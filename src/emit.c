@@ -6,15 +6,28 @@
 #include <string.h>
 
 #include "builtins.h"
+#include "types.h"
 
 typedef struct EmitCtx {
     Buf  *file;     /* file-scope decls (statics, includes) */
     Buf  *main_;    /* main() body */
     int   indent;
     int   tmp_n;
+    /* Phase 2: when emitting a function body, these are the parameter bindings
+     * that should use raw names (without ID suffix) when referenced. */
+    Binding **fn_params;
+    uint8_t   n_fn_params;
 } EmitCtx;
 
 /* ------------ helpers ------------ */
+
+/* Helper to create a Type from TypeKind (mirrors the one in types.c). */
+static Type type_from_kind(TypeKind k) {
+    Type t;
+    t.kind = k;
+    t.as.fn.arity = 0;
+    return t;
+}
 
 static void indent_buf(Buf *b, int n) {
     for (int i = 0; i < n; i++) buf_putc(b, ' ');
@@ -27,8 +40,38 @@ static char *fresh_tmp(EmitCtx *ctx) {
     return p;
 }
 
-/* Return a sanitized C identifier for a Binding. Caller frees. */
-static char *name_for_binding(const Binding *b) {
+/* Return a sanitized C identifier for a Binding, without the ID suffix.
+ * Used for function names and parameters. Caller frees. */
+static char *raw_name_for_binding(const Binding *b) {
+    /* Sanitize the raw name: mangle non-id-safe chars to underscores. */
+    char *p = (char *)malloc(b->name->len + 1);
+    if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
+    size_t k = 0;
+    for (uint32_t i = 0; i < b->name->len; i++) {
+        char c = b->name->name[i];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '_') {
+            p[k++] = c;
+        } else {
+            p[k++] = '_';
+        }
+    }
+    p[k] = '\0';
+    return p;
+}
+
+/* Return a sanitized C identifier for a Binding. If the binding is a
+ * function parameter in the current context, use the raw name (without ID).
+ * Otherwise, append the ID suffix. Caller frees. */
+static char *name_for_binding(EmitCtx *ctx, const Binding *b) {
+    /* Check if this binding is a function parameter in the current context */
+    if (ctx->fn_params) {
+        for (uint8_t i = 0; i < ctx->n_fn_params; i++) {
+            if (ctx->fn_params[i] == b) {
+                return raw_name_for_binding(b);
+            }
+        }
+    }
     /* `<name>_<id>` with non-id-safe chars mangled to underscores. We append
      * the unique id so different bindings with the same source name don't
      * collide in C. */
@@ -73,6 +116,7 @@ static void emit_c_string(Buf *out, StrSlice s) {
  * string that the caller takes ownership of and must free(). */
 static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e);
 static void  emit_stmt (EmitCtx *ctx, Buf *body, const Expr *e);
+static void  emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e);
 
 /* ------------ atomic emitters (no statements emitted) ------------ */
 
@@ -83,8 +127,8 @@ static char *atom_int(int64_t i) {
     snprintf(buf, sizeof buf, "INT64_C(%lld)", (long long)i);
     return strdup(buf);
 }
-static char *atom_var(const Binding *b) {
-    return name_for_binding(b);
+static char *atom_var(EmitCtx *ctx, const Binding *b) {
+    return name_for_binding(ctx, b);
 }
 static char *atom_cstr(StrSlice s) {
     /* Build into a Buf, then strdup out. */
@@ -202,7 +246,7 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
 
     for (uint32_t i = 0; i < e->as.let_.n; i++) {
         const Binding *b = e->as.let_.bindings[i].binding;
-        char *bn = name_for_binding(b);
+        char *bn = name_for_binding(ctx, b);
         char *iv = emit_value(ctx, body, e->as.let_.bindings[i].init);
         indent_buf(body, ctx->indent);
         buf_printf(body, "%s %s = %s;\n", type_c_name(b->type), bn, iv);
@@ -303,7 +347,7 @@ static void emit_while_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
 }
 
 static void emit_set_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
-    char *bn = name_for_binding(e->as.set_.target);
+    char *bn = name_for_binding(ctx, e->as.set_.target);
     char *v = emit_value(ctx, body, e->as.set_.value);
     indent_buf(body, ctx->indent);
     buf_printf(body, "%s = %s;\n", bn, v);
@@ -318,7 +362,7 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_BOOL_LIT: return atom_bool(e->as.b);
         case EX_INT_LIT:  return atom_int(e->as.i);
         case EX_CSTR_LIT: return atom_cstr(e->as.s);
-        case EX_VAR:      return atom_var(e->as.var.binding);
+        case EX_VAR:      return atom_var(ctx, e->as.var.binding);
         case EX_LET:      return emit_let_value(ctx, body, e);
         case EX_IF:       return emit_if_value(ctx, body, e);
         case EX_DO:       return emit_do_value(ctx, body, e);
@@ -328,6 +372,45 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_DEF:      /* handled at top level — shouldn't appear nested. */
         case EX_PROGRAM:
             return atom_nil();
+        /* Phase 2 */
+        case EX_FN_DEF:
+            /* fn should only appear at top level for phase 2 */
+            fprintf(stderr, "tur: emit: EX_FN_DEF in value position (nested fn not yet supported)\n");
+            abort();
+        case EX_FN:
+            fprintf(stderr, "tur: emit: EX_FN not yet implemented\n");
+            abort();
+        case EX_CALL: {
+            /* Emit function call: fn(arg1, arg2, ...) */
+            /* Use raw name for function calls (functions are defined with raw names) */
+            char *fn_name = raw_name_for_binding(e->as.call_.fn_binding);
+            char **arg_strs = (char **)malloc(e->as.call_.n_args * sizeof(char *));
+            if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
+            }
+            Buf out; buf_init(&out);
+            buf_printf(&out, "%s(", fn_name);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                if (i > 0) buf_puts(&out, ", ");
+                buf_printf(&out, "%s", arg_strs[i]);
+            }
+            buf_puts(&out, ")");
+            buf_putc(&out, '\0');
+            char *result = strdup(out.data);
+            buf_free(&out);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) free(arg_strs[i]);
+            free(arg_strs);
+            free(fn_name);
+            return result;
+        }
+        case EX_EXTERN_C: {
+            /* extern-c declarations emit nothing in value position (they're file-scope) */
+            return atom_nil();
+        }
+        case EX_INLINE_C:
+            fprintf(stderr, "tur: emit: EX_INLINE_C not yet implemented\n");
+            abort();
     }
     return atom_nil();
 }
@@ -371,7 +454,121 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_DEF: case EX_PROGRAM:
             /* shouldn't reach here at expr level */
             return;
+        /* Phase 2 */
+        case EX_FN_DEF:
+            /* shouldn't reach here in stmt position */
+            fprintf(stderr, "tur: emit: EX_FN_DEF in stmt position\n");
+            abort();
+            return;
+        case EX_CALL: {
+            /* Emit as expression statement */
+            char *v = emit_value(ctx, body, e);
+            if (e->type.kind != TY_NIL) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "(void)(%s);\n", v);
+            }
+            free(v);
+            return;
+        }
+        case EX_FN:
+            fprintf(stderr, "tur: emit: EX_FN not yet implemented in emit_stmt\n");
+            abort();
+            return;
+        case EX_EXTERN_C:
+            /* extern-c declarations emit nothing in statement position (they're file-scope) */
+            return;
+        case EX_INLINE_C:
+            fprintf(stderr, "tur: emit: EX_INLINE_C not yet implemented in emit_stmt\n");
+            abort();
+            return;
     }
+}
+
+/* ------------ Phase 2: function emission ------------ */
+
+static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
+    FnDef *fd = e->as.fn_def_.fn;
+    /* Use raw name (without ID suffix) for function name */
+    const char *fn_name = raw_name_for_binding(fd->binding);
+
+    /* Emit function signature */
+    /* Special case: C's main() must return int, not int64_t */
+    bool is_main = (strcmp(fn_name, "main") == 0);
+    if (!is_main) {
+        buf_printf(file, "static ");
+    }
+    /* Return type from fn_type */
+    if (e->type.kind == TY_FN) {
+        TypeKind result = e->type.as.fn.result_kind;
+        if (is_main && result == TY_INT) {
+            buf_puts(file, "int");  /* C main returns int, not int64_t */
+        } else {
+            buf_puts(file, type_c_name(type_from_kind(result)));
+        }
+    } else {
+        buf_puts(file, "void");
+    }
+    buf_printf(file, " %s(", fn_name);
+
+    /* Emit parameters - use raw names (without ID suffix) */
+    for (uint8_t i = 0; i < fd->n_params; i++) {
+        if (i > 0) buf_puts(file, ", ");
+        /* Use the param's type for emission */
+        buf_puts(file, type_c_name(fd->param_types[i]));
+        const char *pn = raw_name_for_binding(fd->params[i]);
+        buf_printf(file, " %s", pn);
+        free((void*)pn);
+    }
+    buf_puts(file, ") {\n");
+
+    /* Emit function body */
+    ctx->indent += 4;
+
+    /* Set up function parameter context so that parameter references
+     * in the body use raw names (without ID suffix) */
+    Binding **saved_params = ctx->fn_params;
+    uint8_t saved_n_params = ctx->n_fn_params;
+    ctx->fn_params = fd->params;
+    ctx->n_fn_params = fd->n_params;
+
+    /* Get the return type */
+    TypeKind result_kind = e->type.kind == TY_FN ? e->type.as.fn.result_kind : TY_NIL;
+
+    if (result_kind == TY_NIL) {
+        /* void function - emit body as statements */
+        emit_stmt(ctx, file, fd->body);
+    } else {
+        /* Function with return value */
+        char *ret_val = emit_value(ctx, file, fd->body);
+        indent_buf(file, ctx->indent);
+        /* If the body returns nil but the function expects a non-nil type,
+         * emit a default value. This can happen with e.g. (defn main [] :int (println 42)) */
+        if (fd->body->type.kind == TY_NIL) {
+            /* Body is nil-typed, but function expects a return value.
+             * Emit default based on return type. */
+            free(ret_val);
+            switch (result_kind) {
+                case TY_INT:   ret_val = strdup("0"); break;
+                case TY_BOOL:  ret_val = strdup("false"); break;
+                default:       ret_val = strdup("0"); break;
+            }
+        }
+        /* Special case: if this is main and it returns int64_t, cast to int */
+        if (is_main && result_kind == TY_INT) {
+            buf_printf(file, "return (int)%s;\n", ret_val);
+        } else {
+            buf_printf(file, "return %s;\n", ret_val);
+        }
+        free(ret_val);
+    }
+
+    /* Restore previous context */
+    ctx->fn_params = saved_params;
+    ctx->n_fn_params = saved_n_params;
+
+    ctx->indent -= 4;
+    buf_printf(file, "}\n\n");
+    free((void*)fn_name);
 }
 
 /* ------------ program-level emit ------------ */
@@ -391,34 +588,66 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.main_ = &body;
     ctx.indent = 4;
     ctx.tmp_n = 0;
+    ctx.fn_params = NULL;
+    ctx.n_fn_params = 0;
 
-    /* Pass 1: collect all top-level defs as static decls, emit init code in main body. */
+    /* Check if user defined a main function */
+    bool user_has_main = false;
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        const Expr *e = program->as.program.items[i];
+        if (e->kind == EX_FN_DEF) {
+            FnDef *fd = e->as.fn_def_.fn;
+            if (strcmp(fd->binding->name->name, "main") == 0) {
+                user_has_main = true;
+                break;
+            }
+        }
+    }
+
+    /* Pass 1: collect all top-level defs and fn_defs. */
     for (uint32_t i = 0; i < program->as.program.n; i++) {
         const Expr *e = program->as.program.items[i];
         if (e->kind == EX_DEF) {
-            char *bn = name_for_binding(e->as.def_.binding);
+            char *bn = name_for_binding(&ctx, e->as.def_.binding);
             buf_printf(&file, "static %s %s;\n",
                        type_c_name(e->as.def_.binding->type), bn);
             char *iv = emit_value(&ctx, &body, e->as.def_.init);
             indent_buf(&body, ctx.indent);
             buf_printf(&body, "%s = %s;\n", bn, iv);
             free(bn); free(iv);
+        } else if (e->kind == EX_FN_DEF) {
+            /* Emit function definition at file scope */
+            emit_fn_def(&ctx, &file, e);
+        } else if (e->kind == EX_EXTERN_C) {
+            /* Emit extern-c declaration at file scope */
+            ExternC *ec = e->as.extern_c_.ext;
+            buf_printf(&file, "extern %s %s(",
+                       type_c_name(ec->return_type),
+                       ec->c_name->name);
+            for (uint8_t j = 0; j < ec->n_params; j++) {
+                if (j > 0) buf_puts(&file, ", ");
+                buf_printf(&file, "%s", type_c_name(ec->param_types[j]));
+            }
+            buf_puts(&file, ");\n");
         } else {
             emit_stmt(&ctx, &body, e);
         }
     }
 
     /* Final assembly. */
-    buf_puts(out, "/* generated by tur (phase 1) */\n");
+    buf_puts(out, "/* generated by tur (phase 2) */\n");
     buf_puts(out, "#include <stdio.h>\n");
     buf_puts(out, "#include <stdint.h>\n");
     buf_puts(out, "#include <stdbool.h>\n");
     buf_puts(out, "\n");
     if (file.len) { buf_write(out, file.data, file.len); buf_putc(out, '\n'); }
-    buf_puts(out, "int main(void) {\n");
-    if (body.len) buf_write(out, body.data, body.len);
-    buf_puts(out, "    return 0;\n");
-    buf_puts(out, "}\n");
+    if (!user_has_main) {
+        /* Only generate main() if user didn't define one */
+        buf_puts(out, "int main(void) {\n");
+        if (body.len) buf_write(out, body.data, body.len);
+        buf_puts(out, "    return 0;\n");
+        buf_puts(out, "}\n");
+    }
 
     buf_free(&file);
     buf_free(&body);

@@ -10,7 +10,7 @@ A Lisp (Clojure/Fennel-flavored) that compiles to C, with homoiconic macros, str
 |---|---|---|---|
 | 0 | ✅ **Complete** | hello.tur round-trip | All infrastructure in place: arena, reader, forms, diag, buf, emit, main |
 | 1 | ✅ **Complete** | Fizzbuzz | All core forms, arithmetic, comparison, logical ops; 12/12 fixtures green under ASan/UBSan |
-| 2 | ⏳ Pending | Top-level functions + extern-c | defn, fn (no capture), inline-C, libc interop |
+| 2 | 🚧 **In Progress** | Top-level functions + extern-c | Type system extended with TY_FN, TY_PTR_VOID; Expr kinds extended with EX_FN, EX_CALL, EX_FN_DEF, EX_EXTERN_C, EX_INLINE_C. Core implementation pending. |
 | 3 | ⏳ Pending | Closures | Capture analysis, env struct synthesis, escape analysis |
 | 4 | ⏳ Pending | defer + scope unwind | Label-based goto chains, LIFO ordering |
 | 5 | ⏳ Pending | ref<T> | Move semantics, auto-defer drop |
@@ -20,7 +20,30 @@ A Lisp (Clojure/Fennel-flavored) that compiles to C, with homoiconic macros, str
 | 9 | ⏳ Pending | rc<T> + weak<T> | Reference counting v1 GC |
 | 10 | ⏳ Pending | Bacon-Rajan cycle collector | v2 GC layered over RC |
 
-**Last updated:** 2024-05-09 (Phase 1 complete, all 12 fixtures passing)
+**Last updated:** 2024-05-09 (Phase 2 infrastructure in place, core implementation in progress)
+
+---
+
+**Phase 2 Implementation Checklist:**
+- [x] Extend TypeKind with TY_FN and TY_PTR_VOID
+- [x] Extend ExprKind with EX_FN, EX_CALL, EX_FN_DEF, EX_EXTERN_C, EX_INLINE_C
+- [x] Update type_eq, type_name, type_c_name for function types
+- [x] Update emit.c switch statements for new expr kinds
+- [x] Update expr.c print function for new expr kinds
+- [ ] Add sym_defn, sym_fn, sym_extern_c, sym_inline_c to elaborator
+- [ ] Parse type annotations (^int, : T) in reader/elaborator
+- [ ] Implement elab_defn for (defn name [params...] : ret-T body...)
+- [ ] Implement elab_fn for (fn [params...] body...) - no capture, lift to static
+- [ ] Implement elab_extern_c for (extern-c name [params...] : ret-T)
+- [ ] Implement elab_inline_c for ```c ... ``` blocks
+- [ ] Implement elab_call for (f a b c) function calls
+- [ ] Emit function declarations and definitions in emit.c
+- [ ] Emit function calls in emit.c
+- [ ] Emit extern-c declarations in emit.c
+- [ ] Emit inline-C blocks in emit.c
+- [ ] Update driver for multi-file support (_main.c generation)
+- [ ] Add fixtures: defn-basic, mutual-recursion, extern-printf, inline-c-popcount
+- [ ] Add negative tests: capturing fn gate, arity mismatches, bad inline-C annotations
 
 ---
 

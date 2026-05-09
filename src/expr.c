@@ -88,5 +88,16 @@ void expr_print(Buf *b, const Expr *e) {
                 expr_print(b, e->as.program.items[i]);
             }
             break;
+        /* Phase 2: not yet implemented */
+        case EX_FN:
+            buf_puts(b, "<fn>"); break;
+        case EX_CALL:
+            buf_puts(b, "<call>"); break;
+        case EX_FN_DEF:
+            buf_puts(b, "<fn-def>"); break;
+        case EX_EXTERN_C:
+            buf_puts(b, "<extern-c>"); break;
+        case EX_INLINE_C:
+            buf_puts(b, "<inline-c>"); break;
     }
 }

@@ -1,0 +1,5 @@
+(defn add2 [x y] :int
+  (+ x y))
+
+(defn main [] :int
+  (println (add2 3 4)))

@@ -8,33 +8,33 @@
  * "any-printable" fallback). */
 static BuiltinSpec table_[] = {
     /* Arithmetic — variadic, int. */
-    { "+",   NULL, 2, -1, {TY_INT},  {TY_INT},  BS_VARIADIC_FOLD, "+" },
-    { "-",   NULL, 2, -1, {TY_INT},  {TY_INT},  BS_VARIADIC_FOLD, "-" },
-    { "*",   NULL, 2, -1, {TY_INT},  {TY_INT},  BS_VARIADIC_FOLD, "*" },
-    { "/",   NULL, 2,  2, {TY_INT},  {TY_INT},  BS_BIN_INFIX,     "/" },
-    { "mod", NULL, 2,  2, {TY_INT},  {TY_INT},  BS_BIN_INFIX,     "%" },
+    { "+",   NULL, 2, -1, {.kind=TY_INT},  {.kind=TY_INT},  BS_VARIADIC_FOLD, "+" },
+    { "-",   NULL, 2, -1, {.kind=TY_INT},  {.kind=TY_INT},  BS_VARIADIC_FOLD, "-" },
+    { "*",   NULL, 2, -1, {.kind=TY_INT},  {.kind=TY_INT},  BS_VARIADIC_FOLD, "*" },
+    { "/",   NULL, 2,  2, {.kind=TY_INT},  {.kind=TY_INT},  BS_BIN_INFIX,     "/" },
+    { "mod", NULL, 2,  2, {.kind=TY_INT},  {.kind=TY_INT},  BS_BIN_INFIX,     "%" },
 
     /* Comparison — int. */
-    { "=",    NULL, 2, 2, {TY_INT},  {TY_BOOL}, BS_BIN_INFIX, "==" },
-    { "<",    NULL, 2, 2, {TY_INT},  {TY_BOOL}, BS_BIN_INFIX, "<"  },
-    { ">",    NULL, 2, 2, {TY_INT},  {TY_BOOL}, BS_BIN_INFIX, ">"  },
-    { "<=",   NULL, 2, 2, {TY_INT},  {TY_BOOL}, BS_BIN_INFIX, "<=" },
-    { ">=",   NULL, 2, 2, {TY_INT},  {TY_BOOL}, BS_BIN_INFIX, ">=" },
-    { "not=", NULL, 2, 2, {TY_INT},  {TY_BOOL}, BS_BIN_INFIX, "!=" },
+    { "=",    NULL, 2, 2, {.kind=TY_INT},  {.kind=TY_BOOL}, BS_BIN_INFIX, "==" },
+    { "<",    NULL, 2, 2, {.kind=TY_INT},  {.kind=TY_BOOL}, BS_BIN_INFIX, "<"  },
+    { ">",    NULL, 2, 2, {.kind=TY_INT},  {.kind=TY_BOOL}, BS_BIN_INFIX, ">"  },
+    { "<=",   NULL, 2, 2, {.kind=TY_INT},  {.kind=TY_BOOL}, BS_BIN_INFIX, "<=" },
+    { ">=",   NULL, 2, 2, {.kind=TY_INT},  {.kind=TY_BOOL}, BS_BIN_INFIX, ">=" },
+    { "not=", NULL, 2, 2, {.kind=TY_INT},  {.kind=TY_BOOL}, BS_BIN_INFIX, "!=" },
 
     /* Comparison — bool. */
-    { "=",    NULL, 2, 2, {TY_BOOL}, {TY_BOOL}, BS_BIN_INFIX, "==" },
-    { "not=", NULL, 2, 2, {TY_BOOL}, {TY_BOOL}, BS_BIN_INFIX, "!=" },
+    { "=",    NULL, 2, 2, {.kind=TY_BOOL}, {.kind=TY_BOOL}, BS_BIN_INFIX, "==" },
+    { "not=", NULL, 2, 2, {.kind=TY_BOOL}, {.kind=TY_BOOL}, BS_BIN_INFIX, "!=" },
 
     /* Logical. */
-    { "and", NULL, 2, -1, {TY_BOOL}, {TY_BOOL}, BS_AND_SC,      NULL },
-    { "or",  NULL, 2, -1, {TY_BOOL}, {TY_BOOL}, BS_OR_SC,       NULL },
-    { "not", NULL, 1,  1, {TY_BOOL}, {TY_BOOL}, BS_PREFIX_UNARY, "!" },
+    { "and", NULL, 2, -1, {.kind=TY_BOOL}, {.kind=TY_BOOL}, BS_AND_SC,      NULL },
+    { "or",  NULL, 2, -1, {.kind=TY_BOOL}, {.kind=TY_BOOL}, BS_OR_SC,       NULL },
+    { "not", NULL, 1,  1, {.kind=TY_BOOL}, {.kind=TY_BOOL}, BS_PREFIX_UNARY, "!" },
 
     /* println — separate entries per arg type, dispatched on arg type. */
-    { "println", NULL, 1, 1, {TY_INT},  {TY_NIL}, BS_PRINTLN_INT,  NULL },
-    { "println", NULL, 1, 1, {TY_BOOL}, {TY_NIL}, BS_PRINTLN_BOOL, NULL },
-    { "println", NULL, 1, 1, {TY_CSTR}, {TY_NIL}, BS_PRINTLN_CSTR, NULL },
+    { "println", NULL, 1, 1, {.kind=TY_INT},  {.kind=TY_NIL}, BS_PRINTLN_INT,  NULL },
+    { "println", NULL, 1, 1, {.kind=TY_BOOL}, {.kind=TY_NIL}, BS_PRINTLN_BOOL, NULL },
+    { "println", NULL, 1, 1, {.kind=TY_CSTR}, {.kind=TY_NIL}, BS_PRINTLN_CSTR, NULL },
 };
 
 #define TABLE_LEN (sizeof(table_) / sizeof(table_[0]))

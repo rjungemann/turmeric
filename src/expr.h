@@ -14,6 +14,9 @@
 typedef struct Expr        Expr;
 typedef struct Binding     Binding;
 typedef struct BuiltinSpec BuiltinSpec;
+typedef struct FnDef       FnDef;      /* Phase 2: function definition */
+typedef struct ExternC     ExternC;    /* Phase 2: extern C declaration */
+typedef struct InlineC     InlineC;    /* Phase 2: inline C block */
 
 /* A Binding is the resolved target of a `let`/`def`/`defn` name introduction.
  * Bindings are owned by the elaborator and live in the arena. */
@@ -39,8 +42,41 @@ typedef enum ExprKind {
     EX_SET,
     EX_DEF,
     EX_BUILTIN,
+    EX_FN,              /* Phase 2: anonymous function (no capture) */
+    EX_CALL,            /* Phase 2: function call (f a b c) */
+    EX_FN_DEF,          /* Phase 2: top-level function definition (defn) */
+    EX_EXTERN_C,        /* Phase 2: extern C declaration */
+    EX_INLINE_C,        /* Phase 2: inline C block */
     EX_PROGRAM,
 } ExprKind;
+
+/* Phase 2: FnDef represents a function definition from defn or lifted fn. */
+struct FnDef {
+    Binding        *binding;     /* name binding */
+    Binding       **params;      /* param bindings */
+    uint8_t        n_params;
+    Type          *param_types;  /* param types (for codegen) */
+    Expr          *body;
+    bool           is_variadic;  /* not yet supported in phase 2 */
+};
+
+/* Phase 2: ExternC represents an (extern-c ...) declaration. */
+struct ExternC {
+    const Symbol  *c_name;       /* C identifier */
+    Binding       *binding;     /* Turmeric binding (optional) */
+    Type           return_type;
+    Type          *param_types;
+    uint8_t        n_params;
+    bool           is_variadic;
+};
+
+/* Phase 2: InlineC represents an inline C block. ```c ... ``` */
+struct InlineC {
+    StrSlice       code;         /* the raw C code */
+    Type           return_type; /* annotated : T */
+    Binding      **captures;     /* captured bindings from enclosing scope */
+    uint8_t        n_captures;
+};
 
 typedef struct LetBinding {
     Binding *binding;
@@ -64,6 +100,14 @@ struct Expr {
         struct { Binding *target; Expr *value; }                           set_;
         struct { Binding *binding; Expr *init; }                           def_;
         struct { const BuiltinSpec *spec; Expr **args; uint32_t n; }       builtin;
+
+        /* Phase 2 */
+        struct { FnDef *fn; }                                               fn_def_;
+        struct { Binding *fn_binding; Expr **args; uint32_t n_args; }       call_;
+        struct { FnDef *fn; }                                               fn_;
+        struct { ExternC *ext; }                                            extern_c_;
+        struct { InlineC *inline_c; }                                       inline_c_;
+
         struct { Expr **items; uint32_t n; }                               program;
     } as;
 };

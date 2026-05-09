@@ -6,6 +6,15 @@
 
 #include "builtins.h"
 #include "diag.h"
+#include "types.h"
+
+/* Helper to create a Type from TypeKind. */
+static Type type_from_kind(TypeKind k) {
+    Type t;
+    t.kind = k;
+    t.as.fn.arity = 0;
+    return t;
+}
 
 /* ---- scope ---- */
 
@@ -67,8 +76,12 @@ typedef struct Elab {
     const Symbol *sym_cond;
     const Symbol *sym_set;
     const Symbol *sym_while;
+    const Symbol *sym_defn;     /* Phase 2 */
+    const Symbol *sym_fn;       /* Phase 2 */
+    const Symbol *sym_extern_c; /* Phase 2 */
     const Symbol *sym_caret_mut;   /* ^mut */
     const Symbol *kw_else;         /* :else (the symbol named "else") */
+    const Symbol *kw_derive;       /* :as (the symbol named "as") - for inline-C */
 } Elab;
 
 static const Symbol *intern_cstr(SymbolTable *st, const char *s) {
@@ -89,10 +102,15 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_when      = intern_cstr(st, "when");
     e->sym_unless    = intern_cstr(st, "unless");
     e->sym_cond      = intern_cstr(st, "cond");
+    e->sym_cond      = intern_cstr(st, "cond");
     e->sym_set       = intern_cstr(st, "set!");
     e->sym_while     = intern_cstr(st, "while");
+    e->sym_defn      = intern_cstr(st, "defn");
+    e->sym_fn        = intern_cstr(st, "fn");
+    e->sym_extern_c  = intern_cstr(st, "extern-c");
     e->sym_caret_mut = intern_cstr(st, "^mut");
     e->kw_else       = intern_cstr(st, "else");
+    e->kw_derive     = intern_cstr(st, "as");
 }
 
 static Binding *binding_new(Elab *e, const Symbol *name, Type type,
@@ -461,6 +479,430 @@ static Expr *elab_while(Elab *e, const Form *call) {
     return out;
 }
 
+/* Phase 2: defn — (defn name [param1 param2 ...] : return-type body...)
+ * For now, we only support : int return type annotation. Param types are
+ * inferred from usage. */
+static Expr *elab_defn(Elab *e, const Form *call) {
+    /* Minimum: (defn name []) */
+    if (call->as.list.len < 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "defn requires (defn name [params...] body...)");
+        return NULL;
+    }
+
+    /* Parse name */
+    Form *name_f = call->as.list.items[1];
+    if (name_f->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, name_f->span, "defn name must be a symbol");
+        return NULL;
+    }
+    if (scope_lookup(e->scope, name_f->as.sym)) {
+        diag_emit(DIAG_ERROR, name_f->span,
+                  "defn: '%s' is already defined", name_f->as.sym->name);
+        return NULL;
+    }
+
+    /* Parse param vector */
+    Form *params_f = call->as.list.items[2];
+    if (params_f->tag != F_VEC) {
+        diag_emit(DIAG_ERROR, params_f->span,
+                  "defn: parameter list must be a vector [name1 name2 ...]");
+        return NULL;
+    }
+
+    /* Parse params */
+    Binding **params = NULL;
+    uint8_t n_params = 0;
+    TypeKind param_kinds[MAX_FN_ARITY];
+
+    for (uint32_t i = 0; i < params_f->as.list.len; i++) {
+        Form *p = params_f->as.list.items[i];
+        if (p->tag != F_SYM) {
+            diag_emit(DIAG_ERROR, p->span,
+                      "defn: parameter name must be a symbol");
+            free(params);
+            return NULL;
+        }
+        if (n_params >= MAX_FN_ARITY) {
+            diag_emit(DIAG_ERROR, p->span,
+                      "defn: too many parameters (max %d)", MAX_FN_ARITY);
+            free(params);
+            return NULL;
+        }
+        /* For phase 2, all params are int by default */
+        param_kinds[n_params] = TY_INT;
+        Binding *b = binding_new(e, p->as.sym, TYPE_INT, false, false, p->span);
+        if (n_params == 0) {
+            params = (Binding **)arena_alloc(e->arena, MAX_FN_ARITY * sizeof(Binding *));
+        }
+        params[n_params++] = b;
+    }
+
+    /* Parse return type annotation and body */
+    TypeKind return_kind = TY_NIL;
+    uint32_t body_start = 3;
+
+    /* Check for : return-type annotation */
+    if (call->as.list.len >= 4) {
+        Form *ret_f = call->as.list.items[3];
+        if (ret_f->tag == F_KEYWORD) {
+            /* : int, : bool, etc. */
+            const Symbol *kw = ret_f->as.sym;
+            if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
+                return_kind = TY_INT;
+            } else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0) {
+                return_kind = TY_BOOL;
+            } else if (kw->len == 4 && memcmp(kw->name, "void", 4) == 0) {
+                return_kind = TY_NIL;
+            } else {
+                diag_emit(DIAG_ERROR, ret_f->span,
+                          "defn: unsupported return type keyword :%s",
+                          kw->name);
+                return NULL;
+            }
+            body_start = 4;
+        }
+    }
+
+    /* Elaborate body */
+    if (call->as.list.len < body_start + 1) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "defn: missing body");
+        return NULL;
+    }
+
+    /* Push a new scope for the function body with params bound */
+    Scope inner;
+    scope_init(&inner, e->scope);
+    e->scope = &inner;
+    for (uint8_t i = 0; i < n_params; i++) {
+        scope_add(&inner, params[i]);
+    }
+
+    Expr *body = e_nil(e, call->span);
+    uint32_t n_body = call->as.list.len - body_start;
+    if (n_body == 1) {
+        body = elab_form(e, call->as.list.items[body_start]);
+        if (!body) { e->scope = inner.parent; scope_free(&inner); return NULL; }
+    } else {
+        Expr **items = (Expr **)arena_alloc(e->arena, n_body * sizeof(Expr *));
+        for (uint32_t i = 0; i < n_body; i++) {
+            items[i] = elab_form(e, call->as.list.items[body_start + i]);
+            if (!items[i]) { e->scope = inner.parent; scope_free(&inner); return NULL; }
+        }
+        body = expr_new(e->arena, EX_DO, items[n_body - 1]->type, call->span);
+        body->as.do_.items = items;
+        body->as.do_.n = n_body;
+    }
+
+    /* Pop scope */
+    e->scope = inner.parent;
+    scope_free(&inner);
+
+    /* Create function type */
+    TypeKind arg_kinds[MAX_FN_ARITY];
+    for (uint8_t i = 0; i < n_params; i++) {
+        arg_kinds[i] = TY_INT;  /* All int for phase 2 */
+    }
+    Type fn_type = type_fn(arg_kinds, n_params, return_kind);
+
+    /* Create Binding for the function */
+    Binding *b = binding_new(e, name_f->as.sym, fn_type, false, true, name_f->span);
+    scope_add(&e->global, b);
+
+    /* Build FnDef */
+    FnDef *fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));
+    fd->binding = b;
+    fd->params = params;
+    fd->n_params = n_params;
+    fd->body = body;
+    fd->is_variadic = false;
+    /* Store param types for codegen */
+    fd->param_types = (Type *)arena_alloc(e->arena, n_params * sizeof(Type));
+    for (uint8_t i = 0; i < n_params; i++) {
+        fd->param_types[i] = TYPE_INT;
+    }
+
+    Expr *out = expr_new(e->arena, EX_FN_DEF, fn_type, call->span);
+    out->as.fn_def_.fn = fd;
+    return out;
+}
+
+/* Phase 2: fn — (fn [param1 param2 ...] body...) — no capture for phase 2
+ * Lifts to a static function. For now, we require a return type annotation.
+ * Example: (fn [x y] :int (+ x y)) */
+static Expr *elab_fn(Elab *e, const Form *call) {
+    /* Minimum: (fn [params...] body...) */
+    if (call->as.list.len < 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "fn requires (fn [params...] body...)");
+        return NULL;
+    }
+
+    /* Parse param vector */
+    Form *params_f = call->as.list.items[1];
+    if (params_f->tag != F_VEC) {
+        diag_emit(DIAG_ERROR, params_f->span,
+                  "fn: parameter list must be a vector [name1 name2 ...]");
+        return NULL;
+    }
+
+    /* Parse params */
+    Binding **params = NULL;
+    uint8_t n_params = 0;
+    TypeKind param_kinds[MAX_FN_ARITY];
+
+    for (uint32_t i = 0; i < params_f->as.list.len; i++) {
+        Form *p = params_f->as.list.items[i];
+        if (p->tag != F_SYM) {
+            diag_emit(DIAG_ERROR, p->span,
+                      "fn: parameter name must be a symbol");
+            free(params);
+            return NULL;
+        }
+        if (n_params >= MAX_FN_ARITY) {
+            diag_emit(DIAG_ERROR, p->span,
+                      "fn: too many parameters (max %d)", MAX_FN_ARITY);
+            free(params);
+            return NULL;
+        }
+        /* For phase 2, all params are int by default */
+        param_kinds[n_params] = TY_INT;
+        Binding *b = binding_new(e, p->as.sym, TYPE_INT, false, false, p->span);
+        if (n_params == 0) {
+            params = (Binding **)arena_alloc(e->arena, MAX_FN_ARITY * sizeof(Binding *));
+        }
+        params[n_params++] = b;
+    }
+
+    /* Parse return type annotation and body */
+    TypeKind return_kind = TY_NIL;
+    uint32_t body_start = 2;
+
+    /* Check for : return-type annotation */
+    if (call->as.list.len >= 3) {
+        Form *ret_f = call->as.list.items[2];
+        if (ret_f->tag == F_KEYWORD) {
+            /* : int, : bool, etc. */
+            const Symbol *kw = ret_f->as.sym;
+            if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
+                return_kind = TY_INT;
+            } else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0) {
+                return_kind = TY_BOOL;
+            } else if (kw->len == 4 && memcmp(kw->name, "void", 4) == 0) {
+                return_kind = TY_NIL;
+            } else {
+                diag_emit(DIAG_ERROR, ret_f->span,
+                          "fn: unsupported return type keyword :%s",
+                          kw->name);
+                free(params);
+                return NULL;
+            }
+            body_start = 3;
+        }
+    }
+
+    /* Elaborate body */
+    if (call->as.list.len < body_start + 1) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "fn: missing body");
+        free(params);
+        return NULL;
+    }
+
+    /* Push a new scope for the function body with params bound */
+    Scope inner;
+    scope_init(&inner, e->scope);
+    e->scope = &inner;
+    for (uint8_t i = 0; i < n_params; i++) {
+        scope_add(&inner, params[i]);
+    }
+
+    Expr *body = e_nil(e, call->span);
+    uint32_t n_body = call->as.list.len - body_start;
+    if (n_body == 1) {
+        body = elab_form(e, call->as.list.items[body_start]);
+        if (!body) { e->scope = inner.parent; scope_free(&inner); free(params); return NULL; }
+    } else {
+        Expr **items = (Expr **)arena_alloc(e->arena, n_body * sizeof(Expr *));
+        for (uint32_t i = 0; i < n_body; i++) {
+            items[i] = elab_form(e, call->as.list.items[body_start + i]);
+            if (!items[i]) { e->scope = inner.parent; scope_free(&inner); free(params); return NULL; }
+        }
+        body = expr_new(e->arena, EX_DO, items[n_body - 1]->type, call->span);
+        body->as.do_.items = items;
+        body->as.do_.n = n_body;
+    }
+
+    /* Pop scope */
+    e->scope = inner.parent;
+    scope_free(&inner);
+
+    /* Create function type */
+    TypeKind arg_kinds[MAX_FN_ARITY];
+    for (uint8_t i = 0; i < n_params; i++) {
+        arg_kinds[i] = TY_INT;  /* All int for phase 2 */
+    }
+    Type fn_type = type_fn(arg_kinds, n_params, return_kind);
+
+    /* For anonymous fn, we lift it to a static function with a generated name.
+     * We use the arena to allocate a unique name. */
+    char fn_name_buf[32];
+    snprintf(fn_name_buf, sizeof(fn_name_buf), "__fn_%u", e->next_id++);
+    const Symbol *fn_name_sym = symtab_intern(e->st, 
+        strslice(fn_name_buf, (uint32_t)strlen(fn_name_buf)));
+    
+    Binding *b = binding_new(e, fn_name_sym, fn_type, false, true, call->span);
+    scope_add(&e->global, b);
+
+    /* Build FnDef */
+    FnDef *fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));
+    fd->binding = b;
+    fd->params = params;
+    fd->n_params = n_params;
+    fd->body = body;
+    fd->is_variadic = false;
+    /* Store param types for codegen */
+    fd->param_types = (Type *)arena_alloc(e->arena, n_params * sizeof(Type));
+    for (uint8_t i = 0; i < n_params; i++) {
+        fd->param_types[i] = TYPE_INT;
+    }
+
+    /* Create the FN_DEF expression that will be emitted at file scope */
+    Expr *fn_def_expr = expr_new(e->arena, EX_FN_DEF, fn_type, call->span);
+    fn_def_expr->as.fn_def_.fn = fd;
+    
+    /* For Phase 2: if fn is at top level, we need to emit the function definition.
+     * We do this by returning a special wrapper that contains both the FN_DEF
+     * and a VAR reference. But for now, let's just emit the FN_DEF and return
+     * a VAR reference. The emit_program will need to handle this.
+     * 
+     * Actually, for Phase 2, let's just return the FN_DEF directly and handle
+     * it in emit. For nested fn (in let bindings), we'll need a different approach.
+     */
+    
+    /* Return the FN_DEF expression which will be emitted at file scope */
+    return fn_def_expr;
+}
+
+/* Phase 2: extern-c — (extern-c name [param1 param2 ...] : return-type)
+ * Declares an external C function. For phase 2, we don't support capture.
+ * Example: (extern-c printf [^cstr fmt] : int)
+ * The ^ prefix on a param indicates it's a C type annotation (not yet implemented).
+ * For now, all params are treated as int64_t or pointers.
+ * 
+ * Supported annotations:
+ *   ^cstr - const char* (string)
+ *   ^ptr  - void* (pointer)
+ */
+static Expr *elab_extern_c(Elab *e, const Form *call) {
+    /* Minimum: (extern-c name [params...] : ret-type) */
+    if (call->as.list.len < 4) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "extern-c requires (extern-c name [params...] : ret-type)");
+        return NULL;
+    }
+
+    /* Parse name */
+    Form *name_f = call->as.list.items[1];
+    if (name_f->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, name_f->span, "extern-c name must be a symbol");
+        return NULL;
+    }
+    if (scope_lookup(e->scope, name_f->as.sym)) {
+        diag_emit(DIAG_ERROR, name_f->span,
+                  "extern-c: '%s' is already defined", name_f->as.sym->name);
+        return NULL;
+    }
+
+    /* Parse param vector */
+    Form *params_f = call->as.list.items[2];
+    if (params_f->tag != F_VEC) {
+        diag_emit(DIAG_ERROR, params_f->span,
+                  "extern-c: parameter list must be a vector [name1 name2 ...]");
+        return NULL;
+    }
+
+    /* Parse params - for Phase 2, all params are int64_t
+     * Type prefixes like ^cstr are not yet supported in parameter names */
+    Binding **params = NULL;
+    uint8_t n_params = 0;
+    TypeKind param_kinds[MAX_FN_ARITY];
+
+    for (uint32_t i = 0; i < params_f->as.list.len; i++) {
+        Form *p = params_f->as.list.items[i];
+        if (p->tag != F_SYM) {
+            diag_emit(DIAG_ERROR, p->span,
+                      "extern-c: parameter must be a symbol");
+            return NULL;
+        }
+        if (n_params >= MAX_FN_ARITY) {
+            diag_emit(DIAG_ERROR, p->span,
+                      "extern-c: too many parameters (max %d)", MAX_FN_ARITY);
+            return NULL;
+        }
+        
+        /* For Phase 2, all extern-c params are treated as int64_t */
+        param_kinds[n_params] = TY_INT;
+        Binding *b = binding_new(e, p->as.sym, TYPE_INT, false, false, p->span);
+        if (n_params == 0) {
+            params = (Binding **)arena_alloc(e->arena, MAX_FN_ARITY * sizeof(Binding *));
+        }
+        params[n_params++] = b;
+    }
+
+    /* Parse return type annotation */
+    Form *ret_f = call->as.list.items[3];
+    if (ret_f->tag != F_KEYWORD) {
+        diag_emit(DIAG_ERROR, ret_f->span,
+                  "extern-c: return type must be a keyword (:int, :bool, :void, :cstr, :ptr)");
+        return NULL;
+    }
+
+    TypeKind return_kind = TY_NIL;
+    const Symbol *kw = ret_f->as.sym;
+    if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
+        return_kind = TY_INT;
+    } else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0) {
+        return_kind = TY_BOOL;
+    } else if (kw->len == 4 && memcmp(kw->name, "void", 4) == 0) {
+        return_kind = TY_NIL;
+    } else if (kw->len == 4 && memcmp(kw->name, "cstr", 4) == 0) {
+        return_kind = TY_CSTR;
+    } else if (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0) {
+        return_kind = TY_PTR_VOID;
+    } else {
+        diag_emit(DIAG_ERROR, ret_f->span,
+                  "extern-c: unsupported return type :%s", kw->name);
+        return NULL;
+    }
+
+    /* Create function type */
+    Type fn_type = type_fn(param_kinds, n_params, return_kind);
+
+    /* Create a binding for the extern-c function so it can be looked up and called */
+    Binding *b = binding_new(e, name_f->as.sym, fn_type, false, true, call->span);
+    scope_add(&e->global, b);
+
+    /* Create ExternC declaration */
+    ExternC *ec = (ExternC *)arena_alloc(e->arena, sizeof(ExternC));
+    ec->c_name = name_f->as.sym;
+    ec->binding = b;
+    ec->return_type = type_from_kind(return_kind);
+    ec->param_types = (Type *)arena_alloc(e->arena, n_params * sizeof(Type));
+    for (uint8_t i = 0; i < n_params; i++) {
+        ec->param_types[i] = type_from_kind(param_kinds[i]);
+    }
+    ec->n_params = n_params;
+    ec->is_variadic = false;
+
+    Expr *out = expr_new(e->arena, EX_EXTERN_C, fn_type, call->span);
+    out->as.extern_c_.ext = ec;
+    
+    /* params was allocated with arena_alloc, so no need to free */
+    return out;
+}
+
 static Expr *elab_def(Elab *e, const Form *call) {
     if (call->as.list.len != 3) {
         diag_emit(DIAG_ERROR, call->span, "def takes (def name init)");
@@ -494,6 +936,13 @@ static Expr *elab_def(Elab *e, const Form *call) {
     return out;
 }
 
+/* ---- Phase 2: defn, fn, extern-c ---- */
+
+static Expr *elab_defn(Elab *e, const Form *call);
+static Expr *elab_fn(Elab *e, const Form *call);
+static Expr *elab_extern_c(Elab *e, const Form *call);
+static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding);
+
 /* ---- general elab ---- */
 
 static Expr *elab_call(Elab *e, Form *call) {
@@ -516,6 +965,16 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_cond)   return elab_cond  (e, call);
     if (name == e->sym_set)    return elab_set   (e, call);
     if (name == e->sym_while)  return elab_while (e, call);
+    /* Phase 2 */
+    if (name == e->sym_defn)    return elab_defn  (e, call);
+    if (name == e->sym_fn)      return elab_fn    (e, call);
+    if (name == e->sym_extern_c) return elab_extern_c(e, call);
+
+    /* Phase 2: Check if it's a user-defined function call */
+    Binding *fn_binding = scope_lookup(e->scope, name);
+    if (fn_binding && fn_binding->type.kind == TY_FN) {
+        return elab_call_fn(e, call, fn_binding);
+    }
 
     /* Builtin operator. Evaluate args first, then look up. */
     uint32_t n_args = call->as.list.len - 1;
@@ -554,6 +1013,55 @@ static Expr *elab_call(Elab *e, Form *call) {
     out->as.builtin.spec = spec;
     out->as.builtin.args = args;
     out->as.builtin.n = n_args;
+    return out;
+}
+
+/* Phase 2: Elaborate a function call (f a b c) */
+static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
+    uint32_t n_args = call->as.list.len - 1;
+    if (n_args == 0) {
+        diag_emit(DIAG_ERROR, call->span, "function call requires at least one argument");
+        return NULL;
+    }
+
+    /* Get the function type */
+    Type fn_type = fn_binding->type;
+    if (fn_type.kind != TY_FN) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "'%s' is not a function", fn_binding->name->name);
+        return NULL;
+    }
+
+    uint8_t expected_arity = fn_type.as.fn.arity;
+    if (n_args != expected_arity) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "function '%s' expects %u argument(s), got %u",
+                  fn_binding->name->name, expected_arity, n_args);
+        return NULL;
+    }
+
+    /* Elaborate arguments */
+    Expr **args = (Expr **)arena_alloc(e->arena, n_args * sizeof(Expr *));
+    for (uint32_t i = 0; i < n_args; i++) {
+        args[i] = elab_form(e, call->as.list.items[1 + i]);
+        if (!args[i]) return NULL;
+        /* For phase 2, all params are int, so expect int args */
+        if (args[i]->type.kind != TY_INT) {
+            diag_emit(DIAG_ERROR, args[i]->span,
+                      "function '%s' arg %u: expected int, got %s",
+                      fn_binding->name->name, i + 1, type_name(args[i]->type));
+            return NULL;
+        }
+    }
+
+    /* Result type is the function's return type */
+    TypeKind result_kind = fn_type.as.fn.result_kind;
+    Type result_type = type_from_kind(result_kind);
+
+    Expr *out = expr_new(e->arena, EX_CALL, result_type, call->span);
+    out->as.call_.fn_binding = fn_binding;
+    out->as.call_.args = args;
+    out->as.call_.n_args = n_args;
     return out;
 }
 
