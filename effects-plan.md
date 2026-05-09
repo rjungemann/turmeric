@@ -10,6 +10,18 @@ Cross-references: `§12.1 Delimited continuations`, `§12.2 Type system`, `§5 d
 
 ---
 
+### Status & sequencing commitments
+
+Two load-bearing decisions have been propagated since this doc's first draft:
+
+1. **The unified defer model (§6.10) is now committed in phase 4.** The list-on-frame mechanism, parent pointers, `may_capture` bits, and effect-row slots all ship with phase 4 of the main plan ([turmeric-plan.md §10.5](turmeric-plan.md)). Cost in the no-effects world is sub-percent; the win in the effects-ship world is *no phase-4 rewrite*. This means the S1/S2/S3 strategy choice in §6.2 is now a runtime policy decision, not an architectural one — making this whole plan substantially cheaper to act on.
+
+2. **§12.1 (delimited continuations) is a sequencing precondition for v3 effects.** By design, §12.1 will already have shipped by the time we revisit this plan. The CPS substrate that effects depend on — selective CPS conversion, closure-shaped continuations, scope frames as heap objects — will exist. Several "if §12.1 ships" hedges remain in this doc from the older framing; treat them as historical. The operative framing is: *given §12.1, what does effects implementation cost?*
+
+These two commitments together change the shape of the recommendation in §10. They don't change *what* effects look like (the design space in §4 is unchanged); they reduce the cost of *getting there* from "rewrite phase 4 + commit to CPS + design effects" to just "design effects."
+
+---
+
 ## 1. What OCaml 5 effect handlers actually are
 
 The minimum viable model. OCaml 5 ships *deep* algebraic effect handlers with **one-shot continuations**:
@@ -62,7 +74,7 @@ This is a v2 (or v3) on top of v1 untyped effect handlers. Jane Street's variant
 
 ## 3. Plausibility for Turmeric
 
-**Short answer: feasible, but only if §12.1 (delimited continuations via CPS) ships first.** Without delim-conts, this is a from-scratch runtime overhaul; with them, it's a typed API on top of an existing substrate plus a type-system extension.
+**Short answer: feasible. §12.1 ships before we revisit this plan (see Status & sequencing above), so the CPS substrate is a given — effects become a typed API on top of an existing substrate plus a type-system extension, not a from-scratch runtime overhaul.**
 
 **What aligns:**
 
@@ -82,7 +94,7 @@ This is a v2 (or v3) on top of v1 untyped effect handlers. Jane Street's variant
 | `ref<T>` move semantics | Multi-shot continuations re-execute `ref` constructions — but `ref<T>` was already moved in the first run. Multi-shot is incompatible with our ownership model. |
 | C99 target, no setjmp tricks | OCaml uses fibers and stack-segment copying. We can't do that portably; CPS is the only option, which means we have to commit to it for the whole program. |
 
-**Verdict:** plausible **if and only if** §12.1's CPS strategy is adopted. If §12.1 stays research-only, effects become a separate research project with a totally different runtime model. If §12.1 ships, effects are a natural follow-on.
+**Verdict:** plausible. With §12.1's CPS strategy as a sequencing precondition (see Status & sequencing) and phase 4's unified defer model already in place (§6.10), effects are a natural follow-on rather than a separate research project. The remaining work is the type-system extension (effect rows, §4.4) and the policy choice for `perform`'s defer behavior (§6.2 strategies, now a runtime decision).
 
 ## 4. Design sketch — what this looks like in Turmeric
 
@@ -152,7 +164,7 @@ The function under test is unchanged; the test substitutes a handler. This is th
 
 ## 5. Implementation strategy
 
-Assuming §12.1 ships first.
+Given §12.1 has shipped (precondition; see Status & sequencing) and phase 4 ran with the unified defer model (§6.10), implementation is mostly *plumbing on top of existing parts* rather than new substrate.
 
 ### 5.1 Lowering
 
@@ -410,7 +422,7 @@ This is a real type-system feature beyond plain effect rows. Document the rule, 
 
 ### 6.7 Implementation walkthrough — how S2 actually works
 
-Concrete sketch. Assume §12.1 CPS conversion has already happened.
+Concrete sketch. §12.1 CPS conversion has shipped (precondition); phase 4's unified defer model is in place (§6.10). Implementation builds directly on both.
 
 **1. Scope frames are heap-allocated when capture is possible.**
 
@@ -731,21 +743,25 @@ What C, Go, Rust (mostly), Python, etc. do. Simplest. Loses the testability and 
 
 1. **v1 (now): capability passing** as the idiomatic mock-and-substitute story. Built on typeclasses (§12.2). Zero runtime cost. Covers ~70% of what people want algebraic effects for.
 
-2. **v2: exceptions.** Independent of effects; useful regardless. Probably ships before §12.1 continuations.
+2. **v2: exceptions.** Independent of effects; useful regardless. Almost certainly ships before §12.1 continuations.
 
-3. **v3 stretch: algebraic effects, *only if* §12.1 delim-conts ships first.** Start with untyped one-shot effect handlers (OCaml 5.0 baseline); add effect rows in a v4 pass if user demand justifies the type-system extension. Multi-shot continuations are a v5 concern; don't promise them.
+3. **v3 (post-§12.1): algebraic effects.** §12.1 is a sequencing precondition (Status & sequencing); by the time this tier is on the table, the CPS substrate exists and phase 4 already shipped the unified defer model. Start with untyped one-shot effect handlers (OCaml 5.0 baseline); add effect rows in a v4 pass if user demand justifies the type-system extension. Multi-shot continuations are a v5 concern; don't promise them.
 
-**What earlier phases need to preserve to keep the v3 door open:**
+**What earlier phases need to preserve (mostly already locked in):**
 
-- *§12.1 CPS-friendly IR.* Already in the plan. Keep it.
-- *Effect-row-shaped slot in function types.* Reserve a field in the function-type struct now, even if it's unused in v1. Adding a field later means rewriting every signature in the codebase.
-- *Per-frame handler-stack pointer.* When CPS lowering happens, allocate space in the frame for a handler-stack-top pointer. Adding it post-hoc means revisiting every frame layout.
-- *Don't bake `defer` into a model that can't be extended to per-continuation defer lists.* The §5 label-based unwind chain works for lexical scope; if we ever need defers attached to continuations, we'll need to lift them to a per-frame structure. **Decision now:** make defers a list-on-the-frame, not labels-in-codegen. This costs a tiny bit at compile time but keeps the door open. *(This is a small but real change to the §5 plan; flag it for review when phase 4 starts.)*
+- *§12.1 CPS-friendly IR* — committed; ships before this plan revives.
+- *Effect-row slot in function types* — locked in by phase 4 per [turmeric-plan.md §10.5](turmeric-plan.md) and §6.10.
+- *`may_capture` bit on every function* — locked in by phase 4 per §6.10.
+- *Defers as list-on-frame, not codegen labels* — locked in by phase 4 per §6.10. The §6.2 strategy choice (S1 / S2 / S3) is now a runtime policy decision, not an architectural one.
+- *Per-frame parent pointer* — locked in by phase 4 per §6.10.
+- *Per-frame handler-stack pointer* — when CPS lowering happens (§12.1), allocate space in the frame for a handler-stack-top pointer. The §6.10 frame struct already has unused header bits reserved.
+
+The list shrank from "things to remember" to "things already committed." That's the value of the Status & sequencing decisions: this plan is now a *design-and-prioritize* exercise, not a *preserve-the-option* exercise.
 
 **When to reopen this analysis:**
-- §12.1 actually ships → revisit the cost of (3).
 - A real user hits the async wall and capability passing isn't enough → start v3 phase 1.
 - The Jane Street effect-row paper lands in a stable form → revisit the type-system extension cost.
+- §12.1 finishes shipping and we have spare capacity → optionally start v3 prototyping early to validate the §6.10 mechanism in practice.
 
 **When *not* to reopen:**
 - Just because effects are interesting. They are. That's not enough.

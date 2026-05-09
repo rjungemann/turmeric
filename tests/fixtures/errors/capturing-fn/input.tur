@@ -1,0 +1,3 @@
+(defn main [] :int
+  (let [f (fn [] 42)]
+    (f)))

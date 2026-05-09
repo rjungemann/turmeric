@@ -19,5 +19,6 @@ void  buf_puts(Buf *b, const char *s); /* NUL-terminated */
 void  buf_printf(Buf *b, const char *fmt, ...);
 void  buf_vprintf(Buf *b, const char *fmt, va_list ap);
 int   buf_to_file(const Buf *b, FILE *f); /* returns 0 on success */
+int   buf_to_path(const Buf *b, const char *path); /* write to file by name, returns 0 on success */
 
 #endif

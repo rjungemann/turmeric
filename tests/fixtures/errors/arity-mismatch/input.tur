@@ -1,0 +1,4 @@
+(defn add [x y] :int (+ x y))
+
+(defn main [] :int
+  (add 1 2 3))

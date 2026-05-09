@@ -1,0 +1,7 @@
+(defn popcount [x] :int
+  ```c
+  __builtin_popcount(x);
+  ```)
+
+(defn main [] :int
+  (popcount 7))

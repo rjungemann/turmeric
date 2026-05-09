@@ -496,10 +496,17 @@ static Expr *elab_defn(Elab *e, const Form *call) {
         diag_emit(DIAG_ERROR, name_f->span, "defn name must be a symbol");
         return NULL;
     }
-    if (scope_lookup(e->scope, name_f->as.sym)) {
-        diag_emit(DIAG_ERROR, name_f->span,
-                  "defn: '%s' is already defined", name_f->as.sym->name);
-        return NULL;
+    Binding *existing = scope_lookup(e->scope, name_f->as.sym);
+    if (existing) {
+        /* Allow forward-declared bindings from pass 1 to be redefined */
+        /* Forward declarations have TY_FN type (from pass 1) */
+        if (existing->type.kind == TY_FN && existing->is_global) {
+            /* This is a forward declaration - proceed with the real definition */
+        } else {
+            diag_emit(DIAG_ERROR, name_f->span,
+                      "defn: '%s' is already defined", name_f->as.sym->name);
+            return NULL;
+        }
     }
 
     /* Parse param vector */
@@ -608,7 +615,19 @@ static Expr *elab_defn(Elab *e, const Form *call) {
 
     /* Create Binding for the function */
     Binding *b = binding_new(e, name_f->as.sym, fn_type, false, true, name_f->span);
-    scope_add(&e->global, b);
+    /* If there's a forward-declared binding (TY_FN from pass 1), replace it */
+    if (existing && existing->type.kind == TY_FN) {
+        /* Replace the forward declaration with the real binding */
+        /* Find the forward declaration in the scope and replace it */
+        for (uint32_t i = 0; i < e->global.n; i++) {
+            if (e->global.bindings[i] == existing) {
+                e->global.bindings[i] = b;
+                break;
+            }
+        }
+    } else {
+        scope_add(&e->global, b);
+    }
 
     /* Build FnDef */
     FnDef *fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));
@@ -1134,6 +1153,52 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
     Expr **items = (nforms == 0) ? NULL :
         (Expr **)arena_alloc(arena, nforms * sizeof(Expr *));
     int rc = 0;
+
+    /* Phase 2: Two-pass elaboration for mutual recursion support.
+     * Pass 1: Collect all top-level defn declarations and add them to scope.
+     * This allows mutually recursive functions to see each other. */
+    for (uint32_t i = 0; i < nforms; i++) {
+        Form *f = forms[i];
+        if (f->tag == F_LIST && f->as.list.len > 0) {
+            Form *head = f->as.list.items[0];
+            if (head->tag == F_SYM) {
+                if (head->as.sym == e.sym_defn) {
+                    /* Parse defn declaration without body */
+                    if (f->as.list.len >= 3) {
+                        Form *name_f = f->as.list.items[1];
+                        if (name_f->tag == F_SYM) {
+                            /* Parse return type annotation if present */
+                            TypeKind return_kind = TY_INT; /* default */
+                            if (f->as.list.len >= 4) {
+                                Form *ret_f = f->as.list.items[3];
+                                if (ret_f->tag == F_KEYWORD) {
+                                    const Symbol *kw = ret_f->as.sym;
+                                    if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
+                                        return_kind = TY_INT;
+                                    } else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0) {
+                                        return_kind = TY_BOOL;
+                                    } else if (kw->len == 4 && memcmp(kw->name, "void", 4) == 0) {
+                                        return_kind = TY_NIL;
+                                    } else if (kw->len == 4 && memcmp(kw->name, "cstr", 4) == 0) {
+                                        return_kind = TY_CSTR;
+                                    } else if (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0) {
+                                        return_kind = TY_PTR_VOID;
+                                    }
+                                }
+                            }
+                            /* Create a forward function type with 1 int param and parsed return type */
+                            TypeKind arg_kinds[MAX_FN_ARITY] = {TY_INT};
+                            Type fn_type = type_fn(arg_kinds, 1, return_kind);
+                            Binding *b = binding_new(&e, name_f->as.sym, fn_type, false, true, f->span);
+                            scope_add(&e.global, b);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /* Pass 2: Elaborate all forms */
     for (uint32_t i = 0; i < nforms; i++) {
         items[i] = elab_form(&e, forms[i]);
         if (!items[i]) { rc = -1; /* keep going to surface more diagnostics */ }

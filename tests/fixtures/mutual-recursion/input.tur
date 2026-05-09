@@ -1,0 +1,8 @@
+(defn is-even [n] :bool
+  (if (= n 0) true (is-odd (- n 1))))
+
+(defn is-odd [n] :bool
+  (if (= n 0) false (is-even (- n 1))))
+
+(defn main [] :int
+  (println (is-even 4)))

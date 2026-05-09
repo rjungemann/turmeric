@@ -71,3 +71,11 @@ int buf_to_file(const Buf *b, FILE *f) {
     size_t n = fwrite(b->data, 1, b->len, f);
     return n == b->len ? 0 : -1;
 }
+
+int buf_to_path(const Buf *b, const char *path) {
+    FILE *f = fopen(path, "w");
+    if (!f) return -1;
+    int rc = buf_to_file(b, f);
+    fclose(f);
+    return rc;
+}
