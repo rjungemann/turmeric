@@ -1,0 +1,8 @@
+build/
+*.dSYM/
+*.o
+*.d
+tests/out/
+tests/fixtures/**/actual.*
+tur
+hello

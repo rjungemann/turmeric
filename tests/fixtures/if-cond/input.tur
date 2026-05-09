@@ -1,0 +1,32 @@
+; Branch coverage for if / cond / when / unless.
+
+; if with else
+(println (if (< 1 2) "less" "not"))           ; less
+(println (if (> 1 2) "greater" "no"))         ; no
+
+; cond with :else
+(let [x 7]
+  (println
+    (cond
+      (= x 1) "one"
+      (= x 2) "two"
+      (= x 7) "seven"
+      :else   "other")))                       ; seven
+
+; cond with :else first true
+(println
+  (cond
+    (= 1 2) "no"
+    :else   "yes"))                            ; yes
+
+; when (truthy: prints body)
+(when (= 1 1)
+  (println "when-yes"))                        ; when-yes
+(when (= 1 2)
+  (println "when-no"))                         ; (nothing)
+
+; unless (falsy: prints body)
+(unless (= 1 1)
+  (println "unless-no"))                       ; (nothing)
+(unless (= 1 2)
+  (println "unless-yes"))                      ; unless-yes

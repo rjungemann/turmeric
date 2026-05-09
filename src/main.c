@@ -1,0 +1,214 @@
+/* tur: the Turmeric compiler driver (phase 0). */
+
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/stat.h>
+
+#include "arena.h"
+#include "buf.h"
+#include "diag.h"
+#include "elab.h"
+#include "emit.h"
+#include "expr.h"
+#include "forms.h"
+#include "reader.h"
+#include "symbols.h"
+
+static int read_entire_file(const char *path, char **out, size_t *out_len) {
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        fprintf(stderr, "tur: cannot open '%s': %s\n", path, strerror(errno));
+        return -1;
+    }
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return -1; }
+    long size = ftell(f);
+    if (size < 0) { fclose(f); return -1; }
+    if (fseek(f, 0, SEEK_SET) != 0) { fclose(f); return -1; }
+
+    char *buf = (char *)malloc((size_t)size + 1);
+    if (!buf) { fclose(f); fprintf(stderr, "tur: oom\n"); return -1; }
+    size_t n = fread(buf, 1, (size_t)size, f);
+    fclose(f);
+    if (n != (size_t)size) { free(buf); return -1; }
+    buf[size] = '\0';
+    *out = buf;
+    *out_len = (size_t)size;
+    return 0;
+}
+
+static const char *basename_of(const char *path) {
+    const char *s = strrchr(path, '/');
+    return s ? s + 1 : path;
+}
+
+static int strip_ext(char *p) {
+    char *dot = strrchr(p, '.');
+    if (dot && dot != p) { *dot = '\0'; return 1; }
+    return 0;
+}
+
+/* Reads a .tur file and emits its C source into `out_c`. Returns 0 on success,
+ * nonzero on error (diagnostics already emitted). */
+static int compile_to_c(const char *path, Buf *out_c) {
+    char  *src = NULL;
+    size_t len = 0;
+    if (read_entire_file(path, &src, &len) != 0) return 2;
+
+    SourceFile file = {0};
+    file.path = path;
+    file.src = src;
+    file.len = len;
+    file.file_id = 0;
+    diag_register_file(&file);
+
+    Arena arena;
+    arena_init(&arena, 0);
+    SymbolTable st;
+    symtab_init(&st, &arena);
+
+    uint32_t nforms = 0;
+    Form **forms = read_all(&arena, &st, &file, &nforms);
+
+    int rc = 0;
+    if (!forms || diag_had_error()) {
+        rc = 1;
+    } else {
+        Expr *prog = elaborate_program(&arena, &st, forms, nforms);
+        if (!prog || diag_had_error()) {
+            rc = 1;
+        } else if (emit_program(out_c, prog) != 0) {
+            rc = 1;
+        }
+    }
+
+    symtab_free(&st);
+    arena_free(&arena);
+    free(src);
+    return rc;
+}
+
+static int cmd_emit_c(const char *path) {
+    Buf out;
+    buf_init(&out);
+    int rc = compile_to_c(path, &out);
+    if (rc == 0) buf_to_file(&out, stdout);
+    buf_free(&out);
+    return rc;
+}
+
+/* Choose an output executable name from the input path: foo.tur -> foo. */
+static void default_output_name(const char *input, char *out, size_t cap) {
+    const char *base = basename_of(input);
+    size_t n = strlen(base);
+    if (n >= cap) n = cap - 1;
+    memcpy(out, base, n);
+    out[n] = '\0';
+    strip_ext(out);
+}
+
+static int cmd_build(const char *input, const char *out_path) {
+    Buf csrc;
+    buf_init(&csrc);
+    int rc = compile_to_c(input, &csrc);
+    if (rc != 0) { buf_free(&csrc); return rc; }
+
+    /* Write C to a temp file. */
+    char tmpl[] = "/tmp/tur-XXXXXX.c";
+    int fd = mkstemps(tmpl, 2);
+    if (fd < 0) {
+        fprintf(stderr, "tur: cannot create temp file\n");
+        buf_free(&csrc);
+        return 2;
+    }
+    if (write(fd, csrc.data, csrc.len) != (ssize_t)csrc.len) {
+        fprintf(stderr, "tur: write failed\n");
+        close(fd);
+        buf_free(&csrc);
+        return 2;
+    }
+    close(fd);
+    buf_free(&csrc);
+
+    char chosen_out[1024];
+    if (!out_path) {
+        default_output_name(input, chosen_out, sizeof(chosen_out));
+        out_path = chosen_out;
+    }
+
+    const char *cc = getenv("CC");
+    if (!cc || !*cc) cc = "cc";
+
+    Buf cmd;
+    buf_init(&cmd);
+    buf_printf(&cmd, "%s -O2 -std=c99 -Wall -o %s %s", cc, out_path, tmpl);
+    int sys_rc = system(cmd.data);
+    buf_free(&cmd);
+    unlink(tmpl);
+
+    if (sys_rc != 0) {
+        fprintf(stderr, "tur: cc invocation failed (status %d)\n", sys_rc);
+        return 2;
+    }
+    return 0;
+}
+
+static int cmd_run(const char *input) {
+    char out_path[] = "/tmp/tur-run-XXXXXX";
+    int fd = mkstemp(out_path);
+    if (fd < 0) { fprintf(stderr, "tur: mkstemp failed\n"); return 2; }
+    close(fd);
+    /* We need a path mkstemp picked, but cc will overwrite it; that's fine. */
+
+    int rc = cmd_build(input, out_path);
+    if (rc != 0) { unlink(out_path); return rc; }
+
+    int sys_rc = system(out_path);
+    unlink(out_path);
+    if (sys_rc != 0) return sys_rc;
+    return 0;
+}
+
+static int usage(void) {
+    fprintf(stderr,
+        "tur: the Turmeric compiler (phase 0)\n"
+        "\n"
+        "usage:\n"
+        "  tur build <input.tur> [-o <out>]   build an executable\n"
+        "  tur emit-c <input.tur>             print the generated C to stdout\n"
+        "  tur run <input.tur>                build + execute\n");
+    return 64;
+}
+
+int main(int argc, char **argv) {
+    if (argc < 2) return usage();
+    const char *cmd = argv[1];
+
+    if (strcmp(cmd, "emit-c") == 0) {
+        if (argc != 3) return usage();
+        return cmd_emit_c(argv[2]);
+    }
+    if (strcmp(cmd, "build") == 0) {
+        const char *input = NULL;
+        const char *out = NULL;
+        for (int i = 2; i < argc; i++) {
+            if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
+                out = argv[++i];
+            } else if (argv[i][0] != '-') {
+                if (input) return usage();
+                input = argv[i];
+            } else {
+                return usage();
+            }
+        }
+        if (!input) return usage();
+        return cmd_build(input, out);
+    }
+    if (strcmp(cmd, "run") == 0) {
+        if (argc != 3) return usage();
+        return cmd_run(argv[2]);
+    }
+    return usage();
+}

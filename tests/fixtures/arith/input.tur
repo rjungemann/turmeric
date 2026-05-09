@@ -1,0 +1,14 @@
+; Phase 1 sanity: every arithmetic + comparison + logical op exercised.
+(println (+ 1 2 3 4))                     ; 10
+(println (- 100 1 2 3))                   ; 94
+(println (* 2 3 4))                       ; 24
+(println (/ 100 7))                       ; 14   (int div)
+(println (mod 100 7))                     ; 2
+(println (= 1 1))                         ; true
+(println (= 1 2))                         ; false
+(println (not= 1 2))                      ; true
+(println (< 1 2))                         ; true
+(println (>= 5 5))                        ; true
+(println (and (= 1 1) (< 0 5) (not= 3 4))); true
+(println (or  (= 1 2) (< 5 0) (= 7 7)))   ; true
+(println (not (= 1 2)))                   ; true
