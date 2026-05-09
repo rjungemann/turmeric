@@ -1102,6 +1102,19 @@ static Expr *elab_form(Elab *e, Form *f) {
             diag_emit(DIAG_ERROR, f->span,
                       "phase 1: vector literals are only allowed in let bindings");
             return NULL;
+        case F_CBLOCK: {
+            /* Phase 2: inline C code block ```c ... ``` */
+            /* For now, we don't support captures, so the InlineC has no captures */
+            InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
+            ic->code = f->as.cblock;
+            ic->return_type = TYPE_NIL; /* Will be inferred from context or default to void */
+            ic->captures = NULL;
+            ic->n_captures = 0;
+            
+            Expr *out = expr_new(e->arena, EX_INLINE_C, TYPE_NIL, f->span);
+            out->as.inline_c_.inline_c = ic;
+            return out;
+        }
         case F_LIST:
             if (f->as.list.len == 0) {
                 diag_emit(DIAG_ERROR, f->span, "empty list ()");

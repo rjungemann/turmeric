@@ -685,26 +685,35 @@ Goal: `fn` captures locals; closures are first-class values; the §2 counter exa
 
 Goal: scope-bounded cleanup with LIFO ordering and correct early-return behavior. No `ref<T>` yet — that's phase 5, layered on top.
 
+> **Architectural commitment: the unified defer model.** Defers are a runtime list-on-frame, not codegen labels. This is *modestly* more work in phase 4 and saves a phase-4-rewrite if we ever ship effect handlers (or any other feature where defers fire from a non-syntactic exit point). See [effects-plan.md §6.10](effects-plan.md) for the full rationale; in short, every plausible future strategy (S1 "run on capture" / S2 "attach to continuation" / S3 "forbid") is then a runtime policy decision rather than an architectural rewrite. The cost of paying for this if effects never ship is sub-percent at runtime.
+
+**Frame data structure**
+- [ ] Add a `Frame` struct (or rename `Scope` if it's already in `elab.c`) with: a defer list, a parent pointer, a span. Lives on the C stack in v0/v1.
+- [ ] `frame_push_defer(Frame*, defer_t)` registers a thunk. `defer_t` is `{fn_ptr, env_ptr}` — same shape as a closure (§4) so this composes with the closure machinery.
+- [ ] `frame_fire_defers_lifo(Frame*)` walks the list back-to-front, invokes each thunk.
+
 **Parsing & elaboration**
 - [ ] `(defer expr)` valid only inside a scope-introducing form (`let`, `do`, function body). Error otherwise.
-- [ ] Defers are *expressions* that elaborate to "register this thunk on this scope's defer stack"; they evaluate to nil.
+- [ ] Defers elaborate to a `frame_push_defer` IR node; they evaluate to nil.
 - [ ] Multiple defers per scope: collected in source order, fire LIFO.
 
-**Scope analysis** — `src/scope.{c,h}` (or in `elab`)
-- [ ] Assign every scope a unique label id.
-- [ ] Build a per-scope list of defer expressions.
-- [ ] Identify every exit point (fall-through, explicit return, future `break`/`continue`).
+**Scope analysis & codegen**
+- [ ] Each scope is assigned a `Frame` allocation (stack-allocated; the `may_capture` bit is always false in v0/v1, so no heap path runs yet).
+- [ ] Codegen for scope exit: emit `frame_fire_defers_lifo(&frame); /* free */`. *Not* a per-scope `__cleanup_L<id>:` label — the lowering is a runtime call.
+- [ ] Early `return X`: rewrite to "for each enclosing frame, fire defers, then return". This walks frames via the parent pointer; it's a small loop in the emitted code, not a goto chain.
+- [ ] Function-level frame exists even if it has no defers, so `ref<T>` (phase 5) can register drops on it without special-casing.
 
-**Codegen via labels**
-- [ ] Each scope ends with `__cleanup_L<id>:` block that runs defers in LIFO order.
-- [ ] Normal exit: fall through into the cleanup block.
-- [ ] Early `return X`: rewrite to `{ __ret = X; goto __cleanup_L<id>; }`, with the cleanup block ending in `goto __cleanup_L<outer>` (chain outward) and the outermost performing `return __ret`.
-- [ ] Function-level cleanup label exists even if no defers, so future `ref<T>` (phase 5) can hook in cheaply.
+**Future-proofing slots (per [effects-plan.md §6.10](effects-plan.md))**
+- [ ] `Frame` has a `parent` pointer field — even though v0/v1 doesn't follow it (early return walks via codegen knowledge of nesting). The field exists so v3's heap-frame mode plugs in without restructuring.
+- [ ] Every `FnDef` carries a `may_capture: bool`, defaulting to `false`. Phase 4 doesn't read it; phase v3 will read it to choose stack-vs-heap frame allocation.
+- [ ] Every function `Type` has an `effect_row` slot, defaulting to `nullptr` (treated as `{}` empty row). Phase 4 doesn't populate it; type-equality treats `nullptr == nullptr` as compatible. Phase v3 will populate it.
+- [ ] *Document the commit message:* "this is the unified defer model from effects-plan.md §6.10 — small overhead now, no phase-4 rewrite if effects ship."
 
 **Edge cases**
-- [ ] Defers inside `if` branches: each branch is its own scope; defers fire when the branch ends, not at the enclosing `let`'s end. Document with a fixture.
+- [ ] Defers inside `if` branches: each branch is its own frame; defers fire when the branch ends, not at the enclosing `let`'s end. Document with a fixture.
 - [ ] Defer that itself calls a function that errors: in v0, errors are abort-only, so this is fine. Revisit when we have proper error propagation.
 - [ ] Defer referencing a binding that was `set!`-ed after the defer: defer runs against the *current* value at exit time, not the value at registration. (Standard Go semantics in this respect.) Fixture this explicitly — the surprising case.
+- [ ] *Don't* document defer's semantics as "runs *immediately* at scope exit." Documentation should say "runs on scope exit" without the immediacy claim, leaving room for v3's "...or when a continuation that captured this scope drops" without a doc-breaking change.
 
 **Fixtures**
 - [ ] `defer-order.tur` — three defers, prove LIFO via printed output.
@@ -712,9 +721,9 @@ Goal: scope-bounded cleanup with LIFO ordering and correct early-return behavior
 - [ ] `defer-nested-scopes.tur` — defers in inner `let` fire before defers in outer `let`.
 - [ ] `defer-mutated-binding.tur` — defer captures by reference, sees latest value.
 - [ ] Negative: `(defer ...)` at module top-level → error.
-- [ ] Codegen snapshots for the label-and-goto unwind.
+- [ ] Codegen snapshots for the runtime-list lowering (not the label-chain).
 
-**Exit criterion:** all defer fixtures green; the codegen-snapshot tests show the goto-chain outward across nested scopes; ASan/UBSan clean.
+**Exit criterion:** all defer fixtures green; the codegen-snapshot tests show `frame_fire_defers_lifo` calls (not `__cleanup_L<n>` labels); ASan/UBSan clean.
 
 ---
 

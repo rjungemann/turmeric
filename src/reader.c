@@ -51,6 +51,11 @@ static int peek2(const Reader *r) {
     return (unsigned char)r->src[r->pos + 1];
 }
 
+static int peek3(const Reader *r) {
+    if (r->pos + 2 >= r->len) return -1;
+    return (unsigned char)r->src[r->pos + 2];
+}
+
 static int advance(Reader *r) {
     if (r->pos >= r->len) return -1;
     int c = (unsigned char)r->src[r->pos++];
@@ -333,6 +338,71 @@ static Form *read_seq(Reader *r, char open, char close, FormTag tag,
     return seq;
 }
 
+/* Read a C code block: ```c ... ``` or ``` c ... ``` */
+static Form *read_cblock(Reader *r) {
+    uint32_t start_line = r->line;
+    uint32_t start_col = r->col;
+    size_t start_off = r->pos;
+    
+    /* Expect ``` */
+    if (peek(r) != '`') {
+        Span s = span_point(r);
+        diag_emit(DIAG_ERROR, s, "expected '`' for C code block");
+        r->error = true;
+        return NULL;
+    }
+    advance(r); /* consume '`' */
+    if (peek(r) != '`') {
+        Span s = span_point(r);
+        diag_emit(DIAG_ERROR, s, "expected '`' for C code block");
+        r->error = true;
+        return NULL;
+    }
+    advance(r); /* consume '`' */
+    if (peek(r) != '`') {
+        Span s = span_point(r);
+        diag_emit(DIAG_ERROR, s, "expected '`' for C code block");
+        r->error = true;
+        return NULL;
+    }
+    advance(r); /* consume '`' */
+    
+    /* Now expect 'c' (possibly after whitespace) */
+    skip_ws_and_comments(r);
+    if (peek(r) != 'c') {
+        Span s = span_point(r);
+        diag_emit(DIAG_ERROR, s, "expected 'c' for C code block (use ```c ... ```)");
+        r->error = true;
+        return NULL;
+    }
+    advance(r); /* consume 'c' */
+    skip_ws_and_comments(r);
+    
+    /* Now read the C code until we find ``` */
+    size_t code_start = r->pos;
+    
+    while (peek(r) != -1) {
+        if (peek(r) == '`' && peek2(r) == '`' && peek3(r) == '`') {
+            /* Found ``` */
+            advance(r); advance(r); advance(r);
+            break;
+        }
+        advance(r);
+    }
+    
+    if (peek(r) == -1) {
+        Span s = span_point(r);
+        diag_emit(DIAG_ERROR, s, "unterminated C code block (missing ```)");
+        r->error = true;
+        return NULL;
+    }
+    
+    size_t code_end = r->pos - 3; /* don't include the ``` */
+    StrSlice code = { r->src + code_start, (uint32_t)(code_end - code_start) };
+    Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
+    return form_cblock(r->arena, span, code);
+}
+
 static Form *read_form(Reader *r) {
     skip_ws_and_comments(r);
     int c = peek(r);
@@ -349,6 +419,7 @@ static Form *read_form(Reader *r) {
     }
     if (c == '"') return read_string(r);
     if (c == ':') return read_keyword(r);
+    if (c == '`') return read_cblock(r); /* C code block */
     if (c >= '0' && c <= '9') return read_number(r, 0);
     if (is_sym_start(c)) return read_symbol_or_minus(r);
 

@@ -26,6 +26,7 @@ typedef enum FormTag {
     F_KEYWORD,    /* :foo */
     F_LIST,       /* (a b c) */
     F_VEC,        /* [a b c]  — same payload as F_LIST */
+    F_CBLOCK,     /* ```c ... ``` C code block (Phase 2) */
 } FormTag;
 
 struct Form;
@@ -45,6 +46,7 @@ struct Form {
         StrSlice      s;        /* string literal contents (escapes resolved) */
         const Symbol *sym;
         FormList      list;
+        StrSlice      cblock;   /* raw C code for F_CBLOCK */
     } as;
 };
 
@@ -57,6 +59,7 @@ Form *form_sym    (Arena *a, Span span, const Symbol *sym);
 Form *form_keyword(Arena *a, Span span, const Symbol *sym);
 Form *form_list   (Arena *a, Span span, Form **items, uint32_t len);
 Form *form_vec    (Arena *a, Span span, Form **items, uint32_t len);
+Form *form_cblock (Arena *a, Span span, StrSlice code);
 
 void  form_print(Buf *b, const Form *f);
 

@@ -408,9 +408,13 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* extern-c declarations emit nothing in value position (they're file-scope) */
             return atom_nil();
         }
-        case EX_INLINE_C:
-            fprintf(stderr, "tur: emit: EX_INLINE_C not yet implemented\n");
-            abort();
+        case EX_INLINE_C: {
+            /* Emit the raw C code inline */
+            InlineC *ic = e->as.inline_c_.inline_c;
+            /* Just emit the C code as-is */
+            buf_write(body, ic->code.p, ic->code.len);
+            return atom_nil();
+        }
     }
     return atom_nil();
 }
@@ -477,10 +481,14 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_EXTERN_C:
             /* extern-c declarations emit nothing in statement position (they're file-scope) */
             return;
-        case EX_INLINE_C:
-            fprintf(stderr, "tur: emit: EX_INLINE_C not yet implemented in emit_stmt\n");
-            abort();
+        case EX_INLINE_C: {
+            /* Emit the raw C code inline as a statement */
+            InlineC *ic = e->as.inline_c_.inline_c;
+            indent_buf(body, ctx->indent);
+            buf_write(body, ic->code.p, ic->code.len);
+            buf_putc(body, '\n');
             return;
+        }
     }
 }
 

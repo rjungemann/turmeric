@@ -66,6 +66,14 @@ Form *form_vec(Arena *a, Span span, Form **items, uint32_t len) {
     return form_seq(a, F_VEC, span, items, len);
 }
 
+Form *form_cblock(Arena *a, Span span, StrSlice code) {
+    Form *f = form_new(a, F_CBLOCK, span);
+    /* The code slice points into the source file; we need to copy it */
+    f->as.cblock.p = arena_strdup(a, code.p, code.len);
+    f->as.cblock.len = code.len;
+    return f;
+}
+
 static void print_str_escaped(Buf *b, StrSlice s) {
     buf_putc(b, '"');
     for (uint32_t i = 0; i < s.len; i++) {
@@ -115,6 +123,11 @@ void form_print(Buf *b, const Form *f) {
                 form_print(b, f->as.list.items[i]);
             }
             buf_putc(b, ']');
+            break;
+        case F_CBLOCK:
+            buf_puts(b, "```c ");
+            buf_write(b, f->as.cblock.p, f->as.cblock.len);
+            buf_puts(b, "```");
             break;
     }
 }
