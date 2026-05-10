@@ -302,11 +302,7 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
-int main() {
-        printf("%lld\n", (long long)(((((INT64_C(5)) + (INT64_C(5)))) + (((INT64_C(5)) + (INT64_C(5)))))));
-        int64_t __t0;
-        __t0 = INT64_C(0);
-        return (int)__t0;
+int main(void) {
+    puts("hi");
+    return 0;
 }
-
-

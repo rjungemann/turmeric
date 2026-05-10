@@ -279,6 +279,10 @@ typedef struct Elab {
     const Symbol *sym_try;        /* try */
     const Symbol *sym_catch;      /* catch */
     const Symbol *sym_finally;    /* finally */
+    /* Phase 18: Delimited continuations */
+    const Symbol *sym_reset;      /* reset */
+    const Symbol *sym_shift;      /* shift */
+    const Symbol *sym_shift0;     /* shift0 */
     /* Phase 10: GC */
     const Symbol *sym_gc_force;    /* gc! */
     const Symbol *sym_gc_enable;   /* gc-enable! */
@@ -408,6 +412,10 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_try = intern_cstr(st, "try");
     e->sym_catch = intern_cstr(st, "catch");
     e->sym_finally = intern_cstr(st, "finally");
+    /* Phase 18: Delimited continuations */
+    e->sym_reset = intern_cstr(st, "reset");
+    e->sym_shift = intern_cstr(st, "shift");
+    e->sym_shift0 = intern_cstr(st, "shift0");
     /* Phase 10: GC */
     e->sym_gc_force = intern_cstr(st, "gc!");
     e->sym_gc_enable = intern_cstr(st, "gc-enable!");
@@ -1860,6 +1868,70 @@ static Expr *elab_finally(Elab *e, const Form *call) {
     return NULL;
 }
 
+
+/* Phase 18: Delimited continuations */
+
+/* (reset body) - Establish a continuation boundary.
+ */
+static Expr *elab_reset(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(reset body) requires exactly one argument");
+        return NULL;
+    }
+    Expr *body = elab_form(e, call->as.list.items[1]);
+    if (!body) return NULL;
+    Expr *out = expr_new(e->arena, EX_RESET, body->type, call->span);
+    out->as.reset_.body = body;
+    return out;
+}
+
+/* (shift k body) - Capture the current continuation.
+ */
+static Expr *elab_shift(Elab *e, const Form *call) {
+    if (call->as.list.len != 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(shift k body) requires exactly two arguments");
+        return NULL;
+    }
+    Expr *k_expr = elab_form(e, call->as.list.items[1]);
+    if (!k_expr) return NULL;
+    if (k_expr->kind != EX_FN && k_expr->kind != EX_CLOSURE) {
+        diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
+                  "shift requires a function as first argument");
+        return NULL;
+    }
+    Expr *body = elab_form(e, call->as.list.items[2]);
+    if (!body) return NULL;
+    Expr *out = expr_new(e->arena, EX_SHIFT, TYPE_NIL, call->span);
+    out->as.shift_.k_fn = k_expr;
+    out->as.shift_.body = body;
+    return out;
+}
+
+/* (shift0 k body) - One-shot shift.
+ */
+static Expr *elab_shift0(Elab *e, const Form *call) {
+    if (call->as.list.len != 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(shift0 k body) requires exactly two arguments");
+        return NULL;
+    }
+    Expr *k_expr = elab_form(e, call->as.list.items[1]);
+    if (!k_expr) return NULL;
+    if (k_expr->kind != EX_FN && k_expr->kind != EX_CLOSURE) {
+        diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
+                  "shift0 requires a function as first argument");
+        return NULL;
+    }
+    Expr *body = elab_form(e, call->as.list.items[2]);
+    if (!body) return NULL;
+    Expr *out = expr_new(e->arena, EX_SHIFT0, TYPE_NIL, call->span);
+    out->as.shift0_.k_fn = k_expr;
+    out->as.shift0_.body = body;
+    return out;
+}
+
 /* Phase 6: defmacro — (defmacro name [params...] body...)
  * Defines a macro that will be expanded at compile time.
  * Syntax: (defmacro name [param1 param2 ...] body...)
@@ -2736,6 +2808,10 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_try)         return elab_try(e, call);
     if (name == e->sym_catch)       return elab_catch(e, call);
     if (name == e->sym_finally)     return elab_finally(e, call);
+    /* Phase 18: Delimited continuations */
+    if (name == e->sym_reset)      return elab_reset(e, call);
+    if (name == e->sym_shift)      return elab_shift(e, call);
+    if (name == e->sym_shift0)     return elab_shift0(e, call);
     /* Phase 10: GC */
     if (name == e->sym_gc_force)    return elab_gc_force(e, call);
     if (name == e->sym_gc_enable)   return elab_gc_enable(e, call);

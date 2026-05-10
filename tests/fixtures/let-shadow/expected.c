@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <setjmp.h>
 extern void *malloc(size_t);
 extern void free(void *);
 extern void abort(void);
@@ -32,6 +33,77 @@ static inline int tur_frame_push_defer(tur_frame *f, defer_fn_t thunk, void *env
 static void tur_frame_fire_lifo(tur_frame *f) {
     for (int i = f->n - 1; i >= 0; i--) f->defers[i](f->envs[i]);
     f->n = 0;
+}
+
+/* Exception handling - Phase 17 */
+typedef struct tur_exception tur_exception;
+
+struct tur_exception {
+    int payload_type;      /* TypeKind enum value */
+    void *payload;         /* The exception payload */
+    int line;              /* Line where thrown */
+    const char *file;      /* File where thrown */
+    tur_exception *cause;  /* Chained exception */
+};
+
+typedef struct ExceptionHandler ExceptionHandler;
+struct ExceptionHandler {
+    jmp_buf jmp_buf;
+    int active;
+    tur_exception *caught;
+    ExceptionHandler *parent;
+};
+
+static ExceptionHandler *global_handler_chain = NULL;
+
+ExceptionHandler *exn_push_handler(void) {
+    ExceptionHandler *h = (ExceptionHandler *)malloc(sizeof(ExceptionHandler));
+    if (!h) { fprintf(stderr, "exn: out of memory\n"); abort(); }
+    h->active = 1;
+    h->caught = NULL;
+    h->parent = global_handler_chain;
+    global_handler_chain = h;
+    return h;
+}
+
+ExceptionHandler *exn_pop_handler(void) {
+    ExceptionHandler *old = global_handler_chain;
+    if (old) global_handler_chain = old->parent;
+    return old;
+}
+
+void tur_exception_free(tur_exception *exn) {
+    if (!exn) return;
+    if (exn->cause) { tur_exception_free(exn->cause); }
+    free(exn->payload);
+    free(exn);
+}
+
+bool tur_exception_matches(tur_exception *exn, int expected_type) {
+    if (!exn) return false;
+    if (exn->payload_type == expected_type) return true;
+    if (expected_type == 0) return true;  /* TY_UNKNOWN = 0 = catch-all */
+    return false;
+}
+
+void tur_throw(int payload_type, void *payload, int line, const char *file) {
+    tur_exception *exn = (tur_exception *)malloc(sizeof(tur_exception));
+    if (!exn) { abort(); }
+    exn->payload_type = payload_type;
+    exn->payload = payload;
+    exn->line = line;
+    exn->file = file;
+    exn->cause = NULL;
+    ExceptionHandler *h = global_handler_chain;
+    if (h) {
+        if (h->caught) tur_exception_free(h->caught);
+        h->caught = exn;
+        h->active = 0;
+        longjmp(h->jmp_buf, 1);
+    } else {
+        tur_exception_free(exn);
+        abort();
+    }
 }
 
 /* rc<T> + weak<T> reference counting - Phase 9 */

@@ -77,6 +77,10 @@ typedef enum ExprKind {
     /* Phase 17: Exceptions */
     EX_THROW,          /* (throw expr) - raise an exception */
     EX_TRY,            /* (try body (catch ...) (finally ...)) - try-catch-finally */
+    /* Phase 18: Delimited continuations */
+    EX_RESET,          /* (reset body) - establish continuation boundary */
+    EX_SHIFT,          /* (shift k body) - capture continuation, pass to k */
+    EX_SHIFT0,         /* (shift0 k body) - one-shot shift */
     EX_PROGRAM,
 } ExprKind;
 
@@ -201,6 +205,16 @@ struct Expr {
             uint8_t n_clauses;      /* number of catch clauses */
             Expr *finally_body;     /* finally body (NULL if none) */
         } try_;
+        /* Phase 18: Delimited continuations */
+        struct { Expr *body; }         reset_;      /* (reset body) - body to run with fresh continuation */
+        struct { 
+            Expr *k_fn;             /* (shift k body) - k is a function (fn [v] ...) that receives the continuation */
+            Expr *body;             /* body to run with captured continuation */
+        } shift_;
+        struct { 
+            Expr *k_fn;             /* (shift0 k body) - k is a function that cannot resume */
+            Expr *body;             /* body to run */
+        } shift0_;
 
         struct { Expr **items; uint32_t n; }                               program;
     } as;

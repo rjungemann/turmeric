@@ -300,6 +300,20 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
                 }
             }
             return true;
+        /* Phase 18: Delimited continuations */
+        case EX_RESET:
+            /* Check the reset body */
+            return borrow_check_expr_recursive(ctx, e->as.reset_.body);
+        case EX_SHIFT:
+            /* Check k function and body */
+            if (!borrow_check_expr_recursive(ctx, e->as.shift_.k_fn)) return false;
+            if (!borrow_check_expr_recursive(ctx, e->as.shift_.body)) return false;
+            return true;
+        case EX_SHIFT0:
+            /* Check k function and body */
+            if (!borrow_check_expr_recursive(ctx, e->as.shift0_.k_fn)) return false;
+            if (!borrow_check_expr_recursive(ctx, e->as.shift0_.body)) return false;
+            return true;
     }
     
     return true;

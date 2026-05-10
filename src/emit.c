@@ -757,6 +757,13 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
             return atom_nil();
         }
+        /* Phase 18: Delimited continuations */
+        case EX_RESET:
+        case EX_SHIFT:
+        case EX_SHIFT0:
+            /* For now, emit a placeholder - full impl deferred */
+            buf_puts(body, "__builtin_trap()");
+            return atom_nil();
         case EX_TRY: {
             /* (try body (catch ...) (finally ...)) - emit as setjmp/longjmp */
             char *handler_var = fresh_tmp(ctx);
@@ -1351,6 +1358,13 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             free(v);
             return;
         }
+        /* Phase 18: Delimited continuations */
+        case EX_RESET:
+        case EX_SHIFT:
+        case EX_SHIFT0:
+            /* For now, emit a placeholder - full impl deferred */
+            buf_puts(body, "__builtin_trap();");
+            return;
         case EX_INSTANCE_DEF: {
             /* Phase 15: Emit dictionary struct and global singleton */
             TypeClassInstance *inst = e->as.instance_def_.instance;

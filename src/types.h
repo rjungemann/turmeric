@@ -47,6 +47,8 @@ typedef enum TypeKind {
     TY_TYPECLASS_INST, /* Typeclass instance type */
     /* Phase 17: Exceptions */
     TY_EXCEPTION,    /* Exception type - wraps any value for throw/catch */
+    /* Phase 18: Delimited continuations */
+    TY_CONT,         /* cont<T> - captured continuation that returns T */
 } TypeKind;
 
 /* Max arity for function types in phase 2. */
@@ -100,6 +102,10 @@ typedef struct Type {
         struct {
             TypeKind payload_type;  /* The type of the exception payload */
         } exn;
+        /* Phase 18: Continuation types */
+        struct {
+            TypeKind returns;  /* The type T that cont<T> returns */
+        } cont;
     } as;
 } Type;
 
@@ -237,6 +243,17 @@ static inline Type type_exception(TypeKind payload_type) {
     t.copy_kind = CK_MOVE;  /* Exceptions are move-only (one-shot) */
     t.n_lifetimes = 0;
     t.as.exn.payload_type = payload_type;
+    return t;
+}
+
+/* Phase 18: Continuation type constructor */
+/* Create a continuation type cont<T> that returns T */
+static inline Type type_cont(TypeKind returns) {
+    Type t;
+    t.kind = TY_CONT;
+    t.copy_kind = CK_MOVE;  /* Continuations are move-only (one-shot) */
+    t.n_lifetimes = 0;
+    t.as.cont.returns = returns;
     return t;
 }
 

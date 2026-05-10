@@ -206,5 +206,25 @@ void expr_print(Buf *b, const Expr *e) {
             }
             buf_putc(b, ')');
             break;
+        /* Phase 18: Delimited continuations */
+        case EX_RESET:
+            buf_puts(b, "(reset ");
+            expr_print(b, e->as.reset_.body);
+            buf_putc(b, ')');
+            break;
+        case EX_SHIFT:
+            buf_puts(b, "(shift ");
+            expr_print(b, e->as.shift_.k_fn);
+            buf_puts(b, " ");
+            expr_print(b, e->as.shift_.body);
+            buf_putc(b, ')');
+            break;
+        case EX_SHIFT0:
+            buf_puts(b, "(shift0 ");
+            expr_print(b, e->as.shift0_.k_fn);
+            buf_puts(b, " ");
+            expr_print(b, e->as.shift0_.body);
+            buf_putc(b, ')');
+            break;
     }
 }

@@ -51,6 +51,14 @@ int type_eq(Type a, Type b) {
     if (a.kind == TY_TYPECLASS_INST) {
         return a.as.typeclass_inst.instance == b.as.typeclass_inst.instance;
     }
+    /* Phase 17: Exception types */
+    if (a.kind == TY_EXCEPTION) {
+        return a.as.exn.payload_type == b.as.exn.payload_type;
+    }
+    /* Phase 18: Continuation types */
+    if (a.kind == TY_CONT) {
+        return a.as.cont.returns == b.as.cont.returns;
+    }
     return 1;
 }
 
@@ -174,6 +182,17 @@ const char *type_name(Type t) {
             buf_putc(&tmp, '\0');
             return strdup(tmp.data);
         }
+        /* Phase 18: Continuation types */
+        case TY_CONT: {
+            /* Build "cont<T>" name */
+            Buf tmp;
+            buf_init(&tmp);
+            buf_puts(&tmp, "cont<");
+            buf_puts(&tmp, type_name(type_from_kind(t.as.cont.returns)));
+            buf_puts(&tmp, ">");
+            buf_putc(&tmp, '\0');
+            return strdup(tmp.data);
+        }
     }
     return "?";
 }
@@ -267,6 +286,13 @@ static void type_name_buf(Buf *b, Type t) {
             buf_puts(b, ">");
             break;
         }
+        /* Phase 18: Continuation types */
+        case TY_CONT: {
+            buf_puts(b, "cont<");
+            type_name_buf(b, type_from_kind(t.as.cont.returns));
+            buf_puts(b, ">");
+            break;
+        }
     }
 }
 
@@ -310,6 +336,9 @@ const char *type_c_name(Type t) {
         /* Phase 17: Exception types lower to a struct in C */
         case TY_EXCEPTION:
             return "tur_exception *";
+        /* Phase 18: Continuation types lower to a struct in C */
+        case TY_CONT:
+            return "tur_cont *";
     }
     return "void";
 }
