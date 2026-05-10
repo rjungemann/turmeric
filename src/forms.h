@@ -34,6 +34,7 @@ typedef enum FormTag {
     F_NIL  = 0,
     F_BOOL,
     F_INT,
+    F_FLOAT,       /* Phase 1: Float literals (1.0, 1.5e3) */
     F_STR,
     F_SYM,
     F_KEYWORD,    /* :foo */
@@ -61,6 +62,7 @@ struct Form {
     union {
         bool          b;
         int64_t       i;
+        double        f;        /* Phase 1: Float literal value */
         StrSlice      s;        /* string literal contents (escapes resolved) */
         const Symbol *sym;
         FormList      list;
@@ -72,6 +74,7 @@ Form *form_new(Arena *a, FormTag tag, Span span);
 Form *form_nil    (Arena *a, Span span);
 Form *form_bool   (Arena *a, Span span, bool b);
 Form *form_int    (Arena *a, Span span, int64_t i);
+Form *form_float  (Arena *a, Span span, double f);
 Form *form_str    (Arena *a, Span span, const char *p, uint32_t len);
 Form *form_sym    (Arena *a, Span span, const Symbol *sym);
 Form *form_keyword(Arena *a, Span span, const Symbol *sym);
@@ -85,5 +88,8 @@ Form *form_unquote  (Arena *a, Span span, Form *quoted);
 Form *form_unquote_splicing  (Arena *a, Span span, Form *quoted);
 
 void  form_print(Buf *b, const Form *f);
+
+/* Return the name of a FormTag as a string */
+const char *form_tag_name(FormTag tag);
 
 #endif

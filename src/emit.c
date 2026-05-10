@@ -94,6 +94,9 @@ static bool expr_contains_return_or_throw(const Expr *e) {
         case EX_WHILE:
             /* Check body */
             return expr_contains_return_or_throw(e->as.while_.body);
+        /* Phase 19: Algebraic effects - discontinue is like throw */
+        case EX_DISCONTINUE:
+            return true;
         default:
             return false;
     }
@@ -331,6 +334,18 @@ static char *atom_int(int64_t i) {
     snprintf(buf, sizeof buf, "INT64_C(%lld)", (long long)i);
     return strdup(buf);
 }
+static char *atom_float(double f) {
+    char buf[64];
+    snprintf(buf, sizeof buf, "%.15g", f);
+    /* Ensure it's a double literal by appending .0 if needed */
+    char *p = strchr(buf, '.');
+    char *e = strchr(buf, 'e');
+    if (!p && !e) {
+        /* No decimal point or exponent - append .0 */
+        strcat(buf, ".0");
+    }
+    return strdup(buf);
+}
 static char *atom_var(EmitCtx *ctx, const Binding *b) {
     return name_for_binding(ctx, b);
 }
@@ -379,6 +394,7 @@ static char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
 
     /* println — emits a stmt and returns a nil placeholder. */
     if (spec->shape == BS_PRINTLN_INT ||
+        spec->shape == BS_PRINTLN_FLOAT ||
         spec->shape == BS_PRINTLN_BOOL ||
         spec->shape == BS_PRINTLN_CSTR) {
         char *arg = emit_value(ctx, body, args[0]);
@@ -386,6 +402,9 @@ static char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
         switch (spec->shape) {
             case BS_PRINTLN_INT:
                 buf_printf(body, "printf(\"%%lld\\n\", (long long)(%s));\n", arg);
+                break;
+            case BS_PRINTLN_FLOAT:
+                buf_printf(body, "printf(\"%%g\\n\", %s);\n", arg);
                 break;
             case BS_PRINTLN_BOOL:
                 buf_printf(body, "puts((%s) ? \"true\" : \"false\");\n", arg);
@@ -417,6 +436,11 @@ static char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
             for (uint32_t i = 1; i < n; i++) {
                 buf_printf(&out, " %s (%s))", spec->c_op, arg_strs[i]);
             }
+            break;
+        case BS_DIV_CHECK:
+            /* Division with zero check: (a / b) checks b != 0 */
+            buf_printf(&out, "((%s) ? ((%s) / (%s)) : (fprintf(stderr, \"division by zero\\n\"), abort(), 0))",
+                       arg_strs[1], arg_strs[0], arg_strs[1]);
             break;
         case BS_PREFIX_UNARY:
             buf_printf(&out, "(%s(%s))", spec->c_op, arg_strs[0]);
@@ -814,6 +838,7 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_NIL_LIT:  return atom_nil();
         case EX_BOOL_LIT: return atom_bool(e->as.b);
         case EX_INT_LIT:  return atom_int(e->as.i);
+        case EX_FLOAT_LIT: return atom_float(e->as.f);
         case EX_CSTR_LIT: return atom_cstr(e->as.s);
         case EX_VAR:      return atom_var(ctx, e->as.var.binding);
         case EX_LET:      return emit_let_value(ctx, body, e);
@@ -1318,6 +1343,17 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             free(inner);
             return result;
         }
+        /* Phase 19: Algebraic effects */
+        case EX_DEFECT:
+            /* Effect definitions are compile-time only - no runtime code */
+            return atom_nil();
+        case EX_PERFORM:
+        case EX_HANDLE:
+        case EX_RESUME:
+        case EX_DISCONTINUE:
+            /* For now, emit a placeholder - full impl deferred to lowering pass */
+            buf_puts(body, "__builtin_trap()");
+            return atom_nil();
     }
     return atom_nil();
 }
@@ -1326,7 +1362,7 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* Run e for side effects, discard value. */
     switch (e->kind) {
         case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:
-        case EX_CSTR_LIT: case EX_VAR:
+        case EX_FLOAT_LIT: case EX_CSTR_LIT: case EX_VAR:
         case EX_TYPECLASS_DEF:
             /* No side effects — emit nothing. */
             return;
@@ -1675,6 +1711,17 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             free(v);
             return;
         }
+        /* Phase 19: Algebraic effects */
+        case EX_DEFECT:
+            /* Effect definitions are compile-time only */
+            return;
+        case EX_PERFORM:
+        case EX_HANDLE:
+        case EX_RESUME:
+        case EX_DISCONTINUE:
+            /* Emit as value expression (placeholder for now) */
+            emit_value(ctx, body, e);
+            return;
     }
 }
 

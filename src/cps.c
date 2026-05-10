@@ -81,6 +81,25 @@ bool cps_expr_contains_shift(const Expr *e) {
                 if (cps_expr_contains_shift(e->as.try_.clauses[i].handler)) return true;
             }
             return e->as.try_.finally_body && cps_expr_contains_shift(e->as.try_.finally_body);
+        /* Phase 19: Algebraic effects - these lower to shift/reset */
+        case EX_DEFECT:
+            return false; /* Effect definitions don't contain shift */
+        case EX_PERFORM:
+            /* perform lowers to shift - always needs CPS */
+            return true;
+        case EX_HANDLE:
+            /* handle lowers to reset - always needs CPS */
+            if (cps_expr_contains_shift(e->as.handle_.handle->body)) return true;
+            for (uint8_t i = 0; i < e->as.handle_.handle->n_cases; i++) {
+                if (cps_expr_contains_shift(e->as.handle_.handle->cases[i].body)) return true;
+            }
+            return true; /* handle itself needs CPS even if body doesn't */
+        case EX_RESUME:
+            /* resume is a tail call into a continuation - needs CPS */
+            return true;
+        case EX_DISCONTINUE:
+            /* discontinue is like throw but with a continuation - needs CPS */
+            return cps_expr_contains_shift(e->as.discontinue_.discontinue->exception);
         default:
             return false;
     }

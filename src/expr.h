@@ -11,6 +11,7 @@
 #include "types.h"
 #include "lifetimes.h"  /* Phase 13: Lifetime annotations */
 #include "typeclass.h"  /* Phase 15: Typeclass constraints */
+#include "effect.h"    /* Phase 19: Algebraic effects */
 
 /* Forward declarations. */
 typedef struct Expr        Expr;
@@ -39,6 +40,7 @@ typedef enum ExprKind {
     EX_NIL_LIT = 1,
     EX_BOOL_LIT,
     EX_INT_LIT,
+    EX_FLOAT_LIT,       /* Phase 1: Float literals */
     EX_CSTR_LIT,
     EX_VAR,
     EX_LET,
@@ -82,6 +84,12 @@ typedef enum ExprKind {
     EX_RESET,          /* (reset body) - establish continuation boundary */
     EX_SHIFT,          /* (shift k body) - capture continuation, pass to k */
     EX_SHIFT0,         /* (shift0 k body) - one-shot shift */
+    /* Phase 19: Algebraic effects */
+    EX_DEFECT,         /* (defeffect Name [params...] : result) - define an effect */
+    EX_PERFORM,        /* (perform (EffectName args...)) - perform an effect */
+    EX_HANDLE,         /* (handle expr cases...) - handle effects */
+    EX_RESUME,         /* (resume k value) - resume continuation with value */
+    EX_DISCONTINUE,    /* (discontinue k exception) - discontinue with exception */
     EX_PROGRAM,
 } ExprKind;
 
@@ -142,6 +150,52 @@ typedef struct TryCatchClause {
     Expr *handler;             /* Handler body expression */
 } TryCatchClause;
 
+/* Phase 19: Algebraic effects */
+
+/* Effect definition: (defeffect Name [param1 : T1, ...] : R) */
+typedef struct EffectDef {
+    const Symbol *name;           /* Effect name */
+    const Symbol **param_names;  /* Parameter names */
+    TypeKind *param_types;       /* Parameter types (TypeKind for now) */
+    uint8_t n_params;
+    TypeKind result_type;        /* Result type of the effect operation */
+} EffectDef;
+
+/* Perform expression: (perform (EffectName arg1 arg2 ...)) */
+typedef struct PerformExpr {
+    const Symbol *effect_name;   /* Name of the effect to perform */
+    Expr **args;                /* Arguments to the effect */
+    uint8_t n_args;
+} PerformExpr;
+
+/* Handle case: (EffectName [param1 param2 ...] k) body ... */
+typedef struct HandleCase {
+    const Symbol *effect_name;   /* Name of the effect being handled */
+    const Symbol **param_names;  /* Parameter names for the effect */
+    uint8_t n_params;           /* Number of parameters */
+    const Symbol *k_name;        /* Name of the continuation parameter */
+    Expr *body;                 /* Handler body */
+} HandleCase;
+
+/* Handle expression: (handle expr case1 case2 ...) */
+typedef struct HandleExpr {
+    Expr *body;                 /* The expression being handled */
+    HandleCase *cases;         /* Array of handle cases */
+    uint8_t n_cases;
+} HandleExpr;
+
+/* Resume expression: (resume k value) */
+typedef struct ResumeExpr {
+    Expr *k;                   /* The continuation to resume */
+    Expr *value;               /* The value to resume with */
+} ResumeExpr;
+
+/* Discontinue expression: (discontinue k exception) */
+typedef struct DiscontinueExpr {
+    Expr *k;                   /* The continuation to discontinue */
+    Expr *exception;           /* The exception to raise */
+} DiscontinueExpr;
+
 struct Expr {
     ExprKind kind;
     Type     type;
@@ -149,6 +203,7 @@ struct Expr {
     union {
         bool         b;
         int64_t      i;
+        double       f;        /* Phase 1: Float literal value */
         StrSlice     s;
 
         struct { Binding *binding; }                                       var;
@@ -218,6 +273,12 @@ struct Expr {
             Expr *k_fn;             /* (shift0 k body) - k is a function that cannot resume */
             Expr *body;             /* body to run */
         } shift0_;
+        /* Phase 19: Algebraic effects */
+        struct { EffectDef *def; }                   effect_def_;   /* (defeffect ...) */
+        struct { PerformExpr *perform; }             perform_;     /* (perform ...) */
+        struct { HandleExpr *handle; }               handle_;      /* (handle ...) */
+        struct { ResumeExpr *resume; }               resume_;      /* (resume k v) */
+        struct { DiscontinueExpr *discontinue; }     discontinue_; /* (discontinue k e) */
 
         struct { Expr **items; uint32_t n; }                               program;
     } as;

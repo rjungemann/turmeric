@@ -1,0 +1,118 @@
+#ifndef TUR_EFFECT_H
+#define TUR_EFFECT_H
+
+#include <stdint.h>
+#include <stdbool.h>
+#include "arena.h"
+#include "symbols.h"
+#include "types.h"  /* For TypeKind */
+#include "buf.h"    /* For Buf */
+
+/* Forward declarations */
+typedef struct Effect Effect;
+typedef struct EffectConstructor EffectConstructor;
+struct EffectRow; /* Defined in types.h as forward declaration */
+typedef struct EffectRow EffectRow;
+
+/* Effect constructor represents a single effect operation.
+ * e.g., (defeffect Read [prompt : cstr] : str) creates an effect with
+ * one constructor that takes a cstr parameter and returns a str. */
+struct EffectConstructor {
+    const Symbol *name;           /* Name of the constructor (e.g., Read) */
+    const Symbol **param_names;  /* Parameter names */
+    TypeKind *param_types;       /* Parameter types */
+    uint8_t n_params;
+    TypeKind result_type;        /* Result type of the effect operation */
+    Effect *effect;              /* Parent effect (for now, 1:1 effect:constructor) */
+};
+
+/* Effect represents a user-defined effect type.
+ * In v3, effects are algebraic and can have multiple constructors,
+ * but for simplicity in Phase 19 v1, we start with single-constructor effects. */
+struct Effect {
+    const Symbol *name;           /* Effect name */
+    EffectConstructor *constructor; /* The effect constructor */
+    bool is_polymorphic;          /* Whether this effect is generic over type parameters */
+};
+
+/* Effect row represents a set of effects that a function may perform.
+ * This is the core of the effect system - functions have effect rows in their types.
+ * 
+ * In v3, effect rows are either:
+ * - Empty: {} - pure function
+ * - Concrete: {Effect1, Effect2} - specific effects
+ * - Polymorphic: {a} - effect variable
+ * 
+ * For Phase 19 v1, we start with concrete effect sets. */
+typedef enum EffectRowKind {
+    ERK_EMPTY,       /* {} - no effects */
+    ERK_CONCRETE,    /* {E1, E2, ...} - specific effect set */
+    ERK_VAR,         /* {a} - effect variable */
+    ERK_UNION,       /* {E1 | E2} - union (for type inference) */
+} EffectRowKind;
+
+struct EffectRow {
+    EffectRowKind kind;
+    union {
+        struct {
+            Effect **effects;    /* Array of effects in this row */
+            uint8_t n_effects;
+        } concrete;
+        struct {
+            const Symbol *var_name;  /* Effect variable name */
+        } var;
+        struct {
+            EffectRow *left;
+            EffectRow *right;
+        } union_;
+    } as;
+};
+
+/* Create an empty effect row */
+EffectRow *effect_row_empty(Arena *a);
+
+/* Create a concrete effect row with a single effect */
+EffectRow *effect_row_single(Arena *a, Effect *effect);
+
+/* Create a concrete effect row from multiple effects */
+EffectRow *effect_row_concrete(Arena *a, Effect **effects, uint8_t n_effects);
+
+/* Create an effect row union */
+EffectRow *effect_row_union(Arena *a, EffectRow *left, EffectRow *right);
+
+/* Check if an effect row is empty */
+bool effect_row_is_empty(EffectRow *row);
+
+/* Check if an effect row contains a specific effect */
+bool effect_row_contains(EffectRow *row, Effect *effect);
+
+/* Check if effect row r1 is a subset of r2 (r1 ⊆ r2) */
+bool effect_row_is_subset(EffectRow *r1, EffectRow *r2);
+
+/* Create a union of two effect rows */
+EffectRow *effect_row_merge(Arena *a, EffectRow *r1, EffectRow *r2);
+
+/* Print an effect row for debugging */
+void effect_row_print(Buf *b, EffectRow *row);
+
+/* Effect environment - global registry of effects */
+typedef struct EffectEnv {
+    Effect **effects;        /* All defined effects */
+    uint32_t n_effects;
+    uint32_t cap_effects;
+} EffectEnv;
+
+EffectEnv *effect_env_new(Arena *a);
+
+/* Register a new effect in the environment */
+Effect *effect_env_register(EffectEnv *env, Arena *a, const Symbol *name,
+                            const Symbol **param_names, TypeKind *param_types,
+                            uint8_t n_params, TypeKind result_type);
+
+/* Look up an effect by name */
+Effect *effect_env_lookup(EffectEnv *env, const Symbol *name);
+
+/* Check if an effect is valid (exists in environment) */
+bool effect_env_contains(EffectEnv *env, const Symbol *name);
+
+#endif /* TUR_EFFECT_H */

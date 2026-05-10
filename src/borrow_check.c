@@ -115,6 +115,7 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
         case EX_NIL_LIT:
         case EX_BOOL_LIT:
         case EX_INT_LIT:
+        case EX_FLOAT_LIT:
         case EX_CSTR_LIT:
             return true;
             
@@ -319,6 +320,39 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
             /* Check k function and body */
             if (!borrow_check_expr_recursive(ctx, e->as.shift0_.k_fn)) return false;
             if (!borrow_check_expr_recursive(ctx, e->as.shift0_.body)) return false;
+            return true;
+        /* Phase 19: Algebraic effects */
+        case EX_DEFECT:
+            /* Effect definitions don't have borrows to check at this level */
+            return true;
+        case EX_PERFORM:
+            /* Check perform arguments */
+            for (uint8_t i = 0; i < e->as.perform_.perform->n_args; i++) {
+                if (!borrow_check_expr_recursive(ctx, e->as.perform_.perform->args[i])) {
+                    return false;
+                }
+            }
+            return true;
+        case EX_HANDLE:
+            /* Check the handled body and all case handlers */
+            if (!borrow_check_expr_recursive(ctx, e->as.handle_.handle->body)) {
+                return false;
+            }
+            for (uint8_t i = 0; i < e->as.handle_.handle->n_cases; i++) {
+                if (!borrow_check_expr_recursive(ctx, e->as.handle_.handle->cases[i].body)) {
+                    return false;
+                }
+            }
+            return true;
+        case EX_RESUME:
+            /* Check continuation and value */
+            if (!borrow_check_expr_recursive(ctx, e->as.resume_.resume->k)) return false;
+            if (!borrow_check_expr_recursive(ctx, e->as.resume_.resume->value)) return false;
+            return true;
+        case EX_DISCONTINUE:
+            /* Check continuation and exception */
+            if (!borrow_check_expr_recursive(ctx, e->as.discontinue_.discontinue->k)) return false;
+            if (!borrow_check_expr_recursive(ctx, e->as.discontinue_.discontinue->exception)) return false;
             return true;
     }
     

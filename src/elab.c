@@ -9,6 +9,7 @@
 #include "diag.h"
 #include "typeclass.h"  /* Phase 15 */
 #include "types.h"
+#include "effect.h"    /* Phase 19 */
 
 /* Helper to create a Type from TypeKind. */
 static Type type_from_kind(TypeKind k) {
@@ -19,6 +20,22 @@ static Type type_from_kind(TypeKind k) {
     t.typeclass_instances = NULL;
     t.n_typeclass_instances = 0;
     return t;
+}
+
+/* Helper to convert a type name string to TypeKind (Phase 19). */
+static TypeKind typekind_from_symbol(const char *name) {
+    if (strcmp(name, "int") == 0) return TY_INT;
+    if (strcmp(name, "bool") == 0) return TY_BOOL;
+    if (strcmp(name, "float") == 0) return TY_FLOAT;
+    if (strcmp(name, "cstr") == 0) return TY_CSTR;
+    if (strcmp(name, "nil") == 0) return TY_NIL;
+    if (strcmp(name, "ptr-void") == 0) return TY_PTR_VOID;
+    if (strcmp(name, "ref") == 0) return TY_REF;
+    if (strcmp(name, "rc") == 0) return TY_RC;
+    if (strcmp(name, "weak") == 0) return TY_WEAK;
+    if (strcmp(name, "exception") == 0) return TY_EXCEPTION;
+    if (strcmp(name, "cont") == 0) return TY_CONT;
+    return TY_UNKNOWN;
 }
 
 /* ---- scope ---- */
@@ -284,6 +301,12 @@ typedef struct Elab {
     const Symbol *sym_reset;      /* reset */
     const Symbol *sym_shift;      /* shift */
     const Symbol *sym_shift0;     /* shift0 */
+    /* Phase 19: Algebraic effects */
+    const Symbol *sym_defeffect;  /* defeffect */
+    const Symbol *sym_perform;    /* perform */
+    const Symbol *sym_handle;     /* handle */
+    const Symbol *sym_resume;     /* resume */
+    const Symbol *sym_discontinue;/* discontinue */
     /* Phase 10: GC */
     const Symbol *sym_gc_force;    /* gc! */
     const Symbol *sym_gc_enable;   /* gc-enable! */
@@ -314,6 +337,8 @@ typedef struct Elab {
     struct MacroDef **macros;
     uint32_t n_macros;
     uint32_t cap_macros;
+    /* Phase 19: Algebraic effects */
+    EffectEnv *effect_env;  /* Global effect registry */
 } Elab;
 
 /* Phase 6: Macro definition */
@@ -377,6 +402,8 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->cap_file_scope_defs = 0;
     /* Phase 15: Typeclass environment */
     typeclass_env_init(&e->typeclass_env);
+    /* Phase 19: Effect environment */
+    e->effect_env = effect_env_new(arena);
 
     e->sym_def       = intern_cstr(st, "def");
     e->sym_let       = intern_cstr(st, "let");
@@ -418,6 +445,12 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_reset = intern_cstr(st, "reset");
     e->sym_shift = intern_cstr(st, "shift");
     e->sym_shift0 = intern_cstr(st, "shift0");
+    /* Phase 19: Algebraic effects */
+    e->sym_defeffect = intern_cstr(st, "defeffect");
+    e->sym_perform = intern_cstr(st, "perform");
+    e->sym_handle = intern_cstr(st, "handle");
+    e->sym_resume = intern_cstr(st, "resume");
+    e->sym_discontinue = intern_cstr(st, "discontinue");
     /* Phase 10: GC */
     e->sym_gc_force = intern_cstr(st, "gc!");
     e->sym_gc_enable = intern_cstr(st, "gc-enable!");
@@ -475,6 +508,7 @@ static Form *quasiquote_expand_form(Elab *e, Form *f) {
         case F_NIL:
         case F_BOOL:
         case F_INT:
+        case F_FLOAT:
         case F_STR:
         case F_KEYWORD:
         case F_SYM:
@@ -562,6 +596,7 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
         case F_NIL:
         case F_BOOL:
         case F_INT:
+        case F_FLOAT:
         case F_STR:
         case F_KEYWORD:
         case F_CBLOCK:
@@ -1975,6 +2010,305 @@ static Expr *elab_shift0(Elab *e, const Form *call) {
     return out;
 }
 
+/* Phase 19: Algebraic effects */
+
+/* (defeffect Name [param1 : T1, param2 : T2, ...] : R)
+ * Declares a new algebraic effect with parameters and a result type.
+ */
+static Expr *elab_defeffect(Elab *e, const Form *call) {
+    /* Minimum: (defeffect Name [param1 ...] result-type) */
+    if (call->as.list.len < 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "defeffect requires (defeffect Name [params...] result-type)");
+        return NULL;
+    }
+    
+    /* Parse effect name */
+    Form *name_f = call->as.list.items[1];
+    if (name_f->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, name_f->span, "defeffect: effect name must be a symbol");
+        return NULL;
+    }
+    const Symbol *name = name_f->as.sym;
+    
+    /* Check if effect already exists */
+    if (effect_env_contains(e->effect_env, name)) {
+        diag_emit(DIAG_ERROR, name_f->span,
+                  "defeffect: '%s' is already defined", name->name);
+        return NULL;
+    }
+    
+    /* Parse parameter list */
+    Form *params_f = call->as.list.items[2];
+    if (params_f->tag != F_LIST && params_f->tag != F_VEC) {
+        diag_emit(DIAG_ERROR, params_f->span,
+                  "defeffect: expected parameter list, got %s",
+                  form_tag_name(params_f->tag));
+        return NULL;
+    }
+    
+    uint8_t n_params = params_f->as.list.len;
+    const Symbol **param_names = arena_alloc(e->arena, n_params * sizeof(const Symbol *));
+    TypeKind *param_types = arena_alloc(e->arena, n_params * sizeof(TypeKind));
+    
+    for (uint8_t i = 0; i < n_params; i++) {
+        Form *param_f = params_f->as.list.items[i];
+        if (param_f->tag != F_SYM) {
+            diag_emit(DIAG_ERROR, param_f->span,
+                      "defeffect: parameter name must be a symbol");
+            return NULL;
+        }
+        param_names[i] = param_f->as.sym;
+        /* For v1, all parameters are TY_PTR_VOID (we don't support typed params yet) */
+        param_types[i] = TY_PTR_VOID;
+    }
+    
+    /* Parse return type */
+    Form *ret_f = call->as.list.items[3];
+    if (ret_f->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, ret_f->span,
+                  "defeffect: return type annotation must be a symbol");
+        return NULL;
+    }
+    
+    TypeKind result_type = typekind_from_symbol(ret_f->as.sym->name);
+    if (result_type == TY_UNKNOWN) {
+        diag_emit(DIAG_ERROR, ret_f->span,
+                  "defeffect: unknown return type '%s'", ret_f->as.sym->name);
+        return NULL;
+    }
+    
+    /* Register the effect */
+    Effect *effect = effect_env_register(e->effect_env, e->arena, name,
+                                          param_names, param_types, n_params, result_type);
+    if (!effect) return NULL;
+    
+    /* Create the effect definition expression */
+    EffectDef *def = arena_alloc(e->arena, sizeof(EffectDef));
+    def->name = name;
+    def->param_names = param_names;
+    def->param_types = param_types;
+    def->n_params = n_params;
+    def->result_type = result_type;
+    
+    Expr *out = expr_new(e->arena, EX_DEFECT, TYPE_NIL, call->span);
+    out->as.effect_def_.def = def;
+    return out;
+}
+
+/* (perform (EffectName arg1 arg2 ...))
+ * Perform an algebraic effect with arguments.
+ */
+static Expr *elab_perform(Elab *e, const Form *call) {
+    if (call->as.list.len < 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "perform requires (perform (EffectName arg1 ...))");
+        return NULL;
+    }
+    
+    /* Parse effect call form: (EffectName arg1 arg2 ...) */
+    Form *effect_call_f = call->as.list.items[1];
+    if (effect_call_f->tag != F_LIST) {
+        diag_emit(DIAG_ERROR, effect_call_f->span,
+                  "perform: expected effect call as list, got %s",
+                  form_tag_name(effect_call_f->tag));
+        return NULL;
+    }
+    
+    if (effect_call_f->as.list.len < 1) {
+        diag_emit(DIAG_ERROR, effect_call_f->span,
+                  "perform: effect call must have at least an effect name");
+        return NULL;
+    }
+    
+    /* Parse effect name */
+    Form *name_f = effect_call_f->as.list.items[0];
+    if (name_f->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, name_f->span,
+                  "perform: effect name must be a symbol");
+        return NULL;
+    }
+    const Symbol *effect_name = name_f->as.sym;
+    
+    /* Check if effect exists */
+    Effect *effect = effect_env_lookup(e->effect_env, effect_name);
+    if (!effect) {
+        diag_emit(DIAG_ERROR, name_f->span,
+                  "perform: unknown effect '%s'", effect_name->name);
+        return NULL;
+    }
+    
+    /* Parse arguments */
+    uint8_t n_args = effect_call_f->as.list.len - 1;
+    Expr **args = arena_alloc(e->arena, n_args * sizeof(Expr *));
+    for (uint8_t i = 0; i < n_args; i++) {
+        args[i] = elab_form(e, effect_call_f->as.list.items[i + 1]);
+        if (!args[i]) return NULL;
+    }
+    
+    /* Create the perform expression */
+    PerformExpr *perform = arena_alloc(e->arena, sizeof(PerformExpr));
+    perform->effect_name = effect_name;
+    perform->args = args;
+    perform->n_args = n_args;
+    
+    /* The return type of perform is the result type of the effect */
+    Type result_type = type_from_kind(effect->constructor->result_type);
+    
+    Expr *out = expr_new(e->arena, EX_PERFORM, result_type, call->span);
+    out->as.perform_.perform = perform;
+    return out;
+}
+
+/* (handle expr case1 case2 ...)
+ * Handle algebraic effects with cases.
+ * Each case: (EffectName [param1 param2 ...] k) body ...
+ */
+static Expr *elab_handle(Elab *e, const Form *call) {
+    if (call->as.list.len < 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "handle requires (handle expr case1 case2 ...)");
+        return NULL;
+    }
+    
+    /* Parse the body to be handled */
+    Expr *body = elab_form(e, call->as.list.items[1]);
+    if (!body) return NULL;
+    
+    /* Parse handle cases */
+    uint8_t n_cases = call->as.list.len - 2;
+    HandleCase *cases = arena_alloc(e->arena, n_cases * sizeof(HandleCase));
+    
+    for (uint8_t i = 0; i < n_cases; i++) {
+        Form *case_f = call->as.list.items[i + 2];
+        if (case_f->tag != F_LIST) {
+            diag_emit(DIAG_ERROR, case_f->span,
+                      "handle: expected case as list, got %s",
+                      form_tag_name(case_f->tag));
+            return NULL;
+        }
+        
+        /* Case format: (EffectName [param1 param2 ...] k) body ...
+         * For v1, we support: (EffectName [params...] k) body
+         */
+        if (case_f->as.list.len < 4) {
+            diag_emit(DIAG_ERROR, case_f->span,
+                      "handle case requires (EffectName [params...] k) body");
+            return NULL;
+        }
+        
+        /* Parse effect name */
+        Form *name_f = case_f->as.list.items[0];
+        if (name_f->tag != F_SYM) {
+            diag_emit(DIAG_ERROR, name_f->span,
+                      "handle case: effect name must be a symbol");
+            return NULL;
+        }
+        cases[i].effect_name = name_f->as.sym;
+        
+        /* Parse parameter list */
+        Form *params_f = case_f->as.list.items[1];
+        if (params_f->tag != F_LIST && params_f->tag != F_VEC) {
+            diag_emit(DIAG_ERROR, params_f->span,
+                      "handle case: expected parameter list, got %s",
+                      form_tag_name(params_f->tag));
+            return NULL;
+        }
+        
+        cases[i].n_params = params_f->as.list.len;
+        cases[i].param_names = arena_alloc(e->arena, cases[i].n_params * sizeof(const Symbol *));
+        for (uint8_t j = 0; j < cases[i].n_params; j++) {
+            Form *param_f = params_f->as.list.items[j];
+            if (param_f->tag != F_SYM) {
+                diag_emit(DIAG_ERROR, param_f->span,
+                          "handle case: parameter name must be a symbol");
+                return NULL;
+            }
+            cases[i].param_names[j] = param_f->as.sym;
+        }
+        
+        /* Parse continuation parameter name */
+        Form *k_f = case_f->as.list.items[2];
+        if (k_f->tag != F_SYM) {
+            diag_emit(DIAG_ERROR, k_f->span,
+                      "handle case: continuation name must be a symbol");
+            return NULL;
+        }
+        cases[i].k_name = k_f->as.sym;
+        
+        /* Parse handler body (everything after k) */
+        /* For v1, we expect a single expression body */
+        if (case_f->as.list.len < 5) {
+            diag_emit(DIAG_ERROR, case_f->span,
+                      "handle case: expected body expression");
+            return NULL;
+        }
+        cases[i].body = elab_form(e, case_f->as.list.items[4]);
+        if (!cases[i].body) return NULL;
+    }
+    
+    /* Create the handle expression */
+    HandleExpr *handle = arena_alloc(e->arena, sizeof(HandleExpr));
+    handle->body = body;
+    handle->cases = cases;
+    handle->n_cases = n_cases;
+    
+    /* The return type of handle is the same as the body's type */
+    Expr *out = expr_new(e->arena, EX_HANDLE, body->type, call->span);
+    out->as.handle_.handle = handle;
+    return out;
+}
+
+/* (resume k value)
+ * Resume a captured continuation with a value.
+ */
+static Expr *elab_resume(Elab *e, const Form *call) {
+    if (call->as.list.len != 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(resume k value) requires exactly two arguments");
+        return NULL;
+    }
+    
+    Expr *k = elab_form(e, call->as.list.items[1]);
+    if (!k) return NULL;
+    
+    Expr *value = elab_form(e, call->as.list.items[2]);
+    if (!value) return NULL;
+    
+    ResumeExpr *resume = arena_alloc(e->arena, sizeof(ResumeExpr));
+    resume->k = k;
+    resume->value = value;
+    
+    Expr *out = expr_new(e->arena, EX_RESUME, TYPE_NIL, call->span);
+    out->as.resume_.resume = resume;
+    return out;
+}
+
+/* (discontinue k exception)
+ * Discontinue a captured continuation with an exception.
+ */
+static Expr *elab_discontinue(Elab *e, const Form *call) {
+    if (call->as.list.len != 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(discontinue k exception) requires exactly two arguments");
+        return NULL;
+    }
+    
+    Expr *k = elab_form(e, call->as.list.items[1]);
+    if (!k) return NULL;
+    
+    Expr *exception = elab_form(e, call->as.list.items[2]);
+    if (!exception) return NULL;
+    
+    DiscontinueExpr *discontinue = arena_alloc(e->arena, sizeof(DiscontinueExpr));
+    discontinue->k = k;
+    discontinue->exception = exception;
+    
+    Expr *out = expr_new(e->arena, EX_DISCONTINUE, TYPE_NIL, call->span);
+    out->as.discontinue_.discontinue = discontinue;
+    return out;
+}
+
 /* Phase 6: defmacro — (defmacro name [params...] body...)
  * Defines a macro that will be expanded at compile time.
  * Syntax: (defmacro name [param1 param2 ...] body...)
@@ -2244,6 +2578,9 @@ static Expr *elab_defn(Elab *e, const Form *call) {
             if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
                 param_kinds[n_params - 1] = TY_INT;
                 params[n_params - 1]->type = TYPE_INT;
+            } else if (kw->len == 5 && memcmp(kw->name, "float", 5) == 0) {
+                param_kinds[n_params - 1] = TY_FLOAT;
+                params[n_params - 1]->type = TYPE_FLOAT;
             } else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0) {
                 param_kinds[n_params - 1] = TY_BOOL;
                 params[n_params - 1]->type = TYPE_BOOL;
@@ -2295,10 +2632,14 @@ static Expr *elab_defn(Elab *e, const Form *call) {
             const Symbol *kw = ret_f->as.sym;
             if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
                 return_kind = TY_INT;
+            } else if (kw->len == 5 && memcmp(kw->name, "float", 5) == 0) {
+                return_kind = TY_FLOAT;
             } else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0) {
                 return_kind = TY_BOOL;
             } else if (kw->len == 4 && memcmp(kw->name, "void", 4) == 0) {
                 return_kind = TY_NIL;
+            } else if (kw->len == 4 && memcmp(kw->name, "cstr", 4) == 0) {
+                return_kind = TY_CSTR;
             } else {
                 diag_emit(DIAG_ERROR, ret_f->span,
                           "defn: unsupported return type keyword :%s",
@@ -2383,7 +2724,7 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     /* Store param types for codegen */
     fd->param_types = (Type *)arena_alloc(e->arena, n_params * sizeof(Type));
     for (uint8_t i = 0; i < n_params; i++) {
-        fd->param_types[i] = TYPE_INT;
+        fd->param_types[i] = type_from_kind(param_kinds[i]);
     }
     /* Phase 15: Store collected constraints */
     fd->constraints.constraints = constraint_list;
@@ -2454,6 +2795,8 @@ static Expr *elab_fn(Elab *e, const Form *call) {
             const Symbol *kw = ret_f->as.sym;
             if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
                 return_kind = TY_INT;
+            } else if (kw->len == 5 && memcmp(kw->name, "float", 5) == 0) {
+                return_kind = TY_FLOAT;
             } else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0) {
                 return_kind = TY_BOOL;
             } else if (kw->len == 4 && memcmp(kw->name, "void", 4) == 0) {
@@ -2546,7 +2889,7 @@ static Expr *elab_fn(Elab *e, const Form *call) {
     /* Store param types for codegen */
     fd->param_types = (Type *)arena_alloc(e->arena, n_params * sizeof(Type));
     for (uint8_t i = 0; i < n_params; i++) {
-        fd->param_types[i] = TYPE_INT;
+        fd->param_types[i] = type_from_kind(param_kinds[i]);
     }
     /* Phase 15: Initialize constraints */
     constraint_set_init(&fd->constraints);
@@ -2856,6 +3199,12 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_reset)      return elab_reset(e, call);
     if (name == e->sym_shift)      return elab_shift(e, call);
     if (name == e->sym_shift0)     return elab_shift0(e, call);
+    /* Phase 19: Algebraic effects */
+    if (name == e->sym_defeffect) return elab_defeffect(e, call);
+    if (name == e->sym_perform)   return elab_perform(e, call);
+    if (name == e->sym_handle)    return elab_handle(e, call);
+    if (name == e->sym_resume)    return elab_resume(e, call);
+    if (name == e->sym_discontinue) return elab_discontinue(e, call);
     /* Phase 10: GC */
     if (name == e->sym_gc_force)    return elab_gc_force(e, call);
     if (name == e->sym_gc_enable)   return elab_gc_enable(e, call);
@@ -3047,6 +3396,11 @@ static Expr *elab_form(Elab *e, Form *f) {
         case F_INT: {
             Expr *out = expr_new(e->arena, EX_INT_LIT, TYPE_INT, f->span);
             out->as.i = f->as.i;
+            return out;
+        }
+        case F_FLOAT: {
+            Expr *out = expr_new(e->arena, EX_FLOAT_LIT, TYPE_FLOAT, f->span);
+            out->as.f = f->as.f;
             return out;
         }
         case F_STR: {

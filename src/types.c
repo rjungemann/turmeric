@@ -97,6 +97,7 @@ const char *type_name(Type t) {
         case TY_NIL:     return "nil";
         case TY_BOOL:    return "bool";
         case TY_INT:     return "int";
+        case TY_FLOAT:   return "float";
         case TY_CSTR:    return "cstr";
         case TY_PTR_VOID: return "ptr<void>";
         case TY_FN: {
@@ -203,6 +204,7 @@ static void type_name_buf(Buf *b, Type t) {
         case TY_NIL:     buf_puts(b, "nil"); break;
         case TY_BOOL:    buf_puts(b, "bool"); break;
         case TY_INT:     buf_puts(b, "int"); break;
+        case TY_FLOAT:   buf_puts(b, "float"); break;
         case TY_CSTR:    buf_puts(b, "cstr"); break;
         case TY_PTR_VOID: buf_puts(b, "ptr<void>"); break;
         case TY_FN: {
@@ -302,6 +304,7 @@ const char *type_c_name(Type t) {
         case TY_NIL:     return "void";
         case TY_BOOL:    return "bool";
         case TY_INT:     return "int64_t";
+        case TY_FLOAT:   return "double";
         case TY_CSTR:    return "const char *";
         case TY_PTR_VOID: return "void *";
         case TY_FN: {

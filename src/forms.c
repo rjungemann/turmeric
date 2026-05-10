@@ -26,6 +26,12 @@ Form *form_int(Arena *a, Span span, int64_t i) {
     return f;
 }
 
+Form *form_float(Arena *a, Span span, double f) {
+    Form *form = form_new(a, F_FLOAT, span);
+    form->as.f = f;
+    return form;
+}
+
 Form *form_str(Arena *a, Span span, const char *p, uint32_t len) {
     Form *f = form_new(a, F_STR, span);
     f->as.s.p = arena_strdup(a, p, len);
@@ -112,6 +118,27 @@ Form *form_unquote_splicing(Arena *a, Span span, Form *quoted) {
     return f;
 }
 
+/* Return the name of a FormTag as a string */
+const char *form_tag_name(FormTag tag) {
+    switch (tag) {
+        case F_NIL: return "nil";
+        case F_BOOL: return "bool";
+        case F_INT: return "int";
+        case F_FLOAT: return "float";
+        case F_STR: return "string";
+        case F_SYM: return "symbol";
+        case F_KEYWORD: return "keyword";
+        case F_LIST: return "list";
+        case F_VEC: return "vector";
+        case F_CBLOCK: return "c-block";
+        case F_QUOTE: return "quote";
+        case F_QUASIQUOTE: return "quasiquote";
+        case F_UNQUOTE: return "unquote";
+        case F_UNQUOTE_SPLICING: return "unquote-splicing";
+        default: return "unknown";
+    }
+}
+
 static void print_str_escaped(Buf *b, StrSlice s) {
     buf_putc(b, '"');
     for (uint32_t i = 0; i < s.len; i++) {
@@ -138,6 +165,7 @@ void form_print(Buf *b, const Form *f) {
         case F_NIL:  buf_puts(b, "nil"); break;
         case F_BOOL: buf_puts(b, f->as.b ? "true" : "false"); break;
         case F_INT:  buf_printf(b, "%lld", (long long)f->as.i); break;
+        case F_FLOAT: buf_printf(b, "%g", f->as.f); break;
         case F_STR:  print_str_escaped(b, f->as.s); break;
         case F_SYM:
             buf_write(b, f->as.sym->name, f->as.sym->len);

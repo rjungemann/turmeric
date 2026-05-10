@@ -10,8 +10,8 @@
 typedef struct TypeClass TypeClass;
 typedef struct TypeClassInstance TypeClassInstance;
 
-/* Forward declaration for effect rows (future-proofing for v3 effects) */
-typedef struct EffectRow EffectRow;
+/* Forward declaration for effect rows (Phase 19) */
+struct EffectRow;
 
 /* Phase 11: Copy/Move traits */
 typedef enum CopyKind {
@@ -31,6 +31,7 @@ typedef enum TypeKind {
     TY_NIL,           /* unit / void; (do) with no body, (println …) result */
     TY_BOOL,
     TY_INT,           /* int64_t */
+    TY_FLOAT,         /* Phase 1: double-precision floating point */
     TY_CSTR,          /* const char* — string literal type for now */
     TY_PTR_VOID,      /* void* — for extern-c and raw pointers */
     TY_FN,            /* function type — requires checking as.fn */
@@ -77,7 +78,7 @@ typedef struct Type {
             uint8_t arity;
             /* Future-proofing for v3 effects: effect row slot.
              * NULL in v0/v1; treated as empty effect set. */
-            EffectRow *effect_row;
+            struct EffectRow *effect_row;
         } fn;
         /* Phase 5: ref<T> stores the inner type T */
         struct {
@@ -123,6 +124,7 @@ static inline LifetimeId type_first_lifetime(Type t) {
 #define TYPE_NIL      ((Type){TY_NIL, .copy_kind=CK_COPY, .n_lifetimes=0, .as={0}})
 #define TYPE_BOOL     ((Type){TY_BOOL, .copy_kind=CK_COPY, .n_lifetimes=0, .as={0}})
 #define TYPE_INT      ((Type){TY_INT, .copy_kind=CK_COPY, .n_lifetimes=0, .as={0}})
+#define TYPE_FLOAT    ((Type){TY_FLOAT, .copy_kind=CK_COPY, .n_lifetimes=0, .as={0}})
 #define TYPE_CSTR     ((Type){TY_CSTR, .copy_kind=CK_COPY, .n_lifetimes=0, .as={0}})
 #define TYPE_PTR_VOID ((Type){TY_PTR_VOID, .copy_kind=CK_COPY, .n_lifetimes=0, .as={0}})
 

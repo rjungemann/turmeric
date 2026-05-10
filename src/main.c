@@ -11,9 +11,11 @@
 #include "arena.h"
 #include "buf.h"
 #include "borrow_check.h"  /* Phase 14 */
+#include "cps.h"          /* Phase 18: CPS transformation */
 #include "diag.h"
 #include "elab.h"
 #include "emit.h"
+#include "effect_lower.h" /* Phase 19: Effect lowering */
 #include "expr.h"
 #include "forms.h"
 #include "reader.h"

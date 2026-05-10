@@ -19,6 +19,7 @@ void expr_print(Buf *b, const Expr *e) {
         case EX_NIL_LIT:  buf_puts(b, "nil"); break;
         case EX_BOOL_LIT: buf_puts(b, e->as.b ? "true" : "false"); break;
         case EX_INT_LIT:  buf_printf(b, "%lld", (long long)e->as.i); break;
+        case EX_FLOAT_LIT: buf_printf(b, "%g", e->as.f); break;
         case EX_CSTR_LIT: buf_putc(b, '"'); buf_write(b, e->as.s.p, e->as.s.len); buf_putc(b, '"'); break;
         case EX_VAR:      buf_write(b, e->as.var.binding->name->name, e->as.var.binding->name->len); break;
         case EX_LET:
@@ -232,6 +233,53 @@ void expr_print(Buf *b, const Expr *e) {
             expr_print(b, e->as.shift0_.k_fn);
             buf_puts(b, " ");
             expr_print(b, e->as.shift0_.body);
+            buf_putc(b, ')');
+            break;
+        /* Phase 19: Algebraic effects */
+        case EX_DEFECT:
+            buf_puts(b, "(defeffect ");
+            buf_puts(b, e->as.effect_def_.def->name->name);
+            buf_putc(b, ')');
+            break;
+        case EX_PERFORM:
+            buf_puts(b, "(perform (");
+            buf_puts(b, e->as.perform_.perform->effect_name->name);
+            for (uint8_t i = 0; i < e->as.perform_.perform->n_args; i++) {
+                buf_putc(b, ' ');
+                expr_print(b, e->as.perform_.perform->args[i]);
+            }
+            buf_puts(b, "))");
+            break;
+        case EX_HANDLE:
+            buf_puts(b, "(handle ");
+            expr_print(b, e->as.handle_.handle->body);
+            for (uint8_t i = 0; i < e->as.handle_.handle->n_cases; i++) {
+                buf_puts(b, " (");
+                buf_puts(b, e->as.handle_.handle->cases[i].effect_name->name);
+                buf_puts(b, " [");
+                for (uint8_t j = 0; j < e->as.handle_.handle->cases[i].n_params; j++) {
+                    if (j > 0) buf_putc(b, ' ');
+                    buf_puts(b, e->as.handle_.handle->cases[i].param_names[j]->name);
+                }
+                buf_puts(b, "] ");
+                buf_puts(b, e->as.handle_.handle->cases[i].k_name->name);
+                buf_puts(b, ") ");
+                expr_print(b, e->as.handle_.handle->cases[i].body);
+            }
+            buf_putc(b, ')');
+            break;
+        case EX_RESUME:
+            buf_puts(b, "(resume ");
+            expr_print(b, e->as.resume_.resume->k);
+            buf_puts(b, " ");
+            expr_print(b, e->as.resume_.resume->value);
+            buf_putc(b, ')');
+            break;
+        case EX_DISCONTINUE:
+            buf_puts(b, "(discontinue ");
+            expr_print(b, e->as.discontinue_.discontinue->k);
+            buf_puts(b, " ");
+            expr_print(b, e->as.discontinue_.discontinue->exception);
             buf_putc(b, ')');
             break;
     }
