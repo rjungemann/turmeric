@@ -30,26 +30,46 @@ static void tur_frame_fire_lifo(tur_frame *f) {
     f->n = 0;
 }
 
-static int64_t __fn_2(void *);
-struct __env_4 {int64_t x; };
-static int64_t __fn_2(void * __env_p_5) {
-        struct __env_4 *__env___env_4 = (struct __env_4 *)__env_p_5;
-        return ((__env___env_4->x) + (INT64_C(1)));
+static void __defer_5(void *__env) {
+    puts("inner-2");
+}
+
+static void __defer_4(void *__env) {
+    puts("inner-1");
+}
+
+static void __defer_2(void *__env) {
+    puts("outer-2");
+}
+
+static void __defer_1(void *__env) {
+    puts("outer-1");
 }
 
 int main() {
         {
             int64_t x_1 = INT64_C(10);
             (void)x_1;
+            tur_frame __frame_0;
+            tur_frame_init(&__frame_0, NULL);
+            tur_frame_push_defer(&__frame_0, __defer_1, NULL);
+            tur_frame_push_defer(&__frame_0, __defer_2, NULL);
             {
-                struct __env_4 __t0 = {.x = x_1};
-                void *__t1 = &__t0;
-                void * f_7 = __t1;
-                (void)f_7;
-                printf("%lld\n", (long long)(__fn_2(f_7)));
+                int64_t y_2 = INT64_C(20);
+                (void)y_2;
+                tur_frame __frame_3;
+                tur_frame_init(&__frame_3, &__frame_0);
+                tur_frame_push_defer(&__frame_3, __defer_4, NULL);
+                tur_frame_push_defer(&__frame_3, __defer_5, NULL);
+                puts("inner-body");
+                tur_frame_fire_lifo(&__frame_3);
             }
+            puts("outer-body");
+            tur_frame_fire_lifo(&__frame_0);
         }
-        return (int)0;
+        int64_t __t6;
+        __t6 = INT64_C(0);
+        return (int)__t6;
 }
 
 

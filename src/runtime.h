@@ -9,13 +9,16 @@
  * This matches the forward declaration in types.h. */
 struct EffectRow;
 
-/* A defer thunk - a function pointer that takes no arguments and returns void.
+/* A defer thunk - a function pointer that takes an env pointer and returns void.
  * 
  * Per effects-plan.md §6.10, this is the unified defer model that makes
  * the S1/S2/S3 strategy choice a runtime policy decision rather than an
  * architectural rewrite. The thunk is registered with tur_frame_push_defer
- * and invoked by tur_frame_fire_lifo at scope exit. */
-typedef void (*defer_fn_t)(void);
+ * and invoked by tur_frame_fire_lifo at scope exit.
+ * 
+ * For v1, thunks take a void* env parameter to support captures.
+ * For defers without captures, NULL is passed (though the thunk ignores it). */
+typedef void (*defer_fn_t)(void *env);
 
 /* Maximum number of defers per frame. This is a compile-time limit.
  * In practice, scopes rarely have more than a handful of defers. */
@@ -32,6 +35,8 @@ typedef void (*defer_fn_t)(void);
  *   defers:     Array of defer thunk function pointers (max TUR_FRAME_MAX_DEFERS).
  *               Thunks are registered via tur_frame_push_defer and fired in LIFO
  *               order by tur_frame_fire_lifo.
+ *   envs:       Array of env pointers for defers with captures (parallel to defers).
+ *               For defers without captures, the corresponding env is NULL.
  *   n:          Number of active defers in the list.
  *   parent:     Pointer to the enclosing frame (for scope unwind chain).
  *               Used by tur_frame_fire_chain to unwind through nested scopes.
@@ -42,6 +47,7 @@ typedef void (*defer_fn_t)(void);
  */
 typedef struct tur_frame {
     defer_fn_t defers[TUR_FRAME_MAX_DEFERS];
+    void *envs[TUR_FRAME_MAX_DEFERS];      /* Env pointers for captured defers */
     int n;
     struct tur_frame *parent;
     /* Future-proofing fields - unused in v0/v1 but reserved for v3 effects */
@@ -60,12 +66,15 @@ static inline void tur_frame_init(tur_frame *f, tur_frame *parent) {
 
 /* Push a defer thunk onto the frame's defer list.
  * The thunk will be called in LIFO order when the frame is fired.
+ * env: The environment pointer for captured defers, or NULL if no captures.
  * Returns 0 on success, -1 if the frame is full (shouldn't happen in practice). */
-static inline int tur_frame_push_defer(tur_frame *f, defer_fn_t thunk) {
+static inline int tur_frame_push_defer(tur_frame *f, defer_fn_t thunk, void *env) {
     if (f->n >= TUR_FRAME_MAX_DEFERS) {
         return -1; /* Frame full */
     }
-    f->defers[f->n++] = thunk;
+    f->defers[f->n] = thunk;
+    f->envs[f->n] = env;
+    f->n++;
     return 0;
 }
 

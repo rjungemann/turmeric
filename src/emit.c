@@ -8,6 +8,9 @@
 #include "builtins.h"
 #include "types.h"
 
+/* Forward declarations */
+struct DeferThunk;
+
 typedef struct EmitCtx {
     Buf  *file;     /* file-scope decls (statics, includes) */
     Buf  *main_;    /* main() body */
@@ -24,7 +27,29 @@ typedef struct EmitCtx {
     /* Phase 3: For closure thunk emission, track the current closure */
     struct Closure *closure;
     const char *env_var_name;  /* Name of the casted env variable (e.g., "__env_4") */
+    /* Phase 4 v1: Frame tracking for unified defer model */
+    const char *frame_var;    /* Name of current tur_frame variable (e.g., "__frame_3") */
+    bool in_scope_with_defers; /* Track if current scope has defers */
+    struct DeferThunk *pending_defer_thunks; /* Thunks to emit at file scope */
+    /* Phase 4 v1: For defer thunk emission with captures */
+    Binding **defer_captures;    /* Current defer thunk's captures (NULL if none) */
+    uint8_t n_defer_captures;
 } EmitCtx;
+
+/* Phase 4 v1: Defer thunk tracking */
+typedef struct DeferThunk {
+    char *name;              /* Thunk function name (e.g., "__defer_1") */
+    Expr *body;              /* The defer body expression */
+    Binding **captures;      /* Captured bindings (NULL if none) */
+    uint8_t n_captures;
+    char *env_name;          /* Env struct name for captured defers (NULL if no captures) */
+    struct DeferThunk *next; /* Linked list */
+} DeferThunk;
+
+/* Forward declarations */
+static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e);
+static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e);
+static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e);
 
 /* ------------ helpers ------------ */
 
@@ -46,6 +71,115 @@ static char *fresh_tmp(EmitCtx *ctx) {
     snprintf(p, 24, "__t%d", ctx->tmp_n++);
     return p;
 }
+
+/* Phase 4 v1: Generate a fresh frame variable name */
+static char *fresh_frame(EmitCtx *ctx) {
+    char *p = (char *)malloc(24);
+    if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
+    snprintf(p, 24, "__frame_%d", ctx->tmp_n++);
+    return p;
+}
+
+/* Phase 4 v1: Generate a fresh defer thunk function name */
+static char *fresh_defer_thunk(EmitCtx *ctx) {
+    char *p = (char *)malloc(24);
+    if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
+    snprintf(p, 24, "__defer_%d", ctx->tmp_n++);
+    return p;
+}
+
+/* Phase 4 v1: Generate a fresh defer env struct name */
+static char *fresh_defer_env(EmitCtx *ctx) {
+    char *p = (char *)malloc(24);
+    if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
+    snprintf(p, 24, "__defer_env_%d", ctx->tmp_n++);
+    return p;
+}
+
+/* Phase 4 v1: Register a defer thunk to be emitted at file scope */
+static void register_defer_thunk(EmitCtx *ctx, const char *name, const Expr *body, 
+                                  Binding **captures, uint8_t n_captures, 
+                                  const char *env_name) {
+    DeferThunk *thunk = (DeferThunk *)malloc(sizeof(DeferThunk));
+    if (!thunk) { fprintf(stderr, "tur: oom\n"); abort(); }
+    thunk->name = (char *)name;
+    thunk->body = (Expr *)body;  /* Cast away const for storage */
+    thunk->captures = captures;
+    thunk->n_captures = n_captures;
+    thunk->env_name = env_name ? strdup(env_name) : NULL;
+    thunk->next = ctx->pending_defer_thunks;
+    ctx->pending_defer_thunks = thunk;
+}
+
+/* Phase 4 v1: Emit all registered defer thunks to the output buffer */
+static void emit_pending_defer_thunks(EmitCtx *ctx, Buf *out) {
+    /* First pass: emit env struct definitions for thunks with captures */
+    DeferThunk *thunk = ctx->pending_defer_thunks;
+    while (thunk) {
+        if (thunk->env_name) {
+            /* Emit env struct type definition */
+            buf_printf(out, "struct %s {", thunk->env_name);
+            for (uint8_t i = 0; i < thunk->n_captures; i++) {
+                if (i > 0) buf_puts(out, "; ");
+                Binding *captured = thunk->captures[i];
+                buf_printf(out, "%s %s",
+                           type_c_name(captured->type), captured->name->name);
+            }
+            buf_puts(out, "; };\n\n");
+        }
+        thunk = thunk->next;
+    }
+    
+    /* Second pass: emit thunk functions */
+    thunk = ctx->pending_defer_thunks;
+    while (thunk) {
+        if (thunk->env_name) {
+            /* Thunk with captures - cast void* to env struct type */
+            buf_printf(out, "static void %s(void *__env) {\n", thunk->name);
+            buf_printf(out, "    struct %s *%s = (struct %s *)__env;\n",
+                       thunk->env_name, thunk->env_name, thunk->env_name);
+            
+            /* Set up env access context for name_for_binding */
+            const char *saved_env_var_name = ctx->env_var_name;
+            Binding **saved_defer_captures = ctx->defer_captures;
+            uint8_t saved_n_defer_captures = ctx->n_defer_captures;
+            
+            ctx->env_var_name = thunk->env_name;
+            ctx->defer_captures = thunk->captures;
+            ctx->n_defer_captures = thunk->n_captures;
+            
+            /* Emit the body with env access */
+            int saved_indent = ctx->indent;
+            ctx->indent = 4;
+            emit_stmt(ctx, out, thunk->body);
+            ctx->indent = saved_indent;
+            
+            ctx->env_var_name = saved_env_var_name;
+            ctx->defer_captures = saved_defer_captures;
+            ctx->n_defer_captures = saved_n_defer_captures;
+        } else {
+            /* Thunk without captures */
+            buf_printf(out, "static void %s(void *__env) {\n", thunk->name);
+            int saved_indent = ctx->indent;
+            ctx->indent = 4;
+            emit_stmt(ctx, out, thunk->body);
+            ctx->indent = saved_indent;
+        }
+        buf_puts(out, "}\n\n");
+        thunk = thunk->next;
+    }
+    
+    /* Free the list */
+    while (ctx->pending_defer_thunks) {
+        DeferThunk *tmp = ctx->pending_defer_thunks;
+        ctx->pending_defer_thunks = tmp->next;
+        free(tmp->name);
+        free(tmp->env_name);  /* May be NULL */
+        free(tmp);
+    }
+}
+
+
 
 
 
@@ -79,6 +213,20 @@ static char *name_for_binding(EmitCtx *ctx, const Binding *b) {
     if (ctx->closure && ctx->env_var_name) {
         for (uint8_t i = 0; i < ctx->closure->n_captures; i++) {
             if (ctx->closure->captures[i] == b) {
+                /* This is a captured binding - emit as env_var_name->field_name */
+                char *field_name = raw_name_for_binding(b);
+                char *result = (char *)malloc(strlen(ctx->env_var_name) + strlen(field_name) + 4);
+                if (!result) { fprintf(stderr, "tur: oom\n"); abort(); }
+                snprintf(result, strlen(ctx->env_var_name) + strlen(field_name) + 4, "%s->%s", ctx->env_var_name, field_name);
+                free(field_name);
+                return result;
+            }
+        }
+    }
+    /* Phase 4 v1: If this is a captured binding in a defer thunk, emit as env->field */
+    if (ctx->env_var_name && ctx->defer_captures) {
+        for (uint8_t i = 0; i < ctx->n_defer_captures; i++) {
+            if (ctx->defer_captures[i] == b) {
                 /* This is a captured binding - emit as env_var_name->field_name */
                 char *field_name = raw_name_for_binding(b);
                 char *result = (char *)malloc(strlen(ctx->env_var_name) + strlen(field_name) + 4);
@@ -139,13 +287,6 @@ static void emit_c_string(Buf *out, StrSlice s) {
     }
     buf_putc(out, '"');
 }
-
-/* Forward declarations for the mutually-recursive emit. emit_value emits
- * statements (if any) into `body` and returns a malloc()'d C-expression
- * string that the caller takes ownership of and must free(). */
-static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e);
-static void  emit_stmt (EmitCtx *ctx, Buf *body, const Expr *e);
-static void  emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e);
 
 /* ------------ atomic emitters (no statements emitted) ------------ */
 
@@ -356,27 +497,82 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     return nil_result ? atom_nil() : tmp;
 }
 
-/* Phase 4: defer-aware do-block emission.
+/* Phase 4 v1: defer-aware do-block emission.
  *
- * v0 strategy: collect EX_DEFER children of this EX_DO, emit non-defer items
- * in source order, then emit defer bodies in reverse (LIFO) just before the
- * EX_DO finishes. This is the simplest correct lowering for the common case
- * (defers at scope-top in let/defn/while bodies, since those bodies are
- * wrapped in EX_DO during elaboration).
+ * v1 strategy (effects-plan.md §6.10): Each scope gets a tur_frame variable.
+ * Defers are collected and fired via tur_frame_fire_lifo at scope exit.
+ * This is the unified runtime-list-on-frame model.
  *
- * Known limitations of this v0 lowering (tracked in turmeric-plan.md §10.5):
- *   - Defers inside `if`/`cond` branches won't fire LIFO with sibling defers
- *     in the surrounding scope; they only fire at the branch's own scope end.
- *   - Defers inside `while` bodies fire on every loop iteration.
- *   - Early `return` is not yet a language feature, so it isn't handled here.
+ * For v1, we still emit defer bodies inline (not as thunks yet),
+ * but we use the frame infrastructure for future-proofing.
  *
- * Phase 4's architectural target (per effects-plan §6.10) is the unified
- * runtime-list-on-frame model. That replaces this inline reordering with a
- * stack-allocated `tur_frame` per scope and `tur_frame_push_defer` calls.
- * The switch is local to this file plus the new runtime header. */
+ * Known limitations:
+ *   - Defer bodies are still emitted inline (v0 style), not as thunks
+ *   - Captures are not yet properly handled via env structs
+ *   - Defers inside `while` bodies fire on every loop iteration
+ *   - Early `return` is not yet a language feature
+ *
+ * Future: Proper thunk generation with captures (effects-plan.md §6.10). */
 static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     uint32_t n = e->as.do_.n;
     if (n == 0) return atom_nil();
+
+    /* Check if we have any defers in this scope */
+    bool has_defers = false;
+    for (uint32_t i = 0; i < n; i++) {
+        if (e->as.do_.items[i]->kind == EX_DEFER) {
+            has_defers = true;
+            break;
+        }
+    }
+
+    if (!has_defers) {
+        /* No defers - use old path (no frame needed) */
+        int last_value_idx = -1;
+        for (int i = (int)n - 1; i >= 0; i--) {
+            if (e->as.do_.items[i]->kind != EX_DEFER) { last_value_idx = i; break; }
+        }
+
+        for (uint32_t i = 0; i < n; i++) {
+            const Expr *it = e->as.do_.items[i];
+            if (it->kind == EX_DEFER) continue;
+            if ((int)i == last_value_idx) continue;
+            emit_stmt(ctx, body, it);
+        }
+
+        char *result = NULL;
+        if (last_value_idx >= 0) {
+            const Expr *last = e->as.do_.items[last_value_idx];
+            if (last->type.kind == TY_NIL) {
+                emit_stmt(ctx, body, last);
+            } else {
+                result = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s %s;\n", type_c_name(last->type), result);
+                char *v = emit_value(ctx, body, last);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s = %s;\n", result, v);
+                free(v);
+            }
+        }
+        return result ? result : atom_nil();
+    }
+
+    /* v1 lowering: Has defers - use tur_frame */
+    /* Save parent frame and set up new frame */
+    const char *saved_frame = ctx->frame_var;
+    char *frame_var = fresh_frame(ctx);
+    ctx->frame_var = frame_var;
+
+    /* Emit frame declaration and init */
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "tur_frame %s;\n", frame_var);
+    indent_buf(body, ctx->indent);
+    if (saved_frame) {
+        buf_printf(body, "tur_frame_init(&%s, &%s);\n", frame_var, saved_frame);
+    } else {
+        buf_printf(body, "tur_frame_init(&%s, NULL);\n", frame_var);
+    }
 
     /* Find last non-defer item to source the do-block's value from. */
     int last_value_idx = -1;
@@ -384,11 +580,52 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         if (e->as.do_.items[i]->kind != EX_DEFER) { last_value_idx = i; break; }
     }
 
+    /* Emit non-defer items and register defer thunks */
     for (uint32_t i = 0; i < n; i++) {
         const Expr *it = e->as.do_.items[i];
-        if (it->kind == EX_DEFER) continue; /* fired below */
-        if ((int)i == last_value_idx) continue; /* emitted as value below */
-        emit_stmt(ctx, body, it);
+        if (it->kind == EX_DEFER) {
+            /* v1 lowering: Generate thunk and register with frame */
+            const Expr *defer_expr = it->as.defer_.body;
+            const uint8_t n_captures = it->as.defer_.n_captures;
+            Binding **captures = it->as.defer_.captures;
+            
+            if (n_captures == 0) {
+                /* No captures - generate thunk */
+                char *thunk_name = fresh_defer_thunk(ctx);
+                register_defer_thunk(ctx, thunk_name, defer_expr, captures, n_captures, NULL);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "tur_frame_push_defer(&%s, %s, NULL);\n", frame_var, thunk_name);
+            } else {
+                /* Has captures - generate thunk with env struct */
+                char *env_name = fresh_defer_env(ctx);
+                char *thunk_name = fresh_defer_thunk(ctx);
+                register_defer_thunk(ctx, thunk_name, defer_expr, captures, n_captures, env_name);
+                
+                /* Emit env struct type definition at file scope */
+                /* We'll emit this in emit_pending_defer_thunks, but we need to
+                 * also create the env instance here and pass its address */
+                
+                /* Create env instance and register with address */
+                char *env_tmp = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "struct %s %s = {", env_name, env_tmp);
+                for (uint8_t j = 0; j < n_captures; j++) {
+                    if (j > 0) buf_puts(body, ", ");
+                    char *cn = name_for_binding(ctx, captures[j]);
+                    buf_printf(body, ".%s = %s", captures[j]->name->name, cn);
+                    free(cn);
+                }
+                buf_puts(body, "};\n");
+                
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "tur_frame_push_defer(&%s, %s, &%s);\n", frame_var, thunk_name, env_tmp);
+                free(env_tmp);
+            }
+        } else if ((int)i == last_value_idx) {
+            continue; /* emitted as value below */
+        } else {
+            emit_stmt(ctx, body, it);
+        }
     }
 
     char *result = NULL;
@@ -408,11 +645,13 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
     }
 
-    /* Fire defers LIFO. */
-    for (int i = (int)n - 1; i >= 0; i--) {
-        const Expr *it = e->as.do_.items[i];
-        if (it->kind == EX_DEFER) emit_stmt(ctx, body, it->as.defer_.body);
-    }
+    /* Fire all defers LIFO at scope exit */
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "tur_frame_fire_lifo(&%s);\n", frame_var);
+
+    /* Restore frame state */
+    ctx->frame_var = saved_frame;
+    free(frame_var);
 
     return result ? result : atom_nil();
 }
@@ -624,16 +863,90 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_WHILE: emit_while_stmt(ctx, body, e); return;
         case EX_SET:   emit_set_stmt(ctx, body, e);   return;
         case EX_DO: {
-            /* Phase 4: same defer-aware ordering as emit_do_value, statement form. */
+            /* v1 lowering: use same frame-based approach as emit_do_value */
             uint32_t n = e->as.do_.n;
+            
+            /* Check if we have any defers in this scope */
+            bool has_defers = false;
             for (uint32_t i = 0; i < n; i++) {
-                if (e->as.do_.items[i]->kind == EX_DEFER) continue;
-                emit_stmt(ctx, body, e->as.do_.items[i]);
+                if (e->as.do_.items[i]->kind == EX_DEFER) {
+                    has_defers = true;
+                    break;
+                }
             }
-            for (int i = (int)n - 1; i >= 0; i--) {
+
+            if (!has_defers) {
+                /* No defers - emit all items */
+                for (uint32_t i = 0; i < n; i++) {
+                    emit_stmt(ctx, body, e->as.do_.items[i]);
+                }
+                return;
+            }
+
+            /* Has defers - use tur_frame */
+            const char *saved_frame = ctx->frame_var;
+            char *frame_var = fresh_frame(ctx);
+            ctx->frame_var = frame_var;
+
+            /* Emit frame declaration and init */
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "tur_frame %s;\n", frame_var);
+            indent_buf(body, ctx->indent);
+            if (saved_frame) {
+                buf_printf(body, "tur_frame_init(&%s, &%s);\n", frame_var, saved_frame);
+            } else {
+                buf_printf(body, "tur_frame_init(&%s, NULL);\n", frame_var);
+            }
+
+            /* Emit non-defer items and register defer thunks */
+            for (uint32_t i = 0; i < n; i++) {
                 const Expr *it = e->as.do_.items[i];
-                if (it->kind == EX_DEFER) emit_stmt(ctx, body, it->as.defer_.body);
+                if (it->kind == EX_DEFER) {
+                    /* v1 lowering: Generate thunk and register with frame */
+                    const Expr *defer_expr = it->as.defer_.body;
+                    const uint8_t n_captures = it->as.defer_.n_captures;
+                    Binding **captures = it->as.defer_.captures;
+                    
+                    if (n_captures == 0) {
+                        /* No captures - generate thunk */
+                        char *thunk_name = fresh_defer_thunk(ctx);
+                        register_defer_thunk(ctx, thunk_name, defer_expr, captures, n_captures, NULL);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "tur_frame_push_defer(&%s, %s, NULL);\n", frame_var, thunk_name);
+                    } else {
+                        /* Has captures - generate thunk with env struct */
+                        char *env_name = fresh_defer_env(ctx);
+                        char *thunk_name = fresh_defer_thunk(ctx);
+                        register_defer_thunk(ctx, thunk_name, defer_expr, captures, n_captures, env_name);
+                        
+                        /* Create env instance and register with address */
+                        char *env_tmp = fresh_tmp(ctx);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "struct %s %s = {", env_name, env_tmp);
+                        for (uint8_t j = 0; j < n_captures; j++) {
+                            if (j > 0) buf_puts(body, ", ");
+                            char *cn = name_for_binding(ctx, captures[j]);
+                            buf_printf(body, ".%s = %s", captures[j]->name->name, cn);
+                            free(cn);
+                        }
+                        buf_puts(body, "};\n");
+                        
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "tur_frame_push_defer(&%s, %s, &%s);\n", frame_var, thunk_name, env_tmp);
+                        free(env_tmp);
+                    }
+                } else {
+                    emit_stmt(ctx, body, it);
+                }
             }
+
+            /* Fire all defers LIFO at scope exit */
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "tur_frame_fire_lifo(&%s);\n", frame_var);
+
+            /* Restore frame state */
+            ctx->frame_var = saved_frame;
+            free(frame_var);
             return;
         }
         case EX_LET: {
@@ -860,6 +1173,10 @@ static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     free((void*)fn_name);
 }
 
+
+
+
+
 /* ------------ program-level emit ------------ */
 
 int emit_program(Buf *out, const Expr *program) {
@@ -886,6 +1203,13 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.env_struct_names = NULL;
     ctx.n_env_struct_names = 0;
     ctx.cap_env_struct_names = 0;
+    /* Phase 4 v1: frame tracking */
+    ctx.frame_var = NULL;
+    ctx.in_scope_with_defers = false;
+    ctx.pending_defer_thunks = NULL;
+    /* Phase 4 v1: defer captures tracking */
+    ctx.defer_captures = NULL;
+    ctx.n_defer_captures = 0;
     /* Check if user defined a main function */
     bool user_has_main = false;
     for (uint32_t i = 0; i < program->as.program.n; i++) {
@@ -962,6 +1286,35 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "#include <stdint.h>\n");
     buf_puts(out, "#include <stdbool.h>\n");
     buf_puts(out, "\n");
+    /* Phase 4 v1 lowering: emit tur_frame inline from runtime.h */
+    buf_puts(out, "/* tur_frame - phase 4 v1 lowering (from runtime.h) */\n");
+    buf_puts(out, "typedef void (*defer_fn_t)(void *env);\n");
+    buf_puts(out, "#define TUR_FRAME_MAX_DEFERS 32\n\n");
+    buf_puts(out, "typedef struct tur_frame {\n");
+    buf_puts(out, "    defer_fn_t defers[TUR_FRAME_MAX_DEFERS];\n");
+    buf_puts(out, "    void *envs[TUR_FRAME_MAX_DEFERS];\n");
+    buf_puts(out, "    int n;\n");
+    buf_puts(out, "    struct tur_frame *parent;\n");
+    buf_puts(out, "    bool may_capture;\n");
+    buf_puts(out, "} tur_frame;\n\n");
+    buf_puts(out, "static inline void tur_frame_init(tur_frame *f, tur_frame *parent) {\n");
+    buf_puts(out, "    f->n = 0; f->parent = parent; f->may_capture = false;\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static inline int tur_frame_push_defer(tur_frame *f, defer_fn_t thunk, void *env) {\n");
+    buf_puts(out, "    if (f->n >= TUR_FRAME_MAX_DEFERS) return -1;\n");
+    buf_puts(out, "    f->defers[f->n] = thunk;\n");
+    buf_puts(out, "    f->envs[f->n] = env;\n");
+    buf_puts(out, "    f->n++;\n");
+    buf_puts(out, "    return 0;\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static void tur_frame_fire_lifo(tur_frame *f) {\n");
+    buf_puts(out, "    for (int i = f->n - 1; i >= 0; i--) f->defers[i](f->envs[i]);\n");
+    buf_puts(out, "    f->n = 0;\n");
+    buf_puts(out, "}\n\n");
+    
+    /* Phase 4 v1: Emit all defer thunks at file scope (after tur_frame defs) */
+    emit_pending_defer_thunks(&ctx, out);
+    
     if (file.len) { buf_write(out, file.data, file.len); buf_putc(out, '\n'); }
     if (!user_has_main) {
         /* Only generate main() if user didn't define one */

@@ -6,13 +6,14 @@
  * 
  * Per effects-plan.md §6.10, this implements the unified defer model where
  * defers are entries in a list-on-frame, not codegen labels. Each defer is
- * a thunk function pointer that gets invoked here. The frame's n is reset to
- * 0 after firing so the same frame can be reused (though in v0/v1 frames are
- * stack-allocated per scope and not reused). */
+ * a thunk function pointer that gets invoked here with its corresponding
+ * env pointer. The frame's n is reset to 0 after firing so the same frame
+ * can be reused (though in v0/v1 frames are stack-allocated per scope and
+ * not reused). */
 void tur_frame_fire_lifo(tur_frame *f) {
     /* Fire defers in reverse order (LIFO) */
     for (int i = f->n - 1; i >= 0; i--) {
-        f->defers[i]();
+        f->defers[i](f->envs[i]);
     }
     f->n = 0;
 }

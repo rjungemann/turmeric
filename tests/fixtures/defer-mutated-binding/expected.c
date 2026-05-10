@@ -30,26 +30,27 @@ static void tur_frame_fire_lifo(tur_frame *f) {
     f->n = 0;
 }
 
-static int64_t __fn_2(void *);
-struct __env_4 {int64_t x; };
-static int64_t __fn_2(void * __env_p_5) {
-        struct __env_4 *__env___env_4 = (struct __env_4 *)__env_p_5;
-        return ((__env___env_4->x) + (INT64_C(1)));
+struct __defer_env_1 {int64_t x; };
+
+static void __defer_2(void *__env) {
+    struct __defer_env_1 *__defer_env_1 = (struct __defer_env_1 *)__env;
+    printf("%lld\n", (long long)(__defer_env_1->x));
 }
 
 int main() {
         {
             int64_t x_1 = INT64_C(10);
             (void)x_1;
-            {
-                struct __env_4 __t0 = {.x = x_1};
-                void *__t1 = &__t0;
-                void * f_7 = __t1;
-                (void)f_7;
-                printf("%lld\n", (long long)(__fn_2(f_7)));
-            }
+            tur_frame __frame_0;
+            tur_frame_init(&__frame_0, NULL);
+            struct __defer_env_1 __t3 = {.x = x_1};
+            tur_frame_push_defer(&__frame_0, __defer_2, &__t3);
+            x_1 = INT64_C(20);
+            tur_frame_fire_lifo(&__frame_0);
         }
-        return (int)0;
+        int64_t __t4;
+        __t4 = INT64_C(0);
+        return (int)__t4;
 }
 
 
