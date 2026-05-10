@@ -45,6 +45,8 @@ typedef enum TypeKind {
     /* Phase 15: Typeclasses */
     TY_TYPECLASS,    /* Typeclass type (e.g., Eq, Ord) */
     TY_TYPECLASS_INST, /* Typeclass instance type */
+    /* Phase 17: Exceptions */
+    TY_EXCEPTION,    /* Exception type - wraps any value for throw/catch */
 } TypeKind;
 
 /* Max arity for function types in phase 2. */
@@ -94,6 +96,10 @@ typedef struct Type {
         struct {
             TypeClassInstance *instance;  /* For TY_TYPECLASS_INST - a specific instance */
         } typeclass_inst;
+        /* Phase 17: Exception types */
+        struct {
+            TypeKind payload_type;  /* The type of the exception payload */
+        } exn;
     } as;
 } Type;
 
@@ -220,6 +226,17 @@ static inline Type type_typeclass_inst(TypeClassInstance *inst) {
     t.typeclass_instances = NULL;
     t.n_typeclass_instances = 0;
     t.as.typeclass_inst.instance = inst;
+    return t;
+}
+
+/* Phase 17: Exception type constructor */
+/* Create an exception type wrapping a payload of the given type */
+static inline Type type_exception(TypeKind payload_type) {
+    Type t;
+    t.kind = TY_EXCEPTION;
+    t.copy_kind = CK_MOVE;  /* Exceptions are move-only (one-shot) */
+    t.n_lifetimes = 0;
+    t.as.exn.payload_type = payload_type;
     return t;
 }
 

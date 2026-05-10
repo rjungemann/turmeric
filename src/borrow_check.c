@@ -280,6 +280,26 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
                 }
             }
             return true;
+        /* Phase 17: Exceptions */
+        case EX_THROW:
+            /* Check the payload expression */
+            return borrow_check_expr_recursive(ctx, e->as.throw_.payload);
+        case EX_TRY:
+            /* Check try body and all handlers */
+            if (!borrow_check_expr_recursive(ctx, e->as.try_.body)) {
+                return false;
+            }
+            for (uint8_t i = 0; i < e->as.try_.n_clauses; i++) {
+                if (!borrow_check_expr_recursive(ctx, e->as.try_.clauses[i].handler)) {
+                    return false;
+                }
+            }
+            if (e->as.try_.finally_body) {
+                if (!borrow_check_expr_recursive(ctx, e->as.try_.finally_body)) {
+                    return false;
+                }
+            }
+            return true;
     }
     
     return true;

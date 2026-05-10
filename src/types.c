@@ -163,6 +163,17 @@ const char *type_name(Type t) {
         case TY_TYPECLASS_INST:
             return t.as.typeclass_inst.instance && t.as.typeclass_inst.instance->typeclass ?
                    t.as.typeclass_inst.instance->typeclass->name->name : "<typeclass-inst>";
+        /* Phase 17: Exception types */
+        case TY_EXCEPTION: {
+            /* Build "exception<T>" name */
+            Buf tmp;
+            buf_init(&tmp);
+            buf_puts(&tmp, "exception<");
+            buf_puts(&tmp, type_name(type_from_kind(t.as.exn.payload_type)));
+            buf_puts(&tmp, ">");
+            buf_putc(&tmp, '\0');
+            return strdup(tmp.data);
+        }
     }
     return "?";
 }
@@ -249,6 +260,13 @@ static void type_name_buf(Buf *b, Type t) {
             }
             break;
         }
+        /* Phase 17: Exception types */
+        case TY_EXCEPTION: {
+            buf_puts(b, "exception<");
+            type_name_buf(b, type_from_kind(t.as.exn.payload_type));
+            buf_puts(b, ">");
+            break;
+        }
     }
 }
 
@@ -289,6 +307,9 @@ const char *type_c_name(Type t) {
         case TY_TYPECLASS:
         case TY_TYPECLASS_INST:
             return "void";  /* Typeclasses don't exist at runtime */
+        /* Phase 17: Exception types lower to a struct in C */
+        case TY_EXCEPTION:
+            return "tur_exception *";
     }
     return "void";
 }

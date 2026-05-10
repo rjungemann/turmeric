@@ -1,0 +1,190 @@
+;; Phase 17: Exception types for Turmeric
+;; 
+;; Standard exception types for error handling
+
+(extern-c malloc [^int size] :ptr)
+(extern-c free [^ptr p] :void)
+
+;; ============================================================================
+;; Base Error type
+;; ============================================================================
+
+;; Error - base error type with message and optional cause
+(defn Error-type []
+  ```c
+  typedef struct Error Error;
+  struct Error {
+      const char* message;
+      void* cause;  /* Pointer to another exception or NULL */
+  };
+  return NULL;
+  ```)
+
+;; Create a new Error
+(defn Error. [message cause]
+  ```c
+  typedef struct Error Error;
+  Error* err = (Error*)malloc(sizeof(Error));
+  err->message = message;
+  err->cause = cause;
+  return (void*)err;
+  ```)
+
+;; Get the message from an Error
+(defn Error-message [err]
+  ```c
+  typedef struct Error Error;
+  Error* e = (Error*)err;
+  return (void*)e->message;
+  ```)
+
+;; Get the cause from an Error
+(defn Error-cause [err]
+  ```c
+  typedef struct Error Error;
+  Error* e = (Error*)err;
+  return e->cause;
+  ```)
+
+;; Free an Error
+(defn Error-free [err]
+  ```c
+  free(err);
+  ```)
+
+;; ============================================================================
+;; IoError type
+;; ============================================================================
+
+;; IoError - I/O error with message and errno
+(defn IoError-type []
+  ```c
+  typedef struct IoError IoError;
+  struct IoError {
+      const char* message;
+      int errno_;  /* System error number */
+  };
+  return NULL;
+  ```)
+
+;; Create a new IoError
+(defn IoError. [message errno_val]
+  ```c
+  typedef struct IoError IoError;
+  IoError* err = (IoError*)malloc(sizeof(IoError));
+  err->message = message;
+  err->errno_ = errno_val;
+  return (void*)err;
+  ```)
+
+;; Get the message from an IoError
+(defn IoError-message [err]
+  ```c
+  typedef struct IoError IoError;
+  IoError* e = (IoError*)err;
+  return (void*)e->message;
+  ```)
+
+;; Get the errno from an IoError
+(defn IoError-errno [err]
+  ```c
+  typedef struct IoError IoError;
+  IoError* e = (IoError*)err;
+  return e->errno_;
+  ```)
+
+;; Free an IoError
+(defn IoError-free [err]
+  ```c
+  free(err);
+  ```)
+
+;; ============================================================================
+;; ParseError type
+;; ============================================================================
+
+;; ParseError - parsing error with message and source location
+;; Note: Span is passed as separate fields for now
+(defn ParseError-type []
+  ```c
+  typedef struct ParseError ParseError;
+  struct ParseError {
+      const char* message;
+      int line;
+      int col;
+      const char* file;
+  };
+  return NULL;
+  ```)
+
+;; Create a new ParseError
+(defn ParseError. [message line col file]
+  ```c
+  typedef struct ParseError ParseError;
+  ParseError* err = (ParseError*)malloc(sizeof(ParseError));
+  err->message = message;
+  err->line = line;
+  err->col = col;
+  err->file = file;
+  return (void*)err;
+  ```)
+
+;; Get the message from a ParseError
+(defn ParseError-message [err]
+  ```c
+  typedef struct ParseError ParseError;
+  ParseError* e = (ParseError*)err;
+  return (void*)e->message;
+  ```)
+
+;; Get the line from a ParseError
+(defn ParseError-line [err]
+  ```c
+  typedef struct ParseError ParseError;
+  ParseError* e = (ParseError*)err;
+  return e->line;
+  ```)
+
+;; Get the column from a ParseError
+(defn ParseError-col [err]
+  ```c
+  typedef struct ParseError ParseError;
+  ParseError* e = (ParseError*)err;
+  return e->col;
+  ```)
+
+;; Get the file from a ParseError
+(defn ParseError-file [err]
+  ```c
+  typedef struct ParseError ParseError;
+  ParseError* e = (ParseError*)err;
+  return (void*)e->file;
+  ```)
+
+;; Free a ParseError
+(defn ParseError-free [err]
+  ```c
+  free(err);
+  ```)
+
+;; ============================================================================
+;; Sugar functions for throwing exceptions
+;; ============================================================================
+
+;; throw-error - sugar for (throw (Error. message none))
+(defn throw-error [msg]
+  ```c
+  /* This will be replaced by actual throw implementation in Phase 17 */
+  fprintf(stderr, "Error: %s\n", msg);
+  exit(1);
+  return 0;
+  ```)
+
+;; throw-io-error - sugar for (throw (IoError. message errno))
+(defn throw-io-error [msg]
+  ```c
+  /* This will be replaced by actual throw implementation in Phase 17 */
+  fprintf(stderr, "IoError: %s\n", msg);
+  exit(1);
+  return 0;
+  ```)

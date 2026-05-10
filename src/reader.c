@@ -337,7 +337,7 @@ static Form *read_quasiquote(Reader *r) {
     return form_quasiquote(r->arena, span_from_to(r, start_line, start_col, start_off, inner->span.off_end), inner);
 }
 
-static Form *read_deref(Reader *r) {
+static Form *read_deref(struct Reader *r) {
     /* Phase 5: (@ expr) reader macro - read as (deref expr) */
     uint32_t start_line = r->line;
     uint32_t start_col = r->col;

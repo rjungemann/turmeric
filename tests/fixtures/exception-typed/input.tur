@@ -1,0 +1,17 @@
+;; Phase 17: Typed catch clauses test
+
+(defn test-typed-catch-int []
+  (try
+    (throw 42)
+    (catch [e :int]
+      e)))
+
+(defn test-typed-catch-cstr []
+  (try
+    (throw "error")
+    (catch [e :cstr]
+      e)))
+
+(defn main []
+  (println "exception-typed test")
+  0)

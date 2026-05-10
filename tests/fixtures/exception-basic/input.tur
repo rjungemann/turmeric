@@ -1,0 +1,29 @@
+;; Phase 17: Basic exception syntax test
+;; Just verify parsing works
+
+(defn test-throw []
+  (throw 42))
+
+(defn test-try-catch []
+  (try
+    0
+    (catch [e]
+      1)))
+
+(defn test-try-finally []
+  (try
+    0
+    (finally
+      1)))
+
+(defn test-try-catch-finally []
+  (try
+    0
+    (catch [e]
+      1)
+    (finally
+      2)))
+
+(defn main []
+  (println "exception-basic test")
+  0)

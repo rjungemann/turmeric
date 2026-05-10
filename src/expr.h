@@ -74,6 +74,9 @@ typedef enum ExprKind {
     /* Phase 15: Typeclasses */
     EX_TYPECLASS_DEF,   /* (defclass ...) - typeclass definition */
     EX_INSTANCE_DEF,   /* (definstance ...) - typeclass instance definition */
+    /* Phase 17: Exceptions */
+    EX_THROW,          /* (throw expr) - raise an exception */
+    EX_TRY,            /* (try body (catch ...) (finally ...)) - try-catch-finally */
     EX_PROGRAM,
 } ExprKind;
 
@@ -126,6 +129,13 @@ typedef struct LetBinding {
     Binding *binding;
     Expr    *init;
 } LetBinding;
+
+/* Phase 17: Exception handling - Try-catch clause structure */
+typedef struct TryCatchClause {
+    const Symbol *var_name;    /* Name of the exception variable (e.g., 'e' in (catch [e] ...)) */
+    TypeKind catch_type;        /* Type to match (TY_INT, TY_BOOL, etc.), TY_UNKNOWN = catch-all */
+    Expr *handler;             /* Handler body expression */
+} TryCatchClause;
 
 struct Expr {
     ExprKind kind;
@@ -183,6 +193,14 @@ struct Expr {
         /* Phase 15: Typeclasses */
         struct { TypeClass *typeclass; }                                  typeclass_def_;
         struct { TypeClassInstance *instance; }                          instance_def_;
+        /* Phase 17: Exceptions */
+        struct { Expr *payload; }        throw_;    /* (throw expr) - expression to throw */
+        struct {
+            Expr *body;              /* try body expression */
+            TryCatchClause *clauses; /* catch clauses */
+            uint8_t n_clauses;      /* number of catch clauses */
+            Expr *finally_body;     /* finally body (NULL if none) */
+        } try_;
 
         struct { Expr **items; uint32_t n; }                               program;
     } as;

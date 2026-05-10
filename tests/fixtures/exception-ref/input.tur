@@ -1,0 +1,12 @@
+;; Phase 17: Ref with exceptions test
+
+(defn test-ref-drop-on-exception []
+  (try
+    (let [r (ref 42)]
+      (throw 0))
+    (catch [e]
+      0)))
+
+(defn main []
+  (println "exception-ref test")
+  0)

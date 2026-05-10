@@ -717,6 +717,176 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_INSTANCE_DEF:
             /* Handled in emit_stmt - file scope only */
             return atom_nil();
+        /* Phase 17: Exceptions */
+        case EX_THROW: {
+            /* (throw expr) - emit as tur_throw call */
+            const Expr *payload = e->as.throw_.payload;
+            char *payload_val = emit_value(ctx, body, payload);
+            
+            /* Box primitive types on the heap so they survive the throw */
+            char *boxed_val = payload_val;
+            if (payload->type.kind == TY_INT) {
+                /* Box int: allocate int64_t on heap and copy */
+                char *tmp = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "int64_t *%s = (int64_t *)malloc(sizeof(int64_t));\n", tmp);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "*%s = %s;\n", tmp, payload_val);
+                boxed_val = tmp;
+                free(payload_val);
+            } else if (payload->type.kind == TY_BOOL) {
+                /* Box bool: allocate bool on heap and copy */
+                char *tmp = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "bool *%s = (bool *)malloc(sizeof(bool));\n", tmp);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "*%s = %s;\n", tmp, payload_val);
+                boxed_val = tmp;
+                free(payload_val);
+            }
+            /* For pointer types (cstr, ptr_void, ref, rc, weak), use directly */
+            
+            /* Emit tur_throw call */
+            indent_buf(body, ctx->indent);
+            /* Get file and line from span - use hardcoded file for now */
+            buf_printf(body, "tur_throw(%d, (void*)%s, %d, \"<unknown>\");\n",
+                      payload->type.kind, boxed_val, e->span.line);
+            
+            if (payload->type.kind == TY_INT || payload->type.kind == TY_BOOL) {
+                free(boxed_val); /* Free the tmp name, not the allocation */
+            }
+            return atom_nil();
+        }
+        case EX_TRY: {
+            /* (try body (catch ...) (finally ...)) - emit as setjmp/longjmp */
+            char *handler_var = fresh_tmp(ctx);
+            
+            /* Emit handler setup with setjmp */
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "ExceptionHandler %s;\n", handler_var);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s.parent = global_handler_chain;\n", handler_var);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "global_handler_chain = &%s;\n", handler_var);
+            
+            /* Check if there's a finally clause */
+            bool has_finally = e->as.try_.finally_body != NULL;
+            char *finally_label = has_finally ? fresh_tmp(ctx) : NULL;
+            
+            /* Emit setjmp-based try */
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "if (setjmp(%s.jmp_buf) == 0) {\n", handler_var);
+            ctx->indent += 4;
+            
+            /* Emit try body */
+            emit_stmt(ctx, body, e->as.try_.body);
+            
+            if (has_finally) {
+                /* With finally: pop handler and jump to finally */
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "global_handler_chain = global_handler_chain->parent;\n");
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "goto %s;\n", finally_label);
+            } else {
+                /* Without finally: just pop handler */
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "global_handler_chain = global_handler_chain->parent;\n");
+            }
+            
+            ctx->indent -= 4;
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "} else {\n");
+            ctx->indent += 4;
+            
+            /* Exception was caught - check catch clauses */
+            if (e->as.try_.n_clauses > 0) {
+                /* Emit if-else chain for catch clauses */
+                for (uint8_t i = 0; i < e->as.try_.n_clauses; i++) {
+                    TryCatchClause *clause = &e->as.try_.clauses[i];
+                    
+                    if (i == 0) {
+                        /* First clause - no else */
+                        indent_buf(body, ctx->indent);
+                    } else {
+                        /* Subsequent clauses - close previous block and add else */
+                        ctx->indent -= 4;
+                        indent_buf(body, ctx->indent);
+                        buf_puts(body, "} else ");
+                        ctx->indent += 4;
+                    }
+                    
+                    /* Check if exception matches this clause */
+                    buf_printf(body, "if (tur_exception_matches(%s.caught, %d)) {\n",
+                              handler_var, clause->catch_type);
+                    ctx->indent += 4;
+                    
+                    /* Bind catch variable to exception payload */
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "void *%s = %s.caught->payload;\n",
+                              clause->var_name->name, handler_var);
+                    
+                    /* Emit handler body */
+                    emit_stmt(ctx, body, clause->handler);
+                    
+                    /* Clean up */
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "tur_exception_free(%s.caught);\n", handler_var);
+                    indent_buf(body, ctx->indent);
+                    buf_puts(body, "global_handler_chain = global_handler_chain->parent;\n");
+                    
+                    if (has_finally) {
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "goto %s;\n", finally_label);
+                    }
+                    
+                    ctx->indent -= 4;
+                }
+                
+                /* No match - rethrow */
+                ctx->indent -= 4;
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "} else {\n");
+                ctx->indent += 4;
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "global_handler_chain = global_handler_chain->parent;\n");
+                if (has_finally) {
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "goto %s;\n", finally_label);
+                } else {
+                    indent_buf(body, ctx->indent);
+                    buf_puts(body, "longjmp(global_handler_chain->jmp_buf, 1);\n");
+                }
+                ctx->indent -= 4;
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "}\n");
+            } else {
+                /* No catch clauses, just rethrow (or go to finally) */
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "global_handler_chain = global_handler_chain->parent;\n");
+                if (has_finally) {
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "goto %s;\n", finally_label);
+                } else {
+                    indent_buf(body, ctx->indent);
+                    buf_puts(body, "longjmp(global_handler_chain->jmp_buf, 1);\n");
+                }
+            }
+            
+            ctx->indent -= 4;
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "}\n");
+            
+            /* Emit finally block if present */
+            if (has_finally) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s:\n", finally_label);
+                emit_stmt(ctx, body, e->as.try_.finally_body);
+                free(finally_label);
+            }
+            
+            free(handler_var);
+            return atom_nil();
+        }
         /* Phase 2 */
         case EX_FN_DEF:
             /* fn should only appear at top level for phase 2 */
@@ -1166,6 +1336,21 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_EXTERN_C:
             /* extern-c declarations emit nothing in statement position (they're file-scope) */
             return;
+        /* Phase 17: Exceptions */
+        case EX_THROW: {
+            /* (throw expr) - emit as statement with tur_throw call */
+            /* Delegate to emit_value which handles the full implementation */
+            char *v = emit_value(ctx, body, e);
+            free(v);
+            return;
+        }
+        case EX_TRY: {
+            /* (try body (catch ...) (finally ...)) - emit as setjmp/longjmp */
+            /* Delegate to emit_value which handles the full implementation */
+            char *v = emit_value(ctx, body, e);
+            free(v);
+            return;
+        }
         case EX_INSTANCE_DEF: {
             /* Phase 15: Emit dictionary struct and global singleton */
             TypeClassInstance *inst = e->as.instance_def_.instance;
@@ -1379,8 +1564,8 @@ static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* Return type from fn_type */
     if (e->type.kind == TY_FN) {
         TypeKind result = e->type.as.fn.result_kind;
-        if (is_main && result == TY_INT) {
-            buf_puts(file, "int");  /* C main returns int, not int64_t */
+        if (is_main) {
+            buf_puts(file, "int");  /* C main must always return int */
         } else {
             buf_puts(file, type_c_name(type_from_kind(result)));
         }
@@ -1438,7 +1623,7 @@ static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* Get the return type */
     TypeKind result_kind = e->type.kind == TY_FN ? e->type.as.fn.result_kind : TY_NIL;
 
-    if (result_kind == TY_NIL) {
+    if (result_kind == TY_NIL && !is_main) {
         /* void function - emit body as statements */
         emit_stmt(ctx, file, fd->body);
     } else {
@@ -1591,6 +1776,8 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "#include <stdio.h>\n");
     buf_puts(out, "#include <stdint.h>\n");
     buf_puts(out, "#include <stdbool.h>\n");
+    /* Phase 17: Exceptions - setjmp/longjmp */
+    buf_puts(out, "#include <setjmp.h>\n");
     /* Phase 5: Declare malloc and free for ref<T> without including stdlib.h
      * to avoid conflicts with user-declared functions like exit. */
     buf_puts(out, "extern void *malloc(size_t);\n");
@@ -1623,6 +1810,81 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "static void tur_frame_fire_lifo(tur_frame *f) {\n");
     buf_puts(out, "    for (int i = f->n - 1; i >= 0; i--) f->defers[i](f->envs[i]);\n");
     buf_puts(out, "    f->n = 0;\n");
+    buf_puts(out, "}\n\n");
+    
+    /* Phase 17: Exception runtime (inline from exn.h/c) */
+    buf_puts(out, "/* Exception handling - Phase 17 */\n");
+    buf_puts(out, "typedef struct tur_exception tur_exception;\n\n");
+    buf_puts(out, "struct tur_exception {\n");
+    buf_puts(out, "    int payload_type;      /* TypeKind enum value */\n");
+    buf_puts(out, "    void *payload;         /* The exception payload */\n");
+    buf_puts(out, "    int line;              /* Line where thrown */\n");
+    buf_puts(out, "    const char *file;      /* File where thrown */\n");
+    buf_puts(out, "    tur_exception *cause;  /* Chained exception */\n");
+    buf_puts(out, "};\n\n");
+    
+    /* Exception handler chain */
+    buf_puts(out, "typedef struct ExceptionHandler ExceptionHandler;\n");
+    buf_puts(out, "struct ExceptionHandler {\n");
+    buf_puts(out, "    jmp_buf jmp_buf;\n");
+    buf_puts(out, "    int active;\n");
+    buf_puts(out, "    tur_exception *caught;\n");
+    buf_puts(out, "    ExceptionHandler *parent;\n");
+    buf_puts(out, "};\n\n");
+    
+    /* Thread-local exception handler chain (single-threaded v1) */
+    buf_puts(out, "static ExceptionHandler *global_handler_chain = NULL;\n\n");
+    
+    /* Exception helper functions */
+    buf_puts(out, "ExceptionHandler *exn_push_handler(void) {\n");
+    buf_puts(out, "    ExceptionHandler *h = (ExceptionHandler *)malloc(sizeof(ExceptionHandler));\n");
+    buf_puts(out, "    if (!h) { fprintf(stderr, \"exn: out of memory\\n\"); abort(); }\n");
+    buf_puts(out, "    h->active = 1;\n");
+    buf_puts(out, "    h->caught = NULL;\n");
+    buf_puts(out, "    h->parent = global_handler_chain;\n");
+    buf_puts(out, "    global_handler_chain = h;\n");
+    buf_puts(out, "    return h;\n");
+    buf_puts(out, "}\n\n");
+    
+    buf_puts(out, "ExceptionHandler *exn_pop_handler(void) {\n");
+    buf_puts(out, "    ExceptionHandler *old = global_handler_chain;\n");
+    buf_puts(out, "    if (old) global_handler_chain = old->parent;\n");
+    buf_puts(out, "    return old;\n");
+    buf_puts(out, "}\n\n");
+    
+    buf_puts(out, "void tur_exception_free(tur_exception *exn) {\n");
+    buf_puts(out, "    if (!exn) return;\n");
+    buf_puts(out, "    if (exn->cause) { tur_exception_free(exn->cause); }\n");
+    buf_puts(out, "    free(exn->payload);\n");
+    buf_puts(out, "    free(exn);\n");
+    buf_puts(out, "}\n\n");
+    
+    buf_puts(out, "bool tur_exception_matches(tur_exception *exn, int expected_type) {\n");
+    buf_puts(out, "    if (!exn) return false;\n");
+    buf_puts(out, "    if (exn->payload_type == expected_type) return true;\n");
+    buf_puts(out, "    if (expected_type == 0) return true;  /* TY_UNKNOWN = 0 = catch-all */\n");
+    buf_puts(out, "    return false;\n");
+    buf_puts(out, "}\n\n");
+    
+    /* tur_throw - called from user code */
+    buf_puts(out, "void tur_throw(int payload_type, void *payload, int line, const char *file) {\n");
+    buf_puts(out, "    tur_exception *exn = (tur_exception *)malloc(sizeof(tur_exception));\n");
+    buf_puts(out, "    if (!exn) { abort(); }\n");
+    buf_puts(out, "    exn->payload_type = payload_type;\n");
+    buf_puts(out, "    exn->payload = payload;\n");
+    buf_puts(out, "    exn->line = line;\n");
+    buf_puts(out, "    exn->file = file;\n");
+    buf_puts(out, "    exn->cause = NULL;\n");
+    buf_puts(out, "    ExceptionHandler *h = global_handler_chain;\n");
+    buf_puts(out, "    if (h) {\n");
+    buf_puts(out, "        if (h->caught) tur_exception_free(h->caught);\n");
+    buf_puts(out, "        h->caught = exn;\n");
+    buf_puts(out, "        h->active = 0;\n");
+    buf_puts(out, "        longjmp(h->jmp_buf, 1);\n");
+    buf_puts(out, "    } else {\n");
+    buf_puts(out, "        tur_exception_free(exn);\n");
+    buf_puts(out, "        abort();\n");
+    buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
     
     /* Phase 9: Emit rc.h inline for rc<T> + weak<T> support */

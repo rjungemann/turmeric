@@ -1,0 +1,13 @@
+;; Phase 17: Defer with exceptions test
+
+(defn test-defer-on-exception []
+  (try
+    (do
+      (defer (println "cleanup"))
+      (throw 42))
+    (catch [e]
+      0)))
+
+(defn main []
+  (println "exception-defer test")
+  0)

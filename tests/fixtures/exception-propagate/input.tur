@@ -1,0 +1,17 @@
+;; Phase 17: Exception propagation test
+
+(defn inner []
+  (throw 42))
+
+(defn middle []
+  (inner))
+
+(defn outer []
+  (try
+    (middle)
+    (catch [e]
+      0)))
+
+(defn main []
+  (println "exception-propagate test")
+  0)
