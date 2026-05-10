@@ -228,12 +228,12 @@
 **CPS transformation** — `src/cps.{c,h}` (new pass)
 - [x] CPS pass runs after closure conversion, before defer injection.
 - [x] Mark functions transitively containing `shift` as "needs CPS".
-- [ ] Transform marked functions: convert return to tail call into continuation, wrap body in continuation application.
+- [x] Transform marked functions: convert return to tail call into continuation, wrap body in continuation application.
 - [x] Direct-style functions remain unchanged — no overhead.
 - [x] Closure conversion: captured continuations become ordinary closures (`struct {fn_ptr; env*}`).
-- [ ] `reset` lowers to: allocate continuation frame, invoke body with identity continuation, return result.
-- [ ] `shift` lowers to: capture current continuation (env + PC), pass to `k`, tail-call into `k`'s result.
-- [ ] Continuation frames are heap-allocated (they escape their defining scope by definition).
+- [x] `reset` lowers to: allocate continuation frame, invoke body with identity continuation, return result.
+- [x] `shift` lowers to: capture current continuation (env + PC), pass to `k`, tail-call into `k`'s result.
+- [x] Continuation frames are heap-allocated (they escape their defining scope by definition).
 
 **Interaction with defer and ref** — per [effects-plan.md §6](effects-plan.md)
 - [x] **S2 strategy (chosen):** Defer bodies are attached to continuation frames. When a continuation is captured, the scope frames between capture point and `reset` boundary are heap-allocated and attached to the continuation.
@@ -243,14 +243,14 @@
 - [x] `shift0` provides a type-safe way to get one-shot continuations (the function passed to `shift0` cannot call the continuation).
 
 **Continuation frame structure** — `src/runtime.{c,h}` extensions
-- [ ] Extend `tur_frame` (from Phase 4) to support continuation capture:
+- [x] Extend `tur_frame` (from Phase 4) to support continuation capture:
   - Add `continuation` field: function pointer for resume.
   - Add `env` field: captured environment.
   - Add `parent` field: parent continuation frame.
   - Add `n_captured_frames` and `captured_frames[]`: scopes captured by this continuation.
-- [ ] `tur_cont_alloc()`: allocate continuation frame with captured scope chain.
-- [ ] `tur_cont_resume(cont, value)`: resume continuation with value. Consumes the continuation (one-shot).
-- [ ] `tur_cont_drop(cont)`: drop continuation without resume; fire defers on captured frames.
+- [x] `tur_cont_alloc()`: allocate continuation frame with captured scope chain.
+- [x] `tur_cont_resume(cont, value)`: resume continuation with value. Consumes the continuation (one-shot).
+- [x] `tur_cont_drop(cont)`: drop continuation without resume; fire defers on captured frames.
 
 **Built-in continuations**
 - [ ] `(call/cc f)` — sugar for `(reset (shift k (f k)))` — captures the *current* continuation (not delimited). Deferred to v2 (requires more runtime support).
@@ -277,10 +277,10 @@
 **Goal:** Add OCaml 5-style algebraic effect handlers with one-shot continuations. Built on Phase 18's delimited continuations substrate and Phase 4's unified defer model. This is the v3 effects story per [effects-plan.md](effects-plan.md).
 
 **Prerequisites verification**
-- [ ] Phase 4 unified defer model is in place (§6.10 of effects-plan.md).
-- [ ] Phase 18 delimited continuations are working.
-- [ ] Effect row slots in function types are reserved (Phase 4).
-- [ ] `may_capture` bits on functions are reserved (Phase 4).
+- [x] Phase 4 unified defer model is in place (§6.10 of effects-plan.md).
+- [x] Phase 18 delimited continuations are working.
+- [x] Effect row slots in function types are reserved (Phase 4).
+- [x] `may_capture` bits on functions are reserved (Phase 4).
 
 **Surface syntax** — per [effects-plan.md §4](effects-plan.md)
 - [ ] `(defeffect Name [params...] : result-type)` — declare a new effect.

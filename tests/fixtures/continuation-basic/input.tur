@@ -1,0 +1,9 @@
+;; Phase 18: Delimited continuations - basic test
+
+(defn test-reset [] :int
+  (reset 42))
+
+(defn test-shift [] :int
+  (let [f (fn [k] (k 100))]
+    (reset
+      (shift f 42))))

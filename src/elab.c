@@ -2561,7 +2561,7 @@ static Expr *elab_defn(Elab *e, const Form *call) {
         if (p->tag != F_SYM && p->tag != F_KEYWORD) {
             diag_emit(DIAG_ERROR, p->span,
                       "defn: parameter must be a symbol or type annotation");
-            if (params) free(params);
+            /* params is arena-allocated, no need to free */
             return NULL;
         }
         
@@ -2606,7 +2606,7 @@ static Expr *elab_defn(Elab *e, const Form *call) {
         if (n_params >= MAX_FN_ARITY) {
             diag_emit(DIAG_ERROR, p->span,
                       "defn: too many parameters (max %d)", MAX_FN_ARITY);
-            if (params) free(params);
+            /* params is arena-allocated, no need to free */
             return NULL;
         }
         /* For phase 2, default to int */
@@ -2765,13 +2765,13 @@ static Expr *elab_fn(Elab *e, const Form *call) {
         if (p->tag != F_SYM) {
             diag_emit(DIAG_ERROR, p->span,
                       "fn: parameter name must be a symbol");
-            free(params);
+            /* params is arena-allocated, no need to free */
             return NULL;
         }
         if (n_params >= MAX_FN_ARITY) {
             diag_emit(DIAG_ERROR, p->span,
                       "fn: too many parameters (max %d)", MAX_FN_ARITY);
-            free(params);
+            /* params is arena-allocated, no need to free */
             return NULL;
         }
         /* For phase 2, all params are int by default */
@@ -2805,7 +2805,7 @@ static Expr *elab_fn(Elab *e, const Form *call) {
                 diag_emit(DIAG_ERROR, ret_f->span,
                           "fn: unsupported return type keyword :%s",
                           kw->name);
-                free(params);
+                /* params is arena-allocated, no need to free */
                 return NULL;
             }
             body_start = 3;
@@ -2816,7 +2816,7 @@ static Expr *elab_fn(Elab *e, const Form *call) {
     if (call->as.list.len < body_start + 1) {
         diag_emit(DIAG_ERROR, call->span,
                   "fn: missing body");
-        free(params);
+        /* params is arena-allocated, no need to free */
         return NULL;
     }
 
@@ -2832,12 +2832,12 @@ static Expr *elab_fn(Elab *e, const Form *call) {
     uint32_t n_body = call->as.list.len - body_start;
     if (n_body == 1) {
         body = elab_form(e, call->as.list.items[body_start]);
-        if (!body) { e->scope = inner.parent; scope_free(&inner); free(params); return NULL; }
+        if (!body) { e->scope = inner.parent; scope_free(&inner); /* params is arena-allocated */ return NULL; }
     } else {
         Expr **items = (Expr **)arena_alloc(e->arena, n_body * sizeof(Expr *));
         for (uint32_t i = 0; i < n_body; i++) {
             items[i] = elab_form(e, call->as.list.items[body_start + i]);
-            if (!items[i]) { e->scope = inner.parent; scope_free(&inner); free(params); return NULL; }
+            if (!items[i]) { e->scope = inner.parent; scope_free(&inner); /* params is arena-allocated */ return NULL; }
         }
         body = expr_new(e->arena, EX_DO, items[n_body - 1]->type, call->span);
         body->as.do_.items = items;
@@ -3252,7 +3252,14 @@ static Expr *elab_call(Elab *e, Form *call) {
 
     /* Phase 2: Check if it's a user-defined function call */
     Binding *fn_binding = scope_lookup(e->scope, name);
-    if (fn_binding && (fn_binding->type.kind == TY_FN || (fn_binding->type.kind == TY_PTR_VOID && fn_binding->closure_fn_binding) || fn_binding->closure_fn_binding)) {
+    if (fn_binding && (fn_binding->type.kind == TY_FN || 
+                       (fn_binding->type.kind == TY_PTR_VOID && fn_binding->closure_fn_binding) || 
+                       fn_binding->closure_fn_binding)) {
+        return elab_call_fn(e, call, fn_binding);
+    }
+    
+    /* Phase 19: Allow calling any binding (for function parameters, higher-order functions) */
+    if (fn_binding) {
         return elab_call_fn(e, call, fn_binding);
     }
 
