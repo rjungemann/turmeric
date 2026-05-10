@@ -1,0 +1,51 @@
+;; Result type for Turmeric
+;; Represents either a success (ok) or an error (err)
+
+;; Create an ok value
+(defn ok [x]
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
+  result->is_ok = true;
+  result->ok_val = x;
+  return result;
+  ```)
+
+;; Create an err value
+(defn err [e]
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
+  result->is_ok = false;
+  result->err_val = e;
+  return result;
+  ```)
+
+;; Check if result is ok
+(defn ok? [r] :bool
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  return result != NULL && result->is_ok;
+  ```)
+
+;; Unwrap - returns ok value, panics if err
+(defn result-unwrap [r] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  if (result == NULL || !result->is_ok) {
+    fprintf(stderr, "unwrap called on err\n");
+    exit(1);
+  }
+  return (int)result->ok_val;
+  ```)
+
+;; Unwrap with default
+(defn result-unwrap-or [r default_val] :int
+  (if (ok? r)
+    (result-unwrap r)
+    default_val))
+
+;; Free a result
+(defn result-free [r]
+  ```c
+  free(r);
+  return 0;
+  ```)

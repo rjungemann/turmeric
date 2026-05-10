@@ -17,6 +17,19 @@ typedef struct Span {
     uint32_t off_end;    /* byte offset, exclusive */
 } Span;
 
+/* Sentinel for unknown/missing spans (Phase 8: diagnostics polish) */
+#define SPAN_UNKNOWN ((Span){0})
+
+/* Check if a span is unknown */
+static inline bool span_is_unknown(Span s) {
+    return s.file_id == 0 && s.line == 0 && s.off_start == 0 && s.off_end == 0;
+}
+
+/* Create a span from byte offsets */
+static inline Span span_from_offsets(uint16_t file_id, uint32_t off_start, uint32_t off_end) {
+    return (Span){file_id, 0, 0, 0, off_start, off_end};
+}
+
 typedef enum FormTag {
     F_NIL  = 0,
     F_BOOL,

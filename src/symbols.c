@@ -87,3 +87,51 @@ const Symbol *symtab_intern(SymbolTable *st, StrSlice name) {
     if (st->count * 2 > st->nbuckets) rehash(st);
     return s;
 }
+
+/* Phase 8: Levenshtein distance for "did you mean" suggestions.
+   Returns the minimum number of single-character edits (insertions, deletions, or
+   substitutions) required to change one symbol into the other. */
+int sym_levenshtein_distance(const Symbol *a, const Symbol *b) {
+    size_t len_a = a->len;
+    size_t len_b = b->len;
+    
+    /* Use a simple dynamic programming approach with O(n*m) space.
+       For short symbol names, this is fine. */
+    int *prev_row = (int *)malloc((len_b + 1) * sizeof(int));
+    int *curr_row = (int *)malloc((len_b + 1) * sizeof(int));
+    
+    if (!prev_row || !curr_row) {
+        free(prev_row);
+        free(curr_row);
+        return -1; /* Error, but shouldn't happen */
+    }
+    
+    /* Initialize previous row */
+    for (size_t j = 0; j <= len_b; j++) {
+        prev_row[j] = (int)j;
+    }
+    
+    /* Fill the matrix */
+    for (size_t i = 1; i <= len_a; i++) {
+        curr_row[0] = (int)i;
+        for (size_t j = 1; j <= len_b; j++) {
+            int cost = (a->name[i - 1] == b->name[j - 1]) ? 0 : 1;
+            int insertion = prev_row[j] + 1;
+            int deletion = curr_row[j - 1] + 1;
+            int substitution = prev_row[j - 1] + cost;
+            curr_row[j] = insertion < deletion ? 
+                         (insertion < substitution ? insertion : substitution) :
+                         (deletion < substitution ? deletion : substitution);
+        }
+        
+        /* Swap rows */
+        int *temp = prev_row;
+        prev_row = curr_row;
+        curr_row = temp;
+    }
+    
+    int result = prev_row[len_b];
+    free(prev_row);
+    free(curr_row);
+    return result;
+}

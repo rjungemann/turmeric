@@ -1,0 +1,10 @@
+;; Standard library macros for Turmeric
+;; Phase 7: Core macros
+
+;; when macro: (when test body) -> (if test (do body))
+(defmacro when [test body]
+  (if test (do body)))
+
+;; unless macro: (unless test body) -> (if test nil (do body))
+(defmacro unless [test body]
+  (if test nil (do body)))

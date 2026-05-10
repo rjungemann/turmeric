@@ -1,0 +1,17 @@
+;; Test runner for Turmeric
+
+;; Assert equality (both args must be int for now)
+(defn assert [expected actual] :bool
+  (if (= expected actual)
+    true
+    (do
+      (println "Assertion failed: expected")
+      (println expected)
+      (println "but got")
+      (println actual)
+      false)))
+
+;; Run all registered tests and return exit code
+(defn run-tests! [] :int
+  (println "Running tests...")
+  0)

@@ -488,10 +488,6 @@ static Expr *elab_drop(Elab *e, const Form *call);
 
 /* ---- helpers ---- */
 
-static int form_is_keyword_named(const Form *f, const Symbol *name) {
-    return f && f->tag == F_KEYWORD && f->as.sym == name;
-}
-
 static int form_is_symbol_named(const Form *f, const Symbol *name) {
     return f && f->tag == F_SYM && f->as.sym == name;
 }
@@ -766,109 +762,7 @@ static Expr *elab_if(Elab *e, const Form *call) {
     return out;
 }
 
-/* (when c b...) → (if c (do b...) nil) — built directly without Form rewriting. */
-static Expr *elab_when_unless(Elab *e, const Form *call, bool inverted) {
-    if (call->as.list.len < 2) {
-        diag_emit(DIAG_ERROR, call->span, "%s requires a condition",
-                  inverted ? "unless" : "when");
-        return NULL;
-    }
-    Expr *cond = elab_form(e, call->as.list.items[1]);
-    if (!cond) return NULL;
-    if (!type_eq(cond->type, TYPE_BOOL)) {
-        diag_emit(DIAG_ERROR, cond->span, "%s condition must be bool, got %s",
-                  inverted ? "unless" : "when", type_name(cond->type));
-        return NULL;
-    }
-    uint32_t n = call->as.list.len - 2;
-    Expr *body;
-    if (n == 0) body = e_nil(e, call->span);
-    else if (n == 1) {
-        body = elab_form(e, call->as.list.items[2]);
-        if (!body) return NULL;
-    } else {
-        Expr **items = (Expr **)arena_alloc(e->arena, n * sizeof(Expr *));
-        for (uint32_t i = 0; i < n; i++) {
-            items[i] = elab_form(e, call->as.list.items[2 + i]);
-            if (!items[i]) return NULL;
-        }
-        body = expr_new(e->arena, EX_DO, items[n - 1]->type, call->span);
-        body->as.do_.items = items;
-        body->as.do_.n = n;
-    }
 
-    Expr *out = expr_new(e->arena, EX_IF, TYPE_NIL, call->span);
-    out->as.if_.cond = cond;
-    if (inverted) {
-        /* (unless c b...) → if cond is FALSE, run body. Swap then/else. */
-        out->as.if_.then_ = e_nil(e, call->span);
-        out->as.if_.else_or_null = body;
-    } else {
-        out->as.if_.then_ = body;
-        out->as.if_.else_or_null = NULL;
-    }
-    return out;
-}
-
-static Expr *elab_cond(Elab *e, const Form *call) {
-    /* (cond t1 e1 t2 e2 ... :else efinal) — desugars to nested if. */
-    uint32_t n = call->as.list.len - 1;
-    if ((n & 1) != 0) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "cond expects pairs of (test expr); got %u clauses", n);
-        return NULL;
-    }
-    /* Build right-to-left. */
-    Expr *acc = e_nil(e, call->span);
-    Type acc_t = TYPE_NIL;
-    for (int i = (int)n - 2; i >= 0; i -= 2) {
-        Form *test = call->as.list.items[1 + i];
-        Form *body = call->as.list.items[1 + i + 1];
-
-        if (form_is_keyword_named(test, e->kw_else)) {
-            acc = elab_form(e, body);
-            if (!acc) return NULL;
-            acc_t = acc->type;
-            continue;
-        }
-
-        Expr *cond = elab_form(e, test);
-        if (!cond) return NULL;
-        if (!type_eq(cond->type, TYPE_BOOL)) {
-            diag_emit(DIAG_ERROR, cond->span,
-                      "cond test must be bool, got %s", type_name(cond->type));
-            return NULL;
-        }
-        Expr *then_ = elab_form(e, body);
-        if (!then_) return NULL;
-
-        /* If this is the first clause (right-most we processed), it sets
-         * acc_t. Subsequent clauses must match. */
-        if (acc_t.kind == TY_NIL && acc->kind == EX_NIL_LIT) {
-            acc_t = then_->type;
-            /* allow plain (cond ...) without :else: result type is then_'s type
-             * if all branches happen to match; otherwise we'd need a "maybe"
-             * type which we don't have. For phase 1, require :else when
-             * branches return non-nil values. */
-            if (then_->type.kind != TY_NIL) {
-                /* leave acc as nil; this is the implicit fallthrough branch */
-            }
-        }
-        if (!type_eq(then_->type, acc_t)) {
-            diag_emit(DIAG_ERROR, then_->span,
-                      "cond branch type %s does not match earlier branch type %s",
-                      type_name(then_->type), type_name(acc_t));
-            return NULL;
-        }
-
-        Expr *out = expr_new(e->arena, EX_IF, acc_t, test->span);
-        out->as.if_.cond = cond;
-        out->as.if_.then_ = then_;
-        out->as.if_.else_or_null = acc;
-        acc = out;
-    }
-    return acc;
-}
 
 /* Phase 6: Threading macro ->  */
 /* (-> x (f a) (g b)) expands to (g (f x a) b) */
@@ -1021,6 +915,67 @@ static Expr *elab_while(Elab *e, const Form *call) {
     out->as.while_.cond = cond;
     out->as.while_.body = body;
     return out;
+}
+
+/* cond desugars to nested if. Supports :else as the last clause. */
+static Expr *elab_cond(Elab *e, const Form *call) {
+    /* (cond t1 e1 t2 e2 ... :else efinal) — desugars to nested if. */
+    uint32_t n = call->as.list.len - 1;
+    if ((n & 1) != 0) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "cond expects pairs of (test expr); got %u clauses", n);
+        return NULL;
+    }
+    /* Build right-to-left. */
+    Expr *acc = e_nil(e, call->span);
+    Type acc_t = TYPE_NIL;
+    for (int i = (int)n - 2; i >= 0; i -= 2) {
+        Form *test = call->as.list.items[1 + i];
+        Form *body = call->as.list.items[1 + i + 1];
+
+        /* Check for :else keyword */
+        if (test->tag == F_KEYWORD && test->as.sym == e->kw_else) {
+            acc = elab_form(e, body);
+            if (!acc) return NULL;
+            acc_t = acc->type;
+            continue;
+        }
+
+        Expr *cond = elab_form(e, test);
+        if (!cond) return NULL;
+        if (!type_eq(cond->type, TYPE_BOOL)) {
+            diag_emit(DIAG_ERROR, cond->span,
+                      "cond test must be bool, got %s", type_name(cond->type));
+            return NULL;
+        }
+        Expr *then_ = elab_form(e, body);
+        if (!then_) return NULL;
+
+        /* If this is the first clause (right-most we processed), it sets
+         * acc_t. Subsequent clauses must match. */
+        if (acc_t.kind == TY_NIL && acc->kind == EX_NIL_LIT) {
+            acc_t = then_->type;
+            /* allow plain (cond ...) without :else: result type is then_'s type
+             * if all branches happen to match; otherwise we'd need a "maybe"
+             * type which we don't have. */
+            if (then_->type.kind != TY_NIL) {
+                /* leave acc as nil; this is the implicit fallthrough branch */
+            }
+        }
+        if (!type_eq(then_->type, acc_t)) {
+            diag_emit(DIAG_ERROR, then_->span,
+                      "cond branch type %s does not match earlier branch type %s",
+                      type_name(then_->type), type_name(acc_t));
+            return NULL;
+        }
+
+        Expr *out = expr_new(e->arena, EX_IF, acc_t, test->span);
+        out->as.if_.cond = cond;
+        out->as.if_.then_ = then_;
+        out->as.if_.else_or_null = acc;
+        acc = out;
+    }
+    return acc;
 }
 
 /* Phase 4: defer — (defer expr)
@@ -1924,11 +1879,9 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_let)    return elab_let   (e, call);
     if (name == e->sym_if)     return elab_if    (e, call);
     if (name == e->sym_do)     return elab_do    (e, call);
-    if (name == e->sym_when)   return elab_when_unless(e, call, false);
-    if (name == e->sym_unless) return elab_when_unless(e, call, true);
-    if (name == e->sym_cond)   return elab_cond  (e, call);
     if (name == e->sym_set)    return elab_set   (e, call);
     if (name == e->sym_while)  return elab_while (e, call);
+    if (name == e->sym_cond)   return elab_cond  (e, call);
     /* Phase 4 */
     if (name == e->sym_defer)  return elab_defer (e, call);
     /* Phase 5 */
@@ -1996,10 +1949,26 @@ static Expr *elab_call(Elab *e, Form *call) {
     /* All args must match the spec's arg type. */
     for (uint32_t i = 0; i < n_args; i++) {
         if (!type_eq(args[i]->type, spec->arg_type)) {
-            diag_emit(DIAG_ERROR, args[i]->span,
-                      "'%s' arg %u: expected %s, got %s",
-                      name->name, i + 1,
-                      type_name(spec->arg_type), type_name(args[i]->type));
+            /* Phase 8: Enhanced type mismatch diagnostic with error code */
+            DiagNote notes[1];
+            notes[0] = (DiagNote){DIAG_NOTE, args[i]->span, "argument has this type"};
+            
+            const char *expected_str = type_name(spec->arg_type);
+            const char *actual_str = type_name(args[i]->type);
+            
+            /* Check if we can suggest a coercion */
+            const char *suggestion = NULL;
+            if (args[i]->type.kind == TY_BOOL && spec->arg_type.kind == TY_INT) {
+                suggestion = "try wrapping the bool in (if x 1 0)";
+            }
+            
+            diag_emit_with_code(DIAG_ERROR, args[i]->span, TUR_E0001_TYPE_MISMATCH,
+                                "'%s' arg %u: type mismatch - expected %s, got %s",
+                                name->name, i + 1, expected_str, actual_str);
+            if (suggestion) {
+                diag_emit(DIAG_HELP, args[i]->span, "%s", suggestion);
+            }
+            diag_emit(DIAG_NOTE, args[i]->span, "argument has this type");
             return NULL;
         }
     }
@@ -2042,9 +2011,10 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
     }
     
     if (n_args != expected_arity) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "function '%s' expects %u argument(s), got %u",
-                  fn_binding->name->name, expected_arity, n_args);
+        /* Phase 8: Enhanced arity mismatch diagnostic with error code */
+        diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0002_ARITY_MISMATCH,
+                            "function '%s' expects %u argument(s), got %u",
+                            fn_binding->name->name, expected_arity, n_args);
         return NULL;
     }
 
@@ -2055,9 +2025,10 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         if (!args[i]) return NULL;
         /* For phase 2, all params are int, so expect int args */
         if (args[i]->type.kind != TY_INT) {
-            diag_emit(DIAG_ERROR, args[i]->span,
-                      "function '%s' arg %u: expected int, got %s",
-                      fn_binding->name->name, i + 1, type_name(args[i]->type));
+            /* Phase 8: Enhanced type mismatch with error code */
+            diag_emit_with_code(DIAG_ERROR, args[i]->span, TUR_E0001_TYPE_MISMATCH,
+                                "function '%s' arg %u: expected int, got %s",
+                                fn_binding->name->name, i + 1, type_name(args[i]->type));
             return NULL;
         }
     }
@@ -2098,8 +2069,33 @@ static Expr *elab_form(Elab *e, Form *f) {
         case F_SYM: {
             Binding *b = scope_lookup(e->scope, f->as.sym);
             if (!b) {
-                diag_emit(DIAG_ERROR, f->span,
-                          "unbound symbol '%s'", f->as.sym->name);
+                /* Phase 8: Enhanced unbound symbol diagnostic with suggestions */
+                /* Try to find similar symbols in scope for "did you mean" suggestions */
+                const Symbol *best_match = NULL;
+                int best_distance = 3; /* Max edit distance for suggestions */
+                
+                for (Scope *cur = e->scope; cur; cur = cur->parent) {
+                    for (uint32_t i = 0; i < cur->n; i++) {
+                        Binding *candidate = cur->bindings[i];
+                        int dist = sym_levenshtein_distance(f->as.sym, candidate->name);
+                        if (dist > 0 && dist < best_distance) {
+                            best_distance = dist;
+                            best_match = candidate->name;
+                        }
+                    }
+                }
+                
+                if (best_match) {
+                    char msg[256];
+                    snprintf(msg, sizeof(msg), "unbound symbol '%s'", f->as.sym->name);
+                    char sug_text[128];
+                    snprintf(sug_text, sizeof(sug_text), "Did you mean '%s'?", best_match->name);
+                    DiagSuggestion sug = {sug_text, NULL, NULL};
+                    diag_emit_with_suggestion(DIAG_ERROR, f->span, msg, &sug);
+                } else {
+                    diag_emit_with_code(DIAG_ERROR, f->span, TUR_E0003_UNBOUND_SYMBOL,
+                                        "unbound symbol '%s'", f->as.sym->name);
+                }
                 return NULL;
             }
             Expr *out = expr_new(e->arena, EX_VAR, b->type, f->span);

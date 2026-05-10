@@ -40,4 +40,7 @@ void          symtab_init(SymbolTable *st, Arena *arena);
 void          symtab_free(SymbolTable *st);
 const Symbol *symtab_intern(SymbolTable *st, StrSlice name);
 
+/* Phase 8: Levenshtein distance for "did you mean" suggestions */
+int sym_levenshtein_distance(const Symbol *a, const Symbol *b);
+
 #endif

@@ -1443,7 +1443,9 @@ int emit_header(Buf *out, const char *module_name, const Expr *program) {
     /* Standard includes */
     buf_puts(out, "#include <stdint.h>\n");
     buf_puts(out, "#include <stdbool.h>\n");
-    buf_puts(out, "#include <stdio.h>\n\n");
+    buf_puts(out, "#include <stdio.h>\n");
+    buf_puts(out, "#include <stdlib.h>\n");
+    buf_puts(out, "#include <string.h>\n\n");
 
     /* Forward declarations for functions */
     for (uint32_t i = 0; i < program->as.program.n; i++) {

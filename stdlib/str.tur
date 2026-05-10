@@ -1,0 +1,37 @@
+;; Str type for Turmeric
+;; UTF-8 string as a borrowed view (pointer + length)
+
+;; Create a str from a C string (NUL-terminated)
+(defn str-from-cstr [cstr]
+  ```c
+  const char *s = (const char*)cstr;
+  size_t len = strlen(s);
+  struct { const char *p; size_t len; } *str = malloc(sizeof(*str));
+  str->p = s;
+  str->len = len;
+  return str;
+  ```)
+
+;; Get string length in bytes
+(defn str-len [s] :int
+  ```c
+  struct { const char *p; size_t len; } *str = (void*)s;
+  return (int)str->len;
+  ```)
+
+;; Check if two strings are equal
+(defn str-eq? [s1 s2] :bool
+  ```c
+  struct { const char *p; size_t len; } *a = (void*)s1;
+  struct { const char *p; size_t len; } *b = (void*)s2;
+  if (a == NULL || b == NULL) return a == b;
+  if (a->len != b->len) return false;
+  return memcmp(a->p, b->p, a->len) == 0;
+  ```)
+
+;; Free the str struct (does NOT free the underlying string data)
+(defn str-free [s]
+  ```c
+  free(s);
+  return 0;
+  ```)

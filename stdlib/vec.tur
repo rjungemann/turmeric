@@ -1,0 +1,63 @@
+;; Vec type for Turmeric
+;; Growable owning array
+
+;; Create a new empty vec
+(defn vec-new []
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v->data = NULL;
+  v->len = 0;
+  v->cap = 0;
+  return v;
+  ```)
+
+;; Get vec length - v is a pointer from vec-new
+(defn vec-len [v] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  return (int)vec->len;
+  ```)
+
+;; Get element at index (bounds-checked)
+(defn vec-get [v i] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  if (i >= 0 && (size_t)i < vec->len) return (int)vec->data[i];
+  fprintf(stderr, "vec index out of bounds\n");
+  exit(1);
+  return 0;
+  ```)
+
+;; Push an element to the vec
+(defn vec-push! [v val]
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  if (vec->len >= vec->cap) {
+    size_t new_cap = vec->cap > 0 ? vec->cap * 2 : 4;
+    int64_t *new_data = malloc(sizeof(int64_t) * new_cap);
+    for (size_t i = 0; i < vec->len; i++) new_data[i] = vec->data[i];
+    free(vec->data);
+    vec->data = new_data;
+    vec->cap = new_cap;
+  }
+  vec->data[vec->len++] = val;
+  ```)
+
+;; Pop an element from the vec
+(defn vec-pop! [v] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  if (vec->len == 0) {
+    fprintf(stderr, "vec pop from empty vec\n");
+    exit(1);
+  }
+  return (int)vec->data[--vec->len];
+  ```)
+
+;; Free the vec and its data
+(defn vec-free [v]
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  free(vec->data);
+  free(vec);
+  ```)

@@ -68,6 +68,73 @@ static int compile_to_c(const char *path, Buf *out_c) {
     uint32_t nforms = 0;
     Form **forms = read_all(&arena, &st, &file, &nforms);
 
+    /* Phase 7: Load standard library files */
+    /* For now, load them in a specific order to ensure dependencies are met */
+    /* Note: option, result, slice, str, vec, test use inline C with malloc/free
+     * which causes type mismatches when compiled into every file.
+     * They're deferred until Phase 11 when :ptr<T> support is added.
+     * For Phase 7, we load only macros.tur which contains when/unless macros. */
+    const char *stdlib_files[] = {
+        "stdlib/macros.tur",
+        NULL
+    };
+    
+    uint32_t total_stdlib_forms = 0;
+    Form **all_stdlib_forms = NULL;
+    uint8_t file_id = 1;
+    
+    /* Allocate SourceFile on arena to avoid stack-use-after-scope */
+    SourceFile *stdlib_file = (SourceFile *)arena_alloc(&arena, sizeof(SourceFile));
+    
+    for (int i = 0; stdlib_files[i] != NULL; i++) {
+        char *stdlib_src = NULL;
+        size_t stdlib_len = 0;
+        if (read_entire_file(stdlib_files[i], &stdlib_src, &stdlib_len) == 0) {
+            /* strdup the source so it lives in the arena and won't be freed prematurely */
+            char *src_copy = (char *)arena_alloc(&arena, stdlib_len);
+            memcpy(src_copy, stdlib_src, stdlib_len);
+            
+            *stdlib_file = (SourceFile){0};
+            stdlib_file->path = stdlib_files[i];
+            stdlib_file->src = src_copy;
+            stdlib_file->len = stdlib_len;
+            stdlib_file->file_id = file_id++;
+            diag_register_file(stdlib_file);
+
+            uint32_t stdlib_nforms = 0;
+            Form **stdlib_forms = read_all(&arena, &st, stdlib_file, &stdlib_nforms);
+
+            if (stdlib_forms && stdlib_nforms > 0) {
+                /* Append to all_stdlib_forms */
+                Form **new_all = (Form **)arena_alloc(&arena, 
+                    (total_stdlib_forms + stdlib_nforms) * sizeof(Form *));
+                for (uint32_t j = 0; j < total_stdlib_forms; j++) {
+                    new_all[j] = all_stdlib_forms[j];
+                }
+                for (uint32_t j = 0; j < stdlib_nforms; j++) {
+                    new_all[total_stdlib_forms + j] = stdlib_forms[j];
+                }
+                all_stdlib_forms = new_all;
+                total_stdlib_forms += stdlib_nforms;
+            }
+            free(stdlib_src);
+        }
+    }
+    
+    /* Prepend stdlib forms to user forms */
+    if (all_stdlib_forms && total_stdlib_forms > 0) {
+        Form **all_forms = (Form **)arena_alloc(&arena, 
+            (nforms + total_stdlib_forms) * sizeof(Form *));
+        for (uint32_t i = 0; i < total_stdlib_forms; i++) {
+            all_forms[i] = all_stdlib_forms[i];
+        }
+        for (uint32_t i = 0; i < nforms; i++) {
+            all_forms[total_stdlib_forms + i] = forms[i];
+        }
+        forms = all_forms;
+        nforms += total_stdlib_forms;
+    }
+
     int rc = 0;
     if (!forms || diag_had_error()) {
         rc = 1;
@@ -440,23 +507,131 @@ static int is_directory(const char *path) {
 
 static int usage(void) {
     fprintf(stderr,
-        "tur: the Turmeric compiler (phase 2)\n"
+        "tur: the Turmeric compiler (phase 8)\n"
         "\n"
         "usage:\n"
         "  tur build <file.tur> [-o <out>]    build a single file\n"
         "  tur build <dir> [-o <out>]         build all .tur files in directory\n"
         "  tur emit-c <input.tur>            print the generated C to stdout\n"
-        "  tur run <input.tur>               build + execute a single file\n");
+        "  tur run <input.tur>               build + execute a single file\n"
+        "  tur check <input.tur>             type-check only, no codegen (phase 8)\n"
+        "\n"
+        "global flags:\n"
+        "  --no-color                       disable colored diagnostics\n"
+        "  --json-diagnostics               output diagnostics as JSON (phase 8)\n"
+        "  --explain <code>                 compile code snippet and explain errors (phase 8)\n");
     return 64;
 }
 
+/* Phase 8: Handle --no-color flag */
+static bool parse_no_color(int argc, char **argv) {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--no-color") == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Phase 8: Handle --explain flag - compile code snippet and show detailed error */
+static int cmd_explain(const char *code) {
+    /* Create a temporary source file from the code snippet */
+    SourceFile file = {0};
+    file.path = "<explain>";
+    file.src = code;
+    file.len = strlen(code);
+    file.file_id = 0;
+    diag_register_file(&file);
+
+    Arena arena;
+    arena_init(&arena, 0);
+    SymbolTable st;
+    symtab_init(&st, &arena);
+
+    uint32_t nforms = 0;
+    Form **forms = read_all(&arena, &st, &file, &nforms);
+
+    if (!forms || diag_had_error()) {
+        /* Error already emitted with enhanced diagnostics */
+        symtab_free(&st);
+        arena_free(&arena);
+        return 1;
+    }
+
+    Expr *prog = elaborate_program(&arena, &st, forms, nforms);
+    if (!prog || diag_had_error()) {
+        /* Error already emitted */
+        symtab_free(&st);
+        arena_free(&arena);
+        return 1;
+    }
+
+    /* If no error, just say so */
+    fprintf(stderr, "No errors found in the provided code.\n");
+
+    symtab_free(&st);
+    arena_free(&arena);
+    return 0;
+}
+
+/* Phase 8: Handle --json-diagnostics flag */
+static bool use_json_diagnostics = false;
+
 int main(int argc, char **argv) {
+    /* Phase 8: Check for global flags before command */
+    bool no_color = parse_no_color(argc, argv);
+    bool explain_mode = false;
+    const char *explain_code = NULL;
+    
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--json-diagnostics") == 0) {
+            use_json_diagnostics = true;
+            /* Remove from argv for command parsing */
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--explain") == 0 && i + 1 < argc) {
+            explain_mode = true;
+            explain_code = argv[i + 1];
+            /* Remove --explain and code from argv */
+            for (int j = i; j < argc - 2; j++) {
+                argv[j] = argv[j + 2];
+            }
+            argc -= 2;
+            i--;
+        }
+    }
+    
+        /* Initialize diagnostics - use color unless --no-color or --json-diagnostics specified */
+        /* JSON output disables color */
+        diag_init(!no_color && !use_json_diagnostics && stderr_is_tty());
+        diag_set_json_output(use_json_diagnostics);
+    
+    if (explain_mode) {
+        if (!explain_code) {
+            fprintf(stderr, "tur: --explain requires a code snippet argument\n");
+            return usage();
+        }
+        return cmd_explain(explain_code);
+    }
+    
     if (argc < 2) return usage();
     const char *cmd = argv[1];
 
     if (strcmp(cmd, "emit-c") == 0) {
         if (argc != 3) return usage();
         return cmd_emit_c(argv[2]);
+    }
+    if (strcmp(cmd, "check") == 0) {
+        /* Phase 8: tur check subcommand - type-check only, no codegen */
+        if (argc != 3) return usage();
+        Buf out;
+        buf_init(&out);
+        int rc = compile_to_c(argv[2], &out);
+        buf_free(&out);
+        return rc;
     }
     if (strcmp(cmd, "build") == 0) {
         const char *input = NULL;

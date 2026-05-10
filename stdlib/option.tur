@@ -1,0 +1,46 @@
+;; Option type for Turmeric
+;; Represents optional values: some(value) or none
+
+(extern-c malloc [^int size] :ptr<void>)
+(extern-c free [^ptr<void> p] :void)
+(extern-c exit [^int code] :void)
+
+;; Create a some value
+(defn some [x]
+  ```c
+  struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  opt->is_some = true;
+  opt->value = x;
+  return opt;
+  ```)
+
+;; none value (NULL)
+(defn none []
+  ```c
+  return NULL;
+  ```)
+
+;; Check if option is some
+(defn some? [o] :bool
+  ```c
+  struct { bool is_some; int64_t value; } *opt = (void*)o;
+  return opt != NULL && opt->is_some;
+  ```)
+
+;; Unwrap - returns value, panics if none
+(defn option-unwrap [o] :int
+  ```c
+  struct { bool is_some; int64_t value; } *opt = (void*)o;
+  if (opt == NULL || !opt->is_some) {
+    fprintf(stderr, "unwrap called on none\n");
+    exit(1);
+  }
+  return (int)opt->value;
+  ```)
+
+;; Free an option
+(defn option-free [o]
+  ```c
+  free(o);
+  return 0;
+  ```)

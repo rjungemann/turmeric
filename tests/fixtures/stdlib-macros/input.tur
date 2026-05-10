@@ -1,0 +1,26 @@
+;; Test fixture for stdlib macros (when, unless, cond)
+
+(defn main [] :int
+  ;; Test when macro
+  (when true (println "when-true"))  ;; Should print "when-true"
+  (when false (println "when-false"))  ;; Should not print
+  
+  ;; Test unless macro
+  (unless false (println "unless-false"))  ;; Should print "unless-false"
+  (unless true (println "unless-true"))  ;; Should not print
+  
+  ;; Test cond macro
+  (let [x 5]
+    (cond
+      (= x 1) (println "one")
+      (= x 2) (println "two")
+      (= x 5) (println "five")))  ;; Should print "five"
+  
+  ;; Test cond with :else
+  (let [y 10]
+    (cond
+      (= y 1) (println "one")
+      (= y 2) (println "two")
+      :else (println "other")))  ;; Should print "other"
+  
+  0)

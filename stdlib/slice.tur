@@ -1,0 +1,35 @@
+;; Slice type for Turmeric
+;; Borrowed view into a contiguous sequence
+
+;; Create a slice from pointer and length
+(defn slice-new [data length]
+  ```c
+  struct { int64_t *p; size_t len; } *s = malloc(sizeof(*s));
+  s->p = (int64_t*)data;
+  s->len = (size_t)length;
+  return s;
+  ```)
+
+;; Get slice length
+(defn slice-len [s] :int
+  ```c
+  struct { int64_t *p; size_t len; } *slice = (void*)s;
+  return (int)slice->len;
+  ```)
+
+;; Get element at index (bounds-checked)
+(defn slice-get [s i] :int
+  ```c
+  struct { int64_t *p; size_t len; } *slice = (void*)s;
+  if (i >= 0 && (size_t)i < slice->len) return (int)slice->p[i];
+  fprintf(stderr, "slice index out of bounds\n");
+  exit(1);
+  return 0;
+  ```)
+
+;; Free the slice struct (does NOT free the underlying data)
+(defn slice-free [s]
+  ```c
+  free(s);
+  return 0;
+  ```)
