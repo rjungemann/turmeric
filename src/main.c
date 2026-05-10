@@ -10,6 +10,7 @@
 
 #include "arena.h"
 #include "buf.h"
+#include "borrow_check.h"  /* Phase 14 */
 #include "diag.h"
 #include "elab.h"
 #include "emit.h"
@@ -142,6 +143,9 @@ static int compile_to_c(const char *path, Buf *out_c) {
         Expr *prog = elaborate_program(&arena, &st, forms, nforms);
         if (!prog || diag_had_error()) {
             rc = 1;
+        } else if (!borrow_check_program(prog)) {
+            /* Phase 14: Borrow checker pass */
+            rc = 1;
         } else if (emit_program(out_c, prog) != 0) {
             rc = 1;
         }
@@ -181,6 +185,9 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name) {
         Expr *prog = elaborate_program(&arena, &st, forms, nforms);
         if (!prog || diag_had_error()) {
             rc = 1;
+        } else if (!borrow_check_program(prog)) {
+            /* Phase 14: Borrow checker pass */
+            rc = 1;
         } else if (emit_header(out_h, module_name, prog) != 0) {
             rc = 1;
         }
@@ -219,6 +226,9 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
     } else {
         Expr *prog = elaborate_program(&arena, &st, forms, nforms);
         if (!prog || diag_had_error()) {
+            rc = 1;
+        } else if (!borrow_check_program(prog)) {
+            /* Phase 14: Borrow checker pass */
             rc = 1;
         } else if (emit_implementation(out_c, module_name, prog) != 0) {
             rc = 1;
