@@ -77,6 +77,7 @@ static int compile_to_c(const char *path, Buf *out_c) {
      * For Phase 7, we load only macros.tur which contains when/unless macros. */
     const char *stdlib_files[] = {
         "stdlib/macros.tur",
+        /* "stdlib/typeclass.tur" loaded on demand via (require typeclass) - Phase 15 */
         NULL
     };
     

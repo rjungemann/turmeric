@@ -1,0 +1,54 @@
+;; Phase 15: Typeclasses
+;; Built-in typeclasses: Eq, Ord, Show, Num
+
+;; Eq typeclass - equality comparison
+(defclass Eq [a]
+  (eq? [x y] :bool))
+
+;; Instances for primitive types
+(definstance Eq [int]
+  (eq? [x y] (= x y)))
+
+(definstance Eq [bool]
+  (eq? [x y] (= x y)))
+
+;; Ord typeclass - ordering
+(defclass Ord [a]
+  (lt? [x y] :bool)
+  (lte? [x y] :bool)
+  (gt? [x y] :bool)
+  (gte? [x y] :bool))
+
+;; Instances for primitive types
+(definstance Ord [int]
+  (lt? [x y] (< x y))
+  (lte? [x y] (<= x y))
+  (gt? [x y] (> x y))
+  (gte? [x y] (>= x y)))
+
+;; Show typeclass - string representation
+(defclass Show [a]
+  (show [x] :cstr))
+
+;; Instances for primitive types
+(definstance Show [int]
+  (show [x] :cstr "<int>"))
+
+(definstance Show [cstr]
+  (show [x] x))
+
+;; Num typeclass - numeric operations
+(defclass Num [a]
+  (add [x y] :int)
+  (sub [x y] :int)
+  (mul [x y] :int)
+  (div [x y] :int)
+  (neg [x] :int))
+
+;; Instance for int
+(definstance Num [int]
+  (add [x y] (+ x y))
+  (sub [x y] (- x y))
+  (mul [x y] (* x y))
+  (div [x y] (/ x y))
+  (neg [x] (- 0 x)))

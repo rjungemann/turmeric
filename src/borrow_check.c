@@ -263,6 +263,11 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
             }
             return true;
             
+        case EX_TYPECLASS_DEF:
+        case EX_INSTANCE_DEF:
+            /* Typeclass definitions are compile-time only - no runtime behavior to check */
+            return true;
+            
         case EX_EXTERN_C:
         case EX_INLINE_C:
             /* External and inline C are trusted */

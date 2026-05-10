@@ -1,11 +1,13 @@
 #include "elab.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "builtins.h"
 #include "diag.h"
+#include "typeclass.h"  /* Phase 15 */
 #include "types.h"
 
 /* Helper to create a Type from TypeKind. */
@@ -14,6 +16,8 @@ static Type type_from_kind(TypeKind k) {
     t.kind = k;
     t.as.fn.arity = 0;
     t.n_lifetimes = 0;  /* Phase 13: no lifetimes by default */
+    t.typeclass_instances = NULL;
+    t.n_typeclass_instances = 0;
     return t;
 }
 
@@ -237,6 +241,8 @@ typedef struct Elab {
     Expr       **file_scope_defs;
     uint32_t    n_file_scope_defs;
     uint32_t    cap_file_scope_defs;
+    /* Phase 15: Typeclass environment */
+    TypeClassEnv typeclass_env;
 
     /* Cached symbols for special-form dispatch. */
     const Symbol *sym_def;
@@ -287,6 +293,9 @@ typedef struct Elab {
     /* Phase 12: Borrow traits */
     const Symbol *sym_borrow;      /* & symbol for immutable borrow */
     const Symbol *sym_borrow_mut;  /* &mut for mutable borrow */
+    /* Phase 15: Typeclasses */
+    const Symbol *sym_defclass;    /* defclass */
+    const Symbol *sym_definstance; /* definstance */
     /* Phase 13: Lifetime annotations */
     /* We recognize lifetime annotations as symbols starting with '\'' */
     /* No specific symbol needed - we check the symbol name at runtime */
@@ -356,6 +365,8 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->file_scope_defs = NULL;
     e->n_file_scope_defs = 0;
     e->cap_file_scope_defs = 0;
+    /* Phase 15: Typeclass environment */
+    typeclass_env_init(&e->typeclass_env);
 
     e->sym_def       = intern_cstr(st, "def");
     e->sym_let       = intern_cstr(st, "let");
@@ -407,30 +418,17 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* Phase 12: Borrow traits */
     e->sym_borrow = intern_cstr(st, "&");
     e->sym_borrow_mut = intern_cstr(st, "&mut");
+    /* Phase 15: Typeclasses */
+    e->sym_defclass = intern_cstr(st, "defclass");
+    e->sym_definstance = intern_cstr(st, "definstance");
     /* Macro storage */
     e->macros = NULL;
     e->n_macros = 0;
     e->cap_macros = 0;
 }
 
-/* Phase 13: Lifetime annotation helpers */
-/* Check if a symbol is a lifetime annotation (starts with single quote) */
-static bool sym_is_lifetime(const Symbol *sym) {
-    if (sym == NULL || sym->name == NULL) return false;
-    return sym->name[0] == 39 && sym->len > 1;  /* 39 is ASCII for single quote */
-}
-
-/* Extract lifetime ID from symbol name ('a -> 1, 'b -> 2, etc.) */
-static LifetimeId sym_to_lifetime_id(const Symbol *sym) __attribute__((unused));
-static LifetimeId sym_to_lifetime_id(const Symbol *sym) {
-    if (!sym_is_lifetime(sym)) return LIFETIME_NONE;
-    if (sym->len != 2) return LIFETIME_NONE;  /* Only support single-letter lifetimes for now */
-    char c = sym->name[1];
-    if (c >= 'a' && c <= 'z') {
-        return (LifetimeId)(c - 'a' + 1);
-    }
-    return LIFETIME_NONE;
-}
+/* Phase 13: Lifetime annotation helpers (deferred - infrastructure in place) */
+/* Phase 15: Typeclass cached symbols */
 
 /* Phase 6: Macro lookup */
 static MacroDef *elab_lookup_macro(Elab *e, const Symbol *name) {
@@ -1785,26 +1783,139 @@ static Expr *elab_defn(Elab *e, const Form *call) {
         return NULL;
     }
 
-    /* Parse params */
+    /* Parse params - Phase 15 supports typeclass constraints
+     * Syntax: [^Eq a x : a, y : a] means:
+     *   - ^Eq is a constraint annotation (symbol starting with ^)
+     *   - a is a type variable
+     *   - x : a is parameter x with type annotation :a
+     *   - y : a is parameter y with type annotation :a
+     * 
+     * We parse sequentially, collecting constraints and creating parameters.
+     */
     Binding **params = NULL;
     uint8_t n_params = 0;
     TypeKind param_kinds[MAX_FN_ARITY];
-
+    
+    /* Phase 15: Constraint parsing */
+    /* Track pending constraints that apply to the next type variable */
+    TypeClass *pending_constraints[8];  /* Max 8 constraints per function */
+    uint8_t n_pending = 0;
+    
+    /* Map from type variable name to its index for constraint association */
+    /* For v1, we use a simple approach: each constraint applies to the next type var */
+    /* const Symbol *current_type_var = NULL; */  /* Deferred to v2 */
+    
+    /* Constraint set for this function - allocated on arena */
+    TypeConstraint *constraint_list = NULL;
+    uint8_t n_constraints = 0;
+    
     for (uint32_t i = 0; i < params_f->as.list.len; i++) {
         Form *p = params_f->as.list.items[i];
-        if (p->tag != F_SYM) {
+        
+        /* Phase 15: Handle constraint annotations (^Eq, ^Show, etc.) */
+        if (p->tag == F_SYM && p->as.sym->len > 0 && p->as.sym->name[0] == '^') {
+            /* This is a constraint annotation like ^Eq */
+            const Symbol *constraint_name = p->as.sym;
+            /* Look up the typeclass (skip the ^ character) */
+            const char *tc_name_str = constraint_name->name + 1;  /* Skip '^' */
+            uint32_t tc_name_len = constraint_name->len - 1;
+            /* Create symbol for typeclass name */
+            char tmp_name[64];
+            snprintf(tmp_name, sizeof(tmp_name), "%.*s", tc_name_len, tc_name_str);
+            const Symbol *tc_sym = symtab_intern(e->st, strslice(tmp_name, tc_name_len));
+            TypeClass *tc = typeclass_env_lookup_typeclass(&e->typeclass_env, tc_sym);
+            if (!tc) {
+                diag_emit(DIAG_ERROR, p->span,
+                          "defn: typeclass '%.*s' in constraint is not defined",
+                          tc_name_len, tc_name_str);
+                return NULL;
+            }
+            if (n_pending < 8) {
+                pending_constraints[n_pending++] = tc;
+            } else {
+                diag_emit(DIAG_ERROR, p->span,
+                          "defn: too many constraints (max 8)");
+                return NULL;
+            }
+            continue;
+        }
+        
+        /* Phase 15: Handle type variable declarations */
+        /* After constraints, the next symbol is a type variable name */
+        if (n_pending > 0 && p->tag == F_SYM) {
+            /* This is a type variable that the pending constraints apply to */
+            /* For v1, we ignore the type variable name and just record constraints */
+            
+            /* Register all pending constraints for this type variable */
+            /* Allocate space for new constraints */
+            uint8_t new_count = n_constraints + n_pending;
+            TypeConstraint *new_list = (TypeConstraint *)arena_alloc(e->arena,
+                new_count * sizeof(TypeConstraint));
+            if (constraint_list) {
+                memcpy(new_list, constraint_list, n_constraints * sizeof(TypeConstraint));
+            }
+            constraint_list = new_list;
+            
+            for (uint8_t c = 0; c < n_pending; c++) {
+                /* For v1, we just record the constraint - type_arg will be resolved later */
+                /* We use TYPE_UNKNOWN as a placeholder for the type variable */
+                constraint_list[n_constraints + c].typeclass = pending_constraints[c];
+                constraint_list[n_constraints + c].type_arg = TYPE_UNKNOWN;
+            }
+            n_constraints = new_count;
+            n_pending = 0;
+            continue;
+        }
+        
+        if (p->tag != F_SYM && p->tag != F_KEYWORD) {
             diag_emit(DIAG_ERROR, p->span,
-                      "defn: parameter name must be a symbol");
-            free(params);
+                      "defn: parameter must be a symbol or type annotation");
+            if (params) free(params);
             return NULL;
         }
+        
+        /* Handle type annotations: if this is a keyword like :int, it's a type for the previous param */
+        if (p->tag == F_KEYWORD) {
+            /* This is a type annotation for the previous parameter */
+            if (n_params == 0) {
+                diag_emit(DIAG_ERROR, p->span,
+                          "defn: type annotation without preceding parameter");
+                return NULL;
+            }
+            /* Update the type of the last parameter */
+            const Symbol *kw = p->as.sym;
+            if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
+                param_kinds[n_params - 1] = TY_INT;
+                params[n_params - 1]->type = TYPE_INT;
+            } else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0) {
+                param_kinds[n_params - 1] = TY_BOOL;
+                params[n_params - 1]->type = TYPE_BOOL;
+            } else if (kw->len == 4 && memcmp(kw->name, "cstr", 4) == 0) {
+                param_kinds[n_params - 1] = TY_CSTR;
+                params[n_params - 1]->type = TYPE_CSTR;
+            } else if ((kw->len == 4 && memcmp(kw->name, "void", 4) == 0) || 
+                       (kw->len == 3 && memcmp(kw->name, "nil", 3) == 0)) {
+                param_kinds[n_params - 1] = TY_NIL;
+                params[n_params - 1]->type = TYPE_NIL;
+            } else if (kw->len == 8 && memcmp(kw->name, "ptr<void>", 8) == 0) {
+                param_kinds[n_params - 1] = TY_PTR_VOID;
+                params[n_params - 1]->type = TYPE_PTR_VOID;
+            } else {
+                /* Try to look up as a type variable or typeclass */
+                /* For now, default to int */
+                param_kinds[n_params - 1] = TY_INT;
+                params[n_params - 1]->type = TYPE_INT;
+            }
+            continue;
+        }
+        
         if (n_params >= MAX_FN_ARITY) {
             diag_emit(DIAG_ERROR, p->span,
                       "defn: too many parameters (max %d)", MAX_FN_ARITY);
-            free(params);
+            if (params) free(params);
             return NULL;
         }
-        /* For phase 2, all params are int by default */
+        /* For phase 2, default to int */
         param_kinds[n_params] = TY_INT;
         Binding *b = binding_new(e, p->as.sym, TYPE_INT, false, false, p->span);
         if (n_params == 0) {
@@ -1812,6 +1923,8 @@ static Expr *elab_defn(Elab *e, const Form *call) {
         }
         params[n_params++] = b;
     }
+    
+    /* Phase 13: Lifetime annotations parsing deferred - restore original simple parsing */
 
     /* Parse return type annotation and body */
     TypeKind return_kind = TY_NIL;
@@ -1915,6 +2028,10 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     for (uint8_t i = 0; i < n_params; i++) {
         fd->param_types[i] = TYPE_INT;
     }
+    /* Phase 15: Store collected constraints */
+    fd->constraints.constraints = constraint_list;
+    fd->constraints.n_constraints = n_constraints;
+    fd->constraints.cap_constraints = n_constraints;
 
     Expr *out = expr_new(e->arena, EX_FN_DEF, fn_type, call->span);
     out->as.fn_def_.fn = fd;
@@ -2074,6 +2191,8 @@ static Expr *elab_fn(Elab *e, const Form *call) {
     for (uint8_t i = 0; i < n_params; i++) {
         fd->param_types[i] = TYPE_INT;
     }
+    /* Phase 15: Initialize constraints */
+    constraint_set_init(&fd->constraints);
 
     /* Create the FN_DEF expression that will be emitted at file scope */
     Expr *fn_def_expr = expr_new(e->arena, EX_FN_DEF, fn_type, call->span);
@@ -2329,6 +2448,11 @@ static Expr *elab_defstruct(Elab *e, const Form *call);
 /* Phase 12: Borrow traits */
 static Expr *elab_borrow_immut(Elab *e, const Form *call);
 static Expr *elab_borrow_mut(Elab *e, const Form *call);
+/* Phase 15: Typeclasses */
+static Expr *elab_defclass(Elab *e, const Form *call);
+static Expr *elab_definstance(Elab *e, const Form *call);
+static Expr *elab_method_call(Elab *e, const Form *call);
+static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span span);
 
 /* ---- general elab ---- */
 
@@ -2374,6 +2498,13 @@ static Expr *elab_call(Elab *e, Form *call) {
     /* Phase 12: Borrow traits */
     if (name == e->sym_borrow) return elab_borrow_immut(e, call);
     if (name == e->sym_borrow_mut) return elab_borrow_mut(e, call);
+    /* Phase 15: Typeclasses */
+    if (name == e->sym_defclass) return elab_defclass(e, call);
+    if (name == e->sym_definstance) return elab_definstance(e, call);
+    /* Phase 15: Method call syntax - (.method obj arg1 arg2) */
+    if (name->len > 0 && name->name[0] == '.') {
+        return elab_method_call(e, call);
+    }
     /* Phase 6 */
     if (name == e->sym_defmacro) return elab_defmacro(e, call);
     if (name == e->sym_quote)    return elab_form(e, call->as.list.items[1]); /* (quote x) -> x */
@@ -2827,6 +2958,661 @@ static Expr *elab_borrow_mut(Elab *e, const Form *call) {
     out->as.borrow_mut_.expr = inner;
     return out;
 }
+
+/* Phase 15: Typeclasses */
+
+/* Parse a single typeclass method definition from a Form.
+ * Syntax: (method-name [param1 : type1, param2 : type2, ...] : return-type)
+ * or: (method-name [param1 param2 ...] : return-type) - types inferred from usage
+ */
+static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span span) {
+    if (method_form->tag != F_LIST || method_form->as.list.len < 3) {
+        diag_emit(DIAG_ERROR, span,
+                  "typeclass method requires (name [params...] : return-type)");
+        return NULL;
+    }
+    
+    /* Parse method name */
+    Form *name_form = method_form->as.list.items[0];
+    if (name_form->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, name_form->span,
+                  "typeclass method name must be a symbol");
+        return NULL;
+    }
+    const Symbol *name = name_form->as.sym;
+    
+    /* Parse parameter vector */
+    Form *params_form = method_form->as.list.items[1];
+    if (params_form->tag != F_VEC) {
+        diag_emit(DIAG_ERROR, params_form->span,
+                  "typeclass method parameter list must be a vector");
+        return NULL;
+    }
+    
+    /* Parse parameters */
+    uint8_t n_params = params_form->as.list.len;
+    const Symbol **param_names = NULL;
+    Type *param_types = NULL;
+    
+    if (n_params > 0) {
+        param_names = (const Symbol **)arena_alloc(e->arena, n_params * sizeof(const Symbol *));
+        param_types = (Type *)arena_alloc(e->arena, n_params * sizeof(Type));
+        
+        for (uint8_t i = 0; i < n_params; i++) {
+            Form *p = params_form->as.list.items[i];
+            if (p->tag == F_SYM) {
+                param_names[i] = p->as.sym;
+                /* Default to int for now - type inference for method params deferred */
+                param_types[i] = TYPE_INT;
+            } else if (p->tag == F_VEC && p->as.list.len >= 2) {
+                /* [name : type] syntax */
+                Form *name_f = p->as.list.items[0];
+                Form *type_f = p->as.list.items[1];
+                if (name_f->tag != F_SYM) {
+                    diag_emit(DIAG_ERROR, name_f->span,
+                              "parameter name must be a symbol");
+                    return NULL;
+                }
+                param_names[i] = name_f->as.sym;
+                /* Parse type annotation */
+                if (type_f->tag == F_KEYWORD) {
+                    const Symbol *kw = type_f->as.sym;
+                    if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
+                        param_types[i] = TYPE_INT;
+                    } else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0) {
+                        param_types[i] = TYPE_BOOL;
+                    } else if (kw->len == 4 && memcmp(kw->name, "cstr", 4) == 0) {
+                        param_types[i] = TYPE_CSTR;
+                    } else {
+                        diag_emit(DIAG_ERROR, type_f->span,
+                                  "unsupported type in typeclass method parameter");
+                        return NULL;
+                    }
+                } else {
+                    param_types[i] = TYPE_INT; /* default */
+                }
+            } else {
+                diag_emit(DIAG_ERROR, p->span,
+                          "parameter must be a symbol or [name : type] vector");
+                return NULL;
+            }
+        }
+    }
+    
+    /* Parse return type - must be after params */
+    Type return_type = TYPE_NIL;
+    if (method_form->as.list.len >= 3) {
+        Form *ret_form = method_form->as.list.items[2];
+        if (ret_form->tag == F_KEYWORD) {
+            const Symbol *kw = ret_form->as.sym;
+            if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
+                return_type = TYPE_INT;
+            } else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0) {
+                return_type = TYPE_BOOL;
+            } else if (kw->len == 4 && memcmp(kw->name, "cstr", 4) == 0) {
+                return_type = TYPE_CSTR;
+            } else if ((kw->len == 4 && memcmp(kw->name, "void", 4) == 0) ||
+                       (kw->len == 3 && memcmp(kw->name, "nil", 3) == 0)) {
+                return_type = TYPE_NIL;
+            } else {
+                diag_emit(DIAG_ERROR, ret_form->span,
+                          "unsupported return type in typeclass method");
+                return NULL;
+            }
+        } else {
+            diag_emit(DIAG_ERROR, ret_form->span,
+                      "typeclass method return type must be a keyword like :int");
+            return NULL;
+        }
+    }
+    
+    TypeClassMethod *method = (TypeClassMethod *)arena_alloc(e->arena, sizeof(TypeClassMethod));
+    method->name = name;
+    method->param_names = param_names;
+    method->param_types = param_types;
+    method->n_params = n_params;
+    method->return_type = return_type;
+    return method;
+}
+
+/* Elaborate (defclass Name [type-params...] (method1 ...) (method2 ...) ...)
+ *
+ * Defines a new typeclass with type parameters and methods.
+ * Syntax: (defclass Eq [a] (eq? [x : a, y : a] : bool))
+ *         (defclass Show [a] (show [x : a] : cstr))
+ */
+static Expr *elab_defclass(Elab *e, const Form *call) {
+    /* Minimum: (defclass Name) */
+    if (call->as.list.len < 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "defclass requires a name: (defclass Name [...])");
+        return NULL;
+    }
+    
+    /* Parse typeclass name */
+    Form *name_form = call->as.list.items[1];
+    if (name_form->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, name_form->span,
+                  "defclass name must be a symbol");
+        return NULL;
+    }
+    const Symbol *name = name_form->as.sym;
+    
+    /* Check if already defined */
+    TypeClass *existing = typeclass_env_lookup_typeclass(&e->typeclass_env, name);
+    if (existing) {
+        diag_emit(DIAG_ERROR, name_form->span,
+                  "typeclass '%s' is already defined", name->name);
+        return NULL;
+    }
+    
+    /* Parse type parameters (optional) */
+    const Symbol **type_params = NULL;
+    uint8_t n_type_params = 0;
+    uint32_t methods_start = 2;
+    
+    if (call->as.list.len >= 3) {
+        Form *params_form = call->as.list.items[2];
+        if (params_form->tag == F_VEC) {
+            n_type_params = params_form->as.list.len;
+            if (n_type_params > 0) {
+                type_params = (const Symbol **)arena_alloc(e->arena, 
+                    n_type_params * sizeof(const Symbol *));
+                for (uint8_t i = 0; i < n_type_params; i++) {
+                    Form *p = params_form->as.list.items[i];
+                    if (p->tag != F_SYM) {
+                        diag_emit(DIAG_ERROR, p->span,
+                                  "type parameter must be a symbol");
+                        return NULL;
+                    }
+                    type_params[i] = p->as.sym;
+                }
+            }
+            methods_start = 3;
+        }
+    }
+    
+    /* Parse methods */
+    TypeClassMethod *methods = NULL;
+    uint8_t n_methods = 0;
+    
+    /* First pass: count methods */
+    for (uint32_t i = methods_start; i < call->as.list.len; i++) {
+        n_methods++;
+    }
+    
+    if (n_methods == 0) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "defclass requires at least one method");
+        return NULL;
+    }
+    
+    /* Allocate methods array */
+    methods = (TypeClassMethod *)arena_alloc(e->arena, n_methods * sizeof(TypeClassMethod));
+    
+    /* Second pass: parse each method */
+    for (uint32_t i = 0; i < n_methods; i++) {
+        Form *method_form = call->as.list.items[methods_start + i];
+        TypeClassMethod *method = parse_typeclass_method(e, method_form, call->span);
+        if (!method) return NULL;
+        methods[i] = *method;  /* Copy the method struct */
+    }
+    
+    /* Register the typeclass in the environment */
+    TypeClass *tc = typeclass_env_register_typeclass(&e->typeclass_env, name);
+    if (!tc) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "failed to register typeclass '%s'", name->name);
+        return NULL;
+    }
+    
+    tc->type_params = type_params;
+    tc->n_type_params = n_type_params;
+    tc->methods = methods;
+    tc->n_methods = n_methods;
+    
+    /* Create a TYPECLASS_DEF expression for codegen */
+    Expr *tc_expr = expr_new(e->arena, EX_TYPECLASS_DEF, TYPE_NIL, call->span);
+    tc_expr->as.typeclass_def_.typeclass = tc;
+    elab_register_file_def(e, tc_expr);
+    
+    /* Create a nil expression as the result (defclass returns nothing) */
+    return e_nil(e, call->span);
+}
+
+/* Elaborate (definstance ClassName [type-args...] (method1 [args...] body...) ...)
+ *
+ * Defines an instance of a typeclass for concrete types.
+ * Syntax: (definstance Eq int (eq? [x y] (== x y)))
+ *         (definstance Show int (show [x] (int->str x)))
+ */
+static Expr *elab_definstance(Elab *e, const Form *call) {
+    /* Minimum: (definstance ClassName) */
+    if (call->as.list.len < 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "definstance requires a typeclass name: (definstance ClassName ...)");
+        return NULL;
+    }
+    
+    /* Parse typeclass name */
+    Form *tc_form = call->as.list.items[1];
+    if (tc_form->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, tc_form->span,
+                  "definstance typeclass name must be a symbol");
+        return NULL;
+    }
+    const Symbol *tc_name = tc_form->as.sym;
+    
+    /* Look up the typeclass */
+    TypeClass *tc = typeclass_env_lookup_typeclass(&e->typeclass_env, tc_name);
+    if (!tc) {
+        diag_emit(DIAG_ERROR, tc_form->span,
+                  "typeclass '%s' is not defined", tc_name->name);
+        return NULL;
+    }
+    
+    /* Parse type arguments (optional) */
+    Type *type_args = NULL;
+    uint8_t n_type_args = 0;
+    uint32_t impls_start = 2;
+    
+    if (call->as.list.len >= 3) {
+        Form *args_form = call->as.list.items[2];
+        if (args_form->tag == F_VEC) {
+            n_type_args = args_form->as.list.len;
+            if (n_type_args > 0) {
+                type_args = (Type *)arena_alloc(e->arena, n_type_args * sizeof(Type));
+                for (uint8_t i = 0; i < n_type_args; i++) {
+                    Form *arg = args_form->as.list.items[i];
+                    /* Parse type keywords or symbols */
+                    if (arg->tag == F_KEYWORD || arg->tag == F_SYM) {
+                        const Symbol *kw = arg->as.sym;
+                        if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
+                            type_args[i] = TYPE_INT;
+                        } else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0) {
+                            type_args[i] = TYPE_BOOL;
+                        } else if (kw->len == 4 && memcmp(kw->name, "cstr", 4) == 0) {
+                            type_args[i] = TYPE_CSTR;
+                        } else if ((kw->len == 4 && memcmp(kw->name, "void", 4) == 0) ||
+                                   (kw->len == 3 && memcmp(kw->name, "nil", 3) == 0)) {
+                            type_args[i] = TYPE_NIL;
+                        } else if (kw->len == 8 && memcmp(kw->name, "ptr<void>", 8) == 0) {
+                            type_args[i] = TYPE_PTR_VOID;
+                        } else {
+                            /* Type variable reference - default to int for now */
+                            type_args[i] = TYPE_INT;
+                        }
+                    } else {
+                        diag_emit(DIAG_ERROR, arg->span,
+                                  "unsupported type argument in definstance");
+                        return NULL;
+                    }
+                }
+            }
+            impls_start = 3;
+        }
+    }
+    
+    /* Validate type argument count matches typeclass parameters */
+    if (n_type_args != tc->n_type_params) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "definstance: expected %d type arguments for '%s', got %d",
+                  tc->n_type_params, tc_name->name, n_type_args);
+        return NULL;
+    }
+    
+    /* Parse method implementations */
+    /* Each method impl is a function definition without the 'defn' keyword */
+    /* Syntax: (method-name [param1 param2 ...] body...)
+     * The number of methods must match the typeclass definition.
+     */
+    
+    if (call->as.list.len - impls_start < tc->n_methods) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "definstance: expected %d method implementations for '%s', got %d",
+                  tc->n_methods, tc_name->name, call->as.list.len - impls_start);
+        return NULL;
+    }
+    
+    /* For Phase 15 v1, we store method implementations as FnDef pointers.
+     * In a full implementation, these would be stored in the instance and
+     * codegen would generate dictionary structs. For now, we validate syntax.
+     */
+    FnDef **method_impls = NULL;
+    
+    for (uint8_t i = 0; i < tc->n_methods; i++) {
+        Form *impl_form = call->as.list.items[impls_start + i];
+        if (impl_form->tag != F_LIST || impl_form->as.list.len < 3) {
+            diag_emit(DIAG_ERROR, impl_form->span,
+                      "method implementation requires (name [params...] body...)");
+            return NULL;
+        }
+        
+        /* Parse the method implementation as a function */
+        /* For now, we just validate the name matches */
+        Form *impl_name_form = impl_form->as.list.items[0];
+        if (impl_name_form->tag != F_SYM) {
+            diag_emit(DIAG_ERROR, impl_name_form->span,
+                      "method implementation name must be a symbol");
+            return NULL;
+        }
+        
+        if (impl_name_form->as.sym != tc->methods[i].name) {
+            diag_emit(DIAG_ERROR, impl_name_form->span,
+                      "method implementation name '%s' doesn't match typeclass method '%s'",
+                      impl_name_form->as.sym->name, tc->methods[i].name->name);
+            return NULL;
+        }
+        
+        /* Elaborate the method implementation as a function */
+        /* The form is (method-name [params...] body...) */
+        if (!method_impls) {
+            method_impls = (FnDef **)arena_alloc(e->arena, tc->n_methods * sizeof(FnDef *));
+        }
+        
+        /* Create a synthetic name for this method implementation */
+        /* Format: __inst_<typeclass>_<method>_<typeargs> e.g. __inst_MyEq_eq_int */
+        char method_name[128];
+        
+        /* Sanitize method name for C identifier (replace invalid chars with _) */
+        char sanitized_method_name[64];
+        const char *method_name_str = tc->methods[i].name->name;
+        uint32_t method_name_len = tc->methods[i].name->len;
+        if (method_name_len >= sizeof(sanitized_method_name)) {
+            method_name_len = sizeof(sanitized_method_name) - 1;
+        }
+        memcpy(sanitized_method_name, method_name_str, method_name_len);
+        sanitized_method_name[method_name_len] = '\0';
+        for (char *p = sanitized_method_name; *p; p++) {
+            if (!isalnum((unsigned char)*p) && *p != '_') {
+                *p = '_';
+            }
+        }
+        
+        /* Build type arg suffix */
+        char type_suffix[64] = "";
+        for (uint8_t j = 0; j < n_type_args; j++) {
+            if (j == 0) {
+                strcat(type_suffix, "_");
+            }
+            switch (type_args[j].kind) {
+                case TY_INT: strcat(type_suffix, "int"); break;
+                case TY_BOOL: strcat(type_suffix, "bool"); break;
+                case TY_CSTR: strcat(type_suffix, "cstr"); break;
+                case TY_NIL: strcat(type_suffix, "nil"); break;
+                case TY_PTR_VOID: strcat(type_suffix, "ptr_void"); break;
+                default: strcat(type_suffix, "T"); break;
+            }
+        }
+        snprintf(method_name, sizeof(method_name), "__inst_%s_%s%s",
+                 tc_name->name, sanitized_method_name, type_suffix);
+        
+        const Symbol *method_sym = symtab_intern(e->st, 
+            strslice(method_name, (uint32_t)strlen(method_name)));
+        
+        /* Parse the method implementation form */
+        /* impl_form is (method-name [params...] :return-type body...) */
+        /* or (method-name [params...] body...) if no return type */
+        Form *impl_params_form = impl_form->as.list.items[1];
+        uint32_t impl_body_start = 2;
+        Type return_type = tc->methods[i].return_type;  /* Default from typeclass */
+        
+        /* Check for return type annotation after params */
+        if (impl_form->as.list.len >= 3) {
+            Form *ret_or_body = impl_form->as.list.items[2];
+            if (ret_or_body->tag == F_KEYWORD) {
+                /* This is a return type annotation */
+                const Symbol *kw = ret_or_body->as.sym;
+                if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
+                    return_type = TYPE_INT;
+                } else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0) {
+                    return_type = TYPE_BOOL;
+                } else if (kw->len == 4 && memcmp(kw->name, "cstr", 4) == 0) {
+                    return_type = TYPE_CSTR;
+                } else if ((kw->len == 4 && memcmp(kw->name, "void", 4) == 0) ||
+                           (kw->len == 3 && memcmp(kw->name, "nil", 3) == 0)) {
+                    return_type = TYPE_NIL;
+                }
+                impl_body_start = 3;
+            }
+        }
+        
+        /* Parse parameters */
+        Binding **method_params = NULL;
+        uint8_t n_method_params = 0;
+        Type *method_param_types = NULL;
+        
+        if (impl_params_form->tag == F_VEC) {
+            n_method_params = impl_params_form->as.list.len;
+            if (n_method_params > 0) {
+                method_params = (Binding **)arena_alloc(e->arena, 
+                    n_method_params * sizeof(Binding *));
+                method_param_types = (Type *)arena_alloc(e->arena, 
+                    n_method_params * sizeof(Type));
+                
+                for (uint8_t j = 0; j < n_method_params; j++) {
+                    Form *p = impl_params_form->as.list.items[j];
+                    Type param_type = TYPE_INT;
+                    
+                    /* Phase 15: Try to use type from typeclass method definition */
+                    if (tc->methods[i].param_types && j < tc->methods[i].n_params) {
+                        param_type = tc->methods[i].param_types[j];
+                    }
+                    
+                    /* Phase 15: Substitute type variables with type args */
+                    /* For v1: if the param type is TYPE_INT (default) and we have type args,
+                     * use the first type arg */
+                    if (param_type.kind == TY_INT && n_type_args > 0) {
+                        param_type = type_args[0];
+                    }
+                    
+                    if (p->tag == F_SYM) {
+                        /* Simple parameter name */
+                        method_params[j] = binding_new(e, p->as.sym, param_type, false, false, p->span);
+                        method_param_types[j] = param_type;
+                    } else if (p->tag == F_VEC && p->as.list.len >= 1) {
+                        /* Parameter with type annotation: [name : type] */
+                        Form *name_f = p->as.list.items[0];
+                        if (name_f->tag == F_SYM) {
+                            /* Check for type annotation */
+                            if (p->as.list.len >= 2 && p->as.list.items[1]->tag == F_KEYWORD) {
+                                const Symbol *kw = p->as.list.items[1]->as.sym;
+                                if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
+                                    param_type = TYPE_INT;
+                                } else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0) {
+                                    param_type = TYPE_BOOL;
+                                } else if (kw->len == 4 && memcmp(kw->name, "cstr", 4) == 0) {
+                                    param_type = TYPE_CSTR;
+                                } else if ((kw->len == 4 && memcmp(kw->name, "void", 4) == 0) ||
+                                           (kw->len == 3 && memcmp(kw->name, "nil", 3) == 0)) {
+                                    param_type = TYPE_NIL;
+                                }
+                            }
+                            method_params[j] = binding_new(e, name_f->as.sym, param_type, false, false, p->span);
+                            method_param_types[j] = param_type;
+                        } else {
+                            diag_emit(DIAG_ERROR, p->span,
+                                      "method parameter name must be a symbol");
+                            return NULL;
+                        }
+                    } else {
+                        diag_emit(DIAG_ERROR, p->span,
+                                  "method parameter must be a symbol or vector");
+                        return NULL;
+                    }
+                }
+            }
+        }
+        
+        /* Elaborate the body - push a scope with method parameters */
+        Scope method_scope;
+        scope_init(&method_scope, e->scope);
+        e->scope = &method_scope;
+        
+        /* Add method parameters to scope */
+        for (uint8_t j = 0; j < n_method_params; j++) {
+            scope_add(&method_scope, method_params[j]);
+        }
+        
+        Expr *method_body = e_nil(e, impl_form->span);
+        uint32_t n_body = impl_form->as.list.len - impl_body_start;
+        if (n_body > 0) {
+            if (n_body == 1) {
+                method_body = elab_form(e, impl_form->as.list.items[impl_body_start]);
+            } else {
+                Expr **items = (Expr **)arena_alloc(e->arena, n_body * sizeof(Expr *));
+                for (uint32_t k = 0; k < n_body; k++) {
+                    items[k] = elab_form(e, impl_form->as.list.items[impl_body_start + k]);
+                    if (!items[k]) { e->scope = method_scope.parent; scope_free(&method_scope); return NULL; }
+                }
+                method_body = expr_new(e->arena, EX_DO, items[n_body - 1]->type, impl_form->span);
+                method_body->as.do_.items = items;
+                method_body->as.do_.n = n_body;
+            }
+        }
+        
+        /* Pop method scope */
+        e->scope = method_scope.parent;
+        scope_free(&method_scope);
+        
+        /* Create a proper function type for the method */
+        TypeKind param_kinds[MAX_FN_ARITY];
+        for (uint8_t j = 0; j < n_method_params; j++) {
+            param_kinds[j] = method_param_types[j].kind;
+        }
+        Type fn_type = type_fn(param_kinds, n_method_params, return_type.kind);
+        
+        /* Create FnDef for the method implementation */
+        FnDef *method_fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));
+        Binding *method_binding = binding_new(e, method_sym, fn_type, false, true, impl_form->span);
+        method_fd->binding = method_binding;
+        method_fd->params = method_params;
+        method_fd->n_params = n_method_params;
+        method_fd->body = method_body;
+        method_fd->is_variadic = false;
+        method_fd->closure = NULL;
+        method_fd->param_types = method_param_types;
+        constraint_set_init(&method_fd->constraints);
+        
+        /* Register the method function at file scope */
+        scope_add(&e->global, method_binding);
+        
+        /* Create a file-scope definition expression */
+        Expr *method_def_expr = expr_new(e->arena, EX_FN_DEF, fn_type, impl_form->span);
+        method_def_expr->as.fn_def_.fn = method_fd;
+        elab_register_file_def(e, method_def_expr);
+        
+        method_impls[i] = method_fd;
+    }
+    
+    /* Register the instance */
+    TypeClassInstance *inst = typeclass_env_register_instance(&e->typeclass_env, tc);
+    if (!inst) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "failed to register instance for '%s'", tc_name->name);
+        return NULL;
+    }
+    
+    inst->type_args = type_args;
+    inst->n_type_args = n_type_args;
+    inst->method_impls = method_impls;
+    inst->n_method_impls = tc->n_methods;
+    
+    /* Create an INSTANCE_DEF expression for codegen */
+    Expr *inst_expr = expr_new(e->arena, EX_INSTANCE_DEF, TYPE_NIL, call->span);
+    inst_expr->as.instance_def_.instance = inst;
+    elab_register_file_def(e, inst_expr);
+    
+    /* Create a nil expression as the result (definstance returns nothing) */
+    return e_nil(e, call->span);
+}
+
+/* Phase 15: Elaborate (.method obj arg1 arg2 ...) - typeclass method call
+ * 
+ * Syntax: (.method obj arg1 arg2 ...)
+ * Looks up the method in the typeclass for the type of obj, and generates a call.
+ * For v1, we use direct method function calls (monomorphic only).
+ * Full dictionary passing deferred to v2.
+ */
+static Expr *elab_method_call(Elab *e, const Form *call) {
+    /* call is (.method obj arg1 arg2 ...)
+     * call->as.list.items[0] is the symbol .method
+     */
+    if (call->as.list.len < 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "method call requires (.method obj arg1 ...)");
+        return NULL;
+    }
+    
+    /* Parse method name from the symbol (skip the leading '.') */
+    Form *head = call->as.list.items[0];
+    const Symbol *method_sym = head->as.sym;
+    const char *method_name = method_sym->name + 1;  /* Skip '.' */
+    uint32_t method_name_len = method_sym->len - 1;
+    
+    /* For v1: Find a method implementation that matches */
+    /* We search through all instances to find one with a matching method */
+    /* This is a simplified approach - proper resolution would use type inference */
+    
+    FnDef *best_method = NULL;
+    
+    for (TypeClassInstance *inst = e->typeclass_env.instances; inst != NULL; inst = inst->next) {
+        for (uint8_t i = 0; i < inst->typeclass->n_methods; i++) {
+            const TypeClassMethod *method = &inst->typeclass->methods[i];
+            /* Check if method name matches (case-sensitive) */
+            if (method->name->len == method_name_len &&
+                memcmp(method->name->name, method_name, method_name_len) == 0) {
+                /* Found a matching method */
+                best_method = inst->method_impls[i];
+                break;
+            }
+        }
+        if (best_method) break;
+    }
+    
+    if (!best_method) {
+        /* No matching method found */
+        diag_emit(DIAG_ERROR, call->span,
+                  "no typeclass method found for '%.*s'",
+                  method_name_len, method_name);
+        return NULL;
+    }
+    
+    /* Elaborate the object and arguments */
+    Expr *obj = elab_form(e, call->as.list.items[1]);
+    if (!obj) return NULL;
+    
+    uint32_t n_args = call->as.list.len - 2;
+    Expr **args = (Expr **)arena_alloc(e->arena, n_args * sizeof(Expr *));
+    for (uint32_t i = 0; i < n_args; i++) {
+        args[i] = elab_form(e, call->as.list.items[2 + i]);
+        if (!args[i]) return NULL;
+    }
+    
+    /* For v1: Generate a direct call to the method implementation */
+    /* The method function name is stored in best_method->binding->name */
+    /* We need to create a call expression to that function */
+    
+    /* Allocate arguments array with obj prepended */
+    Expr **call_args = (Expr **)arena_alloc(e->arena, (n_args + 1) * sizeof(Expr *));
+    call_args[0] = obj;
+    for (uint32_t i = 0; i < n_args; i++) {
+        call_args[i + 1] = args[i];
+    }
+    
+    /* Create a call to the method function */
+    /* The result type is the return type of the method */
+    Type result_type = best_method->param_types[0]; /* First param type is the instance type, result is last */
+    /* For v1, use the body type of the method */
+    result_type = best_method->body->type;
+    
+    Expr *out = expr_new(e->arena, EX_CALL, result_type, call->span);
+    out->as.call_.fn_binding = best_method->binding;
+    out->as.call_.args = call_args;
+    out->as.call_.n_args = n_args + 1;
+    return out;
+}
+
 
 Expr *elaborate_program(Arena *arena, SymbolTable *st,
                         Form *const *forms, uint32_t nforms) {

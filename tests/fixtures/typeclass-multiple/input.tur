@@ -1,0 +1,16 @@
+;; Phase 15: Multiple methods and typeclass instances
+
+(defclass MyShow [a]
+  (show [x] :cstr)
+  (show-list [x y] :cstr))
+
+(definstance MyShow [int]
+  (show [x] :cstr "int")
+  (show-list [x y] :cstr "int list"))
+
+(definstance MyShow [bool]
+  (show [x] :cstr "bool")
+  (show-list [x y] :cstr "bool list"))
+
+(defn main [] :int
+  0)

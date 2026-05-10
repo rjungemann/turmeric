@@ -1,0 +1,10 @@
+;; Phase 15: Typeclass methods override operators
+
+(defclass MyAdd [a]
+  (add [x y] :int))
+
+(definstance MyAdd [int]
+  (add [x y] (+ x y)))
+
+(defn main [] :int
+  0)

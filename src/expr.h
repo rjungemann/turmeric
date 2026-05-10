@@ -10,6 +10,7 @@
 #include "symbols.h"
 #include "types.h"
 #include "lifetimes.h"  /* Phase 13: Lifetime annotations */
+#include "typeclass.h"  /* Phase 15: Typeclass constraints */
 
 /* Forward declarations. */
 typedef struct Expr        Expr;
@@ -70,6 +71,9 @@ typedef enum ExprKind {
     /* Phase 12: Borrow traits */
     EX_BORROW_IMMUT,   /* (& expr) - create immutable borrow */
     EX_BORROW_MUT,     /* (&mut expr) - create mutable borrow */
+    /* Phase 15: Typeclasses */
+    EX_TYPECLASS_DEF,   /* (defclass ...) - typeclass definition */
+    EX_INSTANCE_DEF,   /* (definstance ...) - typeclass instance definition */
     EX_PROGRAM,
 } ExprKind;
 
@@ -88,6 +92,8 @@ struct FnDef {
     bool           may_capture;
     /* Phase 13: Lifetime annotations */
     LifetimeContext lifetime_ctx;  /* Lifetime parameters and constraints for this function */
+    /* Phase 15: Typeclass constraints */
+    ConstraintSet  constraints;    /* Typeclass constraints for this function */
 };
 
 /* Phase 2: ExternC represents an (extern-c ...) declaration. */
@@ -174,6 +180,9 @@ struct Expr {
         /* Phase 12: Borrow traits */
         struct { Expr *expr; }        borrow_immut_; /* (& expr) - expression to borrow immutably */
         struct { Expr *expr; }        borrow_mut_;   /* (&mut expr) - expression to borrow mutably */
+        /* Phase 15: Typeclasses */
+        struct { TypeClass *typeclass; }                                  typeclass_def_;
+        struct { TypeClassInstance *instance; }                          instance_def_;
 
         struct { Expr **items; uint32_t n; }                               program;
     } as;

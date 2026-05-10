@@ -6,6 +6,10 @@
 #include "buf.h"
 #include "lifetimes.h"  /* Phase 13: Lifetime annotations */
 
+/* Forward declarations for typeclasses (Phase 15) */
+typedef struct TypeClass TypeClass;
+typedef struct TypeClassInstance TypeClassInstance;
+
 /* Forward declaration for effect rows (future-proofing for v3 effects) */
 typedef struct EffectRow EffectRow;
 
@@ -38,6 +42,9 @@ typedef enum TypeKind {
     /* Phase 12: Borrow traits */
     TY_REF_IMMUT,    /* &T — immutable borrow (non-owning reference) */
     TY_REF_MUT,       /* &mut T — mutable borrow (exclusive non-owning reference) */
+    /* Phase 15: Typeclasses */
+    TY_TYPECLASS,    /* Typeclass type (e.g., Eq, Ord) */
+    TY_TYPECLASS_INST, /* Typeclass instance type */
 } TypeKind;
 
 /* Max arity for function types in phase 2. */
@@ -55,6 +62,10 @@ typedef struct Type {
     /* Lifetimes attached to this type (for &T, &mut T, function types with lifetime params) */
     LifetimeId lifetimes[MAX_TYPE_LIFETIMES];
     uint8_t   n_lifetimes;
+    /* Phase 15: Typeclasses */
+    /* For concrete types, the typeclass instances they implement (e.g., int has Eq, Show) */
+    TypeClassInstance **typeclass_instances;
+    uint8_t n_typeclass_instances;
     union {
         struct {
             TypeKind arg_kinds[MAX_FN_ARITY];
@@ -76,6 +87,13 @@ typedef struct Type {
         struct {
             TypeKind target;  /* The type T being referenced by &T or &mut T */
         } ref_borrow;
+        /* Phase 15: Typeclass types */
+        struct {
+            TypeClass *typeclass;  /* For TY_TYPECLASS - the typeclass itself */
+        } typeclass;
+        struct {
+            TypeClassInstance *instance;  /* For TY_TYPECLASS_INST - a specific instance */
+        } typeclass_inst;
     } as;
 } Type;
 
@@ -177,6 +195,31 @@ static inline Type type_ref_mut_lifetime(TypeKind target, LifetimeId lifetime) {
         t.lifetimes[0] = lifetime;
         t.n_lifetimes = 1;
     }
+    return t;
+}
+
+/* Phase 15: Typeclass type constructors */
+/* Create a typeclass type (e.g., Eq, Ord) */
+static inline Type type_typeclass(TypeClass *tc) {
+    Type t;
+    t.kind = TY_TYPECLASS;
+    t.copy_kind = CK_COPY;  /* Typeclasses are copyable */
+    t.n_lifetimes = 0;
+    t.typeclass_instances = NULL;
+    t.n_typeclass_instances = 0;
+    t.as.typeclass.typeclass = tc;
+    return t;
+}
+
+/* Create a typeclass instance type */
+static inline Type type_typeclass_inst(TypeClassInstance *inst) {
+    Type t;
+    t.kind = TY_TYPECLASS_INST;
+    t.copy_kind = CK_COPY;  /* Typeclass instances are copyable */
+    t.n_lifetimes = 0;
+    t.typeclass_instances = NULL;
+    t.n_typeclass_instances = 0;
+    t.as.typeclass_inst.instance = inst;
     return t;
 }
 

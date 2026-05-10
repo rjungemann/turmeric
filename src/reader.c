@@ -90,6 +90,7 @@ static bool is_sym_start(int c) {
         case '=': case '<': case '>':
         case '!': case '?':
         case '_': case '$': case '&':
+        case '.':            /* Phase 15: enables .method for typeclass method calls */
         case '^':            /* enables ^mut, ^int as sym-shaped metadata */
         case 39:             /* single quote ' - enables lifetime annotations like 'a */
             return true;

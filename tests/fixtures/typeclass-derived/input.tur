@@ -1,0 +1,16 @@
+;; Phase 15: Derived typeclass instances
+
+(defclass Eq [a]
+  (eq? [x y] :bool))
+
+(definstance Eq [int]
+  (eq? [x y] (= x y)))
+
+(definstance Eq [bool]
+  (eq? [x y] (= x y)))
+
+;; Derived instance for option<T> if Eq T
+;; For v1, we just verify the syntax is accepted
+;; Actual derived instance mechanism deferred
+(defn main [] :int
+  0)

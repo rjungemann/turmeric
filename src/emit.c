@@ -711,6 +711,11 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_SET:      emit_set_stmt(ctx, body, e);   return atom_nil();
         case EX_DEF:      /* handled at top level — shouldn't appear nested. */
         case EX_PROGRAM:
+        case EX_TYPECLASS_DEF:
+            /* Typeclass definitions are compile-time only - no runtime code */
+            return atom_nil();
+        case EX_INSTANCE_DEF:
+            /* Handled in emit_stmt - file scope only */
             return atom_nil();
         /* Phase 2 */
         case EX_FN_DEF:
@@ -1021,6 +1026,7 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
     switch (e->kind) {
         case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:
         case EX_CSTR_LIT: case EX_VAR:
+        case EX_TYPECLASS_DEF:
             /* No side effects — emit nothing. */
             return;
         case EX_WHILE: emit_while_stmt(ctx, body, e); return;
@@ -1160,6 +1166,90 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_EXTERN_C:
             /* extern-c declarations emit nothing in statement position (they're file-scope) */
             return;
+        case EX_INSTANCE_DEF: {
+            /* Phase 15: Emit dictionary struct and global singleton */
+            TypeClassInstance *inst = e->as.instance_def_.instance;
+            TypeClass *tc = inst->typeclass;
+            
+            /* Generate dictionary struct name: dict_<TypeClass>_<typeargs> */
+            char dict_name[128];
+            char type_suffix[64] = "";
+            for (uint8_t i = 0; i < inst->n_type_args; i++) {
+                if (i == 0) strcat(type_suffix, "_");
+                switch (inst->type_args[i].kind) {
+                    case TY_INT: strcat(type_suffix, "int"); break;
+                    case TY_BOOL: strcat(type_suffix, "bool"); break;
+                    case TY_CSTR: strcat(type_suffix, "cstr"); break;
+                    case TY_NIL: strcat(type_suffix, "nil"); break;
+                    case TY_PTR_VOID: strcat(type_suffix, "ptr_void"); break;
+                    default: strcat(type_suffix, "T"); break;
+                }
+            }
+            snprintf(dict_name, sizeof(dict_name), "dict_%s%s", tc->name->name, type_suffix);
+            
+            /* Helper to sanitize method name for C identifiers */
+            char sanitized_method_name[64];
+            
+            /* Emit the dictionary struct to file scope */
+            buf_printf(ctx->file, "typedef struct %s {\n", dict_name);
+            for (uint8_t i = 0; i < tc->n_methods; i++) {
+                const TypeClassMethod *method = &tc->methods[i];
+                FnDef *method_impl = inst->method_impls[i];
+                
+                /* Sanitize method name for C field name (replace invalid chars with _) */
+                char sanitized_method_name[64];
+                strncpy(sanitized_method_name, method->name->name, sizeof(sanitized_method_name) - 1);
+                sanitized_method_name[sizeof(sanitized_method_name) - 1] = '\0';
+                for (char *p = sanitized_method_name; *p; p++) {
+                    if (!isalnum((unsigned char)*p) && *p != '_') {
+                        *p = '_';
+                    }
+                }
+                
+                /* Build function pointer type */
+                buf_puts(ctx->file, "    ");
+                
+                /* Return type */
+                const char *ret_c_name = type_c_name(method_impl->body->type);
+                buf_printf(ctx->file, "%s", ret_c_name);
+                buf_puts(ctx->file, " (*");
+                buf_printf(ctx->file, "%s", sanitized_method_name);
+                buf_puts(ctx->file, ")(");
+                
+                /* Parameter types */
+                for (uint8_t j = 0; j < method_impl->n_params; j++) {
+                    if (j > 0) buf_puts(ctx->file, ", ");
+                    buf_printf(ctx->file, "%s", type_c_name(method_impl->param_types[j]));
+                }
+                buf_puts(ctx->file, ");\n");
+            }
+            buf_printf(ctx->file, "} %s;\n\n", dict_name);
+            
+            /* Emit the global singleton dictionary to file scope */
+            buf_printf(ctx->file, "static %s %s_singleton = {\n", dict_name, dict_name);
+            for (uint8_t i = 0; i < tc->n_methods; i++) {
+                const TypeClassMethod *method = &tc->methods[i];
+                
+                /* Sanitize method name for C field name */
+                strncpy(sanitized_method_name, method->name->name, sizeof(sanitized_method_name) - 1);
+                sanitized_method_name[sizeof(sanitized_method_name) - 1] = '\0';
+                for (char *p = sanitized_method_name; *p; p++) {
+                    if (!isalnum((unsigned char)*p) && *p != '_') {
+                        *p = '_';
+                    }
+                }
+                
+                buf_puts(ctx->file, "    ");
+                buf_printf(ctx->file, ".%s = ", sanitized_method_name);
+                /* Method implementation function name - use sanitized method name */
+                buf_printf(ctx->file, "__inst_%s_%s", tc->name->name, sanitized_method_name);
+                /* Add type suffix */
+                buf_puts(ctx->file, type_suffix);
+                buf_puts(ctx->file, ",\n");
+            }
+            buf_printf(ctx->file, "};\n\n");
+            return;
+        }
         case EX_INLINE_C: {
             /* Emit the raw C code inline as a statement */
             InlineC *ic = e->as.inline_c_.inline_c;

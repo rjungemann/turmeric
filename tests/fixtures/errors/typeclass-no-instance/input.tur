@@ -1,0 +1,7 @@
+;; Phase 15: Error for duplicate typeclass definition
+
+(defclass MyEq [a]
+  (eq? [x y] :bool))
+
+(defclass MyEq [b]
+  (eq2? [x y] :bool))

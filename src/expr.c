@@ -1,4 +1,5 @@
 #include "expr.h"
+#include "typeclass.h"  /* Phase 15 */
 
 #include <string.h>
 
@@ -169,6 +170,17 @@ void expr_print(Buf *b, const Expr *e) {
         case EX_BORROW_MUT:
             buf_puts(b, "(&mut ");
             expr_print(b, e->as.borrow_mut_.expr);
+            buf_putc(b, ')');
+            break;
+        /* Phase 15: Typeclasses */
+        case EX_TYPECLASS_DEF:
+            buf_puts(b, "(defclass ");
+            buf_puts(b, e->as.typeclass_def_.typeclass->name->name);
+            buf_putc(b, ')');
+            break;
+        case EX_INSTANCE_DEF:
+            buf_puts(b, "(definstance ");
+            buf_puts(b, e->as.instance_def_.instance->typeclass->name->name);
             buf_putc(b, ')');
             break;
     }

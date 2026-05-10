@@ -1,0 +1,13 @@
+;; Phase 15: Closures capture typeclass dictionaries
+
+(defclass MyShow [a]
+  (show [x] :cstr))
+
+(definstance MyShow [int]
+  (show [x] :cstr "int"))
+
+(defn make-shower [x :int] :int
+  0)
+
+(defn main [] :int
+  0)

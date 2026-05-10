@@ -1,0 +1,37 @@
+;; Phase 15: Built-in typeclasses for primitive types
+
+(defclass Eq [a]
+  (eq? [x y] :bool))
+
+(definstance Eq [int]
+  (eq? [x y] (= x y)))
+
+(definstance Eq [bool]
+  (eq? [x y] (= x y)))
+
+(defclass Ord [a]
+  (lt? [x y] :bool)
+  (lte? [x y] :bool)
+  (gt? [x y] :bool)
+  (gte? [x y] :bool))
+
+(definstance Ord [int]
+  (lt? [x y] (< x y))
+  (lte? [x y] (<= x y))
+  (gt? [x y] (> x y))
+  (gte? [x y] (>= x y)))
+
+(defclass Show [a]
+  (show [x] :cstr))
+
+(definstance Show [int]
+  (show [x] :cstr "<int>"))
+
+(definstance Show [bool]
+  (show [x] :cstr "<bool>"))
+
+(definstance Show [cstr]
+  (show [x] x))
+
+(defn main [] :int
+  0)

@@ -1,4 +1,5 @@
 #include "types.h"
+#include "typeclass.h"  /* Phase 15 */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,6 +43,13 @@ int type_eq(Type a, Type b) {
     /* Phase 12: Borrow types */
     if (a.kind == TY_REF_IMMUT || a.kind == TY_REF_MUT) {
         return a.as.ref_borrow.target == b.as.ref_borrow.target;
+    }
+    /* Phase 15: Typeclass types */
+    if (a.kind == TY_TYPECLASS) {
+        return a.as.typeclass.typeclass == b.as.typeclass.typeclass;
+    }
+    if (a.kind == TY_TYPECLASS_INST) {
+        return a.as.typeclass_inst.instance == b.as.typeclass_inst.instance;
     }
     return 1;
 }
@@ -149,6 +157,12 @@ const char *type_name(Type t) {
             buf_putc(&tmp, '\0');
             return strdup(tmp.data);
         }
+        /* Phase 15: Typeclass types */
+        case TY_TYPECLASS:
+            return t.as.typeclass.typeclass ? t.as.typeclass.typeclass->name->name : "<typeclass>";
+        case TY_TYPECLASS_INST:
+            return t.as.typeclass_inst.instance && t.as.typeclass_inst.instance->typeclass ?
+                   t.as.typeclass_inst.instance->typeclass->name->name : "<typeclass-inst>";
     }
     return "?";
 }
@@ -212,6 +226,29 @@ static void type_name_buf(Buf *b, Type t) {
             }
             break;
         }
+        /* Phase 15: Typeclass types */
+        case TY_TYPECLASS: {
+            if (t.as.typeclass.typeclass) {
+                buf_puts(b, t.as.typeclass.typeclass->name->name);
+            } else {
+                buf_puts(b, "<typeclass>");
+            }
+            break;
+        }
+        case TY_TYPECLASS_INST: {
+            if (t.as.typeclass_inst.instance && t.as.typeclass_inst.instance->typeclass) {
+                buf_puts(b, t.as.typeclass_inst.instance->typeclass->name->name);
+                buf_puts(b, "<");
+                for (uint8_t i = 0; i < t.as.typeclass_inst.instance->n_type_args; i++) {
+                    if (i > 0) buf_puts(b, ", ");
+                    type_name_buf(b, t.as.typeclass_inst.instance->type_args[i]);
+                }
+                buf_puts(b, ">");
+            } else {
+                buf_puts(b, "<typeclass-inst>");
+            }
+            break;
+        }
     }
 }
 
@@ -248,6 +285,10 @@ const char *type_c_name(Type t) {
             /* For now, use void* since we don't have full type info */
             return "void *";
         }
+        /* Phase 15: Typeclass types don't have a C representation - they're compile-time only */
+        case TY_TYPECLASS:
+        case TY_TYPECLASS_INST:
+            return "void";  /* Typeclasses don't exist at runtime */
     }
     return "void";
 }
