@@ -1,0 +1,182 @@
+;; Phase 16: Real FileSystem implementation
+;; 
+;; Implementation of FileSystem capability using libc functions
+
+(extern-c fopen [^cstr ^cstr] :ptr)
+(extern-c fclose [^ptr] :int)
+(extern-c fread [^ptr ^int ^int ^ptr] :int)
+(extern-c fwrite [^ptr ^int ^int ^ptr] :int)
+(extern-c remove [^cstr] :int)
+(extern-c readdir [^ptr] :ptr)
+(extern-c opendir [^cstr] :ptr)
+(extern-c closedir [^ptr] :int)
+(extern-c malloc [^ptr size] :ptr)
+(extern-c free [^ptr p] :void)
+(extern-c memset [^ptr ^int ^int] :ptr)
+
+;; Helper function to get file size
+(defn file-size [f]
+  ```c
+  FILE* file = (FILE*)f;
+  long pos = ftell(file);
+  fseek(file, 0, SEEK_END);
+  long size = ftell(file);
+  fseek(file, pos, SEEK_SET);
+  return (int)size;
+  ```)
+
+;; Real-FileSystem implementation
+;; Returns a FileSystem capability struct with libc-based implementations
+(defn Real-FileSystem []
+  ```c
+  /* Define the FileSystem struct */
+  typedef struct FileSystem FileSystem;
+  struct FileSystem {
+      int (*read_file)(const char* path, unsigned char* buf, int buf_len, int* out_len);
+      int (*write_file)(const char* path, const unsigned char* data, int data_len);
+      int (*delete)(const char* path);
+      int (*list)(const char* path, char** entries, int max_entries, int* out_count);
+  };
+  
+  /* read_file implementation using fopen/fread */
+  static int fs_read_file(const char* path, unsigned char* buf, int buf_len, int* out_len) {
+      FILE* f = fopen(path, "rb");
+      if (!f) return -1;
+      size_t n = fread(buf, 1, buf_len, f);
+      fclose(f);
+      *out_len = (int)n;
+      return 0;
+  }
+  
+  /* write_file implementation using fopen/fwrite */
+  static int fs_write_file(const char* path, const unsigned char* data, int data_len) {
+      FILE* f = fopen(path, "wb");
+      if (!f) return -1;
+      size_t n = fwrite(data, 1, data_len, f);
+      fclose(f);
+      return (n == (size_t)data_len) ? 0 : -1;
+  }
+  
+  /* delete implementation using remove */
+  static int fs_delete(const char* path) {
+      return remove(path);
+  }
+  
+  /* list implementation using opendir/readdir - simplified */
+  static int fs_list(const char* path, char** entries, int max_entries, int* out_count) {
+      DIR* d = opendir(path);
+      if (!d) return -1;
+      
+      struct dirent* entry;
+      int count = 0;
+      while ((entry = readdir(d)) && count < max_entries) {
+          /* Skip . and .. */
+          if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+          
+          /* Store pointer to entry name */
+          if (entries) {
+              entries[count] = strdup(entry->d_name);
+          }
+          count++;
+      }
+      closedir(d);
+      *out_count = count;
+      return 0;
+  }
+  
+  /* Create and populate the capability struct */
+  FileSystem* fs = (FileSystem*)malloc(sizeof(FileSystem));
+  fs->read_file = fs_read_file;
+  fs->write_file = fs_write_file;
+  fs->delete = fs_delete;
+  fs->list = fs_list;
+  return (void*)fs;
+  ```)
+
+;; Free a Real-FileSystem
+(defn Real-FileSystem-free [fs]
+  ```c
+  free(fs);
+  ```)
+
+;; ============================================================================
+;; Additional I/O helper functions
+;; ============================================================================
+
+;; Read entire file into a buffer (allocated with malloc)
+;; Returns buffer pointer (caller must free) or NULL on error
+;; Sets out_len to the number of bytes read
+(defn read-file [path]
+  ```c
+  FILE* f = fopen(path, "rb");
+  if (!f) return NULL;
+  fseek(f, 0, SEEK_END);
+  long size = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  unsigned char* buf = (unsigned char*)malloc(size + 1);
+  size_t n = fread(buf, 1, size, f);
+  fclose(f);
+  if (n != (size_t)size) { free(buf); return NULL; }
+  buf[size] = '\0';
+  return (void*)buf;
+  ```)
+
+;; Write data to a file
+;; Returns 0 on success, non-zero on error
+(defn write-file [path data len]
+  ```c
+  FILE* f = fopen(path, "wb");
+  if (!f) return -1;
+  size_t n = fwrite(data, 1, len, f);
+  fclose(f);
+  return (n == (size_t)len) ? 0 : -1;
+  ```)
+
+;; Check if file exists
+(defn file-exists? [path]
+  ```c
+  FILE* f = fopen(path, "rb");
+  if (f) { fclose(f); return 1; }
+  return 0;
+  ```)
+
+;; Get current directory listing
+;; Returns array of strings (NULL-terminated), caller must free each string and the array
+(defn list-dir [path]
+  ```c
+  DIR* d = opendir(path);
+  if (!d) return NULL;
+  
+  /* Count entries first */
+  struct dirent* entry;
+  int count = 0;
+  while ((entry = readdir(d))) {
+      if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+      count++;
+  }
+  rewinddir(d);
+  
+  /* Allocate array of pointers */
+  char** entries = (char**)malloc((count + 1) * sizeof(char*));
+  if (!entries) { closedir(d); return NULL; }
+  
+  int i = 0;
+  while ((entry = readdir(d))) {
+      if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+      entries[i++] = strdup(entry->d_name);
+  }
+  entries[i] = NULL;
+  closedir(d);
+  return (void*)entries;
+  ```)
+
+;; Free directory listing returned by list-dir
+(defn free-dir-listing [entries]
+  ```c
+  if (!entries) return;
+  char** e = (char**)entries;
+  for (int i = 0; e[i]; i++) {
+      free(e[i]);
+  }
+  free(e);
+  ```)

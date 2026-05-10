@@ -1,0 +1,200 @@
+;; Phase 16: Real Logger implementation
+;; 
+;; Implementation of Logger capability using stderr/stdout
+
+(extern-c fprintf [^ptr ^cstr] :int)
+(extern-c stderr [^] :ptr)
+(extern-c stdout [^] :ptr)
+(extern-c time [^ptr] :ptr)
+(extern-c ctime [^ptr] :cstr)
+(extern-c malloc [^ptr size] :ptr)
+(extern-c free [^ptr p] :void)
+
+;; Real-Logger implementation
+;; Writes to stderr with timestamps
+(defn Real-Logger []
+  ```c
+  /* Define the Logger struct */
+  typedef struct Logger Logger;
+  struct Logger {
+      void (*debug)(const char* msg);
+      void (*info)(const char* msg);
+      void (*warn)(const char* msg);
+      void (*error)(const char* msg);
+  };
+  
+  /* Helper to get current timestamp */
+  static const char* get_timestamp(void) {
+      time_t now = time(NULL);
+      return ctime(&now);
+  }
+  
+  /* Log with timestamp */
+  static void log_with_level(FILE* stream, const char* level, const char* msg) {
+      const char* ts = get_timestamp();
+      /* Remove newline from ctime */
+      char ts_buf[32];
+      size_t len = strlen(ts);
+      if (len > 0 && ts[len-1] == '\n') {
+          memcpy(ts_buf, ts, len - 1);
+          ts_buf[len - 1] = '\0';
+      } else {
+          strcpy(ts_buf, ts);
+      }
+      fprintf(stream, "[%s] [%s] %s\n", ts_buf, level, msg);
+      fflush(stream);
+  }
+  
+  /* debug implementation */
+  static void logger_debug(const char* msg) {
+      log_with_level(stdout, "DEBUG", msg);
+  }
+  
+  /* info implementation */
+  static void logger_info(const char* msg) {
+      log_with_level(stdout, "INFO", msg);
+  }
+  
+  /* warn implementation */
+  static void logger_warn(const char* msg) {
+      log_with_level(stderr, "WARN", msg);
+  }
+  
+  /* error implementation */
+  static void logger_error(const char* msg) {
+      log_with_level(stderr, "ERROR", msg);
+  }
+  
+  /* Create and populate the capability struct */
+  Logger* logger = (Logger*)malloc(sizeof(Logger));
+  logger->debug = logger_debug;
+  logger->info = logger_info;
+  logger->warn = logger_warn;
+  logger->error = logger_error;
+  return (void*)logger;
+  ```)
+
+;; Free a Real-Logger
+(defn Real-Logger-free [log]
+  ```c
+  free(log);
+  ```)
+
+;; ============================================================================
+;; Simple logger without timestamps (faster)
+;; ============================================================================
+
+;; Simple-Logger implementation - no timestamps, just writes to stderr/stdout
+(defn Simple-Logger []
+  ```c
+  typedef struct Logger Logger;
+  struct Logger {
+      void (*debug)(const char* msg);
+      void (*info)(const char* msg);
+      void (*warn)(const char* msg);
+      void (*error)(const char* msg);
+  };
+  
+  /* debug implementation */
+  static void simple_debug(const char* msg) {
+      fprintf(stdout, "[DEBUG] %s\n", msg);
+      fflush(stdout);
+  }
+  
+  /* info implementation */
+  static void simple_info(const char* msg) {
+      fprintf(stdout, "[INFO] %s\n", msg);
+      fflush(stdout);
+  }
+  
+  /* warn implementation */
+  static void simple_warn(const char* msg) {
+      fprintf(stderr, "[WARN] %s\n", msg);
+      fflush(stderr);
+  }
+  
+  /* error implementation */
+  static void simple_error(const char* msg) {
+      fprintf(stderr, "[ERROR] %s\n", msg);
+      fflush(stderr);
+  }
+  
+  /* Create and populate the capability struct */
+  Logger* logger = (Logger*)malloc(sizeof(Logger));
+  logger->debug = simple_debug;
+  logger->info = simple_info;
+  logger->warn = simple_warn;
+  logger->error = simple_error;
+  return (void*)logger;
+  ```)
+
+;; Free a Simple-Logger
+(defn Simple-Logger-free [log]
+  ```c
+  free(log);
+  ```)
+
+;; ============================================================================
+;; Null logger (silent)
+;; ============================================================================
+
+;; Null-Logger implementation - discards all messages
+(defn Null-Logger []
+  ```c
+  typedef struct Logger Logger;
+  struct Logger {
+      void (*debug)(const char* msg);
+      void (*info)(const char* msg);
+      void (*warn)(const char* msg);
+      void (*error)(const char* msg);
+  };
+  
+  /* All implementations are no-ops */
+  static void null_log(const char* msg) {}
+  
+  /* Create and populate the capability struct */
+  Logger* logger = (Logger*)malloc(sizeof(Logger));
+  logger->debug = null_log;
+  logger->info = null_log;
+  logger->warn = null_log;
+  logger->error = null_log;
+  return (void*)logger;
+  ```)
+
+;; Free a Null-Logger
+(defn Null-Logger-free [log]
+  ```c
+  free(log);
+  ```)
+
+;; ============================================================================
+;; Helper functions for direct logging (without capabilities)
+;; ============================================================================
+
+;; Log a debug message
+(defn log-debug-direct [msg]
+  ```c
+  fprintf(stdout, "[DEBUG] %s\n", msg);
+  fflush(stdout);
+  ```)
+
+;; Log an info message
+(defn log-info-direct [msg]
+  ```c
+  fprintf(stdout, "[INFO] %s\n", msg);
+  fflush(stdout);
+  ```)
+
+;; Log a warning message
+(defn log-warn-direct [msg]
+  ```c
+  fprintf(stderr, "[WARN] %s\n", msg);
+  fflush(stderr);
+  ```)
+
+;; Log an error message
+(defn log-error-direct [msg]
+  ```c
+  fprintf(stderr, "[ERROR] %s\n", msg);
+  fflush(stderr);
+  ```)

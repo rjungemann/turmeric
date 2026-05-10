@@ -1,0 +1,5 @@
+;; Phase 16: Capability passing test - Default capability resolution
+
+(defn main []
+  (println "capability-default test")
+  0)

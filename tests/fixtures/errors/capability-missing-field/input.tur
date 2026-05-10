@@ -1,0 +1,7 @@
+;; Phase 16: Negative test - accessing non-existent field
+
+(defn main []
+  (let [x 42]
+    ;; Try to access a field that doesn't exist
+    (.nonexistent x)
+    0))

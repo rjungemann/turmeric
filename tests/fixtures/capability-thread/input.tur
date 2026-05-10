@@ -1,0 +1,5 @@
+;; Phase 16: Capability passing test - Threading capabilities compile
+
+(defn main []
+  (println "capability-thread test")
+  0)

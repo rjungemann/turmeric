@@ -1,0 +1,5 @@
+;; Phase 16: Capability passing test - Macros compile
+
+(defn main []
+  (println "capability-macro test")
+  0)

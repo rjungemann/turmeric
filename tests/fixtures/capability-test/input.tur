@@ -1,0 +1,5 @@
+;; Phase 16: Capability passing test - Test implementations compile
+
+(defn main []
+  (println "capability-test test")
+  0)

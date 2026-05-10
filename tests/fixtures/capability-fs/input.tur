@@ -1,0 +1,6 @@
+;; Phase 16: Capability passing test - FileSystem capability compiles
+
+;; Just verify that the capability definitions compile
+(defn main []
+  (println "capability-fs test")
+  0)

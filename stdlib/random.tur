@@ -1,0 +1,154 @@
+;; Phase 16: Real Random implementation
+;; 
+;; Implementation of Random capability using platform RNG
+
+(extern-c rand [^] :int)
+(extern-c srand [^int] :void)
+(extern-c time [^ptr] :ptr)
+(extern-c malloc [^ptr size] :ptr)
+(extern-c free [^ptr p] :void)
+
+;; Real-Random implementation
+;; Uses libc rand() function
+(defn Real-Random []
+  ```c
+  /* Define the Random struct */
+  typedef struct Random Random;
+  struct Random {
+      int (*next_int)(int min, int max);
+      int (*next_float)(void);
+  };
+  
+  /* next_int implementation using rand() */
+  static int random_next_int(int min, int max) {
+      /* Seed with time if not already seeded */
+      static int seeded = 0;
+      if (!seeded) {
+          srand((unsigned int)time(NULL));
+          seeded = 1;
+      }
+      
+      /* rand() returns [0, RAND_MAX] */
+      int range = max - min + 1;
+      int value = rand() % range;
+      return min + value;
+  }
+  
+  /* next_float implementation - returns [0, 10000) */
+  static int random_next_float(void) {
+      /* Seed with time if not already seeded */
+      static int seeded = 0;
+      if (!seeded) {
+          srand((unsigned int)time(NULL));
+          seeded = 1;
+      }
+      
+      /* Return value in [0, 10000) */
+      return rand() % 10000;
+  }
+  
+  /* Create and populate the capability struct */
+  Random* rng = (Random*)malloc(sizeof(Random));
+  rng->next_int = random_next_int;
+  rng->next_float = random_next_float;
+  return (void*)rng;
+  ```)
+
+;; Free a Real-Random
+(defn Real-Random-free [rng]
+  ```c
+  free(rng);
+  ```)
+
+;; ============================================================================
+;; Seeded Random implementation
+;; ============================================================================
+
+;; Seeded-Random implementation - uses a fixed seed for reproducibility
+;; Useful for testing
+(defn Seeded-Random [seed]
+  ```c
+  typedef struct Random Random;
+  struct Random {
+      int (*next_int)(int min, int max);
+      int (*next_float)(void);
+  };
+  
+  /* Seed the RNG */
+  srand((unsigned int)seed);
+  
+  /* next_int implementation */
+  static int seeded_next_int(int min, int max) {
+      int range = max - min + 1;
+      int value = rand() % range;
+      return min + value;
+  }
+  
+  /* next_float implementation - returns [0, 10000) */
+  static int seeded_next_float(void) {
+      return rand() % 10000;
+  }
+  
+  /* Create and populate the capability struct */
+  Random* rng = (Random*)malloc(sizeof(Random));
+  rng->next_int = seeded_next_int;
+  rng->next_float = seeded_next_float;
+  return (void*)rng;
+  ```)
+
+;; Free a Seeded-Random
+(defn Seeded-Random-free [rng]
+  ```c
+  free(rng);
+  ```)
+
+;; ============================================================================
+;; Helper functions for direct random number generation
+;; ============================================================================
+
+;; Get a random integer in range [min, max]
+(defn rand-int [min max]
+  ```c
+  static int seeded = 0;
+  if (!seeded) {
+      srand((unsigned int)time(NULL));
+      seeded = 1;
+  }
+  int range = max - min + 1;
+  int value = rand() % range;
+  return min + value;
+  ```)
+
+;; Get a random float in range [0, 1)
+;; Returns value scaled by 10000 (divide by 10000.0 to get actual float)
+(defn rand-float []
+  ```c
+  static int seeded = 0;
+  if (!seeded) {
+      srand((unsigned int)time(NULL));
+      seeded = 1;
+  }
+  return rand() % 10000;
+  ```)
+
+;; Roll a die with n sides (1 to n)
+(defn rand-die [sides]
+  ```c
+  static int seeded = 0;
+  if (!seeded) {
+      srand((unsigned int)time(NULL));
+      seeded = 1;
+  }
+  return 1 + (rand() % sides);
+  ```)
+
+;; Random boolean (true or false)
+(defn rand-bool []
+  ```c
+  static int seeded = 0;
+  if (!seeded) {
+      srand((unsigned int)time(NULL));
+      seeded = 1;
+  }
+  return (rand() % 2) != 0;
+  ```)

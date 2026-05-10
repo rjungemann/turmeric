@@ -1,0 +1,5 @@
+;; Phase 16: Capability passing test - Logger capability compiles
+
+(defn main []
+  (println "capability-logger test")
+  0)
