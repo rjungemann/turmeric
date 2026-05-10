@@ -3341,17 +3341,23 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         return NULL;
     }
     
-    if (fn_type.kind != TY_FN) {
+    if (fn_type.kind != TY_FN && fn_type.kind != TY_CONT) {
         diag_emit(DIAG_ERROR, call->span,
-                  "'%s' is not a function", fn_binding->name->name);
+                  "'%s' is not a function or continuation", fn_binding->name->name);
         return NULL;
     }
 
-    uint8_t expected_arity = fn_type.as.fn.arity;
-    
-    /* For closure bindings, the thunk function has an extra env parameter */
-    if (fn_binding->closure_fn_binding) {
-        expected_arity--;  /* Subtract the hidden env parameter */
+    uint8_t expected_arity = 0;
+    if (fn_type.kind == TY_FN) {
+        expected_arity = fn_type.as.fn.arity;
+        
+        /* For closure bindings, the thunk function has an extra env parameter */
+        if (fn_binding->closure_fn_binding) {
+            expected_arity--;  /* Subtract the hidden env parameter */
+        }
+    } else if (fn_type.kind == TY_CONT) {
+        /* Continuations are callable with exactly 1 argument (the resume value) */
+        expected_arity = 1;
     }
     
     if (n_args != expected_arity) {
@@ -3382,8 +3388,16 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
     }
 
     /* Result type is the function's return type */
-    TypeKind result_kind = fn_type.as.fn.result_kind;
-    Type result_type = type_from_kind(result_kind);
+    Type result_type;
+    if (fn_type.kind == TY_FN) {
+        TypeKind result_kind = fn_type.as.fn.result_kind;
+        result_type = type_from_kind(result_kind);
+    } else if (fn_type.kind == TY_CONT) {
+        /* Calling a continuation returns its result type (though in practice it jumps) */
+        result_type = type_from_kind(fn_type.as.cont.returns);
+    } else {
+        result_type = TYPE_NIL;
+    }
 
     Expr *out = expr_new(e->arena, EX_CALL, result_type, call->span);
     out->as.call_.fn_binding = fn_binding;

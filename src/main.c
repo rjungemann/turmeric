@@ -177,11 +177,24 @@ static int compile_to_c(const char *path, Buf *out_c) {
         Expr *prog = elaborate_program(&arena, &st, forms, nforms);
         if (!prog || diag_had_error()) {
             rc = 1;
-        } else if (!borrow_check_program(prog)) {
-            /* Phase 14: Borrow checker pass */
-            rc = 1;
-        } else if (emit_program(out_c, prog) != 0) {
-            rc = 1;
+        } else {
+            /* Phase 19: Effect lowering - transform perform/handle to shift/reset */
+            EffectEnv *effect_env = effect_env_new(&arena);
+            prog = effect_lower(&arena, &st, prog, effect_env);
+            if (!prog || diag_had_error()) {
+                rc = 1;
+            } else {
+                /* Phase 18: CPS transformation for shift/reset */
+                prog = cps_transform(&arena, prog);
+                if (!prog || diag_had_error()) {
+                    rc = 1;
+                } else if (!borrow_check_program(prog)) {
+                    /* Phase 14: Borrow checker pass */
+                    rc = 1;
+                } else if (emit_program(out_c, prog) != 0) {
+                    rc = 1;
+                }
+            }
         }
     }
 
@@ -225,11 +238,24 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name) {
         Expr *prog = elaborate_program(&arena, &st, forms, nforms);
         if (!prog || diag_had_error()) {
             rc = 1;
-        } else if (!borrow_check_program(prog)) {
-            /* Phase 14: Borrow checker pass */
-            rc = 1;
-        } else if (emit_header(out_h, module_name, prog) != 0) {
-            rc = 1;
+        } else {
+            /* Phase 19: Effect lowering - transform perform/handle to shift/reset */
+            EffectEnv *effect_env = effect_env_new(&arena);
+            prog = effect_lower(&arena, &st, prog, effect_env);
+            if (!prog || diag_had_error()) {
+                rc = 1;
+            } else {
+                /* Phase 18: CPS transformation for shift/reset */
+                prog = cps_transform(&arena, prog);
+                if (!prog || diag_had_error()) {
+                    rc = 1;
+                } else if (!borrow_check_program(prog)) {
+                    /* Phase 14: Borrow checker pass */
+                    rc = 1;
+                } else if (emit_header(out_h, module_name, prog) != 0) {
+                    rc = 1;
+                }
+            }
         }
     }
 
@@ -273,11 +299,24 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
         Expr *prog = elaborate_program(&arena, &st, forms, nforms);
         if (!prog || diag_had_error()) {
             rc = 1;
-        } else if (!borrow_check_program(prog)) {
-            /* Phase 14: Borrow checker pass */
-            rc = 1;
-        } else if (emit_implementation(out_c, module_name, prog) != 0) {
-            rc = 1;
+        } else {
+            /* Phase 19: Effect lowering - transform perform/handle to shift/reset */
+            EffectEnv *effect_env = effect_env_new(&arena);
+            prog = effect_lower(&arena, &st, prog, effect_env);
+            if (!prog || diag_had_error()) {
+                rc = 1;
+            } else {
+                /* Phase 18: CPS transformation for shift/reset */
+                prog = cps_transform(&arena, prog);
+                if (!prog || diag_had_error()) {
+                    rc = 1;
+                } else if (!borrow_check_program(prog)) {
+                    /* Phase 14: Borrow checker pass */
+                    rc = 1;
+                } else if (emit_implementation(out_c, module_name, prog) != 0) {
+                    rc = 1;
+                }
+            }
         }
     }
 

@@ -228,12 +228,12 @@
 **CPS transformation** — `src/cps.{c,h}` (new pass)
 - [x] CPS pass runs after closure conversion, before defer injection.
 - [x] Mark functions transitively containing `shift` as "needs CPS".
-- [x] Transform marked functions: convert return to tail call into continuation, wrap body in continuation application.
+- [ ] Transform marked functions: convert return to tail call into continuation, wrap body in continuation application. **Partial: stub implementation in place, full transformation deferred**
 - [x] Direct-style functions remain unchanged — no overhead.
 - [x] Closure conversion: captured continuations become ordinary closures (`struct {fn_ptr; env*}`).
-- [x] `reset` lowers to: allocate continuation frame, invoke body with identity continuation, return result.
-- [x] `shift` lowers to: capture current continuation (env + PC), pass to `k`, tail-call into `k`'s result.
-- [x] Continuation frames are heap-allocated (they escape their defining scope by definition).
+- [ ] `reset` lowers to: allocate continuation frame, invoke body with identity continuation, return result. **Deferred: emitter stub in place**
+- [ ] `shift` lowers to: capture current continuation (env + PC), pass to `k`, tail-call into `k`'s result. **Deferred: emitter stub in place**
+- [ ] Continuation frames are heap-allocated (they escape their defining scope by definition). **Deferred: runtime functions not implemented**
 
 **Interaction with defer and ref** — per [effects-plan.md §6](effects-plan.md)
 - [x] **S2 strategy (chosen):** Defer bodies are attached to continuation frames. When a continuation is captured, the scope frames between capture point and `reset` boundary are heap-allocated and attached to the continuation.
@@ -243,14 +243,14 @@
 - [x] `shift0` provides a type-safe way to get one-shot continuations (the function passed to `shift0` cannot call the continuation).
 
 **Continuation frame structure** — `src/runtime.{c,h}` extensions
-- [x] Extend `tur_frame` (from Phase 4) to support continuation capture:
+- [ ] Extend `tur_frame` (from Phase 4) to support continuation capture:
   - Add `continuation` field: function pointer for resume.
   - Add `env` field: captured environment.
   - Add `parent` field: parent continuation frame.
   - Add `n_captured_frames` and `captured_frames[]`: scopes captured by this continuation.
-- [x] `tur_cont_alloc()`: allocate continuation frame with captured scope chain.
-- [x] `tur_cont_resume(cont, value)`: resume continuation with value. Consumes the continuation (one-shot).
-- [x] `tur_cont_drop(cont)`: drop continuation without resume; fire defers on captured frames.
+- [ ] `tur_cont_alloc()`: allocate continuation frame with captured scope chain.
+- [ ] `tur_cont_resume(cont, value)`: resume continuation with value. Consumes the continuation (one-shot).
+- [ ] `tur_cont_drop(cont)`: drop continuation without resume; fire defers on captured frames.
 
 **Built-in continuations**
 - [ ] `(call/cc f)` — sugar for `(reset (shift k (f k)))` — captures the *current* continuation (not delimited). Deferred to v2 (requires more runtime support).
@@ -278,7 +278,7 @@
 
 **Prerequisites verification**
 - [x] Phase 4 unified defer model is in place (§6.10 of effects-plan.md).
-- [x] Phase 18 delimited continuations are working.
+- [ ] Phase 18 delimited continuations are working. **Partial: CPS pass and effect lowering stubs in place, runtime not implemented**
 - [x] Effect row slots in function types are reserved (Phase 4).
 - [x] `may_capture` bits on functions are reserved (Phase 4).
 
@@ -306,12 +306,12 @@
 - [ ] Effects can be re-opened (add new constructors to existing effect type).
 
 **Effect handling** — lowering
-- [ ] `perform (E args...)` lowers to: `shift k -> (dispatch-to-handler E args k)`.
-- [ ] `handle expr cases...` lowers to: `reset (push-handler-stack; expr; pop-handler-stack)`.
+- [ ] `perform (E args...)` lowers to: `shift k -> (dispatch-to-handler E args k)`. **Stub: effect_lower.c passes through, full impl deferred**
+- [ ] `handle expr cases...` lowers to: `reset (push-handler-stack; expr; pop-handler-stack)`. **Stub: effect_lower.c passes through, full impl deferred**
 - [ ] Handler stack is a per-fiber linked list (TLS in single-threaded v1).
 - [ ] Handler dispatch: walk handler stack for first matching case; call it with args and continuation.
-- [ ] `resume k v` lowers to: `continue k v` (consumes k, one-shot).
-- [ ] `discontinue k e` lowers to: `throw e` (but in the context of the handler).
+- [ ] `resume k v` lowers to: `continue k v` (consumes k, one-shot). **Stub: CPS pass handles, emitter stub in place**
+- [ ] `discontinue k e` lowers to: `throw e` (but in the context of the handler). **Stub: CPS pass handles, emitter stub in place**
 
 **Defer integration — S2 strategy** (per [effects-plan.md §6.2](effects-plan.md))
 - [ ] When a continuation is captured (at `perform`), walk captured scope frames and heap-allocate them if not already heap.
