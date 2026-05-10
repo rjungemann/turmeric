@@ -35,6 +35,8 @@ typedef struct EmitCtx {
     /* Phase 4 v1: For defer thunk emission with captures */
     Binding **defer_captures;    /* Current defer thunk's captures (NULL if none) */
     uint8_t n_defer_captures;
+    /* Phase 3/4: Track if a return has been emitted in the current scope */
+    bool return_emitted;
 } EmitCtx;
 
 /* Phase 4 v1: Defer thunk tracking */
@@ -64,6 +66,37 @@ static Type type_from_kind(TypeKind k) {
 
 static void indent_buf(Buf *b, int n) {
     for (int i = 0; i < n; i++) buf_putc(b, ' ');
+}
+
+/* Phase 3/4: Helper to check if an expression contains return or throw */
+static bool expr_contains_return_or_throw(const Expr *e) {
+    switch (e->kind) {
+        case EX_RETURN:
+        case EX_THROW:
+            return true;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++) {
+                if (expr_contains_return_or_throw(e->as.do_.items[i])) {
+                    return true;
+                }
+            }
+            return false;
+        case EX_LET:
+            /* Check body for return/throw */
+            return expr_contains_return_or_throw(e->as.let_.body);
+        case EX_IF:
+            /* Check both branches */
+            if (expr_contains_return_or_throw(e->as.if_.then_)) return true;
+            if (e->as.if_.else_or_null) {
+                return expr_contains_return_or_throw(e->as.if_.else_or_null);
+            }
+            return false;
+        case EX_WHILE:
+            /* Check body */
+            return expr_contains_return_or_throw(e->as.while_.body);
+        default:
+            return false;
+    }
 }
 
 static char *fresh_tmp(EmitCtx *ctx) {
@@ -416,9 +449,12 @@ static char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
 /* ------------ block-shaped emitters ------------ */
 
 static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
+    /* Phase 3/4: Check if body contains return or throw first */
+    bool body_has_return_or_throw = expr_contains_return_or_throw(e->as.let_.body);
+    
     char *tmp = NULL;
     bool nil_result = (e->type.kind == TY_NIL);
-    if (!nil_result) {
+    if (!nil_result && !body_has_return_or_throw) {
         tmp = fresh_tmp(ctx);
         indent_buf(body, ctx->indent);
         buf_printf(body, "%s %s;\n", type_c_name(e->type), tmp);
@@ -453,6 +489,17 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         free(iv);
     }
 
+    if (body_has_return_or_throw) {
+        /* Body contains return/throw - emit as statement, don't create temp variable */
+        emit_stmt(ctx, body, e->as.let_.body);
+        /* Close scope */
+        ctx->indent -= 4;
+        indent_buf(body, ctx->indent);
+        buf_puts(body, "}\n");
+        /* Return nil - the function will use this to know not to expect a value */
+        return atom_nil();
+    }
+    
     if (nil_result) {
         emit_stmt(ctx, body, e->as.let_.body);
     } else {
@@ -470,9 +517,15 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
 }
 
 static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
+    /* Phase 3/4: Check if branches contain return or throw */
+    bool then_has_return_or_throw = expr_contains_return_or_throw(e->as.if_.then_);
+    bool else_has_return_or_throw = e->as.if_.else_or_null ? 
+        expr_contains_return_or_throw(e->as.if_.else_or_null) : false;
+    bool any_has_return_or_throw = then_has_return_or_throw || else_has_return_or_throw;
+    
     char *tmp = NULL;
     bool nil_result = (e->type.kind == TY_NIL);
-    if (!nil_result) {
+    if (!nil_result && !any_has_return_or_throw) {
         tmp = fresh_tmp(ctx);
         indent_buf(body, ctx->indent);
         buf_printf(body, "%s %s;\n", type_c_name(e->type), tmp);
@@ -482,7 +535,7 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     buf_printf(body, "if (%s) {\n", cond);
     free(cond);
     ctx->indent += 4;
-    if (nil_result) {
+    if (nil_result || any_has_return_or_throw) {
         emit_stmt(ctx, body, e->as.if_.then_);
     } else {
         char *t = emit_value(ctx, body, e->as.if_.then_);
@@ -495,8 +548,9 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     buf_puts(body, "} else {\n");
     ctx->indent += 4;
     if (e->as.if_.else_or_null) {
-        if (nil_result) emit_stmt(ctx, body, e->as.if_.else_or_null);
-        else {
+        if (nil_result || any_has_return_or_throw) {
+            emit_stmt(ctx, body, e->as.if_.else_or_null);
+        } else {
             char *el = emit_value(ctx, body, e->as.if_.else_or_null);
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s = %s;\n", tmp, el);
@@ -531,13 +585,21 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     uint32_t n = e->as.do_.n;
     if (n == 0) return atom_nil();
 
-    /* Check if we have any defers in this scope */
+    /* Phase 3/4: Check if there's a return/throw or defer in this do block */
+    bool has_return_or_throw = false;
     bool has_defers = false;
     for (uint32_t i = 0; i < n; i++) {
-        if (e->as.do_.items[i]->kind == EX_DEFER) {
+        const Expr *it = e->as.do_.items[i];
+        if (it->kind == EX_DEFER) {
             has_defers = true;
-            break;
+        } else if (expr_contains_return_or_throw(it)) {
+            has_return_or_throw = true;
         }
+    }
+    
+    /* If there's a return/throw, we need frame support for defer firing */
+    if (has_return_or_throw) {
+        has_defers = true;
     }
 
     if (!has_defers) {
@@ -557,7 +619,11 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         char *result = NULL;
         if (last_value_idx >= 0) {
             const Expr *last = e->as.do_.items[last_value_idx];
-            if (last->type.kind == TY_NIL) {
+            /* Phase 3/4: If last item is return or throw, emit as statement only */
+            if (last->kind == EX_RETURN || last->kind == EX_THROW) {
+                emit_stmt(ctx, body, last);
+                return atom_nil();
+            } else if (last->type.kind == TY_NIL) {
                 emit_stmt(ctx, body, last);
             } else {
                 result = fresh_tmp(ctx);
@@ -592,6 +658,53 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     int last_value_idx = -1;
     for (int i = (int)n - 1; i >= 0; i--) {
         if (e->as.do_.items[i]->kind != EX_DEFER) { last_value_idx = i; break; }
+    }
+
+    /* Phase 3/4: If there's a return or throw, emit all items as statements */
+    if (has_return_or_throw) {
+        /* Emit all items, registering defers */
+        for (uint32_t i = 0; i < n; i++) {
+            const Expr *it = e->as.do_.items[i];
+            if (it->kind == EX_DEFER) {
+                /* Register defer thunks */
+                const Expr *defer_expr = it->as.defer_.body;
+                const uint8_t n_captures = it->as.defer_.n_captures;
+                Binding **captures = it->as.defer_.captures;
+                
+                if (n_captures == 0) {
+                    char *thunk_name = fresh_defer_thunk(ctx);
+                    register_defer_thunk(ctx, thunk_name, defer_expr, captures, n_captures, NULL);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "tur_frame_push_defer(&%s, %s, NULL);\n", frame_var, thunk_name);
+                } else {
+                    char *env_name = fresh_defer_env(ctx);
+                    char *thunk_name = fresh_defer_thunk(ctx);
+                    register_defer_thunk(ctx, thunk_name, defer_expr, captures, n_captures, env_name);
+                    
+                    char *env_tmp = fresh_tmp(ctx);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "struct %s %s = {", env_name, env_tmp);
+                    for (uint8_t j = 0; j < n_captures; j++) {
+                        if (j > 0) buf_puts(body, ", ");
+                        char *cn = name_for_binding(ctx, captures[j]);
+                        buf_printf(body, ".%s = %s", captures[j]->name->name, cn);
+                        free(cn);
+                    }
+                    buf_puts(body, "};\n");
+                    
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "tur_frame_push_defer(&%s, %s, &%s);\n", frame_var, thunk_name, env_tmp);
+                    free(env_tmp);
+                }
+            } else {
+                emit_stmt(ctx, body, it);
+            }
+        }
+        
+        /* Don't emit cleanup code - return/throw already handles it */
+        ctx->frame_var = saved_frame;
+        free(frame_var);
+        return atom_nil();
     }
 
     /* Emit non-defer items and register defer thunks */
@@ -982,6 +1095,17 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* Defer in value position: emit as nil (defer evaluates to nil) */
             /* The body is emitted as a statement in emit_stmt */
             return atom_nil();
+        }
+        case EX_RETURN: {
+            /* (return expr) or (return) - in value position, just emit the value expression
+             * The return statement itself will be emitted by emit_stmt */
+            if (e->as.return_.value) {
+                return emit_value(ctx, body, e->as.return_.value);
+            } else {
+                /* return with no value - this is only valid in void functions */
+                /* Emit a placeholder */
+                return atom_nil();
+            }
         }
         /* Phase 5 */
         case EX_REF: {
@@ -1475,6 +1599,30 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             emit_stmt(ctx, body, e->as.defer_.body);
             return;
         }
+        /* Phase 3/4: return */
+        case EX_RETURN: {
+            /* (return) or (return expr) - emit full return statement with defer firing */
+            
+            /* Set flag to indicate return has been emitted */
+            ctx->return_emitted = true;
+            
+            /* Fire all defers in the frame chain if we're in a scope with defers */
+            if (ctx->frame_var) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "tur_frame_fire_chain(&%s);\n", ctx->frame_var);
+            }
+            
+            /* Emit the return statement */
+            indent_buf(body, ctx->indent);
+            if (e->as.return_.value) {
+                char *val = emit_value(ctx, body, e->as.return_.value);
+                buf_printf(body, "return %s;\n", val);
+                free(val);
+            } else {
+                buf_puts(body, "return;\n");
+            }
+            return;
+        }
         /* Phase 5 */
         case EX_REF: {
             /* (ref expr) as statement - emit and discard */
@@ -1637,7 +1785,13 @@ static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* Get the return type */
     TypeKind result_kind = e->type.kind == TY_FN ? e->type.as.fn.result_kind : TY_NIL;
 
-    if (result_kind == TY_NIL && !is_main) {
+    /* Phase 3/4: Check if body contains return/throw */
+    bool body_has_return_or_throw = expr_contains_return_or_throw(fd->body);
+    
+    if (body_has_return_or_throw) {
+        /* Body contains a return/throw - emit as statements only */
+        emit_stmt(ctx, file, fd->body);
+    } else if (result_kind == TY_NIL && !is_main) {
         /* void function - emit body as statements */
         emit_stmt(ctx, file, fd->body);
     } else {
@@ -1714,6 +1868,8 @@ int emit_program(Buf *out, const Expr *program) {
     /* Phase 4 v1: defer captures tracking */
     ctx.defer_captures = NULL;
     ctx.n_defer_captures = 0;
+    /* Phase 3/4: Track return emission */
+    ctx.return_emitted = false;
 
     /* Check if user defined a main function */
     bool user_has_main = false;
@@ -1824,6 +1980,16 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "static void tur_frame_fire_lifo(tur_frame *f) {\n");
     buf_puts(out, "    for (int i = f->n - 1; i >= 0; i--) f->defers[i](f->envs[i]);\n");
     buf_puts(out, "    f->n = 0;\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static void tur_frame_fire_chain(tur_frame *f) {\n");
+    buf_puts(out, "    tur_frame *frames[64];\n");
+    buf_puts(out, "    int n_frames = 0;\n");
+    buf_puts(out, "    for (tur_frame *cur = f; cur != NULL && n_frames < 64; cur = cur->parent) {\n");
+    buf_puts(out, "        frames[n_frames++] = cur;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    for (int i = n_frames - 1; i >= 0; i--) {\n");
+    buf_puts(out, "        tur_frame_fire_lifo(frames[i]);\n");
+    buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
     
     /* Phase 17: Exception runtime (inline from exn.h/c) */
@@ -2198,6 +2364,8 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program) 
     ctx.env_struct_names = NULL;
     ctx.n_env_struct_names = 0;
     ctx.cap_env_struct_names = 0;
+    /* Phase 3/4: Track return emission */
+    ctx.return_emitted = false;
     char guard[256];
     sanitize_module_name(guard, module_name, sizeof(guard));
 

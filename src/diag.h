@@ -31,12 +31,35 @@ typedef enum DiagLevel {
 
 #define DIAG_CONTEXT_LINES 2  /* Number of context lines before/after the error line */
 
+/* Reader types for #lang dispatch (Phase S1) */
+typedef enum ReaderType {
+    READER_UNKNOWN = -1,   /* Unknown/invalid #lang directive */
+    READER_TURMERIC,       /* Default s-expression reader */
+    READER_CURLY_INFIX,    /* Turmeric + curly-infix (SRFI-105) */
+    READER_NEOTERIC,       /* Turmeric + neoteric notation */
+    READER_SWEET,          /* Full sweet-expressions */
+} ReaderType;
+
 typedef struct SourceFile {
     const char *path;
     const char *src;     /* full source text */
     size_t      len;
     uint16_t    file_id;
+    ReaderType  reader_type;  /* Phase S1: for enabling syntax features */
 } SourceFile;
+
+/* Detect #lang directive from file source (Phase S0) */
+ReaderType detect_lang(const char *src, size_t len, const char **out_rest, 
+                       size_t *out_rest_len);
+
+/* Get reader type from file extension (Phase S0) */
+ReaderType reader_type_from_extension(const char *path);
+
+/* Get reader type name as string (Phase S0) */
+const char *reader_type_name(ReaderType type);
+
+/* Check if a reader type is implemented (Phase S0) */
+bool reader_type_is_implemented(ReaderType type);
 
 /* Underline style for diagnostics */
 typedef enum UnderlineStyle {

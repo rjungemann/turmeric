@@ -25,6 +25,30 @@ static const char *basename_of(const char *path) {
     return s ? s + 1 : path;
 }
 
+/* Helper to detect language and adjust source for #lang directive */
+static ReaderType detect_and_adjust_lang(const char *path, char *src, size_t len,
+                                        const char **out_src, size_t *out_len) {
+    const char *src_rest = src;
+    size_t len_rest = len;
+    ReaderType detected_type = reader_type_from_extension(path);
+    
+    /* Only parse #lang if file extension didn't already select sweet */
+    if (detected_type == READER_TURMERIC) {
+        detected_type = detect_lang(src, len, &src_rest, &len_rest);
+    }
+    
+    /* Check if the reader is implemented */
+    if (!reader_type_is_implemented(detected_type)) {
+        fprintf(stderr, "tur: error: #lang %s is not yet implemented\n", 
+                reader_type_name(detected_type));
+        exit(1);
+    }
+    
+    *out_src = src_rest;
+    *out_len = len_rest;
+    return detected_type;
+}
+
 static int read_entire_file(const char *path, char **out, size_t *out_len) {
     FILE *f = fopen(path, "rb");
     if (!f) {
@@ -54,11 +78,17 @@ static int compile_to_c(const char *path, Buf *out_c) {
     size_t len = 0;
     if (read_entire_file(path, &src, &len) != 0) return 2;
 
+    /* Detect language and adjust source for #lang directive */
+    const char *src_adj = src;
+    size_t len_adj = len;
+    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj);
+
     SourceFile file = {0};
     file.path = path;
-    file.src = src;
-    file.len = len;
+    file.src = src_adj;
+    file.len = len_adj;
     file.file_id = 0;
+    file.reader_type = reader_type;
     diag_register_file(&file);
 
     Arena arena;
@@ -101,6 +131,7 @@ static int compile_to_c(const char *path, Buf *out_c) {
             stdlib_file->src = src_copy;
             stdlib_file->len = stdlib_len;
             stdlib_file->file_id = file_id++;
+            stdlib_file->reader_type = READER_TURMERIC;  /* Stdlib is always plain s-exprs */
             diag_register_file(stdlib_file);
 
             uint32_t stdlib_nforms = 0;
@@ -164,11 +195,17 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name) {
     size_t len = 0;
     if (read_entire_file(path, &src, &len) != 0) return 2;
 
+    /* Detect language and adjust source for #lang directive */
+    const char *src_adj = src;
+    size_t len_adj = len;
+    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj);
+
     SourceFile file = {0};
     file.path = path;
-    file.src = src;
-    file.len = len;
+    file.src = src_adj;
+    file.len = len_adj;
     file.file_id = 0;
+    file.reader_type = reader_type;
     diag_register_file(&file);
 
     Arena arena;
@@ -206,11 +243,17 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
     size_t len = 0;
     if (read_entire_file(path, &src, &len) != 0) return 2;
 
+    /* Detect language and adjust source for #lang directive */
+    const char *src_adj = src;
+    size_t len_adj = len;
+    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj);
+
     SourceFile file = {0};
     file.path = path;
-    file.src = src;
-    file.len = len;
+    file.src = src_adj;
+    file.len = len_adj;
     file.file_id = 0;
+    file.reader_type = reader_type;
     diag_register_file(&file);
 
     Arena arena;
@@ -552,6 +595,7 @@ static int cmd_explain(const char *code) {
     file.src = code;
     file.len = strlen(code);
     file.file_id = 0;
+    file.reader_type = READER_TURMERIC;  /* Default for explain snippets */
     diag_register_file(&file);
 
     Arena arena;

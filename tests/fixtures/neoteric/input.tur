@@ -1,0 +1,5 @@
+#lang turmeric/neoteric
+
+(println +(1 2))
+(println 42)
+(println *(2 3))

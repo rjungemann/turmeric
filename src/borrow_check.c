@@ -219,6 +219,12 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
         case EX_DEFER:
             /* Check defer body */
             return borrow_check_expr_recursive(ctx, e->as.defer_.body);
+        case EX_RETURN:
+            /* Check return value */
+            if (e->as.return_.value) {
+                return borrow_check_expr_recursive(ctx, e->as.return_.value);
+            }
+            return true;
             
         case EX_REF:
         case EX_DEREF:

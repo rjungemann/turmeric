@@ -54,6 +54,7 @@ typedef enum ExprKind {
     EX_EXTERN_C,        /* Phase 2: extern C declaration */
     EX_INLINE_C,        /* Phase 2: inline C block */
     EX_CLOSURE,         /* Phase 3: closure with captured env */
+    EX_RETURN,          /* Phase 3/4: early return with defer firing */
     EX_DEFER,           /* Phase 4: defer expression */
     /* Phase 5: ref<T> with move semantics */
     EX_REF,             /* (ref expr) - owning reference constructor */
@@ -177,6 +178,8 @@ struct Expr {
             Binding **captures;       /* captured bindings from enclosing scope */
             uint8_t n_captures;
         } defer_;
+        /* Phase 3/4: (return) or (return expr) - early return with defer firing */
+        struct { Expr *value; } return_;
         /* Phase 5 */
         struct { Expr *expr; }        ref_;    /* (ref expr) - inner expression */
         struct { Expr *expr; }        deref_;  /* (@ expr) - expression to dereference */

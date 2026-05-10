@@ -259,6 +259,7 @@ typedef struct Elab {
     const Symbol *sym_extern_c; /* Phase 2 */
     const Symbol *sym_caret_mut;   /* ^mut */
     const Symbol *sym_defer;      /* Phase 4 */
+    const Symbol *sym_return;     /* return - early return with defer firing */
     /* Phase 5 */
     const Symbol *sym_ref;        /* ref */
     const Symbol *sym_deref;      /* @ (deref operator) - stored as symbol for parsing */
@@ -392,6 +393,7 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_extern_c  = intern_cstr(st, "extern-c");
     e->sym_caret_mut = intern_cstr(st, "^mut");
     e->sym_defer     = intern_cstr(st, "defer");
+    e->sym_return    = intern_cstr(st, "return");
     /* Phase 5 */
     e->sym_ref       = intern_cstr(st, "ref");
     e->sym_deref     = intern_cstr(st, "deref");
@@ -1234,6 +1236,47 @@ static Expr *elab_defer(Elab *e, const Form *call) {
     out->as.defer_.body = body;
     out->as.defer_.captures = captures;
     out->as.defer_.n_captures = n_captures;
+    return out;
+}
+
+/* Phase 3/4: return — (return) or (return expr)
+ * Early return from a function, firing all defers in the scope chain.
+ * 
+ * Grammar: (return) or (return expr)
+ * The return value type must match the function's return type.
+ * 
+ * Per effects-plan.md §6.10: "return: walk every enclosing frame, fire defers 
+ * per frame, then function-exit." The codegen emits tur_frame_fire_chain to 
+ * walk the parent chain and fire all defers before returning.
+ */
+static Expr *elab_return(Elab *e, const Form *call) {
+    /* return is only valid inside function bodies */
+    if (e->scope == &e->global) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "return is not allowed at module top level");
+        return NULL;
+    }
+    
+    /* Check number of arguments */
+    if (call->as.list.len > 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "return takes at most one argument: (return) or (return expr)");
+        return NULL;
+    }
+    
+    Expr *value = NULL;
+    if (call->as.list.len == 2) {
+        /* (return expr) */
+        value = elab_form(e, call->as.list.items[1]);
+        if (!value) return NULL;
+    }
+    
+    /* Create EX_RETURN expression */
+    /* The type will be determined by the function's return type during type checking.
+     * For now, use the value's type or NIL if no value. */
+    Type return_type = value ? value->type : TYPE_NIL;
+    Expr *out = expr_new(e->arena, EX_RETURN, return_type, call->span);
+    out->as.return_.value = value;
     return out;
 }
 
@@ -2790,6 +2833,7 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_cond)   return elab_cond  (e, call);
     /* Phase 4 */
     if (name == e->sym_defer)  return elab_defer (e, call);
+    if (name == e->sym_return) return elab_return(e, call);
     /* Phase 5 */
     if (name == e->sym_ref)    return elab_ref   (e, call);
     if (name == e->sym_deref)  return elab_deref (e, call);

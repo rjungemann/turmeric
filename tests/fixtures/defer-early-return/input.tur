@@ -1,0 +1,48 @@
+;; Test fixture for early return with defer firing
+;; This tests that defers are fired correctly when return is used
+
+(defn test-return-no-defer [] :int
+  (return 42))
+
+(defn test-return-with-defer [] :int
+  (defer (println "defer-1"))
+  (return 42))
+
+(defn test-return-in-nested-scope [] :int
+  (let [x 1]
+    (defer (println "outer-defer"))
+    (let [y 2]
+      (defer (println "inner-defer"))
+      (return 42))))
+
+(defn test-return-in-if [] :int
+  (defer (println "defer-before-if"))
+  (if true
+    (do
+      (defer (println "defer-in-then"))
+      (return 42))
+    0))
+
+(defn main [] :int
+  (println "Testing early return with defers...")
+  
+  ;; Test 1: return with no defer
+  (let [r1 (test-return-no-defer)]
+    (println r1))
+  
+  ;; Test 2: return with defer in same scope
+  (println "test-return-with-defer:")
+  (let [r2 (test-return-with-defer)]
+    (println r2))
+  
+  ;; Test 3: return in nested scope
+  (println "test-return-in-nested-scope:")
+  (let [r3 (test-return-in-nested-scope)]
+    (println r3))
+  
+  ;; Test 4: return in if
+  (println "test-return-in-if:")
+  (let [r4 (test-return-in-if)]
+    (println r4))
+  
+  0)

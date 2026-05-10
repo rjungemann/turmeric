@@ -1,0 +1,2 @@
+#lang turmeric
+(println "hello")

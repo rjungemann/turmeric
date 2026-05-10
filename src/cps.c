@@ -71,6 +71,8 @@ bool cps_expr_contains_shift(const Expr *e) {
             return cps_fn_needs_transform(e->as.closure_.closure->fn);
         case EX_DEFER:
             return cps_expr_contains_shift(e->as.defer_.body);
+        case EX_RETURN:
+            return e->as.return_.value && cps_expr_contains_shift(e->as.return_.value);
         case EX_THROW:
             return cps_expr_contains_shift(e->as.throw_.payload);
         case EX_TRY:

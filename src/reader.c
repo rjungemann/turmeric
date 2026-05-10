@@ -15,7 +15,15 @@ typedef struct Reader {
     uint32_t          line;
     uint32_t          col;
     bool              error;
+    /* Phase S1: Curly-infix support */
+    bool              curly_infix_enabled;
+    /* Phase S2: Neoteric support */
+    bool              neoteric_enabled;
 } Reader;
+
+/* Forward declarations for neoteric support */
+static int peek_neoteric_bracket(const Reader *r);
+static Form *read_neoteric_bracket(Reader *r, Form *atom, int bracket);
 
 static Span span_from_to(const Reader *r,
                          uint32_t start_line, uint32_t start_col,
@@ -176,6 +184,15 @@ static Form *read_string(Reader *r) {
     Form *f = form_new(r->arena, F_STR, span);
     f->as.s.p = buf;
     f->as.s.len = (uint32_t)bi;
+    
+    /* Phase S2: Check for neoteric bracket immediately following string */
+    if (r->neoteric_enabled) {
+        int bracket = peek_neoteric_bracket(r);
+        if (bracket != -1) {
+            return read_neoteric_bracket(r, f, bracket);
+        }
+    }
+    
     return f;
 }
 
@@ -228,7 +245,17 @@ static Form *read_number(Reader *r, int sign) {
     }
     if (sign < 0) val = -val;
     Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
-    return form_int(r->arena, span, val);
+    Form *atom = form_int(r->arena, span, val);
+    
+    /* Phase S2: Check for neoteric bracket immediately following number */
+    if (r->neoteric_enabled) {
+        int bracket = peek_neoteric_bracket(r);
+        if (bracket != -1) {
+            return read_neoteric_bracket(r, atom, bracket);
+        }
+    }
+    
+    return atom;
 }
 
 static Form *read_keyword(Reader *r) {
@@ -397,7 +424,17 @@ static Form *read_symbol_or_minus(Reader *r) {
         return form_bool(r->arena, span, false);
 
     const Symbol *sym = symtab_intern(r->st, name);
-    return form_sym(r->arena, span, sym);
+    Form *atom = form_sym(r->arena, span, sym);
+    
+    /* Phase S2: Check for neoteric bracket immediately following atom */
+    if (r->neoteric_enabled) {
+        int bracket = peek_neoteric_bracket(r);
+        if (bracket != -1) {
+            return read_neoteric_bracket(r, atom, bracket);
+        }
+    }
+    
+    return atom;
 }
 
 static Form *read_seq(Reader *r, char open, char close, FormTag tag,
@@ -520,11 +557,229 @@ static Form *read_cblock(Reader *r) {
     return form_cblock(r->arena, span, code);
 }
 
+/* Phase S2: Helper to check if neoteric bracket follows */
+/* Returns the bracket char if found (with no whitespace), or -1 if not */
+static int peek_neoteric_bracket(const Reader *r) {
+    int c = peek(r);
+    if (c == '(' || c == '{' || c == '[') {
+        return c;
+    }
+    return -1;
+}
+
+/* Phase S2: Read neoteric bracketed expression after an atom */
+/* f(expr) -> (f expr), f{expr} -> (f expr), f[expr] -> (bracketapply f expr) */
+static Form *read_neoteric_bracket(Reader *r, Form *atom, int bracket) {
+    uint32_t start_line = r->line;
+    uint32_t start_col = r->col;
+    size_t start_off = r->pos;
+    
+    /* Consume the opening bracket */
+    advance(r);
+    
+    /* Read the content inside the bracket */
+    Form **items = NULL;
+    size_t cap = 0, n = 0;
+    char close_bracket;
+    
+    switch (bracket) {
+        case '(': close_bracket = ')'; break;
+        case '{': close_bracket = '}'; break;
+        case '[': close_bracket = ']'; break;
+        default: return atom; /* Shouldn't happen */
+    }
+    
+    for (;;) {
+        skip_ws_and_comments(r);
+        int c = peek(r);
+        if (c == -1) {
+            Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
+            const char *bracket_name = (bracket == '(') ? "parentheses" : 
+                                       (bracket == '{') ? "braces" : "brackets";
+            diag_emit(DIAG_ERROR, s, "unterminated neoteric %s (missing '%c')", 
+                      bracket_name, close_bracket);
+            r->error = true;
+            free(items);
+            return NULL;
+        }
+        if (c == close_bracket) {
+            advance(r);
+            break;
+        }
+        Form *child = read_form(r);
+        if (!child) {
+            free(items);
+            return NULL;
+        }
+        if (n == cap) {
+            cap = cap ? cap * 2 : 4;
+            items = (Form **)realloc(items, cap * sizeof(Form *));
+            if (!items) { fprintf(stderr, "tur: oom\n"); abort(); }
+        }
+        items[n++] = child;
+    }
+    
+    /* Create the final call form */
+    Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
+    
+    /* For neoteric: f(x y z) -> (f x y z), not (f (x y z)) */
+    /* We need to spread the items as separate arguments */
+    
+    Form **call_items = (Form **)arena_alloc(r->arena, (n + 1) * sizeof(Form *));
+    call_items[0] = atom;
+    for (uint32_t i = 0; i < n; i++) {
+        call_items[i + 1] = items[i];
+    }
+    free(items);
+    
+    if (bracket == '[' && n == 1) {
+        /* Special case: f[x] -> (bracketapply f x) */
+        const Symbol *bracketapply_sym = symtab_intern(r->st, strslice("bracketapply", 12));
+        Form **ba_items = (Form **)arena_alloc(r->arena, 3 * sizeof(Form *));
+        ba_items[0] = form_sym(r->arena, span, bracketapply_sym);
+        ba_items[1] = atom;
+        ba_items[2] = call_items[1]; /* the single argument */
+        free(call_items);
+        return form_list(r->arena, span, ba_items, 3);
+    }
+    
+    return form_list(r->arena, span, call_items, n + 1);
+}
+
+/* Phase S1: Read curly-infix expression {a + b} -> (+ a b) */
+static Form *read_curly_infix(Reader *r) {
+    uint32_t start_line = r->line;
+    uint32_t start_col = r->col;
+    size_t start_off = r->pos;
+    advance(r); /* consume '{' */
+
+    Form **items = NULL;
+    size_t cap = 0, n = 0;
+
+    for (;;) {
+        skip_ws_and_comments(r);
+        int c = peek(r);
+        if (c == -1) {
+            Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
+            diag_emit(DIAG_ERROR, s, "unterminated curly-infix expression (missing '}')");
+            r->error = true;
+            free(items);
+            return NULL;
+        }
+        if (c == '}') {
+            advance(r);
+            break;
+        }
+        Form *child = read_form(r);
+        if (!child) {
+            free(items);
+            return NULL;
+        }
+        if (n == cap) {
+            cap = cap ? cap * 2 : 4;
+            items = (Form **)realloc(items, cap * sizeof(Form *));
+            if (!items) { fprintf(stderr, "tur: oom\n"); abort(); }
+        }
+        items[n++] = child;
+    }
+
+    /* Handle special cases per SRFI-105 */
+    if (n == 0) {
+        /* Empty { } */
+        Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
+        return form_list(r->arena, span, NULL, 0);
+    } else if (n == 1) {
+        /* {e} -> e */
+        return items[0];
+    } else if (n == 2) {
+        /* {e1 e2} -> (e1 e2) - function call */
+        Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
+        Form *result = form_list(r->arena, span, items, (uint32_t)n);
+        free(items);
+        return result;
+    }
+
+    /* Check if all operators are the same (homogeneous infix) */
+    /* Per SRFI-105: {a + b + c} -> (+ a b c) if all operators are + */
+    /* Mixed operators: {a + b * c} -> ($nfx$ a + b * c) */
+    bool all_same_op = true;
+    const Symbol *first_op = NULL;
+    
+    for (uint32_t i = 0; i < n; i++) {
+        if (items[i]->tag == F_SYM) {
+            if (first_op == NULL) {
+                first_op = items[i]->as.sym;
+            } else if (items[i]->as.sym != first_op) {
+                all_same_op = false;
+                break;
+            }
+        }
+    }
+
+    Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
+    
+    if (all_same_op && first_op != NULL) {
+        /* Homogeneous: all operators are the same */
+        /* Rearrange: {a + b + c} where + is the operator
+         * We need to identify which items are operators vs operands
+         * In SRFI-105, operators alternate with operands: a + b + c
+         * So operators are at odd indices (1, 3, ...) if we start with operand
+         * But we need to handle both cases */
+        
+        /* Collect all operator positions */
+        Form **operands = (Form **)arena_alloc(r->arena, n * sizeof(Form *));
+        uint32_t op_count = 0;
+        
+        for (uint32_t i = 0; i < n; i++) {
+            if (items[i]->tag == F_SYM && items[i]->as.sym == first_op) {
+                /* This is the operator - skip it, it's the same for all */
+            } else {
+                operands[op_count++] = items[i];
+            }
+        }
+        
+        /* Create the call: (op arg1 arg2 ...) */
+        Form **call_items = (Form **)arena_alloc(r->arena, (op_count + 1) * sizeof(Form *));
+        call_items[0] = form_sym(r->arena, span, first_op);
+        for (uint32_t i = 0; i < op_count; i++) {
+            call_items[i + 1] = operands[i];
+        }
+        
+        free(items);
+        return form_list(r->arena, span, call_items, op_count + 1);
+    } else {
+        /* Mixed operators or no operators - use $nfx$ macro */
+        /* Create ($nfx$ a + b * c) */
+        const Symbol *nfx_sym = symtab_intern(r->st, strslice("$nfx$", 5));
+        Form **nfx_items = (Form **)arena_alloc(r->arena, (n + 1) * sizeof(Form *));
+        nfx_items[0] = form_sym(r->arena, span, nfx_sym);
+        for (uint32_t i = 0; i < n; i++) {
+            nfx_items[i + 1] = items[i];
+        }
+        free(items);
+        return form_list(r->arena, span, nfx_items, n + 1);
+    }
+}
+
 static Form *read_form(Reader *r) {
     skip_ws_and_comments(r);
     int c = peek(r);
     if (c == -1) return NULL;
 
+    /* Phase S1: Curly-infix support */
+    if (c == '{') {
+        if (r->curly_infix_enabled) {
+            return read_curly_infix(r);
+        } else {
+            /* { is reserved for SRFI-105 curly-infix - error in plain turmeric */
+            Span s = span_point(r);
+            diag_emit(DIAG_ERROR, s, "'{' is reserved for curly-infix; use #lang turmeric/curly-infix to enable it");
+            r->error = true;
+            advance(r);
+            return NULL;
+        }
+    }
+    
     if (c == '(') return read_seq(r, '(', ')', F_LIST, "unterminated list (missing ')')");
     if (c == '[') return read_seq(r, '[', ']', F_VEC,  "unterminated vector (missing ']')");
     if (c == ')' || c == ']') {
@@ -575,6 +830,28 @@ Form **read_all(Arena *arena, SymbolTable *st, const SourceFile *file,
     r.line = 1;
     r.col = 1;
     r.error = false;
+    /* Phase S1: Set syntax feature flags based on reader type from SourceFile */
+    r.curly_infix_enabled = false;
+    r.neoteric_enabled = false;
+    
+    switch (file->reader_type) {
+        case READER_TURMERIC:
+            /* Standard s-expression syntax only */
+            break;
+        case READER_CURLY_INFIX:
+            r.curly_infix_enabled = true;
+            break;
+        case READER_NEOTERIC:
+            r.curly_infix_enabled = true;
+            r.neoteric_enabled = true;
+            break;
+        case READER_SWEET:
+            r.curly_infix_enabled = true;
+            r.neoteric_enabled = true;
+            break;
+        case READER_UNKNOWN:
+            break;
+    }
 
     Form **forms = NULL;
     size_t cap = 0, n = 0;
@@ -602,4 +879,113 @@ Form **read_all(Arena *arena, SymbolTable *st, const SourceFile *file,
 
     *out_count = (uint32_t)n;
     return out;
+}
+
+/* #lang directive detection and reader type utilities */
+
+/* Parse #lang directive from the first line of source */
+ReaderType detect_lang(const char *src, size_t len, const char **out_rest, 
+                       size_t *out_rest_len) {
+    const char *p = src;
+    size_t remaining = len;
+
+    /* Skip leading whitespace (but not newlines - #lang must be first line) */
+    while (remaining > 0 && (p[0] == ' ' || p[0] == '\t')) {
+        p++;
+        remaining--;
+    }
+
+    /* Check for #lang */
+    if (remaining >= 5 && p[0] == '#' && p[1] == 'l' && p[2] == 'a' && 
+        p[3] == 'n' && p[4] == 'g') {
+        p += 5;
+        remaining -= 5;
+
+        /* Skip whitespace after #lang */
+        while (remaining > 0 && (p[0] == ' ' || p[0] == '\t')) {
+            p++;
+            remaining--;
+        }
+
+        /* Extract the language name (can contain slashes) */
+        const char *lang_start = p;
+        size_t lang_len = 0;
+        while (remaining > 0 && p[0] != ' ' && p[0] != '\t' && 
+               p[0] != '\n' && p[0] != '\r') {
+            p++;
+            lang_len++;
+            remaining--;
+        }
+
+        /* Determine reader type from language name */
+        if (lang_len == 8 && memcmp(lang_start, "turmeric", 8) == 0) {
+            if (out_rest) *out_rest = p;
+            if (out_rest_len) *out_rest_len = remaining;
+            return READER_TURMERIC;
+        } else if (lang_len == 20 && memcmp(lang_start, "turmeric/curly-infix", 20) == 0) {
+            if (out_rest) *out_rest = p;
+            if (out_rest_len) *out_rest_len = remaining;
+            return READER_CURLY_INFIX;
+        } else if (lang_len == 17 && memcmp(lang_start, "turmeric/neoteric", 17) == 0) {
+            if (out_rest) *out_rest = p;
+            if (out_rest_len) *out_rest_len = remaining;
+            return READER_NEOTERIC;
+        } else if (lang_len == 9 && memcmp(lang_start, "sweet-exp", 9) == 0) {
+            if (out_rest) *out_rest = p;
+            if (out_rest_len) *out_rest_len = remaining;
+            return READER_SWEET;
+        }
+
+        /* Unknown #lang - return a special value to indicate error */
+        /* We'll use READER_TURMERIC + 1 as a sentinel, but better to add a new type */
+        /* For now, just return TURMERIC and let the caller check */
+        if (out_rest) *out_rest = p;
+        if (out_rest_len) *out_rest_len = remaining;
+        /* Return a special "unknown" type - we'll add this to the enum */
+        return (ReaderType)-1; /* Unknown/invalid */
+    }
+
+    /* No #lang directive found */
+    if (out_rest) *out_rest = src;
+    if (out_rest_len) *out_rest_len = len;
+    return READER_TURMERIC;
+}
+
+/* Get reader type from file extension */
+ReaderType reader_type_from_extension(const char *path) {
+    const char *ext = strrchr(path, '.');
+    if (!ext) return READER_TURMERIC;
+
+    if (strcmp(ext, ".tursweet") == 0) {
+        return READER_SWEET;
+    }
+    return READER_TURMERIC;
+}
+
+/* Get reader type name as string */
+const char *reader_type_name(ReaderType type) {
+    switch (type) {
+        case READER_UNKNOWN: return "unknown";
+        case READER_TURMERIC: return "turmeric";
+        case READER_CURLY_INFIX: return "turmeric/curly-infix";
+        case READER_NEOTERIC: return "turmeric/neoteric";
+        case READER_SWEET: return "sweet-exp";
+        default: return "<invalid>";
+    }
+}
+
+/* Check if a reader type is implemented */
+bool reader_type_is_implemented(ReaderType type) {
+    switch (type) {
+        case READER_UNKNOWN:
+            return false; /* Unknown language is not implemented */
+        case READER_TURMERIC:
+        case READER_CURLY_INFIX:
+        case READER_NEOTERIC:
+            return true; /* Phase S2: neoteric is now implemented */
+        case READER_SWEET:
+            return false; /* Not yet implemented */
+        default:
+            return false;
+    }
 }
