@@ -64,6 +64,9 @@ struct FnDef {
     bool           is_variadic;  /* not yet supported in phase 2 */
     /* Phase 3: For closure thunks, store the closure info */
     struct Closure *closure;    /* NULL for non-closure functions */
+    /* Phase 4: Future-proofing for v3 effects (effects-plan.md §6.10) - whether this
+     * function may capture continuations. Always false in v0/v1. */
+    bool           may_capture;
 };
 
 /* Phase 2: ExternC represents an (extern-c ...) declaration. */
@@ -124,7 +127,15 @@ struct Expr {
         /* Phase 3 */
         struct { struct Closure *closure; }                                 closure_;
         /* Phase 4 */
-        struct { Expr *body; }                                               defer_;
+        struct { 
+            Expr *body;              /* the defer body expression */
+            /* v1 lowering: closure-style capture for defer bodies that reference
+             * local variables. These are lifted into thunk functions with env structs.
+             * Per effects-plan.md §6.10.1, this allows the S1/S2/S3 strategy choice
+             * to be a runtime policy decision. */
+            Binding **captures;       /* captured bindings from enclosing scope */
+            uint8_t n_captures;
+        } defer_;
 
         struct { Expr **items; uint32_t n; }                               program;
     } as;

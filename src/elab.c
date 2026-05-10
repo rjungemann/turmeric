@@ -607,6 +607,7 @@ static Expr *elab_while(Elab *e, const Form *call) {
  * Records an expression to be evaluated at scope exit, in LIFO order.
  * For now, only valid inside let/do/defn/while bodies.
  * The body is elaborated but its value is discarded (defer always evaluates to nil).
+ * v1 lowering (effects-plan.md §6.10): performs capture analysis for thunk lifting.
  * Nested defers are not yet supported.
  */
 static Expr *elab_defer(Elab *e, const Form *call) {
@@ -624,9 +625,38 @@ static Expr *elab_defer(Elab *e, const Form *call) {
     Expr *body = elab_form(e, call->as.list.items[1]);
     if (!body) return NULL;
     
-    /* Create EX_DEFER expression */
+    /* v1 lowering: Collect free variables (captures) for thunk lifting.
+     * Per effects-plan.md §6.10.1, defers are entries in a list-on-frame.
+     * For defers that reference local variables, we need to capture them
+     * in an env struct (same pattern as closures in Phase 3).
+     * 
+     * For defer thunks (unlike closure thunks), there are no "params" — all
+     * non-global bindings referenced in the defer body need to be captured
+     * since the thunk is a separate function at file scope.
+     * We pass empty params to collect_free_vars so all non-global bindings
+     * are treated as free variables (captures). */
+    Binding **captures = NULL;
+    uint8_t n_captures = 0;
+    
+    /* Collect free variables in the defer body - pass empty params
+     * so all non-global bindings are captured */
+    uint32_t n_free = 0;
+    Binding **free_vars = collect_free_vars(body, NULL, 0, &n_free);
+    
+    if (n_free > 0) {
+        /* Store captures in the defer expression (arena-allocated, lives for compilation) */
+        captures = (Binding **)arena_alloc(e->arena, n_free * sizeof(Binding *));
+        memcpy(captures, free_vars, n_free * sizeof(Binding *));
+        n_captures = (uint8_t)n_free;
+    }
+    
+    free(free_vars);
+    
+    /* Create EX_DEFER expression with capture info */
     Expr *out = expr_new(e->arena, EX_DEFER, TYPE_NIL, call->span);
     out->as.defer_.body = body;
+    out->as.defer_.captures = captures;
+    out->as.defer_.n_captures = n_captures;
     return out;
 }
 

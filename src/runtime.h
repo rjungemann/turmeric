@@ -9,7 +9,12 @@
  * This matches the forward declaration in types.h. */
 struct EffectRow;
 
-/* A defer thunk - a function pointer that takes no arguments and returns void. */
+/* A defer thunk - a function pointer that takes no arguments and returns void.
+ * 
+ * Per effects-plan.md §6.10, this is the unified defer model that makes
+ * the S1/S2/S3 strategy choice a runtime policy decision rather than an
+ * architectural rewrite. The thunk is registered with tur_frame_push_defer
+ * and invoked by tur_frame_fire_lifo at scope exit. */
 typedef void (*defer_fn_t)(void);
 
 /* Maximum number of defers per frame. This is a compile-time limit.
@@ -19,17 +24,21 @@ typedef void (*defer_fn_t)(void);
 /* A stack-allocated frame for tracking defers in a scope.
  * Each scope (let/defn/while body) gets one of these.
  * 
- * Per effects-plan.md §6.10, this is the unified defer model that makes
- * the S1/S2/S3 strategy choice a runtime policy decision.
+ * Per effects-plan.md §6.10.1, this is the unified defer model that makes
+ * the S1/S2/S3 strategy choice (§6.10.2) a runtime policy decision rather
+ * than an architectural rewrite.
  * 
  * Fields:
- *   defers:     Array of defer thunk function pointers
- *   n:          Number of active defers in the list
- *   parent:     Pointer to the enclosing frame (for scope unwind)
- *   may_capture: Future-proofing for v3 effects - whether this frame may
- *                be captured by a continuation (always false in v0/v1)
- *   effect_row: Future-proofing for v3 effects - effect row for this frame
- *                (NULL in v0/v1)
+ *   defers:     Array of defer thunk function pointers (max TUR_FRAME_MAX_DEFERS).
+ *               Thunks are registered via tur_frame_push_defer and fired in LIFO
+ *               order by tur_frame_fire_lifo.
+ *   n:          Number of active defers in the list.
+ *   parent:     Pointer to the enclosing frame (for scope unwind chain).
+ *               Used by tur_frame_fire_chain to unwind through nested scopes.
+ *   may_capture: Future-proofing for v3 effects (§6.10) - whether this frame may
+ *                be captured by a continuation. Always false in v0/v1.
+ *   effect_row: Future-proofing for v3 effects (§6.10) - effect row for this frame.
+ *                NULL in v0/v1, treated as empty effect set.
  */
 typedef struct tur_frame {
     defer_fn_t defers[TUR_FRAME_MAX_DEFERS];

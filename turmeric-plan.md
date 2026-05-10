@@ -12,7 +12,7 @@ A Lisp (Clojure/Fennel-flavored) that compiles to C, with homoiconic macros, str
 | 1 | ✅ **Complete** | Fizzbuzz | All core forms, arithmetic, comparison, logical ops; 12/12 fixtures green under ASan/UBSan |
 | 2 | ✅ **Complete** | Top-level functions + extern-c | defn, fn, extern-c, inline-C blocks all compiling and running. Multi-file support with _main.c generation. Mutual recursion via two-pass elaboration. 18/18 tests pass (16 happy, 2 negative). |
 | 3 | ✅ **Complete** | Closures | Capture analysis, env struct synthesis, closure thunk emission, and call-site lowering all working. Nested fn without captures lifts to static functions with proper function pointer type emission. Capturing fn emits closure struct + thunk function with env parameter. Closure calls pass env pointer to thunk. 18/18 tests pass (17 happy, 1 negative). |
-| 4 | 🚧 **In Progress** | defer + scope unwind | v0 lowering shipped: defers in `do`-wrapped scopes (let/defn/while bodies) collected and emitted in LIFO at scope exit. 21/21 fixtures green incl. defer-order, defer-nested-scopes, errors/defer-top-level. **v1 infrastructure in place**: `src/runtime.{c,h}` with `tur_frame` struct, `FnDef.may_capture`, `Type.fn.effect_row`, frame tracking in EmitCtx. Next: complete runtime list-on-frame lowering per effects-plan §6.10. |
+| 4 | 🚧 **In Progress** | defer + scope unwind | v0 lowering shipped: defers in `do`-wrapped scopes (let/defn/while bodies) collected and emitted in LIFO at scope exit. 21/21 fixtures green incl. defer-order, defer-nested-scopes, errors/defer-top-level. **v1 infrastructure landed**: `src/runtime.{c,h}` with `tur_frame` struct (defers array, parent pointer, may_capture, effect_row), `Type.fn.effect_row` slot, test fixtures for edge cases (defer-mutated-binding, defer-conditional, defer-in-loop). **Next**: Complete runtime list-on-frame lowering per effects-plan.md §6.10: emit `tur_frame` per scope, generate thunks via closure capture analysis, use `tur_frame_push_defer`/`tur_frame_fire_lifo`. |
 | 5 | ⏳ Pending | ref<T> | Move semantics, auto-defer drop |
 | 6 | ⏳ Pending | defmacro + quasiquote | Bootstrap interpreter, gensym-based hygiene |
 | 7 | ⏳ Pending | Stdlib seed | vec, slice, str, option, result; test runner |
@@ -24,7 +24,7 @@ A Lisp (Clojure/Fennel-flavored) that compiles to C, with homoiconic macros, str
 | 13 | ⏳ Pending | Lifetime annotations | Explicit `'a` lifetime parameters on functions and references; lifetime elision rules for common cases |
 | 14 | ⏳ Pending | Borrow checker with lifetimes | Full intra- and inter-procedural borrow checking; prevents dangling references and use-after-move at compile time |
 
-**Last updated:** 2026-05-09 (Phase 4 v0: defer LIFO emission via EX_DO scope-exit reordering. 21/21 fixtures green. **v1 infrastructure landed**: `src/runtime.{c,h}` with `tur_frame` struct, parent pointer, `FnDef.may_capture`, `Type.fn.effect_row`, and frame tracking in EmitCtx. Full runtime list-on-frame lowering still pending — see §10.5.)
+**Last updated:** 2026-05-09 (Phase 4: v0 lowering complete with 24/24 fixtures green. **v1 infrastructure landed**: `src/runtime.{c,h}` with `tur_frame` struct (defers[N], parent pointer, may_capture, effect_row), `Type.fn.effect_row` slot, and test fixtures for edge cases. Full runtime list-on-frame lowering with thunk generation still pending — see §10.5 and effects-plan.md §6.10.)
 
 ---
 
@@ -95,19 +95,21 @@ A Lisp (Clojure/Fennel-flavored) that compiles to C, with homoiconic macros, str
 - [x] Fixture: `defer-order` — three defers in a let, prove LIFO ordering (third→first).
 - [x] Fixture: `defer-nested-scopes` — inner-let defers fire before outer-let defers.
 - [x] Negative fixture: `errors/defer-top-level`.
-- [ ] **v1 lowering** — unified runtime-list-on-frame model (effects-plan §6.10):
-  - [x] Add `src/runtime.{c,h}` with `tur_frame { defer_t defers[N]; int n; }` and `tur_frame_push_defer` / `tur_frame_fire_lifo`.
-  - [x] `Frame` carries a `parent` pointer (unused in v1, plumbed for v3 effects).
-  - [x] `FnDef.may_capture: bool` defaulting false.
-  - [x] `Type.fn.effect_row` slot defaulting null — future-proofing slots per effects-plan §6.10.
-  - [x] Add frame tracking infrastructure to EmitCtx (frame_stack, push_frame, pop_frame, etc.).
-  - [ ] Reuse closure capture analysis to lift each defer body into a thunk fn + env struct.
-  - [ ] Each let/defn/while emits a stack-allocated `tur_frame`; defers push to it; scope exit calls `tur_frame_fire_lifo`.
-- [ ] Fixture: `defer-mutated-binding` — defer captures `^mut` binding by reference, sees post-set! value (requires runtime-list lowering with env capture).
-- [ ] Fixture: `defer-conditional` — defer registered only inside an if-branch fires at the *enclosing* scope's end, not the branch's (requires runtime-list lowering).
-- [ ] Fixture: `defer-in-loop` — defer inside a while body registers per iteration, all fire at loop scope's end (requires runtime-list lowering).
-- [ ] Fixture: `defer-early-return` — deferred until early-return / break / `return` ships.
+- [ ] **v1 lowering** — unified runtime-list-on-frame model (effects-plan.md §6.10):
+  - [x] Add `src/runtime.{c,h}` with `tur_frame` struct (defers[N], n, parent, may_capture, effect_row) and functions (`tur_frame_init`, `tur_frame_push_defer`, `tur_frame_fire_lifo`, `tur_frame_fire_chain`).
+  - [x] `FnDef.may_capture: bool` field added to expr.h (future-proofing for v3 effects).
+  - [x] `Type.fn.effect_row` slot added to types.h (future-proofing per effects-plan.md §6.10).
+  - [ ] Modify `Expr.defer_` to store capture info (captures array, env struct name).
+  - [ ] Modify `elab_defer()` to perform capture analysis using `collect_free_vars()`.
+  - [ ] Modify `emit_do_value()` / `emit_stmt()` to emit `tur_frame` per scope with defers.
+  - [ ] Generate thunk functions for defer bodies (simple static funcs for no-capture, env struct + func for captures).
+  - [ ] Register thunks via `tur_frame_push_defer(&frame, thunk)` and fire via `tur_frame_fire_lifo(&frame)`.
+- [x] Fixture: `defer-mutated-binding` — input created (defer captures ^mut binding by reference, should see post-set! value).
+- [x] Fixture: `defer-conditional` — input created (defer inside if-branch should fire at enclosing scope's end).
+- [x] Fixture: `defer-in-loop` — input created (defer inside while body should fire at loop scope's end).
+  - **Note**: These fixtures currently use v0 lowering which has known limitations; they will produce different output than expected until v1 lowering is complete.
 - [ ] Codegen snapshots for the runtime-list lowering once it lands.
+- [ ] Fixture: `defer-early-return` — deferred until early-return / break / `return` ships.
 
 ---
 
