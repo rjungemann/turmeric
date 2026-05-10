@@ -91,6 +91,7 @@ Form *interp_eval(Env *e, Form *f) {
         case F_NIL:
         case F_BOOL:
         case F_INT:
+        case F_FLOAT:
         case F_STR:
         case F_KEYWORD:
             /* Literals evaluate to themselves */
@@ -153,6 +154,7 @@ static Form *quasiquote_expand(Env *macro_env, Form *f) {
         case F_NIL:
         case F_BOOL:
         case F_INT:
+        case F_FLOAT:
         case F_STR:
         case F_KEYWORD:
         case F_SYM:
@@ -216,6 +218,7 @@ Form *macro_expand(Env *macro_env, Form *f, int *depth) {
         case F_NIL:
         case F_BOOL:
         case F_INT:
+        case F_FLOAT:
         case F_STR:
         case F_KEYWORD:
         case F_CBLOCK:

@@ -212,28 +212,81 @@ static Form *read_number(Reader *r, int sign) {
         advance(r);
     }
 
-    int64_t val = 0;
+    bool is_float = false;
+    double fval = 0.0;
+    int64_t ival = 0;
     bool any = false;
 
-    /* 0x / 0b prefixes */
+    /* 0x / 0b prefixes - these are always integers */
     if (peek(r) == '0' && (peek2(r) == 'x' || peek2(r) == 'X')) {
         advance(r); advance(r);
         int d;
         while ((d = hex_digit(peek(r))) >= 0) {
-            val = val * 16 + d;
+            ival = ival * 16 + d;
             advance(r);
             any = true;
         }
     } else if (peek(r) == '0' && (peek2(r) == 'b' || peek2(r) == 'B')) {
         advance(r); advance(r);
         while (peek(r) == '0' || peek(r) == '1') {
-            val = val * 2 + (advance(r) - '0');
+            ival = ival * 2 + (advance(r) - '0');
             any = true;
         }
     } else {
+        /* Parse integer part */
         while (peek(r) >= '0' && peek(r) <= '9') {
-            val = val * 10 + (int64_t)(advance(r) - '0');
+            int digit = advance(r) - '0';
+            ival = ival * 10 + (int64_t)digit;
+            fval = fval * 10.0 + (double)digit;
             any = true;
+        }
+
+        /* Check for fractional part */
+        if (peek(r) == '.') {
+            is_float = true;
+            advance(r);  /* consume '.' */
+            double frac = 0.0;
+            double scale = 0.1;
+            while (peek(r) >= '0' && peek(r) <= '9') {
+                int digit = advance(r) - '0';
+                frac += (double)digit * scale;
+                scale *= 0.1;
+                any = true;
+            }
+            fval += frac;
+        }
+
+        /* Check for exponent part */
+        if ((peek(r) == 'e' || peek(r) == 'E') && any) {
+            is_float = true;
+            advance(r);  /* consume 'e' or 'E' */
+            int exp_sign = 1;
+            if (peek(r) == '+') {
+                advance(r);
+            } else if (peek(r) == '-') {
+                advance(r);
+                exp_sign = -1;
+            }
+            int exp_val = 0;
+            bool exp_any = false;
+            while (peek(r) >= '0' && peek(r) <= '9') {
+                exp_val = exp_val * 10 + (advance(r) - '0');
+                exp_any = true;
+            }
+            if (!exp_any) {
+                Span s = span_point(r);
+                diag_emit(DIAG_ERROR, s, "expected exponent digits in float literal");
+                r->error = true;
+                return NULL;
+            }
+            /* Apply exponent using pow(10, exp) */
+            double exp_factor = 1.0;
+            int abs_exp = exp_sign < 0 ? -exp_val : exp_val;
+            for (int i = 0; i < abs_exp; i++) {
+                if (exp_sign > 0) exp_factor *= 10.0;
+                else exp_factor /= 10.0;
+            }
+            fval *= exp_factor;
         }
     }
 
@@ -243,9 +296,17 @@ static Form *read_number(Reader *r, int sign) {
         r->error = true;
         return NULL;
     }
-    if (sign < 0) val = -val;
+
     Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
-    Form *atom = form_int(r->arena, span, val);
+    Form *atom;
+    
+    if (is_float) {
+        if (sign < 0) fval = -fval;
+        atom = form_float(r->arena, span, fval);
+    } else {
+        if (sign < 0) ival = -ival;
+        atom = form_int(r->arena, span, ival);
+    }
     
     /* Phase S2: Check for neoteric bracket immediately following number */
     if (r->neoteric_enabled) {

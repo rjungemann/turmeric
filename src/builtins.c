@@ -11,8 +11,14 @@ static BuiltinSpec table_[] = {
     { "+",   NULL, 2, -1, {.kind=TY_INT},  {.kind=TY_INT},  BS_VARIADIC_FOLD, "+" },
     { "-",   NULL, 2, -1, {.kind=TY_INT},  {.kind=TY_INT},  BS_VARIADIC_FOLD, "-" },
     { "*",   NULL, 2, -1, {.kind=TY_INT},  {.kind=TY_INT},  BS_VARIADIC_FOLD, "*" },
-    { "/",   NULL, 2,  2, {.kind=TY_INT},  {.kind=TY_INT},  BS_BIN_INFIX,     "/" },
+    { "/",   NULL, 2,  2, {.kind=TY_INT},  {.kind=TY_INT},  BS_DIV_CHECK,    "/" },
     { "mod", NULL, 2,  2, {.kind=TY_INT},  {.kind=TY_INT},  BS_BIN_INFIX,     "%" },
+
+    /* Arithmetic — float. */
+    { "+.",  NULL, 2, -1, {.kind=TY_FLOAT}, {.kind=TY_FLOAT}, BS_VARIADIC_FOLD, "+" },
+    { "-.",  NULL, 2, -1, {.kind=TY_FLOAT}, {.kind=TY_FLOAT}, BS_VARIADIC_FOLD, "-" },
+    { "*.",  NULL, 2, -1, {.kind=TY_FLOAT}, {.kind=TY_FLOAT}, BS_VARIADIC_FOLD, "*" },
+    { "/.",  NULL, 2,  2, {.kind=TY_FLOAT}, {.kind=TY_FLOAT}, BS_DIV_CHECK,     "/" },
 
     /* Comparison — int. */
     { "=",    NULL, 2, 2, {.kind=TY_INT},  {.kind=TY_BOOL}, BS_BIN_INFIX, "==" },
@@ -21,6 +27,14 @@ static BuiltinSpec table_[] = {
     { "<=",   NULL, 2, 2, {.kind=TY_INT},  {.kind=TY_BOOL}, BS_BIN_INFIX, "<=" },
     { ">=",   NULL, 2, 2, {.kind=TY_INT},  {.kind=TY_BOOL}, BS_BIN_INFIX, ">=" },
     { "not=", NULL, 2, 2, {.kind=TY_INT},  {.kind=TY_BOOL}, BS_BIN_INFIX, "!=" },
+
+    /* Comparison — float. */
+    { "=",    NULL, 2, 2, {.kind=TY_FLOAT}, {.kind=TY_BOOL}, BS_BIN_INFIX, "==" },
+    { "<",    NULL, 2, 2, {.kind=TY_FLOAT}, {.kind=TY_BOOL}, BS_BIN_INFIX, "<"  },
+    { ">",    NULL, 2, 2, {.kind=TY_FLOAT}, {.kind=TY_BOOL}, BS_BIN_INFIX, ">"  },
+    { "<=",   NULL, 2, 2, {.kind=TY_FLOAT}, {.kind=TY_BOOL}, BS_BIN_INFIX, "<=" },
+    { ">=",   NULL, 2, 2, {.kind=TY_FLOAT}, {.kind=TY_BOOL}, BS_BIN_INFIX, ">=" },
+    { "not=", NULL, 2, 2, {.kind=TY_FLOAT}, {.kind=TY_BOOL}, BS_BIN_INFIX, "!=" },
 
     /* Comparison — bool. */
     { "=",    NULL, 2, 2, {.kind=TY_BOOL}, {.kind=TY_BOOL}, BS_BIN_INFIX, "==" },
@@ -33,6 +47,7 @@ static BuiltinSpec table_[] = {
 
     /* println — separate entries per arg type, dispatched on arg type. */
     { "println", NULL, 1, 1, {.kind=TY_INT},  {.kind=TY_NIL}, BS_PRINTLN_INT,  NULL },
+    { "println", NULL, 1, 1, {.kind=TY_FLOAT}, {.kind=TY_NIL}, BS_PRINTLN_FLOAT, NULL },
     { "println", NULL, 1, 1, {.kind=TY_BOOL}, {.kind=TY_NIL}, BS_PRINTLN_BOOL, NULL },
     { "println", NULL, 1, 1, {.kind=TY_CSTR}, {.kind=TY_NIL}, BS_PRINTLN_CSTR, NULL },
     /* Phase 5: ref drop */
