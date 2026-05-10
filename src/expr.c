@@ -119,5 +119,46 @@ void expr_print(Buf *b, const Expr *e) {
             expr_print(b, e->as.deref_.expr);
             buf_putc(b, ')');
             break;
+        /* Phase 9: rc<T> + weak<T> */
+        case EX_RC_OF:
+            buf_puts(b, "(rc/of ");
+            expr_print(b, e->as.rc_of_.expr);
+            buf_putc(b, ')');
+            break;
+        case EX_RC_CLONE:
+            buf_puts(b, "(rc/clone ");
+            expr_print(b, e->as.rc_clone_.expr);
+            buf_putc(b, ')');
+            break;
+        case EX_RC_DROP:
+            buf_puts(b, "(rc/drop ");
+            expr_print(b, e->as.rc_drop_.expr);
+            buf_putc(b, ')');
+            break;
+        case EX_RC_PTR:
+            buf_puts(b, "(rc->ptr ");
+            expr_print(b, e->as.rc_ptr_.expr);
+            buf_putc(b, ')');
+            break;
+        case EX_RC_COUNT:
+            buf_puts(b, "(rc/strong-count ");
+            expr_print(b, e->as.rc_count_.expr);
+            buf_putc(b, ')');
+            break;
+        case EX_WEAK:
+            buf_puts(b, "(weak ");
+            expr_print(b, e->as.weak_.expr);
+            buf_putc(b, ')');
+            break;
+        case EX_WEAK_UPGRADE:
+            buf_puts(b, "(upgrade ");
+            expr_print(b, e->as.weak_upgrade_.expr);
+            buf_putc(b, ')');
+            break;
+        case EX_WEAK_PRED:
+            buf_puts(b, "(weak? ");
+            expr_print(b, e->as.weak_pred_.expr);
+            buf_putc(b, ')');
+            break;
     }
 }

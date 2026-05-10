@@ -37,6 +37,24 @@ static BuiltinSpec table_[] = {
     { "println", NULL, 1, 1, {.kind=TY_CSTR}, {.kind=TY_NIL}, BS_PRINTLN_CSTR, NULL },
     /* Phase 5: ref drop */
     { "drop!", NULL, 1, 1, {.kind=TY_UNKNOWN}, {.kind=TY_NIL}, BS_PREFIX_UNARY_FREE, "free" },
+
+    /* Phase 9: rc<T> operations */
+    /* (rc/of x) - create a new rc<T> with x as the value */
+    { "rc/of", NULL, 1, 1, {.kind=TY_UNKNOWN}, {.kind=TY_RC}, BS_PREFIX_UNARY, NULL },
+    /* (rc/clone r) - increment strong count, return new rc<T> */
+    { "rc/clone", NULL, 1, 1, {.kind=TY_RC}, {.kind=TY_RC}, BS_PREFIX_UNARY, NULL },
+    /* (rc/drop r) - decrement strong count */
+    { "rc/drop", NULL, 1, 1, {.kind=TY_RC}, {.kind=TY_NIL}, BS_PREFIX_UNARY_FREE, NULL },
+    /* (rc/strong-count r) - get the strong count */
+    { "rc/strong-count", NULL, 1, 1, {.kind=TY_RC}, {.kind=TY_INT}, BS_PREFIX_UNARY, NULL },
+
+    /* Phase 9: weak<T> operations */
+    /* (weak r) - create a weak<T> from an rc<T> */
+    { "weak", NULL, 1, 1, {.kind=TY_RC}, {.kind=TY_WEAK}, BS_PREFIX_UNARY, NULL },
+    /* (upgrade w) - upgrade weak<T> to option<rc<T>> */
+    { "upgrade", NULL, 1, 1, {.kind=TY_WEAK}, {.kind=TY_UNKNOWN}, BS_PREFIX_UNARY, NULL },
+    /* (weak? w) - check if w is a weak<T> */
+    { "weak?", NULL, 1, 1, {.kind=TY_UNKNOWN}, {.kind=TY_BOOL}, BS_PREFIX_UNARY, NULL },
 };
 
 #define TABLE_LEN (sizeof(table_) / sizeof(table_[0]))

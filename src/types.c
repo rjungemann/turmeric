@@ -17,6 +17,10 @@ int type_eq(Type a, Type b) {
     if (a.kind == TY_REF) {
         return a.as.ref.inner == b.as.ref.inner;
     }
+    /* Phase 9: rc<T> and weak<T> */
+    if (a.kind == TY_RC || a.kind == TY_WEAK) {
+        return a.as.rc.inner == b.as.rc.inner;
+    }
     return 1;
 }
 
@@ -64,6 +68,27 @@ const char *type_name(Type t) {
             buf_putc(&tmp, '\0');
             return strdup(tmp.data);
         }
+        /* Phase 9: rc<T> and weak<T> */
+        case TY_RC: {
+            /* Build "rc<T>" name */
+            Buf tmp;
+            buf_init(&tmp);
+            buf_puts(&tmp, "rc<");
+            buf_puts(&tmp, type_name(type_from_kind(t.as.rc.inner)));
+            buf_puts(&tmp, ">");
+            buf_putc(&tmp, '\0');
+            return strdup(tmp.data);
+        }
+        case TY_WEAK: {
+            /* Build "weak<T>" name */
+            Buf tmp;
+            buf_init(&tmp);
+            buf_puts(&tmp, "weak<");
+            buf_puts(&tmp, type_name(type_from_kind(t.as.rc.inner)));
+            buf_puts(&tmp, ">");
+            buf_putc(&tmp, '\0');
+            return strdup(tmp.data);
+        }
     }
     return "?";
 }
@@ -93,6 +118,19 @@ static void type_name_buf(Buf *b, Type t) {
             buf_puts(b, ">");
             break;
         }
+        /* Phase 9: rc<T> and weak<T> */
+        case TY_RC: {
+            buf_puts(b, "rc<");
+            type_name_buf(b, type_from_kind(t.as.rc.inner));
+            buf_puts(b, ">");
+            break;
+        }
+        case TY_WEAK: {
+            buf_puts(b, "weak<");
+            type_name_buf(b, type_from_kind(t.as.rc.inner));
+            buf_puts(b, ">");
+            break;
+        }
     }
 }
 
@@ -114,6 +152,10 @@ const char *type_c_name(Type t) {
             /* TODO: could use T* directly but void* is simpler for v1 */
             return "void *";
         }
+        /* Phase 9: rc<T> and weak<T> both lower to RcControlBlock* in C */
+        case TY_RC:
+        case TY_WEAK:
+            return "RcControlBlock *";
     }
     return "void";
 }

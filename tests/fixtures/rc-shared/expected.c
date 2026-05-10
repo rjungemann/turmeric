@@ -125,27 +125,32 @@ void *rc_get_value(RcControlBlock *cb) {
     return cb->value;
 }
 
-struct __defer_env_1 {int64_t x; };
-
-static void __defer_2(void *__env) {
-    struct __defer_env_1 *__e = (struct __defer_env_1 *)__env;
-    printf("%lld\n", (long long)(__e->x));
-}
-
 int main() {
+        int64_t __t0;
         {
-            int64_t x_1 = INT64_C(10);
-            (void)x_1;
-            tur_frame __frame_0;
-            tur_frame_init(&__frame_0, NULL);
-            struct __defer_env_1 __t3 = {.x = x_1};
-            tur_frame_push_defer(&__frame_0, __defer_2, &__t3);
-            x_1 = INT64_C(20);
-            tur_frame_fire_lifo(&__frame_0);
+            RcControlBlock *__t1 = rc_cb_alloc(sizeof(int64_t), 3, NULL);
+            *((int64_t *)((char *)__t1 + sizeof(RcControlBlock))) = INT64_C(10);
+            RcControlBlock * a_1 = __t1;
+            (void)a_1;
+            rc_strong_increment(a_1);
+            RcControlBlock * b_2 = a_1;
+            (void)b_2;
+            rc_strong_increment(a_1);
+            RcControlBlock * c_3 = a_1;
+            (void)c_3;
+            int64_t __t2 = rc_strong_count(a_1);
+            printf("%lld\n", (long long)(__t2));
+            rc_strong_decrement(b_2);
+            int64_t __t3 = rc_strong_count(a_1);
+            printf("%lld\n", (long long)(__t3));
+            rc_strong_decrement(c_3);
+            int64_t __t4 = rc_strong_count(a_1);
+            printf("%lld\n", (long long)(__t4));
+            int64_t __t5;
+            __t5 = INT64_C(0);
+            __t0 = __t5;
         }
-        int64_t __t4;
-        __t4 = INT64_C(0);
-        return (int)__t4;
+        return (int)__t0;
 }
 
 

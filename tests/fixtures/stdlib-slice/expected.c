@@ -125,27 +125,11 @@ void *rc_get_value(RcControlBlock *cb) {
     return cb->value;
 }
 
-struct __defer_env_1 {int64_t x; };
-
-static void __defer_2(void *__env) {
-    struct __defer_env_1 *__e = (struct __defer_env_1 *)__env;
-    printf("%lld\n", (long long)(__e->x));
-}
-
 int main() {
-        {
-            int64_t x_1 = INT64_C(10);
-            (void)x_1;
-            tur_frame __frame_0;
-            tur_frame_init(&__frame_0, NULL);
-            struct __defer_env_1 __t3 = {.x = x_1};
-            tur_frame_push_defer(&__frame_0, __defer_2, &__t3);
-            x_1 = INT64_C(20);
-            tur_frame_fire_lifo(&__frame_0);
-        }
-        int64_t __t4;
-        __t4 = INT64_C(0);
-        return (int)__t4;
+        puts("Slice stdlib loaded successfully");
+        int64_t __t0;
+        __t0 = INT64_C(0);
+        return (int)__t0;
 }
 
 

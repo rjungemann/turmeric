@@ -4,6 +4,8 @@
 #include <stdbool.h>
 extern void *malloc(size_t);
 extern void free(void *);
+extern void abort(void);
+extern void *memset(void *, int, size_t);
 
 /* tur_frame - phase 4 v1 lowering (from runtime.h) */
 typedef void (*defer_fn_t)(void *env);
@@ -30,6 +32,97 @@ static inline int tur_frame_push_defer(tur_frame *f, defer_fn_t thunk, void *env
 static void tur_frame_fire_lifo(tur_frame *f) {
     for (int i = f->n - 1; i >= 0; i--) f->defers[i](f->envs[i]);
     f->n = 0;
+}
+
+/* rc<T> + weak<T> reference counting - Phase 9 */
+typedef void (*RcDropFn)(void *value);
+
+typedef struct RcControlBlock RcControlBlock;
+
+struct RcControlBlock {
+    uint64_t strong_count;
+    uint64_t weak_count;
+    void *value;
+    RcDropFn drop_fn;
+    uint8_t value_type_kind;
+    uint8_t reserved[8];
+};
+
+static void default_rc_drop_fn(void *value) {
+    free(value);
+}
+
+RcControlBlock *rc_cb_alloc(size_t value_size, int value_type_kind, RcDropFn drop_fn) {
+    size_t total_size = sizeof(RcControlBlock) + value_size;
+    RcControlBlock *cb = (RcControlBlock *)malloc(total_size);
+    if (!cb) { fprintf(stderr, "rc: out of memory\n"); abort(); }
+    cb->strong_count = 1;
+    cb->weak_count = 0;
+    cb->value = (void *)(cb + 1);
+    cb->drop_fn = drop_fn ? drop_fn : default_rc_drop_fn;
+    cb->value_type_kind = value_type_kind;
+    memset(cb->reserved, 0, sizeof(cb->reserved));
+    return cb;
+}
+
+uint64_t rc_strong_increment(RcControlBlock *cb) {
+    if (!cb) return 0;
+    return ++cb->strong_count;
+}
+
+bool rc_strong_decrement(RcControlBlock *cb) {
+    if (!cb) return false;
+    cb->strong_count--;
+    if (cb->strong_count == 0 && cb->weak_count == 0) {
+        if (cb->value) cb->drop_fn(cb->value);
+        free(cb);
+        return true;
+    }
+    return false;
+}
+
+uint64_t rc_weak_increment(RcControlBlock *cb) {
+    if (!cb) return 0;
+    return ++cb->weak_count;
+}
+
+bool rc_weak_decrement(RcControlBlock *cb) {
+    if (!cb) return false;
+    cb->weak_count--;
+    if (cb->weak_count == 0 && cb->strong_count == 0) {
+        free(cb);
+        return true;
+    }
+    return false;
+}
+
+uint64_t rc_strong_count(RcControlBlock *cb) {
+    if (!cb) return 0;
+    return cb->strong_count;
+}
+
+uint64_t rc_weak_count(RcControlBlock *cb) {
+    if (!cb) return 0;
+    return cb->weak_count;
+}
+
+bool rc_is_alive(RcControlBlock *cb) {
+    if (!cb) return false;
+    return cb->strong_count > 0;
+}
+
+RcControlBlock *rc_upgrade(RcControlBlock *cb) {
+    if (!cb) return NULL;
+    if (cb->strong_count > 0) {
+        rc_strong_increment(cb);
+        return cb;
+    }
+    return NULL;
+}
+
+void *rc_get_value(RcControlBlock *cb) {
+    if (!cb) return NULL;
+    return cb->value;
 }
 
 static int64_t __fn_2(int64_t);

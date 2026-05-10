@@ -20,6 +20,9 @@ typedef enum TypeKind {
     TY_FN,            /* function type — requires checking as.fn */
     /* Phase 5: ref<T> — owning pointer with move semantics */
     TY_REF,           /* ref<T> — owning handle, auto-defer drop at scope end */
+    /* Phase 9: rc<T> + weak<T> — reference-counted shared ownership */
+    TY_RC,            /* rc<T> — reference-counted owning pointer */
+    TY_WEAK,          /* weak<T> — non-owning observer for rc<T> */
 } TypeKind;
 
 /* Max arity for function types in phase 2. */
@@ -41,6 +44,10 @@ typedef struct Type {
         struct {
             TypeKind inner;   /* The type T that ref<T> owns */
         } ref;
+        /* Phase 9: rc<T> and weak<T> store the inner type T */
+        struct {
+            TypeKind inner;   /* The type T that rc<T> or weak<T> points to */
+        } rc;
     } as;
 } Type;
 
@@ -56,6 +63,22 @@ static inline Type type_ref(TypeKind inner) {
     Type t;
     t.kind = TY_REF;
     t.as.ref.inner = inner;
+    return t;
+}
+
+/* Phase 9: rc<T> type constructor */
+static inline Type type_rc(TypeKind inner) {
+    Type t;
+    t.kind = TY_RC;
+    t.as.rc.inner = inner;
+    return t;
+}
+
+/* Phase 9: weak<T> type constructor */
+static inline Type type_weak(TypeKind inner) {
+    Type t;
+    t.kind = TY_WEAK;
+    t.as.rc.inner = inner;  /* Reuse the same field as rc */
     return t;
 }
 

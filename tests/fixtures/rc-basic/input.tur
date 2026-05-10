@@ -1,0 +1,8 @@
+(defn main [] :int
+  (let [r (rc/of 42)]
+    (println (rc/strong-count r))
+    (let [r2 (rc/clone r)]
+      (println (rc/strong-count r))
+      (println (rc/strong-count r2)))
+    (rc/drop r)
+    0))

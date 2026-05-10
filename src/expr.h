@@ -56,6 +56,16 @@ typedef enum ExprKind {
     /* Phase 5: ref<T> with move semantics */
     EX_REF,             /* (ref expr) - owning reference constructor */
     EX_DEREF,           /* (@ expr) - dereference ref<T> or ptr<T> */
+    /* Phase 9: rc<T> + weak<T> reference counting */
+    EX_RC_OF,          /* (rc/of x) - create new rc<T> */
+    EX_RC_CLONE,       /* (rc/clone r) - increment strong count */
+    EX_RC_DROP,        /* (rc/drop r) - decrement strong count */
+    /* Note: (@ r) for rc<T> reuses EX_DEREF */
+    EX_RC_PTR,         /* (rc->ptr r) - borrow ptr<T> from rc<T> */
+    EX_RC_COUNT,       /* (rc/strong-count r) - get strong count */
+    EX_WEAK,           /* (weak r) - create weak<T> from rc<T> */
+    EX_WEAK_UPGRADE,   /* (upgrade w) - upgrade weak<T> to option<rc<T>> */
+    EX_WEAK_PRED,      /* (weak? w) - check if w is weak<T> */
     EX_PROGRAM,
 } ExprKind;
 
@@ -144,6 +154,17 @@ struct Expr {
         /* Phase 5 */
         struct { Expr *expr; }        ref_;    /* (ref expr) - inner expression */
         struct { Expr *expr; }        deref_;  /* (@ expr) - expression to dereference */
+
+        /* Phase 9: rc<T> + weak<T> operations */
+        struct { Expr *expr; }        rc_of_;      /* (rc/of x) - value to wrap */
+        struct { Expr *expr; }        rc_clone_;  /* (rc/clone r) - rc to clone */
+        struct { Expr *expr; }        rc_drop_;   /* (rc/drop r) - rc to drop */
+        /* Note: (@ r) for rc<T> reuses deref_ field */
+        struct { Expr *expr; }        rc_ptr_;    /* (rc->ptr r) - rc to borrow ptr from */
+        struct { Expr *expr; }        rc_count_;  /* (rc/strong-count r) - rc to count */
+        struct { Expr *expr; }        weak_;      /* (weak r) - rc to create weak from */
+        struct { Expr *expr; }        weak_upgrade_; /* (upgrade w) - weak to upgrade */
+        struct { Expr *expr; }        weak_pred_;   /* (weak? w) - expr to check */
 
         struct { Expr **items; uint32_t n; }                               program;
     } as;

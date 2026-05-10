@@ -1,0 +1,10 @@
+(defn main [] :int
+  (let [a (rc/of 10)
+        b (rc/clone a)
+        c (rc/clone a)]
+    (println (rc/strong-count a))
+    (rc/drop b)
+    (println (rc/strong-count a))
+    (rc/drop c)
+    (println (rc/strong-count a))
+    0))

@@ -1,0 +1,6 @@
+(defn main [] :int
+  (let [x (rc/of 1)
+        y (rc/of 2)]
+    (let [z (rc/clone x)]
+      (rc/drop z))
+    0))

@@ -188,6 +188,15 @@ typedef struct Elab {
     const Symbol *sym_drop;       /* drop! - explicit drop for ref<T> */
     const Symbol *kw_else;         /* :else (the symbol named "else") */
     const Symbol *kw_derive;       /* :as (the symbol named "as") - for inline-C */
+    /* Phase 9: rc<T> + weak<T> */
+    const Symbol *sym_rc_of;       /* rc/of */
+    const Symbol *sym_rc_clone;    /* rc/clone */
+    const Symbol *sym_rc_drop;     /* rc/drop */
+    const Symbol *sym_rc_ptr;      /* rc->ptr */
+    const Symbol *sym_rc_strong_count; /* rc/strong-count */
+    const Symbol *sym_weak;        /* weak */
+    const Symbol *sym_upgrade;     /* upgrade */
+    const Symbol *sym_weak_pred;   /* weak? */
     /* Phase 6: Macro system */
     const Symbol *sym_defmacro;   /* defmacro */
     const Symbol *sym_quote;      /* quote */
@@ -260,6 +269,15 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_drop      = intern_cstr(st, "drop!");
     e->kw_else       = intern_cstr(st, "else");
     e->kw_derive     = intern_cstr(st, "as");
+    /* Phase 9: rc<T> + weak<T> */
+    e->sym_rc_of = intern_cstr(st, "rc/of");
+    e->sym_rc_clone = intern_cstr(st, "rc/clone");
+    e->sym_rc_drop = intern_cstr(st, "rc/drop");
+    e->sym_rc_ptr = intern_cstr(st, "rc->ptr");
+    e->sym_rc_strong_count = intern_cstr(st, "rc/strong-count");
+    e->sym_weak = intern_cstr(st, "weak");
+    e->sym_upgrade = intern_cstr(st, "upgrade");
+    e->sym_weak_pred = intern_cstr(st, "weak?");
     /* Phase 6 */
     e->sym_defmacro = intern_cstr(st, "defmacro");
     e->sym_quote = intern_cstr(st, "quote");
@@ -485,6 +503,15 @@ static Expr *elab_form(Elab *e, Form *f);
 static Expr *elab_ref(Elab *e, const Form *call);
 static Expr *elab_deref(Elab *e, const Form *call);
 static Expr *elab_drop(Elab *e, const Form *call);
+/* Phase 9: rc<T> + weak<T> */
+static Expr *elab_rc_of(Elab *e, const Form *call);
+static Expr *elab_rc_clone(Elab *e, const Form *call);
+static Expr *elab_rc_drop(Elab *e, const Form *call);
+static Expr *elab_rc_ptr(Elab *e, const Form *call);
+static Expr *elab_rc_strong_count(Elab *e, const Form *call);
+static Expr *elab_weak(Elab *e, const Form *call);
+static Expr *elab_weak_upgrade(Elab *e, const Form *call);
+static Expr *elab_weak_pred(Elab *e, const Form *call);
 
 /* ---- helpers ---- */
 
@@ -1070,7 +1097,7 @@ static Expr *elab_ref(Elab *e, const Form *call) {
  * Dereferences a ref<T> or ptr<T>, returning T.
  * 
  * Grammar: (@ expr)
- * expr must have type ref<T> or ptr<T>
+ * expr must have type ref<T>, rc<T>, or ptr<T>
  * Returns: T
  */
 static Expr *elab_deref(Elab *e, const Form *call) {
@@ -1085,18 +1112,20 @@ static Expr *elab_deref(Elab *e, const Form *call) {
     Expr *inner = elab_form(e, call->as.list.items[1]);
     if (!inner) return NULL;
     
-    /* Check that inner is ref<T> or ptr<T> */
-    if (inner->type.kind != TY_REF && inner->type.kind != TY_PTR_VOID) {
+    /* Check that inner is ref<T>, rc<T>, or ptr<T> */
+    if (inner->type.kind != TY_REF && inner->type.kind != TY_RC && inner->type.kind != TY_PTR_VOID) {
         diag_emit(DIAG_ERROR, call->span,
-                  "@ requires ref<T> or ptr<T>, got %s",
+                  "@ requires ref<T>, rc<T>, or ptr<T>, got %s",
                   type_name(inner->type));
         return NULL;
     }
     
-    /* Return type is the inner type of ref<T> or void* for ptr<void> */
+    /* Return type is the inner type */
     Type result_type;
     if (inner->type.kind == TY_REF) {
         result_type = type_from_kind(inner->type.as.ref.inner);
+    } else if (inner->type.kind == TY_RC) {
+        result_type = type_from_kind(inner->type.as.rc.inner);
     } else {
         /* ptr<void> derefs to void* for now - could be more precise */
         result_type = TYPE_PTR_VOID;
@@ -1154,6 +1183,227 @@ static Expr *elab_drop(Elab *e, const Form *call) {
     out->as.builtin.args = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
     out->as.builtin.args[0] = inner;
 
+    return out;
+}
+
+/* Phase 9: rc<T> operations */
+
+/* (rc/of x) - Create a new rc<T> with x as the value.
+ * Allocates a control block, copies/moves x into it.
+ * Returns: rc<T>
+ */
+static Expr *elab_rc_of(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(rc/of x) requires exactly one argument");
+        return NULL;
+    }
+
+    Expr *inner = elab_form(e, call->as.list.items[1]);
+    if (!inner) return NULL;
+
+    /* rc<T> where T is the inner expression's type */
+    Type rc_type = type_rc(inner->type.kind);
+
+    /* Create EX_RC_OF expression */
+    Expr *out = expr_new(e->arena, EX_RC_OF, rc_type, call->span);
+    out->as.rc_of_.expr = inner;
+    return out;
+}
+
+/* (rc/clone r) - Increment strong count, return new rc<T> pointing to same value.
+ * Returns: rc<T>
+ */
+static Expr *elab_rc_clone(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(rc/clone r) requires exactly one argument");
+        return NULL;
+    }
+
+    Expr *inner = elab_form(e, call->as.list.items[1]);
+    if (!inner) return NULL;
+
+    /* Argument must be rc<T> */
+    if (inner->type.kind != TY_RC) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "rc/clone requires rc<T>, got %s", type_name(inner->type));
+        return NULL;
+    }
+
+    /* rc/clone returns rc<T> with the same inner type */
+    Type rc_type = inner->type;  /* Same type as input */
+
+    /* Create EX_RC_CLONE expression */
+    Expr *out = expr_new(e->arena, EX_RC_CLONE, rc_type, call->span);
+    out->as.rc_clone_.expr = inner;
+    return out;
+}
+
+/* (rc/drop r) - Decrement strong count.
+ * Returns: nil
+ */
+static Expr *elab_rc_drop(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(rc/drop r) requires exactly one argument");
+        return NULL;
+    }
+
+    Expr *inner = elab_form(e, call->as.list.items[1]);
+    if (!inner) return NULL;
+
+    /* Argument must be rc<T> */
+    if (inner->type.kind != TY_RC) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "rc/drop requires rc<T>, got %s", type_name(inner->type));
+        return NULL;
+    }
+
+    /* Create EX_RC_DROP expression */
+    Expr *out = expr_new(e->arena, EX_RC_DROP, TYPE_NIL, call->span);
+    out->as.rc_drop_.expr = inner;
+    return out;
+}
+
+/* (rc->ptr r) - Borrow a ptr<T> from an rc<T>.
+ * Returns: ptr<void> (for now; could be more precise with generics)
+ */
+static Expr *elab_rc_ptr(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(rc->ptr r) requires exactly one argument");
+        return NULL;
+    }
+
+    Expr *inner = elab_form(e, call->as.list.items[1]);
+    if (!inner) return NULL;
+
+    /* Argument must be rc<T> */
+    if (inner->type.kind != TY_RC) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "rc->ptr requires rc<T>, got %s", type_name(inner->type));
+        return NULL;
+    }
+
+    /* Returns ptr<void> for now */
+    Type result_type = TYPE_PTR_VOID;
+
+    /* Create EX_RC_PTR expression */
+    Expr *out = expr_new(e->arena, EX_RC_PTR, result_type, call->span);
+    out->as.rc_ptr_.expr = inner;
+    return out;
+}
+
+/* (rc/strong-count r) - Get the strong count for debugging.
+ * Returns: int
+ */
+static Expr *elab_rc_strong_count(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(rc/strong-count r) requires exactly one argument");
+        return NULL;
+    }
+
+    Expr *inner = elab_form(e, call->as.list.items[1]);
+    if (!inner) return NULL;
+
+    /* Argument must be rc<T> */
+    if (inner->type.kind != TY_RC) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "rc/strong-count requires rc<T>, got %s", type_name(inner->type));
+        return NULL;
+    }
+
+    /* Create EX_RC_COUNT expression */
+    Expr *out = expr_new(e->arena, EX_RC_COUNT, TYPE_INT, call->span);
+    out->as.rc_count_.expr = inner;
+    return out;
+}
+
+/* Phase 9: weak<T> operations */
+
+/* (weak r) - Create a weak<T> from an rc<T>.
+ * Returns: weak<T>
+ */
+static Expr *elab_weak(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(weak r) requires exactly one argument");
+        return NULL;
+    }
+
+    Expr *inner = elab_form(e, call->as.list.items[1]);
+    if (!inner) return NULL;
+
+    /* Argument must be rc<T> */
+    if (inner->type.kind != TY_RC) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "weak requires rc<T>, got %s", type_name(inner->type));
+        return NULL;
+    }
+
+    /* weak<T> where T is the inner type of the rc */
+    Type weak_type = type_weak(inner->type.as.rc.inner);
+
+    /* Create EX_WEAK expression */
+    Expr *out = expr_new(e->arena, EX_WEAK, weak_type, call->span);
+    out->as.weak_.expr = inner;
+    return out;
+}
+
+/* (upgrade w) - Upgrade weak<T> to option<rc<T>>.
+ * Returns: option<rc<T>>
+ */
+static Expr *elab_weak_upgrade(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(upgrade w) requires exactly one argument");
+        return NULL;
+    }
+
+    Expr *inner = elab_form(e, call->as.list.items[1]);
+    if (!inner) return NULL;
+
+    /* Argument must be weak<T> */
+    if (inner->type.kind != TY_WEAK) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "upgrade requires weak<T>, got %s", type_name(inner->type));
+        return NULL;
+    }
+
+    /* Returns option<rc<T>> */
+    /* For now, we return rc<T> wrapped in option */
+    /* option<rc<T>> would be a separate type, but we'll use rc<T> for simplicity in v1 */
+    /* TODO: Proper option type when option is fully implemented */
+    Type result_type = inner->type;  /* weak<T> - for now, upgrade returns weak<T> or rc<T> */
+    /* Actually, upgrade should return option<rc<T>> */
+    /* Since option isn't fully implemented, we'll return rc<T> or nil */
+    /* For Phase 9, we'll just return rc<T> to keep it simple */
+    result_type = type_rc(inner->type.as.rc.inner);
+
+    /* Create EX_WEAK_UPGRADE expression */
+    Expr *out = expr_new(e->arena, EX_WEAK_UPGRADE, result_type, call->span);
+    out->as.weak_upgrade_.expr = inner;
+    return out;
+}
+
+/* (weak? w) - Check if w is a weak<T>.
+ * Returns: bool
+ */
+static Expr *elab_weak_pred(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(weak? w) requires exactly one argument");
+        return NULL;
+    }
+
+    Expr *inner = elab_form(e, call->as.list.items[1]);
+    if (!inner) return NULL;
+
+    /* Create EX_WEAK_PRED expression */
+    Expr *out = expr_new(e->arena, EX_WEAK_PRED, TYPE_BOOL, call->span);
+    out->as.weak_pred_.expr = inner;
     return out;
 }
 
@@ -1888,6 +2138,15 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_ref)    return elab_ref   (e, call);
     if (name == e->sym_deref)  return elab_deref (e, call);
     if (name == e->sym_drop)   return elab_drop  (e, call);
+    /* Phase 9: rc<T> + weak<T> */
+    if (name == e->sym_rc_of)       return elab_rc_of(e, call);
+    if (name == e->sym_rc_clone)    return elab_rc_clone(e, call);
+    if (name == e->sym_rc_drop)     return elab_rc_drop(e, call);
+    if (name == e->sym_rc_ptr)      return elab_rc_ptr(e, call);
+    if (name == e->sym_rc_strong_count) return elab_rc_strong_count(e, call);
+    if (name == e->sym_weak)        return elab_weak(e, call);
+    if (name == e->sym_upgrade)     return elab_weak_upgrade(e, call);
+    if (name == e->sym_weak_pred)   return elab_weak_pred(e, call);
     /* Phase 6 */
     if (name == e->sym_defmacro) return elab_defmacro(e, call);
     if (name == e->sym_quote)    return elab_form(e, call->as.list.items[1]); /* (quote x) -> x */

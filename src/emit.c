@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "builtins.h"
+#include "rc.h"
 #include "types.h"
 
 /* Forward declarations */
@@ -904,6 +905,92 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             
             return ptr_tmp;
         }
+        /* Phase 9: rc<T> + weak<T> operations */
+        case EX_RC_OF: {
+            /* (rc/of x) - allocate control block, copy value into it */
+            char *inner = emit_value(ctx, body, e->as.rc_of_.expr);
+            char *inner_type_c = strdup(type_c_name(e->as.rc_of_.expr->type));
+            
+            /* Emit: rc_cb_alloc(sizeof(T), TY_T, NULL) */
+            char *cb_tmp = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            /* For Phase 9, we use a simplified approach: allocate struct with value */
+            buf_printf(body, "RcControlBlock *%s = rc_cb_alloc(sizeof(%s), %d, NULL);\n",
+                       cb_tmp, inner_type_c, e->as.rc_of_.expr->type.kind);
+            indent_buf(body, ctx->indent);
+            /* Copy value into control block */
+            buf_printf(body, "*((%s *)((char *)%s + sizeof(RcControlBlock))) = %s;\n",
+                       inner_type_c, cb_tmp, inner);
+            free(inner);
+            free(inner_type_c);
+            return cb_tmp;
+        }
+        case EX_RC_CLONE: {
+            /* (rc/clone r) - increment strong count, return same cb */
+            char *inner = emit_value(ctx, body, e->as.rc_clone_.expr);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "rc_strong_increment(%s);\n", inner);
+            /* Return the same pointer (now with incremented count) */
+            return strdup(inner);
+        }
+        case EX_RC_DROP: {
+            /* (rc/drop r) - decrement strong count */
+            char *inner = emit_value(ctx, body, e->as.rc_drop_.expr);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "rc_strong_decrement(%s);\n", inner);
+            free(inner);
+            return atom_nil();
+        }
+        case EX_RC_PTR: {
+            /* (rc->ptr r) - borrow ptr<T> from rc<T> */
+            char *inner = emit_value(ctx, body, e->as.rc_ptr_.expr);
+            char *tmp = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "void *%s = rc_get_value(%s);\n", tmp, inner);
+            free(inner);
+            return tmp;
+        }
+        case EX_RC_COUNT: {
+            /* (rc/strong-count r) - get strong count */
+            char *inner = emit_value(ctx, body, e->as.rc_count_.expr);
+            char *tmp = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "int64_t %s = rc_strong_count(%s);\n", tmp, inner);
+            free(inner);
+            return tmp;
+        }
+        case EX_WEAK: {
+            /* (weak r) - create weak<T> from rc<T> */
+            char *inner = emit_value(ctx, body, e->as.weak_.expr);
+            char *tmp = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            /* weak shares the same control block, increments weak count */
+            buf_printf(body, "RcControlBlock *%s = %s; rc_weak_increment(%s);\n", tmp, inner, inner);
+            free(inner);
+            return tmp;
+        }
+        case EX_WEAK_UPGRADE: {
+            /* (upgrade w) - upgrade weak<T> to option<rc<T>> */
+            char *inner = emit_value(ctx, body, e->as.weak_upgrade_.expr);
+            char *tmp = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            /* Try to upgrade - returns the same cb if alive, NULL otherwise */
+            buf_printf(body, "RcControlBlock *%s = rc_upgrade(%s);\n", tmp, inner);
+            free(inner);
+            return tmp;
+        }
+        case EX_WEAK_PRED: {
+            /* (weak? w) - check if w is weak<T> */
+            char *inner = emit_value(ctx, body, e->as.weak_pred_.expr);
+            char *tmp = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            /* Check if the type kind is TY_WEAK - but at runtime we can't easily check this */
+            /* For Phase 9, we'll use a simple approach: check if it's a RcControlBlock pointer */
+            /* This is a simplification - in a proper implementation we'd need type info */
+            buf_printf(body, "bool %s = true; // weak? not fully implemented in Phase 9\n", tmp);
+            free(inner);
+            return tmp;
+        }
     }
     return atom_nil();
 }
@@ -1096,6 +1183,29 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "(void)(%s);\n", v);
             }
+            free(v);
+            return;
+        }
+        /* Phase 9: rc<T> + weak<T> as statements */
+        case EX_RC_OF:
+        case EX_RC_CLONE:
+        case EX_RC_PTR:
+        case EX_RC_COUNT:
+        case EX_WEAK:
+        case EX_WEAK_UPGRADE:
+        case EX_WEAK_PRED: {
+            /* Emit as value expression, discard result */
+            char *v = emit_value(ctx, body, e);
+            if (e->type.kind != TY_NIL) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "(void)(%s);\n", v);
+            }
+            free(v);
+            return;
+        }
+        case EX_RC_DROP: {
+            /* rc/drop as statement - emit and discard (already returns nil) */
+            char *v = emit_value(ctx, body, e);
             free(v);
             return;
         }
@@ -1366,6 +1476,9 @@ int emit_program(Buf *out, const Expr *program) {
      * to avoid conflicts with user-declared functions like exit. */
     buf_puts(out, "extern void *malloc(size_t);\n");
     buf_puts(out, "extern void free(void *);\n");
+    /* Phase 9: Declare abort and memset for rc<T> support */
+    buf_puts(out, "extern void abort(void);\n");
+    buf_puts(out, "extern void *memset(void *, int, size_t);\n");
     buf_puts(out, "\n");
     /* Phase 4 v1 lowering: emit tur_frame inline from runtime.h */
     buf_puts(out, "/* tur_frame - phase 4 v1 lowering (from runtime.h) */\n");
@@ -1391,6 +1504,85 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "static void tur_frame_fire_lifo(tur_frame *f) {\n");
     buf_puts(out, "    for (int i = f->n - 1; i >= 0; i--) f->defers[i](f->envs[i]);\n");
     buf_puts(out, "    f->n = 0;\n");
+    buf_puts(out, "}\n\n");
+    
+    /* Phase 9: Emit rc.h inline for rc<T> + weak<T> support */
+    buf_puts(out, "/* rc<T> + weak<T> reference counting - Phase 9 */\n");
+    buf_puts(out, "typedef void (*RcDropFn)(void *value);\n\n");
+    buf_puts(out, "typedef struct RcControlBlock RcControlBlock;\n\n");
+    buf_puts(out, "struct RcControlBlock {\n");
+    buf_puts(out, "    uint64_t strong_count;\n");
+    buf_puts(out, "    uint64_t weak_count;\n");
+    buf_puts(out, "    void *value;\n");
+    buf_puts(out, "    RcDropFn drop_fn;\n");
+    buf_puts(out, "    uint8_t value_type_kind;\n");
+    buf_puts(out, "    uint8_t reserved[8];\n");
+    buf_puts(out, "};\n\n");
+    buf_puts(out, "static void default_rc_drop_fn(void *value) {\n");
+    buf_puts(out, "    free(value);\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "RcControlBlock *rc_cb_alloc(size_t value_size, int value_type_kind, RcDropFn drop_fn) {\n");
+    buf_puts(out, "    size_t total_size = sizeof(RcControlBlock) + value_size;\n");
+    buf_puts(out, "    RcControlBlock *cb = (RcControlBlock *)malloc(total_size);\n");
+    buf_puts(out, "    if (!cb) { fprintf(stderr, \"rc: out of memory\\n\"); abort(); }\n");
+    buf_puts(out, "    cb->strong_count = 1;\n");
+    buf_puts(out, "    cb->weak_count = 0;\n");
+    buf_puts(out, "    cb->value = (void *)(cb + 1);\n");
+    buf_puts(out, "    cb->drop_fn = drop_fn ? drop_fn : default_rc_drop_fn;\n");
+    buf_puts(out, "    cb->value_type_kind = value_type_kind;\n");
+    buf_puts(out, "    memset(cb->reserved, 0, sizeof(cb->reserved));\n");
+    buf_puts(out, "    return cb;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "uint64_t rc_strong_increment(RcControlBlock *cb) {\n");
+    buf_puts(out, "    if (!cb) return 0;\n");
+    buf_puts(out, "    return ++cb->strong_count;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "bool rc_strong_decrement(RcControlBlock *cb) {\n");
+    buf_puts(out, "    if (!cb) return false;\n");
+    buf_puts(out, "    cb->strong_count--;\n");
+    buf_puts(out, "    if (cb->strong_count == 0 && cb->weak_count == 0) {\n");
+    buf_puts(out, "        if (cb->value) cb->drop_fn(cb->value);\n");
+    buf_puts(out, "        free(cb);\n");
+    buf_puts(out, "        return true;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    return false;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "uint64_t rc_weak_increment(RcControlBlock *cb) {\n");
+    buf_puts(out, "    if (!cb) return 0;\n");
+    buf_puts(out, "    return ++cb->weak_count;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "bool rc_weak_decrement(RcControlBlock *cb) {\n");
+    buf_puts(out, "    if (!cb) return false;\n");
+    buf_puts(out, "    cb->weak_count--;\n");
+    buf_puts(out, "    if (cb->weak_count == 0 && cb->strong_count == 0) {\n");
+    buf_puts(out, "        free(cb);\n");
+    buf_puts(out, "        return true;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    return false;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "uint64_t rc_strong_count(RcControlBlock *cb) {\n");
+    buf_puts(out, "    if (!cb) return 0;\n");
+    buf_puts(out, "    return cb->strong_count;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "uint64_t rc_weak_count(RcControlBlock *cb) {\n");
+    buf_puts(out, "    if (!cb) return 0;\n");
+    buf_puts(out, "    return cb->weak_count;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "bool rc_is_alive(RcControlBlock *cb) {\n");
+    buf_puts(out, "    if (!cb) return false;\n");
+    buf_puts(out, "    return cb->strong_count > 0;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "RcControlBlock *rc_upgrade(RcControlBlock *cb) {\n");
+    buf_puts(out, "    if (!cb) return NULL;\n");
+    buf_puts(out, "    if (cb->strong_count > 0) {\n");
+    buf_puts(out, "        rc_strong_increment(cb);\n");
+    buf_puts(out, "        return cb;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    return NULL;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "void *rc_get_value(RcControlBlock *cb) {\n");
+    buf_puts(out, "    if (!cb) return NULL;\n");
+    buf_puts(out, "    return cb->value;\n");
     buf_puts(out, "}\n\n");
     
     /* Phase 4 v1: Emit all defer thunks at file scope (after tur_frame defs) */
