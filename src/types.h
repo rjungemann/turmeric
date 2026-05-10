@@ -4,6 +4,9 @@
 #include <stdint.h>
 #include "buf.h"
 
+/* Forward declaration for effect rows (future-proofing for v3 effects) */
+typedef struct EffectRow EffectRow;
+
 /* Phase 2 type system: function types are stored inline without recursion
  * by using a simple array of TypeKind values. Compound types (structs, 
  * generics) get added in later phases. */
@@ -28,6 +31,9 @@ typedef struct Type {
             TypeKind arg_kinds[MAX_FN_ARITY];
             TypeKind result_kind;
             uint8_t arity;
+            /* Future-proofing for v3 effects: effect row slot.
+             * NULL in v0/v1; treated as empty effect set. */
+            EffectRow *effect_row;
         } fn;
     } as;
 } Type;

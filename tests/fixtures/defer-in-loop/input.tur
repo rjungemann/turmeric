@@ -1,0 +1,7 @@
+(defn main [] :int
+  (let [^mut i 0]
+    (while (< i 3)
+      (defer (println i))
+      (set! i (+ i 1)))
+    (println "loop done"))
+  0)
