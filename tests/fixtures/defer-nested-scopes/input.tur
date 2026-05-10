@@ -1,0 +1,10 @@
+(defn main [] :int
+  (let [x 10]
+    (defer (println "outer-1"))
+    (defer (println "outer-2"))
+    (let [y 20]
+      (defer (println "inner-1"))
+      (defer (println "inner-2"))
+      (println "inner-body"))
+    (println "outer-body"))
+  0)

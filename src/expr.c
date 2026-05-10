@@ -99,5 +99,14 @@ void expr_print(Buf *b, const Expr *e) {
             buf_puts(b, "<extern-c>"); break;
         case EX_INLINE_C:
             buf_puts(b, "<inline-c>"); break;
+        /* Phase 3 */
+        case EX_CLOSURE:
+            buf_puts(b, "<closure>"); break;
+        /* Phase 4 */
+        case EX_DEFER:
+            buf_puts(b, "(defer ");
+            expr_print(b, e->as.defer_.body);
+            buf_putc(b, ')');
+            break;
     }
 }

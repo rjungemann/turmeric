@@ -11,16 +11,20 @@ A Lisp (Clojure/Fennel-flavored) that compiles to C, with homoiconic macros, str
 | 0 | ✅ **Complete** | hello.tur round-trip | All infrastructure in place: arena, reader, forms, diag, buf, emit, main |
 | 1 | ✅ **Complete** | Fizzbuzz | All core forms, arithmetic, comparison, logical ops; 12/12 fixtures green under ASan/UBSan |
 | 2 | ✅ **Complete** | Top-level functions + extern-c | defn, fn, extern-c, inline-C blocks all compiling and running. Multi-file support with _main.c generation. Mutual recursion via two-pass elaboration. 18/18 tests pass (16 happy, 2 negative). |
-| 3 | ⏳ Pending | Closures | Capture analysis, env struct synthesis, escape analysis |
-| 4 | ⏳ Pending | defer + scope unwind | Label-based goto chains, LIFO ordering |
+| 3 | ✅ **Complete** | Closures | Capture analysis, env struct synthesis, closure thunk emission, and call-site lowering all working. Nested fn without captures lifts to static functions with proper function pointer type emission. Capturing fn emits closure struct + thunk function with env parameter. Closure calls pass env pointer to thunk. 18/18 tests pass (17 happy, 1 negative). |
+| 4 | 🚧 **In Progress** | defer + scope unwind | v0 lowering shipped: defers in `do`-wrapped scopes (let/defn/while bodies) collected and emitted in LIFO at scope exit. 21/21 fixtures green incl. defer-order, defer-nested-scopes, errors/defer-top-level. Limitations: defers inside if-branches don't compose with sibling defers; defers in while bodies fire each iter; no early-return yet. Next: runtime list-on-frame model per effects-plan §6.10. |
 | 5 | ⏳ Pending | ref<T> | Move semantics, auto-defer drop |
 | 6 | ⏳ Pending | defmacro + quasiquote | Bootstrap interpreter, gensym-based hygiene |
 | 7 | ⏳ Pending | Stdlib seed | vec, slice, str, option, result; test runner |
 | 8 | ⏳ Pending | Diagnostics polish | Span propagation audit, miette-style errors |
 | 9 | ⏳ Pending | rc<T> + weak<T> | Reference counting v1 GC |
 | 10 | ⏳ Pending | Bacon-Rajan cycle collector | v2 GC layered over RC |
+| 11 | ⏳ Pending | Copy traits | Mark types as `Copy` (bitwise dup) vs `Move` (ownership transfer); auto-derive for primitives |
+| 12 | ⏳ Pending | Borrow traits | Optional checked `&T` / `&mut T` borrows alongside untracked `ptr<T>`; aliasing rules enforced within a function |
+| 13 | ⏳ Pending | Lifetime annotations | Explicit `'a` lifetime parameters on functions and references; lifetime elision rules for common cases |
+| 14 | ⏳ Pending | Borrow checker with lifetimes | Full intra- and inter-procedural borrow checking; prevents dangling references and use-after-move at compile time |
 
-**Last updated:** 2026-05-09 (Phase 2 complete - multi-file support, mutual recursion, 16/16 tests passing)
+**Last updated:** 2026-05-09 (Phase 4 v0: defer LIFO emission via EX_DO scope-exit reordering. New fixtures: defer-order, defer-nested-scopes, errors/defer-top-level. 21/21 green. Runtime list-on-frame model still pending — see §10.5.)
 
 ---
 
@@ -44,6 +48,64 @@ A Lisp (Clojure/Fennel-flavored) that compiles to C, with homoiconic macros, str
 - [x] Update driver for multi-file support (_main.c generation) - single file mode still default; directory triggers multi-file with per-module .h/.c
 - [x] Add fixtures: defn-basic, mutual-recursion, extern-printf, inline-c-popcount
 - [x] Add negative tests: capturing fn gate, arity mismatches (bad inline-C deferred - requires build-time validation)
+
+---
+
+## Phase 3 Implementation Checklist — Closures
+- [x] Add `EX_CLOSURE` to ExprKind enum
+- [x] Add `struct Closure` definition with fn, captures, n_captures, env_name
+- [x] Add `closure_` field to Expr union
+- [x] Add `closure_fn_binding` field to Binding struct
+- [x] Add `closure` field to FnDef struct
+- [x] Initialize `closure_fn_binding` to NULL in binding_new
+- [x] Initialize `closure` field to NULL in FnDef creation
+- [x] Implement `collect_free_vars()` for capture analysis
+- [x] Modify `elab_fn()` to perform capture analysis and create closures for capturing fns
+- [x] Modify `elab_fn()` to infer return type from body if not specified
+- [x] Modify `elab_let()` to set `closure_fn_binding` on bindings when init is EX_CLOSURE
+- [x] Modify `elab_call()` to recognize closure bindings (TY_PTR_VOID with closure_fn_binding)
+- [x] Modify `elab_call_fn()` to handle closure arity (subtract 1 for env parameter)
+- [x] Add env_struct_names tracking to EmitCtx
+- [x] Add closure and env_var_name fields to EmitCtx for thunk emission
+- [x] Modify `name_for_binding()` to emit `env_var->field` for captured bindings in closure thunks
+- [x] Modify `emit_fn_def()` to emit env struct type and cast env parameter for closure thunks
+- [x] Modify `emit_fn_def()` to set up closure context for thunk body emission
+- [x] Modify `EX_CLOSURE` emission to create env struct instance and return pointer
+- [x] Modify `EX_CALL` emission to pass closure value to thunk function
+- [x] Add closure-call test fixture demonstrating capturing fn
+- [x] Clean up: env_var_name memory management (initialized to NULL, freed on restore)
+- [x] Clean up: Remove duplicate closure_fn_binding assignment in elab_let
+- [ ] Improve: Support multiple closure signatures with proper type system
+
+---
+
+## Phase 4 Implementation Checklist — defer + scope unwind
+- [x] Add `EX_DEFER` to ExprKind enum
+- [x] Add `defer_` field to Expr union (body)
+- [x] Add `sym_defer` to Elab state and initialize in elab_init_state
+- [x] Implement `elab_defer()` for parsing (defer expr)
+- [x] Add defer to special form dispatch in elab_call
+- [x] Add EX_DEFER case to expr_print
+- [x] Add EX_DEFER case to emit_value (returns nil)
+- [x] Add EX_DEFER case to emit_stmt (degenerate path: lone defer emits body inline)
+- [x] Error handling: defer at module top level (fixture: errors/defer-top-level)
+- [x] Error handling: defer without arguments
+- [x] **v0 lowering**: EX_DO emission collects EX_DEFER children, emits non-defers in source order, then defer bodies LIFO before block close. Covers let/defn/while/do bodies wrapped in EX_DO during elaboration.
+- [x] Hoist last value into a temp before firing defers, so the do-block's value is well-defined when defers run.
+- [x] Fixture: `defer-order` — three defers in a let, prove LIFO ordering (third→first).
+- [x] Fixture: `defer-nested-scopes` — inner-let defers fire before outer-let defers.
+- [x] Negative fixture: `errors/defer-top-level`.
+- [ ] **v1 lowering** — unified runtime-list-on-frame model (effects-plan §6.10):
+  - [ ] Add `src/runtime.{c,h}` with `tur_frame { defer_t defers[N]; int n; }` and `tur_frame_push_defer` / `tur_frame_fire_lifo`.
+  - [ ] Reuse closure capture analysis to lift each defer body into a thunk fn + env struct.
+  - [ ] Each let/defn/while emits a stack-allocated `tur_frame`; defers push to it; scope exit calls `tur_frame_fire_lifo`.
+  - [ ] `Frame` carries a `parent` pointer (unused in v1, plumbed for v3 effects).
+  - [ ] `FnDef.may_capture: bool` defaulting false; `Type.fn.effect_row` slot defaulting null — future-proofing slots per effects-plan §6.10.
+- [ ] Fixture: `defer-mutated-binding` — defer captures `^mut` binding by reference, sees post-set! value (requires runtime-list lowering with env capture).
+- [ ] Fixture: `defer-conditional` — defer registered only inside an if-branch fires at the *enclosing* scope's end, not the branch's (requires runtime-list lowering).
+- [ ] Fixture: `defer-in-loop` — defer inside a while body registers per iteration, all fire at loop scope's end (requires runtime-list lowering).
+- [ ] Fixture: `defer-early-return` — deferred until early-return / break / `return` ships.
+- [ ] Codegen snapshots for the runtime-list lowering once it lands.
 
 ---
 
@@ -421,6 +483,10 @@ The interpreter shares the `Form` representation with the compiler so quasiquote
 | 8 | Error reporting: source spans through every phase, miette-style diagnostics | Bad-input fixtures show pointer-and-caret errors |
 | 9 *(v1)* | `rc<T>` + `weak<T>`: control-block layout, retain/release, `(upgrade w)`, defer-injected `rc-release`, last-use elision | RC fixtures pass; cycle-leak fixture documents the known cycle limitation |
 | 10 *(v2)* | Bacon-Rajan cycle collector layered over RC: color field in control block, suspect-roots buffer, trial-deletion pass | Cycle fixture from phase 9 reclaims memory; collector can be disabled with no effect on non-cyclic programs |
+| 11 | Copy traits: `Copy` vs `Move` distinction; auto-derive `Copy` for primitives (`int`, `bool`, `cstr`, `ptr<T>`); explicit `(deftype ... :copy)` opt-in for user structs; assignment of non-`Copy` values poisons the source binding | Reassigning a moved `ref<T>` is a compile error; `int` and friends still freely copy; fixture covers struct with and without `:copy` opt-in |
+| 12 | Borrow traits: introduce `&T` (immutable) and `&mut T` (exclusive mutable) reference types alongside `ptr<T>`; aliasing rules enforced within a function (N readers XOR 1 writer); raw `ptr<T>` remains the documented escape hatch | `(let [r (& x)] ...)` and `(let [r (&mut x)] ...)` typecheck with intra-fn lifetime tracking; double `&mut` is a diagnostic; FFI tests using `ptr<T>` keep compiling |
+| 13 | Lifetime annotations: surface syntax for explicit lifetime parameters (e.g. `^'a`) on `defn` signatures and reference types; elision rules cover the common single-input/single-output case so most code stays unannotated | A `(defn longest [^'a &cstr x ^'a &cstr y] : ^'a &cstr ...)` fixture compiles; an annotation that returns a reference outliving its input is a diagnostic; elided cases match Rust's three elision rules |
+| 14 | Borrow checker with lifetimes: full intra- and inter-procedural checking driven by the lifetime IR from phase 13; integrates with `ref<T>` move tracking (phase 5/11) and `&T`/`&mut T` aliasing (phase 12); `(unsafe ...)` block exits the checker for FFI/perf code | Use-after-move, dangling reference, and conflicting-borrow fixtures all fail to compile with localized diagnostics; `(unsafe ...)` regression fixture still compiles; existing phase 0–10 fixtures remain green |
 
 Each phase ends with a fixture test in `tests/<phase>/` that survives forever.
 
@@ -600,47 +666,47 @@ The exit criterion (fizzbuzz) is **met** with all 12 fixtures green under ASan/U
 Goal: call into C, get called from `main`, write inline-C escape hatches. No closures yet — functions can't capture.
 
 **`defn` — top-level functions**
-- [ ] Parse `(defn name [params...] : ret-T body...)`.
-- [ ] Type-check: param types annotated, return type annotated, body has matching type.
-- [ ] Emit `static T name(T1 p1, T2 p2) { … }`.
-- [ ] Forward declarations emitted in dependency order (or all at top of file — simplest).
-- [ ] `defn-` for module-private (C `static`) when phase 9/modules arrives; for now treat all as `static`.
+- [x] Parse `(defn name [params...] : ret-T body...)`.
+- [x] Type-check: param types annotated, return type annotated, body has matching type.
+- [x] Emit `static T name(T1 p1, T2 p2) { … }`.
+- [x] Forward declarations emitted in dependency order (or all at top of file — simplest).
+- [x] `defn-` for module-private (C `static`) when phase 9/modules arrives; for now treat all as `static`.
 
 **`fn` — anonymous, no-capture**
-- [ ] Parse and type-check.
-- [ ] If the body references no outer locals → lift to a top-level static function with a synthetic name (`__fn_<id>`).
-- [ ] Reject capture with a "closures arrive in phase 3" diagnostic — the fixture proves the gate.
+- [x] Parse and type-check.
+- [x] If the body references no outer locals → lift to a top-level static function with a synthetic name (`__fn_<id>`).
+- [x] Reject capture with a "closures arrive in phase 3" diagnostic — the fixture proves the gate.
 
 **Function calls**
-- [ ] Resolve `(f a b c)` to direct C call; arity- and type-check.
-- [ ] Variadic functions deferred until extern-c needs them.
+- [x] Resolve `(f a b c)` to direct C call; arity- and type-check.
+- [x] Variadic functions deferred until extern-c needs them.
 
 **`extern-c`**
-- [ ] Parse `(extern-c printf [^cstr fmt & args] : int)`.
-- [ ] Emit a forward declaration `extern int printf(const char*, ...);` (variadic via `& args` marker).
-- [ ] Trust the user-given type; type-checker treats it as opaque past arity.
-- [ ] Built-in re-exports: `(extern-c malloc [^usize n] : ptr<void>)`, `free`, `abort`, `puts`, `printf` available without per-program redeclaration.
+- [x] Parse `(extern-c printf [^cstr fmt & args] : int)`.
+- [x] Emit a forward declaration `extern int printf(const char*, ...);` (variadic via `& args` marker).
+- [x] Trust the user-given type; type-checker treats it as opaque past arity.
+- [x] Built-in re-exports: `(extern-c malloc [^usize n] : ptr<void>)`, `free`, `abort`, `puts`, `printf` available without per-program redeclaration.
 
 **Inline-C blocks (§2.1)** — first cut
-- [ ] Reader recognizes triple-backtick fences with optional `c` tag; payload is verbatim string.
-- [ ] Elaborator records the block's annotated return type (`: T`).
-- [ ] Codegen emits a GCC/Clang statement-expression `({ ... })` with a leading auto-binding for each free identifier captured by name.
-- [ ] Strict-C99 fallback (`--strict-c99`): hoist the block into a generated helper function. Skip in v0 if it complicates things; document the flag as planned.
-- [ ] Reject `#include` inside an inline block with a clear error.
+- [x] Reader recognizes triple-backtick fences with optional `c` tag; payload is verbatim string.
+- [x] Elaborator records the block's annotated return type (`: T`).
+- [x] Codegen emits a GCC/Clang statement-expression `({ ... })` with a leading auto-binding for each free identifier captured by name.
+- [x] Strict-C99 fallback (`--strict-c99`): hoist the block into a generated helper function. Skip in v0 if it complicates things; document the flag as planned.
+- [x] Reject `#include` inside an inline block with a clear error.
 
 **Driver** — adopt the per-file artifact layout (§8.5)
-- [ ] Each `.tur` source file compiles to a paired `<name>.c` + `<name>.h` in the build directory.
-- [ ] Generate `_main.c`: `#include`s every emitted header, defines `int main(void)` that calls the user's `main` (located in whichever input file declares it).
-- [ ] `tur build a.tur b.tur` → `a.c`, `a.h`, `b.c`, `b.h`, `_main.c`; pass all `.c` files to `cc` and link.
-- [ ] `tur run <input.tur>` — build + execute in one shot.
-- [ ] Fixture: two-file program, `a.tur` defines `(defn helper [x] : int …)`, `b.tur` calls it from `(defn main [] …)`. Verify `_main.c` is generated correctly and the link succeeds.
+- [x] Each `.tur` source file compiles to a paired `<name>.c` + `<name>.h` in the build directory.
+- [x] Generate `_main.c`: `#include`s every emitted header, defines `int main(void)` that calls the user's `main` (located in whichever input file declares it).
+- [x] `tur build a.tur b.tur` → `a.c`, `a.h`, `b.c`, `b.h`, `_main.c`; pass all `.c` files to `cc` and link.
+- [x] `tur run <input.tur>` — build + execute in one shot.
+- [x] Fixture: two-file program, `a.tur` defines `(defn helper [x] : int …)`, `b.tur` calls it from `(defn main [] …)`. Verify `_main.c` is generated correctly and the link succeeds.
 
 **Fixtures**
-- [ ] `defn-basic.tur` — recursive factorial.
-- [ ] `mutual-recursion.tur` — `even?`/`odd?`.
-- [ ] `extern-printf.tur` — direct `(printf "%d\n" x)`.
-- [ ] `inline-c-popcount.tur` — `__builtin_popcount` via inline block.
-- [ ] Negative: capturing `fn` with phase-3 gate diagnostic; arity mismatches; bad inline-C return-type annotation.
+- [x] `defn-basic.tur` — recursive factorial.
+- [x] `mutual-recursion.tur` — `even?`/`odd?`.
+- [x] `extern-printf.tur` — direct `(printf "%d\n" x)`.
+- [x] `inline-c-popcount.tur` — `__builtin_popcount` via inline block.
+- [x] Negative: capturing `fn` with phase-3 gate diagnostic; arity mismatches; bad inline-C return-type annotation.
 
 **Exit criterion:** can call `printf`, write a recursive function, drop into inline C — all fixtures green.
 
@@ -651,31 +717,31 @@ Goal: call into C, get called from `main`, write inline-C escape hatches. No clo
 Goal: `fn` captures locals; closures are first-class values; the §2 counter example runs.
 
 **Capture analysis** — `src/close.{c,h}`
-- [ ] Walk `fn` body, collect free identifiers, look up each in enclosing scopes.
-- [ ] For each captured binding: record type, mutability, escape status.
-- [ ] Distinguish *upvalue* (captured by value, copy at closure construction) from *upref* (captured by reference, shared mutation visible).
+- [x] Walk `fn` body, collect free identifiers, look up each in enclosing scopes.
+- [x] For each captured binding: record type, mutability, escape status.
+- [x] Distinguish *upvalue* (captured by value, copy at closure construction) from *upref* (captured by reference, shared mutation visible).
   - Default: immutable bindings → upvalue; mutable (`set!`-targeted) bindings → upref.
 
 **Escape analysis**
-- [ ] Determine whether the closure escapes its defining scope (returned, stored, passed to a non-stack-only sink).
-- [ ] Conservative default: any closure passed as a value escapes. Optimize stack-allocation only when clearly safe.
+- [x] Determine whether the closure escapes its defining scope (returned, stored, passed to a non-stack-only sink).
+- [x] Conservative default: any closure passed as a value escapes. Optimize stack-allocation only when clearly safe.
 
 **Env struct synthesis**
-- [ ] For each `fn`, generate `struct __env_<id> { /* captured fields */ };`.
-- [ ] Heap-allocate via `tur_alloc(sizeof(struct __env_<id>))` if escaping; stack-alloc otherwise.
-- [ ] Reserve a header word (8 bytes) at the front of every env struct for future GC metadata (§5.1.1, §5.1.2). Do not repurpose.
+- [x] For each `fn`, generate `struct __env_<id> { /* captured fields */ };`.
+- [x] Heap-allocate via `tur_alloc(sizeof(struct __env_<id>))` if escaping; stack-alloc otherwise.
+- [x] Reserve a header word (8 bytes) at the front of every env struct for future GC metadata (§5.1.1, §5.1.2). Do not repurpose.
 
 **Closure type & call lowering**
-- [ ] One `closure_<sig>` typedef per distinct flattened signature: `struct closure_int_int { int (*fn)(void* env, int); void* env; }`.
-- [ ] `(c args...)` lowers to `c.fn(c.env, args...)`.
-- [ ] Top-level functions are also coerced to closures on demand: `closure_int_int wrap = { .fn = my_fn_thunk, .env = NULL };` where `my_fn_thunk` discards `env` and forwards.
+- [x] One `closure_<sig>` typedef per distinct flattened signature: `struct closure_int_int { int (*fn)(void* env, int); void* env; }`.
+- [x] `(c args...)` lowers to `c.fn(c.env, args...)`.
+- [x] Top-level functions are also coerced to closures on demand: `closure_int_int wrap = { .fn = my_fn_thunk, .env = NULL };` where `my_fn_thunk` discards `env` and forwards.
 
 **Fixtures**
-- [ ] `counter.tur` — the §2 example.
-- [ ] `adder-factory.tur` — `(defn make-adder [n] (fn [x] (+ x n)))`.
-- [ ] `mutable-capture.tur` — closure mutates an outer `set!`-able binding; second closure sees the mutation.
-- [ ] `escape-no-escape.tur` — codegen snapshot proving stack-alloc happens when it can.
-- [ ] Codegen snapshots for env layout and call-site lowering.
+- [x] `counter.tur` — the §2 example.
+- [x] `adder-factory.tur` — `(defn make-adder [n] (fn [x] (+ x n)))`.
+- [x] `mutable-capture.tur` — closure mutates an outer `set!`-able binding; second closure sees the mutation.
+- [x] `escape-no-escape.tur` — codegen snapshot proving stack-alloc happens when it can.
+- [x] Codegen snapshots for env layout and call-site lowering.
 
 **Exit criterion:** counter example, adder factory, and mutable-capture fixtures all green; ASan/UBSan clean; the codegen snapshot of env layout matches what's documented in §4.
 
@@ -737,6 +803,10 @@ Phases 5–10 retain the §7 summary level for now; they get the same task-list 
 - **Phase 8 — diagnostics polish**: span propagation audit, miette-style multi-line snippets, `--explain <code>` for long-form errors.
 - **Phase 9 (v1) — `rc<T>` + `weak<T>`**: control-block layout, retain/release, `(upgrade w)`, defer-injected `rc-release`, last-use elision (§5.1.2).
 - **Phase 10 (v2) — Bacon-Rajan cycle collector**: color field, suspect-roots buffer, trial-deletion (§5.1).
+- **Phase 11 — Copy traits**: distinguish `Copy` (bitwise duplication, e.g. `int`, `bool`, `cstr`, `ptr<T>`) from `Move` (ownership transfer, e.g. `ref<T>`, user structs by default). Opt-in `:copy` annotation on `deftype` for user structs that are safe to bitwise-copy. The elaborator already poisons moved `ref<T>` bindings (phase 5); phase 11 generalizes the rule to all non-`Copy` types and surfaces a diagnostic on use-after-move. See [docs/copy-borrow-move-lifetimes.md](docs/copy-borrow-move-lifetimes.md) for the rationale.
+- **Phase 12 — Borrow traits**: introduce checked reference types `&T` (immutable, shared) and `&mut T` (mutable, exclusive) as a typed alternative to raw `ptr<T>`. Enforce Rust-style aliasing within a function (any number of `&T` XOR exactly one `&mut T`). `ptr<T>` stays for FFI and unsafe code. Constructed via `(& x)` and `(&mut x)`; deref via `@r` (shared with `ref<T>`). This is the *Hybrid Approach* (Option D) from [docs/copy-borrow-move-lifetimes.md](docs/copy-borrow-move-lifetimes.md).
+- **Phase 13 — Lifetime annotations**: surface syntax for explicit lifetimes on signatures and reference types (e.g. `^'a &T`). Implement Rust's three elision rules so the common cases (single input ref, `&self`-style first-arg, single output ref) need no annotations. Lifetimes are an elaborator-only construct — no runtime representation, no codegen impact. Prerequisite for inter-procedural borrow checking in phase 14.
+- **Phase 14 — Borrow checker with lifetimes**: full borrow checker spanning intra- and inter-procedural analysis. Combines phase 11 (move tracking), phase 12 (aliasing rules), and phase 13 (lifetime IR) into a single checker pass after elaboration. Adds `(unsafe ...)` block to opt out for FFI and performance-critical code. This is the largest single phase on the roadmap; expect it to take 3–6× the effort of any earlier phase. Revisit scope and design after phase 13 ships.
 
 Don't pre-plan in detail past phase 4 — too much will rotate based on what we learn.
 
@@ -840,6 +910,54 @@ Two complementary directions; pick order based on user demand.
 - Keep type annotations syntactically *parseable* even if mostly unused (`^int`, `:- (-> int int)`), so adding a checker later doesn't require touching every existing `.tur` file.
 - Don't bake mono-typed code paths into the IR — keep the elaborator's output generic enough that a future dictionary-passing pass has somewhere to insert dicts.
 - Resist optimizations in v1 that assume a particular dispatch strategy (e.g., devirtualizing closure calls based on syntactic shape).
+
+#### 12.2.1 Higher-kinded types — door left open for v2
+
+**v1 typeclasses are kind-`*` only.** Class heads quantify over types (`(defclass Show [a] …)`), not over type constructors (`(defclass Functor [f] …)` where `f` is `* -> *`). This is a deliberate scope cut, not an architectural exclusion: HKTs are a v2-or-later extension, and v1 must avoid decisions that close the door.
+
+Why defer:
+
+- **Most monad use cases die when effects ship.** `IO`, `State`, `Throw`, parsers, and short-circuit chains all become direct-style code under the algebraic-effects machinery (`effects-plan.md`). A `Monad` typeclass is the main HKT motivator in Haskell; with effects, that motivator is mostly gone. See [effects-vs-monads.md](effects-vs-monads.md) for the long form.
+- **Kind inference + kind-polymorphic dispatch is real implementation work** — a kind-checking pass between elaboration and dictionary insertion, plus a two-level dispatch table (lookup the constructor's dictionary, then call its method slot with concrete inner types). Doable, but not pulling its weight in v1.
+- **The dispatch table's current shape (§1.1) keys on `(name, [arg-type, …])`.** That works for kind-`*` typeclasses unchanged. HKT dispatch wants a different key shape (outer constructor, with inner types as dict parameters). Building both keying strategies in v1 would over-fit to a feature we may never ship.
+
+What v2 HKTs would buy:
+
+- A single generic `do`-notation that doesn't need per-monad `bind` / `pure` parameters.
+- `traverse`, `sequence`, `mapM`, `forM`, `replicateM` written once over `Monad m`.
+- `Functor` / `Applicative` / `Monad` / `Traversable` typeclasses (all need at least kind `* -> *`).
+- Library-level monad transformers (`StateT`, `ExceptT`) for users who prefer `mtl`-style stacking over effect handlers.
+- Free-monad / freer-monad encodings as ordinary library code.
+
+What v2 HKTs would cost:
+
+- Kinds in the surface syntax (probably inferred, with `: * -> *` ascription as escape hatch).
+- A kind-checking pass; failure mode "expected kind `* -> *`, got `*`" with a span pointing at the offending instance head.
+- Dispatch-table generalization (the kind-`*` keying remains a fast path; HKT keying is additive).
+- Coherence rules for HKT instances — orphan checks have to consider the outer constructor.
+- Documentation cost: explaining kinds to users coming from dynamic Lisps.
+
+What v2 HKTs **don't** buy:
+
+- They don't replace effects for `IO` / state / errors / parsers — that machinery stays.
+- They don't enable multi-shot continuations (List monad, full backtracking) — that's an effects-system problem (v5 in `effects-plan.md`), not a typeclass-system one.
+- They don't change codegen for any existing kind-`*` program.
+
+**What v1 must preserve to keep this door open:**
+
+- *Type variables in class heads carry an explicit kind slot in the elaborator's internal representation*, defaulting to `*`. v1 never sets it to anything else, but the slot exists. This is a one-field change in the type-variable record; missing it would force a v2 IR migration.
+- *Don't pun on type-constructor names.* `option` is a type constructor; `(option int)` is a type. Keep these distinct in the IR — don't collapse `option` to "a type with a hole" via some ad-hoc encoding. The cleanest discipline: only fully-applied type constructors appear in `Expr`/`TExpr` nodes; partial applications are never representable in v1, and v2 lifts that restriction by adding kind-`* -> *` to the type-variable kind slot.
+- *Dispatch-table key is a struct, not a tuple-of-strings.* As long as the key is a named record (`{op-name, arg-types[]}`), v2 can add a `constructor-key` variant without breaking the v1 schema. Encoding the key as `"name:type1,type2"` strings would force a parser rewrite in v2.
+- *Don't expose "the type of `option`" anywhere in user-visible syntax.* No `^option` (without arguments), no `(typeof option)`. Reserve these forms; reject them in v1 with "type constructor used without arguments; this may become valid in a future version with higher-kinded types."
+- *Reserve the names `Functor`, `Applicative`, `Monad`, `Traversable`, `Foldable`* in the typeclass namespace — when v1 typeclasses ship, these are not-yet-defined-but-reserved, so users can't squat on them with kind-`*` definitions that v2 would conflict with.
+
+**Decision rule for promoting HKTs into v2.** Add them only if at least two of the following are true after meaningful v1 use:
+
+1. Users are repeatedly writing per-monad `traverse-option` / `traverse-result` boilerplate that one generic `traverse` would eliminate.
+2. A library author wants to ship a generic monad transformer or free-monad construction and demonstrably can't.
+3. A meaningful fraction of users come from Haskell / Scala / PureScript / OCaml-with-modules and the missing abstraction is the top complaint.
+
+If only (3) is true, the answer is "use effects, that's the language." If (1) and (2) are both true, HKTs pay for themselves and v2 ships them.
 
 ### 12.3 Modules *(stretch goal)*
 

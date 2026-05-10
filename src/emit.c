@@ -17,6 +17,13 @@ typedef struct EmitCtx {
      * that should use raw names (without ID suffix) when referenced. */
     Binding **fn_params;
     uint8_t   n_fn_params;
+    /* Phase 3: Track emitted env struct names to avoid duplicates */
+    const Symbol **env_struct_names;
+    uint8_t   n_env_struct_names;
+    uint8_t   cap_env_struct_names;
+    /* Phase 3: For closure thunk emission, track the current closure */
+    struct Closure *closure;
+    const char *env_var_name;  /* Name of the casted env variable (e.g., "__env_4") */
 } EmitCtx;
 
 /* ------------ helpers ------------ */
@@ -39,6 +46,10 @@ static char *fresh_tmp(EmitCtx *ctx) {
     snprintf(p, 24, "__t%d", ctx->tmp_n++);
     return p;
 }
+
+
+
+
 
 /* Return a sanitized C identifier for a Binding, without the ID suffix.
  * Used for function names and parameters. Caller frees. */
@@ -64,6 +75,20 @@ static char *raw_name_for_binding(const Binding *b) {
  * function parameter in the current context, use the raw name (without ID).
  * Otherwise, append the ID suffix. Caller frees. */
 static char *name_for_binding(EmitCtx *ctx, const Binding *b) {
+    /* Phase 3: If this is a captured binding in a closure thunk, emit as env->field */
+    if (ctx->closure && ctx->env_var_name) {
+        for (uint8_t i = 0; i < ctx->closure->n_captures; i++) {
+            if (ctx->closure->captures[i] == b) {
+                /* This is a captured binding - emit as env_var_name->field_name */
+                char *field_name = raw_name_for_binding(b);
+                char *result = (char *)malloc(strlen(ctx->env_var_name) + strlen(field_name) + 4);
+                if (!result) { fprintf(stderr, "tur: oom\n"); abort(); }
+                snprintf(result, strlen(ctx->env_var_name) + strlen(field_name) + 4, "%s->%s", ctx->env_var_name, field_name);
+                free(field_name);
+                return result;
+            }
+        }
+    }
     /* Check if this binding is a function parameter in the current context */
     if (ctx->fn_params) {
         for (uint8_t i = 0; i < ctx->n_fn_params; i++) {
@@ -71,6 +96,10 @@ static char *name_for_binding(EmitCtx *ctx, const Binding *b) {
                 return raw_name_for_binding(b);
             }
         }
+    }
+    /* If this is a function binding, use raw name without ID */
+    if (b->type.kind == TY_FN) {
+        return raw_name_for_binding(b);
     }
     /* `<name>_<id>` with non-id-safe chars mangled to underscores. We append
      * the unique id so different bindings with the same source name don't
@@ -249,7 +278,19 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         char *bn = name_for_binding(ctx, b);
         char *iv = emit_value(ctx, body, e->as.let_.bindings[i].init);
         indent_buf(body, ctx->indent);
-        buf_printf(body, "%s %s = %s;\n", type_c_name(b->type), bn, iv);
+        if (b->type.kind == TY_FN) {
+            /* For function pointer types, emit: <result> (*<name>)(<args...>) = <init>; */
+            buf_printf(body, "%s (*%s)(", 
+                       type_c_name(type_from_kind(b->type.as.fn.result_kind)), bn);
+            for (uint8_t j = 0; j < b->type.as.fn.arity; j++) {
+                if (j > 0) buf_puts(body, ", ");
+                buf_printf(body, "%s", 
+                           type_c_name(type_from_kind(b->type.as.fn.arg_kinds[j])));
+            }
+            buf_printf(body, ") = %s;\n", iv);
+        } else {
+            buf_printf(body, "%s %s = %s;\n", type_c_name(b->type), bn, iv);
+        }
         /* Suppress unused-variable warnings even if the body never refs it. */
         indent_buf(body, ctx->indent);
         buf_printf(body, "(void)%s;\n", bn);
@@ -269,6 +310,7 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     ctx->indent -= 4;
     indent_buf(body, ctx->indent);
     buf_puts(body, "}\n");
+    
     return nil_result ? atom_nil() : tmp;
 }
 
@@ -314,20 +356,65 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     return nil_result ? atom_nil() : tmp;
 }
 
+/* Phase 4: defer-aware do-block emission.
+ *
+ * v0 strategy: collect EX_DEFER children of this EX_DO, emit non-defer items
+ * in source order, then emit defer bodies in reverse (LIFO) just before the
+ * EX_DO finishes. This is the simplest correct lowering for the common case
+ * (defers at scope-top in let/defn/while bodies, since those bodies are
+ * wrapped in EX_DO during elaboration).
+ *
+ * Known limitations of this v0 lowering (tracked in turmeric-plan.md §10.5):
+ *   - Defers inside `if`/`cond` branches won't fire LIFO with sibling defers
+ *     in the surrounding scope; they only fire at the branch's own scope end.
+ *   - Defers inside `while` bodies fire on every loop iteration.
+ *   - Early `return` is not yet a language feature, so it isn't handled here.
+ *
+ * Phase 4's architectural target (per effects-plan §6.10) is the unified
+ * runtime-list-on-frame model. That replaces this inline reordering with a
+ * stack-allocated `tur_frame` per scope and `tur_frame_push_defer` calls.
+ * The switch is local to this file plus the new runtime header. */
 static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     uint32_t n = e->as.do_.n;
     if (n == 0) return atom_nil();
-    /* Run all but last as statements; last provides value (or runs as stmt
-     * if its type is nil). */
-    for (uint32_t i = 0; i < n - 1; i++) {
-        emit_stmt(ctx, body, e->as.do_.items[i]);
+
+    /* Find last non-defer item to source the do-block's value from. */
+    int last_value_idx = -1;
+    for (int i = (int)n - 1; i >= 0; i--) {
+        if (e->as.do_.items[i]->kind != EX_DEFER) { last_value_idx = i; break; }
     }
-    const Expr *last = e->as.do_.items[n - 1];
-    if (last->type.kind == TY_NIL) {
-        emit_stmt(ctx, body, last);
-        return atom_nil();
+
+    for (uint32_t i = 0; i < n; i++) {
+        const Expr *it = e->as.do_.items[i];
+        if (it->kind == EX_DEFER) continue; /* fired below */
+        if ((int)i == last_value_idx) continue; /* emitted as value below */
+        emit_stmt(ctx, body, it);
     }
-    return emit_value(ctx, body, last);
+
+    char *result = NULL;
+    if (last_value_idx >= 0) {
+        const Expr *last = e->as.do_.items[last_value_idx];
+        if (last->type.kind == TY_NIL) {
+            emit_stmt(ctx, body, last);
+        } else {
+            /* Hoist value into a temp so defers can fire after it's computed. */
+            result = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s %s;\n", type_c_name(last->type), result);
+            char *v = emit_value(ctx, body, last);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s = %s;\n", result, v);
+            free(v);
+        }
+    }
+
+    /* Fire defers LIFO. */
+    for (int i = (int)n - 1; i >= 0; i--) {
+        const Expr *it = e->as.do_.items[i];
+        if (it->kind == EX_DEFER) emit_stmt(ctx, body, it->as.defer_.body);
+    }
+
+    return result ? result : atom_nil();
 }
 
 static void emit_while_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
@@ -381,9 +468,48 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             fprintf(stderr, "tur: emit: EX_FN not yet implemented\n");
             abort();
         case EX_CALL: {
+            Binding *fn_binding = e->as.call_.fn_binding;
+            
+            /* Phase 3: Check if this is a closure call */
+            if (fn_binding->closure_fn_binding) {
+                /* This is a closure - emit call to thunk function with closure value as first arg */
+                Binding *thunk_binding = fn_binding->closure_fn_binding;
+                char *thunk_name = raw_name_for_binding(thunk_binding);
+                
+                /* Closure value is the env struct variable */
+                char *closure_val = name_for_binding(ctx, fn_binding);
+                
+                char **arg_strs = (char **)malloc((e->as.call_.n_args + 1) * sizeof(char *));
+                if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
+                
+                /* First arg is the closure value (env struct) - pass by address for now */
+                arg_strs[0] = closure_val;
+                
+                /* Rest of the args */
+                for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                    arg_strs[i + 1] = emit_value(ctx, body, e->as.call_.args[i]);
+                }
+                
+                Buf out; buf_init(&out);
+                buf_printf(&out, "%s(", thunk_name);
+                for (uint32_t i = 0; i <= e->as.call_.n_args; i++) {
+                    if (i > 0) buf_puts(&out, ", ");
+                    buf_printf(&out, "%s", arg_strs[i]);
+                }
+                buf_puts(&out, ")");
+                buf_putc(&out, '\0');
+                char *result = strdup(out.data);
+                buf_free(&out);
+                for (uint32_t i = 0; i <= e->as.call_.n_args; i++) free(arg_strs[i]);
+                free(arg_strs);
+                free(thunk_name);
+                return result;
+            }
+            
+            /* Regular function call */
             /* Emit function call: fn(arg1, arg2, ...) */
             /* Use raw name for function calls (functions are defined with raw names) */
-            char *fn_name = raw_name_for_binding(e->as.call_.fn_binding);
+            char *fn_name = raw_name_for_binding(fn_binding);
             char **arg_strs = (char **)malloc(e->as.call_.n_args * sizeof(char *));
             if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
@@ -415,6 +541,75 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_write(body, ic->code.p, ic->code.len);
             return atom_nil();
         }
+        /* Phase 3 */
+        /* Phase 4 */
+        case EX_DEFER: {
+            /* Defer in value position: emit as nil (defer evaluates to nil) */
+            /* The body is emitted as a statement in emit_stmt */
+            return atom_nil();
+        }
+        /* Phase 3 */
+        case EX_CLOSURE: {
+            /* Emit closure: the closure value IS the env struct (passed by value to thunk) */
+            struct Closure *closure = e->as.closure_.closure;
+            const Symbol *env_name = closure->env_name;
+            
+            /* Emit env struct type definition at file scope if not already emitted */
+            /* Check if we've already emitted this env struct */
+            bool already_emitted = false;
+            if (ctx->env_struct_names) {
+                for (uint8_t i = 0; i < ctx->n_env_struct_names; i++) {
+                    if (ctx->env_struct_names[i] == env_name) {
+                        already_emitted = true;
+                        break;
+                    }
+                }
+            }
+            if (!already_emitted) {
+                /* Track this env struct */
+                if (ctx->n_env_struct_names >= ctx->cap_env_struct_names) {
+                    ctx->cap_env_struct_names = ctx->cap_env_struct_names ? ctx->cap_env_struct_names * 2 : 8;
+                    ctx->env_struct_names = (const Symbol **)realloc(ctx->env_struct_names,
+                        ctx->cap_env_struct_names * sizeof(const Symbol *));
+                }
+                ctx->env_struct_names[ctx->n_env_struct_names++] = env_name;
+                
+                /* Emit: struct __env_N { int64_t field1; int64_t field2; ... }; */
+                buf_printf(ctx->file, "struct %s {", env_name->name);
+                for (uint8_t i = 0; i < closure->n_captures; i++) {
+                    if (i > 0) buf_puts(ctx->file, "; ");
+                    Binding *captured = closure->captures[i];
+                    buf_printf(ctx->file, "%s %s",
+                               type_c_name(captured->type), captured->name->name);
+                }
+                buf_puts(ctx->file, "; };\n");
+            }
+            
+            /* Emit the env struct as the closure value */
+            /* For Phase 3, closure is the env struct, passed by pointer to thunk */
+            
+            /* Allocate temp for env struct instance */
+            char *tmp = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "struct %s %s = {", env_name->name, tmp);
+            
+            /* Populate with captured values */
+            for (uint8_t i = 0; i < closure->n_captures; i++) {
+                if (i > 0) buf_puts(body, ", ");
+                Binding *captured = closure->captures[i];
+                char *cn = name_for_binding(ctx, captured);
+                buf_printf(body, ".%s = %s", captured->name->name, cn);
+                free(cn);
+            }
+            buf_puts(body, "};\n");
+            
+            /* Return a pointer to the env struct as the closure value */
+            char *ptr_tmp = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "void *%s = &%s;\n", ptr_tmp, tmp);
+            
+            return ptr_tmp;
+        }
     }
     return atom_nil();
 }
@@ -428,11 +623,19 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             return;
         case EX_WHILE: emit_while_stmt(ctx, body, e); return;
         case EX_SET:   emit_set_stmt(ctx, body, e);   return;
-        case EX_DO:
-            for (uint32_t i = 0; i < e->as.do_.n; i++) {
+        case EX_DO: {
+            /* Phase 4: same defer-aware ordering as emit_do_value, statement form. */
+            uint32_t n = e->as.do_.n;
+            for (uint32_t i = 0; i < n; i++) {
+                if (e->as.do_.items[i]->kind == EX_DEFER) continue;
                 emit_stmt(ctx, body, e->as.do_.items[i]);
             }
+            for (int i = (int)n - 1; i >= 0; i--) {
+                const Expr *it = e->as.do_.items[i];
+                if (it->kind == EX_DEFER) emit_stmt(ctx, body, it->as.defer_.body);
+            }
             return;
+        }
         case EX_LET: {
             char *v = emit_value(ctx, body, e);
             free(v);
@@ -489,6 +692,24 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_putc(body, '\n');
             return;
         }
+        /* Phase 3 */
+        case EX_CLOSURE: {
+            /* Emit closure as expression and discard value */
+            char *v = emit_value(ctx, body, e);
+            if (e->type.kind != TY_NIL) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "(void)(%s);\n", v);
+            }
+            free(v);
+            return;
+        }
+        /* Phase 4: a bare defer that escapes its containing EX_DO (e.g. the
+         * sole body of a let or defn) degenerates to "fires at scope end"
+         * trivially — emit the body inline. */
+        case EX_DEFER: {
+            emit_stmt(ctx, body, e->as.defer_.body);
+            return;
+        }
     }
 }
 
@@ -498,6 +719,38 @@ static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     FnDef *fd = e->as.fn_def_.fn;
     /* Use raw name (without ID suffix) for function name */
     const char *fn_name = raw_name_for_binding(fd->binding);
+
+    /* Phase 3: Emit env struct for closure thunks */
+    if (fd->closure) {
+        const Symbol *env_name = fd->closure->env_name;
+        /* Check if we've already emitted this env struct */
+        bool already_emitted = false;
+        if (ctx->env_struct_names) {
+            for (uint8_t i = 0; i < ctx->n_env_struct_names; i++) {
+                if (ctx->env_struct_names[i] == env_name) {
+                    already_emitted = true;
+                    break;
+                }
+            }
+        }
+        if (!already_emitted) {
+            if (ctx->n_env_struct_names >= ctx->cap_env_struct_names) {
+                ctx->cap_env_struct_names = ctx->cap_env_struct_names ? ctx->cap_env_struct_names * 2 : 8;
+                ctx->env_struct_names = (const Symbol **)realloc(ctx->env_struct_names,
+                    ctx->cap_env_struct_names * sizeof(const Symbol *));
+            }
+            ctx->env_struct_names[ctx->n_env_struct_names++] = env_name;
+            
+            buf_printf(file, "struct %s {", env_name->name);
+            for (uint8_t i = 0; i < fd->closure->n_captures; i++) {
+                if (i > 0) buf_puts(file, "; ");
+                Binding *captured = fd->closure->captures[i];
+                buf_printf(file, "%s %s",
+                           type_c_name(captured->type), captured->name->name);
+            }
+            buf_puts(file, "; };\n");
+        }
+    }
 
     /* Emit function signature */
     /* Special case: C's main() must return int, not int64_t */
@@ -539,6 +792,31 @@ static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     ctx->fn_params = fd->params;
     ctx->n_fn_params = fd->n_params;
 
+    /* Phase 3: Set up closure context if this is a closure thunk */
+    struct Closure *saved_closure = ctx->closure;
+    const char *saved_env_var_name = ctx->env_var_name;
+    if (fd->closure) {
+        ctx->closure = fd->closure;
+        /* First parameter is the env */
+        if (fd->n_params > 0) {
+            Binding *env_param = fd->params[0];
+            /* Emit cast of env parameter to env struct type */
+            indent_buf(file, ctx->indent);
+            char *env_param_name = raw_name_for_binding(env_param);
+            /* Create a local variable name for the casted env */
+            char env_var_name_buf[64];
+            snprintf(env_var_name_buf, sizeof(env_var_name_buf), "__env_%s", fd->closure->env_name->name);
+            buf_printf(file, "struct %s *%s = (struct %s *)%s;\n",
+                       fd->closure->env_name->name,
+                       env_var_name_buf,
+                       fd->closure->env_name->name,
+                       env_param_name);
+            free(env_param_name);
+            /* Store the env variable name for use in name_for_binding */
+            ctx->env_var_name = strdup(env_var_name_buf);
+        }
+    }
+
     /* Get the return type */
     TypeKind result_kind = e->type.kind == TY_FN ? e->type.as.fn.result_kind : TY_NIL;
 
@@ -573,6 +851,9 @@ static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* Restore previous context */
     ctx->fn_params = saved_params;
     ctx->n_fn_params = saved_n_params;
+    ctx->closure = saved_closure;
+    free((void*)ctx->env_var_name);
+    ctx->env_var_name = saved_env_var_name;
 
     ctx->indent -= 4;
     buf_printf(file, "}\n\n");
@@ -598,7 +879,13 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.tmp_n = 0;
     ctx.fn_params = NULL;
     ctx.n_fn_params = 0;
-
+    /* Phase 3: closure tracking */
+    ctx.closure = NULL;
+    ctx.env_var_name = NULL;
+    /* Phase 3: env struct tracking */
+    ctx.env_struct_names = NULL;
+    ctx.n_env_struct_names = 0;
+    ctx.cap_env_struct_names = 0;
     /* Check if user defined a main function */
     bool user_has_main = false;
     for (uint32_t i = 0; i < program->as.program.n; i++) {
@@ -788,7 +1075,13 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program) 
     ctx.tmp_n = 0;
     ctx.fn_params = NULL;
     ctx.n_fn_params = 0;
-
+    /* Phase 3: closure tracking */
+    ctx.closure = NULL;
+    ctx.env_var_name = NULL;
+    /* Phase 3: env struct tracking */
+    ctx.env_struct_names = NULL;
+    ctx.n_env_struct_names = 0;
+    ctx.cap_env_struct_names = 0;
     char guard[256];
     sanitize_module_name(guard, module_name, sizeof(guard));
 

@@ -329,7 +329,7 @@ If defers fire on each scope exit during replay, side-effecting defers (closing 
 
 The compile-time enforcement: `resume` is a one-shot consume — the `k` value is moved into `resume`, becoming inaccessible after. Trying to use `k` twice in the handler is a move-after-move error, caught by the same flow analysis that handles `ref<T>`. Runtime check for the cases the analysis can't see (e.g., k stored in a mutable cell): fail with a clear panic.
 
-If multi-shot is ever needed (backtracking parsers, probabilistic programming), gate it behind a `cloneable<continuation>` type that requires every captured value's type to implement a `Clone` trait. Defer this to v2 or v3 of effects.
+**If multi-shot is ever needed** (backtracking parsers, probabilistic programming), gate it behind a `cloneable<continuation>` type that requires every captured value's type to implement a `Clone` trait. Defer this to v2 or v3 of effects.
 
 ### 6.4 RC and continuation lifetime — detailed
 

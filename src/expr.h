@@ -27,6 +27,8 @@ struct Binding {
     bool          is_global;     /* top-level def vs. local let */
     uint32_t      id;            /* unique within the program */
     Span          span;
+    /* Phase 3: For closure bindings, this points to the thunk function binding */
+    struct Binding *closure_fn_binding;
 };
 
 typedef enum ExprKind {
@@ -47,6 +49,8 @@ typedef enum ExprKind {
     EX_FN_DEF,          /* Phase 2: top-level function definition (defn) */
     EX_EXTERN_C,        /* Phase 2: extern C declaration */
     EX_INLINE_C,        /* Phase 2: inline C block */
+    EX_CLOSURE,         /* Phase 3: closure with captured env */
+    EX_DEFER,           /* Phase 4: defer expression */
     EX_PROGRAM,
 } ExprKind;
 
@@ -58,6 +62,8 @@ struct FnDef {
     Type          *param_types;  /* param types (for codegen) */
     Expr          *body;
     bool           is_variadic;  /* not yet supported in phase 2 */
+    /* Phase 3: For closure thunks, store the closure info */
+    struct Closure *closure;    /* NULL for non-closure functions */
 };
 
 /* Phase 2: ExternC represents an (extern-c ...) declaration. */
@@ -76,6 +82,14 @@ struct InlineC {
     Type           return_type; /* annotated : T */
     Binding      **captures;     /* captured bindings from enclosing scope */
     uint8_t        n_captures;
+};
+
+/* Phase 3: Closure represents a fn with captured environment. */
+struct Closure {
+    FnDef         *fn;           /* the function definition (modified with env param) */
+    Binding      **captures;     /* captured bindings from enclosing scope */
+    uint8_t        n_captures;
+    const Symbol *env_name;     /* generated name for the env struct type */
 };
 
 typedef struct LetBinding {
@@ -107,6 +121,10 @@ struct Expr {
         struct { FnDef *fn; }                                               fn_;
         struct { ExternC *ext; }                                            extern_c_;
         struct { InlineC *inline_c; }                                       inline_c_;
+        /* Phase 3 */
+        struct { struct Closure *closure; }                                 closure_;
+        /* Phase 4 */
+        struct { Expr *body; }                                               defer_;
 
         struct { Expr **items; uint32_t n; }                               program;
     } as;

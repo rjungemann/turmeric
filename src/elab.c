@@ -57,6 +57,101 @@ static Binding *scope_lookup(Scope *s, const Symbol *name) {
     return NULL;
 }
 
+/* Phase 3: Collect free variables in an expression that are not in the given
+ * param bindings. Returns a malloc'd list of captured Binding pointers. */
+static Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
+                                  uint32_t *n_out) {
+    Binding **result = NULL;
+    uint32_t cap = 0;
+    uint32_t n = 0;
+
+    /* Simple recursive traversal using a stack */
+    const Expr **stack = (const Expr **)malloc(256 * sizeof(const Expr *));
+    int sp = 0;
+    stack[sp++] = e;
+
+    while (sp > 0) {
+        const Expr *cur = stack[--sp];
+
+        if (cur->kind == EX_VAR) {
+            /* Check if this is a param or global */
+            bool is_param = false;
+            for (uint8_t i = 0; i < n_params; i++) {
+                if (params[i] == cur->as.var.binding) {
+                    is_param = true;
+                    break;
+                }
+            }
+            if (!is_param && !cur->as.var.binding->is_global) {
+                /* This is a free variable - check if it's already in result */
+                bool found = false;
+                for (uint32_t i = 0; i < n; i++) {
+                    if (result[i] == cur->as.var.binding) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    if (n >= cap) {
+                        cap = cap ? cap * 2 : 8;
+                        result = (Binding **)realloc(result, cap * sizeof(Binding *));
+                    }
+                    result[n++] = cur->as.var.binding;
+                }
+            }
+            continue;
+        }
+
+        /* Traverse children (in reverse order for depth-first) */
+        switch (cur->kind) {
+            case EX_LET:
+                for (uint32_t i = cur->as.let_.n; i > 0; i--) {
+                    stack[sp++] = cur->as.let_.bindings[i-1].init;
+                }
+                stack[sp++] = cur->as.let_.body;
+                break;
+            case EX_IF:
+                if (cur->as.if_.else_or_null) stack[sp++] = cur->as.if_.else_or_null;
+                stack[sp++] = cur->as.if_.then_;
+                stack[sp++] = cur->as.if_.cond;
+                break;
+            case EX_DO:
+                for (uint32_t i = cur->as.do_.n; i > 0; i--) {
+                    stack[sp++] = cur->as.do_.items[i-1];
+                }
+                break;
+            case EX_WHILE:
+                stack[sp++] = cur->as.while_.body;
+                stack[sp++] = cur->as.while_.cond;
+                break;
+            case EX_SET:
+                stack[sp++] = cur->as.set_.value;
+                break;
+            case EX_DEF:
+                stack[sp++] = cur->as.def_.init;
+                break;
+            case EX_BUILTIN:
+                for (uint32_t i = cur->as.builtin.n; i > 0; i--) {
+                    stack[sp++] = cur->as.builtin.args[i-1];
+                }
+                break;
+            case EX_CALL:
+                for (uint32_t i = cur->as.call_.n_args; i > 0; i--) {
+                    stack[sp++] = cur->as.call_.args[i-1];
+                }
+                break;
+            case EX_FN_DEF:
+                stack[sp++] = cur->as.fn_def_.fn->body;
+                break;
+            default:
+                break;
+        }
+    }
+    free(stack);
+    *n_out = n;
+    return result;
+}
+
 /* ---- elaborator state ---- */
 
 typedef struct Elab {
@@ -65,6 +160,11 @@ typedef struct Elab {
     Scope       *scope;     /* current */
     Scope        global;
     uint32_t     next_id;
+
+    /* Phase 3: Collect file-scope definitions (FN_DEF) from nested contexts */
+    Expr       **file_scope_defs;
+    uint32_t    n_file_scope_defs;
+    uint32_t    cap_file_scope_defs;
 
     /* Cached symbols for special-form dispatch. */
     const Symbol *sym_def;
@@ -80,9 +180,20 @@ typedef struct Elab {
     const Symbol *sym_fn;       /* Phase 2 */
     const Symbol *sym_extern_c; /* Phase 2 */
     const Symbol *sym_caret_mut;   /* ^mut */
+    const Symbol *sym_defer;      /* Phase 4 */
     const Symbol *kw_else;         /* :else (the symbol named "else") */
     const Symbol *kw_derive;       /* :as (the symbol named "as") - for inline-C */
 } Elab;
+
+/* Phase 3: Register a file-scope definition to be emitted later */
+static void elab_register_file_def(Elab *e, Expr *def_expr) {
+    if (e->n_file_scope_defs >= e->cap_file_scope_defs) {
+        e->cap_file_scope_defs = e->cap_file_scope_defs ? e->cap_file_scope_defs * 2 : 8;
+        e->file_scope_defs = (Expr **)realloc(e->file_scope_defs, 
+            e->cap_file_scope_defs * sizeof(Expr *));
+    }
+    e->file_scope_defs[e->n_file_scope_defs++] = def_expr;
+}
 
 static const Symbol *intern_cstr(SymbolTable *st, const char *s) {
     return symtab_intern(st, strslice(s, (uint32_t)strlen(s)));
@@ -94,6 +205,10 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     scope_init(&e->global, NULL);
     e->scope = &e->global;
     e->next_id = 0;
+    /* Phase 3: file-scope defs collection */
+    e->file_scope_defs = NULL;
+    e->n_file_scope_defs = 0;
+    e->cap_file_scope_defs = 0;
 
     e->sym_def       = intern_cstr(st, "def");
     e->sym_let       = intern_cstr(st, "let");
@@ -109,6 +224,7 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_fn        = intern_cstr(st, "fn");
     e->sym_extern_c  = intern_cstr(st, "extern-c");
     e->sym_caret_mut = intern_cstr(st, "^mut");
+    e->sym_defer     = intern_cstr(st, "defer");
     e->kw_else       = intern_cstr(st, "else");
     e->kw_derive     = intern_cstr(st, "as");
 }
@@ -122,6 +238,7 @@ static Binding *binding_new(Elab *e, const Symbol *name, Type type,
     b->is_global = is_global;
     b->id = e->next_id++;
     b->span = span;
+    b->closure_fn_binding = NULL;
     return b;
 }
 
@@ -207,6 +324,13 @@ static Expr *elab_let(Elab *e, const Form *call) {
             binds = (LetBinding *)realloc(binds, cap * sizeof(LetBinding));
             if (!binds) { fprintf(stderr, "tur: oom\n"); abort(); }
         }
+        
+        /* Phase 3: If init is a closure, set closure_fn_binding on the binding */
+        if (init && init->kind == EX_CLOSURE) {
+            struct Closure *closure = init->as.closure_.closure;
+            b->closure_fn_binding = closure->fn->binding;
+        }
+        
         binds[n_binds].binding = b;
         binds[n_binds].init = init;
         n_binds++;
@@ -479,6 +603,33 @@ static Expr *elab_while(Elab *e, const Form *call) {
     return out;
 }
 
+/* Phase 4: defer — (defer expr)
+ * Records an expression to be evaluated at scope exit, in LIFO order.
+ * For now, only valid inside let/do/defn/while bodies.
+ * The body is elaborated but its value is discarded (defer always evaluates to nil).
+ * Nested defers are not yet supported.
+ */
+static Expr *elab_defer(Elab *e, const Form *call) {
+    if (call->as.list.len < 2) {
+        diag_emit(DIAG_ERROR, call->span, "defer requires an expression");
+        return NULL;
+    }
+    /* Defer is only valid inside scope-introducing forms */
+    if (e->scope == &e->global) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "defer is not allowed at module top level");
+        return NULL;
+    }
+    /* Elaborate the body expression */
+    Expr *body = elab_form(e, call->as.list.items[1]);
+    if (!body) return NULL;
+    
+    /* Create EX_DEFER expression */
+    Expr *out = expr_new(e->arena, EX_DEFER, TYPE_NIL, call->span);
+    out->as.defer_.body = body;
+    return out;
+}
+
 /* Phase 2: defn — (defn name [param1 param2 ...] : return-type body...)
  * For now, we only support : int return type annotation. Param types are
  * inferred from usage. */
@@ -606,6 +757,11 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     e->scope = inner.parent;
     scope_free(&inner);
 
+    /* Infer return type from body if not specified */
+    if (return_kind == TY_NIL && body->type.kind != TY_NIL) {
+        return_kind = body->type.kind;
+    }
+    
     /* Create function type */
     TypeKind arg_kinds[MAX_FN_ARITY];
     for (uint8_t i = 0; i < n_params; i++) {
@@ -636,6 +792,7 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     fd->n_params = n_params;
     fd->body = body;
     fd->is_variadic = false;
+    fd->closure = NULL;
     /* Store param types for codegen */
     fd->param_types = (Type *)arena_alloc(e->arena, n_params * sizeof(Type));
     for (uint8_t i = 0; i < n_params; i++) {
@@ -753,16 +910,29 @@ static Expr *elab_fn(Elab *e, const Form *call) {
         body->as.do_.n = n_body;
     }
 
+    /* Phase 3: Capture analysis - collect free variables in the body */
+    /* We need to do this before popping the scope */
+    uint32_t n_captures = 0;
+    Binding **captures = collect_free_vars(body, params, n_params, &n_captures);
+
     /* Pop scope */
     e->scope = inner.parent;
     scope_free(&inner);
 
+    /* Infer return type from body if not specified */
+    if (return_kind == TY_NIL && body->type.kind != TY_NIL) {
+        return_kind = body->type.kind;
+    }
+    
     /* Create function type */
     TypeKind arg_kinds[MAX_FN_ARITY];
     for (uint8_t i = 0; i < n_params; i++) {
         arg_kinds[i] = TY_INT;  /* All int for phase 2 */
     }
     Type fn_type = type_fn(arg_kinds, n_params, return_kind);
+
+    /* Check if we're at top level */
+    bool at_top_level = (e->scope == &e->global);
 
     /* For anonymous fn, we lift it to a static function with a generated name.
      * We use the arena to allocate a unique name. */
@@ -781,6 +951,7 @@ static Expr *elab_fn(Elab *e, const Form *call) {
     fd->n_params = n_params;
     fd->body = body;
     fd->is_variadic = false;
+    fd->closure = NULL;
     /* Store param types for codegen */
     fd->param_types = (Type *)arena_alloc(e->arena, n_params * sizeof(Type));
     for (uint8_t i = 0; i < n_params; i++) {
@@ -790,18 +961,93 @@ static Expr *elab_fn(Elab *e, const Form *call) {
     /* Create the FN_DEF expression that will be emitted at file scope */
     Expr *fn_def_expr = expr_new(e->arena, EX_FN_DEF, fn_type, call->span);
     fn_def_expr->as.fn_def_.fn = fd;
-    
-    /* For Phase 2: if fn is at top level, we need to emit the function definition.
-     * We do this by returning a special wrapper that contains both the FN_DEF
-     * and a VAR reference. But for now, let's just emit the FN_DEF and return
-     * a VAR reference. The emit_program will need to handle this.
-     * 
-     * Actually, for Phase 2, let's just return the FN_DEF directly and handle
-     * it in emit. For nested fn (in let bindings), we'll need a different approach.
-     */
-    
-    /* Return the FN_DEF expression which will be emitted at file scope */
-    return fn_def_expr;
+
+    if (n_captures == 0) {
+        /* No captures - can use static function */
+        if (!at_top_level) {
+            /* Nested without captures: register FN_DEF for file-scope emission */
+            elab_register_file_def(e, fn_def_expr);
+        }
+        /* Return VAR reference to the function */
+        Expr *var_expr = expr_new(e->arena, EX_VAR, fn_type, call->span);
+        var_expr->as.var.binding = b;
+        free(captures);
+        return var_expr;
+    } else {
+        /* Phase 3: Closure with captures */
+        /* Generate env struct name */
+        char env_name_buf[32];
+        snprintf(env_name_buf, sizeof(env_name_buf), "__env_%u", e->next_id++);
+        const Symbol *env_name_sym = symtab_intern(e->st,
+            strslice(env_name_buf, (uint32_t)strlen(env_name_buf)));
+        
+        /* Modify the FnDef to include env parameter as first parameter */
+        uint8_t new_n_params = n_params + 1;
+        if (new_n_params > MAX_FN_ARITY) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "fn with captures: too many parameters including env (max %d)", MAX_FN_ARITY);
+            free(captures);
+            return NULL;
+        }
+        
+        /* Create new params array with env as first parameter */
+        Binding **new_params = (Binding **)arena_alloc(e->arena, new_n_params * sizeof(Binding *));
+        Type *new_param_types = (Type *)arena_alloc(e->arena, new_n_params * sizeof(Type));
+        
+        /* First param is env (void*) */
+        char env_param_name[32];
+        snprintf(env_param_name, sizeof(env_param_name), "__env_p_%u", e->next_id++);
+        const Symbol *env_param_sym = symtab_intern(e->st,
+            strslice(env_param_name, (uint32_t)strlen(env_param_name)));
+        Binding *env_param_binding = binding_new(e, env_param_sym, TYPE_PTR_VOID, false, false, call->span);
+        new_params[0] = env_param_binding;
+        new_param_types[0] = TYPE_PTR_VOID;
+        
+        /* Copy existing params */
+        for (uint8_t i = 0; i < n_params; i++) {
+            new_params[i + 1] = params[i];
+            new_param_types[i + 1] = TYPE_INT;
+        }
+        
+        /* Update FnDef with new params */
+        fd->params = new_params;
+        fd->n_params = new_n_params;
+        fd->param_types = new_param_types;
+        
+        /* Update function type to include env parameter */
+        TypeKind new_arg_kinds[MAX_FN_ARITY];
+        new_arg_kinds[0] = TY_PTR_VOID;  /* env parameter */
+        for (uint8_t i = 0; i < n_params; i++) {
+            new_arg_kinds[i + 1] = TY_INT;
+        }
+        Type new_fn_type = type_fn(new_arg_kinds, new_n_params, return_kind);
+        b->type = new_fn_type;
+        fd->binding->type = new_fn_type;
+        fn_def_expr->type = new_fn_type;
+        
+        /* Register the modified FN_DEF for file-scope emission */
+        if (!at_top_level) {
+            elab_register_file_def(e, fn_def_expr);
+        }
+        
+        /* Create Closure struct */
+        struct Closure *closure = (struct Closure *)arena_alloc(e->arena, sizeof(struct Closure));
+        closure->fn = fd;
+        closure->captures = captures;
+        closure->n_captures = n_captures;
+        closure->env_name = env_name_sym;
+        
+        /* Store closure reference in FnDef for codegen */
+        fd->closure = closure;
+        
+        /* Create EX_CLOSURE expression */
+        /* The closure's type is void* (pointer to closure struct) */
+        Expr *closure_expr = expr_new(e->arena, EX_CLOSURE, TYPE_PTR_VOID, call->span);
+        closure_expr->as.closure_.closure = closure;
+        
+        /* Don't free captures - it's now owned by the closure */
+        return closure_expr;
+    }
 }
 
 /* Phase 2: extern-c — (extern-c name [param1 param2 ...] : return-type)
@@ -984,6 +1230,8 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_cond)   return elab_cond  (e, call);
     if (name == e->sym_set)    return elab_set   (e, call);
     if (name == e->sym_while)  return elab_while (e, call);
+    /* Phase 4 */
+    if (name == e->sym_defer)  return elab_defer (e, call);
     /* Phase 2 */
     if (name == e->sym_defn)    return elab_defn  (e, call);
     if (name == e->sym_fn)      return elab_fn    (e, call);
@@ -991,7 +1239,7 @@ static Expr *elab_call(Elab *e, Form *call) {
 
     /* Phase 2: Check if it's a user-defined function call */
     Binding *fn_binding = scope_lookup(e->scope, name);
-    if (fn_binding && fn_binding->type.kind == TY_FN) {
+    if (fn_binding && (fn_binding->type.kind == TY_FN || (fn_binding->type.kind == TY_PTR_VOID && fn_binding->closure_fn_binding) || fn_binding->closure_fn_binding)) {
         return elab_call_fn(e, call, fn_binding);
     }
 
@@ -1038,13 +1286,21 @@ static Expr *elab_call(Elab *e, Form *call) {
 /* Phase 2: Elaborate a function call (f a b c) */
 static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
     uint32_t n_args = call->as.list.len - 1;
-    if (n_args == 0) {
-        diag_emit(DIAG_ERROR, call->span, "function call requires at least one argument");
-        return NULL;
-    }
 
     /* Get the function type */
     Type fn_type = fn_binding->type;
+    
+    /* For closure bindings, use the closure's thunk function type */
+    if (fn_binding->closure_fn_binding) {
+        /* This is a closure - get the thunk function type */
+        fn_type = fn_binding->closure_fn_binding->type;
+    } else if (fn_binding->type.kind == TY_PTR_VOID) {
+        /* This shouldn't happen - a TY_PTR_VOID binding without closure_fn_binding */
+        diag_emit(DIAG_ERROR, call->span,
+                  "'%s' is not a callable function", fn_binding->name->name);
+        return NULL;
+    }
+    
     if (fn_type.kind != TY_FN) {
         diag_emit(DIAG_ERROR, call->span,
                   "'%s' is not a function", fn_binding->name->name);
@@ -1052,6 +1308,12 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
     }
 
     uint8_t expected_arity = fn_type.as.fn.arity;
+    
+    /* For closure bindings, the thunk function has an extra env parameter */
+    if (fn_binding->closure_fn_binding) {
+        expected_arity--;  /* Subtract the hidden env parameter */
+    }
+    
     if (n_args != expected_arity) {
         diag_emit(DIAG_ERROR, call->span,
                   "function '%s' expects %u argument(s), got %u",
@@ -1202,6 +1464,25 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
     for (uint32_t i = 0; i < nforms; i++) {
         items[i] = elab_form(&e, forms[i]);
         if (!items[i]) { rc = -1; /* keep going to surface more diagnostics */ }
+    }
+
+    /* Phase 3: Prepend file-scope definitions (from nested fn) */
+    if (e.n_file_scope_defs > 0) {
+        /* Allocate new items array with room for file-scope defs */
+        Expr **new_items = (Expr **)arena_alloc(arena, 
+            (nforms + e.n_file_scope_defs) * sizeof(Expr *));
+        /* Copy file-scope defs first */
+        for (uint32_t i = 0; i < e.n_file_scope_defs; i++) {
+            new_items[i] = e.file_scope_defs[i];
+        }
+        /* Copy original items */
+        for (uint32_t i = 0; i < nforms; i++) {
+            new_items[e.n_file_scope_defs + i] = items[i];
+        }
+        items = new_items;
+        nforms += e.n_file_scope_defs;
+        /* Free the malloc'd file_scope_defs array */
+        free(e.file_scope_defs);
     }
 
     scope_free(&e.global);
