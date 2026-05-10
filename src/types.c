@@ -4,8 +4,26 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Phase 13: Helper to compare lifetimes */
+static bool lifetimes_eq(LifetimeId a_lifetimes[], uint8_t a_n, 
+                        LifetimeId b_lifetimes[], uint8_t b_n) {
+    if (a_n != b_n) return false;
+    for (uint8_t i = 0; i < a_n; i++) {
+        if (a_lifetimes[i] != b_lifetimes[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
 int type_eq(Type a, Type b) {
     if (a.kind != b.kind) return 0;
+    /* Phase 13: Check lifetime annotations - only if either has lifetimes */
+    if (a.n_lifetimes > 0 || b.n_lifetimes > 0) {
+        if (!lifetimes_eq(a.lifetimes, a.n_lifetimes, b.lifetimes, b.n_lifetimes)) {
+            return 0;
+        }
+    }
     if (a.kind == TY_FN) {
         if (a.as.fn.arity != b.as.fn.arity) return 0;
         for (uint8_t i = 0; i < a.as.fn.arity; i++) {
@@ -33,7 +51,26 @@ static Type type_from_kind(TypeKind k) {
     Type t;
     t.kind = k;
     t.as.fn.arity = 0;
+    t.n_lifetimes = 0;  /* Phase 13: no lifetimes by default */
     return t;
+}
+
+/* Phase 13: Helper to format lifetime annotations */
+static void lifetime_format(Buf *b, LifetimeId id) {
+    /* Format lifetime as 'a, 'b, 'c, etc. based on ID */
+    buf_putc(b, '\'');
+    buf_putc(b, 'a' + (id - 1));  /* ID 1 -> 'a, ID 2 -> 'b, etc. */
+}
+
+/* Phase 13: Helper to format lifetimes for a type */
+static void lifetimes_format(Buf *b, Type t) {
+    if (t.n_lifetimes == 0) return;
+    buf_putc(b, '<');
+    for (uint8_t i = 0; i < t.n_lifetimes; i++) {
+        if (i > 0) buf_putc(b, ',');
+        lifetime_format(b, t.lifetimes[i]);
+    }
+    buf_putc(b, '>');
 }
 
 static void type_name_buf(Buf *b, Type t);
@@ -158,11 +195,21 @@ static void type_name_buf(Buf *b, Type t) {
         case TY_REF_IMMUT: {
             buf_puts(b, "&");
             type_name_buf(b, type_from_kind(t.as.ref_borrow.target));
+            /* Phase 13: Add lifetime annotation if present */
+            if (t.n_lifetimes > 0) {
+                buf_putc(b, ' ');
+                lifetimes_format(b, t);
+            }
             break;
         }
         case TY_REF_MUT: {
             buf_puts(b, "&mut ");
             type_name_buf(b, type_from_kind(t.as.ref_borrow.target));
+            /* Phase 13: Add lifetime annotation if present */
+            if (t.n_lifetimes > 0) {
+                buf_putc(b, ' ');
+                lifetimes_format(b, t);
+            }
             break;
         }
     }

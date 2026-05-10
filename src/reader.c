@@ -91,6 +91,7 @@ static bool is_sym_start(int c) {
         case '!': case '?':
         case '_': case '$': case '&':
         case '^':            /* enables ^mut, ^int as sym-shaped metadata */
+        case 39:             /* single quote ' - enables lifetime annotations like 'a */
             return true;
     }
     return false;
@@ -105,6 +106,7 @@ static bool is_sym_cont(int c) {
         case '!': case '?':
         case '_': case '$': case '&':
         case '.': case '#': case '^':
+        case 39:             /* single quote ' - allows ' in lifetime symbols like 'a */
             return true;
     }
     return false;

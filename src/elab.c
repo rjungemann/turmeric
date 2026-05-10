@@ -13,6 +13,7 @@ static Type type_from_kind(TypeKind k) {
     Type t;
     t.kind = k;
     t.as.fn.arity = 0;
+    t.n_lifetimes = 0;  /* Phase 13: no lifetimes by default */
     return t;
 }
 
@@ -286,6 +287,9 @@ typedef struct Elab {
     /* Phase 12: Borrow traits */
     const Symbol *sym_borrow;      /* & symbol for immutable borrow */
     const Symbol *sym_borrow_mut;  /* &mut for mutable borrow */
+    /* Phase 13: Lifetime annotations */
+    /* We recognize lifetime annotations as symbols starting with '\'' */
+    /* No specific symbol needed - we check the symbol name at runtime */
     /* Macro storage: symbol -> MacroDef */
     /* For now, use a simple approach: store macros in a list */
     struct MacroDef **macros;
@@ -407,6 +411,25 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->macros = NULL;
     e->n_macros = 0;
     e->cap_macros = 0;
+}
+
+/* Phase 13: Lifetime annotation helpers */
+/* Check if a symbol is a lifetime annotation (starts with single quote) */
+static bool sym_is_lifetime(const Symbol *sym) {
+    if (sym == NULL || sym->name == NULL) return false;
+    return sym->name[0] == 39 && sym->len > 1;  /* 39 is ASCII for single quote */
+}
+
+/* Extract lifetime ID from symbol name ('a -> 1, 'b -> 2, etc.) */
+static LifetimeId sym_to_lifetime_id(const Symbol *sym) __attribute__((unused));
+static LifetimeId sym_to_lifetime_id(const Symbol *sym) {
+    if (!sym_is_lifetime(sym)) return LIFETIME_NONE;
+    if (sym->len != 2) return LIFETIME_NONE;  /* Only support single-letter lifetimes for now */
+    char c = sym->name[1];
+    if (c >= 'a' && c <= 'z') {
+        return (LifetimeId)(c - 'a' + 1);
+    }
+    return LIFETIME_NONE;
 }
 
 /* Phase 6: Macro lookup */
@@ -2703,7 +2726,7 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
      * For now, we'll use TY_PTR_VOID as a placeholder for struct types.
      * This allows the code to compile while we flesh out the full type system.
      */
-    Type struct_type = {.kind = TY_PTR_VOID, .copy_kind = is_copy ? CK_COPY : CK_MOVE};
+    Type struct_type = {.kind = TY_PTR_VOID, .copy_kind = is_copy ? CK_COPY : CK_MOVE, .n_lifetimes = 0};
     
     /* Create a global binding for the struct type */
     Binding *b = binding_new(e, name, struct_type, false, true, name_form->span);

@@ -9,6 +9,7 @@
 #include "forms.h"   /* Span */
 #include "symbols.h"
 #include "types.h"
+#include "lifetimes.h"  /* Phase 13: Lifetime annotations */
 
 /* Forward declarations. */
 typedef struct Expr        Expr;
@@ -85,6 +86,8 @@ struct FnDef {
     /* Phase 4: Future-proofing for v3 effects (effects-plan.md §6.10) - whether this
      * function may capture continuations. Always false in v0/v1. */
     bool           may_capture;
+    /* Phase 13: Lifetime annotations */
+    LifetimeContext lifetime_ctx;  /* Lifetime parameters and constraints for this function */
 };
 
 /* Phase 2: ExternC represents an (extern-c ...) declaration. */

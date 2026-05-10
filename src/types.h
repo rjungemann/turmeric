@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "buf.h"
+#include "lifetimes.h"  /* Phase 13: Lifetime annotations */
 
 /* Forward declaration for effect rows (future-proofing for v3 effects) */
 typedef struct EffectRow EffectRow;
@@ -14,6 +15,9 @@ typedef enum CopyKind {
     CK_COPY,      /* Copy: bitwise duplication allowed */
     CK_UNSIZED,   /* Unsized: size unknown at compile time (e.g., slices) */
 } CopyKind;
+
+/* Phase 13: Lifetime annotations */
+/* Lifetimes are purely an elaborator construct - no runtime representation */
 
 /* Phase 2 type system: function types are stored inline without recursion
  * by using a simple array of TypeKind values. Compound types (structs, 
@@ -39,11 +43,18 @@ typedef enum TypeKind {
 /* Max arity for function types in phase 2. */
 #define MAX_FN_ARITY 8
 
+/* Phase 13: Maximum lifetime parameters per type */
+#define MAX_TYPE_LIFETIMES 4
+
 /* Type uses a union to store either a simple kind or function info. */
 typedef struct Type {
     TypeKind kind;
     /* Phase 11: Copy/Move trait */
     CopyKind copy_kind;
+    /* Phase 13: Lifetime annotations */
+    /* Lifetimes attached to this type (for &T, &mut T, function types with lifetime params) */
+    LifetimeId lifetimes[MAX_TYPE_LIFETIMES];
+    uint8_t   n_lifetimes;
     union {
         struct {
             TypeKind arg_kinds[MAX_FN_ARITY];
@@ -68,12 +79,22 @@ typedef struct Type {
     } as;
 } Type;
 
-#define TYPE_UNKNOWN  ((Type){TY_UNKNOWN, .copy_kind=CK_MOVE, .as={0}})
-#define TYPE_NIL      ((Type){TY_NIL, .copy_kind=CK_COPY, .as={0}})
-#define TYPE_BOOL     ((Type){TY_BOOL, .copy_kind=CK_COPY, .as={0}})
-#define TYPE_INT      ((Type){TY_INT, .copy_kind=CK_COPY, .as={0}})
-#define TYPE_CSTR     ((Type){TY_CSTR, .copy_kind=CK_COPY, .as={0}})
-#define TYPE_PTR_VOID ((Type){TY_PTR_VOID, .copy_kind=CK_COPY, .as={0}})
+/* Helper to check if a type has lifetime annotations */
+static inline bool type_has_lifetime(Type t) {
+    return t.n_lifetimes > 0;
+}
+
+/* Helper to get the first lifetime from a type */
+static inline LifetimeId type_first_lifetime(Type t) {
+    return t.n_lifetimes > 0 ? t.lifetimes[0] : LIFETIME_NONE;
+}
+
+#define TYPE_UNKNOWN  ((Type){TY_UNKNOWN, .copy_kind=CK_MOVE, .n_lifetimes=0, .as={0}})
+#define TYPE_NIL      ((Type){TY_NIL, .copy_kind=CK_COPY, .n_lifetimes=0, .as={0}})
+#define TYPE_BOOL     ((Type){TY_BOOL, .copy_kind=CK_COPY, .n_lifetimes=0, .as={0}})
+#define TYPE_INT      ((Type){TY_INT, .copy_kind=CK_COPY, .n_lifetimes=0, .as={0}})
+#define TYPE_CSTR     ((Type){TY_CSTR, .copy_kind=CK_COPY, .n_lifetimes=0, .as={0}})
+#define TYPE_PTR_VOID ((Type){TY_PTR_VOID, .copy_kind=CK_COPY, .n_lifetimes=0, .as={0}})
 
 /* Phase 5: ref<T> type constructor */
 static inline Type type_ref(TypeKind inner) {
@@ -81,6 +102,7 @@ static inline Type type_ref(TypeKind inner) {
     t.kind = TY_REF;
     t.copy_kind = CK_MOVE;  /* ref<T> is move-only */
     t.as.ref.inner = inner;
+    t.n_lifetimes = 0;
     return t;
 }
 
@@ -90,6 +112,7 @@ static inline Type type_rc(TypeKind inner) {
     t.kind = TY_RC;
     t.copy_kind = CK_MOVE;  /* rc<T> is move-only by default */
     t.as.rc.inner = inner;
+    t.n_lifetimes = 0;
     return t;
 }
 
@@ -99,6 +122,7 @@ static inline Type type_weak(TypeKind inner) {
     t.kind = TY_WEAK;
     t.copy_kind = CK_MOVE;  /* weak<T> is move-only */
     t.as.rc.inner = inner;  /* Reuse the same field as rc */
+    t.n_lifetimes = 0;
     return t;
 }
 
@@ -121,6 +145,7 @@ static inline Type type_ref_immut(TypeKind target) {
     t.kind = TY_REF_IMMUT;
     t.copy_kind = CK_COPY;  /* Borrows are copyable (they're just pointers) */
     t.as.ref_borrow.target = target;
+    t.n_lifetimes = 0;
     return t;
 }
 
@@ -130,6 +155,28 @@ static inline Type type_ref_mut(TypeKind target) {
     t.kind = TY_REF_MUT;
     t.copy_kind = CK_MOVE;  /* Mutable borrows are move-only (exclusive access) */
     t.as.ref_borrow.target = target;
+    t.n_lifetimes = 0;
+    return t;
+}
+
+/* Phase 13: Lifetime-annotated borrow type constructors */
+/* &'a T - immutable borrow with lifetime */
+static inline Type type_ref_immut_lifetime(TypeKind target, LifetimeId lifetime) {
+    Type t = type_ref_immut(target);
+    if (lifetime != LIFETIME_NONE) {
+        t.lifetimes[0] = lifetime;
+        t.n_lifetimes = 1;
+    }
+    return t;
+}
+
+/* &'a mut T - mutable borrow with lifetime */
+static inline Type type_ref_mut_lifetime(TypeKind target, LifetimeId lifetime) {
+    Type t = type_ref_mut(target);
+    if (lifetime != LIFETIME_NONE) {
+        t.lifetimes[0] = lifetime;
+        t.n_lifetimes = 1;
+    }
     return t;
 }
 
