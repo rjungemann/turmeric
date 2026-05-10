@@ -14,6 +14,9 @@ int type_eq(Type a, Type b) {
         }
         return a.as.fn.result_kind == b.as.fn.result_kind;
     }
+    if (a.kind == TY_REF) {
+        return a.as.ref.inner == b.as.ref.inner;
+    }
     return 1;
 }
 
@@ -51,6 +54,16 @@ const char *type_name(Type t) {
             /* This leaks but it's only used for diagnostics. */
             return strdup(tmp.data);
         }
+        case TY_REF: {
+            /* Build "ref<T>" name */
+            Buf tmp;
+            buf_init(&tmp);
+            buf_puts(&tmp, "ref<");
+            buf_puts(&tmp, type_name(type_from_kind(t.as.ref.inner)));
+            buf_puts(&tmp, ">");
+            buf_putc(&tmp, '\0');
+            return strdup(tmp.data);
+        }
     }
     return "?";
 }
@@ -74,6 +87,12 @@ static void type_name_buf(Buf *b, Type t) {
             buf_puts(b, ")");
             break;
         }
+        case TY_REF: {
+            buf_puts(b, "ref<");
+            type_name_buf(b, type_from_kind(t.as.ref.inner));
+            buf_puts(b, ">");
+            break;
+        }
     }
 }
 
@@ -88,6 +107,12 @@ const char *type_c_name(Type t) {
         case TY_FN: {
             /* For function types, return the result type's C name. */
             return type_c_name(type_from_kind(t.as.fn.result_kind));
+        }
+        case TY_REF: {
+            /* ref<T> lowers to a pointer to T in C */
+            /* For now, we use void* for all refs (simple approach) */
+            /* TODO: could use T* directly but void* is simpler for v1 */
+            return "void *";
         }
     }
     return "void";

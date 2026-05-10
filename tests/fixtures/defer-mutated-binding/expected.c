@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
+extern void *malloc(size_t);
+extern void free(void *);
 
 /* tur_frame - phase 4 v1 lowering (from runtime.h) */
 typedef void (*defer_fn_t)(void *env);
@@ -33,8 +35,8 @@ static void tur_frame_fire_lifo(tur_frame *f) {
 struct __defer_env_1 {int64_t x; };
 
 static void __defer_2(void *__env) {
-    struct __defer_env_1 *__defer_env_1 = (struct __defer_env_1 *)__env;
-    printf("%lld\n", (long long)(__defer_env_1->x));
+    struct __defer_env_1 *__e = (struct __defer_env_1 *)__env;
+    printf("%lld\n", (long long)(__e->x));
 }
 
 int main() {

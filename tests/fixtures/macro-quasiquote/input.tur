@@ -1,0 +1,5 @@
+(defn main [] :int
+  (let [x 42]
+    (let [y `x]
+      (println y))
+    0))

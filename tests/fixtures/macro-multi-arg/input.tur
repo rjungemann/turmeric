@@ -1,0 +1,6 @@
+(defmacro add3 (a b c)
+  (+ a (+ b c)))
+
+(defn main [] :int
+  (println (add3 1 2 3))
+  0)

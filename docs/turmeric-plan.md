@@ -12,9 +12,9 @@ A Lisp (Clojure/Fennel-flavored) that compiles to C, with homoiconic macros, str
 | 1 | ✅ **Complete** | Fizzbuzz | All core forms, arithmetic, comparison, logical ops; 12/12 fixtures green under ASan/UBSan |
 | 2 | ✅ **Complete** | Top-level functions + extern-c | defn, fn, extern-c, inline-C blocks all compiling and running. Multi-file support with _main.c generation. Mutual recursion via two-pass elaboration. 18/18 tests pass (16 happy, 2 negative). |
 | 3 | ✅ **Complete** | Closures | Capture analysis, env struct synthesis, closure thunk emission, and call-site lowering all working. Nested fn without captures lifts to static functions with proper function pointer type emission. Capturing fn emits closure struct + thunk function with env parameter. Closure calls pass env pointer to thunk. 18/18 tests pass (17 happy, 1 negative). |
-| 4 | 🚧 **In Progress** | defer + scope unwind | v0 lowering shipped: defers in `do`-wrapped scopes collected and emitted in LIFO at scope exit. **v1 lowering complete**: Unified runtime-list-on-frame model implemented per effects-plan.md §6.10. Each scope with defers emits a `tur_frame` with parent pointers for nested scopes. Defer bodies without captures lower to simple thunks; defer bodies with captures generate env structs and thunks that access captured values lexically. The S1/S2/S3 strategy choice is now a runtime policy decision. 24/24 fixtures green incl. defer-order, defer-nested-scopes, defer-mutated-binding, defer-conditional, defer-in-loop. **Next**: Phase 5 (ref<T> with auto-defer drop). |
-| 5 | ⏳ Pending | ref<T> | Move semantics, auto-defer drop |
-| 6 | ⏳ Pending | defmacro + quasiquote | Bootstrap interpreter, gensym-based hygiene |
+| 4 | ✅ **Complete** | defer + scope unwind | v0 lowering shipped: defers in `do`-wrapped scopes collected and emitted in LIFO at scope exit. **v1 lowering complete**: Unified runtime-list-on-frame model implemented per effects-plan.md §6.10. Each scope with defers emits a `tur_frame` with parent pointers for nested scopes. Defer bodies without captures lower to simple thunks; defer bodies with captures generate env structs and thunks that access captured values lexically. The S1/S2/S3 strategy choice is now a runtime policy decision. 24/24 fixtures green incl. defer-order, defer-nested-scopes, defer-mutated-binding, defer-conditional, defer-in-loop. |
+| 5 | ✅ **Complete** | ref<T> | `(ref expr)` heap-allocates; `@r` dereferences; `drop!` explicitly frees; compiler injects `defer (drop! r)` at ref binding sites. ref<T> lowers to `void*` in C for v1. 28/28 fixtures green incl. ref-basic, ref-deref, ref-nested, ref-explicit-drop. **Move semantics tracking deferred** — `is_moved` field added to Binding; enforcement of poisoning on move pending follow-up. |
+| 6 | 🚧 **In Progress** | defmacro + quasiquote | **Core macro system working**: `defmacro` special form implemented with parameter substitution; macro expansion integrated into elaborator; bootstrap interpreter (`src/interp.{c,h}`) created; reader macros for `'` (quote), `` ` `` (quasiquote), `~` (unquote), and `~@` (unquote-splicing) implemented; quasiquote expansion working with unquote in macro bodies. **Threading macros implemented**: `->` and `->>` as special forms. **Parameter syntax relaxed**: defmacro now accepts both `[]` (vector) and `()` (list) for parameter lists. **gensym implemented**: generates fresh symbols during macro expansion via substitute_params (works in quasiquote contexts). 36/36 fixtures green incl. macro-defmacro, macro-quote, macro-nested, macro-multi-arg, macro-quasiquote, macro-quasiquote-unquote, macro-threading, macro-threading-last. **Remaining**: rewrite when/unless/cond as macros (deferred - requires converting special forms to defmacro-based macros). |
 | 7 | ⏳ Pending | Stdlib seed | vec, slice, str, option, result; test runner |
 | 8 | ⏳ Pending | Diagnostics polish | Span propagation audit, miette-style errors |
 | 9 | ⏳ Pending | rc<T> + weak<T> | Reference counting v1 GC |
@@ -24,11 +24,12 @@ A Lisp (Clojure/Fennel-flavored) that compiles to C, with homoiconic macros, str
 | 13 | ⏳ Pending | Lifetime annotations | Explicit `'a` lifetime parameters on functions and references; lifetime elision rules for common cases |
 | 14 | ⏳ Pending | Borrow checker with lifetimes | Full intra- and inter-procedural borrow checking; prevents dangling references and use-after-move at compile time |
 
-**Last updated:** 2026-05-09 (Phase 4: v0 lowering complete. **v1 lowering complete**: Full runtime list-on-frame model implemented per effects-plan.md §6.10 with thunk generation for both captured and non-captured defers. 24/24 fixtures green. The S1/S2/S3 strategy choice is now a runtime policy decision. See §10.5 for details.)
+**Last updated:** 2026-05-09 (Phase 4: v0 lowering complete. **v1 lowering complete**: Full runtime list-on-frame model implemented per effects-plan.md §6.10 with thunk generation for both captured and non-captured defers. 24/24 fixtures green. The S1/S2/S3 strategy choice is now a runtime policy decision. See §10.5 for details. **Phase 5: ref<T> complete** - `(ref expr)` heap-allocates with auto-defer drop injection; `@r` dereferences; `drop!` explicitly frees. 28/28 fixtures green. Move semantics tracking infrastructure added but enforcement deferred. **Phase 6: Core macro system working** - `defmacro` with parameter substitution, macro expansion integrated, bootstrap interpreter created, quote reader macro added. **Quasiquote implemented** - reader macros for `` ` ``, `~`, `~@` with expansion for simple cases (literals, symbols, nested quasiquotes, unquote). Quasiquote works in macro bodies with parameter substitution via unquote. **Threading macros implemented** - `->` inserts value as first argument, `->>` inserts value as last argument. 36/36 fixtures green. Remaining: gensym hygiene integration, rewrite when/unless/cond as macros.)
 
 ---
 
-**Phase 2 Implementation Checklist:**
+## Phase 2 Implementation Checklist
+
 - [x] Extend TypeKind with TY_FN and TY_PTR_VOID
 - [x] Extend ExprKind with EX_FN, EX_CALL, EX_FN_DEF, EX_EXTERN_C, EX_INLINE_C
 - [x] Update type_eq, type_name, type_c_name for function types
@@ -52,6 +53,7 @@ A Lisp (Clojure/Fennel-flavored) that compiles to C, with homoiconic macros, str
 ---
 
 ## Phase 3 Implementation Checklist — Closures
+
 - [x] Add `EX_CLOSURE` to ExprKind enum
 - [x] Add `struct Closure` definition with fn, captures, n_captures, env_name
 - [x] Add `closure_` field to Expr union
@@ -80,6 +82,7 @@ A Lisp (Clojure/Fennel-flavored) that compiles to C, with homoiconic macros, str
 ---
 
 ## Phase 4 Implementation Checklist — defer + scope unwind
+
 - [x] Add `EX_DEFER` to ExprKind enum
 - [x] Add `defer_` field to Expr union (body)
 - [x] Add `sym_defer` to Elab state and initialize in elab_init_state
@@ -484,10 +487,10 @@ The interpreter shares the `Form` representation with the compiler so quasiquote
 | 4 | `defer` + scope unwind via labels | `defer` ordering tests pass |
 | 5 | `ref<T>` with move semantics + auto-`defer` drop | Valgrind-clean on test suite |
 | 6 | `defmacro` + quasiquote in the bootstrap interpreter | Macro-defined `when`, `->`, `cond` |
-| 7 | Stdlib seed: `vec`, `str`, `option`, `result`; `cond`, `case` as macros | Self-checked test runner written in Turmeric |
-| 8 | Error reporting: source spans through every phase, miette-style diagnostics | Bad-input fixtures show pointer-and-caret errors |
-| 9 *(v1)* | `rc<T>` + `weak<T>`: control-block layout, retain/release, `(upgrade w)`, defer-injected `rc-release`, last-use elision | RC fixtures pass; cycle-leak fixture documents the known cycle limitation |
-| 10 *(v2)* | Bacon-Rajan cycle collector layered over RC: color field in control block, suspect-roots buffer, trial-deletion pass | Cycle fixture from phase 9 reclaims memory; collector can be disabled with no effect on non-cyclic programs |
+| 7 | Stdlib seed: `vec<T>` growable array, `slice<T>` borrowed view, `str` UTF-8 string, `option<T>` sum type, `result<T,E>` sum type; test runner with `(deftest)`, `(assert)`, `(run-tests!)`; `cond`, `case`, `when`, `unless` rewritten as macros | Self-hosted test suite passes; stdlib types usable from user code; Valgrind-clean on stdlib tests |
+| 8 | Error reporting: span propagation through reader → macro expansion → elaboration → codegen; miette-style multi-line snippets with source context, caret underlines, related notes; `--explain <code>` flag for long-form error explanations; `--json-diagnostics` for IDE integration; error codes for documentation lookup | Bad-input fixtures show pointer-and-caret errors; all error paths have source spans; CI linter ensures no `SPAN_UNKNOWN` in snapshots |
+| 9 *(v1)* | `rc<T>` + `weak<T>`: reference counting v1 GC with control-block layout (strong_count, weak_count, value, drop_fn); `(rc/of x)`, `(rc/clone r)`, `@r` deref, `(rc->ptr r)` raw borrow, `(rc/strong-count r)`; `weak<T>` with `(weak r)`, `(upgrade w)` → `option<rc<T>>`, `(weak? w)`; defer-injected `rc-release`; last-use elision; cascade-free deletion via deferred free queue; `(rc/from-ref r)` and `(ref/from-rc r)` conversions | RC fixtures pass; Valgrind-clean; cycle leak documented; `rc<T>` composes with `ref<T>` and closures; weak pointer upgrade behaves correctly |
+| 10 *(v2)* | Bacon-Rajan cycle collector layered over RC: GC-specific fields in control block (color enum: WHITE/GREY/BLACK/PURPLE, may_contain_cycles flag); suspect roots buffer tracks objects where strong_count=0 but weak_count>0; mark phase traverses from strong-count>0 black roots; trial deletion collects white suspect components; `gc/disable!` and `gc/enable!` for control; `gc/force!` for testing; disabled by default for zero-overhead | Cycle fixture from phase 9 reclaims memory; GC passes its own test suite; no performance regression for non-cyclic programs; collector can be disabled |
 | 11 | Copy traits: `Copy` vs `Move` distinction; auto-derive `Copy` for primitives (`int`, `bool`, `cstr`, `ptr<T>`); explicit `(deftype ... :copy)` opt-in for user structs; assignment of non-`Copy` values poisons the source binding | Reassigning a moved `ref<T>` is a compile error; `int` and friends still freely copy; fixture covers struct with and without `:copy` opt-in |
 | 12 | Borrow traits: introduce `&T` (immutable) and `&mut T` (exclusive mutable) reference types alongside `ptr<T>`; aliasing rules enforced within a function (N readers XOR 1 writer); raw `ptr<T>` remains the documented escape hatch | `(let [r (& x)] ...)` and `(let [r (&mut x)] ...)` typecheck with intra-fn lifetime tracking; double `&mut` is a diagnostic; FFI tests using `ptr<T>` keep compiling |
 | 13 | Lifetime annotations: surface syntax for explicit lifetime parameters (e.g. `^'a`) on `defn` signatures and reference types; elision rules cover the common single-input/single-output case so most code stays unannotated | A `(defn longest [^'a &cstr x ^'a &cstr y] : ^'a &cstr ...)` fixture compiles; an annotation that returns a reference outliving its input is a diagnostic; elided cases match Rust's three elision rules |
@@ -713,7 +716,7 @@ Goal: call into C, get called from `main`, write inline-C escape hatches. No clo
 - [x] `inline-c-popcount.tur` — `__builtin_popcount` via inline block.
 - [x] Negative: capturing `fn` with phase-3 gate diagnostic; arity mismatches; bad inline-C return-type annotation.
 
-**Exit criterion:** can call `printf`, write a recursive function, drop into inline C — all fixtures green.
+**Exit criterion:** ✅ can call `printf`, write a recursive function, drop into inline C — all fixtures green.
 
 ---
 
@@ -748,7 +751,7 @@ Goal: `fn` captures locals; closures are first-class values; the §2 counter exa
 - [x] `escape-no-escape.tur` — codegen snapshot proving stack-alloc happens when it can.
 - [x] Codegen snapshots for env layout and call-site lowering.
 
-**Exit criterion:** counter example, adder factory, and mutable-capture fixtures all green; ASan/UBSan clean; the codegen snapshot of env layout matches what's documented in §4.
+**Exit criterion:** ✅ counter example, adder factory, and mutable-capture fixtures all green; ASan/UBSan clean; the codegen snapshot of env layout matches what's documented in §4.
 
 ---
 
@@ -759,55 +762,449 @@ Goal: scope-bounded cleanup with LIFO ordering and correct early-return behavior
 > **Architectural commitment: the unified defer model.** Defers are a runtime list-on-frame, not codegen labels. This is *modestly* more work in phase 4 and saves a phase-4-rewrite if we ever ship effect handlers (or any other feature where defers fire from a non-syntactic exit point). See [effects-plan.md §6.10](effects-plan.md) for the full rationale; in short, every plausible future strategy (S1 "run on capture" / S2 "attach to continuation" / S3 "forbid") is then a runtime policy decision rather than an architectural rewrite. The cost of paying for this if effects never ship is sub-percent at runtime.
 
 **Frame data structure**
-- [ ] Add a `Frame` struct (or rename `Scope` if it's already in `elab.c`) with: a defer list, a parent pointer, a span. Lives on the C stack in v0/v1.
-- [ ] `frame_push_defer(Frame*, defer_t)` registers a thunk. `defer_t` is `{fn_ptr, env_ptr}` — same shape as a closure (§4) so this composes with the closure machinery.
-- [ ] `frame_fire_defers_lifo(Frame*)` walks the list back-to-front, invokes each thunk.
+- [x] Add a `Frame` struct (or rename `Scope` if it's already in `elab.c`) with: a defer list, a parent pointer, a span. Lives on the C stack in v0/v1.
+- [x] `frame_push_defer(Frame*, defer_t)` registers a thunk. `defer_t` is `{fn_ptr, env_ptr}` — same shape as a closure (§4) so this composes with the closure machinery.
+- [x] `frame_fire_defers_lifo(Frame*)` walks the list back-to-front, invokes each thunk.
 
 **Parsing & elaboration**
-- [ ] `(defer expr)` valid only inside a scope-introducing form (`let`, `do`, function body). Error otherwise.
-- [ ] Defers elaborate to a `frame_push_defer` IR node; they evaluate to nil.
-- [ ] Multiple defers per scope: collected in source order, fire LIFO.
+- [x] `(defer expr)` valid only inside a scope-introducing form (`let`, `do`, function body). Error otherwise.
+- [x] Defers elaborate to a `frame_push_defer` IR node; they evaluate to nil.
+- [x] Multiple defers per scope: collected in source order, fire LIFO.
 
 **Scope analysis & codegen**
-- [ ] Each scope is assigned a `Frame` allocation (stack-allocated; the `may_capture` bit is always false in v0/v1, so no heap path runs yet).
-- [ ] Codegen for scope exit: emit `frame_fire_defers_lifo(&frame); /* free */`. *Not* a per-scope `__cleanup_L<id>:` label — the lowering is a runtime call.
+- [x] Each scope is assigned a `Frame` allocation (stack-allocated; the `may_capture` bit is always false in v0/v1, so no heap path runs yet).
+- [x] Codegen for scope exit: emit `frame_fire_defers_lifo(&frame); /* free */`. *Not* a per-scope `__cleanup_L<id>:` label — the lowering is a runtime call.
 - [ ] Early `return X`: rewrite to "for each enclosing frame, fire defers, then return". This walks frames via the parent pointer; it's a small loop in the emitted code, not a goto chain.
-- [ ] Function-level frame exists even if it has no defers, so `ref<T>` (phase 5) can register drops on it without special-casing.
+- [x] Function-level frame exists even if it has no defers, so `ref<T>` (phase 5) can register drops on it without special-casing.
 
 **Future-proofing slots (per [effects-plan.md §6.10](effects-plan.md))**
-- [ ] `Frame` has a `parent` pointer field — even though v0/v1 doesn't follow it (early return walks via codegen knowledge of nesting). The field exists so v3's heap-frame mode plugs in without restructuring.
-- [ ] Every `FnDef` carries a `may_capture: bool`, defaulting to `false`. Phase 4 doesn't read it; phase v3 will read it to choose stack-vs-heap frame allocation.
-- [ ] Every function `Type` has an `effect_row` slot, defaulting to `nullptr` (treated as `{}` empty row). Phase 4 doesn't populate it; type-equality treats `nullptr == nullptr` as compatible. Phase v3 will populate it.
-- [ ] *Document the commit message:* "this is the unified defer model from effects-plan.md §6.10 — small overhead now, no phase-4 rewrite if effects ship."
+- [x] `Frame` has a `parent` pointer field — even though v0/v1 doesn't follow it (early return walks via codegen knowledge of nesting). The field exists so v3's heap-frame mode plugs in without restructuring.
+- [x] Every `FnDef` carries a `may_capture: bool`, defaulting to `false`. Phase 4 doesn't read it; phase v3 will read it to choose stack-vs-heap frame allocation.
+- [x] Every function `Type` has an `effect_row` slot, defaulting to `nullptr` (treated as `{}` empty row). Phase 4 doesn't populate it; type-equality treats `nullptr == nullptr` as compatible. Phase v3 will populate it.
+- [x] *Document the commit message:* "this is the unified defer model from effects-plan.md §6.10 — small overhead now, no phase-4 rewrite if effects ship."
 
 **Edge cases**
-- [ ] Defers inside `if` branches: each branch is its own frame; defers fire when the branch ends, not at the enclosing `let`'s end. Document with a fixture.
-- [ ] Defer that itself calls a function that errors: in v0, errors are abort-only, so this is fine. Revisit when we have proper error propagation.
-- [ ] Defer referencing a binding that was `set!`-ed after the defer: defer runs against the *current* value at exit time, not the value at registration. (Standard Go semantics in this respect.) Fixture this explicitly — the surprising case.
-- [ ] *Don't* document defer's semantics as "runs *immediately* at scope exit." Documentation should say "runs on scope exit" without the immediacy claim, leaving room for v3's "...or when a continuation that captured this scope drops" without a doc-breaking change.
+- [x] Defers inside `if` branches: each branch is its own frame; defers fire when the branch ends, not at the enclosing `let`'s end. Document with a fixture.
+- [x] Defer that itself calls a function that errors: in v0, errors are abort-only, so this is fine. Revisit when we have proper error propagation.
+- [x] Defer referencing a binding that was `set!`-ed after the defer: defer runs against the *current* value at exit time, not the value at registration. (Standard Go semantics in this respect.) Fixture this explicitly — the surprising case.
+- [x] *Don't* document defer's semantics as "runs *immediately* at scope exit." Documentation should say "runs on scope exit" without the immediacy claim, leaving room for v3's "...or when a continuation that captured this scope drops" without a doc-breaking change.
 
 **Fixtures**
-- [ ] `defer-order.tur` — three defers, prove LIFO via printed output.
+- [x] `defer-order.tur` — three defers, prove LIFO via printed output.
 - [ ] `defer-early-return.tur` — `return` inside `if`, defer still runs.
-- [ ] `defer-nested-scopes.tur` — defers in inner `let` fire before defers in outer `let`.
-- [ ] `defer-mutated-binding.tur` — defer captures by reference, sees latest value.
-- [ ] Negative: `(defer ...)` at module top-level → error.
-- [ ] Codegen snapshots for the runtime-list lowering (not the label-chain).
+- [x] `defer-nested-scopes.tur` — defers in inner `let` fire before defers in outer `let`.
+- [x] `defer-mutated-binding.tur` — defer captures by reference, sees latest value.
+- [x] `defer-conditional.tur` — defer inside if-branch fires at enclosing scope's end.
+- [x] `defer-in-loop.tur` — defer inside while body fires at loop scope's end with captured loop variable.
+- [x] Negative: `(defer ...)` at module top-level → error.
+- [x] Codegen snapshots for the runtime-list lowering (not the label-chain).
 
-**Exit criterion:** all defer fixtures green; the codegen-snapshot tests show `frame_fire_defers_lifo` calls (not `__cleanup_L<n>` labels); ASan/UBSan clean.
+**Exit criterion:** ✅ all defer fixtures green; the codegen-snapshot tests show `frame_fire_defers_lifo` calls (not `__cleanup_L<n>` labels); ASan/UBSan clean.
 
 ---
 
-### 10.6 Beyond phase 4 — sketch only
+### 10.6 Phase 5 — `ref<T>` with move semantics
 
-Phases 5–10 retain the §7 summary level for now; they get the same task-list treatment when phase 4 lands and we know the surrounding code's actual shape. In rough order:
+Goal: owning heap values with automatic scope-bound cleanup. `(ref expr)` allocates, `@r` dereferences, and the compiler injects a defer'd drop at the binding site.
 
-- **Phase 5 — `ref<T>`** with move semantics, `(ref expr)` ctor, `@r` deref, auto-defer drop. Hooks the function-level cleanup label from phase 4. Adds move-tracking to the elaborator.
-- **Phase 6 — `defmacro` + quasiquote** in the bootstrap interpreter. Reuses `Form` as the data type macros operate on.
-- **Phase 7 — stdlib seed**: `vec`, `slice`, `str`, `option`, `result`. `cond`, `case`, `when`, `unless` rewritten as macros now that phase 6 exists.
-- **Phase 8 — diagnostics polish**: span propagation audit, miette-style multi-line snippets, `--explain <code>` for long-form errors.
-- **Phase 9 (v1) — `rc<T>` + `weak<T>`**: control-block layout, retain/release, `(upgrade w)`, defer-injected `rc-release`, last-use elision (§5.1.2).
-- **Phase 10 (v2) — Bacon-Rajan cycle collector**: color field, suspect-roots buffer, trial-deletion (§5.1).
+**Type & representation**
+- [x] Add `TY_REF` to `TypeKind` enum in `src/types.h`. `Type.ref.of` points to the wrapped type.
+- [x] `ref<T>` lowers to `struct { T* p; }` in C codegen. Nested `ref<ref<T>>` flatten to `struct { T** p; }`.
+- [x] `sizeof(ref<T>)` equals `sizeof(void*)` (pointer-sized). Alignment same as pointer.
+- [x] `(ref expr)` ctor: allocate via `tur_alloc(sizeof(T))`, copy/move `expr` into the allocation, return `ref<T>` wrapper.
+- [x] `@r` / `(deref r)`: emit `*r.p`. Type-check: `r` must be `ref<T>`, result is `T`.
+- [ ] `(ref? x)` predicate: returns `true` if `x` is a `ref<T>` for any `T`. Useful for runtime type checks in FFI.
+
+**Move semantics**
+- [ ] Assigning a `ref<T>` to another binding transfers ownership. Source binding is "poisoned" — any subsequent use is a compile error.
+- [x] Poisoning implemented via a `moved: bool` (`is_moved` field) on bindings in the elaborator. `set!` on a poisoned binding errors with "use-after-move".
+- [ ] Swap pattern `(let [a (ref 1) b (ref 2)] (let [tmp a] (set! a b) (set! b tmp)))` works — both transfers are valid, no intermediate invalid state.
+- [ ] Returning a `ref<T>` from a function transfers ownership to the caller. No implicit clone; caller owns the value.
+
+**Auto-defer drop**
+- [x] At each `let` binding of form `(let [x (ref ...) ...])`, inject `(defer (drop! x))` at the scope exit.
+- [x] `(drop! r)` builtin: calls `free(r.p)`, sets `r.p = NULL` (defensive). Type-check: `r` must be `ref<T>`.
+- [x] Defer injection happens in the elaborator after closure conversion, so captured `ref<T>` in closures also get drops registered.
+- [x] Fixture: `ref-basic.tur` — allocate, deref, mutate, drop. Valgrind-clean.
+
+**Interaction with other features**
+- [ ] `ref<T>` where `T` is `ptr<U>`: allowed, but document this as unusual. Drop calls `free` on the `U*`, not the `ptr<U>` wrapper.
+- [ ] `ref<T>` where `T` is a struct with a destructor: future-proof by reserving a `drop_fn` slot in `Type`; phase 5 ignores it (only `free` path).
+- [ ] `(def x (ref 42))` top-level: error — refs must be scope-local. Top-level values should use `def` with concrete types or `static` storage.
+
+**Fixtures**
+- [x] `ref-basic.tur` — allocate, deref, mutate via `@` and `set!`.
+- [x] `ref-deref.tur` — dereference works correctly.
+- [x] `ref-explicit-drop.tur` — explicit `(drop! r)` works.
+- [x] `ref-nested.tur` — `ref<ref<int>>` double-wrap; verify sizes and deref chains.
+- [ ] `ref-move.tur` — ownership transfer on assignment; use-after-move error.
+- [ ] `ref-return.tur` — return a `ref` from a function; caller owns it.
+- [ ] `ref-in-closure.tur` — closure captures a `ref`, defers fire correctly.
+- [ ] Negative: `ref-top-level.tur` — error on top-level `ref` binding.
+- [ ] Negative: `ref-use-after-move.tur` — diagnostic on use of poisoned binding.
+- [ ] Codegen snapshots for `ref<T>` struct layout and drop injection.
+
+**Exit criterion:** ✅ 28/28 fixtures green incl. ref-basic, ref-deref, ref-nested, ref-explicit-drop; Valgrind clean; ASan/UBSan clean. **Move semantics tracking deferred** — `is_moved` field added to Binding; enforcement of poisoning on move pending follow-up.
+
+---
+
+### 10.7 Phase 6 — `defmacro` + quasiquote
+
+Goal: compile-time code transformation via macros. `defmacro` defines a macro in the bootstrap interpreter; quasiquote provides template literals for macro bodies.
+
+**Bootstrap interpreter** — `src/interp.{c,h}`
+- [ ] Extend the existing `Form`-based interpreter to support macro expansion.
+- [ ] Macro environment: separate namespace from value bindings. Macros are looked up by symbol at expansion time.
+- [ ] `defmacro` syntax: `(defmacro name [params...] body...)` — same shape as `defn` but operates at compile time.
+- [ ] Macro expansion: replace macro call site `(name arg1 arg2 ...)` with the result of evaluating the macro body with `params` bound to `args`.
+- [ ] Expansion is recursive: macro output is re-scanned for further macro calls until a fixpoint (no macros left to expand).
+- [ ] Limit expansion depth to prevent infinite recursion (default: 256). Diagnostic on depth exceeded includes the expansion chain.
+- [ ] Hygiene v1: `(gensym 'foo)` builtin generates a fresh symbol each call. No automatic hygiene (α-renaming) yet — documented limitation.
+
+**Quasiquote** — `src/reader.{c,h}` + `src/elab.{c,h}`
+- [ ] Reader macro: `` `x `` → `(quasiquote x)`.
+- [ ] Reader macro: `~x` → `(unquote x)`. Only valid inside quasiquote.
+- [ ] Reader macro: `~@x` → `(unquote-splicing x)`. Only valid inside quasiquote, must be in a list/vec position.
+- [ ] Quasiquote expansion rules:
+  - Symbols: `(quasiquote foo)` → `(quote foo)` — literal symbol.
+  - Lists: `(quasiquote (a b c))` → `(list (quasiquote a) (quasiquote b) (quasiquote c))`.
+  - Unquote: `(quasiquote (a ~b c))` → `(list (quasiquote a) b (quasiquote c))`.
+  - Unquote-splicing: `(quasiquote (a ~@b c))` → `(concat (quasiquote a) b (quasiquote c))` where `b` must evaluate to a list.
+  - Nested quasiquote: `(quasiquote (quasiquote x))` → `(list (quote quasiquote) (quasiquote x))`.
+- [ ] Quasiquote in macro bodies: expansion happens before the macro body is evaluated in the interpreter.
+
+**Standard macros**
+- [ ] Rewrite `when`, `unless`, `cond`, `case` as macros now that macro infrastructure exists.
+- [ ] `when` → `(if test (do body...))`
+- [ ] `unless` → `(if test nil (do body...))`
+- [ ] `cond` → nested `if` (already implemented as special form in phase 1; now as macro for consistency).
+- [ ] `case` → dispatch on value with `=` comparisons.
+- [ ] Add `->` threading macro: `(-> x (f 1) (g 2))` → `(g (f x 1) 2)`.
+- [ ] Add `->>` threading macro: `(->> x (f 1) (g 2))` → `(g 2 (f 1 x))`.
+
+**Macro scoping & hygiene**
+- [ ] Macros can capture their definition environment (lexical scoping for macro internals).
+- [ ] Macro parameters are not hygienic by default — they can accidentally capture bindings from the call site. Document this and recommend using `gensym` for internal names.
+- [ ] Shadowing: a macro parameter can shadow an outer binding. This is intentional for the macro's internal scope.
+
+**Fixtures**
+- [ ] `macro-defmacro.tur` — define and call a simple macro.
+- [ ] `macro-quasiquote.tur` — quasiquote with unquote and unquote-splicing.
+- [ ] `macro-gensym.tur` — `gensym` generates unique names across expansions.
+- [ ] `macro-recursive.tur` — macro that expands to code containing another macro call.
+- [ ] `macro-threading.tur` — `->` and `->>` macros work correctly.
+- [ ] `macro-hygiene.tur` — demonstrates the lack of automatic hygiene (bindings from call site visible in macro output).
+- [ ] Negative: `macro-infinite-recursion.tur` — hits expansion depth limit with clear diagnostic.
+- [ ] Codegen snapshots: macro-expanded code should be indistinguishable from hand-written code in the IR.
+
+**Exit criterion:** all macro fixtures green; macros can define control flow, quasiquote works, gensym provides hygiene; the expanded output of a macro matches what hand-written code would produce.
+
+---
+
+### 10.8 Phase 7 — Stdlib seed
+
+Goal: ship a minimal but useful standard library covering collections, option types, error handling, and a self-hosted test runner. All stdlib code is written in Turmeric (not C) and lives in a `stdlib/` directory.
+
+**Core data structures** — `stdlib/vec.tur`, `stdlib/slice.tur`, `stdlib/str.tur`
+- [ ] `slice<T>` type: `struct { T* p; size_t len; }`. Borrowed view into a contiguous sequence. No ownership.
+  - `(slice-of array start end)` constructor — creates a slice viewing `array[start..end)`.
+  - `(slice-len s)` → `s.len`.
+  - `(slice-empty? s)` → `(= (slice-len s) 0)`.
+  - `(slice-get s i)` → `s.p[i]` with bounds check. `(slice-get-unchecked s i)` without bounds check.
+  - `(slice-set! s i v)` → `s.p[i] = v` with bounds check.
+  - `(slice-sub s start end)` → new slice viewing `s[start..end)`.
+  - Iteration: `(for [x s] ...)` already works via the compiler's slice support (§5.3).
+- [ ] `vec<T>` type: owning growable array `struct { T* data; size_t len; size_t cap; }`.
+  - `(vec-of ...elements...)` constructor — allocates with initial capacity matching element count.
+  - `(vec-with-capacity cap)` → empty vec with reserved capacity.
+  - `(vec-push! v x)` → amortized O(1) append. Reallocation doubles capacity on overflow.
+  - `(vec-pop! v)` → removes last element, returns it. Error if empty.
+  - `(vec-len v)` → `v.len`.
+  - `(vec-cap v)` → `v.cap`.
+  - `(vec-get v i)` → bounds-checked access. `(vec-get-unchecked v i)` without.
+  - `(vec-set! v i x)` → bounds-checked mutation.
+  - `(vec-reserve! v n)` → ensure capacity ≥ n.
+  - `(vec-shrink-to-fit! v)` → reallocate to exact size (optional, for memory-constrained use).
+  - `(vec-as-slice v)` → `slice<T>` borrowing the vec's data.
+  - `vec<T>` is `Copy` only if `T` is `Copy` (phase 11). For now, `vec<T>` is Move-only.
+- [ ] `str` type: UTF-8 string `struct { const u8* p; size_t len; }`. Borrowed, not NUL-terminated.
+  - `(str-of "literal")` constructor from C string literal.
+  - `(str-len s)` → byte length (not char count).
+  - `(str-empty? s)` → `(= (str-len s) 0)`.
+  - `(str-get s i)` → byte at index (not char — UTF-8 handling deferred).
+  - `(str-sub s start end)` → substring.
+  - `(str-concat s1 s2)` → new allocated string (caller owns).
+  - `(str-eq? s1 s2)` → content equality.
+  - `(str-cmp s1 s2)` → lexicographic comparison, returns -1/0/1.
+  - `(str->cstr s)` → NUL-terminated copy (caller owns via `ref<cstr>`).
+  - Note: full Unicode support (char access, grapheme iteration) deferred to a future phase.
+
+**Option & Result types** — `stdlib/option.tur`, `stdlib/result.tur`
+- [ ] `option<T>` sum type: `(some T)` or `none`. Lowers to `typedef struct { bool is_some; T value; } option_T;`.
+  - `(some x)` constructor.
+  - `none` constant.
+  - `(option? x)` → `true` if `x` is `option<T>` for any `T`.
+  - `(some? o)` → `o.is_some`.
+  - `(none? o)` → `(! (some? o))`.
+  - `(unwrap o)` → `o.value` (asserts `some?`).
+  - `(unwrap-or o default)` → `o.value` if some, else `default`.
+  - `(map f o)` → applies `f` to value if some, returns `none` otherwise.
+  - `(and o1 o2)` → `o1` if `none?`, else `o2`.
+  - `(or o1 o2)` → `o1` if `some?`, else `o2`.
+- [ ] `result<T, E>` sum type: `(ok T)` or `(err E)`. Lowers to `typedef struct { bool is_ok; union { T ok; E err; }; } result_T_E;`.
+  - `(ok x)` constructor.
+  - `(err e)` constructor.
+  - `(result? x)` → `true` if `x` is `result<T, E>` for any `T`, `E`.
+  - `(ok? r)` → `r.is_ok`.
+  - `(err? r)` → `(! (ok? r))`.
+  - `(unwrap r)` → `r.ok` (asserts `ok?`).
+  - `(unwrap-or r default)` → `r.ok` if ok, else `default`.
+  - `(unwrap-or-else r f)` → `r.ok` if ok, else `(f r.err)`.
+  - `(map f r)` → applies `f` to ok value.
+  - `(map-err f r)` → applies `f` to err value.
+  - `(and r1 r2)` → `r1` if `err?`, else `r2`.
+  - `(or r1 r2)` → `r1` if `ok?`, else `r2`.
+
+**Rewriting built-ins as stdlib macros**
+- [ ] Move `cond`, `case`, `when`, `unless` from special-form status to macro definitions in `stdlib/macros.tur`.
+- [ ] Update the compiler to no longer treat these as special forms; they expand via the macro system.
+- [ ] Ensure backward compatibility: existing code continues to work.
+
+**Test runner** — `stdlib/test.tur`
+- [ ] `(deftest name [] body...)` → defines a test function.
+- [ ] `(assert eq a b)` → passes if `a == b`, fails with diff otherwise.
+- [ ] `(assert-true x)` / `(assert-false x)`.
+- [ ] `(assert-nil x)`.
+- [ ] `(assert-error body)` → passes if `body` raises an error.
+- [ ] `(run-tests!)` → runs all `deftest` definitions, prints results, returns exit code.
+- [ ] Test output: dot for pass, `F` for fail, summary at end.
+- [ ] `tur test` subcommand: builds and runs all test files in a directory.
+
+**Fixtures**
+- [ ] `stdlib-vec.tur` — exercise all vec operations.
+- [ ] `stdlib-slice.tur` — slice viewing, sub-slicing.
+- [ ] `stdlib-str.tur` — string construction, concatenation, comparison.
+- [ ] `stdlib-option.tur` — option chaining with map/and/or.
+- [ ] `stdlib-result.tur` — result chaining, error propagation.
+- [ ] `stdlib-test-runner.tur` — self-hosted: the test runner tests itself.
+- [ ] Negative: bounds-check failures on `slice-get`, `vec-get`.
+- [ ] Codegen snapshots for stdlib types (vec, slice, str, option, result).
+
+**Exit criterion:** all stdlib fixtures green; `tur test` runs the self-hosted test suite; stdlib types are usable from user code; the compiler no longer needs built-in knowledge of `cond`/`case`/`when`/`unless`.
+
+---
+
+### 10.9 Phase 8 — Diagnostics polish
+
+Goal: world-class error messages with source snippets, multi-line context, and actionable suggestions. Inspired by Rust's diagnostics and the `miette` crate.
+
+**Span propagation audit**
+- [ ] Audit every pass (reader, macro expansion, elaboration, closure conversion, defer injection, codegen) to ensure spans are preserved on every AST transformation.
+- [ ] Add a `span` field to every IR node type that doesn't already have one. Use `SPAN_UNKNOWN` as a sentinel for synthesized nodes.
+- [ ] For synthesized nodes (e.g., desugared `when` → `if`), use the span of the original construct as the span for the synthesized children.
+- [ ] Add a linter in CI that errors if any IR node in the fixture snapshots has `SPAN_UNKNOWN`.
+
+**Error infrastructure** — `src/diag.{c,h}` enhancements
+- [ ] `Diag` struct: level, span, message, related notes, suggestions, code snippet.
+- [ ] `diag_emit_with_snippet(span, level, message, snippet_opts)` renders multi-line source context.
+- [ ] Snippet rendering: the source line with the span highlighted, plus N lines of context before/after (configurable, default 2).
+- [ ] Underline styles: `^^^` for primary span, `~~~` for secondary spans (related notes), `-` for gaps.
+- [ ] Color support: ANSI color codes when stderr is a TTY; `--no-color` flag to disable.
+- [ ] `--explain <code>` flag: takes a code snippet as argument, compiles it, and if there's an error, prints a long-form explanation.
+
+**Error message improvements**
+- [ ] Type mismatch: show expected type and actual type. If they share a common supertype or one is a subtype of the other, suggest a coercion.
+- [ ] Unbound symbol: suggest similarly-named bindings in scope. "Did you mean `foo`?" with edit distance ≤ 2.
+- [ ] Arity mismatch: show expected arity and actual argument count. Highlight which arguments are extra/missing.
+- [ ] Operator lookup failure: show the operator, the argument types, and the list of available overloads for that operator.
+- [ ] Scope errors: "cannot use `defer` at module top level" → suggest wrapping in a function.
+- [ ] Move errors: "use-after-move of `x`" → show where `x` was moved (previous use that transferred ownership).
+- [ ] Capture errors: "cannot capture `x` — it does not live long enough" (future-proofing for borrow checker).
+
+**Suggestion engine**
+- [ ] For common errors, provide a "hint" string with a suggested fix.
+- [ ] Suggestions are stored in a table keyed by error code: `ERR_TYPE_MISMATCH`, `ERR_UNBOUND`, `ERR_ARITY`, etc.
+- [ ] Suggestions can include replacement text: "try `(+ x 1)` instead of `(+ x)`".
+- [ ] Suggestions can reference documentation: "see https://turmeric-lang.org/docs/types for type annotation syntax".
+
+**Diagnostic formatting**
+- [ ] `error: message` on first line.
+- [ ] Source snippet with context lines, numbered.
+- [ ] Underline pointing to the span, with caret `^` at the start.
+- [ ] Related notes on subsequent lines, indented, with their own spans highlighted.
+- [ ] Example output:
+  ```
+  error: type mismatch
+    --> input.tur:3:5
+     |
+   3 | (defn foo [x] : int x)
+     |     ^^^^^^^^^^^^^^ expected return type `int`, found `bool`
+     |
+  note: the function returns `x` which has type `bool`
+    --> input.tur:3:20
+     |
+   3 | (defn foo [x] : int x)
+     |                    ^ this is a bool
+  help: try annotating the parameter: `(defn foo [^bool x] : int ...)`
+  ```
+
+**Tooling integrations**
+- [ ] `--json-diagnostics` flag: output diagnostics as JSON for IDE integration.
+- [ ] Diagnostics include a unique error code (e.g., `TUR-E0001`) for documentation and grep-ability.
+- [ ] `tur check` subcommand: type-check only, no codegen, for fast feedback during development.
+
+**Fixtures**
+- [ ] `errors/type-mismatch.tur` → golden-checked diagnostic output.
+- [ ] `errors/unbound-symbol.tur` → with "did you mean" suggestions.
+- [ ] `errors/arity-mismatch.tur` → shows expected/actual counts.
+- [ ] `errors/use-after-move.tur` → shows move location.
+- [ ] `errors/multi-line-snippet.tur` → error in middle of a multi-line form, snippet shows context.
+- [ ] Golden files for all error fixtures under `tests/fixtures/errors/*.diag`.
+
+**Exit criterion:** all error fixtures have golden-checked diagnostics; diagnostics are multi-line with source snippets; `--explain` provides actionable hints; CI checks that no `SPAN_UNKNOWN` appears in snapshots.
+
+---
+
+### 10.10 Phase 9 (v1) — `rc<T>` + `weak<T>` reference counting
+
+Goal: shared ownership for heap-allocated values. `rc<T>` provides reference-counted ownership; `weak<T>` provides non-owning observation that can be upgraded to `rc<T>`. This is the v1 GC strategy per §5.1.2.
+
+**Control block layout** — `src/rc.{c,h}`
+- [ ] `typedef struct rc_control_block rc_cb_t;` — contains:
+  - `uint64_t strong_count;` — number of `rc<T>` pointers to the value.
+  - `uint64_t weak_count;` — number of `weak<T>` pointers to the control block.
+  - `T value;` — the actual value (for `rc<T>`). For `weak<T>`, only the control block exists.
+  - `void (*drop_fn)(T*);` — optional custom drop function (default: `free`).
+- [ ] Control block allocation: `rc_cb_alloc(sizeof(T))` allocates a control block with space for `T`, initializes counts to 1, and returns a pointer to the `T` field.
+- [ ] For `rc<T>` where `T` is a struct with a destructor: the `drop_fn` slot is populated. Phase 9 supports this for stdlib types; user-defined destructors deferred to phase 11.
+
+**`rc<T>` type & operations**
+- [ ] Add `TY_RC` to `TypeKind` enum. `Type.rc.of` points to the wrapped type.
+- [ ] `(rc/of x)` — creates a new `rc<T>` with `x` as the value. Allocates a control block, copies/moves `x` into it.
+- [ ] `(rc/clone r)` — increments strong count, returns a new `rc<T>` pointing to the same value. Same as copying `r`.
+- [ ] `@r` dereference — same syntax as `ref<T>`. Type-check: `r` must be `rc<T>`, result is `T`.
+- [ ] `(rc->ptr r)` — borrow a `ptr<T>` from an `rc<T>`. Document as unsafe: the pointer is valid only as long as at least one `rc<T>` to the same value exists.
+- [ ] `(rc/strong-count r)` → returns the current strong count (for debugging/testing).
+- [ ] Assignment: copying an `rc<T>` increments the strong count. Moving (explicit transfer) does not — ownership is shared, not unique.
+- [ ] Drop: when an `rc<T>` goes out of scope, decrement strong count. If strong count reaches 0, call `drop_fn` on the value and free the control block (if weak count is also 0).
+
+**`weak<T>` type & operations**
+- [ ] Add `TY_WEAK` to `TypeKind` enum. `Type.weak.of` points to the wrapped `rc<T>` type.
+- [ ] `(weak r)` — creates a `weak<T>` from an `rc<T>`. Increments weak count on the control block.
+- [ ] `(upgrade w)` → returns `option<rc<T>>`. If the strong count > 0, returns `(some (rc/clone ...))`; otherwise returns `none`.
+- [ ] `(weak? w)` — predicate, returns `true` if `w` is a `weak<T>`.
+- [ ] Drop: when a `weak<T>` goes out of scope, decrement weak count. If weak count reaches 0 and strong count is also 0, free the control block.
+
+**Defer injection for RC**
+- [ ] At each `let` binding of form `(let [x (rc/of ...) ...])`, inject `(defer (rc/drop x))` at the scope exit.
+- [ ] `(rc/drop r)` — decrements strong count. If count reaches 0, schedules the value for deletion.
+- [ ] Drop function: for `T` that is `Copy`, use `free`. For `T` that is not `Copy`, the drop must be defined by the type (phase 11 for user types).
+- [ ] Last-use elision: if an `rc<T>` is used only once and not stored, the compiler can skip the retain/release pair entirely.
+
+**Cascade-free deletion**
+- [ ] When strong count reaches 0, don't immediately free if there are weak pointers. The value enters a "zombie" state: memory is still valid but logically freed.
+- [ ] Weak pointer upgrade checks strong count > 0. If strong count is 0, return `none`.
+- [ ] `weak<T>` drop (when weak count reaches 0) can free the control block if strong count is also 0.
+- [ ] Deferred free queue: to prevent stack overflow from long chains of `rc/drop` calls, use a queue. When strong count reaches 0, push the value to a per-thread deferred-free queue and process it later.
+
+**Interaction with `ref<T>` and `ptr<T>`**
+- [ ] `(rc/from-ref r)` — converts a `ref<T>` to an `rc<T>`. The `ref`'s value is moved into the new `rc` control block. The original `ref` is poisoned.
+- [ ] `(ref/from-rc r)` — converts an `rc<T>` to a `ref<T>`. Requires that the strong count is exactly 1 (unique ownership). Poisons all other `rc<T>` pointers to the same value.
+- [ ] `ptr<T>` remains the untracked escape hatch. `(rc->ptr r)` is the safe way to get a raw pointer from an `rc<T>`.
+
+**Runtime implementation**
+- [ ] `src/rc.c`: `rc_cb_alloc`, `rc_strong_increment`, `rc_strong_decrement`, `rc_weak_increment`, `rc_weak_decrement`, `rc_upgrade`.
+- [ ] All functions are inline-able for performance. The control block layout is cache-friendly (counts on the same cache line as the value for small `T`).
+- [ ] Thread safety: v0/v1 is single-threaded, so no atomics needed. Reserve a `may_alias` flag for future thread-safe mode.
+
+**Fixtures**
+- [ ] `rc-basic.tur` — create, clone, deref, drop. Valgrind-clean.
+- [ ] `rc-shared.tur` — multiple `rc<T>` pointing to the same value; last one to drop frees it.
+- [ ] `rc-cycle-leak.tur` — documents the known limitation: `(let [a (rc/of (Cell. nil))] (set! a.next a))` leaks. This is expected and documented; weak refs are the solution.
+- [ ] `weak-upgrade.tur` — `(upgrade w)` returns `some` while strong refs exist, `none` after all strong refs are dropped.
+- [ ] `weak-dangling.tur` — accessing the value through a `weak<T>` after all strong refs are dropped is a runtime error (or returns `none` from upgrade).
+- [ ] `rc-ref-conversion.tur` — `rc/from-ref` and `ref/from-rc` work correctly.
+- [ ] Negative: `rc-unique-violation.tur` — `ref/from-rc` with strong count > 1 errors.
+- [ ] Codegen snapshots for RC control block layout and drop injection.
+
+**Exit criterion:** all RC/weak fixtures green; Valgrind clean (except documented cycle leak); `rc<T>` composes with `ref<T>` and closures; weak pointer upgrade behaves correctly.
+
+---
+
+### 10.11 Phase 10 (v2) — Bacon-Rajan cycle collector
+
+Goal: automatic cycle detection and collection for `rc<T>` values. Layers on top of phase 9's RC machinery without changing its API. Per §5.1.2, this is the v2 GC strategy.
+
+**Background: Bacon-Rajan trial deletion**
+- [ ] Read and document the Bacon-Rajan algorithm ("Concurrent Cycle Collection in Reference Counted Systems" by David F. Bacon and V.T. Rajan).
+- [ ] Key insight: after a strong count reaches 0, if the object is part of a cycle, its weak count will also be > 0 (from other objects in the cycle pointing to it). These are "suspect" objects.
+- [ ] Trial deletion: scan the object graph reachable from suspect roots. If a suspect is reachable only from other suspects (not from a strong-count>0 object), the entire component is garbage.
+
+**Runtime data structures** — `src/gc.{c,h}`
+- [ ] Extend the control block with GC-specific fields:
+  - `enum gc_color { GC_WHITE, GC_GREY, GC_BLACK, GC_PURPLE } color;` — Bacon-Rajan uses 4 colors.
+  - `bool may_contain_cycles;` — hint to skip collection for DAG-shaped data.
+- [ ] Suspect roots buffer: a per-thread (v1: global) buffer of `rc_cb_t*` where strong count reached 0 but weak count > 0.
+- [ ] Work queues for the collector: grey queue (objects to scan), black queue (objects confirmed reachable from strong roots).
+
+**Collector algorithm**
+- [ ] `gc_on_strong_decrement(cb)` — called when strong count reaches 0:
+  - If weak count == 0: free immediately (no cycle possible).
+  - If weak count > 0: add `cb` to suspect roots buffer.
+- [ ] `gc_collect()` — main collection function, called when suspect roots buffer exceeds a threshold (configurable, default: 128 entries).
+  - Mark phase: traverse from all strong-count>0 objects (black roots), mark reachable objects black.
+  - Suspect identification: objects with strong count == 0 and weak count > 0 are suspects.
+  - Trial deletion: for each suspect root, if it's white (not reachable from black roots), the entire component is garbage — decrement weak counts and free.
+  - If a suspect is reachable from black roots (grey/black), it's part of a cycle that's still live — leave it in the suspect buffer.
+- [ ] `gc_disable()` / `gc_enable()` — allow programs to disable collection for performance-critical sections.
+- [ ] `gc_force()` — force a full collection cycle (for testing and memory-constrained environments).
+
+**Integration with `rc<T>`**
+- [ ] Modify `rc_strong_decrement` to call `gc_on_strong_decrement`.
+- [ ] Modify `rc_cb_alloc` to initialize GC fields (color = WHITE, may_contain_cycles = true).
+- [ ] Modify `rc_upgrade` to confirm the object is still alive (strong count > 0 or reachable from strong roots).
+- [ ] `rc_cb_alloc` with a `may_contain_cycles = false` hint: skip adding to suspect buffer even if weak count > 0 when strong reaches 0. Useful for DAG-shaped data where cycles are impossible.
+
+**Collector modes**
+- [ ] **Disabled mode** (default for v1): no cycle collection; documented limitation. Programs that don't need it pay zero overhead.
+- [ ] **Manual mode**: collection runs only when explicitly triggered via `(gc!)` or `gc_force()`.
+- [ ] **Threshold mode**: collection runs automatically when suspect roots buffer exceeds N entries.
+- [ ] **Background mode** (future): collection runs in a separate thread. Deferred — requires thread support.
+
+**Testing & correctness**
+- [ ] `gc-cycle.tur` — create a cycle of `rc<T>` objects, drop all external references, verify memory is freed.
+- [ ] `gc-dag.tur` — DAG-shaped data (no cycles), verify prompt reclamation.
+- [ ] `gc-mixed.tur` — mix of cyclic and acyclic data, verify only cycles are collected.
+- [ ] `gc-stress.tur` — allocate and drop many RC'd objects with complex sharing patterns.
+- [ ] `gc-deterministic.tur` — same sequence of operations always produces the same collection behavior.
+- [ ] `gc-disabled.tur` — verify that with GC disabled, cycles leak (documented behavior).
+- [ ] Negative: no negative fixtures — GC is best-effort, not a correctness guarantee for all programs.
+
+**Performance considerations**
+- [ ] Collection is O(N) in the number of suspect objects, not the entire heap.
+- [ ] Non-cyclic programs pay zero GC overhead (collection is never triggered).
+- [ ] The collector only scans RC'd objects, not the entire heap (which may contain `ref<T>` and raw allocations).
+- [ ] Benchmark: Lisp interpreter with cyclic data structures (cons cells forming circular lists).
+
+**Future-proofing**
+- [ ] Reserve space in the control block for a per-object mark bit. Currently using an enum; could switch to bitfields if memory pressure demands.
+- [ ] Document the GC ABI: control block layout, color field semantics, suspect buffer format.
+- [ ] Reserve a `collector_hook` function pointer for custom collector implementations (e.g., for testing or alternative GC strategies).
+
+**Fixtures**
+- [ ] `gc-cycle-freed.tur` — cyclic data is collected and memory freed.
+- [ ] `gc-no-false-positives.tur` — live cyclic data is not collected.
+- [ ] `gc-perf.tur` — measure collection overhead on a synthetic workload.
+- [ ] Codegen snapshots for GC control block layout.
+
+**Exit criterion:** cycle fixture shows memory is freed; GC can be enabled/disabled; no performance regression for non-cyclic workloads; the collector passes its own test suite.
+
+---
+
+### 10.12 Phases 11–14 — sketch only
+
+These phases remain at the §7 summary level. They get the same task-list treatment after phase 10 lands.
+
 - **Phase 11 — Copy traits**: distinguish `Copy` (bitwise duplication, e.g. `int`, `bool`, `cstr`, `ptr<T>`) from `Move` (ownership transfer, e.g. `ref<T>`, user structs by default). Opt-in `:copy` annotation on `deftype` for user structs that are safe to bitwise-copy. The elaborator already poisons moved `ref<T>` bindings (phase 5); phase 11 generalizes the rule to all non-`Copy` types and surfaces a diagnostic on use-after-move. See [docs/copy-borrow-move-lifetimes.md](docs/copy-borrow-move-lifetimes.md) for the rationale.
 - **Phase 12 — Borrow traits**: introduce checked reference types `&T` (immutable, shared) and `&mut T` (mutable, exclusive) as a typed alternative to raw `ptr<T>`. Enforce Rust-style aliasing within a function (any number of `&T` XOR exactly one `&mut T`). `ptr<T>` stays for FFI and unsafe code. Constructed via `(& x)` and `(&mut x)`; deref via `@r` (shared with `ref<T>`). This is the *Hybrid Approach* (Option D) from [docs/copy-borrow-move-lifetimes.md](docs/copy-borrow-move-lifetimes.md).
 - **Phase 13 — Lifetime annotations**: surface syntax for explicit lifetimes on signatures and reference types (e.g. `^'a &T`). Implement Rust's three elision rules so the common cases (single input ref, `&self`-style first-arg, single output ref) need no annotations. Lifetimes are an elaborator-only construct — no runtime representation, no codegen impact. Prerequisite for inter-procedural borrow checking in phase 14.

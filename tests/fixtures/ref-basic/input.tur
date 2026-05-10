@@ -1,0 +1,4 @@
+(defn main [] :int
+  (let [r (ref 42)]
+    (println @r)
+    0))

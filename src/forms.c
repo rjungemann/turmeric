@@ -74,6 +74,44 @@ Form *form_cblock(Arena *a, Span span, StrSlice code) {
     return f;
 }
 
+/* Phase 6 */
+Form *form_quote(Arena *a, Span span, Form *quoted) {
+    Form *f = form_new(a, F_QUOTE, span);
+    /* Allocate a proper list with one item */
+    Form **items = (Form **)arena_alloc(a, sizeof(Form *));
+    items[0] = quoted;
+    f->as.list.items = items;
+    f->as.list.len = 1;
+    return f;
+}
+
+Form *form_quasiquote(Arena *a, Span span, Form *quoted) {
+    Form *f = form_new(a, F_QUASIQUOTE, span);
+    Form **items = (Form **)arena_alloc(a, sizeof(Form *));
+    items[0] = quoted;
+    f->as.list.items = items;
+    f->as.list.len = 1;
+    return f;
+}
+
+Form *form_unquote(Arena *a, Span span, Form *quoted) {
+    Form *f = form_new(a, F_UNQUOTE, span);
+    Form **items = (Form **)arena_alloc(a, sizeof(Form *));
+    items[0] = quoted;
+    f->as.list.items = items;
+    f->as.list.len = 1;
+    return f;
+}
+
+Form *form_unquote_splicing(Arena *a, Span span, Form *quoted) {
+    Form *f = form_new(a, F_UNQUOTE_SPLICING, span);
+    Form **items = (Form **)arena_alloc(a, sizeof(Form *));
+    items[0] = quoted;
+    f->as.list.items = items;
+    f->as.list.len = 1;
+    return f;
+}
+
 static void print_str_escaped(Buf *b, StrSlice s) {
     buf_putc(b, '"');
     for (uint32_t i = 0; i < s.len; i++) {
@@ -128,6 +166,35 @@ void form_print(Buf *b, const Form *f) {
             buf_puts(b, "```c ");
             buf_write(b, f->as.cblock.p, f->as.cblock.len);
             buf_puts(b, "```");
+            break;
+        /* Phase 6 */
+        case F_QUOTE:
+            buf_puts(b, "(quote ");
+            if (f->as.list.len > 0) {
+                form_print(b, f->as.list.items[0]);
+            }
+            buf_puts(b, ")");
+            break;
+        case F_QUASIQUOTE:
+            buf_puts(b, "(quasiquote ");
+            if (f->as.list.len > 0) {
+                form_print(b, f->as.list.items[0]);
+            }
+            buf_puts(b, ")");
+            break;
+        case F_UNQUOTE:
+            buf_puts(b, "(unquote ");
+            if (f->as.list.len > 0) {
+                form_print(b, f->as.list.items[0]);
+            }
+            buf_puts(b, ")");
+            break;
+        case F_UNQUOTE_SPLICING:
+            buf_puts(b, "(unquote-splicing ");
+            if (f->as.list.len > 0) {
+                form_print(b, f->as.list.items[0]);
+            }
+            buf_puts(b, ")");
             break;
     }
 }

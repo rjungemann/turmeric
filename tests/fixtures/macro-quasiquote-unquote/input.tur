@@ -1,0 +1,7 @@
+(defmacro make-add (n)
+  (fn [x] (+ x ~n)))
+
+(defn main [] :int
+  (let [add5 (make-add 5)]
+    (println (add5 10))
+    0))

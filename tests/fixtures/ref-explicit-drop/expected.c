@@ -32,26 +32,33 @@ static void tur_frame_fire_lifo(tur_frame *f) {
     f->n = 0;
 }
 
-static int64_t __fn_2(void *);
-struct __env_4 {int64_t x; };
-static int64_t __fn_2(void * __env_p_5) {
-        struct __env_4 *__env___env_4 = (struct __env_4 *)__env_p_5;
-        return ((__env___env_4->x) + (INT64_C(1)));
+struct __defer_env_4 {void * r; };
+
+static void __defer_5(void *__env) {
+    struct __defer_env_4 *__e = (struct __defer_env_4 *)__env;
+    free(__e->r);
 }
 
 int main() {
+        int64_t __t0;
         {
-            int64_t x_1 = INT64_C(10);
-            (void)x_1;
-            {
-                struct __env_4 __t0 = {.x = x_1};
-                void *__t1 = &__t0;
-                void * f_7 = __t1;
-                (void)f_7;
-                printf("%lld\n", (long long)(__fn_2(f_7)));
-            }
+            void * __t1 = malloc(sizeof(int64_t));
+            *((int64_t *)__t1) = INT64_C(42);
+            void * r_1 = __t1;
+            (void)r_1;
+            tur_frame __frame_2;
+            tur_frame_init(&__frame_2, NULL);
+            int64_t __t3 = *((int64_t *)r_1);
+            printf("%lld\n", (long long)(__t3));
+            free(r_1);
+            struct __defer_env_4 __t6 = {.r = r_1};
+            tur_frame_push_defer(&__frame_2, __defer_5, &__t6);
+            int64_t __t7;
+            __t7 = INT64_C(0);
+            tur_frame_fire_lifo(&__frame_2);
+            __t0 = __t7;
         }
-        return (int)0;
+        return (int)__t0;
 }
 
 

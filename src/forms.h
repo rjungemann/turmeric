@@ -27,6 +27,11 @@ typedef enum FormTag {
     F_LIST,       /* (a b c) */
     F_VEC,        /* [a b c]  — same payload as F_LIST */
     F_CBLOCK,     /* ```c ... ``` C code block (Phase 2) */
+    /* Phase 6: quote/quasiquote */
+    F_QUOTE,      /* (quote x) - literal expression */
+    F_QUASIQUOTE, /* (quasiquote x) - template literal with unquote */
+    F_UNQUOTE,    /* (unquote x) - unquote in quasiquote */
+    F_UNQUOTE_SPLICING, /* (unquote-splicing x) - splice unquoted list */
 } FormTag;
 
 struct Form;
@@ -60,6 +65,11 @@ Form *form_keyword(Arena *a, Span span, const Symbol *sym);
 Form *form_list   (Arena *a, Span span, Form **items, uint32_t len);
 Form *form_vec    (Arena *a, Span span, Form **items, uint32_t len);
 Form *form_cblock (Arena *a, Span span, StrSlice code);
+/* Phase 6 */
+Form *form_quote  (Arena *a, Span span, Form *quoted);
+Form *form_quasiquote  (Arena *a, Span span, Form *quoted);
+Form *form_unquote  (Arena *a, Span span, Form *quoted);
+Form *form_unquote_splicing  (Arena *a, Span span, Form *quoted);
 
 void  form_print(Buf *b, const Form *f);
 

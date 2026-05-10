@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
+extern void *malloc(size_t);
+extern void free(void *);
 
 /* tur_frame - phase 4 v1 lowering (from runtime.h) */
 typedef void (*defer_fn_t)(void *env);

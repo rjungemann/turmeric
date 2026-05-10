@@ -1,0 +1,7 @@
+(defn add5 [x] :int (+ x 5))
+(defn mul2 [x] :int (* x 2))
+
+(defn main [] :int
+  (let [result (-> 10 add5 mul2)]
+    (println result)
+    0))

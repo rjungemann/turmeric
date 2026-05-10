@@ -1,0 +1,9 @@
+(defmacro twice (x)
+  (+ x x))
+
+(defmacro quad (x)
+  (twice (twice x)))
+
+(defn main [] :int
+  (println (quad 5))
+  0)

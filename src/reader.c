@@ -248,6 +248,120 @@ static Form *read_keyword(Reader *r) {
     return form_keyword(r->arena, span, sym);
 }
 
+static Form *read_quote(Reader *r) {
+    /* Phase 6: ('x) reader macro - read as (quote x) */
+    uint32_t start_line = r->line;
+    uint32_t start_col = r->col;
+    size_t start_off = r->pos;
+    advance(r); /* consume '\'' */
+    skip_ws_and_comments(r);
+    
+    if (peek(r) == -1) {
+        Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
+        diag_emit(DIAG_ERROR, s, "' requires an expression after it");
+        r->error = true;
+        return NULL;
+    }
+    
+    Form *inner = read_form(r);
+    if (!inner) return NULL;
+    
+    /* Create a quote form */
+    return form_quote(r->arena, span_from_to(r, start_line, start_col, start_off, inner->span.off_end), inner);
+}
+
+/* Phase 6: Read unquote (~) or unquote-splicing (~@) - only valid inside quasiquote */
+static Form *read_unquote(Reader *r) {
+    uint32_t start_line = r->line;
+    uint32_t start_col = r->col;
+    size_t start_off = r->pos;
+    advance(r); /* consume '~' */
+    
+    /* Check for ~@ (unquote-splicing) */
+    if (peek(r) == '@') {
+        advance(r); /* consume '@' */
+        skip_ws_and_comments(r);
+        
+        if (peek(r) == -1) {
+            Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
+            diag_emit(DIAG_ERROR, s, "~@ requires an expression after it");
+            r->error = true;
+            return NULL;
+        }
+        
+        Form *inner = read_form(r);
+        if (!inner) return NULL;
+        
+        /* Create an unquote-splicing form */
+        return form_unquote_splicing(r->arena, span_from_to(r, start_line, start_col, start_off, inner->span.off_end), inner);
+    }
+    
+    skip_ws_and_comments(r);
+    
+    if (peek(r) == -1) {
+        Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
+        diag_emit(DIAG_ERROR, s, "~ requires an expression after it");
+        r->error = true;
+        return NULL;
+    }
+    
+    Form *inner = read_form(r);
+    if (!inner) return NULL;
+    
+    /* Create an unquote form */
+    return form_unquote(r->arena, span_from_to(r, start_line, start_col, start_off, inner->span.off_end), inner);
+}
+
+static Form *read_quasiquote(Reader *r) {
+    /* Phase 6: (`x) reader macro - read as (quasiquote x) */
+    uint32_t start_line = r->line;
+    uint32_t start_col = r->col;
+    size_t start_off = r->pos;
+    advance(r); /* consume '`' */
+    skip_ws_and_comments(r);
+    
+    if (peek(r) == -1) {
+        Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
+        diag_emit(DIAG_ERROR, s, "` requires an expression after it");
+        r->error = true;
+        return NULL;
+    }
+    
+    Form *inner = read_form(r);
+    if (!inner) return NULL;
+    
+    /* Create a quasiquote form */
+    return form_quasiquote(r->arena, span_from_to(r, start_line, start_col, start_off, inner->span.off_end), inner);
+}
+
+static Form *read_deref(Reader *r) {
+    /* Phase 5: (@ expr) reader macro - read as (deref expr) */
+    uint32_t start_line = r->line;
+    uint32_t start_col = r->col;
+    size_t start_off = r->pos;
+    advance(r); /* consume '@' */
+    skip_ws_and_comments(r);
+    
+    if (peek(r) == -1) {
+        Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
+        diag_emit(DIAG_ERROR, s, "@ requires an expression after it");
+        r->error = true;
+        return NULL;
+    }
+    
+    Form *inner = read_form(r);
+    if (!inner) return NULL;
+    
+    /* Create a list: (deref inner) */
+    Form **items = (Form **)arena_alloc(r->arena, 2 * sizeof(Form *));
+    const Symbol *deref_sym = symtab_intern(r->st, strslice("deref", 5));
+    items[0] = form_sym(r->arena, span_from_to(r, start_line, start_col, start_off, start_off + 1), deref_sym);
+    items[1] = inner;
+    
+    Span span = span_from_to(r, start_line, start_col, start_off, inner->span.off_end);
+    return form_list(r->arena, span, items, 2);
+}
+
 static Form *read_symbol_or_minus(Reader *r) {
     uint32_t start_line = r->line;
     uint32_t start_col = r->col;
@@ -419,8 +533,22 @@ static Form *read_form(Reader *r) {
     }
     if (c == '"') return read_string(r);
     if (c == ':') return read_keyword(r);
-    if (c == '`') return read_cblock(r); /* C code block */
+    if (c == '`') {
+        /* Phase 6: Check for triple backtick (C block) vs single backtick (quasiquote) */
+        if (peek2(r) == '`' && peek3(r) == '`') {
+            return read_cblock(r); /* C code block ``` */
+        } else {
+            /* Single backtick - quasiquote */
+            return read_quasiquote(r);
+        }
+    }
     if (c >= '0' && c <= '9') return read_number(r, 0);
+    /* Phase 5: @ as deref operator */
+    if (c == '@') return read_deref(r);
+    /* Phase 6: ' as quote operator */
+    if (c == '\'') return read_quote(r);
+    /* Phase 6: ~ as unquote operator (only valid inside quasiquote) */
+    if (c == '~') return read_unquote(r);
     if (is_sym_start(c)) return read_symbol_or_minus(r);
 
     Span s = span_point(r);

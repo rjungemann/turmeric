@@ -18,6 +18,8 @@ typedef enum TypeKind {
     TY_CSTR,          /* const char* — string literal type for now */
     TY_PTR_VOID,      /* void* — for extern-c and raw pointers */
     TY_FN,            /* function type — requires checking as.fn */
+    /* Phase 5: ref<T> — owning pointer with move semantics */
+    TY_REF,           /* ref<T> — owning handle, auto-defer drop at scope end */
 } TypeKind;
 
 /* Max arity for function types in phase 2. */
@@ -35,6 +37,10 @@ typedef struct Type {
              * NULL in v0/v1; treated as empty effect set. */
             EffectRow *effect_row;
         } fn;
+        /* Phase 5: ref<T> stores the inner type T */
+        struct {
+            TypeKind inner;   /* The type T that ref<T> owns */
+        } ref;
     } as;
 } Type;
 
@@ -44,6 +50,14 @@ typedef struct Type {
 #define TYPE_INT      ((Type){TY_INT, .as={0}})
 #define TYPE_CSTR     ((Type){TY_CSTR, .as={0}})
 #define TYPE_PTR_VOID ((Type){TY_PTR_VOID, .as={0}})
+
+/* Phase 5: ref<T> type constructor */
+static inline Type type_ref(TypeKind inner) {
+    Type t;
+    t.kind = TY_REF;
+    t.as.ref.inner = inner;
+    return t;
+}
 
 /* Construct a function type from TypeKinds. */
 static inline Type type_fn(TypeKind arg_kinds[], uint8_t arity, TypeKind result_kind) {

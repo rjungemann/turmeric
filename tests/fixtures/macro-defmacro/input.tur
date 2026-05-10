@@ -1,0 +1,7 @@
+(defmacro my-when (test body)
+  (if test body))
+
+(defn main [] :int
+  (let [x 42]
+    (my-when true (println x))
+    0))

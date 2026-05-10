@@ -32,25 +32,30 @@ static void tur_frame_fire_lifo(tur_frame *f) {
     f->n = 0;
 }
 
-static int64_t __fn_2(void *);
-struct __env_4 {int64_t x; };
-static int64_t __fn_2(void * __env_p_5) {
-        struct __env_4 *__env___env_4 = (struct __env_4 *)__env_p_5;
-        return ((__env___env_4->x) + (INT64_C(1)));
+static bool is_even(int64_t);
+static bool is_odd(int64_t);
+static bool is_even(int64_t n) {
+        bool __t0;
+        if (((n) == (INT64_C(0)))) {
+            __t0 = true;
+        } else {
+            __t0 = is_odd(((n) - (INT64_C(1))));
+        }
+        return __t0;
+}
+
+static bool is_odd(int64_t n) {
+        bool __t1;
+        if (((n) == (INT64_C(0)))) {
+            __t1 = false;
+        } else {
+            __t1 = is_even(((n) - (INT64_C(1))));
+        }
+        return __t1;
 }
 
 int main() {
-        {
-            int64_t x_1 = INT64_C(10);
-            (void)x_1;
-            {
-                struct __env_4 __t0 = {.x = x_1};
-                void *__t1 = &__t0;
-                void * f_7 = __t1;
-                (void)f_7;
-                printf("%lld\n", (long long)(__fn_2(f_7)));
-            }
-        }
+        puts((is_even(INT64_C(4))) ? "true" : "false");
         return (int)0;
 }
 

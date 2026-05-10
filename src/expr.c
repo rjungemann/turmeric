@@ -108,5 +108,16 @@ void expr_print(Buf *b, const Expr *e) {
             expr_print(b, e->as.defer_.body);
             buf_putc(b, ')');
             break;
+        /* Phase 5 */
+        case EX_REF:
+            buf_puts(b, "(ref ");
+            expr_print(b, e->as.ref_.expr);
+            buf_putc(b, ')');
+            break;
+        case EX_DEREF:
+            buf_puts(b, "(@ ");
+            expr_print(b, e->as.deref_.expr);
+            buf_putc(b, ')');
+            break;
     }
 }

@@ -160,6 +160,7 @@ typedef struct Elab {
     Scope       *scope;     /* current */
     Scope        global;
     uint32_t     next_id;
+    uint32_t     next_gensym_id;  /* Phase 6: for generating unique symbol names */
 
     /* Phase 3: Collect file-scope definitions (FN_DEF) from nested contexts */
     Expr       **file_scope_defs;
@@ -181,9 +182,36 @@ typedef struct Elab {
     const Symbol *sym_extern_c; /* Phase 2 */
     const Symbol *sym_caret_mut;   /* ^mut */
     const Symbol *sym_defer;      /* Phase 4 */
+    /* Phase 5 */
+    const Symbol *sym_ref;        /* ref */
+    const Symbol *sym_deref;      /* @ (deref operator) - stored as symbol for parsing */
+    const Symbol *sym_drop;       /* drop! - explicit drop for ref<T> */
     const Symbol *kw_else;         /* :else (the symbol named "else") */
     const Symbol *kw_derive;       /* :as (the symbol named "as") - for inline-C */
+    /* Phase 6: Macro system */
+    const Symbol *sym_defmacro;   /* defmacro */
+    const Symbol *sym_quote;      /* quote */
+    const Symbol *sym_quasiquote; /* quasiquote */
+    const Symbol *sym_unquote;    /* unquote */
+    const Symbol *sym_unquote_splicing; /* unquote-splicing */
+    const Symbol *sym_gensym;     /* gensym */
+    const Symbol *sym_thread;    /* -> threading macro */
+    const Symbol *sym_thread_last; /* ->> threading macro */
+    /* Macro storage: symbol -> MacroDef */
+    /* For now, use a simple approach: store macros in a list */
+    struct MacroDef **macros;
+    uint32_t n_macros;
+    uint32_t cap_macros;
 } Elab;
+
+/* Phase 6: Macro definition */
+typedef struct MacroDef {
+    const Symbol *name;
+    Form **params;
+    uint32_t n_params;
+    Form *body;
+    Span span;
+} MacroDef;
 
 /* Phase 3: Register a file-scope definition to be emitted later */
 static void elab_register_file_def(Elab *e, Expr *def_expr) {
@@ -205,6 +233,7 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     scope_init(&e->global, NULL);
     e->scope = &e->global;
     e->next_id = 0;
+    e->next_gensym_id = 0;  /* Phase 6 */
     /* Phase 3: file-scope defs collection */
     e->file_scope_defs = NULL;
     e->n_file_scope_defs = 0;
@@ -225,8 +254,215 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_extern_c  = intern_cstr(st, "extern-c");
     e->sym_caret_mut = intern_cstr(st, "^mut");
     e->sym_defer     = intern_cstr(st, "defer");
+    /* Phase 5 */
+    e->sym_ref       = intern_cstr(st, "ref");
+    e->sym_deref     = intern_cstr(st, "deref");
+    e->sym_drop      = intern_cstr(st, "drop!");
     e->kw_else       = intern_cstr(st, "else");
     e->kw_derive     = intern_cstr(st, "as");
+    /* Phase 6 */
+    e->sym_defmacro = intern_cstr(st, "defmacro");
+    e->sym_quote = intern_cstr(st, "quote");
+    e->sym_quasiquote = intern_cstr(st, "quasiquote");
+    e->sym_unquote = intern_cstr(st, "unquote");
+    e->sym_unquote_splicing = intern_cstr(st, "unquote-splicing");
+    e->sym_gensym = intern_cstr(st, "gensym");
+    e->sym_thread = intern_cstr(st, "->");
+    e->sym_thread_last = intern_cstr(st, "->>");
+    e->next_gensym_id = 0;  /* Phase 6 */
+    /* Macro storage */
+    e->macros = NULL;
+    e->n_macros = 0;
+    e->cap_macros = 0;
+}
+
+/* Phase 6: Macro lookup */
+static MacroDef *elab_lookup_macro(Elab *e, const Symbol *name) {
+    for (uint32_t i = 0; i < e->n_macros; i++) {
+        if (e->macros[i]->name == name) {
+            return e->macros[i];
+        }
+    }
+    return NULL;
+}
+
+/* Phase 6: Register a macro */
+static void elab_register_macro(Elab *e, MacroDef *macro) {
+    if (e->n_macros >= e->cap_macros) {
+        e->cap_macros = e->cap_macros ? e->cap_macros * 2 : 8;
+        e->macros = (MacroDef **)realloc(e->macros, e->cap_macros * sizeof(MacroDef *));
+    }
+    e->macros[e->n_macros++] = macro;
+}
+
+/* Phase 6: Expand quasiquote forms recursively */
+static Form *quasiquote_expand_form(Elab *e, Form *f) {
+    switch (f->tag) {
+        case F_NIL:
+        case F_BOOL:
+        case F_INT:
+        case F_STR:
+        case F_KEYWORD:
+        case F_SYM:
+            /* Literals and symbols: (quasiquote x) -> (quote x) */
+            return form_quote(e->arena, f->span, f);
+        case F_QUOTE:
+            /* (quasiquote (quote x)) -> (quote (quasiquote x)) */
+            {
+                Form *quoted_form = f->as.list.items[0];
+                Form *expanded_quoted = quasiquote_expand_form(e, quoted_form);
+                return form_quote(e->arena, f->span, expanded_quoted);
+            }
+        case F_UNQUOTE:
+            /* (quasiquote (unquote x)) -> x */
+            return f->as.list.items[0];
+        case F_UNQUOTE_SPLICING:
+            /* (quasiquote (unquote-splicing x)) -> x */
+            return f->as.list.items[0];
+        case F_LIST: {
+            /* Check for gensym call: (gensym ...) */
+            if (f->as.list.len >= 1 && f->as.list.items[0]->tag == F_SYM) {
+                const Symbol *name = f->as.list.items[0]->as.sym;
+                if (name == e->sym_gensym) {
+                    /* Generate a fresh symbol for gensym inside quasiquote */
+                    const char *prefix = "g";
+                    if (f->as.list.len >= 2) {
+                        Form *prefix_f = f->as.list.items[1];
+                        if (prefix_f->tag == F_SYM) {
+                            prefix = prefix_f->as.sym->name;
+                        } else if (prefix_f->tag == F_STR) {
+                            prefix = prefix_f->as.s.p;
+                        }
+                    }
+                    char name_buf[64];
+                    snprintf(name_buf, sizeof(name_buf), "%s_%u", prefix, e->next_gensym_id++);
+                    const Symbol *fresh_sym = symtab_intern(e->st, strslice(name_buf, (uint32_t)strlen(name_buf)));
+                    return form_sym(e->arena, f->span, fresh_sym);
+                }
+            }
+            /* Lists inside quasiquote: process each element */
+            /* (quasiquote (a ~b c)) -> (a b c) with b unbound from macro params */
+            /* For phase 6, we build a list with expanded elements */
+            {
+                Form **new_items = (Form **)arena_alloc(e->arena, f->as.list.len * sizeof(Form *));
+                for (uint32_t i = 0; i < f->as.list.len; i++) {
+                    Form *item = f->as.list.items[i];
+                    if (item->tag == F_UNQUOTE || item->tag == F_UNQUOTE_SPLICING) {
+                        /* Unwrap unquote/unquote-splicing - just return the inner form */
+                        /* Parameter substitution will happen in substitute_params */
+                        new_items[i] = item->as.list.items[0];
+                    } else {
+                        /* Recursively expand other items */
+                        new_items[i] = quasiquote_expand_form(e, item);
+                    }
+                }
+                return form_list(e->arena, f->span, new_items, f->as.list.len);
+            }
+        }
+        case F_VEC:
+            /* Vectors inside quasiquote: process each element */
+            {
+                Form **new_items = (Form **)arena_alloc(e->arena, f->as.list.len * sizeof(Form *));
+                for (uint32_t i = 0; i < f->as.list.len; i++) {
+                    Form *item = f->as.list.items[i];
+                    if (item->tag == F_UNQUOTE || item->tag == F_UNQUOTE_SPLICING) {
+                        new_items[i] = item->as.list.items[0];
+                    } else {
+                        new_items[i] = quasiquote_expand_form(e, item);
+                    }
+                }
+                return form_vec(e->arena, f->span, new_items, f->as.list.len);
+            }
+        case F_CBLOCK:
+            return f;
+        case F_QUASIQUOTE:
+            /* Expand the quasiquoted form */
+            return quasiquote_expand_form(e, f->as.list.items[0]);
+    }
+    return f;
+}
+
+/* Phase 6: Helper to substitute parameters in a form */
+static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
+    switch (f->tag) {
+        case F_NIL:
+        case F_BOOL:
+        case F_INT:
+        case F_STR:
+        case F_KEYWORD:
+        case F_CBLOCK:
+        case F_QUOTE:
+            /* Literals and quote forms are returned as-is */
+            return f;
+        case F_QUASIQUOTE:
+        case F_UNQUOTE:
+        case F_UNQUOTE_SPLICING:
+            /* Expand quasiquote forms first, then continue substitution */
+            return substitute_params(e, quasiquote_expand_form(e, f), macro, args);
+        case F_LIST: {
+            /* Check for gensym call: (gensym) or (gensym prefix) */
+            if (f->as.list.len >= 1 && f->as.list.items[0]->tag == F_SYM) {
+                const Symbol *name = f->as.list.items[0]->as.sym;
+                if (name == e->sym_gensym) {
+                    /* This is a gensym call - generate a fresh symbol */
+                    const char *prefix = "g";
+                    if (f->as.list.len >= 2) {
+                        Form *prefix_f = f->as.list.items[1];
+                        if (prefix_f->tag == F_SYM) {
+                            prefix = prefix_f->as.sym->name;
+                        } else if (prefix_f->tag == F_STR) {
+                            prefix = prefix_f->as.s.p;
+                        }
+                        /* For other cases, use default prefix */
+                    }
+                    char name_buf[64];
+                    snprintf(name_buf, sizeof(name_buf), "%s_%u", prefix, e->next_gensym_id++);
+                    const Symbol *fresh_sym = symtab_intern(e->st, strslice(name_buf, (uint32_t)strlen(name_buf)));
+                    return form_sym(e->arena, f->span, fresh_sym);
+                }
+            }
+            /* Not a gensym call - continue with normal processing */
+            Form **items = (Form **)arena_alloc(e->arena, f->as.list.len * sizeof(Form *));
+            for (uint32_t i = 0; i < f->as.list.len; i++) {
+                items[i] = substitute_params(e, f->as.list.items[i], macro, args);
+            }
+            return form_list(e->arena, f->span, items, f->as.list.len);
+        }
+        case F_SYM: {
+            /* Check if this symbol is a parameter - if so, replace with corresponding arg */
+            for (uint32_t i = 0; i < macro->n_params; i++) {
+                Form *param = macro->params[i];
+                if (param->tag == F_SYM && param->as.sym == f->as.sym) {
+                    return args[i];
+                }
+            }
+            /* Not a parameter - return as-is */
+            return f;
+        }
+        case F_VEC: {
+            /* Recursively substitute in vec items */
+            Form **items = (Form **)arena_alloc(e->arena, f->as.list.len * sizeof(Form *));
+            for (uint32_t i = 0; i < f->as.list.len; i++) {
+                items[i] = substitute_params(e, f->as.list.items[i], macro, args);
+            }
+            return form_vec(e->arena, f->span, items, f->as.list.len);
+        }
+    }
+    return f;
+}
+
+/* Phase 6: Expand a macro call with arguments */
+static Form *elab_expand_macro(Elab *e, MacroDef *macro, Form **args, uint32_t n_args) {
+    /* Check arity */
+    if (n_args != macro->n_params) {
+        diag_emit(DIAG_ERROR, macro->span,
+                  "macro '%s' expects %u arguments, got %u",
+                  macro->name->name, macro->n_params, n_args);
+        return NULL;
+    }
+    
+    /* Substitute parameters in the macro body */
+    return substitute_params(e, macro->body, macro, args);
 }
 
 static Binding *binding_new(Elab *e, const Symbol *name, Type type,
@@ -239,11 +475,16 @@ static Binding *binding_new(Elab *e, const Symbol *name, Type type,
     b->id = e->next_id++;
     b->span = span;
     b->closure_fn_binding = NULL;
+    b->is_moved = false;  /* Phase 5: move semantics */
     return b;
 }
 
 /* Forward declarations. */
 static Expr *elab_form(Elab *e, Form *f);
+/* Phase 5 */
+static Expr *elab_ref(Elab *e, const Form *call);
+static Expr *elab_deref(Elab *e, const Form *call);
+static Expr *elab_drop(Elab *e, const Form *call);
 
 /* ---- helpers ---- */
 
@@ -336,6 +577,15 @@ static Expr *elab_let(Elab *e, const Form *call) {
         n_binds++;
     }
 
+    /* Phase 5: Check if any binding is a ref and needs auto-defer drop */
+    bool has_ref_bindings = false;
+    for (uint32_t k = 0; k < n_binds; k++) {
+        if (binds[k].binding->type.kind == TY_REF) {
+            has_ref_bindings = true;
+            break;
+        }
+    }
+
     Expr *body = NULL;
     if (rc == 0) {
         uint32_t body_count = call->as.list.len - 2;
@@ -354,6 +604,94 @@ static Expr *elab_let(Elab *e, const Form *call) {
                 body = expr_new(e->arena, EX_DO, items[body_count - 1]->type, call->span);
                 body->as.do_.items = items;
                 body->as.do_.n = body_count;
+            }
+        }
+        
+        /* Phase 5: If we have ref bindings and the body is a single expression
+         * (not a do), wrap it in a do so we can add defers */
+        if (has_ref_bindings && body && body->kind != EX_DO) {
+            Expr **items = (Expr **)arena_alloc(e->arena, 1 * sizeof(Expr *));
+            items[0] = body;
+            body = expr_new(e->arena, EX_DO, body->type, call->span);
+            body->as.do_.items = items;
+            body->as.do_.n = 1;
+        }
+        
+        /* Phase 5: Inject defers for ref bindings into the do body */
+        if (has_ref_bindings && body && body->kind == EX_DO) {
+            /* We need to add defer expressions to the do body */
+            /* First, collect all ref binding names that need drops */
+            uint32_t n_refs = 0;
+            for (uint32_t k = 0; k < n_binds; k++) {
+                if (binds[k].binding->type.kind == TY_REF) {
+                    n_refs++;
+                }
+            }
+            
+            if (n_refs > 0) {
+                /* Create new items array with space for defers */
+                uint32_t new_n = body->as.do_.n + n_refs;
+                Expr **new_items = (Expr **)arena_alloc(e->arena, new_n * sizeof(Expr *));
+                
+                /* Copy existing items */
+                memcpy(new_items, body->as.do_.items, body->as.do_.n * sizeof(Expr *));
+                
+                /* Add defer expressions for each ref binding at the end */
+                /* Note: defers execute in LIFO order, so we add them in order and they'll
+                 * fire in reverse order. But since we're adding them at the end of the
+                 * items array, they'll be after the actual body expressions, which is
+                 * what we want for scope-exit behavior. */
+                uint32_t defer_idx = body->as.do_.n;
+                for (uint32_t k = 0; k < n_binds; k++) {
+                    if (binds[k].binding->type.kind == TY_REF) {
+                        /* Create (defer (drop! binding_name)) expression */
+                        /* Create a variable reference to the binding */
+                        Expr *var_expr = expr_new(e->arena, EX_VAR, binds[k].binding->type, call->span);
+                        var_expr->as.var.binding = binds[k].binding;
+                        
+                        /* Look up the drop! builtin spec and create a BUILTIN expression */
+                        const BuiltinSpec *spec = builtin_lookup(e->sym_drop, binds[k].binding->type, 1);
+                        if (!spec) {
+                            diag_emit(DIAG_ERROR, call->span,
+                                      "internal error: drop! builtin not found for ref<T>");
+                            rc = -1;
+                            break;
+                        }
+                        
+                        /* Create the drop! builtin call */
+                        Expr *drop_call = expr_new(e->arena, EX_BUILTIN, TYPE_NIL, call->span);
+                        drop_call->as.builtin.spec = spec;
+                        drop_call->as.builtin.n = 1;
+                        drop_call->as.builtin.args = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+                        drop_call->as.builtin.args[0] = var_expr;
+                        
+                        /* Create the defer expression */
+                        Expr *defer_expr = expr_new(e->arena, EX_DEFER, TYPE_NIL, call->span);
+                        defer_expr->as.defer_.body = drop_call;
+                        /* Capture analysis for defer body */
+                        /* Collect free variables in the defer body (the drop! call references the binding) */
+                        uint32_t n_free = 0;
+                        Binding **free_vars = collect_free_vars(drop_call, NULL, 0, &n_free);
+                        
+                        Binding **captures = NULL;
+                        uint8_t n_captures = 0;
+                        if (n_free > 0) {
+                            captures = (Binding **)arena_alloc(e->arena, n_free * sizeof(Binding *));
+                            memcpy(captures, free_vars, n_free * sizeof(Binding *));
+                            n_captures = (uint8_t)n_free;
+                        }
+                        free(free_vars);
+                        
+                        defer_expr->as.defer_.captures = captures;
+                        defer_expr->as.defer_.n_captures = n_captures;
+                        
+                        new_items[defer_idx++] = defer_expr;
+                    }
+                }
+                
+                /* Update the body with new items */
+                body->as.do_.items = new_items;
+                body->as.do_.n = new_n;
             }
         }
     }
@@ -532,6 +870,88 @@ static Expr *elab_cond(Elab *e, const Form *call) {
     return acc;
 }
 
+/* Phase 6: Threading macro ->  */
+/* (-> x (f a) (g b)) expands to (g (f x a) b) */
+static Expr *elab_thread(Elab *e, const Form *call) {
+    if (call->as.list.len < 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "-> requires at least one argument");
+        return NULL;
+    }
+    
+    /* Start with the initial value as a Form */
+    Form *current = call->as.list.items[1];
+    
+    /* Process remaining forms */
+    for (uint32_t i = 2; i < call->as.list.len; i++) {
+        Form *form = call->as.list.items[i];
+        if (form->tag == F_SYM) {
+            /* (-> x f) -> (f x) */
+            current = form_list(e->arena, call->span,
+                (Form *[]){form, current}, 2);
+        } else if (form->tag == F_LIST) {
+            /* (-> x (f a b)) -> (f x a b) */
+            /* Prepend current to the list arguments */
+            uint32_t n = form->as.list.len;
+            Form **new_items = (Form **)arena_alloc(e->arena, (n + 1) * sizeof(Form *));
+            new_items[0] = form->as.list.items[0]; /* function name */
+            new_items[1] = current; /* insert current as first arg */
+            for (uint32_t j = 1; j < n; j++) {
+                new_items[j + 1] = form->as.list.items[j];
+            }
+            current = form_list(e->arena, call->span, new_items, n + 1);
+        } else {
+            diag_emit(DIAG_ERROR, form->span,
+                      "-> expected symbol or list, got %s",
+                      form->tag == F_VEC ? "vector" : "other");
+            return NULL;
+        }
+    }
+    
+    /* Elaborate the final form */
+    return elab_form(e, current);
+}
+
+/* Phase 6: Threading macro ->>  */
+/* (->> x (f a) (g b)) expands to (g b (f x a)) - value as last arg */
+static Expr *elab_thread_last(Elab *e, const Form *call) {
+    if (call->as.list.len < 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "->> requires at least one argument");
+        return NULL;
+    }
+    
+    /* Start with the initial value as a Form */
+    Form *current = call->as.list.items[1];
+    
+    /* Process remaining forms */
+    for (uint32_t i = 2; i < call->as.list.len; i++) {
+        Form *form = call->as.list.items[i];
+        if (form->tag == F_SYM) {
+            /* (->> x f) -> (f x) - same as -> for single arg */
+            current = form_list(e->arena, call->span,
+                (Form *[]){form, current}, 2);
+        } else if (form->tag == F_LIST) {
+            /* (->> x (f a b)) -> (f a b x) - append current as last arg */
+            uint32_t n = form->as.list.len;
+            Form **new_items = (Form **)arena_alloc(e->arena, (n + 1) * sizeof(Form *));
+            for (uint32_t j = 0; j < n; j++) {
+                new_items[j] = form->as.list.items[j];
+            }
+            new_items[n] = current; /* append current as last arg */
+            current = form_list(e->arena, call->span, new_items, n + 1);
+        } else {
+            diag_emit(DIAG_ERROR, form->span,
+                      "->> expected symbol or list, got %s",
+                      form->tag == F_VEC ? "vector" : "other");
+            return NULL;
+        }
+    }
+    
+    /* Elaborate the final form */
+    return elab_form(e, current);
+}
+
 static Expr *elab_set(Elab *e, const Form *call) {
     if (call->as.list.len != 3) {
         diag_emit(DIAG_ERROR, call->span, "set! takes (set! name value)");
@@ -657,6 +1077,255 @@ static Expr *elab_defer(Elab *e, const Form *call) {
     out->as.defer_.body = body;
     out->as.defer_.captures = captures;
     out->as.defer_.n_captures = n_captures;
+    return out;
+}
+
+/* Phase 5: ref — (ref expr)
+ * Creates an owning reference to a heap-allocated value.
+ * The compiler injects a defer (drop! r) at the binding site for auto-cleanup.
+ * 
+ * Grammar: (ref expr)
+ * Returns: ref<T> where T is the type of expr
+ * 
+ * Move semantics: Once a ref binding is moved (assigned to another binding),
+ * the source is poisoned and cannot be used again.
+ */
+static Expr *elab_ref(Elab *e, const Form *call) {
+    /* Minimum: (ref expr) */
+    if (call->as.list.len < 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "ref requires an expression: (ref expr)");
+        return NULL;
+    }
+    
+    /* Elaborate the inner expression */
+    Expr *inner = elab_form(e, call->as.list.items[1]);
+    if (!inner) return NULL;
+    
+    /* ref<T> where T is the inner expression's type */
+    Type ref_type = type_ref(inner->type.kind);
+    
+    /* Create EX_REF expression */
+    Expr *out = expr_new(e->arena, EX_REF, ref_type, call->span);
+    out->as.ref_.expr = inner;
+    return out;
+}
+
+/* Phase 5: deref — (@ expr)
+ * Dereferences a ref<T> or ptr<T>, returning T.
+ * 
+ * Grammar: (@ expr)
+ * expr must have type ref<T> or ptr<T>
+ * Returns: T
+ */
+static Expr *elab_deref(Elab *e, const Form *call) {
+    /* Minimum: (@ expr) */
+    if (call->as.list.len < 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "@ requires an expression: (@ expr)");
+        return NULL;
+    }
+    
+    /* Elaborate the inner expression */
+    Expr *inner = elab_form(e, call->as.list.items[1]);
+    if (!inner) return NULL;
+    
+    /* Check that inner is ref<T> or ptr<T> */
+    if (inner->type.kind != TY_REF && inner->type.kind != TY_PTR_VOID) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "@ requires ref<T> or ptr<T>, got %s",
+                  type_name(inner->type));
+        return NULL;
+    }
+    
+    /* Return type is the inner type of ref<T> or void* for ptr<void> */
+    Type result_type;
+    if (inner->type.kind == TY_REF) {
+        result_type = type_from_kind(inner->type.as.ref.inner);
+    } else {
+        /* ptr<void> derefs to void* for now - could be more precise */
+        result_type = TYPE_PTR_VOID;
+    }
+    
+    /* Create EX_DEREF expression */
+    Expr *out = expr_new(e->arena, EX_DEREF, result_type, call->span);
+    out->as.deref_.expr = inner;
+    return out;
+}
+
+/* Phase 5: drop! — (drop! expr)
+ * Explicitly drops a ref<T>, freeing the underlying allocation.
+ * Grammar: (drop! expr)
+ * Returns: nil
+ * Note: This is used by auto-injected defers for ref bindings.
+ * Move semantics: After drop!, the ref should not be used (enforced at codegen time
+ * by the elaborator not tracking moves yet - future work). */
+static Expr *elab_drop(Elab *e, const Form *call) {
+    /* Minimum: (drop! expr) */
+    if (call->as.list.len < 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "drop! requires an expression: (drop! expr)");
+        return NULL;
+    }
+    if (call->as.list.len > 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "drop! takes exactly 1 argument: (drop! expr)");
+        return NULL;
+    }
+
+    Expr *inner = elab_form(e, call->as.list.items[1]);
+    if (!inner) return NULL;
+
+    /* drop! works on ref<T> */
+    if (inner->type.kind != TY_REF) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "drop! requires ref<T>, got %s", type_name(inner->type));
+        return NULL;
+    }
+
+    /* Look up the drop! builtin spec and create a BUILTIN expression */
+    /* drop! is a unary operator on ref<T> that returns nil */
+    const BuiltinSpec *spec = builtin_lookup(e->sym_drop, inner->type, 1);
+    if (!spec) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "internal error: drop! builtin not found");
+        return NULL;
+    }
+
+    /* Create a BUILTIN expression */
+    Expr *out = expr_new(e->arena, EX_BUILTIN, TYPE_NIL, call->span);
+    out->as.builtin.spec = spec;
+    out->as.builtin.n = 1;
+    out->as.builtin.args = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+    out->as.builtin.args[0] = inner;
+
+    return out;
+}
+
+/* Phase 6: defmacro — (defmacro name [params...] body...)
+ * Defines a macro that will be expanded at compile time.
+ * Syntax: (defmacro name [param1 param2 ...] body...)
+ * The macro body can use quasiquote/unquote to build the output form.
+ * The macro is stored and will be used to expand subsequent calls.
+ */
+static Expr *elab_defmacro(Elab *e, const Form *call) {
+    /* Minimum: (defmacro name [params...] body...) */
+    if (call->as.list.len < 4) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "defmacro requires (defmacro name [params...] body...)");
+        return NULL;
+    }
+
+    /* Parse name */
+    Form *name_f = call->as.list.items[1];
+    if (name_f->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, name_f->span, "defmacro name must be a symbol");
+        return NULL;
+    }
+
+    /* Check if macro already exists */
+    if (elab_lookup_macro(e, name_f->as.sym)) {
+        diag_emit(DIAG_ERROR, name_f->span,
+                  "defmacro: '%s' is already defined", name_f->as.sym->name);
+        return NULL;
+    }
+
+    /* Parse params */
+    Form *params_f = call->as.list.items[2];
+    if (params_f->tag != F_LIST && params_f->tag != F_VEC) {
+        diag_emit(DIAG_ERROR, params_f->span,
+                  "defmacro: expected parameter list or vector, got %s", 
+                  params_f->tag == F_SYM ? "symbol" : "non-list");
+        return NULL;
+    }
+
+    /* Extract parameter symbols */
+    Form **params = (Form **)arena_alloc(e->arena, params_f->as.list.len * sizeof(Form *));
+    for (uint32_t i = 0; i < params_f->as.list.len; i++) {
+        Form *p = params_f->as.list.items[i];
+        if (p->tag != F_SYM) {
+            diag_emit(DIAG_ERROR, p->span,
+                      "defmacro: parameter must be a symbol, got %s", 
+                      p->tag == F_KEYWORD ? "keyword" : "non-symbol");
+            return NULL;
+        }
+        params[i] = p;
+    }
+
+    /* The body is everything after the parameter list */
+    uint32_t body_count = call->as.list.len - 3;
+    if (body_count == 0) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "defmacro: expected at least one body expression");
+        return NULL;
+    }
+
+    /* For now, we only support a single body expression
+     * (multi-expression macro bodies would need to be wrapped in do) */
+    Form *body = call->as.list.items[3];
+    if (body_count > 1) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "defmacro: multi-expression bodies not yet supported; wrap in do");
+        return NULL;
+    }
+
+    /* Create the macro definition */
+    MacroDef *macro = (MacroDef *)arena_alloc(e->arena, sizeof(MacroDef));
+    macro->name = name_f->as.sym;
+    macro->params = params;
+    macro->n_params = params_f->as.list.len;
+    macro->body = body;
+    macro->span = call->span;
+
+    /* Register the macro */
+    elab_register_macro(e, macro);
+
+    /* Return nil - defmacro doesn't produce a value */
+    return e_nil(e, call->span);
+}
+
+/* Phase 6: gensym — (gensym) or (gensym prefix-sym) generates a fresh symbol Form */
+static Expr *elab_gensym(Elab *e, const Form *call) {
+    /* Syntax: (gensym) or (gensym prefix) */
+    const char *prefix = "g"; /* default prefix */
+    
+    if (call->as.list.len >= 2) {
+        Form *prefix_f = call->as.list.items[1];
+        if (prefix_f->tag == F_SYM) {
+            prefix = prefix_f->as.sym->name;
+        } else if (prefix_f->tag == F_STR) {
+            prefix = prefix_f->as.s.p;
+        } else if (prefix_f->tag == F_QUOTE && prefix_f->as.list.len == 1) {
+            /* (gensym 'prefix) - get the symbol from the quote */
+            Form *quoted = prefix_f->as.list.items[0];
+            if (quoted->tag == F_SYM) {
+                prefix = quoted->as.sym->name;
+            } else {
+                diag_emit(DIAG_ERROR, prefix_f->span,
+                          "gensym: quoted prefix must be a symbol");
+                return NULL;
+            }
+        } else {
+            diag_emit(DIAG_ERROR, prefix_f->span,
+                      "gensym: expected symbol, string, or quoted symbol prefix, got %s",
+                      prefix_f->tag == F_INT ? "integer" : "other");
+            return NULL;
+        }
+    }
+    
+    /* Generate a fresh symbol name */
+    char name_buf[64];
+    snprintf(name_buf, sizeof(name_buf), "%s_%u", prefix, e->next_gensym_id++);
+    const Symbol *fresh_sym = symtab_intern(e->st, strslice(name_buf, (uint32_t)strlen(name_buf)));
+    
+    /* For phase 6: gensym generates a fresh symbol but doesn't register it. */
+    /* The symbol can be used in macro output, but the user must bind it. */
+    /* Return a symbol expression - in practice, this will error until gensym */
+    /* is used in a proper context (like inside quasiquote in a macro body). */
+    Binding *b = binding_new(e, fresh_sym, TYPE_INT, false, false, call->span);
+    Expr *out = expr_new(e->arena, EX_VAR, TYPE_INT, call->span);
+    out->as.var.binding = b;
+    
     return out;
 }
 
@@ -1262,10 +1931,38 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_while)  return elab_while (e, call);
     /* Phase 4 */
     if (name == e->sym_defer)  return elab_defer (e, call);
+    /* Phase 5 */
+    if (name == e->sym_ref)    return elab_ref   (e, call);
+    if (name == e->sym_deref)  return elab_deref (e, call);
+    if (name == e->sym_drop)   return elab_drop  (e, call);
+    /* Phase 6 */
+    if (name == e->sym_defmacro) return elab_defmacro(e, call);
+    if (name == e->sym_quote)    return elab_form(e, call->as.list.items[1]); /* (quote x) -> x */
+    if (name == e->sym_gensym)   return elab_gensym(e, call);
+    if (name == e->sym_thread)    return elab_thread(e, call);
+    if (name == e->sym_thread_last) return elab_thread_last(e, call);
     /* Phase 2 */
     if (name == e->sym_defn)    return elab_defn  (e, call);
     if (name == e->sym_fn)      return elab_fn    (e, call);
     if (name == e->sym_extern_c) return elab_extern_c(e, call);
+
+    /* Phase 6: Check if it's a macro call */
+    MacroDef *macro = elab_lookup_macro(e, name);
+    if (macro) {
+        /* Expand the macro with arguments */
+        /* Extract arguments (rest of list) */
+        uint32_t n_args = call->as.list.len - 1;
+        Form **args = (n_args == 0) ? NULL : (Form **)arena_alloc(e->arena, n_args * sizeof(Form *));
+        for (uint32_t i = 0; i < n_args; i++) {
+            args[i] = call->as.list.items[1 + i];
+        }
+        
+        Form *expanded = elab_expand_macro(e, macro, args, n_args);
+        if (!expanded) return NULL;
+        
+        /* Recursively elaborate the expanded form */
+        return elab_form(e, expanded);
+    }
 
     /* Phase 2: Check if it's a user-defined function call */
     Binding *fn_binding = scope_lookup(e->scope, name);
@@ -1413,6 +2110,28 @@ static Expr *elab_form(Elab *e, Form *f) {
             diag_emit(DIAG_ERROR, f->span,
                       "phase 1: vector literals are only allowed in let bindings");
             return NULL;
+        /* Phase 6: quote form */
+        case F_QUOTE: {
+            /* (quote x) returns x as a literal without evaluating x */
+            if (f->as.list.len != 1) {
+                diag_emit(DIAG_ERROR, f->span,
+                          "quote requires exactly one argument");
+                return NULL;
+            }
+            Form *quoted = f->as.list.items[0];
+            /* Quote just returns the inner form as a literal */
+            /* For now, support quoting literals and symbols */
+            return elab_form(e, quoted);
+        }
+        /* Phase 6: quasiquote forms - expand them */
+        case F_QUASIQUOTE:
+        case F_UNQUOTE:
+        case F_UNQUOTE_SPLICING:
+            /* Expand quasiquote forms first */
+            {
+                Form *expanded = quasiquote_expand_form(e, f);
+                return elab_form(e, expanded);
+            }
         case F_CBLOCK: {
             /* Phase 2: inline C code block ```c ... ``` */
             /* For now, we don't support captures, so the InlineC has no captures */

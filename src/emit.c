@@ -136,15 +136,15 @@ static void emit_pending_defer_thunks(EmitCtx *ctx, Buf *out) {
         if (thunk->env_name) {
             /* Thunk with captures - cast void* to env struct type */
             buf_printf(out, "static void %s(void *__env) {\n", thunk->name);
-            buf_printf(out, "    struct %s *%s = (struct %s *)__env;\n",
-                       thunk->env_name, thunk->env_name, thunk->env_name);
+            buf_printf(out, "    struct %s *__e = (struct %s *)__env;\n",
+                       thunk->env_name, thunk->env_name);
             
             /* Set up env access context for name_for_binding */
             const char *saved_env_var_name = ctx->env_var_name;
             Binding **saved_defer_captures = ctx->defer_captures;
             uint8_t saved_n_defer_captures = ctx->n_defer_captures;
             
-            ctx->env_var_name = thunk->env_name;
+            ctx->env_var_name = "__e";
             ctx->defer_captures = thunk->captures;
             ctx->n_defer_captures = thunk->n_captures;
             
@@ -387,6 +387,18 @@ static char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
         case BS_PREFIX_UNARY:
             buf_printf(&out, "(%s(%s))", spec->c_op, arg_strs[0]);
             break;
+        case BS_PREFIX_UNARY_FREE:
+            /* Special case for drop!: free the ref pointer directly
+             * arg is a ref<T> which is stored as void* in C for v1
+             * Emit: free(arg) as a statement
+             * Unlike other builtins, this has side effects and is always emitted
+             * as a statement, so we emit it directly here and return nil */
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "free(%s);\n", arg_strs[0]);
+            buf_free(&out);
+            for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
+            free(arg_strs);
+            return atom_nil();
         default:
             /* unreachable for the shapes handled above */
             buf_puts(&out, "((void)0)");
@@ -410,6 +422,7 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         indent_buf(body, ctx->indent);
         buf_printf(body, "%s %s;\n", type_c_name(e->type), tmp);
     }
+    
     indent_buf(body, ctx->indent);
     buf_puts(body, "{\n");
     ctx->indent += 4;
@@ -787,6 +800,48 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* The body is emitted as a statement in emit_stmt */
             return atom_nil();
         }
+        /* Phase 5 */
+        case EX_REF: {
+            /* (ref expr) - allocate on heap and return pointer */
+            /* ref<T> lowers to void* in C for simplicity in v1 */
+            char *inner = emit_value(ctx, body, e->as.ref_.expr);
+            
+            /* Emit: malloc + store value */
+            char *tmp = fresh_tmp(ctx);
+            char *inner_type_c = strdup(type_c_name(e->as.ref_.expr->type));
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s %s = malloc(sizeof(%s));\n", 
+                       type_c_name(e->type), tmp, inner_type_c);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "*((%s *)%s) = %s;\n", inner_type_c, tmp, inner);
+            free(inner);
+            free(inner_type_c);
+            /* Mark that we need stdlib.h for malloc/free */
+            /* We'll use a flag in the EmitCtx - but ctx is passed by pointer */
+            /* For now, we'll just always include stdlib.h when we see a ref */
+            /* This is a simplification - in production we'd track this properly */
+            return tmp;
+        }
+        case EX_DEREF: {
+            /* (@ expr) - dereference ref<T> or ptr<T> */
+            char *inner = emit_value(ctx, body, e->as.deref_.expr);
+            
+            /* For ref<T>, we need to cast and dereference */
+            if (e->as.deref_.expr->type.kind == TY_REF) {
+                char *inner_type_c = strdup(type_c_name(e->type));
+                char *tmp = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s %s = *((%s *)%s);\n", 
+                           inner_type_c, tmp, inner_type_c, inner);
+                free(inner);
+                free(inner_type_c);
+                return tmp;
+            } else {
+                /* For ptr<T>, just cast to the appropriate type and dereference */
+                /* For now, ptr<void> stays as void* */
+                return inner;
+            }
+        }
         /* Phase 3 */
         case EX_CLOSURE: {
             /* Emit closure: the closure value IS the env struct (passed by value to thunk) */
@@ -1023,6 +1078,27 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             emit_stmt(ctx, body, e->as.defer_.body);
             return;
         }
+        /* Phase 5 */
+        case EX_REF: {
+            /* (ref expr) as statement - emit and discard */
+            char *v = emit_value(ctx, body, e);
+            if (e->type.kind != TY_NIL) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "(void)(%s);\n", v);
+            }
+            free(v);
+            return;
+        }
+        case EX_DEREF: {
+            /* (@ expr) as statement - emit and discard */
+            char *v = emit_value(ctx, body, e);
+            if (e->type.kind != TY_NIL) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "(void)(%s);\n", v);
+            }
+            free(v);
+            return;
+        }
     }
 }
 
@@ -1210,6 +1286,7 @@ int emit_program(Buf *out, const Expr *program) {
     /* Phase 4 v1: defer captures tracking */
     ctx.defer_captures = NULL;
     ctx.n_defer_captures = 0;
+
     /* Check if user defined a main function */
     bool user_has_main = false;
     for (uint32_t i = 0; i < program->as.program.n; i++) {
@@ -1285,6 +1362,10 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "#include <stdio.h>\n");
     buf_puts(out, "#include <stdint.h>\n");
     buf_puts(out, "#include <stdbool.h>\n");
+    /* Phase 5: Declare malloc and free for ref<T> without including stdlib.h
+     * to avoid conflicts with user-declared functions like exit. */
+    buf_puts(out, "extern void *malloc(size_t);\n");
+    buf_puts(out, "extern void free(void *);\n");
     buf_puts(out, "\n");
     /* Phase 4 v1 lowering: emit tur_frame inline from runtime.h */
     buf_puts(out, "/* tur_frame - phase 4 v1 lowering (from runtime.h) */\n");

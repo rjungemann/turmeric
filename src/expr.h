@@ -29,6 +29,8 @@ struct Binding {
     Span          span;
     /* Phase 3: For closure bindings, this points to the thunk function binding */
     struct Binding *closure_fn_binding;
+    /* Phase 5: Move semantics - whether this ref binding has been moved */
+    bool          is_moved;
 };
 
 typedef enum ExprKind {
@@ -51,6 +53,9 @@ typedef enum ExprKind {
     EX_INLINE_C,        /* Phase 2: inline C block */
     EX_CLOSURE,         /* Phase 3: closure with captured env */
     EX_DEFER,           /* Phase 4: defer expression */
+    /* Phase 5: ref<T> with move semantics */
+    EX_REF,             /* (ref expr) - owning reference constructor */
+    EX_DEREF,           /* (@ expr) - dereference ref<T> or ptr<T> */
     EX_PROGRAM,
 } ExprKind;
 
@@ -136,6 +141,9 @@ struct Expr {
             Binding **captures;       /* captured bindings from enclosing scope */
             uint8_t n_captures;
         } defer_;
+        /* Phase 5 */
+        struct { Expr *expr; }        ref_;    /* (ref expr) - inner expression */
+        struct { Expr *expr; }        deref_;  /* (@ expr) - expression to dereference */
 
         struct { Expr **items; uint32_t n; }                               program;
     } as;

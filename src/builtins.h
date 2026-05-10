@@ -13,6 +13,7 @@ typedef enum BuiltinShape {
     BS_BIN_INFIX,        /* "(a) <op> (b)" */
     BS_VARIADIC_FOLD,    /* "((a) <op> (b)) <op> (c) ..." (left-fold) */
     BS_PREFIX_UNARY,     /* "<op>(a)" */
+    BS_PREFIX_UNARY_FREE,/* "free(a)" - special case for ref drop */
     BS_PRINTLN_INT,      /* printf("%lld\n", x)         */
     BS_PRINTLN_BOOL,     /* puts(x ? "true" : "false")  */
     BS_PRINTLN_CSTR,     /* puts(x)                     */
