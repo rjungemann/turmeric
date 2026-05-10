@@ -21,6 +21,10 @@ int type_eq(Type a, Type b) {
     if (a.kind == TY_RC || a.kind == TY_WEAK) {
         return a.as.rc.inner == b.as.rc.inner;
     }
+    /* Phase 12: Borrow types */
+    if (a.kind == TY_REF_IMMUT || a.kind == TY_REF_MUT) {
+        return a.as.ref_borrow.target == b.as.ref_borrow.target;
+    }
     return 1;
 }
 
@@ -89,6 +93,25 @@ const char *type_name(Type t) {
             buf_putc(&tmp, '\0');
             return strdup(tmp.data);
         }
+        /* Phase 12: Borrow types */
+        case TY_REF_IMMUT: {
+            /* Build "&T" name */
+            Buf tmp;
+            buf_init(&tmp);
+            buf_puts(&tmp, "&");
+            buf_puts(&tmp, type_name(type_from_kind(t.as.ref_borrow.target)));
+            buf_putc(&tmp, '\0');
+            return strdup(tmp.data);
+        }
+        case TY_REF_MUT: {
+            /* Build "&mut T" name */
+            Buf tmp;
+            buf_init(&tmp);
+            buf_puts(&tmp, "&mut ");
+            buf_puts(&tmp, type_name(type_from_kind(t.as.ref_borrow.target)));
+            buf_putc(&tmp, '\0');
+            return strdup(tmp.data);
+        }
     }
     return "?";
 }
@@ -131,6 +154,17 @@ static void type_name_buf(Buf *b, Type t) {
             buf_puts(b, ">");
             break;
         }
+        /* Phase 12: Borrow types */
+        case TY_REF_IMMUT: {
+            buf_puts(b, "&");
+            type_name_buf(b, type_from_kind(t.as.ref_borrow.target));
+            break;
+        }
+        case TY_REF_MUT: {
+            buf_puts(b, "&mut ");
+            type_name_buf(b, type_from_kind(t.as.ref_borrow.target));
+            break;
+        }
     }
 }
 
@@ -156,6 +190,17 @@ const char *type_c_name(Type t) {
         case TY_RC:
         case TY_WEAK:
             return "RcControlBlock *";
+        /* Phase 12: Borrow types lower to pointers in C */
+        case TY_REF_IMMUT: {
+            /* &T lowers to const T* in C (immutable borrow) */
+            /* For now, use void* since we don't have full type info */
+            return "const void *";
+        }
+        case TY_REF_MUT: {
+            /* &mut T lowers to T* in C (mutable borrow) */
+            /* For now, use void* since we don't have full type info */
+            return "void *";
+        }
     }
     return "void";
 }

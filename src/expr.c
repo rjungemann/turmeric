@@ -160,5 +160,16 @@ void expr_print(Buf *b, const Expr *e) {
             expr_print(b, e->as.weak_pred_.expr);
             buf_putc(b, ')');
             break;
+        /* Phase 12: Borrow traits */
+        case EX_BORROW_IMMUT:
+            buf_puts(b, "(& ");
+            expr_print(b, e->as.borrow_immut_.expr);
+            buf_putc(b, ')');
+            break;
+        case EX_BORROW_MUT:
+            buf_puts(b, "(&mut ");
+            expr_print(b, e->as.borrow_mut_.expr);
+            buf_putc(b, ')');
+            break;
     }
 }

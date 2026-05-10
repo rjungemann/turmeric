@@ -18,11 +18,25 @@ static Type type_from_kind(TypeKind k) {
 
 /* ---- scope ---- */
 
+/* Phase 12: Borrow tracking in Scope */
+typedef enum BorrowKind {
+    BK_IMMUT,   /* &T - immutable borrow */
+    BK_MUT,     /* &mut T - mutable borrow */
+} BorrowKind;
+
+typedef struct ScopeBorrow {
+    Binding *binding;       /* The binding being borrowed */
+    BorrowKind kind;        /* BK_IMMUT or BK_MUT */
+    struct ScopeBorrow *next; /* Next in the list */
+} ScopeBorrow;
+
 typedef struct Scope {
     struct Scope *parent;
     Binding     **bindings;
     uint32_t      n;
     uint32_t      cap;
+    /* Phase 12: Active borrows in this scope */
+    ScopeBorrow  *borrows;
 } Scope;
 
 static void scope_init(Scope *s, Scope *parent) {
@@ -30,12 +44,68 @@ static void scope_init(Scope *s, Scope *parent) {
     s->bindings = NULL;
     s->n = 0;
     s->cap = 0;
+    s->borrows = NULL;
 }
 
 static void scope_free(Scope *s) {
     free(s->bindings);
+    /* Free borrow list */
+    ScopeBorrow *b = s->borrows;
+    while (b) {
+        ScopeBorrow *next = b->next;
+        free(b);
+        b = next;
+    }
     s->bindings = NULL;
     s->n = s->cap = 0;
+    s->borrows = NULL;
+}
+
+/* Phase 12: Check if a binding has an active borrow that conflicts with the requested kind */
+static bool scope_borrow_conflicts(const Scope *s, Binding *binding, BorrowKind kind) {
+    for (const Scope *cur = s; cur; cur = cur->parent) {
+        for (ScopeBorrow *b = cur->borrows; b; b = b->next) {
+            if (b->binding == binding) {
+                /* Same binding is borrowed - check for conflict */
+                if (kind == BK_MUT) {
+                    /* &mut T cannot coexist with any other borrow of T */
+                    return true;
+                }
+                if (b->kind == BK_MUT) {
+                    /* Existing &mut T conflicts with new &T */
+                    return true;
+                }
+                /* Both are &T - allowed (multiple immutable borrows) */
+            }
+        }
+    }
+    return false;
+}
+
+/* Phase 12: Add a borrow to the current scope */
+static bool scope_add_borrow(Scope *s, Binding *binding, BorrowKind kind, Span span) {
+    if (scope_borrow_conflicts(s, binding, kind)) {
+        /* Conflict - emit error */
+        if (kind == BK_MUT) {
+            diag_emit(DIAG_ERROR, span,
+                      "cannot borrow `%s` as mutable while it is already borrowed",
+                      binding->name->name);
+        } else {
+            diag_emit(DIAG_ERROR, span,
+                      "cannot borrow `%s` as immutable while it is mutably borrowed",
+                      binding->name->name);
+        }
+        return false;
+    }
+    
+    /* Add to this scope's borrow list */
+    ScopeBorrow *b = (ScopeBorrow *)malloc(sizeof(ScopeBorrow));
+    if (!b) { fprintf(stderr, "tur: oom\n"); abort(); }
+    b->binding = binding;
+    b->kind = kind;
+    b->next = s->borrows;
+    s->borrows = b;
+    return true;
 }
 
 static void scope_add(Scope *s, Binding *b) {
@@ -213,6 +283,9 @@ typedef struct Elab {
     /* Phase 11: defstruct */
     const Symbol *sym_defstruct;   /* defstruct */
     const Symbol *kw_copy;        /* :copy keyword for defstruct */
+    /* Phase 12: Borrow traits */
+    const Symbol *sym_borrow;      /* & symbol for immutable borrow */
+    const Symbol *sym_borrow_mut;  /* &mut for mutable borrow */
     /* Macro storage: symbol -> MacroDef */
     /* For now, use a simple approach: store macros in a list */
     struct MacroDef **macros;
@@ -327,6 +400,9 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* Phase 11: defstruct */
     e->sym_defstruct = intern_cstr(st, "defstruct");
     e->kw_copy = intern_cstr(st, "copy");
+    /* Phase 12: Borrow traits */
+    e->sym_borrow = intern_cstr(st, "&");
+    e->sym_borrow_mut = intern_cstr(st, "&mut");
     /* Macro storage */
     e->macros = NULL;
     e->n_macros = 0;
@@ -2227,6 +2303,9 @@ static Expr *elab_extern_c(Elab *e, const Form *call);
 static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding);
 /* Phase 11: defstruct */
 static Expr *elab_defstruct(Elab *e, const Form *call);
+/* Phase 12: Borrow traits */
+static Expr *elab_borrow_immut(Elab *e, const Form *call);
+static Expr *elab_borrow_mut(Elab *e, const Form *call);
 
 /* ---- general elab ---- */
 
@@ -2269,6 +2348,9 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_gc_disable)  return elab_gc_disable(e, call);
     /* Phase 11: defstruct */
     if (name == e->sym_defstruct) return elab_defstruct(e, call);
+    /* Phase 12: Borrow traits */
+    if (name == e->sym_borrow) return elab_borrow_immut(e, call);
+    if (name == e->sym_borrow_mut) return elab_borrow_mut(e, call);
     /* Phase 6 */
     if (name == e->sym_defmacro) return elab_defmacro(e, call);
     if (name == e->sym_quote)    return elab_form(e, call->as.list.items[1]); /* (quote x) -> x */
@@ -2633,6 +2715,93 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
     Expr *out = expr_new(e->arena, EX_DEF, TYPE_NIL, call->span);
     out->as.def_.binding = b;
     out->as.def_.init = NULL;
+    return out;
+}
+
+/* Phase 12: Borrow traits */
+
+/* Elaborate (& expr) - create an immutable borrow
+ * 
+ * Syntax: (& expr)
+ * Returns: &T where T is the type of expr
+ * The borrow is valid for the duration of the enclosing scope.
+ */
+static Expr *elab_borrow_immut(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "& takes exactly one argument: (& expr)");
+        return NULL;
+    }
+    
+    /* Elaborate the expression being borrowed */
+    Expr *inner = elab_form(e, call->as.list.items[1]);
+    if (!inner) return NULL;
+    
+    /* Phase 12: Borrow tracking - check if inner is a binding and track the borrow */
+    if (inner->kind == EX_VAR) {
+        Binding *target = inner->as.var.binding;
+        /* Check for use-after-move */
+        if (target->is_moved) {
+            diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0005_USE_AFTER_MOVE,
+                                "cannot borrow `%s` because it was moved",
+                                target->name->name);
+            return NULL;
+        }
+        /* Check for borrow conflicts and add to active borrows */
+        if (!scope_add_borrow(e->scope, target, BK_IMMUT, call->span)) {
+            return NULL; /* Error already emitted */
+        }
+    }
+    
+    /* Create the borrow type: &T where T is inner's type */
+    Type borrow_type = type_ref_immut(inner->type.kind);
+    
+    /* Create the borrow expression */
+    Expr *out = expr_new(e->arena, EX_BORROW_IMMUT, borrow_type, call->span);
+    out->as.borrow_immut_.expr = inner;
+    return out;
+}
+
+/* Elaborate (&mut expr) - create a mutable borrow
+ * 
+ * Syntax: (&mut expr)
+ * Returns: &mut T where T is the type of expr
+ * The borrow is valid for the duration of the enclosing scope.
+ * Only one &mut T can exist for a given T at a time.
+ */
+static Expr *elab_borrow_mut(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "&mut takes exactly one argument: (&mut expr)");
+        return NULL;
+    }
+    
+    /* Elaborate the expression being borrowed */
+    Expr *inner = elab_form(e, call->as.list.items[1]);
+    if (!inner) return NULL;
+    
+    /* Phase 12: Borrow tracking - check if inner is a binding and track the borrow */
+    if (inner->kind == EX_VAR) {
+        Binding *target = inner->as.var.binding;
+        /* Check for use-after-move */
+        if (target->is_moved) {
+            diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0005_USE_AFTER_MOVE,
+                                "cannot mutably borrow `%s` because it was moved",
+                                target->name->name);
+            return NULL;
+        }
+        /* Check for borrow conflicts and add to active borrows */
+        if (!scope_add_borrow(e->scope, target, BK_MUT, call->span)) {
+            return NULL; /* Error already emitted */
+        }
+    }
+    
+    /* Create the borrow type: &mut T where T is inner's type */
+    Type borrow_type = type_ref_mut(inner->type.kind);
+    
+    /* Create the borrow expression */
+    Expr *out = expr_new(e->arena, EX_BORROW_MUT, borrow_type, call->span);
+    out->as.borrow_mut_.expr = inner;
     return out;
 }
 

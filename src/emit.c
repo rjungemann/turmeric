@@ -991,6 +991,27 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             free(inner);
             return tmp;
         }
+        /* Phase 12: Borrow traits */
+        case EX_BORROW_IMMUT: {
+            /* (& expr) - immutable borrow: emit as &expr */
+            char *inner = emit_value(ctx, body, e->as.borrow_immut_.expr);
+            /* For borrow, we return a pointer expression */
+            char *result = (char *)malloc(strlen(inner) + 10);
+            if (!result) { fprintf(stderr, "tur: oom\n"); abort(); }
+            snprintf(result, strlen(inner) + 10, "&%s", inner);
+            free(inner);
+            return result;
+        }
+        case EX_BORROW_MUT: {
+            /* (&mut expr) - mutable borrow: emit as &expr */
+            char *inner = emit_value(ctx, body, e->as.borrow_mut_.expr);
+            /* For mutable borrow, we return a pointer expression */
+            char *result = (char *)malloc(strlen(inner) + 10);
+            if (!result) { fprintf(stderr, "tur: oom\n"); abort(); }
+            snprintf(result, strlen(inner) + 10, "&%s", inner);
+            free(inner);
+            return result;
+        }
     }
     return atom_nil();
 }
@@ -1205,6 +1226,14 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         case EX_RC_DROP: {
             /* rc/drop as statement - emit and discard (already returns nil) */
+            char *v = emit_value(ctx, body, e);
+            free(v);
+            return;
+        }
+        /* Phase 12: Borrow traits as statements */
+        case EX_BORROW_IMMUT:
+        case EX_BORROW_MUT: {
+            /* Borrow as statement - emit and discard (borrows are pointer operations) */
             char *v = emit_value(ctx, body, e);
             free(v);
             return;

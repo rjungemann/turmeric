@@ -31,6 +31,9 @@ typedef enum TypeKind {
     /* Phase 9: rc<T> + weak<T> — reference-counted shared ownership */
     TY_RC,            /* rc<T> — reference-counted owning pointer */
     TY_WEAK,          /* weak<T> — non-owning observer for rc<T> */
+    /* Phase 12: Borrow traits */
+    TY_REF_IMMUT,    /* &T — immutable borrow (non-owning reference) */
+    TY_REF_MUT,       /* &mut T — mutable borrow (exclusive non-owning reference) */
 } TypeKind;
 
 /* Max arity for function types in phase 2. */
@@ -58,6 +61,10 @@ typedef struct Type {
         struct {
             TypeKind inner;   /* The type T that rc<T> or weak<T> points to */
         } rc;
+        /* Phase 12: Borrow types store the referenced type T */
+        struct {
+            TypeKind target;  /* The type T being referenced by &T or &mut T */
+        } ref_borrow;
     } as;
 } Type;
 
@@ -104,6 +111,25 @@ static inline Type type_fn(TypeKind arg_kinds[], uint8_t arity, TypeKind result_
         t.as.fn.arg_kinds[i] = arg_kinds[i];
     }
     t.as.fn.result_kind = result_kind;
+    return t;
+}
+
+/* Phase 12: Borrow type constructors */
+/* &T - immutable borrow */
+static inline Type type_ref_immut(TypeKind target) {
+    Type t;
+    t.kind = TY_REF_IMMUT;
+    t.copy_kind = CK_COPY;  /* Borrows are copyable (they're just pointers) */
+    t.as.ref_borrow.target = target;
+    return t;
+}
+
+/* &mut T - mutable borrow */
+static inline Type type_ref_mut(TypeKind target) {
+    Type t;
+    t.kind = TY_REF_MUT;
+    t.copy_kind = CK_MOVE;  /* Mutable borrows are move-only (exclusive access) */
+    t.as.ref_borrow.target = target;
     return t;
 }
 

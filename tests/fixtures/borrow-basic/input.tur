@@ -1,0 +1,11 @@
+; Phase 12: Basic borrow syntax
+; Multiple immutable borrows allowed
+
+(defn main [] :int
+  (let [x 42]
+    (let [r1 (& x)]
+      (let [r2 (& x)]  ; OK: multiple &T allowed
+        (println 1)))
+    (let [r3 (&mut x)]  ; OK: x is no longer borrowed
+      (println 2)))
+  0)

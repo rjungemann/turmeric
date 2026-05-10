@@ -66,6 +66,9 @@ typedef enum ExprKind {
     EX_WEAK,           /* (weak r) - create weak<T> from rc<T> */
     EX_WEAK_UPGRADE,   /* (upgrade w) - upgrade weak<T> to option<rc<T>> */
     EX_WEAK_PRED,      /* (weak? w) - check if w is weak<T> */
+    /* Phase 12: Borrow traits */
+    EX_BORROW_IMMUT,   /* (& expr) - create immutable borrow */
+    EX_BORROW_MUT,     /* (&mut expr) - create mutable borrow */
     EX_PROGRAM,
 } ExprKind;
 
@@ -165,6 +168,9 @@ struct Expr {
         struct { Expr *expr; }        weak_;      /* (weak r) - rc to create weak from */
         struct { Expr *expr; }        weak_upgrade_; /* (upgrade w) - weak to upgrade */
         struct { Expr *expr; }        weak_pred_;   /* (weak? w) - expr to check */
+        /* Phase 12: Borrow traits */
+        struct { Expr *expr; }        borrow_immut_; /* (& expr) - expression to borrow immutably */
+        struct { Expr *expr; }        borrow_mut_;   /* (&mut expr) - expression to borrow mutably */
 
         struct { Expr **items; uint32_t n; }                               program;
     } as;
