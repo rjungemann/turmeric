@@ -35,6 +35,9 @@ static void tur_frame_fire_lifo(tur_frame *f) {
 }
 
 /* rc<T> + weak<T> reference counting - Phase 9 */
+/* Phase 10: GC color enum for Bacon-Rajan */
+typedef enum { GC_WHITE, GC_GREY, GC_BLACK, GC_PURPLE } GcColor;
+
 typedef void (*RcDropFn)(void *value);
 
 typedef struct RcControlBlock RcControlBlock;
@@ -45,8 +48,39 @@ struct RcControlBlock {
     void *value;
     RcDropFn drop_fn;
     uint8_t value_type_kind;
-    uint8_t reserved[8];
+    uint8_t color;           /* GC color */
+    bool may_contain_cycles;  /* Hint for GC */
+    uint8_t reserved[6];
 };
+
+#define GC_GLOBAL_REGISTRY_CAPACITY 4096
+static RcControlBlock *gc_all_blocks[GC_GLOBAL_REGISTRY_CAPACITY];
+static uint32_t gc_all_blocks_count = 0;
+
+static void gc_register_block(RcControlBlock *cb) {
+    if (!cb || gc_all_blocks_count >= GC_GLOBAL_REGISTRY_CAPACITY) return;
+    gc_all_blocks[gc_all_blocks_count++] = cb;
+    cb->color = GC_WHITE;
+    cb->may_contain_cycles = true;
+}
+
+static void gc_unregister_block(RcControlBlock *cb) {
+    if (!cb) return;
+    for (uint32_t i = 0; i < gc_all_blocks_count; i++) {
+        if (gc_all_blocks[i] == cb) {
+            gc_all_blocks[i] = gc_all_blocks[gc_all_blocks_count - 1];
+            gc_all_blocks_count--;
+            break;
+        }
+    }
+}
+
+static void gc_on_strong_decrement(RcControlBlock *cb) {
+    if (!cb) return;
+    if (cb->weak_count > 0) {
+        cb->color = GC_PURPLE;
+    }
+}
 
 static void default_rc_drop_fn(void *value) {
     free(value);
@@ -62,6 +96,8 @@ RcControlBlock *rc_cb_alloc(size_t value_size, int value_type_kind, RcDropFn dro
     cb->drop_fn = drop_fn ? drop_fn : default_rc_drop_fn;
     cb->value_type_kind = value_type_kind;
     memset(cb->reserved, 0, sizeof(cb->reserved));
+    /* Register with GC */
+    gc_register_block(cb);
     return cb;
 }
 
@@ -73,10 +109,16 @@ uint64_t rc_strong_increment(RcControlBlock *cb) {
 bool rc_strong_decrement(RcControlBlock *cb) {
     if (!cb) return false;
     cb->strong_count--;
-    if (cb->strong_count == 0 && cb->weak_count == 0) {
-        if (cb->value) cb->drop_fn(cb->value);
-        free(cb);
-        return true;
+    if (cb->strong_count == 0) {
+        if (cb->weak_count > 0) {
+            gc_on_strong_decrement(cb);
+            return false;
+        } else {
+            gc_unregister_block(cb);
+            if (cb->value) cb->drop_fn(cb->value);
+            free(cb);
+            return true;
+        }
     }
     return false;
 }
@@ -90,6 +132,7 @@ bool rc_weak_decrement(RcControlBlock *cb) {
     if (!cb) return false;
     cb->weak_count--;
     if (cb->weak_count == 0 && cb->strong_count == 0) {
+        gc_unregister_block(cb);
         free(cb);
         return true;
     }
@@ -123,6 +166,68 @@ RcControlBlock *rc_upgrade(RcControlBlock *cb) {
 void *rc_get_value(RcControlBlock *cb) {
     if (!cb) return NULL;
     return cb->value;
+}
+
+/* gc (Bacon-Rajan cycle collector) - Phase 10 */
+#define GC_SUSPECT_THRESHOLD 128
+#define GC_MAX_SUSPECTS 4096
+
+typedef enum { GC_DISABLED, GC_MANUAL, GC_THRESHOLD } GcMode;
+
+static RcControlBlock *gc_suspect_roots[GC_MAX_SUSPECTS];
+static uint32_t gc_suspect_count = 0;
+static RcControlBlock *gc_grey_queue[GC_MAX_SUSPECTS];
+static uint32_t gc_grey_count = 0;
+static GcMode gc_mode = GC_DISABLED;
+static bool gc_enabled = false;
+
+static void gc_set_color(RcControlBlock *cb, GcColor color) {
+    if (cb) cb->color = color;
+}
+
+static GcColor gc_get_color(RcControlBlock *cb) {
+    if (cb) return cb->color;
+    return GC_WHITE;
+}
+
+static void gc_mark_phase(void) {
+    for (uint32_t i = 0; i < gc_all_blocks_count; i++) {
+        gc_all_blocks[i]->color = GC_WHITE;
+    }
+    for (uint32_t i = 0; i < gc_all_blocks_count; i++) {
+        RcControlBlock *cb = gc_all_blocks[i];
+        if (cb->strong_count > 0) {
+            cb->color = GC_BLACK;
+        }
+    }
+}
+
+static void gc_collect(void) {
+    if (!gc_enabled || gc_mode == GC_DISABLED) return;
+    gc_grey_count = 0;
+    gc_mark_phase();
+}
+
+static void gc_force(void) {
+    gc_collect();
+}
+
+static void gc_enable(void) {
+    gc_enabled = true;
+}
+
+static void gc_disable(void) {
+    gc_enabled = false;
+}
+
+static void gc_set_mode(GcMode mode) {
+    gc_mode = mode;
+}
+
+static bool gc_is_alive(RcControlBlock *cb) {
+    if (!cb) return false;
+    if (cb->strong_count > 0) return true;
+    return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
 struct __defer_env_1 {int64_t x; };

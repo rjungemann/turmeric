@@ -197,6 +197,10 @@ typedef struct Elab {
     const Symbol *sym_weak;        /* weak */
     const Symbol *sym_upgrade;     /* upgrade */
     const Symbol *sym_weak_pred;   /* weak? */
+    /* Phase 10: GC */
+    const Symbol *sym_gc_force;    /* gc! */
+    const Symbol *sym_gc_enable;   /* gc-enable! */
+    const Symbol *sym_gc_disable;  /* gc-disable! */
     /* Phase 6: Macro system */
     const Symbol *sym_defmacro;   /* defmacro */
     const Symbol *sym_quote;      /* quote */
@@ -278,6 +282,10 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_weak = intern_cstr(st, "weak");
     e->sym_upgrade = intern_cstr(st, "upgrade");
     e->sym_weak_pred = intern_cstr(st, "weak?");
+    /* Phase 10: GC */
+    e->sym_gc_force = intern_cstr(st, "gc!");
+    e->sym_gc_enable = intern_cstr(st, "gc-enable!");
+    e->sym_gc_disable = intern_cstr(st, "gc-disable!");
     /* Phase 6 */
     e->sym_defmacro = intern_cstr(st, "defmacro");
     e->sym_quote = intern_cstr(st, "quote");
@@ -512,6 +520,10 @@ static Expr *elab_rc_strong_count(Elab *e, const Form *call);
 static Expr *elab_weak(Elab *e, const Form *call);
 static Expr *elab_weak_upgrade(Elab *e, const Form *call);
 static Expr *elab_weak_pred(Elab *e, const Form *call);
+/* Phase 10: GC */
+static Expr *elab_gc_force(Elab *e, const Form *call);
+static Expr *elab_gc_enable(Elab *e, const Form *call);
+static Expr *elab_gc_disable(Elab *e, const Form *call);
 
 /* ---- helpers ---- */
 
@@ -1407,6 +1419,60 @@ static Expr *elab_weak_pred(Elab *e, const Form *call) {
     return out;
 }
 
+/* Phase 10: GC builtins */
+
+/* (gc!) - Force a garbage collection cycle. Returns nil. */
+static Expr *elab_gc_force(Elab *e, const Form *call) {
+    if (call->as.list.len != 1) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(gc!) takes no arguments");
+        return NULL;
+    }
+    /* For Phase 10 v1: emit as inline-C with gc_force() call */
+    InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
+    ic->code = strslice("gc_force();", 11);
+    ic->return_type = TYPE_NIL;
+    ic->captures = NULL;
+    ic->n_captures = 0;
+    Expr *out = expr_new(e->arena, EX_INLINE_C, TYPE_NIL, call->span);
+    out->as.inline_c_.inline_c = ic;
+    return out;
+}
+
+/* (gc-enable!) - Enable cycle collection. Returns nil. */
+static Expr *elab_gc_enable(Elab *e, const Form *call) {
+    if (call->as.list.len != 1) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(gc-enable!) takes no arguments");
+        return NULL;
+    }
+    InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
+    ic->code = strslice("gc_enable();", 12);
+    ic->return_type = TYPE_NIL;
+    ic->captures = NULL;
+    ic->n_captures = 0;
+    Expr *out = expr_new(e->arena, EX_INLINE_C, TYPE_NIL, call->span);
+    out->as.inline_c_.inline_c = ic;
+    return out;
+}
+
+/* (gc-disable!) - Disable cycle collection. Returns nil. */
+static Expr *elab_gc_disable(Elab *e, const Form *call) {
+    if (call->as.list.len != 1) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(gc-disable!) takes no arguments");
+        return NULL;
+    }
+    InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
+    ic->code = strslice("gc_disable();", 13);
+    ic->return_type = TYPE_NIL;
+    ic->captures = NULL;
+    ic->n_captures = 0;
+    Expr *out = expr_new(e->arena, EX_INLINE_C, TYPE_NIL, call->span);
+    out->as.inline_c_.inline_c = ic;
+    return out;
+}
+
 /* Phase 6: defmacro — (defmacro name [params...] body...)
  * Defines a macro that will be expanded at compile time.
  * Syntax: (defmacro name [param1 param2 ...] body...)
@@ -2147,6 +2213,10 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_weak)        return elab_weak(e, call);
     if (name == e->sym_upgrade)     return elab_weak_upgrade(e, call);
     if (name == e->sym_weak_pred)   return elab_weak_pred(e, call);
+    /* Phase 10: GC */
+    if (name == e->sym_gc_force)    return elab_gc_force(e, call);
+    if (name == e->sym_gc_enable)   return elab_gc_enable(e, call);
+    if (name == e->sym_gc_disable)  return elab_gc_disable(e, call);
     /* Phase 6 */
     if (name == e->sym_defmacro) return elab_defmacro(e, call);
     if (name == e->sym_quote)    return elab_form(e, call->as.list.items[1]); /* (quote x) -> x */

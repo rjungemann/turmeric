@@ -10,6 +10,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Phase 10: Include GC header for cycle collection integration */
+#include "gc.h"
+
 /* Default drop function: just call free() on the value */
 static void default_drop_fn(void *value) {
     free(value);
@@ -21,7 +24,7 @@ static void default_drop_fn(void *value) {
  */
 RcControlBlock *rc_cb_alloc(size_t value_size, TypeKind value_type, RcDropFn drop_fn) {
     /* Allocate header + value in one block for cache efficiency */
-    size_t total_size = RC_CB_HEADER_SIZE + value_size;
+    size_t total_size = sizeof(RcControlBlock) + value_size;
     RcControlBlock *cb = (RcControlBlock *)malloc(total_size);
     if (!cb) {
         fprintf(stderr, "rc: out of memory allocating control block\n");
@@ -35,8 +38,13 @@ RcControlBlock *rc_cb_alloc(size_t value_size, TypeKind value_type, RcDropFn dro
     cb->drop_fn = drop_fn ? drop_fn : default_drop_fn;
     cb->value_type_kind = value_type;
     
-    /* Zero-initialize reserved fields */
+    /* Phase 10: Initialize GC fields */
+    cb->color = GC_WHITE;
+    cb->may_contain_cycles = true;  /* Default: assume it might contain cycles */
     memset(cb->reserved, 0, sizeof(cb->reserved));
+    
+    /* Register with GC for cycle collection tracking */
+    gc_register_block(cb);
     
     return cb;
 }
@@ -46,6 +54,9 @@ RcControlBlock *rc_cb_alloc(size_t value_size, TypeKind value_type, RcDropFn dro
  */
 void rc_cb_free(RcControlBlock *cb) {
     if (!cb) return;
+    
+    /* Unregister from GC tracking */
+    gc_unregister_block(cb);
     
     /* Call the drop function on the value */
     if (cb->value) {
@@ -75,7 +86,8 @@ bool rc_strong_decrement(RcControlBlock *cb) {
         if (cb->weak_count > 0) {
             /* Zombie state: value is logically freed but memory still valid
              * for weak pointers to check. Don't free yet. */
-            /* Future: call gc_on_strong_decrement(cb) for Phase 10 */
+            /* Phase 10: Notify GC for cycle collection */
+            gc_on_strong_decrement(cb);
             return false;  /* Value not yet freed */
         } else {
             /* No weak references either - free immediately */

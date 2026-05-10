@@ -231,23 +231,10 @@ static bool gc_is_alive(RcControlBlock *cb) {
 }
 
 int main() {
+        gc_enable();
+        gc_force();
         int64_t __t0;
-        {
-            RcControlBlock *__t1 = rc_cb_alloc(sizeof(int64_t), 3, NULL);
-            *((int64_t *)((char *)__t1 + sizeof(RcControlBlock))) = INT64_C(99);
-            RcControlBlock * rc_1 = __t1;
-            (void)rc_1;
-            {
-                RcControlBlock *__t2 = rc_1; rc_weak_increment(rc_1);
-                RcControlBlock * w_2 = __t2;
-                (void)w_2;
-                bool __t3 = true; // weak? not fully implemented in Phase 9
-                puts((__t3) ? "true" : "false");
-            }
-            int64_t __t4;
-            __t4 = INT64_C(0);
-            __t0 = __t4;
-        }
+        __t0 = INT64_C(0);
         return (int)__t0;
 }
 

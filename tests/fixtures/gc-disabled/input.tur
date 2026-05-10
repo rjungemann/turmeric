@@ -1,0 +1,4 @@
+(defn main [] :int
+  (gc-disable!)
+  (gc!)
+  0)

@@ -15,6 +15,14 @@
 #include "arena.h"
 #include "types.h"
 
+/* Phase 10: GC color enum for Bacon-Rajan cycle collector */
+typedef enum {
+    GC_WHITE,   /* Not yet scanned */
+    GC_GREY,    /* In work queue, being scanned */
+    GC_BLACK,   /* Reachable from strong roots */
+    GC_PURPLE   /* Suspect (strong count == 0, weak count > 0) */
+} GcColor;
+
 /* Phase 9: Reference counting control block layout */
 
 /* Forward declaration */
@@ -57,9 +65,11 @@ struct RcControlBlock {
     /* Type information for debugging */
     TypeKind value_type_kind;
     
-    /* Future-proofing: reserved fields for GC integration (Phase 10) */
-    /* enum gc_color { GC_WHITE, GC_GREY, GC_BLACK, GC_PURPLE } color; */
-    uint8_t reserved[8];
+    /* Phase 10: Bacon-Rajan cycle collector fields */
+    GcColor color;           /* GC color for cycle collection */
+    bool may_contain_cycles;  /* Hint: true if this could be part of a cycle */
+    /* 6 bytes reserved for future use */
+    uint8_t reserved[6];
 };
 
 /* Size of the control block header (without the value) */

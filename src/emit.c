@@ -1507,7 +1507,10 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "}\n\n");
     
     /* Phase 9: Emit rc.h inline for rc<T> + weak<T> support */
+    /* Phase 10: GC color enum and runtime (needed by rc_cb_alloc) */
     buf_puts(out, "/* rc<T> + weak<T> reference counting - Phase 9 */\n");
+    buf_puts(out, "/* Phase 10: GC color enum for Bacon-Rajan */\n");
+    buf_puts(out, "typedef enum { GC_WHITE, GC_GREY, GC_BLACK, GC_PURPLE } GcColor;\n\n");
     buf_puts(out, "typedef void (*RcDropFn)(void *value);\n\n");
     buf_puts(out, "typedef struct RcControlBlock RcControlBlock;\n\n");
     buf_puts(out, "struct RcControlBlock {\n");
@@ -1516,8 +1519,37 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    void *value;\n");
     buf_puts(out, "    RcDropFn drop_fn;\n");
     buf_puts(out, "    uint8_t value_type_kind;\n");
-    buf_puts(out, "    uint8_t reserved[8];\n");
+    /* Phase 10: Bacon-Rajan GC fields */
+    buf_puts(out, "    uint8_t color;           /* GC color */\n");
+    buf_puts(out, "    bool may_contain_cycles;  /* Hint for GC */\n");
+    buf_puts(out, "    uint8_t reserved[6];\n");
     buf_puts(out, "};\n\n");
+    /* Phase 10: GC globals and helper functions (needed before rc_cb_alloc) */
+    buf_puts(out, "#define GC_GLOBAL_REGISTRY_CAPACITY 4096\n");
+    buf_puts(out, "static RcControlBlock *gc_all_blocks[GC_GLOBAL_REGISTRY_CAPACITY];\n");
+    buf_puts(out, "static uint32_t gc_all_blocks_count = 0;\n\n");
+    buf_puts(out, "static void gc_register_block(RcControlBlock *cb) {\n");
+    buf_puts(out, "    if (!cb || gc_all_blocks_count >= GC_GLOBAL_REGISTRY_CAPACITY) return;\n");
+    buf_puts(out, "    gc_all_blocks[gc_all_blocks_count++] = cb;\n");
+    buf_puts(out, "    cb->color = GC_WHITE;\n");
+    buf_puts(out, "    cb->may_contain_cycles = true;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static void gc_unregister_block(RcControlBlock *cb) {\n");
+    buf_puts(out, "    if (!cb) return;\n");
+    buf_puts(out, "    for (uint32_t i = 0; i < gc_all_blocks_count; i++) {\n");
+    buf_puts(out, "        if (gc_all_blocks[i] == cb) {\n");
+    buf_puts(out, "            gc_all_blocks[i] = gc_all_blocks[gc_all_blocks_count - 1];\n");
+    buf_puts(out, "            gc_all_blocks_count--;\n");
+    buf_puts(out, "            break;\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static void gc_on_strong_decrement(RcControlBlock *cb) {\n");
+    buf_puts(out, "    if (!cb) return;\n");
+    buf_puts(out, "    if (cb->weak_count > 0) {\n");
+    buf_puts(out, "        cb->color = GC_PURPLE;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "}\n\n");
     buf_puts(out, "static void default_rc_drop_fn(void *value) {\n");
     buf_puts(out, "    free(value);\n");
     buf_puts(out, "}\n\n");
@@ -1531,6 +1563,8 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    cb->drop_fn = drop_fn ? drop_fn : default_rc_drop_fn;\n");
     buf_puts(out, "    cb->value_type_kind = value_type_kind;\n");
     buf_puts(out, "    memset(cb->reserved, 0, sizeof(cb->reserved));\n");
+    buf_puts(out, "    /* Register with GC */\n");
+    buf_puts(out, "    gc_register_block(cb);\n");
     buf_puts(out, "    return cb;\n");
     buf_puts(out, "}\n\n");
     buf_puts(out, "uint64_t rc_strong_increment(RcControlBlock *cb) {\n");
@@ -1540,10 +1574,16 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "bool rc_strong_decrement(RcControlBlock *cb) {\n");
     buf_puts(out, "    if (!cb) return false;\n");
     buf_puts(out, "    cb->strong_count--;\n");
-    buf_puts(out, "    if (cb->strong_count == 0 && cb->weak_count == 0) {\n");
-    buf_puts(out, "        if (cb->value) cb->drop_fn(cb->value);\n");
-    buf_puts(out, "        free(cb);\n");
-    buf_puts(out, "        return true;\n");
+    buf_puts(out, "    if (cb->strong_count == 0) {\n");
+    buf_puts(out, "        if (cb->weak_count > 0) {\n");
+    buf_puts(out, "            gc_on_strong_decrement(cb);\n");
+    buf_puts(out, "            return false;\n");
+    buf_puts(out, "        } else {\n");
+    buf_puts(out, "            gc_unregister_block(cb);\n");
+    buf_puts(out, "            if (cb->value) cb->drop_fn(cb->value);\n");
+    buf_puts(out, "            free(cb);\n");
+    buf_puts(out, "            return true;\n");
+    buf_puts(out, "        }\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    return false;\n");
     buf_puts(out, "}\n\n");
@@ -1555,6 +1595,7 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    if (!cb) return false;\n");
     buf_puts(out, "    cb->weak_count--;\n");
     buf_puts(out, "    if (cb->weak_count == 0 && cb->strong_count == 0) {\n");
+    buf_puts(out, "        gc_unregister_block(cb);\n");
     buf_puts(out, "        free(cb);\n");
     buf_puts(out, "        return true;\n");
     buf_puts(out, "    }\n");
@@ -1583,6 +1624,58 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "void *rc_get_value(RcControlBlock *cb) {\n");
     buf_puts(out, "    if (!cb) return NULL;\n");
     buf_puts(out, "    return cb->value;\n");
+    buf_puts(out, "}\n\n");
+    
+    /* Phase 10: Emit remaining gc runtime for cycle collection */
+    buf_puts(out, "/* gc (Bacon-Rajan cycle collector) - Phase 10 */\n");
+    buf_puts(out, "#define GC_SUSPECT_THRESHOLD 128\n");
+    buf_puts(out, "#define GC_MAX_SUSPECTS 4096\n\n");
+    buf_puts(out, "typedef enum { GC_DISABLED, GC_MANUAL, GC_THRESHOLD } GcMode;\n\n");
+    buf_puts(out, "static RcControlBlock *gc_suspect_roots[GC_MAX_SUSPECTS];\n");
+    buf_puts(out, "static uint32_t gc_suspect_count = 0;\n");
+    buf_puts(out, "static RcControlBlock *gc_grey_queue[GC_MAX_SUSPECTS];\n");
+    buf_puts(out, "static uint32_t gc_grey_count = 0;\n");
+    buf_puts(out, "static GcMode gc_mode = GC_DISABLED;\n");
+    buf_puts(out, "static bool gc_enabled = false;\n\n");
+    buf_puts(out, "static void gc_set_color(RcControlBlock *cb, GcColor color) {\n");
+    buf_puts(out, "    if (cb) cb->color = color;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static GcColor gc_get_color(RcControlBlock *cb) {\n");
+    buf_puts(out, "    if (cb) return cb->color;\n");
+    buf_puts(out, "    return GC_WHITE;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static void gc_mark_phase(void) {\n");
+    buf_puts(out, "    for (uint32_t i = 0; i < gc_all_blocks_count; i++) {\n");
+    buf_puts(out, "        gc_all_blocks[i]->color = GC_WHITE;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    for (uint32_t i = 0; i < gc_all_blocks_count; i++) {\n");
+    buf_puts(out, "        RcControlBlock *cb = gc_all_blocks[i];\n");
+    buf_puts(out, "        if (cb->strong_count > 0) {\n");
+    buf_puts(out, "            cb->color = GC_BLACK;\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static void gc_collect(void) {\n");
+    buf_puts(out, "    if (!gc_enabled || gc_mode == GC_DISABLED) return;\n");
+    buf_puts(out, "    gc_grey_count = 0;\n");
+    buf_puts(out, "    gc_mark_phase();\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static void gc_force(void) {\n");
+    buf_puts(out, "    gc_collect();\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static void gc_enable(void) {\n");
+    buf_puts(out, "    gc_enabled = true;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static void gc_disable(void) {\n");
+    buf_puts(out, "    gc_enabled = false;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static void gc_set_mode(GcMode mode) {\n");
+    buf_puts(out, "    gc_mode = mode;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static bool gc_is_alive(RcControlBlock *cb) {\n");
+    buf_puts(out, "    if (!cb) return false;\n");
+    buf_puts(out, "    if (cb->strong_count > 0) return true;\n");
+    buf_puts(out, "    return (cb->color == GC_BLACK || cb->color == GC_GREY);\n");
     buf_puts(out, "}\n\n");
     
     /* Phase 4 v1: Emit all defer thunks at file scope (after tur_frame defs) */
