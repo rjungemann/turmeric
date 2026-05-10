@@ -2,10 +2,18 @@
 #define TUR_TYPES_H
 
 #include <stdint.h>
+#include <stdbool.h>
 #include "buf.h"
 
 /* Forward declaration for effect rows (future-proofing for v3 effects) */
 typedef struct EffectRow EffectRow;
+
+/* Phase 11: Copy/Move traits */
+typedef enum CopyKind {
+    CK_MOVE,      /* Move-only: ownership transfer, cannot be copied */
+    CK_COPY,      /* Copy: bitwise duplication allowed */
+    CK_UNSIZED,   /* Unsized: size unknown at compile time (e.g., slices) */
+} CopyKind;
 
 /* Phase 2 type system: function types are stored inline without recursion
  * by using a simple array of TypeKind values. Compound types (structs, 
@@ -31,6 +39,8 @@ typedef enum TypeKind {
 /* Type uses a union to store either a simple kind or function info. */
 typedef struct Type {
     TypeKind kind;
+    /* Phase 11: Copy/Move trait */
+    CopyKind copy_kind;
     union {
         struct {
             TypeKind arg_kinds[MAX_FN_ARITY];
@@ -51,17 +61,18 @@ typedef struct Type {
     } as;
 } Type;
 
-#define TYPE_UNKNOWN  ((Type){TY_UNKNOWN, .as={0}})
-#define TYPE_NIL      ((Type){TY_NIL, .as={0}})
-#define TYPE_BOOL     ((Type){TY_BOOL, .as={0}})
-#define TYPE_INT      ((Type){TY_INT, .as={0}})
-#define TYPE_CSTR     ((Type){TY_CSTR, .as={0}})
-#define TYPE_PTR_VOID ((Type){TY_PTR_VOID, .as={0}})
+#define TYPE_UNKNOWN  ((Type){TY_UNKNOWN, .copy_kind=CK_MOVE, .as={0}})
+#define TYPE_NIL      ((Type){TY_NIL, .copy_kind=CK_COPY, .as={0}})
+#define TYPE_BOOL     ((Type){TY_BOOL, .copy_kind=CK_COPY, .as={0}})
+#define TYPE_INT      ((Type){TY_INT, .copy_kind=CK_COPY, .as={0}})
+#define TYPE_CSTR     ((Type){TY_CSTR, .copy_kind=CK_COPY, .as={0}})
+#define TYPE_PTR_VOID ((Type){TY_PTR_VOID, .copy_kind=CK_COPY, .as={0}})
 
 /* Phase 5: ref<T> type constructor */
 static inline Type type_ref(TypeKind inner) {
     Type t;
     t.kind = TY_REF;
+    t.copy_kind = CK_MOVE;  /* ref<T> is move-only */
     t.as.ref.inner = inner;
     return t;
 }
@@ -70,6 +81,7 @@ static inline Type type_ref(TypeKind inner) {
 static inline Type type_rc(TypeKind inner) {
     Type t;
     t.kind = TY_RC;
+    t.copy_kind = CK_MOVE;  /* rc<T> is move-only by default */
     t.as.rc.inner = inner;
     return t;
 }
@@ -78,6 +90,7 @@ static inline Type type_rc(TypeKind inner) {
 static inline Type type_weak(TypeKind inner) {
     Type t;
     t.kind = TY_WEAK;
+    t.copy_kind = CK_MOVE;  /* weak<T> is move-only */
     t.as.rc.inner = inner;  /* Reuse the same field as rc */
     return t;
 }
@@ -98,5 +111,21 @@ int          type_eq(Type a, Type b);
 const char  *type_name(Type t);                   /* "int", "bool", … */
 const char  *type_c_name(Type t);                 /* "int64_t", "bool", … */
 void         type_print(Buf *b, Type t);
+
+/* Phase 11: Copy/Move trait helpers */
+/* Returns true if the type is Copy (bitwise duplication allowed) */
+static inline bool type_is_copy(Type t) {
+    return t.copy_kind == CK_COPY;
+}
+
+/* Returns true if the type is Move-only (ownership transfer) */
+static inline bool type_is_move(Type t) {
+    return t.copy_kind == CK_MOVE;
+}
+
+/* Returns true if the type is Unsized (size unknown at compile time) */
+static inline bool type_is_unsized(Type t) {
+    return t.copy_kind == CK_UNSIZED;
+}
 
 #endif

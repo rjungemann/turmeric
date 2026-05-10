@@ -1,0 +1,8 @@
+; Phase 11: use-after-move with set!
+
+(defn main [] :int
+  (let [^mut r (ref 42)]
+    (let [s r]  ; s takes ownership of r
+      (set! r (ref 100))  ; ERROR: use-after-move - r was moved
+      (println @s)))
+  0)

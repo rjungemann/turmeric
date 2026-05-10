@@ -1,0 +1,9 @@
+; Phase 11: Copy traits - basic copyable types
+; int, bool, cstr, ptr<void> are Copy - assignment doesn't poison
+
+(defn main [] :int
+  (let [x 42]
+    (let [y x]  ; y gets a copy of x (both are int, which is Copy)
+      (println x)  ; x still usable
+      (println y)))
+  0)
