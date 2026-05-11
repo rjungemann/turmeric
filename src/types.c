@@ -59,6 +59,10 @@ int type_eq(Type a, Type b) {
     if (a.kind == TY_CONT) {
         return a.as.cont.returns == b.as.cont.returns;
     }
+    /* Phase 11: Struct types - identity by StructDef pointer */
+    if (a.kind == TY_STRUCT) {
+        return a.as.struct_.def == b.as.struct_.def;
+    }
     return 1;
 }
 
@@ -197,6 +201,9 @@ const char *type_name(Type t) {
             buf_putc(&tmp, '\0');
             return strdup(tmp.data);
         }
+        /* Phase 11: Struct types */
+        case TY_STRUCT:
+            return t.as.struct_.def ? t.as.struct_.def->name : "<struct>";
     }
     return "?";
 }
@@ -298,6 +305,15 @@ static void type_name_buf(Buf *b, Type t) {
             buf_puts(b, ">");
             break;
         }
+        /* Phase 11: Struct types */
+        case TY_STRUCT: {
+            if (t.as.struct_.def) {
+                buf_puts(b, t.as.struct_.def->name);
+            } else {
+                buf_puts(b, "<struct>");
+            }
+            break;
+        }
     }
 }
 
@@ -345,6 +361,9 @@ const char *type_c_name(Type t) {
         /* Phase 18: Continuation types lower to a struct in C */
         case TY_CONT:
             return "tur_cont *";
+        /* Phase 11: Struct types lower to the struct name in C */
+        case TY_STRUCT:
+            return t.as.struct_.def ? t.as.struct_.def->name : "void *";
     }
     return "void";
 }

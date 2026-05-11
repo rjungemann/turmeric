@@ -297,5 +297,8 @@ void expr_print(Buf *b, const Expr *e) {
             expr_print(b, e->as.discontinue_.discontinue->exception);
             buf_putc(b, ')');
             break;
+        case EX_MAKE_STRUCT:
+            buf_puts(b, "<make-struct>");
+            break;
     }
 }

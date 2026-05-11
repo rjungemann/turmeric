@@ -1,0 +1,13 @@
+;; Phase 9 Prerequisite 2: RC Binding-Consumption Detection.
+;; When an rc binding is consumed by (ref/from-rc x), ownership transfers
+;; to the caller. No auto-drop defer should be injected for x, since
+;; ref/from-rc moves x and the caller owns the resulting ref.
+;;
+;; Expected: no rc_strong_decrement for x in the generated code
+;; (the ref/from-rc itself free the control block).
+
+(defn main [] :int
+  (let [x (rc/of 100)]
+    (let [r (ref/from-rc x)]
+      (println @r)))
+  0)

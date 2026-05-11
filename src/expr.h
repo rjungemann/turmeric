@@ -95,6 +95,8 @@ typedef enum ExprKind {
     EX_HANDLE,         /* (handle expr cases...) - handle effects */
     EX_RESUME,         /* (resume k value) - resume continuation with value */
     EX_DISCONTINUE,    /* (discontinue k exception) - discontinue with exception */
+    /* Phase 11: Struct operations */
+    EX_MAKE_STRUCT,    /* (make-struct Name v1 v2 ...) - struct literal */
     EX_PROGRAM,
 } ExprKind;
 
@@ -218,7 +220,7 @@ struct Expr {
         struct { Expr **items; uint32_t n; }                               do_;
         struct { Expr *cond; Expr *body; }                                 while_;
         struct { Binding *target; Expr *value; }                           set_;
-        struct { Binding *binding; Expr *init; }                           def_;
+        struct { Binding *binding; Expr *init; StructDef *struct_def; }     def_;
         struct { const BuiltinSpec *spec; Expr **args; uint32_t n; }       builtin;
 
         /* Phase 2 */
@@ -288,6 +290,9 @@ struct Expr {
         struct { HandleExpr *handle; }               handle_;      /* (handle ...) */
         struct { ResumeExpr *resume; }               resume_;      /* (resume k v) */
         struct { DiscontinueExpr *discontinue; }     discontinue_; /* (discontinue k e) */
+
+        /* Phase 11: Struct operations */
+        struct { StructDef *def; Expr **field_values; uint32_t n_fields; } make_struct_; /* (make-struct Name v1...) */
 
         struct { Expr **items; uint32_t n; }                               program;
     } as;

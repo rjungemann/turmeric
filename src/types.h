@@ -50,7 +50,27 @@ typedef enum TypeKind {
     TY_EXCEPTION,    /* Exception type - wraps any value for throw/catch */
     /* Phase 18: Delimited continuations */
     TY_CONT,         /* cont<T> - captured continuation that returns T */
+    /* Phase 11: User-defined struct types */
+    TY_STRUCT,       /* user-defined struct type - see as.struct_ for StructDef */
 } TypeKind;
+
+/* Phase 11: Struct field descriptor.
+ * Stored inline in StructDef.fields[]. */
+typedef struct StructField {
+    TypeKind kind;       /* field type kind */
+    TypeKind inner_kind; /* for rc/ref/weak, the inner type; TY_UNKNOWN otherwise */
+    const char *name;    /* field name (interned string, NUL-terminated) */
+} StructField;
+
+/* Phase 11: Struct type descriptor.
+ * Created by elab_defstruct; pointed to from Type.as.struct_.def. */
+typedef struct StructDef {
+    const char *name;       /* struct name (interned string, NUL-terminated) */
+    uint32_t n_fields;
+    StructField *fields;    /* field array (malloc'd) */
+    bool is_copy;           /* :copy annotation */
+    bool needs_drop_glue;   /* true if any field is rc/ref/weak */
+} StructDef;
 
 /* Phase 11: canonical default copy-kind by kind (typeclass path is primary; this
  * keeps concrete move/copy semantics deterministic for elaboration/codegen). */
@@ -73,14 +93,13 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
         case TY_REF_MUT:
         case TY_EXCEPTION:
         case TY_CONT:
+        case TY_STRUCT:   /* default move; actual copy_kind set via type_struct() */
             return CK_MOVE;
         case TY_UNKNOWN:
         default:
             return CK_MOVE;
     }
 }
-
-/* Max arity for function types in phase 2. */
 #define MAX_FN_ARITY 8
 
 /* Phase 13: Maximum lifetime parameters per type */
@@ -135,6 +154,10 @@ typedef struct Type {
         struct {
             TypeKind returns;  /* The type T that cont<T> returns */
         } cont;
+        /* Phase 11: Struct types */
+        struct {
+            StructDef *def;    /* The struct type descriptor */
+        } struct_;
     } as;
 } Type;
 
@@ -289,6 +312,20 @@ static inline Type type_cont(TypeKind returns) {
     t.copy_kind = CK_MOVE;  /* Continuations are move-only (one-shot) */
     t.n_lifetimes = 0;
     t.as.cont.returns = returns;
+    return t;
+}
+
+/* Phase 11: Struct type constructor */
+/* Create a TY_STRUCT type referencing the given StructDef.
+ * copy_kind is taken from def->is_copy. */
+static inline Type type_struct(StructDef *def) {
+    Type t;
+    t.kind = TY_STRUCT;
+    t.copy_kind = def->is_copy ? CK_COPY : CK_MOVE;
+    t.n_lifetimes = 0;
+    t.typeclass_instances = NULL;
+    t.n_typeclass_instances = 0;
+    t.as.struct_.def = def;
     return t;
 }
 

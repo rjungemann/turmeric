@@ -1420,8 +1420,18 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
 
             char *cb_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
-            buf_printf(body, "RcControlBlock *%s = rc_cb_alloc(0, %d, NULL);\n",
-                       cb_tmp, e->as.rc_of_.expr->type.kind);
+            /* Phase 11: if the inner value is a struct with RC fields, pass its drop glue */
+            const char *drop_fn_name = "NULL";
+            char dg_name_buf[256];
+            if (e->as.rc_of_.expr->type.kind == TY_STRUCT) {
+                StructDef *sdef = e->as.rc_of_.expr->type.as.struct_.def;
+                if (sdef && sdef->needs_drop_glue) {
+                    snprintf(dg_name_buf, sizeof(dg_name_buf), "drop_glue_%s", sdef->name);
+                    drop_fn_name = dg_name_buf;
+                }
+            }
+            buf_printf(body, "RcControlBlock *%s = rc_cb_alloc(0, %d, %s);\n",
+                       cb_tmp, e->as.rc_of_.expr->type.kind, drop_fn_name);
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s->value = %s;\n", cb_tmp, val_tmp);
 
@@ -1619,6 +1629,23 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 free(e_var);
             }
             return atom_nil();
+        }
+        case EX_MAKE_STRUCT: {
+            /* (make-struct StructName v1 v2 ...) - emit C99 compound literal */
+            StructDef *def = e->as.make_struct_.def;
+            Buf lit; buf_init(&lit);
+            buf_printf(&lit, "(%s){", def->name);
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++) {
+                char *fv = emit_value(ctx, body, e->as.make_struct_.field_values[i]);
+                if (i > 0) buf_puts(&lit, ", ");
+                buf_printf(&lit, ".%s = %s", def->fields[i].name, fv);
+                free(fv);
+            }
+            buf_puts(&lit, "}");
+            buf_putc(&lit, '\0');
+            char *result = strdup(lit.data);
+            buf_free(&lit);
+            return result;
         }
     }
     return atom_nil();
@@ -1989,7 +2016,8 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_PERFORM:
         case EX_HANDLE:
         case EX_RESUME:
-        case EX_DISCONTINUE: {
+        case EX_DISCONTINUE:
+        case EX_MAKE_STRUCT: {
             /* These should be lowered by effect_lower/CPS passes.
              * Fallback: emit via emit_value and discard result.
              * Do not recurse into emit_stmt with the same node. */
@@ -2212,7 +2240,56 @@ int emit_program(Buf *out, const Expr *program) {
     }
 
     /* Phase 2: Two-pass emission for mutual recursion support.
-     * Pass 1: Emit forward declarations for all functions. */
+     * Pass 0: Emit struct typedefs + drop glue (must precede function forward decls). */
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        const Expr *e = program->as.program.items[i];
+        if (e->kind == EX_DEF && e->as.def_.struct_def) {
+            StructDef *def = e->as.def_.struct_def;
+            /* Emit: typedef struct Name { fields... } Name; */
+            buf_printf(&file, "typedef struct %s {\n", def->name);
+            for (uint32_t j = 0; j < def->n_fields; j++) {
+                StructField *f = &def->fields[j];
+                const char *ctype;
+                switch (f->kind) {
+                    case TY_INT:      ctype = "int64_t"; break;
+                    case TY_BOOL:     ctype = "bool"; break;
+                    case TY_FLOAT:    ctype = "double"; break;
+                    case TY_CSTR:     ctype = "const char *"; break;
+                    case TY_PTR_VOID: ctype = "void *"; break;
+                    case TY_RC:
+                    case TY_WEAK:     ctype = "RcControlBlock *"; break;
+                    case TY_REF:      ctype = "void *"; break;
+                    default:          ctype = "int64_t"; break;
+                }
+                buf_printf(&file, "    %s %s;\n", ctype, f->name);
+            }
+            buf_printf(&file, "} %s;\n\n", def->name);
+            /* If any RC/ref/weak field, emit drop glue function */
+            if (def->needs_drop_glue) {
+                buf_printf(&file, "static void drop_glue_%s(void *ptr) {\n", def->name);
+                buf_printf(&file, "    if (!ptr) return;\n");
+                buf_printf(&file, "    %s *s = (%s *)ptr;\n", def->name, def->name);
+                /* Drop fields in REVERSE order */
+                for (int32_t j = (int32_t)def->n_fields - 1; j >= 0; j--) {
+                    StructField *f = &def->fields[j];
+                    if (f->kind == TY_RC) {
+                        buf_printf(&file, "    if (s->%s) { rc_strong_decrement(s->%s); rc_free_queue_drain(); }\n",
+                                   f->name, f->name);
+                    } else if (f->kind == TY_WEAK) {
+                        buf_printf(&file, "    if (s->%s) rc_weak_decrement(s->%s);\n",
+                                   f->name, f->name);
+                    } else if (f->kind == TY_REF) {
+                        buf_printf(&file, "    if (s->%s) free(s->%s);\n",
+                                   f->name, f->name);
+                    }
+                }
+                buf_printf(&file, "    free(ptr);\n");
+                buf_printf(&file, "}\n\n");
+            }
+        }
+    }
+
+    /* Pass 1: Emit forward declarations for all functions. */
     for (uint32_t i = 0; i < program->as.program.n; i++) {
         const Expr *e = program->as.program.items[i];
         if (e->kind == EX_FN_DEF) {
@@ -2242,6 +2319,8 @@ int emit_program(Buf *out, const Expr *program) {
     for (uint32_t i = 0; i < program->as.program.n; i++) {
         const Expr *e = program->as.program.items[i];
         if (e->kind == EX_DEF) {
+            /* Phase 11: skip struct typedefs — already emitted in Pass 0 */
+            if (e->as.def_.struct_def) continue;
             char *bn = name_for_binding(&ctx, e->as.def_.binding);
             buf_printf(&file, "static %s %s;\n",
                        type_c_name(e->as.def_.binding->type), bn);
@@ -2471,6 +2550,26 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "#define GC_GLOBAL_REGISTRY_CAPACITY 4096\n");
     buf_puts(out, "static RcControlBlock *gc_all_blocks[GC_GLOBAL_REGISTRY_CAPACITY];\n");
     buf_puts(out, "static uint32_t gc_all_blocks_count = 0;\n\n");
+    /* GC state must be declared early because gc_on_strong_decrement (called from
+     * rc_strong_decrement) needs it.  The collector functions themselves are
+     * defined later, after all RC helpers. */
+    buf_puts(out, "#define GC_SUSPECT_THRESHOLD 128\n");
+    buf_puts(out, "#define GC_MAX_SUSPECTS 4096\n\n");
+    buf_puts(out, "typedef enum { GC_DISABLED, GC_MANUAL, GC_THRESHOLD } GcMode;\n\n");
+    buf_puts(out, "static RcControlBlock *gc_suspect_roots[GC_MAX_SUSPECTS];\n");
+    buf_puts(out, "static uint32_t gc_suspect_count = 0;\n");
+    buf_puts(out, "static RcControlBlock *gc_grey_queue[GC_MAX_SUSPECTS];\n");
+    buf_puts(out, "static uint32_t gc_grey_count = 0;\n");
+    buf_puts(out, "static GcMode gc_mode = GC_DISABLED;\n");
+    buf_puts(out, "static bool gc_enabled = false;\n\n");
+    buf_puts(out, "static void gc_collect(void);  /* Forward decl */\n\n");
+    buf_puts(out, "static void gc_set_color(RcControlBlock *cb, GcColor color) {\n");
+    buf_puts(out, "    if (cb) cb->color = color;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static GcColor gc_get_color(RcControlBlock *cb) {\n");
+    buf_puts(out, "    if (cb) return cb->color;\n");
+    buf_puts(out, "    return GC_WHITE;\n");
+    buf_puts(out, "}\n\n");
     buf_puts(out, "static void gc_register_block(RcControlBlock *cb) {\n");
     buf_puts(out, "    if (!cb || gc_all_blocks_count >= GC_GLOBAL_REGISTRY_CAPACITY) return;\n");
     buf_puts(out, "    gc_all_blocks[gc_all_blocks_count++] = cb;\n");
@@ -2487,10 +2586,35 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "        }\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
+    /* Phase 10: Suspect buffer management (before rc_strong_decrement) */
+    buf_puts(out, "static void gc_add_suspect(RcControlBlock *cb) {\n");
+    buf_puts(out, "    if (!cb || !gc_enabled || gc_mode == GC_DISABLED) return;\n");
+    buf_puts(out, "    for (uint32_t i = 0; i < gc_suspect_count; i++) {\n");
+    buf_puts(out, "        if (gc_suspect_roots[i] == cb) return;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    if (gc_suspect_count >= GC_MAX_SUSPECTS) return;\n");
+    buf_puts(out, "    gc_suspect_roots[gc_suspect_count++] = cb;\n");
+    buf_puts(out, "    cb->color = GC_PURPLE;\n");
+    buf_puts(out, "    /* Threshold mode: auto-collect when buffer is full */\n");
+    buf_puts(out, "    if (gc_mode == GC_THRESHOLD && gc_suspect_count >= GC_SUSPECT_THRESHOLD) {\n");
+    buf_puts(out, "        gc_collect();\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static void gc_remove_suspect(RcControlBlock *cb) {\n");
+    buf_puts(out, "    if (!cb) return;\n");
+    buf_puts(out, "    for (uint32_t i = 0; i < gc_suspect_count; i++) {\n");
+    buf_puts(out, "        if (gc_suspect_roots[i] == cb) {\n");
+    buf_puts(out, "            gc_suspect_roots[i] = gc_suspect_roots[gc_suspect_count - 1];\n");
+    buf_puts(out, "            gc_suspect_count--;\n");
+    buf_puts(out, "            return;\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "}\n\n");
     buf_puts(out, "static void gc_on_strong_decrement(RcControlBlock *cb) {\n");
     buf_puts(out, "    if (!cb) return;\n");
+    buf_puts(out, "    /* Zombie: strong reached 0 but weak refs still exist */\n");
     buf_puts(out, "    if (cb->weak_count > 0) {\n");
-    buf_puts(out, "        cb->color = GC_PURPLE;\n");
+    buf_puts(out, "        gc_add_suspect(cb);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
     buf_puts(out, "\n/* Phase 9: Deferred free queue drain */\n");
@@ -2548,8 +2672,9 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    cb->drop_fn = drop_fn ? drop_fn : default_drop_fn_for_type(value_type_kind);\n");
     buf_puts(out, "    cb->value_type_kind = value_type_kind;\n");
     buf_puts(out, "    memset(cb->reserved, 0, sizeof(cb->reserved));\n");
-    buf_puts(out, "    /* Register with GC */\n");
+    buf_puts(out, "    /* Register with GC; primitives (type_kind<=7) cannot form cycles */\n");
     buf_puts(out, "    gc_register_block(cb);\n");
+    buf_puts(out, "    if (value_type_kind <= 7) cb->may_contain_cycles = false;\n");
     buf_puts(out, "    return cb;\n");
     buf_puts(out, "}\n\n");
     buf_puts(out, "uint64_t rc_strong_increment(RcControlBlock *cb) {\n");
@@ -2579,6 +2704,10 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    cb->weak_count--;\n");
     buf_puts(out, "    if (cb->weak_count == 0 && cb->strong_count == 0) {\n");
     buf_puts(out, "        gc_unregister_block(cb);\n");
+    buf_puts(out, "        /* Free zombie value if GC did not already collect it */\n");
+    buf_puts(out, "        if (cb->value && cb->drop_fn) {\n");
+    buf_puts(out, "            cb->drop_fn(cb->value);\n");
+    buf_puts(out, "        }\n");
     buf_puts(out, "        free(cb);\n");
     buf_puts(out, "        return true;\n");
     buf_puts(out, "    }\n");
@@ -2637,24 +2766,8 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    return value;\n");
     buf_puts(out, "}\n\n");
     
-    /* Phase 10: Emit remaining gc runtime for cycle collection */
-    buf_puts(out, "/* gc (Bacon-Rajan cycle collector) - Phase 10 */\n");
-    buf_puts(out, "#define GC_SUSPECT_THRESHOLD 128\n");
-    buf_puts(out, "#define GC_MAX_SUSPECTS 4096\n\n");
-    buf_puts(out, "typedef enum { GC_DISABLED, GC_MANUAL, GC_THRESHOLD } GcMode;\n\n");
-    buf_puts(out, "static RcControlBlock *gc_suspect_roots[GC_MAX_SUSPECTS];\n");
-    buf_puts(out, "static uint32_t gc_suspect_count = 0;\n");
-    buf_puts(out, "static RcControlBlock *gc_grey_queue[GC_MAX_SUSPECTS];\n");
-    buf_puts(out, "static uint32_t gc_grey_count = 0;\n");
-    buf_puts(out, "static GcMode gc_mode = GC_DISABLED;\n");
-    buf_puts(out, "static bool gc_enabled = false;\n\n");
-    buf_puts(out, "static void gc_set_color(RcControlBlock *cb, GcColor color) {\n");
-    buf_puts(out, "    if (cb) cb->color = color;\n");
-    buf_puts(out, "}\n\n");
-    buf_puts(out, "static GcColor gc_get_color(RcControlBlock *cb) {\n");
-    buf_puts(out, "    if (cb) return cb->color;\n");
-    buf_puts(out, "    return GC_WHITE;\n");
-    buf_puts(out, "}\n\n");
+    /* Phase 10: Emit remaining GC runtime — mark + trial deletion phases */
+    buf_puts(out, "/* gc (Bacon-Rajan cycle collector - trial deletion) - Phase 10 */\n");
     buf_puts(out, "static void gc_mark_phase(void) {\n");
     buf_puts(out, "    for (uint32_t i = 0; i < gc_all_blocks_count; i++) {\n");
     buf_puts(out, "        gc_all_blocks[i]->color = GC_WHITE;\n");
@@ -2666,19 +2779,46 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "        }\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
+    /* Trial deletion: free zombie suspects not reachable from strong roots */
+    buf_puts(out, "static void gc_trial_deletion_phase(void) {\n");
+    buf_puts(out, "    uint32_t i = 0;\n");
+    buf_puts(out, "    while (i < gc_suspect_count) {\n");
+    buf_puts(out, "        RcControlBlock *cb = gc_suspect_roots[i];\n");
+    buf_puts(out, "        /* If revived or reachable from strong roots, keep */\n");
+    buf_puts(out, "        if (cb->strong_count > 0 || cb->color == GC_BLACK) {\n");
+    buf_puts(out, "            cb->color = GC_WHITE;\n");
+    buf_puts(out, "            i++;\n");
+    buf_puts(out, "            continue;\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "        /* WHITE and strong_count == 0: zombie — free value, keep cb for weak refs */\n");
+    buf_puts(out, "        if (cb->value && cb->drop_fn) {\n");
+    buf_puts(out, "            cb->drop_fn(cb->value);\n");
+    buf_puts(out, "            cb->value = NULL;\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "        /* Unregister from global registry (cb stays alive for weak refs) */\n");
+    buf_puts(out, "        gc_unregister_block(cb);\n");
+    buf_puts(out, "        /* Remove from suspect buffer without advancing i */\n");
+    buf_puts(out, "        gc_suspect_roots[i] = gc_suspect_roots[gc_suspect_count - 1];\n");
+    buf_puts(out, "        gc_suspect_count--;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "}\n\n");
     buf_puts(out, "static void gc_collect(void) {\n");
     buf_puts(out, "    if (!gc_enabled || gc_mode == GC_DISABLED) return;\n");
     buf_puts(out, "    gc_grey_count = 0;\n");
     buf_puts(out, "    gc_mark_phase();\n");
+    buf_puts(out, "    gc_trial_deletion_phase();\n");
     buf_puts(out, "}\n\n");
     buf_puts(out, "static void gc_force(void) {\n");
     buf_puts(out, "    gc_collect();\n");
     buf_puts(out, "}\n\n");
     buf_puts(out, "static void gc_enable(void) {\n");
     buf_puts(out, "    gc_enabled = true;\n");
+    buf_puts(out, "    /* Default to manual mode when enabled */\n");
+    buf_puts(out, "    if (gc_mode == GC_DISABLED) gc_mode = GC_MANUAL;\n");
     buf_puts(out, "}\n\n");
     buf_puts(out, "static void gc_disable(void) {\n");
     buf_puts(out, "    gc_enabled = false;\n");
+    buf_puts(out, "    gc_mode = GC_DISABLED;\n");
     buf_puts(out, "}\n\n");
     buf_puts(out, "static void gc_set_mode(GcMode mode) {\n");
     buf_puts(out, "    gc_mode = mode;\n");

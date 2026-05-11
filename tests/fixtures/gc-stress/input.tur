@@ -1,0 +1,14 @@
+; gc-stress: many zombie objects created and collected in a loop.
+; Each iteration creates an RC with a weak ref, drops the RC (making it zombie),
+; then collects it with gc!. This stresses the suspect buffer and collector.
+(defn main [] :int
+  (gc-enable!)
+  (let [^mut i 0]
+    (while (< i 20)
+      (let [r (rc/of i)]
+        (let [w (weak r)]
+          (rc/drop r)
+          (gc!)))
+      (set! i (+ i 1))))
+  (println 1)
+  0)

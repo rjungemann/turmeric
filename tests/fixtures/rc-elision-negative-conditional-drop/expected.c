@@ -193,6 +193,29 @@ static void rc_free_queue_push(RcControlBlock *cb) {
 static RcControlBlock *gc_all_blocks[GC_GLOBAL_REGISTRY_CAPACITY];
 static uint32_t gc_all_blocks_count = 0;
 
+#define GC_SUSPECT_THRESHOLD 128
+#define GC_MAX_SUSPECTS 4096
+
+typedef enum { GC_DISABLED, GC_MANUAL, GC_THRESHOLD } GcMode;
+
+static RcControlBlock *gc_suspect_roots[GC_MAX_SUSPECTS];
+static uint32_t gc_suspect_count = 0;
+static RcControlBlock *gc_grey_queue[GC_MAX_SUSPECTS];
+static uint32_t gc_grey_count = 0;
+static GcMode gc_mode = GC_DISABLED;
+static bool gc_enabled = false;
+
+static void gc_collect(void);  /* Forward decl */
+
+static void gc_set_color(RcControlBlock *cb, GcColor color) {
+    if (cb) cb->color = color;
+}
+
+static GcColor gc_get_color(RcControlBlock *cb) {
+    if (cb) return cb->color;
+    return GC_WHITE;
+}
+
 static void gc_register_block(RcControlBlock *cb) {
     if (!cb || gc_all_blocks_count >= GC_GLOBAL_REGISTRY_CAPACITY) return;
     gc_all_blocks[gc_all_blocks_count++] = cb;
@@ -211,10 +234,36 @@ static void gc_unregister_block(RcControlBlock *cb) {
     }
 }
 
+static void gc_add_suspect(RcControlBlock *cb) {
+    if (!cb || !gc_enabled || gc_mode == GC_DISABLED) return;
+    for (uint32_t i = 0; i < gc_suspect_count; i++) {
+        if (gc_suspect_roots[i] == cb) return;
+    }
+    if (gc_suspect_count >= GC_MAX_SUSPECTS) return;
+    gc_suspect_roots[gc_suspect_count++] = cb;
+    cb->color = GC_PURPLE;
+    /* Threshold mode: auto-collect when buffer is full */
+    if (gc_mode == GC_THRESHOLD && gc_suspect_count >= GC_SUSPECT_THRESHOLD) {
+        gc_collect();
+    }
+}
+
+static void gc_remove_suspect(RcControlBlock *cb) {
+    if (!cb) return;
+    for (uint32_t i = 0; i < gc_suspect_count; i++) {
+        if (gc_suspect_roots[i] == cb) {
+            gc_suspect_roots[i] = gc_suspect_roots[gc_suspect_count - 1];
+            gc_suspect_count--;
+            return;
+        }
+    }
+}
+
 static void gc_on_strong_decrement(RcControlBlock *cb) {
     if (!cb) return;
+    /* Zombie: strong reached 0 but weak refs still exist */
     if (cb->weak_count > 0) {
-        cb->color = GC_PURPLE;
+        gc_add_suspect(cb);
     }
 }
 
@@ -280,8 +329,9 @@ RcControlBlock *rc_cb_alloc(size_t value_size, int value_type_kind, RcDropFn dro
     cb->drop_fn = drop_fn ? drop_fn : default_drop_fn_for_type(value_type_kind);
     cb->value_type_kind = value_type_kind;
     memset(cb->reserved, 0, sizeof(cb->reserved));
-    /* Register with GC */
+    /* Register with GC; primitives (type_kind<=7) cannot form cycles */
     gc_register_block(cb);
+    if (value_type_kind <= 7) cb->may_contain_cycles = false;
     return cb;
 }
 
@@ -315,6 +365,10 @@ bool rc_weak_decrement(RcControlBlock *cb) {
     cb->weak_count--;
     if (cb->weak_count == 0 && cb->strong_count == 0) {
         gc_unregister_block(cb);
+        /* Free zombie value if GC did not already collect it */
+        if (cb->value && cb->drop_fn) {
+            cb->drop_fn(cb->value);
+        }
         free(cb);
         return true;
     }
@@ -380,28 +434,7 @@ void *tur_ref_from_rc(RcControlBlock *cb) {
     return value;
 }
 
-/* gc (Bacon-Rajan cycle collector) - Phase 10 */
-#define GC_SUSPECT_THRESHOLD 128
-#define GC_MAX_SUSPECTS 4096
-
-typedef enum { GC_DISABLED, GC_MANUAL, GC_THRESHOLD } GcMode;
-
-static RcControlBlock *gc_suspect_roots[GC_MAX_SUSPECTS];
-static uint32_t gc_suspect_count = 0;
-static RcControlBlock *gc_grey_queue[GC_MAX_SUSPECTS];
-static uint32_t gc_grey_count = 0;
-static GcMode gc_mode = GC_DISABLED;
-static bool gc_enabled = false;
-
-static void gc_set_color(RcControlBlock *cb, GcColor color) {
-    if (cb) cb->color = color;
-}
-
-static GcColor gc_get_color(RcControlBlock *cb) {
-    if (cb) return cb->color;
-    return GC_WHITE;
-}
-
+/* gc (Bacon-Rajan cycle collector - trial deletion) - Phase 10 */
 static void gc_mark_phase(void) {
     for (uint32_t i = 0; i < gc_all_blocks_count; i++) {
         gc_all_blocks[i]->color = GC_WHITE;
@@ -414,10 +447,34 @@ static void gc_mark_phase(void) {
     }
 }
 
+static void gc_trial_deletion_phase(void) {
+    uint32_t i = 0;
+    while (i < gc_suspect_count) {
+        RcControlBlock *cb = gc_suspect_roots[i];
+        /* If revived or reachable from strong roots, keep */
+        if (cb->strong_count > 0 || cb->color == GC_BLACK) {
+            cb->color = GC_WHITE;
+            i++;
+            continue;
+        }
+        /* WHITE and strong_count == 0: zombie — free value, keep cb for weak refs */
+        if (cb->value && cb->drop_fn) {
+            cb->drop_fn(cb->value);
+            cb->value = NULL;
+        }
+        /* Unregister from global registry (cb stays alive for weak refs) */
+        gc_unregister_block(cb);
+        /* Remove from suspect buffer without advancing i */
+        gc_suspect_roots[i] = gc_suspect_roots[gc_suspect_count - 1];
+        gc_suspect_count--;
+    }
+}
+
 static void gc_collect(void) {
     if (!gc_enabled || gc_mode == GC_DISABLED) return;
     gc_grey_count = 0;
     gc_mark_phase();
+    gc_trial_deletion_phase();
 }
 
 static void gc_force(void) {
@@ -426,10 +483,13 @@ static void gc_force(void) {
 
 static void gc_enable(void) {
     gc_enabled = true;
+    /* Default to manual mode when enabled */
+    if (gc_mode == GC_DISABLED) gc_mode = GC_MANUAL;
 }
 
 static void gc_disable(void) {
     gc_enabled = false;
+    gc_mode = GC_DISABLED;
 }
 
 static void gc_set_mode(GcMode mode) {
@@ -466,12 +526,13 @@ int main() {
             int64_t __t7;
             int64_t __t8;
             {
-                /* rc-elision: skipped rc_strong_increment(r_1) — last-use clone */
+                rc_strong_increment(r_1);
                 RcControlBlock * c_2 = r_1;
                 (void)c_2;
                 int64_t __t9;
                 {
-                    /* rc-elision: skipped rc_strong_decrement(c_2) — matched elided clone */
+                    rc_strong_decrement(c_2);
+                    rc_free_queue_drain();
                     int64_t __t10;
                     __t10 = INT64_C(0);
                     int64_t ignored_3 = __t10;
