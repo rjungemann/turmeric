@@ -1,0 +1,11 @@
+;; Phase 9 elision negative: drop is nested in a let init, so clone/drop
+;; pair must not be elided by direct-statement-only analysis.
+
+(defn main []
+  (let [r (rc/of 9)]
+    (let [c (rc/clone r)]
+      (let [ignored (do
+                      (rc/drop c)
+                      0)]
+        ignored)
+      0)))

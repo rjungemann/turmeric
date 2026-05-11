@@ -1,0 +1,10 @@
+;; Test: Auto-drop injection for rc/of bindings
+;; The binding x is initialized with (rc/of 42) and not consumed
+;; by ref/from-rc, so an auto-drop should be injected at scope exit.
+;;
+;; Expected: (defer (rc/drop x)) is automatically added, resulting in 
+;; rc_strong_increment and rc_strong_decrement in generated code.
+
+(defn test-rc-auto-drop []
+  (let [x (rc/of 42)]
+    (+ 1 2)))

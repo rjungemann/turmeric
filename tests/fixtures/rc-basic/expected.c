@@ -7,6 +7,44 @@ extern void *malloc(size_t);
 extern void free(void *);
 extern void abort(void);
 extern void *memset(void *, int, size_t);
+extern void *memmove(void *, const void *, size_t);
+
+#define TUR_TEST_REGISTRY_MAX 1024
+typedef int64_t (*tur_test_callback_t)(void);
+static const char *tur_test_registry_names[TUR_TEST_REGISTRY_MAX];
+static tur_test_callback_t tur_test_registry_fns[TUR_TEST_REGISTRY_MAX];
+static int64_t tur_test_registry_count = 0;
+
+int64_t tur_test_register(const char *name, void *test_fn) {
+    if (!test_fn) return 0;
+    if (tur_test_registry_count >= TUR_TEST_REGISTRY_MAX) return 0;
+    tur_test_registry_names[tur_test_registry_count] = name ? name : "<unnamed>";
+    tur_test_registry_fns[tur_test_registry_count] = (tur_test_callback_t)test_fn;
+    tur_test_registry_count++;
+    return 1;
+}
+
+int64_t tur_test_run_all(void) {
+    int64_t passed = 0;
+    int64_t failed = 0;
+    for (int64_t i = 0; i < tur_test_registry_count; i++) {
+        tur_test_callback_t fn = tur_test_registry_fns[i];
+        int64_t rc = fn ? fn() : 0;
+        if (rc == 1) {
+            putchar('.');
+            putchar('\n');
+            passed++;
+        } else {
+            putchar('F');
+            putchar('\n');
+            printf("%s\n", tur_test_registry_names[i]);
+            failed++;
+        }
+    }
+    printf("summary: %lld passed, %lld failed\n",
+           (long long)passed, (long long)failed);
+    return failed == 0 ? 0 : 1;
+}
 
 /* tur_frame - phase 4 v1 lowering (from runtime.h) */
 typedef void (*defer_fn_t)(void *env);
@@ -135,6 +173,22 @@ struct RcControlBlock {
     uint8_t reserved[6];
 };
 
+#define RC_FREE_QUEUE_CAPACITY 65536
+static RcControlBlock *rc_free_queue[RC_FREE_QUEUE_CAPACITY];
+static uint32_t rc_free_queue_count = 0;
+static uint32_t rc_free_queue_drain(void);  /* Forward decl */
+static void rc_free_queue_push(RcControlBlock *cb);  /* Forward decl */
+bool rc_strong_decrement(RcControlBlock *cb);  /* Forward decl */
+bool rc_weak_decrement(RcControlBlock *cb);    /* Forward decl */
+static void rc_free_queue_push(RcControlBlock *cb) {
+    if (!cb) return;
+    if (rc_free_queue_count >= RC_FREE_QUEUE_CAPACITY) {
+        fprintf(stderr, "rc_free_queue: full, aborting\n");
+        abort();
+    }
+    rc_free_queue[rc_free_queue_count++] = cb;
+}
+
 #define GC_GLOBAL_REGISTRY_CAPACITY 4096
 static RcControlBlock *gc_all_blocks[GC_GLOBAL_REGISTRY_CAPACITY];
 static uint32_t gc_all_blocks_count = 0;
@@ -164,8 +218,56 @@ static void gc_on_strong_decrement(RcControlBlock *cb) {
     }
 }
 
+
+/* Phase 9: Deferred free queue drain */
+static uint32_t rc_free_queue_drain(void) {
+    if (rc_free_queue_count == 0) return 0;
+    uint32_t freed = 0;
+    while (rc_free_queue_count > 0) {
+        RcControlBlock *cb = rc_free_queue[0];
+        memmove(rc_free_queue, rc_free_queue + 1,
+                (rc_free_queue_count - 1) * sizeof(RcControlBlock *));
+        rc_free_queue_count--;
+        gc_unregister_block(cb);
+        if (cb->value) cb->drop_fn(cb->value);
+        free(cb);
+        freed++;
+    }
+    return freed;
+}
+
 static void default_rc_drop_fn(void *value) {
     free(value);
+}
+
+static void drop_ref_payload(void *value) {
+    if (!value) return;
+    void *inner = *((void **)value);
+    if (inner) free(inner);
+    free(value);
+}
+
+static void drop_rc_payload(void *value) {
+    if (!value) return;
+    RcControlBlock *inner = *((RcControlBlock **)value);
+    if (inner) { rc_strong_decrement(inner); rc_free_queue_drain(); }
+    free(value);
+}
+
+static void drop_weak_payload(void *value) {
+    if (!value) return;
+    RcControlBlock *inner = *((RcControlBlock **)value);
+    if (inner) rc_weak_decrement(inner);
+    free(value);
+}
+
+static RcDropFn default_drop_fn_for_type(int value_type_kind) {
+    switch (value_type_kind) {
+        case 8: return drop_ref_payload;   /* TY_REF */
+        case 9: return drop_rc_payload;    /* TY_RC */
+        case 10: return drop_weak_payload; /* TY_WEAK */
+        default: return default_rc_drop_fn;
+    }
 }
 
 RcControlBlock *rc_cb_alloc(size_t value_size, int value_type_kind, RcDropFn drop_fn) {
@@ -175,7 +277,7 @@ RcControlBlock *rc_cb_alloc(size_t value_size, int value_type_kind, RcDropFn dro
     cb->strong_count = 1;
     cb->weak_count = 0;
     cb->value = (void *)(cb + 1);
-    cb->drop_fn = drop_fn ? drop_fn : default_rc_drop_fn;
+    cb->drop_fn = drop_fn ? drop_fn : default_drop_fn_for_type(value_type_kind);
     cb->value_type_kind = value_type_kind;
     memset(cb->reserved, 0, sizeof(cb->reserved));
     /* Register with GC */
@@ -196,9 +298,7 @@ bool rc_strong_decrement(RcControlBlock *cb) {
             gc_on_strong_decrement(cb);
             return false;
         } else {
-            gc_unregister_block(cb);
-            if (cb->value) cb->drop_fn(cb->value);
-            free(cb);
+            rc_free_queue_push(cb);
             return true;
         }
     }
@@ -248,6 +348,36 @@ RcControlBlock *rc_upgrade(RcControlBlock *cb) {
 void *rc_get_value(RcControlBlock *cb) {
     if (!cb) return NULL;
     return cb->value;
+}
+
+RcControlBlock *tur_rc_from_ref(void *ref_value, int value_type_kind) {
+    if (!ref_value) return NULL;
+    RcControlBlock *cb = (RcControlBlock *)malloc(sizeof(RcControlBlock));
+    if (!cb) { fprintf(stderr, "rc/from-ref: out of memory\n"); abort(); }
+    cb->strong_count = 1;
+    cb->weak_count = 0;
+    cb->value = ref_value;
+    cb->drop_fn = default_drop_fn_for_type(value_type_kind);
+    cb->value_type_kind = (uint8_t)value_type_kind;
+    cb->color = GC_WHITE;
+    cb->may_contain_cycles = true;
+    memset(cb->reserved, 0, sizeof(cb->reserved));
+    gc_register_block(cb);
+    return cb;
+}
+
+void *tur_ref_from_rc(RcControlBlock *cb) {
+    if (!cb) return NULL;
+    if (cb->strong_count != 1 || cb->weak_count != 0) {
+        fprintf(stderr, "ref/from-rc requires unique rc (strong_count==1 and weak_count==0), got strong=%llu weak=%llu\n",
+                (unsigned long long)cb->strong_count, (unsigned long long)cb->weak_count);
+        abort();
+    }
+    void *value = cb->value;
+    cb->value = NULL;
+    gc_unregister_block(cb);
+    free(cb);
+    return value;
 }
 
 /* gc (Bacon-Rajan cycle collector) - Phase 10 */
@@ -312,28 +442,44 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
+struct __defer_env_7 {RcControlBlock * r2; };
+
+static void __defer_8(void *__env) {
+    struct __defer_env_7 *__e = (struct __defer_env_7 *)__env;
+    rc_strong_decrement(__e->r2);
+    rc_free_queue_drain();
+}
+
 int main() {
         int64_t __t0;
         {
-            RcControlBlock *__t1 = rc_cb_alloc(sizeof(int64_t), 3, NULL);
-            *((int64_t *)((char *)__t1 + sizeof(RcControlBlock))) = INT64_C(42);
-            RcControlBlock * r_1 = __t1;
+            int64_t *__t1 = (int64_t *)malloc(sizeof(int64_t));
+            *__t1 = INT64_C(42);
+            RcControlBlock *__t2 = rc_cb_alloc(0, 3, NULL);
+            __t2->value = __t1;
+            RcControlBlock * r_1 = __t2;
             (void)r_1;
-            int64_t __t2 = rc_strong_count(r_1);
-            printf("%lld\n", (long long)(__t2));
+            int64_t __t3 = rc_strong_count(r_1);
+            printf("%lld\n", (long long)(__t3));
             {
                 rc_strong_increment(r_1);
                 RcControlBlock * r2_2 = r_1;
                 (void)r2_2;
-                int64_t __t3 = rc_strong_count(r_1);
-                printf("%lld\n", (long long)(__t3));
-                int64_t __t4 = rc_strong_count(r2_2);
-                printf("%lld\n", (long long)(__t4));
+                tur_frame __frame_4;
+                tur_frame_init(&__frame_4, NULL);
+                int64_t __t5 = rc_strong_count(r_1);
+                printf("%lld\n", (long long)(__t5));
+                int64_t __t6 = rc_strong_count(r2_2);
+                printf("%lld\n", (long long)(__t6));
+                struct __defer_env_7 __t9 = {.r2 = r2_2};
+                tur_frame_push_defer(&__frame_4, __defer_8, &__t9);
+                tur_frame_fire_lifo(&__frame_4);
             }
             rc_strong_decrement(r_1);
-            int64_t __t5;
-            __t5 = INT64_C(0);
-            __t0 = __t5;
+            rc_free_queue_drain();
+            int64_t __t10;
+            __t10 = INT64_C(0);
+            __t0 = __t10;
         }
         return (int)__t0;
 }

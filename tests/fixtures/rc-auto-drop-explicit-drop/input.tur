@@ -1,0 +1,7 @@
+;; Phase 9 auto-drop: explicit rc/drop should count as consumption and suppress auto-drop injection.
+
+(defn main []
+  (let [x (rc/of 42)]
+    (println (rc/strong-count x))
+    (rc/drop x)
+    0))

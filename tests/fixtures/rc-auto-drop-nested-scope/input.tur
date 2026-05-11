@@ -1,0 +1,6 @@
+;; Phase 9 auto-drop: nested scope should drop inner rc before outer rc via LIFO defers.
+
+(defn rc-auto-drop-nested-scope []
+  (let [outer (rc/of 10)]
+    (let [inner (rc/of 20)]
+      (+ (rc/strong-count outer) (rc/strong-count inner)))))

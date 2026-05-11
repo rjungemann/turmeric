@@ -368,8 +368,16 @@ static ElideDecision is_elision_eligible(const Expr *body, const Binding *b) {
 
     /* Condition (b): no barrier before the single use in a do-block */
     if (!body || body->kind != EX_DO) {
-        /* Single expression body — no prior statements, no barrier */
-        return ELIDE_OK;
+        /* Single-expression let body: require a direct (rc/drop <binding>) use.
+         * Reject nested/conditional contexts (e.g. if/while/try), which are harder
+         * to prove equivalent for clone/drop elision. */
+        if (body->kind == EX_RC_DROP &&
+            body->as.rc_drop_.expr &&
+            body->as.rc_drop_.expr->kind == EX_VAR &&
+            body->as.rc_drop_.expr->as.var.binding == b) {
+            return ELIDE_OK;
+        }
+        return ELIDE_REJECT_NON_DROP_USE;
     }
 
     /* do-block: find the statement index that contains the use */
@@ -381,6 +389,19 @@ static ElideDecision is_elision_eligible(const Expr *body, const Binding *b) {
         }
     }
     if (use_idx < 0) return ELIDE_REJECT_USE_NOT_FOUND;
+
+        /* Require the use statement itself to be a direct rc/drop of the cloned
+         * binding. This rejects conditional/nested drops inside if/while/try, which
+         * could otherwise appear as single-use but are not guaranteed to execute in
+         * an unconditional straight-line way. */
+        const Expr *use_stmt = body->as.do_.items[use_idx];
+        if (!(use_stmt &&
+                    use_stmt->kind == EX_RC_DROP &&
+                    use_stmt->as.rc_drop_.expr &&
+                    use_stmt->as.rc_drop_.expr->kind == EX_VAR &&
+                    use_stmt->as.rc_drop_.expr->as.var.binding == b)) {
+                return ELIDE_REJECT_NON_DROP_USE;
+        }
 
     /* Check if any statement before use_idx has a barrier */
     for (int i = 0; i < use_idx; i++) {

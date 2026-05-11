@@ -151,6 +151,7 @@ typedef struct LetBinding {
 /* Phase 17: Exception handling - Try-catch clause structure */
 typedef struct TryCatchClause {
     const Symbol *var_name;    /* Name of the exception variable (e.g., 'e' in (catch [e] ...)) */
+    Binding *binding;          /* Resolved binding for codegen/name resolution */
     TypeKind catch_type;        /* Type to match (TY_INT, TY_BOOL, etc.), TY_UNKNOWN = catch-all */
     Expr *handler;             /* Handler body expression */
 } TryCatchClause;

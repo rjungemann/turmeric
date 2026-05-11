@@ -8,6 +8,6 @@
   ;; ref/from-rc frees the control block, so manual drop would be wrong
   (let [x (rc/of 200)]
     (let [r (ref/from-rc x)]
-      (println (cast r :int))))
+      (println (deref r))))
   
   0)
