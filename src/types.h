@@ -52,6 +52,34 @@ typedef enum TypeKind {
     TY_CONT,         /* cont<T> - captured continuation that returns T */
 } TypeKind;
 
+/* Phase 11: canonical default copy-kind by kind (typeclass path is primary; this
+ * keeps concrete move/copy semantics deterministic for elaboration/codegen). */
+static inline CopyKind typekind_default_copy_kind(TypeKind k) {
+    switch (k) {
+        case TY_NIL:
+        case TY_BOOL:
+        case TY_INT:
+        case TY_FLOAT:
+        case TY_CSTR:
+        case TY_PTR_VOID:
+        case TY_FN:
+        case TY_REF_IMMUT:
+        case TY_TYPECLASS:
+        case TY_TYPECLASS_INST:
+            return CK_COPY;
+        case TY_REF:
+        case TY_RC:
+        case TY_WEAK:
+        case TY_REF_MUT:
+        case TY_EXCEPTION:
+        case TY_CONT:
+            return CK_MOVE;
+        case TY_UNKNOWN:
+        default:
+            return CK_MOVE;
+    }
+}
+
 /* Max arity for function types in phase 2. */
 #define MAX_FN_ARITY 8
 
@@ -162,11 +190,16 @@ static inline Type type_weak(TypeKind inner) {
 static inline Type type_fn(TypeKind arg_kinds[], uint8_t arity, TypeKind result_kind) {
     Type t;
     t.kind = TY_FN;
+    t.copy_kind = typekind_default_copy_kind(TY_FN);
+    t.n_lifetimes = 0;
+    t.typeclass_instances = NULL;
+    t.n_typeclass_instances = 0;
     t.as.fn.arity = arity;
     for (uint8_t i = 0; i < arity; i++) {
         t.as.fn.arg_kinds[i] = arg_kinds[i];
     }
     t.as.fn.result_kind = result_kind;
+    t.as.fn.effect_row = NULL;
     return t;
 }
 

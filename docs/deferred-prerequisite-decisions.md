@@ -133,7 +133,11 @@ Decision:
 
 ### TY_COPY_TRAIT direction
 Decision:
-- keep placeholder for compatibility, but treat typeclass-based copy modeling as primary long-term path
+- no dedicated `TY_COPY_TRAIT` type kind; copy semantics are finalized through `Type.copy_kind` + typeclass-based modeling
+
+Implementation status:
+- `typekind_default_copy_kind(...)` now provides deterministic copy/move defaults for all `TypeKind` values
+- helper constructors/derivations (`type_fn`, elaborator/type pretty-printer `type_from_kind`) initialize `copy_kind` explicitly
 
 ### Return move-transfer semantics
 Decision:

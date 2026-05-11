@@ -39,6 +39,21 @@
       (println "Assertion failed: expected nil")
       false)))
 
+;; Assert that invoking the callback throws an error.
+;; `thunk` must be a no-arg callback bridged through ptr<void>.
+(defn assert-error [thunk :ptr<void>] :bool
+  (if (= (try
+           (do
+             (thunk)
+             0)
+           (catch [e]
+             1))
+         1)
+    true
+    (do
+      (println "Assertion failed: expected error")
+      false)))
+
 ;; Run a single test result and print marker output.
 ;; Returns 1 on pass, 0 on fail.
 ;; `test-fn` is passed as an opaque callback pointer and invoked in-body.

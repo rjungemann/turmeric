@@ -1,0 +1,7 @@
+(defn bad []
+  (let [r (ref 3)]
+    (return r)
+    @r))
+
+(defn main [] :int
+  0)

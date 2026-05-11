@@ -66,8 +66,11 @@ int type_eq(Type a, Type b) {
 static Type type_from_kind(TypeKind k) {
     Type t;
     t.kind = k;
+    t.copy_kind = typekind_default_copy_kind(k);
     t.as.fn.arity = 0;
     t.n_lifetimes = 0;  /* Phase 13: no lifetimes by default */
+    t.typeclass_instances = NULL;
+    t.n_typeclass_instances = 0;
     return t;
 }
 

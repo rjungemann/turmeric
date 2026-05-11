@@ -1,0 +1,7 @@
+(defn main [] :int
+  (let [r (ref 1)]
+    (if false
+      (let [tmp r]
+        0))
+    (println @r)
+    0))

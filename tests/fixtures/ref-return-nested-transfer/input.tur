@@ -1,0 +1,11 @@
+(defn make-ref []
+  (let [r (ref 21)]
+    (do
+      (let [tmp r]
+        (return tmp))
+      (ref 0))))
+
+(defn main [] :int
+  (make-ref)
+  (println 0)
+  0)

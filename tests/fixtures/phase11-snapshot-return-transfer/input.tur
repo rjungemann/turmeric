@@ -1,0 +1,12 @@
+(defn ret-int [x :int] :int
+  (return x))
+
+(defn ret-ref []
+  (let [r (ref 7)]
+    (return r)))
+
+(defn main [] :int
+  (println (ret-int 3))
+  (ret-ref)
+  (println 0)
+  0)

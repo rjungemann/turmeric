@@ -1,0 +1,3 @@
+(defstruct Bad :copy [r :ref<int>])
+
+(defn main [] :int 0)

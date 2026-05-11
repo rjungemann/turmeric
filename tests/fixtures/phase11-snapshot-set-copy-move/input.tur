@@ -1,0 +1,12 @@
+(defn main [] :int
+  (let [x 10]
+    (let [^mut y 0]
+      (set! y x)
+      (println y)))
+
+  (let [^mut a (ref 1)
+        b (ref 2)]
+    (set! a b)
+    (println @a))
+
+  0)

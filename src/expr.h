@@ -34,6 +34,8 @@ struct Binding {
     struct Binding *closure_fn_binding;
     /* Phase 5: Move semantics - whether this ref binding has been moved */
     bool          is_moved;
+    /* Phase 11: span of first move for note chaining diagnostics */
+    Span          moved_at;
 };
 
 typedef enum ExprKind {

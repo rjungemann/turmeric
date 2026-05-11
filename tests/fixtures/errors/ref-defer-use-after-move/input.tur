@@ -1,0 +1,6 @@
+(defn main [] :int
+  (let [r (ref 9)]
+    (let [tmp r]
+      (defer (println @r))
+      0))
+  0)

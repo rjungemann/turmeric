@@ -986,6 +986,14 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_TRY: {
             /* (try body (catch ...) (finally ...)) - emit as setjmp/longjmp */
             char *handler_var = fresh_tmp(ctx);
+            bool returns_value = (e->type.kind != TY_NIL);
+            char *result_tmp = returns_value ? fresh_tmp(ctx) : NULL;
+
+            if (returns_value) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s %s = (%s)0;\n",
+                          type_c_name(e->type), result_tmp, type_c_name(e->type));
+            }
             
             /* Emit handler setup with setjmp */
             indent_buf(body, ctx->indent);
@@ -1005,7 +1013,14 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             ctx->indent += 4;
             
             /* Emit try body */
-            emit_stmt(ctx, body, e->as.try_.body);
+            if (returns_value) {
+                char *try_val = emit_value(ctx, body, e->as.try_.body);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s = %s;\n", result_tmp, try_val);
+                free(try_val);
+            } else {
+                emit_stmt(ctx, body, e->as.try_.body);
+            }
             
             if (has_finally) {
                 /* With finally: pop handler and jump to finally */
@@ -1052,7 +1067,14 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                               clause->var_name->name, handler_var);
                     
                     /* Emit handler body */
-                    emit_stmt(ctx, body, clause->handler);
+                    if (returns_value) {
+                        char *handler_val = emit_value(ctx, body, clause->handler);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "%s = %s;\n", result_tmp, handler_val);
+                        free(handler_val);
+                    } else {
+                        emit_stmt(ctx, body, clause->handler);
+                    }
                     
                     /* Clean up */
                     indent_buf(body, ctx->indent);
@@ -1111,6 +1133,9 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
             
             free(handler_var);
+            if (returns_value) {
+                return result_tmp;
+            }
             return atom_nil();
         }
         /* Phase 2 */
@@ -2145,10 +2170,13 @@ int emit_program(Buf *out, const Expr *program) {
             char *bn = name_for_binding(&ctx, e->as.def_.binding);
             buf_printf(&file, "static %s %s;\n",
                        type_c_name(e->as.def_.binding->type), bn);
-            char *iv = emit_value(&ctx, &body, e->as.def_.init);
-            indent_buf(&body, ctx.indent);
-            buf_printf(&body, "%s = %s;\n", bn, iv);
-            free(bn); free(iv);
+            if (e->as.def_.init) {
+                char *iv = emit_value(&ctx, &body, e->as.def_.init);
+                indent_buf(&body, ctx.indent);
+                buf_printf(&body, "%s = %s;\n", bn, iv);
+                free(iv);
+            }
+            free(bn);
         } else if (e->kind == EX_FN_DEF) {
             /* Emit function definition at file scope */
             emit_fn_def(&ctx, &file, e);
@@ -2655,10 +2683,13 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program) 
             char *bn = name_for_binding(&ctx, e->as.def_.binding);
             buf_printf(&file, "static %s %s;\n",
                        type_c_name(e->as.def_.binding->type), bn);
-            char *iv = emit_value(&ctx, &body, e->as.def_.init);
-            indent_buf(&body, ctx.indent);
-            buf_printf(&body, "%s = %s;\n", bn, iv);
-            free(bn); free(iv);
+            if (e->as.def_.init) {
+                char *iv = emit_value(&ctx, &body, e->as.def_.init);
+                indent_buf(&body, ctx.indent);
+                buf_printf(&body, "%s = %s;\n", bn, iv);
+                free(iv);
+            }
+            free(bn);
         } else if (e->kind == EX_FN_DEF) {
             /* Emit function definition */
             emit_fn_def(&ctx, &file, e);

@@ -73,7 +73,7 @@ After prerequisites are complete, execute these implementation tasks.
 #### C) Test runner completeness
 - [x] Implement `assert-true` and `assert-false`.
 - [x] Implement `assert-nil`.
-- [ ] Implement `assert-error` behavior per agreed contract.
+- [x] Implement `assert-error` behavior per agreed contract.
 - [x] Implement `run-test` with pass/fail reporting and integration hooks.
 - [x] Enable callback-based test execution (`passing function values as test callbacks is not supported in the current path`).
 - [x] Upgrade `run-tests!` from stub to full discovery/registration execution flow.
@@ -84,40 +84,52 @@ After prerequisites are complete, execute these implementation tasks.
 ### Phase 11 remaining tasks
 
 #### A) Copy trait placeholder and annotations
-- [ ] Finalize handling of `TY_COPY_TRAIT` decision (retain, refine, or remove placeholder path).
-- [ ] Implement explicit `:move` annotation handling depth consistent with `:copy` behavior.
-- [ ] Add tests for annotation parsing/diagnostics around `:copy` and `:move`.
+- [x] Finalize handling of `TY_COPY_TRAIT` decision (retain, refine, or remove placeholder path).
+- [x] Implement explicit `:move` annotation handling depth consistent with `:copy` behavior.
+- [x] Add tests for annotation parsing/diagnostics around `:copy` and `:move`.
 
 #### B) Return-transfer semantics and suppression nuances
-- [ ] Implement move tracking on `return` edges according to agreed ownership semantics.
-- [ ] Implement move suppression behavior where ownership transfers to caller.
-- [ ] Add fixtures for nested returns, early returns, and mixed copy/move return expressions.
-- [ ] Add diagnostics fixtures for invalid post-return uses of moved bindings.
+- [x] Implement move tracking on `return` edges according to agreed ownership semantics.
+- [x] Implement move suppression behavior where ownership transfers to caller.
+- [x] Add fixtures for nested returns, early returns, and mixed copy/move return expressions.
+- [x] Add diagnostics fixtures for invalid post-return uses of moved bindings.
 
 #### C) defstruct copy validation completeness
-- [ ] Implement strict field-level `:copy` validation using copy-kind checks.
-- [ ] Reject `:copy` structs containing non-copy fields with targeted diagnostic text.
-- [ ] Add positive fixture for valid `:copy` struct.
-- [ ] Add negative fixture for invalid `:copy` struct (for example `ref<T>` field).
+- [x] Implement strict field-level `:copy` validation using copy-kind checks.
+- [x] Reject `:copy` structs containing non-copy fields with targeted diagnostic text.
+- [x] Add positive fixture for valid `:copy` struct.
+- [x] Add negative fixture for invalid `:copy` struct (for example `ref<T>` field).
 
 #### D) Closure/defer moved-binding edge checks
-- [ ] Add closure capture analysis check for moved bindings.
-- [ ] Add defer body analysis check for moved bindings.
-- [ ] Add fixtures for capture/use before and after move points.
-- [ ] Ensure diagnostics include both move site and invalid reference site where applicable.
+- [x] Add closure capture analysis check for moved bindings.
+- [x] Add defer body analysis check for moved bindings.
+- [x] Add fixtures for capture/use before and after move points.
+- [x] Ensure diagnostics include both move site and invalid reference site where applicable.
 
 #### E) Snapshot depth for copy/move behavior
-- [ ] Add codegen snapshots for `let` move/copy paths.
-- [ ] Add codegen snapshots for `set!` move/copy paths.
-- [ ] Add codegen snapshots for function/builtin call argument move/copy paths.
-- [ ] Add codegen snapshots for return transfer paths.
-- [ ] Verify snapshots demonstrate no runtime bookkeeping overhead for static move/copy analysis.
+- [x] Add codegen snapshots for `let` move/copy paths.
+- [x] Add codegen snapshots for `set!` move/copy paths.
+- [x] Add codegen snapshots for function/builtin call argument move/copy paths.
+- [x] Add codegen snapshots for return transfer paths.
+- [x] Verify snapshots demonstrate no runtime bookkeeping overhead for static move/copy analysis.
 
 ### Closeout tasks
 - [x] Re-run targeted fixtures for all new Phase 7 follow-up work.
-- [ ] Re-run targeted fixtures for all new Phase 11 follow-up work.
+- [x] Re-run targeted fixtures for all new Phase 11 follow-up work.
 - [ ] Update docs/turmeric-plan.md or successor active roadmap with any promoted follow-up items.
-- [ ] Add a short completion note to this file indicating which deferred clusters were fully resolved.
+- [x] Add a short completion note to this file indicating which deferred clusters were fully resolved.
+
+### Phase 11 Completion Note
+
+Resolved deferred clusters in this follow-up pass:
+- A) Copy trait placeholder and annotations
+- B) Return-transfer semantics and suppression nuances
+- C) defstruct copy validation completeness
+- D) Closure/defer moved-binding edge checks
+- E) Snapshot depth for copy/move behavior
+
+Outstanding cross-phase closeout still tracked separately:
+- roadmap promotion/update task above
 
 ---
 
@@ -311,3 +323,35 @@ The following prerequisites were executed and documented:
 - `run-tests!` upgraded from stub to registry-backed execution with explicit registration helpers:
 	- [stdlib/test.tur](stdlib/test.tur)
 	- [tests/fixtures/stdlib-test-runner-registry/input.tur](tests/fixtures/stdlib-test-runner-registry/input.tur)
+- `assert-error` implemented via typed `try`/`catch` callback assertion flow:
+	- [stdlib/test.tur](stdlib/test.tur)
+	- [tests/fixtures/stdlib-test-assert-error/input.tur](tests/fixtures/stdlib-test-assert-error/input.tur)
+- Phase 11 defstruct follow-up: explicit `:move` annotation + strict `:copy` field validation and fixtures:
+	- [src/elab.c](src/elab.c)
+	- [tests/fixtures/defstruct-copy-valid/input.tur](tests/fixtures/defstruct-copy-valid/input.tur)
+	- [tests/fixtures/defstruct-move-annotation/input.tur](tests/fixtures/defstruct-move-annotation/input.tur)
+	- [tests/fixtures/errors/defstruct-copy-noncopy-field/input.tur](tests/fixtures/errors/defstruct-copy-noncopy-field/input.tur)
+- Phase 11 copy-trait finalization: remove placeholder-path dependence and make copy/move defaults deterministic by type kind:
+	- [src/types.h](src/types.h)
+	- [src/types.c](src/types.c)
+	- [src/elab.c](src/elab.c)
+- Phase 11 move-suppression nuance: branch-local moves in `if` no longer poison outer path unless moved in both branches:
+	- [src/elab.c](src/elab.c)
+	- [tests/fixtures/ref-if-branch-move-suppression/input.tur](tests/fixtures/ref-if-branch-move-suppression/input.tur)
+- Phase 11 return-transfer semantics completed: return-edge moves + suppression nuances + diagnostics fixtures:
+	- [src/elab.c](src/elab.c)
+	- [tests/fixtures/ref-return-early-branch/input.tur](tests/fixtures/ref-return-early-branch/input.tur)
+	- [tests/fixtures/ref-return-nested-transfer/input.tur](tests/fixtures/ref-return-nested-transfer/input.tur)
+	- [tests/fixtures/errors/ref-return-use-after-move/input.tur](tests/fixtures/errors/ref-return-use-after-move/input.tur)
+- Phase 11 closure/defer moved-binding checks completed with two-span diagnostics (invalid use + move site):
+	- [src/expr.h](src/expr.h)
+	- [src/elab.c](src/elab.c)
+	- [tests/fixtures/errors/ref-closure-capture-after-move/input.tur](tests/fixtures/errors/ref-closure-capture-after-move/input.tur)
+	- [tests/fixtures/errors/ref-defer-use-after-move/input.tur](tests/fixtures/errors/ref-defer-use-after-move/input.tur)
+- Phase 11 snapshot-depth coverage added for copy/move paths:
+	- [tests/fixtures/phase11-snapshot-let-copy-move/input.tur](tests/fixtures/phase11-snapshot-let-copy-move/input.tur)
+	- [tests/fixtures/phase11-snapshot-set-copy-move/input.tur](tests/fixtures/phase11-snapshot-set-copy-move/input.tur)
+	- [tests/fixtures/phase11-snapshot-call-arg-copy-move/input.tur](tests/fixtures/phase11-snapshot-call-arg-copy-move/input.tur)
+	- [tests/fixtures/phase11-snapshot-return-transfer/input.tur](tests/fixtures/phase11-snapshot-return-transfer/input.tur)
+	- generated snapshots: `expected.c` in each fixture directory
+- Static-overhead check: grep over new snapshots found no runtime move bookkeeping markers (`is_moved`, `tur_move`, `copy_kind`, `move_`).

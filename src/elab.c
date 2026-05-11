@@ -15,6 +15,7 @@
 static Type type_from_kind(TypeKind k) {
     Type t;
     t.kind = k;
+    t.copy_kind = typekind_default_copy_kind(k);
     t.as.fn.arity = 0;
     t.n_lifetimes = 0;  /* Phase 13: no lifetimes by default */
     t.typeclass_instances = NULL;
@@ -324,6 +325,7 @@ typedef struct Elab {
     /* Phase 11: defstruct */
     const Symbol *sym_defstruct;   /* defstruct */
     const Symbol *kw_copy;        /* :copy keyword for defstruct */
+    const Symbol *kw_move;        /* :move keyword for defstruct */
     /* Phase 12: Borrow traits */
     const Symbol *sym_borrow;      /* & symbol for immutable borrow */
     const Symbol *sym_borrow_mut;  /* &mut for mutable borrow */
@@ -353,8 +355,9 @@ typedef struct MacroDef {
 
 /* Phase 3: Register a file-scope definition to be emitted later */
 static void elab_register_file_def(Elab *e, Expr *def_expr) {
+    if (!def_expr) return;
     if (e->n_file_scope_defs >= e->cap_file_scope_defs) {
-        e->cap_file_scope_defs = e->cap_file_scope_defs ? e->cap_file_scope_defs * 2 : 8;
+        e->cap_file_scope_defs = e->cap_file_scope_defs ? e->cap_file_scope_defs * 2 : 16;
         e->file_scope_defs = (Expr **)realloc(e->file_scope_defs, 
             e->cap_file_scope_defs * sizeof(Expr *));
     }
@@ -370,11 +373,11 @@ static const Symbol *intern_cstr(SymbolTable *st, const char *s) {
 /* Mark a binding as moved (poisoned). Returns true if successfully marked,
  * false if it was already moved (use-after-move). */
 static bool binding_mark_moved(Binding *b, Span use_span) {
-    (void)use_span; /* Unused for now - may track move location in future */
     if (b->is_moved) {
         return false; /* Already moved - use-after-move */
     }
     b->is_moved = true;
+    b->moved_at = use_span;
     return true;
 }
 
@@ -385,9 +388,66 @@ static bool binding_check_not_moved(Binding *b, Span use_span, const char *use_d
         diag_emit_with_code(DIAG_ERROR, use_span, TUR_E0005_USE_AFTER_MOVE,
                             "use-after-move: %s '%s' was moved and cannot be used again",
                             use_desc, b->name->name);
+        if (!span_is_unknown(b->moved_at)) {
+            diag_emit(DIAG_NOTE, b->moved_at, "moved here");
+        }
         return false;
     }
     return true;
+}
+
+/* Snapshot/restore move-state for all currently visible bindings.
+ * Used to make branch elaboration path-sensitive for move tracking. */
+static uint32_t move_state_snapshot_bindings(const Scope *scope,
+                                             Binding ***out_bindings,
+                                             bool **out_states) {
+    uint32_t n = 0;
+    uint32_t cap = 16;
+    Binding **bindings = (Binding **)malloc(cap * sizeof(Binding *));
+    bool *states = (bool *)malloc(cap * sizeof(bool));
+    if (!bindings || !states) {
+        fprintf(stderr, "tur: oom\n");
+        abort();
+    }
+
+    for (const Scope *cur = scope; cur; cur = cur->parent) {
+        for (uint32_t i = 0; i < cur->n; i++) {
+            if (n == cap) {
+                cap *= 2;
+                bindings = (Binding **)realloc(bindings, cap * sizeof(Binding *));
+                states = (bool *)realloc(states, cap * sizeof(bool));
+                if (!bindings || !states) {
+                    fprintf(stderr, "tur: oom\n");
+                    abort();
+                }
+            }
+            bindings[n] = cur->bindings[i];
+            states[n] = cur->bindings[i]->is_moved;
+            n++;
+        }
+    }
+
+    *out_bindings = bindings;
+    *out_states = states;
+    return n;
+}
+
+static bool *move_state_capture_current(Binding **bindings, uint32_t n) {
+    bool *states = (bool *)malloc((n == 0 ? 1 : n) * sizeof(bool));
+    if (!states) {
+        fprintf(stderr, "tur: oom\n");
+        abort();
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        states[i] = bindings[i]->is_moved;
+    }
+    return states;
+}
+
+static void move_state_restore(Binding **bindings, const bool *states, uint32_t n) {
+    for (uint32_t i = 0; i < n; i++) {
+        bindings[i]->is_moved = states[i];
+    }
 }
 
 static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
@@ -470,6 +530,7 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* Phase 11: defstruct */
     e->sym_defstruct = intern_cstr(st, "defstruct");
     e->kw_copy = intern_cstr(st, "copy");
+    e->kw_move = intern_cstr(st, "move");
     /* Phase 12: Borrow traits */
     e->sym_borrow = intern_cstr(st, "&");
     e->sym_borrow_mut = intern_cstr(st, "&mut");
@@ -695,6 +756,7 @@ static Binding *binding_new(Elab *e, const Symbol *name, Type type,
     b->span = span;
     b->closure_fn_binding = NULL;
     b->is_moved = false;  /* Phase 5: move semantics */
+    b->moved_at = SPAN_UNKNOWN;
     return b;
 }
 
@@ -976,21 +1038,61 @@ static Expr *elab_if(Elab *e, const Form *call) {
                   "if condition must be bool, got %s", type_name(cond->type));
         return NULL;
     }
+
+    Binding **move_bindings = NULL;
+    bool *before_states = NULL;
+    uint32_t n_move_bindings = move_state_snapshot_bindings(e->scope, &move_bindings, &before_states);
+
     Expr *then_ = elab_form(e, call->as.list.items[2]);
-    if (!then_) return NULL;
+    if (!then_) {
+        free(move_bindings);
+        free(before_states);
+        return NULL;
+    }
+    bool *then_states = move_state_capture_current(move_bindings, n_move_bindings);
+
+    /* Rewind to pre-branch move-state before elaborating else branch. */
+    move_state_restore(move_bindings, before_states, n_move_bindings);
+
     Expr *else_ = NULL;
     Type result_t = TYPE_NIL;
     if (call->as.list.len == 4) {
         else_ = elab_form(e, call->as.list.items[3]);
-        if (!else_) return NULL;
+        if (!else_) {
+            move_state_restore(move_bindings, before_states, n_move_bindings);
+            free(then_states);
+            free(move_bindings);
+            free(before_states);
+            return NULL;
+        }
+        bool *else_states = move_state_capture_current(move_bindings, n_move_bindings);
+
+        /* A move is guaranteed after if/else only if it was present before,
+         * or both branches moved the binding. */
+        for (uint32_t i = 0; i < n_move_bindings; i++) {
+            move_bindings[i]->is_moved = before_states[i] || (then_states[i] && else_states[i]);
+        }
+        free(else_states);
+
         if (!type_eq(then_->type, else_->type)) {
+            free(then_states);
+            free(move_bindings);
+            free(before_states);
             diag_emit(DIAG_ERROR, call->span,
                       "if branches have mismatched types: then=%s else=%s",
                       type_name(then_->type), type_name(else_->type));
             return NULL;
         }
         result_t = then_->type;
+    } else {
+        /* Without else, then-branch moves are not guaranteed after the if. */
+        move_state_restore(move_bindings, before_states, n_move_bindings);
     }
+
+    free(then_states);
+    free(move_bindings);
+    free(before_states);
+
     /* If no else, the if is a statement-style branch with type nil
      * (matches Clojure's behavior of returning nil for a missing else). */
     Expr *out = expr_new(e->arena, EX_IF, result_t, call->span);
@@ -1315,6 +1417,11 @@ static Expr *elab_return(Elab *e, const Form *call) {
         /* (return expr) */
         value = elab_form(e, call->as.list.items[1]);
         if (!value) return NULL;
+
+        /* Phase 11: returning a move-only binding transfers ownership. */
+        if (value->kind == EX_VAR && type_is_move(value->as.var.binding->type)) {
+            binding_mark_moved(value->as.var.binding, value->span);
+        }
     }
     
     /* Create EX_RETURN expression */
@@ -1795,6 +1902,7 @@ static Expr *elab_try(Elab *e, const Form *call) {
     /* Parse body (can be single expression or do-form) */
     Expr *body = elab_form(e, call->as.list.items[1]);
     if (!body) return NULL;
+    Type result_type = body->type;
     
     /* Parse remaining clauses (catch and finally) */
     /* Phase 17: Use fixed-size array for catch clauses (max 8) for simplicity */
@@ -1905,6 +2013,16 @@ static Expr *elab_try(Elab *e, const Form *call) {
                 scope_free(&handler_scope); 
                 return NULL; 
             }
+
+            /* try/catch is an expression: body and each catch handler must agree on type */
+            if (!type_eq(handler->type, result_type)) {
+                diag_emit(DIAG_ERROR, clause_form->span,
+                          "try/catch type mismatch: body is %s but catch handler is %s",
+                          type_name(result_type), type_name(handler->type));
+                e->scope = handler_scope.parent;
+                scope_free(&handler_scope);
+                return NULL;
+            }
             
             /* Pop the handler scope */
             e->scope = handler_scope.parent;
@@ -1955,7 +2073,7 @@ static Expr *elab_try(Elab *e, const Form *call) {
         memcpy(arena_clauses, clauses, n_clauses * sizeof(TryCatchClause));
     }
     
-    Expr *out = expr_new(e->arena, EX_TRY, TYPE_NIL, call->span);
+    Expr *out = expr_new(e->arena, EX_TRY, result_type, call->span);
     out->as.try_.body = body;
     out->as.try_.clauses = arena_clauses;
     out->as.try_.n_clauses = n_clauses;
@@ -3660,7 +3778,7 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
     }
     const Symbol *name = name_form->as.sym;
     
-    /* Check for :copy keyword */
+    /* Check for optional :copy / :move annotation */
     bool is_copy = false;
     uint32_t fields_start_idx = 2;
     
@@ -3668,6 +3786,9 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
         Form *kw_form = call->as.list.items[2];
         if (kw_form->tag == F_KEYWORD && kw_form->as.sym == e->kw_copy) {
             is_copy = true;
+            fields_start_idx = 3;
+        } else if (kw_form->tag == F_KEYWORD && kw_form->as.sym == e->kw_move) {
+            is_copy = false;
             fields_start_idx = 3;
         }
     }
@@ -3705,6 +3826,53 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
         diag_emit(DIAG_ERROR, fields_form->span,
                   "defstruct field list cannot be empty");
         return NULL;
+    }
+
+    if ((n_fields % 2) != 0) {
+        diag_emit(DIAG_ERROR, fields_form->span,
+                  "defstruct field list must have [name :type ...] pairs");
+        return NULL;
+    }
+
+    /* Parse field pairs and validate :copy structs only contain copyable fields. */
+    for (uint32_t i = 0; i < n_fields; i += 2) {
+        Form *field_name = fields_form->as.list.items[i];
+        Form *field_type = fields_form->as.list.items[i + 1];
+
+        if (field_name->tag != F_SYM) {
+            diag_emit(DIAG_ERROR, field_name->span,
+                      "defstruct field name must be a symbol");
+            return NULL;
+        }
+        if (field_type->tag != F_KEYWORD) {
+            diag_emit(DIAG_ERROR, field_type->span,
+                      "defstruct field '%s' type must be a keyword like :int",
+                      field_name->as.sym->name);
+            return NULL;
+        }
+
+        if (is_copy) {
+            const char *tname = field_type->as.sym->name;
+            uint32_t tlen = field_type->as.sym->len;
+
+            bool is_copy_field = false;
+            if ((tlen == 3 && memcmp(tname, "int", 3) == 0) ||
+                (tlen == 4 && memcmp(tname, "bool", 4) == 0) ||
+                (tlen == 5 && memcmp(tname, "float", 5) == 0) ||
+                (tlen == 4 && memcmp(tname, "cstr", 4) == 0) ||
+                (tlen == 9 && memcmp(tname, "ptr<void>", 9) == 0) ||
+                (tlen == 3 && memcmp(tname, "nil", 3) == 0) ||
+                (tlen == 4 && memcmp(tname, "void", 4) == 0)) {
+                is_copy_field = true;
+            }
+
+            if (!is_copy_field) {
+                diag_emit(DIAG_ERROR, field_type->span,
+                          "defstruct: field '%s' has non-copy type :%s and cannot be used in :copy struct",
+                          field_name->as.sym->name, tname);
+                return NULL;
+            }
+        }
     }
     
     /* For Phase 11, we simply create a def-like binding for the struct name
