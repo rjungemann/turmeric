@@ -1,3 +1,1 @@
-* sweet-exps
-* async? threads?
-* effect system?
+* doc for custom effects
