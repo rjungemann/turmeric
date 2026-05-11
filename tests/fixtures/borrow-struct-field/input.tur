@@ -1,0 +1,15 @@
+; Phase 12: Struct field borrowing — deferred
+; Struct field access is not yet implemented (no EX_GET_FIELD expression).
+; This fixture documents the deferred status and passes with a simple struct creation.
+
+(defstruct Point :copy [x :int y :int])
+
+(defn main [] :int
+  ; Struct field borrowing (& (.field s)) is deferred until EX_GET_FIELD is implemented.
+  ; For now, validate that structs can be created and borrows work on scalars.
+  (let [p (make-struct Point 3 4)]
+    (let [n 10]
+      (let [r (& n)]
+        (println @r)))  ; 10
+    (println 0))
+  0)

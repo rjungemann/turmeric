@@ -1,0 +1,9 @@
+; Phase 12: Borrow from ptr<T> — deferred
+; Borrowing from raw ptr<T> is deferred (requires explicit unsafe/untracked policy).
+; This fixture validates that borrows from plain values work correctly.
+
+(defn main [] :int
+  (let [x 100]
+    (let [r (& x)]
+      (println @r)))   ; 100
+  0)

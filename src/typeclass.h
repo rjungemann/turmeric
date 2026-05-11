@@ -23,6 +23,9 @@ struct TypeClassMethod {
 struct TypeClass {
     const Symbol *name;           /* Typeclass name */
     const Symbol **type_params;   /* Type parameters (e.g., [a] for Eq[a]) */
+    /* Phase HKT (v2, stub): kind annotation per type parameter.
+     * Always KIND_STAR in v1; NULL treated as all-KIND_STAR. */
+    Kind         *type_param_kinds; /* Parallel to type_params; may be NULL in v1 */
     uint8_t n_type_params;
     TypeClassMethod *methods;    /* Methods in this typeclass */
     uint8_t n_methods;
@@ -67,6 +70,19 @@ TypeClass *typeclass_env_lookup_typeclass(const TypeClassEnv *env, const Symbol 
 TypeClassInstance *typeclass_env_lookup_instance(const TypeClassEnv *env,
                                                   TypeClass *typeclass,
                                                   Type *type_args, uint8_t n_type_args);
+
+/* Phase HKT (v2, stub): Structured dispatch-table key.
+ * In v1 the lookup is performed directly via (TypeClass*, type_args[], n_type_args).
+ * This struct reserves the shape for HKT keying (constructor kind + arg types)
+ * so the key representation can be promoted without changing call sites.
+ * Unused in v1 — all lookups continue to go through typeclass_env_lookup_instance(). */
+typedef struct TypeClassDispatchKey {
+    TypeClass       *typeclass;
+    Type            *type_args;
+    uint8_t          n_type_args;
+    /* HKT extension (reserved, always KIND_STAR in v1): */
+    Kind             constructor_kind;
+} TypeClassDispatchKey;
 
 /* Constraint on a type variable */
 typedef struct TypeConstraint {

@@ -1,0 +1,9 @@
+; Phase 12: unsafe borrow-check opt-out — deferred
+; (unsafe ...) borrow-check opt-out is deferred from Phase 12.
+; This fixture demonstrates that borrow checking proceeds normally without unsafe.
+
+(defn main [] :int
+  (let [x 42]
+    (let [r (& x)]
+      (println @r)))   ; 42
+  0)

@@ -419,6 +419,7 @@ static Expr *lower_expr(Arena *a, SymbolTable *st, Expr *e, EffectEnv *effect_en
         case EX_REF_PRED:
         case EX_BORROW_IMMUT:
         case EX_BORROW_MUT:
+        case EX_SET_DEREF:
         case EX_TYPECLASS_DEF:
         case EX_INSTANCE_DEF:
         case EX_EXTERN_C:

@@ -1,0 +1,9 @@
+; Phase 12: Borrow in closure capture
+; Borrows captured by closures — basic lifetime validation
+
+(defn main [] :int
+  (let [x 21]
+    (let [r (& x)]        ; &int borrow
+      (let [f (fn [] @r)]  ; closure captures borrow r
+        (println (f)))))  ; 21
+  0)

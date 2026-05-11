@@ -1,0 +1,9 @@
+; Phase 12: Mutation through mutable borrow
+; (set! @r value) writes through &mut T
+
+(defn main [] :int
+  (let [^mut x 10]
+    (let [rm (&mut x)]
+      (set! @rm 99))   ; write 99 through &mut int
+    (println x))          ; prints 99
+  0)

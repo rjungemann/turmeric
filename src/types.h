@@ -19,7 +19,14 @@ typedef enum CopyKind {
     CK_COPY,      /* Copy: bitwise duplication allowed */
     CK_UNSIZED,   /* Unsized: size unknown at compile time (e.g., slices) */
 } CopyKind;
-
+/* Phase HKT (v2, stub): Kind annotations for higher-kinded type support.
+ * In v1 all types have kind KIND_STAR; KIND_ARROW is reserved for future use.
+ * The hkt_kind field on Type is always KIND_STAR in v1 and ignored by all
+ * current elaboration, codegen, and borrow-check passes. */
+typedef enum Kind {
+    KIND_STAR  = 0,  /* * — a concrete type, e.g. int, bool, vec<int> */
+    KIND_ARROW = 1,  /* * -> * — a type constructor, e.g. vec, option (reserved, unused in v1) */
+} Kind;
 /* Phase 13: Lifetime annotations */
 /* Lifetimes are purely an elaborator construct - no runtime representation */
 
@@ -118,6 +125,8 @@ typedef struct Type {
     /* For concrete types, the typeclass instances they implement (e.g., int has Eq, Show) */
     TypeClassInstance **typeclass_instances;
     uint8_t n_typeclass_instances;
+    /* Phase HKT (v2, stub): kind annotation — always KIND_STAR in v1, reserved for HKT. */
+    Kind hkt_kind;
     union {
         struct {
             TypeKind arg_kinds[MAX_FN_ARITY];

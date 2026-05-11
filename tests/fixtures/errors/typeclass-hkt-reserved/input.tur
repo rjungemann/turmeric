@@ -1,0 +1,4 @@
+;; Phase 15 negative: HKT kind annotation in defclass type params should give
+;; a clear "not yet supported" diagnostic instead of a confusing error.
+(defclass MyFunctor [[f :kind]]
+  (fmap [f a b] :int))

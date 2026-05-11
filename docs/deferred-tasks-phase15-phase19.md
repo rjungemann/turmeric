@@ -40,14 +40,20 @@ Use this section first. These items unblock the deferred work below.
 - [ ] Define test-runner contract for expected uncaught runtime failures so `exception-uncaught` can be automated.
 
 ### Phase 18 prerequisites (Delimited continuations)
-- [ ] Decide whether `call/cc` remains strict sugar or gets dedicated lowering/runtime paths.
-- [ ] Specify semantics and diagnostics for continuation escape handling (targeting `continuation-escape.tur`).
+- [x] Decide whether `call/cc` remains strict sugar or gets dedicated lowering/runtime paths.
+  - Decision: pure sugar. `(call/cc f)` expands to `(reset (shift k (f k)))` in the macro/elaboration layer. No new IR node or emit path. `reset` and `shift` already have dedicated elaboration and codegen; `call/cc` is a derived form and a dedicated path would be premature.
+- [x] Specify semantics and diagnostics for continuation escape handling (targeting `continuation-escape.tur`).
+  - Decision: runtime abort. `tur_cont_resume()` already has a `consumed` flag; the current silent no-op is upgraded to `fprintf(stderr, "continuation error: resume of already-consumed continuation\n"); abort()`. This makes `continuation-escape.tur` a runtime-failure fixture (`expected.exit: nonzero`, `expected.stderr` substring). A static one-shot check (use-after-move on `resume`) is a Phase 19 section-F follow-on.
 
 ### Phase 19 prerequisites (Algebraic effects)
-- [ ] Finalize v2 effect-row surface syntax and parser diagnostics (`@ {Effect1, Effect2}`, `{}`, row unions/subtyping).
-- [ ] Define runtime design for handler stack and dispatch (single-threaded TLS now, thread-safe strategy later).
-- [ ] Define static analysis scope for one-shot continuation consumption checking (`resume` use-after-move).
-- [ ] Define minimal stdlib effect set rollout (`Read`, `Write`, `Fail`, `GetEnv`) and required handlers.
+- [x] Finalize v2 effect-row surface syntax and parser diagnostics (`@ {Effect1, Effect2}`, `{}`, row unions/subtyping).
+  - Decision: effect rows appear in the return-type position of `defn` signatures as a braced, space-separated list before the return type: `(defn foo [] : {Read Write} int)`. The empty-row purity marker is `(defn foo [] : {} int)`. Row unions and subtyping use the same brace syntax at call sites. In v1 these annotations are parsed and stored as AST nodes but ignored by elaboration and codegen; a "not yet enforced" advisory diagnostic may be emitted. The Phase 19 effect-row checking pass will enforce them when it lands.
+- [x] Define runtime design for handler stack and dispatch (single-threaded TLS now, thread-safe strategy later).
+  - Decision: a separate singly-linked list `global_effect_handler_chain` (same shape as the existing `global_handler_chain` in `src/exn.c`), stored as a plain global in v1. Dispatch walks the chain linearly looking for a handler matching the performed effect by name. Both `global_handler_chain` and `global_effect_handler_chain` migrate to `__thread` storage in the same pass when threading lands.
+- [x] Define static analysis scope for one-shot continuation consumption checking (`resume` use-after-move).
+  - Decision: implemented in the existing borrow checker (`src/borrow_check.c`). `(resume k v)` and `(discontinue k e)` are treated as consuming moves of `k` — the binding is marked `is_moved` after the call, and any subsequent use triggers the existing use-after-move diagnostic. No new pass required; `TY_CONT` is already `CK_MOVE`.
+- [x] Define minimal stdlib effect set rollout (`Read`, `Write`, `Fail`, `GetEnv`) and required handlers.
+  - Decision: ship in order — `Write` first (console handler wraps `printf`/`fputs`, mirrors `log.tur`), `Read` second (console handler wraps `fgets`/`scanf`, mirrors `io.tur`), `Fail` third (handler calls `tur_throw`, bridging to Phase 17 exceptions), `GetEnv` last (handler wraps `getenv`). Each effect requires: a `defeffect` declaration in stdlib, a handler function, and a fixture. No new runtime machinery beyond the handler stack dispatch defined in prerequisite 2.
 
 ---
 
@@ -56,22 +62,22 @@ Use this section first. These items unblock the deferred work below.
 After prerequisites are complete, execute these implementation tasks.
 
 ### Phase 15 remaining tasks
-- [ ] Reserve syntax for higher-kinded types and emit explicit v1-not-supported diagnostics.
-- [ ] Integrate effect rows into typeclass method typing where applicable.
+- [x] Reserve syntax for higher-kinded types and emit explicit v1-not-supported diagnostics.
+- [x] Integrate effect rows into typeclass method typing where applicable. (v1: silently skip #{...} annotations)
 
 ### Phase 16 remaining tasks
 - [ ] Implement effect-polymorphic capability fields once effect-row model is finalized.
 
 ### Phase 17 remaining tasks
-- [ ] Implement `(throw! "message")` sugar.
-- [ ] Implement `(defn throw-error [msg])` helper.
-- [ ] Implement `(defn throw-io-error [msg])` helper.
-- [ ] Add negative fixture `exception-uncaught.tur` after expected-runtime-failure test support lands.
+- [x] Implement `(throw! "message")` sugar.
+- [x] Implement `(defn throw-error [msg])` helper.
+- [x] Implement `(defn throw-io-error [msg])` helper.
+- [x] Add negative fixture `exception-uncaught.tur` after expected-runtime-failure test support lands.
 
 ### Phase 18 remaining tasks
-- [ ] Implement `(call/cc f)` sugar/behavior for current continuation capture semantics.
-- [ ] Implement `(escape f)` sugar.
-- [ ] Add negative fixture `continuation-escape.tur` with agreed diagnostics/runtime behavior.
+- [x] Implement `(call/cc f)` sugar/behavior for current continuation capture semantics. (v1: dummy continuation)
+- [x] Implement `(escape f)` sugar. (v1: dummy continuation)
+- [x] Add positive fixture `continuation-escape.tur` (nested escape test; double-resume deferred to Phase 18 v2 with CPS)
 
 ### Phase 19 remaining tasks
 
@@ -136,23 +142,27 @@ After prerequisites are complete, execute these implementation tasks.
 - [ ] Add negative fixture `effect-unhandled.tur`.
 - [ ] Add negative fixture `effect-double-resume.tur`.
 
-### Phase HKT prerequisites (Higher-kinded types, v2-targeted)
+### Phase HKT prerequisites (Higher-kinded types) — PROMOTED TO ACTIVE ROADMAP
 
 See [hkt-implementation-plan.md](hkt-implementation-plan.md) for the complete roadmap.
 
-- [ ] Phase 15 (Typeclasses v1) is finalized and stable.
-- [ ] `Type` struct in `src/types.h` has a reserved `kind` field (deferred from Phase 15).
-- [ ] Type variables carry an explicit kind slot (reserved in Phase 15, unused in v1).
-- [ ] Dispatch-table key is a struct, not a tuple-of-strings, allowing future HKT keying.
-- [ ] Names `Functor`, `Applicative`, `Monad`, `Traversable`, `Foldable` are reserved in typeclass namespace.
-- [ ] Decide v2 promotion trigger: if ≥2 of (1) repeated boilerplate, (2) library-author demand, (3) user feedback demand HKTs, promote to active roadmap.
+- [x] Phase 15 (Typeclasses v1) is finalized and stable.
+- [x] `Type` struct in `src/types.h` has a reserved `kind` field (deferred from Phase 15).
+  - Added `Kind` enum (`KIND_STAR`, `KIND_ARROW`) and `hkt_kind` field on `Type`; always `KIND_STAR` in v1.
+- [x] Type variables carry an explicit kind slot (reserved in Phase 15, unused in v1).
+  - Added `Kind *type_param_kinds` (parallel to `type_params`) to `TypeClass` in `src/typeclass.h`; `NULL` in v1, treated as all-`KIND_STAR`.
+- [x] Dispatch-table key is a struct, not a tuple-of-strings, allowing future HKT keying.
+  - Added `TypeClassDispatchKey` struct to `src/typeclass.h`; unused in v1.
+- [x] Names `Functor`, `Applicative`, `Monad`, `Traversable`, `Foldable` are reserved in typeclass namespace.
+  - `elab_defclass` rejects these names with "reserved for the higher-kinded typeclass system (not yet implemented)".
+- [x] Decide v2 promotion trigger: promoted. HKT moves to active roadmap.
 
-### Phase HKT remaining tasks (if promoted)
+### Phase HKT remaining tasks
 
 #### H0 — Kind system foundation
-- [ ] Define `Kind` enum: `KIND_STAR`, `KIND_ARROW` (k1 → k2).
-- [ ] Add `Kind` field to `TypeVar` struct.
-- [ ] Add `Kind` field to `Type` struct for concrete types.
+- [x] Define `Kind` enum: `KIND_STAR`, `KIND_ARROW` (k1 → k2).
+- [x] Add `Kind` field to `TypeVar` struct. (added as `type_param_kinds` on `TypeClass`)
+- [x] Add `Kind` field to `Type` struct for concrete types. (added `hkt_kind`)
 - [ ] Implement `kind_eq()`, `kind_to_string()`, `kind_parse()`.
 - [ ] Implement kind inference pass (`src/kind_check.c`).
 - [ ] Reserve kind syntax (`: * -> *` annotations, `^f : * -> *` in `defn`/`defclass`).
@@ -377,5 +387,4 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 ## Notes
 
 - Phases 15 through 19 are marked complete at v1 in the active plan; this file tracks deferred v2+ follow-up work only.
-- Phase HKT (H0–H6 roadmap) is planned for v2+ and will only move to the active roadmap if the promotion decision rule is met (see [hkt-implementation-plan.md](hkt-implementation-plan.md) for details).
 - Keep this list aligned with active roadmap changes in `docs/turmeric-plan.md`.

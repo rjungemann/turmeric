@@ -833,6 +833,16 @@ static void emit_set_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
     free(bn); free(v);
 }
 
+/* Phase 12: emit (set! (@ r) value) - mutation through mutable borrow */
+static void emit_set_deref_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
+    char *ref = emit_value(ctx, body, e->as.set_deref_.ref);
+    char *val = emit_value(ctx, body, e->as.set_deref_.value);
+    const char *inner_type_c = type_c_name(e->as.set_deref_.value->type);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "*((%s *)%s) = %s;\n", inner_type_c, ref, val);
+    free(ref); free(val);
+}
+
 /* ------------ entry points ------------ */
 
 static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
@@ -849,6 +859,7 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_BUILTIN:  return emit_builtin(ctx, body, e);
         case EX_WHILE:    emit_while_stmt(ctx, body, e); return atom_nil();
         case EX_SET:      emit_set_stmt(ctx, body, e);   return atom_nil();
+        case EX_SET_DEREF: emit_set_deref_stmt(ctx, body, e); return atom_nil();
         case EX_DEF:      /* handled at top level — shouldn't appear nested. */
         case EX_PROGRAM:
         case EX_TYPECLASS_DEF:
@@ -1000,6 +1011,8 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* Emit handler setup with setjmp */
             indent_buf(body, ctx->indent);
             buf_printf(body, "ExceptionHandler %s;\n", handler_var);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s.caught = NULL;\n", handler_var);
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s.parent = global_handler_chain;\n", handler_var);
             indent_buf(body, ctx->indent);
@@ -1323,7 +1336,7 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             return tmp;
         }
         case EX_DEREF: {
-            /* (@ expr) - dereference ref<T> or ptr<T> */
+            /* (@ expr) - dereference ref<T>, rc<T>, ptr<T>, &T, or &mut T */
             char *inner = emit_value(ctx, body, e->as.deref_.expr);
             
             /* For ref<T>, we need to cast and dereference */
@@ -1335,6 +1348,16 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                            inner_type_c, tmp, inner_type_c, inner);
                 free(inner);
                 free(inner_type_c);
+                return tmp;
+            } else if (e->as.deref_.expr->type.kind == TY_REF_IMMUT
+                       || e->as.deref_.expr->type.kind == TY_REF_MUT) {
+                /* Phase 12: &T / &mut T dereference: *((T *)ptr) */
+                const char *inner_type_c = type_c_name(e->type);
+                char *tmp = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s %s = *((%s *)%s);\n",
+                           inner_type_c, tmp, inner_type_c, inner);
+                free(inner);
                 return tmp;
             } else {
                 /* For ptr<T>, just cast to the appropriate type and dereference */
@@ -1553,24 +1576,50 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         /* Phase 12: Borrow traits */
         case EX_BORROW_IMMUT: {
-            /* (& expr) - immutable borrow: emit as &expr */
+            /* (& expr) - immutable borrow */
+            Type inner_type = e->as.borrow_immut_.expr->type;
             char *inner = emit_value(ctx, body, e->as.borrow_immut_.expr);
-            /* For borrow, we return a pointer expression */
-            char *result = (char *)malloc(strlen(inner) + 10);
-            if (!result) { fprintf(stderr, "tur: oom\n"); abort(); }
-            snprintf(result, strlen(inner) + 10, "&%s", inner);
-            free(inner);
-            return result;
+            if (inner_type.kind == TY_REF_IMMUT || inner_type.kind == TY_REF_MUT) {
+                /* Reborrow: the pointer value IS the borrow — return as-is */
+                return inner;
+            } else if (inner_type.kind == TY_REF) {
+                /* Borrow from ref<T>: ref<T> is a void* pointing to T */
+                char *result = (char *)malloc(strlen(inner) + 24);
+                if (!result) { fprintf(stderr, "tur: oom\n"); abort(); }
+                snprintf(result, strlen(inner) + 24, "((const void *)%s)", inner);
+                free(inner);
+                return result;
+            } else {
+                /* Plain value borrow: take address */
+                char *result = (char *)malloc(strlen(inner) + 10);
+                if (!result) { fprintf(stderr, "tur: oom\n"); abort(); }
+                snprintf(result, strlen(inner) + 10, "&%s", inner);
+                free(inner);
+                return result;
+            }
         }
         case EX_BORROW_MUT: {
-            /* (&mut expr) - mutable borrow: emit as &expr */
+            /* (&mut expr) - mutable borrow */
+            Type inner_type = e->as.borrow_mut_.expr->type;
             char *inner = emit_value(ctx, body, e->as.borrow_mut_.expr);
-            /* For mutable borrow, we return a pointer expression */
-            char *result = (char *)malloc(strlen(inner) + 10);
-            if (!result) { fprintf(stderr, "tur: oom\n"); abort(); }
-            snprintf(result, strlen(inner) + 10, "&%s", inner);
-            free(inner);
-            return result;
+            if (inner_type.kind == TY_REF_MUT) {
+                /* Mutable reborrow: return pointer directly */
+                return inner;
+            } else if (inner_type.kind == TY_REF) {
+                /* Borrow from ref<T>: ref<T> is a void* pointing to T */
+                char *result = (char *)malloc(strlen(inner) + 20);
+                if (!result) { fprintf(stderr, "tur: oom\n"); abort(); }
+                snprintf(result, strlen(inner) + 20, "((void *)%s)", inner);
+                free(inner);
+                return result;
+            } else {
+                /* Plain value mutable borrow: take address */
+                char *result = (char *)malloc(strlen(inner) + 10);
+                if (!result) { fprintf(stderr, "tur: oom\n"); abort(); }
+                snprintf(result, strlen(inner) + 10, "&%s", inner);
+                free(inner);
+                return result;
+            }
         }
         /* Phase 19: Algebraic effects */
         case EX_DEFECT:
@@ -1660,7 +1709,8 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* No side effects — emit nothing. */
             return;
         case EX_WHILE: emit_while_stmt(ctx, body, e); return;
-        case EX_SET:   emit_set_stmt(ctx, body, e);   return;
+        case EX_SET:      emit_set_stmt(ctx, body, e);       return;
+        case EX_SET_DEREF: emit_set_deref_stmt(ctx, body, e); return;
         case EX_DO: {
             /* v1 lowering: use same frame-based approach as emit_do_value */
             uint32_t n = e->as.do_.n;
@@ -2480,14 +2530,18 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "void tur_exception_free(tur_exception *exn) {\n");
     buf_puts(out, "    if (!exn) return;\n");
     buf_puts(out, "    if (exn->cause) { tur_exception_free(exn->cause); }\n");
-    buf_puts(out, "    free(exn->payload);\n");
+    buf_puts(out, "    /* Only free heap-allocated payloads (int=3, bool=2). */\n");
+    buf_puts(out, "    /* cstr/ptr payloads point to literals or external memory, not owned. */\n");
+    buf_puts(out, "    if (exn->payload_type == 3 || exn->payload_type == 2) {\n");
+    buf_puts(out, "        free(exn->payload);\n");
+    buf_puts(out, "    }\n");
     buf_puts(out, "    free(exn);\n");
     buf_puts(out, "}\n\n");
     
     buf_puts(out, "bool tur_exception_matches(tur_exception *exn, int expected_type) {\n");
     buf_puts(out, "    if (!exn) return false;\n");
     buf_puts(out, "    if (exn->payload_type == expected_type) return true;\n");
-    buf_puts(out, "    if (expected_type == 0) return true;  /* TY_UNKNOWN = 0 = catch-all */\n");
+    buf_puts(out, "    if (expected_type == 1) return true;  /* TY_NIL = 1 = catch-all */\n");
     buf_puts(out, "    return false;\n");
     buf_puts(out, "}\n\n");
     
@@ -2507,6 +2561,7 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "        h->active = 0;\n");
     buf_puts(out, "        longjmp(h->jmp_buf, 1);\n");
     buf_puts(out, "    } else {\n");
+    buf_puts(out, "        fprintf(stderr, \"Uncaught exception thrown at %s:%d\\n\", file ? file : \"<unknown>\", line);\n");
     buf_puts(out, "        tur_exception_free(exn);\n");
     buf_puts(out, "        abort();\n");
     buf_puts(out, "    }\n");
