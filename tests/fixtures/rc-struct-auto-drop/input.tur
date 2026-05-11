@@ -1,0 +1,9 @@
+;; auto-drop of RC<struct> with cleanup
+(defstruct Wrapper :move [val :rc<int>])
+
+(defn main [] :int
+  (let [inner (rc/of 10)]
+    (println (rc/strong-count inner))
+    (let [w (rc/of (make-struct Wrapper inner))]
+      (println (rc/strong-count w))
+      0)))

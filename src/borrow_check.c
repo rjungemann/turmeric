@@ -286,7 +286,8 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
             
         case EX_EXTERN_C:
         case EX_INLINE_C:
-            /* External and inline C are trusted */
+        case EX_MAKE_STRUCT:
+            /* External/inline C and struct literals are trusted */
             return true;
             
         case EX_PROGRAM:

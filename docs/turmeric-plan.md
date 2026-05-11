@@ -417,6 +417,298 @@
 
 ---
 
+## Hybrid Result + Limited Panic (Phases R0–R6)
+
+**Status:** Planned. Prerequisites: Phase 15 (Typeclasses v1 — for `Display`/`Debug` traits), Phase 17 (Exceptions — `setjmp`/`longjmp` substrate for `catch_unwind`). See [panic-system-vs-exception-system-plan.md](./panic-system-vs-exception-system-plan.md) for full rationale and open-question answers.
+
+**Summary of resolved design decisions:**
+- Panic payloads are **typed** (not erased `Any`); catching specific panic types is supported via typed `catch_unwind`.
+- The keyword is **`panic`** (not `throw`); `throw` is not provided as an alias.
+- A `Must<T>` type (`.must()` / `(must! expr)`) panics on `None`/`Err` automatically.
+- Panic/async and panic-in-Drop semantics follow Rust prior art (double-panic → abort; async boundary = `catch_unwind` boundary).
+
+| Phase | Goal | Exit Criterion |
+|---|---|---|
+| **R0** | Design & prerequisites | Surface syntax finalised; `Result<T,E>` distinguished from existing `result`; panic payload schema agreed |
+| **R1** | Core `Result<T, E>` type | `Ok`/`Err`, combinators, `?` operator, `Display`/`Debug` traits all working |
+| **R2** | Panic mechanism | `panic!` macro, typed payloads, `catch_unwind`, specific-type catching, defer/drop ordering |
+| **R3** | Standard library errors | `IoError`, `ParseError`, `From`/`Into` conversions, `Error` trait hierarchy |
+| **R4** | `Must<T>` type | `(must! expr)` / `.must()` sugar; panics on `None` or `Err`; stdlib integration |
+| **R5** | Interop & FFI | FFI-safe panic handling (abort vs. unwind choice); WASM representation; C exception bridge |
+| **R6** | Async/effects & tooling | Panic + continuations/effects semantics; compiler warnings for unhandled `Result`; linter; stack-trace debug support |
+
+---
+
+### Phase R0 — Design & Prerequisites
+
+**Goal:** Finalise all design decisions before any implementation lands, so phases R1–R6 can proceed without back-tracking.
+
+**Design decisions to lock**
+- [ ] Confirm `Result<T, E>` surface syntax: `(result T E)` type constructor, `(ok v)` / `(err e)` constructors, consistent with existing `stdlib/result.tur`. Determine whether stdlib `result.tur` already covers the required shape or needs to be replaced/extended.
+- [ ] Specify panic payload schema: payloads are typed values (any Turmeric type); `catch_unwind` receives the payload as a typed `Result<T, PanicPayload>` where `PanicPayload` carries the runtime type tag and value.
+- [ ] Specify `catch_unwind` surface syntax: `(catch-unwind thunk)` → `Result<T, PanicPayload>`. Decide whether it integrates with `try`/`catch` or stands alone.
+- [ ] Specify typed `catch_panic` for specific panic types: `(catch-panic-of SomeType thunk)` → `Result<T, SomeType>`. Define what happens when payload type doesn't match (re-panics).
+- [ ] Decide panic keyword: **`panic`** confirmed; no `throw` alias.
+- [ ] Survey Rust `catch_unwind` + async for panic/async interaction model; document the ruling in `panic-system-vs-exception-system-plan.md`.
+- [ ] Survey Rust double-panic behavior (abort) for panic-in-Drop; document the ruling.
+- [ ] Define `Must<T>` semantics: wraps `option<T>` or `result<T, E>`; `.must()` method panics with a descriptive message on `none` or `err`; `(must! expr)` macro is sugar.
+- [ ] Define standard `Error` trait (extends `Show`): `(defclass Error [e] (error-message [x : e] : cstr) (error-cause [x : e] : (option cstr)))`.
+- [ ] Define `From`/`Into` conversion traits for error chaining.
+- [ ] Confirm `?` operator surface syntax for `Result` propagation: `(? expr)` or postfix `.?` — pick one, reserve the other.
+
+**Prerequisites check**
+- [ ] Phase 15 typeclasses are stable (needed for `Display`, `Debug`, `Error` traits).
+- [ ] Phase 17 exceptions are stable (`setjmp`/`longjmp` chain is the substrate for `catch_unwind`).
+- [ ] `stdlib/result.tur` reviewed and gap-analysed against R1 requirements.
+
+**Exit criterion:** All design bullets above are checked and recorded; no open ambiguities remain before R1 implementation starts.
+
+---
+
+### Phase R1 — Core `Result<T, E>` Type
+
+**Goal:** Ship a fully-featured `Result<T, E>` type with ergonomic combinators and `?`-operator propagation. This is the primary mechanism for recoverable errors.
+
+**Type system** — `src/types.{c,h}`
+- [ ] Ensure `result<T, E>` is a first-class generic type in the elaborator (may already be true via `stdlib/result.tur`; verify).
+- [ ] Add typeclass instances for `Eq`, `Show`/`Display` on `result<T, E>` when `T` and `E` implement them.
+- [ ] Ensure `result<T, E>` participates in typeclass constraint solving (e.g., `^Show` on a `result` value).
+
+**Surface syntax** — `src/reader.{c,h}` + `src/elab.{c,h}`
+- [ ] `(ok value)` — construct `Ok` variant.
+- [ ] `(err error)` — construct `Err` variant.
+- [ ] `(ok? r)` — predicate: true if `Ok`.
+- [ ] `(err? r)` — predicate: true if `Err`.
+- [ ] `(ok-val r)` — extract value; panics if `Err` (sugar for `.must()`).
+- [ ] `(err-val r)` — extract error; panics if `Ok`.
+- [ ] `(? expr)` operator: if `expr` is `Ok(v)`, evaluates to `v`; if `Err(e)`, short-circuits returning `Err(e)` from the enclosing function. Compile error if used outside a function returning `Result`.
+- [ ] `(result-map r f)` — map over `Ok` value.
+- [ ] `(result-flat-map r f)` / `(result-and-then r f)` — monadic bind.
+- [ ] `(result-map-err r f)` — map over `Err` value.
+- [ ] `(result-or r default)` — return `Ok` value or `default` on `Err`.
+- [ ] `(result-or-else r f)` — return `Ok` value or call `f` with `Err` value.
+- [ ] `(result-unwrap-or r default)` — alias for `result-or`.
+- [ ] `(result-expect r msg)` — return `Ok` value or panic with `msg`.
+
+**Standard `Error` trait** — `stdlib/typeclass.tur` + `stdlib/exn.tur`
+- [ ] `(defclass Error [e] (error-message [x : e] : cstr) (error-cause [x : e] : (option cstr)))`.
+- [ ] `(definstance Error Error ...)` for the existing stdlib `Error` struct.
+- [ ] `(definstance Error IoError ...)` and `(definstance Error ParseError ...)`.
+- [ ] `(defclass Display [a] (display [x : a] : cstr))` — if not already defined via `Show`.
+- [ ] `(defclass Debug [a] (debug [x : a] : cstr))` — machine-readable representation.
+
+**`From`/`Into` conversion traits** — `stdlib/typeclass.tur`
+- [ ] `(defclass From [a b] (from [x : b] : a))` — convert `b` into `a`.
+- [ ] `(defclass Into [a b] (into [x : a] : b))` — derived automatically from `From`.
+- [ ] Blanket instance: if `(From A B)` exists, then `(Into B A)` is automatically derived.
+- [ ] Error conversion: `(From IoError Error)` etc. for stdlib error types.
+- [ ] `?` operator uses `From` to convert error type when propagating across function boundaries.
+
+**Stdlib** — `stdlib/result.tur`
+- [ ] Ensure all above combinators are implemented and tested.
+- [ ] Add `(result-collect vec-of-results)` — collect `(vec (result T E))` into `(result (vec T) E)` (short-circuits on first `Err`).
+- [ ] Add `(result-partition results)` — split `(vec (result T E))` into `(vec T, vec E)`.
+
+**Fixtures** — `tests/fixtures/result/`
+- [ ] `result-basic.tur` — `ok`/`err` construction and pattern matching.
+- [ ] `result-combinators.tur` — `map`, `flat-map`, `map-err`, `or`, `or-else`.
+- [ ] `result-question-op.tur` — `?` operator propagation.
+- [ ] `result-display.tur` — `Show`/`Display` instances.
+- [ ] `result-from-into.tur` — `From`/`Into` conversion and `?` cross-type propagation.
+- [ ] `result-collect.tur` — collect and partition.
+- [ ] Negative: `result-question-outside-fn.tur` — `?` outside `Result`-returning function is a compile error.
+- [ ] Codegen snapshots: `ok`/`err` lower to tagged union; `?` lowers to early return.
+
+**Exit criterion:** `Result<T, E>` is the idiomatic recoverable-error type; combinators cover common patterns; `?` operator propagates errors ergonomically; `Error` trait and `From`/`Into` chain allow library-defined error types.
+
+---
+
+### Phase R2 — Panic Mechanism
+
+**Goal:** Implement `panic!` with typed payloads, `catch_unwind` for boundary recovery, and support for catching specific panic types. Defer/drop ordering follows Rust semantics.
+
+**Surface syntax**
+- [ ] `(panic msg)` — panic with a string message; payload is a `cstr`.
+- [ ] `(panic-with payload)` — panic with a typed payload value (any Turmeric type).
+- [ ] `(catch-unwind thunk)` → `result<T, panic-payload>` — recover from any panic at a boundary. `panic-payload` carries the runtime type tag and boxed value.
+- [ ] `(catch-panic-of PanicType thunk)` → `result<T, PanicType>` — recover from panics whose payload matches `PanicType`; re-panics with the original payload if the type doesn't match.
+- [ ] `(panic-payload-type p)` — inspect the runtime type tag of a `panic-payload`.
+- [ ] `(panic-payload-downcast p PanicType)` → `option<PanicType>` — attempt typed extraction.
+
+**Runtime** — `src/runtime.{c,h}` + `src/exn.{c,h}`
+- [ ] `tur_panic(const char* msg)` — panic with string; wraps in `tur_exception` with `PANIC_KIND_MSG` tag and calls `tur_throw`.
+- [ ] `tur_panic_with(TypeKind type, void* payload)` — panic with typed payload.
+- [ ] `tur_catch_unwind(tur_thunk_fn thunk, void* env, tur_result_t* out)` — setjmp boundary; calls thunk; if panic occurs, catches it and writes `Err(panic_payload)` to `out`.
+- [ ] `tur_catch_panic_of(TypeKind expected_type, tur_thunk_fn thunk, void* env, tur_result_t* out)` — like `catch_unwind` but re-panics if payload type doesn't match `expected_type`.
+- [ ] `panic-payload` struct: `{ TypeKind type_tag; void* value; const char* file; int line; }`.
+- [ ] Double-panic behavior: if a panic occurs while unwinding from another panic (i.e., a panic fires inside a `defer` block that was triggered by a panic), call `abort()` immediately. (Prior art: Rust.)
+- [ ] Panic in effect handler continuation: if `resume` is called inside a `catch_unwind` boundary, panics propagate out of the `reset` block and are caught by the nearest `catch_unwind`. Document the interaction.
+
+**Elaborator / codegen** — `src/elab.{c,h}` + `src/emit.{c,h}`
+- [ ] `(panic msg)` lowers to: `tur_panic(msg)` — never returns (mark as diverging type `!`).
+- [ ] `(panic-with payload)` lowers to: box payload, call `tur_panic_with(type_tag, boxed)`.
+- [ ] `(catch-unwind thunk)` lowers to: allocate `tur_result_t`, call `tur_catch_unwind`, return result.
+- [ ] `(catch-panic-of T thunk)` lowers to: call `tur_catch_panic_of` with type tag for `T`.
+- [ ] Diverging type `!` (never type): `panic` has return type `!`; `!` is a subtype of everything so it can appear in any branch of `if`/`match`.
+
+**Interaction with defer and ref**
+- [ ] Panics trigger the same defer/unwind chain as exceptions (Phase 17's `tur_throw` mechanism).
+- [ ] `ref<T>` and `rc<T>` drops fire during panic unwinding (already true via defer chain; verify end-to-end).
+- [ ] Document: panics do **not** fire defers in `catch_unwind`-captured continuations unless explicitly resumed.
+
+**Fixtures** — `tests/fixtures/panic/`
+- [ ] `panic-basic.tur` — `(panic "msg")` unwinds and prints error.
+- [ ] `panic-with-typed.tur` — `(panic-with payload)` with a user-defined struct payload.
+- [ ] `panic-catch-unwind.tur` — `catch_unwind` catches a panic; `Ok` on success, `Err(payload)` on panic.
+- [ ] `panic-catch-of-type.tur` — `catch-panic-of` catches matching type; re-panics on mismatch.
+- [ ] `panic-downcast.tur` — `panic-payload-downcast` extracts payload.
+- [ ] `panic-defer.tur` — defers fire during panic unwinding.
+- [ ] `panic-ref.tur` — `ref<T>` drops fire during panic unwinding.
+- [ ] `panic-double-panic.tur` — panic in defer during panic unwind calls `abort()`.
+- [ ] Negative: `panic-in-pure-context.tur` — linter warns when `panic` is called in a pure/effect-annotated function (deferred to R6 linter phase).
+- [ ] Codegen snapshots: `panic` lowers to `tur_panic`; `catch_unwind` lowers to `setjmp`-based boundary.
+
+**Exit criterion:** `panic!` with typed payloads works; `catch_unwind` and `catch-panic-of` work at boundaries; defer/ref drops fire correctly during panic unwinding; double-panic aborts.
+
+---
+
+### Phase R3 — Standard Library Errors
+
+**Goal:** Provide a rich, composable set of stdlib error types and the `From`/`Into` chain that lets library code convert between them ergonomically.
+
+**Stdlib error types** — `stdlib/exn.tur`
+- [ ] `(defstruct Error [message : cstr, cause : (option cstr)])` — base error type (may already exist; verify and extend if needed).
+- [ ] `(defstruct IoError [message : cstr, errno : int, path : (option cstr)])` — I/O errors with optional path context.
+- [ ] `(defstruct ParseError [message : cstr, line : int, col : int, file : cstr])` — parsing errors with source location.
+- [ ] `(defstruct ValidationError [message : cstr, field : (option cstr)])` — input validation errors.
+- [ ] `(defstruct NotFoundError [what : cstr])` — generic not-found error.
+- [ ] `(defstruct PermissionError [message : cstr, path : (option cstr)])` — permission denied.
+
+**Error trait instances** — `stdlib/exn.tur`
+- [ ] `(definstance Error Error ...)` — `error-message` returns `message`; `error-cause` returns `cause`.
+- [ ] `(definstance Error IoError ...)`, `ParseError`, `ValidationError`, `NotFoundError`, `PermissionError`.
+- [ ] `(definstance Show Error ...)` etc. for all error types.
+
+**`From`/`Into` conversions** — `stdlib/exn.tur`
+- [ ] `(definstance From IoError Error ...)` — upcast `IoError` to base `Error`.
+- [ ] `(definstance From ParseError Error ...)` — upcast.
+- [ ] `(definstance From ValidationError Error ...)` — upcast.
+- [ ] Define pattern for library authors: how to add their own `From` instances without orphan conflicts.
+
+**Convenience helpers** — `stdlib/exn.tur`
+- [ ] `(defn io-error [msg errno])` — construct `IoError`.
+- [ ] `(defn parse-error [msg line col file])` — construct `ParseError`.
+- [ ] `(defn ok-or [value error-fn])` — convert `option<T>` to `result<T, E>` with a lazily-evaluated error.
+- [ ] `(defn err-context [result context-msg])` — wrap the error in additional context string (like Rust's `context()` from `anyhow`).
+
+**Fixtures** — `tests/fixtures/result-errors/`
+- [ ] `error-types-basic.tur` — construct each stdlib error type and display it.
+- [ ] `error-from-into.tur` — `From`/`Into` conversions between error types.
+- [ ] `error-context.tur` — `err-context` adds context to an error.
+- [ ] `error-ok-or.tur` — `option` to `result` conversion.
+- [ ] Codegen snapshots: error struct layouts, trait dispatch.
+
+**Exit criterion:** stdlib error types cover common cases; `From`/`Into` chain allows ergonomic error propagation without manual wrapping; `?` operator uses `From` automatically.
+
+---
+
+### Phase R4 — `Must<T>` Type
+
+**Goal:** Provide a `Must<T>` abstraction (analogous to Rust's `.unwrap()`) that panics on `None` or `Err` with a descriptive message. Keeps happy-path code clean without hiding errors.
+
+**Design**
+- [ ] `Must<T>` is not a separate struct — it is a set of methods/macros on `option<T>` and `result<T, E>`.
+- [ ] `(must! expr)` macro: if `expr` is `(some v)` or `(ok v)`, evaluates to `v`; otherwise panics with `"must! failed: got none"` or `"must! failed: got err: <display>"`.
+- [ ] `(must-msg! expr msg)` macro: same but panics with `msg` instead of default message.
+- [ ] `(defn option-must [opt])` — method form of `(must! ...)` for `option<T>`.
+- [ ] `(defn result-must [res])` — method form for `result<T, E>`.
+- [ ] `(defn result-must-msg [res msg])` — with custom panic message.
+- [ ] `(defn option-expect [opt msg])` — alias matching Rust naming.
+- [ ] `(defn result-expect [res msg])` — alias matching Rust naming.
+
+**Linter integration (deferred to R6)**
+- [ ] Emit a lint warning when `must!` appears in library code (i.e., not in `main` or test fixtures) — the same "panics should be rare" rule.
+
+**Fixtures** — `tests/fixtures/must/`
+- [ ] `must-option-some.tur` — `(must! (some 42))` returns `42`.
+- [ ] `must-option-none.tur` — `(must! none)` panics with descriptive message.
+- [ ] `must-result-ok.tur` — `(must! (ok 42))` returns `42`.
+- [ ] `must-result-err.tur` — `(must! (err (Error. "oops" none)))` panics and displays the error.
+- [ ] `must-msg.tur` — custom panic message via `must-msg!`.
+- [ ] `must-expect.tur` — `option-expect` and `result-expect` aliases.
+- [ ] Codegen snapshots: `must!` lowers to inline branch + `tur_panic`.
+
+**Exit criterion:** `must!` and `must-msg!` work on both `option<T>` and `result<T, E>`; panics display useful messages; `expect` aliases work.
+
+---
+
+### Phase R5 — Interop & FFI
+
+**Goal:** Make panics and `Result` safe across FFI and WASM boundaries.
+
+**FFI-safe panic handling** — `src/runtime.{c,h}`
+- [ ] Define `TUR_PANIC_STRATEGY` compile-time flag: `UNWIND` (default, setjmp-based) or `ABORT` (call `abort()` immediately on panic — safe for FFI boundaries).
+- [ ] `tur_panic_abort(const char* msg)` — panic that always aborts; used at `extern-c` call sites when `ABORT` strategy is chosen.
+- [ ] Add `#[no-unwind]` attribute for `defn` declarations: marks functions that must not allow panics to escape (panic inside is converted to abort). Useful for callbacks registered with C libraries.
+- [ ] Document FFI rule: panics must not cross `extern-c` boundaries; use `catch-unwind` at the boundary or mark with `#[no-unwind]`.
+
+**WASM representation**
+- [ ] Decide WASM panic representation: `unreachable` instruction (abort semantics) or custom `__tur_panic` import from host (recoverable in JS). Document the decision.
+- [ ] Implement chosen WASM panic lowering in `src/emit.{c,h}`.
+- [ ] Ensure `catch_unwind` at WASM module boundary converts panics to `Result` before returning to host.
+
+**Exception translation layer**
+- [ ] `(result->exception res)` — if `Err(e)`, throw as exception; if `Ok(v)`, return `v`. Bridge for code that expects exceptions.
+- [ ] `(exception->result thunk)` — run `thunk` catching exceptions; return `Ok(v)` or `Err(exception)`. Converts exception-style code to `Result`-style.
+
+**Fixtures** — `tests/fixtures/panic-ffi/`
+- [ ] `panic-ffi-boundary.tur` — `catch-unwind` wraps an FFI call boundary; verifies panic doesn't leak into C.
+- [ ] `panic-no-unwind.tur` — `#[no-unwind]` function panics → `abort()`.
+- [ ] `result-exception-bridge.tur` — `result->exception` and `exception->result` round-trip.
+
+**Exit criterion:** Panics do not cross FFI boundaries without explicit wrapping; WASM panic strategy is defined and implemented; exception/result bridge works.
+
+---
+
+### Phase R6 — Async/Effects Integration & Tooling
+
+**Goal:** Define panic semantics inside continuations and effects; add compiler warnings, linter rules, and debugging support.
+
+**Panic + continuations/effects semantics**
+- [ ] Define: panicking inside `(catch-unwind ...)` that spans a `reset` boundary is well-defined — the panic exits the `reset` block and is caught by `catch_unwind`.
+- [ ] Define: panicking inside a `handle` case (after `resume`) propagates to the nearest enclosing `catch_unwind`. Document in `panic-system-vs-exception-system-plan.md`.
+- [ ] Define: panicking inside an async task (if async is implemented in the future) follows Rust's model — the task's future resolves to `Err(PanicPayload)` at the join point.
+- [ ] Implement `(catch-unwind-cont ...)` variant if needed for continuation-aware boundaries (defer to async phase if not needed sooner).
+- [ ] Write and publish `docs/error-handling-guide.md` covering `Result`, `panic`, `must!`, `catch_unwind`, and when to use each.
+
+**Compiler warnings for unhandled `Result`**
+- [ ] Add elaborator pass: if a `result<T, E>` expression value is silently discarded (not bound, not pattern-matched, not passed), emit a warning: `"warning: unused Result value; consider using `?`, `must!`, or explicit match"`.
+- [ ] Warning is suppressible with `(ignore! expr)` helper that explicitly discards the value.
+- [ ] Configuration: `--warn-unused-result` (default on) / `--no-warn-unused-result`.
+
+**Linter rules for panic usage**
+- [ ] Add lint: `panic` calls in functions whose name does not contain `test` and is not `main` emit a note: `"note: consider returning Result instead of panicking"`.
+- [ ] Add lint: `must!` in non-test, non-main code emits same note.
+- [ ] Lint is opt-in via `--lint-panic` flag (not a hard error).
+- [ ] Add lint: `catch_unwind` used for normal error handling (i.e., inside a function that already returns `Result`) emits warning: `"catch_unwind is for boundary recovery, not normal error handling; consider propagating Result instead"`.
+
+**Debugging support**
+- [ ] `tur_panic` prints: `"panic at <file>:<line>: <message>"` to stderr before unwinding.
+- [ ] `tur_catch_unwind` captures the panic location in `panic_payload.file` / `.line`.
+- [ ] `--panic-trace` debug flag: prints full scope chain when a panic fires (like Rust's `RUST_BACKTRACE=1`).
+- [ ] `--panic-abort` flag: all panics call `abort()` instead of unwinding (useful for crash debugging with a core dump).
+- [ ] Ensure panic messages from `must!` include the failing expression text (use `__FILE__`/`__LINE__` macros in C lowering).
+
+**Fixtures** — `tests/fixtures/panic-tooling/`
+- [ ] `warn-unused-result.tur` — unused `Result` triggers compiler warning.
+- [ ] `warn-suppress-ignore.tur` — `(ignore! expr)` suppresses the warning.
+- [ ] `panic-trace.tur` — `--panic-trace` output includes file/line in golden output.
+- [ ] Codegen snapshots: panic lowering includes file/line injection.
+
+**Exit criterion:** Compiler warns on discarded `Result`; linter flags excessive `panic` usage; `--panic-trace` provides actionable debug output; error handling guide documents the full model.
+
+---
+
 ## 11. Writing the compiler in C — concrete shape
 
 Since the host *is* C, lock these conventions early so the codebase stays legible:

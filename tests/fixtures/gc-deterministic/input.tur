@@ -1,0 +1,16 @@
+; gc-deterministic: predictable collection — multiple zombies collected at once.
+; Both a and b become zombies; a single gc! collects both.
+; Subsequent upgrade calls return NULL for both (strong_count = 0).
+(defn main [] :int
+  (gc-enable!)
+  (let [a (rc/of 1)
+        b (rc/of 2)]
+    (let [wa (weak a)
+          wb (weak b)]
+      (rc/drop a)
+      (rc/drop b)
+      (gc!)
+      (let [ua (upgrade wa)
+            ub (upgrade wb)]
+        (println (+ (rc/strong-count ua) (rc/strong-count ub))))))
+  0)

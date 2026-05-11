@@ -423,6 +423,7 @@ static Expr *lower_expr(Arena *a, SymbolTable *st, Expr *e, EffectEnv *effect_en
         case EX_INSTANCE_DEF:
         case EX_EXTERN_C:
         case EX_INLINE_C:
+        case EX_MAKE_STRUCT:
             return e;
         
         /* Phase 18: Delimited continuations */

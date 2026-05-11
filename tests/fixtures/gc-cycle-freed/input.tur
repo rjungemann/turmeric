@@ -1,0 +1,12 @@
+; gc-cycle-freed: a zombie (strong=0, weak>0) is freed by explicit gc/collect.
+; After rc/drop, r's strong_count reaches 0 while weak_count=1 (zombie state).
+; gc! should free the zombie value; upgrade then returns NULL (strong_count=0).
+(defn main [] :int
+  (gc-enable!)
+  (let [r (rc/of 99)]
+    (let [w (weak r)]
+      (rc/drop r)
+      (gc!)
+      (let [u (upgrade w)]
+        (println (rc/strong-count u)))))
+  0)

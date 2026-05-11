@@ -272,6 +272,11 @@ static Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_pa
             case EX_REF_PRED:
                 stack[sp++] = cur->as.ref_pred_.expr;
                 break;
+            case EX_MAKE_STRUCT:
+                for (uint32_t i = cur->as.make_struct_.n_fields; i > 0; i--) {
+                    stack[sp++] = cur->as.make_struct_.field_values[i-1];
+                }
+                break;
             default:
                 break;
         }
@@ -362,6 +367,7 @@ typedef struct Elab {
     const Symbol *sym_thread_last; /* ->> threading macro */
     /* Phase 11: defstruct */
     const Symbol *sym_defstruct;   /* defstruct */
+    const Symbol *sym_make_struct; /* make-struct */
     const Symbol *kw_copy;        /* :copy keyword for defstruct */
     const Symbol *kw_move;        /* :move keyword for defstruct */
     /* Phase 12: Borrow traits */
@@ -380,6 +386,10 @@ typedef struct Elab {
     uint32_t cap_macros;
     /* Phase 19: Algebraic effects */
     EffectEnv *effect_env;  /* Global effect registry */
+    /* Phase 11: Struct registry - maps struct names to StructDef */
+    StructDef **struct_defs;
+    uint32_t n_struct_defs;
+    uint32_t cap_struct_defs;
 } Elab;
 
 /* Phase 6: Macro definition */
@@ -582,6 +592,11 @@ static bool is_rc_binding_consumed(const Expr *body, Binding *binding) {
             case EX_SET:
                 stack[sp++] = cur->as.set_.value;
                 break;
+            case EX_MAKE_STRUCT:
+                for (uint32_t i = cur->as.make_struct_.n_fields; i > 0; i--) {
+                    stack[sp++] = cur->as.make_struct_.field_values[i-1];
+                }
+                break;
             default:
                 break;
         }
@@ -672,8 +687,13 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->next_gensym_id = 0;  /* Phase 6 */
     /* Phase 11: defstruct */
     e->sym_defstruct = intern_cstr(st, "defstruct");
+    e->sym_make_struct = intern_cstr(st, "make-struct");
     e->kw_copy = intern_cstr(st, "copy");
     e->kw_move = intern_cstr(st, "move");
+    /* Phase 11: struct registry */
+    e->struct_defs = NULL;
+    e->n_struct_defs = 0;
+    e->cap_struct_defs = 0;
     /* Phase 12: Borrow traits */
     e->sym_borrow = intern_cstr(st, "&");
     e->sym_borrow_mut = intern_cstr(st, "&mut");
@@ -953,6 +973,7 @@ static Expr *elab_let(Elab *e, const Form *call) {
 
     /* Parse bindings: walk left-to-right, optional ^mut prefix per entry. */
     LetBinding *binds = NULL;
+    bool       *binding_moved_during_init = NULL; /* tracks moves of preceding bindings during each init elaboration */
     uint32_t    n_binds = 0, cap = 0;
     Scope       inner;
     scope_init(&inner, e->scope);
@@ -990,7 +1011,30 @@ static Expr *elab_let(Elab *e, const Form *call) {
             rc = -1; break;
         }
         Form *init_form = bindings_form->as.list.items[i++];
+
+        /* Task 1 (Prereq 1): Snapshot move-state of preceding bindings before elaborating this init.
+         * This lets us detect which preceding bindings are moved during this init's elaboration. */
+        bool *moved_snapshot = NULL;
+        if (n_binds > 0) {
+            moved_snapshot = (bool *)malloc(n_binds * sizeof(bool));
+            if (!moved_snapshot) { fprintf(stderr, "tur: oom\n"); abort(); }
+            for (uint32_t j = 0; j < n_binds; j++) {
+                moved_snapshot[j] = binds[j].binding->is_moved;
+            }
+        }
+
         Expr *init = elab_form(e, init_form);
+
+        /* Task 2 (Prereq 1): Capture which preceding bindings were newly moved during this init elaboration. */
+        if (moved_snapshot) {
+            for (uint32_t j = 0; j < n_binds; j++) {
+                if (!moved_snapshot[j] && binds[j].binding->is_moved) {
+                    binding_moved_during_init[j] = true;
+                }
+            }
+            free(moved_snapshot);
+        }
+
         if (!init) { rc = -1; break; }
 
         /* Phase 11: Move tracking - if init is a CK_MOVE binding reference, poison it */
@@ -1005,6 +1049,8 @@ static Expr *elab_let(Elab *e, const Form *call) {
             cap = cap ? cap * 2 : 4;
             binds = (LetBinding *)realloc(binds, cap * sizeof(LetBinding));
             if (!binds) { fprintf(stderr, "tur: oom\n"); abort(); }
+            binding_moved_during_init = (bool *)realloc(binding_moved_during_init, cap * sizeof(bool));
+            if (!binding_moved_during_init) { fprintf(stderr, "tur: oom\n"); abort(); }
         }
         
         /* Phase 3: If init is a closure, set closure_fn_binding on the binding */
@@ -1015,6 +1061,7 @@ static Expr *elab_let(Elab *e, const Form *call) {
         
         binds[n_binds].binding = b;
         binds[n_binds].init = init;
+        binding_moved_during_init[n_binds] = false; /* new binding, not yet moved during init */
         n_binds++;
     }
 
@@ -1029,20 +1076,10 @@ static Expr *elab_let(Elab *e, const Form *call) {
         }
     }
 
-    /* Phase 5b: Snapshot move-state of let-bindings before elaborating body.
-     * This allows us to detect which ref bindings were moved during body elaboration,
-     * so we can skip auto-drop for moved bindings (avoid use-after-move in defer). */
-    bool *ref_binding_moved_before_body = NULL;
-    if (has_ref_bindings) {
-        ref_binding_moved_before_body = (bool *)malloc(n_binds * sizeof(bool));
-        if (!ref_binding_moved_before_body) {
-            fprintf(stderr, "tur: oom\n");
-            abort();
-        }
-        for (uint32_t k = 0; k < n_binds; k++) {
-            ref_binding_moved_before_body[k] = binds[k].binding->is_moved;
-        }
-    }
+    /* The binding_moved_during_init array (built during the binding loop) records which
+     * bindings were moved during init elaboration of subsequent bindings in this let form.
+     * Combined with is_moved (which also captures body-phase moves), this gives complete
+     * move-state tracking across all elaboration phases. */
 
     Expr *body = NULL;
     if (rc == 0) {
@@ -1082,9 +1119,10 @@ static Expr *elab_let(Elab *e, const Form *call) {
             uint32_t n_refs = 0;
             for (uint32_t k = 0; k < n_binds; k++) {
                 /* Skip refs that come from ref/from-rc - they don't own the data */
-                /* Skip refs that were moved during body elaboration - avoid use-after-move defer */
+                /* Skip refs that were moved during init or body elaboration - avoid use-after-move defer */
                 if (binds[k].binding->type.kind == TY_REF &&
                     binds[k].init->kind != EX_REF_FROM_RC &&
+                    !binding_moved_during_init[k] &&
                     !binds[k].binding->is_moved) {
                     n_refs++;
                 }
@@ -1106,9 +1144,10 @@ static Expr *elab_let(Elab *e, const Form *call) {
                 uint32_t defer_idx = body->as.do_.n;
                 for (uint32_t k = 0; k < n_binds; k++) {
                     /* Skip refs that come from ref/from-rc - they don't own the data */
-                    /* Skip refs that were moved during body elaboration - avoid use-after-move defer */
+                    /* Skip refs moved during init or body elaboration - avoid use-after-move defer */
                     if (binds[k].binding->type.kind == TY_REF &&
                         binds[k].init->kind != EX_REF_FROM_RC &&
+                        !binding_moved_during_init[k] &&
                         !binds[k].binding->is_moved) {
                         /* Create (defer (drop! binding_name)) expression */
                         /* Create a variable reference to the binding */
@@ -1162,11 +1201,6 @@ static Expr *elab_let(Elab *e, const Form *call) {
         }
     }
 
-    /* Clean up snapshot memory */
-    if (ref_binding_moved_before_body) {
-        free(ref_binding_moved_before_body);
-    }
-
     /* Phase 5b: RC auto-drop injection with consumption detection.
      * Inject (defer (rc/drop x)) for let-bound rc/of values that are:
      * 1. Not consumed by ref/from-rc (which would transfer ownership and cause double-free)
@@ -1194,6 +1228,7 @@ static Expr *elab_let(Elab *e, const Form *call) {
         uint32_t n_rc_drops = 0;
         for (uint32_t k = 0; k < n_binds; k++) {
             if (binds[k].binding->type.kind == TY_RC && 
+                !binding_moved_during_init[k] &&
                 !binds[k].binding->is_moved &&
                 !is_rc_binding_consumed(body, binds[k].binding)) {
                 n_rc_drops++;
@@ -1213,6 +1248,7 @@ static Expr *elab_let(Elab *e, const Form *call) {
             for (uint32_t k = 0; k < n_binds; k++) {
                 /* Skip RC bindings that are moved or consumed */
                 if (binds[k].binding->type.kind == TY_RC && 
+                    !binding_moved_during_init[k] &&
                     !binds[k].binding->is_moved &&
                     !is_rc_binding_consumed(body, binds[k].binding)) {
                     
@@ -1257,6 +1293,11 @@ static Expr *elab_let(Elab *e, const Form *call) {
     /* Pop scope before returning. */
     e->scope = inner.parent;
     scope_free(&inner);
+
+    /* Clean up move-state tracking memory */
+    if (binding_moved_during_init) {
+        free(binding_moved_during_init);
+    }
 
     if (rc != 0) { free(binds); return NULL; }
 
@@ -3666,6 +3707,7 @@ static Expr *elab_def(Elab *e, const Form *call) {
     Expr *out = expr_new(e->arena, EX_DEF, TYPE_NIL, call->span);
     out->as.def_.binding = b;
     out->as.def_.init = init;
+    out->as.def_.struct_def = NULL;
     return out;
 }
 
@@ -3677,6 +3719,7 @@ static Expr *elab_extern_c(Elab *e, const Form *call);
 static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding);
 /* Phase 11: defstruct */
 static Expr *elab_defstruct(Elab *e, const Form *call);
+static Expr *elab_make_struct(Elab *e, const Form *call);
 /* Phase 12: Borrow traits */
 static Expr *elab_borrow_immut(Elab *e, const Form *call);
 static Expr *elab_borrow_mut(Elab *e, const Form *call);
@@ -3746,6 +3789,7 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_gc_disable)  return elab_gc_disable(e, call);
     /* Phase 11: defstruct */
     if (name == e->sym_defstruct) return elab_defstruct(e, call);
+    if (name == e->sym_make_struct) return elab_make_struct(e, call);
     /* Phase 12: Borrow traits */
     if (name == e->sym_borrow) return elab_borrow_immut(e, call);
     if (name == e->sym_borrow_mut) return elab_borrow_mut(e, call);
@@ -4114,13 +4158,74 @@ static Expr *elab_form(Elab *e, Form *f) {
 }
 
 /* Phase 11: defstruct - define a struct type
- * Syntax: (defstruct Name [:copy] [field1 : type1, field2 : type2, ...])
+ * Syntax: (defstruct Name [:copy] [field1 :type1 field2 :type2 ...])
  * 
  * The :copy annotation indicates the struct is bitwise-copyable (all fields must be Copy).
  * Without :copy, the struct is move-only (default).
  * 
  * Returns an EX_DEF expression that defines the struct type at file scope.
  */
+
+/* Helper: parse a field type keyword like "int", "rc<int>", "ref<bool>", "ptr<void>" */
+static void parse_struct_field_type(const char *tname, uint32_t tlen,
+                                     TypeKind *out_kind, TypeKind *out_inner) {
+    *out_kind = TY_UNKNOWN;
+    *out_inner = TY_UNKNOWN;
+
+    if (tlen == 3  && memcmp(tname, "int",   3) == 0) { *out_kind = TY_INT;      return; }
+    if (tlen == 4  && memcmp(tname, "bool",  4) == 0) { *out_kind = TY_BOOL;     return; }
+    if (tlen == 5  && memcmp(tname, "float", 5) == 0) { *out_kind = TY_FLOAT;    return; }
+    if (tlen == 4  && memcmp(tname, "cstr",  4) == 0) { *out_kind = TY_CSTR;     return; }
+    if (tlen == 3  && memcmp(tname, "nil",   3) == 0) { *out_kind = TY_NIL;      return; }
+    if (tlen == 4  && memcmp(tname, "void",  4) == 0) { *out_kind = TY_NIL;      return; }
+    if (tlen == 9  && memcmp(tname, "ptr<void>", 9) == 0) { *out_kind = TY_PTR_VOID; return; }
+
+    /* Compound types: rc<T>, ref<T>, weak<T> */
+    /* Parse the prefix and inner type */
+    const char *prefix_rc   = "rc<";
+    const char *prefix_ref  = "ref<";
+    const char *prefix_weak = "weak<";
+
+    TypeKind prefix_kind = TY_UNKNOWN;
+    uint32_t prefix_len = 0;
+    if (tlen > 3 && memcmp(tname, prefix_rc, 3) == 0)   { prefix_kind = TY_RC;   prefix_len = 3; }
+    if (tlen > 4 && memcmp(tname, prefix_ref, 4) == 0)  { prefix_kind = TY_REF;  prefix_len = 4; }
+    if (tlen > 5 && memcmp(tname, prefix_weak, 5) == 0) { prefix_kind = TY_WEAK; prefix_len = 5; }
+
+    if (prefix_kind != TY_UNKNOWN && prefix_len > 0 && tname[tlen - 1] == '>') {
+        const char *inner_name = tname + prefix_len;
+        uint32_t inner_len = tlen - prefix_len - 1; /* strip trailing '>' */
+        TypeKind inner_kind = TY_UNKNOWN, dummy = TY_UNKNOWN;
+        parse_struct_field_type(inner_name, inner_len, &inner_kind, &dummy);
+        *out_kind = prefix_kind;
+        *out_inner = inner_kind;
+        return;
+    }
+
+    /* Unknown type - leave as TY_UNKNOWN */
+}
+
+/* Helper: check if a TypeKind is considered copy */
+static bool typekind_is_copy_for_struct(TypeKind k) {
+    switch (k) {
+        case TY_INT: case TY_BOOL: case TY_FLOAT: case TY_CSTR:
+        case TY_PTR_VOID: case TY_NIL:
+            return true;
+        default:
+            return false;
+    }
+}
+
+/* Helper: add StructDef to the elab registry */
+static void elab_register_struct_def(Elab *e, StructDef *def) {
+    if (e->n_struct_defs >= e->cap_struct_defs) {
+        e->cap_struct_defs = e->cap_struct_defs ? e->cap_struct_defs * 2 : 8;
+        e->struct_defs = (StructDef **)realloc(e->struct_defs,
+            e->cap_struct_defs * sizeof(StructDef *));
+    }
+    e->struct_defs[e->n_struct_defs++] = def;
+}
+
 static Expr *elab_defstruct(Elab *e, const Form *call) {
     if (call->as.list.len < 2) {
         diag_emit(DIAG_ERROR, call->span,
@@ -4164,94 +4269,155 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
         return NULL;
     }
     
-    /* For Phase 11, we'll implement a simplified version that just validates the syntax
-     * and creates a placeholder. Full struct type support with field access will come later.
-     * 
-     * For now, validate that:
-     * 1. If :copy is specified, all field types must be Copy
-     * 2. The struct name is not already bound
-     */
-    
     if (scope_lookup(e->scope, name)) {
         diag_emit(DIAG_ERROR, name_form->span,
                   "defstruct: '%s' is already defined", name->name);
         return NULL;
     }
     
-    /* Validate field list and check copy constraints */
+    /* Validate field list */
     uint32_t n_fields = fields_form->as.list.len;
     if (n_fields == 0) {
         diag_emit(DIAG_ERROR, fields_form->span,
                   "defstruct field list cannot be empty");
         return NULL;
     }
-
     if ((n_fields % 2) != 0) {
         diag_emit(DIAG_ERROR, fields_form->span,
                   "defstruct field list must have [name :type ...] pairs");
         return NULL;
     }
 
-    /* Parse field pairs and validate :copy structs only contain copyable fields. */
+    uint32_t actual_n_fields = n_fields / 2;
+
+    /* Allocate StructDef and field array */
+    StructDef *def = (StructDef *)malloc(sizeof(StructDef));
+    def->name = name->name;
+    def->n_fields = actual_n_fields;
+    def->fields = (StructField *)malloc(actual_n_fields * sizeof(StructField));
+    def->is_copy = is_copy;
+    def->needs_drop_glue = false;
+
+    /* Parse field pairs */
     for (uint32_t i = 0; i < n_fields; i += 2) {
-        Form *field_name = fields_form->as.list.items[i];
-        Form *field_type = fields_form->as.list.items[i + 1];
+        uint32_t fi = i / 2;
+        Form *field_name_form = fields_form->as.list.items[i];
+        Form *field_type_form = fields_form->as.list.items[i + 1];
 
-        if (field_name->tag != F_SYM) {
-            diag_emit(DIAG_ERROR, field_name->span,
+        if (field_name_form->tag != F_SYM) {
+            diag_emit(DIAG_ERROR, field_name_form->span,
                       "defstruct field name must be a symbol");
+            free(def->fields); free(def);
             return NULL;
         }
-        if (field_type->tag != F_KEYWORD) {
-            diag_emit(DIAG_ERROR, field_type->span,
+        if (field_type_form->tag != F_KEYWORD) {
+            diag_emit(DIAG_ERROR, field_type_form->span,
                       "defstruct field '%s' type must be a keyword like :int",
-                      field_name->as.sym->name);
+                      field_name_form->as.sym->name);
+            free(def->fields); free(def);
             return NULL;
         }
 
-        if (is_copy) {
-            const char *tname = field_type->as.sym->name;
-            uint32_t tlen = field_type->as.sym->len;
+        const char *tname = field_type_form->as.sym->name;
+        uint32_t tlen = field_type_form->as.sym->len;
+        TypeKind fkind, finner;
+        parse_struct_field_type(tname, tlen, &fkind, &finner);
 
-            bool is_copy_field = false;
-            if ((tlen == 3 && memcmp(tname, "int", 3) == 0) ||
-                (tlen == 4 && memcmp(tname, "bool", 4) == 0) ||
-                (tlen == 5 && memcmp(tname, "float", 5) == 0) ||
-                (tlen == 4 && memcmp(tname, "cstr", 4) == 0) ||
-                (tlen == 9 && memcmp(tname, "ptr<void>", 9) == 0) ||
-                (tlen == 3 && memcmp(tname, "nil", 3) == 0) ||
-                (tlen == 4 && memcmp(tname, "void", 4) == 0)) {
-                is_copy_field = true;
-            }
+        if (fkind == TY_UNKNOWN) {
+            diag_emit(DIAG_ERROR, field_type_form->span,
+                      "defstruct field '%s' has unrecognized type :%s",
+                      field_name_form->as.sym->name, tname);
+            free(def->fields); free(def);
+            return NULL;
+        }
 
-            if (!is_copy_field) {
-                diag_emit(DIAG_ERROR, field_type->span,
-                          "defstruct: field '%s' has non-copy type :%s and cannot be used in :copy struct",
-                          field_name->as.sym->name, tname);
-                return NULL;
-            }
+        /* :copy struct validation: all fields must be copy */
+        if (is_copy && !typekind_is_copy_for_struct(fkind)) {
+            diag_emit(DIAG_ERROR, field_type_form->span,
+                      "defstruct: field '%s' has non-copy type :%s and cannot be used in :copy struct",
+                      field_name_form->as.sym->name, tname);
+            free(def->fields); free(def);
+            return NULL;
+        }
+
+        def->fields[fi].name = field_name_form->as.sym->name;
+        def->fields[fi].kind = fkind;
+        def->fields[fi].inner_kind = finner;
+
+        /* Check if this field requires drop glue */
+        if (fkind == TY_RC || fkind == TY_REF || fkind == TY_WEAK) {
+            def->needs_drop_glue = true;
         }
     }
-    
-    /* For Phase 11, we simply create a def-like binding for the struct name
-     * with a placeholder type. The actual struct type system will be
-     * implemented in a future phase.
-     * 
-     * For now, we'll use TY_PTR_VOID as a placeholder for struct types.
-     * This allows the code to compile while we flesh out the full type system.
-     */
-    Type struct_type = {.kind = TY_PTR_VOID, .copy_kind = is_copy ? CK_COPY : CK_MOVE, .n_lifetimes = 0};
-    
-    /* Create a global binding for the struct type */
+
+    /* Register struct in elab registry */
+    elab_register_struct_def(e, def);
+
+    /* Create a global binding for the struct type with proper TY_STRUCT type */
+    Type struct_type = type_struct(def);
     Binding *b = binding_new(e, name, struct_type, false, true, name_form->span);
     scope_add(&e->global, b);
-    
-    /* Register as file-scope definition */
-    elab_register_file_def(e, NULL); /* Placeholder - full impl deferred */
-    
+
+    /* Return EX_DEF with struct_def populated */
     Expr *out = expr_new(e->arena, EX_DEF, TYPE_NIL, call->span);
     out->as.def_.binding = b;
     out->as.def_.init = NULL;
+    out->as.def_.struct_def = def;
+    return out;
+}
+
+/* Phase 11: make-struct - construct a struct value
+ * Syntax: (make-struct StructName val1 val2 ...)
+ * Returns a struct value (TY_STRUCT) with fields filled in positional order.
+ */
+static Expr *elab_make_struct(Elab *e, const Form *call) {
+    if (call->as.list.len < 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "make-struct requires a struct name: (make-struct StructName val1 ...)");
+        return NULL;
+    }
+
+    Form *name_form = call->as.list.items[1];
+    if (name_form->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, name_form->span,
+                  "make-struct: first argument must be a struct name");
+        return NULL;
+    }
+
+    /* Look up the struct binding */
+    Binding *struct_binding = scope_lookup(e->scope, name_form->as.sym);
+    if (!struct_binding || struct_binding->type.kind != TY_STRUCT) {
+        diag_emit(DIAG_ERROR, name_form->span,
+                  "make-struct: '%s' is not a defined struct type",
+                  name_form->as.sym->name);
+        return NULL;
+    }
+
+    StructDef *def = struct_binding->type.as.struct_.def;
+    uint32_t n_given = call->as.list.len - 2; /* args after name */
+
+    if (n_given != def->n_fields) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "make-struct '%s': expected %u field value(s), got %u",
+                  def->name, def->n_fields, n_given);
+        return NULL;
+    }
+
+    /* Elaborate each field value */
+    Expr **field_values = (Expr **)arena_alloc(e->arena, def->n_fields * sizeof(Expr *));
+    for (uint32_t i = 0; i < def->n_fields; i++) {
+        Expr *fv = elab_form(e, call->as.list.items[2 + i]);
+        if (!fv) return NULL;
+        field_values[i] = fv;
+    }
+
+    /* Build the result type */
+    Type result_type = type_struct(def);
+
+    Expr *out = expr_new(e->arena, EX_MAKE_STRUCT, result_type, call->span);
+    out->as.make_struct_.def = def;
+    out->as.make_struct_.field_values = field_values;
+    out->as.make_struct_.n_fields = def->n_fields;
     return out;
 }
 

@@ -169,6 +169,12 @@ static int count_uses(const Expr *e, const Binding *b) {
             }
             return n;
         }
+        case EX_MAKE_STRUCT: {
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++) {
+                n += count_uses(e->as.make_struct_.field_values[i], b);
+            }
+            return n;
+        }
         /* Leaf / no-child nodes */
         default:
             return 0;
@@ -240,6 +246,12 @@ static bool has_barrier(const Expr *e) {
         case EX_REF_PRED:      return has_barrier(e->as.ref_pred_.expr);
         case EX_BORROW_IMMUT:  return has_barrier(e->as.borrow_immut_.expr);
         case EX_BORROW_MUT:    return has_barrier(e->as.borrow_mut_.expr);
+        case EX_MAKE_STRUCT: {
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++) {
+                if (has_barrier(e->as.make_struct_.field_values[i])) return true;
+            }
+            return false;
+        }
         /* Leaf nodes */
         default:
             return false;
@@ -538,6 +550,10 @@ static void analyze_expr(Expr *e) {
         case EX_DISCONTINUE:
             analyze_expr(e->as.discontinue_.discontinue->k);
             analyze_expr(e->as.discontinue_.discontinue->exception);
+            return;
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+                analyze_expr(e->as.make_struct_.field_values[i]);
             return;
         /* Leaf nodes: nothing to recurse */
         default:
