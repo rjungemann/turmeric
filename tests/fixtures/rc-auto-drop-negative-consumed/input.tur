@@ -1,0 +1,9 @@
+;; Test: No auto-drop when rc is consumed by ref/from-rc
+;; When an rc value is converted to a unique ref via (ref/from-rc x),
+;; the rc control block is transferred, so we should NOT auto-drop.
+;;
+;; Expected: NO (defer (rc/drop x)) should be injected, since x is consumed.
+
+(defn test-rc-consumed-by-ref-from-rc []
+  (let [x (rc/of 42)]
+    (ref/from-rc x)))

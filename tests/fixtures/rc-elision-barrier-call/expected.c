@@ -442,6 +442,14 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
+struct __defer_env_3 {RcControlBlock * orig; };
+
+static void __defer_4(void *__env) {
+    struct __defer_env_3 *__e = (struct __defer_env_3 *)__env;
+    rc_strong_decrement(__e->orig);
+    rc_free_queue_drain();
+}
+
 int main() {
         {
             int64_t *__t0 = (int64_t *)malloc(sizeof(int64_t));
@@ -450,6 +458,8 @@ int main() {
             __t1->value = __t0;
             RcControlBlock * orig_1 = __t1;
             (void)orig_1;
+            tur_frame __frame_2;
+            tur_frame_init(&__frame_2, NULL);
             {
                 rc_strong_increment(orig_1);
                 RcControlBlock * cloned_2 = orig_1;
@@ -458,10 +468,13 @@ int main() {
                 rc_strong_decrement(cloned_2);
                 rc_free_queue_drain();
             }
+            struct __defer_env_3 __t5 = {.orig = orig_1};
+            tur_frame_push_defer(&__frame_2, __defer_4, &__t5);
+            tur_frame_fire_lifo(&__frame_2);
         }
-        int64_t __t2;
-        __t2 = INT64_C(0);
-        return (int)__t2;
+        int64_t __t6;
+        __t6 = INT64_C(0);
+        return (int)__t6;
 }
 
 

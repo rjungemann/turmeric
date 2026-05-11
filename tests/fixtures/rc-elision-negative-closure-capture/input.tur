@@ -1,0 +1,9 @@
+;; Phase 9 elision negative: clone escapes via closure capture, so elision must not fire.
+
+(defn main []
+  (let [r (rc/of 5)]
+    (let [c (rc/clone r)]
+      (let [f (fn [] (rc/strong-count c))]
+        (println (f))
+        (rc/drop c)
+        0))))

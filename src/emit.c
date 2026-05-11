@@ -71,6 +71,7 @@ static void indent_buf(Buf *b, int n) {
 
 /* Phase 3/4: Helper to check if an expression contains return or throw */
 static bool expr_contains_return_or_throw(const Expr *e) {
+    if (!e) return false;
     switch (e->kind) {
         case EX_RETURN:
         case EX_THROW:
@@ -1015,10 +1016,14 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             
             /* Emit try body */
             if (returns_value) {
-                char *try_val = emit_value(ctx, body, e->as.try_.body);
-                indent_buf(body, ctx->indent);
-                buf_printf(body, "%s = %s;\n", result_tmp, try_val);
-                free(try_val);
+                if (e->as.try_.body->type.kind == TY_NIL) {
+                    emit_stmt(ctx, body, e->as.try_.body);
+                } else {
+                    char *try_val = emit_value(ctx, body, e->as.try_.body);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "%s = %s;\n", result_tmp, try_val);
+                    free(try_val);
+                }
             } else {
                 emit_stmt(ctx, body, e->as.try_.body);
             }
@@ -1064,15 +1069,36 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     
                     /* Bind catch variable to exception payload */
                     indent_buf(body, ctx->indent);
-                    buf_printf(body, "void *%s = %s.caught->payload;\n",
-                              clause->var_name->name, handler_var);
+                    char *catch_name = name_for_binding(ctx, clause->binding);
+                    switch (clause->binding->type.kind) {
+                        case TY_INT:
+                            buf_printf(body, "int64_t %s = *((int64_t *)%s.caught->payload);\n",
+                                      catch_name, handler_var);
+                            break;
+                        case TY_BOOL:
+                            buf_printf(body, "bool %s = *((bool *)%s.caught->payload);\n",
+                                      catch_name, handler_var);
+                            break;
+                        default:
+                            buf_printf(body, "%s %s = (%s)%s.caught->payload;\n",
+                                      type_c_name(clause->binding->type),
+                                      catch_name,
+                                      type_c_name(clause->binding->type),
+                                      handler_var);
+                            break;
+                    }
+                    free(catch_name);
                     
                     /* Emit handler body */
                     if (returns_value) {
-                        char *handler_val = emit_value(ctx, body, clause->handler);
-                        indent_buf(body, ctx->indent);
-                        buf_printf(body, "%s = %s;\n", result_tmp, handler_val);
-                        free(handler_val);
+                        if (clause->handler->type.kind == TY_NIL) {
+                            emit_stmt(ctx, body, clause->handler);
+                        } else {
+                            char *handler_val = emit_value(ctx, body, clause->handler);
+                            indent_buf(body, ctx->indent);
+                            buf_printf(body, "%s = %s;\n", result_tmp, handler_val);
+                            free(handler_val);
+                        }
                     } else {
                         emit_stmt(ctx, body, clause->handler);
                     }

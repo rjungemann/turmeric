@@ -1,0 +1,10 @@
+;; Test: Multiple rc bindings with auto-drop (LIFO order)
+;; Both x and y should get auto-drop defers, and they should fire in LIFO order:
+;; y drops first (LIFO), then x.
+;;
+;; Expected: Two defer functions, y's fires before x's
+
+(defn test-rc-auto-drop-multiple []
+  (let [x (rc/of 10)
+        y (rc/of 20)]
+    (+ (rc/strong-count x) (rc/strong-count y))))

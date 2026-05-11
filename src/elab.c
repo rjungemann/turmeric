@@ -488,6 +488,109 @@ static void move_state_restore(Binding **bindings, const bool *states, uint32_t 
     }
 }
 
+/* Check if an RC binding is consumed by ref/from-rc or explicitly dropped via rc/drop.
+ * Returns true if the binding is consumed (should skip auto-drop to avoid double-free). */
+static bool is_rc_binding_consumed(const Expr *body, Binding *binding) {
+    if (!body) return false;
+    
+    const Expr **stack = (const Expr **)malloc(256 * sizeof(const Expr *));
+    if (!stack) {
+        fprintf(stderr, "tur: oom\n");
+        abort();
+    }
+    int sp = 0;
+    
+    /* Start by pushing body onto stack */
+    stack[sp++] = body;
+    
+    while (sp > 0) {
+        const Expr *cur = stack[--sp];
+        if (!cur) continue;
+        
+        /* Check if this expression consumes the binding via ref/from-rc */
+        if (cur->kind == EX_REF_FROM_RC &&
+            cur->as.ref_from_rc_.expr &&
+            cur->as.ref_from_rc_.expr->kind == EX_VAR &&
+            cur->as.ref_from_rc_.expr->as.var.binding == binding) {
+            free(stack);
+            return true;
+        }
+        
+        /* Check if this expression consumes the binding via rc/drop */
+        if (cur->kind == EX_RC_DROP &&
+            cur->as.rc_drop_.expr &&
+            cur->as.rc_drop_.expr->kind == EX_VAR &&
+            cur->as.rc_drop_.expr->as.var.binding == binding) {
+            free(stack);
+            return true;
+        }
+        
+        /* Recursively traverse sub-expressions */
+        switch (cur->kind) {
+            case EX_LET:
+                for (uint32_t i = cur->as.let_.n; i > 0; i--) {
+                    stack[sp++] = cur->as.let_.bindings[i-1].init;
+                }
+                stack[sp++] = cur->as.let_.body;
+                break;
+            case EX_IF:
+                if (cur->as.if_.else_or_null) stack[sp++] = cur->as.if_.else_or_null;
+                stack[sp++] = cur->as.if_.then_;
+                stack[sp++] = cur->as.if_.cond;
+                break;
+            case EX_DO:
+                for (uint32_t i = cur->as.do_.n; i > 0; i--) {
+                    stack[sp++] = cur->as.do_.items[i-1];
+                }
+                break;
+            case EX_CALL:
+                for (uint32_t i = cur->as.call_.n_args; i > 0; i--) {
+                    stack[sp++] = cur->as.call_.args[i-1];
+                }
+                break;
+            case EX_BUILTIN:
+                for (uint32_t i = cur->as.builtin.n; i > 0; i--) {
+                    stack[sp++] = cur->as.builtin.args[i-1];
+                }
+                break;
+            case EX_CLOSURE:
+                if (cur->as.closure_.closure && cur->as.closure_.closure->fn) {
+                    stack[sp++] = cur->as.closure_.closure->fn->body;
+                }
+                break;
+            case EX_DEFER:
+                stack[sp++] = cur->as.defer_.body;
+                break;
+            case EX_WHILE:
+                stack[sp++] = cur->as.while_.body;
+                stack[sp++] = cur->as.while_.cond;
+                break;
+            case EX_THROW:
+                stack[sp++] = cur->as.throw_.payload;
+                break;
+            case EX_TRY:
+                stack[sp++] = cur->as.try_.body;
+                for (uint8_t i = 0; i < cur->as.try_.n_clauses; i++) {
+                    if (cur->as.try_.clauses[i].handler) {
+                        stack[sp++] = cur->as.try_.clauses[i].handler;
+                    }
+                }
+                if (cur->as.try_.finally_body) {
+                    stack[sp++] = cur->as.try_.finally_body;
+                }
+                break;
+            case EX_SET:
+                stack[sp++] = cur->as.set_.value;
+                break;
+            default:
+                break;
+        }
+    }
+    
+    free(stack);
+    return false;
+}
+
 static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->arena = arena;
     e->st = st;
@@ -926,6 +1029,21 @@ static Expr *elab_let(Elab *e, const Form *call) {
         }
     }
 
+    /* Phase 5b: Snapshot move-state of let-bindings before elaborating body.
+     * This allows us to detect which ref bindings were moved during body elaboration,
+     * so we can skip auto-drop for moved bindings (avoid use-after-move in defer). */
+    bool *ref_binding_moved_before_body = NULL;
+    if (has_ref_bindings) {
+        ref_binding_moved_before_body = (bool *)malloc(n_binds * sizeof(bool));
+        if (!ref_binding_moved_before_body) {
+            fprintf(stderr, "tur: oom\n");
+            abort();
+        }
+        for (uint32_t k = 0; k < n_binds; k++) {
+            ref_binding_moved_before_body[k] = binds[k].binding->is_moved;
+        }
+    }
+
     Expr *body = NULL;
     if (rc == 0) {
         uint32_t body_count = call->as.list.len - 2;
@@ -960,10 +1078,14 @@ static Expr *elab_let(Elab *e, const Form *call) {
         /* Phase 5: Inject defers for ref bindings into the do body */
         if (has_ref_bindings && body && body->kind == EX_DO) {
             /* We need to add defer expressions to the do body */
-            /* First, collect all ref binding names that need drops */
+            /* First, collect all ref binding names that need drops (excluding moved ones) */
             uint32_t n_refs = 0;
             for (uint32_t k = 0; k < n_binds; k++) {
-                if (binds[k].binding->type.kind == TY_REF) {
+                /* Skip refs that come from ref/from-rc - they don't own the data */
+                /* Skip refs that were moved during body elaboration - avoid use-after-move defer */
+                if (binds[k].binding->type.kind == TY_REF &&
+                    binds[k].init->kind != EX_REF_FROM_RC &&
+                    !binds[k].binding->is_moved) {
                     n_refs++;
                 }
             }
@@ -984,8 +1106,10 @@ static Expr *elab_let(Elab *e, const Form *call) {
                 uint32_t defer_idx = body->as.do_.n;
                 for (uint32_t k = 0; k < n_binds; k++) {
                     /* Skip refs that come from ref/from-rc - they don't own the data */
+                    /* Skip refs that were moved during body elaboration - avoid use-after-move defer */
                     if (binds[k].binding->type.kind == TY_REF &&
-                        binds[k].init->kind != EX_REF_FROM_RC) {
+                        binds[k].init->kind != EX_REF_FROM_RC &&
+                        !binds[k].binding->is_moved) {
                         /* Create (defer (drop! binding_name)) expression */
                         /* Create a variable reference to the binding */
                         Expr *var_expr = expr_new(e->arena, EX_VAR, binds[k].binding->type, call->span);
@@ -1038,21 +1162,26 @@ static Expr *elab_let(Elab *e, const Form *call) {
         }
     }
 
-    /* Phase 5b: RC auto-drop injection (separate from ref to avoid mixing concerns)
-     * NOTE: Currently disabled due to complexity in detecting consumed rc values
-     * when ref/from-rc extracts and frees the rc control block. To be revisited
-     * with more sophisticated binding-usage analysis. For now, rc values must be
-     * manually dropped with explicit (rc/drop rc) calls. */
+    /* Clean up snapshot memory */
+    if (ref_binding_moved_before_body) {
+        free(ref_binding_moved_before_body);
+    }
+
+    /* Phase 5b: RC auto-drop injection with consumption detection.
+     * Inject (defer (rc/drop x)) for let-bound rc/of values that are:
+     * 1. Not consumed by ref/from-rc (which would transfer ownership and cause double-free)
+     * 2. Not explicitly dropped via (rc/drop x)
+     * 3. Not moved to another binding */
     bool has_rc_bindings = false;
-    /* Disabled: for (uint32_t k = 0; k < n_binds; k++) {
+    for (uint32_t k = 0; k < n_binds; k++) {
         if (binds[k].binding->type.kind == TY_RC) {
             has_rc_bindings = true;
             break;
         }
-    } */
+    }
     
     /* If we have rc bindings, wrap body in do if needed and inject defers */
-    if (false && has_rc_bindings && body && body->kind != EX_DO) {
+    if (has_rc_bindings && body && body->kind != EX_DO) {
         Expr **items = (Expr **)arena_alloc(e->arena, 1 * sizeof(Expr *));
         items[0] = body;
         body = expr_new(e->arena, EX_DO, body->type, call->span);
@@ -1060,11 +1189,13 @@ static Expr *elab_let(Elab *e, const Form *call) {
         body->as.do_.n = 1;
     }
     
-    if (false && has_rc_bindings && body && body->kind == EX_DO) {
-        /* Count rc bindings that need drops */
+    if (has_rc_bindings && body && body->kind == EX_DO) {
+        /* Count rc bindings that need auto-drop (excluding consumed/moved ones) */
         uint32_t n_rc_drops = 0;
         for (uint32_t k = 0; k < n_binds; k++) {
-            if (binds[k].binding->type.kind == TY_RC) {
+            if (binds[k].binding->type.kind == TY_RC && 
+                !binds[k].binding->is_moved &&
+                !is_rc_binding_consumed(body, binds[k].binding)) {
                 n_rc_drops++;
             }
         }
@@ -1077,62 +1208,13 @@ static Expr *elab_let(Elab *e, const Form *call) {
             /* Copy existing items */
             memcpy(new_items, body->as.do_.items, body->as.do_.n * sizeof(Expr *));
             
-            /* Add defer expressions for each rc binding */
+            /* Add defer expressions for each unconsumed rc binding */
             uint32_t defer_idx = body->as.do_.n;
             for (uint32_t k = 0; k < n_binds; k++) {
-                if (binds[k].binding->type.kind == TY_RC) {
-                    /* Check if this rc is consumed by ref/from-rc - if so, don't auto-drop it
-                     * because tur_ref_from_rc frees the rc control block */
-                    bool is_consumed = false;
-                    
-                    /* Scan entire body for ref/from-rc using this binding */
-                    if (body && body->kind == EX_DO) {
-                        const Expr **stack = (const Expr **)malloc(256 * sizeof(const Expr *));
-                        int sp = 0;
-                        
-                        for (uint32_t i = 0; i < body->as.do_.n; i++) {
-                            stack[sp++] = body->as.do_.items[i];
-                        }
-                        
-                        while (sp > 0 && !is_consumed) {
-                            const Expr *cur = stack[--sp];
-                            if (cur->kind == EX_REF_FROM_RC &&
-                                cur->as.ref_from_rc_.expr->kind == EX_VAR &&
-                                cur->as.ref_from_rc_.expr->as.var.binding == binds[k].binding) {
-                                is_consumed = true;
-                                break;
-                            }
-                            
-                            switch (cur->kind) {
-                                case EX_LET:
-                                    for (uint32_t i = cur->as.let_.n; i > 0; i--) {
-                                        stack[sp++] = cur->as.let_.bindings[i-1].init;
-                                    }
-                                    stack[sp++] = cur->as.let_.body;
-                                    break;
-                                case EX_IF:
-                                    if (cur->as.if_.else_or_null) stack[sp++] = cur->as.if_.else_or_null;
-                                    stack[sp++] = cur->as.if_.then_;
-                                    stack[sp++] = cur->as.if_.cond;
-                                    break;
-                                case EX_DO:
-                                    for (uint32_t i = cur->as.do_.n; i > 0; i--) {
-                                        stack[sp++] = cur->as.do_.items[i-1];
-                                    }
-                                    break;
-                                case EX_CALL:
-                                    for (uint32_t i = cur->as.call_.n_args; i > 0; i--) {
-                                        stack[sp++] = cur->as.call_.args[i-1];
-                                    }
-                                    break;
-                                default:
-                                    break;
-                            }
-                        }
-                        free(stack);
-                    }
-                    
-                    if (is_consumed) continue;
+                /* Skip RC bindings that are moved or consumed */
+                if (binds[k].binding->type.kind == TY_RC && 
+                    !binds[k].binding->is_moved &&
+                    !is_rc_binding_consumed(body, binds[k].binding)) {
                     
                     /* Create a variable reference to the rc binding */
                     Expr *var_expr = expr_new(e->arena, EX_VAR, binds[k].binding->type, call->span);
@@ -2239,7 +2321,8 @@ static Expr *elab_try(Elab *e, const Form *call) {
             }
             
             /* Create a binding for the catch variable in a new scope */
-            Type catch_var_type = {.kind = catch_type, .copy_kind = CK_MOVE, .n_lifetimes = 0};
+            TypeKind catch_var_kind = (catch_type == TY_UNKNOWN) ? TY_PTR_VOID : catch_type;
+            Type catch_var_type = {.kind = catch_var_kind, .copy_kind = CK_MOVE, .n_lifetimes = 0};
             Binding *catch_binding = binding_new(e, var_name->as.sym, catch_var_type, false, false, var_name->span);
             
             /* Push a new scope for the handler with the catch variable bound */
@@ -2255,14 +2338,22 @@ static Expr *elab_try(Elab *e, const Form *call) {
                 return NULL; 
             }
 
-            /* try/catch is an expression: body and each catch handler must agree on type */
+            /* try/catch is an expression: body and each catch handler must agree on type.
+             * Treat nil-typed branches as throw-only/bottom-like so they can unify with
+             * a concrete type from other branches. */
             if (!type_eq(handler->type, result_type)) {
-                diag_emit(DIAG_ERROR, clause_form->span,
-                          "try/catch type mismatch: body is %s but catch handler is %s",
-                          type_name(result_type), type_name(handler->type));
-                e->scope = handler_scope.parent;
-                scope_free(&handler_scope);
-                return NULL;
+                if (result_type.kind == TY_NIL && handler->type.kind != TY_NIL) {
+                    result_type = handler->type;
+                } else if (handler->type.kind == TY_NIL && result_type.kind != TY_NIL) {
+                    /* Keep current result_type; nil handler is compatible. */
+                } else {
+                    diag_emit(DIAG_ERROR, clause_form->span,
+                              "try/catch type mismatch: body is %s but catch handler is %s",
+                              type_name(result_type), type_name(handler->type));
+                    e->scope = handler_scope.parent;
+                    scope_free(&handler_scope);
+                    return NULL;
+                }
             }
             
             /* Pop the handler scope */
@@ -2276,6 +2367,7 @@ static Expr *elab_try(Elab *e, const Form *call) {
                 return NULL;
             }
             clauses[n_clauses].var_name = var_name->as.sym;
+            clauses[n_clauses].binding = catch_binding;
             clauses[n_clauses].catch_type = catch_type;
             clauses[n_clauses].handler = handler;
             n_clauses++;
