@@ -1,0 +1,1 @@
+ref/from-rc requires unique rc (strong_count==1 and weak_count==0), got strong=1 weak=1

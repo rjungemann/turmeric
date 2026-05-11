@@ -234,6 +234,8 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
         case EX_RC_DROP:
         case EX_RC_PTR:
         case EX_RC_COUNT:
+        case EX_RC_FROM_REF:
+        case EX_REF_FROM_RC:
         case EX_WEAK:
         case EX_WEAK_UPGRADE:
         case EX_WEAK_PRED:
@@ -253,6 +255,10 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
                 return borrow_check_expr_recursive(ctx, e->as.rc_ptr_.expr);
             } else if (e->kind == EX_RC_COUNT) {
                 return borrow_check_expr_recursive(ctx, e->as.rc_count_.expr);
+            } else if (e->kind == EX_RC_FROM_REF) {
+                return borrow_check_expr_recursive(ctx, e->as.rc_from_ref_.expr);
+            } else if (e->kind == EX_REF_FROM_RC) {
+                return borrow_check_expr_recursive(ctx, e->as.ref_from_rc_.expr);
             } else if (e->kind == EX_WEAK) {
                 return borrow_check_expr_recursive(ctx, e->as.weak_.expr);
             } else if (e->kind == EX_WEAK_UPGRADE) {

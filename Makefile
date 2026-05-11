@@ -34,6 +34,7 @@ build:
 test: $(BIN)
 	@bash tests/run.sh
 	@bash tests/run-cli.sh
+	@bash tests/check-span-unknown.sh
 
 clean:
 	rm -rf build tests/out

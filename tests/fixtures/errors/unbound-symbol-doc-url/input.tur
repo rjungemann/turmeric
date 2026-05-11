@@ -1,0 +1,4 @@
+(defn main [] :int
+  (let [count 1]
+    coumt)
+  0)

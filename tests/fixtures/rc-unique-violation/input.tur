@@ -1,0 +1,6 @@
+(defn main [] :int
+  (let [rc (rc/of 77)]
+    (let [w (weak rc)]
+      (ref/from-rc rc)
+      0))
+  0)

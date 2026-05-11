@@ -7,6 +7,7 @@
 
 #include "builtins.h"
 #include "rc.h"
+#include "rc_elision.h"
 #include "types.h"
 
 /* Forward declarations */
@@ -1383,33 +1384,55 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             char *inner = emit_value(ctx, body, e->as.rc_of_.expr);
             char *inner_type_c = strdup(type_c_name(e->as.rc_of_.expr->type));
             
-            /* Emit: rc_cb_alloc(sizeof(T), TY_T, NULL) */
+            /* Emit: allocate value separately, then attach it to rc control block. */
+            char *val_tmp = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s *%s = (%s *)malloc(sizeof(%s));\n",
+                       inner_type_c, val_tmp, inner_type_c, inner_type_c);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "*%s = %s;\n", val_tmp, inner);
+
             char *cb_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
-            /* For Phase 9, we use a simplified approach: allocate struct with value */
-            buf_printf(body, "RcControlBlock *%s = rc_cb_alloc(sizeof(%s), %d, NULL);\n",
-                       cb_tmp, inner_type_c, e->as.rc_of_.expr->type.kind);
+            buf_printf(body, "RcControlBlock *%s = rc_cb_alloc(0, %d, NULL);\n",
+                       cb_tmp, e->as.rc_of_.expr->type.kind);
             indent_buf(body, ctx->indent);
-            /* Copy value into control block */
-            buf_printf(body, "*((%s *)((char *)%s + sizeof(RcControlBlock))) = %s;\n",
-                       inner_type_c, cb_tmp, inner);
+            buf_printf(body, "%s->value = %s;\n", cb_tmp, val_tmp);
+
             free(inner);
             free(inner_type_c);
+            free(val_tmp);
             return cb_tmp;
         }
         case EX_RC_CLONE: {
             /* (rc/clone r) - increment strong count, return same cb */
             char *inner = emit_value(ctx, body, e->as.rc_clone_.expr);
-            indent_buf(body, ctx->indent);
-            buf_printf(body, "rc_strong_increment(%s);\n", inner);
-            /* Return the same pointer (now with incremented count) */
+            if (e->as.rc_clone_.elide) {
+#if TUR_DEBUG
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "/* rc-elision: skipped rc_strong_increment(%s) — last-use clone */\n", inner);
+#endif
+            } else {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "rc_strong_increment(%s);\n", inner);
+            }
+            /* Return the same pointer (now with incremented count, or elided) */
             return strdup(inner);
         }
         case EX_RC_DROP: {
             /* (rc/drop r) - decrement strong count */
             char *inner = emit_value(ctx, body, e->as.rc_drop_.expr);
-            indent_buf(body, ctx->indent);
-            buf_printf(body, "rc_strong_decrement(%s);\n", inner);
+            if (e->as.rc_drop_.elide) {
+#if TUR_DEBUG
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "/* rc-elision: skipped rc_strong_decrement(%s) — matched elided clone */\n", inner);
+#endif
+            } else {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "rc_strong_decrement(%s);\n", inner);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "rc_free_queue_drain();\n");
+            }
             free(inner);
             return atom_nil();
         }
@@ -1428,6 +1451,25 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             char *tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
             buf_printf(body, "int64_t %s = rc_strong_count(%s);\n", tmp, inner);
+            free(inner);
+            return tmp;
+        }
+        case EX_RC_FROM_REF: {
+            /* (rc/from-ref r) - move ref<T> into rc<T> */
+            char *inner = emit_value(ctx, body, e->as.rc_from_ref_.expr);
+            char *tmp = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "RcControlBlock *%s = tur_rc_from_ref(%s, %d);\n",
+                       tmp, inner, e->type.as.rc.inner);
+            free(inner);
+            return tmp;
+        }
+        case EX_REF_FROM_RC: {
+            /* (ref/from-rc r) - extract unique ref<T> from rc<T> */
+            char *inner = emit_value(ctx, body, e->as.ref_from_rc_.expr);
+            char *tmp = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "void *%s = tur_ref_from_rc(%s);\n", tmp, inner);
             free(inner);
             return tmp;
         }
@@ -1885,6 +1927,8 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_RC_CLONE:
         case EX_RC_PTR:
         case EX_RC_COUNT:
+        case EX_RC_FROM_REF:
+        case EX_REF_FROM_RC:
         case EX_WEAK:
         case EX_WEAK_UPGRADE:
         case EX_WEAK_PRED:
@@ -1998,6 +2042,11 @@ static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         free((void*)pn);
     }
     buf_puts(file, ") {\n");
+
+    /* Phase 9 follow-up: Run last-use elision analysis on the function body
+     * before emitting.  This marks eligible EX_RC_CLONE/EX_RC_DROP nodes so
+     * the emitter can skip redundant rc_strong_increment/decrement pairs. */
+    rc_elision_analyze_fn(fd->body);
 
     /* Emit function body */
     ctx->indent += 4;
@@ -2210,6 +2259,7 @@ int emit_program(Buf *out, const Expr *program) {
     /* Phase 9: Declare abort and memset for rc<T> support */
     buf_puts(out, "extern void abort(void);\n");
     buf_puts(out, "extern void *memset(void *, int, size_t);\n");
+    buf_puts(out, "extern void *memmove(void *, const void *, size_t);\n");
     buf_puts(out, "\n");
     /* Phase 7 follow-up: minimal in-process test registry for stdlib/test.tur. */
     buf_puts(out, "#define TUR_TEST_REGISTRY_MAX 1024\n");
@@ -2375,6 +2425,22 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    bool may_contain_cycles;  /* Hint for GC */\n");
     buf_puts(out, "    uint8_t reserved[6];\n");
     buf_puts(out, "};\n\n");
+    /* Phase 9: Deferred free queue to avoid deep recursion in rc_strong_decrement */
+    buf_puts(out, "#define RC_FREE_QUEUE_CAPACITY 65536\n");
+    buf_puts(out, "static RcControlBlock *rc_free_queue[RC_FREE_QUEUE_CAPACITY];\n");
+    buf_puts(out, "static uint32_t rc_free_queue_count = 0;\n");
+    buf_puts(out, "static uint32_t rc_free_queue_drain(void);  /* Forward decl */\n");
+    buf_puts(out, "static void rc_free_queue_push(RcControlBlock *cb);  /* Forward decl */\n");
+    buf_puts(out, "bool rc_strong_decrement(RcControlBlock *cb);  /* Forward decl */\n");
+    buf_puts(out, "bool rc_weak_decrement(RcControlBlock *cb);    /* Forward decl */\n");
+    buf_puts(out, "static void rc_free_queue_push(RcControlBlock *cb) {\n");
+    buf_puts(out, "    if (!cb) return;\n");
+    buf_puts(out, "    if (rc_free_queue_count >= RC_FREE_QUEUE_CAPACITY) {\n");
+    buf_puts(out, "        fprintf(stderr, \"rc_free_queue: full, aborting\\n\");\n");
+    buf_puts(out, "        abort();\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    rc_free_queue[rc_free_queue_count++] = cb;\n");
+    buf_puts(out, "}\n\n");
     /* Phase 10: GC globals and helper functions (needed before rc_cb_alloc) */
     buf_puts(out, "#define GC_GLOBAL_REGISTRY_CAPACITY 4096\n");
     buf_puts(out, "static RcControlBlock *gc_all_blocks[GC_GLOBAL_REGISTRY_CAPACITY];\n");
@@ -2401,8 +2467,50 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "        cb->color = GC_PURPLE;\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
+    buf_puts(out, "\n/* Phase 9: Deferred free queue drain */\n");
+    buf_puts(out, "static uint32_t rc_free_queue_drain(void) {\n");
+    buf_puts(out, "    if (rc_free_queue_count == 0) return 0;\n");
+    buf_puts(out, "    uint32_t freed = 0;\n");
+    buf_puts(out, "    while (rc_free_queue_count > 0) {\n");
+    buf_puts(out, "        RcControlBlock *cb = rc_free_queue[0];\n");
+    buf_puts(out, "        memmove(rc_free_queue, rc_free_queue + 1,\n");
+    buf_puts(out, "                (rc_free_queue_count - 1) * sizeof(RcControlBlock *));\n");
+    buf_puts(out, "        rc_free_queue_count--;\n");
+    buf_puts(out, "        gc_unregister_block(cb);\n");
+    buf_puts(out, "        if (cb->value) cb->drop_fn(cb->value);\n");
+    buf_puts(out, "        free(cb);\n");
+    buf_puts(out, "        freed++;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    return freed;\n");
+    buf_puts(out, "}\n\n");
     buf_puts(out, "static void default_rc_drop_fn(void *value) {\n");
     buf_puts(out, "    free(value);\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static void drop_ref_payload(void *value) {\n");
+    buf_puts(out, "    if (!value) return;\n");
+    buf_puts(out, "    void *inner = *((void **)value);\n");
+    buf_puts(out, "    if (inner) free(inner);\n");
+    buf_puts(out, "    free(value);\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static void drop_rc_payload(void *value) {\n");
+    buf_puts(out, "    if (!value) return;\n");
+    buf_puts(out, "    RcControlBlock *inner = *((RcControlBlock **)value);\n");
+    buf_puts(out, "    if (inner) { rc_strong_decrement(inner); rc_free_queue_drain(); }\n");
+    buf_puts(out, "    free(value);\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static void drop_weak_payload(void *value) {\n");
+    buf_puts(out, "    if (!value) return;\n");
+    buf_puts(out, "    RcControlBlock *inner = *((RcControlBlock **)value);\n");
+    buf_puts(out, "    if (inner) rc_weak_decrement(inner);\n");
+    buf_puts(out, "    free(value);\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static RcDropFn default_drop_fn_for_type(int value_type_kind) {\n");
+    buf_puts(out, "    switch (value_type_kind) {\n");
+    buf_puts(out, "        case 8: return drop_ref_payload;   /* TY_REF */\n");
+    buf_puts(out, "        case 9: return drop_rc_payload;    /* TY_RC */\n");
+    buf_puts(out, "        case 10: return drop_weak_payload; /* TY_WEAK */\n");
+    buf_puts(out, "        default: return default_rc_drop_fn;\n");
+    buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
     buf_puts(out, "RcControlBlock *rc_cb_alloc(size_t value_size, int value_type_kind, RcDropFn drop_fn) {\n");
     buf_puts(out, "    size_t total_size = sizeof(RcControlBlock) + value_size;\n");
@@ -2411,7 +2519,7 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    cb->strong_count = 1;\n");
     buf_puts(out, "    cb->weak_count = 0;\n");
     buf_puts(out, "    cb->value = (void *)(cb + 1);\n");
-    buf_puts(out, "    cb->drop_fn = drop_fn ? drop_fn : default_rc_drop_fn;\n");
+    buf_puts(out, "    cb->drop_fn = drop_fn ? drop_fn : default_drop_fn_for_type(value_type_kind);\n");
     buf_puts(out, "    cb->value_type_kind = value_type_kind;\n");
     buf_puts(out, "    memset(cb->reserved, 0, sizeof(cb->reserved));\n");
     buf_puts(out, "    /* Register with GC */\n");
@@ -2430,9 +2538,7 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "            gc_on_strong_decrement(cb);\n");
     buf_puts(out, "            return false;\n");
     buf_puts(out, "        } else {\n");
-    buf_puts(out, "            gc_unregister_block(cb);\n");
-    buf_puts(out, "            if (cb->value) cb->drop_fn(cb->value);\n");
-    buf_puts(out, "            free(cb);\n");
+    buf_puts(out, "            rc_free_queue_push(cb);\n");
     buf_puts(out, "            return true;\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "    }\n");
@@ -2475,6 +2581,34 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "void *rc_get_value(RcControlBlock *cb) {\n");
     buf_puts(out, "    if (!cb) return NULL;\n");
     buf_puts(out, "    return cb->value;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "RcControlBlock *tur_rc_from_ref(void *ref_value, int value_type_kind) {\n");
+    buf_puts(out, "    if (!ref_value) return NULL;\n");
+    buf_puts(out, "    RcControlBlock *cb = (RcControlBlock *)malloc(sizeof(RcControlBlock));\n");
+    buf_puts(out, "    if (!cb) { fprintf(stderr, \"rc/from-ref: out of memory\\n\"); abort(); }\n");
+    buf_puts(out, "    cb->strong_count = 1;\n");
+    buf_puts(out, "    cb->weak_count = 0;\n");
+    buf_puts(out, "    cb->value = ref_value;\n");
+    buf_puts(out, "    cb->drop_fn = default_drop_fn_for_type(value_type_kind);\n");
+    buf_puts(out, "    cb->value_type_kind = (uint8_t)value_type_kind;\n");
+    buf_puts(out, "    cb->color = GC_WHITE;\n");
+    buf_puts(out, "    cb->may_contain_cycles = true;\n");
+    buf_puts(out, "    memset(cb->reserved, 0, sizeof(cb->reserved));\n");
+    buf_puts(out, "    gc_register_block(cb);\n");
+    buf_puts(out, "    return cb;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "void *tur_ref_from_rc(RcControlBlock *cb) {\n");
+    buf_puts(out, "    if (!cb) return NULL;\n");
+    buf_puts(out, "    if (cb->strong_count != 1 || cb->weak_count != 0) {\n");
+    buf_puts(out, "        fprintf(stderr, \"ref/from-rc requires unique rc (strong_count==1 and weak_count==0), got strong=%llu weak=%llu\\n\",\n");
+    buf_puts(out, "                (unsigned long long)cb->strong_count, (unsigned long long)cb->weak_count);\n");
+    buf_puts(out, "        abort();\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    void *value = cb->value;\n");
+    buf_puts(out, "    cb->value = NULL;\n");
+    buf_puts(out, "    gc_unregister_block(cb);\n");
+    buf_puts(out, "    free(cb);\n");
+    buf_puts(out, "    return value;\n");
     buf_puts(out, "}\n\n");
     
     /* Phase 10: Emit remaining gc runtime for cycle collection */

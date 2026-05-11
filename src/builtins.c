@@ -104,3 +104,19 @@ const BuiltinSpec *builtin_first_with_name(const Symbol *name) {
     }
     return NULL;
 }
+
+uint32_t builtin_collect_with_name(const Symbol *name,
+                                   const BuiltinSpec **out,
+                                   uint32_t max_out) {
+    if (!out || max_out == 0) return 0;
+    uint32_t n = 0;
+    for (size_t i = 0; i < TABLE_LEN; i++) {
+        if (table_[i].name_sym != name) continue;
+        if (n < max_out) {
+            out[n++] = &table_[i];
+        } else {
+            break;
+        }
+    }
+    return n;
+}

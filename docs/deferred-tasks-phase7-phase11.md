@@ -156,6 +156,63 @@ The detailed narrative sections previously used for Phase 7 and Phase 11 deferre
 - [x] Specify rules for `rc/from-ref` and `ref/from-rc` (poisoning semantics, unique-ownership check behavior, diagnostics).
 - [x] Define deferred-free queue requirements (queue type, flush points, recursion-guard behavior).
 - [x] Clarify scope for weak dangling behavior fixture (`upgrade -> NULL` vs hard runtime error path).
+- [x] Define concrete compiler pipeline hook for `drop_fn` selection at allocation sites (`rc/of`, conversions), including where resolved drop symbols are stored in IR.
+- [x] Define auto-generated drop-glue contract for user composite types (field traversal order, nested RC handling, cycle-safe behavior, and re-entrancy rules).
+- [x] Define non-Copy payload drop policy matrix by type category (primitive, ref, rc, weak, struct, tuple, function) and whether policy is static, dynamic, or hybrid.
+- [x] Define destructor ordering guarantees between user drop glue, runtime free-queue draining, and control-block release.
+- [x] Define diagnostics contract for invalid drop-policy configurations (missing drop glue, unsupported type forms, conflicting ownership annotations).
+- [x] Define last-use elision safety model (alias assumptions, side-effect barriers, call/loop boundaries, volatile/extern interactions).
+- [x] Define verification strategy for elision correctness (IR assertions, codegen invariants, and fixture classes for positive and negative elision cases).
+
+#### Phase 9 prerequisite decisions (2026-05-10)
+
+1. `drop_fn` pipeline hook and IR storage
+- Resolve `drop_fn` during elaboration after type finalization, before lowering/codegen.
+- Store resolved drop identity on RC-producing expressions as a nullable IR field (for example on `EX_RC_OF` / conversion nodes), not by re-deriving in emitter.
+- Keep runtime ABI as function pointer `void (*drop_fn)(void *)`; emit `NULL` only for unreachable/internal placeholder paths, never for valid non-Copy payloads.
+- For `rc/from-ref`, carry over the same resolved payload drop contract as if created by `rc/of` for that payload type.
+
+2. Auto-generated drop glue for composite types
+- Generate one monomorphic drop-glue function per concrete payload type that requires destruction.
+- Field traversal order is reverse declaration order (LIFO-like unwind semantics).
+- Nested RC/weak fields: use RC operations (`rc_strong_decrement` / weak decrement path), never raw `free`.
+- Non-owning fields (`weak`, borrowed pointers, function pointers) do not own payload memory and are not recursively freed.
+- Drop glue must be re-entrancy-safe: no global mutable recursion counters; rely on RC counts + deferred free queue behavior.
+
+3. Non-Copy payload policy matrix
+- Primitive scalars: static no-op policy (`drop_fn` may be default free-only of payload storage).
+- `ref<T>` payloads: explicit owned-free policy (free referenced storage according to ref ownership rules).
+- `rc<T>` payloads: decrement policy on inner RC handle(s), not deep free.
+- `weak<T>` payloads: weak-release policy only.
+- Struct/tuple payloads: synthesized glue by field policy composition.
+- Function values/closures: treat captured environment ownership according to closure representation; if owning env exists, provide glue; otherwise no-op.
+- Policy selection is static by type kind in this phase; no runtime type switching.
+
+4. Destructor ordering guarantees
+- Logical order on last strong release: user drop glue runs before control-block free.
+- Any RC releases triggered by drop glue may enqueue additional frees; queue drain occurs at defined flush points (existing explicit drains and scope-end/runtime shutdown points as implemented).
+- Control block memory is released only after payload destructor path completes for that block.
+- Weak cleanup remains count-driven and cannot observe partially dropped payload state as live.
+
+5. Diagnostics contract
+- Missing drop glue for a required non-Copy payload: hard compile-time diagnostic at allocation/conversion site.
+- Unsupported type forms in RC payload (if any remain): hard compile-time diagnostic naming the offending type shape.
+- Conflicting ownership annotations affecting drop policy inference: emit primary span at declaration plus note at conflicting site.
+- Diagnostic text should name operation (`rc/of`, `rc/from-ref`, etc.) and required drop contract.
+
+6. Last-use elision safety model
+- Elide retain/release only when SSA-like last-use proof is available in the current function body.
+- Do not elide across unknown side-effect boundaries: extern calls, opaque builtins, loops with unknown aliasing, or captured closure escapes.
+- Treat address-taking/escape of RC handles as an elision barrier.
+- Prefer conservative false negatives over unsound elision.
+
+7. Elision verification strategy
+- Add IR-level assertions: no negative refcount transitions and no dropped-live-use edges after elision.
+- Add codegen invariants checks in snapshots for representative patterns (straight-line, branch, loop barrier, call barrier).
+- Add fixture classes:
+	- Positive: obvious last-use in straight-line code.
+	- Negative: alias/escape/call-boundary cases where elision must not fire.
+	- Regression: `ref/from-rc` + deferred queue interaction under elision-disabled boundary.
 
 ### Phase 10 prerequisites (GC v1 Bacon-Rajan infrastructure)
 - [x] Define type-metadata shape needed to scan object fields for RC pointers during trial deletion.
@@ -169,29 +226,67 @@ The detailed narrative sections previously used for Phase 7 and Phase 11 deferre
 ## Actionable Remaining Tasks — Phases 8, 9, 10 (Checkbox Backlog)
 
 ### Phase 8 remaining tasks
-- [ ] Implement operator lookup failure diagnostics showing operator, arg types, and available overload set.
-- [ ] Add docs URL plumbing for suggestions and include at least one fixture/assertion covering URL emission.
-- [ ] Add/update golden fixtures for multi-line diagnostic outputs under `tests/fixtures/errors/*.diag`.
-- [ ] Add CI/lint check to fail when snapshot IR contains `SPAN_UNKNOWN` where prohibited.
+- [x] Implement operator lookup failure diagnostics showing operator, arg types, and available overload set.
+- [x] Add docs URL plumbing for suggestions and include at least one fixture/assertion covering URL emission.
+- [x] Add/update golden fixtures for multi-line diagnostic outputs under `tests/fixtures/errors/*.diag`.
+- [x] Add CI/lint check to fail when snapshot IR contains `SPAN_UNKNOWN` where prohibited.
 
 ### Phase 9 remaining tasks
 
 #### RC lifecycle and drop behavior
-- [ ] Populate `drop_fn` for user-defined destructor-bearing RC payloads.
-- [ ] Inject `(defer (rc/drop x))` for `let` bindings of `(rc/of ...)` according to selected policy.
-- [ ] Implement type-dependent drop policy for non-Copy payloads via explicit drop hooks.
-- [ ] Implement/verify last-use elision for redundant retain/release paths.
+- [ ] Populate `drop_fn` for user-defined destructor-bearing RC payloads. **[PARTIAL: wired default typed hooks for `ref<T>`, `rc<T>`, and `weak<T>` payload kinds; user-defined composite payload glue still pending]**
+- [ ] Inject `(defer (rc/drop x))` for `let` bindings of `(rc/of ...)` **[DEFERRED: complex interaction with ref/from-rc consumption; needs binding-usage analysis]**.
+- [x] Implement type-dependent drop policy for non-Copy payloads via explicit drop hooks (current Phase 9 kind set: `ref`, `rc`, `weak`).
+- [ ] Implement/verify last-use elision for redundant retain/release paths. **[DEFERRED: requires SSA-like usage analysis; fixtures created as baseline; full implementation in Phase 9 follow-up]**
+
+#### Phase 9 follow-up: SSA-like last-use elision implementation
+- [ ] Add a per-function SSA-like usage pass that computes last-use information for RC values (including linear flow + branch merge handling).
+- [ ] Define and implement elision eligibility rules in the pass (single-use clones, no alias/escape, no opaque side-effect barriers, no loop uncertainty).
+- [ ] Wire pass results into lowering/emission so eligible retain/release pairs are skipped without changing observable semantics.
+- [ ] Add conservative bailout diagnostics/logging mode for development builds to explain why candidate elisions were rejected.
+- [ ] Extend regression fixtures with positive branch/merge elision cases and negative barrier cases (extern call, closure escape, address-taken).
+- [ ] Add at least one fixture covering `ref/from-rc` interaction to verify elision never breaks uniqueness/poison semantics.
+- [ ] Add snapshot assertions to prove removed retain/release calls in positive cases and preserved calls in blocked cases.
+- [ ] Re-run full Phase 9 fixture matrix and record pass/fail summary in this doc when the follow-up lands.
 
 #### Queueing and conversions
-- [ ] Implement deferred free queue to avoid deep recursive free chains.
-- [ ] Implement `(rc/from-ref r)` conversion with move/poison semantics.
-- [ ] Implement `(ref/from-rc r)` conversion with strong-count==1 enforcement.
-- [ ] Add negative diagnostic for non-unique `ref/from-rc` attempts.
+- [x] Implement deferred free queue to avoid deep recursive free chains.
+- [x] Implement `(rc/from-ref r)` conversion with move/poison semantics.
+- [x] Implement `(ref/from-rc r)` conversion with strong-count==1 enforcement.
+- [x] Add negative diagnostic for non-unique `ref/from-rc` attempts.
 
 #### Phase 9 fixtures
-- [ ] Add `weak-dangling.tur` fixture for post-drop weak behavior.
-- [ ] Add `rc-ref-conversion.tur` fixture.
-- [ ] Add `rc-unique-violation.tur` negative fixture.
+- [x] Add `weak-dangling.tur` fixture for post-drop weak behavior.
+- [x] Add `rc-ref-conversion.tur` fixture.
+- [x] Add `rc-unique-violation.tur` negative fixture.
+- [x] Add `rc-nested-free-queue.tur` fixture for deferred queue stress test.
+- [x] Add `rc-elision-positive.tur` fixture for obvious last-use elision cases.
+- [x] Add `rc-elision-negative-escape.tur` fixture for cases where elision is blocked.
+
+#### Phase 9 Completion Note (Follow-up Session)
+
+Completed in this session:
+- Extended `collect_free_vars` traversal to handle all new rc/weak expression kinds (rc/of, rc/clone, rc/drop, rc/from-ref, ref/from-rc, weak, upgrade, strong-count, weak?, ref?)
+- Implemented proper free-variable capture for defer bodies containing rc/weak operations
+- Refined auto-drop semantics: refs extracted via ref/from-rc are no longer auto-dropped (they don't own the data)
+- Validated conversion fixtures all pass: `weak-dangling`, `rc-ref-conversion`, `rc-unique-violation`
+- Documented that rc auto-drop injection is deferred pending more sophisticated binding-usage analysis
+
+**Additional completion in continuation session:**
+- Implemented deferred free queue infrastructure to prevent stack overflow on deeply nested RC value drops
+- Added rc_free_queue.h/c with queue management functions (push, drain)
+- Modified rc.c rc_strong_decrement to use queue instead of immediate freeing
+- Updated emit.c to generate rc_free_queue_drain calls after rc_strong_decrement operations
+- Added type-aware default drop hooks for non-Copy payload kinds (`ref`, `rc`, `weak`) and wired selection in runtime + emitted runtime (`rc_cb_alloc`, `tur_rc_from_ref`)
+- Added fixture `rc-drop-hook-inner-rc` validating nested `rc<rc<T>>` payload release behavior (`2 -> 1` strong-count transition)
+- Validated all Phase 9 fixtures pass: rc-basic, rc-shared, rc-cycle-leak, rc-auto-drop-injection, weak-upgrade, weak-dangling, rc-ref-conversion, rc-drop-hook-inner-rc
+
+**Latest continuation session (elision baseline):**
+- Created `rc-elision-positive.tur` fixture demonstrating obvious last-use elision candidate (single clone-use-drop sequence)
+- Created `rc-elision-negative-escape.tur` fixture showing cases where elision must not fire (multiple uses, extern call barriers)
+- Documented elision opportunity: when RC is cloned, used exactly once, then immediately dropped, the increment/decrement pair can be elided
+- Deferred full SSA-like analysis implementation to Phase 9 follow-up; current baseline shows where optimization would apply
+- All 12 Phase 9 fixtures now pass: rc-basic, rc-shared, rc-cycle-leak, rc-auto-drop-injection, weak-upgrade, weak-dangling, rc-ref-conversion, rc-unique-violation, rc-nested-free-queue, rc-drop-hook-inner-rc, rc-elision-positive, rc-elision-negative-escape
 
 ### Phase 10 remaining tasks
 
@@ -355,3 +450,17 @@ The following prerequisites were executed and documented:
 	- [tests/fixtures/phase11-snapshot-return-transfer/input.tur](tests/fixtures/phase11-snapshot-return-transfer/input.tur)
 	- generated snapshots: `expected.c` in each fixture directory
 - Static-overhead check: grep over new snapshots found no runtime move bookkeeping markers (`is_moved`, `tur_move`, `copy_kind`, `move_`).
+- Phase 8 diagnostics follow-up completed:
+	- overload lookup now reports available overload set (operator, arity, arg/result types): [src/elab.c](src/elab.c), [src/builtins.c](src/builtins.c), [src/builtins.h](src/builtins.h)
+	- docs URL plumbing exercised via unbound-symbol suggestion path: [src/elab.c](src/elab.c)
+	- new diagnostics fixtures: [tests/fixtures/errors/operator-overload-set/input.tur](tests/fixtures/errors/operator-overload-set/input.tur), [tests/fixtures/errors/unbound-symbol-doc-url/input.tur](tests/fixtures/errors/unbound-symbol-doc-url/input.tur)
+	- SPAN_UNKNOWN snapshot guard in test flow: [tests/check-span-unknown.sh](tests/check-span-unknown.sh), [Makefile](Makefile)
+- Phase 9 fixture follow-up:
+	- added weak dangling behavior fixture for post-drop `upgrade` path: [tests/fixtures/weak-dangling/input.tur](tests/fixtures/weak-dangling/input.tur)
+	- implemented `(rc/from-ref r)` and `(ref/from-rc rc)` expression kinds through elaboration and emission, with `ref/from-rc` uniqueness runtime enforcement:
+		- [src/expr.h](src/expr.h), [src/expr.c](src/expr.c), [src/elab.c](src/elab.c), [src/emit.c](src/emit.c)
+	- updated `rc/of` emission to allocate payload storage separately from control block to support safe ownership transfer in `ref/from-rc`:
+		- [src/emit.c](src/emit.c)
+	- added/validated conversion fixtures:
+		- positive conversion: [tests/fixtures/rc-ref-conversion/input.tur](tests/fixtures/rc-ref-conversion/input.tur)
+		- uniqueness violation negative: [tests/fixtures/rc-unique-violation/input.tur](tests/fixtures/rc-unique-violation/input.tur)

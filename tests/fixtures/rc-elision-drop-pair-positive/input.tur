@@ -1,0 +1,8 @@
+(defn main [] :int
+  (let [orig (rc/of 42)]
+    ;; Safe elision candidate: clone is only used in rc/drop.
+    (let [tmp (rc/clone orig)]
+      (rc/drop tmp))
+    (println (rc/strong-count orig))
+    (rc/drop orig)
+    0))

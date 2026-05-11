@@ -155,6 +155,16 @@ void expr_print(Buf *b, const Expr *e) {
             expr_print(b, e->as.rc_count_.expr);
             buf_putc(b, ')');
             break;
+        case EX_RC_FROM_REF:
+            buf_puts(b, "(rc/from-ref ");
+            expr_print(b, e->as.rc_from_ref_.expr);
+            buf_putc(b, ')');
+            break;
+        case EX_REF_FROM_RC:
+            buf_puts(b, "(ref/from-rc ");
+            expr_print(b, e->as.ref_from_rc_.expr);
+            buf_putc(b, ')');
+            break;
         case EX_WEAK:
             buf_puts(b, "(weak ");
             expr_print(b, e->as.weak_.expr);
