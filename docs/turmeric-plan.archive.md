@@ -670,7 +670,7 @@ Goal: `fn` captures locals; closures are first-class values; the §2 counter exa
 
 Goal: scope-bounded cleanup with LIFO ordering and correct early-return behavior. No `ref<T>` yet — that's phase 5, layered on top.
 
-> **Architectural commitment: the unified defer model.** Defers are a runtime list-on-frame, not codegen labels. This is *modestly* more work in phase 4 and saves a phase-4-rewrite if we ever ship effect handlers (or any other feature where defers fire from a non-syntactic exit point). See [effects-plan.md §6.10](effects-plan.md) for the full rationale; in short, every plausible future strategy (S1 "run on capture" / S2 "attach to continuation" / S3 "forbid") is then a runtime policy decision rather than an architectural rewrite. The cost of paying for this if effects never ship is sub-percent at runtime.
+> **Architectural commitment: the unified defer model.** Defers are a runtime list-on-frame, not codegen labels. This is *modestly* more work in phase 4 and saves a phase-4-rewrite if we ever ship effect handlers (or any other feature where defers fire from a non-syntactic exit point). See [effects-plan.md §6.10](archive/effects-plan.md) for the full rationale; in short, every plausible future strategy (S1 "run on capture" / S2 "attach to continuation" / S3 "forbid") is then a runtime policy decision rather than an architectural rewrite. The cost of paying for this if effects never ship is sub-percent at runtime.
 
 **Frame data structure**
 - [x] Add a `Frame` struct (or rename `Scope` if it's already in `elab.c`) with: a defer list, a parent pointer, a span. Lives on the C stack in v0/v1.
@@ -688,7 +688,7 @@ Goal: scope-bounded cleanup with LIFO ordering and correct early-return behavior
 - [x] Early `return X`: rewrite to "for each enclosing frame, fire defers, then return". This walks frames via the parent pointer; it's a small loop in the emitted code, not a goto chain.
 - [x] Function-level frame exists even if it has no defers, so `ref<T>` (phase 5) can register drops on it without special-casing.
 
-**Future-proofing slots (per [effects-plan.md §6.10](effects-plan.md))**
+**Future-proofing slots (per [effects-plan.md §6.10](archive/effects-plan.md))**
 - [x] `Frame` has a `parent` pointer field — even though v0/v1 doesn't follow it (early return walks via codegen knowledge of nesting). The field exists so v3's heap-frame mode plugs in without restructuring.
 - [x] Every `FnDef` carries a `may_capture: bool`, defaulting to `false`. Phase 4 doesn't read it; phase v3 will read it to choose stack-vs-heap frame allocation.
 - [x] Every function `Type` has an `effect_row` slot, defaulting to `nullptr` (treated as `{}` empty row). Phase 4 doesn't populate it; type-equality treats `nullptr == nullptr` as compatible. Phase v3 will populate it.
@@ -1148,7 +1148,7 @@ Goal: automatic cycle detection and collection for `rc<T>` values. Layers on top
 
 ### 10.12 Phase 11 — Copy traits
 
-**Goal:** Distinguish `Copy` types (bitwise duplication) from `Move` types (ownership transfer). Extend the existing `ref<T>` move-poisoning machinery to all non-`Copy` types. See [docs/copy-borrow-move-lifetimes.md](docs/copy-borrow-move-lifetimes.md) for rationale.
+**Goal:** Distinguish `Copy` types (bitwise duplication) from `Move` types (ownership transfer). Extend the existing `ref<T>` move-poisoning machinery to all non-`Copy` types. See [docs/copy-borrow-move-lifetimes.md](archive/copy-borrow-move-lifetimes.md) for rationale.
 
 **Type system extensions** — `src/types.{c,h}`
 - [x] Add `copy_kind` field to `Type` struct: `CK_MOVE` (default), `CK_COPY`, `CK_UNSIZED` (for unsized types like slices).
@@ -1201,7 +1201,7 @@ Goal: automatic cycle detection and collection for `rc<T>` values. Layers on top
 
 ### 10.13 Phase 12 — Borrow traits
 
-**Goal:** Introduce checked reference types `&T` (immutable, shared) and `&mut T` (mutable, exclusive) as a typed, safe alternative to raw `ptr<T>`. Enforce Rust-style aliasing rules within a function. This is the *Hybrid Approach* (Option D) from [docs/copy-borrow-move-lifetimes.md](docs/copy-borrow-move-lifetimes.md).
+**Goal:** Introduce checked reference types `&T` (immutable, shared) and `&mut T` (mutable, exclusive) as a typed, safe alternative to raw `ptr<T>`. Enforce Rust-style aliasing rules within a function. This is the *Hybrid Approach* (Option D) from [docs/copy-borrow-move-lifetimes.md](archive/copy-borrow-move-lifetimes.md).
 
 **Type system extensions** — `src/types.{c,h}`
 - [x] Add `TY_REF_IMMUT` for `&T` (immutable borrow).

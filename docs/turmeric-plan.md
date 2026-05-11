@@ -14,8 +14,12 @@
 | 18 | ✅ **Complete** | Delimited continuations (`shift`/`reset`) | Selective CPS-transform; one-shot continuations; S2 defer strategy; substrate for algebraic effects. v1: direct-style emission with runtime continuation support. |
 | 19 | ✅ **Complete** | Algebraic effects (v3) | OCaml 5-style effect handlers; effect rows; built on shift/reset substrate and unified defer model. v1: effect lowering (perform->shift, handle->reset), CPS marking pass, closure-aware shift emission. |
 | H0–H6 | 📋 **Planned (v2)** | Higher-kinded types | Six-phase roadmap: kind system (H0), kind-polymorphic typeclasses (H1), HKT dispatch (H2), built-in typeclass library (H3), kind-polymorphic functions (H4), advanced kinds (H5), integration & polish (H6). Entry point for generic `Functor`, `Monad`, `Traversable`. See [hkt-implementation-plan.md](hkt-implementation-plan.md) for full design. |
+| 20 | 📋 **Planned (v2)** | STM core (v1) | Haskell-style Software Transactional Memory; `TVar<T>`, `stm`/`atomically` forms, `retry`/`check`/`or-else`; `TMVar`, `TChan`, `TSem`; global-lock v1 implementation; `stdlib/stm.tur`. See [stm-plan.md](archive/stm-plan.md). Prerequisites: Phase 19 + T19 thread primitives. |
+| 21 | 📋 **Planned (v2)** | STM scalable (v2) | Fine-grained per-TVar locking with lock-ordering; lock stripping; performance benchmarks; stress tests. Prerequisites: Phase 20. |
+| P1–P4 | 📋 **Planned (v2)** | Persistent collections (HAMT) | Immutable hash map with structural sharing; ref-counted C implementation; Lisp bindings; optional compiler lowering for `^persistent` maps. See [hamt-feasibility.md](archive/hamt-feasibility.md). |
+| B1–B5 | 📋 **Planned (v2)** | Backtracking / cloneable continuations | Multi-shot continuations via `Clone` trait; backtracking monad; logic programming (`stdlib/logic.tur`); parser combinators (`stdlib/parsec.tur`). See [backtracking-cloneable-continuations-plan.md](archive/backtracking-cloneable-continuations-plan.md). |
 
-**Last updated:** 2026-05-10 (Phase 19: Algebraic effects v1. HKT roadmap added.)
+**Last updated:** 2026-05-11 (Phase 19: Algebraic effects v1. HKT roadmap added. STM phases 20–21 added. HAMT phases P1–P4 added. Backtracking phases B1–B5 added.)
 
 ---
 
@@ -101,7 +105,7 @@
 
 ### 10.17 Phase 16 — Capability passing (v1 effects)
 
-**Goal:** Provide a library-level effect system using capability passing built on typeclasses. Zero runtime cost. Covers mocking, dependency injection, and resource passing without new compiler primitives. This is the v1 effects story per [effects-plan.md §7.2](effects-plan.md).
+**Goal:** Provide a library-level effect system using capability passing built on typeclasses. Zero runtime cost. Covers mocking, dependency injection, and resource passing without new compiler primitives. This is the v1 effects story per [effects-plan.md §7.2](archive/effects-plan.md).
 
 **Typeclass infrastructure** — depends on Phase 15 (typeclasses)
 - [x] `src/typeclass.{c,h}` from Phase 15 already supports dictionary-passing dispatch.
@@ -212,7 +216,7 @@
 
 ### 10.19 Phase 18 — Delimited continuations (`shift`/`reset`)
 
-**Goal:** Add delimited continuations as the substrate for algebraic effects. This is §12.1 from the main plan. Selective CPS-transform on demand: only functions containing `shift` are converted. See [effects-plan.md](effects-plan.md) for full rationale.
+**Goal:** Add delimited continuations as the substrate for algebraic effects. This is §12.1 from the main plan. Selective CPS-transform on demand: only functions containing `shift` are converted. See [effects-plan.md](archive/effects-plan.md) for full rationale.
 
 **Surface syntax**
 - [x] `(reset expr)` — establishes a new continuation boundary. Returns the result of `expr`.
@@ -236,7 +240,7 @@
 - [x] `shift` lowers to: call handler function with body value. **v1: direct-style emission with closure support**
 - [x] Continuation frames are heap-allocated (they escape their defining scope by definition). Runtime functions implemented in runtime.c.
 
-**Interaction with defer and ref** — per [effects-plan.md §6](effects-plan.md)
+**Interaction with defer and ref** — per [effects-plan.md §6](archive/effects-plan.md)
 - [x] **S2 strategy (chosen):** Defer bodies are attached to continuation frames. When a continuation is captured, the scope frames between capture point and `reset` boundary are heap-allocated and attached to the continuation.
 - [x] Defers fire when: (a) continuation is resumed and scopes exit normally, or (b) continuation is dropped without resume.
 - [x] `ref<T>` drops are just defers; same mechanism applies.
@@ -277,7 +281,7 @@
 
 ### 10.20 Phase 19 — Algebraic effects (v3)
 
-**Goal:** Add OCaml 5-style algebraic effect handlers with one-shot continuations. Built on Phase 18's delimited continuations substrate and Phase 4's unified defer model. This is the v3 effects story per [effects-plan.md](effects-plan.md).
+**Goal:** Add OCaml 5-style algebraic effect handlers with one-shot continuations. Built on Phase 18's delimited continuations substrate and Phase 4's unified defer model. This is the v3 effects story per [effects-plan.md](archive/effects-plan.md).
 
 **Prerequisites verification**
 - [x] Phase 4 unified defer model is in place (§6.10 of effects-plan.md).
@@ -285,7 +289,7 @@
 - [x] Effect row slots in function types are reserved (Phase 4).
 - [x] `may_capture` bits on functions are reserved (Phase 4).
 
-**Surface syntax** — per [effects-plan.md §4](effects-plan.md)
+**Surface syntax** — per [effects-plan.md §4](archive/effects-plan.md)
 - [x] `(defeffect Name [params...] : result-type)` — declare a new effect (v1: type checked but not lowered).
 - [x] `(perform (Name args...))` — raise/perform an effect. v1: lowered to shift.
 - [x] `(handle expr (Name [params...] k) body ...)` — handle effects. v1: lowered to reset.
@@ -316,7 +320,7 @@
 - [x] `resume k v` lowers to: `continue k v` (consumes k, one-shot). v1: runtime function `tur_cont_resume` handles it.
 - [x] `discontinue k e` lowers to: `throw e` (but in the context of the handler). v1: runtime functions `tur_cont_drop` + `tur_throw` handle it.
 
-**Defer integration — S2 strategy** (per [effects-plan.md §6.2](effects-plan.md))
+**Defer integration — S2 strategy** (per [effects-plan.md §6.2](archive/effects-plan.md))
 - [x] When a continuation is captured (at `perform`), walk captured scope frames and heap-allocate them if not already heap. v1: `tur_cont_alloc` captures frame chain.
 - [x] Defers are attached to scope frames; they fire when the frame is released. v1: `tur_frame_fire_chain` implemented.
 - [x] Frame release happens on: (a) normal scope exit during resume, (b) continuation drop. v1: `tur_cont_resume` and `tur_cont_drop` handle this.
@@ -419,7 +423,7 @@
 
 ## Hybrid Result + Limited Panic (Phases R0–R6)
 
-**Status:** Planned. Prerequisites: Phase 15 (Typeclasses v1 — for `Display`/`Debug` traits), Phase 17 (Exceptions — `setjmp`/`longjmp` substrate for `catch_unwind`). See [panic-system-vs-exception-system-plan.md](./panic-system-vs-exception-system-plan.md) for full rationale and open-question answers.
+**Status:** Planned. Prerequisites: Phase 15 (Typeclasses v1 — for `Display`/`Debug` traits), Phase 17 (Exceptions — `setjmp`/`longjmp` substrate for `catch_unwind`). See [panic-system-vs-exception-system-plan.md](./archive/panic-system-vs-exception-system-plan.md) for full rationale and open-question answers.
 
 **Summary of resolved design decisions:**
 - Panic payloads are **typed** (not erased `Any`); catching specific panic types is supported via typed `catch_unwind`.
@@ -709,6 +713,916 @@
 
 ---
 
+## Thread Safety and Thread Primitives (Phases T19–T21)
+
+**Status:** Planned (v2). Prerequisites: Phase 17 (Exceptions — panic propagation from threads), Phase 4 (`defer` + scope unwind — lock release), Phase 5 (`ref<T>` ownership model). See [thread-safety-and-primitives-plan.md](archive/thread-safety-and-primitives-plan.md) for full design.
+
+| Phase | Goal | Exit Criterion |
+|---|---|---|
+| **T19** | Thread primitives v1 | `Arc<T>`, `Mutex<T>`, `Atomic<T>`, `Thread`/`JoinHandle`, `Chan<T>`, borrow checker `Send`/`Sync` enforcement all working |
+| **T20** | Thread pool and higher-level abstractions | `ThreadPool`, `Future<T>`, `Promise<T>`, `WorkQueue<T>`, `Semaphore` in stdlib |
+| **T21** | Fibers and effects integration (v2) | Fiber type, cooperative scheduler, `async`/`await` sugar via fibers + continuations |
+
+---
+
+### Phase T19 — Thread Primitives (v1)
+
+**Goal:** Add basic thread safety and thread primitives to Turmeric via C11 `<threads.h>` and `<stdatomic.h>`.
+
+**`Send`/`Sync` marker traits** — `src/types.{c,h}` + `src/typeclass.{c,h}`
+- [ ] Add `Send` marker trait: `T` is `Send` if it can be safely transferred to another thread (ownership moves).
+- [ ] Add `Sync` marker trait: `T` is `Sync` if it can be safely shared across threads (immutable or properly synchronized).
+- [ ] Auto-implement `Send` and `Sync` for all primitive types (`int`, `bool`, `float`, etc.).
+- [ ] Mark `ptr<T>`, `ref<T>`, `rc<T>`, `cont<T>` as neither `Send` nor `Sync`.
+- [ ] `Arc<T>` is `Send + Sync` if `T` is `Send + Sync`; `Mutex<T>` is `Send + Sync` if `T` is `Send`.
+- [ ] Enforce `Sync` implies `Send` in the elaborator.
+- [ ] Borrow checker integration: reject closures that capture non-`Send` types when passed to `thread`.
+
+**`Arc<T>` — atomic reference counting** — `src/rc.{c,h}` + `stdlib/arc.tur`
+- [ ] Define `Arc<T>` struct: `_Atomic(int) refcount` + `T value` in heap-allocated storage.
+- [ ] Implement `Arc::new`, `Arc::clone` (atomic refcount increment), `Arc::get` (immutable borrow).
+- [ ] Implement `Arc::drop` (atomic refcount decrement; free when zero, drop value).
+- [ ] Borrow checker: `Arc::clone` is a copy (shared ownership, atomic); `Arc::drop` is a consume.
+- [ ] Lowering: map to C11 `atomic_fetch_add`/`atomic_fetch_sub` on `_Atomic(int)`.
+
+**`Atomic<T>` — atomic operations** — `stdlib/atomic.tur`
+- [ ] Implement `Atomic::new`, `Atomic::load`, `Atomic::store`, `Atomic::exchange`.
+- [ ] Implement `Atomic::compare-exchange` (returns `{:ok new-value}` or `{:err current-value}`).
+- [ ] Implement `Atomic::fetch-add`, `Atomic::fetch-sub` for numeric types.
+- [ ] Memory ordering options: `:relaxed`, `:acquire`, `:release`, `:acqrel`, `:seqcst`.
+- [ ] Supported types: `bool`, `int`, `uint`, `isize`, `usize`, `ptr<T>`.
+- [ ] Lowering: map directly to C11 `_Atomic` and `atomic_*` functions.
+
+**`Mutex<T>` — mutual exclusion** — `stdlib/mutex.tur`
+- [ ] Implement `Mutex::new`, `Mutex::lock`, `Mutex::unlock`, `Mutex::get`, `Mutex::set!`.
+- [ ] Implement `Mutex::with-lock` scoped variant integrating with `defer` for automatic unlock.
+- [ ] Implement poison detection: if a thread panics while holding the lock, mark it poisoned; subsequent `lock` returns `Err(Poisoned)`.
+- [ ] Lowering: map to C11 `mtx_t`.
+
+**`RwLock<T>` — reader-writer lock** — `stdlib/rwlock.tur`
+- [ ] Implement `RwLock::new`, `RwLock::read`, `RwLock::read-unlock`, `RwLock::write`, `RwLock::write-unlock`.
+- [ ] Implement `RwLock::with-read` and `RwLock::with-write` scoped variants.
+- [ ] Lowering: custom POSIX `pthread_rwlock_t`-based implementation (C11 lacks a built-in rwlock).
+
+**`Condvar` — condition variables** — `stdlib/condvar.tur`
+- [ ] Implement `Condvar::new`, `Condvar::wait`, `Condvar::notify-one`, `Condvar::notify-all`.
+- [ ] Implement `Condvar::with-wait` scoped variant.
+- [ ] Lowering: map to C11 `cnd_t`.
+
+**`Once` and `Barrier`** — `stdlib/sync.tur`
+- [ ] Implement `Once::new`, `Once::call` (execute function exactly once; subsequent calls are no-ops).
+- [ ] Implement `Barrier::new`, `Barrier::wait` (block until N threads have each called `wait`).
+- [ ] Lowering: `Once` → C11 `once_flag`/`call_once`; `Barrier` → custom `Mutex` + `Condvar` + counter.
+
+**`Thread`/`JoinHandle`** — `stdlib/thread.tur`
+- [ ] Implement `thread` form: spawn an OS thread, return `JoinHandle`.
+- [ ] Implement `Thread::join` (block until completion; returns `Result<T, exn>`).
+- [ ] Implement `Thread::detach`, `Thread::id`, `Thread::done?`.
+- [ ] Thread attributes: `:stack-size`, `:detached`, `:name`.
+- [ ] Lowering: `thread` → `thrd_create()` with trampoline; `Thread::join` → `thrd_join()`.
+
+**Thread-local storage** — `stdlib/thread.tur`
+- [ ] Implement `thread-local` form, `thread-local-get`, `thread-local-set!`.
+- [ ] Lowering: C11 `thread_local` or `tss_t` key-based TLS.
+
+**`Chan<T>` — synchronous channel** — `stdlib/chan.tur`
+- [ ] Implement `Chan::new`, `Chan::send` (blocks until receiver ready), `Chan::recv` (blocks until sender ready).
+- [ ] Lowering: custom `Mutex` + `Condvar` implementation.
+
+**`AsyncChan<T>` — buffered async channel** — `stdlib/chan.tur`
+- [ ] Implement `AsyncChan::new` (with buffer size), `AsyncChan::send`, `AsyncChan::recv`.
+- [ ] Implement `AsyncChan::try-send`, `AsyncChan::try-recv` (non-blocking variants; return `:full`/`:empty`).
+- [ ] Lowering: custom `Mutex` + `Condvar` + ring-buffer queue.
+
+**`Select` — multi-channel operations** — `stdlib/chan.tur`
+- [ ] Implement `select` form: wait on multiple channels, dispatch to first-ready branch.
+- [ ] `default` branch for non-blocking select (no-op if no channel is ready).
+- [ ] Lowering: custom state machine; each `select` registers with all involved channels.
+
+**Integration with existing features**
+- [ ] `defer`: `Mutex::with-lock`, `RwLock::with-read/write` all release via `defer` on scope exit.
+- [ ] Exceptions: thread panics store the exception in `JoinHandle`; returned by `Thread::join`.
+- [ ] `ref<T>`/`rc<T>`: not `Send`/`Sync`; use `Arc<Mutex<T>>` or `Arc<Atomic<T>>` for shared state.
+- [ ] Continuations: `cont<T>` is not `Send` (captures C stack); resuming on wrong thread is UB.
+- [ ] Effect handler chains: migrate `global_handler_chain` and `global_effect_handler_chain` to `__thread` TLS.
+
+**Fixtures** — `tests/fixtures/threads/`
+- [ ] `thread-basic.tur` — spawn and join a thread.
+- [ ] `arc-basic.tur` — `Arc<T>` clone/drop across threads.
+- [ ] `mutex-basic.tur` — basic mutex lock/unlock.
+- [ ] `mutex-poison.tur` — poison detection on panic.
+- [ ] `rwlock-basic.tur` — reader-writer lock with multiple readers.
+- [ ] `atomic-basic.tur` — atomic increment from multiple threads.
+- [ ] `channel-basic.tur` — synchronous channel send/recv.
+- [ ] `async-channel.tur` — buffered async channel.
+- [ ] `select-basic.tur` — multi-channel select.
+- [ ] `barrier.tur` — barrier synchronization for N threads.
+- [ ] `once.tur` — one-time initialization.
+- [ ] `thread-arc.tur` — `Arc<Mutex<T>>` for shared mutable state.
+- [ ] Integration: `threaded-fizzbuzz.tur` — multi-threaded FizzBuzz.
+- [ ] Integration: `producer-consumer.tur` — producer-consumer with channels.
+- [ ] Stress: `thread-stress.tur` — spawn 1000 threads, join all.
+- [ ] Stress: `mutex-stress.tur` — 10 threads contend on a mutex.
+- [ ] Stress: `atomic-stress.tur` — atomic increment from 100 threads.
+- [ ] Negative: `thread-send-ref.tur` — sending `ref<T>` across threads is a compile error.
+- [ ] Negative: `thread-send-cont.tur` — sending `cont<T>` across threads is a compile error.
+- [ ] Codegen snapshots: thread spawn, `Arc` refcount, `Mutex` lock/unlock lowering.
+
+**Exit criterion:** Thread spawn and join work; `Arc<T>`, `Mutex<T>`, `Atomic<T>` work correctly; `Send`/`Sync` checking rejects unsafe cross-thread operations at compile time; channels and `Select` work; all fixtures pass under ThreadSanitizer.
+
+---
+
+### Phase T20 — Thread Pool and Higher-Level Abstractions
+
+**Goal:** Add a thread pool and higher-level concurrency abstractions on top of T19 primitives.
+
+**`ThreadPool`** — `stdlib/threadpool.tur`
+- [ ] Implement `ThreadPool::new` with fixed size: takes a thread count, spawns worker threads.
+- [ ] Implement `ThreadPool::submit` (submit a closure; returns `Future<T>`).
+- [ ] Implement `ThreadPool::shutdown` (drain queue and join all threads).
+- [ ] Implement dynamic-scaling variant: `ThreadPool::new-dynamic` (grows up to a max size on demand).
+
+**`Future<T>` and `Promise<T>`** — `stdlib/future.tur`
+- [ ] Implement `Future<T>`: represents a value that will be available asynchronously.
+- [ ] Implement `Future::get` (blocks until value available; returns `Result<T, exn>`).
+- [ ] Implement `Future::done?` (non-blocking check).
+- [ ] Implement `Promise<T>`: producer side of a `Future`.
+- [ ] Implement `Promise::fulfill` (set the value; wakes all blocked `Future::get` callers).
+- [ ] Implement `Promise::fail` (set an exception; `Future::get` returns `Err`).
+
+**`WorkQueue<T>`** — `stdlib/threadpool.tur`
+- [ ] Implement `WorkQueue::new`, `WorkQueue::push`, `WorkQueue::pop`.
+- [ ] Bounded queue: `WorkQueue::new-bounded` (blocks on `push` when full, `pop` when empty).
+- [ ] Thread-safe via internal `Mutex` + `Condvar`.
+
+**`Semaphore`** — `stdlib/sync.tur`
+- [ ] Implement `Semaphore::new` (with initial count), `Semaphore::acquire`, `Semaphore::release`.
+- [ ] Lowering: custom `Mutex` + `Condvar` + counter.
+
+**Fixtures** — `tests/fixtures/threads/`
+- [ ] `thread-pool-basic.tur` — submit tasks, collect results.
+- [ ] `thread-pool-dynamic.tur` — dynamic-scaling pool.
+- [ ] `future-basic.tur` — `Future`/`Promise` round-trip.
+- [ ] `future-error.tur` — `Promise::fail` propagates error to `Future::get`.
+- [ ] `work-queue.tur` — bounded work queue with producers and consumers.
+- [ ] `semaphore.tur` — counting semaphore usage.
+- [ ] Integration: `raytracer.tur` — parallel ray-tracer using thread pool.
+
+**Exit criterion:** Thread pool with fixed and dynamic sizing works; `Future`/`Promise` abstraction is ergonomic; `Semaphore` and `WorkQueue` are available in stdlib.
+
+---
+
+### Phase T21 — Fibers and Effects Integration (v2)
+
+**Goal:** Add fibers (user-space cooperative threads) that integrate with delimited continuations and effects, enabling `async`/`await` sugar.
+
+**Prerequisites:**
+- Phase T19 — Thread primitives (OS-thread scheduler host).
+- Phase 18 — Delimited continuations (`reset`/`shift` CPS substrate).
+- Phase 19 — Algebraic effects (for full handler integration).
+
+**Fiber type and API** — `stdlib/fiber.tur`
+- [ ] Define `Fiber<T>` type: user-space coroutine backed by a heap-allocated stack.
+- [ ] Implement `Fiber::new` (create a fiber from a closure), `Fiber::resume`, `Fiber::yield`.
+- [ ] Implement `Fiber::done?`, `Fiber::result`.
+- [ ] Fiber-local storage: `fiber-local`, `fiber-local-get`, `fiber-local-set!`.
+
+**Fiber scheduler** — `stdlib/fiber.tur`
+- [ ] Implement cooperative scheduler: run fibers until they yield or complete.
+- [ ] `Scheduler::new`, `Scheduler::spawn`, `Scheduler::run-to-completion`.
+- [ ] Integrate with channels: a fiber blocked on `Chan::recv` yields to the scheduler.
+
+**`reset`/`shift` integration** — `src/cps.{c,h}` + `src/runtime.{c,h}`
+- [ ] Continuations captured inside a fiber are scoped to that fiber's stack; cross-fiber resume is a runtime error.
+- [ ] Fibers interoperate with `handle`/`perform` effect handlers within the same fiber.
+
+**`async`/`await` sugar** — `src/reader.{c,h}` + `src/elab.{c,h}`
+- [ ] `(async expr)` — wrap expression in a fiber; return type is `Future<T>`.
+- [ ] `(await future)` — yield current fiber until `future` completes; evaluates to `T`.
+- [ ] `async`/`await` desugars to `Fiber::new` + `Fiber::resume` + `Fiber::yield` calls.
+- [ ] Implement `ThreadPool::submit-async` for submitting `async` tasks.
+
+**Fixtures** — `tests/fixtures/fibers/`
+- [ ] `fiber-basic.tur` — create and resume a fiber.
+- [ ] `fiber-yield.tur` — fiber yield and resume round-trip.
+- [ ] `fiber-scheduler.tur` — multiple fibers scheduled cooperatively.
+- [ ] `async-await-basic.tur` — `async`/`await` syntax sugar.
+- [ ] `async-await-channel.tur` — async producer-consumer via channels.
+- [ ] Negative: `fiber-cross-resume.tur` — resuming a continuation on the wrong fiber panics.
+
+**Exit criterion:** Fibers work as cooperative coroutines; `async`/`await` desugars correctly; fiber scheduler runs multiple concurrent fibers; integration with effects and channels is clean.
+
+---
+
+## Software Transactional Memory (Phases 20–21)
+
+**Status:** Planned (v2). Prerequisites: Phase 19 (Algebraic effects — `stm` desugars to a transaction closure; continuation infrastructure in place), T19 (Thread primitives — `Mutex<T>`, condition variables, `Arc<T>`). See [stm-plan.md](archive/stm-plan.md) for full design.
+
+**Key design decisions:**
+- **Haskell-style API:** `TVar<T>`, `stm` block, `atomically`, `retry`, `or-else`, `check`; `TMVar`/`TChan`/`TSem` primitives.
+- **Lock-based v1:** Single global `mtx_t` for simplicity; correct by construction; replaced by fine-grained per-TVar locking in v2.
+- **`stm` is a special form** handled by `elab_stm` in `src/elab.c`; `TVar::read`/`TVar::write` outside an `stm` block are compile errors (TUR-E0009).
+- **`defer` inside `stm`:** defers execute at transaction commit (success) or transaction abort (failure) — not at `stm` lexical exit.
+- **Exception inside `stm`:** transaction aborts (writes discarded), abort-path defers fire, then exception propagates normally.
+- **`TVar` naming:** `TVar` (Haskell style); `dosync` is the ergonomic shorthand macro.
+
+| Phase | Goal | Exit Criterion |
+|---|---|---|
+| **20** | STM core (v1) | `TVar<T>`, `stm`/`atomically`, `retry`/`check`/`or-else`, `TMVar`/`TChan`/`TSem`, global lock, `stdlib/stm.tur`, unit + simple concurrency tests all passing |
+| **21** | Scalable STM (v2) | Per-TVar locking with lock ordering, lock stripping, performance benchmarks, TSan-clean stress tests |
+
+---
+
+### Phase 20 — STM Core (v1)
+
+**Goal:** Add Haskell-style Software Transactional Memory with a global-lock implementation suitable for low-to-medium contention workloads.
+
+**Prerequisites:**
+- Phase 19 complete (algebraic effects infrastructure stable).
+- T19 complete (`Mutex<T>`, condition variables, `Arc<T>`, POSIX `pthread_cond_t`).
+
+**Runtime data structures** — `src/stm.{c,h}` (new files)
+- [ ] Define `TVar` struct: `{ TypeInfo *type; void *value; uint64_t version; STM_WaitQueue waiters; }`.
+- [ ] Define `STM_Transaction` struct: `{ TVar **read_set; uint64_t *read_versions; int read_count; TVar **write_set; void **new_values; int write_count; bool retry_requested; tur_frame_t *defer_stack; }`.
+- [ ] Define `STM_State` global: `{ mtx_t global_lock; }`.
+- [ ] Define `STM_WaitQueue`: `{ STM_Transaction **waiters; int count; pthread_cond_t cond; }`.
+- [ ] Implement `tur_tvar_new(TypeInfo *type, void *initial_value) → TVar *`.
+- [ ] Implement `tur_tvar_read(STM_Transaction *tx, TVar *tv) → void *` (records read in transaction log).
+- [ ] Implement `tur_tvar_write(STM_Transaction *tx, TVar *tv, void *value)` (records write in transaction log).
+- [ ] Implement `tur_stm_validate(STM_Transaction *tx) → bool` (checks all read versions are still current).
+- [ ] Implement `tur_stm_commit(STM_Transaction *tx) → bool` (applies writes, increments versions, fires commit-path defers).
+- [ ] Implement `tur_stm_abort(STM_Transaction *tx)` (discards writes, fires abort-path defers).
+- [ ] Implement `tur_stm_retry(STM_Transaction *tx)` (adds to wait queues of all read TVars, blocks on condition variable).
+- [ ] Implement `tur_stm_check(bool condition)` (calls `tur_stm_abort` if false).
+- [ ] Implement `tur_atomically(stm_fn_t fn, void *env) → void *` (outer retry loop with global lock).
+- [ ] Use `__thread STM_Transaction *tur_current_tx` for thread-local transaction context (migrates to `TUR_THREAD_LOCAL` in the same pass as effect handler chains).
+
+**Elaborator and codegen** — `src/elab.{c,h}` + `src/emit.{c,h}`
+- [ ] Implement `elab_stm`: delimits a transaction block; type-checks body; verifies `TVar::read`/`TVar::write` are inside `stm`.
+- [ ] Implement `elab_atomically`: validates argument is an `stm` block or returns `(STM a)`.
+- [ ] Implement `elab_retry`: only valid inside `stm`; lowers to `tur_stm_retry(tur_current_tx)`.
+- [ ] Implement `elab_check`: only valid inside `stm`; lowers to `tur_stm_check(cond)`.
+- [ ] Implement `elab_or_else`: tries first `stm` block; falls through to second if first calls `retry`.
+- [ ] Emit `TVar::read` → `tur_tvar_read(tur_current_tx, tv)`.
+- [ ] Emit `TVar::write` → `tur_tvar_write(tur_current_tx, tv, value)`.
+- [ ] Emit `stm` block as a closure passed to `tur_atomically`.
+- [ ] Emit `TVar::modify` as inline `read → apply fn → write` within the same transaction.
+- [ ] Emit `TVar::swap` as inline `read → write → return old`.
+- [ ] Static check: `TVar::read`/`TVar::write` outside an `stm` block is a compile error (TUR-E0009).
+
+**Stdlib** — `stdlib/stm.tur`
+- [ ] Define `TVar` opaque type and `TVar::new`, `TVar::read`, `TVar::write`, `TVar::modify`, `TVar::swap`, `TVar::cas`.
+- [ ] Implement `TMVar<T>` (wraps `TVar<(option T)>`): `TMVar::new`, `TMVar::new-empty`, `TMVar::put`, `TMVar::try-put`, `TMVar::take`, `TMVar::try-take`, `TMVar::read`, `TMVar::is-empty`.
+- [ ] Implement `TChan<T>` (wraps `TVar` of a cons list): `TChan::new`, `TChan::write`, `TChan::read`, `TChan::try-read`, `TChan::peek`, `TChan::try-peek`.
+- [ ] Implement `TSem` (wraps `TVar<int>`): `TSem::new`, `TSem::wait`, `TSem::try-wait`, `TSem::signal`.
+- [ ] Implement convenience macros: `(with-tvar [name init] & body)`, `(dosync & body)`, `(stm-when cond & body)`, `(stm-unless cond & body)`.
+- [ ] Implement `(atomically-batch & txs)`: run multiple closures in one transaction.
+
+**Fixtures** — `tests/fixtures/stm/`
+- [ ] `stm-tvar-basic.tur` — `TVar::new`, `TVar::read`, `TVar::write` single-threaded.
+- [ ] `stm-tvar-modify.tur` — `TVar::modify`, `TVar::swap`, `TVar::cas`.
+- [ ] `stm-atomicity.tur` — writes not visible outside until commit.
+- [ ] `stm-retry.tur` — `retry` blocks and retries when TVar changes.
+- [ ] `stm-check.tur` — `check` aborts transaction when condition false.
+- [ ] `stm-or-else.tur` — `or-else` falls through when first branch calls `retry`.
+- [ ] `stm-tmvar.tur` — `TMVar` put/take/read/is-empty.
+- [ ] `stm-tchan.tur` — `TChan` write/read/peek.
+- [ ] `stm-tsem.tur` — `TSem` new/wait/signal.
+- [ ] `stm-defer.tur` — `defer` inside `stm` fires at commit or abort, not lexical exit.
+- [ ] `stm-exception.tur` — exception inside `stm` aborts and propagates.
+- [ ] `stm-dosync.tur` — `dosync` macro.
+- [ ] `stm-with-tvar.tur` — `with-tvar` macro.
+- [ ] Concurrency: `stm-concurrent-writes.tur` — multiple threads writing to same TVar (requires T19).
+- [ ] Concurrency: `stm-concurrent-transfers.tur` — concurrent bank transfers, no money created or lost.
+- [ ] Stress: `stm-stress.tur` — high-contention increment benchmark.
+- [ ] Integration: `stm-with-arc.tur` — `Arc<TVar<T>>` shared across threads.
+- [ ] Integration: `stm-with-threads.tur` — STM + `Thread` spawn/join.
+- [ ] Negative: `stm-read-outside-transaction.tur` — `TVar::read` outside `stm` is compile error TUR-E0009.
+- [ ] Negative: `stm-write-outside-transaction.tur` — `TVar::write` outside `stm` is compile error.
+- [ ] Codegen snapshots: `stm` block lowers to closure + `tur_atomically`; `TVar::read`/`write` lower to `tur_tvar_read`/`tur_tvar_write`.
+
+**Exit criterion:** STM works correctly for single-threaded and simple multi-threaded use cases; `TMVar`/`TChan`/`TSem` are available in stdlib; `defer` and exception integration is correct; all unit fixtures pass; concurrency fixtures pass under ThreadSanitizer.
+
+---
+
+### Phase 21 — Scalable STM (v2)
+
+**Goal:** Replace the global lock with per-TVar fine-grained locking to support high-concurrency workloads.
+
+**Prerequisites:** Phase 20 (Core STM).
+
+**Fine-grained locking** — `src/stm.{c,h}`
+- [ ] Add `mtx_t lock` field to `TVar` struct.
+- [ ] Replace `STM_State.global_lock` acquire/release with per-TVar lock acquisition during commit.
+- [ ] Implement lock ordering: acquire TVar locks in address order during commit phase to prevent deadlocks.
+- [ ] Implement lock stripping: group TVars into N lock buckets (default: 64) to reduce per-TVar overhead.
+- [ ] Update `tur_stm_commit` to use per-TVar locks: acquire all write-set locks in order, validate read set, apply writes, release locks.
+- [ ] Update `tur_stm_retry` to use per-TVar condition variables.
+
+**Performance benchmarks** — `tests/benchmarks/stm/`
+- [ ] `stm-counter`: single TVar increment loop; target < 100 ns/op with fine-grained locking.
+- [ ] `stm-transfer`: transfer between 2 TVars; target < 200 ns/transfer.
+- [ ] `stm-bank`: concurrent bank simulation; verify linear scalability across thread counts.
+- [ ] `stm-tchan-throughput`: `TChan` write/read throughput; target > 1M ops/sec.
+
+**Stress and validation** — `tests/fixtures/stm/`
+- [ ] `stm-deadlock-free.tur` — complex multi-TVar transaction patterns; verify no deadlocks.
+- [ ] `stm-starvation.tur` — verify fairness: no transaction is indefinitely starved.
+- [ ] Re-run all Phase 20 concurrency and stress fixtures under ThreadSanitizer.
+
+**Exit criterion:** STM scales to high-concurrency workloads with acceptable performance; lock-ordering prevents deadlocks; all fixtures pass under ThreadSanitizer with no data races.
+
+---
+
+## Unsafe Operations (Phases U1–U5)
+
+**Status:** Planned (v2). Prerequisites: Phase 19 (Algebraic effects — `Unsafe` is modeled as an effect in the effect row). See [unsafe-operations-plan.md](archive/unsafe-operations-plan.md) for full design.
+
+| Phase | Goal | Exit Criterion |
+|---|---|---|
+| **U1** | `Unsafe` effect in type system | Effect row tracks `Unsafe`; unsafe functions carry `@ {Unsafe}`; calling them from safe context is a compile error |
+| **U2** | `unsafe { }` syntactic sugar and containment checks | `unsafe` block desugars to `try_with` with `Unsafe` handler; containment enforced; lints for empty/large blocks |
+| **U3** | Unsafe primitive operations | Pointer ops, type casts, unchecked array access, raw memory management, FFI primitives — all `@ {Unsafe}` |
+| **U4** | Safe standard library wrappers | Bounds-checked `Array<T>`, safe `Vec<T>`, safe FFI helpers, `box`/`unbox`, arena allocator |
+| **U5** | Linting, auditing, and tooling | `unsafe` block linter, trusted-code coverage metric, documentation enforcement |
+
+---
+
+### Phase U1 — `Unsafe` Effect
+
+**Goal:** Introduce `Unsafe` as a built-in effect so the type system tracks where unsafe operations can occur.
+
+**Type system** — `src/effect.{c,h}` + `src/types.{c,h}`
+- [ ] Register `Unsafe` as a built-in effect constant alongside `Read`, `Write`, `Fail`, `GetEnv`.
+- [ ] Functions that perform unsafe operations carry `@ {Unsafe}` in their effect row.
+- [ ] Safe functions (effect row does not include `Unsafe`) cannot call unsafe functions outside an `unsafe` block.
+- [ ] Effect polymorphism: if a higher-order function takes `(fn [] : {e} T)`, an unsafe closure propagates `Unsafe` through `e` automatically.
+
+**Elaborator** — `src/elab.{c,h}`
+- [ ] Propagate `Unsafe` through call sites using the existing effect-row mechanism.
+- [ ] Emit a compile error when an unsafe function is called in a safe context without an enclosing `unsafe` block.
+- [ ] Allow explicit `@ {Unsafe}` annotation on `defn` to mark an entire function unsafe.
+
+**Fixtures**
+- [ ] `unsafe-effect-row.tur` — `@ {Unsafe}` annotation on functions parses and elaborates correctly.
+- [ ] Negative: `unsafe-leak.tur` — calling an unsafe function from a safe context without `unsafe` block is a compile error.
+
+**Exit criterion:** `Unsafe` is a first-class effect; the effect row tracks it; unsafe calls in safe contexts are compile errors.
+
+---
+
+### Phase U2 — `unsafe { }` Block Sugar
+
+**Goal:** Provide `unsafe { }` syntactic sugar and enforce that unsafe operations are properly contained.
+
+**Surface syntax** — `src/reader.{c,h}` + `src/elab.{c,h}`
+- [ ] Parse `(unsafe expr...)` as a new form.
+- [ ] Desugar to `try_with` with an `Unsafe` handler that discharges the effect within the block.
+- [ ] The `unsafe` block has effect row `{}` on the outside — `Unsafe` is consumed within the block.
+- [ ] Nested `unsafe` blocks are allowed but the inner one is redundant (warn via lint).
+
+**Compiler checks** — `src/elab.{c,h}`
+- [ ] Verify containment: an `unsafe` block cannot leak `Unsafe` to its caller.
+- [ ] Warn on empty `unsafe` blocks.
+- [ ] Warn on `unsafe` blocks exceeding a configurable size threshold (default: 10 lines).
+
+**Interaction with existing features**
+- [ ] `defer` inside `unsafe` blocks fires normally on scope exit (safe or otherwise).
+- [ ] Exceptions propagate outward past `unsafe` boundaries normally.
+- [ ] Continuations (`shift`/`reset`) inside `unsafe` blocks: `Unsafe` is scoped to the block; captured continuations do not re-expose `Unsafe` after the block exits.
+
+**Fixtures**
+- [ ] `unsafe-basic.tur` — `unsafe` block calls an unsafe function; result is safe.
+- [ ] `unsafe-nested.tur` — nested `unsafe` blocks work correctly.
+- [ ] `unsafe-defer.tur` — defers fire correctly inside `unsafe` blocks.
+- [ ] Negative: `unsafe-empty.tur` — empty `unsafe` block emits a warning.
+- [ ] Codegen snapshots: `unsafe` block lowering.
+
+**Exit criterion:** `unsafe { }` desugars correctly; containment is enforced; defers and exceptions compose correctly with `unsafe` blocks.
+
+---
+
+### Phase U3 — Unsafe Primitive Operations
+
+**Goal:** Implement the core set of unsafe primitives, all carrying `@ {Unsafe}`.
+
+**Pointer operations** — `stdlib/ptr.tur`
+- [ ] `(ptr-deref p)` — dereference a raw pointer: `*T → T @ {Unsafe}`.
+- [ ] `(ptr-write p v)` — write through a raw pointer: `*T → T → () @ {Unsafe}`.
+- [ ] `(ptr-add p n)` — pointer arithmetic: `*T → int → *T @ {Unsafe}`.
+- [ ] `(ptr-sub p n)` — pointer arithmetic: `*T → int → *T @ {Unsafe}`.
+- [ ] `(ptr-null? p)` — null check: `*T → bool @ {}` (safe; only inspects the pointer).
+- [ ] `(ptr-of r)` — get raw pointer from `ref<T>`: `ref<T> → *T @ {Unsafe}`.
+
+**Type casting** — `stdlib/cast.tur`
+- [ ] `(unsafe-cast v)` — unchecked cast between types: `T → U @ {Unsafe}`.
+- [ ] `(reinterpret v)` — bit reinterpretation: `T → U @ {Unsafe}` (requires `sizeof(T) == sizeof(U)`; compile-time check).
+- [ ] `(transmute v)` — Rust-familiar alias for `reinterpret`.
+- [ ] Emit a compile error if `reinterpret`/`transmute` is used with mismatched sizes.
+
+**Unchecked array operations** — `stdlib/array.tur`
+- [ ] `(array-get-unchecked arr i)` — unchecked array read: `Array<T> → int → T @ {Unsafe}`.
+- [ ] `(array-set-unchecked arr i v)` — unchecked array write: `Array<T> → int → T → () @ {Unsafe}`.
+
+**Raw memory management** — `stdlib/mem.tur`
+- [ ] `(raw-malloc n)` — allocate raw memory: `size → *void @ {Unsafe}`.
+- [ ] `(raw-free p)` — free raw memory: `*void → () @ {Unsafe}`.
+- [ ] `(raw-realloc p n)` — reallocate: `*void → size → *void @ {Unsafe}`.
+- [ ] `(raw-memcpy dst src n)` — raw memory copy: `*void → *void → size → () @ {Unsafe}`.
+- [ ] `(raw-memset p v n)` — raw memory set: `*void → int → size → () @ {Unsafe}`.
+
+**FFI primitives** — `stdlib/ffi.tur`
+- [ ] `(c-call fn-ptr args...)` — call a C function pointer: `@ {Unsafe, IO}`.
+- [ ] `(dlopen path)` — open a dynamic library: `cstr → *void @ {Unsafe}`.
+- [ ] `(dlsym handle name)` — load a symbol: `*void → cstr → *void @ {Unsafe}`.
+- [ ] `(dlclose handle)` — close a dynamic library: `*void → () @ {Unsafe}`.
+
+**Fixtures** — `tests/fixtures/unsafe/`
+- [ ] `unsafe-ptr-deref.tur` — dereference a raw pointer inside an `unsafe` block.
+- [ ] `unsafe-ptr-arith.tur` — pointer arithmetic.
+- [ ] `unsafe-cast.tur` — unchecked cast between compatible types.
+- [ ] `unsafe-reinterpret.tur` — bit reinterpretation for same-size types.
+- [ ] `unsafe-array-unchecked.tur` — unchecked array access.
+- [ ] `unsafe-malloc.tur` — raw malloc/free cycle.
+- [ ] `unsafe-memcpy.tur` — raw memcpy.
+- [ ] Negative: `unsafe-reinterpret-size-mismatch.tur` — `reinterpret` with mismatched sizes is a compile error.
+- [ ] Codegen snapshots: all unsafe primitives lower to direct C equivalents.
+
+**Exit criterion:** All unsafe primitives are implemented with `@ {Unsafe}` effect; they lower correctly to C; size mismatch on `reinterpret` is a compile-time error.
+
+---
+
+### Phase U4 — Safe Standard Library Wrappers
+
+**Goal:** Build safe, bounds-checked wrappers around all unsafe primitives so that normal code never needs to touch `unsafe` directly.
+
+**Safe array and vector** — `stdlib/array.tur` + `stdlib/vec.tur`
+- [ ] `(array-get arr i)` — bounds-checked read: `Array<T> → int → Option<T> @ {}`.
+- [ ] `(array-set arr i v)` — bounds-checked write: `Array<T> → int → T → bool @ {}` (returns false if OOB).
+- [ ] `(array-slice arr start end)` — sub-slice: `Array<T> → int → int → Array<T> @ {}`.
+- [ ] Verify/extend `Vec<T>` operations use `unsafe` blocks internally for `raw-malloc`/`raw-realloc`/`raw-free`.
+
+**Safe FFI helpers** — `stdlib/ffi.tur`
+- [ ] `(with-c-string s body)` — allocate a null-terminated C string and free on scope exit via `defer`.
+- [ ] `(from-c-string p)` — convert `*char` to Turmeric `str` with explicit length check.
+
+**Safe memory management** — `stdlib/mem.tur`
+- [ ] `(box v)` — heap-allocate a value; returns `ref<T>` (drop frees via `defer`).
+- [ ] `(unbox r)` — move out of a heap-allocated `ref<T>`.
+- [ ] Arena allocator: `(arena-new)`, `(arena-alloc arena T)`, `(arena-free arena)` — bulk-free on scope exit.
+
+**Fixtures** — `tests/fixtures/unsafe/`
+- [ ] `safe-array-bounds.tur` — bounds-checked array access returns `Option`.
+- [ ] `safe-vec-ops.tur` — vector push/pop/get all safe.
+- [ ] `safe-c-string.tur` — `with-c-string` allocates and frees correctly.
+- [ ] `safe-box.tur` — `box`/`unbox` for heap allocation.
+- [ ] `safe-arena.tur` — arena allocation and bulk-free.
+
+**Exit criterion:** All common use cases are covered by safe wrappers; no direct use of unsafe primitives is needed for standard operations.
+
+---
+
+### Phase U5 — Linting, Auditing, and Tooling
+
+**Goal:** Provide tools to minimize and audit the trusted codebase.
+
+**Unsafe block linter** — `src/lint.{c,h}`
+- [ ] Warn on `unsafe` blocks exceeding a configurable size threshold (default: 10 lines); configure via `--lint-unsafe-max-lines N`.
+- [ ] Warn on nested `unsafe` blocks (outer block already admits `Unsafe`; inner is redundant).
+- [ ] Enable all unsafe lints via `--lint-unsafe` flag.
+
+**Documentation enforcement** — `src/lint.{c,h}` + `src/reader.{c,h}`
+- [ ] `#[safety "invariant description"]` attribute on `unsafe` blocks documents the relied-upon invariant.
+- [ ] `--require-unsafe-docs` flag: require a `;;; SAFETY:` comment or `#[safety]` attribute on every non-test `unsafe` block.
+
+**Trusted-code coverage** — `src/lint.{c,h}` + tooling
+- [ ] Track the percentage of AST nodes inside `unsafe` blocks.
+- [ ] `--unsafe-stats` flag: print trusted-code percentage per file and overall.
+- [ ] CI integration: fail if trusted-code percentage exceeds a configurable threshold.
+
+**Fixtures** — `tests/fixtures/unsafe/`
+- [ ] `lint-unsafe-size.tur` — large `unsafe` block triggers lint warning.
+- [ ] `lint-unsafe-doc.tur` — missing `SAFETY:` comment triggers lint with `--require-unsafe-docs`.
+- [ ] `lint-unsafe-nested.tur` — nested `unsafe` triggers redundancy warning.
+- [ ] `stats-unsafe.tur` — `--unsafe-stats` output matches expected golden.
+
+**Exit criterion:** Unsafe lints are actionable and suppressible; trusted-code coverage is measurable via `--unsafe-stats`; documentation enforcement is available for library authors.
+
+---
+
+## Persistent Collections — HAMT (Phases P1–P4)
+
+**Status:** Planned (v2). Prerequisites: Phase 15 (Typeclasses — `Eq`/`Hash` dispatch needed for key comparison), Phase 19 (Algebraic effects — `@ {Unsafe}` tracks internal raw memory use in `hamt.c`). See [hamt-feasibility.md](archive/hamt-feasibility.md) for feasibility analysis and design decisions.
+
+**Key design decisions:**
+- **Separate translation units:** `src/hamt.{c,h}` are compiled independently. Unused HAMT code is stripped by the linker automatically (`-dead_strip` on macOS, `-Wl,--gc-sections` on Linux) — no emit-phase gating required in v1. See [hamt-feasibility.md §Dead Code / Inclusion Strategy](archive/hamt-feasibility.md).
+- **Memory model:** ref-counting (Phase P1 v1); GC integration deferred until GC lands.
+- **Node width:** 5 bits (32 slots) — balanced trie depth vs. bitmap size.
+- **Hash function:** SipHash (cryptographic) or xxHash (speed); decision finalized in Phase P1.
+- **Collision handling:** linked list in v1; upgrade to HAMT-of-HAMTs if benchmarks warrant.
+- **Transient mode (mutable buffer → flush to immutable):** deferred to Phase P4.
+- **Compiler lowering:** the emit-phase `immutable map → HAMT` lowering pass is Phase P3; Phases P1–P2 are pure library work with no compiler changes.
+
+| Phase | Goal | Exit Criterion |
+|---|---|---|
+| **P1** | Core HAMT C implementation | `hamt.{c,h}` complete; all unit fixtures pass; ref-count memory-safe under AddressSanitizer |
+| **P2** | Lisp bindings (`stdlib/hamt.tur`) | `hamt/new`, `hamt/set`, `hamt/get`, `hamt/del`, `hamt/has?`, `hamt/count`, `hamt/keys`, `hamt/vals`, `hamt/merge` all working; fixture suite passes |
+| **P3** | Compiler lowering pass | Elaborator lowers immutable `map` literals and `assoc`/`dissoc` calls to HAMT when the map is annotated `^persistent` or inferred immutable; existing mutable-map code unchanged |
+| **P4** | Optimization and tooling | Transient mode (`hamt/transient`, `hamt/persistent!`), `hamt/dump` visualization, benchmarks vs. mutable hash table |
+
+---
+
+### Phase P1 — Core HAMT C Implementation
+
+**Goal:** Implement a standalone, ref-counted HAMT in C99 with a minimal public API. No compiler integration yet; this is pure library code.
+
+**New files** — `src/hamt.{c,h}`
+- [ ] Define node types: `HAMT_NODE_BITMAP` (sparse, ≤ 32 entries), `HAMT_NODE_ARRAY` (dense, = 32 entries), `HAMT_NODE_COLLISION` (same-hash key list).
+- [ ] Define `HamtNode` tagged union and `Hamt` root struct `{ HamtNode *root; uint32_t count; }`.
+- [ ] Implement `hamt_new(void) → Hamt *` — allocate empty HAMT.
+- [ ] Implement `hamt_set(Hamt *m, uint64_t hash, void *key, void *val) → Hamt *` — structural sharing; returns new root.
+- [ ] Implement `hamt_del(Hamt *m, uint64_t hash, void *key) → Hamt *` — returns new root or same root if key absent.
+- [ ] Implement `hamt_has(Hamt *m, uint64_t hash, void *key) → bool`.
+- [ ] Implement `hamt_get(Hamt *m, uint64_t hash, void *key) → void *` — returns `NULL` if absent.
+- [ ] Implement `hamt_count(Hamt *m) → uint32_t`.
+- [ ] Implement `hamt_free(Hamt *m)` — decrement root ref-count; free nodes with zero refs.
+- [ ] Implement `hamt_node_retain(HamtNode *n)` / `hamt_node_release(HamtNode *n)` — ref-counting helpers.
+- [ ] Implement `hamt_merge(Hamt *a, Hamt *b) → Hamt *` — `b` wins on collision.
+- [ ] Implement `hamt_iter_init` / `hamt_iter_next` — in-order iteration over key/value pairs.
+- [ ] Choose and integrate hash function: `tur_siphash13` or `tur_xxhash64`; document decision in a comment at top of `hamt.c`.
+- [ ] Add `hamt_dump(Hamt *m, FILE *out)` — pretty-print node tree for debugging.
+
+**Memory safety requirements**
+- [ ] All node allocations go through `hamt_alloc` / `hamt_free_node` (wrappers around `malloc`/`free`); no `malloc` calls outside these wrappers.
+- [ ] All unit tests run clean under AddressSanitizer (`-fsanitize=address`) and Valgrind.
+- [ ] No memory leaked between `hamt_new` and `hamt_free` even when intermediate `hamt_set`/`hamt_del` results are discarded.
+
+**Fixtures** — `tests/fixtures/hamt/`
+- [ ] `hamt-basic.tur` — `hamt/new`, `hamt/set`, `hamt/get`, `hamt/has?`, `hamt/count` round-trip.
+- [ ] `hamt-sharing.tur` — two maps share structure after `hamt/set`; modifying one does not affect the other.
+- [ ] `hamt-delete.tur` — `hamt/del` on present and absent keys; count decrements correctly.
+- [ ] `hamt-collision.tur` — insert multiple keys with the same hash; all retrievable.
+- [ ] `hamt-iteration.tur` — iterate all key/value pairs; no duplicates, no omissions.
+- [ ] `hamt-merge.tur` — merge two disjoint maps; merge with overlapping keys (last writer wins).
+- [ ] `hamt-large.tur` — insert 10 000 unique keys; verify count and random-sample lookups.
+- [ ] `hamt-memory.tur` — ASan clean: insert, snapshot, mutate snapshot, free both versions.
+
+**Exit criterion:** all C unit tests pass; fixtures pass; ASan/Valgrind clean; `hamt_dump` produces legible output.
+
+---
+
+### Phase P2 — Lisp Bindings
+
+**Goal:** Wrap `src/hamt.{c,h}` in a Turmeric stdlib module so Lisp code can use HAMTs directly. No compiler lowering yet — this is an explicit API.
+
+**New file** — `stdlib/hamt.tur`
+- [ ] `(hamt/new) → hamt` — create empty persistent map.
+- [ ] `(hamt/set m key val) → hamt` — insert/update; returns new map.
+- [ ] `(hamt/get m key) → (option T)` — lookup; returns `none` if absent.
+- [ ] `(hamt/get-or m key default) → T` — lookup with fallback.
+- [ ] `(hamt/del m key) → hamt` — delete; returns new map (same map if key absent).
+- [ ] `(hamt/has? m key) → bool` — membership test.
+- [ ] `(hamt/count m) → int` — number of key/value pairs.
+- [ ] `(hamt/keys m) → (vec T)` — all keys as a vector.
+- [ ] `(hamt/vals m) → (vec T)` — all values as a vector.
+- [ ] `(hamt/entries m) → (vec (pair K V))` — all key/value pairs.
+- [ ] `(hamt/merge a b) → hamt` — merge; `b` wins on collision.
+- [ ] `(hamt/merge-with f a b) → hamt` — merge with combiner function for collisions.
+- [ ] `(hamt/map f m) → hamt` — map function over values; returns new map.
+- [ ] `(hamt/filter f m) → hamt` — filter by predicate on value; returns new map.
+- [ ] `(hamt/reduce f init m) → T` — fold over key/value pairs.
+- [ ] `(hamt/from-vec pairs) → hamt` — construct from `(vec (pair K V))`.
+- [ ] `(hamt/to-vec m) → (vec (pair K V))` — destructure to association list.
+
+**Typeclass instances**
+- [ ] `Show` instance for `hamt` — `(show m)` returns `"{key1: val1, key2: val2, ...}"`.
+- [ ] `Eq` instance for `hamt` — two maps are equal if they have the same key/value pairs.
+
+**Fixtures** — `tests/fixtures/hamt/`
+- [ ] `hamt-lisp-basic.tur` — basic API round-trip from Turmeric code.
+- [ ] `hamt-lisp-snapshot.tur` — take snapshot with `hamt/set`, verify original unchanged.
+- [ ] `hamt-lisp-map-filter.tur` — `hamt/map`, `hamt/filter`, `hamt/reduce`.
+- [ ] `hamt-lisp-merge-with.tur` — `hamt/merge-with` combiner function.
+- [ ] `hamt-lisp-show.tur` — `Show` instance produces expected string.
+- [ ] `hamt-lisp-eq.tur` — `Eq` instance: equal and unequal maps.
+- [ ] `hamt-lisp-from-to-vec.tur` — `hamt/from-vec` / `hamt/to-vec` round-trip.
+- [ ] Codegen snapshots: HAMT function calls lower to `hamt_*` C calls; no unexpected overhead.
+
+**Exit criterion:** all stdlib functions are usable from Turmeric; typeclass instances work; fixture suite passes; codegen snapshots stable.
+
+---
+
+### Phase P3 — Compiler Lowering Pass
+
+**Goal:** Allow the elaborator to automatically lower immutable `map` literals and persistent map operations to HAMT when beneficial, without requiring explicit `hamt/` namespace calls.
+
+**Elaborator changes** — `src/elab.{c,h}`
+- [ ] Recognize `^persistent` annotation on `def`/`let` bindings: `(def ^persistent m {:a 1 :b 2})` lowers the map literal to `hamt/from-vec`.
+- [ ] Recognize `(assoc m k v)` on a `^persistent`-typed binding: lowers to `hamt/set`.
+- [ ] Recognize `(dissoc m k)` on a `^persistent`-typed binding: lowers to `hamt/del`.
+- [ ] Recognize `(get m k)` on a `^persistent`-typed binding: lowers to `hamt/get`.
+- [ ] Recognize `(count m)` on a `^persistent`-typed binding: lowers to `hamt/count`.
+- [ ] Propagate `^persistent` through `let` bindings and function return types.
+- [ ] Emit a type-mismatch diagnostic when a `^persistent` map is passed to a function expecting a mutable map (and vice versa).
+
+**Emit changes** — `src/emit.{c,h}`
+- [ ] When `needs_hamt` flag is set on the `Emit` context (set by the P3 lowering pass), include `hamt.h` in the emitted C header block.
+- [ ] `needs_hamt` is set on first encounter of any HAMT-lowered form; existing code that never uses `^persistent` is unaffected.
+
+**Linker flag policy** — `src/emit.{c,h}` (already decided; document here)
+- [ ] No `-lhamt` needed (HAMT is compiled into the binary as part of `src/`).
+- [ ] Dead-code stripping: on macOS add `-dead_strip`; on Linux add `-Wl,--gc-sections` (with `-ffunction-sections -fdata-sections` on object files). These flags are emitted by `tur build` automatically when targeting those platforms.
+
+**Fixtures** — `tests/fixtures/hamt/`
+- [ ] `hamt-lowering-basic.tur` — `(def ^persistent m {:a 1})` followed by `assoc`/`get` lowers to HAMT calls.
+- [ ] `hamt-lowering-propagate.tur` — `^persistent` propagates through `let` chains.
+- [ ] `hamt-lowering-mutable-unchanged.tur` — ordinary (mutable) map operations are unaffected by the lowering pass.
+- [ ] Negative: `hamt-lowering-type-mismatch.tur` — passing `^persistent` map to mutable-map function emits TUR-E00XX.
+- [ ] Codegen snapshots: `assoc`/`dissoc`/`get` on `^persistent` map lower to `hamt_set`/`hamt_del`/`hamt_get`.
+
+**Exit criterion:** `^persistent` annotation triggers HAMT lowering end-to-end; non-annotated code is unaffected; codegen snapshots stable; type-mismatch diagnostic fires correctly.
+
+---
+
+### Phase P4 — Optimization and Tooling
+
+**Goal:** Add transient mutation mode for batch construction, visualization tooling, and performance benchmarks.
+
+**Transient mode** — `src/hamt.{c,h}` + `stdlib/hamt.tur`
+- [ ] Define `HamtTransient` struct: mutable wrapper around a `HamtNode *` root; carries an owner token to prevent concurrent mutation.
+- [ ] Implement `hamt_transient(Hamt *m) → HamtTransient *` — fork a transient from an immutable map; marks all nodes as owned-by-transient.
+- [ ] Implement `hamt_transient_set(HamtTransient *t, uint64_t hash, void *key, void *val)` — mutates in-place if node is owned; copies otherwise.
+- [ ] Implement `hamt_transient_del(HamtTransient *t, uint64_t hash, void *key)` — mutates in-place if owned.
+- [ ] Implement `hamt_persistent(HamtTransient *t) → Hamt *` — seal transient into immutable map; invalidates `t`.
+- [ ] Lisp API: `(hamt/transient m) → hamt-transient`, `(hamt/transient-set! t k v)`, `(hamt/transient-del! t k)`, `(hamt/persistent! t) → hamt`.
+
+**Visualization** — `src/hamt.{c,h}`
+- [ ] Extend `hamt_dump` to produce DOT format for Graphviz: `hamt_dump_dot(Hamt *m, FILE *out)`.
+- [ ] Add `(hamt/dump m)` Lisp form that emits DOT to stderr (debug builds only).
+
+**Benchmarks** — `tests/benchmarks/hamt/`
+- [ ] `hamt-bench-insert.tur` — 100 000 sequential inserts; compare vs. mutable hash table baseline; target < 3× overhead.
+- [ ] `hamt-bench-lookup.tur` — 100 000 lookups after 100 000 inserts; target O(1) average.
+- [ ] `hamt-bench-snapshot.tur` — 1 000 snapshots (fork + 1 insert each); total time vs. deep-copy baseline.
+- [ ] `hamt-bench-transient.tur` — bulk-build 100 000 entries via transient then seal; compare vs. sequential `hamt/set`.
+
+**Fixtures** — `tests/fixtures/hamt/`
+- [ ] `hamt-transient-basic.tur` — fork transient, mutate, seal; verify result correct.
+- [ ] `hamt-transient-isolation.tur` — original map unchanged after transient mutations.
+- [ ] `hamt-transient-invalidated.tur` — using a sealed transient panics or errors.
+
+**Exit criterion:** transient mode is correct and faster than sequential `hamt/set` for bulk construction; benchmarks documented; `hamt_dump_dot` produces valid DOT output.
+
+---
+
+## Backtracking with Cloneable Continuations (Phases B1–B5)
+
+**Status:** Planned (v2 stretch goal). Prerequisites: Phase 15 (Typeclasses — `Clone` trait dispatch), Phase 18 (Delimited continuations — `shift`/`reset` substrate), Phase 19 (Algebraic effects — handler infrastructure). See [backtracking-cloneable-continuations-plan.md](archive/backtracking-cloneable-continuations-plan.md) for full design.
+
+**Key design decisions:**
+- **Core abstraction:** `cloneable_continuation<T>` — a continuation that can be resumed multiple times. All types captured by the continuation must satisfy the `Clone` typeclass constraint, enforced by the elaborator.
+- **Deep clone (v1):** All clones are deep; start simple and optimise to copy-on-write if profiling warrants it.
+- **Defer semantics:** Defers are suspended by default during cloneable-continuation replay; they fire only when the *original* scope exits. Opt-in per-resume defers use an explicit `:replay true` annotation.
+- **Hybrid effect integration:** Cloneable continuations work standalone and inside effect handlers (hybrid approach, neither fully separate nor effect-only).
+- **Backtracking monad:** `Backtrack<T>` is a list-of-thunks monad built on top of cloneable continuations. `mzero`, `mplus`, `bind`, `return`, `choice`, `guard`, `fresh` are the core combinators.
+- **Selective CPS:** Only code inside `cloneable-reset` blocks undergoes the modified CPS transformation; normal `reset`/`shift` blocks are unaffected.
+
+| Phase | Goal | Exit Criterion |
+|---|---|---|
+| **B1** | `Clone` trait infrastructure | `Clone` typeclass defined; primitive instances ship; `rc<T>` / `ref<T>` clone methods work; elaborator rejects cloneable continuations that capture non-`Clone` types |
+| **B2** | Cloneable continuation runtime + CPS | `cloneable_continuation<T>` type; `continuation_clone()`; `:cloneable` flag on `shift`/`reset`; CPS pass emits correct cloneable environment capture; defer suspend/replay semantics correct |
+| **B3** | Backtracking monad | `Backtrack<T>`, `mzero`, `mplus`, `bind`, `return`, `run-backtrack`, `run-backtrack-depth`, `choice`, `guard`, `fresh` all working; unit fixture suite passes |
+| **B4** | Standard library integration | `stdlib/logic.tur` (`LVar`, `unify`, `Goal`, `run-logic`, `fresh`, `conjoined`, `disjoined`) and `stdlib/parsec.tur` (`Parser<T>`, `pure`, `fail`, `item`, `char`, `many`, `or-parser`, `bind-parser`, `run-parser`) complete; integration fixtures pass |
+| **B5** | Testing, benchmarks, and optimization | All unit/integration/negative/perf fixtures pass; clone overhead benchmarked; memory usage documented; `--backtrack-depth` safety flag; documentation in user guide |
+
+---
+
+### Phase B1 — Clone Trait Infrastructure
+
+**Goal:** Define the `Clone` typeclass and ship primitive plus derived instances. This is the static foundation — without `Clone`, the elaborator cannot verify that a continuation's captured environment is safely duplicatable.
+
+**Typeclass definition** — `stdlib/typeclass.tur`
+- [ ] Define `(defclass Clone [a] (clone [x : a] : a))` alongside `Eq`/`Ord`/`Show`.
+- [ ] Document that `Clone` is a *deep* clone — the returned value shares no mutable state with the original.
+- [ ] Reserve `copy` as a future `Copy` (bit-copy, zero-cost) trait; do not conflate with `Clone`.
+
+**Primitive instances** — `stdlib/typeclass.tur`
+- [ ] `(definstance Clone int)` — returns `x` unchanged (integers are `Copy`).
+- [ ] `(definstance Clone int8)` … `(definstance Clone int64)` — same.
+- [ ] `(definstance Clone uint8)` … `(definstance Clone uint64)` — same.
+- [ ] `(definstance Clone float)` — same.
+- [ ] `(definstance Clone double)` — same.
+- [ ] `(definstance Clone bool)` — same.
+- [ ] `(definstance Clone cstr)` — same (string literals are static pointers; safe to copy).
+
+**Derived instances** — `stdlib/typeclass.tur`
+- [ ] `(definstance Clone (Pair a b) [Clone a, Clone b])` — clone both fields.
+- [ ] `(definstance Clone (option a) [Clone a])` — clone the payload if `some`.
+- [ ] `(definstance Clone (list a) [Clone a])` — deep-clone each element.
+- [ ] `(definstance Clone (vec a) [Clone a])` — allocate new vec, clone each element.
+
+**Reference type clone semantics** — `stdlib/rc.tur`, `stdlib/ref.tur`
+- [ ] `(definstance Clone (rc a) [Clone a])` — `clone` increments the ref-count; returns same pointer (shallow). Document that this gives shared ownership, not a new independent copy. If a fully independent deep copy is needed, users call `(clone (rc/deref r))` and re-wrap.
+- [ ] `(definstance Clone (ref a) [Clone a])` — `clone` deep-clones the pointed-to value into a new heap allocation; returns a new independent `ref<T>`. This is the safe default for mutable references inside continuations.
+
+**Elaborator enforcement** — `src/elab.{c,h}`
+- [ ] Add `check_cloneable_capture(shift_expr, env)` — walk captured bindings of any `cloneable-shift`; emit a compile error for each binding whose type lacks a `Clone` instance.
+- [ ] Emit error code TUR-E00YY (`"type %s captured by cloneable continuation does not implement Clone"`).
+- [ ] Recursively verify type arguments (e.g., `vec<ref<T>>` requires `Clone ref<T>` which requires `Clone T`).
+
+**Fixtures** — `tests/fixtures/backtrack/`
+- [ ] `clone-primitives.tur` — `clone` on `int`, `bool`, `cstr` returns equal value.
+- [ ] `clone-pair.tur` — `clone` on `Pair` deep-clones both fields.
+- [ ] `clone-option.tur` — `clone` on `some` and `none`.
+- [ ] `clone-list.tur` — `clone` on list preserves all elements independently.
+- [ ] `clone-vec.tur` — cloned vec is independent; mutating original does not affect clone.
+- [ ] `clone-rc.tur` — `clone` increments ref-count; original and clone share data.
+- [ ] `clone-ref.tur` — `clone` produces independent copy; mutation isolated.
+- [ ] Negative: `clone-non-clone-capture.tur` — `cloneable-shift` capturing a non-`Clone` type emits TUR-E00YY.
+
+**Exit criterion:** `Clone` typeclass is defined; all primitive and derived instances ship; `rc<T>` / `ref<T>` semantics documented; elaborator rejects non-`Clone` captures at compile time.
+
+---
+
+### Phase B2 — Cloneable Continuation Runtime + CPS
+
+**Goal:** Extend the runtime and CPS pass to support multi-shot continuations, defer suspend/replay semantics, and the `:cloneable` surface annotation.
+
+**Surface syntax** — `src/reader.{c,h}` + `src/elab.{c,h}`
+- [ ] Parse `(cloneable-reset body)` as sugar for `(reset body :cloneable true)`.
+- [ ] Parse `(cloneable-shift k expr)` as sugar for `(shift k expr :cloneable true)`.
+- [ ] Reject `:cloneable true` on a `shift` that is not inside a `cloneable-reset` boundary; emit diagnostic TUR-E00YZ.
+- [ ] `(call/cc* f)` — sugar for `(cloneable-shift k (f k))`; captures current continuation as cloneable.
+
+**Type system** — `src/types.{c,h}`
+- [ ] Add `TY_CLONEABLE_CONT` variant alongside `TY_CONT`.
+- [ ] `cloneable_continuation<T>` is a struct type: `{ k: continuation<T>, clone: (-> cloneable_continuation<T>) }`.
+- [ ] `cloneable_continuation<T>` is NOT move-only — it can be copied freely (each copy invokes `clone`).
+- [ ] Borrow checker: `cloneable_continuation<T>` does not trigger the `is_moved` path on use (unlike `TY_CONT`).
+
+**Runtime** — `src/runtime.{c,h}`
+- [ ] Define `CloneableContinuation` struct: `{ Continuation base; size_t env_size; CloneEnvEntry *env_entries; }`.
+- [ ] Define `CloneEnvEntry`: `{ void *value; CloneFn clone_fn; DropFn drop_fn; }`.
+- [ ] Implement `tur_cont_clone(CloneableContinuation *k) → CloneableContinuation *` — deep-clones `env_entries` using each entry's `clone_fn`; returns a new independent continuation.
+- [ ] Implement `tur_cont_resume_cloneable(CloneableContinuation *k, void *arg) → void *` — resumes **without** consuming `k`; `k` remains valid for further clones/resumes.
+- [ ] Implement `tur_cont_drop_cloneable(CloneableContinuation *k)` — runs drop_fn on all entries, frees the struct.
+- [ ] Set `base.is_cloneable = true`; one-shot `tur_cont_resume` aborts if called on a cloneable continuation.
+
+**Defer suspend/replay semantics** — `src/runtime.{c,h}` + `src/elab.{c,h}`
+- [ ] When entering a `cloneable-reset` scope, mark all registered defers as `DEFER_SUSPENDED`.
+- [ ] On resume of a cloneable continuation: suspended defers do NOT fire; they remain attached to the original scope.
+- [ ] On `:replay true` defer annotation: mark the defer as `DEFER_REPLAY`; it fires on every resume as well as on original scope exit.
+- [ ] When the original `cloneable-reset` scope exits normally (all resumes done): fire all defers in reverse order.
+- [ ] When `tur_cont_drop_cloneable` is called (continuation dropped without resume): fire replay-flagged defers only.
+
+**CPS pass changes** — `src/cps.{c,h}`
+- [ ] `needs_cloneable_cps(expr)` — return true if the expr is or contains `EX_CLONEABLE_RESET` / `EX_CLONEABLE_SHIFT`.
+- [ ] `emit_capture_environment(expr, bb, cloneable=true)` — for each captured binding, record both the value and its typeclass-resolved `clone_fn` and `drop_fn` pointers.
+- [ ] `emit_create_cloneable_continuation(env, bb)` — allocate `CloneableContinuation`; populate `env_entries`.
+- [ ] Normal `reset`/`shift` paths are unaffected.
+
+**Fixtures** — `tests/fixtures/backtrack/`
+- [ ] `cloneable-basic.tur` — `cloneable-shift` captures continuation; clone it; resume both independently; verify different results.
+- [ ] `cloneable-multi-resume.tur` — resume the same cloneable continuation three times; verify each produces the correct value.
+- [ ] `cloneable-defer-suspend.tur` — defer inside `cloneable-reset` fires only once (at original scope exit), not on intermediate resumes.
+- [ ] `cloneable-defer-replay.tur` — `(defer :replay true ...)` fires on every resume AND at original scope exit.
+- [ ] `cloneable-ref.tur` — `ref<T>` captured in cloneable continuation deep-clones correctly; each resume sees independent state.
+- [ ] `cloneable-rc.tur` — `rc<T>` captured increases refcount on clone; original and clones share data.
+- [ ] Negative: `cloneable-shift-outside-reset.tur` — `cloneable-shift` outside `cloneable-reset` emits TUR-E00YZ.
+- [ ] Codegen snapshots: cloneable continuation lowering; `CloneEnvEntry` array generation.
+
+**Exit criterion:** cloneable continuations can be cloned and resumed multiple times; defer semantics correct; elaborator enforces `Clone` capture constraint; one-shot `tur_cont_resume` aborts if called on cloneable cont; CPS pass unaffected for non-cloneable code.
+
+---
+
+### Phase B3 — Backtracking Monad
+
+**Goal:** Implement `Backtrack<T>` as a list-of-thunks monad on top of cloneable continuations. This is a pure library phase — no compiler changes.
+
+**New file** — `stdlib/backtrack.tur`
+- [ ] Define `(defalias Backtrack<T> (-> (list (-> T))))` — a computation yielding zero or more results.
+- [ ] Implement `(defn mzero [] : (Backtrack a))` — empty search; returns `[]`.
+- [ ] Implement `(defn mreturn [x : a] : (Backtrack a))` — single result.
+- [ ] Implement `(defn mplus [^Clone a fs gs : (Backtrack a)] : (Backtrack a))` — concatenate two result streams.
+- [ ] Implement `(defn mbind [^Clone a b f : (-> a (Backtrack b)) xs : (Backtrack a)] : (Backtrack b))` — monadic bind.
+- [ ] Implement `(defn run-backtrack [^Clone a m : (Backtrack a)] : (list a))` — execute and collect all results.
+- [ ] Implement `(defn run-backtrack-depth [^Clone a depth : int, m : (Backtrack a)] : (list a))` — depth-limited version; returns at most `depth` results.
+- [ ] Implement `(defn choice [^Clone a x y : (Backtrack a)] : (Backtrack a))` — try first, then second.
+- [ ] Implement `(defn guard [cond : bool] : (Backtrack unit))` — succeed only if `cond` is true; otherwise `mzero`.
+- [ ] Implement `(defn fresh [^Clone a n : int, f : (-> int (Backtrack a))] : (Backtrack a))` — enumerate `n` alternatives.
+- [ ] Implement `(defn once [^Clone a m : (Backtrack a)] : (Backtrack a))` — take at most one result; cut remaining search.
+- [ ] Implement `(defn interleave [^Clone a xs ys : (Backtrack a)] : (Backtrack a))` — fair interleaving of two streams.
+- [ ] Implement `do`-notation helper macro `(backtrack-do ...)` for sequencing backtracking computations.
+
+**Fixtures** — `tests/fixtures/backtrack/`
+- [ ] `backtrack-basic.tur` — `choice`, `mreturn`, `run-backtrack`; verify both branches returned.
+- [ ] `backtrack-mzero.tur` — `mzero` produces empty result list.
+- [ ] `backtrack-bind.tur` — `mbind` composes two choice computations; verify Cartesian product.
+- [ ] `backtrack-guard.tur` — `guard true` succeeds; `guard false` prunes.
+- [ ] `backtrack-fresh.tur` — `fresh 5 id` produces 5 results `[0 1 2 3 4]`.
+- [ ] `backtrack-depth.tur` — `run-backtrack-depth 3` returns at most 3 results from an infinite search.
+- [ ] `backtrack-once.tur` — `once` returns exactly one result.
+- [ ] `backtrack-interleave.tur` — `interleave` fairly alternates two infinite streams.
+- [ ] `backtrack-nested.tur` — nested `choice` inside `mbind`; verify all combinations.
+- [ ] `backtrack-ref.tur` — backtracking with `ref<T>` state; each branch sees independent state.
+- [ ] Codegen snapshots: `run-backtrack` and `mbind` lowering.
+
+**Exit criterion:** all monad combinators work correctly; depth limiting prevents divergence; `ref<T>` state is properly isolated across branches; fixture suite passes.
+
+---
+
+### Phase B4 — Standard Library Integration
+
+**Goal:** Build two canonical consumers of the backtracking monad: a logic programming layer (`stdlib/logic.tur`) and a parser combinator library (`stdlib/parsec.tur`).
+
+**New file** — `stdlib/logic.tur`
+- [ ] Define `(defstruct LVar [id : int])` — logic variable.
+- [ ] Define `(defstruct UState [subst : (hamt LVar Term), counter : int])` — unification state (uses HAMT for persistent substitution map; degrade to association list if HAMT not yet available).
+- [ ] Define `(defalias Term (variant INT int64, BOOL bool, SYM cstr, VAR LVar, PAIR (Pair Term Term), NIL unit))`.
+- [ ] Define `(defalias Goal (Backtrack UState))`.
+- [ ] Implement `(defn unify [x y : Term] : Goal)` — unification with occurs check; calls `mzero` on mismatch.
+- [ ] Implement `(defn unify-var [v : LVar, t : Term, k] : Goal)` — helper; checks occurs-check, records binding in substitution.
+- [ ] Implement `(defn walk [v : Term, s : UState] : Term)` — follow variable chains in substitution.
+- [ ] Implement `(defn fresh-lvar [f : (-> LVar Goal)] : Goal)` — generate a fresh logic variable.
+- [ ] Implement `(defn conjoined [g1 g2 : Goal] : Goal)` — `mbind g1 (fn [_] g2)`.
+- [ ] Implement `(defn disjoined [g1 g2 : Goal] : Goal)` — `mplus g1 g2`.
+- [ ] Implement `(defn run-logic [n : int, g : Goal] : (list UState))` — `run-backtrack-depth n g` with fresh initial state.
+- [ ] Implement `(defn reify [v : LVar, state : UState] : Term)` — walk substitution to ground term.
+
+**New file** — `stdlib/parsec.tur`
+- [ ] Define `(defalias Input (struct [chars : (vec char), pos : int]))`.
+- [ ] Define `(defalias Parser<a> (-> Input (Backtrack (Pair a Input))))`.
+- [ ] Implement `(defn pure [^Clone a x : a] : (Parser a))` — succeed with `x`, no input consumed.
+- [ ] Implement `(defn pfail [] : (Parser a))` — always fail.
+- [ ] Implement `(defn item [] : (Parser char))` — consume one character; `mzero` on empty input.
+- [ ] Implement `(defn pchar [expected : char] : (Parser char))` — consume if matches.
+- [ ] Implement `(defn pstring [expected : cstr] : (Parser cstr))` — consume fixed string.
+- [ ] Implement `(defn or-parser [^Clone a p q : (Parser a)] : (Parser a))` — `mplus`-based; backtracks fully on first-branch failure.
+- [ ] Implement `(defn bind-parser [^Clone a b p : (Parser a), f : (-> a (Parser b))] : (Parser b))` — sequential composition.
+- [ ] Implement `(defn then-parser [^Clone a b p : (Parser a), q : (Parser b)] : (Parser b))` — discard first result.
+- [ ] Implement `(defn many [^Clone a p : (Parser a)] : (Parser (list a)))` — zero or more; returns longest match first.
+- [ ] Implement `(defn many1 [^Clone a p : (Parser a)] : (Parser (list a)))` — one or more.
+- [ ] Implement `(defn optional [^Clone a p : (Parser a)] : (Parser (option a)))` — try `p`; return `none` on failure.
+- [ ] Implement `(defn run-parser [^Clone a p : (Parser a), input : cstr] : (list (Pair a Input)))` — parse a string; return all successful parses.
+- [ ] Implement `(defn run-parser-full [^Clone a p : (Parser a), input : cstr] : (option a))` — return only the parse that consumes all input; `none` if ambiguous or failed.
+
+**Fixtures** — `tests/fixtures/backtrack/`
+- [ ] `logic-unify-basic.tur` — unify `(VAR v)` with `(INT 42)`; verify substitution.
+- [ ] `logic-unify-fail.tur` — unify `(INT 1)` with `(INT 2)`; verify `mzero`.
+- [ ] `logic-fresh.tur` — `fresh-lvar` produces independent variables.
+- [ ] `logic-conjoined.tur` — conjunction of two successful goals.
+- [ ] `logic-disjoined.tur` — disjunction yields two result states.
+- [ ] `logic-occurs-check.tur` — occurs check prevents circular bindings.
+- [ ] `logic-reify.tur` — reify a ground term from a substitution.
+- [ ] `logic-query.tur` — multi-goal query with `run-logic 10`; verify expected results.
+- [ ] `parsec-basic.tur` — `pchar 'a'` succeeds on `"a"`, fails on `"b"`.
+- [ ] `parsec-or.tur` — `or-parser` backtracks from first branch and succeeds on second (the `"ac"` example from the plan).
+- [ ] `parsec-many.tur` — `many (pchar 'a')` on `"aaa"` returns list of 3.
+- [ ] `parsec-sequence.tur` — sequence two parsers with `bind-parser`.
+- [ ] `parsec-full.tur` — `run-parser-full` rejects ambiguous parses.
+- [ ] `parsec-json-subset.tur` — parse a JSON-like subset (numbers, strings, arrays) using combinators.
+- [ ] Codegen snapshots: `or-parser` lowering with backtracking; `run-logic` lowering.
+
+**Exit criterion:** `stdlib/logic.tur` and `stdlib/parsec.tur` are complete; all fixtures pass; the backtracking parser example from the plan passes end-to-end.
+
+---
+
+### Phase B5 — Testing, Benchmarks, and Optimization
+
+**Goal:** Validate correctness under stress, measure clone overhead, and add safety/diagnostic tooling.
+
+**Performance benchmarks** — `tests/benchmarks/backtrack/`
+- [ ] `bench-clone-overhead.tur` — 10 000 cloneable continuation clone/resume cycles; measure ns per clone.
+- [ ] `bench-backtrack-n-queens.tur` — N-queens solver (N = 8, 10, 12) using `choice`/`guard`; measure solutions-per-second.
+- [ ] `bench-parsec-json.tur` — parse a 10 KB JSON document with the parsec combinator library; measure MB/s.
+- [ ] `bench-logic-query.tur` — `run-logic 1000` on a relational arithmetic query; measure results-per-second.
+- [ ] Compare `clone` overhead: deep-clone baseline vs. projected copy-on-write savings.
+
+**Safety and diagnostic tooling**
+- [ ] Add `--backtrack-depth N` flag: caps the depth of any `run-backtrack` call globally; prevents accidental infinite search in production builds.
+- [ ] Emit a warning when `run-backtrack` (no depth limit) is called outside of a test context. Suppress with `(run-backtrack :allow-infinite true ...)`.
+- [ ] Add `--dump-clone-plan` debug flag: print which types were resolved to `Clone` instances at each cloneable continuation site.
+
+**Memory analysis**
+- [ ] Verify that cloneable continuations release all cloned memory when both the original and all clones are dropped (ASan clean).
+- [ ] Profile peak memory usage for the N-queens benchmark; document in `backtracking-cloneable-continuations-plan.md`.
+
+**Fixtures** — `tests/fixtures/backtrack/`
+- [ ] `backtrack-n-queens.tur` — 8-queens solver; verify all 92 solutions found.
+- [ ] `backtrack-sudoku.tur` — minimal Sudoku solver using `guard`; verify a known puzzle.
+- [ ] `backtrack-memory.tur` — ASan clean: clone, resume, drop all branches; no leaks.
+- [ ] Negative: `backtrack-depth-exceeded.tur` — `run-backtrack-depth 0` returns empty list immediately.
+- [ ] `backtrack-integration-effects.tur` — cloneable continuation inside an algebraic effect handler; verify composability.
+- [ ] `backtrack-integration-stm.tur` — (requires Phase 20) verify that backtracking correctly rolls back STM writes per branch.
+
+**Documentation**
+- [ ] Add `docs/backtracking-guide.md` — user guide covering `Clone` trait, `cloneable-reset`/`cloneable-shift`, `Backtrack<T>` monad, `stdlib/logic.tur`, `stdlib/parsec.tur`, and when to use each.
+- [ ] Update `backtracking-cloneable-continuations-plan.md` with implementation notes, resolved open questions, and benchmark results.
+
+**Exit criterion:** N-queens and Sudoku solvers work correctly; clone overhead is measured and documented; ASan clean under all fixture scenarios; `--backtrack-depth` safety flag works; user guide exists.
+
+---
+
 ## 11. Writing the compiler in C — concrete shape
 
 Since the host *is* C, lock these conventions early so the codebase stays legible:
@@ -814,7 +1728,7 @@ Two complementary directions; pick order based on user demand.
 
 Why defer:
 
-- **Most monad use cases die when effects ship.** `IO`, `State`, `Throw`, parsers, and short-circuit chains all become direct-style code under the algebraic-effects machinery (`effects-plan.md`). A `Monad` typeclass is the main HKT motivator in Haskell; with effects, that motivator is mostly gone. See [effects-vs-monads.md](effects-vs-monads.md) for the long form.
+- **Most monad use cases die when effects ship.** `IO`, `State`, `Throw`, parsers, and short-circuit chains all become direct-style code under the algebraic-effects machinery (`effects-plan.md`). A `Monad` typeclass is the main HKT motivator in Haskell; with effects, that motivator is mostly gone. See [effects-vs-monads.md](archive/effects-vs-monads.md) for the long form.
 - **Kind inference + kind-polymorphic dispatch is real implementation work** — a kind-checking pass between elaboration and dictionary insertion, plus a two-level dispatch table (lookup the constructor's dictionary, then call its method slot with concrete inner types). Doable, but not pulling its weight in v1.
 - **The dispatch table's current shape (§1.1) keys on `(name, [arg-type, …])`.** That works for kind-`*` typeclasses unchanged. HKT dispatch wants a different key shape (outer constructor, with inner types as dict parameters). Building both keying strategies in v1 would over-fit to a feature we may never ship.
 

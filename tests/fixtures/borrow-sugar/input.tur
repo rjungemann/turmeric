@@ -1,0 +1,16 @@
+; Phase 12: Reader sugar for borrow operators
+; &x  → (& x)    immutable borrow prefix
+; &mut x → (&mut x)  mutable borrow prefix
+
+(defn main [] :int
+  (let [x 10]
+    ; Immutable borrow sugar
+    (let [r &x]
+      (println @r))   ; 10
+    ; Mutable borrow sugar, write through
+    (let [^mut y 5]
+      (let [rm &mut y]
+        (set! @rm 42)
+        (println @rm))) ; 42
+  )
+  0)

@@ -491,6 +491,86 @@ static Form *read_deref(struct Reader *r) {
     return form_list(r->arena, span, items, 2);
 }
 
+/* Phase 12: & / &mut borrow prefix sugar.
+ *
+ * Rules:
+ *   '&' followed by whitespace/EOF/closer → bare '&' symbol (preserves (& x) form)
+ *   '&' followed by 'm','u','t' + delimiter → (&mut <next-form>) sugar
+ *   '&' followed by anything else           → (& <next-form>) sugar
+ *
+ * This means:
+ *   (& x)    still works: '& ' has space → bare symbol, list reads normally
+ *   &x       → (& x)
+ *   &mut x   → (&mut x)   [note: (&mut x) explicit form must be written as &mut x]
+ */
+static bool is_borrow_no_sugar(int c) {
+    /* Characters after '&' that suppress sugar and return a bare '&' symbol */
+    if (c == -1) return true;
+    return (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == ',' ||
+            c == ')' || c == ']' || c == '}' || c == ';' || c == '"');
+}
+
+static bool is_token_delim(int c) {
+    /* Characters that end a token — used to check what follows 'mut' */
+    if (c == -1) return true;
+    return (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == ',' ||
+            c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}' ||
+            c == ';' || c == '"' || c == ':' || c == '@' || c == '`' || c == '~');
+}
+
+static Form *read_borrow(Reader *r) {
+    uint32_t start_line = r->line;
+    uint32_t start_col = r->col;
+    size_t start_off = r->pos;
+    advance(r); /* consume '&' */
+
+    /* No-sugar: '&' followed by whitespace/closer → return bare '&' symbol.
+     * This preserves the (& x) explicit call form. */
+    if (is_borrow_no_sugar(peek(r))) {
+        Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
+        const Symbol *sym = symtab_intern(r->st, strslice("&", 1));
+        return form_sym(r->arena, span, sym);
+    }
+
+    /* Check for &mut sugar: next chars 'm','u','t' + token delimiter */
+    int c1 = peek(r), c2 = peek2(r), c3 = peek3(r);
+    int c4 = (r->pos + 3 < r->len) ? (unsigned char)r->src[r->pos + 3] : -1;
+    bool is_mut = (c1 == 'm' && c2 == 'u' && c3 == 't' && is_token_delim(c4));
+
+    const char *op_str;
+    uint32_t op_len;
+    if (is_mut) {
+        advance(r); advance(r); advance(r); /* consume 'm','u','t' */
+        op_str = "&mut";
+        op_len = 4;
+    } else {
+        op_str = "&";
+        op_len = 1;
+    }
+    Span op_span = span_from_to(r, start_line, start_col, start_off, r->pos);
+
+    /* Allow whitespace between operator and operand (e.g. &mut x) */
+    skip_ws_and_comments(r);
+
+    if (peek(r) == -1 || peek(r) == ')' || peek(r) == ']' || peek(r) == '}') {
+        Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
+        diag_emit(DIAG_ERROR, s, "%s requires an expression after it", op_str);
+        r->error = true;
+        return NULL;
+    }
+
+    Form *inner = read_form(r);
+    if (!inner) return NULL;
+
+    const Symbol *op_sym = symtab_intern(r->st, strslice(op_str, op_len));
+    Form **items = (Form **)arena_alloc(r->arena, 2 * sizeof(Form *));
+    items[0] = form_sym(r->arena, op_span, op_sym);
+    items[1] = inner;
+
+    Span span = span_from_to(r, start_line, start_col, start_off, inner->span.off_end);
+    return form_list(r->arena, span, items, 2);
+}
+
 static Form *read_symbol_or_minus(Reader *r) {
     uint32_t start_line = r->line;
     uint32_t start_col = r->col;
@@ -932,6 +1012,8 @@ static Form *read_form(Reader *r) {
     if (c == '\'') return read_quote(r);
     /* Phase 6: ~ as unquote operator (only valid inside quasiquote) */
     if (c == '~') return read_unquote(r);
+    /* Phase 12: & as borrow prefix sugar (&x → (& x), &mut x → (&mut x)) */
+    if (c == '&') return read_borrow(r);
     if (is_sym_start(c)) return read_symbol_or_minus(r);
 
     Span s = span_point(r);

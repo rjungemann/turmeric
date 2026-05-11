@@ -113,50 +113,19 @@ defn return [x : a] : (Backtrack a)
 
 ## 3. Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Backtracking Layer                            │
-├─────────────────────────────────────────────────────────────────┤
-│  stdlib/backtrack.tur                                             │
-│  ├── cloneable_continuation<T> :: struct with clone method        │
-│  ├── Clone trait :: required for all captured types              │
-│  ├── Backtrack<T> monad :: list of continuations                 │
-│  ├── mzero, mplus, bind :: monadic combinators                   │
-│  ├── call/cc :: capture current continuation as cloneable        │
-│  └── run_backtrack :: execute, collect all results                │
-│                                                                      │
-│  stdlib/logic.tur (optional: miniKanren integration)              │
-│  ├── lvar<T> :: logic variables                                    │
-│  ├── unify :: constraint propagation                              │
-│  └── run :: backtracking query execution                          │
-└─────────────────────────────────────────────────────────────────┘
-              │
-              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│              Substrate: Phase 18/19 Features                       │
-├─────────────────────────────────────────────────────────────────┤
-│  Phase 18:  shift/reset  :: delimited continuations               │
-│  Phase 18:  S2 defer strategy :: defer on capture, not resume     │
-│  Phase 19:  Algebraic effects :: handler infrastructure           │
-│  Phase 15:  Typeclasses :: Clone trait dispatch                   │
-│  Phase 5:   rc<T> :: reference counting for captured env          │
-│  Phase 4:   Unified defer model :: list-on-frame mechanism        │
-└─────────────────────────────────────────────────────────────────┘
-              │
-              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│              Runtime Support                                        │
-├─────────────────────────────────────────────────────────────────┤
-│  ;; Cloneable continuation representation                           │
-│  typedef struct CloneableContinuation {                           │
-│      Continuation* base;  ;; The underlying one-shot continuation│
-│      CloneFn clone_fn;    ;; Type-specific clone function         │
-│  };                                                                  │
-│                                                                      │
-│  ;; Deep clone of captured environment                             │
-│  Value* clone_environment(Environment* env);                      │
-│  ;; Uses Clone trait dispatch for each binding                     │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    BL["Backtracking Layer"]
+    bt["stdlib/backtrack.tur<br/>cloneable_continuation&lt;T&gt; :: struct with clone method<br/>Clone trait :: required for all captured types<br/>Backtrack&lt;T&gt; monad :: list of continuations<br/>mzero, mplus, bind :: monadic combinators<br/>call/cc :: capture current continuation as cloneable<br/>run_backtrack :: execute, collect all results"]
+    logic["stdlib/logic.tur (optional)<br/>lvar&lt;T&gt; :: logic variables<br/>unify :: constraint propagation<br/>run :: backtracking query execution"]
+    Sub["Substrate: Phase 18/19 Features<br/>Phase 18: shift/reset :: delimited continuations<br/>Phase 18: S2 defer strategy :: defer on capture, not resume<br/>Phase 19: Algebraic effects :: handler infrastructure<br/>Phase 15: Typeclasses :: Clone trait dispatch<br/>Phase 5: rc&lt;T&gt; :: reference counting for captured env<br/>Phase 4: Unified defer model :: list-on-frame mechanism"]
+    RT["Runtime Support<br/>CloneableContinuation :: base continuation + clone_fn<br/>clone_environment() :: deep clone of captured environment"]
+
+    BL --> bt
+    BL --> logic
+    bt --> Sub
+    logic --> Sub
+    Sub --> RT
 ```
 
 ---

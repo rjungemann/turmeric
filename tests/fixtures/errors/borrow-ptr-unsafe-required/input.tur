@@ -1,0 +1,10 @@
+;; Phase 12: Borrowing from ptr<void> requires (unsafe ../..)
+;; Attempting to borrow from a raw pointer outside unsafe must be rejected.
+
+(defn main [] :int
+  (let [r (rc/of 42)]
+    (let [p (rc->ptr r)]
+      ;; This must fail: cannot borrow from ptr<void> without unsafe
+      (let [b &p]
+        (println 1)))
+    0))

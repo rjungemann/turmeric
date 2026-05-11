@@ -1,51 +1,302 @@
 ;; Result type for Turmeric
 ;; Represents either a success (ok) or an error (err)
+;;
+;; v1 representation: heap-allocated struct { bool is_ok; int64_t ok_val; int64_t err_val; }
+;; returned as ptr<void>. Both ok_val and err_val are int64_t in v1; typed generics
+;; are a Phase R1 follow-on once generic structs land.
+
+
+;; ── Constructors ─────────────────────────────────────────────────────────────
 
 ;; Create an ok value
-(defn ok [x]
+(defn ok [x :int] :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
   result->is_ok = true;
   result->ok_val = x;
+  result->err_val = 0;
   return result;
   ```)
 
 ;; Create an err value
-(defn err [e]
+(defn err [e :int] :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
   result->is_ok = false;
+  result->ok_val = 0;
   result->err_val = e;
   return result;
   ```)
 
+;; ── Predicates ───────────────────────────────────────────────────────────────
+
 ;; Check if result is ok
-(defn ok? [r] :bool
+(defn ok? [r :ptr<void>] :bool
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
   return result != NULL && result->is_ok;
   ```)
 
-;; Unwrap - returns ok value, panics if err
-(defn result-unwrap [r] :int
+;; Check if result is err
+(defn err? [r :ptr<void>] :bool
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  return result == NULL || !result->is_ok;
+  ```)
+
+;; ── Value accessors ───────────────────────────────────────────────────────────
+
+;; Extract the ok value (undefined behaviour if r is err)
+(defn ok-val [r :ptr<void>] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  return result->ok_val;
+  ```)
+
+;; Extract the err value (undefined behaviour if r is ok)
+(defn err-val [r :ptr<void>] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  return result->err_val;
+  ```)
+
+;; ── Unwrapping ────────────────────────────────────────────────────────────────
+
+;; Unwrap - returns ok value, aborts if err
+(defn result-unwrap [r :ptr<void>] :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
   if (result == NULL || !result->is_ok) {
-    fprintf(stderr, "unwrap called on err\n");
-    exit(1);
+    fprintf(stderr, "result-unwrap: called on err\n");
+    abort();
   }
   return (int)result->ok_val;
   ```)
 
-;; Unwrap with default
-(defn result-unwrap-or [r default_val] :int
-  (if (ok? r)
-    (result-unwrap r)
-    default_val))
+;; Unwrap with default - returns ok value or default_val if err
+(defn result-unwrap-or [r :ptr<void> default_val :int] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  if (result != NULL && result->is_ok) return (int)result->ok_val;
+  return default_val;
+  ```)
 
-;; Free a result
-(defn result-free [r]
+;; Expect - returns ok value, aborts with custom message if err
+(defn result-expect [r :ptr<void> msg :cstr] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  if (result == NULL || !result->is_ok) {
+    fprintf(stderr, "result-expect: %s\n", (const char*)msg);
+    abort();
+  }
+  return (int)result->ok_val;
+  ```)
+
+;; ── Combinators ──────────────────────────────────────────────────────────────
+
+;; result-map — apply f to the ok value; propagate err unchanged
+;; f must be a fn [x :int] :int
+(defn result-map [r :ptr<void> f :ptr<void>] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  if (res == NULL || !res->is_ok) return r;
+  int64_t new_val = ((int64_t (*)(int64_t))f)(res->ok_val);
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
+  out->is_ok   = true;
+  out->ok_val  = new_val;
+  out->err_val = 0;
+  return out;
+  ```)
+
+;; result-map-err — apply f to the err value; propagate ok unchanged
+;; f must be a fn [e :int] :int
+(defn result-map-err [r :ptr<void> f :ptr<void>] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  if (res == NULL || res->is_ok) return r;
+  int64_t new_err = ((int64_t (*)(int64_t))f)(res->err_val);
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
+  out->is_ok   = false;
+  out->ok_val  = 0;
+  out->err_val = new_err;
+  return out;
+  ```)
+
+;; result-flat-map (result-and-then) — chain computations that may fail
+;; f receives the ok value and must return a ptr<void> result
+(defn result-flat-map [r :ptr<void> f :ptr<void>] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  if (res == NULL || !res->is_ok) return r;
+  return (void *)((int64_t (*)(int64_t))f)(res->ok_val);
+  ```)
+
+;; result-or — return r if ok, otherwise return alt
+(defn result-or [r :ptr<void> alt :ptr<void>] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  if (res != NULL && res->is_ok) return r;
+  return alt;
+  ```)
+
+;; result-or-else — return r if ok, otherwise compute alt via thunk
+;; f must be a fn [e :int] :ptr<void>
+(defn result-or-else [r :ptr<void> f :ptr<void>] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  if (res != NULL && res->is_ok) return r;
+  int64_t ev = res ? res->err_val : 0;
+  return (void *)((int64_t (*)(int64_t))f)(ev);
+  ```)
+
+;; ── Option interop ───────────────────────────────────────────────────────────
+
+;; ok-or — convert option to result: some(v) → ok(v), none → err(e)
+(defn ok-or [opt :ptr<void> e :int] :ptr<void>
+  ```c
+  struct { bool is_some; int64_t value; } *o = (void*)opt;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
+  if (o != NULL && o->is_some) {
+    result->is_ok   = true;
+    result->ok_val  = o->value;
+    result->err_val = 0;
+  } else {
+    result->is_ok   = false;
+    result->ok_val  = 0;
+    result->err_val = e;
+  }
+  return result;
+  ```)
+
+;; ── Error context ─────────────────────────────────────────────────────────────
+
+;; err-context — wrap an err value's message in additional context
+;; Returns a new err whose err_val is a freshly allocated cstr "context: original"
+;; If r is ok, returns r unchanged.
+(defn err-context [r :ptr<void> ctx :cstr] :ptr<void>
+  ```c
+  extern size_t strlen(const char*);
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  if (res == NULL || res->is_ok) return r;
+  const char *orig = (const char *)(intptr_t)res->err_val;
+  size_t ctx_len  = strlen((const char*)ctx);
+  size_t orig_len = orig ? strlen(orig) : 0;
+  char *msg = malloc(ctx_len + 2 + orig_len + 1);
+  memmove(msg, ctx, ctx_len);
+  msg[ctx_len]     = ':';
+  msg[ctx_len + 1] = ' ';
+  if (orig) memmove(msg + ctx_len + 2, orig, orig_len);
+  msg[ctx_len + 2 + orig_len] = '\0';
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
+  out->is_ok   = false;
+  out->ok_val  = 0;
+  out->err_val = (int64_t)(intptr_t)msg;
+  return out;
+  ```)
+
+;; ── Memory management ────────────────────────────────────────────────────────
+
+;; Free a result (does not free the contained value)
+(defn result-free [r :ptr<void>]
   ```c
   free(r);
-  return 0;
+  ```)
+
+;; ── Collection helpers ────────────────────────────────────────────────────────
+
+;; result-collect — collect a vec of results into a single result
+;; v must be a vec (ptr<void> from vec-new) containing result ptr<void> values.
+;; Returns ok(vec-of-ok-values) if all items are ok,
+;; or err(first-err-value) on the first err encountered.
+(defn result-collect [v :ptr<void>] :ptr<void>
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res_ptr;
+  /* Check for first error */
+  for (size_t i = 0; i < vec->len; i++) {
+    res_ptr = (void *)(intptr_t)vec->data[i];
+    if (res_ptr == NULL || !res_ptr->is_ok) {
+      int64_t ev = res_ptr ? res_ptr->err_val : 0;
+      struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out =
+          malloc(sizeof(*out));
+      out->is_ok   = false;
+      out->ok_val  = 0;
+      out->err_val = ev;
+      return out;
+    }
+  }
+  /* All ok — build a new vec of ok values */
+  struct { int64_t *data; size_t len; size_t cap; } *ok_vec =
+      malloc(sizeof(*ok_vec));
+  ok_vec->len  = vec->len;
+  ok_vec->cap  = vec->len;
+  ok_vec->data = vec->len > 0 ? malloc(sizeof(int64_t) * vec->len) : NULL;
+  for (size_t i = 0; i < vec->len; i++) {
+    res_ptr = (void *)(intptr_t)vec->data[i];
+    ok_vec->data[i] = res_ptr->ok_val;
+  }
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out =
+      malloc(sizeof(*out));
+  out->is_ok   = true;
+  out->ok_val  = (int64_t)(intptr_t)ok_vec;
+  out->err_val = 0;
+  return out;
+  ```)
+
+;; result-partition — split a vec of results into (ok-vec, err-vec)
+;; Returns a ptr<void> to a pair struct { void *ok_vec; void *err_vec; }.
+;; Use result-partition-ok and result-partition-err to extract each vec.
+(defn result-partition [v :ptr<void>] :ptr<void>
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res_ptr;
+  /* Build ok and err vecs */
+  struct { int64_t *data; size_t len; size_t cap; } *ok_vec =
+      malloc(sizeof(*ok_vec));
+  ok_vec->data = NULL; ok_vec->len = 0; ok_vec->cap = 0;
+  struct { int64_t *data; size_t len; size_t cap; } *err_vec =
+      malloc(sizeof(*err_vec));
+  err_vec->data = NULL; err_vec->len = 0; err_vec->cap = 0;
+  for (size_t i = 0; i < vec->len; i++) {
+    res_ptr = (void *)(intptr_t)vec->data[i];
+    int64_t val;
+    struct { int64_t *data; size_t len; size_t cap; } *dst;
+    if (res_ptr != NULL && res_ptr->is_ok) {
+      val = res_ptr->ok_val;
+      dst = ok_vec;
+    } else {
+      val = res_ptr ? res_ptr->err_val : 0;
+      dst = err_vec;
+    }
+    if (dst->len >= dst->cap) {
+      size_t new_cap = dst->cap > 0 ? dst->cap * 2 : 4;
+      int64_t *new_data = malloc(sizeof(int64_t) * new_cap);
+      for (size_t j = 0; j < dst->len; j++) new_data[j] = dst->data[j];
+      free(dst->data);
+      dst->data = new_data;
+      dst->cap  = new_cap;
+    }
+    dst->data[dst->len++] = val;
+  }
+  /* Return pair */
+  struct { void *ok_vec; void *err_vec; } *pair = malloc(sizeof(*pair));
+  pair->ok_vec  = ok_vec;
+  pair->err_vec = err_vec;
+  return pair;
+  ```)
+
+;; result-partition-ok — extract the ok-vec from a result-partition pair
+(defn result-partition-ok [pair :ptr<void>] :ptr<void>
+  ```c
+  struct { void *ok_vec; void *err_vec; } *p = (void*)pair;
+  return p->ok_vec;
+  ```)
+
+;; result-partition-err — extract the err-vec from a result-partition pair
+(defn result-partition-err [pair :ptr<void>] :ptr<void>
+  ```c
+  struct { void *ok_vec; void *err_vec; } *p = (void*)pair;
+  return p->err_vec;
   ```)

@@ -1,0 +1,13 @@
+;; Phase 19: each handler activation receives its own one-shot continuation.
+;; Two sequential performs each trigger an independent handler activation;
+;; the continuation k from each activation is consumed exactly once.
+;; First activation: Choose(1) → resumes with 1*10=10
+;; Second activation: Choose(2) → resumes with 2*10=20
+;; Result: 10 + 20 = 30
+(defeffect Choose [n :int] :int)
+
+(defn pick-two [] :int
+  (+ (perform (Choose 1)) (perform (Choose 2))))
+
+(println (handle (pick-two)
+  (Choose [n] k) (resume k (* n 10))))

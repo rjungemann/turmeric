@@ -81,3 +81,10 @@
   extern int64_t tur_test_run_all(void);
   return (int)tur_test_run_all();
   ```)
+
+;; Convenience macro: register a named test with multiple body expressions.
+;; Usage: (deftest "my-test" (assert-true ...) (assert-false ...) ...)
+;; Expands to: (register-test "my-test" (fn [] body... 1))
+;; The fn returns 1 (pass); assertions print failure messages on failure.
+(defmacro deftest [test-name & body]
+  (register-test test-name (fn [] ~@body 1)))

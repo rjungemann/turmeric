@@ -1,0 +1,15 @@
+;; Phase 19: combined Write and Read console handlers.
+;; Read is answered with a fixed value for deterministic output.
+;; Write routes to println via its handler.
+(defeffect Write [s :cstr] :nil)
+(defeffect Read [] :int)
+
+(defn echo-doubled [] :nil
+  (let [x (perform (Read))]
+    (perform (Write "result:"))
+    (println (* x 2))))
+
+(handle
+  (handle (echo-doubled)
+    (Write [s] k) (do (println s) (resume k nil)))
+  (Read [] k) (resume k 21))

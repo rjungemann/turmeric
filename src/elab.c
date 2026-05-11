@@ -295,6 +295,9 @@ static Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_pa
                     stack[sp++] = cur->as.make_struct_.field_values[i-1];
                 }
                 break;
+            case EX_GET_FIELD:
+                stack[sp++] = cur->as.get_field_.struct_expr;
+                break;
             default:
                 break;
         }
@@ -329,6 +332,7 @@ typedef struct Elab {
     const Symbol *sym_when;
     const Symbol *sym_unless;
     const Symbol *sym_cond;
+    const Symbol *sym_case;
     const Symbol *sym_set;
     const Symbol *sym_while;
     const Symbol *sym_defn;     /* Phase 2 */
@@ -404,6 +408,10 @@ typedef struct Elab {
     const Symbol *sym_hkt_Monad;
     const Symbol *sym_hkt_Traversable;
     const Symbol *sym_hkt_Foldable;
+    /* Phase R2: Panic */
+    const Symbol *sym_panic;
+    /* Phase R1: ? operator (reserved; not yet implemented) */
+    const Symbol *sym_question;
     /* Phase 13: Lifetime annotations */
     /* We recognize lifetime annotations as symbols starting with '\'' */
     /* No specific symbol needed - we check the symbol name at runtime */
@@ -414,6 +422,15 @@ typedef struct Elab {
     uint32_t cap_macros;
     /* Phase 19: Algebraic effects */
     EffectEnv *effect_env;  /* Global effect registry */
+    /* Phase 19 TUR-E0008: Effect-scope tracking.
+     * handled_effect_names: stack of effect names covered by enclosing handle.
+     * fn_body_depth: depth inside defn/fn bodies; TUR-E0008 only fires at 0. */
+    const Symbol **handled_effect_names;
+    uint32_t n_handled_effects;
+    uint32_t cap_handled_effects;
+    uint32_t fn_body_depth;
+    /* Phase 19: cont? predicate */
+    const Symbol *sym_cont_pred; /* cont? */
     /* Phase 11: Struct registry - maps struct names to StructDef */
     StructDef **struct_defs;
     uint32_t n_struct_defs;
@@ -424,7 +441,9 @@ typedef struct Elab {
 typedef struct MacroDef {
     const Symbol *name;
     Form **params;
-    uint32_t n_params;
+    uint32_t n_params;       /* number of fixed params (excludes rest param) */
+    bool is_variadic;        /* true if [params & rest] syntax used */
+    const Symbol *rest_param; /* rest-arg symbol name, or NULL */
     Form *body;
     Span span;
 } MacroDef;
@@ -606,6 +625,9 @@ static bool is_rc_binding_consumed(const Expr *body, Binding *binding) {
             case EX_THROW:
                 stack[sp++] = cur->as.throw_.payload;
                 break;
+            case EX_PANIC:
+                stack[sp++] = cur->as.panic_.payload;
+                break;
             case EX_TRY:
                 stack[sp++] = cur->as.try_.body;
                 for (uint8_t i = 0; i < cur->as.try_.n_clauses; i++) {
@@ -628,6 +650,9 @@ static bool is_rc_binding_consumed(const Expr *body, Binding *binding) {
                 for (uint32_t i = cur->as.make_struct_.n_fields; i > 0; i--) {
                     stack[sp++] = cur->as.make_struct_.field_values[i-1];
                 }
+                break;
+            case EX_GET_FIELD:
+                stack[sp++] = cur->as.get_field_.struct_expr;
                 break;
             default:
                 break;
@@ -661,7 +686,7 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_when      = intern_cstr(st, "when");
     e->sym_unless    = intern_cstr(st, "unless");
     e->sym_cond      = intern_cstr(st, "cond");
-    e->sym_cond      = intern_cstr(st, "cond");
+    e->sym_case      = intern_cstr(st, "case");
     e->sym_set       = intern_cstr(st, "set!");
     e->sym_while     = intern_cstr(st, "while");
     e->sym_defn      = intern_cstr(st, "defn");
@@ -707,6 +732,12 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_try_with = intern_cstr(st, "try-with");
     e->sym_resume = intern_cstr(st, "resume");
     e->sym_discontinue = intern_cstr(st, "discontinue");
+    e->sym_cont_pred = intern_cstr(st, "cont?");
+    /* Phase 19 TUR-E0008: Effect scope tracking */
+    e->handled_effect_names = NULL;
+    e->n_handled_effects = 0;
+    e->cap_handled_effects = 0;
+    e->fn_body_depth = 0;
     /* Phase 10: GC */
     e->sym_gc_force = intern_cstr(st, "gc!");
     e->sym_gc_enable = intern_cstr(st, "gc-enable!");
@@ -742,6 +773,10 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_hkt_Monad        = intern_cstr(st, "Monad");
     e->sym_hkt_Traversable  = intern_cstr(st, "Traversable");
     e->sym_hkt_Foldable     = intern_cstr(st, "Foldable");
+    /* Phase R2: Panic */
+    e->sym_panic = intern_cstr(st, "panic");
+    /* Phase R1: ? operator */
+    e->sym_question = intern_cstr(st, "?");
     /* Macro storage */
     e->macros = NULL;
     e->n_macros = 0;
@@ -903,6 +938,53 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
                 }
             }
             /* Not a gensym call - continue with normal processing */
+            /* Check if any item is ~@ (unquote-splicing) — use splice path if so */
+            bool has_splice = false;
+            for (uint32_t i = 0; i < f->as.list.len; i++) {
+                if (f->as.list.items[i]->tag == F_UNQUOTE_SPLICING) {
+                    has_splice = true; break;
+                }
+            }
+            if (has_splice) {
+                /* Two-pass splice: substitute each item, splicing F_UNQUOTE_SPLICING */
+                uint32_t n_in = f->as.list.len;
+                Form **temp = (Form **)arena_alloc(e->arena, n_in * sizeof(Form *));
+                bool *is_splice = (bool *)arena_alloc(e->arena, n_in * sizeof(bool));
+                uint32_t n_out = 0;
+                for (uint32_t i = 0; i < n_in; i++) {
+                    Form *item = f->as.list.items[i];
+                    if (item->tag == F_UNQUOTE_SPLICING) {
+                        /* ~@ inner: substitute the inner form, then splice if it's a list */
+                        Form *inner = item->as.list.items[0];
+                        Form *subst = substitute_params(e, inner, macro, args);
+                        temp[i] = subst;
+                        if (subst->tag == F_LIST) {
+                            is_splice[i] = true;
+                            n_out += subst->as.list.len;
+                        } else {
+                            is_splice[i] = false;
+                            n_out++;
+                        }
+                    } else {
+                        temp[i] = substitute_params(e, item, macro, args);
+                        is_splice[i] = false;
+                        n_out++;
+                    }
+                }
+                Form **items = (Form **)arena_alloc(e->arena, n_out * sizeof(Form *));
+                uint32_t out_idx = 0;
+                for (uint32_t i = 0; i < n_in; i++) {
+                    if (is_splice[i]) {
+                        Form *lst = temp[i];
+                        for (uint32_t j = 0; j < lst->as.list.len; j++) {
+                            items[out_idx++] = lst->as.list.items[j];
+                        }
+                    } else {
+                        items[out_idx++] = temp[i];
+                    }
+                }
+                return form_list(e->arena, f->span, items, n_out);
+            }
             Form **items = (Form **)arena_alloc(e->arena, f->as.list.len * sizeof(Form *));
             for (uint32_t i = 0; i < f->as.list.len; i++) {
                 items[i] = substitute_params(e, f->as.list.items[i], macro, args);
@@ -910,12 +992,16 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
             return form_list(e->arena, f->span, items, f->as.list.len);
         }
         case F_SYM: {
-            /* Check if this symbol is a parameter - if so, replace with corresponding arg */
+            /* Check if this symbol is a fixed parameter - if so, replace with corresponding arg */
             for (uint32_t i = 0; i < macro->n_params; i++) {
                 Form *param = macro->params[i];
                 if (param->tag == F_SYM && param->as.sym == f->as.sym) {
                     return args[i];
                 }
+            }
+            /* Check if this symbol is the rest parameter */
+            if (macro->rest_param && macro->rest_param == f->as.sym) {
+                return args[macro->n_params]; /* rest list packed at n_params index */
             }
             /* Not a parameter - return as-is */
             return f;
@@ -939,6 +1025,28 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
 /* Phase 6: Expand a macro call with arguments */
 static Form *elab_expand_macro(Elab *e, MacroDef *macro, Form **args, uint32_t n_args) {
     /* Check arity */
+    if (macro->is_variadic) {
+        if (n_args < macro->n_params) {
+            diag_emit(DIAG_ERROR, macro->span,
+                      "macro '%s' expects at least %u arguments, got %u",
+                      macro->name->name, macro->n_params, n_args);
+            return NULL;
+        }
+        /* Build augmented args: fixed args + packed rest list at index n_params */
+        Form **aug_args = (Form **)arena_alloc(e->arena, (macro->n_params + 1) * sizeof(Form *));
+        for (uint32_t i = 0; i < macro->n_params; i++) {
+            aug_args[i] = args[i];
+        }
+        /* Pack trailing args into an F_LIST for the rest param */
+        uint32_t n_rest = n_args - macro->n_params;
+        Form **rest_items = (Form **)arena_alloc(e->arena, n_rest * sizeof(Form *));
+        for (uint32_t i = 0; i < n_rest; i++) {
+            rest_items[i] = args[macro->n_params + i];
+        }
+        Span rest_span = n_rest > 0 ? args[macro->n_params]->span : macro->span;
+        aug_args[macro->n_params] = form_list(e->arena, rest_span, rest_items, n_rest);
+        return substitute_params(e, macro->body, macro, aug_args);
+    }
     if (n_args != macro->n_params) {
         diag_emit(DIAG_ERROR, macro->span,
                   "macro '%s' expects %u arguments, got %u",
@@ -1683,6 +1791,66 @@ static Expr *elab_cond(Elab *e, const Form *call) {
         acc = out;
     }
     return acc;
+}
+
+/* case desugars to (let [g disc] (if (= g v1) e1 (if (= g v2) e2 ... eN))).
+ * Syntax: (case val v1 e1 v2 e2 ... :else eN) */
+static Expr *elab_case(Elab *e, const Form *call) {
+    if (call->as.list.len < 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "case requires (case val v1 e1 ...), got empty call");
+        return NULL;
+    }
+    uint32_t n = call->as.list.len - 2; /* clause forms after discriminant */
+    if ((n & 1) != 0) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "case expects pairs of (value expr) after discriminant; got %u clause forms", n);
+        return NULL;
+    }
+
+    /* Generate a gensym for the discriminant to avoid multiple evaluation. */
+    char disc_name[32];
+    snprintf(disc_name, sizeof(disc_name), "case_disc_%u", e->next_gensym_id++);
+    const Symbol *disc_sym = symtab_intern(e->st, strslice(disc_name, (uint32_t)strlen(disc_name)));
+    Form *disc_sym_f = form_sym(e->arena, call->span, disc_sym);
+
+    /* Intern = symbol for building (= g vi) tests */
+    const Symbol *sym_eq = symtab_intern(e->st, strslice("=", 1));
+    Form *sym_eq_f = form_sym(e->arena, call->span, sym_eq);
+
+    /* Intern 'if' and ':else' for building the nested if tree */
+    Form *sym_if_f  = form_sym(e->arena, call->span, e->sym_if);
+
+    /* Build the nested if tree right-to-left */
+    Form *acc = form_nil(e->arena, call->span);
+    for (int i = (int)n - 2; i >= 0; i -= 2) {
+        Form *val  = call->as.list.items[2 + i];
+        Form *body = call->as.list.items[2 + i + 1];
+
+        if (val->tag == F_KEYWORD && val->as.sym == e->kw_else) {
+            /* :else — replace acc with the else body */
+            acc = body;
+            continue;
+        }
+
+        /* Build (= disc_sym val) */
+        Form *eq_items[3] = { sym_eq_f, disc_sym_f, val };
+        Form *test_f = form_list(e->arena, val->span, eq_items, 3);
+
+        /* Build (if test body acc) */
+        Form *if_items[4] = { sym_if_f, test_f, body, acc };
+        acc = form_list(e->arena, val->span, if_items, 4);
+    }
+
+    /* Wrap in (let [disc_sym disc_expr] acc) */
+    Form *disc_f = call->as.list.items[1];
+    Form *bind_vec_items[2] = { disc_sym_f, disc_f };
+    Form *bind_vec = form_vec(e->arena, call->span, bind_vec_items, 2);
+    Form *sym_let_f = form_sym(e->arena, call->span, e->sym_let);
+    Form *let_items[3] = { sym_let_f, bind_vec, acc };
+    Form *let_form = form_list(e->arena, call->span, let_items, 3);
+
+    return elab_form(e, let_form);
 }
 
 /* Phase 4: defer — (defer expr)
@@ -2752,6 +2920,24 @@ static Expr *elab_defeffect(Elab *e, const Form *call) {
     return out;
 }
 
+/* Phase 19 TUR-E0008: Helpers for unhandled-effect scope tracking. */
+static bool is_effect_handled(Elab *e, const Symbol *name) {
+    for (uint32_t i = 0; i < e->n_handled_effects; i++) {
+        if (e->handled_effect_names[i] == name) return true;
+    }
+    return false;
+}
+
+static void push_handled_effect(Elab *e, const Symbol *name) {
+    if (e->n_handled_effects >= e->cap_handled_effects) {
+        e->cap_handled_effects = e->cap_handled_effects ? e->cap_handled_effects * 2 : 8;
+        e->handled_effect_names = (const Symbol **)realloc(
+            e->handled_effect_names,
+            e->cap_handled_effects * sizeof(const Symbol *));
+    }
+    e->handled_effect_names[e->n_handled_effects++] = name;
+}
+
 /* (perform (EffectName arg1 arg2 ...))
  * Perform an algebraic effect with arguments.
  */
@@ -2793,7 +2979,19 @@ static Expr *elab_perform(Elab *e, const Form *call) {
                   "perform: unknown effect '%s'", effect_name->name);
         return NULL;
     }
-    
+
+    /* Phase 19 TUR-E0008: At top level (not inside a defn/fn body), every
+     * perform must be wrapped by an enclosing handle expression. Inside a
+     * defn/fn the caller is expected to provide the handler, so we skip. */
+    if (e->fn_body_depth == 0 && !is_effect_handled(e, effect_name)) {
+        diag_emit(DIAG_ERROR, name_f->span,
+                  "[TUR-E0008]: effect '%s' is performed but has no enclosing handler",
+                  effect_name->name);
+        diag_emit(DIAG_NOTE, name_f->span,
+                  "wrap the expression with a (handle ...) block or a handler macro");
+        return NULL;
+    }
+
     /* Parse arguments */
     uint8_t n_args = effect_call_f->as.list.len - 1;
     Expr **args = arena_alloc(e->arena, n_args * sizeof(Expr *));
@@ -2827,8 +3025,27 @@ static Expr *elab_handle(Elab *e, const Form *call) {
         return NULL;
     }
     
+    /* Phase 19 TUR-E0008: Pre-scan case headers to push effect names onto the
+     * handled-effects scope BEFORE elaborating the body.  This ensures that
+     * perform calls inside the body see the enclosing handle as a handler,
+     * without changing the case elaboration logic below. */
+    uint32_t n_case_forms_pre = call->as.list.len >= 2 ? call->as.list.len - 2 : 0;
+    uint8_t n_cases_pre = (uint8_t)((n_case_forms_pre / 2));
+    uint32_t saved_n_handled = e->n_handled_effects;
+    for (uint8_t i = 0; i < n_cases_pre; i++) {
+        Form *case_f = call->as.list.items[2 + (i * 2)];
+        if (case_f->tag == F_LIST && case_f->as.list.len >= 1 &&
+            case_f->as.list.items[0]->tag == F_SYM) {
+            push_handled_effect(e, case_f->as.list.items[0]->as.sym);
+        }
+    }
+
     /* Parse the body to be handled */
     Expr *body = elab_form(e, call->as.list.items[1]);
+
+    /* Pop the pre-scanned handlers after body elaboration */
+    e->n_handled_effects = saved_n_handled;
+
     if (!body) return NULL;
     
     /* Parse handle cases.
@@ -3016,6 +3233,33 @@ static Expr *elab_discontinue(Elab *e, const Form *call) {
     return out;
 }
 
+/* Phase 19: (cont? k) — check if a Phase 18 continuation has not been consumed.
+ * For Phase 19 algebraic-effect continuations (which are CK_MOVE int64_t dummies),
+ * the static one-shot check already catches double-resume at compile time.
+ * For Phase 18 tur_cont* continuations, this checks tur_cont_consumed at runtime.
+ * Returns: bool
+ */
+static Expr *elab_cont_pred(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(cont? k) requires exactly one argument");
+        return NULL;
+    }
+    Expr *inner = elab_form(e, call->as.list.items[1]);
+    if (!inner) return NULL;
+
+    /* Accepts TY_CONT (Phase 18 tur_cont*) or TY_INT (Phase 19 CK_MOVE dummy k) */
+    if (inner->type.kind != TY_CONT && inner->type.kind != TY_INT) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(cont? k) requires a continuation argument");
+        return NULL;
+    }
+
+    Expr *out = expr_new(e->arena, EX_CONT_PRED, TYPE_BOOL, call->span);
+    out->as.cont_pred_.expr = inner;
+    return out;
+}
+
 /* Phase 6: defmacro — (defmacro name [params...] body...)
  * Defines a macro that will be expanded at compile time.
  * Syntax: (defmacro name [param1 param2 ...] body...)
@@ -3053,9 +3297,15 @@ static Expr *elab_defmacro(Elab *e, const Form *call) {
         return NULL;
     }
 
-    /* Extract parameter symbols */
-    Form **params = (Form **)arena_alloc(e->arena, params_f->as.list.len * sizeof(Form *));
-    for (uint32_t i = 0; i < params_f->as.list.len; i++) {
+    /* Extract parameter symbols, detecting optional variadic '& rest' tail. */
+    uint32_t n_total = params_f->as.list.len;
+    /* Allocate enough space for all params (excluding '&' marker) */
+    Form **params = (Form **)arena_alloc(e->arena, n_total * sizeof(Form *));
+    uint32_t n_fixed = 0;
+    bool is_variadic = false;
+    const Symbol *rest_param = NULL;
+
+    for (uint32_t i = 0; i < n_total; i++) {
         Form *p = params_f->as.list.items[i];
         if (p->tag != F_SYM) {
             diag_emit(DIAG_ERROR, p->span,
@@ -3063,7 +3313,29 @@ static Expr *elab_defmacro(Elab *e, const Form *call) {
                       p->tag == F_KEYWORD ? "keyword" : "non-symbol");
             return NULL;
         }
-        params[i] = p;
+        if (p->as.sym == e->sym_borrow) {
+            /* '&' rest-arg marker: the next symbol is the rest param */
+            if (i + 1 >= n_total) {
+                diag_emit(DIAG_ERROR, p->span,
+                          "defmacro: '&' must be followed by a rest parameter name");
+                return NULL;
+            }
+            if (i + 2 < n_total) {
+                diag_emit(DIAG_ERROR, params_f->as.list.items[i + 2]->span,
+                          "defmacro: only one parameter may follow '&'");
+                return NULL;
+            }
+            Form *rest_f = params_f->as.list.items[i + 1];
+            if (rest_f->tag != F_SYM) {
+                diag_emit(DIAG_ERROR, rest_f->span,
+                          "defmacro: rest parameter after '&' must be a symbol");
+                return NULL;
+            }
+            is_variadic = true;
+            rest_param = rest_f->as.sym;
+            break; /* no more params after & rest */
+        }
+        params[n_fixed++] = p;
     }
 
     /* The body is everything after the parameter list */
@@ -3087,7 +3359,9 @@ static Expr *elab_defmacro(Elab *e, const Form *call) {
     MacroDef *macro = (MacroDef *)arena_alloc(e->arena, sizeof(MacroDef));
     macro->name = name_f->as.sym;
     macro->params = params;
-    macro->n_params = params_f->as.list.len;
+    macro->n_params = n_fixed;
+    macro->is_variadic = is_variadic;
+    macro->rest_param = rest_param;
     macro->body = body;
     macro->span = call->span;
 
@@ -3395,19 +3669,21 @@ static Expr *elab_defn(Elab *e, const Form *call) {
 
     Expr *body = e_nil(e, call->span);
     uint32_t n_body = call->as.list.len - body_start;
+    e->fn_body_depth++;
     if (n_body == 1) {
         body = elab_form(e, call->as.list.items[body_start]);
-        if (!body) { e->scope = inner.parent; scope_free(&inner); return NULL; }
+        if (!body) { e->fn_body_depth--; e->scope = inner.parent; scope_free(&inner); return NULL; }
     } else {
         Expr **items = (Expr **)arena_alloc(e->arena, n_body * sizeof(Expr *));
         for (uint32_t i = 0; i < n_body; i++) {
             items[i] = elab_form(e, call->as.list.items[body_start + i]);
-            if (!items[i]) { e->scope = inner.parent; scope_free(&inner); return NULL; }
+            if (!items[i]) { e->fn_body_depth--; e->scope = inner.parent; scope_free(&inner); return NULL; }
         }
         body = expr_new(e->arena, EX_DO, items[n_body - 1]->type, call->span);
         body->as.do_.items = items;
         body->as.do_.n = n_body;
     }
+    e->fn_body_depth--;
 
     /* Pop scope */
     e->scope = inner.parent;
@@ -3575,19 +3851,21 @@ static Expr *elab_fn(Elab *e, const Form *call) {
 
     Expr *body = e_nil(e, call->span);
     uint32_t n_body = call->as.list.len - body_start;
+    e->fn_body_depth++;
     if (n_body == 1) {
         body = elab_form(e, call->as.list.items[body_start]);
-        if (!body) { e->scope = inner.parent; scope_free(&inner); /* params is arena-allocated */ return NULL; }
+        if (!body) { e->fn_body_depth--; e->scope = inner.parent; scope_free(&inner); /* params is arena-allocated */ return NULL; }
     } else {
         Expr **items = (Expr **)arena_alloc(e->arena, n_body * sizeof(Expr *));
         for (uint32_t i = 0; i < n_body; i++) {
             items[i] = elab_form(e, call->as.list.items[body_start + i]);
-            if (!items[i]) { e->scope = inner.parent; scope_free(&inner); /* params is arena-allocated */ return NULL; }
+            if (!items[i]) { e->fn_body_depth--; e->scope = inner.parent; scope_free(&inner); /* params is arena-allocated */ return NULL; }
         }
         body = expr_new(e->arena, EX_DO, items[n_body - 1]->type, call->span);
         body->as.do_.items = items;
         body->as.do_.n = n_body;
     }
+    e->fn_body_depth--;
 
     /* Phase 3: Capture analysis - collect free variables in the body */
     /* We need to do this before popping the scope */
@@ -3936,6 +4214,10 @@ static Expr *elab_throw_bang(Elab *e, const Form *call);
 /* Phase 18: call/cc and escape sugar */
 static Expr *elab_call_cc(Elab *e, const Form *call);
 static Expr *elab_escape(Elab *e, const Form *call);
+/* Phase 19: cont? predicate */
+static Expr *elab_cont_pred(Elab *e, const Form *call);
+/* Phase R2: Panic */
+static Expr *elab_panic(Elab *e, const Form *call);
 
 /* ---- general elab ---- */
 
@@ -3957,6 +4239,7 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_set)    return elab_set   (e, call);
     if (name == e->sym_while)  return elab_while (e, call);
     if (name == e->sym_cond)   return elab_cond  (e, call);
+    if (name == e->sym_case)   return elab_case  (e, call);
     /* Phase 4 */
     if (name == e->sym_defer)  return elab_defer (e, call);
     if (name == e->sym_return) return elab_return(e, call);
@@ -3995,6 +4278,7 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_try_with)  return elab_try_with(e, call);
     if (name == e->sym_resume)    return elab_resume(e, call);
     if (name == e->sym_discontinue) return elab_discontinue(e, call);
+    if (name == e->sym_cont_pred)   return elab_cont_pred(e, call);
     /* Phase 10: GC */
     if (name == e->sym_gc_force)    return elab_gc_force(e, call);
     if (name == e->sym_gc_enable)   return elab_gc_enable(e, call);
@@ -4008,6 +4292,14 @@ static Expr *elab_call(Elab *e, Form *call) {
     /* Phase 15: Typeclasses */
     if (name == e->sym_defclass) return elab_defclass(e, call);
     if (name == e->sym_definstance) return elab_definstance(e, call);
+    /* Phase R2: Panic */
+    if (name == e->sym_panic) return elab_panic(e, call);
+    /* Phase R1: ? operator (reserved, not yet implemented) */
+    if (name == e->sym_question) {
+        diag_emit(DIAG_ERROR, call->span,
+            "? operator is not yet implemented (Phase R1)");
+        return NULL;
+    }
     /* Phase 15: Method call syntax - (.method obj arg1 arg2) */
     if (name->len > 0 && name->name[0] == '.') {
         return elab_method_call(e, call);
@@ -4710,6 +5002,14 @@ static Expr *elab_borrow_immut(Elab *e, const Form *call) {
         }
     }
     
+    /* Phase 12: Borrowing from ptr<void> requires (unsafe ...).
+     * Emit an error until (unsafe ...) is implemented. */
+    if (inner->type.kind == TY_PTR_VOID) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "cannot borrow from ptr<void> outside (unsafe ...)");
+        return NULL;
+    }
+
     /* Create the borrow type: &T where T is the referenced value's type.
      * Special cases:
      *   (& r) where r: ref<T>     → &T (borrow from owning ref)
@@ -4765,6 +5065,14 @@ static Expr *elab_borrow_mut(Elab *e, const Form *call) {
         }
     }
     
+    /* Phase 12: Borrowing from ptr<void> requires (unsafe ...).
+     * Emit an error until (unsafe ...) is implemented. */
+    if (inner->type.kind == TY_PTR_VOID) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "cannot borrow from ptr<void> outside (unsafe ...)");
+        return NULL;
+    }
+
     /* Create the borrow type: &mut T where T is the referenced value's type.
      * Special cases:
      *   (&mut r) where r: ref<T>  → &mut T (mutable borrow from owning ref)
@@ -4937,6 +5245,22 @@ static Expr *elab_throw_bang(Elab *e, const Form *call) {
     if (!payload) return NULL;
     Expr *out = expr_new(e->arena, EX_THROW, TYPE_NIL, call->span);
     out->as.throw_.payload = payload;
+    return out;
+}
+
+/* Phase R2: (panic msg) — print msg to stderr, then abort.
+ * msg must be of type :cstr (or a string literal).
+ * Return type is TYPE_NIL (diverging; caller never observes a value). */
+static Expr *elab_panic(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(panic msg) requires exactly one argument");
+        return NULL;
+    }
+    Expr *payload = elab_form(e, call->as.list.items[1]);
+    if (!payload) return NULL;
+    Expr *out = expr_new(e->arena, EX_PANIC, TYPE_NIL, call->span);
+    out->as.panic_.payload = payload;
     return out;
 }
 
@@ -5500,6 +5824,14 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
  * For v1, we use direct method function calls (monomorphic only).
  * Full dictionary passing deferred to v2.
  */
+/* Phase 12: EX_GET_FIELD — struct field access via (.fieldname s)
+ *
+ * Syntax: (.field s)  where s has type TY_STRUCT
+ * Returns: the type of the named field
+ * Also resolves immutable/mutable borrow of a field:
+ *   (& (.field s))   → EX_BORROW_IMMUT wrapping EX_GET_FIELD
+ *   (&mut (.field s)) → EX_BORROW_MUT wrapping EX_GET_FIELD
+ */
 static Expr *elab_method_call(Elab *e, const Form *call) {
     /* call is (.method obj arg1 arg2 ...)
      * call->as.list.items[0] is the symbol .method
@@ -5515,6 +5847,51 @@ static Expr *elab_method_call(Elab *e, const Form *call) {
     const Symbol *method_sym = head->as.sym;
     const char *method_name = method_sym->name + 1;  /* Skip '.' */
     uint32_t method_name_len = method_sym->len - 1;
+
+    /* Phase 12: EX_GET_FIELD — if the form is exactly (.field s) with no extra
+     * args, try to resolve it as a struct field access first.
+     * If the object is not a struct type (or the field name doesn't match),
+     * fall through to typeclass method dispatch below. */
+    if (call->as.list.len == 2) {
+        /* Elaborate the object without committing to errors yet */
+        Expr *obj_probe = elab_form(e, call->as.list.items[1]);
+        if (obj_probe) {
+            /* Unwrap borrow types */
+            Type base = obj_probe->type;
+            if (base.kind == TY_REF_IMMUT || base.kind == TY_REF_MUT) {
+                base = type_from_kind(base.as.ref_borrow.target);
+            }
+            if (base.kind == TY_STRUCT) {
+                /* Object is a struct — try field lookup */
+                StructDef *def = base.as.struct_.def;
+                for (uint32_t i = 0; i < def->n_fields; i++) {
+                    if (strcmp(def->fields[i].name, method_name) == 0) {
+                        /* Found matching field — build EX_GET_FIELD */
+                        TypeKind fkind = def->fields[i].kind;
+                        TypeKind finner = def->fields[i].inner_kind;
+                        Type field_type;
+                        if (fkind == TY_REF || fkind == TY_RC || fkind == TY_WEAK) {
+                            field_type.kind = fkind;
+                            field_type.as.ref.inner = finner;
+                        } else {
+                            field_type = type_from_kind(fkind);
+                        }
+                        Expr *out = expr_new(e->arena, EX_GET_FIELD, field_type, call->span);
+                        out->as.get_field_.struct_expr = obj_probe;
+                        out->as.get_field_.field_idx = i;
+                        out->as.get_field_.def = def;
+                        return out;
+                    }
+                }
+                /* Struct but no matching field */
+                diag_emit(DIAG_ERROR, call->span,
+                          "struct '%s' has no field '%s'",
+                          def->name, method_name);
+                return NULL;
+            }
+            /* Not a struct — fall through to typeclass dispatch below */
+        }
+    }
     
     /* For v1: Find a method implementation that matches */
     /* We search through all instances to find one with a matching method */

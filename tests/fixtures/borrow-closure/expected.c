@@ -160,6 +160,18 @@ void tur_throw(int payload_type, void *payload, int line, const char *file) {
     }
 }
 
+/* Phase R2: tur_panic */
+static int tur_panic_in_progress = 0;
+static void tur_panic(const char *msg) {
+    if (tur_panic_in_progress) {
+        fprintf(stderr, "double panic: aborting\n");
+        abort();
+    }
+    tur_panic_in_progress = 1;
+    fprintf(stderr, "panic: %s\n", msg ? msg : "(no message)");
+    abort();
+}
+
 /* Phase 19: Algebraic effect handler chain */
 typedef struct EffectHandlerCase EffectHandlerCase;
 struct EffectHandlerCase {

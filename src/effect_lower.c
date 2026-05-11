@@ -73,6 +73,8 @@ static bool expr_contains_effects(const Expr *e) {
             return e->as.return_.value && expr_contains_effects(e->as.return_.value);
         case EX_THROW:
             return expr_contains_effects(e->as.throw_.payload);
+        case EX_PANIC:
+            return expr_contains_effects(e->as.panic_.payload);
         case EX_TRY:
             if (expr_contains_effects(e->as.try_.body)) return true;
             for (uint8_t i = 0; i < e->as.try_.n_clauses; i++) {
@@ -369,6 +371,13 @@ static Expr *lower_expr(Arena *a, SymbolTable *st, Expr *e, EffectEnv *effect_en
             Expr *new_payload = lower_expr(a, st, e->as.throw_.payload, effect_env);
             Expr *out = expr_new(a, EX_THROW, e->type, e->span);
             out->as.throw_.payload = new_payload;
+            return out;
+        }
+
+        case EX_PANIC: {
+            Expr *new_payload = lower_expr(a, st, e->as.panic_.payload, effect_env);
+            Expr *out = expr_new(a, EX_PANIC, e->type, e->span);
+            out->as.panic_.payload = new_payload;
             return out;
         }
         

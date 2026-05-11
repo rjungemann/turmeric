@@ -86,6 +86,8 @@ typedef enum ExprKind {
     /* Phase 17: Exceptions */
     EX_THROW,          /* (throw expr) - raise an exception */
     EX_TRY,            /* (try body (catch ...) (finally ...)) - try-catch-finally */
+    /* Phase R2: Panic */
+    EX_PANIC,          /* (panic msg) - print msg to stderr and abort */
     /* Phase 18: Delimited continuations */
     EX_RESET,          /* (reset body) - establish continuation boundary */
     EX_SHIFT,          /* (shift k body) - capture continuation, pass to k */
@@ -96,8 +98,10 @@ typedef enum ExprKind {
     EX_HANDLE,         /* (handle expr cases...) - handle effects */
     EX_RESUME,         /* (resume k value) - resume continuation with value */
     EX_DISCONTINUE,    /* (discontinue k exception) - discontinue with exception */
+    EX_CONT_PRED,      /* (cont? k) - check if continuation is unconsumed */
     /* Phase 11: Struct operations */
     EX_MAKE_STRUCT,    /* (make-struct Name v1 v2 ...) - struct literal */
+    EX_GET_FIELD,      /* (.field s) - struct field access */
     EX_PROGRAM,
 } ExprKind;
 
@@ -272,6 +276,8 @@ struct Expr {
         struct { TypeClassInstance *instance; }                          instance_def_;
         /* Phase 17: Exceptions */
         struct { Expr *payload; }        throw_;    /* (throw expr) - expression to throw */
+        /* Phase R2: Panic */
+        struct { Expr *payload; }        panic_;    /* (panic msg) - message to print before abort */
         struct {
             Expr *body;              /* try body expression */
             TryCatchClause *clauses; /* catch clauses */
@@ -294,9 +300,11 @@ struct Expr {
         struct { HandleExpr *handle; }               handle_;      /* (handle ...) */
         struct { ResumeExpr *resume; }               resume_;      /* (resume k v) */
         struct { DiscontinueExpr *discontinue; }     discontinue_; /* (discontinue k e) */
+        struct { Expr *expr; }                       cont_pred_;   /* (cont? k) */
 
         /* Phase 11: Struct operations */
         struct { StructDef *def; Expr **field_values; uint32_t n_fields; } make_struct_; /* (make-struct Name v1...) */
+        struct { Expr *struct_expr; uint32_t field_idx; StructDef *def; } get_field_; /* (.field s) - field read */
 
         struct { Expr **items; uint32_t n; }                               program;
     } as;

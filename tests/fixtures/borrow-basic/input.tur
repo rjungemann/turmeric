@@ -6,6 +6,6 @@
     (let [r1 (& x)]
       (let [r2 (& x)]  ; OK: multiple &T allowed
         (println 1)))
-    (let [r3 (&mut x)]  ; OK: x is no longer borrowed
+      (let [r3 &mut x]    ; OK: x is no longer borrowed
       (println 2)))
   0)

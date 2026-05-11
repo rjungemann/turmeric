@@ -1,0 +1,5 @@
+;; Phase R1: The ? operator is reserved but not yet implemented.
+(defn main [] :int
+  (do
+    (? 42)
+    0))

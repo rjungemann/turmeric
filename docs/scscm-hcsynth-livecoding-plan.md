@@ -3,7 +3,7 @@
 > **Status**: Draft / Proposal  
 > **Target**: Phase 20+ (Post-algebraic effects)  
 > **Dependencies**: Phase 2 FFI (`extern-c`, inline-C), Phase 19 algebraic effects (for async), hcsynth OSC API  
-> **Related**: [signal-processing-arrows-plan.md](./signal-processing-arrows-plan.md), [effects-plan.md](./effects-plan.md)
+> **Related**: [signal-processing-arrows-plan.md](./signal-processing-arrows-plan.md), [effects-plan.md](./archive/effects-plan.md)
 
 ---
 
@@ -21,31 +21,18 @@
 
 ### 1.2 Architecture Summary
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Turmeric Compiler                           │
-├─────────────────────────────────────────────────────────────────┤
-│  scscm.tur library                      │  User live-coding code   │
-│  ┌─────────────────┐                    ┌───────────────────────┐ │
-│  │ OSC type aliases │                    │ SynthDef definitions  │ │
-│  │ Message builders │                    │ Pattern generation    │ │
-│  │ hcsynth bindings │                    │ Parameter automation   │ │
-│  └────────┬────────┘                    └───────────┬───────────┘ │
-└───────────┼──────────────────────────────────────────┼────────────┘
-            │                                              │
-            ▼                                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Generated C + hcsynth C API                   │
-├─────────────────────────────────────────────────────────────────┤
-│  FFI thunks  ◄──────►  hcsynth OSC shim (HC_Wasm_OscShim)         │
-│  Memory mgmt ◄──────►  hcsynth server process                      │
-└─────────────────────────────────────────────────────────────────┘
-            │
-            ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                        SuperCollider Server                        │
-│  scsynth - real-time audio synthesis engine                       │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph TC["Turmeric Compiler"]
+        scscm["scscm.tur library<br/>OSC type aliases · Message builders · hcsynth bindings"]
+        user["User live-coding code<br/>SynthDef definitions · Pattern generation · Parameter automation"]
+    end
+    gen["Generated C + hcsynth C API<br/>FFI thunks ↔ hcsynth OSC shim (HC_Wasm_OscShim)<br/>Memory mgmt ↔ hcsynth server process"]
+    sc["SuperCollider Server<br/>scsynth — real-time audio synthesis engine"]
+
+    scscm --> gen
+    user --> gen
+    gen --> sc
 ```
 
 ### 1.3 Communication Model

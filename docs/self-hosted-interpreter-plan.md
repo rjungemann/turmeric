@@ -20,36 +20,21 @@ The interpreter will be a **separate executable** (`turi`) distinct from the com
 
 ## Architecture Overview
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      turi (Self-Hosted Interpreter)           │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  ┌─────────────────┐    ┌─────────────────┐    ┌─────────┐ │
-│  │  Bootstrap       │    │  Self-Hosted     │    │  FFI     │ │
-│  │  Interpreter     │───▶│  Interpreter     │───▶│  Layer   │ │
-│  │  (C)             │    │  (Turmeric)      │    │  (C)     │ │
-│  └─────────────────┘    └─────────────────┘    └─────────┘ │
-│           │                     ▲                         ▲     │
-│           │                     │                         │     │
-│           ▼                     │                         │     │
-│  ┌─────────────────┐             │                         │     │
-│  │  Mini-Reader    │             │                         │     │
-│  │  (C)            │             │                         │     │
-│  └─────────────────┘             │                         │     │
-│                                    │                         │     │
-│  ┌─────────────────────────────────▼─────────────────┐      │     │
-│  │              Turmeric Source Code                 │      │     │
-│  └──────────────────────────────────────────────────┘      │     │
-│                                                        ↑      │     │
-│  ┌─────────────────────────────────────────────────────┐   │     │
-│  │              Interpreter Core Types                 │   │     │
-│  │  - Value (tagged union)                            │   │     │
-│  │  - Environment (persistent hash map)              │   │     │
-│  │  - Continuation (for effects)                     │   │     │
-│  │  - Thunk (delayed computation)                    │   │     │
-│  └─────────────────────────────────────────────────────┘   │     │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    Bootstrap["Bootstrap Interpreter (C)"]
+    SHI["Self-Hosted Interpreter (Turmeric)"]
+    FFI["FFI Layer (C)"]
+    MiniReader["Mini-Reader (C)"]
+    Source["Turmeric Source Code"]
+    CoreTypes["Interpreter Core Types<br/>Value (tagged union)<br/>Environment (persistent hash map)<br/>Continuation (for effects)<br/>Thunk (delayed computation)"]
+
+    Bootstrap -->|"runs"| SHI
+    SHI -->|"calls into"| FFI
+    Bootstrap --> MiniReader
+    MiniReader -->|"parses"| Source
+    Source -->|"interpreted by"| SHI
+    CoreTypes -->|"used by"| FFI
 ```
 
 ### Components
@@ -647,7 +632,7 @@ Root (fith/)
 ## Related Documents
 
 - [turmeric-plan.md](turmeric-plan.md) — Main compiler roadmap
-- [effects-plan.md](effects-plan.md) — Effect system design
+- [effects-plan.md](archive/effects-plan.md) — Effect system design
 - [typeclass-plan.md](typeclass-plan.md) — Typeclass design
 - [module-system-plan.md](module-system-plan.md) — Module system design
 

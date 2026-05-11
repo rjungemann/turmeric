@@ -1,0 +1,65 @@
+;; Phase R1: basic result type predicates and accessors
+
+(defn ok [x :int] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
+  result->is_ok = true; result->ok_val = x; result->err_val = 0; return result;
+  ```)
+(defn err [e :int] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
+  result->is_ok = false; result->ok_val = 0; result->err_val = e; return result;
+  ```)
+(defn ok? [r :ptr<void>] :bool
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  return result != NULL && result->is_ok;
+  ```)
+(defn err? [r :ptr<void>] :bool
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  return result == NULL || !result->is_ok;
+  ```)
+(defn ok-val [r :ptr<void>] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  return result->ok_val;
+  ```)
+(defn err-val [r :ptr<void>] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  return result->err_val;
+  ```)
+(defn result-unwrap [r :ptr<void>] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  if (result == NULL || !result->is_ok) { fprintf(stderr, "result-unwrap: err\n"); abort(); }
+  return (int)result->ok_val;
+  ```)
+(defn result-unwrap-or [r :ptr<void> default_val :int] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  if (result != NULL && result->is_ok) return (int)result->ok_val;
+  return default_val;
+  ```)
+(defn result-expect [r :ptr<void> msg :cstr] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  if (result == NULL || !result->is_ok) { fprintf(stderr, "expect: %s\n", (const char*)msg); abort(); }
+  return (int)result->ok_val;
+  ```)
+
+(defn main [] :int
+  (let [r1 (ok 42)]
+    (let [r2 (err 7)]
+      (do
+        (println (ok? r1))
+        (println (ok? r2))
+        (println (err? r1))
+        (println (err? r2))
+        (println (ok-val r1))
+        (println (err-val r2))
+        (println (result-unwrap r1))
+        (println (result-unwrap-or r2 99))
+        (println (result-expect r1 "should not abort"))
+        0))))

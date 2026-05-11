@@ -46,41 +46,20 @@ Core concepts:
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    stdlib/minikanren.tur                          │
-├─────────────────────────────────────────────────────────────────┤
-│  Core Data Types                                                   │
-│  ├── LogicVar      ::= lvar-id + substitution state              │
-│  ├── Term          ::= LogicVar | Symbol | Pair(Term, Term) | ...   │
-│  ├── Goal          ::= (-> State Stream)                         │
-│  ├── State         ::= {substitution: Subst, counter: int}       │
-│  └── Stream        ::= Nil | Cons(Term, (-> Stream))             │
-│                                                                      │
-│  Core Operators                                                    │
-│  ├── fresh         : introduce scoped logic variables           │
-│  ├── = (unify)     : unify two terms, backtrack on failure        │
-│  ├── ==            : syntactic equality (no unification)         │
-│  ├── conde         : combinator for disjunctive goals            │
-│  ├── conda         : all-combinator (commit to first success)    │
-│  ├── run           : execute query, collect results              │
-│  └── run*          : execute query, return full stream           │
-│                                                                      │
-│  Reified Operators (for higher-order)                           │
-│  ├── call/fresh    : reifiable fresh                              │
-│  ├── call/conde    : reifiable conde                               │
-│  └── =             : reifiable unify                              │
-└─────────────────────────────────────────────────────────────────┘
-              │
-              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│              Substrate: Turmeric Features                         │
-├─────────────────────────────────────────────────────────────────┤
-│  Phase 18:  shift/reset  :: delimited continuations for backtrack │
-│  Phase 16:  Capabilities :: logic state management                │
-│  Phase 15:  Typeclasses   :: ad-hoc polymorphism for terms       │
-│  Phase 19:  Effects       :: (future) cleaner handler interface   │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    MK["stdlib/minikanren.tur"]
+    types["Core Data Types<br/>LogicVar ::= lvar-id + substitution state<br/>Term ::= LogicVar | Symbol | Pair(Term, Term) | ...<br/>Goal ::= (→ State Stream)<br/>State ::= {substitution: Subst, counter: int}<br/>Stream ::= Nil | Cons(Term, (→ Stream))"]
+    ops["Core Operators<br/>fresh :: introduce scoped logic variables<br/>= (unify) :: unify two terms, backtrack on failure<br/>== :: syntactic equality<br/>conde :: disjunctive goals<br/>conda :: commit to first success<br/>run / run* :: execute query, collect results"]
+    reified["Reified Operators (higher-order)<br/>call/fresh, call/conde, = (reifiable unify)"]
+    Sub["Substrate: Turmeric Features<br/>Phase 18: shift/reset :: delimited continuations<br/>Phase 16: Capabilities :: logic state management<br/>Phase 15: Typeclasses :: ad-hoc polymorphism for terms<br/>Phase 19: Effects :: (future) cleaner handler interface"]
+
+    MK --> types
+    MK --> ops
+    MK --> reified
+    types --> Sub
+    ops --> Sub
+    reified --> Sub
 ```
 
 ---

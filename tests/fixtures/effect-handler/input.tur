@@ -1,0 +1,14 @@
+;; Phase 19: handler with multiple clauses and parameter binding.
+;; Each clause handles a different effect and transforms its parameter.
+(defeffect Add [x :int] :int)
+(defeffect Mul [x :int] :int)
+
+(defn compute [] :int
+  (* (perform (Add 3)) (perform (Mul 4))))
+
+;; Add handler: resumes with x+10 = 13
+;; Mul handler: resumes with x*2 = 8
+;; Result: 13 * 8 = 104
+(println (handle (compute)
+  (Add [x] k) (resume k (+ x 10))
+  (Mul [x] k) (resume k (* x 2))))

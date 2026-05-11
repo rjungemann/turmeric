@@ -1,0 +1,8 @@
+;; Negative test: too few args to a variadic macro (missing required fixed args)
+(defmacro needs-name [name & rest]
+  (do (println name) ~@rest))
+
+(defn main [] :int
+  ;; needs-name requires at least one fixed arg; calling with zero should error
+  (needs-name)
+  0)

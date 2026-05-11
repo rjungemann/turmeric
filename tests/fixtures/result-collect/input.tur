@@ -1,0 +1,209 @@
+;; Phase R1: result-collect and result-partition tests
+
+;; ── result constructors / accessors ──────────────────────────────────────────
+(defn ok [x :int] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = true; r->ok_val = x; r->err_val = 0; return r;
+  ```)
+
+(defn err [e :int] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = false; r->ok_val = 0; r->err_val = e; return r;
+  ```)
+
+(defn ok? [r :ptr<void>] :bool
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  return res != NULL && res->is_ok;
+  ```)
+
+(defn err? [r :ptr<void>] :bool
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  return res == NULL || !res->is_ok;
+  ```)
+
+(defn ok-val [r :ptr<void>] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  return (int)res->ok_val;
+  ```)
+
+(defn ok-val-ptr [r :ptr<void>] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  return (void *)(intptr_t)res->ok_val;
+  ```)
+
+(defn err-val [r :ptr<void>] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  return (int)res->err_val;
+  ```)
+
+;; ── vec primitives ────────────────────────────────────────────────────────────
+(defn vec-new [] :ptr<void>
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v->data = NULL; v->len = 0; v->cap = 0; return v;
+  ```)
+
+(defn vec-len [v :ptr<void>] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  return (int)vec->len;
+  ```)
+
+(defn vec-get [v :ptr<void> i :int] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  if (i >= 0 && (size_t)i < vec->len) return (int)vec->data[i];
+  fprintf(stderr, "vec index out of bounds\n"); abort(); return 0;
+  ```)
+
+(defn vec-get-ptr [v :ptr<void> i :int] :ptr<void>
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  if (i >= 0 && (size_t)i < vec->len) return (void *)(intptr_t)vec->data[i];
+  fprintf(stderr, "vec index out of bounds\n"); abort(); return NULL;
+  ```)
+
+(defn vec-push! [v :ptr<void> val :int]
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  if (vec->len >= vec->cap) {
+    size_t nc = vec->cap > 0 ? vec->cap * 2 : 4;
+    int64_t *nd = malloc(sizeof(int64_t) * nc);
+    for (size_t i = 0; i < vec->len; i++) nd[i] = vec->data[i];
+    free(vec->data); vec->data = nd; vec->cap = nc;
+  }
+  vec->data[vec->len++] = val;
+  ```)
+
+(defn vec-push-ptr! [v :ptr<void> val :ptr<void>]
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  if (vec->len >= vec->cap) {
+    size_t nc = vec->cap > 0 ? vec->cap * 2 : 4;
+    int64_t *nd = malloc(sizeof(int64_t) * nc);
+    for (size_t i = 0; i < vec->len; i++) nd[i] = vec->data[i];
+    free(vec->data); vec->data = nd; vec->cap = nc;
+  }
+  vec->data[vec->len++] = (int64_t)(intptr_t)val;
+  ```)
+
+;; ── result-collect ────────────────────────────────────────────────────────────
+(defn result-collect [v :ptr<void>] :ptr<void>
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *rp;
+  for (size_t i = 0; i < vec->len; i++) {
+    rp = (void *)(intptr_t)vec->data[i];
+    if (rp == NULL || !rp->is_ok) {
+      int64_t ev = rp ? rp->err_val : 0;
+      struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
+      out->is_ok = false; out->ok_val = 0; out->err_val = ev; return out;
+    }
+  }
+  struct { int64_t *data; size_t len; size_t cap; } *ov = malloc(sizeof(*ov));
+  ov->len = vec->len; ov->cap = vec->len;
+  ov->data = vec->len > 0 ? malloc(sizeof(int64_t) * vec->len) : NULL;
+  for (size_t i = 0; i < vec->len; i++) {
+    rp = (void *)(intptr_t)vec->data[i];
+    ov->data[i] = rp->ok_val;
+  }
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
+  out->is_ok = true; out->ok_val = (int64_t)(intptr_t)ov; out->err_val = 0;
+  return out;
+  ```)
+
+;; ── result-partition ─────────────────────────────────────────────────────────
+(defn result-partition [v :ptr<void>] :ptr<void>
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *rp;
+  struct { int64_t *data; size_t len; size_t cap; } *ov = malloc(sizeof(*ov));
+  ov->data = NULL; ov->len = 0; ov->cap = 0;
+  struct { int64_t *data; size_t len; size_t cap; } *ev2 = malloc(sizeof(*ev2));
+  ev2->data = NULL; ev2->len = 0; ev2->cap = 0;
+  for (size_t i = 0; i < vec->len; i++) {
+    rp = (void *)(intptr_t)vec->data[i];
+    int64_t val;
+    struct { int64_t *data; size_t len; size_t cap; } *dst;
+    if (rp != NULL && rp->is_ok) { val = rp->ok_val; dst = ov; }
+    else { val = rp ? rp->err_val : 0; dst = ev2; }
+    if (dst->len >= dst->cap) {
+      size_t nc = dst->cap > 0 ? dst->cap * 2 : 4;
+      int64_t *nd = malloc(sizeof(int64_t) * nc);
+      for (size_t j = 0; j < dst->len; j++) nd[j] = dst->data[j];
+      free(dst->data); dst->data = nd; dst->cap = nc;
+    }
+    dst->data[dst->len++] = val;
+  }
+  struct { void *ok_vec; void *err_vec; } *pair = malloc(sizeof(*pair));
+  pair->ok_vec = ov; pair->err_vec = ev2;
+  return pair;
+  ```)
+
+(defn result-partition-ok [pair :ptr<void>] :ptr<void>
+  ```c
+  struct { void *ok_vec; void *err_vec; } *p = (void*)pair;
+  return p->ok_vec;
+  ```)
+
+(defn result-partition-err [pair :ptr<void>] :ptr<void>
+  ```c
+  struct { void *ok_vec; void *err_vec; } *p = (void*)pair;
+  return p->err_vec;
+  ```)
+
+(defn main [] :int
+  (do
+    ;; result-collect: all ok
+    (let [v1 (vec-new)]
+      (do
+        (vec-push-ptr! v1 (ok 10))
+        (vec-push-ptr! v1 (ok 20))
+        (vec-push-ptr! v1 (ok 30))
+        (let [c1 (result-collect v1)]
+          (do
+            (println (ok? c1))
+            (let [ov (ok-val-ptr c1)]
+              (do
+                (println (vec-len ov))
+                (println (vec-get ov 0))
+                (println (vec-get ov 1))
+                (println (vec-get ov 2))))))))
+    ;; result-collect: first err wins
+    (let [v2 (vec-new)]
+      (do
+        (vec-push-ptr! v2 (ok 1))
+        (vec-push-ptr! v2 (err 99))
+        (vec-push-ptr! v2 (ok 2))
+        (let [c2 (result-collect v2)]
+          (do
+            (println (err? c2))
+            (println (err-val c2))))))
+    ;; result-partition
+    (let [v3 (vec-new)]
+      (do
+        (vec-push-ptr! v3 (ok 10))
+        (vec-push-ptr! v3 (err 1))
+        (vec-push-ptr! v3 (ok 20))
+        (vec-push-ptr! v3 (err 2))
+        (let [p (result-partition v3)]
+          (do
+            (let [oks  (result-partition-ok  p)]
+              (let [errs (result-partition-err p)]
+                (do
+                  (println (vec-len oks))
+                  (println (vec-get oks 0))
+                  (println (vec-get oks 1))
+                  (println (vec-len errs))
+                  (println (vec-get errs 0))
+                  (println (vec-get errs 1)))))))))
+    0))

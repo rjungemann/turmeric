@@ -78,6 +78,7 @@ static bool expr_contains_return_or_throw(const Expr *e) {
     switch (e->kind) {
         case EX_RETURN:
         case EX_THROW:
+        case EX_PANIC:
             return true;
         case EX_DO:
             for (uint32_t i = 0; i < e->as.do_.n; i++) {
@@ -649,7 +650,7 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         if (last_value_idx >= 0) {
             const Expr *last = e->as.do_.items[last_value_idx];
             /* Phase 3/4: If last item is return or throw, emit as statement only */
-            if (last->kind == EX_RETURN || last->kind == EX_THROW) {
+            if (last->kind == EX_RETURN || last->kind == EX_THROW || last->kind == EX_PANIC) {
                 emit_stmt(ctx, body, last);
                 return atom_nil();
             } else if (last->type.kind == TY_NIL) {
@@ -909,6 +910,21 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             if (payload->type.kind == TY_INT || payload->type.kind == TY_BOOL) {
                 free(boxed_val); /* Free the tmp name, not the allocation */
             }
+            return atom_nil();
+        }
+        /* Phase R2: Panic */
+        case EX_PANIC: {
+            /* (panic msg) - evaluate msg (cstr), call tur_panic, abort */
+            const Expr *payload = e->as.panic_.payload;
+            char *msg_val = emit_value(ctx, body, payload);
+            indent_buf(body, ctx->indent);
+            if (payload->type.kind == TY_CSTR) {
+                buf_printf(body, "tur_panic(%s);\n", msg_val);
+            } else {
+                /* For non-cstr, use a generic message */
+                buf_printf(body, "tur_panic(\"(non-string panic)\");\n");
+            }
+            free(msg_val);
             return atom_nil();
         }
         /* Phase 18: Delimited continuations */
@@ -1577,6 +1593,25 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             free(inner);
             return tmp;
         }
+        case EX_CONT_PRED: {
+            /* (cont? k) - check if a Phase 18 continuation has not been consumed.
+             * For Phase 19 algebraic-effect continuations (CK_MOVE int64_t dummy),
+             * this always returns true since the static one-shot check prevents
+             * a double-resume before we reach this point.
+             * For Phase 18 tur_cont* continuations, call tur_cont_consumed(). */
+            char *inner = emit_value(ctx, body, e->as.cont_pred_.expr);
+            char *tmp = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            if (e->as.cont_pred_.expr->type.kind == TY_CONT) {
+                buf_printf(body, "bool %s = !tur_cont_consumed((tur_cont *)(intptr_t)%s);\n", tmp, inner);
+            } else {
+                /* Phase 19 dummy k — statically always live */
+                buf_printf(body, "bool %s = true; /* cont? on Phase-19 k is always true */\n", tmp);
+                (void)inner;
+            }
+            free(inner);
+            return tmp;
+        }
         /* Phase 12: Borrow traits */
         case EX_BORROW_IMMUT: {
             /* (& expr) - immutable borrow */
@@ -1859,6 +1894,19 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_free(&lit);
             return result;
         }
+        case EX_GET_FIELD: {
+            /* (.field s) - emit s.field_name */
+            char *sv = emit_value(ctx, body, e->as.get_field_.struct_expr);
+            StructDef *def = e->as.get_field_.def;
+            const char *fname = def->fields[e->as.get_field_.field_idx].name;
+            Buf lit; buf_init(&lit);
+            buf_printf(&lit, "(%s).%s", sv, fname);
+            buf_putc(&lit, '\0');
+            free(sv);
+            char *result = strdup(lit.data);
+            buf_free(&lit);
+            return result;
+        }
     }
     return atom_nil();
 }
@@ -2015,6 +2063,12 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_THROW: {
             /* (throw expr) - emit as statement with tur_throw call */
             /* Delegate to emit_value which handles the full implementation */
+            char *v = emit_value(ctx, body, e);
+            free(v);
+            return;
+        }
+        /* Phase R2: Panic */
+        case EX_PANIC: {
             char *v = emit_value(ctx, body, e);
             free(v);
             return;
@@ -2198,7 +2252,8 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_WEAK:
         case EX_WEAK_UPGRADE:
         case EX_WEAK_PRED:
-        case EX_REF_PRED: {
+        case EX_REF_PRED:
+        case EX_CONT_PRED: {
             /* Emit as value expression, discard result */
             char *v = emit_value(ctx, body, e);
             if (e->type.kind != TY_NIL) {
@@ -2230,7 +2285,8 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_HANDLE:
         case EX_RESUME:
         case EX_DISCONTINUE:
-        case EX_MAKE_STRUCT: {
+        case EX_MAKE_STRUCT:
+        case EX_GET_FIELD: {
             /* These should be lowered by effect_lower/CPS passes.
              * Fallback: emit via emit_value and discard result.
              * Do not recurse into emit_stmt with the same node. */
@@ -2755,6 +2811,19 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "        tur_exception_free(exn);\n");
     buf_puts(out, "        abort();\n");
     buf_puts(out, "    }\n");
+    buf_puts(out, "}\n\n");
+
+    /* Phase R2: tur_panic */
+    buf_puts(out, "/* Phase R2: tur_panic */\n");
+    buf_puts(out, "static int tur_panic_in_progress = 0;\n");
+    buf_puts(out, "static void tur_panic(const char *msg) {\n");
+    buf_puts(out, "    if (tur_panic_in_progress) {\n");
+    buf_puts(out, "        fprintf(stderr, \"double panic: aborting\\n\");\n");
+    buf_puts(out, "        abort();\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    tur_panic_in_progress = 1;\n");
+    buf_puts(out, "    fprintf(stderr, \"panic: %s\\n\", msg ? msg : \"(no message)\");\n");
+    buf_puts(out, "    abort();\n");
     buf_puts(out, "}\n\n");
 
     /* Phase 19: Effect handler chain */

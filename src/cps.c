@@ -74,6 +74,8 @@ bool cps_expr_contains_shift(const Expr *e) {
             return e->as.return_.value && cps_expr_contains_shift(e->as.return_.value);
         case EX_THROW:
             return cps_expr_contains_shift(e->as.throw_.payload);
+        case EX_PANIC:
+            return cps_expr_contains_shift(e->as.panic_.payload);
         case EX_TRY:
             if (cps_expr_contains_shift(e->as.try_.body)) return true;
             for (uint8_t i = 0; i < e->as.try_.n_clauses; i++) {
@@ -279,6 +281,13 @@ static Expr *cps_mark_expr(Arena *a, Expr *e) {
             Expr *new_payload = cps_mark_expr(a, e->as.throw_.payload);
             Expr *out = expr_new(a, EX_THROW, e->type, e->span);
             out->as.throw_.payload = new_payload;
+            return out;
+        }
+
+        case EX_PANIC: {
+            Expr *new_payload = cps_mark_expr(a, e->as.panic_.payload);
+            Expr *out = expr_new(a, EX_PANIC, e->type, e->span);
+            out->as.panic_.payload = new_payload;
             return out;
         }
         
