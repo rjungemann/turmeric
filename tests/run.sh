@@ -159,7 +159,11 @@ run_happy() {
         return
     fi
 
-    "$exe" > "$actual_stdout" 2> "$actual_stderr"
+    if [ -f "$dir/input.stdin" ]; then
+        "$exe" < "$dir/input.stdin" > "$actual_stdout" 2> "$actual_stderr"
+    else
+        "$exe" > "$actual_stdout" 2> "$actual_stderr"
+    fi
     local rc=$?
     rm -f "$exe"
 

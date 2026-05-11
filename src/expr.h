@@ -181,8 +181,10 @@ typedef struct PerformExpr {
 typedef struct HandleCase {
     const Symbol *effect_name;   /* Name of the effect being handled */
     const Symbol **param_names;  /* Parameter names for the effect */
+    struct Binding **param_bindings; /* Resolved bindings for params (set by elab) */
     uint8_t n_params;           /* Number of parameters */
     const Symbol *k_name;        /* Name of the continuation parameter */
+    struct Binding *k_binding;   /* Resolved binding for k (set by elab) */
     Expr *body;                 /* Handler body */
 } HandleCase;
 

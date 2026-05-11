@@ -38,6 +38,9 @@ typedef struct EmitCtx {
     uint8_t n_defer_captures;
     /* Phase 3/4: Track if a return has been emitted in the current scope */
     bool return_emitted;
+    /* Phase 19: Buffer for effect handler functions that must be emitted just
+     * before the enclosing function definition (never inside a function body). */
+    Buf *pending_handler_fns;
 } EmitCtx;
 
 /* Phase 4 v1: Defer thunk tracking */
@@ -1626,55 +1629,215 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* Effect definitions are compile-time only - no runtime code */
             return atom_nil();
         case EX_PERFORM: {
-            /* (perform (EffectName args...)) - perform an effect
-             * 
-             * This should be lowered to shift by the effect_lower pass.
-             * If we reach here, the lowering didn't happen.
-             * For now, emit a comment as a placeholder.
+            /* (perform (EffectName args...)) - perform an effect.
+             * Emit: tur_effect_perform("Name", args_array, n_args)
              */
-            indent_buf(body, ctx->indent);
-            buf_printf(body, "/* perform %s */\n", 
-                      e->as.perform_.perform ? e->as.perform_.perform->effect_name->name : "unknown");
-            return atom_nil();
+            PerformExpr *perf = e->as.perform_.perform;
+            if (!perf) return atom_nil();
+
+            bool nil_result = (e->type.kind == TY_NIL);
+
+            /* Emit arguments into a temporary array */
+            char *args_var_str = NULL;
+            if (perf->n_args > 0) {
+                args_var_str = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "int64_t %s[%d];\n", args_var_str, perf->n_args);
+                for (uint8_t i = 0; i < perf->n_args; i++) {
+                    char *av = emit_value(ctx, body, perf->args[i]);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "%s[%d] = (int64_t)%s;\n", args_var_str, i, av);
+                    free(av);
+                }
+            }
+            const char *args_arg  = args_var_str ? args_var_str : "NULL";
+            int         n_args    = perf->n_args;
+
+            if (nil_result) {
+                /* Void-result effect: emit as statement, return nil placeholder */
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "tur_effect_perform(\"%s\", %s, %d);\n",
+                           perf->effect_name->name, args_arg, n_args);
+                free(args_var_str);
+                return atom_nil();
+            } else {
+                char *result = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                const char *res_ctype = type_c_name(e->type);
+                bool needs_cast = (e->type.kind != TY_INT && e->type.kind != TY_UNKNOWN);
+                if (needs_cast) {
+                    buf_printf(body, "%s %s = (%s)tur_effect_perform(\"%s\", %s, %d);\n",
+                               res_ctype, result, res_ctype,
+                               perf->effect_name->name, args_arg, n_args);
+                } else {
+                    buf_printf(body, "int64_t %s = tur_effect_perform(\"%s\", %s, %d);\n",
+                               result, perf->effect_name->name, args_arg, n_args);
+                }
+                free(args_var_str);
+                return result;
+            }
         }
         case EX_HANDLE: {
-            /* (handle expr cases...) - handle effects
-             * 
-             * This should be lowered to reset by the effect_lower pass.
-             * If we reach here, the lowering didn't happen.
+            /* (handle body (E [params] k) handler ...)
+             *
+             * Emits a static handler function per case, builds a
+             * EffectHandlerFrame on the stack, runs body, pops frame.
+             *
+             * v1 limitation: handler bodies cannot capture outer-scope
+             * variables (no closure analysis for handler functions yet).
              */
-            emit_stmt(ctx, body, e->as.handle_.handle->body);
+            HandleExpr *h = e->as.handle_.handle;
+            bool returns_value = (e->type.kind != TY_NIL);
+
+            /* Allocate handler function names */
+            char **hfn_names = (char **)malloc(h->n_cases * sizeof(char *));
+            for (uint8_t i = 0; i < h->n_cases; i++) {
+                hfn_names[i] = (char *)malloc(32);
+                snprintf(hfn_names[i], 32, "__effect_handler_%d", ctx->tmp_n++);
+            }
+
+            /* Emit static handler functions to pending buffer (flushed before
+             * the enclosing function definition, so they land at file scope). */
+            for (uint8_t i = 0; i < h->n_cases; i++) {
+                HandleCase *c = &h->cases[i];
+                Buf *hbuf = ctx->pending_handler_fns;
+
+                /* Forward declaration */
+                buf_printf(hbuf,
+                    "static int64_t %s(int64_t *__effect_args, int __n_effect_args,"
+                    " int64_t __k, void *__env);\n", hfn_names[i]);
+
+                /* Function definition */
+                buf_printf(hbuf,
+                    "static int64_t %s(int64_t *__effect_args, int __n_effect_args,"
+                    " int64_t __k, void *__env) {\n", hfn_names[i]);
+
+                /* Unpack effect arguments into named locals using the correct C type. */
+                for (uint8_t j = 0; j < c->n_params; j++) {
+                    if (c->param_bindings && c->param_bindings[j]) {
+                        const char *ctype = type_c_name(c->param_bindings[j]->type);
+                        char *raw = raw_name_for_binding(c->param_bindings[j]);
+                        buf_printf(hbuf,
+                            "    %s %s_%u = (%s)__effect_args[%d];\n",
+                            ctype, raw, (unsigned)c->param_bindings[j]->id, ctype, j);
+                        free(raw);
+                    }
+                }
+
+                /* Bind k */
+                if (c->k_binding) {
+                    char *raw = raw_name_for_binding(c->k_binding);
+                    buf_printf(hbuf,
+                        "    int64_t %s_%u = __k;\n",
+                        raw, (unsigned)c->k_binding->id);
+                    free(raw);
+                }
+
+                /* Emit handler body; use hbuf for body text and also as the
+                 * pending_handler_fns target so nested handles work. */
+                EmitCtx hctx = *ctx;
+                hctx.file = hbuf;
+                hctx.pending_handler_fns = hbuf;
+                hctx.indent = 4;
+                hctx.fn_params = NULL;
+                hctx.n_fn_params = 0;
+                hctx.closure = NULL;
+                hctx.env_var_name = NULL;
+                hctx.defer_captures = NULL;
+                hctx.n_defer_captures = 0;
+                hctx.frame_var = NULL;
+                hctx.return_emitted = false;
+
+                if (c->body && c->body->type.kind == TY_NIL) {
+                    /* Void-typed body: emit as statement, then return 0 */
+                    emit_stmt(&hctx, hbuf, c->body);
+                    buf_puts(hbuf, "    return 0;\n");
+                } else {
+                    char *hret = emit_value(&hctx, hbuf, c->body);
+                    buf_printf(hbuf, "    return (int64_t)%s;\n", hret);
+                    free(hret);
+                }
+                buf_puts(hbuf, "}\n\n");
+
+                /* Propagate counter back */
+                ctx->tmp_n = hctx.tmp_n;
+            }
+
+            /* Emit EffectHandlerFrame on the stack */
+            char *frame_var = (char *)malloc(32);
+            snprintf(frame_var, 32, "__eff_frame_%d", ctx->tmp_n++);
+
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "EffectHandlerFrame %s;\n", frame_var);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s.parent = global_effect_handler_chain;\n", frame_var);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s.n_cases = %d;\n", frame_var, h->n_cases);
+            for (uint8_t i = 0; i < h->n_cases; i++) {
+                HandleCase *c = &h->cases[i];
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s.cases[%d].effect_name = \"%s\";\n",
+                           frame_var, i, c->effect_name->name);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s.cases[%d].handler_fn = %s;\n",
+                           frame_var, i, hfn_names[i]);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s.cases[%d].env = NULL;\n", frame_var, i);
+            }
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "global_effect_handler_chain = &%s;\n", frame_var);
+
+            /* Evaluate the body */
+            char *result = fresh_tmp(ctx);
+            if (returns_value) {
+                char *bv = emit_value(ctx, body, h->body);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s %s = %s;\n", type_c_name(e->type), result, bv);
+                free(bv);
+            } else {
+                emit_stmt(ctx, body, h->body);
+            }
+
+            /* Pop frame */
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "global_effect_handler_chain = global_effect_handler_chain->parent;\n");
+
+            /* Cleanup */
+            for (uint8_t i = 0; i < h->n_cases; i++) free(hfn_names[i]);
+            free(hfn_names);
+            free(frame_var);
+
+            if (returns_value) return result;
+            free(result);
             return atom_nil();
         }
         case EX_RESUME: {
-            /* (resume k value) - resume continuation with value
-             * 
-             * This should be lowered by CPS pass. If we reach here without CPS,
-             * emit a direct call to the runtime function.
+            /* (resume k value) - resume continuation with value.
+             *
+             * v1 direct-style semantics: resume is the last expression in a
+             * handler body; it returns its value argument (k is a dummy int).
+             * The handler function returns this value to tur_effect_perform,
+             * which returns it as the result of perform at the call site.
              */
             if (e->as.resume_.resume) {
+                /* Evaluate k (side-effect only, value discarded) */
                 char *k_var = emit_value(ctx, body, e->as.resume_.resume->k);
-                char *v_var = emit_value(ctx, body, e->as.resume_.resume->value);
-                indent_buf(body, ctx->indent);
-                buf_printf(body, "tur_cont_resume((tur_cont *)%s, (int64_t)%s);\n", k_var, v_var);
                 free(k_var);
-                free(v_var);
+                /* Return the resume value */
+                return emit_value(ctx, body, e->as.resume_.resume->value);
             }
             return atom_nil();
         }
         case EX_DISCONTINUE: {
-            /* (discontinue k exception) - discontinue with exception
-             * Similar to resume but for exceptions.
+            /* (discontinue k exception) - discontinue with exception.
+             * v1: throw the exception; k (dummy int) is discarded.
              */
             if (e->as.discontinue_.discontinue) {
                 char *k_var = emit_value(ctx, body, e->as.discontinue_.discontinue->k);
+                free(k_var);
                 char *e_var = emit_value(ctx, body, e->as.discontinue_.discontinue->exception);
                 indent_buf(body, ctx->indent);
-                buf_printf(body, "tur_cont_drop((tur_cont *)%s);\n", k_var);
-                /* Then throw the exception */
-                indent_buf(body, ctx->indent);
-                buf_printf(body, "tur_throw(0, %s, __LINE__, __FILE__);\n", e_var);
-                free(k_var);
+                buf_printf(body, "tur_throw(5, (void*)%s, __LINE__, \"<unknown>\");\n", e_var);
                 free(e_var);
             }
             return atom_nil();
@@ -2085,6 +2248,15 @@ static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* Use raw name (without ID suffix) for function name */
     const char *fn_name = raw_name_for_binding(fd->binding);
 
+    /* Phase 19: Drain any pending effect handler functions accumulated while
+     * elaborating the PREVIOUS top-level expression.  They must appear before
+     * this function definition so they are at file scope. */
+    if (ctx->pending_handler_fns && ctx->pending_handler_fns->len > 0) {
+        buf_write(file, ctx->pending_handler_fns->data, ctx->pending_handler_fns->len);
+        buf_free(ctx->pending_handler_fns);
+        buf_init(ctx->pending_handler_fns);
+    }
+
     /* Phase 3: Emit env struct for closure thunks */
     if (fd->closure) {
         const Symbol *env_name = fd->closure->env_name;
@@ -2251,6 +2423,17 @@ int emit_program(Buf *out, const Expr *program) {
     /* Two buffers: file scope (statics) and main body. We assemble at the end. */
     Buf file; buf_init(&file);
     Buf body; buf_init(&body);
+    /* Phase 19: separate buffers for ordered final assembly:
+     *   early_file   - pass 0: struct typedefs + drop glue
+     *   fwd_decls    - pass 1: function forward declarations
+     *   extern_decls - user extern-c declarations
+     *   file         - pass 2: function definitions + globals
+     *   pending_handler_fns emitted between fwd_decls and file
+     * Order ensures: struct typedefs visible to fwd_decls; fwd_decls visible
+     * to handler functions; handler functions visible to fn definitions. */
+    Buf early_file;  buf_init(&early_file);
+    Buf fwd_decls;   buf_init(&fwd_decls);
+    Buf extern_decls; buf_init(&extern_decls);
 
     EmitCtx ctx;
     ctx.file = &file;
@@ -2275,6 +2458,9 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.n_defer_captures = 0;
     /* Phase 3/4: Track return emission */
     ctx.return_emitted = false;
+    /* Phase 19: Pending effect handler function buffer */
+    Buf pending_hfns; buf_init(&pending_hfns);
+    ctx.pending_handler_fns = &pending_hfns;
 
     /* Check if user defined a main function */
     bool user_has_main = false;
@@ -2296,7 +2482,7 @@ int emit_program(Buf *out, const Expr *program) {
         if (e->kind == EX_DEF && e->as.def_.struct_def) {
             StructDef *def = e->as.def_.struct_def;
             /* Emit: typedef struct Name { fields... } Name; */
-            buf_printf(&file, "typedef struct %s {\n", def->name);
+            buf_printf(&early_file, "typedef struct %s {\n", def->name);
             for (uint32_t j = 0; j < def->n_fields; j++) {
                 StructField *f = &def->fields[j];
                 const char *ctype;
@@ -2311,35 +2497,37 @@ int emit_program(Buf *out, const Expr *program) {
                     case TY_REF:      ctype = "void *"; break;
                     default:          ctype = "int64_t"; break;
                 }
-                buf_printf(&file, "    %s %s;\n", ctype, f->name);
+                buf_printf(&early_file, "    %s %s;\n", ctype, f->name);
             }
-            buf_printf(&file, "} %s;\n\n", def->name);
+            buf_printf(&early_file, "} %s;\n\n", def->name);
             /* If any RC/ref/weak field, emit drop glue function */
             if (def->needs_drop_glue) {
-                buf_printf(&file, "static void drop_glue_%s(void *ptr) {\n", def->name);
-                buf_printf(&file, "    if (!ptr) return;\n");
-                buf_printf(&file, "    %s *s = (%s *)ptr;\n", def->name, def->name);
+                buf_printf(&early_file, "static void drop_glue_%s(void *ptr) {\n", def->name);
+                buf_printf(&early_file, "    if (!ptr) return;\n");
+                buf_printf(&early_file, "    %s *s = (%s *)ptr;\n", def->name, def->name);
                 /* Drop fields in REVERSE order */
                 for (int32_t j = (int32_t)def->n_fields - 1; j >= 0; j--) {
                     StructField *f = &def->fields[j];
                     if (f->kind == TY_RC) {
-                        buf_printf(&file, "    if (s->%s) { rc_strong_decrement(s->%s); rc_free_queue_drain(); }\n",
+                        buf_printf(&early_file, "    if (s->%s) { rc_strong_decrement(s->%s); rc_free_queue_drain(); }\n",
                                    f->name, f->name);
                     } else if (f->kind == TY_WEAK) {
-                        buf_printf(&file, "    if (s->%s) rc_weak_decrement(s->%s);\n",
+                        buf_printf(&early_file, "    if (s->%s) rc_weak_decrement(s->%s);\n",
                                    f->name, f->name);
                     } else if (f->kind == TY_REF) {
-                        buf_printf(&file, "    if (s->%s) free(s->%s);\n",
+                        buf_printf(&early_file, "    if (s->%s) free(s->%s);\n",
                                    f->name, f->name);
                     }
                 }
-                buf_printf(&file, "    free(ptr);\n");
-                buf_printf(&file, "}\n\n");
+                buf_printf(&early_file, "    free(ptr);\n");
+                buf_printf(&early_file, "}\n\n");
             }
         }
     }
 
-    /* Pass 1: Emit forward declarations for all functions. */
+    /* Pass 1: Emit forward declarations for all functions.
+     * Written to fwd_decls buffer (emitted before pending_handler_fns in final
+     * assembly) so that effect handler functions can call user-defined functions. */
     for (uint32_t i = 0; i < program->as.program.n; i++) {
         const Expr *e = program->as.program.items[i];
         if (e->kind == EX_FN_DEF) {
@@ -2347,20 +2535,20 @@ int emit_program(Buf *out, const Expr *program) {
             /* Skip main - it's not called from other functions in the same file */
             if (strcmp(fd->binding->name->name, "main") == 0) continue;
             /* Emit forward declaration with static */
-            buf_puts(&file, "static ");
+            buf_puts(&fwd_decls, "static ");
             if (e->type.kind == TY_FN) {
                 TypeKind result = e->type.as.fn.result_kind;
-                buf_puts(&file, type_c_name(type_from_kind(result)));
+                buf_puts(&fwd_decls, type_c_name(type_from_kind(result)));
             } else {
-                buf_puts(&file, "void");
+                buf_puts(&fwd_decls, "void");
             }
             const char *fn_name = raw_name_for_binding(fd->binding);
-            buf_printf(&file, " %s(", fn_name);
+            buf_printf(&fwd_decls, " %s(", fn_name);
             for (uint8_t j = 0; j < fd->n_params; j++) {
-                if (j > 0) buf_puts(&file, ", ");
-                buf_puts(&file, type_c_name(fd->param_types[j]));
+                if (j > 0) buf_puts(&fwd_decls, ", ");
+                buf_puts(&fwd_decls, type_c_name(fd->param_types[j]));
             }
-            buf_puts(&file, ");\n");
+            buf_puts(&fwd_decls, ");\n");
             free((void*)fn_name);
         }
     }
@@ -2385,16 +2573,16 @@ int emit_program(Buf *out, const Expr *program) {
             /* Emit function definition at file scope */
             emit_fn_def(&ctx, &file, e);
         } else if (e->kind == EX_EXTERN_C) {
-            /* Emit extern-c declaration at file scope */
+            /* Emit extern-c declaration early (before handler functions) */
             ExternC *ec = e->as.extern_c_.ext;
-            buf_printf(&file, "extern %s %s(",
+            buf_printf(&extern_decls, "extern %s %s(",
                        type_c_name(ec->return_type),
                        ec->c_name->name);
             for (uint8_t j = 0; j < ec->n_params; j++) {
-                if (j > 0) buf_puts(&file, ", ");
-                buf_printf(&file, "%s", type_c_name(ec->param_types[j]));
+                if (j > 0) buf_puts(&extern_decls, ", ");
+                buf_printf(&extern_decls, "%s", type_c_name(ec->param_types[j]));
             }
-            buf_puts(&file, ");\n");
+            buf_puts(&extern_decls, ");\n");
         } else {
             emit_stmt(&ctx, &body, e);
         }
@@ -2415,6 +2603,8 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "extern void abort(void);\n");
     buf_puts(out, "extern void *memset(void *, int, size_t);\n");
     buf_puts(out, "extern void *memmove(void *, const void *, size_t);\n");
+    /* Phase 19: strcmp for effect handler name matching */
+    buf_puts(out, "extern int strcmp(const char *, const char *);\n");
     buf_puts(out, "\n");
     /* Phase 7 follow-up: minimal in-process test registry for stdlib/test.tur. */
     buf_puts(out, "#define TUR_TEST_REGISTRY_MAX 1024\n");
@@ -2566,7 +2756,37 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "        abort();\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
-    
+
+    /* Phase 19: Effect handler chain */
+    buf_puts(out, "/* Phase 19: Algebraic effect handler chain */\n");
+    buf_puts(out, "typedef struct EffectHandlerCase EffectHandlerCase;\n");
+    buf_puts(out, "struct EffectHandlerCase {\n");
+    buf_puts(out, "    const char *effect_name;\n");
+    buf_puts(out, "    int64_t (*handler_fn)(int64_t *args, int n_args, int64_t k, void *env);\n");
+    buf_puts(out, "    void *env;\n");
+    buf_puts(out, "};\n\n");
+    buf_puts(out, "typedef struct EffectHandlerFrame EffectHandlerFrame;\n");
+    buf_puts(out, "struct EffectHandlerFrame {\n");
+    buf_puts(out, "    struct EffectHandlerFrame *parent;\n");
+    buf_puts(out, "    int n_cases;\n");
+    buf_puts(out, "    EffectHandlerCase cases[8];\n");
+    buf_puts(out, "};\n\n");
+    buf_puts(out, "static EffectHandlerFrame *global_effect_handler_chain = NULL;\n\n");
+    buf_puts(out, "static int64_t tur_effect_perform(const char *name, int64_t *args, int n_args) {\n");
+    buf_puts(out, "    EffectHandlerFrame *frame = global_effect_handler_chain;\n");
+    buf_puts(out, "    while (frame) {\n");
+    buf_puts(out, "        for (int __i = 0; __i < frame->n_cases; __i++) {\n");
+    buf_puts(out, "            if (strcmp(frame->cases[__i].effect_name, name) == 0) {\n");
+    buf_puts(out, "                return frame->cases[__i].handler_fn(args, n_args, 0LL, frame->cases[__i].env);\n");
+    buf_puts(out, "            }\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "        frame = frame->parent;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    fprintf(stderr, \"Unhandled effect: %s\\n\", name);\n");
+    buf_puts(out, "    abort();\n");
+    buf_puts(out, "    return 0;\n");
+    buf_puts(out, "}\n\n");
+
     /* Phase 9: Emit rc.h inline for rc<T> + weak<T> support */
     /* Phase 10: GC color enum and runtime (needed by rc_cb_alloc) */
     buf_puts(out, "/* rc<T> + weak<T> reference counting - Phase 9 */\n");
@@ -2886,8 +3106,32 @@ int emit_program(Buf *out, const Expr *program) {
     
     /* Phase 4 v1: Emit all defer thunks at file scope (after tur_frame defs) */
     emit_pending_defer_thunks(&ctx, out);
-    
+
+    /* Final assembly order (ensures correct C visibility):
+     *  1. early_file  - struct typedefs + drop glue (visible to everything)
+     *  2. extern_decls - user extern-c declarations
+     *  3. fwd_decls   - Turmeric function forward declarations (visible to handlers)
+     *  4. pending_handler_fns - effect handler functions (can call Turmeric fns)
+     *  5. file        - Turmeric function definitions (can reference handler fns by name)
+     *  6. main()      - entry point body
+     */
+    if (early_file.len)  { buf_write(out, early_file.data, early_file.len); buf_putc(out, '\n'); }
+    if (extern_decls.len){ buf_write(out, extern_decls.data, extern_decls.len); buf_putc(out, '\n'); }
+    if (fwd_decls.len)   { buf_write(out, fwd_decls.data, fwd_decls.len); buf_putc(out, '\n'); }
+    buf_free(&early_file);
+    buf_free(&extern_decls);
+    buf_free(&fwd_decls);
+
+    /* Phase 19: Effect handler functions (after fwd_decls so they can call
+     * user-defined Turmeric functions, before file so fn defs can reference them). */
+    if (ctx.pending_handler_fns && ctx.pending_handler_fns->len > 0) {
+        buf_write(out, ctx.pending_handler_fns->data, ctx.pending_handler_fns->len);
+        buf_free(ctx.pending_handler_fns);
+        buf_init(ctx.pending_handler_fns);
+    }
+
     if (file.len) { buf_write(out, file.data, file.len); buf_putc(out, '\n'); }
+
     if (!user_has_main) {
         /* Only generate main() if user didn't define one */
         buf_puts(out, "int main(void) {\n");
@@ -3011,6 +3255,9 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program) 
     ctx.cap_env_struct_names = 0;
     /* Phase 3/4: Track return emission */
     ctx.return_emitted = false;
+    /* Phase 19: Pending effect handler function buffer */
+    Buf pending_hfns2; buf_init(&pending_hfns2);
+    ctx.pending_handler_fns = &pending_hfns2;
     char guard[256];
     sanitize_module_name(guard, module_name, sizeof(guard));
 

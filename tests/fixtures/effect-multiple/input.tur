@@ -1,0 +1,14 @@
+;; Phase 19: multiple effects handled in a single handle block.
+;; Ask returns an int; Tell prints its argument.
+(defeffect Ask [] :int)
+(defeffect Tell [x :int] :nil)
+
+(defn use-both [] :int
+  (let [result (+ 1 (perform (Ask)))]
+    (do
+      (perform (Tell result))
+      result)))
+
+(println (handle (use-both)
+  (Ask [] k) (resume k 41)
+  (Tell [x] k) (do (println x) (resume k nil))))

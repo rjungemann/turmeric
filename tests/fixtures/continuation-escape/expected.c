@@ -8,6 +8,7 @@ extern void free(void *);
 extern void abort(void);
 extern void *memset(void *, int, size_t);
 extern void *memmove(void *, const void *, size_t);
+extern int strcmp(const char *, const char *);
 
 #define TUR_TEST_REGISTRY_MAX 1024
 typedef int64_t (*tur_test_callback_t)(void);
@@ -157,6 +158,38 @@ void tur_throw(int payload_type, void *payload, int line, const char *file) {
         tur_exception_free(exn);
         abort();
     }
+}
+
+/* Phase 19: Algebraic effect handler chain */
+typedef struct EffectHandlerCase EffectHandlerCase;
+struct EffectHandlerCase {
+    const char *effect_name;
+    int64_t (*handler_fn)(int64_t *args, int n_args, int64_t k, void *env);
+    void *env;
+};
+
+typedef struct EffectHandlerFrame EffectHandlerFrame;
+struct EffectHandlerFrame {
+    struct EffectHandlerFrame *parent;
+    int n_cases;
+    EffectHandlerCase cases[8];
+};
+
+static EffectHandlerFrame *global_effect_handler_chain = NULL;
+
+static int64_t tur_effect_perform(const char *name, int64_t *args, int n_args) {
+    EffectHandlerFrame *frame = global_effect_handler_chain;
+    while (frame) {
+        for (int __i = 0; __i < frame->n_cases; __i++) {
+            if (strcmp(frame->cases[__i].effect_name, name) == 0) {
+                return frame->cases[__i].handler_fn(args, n_args, 0LL, frame->cases[__i].env);
+            }
+        }
+        frame = frame->parent;
+    }
+    fprintf(stderr, "Unhandled effect: %s\n", name);
+    abort();
+    return 0;
 }
 
 /* rc<T> + weak<T> reference counting - Phase 9 */
@@ -512,6 +545,7 @@ static int64_t __fn_8(int64_t);
 static int64_t __fn_12(int64_t);
 static int64_t test_escape_nested();
 static int64_t test_escape_let();
+
 static int64_t __fn_5(int64_t exit2) {
         return INT64_C(100);
 }

@@ -82,8 +82,9 @@ After prerequisites are complete, execute these implementation tasks.
 ### Phase 19 remaining tasks
 
 #### A) Surface syntax and declaration model
-- [ ] Implement `(try-with body handler)` sugar for `(reset (handle body handler))`.
-- [ ] Implement effect-row syntax in `defn` signatures.
+- [x] Implement `(try-with body handler)` sugar for `(handle body handler)`.
+- [x] Implement typed `defeffect` params: `(defeffect E [x :int y :cstr] :ret)`.
+- [x] Implement effect-row syntax in `defn` signatures (v1: `#{}` map literal in return-type position, parsed and ignored with advisory note).
 - [ ] Implement empty-row purity marker (`{}`).
 - [ ] Implement effect-row polymorphism.
 - [ ] Implement row union propagation at call sites.
@@ -92,8 +93,12 @@ After prerequisites are complete, execute these implementation tasks.
 - [ ] Add effect re-opening support.
 
 #### B) Runtime handler pipeline
-- [ ] Implement per-fiber handler stack representation.
-- [ ] Implement matching handler dispatch walk.
+- [x] Implement global handler chain representation (`EffectHandlerFrame` linked list).
+- [x] Implement matching handler dispatch walk (`tur_effect_perform`).
+- [x] EX_HANDLE codegen: emit static handler functions + push/pop frame inline.
+- [x] EX_PERFORM codegen: call `tur_effect_perform`.
+- [x] EX_RESUME codegen: v1 direct-style (handler returns value synchronously).
+- [ ] Implement per-fiber handler stack (when fibers/async is added).
 
 #### C) Effect-row checking pass
 - [ ] Add pass scheduling after elaboration and before codegen.
@@ -105,21 +110,21 @@ After prerequisites are complete, execute these implementation tasks.
 #### D) Handler scoping semantics
 - [ ] Implement handler-parameter shadowing behavior.
 - [ ] Ensure continuation binding `k` is fresh per handler case.
-- [ ] Implement deep-handler continuation capture semantics.
+- [ ] Implement deep-handler continuation capture semantics (requires CPS).
 
 #### E) Stdlib effects and handlers
-- [ ] Implement `Read` effect.
-- [ ] Implement `Write` effect.
-- [ ] Implement `Fail` effect.
-- [ ] Implement `GetEnv` effect.
-- [ ] Implement console handler for `Read`/`Write`.
-- [ ] Implement exception bridge handler for `Fail`.
+- [x] Implement `Write` effect (`stdlib/effects.tur`).
+- [x] Implement `Fail` effect (`stdlib/effects.tur`).
+- [x] Implement `Read` effect.
+- [x] Implement `GetEnv` effect.
+- [x] Implement console handler for `Read`/`Write` (`with-read-console`, `with-write`).
+- [x] Implement exception bridge handler for `Fail` (`with-fail-throw`).
+- [x] Implement `with-getenv` handler using typed `extern-c` param support.
 
 #### F) Feature interactions and one-shot checks
 - [ ] Enable macro-generated effectful code path and hygiene interactions.
-- [ ] Implement module-scoped effect handling/linking behavior.
 - [ ] Integrate borrow-check constraints for effect handlers that capture references.
-- [ ] Add static one-shot check: `resume` consumes continuation and rejects second use.
+- [x] Add static one-shot check: `resume` consumes continuation and rejects second use (k is CK_MOVE; elab marks moved after `resume`/`discontinue`).
 - [ ] Implement `cont?` predicate.
 
 #### G) Optimizations (post-MVP, optional)
@@ -128,19 +133,27 @@ After prerequisites are complete, execute these implementation tasks.
 - [ ] Frame fusion for adjacent non-capturing scopes.
 - [ ] Escape analysis for non-escaping scopes.
 
-#### H) Deferred effect fixtures
-- [ ] Add `effect-declaration.tur` fixture.
-- [ ] Add `effect-handler.tur` fixture.
-- [ ] Add `effect-multiple.tur` fixture.
-- [ ] Add `effect-nested.tur` fixture.
-- [ ] Add `effect-defer.tur` fixture.
-- [ ] Add `effect-ref.tur` fixture.
-- [ ] Add `effect-rc.tur` fixture.
-- [ ] Add `effect-oneshot.tur` fixture.
-- [ ] Add `effect-console.tur` fixture.
-- [ ] Add `effect-fail.tur` fixture.
-- [ ] Add negative fixture `effect-unhandled.tur`.
-- [ ] Add negative fixture `effect-double-resume.tur`.
+#### H) Fixtures
+- [x] `effect-perform-handle.tur` — basic perform/handle/resume (outputs 42).
+- [x] `effect-resume-value.tur` — typed effect param + arithmetic in resume body.
+- [x] `effect-syntax.tur` — parser smoke test.
+- [x] `effect-syntax-compat.tur` — historical return-type syntax.
+- [x] Add `effect-multiple.tur` fixture (multiple effects in one handle).
+- [x] Add `effect-nested.tur` fixture.
+- [x] Add `effect-defer.tur` fixture.
+- [x] Add `effect-rc.tur` fixture.
+- [x] Add negative fixture `effect-unhandled.tur`.
+- [x] Add negative fixture `effect-double-resume.tur` (use-after-move on continuation).
+- [x] Add `effect-with-write.tur` fixture (stdlib `with-write` macro handler).
+- [x] Add `effect-with-fail.tur` fixture (stdlib `with-fail-throw` exception bridge).
+- [x] Add `effect-with-getenv.tur` fixture (stdlib `with-getenv` handler).
+- [x] Add `effect-with-read-console.tur` fixture (stdin integer reader).
+
+#### Known v1 limitations
+- Handler bodies cannot capture outer-scope variables (no closure analysis for handler functions).
+- `resume` is direct-style only: the handler returns the resume value immediately; the computation after `perform` continues with that value.
+- No per-fiber handler stacks; uses a single global chain.
+
 
 ### Phase HKT prerequisites (Higher-kinded types) — PROMOTED TO ACTIVE ROADMAP
 

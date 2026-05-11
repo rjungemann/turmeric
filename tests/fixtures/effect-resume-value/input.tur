@@ -1,0 +1,8 @@
+;; Phase 19: resume with expression
+(defeffect Double [x :int] :int)
+
+(defn use-double [n :int] :int
+  (perform (Double n)))
+
+(println (handle (use-double 21)
+  (Double [x] k) (resume k (* x 2))))

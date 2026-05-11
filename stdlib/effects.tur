@@ -1,0 +1,55 @@
+;; Phase 19: Standard algebraic effects for common side effects.
+;;
+;; These effects allow pure code to declare IO dependencies that are
+;; supplied by an enclosing handler.
+;;
+;; v1 limitation: handler bodies cannot capture outer-scope variables
+;; (no closure analysis for effect handler functions yet).
+
+;; ── Write ──────────────────────────────────────────────────────────────────
+;; Perform a string write operation.
+(defeffect Write [s :cstr] :nil)
+
+;; ── Fail ───────────────────────────────────────────────────────────────────
+;; Signal a failure with a message string.  A handler may recover or abort.
+(defeffect Fail [msg :cstr] :nil)
+
+;; ── Read ───────────────────────────────────────────────────────────────────
+;; Request an integer value from the environment.
+(defeffect Read [] :int)
+
+;; ── GetEnv ─────────────────────────────────────────────────────────────────
+;; Look up a named environment variable; returns a cstr (or nil if absent).
+(defeffect GetEnv [key :cstr] :cstr)
+
+;; ── Handlers ───────────────────────────────────────────────────────────────
+;;
+;; with-write  — handle Write by printing to stdout via println.
+;; with-fail-throw — handle Fail by throwing an exception.
+;; with-getenv — handle GetEnv by delegating to the C getenv(3) function.
+;; with-read-console — handle Read by reading an integer from stdin.
+
+(defmacro with-write [body]
+  (handle body
+    (Write [s] k) (do (println s) (resume k nil))))
+
+(defmacro with-fail-throw [body]
+  (handle body
+    (Fail [msg] k) (throw! msg)))
+
+(extern-c getenv [key :cstr] :cstr)
+
+(defmacro with-getenv [body]
+  (handle body
+    (GetEnv [key] k) (resume k (getenv key))))
+
+(defn read-int-console [] :int
+  ```c
+  int _v = 0;
+  scanf("%d", &_v);
+  return (int64_t)_v;
+  ```)
+
+(defmacro with-read-console [body]
+  (handle body
+    (Read [] k) (resume k (read-int-console))))
