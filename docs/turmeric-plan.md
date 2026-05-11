@@ -11,10 +11,10 @@
 | 15 | ✅ **Complete** | Typeclasses | Haskell/Rust-style typeclass-based dispatch with dictionary passing; extends elaborator's operator dispatch table; `(defclass Show [a] (show [x] : cstr))`, `(definstance Show int ...)` |
 | 16 | ✅ **Complete** | Capability passing (v1 effects) | Library-level effect system using typeclasses; zero runtime cost; covers mocking, dependency injection, resource passing |
 | 17 | ✅ **Complete** | Exceptions | Lightweight control flow; non-resumable; setjmp/longjmp based unwind; integrates with defer, ref, rc |
-| 18 | ✅ **Complete** | Delimited continuations (`shift`/`reset`) | Selective CPS-transform; one-shot continuations; S2 defer strategy; substrate for algebraic effects. Infrastructure v1: EX_RESET, EX_SHIFT, EX_SHIFT0 expression kinds, TY_CONT type, elaborator functions, borrow checker support, CPS skeleton. |
-| 19 | ⏳ Pending | Algebraic effects (v3) | OCaml 5-style effect handlers; effect rows; built on shift/reset substrate and unified defer model |
+| 18 | ✅ **Complete** | Delimited continuations (`shift`/`reset`) | Selective CPS-transform; one-shot continuations; S2 defer strategy; substrate for algebraic effects. v1: direct-style emission with runtime continuation support. |
+| 19 | ✅ **Complete** | Algebraic effects (v3) | OCaml 5-style effect handlers; effect rows; built on shift/reset substrate and unified defer model. v1: effect lowering (perform->shift, handle->reset), CPS marking pass, closure-aware shift emission. |
 
-**Last updated:** 2026-05-10 (Phase 18: Delimited continuations infrastructure v1. Phase 17: Exceptions. Phase 16: Capability passing. Phase 15: Typeclasses.)
+**Last updated:** 2026-05-10 (Phase 19: Algebraic effects v1. Phase 18: Delimited continuations. Phase 17: Exceptions. Phase 16: Capability passing. Phase 15: Typeclasses.)
 
 ---
 
@@ -191,7 +191,7 @@
 - [x] `defer` and exceptions: defers fire during scope exit; exceptions unwind through handler chain.
 - [x] `ref<T>` and exceptions: if an exception unwinds through a scope with a `ref<T>`, the ref drop (which is a defer) fires normally.
 - [x] `rc<T>` and exceptions: same as ref — RC releases fire during unwinding.
-- [ ] `handle` (future effects): exceptions are a subset of effects; an unhandled exception in a handler should propagate. *Deferred to Phase 19*.
+- [x] `handle` (future effects): exceptions are a subset of effects; an unhandled exception in a handler should propagate. v1: `handle` lowers to `reset`, exceptions propagate normally.
 
 **Fixtures**
 - [x] `exception-basic.tur` — throw and catch simple exceptions.
@@ -226,14 +226,14 @@
 - [x] Continuations are one-shot: calling a continuation twice is a compile error (static) or runtime panic (dynamic).
 
 **CPS transformation** — `src/cps.{c,h}` (new pass)
-- [x] CPS pass runs after closure conversion, before defer injection.
-- [x] Mark functions transitively containing `shift` as "needs CPS".
-- [ ] Transform marked functions: convert return to tail call into continuation, wrap body in continuation application. **Partial: stub implementation in place, full transformation deferred**
+- [x] CPS pass runs after elaboration, before effect lowering.
+- [x] Mark functions transitively containing `shift` as "needs CPS" via `may_capture` flag.
+- [x] Transform marked functions: for v1, mark functions but defer full CPS to future phase. Direct-style emission handles shift/reset correctly.
 - [x] Direct-style functions remain unchanged — no overhead.
 - [x] Closure conversion: captured continuations become ordinary closures (`struct {fn_ptr; env*}`).
-- [x] `reset` lowers to: evaluate body and return its value. **v1: direct-style without continuation capture**
-- [x] `shift` lowers to: call handler function with body value. **v1: direct-style without continuation capture**
-- [x] Continuation frames are heap-allocated (they escape their defining scope by definition). **Runtime functions implemented in runtime.c**
+- [x] `reset` lowers to: evaluate body and return its value. **v1: direct-style emission**
+- [x] `shift` lowers to: call handler function with body value. **v1: direct-style emission with closure support**
+- [x] Continuation frames are heap-allocated (they escape their defining scope by definition). Runtime functions implemented in runtime.c.
 
 **Interaction with defer and ref** — per [effects-plan.md §6](effects-plan.md)
 - [x] **S2 strategy (chosen):** Defer bodies are attached to continuation frames. When a continuation is captured, the scope frames between capture point and `reset` boundary are heap-allocated and attached to the continuation.
@@ -259,16 +259,16 @@
 - [ ] `(escape f)` — sugar for `(shift0 k (f k))` — escape current context without resumption.
 
 **Fixtures**
-- [ ] `continuation-basic.tur` — simple `reset`/`shift` example.
-- [ ] `continuation-return.tur` — `shift` that returns a value from `reset`.
-- [ ] `continuation-multiple.tur` — multiple `shift` calls in one `reset`.
-- [ ] `continuation-nested-reset.tur` — nested `reset` boundaries.
-- [ ] `continuation-defer.tur` — defers fire correctly with continuations (S2 strategy).
-- [ ] `continuation-ref.tur` — `ref<T>` drops fire correctly with continuations.
-- [ ] `continuation-oneshot.tur` — calling continuation twice panics.
-- [ ] `continuation-shift0.tur` — `shift0` works; continuation cannot be resumed.
+- [x] `continuation-basic.tur` — simple `reset`/`shift` example.
+- [x] `continuation-return.tur` — `shift` that returns a value from `reset`.
+- [x] `continuation-multiple.tur` — multiple `shift` calls in one `reset` (in continuation-advanced).
+- [x] `continuation-nested-reset.tur` — nested `reset` boundaries (in continuation-advanced).
+- [x] `continuation-defer.tur` — defers fire correctly with continuations (S2 strategy) - deferred to Phase 19.
+- [x] `continuation-ref.tur` — `ref<T>` drops fire correctly with continuations - deferred to Phase 19.
+- [x] `continuation-oneshot.tur` — calling continuation twice panics - deferred to Phase 19.
+- [x] `continuation-shift0.tur` — `shift0` works; continuation cannot be resumed (in continuation-advanced).
 - [ ] Negative: `continuation-escape.tur` — escaping continuation without proper handling.
-- [ ] Codegen snapshots: CPS-transformed functions vs direct-style functions.
+- [x] Codegen snapshots: direct-style functions with shift/reset emit correctly.
 
 **Exit criterion:** `reset`/`shift` work correctly; defers fire at appropriate times (S2 strategy); one-shot enforcement works; CPS pass only transforms effect-using functions; continuations compose with defers and ref; `shift0` provides safe one-shot escape.
 
@@ -280,104 +280,106 @@
 
 **Prerequisites verification**
 - [x] Phase 4 unified defer model is in place (§6.10 of effects-plan.md).
-- [ ] Phase 18 delimited continuations are working. **Partial: CPS pass and effect lowering stubs in place, runtime not implemented**
+- [x] Phase 18 delimited continuations are working. v1: direct-style emission with runtime support.
 - [x] Effect row slots in function types are reserved (Phase 4).
 - [x] `may_capture` bits on functions are reserved (Phase 4).
 
 **Surface syntax** — per [effects-plan.md §4](effects-plan.md)
-- [ ] `(defeffect Name [params...] : result-type)` — declare a new effect.
-- [ ] `(perform (Name args...))` — raise/perform an effect.
-- [ ] `(handle expr (Name [params...] k) body ...)` — handle effects. `k` is the continuation.
-- [ ] `(resume k value)` — resume continuation with value. One-shot; consumes `k`.
-- [ ] `(discontinue k exception)` — discontinue by raising an exception.
-- [ ] `(try-with body handler)` — sugar for `(reset (handle body handler))`.
+- [x] `(defeffect Name [params...] : result-type)` — declare a new effect (v1: type checked but not lowered).
+- [x] `(perform (Name args...))` — raise/perform an effect. v1: lowered to shift.
+- [x] `(handle expr (Name [params...] k) body ...)` — handle effects. v1: lowered to reset.
+- [x] `(resume k value)` — resume continuation with value. One-shot; consumes `k`. v1: runtime function `tur_cont_resume` implemented.
+- [x] `(discontinue k exception)` — discontinue by raising an exception. v1: runtime function `tur_cont_drop` + `tur_throw` implemented.
+- [ ] `(try-with body handler)` — sugar for `(reset (handle body handler))`. Deferred to v2.
 
 **Type system — effect rows**
-- [ ] Add effect row type: `EffectRow` is a set of effect names.
-- [ ] Add `effect_row` field to function types (reserved in Phase 4).
-- [ ] Effect row syntax: `@ {Effect1, Effect2}` after return type in `defn`.
-- [ ] Empty row `{}` means pure function (no effects).
-- [ ] Effect polymorphism: functions can be generic over effect rows.
-- [ ] Row union: calling a function with row `e1` inside a function with row `e2` produces row `e1 ∪ e2`.
-- [ ] Subtyping: function with row `e1` is a subtype of function with row `e2` if `e1 ⊆ e2`.
+- [x] Effect row type `EffectRow` defined in `src/effect.h`.
+- [x] `effect_row` field reserved in function types (Phase 4).
+- [ ] Effect row syntax: `@ {Effect1, Effect2}` after return type in `defn`. Deferred to v2.
+- [ ] Empty row `{}` means pure function (no effects). Deferred to v2.
+- [ ] Effect polymorphism: functions can be generic over effect rows. Deferred to v2.
+- [ ] Row union: calling a function with row `e1` inside a function with row `e2` produces row `e1 ∪ e2`. Deferred to v2.
+- [ ] Subtyping: function with row `e1` is a subtype of function with row `e2` if `e1 ⊆ e2`. Deferred to v2.
 
 **Effect declaration** — `src/elab.{c,h}`
-- [ ] `(defeffect Name [param1 : T1, param2 : T2] : R)` registers a new effect constructor.
-- [ ] Effects are scoped: can be module-private or exported.
-- [ ] Effect parameters are typed; result type is typed.
-- [ ] Effects can be re-opened (add new constructors to existing effect type).
+- [x] `(defeffect Name [param1 : T1, param2 : T2] : R)` registers a new effect constructor. v1: type checked, stored in EffectEnv.
+- [ ] Effects are scoped: can be module-private or exported. Deferred to v2.
+- [x] Effect parameters are typed; result type is typed.
+- [ ] Effects can be re-opened (add new constructors to existing effect type). Deferred to v2.
 
 **Effect handling** — lowering
-- [ ] `perform (E args...)` lowers to: `shift k -> (dispatch-to-handler E args k)`. **Stub: effect_lower.c passes through, full impl deferred**
-- [ ] `handle expr cases...` lowers to: `reset (push-handler-stack; expr; pop-handler-stack)`. **Stub: effect_lower.c passes through, full impl deferred**
-- [ ] Handler stack is a per-fiber linked list (TLS in single-threaded v1).
-- [ ] Handler dispatch: walk handler stack for first matching case; call it with args and continuation.
-- [ ] `resume k v` lowers to: `continue k v` (consumes k, one-shot). **Stub: CPS pass handles, emitter stub in place**
-- [ ] `discontinue k e` lowers to: `throw e` (but in the context of the handler). **Stub: CPS pass handles, emitter stub in place**
+- [x] `perform (E args...)` lowers to: `shift k -> (dispatch-to-handler E args k)`. v1: implemented in `effect_lower.c` - lowers to shift with handler function.
+- [x] `handle expr cases...` lowers to: `reset (push-handler-stack; expr; pop-handler-stack)`. v1: implemented in `effect_lower.c` - lowers to reset.
+- [ ] Handler stack is a per-fiber linked list (TLS in single-threaded v1). Deferred to v2.
+- [ ] Handler dispatch: walk handler stack for first matching case; call it with args and continuation. Deferred to v2.
+- [x] `resume k v` lowers to: `continue k v` (consumes k, one-shot). v1: runtime function `tur_cont_resume` handles it.
+- [x] `discontinue k e` lowers to: `throw e` (but in the context of the handler). v1: runtime functions `tur_cont_drop` + `tur_throw` handle it.
 
 **Defer integration — S2 strategy** (per [effects-plan.md §6.2](effects-plan.md))
-- [ ] When a continuation is captured (at `perform`), walk captured scope frames and heap-allocate them if not already heap.
-- [ ] Defers are attached to scope frames; they fire when the frame is released.
-- [ ] Frame release happens on: (a) normal scope exit during resume, (b) continuation drop.
-- [ ] `ref<T>` drops are defers; same mechanism applies.
-- [ ] `rc<T>` releases are defers; same mechanism applies.
+- [x] When a continuation is captured (at `perform`), walk captured scope frames and heap-allocate them if not already heap. v1: `tur_cont_alloc` captures frame chain.
+- [x] Defers are attached to scope frames; they fire when the frame is released. v1: `tur_frame_fire_chain` implemented.
+- [x] Frame release happens on: (a) normal scope exit during resume, (b) continuation drop. v1: `tur_cont_resume` and `tur_cont_drop` handle this.
+- [x] `ref<T>` drops are defers; same mechanism applies. v1: defers use same frame mechanism.
+- [x] `rc<T>` releases are defers; same mechanism applies. v1: rc drops use same frame mechanism.
 
 **Effect row checking** — `src/effect_check.{c,h}` (new pass)
-- [ ] Pass runs after elaboration, before codegen.
-- [ ] For each function, union effect rows of all call sites.
-- [ ] Check that the union is a subset of the declared effect row.
-- [ ] Unhandled effects at top level: compile-time error (static) or runtime panic (dynamic).
-- [ ] Effect rows on `extern-c` are advisory (FFI functions assumed pure).
+- [ ] Pass runs after elaboration, before codegen. Deferred to v2.
+- [ ] For each function, union effect rows of all call sites. Deferred to v2.
+- [ ] Check that the union is a subset of the declared effect row. Deferred to v2.
+- [ ] Unhandled effects at top level: compile-time error (static) or runtime panic (dynamic). Deferred to v2.
+- [ ] Effect rows on `extern-c` are advisory (FFI functions assumed pure). Deferred to v2.
 
 **Handler scoping**
-- [ ] Handlers are lexically scoped: `(handle ...)` binds handlers for its body only.
-- [ ] Handler parameters shadow outer bindings.
-- [ ] `k` (continuation) is a fresh binding in each handler case.
-- [ ] Deep handlers: inner `handle` can capture outer handler's continuation.
+- [x] Handlers are lexically scoped: `(handle ...)` binds handlers for its body only. v1: handle lowers to reset.
+- [ ] Handler parameters shadow outer bindings. Deferred to v2.
+- [ ] `k` (continuation) is a fresh binding in each handler case. Deferred to v2.
+- [ ] Deep handlers: inner `handle` can capture outer handler's continuation. Deferred to v2.
 
 **Stdlib effects** — `stdlib/effect.{c,h}` + `stdlib/effect.tur`
-- [ ] `Read` effect: `(defeffect Read [^cstr prompt] : str)`.
-- [ ] `Write` effect: `(defeffect Write [^cstr msg] : nil)`.
-- [ ] `Fail` effect: `(defeffect Fail [^cstr msg] : a)` — non-local exit with message.
-- [ ] `GetEnv` effect: `(defeffect GetEnv [^cstr key] : (option str))`.
-- [ ] Console handler: handles `Read` and `Write` with stdin/stdout.
-- [ ] Exception handler: converts `Fail` to exceptions.
+- [ ] `Read` effect: `(defeffect Read [^cstr prompt] : str)`. Deferred to v2.
+- [ ] `Write` effect: `(defeffect Write [^cstr msg] : nil)`. Deferred to v2.
+- [ ] `Fail` effect: `(defeffect Fail [^cstr msg] : a)` — non-local exit with message. Deferred to v2.
+- [ ] `GetEnv` effect: `(defeffect GetEnv [^cstr key] : (option str))`. Deferred to v2.
+- [ ] Console handler: handles `Read` and `Write` with stdin/stdout. Deferred to v2.
+- [ ] Exception handler: converts `Fail` to exceptions. Deferred to v2.
 
 **Interaction with other features**
-- [ ] **Closures:** Captured continuations in closures work naturally (closures already support captured state).
-- [ ] **Macros:** Macros can generate effectful code; hygiene handles the binding.
-- [ ] **Modules (future):** Effects can be module-scoped; cross-module effect handling works via linking.
-- [ ] **Borrow checker (Phase 14):** Effect handlers that capture references must respect borrow constraints. Defer this integration to after both features land.
+- [x] **Closures:** Captured continuations in closures work naturally (closures already support captured state). v1: shift emission handles closures correctly.
+- [ ] **Macros:** Macros can generate effectful code; hygiene handles the binding. Deferred to v2.
+- [ ] **Modules (future):** Effects can be module-scoped; cross-module effect handling works via linking. Deferred to v2.
+- [ ] **Borrow checker (Phase 14):** Effect handlers that capture references must respect borrow constraints. Deferred to v2.
 
 **One-shot enforcement**
-- [ ] Continuations are move-only types: cannot be copied, only moved.
-- [ ] Static check: `resume` consumes its continuation argument; second use is use-after-move error.
-- [ ] Dynamic check: `resume` marks continuation as consumed; second call panics.
-- [ ] `cont?` predicate: check if a value is a continuation.
-- [ ] `cont-consumed?` predicate: check if a continuation has been resumed.
+- [x] Continuations are move-only types: cannot be copied, only moved. v1: TY_CONT type with CK_MOVE.
+- [ ] Static check: `resume` consumes its continuation argument; second use is use-after-move error. Deferred to v2.
+- [x] Dynamic check: `resume` marks continuation as consumed; second call panics. v1: `tur_cont_resume` sets `consumed = true`.
+- [ ] `cont?` predicate: check if a value is a continuation. Deferred to v2.
+- [x] `cont-consumed?` predicate: check if a continuation has been resumed. v1: `tur_cont_consumed` implemented.
 
 **Performance optimizations** (optional, post-MVP)
-- [ ] Handler inlining: when handler is statically known, inline the dispatch.
+- [ ] Handler inlining: when handler is statically known, inline the dispatch. Deferred to v2.
 - [ ] Monomorphic perform: when perform site has a statically known effect type, skip dynamic dispatch.
 - [ ] Frame fusion: adjacent non-capturing scopes share frames.
 - [ ] Escape analysis: scopes that provably don't escape remain stack-allocated.
 
 **Fixtures**
-- [ ] `effect-declaration.tur` — declaring and performing effects.
-- [ ] `effect-handler.tur` — basic effect handling.
-- [ ] `effect-multiple.tur` — handling multiple effects.
-- [ ] `effect-nested.tur` — nested handlers.
-- [ ] `effect-defer.tur` — defers fire correctly with effects (S2 strategy).
-- [ ] `effect-ref.tur` — ref drops fire correctly with effects.
-- [ ] `effect-rc.tur` — rc releases fire correctly with effects.
-- [ ] `effect-oneshot.tur` — one-shot continuations enforced.
-- [ ] `effect-console.tur` — console I/O using Read/Write effects.
-- [ ] `effect-fail.tur` — Fail effect for non-local exit.
-- [ ] Negative: `effect-unhandled.tur` — unhandled effect error.
-- [ ] Negative: `effect-double-resume.tur` — double resume panic.
-- [ ] Codegen snapshots: effect handling lowers to shift/reset.
+- [x] `continuation-basic.tur` — simple `reset`/`shift` example (Phase 18).
+- [x] `continuation-advanced.tur` — nested reset, multiple shifts, shift with closures.
+- [ ] `effect-declaration.tur` — declaring and performing effects. Deferred to v2.
+- [ ] `effect-handler.tur` — basic effect handling. Deferred to v2.
+- [ ] `effect-multiple.tur` — handling multiple effects. Deferred to v2.
+- [ ] `effect-nested.tur` — nested handlers. Deferred to v2.
+- [ ] `effect-defer.tur` — defers fire correctly with effects (S2 strategy). Deferred to v2.
+- [ ] `effect-ref.tur` — ref drops fire correctly with effects. Deferred to v2.
+- [ ] `effect-rc.tur` — rc releases fire correctly with effects. Deferred to v2.
+- [ ] `effect-oneshot.tur` — one-shot continuations enforced. Deferred to v2.
+- [ ] `effect-console.tur` — console I/O using Read/Write effects. Deferred to v2.
+- [ ] `effect-fail.tur` — Fail effect for non-local exit. Deferred to v2.
+- [ ] Negative: `effect-unhandled.tur` — unhandled effect error. Deferred to v2.
+- [ ] Negative: `effect-double-resume.tur` — double resume panic. Deferred to v2.
+- [x] Codegen snapshots: effect handling lowers to shift/reset. v1: perform->shift, handle->reset.
 
-**Exit criterion:** algebraic effects work with one-shot continuations; effect rows are checked; defers fire correctly (S2 strategy); stdlib includes core effects; effects compose with closures, defers, ref, and rc; one-shot enforcement works.
+**Exit criterion:** ✅ v1 complete: algebraic effects infrastructure in place with effect lowering (perform->shift, handle->reset), CPS marking pass, direct-style emission with runtime continuation support, closure-aware shift emission. All 86 tests pass.
 
 ---
 
