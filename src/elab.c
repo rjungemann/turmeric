@@ -272,6 +272,24 @@ static Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_pa
             case EX_REF_PRED:
                 stack[sp++] = cur->as.ref_pred_.expr;
                 break;
+            /* Phase 5: ref/deref */
+            case EX_REF:
+                stack[sp++] = cur->as.ref_.expr;
+                break;
+            case EX_DEREF:
+                stack[sp++] = cur->as.deref_.expr;
+                break;
+            /* Phase 12: Borrow traits */
+            case EX_BORROW_IMMUT:
+                stack[sp++] = cur->as.borrow_immut_.expr;
+                break;
+            case EX_BORROW_MUT:
+                stack[sp++] = cur->as.borrow_mut_.expr;
+                break;
+            case EX_SET_DEREF:
+                stack[sp++] = cur->as.set_deref_.ref;
+                stack[sp++] = cur->as.set_deref_.value;
+                break;
             case EX_MAKE_STRUCT:
                 for (uint32_t i = cur->as.make_struct_.n_fields; i > 0; i--) {
                     stack[sp++] = cur->as.make_struct_.field_values[i-1];
@@ -339,6 +357,7 @@ typedef struct Elab {
     const Symbol *sym_ref_pred;    /* ref? */
     /* Phase 17: Exceptions */
     const Symbol *sym_throw;      /* throw */
+    const Symbol *sym_throw_bang; /* throw! (sugar for throw) */
     const Symbol *sym_try;        /* try */
     const Symbol *sym_catch;      /* catch */
     const Symbol *sym_finally;    /* finally */
@@ -346,6 +365,8 @@ typedef struct Elab {
     const Symbol *sym_reset;      /* reset */
     const Symbol *sym_shift;      /* shift */
     const Symbol *sym_shift0;     /* shift0 */
+    const Symbol *sym_call_cc;    /* call/cc (sugar: (reset (shift k (f k)))) */
+    const Symbol *sym_escape;     /* escape (sugar: (reset (shift k (f (fn [_] k))))) */
     /* Phase 19: Algebraic effects */
     const Symbol *sym_defeffect;  /* defeffect */
     const Symbol *sym_perform;    /* perform */
@@ -376,6 +397,12 @@ typedef struct Elab {
     /* Phase 15: Typeclasses */
     const Symbol *sym_defclass;    /* defclass */
     const Symbol *sym_definstance; /* definstance */
+    /* Phase HKT (v2): reserved typeclass names — user definitions rejected with diagnostic */
+    const Symbol *sym_hkt_Functor;
+    const Symbol *sym_hkt_Applicative;
+    const Symbol *sym_hkt_Monad;
+    const Symbol *sym_hkt_Traversable;
+    const Symbol *sym_hkt_Foldable;
     /* Phase 13: Lifetime annotations */
     /* We recognize lifetime annotations as symbols starting with '\'' */
     /* No specific symbol needed - we check the symbol name at runtime */
@@ -592,6 +619,10 @@ static bool is_rc_binding_consumed(const Expr *body, Binding *binding) {
             case EX_SET:
                 stack[sp++] = cur->as.set_.value;
                 break;
+            case EX_SET_DEREF:
+                stack[sp++] = cur->as.set_deref_.ref;
+                stack[sp++] = cur->as.set_deref_.value;
+                break;
             case EX_MAKE_STRUCT:
                 for (uint32_t i = cur->as.make_struct_.n_fields; i > 0; i--) {
                     stack[sp++] = cur->as.make_struct_.field_values[i-1];
@@ -658,6 +689,7 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_ref_pred  = intern_cstr(st, "ref?");
     /* Phase 17: Exceptions */
     e->sym_throw = intern_cstr(st, "throw");
+    e->sym_throw_bang = intern_cstr(st, "throw!");
     e->sym_try = intern_cstr(st, "try");
     e->sym_catch = intern_cstr(st, "catch");
     e->sym_finally = intern_cstr(st, "finally");
@@ -665,6 +697,8 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_reset = intern_cstr(st, "reset");
     e->sym_shift = intern_cstr(st, "shift");
     e->sym_shift0 = intern_cstr(st, "shift0");
+    e->sym_call_cc = intern_cstr(st, "call/cc");
+    e->sym_escape = intern_cstr(st, "escape");
     /* Phase 19: Algebraic effects */
     e->sym_defeffect = intern_cstr(st, "defeffect");
     e->sym_perform = intern_cstr(st, "perform");
@@ -700,6 +734,12 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* Phase 15: Typeclasses */
     e->sym_defclass = intern_cstr(st, "defclass");
     e->sym_definstance = intern_cstr(st, "definstance");
+    /* Phase HKT (v2): reserved typeclass names */
+    e->sym_hkt_Functor      = intern_cstr(st, "Functor");
+    e->sym_hkt_Applicative  = intern_cstr(st, "Applicative");
+    e->sym_hkt_Monad        = intern_cstr(st, "Monad");
+    e->sym_hkt_Traversable  = intern_cstr(st, "Traversable");
+    e->sym_hkt_Foldable     = intern_cstr(st, "Foldable");
     /* Macro storage */
     e->macros = NULL;
     e->n_macros = 0;
@@ -945,6 +985,8 @@ static Expr *elab_ref_pred(Elab *e, const Form *call);
 static Expr *elab_gc_force(Elab *e, const Form *call);
 static Expr *elab_gc_enable(Elab *e, const Form *call);
 static Expr *elab_gc_disable(Elab *e, const Form *call);
+/* Phase 12: Borrow deref assignment */
+static Expr *elab_set_deref(Elab *e, const Form *call, const Form *deref_form);
 
 /* ---- helpers ---- */
 
@@ -1495,8 +1537,16 @@ static Expr *elab_set(Elab *e, const Form *call) {
         return NULL;
     }
     Form *target = call->as.list.items[1];
+
+    /* Phase 12: Handle (set! (@ r) value) - mutation through mutable borrow */
+    if (target->tag == F_LIST && target->as.list.len == 2
+        && target->as.list.items[0]->tag == F_SYM
+        && target->as.list.items[0]->as.sym == e->sym_deref) {
+        return elab_set_deref(e, call, target);
+    }
+
     if (target->tag != F_SYM) {
-        diag_emit(DIAG_ERROR, target->span, "set! target must be a symbol");
+        diag_emit(DIAG_ERROR, target->span, "set! target must be a symbol or (@ borrow)");
         return NULL;
     }
     Binding *b = scope_lookup(e->scope, target->as.sym);
@@ -1786,10 +1836,11 @@ static Expr *elab_deref(Elab *e, const Form *call) {
     Expr *inner = elab_form(e, call->as.list.items[1]);
     if (!inner) return NULL;
     
-    /* Check that inner is ref<T>, rc<T>, or ptr<T> */
-    if (inner->type.kind != TY_REF && inner->type.kind != TY_RC && inner->type.kind != TY_PTR_VOID) {
+    /* Check that inner is ref<T>, rc<T>, ptr<T>, &T, or &mut T */
+    if (inner->type.kind != TY_REF && inner->type.kind != TY_RC && inner->type.kind != TY_PTR_VOID
+        && inner->type.kind != TY_REF_IMMUT && inner->type.kind != TY_REF_MUT) {
         diag_emit(DIAG_ERROR, call->span,
-                  "@ requires ref<T>, rc<T>, or ptr<T>, got %s",
+                  "@ requires ref<T>, rc<T>, ptr<T>, &T, or &mut T, got %s",
                   type_name(inner->type));
         return NULL;
     }
@@ -1800,6 +1851,9 @@ static Expr *elab_deref(Elab *e, const Form *call) {
         result_type = type_from_kind(inner->type.as.ref.inner);
     } else if (inner->type.kind == TY_RC) {
         result_type = type_from_kind(inner->type.as.rc.inner);
+    } else if (inner->type.kind == TY_REF_IMMUT || inner->type.kind == TY_REF_MUT) {
+        /* Phase 12: &T and &mut T dereference to T */
+        result_type = type_from_kind(inner->type.as.ref_borrow.target);
     } else {
         /* ptr<void> derefs to void* for now - could be more precise */
         result_type = TYPE_PTR_VOID;
@@ -2327,7 +2381,7 @@ static Expr *elab_try(Elab *e, const Form *call) {
             }
             
             /* Parse optional type annotation */
-            TypeKind catch_type = TY_UNKNOWN;  /* Match any */
+            TypeKind catch_type = TY_NIL;  /* No annotation = catch-all (TY_NIL) */
             if (binding_form->as.list.len == 2) {
                 Form *type_form = binding_form->as.list.items[1];
                 if (type_form->tag != F_KEYWORD) {
@@ -2362,7 +2416,7 @@ static Expr *elab_try(Elab *e, const Form *call) {
             }
             
             /* Create a binding for the catch variable in a new scope */
-            TypeKind catch_var_kind = (catch_type == TY_UNKNOWN) ? TY_PTR_VOID : catch_type;
+            TypeKind catch_var_kind = (catch_type == TY_NIL) ? TY_PTR_VOID : catch_type;
             Type catch_var_type = {.kind = catch_var_kind, .copy_kind = CK_MOVE, .n_lifetimes = 0};
             Binding *catch_binding = binding_new(e, var_name->as.sym, catch_var_type, false, false, var_name->span);
             
@@ -3728,6 +3782,11 @@ static Expr *elab_defclass(Elab *e, const Form *call);
 static Expr *elab_definstance(Elab *e, const Form *call);
 static Expr *elab_method_call(Elab *e, const Form *call);
 static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span span);
+/* Phase 17: throw! sugar */
+static Expr *elab_throw_bang(Elab *e, const Form *call);
+/* Phase 18: call/cc and escape sugar */
+static Expr *elab_call_cc(Elab *e, const Form *call);
+static Expr *elab_escape(Elab *e, const Form *call);
 
 /* ---- general elab ---- */
 
@@ -3770,6 +3829,7 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_ref_pred)    return elab_ref_pred(e, call);
     /* Phase 17: Exceptions */
     if (name == e->sym_throw)       return elab_throw(e, call);
+    if (name == e->sym_throw_bang)  return elab_throw_bang(e, call);
     if (name == e->sym_try)         return elab_try(e, call);
     if (name == e->sym_catch)       return elab_catch(e, call);
     if (name == e->sym_finally)     return elab_finally(e, call);
@@ -3777,6 +3837,8 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_reset)      return elab_reset(e, call);
     if (name == e->sym_shift)      return elab_shift(e, call);
     if (name == e->sym_shift0)     return elab_shift0(e, call);
+    if (name == e->sym_call_cc)    return elab_call_cc(e, call);
+    if (name == e->sym_escape)     return elab_escape(e, call);
     /* Phase 19: Algebraic effects */
     if (name == e->sym_defeffect) return elab_defeffect(e, call);
     if (name == e->sym_perform)   return elab_perform(e, call);
@@ -4423,6 +4485,48 @@ static Expr *elab_make_struct(Elab *e, const Form *call) {
 
 /* Phase 12: Borrow traits */
 
+/* Elaborate (set! (@ r) value) - mutation through a mutable borrow.
+ *
+ * Called when elab_set detects a deref-assignment target: (set! (@ r) value).
+ * Only &mut T is allowed as the borrow; &T produces an immutable-borrow diagnostic.
+ */
+static Expr *elab_set_deref(Elab *e, const Form *call, const Form *deref_form) {
+    /* Elaborate the borrow expression r */
+    Expr *ref = elab_form(e, deref_form->as.list.items[1]);
+    if (!ref) return NULL;
+
+    /* Must be &mut T */
+    if (ref->type.kind == TY_REF_IMMUT) {
+        diag_emit(DIAG_ERROR, deref_form->span,
+                  "cannot assign through immutable borrow; use `&mut T` for mutation");
+        return NULL;
+    }
+    if (ref->type.kind != TY_REF_MUT) {
+        diag_emit(DIAG_ERROR, deref_form->span,
+                  "set! via @ requires a &mut T borrow, got %s",
+                  type_name(ref->type));
+        return NULL;
+    }
+
+    /* Elaborate the value */
+    Expr *value = elab_form(e, call->as.list.items[2]);
+    if (!value) return NULL;
+
+    /* Type-check: value must match the inner type */
+    Type inner_type = type_from_kind(ref->type.as.ref_borrow.target);
+    if (!type_eq(value->type, inner_type)) {
+        diag_emit(DIAG_ERROR, value->span,
+                  "set! type mismatch: cannot assign %s through &mut %s borrow",
+                  type_name(value->type), type_name(inner_type));
+        return NULL;
+    }
+
+    Expr *out = expr_new(e->arena, EX_SET_DEREF, TYPE_NIL, call->span);
+    out->as.set_deref_.ref = ref;
+    out->as.set_deref_.value = value;
+    return out;
+}
+
 /* Elaborate (& expr) - create an immutable borrow
  * 
  * Syntax: (& expr)
@@ -4456,8 +4560,20 @@ static Expr *elab_borrow_immut(Elab *e, const Form *call) {
         }
     }
     
-    /* Create the borrow type: &T where T is inner's type */
-    Type borrow_type = type_ref_immut(inner->type.kind);
+    /* Create the borrow type: &T where T is the referenced value's type.
+     * Special cases:
+     *   (& r) where r: ref<T>     → &T (borrow from owning ref)
+     *   (& r) where r: &T or &mut T → &T (reborrow — same target type, not &&T)
+     *   (& x) where x: T           → &T (plain borrow)
+     */
+    Type borrow_type;
+    if (inner->type.kind == TY_REF) {
+        borrow_type = type_ref_immut(inner->type.as.ref.inner);
+    } else if (inner->type.kind == TY_REF_IMMUT || inner->type.kind == TY_REF_MUT) {
+        borrow_type = type_ref_immut(inner->type.as.ref_borrow.target);
+    } else {
+        borrow_type = type_ref_immut(inner->type.kind);
+    }
     
     /* Create the borrow expression */
     Expr *out = expr_new(e->arena, EX_BORROW_IMMUT, borrow_type, call->span);
@@ -4499,8 +4615,25 @@ static Expr *elab_borrow_mut(Elab *e, const Form *call) {
         }
     }
     
-    /* Create the borrow type: &mut T where T is inner's type */
-    Type borrow_type = type_ref_mut(inner->type.kind);
+    /* Create the borrow type: &mut T where T is the referenced value's type.
+     * Special cases:
+     *   (&mut r) where r: ref<T>  → &mut T (mutable borrow from owning ref)
+     *   (&mut r) where r: &mut T  → &mut T (mutable reborrow)
+     *   (&mut r) where r: &T      → error (cannot take mutable borrow of immutable borrow)
+     *   (&mut x) where x: T       → &mut T (plain mutable borrow)
+     */
+    Type borrow_type;
+    if (inner->type.kind == TY_REF) {
+        borrow_type = type_ref_mut(inner->type.as.ref.inner);
+    } else if (inner->type.kind == TY_REF_IMMUT) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "cannot borrow as mutable: source is already an immutable borrow `&T`");
+        return NULL;
+    } else if (inner->type.kind == TY_REF_MUT) {
+        borrow_type = type_ref_mut(inner->type.as.ref_borrow.target);
+    } else {
+        borrow_type = type_ref_mut(inner->type.kind);
+    }
     
     /* Create the borrow expression */
     Expr *out = expr_new(e->arena, EX_BORROW_MUT, borrow_type, call->span);
@@ -4589,10 +4722,27 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
     }
     
     /* Parse return type - must be after params */
+    /* Syntax: (method [params] : return-type)
+     *      or (method [params] : #{Effect...} return-type)  — effect row annotation
+     *      or (method [params] #{Effect...} : return-type)  — effect row annotation alt
+     *
+     * Phase 15: #{...} (F_MAP) in return-type position is an advisory effect-row
+     * annotation.  We skip over it silently; enforcement deferred to Phase 19. */
     Type return_type = TYPE_NIL;
-    if (method_form->as.list.len >= 3) {
-        Form *ret_form = method_form->as.list.items[2];
-        if (ret_form->tag == F_KEYWORD) {
+    uint32_t ret_idx = 2;   /* first element after params vector */
+    if (method_form->as.list.len > ret_idx) {
+        Form *maybe_row = method_form->as.list.items[ret_idx];
+        if (maybe_row->tag == F_MAP) {
+            /* #{Effect...} effect-row annotation — skip silently (v1 advisory) */
+            ret_idx++;
+        }
+    }
+    if (method_form->as.list.len > ret_idx) {
+        Form *ret_form = method_form->as.list.items[ret_idx];
+        if (ret_form->tag == F_MAP) {
+            /* another effect row or #{} after the params — skip silently */
+            /* (ignore the rest; return type stays TYPE_NIL) */
+        } else if (ret_form->tag == F_KEYWORD) {
             const Symbol *kw = ret_form->as.sym;
             if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
                 return_type = TYPE_INT;
@@ -4624,6 +4774,105 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
     return method;
 }
 
+/* Phase 17: (throw! msg) - sugar for (throw msg).
+ * Provides a bang-style helper so callers can write (throw! "oops") without
+ * needing to construct an Error struct explicitly. */
+static Expr *elab_throw_bang(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(throw! msg) requires exactly one argument");
+        return NULL;
+    }
+    Expr *payload = elab_form(e, call->as.list.items[1]);
+    if (!payload) return NULL;
+    Expr *out = expr_new(e->arena, EX_THROW, TYPE_NIL, call->span);
+    out->as.throw_.payload = payload;
+    return out;
+}
+
+/* Phase 18: (call/cc f) - capture the current (delimited) continuation.
+ * v1 sugar: (call/cc f) => (let [__cc_f f] (__cc_f (fn [__v] __v)))
+ *
+ * In v1, full continuation capture is not yet implemented (requires CPS).
+ * `f` receives an identity function as the continuation `k`; calling `(k v)`
+ * just returns `v`.  This supports escape/abort patterns where f immediately
+ * returns `(k result)` without relying on the rest of the computation. */
+static Expr *elab_call_cc(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(call/cc f) requires exactly one argument");
+        return NULL;
+    }
+    /* v1 sugar: (call/cc f) => (let [__cc_f f] (__cc_f 0))
+     *
+     * In v1 all lambda parameters default to TY_INT, so the continuation
+     * is passed as the integer 0.  Full continuation capture (where k is
+     * actually callable) requires CPS and is deferred to a future phase. */
+    Arena *a = e->arena;
+    Span sp = call->span;
+
+    /* integer literal 0 — the dummy v1 continuation */
+    Form *zero     = form_int(a, sp, 0);
+
+    /* let binding: [__cc_f <user-fn>] */
+    Form *sym_ff    = form_sym(a, sp, intern_cstr(e->st, "__cc_f"));
+    Form *fn_form   = call->as.list.items[1];
+    Form **bv       = (Form **)arena_alloc(a, 2 * sizeof(Form *));
+    bv[0] = sym_ff;
+    bv[1] = fn_form;
+    Form *bind_vec  = form_vec(a, sp, bv, 2);
+
+    /* inner call: (__cc_f 0) */
+    Form **ic       = (Form **)arena_alloc(a, 2 * sizeof(Form *));
+    ic[0] = sym_ff;
+    ic[1] = zero;
+    Form *inner     = form_list(a, sp, ic, 2);
+
+    /* (let [__cc_f fn_form] (__cc_f 0)) */
+    Form *sym_let   = form_sym(a, sp, e->sym_let);
+    Form **li       = (Form **)arena_alloc(a, 3 * sizeof(Form *));
+    li[0] = sym_let;
+    li[1] = bind_vec;
+    li[2] = inner;
+    return elab_form(e, form_list(a, sp, li, 3));
+}
+
+/* Phase 18: (escape f) - one-shot escape continuation.
+ * v1 sugar: (escape f) => (let [__esc_f f] (__esc_f 0))
+ *
+ * `f` receives 0 as the escape procedure.  Full early-exit semantics require
+ * CPS and are deferred to a future phase. */
+static Expr *elab_escape(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(escape f) requires exactly one argument");
+        return NULL;
+    }
+    Arena *a = e->arena;
+    Span sp = call->span;
+
+    Form *zero     = form_int(a, sp, 0);
+
+    Form *sym_ff    = form_sym(a, sp, intern_cstr(e->st, "__esc_f"));
+    Form *fn_form   = call->as.list.items[1];
+    Form **bv       = (Form **)arena_alloc(a, 2 * sizeof(Form *));
+    bv[0] = sym_ff;
+    bv[1] = fn_form;
+    Form *bind_vec  = form_vec(a, sp, bv, 2);
+
+    Form **ic       = (Form **)arena_alloc(a, 2 * sizeof(Form *));
+    ic[0] = sym_ff;
+    ic[1] = zero;
+    Form *inner     = form_list(a, sp, ic, 2);
+
+    Form *sym_let   = form_sym(a, sp, e->sym_let);
+    Form **li       = (Form **)arena_alloc(a, 3 * sizeof(Form *));
+    li[0] = sym_let;
+    li[1] = bind_vec;
+    li[2] = inner;
+    return elab_form(e, form_list(a, sp, li, 3));
+}
+
 /* Elaborate (defclass Name [type-params...] (method1 ...) (method2 ...) ...)
  *
  * Defines a new typeclass with type parameters and methods.
@@ -4646,7 +4895,17 @@ static Expr *elab_defclass(Elab *e, const Form *call) {
         return NULL;
     }
     const Symbol *name = name_form->as.sym;
-    
+
+    /* Phase HKT (v2): reserved names — not yet implemented */
+    if (name == e->sym_hkt_Functor || name == e->sym_hkt_Applicative ||
+        name == e->sym_hkt_Monad   || name == e->sym_hkt_Traversable ||
+        name == e->sym_hkt_Foldable) {
+        diag_emit(DIAG_ERROR, name_form->span,
+                  "'%s' is reserved for the higher-kinded typeclass system (not yet implemented)",
+                  name->name);
+        return NULL;
+    }
+
     /* Check if already defined */
     TypeClass *existing = typeclass_env_lookup_typeclass(&e->typeclass_env, name);
     if (existing) {
@@ -4669,6 +4928,14 @@ static Expr *elab_defclass(Elab *e, const Form *call) {
                     n_type_params * sizeof(const Symbol *));
                 for (uint8_t i = 0; i < n_type_params; i++) {
                     Form *p = params_form->as.list.items[i];
+                    /* Phase HKT (v2): detect kind annotation [f : * -> *] written as
+                     * a vector [f kind] inside the type-params vector.  Reject with a
+                     * clear "not yet supported" diagnostic rather than a confusing one. */
+                    if (p->tag == F_VEC) {
+                        diag_emit(DIAG_ERROR, p->span,
+                                  "kind annotations in defclass type parameters are not yet supported (Phase HKT)");
+                        return NULL;
+                    }
                     if (p->tag != F_SYM) {
                         diag_emit(DIAG_ERROR, p->span,
                                   "type parameter must be a symbol");
@@ -5087,7 +5354,7 @@ static Expr *elab_method_call(Elab *e, const Form *call) {
     /* call is (.method obj arg1 arg2 ...)
      * call->as.list.items[0] is the symbol .method
      */
-    if (call->as.list.len < 3) {
+    if (call->as.list.len < 2) {
         diag_emit(DIAG_ERROR, call->span,
                   "method call requires (.method obj arg1 ...)");
         return NULL;

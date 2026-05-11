@@ -79,6 +79,7 @@ typedef enum ExprKind {
     /* Phase 12: Borrow traits */
     EX_BORROW_IMMUT,   /* (& expr) - create immutable borrow */
     EX_BORROW_MUT,     /* (&mut expr) - create mutable borrow */
+    EX_SET_DEREF,      /* (set! (@ r) v) - mutation through mutable borrow */
     /* Phase 15: Typeclasses */
     EX_TYPECLASS_DEF,   /* (defclass ...) - typeclass definition */
     EX_INSTANCE_DEF,   /* (definstance ...) - typeclass instance definition */
@@ -263,6 +264,7 @@ struct Expr {
         /* Phase 12: Borrow traits */
         struct { Expr *expr; }        borrow_immut_; /* (& expr) - expression to borrow immutably */
         struct { Expr *expr; }        borrow_mut_;   /* (&mut expr) - expression to borrow mutably */
+        struct { Expr *ref; Expr *value; } set_deref_; /* (set! (@ r) v) - mutation through &mut T */
         /* Phase 15: Typeclasses */
         struct { TypeClass *typeclass; }                                  typeclass_def_;
         struct { TypeClassInstance *instance; }                          instance_def_;

@@ -123,14 +123,18 @@ ExceptionHandler *exn_pop_handler(void) {
 void tur_exception_free(tur_exception *exn) {
     if (!exn) return;
     if (exn->cause) { tur_exception_free(exn->cause); }
-    free(exn->payload);
+    /* Only free heap-allocated payloads (int=3, bool=2). */
+    /* cstr/ptr payloads point to literals or external memory, not owned. */
+    if (exn->payload_type == 3 || exn->payload_type == 2) {
+        free(exn->payload);
+    }
     free(exn);
 }
 
 bool tur_exception_matches(tur_exception *exn, int expected_type) {
     if (!exn) return false;
     if (exn->payload_type == expected_type) return true;
-    if (expected_type == 0) return true;  /* TY_UNKNOWN = 0 = catch-all */
+    if (expected_type == 1) return true;  /* TY_NIL = 1 = catch-all */
     return false;
 }
 
@@ -149,6 +153,7 @@ void tur_throw(int payload_type, void *payload, int line, const char *file) {
         h->active = 0;
         longjmp(h->jmp_buf, 1);
     } else {
+        fprintf(stderr, "Uncaught exception thrown at %s:%d\n", file ? file : "<unknown>", line);
         tur_exception_free(exn);
         abort();
     }
@@ -515,13 +520,14 @@ static void test_throw() {
 static int64_t test_try_catch() {
         int64_t __t2 = (int64_t)0;
         ExceptionHandler __t1;
+        __t1.caught = NULL;
         __t1.parent = global_handler_chain;
         global_handler_chain = &__t1;
         if (setjmp(__t1.jmp_buf) == 0) {
             __t2 = INT64_C(0);
             global_handler_chain = global_handler_chain->parent;
         } else {
-            if (tur_exception_matches(__t1.caught, 0)) {
+            if (tur_exception_matches(__t1.caught, 1)) {
                 void * e_5 = (void *)__t1.caught->payload;
                 __t2 = INT64_C(1);
                 tur_exception_free(__t1.caught);
@@ -537,6 +543,7 @@ static int64_t test_try_catch() {
 static int64_t test_try_finally() {
     int64_t __t4 = (int64_t)0;
     ExceptionHandler __t3;
+    __t3.caught = NULL;
     __t3.parent = global_handler_chain;
     global_handler_chain = &__t3;
     if (setjmp(__t3.jmp_buf) == 0) {
@@ -554,6 +561,7 @@ static int64_t test_try_finally() {
 static int64_t test_try_catch_finally() {
     int64_t __t7 = (int64_t)0;
     ExceptionHandler __t6;
+    __t6.caught = NULL;
     __t6.parent = global_handler_chain;
     global_handler_chain = &__t6;
     if (setjmp(__t6.jmp_buf) == 0) {
@@ -561,7 +569,7 @@ static int64_t test_try_catch_finally() {
         global_handler_chain = global_handler_chain->parent;
         goto __t8;
     } else {
-        if (tur_exception_matches(__t6.caught, 0)) {
+        if (tur_exception_matches(__t6.caught, 1)) {
             void * e_6 = (void *)__t6.caught->payload;
             __t7 = INT64_C(1);
             tur_exception_free(__t6.caught);

@@ -1,0 +1,16 @@
+;; Phase 18: escape basic test
+;; v1 semantics: (escape f) = f(identity) where identity(v) = v.
+;; Full early-exit semantics require CPS (deferred to future phase).
+
+;; Test 1: escape body ignores exit, returns value normally
+(defn test-escape-no-exit [] :int
+  (escape (fn [exit] 42)))
+
+;; Test 2: escape body ignores exit, value flows out through arithmetic
+(defn test-escape-value [] :int
+  (+ 3 (escape (fn [exit] 7))))
+
+(defn main [] :int
+  (println (test-escape-no-exit))
+  (println (test-escape-value))
+  0)

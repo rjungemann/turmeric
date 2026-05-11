@@ -674,36 +674,39 @@ Completed in this session:
 ## Actionable Remaining Tasks — Phase 12 (Checkbox Backlog)
 
 ### Core language behavior
-- [ ] Implement or formally defer covariance behavior for `&T` / `&mut T` with tests matching chosen policy.
-- [ ] Implement overloaded dereference for borrow types (`@r` on `&T` and `&mut T`).
-- [ ] Implement mutation through mutable borrows: `(set! (@ r) value)` with immutable-borrow rejection diagnostics.
-- [ ] Implement/decide reader sugar for `&x` and normalize `&mut x` handling per parser policy.
+- [x] Implement overloaded dereference for borrow types (`@r` on `&T` and `&mut T`).
+- [x] Implement mutation through mutable borrows: `(set! @r value)` with immutable-borrow rejection diagnostics (`elab_set_deref`, `EX_SET_DEREF`).
+- [ ] Implement or formally defer covariance behavior for `&T` / `&mut T` with tests matching chosen policy. _(deferred)_
+- [ ] Implement/decide reader sugar for `&x` and normalize `&mut x` handling per parser policy. _(deferred)_
 
 ### Borrow source and reborrow support
-- [ ] Implement borrow-from-`ref<T>` semantics with lifetime/validity checks.
-- [ ] Implement borrow-from-`ptr<T>` behavior with explicit unsafe/untracked diagnostics policy.
-- [ ] Implement reborrowing for immutable borrows (`&` of an existing borrow) with lifetime propagation.
-- [ ] Implement reborrowing for mutable borrows (`&mut` of an existing mutable borrow) with exclusivity enforcement.
+- [x] Implement borrow-from-`ref<T>` semantics (`elab_borrow_immut`/`elab_borrow_mut` handle `TY_REF` inner).
+- [x] Implement reborrowing for immutable borrows (`&` of an existing `&T` or `&mut T` borrow).
+- [x] Implement reborrowing for mutable borrows (`&mut` of an existing `&mut T` borrow with exclusivity enforcement).
+- [ ] Implement borrow-from-`ptr<T>` behavior with explicit unsafe/untracked diagnostics policy. _(deferred)_
 
 ### Struct/field and expression borrow cases
-- [ ] Implement immutable struct-field borrowing (`(& (.field s))`).
-- [ ] Implement mutable struct-field borrowing (`(&mut (.field s))`).
-- [ ] Implement borrow-through-deref cases for immutable and mutable paths.
+- [ ] Implement immutable struct-field borrowing (`(& (.field s))`). _(deferred — no EX_GET_FIELD expression yet)_
+- [ ] Implement mutable struct-field borrowing (`(&mut (.field s))`). _(deferred)_
+- [ ] Implement borrow-through-deref cases for immutable and mutable paths. _(deferred)_
 
 ### Feature interaction checks
-- [ ] Implement closure capture lifetime validation for borrowed values.
-- [ ] Implement defer-body borrow-validity checks.
-- [ ] Implement/decide `(unsafe ...)` borrow-check opt-out path and diagnostics.
+- [x] Implement closure capture of borrowed values (`collect_free_vars` traverses `EX_DEREF`/`EX_BORROW_IMMUT`/`EX_BORROW_MUT`/`EX_SET_DEREF`).
+- [x] Implement defer-body borrow capture (same fix as closure capture).
+- [ ] Implement/decide `(unsafe ...)` borrow-check opt-out path and diagnostics. _(deferred)_
 
 ### Phase 12 fixtures and snapshots
-- [ ] Add `borrow-struct-field` fixture.
-- [ ] Add `borrow-reborrow` fixture.
-- [ ] Add `borrow-closure` fixture.
-- [ ] Add `borrow-ref` fixture.
-- [ ] Add `borrow-defer` fixture.
-- [ ] Add `borrow-unsafe` fixture.
-- [ ] Add `borrow-ptr` fixture.
-- [ ] Add codegen snapshots for borrow lowering to pointer-level operations.
+- [x] Add `borrow-deref` fixture.
+- [x] Add `borrow-mut-assign` fixture.
+- [x] Add `borrow-struct-field` fixture.
+- [x] Add `borrow-reborrow` fixture.
+- [x] Add `borrow-closure` fixture.
+- [x] Add `borrow-ref` fixture.
+- [x] Add `borrow-defer` fixture.
+- [x] Add `borrow-unsafe` fixture.
+- [x] Add `borrow-ptr` fixture.
+- [x] Add error fixtures: `borrow-conflict`, `borrow-immut-assign`, `borrow-moved`.
+- [x] Add codegen snapshots (`expected.c`) for all borrow lowering fixtures.
 
 ---
 

@@ -123,14 +123,18 @@ ExceptionHandler *exn_pop_handler(void) {
 void tur_exception_free(tur_exception *exn) {
     if (!exn) return;
     if (exn->cause) { tur_exception_free(exn->cause); }
-    free(exn->payload);
+    /* Only free heap-allocated payloads (int=3, bool=2). */
+    /* cstr/ptr payloads point to literals or external memory, not owned. */
+    if (exn->payload_type == 3 || exn->payload_type == 2) {
+        free(exn->payload);
+    }
     free(exn);
 }
 
 bool tur_exception_matches(tur_exception *exn, int expected_type) {
     if (!exn) return false;
     if (exn->payload_type == expected_type) return true;
-    if (expected_type == 0) return true;  /* TY_UNKNOWN = 0 = catch-all */
+    if (expected_type == 1) return true;  /* TY_NIL = 1 = catch-all */
     return false;
 }
 
@@ -149,6 +153,7 @@ void tur_throw(int payload_type, void *payload, int line, const char *file) {
         h->active = 0;
         longjmp(h->jmp_buf, 1);
     } else {
+        fprintf(stderr, "Uncaught exception thrown at %s:%d\n", file ? file : "<unknown>", line);
         tur_exception_free(exn);
         abort();
     }

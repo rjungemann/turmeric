@@ -1,6 +1,7 @@
 #include "runtime.h"
 
 #include <stddef.h>
+#include <stdio.h>
 
 /* Fire all defers in LIFO order and reset the frame.
  * 
@@ -77,8 +78,9 @@ tur_cont *tur_cont_alloc(tur_frame **frame_chain, int n_frames) {
 /* Resume a continuation with a value. Consumes the continuation (one-shot). */
 void tur_cont_resume(tur_cont *cont, int64_t value) {
     if (!cont || cont->consumed) {
-        /* Already consumed - this is a double resume which is undefined behavior */
-        return;
+        /* Already consumed - continuation escape/double-resume is a hard error */
+        fprintf(stderr, "continuation error: resume of already-consumed continuation\n");
+        abort();
     }
     
     /* Mark as consumed (one-shot) */

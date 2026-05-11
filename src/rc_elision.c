@@ -127,6 +127,8 @@ static int count_uses(const Expr *e, const Binding *b) {
         case EX_REF_PRED:     return count_uses(e->as.ref_pred_.expr, b);
         case EX_BORROW_IMMUT: return count_uses(e->as.borrow_immut_.expr, b);
         case EX_BORROW_MUT:   return count_uses(e->as.borrow_mut_.expr, b);
+        case EX_SET_DEREF:    return count_uses(e->as.set_deref_.ref, b)
+                                   + count_uses(e->as.set_deref_.value, b);
         case EX_THROW:        return count_uses(e->as.throw_.payload, b);
         case EX_TRY: {
             n += count_uses(e->as.try_.body, b);
@@ -246,6 +248,8 @@ static bool has_barrier(const Expr *e) {
         case EX_REF_PRED:      return has_barrier(e->as.ref_pred_.expr);
         case EX_BORROW_IMMUT:  return has_barrier(e->as.borrow_immut_.expr);
         case EX_BORROW_MUT:    return has_barrier(e->as.borrow_mut_.expr);
+        case EX_SET_DEREF:     return has_barrier(e->as.set_deref_.ref)
+                                   || has_barrier(e->as.set_deref_.value);
         case EX_MAKE_STRUCT: {
             for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++) {
                 if (has_barrier(e->as.make_struct_.field_values[i])) return true;
@@ -516,6 +520,8 @@ static void analyze_expr(Expr *e) {
         case EX_REF_PRED:      analyze_expr(e->as.ref_pred_.expr);      return;
         case EX_BORROW_IMMUT:  analyze_expr(e->as.borrow_immut_.expr);  return;
         case EX_BORROW_MUT:    analyze_expr(e->as.borrow_mut_.expr);    return;
+        case EX_SET_DEREF:     analyze_expr(e->as.set_deref_.ref);
+                               analyze_expr(e->as.set_deref_.value);    return;
         case EX_THROW:         analyze_expr(e->as.throw_.payload);      return;
         case EX_TRY: {
             analyze_expr(e->as.try_.body);

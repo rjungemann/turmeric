@@ -123,14 +123,18 @@ ExceptionHandler *exn_pop_handler(void) {
 void tur_exception_free(tur_exception *exn) {
     if (!exn) return;
     if (exn->cause) { tur_exception_free(exn->cause); }
-    free(exn->payload);
+    /* Only free heap-allocated payloads (int=3, bool=2). */
+    /* cstr/ptr payloads point to literals or external memory, not owned. */
+    if (exn->payload_type == 3 || exn->payload_type == 2) {
+        free(exn->payload);
+    }
     free(exn);
 }
 
 bool tur_exception_matches(tur_exception *exn, int expected_type) {
     if (!exn) return false;
     if (exn->payload_type == expected_type) return true;
-    if (expected_type == 0) return true;  /* TY_UNKNOWN = 0 = catch-all */
+    if (expected_type == 1) return true;  /* TY_NIL = 1 = catch-all */
     return false;
 }
 
@@ -149,6 +153,7 @@ void tur_throw(int payload_type, void *payload, int line, const char *file) {
         h->active = 0;
         longjmp(h->jmp_buf, 1);
     } else {
+        fprintf(stderr, "Uncaught exception thrown at %s:%d\n", file ? file : "<unknown>", line);
         tur_exception_free(exn);
         abort();
     }
@@ -507,6 +512,7 @@ static int64_t test_finally_with_exception();
 static int64_t test_finally_runs() {
         int64_t __t1 = (int64_t)0;
         ExceptionHandler __t0;
+        __t0.caught = NULL;
         __t0.parent = global_handler_chain;
         global_handler_chain = &__t0;
         if (setjmp(__t0.jmp_buf) == 0) {
@@ -525,6 +531,7 @@ static int64_t test_finally_runs() {
 static int64_t test_finally_with_exception() {
         int64_t __t4 = (int64_t)0;
         ExceptionHandler __t3;
+        __t3.caught = NULL;
         __t3.parent = global_handler_chain;
         global_handler_chain = &__t3;
         if (setjmp(__t3.jmp_buf) == 0) {
@@ -534,7 +541,7 @@ static int64_t test_finally_with_exception() {
             global_handler_chain = global_handler_chain->parent;
             goto __t5;
         } else {
-            if (tur_exception_matches(__t3.caught, 0)) {
+            if (tur_exception_matches(__t3.caught, 1)) {
                 void * e_3 = (void *)__t3.caught->payload;
                 __t4 = INT64_C(0);
                 tur_exception_free(__t3.caught);

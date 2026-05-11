@@ -68,6 +68,13 @@ void expr_print(Buf *b, const Expr *e) {
             expr_print(b, e->as.set_.value);
             buf_putc(b, ')');
             break;
+        case EX_SET_DEREF:
+            buf_puts(b, "(set! (@ ");
+            expr_print(b, e->as.set_deref_.ref);
+            buf_puts(b, ") ");
+            expr_print(b, e->as.set_deref_.value);
+            buf_putc(b, ')');
+            break;
         case EX_DEF:
             buf_puts(b, "(def ");
             buf_write(b, e->as.def_.binding->name->name, e->as.def_.binding->name->len);
