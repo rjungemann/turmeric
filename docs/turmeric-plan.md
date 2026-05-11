@@ -4,7 +4,7 @@
 
 ---
 
-## Progress Summary (Phases 15–19)
+## Progress Summary (Phases 15–19 Complete; HKT v2-targeted)
 
 | Phase | Status | Exit Criterion | Notes |
 |---|---|---|---|
@@ -13,8 +13,9 @@
 | 17 | ✅ **Complete** | Exceptions | Lightweight control flow; non-resumable; setjmp/longjmp based unwind; integrates with defer, ref, rc |
 | 18 | ✅ **Complete** | Delimited continuations (`shift`/`reset`) | Selective CPS-transform; one-shot continuations; S2 defer strategy; substrate for algebraic effects. v1: direct-style emission with runtime continuation support. |
 | 19 | ✅ **Complete** | Algebraic effects (v3) | OCaml 5-style effect handlers; effect rows; built on shift/reset substrate and unified defer model. v1: effect lowering (perform->shift, handle->reset), CPS marking pass, closure-aware shift emission. |
+| H0–H6 | 📋 **Planned (v2)** | Higher-kinded types | Six-phase roadmap: kind system (H0), kind-polymorphic typeclasses (H1), HKT dispatch (H2), built-in typeclass library (H3), kind-polymorphic functions (H4), advanced kinds (H5), integration & polish (H6). Entry point for generic `Functor`, `Monad`, `Traversable`. See [hkt-implementation-plan.md](hkt-implementation-plan.md) for full design. |
 
-**Last updated:** 2026-05-10 (Phase 19: Algebraic effects v1. Phase 18: Delimited continuations. Phase 17: Exceptions. Phase 16: Capability passing. Phase 15: Typeclasses.)
+**Last updated:** 2026-05-10 (Phase 19: Algebraic effects v1. HKT roadmap added.)
 
 ---
 
@@ -365,6 +366,9 @@
 **Fixtures**
 - [x] `continuation-basic.tur` — simple `reset`/`shift` example (Phase 18).
 - [x] `continuation-advanced.tur` — nested reset, multiple shifts, shift with closures.
+- [x] `effect-syntax.tur` — parser accepts `defeffect` return keywords (`:int`) and `handle` case/body pair syntax.
+- [x] `effect-syntax-compat.tur` — parser keeps supporting legacy `defeffect` return symbol syntax (`int`).
+- [x] Negative: `effect-handle-pairs.tur` — malformed `handle` without case/body pairs reports parser error.
 - [ ] `effect-declaration.tur` — declaring and performing effects. Deferred to v2.
 - [ ] `effect-handler.tur` — basic effect handling. Deferred to v2.
 - [ ] `effect-multiple.tur` — handling multiple effects. Deferred to v2.
@@ -380,6 +384,36 @@
 - [x] Codegen snapshots: effect handling lowers to shift/reset. v1: perform->shift, handle->reset.
 
 **Exit criterion:** ✅ v1 complete: algebraic effects infrastructure in place with effect lowering (perform->shift, handle->reset), CPS marking pass, direct-style emission with runtime continuation support, closure-aware shift emission. All 86 tests pass.
+
+---
+
+## Higher-Kinded Types (HKT Cluster — Phases H0–H6)
+
+**Status:** Planned for v2+. Prerequisite: Phase 15 (Typeclasses v1 complete). See [hkt-implementation-plan.md](hkt-implementation-plan.md) for the full design document.
+
+**Motivation:** HKTs enable user-defined typeclasses that quantify over type constructors (e.g., `Functor [f]` where `f : * -> *`), unblocking generic `traverse`/`sequence`/monad transformers and free-monad encodings. v1 typeclasses are restricted to kind-`*` only; HKTs lift that restriction for v2.
+
+**Roadmap (6 phases, ~12–20 weeks estimated):**
+
+| Phase | Goal | Exit Criterion |
+|---|---|---|
+| **H0** | Kind system foundation | Kind annotations parse and check; `option : * -> *`, `result : * -> * -> *` inferred correctly |
+| **H1** | Kind-polymorphic typeclasses | `defclass` accepts kind-parameterized heads; constraint solving validates kinds |
+| **H2** | HKT dispatch table | Two-level dictionary lookup (constructor + types); no v1 performance regression |
+| **H3** | Built-in HKT typeclasses | `Functor`, `Applicative`, `Monad`, `Traversable`, `Foldable` defined and instanced for stdlib types |
+| **H4** | Kind-polymorphic functions | `defn` with kind parameters; implicit kind inference; constraint propagation |
+| **H5** | Advanced kinds | Binary type constructors (`* -> * -> *`), kind aliases, recursive HKT types (Fix, Free) |
+| **H6** | Integration & polish | Stdlib migration, documentation, performance benchmarks, tooling (`--dump-kinds`, IDE support) |
+
+**Why v2, not v1:**
+- v1 algebr effects (Phases 17–19) already cover most monad-like abstraction use cases (`IO`, `State`, error handling) via direct-style code. HKTs add expressiveness but are lower priority.
+- Kind system design (H0) is straightforward; the complexity is in dispatch generalization (H1–H2) and stdlib coverage (H3). Worth waiting for real v1 user feedback to validate the design before committing.
+- Deferring to v2 avoids over-fit to a feature that might never be needed at scale in Turmeric's primary use case (embedded scripting + effects for systems programming).
+
+**Decision rule for v2 promotion:** Add HKTs to active roadmap if at least **two** of the following are true after v1 stabilizes:
+1. Users write repeated per-monad boilerplate that generic `traverse`/`sequence` would eliminate.
+2. A library author needs generic monad transformers or free-monad encodings.
+3. Significant demand from Haskell/Scala/PureScript users.
 
 ---
 

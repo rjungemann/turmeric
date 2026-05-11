@@ -141,8 +141,9 @@ Form *interp_eval(Env *e, Form *f) {
             return form_list(e->arena, f->span, items, f->as.list.len);
         }
         case F_VEC:
+        case F_MAP:
         case F_CBLOCK:
-            /* Vectors and C blocks evaluate to themselves */
+            /* Vectors, maps, and C blocks evaluate to themselves */
             return f;
     }
     return f;
@@ -189,10 +190,14 @@ static Form *quasiquote_expand(Env *macro_env, Form *f) {
             }
             return form_list(macro_env->arena, f->span, new_items, f->as.list.len);
         case F_VEC:
+        case F_MAP:
             {
                 Form **new_items = (Form **)arena_alloc(macro_env->arena, f->as.list.len * sizeof(Form *));
                 for (uint32_t i = 0; i < f->as.list.len; i++) {
                     new_items[i] = quasiquote_expand(macro_env, f->as.list.items[i]);
+                }
+                if (f->tag == F_MAP) {
+                    return form_map(macro_env->arena, f->span, new_items, f->as.list.len);
                 }
                 return form_vec(macro_env->arena, f->span, new_items, f->as.list.len);
             }
@@ -276,13 +281,17 @@ Form *macro_expand(Env *macro_env, Form *f, int *depth) {
             }
             return form_list(macro_env->arena, f->span, items, f->as.list.len);
         }
-        case F_VEC: {
+        case F_VEC:
+        case F_MAP: {
             Form **items = (Form **)arena_alloc(macro_env->arena, f->as.list.len * sizeof(Form *));
             for (uint32_t i = 0; i < f->as.list.len; i++) {
                 items[i] = macro_expand(macro_env, f->as.list.items[i], depth);
             }
             if (f->as.list.items == items) {
                 return f;
+            }
+            if (f->tag == F_MAP) {
+                return form_map(macro_env->arena, f->span, items, f->as.list.len);
             }
             return form_vec(macro_env->arena, f->span, items, f->as.list.len);
         }

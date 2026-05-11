@@ -1,0 +1,4 @@
+; Phase 5: ref<T> must be scope-local; top-level def with ref is an error.
+
+(def x (ref 42))
+(defn main [] :int 0)

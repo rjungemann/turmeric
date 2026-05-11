@@ -1159,6 +1159,41 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 free(thunk_name);
                 return result;
             }
+
+            /* Callback call through ptr<void> parameter. */
+            if (fn_binding->type.kind == TY_PTR_VOID) {
+                char *fn_name = raw_name_for_binding(fn_binding);
+                char **arg_strs = (char **)malloc(e->as.call_.n_args * sizeof(char *));
+                if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
+                for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                    arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
+                }
+
+                Buf out; buf_init(&out);
+                buf_printf(&out, "((%s (*) (", type_c_name(e->type));
+                if (e->as.call_.n_args == 0) {
+                    buf_puts(&out, "void");
+                } else {
+                    for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                        if (i > 0) buf_puts(&out, ", ");
+                        buf_puts(&out, type_c_name(e->as.call_.args[i]->type));
+                    }
+                }
+                buf_printf(&out, "))%s) (", fn_name);
+                for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                    if (i > 0) buf_puts(&out, ", ");
+                    buf_printf(&out, "%s", arg_strs[i]);
+                }
+                buf_puts(&out, ")");
+                buf_putc(&out, '\0');
+
+                char *result = strdup(out.data);
+                buf_free(&out);
+                for (uint32_t i = 0; i < e->as.call_.n_args; i++) free(arg_strs[i]);
+                free(arg_strs);
+                free(fn_name);
+                return result;
+            }
             
             /* Regular function call */
             /* Emit function call: fn(arg1, arg2, ...) */
@@ -1403,6 +1438,16 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             free(inner);
             return tmp;
         }
+        case EX_REF_PRED: {
+            /* (ref? x) - check if x is ref<T>: always true if elaboration accepted it */
+            char *inner = emit_value(ctx, body, e->as.ref_pred_.expr);
+            char *tmp = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            /* ref<T> is a void* in C; check non-NULL */
+            buf_printf(body, "bool %s = (%s != NULL); /* ref? — non-null pointer check */\n", tmp, inner);
+            free(inner);
+            return tmp;
+        }
         /* Phase 12: Borrow traits */
         case EX_BORROW_IMMUT: {
             /* (& expr) - immutable borrow: emit as &expr */
@@ -1617,8 +1662,10 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_CALL: {
             /* Emit as expression statement */
             char *v = emit_value(ctx, body, e);
-            if (e->type.kind != TY_NIL) {
-                indent_buf(body, ctx->indent);
+            indent_buf(body, ctx->indent);
+            if (e->type.kind == TY_NIL) {
+                buf_printf(body, "%s;\n", v);
+            } else {
                 buf_printf(body, "(void)(%s);\n", v);
             }
             free(v);
@@ -1815,7 +1862,8 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_RC_COUNT:
         case EX_WEAK:
         case EX_WEAK_UPGRADE:
-        case EX_WEAK_PRED: {
+        case EX_WEAK_PRED:
+        case EX_REF_PRED: {
             /* Emit as value expression, discard result */
             char *v = emit_value(ctx, body, e);
             if (e->type.kind != TY_NIL) {
@@ -1846,11 +1894,14 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_PERFORM:
         case EX_HANDLE:
         case EX_RESUME:
-        case EX_DISCONTINUE:
-            /* These should be lowered by effect_lower pass.
-             * If we reach here, emit as statement for now. */
-            emit_stmt(ctx, body, e);
+        case EX_DISCONTINUE: {
+            /* These should be lowered by effect_lower/CPS passes.
+             * Fallback: emit via emit_value and discard result.
+             * Do not recurse into emit_stmt with the same node. */
+            char *v = emit_value(ctx, body, e);
+            free(v);
             return;
+        }
     }
 }
 
@@ -2132,6 +2183,41 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "extern void abort(void);\n");
     buf_puts(out, "extern void *memset(void *, int, size_t);\n");
     buf_puts(out, "\n");
+    /* Phase 7 follow-up: minimal in-process test registry for stdlib/test.tur. */
+    buf_puts(out, "#define TUR_TEST_REGISTRY_MAX 1024\n");
+    buf_puts(out, "typedef int64_t (*tur_test_callback_t)(void);\n");
+    buf_puts(out, "static const char *tur_test_registry_names[TUR_TEST_REGISTRY_MAX];\n");
+    buf_puts(out, "static tur_test_callback_t tur_test_registry_fns[TUR_TEST_REGISTRY_MAX];\n");
+    buf_puts(out, "static int64_t tur_test_registry_count = 0;\n\n");
+    buf_puts(out, "int64_t tur_test_register(const char *name, void *test_fn) {\n");
+    buf_puts(out, "    if (!test_fn) return 0;\n");
+    buf_puts(out, "    if (tur_test_registry_count >= TUR_TEST_REGISTRY_MAX) return 0;\n");
+    buf_puts(out, "    tur_test_registry_names[tur_test_registry_count] = name ? name : \"<unnamed>\";\n");
+    buf_puts(out, "    tur_test_registry_fns[tur_test_registry_count] = (tur_test_callback_t)test_fn;\n");
+    buf_puts(out, "    tur_test_registry_count++;\n");
+    buf_puts(out, "    return 1;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "int64_t tur_test_run_all(void) {\n");
+    buf_puts(out, "    int64_t passed = 0;\n");
+    buf_puts(out, "    int64_t failed = 0;\n");
+    buf_puts(out, "    for (int64_t i = 0; i < tur_test_registry_count; i++) {\n");
+    buf_puts(out, "        tur_test_callback_t fn = tur_test_registry_fns[i];\n");
+    buf_puts(out, "        int64_t rc = fn ? fn() : 0;\n");
+    buf_puts(out, "        if (rc == 1) {\n");
+    buf_puts(out, "            putchar('.');\n");
+    buf_puts(out, "            putchar('\\n');\n");
+    buf_puts(out, "            passed++;\n");
+    buf_puts(out, "        } else {\n");
+    buf_puts(out, "            putchar('F');\n");
+    buf_puts(out, "            putchar('\\n');\n");
+    buf_puts(out, "            printf(\"%s\\n\", tur_test_registry_names[i]);\n");
+    buf_puts(out, "            failed++;\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    printf(\"summary: %lld passed, %lld failed\\n\",\n");
+    buf_puts(out, "           (long long)passed, (long long)failed);\n");
+    buf_puts(out, "    return failed == 0 ? 0 : 1;\n");
+    buf_puts(out, "}\n\n");
     /* Phase 4 v1 lowering: emit tur_frame inline from runtime.h */
     buf_puts(out, "/* tur_frame - phase 4 v1 lowering (from runtime.h) */\n");
     buf_puts(out, "typedef void (*defer_fn_t)(void *env);\n");

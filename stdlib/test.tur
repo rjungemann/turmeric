@@ -11,7 +11,58 @@
       (println actual)
       false)))
 
+;; Assert a condition is true.
+;; Current compiler limits function argument kinds to int in signatures,
+;; so test helpers use 1=true / 0=false convention for now.
+(defn assert-true [x] :bool
+  (if (= x 1)
+    true
+    (do
+      (println "Assertion failed: expected true")
+      false)))
+
+;; Assert a condition is false (0=false convention)
+(defn assert-false [x] :bool
+  (if (= x 1)
+    (do
+      (println "Assertion failed: expected false")
+      false)
+    true))
+
+;; Assert a value is nil.
+;; Current function-signature limits treat args as int in this path,
+;; so nil convention is represented as 0 for now.
+(defn assert-nil [x] :bool
+  (if (= x 0)
+    true
+    (do
+      (println "Assertion failed: expected nil")
+      false)))
+
+;; Run a single test result and print marker output.
+;; Returns 1 on pass, 0 on fail.
+;; `test-fn` is passed as an opaque callback pointer and invoked in-body.
+(defn run-test [name :cstr test-fn :ptr<void>] :int
+  (if (= (test-fn) 1)
+    (do
+      (println ".")
+      1)
+    (do
+      (println "F")
+      (println name)
+      0)))
+
+;; Register a named test callback for later execution via run-tests!.
+;; Returns nonzero on success.
+(defn register-test [name :cstr test-fn :ptr<void>] :int
+  ```c
+  extern int64_t tur_test_register(const char *name, void *test_fn);
+  return (int)tur_test_register((const char *)name, (void *)test_fn);
+  ```)
+
 ;; Run all registered tests and return exit code
 (defn run-tests! [] :int
-  (println "Running tests...")
-  0)
+  ```c
+  extern int64_t tur_test_run_all(void);
+  return (int)tur_test_run_all();
+  ```)

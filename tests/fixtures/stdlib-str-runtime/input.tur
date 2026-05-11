@@ -1,0 +1,45 @@
+(defn str-from-cstr [cstr :cstr] :ptr<void>
+  ```c
+  const char *s = (const char*)cstr;
+  size_t len = 0;
+  while (s[len] != '\0') len++;
+  struct { const char *p; size_t len; } *str = malloc(sizeof(*str));
+  str->p = s;
+  str->len = len;
+  return str;
+  ```)
+
+(defn str-len [s :ptr<void>] :int
+  ```c
+  struct { const char *p; size_t len; } *str = (void*)s;
+  return (int)str->len;
+  ```)
+
+(defn str-eq? [s1 :ptr<void> s2 :ptr<void>] :bool
+  ```c
+  struct { const char *p; size_t len; } *a = (void*)s1;
+  struct { const char *p; size_t len; } *b = (void*)s2;
+  if (a == NULL || b == NULL) return (a == NULL) && (b == NULL);
+  if (a->len != b->len) return false;
+  for (size_t i = 0; i < a->len; i++) {
+    if (a->p[i] != b->p[i]) return false;
+  }
+  return true;
+  ```)
+
+(defn str-free [s :ptr<void>]
+  ```c
+  free(s);
+  ```)
+
+(defn main [] :int
+  (let [a (str-from-cstr "abc")]
+    (let [b (str-from-cstr "abc")]
+      (let [c (str-from-cstr "abd")]
+        (println (str-len a))
+        (println (str-eq? a b))
+        (println (str-eq? a c))
+        (str-free a)
+        (str-free b)
+        (str-free c)
+        0))))

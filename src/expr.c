@@ -170,6 +170,11 @@ void expr_print(Buf *b, const Expr *e) {
             expr_print(b, e->as.weak_pred_.expr);
             buf_putc(b, ')');
             break;
+        case EX_REF_PRED:
+            buf_puts(b, "(ref? ");
+            expr_print(b, e->as.ref_pred_.expr);
+            buf_putc(b, ')');
+            break;
         /* Phase 12: Borrow traits */
         case EX_BORROW_IMMUT:
             buf_puts(b, "(& ");

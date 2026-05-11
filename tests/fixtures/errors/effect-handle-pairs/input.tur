@@ -1,0 +1,5 @@
+(defeffect Read [] :int)
+(defn main [] :int
+  (handle 1
+    (Read [] k)))
+(println (main))

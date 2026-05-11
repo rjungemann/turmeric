@@ -1,0 +1,66 @@
+(defn vec-new [] :ptr<void>
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v->data = NULL;
+  v->len = 0;
+  v->cap = 0;
+  return v;
+  ```)
+
+(defn vec-len [v :ptr<void>] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  return (int)vec->len;
+  ```)
+
+(defn vec-get [v :ptr<void> i] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  if (i >= 0 && (size_t)i < vec->len) return (int)vec->data[i];
+  fprintf(stderr, "vec index out of bounds\n");
+  return 0;
+  ```)
+
+(defn vec-push! [v :ptr<void> val]
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  if (vec->len >= vec->cap) {
+    size_t new_cap = vec->cap > 0 ? vec->cap * 2 : 4;
+    int64_t *new_data = malloc(sizeof(int64_t) * new_cap);
+    for (size_t i = 0; i < vec->len; i++) new_data[i] = vec->data[i];
+    free(vec->data);
+    vec->data = new_data;
+    vec->cap = new_cap;
+  }
+  vec->data[vec->len++] = val;
+  ```)
+
+(defn vec-pop! [v :ptr<void>] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  if (vec->len == 0) {
+    fprintf(stderr, "vec pop from empty vec\n");
+    return 0;
+  }
+  return (int)vec->data[--vec->len];
+  ```)
+
+(defn vec-free [v :ptr<void>]
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  free(vec->data);
+  free(vec);
+  ```)
+
+(defn main [] :int
+  (let [v (vec-new)]
+    (println (vec-len v))
+    (vec-push! v 10)
+    (vec-push! v 20)
+    (println (vec-len v))
+    (println (vec-get v 0))
+    (println (vec-get v 1))
+    (println (vec-pop! v))
+    (println (vec-len v))
+    (vec-free v)
+    0))

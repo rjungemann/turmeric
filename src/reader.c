@@ -76,14 +76,52 @@ static int advance(Reader *r) {
     return c;
 }
 
+/* Skip a #| ... |# block comment (supports nesting). */
+static bool skip_block_comment(Reader *r) {
+    uint32_t start_line = r->line;
+    uint32_t start_col = r->col;
+    size_t start_off = r->pos;
+
+    /* Consume opening #| */
+    advance(r);
+    advance(r);
+
+    int depth = 1;
+    while (peek(r) != -1) {
+        if (peek(r) == '#' && peek2(r) == '|') {
+            advance(r);
+            advance(r);
+            depth++;
+            continue;
+        }
+        if (peek(r) == '|' && peek2(r) == '#') {
+            advance(r);
+            advance(r);
+            depth--;
+            if (depth == 0) return true;
+            continue;
+        }
+        advance(r);
+    }
+
+    diag_emit(DIAG_ERROR,
+              span_from_to(r, start_line, start_col, start_off, r->pos),
+              "unterminated block comment");
+    r->error = true;
+    return false;
+}
+
 static void skip_ws_and_comments(Reader *r) {
     for (;;) {
+        if (r->error) return;
         int c = peek(r);
         if (c == -1) return;
         if (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == ',') {
             advance(r);
         } else if (c == ';') {
             while ((c = peek(r)) != -1 && c != '\n') advance(r);
+        } else if (c == '#' && peek2(r) == '|') {
+            if (!skip_block_comment(r)) return;
         } else {
             return;
         }
@@ -547,10 +585,31 @@ static Form *read_seq(Reader *r, char open, char close, FormTag tag,
 
     Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
     Form *seq;
-    if (tag == F_LIST) seq = form_list(r->arena, span, items, (uint32_t)n);
-    else               seq = form_vec (r->arena, span, items, (uint32_t)n);
+    if (tag == F_LIST) {
+        seq = form_list(r->arena, span, items, (uint32_t)n);
+    } else if (tag == F_VEC) {
+        seq = form_vec(r->arena, span, items, (uint32_t)n);
+    } else {
+        seq = form_map(r->arena, span, items, (uint32_t)n);
+    }
     free(items);
     return seq;
+}
+
+static Form *read_map(Reader *r) {
+    uint32_t start_line = r->line;
+    uint32_t start_col = r->col;
+    size_t start_off = r->pos;
+
+    advance(r); /* consume '#' */
+    if (peek(r) != '{') {
+        Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
+        diag_emit(DIAG_ERROR, s, "expected '{' after '#' for map literal");
+        r->error = true;
+        return NULL;
+    }
+
+    return read_seq(r, '{', '}', F_MAP, "unterminated map (missing '}')");
 }
 
 /* Read a C code block: ```c ... ``` or ``` c ... ``` */
@@ -824,8 +883,13 @@ static Form *read_curly_infix(Reader *r) {
 
 static Form *read_form(Reader *r) {
     skip_ws_and_comments(r);
+    if (r->error) return NULL;
     int c = peek(r);
     if (c == -1) return NULL;
+
+    if (c == '#' && peek2(r) == '{') {
+        return read_map(r);
+    }
 
     /* Phase S1: Curly-infix support */
     if (c == '{') {
@@ -843,7 +907,7 @@ static Form *read_form(Reader *r) {
     
     if (c == '(') return read_seq(r, '(', ')', F_LIST, "unterminated list (missing ')')");
     if (c == '[') return read_seq(r, '[', ']', F_VEC,  "unterminated vector (missing ']')");
-    if (c == ')' || c == ']') {
+    if (c == ')' || c == ']' || c == '}') {
         Span s = span_point(r);
         diag_emit(DIAG_ERROR, s, "unexpected '%c'", (char)c);
         r->error = true;
@@ -919,6 +983,10 @@ Form **read_all(Arena *arena, SymbolTable *st, const SourceFile *file,
 
     for (;;) {
         skip_ws_and_comments(&r);
+        if (r.error) {
+            free(forms);
+            return NULL;
+        }
         if (peek(&r) == -1) break;
         Form *f = read_form(&r);
         if (!f) {

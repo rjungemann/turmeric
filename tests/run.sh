@@ -33,6 +33,7 @@ run_happy() {
 
     local out_dir="$dir"
     local actual_stdout="$out_dir/actual.stdout"
+    local actual_stderr="$out_dir/actual.stderr"
     local actual_c="$out_dir/actual.c"
 
     "$TUR" emit-c "$input" > "$actual_c" 2> "$out_dir/actual.stderr"
@@ -54,9 +55,14 @@ run_happy() {
         return
     fi
 
-    "$exe" > "$actual_stdout"
+    "$exe" > "$actual_stdout" 2> "$actual_stderr"
     local rc=$?
     rm -f "$exe"
+
+    local expected_exit="0"
+    if [ -f "$dir/expected.exit" ]; then
+        expected_exit=$(tr -d '[:space:]' < "$dir/expected.exit")
+    fi
 
     if [ -f "$dir/expected.stdout" ]; then
         if ! diff -u "$dir/expected.stdout" "$actual_stdout" > /dev/null; then
@@ -76,10 +82,36 @@ run_happy() {
         fi
     fi
 
-    if [ "$rc" -ne 0 ]; then
-        FAIL=$((FAIL+1)); FAILED+=("$name (exit $rc)")
-        echo "FAIL $name — program exited $rc"
-        return
+    if [ "$expected_exit" = "nonzero" ]; then
+        if [ "$rc" -eq 0 ]; then
+            FAIL=$((FAIL+1)); FAILED+=("$name (expected nonzero exit)")
+            echo "FAIL $name — expected nonzero exit, got 0"
+            return
+        fi
+    else
+        if [ "$rc" -ne "$expected_exit" ]; then
+            FAIL=$((FAIL+1)); FAILED+=("$name (exit $rc, expected $expected_exit)")
+            echo "FAIL $name — program exited $rc (expected $expected_exit)"
+            return
+        fi
+    fi
+
+    if [ -f "$dir/expected.stderr" ]; then
+        local missing=0
+        while IFS= read -r needle; do
+            [ -z "$needle" ] && continue
+            if ! grep -F -q "$needle" "$actual_stderr"; then
+                echo "FAIL $name — expected stderr substring not found:"
+                echo "    $needle"
+                missing=1
+            fi
+        done < "$dir/expected.stderr"
+        if [ $missing -ne 0 ]; then
+            FAIL=$((FAIL+1)); FAILED+=("$name (stderr mismatch)")
+            echo "    actual stderr:"
+            sed 's/^/      /' "$actual_stderr"
+            return
+        fi
     fi
 
     PASS=$((PASS+1))

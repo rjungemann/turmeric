@@ -1,0 +1,29 @@
+(defn slice-new [data :ptr<void> length] :ptr<void>
+  ```c
+  struct { int64_t *p; size_t len; } *s = malloc(sizeof(*s));
+  s->p = (int64_t*)data;
+  s->len = (size_t)length;
+  return s;
+  ```)
+
+(defn slice-get [s :ptr<void> i] :int
+  ```c
+  struct { int64_t *p; size_t len; } *slice = (void*)s;
+  if (i >= 0 && (size_t)i < slice->len) return (int)slice->p[i];
+  fprintf(stderr, "slice index out of bounds\n");
+  __builtin_trap();
+  return 0;
+  ```)
+
+(defn make-buf [] :ptr<void>
+  ```c
+  int64_t *p = malloc(sizeof(int64_t));
+  p[0] = 7;
+  return p;
+  ```)
+
+(defn main [] :int
+  (let [p (make-buf)]
+    (let [s (slice-new p 1)]
+      (println (slice-get s 2))
+      0)))

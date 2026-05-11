@@ -33,9 +33,11 @@ build:
 
 test: $(BIN)
 	@bash tests/run.sh
+	@bash tests/run-cli.sh
 
 clean:
 	rm -rf build tests/out
 	find tests/fixtures -name 'actual.*' -delete
+	find tests/cli -name 'actual.*' -delete
 
 -include $(DEPS)

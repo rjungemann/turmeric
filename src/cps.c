@@ -328,6 +328,7 @@ static Expr *cps_mark_expr(Arena *a, Expr *e) {
         case EX_WEAK:
         case EX_WEAK_UPGRADE:
         case EX_WEAK_PRED:
+        case EX_REF_PRED:
         case EX_BORROW_IMMUT:
         case EX_BORROW_MUT:
         case EX_TYPECLASS_DEF:

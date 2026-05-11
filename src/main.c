@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include <sys/wait.h>
 
 #include "arena.h"
 #include "buf.h"
@@ -464,6 +465,78 @@ static void free_tur_files(char **files, int n) {
     free(files);
 }
 
+static int compare_cstr_ptrs(const void *a, const void *b) {
+    const char *const *sa = (const char *const *)a;
+    const char *const *sb = (const char *const *)b;
+    return strcmp(*sa, *sb);
+}
+
+static int decode_exit_status(int status) {
+    if (status == -1) return 127;
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
+    if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
+    return 1;
+}
+
+static int cmd_test(const char *dir) {
+    int n_files = 0;
+    char **tur_files = collect_tur_files(dir, &n_files);
+    if (!tur_files || n_files == 0) {
+        fprintf(stderr, "tur: no .tur files found in '%s'\n", dir);
+        free_tur_files(tur_files, n_files);
+        return 1;
+    }
+
+    qsort(tur_files, (size_t)n_files, sizeof(char *), compare_cstr_ptrs);
+
+    int passed = 0;
+    int failed = 0;
+    char **failed_files = (char **)calloc((size_t)n_files, sizeof(char *));
+    if (!failed_files) {
+        fprintf(stderr, "tur: oom\n");
+        free_tur_files(tur_files, n_files);
+        return 2;
+    }
+
+    for (int i = 0; i < n_files; i++) {
+        char out_path[] = "/tmp/tur-test-XXXXXX";
+        int fd = mkstemp(out_path);
+        if (fd < 0) {
+            fprintf(stderr, "tur: mkstemp failed for %s\n", tur_files[i]);
+            failed_files[failed++] = tur_files[i];
+            putchar('F');
+            continue;
+        }
+        close(fd);
+
+        int build_rc = cmd_build(tur_files[i], out_path);
+        int run_rc = 1;
+        if (build_rc == 0) {
+            int status = system(out_path);
+            run_rc = decode_exit_status(status);
+        }
+        unlink(out_path);
+
+        if (build_rc == 0 && run_rc == 0) {
+            passed++;
+            putchar('.');
+        } else {
+            failed_files[failed++] = tur_files[i];
+            putchar('F');
+        }
+    }
+
+    putchar('\n');
+    printf("%d tests, %d passed, %d failed\n", n_files, passed, failed);
+    for (int i = 0; i < failed; i++) {
+        printf("FAIL %s\n", failed_files[i]);
+    }
+
+    free(failed_files);
+    free_tur_files(tur_files, n_files);
+    return failed == 0 ? 0 : 1;
+}
+
 /* Build a project from multiple .tur files. Generates .h and .c for each,
  * plus a _main.c that includes all headers. */
 static int cmd_build_multi(const char *dir, const char *out_path) {
@@ -609,6 +682,7 @@ static int usage(void) {
         "  tur build <dir> [-o <out>]         build all .tur files in directory\n"
         "  tur emit-c <input.tur>            print the generated C to stdout\n"
         "  tur run <input.tur>               build + execute a single file\n"
+        "  tur test <dir>                    run all .tur files in a directory\n"
         "  tur check <input.tur>             type-check only, no codegen (phase 8)\n"
         "\n"
         "global flags:\n"
@@ -753,6 +827,10 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "run") == 0) {
         if (argc != 3) return usage();
         return cmd_run(argv[2]);
+    }
+    if (strcmp(cmd, "test") == 0) {
+        if (argc != 3) return usage();
+        return cmd_test(argv[2]);
     }
     return usage();
 }

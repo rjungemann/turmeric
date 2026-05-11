@@ -1,0 +1,13 @@
+;; Phase 19: parser smoke test for algebraic effect surface syntax.
+;; This validates defeffect return-type keywords and handle case/body pairing.
+
+(defeffect Read [] :int)
+
+
+(defn effect-parser-smoke [] :int
+  (do
+    (handle 41
+      (Read [] k) 0)
+    41))
+
+(println (effect-parser-smoke))

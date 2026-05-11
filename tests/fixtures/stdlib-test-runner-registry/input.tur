@@ -1,0 +1,19 @@
+(defn register-test [name :cstr test-fn :ptr<void>] :int
+  ```c
+  extern int64_t tur_test_register(const char *name, void *test_fn);
+  return (int)tur_test_register((const char *)name, (void *)test_fn);
+  ```)
+
+(defn run-tests! [] :int
+  ```c
+  extern int64_t tur_test_run_all(void);
+  return (int)tur_test_run_all();
+  ```)
+
+(defn t-pass [] :int 1)
+(defn t-fail [] :int 0)
+
+(defn main [] :int
+  (register-test "t-pass" t-pass)
+  (register-test "t-fail" t-fail)
+  (run-tests!))

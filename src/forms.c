@@ -72,6 +72,10 @@ Form *form_vec(Arena *a, Span span, Form **items, uint32_t len) {
     return form_seq(a, F_VEC, span, items, len);
 }
 
+Form *form_map(Arena *a, Span span, Form **items, uint32_t len) {
+    return form_seq(a, F_MAP, span, items, len);
+}
+
 Form *form_cblock(Arena *a, Span span, StrSlice code) {
     Form *f = form_new(a, F_CBLOCK, span);
     /* The code slice points into the source file; we need to copy it */
@@ -130,6 +134,7 @@ const char *form_tag_name(FormTag tag) {
         case F_KEYWORD: return "keyword";
         case F_LIST: return "list";
         case F_VEC: return "vector";
+        case F_MAP: return "map";
         case F_CBLOCK: return "c-block";
         case F_QUOTE: return "quote";
         case F_QUASIQUOTE: return "quasiquote";
@@ -189,6 +194,14 @@ void form_print(Buf *b, const Form *f) {
                 form_print(b, f->as.list.items[i]);
             }
             buf_putc(b, ']');
+            break;
+        case F_MAP:
+            buf_puts(b, "#{");
+            for (uint32_t i = 0; i < f->as.list.len; i++) {
+                if (i) buf_putc(b, ' ');
+                form_print(b, f->as.list.items[i]);
+            }
+            buf_putc(b, '}');
             break;
         case F_CBLOCK:
             buf_puts(b, "```c ");

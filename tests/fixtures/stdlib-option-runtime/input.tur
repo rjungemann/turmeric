@@ -1,0 +1,42 @@
+(defn some [x] :ptr<void>
+  ```c
+  struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  opt->is_some = true;
+  opt->value = x;
+  return opt;
+  ```)
+
+(defn none [] :ptr<void>
+  ```c
+  return NULL;
+  ```)
+
+(defn some? [o :ptr<void>] :bool
+  ```c
+  struct { bool is_some; int64_t value; } *opt = (void*)o;
+  return opt != NULL && opt->is_some;
+  ```)
+
+(defn option-unwrap [o :ptr<void>] :int
+  ```c
+  struct { bool is_some; int64_t value; } *opt = (void*)o;
+  if (opt == NULL || !opt->is_some) {
+    fprintf(stderr, "unwrap called on none\n");
+    return 0;
+  }
+  return (int)opt->value;
+  ```)
+
+(defn option-free [o :ptr<void>]
+  ```c
+  free(o);
+  ```)
+
+(defn main [] :int
+  (let [a (some 42)]
+    (let [b (none)]
+      (println (some? a))
+      (println (some? b))
+      (println (option-unwrap a))
+      (option-free a)
+      0)))

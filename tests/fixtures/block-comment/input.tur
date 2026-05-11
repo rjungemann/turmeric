@@ -1,0 +1,10 @@
+(println "start")
+#|
+  This whole block is ignored.
+  (println "skip-1")
+  #|
+    Nested block comment.
+    (println "skip-2")
+  |#
+|#
+(println "end")

@@ -1,0 +1,22 @@
+(defn vec-new [] :ptr<void>
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v->data = NULL;
+  v->len = 0;
+  v->cap = 0;
+  return v;
+  ```)
+
+(defn vec-get [v :ptr<void> i] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  if (i >= 0 && (size_t)i < vec->len) return (int)vec->data[i];
+  fprintf(stderr, "vec index out of bounds\n");
+  __builtin_trap();
+  return 0;
+  ```)
+
+(defn main [] :int
+  (let [v (vec-new)]
+    (println (vec-get v 0))
+    0))

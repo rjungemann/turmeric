@@ -292,6 +292,7 @@ typedef struct Elab {
     const Symbol *sym_weak;        /* weak */
     const Symbol *sym_upgrade;     /* upgrade */
     const Symbol *sym_weak_pred;   /* weak? */
+    const Symbol *sym_ref_pred;    /* ref? */
     /* Phase 17: Exceptions */
     const Symbol *sym_throw;      /* throw */
     const Symbol *sym_try;        /* try */
@@ -436,6 +437,7 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_weak = intern_cstr(st, "weak");
     e->sym_upgrade = intern_cstr(st, "upgrade");
     e->sym_weak_pred = intern_cstr(st, "weak?");
+    e->sym_ref_pred  = intern_cstr(st, "ref?");
     /* Phase 17: Exceptions */
     e->sym_throw = intern_cstr(st, "throw");
     e->sym_try = intern_cstr(st, "try");
@@ -568,7 +570,8 @@ static Form *quasiquote_expand_form(Elab *e, Form *f) {
             }
         }
         case F_VEC:
-            /* Vectors inside quasiquote: process each element */
+        case F_MAP:
+            /* Vectors/maps inside quasiquote: process each element */
             {
                 Form **new_items = (Form **)arena_alloc(e->arena, f->as.list.len * sizeof(Form *));
                 for (uint32_t i = 0; i < f->as.list.len; i++) {
@@ -578,6 +581,9 @@ static Form *quasiquote_expand_form(Elab *e, Form *f) {
                     } else {
                         new_items[i] = quasiquote_expand_form(e, item);
                     }
+                }
+                if (f->tag == F_MAP) {
+                    return form_map(e->arena, f->span, new_items, f->as.list.len);
                 }
                 return form_vec(e->arena, f->span, new_items, f->as.list.len);
             }
@@ -648,11 +654,15 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
             /* Not a parameter - return as-is */
             return f;
         }
-        case F_VEC: {
-            /* Recursively substitute in vec items */
+        case F_VEC:
+        case F_MAP: {
+            /* Recursively substitute in vector/map items */
             Form **items = (Form **)arena_alloc(e->arena, f->as.list.len * sizeof(Form *));
             for (uint32_t i = 0; i < f->as.list.len; i++) {
                 items[i] = substitute_params(e, f->as.list.items[i], macro, args);
+            }
+            if (f->tag == F_MAP) {
+                return form_map(e->arena, f->span, items, f->as.list.len);
             }
             return form_vec(e->arena, f->span, items, f->as.list.len);
         }
@@ -703,6 +713,7 @@ static Expr *elab_rc_strong_count(Elab *e, const Form *call);
 static Expr *elab_weak(Elab *e, const Form *call);
 static Expr *elab_weak_upgrade(Elab *e, const Form *call);
 static Expr *elab_weak_pred(Elab *e, const Form *call);
+static Expr *elab_ref_pred(Elab *e, const Form *call);
 /* Phase 10: GC */
 static Expr *elab_gc_force(Elab *e, const Form *call);
 static Expr *elab_gc_enable(Elab *e, const Form *call);
@@ -1660,6 +1671,25 @@ static Expr *elab_weak_pred(Elab *e, const Form *call) {
     return out;
 }
 
+/* (ref? x) - Check if x is a ref<T>.
+ * Returns: bool
+ */
+static Expr *elab_ref_pred(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(ref? x) requires exactly one argument");
+        return NULL;
+    }
+
+    Expr *inner = elab_form(e, call->as.list.items[1]);
+    if (!inner) return NULL;
+
+    /* Create EX_REF_PRED expression — always true if the type is TY_REF */
+    Expr *out = expr_new(e->arena, EX_REF_PRED, TYPE_BOOL, call->span);
+    out->as.ref_pred_.expr = inner;
+    return out;
+}
+
 /* Phase 10: GC builtins */
 
 /* (gc!) - Force a garbage collection cycle. Returns nil. */
@@ -2048,8 +2078,8 @@ static Expr *elab_shift0(Elab *e, const Form *call) {
  * Declares a new algebraic effect with parameters and a result type.
  */
 static Expr *elab_defeffect(Elab *e, const Form *call) {
-    /* Minimum: (defeffect Name [param1 ...] result-type) */
-    if (call->as.list.len < 3) {
+    /* Minimum: (defeffect Name [params...] :ret-type) */
+    if (call->as.list.len < 4) {
         diag_emit(DIAG_ERROR, call->span,
                   "defeffect requires (defeffect Name [params...] result-type)");
         return NULL;
@@ -2095,11 +2125,15 @@ static Expr *elab_defeffect(Elab *e, const Form *call) {
         param_types[i] = TY_PTR_VOID;
     }
     
-    /* Parse return type */
+    /* Parse return type.
+     * v1 accepts both historical symbol syntax and keyword syntax:
+     *   (defeffect E [] int)
+     *   (defeffect E [] :int)
+     */
     Form *ret_f = call->as.list.items[3];
-    if (ret_f->tag != F_SYM) {
+    if (ret_f->tag != F_SYM && ret_f->tag != F_KEYWORD) {
         diag_emit(DIAG_ERROR, ret_f->span,
-                  "defeffect: return type annotation must be a symbol");
+                  "defeffect: return type annotation must be a symbol or keyword like :int");
         return NULL;
     }
     
@@ -2207,12 +2241,25 @@ static Expr *elab_handle(Elab *e, const Form *call) {
     Expr *body = elab_form(e, call->as.list.items[1]);
     if (!body) return NULL;
     
-    /* Parse handle cases */
-    uint8_t n_cases = call->as.list.len - 2;
+    /* Parse handle cases.
+     * Surface syntax follows effects-plan.md §4.3:
+     *   (handle expr
+     *     (Effect [params...] k) body
+     *     ...)
+     * so cases are provided as header/body pairs.
+     */
+    uint32_t n_case_forms = call->as.list.len - 2;
+    if ((n_case_forms & 1U) != 0U) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "handle expects pairs of (case-header body)");
+        return NULL;
+    }
+
+    uint8_t n_cases = (uint8_t)(n_case_forms / 2);
     HandleCase *cases = arena_alloc(e->arena, n_cases * sizeof(HandleCase));
     
     for (uint8_t i = 0; i < n_cases; i++) {
-        Form *case_f = call->as.list.items[i + 2];
+        Form *case_f = call->as.list.items[2 + (i * 2)];
         if (case_f->tag != F_LIST) {
             diag_emit(DIAG_ERROR, case_f->span,
                       "handle: expected case as list, got %s",
@@ -2220,12 +2267,10 @@ static Expr *elab_handle(Elab *e, const Form *call) {
             return NULL;
         }
         
-        /* Case format: (EffectName [param1 param2 ...] k) body ...
-         * For v1, we support: (EffectName [params...] k) body
-         */
-        if (case_f->as.list.len < 4) {
+        /* Case header format: (EffectName [params...] k) */
+        if (case_f->as.list.len != 3) {
             diag_emit(DIAG_ERROR, case_f->span,
-                      "handle case requires (EffectName [params...] k) body");
+                      "handle case header requires (EffectName [params...] k)");
             return NULL;
         }
         
@@ -2268,14 +2313,9 @@ static Expr *elab_handle(Elab *e, const Form *call) {
         }
         cases[i].k_name = k_f->as.sym;
         
-        /* Parse handler body (everything after k) */
-        /* For v1, we expect a single expression body */
-        if (case_f->as.list.len < 5) {
-            diag_emit(DIAG_ERROR, case_f->span,
-                      "handle case: expected body expression");
-            return NULL;
-        }
-        cases[i].body = elab_form(e, case_f->as.list.items[4]);
+        /* Parse handler body from the paired form. */
+        Form *body_f = call->as.list.items[3 + (i * 2)];
+        cases[i].body = elab_form(e, body_f);
         if (!cases[i].body) return NULL;
     }
     
@@ -2623,7 +2663,7 @@ static Expr *elab_defn(Elab *e, const Form *call) {
                        (kw->len == 3 && memcmp(kw->name, "nil", 3) == 0)) {
                 param_kinds[n_params - 1] = TY_NIL;
                 params[n_params - 1]->type = TYPE_NIL;
-            } else if (kw->len == 8 && memcmp(kw->name, "ptr<void>", 8) == 0) {
+            } else if (kw->len == 9 && memcmp(kw->name, "ptr<void>", 9) == 0) {
                 param_kinds[n_params - 1] = TY_PTR_VOID;
                 params[n_params - 1]->type = TYPE_PTR_VOID;
             } else {
@@ -2672,6 +2712,8 @@ static Expr *elab_defn(Elab *e, const Form *call) {
                 return_kind = TY_NIL;
             } else if (kw->len == 4 && memcmp(kw->name, "cstr", 4) == 0) {
                 return_kind = TY_CSTR;
+            } else if (kw->len == 9 && memcmp(kw->name, "ptr<void>", 9) == 0) {
+                return_kind = TY_PTR_VOID;
             } else {
                 diag_emit(DIAG_ERROR, ret_f->span,
                           "defn: unsupported return type keyword :%s",
@@ -2725,23 +2767,20 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     /* Create function type */
     TypeKind arg_kinds[MAX_FN_ARITY];
     for (uint8_t i = 0; i < n_params; i++) {
-        arg_kinds[i] = TY_INT;  /* All int for phase 2 */
+        arg_kinds[i] = param_kinds[i];
     }
     Type fn_type = type_fn(arg_kinds, n_params, return_kind);
 
-    /* Create Binding for the function */
-    Binding *b = binding_new(e, name_f->as.sym, fn_type, false, true, name_f->span);
-    /* If there's a forward-declared binding (TY_FN from pass 1), replace it */
-    if (existing && existing->type.kind == TY_FN) {
-        /* Replace the forward declaration with the real binding */
-        /* Find the forward declaration in the scope and replace it */
-        for (uint32_t i = 0; i < e->global.n; i++) {
-            if (e->global.bindings[i] == existing) {
-                e->global.bindings[i] = b;
-                break;
-            }
-        }
+    /* Create/update binding for the function.
+     * Reuse pass-1 forward bindings in place so subsequent lookups observe
+     * updated arity/types from the real definition. */
+    Binding *b = NULL;
+    if (existing && existing->type.kind == TY_FN && existing->is_global) {
+        b = existing;
+        b->type = fn_type;
+        b->span = name_f->span;
     } else {
+        b = binding_new(e, name_f->as.sym, fn_type, false, true, name_f->span);
         scope_add(&e->global, b);
     }
 
@@ -2833,6 +2872,8 @@ static Expr *elab_fn(Elab *e, const Form *call) {
                 return_kind = TY_BOOL;
             } else if (kw->len == 4 && memcmp(kw->name, "void", 4) == 0) {
                 return_kind = TY_NIL;
+            } else if (kw->len == 9 && memcmp(kw->name, "ptr<void>", 9) == 0) {
+                return_kind = TY_PTR_VOID;
             } else {
                 diag_emit(DIAG_ERROR, ret_f->span,
                           "fn: unsupported return type keyword :%s",
@@ -3159,6 +3200,14 @@ static Expr *elab_def(Elab *e, const Form *call) {
     Expr *init = elab_form(e, call->as.list.items[2]);
     if (!init) return NULL;
 
+    /* Phase 5: ref<T> is scope-local only — disallow at top-level def */
+    if (init->type.kind == TY_REF) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "def: ref<T> values must be scope-local; use let instead of def for '%s'",
+                  name_f->as.sym->name);
+        return NULL;
+    }
+
     Binding *b = binding_new(e, name_f->as.sym, init->type,
                              /*is_mut=*/false, /*is_global=*/true, name_f->span);
     scope_add(&e->global, b);
@@ -3222,6 +3271,7 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_weak)        return elab_weak(e, call);
     if (name == e->sym_upgrade)     return elab_weak_upgrade(e, call);
     if (name == e->sym_weak_pred)   return elab_weak_pred(e, call);
+    if (name == e->sym_ref_pred)    return elab_ref_pred(e, call);
     /* Phase 17: Exceptions */
     if (name == e->sym_throw)       return elab_throw(e, call);
     if (name == e->sym_try)         return elab_try(e, call);
@@ -3367,10 +3417,18 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         /* This is a closure - get the thunk function type */
         fn_type = fn_binding->closure_fn_binding->type;
     } else if (fn_binding->type.kind == TY_PTR_VOID) {
-        /* This shouldn't happen - a TY_PTR_VOID binding without closure_fn_binding */
-        diag_emit(DIAG_ERROR, call->span,
-                  "'%s' is not a callable function", fn_binding->name->name);
-        return NULL;
+        /* Phase 19: callback values passed as ptr<void> are callable (v1: no-arg). */
+        if (n_args != 0) {
+            diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0002_ARITY_MISMATCH,
+                                "callback '%s' expects %u argument(s), got %u",
+                                fn_binding->name->name, 0u, n_args);
+            return NULL;
+        }
+        Expr *out = expr_new(e->arena, EX_CALL, TYPE_INT, call->span);
+        out->as.call_.fn_binding = fn_binding;
+        out->as.call_.args = NULL;
+        out->as.call_.n_args = 0;
+        return out;
     }
     
     if (fn_type.kind != TY_FN && fn_type.kind != TY_CONT) {
@@ -3405,12 +3463,33 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
     for (uint32_t i = 0; i < n_args; i++) {
         args[i] = elab_form(e, call->as.list.items[1 + i]);
         if (!args[i]) return NULL;
-        /* For phase 2, all params are int, so expect int args */
-        if (args[i]->type.kind != TY_INT) {
+        TypeKind expected_arg_kind = TY_INT;
+        if (fn_type.kind == TY_FN) {
+            uint32_t fn_arg_idx = i;
+            if (fn_binding->closure_fn_binding) {
+                /* Closure thunk arg[0] is hidden env ptr. */
+                fn_arg_idx = i + 1;
+            }
+            expected_arg_kind = fn_type.as.fn.arg_kinds[fn_arg_idx];
+        }
+
+        bool arg_ok = (args[i]->type.kind == expected_arg_kind);
+        if (!arg_ok && expected_arg_kind == TY_PTR_VOID && args[i]->type.kind == TY_FN) {
+            /* Allow passing a function value where callback pointer is expected. */
+            arg_ok = true;
+        }
+        if (!arg_ok && expected_arg_kind == TY_PTR_VOID && args[i]->type.kind == TY_NIL) {
+            /* Allow nil as a null pointer for ptr<void> parameters. */
+            arg_ok = true;
+        }
+
+        if (!arg_ok) {
             /* Phase 8: Enhanced type mismatch with error code */
             diag_emit_with_code(DIAG_ERROR, args[i]->span, TUR_E0001_TYPE_MISMATCH,
-                                "function '%s' arg %u: expected int, got %s",
-                                fn_binding->name->name, i + 1, type_name(args[i]->type));
+                                "function '%s' arg %u: expected %s, got %s",
+                                fn_binding->name->name, i + 1,
+                                type_name(type_from_kind(expected_arg_kind)),
+                                type_name(args[i]->type));
             return NULL;
         }
         /* Phase 11: Move tracking - if arg is a CK_MOVE binding reference, poison it */
@@ -3508,6 +3587,10 @@ static Expr *elab_form(Elab *e, Form *f) {
         case F_VEC:
             diag_emit(DIAG_ERROR, f->span,
                       "phase 1: vector literals are only allowed in let bindings");
+            return NULL;
+        case F_MAP:
+            diag_emit(DIAG_ERROR, f->span,
+                      "phase 1: map literals are parsed but not yet supported by elaboration");
             return NULL;
         /* Phase 6: quote form */
         case F_QUOTE: {
@@ -4425,7 +4508,7 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                                         return_kind = TY_NIL;
                                     } else if (kw->len == 4 && memcmp(kw->name, "cstr", 4) == 0) {
                                         return_kind = TY_CSTR;
-                                    } else if (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0) {
+                                    } else if (kw->len == 9 && memcmp(kw->name, "ptr<void>", 9) == 0) {
                                         return_kind = TY_PTR_VOID;
                                     }
                                 }
