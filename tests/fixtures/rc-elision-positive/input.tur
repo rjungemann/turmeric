@@ -1,0 +1,13 @@
+(defn main [] :int
+  ;; Test case 1: Single clone-use-drop sequence (obvious last-use elision candidate)
+  ;; The RC is cloned, used once for reading, then immediately dropped.
+  ;; With elision, the clone increment and drop decrement can be skipped.
+  (let [orig (rc/of 42)]
+    (let [cloned (rc/clone orig)]
+      (println (rc/strong-count cloned))))
+  
+  ;; Test case 2: Clone in argument (last use before return)
+  ;; With elision, we avoid increment+decrement around the function call.
+  (println (rc/strong-count (rc/clone (rc/of 99))))
+  
+  0)

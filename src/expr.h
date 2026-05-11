@@ -70,6 +70,8 @@ typedef enum ExprKind {
     /* Note: (@ r) for rc<T> reuses EX_DEREF */
     EX_RC_PTR,         /* (rc->ptr r) - borrow ptr<T> from rc<T> */
     EX_RC_COUNT,       /* (rc/strong-count r) - get strong count */
+    EX_RC_FROM_REF,    /* (rc/from-ref r) - move ref<T> into rc<T> */
+    EX_REF_FROM_RC,    /* (ref/from-rc r) - extract unique ref<T> from rc<T> */
     EX_WEAK,           /* (weak r) - create weak<T> from rc<T> */
     EX_WEAK_UPGRADE,   /* (upgrade w) - upgrade weak<T> to option<rc<T>> */
     EX_WEAK_PRED,      /* (weak? w) - check if w is weak<T> */
@@ -244,11 +246,13 @@ struct Expr {
 
         /* Phase 9: rc<T> + weak<T> operations */
         struct { Expr *expr; }        rc_of_;      /* (rc/of x) - value to wrap */
-        struct { Expr *expr; }        rc_clone_;  /* (rc/clone r) - rc to clone */
-        struct { Expr *expr; }        rc_drop_;   /* (rc/drop r) - rc to drop */
+        struct { Expr *expr; bool elide; } rc_clone_;  /* (rc/clone r) - rc to clone; elide=true skips rc_strong_increment */
+        struct { Expr *expr; bool elide; } rc_drop_;   /* (rc/drop r) - rc to drop; elide=true skips rc_strong_decrement */
         /* Note: (@ r) for rc<T> reuses deref_ field */
         struct { Expr *expr; }        rc_ptr_;    /* (rc->ptr r) - rc to borrow ptr from */
         struct { Expr *expr; }        rc_count_;  /* (rc/strong-count r) - rc to count */
+        struct { Expr *expr; }        rc_from_ref_; /* (rc/from-ref r) - ref to convert */
+        struct { Expr *expr; }        ref_from_rc_; /* (ref/from-rc r) - rc to convert */
         struct { Expr *expr; }        weak_;      /* (weak r) - rc to create weak from */
         struct { Expr *expr; }        weak_upgrade_; /* (upgrade w) - weak to upgrade */
         struct { Expr *expr; }        weak_pred_;   /* (weak? w) - expr to check */

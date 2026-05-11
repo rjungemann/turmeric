@@ -1,0 +1,18 @@
+(defn main [] :int
+  ;; Test case 1: Multiple uses of cloned RC (elision barrier)
+  ;; Even though both uses are "local", the clone is used more than once.
+  ;; With multiple uses, we can't elide the increment/decrement.
+  (let [orig (rc/of 777)]
+    (let [cloned (rc/clone orig)]
+      (println (rc/strong-count cloned))
+      (println (rc/strong-count cloned))))
+  
+  ;; Test case 2: Clone used after a println call (elision barrier due to extern)
+  ;; The clone is used before AND after a function call.
+  ;; Extern calls are elision barriers, so we can't elide.
+  (let [orig (rc/of 888)]
+    (let [cloned (rc/clone orig)]
+      (println "before")
+      (println (rc/strong-count cloned))))
+  
+  0)

@@ -13,9 +13,60 @@
 /* Phase 10: Include GC header for cycle collection integration */
 #include "gc.h"
 
+/* Phase 9: Include deferred free queue to avoid deep recursion */
+#include "rc_free_queue.h"
+
 /* Default drop function: just call free() on the value */
 static void default_drop_fn(void *value) {
     free(value);
+}
+
+/* Drop hook for ref<T> payloads stored in rc<ref<T>>.
+ * rc/of stores payload as a heap-allocated cell containing the inner pointer,
+ * so we must free both the pointee and the payload cell. */
+static void drop_ref_payload(void *value) {
+    if (!value) return;
+    void *inner = *((void **)value);
+    if (inner) {
+        free(inner);
+    }
+    free(value);
+}
+
+/* Drop hook for rc<T> payloads stored in rc<rc<T>>.
+ * Payload is a heap-allocated cell containing RcControlBlock*. */
+static void drop_rc_payload(void *value) {
+    if (!value) return;
+    RcControlBlock *inner = *((RcControlBlock **)value);
+    if (inner) {
+        (void)rc_strong_decrement(inner);
+        rc_free_queue_drain();
+    }
+    free(value);
+}
+
+/* Drop hook for weak<T> payloads stored in rc<weak<T>>.
+ * Payload is a heap-allocated cell containing RcControlBlock*. */
+static void drop_weak_payload(void *value) {
+    if (!value) return;
+    RcControlBlock *inner = *((RcControlBlock **)value);
+    if (inner) {
+        (void)rc_weak_decrement(inner);
+    }
+    free(value);
+}
+
+static RcDropFn default_drop_fn_for_type(TypeKind value_type) {
+    switch (value_type) {
+        case TY_REF:
+            return drop_ref_payload;
+        case TY_RC:
+            return drop_rc_payload;
+        case TY_WEAK:
+            return drop_weak_payload;
+        default:
+            return default_drop_fn;
+    }
 }
 
 /* Allocate a control block with space for a value of size `value_size`.
@@ -35,7 +86,7 @@ RcControlBlock *rc_cb_alloc(size_t value_size, TypeKind value_type, RcDropFn dro
     cb->strong_count = 1;  /* First rc<T> reference */
     cb->weak_count = 0;
     cb->value = (void *)(cb + 1);  /* Value starts right after header */
-    cb->drop_fn = drop_fn ? drop_fn : default_drop_fn;
+    cb->drop_fn = drop_fn ? drop_fn : default_drop_fn_for_type(value_type);
     cb->value_type_kind = value_type;
     
     /* Phase 10: Initialize GC fields */
@@ -90,9 +141,9 @@ bool rc_strong_decrement(RcControlBlock *cb) {
             gc_on_strong_decrement(cb);
             return false;  /* Value not yet freed */
         } else {
-            /* No weak references either - free immediately */
-            rc_cb_free(cb);
-            return true;  /* Value was freed */
+            /* Phase 9: Queue for deferred freeing to avoid deep recursion */
+            rc_free_queue_push(cb);
+            return true;  /* Value was (or will be) freed */
         }
     }
     
@@ -170,5 +221,5 @@ void *rc_get_value(RcControlBlock *cb) {
 void rc_set_value(RcControlBlock *cb, void *value, RcDropFn drop_fn) {
     if (!cb) return;
     cb->value = value;
-    cb->drop_fn = drop_fn ? drop_fn : default_drop_fn;
+    cb->drop_fn = drop_fn ? drop_fn : default_drop_fn_for_type(cb->value_type_kind);
 }

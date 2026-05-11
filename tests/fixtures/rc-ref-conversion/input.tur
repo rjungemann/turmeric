@@ -1,0 +1,9 @@
+(defn main [] :int
+  (let [r (ref 123)]
+    (let [rc (rc/from-ref r)]
+      (println (rc/strong-count rc))))
+
+  (let [rc2 (rc/of 321)]
+    (let [r2 (ref/from-rc rc2)]
+      (println @r2)))
+  0)

@@ -45,4 +45,10 @@ const BuiltinSpec *builtin_lookup(const Symbol *name, Type first_arg_type,
  * regardless of arity/type. NULL if no entry exists with this name. */
 const BuiltinSpec *builtin_first_with_name(const Symbol *name);
 
+/* Collect overloads for a builtin name.
+ * Returns number of entries written to `out` (up to max_out). */
+uint32_t builtin_collect_with_name(const Symbol *name,
+                                   const BuiltinSpec **out,
+                                   uint32_t max_out);
+
 #endif

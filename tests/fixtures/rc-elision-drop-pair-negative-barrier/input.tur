@@ -1,0 +1,9 @@
+(defn main [] :int
+  (let [orig (rc/of 42)]
+    ;; Barrier before rc/drop: count is observable through orig.
+    (let [tmp (rc/clone orig)]
+      (println (rc/strong-count orig))
+      (rc/drop tmp))
+    (println (rc/strong-count orig))
+    (rc/drop orig)
+    0))

@@ -1,0 +1,11 @@
+(defn main [] :int
+  ;; Fixture: Call barrier blocks elision.
+  ;; Even though the clone+drop pattern is present, a call (println) appears
+  ;; before the drop in a do-block, creating a barrier. Elision must not fire.
+  (let [orig (rc/of 123)]
+    (let [cloned (rc/clone orig)]
+      (do
+        (println "barrier call before drop")
+        (rc/drop cloned))))
+  
+  0)

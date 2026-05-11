@@ -236,6 +236,42 @@ static Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_pa
             case EX_FN_DEF:
                 stack[sp++] = cur->as.fn_def_.fn->body;
                 break;
+            case EX_RC_DROP:
+                stack[sp++] = cur->as.rc_drop_.expr;
+                break;
+            case EX_DEFER:
+                stack[sp++] = cur->as.defer_.body;
+                break;
+            case EX_RC_OF:
+                stack[sp++] = cur->as.rc_of_.expr;
+                break;
+            case EX_RC_FROM_REF:
+                stack[sp++] = cur->as.rc_from_ref_.expr;
+                break;
+            case EX_REF_FROM_RC:
+                stack[sp++] = cur->as.ref_from_rc_.expr;
+                break;
+            case EX_WEAK:
+                stack[sp++] = cur->as.weak_.expr;
+                break;
+            case EX_WEAK_UPGRADE:
+                stack[sp++] = cur->as.weak_upgrade_.expr;
+                break;
+            case EX_RC_CLONE:
+                stack[sp++] = cur->as.rc_clone_.expr;
+                break;
+            case EX_RC_PTR:
+                stack[sp++] = cur->as.rc_ptr_.expr;
+                break;
+            case EX_RC_COUNT:
+                stack[sp++] = cur->as.rc_count_.expr;
+                break;
+            case EX_WEAK_PRED:
+                stack[sp++] = cur->as.weak_pred_.expr;
+                break;
+            case EX_REF_PRED:
+                stack[sp++] = cur->as.ref_pred_.expr;
+                break;
             default:
                 break;
         }
@@ -290,6 +326,8 @@ typedef struct Elab {
     const Symbol *sym_rc_drop;     /* rc/drop */
     const Symbol *sym_rc_ptr;      /* rc->ptr */
     const Symbol *sym_rc_strong_count; /* rc/strong-count */
+    const Symbol *sym_rc_from_ref; /* rc/from-ref */
+    const Symbol *sym_ref_from_rc; /* ref/from-rc */
     const Symbol *sym_weak;        /* weak */
     const Symbol *sym_upgrade;     /* upgrade */
     const Symbol *sym_weak_pred;   /* weak? */
@@ -494,6 +532,8 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_rc_drop = intern_cstr(st, "rc/drop");
     e->sym_rc_ptr = intern_cstr(st, "rc->ptr");
     e->sym_rc_strong_count = intern_cstr(st, "rc/strong-count");
+    e->sym_rc_from_ref = intern_cstr(st, "rc/from-ref");
+    e->sym_ref_from_rc = intern_cstr(st, "ref/from-rc");
     e->sym_weak = intern_cstr(st, "weak");
     e->sym_upgrade = intern_cstr(st, "upgrade");
     e->sym_weak_pred = intern_cstr(st, "weak?");
@@ -772,6 +812,8 @@ static Expr *elab_rc_clone(Elab *e, const Form *call);
 static Expr *elab_rc_drop(Elab *e, const Form *call);
 static Expr *elab_rc_ptr(Elab *e, const Form *call);
 static Expr *elab_rc_strong_count(Elab *e, const Form *call);
+static Expr *elab_rc_from_ref(Elab *e, const Form *call);
+static Expr *elab_ref_from_rc(Elab *e, const Form *call);
 static Expr *elab_weak(Elab *e, const Form *call);
 static Expr *elab_weak_upgrade(Elab *e, const Form *call);
 static Expr *elab_weak_pred(Elab *e, const Form *call);
@@ -876,7 +918,9 @@ static Expr *elab_let(Elab *e, const Form *call) {
     /* Phase 5: Check if any binding is a ref and needs auto-defer drop */
     bool has_ref_bindings = false;
     for (uint32_t k = 0; k < n_binds; k++) {
-        if (binds[k].binding->type.kind == TY_REF) {
+        /* Skip refs that come from ref/from-rc - they don't own the data */
+        if (binds[k].binding->type.kind == TY_REF &&
+            binds[k].init->kind != EX_REF_FROM_RC) {
             has_ref_bindings = true;
             break;
         }
@@ -939,7 +983,9 @@ static Expr *elab_let(Elab *e, const Form *call) {
                  * what we want for scope-exit behavior. */
                 uint32_t defer_idx = body->as.do_.n;
                 for (uint32_t k = 0; k < n_binds; k++) {
-                    if (binds[k].binding->type.kind == TY_REF) {
+                    /* Skip refs that come from ref/from-rc - they don't own the data */
+                    if (binds[k].binding->type.kind == TY_REF &&
+                        binds[k].init->kind != EX_REF_FROM_RC) {
                         /* Create (defer (drop! binding_name)) expression */
                         /* Create a variable reference to the binding */
                         Expr *var_expr = expr_new(e->arena, EX_VAR, binds[k].binding->type, call->span);
@@ -989,6 +1035,140 @@ static Expr *elab_let(Elab *e, const Form *call) {
                 body->as.do_.items = new_items;
                 body->as.do_.n = new_n;
             }
+        }
+    }
+
+    /* Phase 5b: RC auto-drop injection (separate from ref to avoid mixing concerns)
+     * NOTE: Currently disabled due to complexity in detecting consumed rc values
+     * when ref/from-rc extracts and frees the rc control block. To be revisited
+     * with more sophisticated binding-usage analysis. For now, rc values must be
+     * manually dropped with explicit (rc/drop rc) calls. */
+    bool has_rc_bindings = false;
+    /* Disabled: for (uint32_t k = 0; k < n_binds; k++) {
+        if (binds[k].binding->type.kind == TY_RC) {
+            has_rc_bindings = true;
+            break;
+        }
+    } */
+    
+    /* If we have rc bindings, wrap body in do if needed and inject defers */
+    if (false && has_rc_bindings && body && body->kind != EX_DO) {
+        Expr **items = (Expr **)arena_alloc(e->arena, 1 * sizeof(Expr *));
+        items[0] = body;
+        body = expr_new(e->arena, EX_DO, body->type, call->span);
+        body->as.do_.items = items;
+        body->as.do_.n = 1;
+    }
+    
+    if (false && has_rc_bindings && body && body->kind == EX_DO) {
+        /* Count rc bindings that need drops */
+        uint32_t n_rc_drops = 0;
+        for (uint32_t k = 0; k < n_binds; k++) {
+            if (binds[k].binding->type.kind == TY_RC) {
+                n_rc_drops++;
+            }
+        }
+        
+        if (n_rc_drops > 0) {
+            /* Create new items array with space for rc drop defers */
+            uint32_t new_n = body->as.do_.n + n_rc_drops;
+            Expr **new_items = (Expr **)arena_alloc(e->arena, new_n * sizeof(Expr *));
+            
+            /* Copy existing items */
+            memcpy(new_items, body->as.do_.items, body->as.do_.n * sizeof(Expr *));
+            
+            /* Add defer expressions for each rc binding */
+            uint32_t defer_idx = body->as.do_.n;
+            for (uint32_t k = 0; k < n_binds; k++) {
+                if (binds[k].binding->type.kind == TY_RC) {
+                    /* Check if this rc is consumed by ref/from-rc - if so, don't auto-drop it
+                     * because tur_ref_from_rc frees the rc control block */
+                    bool is_consumed = false;
+                    
+                    /* Scan entire body for ref/from-rc using this binding */
+                    if (body && body->kind == EX_DO) {
+                        const Expr **stack = (const Expr **)malloc(256 * sizeof(const Expr *));
+                        int sp = 0;
+                        
+                        for (uint32_t i = 0; i < body->as.do_.n; i++) {
+                            stack[sp++] = body->as.do_.items[i];
+                        }
+                        
+                        while (sp > 0 && !is_consumed) {
+                            const Expr *cur = stack[--sp];
+                            if (cur->kind == EX_REF_FROM_RC &&
+                                cur->as.ref_from_rc_.expr->kind == EX_VAR &&
+                                cur->as.ref_from_rc_.expr->as.var.binding == binds[k].binding) {
+                                is_consumed = true;
+                                break;
+                            }
+                            
+                            switch (cur->kind) {
+                                case EX_LET:
+                                    for (uint32_t i = cur->as.let_.n; i > 0; i--) {
+                                        stack[sp++] = cur->as.let_.bindings[i-1].init;
+                                    }
+                                    stack[sp++] = cur->as.let_.body;
+                                    break;
+                                case EX_IF:
+                                    if (cur->as.if_.else_or_null) stack[sp++] = cur->as.if_.else_or_null;
+                                    stack[sp++] = cur->as.if_.then_;
+                                    stack[sp++] = cur->as.if_.cond;
+                                    break;
+                                case EX_DO:
+                                    for (uint32_t i = cur->as.do_.n; i > 0; i--) {
+                                        stack[sp++] = cur->as.do_.items[i-1];
+                                    }
+                                    break;
+                                case EX_CALL:
+                                    for (uint32_t i = cur->as.call_.n_args; i > 0; i--) {
+                                        stack[sp++] = cur->as.call_.args[i-1];
+                                    }
+                                    break;
+                                default:
+                                    break;
+                            }
+                        }
+                        free(stack);
+                    }
+                    
+                    if (is_consumed) continue;
+                    
+                    /* Create a variable reference to the rc binding */
+                    Expr *var_expr = expr_new(e->arena, EX_VAR, binds[k].binding->type, call->span);
+                    var_expr->as.var.binding = binds[k].binding;
+                    
+                    /* Create the rc/drop expression */
+                    Expr *rc_drop_expr = expr_new(e->arena, EX_RC_DROP, TYPE_NIL, call->span);
+                    rc_drop_expr->as.rc_drop_.expr = var_expr;
+                    
+                    /* Create the defer expression wrapping the rc/drop */
+                    Expr *defer_expr = expr_new(e->arena, EX_DEFER, TYPE_NIL, call->span);
+                    defer_expr->as.defer_.body = rc_drop_expr;
+                    
+                    /* Capture analysis */
+                    uint32_t n_free = 0;
+                    Binding **free_vars = collect_free_vars(rc_drop_expr, NULL, 0, &n_free);
+                    
+                    Binding **captures = NULL;
+                    uint8_t n_captures = 0;
+                    if (n_free > 0) {
+                        captures = (Binding **)arena_alloc(e->arena, n_free * sizeof(Binding *));
+                        memcpy(captures, free_vars, n_free * sizeof(Binding *));
+                        n_captures = (uint8_t)n_free;
+                    }
+                    free(free_vars);
+                    
+                    defer_expr->as.defer_.captures = captures;
+                    defer_expr->as.defer_.n_captures = n_captures;
+                    
+                    new_items[defer_idx++] = defer_expr;
+                }
+            }
+            
+            /* Update the body with new items */
+            body->as.do_.items = new_items;
+            body->as.do_.n = new_n;
         }
     }
 
@@ -1608,6 +1788,7 @@ static Expr *elab_rc_clone(Elab *e, const Form *call) {
     /* Create EX_RC_CLONE expression */
     Expr *out = expr_new(e->arena, EX_RC_CLONE, rc_type, call->span);
     out->as.rc_clone_.expr = inner;
+    out->as.rc_clone_.elide = false;  /* Phase 9 follow-up: elision pass may set true */
     return out;
 }
 
@@ -1634,6 +1815,7 @@ static Expr *elab_rc_drop(Elab *e, const Form *call) {
     /* Create EX_RC_DROP expression */
     Expr *out = expr_new(e->arena, EX_RC_DROP, TYPE_NIL, call->span);
     out->as.rc_drop_.expr = inner;
+    out->as.rc_drop_.elide = false;  /* Phase 9 follow-up: elision pass may set true */
     return out;
 }
 
@@ -1689,6 +1871,65 @@ static Expr *elab_rc_strong_count(Elab *e, const Form *call) {
     /* Create EX_RC_COUNT expression */
     Expr *out = expr_new(e->arena, EX_RC_COUNT, TYPE_INT, call->span);
     out->as.rc_count_.expr = inner;
+    return out;
+}
+
+/* (rc/from-ref r) - Move a ref<T> into rc<T>.
+ * Returns: rc<T>
+ */
+static Expr *elab_rc_from_ref(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(rc/from-ref r) requires exactly one argument");
+        return NULL;
+    }
+
+    Expr *inner = elab_form(e, call->as.list.items[1]);
+    if (!inner) return NULL;
+
+    if (inner->type.kind != TY_REF) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "rc/from-ref requires ref<T>, got %s", type_name(inner->type));
+        return NULL;
+    }
+
+    if (inner->kind == EX_VAR) {
+        binding_mark_moved(inner->as.var.binding, inner->span);
+    }
+
+    Type rc_type = type_rc(inner->type.as.ref.inner);
+    Expr *out = expr_new(e->arena, EX_RC_FROM_REF, rc_type, call->span);
+    out->as.rc_from_ref_.expr = inner;
+    return out;
+}
+
+/* (ref/from-rc r) - Extract a ref<T> from a unique rc<T>.
+ * Requires strong-count == 1 and no weak observers at runtime.
+ * Returns: ref<T>
+ */
+static Expr *elab_ref_from_rc(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(ref/from-rc r) requires exactly one argument");
+        return NULL;
+    }
+
+    Expr *inner = elab_form(e, call->as.list.items[1]);
+    if (!inner) return NULL;
+
+    if (inner->type.kind != TY_RC) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "ref/from-rc requires rc<T>, got %s", type_name(inner->type));
+        return NULL;
+    }
+
+    if (inner->kind == EX_VAR) {
+        binding_mark_moved(inner->as.var.binding, inner->span);
+    }
+
+    Type ref_type = type_ref(inner->type.as.rc.inner);
+    Expr *out = expr_new(e->arena, EX_REF_FROM_RC, ref_type, call->span);
+    out->as.ref_from_rc_.expr = inner;
     return out;
 }
 
@@ -3386,6 +3627,8 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_rc_drop)     return elab_rc_drop(e, call);
     if (name == e->sym_rc_ptr)      return elab_rc_ptr(e, call);
     if (name == e->sym_rc_strong_count) return elab_rc_strong_count(e, call);
+    if (name == e->sym_rc_from_ref) return elab_rc_from_ref(e, call);
+    if (name == e->sym_ref_from_rc) return elab_ref_from_rc(e, call);
     if (name == e->sym_weak)        return elab_weak(e, call);
     if (name == e->sym_upgrade)     return elab_weak_upgrade(e, call);
     if (name == e->sym_weak_pred)   return elab_weak_pred(e, call);
@@ -3480,10 +3723,29 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (!spec) {
         const BuiltinSpec *any = builtin_first_with_name(name);
         if (any) {
-            diag_emit(DIAG_ERROR, call->span,
-                      "no matching overload for '%s' with %u arg(s) of type %s",
-                      name->name, n_args,
-                      n_args > 0 ? type_name(first_t) : "<none>");
+            diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0006_OPERATOR_LOOKUP_FAILED,
+                                "operator lookup failed for '%s': got %u arg(s), first arg type %s",
+                                name->name, n_args,
+                                n_args > 0 ? type_name(first_t) : "<none>");
+
+            const BuiltinSpec *overloads[32];
+            uint32_t n_overloads = builtin_collect_with_name(name, overloads, 32);
+            for (uint32_t oi = 0; oi < n_overloads; oi++) {
+                const BuiltinSpec *ov = overloads[oi];
+                const char *arg_name = (ov->arg_type.kind == TY_UNKNOWN)
+                    ? "any"
+                    : type_name(ov->arg_type);
+                const char *res_name = type_name(ov->result_type);
+                if (ov->max_arity < 0) {
+                    diag_emit(DIAG_NOTE, call->span,
+                              "available overload: %s arity %d..* arg=%s result=%s",
+                              ov->name, ov->min_arity, arg_name, res_name);
+                } else {
+                    diag_emit(DIAG_NOTE, call->span,
+                              "available overload: %s arity %d..%d arg=%s result=%s",
+                              ov->name, ov->min_arity, ov->max_arity, arg_name, res_name);
+                }
+            }
         } else {
             diag_emit(DIAG_ERROR, head->span,
                       "unknown function or operator '%s'", name->name);
@@ -3686,7 +3948,11 @@ static Expr *elab_form(Elab *e, Form *f) {
                     snprintf(msg, sizeof(msg), "unbound symbol '%s'", f->as.sym->name);
                     char sug_text[128];
                     snprintf(sug_text, sizeof(sug_text), "Did you mean '%s'?", best_match->name);
-                    DiagSuggestion sug = {sug_text, NULL, NULL};
+                    DiagSuggestion sug = {
+                        sug_text,
+                        NULL,
+                        "https://turmeric-lang.dev/docs/errors/TUR-E0003"
+                    };
                     diag_emit_with_suggestion(DIAG_ERROR, f->span, msg, &sug);
                 } else {
                     diag_emit_with_code(DIAG_ERROR, f->span, TUR_E0003_UNBOUND_SYMBOL,
