@@ -99,6 +99,15 @@ void  hamt_free(Hamt* map);  // Decref root
 | Integration with compiler | 50-100 | 0.5-1 day |
 | **Total** | **900-1250** | **4-6 days** |
 
+## Dead Code / Inclusion Strategy
+
+Since `hamt.c`/`hamt.h` are separate translation units, unused HAMT code can be stripped automatically by the linker:
+
+- **macOS:** pass `-dead_strip` to the linker
+- **Linux:** pass `-Wl,--gc-sections` (compile with `-ffunction-sections -fdata-sections`)
+
+No compiler changes needed — if no HAMT symbols are referenced, none are included in the binary. Emit-phase gating (only `#include "hamt.h"` when HAMTs are used) can be added later as an optimization, but linker stripping is sufficient for now.
+
 ## Recommendation
 
 **Proceed.** HAMTs are a natural fit for:

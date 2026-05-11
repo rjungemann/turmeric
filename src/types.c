@@ -371,3 +371,26 @@ const char *type_c_name(Type t) {
 void type_print(Buf *b, Type t) {
     type_name_buf(b, t);
 }
+
+/* Phase HKT H0: Kind utilities */
+
+bool kind_eq(Kind a, Kind b) {
+    return a == b;
+}
+
+const char *kind_to_string(Kind k) {
+    switch (k) {
+        case KIND_STAR:  return "*";
+        case KIND_ARROW: return "* -> *";
+    }
+    return "*";  /* default */
+}
+
+Kind kind_parse(const char *s) {
+    if (!s) return KIND_STAR;
+    if (s[0] == '*' && s[1] == ' ' && s[2] == '-' && s[3] == '>' &&
+        s[4] == ' ' && s[5] == '*' && s[6] == '\0') {
+        return KIND_ARROW;
+    }
+    return KIND_STAR;
+}

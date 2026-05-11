@@ -130,6 +130,7 @@ static int count_uses(const Expr *e, const Binding *b) {
         case EX_SET_DEREF:    return count_uses(e->as.set_deref_.ref, b)
                                    + count_uses(e->as.set_deref_.value, b);
         case EX_THROW:        return count_uses(e->as.throw_.payload, b);
+        case EX_PANIC:        return count_uses(e->as.panic_.payload, b);
         case EX_TRY: {
             n += count_uses(e->as.try_.body, b);
             for (uint8_t i = 0; i < e->as.try_.n_clauses; i++)
@@ -201,6 +202,7 @@ static bool has_barrier(const Expr *e) {
         case EX_BUILTIN:
         case EX_WHILE:
         case EX_THROW:
+        case EX_PANIC:
         case EX_TRY:
         case EX_CLOSURE:
         case EX_DEFER:
@@ -523,6 +525,7 @@ static void analyze_expr(Expr *e) {
         case EX_SET_DEREF:     analyze_expr(e->as.set_deref_.ref);
                                analyze_expr(e->as.set_deref_.value);    return;
         case EX_THROW:         analyze_expr(e->as.throw_.payload);      return;
+        case EX_PANIC:         analyze_expr(e->as.panic_.payload);      return;
         case EX_TRY: {
             analyze_expr(e->as.try_.body);
             for (uint8_t i = 0; i < e->as.try_.n_clauses; i++)

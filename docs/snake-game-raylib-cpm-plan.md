@@ -527,5 +527,5 @@ We define algebraic effects for the game domain:
 - [Raylib](https://www.raylib.com/) — Simple and easy-to-use library to enjoy videogames programming
 - [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake) — C++ Package Manager
 - [Turmeric Plan](turmeric-plan.md) — Language design and implementation
-- [Effects Plan](effects-plan.md) — Algebraic effects design for Turmeric
+- [Effects Plan](archive/effects-plan.md) — Algebraic effects design for Turmeric
 - [OCaml 5 Effects](https://ocaml.org/manual/5.4/effects.html) — Reference for effect semantics

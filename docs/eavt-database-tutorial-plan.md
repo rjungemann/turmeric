@@ -56,27 +56,21 @@ A **fact** (or **datum**) is a tuple: `[entity, attribute, value, tx]`
 
 ### 1.3 Why EAVT?
 
-```
-Traditional relational:
-┌─────────┬──────────┬──────────────┐
-│ user_id  │ name     │ email         │
-├─────────┼──────────┼──────────────┤
-│ 42       │ Alice    │ alice@ex.com  │
-│ 43       │ Bob      │ bob@ex.com    │
-└─────────┴──────────┴──────────────┘
-  Fixed schema, mutable rows
+**Traditional relational** — fixed schema, mutable rows:
 
-EAVT (immutable facts):
-┌─────────┬─────────────┬──────────────┬──────┐
-│ entity  │ attribute    │ value         │ tx   │
-├─────────┼─────────────┼──────────────┼──────┤
-│ 42       │ :user/name   │ "Alice"       │ 100  │
-│ 42       │ :user/email  │ "alice@ex.com"│ 100  │
-│ 43       │ :user/name   │ "Bob"        │ 101  │
-│ 43       │ :user/email  │ "bob@ex.com" │ 101  │
-└─────────┴─────────────┴──────────────┴──────┘
-  Schema-on-read, append-only, temporal
-```
+| user_id | name  | email         |
+|---------|-------|---------------|
+| 42      | Alice | alice@ex.com  |
+| 43      | Bob   | bob@ex.com    |
+
+**EAVT (immutable facts)** — schema-on-read, append-only, temporal:
+
+| entity | attribute    | value          | tx  |
+|--------|--------------|----------------|-----|
+| 42     | :user/name   | "Alice"        | 100 |
+| 42     | :user/email  | "alice@ex.com" | 100 |
+| 43     | :user/name   | "Bob"          | 101 |
+| 43     | :user/email  | "bob@ex.com"   | 101 |
 
 ---
 

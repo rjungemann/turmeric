@@ -6,7 +6,7 @@
     (let [r (& x)]       ; &int — immutable borrow
       (println @r))      ; deref &int → 42
     (let [^mut y 0]
-      (let [rm (&mut y)]   ; &mut int — mutable borrow
+      (let [rm &mut y]     ; &mut int — mutable borrow
         (println @rm)))  ; deref &mut int → 0
   )
   0)

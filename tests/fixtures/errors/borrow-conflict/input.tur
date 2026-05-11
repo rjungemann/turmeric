@@ -4,7 +4,7 @@
 (defn main [] :int
   (let [x 42]
     (let [r1 (& x)]
-      (let [r2 (&mut x)]  ; ERROR: cannot borrow as mutable while already borrowed
+      (let [r2 &mut x]    ; ERROR: cannot borrow as mutable while already borrowed
         (println 1)))
     0)
   0)

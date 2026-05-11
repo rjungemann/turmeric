@@ -113,3 +113,16 @@ bool tur_cont_consumed(tur_cont *cont) {
     if (!cont) return true;  /* NULL is considered consumed */
     return cont->consumed;
 }
+
+/* Phase R2: Panic */
+int tur_panic_in_progress = 0;
+
+void tur_panic(const char *msg) {
+    if (tur_panic_in_progress) {
+        fprintf(stderr, "double panic: aborting\n");
+        abort();
+    }
+    tur_panic_in_progress = 1;
+    fprintf(stderr, "panic: %s\n", msg ? msg : "(no message)");
+    abort();
+}

@@ -167,6 +167,7 @@ Decision: minimum required snapshots:
 ### Variance model
 Decision:
 - keep invariance behavior for now; covariance remains deferred until broader subtype model exists
+- add conformance fixture asserting invariant behavior; mark implementation task complete
 
 ### Overloaded deref contract
 Decision:
@@ -180,12 +181,13 @@ Decision:
 
 ### Reader sugar for & / &mut
 Decision:
-- keep explicit forms stable first; sugar can remain deferred until parser ambiguity concerns are resolved
+- implement `&x` / `&mut x` reader sugar now; parser ambiguity concerns resolved in favor of treating `&` as unambiguous borrow prefix in expression position
 
 ### ref/ptr borrow interop
 Decision:
 - borrowing from `ref<T>` allowed with lifetime validity checks
-- borrowing from raw `ptr<T>` remains explicitly unsafe/untracked path
+- borrowing from raw `ptr<T>`: allow inside `(unsafe ...)` blocks only; emit an untracked-borrow diagnostic outside `(unsafe ...)`; borrow checker does not validate lifetime for these borrows (programmer responsibility)
+- revisit when unsafe effects (`(unsafe ...)` as a first-class effect) are implemented
 
 ### Closure/defer borrow-lifetime rules
 Decision:
@@ -195,6 +197,13 @@ Decision:
 ### unsafe opt-out
 Decision:
 - `(unsafe ...)` borrow-check opt-out remains deferred; no implicit relaxation in current phase
+- revisit when `(unsafe ...)` is implemented as a first-class effect
+
+### Struct-field borrowing and EX_GET_FIELD
+Decision:
+- implement `EX_GET_FIELD` as a first-class IR node for reading named struct fields
+- implement immutable struct-field borrowing `(& (.field s))` and mutable `(&mut (.field s))` on top of it
+- implement borrow-through-deref for both immutable and mutable paths in the same pass
 
 ### Borrow fixture matrix
 Decision:

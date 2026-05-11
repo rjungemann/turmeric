@@ -1,0 +1,4 @@
+;; Phase HKT H0: reserved typeclass names should produce a clear diagnostic.
+;; Functor is reserved for the higher-kinded typeclass system.
+(defclass Functor [f]
+  (fmap [f a b] :int))

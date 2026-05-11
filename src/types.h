@@ -343,6 +343,11 @@ const char  *type_name(Type t);                   /* "int", "bool", … */
 const char  *type_c_name(Type t);                 /* "int64_t", "bool", … */
 void         type_print(Buf *b, Type t);
 
+/* Phase HKT H0: Kind utilities */
+bool         kind_eq(Kind a, Kind b);             /* true if a == b */
+const char  *kind_to_string(Kind k);              /* "*", "* -> *", … */
+Kind         kind_parse(const char *s);           /* parse "*" / "* -> *"; default KIND_STAR */
+
 /* Phase 11: Copy/Move trait helpers */
 /* Returns true if the type is Copy (bitwise duplication allowed) */
 static inline bool type_is_copy(Type t) {

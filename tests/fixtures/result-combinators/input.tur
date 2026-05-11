@@ -1,0 +1,109 @@
+;; Phase R1: result combinators — map, flat-map, map-err, or, or-else, expect
+
+(defn ok [x :int] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = true; r->ok_val = x; r->err_val = 0; return r;
+  ```)
+(defn err [e :int] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = false; r->ok_val = 0; r->err_val = e; return r;
+  ```)
+(defn ok? [r :ptr<void>] :bool
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  return result != NULL && result->is_ok;
+  ```)
+(defn err? [r :ptr<void>] :bool
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  return result == NULL || !result->is_ok;
+  ```)
+(defn ok-val [r :ptr<void>] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  return result->ok_val;
+  ```)
+(defn err-val [r :ptr<void>] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  return result->err_val;
+  ```)
+(defn result-unwrap-or [r :ptr<void> default_val :int] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  if (result != NULL && result->is_ok) return (int)result->ok_val;
+  return default_val;
+  ```)
+(defn result-expect [r :ptr<void> msg :cstr] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  if (result == NULL || !result->is_ok) { fprintf(stderr, "expect: %s\n", (const char*)msg); abort(); }
+  return (int)result->ok_val;
+  ```)
+(defn result-map [r :ptr<void> f :ptr<void>] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  if (res == NULL || !res->is_ok) return r;
+  int64_t new_val = ((int64_t (*)(int64_t))f)(res->ok_val);
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
+  out->is_ok = true; out->ok_val = new_val; out->err_val = 0; return out;
+  ```)
+(defn result-map-err [r :ptr<void> f :ptr<void>] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  if (res == NULL || res->is_ok) return r;
+  int64_t new_err = ((int64_t (*)(int64_t))f)(res->err_val);
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
+  out->is_ok = false; out->ok_val = 0; out->err_val = new_err; return out;
+  ```)
+(defn result-flat-map [r :ptr<void> f :ptr<void>] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  if (res == NULL || !res->is_ok) return r;
+  return (void *)((int64_t (*)(int64_t))f)(res->ok_val);
+  ```)
+(defn result-or [r :ptr<void> alt :ptr<void>] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  if (res != NULL && res->is_ok) return r; return alt;
+  ```)
+(defn result-or-else [r :ptr<void> f :ptr<void>] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  if (res != NULL && res->is_ok) return r;
+  int64_t ev = res ? res->err_val : 0;
+  return (void *)((int64_t (*)(int64_t))f)(ev);
+  ```)
+
+(defn double-it [n :int] :int (* n 2))
+(defn negate [n :int] :int (- 0 n))
+(defn safe-double [n :int] :ptr<void> (ok (* n 2)))
+
+(defn main [] :int
+  ;; result-map: ok path applies f
+  (println (ok-val (result-map (ok 5) double-it)))
+  ;; result-map: err path propagates unchanged
+  (println (err? (result-map (err 3) double-it)))
+  ;; result-map-err: err path applies f
+  (println (err-val (result-map-err (err 4) negate)))
+  ;; result-map-err: ok path unchanged
+  (println (ok? (result-map-err (ok 7) negate)))
+  ;; result-flat-map: ok path chains
+  (println (ok-val (result-flat-map (ok 6) safe-double)))
+  ;; result-flat-map: err path propagates
+  (println (err? (result-flat-map (err 9) safe-double)))
+  ;; result-or: ok wins
+  (println (ok-val (result-or (ok 11) (ok 99))))
+  ;; result-or: err falls back
+  (println (ok-val (result-or (err 0) (ok 22))))
+  ;; result-or-else: ok wins
+  (println (ok-val (result-or-else (ok 33) safe-double)))
+  ;; result-or-else: err calls f
+  (println (ok-val (result-or-else (err 5) safe-double)))
+  ;; result-unwrap-or default
+  (println (result-unwrap-or (err 0) 77))
+  ;; result-expect success
+  (println (result-expect (ok 42) "no panic"))
+  0)

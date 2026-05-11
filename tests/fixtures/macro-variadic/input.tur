@@ -1,0 +1,27 @@
+;; Test variadic macros with & rest parameter and ~@ splicing
+
+;; Wrap multiple body expressions in a do block
+(defmacro do-all [& body]
+  (do ~@body))
+
+;; Print a label then run variadic body
+(defmacro section [label & body]
+  (do
+    (println label)
+    ~@body))
+
+(defn main [] :int
+  ;; One rest arg
+  (do-all (println 10))
+
+  ;; Multiple rest args spliced
+  (do-all
+    (println 20)
+    (println 30))
+
+  ;; Fixed + variadic args
+  (section "section-start"
+    (println 40)
+    (println 50))
+
+  0)

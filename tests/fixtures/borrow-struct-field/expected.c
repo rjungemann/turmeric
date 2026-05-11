@@ -160,6 +160,18 @@ void tur_throw(int payload_type, void *payload, int line, const char *file) {
     }
 }
 
+/* Phase R2: tur_panic */
+static int tur_panic_in_progress = 0;
+static void tur_panic(const char *msg) {
+    if (tur_panic_in_progress) {
+        fprintf(stderr, "double panic: aborting\n");
+        abort();
+    }
+    tur_panic_in_progress = 1;
+    fprintf(stderr, "panic: %s\n", msg ? msg : "(no message)");
+    abort();
+}
+
 /* Phase 19: Algebraic effect handler chain */
 typedef struct EffectHandlerCase EffectHandlerCase;
 struct EffectHandlerCase {
@@ -547,24 +559,23 @@ typedef struct Point {
 
 
 int main() {
+        int64_t __t0;
         {
             Point p_2 = (Point){.x = INT64_C(3), .y = INT64_C(4)};
             (void)p_2;
+            printf("%lld\n", (long long)((p_2).x));
+            printf("%lld\n", (long long)((p_2).y));
             {
-                int64_t n_3 = INT64_C(10);
-                (void)n_3;
-                {
-                    const void * r_4 = &n_3;
-                    (void)r_4;
-                    int64_t __t0 = *((int64_t *)r_4);
-                    printf("%lld\n", (long long)(__t0));
-                }
+                const void * rx_3 = &(p_2).x;
+                (void)rx_3;
+                int64_t __t1 = *((int64_t *)rx_3);
+                printf("%lld\n", (long long)(__t1));
             }
-            printf("%lld\n", (long long)(INT64_C(0)));
+            int64_t __t2;
+            __t2 = INT64_C(0);
+            __t0 = __t2;
         }
-        int64_t __t1;
-        __t1 = INT64_C(0);
-        return (int)__t1;
+        return (int)__t0;
 }
 
 

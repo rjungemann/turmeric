@@ -1,0 +1,18 @@
+;; Test case built-in form
+
+(defn main [] :int
+  ;; Basic integer case
+  (let [x 2]
+    (case x
+      1 (println "one")
+      2 (println "two")
+      3 (println "three")
+      :else (println "other")))
+
+  ;; :else branch
+  (let [y 99]
+    (case y
+      0 (println "zero")
+      :else (println "unknown")))
+
+  0)

@@ -1,0 +1,10 @@
+;; Phase 19: ref is live during perform — borrow check still applies correctly.
+;; The ref binding remains valid across the perform/resume boundary.
+(defeffect GetBase [] :int)
+
+(defn sum-with-base [] :int
+  (let [base (ref 100)]
+    (+ (deref base) (perform (GetBase)))))
+
+(println (handle (sum-with-base)
+  (GetBase [] k) (resume k 42)))

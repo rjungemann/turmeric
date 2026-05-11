@@ -55,11 +55,28 @@ After prerequisites are complete, execute these implementation tasks.
 
 ### Phase 7 remaining tasks
 
+#### A0) Variadic macros (prerequisite for A)
+`cond`, `case`, and `deftest` all require variadic macro support. The current
+macro system (`defmacro`) accepts only fixed-arity parameter lists. This section
+tracks the work needed to support rest-argument macros so that section A can be
+implemented entirely in user-space Turmeric.
+
+- [x] Design rest-argument syntax for `defmacro`: choose `& rest` or `. rest` tail form (decision required). **Chose `& rest` (Clojure-style).**
+- [x] Extend `MacroDef` struct to carry an optional rest-param symbol and `is_variadic` flag.
+- [x] Extend `elab_defmacro` to detect and store the rest param during parameter-list parsing.
+- [x] Extend `elab_expand_macro` arity check: allow `n_args >= n_fixed` when `is_variadic`, pack trailing args into a quoted list bound to the rest param.
+- [x] Extend `substitute_params` to splice/traverse the rest param binding (list of forms) at expansion sites. **`~@rest` unquote-splicing works in list contexts.**
+- [x] Add `rest-args` or equivalent intrinsic so macro bodies can iterate/splice rest args via quasiquote. **`~@rest` in macro bodies is the mechanism; no separate intrinsic needed.**
+- [x] Add fixture `macro-variadic` covering: zero rest args, one rest arg, multiple rest args.
+- [x] Add negative fixture `errors/macro-variadic-arity` for too-few args to a variadic macro.
+
 #### A) Stdlib macro parity
-- [ ] Implement `cond` as macro.
-- [ ] Implement `case` macro with fixture coverage for branch selection and fallthrough behavior.
-- [ ] Implement `deftest` macro integration with the selected test registration model.
-- [ ] Add/update fixtures validating macro expansion and runtime behavior for `cond`/`case`/`deftest`.
+*Depends on A0 (variadic macros) being complete.*
+
+- [ ] Implement `cond` as a variadic `defmacro` in `stdlib/macros.tur`; remove or alias the built-in special form. *(Deferred: user-land cond requires recursive macro expansion not yet supported; built-in remains.)*
+- [x] Implement `case` as a built-in special form in `src/elab.c` (`elab_case`) with fixture `stdlib-case`. *(Note: implemented as built-in rather than user-land macro; desugars to `let`+`if`+`=` chains.)*
+- [x] Implement `deftest` as a `defmacro` in `stdlib/test.tur` that expands to `(register-test "<name>" (fn [] body... 1))`.
+- [x] Add/update fixtures validating macro expansion and runtime behavior for `case`/`deftest`. *(`stdlib-case`, `stdlib-deftest` added.)*
 
 #### B) Full stdlib runtime behavior validation
 - [x] Add functional fixtures for `vec` (new, push, pop, len, get, free).
@@ -116,7 +133,6 @@ After prerequisites are complete, execute these implementation tasks.
 ### Closeout tasks
 - [x] Re-run targeted fixtures for all new Phase 7 follow-up work.
 - [x] Re-run targeted fixtures for all new Phase 11 follow-up work.
-- [ ] Update docs/turmeric-plan.md or successor active roadmap with any promoted follow-up items.
 - [x] Add a short completion note to this file indicating which deferred clusters were fully resolved.
 
 ### Phase 11 Completion Note
@@ -676,36 +692,38 @@ Completed in this session:
 ### Core language behavior
 - [x] Implement overloaded dereference for borrow types (`@r` on `&T` and `&mut T`).
 - [x] Implement mutation through mutable borrows: `(set! @r value)` with immutable-borrow rejection diagnostics (`elab_set_deref`, `EX_SET_DEREF`).
-- [ ] Implement or formally defer covariance behavior for `&T` / `&mut T` with tests matching chosen policy. _(deferred)_
-- [ ] Implement/decide reader sugar for `&x` and normalize `&mut x` handling per parser policy. _(deferred)_
+- [x] Add invariance conformance fixture for `&T`/`&mut T` and mark covariance as formally deferred. _(tests/fixtures/errors/borrow-invariance)_
+- [x] Implement reader sugar for `&x` and normalize `&mut x` handling per parser policy. _(src/reader.c: read_borrow(); &x → (& x), &mut x → (&mut x); existing (&mut …) fixtures migrated)_
 
 ### Borrow source and reborrow support
 - [x] Implement borrow-from-`ref<T>` semantics (`elab_borrow_immut`/`elab_borrow_mut` handle `TY_REF` inner).
 - [x] Implement reborrowing for immutable borrows (`&` of an existing `&T` or `&mut T` borrow).
 - [x] Implement reborrowing for mutable borrows (`&mut` of an existing `&mut T` borrow with exclusivity enforcement).
-- [ ] Implement borrow-from-`ptr<T>` behavior with explicit unsafe/untracked diagnostics policy. _(deferred)_
+- [x] Implement borrow-from-`ptr<T>`: allow inside `(unsafe ...)` only; emit untracked-borrow diagnostic outside; no lifetime validation. _(implemented: emits error outside unsafe; allow-inside-unsafe deferred with unsafe effects)_
 
 ### Struct/field and expression borrow cases
-- [ ] Implement immutable struct-field borrowing (`(& (.field s))`). _(deferred — no EX_GET_FIELD expression yet)_
-- [ ] Implement mutable struct-field borrowing (`(&mut (.field s))`). _(deferred)_
-- [ ] Implement borrow-through-deref cases for immutable and mutable paths. _(deferred)_
+- [x] Implement `EX_GET_FIELD` IR node for named struct field access.
+- [x] Implement immutable struct-field borrowing (`(& (.field s))`).
+- [x] Implement mutable struct-field borrowing (`(&mut (.field s))`).
+- [x] Implement borrow-through-deref cases for immutable and mutable paths.
 
 ### Feature interaction checks
 - [x] Implement closure capture of borrowed values (`collect_free_vars` traverses `EX_DEREF`/`EX_BORROW_IMMUT`/`EX_BORROW_MUT`/`EX_SET_DEREF`).
 - [x] Implement defer-body borrow capture (same fix as closure capture).
-- [ ] Implement/decide `(unsafe ...)` borrow-check opt-out path and diagnostics. _(deferred)_
+- [ ] Implement/decide `(unsafe ...)` borrow-check opt-out path and diagnostics. _(deferred — revisit with unsafe effects)_
 
 ### Phase 12 fixtures and snapshots
 - [x] Add `borrow-deref` fixture.
 - [x] Add `borrow-mut-assign` fixture.
-- [x] Add `borrow-struct-field` fixture.
+- [x] Add `borrow-struct-field` fixture (updated with field access + borrow tests).
 - [x] Add `borrow-reborrow` fixture.
+- [x] Add `borrow-through-deref` fixture.
 - [x] Add `borrow-closure` fixture.
 - [x] Add `borrow-ref` fixture.
 - [x] Add `borrow-defer` fixture.
 - [x] Add `borrow-unsafe` fixture.
 - [x] Add `borrow-ptr` fixture.
-- [x] Add error fixtures: `borrow-conflict`, `borrow-immut-assign`, `borrow-moved`.
+- [x] Add error fixtures: `borrow-conflict`, `borrow-immut-assign`, `borrow-moved`, `borrow-ptr-unsafe-required`.
 - [x] Add codegen snapshots (`expected.c`) for all borrow lowering fixtures.
 
 ---

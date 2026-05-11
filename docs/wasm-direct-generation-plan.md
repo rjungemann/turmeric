@@ -94,18 +94,22 @@ C Compiler (cc) → Native Binary
 
 ### WASM Model
 
-```
-┌─────────────────────────────────────────┐
-│              Module                        │
-│  ┌──────────┐  ┌──────────┐  ┌────────┐ │
-│  │  Types   │  │ Functions│  │ Memory  │ │
-│  │ (imports)│  │ (code)    │  │ (linear) │ │
-│  └──────────┘  └──────────┘  └────────┘ │
-│  ┌──────────┐  ┌──────────┐  ┌────────┐ │
-│  │ Globals  │  │  Data    │  │ Exports │ │
-│  │          │  │ (const)  │  │         │ │
-│  └──────────┘  └──────────┘  └────────┘ │
-└─────────────────────────────────────────┘
+```mermaid
+graph TD
+    Module["WebAssembly Module"]
+    Types["Types<br/>(imports)"]
+    Functions["Functions<br/>(code)"]
+    Memory["Memory<br/>(linear)"]
+    Globals["Globals"]
+    Data["Data<br/>(const)"]
+    Exports["Exports"]
+
+    Module --> Types
+    Module --> Functions
+    Module --> Memory
+    Module --> Globals
+    Module --> Data
+    Module --> Exports
 ```
 
 ### WASM Types (MVP)
@@ -178,23 +182,20 @@ local.tee N  ;; get and set local N
 
 ### Architecture: Dual Backend
 
-```
-Turmeric Source (.tur)
-    ↓
-Reader → Forms
-    ↓
-Macro Expansion
-    ↓
-Elaboration → Expr (Typed IR)
-    ↓
-Closure Conversion
-    ↓
-Defer Injection
-    ↓
-┌─────────────┐
-│  C Backend   │ → .c → cc → Native
-│  WASM Backend│ → .wasm → Runtime
-└─────────────┘
+```mermaid
+graph TD
+    Source[".tur Source"]
+    Reader["Reader → Forms"]
+    Macro["Macro Expansion"]
+    Elab["Elaboration → Expr (Typed IR)"]
+    CC["Closure Conversion"]
+    DI["Defer Injection"]
+    CBack["C Backend → .c → cc → Native"]
+    WBack["WASM Backend → .wasm → Runtime"]
+
+    Source --> Reader --> Macro --> Elab --> CC --> DI
+    DI --> CBack
+    DI --> WBack
 ```
 
 ### Implementation Strategy
@@ -266,18 +267,19 @@ void wasm_lower_expr(WasmModule*, Expr*, WasmEmitCtx*);
 - [ ] Test fixture: `counter-ref.tur` with `ref<int>`
 
 **Memory Layout Design:**
+
+```mermaid
+graph LR
+    G["Globals\n0x0000–0x0FFF"]
+    H["Heap Allocations\n0x1000 → (bump allocator)"]
+    S["Stack\n(WASM locals)"]
+    G --> H --> S
 ```
-Linear Memory:
-┌────────────────────────────────────────┐
-│  [Globals]  [Heap Allocations]  [Stack] │
-│  0...      ...               ...     ... │
-└────────────────────────────────────────┘
 
 Heap bump allocator:
 - `tur_alloc` uses a global i64 offset
 - Each allocation increments offset
 - No free (defer handles cleanup via reset)
-```
 
 **Exit Criterion:** `(defn make-counter [] (ref 0))` compiles, counter can be incremented and dereferenced.
 
@@ -666,48 +668,16 @@ void wasm_lower_expr(WasmEmitCtx* ctx, Expr* expr) {
 
 ### Linear Memory Layout
 
-```
-┌───────────────────────────────────────────────────────┐
-│  Linear Memory (grows as needed)                          │
-│  0x00000000 ┬───────────────────────────────────────────┤
-│              │                                           │
-│              │  ┌─────────────┐                          │
-│              │  │ Globals     │  Fixed addresses         │
-│              │  │  - g0       │  0x0000 - 0x0FFF        │
-│              │  │  - g1       │                          │
-│              │  │  ...        │                          │
-│              │  └─────────────┘                          │
-│              │                                           │
-│              ├───────────────────────────────────────────┤
-│              │  Heap Region                               │
-│              │  ┌─────────────┐                          │
-│              │  │ Bump Alloc   │  Grows upward            │
-│              │  │  - ref<T>    │  0x1000 →                 │
-│              │  │  - structs   │                          │
-│              │  │  - arrays   │                          │
-│              │  └─────────────┘                          │
-│              │                                           │
-│              ├───────────────────────────────────────────┤
-│              │  Stack Region                              │
-│              │  ┌─────────────┐                          │
-│              │  │ Function    │  Grows downward          │
-│              │  │  locals     │  (WASM uses explicit    │
-│              │  │              │   local.get/set)         │
-│              │  └─────────────┘                          │
-│              │                                           │
-│              ├───────────────────────────────────────────┤
-│              │  Closure Environments                       │
-│              │  ┌─────────────┐                          │
-│              │  │ env_0      │  Captured by fn_0        │
-│              │  │ env_1      │  Captured by fn_1        │
-│              │  │ ...        │                          │
-│              │  └─────────────┘                          │
-│              │                                           │
-│              ├───────────────────────────────────────────┤
-│              │  Function Table                             │
-│              │  (for indirect calls without GC proposal)   │
-│              └───────────────────────────────────────────┘
-└───────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    LM["Linear Memory (grows as needed)"]
+    Globals["Globals\n0x0000 – 0x0FFF (fixed addresses)"]
+    Heap["Heap Region (Bump Allocator)\n0x1000 → (grows upward)\nref&lt;T&gt;, structs, arrays"]
+    Stack["Stack Region\nFunction locals (grows downward)\nWASM explicit local.get/set"]
+    Closures["Closure Environments\nenv_0 (captured by fn_0)\nenv_1 (captured by fn_1)"]
+    FuncTable["Function Table\n(indirect calls without GC proposal)"]
+
+    LM --> Globals --> Heap --> Stack --> Closures --> FuncTable
 ```
 
 ### Memory Management Strategy

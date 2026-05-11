@@ -246,6 +246,7 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
         case EX_WEAK_UPGRADE:
         case EX_WEAK_PRED:
         case EX_REF_PRED:
+        case EX_CONT_PRED:
             /* These are reference operations - check the inner expression */
             if (e->kind == EX_REF) {
                 return borrow_check_expr_recursive(ctx, e->as.ref_.expr);
@@ -273,6 +274,8 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
                 return borrow_check_expr_recursive(ctx, e->as.weak_pred_.expr);
             } else if (e->kind == EX_REF_PRED) {
                 return borrow_check_expr_recursive(ctx, e->as.ref_pred_.expr);
+            } else if (e->kind == EX_CONT_PRED) {
+                return borrow_check_expr_recursive(ctx, e->as.cont_pred_.expr);
             }
             return true;
             
@@ -295,6 +298,9 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
         case EX_MAKE_STRUCT:
             /* External/inline C and struct literals are trusted */
             return true;
+
+        case EX_GET_FIELD:
+            return borrow_check_expr_recursive(ctx, e->as.get_field_.struct_expr);
             
         case EX_PROGRAM:
             for (uint32_t i = 0; i < e->as.program.n; i++) {
@@ -307,6 +313,9 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
         case EX_THROW:
             /* Check the payload expression */
             return borrow_check_expr_recursive(ctx, e->as.throw_.payload);
+        /* Phase R2: Panic */
+        case EX_PANIC:
+            return borrow_check_expr_recursive(ctx, e->as.panic_.payload);
         case EX_TRY:
             /* Check try body and all handlers */
             if (!borrow_check_expr_recursive(ctx, e->as.try_.body)) {

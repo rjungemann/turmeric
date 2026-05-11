@@ -1,0 +1,14 @@
+;; Phase 19: (cont? k) — check if a continuation is unconsumed.
+;; For Phase 19 algebraic-effect k values (CK_MOVE dummies), cont? always
+;; returns true since the static one-shot check prevents double-resume.
+(defeffect Ask [] :int)
+
+(defn ask-with-check [] :int
+  (perform (Ask)))
+
+;; The handler checks (cont? k) before resuming.
+(println (handle (ask-with-check)
+  (Ask [] k)
+  (do
+    (println (cont? k))
+    (resume k 42))))

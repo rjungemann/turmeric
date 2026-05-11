@@ -192,6 +192,11 @@ void expr_print(Buf *b, const Expr *e) {
             expr_print(b, e->as.ref_pred_.expr);
             buf_putc(b, ')');
             break;
+        case EX_CONT_PRED:
+            buf_puts(b, "(cont? ");
+            expr_print(b, e->as.cont_pred_.expr);
+            buf_putc(b, ')');
+            break;
         /* Phase 12: Borrow traits */
         case EX_BORROW_IMMUT:
             buf_puts(b, "(& ");
@@ -218,6 +223,12 @@ void expr_print(Buf *b, const Expr *e) {
         case EX_THROW:
             buf_puts(b, "(throw ");
             expr_print(b, e->as.throw_.payload);
+            buf_putc(b, ')');
+            break;
+        /* Phase R2: Panic */
+        case EX_PANIC:
+            buf_puts(b, "(panic ");
+            expr_print(b, e->as.panic_.payload);
             buf_putc(b, ')');
             break;
         case EX_TRY:
@@ -306,6 +317,9 @@ void expr_print(Buf *b, const Expr *e) {
             break;
         case EX_MAKE_STRUCT:
             buf_puts(b, "<make-struct>");
+            break;
+        case EX_GET_FIELD:
+            buf_puts(b, "<get-field>");
             break;
     }
 }

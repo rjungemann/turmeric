@@ -3,7 +3,7 @@
 
 (defn main [] :int
   (let [^mut x 10]
-    (let [rm (&mut x)]
+    (let [rm &mut x]
       (set! @rm 99))   ; write 99 through &mut int
     (println x))          ; prints 99
   0)

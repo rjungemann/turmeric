@@ -136,4 +136,9 @@ void tur_cont_drop(tur_cont *cont);
  * Returns: true if the continuation has been resumed, false otherwise. */
 bool tur_cont_consumed(tur_cont *cont);
 
+/* Phase R2: Panic — print message to stderr, then abort.
+ * Re-entry (double panic) calls abort() immediately. */
+extern int tur_panic_in_progress;
+void tur_panic(const char *msg);
+
 #endif /* TUR_RUNTIME_H */
