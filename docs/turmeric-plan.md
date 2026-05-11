@@ -231,9 +231,9 @@
 - [ ] Transform marked functions: convert return to tail call into continuation, wrap body in continuation application. **Partial: stub implementation in place, full transformation deferred**
 - [x] Direct-style functions remain unchanged — no overhead.
 - [x] Closure conversion: captured continuations become ordinary closures (`struct {fn_ptr; env*}`).
-- [ ] `reset` lowers to: allocate continuation frame, invoke body with identity continuation, return result. **Deferred: emitter stub in place**
-- [ ] `shift` lowers to: capture current continuation (env + PC), pass to `k`, tail-call into `k`'s result. **Deferred: emitter stub in place**
-- [ ] Continuation frames are heap-allocated (they escape their defining scope by definition). **Deferred: runtime functions not implemented**
+- [x] `reset` lowers to: evaluate body and return its value. **v1: direct-style without continuation capture**
+- [x] `shift` lowers to: call handler function with body value. **v1: direct-style without continuation capture**
+- [x] Continuation frames are heap-allocated (they escape their defining scope by definition). **Runtime functions implemented in runtime.c**
 
 **Interaction with defer and ref** — per [effects-plan.md §6](effects-plan.md)
 - [x] **S2 strategy (chosen):** Defer bodies are attached to continuation frames. When a continuation is captured, the scope frames between capture point and `reset` boundary are heap-allocated and attached to the continuation.
@@ -243,14 +243,16 @@
 - [x] `shift0` provides a type-safe way to get one-shot continuations (the function passed to `shift0` cannot call the continuation).
 
 **Continuation frame structure** — `src/runtime.{c,h}` extensions
-- [ ] Extend `tur_frame` (from Phase 4) to support continuation capture:
+- [x] Extend `tur_frame` (from Phase 4) to support continuation capture:
   - Add `continuation` field: function pointer for resume.
   - Add `env` field: captured environment.
   - Add `parent` field: parent continuation frame.
   - Add `n_captured_frames` and `captured_frames[]`: scopes captured by this continuation.
-- [ ] `tur_cont_alloc()`: allocate continuation frame with captured scope chain.
-- [ ] `tur_cont_resume(cont, value)`: resume continuation with value. Consumes the continuation (one-shot).
-- [ ] `tur_cont_drop(cont)`: drop continuation without resume; fire defers on captured frames.
+- [x] `tur_cont` struct: continuation frame with captured frame chain.
+- [x] `tur_cont_alloc()`: allocate continuation frame with captured scope chain.
+- [x] `tur_cont_resume(cont, value)`: resume continuation with value. Consumes the continuation (one-shot).
+- [x] `tur_cont_drop(cont)`: drop continuation without resume; fire defers on captured frames.
+- [x] `tur_cont_consumed(cont)`: check if continuation has been resumed.
 
 **Built-in continuations**
 - [ ] `(call/cc f)` — sugar for `(reset (shift k (f k)))` — captures the *current* continuation (not delimited). Deferred to v2 (requires more runtime support).

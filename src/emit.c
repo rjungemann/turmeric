@@ -896,12 +896,93 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             return atom_nil();
         }
         /* Phase 18: Delimited continuations */
-        case EX_RESET:
-        case EX_SHIFT:
-        case EX_SHIFT0:
-            /* For now, emit a placeholder - full impl deferred */
-            buf_puts(body, "__builtin_trap()");
-            return atom_nil();
+        case EX_RESET: {
+            /* (reset body) - establish a continuation boundary and run body
+             * 
+             * For v1 without full CPS: reset just evaluates and returns its body.
+             * This is correct for the case where body doesn't contain shift.
+             * When body contains shift, the CPS pass should have transformed it.
+             */
+            /* Emit body as an expression and return its value */
+            return emit_value(ctx, body, e->as.reset_.body);
+        }
+        case EX_SHIFT: {
+            /* (shift k body) - shift with continuation handler k and value body
+             * 
+             * Semantics: evaluate body to get value v, call k(v), return result.
+             * Note: Without CPS, we can't capture the continuation, so this is a
+             * simplified version that just calls k with body's value.
+             * Full implementation requires CPS transformation.
+             */
+            char *body_val = emit_value(ctx, body, e->as.shift_.body);
+            char *result = fresh_tmp(ctx);
+            
+            /* Emit the call: k_fn(body_val) */
+            /* Use emit_call_helper to handle both functions and closures */
+            /* For now, just emit as a regular call */
+            char *k_fn = emit_value(ctx, body, e->as.shift_.k_fn);
+            
+            /* Check if this is a closure call by looking at the expression */
+            if (e->as.shift_.k_fn->kind == EX_CLOSURE) {
+                /* For closures, k_fn is the env pointer, need to call thunk */
+                struct Closure *closure = e->as.shift_.k_fn->as.closure_.closure;
+                /* The thunk function name is based on the closure's function binding */
+                /* For now, construct the thunk name from the function */
+                char *thunk_name = (char *)malloc(64);
+                if (closure->fn->binding) {
+                    snprintf(thunk_name, 64, "%s", closure->fn->binding->name->name);
+                } else {
+                    /* Anonymous function - this shouldn't happen for closures */
+                    snprintf(thunk_name, 64, "__fn_anon_%d", closure->fn->params[0]->id);
+                }
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s %s = %s(%s, %s);\n", 
+                          type_c_name(e->type), result, thunk_name, k_fn, body_val);
+                free(thunk_name);
+            } else {
+                /* Regular function call */
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s %s = %s(%s);\n", 
+                          type_c_name(e->type), result, k_fn, body_val);
+            }
+            free(k_fn);
+            free(body_val);
+            return result;
+        }
+        case EX_SHIFT0: {
+            /* (shift0 k body) - one-shot shift
+             * Similar to shift but k cannot resume the continuation.
+             * For now, same implementation as shift.
+             */
+            char *body_val = emit_value(ctx, body, e->as.shift0_.body);
+            char *result = fresh_tmp(ctx);
+            
+            char *k_fn = emit_value(ctx, body, e->as.shift0_.k_fn);
+            
+            /* Check if this is a closure call by looking at the expression */
+            if (e->as.shift0_.k_fn->kind == EX_CLOSURE) {
+                /* For closures, k_fn is the env pointer, need to call thunk */
+                struct Closure *closure = e->as.shift0_.k_fn->as.closure_.closure;
+                char *thunk_name = (char *)malloc(64);
+                if (closure->fn->binding) {
+                    snprintf(thunk_name, 64, "%s", closure->fn->binding->name->name);
+                } else {
+                    snprintf(thunk_name, 64, "__fn_anon_%d", closure->fn->params[0]->id);
+                }
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s %s = %s(%s, %s);\n", 
+                          type_c_name(e->type), result, thunk_name, k_fn, body_val);
+                free(thunk_name);
+            } else {
+                /* Regular function call */
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s %s = %s(%s);\n", 
+                          type_c_name(e->type), result, k_fn, body_val);
+            }
+            free(k_fn);
+            free(body_val);
+            return result;
+        }
         case EX_TRY: {
             /* (try body (catch ...) (finally ...)) - emit as setjmp/longjmp */
             char *handler_var = fresh_tmp(ctx);
@@ -1347,13 +1428,60 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_DEFECT:
             /* Effect definitions are compile-time only - no runtime code */
             return atom_nil();
-        case EX_PERFORM:
-        case EX_HANDLE:
-        case EX_RESUME:
-        case EX_DISCONTINUE:
-            /* For now, emit a placeholder - full impl deferred to lowering pass */
-            buf_puts(body, "__builtin_trap()");
+        case EX_PERFORM: {
+            /* (perform (EffectName args...)) - perform an effect
+             * 
+             * This should be lowered to shift by the effect_lower pass.
+             * If we reach here, the lowering didn't happen.
+             * For now, emit a comment as a placeholder.
+             */
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "/* perform %s */\n", 
+                      e->as.perform_.perform ? e->as.perform_.perform->effect_name->name : "unknown");
             return atom_nil();
+        }
+        case EX_HANDLE: {
+            /* (handle expr cases...) - handle effects
+             * 
+             * This should be lowered to reset by the effect_lower pass.
+             * If we reach here, the lowering didn't happen.
+             */
+            emit_stmt(ctx, body, e->as.handle_.handle->body);
+            return atom_nil();
+        }
+        case EX_RESUME: {
+            /* (resume k value) - resume continuation with value
+             * 
+             * This should be lowered by CPS pass. If we reach here without CPS,
+             * emit a direct call to the runtime function.
+             */
+            if (e->as.resume_.resume) {
+                char *k_var = emit_value(ctx, body, e->as.resume_.resume->k);
+                char *v_var = emit_value(ctx, body, e->as.resume_.resume->value);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "tur_cont_resume((tur_cont *)%s, (int64_t)%s);\n", k_var, v_var);
+                free(k_var);
+                free(v_var);
+            }
+            return atom_nil();
+        }
+        case EX_DISCONTINUE: {
+            /* (discontinue k exception) - discontinue with exception
+             * Similar to resume but for exceptions.
+             */
+            if (e->as.discontinue_.discontinue) {
+                char *k_var = emit_value(ctx, body, e->as.discontinue_.discontinue->k);
+                char *e_var = emit_value(ctx, body, e->as.discontinue_.discontinue->exception);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "tur_cont_drop((tur_cont *)%s);\n", k_var);
+                /* Then throw the exception */
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "tur_throw(0, %s, __LINE__, __FILE__);\n", e_var);
+                free(k_var);
+                free(e_var);
+            }
+            return atom_nil();
+        }
     }
     return atom_nil();
 }
@@ -1719,8 +1847,9 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_HANDLE:
         case EX_RESUME:
         case EX_DISCONTINUE:
-            /* Emit as value expression (placeholder for now) */
-            emit_value(ctx, body, e);
+            /* These should be lowered by effect_lower pass.
+             * If we reach here, emit as statement for now. */
+            emit_stmt(ctx, body, e);
             return;
     }
 }

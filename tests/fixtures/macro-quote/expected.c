@@ -34,6 +34,16 @@ static void tur_frame_fire_lifo(tur_frame *f) {
     for (int i = f->n - 1; i >= 0; i--) f->defers[i](f->envs[i]);
     f->n = 0;
 }
+static void tur_frame_fire_chain(tur_frame *f) {
+    tur_frame *frames[64];
+    int n_frames = 0;
+    for (tur_frame *cur = f; cur != NULL && n_frames < 64; cur = cur->parent) {
+        frames[n_frames++] = cur;
+    }
+    for (int i = n_frames - 1; i >= 0; i--) {
+        tur_frame_fire_lifo(frames[i]);
+    }
+}
 
 /* Exception handling - Phase 17 */
 typedef struct tur_exception tur_exception;

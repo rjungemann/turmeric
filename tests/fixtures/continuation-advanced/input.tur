@@ -1,0 +1,38 @@
+;;
+;; Phase 19: Delimited continuations - advanced tests
+;;
+
+;; Test 1: Nested reset boundaries
+(defn test-nested-reset [] :int
+  (reset
+    (+ 1
+       (reset
+         (+ 10 (shift (fn [v] (* v 2)) 5))))))
+
+;; Test 2: Shift that doesn't resume (returns different value)
+(defn test-shift-return-different [] :int
+  (reset
+    (shift (fn [v] (+ v 100)) 7)))
+
+;; Test 3: Multiple shifts in sequence
+(defn test-multiple-shifts [] :int
+  (reset
+    (let [x (shift (fn [v] (* v 2)) 3)]
+      (shift (fn [v] (+ x v)) 4))))
+
+;; Test 4: Shift with function that doesn't use continuation
+(defn test-shift-ignores-k [] :int
+  (reset
+    (shift (fn [v] 42) 10)))
+
+;; Test 5: Reset with no shift
+(defn test-reset-no-shift [] :int
+  (reset 123))
+
+;; Test 6: Deeply nested shift
+(defn test-deeply-nested-shift [] :int
+  (reset
+    (let [a 1
+          b 2
+          c 3]
+      (shift (fn [v] (+ a (+ b (+ c v)))) 10))))

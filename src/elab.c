@@ -1974,14 +1974,30 @@ static Expr *elab_shift(Elab *e, const Form *call) {
     }
     Expr *k_expr = elab_form(e, call->as.list.items[1]);
     if (!k_expr) return NULL;
-    if (k_expr->kind != EX_FN && k_expr->kind != EX_CLOSURE) {
+    
+    /* Check if k_expr is a function, closure, or a var referencing a function */
+    bool is_function = false;
+    if (k_expr->kind == EX_FN || k_expr->kind == EX_CLOSURE) {
+        is_function = true;
+    } else if (k_expr->kind == EX_VAR) {
+        /* Check if the binding is a function */
+        Binding *b = k_expr->as.var.binding;
+        if (b && (b->type.kind == TY_FN || b->closure_fn_binding)) {
+            is_function = true;
+        }
+    }
+    
+    if (!is_function) {
         diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
                   "shift requires a function as first argument");
         return NULL;
     }
+    
     Expr *body = elab_form(e, call->as.list.items[2]);
     if (!body) return NULL;
-    Expr *out = expr_new(e->arena, EX_SHIFT, TYPE_NIL, call->span);
+    /* The result type of shift is the result type of calling k_fn with body's value.
+     * For now, we use body's type as a placeholder (full type inference deferred). */
+    Expr *out = expr_new(e->arena, EX_SHIFT, body->type, call->span);
     out->as.shift_.k_fn = k_expr;
     out->as.shift_.body = body;
     return out;
@@ -1997,14 +2013,30 @@ static Expr *elab_shift0(Elab *e, const Form *call) {
     }
     Expr *k_expr = elab_form(e, call->as.list.items[1]);
     if (!k_expr) return NULL;
-    if (k_expr->kind != EX_FN && k_expr->kind != EX_CLOSURE) {
+    
+    /* Check if k_expr is a function, closure, or a var referencing a function */
+    bool is_function = false;
+    if (k_expr->kind == EX_FN || k_expr->kind == EX_CLOSURE) {
+        is_function = true;
+    } else if (k_expr->kind == EX_VAR) {
+        /* Check if the binding is a function */
+        Binding *b = k_expr->as.var.binding;
+        if (b && (b->type.kind == TY_FN || b->closure_fn_binding)) {
+            is_function = true;
+        }
+    }
+    
+    if (!is_function) {
         diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
                   "shift0 requires a function as first argument");
         return NULL;
     }
+    
     Expr *body = elab_form(e, call->as.list.items[2]);
     if (!body) return NULL;
-    Expr *out = expr_new(e->arena, EX_SHIFT0, TYPE_NIL, call->span);
+    /* The result type of shift0 is the result type of calling k_fn with body's value.
+     * For now, we use body's type as a placeholder (full type inference deferred). */
+    Expr *out = expr_new(e->arena, EX_SHIFT0, body->type, call->span);
     out->as.shift0_.k_fn = k_expr;
     out->as.shift0_.body = body;
     return out;

@@ -86,4 +86,54 @@ void tur_frame_fire_lifo(tur_frame *f);
  * This is used for unwinding through multiple scope levels (e.g., on return). */
 void tur_frame_fire_chain(tur_frame *f);
 
+/* Phase 18: Delimited continuations */
+
+/* Maximum number of captured frames per continuation. */
+#define TUR_CONT_MAX_CAPTURED_FRAMES 16
+
+/* A continuation frame for delimited continuations (shift/reset).
+ * 
+ * A continuation captures the execution state at the point of shift,
+ * allowing it to be resumed later. Continuations are one-shot (move-only).
+ * 
+ * Fields:
+ *   cont_fn:      Function pointer to the continuation trampoline.
+ *   env:          Environment captured by the continuation.
+ *   parent:       Parent continuation (for nested reset boundaries).
+ *   n_captured:   Number of tur_frame structures captured by this continuation.
+ *   captured:     Array of captured tur_frame pointers.
+ *   consumed:     Whether this continuation has been resumed (one-shot enforcement).
+ */
+typedef struct tur_cont {
+    void (*cont_fn)(void *env, int64_t value);  /* Function to call to resume */
+    void *env;                                     /* Captured environment */
+    struct tur_cont *parent;                      /* Parent continuation */
+    tur_frame *captured[TUR_CONT_MAX_CAPTURED_FRAMES];
+    int n_captured;
+    bool consumed;  /* One-shot: true after resume */
+} tur_cont;
+
+/* Allocate a new continuation with captured frame chain.
+ * frame_chain: Array of tur_frame pointers to capture.
+ * n_frames:   Number of frames to capture.
+ * Returns:     New tur_cont, or NULL on error. */
+tur_cont *tur_cont_alloc(tur_frame **frame_chain, int n_frames);
+
+/* Resume a continuation with a value. Consumes the continuation (one-shot).
+ * cont:    The continuation to resume.
+ * value:   The value to pass to the continuation.
+ * Note:    After calling this, the continuation is marked as consumed and cannot
+ *          be resumed again. */
+void tur_cont_resume(tur_cont *cont, int64_t value);
+
+/* Drop a continuation without resuming it. Fires defers on captured frames.
+ * cont:    The continuation to drop.
+ * Note:    This is called when a continuation is garbage collected without being resumed. */
+void tur_cont_drop(tur_cont *cont);
+
+/* Check if a continuation has been consumed.
+ * cont:    The continuation to check.
+ * Returns: true if the continuation has been resumed, false otherwise. */
+bool tur_cont_consumed(tur_cont *cont);
+
 #endif /* TUR_RUNTIME_H */
