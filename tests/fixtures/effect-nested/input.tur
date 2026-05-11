@@ -1,0 +1,14 @@
+;; Phase 19: nested handle blocks.
+;; Inner handler shadows the outer for the same effect.
+(defeffect Val [] :int)
+
+(defn get-val [] :int
+  (perform (Val)))
+
+;; Outer supplies 10; inner overrides with 42 for its scope.
+;; Result: 10 + 42 = 52
+(println (handle
+  (+ (get-val)
+     (handle (get-val)
+       (Val [] k) (resume k 42)))
+  (Val [] k) (resume k 10)))

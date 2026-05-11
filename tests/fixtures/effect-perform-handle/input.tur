@@ -1,0 +1,8 @@
+;; Phase 19: basic perform/handle test
+(defeffect Ask [] :int)
+
+(defn use-ask [] :int
+  (+ 1 (perform (Ask))))
+
+(println (handle (use-ask)
+  (Ask [] k) (resume k 41)))

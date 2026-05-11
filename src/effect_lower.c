@@ -92,12 +92,9 @@ static bool expr_contains_effects(const Expr *e) {
 /* Helper: transform a single expression, recursively lowering effects */
 static Expr *lower_expr(Arena *a, SymbolTable *st, Expr *e, EffectEnv *effect_env);
 
-/* Helper: create a shift expression from a perform.
- * For v1, we use a simplified lowering:
- * (perform (E args...)) -> (shift (fn [k] (k value)) value)
- * where value is a placeholder since we don't have the actual effect result yet.
- * The handler cases in the enclosing handle will provide the actual implementation.
- */
+/* Helper: create a shift expression from a perform. (UNUSED in v1 direct-style) */
+static Expr *perform_to_shift(Arena *a, SymbolTable *st, const PerformExpr *perform, Span span)
+    __attribute__((unused));
 static Expr *perform_to_shift(Arena *a, SymbolTable *st, const PerformExpr *perform, Span span) {
     /* For v1: we lower perform to shift where the handler function
      * immediately calls the continuation with a default value.
@@ -174,7 +171,9 @@ static Expr *perform_to_shift(Arena *a, SymbolTable *st, const PerformExpr *perf
     return shift_expr;
 }
 
-/* Helper: transform a handle expression to reset */
+/* Helper: transform a handle expression to reset. (UNUSED in v1 direct-style) */
+static Expr *handle_to_reset(Arena *a, SymbolTable *st, HandleExpr *handle, Span span)
+    __attribute__((unused));
 static Expr *handle_to_reset(Arena *a, SymbolTable *st, HandleExpr *handle, Span span) {
     /* (handle body cases...) -> (reset body)
      * 
@@ -193,7 +192,9 @@ static Expr *handle_to_reset(Arena *a, SymbolTable *st, HandleExpr *handle, Span
     return reset_expr;
 }
 
-/* Helper: transform a resume expression */
+/* Helper: transform a resume expression. (UNUSED in v1 direct-style) */
+static Expr *lower_resume(Arena *a, SymbolTable *st, ResumeExpr *resume, Span span)
+    __attribute__((unused));
 static Expr *lower_resume(Arena *a, SymbolTable *st, ResumeExpr *resume, Span span) {
     Expr *new_k = lower_expr(a, st, resume->k, NULL);
     Expr *new_value = lower_expr(a, st, resume->value, NULL);
@@ -453,21 +454,22 @@ static Expr *lower_expr(Arena *a, SymbolTable *st, Expr *e, EffectEnv *effect_en
             return out;
         }
         
-        /* Phase 19: Algebraic effects */
+        /* Phase 19: Algebraic effects
+         * EX_PERFORM, EX_HANDLE, and EX_RESUME are emitted directly by emit.c
+         * using the runtime effect handler chain (global_effect_handler_chain).
+         * We pass them through unchanged here instead of converting to shift/reset stubs.
+         */
         case EX_DEFECT:
             return e;
         
-        case EX_PERFORM: {
-            return perform_to_shift(a, st, e->as.perform_.perform, e->span);
-        }
+        case EX_PERFORM:
+            return e;
         
-        case EX_HANDLE: {
-            return handle_to_reset(a, st, e->as.handle_.handle, e->span);
-        }
+        case EX_HANDLE:
+            return e;
         
-        case EX_RESUME: {
-            return lower_resume(a, st, e->as.resume_.resume, e->span);
-        }
+        case EX_RESUME:
+            return e;
         
         case EX_DISCONTINUE: {
             return lower_discontinue(a, st, e->as.discontinue_.discontinue, e->span);

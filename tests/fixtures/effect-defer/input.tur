@@ -1,0 +1,10 @@
+;; Phase 19: effects work when perform appears inside a do block that also has defer.
+(defeffect Ask [] :int)
+
+(defn deferred-ask [] :int
+  (do
+    (defer (println "cleanup"))
+    (perform (Ask))))
+
+(println (handle (deferred-ask)
+  (Ask [] k) (resume k 42)))

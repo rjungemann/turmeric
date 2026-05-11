@@ -371,6 +371,7 @@ typedef struct Elab {
     const Symbol *sym_defeffect;  /* defeffect */
     const Symbol *sym_perform;    /* perform */
     const Symbol *sym_handle;     /* handle */
+    const Symbol *sym_try_with;   /* try-with (sugar for handle) */
     const Symbol *sym_resume;     /* resume */
     const Symbol *sym_discontinue;/* discontinue */
     /* Phase 10: GC */
@@ -703,6 +704,7 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_defeffect = intern_cstr(st, "defeffect");
     e->sym_perform = intern_cstr(st, "perform");
     e->sym_handle = intern_cstr(st, "handle");
+    e->sym_try_with = intern_cstr(st, "try-with");
     e->sym_resume = intern_cstr(st, "resume");
     e->sym_discontinue = intern_cstr(st, "discontinue");
     /* Phase 10: GC */
@@ -2620,6 +2622,18 @@ static Expr *elab_shift0(Elab *e, const Form *call) {
 
 /* Phase 19: Algebraic effects */
 
+/* Forward declaration (defined after elab_defeffect) */
+static Expr *elab_handle(Elab *e, const Form *call);
+
+/* (try-with body (EffectName [params] k) handler ...)
+ * Sugar: identical to (handle body ...).
+ * Provided for OCaml/algebraic-effects familiarity.
+ */
+static Expr *elab_try_with(Elab *e, const Form *call) {
+    /* try-with has the same surface syntax as handle; delegate directly. */
+    return elab_handle(e, call);
+}
+
 /* (defeffect Name [param1 : T1, param2 : T2, ...] : R)
  * Declares a new algebraic effect with parameters and a result type.
  */
@@ -2655,20 +2669,50 @@ static Expr *elab_defeffect(Elab *e, const Form *call) {
         return NULL;
     }
     
-    uint8_t n_params = params_f->as.list.len;
+    /* Parse parameter list.
+     * Accepts:
+     *   []          — no params
+     *   [x y]       — untyped params (default to TY_INT)
+     *   [x :int y :cstr] — typed params (name :type pairs)
+     */
+    uint8_t raw_n = (uint8_t)params_f->as.list.len;
+    /* Count actual params (skip type keyword items) */
+    uint8_t n_params = 0;
+    for (uint8_t i = 0; i < raw_n; i++) {
+        Form *f = params_f->as.list.items[i];
+        if (f->tag == F_SYM) n_params++;
+        /* F_KEYWORD items are type annotations, not params */
+    }
     const Symbol **param_names = arena_alloc(e->arena, n_params * sizeof(const Symbol *));
     TypeKind *param_types = arena_alloc(e->arena, n_params * sizeof(TypeKind));
-    
-    for (uint8_t i = 0; i < n_params; i++) {
-        Form *param_f = params_f->as.list.items[i];
-        if (param_f->tag != F_SYM) {
-            diag_emit(DIAG_ERROR, param_f->span,
-                      "defeffect: parameter name must be a symbol");
-            return NULL;
+
+    {
+        uint8_t p = 0;
+        for (uint8_t i = 0; i < raw_n; i++) {
+            Form *param_f = params_f->as.list.items[i];
+            if (param_f->tag == F_KEYWORD) {
+                /* Type annotation for preceding param — already handled below */
+                continue;
+            }
+            if (param_f->tag != F_SYM) {
+                diag_emit(DIAG_ERROR, param_f->span,
+                          "defeffect: parameter name must be a symbol");
+                return NULL;
+            }
+            param_names[p] = param_f->as.sym;
+            /* Check if the next item is a type keyword */
+            TypeKind pk = TY_INT;
+            if (i + 1 < raw_n) {
+                Form *next = params_f->as.list.items[i + 1];
+                if (next->tag == F_KEYWORD) {
+                    pk = typekind_from_symbol(next->as.sym->name);
+                    if (pk == TY_UNKNOWN) pk = TY_INT;
+                    i++; /* Consume the type keyword */
+                }
+            }
+            param_types[p] = pk;
+            p++;
         }
-        param_names[i] = param_f->as.sym;
-        /* For v1, all parameters are TY_PTR_VOID (we don't support typed params yet) */
-        param_types[i] = TY_PTR_VOID;
     }
     
     /* Parse return type.
@@ -2840,6 +2884,7 @@ static Expr *elab_handle(Elab *e, const Form *call) {
         
         cases[i].n_params = params_f->as.list.len;
         cases[i].param_names = arena_alloc(e->arena, cases[i].n_params * sizeof(const Symbol *));
+        cases[i].param_bindings = arena_alloc(e->arena, cases[i].n_params * sizeof(Binding *));
         for (uint8_t j = 0; j < cases[i].n_params; j++) {
             Form *param_f = params_f->as.list.items[j];
             if (param_f->tag != F_SYM) {
@@ -2859,9 +2904,41 @@ static Expr *elab_handle(Elab *e, const Form *call) {
         }
         cases[i].k_name = k_f->as.sym;
         
-        /* Parse handler body from the paired form. */
+        /* Look up effect definition to get param types */
+        Effect *eff = effect_env_lookup(e->effect_env, cases[i].effect_name);
+        
+        /* Create a handler scope with bindings for params and k */
+        Scope handler_scope;
+        scope_init(&handler_scope, e->scope);
+        Scope *saved_scope = e->scope;
+        e->scope = &handler_scope;
+        
+        /* Create bindings for each parameter */
+        for (uint8_t j = 0; j < cases[i].n_params; j++) {
+            /* Use the effect's declared param type if available, else TY_INT */
+            TypeKind pk = (eff && j < eff->constructor->n_params)
+                ? eff->constructor->param_types[j] : TY_INT;
+            Type ptype = type_from_kind(pk);
+            Binding *pb = binding_new(e, cases[i].param_names[j], ptype, false, false, params_f->span);
+            cases[i].param_bindings[j] = pb;
+            scope_add(&handler_scope, pb);
+        }
+        
+        /* Create binding for k (dummy continuation — int64).
+         * Marked CK_MOVE so the one-shot check fires on a second resume/discontinue. */
+        Binding *kb = binding_new(e, cases[i].k_name, TYPE_INT, false, false, k_f->span);
+        kb->type.copy_kind = CK_MOVE;
+        cases[i].k_binding = kb;
+        scope_add(&handler_scope, kb);
+        
+        /* Parse handler body inside the handler scope */
         Form *body_f = call->as.list.items[3 + (i * 2)];
         cases[i].body = elab_form(e, body_f);
+        
+        /* Restore outer scope */
+        e->scope = saved_scope;
+        scope_free(&handler_scope);
+        
         if (!cases[i].body) return NULL;
     }
     
@@ -2893,11 +2970,18 @@ static Expr *elab_resume(Elab *e, const Form *call) {
     Expr *value = elab_form(e, call->as.list.items[2]);
     if (!value) return NULL;
     
+    /* Phase 19: One-shot continuation check.
+     * k is TY_CONT which is CK_MOVE — mark it consumed so any second
+     * (resume k ...) triggers the existing use-after-move diagnostic. */
+    if (k->kind == EX_VAR && type_is_move(k->as.var.binding->type)) {
+        binding_mark_moved(k->as.var.binding, k->span);
+    }
+    
     ResumeExpr *resume = arena_alloc(e->arena, sizeof(ResumeExpr));
     resume->k = k;
     resume->value = value;
     
-    Expr *out = expr_new(e->arena, EX_RESUME, TYPE_NIL, call->span);
+    Expr *out = expr_new(e->arena, EX_RESUME, value->type, call->span);
     out->as.resume_.resume = resume;
     return out;
 }
@@ -2917,6 +3001,11 @@ static Expr *elab_discontinue(Elab *e, const Form *call) {
     
     Expr *exception = elab_form(e, call->as.list.items[2]);
     if (!exception) return NULL;
+    
+    /* Phase 19: One-shot continuation check — same as resume. */
+    if (k->kind == EX_VAR && type_is_move(k->as.var.binding->type)) {
+        binding_mark_moved(k->as.var.binding, k->span);
+    }
     
     DiscontinueExpr *discontinue = arena_alloc(e->arena, sizeof(DiscontinueExpr));
     discontinue->k = k;
@@ -3242,9 +3331,20 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     TypeKind return_kind = TY_NIL;
     uint32_t body_start = 3;
 
-    /* Check for : return-type annotation */
+    /* Phase 19: Skip optional effect-row annotation #{Read Write} before return type.
+     * In v1 these are parsed and accepted but not enforced by the type checker. */
     if (call->as.list.len >= 4) {
-        Form *ret_f = call->as.list.items[3];
+        Form *maybe_row = call->as.list.items[3];
+        if (maybe_row->tag == F_MAP) {
+            diag_emit(DIAG_NOTE, maybe_row->span,
+                      "effect-row annotations are not yet enforced (Phase 19 v1)");
+            body_start = 4;
+        }
+    }
+
+    /* Check for : return-type annotation */
+    if (call->as.list.len >= (body_start + 1)) {
+        Form *ret_f = call->as.list.items[body_start];
         if (ret_f->tag == F_KEYWORD) {
             /* : int, : bool, etc. */
             const Symbol *kw = ret_f->as.sym;
@@ -3260,13 +3360,21 @@ static Expr *elab_defn(Elab *e, const Form *call) {
                 return_kind = TY_CSTR;
             } else if (kw->len == 9 && memcmp(kw->name, "ptr<void>", 9) == 0) {
                 return_kind = TY_PTR_VOID;
+            } else if (kw->len == 3 && memcmp(kw->name, "nil", 3) == 0) {
+                return_kind = TY_NIL;
+            } else if (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0) {
+                return_kind = TY_PTR_VOID;
+            } else if (kw->len == 2 && memcmp(kw->name, "rc", 2) == 0) {
+                return_kind = TY_RC;
+            } else if (kw->len == 4 && memcmp(kw->name, "weak", 4) == 0) {
+                return_kind = TY_WEAK;
             } else {
                 diag_emit(DIAG_ERROR, ret_f->span,
                           "defn: unsupported return type keyword :%s",
                           kw->name);
                 return NULL;
             }
-            body_start = 4;
+            body_start++;
         }
     }
 
@@ -3404,9 +3512,19 @@ static Expr *elab_fn(Elab *e, const Form *call) {
     TypeKind return_kind = TY_NIL;
     uint32_t body_start = 2;
 
-    /* Check for : return-type annotation */
+    /* Phase 19: Skip optional effect-row annotation #{Read Write} before return type. */
     if (call->as.list.len >= 3) {
-        Form *ret_f = call->as.list.items[2];
+        Form *maybe_row = call->as.list.items[2];
+        if (maybe_row->tag == F_MAP) {
+            diag_emit(DIAG_NOTE, maybe_row->span,
+                      "effect-row annotations are not yet enforced (Phase 19 v1)");
+            body_start = 3;
+        }
+    }
+
+    /* Check for : return-type annotation */
+    if (call->as.list.len >= (body_start + 1)) {
+        Form *ret_f = call->as.list.items[body_start];
         if (ret_f->tag == F_KEYWORD) {
             /* : int, : bool, etc. */
             const Symbol *kw = ret_f->as.sym;
@@ -3420,6 +3538,14 @@ static Expr *elab_fn(Elab *e, const Form *call) {
                 return_kind = TY_NIL;
             } else if (kw->len == 9 && memcmp(kw->name, "ptr<void>", 9) == 0) {
                 return_kind = TY_PTR_VOID;
+            } else if (kw->len == 3 && memcmp(kw->name, "nil", 3) == 0) {
+                return_kind = TY_NIL;
+            } else if (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0) {
+                return_kind = TY_PTR_VOID;
+            } else if (kw->len == 2 && memcmp(kw->name, "rc", 2) == 0) {
+                return_kind = TY_RC;
+            } else if (kw->len == 4 && memcmp(kw->name, "weak", 4) == 0) {
+                return_kind = TY_WEAK;
             } else {
                 diag_emit(DIAG_ERROR, ret_f->span,
                           "fn: unsupported return type keyword :%s",
@@ -3427,7 +3553,7 @@ static Expr *elab_fn(Elab *e, const Form *call) {
                 /* params is arena-allocated, no need to free */
                 return NULL;
             }
-            body_start = 3;
+            body_start++;
         }
     }
 
@@ -3643,14 +3769,38 @@ static Expr *elab_extern_c(Elab *e, const Form *call) {
         return NULL;
     }
 
-    /* Parse params - for Phase 2, all params are int64_t
-     * Type prefixes like ^cstr are not yet supported in parameter names */
+    /* Parse params - support type annotations: [name :type ...]
+     * e.g. (extern-c getenv [key :cstr] :cstr) */
     Binding **params = NULL;
     uint8_t n_params = 0;
     TypeKind param_kinds[MAX_FN_ARITY];
 
     for (uint32_t i = 0; i < params_f->as.list.len; i++) {
         Form *p = params_f->as.list.items[i];
+        /* Handle type annotation keyword after the previous param */
+        if (p->tag == F_KEYWORD) {
+            if (n_params == 0) {
+                diag_emit(DIAG_ERROR, p->span,
+                          "extern-c: type annotation without preceding parameter");
+                return NULL;
+            }
+            const Symbol *kw = p->as.sym;
+            TypeKind pk = TY_INT;
+            if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0)        pk = TY_INT;
+            else if (kw->len == 5 && memcmp(kw->name, "float", 5) == 0) pk = TY_FLOAT;
+            else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0)  pk = TY_BOOL;
+            else if (kw->len == 4 && memcmp(kw->name, "cstr", 4) == 0)  pk = TY_CSTR;
+            else if (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0)   pk = TY_PTR_VOID;
+            else if (kw->len == 4 && memcmp(kw->name, "void", 4) == 0)  pk = TY_NIL;
+            else {
+                diag_emit(DIAG_ERROR, p->span,
+                          "extern-c: unsupported parameter type :%s", kw->name);
+                return NULL;
+            }
+            param_kinds[n_params - 1] = pk;
+            params[n_params - 1]->type = type_from_kind(pk);
+            continue;
+        }
         if (p->tag != F_SYM) {
             diag_emit(DIAG_ERROR, p->span,
                       "extern-c: parameter must be a symbol");
@@ -3662,7 +3812,6 @@ static Expr *elab_extern_c(Elab *e, const Form *call) {
             return NULL;
         }
         
-        /* For Phase 2, all extern-c params are treated as int64_t */
         param_kinds[n_params] = TY_INT;
         Binding *b = binding_new(e, p->as.sym, TYPE_INT, false, false, p->span);
         if (n_params == 0) {
@@ -3843,6 +3992,7 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_defeffect) return elab_defeffect(e, call);
     if (name == e->sym_perform)   return elab_perform(e, call);
     if (name == e->sym_handle)    return elab_handle(e, call);
+    if (name == e->sym_try_with)  return elab_try_with(e, call);
     if (name == e->sym_resume)    return elab_resume(e, call);
     if (name == e->sym_discontinue) return elab_discontinue(e, call);
     /* Phase 10: GC */

@@ -1,0 +1,3 @@
+;; Phase 19: unhandled effect aborts at runtime with a diagnostic message.
+(defeffect Boom [] :int)
+(println (perform (Boom)))

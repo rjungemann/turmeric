@@ -1,0 +1,12 @@
+;; Phase 19: with-getenv stdlib handler — delegates GetEnv to C getenv(3).
+(defeffect GetEnv [key :cstr] :cstr)
+(extern-c getenv [key :cstr] :cstr)
+
+(defmacro with-getenv [body]
+  (handle body
+    (GetEnv [key] k) (resume k (getenv key))))
+
+;; Set a predictable env variable in the test (use PATH which is always set).
+(with-getenv
+  (let [_ (perform (GetEnv "PATH"))]
+    (println "getenv ok")))
