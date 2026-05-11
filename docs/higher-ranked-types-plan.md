@@ -25,6 +25,446 @@ Higher-Ranked Types (HRTs) extend Hindley-Milner type inference by allowing univ
 
 ---
 
+## Motivating Examples
+
+This section shows concrete Turmeric code that becomes possible — or becomes dramatically cleaner — with HRT support. Each example is paired with the equivalent without HRTs to illustrate the gap.
+
+### 1. Polymorphic function as an argument (Rank-2)
+
+**Without HRTs** you must pick a concrete type for the callback before passing it:
+
+```clojure
+; Works only for int → int
+(defn apply-twice-int [f : (-> int int), x : int] : int
+  (f (f x)))
+
+(apply-twice-int (fn [n] (+ n 1)) 3)   ; → 5
+; (apply-twice-int to-string 3)         ; ERROR — wrong type
+```
+
+**With HRTs** the callback is truly polymorphic; the caller decides the type at each use site:
+
+```clojure
+(defn apply-twice [f : (forall [a] (-> a a)), x : int] : int
+  (f (f x)))
+
+(apply-twice (fn [n] (+ n 1)) 3)       ; → 5   (a = int)
+(apply-twice (fn [s] (str s "!")) "hi") ; → "hi!!"  (a = string)
+```
+
+> **Why rank-2?** `(forall [a] (-> a a))` appears inside the argument list, not at the top level. Rank-1 inference cannot express "this argument must work for *all* types simultaneously."
+
+---
+
+### 2. `runST` — safe mutable state with phantom regions
+
+A classic HRT application: a stateful computation is parameterised by a phantom region variable `s`. Because `s` never escapes the `run-st` call, the state cell cannot be observed outside the computation.
+
+```clojure
+; State-thread token — 's' is phantom, never a real value
+(deftype ST [s a] (forall [ignored] (-> (STToken s) a)))
+
+; run-st requires f to work for *any* phantom s
+(defn run-st [f : (forall [s] (-> (ST s a) a))] : a
+  (f (make-st-token)))
+
+; new-ref and read-ref only work inside the same ST region
+(defn new-ref  [init : a] : (ST s (STRef s a)) ...)
+(defn read-ref [r : (STRef s a)] : (ST s a) ...)
+(defn write-ref [r : (STRef s a), v : a] : (ST s unit) ...)
+
+; Usage — safe: the STRef cannot leak outside run-st
+(run-st (fn [_tok]
+  (let [r (new-ref 0)]
+    (write-ref r 42)
+    (read-ref r))))   ; → 42
+
+; Compile-time error — STRef escaping its region:
+; (def leaked (run-st (fn [_tok] (new-ref 0))))
+```
+
+> **Why this works:** `run-st` receives `f : (forall [s] ...)`. Inside `f`, `s` is a rigid (skolem) variable. Any `STRef s a` produced inside `f` mentions `s`, so the type-checker catches any attempt to return it through `run-st`.
+
+---
+
+### 3. Existential types — abstract data types / modules
+
+Existential types let you hide the concrete representation of a value behind an interface, mimicking ML-style modules.
+
+```clojure
+; An "any showable" value — the concrete type 'a' is hidden
+(deftype AnyShowable (exists [a] [a (-> a string)]))
+
+; Packing a value together with its show function
+(def show-int  : AnyShowable (pack int  [42,      int-to-string]))
+(def show-bool : AnyShowable (pack bool [true,     bool-to-string]))
+
+; Consuming without knowing the concrete type
+(defn show-it [s : AnyShowable] : string
+  (open s [a [val show-fn]]
+    (show-fn val)))
+
+(show-it show-int)   ; → "42"
+(show-it show-bool)  ; → "true"
+```
+
+You can collect heterogeneous showable values in a single list:
+
+```clojure
+(def things : (vec AnyShowable)
+  [(pack int  [1,     int-to-string])
+   (pack bool [false, bool-to-string])
+   (pack str  ["yo",  identity])])
+
+(map show-it things)  ; → ["1", "false", "yo"]
+```
+
+> **Without existentials** you would need a tagged union or a `Showable` typeclass instance stored alongside the value — a verbose, manually-maintained pattern.
+
+---
+
+### 4. van Laarhoven Lenses (Rank-2 optics)
+
+Lenses are the canonical Rank-2 example from functional programming. A lens focuses on a field `a` inside a structure `s`:
+
+```clojure
+; A Lens is a rank-2 function — 'f' must be any Functor
+(deftype Lens [s a]
+  (forall [f : Functor]
+    (-> (-> a (f a)) s (f s))))
+
+; Getter and setter derived from a single Lens value
+(defn view [lens : (Lens s a), s : s] : a
+  (let [r (lens (fn [a] (Identity a)) s)]
+    (run-identity r)))
+
+(defn over [lens : (Lens s a), f : (-> a a), s : s] : s
+  (run-identity (lens (fn [a] (Identity (f a))) s)))
+
+(defn set [lens : (Lens s a), v : a, s : s] : s
+  (over lens (fn [_] v) s))
+
+; A concrete lens for a struct field
+(defn name-lens [f : (-> string (f string)), p : Person] : (f Person)
+  (map (fn [n] { p | name: n }) (f (get p :name))))
+
+; Usage
+(def p { name: "Alice", age: 30 })
+(view name-lens p)              ; → "Alice"
+(set  name-lens "Bob" p)        ; → { name: "Bob", age: 30 }
+(over name-lens str-upper p)    ; → { name: "ALICE", age: 30 }
+
+; Lens composition is plain function composition — no special operator needed
+(def street-lens (comp address-lens street-inner-lens))
+```
+
+> **The rank-2 insight:** `(forall [f : Functor] ...)` inside the lens type means the *same* lens value can be used for both reading (with `Identity` functor) and writing (with `Const` functor) — without any runtime dispatch.
+
+---
+
+### 5. Continuation monad (CPS with universal return type)
+
+The continuation type `(Cont r a)` uses a rank-2 `forall` to make the result type polymorphic, enabling `callCC` and delimited continuations:
+
+```clojure
+(deftype Cont [a] (forall [r] (-> (-> a r) r)))
+
+(defn return-cont [x : a] : (Cont a)
+  (fn [k] (k x)))
+
+(defn bind-cont [c : (Cont a), f : (-> a (Cont b))] : (Cont b)
+  (fn [k] (c (fn [a] ((f a) k)))))
+
+(defn run-cont [c : (Cont a), k : (-> a r)] : r
+  (c k))
+
+; callCC — capture the current continuation
+(defn call-cc [f : (-> (-> a (Cont b)) (Cont a))] : (Cont a)
+  (fn [k] ((f (fn [x] (fn [_] (k x)))) k)))
+
+; Usage — early exit from a loop
+(run-cont
+  (call-cc (fn [exit]
+    (bind-cont (return-cont 10) (fn [x]
+      (if (> x 5)
+        (exit "too big")
+        (return-cont (* x 2)))))))
+  identity)   ; → "too big"
+```
+
+---
+
+### 6. Church / Böhm-Berarducci encodings
+
+Any algebraic data type can be represented as a rank-2 function (Church encoding), allowing data types to be defined purely through functions without any concrete constructors:
+
+```clojure
+; Church-encoded option
+(deftype ChurchOption [a]
+  (forall [r] (-> r (-> a r) r)))
+
+(defn church-none : (ChurchOption a)
+  (fn [none _some] none))
+
+(defn church-some [x : a] : (ChurchOption a)
+  (fn [_none some] (some x)))
+
+(defn church-option-map [f : (-> a b), opt : (ChurchOption a)] : (ChurchOption b)
+  (fn [none some] (opt none (fn [x] (some (f x))))))
+
+(defn church-option-to-option [opt : (ChurchOption a)] : (option a)
+  (opt (none) (fn [x] (some x))))
+
+; Church-encoded list
+(deftype ChurchList [a]
+  (forall [r] (-> r (-> a r r) r)))
+
+(defn church-nil : (ChurchList a)
+  (fn [nil _cons] nil))
+
+(defn church-cons [h : a, t : (ChurchList a)] : (ChurchList a)
+  (fn [nil cons] (cons h (t nil cons))))
+
+(defn church-foldr [f : (-> a r r), z : r, xs : (ChurchList a)] : r
+  (xs z f))
+
+(defn church-map [f : (-> a b), xs : (ChurchList a)] : (ChurchList b)
+  (fn [nil cons] (xs nil (fn [h t] (cons (f h) t)))))
+```
+
+---
+
+## Usage Tutorial
+
+This tutorial introduces HRTs in Turmeric step by step. It assumes familiarity with Turmeric's basic syntax and typeclass system.
+
+### Step 1 — Understanding rank
+
+Every Turmeric type has a **rank**:
+
+| Example | Rank | Explanation |
+|---|---|---|
+| `int` | 0 (monotype) | no quantifiers |
+| `(-> int int)` | 0 (monotype) | no quantifiers |
+| `(forall [a] (-> a a))` | 1 | top-level `forall` |
+| `(-> (forall [a] (-> a a)) int)` | 2 | `forall` inside an argument |
+| `(-> (-> (forall [a] (-> a a)) int) int)` | 3 | `forall` nested two levels deep |
+
+In standard Hindley-Milner, all `forall` quantifiers are implicitly at rank 1 and are invisible. HRTs let you write rank-2 and above explicitly.
+
+**Rule of thumb:** the rank is the maximum nesting depth of a `forall` on the *left* side of a `->`.
+
+---
+
+### Step 2 — Your first rank-2 function
+
+Enable HRTs with the compiler flag:
+
+```sh
+./build/tur build -Xhrt my-file.tur
+```
+
+Write a function that accepts a polymorphic argument using `::` for the type annotation:
+
+```clojure
+; apply-id accepts any function that is the identity for its argument type
+(defn apply-id [f : (forall [a] (-> a a)), x : int, y : string] : [int string]
+  [(f x) (f y)])
+
+; Pass in a concrete identity function — type-checker verifies it works for all 'a'
+(apply-id (fn [v] v) 42 "hello")   ; → [42, "hello"]
+```
+
+If you omit the annotation on `f`, the compiler emits:
+
+```
+error: argument type requires rank-2 annotation
+  hint: add `: (forall [a] (-> a a))` to the parameter
+```
+
+---
+
+### Step 3 — Rank-2 with typeclass constraints
+
+You can constrain the type variable inside `forall`:
+
+```clojure
+; f must work for any type that has a Show instance
+(defn print-twice [f : (forall [a : Show] (-> a a)), x : int] : unit
+  (do
+    (println (show (f x)))
+    (println (show (f x)))))
+```
+
+The `a : Show` syntax inside the `forall` binder is a kind/constraint annotation: "`a` must have a `Show` instance."
+
+---
+
+### Step 4 — Existential types with `pack` and `open`
+
+Existential types hide a concrete type behind an interface. Use `pack` to create an existential value and `open` to consume it:
+
+```clojure
+; Define an existential interface — a value plus functions on it
+(deftype Counter (exists [s] [s              ; the hidden state type
+                               (-> s s)      ; increment
+                               (-> s int)])) ; read
+
+; Create a counter backed by an int
+(def int-counter : Counter
+  (pack int [0
+             (fn [n] (+ n 1))
+             (fn [n] n)]))
+
+; Create a counter backed by a pair (tracks both steps and parity)
+(def pair-counter : Counter
+  (pack [int bool]
+    [[0 false]
+     (fn [[n p]] [(+ n 1) (not p)])
+     (fn [[n _]] n)]))
+
+; Consume a Counter without knowing the hidden type
+(defn run-counter [c : Counter, steps : int] : int
+  (open c [s [state incr read]]
+    (let [final (loop [i steps, st state]
+                  (if (= i 0) st (recur (- i 1) (incr st))))]
+      (read final))))
+
+(run-counter int-counter  5)  ; → 5
+(run-counter pair-counter 5)  ; → 5
+```
+
+**Key safety rule:** the hidden type `s` inside `open` cannot escape the body. This is checked at compile time:
+
+```clojure
+; ERROR — 's' escapes its scope
+(defn bad [c : Counter] : ???
+  (open c [s [state _ _]]
+    state))   ; state has type 's', which is not visible outside 'open'
+```
+
+---
+
+### Step 5 — Building a lens
+
+Lenses are the most widely-used rank-2 pattern. Here is a minimal lens library:
+
+```clojure
+; Lens type — 'f' ranges over all Functors
+(deftype Lens [s a]
+  (forall [f : Functor]
+    (-> (-> a (f a)) s (f s))))
+
+; Two trivial functors needed to run a lens
+(deftype Identity [a] a)
+(defn run-identity [x : (Identity a)] : a  x)
+(definstance Functor Identity (defn map [f x] (f x)))
+
+(deftype Const [b a] b)
+(defn run-const [x : (Const b a)] : b  x)
+(definstance Functor (Const b) (defn map [_ x] x))
+
+; Getter: run the lens with Const to extract the focused value
+(defn view [lens : (Lens s a), s : s] : a
+  (run-const (lens (fn [a] a) s)))
+
+; Setter: run the lens with Identity to rebuild the structure
+(defn set [lens : (Lens s a), v : a, s : s] : s
+  (run-identity (lens (fn [_] v) s)))
+
+; Modifier
+(defn over [lens : (Lens s a), f : (-> a a), s : s] : s
+  (run-identity (lens (fn [a] (f a)) s)))
+```
+
+Define a lens for a record field with a plain function:
+
+```clojure
+(defstruct Point [x : float, y : float])
+
+(defn x-lens [f : (-> float (f float)), p : Point] : (f Point)
+  (map (fn [x2] { p | x: x2 }) (f (get p :x))))
+
+(def p { x: 1.0, y: 2.0 })
+(view x-lens p)        ; → 1.0
+(set  x-lens 5.0 p)   ; → { x: 5.0, y: 2.0 }
+(over x-lens (fn [x] (* x 2.0)) p)  ; → { x: 2.0, y: 2.0 }
+```
+
+Lens composition is plain function composition — no special operator needed:
+
+```clojure
+(defstruct Line [start : Point, end : Point])
+
+(defn start-lens [f, l] (map (fn [s2] { l | start: s2 }) (f (get l :start))))
+
+; Focus on the x-coordinate of the start point of a line
+(def start-x-lens (comp start-lens x-lens))
+
+(def ln { start: { x: 0.0, y: 0.0 }, end: { x: 1.0, y: 1.0 } })
+(set start-x-lens 3.0 ln)  ; → { start: { x: 3.0, y: 0.0 }, ... }
+```
+
+---
+
+### Step 6 — Rank-N and kind quantification
+
+For rank-3 and above you must always provide an annotation. The compiler will tell you if one is missing:
+
+```clojure
+; rank-3: the argument itself expects a rank-2 argument
+(defn apply-rank2
+  [g : (-> (forall [a] (-> a a)) int)] : int
+  (g (fn [x] x)))
+
+(defn double-apply
+  [h : (-> (-> (forall [a] (-> a a)) int) int)] : int
+  (h apply-rank2)
+
+; Combine kind quantification (HKT) with type quantification (HRT)
+(defn fmap-any
+  [f : (forall [ff : Functor, a, b] (-> (-> a b) (ff a) (ff b)))]
+  : ...
+  ...)
+```
+
+---
+
+### Step 7 — Storing polymorphic values (first-class poly, `-Ximpredicative`)
+
+To store a polymorphic value inside a container you need the additional flag:
+
+```sh
+./build/tur build -Xhrt -Ximpredicative my-file.tur
+```
+
+```clojure
+; A list of identity-like functions, each potentially for a different type
+(def polys : (vec (forall [a] (-> a a)))
+  [(fn [x] x)
+   (fn [x] x)])   ; stored as tur_poly_t entries at runtime
+
+; Retrieve and apply
+(let [f (nth polys 0)]
+  (f 42))       ; → 42
+```
+
+> **Note:** Impredicative types are the most advanced HRT feature. Prefer explicit existential types (`exists`) when possible — they are clearer and do not require `-Ximpredicative`.
+
+---
+
+### Common mistakes and error messages
+
+| Mistake | Error | Fix |
+|---|---|---|
+| Passing a rank-1 function where rank-2 is expected | `type mismatch: expected (forall [a] ...), got (-> int int)` | Ensure the function is genuinely polymorphic |
+| Missing rank-2 annotation on a parameter | `rank-2 type requires explicit annotation` | Add `: (forall [a] ...)` to the `defn` parameter |
+| Existential type variable escaping `open` | `existential variable 's' escapes its scope` | Keep all uses of `s` inside the `open` body |
+| Using HRT syntax without `-Xhrt` | `unknown type form 'forall' (pass -Xhrt to enable)` | Add `-Xhrt` to the build command |
+| Storing a `forall` type in a container without `-Ximpredicative` | `impredicative type requires -Ximpredicative` | Either add the flag or wrap with an existential |
+
+---
+
 ## Phase Overview
 
 | Phase | Deliverable | Exit Criterion | Estimated Effort |
