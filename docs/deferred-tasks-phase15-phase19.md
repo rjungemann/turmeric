@@ -1077,8 +1077,8 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 ##### SCH-004 — Thread-local state and safety
 - [x] Implement `__thread` TLS for current scheduler and thread index.
   - Implemented: `tur_current_scheduler_mt`, `tur_current_thread_idx`, `tur_current_thread_id` in `src/scheduler.c`.
-- [ ] Migrate per-fiber effect handler chain to be migration-safe.
-  - **Deferred**: Effect handlers use `tur_current_fiber->handler_chain`. Cross-thread migration requires ensuring chain is valid after steal. v1 defers this by not supporting effect handlers in migrated fibers.
+- [x] Migrate per-fiber effect handler chain to be migration-safe.
+  - Implemented: Added `migration_safe` flag to FiberBlock in emit.c. Added code in `tur_fiber_block_new` to copy the global effect handler chain to the fiber's `effect_handler_chain`, making fibers self-contained. When a fiber migrates to a different thread via work-stealing, `tur_fiber_block_resume` sets `tur_current_fiber` on the new thread, and `tur_effect_perform` uses `tur_current_fiber->effect_handler_chain`, ensuring handlers are accessible after migration.
 - [x] Implement `Fiber::thread-id` — get OS thread ID for debugging.
   - Implemented: `fiber-thread-id` in `stdlib/fiber.tur` returns `(int64_t)pthread_self()`.
 

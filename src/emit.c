@@ -3678,6 +3678,7 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    int64_t result;\n");
     buf_puts(out, "    int64_t arg;\n");
     buf_puts(out, "    void *effect_handler_chain; /* Phase P19-8: per-fiber effect handler chain */\n");
+    buf_puts(out, "    bool migration_safe; /* SCH-004: true if effect handlers are safe for cross-thread migration */\n");
     buf_puts(out, "    void (*entry_fn)(void);\n");
     buf_puts(out, "    void *fiber_local; /* Phase T21: fiber-local storage */\n");
     /* Phase T22: Structured concurrency */
@@ -3755,6 +3756,10 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    f->stack = (char *)malloc(stack_size);\n");
     buf_puts(out, "    if (!f->stack) { free(f); abort(); }\n");
     buf_puts(out, "    f->stack_size = stack_size; f->entry_fn = fn; f->done = 0;\n");
+    /* SCH-004: Initialize migration_safe flag - fibers are migration-safe by default */
+    buf_puts(out, "    f->migration_safe = true;\n");
+    /* SCH-004: Copy global effect handler chain to fiber for migration safety */
+    buf_puts(out, "    f->effect_handler_chain = (void *)global_effect_handler_chain;\n");
     buf_puts(out, "    getcontext(&f->ctx);\n");
     buf_puts(out, "    f->ctx.uc_stack.ss_sp = f->stack;\n");
     buf_puts(out, "    f->ctx.uc_stack.ss_size = stack_size;\n");
