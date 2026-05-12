@@ -1,0 +1,110 @@
+;; miniKanren-style relational example
+;;
+;; This example demonstrates a tiny relational program with:
+;;   - relation predicates (`parento`, `grandparento`)
+;;   - bidirectional querying (find parents, children, and pairs)
+;;   - a simple "logic style" workflow in plain Turmeric
+
+(def PERSON_COUNT 6)
+
+(defn person-name [id :int] :cstr
+  (cond
+    (= id 0) "abe"
+    (= id 1) "homer"
+    (= id 2) "bart"
+    (= id 3) "lisa"
+    (= id 4) "marge"
+    (= id 5) "mona"
+    :else "unknown"))
+
+(defn parento [parent :int child :int] :int
+  (cond
+    (and (= parent 0) (= child 1)) 1  ;; abe -> homer
+    (and (= parent 5) (= child 1)) 1  ;; mona -> homer
+    (and (= parent 1) (= child 2)) 1  ;; homer -> bart
+    (and (= parent 1) (= child 3)) 1  ;; homer -> lisa
+    (and (= parent 4) (= child 2)) 1  ;; marge -> bart
+    (and (= parent 4) (= child 3)) 1  ;; marge -> lisa
+    :else 0))
+
+(defn grandparento [grand :int child :int] :int
+  (let [^mut mid 0
+        ^mut found 0]
+    (while (< mid PERSON_COUNT)
+      (do
+        (when (and (= (parento grand mid) 1)
+                   (= (parento mid child) 1))
+          (set! found 1))
+        (set! mid (+ mid 1))))
+    found))
+
+(defn query-parents-of [child :int] :nil
+  (do
+    (println "Parents:")
+    (println (person-name child))
+    (let [^mut p 0]
+      (while (< p PERSON_COUNT)
+        (do
+          (when (= (parento p child) 1)
+            (println (person-name p)))
+          (set! p (+ p 1)))))
+    nil))
+
+(defn query-children-of [parent :int] :nil
+  (do
+    (println "Children:")
+    (println (person-name parent))
+    (let [^mut c 0]
+      (while (< c PERSON_COUNT)
+        (do
+          (when (= (parento parent c) 1)
+            (println (person-name c)))
+          (set! c (+ c 1)))))
+    nil))
+
+(defn query-grandparents-of [child :int] :nil
+  (do
+    (println "Grandparents:")
+    (println (person-name child))
+    (let [^mut g 0]
+      (while (< g PERSON_COUNT)
+        (do
+          (when (= (grandparento g child) 1)
+            (println (person-name g)))
+          (set! g (+ g 1)))))
+    nil))
+
+(defn print-all-parent-facts [] :nil
+  (do
+    (println "All parent facts (both vars unknown):")
+    (let [^mut p 0]
+      (while (< p PERSON_COUNT)
+        (do
+          (let [^mut c 0]
+            (while (< c PERSON_COUNT)
+              (do
+                (when (= (parento p c) 1)
+                  (do
+                    (println (person-name p))
+                    (println (person-name c))))
+                (set! c (+ c 1)))))
+          (set! p (+ p 1)))))
+    nil))
+
+(defn -main [] :int
+  (do
+    (println "miniKanren-style relational example")
+    (println "----------------------------------")
+
+    ;; Query with known child and unknown parent:
+    (query-parents-of 2)   ;; bart -> homer, marge
+
+    ;; Query with known parent and unknown child:
+    (query-children-of 1)  ;; homer -> bart, lisa
+
+    ;; Two-hop relation:
+    (query-grandparents-of 2) ;; bart -> abe, mona
+
+    ;; Enumerate all matching pairs:
+    (print-all-parent-facts)
+    0))
