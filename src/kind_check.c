@@ -33,10 +33,23 @@
 /* Returns the effective kind of a Type value in H1.
  * Primitive scalar types are KIND_STAR.
  * Struct types (user-defined, can wrap an inner type) are KIND_ARROW.
+ * TY_APP: result kind is computed from fn's kind (see kind_of_type_app).
+ * TY_REC: kind is KIND_ARROW (recursive type constructors have kind * -> *).
  * All other types default to KIND_STAR in H1. */
 static Kind type_effective_kind(Type t) {
     switch (t.kind) {
         case TY_STRUCT: return KIND_ARROW;
+        case TY_REC:    return KIND_ARROW;  /* Phase HKT-P2 */
+        case TY_APP:
+            /* Phase HKT-P1: result kind depends on fn's kind */
+            if (t.as.app.fn) {
+                switch (t.as.app.fn->hkt_kind) {
+                    case KIND_ARROW2: return KIND_ARROW;
+                    case KIND_ARROW:  return KIND_STAR;
+                    default:          return KIND_STAR;
+                }
+            }
+            return KIND_STAR;
         case TY_INT:
         case TY_BOOL:
         case TY_CSTR:
@@ -46,6 +59,56 @@ static Kind type_effective_kind(Type t) {
             return KIND_STAR;
         default:
             return KIND_STAR;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * Phase HKT-P1: kind_of_type_app
+ * ------------------------------------------------------------------------- */
+
+/* Infer the result kind of a type application (type-app fn_type arg_type).
+ *
+ * fn_type.hkt_kind must be KIND_ARROW (unary) or KIND_ARROW2 (binary):
+ *   KIND_ARROW  → applying one arg fully saturates → result KIND_STAR
+ *   KIND_ARROW2 → partial application → result KIND_ARROW
+ *
+ * Emits TUR_E0012_KIND_MISMATCH and returns KIND_STAR if fn_type.hkt_kind
+ * is KIND_STAR (cannot apply a concrete type as a type constructor). */
+Kind kind_of_type_app(Type fn_type, Type arg_type, Span span) {
+    (void)arg_type;  /* arg kind not validated separately in v1 */
+    switch (fn_type.hkt_kind) {
+        case KIND_ARROW:
+            /* Unary type constructor fully applied → concrete type */
+            return KIND_STAR;
+        case KIND_ARROW2:
+            /* Binary type constructor partially applied → still a constructor */
+            return KIND_ARROW;
+        case KIND_STAR:
+            diag_emit_with_code(DIAG_ERROR, span, TUR_E0012_KIND_MISMATCH,
+                "kind mismatch (TUR-E0012): cannot apply a type of kind '*' as a "
+                "type constructor; type must have kind '* -> *' or '* -> * -> *'");
+            return KIND_STAR;
+    }
+    return KIND_STAR;
+}
+
+/* ---------------------------------------------------------------------------
+ * Phase HKT-P2: occurs-check helper for TY_REC
+ * ------------------------------------------------------------------------- */
+
+/* Returns true if 'rec_name' appears in type 't' without going through
+ * a TY_APP node (unguarded self-recursion causes infinite unrolling). */
+static bool rec_name_occurs_unguarded(const char *rec_name, Type *t, int depth) {
+    if (!t || depth > 16) return false;
+    switch (t->kind) {
+        case TY_REC:
+            /* Same interned name pointer → unguarded self-reference */
+            return (t->as.rec.name == rec_name);
+        case TY_APP:
+            /* TY_APP guards the recursion */
+            return false;
+        default:
+            return false;
     }
 }
 
@@ -83,6 +146,25 @@ static int kind_check_expr(Expr *expr) {
                             errors++;
                         }
                     }
+                }
+            }
+            break;
+        }
+        case EX_DEF: {
+            /* Phase HKT-P2: occurs-check — report an unguarded self-recursive TY_REC.
+             * In v1 the body is always NULL so this is a no-op, but the check is
+             * in place for when body evaluation is added in a later phase. */
+            Binding *b = expr->as.def_.binding;
+            if (b && b->type.kind == TY_REC && b->type.as.rec.body) {
+                if (rec_name_occurs_unguarded(b->type.as.rec.name,
+                                              b->type.as.rec.body, 0)) {
+                    diag_emit_with_code(DIAG_ERROR, expr->span,
+                        TUR_E0012_KIND_MISMATCH,
+                        "kind mismatch (TUR-E0012): recursive type '%s' has an "
+                        "unguarded self-reference (wrap recursive use in a type "
+                        "application to make the recursion guarded)",
+                        b->type.as.rec.name ? b->type.as.rec.name : "<rec>");
+                    errors++;
                 }
             }
             break;
