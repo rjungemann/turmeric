@@ -1123,13 +1123,14 @@ static CtValue ct_eval_call(CtEnv *env, Form *f) {
     if (head->tag != F_SYM) {
         return ct_value_form(f);
     }
-    if (head->tag == F_SYM && head->as.sym == env->elab->sym_quote && f->as.list.len == 2) {
+    /* At this point head->tag == F_SYM is guaranteed by the early return above. */
+    if (head->as.sym == env->elab->sym_quote && f->as.list.len == 2) {
         return ct_value_form(f->as.list.items[1]);
     }
-    if (head->tag == F_SYM && head->as.sym == env->elab->sym_quasiquote && f->as.list.len == 2) {
+    if (head->as.sym == env->elab->sym_quasiquote && f->as.list.len == 2) {
         return ct_value_form(ct_eval_quasiquote(env, f->as.list.items[1]));
     }
-    if (head->tag == F_SYM && head->as.sym == env->elab->sym_if) {
+    if (head->as.sym == env->elab->sym_if) {
         if (f->as.list.len < 3 || f->as.list.len > 4) {
             *env->ok = false;
             diag_emit(DIAG_ERROR, f->span, "compile-time if requires 2 or 3 arguments");
@@ -1156,7 +1157,7 @@ static CtValue ct_eval_call(CtEnv *env, Form *f) {
         }
         return ct_value_form(form_list(env->elab->arena, f->span, items, f->as.list.len));
     }
-    if (head->tag == F_SYM && head->as.sym == env->elab->sym_do) {
+    if (head->as.sym == env->elab->sym_do) {
         CtValue out = ct_value_form(form_nil(env->elab->arena, f->span));
         for (uint32_t i = 1; i < f->as.list.len; i++) {
             out = ct_eval_form(env, f->as.list.items[i]);
@@ -1164,7 +1165,7 @@ static CtValue ct_eval_call(CtEnv *env, Form *f) {
         }
         return out;
     }
-    if (head->tag == F_SYM && head->as.sym == env->elab->sym_let) {
+    if (head->as.sym == env->elab->sym_let) {
         if (f->as.list.len < 3) {
             *env->ok = false;
             diag_emit(DIAG_ERROR, f->span, "compile-time let requires bindings and body");
@@ -1200,7 +1201,7 @@ static CtValue ct_eval_call(CtEnv *env, Form *f) {
         }
         return out;
     }
-    if (head->tag == F_SYM && head->as.sym == env->elab->sym_fn) {
+    if (head->as.sym == env->elab->sym_fn) {
         if (f->as.list.len < 3) {
             *env->ok = false;
             diag_emit(DIAG_ERROR, f->span, "compile-time fn requires params and body");
@@ -1308,7 +1309,8 @@ static CtValue ct_eval_call(CtEnv *env, Form *f) {
         }
     }
 
-    if (head->tag == F_SYM) {
+    /* head->tag == F_SYM is guaranteed here by the early return above. */
+    {
         CtValue b = ct_eval_builtin(env, head->as.sym, args, n_args, f->span);
         if (b.tag == CT_VAL_FORM && b.as.form != NULL) return b;
     }
