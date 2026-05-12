@@ -28,7 +28,7 @@ Code location:
 From the repository root:
 
 ```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build -j --target minikanren
 ./build/examples/minikanren/minikanren
 ```
