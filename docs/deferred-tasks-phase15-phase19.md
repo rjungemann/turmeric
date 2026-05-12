@@ -627,12 +627,18 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 ### Unsafe Operations remaining tasks
 
 #### U1 — `Unsafe` effect in type system
-- [ ] Register `Unsafe` as a built-in effect constant in `src/effect.{c,h}`.
-- [ ] Propagate `Unsafe` through call sites via the existing effect-row mechanism.
-- [ ] Emit compile error when unsafe function is called from safe context without `unsafe` block.
-- [ ] Support explicit `@ {Unsafe}` annotation on `defn` to mark an entire function unsafe.
-- [ ] Add fixture `unsafe-effect-row.tur`.
-- [ ] Add negative fixture `unsafe-leak.tur`.
+- [x] Register `Unsafe` as a built-in effect constant in `src/effect.{c,h}`.
+  - Implemented: `effect_env_register_builtin_unsafe(...)` and wired registration in elaboration/effect passes.
+- [x] Propagate `Unsafe` through call sites via the existing effect-row mechanism.
+  - Implemented: effect inference now propagates `Unsafe` for calls to `Unsafe`-annotated functions and for raw-pointer deref/borrow operations.
+- [x] Emit compile error when unsafe function is called from safe context without `unsafe` block.
+  - Implemented: call elaboration rejects calls to `@ {Unsafe}` functions unless in an `unsafe` context.
+- [x] Support explicit `@ {Unsafe}` annotation on `defn` to mark an entire function unsafe.
+  - Implemented: reader accepts `@ { ... }` (and `@{...}`) effect-row annotations; `Unsafe`-annotated function bodies are elaborated in unsafe context.
+- [x] Add fixture `unsafe-effect-row.tur`.
+  - Implemented: `tests/fixtures/unsafe-effect-row/`.
+- [x] Add negative fixture `unsafe-leak.tur`.
+  - Implemented: `tests/fixtures/errors/unsafe-leak/`.
 
 #### U2 — `unsafe { }` block sugar
 - [x] Parse `(unsafe expr...)` form in reader.

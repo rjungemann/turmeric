@@ -1,0 +1,5 @@
+(defn unsafe-id [x :int] @ {Unsafe} :int
+  x)
+
+(defn main [] :int
+  (unsafe-id 1))
