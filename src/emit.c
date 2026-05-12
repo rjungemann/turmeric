@@ -3604,6 +3604,9 @@ int emit_program(Buf *out, const Expr *program) {
     /* Phase T22: Structured concurrency */
     buf_puts(out, "    void *task_group; /* Parent TaskGroup for cancellation */\n");
     buf_puts(out, "    bool cancelled; /* Set when parent TaskGroup is cancelled */\n");
+    /* Phase TG-004-1 PR: Per-fiber panic handling for auto-cancel propagation */
+    buf_puts(out, "    jmp_buf panic_jmpbuf; /* Per-fiber panic recovery buffer */\n");
+    buf_puts(out, "    bool panic_jmpbuf_valid; /* Whether this fiber's panic handler is active */\n");
     buf_puts(out, "};\n\n");
     buf_puts(out, "static __thread FiberBlock *tur_current_fiber = NULL;\n");
     /* Phase T22: Cooperative cancellation flag */
