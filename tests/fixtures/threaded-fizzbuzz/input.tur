@@ -1,0 +1,120 @@
+;; Phase T19-E: threaded-fizzbuzz — compute FizzBuzz 1..15 across 3 threads.
+;;
+;; Thread A: numbers 1..5  (indices 0..4  in results array)
+;; Thread B: numbers 6..10 (indices 5..9  in results array)
+;; Thread C: numbers 11..15(indices 10..14 in results array)
+;;
+;; Each thread fills its slice with integer codes:
+;;   result > 0   => print the number itself
+;;   result == -1 => print "fizz"
+;;   result == -2 => print "buzz"
+;;   result == -3 => print "fizzbuzz"
+;;
+;; Main joins all threads then prints results 0..14 in order.
+
+;; Allocate a flat int64_t[15] results array, zero-initialised.
+(defn fb-results-new [] :ptr<void>
+  ```c
+  int64_t *r = (int64_t *)malloc(15 * sizeof(int64_t));
+  if (!r) { fprintf(stderr, "fb-results-new: oom\n"); abort(); }
+  memset(r, 0, 15 * sizeof(int64_t));
+  return (void *)r;
+  ```)
+
+(defn fb-results-free [r :ptr<void>] :nil
+  ```c
+  free(r);
+  ```)
+
+;; Range arg: { results_ptr, start_idx (0-based), count }
+(defn fb-range-new [results :ptr<void> start :int count :int] :ptr<void>
+  ```c
+  typedef struct { int64_t *results; int64_t start; int64_t count; } FBRange;
+  FBRange *rng = (FBRange *)malloc(sizeof(FBRange));
+  if (!rng) { fprintf(stderr, "fb-range-new: oom\n"); abort(); }
+  rng->results = (int64_t *)results;
+  rng->start   = (int64_t)start;
+  rng->count   = (int64_t)count;
+  return (void *)rng;
+  ```)
+
+(defn fb-range-free [rng :ptr<void>] :nil
+  ```c
+  free(rng);
+  ```)
+
+;; Worker: fills the assigned slice of the results array.
+(defn fb-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  typedef struct { int64_t *results; int64_t start; int64_t count; } FBRange;
+  FBRange *rng = (FBRange *)arg;
+  int64_t i;
+  for (i = 0; i < rng->count; i++) {
+      int64_t n = rng->start + i + 1;  /* 1-based number */
+      if      (n % 15 == 0) rng->results[rng->start + i] = -3;
+      else if (n %  3 == 0) rng->results[rng->start + i] = -1;
+      else if (n %  5 == 0) rng->results[rng->start + i] = -2;
+      else                  rng->results[rng->start + i] = n;
+  }
+  return NULL;
+  ```)
+
+;; Spawn a thread running fn-ptr with the given arg; return pthread_t handle.
+(defn fb-thread-spawn [fn-ptr :ptr<void> arg :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  if (!t) { fprintf(stderr, "fb-thread-spawn: oom\n"); abort(); }
+  pthread_create(t, NULL, (void *(*)(void *))fn_ptr, arg);
+  return (void *)t;
+  ```)
+
+;; Join a thread and free its handle.
+(defn fb-thread-join [t :ptr<void>] :nil
+  ```c
+  pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  ```)
+
+;; Print the result at index i.
+(defn fb-print [results :ptr<void> i :int] :nil
+  ```c
+  int64_t v = ((int64_t *)results)[i];
+  if      (v == -3) printf("fizzbuzz\n");
+  else if (v == -1) printf("fizz\n");
+  else if (v == -2) printf("buzz\n");
+  else              printf("%lld\n", (long long)v);
+  ```)
+
+(defn main [] :int
+  (let [results (fb-results-new)]
+    (let [rng-a (fb-range-new results 0  5)]
+      (let [rng-b (fb-range-new results 5  5)]
+        (let [rng-c (fb-range-new results 10 5)]
+          ;; Spawn three threads.
+          (let [ta (fb-thread-spawn fb-worker rng-a)]
+            (let [tb (fb-thread-spawn fb-worker rng-b)]
+              (let [tc (fb-thread-spawn fb-worker rng-c)]
+                (fb-thread-join ta)
+                (fb-thread-join tb)
+                (fb-thread-join tc))))
+          ;; Print results 1..15 in order.
+          (fb-print results 0)
+          (fb-print results 1)
+          (fb-print results 2)
+          (fb-print results 3)
+          (fb-print results 4)
+          (fb-print results 5)
+          (fb-print results 6)
+          (fb-print results 7)
+          (fb-print results 8)
+          (fb-print results 9)
+          (fb-print results 10)
+          (fb-print results 11)
+          (fb-print results 12)
+          (fb-print results 13)
+          (fb-print results 14)
+          (fb-range-free rng-a)
+          (fb-range-free rng-b)
+          (fb-range-free rng-c))))
+    (fb-results-free results))
+  0)

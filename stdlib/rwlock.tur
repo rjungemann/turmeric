@@ -1,0 +1,52 @@
+;; stdlib/rwlock.tur — POSIX read-write lock (Phase T19-C)
+;;
+;; Wraps pthread_rwlock_t as a :ptr<void>.  Multiple readers can hold the lock
+;; concurrently; writers get exclusive access.
+;;
+;; API:
+;;   rwlock-new         []                    → ptr<void>
+;;   rwlock-rdlock      [rw :ptr<void>]       → nil
+;;   rwlock-wrlock      [rw :ptr<void>]       → nil
+;;   rwlock-try-rdlock  [rw :ptr<void>]       → bool
+;;   rwlock-try-wrlock  [rw :ptr<void>]       → bool
+;;   rwlock-unlock      [rw :ptr<void>]       → nil
+;;   rwlock-free        [rw :ptr<void>]       → nil
+
+(defn rwlock-new [] :ptr<void>
+  ```c
+  pthread_rwlock_t *rw = (pthread_rwlock_t *)malloc(sizeof(pthread_rwlock_t));
+  if (!rw) { fprintf(stderr, "rwlock-new: out of memory\n"); abort(); }
+  pthread_rwlock_init(rw, NULL);
+  return (void *)rw;
+  ```)
+
+(defn rwlock-rdlock [rw :ptr<void>] :nil
+  ```c
+  pthread_rwlock_rdlock((pthread_rwlock_t *)rw);
+  ```)
+
+(defn rwlock-wrlock [rw :ptr<void>] :nil
+  ```c
+  pthread_rwlock_wrlock((pthread_rwlock_t *)rw);
+  ```)
+
+(defn rwlock-try-rdlock [rw :ptr<void>] :bool
+  ```c
+  return pthread_rwlock_tryrdlock((pthread_rwlock_t *)rw) == 0;
+  ```)
+
+(defn rwlock-try-wrlock [rw :ptr<void>] :bool
+  ```c
+  return pthread_rwlock_trywrlock((pthread_rwlock_t *)rw) == 0;
+  ```)
+
+(defn rwlock-unlock [rw :ptr<void>] :nil
+  ```c
+  pthread_rwlock_unlock((pthread_rwlock_t *)rw);
+  ```)
+
+(defn rwlock-free [rw :ptr<void>] :nil
+  ```c
+  pthread_rwlock_destroy((pthread_rwlock_t *)rw);
+  free(rw);
+  ```)

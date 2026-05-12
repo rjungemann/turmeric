@@ -27,7 +27,7 @@ fith/
 │   └── CPM.cmake                    # CPM download (if not system-installed)
 ├── external/
 │   └── CPM.cmake                    # Alternative: vendored CPM
-├── games/
+├── examples/
 │   └── snake/
 │       ├── CMakeLists.txt            # Game target + Raylib dependency
 │       ├── src/
@@ -62,7 +62,7 @@ add_subdirectory(src)
 add_subdirectory(games)
 ```
 
-### 3.2 Snake Game (`games/snake/CMakeLists.txt`)
+### 3.2 Snake Game (`examples/snake/CMakeLists.txt`)
 
 ```cmake
 # CPM: fetch Raylib
@@ -449,7 +449,7 @@ We define algebraic effects for the game domain:
 ## 9. Implementation Phases
 
 ### Phase 1: Build Infrastructure (1–2 days)
-- [ ] Create `games/snake/` directory structure
+- [ ] Create `examples/snake/` directory structure
 - [ ] Add CPM.cmake to project
 - [ ] Create root CMakeLists.txt with Turmeric + games
 - [ ] Create snake CMakeLists.txt with Raylib dependency
@@ -489,7 +489,7 @@ We define algebraic effects for the game domain:
 ## 10. Success Criteria
 
 1. **Build**: `cmake --build build` succeeds on macOS and Linux
-2. **Run**: `./games/snake/snake` opens a window with a playable snake
+2. **Run**: `./examples/snake/snake` opens a window with a playable snake
 3. **Controls**: Arrow keys change direction, ESC quits
 4. **Rendering**: Snake is green, food is red, background is black
 5. **Gameplay**: Snake grows on food, dies on wall/self collision

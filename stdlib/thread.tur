@@ -1,0 +1,44 @@
+;; stdlib/thread.tur — POSIX thread spawn/join/detach (Phase T19-C)
+;;
+;; Wraps pthread_create / pthread_join / pthread_detach.
+;; A thread handle is a :ptr<void> pointing to a heap-allocated pthread_t.
+;; The handle is consumed (freed) by thread-join or thread-detach.
+;;
+;; API:
+;;   thread-spawn-fn  [fn-ptr :ptr<void> arg :ptr<void>]  → ptr<void>
+;;   thread-join      [t :ptr<void>]                       → nil
+;;   thread-detach    [t :ptr<void>]                       → nil
+;;   thread-id        []                                   → int
+;;
+;; Note: (thread-spawn (fn [] ...)) is the elaborator-level Send-safety gate
+;; (Phase T19-B).  thread-spawn-fn is the runtime entry point for calling
+;; pthread_create with an explicit function pointer.
+
+(defn thread-spawn-fn [fn-ptr :ptr<void> arg :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  if (!t) { fprintf(stderr, "thread-spawn-fn: out of memory\n"); abort(); }
+  int rc = pthread_create(t, NULL, (void *(*)(void *))fn_ptr, (void *)arg);
+  if (rc != 0) {
+      fprintf(stderr, "thread-spawn-fn: pthread_create failed (%d)\n", rc);
+      abort();
+  }
+  return (void *)t;
+  ```)
+
+(defn thread-join [t :ptr<void>] :nil
+  ```c
+  pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  ```)
+
+(defn thread-detach [t :ptr<void>] :nil
+  ```c
+  pthread_detach(*(pthread_t *)t);
+  free(t);
+  ```)
+
+(defn thread-id [] :int
+  ```c
+  return (int64_t)(uintptr_t)pthread_self();
+  ```)

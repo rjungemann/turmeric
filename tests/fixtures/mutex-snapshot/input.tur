@@ -1,0 +1,36 @@
+;; Phase T19-F codegen snapshot: mutex-snapshot
+;;
+;; mutex-new + mutex-lock + mutex-unlock + mutex-free.  The golden expected.c
+;; documents the pthread_mutex_* call pattern emitted by the compiler.
+;; No expected.stdout; only expected.c is checked.
+
+(defn mutex-new [] :ptr<void>
+  ```c
+  pthread_mutex_t *m = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
+  if (!m) { fprintf(stderr, "mutex-new: oom\n"); abort(); }
+  pthread_mutex_init(m, NULL);
+  return (void *)m;
+  ```)
+
+(defn mutex-lock [m :ptr<void>] :nil
+  ```c
+  pthread_mutex_lock((pthread_mutex_t *)m);
+  ```)
+
+(defn mutex-unlock [m :ptr<void>] :nil
+  ```c
+  pthread_mutex_unlock((pthread_mutex_t *)m);
+  ```)
+
+(defn mutex-free [m :ptr<void>] :nil
+  ```c
+  pthread_mutex_destroy((pthread_mutex_t *)m);
+  free(m);
+  ```)
+
+(defn main [] :int
+  (let [m (mutex-new)]
+    (mutex-lock m)
+    (mutex-unlock m)
+    (mutex-free m))
+  0)

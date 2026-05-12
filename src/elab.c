@@ -4276,6 +4276,7 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     fd->body = body;
     fd->is_variadic = false;
     fd->closure = NULL;
+    fd->inferred_effect_row = NULL;  /* must be NULL; effect_check_pass reads this */
     /* Store param types for codegen */
     fd->param_types = (Type *)arena_alloc(e->arena, n_params * sizeof(Type));
     for (uint8_t i = 0; i < n_params; i++) {
@@ -4463,6 +4464,7 @@ static Expr *elab_fn(Elab *e, const Form *call) {
     fd->body = body;
     fd->is_variadic = false;
     fd->closure = NULL;
+    fd->inferred_effect_row = NULL;  /* must be NULL; effect_check_pass reads this */
     /* Store param types for codegen */
     fd->param_types = (Type *)arena_alloc(e->arena, n_params * sizeof(Type));
     for (uint8_t i = 0; i < n_params; i++) {
@@ -4860,7 +4862,15 @@ static Expr *elab_call(Elab *e, Form *call) {
     /* Phase R2: Panic */
     if (name == e->sym_panic) return elab_panic(e, call);
     /* Phase T19-B: thread-spawn (Send-safety check for cross-thread closures) */
-    if (name == e->sym_thread_spawn) return elab_thread_spawn(e, call);
+    /* Only intercept when arg[1] is a literal (fn ...) form; if the user has  */
+    /* defined their own thread-spawn function, let it fall through below.      */
+    if (name == e->sym_thread_spawn &&
+        call->as.list.len == 2 &&
+        call->as.list.items[1]->tag == F_LIST &&
+        call->as.list.items[1]->as.list.len >= 1 &&
+        call->as.list.items[1]->as.list.items[0]->tag == F_SYM &&
+        call->as.list.items[1]->as.list.items[0]->as.sym == e->sym_fn)
+        return elab_thread_spawn(e, call);
     /* Phase R1: ? operator (reserved, not yet implemented) */
     if (name == e->sym_question) {
         diag_emit(DIAG_ERROR, call->span,
@@ -5858,8 +5868,9 @@ static Expr *elab_thread_spawn(Elab *e, const Form *call) {
         if (had_error) return NULL;
     }
 
-    /* Return nil — runtime thread spawning is via stdlib/thread.tur (T19-C). */
-    return expr_new(e->arena, EX_NIL_LIT, TYPE_NIL, call->span);
+    /* Return the closure expression (type flows through; T19-C provides the
+     * actual runtime thread-spawn wrapper in stdlib/thread.tur).            */
+    return closure_expr;
 }
 
 /* Phase R2: (panic msg) — print msg to stderr, then abort.
