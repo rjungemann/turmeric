@@ -1393,6 +1393,46 @@ See [backtracking-cloneable-continuations-plan.md](archive/backtracking-cloneabl
 
 ---
 
+## Parameterized Typeclass Prerequisites (Phases PTC1–PTC3)
+
+These prerequisites unblock parameterized typeclass instances, which are required for several Phase B1 and Phase B2 tasks.
+
+### PTC1 — Typeclass constraint syntax and parsing
+- [ ] Extend `elab_definstance` in `src/elab.c` to parse typeclass constraints in instance declarations.
+  - Current syntax: `(definstance Clone [option] ...)` — non-parameterized.
+  - Target syntax: `(definstance Clone [Pair a b] [Clone a, Clone b] ...)` — parameterized with constraints.
+  - Parse constraint list after type parameters: scan for `[Constraint1 Constraint2 ...]` vector.
+  - Each constraint is a typeclass name applied to type variables from the instance head.
+- [ ] Add `TypeClassConstraint` struct in `src/typeclass.h` to represent a constraint.
+  - Fields: `typeclass` (TypeClass*), `type_args` (Type* array for the constrained types).
+  - Example: `[Clone a]` → TypeClassConstraint{typeclass: Clone, type_args: [a]}.
+- [ ] Store constraints on `TypeClassInstance` in `src/typeclass.h`.
+  - Add `TypeClassConstraint *constraints` array and `n_constraints` field.
+
+### PTC2 — Constraint validation during instance elaboration
+- [ ] Implement constraint lookup: for each constraint `[Clone a]`, verify that a `Clone` instance exists for type `a`.
+  - In v1: only check if `a` is a primitive type with a known Clone instance (int, bool, cstr).
+  - For user-defined types (option, vec, Pair), the constraint is stored but not validated at elaboration time (deferred to PTC3).
+- [ ] Emit diagnostic `TUR-E0015_TYPECLASS_CONSTRAINT_NOT_SATISFIED` when a required constraint cannot be satisfied.
+  - Example: `(definstance Foo [Pair a b] [Clone a] ...)` where no Clone instance exists for `a`.
+  - Add to `DiagCode` enum in `src/diag.h` and `diag_code_to_string()` in `src/diag.c`.
+
+### PTC3 — Constraint propagation and method resolution with parameters
+- [ ] Implement constraint-based instance selection in `typeclass_env_lookup_instance`.
+  - When looking up an instance for `Clone [Pair int bool]`, check if constraints `[Clone int, Clone bool]` are satisfied.
+  - For primitive types with known instances, use the primitive instance directly.
+  - For user-defined types, walk the constraint chain to find valid instances.
+- [ ] Extend method call elaboration to handle parameterized instances.
+  - When calling `(clone pair_val)` where `pair_val : Pair int bool`, find the `Clone [Pair int bool]` instance.
+  - Propagate constraints through the call: if the instance requires `[Clone int, Clone bool]`, verify these exist.
+
+### PTC4 — Test fixtures for parameterized typeclasses
+- [ ] Add `tests/fixtures/typeclass/parametric-clone-pair.tur` — Clone instance for `Pair a b` with constraints.
+- [ ] Add `tests/fixtures/typeclass/parametric-clone-list.tur` — Clone instance for `list a` with constraint `[Clone a]`.
+- [ ] Add negative fixture `tests/fixtures/errors/typeclass-constraint-unsatisfied.tur` — constraint error diagnostic.
+
+---
+
 ## Backtracking remaining tasks (Phases B1–B5)
 
 ### Phase B1 remaining tasks (Clone trait infrastructure)
@@ -1401,29 +1441,32 @@ See [backtracking-cloneable-continuations-plan.md](archive/backtracking-cloneabl
 - [x] Implement `Clone` instances for: `int`, `int8`–`int64`, `uint8`–`uint64`, `float`, `double`, `bool`, `cstr`.
   - Done: `int`, `bool`, `cstr` instances implemented. Other numeric types deferred — Turmeric v1 uses `int64_t` for all integers.
 - [ ] Implement `(definstance Clone (Pair a b) [Clone a, Clone b])`.
-  - Deferred: requires parameterized typeclass instances (not yet supported by `elab_definstance`).
+  - **Blocked**: requires PTC1–PTC3 (parameterized typeclass constraints).
+  - Once PTC prerequisites land, add: `(definstance Clone [Pair a b] [Clone a, Clone b] (clone [x] __clone_pair))`.
 - [x] Implement `(definstance Clone (option a) [Clone a])`.
   - Done: non-parameterized Clone instance for option in `stdlib/option.tur` using deep copy of contained int64_t value.
+  - Note: A parameterized version `[option a] [Clone a]` requires PTC1–PTC3.
 - [ ] Implement `(definstance Clone (list a) [Clone a])`.
-  - Deferred: requires parameterized typeclass instances.
+  - **Blocked**: requires PTC1–PTC3 (parameterized typeclass constraints) and list type in stdlib.
 - [x] Implement `(definstance Clone (vec a) [Clone a])`.
   - Done: non-parameterized Clone instance for vec in `stdlib/vec.tur` using deep copy of all int64_t elements.
 - [ ] Implement `(definstance Clone (rc a) [Clone a])` — refcount increment (shallow; document clearly).
-  - Deferred: `rc`/`Rc` type not yet implemented as a stdlib type in v1. Arc (atomic RC) exists at runtime level but not as a Turmeric type.
+  - **Blocked**: requires PTC1–PTC3 and `rc`/`Rc` type in stdlib.
 - [ ] Implement `(definstance Clone (ref a) [Clone a])` — deep clone into new heap allocation.
-  - Deferred: `ref` type not yet implemented as a stdlib type in v1. Borrow-checked references (`&T`, `&mut T`) are compiler-level constructs, not heap-allocated types.
+  - **Blocked**: requires PTC1–PTC3 and `ref` type in stdlib.
+  - Note: Borrow-checked references (`&T`, `&mut T`) are compiler-level constructs, not heap-allocated types.
 - [ ] Add `check_cloneable_capture` in `src/elab.c`; emit TUR-E0014 on non-`Clone` capture.
   - Deferred: requires B2 (cloneable continuation runtime) to have cloneable continuations to check.
 - [x] Add `tests/fixtures/backtrack/clone-primitives.tur`.
   - Done: fixture exists at `tests/fixtures/clone-primitives/` and passes.
 - [ ] Add `tests/fixtures/clone-pair/` fixture.
-  - Blocked: requires parameterized Clone instances.
+  - **Blocked**: requires PTC1–PTC3 (parameterized Clone instance) and Pair type in stdlib.
 - [ ] Add `tests/fixtures/clone-option/` fixture.
-  - Blocked: non-parameterized Clone for option works, but parameterized test would need instance resolution.
+  - **Blocked**: requires PTC1–PTC3 for parameterized Clone instance, or a working multi-file compilation to use existing non-parameterized instance.
 - [ ] Add `tests/fixtures/clone-list/` fixture.
-  - Blocked: requires parameterized Clone instances.
+  - **Blocked**: requires PTC1–PTC3 and list type in stdlib.
 - [ ] Add `tests/fixtures/clone-vec/` fixture.
-  - Blocked: non-parameterized Clone for vec works, but parameterized test would need instance resolution.
+  - **Blocked**: requires PTC1–PTC3 for parameterized Clone instance, or a working multi-file compilation to use existing non-parameterized instance.
 - [ ] Add `tests/fixtures/backtrack/clone-rc.tur`.
   - Deferred: `rc` type not yet implemented as stdlib type.
 - [ ] Add `tests/fixtures/backtrack/clone-ref.tur`.
@@ -1437,7 +1480,7 @@ These prerequisites must be completed before the remaining B2 implementation tas
 
 - [ ] Implement deep clone infrastructure for arbitrary types via `Clone` trait dispatch.
   - Required for: `tur_cloneable_cont_clone` to deep copy captured environments.
-  - Blocking: The runtime needs to call type-specific clone functions for each captured value. In v1, only primitive types (`int`, `bool`, `cstr`) and `option`, `vec` have Clone instances. Parameterized instances (for `Pair`, `list`, etc.) and runtime dispatch via typeclass dictionaries are needed.
+  - Blocking: The runtime needs to call type-specific clone functions for each captured value. In v1, only primitive types (`int`, `bool`, `cstr`) and non-parameterized `option`, `vec` have Clone instances. Full support requires PTC1–PTC3 (parameterized instances for `Pair`, `list`, etc.) and runtime dispatch via typeclass dictionaries.
 - [ ] Implement cloneable continuation type tagging in `tur_cont` struct.
   - Required for: distinguishing cloneable vs one-shot continuations at runtime.
   - Action: Add `is_cloneable` bool field to `tur_cont` in `src/runtime.h`.
