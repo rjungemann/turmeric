@@ -216,13 +216,21 @@ static inline bool type_is_sync(Type t) {
     return type_is_send(t);
 }
 
-#define TYPE_UNKNOWN  ((Type){TY_UNKNOWN, .copy_kind=CK_MOVE, .n_lifetimes=0, .as={0}})
-#define TYPE_NIL      ((Type){TY_NIL, .copy_kind=CK_COPY, .n_lifetimes=0, .as={0}})
-#define TYPE_BOOL     ((Type){TY_BOOL, .copy_kind=CK_COPY, .n_lifetimes=0, .as={0}})
-#define TYPE_INT      ((Type){TY_INT, .copy_kind=CK_COPY, .n_lifetimes=0, .as={0}})
-#define TYPE_FLOAT    ((Type){TY_FLOAT, .copy_kind=CK_COPY, .n_lifetimes=0, .as={0}})
-#define TYPE_CSTR     ((Type){TY_CSTR, .copy_kind=CK_COPY, .n_lifetimes=0, .as={0}})
-#define TYPE_PTR_VOID ((Type){TY_PTR_VOID, .copy_kind=CK_COPY, .n_lifetimes=0, .as={0}})
+static inline Type type_simple(TypeKind kind, CopyKind copy_kind) {
+    Type t = {0};
+    t.kind = kind;
+    t.copy_kind = copy_kind;
+    t.hkt_kind = KIND_STAR;
+    return t;
+}
+
+#define TYPE_UNKNOWN  (type_simple(TY_UNKNOWN, CK_MOVE))
+#define TYPE_NIL      (type_simple(TY_NIL, CK_COPY))
+#define TYPE_BOOL     (type_simple(TY_BOOL, CK_COPY))
+#define TYPE_INT      (type_simple(TY_INT, CK_COPY))
+#define TYPE_FLOAT    (type_simple(TY_FLOAT, CK_COPY))
+#define TYPE_CSTR     (type_simple(TY_CSTR, CK_COPY))
+#define TYPE_PTR_VOID (type_simple(TY_PTR_VOID, CK_COPY))
 
 /* Phase 5: ref<T> type constructor */
 static inline Type type_ref(TypeKind inner) {
