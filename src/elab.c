@@ -719,7 +719,7 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->n_file_scope_defs = 0;
     e->cap_file_scope_defs = 0;
     /* Phase 15: Typeclass environment */
-    typeclass_env_init(&e->typeclass_env);
+    typeclass_env_init(&e->typeclass_env, arena);
     /* Phase 19: Effect environment */
     e->effect_env = effect_env_new(arena);
 
@@ -5424,10 +5424,10 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
     uint32_t actual_n_fields = n_fields / 2;
 
     /* Allocate StructDef and field array */
-    StructDef *def = (StructDef *)malloc(sizeof(StructDef));
+    StructDef *def = (StructDef *)arena_alloc(e->arena, sizeof(StructDef));
     def->name = name->name;
     def->n_fields = actual_n_fields;
-    def->fields = (StructField *)malloc(actual_n_fields * sizeof(StructField));
+    def->fields = (StructField *)arena_alloc(e->arena, actual_n_fields * sizeof(StructField));
     def->is_copy = is_copy;
     def->needs_drop_glue = false;
 
@@ -5440,14 +5440,12 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
         if (field_name_form->tag != F_SYM) {
             diag_emit(DIAG_ERROR, field_name_form->span,
                       "defstruct field name must be a symbol");
-            free(def->fields); free(def);
             return NULL;
         }
         if (field_type_form->tag != F_KEYWORD) {
             diag_emit(DIAG_ERROR, field_type_form->span,
                       "defstruct field '%s' type must be a keyword like :int",
                       field_name_form->as.sym->name);
-            free(def->fields); free(def);
             return NULL;
         }
 
@@ -5460,7 +5458,6 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
             diag_emit(DIAG_ERROR, field_type_form->span,
                       "defstruct field '%s' has unrecognized type :%s",
                       field_name_form->as.sym->name, tname);
-            free(def->fields); free(def);
             return NULL;
         }
 
@@ -5469,7 +5466,6 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
             diag_emit(DIAG_ERROR, field_type_form->span,
                       "defstruct: field '%s' has non-copy type :%s and cannot be used in :copy struct",
                       field_name_form->as.sym->name, tname);
-            free(def->fields); free(def);
             return NULL;
         }
 
@@ -6725,6 +6721,9 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
     }
 
     scope_free(&e.global);
+    free(e.struct_defs);
+    free(e.handled_effect_names);
+    free(e.macros);
     if (rc != 0) return NULL;
 
     Expr *prog = expr_new(arena, EX_PROGRAM, TYPE_NIL,

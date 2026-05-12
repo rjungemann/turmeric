@@ -5,8 +5,8 @@ cmake_minimum_required(VERSION 3.20)
 # ---------------------------------------------------------------------------
 CPMAddPackage(
   NAME raylib
-  GITHUB_REPO raysan5/raylib
-  VERSION 5.0
+  GITHUB_REPOSITORY raysan5/raylib
+  GIT_TAG 5.0
   OPTIONS
     "BUILD_EXAMPLES OFF"
     "BUILD_GAMES    OFF"
@@ -30,8 +30,7 @@ set(TUR_OUTDIR   "${CMAKE_CURRENT_BINARY_DIR}")
 # ---------------------------------------------------------------------------
 add_custom_command(
   OUTPUT  "${TUR_OUTDIR}/snake_gen.c"
-  COMMAND "${TUR_COMPILER}" emit-c "${TUR_SRCDIR}/main.tur"
-          > "${TUR_OUTDIR}/snake_gen.c"
+  COMMAND /bin/sh -c "\"${TUR_COMPILER}\" emit-c \"${TUR_SRCDIR}/main.tur\" > \"${TUR_OUTDIR}/snake_gen.c\""
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   DEPENDS tur_compiler "${TUR_SRCDIR}/main.tur"
   COMMENT "Compiling main.tur → snake_gen.c"

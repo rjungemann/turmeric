@@ -182,8 +182,9 @@
       ;; GameOver: show game-over screen and exit without resuming k.
       ;; Discarding k unwinds the game loop immediately.
       (GameOver [score] k)
-        (show-game-over)
-        nil)))
+        (do
+          (show-game-over)
+          nil))))
 
 ;; ============================================================
 ;; Typeclass usage demonstration (at startup)
@@ -193,8 +194,8 @@
 ;; proving that the typeclass dispatch works end-to-end.
 ;; ============================================================
 (defn demo-typeclass [] :void
-  (let [label (.describe 42)])
-  nil)   ;; label unused at runtime; demonstrates dispatch compiles
+  (let [label (.describe 42)]
+    nil))   ;; label unused at runtime; demonstrates dispatch compiles
 
 ;; ============================================================
 ;; Entry point
