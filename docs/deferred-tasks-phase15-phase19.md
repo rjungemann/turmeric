@@ -1378,15 +1378,24 @@ See [backtracking-cloneable-continuations-plan.md](archive/backtracking-cloneabl
   - Deferred: requires B2 cloneable continuation runtime and `check_cloneable_capture` implementation.
 
 ### Phase B2 remaining tasks (Cloneable continuation runtime + CPS)
-- [ ] Parse `(cloneable-reset body)` and `(cloneable-shift k expr)` surface forms.
-- [ ] Parse `(call/cc* f)` sugar.
-- [ ] Add `TY_CLONEABLE_CONT` to `src/types.{c,h}`.
-- [ ] Define `CloneableContinuation` struct and `CloneEnvEntry` in `src/runtime.{c,h}`.
-- [ ] Implement `tur_cont_clone`, `tur_cont_resume_cloneable`, `tur_cont_drop_cloneable`.
+- [x] Parse `(cloneable-reset body)` and `(cloneable-shift k expr)` surface forms.
+  - Implemented: `elab_cloneable_reset` and `elab_cloneable_shift` in `src/elab.c`. Symbols registered and dispatch added.
+- [x] Parse `(call/cc* f)` sugar.
+  - Implemented: `elab_call_cc_star` in `src/elab.c` (stub that emits "not yet implemented" error).
+- [x] Add `TY_CLONEABLE_CONT` to `src/types.{c,h}`.
+  - Implemented: Added `TY_CLONEABLE_CONT` enum value, `type_cloneable_cont()` constructor, `type_c_name()` case, `type_name()` case, `type_eq()` case, `type_is_send()` case.
+- [x] Define `CloneableContinuation` struct (`tur_cloneable_cont`) in `src/runtime.{c,h}`.
+  - Implemented: Added `tur_cloneable_cont` struct and function declarations `tur_cloneable_cont_alloc`, `tur_cloneable_cont_clone`, `tur_cloneable_cont_resume`, `tur_cloneable_cont_drop`.
+- [ ] Implement `tur_cloneable_cont_clone`, `tur_cloneable_cont_resume`, `tur_cloneable_cont_drop` in `src/runtime.c`.
+  - Deferred: Runtime implementation requires deep clone of captured environment. Blocked by Clone trait infrastructure for arbitrary types.
 - [ ] One-shot `tur_cont_resume` aborts with diagnostic if called on a `is_cloneable = true` continuation.
+  - Deferred: Requires cloneable continuation type checking at runtime.
 - [ ] Implement `DEFER_SUSPENDED` and `DEFER_REPLAY` defer modes; update `src/runtime.{c,h}`.
+  - Deferred: Requires cloneable continuation integration with defer system.
 - [ ] Implement `needs_cloneable_cps` in `src/cps.{c,h}`.
+  - Deferred: Requires full CPS transformation for cloneable continuations.
 - [ ] Implement `emit_capture_environment(..., cloneable=true)` in `src/cps.{c,h}`: record `clone_fn`/`drop_fn` per binding.
+  - Deferred: Requires CPS transformation infrastructure for cloneable continuations.
 - [ ] Add `tests/fixtures/backtrack/cloneable-basic.tur`.
 - [ ] Add `tests/fixtures/backtrack/cloneable-multi-resume.tur`.
 - [ ] Add `tests/fixtures/backtrack/cloneable-defer-suspend.tur`.

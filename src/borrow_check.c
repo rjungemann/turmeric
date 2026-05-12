@@ -416,6 +416,15 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
             if (!borrow_check_expr_recursive(ctx, e->as.shift0_.k_fn)) return false;
             if (!borrow_check_expr_recursive(ctx, e->as.shift0_.body)) return false;
             return true;
+        /* Phase B2: Cloneable continuations */
+        case EX_CLONEABLE_RESET:
+            /* Check the cloneable-reset body */
+            return borrow_check_expr_recursive(ctx, e->as.cloneable_reset_.body);
+        case EX_CLONEABLE_SHIFT:
+            /* Check k function and body */
+            if (!borrow_check_expr_recursive(ctx, e->as.cloneable_shift_.k_fn)) return false;
+            if (!borrow_check_expr_recursive(ctx, e->as.cloneable_shift_.body)) return false;
+            return true;
         /* Phase 19: Algebraic effects */
         case EX_DEFECT:
             /* Effect definitions don't have borrows to check at this level */
