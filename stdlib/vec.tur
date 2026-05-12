@@ -113,3 +113,24 @@
 (definstance Foldable [vec]
   (foldl [ta init fn] (__foldable_vec_foldl ta init fn))
   (foldr [ta init fn] (__foldable_vec_foldr ta init fn)))
+
+;; Phase B1: Clone instance for vec
+;; Deep copies the vec struct and all its elements (v1: int64_t only)
+(defn __clone_vec_clone [x] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)x;
+  if (!v) return 0;
+  struct { int64_t *data; size_t len; size_t cap; } *r =
+      malloc(sizeof(struct { int64_t *data; size_t len; size_t cap; }));
+  r->len = v->len;
+  r->cap = v->cap;
+  r->data = malloc(sizeof(int64_t) * v->cap);
+  for (size_t i = 0; i < v->len; i++) {
+      r->data[i] = v->data[i];  /* v1: int64_t copy (deep clone for primitives) */
+  }
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(definstance Clone [vec]
+  (clone [x] (__clone_vec_clone x)))
