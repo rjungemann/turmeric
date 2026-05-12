@@ -58,7 +58,7 @@ These decisions were finalised in the T19–T21 prerequisites section of
 - **`-pthread` linking**: elaborator sets `needs_pthread` flag in `EmitCtx`; appended at link time in `src/emit.c`.
 - **Multi-threaded test runner**: `expected.timeout` (default 10 s); `TUR_TSAN=1` opt-in; fixtures needing TSan include `requires.tsan`.
 - **STM prerequisite**: Phase 20 may begin when T19's `Mutex<T>`, condition variables, and `Arc<T>` land — all three are already complete.
-- **T21 fiber context switching**: `ucontext_t` / `makecontext` / `swapcontext` (POSIX; available on macOS despite deprecation warning; suppress with `-Wno-deprecated-declarations`).
+- **T21 fiber context switching**: hand-rolled assembly context switch via `tur_ctx_swap` (`src/fiber_ctx_x64.S`, `src/fiber_ctx_arm64.S`) and `tur_ctx_t` (`src/fiber_ctx.h`).
 
 ---
 
@@ -247,8 +247,8 @@ Already noted in T19-C; `Semaphore` lives in `stdlib/sync.tur`. If it is impleme
 - [ ] Define `TurFiber` struct in `src/fiber.h`:
   ```c
   typedef struct TurFiber {
-      ucontext_t  ctx;          /* fiber execution context            */
-      ucontext_t  caller_ctx;   /* context to return to on yield      */
+      tur_ctx_t   ctx;          /* fiber execution context            */
+      tur_ctx_t   caller_ctx;   /* context to return to on yield      */
       void       *stack;        /* heap-allocated stack               */
       size_t      stack_size;   /* default: 1 MiB                     */
       bool        done;         /* true after fiber closure returns   */
@@ -258,18 +258,17 @@ Already noted in T19-C; `Semaphore` lives in `stdlib/sync.tur`. If it is impleme
   } TurFiber;
   ```
 - [ ] Implement `tur_fiber_new(void (*fn)(TurFiber *), size_t stack_size) → TurFiber *`.
-  - Allocate stack via `malloc`; call `getcontext` + `makecontext` to set up the entry point.
-  - Suppress deprecation warning on macOS with `#pragma clang diagnostic ignored "-Wdeprecated-declarations"` around the `ucontext_t` usage in `src/fiber.c`.
+  - Allocate stack via `malloc`; initialize `ctx` fields (`rip`/`rsp` on x64, `lr`/`sp` on arm64) for first entry through `fiber_entry_shim`.
 - [ ] Implement `tur_fiber_resume(TurFiber *f, void *arg) → void *`.
-  - Sets `f->arg`, then calls `swapcontext(&f->caller_ctx, &f->ctx)`.
+  - Sets `f->arg`, then calls `tur_ctx_swap(&f->caller_ctx, &f->ctx)`.
   - Returns `f->result` when the fiber has yielded or completed.
 - [ ] Implement `tur_fiber_yield(TurFiber *f, void *value)`.
-  - Sets `f->result = value`, then calls `swapcontext(&f->ctx, &f->caller_ctx)`.
+  - Sets `f->result = value`, then calls `tur_ctx_swap(&f->ctx, &f->caller_ctx)`.
 - [ ] Implement `tur_fiber_done(TurFiber *f) → bool`.
 - [ ] Implement `tur_fiber_free(TurFiber *f)` — frees the stack and the struct.
 - [ ] Add `src/fiber.c` and `src/fiber.h` to `Makefile` and `src/main.c` include set.
 
-**Context-switching platform note:** `ucontext_t` is the preferred approach. If Apple Clang ever removes it, fall back to a minimal assembly context switch (6–8 instructions per architecture; see typical coroutine library implementations for x86-64 and arm64 patterns). Do not use `setjmp`/`longjmp` — they do not switch stacks and cannot back a real fiber.
+**Context-switching platform note:** Use the assembly context switch path (`tur_ctx_swap`) for x86-64 and arm64. Do not use `setjmp`/`longjmp` — they do not switch stacks and cannot back a real fiber.
 
 #### T21-B — Fiber-local effect handler chain
 
