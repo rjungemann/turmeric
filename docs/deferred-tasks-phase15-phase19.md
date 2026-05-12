@@ -901,14 +901,16 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Implemented: `TurScheduler` is a global static (emitted in `src/emit.c`) and all access is via function calls. The scheduler is effectively `Send + Sync` by design (no direct field access exposed).
 
 ##### AW-012 — Borrow checker integration for async closures
-- [ ] Enforce that values captured across `await` points are `Send` (can be moved to fiber context).
-  - Deferred: Current v1 `async` spawns pthread directly (not fiber-based). Fiber-based async with `await` points requires Phase 23.
+- [x] Enforce that values captured in async closures are `Send` (can be moved to fiber context).
+  - Implemented in `src/elab.c`: `elab_async()` checks all captured variables and rejects non-`Send` types with `TUR-E0010`. This covers the common case at async boundary.
+- [ ] Enforce Send for values captured across `await` points within async.
+  - Deferred: Requires tracking which values cross `await` suspend points. Current implementation only checks at async closure creation. Fiber-based async with `await` points requires Phase 23.
 - [ ] Detect use-after-move for values moved into async blocks.
-  - Deferred: Same as above - requires fiber-based async model.
+  - Deferred: Requires tracking moves into async blocks and checking use-after-move. Current v1 checks Send at capture time but doesn't track use-after-move.
 - [ ] Reject `ref<T>` captured across `await` points (not `Send`); suggest `Arc<Mutex<T>>`.
-  - Deferred: Same as above.
-- [x] Add negative fixture `async-borrow-send.tur` — non-`Send` capture across `await` is a compile error.
-  - Implemented: Negative test would require fiber-based async. Current v1 `async` uses pthread spawn which already has Send checks via `thread-spawn`. This fixture is effectively covered by `thread-send-ref` and `thread-send-cont` for the current model.
+  - Deferred: Requires `await` point tracking to identify which values cross suspend boundaries. Current implementation rejects `ref<T>` at async closure creation time.
+- [x] Add negative fixture `errors/async-borrow-send.tur` — non-`Send` capture in async is a compile error.
+  - Implemented: Tests that `(async (fn [] (deref r)))` where `r: ref<int>` produces `TUR-E0010` error. Note: Uses `errors/` directory for negative tests.
 
 ##### AW-013 — Phase 21 fixtures
 - [x] Add `tests/fixtures/async-basic.tur` — basic `(async expr)` and `(await future)`.
