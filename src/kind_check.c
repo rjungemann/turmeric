@@ -234,3 +234,75 @@ int kind_check_pass(Arena *a, Expr *program) {
 
     return errors > 0 ? 1 : 0;
 }
+
+/* ---------------------------------------------------------------------------
+ * Phase HKT-P6: kind_dump_program — debug helper for --dump-kinds
+ * ------------------------------------------------------------------------- */
+
+/* Print type arguments for a TypeClassInstance in a compact form. */
+static void dump_instance_type_args_(TypeClassInstance *inst, FILE *out) {
+    if (!inst) return;
+    fputc('[', out);
+    for (uint8_t a = 0; a < inst->n_type_args; a++) {
+        if (a > 0) fputs(", ", out);
+        const char *n = type_name(inst->type_args[a]);
+        fputs(n ? n : "?", out);
+    }
+    fputc(']', out);
+}
+
+void kind_dump_program(Expr *program, FILE *out) {
+    if (!program || !out) return;
+
+    Expr   **items = NULL;
+    uint32_t n     = 0;
+    if (program->kind == EX_DO) {
+        items = program->as.do_.items;
+        n     = program->as.do_.n;
+    } else if (program->kind == EX_PROGRAM) {
+        items = program->as.program.items;
+        n     = program->as.program.n;
+    } else {
+        return;
+    }
+
+    for (uint32_t i = 0; i < n; i++) {
+        Expr *e = items[i];
+        if (!e) continue;
+
+        if (e->kind == EX_TYPECLASS_DEF) {
+            /* Print each type parameter that has a non-KIND_STAR kind. */
+            TypeClass *tc = e->as.typeclass_def_.typeclass;
+            if (!tc || !tc->name) continue;
+            for (uint8_t p = 0; p < tc->n_type_params; p++) {
+                Kind k = (tc->type_param_kinds ? tc->type_param_kinds[p]
+                                               : KIND_STAR);
+                if (k != KIND_STAR) {
+                    fprintf(out, "defclass %s param[%u] : %s\n",
+                            tc->name->name, (unsigned)p, kind_to_string(k));
+                }
+            }
+
+        } else if (e->kind == EX_INSTANCE_DEF) {
+            TypeClassInstance *inst = e->as.instance_def_.instance;
+            if (!inst || !inst->typeclass || !inst->typeclass->name) continue;
+
+            /* Only print instances where the typeclass has HKT parameters. */
+            bool has_hkt = false;
+            if (inst->typeclass->type_param_kinds) {
+                for (uint8_t p = 0; p < inst->typeclass->n_type_params; p++) {
+                    if (inst->typeclass->type_param_kinds[p] != KIND_STAR) {
+                        has_hkt = true;
+                        break;
+                    }
+                }
+            }
+            if (has_hkt) {
+                fprintf(out, "definstance %s ", inst->typeclass->name->name);
+                dump_instance_type_args_(inst, out);
+                fputc('\n', out);
+            }
+        }
+    }
+}
+
