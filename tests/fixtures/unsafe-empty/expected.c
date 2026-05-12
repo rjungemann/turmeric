@@ -581,122 +581,59 @@ static void tur_scheduler_unpark(FiberBlock *f) {
 #pragma clang diagnostic pop
 #endif
 
-static void tur_scheduler_run_one(TurScheduler *s) {
-    FiberBlock *f = tur_scheduler_dequeue(s);
-    if (!f) { return; }
-    s->current_fiber = f;
-    tur_fiber_block_resume(f, 0);
-    s->current_fiber = NULL;
-    if (!f->done && !f->parked) tur_scheduler_enqueue(s, f);
-}
-
-/* Phase T21-F: async/await runtime - fiber-based Futures */
-typedef enum { FUTURE_PENDING, FUTURE_FULFILLED, FUTURE_REJECTED } TurFutureStatus;
-
-typedef struct TurFuture TurFuture;
-struct TurFuture {
-    TurFutureStatus status;
-    int64_t value;
-    const char *error;  /* NULL if no error */
-    FiberBlock *fiber;  /* The fiber running the async task */
-    struct { void (*fn)(TurFuture *, int64_t); void *env; } on_complete;
+/* Phase T21-F: async/await runtime */
+typedef struct TurAsyncTask TurAsyncTask;
+struct TurAsyncTask {
+    pthread_mutex_t lock;
+    pthread_cond_t  ready;
+    int64_t         value;
+    int             done;
 };
 
-/* Create a new pending future */
-static TurFuture *tur_future_new(void) {
-    TurFuture *f = (TurFuture *)calloc(1, sizeof(TurFuture));
-    if (!f) { fprintf(stderr, "future: oom\n"); abort(); }
-    f->status = FUTURE_PENDING;
-    f->fiber = NULL;
-    f->on_complete.fn = NULL;
-    return f;
+typedef struct { TurAsyncTask *cell; int64_t (*fn)(void *env); void *env; } TurAsyncArg;
+
+static void *tur_async_trampoline(void *raw) {
+    TurAsyncArg *a = (TurAsyncArg *)raw;
+    int64_t result = a->fn(a->env);
+    pthread_mutex_lock(&a->cell->lock);
+    a->cell->value = result;
+    a->cell->done  = 1;
+    pthread_cond_broadcast(&a->cell->ready);
+    pthread_mutex_unlock(&a->cell->lock);
+    free(a);
+    return NULL;
 }
 
-/* Fulfill a future with a value */
-static void tur_future_fulfill(TurFuture *f, int64_t value) {
-    if (!f || f->status != FUTURE_PENDING) return;
-    f->status = FUTURE_FULFILLED;
-    f->value = value;
-    if (f->on_complete.fn) f->on_complete.fn(f, value);
+static TurAsyncTask *tur_async_call(int64_t (*fn)(void *env), void *env) {
+    TurAsyncTask *cell = (TurAsyncTask *)malloc(sizeof(TurAsyncTask));
+    if (!cell) { fprintf(stderr, "async: oom\n"); abort(); }
+    pthread_mutex_init(&cell->lock, NULL);
+    pthread_cond_init(&cell->ready, NULL);
+    cell->value = 0; cell->done = 0;
+    TurAsyncArg *arg = (TurAsyncArg *)malloc(sizeof(TurAsyncArg));
+    if (!arg) { free(cell); fprintf(stderr, "async: oom\n"); abort(); }
+    arg->cell = cell; arg->fn = fn; arg->env = env;
+    pthread_t __tid;
+    pthread_create(&__tid, NULL, tur_async_trampoline, arg);
+    pthread_detach(__tid);
+    return cell;
 }
 
-/* Reject a future with an error message */
-static void tur_future_reject(TurFuture *f, const char *error) {
-    if (!f || f->status != FUTURE_PENDING) return;
-    f->status = FUTURE_REJECTED;
-    f->error = error;
+static int64_t tur_await_future(TurAsyncTask *cell) {
+    pthread_mutex_lock(&cell->lock);
+    while (!cell->done)
+        pthread_cond_wait(&cell->ready, &cell->lock);
+    int64_t v = cell->value;
+    pthread_mutex_unlock(&cell->lock);
+    return v;
 }
 
-/* Check if future is done (fulfilled or rejected) */
-static int tur_future_done(TurFuture *f) {
-    return f && (f->status == FUTURE_FULFILLED || f->status == FUTURE_REJECTED);
+static void tur_async_free(TurAsyncTask *cell) {
+    if (!cell) return;
+    pthread_mutex_destroy(&cell->lock);
+    pthread_cond_destroy(&cell->ready);
+    free(cell);
 }
-
-/* Get future value (only valid if fulfilled) */
-static int64_t tur_future_get(TurFuture *f) {
-    if (!f || f->status != FUTURE_FULFILLED) return 0;
-    return f->value;
-}
-
-static TurFuture *tur_async_fiber(int64_t (*fn)(void)) {
-    TurFuture *future = tur_future_new();
-    if (!tur_scheduler) {
-        /* AW-005: Initialize scheduler on first use */
-        tur_scheduler = tur_scheduler_new();
-    }
-    /* AW-005: Simplified v1 - call function directly and fulfill */
-    int64_t result = fn();
-    tur_future_fulfill(future, result);
-    return future;
-}
-
-/* AW-004: await lowering with shift + scheduler callback */
-static int64_t tur_await_future(TurFuture *f) {
-    if (!f) { fprintf(stderr, "await: null future\n"); abort(); }
-    if (tur_future_done(f)) {
-        if (f->status == FUTURE_REJECTED) {
-            fprintf(stderr, "await: future rejected: %s\n", f->error ? f->error : "unknown");
-            abort();
-        }
-        return f->value;
-    }
-    /* Future not ready */
-    if (!tur_current_fiber) {
-        /* Not in a fiber - run the scheduler until future is done */
-        if (!tur_scheduler) {
-            fprintf(stderr, "await: no scheduler and not in fiber\n");
-            abort();
-        }
-        while (!tur_future_done(f)) {
-            tur_scheduler_run_one(tur_scheduler);
-        }
-    } else {
-        /* In a fiber - yield and let scheduler resume us */
-        /* Register a callback to re-enqueue this fiber when future completes */
-        f->on_complete.fn = (void (*)(TurFuture *, int64_t))tur_fiber_block_resume;
-        f->on_complete.env = (void *)tur_current_fiber;
-        tur_fiber_block_yield(0);
-        /* When we resume, the future should be done */
-        if (tur_future_done(f) && f->status == FUTURE_REJECTED) {
-            fprintf(stderr, "await: future rejected: %s\n", f->error ? f->error : "unknown");
-            abort();
-        }
-        return f->value;
-    }
-    if (f->status == FUTURE_REJECTED) {
-        fprintf(stderr, "await: future rejected: %s\n", f->error ? f->error : "unknown");
-        abort();
-    }
-    return f->value;
-}
-
-static void tur_future_free(TurFuture *f) {
-    if (!f) return;
-    free(f);
-}
-
-/* Backward compatibility: TurAsyncTask = TurFuture */
-typedef TurFuture TurAsyncTask;
 
 static __thread EffectHandlerFrame *global_effect_handler_chain = NULL;
 
@@ -1068,9 +1005,8 @@ static bool gc_is_alive(RcControlBlock *cb) {
 }
 
 int main() {
-        int64_t __t0;
-        __t0 = INT64_C(0);
-        return (int)__t0;
+        printf("%lld\n", (long long)(INT64_C(0)));
+        return (int)0;
 }
 
 
