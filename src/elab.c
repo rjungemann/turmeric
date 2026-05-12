@@ -886,7 +886,7 @@ static bool ct_env_lookup(CtEnv *env, const Symbol *name, CtValue *out) {
     return false;
 }
 
-static bool ct_truthy(Form *f) {
+static bool compile_time_truthy(Form *f) {
     return !(f->tag == F_NIL || (f->tag == F_BOOL && !f->as.b));
 }
 
@@ -1047,7 +1047,11 @@ static bool form_contains_ct_builtins(Form *f) {
 
 static CtValue ct_eval_builtin(CtEnv *env, const Symbol *name, Form **args, uint32_t n_args, Span span) {
     if (ct_symbol_name(name, "first")) {
-        if (n_args != 1) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time first expects 1 argument"); return ct_value_form(form_nil(env->elab->arena, span)); }
+        if (n_args != 1) {
+            *env->ok = false;
+            diag_emit(DIAG_ERROR, span, "compile-time first expects 1 argument");
+            return ct_value_form(form_nil(env->elab->arena, span));
+        }
         if (args[0]->tag != F_LIST || args[0]->as.list.len == 0) return ct_value_form(form_nil(env->elab->arena, span));
         return ct_value_form(args[0]->as.list.items[0]);
     }
@@ -1081,7 +1085,12 @@ static CtValue ct_eval_builtin(CtEnv *env, const Symbol *name, Form **args, uint
     if (ct_symbol_name(name, "cons")) {
         if (n_args != 2) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time cons expects 2 arguments"); return ct_value_form(form_nil(env->elab->arena, span)); }
         Form *tail = args[1];
-        uint32_t tail_len = (tail->tag == F_LIST) ? tail->as.list.len : (tail->tag == F_NIL ? 0 : 1);
+        uint32_t tail_len = 0;
+        if (tail->tag == F_LIST) {
+            tail_len = tail->as.list.len;
+        } else if (tail->tag != F_NIL) {
+            tail_len = 1;
+        }
         Form **items = (Form **)arena_alloc(env->elab->arena, (tail_len + 1) * sizeof(Form *));
         items[0] = args[0];
         if (tail->tag == F_LIST) {
@@ -1102,7 +1111,7 @@ static CtValue ct_eval_builtin(CtEnv *env, const Symbol *name, Form **args, uint
     }
     if (ct_symbol_name(name, "not")) {
         if (n_args != 1) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time not expects 1 argument"); return ct_value_form(form_bool(env->elab->arena, span, false)); }
-        return ct_value_form(form_bool(env->elab->arena, span, !ct_truthy(args[0])));
+        return ct_value_form(form_bool(env->elab->arena, span, !compile_time_truthy(args[0])));
     }
     return ct_value_form(NULL);
 }
@@ -1126,7 +1135,7 @@ static CtValue ct_eval_call(CtEnv *env, Form *f) {
         Form *cond = ct_value_to_form(env, cond_v, f->as.list.items[1]->span);
         if (!*env->ok) return ct_value_form(form_nil(env->elab->arena, f->span));
         if (cond->tag == F_BOOL || cond->tag == F_NIL) {
-            if (ct_truthy(cond)) return ct_eval_form(env, f->as.list.items[2]);
+            if (compile_time_truthy(cond)) return ct_eval_form(env, f->as.list.items[2]);
             if (f->as.list.len == 4) return ct_eval_form(env, f->as.list.items[3]);
             return ct_value_form(form_nil(env->elab->arena, f->span));
         }
