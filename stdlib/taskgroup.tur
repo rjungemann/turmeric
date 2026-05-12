@@ -90,6 +90,36 @@
   return c;
   ```)
 
+;; Check if the current task should exit due to cancellation
+;; PR-TG-003-2: Combines fiber-level and group-level cancellation checks
+;; Returns true if either the current fiber was cancelled or the group was cancelled
+(defn task-group-should-exit? [group :ptr<void>] :bool
+  ```c
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t done_cond;
+      int64_t task_count;
+      int64_t completed_count;
+      bool cancelled;
+      bool done;
+  } TaskGroupBlock;
+  TaskGroupBlock *g = (TaskGroupBlock *)group;
+  
+  /* Check fiber-level cancellation first (thread-local flag) */
+  if (tur_fiber_cancelled()) return true;
+  
+  /* Check group-level cancellation */
+  pthread_mutex_lock(&g->lock);
+  bool should_exit = g->cancelled;
+  pthread_mutex_unlock(&g->lock);
+  return should_exit;
+  ```)
+
+;; Alternative: check if current fiber should exit (without group context)
+;; Returns true if the thread-local cancelled flag is set
+(defn fiber-should-exit? [] :bool
+  (fiber-cancelled?))
+
 ;; Check if all tasks in the group have completed
 (defn task-group-done? [group :ptr<void>] :bool
   ```c
