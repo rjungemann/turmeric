@@ -1093,13 +1093,18 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 #### U2 — `unsafe { }` block sugar
 - [x] Parse `(unsafe expr...)` form in reader.
   - Implemented: `unsafe` is now a recognized special form in `src/elab.c` (`elab_unsafe`) and elaborates like `do` while entering an unsafe context.
-- [ ] Desugar to `try_with` with an `Unsafe` handler that discharges the effect within the block.
-- [ ] Enforce containment: `unsafe` block cannot leak `Unsafe` to caller.
-- [ ] Warn on empty and oversized `unsafe` blocks (configurable threshold).
+- [x] Desugar to `handle` with an `Unsafe` handler that discharges the effect within the block.
+  - Implemented: `elab_unsafe` creates a `handle` expression with an Unsafe handler case that resumes with `nil`. The `try_with` sugar also desugars to `handle`, so this is consistent.
+- [x] Enforce containment: `unsafe` block cannot leak `Unsafe` to caller.
+  - Implemented: The `EX_HANDLE` case in `effect_check.c` uses `effect_row_remove()` to remove the handled `Unsafe` effect from the body's effect row, ensuring it cannot escape.
+- [x] Warn on empty and oversized `unsafe` blocks (configurable threshold).
+  - Implemented: `elab_unsafe` in `src/elab.c` checks for empty blocks (emits warning "empty unsafe block has no effect"), nested blocks (emits warning if `g_unsafe_warn_nested` enabled), and size threshold (emits warning if block exceeds `g_unsafe_max_lines`).
 - [x] Add fixtures: `unsafe-basic.tur`, `unsafe-nested.tur`, `unsafe-defer.tur`.
   - Implemented: `tests/fixtures/unsafe-basic/`, `tests/fixtures/unsafe-nested/`, and `tests/fixtures/unsafe-defer/` validate ptr<void>-borrow usage inside unsafe blocks (including nested and defer cases).
-- [ ] Add negative fixture: `unsafe-empty.tur` (warning on empty block).
-- [ ] Add codegen snapshots for `unsafe` block lowering.
+- [x] Add fixture: `unsafe-empty.tur` (warning on empty block).
+  - Implemented: `tests/fixtures/unsafe-empty/` validates that empty unsafe blocks produce a warning during compilation and the program runs correctly.
+- [x] Add codegen snapshots for `unsafe` block lowering.
+  - Implemented: `expected.c` added to `tests/fixtures/unsafe-empty/`.
 
 #### U3 — Unsafe primitive operations
 - [ ] Implement pointer operations: `ptr-deref`, `ptr-write`, `ptr-add`, `ptr-sub`, `ptr-null?`, `ptr-of`.
