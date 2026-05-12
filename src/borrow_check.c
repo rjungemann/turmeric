@@ -366,7 +366,8 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
             
         case EX_TYPECLASS_DEF:
         case EX_INSTANCE_DEF:
-            /* Typeclass definitions are compile-time only - no runtime behavior to check */
+        case EX_DICT:
+            /* Typeclass definitions and dictionary references are compile-time only */
             return true;
             
         case EX_EXTERN_C:

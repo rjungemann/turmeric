@@ -115,6 +115,8 @@ typedef enum ExprKind {
     /* Phase T21-F: async/await sugar */
     EX_ASYNC,          /* (async fn-expr) - run no-arg fn in thread; return Future (ptr<void>) */
     EX_AWAIT,          /* (await fut)     - block on Future; return int value */
+    /* Phase H §1: dictionary passing */
+    EX_DICT,           /* implicit dictionary argument — address of a typeclass instance singleton */
     /* Phase 11: Struct operations */
     EX_MAKE_STRUCT,    /* (make-struct Name v1 v2 ...) - struct literal */
     EX_GET_FIELD,      /* (.field s) - struct field access */
@@ -255,8 +257,13 @@ struct Expr {
         struct { FnDef *fn; }                                               fn_def_;
         /* Phase 16 v2: fn_expr is non-NULL for indirect capability field calls
          * (EX_GET_FIELD callee). fn_binding is NULL in that case. */
+        /* Phase H §1: dict_arg is non-NULL for typeclass method calls; holds the
+         * EX_DICT node for the selected instance's dictionary singleton.
+         * Full runtime dict passing is deferred; this field annotates the IR
+         * so the information is available for future passes. */
         struct { Binding *fn_binding; Expr **args; uint32_t n_args;
-                 struct Expr *fn_expr; }                                    call_;
+                 struct Expr *fn_expr;
+                 struct Expr *dict_arg; }                                   call_;
         struct { FnDef *fn; }                                               fn_;
         struct { ExternC *ext; }                                            extern_c_;
         struct { InlineC *inline_c; }                                       inline_c_;
@@ -342,6 +349,8 @@ struct Expr {
         /* Phase T21-F: async/await */
         struct { Expr *fn_expr; }                    async_;       /* (async fn-expr) */
         struct { Expr *fut_expr; }                   await_;       /* (await fut) */
+        /* Phase H §1: dictionary passing */
+        struct { TypeClassInstance *instance; char dict_name[128]; } dict_; /* (dict Instance) */
 
         /* Phase 11: Struct operations */
         struct { StructDef *def; Expr **field_values; uint32_t n_fields; } make_struct_; /* (make-struct Name v1...) */

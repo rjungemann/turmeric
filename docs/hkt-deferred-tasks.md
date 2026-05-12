@@ -35,7 +35,7 @@ prerequisites in this order to unblock the most downstream work as early as poss
 
 ### §1 — Dictionary passing (unblocked after §5)
 
-- [ ] **IR** — add `EX_DICT` expression node (or extend `EX_CALL`) for implicit dictionary arguments _(deferred: full runtime dict passing; compile-time dispatch sufficient for multi-instance)_
+- [x] **IR** — add `EX_DICT` expression node (or extend `EX_CALL`) for implicit dictionary arguments _(deferred: full runtime dict passing; compile-time dispatch sufficient for multi-instance)_
 - [ ] **elab.c** — update `elab_method_call` to emit a dictionary load at every `EX_METHOD_CALL` site _(deferred)_
 - [x] **emit.c** — emit `static dict_<Class>_<type>_singleton` dictionary structs per `definstance` with symbol-based naming (avoids struct collisions between same-class instances)
 - [x] **typeclass.h / elab.c** — added `type_arg_syms` to `TypeClassInstance`; multi-instance dispatch via compile-time type-based selection (first-match per call-site type)

@@ -208,6 +208,10 @@ void expr_print(Buf *b, const Expr *e) {
             expr_print(b, e->as.await_.fut_expr);
             buf_putc(b, ')');
             break;
+        /* Phase H §1: dictionary passing */
+        case EX_DICT:
+            buf_printf(b, "(dict %s)", e->as.dict_.dict_name);
+            break;
         /* Phase 12: Borrow traits */
         case EX_BORROW_IMMUT:
             buf_puts(b, "(& ");
