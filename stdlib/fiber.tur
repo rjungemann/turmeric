@@ -43,3 +43,28 @@
   ```c
   tur_fiber_block_free((FiberBlock *)f);
   ```)
+
+;; Phase T21: Fiber-local storage
+;; Each fiber can store key-value pairs that persist for the lifetime of the fiber.
+;; Keys and values are int64_t.
+
+(defn fiber-local-get [f :ptr<void> key :int] :int
+  ```c
+  return tur_fiber_local_get((FiberBlock *)f, (int64_t)key);
+  ```)
+
+(defn fiber-local-set! [f :ptr<void> key :int value :int] :nil
+  ```c
+  tur_fiber_local_set((FiberBlock *)f, (int64_t)key, (int64_t)value);
+  ```)
+
+;; Current fiber versions - use tur_current_fiber implicitly
+(defn fiber-local-current-get [key :int] :int
+  ```c
+  return tur_fiber_local_get(tur_current_fiber, (int64_t)key);
+  ```)
+
+(defn fiber-local-current-set! [key :int value :int] :nil
+  ```c
+  tur_fiber_local_set(tur_current_fiber, (int64_t)key, (int64_t)value);
+  ```)
