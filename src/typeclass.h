@@ -90,6 +90,12 @@ TypeClassInstance *typeclass_env_lookup_instance(const TypeClassEnv *env,
                                                   TypeClass *typeclass,
                                                   Type *type_args, uint8_t n_type_args);
 
+/* Phase PTC3: Check if an instance's type parameter constraints are satisfied
+ * for the given type arguments. */
+bool typeclass_instance_constraints_satisfied(const TypeClassInstance *inst,
+                                              Type *lookup_type_args, uint8_t n_lookup_args,
+                                              const TypeClassEnv *env);
+
 /* Phase HKT H2: Structured dispatch-table key.
  * Generalized lookup key carrying the constructor kind for two-level dispatch.
  * KIND_STAR keys fall through to typeclass_env_lookup_instance (no regression). */

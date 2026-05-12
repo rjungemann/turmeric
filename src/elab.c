@@ -7649,9 +7649,14 @@ static Expr *elab_defclass(Elab *e, const Form *call) {
             if (n_type_params > 0) {
                 type_params = (const Symbol **)arena_alloc(e->arena,
                     n_type_params * sizeof(const Symbol *));
-                /* arena_alloc zeroes memory, so all kinds start as KIND_STAR (0). */
+                /* Phase PTC2: Explicitly initialize all type_param_kinds to KIND_STAR.
+                 * Note: arena_alloc does NOT zero memory, contrary to the old comment. */
                 type_param_kinds = (Kind *)arena_alloc(e->arena,
                     n_type_params * sizeof(Kind));
+                for (uint8_t i = 0; i < n_type_params; i++) {
+                    type_param_kinds[i] = KIND_STAR;  /* Default kind for all params */
+                }
+                
                 for (uint8_t i = 0; i < n_type_params; i++) {
                     Form *p = params_form->as.list.items[i];
                     /* Phase HKT H1: [f :kind] vector form — not yet supported;
@@ -8012,6 +8017,50 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
                 }
                 impls_start++; /* Skip past the constraint vector */
             }
+        }
+    }
+
+    /* Phase PTC2: Validate type parameter constraints */
+    if (type_param_constraints && n_type_param_constraints > 0) {
+        for (uint8_t i = 0; i < n_type_param_constraints; i++) {
+            TypeClass *constraint_tc = type_param_constraints[i].typeclass;
+            Type constrained_type = type_param_constraints[i].type_arg;
+            bool is_primitive = (constrained_type.kind == TY_INT ||
+                                 constrained_type.kind == TY_BOOL ||
+                                 constrained_type.kind == TY_CSTR ||
+                                 constrained_type.kind == TY_NIL ||
+                                 constrained_type.kind == TY_FLOAT ||
+                                 constrained_type.kind == TY_PTR_VOID);
+            
+            /* PTC2: For primitive types, validate that a constraint instance exists.
+             * For user-defined types (structs, etc.), defer validation to PTC3.
+             * Phase B1: float is treated as a primitive for constraint purposes. */
+            if (is_primitive) {
+                Type lookup_type = constrained_type;
+                if (constrained_type.kind == TY_BOOL) {
+                    lookup_type = TYPE_BOOL;
+                } else if (constrained_type.kind == TY_CSTR) {
+                    lookup_type = TYPE_CSTR;
+                } else if (constrained_type.kind == TY_NIL) {
+                    lookup_type = TYPE_NIL;
+                } else if (constrained_type.kind == TY_PTR_VOID) {
+                    lookup_type = TYPE_PTR_VOID;
+                } else if (constrained_type.kind == TY_FLOAT) {
+                    lookup_type = TYPE_FLOAT;
+                }
+                
+                TypeClassInstance *inst = typeclass_env_lookup_instance(
+                    &e->typeclass_env, constraint_tc, &lookup_type, 1);
+                if (!inst) {
+                    diag_emit_with_code(DIAG_ERROR, call->span,
+                        TUR_E0015_TYPECLASS_CONSTRAINT_NOT_SATISFIED,
+                        "typeclass constraint not satisfied: no instance of '%s' for type '%s'",
+                        constraint_tc->name->name, type_name(constrained_type));
+                    return NULL;
+                }
+            }
+            /* For user-defined types, the constraint is stored on the instance
+             * but not validated here (deferred to PTC3 for constraint propagation). */
         }
     }
 
@@ -8506,11 +8555,9 @@ static Expr *elab_method_call(Elab *e, const Form *call) {
                     return out;
                 }
             }
-            /* Struct but no matching field */
-            diag_emit(DIAG_ERROR, call->span,
-                      "struct '%s' has no field '%s'",
-                      def->name, method_name);
-            return NULL;
+            /* Struct but no matching field — fall through to typeclass method lookup */
+            /* In Phase PTC4, this allows (.method obj) to dispatch to typeclass
+             * methods even when obj is a struct that doesn't have that field. */
         }
     }
 
@@ -8650,6 +8697,17 @@ static Expr *elab_method_call(Elab *e, const Form *call) {
                 if (!type_ok) {
                     /* Record as fallback but keep searching. */
                     if (!best_method) { best_method = inst->method_impls[i]; best_inst = inst; }
+                    continue;
+                }
+            }
+            /* Phase PTC3: Check type parameter constraints on this instance.
+             * If the instance has constraints, verify they are satisfied before
+             * selecting it. For v1, we use the obj type as the only type argument.
+             * Phase PTC4 will handle full parameterized type matching. */
+            if (inst->type_param_constraints && inst->n_type_param_constraints > 0) {
+                Type obj_type = obj->type;
+                if (!typeclass_instance_constraints_satisfied(inst, &obj_type, 1, &e->typeclass_env)) {
+                    /* Constraints not satisfied - skip this instance */
                     continue;
                 }
             }
