@@ -2501,6 +2501,7 @@ static Expr *elab_c_call(Elab *e, const Form *call) {
     out->as.call_.fn_binding = b;
     out->as.call_.args = args;
     out->as.call_.n_args = n_args;
+    out->as.call_.fn_expr = NULL;
     return out;
 }
 
@@ -6184,6 +6185,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         out->as.call_.fn_binding = fn_binding;
         out->as.call_.args = NULL;
         out->as.call_.n_args = 0;
+        out->as.call_.fn_expr = NULL;
         return out;
     }
     
@@ -6289,6 +6291,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
     out->as.call_.fn_binding = fn_binding;
     out->as.call_.args = args;
     out->as.call_.n_args = n_args;
+    out->as.call_.fn_expr = NULL;
     return out;
 }
 
@@ -6438,6 +6441,8 @@ static void parse_struct_field_type(const char *tname, uint32_t tlen,
     if (tlen == 3  && memcmp(tname, "nil",   3) == 0) { *out_kind = TY_NIL;      return; }
     if (tlen == 4  && memcmp(tname, "void",  4) == 0) { *out_kind = TY_NIL;      return; }
     if (tlen == 9  && memcmp(tname, "ptr<void>", 9) == 0) { *out_kind = TY_PTR_VOID; return; }
+    /* Phase 16 v2: :fn field type — function pointer (may carry #{...} effect-row annotation) */
+    if (tlen == 2  && memcmp(tname, "fn",    2) == 0) { *out_kind = TY_FN;       return; }
 
     /* Compound types: rc<T>, ref<T>, weak<T> */
     /* Parse the prefix and inner type */
@@ -6469,6 +6474,9 @@ static bool typekind_is_copy_for_struct(TypeKind k) {
     switch (k) {
         case TY_INT: case TY_BOOL: case TY_FLOAT: case TY_CSTR:
         case TY_PTR_VOID: case TY_NIL:
+        /* Phase 16 v2: :fn fields are stored as int64_t at the C level, so they are
+         * trivially copyable (function pointer stored as an integer value). */
+        case TY_FN:
             return true;
         default:
             return false;
@@ -6541,13 +6549,38 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
                   "defstruct field list cannot be empty");
         return NULL;
     }
-    if ((n_fields % 2) != 0) {
-        diag_emit(DIAG_ERROR, fields_form->span,
-                  "defstruct field list must have [name :type ...] pairs");
-        return NULL;
-    }
 
-    uint32_t actual_n_fields = n_fields / 2;
+    uint32_t n_items = n_fields; /* n_fields = fields_form->as.list.len */
+
+    /* Phase 16 v2: Field list may contain optional #{...} after :fn type annotations.
+     * Pre-scan to count actual fields and validate structure. */
+    uint32_t actual_n_fields = 0;
+    {
+        uint32_t scan = 0;
+        while (scan < n_items) {
+            if (fields_form->as.list.items[scan]->tag != F_SYM) {
+                diag_emit(DIAG_ERROR, fields_form->as.list.items[scan]->span,
+                          "defstruct field list: expected field name symbol");
+                return NULL;
+            }
+            scan++; /* consume name */
+            if (scan >= n_items || fields_form->as.list.items[scan]->tag != F_KEYWORD) {
+                diag_emit(DIAG_ERROR, fields_form->span,
+                          "defstruct field list must have [name :type ...] pairs");
+                return NULL;
+            }
+            const char *tname = fields_form->as.list.items[scan]->as.sym->name;
+            uint32_t tlen = fields_form->as.list.items[scan]->as.sym->len;
+            scan++; /* consume type keyword */
+            /* Optional #{...} effect-row only for :fn fields */
+            bool is_fn_field = (tlen == 2 && memcmp(tname, "fn", 2) == 0);
+            if (is_fn_field && scan < n_items &&
+                fields_form->as.list.items[scan]->tag == F_MAP) {
+                scan++; /* consume #{...} annotation */
+            }
+            actual_n_fields++;
+        }
+    }
 
     /* Allocate StructDef and field array */
     StructDef *def = (StructDef *)arena_alloc(e->arena, sizeof(StructDef));
@@ -6557,51 +6590,59 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
     def->is_copy = is_copy;
     def->needs_drop_glue = false;
 
-    /* Parse field pairs */
-    for (uint32_t i = 0; i < n_fields; i += 2) {
-        uint32_t fi = i / 2;
-        Form *field_name_form = fields_form->as.list.items[i];
-        Form *field_type_form = fields_form->as.list.items[i + 1];
+    /* Parse fields */
+    {
+        uint32_t scan = 0;
+        for (uint32_t fi = 0; fi < actual_n_fields; fi++) {
+            Form *field_name_form = fields_form->as.list.items[scan++];
+            Form *field_type_form = fields_form->as.list.items[scan++];
 
-        if (field_name_form->tag != F_SYM) {
-            diag_emit(DIAG_ERROR, field_name_form->span,
-                      "defstruct field name must be a symbol");
-            return NULL;
-        }
-        if (field_type_form->tag != F_KEYWORD) {
-            diag_emit(DIAG_ERROR, field_type_form->span,
-                      "defstruct field '%s' type must be a keyword like :int",
-                      field_name_form->as.sym->name);
-            return NULL;
-        }
+            const char *tname = field_type_form->as.sym->name;
+            uint32_t tlen = field_type_form->as.sym->len;
+            TypeKind fkind, finner;
+            parse_struct_field_type(tname, tlen, &fkind, &finner);
 
-        const char *tname = field_type_form->as.sym->name;
-        uint32_t tlen = field_type_form->as.sym->len;
-        TypeKind fkind, finner;
-        parse_struct_field_type(tname, tlen, &fkind, &finner);
+            if (fkind == TY_UNKNOWN) {
+                diag_emit(DIAG_ERROR, field_type_form->span,
+                          "defstruct field '%s' has unrecognized type :%s",
+                          field_name_form->as.sym->name, tname);
+                return NULL;
+            }
 
-        if (fkind == TY_UNKNOWN) {
-            diag_emit(DIAG_ERROR, field_type_form->span,
-                      "defstruct field '%s' has unrecognized type :%s",
-                      field_name_form->as.sym->name, tname);
-            return NULL;
-        }
+            /* :copy struct validation: all fields must be copy */
+            if (is_copy && !typekind_is_copy_for_struct(fkind)) {
+                diag_emit(DIAG_ERROR, field_type_form->span,
+                          "defstruct: field '%s' has non-copy type :%s and cannot be used in :copy struct",
+                          field_name_form->as.sym->name, tname);
+                return NULL;
+            }
 
-        /* :copy struct validation: all fields must be copy */
-        if (is_copy && !typekind_is_copy_for_struct(fkind)) {
-            diag_emit(DIAG_ERROR, field_type_form->span,
-                      "defstruct: field '%s' has non-copy type :%s and cannot be used in :copy struct",
-                      field_name_form->as.sym->name, tname);
-            return NULL;
-        }
+            def->fields[fi].name = field_name_form->as.sym->name;
+            def->fields[fi].kind = fkind;
+            def->fields[fi].inner_kind = finner;
+            def->fields[fi].effect_row = NULL;
 
-        def->fields[fi].name = field_name_form->as.sym->name;
-        def->fields[fi].kind = fkind;
-        def->fields[fi].inner_kind = finner;
+            /* Phase 16 v2: parse optional #{...} effect-row annotation for :fn fields */
+            if (fkind == TY_FN && scan < n_items &&
+                fields_form->as.list.items[scan]->tag == F_MAP) {
+                Form *row_form = fields_form->as.list.items[scan++];
+                uint8_t n_sym = (uint8_t)row_form->as.list.len;
+                const Symbol **syms = (const Symbol **)arena_alloc(e->arena,
+                                        (n_sym ? n_sym : 1) * sizeof(Symbol *));
+                uint8_t n_valid = 0;
+                for (uint32_t j = 0; j < row_form->as.list.len; j++) {
+                    Form *item = row_form->as.list.items[j];
+                    if (item->tag == F_SYM) {
+                        syms[n_valid++] = item->as.sym;
+                    }
+                }
+                def->fields[fi].effect_row = effect_row_unresolved(e->arena, syms, n_valid);
+            }
 
-        /* Check if this field requires drop glue */
-        if (fkind == TY_RC || fkind == TY_REF || fkind == TY_WEAK) {
-            def->needs_drop_glue = true;
+            /* Check if this field requires drop glue */
+            if (fkind == TY_RC || fkind == TY_REF || fkind == TY_WEAK) {
+                def->needs_drop_glue = true;
+            }
         }
     }
 
@@ -7868,6 +7909,97 @@ static Expr *elab_method_call(Elab *e, const Form *call) {
         }
     }
 
+    /* Phase 16 v2: capability field call — (.field-name cap arg1 arg2 ...)
+     * When the receiver is a struct and the named field is :fn (TY_FN), and
+     * there are arguments, emit an indirect function-pointer call through the
+     * field. The call carries the EX_GET_FIELD as fn_expr for effect-row
+     * propagation. Effect rows on the field are advisory in v1 (codegen erases
+     * to a plain function pointer call). */
+    if (call->as.list.len > 2) {
+        Type base = obj->type;
+        if (base.kind == TY_REF_IMMUT || base.kind == TY_REF_MUT) {
+            base = type_from_kind(base.as.ref_borrow.target);
+        }
+        if (base.kind == TY_STRUCT) {
+            StructDef *def = base.as.struct_.def;
+            for (uint32_t i = 0; i < def->n_fields; i++) {
+                if (strcmp(def->fields[i].name, method_name) == 0 &&
+                    def->fields[i].kind == TY_FN) {
+                    /* Build EX_GET_FIELD for the function pointer */
+                    Type field_type = type_from_kind(TY_FN);
+                    Expr *get_field = expr_new(e->arena, EX_GET_FIELD, field_type, call->span);
+                    get_field->as.get_field_.struct_expr = obj;
+                    get_field->as.get_field_.field_idx = i;
+                    get_field->as.get_field_.def = def;
+
+                    /* Elaborate arguments */
+                    uint32_t n_args = call->as.list.len - 2;
+                    Expr **args = (Expr **)arena_alloc(e->arena, n_args * sizeof(Expr *));
+                    for (uint32_t j = 0; j < n_args; j++) {
+                        args[j] = elab_form(e, call->as.list.items[2 + j]);
+                        if (!args[j]) return NULL;
+                    }
+
+                    /* Build indirect EX_CALL through fn_expr */
+                    Expr *call_out = expr_new(e->arena, EX_CALL, TYPE_INT, call->span);
+                    call_out->as.call_.fn_binding = NULL;
+                    call_out->as.call_.fn_expr = get_field;
+                    call_out->as.call_.args = args;
+                    call_out->as.call_.n_args = n_args;
+                    return call_out;
+                }
+            }
+        }
+    }
+
+    /* Phase 16 v2 fallback: when receiver has TY_UNKNOWN or TY_INT type
+     * (untyped parameters default to TY_INT), search all registered struct defs
+     * for a :fn field matching the method name.
+     * This allows (.method-name cap args...) when cap has no explicit type annotation,
+     * as long as exactly one struct in scope has a TY_FN field with that name. */
+    if (call->as.list.len > 2 &&
+        (obj->type.kind == TY_UNKNOWN || obj->type.kind == TY_INT)) {
+        StructDef *matched_def = NULL;
+        uint32_t matched_idx = 0;
+        bool ambiguous = false;
+        for (uint32_t sd = 0; sd < e->n_struct_defs; sd++) {
+            StructDef *sdef = e->struct_defs[sd];
+            for (uint32_t i = 0; i < sdef->n_fields; i++) {
+                if (sdef->fields[i].kind == TY_FN &&
+                    strlen(sdef->fields[i].name) == method_name_len &&
+                    memcmp(sdef->fields[i].name, method_name, method_name_len) == 0) {
+                    if (matched_def != NULL && matched_def != sdef) {
+                        ambiguous = true;
+                    } else {
+                        matched_def = sdef;
+                        matched_idx = i;
+                    }
+                }
+            }
+        }
+        if (matched_def && !ambiguous) {
+            Type field_type = type_from_kind(TY_FN);
+            Expr *get_field = expr_new(e->arena, EX_GET_FIELD, field_type, call->span);
+            get_field->as.get_field_.struct_expr = obj;
+            get_field->as.get_field_.field_idx = matched_idx;
+            get_field->as.get_field_.def = matched_def;
+
+            uint32_t n_args = call->as.list.len - 2;
+            Expr **args = (Expr **)arena_alloc(e->arena, n_args * sizeof(Expr *));
+            for (uint32_t j = 0; j < n_args; j++) {
+                args[j] = elab_form(e, call->as.list.items[2 + j]);
+                if (!args[j]) return NULL;
+            }
+
+            Expr *call_out = expr_new(e->arena, EX_CALL, TYPE_INT, call->span);
+            call_out->as.call_.fn_binding = NULL;
+            call_out->as.call_.fn_expr = get_field;
+            call_out->as.call_.args = args;
+            call_out->as.call_.n_args = n_args;
+            return call_out;
+        }
+    }
+
     /* Phase HKT H2: Type-based instance lookup.
      * Build a TypeClassDispatchKey from the obj type, then use
      * typeclass_env_lookup_instance_by_key for a two-level search.
@@ -7966,6 +8098,7 @@ found_method:;
     out->as.call_.fn_binding = best_method->binding;
     out->as.call_.args = call_args;
     out->as.call_.n_args = n_args + 1;
+    out->as.call_.fn_expr = NULL;
     return out;
 }
 

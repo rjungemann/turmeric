@@ -90,6 +90,27 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
     case EX_CALL: {
         /* Phase P19-4: propagate from a known callee's already-inferred row,
          * applying any row-variable substitutions before merging. */
+
+        /* Phase 16 v2: indirect capability field call — fn_expr is EX_GET_FIELD.
+         * Propagate the effect-row annotation on the :fn struct field (if any). */
+        if (e->as.call_.fn_expr &&
+            e->as.call_.fn_expr->kind == EX_GET_FIELD) {
+            Expr *gf = e->as.call_.fn_expr;
+            StructDef *def = gf->as.get_field_.def;
+            uint32_t fidx = gf->as.get_field_.field_idx;
+            if (def && fidx < def->n_fields && def->fields[fidx].effect_row) {
+                EffectRow *field_row = effect_row_apply_subst(
+                    def->fields[fidx].effect_row, subst, a);
+                row = effect_row_merge(a, row, field_row);
+            }
+            /* Also recurse into the struct expression and arguments. */
+            row = collect_effects_in_expr(a, gf->as.get_field_.struct_expr, row, idx, env, subst);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                row = collect_effects_in_expr(a, e->as.call_.args[i], row, idx, env, subst);
+            }
+            return row;
+        }
+
         FnDef *callee = fn_index_lookup(idx, e->as.call_.fn_binding);
         if (callee && callee->inferred_effect_row) {
             /* Apply substitution to resolve any row variables in the callee's

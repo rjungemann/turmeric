@@ -1,0 +1,257 @@
+;; Phase T21 AW-013: future-combinators — map, then, race, all2, any2, of, error-of, cancel
+;;
+;; Tests the new Future combinators using inline C (following existing fixture pattern).
+;; Expected output:
+;;   42
+;;   -1
+;;   20
+;;   -5
+;;   70
+;;   -3
+;;   100
+;;   -7
+;;   55
+;;   cancelled
+
+;; ---- Shared FutureCell type definition ----
+
+;; Create a pre-fulfilled FutureCell
+(defn future-of [v :int] :ptr<void>
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *cell = (FutureCell *)malloc(sizeof(FutureCell));
+  if (!cell) abort();
+  pthread_mutex_init(&cell->lock, NULL);
+  pthread_cond_init(&cell->ready, NULL);
+  cell->value = (int64_t)v; cell->exn = 0; cell->is_set = true; cell->is_ok = true;
+  return (void *)cell;
+  ```)
+
+;; Create a pre-rejected FutureCell
+(defn future-error-of [e :int] :ptr<void>
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *cell = (FutureCell *)malloc(sizeof(FutureCell));
+  if (!cell) abort();
+  pthread_mutex_init(&cell->lock, NULL);
+  pthread_cond_init(&cell->ready, NULL);
+  cell->value = 0; cell->exn = (int64_t)e; cell->is_set = true; cell->is_ok = false;
+  return (void *)cell;
+  ```)
+
+;; Free a FutureCell
+(defn future-free [f :ptr<void>] :nil
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *fc = (FutureCell *)f;
+  pthread_mutex_destroy(&fc->lock);
+  pthread_cond_destroy(&fc->ready);
+  free(fc);
+  ```)
+
+;; Block until ready, return ok_val or err_val depending on is_ok
+(defn future-get-ok [f :ptr<void>] :int
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *fc = (FutureCell *)f;
+  pthread_mutex_lock(&fc->lock);
+  while (!fc->is_set) pthread_cond_wait(&fc->ready, &fc->lock);
+  bool ok = fc->is_ok; int64_t val = fc->value; int64_t exn = fc->exn;
+  pthread_mutex_unlock(&fc->lock);
+  return ok ? val : exn;
+  ```)
+
+(defn future-is-ok [f :ptr<void>] :bool
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *fc = (FutureCell *)f;
+  pthread_mutex_lock(&fc->lock);
+  while (!fc->is_set) pthread_cond_wait(&fc->ready, &fc->lock);
+  bool ok = fc->is_ok;
+  pthread_mutex_unlock(&fc->lock);
+  return ok;
+  ```)
+
+;; Map fn (int64_t->int64_t) over a future; propagates errors.
+(defn future-map [f :ptr<void> fn :ptr<void>] :ptr<void>
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *fc = (FutureCell *)f;
+  pthread_mutex_lock(&fc->lock);
+  while (!fc->is_set) pthread_cond_wait(&fc->ready, &fc->lock);
+  bool ok = fc->is_ok; int64_t val = fc->value; int64_t exn = fc->exn;
+  pthread_mutex_unlock(&fc->lock);
+  FutureCell *out = (FutureCell *)malloc(sizeof(FutureCell));
+  if (!out) abort();
+  pthread_mutex_init(&out->lock, NULL); pthread_cond_init(&out->ready, NULL);
+  out->is_set = true;
+  if (ok) { out->value = ((int64_t (*)(int64_t))fn)(val); out->exn = 0; out->is_ok = true; }
+  else { out->value = 0; out->exn = exn; out->is_ok = false; }
+  return (void *)out;
+  ```)
+
+;; Flat-map: fn receives value and returns a new future ptr<void>. Propagates errors.
+(defn future-then [f :ptr<void> fn :ptr<void>] :ptr<void>
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *fc = (FutureCell *)f;
+  pthread_mutex_lock(&fc->lock);
+  while (!fc->is_set) pthread_cond_wait(&fc->ready, &fc->lock);
+  bool ok = fc->is_ok; int64_t val = fc->value; int64_t exn = fc->exn;
+  pthread_mutex_unlock(&fc->lock);
+  if (!ok) {
+    FutureCell *out = (FutureCell *)malloc(sizeof(FutureCell));
+    if (!out) abort();
+    pthread_mutex_init(&out->lock, NULL); pthread_cond_init(&out->ready, NULL);
+    out->value = 0; out->exn = exn; out->is_set = true; out->is_ok = false;
+    return (void *)out;
+  }
+  return (void *)(intptr_t)((int64_t (*)(int64_t))fn)(val);
+  ```)
+
+;; Await both futures; if both ok, return ok(val_a). If either fails, return first error.
+(defn future-all2 [fa :ptr<void> fb :ptr<void>] :ptr<void>
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *a = (FutureCell *)fa; FutureCell *b = (FutureCell *)fb;
+  pthread_mutex_lock(&a->lock); while (!a->is_set) pthread_cond_wait(&a->ready, &a->lock);
+  bool ok_a = a->is_ok; int64_t val_a = a->value; int64_t exn_a = a->exn;
+  pthread_mutex_unlock(&a->lock);
+  pthread_mutex_lock(&b->lock); while (!b->is_set) pthread_cond_wait(&b->ready, &b->lock);
+  bool ok_b = b->is_ok; int64_t exn_b = b->exn;
+  pthread_mutex_unlock(&b->lock);
+  FutureCell *out = (FutureCell *)malloc(sizeof(FutureCell)); if (!out) abort();
+  pthread_mutex_init(&out->lock, NULL); pthread_cond_init(&out->ready, NULL);
+  out->is_set = true;
+  if (!ok_a) { out->is_ok = false; out->value = 0; out->exn = exn_a; }
+  else if (!ok_b) { out->is_ok = false; out->value = 0; out->exn = exn_b; }
+  else { out->is_ok = true; out->value = val_a; out->exn = 0; }
+  return (void *)out;
+  ```)
+
+;; Return first future to fulfill; if fa is already fulfilled, return it.
+;; If fa rejects, try fb. If both reject, return fb's rejection.
+(defn future-any2 [fa :ptr<void> fb :ptr<void>] :ptr<void>
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *a = (FutureCell *)fa; FutureCell *b = (FutureCell *)fb;
+  pthread_mutex_lock(&a->lock); while (!a->is_set) pthread_cond_wait(&a->ready, &a->lock);
+  bool ok_a = a->is_ok; int64_t val_a = a->value;
+  pthread_mutex_unlock(&a->lock);
+  if (ok_a) {
+    FutureCell *out = (FutureCell *)malloc(sizeof(FutureCell)); if (!out) abort();
+    pthread_mutex_init(&out->lock, NULL); pthread_cond_init(&out->ready, NULL);
+    out->is_set = true; out->is_ok = true; out->value = val_a; out->exn = 0;
+    return (void *)out;
+  }
+  pthread_mutex_lock(&b->lock); while (!b->is_set) pthread_cond_wait(&b->ready, &b->lock);
+  bool ok_b = b->is_ok; int64_t val_b = b->value; int64_t exn_b = b->exn;
+  pthread_mutex_unlock(&b->lock);
+  FutureCell *out = (FutureCell *)malloc(sizeof(FutureCell)); if (!out) abort();
+  pthread_mutex_init(&out->lock, NULL); pthread_cond_init(&out->ready, NULL);
+  out->is_set = true; out->is_ok = ok_b; out->value = val_b; out->exn = exn_b;
+  return (void *)out;
+  ```)
+
+;; Cancel a future: settle it with error -2 if not already settled.
+(defn future-cancel [f :ptr<void>] :nil
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *fc = (FutureCell *)f;
+  pthread_mutex_lock(&fc->lock);
+  if (!fc->is_set) { fc->exn = (int64_t)-2; fc->is_set = true; fc->is_ok = false; pthread_cond_broadcast(&fc->ready); }
+  pthread_mutex_unlock(&fc->lock);
+  ```)
+
+(defn future-cancelled? [f :ptr<void>] :bool
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *fc = (FutureCell *)f;
+  pthread_mutex_lock(&fc->lock);
+  bool c = fc->is_set && !fc->is_ok && fc->exn == (int64_t)-2;
+  pthread_mutex_unlock(&fc->lock);
+  return c;
+  ```)
+
+;; ---- Helper fns for map/then ----
+
+(defn double-fn [x :int] :int (* x 2))
+(defn times10-fn [x :int] :ptr<void> (future-of (* x 10)))
+
+;; ---- Main ----
+
+(defn main [] :int
+  ;; future-of: pre-fulfilled future
+  (let [f1 (future-of 42)]
+    (println (future-get-ok f1))   ;; 42
+    (future-free f1))
+
+  ;; future-error-of: pre-rejected future (get returns error code)
+  (let [f2 (future-error-of -1)]
+    (println (future-get-ok f2))  ;; -1
+    (future-free f2))
+
+  ;; future-map: transform fulfilled value (10 -> 20)
+  (let [f3 (future-of 10)]
+    (let [f3m (future-map f3 double-fn)]
+      (println (future-get-ok f3m))  ;; 20
+      (future-free f3)
+      (future-free f3m)))
+
+  ;; future-map on rejected: error propagates (-5)
+  (let [f4 (future-error-of -5)]
+    (let [f4m (future-map f4 double-fn)]
+      (println (future-get-ok f4m))  ;; -5
+      (future-free f4)
+      (future-free f4m)))
+
+  ;; future-then: flat-map (7 -> future-of(70))
+  (let [f5 (future-of 7)]
+    (let [f5t (future-then f5 times10-fn)]
+      (println (future-get-ok f5t))  ;; 70
+      (future-free f5)
+      (future-free f5t)))
+
+  ;; future-then on rejected: error propagates (-3)
+  (let [f6 (future-error-of -3)]
+    (let [f6t (future-then f6 times10-fn)]
+      (println (future-get-ok f6t))  ;; -3
+      (future-free f6)
+      (future-free f6t)))
+
+  ;; future-all2: both ok → value of fa (100)
+  (let [fa (future-of 100)]
+    (let [fb (future-of 200)]
+      (let [fall (future-all2 fa fb)]
+        (println (future-get-ok fall))  ;; 100
+        (future-free fa)
+        (future-free fb)
+        (future-free fall))))
+
+  ;; future-all2: one rejected → error (-7)
+  (let [fa2 (future-of 100)]
+    (let [fb2 (future-error-of -7)]
+      (let [fall2 (future-all2 fa2 fb2)]
+        (println (future-get-ok fall2))  ;; -7
+        (future-free fa2)
+        (future-free fb2)
+        (future-free fall2))))
+
+  ;; future-any2: first fulfilled wins (55)
+  (let [fa3 (future-of 55)]
+    (let [fb3 (future-error-of -8)]
+      (let [fany (future-any2 fa3 fb3)]
+        (println (future-get-ok fany))  ;; 55
+        (future-free fa3)
+        (future-free fb3)
+        (future-free fany))))
+
+  ;; future-cancel: cancelled? returns true
+  (let [fc (future-of 99)]
+    (future-cancel fc)
+    (if (future-cancelled? fc)
+      (println "cancelled")  ;; cancelled
+      (println "FAIL"))
+    (future-free fc))
+
+  0)

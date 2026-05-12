@@ -246,6 +246,8 @@ static Expr *cps_mark_expr(Arena *a, Expr *e) {
             }
             Expr *out = expr_new(a, EX_CALL, e->type, e->span);
             out->as.call_.fn_binding = e->as.call_.fn_binding;
+            out->as.call_.fn_expr = e->as.call_.fn_expr
+                ? cps_mark_expr(a, e->as.call_.fn_expr) : NULL;
             out->as.call_.args = new_args;
             out->as.call_.n_args = e->as.call_.n_args;
             return out;

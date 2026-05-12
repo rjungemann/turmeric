@@ -126,6 +126,7 @@ static Expr *perform_to_shift(Arena *a, SymbolTable *st, const PerformExpr *perf
     /* Create the call: (k 0) */
     Expr *k_call = expr_new(a, EX_CALL, perform->args[0] ? perform->args[0]->type : TYPE_NIL, span);
     k_call->as.call_.fn_binding = k_binding;
+    k_call->as.call_.fn_expr = NULL;
     
     /* For v1: use the first argument as the value, or 0 if no args */
     if (perform->n_args > 0) {
@@ -339,6 +340,8 @@ static Expr *lower_expr(Arena *a, SymbolTable *st, Expr *e, EffectEnv *effect_en
             }
             Expr *out = expr_new(a, EX_CALL, e->type, e->span);
             out->as.call_.fn_binding = e->as.call_.fn_binding;
+            out->as.call_.fn_expr = e->as.call_.fn_expr
+                ? lower_expr(a, st, e->as.call_.fn_expr, effect_env) : NULL;
             out->as.call_.args = new_args;
             out->as.call_.n_args = e->as.call_.n_args;
             return out;

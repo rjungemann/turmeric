@@ -240,7 +240,10 @@ struct Expr {
 
         /* Phase 2 */
         struct { FnDef *fn; }                                               fn_def_;
-        struct { Binding *fn_binding; Expr **args; uint32_t n_args; }       call_;
+        /* Phase 16 v2: fn_expr is non-NULL for indirect capability field calls
+         * (EX_GET_FIELD callee). fn_binding is NULL in that case. */
+        struct { Binding *fn_binding; Expr **args; uint32_t n_args;
+                 struct Expr *fn_expr; }                                    call_;
         struct { FnDef *fn; }                                               fn_;
         struct { ExternC *ext; }                                            extern_c_;
         struct { InlineC *inline_c; }                                       inline_c_;

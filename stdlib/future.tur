@@ -172,6 +172,220 @@
 (defn future-free [f :ptr<void>] :nil
   (future-cell-free f))
 
+;; ---- AW-002: Pre-settled futures ----
+
+;; Create a pre-fulfilled future with the given value.
+(defn future-of [v :int] :ptr<void>
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *cell = (FutureCell *)malloc(sizeof(FutureCell));
+  if (!cell) { fprintf(stderr, "future-of: oom\n"); abort(); }
+  pthread_mutex_init(&cell->lock, NULL);
+  pthread_cond_init(&cell->ready, NULL);
+  cell->value = (int64_t)v;
+  cell->exn = 0;
+  cell->is_set = true;
+  cell->is_ok = true;
+  return (void *)cell;
+  ```)
+
+;; Create a pre-rejected future with the given error code.
+(defn future-error-of [e :int] :ptr<void>
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *cell = (FutureCell *)malloc(sizeof(FutureCell));
+  if (!cell) { fprintf(stderr, "future-error-of: oom\n"); abort(); }
+  pthread_mutex_init(&cell->lock, NULL);
+  pthread_cond_init(&cell->ready, NULL);
+  cell->value = 0;
+  cell->exn = (int64_t)e;
+  cell->is_set = true;
+  cell->is_ok = false;
+  return (void *)cell;
+  ```)
+
+;; Cancel a future: if not yet settled, settle it with error code -2 (cancelled sentinel).
+;; If already settled, this is a no-op.
+(defn future-cancel [f :ptr<void>] :nil
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *fc = (FutureCell *)f;
+  pthread_mutex_lock(&fc->lock);
+  if (!fc->is_set) {
+      fc->exn = (int64_t)-2; /* TUR_FUTURE_CANCELLED */
+      fc->is_set = true;
+      fc->is_ok = false;
+      pthread_cond_broadcast(&fc->ready);
+  }
+  pthread_mutex_unlock(&fc->lock);
+  ```)
+
+;; Check if a future was cancelled (error code == -2).
+(defn future-cancelled? [f :ptr<void>] :bool
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *fc = (FutureCell *)f;
+  pthread_mutex_lock(&fc->lock);
+  bool cancelled = fc->is_set && !fc->is_ok && fc->exn == (int64_t)-2;
+  pthread_mutex_unlock(&fc->lock);
+  return cancelled;
+  ```)
+
+;; ---- AW-006: Future combinators ----
+
+;; Map a function over a fulfilled future value.
+;; fn is a ptr<void> treated as int64_t(*)(int64_t).
+;; If the future is rejected, propagates the error.
+;; Returns a new pre-settled future.
+(defn future-map [f :ptr<void> fn :ptr<void>] :ptr<void>
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *fc = (FutureCell *)f;
+  pthread_mutex_lock(&fc->lock);
+  while (!fc->is_set) pthread_cond_wait(&fc->ready, &fc->lock);
+  bool ok = fc->is_ok;
+  int64_t val = fc->value;
+  int64_t exn = fc->exn;
+  pthread_mutex_unlock(&fc->lock);
+  FutureCell *out = (FutureCell *)malloc(sizeof(FutureCell));
+  if (!out) { fprintf(stderr, "future-map: oom\n"); abort(); }
+  pthread_mutex_init(&out->lock, NULL);
+  pthread_cond_init(&out->ready, NULL);
+  out->is_set = true;
+  if (ok) {
+      out->value = ((int64_t (*)(int64_t))fn)(val);
+      out->exn   = 0;
+      out->is_ok = true;
+  } else {
+      out->value = 0;
+      out->exn   = exn;
+      out->is_ok = false;
+  }
+  return (void *)out;
+  ```)
+
+;; Flat-map: fn receives the fulfilled value and must return a new future (ptr<void>).
+;; If the source future is rejected, propagates the error without calling fn.
+(defn future-then [f :ptr<void> fn :ptr<void>] :ptr<void>
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *fc = (FutureCell *)f;
+  pthread_mutex_lock(&fc->lock);
+  while (!fc->is_set) pthread_cond_wait(&fc->ready, &fc->lock);
+  bool ok = fc->is_ok;
+  int64_t val = fc->value;
+  int64_t exn = fc->exn;
+  pthread_mutex_unlock(&fc->lock);
+  if (!ok) {
+      FutureCell *out = (FutureCell *)malloc(sizeof(FutureCell));
+      if (!out) { fprintf(stderr, "future-then: oom\n"); abort(); }
+      pthread_mutex_init(&out->lock, NULL);
+      pthread_cond_init(&out->ready, NULL);
+      out->value = 0; out->exn = exn; out->is_set = true; out->is_ok = false;
+      return (void *)out;
+  }
+  /* Call fn(val) which returns a new FutureCell ptr<void> */
+  return (void *)(intptr_t)((int64_t (*)(int64_t))fn)(val);
+  ```)
+
+;; ---- AW-007: Multi-combinators ----
+
+;; Race two futures: return a new future that resolves to whichever settles first.
+;; The result is a pre-settled future with the winner's value or error.
+(defn future-race [fa :ptr<void> fb :ptr<void>] :ptr<void>
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *a = (FutureCell *)fa;
+  FutureCell *b = (FutureCell *)fb;
+  /* Poll in a spin loop until one settles; lock ordering to avoid deadlock */
+  for (;;) {
+      pthread_mutex_lock(&a->lock);
+      if (a->is_set) {
+          bool ok = a->is_ok; int64_t val = a->value; int64_t exn = a->exn;
+          pthread_mutex_unlock(&a->lock);
+          FutureCell *out = (FutureCell *)malloc(sizeof(FutureCell));
+          if (!out) { fprintf(stderr, "future-race: oom\n"); abort(); }
+          pthread_mutex_init(&out->lock, NULL); pthread_cond_init(&out->ready, NULL);
+          out->is_set = true; out->is_ok = ok; out->value = val; out->exn = exn;
+          return (void *)out;
+      }
+      pthread_mutex_unlock(&a->lock);
+      pthread_mutex_lock(&b->lock);
+      if (b->is_set) {
+          bool ok = b->is_ok; int64_t val = b->value; int64_t exn = b->exn;
+          pthread_mutex_unlock(&b->lock);
+          FutureCell *out = (FutureCell *)malloc(sizeof(FutureCell));
+          if (!out) { fprintf(stderr, "future-race: oom\n"); abort(); }
+          pthread_mutex_init(&out->lock, NULL); pthread_cond_init(&out->ready, NULL);
+          out->is_set = true; out->is_ok = ok; out->value = val; out->exn = exn;
+          return (void *)out;
+      }
+      pthread_mutex_unlock(&b->lock);
+      /* Brief yield to avoid 100% CPU spin */
+      struct timespec ts = {0, 100000}; nanosleep(&ts, NULL);
+  }
+  ```)
+
+;; Await both futures; return a new future that:
+;;   - is fulfilled with the value of fa if both are ok (value from fa)
+;;   - is rejected with the first encountered error
+;; Returns a pre-settled future.
+(defn future-all2 [fa :ptr<void> fb :ptr<void>] :ptr<void>
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *a = (FutureCell *)fa;
+  FutureCell *b = (FutureCell *)fb;
+  pthread_mutex_lock(&a->lock);
+  while (!a->is_set) pthread_cond_wait(&a->ready, &a->lock);
+  bool ok_a = a->is_ok; int64_t val_a = a->value; int64_t exn_a = a->exn;
+  pthread_mutex_unlock(&a->lock);
+  pthread_mutex_lock(&b->lock);
+  while (!b->is_set) pthread_cond_wait(&b->ready, &b->lock);
+  bool ok_b = b->is_ok; int64_t exn_b = b->exn;
+  pthread_mutex_unlock(&b->lock);
+  FutureCell *out = (FutureCell *)malloc(sizeof(FutureCell));
+  if (!out) { fprintf(stderr, "future-all2: oom\n"); abort(); }
+  pthread_mutex_init(&out->lock, NULL); pthread_cond_init(&out->ready, NULL);
+  out->is_set = true;
+  if (!ok_a) { out->is_ok = false; out->value = 0; out->exn = exn_a; }
+  else if (!ok_b) { out->is_ok = false; out->value = 0; out->exn = exn_b; }
+  else { out->is_ok = true; out->value = val_a; out->exn = 0; }
+  return (void *)out;
+  ```)
+
+;; Return the first future to be *fulfilled* (ignoring rejections until all reject).
+;; With exactly two futures: if fa fulfills, return fa's value.
+;; If fa rejects but fb fulfills, return fb's value.
+;; If both reject, return fb's rejection.
+(defn future-any2 [fa :ptr<void> fb :ptr<void>] :ptr<void>
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *a = (FutureCell *)fa;
+  FutureCell *b = (FutureCell *)fb;
+  pthread_mutex_lock(&a->lock);
+  while (!a->is_set) pthread_cond_wait(&a->ready, &a->lock);
+  bool ok_a = a->is_ok; int64_t val_a = a->value; int64_t exn_a = a->exn; (void)exn_a;
+  pthread_mutex_unlock(&a->lock);
+  if (ok_a) {
+      FutureCell *out = (FutureCell *)malloc(sizeof(FutureCell));
+      if (!out) { fprintf(stderr, "future-any2: oom\n"); abort(); }
+      pthread_mutex_init(&out->lock, NULL); pthread_cond_init(&out->ready, NULL);
+      out->is_set = true; out->is_ok = true; out->value = val_a; out->exn = 0;
+      return (void *)out;
+  }
+  /* fa rejected, try fb */
+  pthread_mutex_lock(&b->lock);
+  while (!b->is_set) pthread_cond_wait(&b->ready, &b->lock);
+  bool ok_b = b->is_ok; int64_t val_b = b->value; int64_t exn_b = b->exn;
+  pthread_mutex_unlock(&b->lock);
+  FutureCell *out = (FutureCell *)malloc(sizeof(FutureCell));
+  if (!out) { fprintf(stderr, "future-any2: oom\n"); abort(); }
+  pthread_mutex_init(&out->lock, NULL); pthread_cond_init(&out->ready, NULL);
+  out->is_set = true;
+  out->is_ok = ok_b; out->value = val_b; out->exn = exn_b;
+  return (void *)out;
+  ```)
+
 ;; ---- Convenience: Create and return a (Promise, Future) pair in one step ----
 
 (defn promise-new-pair [] :ptr<void>
