@@ -141,7 +141,24 @@ These are the concrete implementation gaps that cause Phase 19 tasks to be skipp
 - [x] Define linker flag policy: `tur build` should automatically add `-pthread` when thread primitives are used.
   - Decision: the elaborator sets a `needs_pthread` flag on the `Emit` context whenever a thread primitive (`spawn`, `Mutex`, `Arc`, `RwLock`, etc.) is encountered. The final link command in `src/emit.c` appends `-pthread` to the compiler invocation when `needs_pthread` is set. No user action required.
 
-### Unsafe Operations prerequisites (Phases U1–U5)
+### Unsafe Operations prerequisites (Phases U0–U5)
+
+#### U0 — Blocking issues
+
+These prerequisites must be resolved before U1–U5 tasks can proceed.
+
+- [x] Fix unsafe primitive symbol resolution (CRITICAL blocker)
+  - **Symptom**: `(raw-malloc 16)` produced `error: unknown function or operator 'raw-malloc'`
+  - **Status**: RESOLVED. The symbol lookup issue has been fixed. Unsafe primitives (`raw-malloc`, `ptr-deref`, `ptr-write`, etc.) are now properly recognized during elaboration.
+  - **Verification**: `(unsafe (raw-malloc 16))` compiles and runs successfully.
+- [x] Verify unsafe block dispatch order
+  - **Status**: RESOLVED. Confirmed that in `elab_call` (src/elab.c), the dispatch for U3 primitives executes BEFORE macro lookup and user-defined function lookup.
+  - **Action**: Symbol dispatch order is correct; unsafe primitives are handled at the special form level before falling through to user-defined names.
+- [x] Validate unsafe primitive builtin initialization
+  - **Status**: RESOLVED. `builtins_init` (src/builtins.c) is called before elaboration and all `table_[].name_sym` fields are properly populated.
+  - **Verification**: All unsafe primitive symbols are initialized and accessible during elaboration.
+
+#### Unsafe Operations prerequisites (Phases U1–U5)
 - [x] Confirm `Unsafe` integrates with Phase 19 effect rows before Phase U1 begins (effect-row infrastructure must be stable).
   - Decision: confirmed. `Unsafe` is a Phase 19 effect, written as `{Unsafe}` in the effect row position. Phase U1 depends on Phase 19 Section A (surface syntax and declaration model) being stable. Phase U1 does not begin until Phase 19 Section A items are complete.
 - [x] Define the `;;; SAFETY:` comment convention and whether it is syntactic (parser-recognized) or documentary only.
