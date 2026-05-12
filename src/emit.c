@@ -3518,12 +3518,19 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    void *handler_chain;\n");
     buf_puts(out, "    void (*entry_fn)(void);\n");
     buf_puts(out, "    void *fiber_local; /* Phase T21: fiber-local storage */\n");
+    /* Phase T22: Structured concurrency */
+    buf_puts(out, "    void *task_group; /* Parent TaskGroup for cancellation */\n");
+    buf_puts(out, "    bool cancelled; /* Set when parent TaskGroup is cancelled */\n");
     buf_puts(out, "};\n\n");
-    buf_puts(out, "static __thread FiberBlock *tur_current_fiber = NULL;\n\n");
+    buf_puts(out, "static __thread FiberBlock *tur_current_fiber = NULL;\n");
+    /* Phase T22: Cooperative cancellation flag */
+    buf_puts(out, "static __thread bool tur_fiber_cancelled_flag = false;\n\n");
     buf_puts(out, "static void tur_fiber_shim(uint32_t hi, uint32_t lo) {\n");
     buf_puts(out, "    FiberBlock *f = (FiberBlock *)(((uintptr_t)hi << 32) | (uintptr_t)(uint32_t)lo);\n");
     buf_puts(out, "    f->entry_fn();\n");
     buf_puts(out, "    f->done = 1;\n");
+    /* Phase T22: Notify task group on completion */
+    buf_puts(out, "    tur_task_group_notify_done(f->task_group);\n");
     buf_puts(out, "    swapcontext(&f->ctx, &f->caller_ctx);\n");
     buf_puts(out, "    abort();\n");
     buf_puts(out, "}\n\n");
@@ -3546,6 +3553,12 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "}\n\n");
     buf_puts(out, "static int64_t tur_fiber_block_resume(FiberBlock *f, int64_t arg) {\n");
     buf_puts(out, "    if (!f || f->done) return f ? f->result : 0;\n");
+    /* Phase T22: Check if fiber or its task group was cancelled before resuming */
+    buf_puts(out, "    if (f->cancelled) { f->done = 1; return 0; }\n");
+    buf_puts(out, "    if (f->task_group) {\n");
+    buf_puts(out, "        typedef struct TaskGroupBlock { bool cancelled; } TaskGroupBlock;\n");
+    buf_puts(out, "        if (((TaskGroupBlock *)f->task_group)->cancelled) { f->cancelled = 1; f->done = 1; return 0; }\n");
+    buf_puts(out, "    }\n");
     buf_puts(out, "    FiberBlock *_prev = tur_current_fiber;\n");
     buf_puts(out, "    tur_current_fiber = f;\n");
     buf_puts(out, "    f->arg = arg;\n");
@@ -3588,6 +3601,34 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    if (!f) return;\n");
     buf_puts(out, "    tur_fiber_local_free(f);\n");
     buf_puts(out, "    free(f->stack); free(f);\n");
+    buf_puts(out, "}\n\n");
+    /* Phase T22: Fiber cancellation */
+    buf_puts(out, "static bool tur_fiber_cancelled(void) {\n");
+    buf_puts(out, "    return tur_fiber_cancelled_flag;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static void tur_fiber_set_cancelled(bool c) {\n");
+    buf_puts(out, "    tur_fiber_cancelled_flag = c;\n");
+    buf_puts(out, "}\n\n");
+    /* Phase T22: TaskGroup notification on fiber completion */
+    buf_puts(out, "static void tur_task_group_notify_done(void *task_group) {\n");
+    buf_puts(out, "    if (!task_group) return;\n");
+    buf_puts(out, "    typedef struct TaskGroupBlock {\n");
+    buf_puts(out, "        pthread_mutex_t lock;\n");
+    buf_puts(out, "        pthread_cond_t done_cond;\n");
+    buf_puts(out, "        int64_t task_count;\n");
+    buf_puts(out, "        int64_t completed_count;\n");
+    buf_puts(out, "        bool cancelled;\n");
+    buf_puts(out, "        bool done;\n");
+    buf_puts(out, "        pthread_t owner_thread;\n");
+    buf_puts(out, "    } TaskGroupBlock;\n");
+    buf_puts(out, "    TaskGroupBlock *g = (TaskGroupBlock *)task_group;\n");
+    buf_puts(out, "    pthread_mutex_lock(&g->lock);\n");
+    buf_puts(out, "    g->completed_count++;\n");
+    buf_puts(out, "    if (g->completed_count >= g->task_count) {\n");
+    buf_puts(out, "        g->done = true;\n");
+    buf_puts(out, "        pthread_cond_broadcast(&g->done_cond);\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    pthread_mutex_unlock(&g->lock);\n");
     buf_puts(out, "}\n\n");
     /* Phase T21: Cooperative Scheduler for fibers */
     buf_puts(out, "typedef struct TurScheduler TurScheduler;\n");
