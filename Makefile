@@ -7,7 +7,17 @@ CFLAGS  ?= $(WARN) $(DEBUG)
 LDFLAGS ?=
 
 SRCS := $(wildcard src/*.c)
-OBJS := $(patsubst src/%.c,build/%.o,$(SRCS))
+UNAME_M := $(shell uname -m)
+ifeq ($(UNAME_M),arm64)
+ASM_SRCS := src/fiber_ctx_arm64.S
+else ifeq ($(UNAME_M),aarch64)
+ASM_SRCS := src/fiber_ctx_arm64.S
+else
+ASM_SRCS := src/fiber_ctx_x64.S
+endif
+
+OBJS := $(patsubst src/%.c,build/%.o,$(SRCS)) \
+	$(patsubst src/%.S,build/%.o,$(ASM_SRCS))
 DEPS := $(OBJS:.o=.d)
 
 BIN := build/tur
@@ -32,6 +42,9 @@ $(BIN): $(OBJS) | build
 	$(CC) $(CFLAGS) -o $@ $(OBJS) $(LDFLAGS)
 
 build/%.o: src/%.c | build
+	$(CC) $(CFLAGS) -MMD -MP -c -o $@ $<
+
+build/%.o: src/%.S | build
 	$(CC) $(CFLAGS) -MMD -MP -c -o $@ $<
 
 build:

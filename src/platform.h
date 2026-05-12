@@ -41,4 +41,13 @@
 #  define TUR_UNLIKELY(x) (x)
 #endif
 
+/* ── Architecture tags ────────────────────────────────────────────────────── */
+#if defined(__aarch64__) || defined(_M_ARM64)
+#  define TUR_ARCH_ARM64 1
+#elif defined(__x86_64__) || defined(_M_X64)
+#  define TUR_ARCH_X64 1
+#else
+#  error "Unsupported architecture: only x86-64 and arm64 are supported"
+#endif
+
 #endif /* TUR_PLATFORM_H */
