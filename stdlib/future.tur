@@ -1,0 +1,178 @@
+;; stdlib/future.tur — Future<T> and Promise<T> (Phase T20-C)
+;;
+;; Promise/Future pair for asynchronous computation results.
+;;
+;; A Promise is the producer end: it can fulfill (set value) or fail (set exception).
+;; A Future is the consumer end: it can query completion or block waiting for a result.
+;;
+;; Both share a common heap-allocated cell containing:
+;;   - mutex + condvar for synchronization
+;;   - optional value (int64_t)
+;;   - optional exception/error code (int64_t)
+;;   - bool indicating whether the result is set
+;;
+;; Shared cell layout (FutureCell):
+;;   pthread_mutex_t   lock
+;;   pthread_cond_t    ready
+;;   int64_t            value
+;;   int64_t            exn
+;;   bool              is_set    (true = value/exn is valid)
+;;   bool              is_ok     (true = ok/fulfilled, false = err/failed)
+;;
+;; API:
+;;   promise-new            []                         → ptr<void>  (returns FutureCell*; call promise-pair to get (Promise, Future))
+;;   promise-pair           [cell :ptr<void>]         → (ptr<void> ptr<void>)  (Promise Future)
+;;   promise-fulfill        [p :ptr<void> v :int]     → nil       (sets value, wakes waiters)
+;;   promise-fail           [p :ptr<void> e :int]     → nil       (sets exn, wakes waiters)
+;;   promise-free           [p :ptr<void>]            → nil
+;;
+;;   future-get             [f :ptr<void>]            → ptr<void>  (blocks; returns Result<T>)
+;;   future-done?           [f :ptr<void>]            → bool      (non-blocking check)
+;;   future-free            [f :ptr<void>]            → nil
+
+;; ---- Shared FutureCell type and helpers ----
+
+;; Allocate a new FutureCell (shared by Promise and Future)
+(defn future-cell-new [] :ptr<void>
+  ```c
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t  ready;
+      int64_t value;
+      int64_t exn;
+      bool is_set;
+      bool is_ok;
+  } FutureCell;
+  FutureCell *cell = (FutureCell *)malloc(sizeof(FutureCell));
+  if (!cell) { fprintf(stderr, "future-cell-new: out of memory\n"); abort(); }
+  pthread_mutex_init(&cell->lock, NULL);
+  pthread_cond_init(&cell->ready, NULL);
+  cell->is_set = false;
+  cell->is_ok = false;
+  cell->value = 0;
+  cell->exn = 0;
+  return (void *)cell;
+  ```)
+
+;; Free a FutureCell
+(defn future-cell-free [cell :ptr<void>] :nil
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *fc = (FutureCell *)cell;
+  pthread_mutex_destroy(&fc->lock);
+  pthread_cond_destroy(&fc->ready);
+  free(fc);
+  ```)
+
+;; ---- Promise API ----
+
+;; Create a new Promise+Future pair.
+;; Returns a FutureCell* that can be used as both Promise and Future.
+;; Use promise-pair to get separate Promise and Future handles,
+;; or just use the same cell pointer for both (they're the same underlying object).
+(defn promise-new [] :ptr<void>
+  (future-cell-new))
+
+;; Given a cell, return the Promise handle (same pointer as cell).
+;; This is a convenience for API symmetry.
+(defn promise-of-cell [cell :ptr<void>] :ptr<void>
+  cell)
+
+;; Given a cell, return the Future handle (same pointer as cell).
+(defn future-of-cell [cell :ptr<void>] :ptr<void>
+  cell)
+
+;; Return a (Promise Future) pair from a cell.
+;; Both elements are the same pointer but conceptually distinct types.
+(defmacro promise-pair [cell :ptr<void>]
+  (list (promise-of-cell cell) (future-of-cell cell)))
+
+;; Fulfill a promise with a value.
+;; Wakes all threads waiting on the associated future.
+(defn promise-fulfill [p :ptr<void> v :int] :nil
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *fc = (FutureCell *)p;
+  pthread_mutex_lock(&fc->lock);
+  if (fc->is_set) {
+      pthread_mutex_unlock(&fc->lock);
+      fprintf(stderr, "promise-fulfill: promise already settled\n");
+      abort();
+  }
+  fc->value = (int64_t)v;
+  fc->is_set = true;
+  fc->is_ok = true;
+  pthread_cond_broadcast(&fc->ready);
+  pthread_mutex_unlock(&fc->lock);
+  ```)
+
+;; Fail a promise with an exception/error code.
+;; Wakes all threads waiting on the associated future.
+(defn promise-fail [p :ptr<void> e :int] :nil
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *fc = (FutureCell *)p;
+  pthread_mutex_lock(&fc->lock);
+  if (fc->is_set) {
+      pthread_mutex_unlock(&fc->lock);
+      fprintf(stderr, "promise-fail: promise already settled\n");
+      abort();
+  }
+  fc->exn = (int64_t)e;
+  fc->is_set = true;
+  fc->is_ok = false;
+  pthread_cond_broadcast(&fc->ready);
+  pthread_mutex_unlock(&fc->lock);
+  ```)
+
+;; Free a promise (and its associated future - they share the same cell).
+(defn promise-free [p :ptr<void>] :nil
+  (future-cell-free p))
+
+;; ---- Future API ----
+
+;; Check if a future is done (non-blocking).
+(defn future-done? [f :ptr<void>] :bool
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *fc = (FutureCell *)f;
+  pthread_mutex_lock(&fc->lock);
+  bool done = fc->is_set;
+  pthread_mutex_unlock(&fc->lock);
+  return done;
+  ```)
+
+;; Block until the future is ready, then return a Result<T>.
+;; Returns a ptr<void> that is a Result* (use ok?/err?/ok-val/err-val to inspect).
+(defn future-get [f :ptr<void>] :ptr<void>
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *fc = (FutureCell *)f;
+  pthread_mutex_lock(&fc->lock);
+  while (!fc->is_set)
+      pthread_cond_wait(&fc->ready, &fc->lock);
+  
+  ;; Build a Result to return
+  typedef struct { bool is_ok; int64_t ok_val; int64_t err_val; } Result;
+  Result *result = (Result *)malloc(sizeof(Result));
+  if (!result) { pthread_mutex_unlock(&fc->lock); fprintf(stderr, "future-get: oom\n"); abort(); }
+  result->is_ok = fc->is_ok;
+  if (fc->is_ok) {
+      result->ok_val = fc->value;
+      result->err_val = 0;
+  } else {
+      result->ok_val = 0;
+      result->err_val = fc->exn;
+  }
+  pthread_mutex_unlock(&fc->lock);
+  return (void *)result;
+  ```)
+
+;; Free a future (and its associated promise - they share the same cell).
+(defn future-free [f :ptr<void>] :nil
+  (future-cell-free f))
+
+;; ---- Convenience: Create and return a (Promise, Future) pair in one step ----
+
+(defn promise-new-pair [] :ptr<void>
+  (promise-new))

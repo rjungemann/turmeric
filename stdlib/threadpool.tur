@@ -1,4 +1,4 @@
-;; stdlib/threadpool.tur — WorkQueue<T> (Phase T20-B)
+;; stdlib/threadpool.tur — WorkQueue<T> and ThreadPool (Phase T20-B and T20-D)
 ;;
 ;; WorkQueue: thread-safe FIFO queue backed by a mutex + condvar.
 ;;
@@ -10,13 +10,18 @@
 ;; Items are int64_t values (the generic T is encoded as an integer handle).
 ;; A sentinel value INT64_MIN (returned by pop after close) signals shutdown.
 ;;
+;; ThreadPool: fixed-size pool of worker threads (Phase T20-D).
+;;
 ;; API:
-;;   work-queue-new          []                    → ptr<void>
-;;   work-queue-new-bounded  [cap :int]            → ptr<void>
-;;   work-queue-push         [q :ptr<void> v :int] → nil  (blocks if bounded+full)
-;;   work-queue-pop          [q :ptr<void>]        → int  (blocks when empty; INT64_MIN when closed)
-;;   work-queue-close        [q :ptr<void>]        → nil  (unblocks all waiters)
-;;   work-queue-free         [q :ptr<void>]        → nil
+;;   thread-pool-new        [n :int]                     → ptr<void>
+;;   thread-pool-submit     [tp :ptr<void> task_fn :ptr<void> task_arg :ptr<void>] → ptr<void>
+;;   thread-pool-shutdown   [tp :ptr<void>]              → nil
+;;   thread-pool-free       [tp :ptr<void>]              → nil
+
+
+;; =============================================================================
+;; WorkQueue (Phase T20-B)
+;; =============================================================================
 
 ;; ---- WorkQueueBlock layout ----
 ;; Unbounded: dynamic array (int64_t *buf, capacity doubles on resize)
@@ -87,21 +92,17 @@
   pthread_mutex_lock(&wq->lock);
   if (wq->closed) { pthread_mutex_unlock(&wq->lock); return; }
   if (wq->cap > 0) {
-      /* bounded: block while full */
       while (wq->count == wq->cap && !wq->closed)
           pthread_cond_wait(&wq->not_full, &wq->lock);
       if (wq->closed) { pthread_mutex_unlock(&wq->lock); return; }
       wq->buf[wq->tail] = (int64_t)v;
       wq->tail = (wq->tail + 1) % wq->cap;
   } else {
-      /* unbounded: grow if needed */
       if (wq->count == wq->alloc) {
           int64_t new_alloc = wq->alloc * 2;
           int64_t *new_buf = (int64_t *)malloc((size_t)new_alloc * sizeof(int64_t));
           if (!new_buf) { pthread_mutex_unlock(&wq->lock); fprintf(stderr, "work-queue-push: oom\n"); abort(); }
-          /* copy in order: head..tail */
-          int64_t i;
-          for (i = 0; i < wq->count; i++)
+          for (int64_t i = 0; i < wq->count; i++)
               new_buf[i] = wq->buf[(wq->head + i) % wq->alloc];
           free(wq->buf);
           wq->buf = new_buf; wq->head = 0; wq->tail = wq->count; wq->alloc = new_alloc;
@@ -127,7 +128,6 @@
   while (wq->count == 0 && !wq->closed)
       pthread_cond_wait(&wq->not_empty, &wq->lock);
   if (wq->count == 0) {
-      /* closed and empty */
       pthread_mutex_unlock(&wq->lock);
       return (int64_t)WQ_CLOSED_SENTINEL;
   }
@@ -168,4 +168,276 @@
   pthread_cond_destroy(&wq->not_empty);
   free(wq->buf);
   free(wq);
+  ```)
+
+
+;; =============================================================================
+;; ThreadPool (Phase T20-D)
+;; =============================================================================
+
+;; ThreadPoolTask layout (stored as int64_t in the internal queue):
+;;   void *(*fn)(void *)  - function to execute
+;;   void *arg            - argument to pass
+;;   void *promise_cell   - FutureCell* (from stdlib/future.tur layout)
+;;
+;; FutureCell layout:
+;;   pthread_mutex_t lock
+;;   pthread_cond_t ready
+;;   int64_t value
+;;   int64_t exn
+;;   bool is_set
+;;   bool is_ok
+
+;; Worker thread function: pops tasks and executes them.
+(defn tp-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  typedef struct {
+      void *queue;
+      pthread_t *threads;
+      int64_t n_threads;
+      volatile int stop_flag;
+  } ThreadPoolBlock;
+  ThreadPoolBlock *tp = (ThreadPoolBlock *)arg;
+  
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count;
+      int64_t cap; int64_t alloc; int closed;
+  } TPQueueBlock;
+  TPQueueBlock *q = (TPQueueBlock *)tp->queue;
+  
+  typedef struct {
+      void *(*fn)(void *);
+      void *arg;
+      void *promise_cell;
+  } ThreadPoolTask;
+  
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t ready;
+      int64_t value;
+      int64_t exn;
+      bool is_set;
+      bool is_ok;
+  } FutureCell;
+  
+  #define TP_CLOSED_SENTINEL INT64_MIN
+  
+  while (1) {
+      int64_t task_ptr;
+      pthread_mutex_lock(&q->lock);
+      while (q->count == 0 && !q->closed)
+          pthread_cond_wait(&q->not_empty, &q->lock);
+      if (q->count == 0 && q->closed) {
+          pthread_mutex_unlock(&q->lock);
+          break;
+      }
+      task_ptr = q->buf[q->head];
+      int64_t mod = (q->cap > 0) ? q->cap : q->alloc;
+      q->head = (q->head + 1) % mod;
+      q->count--;
+      pthread_cond_signal(&q->not_full);
+      pthread_mutex_unlock(&q->lock);
+      
+      if (task_ptr == TP_CLOSED_SENTINEL || task_ptr == 0) {
+          break;
+      }
+      
+      ThreadPoolTask *task = (ThreadPoolTask *)(uintptr_t)task_ptr;
+      void *result = task->fn(task->arg);
+      
+      FutureCell *fc = (FutureCell *)task->promise_cell;
+      pthread_mutex_lock(&fc->lock);
+      if (!fc->is_set) {
+          fc->value = (int64_t)(uintptr_t)result;
+          fc->is_set = true;
+          fc->is_ok = true;
+          pthread_cond_broadcast(&fc->ready);
+      }
+      pthread_mutex_unlock(&fc->lock);
+      
+      free(task);
+  }
+  return NULL;
+  ```)
+
+;; Create a new ThreadPool with n worker threads.
+defn thread-pool-new [n :int] :ptr<void>
+  ```c
+  if (n <= 0) { fprintf(stderr, "thread-pool-new: n must be > 0\n"); abort(); }
+  
+  typedef struct {
+      void *queue;
+      pthread_t *threads;
+      int64_t n_threads;
+      volatile int stop_flag;
+  } ThreadPoolBlock;
+  ThreadPoolBlock *tp = (ThreadPoolBlock *)malloc(sizeof(ThreadPoolBlock));
+  if (!tp) { fprintf(stderr, "thread-pool-new: oom\n"); abort(); }
+  tp->n_threads = (int64_t)n;
+  tp->stop_flag = 0;
+  
+  /* Create internal unbounded queue */
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count;
+      int64_t cap; int64_t alloc; int closed;
+  } TPQueueBlock;
+  TPQueueBlock *q = (TPQueueBlock *)malloc(sizeof(TPQueueBlock));
+  if (!q) { free(tp); fprintf(stderr, "thread-pool-new: q oom\n"); abort(); }
+  pthread_mutex_init(&q->lock, NULL);
+  pthread_cond_init(&q->not_full, NULL);
+  pthread_cond_init(&q->not_empty, NULL);
+  q->alloc = 16;
+  q->buf = (int64_t *)malloc((size_t)q->alloc * sizeof(int64_t));
+  if (!q->buf) {
+      pthread_mutex_destroy(&q->lock);
+      pthread_cond_destroy(&q->not_full);
+      pthread_cond_destroy(&q->not_empty);
+      free(q); free(tp);
+      fprintf(stderr, "thread-pool-new: buf oom\n"); abort();
+  }
+  q->head = 0; q->tail = 0; q->count = 0; q->cap = 0; q->closed = 0;
+  tp->queue = (void *)q;
+  
+  tp->threads = (pthread_t *)malloc((size_t)n * sizeof(pthread_t));
+  if (!tp->threads) {
+      free(q->buf);
+      pthread_mutex_destroy(&q->lock);
+      pthread_cond_destroy(&q->not_full);
+      pthread_cond_destroy(&q->not_empty);
+      free(q); free(tp);
+      fprintf(stderr, "thread-pool-new: threads oom\n"); abort();
+  }
+  
+  for (int i = 0; i < n; i++) {
+      int rc = pthread_create(&tp->threads[i], NULL, (void *(*)(void *))tp_worker, (void *)tp);
+      if (rc != 0) {
+          fprintf(stderr, "thread-pool-new: pthread_create failed (%d)\n", rc);
+          abort();
+      }
+  }
+  
+  return (void *)tp;
+  ```)
+
+;; Submit a task to the thread pool. Returns a Future cell (ptr<void>).
+;; task_fn is a C function: void *(*)(void *)
+;; The return value from task_fn is stored as the Future result.
+defn thread-pool-submit [tp :ptr<void> task_fn :ptr<void> task_arg :ptr<void>] :ptr<void>
+  ```c
+  typedef struct {
+      void *queue;
+      pthread_t *threads;
+      int64_t n_threads;
+      volatile int stop_flag;
+  } ThreadPoolBlock;
+  ThreadPoolBlock *pool = (ThreadPoolBlock *)tp;
+  
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *fc = (FutureCell *)malloc(sizeof(FutureCell));
+  if (!fc) { fprintf(stderr, "thread-pool-submit: fc oom\n"); abort(); }
+  pthread_mutex_init(&fc->lock, NULL);
+  pthread_cond_init(&fc->ready, NULL);
+  fc->is_set = false; fc->is_ok = false; fc->value = 0; fc->exn = 0;
+  
+  typedef struct { void *(*fn)(void *); void *arg; void *promise_cell; } ThreadPoolTask;
+  ThreadPoolTask *task = (ThreadPoolTask *)malloc(sizeof(ThreadPoolTask));
+  if (!task) {
+      pthread_mutex_destroy(&fc->lock);
+      pthread_cond_destroy(&fc->ready);
+      free(fc);
+      fprintf(stderr, "thread-pool-submit: task oom\n"); abort();
+  }
+  task->fn = (void *(*)(void *))task_fn;
+  task->arg = task_arg;
+  task->promise_cell = (void *)fc;
+  
+  /* Push to internal queue */
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count;
+      int64_t cap; int64_t alloc; int closed;
+  } TPQueueBlock;
+  TPQueueBlock *q = (TPQueueBlock *)pool->queue;
+  pthread_mutex_lock(&q->lock);
+  if (q->cap > 0) {
+      while (q->count == q->cap && !q->closed)
+          pthread_cond_wait(&q->not_full, &q->lock);
+      if (q->closed) { pthread_mutex_unlock(&q->lock); free(task); free(fc); return NULL; }
+      q->buf[q->tail] = (int64_t)(uintptr_t)task;
+      q->tail = (q->tail + 1) % q->cap;
+  } else {
+      if (q->count == q->alloc) {
+          int64_t new_alloc = q->alloc * 2;
+          int64_t *new_buf = (int64_t *)malloc((size_t)new_alloc * sizeof(int64_t));
+          if (!new_buf) { pthread_mutex_unlock(&q->lock); free(task); free(fc); fprintf(stderr, "submit: grow oom\n"); abort(); }
+          for (int64_t i = 0; i < q->count; i++)
+              new_buf[i] = q->buf[(q->head + i) % q->alloc];
+          free(q->buf);
+          q->buf = new_buf; q->head = 0; q->tail = q->count; q->alloc = new_alloc;
+      }
+      q->buf[q->tail] = (int64_t)(uintptr_t)task;
+      q->tail = (q->tail + 1) % q->alloc;
+  }
+  q->count++;
+  pthread_cond_signal(&q->not_empty);
+  pthread_mutex_unlock(&q->lock);
+  
+  return (void *)fc;
+  ```)
+
+;; Signal all workers to stop and join them.
+defn thread-pool-shutdown [tp :ptr<void>] :nil
+  ```c
+  typedef struct {
+      void *queue;
+      pthread_t *threads;
+      int64_t n_threads;
+      volatile int stop_flag;
+  } ThreadPoolBlock;
+  ThreadPoolBlock *pool = (ThreadPoolBlock *)tp;
+  
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count;
+      int64_t cap; int64_t alloc; int closed;
+  } TPQueueBlock;
+  TPQueueBlock *q = (TPQueueBlock *)pool->queue;
+  pthread_mutex_lock(&q->lock);
+  q->closed = 1;
+  pthread_cond_broadcast(&q->not_empty);
+  pthread_cond_broadcast(&q->not_full);
+  pthread_mutex_unlock(&q->lock);
+  
+  for (int64_t i = 0; i < pool->n_threads; i++) {
+      pthread_join(pool->threads[i], NULL);
+  }
+  ```)
+
+;; Free the ThreadPool (must be called after shutdown).
+defn thread-pool-free [tp :ptr<void>] :nil
+  ```c
+  typedef struct {
+      void *queue;
+      pthread_t *threads;
+      int64_t n_threads;
+      volatile int stop_flag;
+  } ThreadPoolBlock;
+  ThreadPoolBlock *pool = (ThreadPoolBlock *)tp;
+  
+  free(pool->threads);
+  
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count;
+      int64_t cap; int64_t alloc; int closed;
+  } TPQueueBlock;
+  TPQueueBlock *q = (TPQueueBlock *)pool->queue;
+  pthread_mutex_destroy(&q->lock);
+  pthread_cond_destroy(&q->not_full);
+  pthread_cond_destroy(&q->not_empty);
+  free(q->buf);
+  free(q);
+  free(pool);
   ```)

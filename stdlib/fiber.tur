@@ -1,0 +1,48 @@
+; Phase T21-C: Fiber API — lightweight cooperative fibers via FiberBlock.
+;
+; All functions delegate directly to the FiberBlock C runtime emitted into
+; every compiled Turmeric program by emit.c (FiberBlock + tur_fiber_block_*).
+;
+; Usage:
+;   (let f (fiber-new fn 0))
+;   (fiber-resume f 0)          ; returns yielded or final value as :int
+;   (fiber-done? f)             ; returns 1 if fiber has returned
+;   (fiber-free f)              ; release memory
+;
+; Inside a fiber body (fn is called with no args via entry_fn):
+;   (fiber-yield 42)            ; suspend and hand 42 back to caller
+
+(defn fiber-new [fn stack-size :int -> :ptr<void>]
+  ```c
+  FiberBlock *f = tur_fiber_block_new((void(*)(void))fn, (size_t)stack_size);
+  return (int64_t)(intptr_t)f;
+  ```)
+
+(defn fiber-resume [f :ptr<void> arg :int -> :int]
+  ```c
+  return tur_fiber_block_resume((FiberBlock *)(intptr_t)f, arg);
+  ```)
+
+(defn fiber-yield [value :int -> :int]
+  ```c
+  tur_fiber_block_yield(value);
+  return 0;
+  ```)
+
+(defn fiber-done? [f :ptr<void> -> :int]
+  ```c
+  FiberBlock *fb = (FiberBlock *)(intptr_t)f;
+  return fb ? (int64_t)fb->done : 1;
+  ```)
+
+(defn fiber-arg [f :ptr<void> -> :int]
+  ```c
+  FiberBlock *fb = (FiberBlock *)(intptr_t)f;
+  return fb ? fb->arg : 0;
+  ```)
+
+(defn fiber-free [f :ptr<void> -> :int]
+  ```c
+  tur_fiber_block_free((FiberBlock *)(intptr_t)f);
+  return 0;
+  ```)
