@@ -59,6 +59,9 @@ bool g_lint_unsafe_enabled = false;    /* master flag for all unsafe lints */
 bool g_panic_abort = false;            /* --panic-abort: all panics call abort() directly */
 bool g_panic_trace = false;            /* --panic-trace: print scope chain on panic */
 
+/* Phase HKT-P6: --dump-kinds flag: print kind annotations after kind-check */
+static bool g_dump_kinds = false;
+
 /* Phase U5: Global statistics for unsafe linting */
 uint32_t g_unsafe_block_count = 0;     /* count of unsafe blocks seen */
 uint32_t g_unsafe_total_lines = 0;     /* total lines in unsafe blocks */
@@ -137,6 +140,9 @@ static int run_core_passes(PassContext *ctx) {
             /* Phase HKT H0: kind inference and validation pass (v1 stub). */
             if (kind_check_pass(ctx->arena, ctx->prog) != 0)
                 return 1;
+            /* Phase HKT-P6: optionally dump kind annotations for debugging. */
+            if (g_dump_kinds)
+                kind_dump_program(ctx->prog, stdout);
             break;
         case PASS_EFFECT_LOWER:
             /* Phase 19: transform perform/handle into shift/reset. */
@@ -807,7 +813,9 @@ static int usage(void) {
         "global flags:\n"
         "  --no-color                       disable colored diagnostics\n"
         "  --json-diagnostics               output diagnostics as JSON (phase 8)\n"
-        "  --explain <code>                 compile code snippet and explain errors (phase 8)\n"
+        "  --explain <TUR-E####>            print explanation for a diagnostic code (HKT-P5)\n"
+        "  --explain <snippet>              compile code snippet and explain errors (phase 8)\n"
+        "  --dump-kinds                     dump kind annotations after kind-check (HKT-P6)\n"
         "  --panic-abort                   all panics call abort() directly (Phase R5)\n"
         "  --panic-trace                   print scope chain on panic (Phase R6)\n");
     return 64;
@@ -844,8 +852,34 @@ static bool parse_panic_trace(int argc, char **argv) {
 }
 
 /* Phase 8: Handle --explain flag - compile code snippet and show detailed error */
+
+/* Phase HKT-P5: Return true if `s` looks like a diagnostic code string
+ * of the form "TUR-E" followed by one or more decimal digits. */
+static bool looks_like_diag_code_(const char *s) {
+    if (!s) return false;
+    if (strncmp(s, "TUR-E", 5) != 0) return false;
+    const char *p = s + 5;
+    if (*p == '\0') return false;   /* need at least one digit */
+    while (*p) {
+        if (*p < '0' || *p > '9') return false;
+        p++;
+    }
+    return true;
+}
+
 static int cmd_explain(const char *code) {
-    /* Create a temporary source file from the code snippet */
+    /* Phase HKT-P5: If the argument looks like a diagnostic code (TUR-E####),
+     * look it up in the explanation table instead of compiling a snippet. */
+    if (looks_like_diag_code_(code)) {
+        DiagCode dc = diag_code_from_string(code);
+        if (dc == DIAG_CODE_NONE || !diag_explain(dc, stdout)) {
+            fprintf(stderr, "tur: no explanation for '%s'\n", code);
+            return 1;
+        }
+        return 0;
+    }
+
+    /* Legacy behaviour: compile a Turmeric source snippet and surface errors. */
     SourceFile file = {0};
     file.path = "<explain>";
     file.src = code;
@@ -887,6 +921,7 @@ static int cmd_explain(const char *code) {
 
 /* Phase 8: Handle --json-diagnostics flag */
 static bool use_json_diagnostics = false;
+
 
 int main(int argc, char **argv) {
     /* Phase 8: Check for global flags before command */
@@ -959,6 +994,14 @@ int main(int argc, char **argv) {
             g_lint_unsafe_enabled = true;
             g_unsafe_stats_enabled = true;
             /* Remove from argv for command parsing */
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--dump-kinds") == 0) {
+            /* Phase HKT-P6: enable kind-annotation dump after kind-check */
+            g_dump_kinds = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

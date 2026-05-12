@@ -16,6 +16,7 @@
 #ifndef TUR_KIND_CHECK_H
 #define TUR_KIND_CHECK_H
 
+#include <stdio.h>
 #include "arena.h"
 #include "expr.h"
 
@@ -37,5 +38,11 @@ int kind_check_pass(Arena *a, Expr *program);
  * 'span' is used for diagnostics.
  */
 Kind kind_of_type_app(Type fn_type, Type arg_type, Span span);
+
+/* Phase HKT-P6: Walk the elaborated AST and print, to `out`, every
+ * defclass / definstance / defn that carries a non-KIND_STAR kind
+ * annotation.  Useful for debugging the kind-inference pipeline with
+ * the --dump-kinds flag. */
+void kind_dump_program(Expr *program, FILE *out);
 
 #endif /* TUR_KIND_CHECK_H */

@@ -327,9 +327,9 @@ Binary type constructors work; kind aliases resolve; recursive HKT types compile
 - [ ] Negative tests: invalid kind usage, orphan instances
 
 #### Tooling
-- [ ] `tur explain` support for kind errors
+- [x] `tur explain` support for kind errors (HKT-P5: `--explain TUR-E0012` etc.)
 - [ ] IDE integration: kind information in hover tooltips
-- [ ] Debug dump: `--dump-kinds` flag
+- [x] Debug dump: `--dump-kinds` flag (HKT-P6)
 
 ### Fixtures
 - [ ] `hkt-laws-functor.tur` — functor laws: identity and composition
