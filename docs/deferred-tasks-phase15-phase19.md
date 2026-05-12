@@ -961,15 +961,40 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 - [ ] Implement `TaskGroup::with-cancellation [group & body]` — body can receive cancellation signal.
   - Deferred: Requires cooperative cancellation integration.
 
+##### TG-004 — Prerequisites: Per-fiber panic handling
+
+**New prerequisites for automatic cancellation propagation:**
+
+- [ ] **PR-TG-004-1** Add per-fiber panic jmp_buf to FiberBlock struct
+  - Blocked by: Architecture decision on panic handling strategy
+  - Add `jmp_buf panic_jmpbuf` and `bool panic_jmpbuf_valid` fields to FiberBlock
+  - This allows each fiber to have its own panic recovery context
+  - Current global `global_panic_jmpbuf` only supports one panic handler at a time
+
+- [ ] **PR-TG-004-2** Modify `tur_panic_with` to check for fiber-specific handler
+  - Blocked by: PR-TG-004-1
+  - `tur_panic_with` should check if `tur_current_fiber` exists and has a valid `panic_jmpbuf`
+  - If so, use the fiber's jmp_buf instead of the global one
+  - This enables per-fiber panic catching
+
+- [ ] **PR-TG-004-3** Implement fiber panic cleanup hook
+  - Blocked by: PR-TG-004-1, PR-TG-004-2
+  - When a fiber's panic handler catches a panic, it should:
+    1. Check if fiber has a `task_group` field set
+    2. If yes, auto-cancel the task group with reason=1 (panic)
+    3. Set thread-local `tur_fiber_cancelled_flag` to true
+    4. Clean up panic payload
+  - This can be implemented in the fiber shim's setjmp handler
+
 ##### TG-004 — Cancellation
 - [x] Implement `TaskGroup::cancel [group]` — request all tasks cancel.
   - Implemented: Sets `cancelled` flag, broadcasts to wake waiters. Tasks must check `fiber-cancelled?`.
 - [x] Implement `Fiber::cancelled? []` — check if current fiber was cancelled.
   - Implemented: `fiber-cancelled?` in `stdlib/taskgroup.tur` accesses thread-local `tur_fiber_cancelled_flag`.
 - [ ] Implement automatic cancellation propagation.
-  - Deferred: If a child task panics/exceptions, parent should auto-cancel siblings. Requires exception handling integration.
+  - Deferred: If a child task panics/exceptions, parent should auto-cancel siblings. **Requires PR-TG-004-1, PR-TG-004-2, PR-TG-004-3.**
 - [ ] Implement `task-group-cancel-reason [group]` — get why group was cancelled.
-  - Deferred: Would require storing error/exception in `TaskGroup` struct.
+  - Deferred: Would require storing error/exception in `TaskGroup` struct. **Blocked by: PR-TG-004-1** (need cancel_reason field in TaskGroupBlock).
 
 ##### TG-005 — Testing
 - [x] Add fixture: `taskgroup-basic.tur` — spawn 2 tasks, await completion.
