@@ -35,13 +35,13 @@ TurFiber *tur_fiber_new(void (*fn)(TurFiber *), size_t stack_size) {
     void *sp = tur_align_down_16((char *)f->stack + stack_size);
 
 #if defined(TUR_ARCH_X64)
-    f->ctx.rip = (void *)fiber_entry_shim;
-    f->ctx.rsp = sp;
-    f->ctx.r12 = (void *)f;
+    f->ctx.rip = (uintptr_t)fiber_entry_shim;
+    f->ctx.rsp = (uintptr_t)sp;
+    f->ctx.r12 = (uintptr_t)f;
 #elif defined(TUR_ARCH_ARM64)
-    f->ctx.lr = (void *)fiber_entry_shim;
-    f->ctx.sp = sp;
-    f->ctx.x19 = (void *)f;
+    f->ctx.lr = (uintptr_t)fiber_entry_shim;
+    f->ctx.sp = (uintptr_t)sp;
+    f->ctx.x19 = (uintptr_t)f;
 #endif
 
     return f;
