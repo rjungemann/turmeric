@@ -953,13 +953,34 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 - [ ] Implement `task-group-join [group handle]` — await specific task completion.
   - Deferred: Current v1 only supports waiting for all tasks via `task-group-wait`.
 
+##### TG-003 — Prerequisites: Cooperative cancellation integration
+
+**New prerequisites for TaskGroup::with-cancellation:**
+
+- [ ] **PR-TG-003-1** Design cancellation signal mechanism
+  - Blocked by: None
+  - Decide how cancellation signals are propagated to task body
+  - Options: thread-local flag, per-fiber flag, callback mechanism
+  - Should integrate with existing `fiber-cancelled?` function
+
+- [ ] **PR-TG-003-2** Add cancellation check point API
+  - Blocked by: PR-TG-003-1
+  - Provide a function that tasks can call to check if they should exit
+  - Example: `(task-group-should-exit? group)` or `(fiber-should-exit?)`
+  - Should return true if group was cancelled or if parent fiber was cancelled
+
+- [ ] **PR-TG-003-3** Implement `TaskGroup::with-cancellation` macro
+  - Blocked by: PR-TG-003-1, PR-TG-003-2
+  - Macro that sets up cancellation checking in the body
+  - Body can periodically check cancellation status and exit early
+
 ##### TG-003 — Scoped execution (`with` macro)
 - [x] Implement `TaskGroup::with [group & body]` macro.
   - Implemented: `task-group-with` macro creates group, executes body, calls `task-group-wait`.
 - [x] Implement `TaskGroup::with-timeout [group ms & body]` — auto-cancel on timeout.
   - Implemented: Spawns background thread using `pthread_create` + `pthread_detach` that sleeps then cancels.
 - [ ] Implement `TaskGroup::with-cancellation [group & body]` — body can receive cancellation signal.
-  - Deferred: Requires cooperative cancellation integration.
+  - Deferred: Requires PR-TG-003-1, PR-TG-003-2, PR-TG-003-3.
 
 ##### TG-004 — Prerequisites: Per-fiber panic handling
 
