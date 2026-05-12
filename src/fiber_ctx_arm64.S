@@ -37,12 +37,16 @@ tur_ctx_swap:
     .globl _fiber_entry_shim
 _fiber_entry_shim:
     mov    x0, x19
-    b      _tur_fiber_entry
+    bl     _tur_fiber_entry
+    bl     _abort
+    brk    #1
 #else
     .globl fiber_entry_shim
     .type fiber_entry_shim, %function
 fiber_entry_shim:
     mov    x0, x19
-    b      tur_fiber_entry
+    bl     tur_fiber_entry
+    bl     abort
+    brk    #1
     .size fiber_entry_shim, .-fiber_entry_shim
 #endif

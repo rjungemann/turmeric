@@ -44,6 +44,7 @@ _fiber_entry_shim:
     mov    %r12, %rdi
     call   _tur_fiber_entry
     call   _abort
+    ud2
 #else
     .globl fiber_entry_shim
     .type fiber_entry_shim, @function

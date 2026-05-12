@@ -12,8 +12,12 @@ ifeq ($(UNAME_M),arm64)
 ASM_SRCS := src/fiber_ctx_arm64.S
 else ifeq ($(UNAME_M),aarch64)
 ASM_SRCS := src/fiber_ctx_arm64.S
-else
+else ifeq ($(UNAME_M),x86_64)
 ASM_SRCS := src/fiber_ctx_x64.S
+else ifeq ($(UNAME_M),amd64)
+ASM_SRCS := src/fiber_ctx_x64.S
+else
+$(error Unsupported architecture '$(UNAME_M)'; expected arm64/aarch64/x86_64/amd64)
 endif
 
 OBJS := $(patsubst src/%.c,build/%.o,$(SRCS)) \
