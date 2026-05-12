@@ -1242,16 +1242,19 @@ See [backtracking-cloneable-continuations-plan.md](archive/backtracking-cloneabl
 These prerequisites unblock parameterized typeclass instances, which are required for several Phase B1 and Phase B2 tasks.
 
 ### PTC1 — Typeclass constraint syntax and parsing
-- [ ] Extend `elab_definstance` in `src/elab.c` to parse typeclass constraints in instance declarations.
-  - Current syntax: `(definstance Clone [option] ...)` — non-parameterized.
-  - Target syntax: `(definstance Clone [Pair a b] [Clone a, Clone b] ...)` — parameterized with constraints.
-  - Parse constraint list after type parameters: scan for `[Constraint1 Constraint2 ...]` vector.
-  - Each constraint is a typeclass name applied to type variables from the instance head.
-- [ ] Add `TypeClassConstraint` struct in `src/typeclass.h` to represent a constraint.
-  - Fields: `typeclass` (TypeClass*), `type_args` (Type* array for the constrained types).
-  - Example: `[Clone a]` → TypeClassConstraint{typeclass: Clone, type_args: [a]}.
-- [ ] Store constraints on `TypeClassInstance` in `src/typeclass.h`.
-  - Add `TypeClassConstraint *constraints` array and `n_constraints` field.
+- [x] Extend `elab_definstance` in `src/elab.c` to parse typeclass constraints in instance declarations.
+  - Implemented: `(definstance Clone [Pair] [Clone int Clone int] (clone [x] ...))` syntax.
+  - Supports two formats:
+    - Vector of lists: `[(Clone int) (Clone bool)]` — each constraint is a list
+    - Flat vector: `[Clone int Clone bool]` — alternating TypeClass/TypeArg pairs
+  - Parsing logic added after type args parsing, before method implementations.
+- [x] Add `TypeConstraint` struct in `src/typeclass.h` to represent a constraint.
+  - Already existed as `typedef struct TypeConstraint { TypeClass *typeclass; Type type_arg; }`.
+  - Added forward declaration for use in `TypeClassInstance`.
+- [x] Store constraints on `TypeClassInstance` in `src/typeclass.h`.
+  - Added fields: `TypeConstraint *type_param_constraints` and `uint8_t n_type_param_constraints`.
+  - Initialized in `typeclass_env_register_instance()` in `src/typeclass.c`.
+  - Stored from `elab_definstance` after parsing.
 
 ### PTC2 — Constraint validation during instance elaboration
 - [ ] Implement constraint lookup: for each constraint `[Clone a]`, verify that a `Clone` instance exists for type `a`.
