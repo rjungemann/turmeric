@@ -77,3 +77,31 @@
   (handle body
     (Abort [msg] k) (panic msg)))
 
+;; ---- Phase T25: Async/Await effects for effect/async integration ----
+
+;; Async effect: perform an async computation and return a Future.
+;; The handler should spawn the computation and return a Future that can be awaited.
+(defeffect Async [thunk :ptr<void>] :ptr<void>)
+
+;; Await effect: await a future and return its value.
+;; The handler should block (or yield) until the future is ready, then resume with the value.
+(defeffect Await [future :ptr<void>] :int)
+
+;; with-async — handle Async by spawning a fiber and returning a Future
+(defmacro with-async [body]
+  (handle body
+    (Async [thunk k])
+      (do
+        ;; Spawn the thunk as a fiber and get a Future
+        ;; Note: This is a placeholder - actual implementation requires
+        ;; integration with the async/await runtime
+        (let [result (thunk)]
+          (resume k result)))))
+
+;; with-await — handle Await by blocking until future is ready
+(defmacro with-await [body]
+  (handle body
+    (Await [future k])
+      (let [value (await future)]
+        (resume k value))))
+

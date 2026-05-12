@@ -1,0 +1,14 @@
+;; Phase T25: async-effect-spawn — effect handler spawns a fiber
+;;
+;; Tests that an effect handler can spawn a fiber and the fiber runs on the scheduler.
+
+(defeffect GetValue [] :int)
+
+(defn main [] :int
+  (let [result (handle (perform (GetValue))
+                   (GetValue [] k)
+                     (let [fut (async (fn [] :int 42))]
+                       (let [val (await fut)]
+                         (resume k val))))]
+    (println result)
+    0))

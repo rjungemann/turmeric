@@ -1,0 +1,14 @@
+;; Phase T25: effects-async — effect handlers in async context
+;;
+;; Tests that effect handlers work correctly inside async blocks.
+
+(defeffect AddTen [x :int] :int)
+
+(defn main [] :int
+  ;; Test: perform an effect inside async block, handler resumes fiber
+  (let [fut (async (fn [] :int
+                     (handle (perform (AddTen 5))
+                       (AddTen [x] k) (resume k (+ x 10)))))]
+    (let [result (await fut)]
+      (println result)
+      0)))
