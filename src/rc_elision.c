@@ -131,6 +131,16 @@ static int count_uses(const Expr *e, const Binding *b) {
                                    + count_uses(e->as.set_deref_.value, b);
         case EX_THROW:        return count_uses(e->as.throw_.payload, b);
         case EX_PANIC:        return count_uses(e->as.panic_.payload, b);
+        case EX_PANIC_WITH:   return count_uses(e->as.panic_with_.payload, b);
+        case EX_CATCH_UNWIND: return count_uses(e->as.catch_unwind_.thunk, b);
+        case EX_CATCH_PANIC_OF: return count_uses(e->as.catch_panic_of_.thunk, b);
+        case EX_PANIC_PAYLOAD_TYPE:
+        case EX_PANIC_PAYLOAD_VALUE:
+        case EX_PANIC_PAYLOAD_FILE:
+        case EX_PANIC_PAYLOAD_LINE:
+            return count_uses(e->as.panic_payload_type_.payload, b);
+        case EX_PANIC_PAYLOAD_DOWNS:
+            return count_uses(e->as.panic_payload_downs_.payload, b);
         case EX_TRY: {
             n += count_uses(e->as.try_.body, b);
             for (uint8_t i = 0; i < e->as.try_.n_clauses; i++)
@@ -203,6 +213,9 @@ static bool has_barrier(const Expr *e) {
         case EX_WHILE:
         case EX_THROW:
         case EX_PANIC:
+        case EX_PANIC_WITH:
+        case EX_CATCH_UNWIND:
+        case EX_CATCH_PANIC_OF:
         case EX_TRY:
         case EX_CLOSURE:
         case EX_DEFER:
@@ -526,6 +539,16 @@ static void analyze_expr(Expr *e) {
                                analyze_expr(e->as.set_deref_.value);    return;
         case EX_THROW:         analyze_expr(e->as.throw_.payload);      return;
         case EX_PANIC:         analyze_expr(e->as.panic_.payload);      return;
+        case EX_PANIC_WITH:    analyze_expr(e->as.panic_with_.payload); return;
+        case EX_CATCH_UNWIND:  analyze_expr(e->as.catch_unwind_.thunk); return;
+        case EX_CATCH_PANIC_OF: analyze_expr(e->as.catch_panic_of_.thunk); return;
+        case EX_PANIC_PAYLOAD_TYPE:
+        case EX_PANIC_PAYLOAD_VALUE:
+        case EX_PANIC_PAYLOAD_FILE:
+        case EX_PANIC_PAYLOAD_LINE:
+            analyze_expr(e->as.panic_payload_type_.payload); return;
+        case EX_PANIC_PAYLOAD_DOWNS:
+            analyze_expr(e->as.panic_payload_downs_.payload); return;
         case EX_TRY: {
             analyze_expr(e->as.try_.body);
             for (uint8_t i = 0; i < e->as.try_.n_clauses; i++)

@@ -107,6 +107,7 @@ const char *type_name(Type t) {
         case TY_FLOAT:   return "float";
         case TY_CSTR:    return "cstr";
         case TY_PTR_VOID: return "ptr<void>";
+        case TY_NEVER:   return "!";
         case TY_FN: {
             /* Build into a buf, then strdup. */
             Buf tmp;
@@ -217,6 +218,7 @@ static void type_name_buf(Buf *b, Type t) {
         case TY_FLOAT:   buf_puts(b, "float"); break;
         case TY_CSTR:    buf_puts(b, "cstr"); break;
         case TY_PTR_VOID: buf_puts(b, "ptr<void>"); break;
+        case TY_NEVER:   buf_puts(b, "!"); break;
         case TY_FN: {
             buf_puts(b, "(fn [");
             for (uint8_t i = 0; i < t.as.fn.arity; i++) {
@@ -326,6 +328,7 @@ const char *type_c_name(Type t) {
         case TY_FLOAT:   return "double";
         case TY_CSTR:    return "const char *";
         case TY_PTR_VOID: return "void *";
+        case TY_NEVER:   return "void";  /* never type has no values, use void */
         case TY_FN: {
             /* For function types, return the result type's C name. */
             return type_c_name(type_from_kind(t.as.fn.result_kind));
@@ -402,4 +405,29 @@ Kind kind_parse(const char *s) {
         return KIND_ARROW;
     }
     return KIND_STAR;
+}
+
+const char *typekind_to_string(TypeKind k) {
+    switch (k) {
+        case TY_UNKNOWN:   return "unknown";
+        case TY_NIL:      return "nil";
+        case TY_BOOL:     return "bool";
+        case TY_INT:      return "int";
+        case TY_FLOAT:    return "float";
+        case TY_CSTR:     return "cstr";
+        case TY_PTR_VOID: return "ptr-void";
+        case TY_FN:       return "fn";
+        case TY_REF:      return "ref";
+        case TY_RC:       return "rc";
+        case TY_WEAK:     return "weak";
+        case TY_REF_IMMUT: return "&immut";
+        case TY_REF_MUT:  return "&mut";
+        case TY_TYPECLASS: return "typeclass";
+        case TY_TYPECLASS_INST: return "typeclass-inst";
+        case TY_EXCEPTION: return "exception";
+        case TY_CONT:     return "cont";
+        case TY_STRUCT:   return "struct";
+        case TY_NEVER:    return "!";
+        default:          return "<?>";
+    }
 }

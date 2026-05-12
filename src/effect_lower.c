@@ -75,6 +75,19 @@ static bool expr_contains_effects(const Expr *e) {
             return expr_contains_effects(e->as.throw_.payload);
         case EX_PANIC:
             return expr_contains_effects(e->as.panic_.payload);
+        case EX_PANIC_WITH:
+            return expr_contains_effects(e->as.panic_with_.payload);
+        case EX_CATCH_UNWIND:
+            return expr_contains_effects(e->as.catch_unwind_.thunk);
+        case EX_CATCH_PANIC_OF:
+            return expr_contains_effects(e->as.catch_panic_of_.thunk);
+        case EX_PANIC_PAYLOAD_TYPE:
+        case EX_PANIC_PAYLOAD_VALUE:
+        case EX_PANIC_PAYLOAD_FILE:
+        case EX_PANIC_PAYLOAD_LINE:
+            return expr_contains_effects(e->as.panic_payload_type_.payload);
+        case EX_PANIC_PAYLOAD_DOWNS:
+            return expr_contains_effects(e->as.panic_payload_downs_.payload);
         case EX_TRY:
             if (expr_contains_effects(e->as.try_.body)) return true;
             for (uint8_t i = 0; i < e->as.try_.n_clauses; i++) {

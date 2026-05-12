@@ -76,6 +76,19 @@ bool cps_expr_contains_shift(const Expr *e) {
             return cps_expr_contains_shift(e->as.throw_.payload);
         case EX_PANIC:
             return cps_expr_contains_shift(e->as.panic_.payload);
+        case EX_PANIC_WITH:
+            return cps_expr_contains_shift(e->as.panic_with_.payload);
+        case EX_CATCH_UNWIND:
+            return cps_expr_contains_shift(e->as.catch_unwind_.thunk);
+        case EX_CATCH_PANIC_OF:
+            return cps_expr_contains_shift(e->as.catch_panic_of_.thunk);
+        case EX_PANIC_PAYLOAD_TYPE:
+        case EX_PANIC_PAYLOAD_VALUE:
+        case EX_PANIC_PAYLOAD_FILE:
+        case EX_PANIC_PAYLOAD_LINE:
+            return cps_expr_contains_shift(e->as.panic_payload_type_.payload);
+        case EX_PANIC_PAYLOAD_DOWNS:
+            return cps_expr_contains_shift(e->as.panic_payload_downs_.payload);
         case EX_TRY:
             if (cps_expr_contains_shift(e->as.try_.body)) return true;
             for (uint8_t i = 0; i < e->as.try_.n_clauses; i++) {

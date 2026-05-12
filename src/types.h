@@ -60,6 +60,8 @@ typedef enum TypeKind {
     TY_CONT,         /* cont<T> - captured continuation that returns T */
     /* Phase 11: User-defined struct types */
     TY_STRUCT,       /* user-defined struct type - see as.struct_ for StructDef */
+    /* Phase R2: Panic - diverging/never type */
+    TY_NEVER,        /* ! - diverging type (never returns; bottom type) */
 } TypeKind;
 
 /* Phase 11: Struct field descriptor.
@@ -104,6 +106,7 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
         case TY_EXCEPTION:
         case TY_CONT:
         case TY_STRUCT:   /* default move; actual copy_kind set via type_struct() */
+        case TY_NEVER:     /* never type is move-only (no values exist) */
             return CK_MOVE;
         case TY_UNKNOWN:
         default:
@@ -209,6 +212,9 @@ static inline bool type_is_send(Type t) {
         case TY_REF_IMMUT:
         case TY_REF_MUT:
             return false;
+        case TY_NEVER:
+            /* Never type has no values, so vacuously Send */
+            return true;
         default:
             return true;
     }
@@ -218,6 +224,9 @@ static inline bool type_is_sync(Type t) {
     /* Sync implies Send; use the same conservative rule set in v1. */
     return type_is_send(t);
 }
+
+/* Convert TypeKind to string representation for debugging */
+const char *typekind_to_string(TypeKind k);
 
 static inline Type type_simple(TypeKind kind, CopyKind copy_kind) {
     Type t = {0};
@@ -234,6 +243,7 @@ static inline Type type_simple(TypeKind kind, CopyKind copy_kind) {
 #define TYPE_FLOAT    (type_simple(TY_FLOAT, CK_COPY))
 #define TYPE_CSTR     (type_simple(TY_CSTR, CK_COPY))
 #define TYPE_PTR_VOID (type_simple(TY_PTR_VOID, CK_COPY))
+#define TYPE_NEVER    (type_simple(TY_NEVER, CK_MOVE))
 
 /* Phase 5: ref<T> type constructor */
 static inline Type type_ref(TypeKind inner) {
