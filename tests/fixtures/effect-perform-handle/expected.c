@@ -708,14 +708,15 @@ static int64_t use_ask() {
 
 int main(void) {
     EffectHandlerFrame __eff_frame_2;
-    __eff_frame_2.parent = global_effect_handler_chain;
+    EffectHandlerFrame **__eff_chain_2 = (tur_current_fiber ? (EffectHandlerFrame **)&tur_current_fiber->handler_chain : &global_effect_handler_chain);
+    __eff_frame_2.parent = *__eff_chain_2;
     __eff_frame_2.n_cases = 1;
     __eff_frame_2.cases[0].effect_name = "Ask";
     __eff_frame_2.cases[0].handler_fn = __effect_handler_1;
     __eff_frame_2.cases[0].env = NULL;
-    global_effect_handler_chain = &__eff_frame_2;
+    *__eff_chain_2 = &__eff_frame_2;
     int64_t __t3 = use_ask();
-    global_effect_handler_chain = global_effect_handler_chain->parent;
+    *__eff_chain_2 = (*__eff_chain_2)->parent;
     printf("%lld\n", (long long)(__t3));
     return 0;
 }

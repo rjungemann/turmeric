@@ -1817,10 +1817,20 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             char *frame_var = (char *)malloc(32);
             snprintf(frame_var, 32, "__eff_frame_%d", ctx->tmp_n++);
 
+            /* Derive a chain pointer name parallel to the frame name */
+            char *chain_var = (char *)malloc(32);
+            snprintf(chain_var, 32, "__eff_chain_%d", ctx->tmp_n - 1);
+
             indent_buf(body, ctx->indent);
             buf_printf(body, "EffectHandlerFrame %s;\n", frame_var);
+            /* T21-B: use fiber-local chain when inside a fiber */
             indent_buf(body, ctx->indent);
-            buf_printf(body, "%s.parent = global_effect_handler_chain;\n", frame_var);
+            buf_printf(body,
+                "EffectHandlerFrame **%s = (tur_current_fiber"
+                " ? (EffectHandlerFrame **)&tur_current_fiber->handler_chain"
+                " : &global_effect_handler_chain);\n", chain_var);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s.parent = *%s;\n", frame_var, chain_var);
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s.n_cases = %d;\n", frame_var, h->n_cases);
             for (uint8_t i = 0; i < h->n_cases; i++) {
@@ -1835,7 +1845,7 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(body, "%s.cases[%d].env = NULL;\n", frame_var, i);
             }
             indent_buf(body, ctx->indent);
-            buf_printf(body, "global_effect_handler_chain = &%s;\n", frame_var);
+            buf_printf(body, "*%s = &%s;\n", chain_var, frame_var);
 
             /* Evaluate the body */
             char *result = fresh_tmp(ctx);
@@ -1850,11 +1860,12 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
 
             /* Pop frame */
             indent_buf(body, ctx->indent);
-            buf_puts(body, "global_effect_handler_chain = global_effect_handler_chain->parent;\n");
+            buf_printf(body, "*%s = (*%s)->parent;\n", chain_var, chain_var);
 
             /* Cleanup */
             for (uint8_t i = 0; i < h->n_cases; i++) free(hfn_names[i]);
             free(hfn_names);
+            free(chain_var);
             free(frame_var);
 
             if (returns_value) return result;
@@ -2352,6 +2363,24 @@ static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         buf_init(ctx->pending_handler_fns);
     }
 
+    /* Phase 19 (per-fiber): Route THIS function's body through a temp buffer so
+     * that any handler functions accumulated during body emission are flushed to
+     * file-scope BEFORE this function's definition. Without this, a handle
+     * expression inside a non-final function generates a forward reference: the
+     * function body is written to `file` first, then the handler appears after
+     * the next function drains the pending buffer.
+     *
+     * Steps:
+     *   1. Redirect ctx->file to a temp buf
+     *   2. Emit the function definition into the temp buf
+     *   3. Drain any newly-added handlers to the real file (file scope, before def)
+     *   4. Append the temp buf to the real file
+     */
+    Buf fn_tmp; buf_init(&fn_tmp);
+    Buf *real_file = file;
+    ctx->file = &fn_tmp;
+    file = &fn_tmp;
+
     /* Phase 3: Emit env struct for closure thunks */
     if (fd->closure) {
         const Symbol *env_name = fd->closure->env_name;
@@ -2501,6 +2530,17 @@ static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     ctx->indent -= 4;
     buf_printf(file, "}\n\n");
     free((void*)fn_name);
+
+    /* Phase 19 (per-fiber): flush handlers accumulated during this body, then
+     * commit the temp function buffer to the real file. */
+    if (ctx->pending_handler_fns && ctx->pending_handler_fns->len > 0) {
+        buf_write(real_file, ctx->pending_handler_fns->data, ctx->pending_handler_fns->len);
+        buf_free(ctx->pending_handler_fns);
+        buf_init(ctx->pending_handler_fns);
+    }
+    buf_write(real_file, fn_tmp.data, fn_tmp.len);
+    buf_free(&fn_tmp);
+    ctx->file = real_file;
 }
 
 

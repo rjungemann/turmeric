@@ -711,15 +711,16 @@ int _v = 0;
 int main(void) {
     {
         EffectHandlerFrame __eff_frame_1;
-        __eff_frame_1.parent = global_effect_handler_chain;
+        EffectHandlerFrame **__eff_chain_1 = (tur_current_fiber ? (EffectHandlerFrame **)&tur_current_fiber->handler_chain : &global_effect_handler_chain);
+        __eff_frame_1.parent = *__eff_chain_1;
         __eff_frame_1.n_cases = 1;
         __eff_frame_1.cases[0].effect_name = "Read";
         __eff_frame_1.cases[0].handler_fn = __effect_handler_0;
         __eff_frame_1.cases[0].env = NULL;
-        global_effect_handler_chain = &__eff_frame_1;
+        *__eff_chain_1 = &__eff_frame_1;
         int64_t __t3 = tur_effect_perform("Read", NULL, 0);
         int64_t __t2 = __t3;
-        global_effect_handler_chain = global_effect_handler_chain->parent;
+        *__eff_chain_1 = (*__eff_chain_1)->parent;
         int64_t x_2 = __t2;
         (void)x_2;
         printf("%lld\n", (long long)(((x_2) + (INT64_C(1)))));

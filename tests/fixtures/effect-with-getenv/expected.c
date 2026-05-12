@@ -703,12 +703,13 @@ static int64_t __effect_handler_0(int64_t *__effect_args, int __n_effect_args, i
 
 int main(void) {
     EffectHandlerFrame __eff_frame_1;
-    __eff_frame_1.parent = global_effect_handler_chain;
+    EffectHandlerFrame **__eff_chain_1 = (tur_current_fiber ? (EffectHandlerFrame **)&tur_current_fiber->handler_chain : &global_effect_handler_chain);
+    __eff_frame_1.parent = *__eff_chain_1;
     __eff_frame_1.n_cases = 1;
     __eff_frame_1.cases[0].effect_name = "GetEnv";
     __eff_frame_1.cases[0].handler_fn = __effect_handler_0;
     __eff_frame_1.cases[0].env = NULL;
-    global_effect_handler_chain = &__eff_frame_1;
+    *__eff_chain_1 = &__eff_frame_1;
     {
         int64_t __t3[1];
         __t3[0] = (int64_t)"PATH";
@@ -717,6 +718,6 @@ int main(void) {
         (void)__2;
         puts("getenv ok");
     }
-    global_effect_handler_chain = global_effect_handler_chain->parent;
+    *__eff_chain_1 = (*__eff_chain_1)->parent;
     return 0;
 }
