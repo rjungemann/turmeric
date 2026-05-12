@@ -4195,6 +4195,8 @@ static Expr *elab_try(Elab *e, const Form *call) {
                 } else if ((kw->len == 4 && memcmp(kw->name, "void", 4) == 0) ||
                            (kw->len == 3 && memcmp(kw->name, "nil", 3) == 0)) {
                     catch_type = TY_NIL;  /* Catch-all */
+                } else if (kw->len == 1 && memcmp(kw->name, "!", 1) == 0) {
+                    catch_type = TY_NEVER;
                 } else {
                     diag_emit(DIAG_ERROR, type_form->span,
                               "unsupported type in catch clause");
@@ -5210,6 +5212,9 @@ static Expr *elab_defn(Elab *e, const Form *call) {
             } else if (kw->len == 9 && memcmp(kw->name, "ptr<void>", 9) == 0) {
                 param_kinds[n_params - 1] = TY_PTR_VOID;
                 params[n_params - 1]->type = TYPE_PTR_VOID;
+            } else if (kw->len == 1 && memcmp(kw->name, "!", 1) == 0) {
+                param_kinds[n_params - 1] = TY_NEVER;
+                params[n_params - 1]->type = TYPE_NEVER;
             } else {
                 /* Try to look up as a type variable or typeclass */
                 /* For now, default to int */
@@ -5290,6 +5295,8 @@ static Expr *elab_defn(Elab *e, const Form *call) {
                 return_kind = TY_RC;
             } else if (kw->len == 4 && memcmp(kw->name, "weak", 4) == 0) {
                 return_kind = TY_WEAK;
+            } else if (kw->len == 1 && memcmp(kw->name, "!", 1) == 0) {
+                return_kind = TY_NEVER;
             } else {
                 diag_emit(DIAG_ERROR, ret_f->span,
                           "defn: unsupported return type keyword :%s",
@@ -5501,6 +5508,8 @@ static Expr *elab_fn(Elab *e, const Form *call) {
                 return_kind = TY_RC;
             } else if (kw->len == 4 && memcmp(kw->name, "weak", 4) == 0) {
                 return_kind = TY_WEAK;
+            } else if (kw->len == 1 && memcmp(kw->name, "!", 1) == 0) {
+                return_kind = TY_NEVER;
             } else {
                 diag_emit(DIAG_ERROR, ret_f->span,
                           "fn: unsupported return type keyword :%s",

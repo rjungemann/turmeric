@@ -123,7 +123,14 @@ void tur_panic(const char *msg) {
         abort();
     }
     tur_panic_in_progress = 1;
-    fprintf(stderr, "panic: %s\n", msg ? msg : "(no message)");
+    fprintf(stderr, "panic at %s:%d: %s\n", __FILE__, __LINE__, msg ? msg : "(no message)");
+    abort();
+}
+
+/* Phase R5: Panic strategy - ABORT variant for #[no-unwind] */
+void tur_panic_abort(const char *msg) {
+    /* Abort immediately without unwinding - used for #[no-unwind] functions */
+    fprintf(stderr, "panic (no unwind): %s\n", msg ? msg : "(no message)");
     abort();
 }
 
