@@ -794,6 +794,18 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 - [ ] Add integration fixture: `raytracer.tur` (parallel ray-tracer using thread pool).
   - Deferred: requires `ThreadPool::new-dynamic` auto-scaling for meaningful parallelism.
 
+##### T20-TC — Type Constructor Support
+- [x] Define `TY_APP` type application node in `src/types.h` to represent a partially-applied type constructor (e.g., `(result int)` producing a `* -> *` type).
+  - Implemented: `TY_APP` added to `TypeKind` enum in `src/types.h` with `app` struct containing `fn` and `arg` Type pointers.
+- [x] Implement `kind_of_type_app(Type *fn_type, Type *arg_type, Diag *d) → Kind` in `src/kind_check.c`.
+  - Implemented: Returns `KIND_STAR` for `KIND_ARROW`, `KIND_ARROW` for `KIND_ARROW2`, emits `TUR_E0012_KIND_MISMATCH` for `KIND_STAR`.
+- [x] Decide and document type-level application surface syntax: `(type-app F A)` at type-annotation positions vs. `(F A)` as sugar for the same. Record decision here before implementing.
+  - Decision: `(type-app F A)` is the canonical syntax. Documented in `tests/fixtures/hkt-type-app-kind/input.tur` header comment.
+- [x] Wire `TY_APP` into `type_c_name()` in `src/types.c` so it emits a valid C representation (opaque `int64_t` in v1, same as `TY_STRUCT`).
+  - Implemented: Returns `"int64_t"` for `TY_APP` case in `src/types.c:432`.
+- [x] Add fixture `hkt-type-app-kind.tur` verifying that a partially-applied two-argument type constructor has kind `* -> *` (advisory check in v1; kind mismatch emits `TUR-E0012`).
+  - Implemented: Fixture exists at `tests/fixtures/hkt-type-app-kind/` with BifMap typeclass test.
+
 #### T21 — Fibers and async/await core (Phase 21)
 
 **Dependencies:** Phase 18 (delimited continuations), Phase 17 (exceptions), Phase 5 (`ref<T>` ownership model)
