@@ -4,45 +4,42 @@
 ; every compiled Turmeric program by emit.c (FiberBlock + tur_fiber_block_*).
 ;
 ; Usage:
-;   (let f (fiber-new fn 0))
+;   (let [f (fiber-new fn-ref 0)] ...)
 ;   (fiber-resume f 0)          ; returns yielded or final value as :int
-;   (fiber-done? f)             ; returns 1 if fiber has returned
+;   (fiber-done? f)             ; returns non-zero if fiber has returned
 ;   (fiber-free f)              ; release memory
 ;
-; Inside a fiber body (fn is called with no args via entry_fn):
+; Inside a fiber body (fn-ref is a zero-arg function taking no args):
 ;   (fiber-yield 42)            ; suspend and hand 42 back to caller
 
-(defn fiber-new [fn stack-size :int -> :ptr<void>]
+(defn fiber-new [fn :ptr<void> stack-size :int] :ptr<void>
   ```c
-  FiberBlock *f = tur_fiber_block_new((void(*)(void))fn, (size_t)stack_size);
-  return (int64_t)(intptr_t)f;
+  return (void *)tur_fiber_block_new((void(*)(void))fn, (size_t)stack_size);
   ```)
 
-(defn fiber-resume [f :ptr<void> arg :int -> :int]
+(defn fiber-resume [f :ptr<void> arg :int] :int
   ```c
-  return tur_fiber_block_resume((FiberBlock *)(intptr_t)f, arg);
+  return tur_fiber_block_resume((FiberBlock *)f, (int64_t)arg);
   ```)
 
-(defn fiber-yield [value :int -> :int]
+(defn fiber-yield [value :int] :nil
   ```c
   tur_fiber_block_yield(value);
-  return 0;
   ```)
 
-(defn fiber-done? [f :ptr<void> -> :int]
+(defn fiber-done? [f :ptr<void>] :int
   ```c
-  FiberBlock *fb = (FiberBlock *)(intptr_t)f;
+  FiberBlock *fb = (FiberBlock *)f;
   return fb ? (int64_t)fb->done : 1;
   ```)
 
-(defn fiber-arg [f :ptr<void> -> :int]
+(defn fiber-arg [f :ptr<void>] :int
   ```c
-  FiberBlock *fb = (FiberBlock *)(intptr_t)f;
+  FiberBlock *fb = (FiberBlock *)f;
   return fb ? fb->arg : 0;
   ```)
 
-(defn fiber-free [f :ptr<void> -> :int]
+(defn fiber-free [f :ptr<void>] :nil
   ```c
-  tur_fiber_block_free((FiberBlock *)(intptr_t)f);
-  return 0;
+  tur_fiber_block_free((FiberBlock *)f);
   ```)

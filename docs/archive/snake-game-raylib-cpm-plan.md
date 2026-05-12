@@ -58,8 +58,8 @@ include(cmake/CPM.cmake)
 # Build Turmeric compiler first
 add_subdirectory(src)
 
-# Games directory
-add_subdirectory(games)
+# Examples directory
+add_subdirectory(examples)
 ```
 
 ### 3.2 Snake Game (`examples/snake/CMakeLists.txt`)

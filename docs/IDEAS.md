@@ -1,1 +1,0 @@
-* doc for custom effects

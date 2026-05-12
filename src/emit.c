@@ -149,7 +149,7 @@ static void register_defer_thunk(EmitCtx *ctx, const char *name, const Expr *bod
     thunk->body = (Expr *)body;  /* Cast away const for storage */
     thunk->captures = captures;
     thunk->n_captures = n_captures;
-    thunk->env_name = env_name ? tur_strdup(env_name) : NULL;
+    thunk->env_name = env_name ? strdup(env_name) : NULL;
     thunk->next = ctx->pending_defer_thunks;
     ctx->pending_defer_thunks = thunk;
 }
@@ -333,12 +333,12 @@ static void emit_c_string(Buf *out, StrSlice s) {
 
 /* ------------ atomic emitters (no statements emitted) ------------ */
 
-static char *atom_nil(void)         { return tur_strdup("((void)0)"); }
-static char *atom_bool(bool b)      { return tur_strdup(b ? "true" : "false"); }
+static char *atom_nil(void)         { return strdup("((void)0)"); }
+static char *atom_bool(bool b)      { return strdup(b ? "true" : "false"); }
 static char *atom_int(int64_t i) {
     char buf[40];
     snprintf(buf, sizeof buf, "INT64_C(%lld)", (long long)i);
-    return tur_strdup(buf);
+    return strdup(buf);
 }
 static char *atom_float(double f) {
     char buf[64];
@@ -350,7 +350,7 @@ static char *atom_float(double f) {
         /* No decimal point or exponent - append .0 */
         strcat(buf, ".0");
     }
-    return tur_strdup(buf);
+    return strdup(buf);
 }
 static char *atom_var(EmitCtx *ctx, const Binding *b) {
     return name_for_binding(ctx, b);
@@ -360,7 +360,7 @@ static char *atom_cstr(StrSlice s) {
     Buf b; buf_init(&b);
     emit_c_string(&b, s);
     buf_putc(&b, '\0');
-    char *p = tur_strdup(b.data);
+    char *p = strdup(b.data);
     buf_free(&b);
     return p;
 }
@@ -469,7 +469,7 @@ static char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
             break;
     }
     buf_putc(&out, '\0');
-    char *result = tur_strdup(out.data);
+    char *result = strdup(out.data);
     buf_free(&out);
     for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
     free(arg_strs);
@@ -1236,7 +1236,7 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
                 buf_puts(&out, ")");
                 buf_putc(&out, '\0');
-                char *result = tur_strdup(out.data);
+                char *result = strdup(out.data);
                 buf_free(&out);
                 for (uint32_t i = 0; i <= e->as.call_.n_args; i++) free(arg_strs[i]);
                 free(arg_strs);
@@ -1271,7 +1271,7 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_puts(&out, ")");
                 buf_putc(&out, '\0');
 
-                char *result = tur_strdup(out.data);
+                char *result = strdup(out.data);
                 buf_free(&out);
                 for (uint32_t i = 0; i < e->as.call_.n_args; i++) free(arg_strs[i]);
                 free(arg_strs);
@@ -1296,7 +1296,7 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
             buf_puts(&out, ")");
             buf_putc(&out, '\0');
-            char *result = tur_strdup(out.data);
+            char *result = strdup(out.data);
             buf_free(&out);
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) free(arg_strs[i]);
             free(arg_strs);
@@ -1340,7 +1340,7 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             
             /* Emit: malloc + store value */
             char *tmp = fresh_tmp(ctx);
-            char *inner_type_c = tur_strdup(type_c_name(e->as.ref_.expr->type));
+            char *inner_type_c = strdup(type_c_name(e->as.ref_.expr->type));
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s %s = malloc(sizeof(%s));\n", 
                        type_c_name(e->type), tmp, inner_type_c);
@@ -1360,7 +1360,7 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             
             /* For ref<T>, we need to cast and dereference */
             if (e->as.deref_.expr->type.kind == TY_REF) {
-                char *inner_type_c = tur_strdup(type_c_name(e->type));
+                char *inner_type_c = strdup(type_c_name(e->type));
                 char *tmp = fresh_tmp(ctx);
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "%s %s = *((%s *)%s);\n", 
@@ -1450,7 +1450,7 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_RC_OF: {
             /* (rc/of x) - allocate control block, copy value into it */
             char *inner = emit_value(ctx, body, e->as.rc_of_.expr);
-            char *inner_type_c = tur_strdup(type_c_name(e->as.rc_of_.expr->type));
+            char *inner_type_c = strdup(type_c_name(e->as.rc_of_.expr->type));
             
             /* Emit: allocate value separately, then attach it to rc control block. */
             char *val_tmp = fresh_tmp(ctx);
@@ -1493,7 +1493,7 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(body, "rc_strong_increment(%s);\n", inner);
             }
             /* Return the same pointer (now with incremented count, or elided) */
-            return tur_strdup(inner);
+            return strdup(inner);
         }
         case EX_RC_DROP: {
             /* (rc/drop r) - decrement strong count */
@@ -1606,6 +1606,25 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(body, "bool %s = !((TurContK *)(intptr_t)%s)->consumed;\n", tmp, inner);
             }
             free(inner);
+            return tmp;
+        }
+        /* Phase T21-F: async/await */
+        case EX_ASYNC: {
+            /* (async fn-expr) — launch fn-expr (a no-arg fn) in a thread, return TurAsyncTask* as ptr<void> */
+            char *fn_val = emit_value(ctx, body, e->as.async_.fn_expr);
+            char *tmp = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "void *%s = (void *)tur_async_call((int64_t(*)(void*))%s, NULL);\n", tmp, fn_val);
+            free(fn_val);
+            return tmp;
+        }
+        case EX_AWAIT: {
+            /* (await fut) — block on TurAsyncTask*, return int64_t value */
+            char *fut_val = emit_value(ctx, body, e->as.await_.fut_expr);
+            char *tmp = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "int64_t %s = tur_await_future((TurAsyncTask*)(intptr_t)%s);\n", tmp, fut_val);
+            free(fut_val);
             return tmp;
         }
         /* Phase 12: Borrow traits */
@@ -1856,8 +1875,16 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              */
             if (e->as.resume_.resume) {
                 char *k_var = emit_value(ctx, body, e->as.resume_.resume->k);
-                /* Mark TurContK consumed for Phase 19 k (TY_INT with CK_MOVE). */
+                /* Mark TurContK consumed for Phase 19 k (TY_INT with CK_MOVE).
+                 * T21-E: also enforce cross-fiber resume check. */
                 if (e->as.resume_.resume->k->type.kind == TY_INT) {
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body,
+                        "if (((TurContK *)(intptr_t)%s)->origin_fiber != "
+                        "(void *)tur_current_fiber) { "
+                        "fprintf(stderr, \"continuation error: resume on wrong "
+                        "fiber\\n\"); abort(); }\n",
+                        k_var);
                     indent_buf(body, ctx->indent);
                     buf_printf(body, "((TurContK *)(intptr_t)%s)->consumed = true;\n", k_var);
                 }
@@ -1899,7 +1926,7 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
             buf_puts(&lit, "}");
             buf_putc(&lit, '\0');
-            char *result = tur_strdup(lit.data);
+            char *result = strdup(lit.data);
             buf_free(&lit);
             return result;
         }
@@ -1912,7 +1939,7 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_printf(&lit, "(%s).%s", sv, fname);
             buf_putc(&lit, '\0');
             free(sv);
-            char *result = tur_strdup(lit.data);
+            char *result = strdup(lit.data);
             buf_free(&lit);
             return result;
         }
@@ -2262,7 +2289,10 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_WEAK_UPGRADE:
         case EX_WEAK_PRED:
         case EX_REF_PRED:
-        case EX_CONT_PRED: {
+        case EX_CONT_PRED:
+        /* Phase T21-F: async/await as statement - emit and discard */
+        case EX_ASYNC:
+        case EX_AWAIT: {
             /* Emit as value expression, discard result */
             char *v = emit_value(ctx, body, e);
             if (e->type.kind != TY_NIL) {
@@ -2420,7 +2450,7 @@ static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                        env_param_name);
             free(env_param_name);
             /* Store the env variable name for use in name_for_binding */
-            ctx->env_var_name = tur_strdup(env_var_name_buf);
+            ctx->env_var_name = strdup(env_var_name_buf);
         }
     }
 
@@ -2447,9 +2477,9 @@ static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * Emit default based on return type. */
             free(ret_val);
             switch (result_kind) {
-                case TY_INT:   ret_val = tur_strdup("0"); break;
-                case TY_BOOL:  ret_val = tur_strdup("false"); break;
-                default:       ret_val = tur_strdup("0"); break;
+                case TY_INT:   ret_val = strdup("0"); break;
+                case TY_BOOL:  ret_val = strdup("false"); break;
+                default:       ret_val = strdup("0"); break;
             }
         }
         /* Special case: if this is main and it returns int64_t, cast to int */
@@ -2933,6 +2963,55 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "#ifdef __clang__\n");
     buf_puts(out, "#pragma clang diagnostic pop\n");
     buf_puts(out, "#endif\n\n");
+    /* Phase T21-F: async/await runtime — TurAsyncTask + tur_async_call + tur_await_future */
+    buf_puts(out, "/* Phase T21-F: async/await runtime */\n");
+    buf_puts(out, "typedef struct TurAsyncTask TurAsyncTask;\n");
+    buf_puts(out, "struct TurAsyncTask {\n");
+    buf_puts(out, "    pthread_mutex_t lock;\n");
+    buf_puts(out, "    pthread_cond_t  ready;\n");
+    buf_puts(out, "    int64_t         value;\n");
+    buf_puts(out, "    int             done;\n");
+    buf_puts(out, "};\n\n");
+    buf_puts(out, "typedef struct { TurAsyncTask *cell; int64_t (*fn)(void *env); void *env; } TurAsyncArg;\n\n");
+    buf_puts(out, "static void *tur_async_trampoline(void *raw) {\n");
+    buf_puts(out, "    TurAsyncArg *a = (TurAsyncArg *)raw;\n");
+    buf_puts(out, "    int64_t result = a->fn(a->env);\n");
+    buf_puts(out, "    pthread_mutex_lock(&a->cell->lock);\n");
+    buf_puts(out, "    a->cell->value = result;\n");
+    buf_puts(out, "    a->cell->done  = 1;\n");
+    buf_puts(out, "    pthread_cond_broadcast(&a->cell->ready);\n");
+    buf_puts(out, "    pthread_mutex_unlock(&a->cell->lock);\n");
+    buf_puts(out, "    free(a);\n");
+    buf_puts(out, "    return NULL;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static TurAsyncTask *tur_async_call(int64_t (*fn)(void *env), void *env) {\n");
+    buf_puts(out, "    TurAsyncTask *cell = (TurAsyncTask *)malloc(sizeof(TurAsyncTask));\n");
+    buf_puts(out, "    if (!cell) { fprintf(stderr, \"async: oom\\n\"); abort(); }\n");
+    buf_puts(out, "    pthread_mutex_init(&cell->lock, NULL);\n");
+    buf_puts(out, "    pthread_cond_init(&cell->ready, NULL);\n");
+    buf_puts(out, "    cell->value = 0; cell->done = 0;\n");
+    buf_puts(out, "    TurAsyncArg *arg = (TurAsyncArg *)malloc(sizeof(TurAsyncArg));\n");
+    buf_puts(out, "    if (!arg) { free(cell); fprintf(stderr, \"async: oom\\n\"); abort(); }\n");
+    buf_puts(out, "    arg->cell = cell; arg->fn = fn; arg->env = env;\n");
+    buf_puts(out, "    pthread_t __tid;\n");
+    buf_puts(out, "    pthread_create(&__tid, NULL, tur_async_trampoline, arg);\n");
+    buf_puts(out, "    pthread_detach(__tid);\n");
+    buf_puts(out, "    return cell;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static int64_t tur_await_future(TurAsyncTask *cell) {\n");
+    buf_puts(out, "    pthread_mutex_lock(&cell->lock);\n");
+    buf_puts(out, "    while (!cell->done)\n");
+    buf_puts(out, "        pthread_cond_wait(&cell->ready, &cell->lock);\n");
+    buf_puts(out, "    int64_t v = cell->value;\n");
+    buf_puts(out, "    pthread_mutex_unlock(&cell->lock);\n");
+    buf_puts(out, "    return v;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static void tur_async_free(TurAsyncTask *cell) {\n");
+    buf_puts(out, "    if (!cell) return;\n");
+    buf_puts(out, "    pthread_mutex_destroy(&cell->lock);\n");
+    buf_puts(out, "    pthread_cond_destroy(&cell->ready);\n");
+    buf_puts(out, "    free(cell);\n");
+    buf_puts(out, "}\n\n");
     buf_puts(out, "static __thread EffectHandlerFrame *global_effect_handler_chain = NULL;\n\n");
     buf_puts(out, "static int64_t tur_effect_perform(const char *name, int64_t *args, int n_args) {\n");
         /* T21-B: use fiber-local handler chain when inside a fiber */

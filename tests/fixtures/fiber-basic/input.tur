@@ -1,31 +1,31 @@
-; T21-C: fiber-basic — create a fiber, resume it once, get return value.
-;
-; The fiber body yields 42 back to the caller.
-; Expected output: 42
+;; Phase T21-C: fiber-basic — create a fiber, resume it once, get yielded value.
+;;
+;; The fiber body calls tur_fiber_block_yield(42).
+;; Expected output: 42
 
-(defn fiber-body [] :int
+(defn fiber-body [] :nil
   ```c
   tur_fiber_block_yield(42);
-  return 0;
   ```)
 
-(defn fiber-block-new [fn :ptr<void> stack-size :int] :ptr<void>
+(defn fiber-new-fn [fn :ptr<void> stack-size :int] :ptr<void>
   ```c
-  FiberBlock *f = tur_fiber_block_new((void(*)(void))fn, (size_t)stack_size);
-  return (int64_t)(intptr_t)f;
+  return (void *)tur_fiber_block_new((void(*)(void))fn, (size_t)stack_size);
   ```)
 
-(defn fiber-block-resume [f :ptr<void> arg :int] :int
+(defn fiber-resume-fn [f :ptr<void> arg :int] :int
   ```c
-  return tur_fiber_block_resume((FiberBlock *)(intptr_t)f, arg);
+  return tur_fiber_block_resume((FiberBlock *)f, (int64_t)arg);
   ```)
 
-(defn fiber-block-free [f :ptr<void>] :nil
+(defn fiber-free-fn [f :ptr<void>] :nil
   ```c
-  tur_fiber_block_free((FiberBlock *)(intptr_t)f);
+  tur_fiber_block_free((FiberBlock *)f);
   ```)
 
-(let f (fiber-block-new fiber-body 0))
-(let result (fiber-block-resume f 0))
-(println result)
-(fiber-block-free f)
+(defn main [] :int
+  (let [f (fiber-new-fn fiber-body 0)]
+    (let [result (fiber-resume-fn f 0)]
+      (println result)
+      (fiber-free-fn f)
+      0)))

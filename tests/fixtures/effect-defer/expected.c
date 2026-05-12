@@ -267,6 +267,60 @@ static void tur_fiber_block_free(FiberBlock *f) {
 #pragma clang diagnostic pop
 #endif
 
+/* Phase T21-F: async/await runtime */
+typedef struct TurAsyncTask TurAsyncTask;
+struct TurAsyncTask {
+    pthread_mutex_t lock;
+    pthread_cond_t  ready;
+    int64_t         value;
+    int             done;
+};
+
+typedef struct { TurAsyncTask *cell; int64_t (*fn)(void *env); void *env; } TurAsyncArg;
+
+static void *tur_async_trampoline(void *raw) {
+    TurAsyncArg *a = (TurAsyncArg *)raw;
+    int64_t result = a->fn(a->env);
+    pthread_mutex_lock(&a->cell->lock);
+    a->cell->value = result;
+    a->cell->done  = 1;
+    pthread_cond_broadcast(&a->cell->ready);
+    pthread_mutex_unlock(&a->cell->lock);
+    free(a);
+    return NULL;
+}
+
+static TurAsyncTask *tur_async_call(int64_t (*fn)(void *env), void *env) {
+    TurAsyncTask *cell = (TurAsyncTask *)malloc(sizeof(TurAsyncTask));
+    if (!cell) { fprintf(stderr, "async: oom\n"); abort(); }
+    pthread_mutex_init(&cell->lock, NULL);
+    pthread_cond_init(&cell->ready, NULL);
+    cell->value = 0; cell->done = 0;
+    TurAsyncArg *arg = (TurAsyncArg *)malloc(sizeof(TurAsyncArg));
+    if (!arg) { free(cell); fprintf(stderr, "async: oom\n"); abort(); }
+    arg->cell = cell; arg->fn = fn; arg->env = env;
+    pthread_t __tid;
+    pthread_create(&__tid, NULL, tur_async_trampoline, arg);
+    pthread_detach(__tid);
+    return cell;
+}
+
+static int64_t tur_await_future(TurAsyncTask *cell) {
+    pthread_mutex_lock(&cell->lock);
+    while (!cell->done)
+        pthread_cond_wait(&cell->ready, &cell->lock);
+    int64_t v = cell->value;
+    pthread_mutex_unlock(&cell->lock);
+    return v;
+}
+
+static void tur_async_free(TurAsyncTask *cell) {
+    if (!cell) return;
+    pthread_mutex_destroy(&cell->lock);
+    pthread_cond_destroy(&cell->ready);
+    free(cell);
+}
+
 static __thread EffectHandlerFrame *global_effect_handler_chain = NULL;
 
 static int64_t tur_effect_perform(const char *name, int64_t *args, int n_args) {
@@ -645,6 +699,7 @@ static int64_t deferred_ask();
 static int64_t __effect_handler_4(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_4(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
     int64_t k_1 = __k;
+    if (((TurContK *)(intptr_t)k_1)->origin_fiber != (void *)tur_current_fiber) { fprintf(stderr, "continuation error: resume on wrong fiber\n"); abort(); }
     ((TurContK *)(intptr_t)k_1)->consumed = true;
     return (int64_t)INT64_C(42);
 }

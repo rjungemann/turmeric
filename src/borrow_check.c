@@ -298,6 +298,8 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
         case EX_WEAK_PRED:
         case EX_REF_PRED:
         case EX_CONT_PRED:
+        case EX_ASYNC:
+        case EX_AWAIT:
             /* These are reference operations - check the inner expression */
             if (e->kind == EX_REF) {
                 return borrow_check_expr_recursive(ctx, e->as.ref_.expr);
@@ -327,6 +329,10 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
                 return borrow_check_expr_recursive(ctx, e->as.ref_pred_.expr);
             } else if (e->kind == EX_CONT_PRED) {
                 return borrow_check_expr_recursive(ctx, e->as.cont_pred_.expr);
+            } else if (e->kind == EX_ASYNC) {
+                return borrow_check_expr_recursive(ctx, e->as.async_.fn_expr);
+            } else if (e->kind == EX_AWAIT) {
+                return borrow_check_expr_recursive(ctx, e->as.await_.fut_expr);
             }
             return true;
             

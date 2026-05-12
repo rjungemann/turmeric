@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(turmeric-games LANGUAGES C)
+project(turmeric LANGUAGES C)
 
 # ---------------------------------------------------------------------------
 # CPM: package manager for fetching Raylib (and any future C dependencies).
@@ -29,6 +29,6 @@ add_custom_target(tur_tests
 )
 
 # ---------------------------------------------------------------------------
-# Games
+# Examples
 # ---------------------------------------------------------------------------
-add_subdirectory(games)
+add_subdirectory(examples)

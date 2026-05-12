@@ -4,8 +4,16 @@
 #define _DEFAULT_SOURCE
 #endif
 
-#ifndef _POSIX_C_SOURCE
-#define _POSIX_C_SOURCE 200809L
+/* _DARWIN_C_SOURCE exposes mkstemps and DT_REG on macOS without suppressing
+ * POSIX extensions; on Linux _DEFAULT_SOURCE covers both. */
+#if defined(__APPLE__)
+#  ifndef _DARWIN_C_SOURCE
+#    define _DARWIN_C_SOURCE
+#  endif
+#else
+#  ifndef _POSIX_C_SOURCE
+#    define _POSIX_C_SOURCE 200809L
+#  endif
 #endif
 
 #include <errno.h>

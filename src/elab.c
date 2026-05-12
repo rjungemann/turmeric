@@ -415,6 +415,9 @@ typedef struct Elab {
     const Symbol *sym_question;
     /* Phase T19-B: thread-spawn form — (thread-spawn closure) */
     const Symbol *sym_thread_spawn;
+    /* Phase T21-F: async/await forms */
+    const Symbol *sym_async;
+    const Symbol *sym_await;
     /* Phase 13: Lifetime annotations */
     /* We recognize lifetime annotations as symbols starting with '\'' */
     /* No specific symbol needed - we check the symbol name at runtime */
@@ -822,6 +825,9 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_question = intern_cstr(st, "?");
     /* Phase T19-B: thread-spawn */
     e->sym_thread_spawn = intern_cstr(st, "thread-spawn");
+    /* Phase T21-F: async/await */
+    e->sym_async = intern_cstr(st, "async");
+    e->sym_await = intern_cstr(st, "await");
     /* Macro storage */
     e->macros = NULL;
     e->n_macros = 0;
@@ -4786,6 +4792,9 @@ static Expr *elab_cont_pred(Elab *e, const Form *call);
 static Expr *elab_panic(Elab *e, const Form *call);
 /* Phase T19-B: thread-spawn (Send-safety check for cross-thread closures) */
 static Expr *elab_thread_spawn(Elab *e, const Form *call);
+/* Phase T21-F: async/await sugar */
+static Expr *elab_async(Elab *e, const Form *call);
+static Expr *elab_await(Elab *e, const Form *call);
 
 /* ---- general elab ---- */
 
@@ -4871,6 +4880,11 @@ static Expr *elab_call(Elab *e, Form *call) {
         call->as.list.items[1]->as.list.items[0]->tag == F_SYM &&
         call->as.list.items[1]->as.list.items[0]->as.sym == e->sym_fn)
         return elab_thread_spawn(e, call);
+    /* Phase T21-F: async/await sugar */
+    if (name == e->sym_async && call->as.list.len == 2)
+        return elab_async(e, call);
+    if (name == e->sym_await && call->as.list.len == 2)
+        return elab_await(e, call);
     /* Phase R1: ? operator (reserved, not yet implemented) */
     if (name == e->sym_question) {
         diag_emit(DIAG_ERROR, call->span,
@@ -5871,6 +5885,35 @@ static Expr *elab_thread_spawn(Elab *e, const Form *call) {
     /* Return the closure expression (type flows through; T19-C provides the
      * actual runtime thread-spawn wrapper in stdlib/thread.tur).            */
     return closure_expr;
+}
+
+/* Phase T21-F: (async fn-expr) — launch fn-expr (no-arg function) in a new
+ * thread; return a TurAsyncTask* as ptr<void> (the future handle).          */
+static Expr *elab_async(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(async fn-expr) requires exactly one argument");
+        return NULL;
+    }
+    Expr *fn_expr = elab_form(e, call->as.list.items[1]);
+    if (!fn_expr) return NULL;
+    Expr *out = expr_new(e->arena, EX_ASYNC, TYPE_PTR_VOID, call->span);
+    out->as.async_.fn_expr = fn_expr;
+    return out;
+}
+
+/* Phase T21-F: (await fut) — block on TurAsyncTask* future; return int64_t. */
+static Expr *elab_await(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(await fut) requires exactly one argument");
+        return NULL;
+    }
+    Expr *fut_expr = elab_form(e, call->as.list.items[1]);
+    if (!fut_expr) return NULL;
+    Expr *out = expr_new(e->arena, EX_AWAIT, TYPE_INT, call->span);
+    out->as.await_.fut_expr = fut_expr;
+    return out;
 }
 
 /* Phase R2: (panic msg) — print msg to stderr, then abort.
