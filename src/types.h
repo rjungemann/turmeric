@@ -180,6 +180,42 @@ static inline LifetimeId type_first_lifetime(Type t) {
     return t.n_lifetimes > 0 ? t.lifetimes[0] : LIFETIME_NONE;
 }
 
+/* Phase T19-B: Thread-safety marker helpers.
+ *
+ * type_is_send(t): true iff a value of type `t` can be transferred to another
+ *   thread (ownership move across thread boundary is safe).
+ * type_is_sync(t): true iff a value of type `t` can be shared across threads
+ *   (immutable or internally synchronized).
+ *
+ * Rules (conservative defaults derived from TypeKind):
+ *   - Primitives, TY_NIL, TY_BOOL, TY_INT, TY_FLOAT, TY_CSTR, TY_PTR_VOID,
+ *     TY_FN, TY_TYPECLASS*, TY_EXCEPTION, TY_STRUCT (default): Send + Sync.
+ *   - TY_REF, TY_RC, TY_WEAK:   neither Send nor Sync (single-threaded RC).
+ *   - TY_CONT:                   neither Send nor Sync (captures C stack).
+ *   - TY_REF_IMMUT, TY_REF_MUT: neither Send nor Sync (borrows; not owned).
+ *
+ * Struct field propagation and Arc<T>/Mutex<T>/Chan<T> Send+Sync derivation
+ * are handled at call sites (T19-C) when those types are introduced.
+ */
+static inline bool type_is_send(Type t) {
+    switch (t.kind) {
+        case TY_REF:
+        case TY_RC:
+        case TY_WEAK:
+        case TY_CONT:
+        case TY_REF_IMMUT:
+        case TY_REF_MUT:
+            return false;
+        default:
+            return true;
+    }
+}
+
+static inline bool type_is_sync(Type t) {
+    /* Sync implies Send; use the same conservative rule set in v1. */
+    return type_is_send(t);
+}
+
 #define TYPE_UNKNOWN  ((Type){TY_UNKNOWN, .copy_kind=CK_MOVE, .n_lifetimes=0, .as={0}})
 #define TYPE_NIL      ((Type){TY_NIL, .copy_kind=CK_COPY, .n_lifetimes=0, .as={0}})
 #define TYPE_BOOL     ((Type){TY_BOOL, .copy_kind=CK_COPY, .n_lifetimes=0, .as={0}})

@@ -22,6 +22,9 @@ typedef enum DiagCode {
     TUR_E0007_CAPTURE_ERROR,
     /* Effect-row mismatch (P19-2) */
     TUR_E0009_EFFECT_ROW_MISMATCH,
+    /* Thread safety (T19-B) */
+    TUR_E0010_NOT_SEND,   /* type cannot be sent across thread boundaries */
+    TUR_E0011_NOT_SYNC,   /* type cannot be shared across thread boundaries */
 } DiagCode;
 
 typedef enum DiagLevel {

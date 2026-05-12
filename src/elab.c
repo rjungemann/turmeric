@@ -412,6 +412,8 @@ typedef struct Elab {
     const Symbol *sym_panic;
     /* Phase R1: ? operator (reserved; not yet implemented) */
     const Symbol *sym_question;
+    /* Phase T19-B: thread-spawn form — (thread-spawn closure) */
+    const Symbol *sym_thread_spawn;
     /* Phase 13: Lifetime annotations */
     /* We recognize lifetime annotations as symbols starting with '\'' */
     /* No specific symbol needed - we check the symbol name at runtime */
@@ -777,6 +779,8 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_panic = intern_cstr(st, "panic");
     /* Phase R1: ? operator */
     e->sym_question = intern_cstr(st, "?");
+    /* Phase T19-B: thread-spawn */
+    e->sym_thread_spawn = intern_cstr(st, "thread-spawn");
     /* Macro storage */
     e->macros = NULL;
     e->n_macros = 0;
@@ -4228,6 +4232,8 @@ static Expr *elab_escape(Elab *e, const Form *call);
 static Expr *elab_cont_pred(Elab *e, const Form *call);
 /* Phase R2: Panic */
 static Expr *elab_panic(Elab *e, const Form *call);
+/* Phase T19-B: thread-spawn (Send-safety check for cross-thread closures) */
+static Expr *elab_thread_spawn(Elab *e, const Form *call);
 
 /* ---- general elab ---- */
 
@@ -4304,6 +4310,8 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_definstance) return elab_definstance(e, call);
     /* Phase R2: Panic */
     if (name == e->sym_panic) return elab_panic(e, call);
+    /* Phase T19-B: thread-spawn (Send-safety check for cross-thread closures) */
+    if (name == e->sym_thread_spawn) return elab_thread_spawn(e, call);
     /* Phase R1: ? operator (reserved, not yet implemented) */
     if (name == e->sym_question) {
         diag_emit(DIAG_ERROR, call->span,
@@ -5256,6 +5264,51 @@ static Expr *elab_throw_bang(Elab *e, const Form *call) {
     Expr *out = expr_new(e->arena, EX_THROW, TYPE_NIL, call->span);
     out->as.throw_.payload = payload;
     return out;
+}
+
+/* Phase T19-B: (thread-spawn closure)
+ *
+ * Performs a Send-safety check on all variables captured by the closure.
+ * Types that are not Send (ref<T>, rc<T>, weak<T>, cont<T>, &T, &mut T)
+ * are rejected with TUR-E0010.
+ *
+ * This form is the elaboration-level gate for cross-thread closure passing.
+ * Actual OS-thread spawning is provided by stdlib/thread.tur (T19-C); this
+ * form only validates send-safety and returns nil as a compile-time assertion.
+ *
+ * Usage: (thread-spawn (fn [...] body))
+ */
+static Expr *elab_thread_spawn(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "thread-spawn requires exactly one argument: "
+                  "(thread-spawn closure)");
+        return NULL;
+    }
+
+    Expr *closure_expr = elab_form(e, call->as.list.items[1]);
+    if (!closure_expr) return NULL;
+
+    /* Send-check: walk the capture set of any closure argument. */
+    if (closure_expr->kind == EX_CLOSURE) {
+        struct Closure *cl = closure_expr->as.closure_.closure;
+        bool had_error = false;
+        for (uint8_t i = 0; i < cl->n_captures; i++) {
+            Binding *cap = cl->captures[i];
+            if (!type_is_send(cap->type)) {
+                diag_emit_with_code(DIAG_ERROR, call->span,
+                    TUR_E0010_NOT_SEND,
+                    "type `%s` cannot be sent across thread boundaries "
+                    "(not `Send`); captured variable `%s`",
+                    type_name(cap->type), cap->name->name);
+                had_error = true;
+            }
+        }
+        if (had_error) return NULL;
+    }
+
+    /* Return nil — runtime thread spawning is via stdlib/thread.tur (T19-C). */
+    return expr_new(e->arena, EX_NIL_LIT, TYPE_NIL, call->span);
 }
 
 /* Phase R2: (panic msg) — print msg to stderr, then abort.
