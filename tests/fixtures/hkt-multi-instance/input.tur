@@ -1,0 +1,93 @@
+;; Phase HKT §1: Two instances of the same HKT typeclass (Functor) in one program.
+;; Functor[option] and Functor[vec] must coexist and dispatch to the correct
+;; implementation at each call site.
+
+(defclass Functor [^f]
+  (fmap [container fn] :int))
+
+;; --- option helpers ---
+
+(defn __opt_some [x] :int
+  ```c
+  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
+  r->is_some = true;
+  r->value = x;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(defn __opt_some? [o] :bool
+  ```c
+  struct { bool is_some; int64_t value; } *p =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)o;
+  return p != 0 && p->is_some;
+  ```)
+
+(defn __opt_unwrap [o] :int
+  ```c
+  struct { bool is_some; int64_t value; } *p =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)o;
+  return (int64_t)(p->value);
+  ```)
+
+(defn __fmap_option [container fn] :int
+  ```c
+  struct { bool is_some; int64_t value; } *c =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)container;
+  if (!c || !c->is_some) return 0;
+  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
+  r->is_some = true;
+  r->value = ((int64_t(*)(int64_t))(intptr_t)fn)(c->value);
+  return (int64_t)(intptr_t)r;
+  ```)
+
+;; --- vec helpers (single-element for this test) ---
+
+(defn __vec_of [x] :int
+  ```c
+  struct { int64_t len; int64_t item; } *r = malloc(sizeof(*r));
+  r->len = 1;
+  r->item = x;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(defn __vec_get0 [v] :int
+  ```c
+  struct { int64_t len; int64_t item; } *p =
+      (struct { int64_t len; int64_t item; } *)(intptr_t)v;
+  return p->item;
+  ```)
+
+(defn __fmap_vec [container fn] :int
+  ```c
+  struct { int64_t len; int64_t item; } *c =
+      (struct { int64_t len; int64_t item; } *)(intptr_t)container;
+  struct { int64_t len; int64_t item; } *r = malloc(sizeof(*r));
+  r->len = c->len;
+  r->item = ((int64_t(*)(int64_t))(intptr_t)fn)(c->item);
+  return (int64_t)(intptr_t)r;
+  ```)
+
+;; Two Functor instances for different type constructors
+(definstance Functor [option]
+  (fmap [container fn] (__fmap_option container fn)))
+
+(definstance Functor [vec]
+  (fmap [container fn] (__fmap_vec container fn)))
+
+(defn add5 [x] :int (+ x 5))
+(defn twice [x] :int (* x 2))
+
+(defn main [] :int
+  (do
+    ;; Functor[option]: fmap add5 (some 10) => some 15
+    (let [o (__opt_some 10)]
+      (let [o2 (.fmap o add5)]
+        (do
+          (println (__opt_some? o2))   ;; true
+          (println (__opt_unwrap o2))))) ;; 15
+
+    ;; Functor[vec]: fmap twice (vec-of 7) => vec-of 14
+    (let [v (__vec_of 7)]
+      (let [v2 (.fmap v twice)]
+        (println (__vec_get0 v2))))    ;; 14
+    0))

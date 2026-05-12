@@ -39,6 +39,7 @@ TypeClassInstance *typeclass_env_register_instance(TypeClassEnv *env, TypeClass 
     
     inst->typeclass = typeclass;
     inst->type_args = NULL;
+    inst->type_arg_syms = NULL;
     inst->n_type_args = 0;
     inst->method_impls = NULL;
     inst->n_method_impls = 0;

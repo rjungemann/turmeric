@@ -1130,11 +1130,11 @@ static int64_t __inst_Monad_bind_option(int64_t ma, int64_t fn) {
         return __bind_option(ma, fn);
 }
 
-typedef struct dict_Monad_T {
+typedef struct dict_Monad_option {
     int64_t (*bind)(int64_t, int64_t);
-} dict_Monad_T;
+} dict_Monad_option;
 
-static dict_Monad_T dict_Monad_T_singleton = {
+static dict_Monad_option dict_Monad_option_singleton = {
     .bind = __inst_Monad_bind_option,
 };
 

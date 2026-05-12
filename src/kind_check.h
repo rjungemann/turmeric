@@ -1,4 +1,4 @@
-/* kind_check.h — Kind inference and validation pass (Phase HKT H1).
+/* kind_check.h — Kind inference and validation pass (Phase HKT H1/H2).
  *
  * This pass runs after elaboration and before effect-lowering.
  *
@@ -7,7 +7,11 @@
  *   2. Belt-and-suspenders kind validation for definstance type arguments
  *      (the same check performed by elab_definstance, here as a safety net).
  *
- * Future phases will add full kind inference for higher-kinded types.
+ * Phase H2 adds:
+ *   3. Bottom-up kind inference: infers the kind of typeclass parameters from
+ *      the kinds of the type arguments provided in definstance declarations.
+ *      This makes explicit `^f` annotations optional.
+ *   4. KindEnv — a symbol → Kind mapping used to propagate inferred kinds.
  *
  * Pipeline position:
  *   PASS_ELABORATE → PASS_KIND_CHECK → PASS_EFFECT_LOWER → ...
@@ -19,6 +23,41 @@
 #include <stdio.h>
 #include "arena.h"
 #include "expr.h"
+#include "types.h"
+
+/* ---------------------------------------------------------------------------
+ * Phase HKT H2: KindEnv — symbol → Kind mapping
+ * ------------------------------------------------------------------------- */
+
+/* Opaque kind environment.  Backed by the arena; no explicit free needed. */
+typedef struct KindEnv KindEnv;
+
+/* Allocate a new, empty KindEnv backed by arena 'a'. */
+KindEnv *kind_env_new(Arena *a);
+
+/* Bind symbol 'sym' to kind 'k' in 'env'.  If 'sym' is already bound its kind
+ * is updated to the result of kind_unify(old, k).  'span' is used for any
+ * diagnostic emitted during unification. */
+void kind_env_bind(KindEnv *env, const Symbol *sym, Kind k, Span span);
+
+/* Look up the kind of 'sym'.  Returns KIND_STAR if 'sym' is not bound. */
+Kind kind_env_lookup(const KindEnv *env, const Symbol *sym);
+
+/* ---------------------------------------------------------------------------
+ * Phase HKT H2: kind_unify
+ * ------------------------------------------------------------------------- */
+
+/* Unify two kinds.
+ *
+ * Rules (v1 ground kinds only — no kind variables):
+ *   unify(k, k)          → k
+ *   unify(KIND_STAR, KIND_ARROW) → emit TUR_E0012_KIND_MISMATCH; return KIND_STAR
+ *   unify(KIND_ARROW, KIND_STAR) → same
+ *
+ * 'span' is used for any diagnostic.  Returns the unified kind (or KIND_STAR
+ * on error).
+ */
+Kind kind_unify(Kind k1, Kind k2, Span span);
 
 /* Run the kind-check pass over the elaborated program.
  *

@@ -1130,11 +1130,11 @@ static int64_t __inst_Bifunctor_bimap_pair(int64_t container, int64_t fn_left, i
         return __bimap_pair(container, fn_left, fn_right);
 }
 
-typedef struct dict_Bifunctor_T {
+typedef struct dict_Bifunctor_pair {
     int64_t (*bimap)(int64_t, int64_t, int64_t);
-} dict_Bifunctor_T;
+} dict_Bifunctor_pair;
 
-static dict_Bifunctor_T dict_Bifunctor_T_singleton = {
+static dict_Bifunctor_pair dict_Bifunctor_pair_singleton = {
     .bimap = __inst_Bifunctor_bimap_pair,
 };
 

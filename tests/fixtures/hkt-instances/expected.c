@@ -1130,11 +1130,11 @@ static int64_t __inst_Functor_fmap_option(int64_t container, int64_t fn) {
         return INT64_C(0);
 }
 
-typedef struct dict_Functor_T {
+typedef struct dict_Functor_option {
     int64_t (*fmap)(int64_t, int64_t);
-} dict_Functor_T;
+} dict_Functor_option;
 
-static dict_Functor_T dict_Functor_T_singleton = {
+static dict_Functor_option dict_Functor_option_singleton = {
     .fmap = __inst_Functor_fmap_option,
 };
 
@@ -1146,12 +1146,12 @@ static int64_t __inst_Applicative_ap_option(int64_t ff, int64_t fa) {
         return INT64_C(0);
 }
 
-typedef struct dict_Applicative_T {
+typedef struct dict_Applicative_option {
     int64_t (*pure)(int64_t);
     int64_t (*ap)(int64_t, int64_t);
-} dict_Applicative_T;
+} dict_Applicative_option;
 
-static dict_Applicative_T dict_Applicative_T_singleton = {
+static dict_Applicative_option dict_Applicative_option_singleton = {
     .pure = __inst_Applicative_pure_option,
     .ap = __inst_Applicative_ap_option,
 };
@@ -1160,11 +1160,11 @@ static int64_t __inst_Monad_bind_option(int64_t ma, int64_t fn) {
         return INT64_C(0);
 }
 
-typedef struct dict_Monad_T {
+typedef struct dict_Monad_option {
     int64_t (*bind)(int64_t, int64_t);
-} dict_Monad_T;
+} dict_Monad_option;
 
-static dict_Monad_T dict_Monad_T_singleton = {
+static dict_Monad_option dict_Monad_option_singleton = {
     .bind = __inst_Monad_bind_option,
 };
 
@@ -1176,12 +1176,12 @@ static int64_t __inst_Foldable_foldr_vec(int64_t ta, int64_t init, int64_t fn) {
         return init;
 }
 
-typedef struct dict_Foldable_T {
+typedef struct dict_Foldable_vec {
     int64_t (*foldl)(int64_t, int64_t, int64_t);
     int64_t (*foldr)(int64_t, int64_t, int64_t);
-} dict_Foldable_T;
+} dict_Foldable_vec;
 
-static dict_Foldable_T dict_Foldable_T_singleton = {
+static dict_Foldable_vec dict_Foldable_vec_singleton = {
     .foldl = __inst_Foldable_foldl_vec,
     .foldr = __inst_Foldable_foldr_vec,
 };
@@ -1190,11 +1190,11 @@ static int64_t __inst_Traversable_traverse_option(int64_t ta, int64_t fn) {
         return INT64_C(0);
 }
 
-typedef struct dict_Traversable_T {
+typedef struct dict_Traversable_option {
     int64_t (*traverse)(int64_t, int64_t);
-} dict_Traversable_T;
+} dict_Traversable_option;
 
-static dict_Traversable_T dict_Traversable_T_singleton = {
+static dict_Traversable_option dict_Traversable_option_singleton = {
     .traverse = __inst_Traversable_traverse_option,
 };
 

@@ -1678,8 +1678,10 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     uint8_t n_fnparams = fn_binding->type.as.fn.arity;
                     uint8_t param_idx = (i < n_fnparams) ? i : (n_fnparams > 0 ? n_fnparams - 1 : 0);
                     TypeKind pk = fn_binding->type.as.fn.arg_kinds[param_idx];
-                    /* Apply cast when param is int64_t in C: TY_INT or opaque TY_STRUCT (HKT container) */
-                    needs_fn_cast = (pk == TY_INT || pk == TY_STRUCT);
+                    /* Apply cast when param is int64_t in C: TY_INT, opaque TY_STRUCT
+                     * (HKT container), or TY_PTR_VOID (fat-closure env ptr passed as
+                     * void * to a polymorphic HKT helper). */
+                    needs_fn_cast = (pk == TY_INT || pk == TY_STRUCT || pk == TY_PTR_VOID);
                 }
                 if (needs_fn_cast) {
                     Buf cast; buf_init(&cast);
@@ -2602,19 +2604,42 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             TypeClassInstance *inst = e->as.instance_def_.instance;
             TypeClass *tc = inst->typeclass;
             
-            /* Generate dictionary struct name: dict_<TypeClass>_<typeargs> */
+            /* Generate dictionary struct name: dict_<TypeClass>_<typeargs>
+             * Mirrors the type_suffix logic in elab_definstance so that
+             * the struct name matches the method impl names already emitted. */
             char dict_name[128];
             char type_suffix[64] = "";
             for (uint8_t i = 0; i < inst->n_type_args; i++) {
                 if (i == 0) strcat(type_suffix, "_");
+                const char *component = "T";
                 switch (inst->type_args[i].kind) {
-                    case TY_INT: strcat(type_suffix, "int"); break;
-                    case TY_BOOL: strcat(type_suffix, "bool"); break;
-                    case TY_CSTR: strcat(type_suffix, "cstr"); break;
-                    case TY_NIL: strcat(type_suffix, "nil"); break;
-                    case TY_PTR_VOID: strcat(type_suffix, "ptr_void"); break;
-                    default: strcat(type_suffix, "T"); break;
+                    case TY_INT:      component = "int";      break;
+                    case TY_BOOL:     component = "bool";     break;
+                    case TY_CSTR:     component = "cstr";     break;
+                    case TY_NIL:      component = "nil";      break;
+                    case TY_PTR_VOID: component = "ptr_void"; break;
+                    case TY_STRUCT:
+                        /* Phase HKT §1: Use the original type arg symbol name
+                         * (e.g. "option", "vec") so that two instances of the
+                         * same HKT typeclass get distinct dict struct names.
+                         * Fall back to the struct def name, then "T". */
+                        if (inst->type_arg_syms && inst->type_arg_syms[i]) {
+                            component = inst->type_arg_syms[i]->name;
+                        } else if (inst->type_args[i].as.struct_.def &&
+                                   inst->type_args[i].as.struct_.def->name) {
+                            component = inst->type_args[i].as.struct_.def->name;
+                        }
+                        break;
+                    default: break;
                 }
+                /* Sanitise component: replace non-alnum chars with _ */
+                char comp_buf[32];
+                strncpy(comp_buf, component, sizeof(comp_buf) - 1);
+                comp_buf[sizeof(comp_buf) - 1] = '\0';
+                for (char *p = comp_buf; *p; p++) {
+                    if (!isalnum((unsigned char)*p)) *p = '_';
+                }
+                strncat(type_suffix, comp_buf, sizeof(type_suffix) - strlen(type_suffix) - 1);
             }
             snprintf(dict_name, sizeof(dict_name), "dict_%s%s", tc->name->name, type_suffix);
             
