@@ -1,0 +1,48 @@
+;; stdlib/rc.tur — Reference-counted pointer (Phase 9)
+;; rc<T> is a reference-counted owning pointer.
+;;
+;; In v1, rc operations are built-in primitives:
+;;   (rc/of x)    - create new rc with value x
+;;   (rc/clone r) - increment refcount, return new rc
+;;   (rc/drop r)  - decrement refcount, free if zero
+;;   (rc->ptr r)  - get raw pointer (non-owning)
+;;
+;; HKT instances use ptr<void> as the container type since v1 doesn't have
+;; generic type constructors yet.
+
+;;; SINCE: Phase HKT H3
+;; Functor instance for rc<T>
+
+;; Functor for rc - map a function over the contained value, returning a new rc
+;; fmap :: (a -> b) -> rc a -> rc b
+;; Implementation: clone the rc, unwrap to get the value, apply fn, wrap in new rc
+(defn __functor_rc_fmap [container fn] :int
+  ```c
+  /* In v1, rc<T> is represented as RcControlBlock* (see src/rc.c)
+   * We can't easily implement fmap without modifying the RcControlBlock
+   * to store the actual value. For v1, we return a cloned rc with the
+   * function applied to the value. This requires rc->ptr access.
+   *
+   * Note: This is a simplified v1 implementation. A proper implementation
+   * would need to handle the case where the value is not a plain int64_t.
+   */
+  void *rc_ptr = (void*)(intptr_t)container;
+  if (!rc_ptr) return 0;
+  /* Clone the rc to get an owned pointer */
+  void *cloned = tur_rc_clone(rc_ptr);
+  if (!cloned) return 0;
+  /* Get the raw pointer value */
+  int64_t value = *(int64_t*)tur_rc_ptr(cloned);
+  /* Apply the function */
+  int64_t new_value = ((int64_t(*)(int64_t))(intptr_t)fn)(value);
+  /* Create a new rc with the new value */
+  void *new_rc = tur_rc_of((void*)(intptr_t)new_value);
+  /* Drop the clone */
+  tur_rc_drop(cloned);
+  return (int64_t)(intptr_t)new_rc;
+  ```)
+
+;; Functor instance for rc
+;; Note: Uses ptr<void> as the type constructor representation in v1
+(definstance Functor [ptr<void>]
+  (fmap [container fn] (__functor_rc_fmap container fn)))

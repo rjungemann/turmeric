@@ -1,0 +1,47 @@
+;; Phase HKT-P8: do-m with result monad
+;; Tests that do-m works with result<T, E> and short-circuits on err
+
+;; Create an ok result with value
+(defn ok-result [x] (ok x))
+
+;; Create an err result
+(defn err-result [e] (err e))
+
+;; Helper: add two results, propagating err
+(defn add-results [a b]
+  (do-m
+   x a
+   y b
+   (ok-result (+ x y))))
+
+(defn main [] :int
+  ```c
+  /* Test 1: ok + ok = ok(sum) */
+  void *r1 = add_results((void*)(intptr_t)ok-result(10), (void*)(intptr_t)ok-result(20));
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result1 = (void*)r1;
+  if (!result1 || !result1->is_ok) {
+      printf("FAIL: add-results(ok(10), ok(20)) should be ok(30)\n");
+      return 1;
+  }
+  if (result1->ok_val != 30) {
+      printf("FAIL: expected 30, got %lld\n", (long long)result1->ok_val);
+      return 1;
+  }
+  result-free(r1);
+  
+  /* Test 2: err + ok = err */
+  void *r2 = add_results((void*)(intptr_t)err-result(999), (void*)(intptr_t)ok-result(20));
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result2 = (void*)r2;
+  if (!result2 || result2->is_ok) {
+      printf("FAIL: add-results(err(999), ok(20)) should be err\n");
+      return 1;
+  }
+  if (result2->err_val != 999) {
+      printf("FAIL: expected err 999, got %lld\n", (long long)result2->err_val);
+      return 1;
+  }
+  result-free(r2);
+  
+  printf("PASS\n");
+  return 0;
+  ```)
