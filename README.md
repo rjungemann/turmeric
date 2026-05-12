@@ -14,15 +14,24 @@ Turmeric exists to explore the intersection of Lisp expressiveness and systems-l
 
 **Prerequisites:**
 - A C99-compatible compiler (`cc`, `clang`, or `gcc`)
-- `make`
+- CMake 3.20+
+- [`just`](https://github.com/casey/just) (optional, but recommended)
 
 **Build the compiler:**
 
 ```sh
 git clone <repo-url>
 cd turmeric
-make          # debug build with AddressSanitizer + UBSan
-make release  # optimized build (no sanitizers)
+just configure   # cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug ...
+just             # debug build with AddressSanitizer + UBSan
+just release     # optimized build (no sanitizers)
+```
+
+Or with plain CMake:
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+cmake --build build -j
 ```
 
 The compiler binary lands at `build/tur`.
@@ -30,7 +39,8 @@ The compiler binary lands at `build/tur`.
 **Run the tests:**
 
 ```sh
-make test
+just test
+# or: ctest --output-on-failure --test-dir build
 ```
 
 ## Usage
