@@ -577,6 +577,57 @@ static void tur_scheduler_unpark(FiberBlock *f) {
     if (tur_scheduler) tur_scheduler_enqueue(tur_scheduler, f);
 }
 
+typedef struct TurTimeout TurTimeout;
+struct TurTimeout {
+    int64_t ms;
+    void (*callback)(void *arg);
+    void *arg;
+    pthread_t thread;
+    TurTimeout *next;
+};
+
+static TurTimeout *tur_timeout_list = NULL;
+static pthread_mutex_t tur_timeout_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void *tur_timeout_thread(void *raw) {
+    TurTimeout *t = (TurTimeout *)raw;
+    if (t->ms > 0) {
+        struct timespec ts;
+        ts.tv_sec = t->ms / 1000;
+        ts.tv_nsec = (t->ms % 1000) * 1000000L;
+        nanosleep(&ts, NULL);
+    }
+    t->callback(t->arg);
+    pthread_mutex_lock(&tur_timeout_lock);
+    TurTimeout *prev = NULL;
+    TurTimeout *curr = tur_timeout_list;
+    while (curr && curr != t) { prev = curr; curr = curr->next; }
+    if (prev) prev->next = t->next;
+    else tur_timeout_list = t->next;
+    pthread_mutex_unlock(&tur_timeout_lock);
+    free(t);
+    return NULL;
+}
+
+static void tur_scheduler_timeout(int64_t ms, void (*callback)(void *arg), void *arg) {
+    TurTimeout *t = (TurTimeout *)malloc(sizeof(TurTimeout));
+    if (!t) { fprintf(stderr, "timeout: oom\n"); abort(); }
+    t->ms = ms;
+    t->callback = callback;
+    t->arg = arg;
+    t->next = NULL;
+    pthread_mutex_lock(&tur_timeout_lock);
+    t->next = tur_timeout_list;
+    tur_timeout_list = t;
+    pthread_mutex_unlock(&tur_timeout_lock);
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    pthread_t tid;
+    pthread_create(&tid, &attr, tur_timeout_thread, t);
+    pthread_attr_destroy(&attr);
+}
+
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif

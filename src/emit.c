@@ -3784,6 +3784,57 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    if (tur_scheduler) tur_scheduler_enqueue(tur_scheduler, f);\n");
     buf_puts(out, "}\n\n");
 
+    /* AW-010: Scheduler timeout - schedule callback after delay */
+    buf_puts(out, "typedef struct TurTimeout TurTimeout;\n");
+    buf_puts(out, "struct TurTimeout {\n");
+    buf_puts(out, "    int64_t ms;\n");
+    buf_puts(out, "    void (*callback)(void *arg);\n");
+    buf_puts(out, "    void *arg;\n");
+    buf_puts(out, "    pthread_t thread;\n");
+    buf_puts(out, "    TurTimeout *next;\n");
+    buf_puts(out, "};\n\n");
+    buf_puts(out, "static TurTimeout *tur_timeout_list = NULL;\n");
+    buf_puts(out, "static pthread_mutex_t tur_timeout_lock = PTHREAD_MUTEX_INITIALIZER;\n\n");
+    
+    buf_puts(out, "static void *tur_timeout_thread(void *raw) {\n");
+    buf_puts(out, "    TurTimeout *t = (TurTimeout *)raw;\n");
+    buf_puts(out, "    if (t->ms > 0) {\n");
+    buf_puts(out, "        struct timespec ts;\n");
+    buf_puts(out, "        ts.tv_sec = t->ms / 1000;\n");
+    buf_puts(out, "        ts.tv_nsec = (t->ms % 1000) * 1000000L;\n");
+    buf_puts(out, "        nanosleep(&ts, NULL);\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    t->callback(t->arg);\n");
+    buf_puts(out, "    pthread_mutex_lock(&tur_timeout_lock);\n");
+    buf_puts(out, "    TurTimeout *prev = NULL;\n");
+    buf_puts(out, "    TurTimeout *curr = tur_timeout_list;\n");
+    buf_puts(out, "    while (curr && curr != t) { prev = curr; curr = curr->next; }\n");
+    buf_puts(out, "    if (prev) prev->next = t->next;\n");
+    buf_puts(out, "    else tur_timeout_list = t->next;\n");
+    buf_puts(out, "    pthread_mutex_unlock(&tur_timeout_lock);\n");
+    buf_puts(out, "    free(t);\n");
+    buf_puts(out, "    return NULL;\n");
+    buf_puts(out, "}\n\n");
+    
+    buf_puts(out, "static void tur_scheduler_timeout(int64_t ms, void (*callback)(void *arg), void *arg) {\n");
+    buf_puts(out, "    TurTimeout *t = (TurTimeout *)malloc(sizeof(TurTimeout));\n");
+    buf_puts(out, "    if (!t) { fprintf(stderr, \"timeout: oom\\n\"); abort(); }\n");
+    buf_puts(out, "    t->ms = ms;\n");
+    buf_puts(out, "    t->callback = callback;\n");
+    buf_puts(out, "    t->arg = arg;\n");
+    buf_puts(out, "    t->next = NULL;\n");
+    buf_puts(out, "    pthread_mutex_lock(&tur_timeout_lock);\n");
+    buf_puts(out, "    t->next = tur_timeout_list;\n");
+    buf_puts(out, "    tur_timeout_list = t;\n");
+    buf_puts(out, "    pthread_mutex_unlock(&tur_timeout_lock);\n");
+    buf_puts(out, "    pthread_attr_t attr;\n");
+    buf_puts(out, "    pthread_attr_init(&attr);\n");
+    buf_puts(out, "    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);\n");
+    buf_puts(out, "    pthread_t tid;\n");
+    buf_puts(out, "    pthread_create(&tid, &attr, tur_timeout_thread, t);\n");
+    buf_puts(out, "    pthread_attr_destroy(&attr);\n");
+    buf_puts(out, "}\n\n");
+
     buf_puts(out, "#ifdef __clang__\n");
     buf_puts(out, "#pragma clang diagnostic pop\n");
     buf_puts(out, "#endif\n\n");
