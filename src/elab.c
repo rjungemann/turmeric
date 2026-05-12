@@ -8180,6 +8180,7 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
     
     inst->type_args = type_args;
     inst->n_type_args = n_type_args;
+    inst->type_arg_syms = type_arg_syms;  /* Phase HKT §1: store for dict naming */
     inst->method_impls = method_impls;
     inst->n_method_impls = tc->n_methods;
     /* Phase HKT-P4: record the file that defined this instance. */

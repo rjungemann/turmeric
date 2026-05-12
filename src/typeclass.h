@@ -40,6 +40,12 @@ struct TypeClass {
 struct TypeClassInstance {
     TypeClass *typeclass;         /* The typeclass this is an instance of */
     Type *type_args;              /* Concrete types for type parameters */
+    /* Phase HKT §1: original symbol name for each type arg (e.g. "option",
+     * "vec").  Parallel to type_args; entries may be NULL for primitive types
+     * that have an unambiguous C name from their TypeKind.  Used by emit.c to
+     * produce distinct dictionary struct names (dict_Functor_option vs
+     * dict_Functor_vec) when multiple HKT instances exist. */
+    const struct Symbol **type_arg_syms;
     uint8_t n_type_args;
     /* Method implementations - these are FnDef pointers */
     struct FnDef **method_impls;   /* Function definitions for each method */

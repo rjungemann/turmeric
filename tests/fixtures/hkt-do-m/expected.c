@@ -1135,11 +1135,11 @@ static int64_t __inst_Functor_fmap_option(int64_t container, int64_t fn) {
         return __fmap_option(container, fn);
 }
 
-typedef struct dict_Functor_T {
+typedef struct dict_Functor_option {
     int64_t (*fmap)(int64_t, int64_t);
-} dict_Functor_T;
+} dict_Functor_option;
 
-static dict_Functor_T dict_Functor_T_singleton = {
+static dict_Functor_option dict_Functor_option_singleton = {
     .fmap = __inst_Functor_fmap_option,
 };
 
@@ -1147,11 +1147,11 @@ static int64_t __inst_Monad_bind_option(int64_t ma, int64_t fn) {
         return __bind_option(ma, fn);
 }
 
-typedef struct dict_Monad_T {
+typedef struct dict_Monad_option {
     int64_t (*bind)(int64_t, int64_t);
-} dict_Monad_T;
+} dict_Monad_option;
 
-static dict_Monad_T dict_Monad_T_singleton = {
+static dict_Monad_option dict_Monad_option_singleton = {
     .bind = __inst_Monad_bind_option,
 };
 

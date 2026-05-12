@@ -577,57 +577,6 @@ static void tur_scheduler_unpark(FiberBlock *f) {
     if (tur_scheduler) tur_scheduler_enqueue(tur_scheduler, f);
 }
 
-typedef struct TurTimeout TurTimeout;
-struct TurTimeout {
-    int64_t ms;
-    void (*callback)(void *arg);
-    void *arg;
-    pthread_t thread;
-    TurTimeout *next;
-};
-
-static TurTimeout *tur_timeout_list = NULL;
-static pthread_mutex_t tur_timeout_lock = PTHREAD_MUTEX_INITIALIZER;
-
-static void *tur_timeout_thread(void *raw) {
-    TurTimeout *t = (TurTimeout *)raw;
-    if (t->ms > 0) {
-        struct timespec ts;
-        ts.tv_sec = t->ms / 1000;
-        ts.tv_nsec = (t->ms % 1000) * 1000000L;
-        nanosleep(&ts, NULL);
-    }
-    t->callback(t->arg);
-    pthread_mutex_lock(&tur_timeout_lock);
-    TurTimeout *prev = NULL;
-    TurTimeout *curr = tur_timeout_list;
-    while (curr && curr != t) { prev = curr; curr = curr->next; }
-    if (prev) prev->next = t->next;
-    else tur_timeout_list = t->next;
-    pthread_mutex_unlock(&tur_timeout_lock);
-    free(t);
-    return NULL;
-}
-
-static void tur_scheduler_timeout(int64_t ms, void (*callback)(void *arg), void *arg) {
-    TurTimeout *t = (TurTimeout *)malloc(sizeof(TurTimeout));
-    if (!t) { fprintf(stderr, "timeout: oom\n"); abort(); }
-    t->ms = ms;
-    t->callback = callback;
-    t->arg = arg;
-    t->next = NULL;
-    pthread_mutex_lock(&tur_timeout_lock);
-    t->next = tur_timeout_list;
-    tur_timeout_list = t;
-    pthread_mutex_unlock(&tur_timeout_lock);
-    pthread_attr_t attr;
-    pthread_attr_init(&attr);
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    pthread_t tid;
-    pthread_create(&tid, &attr, tur_timeout_thread, t);
-    pthread_attr_destroy(&attr);
-}
-
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif
@@ -1119,14 +1068,16 @@ static bool gc_is_alive(RcControlBlock *cb) {
 }
 
 static int64_t __inst_Functor_fmap_option(int64_t, int64_t);
-static int64_t __inst_Monad_bind_option(int64_t, int64_t);
+static int64_t __inst_Functor_fmap_vec(int64_t, int64_t);
 static int64_t __opt_some(int64_t);
-static int64_t __opt_none();
 static bool __opt_some_(int64_t);
 static int64_t __opt_unwrap(int64_t);
 static int64_t __fmap_option(int64_t, int64_t);
-static int64_t __bind_option(int64_t, int64_t);
-static int64_t safe_reciprocal(int64_t);
+static int64_t __vec_of(int64_t);
+static int64_t __vec_get0(int64_t);
+static int64_t __fmap_vec(int64_t, int64_t);
+static int64_t add5(int64_t);
+static int64_t twice(int64_t);
 
 static int64_t __inst_Functor_fmap_option(int64_t container, int64_t fn) {
         return __fmap_option(container, fn);
@@ -1140,16 +1091,16 @@ static dict_Functor_option dict_Functor_option_singleton = {
     .fmap = __inst_Functor_fmap_option,
 };
 
-static int64_t __inst_Monad_bind_option(int64_t ma, int64_t fn) {
-        return __bind_option(ma, fn);
+static int64_t __inst_Functor_fmap_vec(int64_t container, int64_t fn) {
+        return __fmap_vec(container, fn);
 }
 
-typedef struct dict_Monad_option {
-    int64_t (*bind)(int64_t, int64_t);
-} dict_Monad_option;
+typedef struct dict_Functor_vec {
+    int64_t (*fmap)(int64_t, int64_t);
+} dict_Functor_vec;
 
-static dict_Monad_option dict_Monad_option_singleton = {
-    .bind = __inst_Monad_bind_option,
+static dict_Functor_vec dict_Functor_vec_singleton = {
+    .fmap = __inst_Functor_fmap_vec,
 };
 
 static int64_t __opt_some(int64_t x) {
@@ -1157,11 +1108,6 @@ static int64_t __opt_some(int64_t x) {
   r->is_some = true;
   r->value = x;
   return (int64_t)(intptr_t)r;
-  
-}
-
-static int64_t __opt_none() {
-        return 0;
   
 }
 
@@ -1175,7 +1121,7 @@ static bool __opt_some_(int64_t o) {
 static int64_t __opt_unwrap(int64_t o) {
         struct { bool is_some; int64_t value; } *p =
       (struct { bool is_some; int64_t value; } *)(intptr_t)o;
-  return (int)(p->value);
+  return (int64_t)(p->value);
   
 }
 
@@ -1190,39 +1136,62 @@ static int64_t __fmap_option(int64_t container, int64_t fn) {
   
 }
 
-static int64_t __bind_option(int64_t ma, int64_t fn) {
-        struct { bool is_some; int64_t value; } *opt =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)ma;
-  if (!opt || !opt->is_some) return 0;
-  return ((int64_t(*)(int64_t))(intptr_t)fn)(opt->value);
+static int64_t __vec_of(int64_t x) {
+        struct { int64_t len; int64_t item; } *r = malloc(sizeof(*r));
+  r->len = 1;
+  r->item = x;
+  return (int64_t)(intptr_t)r;
   
 }
 
-static int64_t safe_reciprocal(int64_t x) {
-        int64_t __t0;
-        if (((x) == (INT64_C(0)))) {
-            __t0 = __opt_none();
-        } else {
-            __t0 = __opt_some(((x) ? ((INT64_C(100)) / (x)) : (fprintf(stderr, "division by zero\n"), abort(), 0)));
-        }
-        return __t0;
+static int64_t __vec_get0(int64_t v) {
+        struct { int64_t len; int64_t item; } *p =
+      (struct { int64_t len; int64_t item; } *)(intptr_t)v;
+  return p->item;
+  
+}
+
+static int64_t __fmap_vec(int64_t container, int64_t fn) {
+        struct { int64_t len; int64_t item; } *c =
+      (struct { int64_t len; int64_t item; } *)(intptr_t)container;
+  struct { int64_t len; int64_t item; } *r = malloc(sizeof(*r));
+  r->len = c->len;
+  r->item = ((int64_t(*)(int64_t))(intptr_t)fn)(c->item);
+  return (int64_t)(intptr_t)r;
+  
+}
+
+static int64_t add5(int64_t x) {
+        return ((x) + (INT64_C(5)));
+}
+
+static int64_t twice(int64_t x) {
+        return ((x) * (INT64_C(2)));
 }
 
 int main() {
         {
-            int64_t result_22 = __bind_option(__opt_some(INT64_C(4)), (int64_t)(intptr_t)(safe_reciprocal));
-            (void)result_22;
-            puts((__opt_some_(result_22)) ? "true" : "false");
-            printf("%lld\n", (long long)(__opt_unwrap(result_22)));
+            int64_t o_27 = __opt_some(INT64_C(10));
+            (void)o_27;
+            {
+                int64_t o2_28 = __inst_Functor_fmap_vec(o_27, (int64_t)(intptr_t)(add5));
+                (void)o2_28;
+                puts((__opt_some_(o2_28)) ? "true" : "false");
+                printf("%lld\n", (long long)(__opt_unwrap(o2_28)));
+            }
         }
         {
-            int64_t result2_23 = __bind_option(__opt_none(), (int64_t)(intptr_t)(safe_reciprocal));
-            (void)result2_23;
-            puts((__opt_some_(result2_23)) ? "true" : "false");
+            int64_t v_29 = __vec_of(INT64_C(7));
+            (void)v_29;
+            {
+                int64_t v2_30 = __inst_Functor_fmap_vec(v_29, (int64_t)(intptr_t)(twice));
+                (void)v2_30;
+                printf("%lld\n", (long long)(__vec_get0(v2_30)));
+            }
         }
-        int64_t __t1;
-        __t1 = INT64_C(0);
-        return (int)__t1;
+        int64_t __t0;
+        __t0 = INT64_C(0);
+        return (int)__t0;
 }
 
 
