@@ -8370,6 +8370,8 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
         method_fd->is_variadic = false;
         method_fd->closure = NULL;
         method_fd->param_types = method_param_types;
+        method_fd->may_capture = false;
+        method_fd->inferred_effect_row = NULL;  /* must be NULL; effect_check_pass reads this */
         constraint_set_init(&method_fd->constraints);
         
         /* Register the method function at file scope */
@@ -8760,15 +8762,37 @@ found_method:;
         }
     }
     
+    /* Phase H §1 (dict load): Build an EX_DICT node that carries both the
+     * singleton identity AND the method field name.  When fn_expr is this
+     * node, emit.c dispatches through the dictionary struct at the call site:
+     *   dict_<Class>_<type>_singleton.<method>(args...)
+     * instead of a direct call to the impl function.  Fall back to the direct
+     * binding if, for some reason, no instance was resolved. */
+    Expr *dict_expr = NULL;
+    if (best_inst) {
+        dict_expr = make_dict_expr(e, best_inst, call->span);
+        /* Copy the method name into the EX_DICT node and sanitize for C. */
+        strncpy(dict_expr->as.dict_.method_name, method_name,
+                sizeof(dict_expr->as.dict_.method_name) - 1);
+        dict_expr->as.dict_.method_name[sizeof(dict_expr->as.dict_.method_name) - 1] = '\0';
+        for (char *p = dict_expr->as.dict_.method_name; *p; p++) {
+            if (!isalnum((unsigned char)*p) && *p != '_') *p = '_';
+        }
+    }
+
     Expr *out = expr_new(e->arena, EX_CALL, result_type, call->span);
-    out->as.call_.fn_binding = best_method->binding;
-    out->as.call_.args = call_args;
-    out->as.call_.n_args = n_args + 1;
-    out->as.call_.fn_expr = NULL;
-    /* Phase H §1: Annotate the call with the selected instance's dictionary.
-     * Full runtime dict passing is deferred; this field records which dictionary
-     * would be passed so future passes can use it without re-resolving. */
-    out->as.call_.dict_arg = best_inst ? make_dict_expr(e, best_inst, call->span) : NULL;
+    if (dict_expr) {
+        /* Dictionary dispatch: indirect call through the vtable field. */
+        out->as.call_.fn_binding = NULL;
+        out->as.call_.fn_expr    = dict_expr;
+    } else {
+        /* Fallback: direct call (no instance resolved — should not happen). */
+        out->as.call_.fn_binding = best_method->binding;
+        out->as.call_.fn_expr    = NULL;
+    }
+    out->as.call_.args    = call_args;
+    out->as.call_.n_args  = n_args + 1;
+    out->as.call_.dict_arg = dict_expr;  /* annotation for downstream passes */
     return out;
 }
 

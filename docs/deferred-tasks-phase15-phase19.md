@@ -1224,24 +1224,6 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 
 ---
 
-### STM tasks (Phase 20–21)
-
-See [stm-plan.md](stm-plan.md) for prerequisites checklist, all remaining tasks (S1–S6), and Phase 21 scalable STM work.
-
-### Closeout tasks
-- [ ] Re-run targeted fixtures for Phases 15-19 deferred follow-up work.
-- [ ] Re-run relevant codegen snapshots for typeclass/effect/continuation lowering paths.
-- [ ] Update `docs/turmeric-plan.md` with promoted or completed deferred items.
-- [ ] Add a short completion note to this file once deferred clusters are resolved.
-
----
-
-## HAMT tasks (Phases P1–P4)
-
-See [hamt-plan.md](hamt-plan.md) for prerequisites checklist and all remaining tasks (Phases P1–P4).
-
----
-
 ## Backtracking prerequisites (Phases B1–B5)
 
 See [backtracking-cloneable-continuations-plan.md](archive/backtracking-cloneable-continuations-plan.md) and [turmeric-plan.md §Backtracking with Cloneable Continuations](turmeric-plan.md) for rationale and design decisions.
