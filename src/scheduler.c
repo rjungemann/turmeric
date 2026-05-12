@@ -1,11 +1,13 @@
 #include "scheduler.h"
 #include "fiber.h"
 #include "atomic_queue.h"
+#include "io.h"
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
 /* Phase T23: Multi-threaded work-stealing scheduler implementation */
+/* SCH-003: I/O integration */
 
 /* Per-thread work deque using a lock-free ring buffer */
 struct WorkStealingDeque {
@@ -18,6 +20,7 @@ struct WorkStealingDeque {
 };
 
 /* Multi-threaded scheduler */
+/* SCH-003: Added IOBackend for I/O event integration */
 struct TurSchedulerMT {
     size_t n_threads;
     pthread_t *threads;
@@ -27,6 +30,20 @@ struct TurSchedulerMT {
     bool should_stop;
     pthread_mutex_t stop_lock;
     pthread_cond_t stop_cond;
+    
+    /* I/O integration */
+    IOBackend *io_backend;       /* Platform-specific I/O event backend */
+    pthread_mutex_t io_lock;     /* Protects io_waiters list */
+    struct IOWaiter *io_waiters; /* List of fibers waiting on I/O */
+};
+
+/* I/O waiter structure - tracks fibers waiting on I/O events */
+struct IOWaiter {
+    FiberBlock *fiber;
+    int fd;                     /* File descriptor being waited on */
+    int events;                /* Events we're waiting for */
+    void *user_data;           /* User callback data */
+    struct IOWaiter *next;
 };
 
 /* Thread-local storage for current scheduler and thread ID */
@@ -182,9 +199,12 @@ static void *scheduler_worker(void *arg) {
             continue;
         }
         
-        /* No work - yield or park */
-        /* For v1, use a simple spin-wait with backoff */
-        struct timespec ts = { .tv_sec = 0, .tv_nsec = 1000000 };  /* 1ms */
+        /* No work - check for I/O events */
+        /* SCH-003: Poll for I/O events with a timeout */
+        scheduler_mt_poll_io(s, 1);  /* 1ms timeout */
+        
+        /* If still no work, yield */
+        struct timespec ts = { .tv_sec = 0, .tv_nsec = 100000 };  /* 0.1ms */
         nanosleep(&ts, NULL);
     }
     
@@ -231,6 +251,11 @@ TurSchedulerMT *tur_scheduler_mt_new(size_t n_threads) {
     pthread_mutex_init(&s->stop_lock, NULL);
     pthread_cond_init(&s->stop_cond, NULL);
     
+    /* SCH-003: Initialize I/O backend */
+    s->io_backend = io_backend_new();
+    pthread_mutex_init(&s->io_lock, NULL);
+    s->io_waiters = NULL;
+    
     /* Create worker threads */
     for (size_t i = 0; i < n_threads; i++) {
         if (pthread_create(&s->threads[i], NULL, scheduler_worker, s) != 0) {
@@ -258,9 +283,30 @@ void tur_scheduler_mt_free(TurSchedulerMT *s) {
     s->should_stop = true;
     pthread_cond_broadcast(&s->stop_cond);
     
+    /* SCH-003: Wake I/O backend to unblock any waiting threads */
+    if (s->io_backend) {
+        io_wake(s->io_backend);
+    }
+    
     /* Join all worker threads */
     for (size_t i = 0; i < s->n_threads; i++) {
         pthread_join(s->threads[i], NULL);
+    }
+    
+    /* SCH-003: Free I/O waiters list */
+    pthread_mutex_lock(&s->io_lock);
+    struct IOWaiter *waiter = s->io_waiters;
+    while (waiter) {
+        struct IOWaiter *next = waiter->next;
+        free(waiter);
+        waiter = next;
+    }
+    pthread_mutex_unlock(&s->io_lock);
+    pthread_mutex_destroy(&s->io_lock);
+    
+    /* SCH-003: Free I/O backend */
+    if (s->io_backend) {
+        io_backend_free(s->io_backend);
     }
     
     aq_free(s->global_queue);
@@ -335,4 +381,116 @@ int64_t tur_scheduler_mt_thread_id(void) {
         tur_current_thread_id = (int64_t)(uintptr_t)pthread_self();
     }
     return tur_current_thread_id;
+}
+
+/* SCH-003: I/O integration functions */
+
+/* I/O callback that unparks a waiting fiber */
+static void scheduler_mt_io_callback(int fd, int events, void *user_data) {
+    TurSchedulerMT *s = tur_current_scheduler_mt;
+    if (!s) return;
+    
+    /* Find and wake up any fibers waiting on this fd */
+    pthread_mutex_lock(&s->io_lock);
+    struct IOWaiter **waiter_p = &s->io_waiters;
+    
+    while (*waiter_p) {
+        struct IOWaiter *waiter = *waiter_p;
+        if (waiter->fd == fd && (waiter->events & events)) {
+            /* Found a matching waiter - unpark its fiber */
+            *waiter_p = waiter->next;
+            pthread_mutex_unlock(&s->io_lock);
+            
+            /* Unpark the fiber so it can resume */
+            tur_scheduler_mt_unpark(waiter->fiber);
+            free(waiter);
+            return;
+        }
+        waiter_p = &(*waiter_p)->next;
+    }
+    pthread_mutex_unlock(&s->io_lock);
+}
+
+/* Register a fiber to wait on I/O events for a file descriptor */
+void tur_scheduler_mt_io_wait(TurSchedulerMT *s, int fd, int events, FiberBlock *f, void *user_data) {
+    if (!s || !s->io_backend || fd < 0) return;
+    
+    /* Create an I/O waiter */
+    struct IOWaiter *waiter = (struct IOWaiter *)malloc(sizeof(struct IOWaiter));
+    if (!waiter) return;
+    
+    waiter->fiber = f;
+    waiter->fd = fd;
+    waiter->events = events;
+    waiter->user_data = user_data;
+    waiter->next = NULL;
+    
+    /* Register with I/O backend */
+    int rc = io_register(s->io_backend, fd, events, scheduler_mt_io_callback, s);
+    if (rc != 0) {
+        free(waiter);
+        return;
+    }
+    
+    /* Add to our waiters list */
+    pthread_mutex_lock(&s->io_lock);
+    waiter->next = s->io_waiters;
+    s->io_waiters = waiter;
+    pthread_mutex_unlock(&s->io_lock);
+    
+    /* Park the fiber - it will be unparked when I/O event occurs */
+    tur_scheduler_mt_park();
+}
+
+/* Modify I/O interest for a file descriptor */
+void tur_scheduler_mt_io_modify(TurSchedulerMT *s, int fd, int events) {
+    if (!s || !s->io_backend || fd < 0) return;
+    io_modify(s->io_backend, fd, events);
+}
+
+/* Unregister I/O interest for a file descriptor */
+void tur_scheduler_mt_io_unregister(TurSchedulerMT *s, int fd) {
+    if (!s || !s->io_backend || fd < 0) return;
+    
+    /* Remove from our waiters list */
+    pthread_mutex_lock(&s->io_lock);
+    struct IOWaiter **waiter_p = &s->io_waiters;
+    while (*waiter_p) {
+        struct IOWaiter *waiter = *waiter_p;
+        if (waiter->fd == fd) {
+            *waiter_p = waiter->next;
+            free(waiter);
+            break;
+        }
+        waiter_p = &(*waiter_p)->next;
+    }
+    pthread_mutex_unlock(&s->io_lock);
+    
+    io_unregister(s->io_backend, fd);
+}
+
+/* Poll for I/O events and process them */
+static void scheduler_mt_poll_io(TurSchedulerMT *s, int timeout_ms) {
+    if (!s || !s->io_backend) return;
+    io_poll(s->io_backend, timeout_ms);
+}
+
+/* SCH-003: ThreadPool integration */
+/* Mapping from ThreadPool to TurSchedulerMT */
+/* For now, we use a simple approach: store the scheduler pointer in the ThreadPool */
+
+/* These functions are placeholders for the integration */
+/* The full integration would require modifying threadpool.tur to use the scheduler */
+
+TurSchedulerMT *tur_scheduler_mt_from_threadpool(void *threadpool) {
+    /* In a full integration, ThreadPoolBlock would contain a TurSchedulerMT pointer */
+    /* For now, return the current scheduler */
+    (void)threadpool;
+    return tur_current_scheduler_mt;
+}
+
+void tur_scheduler_mt_set_for_threadpool(void *threadpool, TurSchedulerMT *s) {
+    /* In a full integration, we would store s in threadpool */
+    (void)threadpool;
+    tur_current_scheduler_mt = s;
 }

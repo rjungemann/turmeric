@@ -1062,12 +1062,12 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Deferred: Current v1 uses spinlocks for simplicity. CAS-based lock-free version would improve contention.
 
 ##### SCH-003 — Integration with existing abstractions
-- [ ] Integrate with `ThreadPool` from T20: unify thread creation and management.
-  - **Deferred**: Current `ThreadPool` (`stdlib/threadpool.tur`) and `TurSchedulerMT` (`src/scheduler.c`) are separate. Should share worker thread pool.
-- [ ] Integrate I/O waiting: scheduler park/unpark on I/O completion.
-  - **Deferred**: Requires platform I/O event APIs (epoll/kqueue/io_uring) and callback registration.
-- [ ] Integrate with single-threaded scheduler (T21): same API, different implementation.
-  - **Deferred**: Single-threaded scheduler uses `FiberBlock` queue; MT scheduler uses `WorkStealingDeque`. API unification deferred.
+- [x] Integrate with `ThreadPool` from T20: unify thread creation and management.
+  - Implemented: Added `tur_scheduler_mt_from_threadpool` and `tur_scheduler_mt_set_for_threadpool` in `scheduler.h`/`scheduler.c` for bridging ThreadPool and TurSchedulerMT. ThreadPool can now submit work to the scheduler's work-stealing deques.
+- [x] Integrate I/O waiting: scheduler park/unpark on I/O completion.
+  - Implemented: Added `IOBackend` integration to `TurSchedulerMT` with `tur_scheduler_mt_io_wait`, `tur_scheduler_mt_io_modify`, `tur_scheduler_mt_io_unregister` functions. Worker threads poll for I/O events using platform-specific backends (epoll/kqueue). I/O callbacks unpark waiting fibers.
+- [x] Integrate with single-threaded scheduler (T21): same API, different implementation.
+  - Implemented: Created `scheduler_common.h`/`scheduler_common.c` with unified `TurSchedulerCommon` interface that wraps both single-threaded (`TurScheduler` from emit.c) and multi-threaded (`TurSchedulerMT`) schedulers. Common API includes spawn, run, park, unpark, and I/O wait operations.
 
 ##### SCH-004 — Thread-local state and safety
 - [x] Implement `__thread` TLS for current scheduler and thread index.
