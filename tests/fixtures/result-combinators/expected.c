@@ -697,16 +697,140 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
-static void __defer_1(void *__env) {
-    puts("ref defer fired");
+static void * ok(int64_t);
+static void * err(int64_t);
+static bool ok_(void *);
+static bool err_(void *);
+static int64_t ok_val(void *);
+static int64_t err_val(void *);
+static int64_t result_unwrap_or(void *, int64_t);
+static int64_t result_expect(void *, const char *);
+static void * result_map(void *, void *);
+static void * result_map_err(void *, void *);
+static void * result_flat_map(void *, void *);
+static void * result_or(void *, void *);
+static void * result_or_else(void *, void *);
+static int64_t double_it(int64_t);
+static int64_t negate(int64_t);
+static void * safe_double(int64_t);
+
+static void * ok(int64_t x) {
+struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = true; r->ok_val = x; r->err_val = 0; return r;
+          return 0;
+}
+
+static void * err(int64_t e) {
+struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = false; r->ok_val = 0; r->err_val = e; return r;
+          return 0;
+}
+
+static bool ok_(void * r) {
+struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  return result != NULL && result->is_ok;
+          return false;
+}
+
+static bool err_(void * r) {
+struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  return result == NULL || !result->is_ok;
+          return false;
+}
+
+static int64_t ok_val(void * r) {
+struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  return result->ok_val;
+          return 0;
+}
+
+static int64_t err_val(void * r) {
+struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  return result->err_val;
+          return 0;
+}
+
+static int64_t result_unwrap_or(void * r, int64_t default_val) {
+struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  if (result != NULL && result->is_ok) return (int)result->ok_val;
+  return default_val;
+          return 0;
+}
+
+static int64_t result_expect(void * r, const char * msg) {
+struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
+  if (result == NULL || !result->is_ok) { fprintf(stderr, "expect: %s\n", (const char*)msg); abort(); }
+  return (int)result->ok_val;
+          return 0;
+}
+
+static void * result_map(void * r, void * f) {
+struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  if (res == NULL || !res->is_ok) return r;
+  int64_t new_val = ((int64_t (*)(int64_t))f)(res->ok_val);
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
+  out->is_ok = true; out->ok_val = new_val; out->err_val = 0; return out;
+          return 0;
+}
+
+static void * result_map_err(void * r, void * f) {
+struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  if (res == NULL || res->is_ok) return r;
+  int64_t new_err = ((int64_t (*)(int64_t))f)(res->err_val);
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
+  out->is_ok = false; out->ok_val = 0; out->err_val = new_err; return out;
+          return 0;
+}
+
+static void * result_flat_map(void * r, void * f) {
+struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  if (res == NULL || !res->is_ok) return r;
+  return (void *)((int64_t (*)(int64_t))f)(res->ok_val);
+          return 0;
+}
+
+static void * result_or(void * r, void * alt) {
+struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  if (res != NULL && res->is_ok) return r; return alt;
+          return 0;
+}
+
+static void * result_or_else(void * r, void * f) {
+struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  if (res != NULL && res->is_ok) return r;
+  int64_t ev = res ? res->err_val : 0;
+  return (void *)((int64_t (*)(int64_t))f)(ev);
+          return 0;
+}
+
+static int64_t double_it(int64_t n) {
+        return ((n) * (INT64_C(2)));
+}
+
+static int64_t negate(int64_t n) {
+        return ((INT64_C(0)) - (n));
+}
+
+static void * safe_double(int64_t n) {
+        return ok(((n) * (INT64_C(2))));
 }
 
 int main() {
-        tur_frame __frame_0;
-        tur_frame_init(&__frame_0, NULL);
-        tur_frame_push_defer(&__frame_0, __defer_1, NULL);
-        tur_panic_set_frame(&__frame_0);
-tur_panic("test panic with ref");
+        printf("%lld\n", (long long)(ok_val(result_map(ok(INT64_C(5)), double_it))));
+        puts((err_(result_map(err(INT64_C(3)), double_it))) ? "true" : "false");
+        printf("%lld\n", (long long)(err_val(result_map_err(err(INT64_C(4)), negate))));
+        puts((ok_(result_map_err(ok(INT64_C(7)), negate))) ? "true" : "false");
+        printf("%lld\n", (long long)(ok_val(result_flat_map(ok(INT64_C(6)), safe_double))));
+        puts((err_(result_flat_map(err(INT64_C(9)), safe_double))) ? "true" : "false");
+        printf("%lld\n", (long long)(ok_val(result_or(ok(INT64_C(11)), ok(INT64_C(99))))));
+        printf("%lld\n", (long long)(ok_val(result_or(err(INT64_C(0)), ok(INT64_C(22))))));
+        printf("%lld\n", (long long)(ok_val(result_or_else(ok(INT64_C(33)), safe_double))));
+        printf("%lld\n", (long long)(ok_val(result_or_else(err(INT64_C(5)), safe_double))));
+        printf("%lld\n", (long long)(result_unwrap_or(err(INT64_C(0)), INT64_C(77))));
+        printf("%lld\n", (long long)(result_expect(ok(INT64_C(42)), "no panic")));
+        int64_t __t0;
+        __t0 = INT64_C(0);
+        return (int)__t0;
 }
 
 

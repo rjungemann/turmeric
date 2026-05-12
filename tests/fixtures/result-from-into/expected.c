@@ -697,16 +697,39 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
-static void __defer_1(void *__env) {
-    puts("ref defer fired");
+static int64_t __inst_From_from_intint(int64_t);
+static int64_t __inst_Into_into_intint(int64_t);
+
+static int64_t __inst_From_from_intint(int64_t x) {
+        return ((x) + (INT64_C(1)));
 }
 
+typedef struct dict_From_intint {
+    int64_t (*from)(int64_t);
+} dict_From_intint;
+
+static dict_From_intint dict_From_intint_singleton = {
+    .from = __inst_From_from_intint,
+};
+
+static int64_t __inst_Into_into_intint(int64_t x) {
+        return __inst_From_from_intint(x);
+}
+
+typedef struct dict_Into_intint {
+    int64_t (*into)(int64_t);
+} dict_Into_intint;
+
+static dict_Into_intint dict_Into_intint_singleton = {
+    .into = __inst_Into_into_intint,
+};
+
 int main() {
-        tur_frame __frame_0;
-        tur_frame_init(&__frame_0, NULL);
-        tur_frame_push_defer(&__frame_0, __defer_1, NULL);
-        tur_panic_set_frame(&__frame_0);
-tur_panic("test panic with ref");
+        printf("%lld\n", (long long)(__inst_From_from_intint(INT64_C(41))));
+        printf("%lld\n", (long long)(__inst_Into_into_intint(INT64_C(9))));
+        int64_t __t0;
+        __t0 = INT64_C(0);
+        return (int)__t0;
 }
 
 
