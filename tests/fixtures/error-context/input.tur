@@ -1,0 +1,126 @@
+;; Phase R3: error-context — err-context wrapping and show functions
+
+;; ─── inline result helpers ──────────────────────────────────────────────────
+(defn ok [x :int] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = true; r->ok_val = x; r->err_val = 0; return (void*)r;
+  ```)
+
+(defn err [x :cstr] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = false; r->ok_val = 0;
+  r->err_val = (int64_t)(intptr_t)(const char*)x;
+  return (void*)r;
+  ```)
+
+(defn ok? [r :ptr<void>] :bool
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  return res->is_ok;
+  ```)
+
+(defn err-val-cstr [r :ptr<void>] :cstr
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  return (const char*)(intptr_t)res->err_val;
+  ```)
+
+;; err-context — wrap an err value's message in additional context
+(defn err-context [r :ptr<void> ctx :cstr] :ptr<void>
+  ```c
+  extern size_t strlen(const char*);
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  if (res == NULL || res->is_ok) return r;
+  const char *orig = (const char *)(intptr_t)res->err_val;
+  size_t ctx_len  = strlen((const char*)ctx);
+  size_t orig_len = orig ? strlen(orig) : 0;
+  char *msg = malloc(ctx_len + 2 + orig_len + 1);
+  memmove(msg, ctx, ctx_len);
+  msg[ctx_len]     = ':';
+  msg[ctx_len + 1] = ' ';
+  if (orig) memmove(msg + ctx_len + 2, orig, orig_len);
+  msg[ctx_len + 2 + orig_len] = '\0';
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
+  out->is_ok   = false;
+  out->ok_val  = 0;
+  out->err_val = (int64_t)(intptr_t)msg;
+  return out;
+  ```)
+
+;; ─── inline error type helpers ───────────────────────────────────────────────
+;; IoError convenience constructor
+(defn io-error [msg :cstr] :ptr<void>
+  ```c
+  typedef struct { const char *message; int errno_; } IoError;
+  IoError *e = (IoError*)malloc(sizeof(IoError));
+  e->message = (const char*)(intptr_t)msg;
+  e->errno_ = 0;
+  return (void*)e;
+  ```)
+
+(defn show-io-error [err :ptr<void>] :cstr
+  ```c
+  typedef struct { const char *message; int errno_; } IoError;
+  IoError *e = (IoError*)err;
+  extern size_t strlen(const char*);
+  size_t msg_len = strlen(e->message);
+  char *buf = (char*)malloc(msg_len + 32);
+  if (e->errno_ != 0) {
+    snprintf(buf, msg_len + 32, "IoError: %s (errno=%d)", e->message, e->errno_);
+  } else {
+    snprintf(buf, msg_len + 32, "IoError: %s", e->message);
+  }
+  return buf;
+  ```)
+
+;; ParseError convenience constructor
+(defn parse-error-simple [msg :cstr line :int] :ptr<void>
+  ```c
+  typedef struct { const char *message; int line; int col; const char *file; } ParseError;
+  ParseError *e = (ParseError*)malloc(sizeof(ParseError));
+  e->message = (const char*)(intptr_t)msg;
+  e->line = line;
+  e->col = 0;
+  e->file = "<unknown>";
+  return (void*)e;
+  ```)
+
+(defn show-parse-error [err :ptr<void>] :cstr
+  ```c
+  typedef struct { const char *message; int line; int col; const char *file; } ParseError;
+  ParseError *e = (ParseError*)err;
+  extern size_t strlen(const char*);
+  size_t msg_len = strlen(e->message);
+  size_t file_len = strlen(e->file);
+  char *buf = (char*)malloc(msg_len + file_len + 64);
+  snprintf(buf, msg_len + file_len + 64, "ParseError: %s at %s:%d:%d", e->message, e->file, e->line, e->col);
+  return buf;
+  ```)
+
+(defn main [] :int
+  (do
+    ;; err-context adds context to an err result
+    (let [r1 (err "file not found")]
+      (let [r2 (err-context r1 "reading config")]
+        (if (ok? r2)
+          (println "unexpected ok")
+          (println (err-val-cstr r2)))))
+
+    ;; err-context passes ok results through unchanged
+    (let [r3 (ok 42)]
+      (let [r4 (err-context r3 "some context")]
+        (if (ok? r4)
+          (println "ok passed through")
+          (println "unexpected err"))))
+
+    ;; show-io-error formats IoError
+    (let [e1 (io-error "connection refused")]
+      (println (show-io-error e1)))
+
+    ;; show-parse-error formats ParseError
+    (let [e2 (parse-error-simple "unexpected token" 12)]
+      (println (show-parse-error e2)))
+
+    0))

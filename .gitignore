@@ -4,5 +4,7 @@ build/
 *.d
 tests/out/
 tests/fixtures/**/actual.*
+tests/.stamp-cache/
+/tmp/tur-build/
 tur
 hello

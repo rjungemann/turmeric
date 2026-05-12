@@ -1,0 +1,32 @@
+;; Phase 19 E: Log effect — leveled logging with handler-swappable output.
+
+(defeffect Log [level :cstr msg :cstr] :nil)
+
+;; with-stderr-log — print all log lines as "<msg>" (level for future filter)
+(defmacro with-stderr-log [body]
+  (handle body
+    (Log [level msg] k) (do (println msg) (resume k nil))))
+
+;; with-silent-log — suppress all log output
+(defmacro with-silent-log [body]
+  (handle body
+    (Log [level msg] k) (resume k nil)))
+
+(defn process [x :int] :int
+  (do
+    (perform (Log "info" "starting"))
+    (let [result (* x 2)]
+      (do
+        (perform (Log "info" "done"))
+        result))))
+
+(defn main [] :int
+  ;; with-stderr-log: both log lines visible
+  (let [r1 (with-stderr-log (process 21))]
+    (println r1))
+
+  ;; with-silent-log: no log output, only result
+  (let [r2 (with-silent-log (process 5))]
+    (println r2))
+
+  0)

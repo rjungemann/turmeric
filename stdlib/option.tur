@@ -44,3 +44,23 @@
   free(o);
   return 0;
   ```)
+
+;; Phase R4: option-must — unwrap or panic with a default message
+(defn option-must [o :ptr<void>] :int
+  ```c
+  struct { bool is_some; int64_t value; } *opt = (void*)o;
+  if (opt == NULL || !opt->is_some) {
+    tur_panic("option-must: called on none");
+  }
+  return (int)opt->value;
+  ```)
+
+;; Phase R4: option-expect — unwrap or panic with a custom message
+(defn option-expect [o :ptr<void> msg :cstr] :int
+  ```c
+  struct { bool is_some; int64_t value; } *opt = (void*)o;
+  if (opt == NULL || !opt->is_some) {
+    tur_panic(msg);
+  }
+  return (int)opt->value;
+  ```)

@@ -1,0 +1,15 @@
+;; Phase 19 D1: handler-parameter shadowing.
+;; The handler case parameter `x` has the same name as the outer let binding.
+;; The handler's `x` should refer to the effect argument, not the outer `x`.
+
+(defeffect Scale [x :int] :int)
+
+(defn main [] :int
+  ;; Outer x = 1000; handler's x = effect argument (7)
+  ;; If shadowing works, result should be 7 * 2 = 14, not 1000 * 2.
+  (let [x 1000]
+    (let [result
+      (handle (perform (Scale 7))
+        (Scale [x] k) (resume k (* x 2)))]
+      (println result)))
+  0)

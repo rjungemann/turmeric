@@ -1,0 +1,17 @@
+;; Phase 19 E: Abort triggered at runtime causes panic via with-abort-panic.
+
+(defeffect Abort [msg :cstr] :int)
+
+(defmacro with-abort-panic [body]
+  (handle body
+    (Abort [msg] k) (panic msg)))
+
+(defn safe-divide [n :int d :int] :int
+  (if (= d 0)
+    (perform (Abort "division by zero"))
+    (/ n d)))
+
+(defn main [] :int
+  (let [r (with-abort-panic (safe-divide 10 0))]
+    (println r))
+  0)

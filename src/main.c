@@ -369,27 +369,66 @@ static void default_output_name(const char *input, char *out, size_t cap) {
     }
 }
 
+static int cmd_build(const char *input, const char *out_path);
+
+/* Build a deterministic path for the intermediate generated-C file so that
+ * ccache can cache repeated compilations of the same .tur source.
+ * Maps the input path to /tmp/tur-build/<sanitized>.c where non-alphanumeric
+ * characters (except '-') are replaced with '_'.
+ * Creates /tmp/tur-build/ on first call. */
+static void stable_c_path(const char *input, char *out, size_t cap) {
+    static int dir_made = 0;
+    if (!dir_made) { mkdir("/tmp/tur-build", 0700); dir_made = 1; }
+    const char *prefix = "/tmp/tur-build/";
+    size_t plen = strlen(prefix);
+    if (plen + 3 >= cap) { out[0] = '\0'; return; }
+    memcpy(out, prefix, plen);
+    size_t i = plen;
+    for (const char *p = input; *p && i < cap - 3; p++) {
+        char c = *p;
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '-') {
+            out[i++] = c;
+        } else {
+            out[i++] = '_';
+        }
+    }
+    out[i++] = '.';
+    out[i++] = 'c';
+    out[i] = '\0';
+}
+
 static int cmd_build(const char *input, const char *out_path) {
     Buf csrc;
     buf_init(&csrc);
     int rc = compile_to_c(input, &csrc);
     if (rc != 0) { buf_free(&csrc); return rc; }
 
-    /* Write C to a temp file. */
-    char tmpl[] = "/tmp/tur-XXXXXX.c";
-    int fd = mkstemps(tmpl, 2);
-    if (fd < 0) {
-        fprintf(stderr, "tur: cannot create temp file\n");
-        buf_free(&csrc);
-        return 2;
+    /* Write generated C to a deterministic path so ccache can cache the result
+     * across repeated builds of the same .tur file.  Fall back to a random
+     * temp if the stable path cannot be constructed (e.g. path too long). */
+    char tmpl[1024];
+    stable_c_path(input, tmpl, sizeof(tmpl));
+    FILE *tf = tmpl[0] ? fopen(tmpl, "wb") : NULL;
+    if (!tf) {
+        /* fallback: random temp */
+        char fallback[] = "/tmp/tur-XXXXXX.c";
+        int fd = mkstemps(fallback, 2);
+        if (fd < 0) {
+            fprintf(stderr, "tur: cannot create temp file\n");
+            buf_free(&csrc);
+            return 2;
+        }
+        tf = fdopen(fd, "wb");
+        memcpy(tmpl, fallback, sizeof(fallback));
     }
-    if (write(fd, csrc.data, csrc.len) != (ssize_t)csrc.len) {
+    if (!tf || fwrite(csrc.data, 1, csrc.len, tf) != csrc.len) {
         fprintf(stderr, "tur: write failed\n");
-        close(fd);
+        if (tf) fclose(tf);
         buf_free(&csrc);
         return 2;
     }
-    close(fd);
+    fclose(tf);
     buf_free(&csrc);
 
     char chosen_out[1024];
@@ -401,12 +440,20 @@ static int cmd_build(const char *input, const char *out_path) {
     const char *cc = getenv("CC");
     if (!cc || !*cc) cc = "cc";
 
+    /* TUR_CC_FLAGS overrides the default compiler flags.  Useful for test runs
+     * where -O0 is fast enough and ccache benefits from consistent flags. */
+    const char *cc_flags = getenv("TUR_CC_FLAGS");
+    if (!cc_flags || !*cc_flags) cc_flags = "-O2 -std=c99 -Wall";
+
     Buf cmd;
     buf_init(&cmd);
-    buf_printf(&cmd, "%s -O2 -std=c99 -Wall -o %s %s", cc, out_path, tmpl);
+    buf_printf(&cmd, "%s %s -o %s %s", cc, cc_flags, out_path, tmpl);
     int sys_rc = system(cmd.data);
     buf_free(&cmd);
-    unlink(tmpl);
+    /* Leave the stable temp file for ccache; only unlink random fallbacks. */
+    if (tmpl[0] == '/' && strncmp(tmpl, "/tmp/tur-build/", 15) != 0) {
+        unlink(tmpl);
+    }
 
     if (sys_rc != 0) {
         fprintf(stderr, "tur: cc invocation failed (status %d)\n", sys_rc);
@@ -642,9 +689,12 @@ static int cmd_build_multi(const char *dir, const char *out_path) {
     const char *cc = getenv("CC");
     if (!cc || !*cc) cc = "cc";
 
+    const char *cc_flags = getenv("TUR_CC_FLAGS");
+    if (!cc_flags || !*cc_flags) cc_flags = "-O2 -std=c99 -Wall";
+
     Buf cmd;
     buf_init(&cmd);
-    buf_printf(&cmd, "%s -O2 -std=c99 -Wall -o %s", cc, out_path);
+    buf_printf(&cmd, "%s %s -o %s", cc, cc_flags, out_path);
     /* Add _main.c first */
     buf_printf(&cmd, " _main.c");
     /* Add all .c files */

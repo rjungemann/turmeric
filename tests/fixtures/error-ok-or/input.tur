@@ -1,0 +1,79 @@
+;; Phase R3: error-ok-or — convert option to result using ok-or
+
+;; ─── inline option helpers ───────────────────────────────────────────────────
+(defn some [x :int] :ptr<void>
+  ```c
+  struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  opt->is_some = true; opt->value = x; return (void*)opt;
+  ```)
+
+(defn none [] :ptr<void>
+  ```c
+  struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  opt->is_some = false; opt->value = 0; return (void*)opt;
+  ```)
+
+;; ─── inline result helpers ───────────────────────────────────────────────────
+(defn ok? [r :ptr<void>] :bool
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  return res->is_ok;
+  ```)
+
+(defn ok-val [r :ptr<void>] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  return (int)res->ok_val;
+  ```)
+
+;; ok-or — convert option to result: some(v) → ok(v), none → err(e)
+(defn ok-or [opt :ptr<void> e :int] :ptr<void>
+  ```c
+  struct { bool is_some; int64_t value; } *o = (void*)opt;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
+  if (o != NULL && o->is_some) {
+    result->is_ok   = true;
+    result->ok_val  = o->value;
+    result->err_val = 0;
+  } else {
+    result->is_ok   = false;
+    result->ok_val  = 0;
+    result->err_val = e;
+  }
+  return result;
+  ```)
+
+;; ─── inline show for a simple error code ────────────────────────────────────
+(defn show-err-code [code :int] :cstr
+  ```c
+  switch (code) {
+    case 1: return "not-found";
+    case 2: return "permission-denied";
+    default: return "unknown-error";
+  }
+  ```)
+
+(defn main [] :int
+  (do
+    ;; some option → ok result
+    (let [opt1 (some 42)]
+      (let [r1 (ok-or opt1 1)]
+        (if (ok? r1)
+          (println (ok-val r1))
+          (println "unexpected err"))))
+
+    ;; none option with err code 1 → err result
+    (let [opt2 (none)]
+      (let [r2 (ok-or opt2 1)]
+        (if (ok? r2)
+          (println "unexpected ok")
+          (println (show-err-code 1)))))
+
+    ;; none option with err code 2 → err result
+    (let [opt3 (none)]
+      (let [r3 (ok-or opt3 2)]
+        (if (ok? r3)
+          (println "unexpected ok")
+          (println (show-err-code 2)))))
+
+    0))

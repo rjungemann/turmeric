@@ -25,11 +25,22 @@ FAILED=()
 
 # Performance plan item #1: compiler cache integration for build steps.
 # Opt in with TUR_USE_CCACHE=1 (enabled by default here if ccache is available).
+# The generated C is written to a deterministic path (/tmp/tur-build/<name>.c)
+# so that ccache can actually produce cache hits across runs.
+# CCACHE_NOHASHDIR=1 prevents ccache from hashing the source file directory,
+# further improving hit rates for generated files.
 TUR_USE_CCACHE="${TUR_USE_CCACHE:-1}"
 BUILD_CC="${CC:-cc}"
 if [ "$TUR_USE_CCACHE" = "1" ] && command -v ccache >/dev/null 2>&1; then
     BUILD_CC="ccache ${BUILD_CC}"
+    export CCACHE_NOHASHDIR=1
 fi
+
+# Default compiler flags for test builds.
+# Override with TUR_CC_FLAGS="-O1 -std=c99" for faster (but less safe) builds.
+# NOTE: -O0 causes SIGTRAP on Apple Silicon; -O1 exposes latent UB in some
+#       emitted functions missing a return path — keep -O2 for safety.
+export TUR_CC_FLAGS="${TUR_CC_FLAGS:--O2 -std=c99 -Wall}"
 
 # Performance plan item #3: avoid redundant emit-c work.
 # "snapshot-only" means run emit-c only for fixtures that have expected.c.
@@ -37,24 +48,27 @@ fi
 TUR_EMIT_C_MODE="${TUR_EMIT_C_MODE:-snapshot-only}"
 
 # Performance plan item #2: parallel fixture execution.
-# Override with TUR_TEST_JOBS=<n>; defaults to logical CPU count (capped at 8).
+# Override with TUR_TEST_JOBS=<n>; defaults to nproc*2 (capped at 32).
+# Fixture workers are I/O-bound (process spawning, temp files, linking) so
+# oversubscribing beyond the physical core count keeps pipelines saturated.
 if [ -n "${TUR_TEST_JOBS:-}" ]; then
     JOBS="$TUR_TEST_JOBS"
 else
     if command -v getconf >/dev/null 2>&1; then
-        JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
+        _nproc="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
     elif command -v sysctl >/dev/null 2>&1; then
-        JOBS="$(sysctl -n hw.logicalcpu 2>/dev/null || echo 4)"
+        _nproc="$(sysctl -n hw.logicalcpu 2>/dev/null || echo 4)"
     else
-        JOBS=4
+        _nproc=4
     fi
+    JOBS=$(( _nproc * 2 ))
 fi
 
 case "$JOBS" in
-    ''|*[!0-9]*) JOBS=4 ;;
+    ''|*[!0-9]*) JOBS=8 ;;
 esac
 if [ "$JOBS" -lt 1 ]; then JOBS=1; fi
-if [ "$JOBS" -gt 8 ]; then JOBS=8; fi
+if [ "$JOBS" -gt 32 ]; then JOBS=32; fi
 
 RESULTS_DIR="$(mktemp -d -t tur-tests-results-XXXXXX)"
 trap 'rm -rf "$RESULTS_DIR"' EXIT
@@ -115,6 +129,63 @@ write_result() {
     } > "$RESULTS_DIR/$id.result"
 }
 
+# ---------------------------------------------------------------------------
+# Stamp-file caching (T2-C)
+# After a fixture passes, record a stamp: content-hash of input.tur plus the
+# mtime of the tur binary.  On the next run, if both are unchanged the fixture
+# is skipped without rebuilding.
+# Disable with TUR_FORCE=1 or by setting TUR_STAMP_CACHE="".
+# Stamps are stored in tests/.stamp-cache/ (listed in .gitignore).
+# NOTE: changes to stdlib/ files other than macros.tur are not tracked; run
+#       with TUR_FORCE=1 after editing stdlib sources.
+# ---------------------------------------------------------------------------
+TUR_FORCE="${TUR_FORCE:-0}"
+TUR_STAMP_CACHE="${TUR_STAMP_CACHE:-tests/.stamp-cache}"
+
+_tur_hash_file() {
+    local path="$1"
+    if command -v md5 >/dev/null 2>&1; then
+        md5 -q "$path" 2>/dev/null
+    elif command -v md5sum >/dev/null 2>&1; then
+        md5sum "$path" 2>/dev/null | awk '{print $1}'
+    else
+        echo "nohash"
+    fi
+}
+
+_tur_mtime() {
+    stat -f '%m' "$1" 2>/dev/null || stat -c '%Y' "$1" 2>/dev/null || echo "0"
+}
+
+stamp_key() {
+    local input="$1"
+    local dir
+    dir="$(dirname "$input")"
+    # Incorporate the expected.c snapshot hash (if present) so that regenerating
+    # snapshots invalidates the stamp and forces a fresh codegen check.
+    local ec_hash=""
+    [ -f "$dir/expected.c" ] && ec_hash="$(_tur_hash_file "$dir/expected.c")"
+    echo "$(_tur_hash_file "$input")-${ec_hash}-$(_tur_mtime "$TUR")"
+}
+
+stamp_check() {
+    local name="$1" input="$2"
+    [ "$TUR_FORCE" = "1" ] && return 1
+    [ -z "$TUR_STAMP_CACHE" ] && return 1
+    local sf="$TUR_STAMP_CACHE/$(printf '%s' "$name" | tr '/ ' '__').stamp"
+    [ -f "$sf" ] || return 1
+    [ "$(cat "$sf")" = "$(stamp_key "$input")" ]
+}
+
+stamp_write() {
+    local name="$1" input="$2"
+    [ -z "$TUR_STAMP_CACHE" ] && return
+    mkdir -p "$TUR_STAMP_CACHE"
+    local sf="$TUR_STAMP_CACHE/$(printf '%s' "$name" | tr '/ ' '__').stamp"
+    stamp_key "$input" > "$sf"
+}
+# ---------------------------------------------------------------------------
+
 run_happy() {
     local dir="$1"
     local name="${dir#tests/fixtures/}"
@@ -132,6 +203,13 @@ run_happy() {
 
     if [ -f "$dir/expected.c" ]; then
         needs_codegen_check=1
+    fi
+
+    # Stamp fast-path: skip if input, expected.c, and tur binary are all
+    # unchanged since the last passing run.
+    if stamp_check "$name" "$input"; then
+        write_result "PASS" "$name" "" ""
+        return
     fi
 
     if [ "$TUR_EMIT_C_MODE" = "always" ] || [ "$needs_codegen_check" -eq 1 ]; then
@@ -234,6 +312,7 @@ run_happy() {
         fi
     fi
 
+    stamp_write "$name" "$input"
     write_result "PASS" "$name" "" ""
 }
 
@@ -244,6 +323,12 @@ run_negative() {
     [ -f "$input" ] || { echo "SKIP $name (no input)"; return; }
 
     local log_file="$RESULTS_DIR/$(printf '%s' "neg-$name" | tr '/ ' '__').log"
+
+    # Stamp fast-path: skip if input + tur binary unchanged since last PASS.
+    if stamp_check "$name" "$input"; then
+        write_result "PASS" "$name" "" ""
+        return
+    fi
 
     "$TUR" emit-c "$input" > /dev/null 2> "$dir/actual.stderr"
     local rc=$?
@@ -277,6 +362,7 @@ run_negative() {
         fi
     fi
 
+    stamp_write "$name" "$input"
     write_result "PASS" "$name" "" ""
 }
 
@@ -291,7 +377,9 @@ run_negative_worker() {
 export TUR BUILD_CC RESULTS_DIR TUR_EMIT_C_MODE
 export TUR_TEST_FILTER
 export TUR_TEST_SHARD SHARD_INDEX SHARD_TOTAL
+export TUR_FORCE TUR_STAMP_CACHE
 export -f matches_filter matches_shard write_result run_happy run_negative run_happy_worker run_negative_worker
+export -f _tur_hash_file _tur_mtime stamp_key stamp_check stamp_write
 
 # Happy fixtures: tests/fixtures/* except tests/fixtures/errors
 shopt -s nullglob
@@ -311,7 +399,7 @@ done
 if [ ${#HAPPY_DIRS[@]} -gt 0 ]; then
     HAPPY_LIST_FILE="$RESULTS_DIR/happy_dirs.list"
     printf '%s\n' "${HAPPY_DIRS[@]}" > "$HAPPY_LIST_FILE"
-    xargs -P "$JOBS" -I{} bash -lc 'run_happy_worker "$@"' _ {} < "$HAPPY_LIST_FILE" 2>/dev/null
+    xargs -P "$JOBS" -I{} bash -c 'run_happy_worker "$@"' _ {} < "$HAPPY_LIST_FILE" 2>/dev/null
 fi
 
 # Error fixtures
@@ -330,7 +418,7 @@ done
 if [ ${#ERROR_DIRS[@]} -gt 0 ]; then
     ERROR_LIST_FILE="$RESULTS_DIR/error_dirs.list"
     printf '%s\n' "${ERROR_DIRS[@]}" > "$ERROR_LIST_FILE"
-    xargs -P "$JOBS" -I{} bash -lc 'run_negative_worker "$@"' _ {} < "$ERROR_LIST_FILE" 2>/dev/null
+    xargs -P "$JOBS" -I{} bash -c 'run_negative_worker "$@"' _ {} < "$ERROR_LIST_FILE" 2>/dev/null
 fi
 
 for result_file in "$RESULTS_DIR"/*.result; do

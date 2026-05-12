@@ -1,15 +1,15 @@
 #include "exn.h"
 #include "arena.h"
 #include "forms.h"  /* For Span */
+#include "platform.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-/* Thread-local storage for the exception handler chain
- * In v1 (single-threaded), we use a simple global variable
- * In future multi-threaded versions, this would be __thread or pthread_key_t */
-static ExceptionHandler *global_handler_chain = NULL;
+/* Thread-local exception handler chain (Phase T19).
+ * Each OS thread gets its own independent handler stack. */
+static TUR_THREAD_LOCAL ExceptionHandler *global_handler_chain = NULL;
 
 /* ============================================================================
  * Exception handler chain management

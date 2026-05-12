@@ -300,3 +300,23 @@
   struct { void *ok_vec; void *err_vec; } *p = (void*)pair;
   return p->err_vec;
   ```)
+
+;; Phase R4: result-must — unwrap ok or panic with default message
+(defn result-must [r :ptr<void>] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  if (res == NULL || !res->is_ok) {
+    tur_panic("result-must: called on err");
+  }
+  return (int)res->ok_val;
+  ```)
+
+;; Phase R4: result-must-msg — unwrap ok or panic with custom message
+(defn result-must-msg [r :ptr<void> msg :cstr] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  if (res == NULL || !res->is_ok) {
+    tur_panic(msg);
+  }
+  return (int)res->ok_val;
+  ```)
