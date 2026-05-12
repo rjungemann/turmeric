@@ -705,18 +705,19 @@ int main(void) {
     global_handler_chain = &__t0;
     if (setjmp(__t0.jmp_buf) == 0) {
         EffectHandlerFrame __eff_frame_2;
-        __eff_frame_2.parent = global_effect_handler_chain;
+        EffectHandlerFrame **__eff_chain_2 = (tur_current_fiber ? (EffectHandlerFrame **)&tur_current_fiber->handler_chain : &global_effect_handler_chain);
+        __eff_frame_2.parent = *__eff_chain_2;
         __eff_frame_2.n_cases = 1;
         __eff_frame_2.cases[0].effect_name = "Fail";
         __eff_frame_2.cases[0].handler_fn = __effect_handler_1;
         __eff_frame_2.cases[0].env = NULL;
-        global_effect_handler_chain = &__eff_frame_2;
+        *__eff_chain_2 = &__eff_frame_2;
         puts("before fail");
         int64_t __t4[1];
         __t4[0] = (int64_t)"something went wrong";
         tur_effect_perform("Fail", __t4, 1);
         puts("after fail");
-        global_effect_handler_chain = global_effect_handler_chain->parent;
+        *__eff_chain_2 = (*__eff_chain_2)->parent;
         global_handler_chain = global_handler_chain->parent;
     } else {
         if (tur_exception_matches(__t0.caught, 5)) {

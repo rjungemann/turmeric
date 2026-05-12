@@ -729,7 +729,8 @@ static int64_t use_both() {
 
 int main(void) {
     EffectHandlerFrame __eff_frame_6;
-    __eff_frame_6.parent = global_effect_handler_chain;
+    EffectHandlerFrame **__eff_chain_6 = (tur_current_fiber ? (EffectHandlerFrame **)&tur_current_fiber->handler_chain : &global_effect_handler_chain);
+    __eff_frame_6.parent = *__eff_chain_6;
     __eff_frame_6.n_cases = 2;
     __eff_frame_6.cases[0].effect_name = "Ask";
     __eff_frame_6.cases[0].handler_fn = __effect_handler_4;
@@ -737,9 +738,9 @@ int main(void) {
     __eff_frame_6.cases[1].effect_name = "Tell";
     __eff_frame_6.cases[1].handler_fn = __effect_handler_5;
     __eff_frame_6.cases[1].env = NULL;
-    global_effect_handler_chain = &__eff_frame_6;
+    *__eff_chain_6 = &__eff_frame_6;
     int64_t __t7 = use_both();
-    global_effect_handler_chain = global_effect_handler_chain->parent;
+    *__eff_chain_6 = (*__eff_chain_6)->parent;
     printf("%lld\n", (long long)(__t7));
     return 0;
 }

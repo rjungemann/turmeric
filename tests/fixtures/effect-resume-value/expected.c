@@ -711,14 +711,15 @@ static int64_t use_double(int64_t n) {
 
 int main(void) {
     EffectHandlerFrame __eff_frame_3;
-    __eff_frame_3.parent = global_effect_handler_chain;
+    EffectHandlerFrame **__eff_chain_3 = (tur_current_fiber ? (EffectHandlerFrame **)&tur_current_fiber->handler_chain : &global_effect_handler_chain);
+    __eff_frame_3.parent = *__eff_chain_3;
     __eff_frame_3.n_cases = 1;
     __eff_frame_3.cases[0].effect_name = "Double";
     __eff_frame_3.cases[0].handler_fn = __effect_handler_2;
     __eff_frame_3.cases[0].env = NULL;
-    global_effect_handler_chain = &__eff_frame_3;
+    *__eff_chain_3 = &__eff_frame_3;
     int64_t __t4 = use_double(INT64_C(21));
-    global_effect_handler_chain = global_effect_handler_chain->parent;
+    *__eff_chain_3 = (*__eff_chain_3)->parent;
     printf("%lld\n", (long long)(__t4));
     return 0;
 }

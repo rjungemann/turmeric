@@ -733,14 +733,15 @@ static int64_t use_rc() {
 
 int main(void) {
     EffectHandlerFrame __eff_frame_10;
-    __eff_frame_10.parent = global_effect_handler_chain;
+    EffectHandlerFrame **__eff_chain_10 = (tur_current_fiber ? (EffectHandlerFrame **)&tur_current_fiber->handler_chain : &global_effect_handler_chain);
+    __eff_frame_10.parent = *__eff_chain_10;
     __eff_frame_10.n_cases = 1;
     __eff_frame_10.cases[0].effect_name = "GetCount";
     __eff_frame_10.cases[0].handler_fn = __effect_handler_9;
     __eff_frame_10.cases[0].env = NULL;
-    global_effect_handler_chain = &__eff_frame_10;
+    *__eff_chain_10 = &__eff_frame_10;
     int64_t __t11 = use_rc();
-    global_effect_handler_chain = global_effect_handler_chain->parent;
+    *__eff_chain_10 = (*__eff_chain_10)->parent;
     printf("%lld\n", (long long)(__t11));
     return 0;
 }

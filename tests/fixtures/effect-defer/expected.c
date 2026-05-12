@@ -718,14 +718,15 @@ static int64_t deferred_ask() {
 
 int main(void) {
     EffectHandlerFrame __eff_frame_5;
-    __eff_frame_5.parent = global_effect_handler_chain;
+    EffectHandlerFrame **__eff_chain_5 = (tur_current_fiber ? (EffectHandlerFrame **)&tur_current_fiber->handler_chain : &global_effect_handler_chain);
+    __eff_frame_5.parent = *__eff_chain_5;
     __eff_frame_5.n_cases = 1;
     __eff_frame_5.cases[0].effect_name = "Ask";
     __eff_frame_5.cases[0].handler_fn = __effect_handler_4;
     __eff_frame_5.cases[0].env = NULL;
-    global_effect_handler_chain = &__eff_frame_5;
+    *__eff_chain_5 = &__eff_frame_5;
     int64_t __t6 = deferred_ask();
-    global_effect_handler_chain = global_effect_handler_chain->parent;
+    *__eff_chain_5 = (*__eff_chain_5)->parent;
     printf("%lld\n", (long long)(__t6));
     return 0;
 }

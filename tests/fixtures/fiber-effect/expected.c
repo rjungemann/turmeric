@@ -690,31 +690,105 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
-static int64_t __effect_handler_0(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
-static int64_t __effect_handler_0(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    const char * s_0 = (const char *)__effect_args[0];
-    int64_t k_1 = __k;
-    puts(s_0);
-    if (((TurContK *)(intptr_t)k_1)->origin_fiber != (void *)tur_current_fiber) { fprintf(stderr, "continuation error: resume on wrong fiber\n"); abort(); }
-    ((TurContK *)(intptr_t)k_1)->consumed = true;
-    return 0;
+static void * fiber_new_fn(void *, int64_t);
+static int64_t fiber_resume_fn(void *, int64_t);
+static void fiber_free_fn(void *);
+static void fiber_yield_fn(int64_t);
+static void fiber_body();
+
+static void * fiber_new_fn(void * fn, int64_t stack_size) {
+return (void *)tur_fiber_block_new((void(*)(void))fn, (size_t)stack_size);
+          return 0;
 }
 
-int main(void) {
-    EffectHandlerFrame __eff_frame_1;
-    EffectHandlerFrame **__eff_chain_1 = (tur_current_fiber ? (EffectHandlerFrame **)&tur_current_fiber->handler_chain : &global_effect_handler_chain);
-    __eff_frame_1.parent = *__eff_chain_1;
-    __eff_frame_1.n_cases = 1;
-    __eff_frame_1.cases[0].effect_name = "Write";
-    __eff_frame_1.cases[0].handler_fn = __effect_handler_0;
-    __eff_frame_1.cases[0].env = NULL;
-    *__eff_chain_1 = &__eff_frame_1;
-    int64_t __t3[1];
-    __t3[0] = (int64_t)"hello";
-    tur_effect_perform("Write", __t3, 1);
-    int64_t __t4[1];
-    __t4[0] = (int64_t)"world";
-    tur_effect_perform("Write", __t4, 1);
-    *__eff_chain_1 = (*__eff_chain_1)->parent;
-    return 0;
+static int64_t fiber_resume_fn(void * f, int64_t arg) {
+return tur_fiber_block_resume((FiberBlock *)f, (int64_t)arg);
+          return 0;
 }
+
+static void fiber_free_fn(void * f) {
+        tur_fiber_block_free((FiberBlock *)f);
+  
+}
+
+static void fiber_yield_fn(int64_t v) {
+        tur_fiber_block_yield((int64_t)v);
+  
+}
+
+static int64_t __effect_handler_0(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
+static int64_t __effect_handler_0(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
+    int64_t k_12 = __k;
+    if (((TurContK *)(intptr_t)k_12)->origin_fiber != (void *)tur_current_fiber) { fprintf(stderr, "continuation error: resume on wrong fiber\n"); abort(); }
+    ((TurContK *)(intptr_t)k_12)->consumed = true;
+    return (int64_t)INT64_C(10);
+}
+
+static void fiber_body() {
+        {
+            EffectHandlerFrame __eff_frame_1;
+            EffectHandlerFrame **__eff_chain_1 = (tur_current_fiber ? (EffectHandlerFrame **)&tur_current_fiber->handler_chain : &global_effect_handler_chain);
+            __eff_frame_1.parent = *__eff_chain_1;
+            __eff_frame_1.n_cases = 1;
+            __eff_frame_1.cases[0].effect_name = "Ask";
+            __eff_frame_1.cases[0].handler_fn = __effect_handler_0;
+            __eff_frame_1.cases[0].env = NULL;
+            *__eff_chain_1 = &__eff_frame_1;
+            int64_t __t3 = tur_effect_perform("Ask", NULL, 0);
+            int64_t __t2 = __t3;
+            *__eff_chain_1 = (*__eff_chain_1)->parent;
+            int64_t result_13 = __t2;
+            (void)result_13;
+            fiber_yield_fn(result_13);
+        }
+}
+
+static int64_t __effect_handler_8(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
+static int64_t __effect_handler_8(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
+    int64_t k_16 = __k;
+    if (((TurContK *)(intptr_t)k_16)->origin_fiber != (void *)tur_current_fiber) { fprintf(stderr, "continuation error: resume on wrong fiber\n"); abort(); }
+    ((TurContK *)(intptr_t)k_16)->consumed = true;
+    return (int64_t)INT64_C(99);
+}
+
+int main() {
+        int64_t __t4;
+        {
+            void * f_14 = fiber_new_fn(fiber_body, INT64_C(0));
+            (void)f_14;
+            int64_t __t5;
+            {
+                int64_t fval_15 = fiber_resume_fn(f_14, INT64_C(0));
+                (void)fval_15;
+                printf("%lld\n", (long long)(fval_15));
+                fiber_free_fn(f_14);
+                int64_t __t6;
+                int64_t __t7;
+                {
+                    EffectHandlerFrame __eff_frame_9;
+                    EffectHandlerFrame **__eff_chain_9 = (tur_current_fiber ? (EffectHandlerFrame **)&tur_current_fiber->handler_chain : &global_effect_handler_chain);
+                    __eff_frame_9.parent = *__eff_chain_9;
+                    __eff_frame_9.n_cases = 1;
+                    __eff_frame_9.cases[0].effect_name = "Ask";
+                    __eff_frame_9.cases[0].handler_fn = __effect_handler_8;
+                    __eff_frame_9.cases[0].env = NULL;
+                    *__eff_chain_9 = &__eff_frame_9;
+                    int64_t __t11 = tur_effect_perform("Ask", NULL, 0);
+                    int64_t __t10 = __t11;
+                    *__eff_chain_9 = (*__eff_chain_9)->parent;
+                    int64_t mval_17 = __t10;
+                    (void)mval_17;
+                    printf("%lld\n", (long long)(mval_17));
+                    int64_t __t12;
+                    __t12 = INT64_C(0);
+                    __t7 = __t12;
+                }
+                __t6 = __t7;
+                __t5 = __t6;
+            }
+            __t4 = __t5;
+        }
+        return (int)__t4;
+}
+
+

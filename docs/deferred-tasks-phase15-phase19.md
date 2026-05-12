@@ -205,8 +205,8 @@ After prerequisites are complete, execute these implementation tasks.
   - Implemented: `effect_row_remove()` added to `src/effect.c`; `EX_HANDLE` case in `collect_effects_in_expr()` removes handled effects from the body row and adds handler-case body effects (re-opened effects propagate out). Fixture `tests/fixtures/effect-reopen/` passes.
 
 #### B) Runtime handler pipeline
-- [ ] Implement per-fiber handler stack representation.
-  - UNBLOCKED: depends on fiber support (Phase T19). The current `global_effect_handler_chain` global serves single-threaded code correctly. Will become per-fiber storage when fibers land.
+- [x] Implement per-fiber handler stack representation.
+  - Implemented (T21-B): `FiberBlock.handler_chain` field already existed. `tur_effect_perform` already reads from `tur_current_fiber->handler_chain` when inside a fiber. Fixed the `EX_HANDLE` push/pop to also be fiber-aware: emits `EffectHandlerFrame **__eff_chain_N = (tur_current_fiber ? (EffectHandlerFrame **)&tur_current_fiber->handler_chain : &global_effect_handler_chain);` and uses `*__eff_chain_N` for push/pop. Also fixed a handler-ordering bug in `emit_fn_def`: function bodies are now emitted to a temp buffer so that accumulated handlers are flushed before the function definition. Fixture `tests/fixtures/fiber-effect/` passes (fiber's own Ask handler returns 10, main's returns 99).
 - [x] Implement matching handler dispatch walk.
   - Done: `tur_effect_perform` in `src/emit.c` emits a runtime function that walks `global_effect_handler_chain`, iterates cases, and dispatches by effect name via `strcmp`. All effect fixtures confirm correct dispatch.
 
