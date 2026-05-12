@@ -7258,6 +7258,33 @@ static Expr *elab_async(Elab *e, const Form *call) {
     }
     Expr *fn_expr = elab_form(e, call->as.list.items[1]);
     if (!fn_expr) return NULL;
+    
+    /* AW-012 / AW-011B-1: Send-check for async closures.
+     * Values captured in async blocks must be Send (can be moved to fiber context). */
+    if (fn_expr->kind == EX_FN || fn_expr->kind == EX_CLOSURE) {
+        const struct Closure *cl = NULL;
+        if (fn_expr->kind == EX_CLOSURE) {
+            cl = fn_expr->as.closure_.closure;
+        } else if (fn_expr->kind == EX_FN) {
+            cl = fn_expr->as.fn_.closure;
+        }
+        if (cl) {
+            bool had_error = false;
+            for (uint8_t i = 0; i < cl->n_captures; i++) {
+                Binding *cap = cl->captures[i];
+                if (!type_is_send(cap->type)) {
+                    diag_emit_with_code(DIAG_ERROR, call->span,
+                        TUR_E0010_NOT_SEND,
+                        "type `%s` cannot be sent across thread boundaries "
+                        "(not `Send`); captured variable `%s` in async block",
+                        type_name(cap->type), cap->name->name);
+                    had_error = true;
+                }
+            }
+            if (had_error) return NULL;
+        }
+    }
+    
     Expr *out = expr_new(e->arena, EX_ASYNC, TYPE_PTR_VOID, call->span);
     out->as.async_.fn_expr = fn_expr;
     return out;
