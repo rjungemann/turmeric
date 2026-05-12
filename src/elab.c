@@ -1001,6 +1001,50 @@ static bool ct_symbol_name(const Symbol *sym, const char *name) {
     return sym->len == n && strncmp(sym->name, name, n) == 0;
 }
 
+static bool form_contains_ct_builtins(Form *f) {
+    switch (f->tag) {
+        case F_LIST:
+            if (f->as.list.len > 0 && f->as.list.items[0]->tag == F_SYM) {
+                const Symbol *head = f->as.list.items[0]->as.sym;
+                if (ct_symbol_name(head, "first") ||
+                    ct_symbol_name(head, "rest") ||
+                    ct_symbol_name(head, "second") ||
+                    ct_symbol_name(head, "nil?") ||
+                    ct_symbol_name(head, "empty?") ||
+                    ct_symbol_name(head, "list?") ||
+                    ct_symbol_name(head, "cons") ||
+                    ct_symbol_name(head, "list")) {
+                    return true;
+                }
+            }
+            for (uint32_t i = 0; i < f->as.list.len; i++) {
+                if (form_contains_ct_builtins(f->as.list.items[i])) return true;
+            }
+            return false;
+        case F_VEC:
+        case F_MAP:
+            for (uint32_t i = 0; i < f->as.list.len; i++) {
+                if (form_contains_ct_builtins(f->as.list.items[i])) return true;
+            }
+            return false;
+        case F_UNQUOTE:
+        case F_UNQUOTE_SPLICING:
+            return form_contains_ct_builtins(f->as.list.items[0]);
+        case F_QUOTE:
+        case F_QUASIQUOTE:
+        case F_SYM:
+        case F_NIL:
+        case F_BOOL:
+        case F_INT:
+        case F_FLOAT:
+        case F_STR:
+        case F_KEYWORD:
+        case F_CBLOCK:
+            return false;
+    }
+    return false;
+}
+
 static CtValue ct_eval_builtin(CtEnv *env, const Symbol *name, Form **args, uint32_t n_args, Span span) {
     if (ct_symbol_name(name, "first")) {
         if (n_args != 1) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time first expects 1 argument"); return ct_value_form(form_nil(env->elab->arena, span)); }
@@ -1089,7 +1133,14 @@ static CtValue ct_eval_call(CtEnv *env, Form *f) {
         Form **items = (Form **)arena_alloc(env->elab->arena, f->as.list.len * sizeof(Form *));
         items[0] = head;
         items[1] = cond;
-        for (uint32_t i = 2; i < f->as.list.len; i++) items[i] = f->as.list.items[i];
+        CtValue then_v = ct_eval_form(env, f->as.list.items[2]);
+        items[2] = ct_value_to_form(env, then_v, f->as.list.items[2]->span);
+        if (!*env->ok) return ct_value_form(form_nil(env->elab->arena, f->span));
+        if (f->as.list.len == 4) {
+            CtValue else_v = ct_eval_form(env, f->as.list.items[3]);
+            items[3] = ct_value_to_form(env, else_v, f->as.list.items[3]->span);
+            if (!*env->ok) return ct_value_form(form_nil(env->elab->arena, f->span));
+        }
         return ct_value_form(form_list(env->elab->arena, f->span, items, f->as.list.len));
     }
     if (head->tag == F_SYM && head->as.sym == env->elab->sym_do) {
@@ -1206,12 +1257,42 @@ static CtValue ct_eval_call(CtEnv *env, Form *f) {
 
     CtValue head_v = ct_eval_form(env, head);
     if (!*env->ok) return head_v;
-    uint32_t n_args = f->as.list.len - 1;
+    uint32_t n_in_args = f->as.list.len - 1;
+    Form **tmp_args = (n_in_args == 0) ? NULL : (Form **)arena_alloc(env->elab->arena, n_in_args * sizeof(Form *));
+    bool *splice = (n_in_args == 0) ? NULL : (bool *)arena_alloc(env->elab->arena, n_in_args * sizeof(bool));
+    uint32_t n_args = 0;
+    for (uint32_t i = 0; i < n_in_args; i++) {
+        Form *arg_form = f->as.list.items[i + 1];
+        if (arg_form->tag == F_UNQUOTE_SPLICING) {
+            CtValue v = ct_eval_form(env, arg_form->as.list.items[0]);
+            Form *inner = ct_value_to_form(env, v, arg_form->span);
+            if (!*env->ok) return ct_value_form(form_nil(env->elab->arena, f->span));
+            tmp_args[i] = inner;
+            if (inner->tag == F_LIST) {
+                splice[i] = true;
+                n_args += inner->as.list.len;
+            } else {
+                splice[i] = false;
+                n_args += 1;
+            }
+        } else {
+            CtValue v = ct_eval_form(env, arg_form);
+            Form *evaluated = ct_value_to_form(env, v, arg_form->span);
+            if (!*env->ok) return ct_value_form(form_nil(env->elab->arena, f->span));
+            tmp_args[i] = evaluated;
+            splice[i] = false;
+            n_args += 1;
+        }
+    }
     Form **args = (n_args == 0) ? NULL : (Form **)arena_alloc(env->elab->arena, n_args * sizeof(Form *));
-    for (uint32_t i = 0; i < n_args; i++) {
-        CtValue v = ct_eval_form(env, f->as.list.items[i + 1]);
-        args[i] = ct_value_to_form(env, v, f->as.list.items[i + 1]->span);
-        if (!*env->ok) return ct_value_form(form_nil(env->elab->arena, f->span));
+    uint32_t out_idx = 0;
+    for (uint32_t i = 0; i < n_in_args; i++) {
+        if (splice && splice[i]) {
+            Form *lst = tmp_args[i];
+            for (uint32_t j = 0; j < lst->as.list.len; j++) args[out_idx++] = lst->as.list.items[j];
+        } else if (n_args > 0) {
+            args[out_idx++] = tmp_args ? tmp_args[i] : NULL;
+        }
     }
 
     if (head->tag == F_SYM) {
@@ -1455,6 +1536,7 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
                 uint32_t n_in = f->as.list.len;
                 Form **temp = (Form **)arena_alloc(e->arena, n_in * sizeof(Form *));
                 bool *is_splice = (bool *)arena_alloc(e->arena, n_in * sizeof(bool));
+                bool *keep_splice_wrapper = (bool *)arena_alloc(e->arena, n_in * sizeof(bool));
                 uint32_t n_out = 0;
                 for (uint32_t i = 0; i < n_in; i++) {
                     Form *item = f->as.list.items[i];
@@ -1465,14 +1547,17 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
                         temp[i] = subst;
                         if (subst->tag == F_LIST) {
                             is_splice[i] = true;
+                            keep_splice_wrapper[i] = false;
                             n_out += subst->as.list.len;
                         } else {
                             is_splice[i] = false;
+                            keep_splice_wrapper[i] = true;
                             n_out++;
                         }
                     } else {
                         temp[i] = substitute_params(e, item, macro, args);
                         is_splice[i] = false;
+                        keep_splice_wrapper[i] = false;
                         n_out++;
                     }
                 }
@@ -1485,7 +1570,11 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
                             items[out_idx++] = lst->as.list.items[j];
                         }
                     } else {
-                        items[out_idx++] = temp[i];
+                        if (keep_splice_wrapper[i]) {
+                            items[out_idx++] = form_unquote_splicing(e->arena, f->as.list.items[i]->span, temp[i]);
+                        } else {
+                            items[out_idx++] = temp[i];
+                        }
                     }
                 }
                 return form_list(e->arena, f->span, items, n_out);
@@ -1552,6 +1641,7 @@ static Form *elab_expand_macro(Elab *e, MacroDef *macro, Form **args, uint32_t n
         aug_args[macro->n_params] = form_list(e->arena, rest_span, rest_items, n_rest);
         Form *templ = substitute_params(e, macro->body, macro, aug_args);
         if (!templ) return NULL;
+        if (!form_contains_ct_builtins(templ)) return templ;
         return elab_eval_macro_form(e, templ);
     }
     if (n_args != macro->n_params) {
@@ -1564,6 +1654,7 @@ static Form *elab_expand_macro(Elab *e, MacroDef *macro, Form **args, uint32_t n
     /* Substitute parameters in the macro body */
     Form *templ = substitute_params(e, macro->body, macro, args);
     if (!templ) return NULL;
+    if (!form_contains_ct_builtins(templ)) return templ;
     return elab_eval_macro_form(e, templ);
 }
 

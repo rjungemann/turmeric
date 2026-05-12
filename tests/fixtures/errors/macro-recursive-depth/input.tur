@@ -1,0 +1,6 @@
+(defmacro loop-m []
+  (loop-m))
+
+(defn main [] :int
+  (loop-m)
+  0)
