@@ -454,3 +454,40 @@
         (do
           body
           (task-group-wait group)))))
+
+;; ---- TG-006: Integration with async/await ----
+;; 
+;; NOTE: These functions require async/await to use fiber-based execution.
+;; Currently (v1), async uses pthread-based execution via tur_async_fiber which
+;; calls the function directly without creating a fiber. Fiber-based async
+;; execution is tracked in Phase AW-005. Until then, these functions are
+;; stubs that document the intended API.
+
+;; Spawn an async computation into a task group.
+;; Takes a no-argument function that returns int64, spawns it as a fiber in the group,
+;; and returns a Future that will be fulfilled with the result.
+;; TG-006: Enables async blocks to be spawned into TaskGroup for tracking.
+;; DEPENDENCY: Requires async to use fiber-based execution (Phase AW-005).
+(defn task-group-spawn-async [group :ptr<void> f :ptr<void>] :ptr<void>
+  ```c
+  /* TG-006: Stub implementation - requires fiber-based async */
+  /* When async uses fibers, this will:
+     1. Increment task count for the group
+     2. Create a future
+     3. Spawn a fiber with f as entry, future passed as arg
+     4. Set fiber's task_group to group
+     5. Set future callback to notify group on completion
+     6. Return future
+  */
+  fprintf(stderr, "task-group-spawn-async: requires fiber-based async (Phase AW-005)\n");
+  abort();
+  return NULL;
+  ```)
+
+;; Macro: Spawn an async block into a task group
+;; TG-006: task-group-async [group async-thunk] — spawn async task into group
+;; The async-thunk is a no-argument function that returns a value.
+;; Returns a future that can be awaited.
+;; DEPENDENCY: Requires async to use fiber-based execution (Phase AW-005).
+(defmacro task-group-async [group async-thunk]
+  (list (task-group-spawn-async group async-thunk)))

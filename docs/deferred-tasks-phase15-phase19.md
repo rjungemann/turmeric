@@ -1034,9 +1034,12 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 
 ##### TG-006 — Integration with async/await
 - [ ] Ensure `async` blocks can be spawned into `TaskGroup`.
-  - Deferred: Requires `async` to use fiber-based execution (currently pthread-based).
-- [ ] Add `task-group-async [group async-thunk]` — spawn async task into group.
-  - Deferred: Same as above.
+  - Deferred: Requires `async` to use fiber-based execution (currently pthread-based via `tur_async_fiber`).
+  - Fiber-based async is tracked in Phase AW-005. The `TurFuture` and scheduler infrastructure exists but async bypasses it in v1 by calling functions directly.
+- [x] Add `task-group-async [group async-thunk]` — spawn async task into group.
+  - Implemented in `stdlib/taskgroup.tur`: Added `task-group-async` macro and `task-group-spawn-async` stub function.
+  - Currently aborts with "requires fiber-based async (Phase AW-005)" message.
+  - Once async uses fibers (AW-005), this will: increment task count, create future, spawn fiber with `task_group` set, and return future.
 
 #### T23 — Multi-threaded work-stealing scheduler (Phase 23)
 
