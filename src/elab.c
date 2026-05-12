@@ -450,6 +450,14 @@ typedef struct Elab {
     const Symbol *sym_hkt_Foldable;
     /* Phase R2: Panic */
     const Symbol *sym_panic;
+    const Symbol *sym_panic_with;
+    const Symbol *sym_catch_unwind;
+    const Symbol *sym_catch_panic_of;
+    const Symbol *sym_panic_payload_type;
+    const Symbol *sym_panic_payload_value;
+    const Symbol *sym_panic_payload_file;
+    const Symbol *sym_panic_payload_line;
+    const Symbol *sym_panic_payload_downcast;
     /* Phase R1: ? operator (reserved; not yet implemented) */
     const Symbol *sym_question;
     /* Phase T19-B: thread-spawn form — (thread-spawn closure) */
@@ -907,6 +915,14 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_hkt_Foldable     = intern_cstr(st, "Foldable");
     /* Phase R2: Panic */
     e->sym_panic = intern_cstr(st, "panic");
+    e->sym_panic_with = intern_cstr(st, "panic-with");
+    e->sym_catch_unwind = intern_cstr(st, "catch-unwind");
+    e->sym_catch_panic_of = intern_cstr(st, "catch-panic-of");
+    e->sym_panic_payload_type = intern_cstr(st, "panic-payload-type");
+    e->sym_panic_payload_value = intern_cstr(st, "panic-payload-value");
+    e->sym_panic_payload_file = intern_cstr(st, "panic-payload-file");
+    e->sym_panic_payload_line = intern_cstr(st, "panic-payload-line");
+    e->sym_panic_payload_downcast = intern_cstr(st, "panic-payload-downcast");
     /* Phase R1: ? operator */
     e->sym_question = intern_cstr(st, "?");
     /* Phase T19-B: thread-spawn */
@@ -1830,6 +1846,16 @@ static Expr *elab_c_call(Elab *e, const Form *call);
 static Expr *elab_dlopen(Elab *e, const Form *call);
 static Expr *elab_dlsym(Elab *e, const Form *call);
 static Expr *elab_dlclose(Elab *e, const Form *call);
+/* Phase R2: Panic */
+static Expr *elab_panic(Elab *e, const Form *call);
+static Expr *elab_panic_with(Elab *e, const Form *call);
+static Expr *elab_catch_unwind(Elab *e, const Form *call);
+static Expr *elab_catch_panic_of(Elab *e, const Form *call);
+static Expr *elab_panic_payload_type(Elab *e, const Form *call);
+static Expr *elab_panic_payload_value(Elab *e, const Form *call);
+static Expr *elab_panic_payload_file(Elab *e, const Form *call);
+static Expr *elab_panic_payload_line(Elab *e, const Form *call);
+static Expr *elab_panic_payload_downcast(Elab *e, const Form *call);
 
 /* Phase U3: Unsafe primitives implementations */
 
@@ -5984,6 +6010,14 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_defkind) return elab_defkind(e, call);
     /* Phase R2: Panic */
     if (name == e->sym_panic) return elab_panic(e, call);
+    if (name == e->sym_panic_with) return elab_panic_with(e, call);
+    if (name == e->sym_catch_unwind) return elab_catch_unwind(e, call);
+    if (name == e->sym_catch_panic_of) return elab_catch_panic_of(e, call);
+    if (name == e->sym_panic_payload_type) return elab_panic_payload_type(e, call);
+    if (name == e->sym_panic_payload_value) return elab_panic_payload_value(e, call);
+    if (name == e->sym_panic_payload_file) return elab_panic_payload_file(e, call);
+    if (name == e->sym_panic_payload_line) return elab_panic_payload_line(e, call);
+    if (name == e->sym_panic_payload_downcast) return elab_panic_payload_downcast(e, call);
     /* Phase U3: Unsafe primitives - pointer operations */
     if (name == e->sym_ptr_deref)   return elab_ptr_deref(e, call);
     if (name == e->sym_ptr_write)  return elab_ptr_write(e, call);
@@ -7074,7 +7108,7 @@ static Expr *elab_await(Elab *e, const Form *call) {
 
 /* Phase R2: (panic msg) — print msg to stderr, then abort.
  * msg must be of type :cstr (or a string literal).
- * Return type is TYPE_NIL (diverging; caller never observes a value). */
+ * Return type is TYPE_NEVER (diverging; caller never observes a value). */
 static Expr *elab_panic(Elab *e, const Form *call) {
     if (call->as.list.len != 2) {
         diag_emit(DIAG_ERROR, call->span,
@@ -7083,8 +7117,147 @@ static Expr *elab_panic(Elab *e, const Form *call) {
     }
     Expr *payload = elab_form(e, call->as.list.items[1]);
     if (!payload) return NULL;
-    Expr *out = expr_new(e->arena, EX_PANIC, TYPE_NIL, call->span);
+    Expr *out = expr_new(e->arena, EX_PANIC, TYPE_NEVER, call->span);
     out->as.panic_.payload = payload;
+    return out;
+}
+
+/* Phase R2: (panic-with payload) — panic with typed payload.
+ * payload is any value; its TypeKind is stored for catch-panic-of filtering.
+ * Return type is TYPE_NEVER (diverging). */
+static Expr *elab_panic_with(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(panic-with payload) requires exactly one argument");
+        return NULL;
+    }
+    Expr *payload = elab_form(e, call->as.list.items[1]);
+    if (!payload) return NULL;
+    Expr *out = expr_new(e->arena, EX_PANIC_WITH, TYPE_NEVER, call->span);
+    out->as.panic_with_.payload = payload;
+    return out;
+}
+
+/* Phase R2: (catch-unwind thunk) — catch any panic at a boundary.
+ * thunk is a nullary function; returns result<T, panic-payload>.
+ * In v1, result is ptr<void> and lowering uses tur_catch_unwind from runtime. */
+static Expr *elab_catch_unwind(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(catch-unwind thunk) requires exactly one argument");
+        return NULL;
+    }
+    Expr *thunk = elab_form(e, call->as.list.items[1]);
+    if (!thunk) return NULL;
+    /* Result type is result<T, panic-payload> - ptr<void> in v1 */
+    Expr *out = expr_new(e->arena, EX_CATCH_UNWIND, TYPE_PTR_VOID, call->span);
+    out->as.catch_unwind_.thunk = thunk;
+    return out;
+}
+
+/* Phase R2: (catch-panic-of Type thunk) — catch panics of a specific type.
+ * Type is a type identifier (symbol); thunk is a nullary function.
+ * Returns result<T, panic-payload> if type matches, otherwise re-panics.
+ * In v1, result is ptr<void> and lowering uses tur_catch_panic_of from runtime. */
+static Expr *elab_catch_panic_of(Elab *e, const Form *call) {
+    if (call->as.list.len != 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(catch-panic-of Type thunk) requires exactly two arguments");
+        return NULL;
+    }
+    /* First arg: type identifier */
+    Form *type_form = call->as.list.items[1];
+    TypeKind type_kind = TY_UNKNOWN;
+    if (type_form->tag == F_SYM) {
+        const char *type_name = type_form->as.sym->name;
+        type_kind = typekind_from_name(type_name);
+    }
+    /* Second arg: thunk */
+    Expr *thunk = elab_form(e, call->as.list.items[2]);
+    if (!thunk) return NULL;
+    /* Result type is result<T, panic-payload> - ptr<void> in v1 */
+    Expr *out = expr_new(e->arena, EX_CATCH_PANIC_OF, TYPE_PTR_VOID, call->span);
+    out->as.catch_panic_of_.type_kind = type_kind;
+    out->as.catch_panic_of_.thunk = thunk;
+    return out;
+}
+
+/* Phase R2: (panic-payload-type p) — get the TypeKind tag from a panic payload. */
+static Expr *elab_panic_payload_type(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(panic-payload-type payload) requires exactly one argument");
+        return NULL;
+    }
+    Expr *payload = elab_form(e, call->as.list.items[1]);
+    if (!payload) return NULL;
+    Expr *out = expr_new(e->arena, EX_PANIC_PAYLOAD_TYPE, TYPE_INT, call->span);
+    out->as.panic_payload_type_.payload = payload;
+    return out;
+}
+
+/* Phase R2: (panic-payload-value p) — get the boxed value from a panic payload. */
+static Expr *elab_panic_payload_value(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(panic-payload-value payload) requires exactly one argument");
+        return NULL;
+    }
+    Expr *payload = elab_form(e, call->as.list.items[1]);
+    if (!payload) return NULL;
+    Expr *out = expr_new(e->arena, EX_PANIC_PAYLOAD_VALUE, TYPE_PTR_VOID, call->span);
+    out->as.panic_payload_value_.payload = payload;
+    return out;
+}
+
+/* Phase R2: (panic-payload-file p) — get the source file from a panic payload. */
+static Expr *elab_panic_payload_file(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(panic-payload-file payload) requires exactly one argument");
+        return NULL;
+    }
+    Expr *payload = elab_form(e, call->as.list.items[1]);
+    if (!payload) return NULL;
+    Expr *out = expr_new(e->arena, EX_PANIC_PAYLOAD_FILE, TYPE_CSTR, call->span);
+    out->as.panic_payload_file_.payload = payload;
+    return out;
+}
+
+/* Phase R2: (panic-payload-line p) — get the source line from a panic payload. */
+static Expr *elab_panic_payload_line(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(panic-payload-line payload) requires exactly one argument");
+        return NULL;
+    }
+    Expr *payload = elab_form(e, call->as.list.items[1]);
+    if (!payload) return NULL;
+    Expr *out = expr_new(e->arena, EX_PANIC_PAYLOAD_LINE, TYPE_INT, call->span);
+    out->as.panic_payload_line_.payload = payload;
+    return out;
+}
+
+/* Phase R2: (panic-payload-downcast p Type) — cast panic payload to a specific type.
+ * Returns the boxed value if type matches, NULL otherwise. */
+static Expr *elab_panic_payload_downcast(Elab *e, const Form *call) {
+    if (call->as.list.len != 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(panic-payload-downcast payload Type) requires exactly two arguments");
+        return NULL;
+    }
+    Expr *payload = elab_form(e, call->as.list.items[1]);
+    if (!payload) return NULL;
+    /* Second arg: type identifier */
+    Form *type_form = call->as.list.items[2];
+    TypeKind target_type = TY_UNKNOWN;
+    if (type_form->tag == F_SYM) {
+        const char *type_name = type_form->as.sym->name;
+        target_type = typekind_from_name(type_name);
+    }
+    Expr *out = expr_new(e->arena, EX_PANIC_PAYLOAD_DOWNS, TYPE_PTR_VOID, call->span);
+    out->as.panic_payload_downs_.payload = payload;
+    out->as.panic_payload_downs_.target_type = target_type;
     return out;
 }
 
