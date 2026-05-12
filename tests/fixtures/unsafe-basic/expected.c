@@ -215,12 +215,10 @@ struct FiberBlock {
     char *stack;
     size_t stack_size;
     int done;
-    int parked; /* Phase T21: scheduler park/unpark */
     int64_t result;
     int64_t arg;
     void *handler_chain;
     void (*entry_fn)(void);
-    void *fiber_local; /* Phase T21: fiber-local storage */
 };
 
 static __thread FiberBlock *tur_current_fiber = NULL;
@@ -268,141 +266,8 @@ static void tur_fiber_block_yield(int64_t value) {
     swapcontext(&f->ctx, &f->caller_ctx);
 }
 
-typedef struct FiberLocalEntry FiberLocalEntry;
-struct FiberLocalEntry {
-    int64_t key;
-    int64_t value;
-    FiberLocalEntry *next;
-};
-
-static void tur_fiber_local_free(FiberBlock *f) {
-    FiberLocalEntry *e = (FiberLocalEntry *)f->fiber_local;
-    while (e) { FiberLocalEntry *n = e->next; free(e); e = n; }
-}
-
-static int64_t tur_fiber_local_get(FiberBlock *f, int64_t key) {
-    FiberLocalEntry *e = (FiberLocalEntry *)f->fiber_local;
-    while (e) { if (e->key == key) return e->value; e = e->next; }
-    return 0;
-}
-
-static void tur_fiber_local_set(FiberBlock *f, int64_t key, int64_t value) {
-    FiberLocalEntry *e = (FiberLocalEntry *)f->fiber_local;
-    while (e) { if (e->key == key) { e->value = value; return; } e = e->next; }
-    FiberLocalEntry *n = (FiberLocalEntry *)malloc(sizeof(FiberLocalEntry));
-    if (!n) { fprintf(stderr, "fiber-local: oom\n"); abort(); }
-    n->key = key; n->value = value;
-    n->next = (FiberLocalEntry *)f->fiber_local;
-    f->fiber_local = (void *)n;
-}
-
 static void tur_fiber_block_free(FiberBlock *f) {
-    if (!f) return;
-    tur_fiber_local_free(f);
-    free(f->stack); free(f);
-}
-
-typedef struct TurScheduler TurScheduler;
-struct TurScheduler {
-    FiberBlock **run_queue;
-    int64_t run_queue_cap;
-    int64_t run_queue_len;
-    int64_t run_queue_head;
-    int64_t run_queue_tail;
-    FiberBlock *current_fiber;
-    bool running;
-};
-
-static TurScheduler *tur_scheduler = NULL;
-
-static TurScheduler *tur_scheduler_new(void) {
-    TurScheduler *s = (TurScheduler *)calloc(1, sizeof(TurScheduler));
-    if (!s) { fprintf(stderr, "scheduler: oom\n"); abort(); }
-    s->run_queue_cap = 64;
-    s->run_queue = (FiberBlock **)malloc(sizeof(FiberBlock *) * (size_t)s->run_queue_cap);
-    if (!s->run_queue) { free(s); fprintf(stderr, "scheduler: queue oom\n"); abort(); }
-    s->run_queue_len = 0;
-    s->run_queue_head = 0;
-    s->run_queue_tail = 0;
-    s->current_fiber = NULL;
-    s->running = false;
-    return s;
-}
-
-static TurScheduler *tur_scheduler_current(void) {
-    return tur_scheduler;
-}
-
-static void tur_scheduler_enqueue(TurScheduler *s, FiberBlock *f) {
-    if (s->run_queue_len >= s->run_queue_cap) {
-        int64_t new_cap = s->run_queue_cap * 2;
-        FiberBlock **new_q = (FiberBlock **)malloc(sizeof(FiberBlock *) * (size_t)new_cap);
-        if (!new_q) { fprintf(stderr, "scheduler: grow oom\n"); abort(); }
-        for (int64_t i = 0; i < s->run_queue_len; i++)
-            new_q[i] = s->run_queue[(s->run_queue_head + i) % s->run_queue_cap];
-        free(s->run_queue);
-        s->run_queue = new_q;
-        s->run_queue_cap = new_cap;
-        s->run_queue_head = 0;
-        s->run_queue_tail = s->run_queue_len;
-    }
-    s->run_queue[s->run_queue_tail] = f;
-    s->run_queue_tail = (s->run_queue_tail + 1) % s->run_queue_cap;
-    s->run_queue_len++;
-}
-
-static FiberBlock *tur_scheduler_dequeue(TurScheduler *s) {
-    if (s->run_queue_len == 0) return NULL;
-    FiberBlock *f = s->run_queue[s->run_queue_head];
-    s->run_queue_head = (s->run_queue_head + 1) % s->run_queue_cap;
-    s->run_queue_len--;
-    return f;
-}
-
-static void tur_scheduler_spawn(TurScheduler *s, FiberBlock *f) {
-    tur_scheduler_enqueue(s, f);
-}
-
-static void tur_scheduler_run(TurScheduler *s) {
-    s->running = true;
-    while (s->running) {
-        FiberBlock *f = tur_scheduler_dequeue(s);
-        if (!f) { break; }
-        s->current_fiber = f;
-        tur_fiber_block_resume(f, 0);
-        s->current_fiber = NULL;
-        if (!f->done && !f->parked) tur_scheduler_enqueue(s, f);
-    }
-    s->running = false;
-}
-
-static void tur_scheduler_run_to_completion(TurScheduler *s) {
-    s->running = true;
-    while (s->run_queue_len > 0 && s->running) {
-        FiberBlock *f = tur_scheduler_dequeue(s);
-        if (f) {
-            s->current_fiber = f;
-            tur_fiber_block_resume(f, 0);
-            s->current_fiber = NULL;
-            if (!f->done && !f->parked) tur_scheduler_enqueue(s, f);
-        }
-    }
-    s->running = false;
-}
-
-static void tur_scheduler_yield(void) {
-    tur_fiber_block_yield(0);
-}
-
-static void tur_scheduler_park(void) {
-    if (tur_current_fiber) tur_current_fiber->parked = 1;
-    tur_fiber_block_yield(0);
-}
-
-static void tur_scheduler_unpark(FiberBlock *f) {
-    if (!f) return;
-    f->parked = 0;
-    if (tur_scheduler) tur_scheduler_enqueue(tur_scheduler, f);
+    if (!f) return; free(f->stack); free(f);
 }
 
 #ifdef __clang__
@@ -832,18 +697,12 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
-struct __defer_env_8 {RcControlBlock * r; };
+struct __defer_env_5 {RcControlBlock * r; };
 
-static void __defer_9(void *__env) {
-    struct __defer_env_8 *__e = (struct __defer_env_8 *)__env;
+static void __defer_6(void *__env) {
+    struct __defer_env_5 *__e = (struct __defer_env_5 *)__env;
     rc_strong_decrement(__e->r);
     rc_free_queue_drain();
-}
-
-static int64_t __effect_handler_5(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
-static int64_t __effect_handler_5(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t k_4 = __k;
-    return 0;
 }
 
 int main() {
@@ -861,27 +720,18 @@ int main() {
                 void *__t4 = rc_get_value(r_1);
                 void * p_2 = __t4;
                 (void)p_2;
-                EffectHandlerFrame __eff_frame_6;
-                EffectHandlerFrame **__eff_chain_6 = (tur_current_fiber ? (EffectHandlerFrame **)&tur_current_fiber->handler_chain : &global_effect_handler_chain);
-                __eff_frame_6.parent = *__eff_chain_6;
-                __eff_frame_6.n_cases = 1;
-                __eff_frame_6.cases[0].effect_name = "Unsafe";
-                __eff_frame_6.cases[0].handler_fn = __effect_handler_5;
-                __eff_frame_6.cases[0].env = NULL;
-                *__eff_chain_6 = &__eff_frame_6;
                 {
                     const void * b_3 = &p_2;
                     (void)b_3;
                     printf("%lld\n", (long long)(INT64_C(1)));
                 }
-                *__eff_chain_6 = (*__eff_chain_6)->parent;
             }
-            struct __defer_env_8 __t10 = {.r = r_1};
-            tur_frame_push_defer(&__frame_3, __defer_9, &__t10);
-            int64_t __t11;
-            __t11 = INT64_C(0);
+            struct __defer_env_5 __t7 = {.r = r_1};
+            tur_frame_push_defer(&__frame_3, __defer_6, &__t7);
+            int64_t __t8;
+            __t8 = INT64_C(0);
             tur_frame_fire_lifo(&__frame_3);
-            __t0 = __t11;
+            __t0 = __t8;
         }
         return (int)__t0;
 }
