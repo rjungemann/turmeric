@@ -333,7 +333,6 @@ typedef struct Elab {
     const Symbol *sym_do;
     const Symbol *sym_when;
     const Symbol *sym_unless;
-    const Symbol *sym_cond;
     const Symbol *sym_case;
     const Symbol *sym_set;
     const Symbol *sym_while;
@@ -729,7 +728,6 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_do        = intern_cstr(st, "do");
     e->sym_when      = intern_cstr(st, "when");
     e->sym_unless    = intern_cstr(st, "unless");
-    e->sym_cond      = intern_cstr(st, "cond");
     e->sym_case      = intern_cstr(st, "case");
     e->sym_set       = intern_cstr(st, "set!");
     e->sym_while     = intern_cstr(st, "while");
@@ -1119,6 +1117,12 @@ static CtValue ct_eval_builtin(CtEnv *env, const Symbol *name, Form **args, uint
 static CtValue ct_eval_call(CtEnv *env, Form *f) {
     if (f->as.list.len == 0) return ct_value_form(form_list(env->elab->arena, f->span, NULL, 0));
     Form *head = f->as.list.items[0];
+    /* Non-symbol head: cannot be a CT special form or builtin.
+     * Return the form as-is so it can be elaborated later.
+     * This preserves unevaluated clause lists inside variadic macros. */
+    if (head->tag != F_SYM) {
+        return ct_value_form(f);
+    }
     if (head->tag == F_SYM && head->as.sym == env->elab->sym_quote && f->as.list.len == 2) {
         return ct_value_form(f->as.list.items[1]);
     }
@@ -2339,67 +2343,6 @@ static Expr *elab_while(Elab *e, const Form *call) {
     out->as.while_.cond = cond;
     out->as.while_.body = body;
     return out;
-}
-
-/* cond desugars to nested if. Supports :else as the last clause. */
-static Expr *elab_cond(Elab *e, const Form *call) {
-    /* (cond t1 e1 t2 e2 ... :else efinal) — desugars to nested if. */
-    uint32_t n = call->as.list.len - 1;
-    if ((n & 1) != 0) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "cond expects pairs of (test expr); got %u clauses", n);
-        return NULL;
-    }
-    /* Build right-to-left. */
-    Expr *acc = e_nil(e, call->span);
-    Type acc_t = TYPE_NIL;
-    for (int i = (int)n - 2; i >= 0; i -= 2) {
-        Form *test = call->as.list.items[1 + i];
-        Form *body = call->as.list.items[1 + i + 1];
-
-        /* Check for :else keyword */
-        if (test->tag == F_KEYWORD && test->as.sym == e->kw_else) {
-            acc = elab_form(e, body);
-            if (!acc) return NULL;
-            acc_t = acc->type;
-            continue;
-        }
-
-        Expr *cond = elab_form(e, test);
-        if (!cond) return NULL;
-        if (!type_eq(cond->type, TYPE_BOOL)) {
-            diag_emit(DIAG_ERROR, cond->span,
-                      "cond test must be bool, got %s", type_name(cond->type));
-            return NULL;
-        }
-        Expr *then_ = elab_form(e, body);
-        if (!then_) return NULL;
-
-        /* If this is the first clause (right-most we processed), it sets
-         * acc_t. Subsequent clauses must match. */
-        if (acc_t.kind == TY_NIL && acc->kind == EX_NIL_LIT) {
-            acc_t = then_->type;
-            /* allow plain (cond ...) without :else: result type is then_'s type
-             * if all branches happen to match; otherwise we'd need a "maybe"
-             * type which we don't have. */
-            if (then_->type.kind != TY_NIL) {
-                /* leave acc as nil; this is the implicit fallthrough branch */
-            }
-        }
-        if (!type_eq(then_->type, acc_t)) {
-            diag_emit(DIAG_ERROR, then_->span,
-                      "cond branch type %s does not match earlier branch type %s",
-                      type_name(then_->type), type_name(acc_t));
-            return NULL;
-        }
-
-        Expr *out = expr_new(e->arena, EX_IF, acc_t, test->span);
-        out->as.if_.cond = cond;
-        out->as.if_.then_ = then_;
-        out->as.if_.else_or_null = acc;
-        acc = out;
-    }
-    return acc;
 }
 
 /* case desugars to (let [g disc] (if (= g v1) e1 (if (= g v2) e2 ... eN))).
@@ -4859,7 +4802,6 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_do)     return elab_do    (e, call);
     if (name == e->sym_set)    return elab_set   (e, call);
     if (name == e->sym_while)  return elab_while (e, call);
-    if (name == e->sym_cond)   return elab_cond  (e, call);
     if (name == e->sym_case)   return elab_case  (e, call);
     /* Phase 4 */
     if (name == e->sym_defer)  return elab_defer (e, call);
@@ -5195,7 +5137,7 @@ static Expr *elab_form(Elab *e, Form *f) {
         }
         case F_KEYWORD:
             diag_emit(DIAG_ERROR, f->span,
-                      "phase 1: keywords are only allowed as :else in cond");
+                      "phase 1: keywords are only allowed as :else in cond or case");
             return NULL;
         case F_SYM: {
             Binding *b = scope_lookup(e->scope, f->as.sym);

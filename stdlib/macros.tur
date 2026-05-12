@@ -1,6 +1,16 @@
 ;; Standard library macros for Turmeric
 ;; Phase 7: Core macros
 
+;; cond macro: (cond t1 e1 t2 e2 ... :else efinal) -> nested (if ...) chain
+;; Uses compile-time list manipulation to build the expansion.
+(defmacro cond [& clauses]
+  (if (empty? clauses)
+    nil
+    (if (= (first clauses) :else)
+      (second clauses)
+      (list if (first clauses) (second clauses)
+            (list cond ~@(rest (rest clauses)))))))
+
 ;; when macro: (when test body) -> (if test (do body))
 (defmacro when [test body]
   (if test (do body)))

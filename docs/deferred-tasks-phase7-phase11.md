@@ -87,7 +87,7 @@ implemented entirely in user-space Turmeric.
 #### A) Stdlib macro parity
 *Depends on A0 (variadic macros) and A0a (procedural macro evaluation) being complete.*
 
-- [ ] Implement `cond` as a variadic `defmacro` in `stdlib/macros.tur`; remove or alias the built-in special form. *(Deferred: user-land cond requires recursive macro expansion not yet supported; built-in remains.)*
+- [x] Implement `cond` as a variadic `defmacro` in `stdlib/macros.tur`; remove or alias the built-in special form. *(Implemented: CT evaluator fixed to treat non-symbol-headed lists as opaque data; built-in `elab_cond` removed; macro defined in `stdlib/macros.tur`.)*
 - [x] Implement `case` as a built-in special form in `src/elab.c` (`elab_case`) with fixture `stdlib-case`. *(Note: implemented as built-in rather than user-land macro; desugars to `let`+`if`+`=` chains.)*
 - [x] Implement `deftest` as a `defmacro` in `stdlib/test.tur` that expands to `(register-test "<name>" (fn [] body... 1))`.
 - [x] Add/update fixtures validating macro expansion and runtime behavior for `case`/`deftest`. *(`stdlib-case`, `stdlib-deftest` added.)*
