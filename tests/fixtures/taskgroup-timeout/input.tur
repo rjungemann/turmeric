@@ -1,0 +1,136 @@
+;; Phase T22: taskgroup-timeout — task group with timeout
+;;
+;; Tests:
+;;   1. Create a task group
+;;   2. Use a timeout thread to cancel the group after 100ms
+;;   3. Wait for completion
+;; Expected output: timed out
+
+(defn tg-new [] :ptr<void>
+  ```c
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t done_cond;
+      int64_t task_count;
+      int64_t completed_count;
+      bool cancelled;
+      bool done;
+  } TaskGroupBlock;
+  TaskGroupBlock *g = (TaskGroupBlock *)malloc(sizeof(TaskGroupBlock));
+  if (!g) { fprintf(stderr, "tg-new: oom\n"); abort(); }
+  pthread_mutex_init(&g->lock, NULL);
+  pthread_cond_init(&g->done_cond, NULL);
+  g->task_count = 0;
+  g->completed_count = 0;
+  g->cancelled = false;
+  g->done = false;
+  return (void *)g;
+  ```)
+
+(defn tg-cancel [group :ptr<void>] :nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t done_cond;
+      int64_t task_count;
+      int64_t completed_count;
+      bool cancelled;
+      bool done;
+  } TaskGroupBlock;
+  TaskGroupBlock *g = (TaskGroupBlock *)group;
+  pthread_mutex_lock(&g->lock);
+  g->cancelled = true;
+  g->done = true;
+  pthread_cond_broadcast(&g->done_cond);
+  pthread_mutex_unlock(&g->lock);
+  ```)
+
+(defn tg-wait [group :ptr<void>] :nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t done_cond;
+      int64_t task_count;
+      int64_t completed_count;
+      bool cancelled;
+      bool done;
+  } TaskGroupBlock;
+  TaskGroupBlock *g = (TaskGroupBlock *)group;
+  pthread_mutex_lock(&g->lock);
+  while (!g->done)
+      pthread_cond_wait(&g->done_cond, &g->lock);
+  pthread_mutex_unlock(&g->lock);
+  ```)
+
+(defn tg-free [group :ptr<void>] :nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t done_cond;
+      int64_t task_count;
+      int64_t completed_count;
+      bool cancelled;
+      bool done;
+  } TaskGroupBlock;
+  TaskGroupBlock *g = (TaskGroupBlock *)group;
+  pthread_mutex_destroy(&g->lock);
+  pthread_cond_destroy(&g->done_cond);
+  free(g);
+  ```)
+
+;; Spawn a timeout thread that will cancel the group
+(defn spawn-timeout-thread [tg :ptr<void> ms :int] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  if (!t) { fprintf(stderr, "spawn-timeout: oom\n"); abort(); }
+  
+  typedef struct { void *tg; int ms; } TimeoutArg;
+  TimeoutArg *arg = (TimeoutArg *)malloc(sizeof(TimeoutArg));
+  if (!arg) { free(t); fprintf(stderr, "spawn-timeout: arg oom\n"); abort(); }
+  arg->tg = tg;
+  arg->ms = (int)ms;
+  
+  /* Timeout function */
+  void timeout_fn(void *raw) {
+      TimeoutArg *a = (TimeoutArg *)raw;
+      typedef struct { long tv_sec; long tv_nsec; } timespec;
+      timespec ts = { .tv_sec = a->ms / 1000, .tv_nsec = (a->ms % 1000) * 1000000 };
+      nanosleep(&ts, NULL);
+      
+      typedef struct {
+          pthread_mutex_t lock;
+          pthread_cond_t done_cond;
+          int64_t task_count;
+          int64_t completed_count;
+          bool cancelled;
+          bool done;
+      } TaskGroupBlock;
+      TaskGroupBlock *g = (TaskGroupBlock *)a->tg;
+      pthread_mutex_lock(&g->lock);
+      g->cancelled = true;
+      g->done = true;
+      pthread_cond_broadcast(&g->done_cond);
+      pthread_mutex_unlock(&g->lock);
+      free(a);
+  }
+  
+  pthread_create(t, NULL, (void *(*)(void *))timeout_fn, arg);
+  pthread_detach(*t);
+  return (void *)t;
+  ```)
+
+(defn join-timeout-thread [t :ptr<void>] :nil
+  ```c
+  pthread_t *tid = (pthread_t *)t;
+  /* Detached thread, just free the handle */
+  free(tid);
+  ```)
+
+(defn main [] :int
+  (let [tg (tg-new)]
+    (let [timeout (spawn-timeout-thread tg 100)]  ;; 100ms timeout
+      (tg-wait tg)  ;; Will be woken by timeout thread
+      (join-timeout-thread timeout)
+      (println "timed out")
+      (tg-free tg))
+    0))

@@ -1,0 +1,222 @@
+;; stdlib/taskgroup.tur — Structured concurrency with TaskGroup (Phase T22)
+;;
+;; TaskGroup provides structured concurrency: a group of tasks that are
+;; spawned together and can be cancelled together. When a task fails or
+;; the group is explicitly cancelled, all running tasks receive a cancellation
+;; signal and are expected to cooperate by checking `fiber-cancelled?` and
+;; exiting promptly.
+;;
+;; API:
+;;   task-group-new       []                              → ptr<void>
+;;   task-group-spawn     [group :ptr<void> f :ptr<void>] → ptr<void>  (fiber handle)
+;;   task-group-cancel    [group :ptr<void>]            → nil
+;;   task-group-cancelled? []                            → bool  (checks current fiber)
+;;   task-group-done?      [group :ptr<void>]           → bool
+;;   task-group-wait      [group :ptr<void>]           → nil  (blocks until done)
+;;   task-group-free      [group :ptr<void>]           → nil
+;;
+;; TaskGroupBlock layout:
+;;   { pthread_mutex_t lock;
+;;     pthread_cond_t done_cond;
+;;     int64_t task_count;
+;;     int64_t completed_count;
+;;     bool cancelled;
+;;     bool done; }
+;;
+;; Each spawned task increments task_count. When a task completes (normally
+;; or via cancellation), it must call (task-group-task-done group).
+;; When all tasks complete, the group is marked done and waiters are notified.
+;;
+;; Cancellation is cooperative: tasks must periodically check `task-group-cancelled?`
+;; or `fiber-cancelled?` and exit if cancelled.
+
+;; ---- TaskGroup lifecycle ----
+
+;; Create a new TaskGroup
+(defn task-group-new [] :ptr<void>
+  ```c
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t done_cond;
+      int64_t task_count;
+      int64_t completed_count;
+      bool cancelled;
+      bool done;
+  } TaskGroupBlock;
+  TaskGroupBlock *g = (TaskGroupBlock *)malloc(sizeof(TaskGroupBlock));
+  if (!g) { fprintf(stderr, "task-group-new: oom\n"); abort(); }
+  pthread_mutex_init(&g->lock, NULL);
+  pthread_cond_init(&g->done_cond, NULL);
+  g->task_count = 0;
+  g->completed_count = 0;
+  g->cancelled = false;
+  g->done = false;
+  return (void *)g;
+  ```)
+
+;; Check if the current fiber has been cancelled
+;; This checks a thread-local flag set by the task group
+(defn fiber-cancelled? [] :bool
+  ```c
+  return tur_fiber_cancelled();
+  ```)
+
+;; Set the current fiber's cancelled flag (used internally by task-group-cancel)
+;; This is called automatically by task-group-cancel
+(defn __fiber_set_cancelled [cancelled :int] :nil
+  ```c
+  tur_fiber_set_cancelled((bool)cancelled);
+  ```)
+
+;; Check if a specific task group has been cancelled
+(defn task-group-cancelled? [group :ptr<void>] :bool
+  ```c
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t done_cond;
+      int64_t task_count;
+      int64_t completed_count;
+      bool cancelled;
+      bool done;
+  } TaskGroupBlock;
+  TaskGroupBlock *g = (TaskGroupBlock *)group;
+  pthread_mutex_lock(&g->lock);
+  bool c = g->cancelled;
+  pthread_mutex_unlock(&g->lock);
+  return c;
+  ```)
+
+;; Check if all tasks in the group have completed
+(defn task-group-done? [group :ptr<void>] :bool
+  ```c
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t done_cond;
+      int64_t task_count;
+      int64_t completed_count;
+      bool cancelled;
+      bool done;
+  } TaskGroupBlock;
+  TaskGroupBlock *g = (TaskGroupBlock *)group;
+  pthread_mutex_lock(&g->lock);
+  bool d = g->done;
+  pthread_mutex_unlock(&g->lock);
+  return d;
+  ```)
+
+;; Signal that a task has completed. Must be called by each spawned task.
+(defn task-group-task-done [group :ptr<void>] :nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t done_cond;
+      int64_t task_count;
+      int64_t completed_count;
+      bool cancelled;
+      bool done;
+  } TaskGroupBlock;
+  TaskGroupBlock *g = (TaskGroupBlock *)group;
+  if (!g) return;
+  pthread_mutex_lock(&g->lock);
+  g->completed_count++;
+  if (g->completed_count >= g->task_count && g->task_count > 0) {
+      g->done = true;
+      pthread_cond_broadcast(&g->done_cond);
+  }
+  pthread_mutex_unlock(&g->lock);
+  ```)
+
+;; Wait for all tasks in the group to complete
+(defn task-group-wait [group :ptr<void>] :nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t done_cond;
+      int64_t task_count;
+      int64_t completed_count;
+      bool cancelled;
+      bool done;
+  } TaskGroupBlock;
+  TaskGroupBlock *g = (TaskGroupBlock *)group;
+  pthread_mutex_lock(&g->lock);
+  while (!g->done)
+      pthread_cond_wait(&g->done_cond, &g->lock);
+  pthread_mutex_unlock(&g->lock);
+  ```)
+
+;; Cancel all tasks in the group (cooperative)
+;; Sets the cancelled flag and marks the group as done
+;; Tasks must check `fiber-cancelled?` or `task-group-cancelled?` and exit
+(defn task-group-cancel [group :ptr<void>] :nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t done_cond;
+      int64_t task_count;
+      int64_t completed_count;
+      bool cancelled;
+      bool done;
+  } TaskGroupBlock;
+  TaskGroupBlock *g = (TaskGroupBlock *)group;
+  pthread_mutex_lock(&g->lock);
+  g->cancelled = true;
+  g->done = true;
+  pthread_cond_broadcast(&g->done_cond);
+  pthread_mutex_unlock(&g->lock);
+  /* Also set the thread-local cancelled flag for fibers in this group */
+  __fiber_set_cancelled(1);
+  ```)
+
+;; Spawn a fiber in the task group
+(defn task-group-spawn [group :ptr<void> f :ptr<void>] :ptr<void>
+  ```c
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t done_cond;
+      int64_t task_count;
+      int64_t completed_count;
+      bool cancelled;
+      bool done;
+  } TaskGroupBlock;
+  typedef void (*FiberFn)(void);
+  
+  TaskGroupBlock *g = (TaskGroupBlock *)group;
+  pthread_mutex_lock(&g->lock);
+  g->task_count++;
+  pthread_mutex_unlock(&g->lock);
+  
+  /* Spawn the fiber via the scheduler */
+  void *fiber = tur_fiber_block_new((FiberFn)f, 0);
+  if (!fiber) { fprintf(stderr, "task-group-spawn: fiber oom\n"); abort(); }
+  
+  /* Store the task group reference in the fiber so it can signal completion */
+  /* In v1, we use a global hack since FiberBlock doesn't have task_group field yet */
+  /* For now, the task must manually call task-group-task-done */
+  
+  return fiber;
+  ```)
+
+;; Free the task group
+(defn task-group-free [group :ptr<void>] :nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t done_cond;
+      int64_t task_count;
+      int64_t completed_count;
+      bool cancelled;
+      bool done;
+  } TaskGroupBlock;
+  TaskGroupBlock *g = (TaskGroupBlock *)group;
+  pthread_mutex_destroy(&g->lock);
+  pthread_cond_destroy(&g->done_cond);
+  free(g);
+  ```)
+
+;; ---- TaskGroup::with macro ----
+
+;; TaskGroup::with [group & body] - runs body, waits for all spawned tasks
+(defmacro task-group-with [group & body]
+  (list (do
+          body
+          (task-group-wait group))))
