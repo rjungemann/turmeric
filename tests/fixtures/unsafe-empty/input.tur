@@ -1,0 +1,3 @@
+(defn main [] :int
+  (unsafe)
+  0)

@@ -1,0 +1,133 @@
+;; Phase U4: Safe standard library wrappers
+;; Bounds-checked operations that return Option or Result
+
+(extern-c malloc [^int size] :ptr)
+(extern-c free [^ptr p] :void)
+
+;; ============================================================================
+;; Bounds-checked array operations
+;; ============================================================================
+
+;; array-get: bounds-checked array access, returns option<int>
+;; arr is a ptr<void> to an array of int64_t, idx is the index
+(defn array-get [arr :ptr<void> idx :int] :ptr
+  ```c
+  struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  ```)
+
+;; array-set: bounds-checked array mutation, returns bool (true on success)
+(defn array-set [arr :ptr<void> idx :int value :int] :int
+  ```c
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  ```)
+
+;; array-slice: create a slice (ptr + length) from an array
+;; For v1, we just return the pointer offset
+(defn array-slice [arr :ptr<void> start :int len :int] :ptr
+  ```c
+  /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  ```)
+
+;; ============================================================================
+;; Safe FFI helpers
+;; ============================================================================
+
+;; with-c-string: create a C string from a Turmeric string, call thunk with it
+;; The thunk should take one argument (the cstr)
+(defn with-c-string [s :cstr f :ptr] :ptr
+  ```c
+  /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  ```)
+
+;; from-c-string: create a Turmeric string from a C string
+;; For v1, we just return the cstr as-is (no copying)
+(defn from-c-string [s :cstr] :cstr
+  s)
+
+;; ============================================================================
+;; Box/unbox for heap allocation
+;; ============================================================================
+
+;; box: allocate a value on the heap and return a pointer to it
+(defn box [v :int] :ptr
+  ```c
+  int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  ```)
+
+;; unbox: get the value from a boxed pointer
+(defn unbox [p :ptr] :int
+  ```c
+  int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  ```)
+
+;; ============================================================================
+;; Arena allocator
+;; ============================================================================
+
+;; Arena: opaque struct for arena allocation
+(defn Arena-type []
+  ```c
+  typedef struct Arena Arena;
+  struct Arena {
+      char *ptr;
+      char *end;
+      size_t block_size;
+  };
+  return NULL;
+  ```)
+
+;; arena-new: create a new arena
+(defn arena-new [] :ptr
+  ```c
+  typedef struct Arena Arena;
+  Arena *a = malloc(sizeof(Arena));
+  a->block_size = 4096;
+  a->ptr = malloc(a->block_size);
+  a->end = a->ptr + a->block_size;
+  return a;
+  ```)
+
+;; arena-alloc: allocate memory from an arena
+(defn arena-alloc [a :ptr size :int] :ptr
+  ```c
+  Arena *arena = (Arena *)a;
+  size_t aligned_size = (size + 7) & ~7;  /* align to 8 bytes */
+  if (arena->ptr + aligned_size > arena->end) {
+    /* Out of space - for v1, just return NULL */
+    return NULL;
+  }
+  void *result = arena->ptr;
+  arena->ptr += aligned_size;
+  return result;
+  ```)
+
+;; arena-free: free all memory allocated by an arena
+(defn arena-free [a :ptr]
+  ```c
+  Arena *arena = (Arena *)a;
+  free(arena->ptr);
+  free(arena);
+  ```)

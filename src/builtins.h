@@ -21,6 +21,24 @@ typedef enum BuiltinShape {
     BS_DIV_CHECK,        /* Division with zero check: (a / b) with runtime check */
     BS_AND_SC,           /* short-circuit (handled in codegen)   */
     BS_OR_SC,            /* short-circuit (handled in codegen)   */
+    /* Phase U3: Unsafe primitives */
+    BS_PTR_WRITE,        /* *ptr = value - emit as statement, return nil */
+    BS_PTR_ARITH,        /* ptr arithmetic: (char *)ptr op offset */
+    BS_PTR_DEREF,        /* ptr dereference: *((T *)ptr) */
+    BS_UNSAFE_CAST,      /* unsafe-cast: C-style cast */
+    BS_REINTERPRET,      /* reinterpret: bitwise reinterpretation */
+    BS_TRANSMUTE,        /* transmute: type-punning with size check */
+    BS_ARRAY_GET_UNCHECKED,  /* array-get-unchecked: *(ptr + index) */
+    BS_ARRAY_SET_UNCHECKED,  /* array-set-unchecked: *(ptr + index) = value */
+    BS_RAW_MALLOC,       /* raw-malloc: malloc(size) */
+    BS_RAW_FREE,         /* raw-free: free(ptr) */
+    BS_RAW_REALLOC,      /* raw-realloc: realloc(ptr, new_size) */
+    BS_RAW_MEMCPY,       /* raw-memcpy: memcpy(dest, src, n) */
+    BS_RAW_MEMSET,       /* raw-memset: memset(dest, byte, n) */
+    /* Phase U3: FFI */
+    BS_DLOPEN,           /* dlopen: dlopen(path, RTLD_LAZY) */
+    BS_DLSYM,           /* dlsym: dlsym(handle, symbol) */
+    BS_DLCLOSE,          /* dlclose: dlclose(handle) */
 } BuiltinShape;
 
 struct BuiltinSpec {

@@ -48,6 +48,17 @@ static const char *basename_of(const char *path) {
     return s ? s + 1 : path;
 }
 
+/* Phase U5: Global configuration for unsafe linting */
+uint32_t g_unsafe_max_lines = 20;      /* default threshold */
+bool g_unsafe_warn_nested = false;      /* disabled by default */
+bool g_unsafe_require_safety = false;   /* disabled by default */
+bool g_unsafe_stats_enabled = false;   /* disabled by default */
+bool g_lint_unsafe_enabled = false;    /* master flag for all unsafe lints */
+
+/* Phase U5: Global statistics for unsafe linting */
+uint32_t g_unsafe_block_count = 0;     /* count of unsafe blocks seen */
+uint32_t g_unsafe_total_lines = 0;     /* total lines in unsafe blocks */
+
 /* Helper to detect language and adjust source for #lang directive */
 static ReaderType detect_and_adjust_lang(const char *path, char *src, size_t len,
                                         const char **out_src, size_t *out_len) {
@@ -271,6 +282,12 @@ static int compile_to_c(const char *path, Buf *out_c) {
         if (rc == 0 && emit_program(out_c, ctx.prog) != 0) {
             rc = 1;
         }
+    }
+
+    /* Phase U5: Print unsafe statistics if enabled */
+    if (g_unsafe_stats_enabled) {
+        fprintf(stderr, "unsafe stats: %u blocks, %u total forms\n",
+                g_unsafe_block_count, g_unsafe_total_lines);
     }
 
     symtab_free(&st);
@@ -868,6 +885,42 @@ int main(int argc, char **argv) {
                 argv[j] = argv[j + 2];
             }
             argc -= 2;
+            i--;
+        } else if (strcmp(argv[i], "--lint-unsafe") == 0) {
+            g_lint_unsafe_enabled = true;
+            g_unsafe_warn_nested = true;
+            /* Remove from argv for command parsing */
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strncmp(argv[i], "--lint-unsafe-max-lines=", 24) == 0) {
+            g_lint_unsafe_enabled = true;
+            g_unsafe_max_lines = (uint32_t)atoi(argv[i] + 24);
+            /* Remove from argv for command parsing */
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--require-unsafe-docs") == 0) {
+            g_lint_unsafe_enabled = true;
+            g_unsafe_require_safety = true;
+            /* Remove from argv for command parsing */
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--unsafe-stats") == 0) {
+            g_lint_unsafe_enabled = true;
+            g_unsafe_stats_enabled = true;
+            /* Remove from argv for command parsing */
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
             i--;
         }
     }
