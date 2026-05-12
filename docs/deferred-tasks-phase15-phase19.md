@@ -1016,10 +1016,14 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 - [x] Add fixture: `taskgroup-basic.tur` — spawn 2 tasks, await completion.
 - [x] Add fixture: `taskgroup-cancel.tur` — manual cancel, verify tasks stop.
 - [x] Add fixture: `taskgroup-timeout.tur` — timeout-based cancel.
-- [ ] Add fixture: `taskgroup-nested.tur` — nested task groups with propagation.
-- [ ] Add fixture: `taskgroup-error-propagate.tur` — child error cancels siblings.
-- [ ] Add fixture: `taskgroup-panic-propagate.tur` — panic in child cancels group.
-- [ ] Add codegen snapshots for `TaskGroup::with` macro expansion.
+- [x] Add fixture: `taskgroup-nested.tur` — nested task groups with propagation.
+  - Implemented: Tests creating outer and inner task groups, spawning tasks in both, and waiting for completion.
+- [x] Add fixture: `taskgroup-error-propagate.tur` — child error cancels siblings.
+  - Implemented: Tests cancelling a group with error reason (3) and verifying the reason.
+- [x] Add fixture: `taskgroup-panic-propagate.tur` — panic in child cancels group.
+  - Implemented: Tests cancelling a group with panic reason (1) and verifying the reason.
+- [x] Add codegen snapshots for `TaskGroup::with` macro expansion.
+  - Implemented: `taskgroup-with-macro` fixture with expected.c snapshot showing macro inlines body followed by `tg-wait`.
 
 ##### TG-006 — Integration with async/await
 - [ ] Ensure `async` blocks can be spawned into `TaskGroup`.
