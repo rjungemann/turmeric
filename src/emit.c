@@ -3589,8 +3589,8 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    FiberBlock *f = (FiberBlock *)(((uintptr_t)hi << 32) | (uintptr_t)(uint32_t)lo);\n");
     buf_puts(out, "    f->entry_fn();\n");
     buf_puts(out, "    f->done = 1;\n");
-    /* Phase T22: Notify task group on completion */
-    buf_puts(out, "    tur_task_group_notify_done(f->task_group);\n");
+    /* Phase T22: Notify task group on completion (TG-002: only if task_group is set) */
+    buf_puts(out, "    if (f->task_group) tur_task_group_notify_done(f->task_group);\n");
     buf_puts(out, "    swapcontext(&f->ctx, &f->caller_ctx);\n");
     buf_puts(out, "    abort();\n");
     buf_puts(out, "}\n\n");
