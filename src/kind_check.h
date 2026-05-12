@@ -25,4 +25,17 @@
  */
 int kind_check_pass(Arena *a, Expr *program);
 
+/* Phase HKT-P1: Infer the result kind of a type application (type-app fn arg).
+ *
+ * fn_type must have hkt_kind == KIND_ARROW or KIND_ARROW2:
+ *   KIND_ARROW  (fn : * -> *)   applied to one arg → result kind KIND_STAR
+ *   KIND_ARROW2 (fn : * -> * -> *) applied to one arg → result kind KIND_ARROW
+ *
+ * Emits TUR_E0012_KIND_MISMATCH and returns KIND_STAR if fn_type has KIND_STAR
+ * (cannot apply a concrete type).
+ *
+ * 'span' is used for diagnostics.
+ */
+Kind kind_of_type_app(Type fn_type, Type arg_type, Span span);
+
 #endif /* TUR_KIND_CHECK_H */
