@@ -3354,10 +3354,17 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "        abort();\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    tur_panic_in_progress = 1;\n");
-    buf_puts(out, "    fprintf(stderr, \"panic: %s\\n\", msg ? msg : \"(no message)\");\n");
+    buf_puts(out, "    fprintf(stderr, \"panic at %s:%d: %s\\n\", __FILE__, __LINE__, msg ? msg : \"(no message)\");\n");
     buf_puts(out, "    if (global_panic_frame) {\n");
     buf_puts(out, "        tur_frame_fire_chain(global_panic_frame);\n");
     buf_puts(out, "    }\n");
+    buf_puts(out, "    abort();\n");
+    buf_puts(out, "}\n\n");
+
+    /* Phase R5: tur_panic_abort for #[no-unwind] */
+    buf_puts(out, "/* Phase R5: tur_panic_abort - no unwinding, immediate abort */\n");
+    buf_puts(out, "static void tur_panic_abort(const char *msg) {\n");
+    buf_puts(out, "    fprintf(stderr, \"panic (no unwind): %s\\n\", msg ? msg : \"(no message)\");\n");
     buf_puts(out, "    abort();\n");
     buf_puts(out, "}\n\n");
 
