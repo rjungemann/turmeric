@@ -1605,9 +1605,9 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             if (e->as.cont_pred_.expr->type.kind == TY_CONT) {
                 buf_printf(body, "bool %s = !tur_cont_consumed((tur_cont *)(intptr_t)%s);\n", tmp, inner);
             } else {
-                /* Phase 19 dummy k — statically always live */
-                buf_printf(body, "bool %s = true; /* cont? on Phase-19 k is always true */\n", tmp);
-                (void)inner;
+                /* Phase P19-5: Phase-19 k is a TurContK* cast to int64_t.
+                 * Check the consumed flag for runtime freshness verification. */
+                buf_printf(body, "bool %s = !((TurContK *)(intptr_t)%s)->consumed;\n", tmp, inner);
             }
             free(inner);
             return tmp;
@@ -1853,10 +1853,18 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * handler body; it returns its value argument (k is a dummy int).
              * The handler function returns this value to tur_effect_perform,
              * which returns it as the result of perform at the call site.
+             *
+             * Phase P19-5 k-freshness: for Phase-19 TY_INT k values (which are
+             * actually TurContK* cast to int64_t), mark the continuation token
+             * as consumed before returning, enabling (cont? k) runtime checks.
              */
             if (e->as.resume_.resume) {
-                /* Evaluate k (side-effect only, value discarded) */
                 char *k_var = emit_value(ctx, body, e->as.resume_.resume->k);
+                /* Mark TurContK consumed for Phase 19 k (TY_INT with CK_MOVE). */
+                if (e->as.resume_.resume->k->type.kind == TY_INT) {
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "((TurContK *)(intptr_t)%s)->consumed = true;\n", k_var);
+                }
                 free(k_var);
                 /* Return the resume value */
                 return emit_value(ctx, body, e->as.resume_.resume->value);
@@ -1865,10 +1873,15 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         case EX_DISCONTINUE: {
             /* (discontinue k exception) - discontinue with exception.
-             * v1: throw the exception; k (dummy int) is discarded.
+             * v1: throw the exception; k is discarded.
+             * Phase P19-5: mark TurContK consumed for Phase-19 TY_INT k values.
              */
             if (e->as.discontinue_.discontinue) {
                 char *k_var = emit_value(ctx, body, e->as.discontinue_.discontinue->k);
+                if (e->as.discontinue_.discontinue->k->type.kind == TY_INT) {
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "((TurContK *)(intptr_t)%s)->consumed = true;\n", k_var);
+                }
                 free(k_var);
                 char *e_var = emit_value(ctx, body, e->as.discontinue_.discontinue->exception);
                 indent_buf(body, ctx->indent);
@@ -2834,6 +2847,11 @@ int emit_program(Buf *out, const Expr *program) {
 
     /* Phase 19: Effect handler chain */
     buf_puts(out, "/* Phase 19: Algebraic effect handler chain */\n");
+    /* Phase P19-5: TurContK — a lightweight per-invocation continuation token.
+     * Each tur_effect_perform call allocates one on the stack and passes its
+     * address as `k` to the handler function.  `consumed` is set by (resume k v)
+     * so that (cont? k) can verify freshness at runtime. */
+    buf_puts(out, "typedef struct { bool consumed; } TurContK;\n\n");
     buf_puts(out, "typedef struct EffectHandlerCase EffectHandlerCase;\n");
     buf_puts(out, "struct EffectHandlerCase {\n");
     buf_puts(out, "    const char *effect_name;\n");
@@ -2852,7 +2870,9 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    while (frame) {\n");
     buf_puts(out, "        for (int __i = 0; __i < frame->n_cases; __i++) {\n");
     buf_puts(out, "            if (strcmp(frame->cases[__i].effect_name, name) == 0) {\n");
-    buf_puts(out, "                return frame->cases[__i].handler_fn(args, n_args, 0LL, frame->cases[__i].env);\n");
+    /* Phase P19-5: allocate a fresh TurContK on the stack per invocation */
+    buf_puts(out, "                TurContK __fresh_k = {false};\n");
+    buf_puts(out, "                return frame->cases[__i].handler_fn(args, n_args, (int64_t)(intptr_t)&__fresh_k, frame->cases[__i].env);\n");
     buf_puts(out, "            }\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "        frame = frame->parent;\n");

@@ -10,6 +10,8 @@ void borrow_check_ctx_init(BorrowCheckCtx *ctx, const LifetimeContext *lifetime_
     ctx->lifetime_ctx = lifetime_ctx;
     ctx->scope = scope;
     ctx->error_count = 0;
+    ctx->handler_case = NULL;
+    ctx->only_handler_captures = false;
 }
 
 /* Check if a type is a borrow type (&T or &mut T) */
@@ -88,18 +90,64 @@ bool borrow_check_program(const Expr *program) {
     return ctx.error_count == 0;
 }
 
+/* Phase P19-7: Always-on check for borrow captures in effect handler case
+ * bodies.  Handler case bodies are emitted as top-level C static functions
+ * with no access to the enclosing stack frame, so any borrow-typed variable
+ * from the outer scope referenced inside a handler body is an error.
+ * This function runs unconditionally (not gated by borrow_check_set_enabled). */
+bool borrow_check_effect_handler_captures(const Expr *program) {
+    if (!program || program->kind != EX_PROGRAM) {
+        return true;
+    }
+    BorrowCheckCtx ctx;
+    borrow_check_ctx_init(&ctx, NULL, NULL);
+    ctx.only_handler_captures = true;
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        borrow_check_expr_recursive(&ctx, program->as.program.items[i]);
+    }
+    return ctx.error_count == 0;
+}
+
 /* Check a variable reference */
 static bool borrow_check_var(BorrowCheckCtx *ctx, const Expr *e) {
     const Binding *b = e->as.var.binding;
     
-    /* Check if this is a moved binding */
-    if (b->is_moved) {
+    /* Check if this is a moved binding (skip in handler-captures-only mode,
+     * as elab.c already emits use-after-move diagnostics). */
+    if (!ctx->only_handler_captures && b->is_moved) {
         diag_emit(DIAG_ERROR, e->span,
                   "use-after-move of '%s' - value was moved", b->name->name);
         ctx->error_count++;
         return false;
     }
     
+    /* Phase P19-7: Check borrow capture into effect handler case body.
+     * Handler case bodies are emitted as top-level C static functions with no
+     * access to the enclosing stack frame.  A binding with a borrow type that
+     * originates outside the handler case (i.e. is not one of its own
+     * param_bindings or k_binding) cannot be used inside the case body. */
+    if (ctx->handler_case && type_is_borrow(b->type)) {
+        const HandleCase *hc = ctx->handler_case;
+        bool is_local = false;
+        if (hc->k_binding && b == hc->k_binding) {
+            is_local = true;
+        }
+        for (uint8_t i = 0; i < hc->n_params && !is_local; i++) {
+            if (hc->param_bindings && hc->param_bindings[i] == b) {
+                is_local = true;
+            }
+        }
+        if (!is_local) {
+            diag_emit(DIAG_ERROR, e->span,
+                      "borrow '%s' cannot be captured by an effect handler case: "
+                      "handler cases are emitted as separate functions and have no "
+                      "access to the enclosing stack frame",
+                      b->name->name);
+            ctx->error_count++;
+            return false;
+        }
+    }
+
     /* Check if this is a borrow type */
     if (type_is_borrow(e->type)) {
         /* The borrow should still be valid in the current scope */
@@ -156,7 +204,7 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
         case EX_SET:
             if (!borrow_check_expr_recursive(ctx, e->as.set_.value)) return false;
             /* Check if target is moved */
-            if (e->as.set_.target->is_moved) {
+            if (!ctx->only_handler_captures && e->as.set_.target->is_moved) {
                 diag_emit(DIAG_ERROR, e->span,
                           "use-after-move of '%s' in set!", e->as.set_.target->name->name);
                 ctx->error_count++;
@@ -184,6 +232,7 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
             {
                 BorrowCheckCtx fn_ctx;
                 borrow_check_ctx_init(&fn_ctx, &e->as.fn_def_.fn->lifetime_ctx, ctx->scope);
+                fn_ctx.only_handler_captures = ctx->only_handler_captures;
                 if (!borrow_check_fn(&fn_ctx, e->as.fn_def_.fn)) {
                     ctx->error_count += fn_ctx.error_count;
                     return false;
@@ -196,6 +245,7 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
                 FnDef *fn_def = e->as.fn_.fn;
                 BorrowCheckCtx fn_ctx;
                 borrow_check_ctx_init(&fn_ctx, &fn_def->lifetime_ctx, ctx->scope);
+                fn_ctx.only_handler_captures = ctx->only_handler_captures;
                 if (!borrow_check_fn(&fn_ctx, fn_def)) {
                     ctx->error_count += fn_ctx.error_count;
                     return false;
@@ -216,6 +266,7 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
             if (e->as.closure_.closure && e->as.closure_.closure->fn) {
                 BorrowCheckCtx closure_ctx;
                 borrow_check_ctx_init(&closure_ctx, &e->as.closure_.closure->fn->lifetime_ctx, ctx->scope);
+                closure_ctx.only_handler_captures = ctx->only_handler_captures;
                 if (!borrow_check_fn(&closure_ctx, e->as.closure_.closure->fn)) {
                     ctx->error_count += closure_ctx.error_count;
                     return false;
@@ -359,12 +410,23 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
             }
             return true;
         case EX_HANDLE:
-            /* Check the handled body and all case handlers */
+            /* Check the handled body (no special capture restrictions) */
             if (!borrow_check_expr_recursive(ctx, e->as.handle_.handle->body)) {
                 return false;
             }
+            /* Phase P19-7: Check each handler case body in a sub-context that
+             * marks it as being inside a handler case.  Any variable reference
+             * whose type is a borrow (&T / &mut T) and whose binding originates
+             * outside the case (not in param_bindings or k_binding) is illegal
+             * because handler case bodies are emitted as top-level C static
+             * functions with no access to the enclosing stack frame. */
             for (uint8_t i = 0; i < e->as.handle_.handle->n_cases; i++) {
-                if (!borrow_check_expr_recursive(ctx, e->as.handle_.handle->cases[i].body)) {
+                const HandleCase *hc = &e->as.handle_.handle->cases[i];
+                const HandleCase *prev_hc = ctx->handler_case;
+                ctx->handler_case = hc;
+                bool ok = borrow_check_expr_recursive(ctx, hc->body);
+                ctx->handler_case = prev_hc;
+                if (!ok) {
                     return false;
                 }
             }
@@ -404,6 +466,7 @@ bool borrow_check_fn(BorrowCheckCtx *ctx, const FnDef *fn) {
     /* Check function body */
     BorrowCheckCtx body_ctx;
     borrow_check_ctx_init(&body_ctx, &fn->lifetime_ctx, ctx->scope);
+    body_ctx.only_handler_captures = ctx->only_handler_captures;
     
     if (fn->body && !borrow_check_expr(&body_ctx, fn->body)) {
         ctx->error_count += body_ctx.error_count;

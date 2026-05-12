@@ -176,6 +176,8 @@ static void tur_panic(const char *msg) {
 }
 
 /* Phase 19: Algebraic effect handler chain */
+typedef struct { bool consumed; } TurContK;
+
 typedef struct EffectHandlerCase EffectHandlerCase;
 struct EffectHandlerCase {
     const char *effect_name;
@@ -197,7 +199,8 @@ static int64_t tur_effect_perform(const char *name, int64_t *args, int n_args) {
     while (frame) {
         for (int __i = 0; __i < frame->n_cases; __i++) {
             if (strcmp(frame->cases[__i].effect_name, name) == 0) {
-                return frame->cases[__i].handler_fn(args, n_args, 0LL, frame->cases[__i].env);
+                TurContK __fresh_k = {false};
+                return frame->cases[__i].handler_fn(args, n_args, (int64_t)(intptr_t)&__fresh_k, frame->cases[__i].env);
             }
         }
         frame = frame->parent;
@@ -560,6 +563,7 @@ static int64_t use_both();
 static int64_t __effect_handler_4(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_4(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
     int64_t k_2 = __k;
+    ((TurContK *)(intptr_t)k_2)->consumed = true;
     return (int64_t)INT64_C(41);
 }
 
@@ -568,6 +572,7 @@ static int64_t __effect_handler_5(int64_t *__effect_args, int __n_effect_args, i
     int64_t x_3 = (int64_t)__effect_args[0];
     int64_t k_4 = __k;
     printf("%lld\n", (long long)(x_3));
+    ((TurContK *)(intptr_t)k_4)->consumed = true;
     return 0;
 }
 

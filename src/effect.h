@@ -115,4 +115,46 @@ Effect *effect_env_lookup(EffectEnv *env, const Symbol *name);
 /* Check if an effect is valid (exists in environment) */
 bool effect_env_contains(EffectEnv *env, const Symbol *name);
 
+/* ---------------------------------------------------------------------------
+ * Phase P19-4: Effect-row substitution for row-variable unification.
+ * An EffectRowSubst maps effect-row variables (Symbol names) to concrete or
+ * partially-solved EffectRow values.  Used during effect-row inference to
+ * propagate constraints when a polymorphic callee is instantiated.
+ * --------------------------------------------------------------------------- */
+
+#define EFFECT_ROW_SUBST_CAP 32
+
+typedef struct {
+    const Symbol *var;   /* Row-variable name */
+    EffectRow    *row;   /* The row it has been bound to */
+} EffectRowSubstEntry;
+
+typedef struct {
+    EffectRowSubstEntry entries[EFFECT_ROW_SUBST_CAP];
+    uint32_t            n;
+} EffectRowSubst;
+
+/* Allocate a fresh, empty substitution on arena `a`. */
+EffectRowSubst *effect_row_subst_new(Arena *a);
+
+/* Bind variable `var` to `row` in `subst`.
+ * If `var` is already bound, the existing binding is kept (first wins). */
+void effect_row_subst_bind(EffectRowSubst *subst,
+                           const Symbol *var, EffectRow *row);
+
+/* Look up `var` in `subst`.  Returns NULL if not bound. */
+EffectRow *effect_row_subst_lookup(const EffectRowSubst *subst,
+                                   const Symbol *var);
+
+/* Unify two effect rows, recording bindings for any row variables in `subst`.
+ * Returns true on success, false if the rows are incompatible (e.g. two
+ * different concrete effects conflict).  Arena `a` is used for allocations. */
+bool effect_row_unify(EffectRow *r1, EffectRow *r2,
+                      EffectRowSubst *subst, Arena *a);
+
+/* Apply `subst` to `row`, replacing bound ERK_VAR nodes with their values.
+ * Unbound variables are left as ERK_VAR.  Returns a new EffectRow on `a`. */
+EffectRow *effect_row_apply_subst(EffectRow *row,
+                                  const EffectRowSubst *subst, Arena *a);
+
 #endif /* TUR_EFFECT_H */

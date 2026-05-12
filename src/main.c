@@ -119,6 +119,9 @@ static int run_core_passes(PassContext *ctx) {
         case PASS_BORROW_CHECK:
             /* Phase 14: ownership, move, and borrow analysis. */
             if (!borrow_check_program(ctx->prog)) return 1;
+            /* Phase P19-7: Always-on check that handler case bodies do not
+             * capture borrow-typed variables from the enclosing scope. */
+            if (!borrow_check_effect_handler_captures(ctx->prog)) return 1;
             break;
         }
     }

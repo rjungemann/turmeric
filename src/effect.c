@@ -277,3 +277,95 @@ Effect *effect_env_lookup(EffectEnv *env, const Symbol *name) {
 bool effect_env_contains(EffectEnv *env, const Symbol *name) {
     return effect_env_lookup(env, name) != NULL;
 }
+
+/* ---------------------------------------------------------------------------
+ * Phase P19-4: EffectRowSubst — effect-row variable unification
+ * --------------------------------------------------------------------------- */
+
+EffectRowSubst *effect_row_subst_new(Arena *a) {
+    EffectRowSubst *s = arena_alloc(a, sizeof(EffectRowSubst));
+    s->n = 0;
+    return s;
+}
+
+void effect_row_subst_bind(EffectRowSubst *subst,
+                            const Symbol *var, EffectRow *row) {
+    if (!subst || !var || !row) return;
+    /* First-wins: do not overwrite an existing binding. */
+    for (uint32_t i = 0; i < subst->n; i++) {
+        if (subst->entries[i].var == var) return;
+    }
+    if (subst->n >= EFFECT_ROW_SUBST_CAP) return; /* silently drop when full */
+    subst->entries[subst->n].var = var;
+    subst->entries[subst->n].row = row;
+    subst->n++;
+}
+
+EffectRow *effect_row_subst_lookup(const EffectRowSubst *subst,
+                                    const Symbol *var) {
+    if (!subst || !var) return NULL;
+    for (uint32_t i = 0; i < subst->n; i++) {
+        if (subst->entries[i].var == var)
+            return subst->entries[i].row;
+    }
+    return NULL;
+}
+
+bool effect_row_unify(EffectRow *r1, EffectRow *r2,
+                      EffectRowSubst *subst, Arena *a) {
+    if (!r1 || !r2) return true; /* NULL rows unify trivially */
+
+    /* Simplify: apply existing substitutions first. */
+    if (r1->kind == ERK_VAR) {
+        EffectRow *bound = effect_row_subst_lookup(subst, r1->as.var.var_name);
+        if (bound) return effect_row_unify(bound, r2, subst, a);
+        /* r1 is an unbound variable: bind it to r2 */
+        effect_row_subst_bind(subst, r1->as.var.var_name, r2);
+        return true;
+    }
+    if (r2->kind == ERK_VAR) {
+        EffectRow *bound = effect_row_subst_lookup(subst, r2->as.var.var_name);
+        if (bound) return effect_row_unify(r1, bound, subst, a);
+        /* r2 is an unbound variable: bind it to r1 */
+        effect_row_subst_bind(subst, r2->as.var.var_name, r1);
+        return true;
+    }
+
+    /* Both concrete: succeed (we allow concrete rows to be supersets; exact
+     * subset checking is done separately in effect_row_check_declared). */
+    if (r1->kind == ERK_EMPTY && r2->kind == ERK_EMPTY) return true;
+    if (r1->kind == ERK_EMPTY || r2->kind == ERK_EMPTY) {
+        /* One empty, one non-empty: succeed — the non-empty row just means
+         * the callee uses those effects at the call site. */
+        return true;
+    }
+    /* Both concrete (or union): succeed permissively in v1. */
+    (void)a;
+    return true;
+}
+
+EffectRow *effect_row_apply_subst(EffectRow *row,
+                                   const EffectRowSubst *subst, Arena *a) {
+    if (!row) return NULL;
+    switch (row->kind) {
+    case ERK_EMPTY:
+    case ERK_CONCRETE:
+        return row; /* No variables — return unchanged. */
+
+    case ERK_VAR: {
+        EffectRow *bound = effect_row_subst_lookup(subst, row->as.var.var_name);
+        if (bound) {
+            /* Recursively apply substitution to the bound value. */
+            return effect_row_apply_subst(bound, subst, a);
+        }
+        return row; /* Unbound — keep as-is. */
+    }
+
+    case ERK_UNION: {
+        EffectRow *left  = effect_row_apply_subst(row->as.union_.left,  subst, a);
+        EffectRow *right = effect_row_apply_subst(row->as.union_.right, subst, a);
+        return effect_row_union(a, left, right);
+    }
+    }
+    return row; /* unreachable */
+}

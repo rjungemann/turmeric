@@ -176,6 +176,8 @@ static void tur_panic(const char *msg) {
 }
 
 /* Phase 19: Algebraic effect handler chain */
+typedef struct { bool consumed; } TurContK;
+
 typedef struct EffectHandlerCase EffectHandlerCase;
 struct EffectHandlerCase {
     const char *effect_name;
@@ -197,7 +199,8 @@ static int64_t tur_effect_perform(const char *name, int64_t *args, int n_args) {
     while (frame) {
         for (int __i = 0; __i < frame->n_cases; __i++) {
             if (strcmp(frame->cases[__i].effect_name, name) == 0) {
-                return frame->cases[__i].handler_fn(args, n_args, 0LL, frame->cases[__i].env);
+                TurContK __fresh_k = {false};
+                return frame->cases[__i].handler_fn(args, n_args, (int64_t)(intptr_t)&__fresh_k, frame->cases[__i].env);
             }
         }
         frame = frame->parent;

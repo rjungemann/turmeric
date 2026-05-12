@@ -47,11 +47,16 @@ static FnDef *fn_index_lookup(const FnIndex *idx, const Binding *b) {
 
 /* Walk an expression tree and collect into *row all effects that are directly
  * performed (EX_PERFORM) or transitively performed (EX_CALL to a known defn
- * whose inferred row is already populated). */
+ * whose inferred row is already populated).
+ *
+ * Phase P19-4: `subst` is an effect-row substitution used to resolve row
+ * variables when a polymorphic callee is instantiated at a call site.  Pass a
+ * fresh empty EffectRowSubst for each top-level function analysis. */
 static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
                                           EffectRow *row,
                                           const FnIndex *idx,
-                                          EffectEnv *env) {
+                                          EffectEnv *env,
+                                          EffectRowSubst *subst) {
     if (!e) return row;
 
     switch (e->kind) {
@@ -65,90 +70,106 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
         }
         /* Also recurse into arguments. */
         for (uint8_t i = 0; i < p->n_args; i++) {
-            row = collect_effects_in_expr(a, p->args[i], row, idx, env);
+            row = collect_effects_in_expr(a, p->args[i], row, idx, env, subst);
         }
         return row;
     }
 
     case EX_CALL: {
-        /* Propagate from a known callee's already-inferred row. */
+        /* Phase P19-4: propagate from a known callee's already-inferred row,
+         * applying any row-variable substitutions before merging. */
         FnDef *callee = fn_index_lookup(idx, e->as.call_.fn_binding);
         if (callee && callee->inferred_effect_row) {
-            row = effect_row_merge(a, row, callee->inferred_effect_row);
+            /* Apply substitution to resolve any row variables in the callee's
+             * inferred row (e.g., from a polymorphic higher-order parameter). */
+            EffectRow *callee_row =
+                effect_row_apply_subst(callee->inferred_effect_row, subst, a);
+            row = effect_row_merge(a, row, callee_row);
+        } else if (e->as.call_.fn_binding) {
+            /* Callee not in the top-level index (e.g., a higher-order param).
+             * If the binding's declared effect row has been resolved via the
+             * current substitution, contribute those effects. */
+            EffectRow *decl_row = e->as.call_.fn_binding->type.as.fn.effect_row;
+            if (decl_row) {
+                EffectRow *resolved = effect_row_apply_subst(decl_row, subst, a);
+                if (resolved && resolved->kind == ERK_CONCRETE) {
+                    row = effect_row_merge(a, row, resolved);
+                }
+            }
         }
         /* Recurse into arguments. */
         for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
-            row = collect_effects_in_expr(a, e->as.call_.args[i], row, idx, env);
+            row = collect_effects_in_expr(a, e->as.call_.args[i], row, idx, env, subst);
         }
         return row;
     }
 
     case EX_LET: {
         for (uint32_t i = 0; i < e->as.let_.n; i++) {
-            row = collect_effects_in_expr(a, e->as.let_.bindings[i].init, row, idx, env);
+            row = collect_effects_in_expr(a, e->as.let_.bindings[i].init, row, idx, env, subst);
         }
-        return collect_effects_in_expr(a, e->as.let_.body, row, idx, env);
+        return collect_effects_in_expr(a, e->as.let_.body, row, idx, env, subst);
     }
 
     case EX_DO: {
         for (uint32_t i = 0; i < e->as.do_.n; i++) {
-            row = collect_effects_in_expr(a, e->as.do_.items[i], row, idx, env);
+            row = collect_effects_in_expr(a, e->as.do_.items[i], row, idx, env, subst);
         }
         return row;
     }
 
     case EX_IF:
-        row = collect_effects_in_expr(a, e->as.if_.cond,       row, idx, env);
-        row = collect_effects_in_expr(a, e->as.if_.then_,      row, idx, env);
-        row = collect_effects_in_expr(a, e->as.if_.else_or_null, row, idx, env);
+        row = collect_effects_in_expr(a, e->as.if_.cond,       row, idx, env, subst);
+        row = collect_effects_in_expr(a, e->as.if_.then_,      row, idx, env, subst);
+        row = collect_effects_in_expr(a, e->as.if_.else_or_null, row, idx, env, subst);
         return row;
 
     case EX_WHILE:
-        row = collect_effects_in_expr(a, e->as.while_.cond, row, idx, env);
-        row = collect_effects_in_expr(a, e->as.while_.body, row, idx, env);
+        row = collect_effects_in_expr(a, e->as.while_.cond, row, idx, env, subst);
+        row = collect_effects_in_expr(a, e->as.while_.body, row, idx, env, subst);
         return row;
 
     case EX_SET:
-        return collect_effects_in_expr(a, e->as.set_.value, row, idx, env);
+        return collect_effects_in_expr(a, e->as.set_.value, row, idx, env, subst);
 
     case EX_DEF:
-        return collect_effects_in_expr(a, e->as.def_.init, row, idx, env);
+        return collect_effects_in_expr(a, e->as.def_.init, row, idx, env, subst);
 
     case EX_BUILTIN:
         for (uint32_t i = 0; i < e->as.builtin.n; i++) {
-            row = collect_effects_in_expr(a, e->as.builtin.args[i], row, idx, env);
+            row = collect_effects_in_expr(a, e->as.builtin.args[i], row, idx, env, subst);
         }
         return row;
 
     case EX_RETURN:
-        return collect_effects_in_expr(a, e->as.return_.value, row, idx, env);
+        return collect_effects_in_expr(a, e->as.return_.value, row, idx, env, subst);
 
     case EX_THROW:
-        return collect_effects_in_expr(a, e->as.throw_.payload, row, idx, env);
+        return collect_effects_in_expr(a, e->as.throw_.payload, row, idx, env, subst);
 
     case EX_PANIC:
-        return collect_effects_in_expr(a, e->as.panic_.payload, row, idx, env);
+        return collect_effects_in_expr(a, e->as.panic_.payload, row, idx, env, subst);
 
     case EX_TRY:
-        row = collect_effects_in_expr(a, e->as.try_.body, row, idx, env);
+        row = collect_effects_in_expr(a, e->as.try_.body, row, idx, env, subst);
         for (uint8_t i = 0; i < e->as.try_.n_clauses; i++) {
-            row = collect_effects_in_expr(a, e->as.try_.clauses[i].handler, row, idx, env);
+            row = collect_effects_in_expr(a, e->as.try_.clauses[i].handler, row, idx, env, subst);
         }
-        return collect_effects_in_expr(a, e->as.try_.finally_body, row, idx, env);
+        return collect_effects_in_expr(a, e->as.try_.finally_body, row, idx, env, subst);
 
     case EX_DEFER:
-        return collect_effects_in_expr(a, e->as.defer_.body, row, idx, env);
+        return collect_effects_in_expr(a, e->as.defer_.body, row, idx, env, subst);
 
     case EX_RESET:
-        return collect_effects_in_expr(a, e->as.reset_.body, row, idx, env);
+        return collect_effects_in_expr(a, e->as.reset_.body, row, idx, env, subst);
 
     case EX_SHIFT:
-        row = collect_effects_in_expr(a, e->as.shift_.k_fn, row, idx, env);
-        return collect_effects_in_expr(a, e->as.shift_.body, row, idx, env);
+        row = collect_effects_in_expr(a, e->as.shift_.k_fn, row, idx, env, subst);
+        return collect_effects_in_expr(a, e->as.shift_.body, row, idx, env, subst);
 
     case EX_SHIFT0:
-        row = collect_effects_in_expr(a, e->as.shift0_.k_fn, row, idx, env);
-        return collect_effects_in_expr(a, e->as.shift0_.body, row, idx, env);
+        row = collect_effects_in_expr(a, e->as.shift0_.k_fn, row, idx, env, subst);
+        return collect_effects_in_expr(a, e->as.shift0_.body, row, idx, env, subst);
 
     case EX_HANDLE: {
         /* Effects performed inside a handle body are handled (absorbed) by the
@@ -156,52 +177,52 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
          * For v1 we conservatively treat the whole body as contributing its
          * effects — a more precise analysis is deferred to P19-4. */
         HandleExpr *h = e->as.handle_.handle;
-        row = collect_effects_in_expr(a, h->body, row, idx, env);
+        row = collect_effects_in_expr(a, h->body, row, idx, env, subst);
         for (uint8_t i = 0; i < h->n_cases; i++) {
-            row = collect_effects_in_expr(a, h->cases[i].body, row, idx, env);
+            row = collect_effects_in_expr(a, h->cases[i].body, row, idx, env, subst);
         }
         return row;
     }
 
     case EX_RESUME:
-        row = collect_effects_in_expr(a, e->as.resume_.resume->k, row, idx, env);
-        return collect_effects_in_expr(a, e->as.resume_.resume->value, row, idx, env);
+        row = collect_effects_in_expr(a, e->as.resume_.resume->k, row, idx, env, subst);
+        return collect_effects_in_expr(a, e->as.resume_.resume->value, row, idx, env, subst);
 
     case EX_REF:
-        return collect_effects_in_expr(a, e->as.ref_.expr, row, idx, env);
+        return collect_effects_in_expr(a, e->as.ref_.expr, row, idx, env, subst);
     case EX_DEREF:
-        return collect_effects_in_expr(a, e->as.deref_.expr, row, idx, env);
+        return collect_effects_in_expr(a, e->as.deref_.expr, row, idx, env, subst);
 
     case EX_BORROW_IMMUT:
-        return collect_effects_in_expr(a, e->as.borrow_immut_.expr, row, idx, env);
+        return collect_effects_in_expr(a, e->as.borrow_immut_.expr, row, idx, env, subst);
     case EX_BORROW_MUT:
-        return collect_effects_in_expr(a, e->as.borrow_mut_.expr, row, idx, env);
+        return collect_effects_in_expr(a, e->as.borrow_mut_.expr, row, idx, env, subst);
 
     case EX_RC_OF:
-        return collect_effects_in_expr(a, e->as.rc_of_.expr, row, idx, env);
+        return collect_effects_in_expr(a, e->as.rc_of_.expr, row, idx, env, subst);
     case EX_RC_CLONE:
-        return collect_effects_in_expr(a, e->as.rc_clone_.expr, row, idx, env);
+        return collect_effects_in_expr(a, e->as.rc_clone_.expr, row, idx, env, subst);
     case EX_RC_DROP:
-        return collect_effects_in_expr(a, e->as.rc_drop_.expr, row, idx, env);
+        return collect_effects_in_expr(a, e->as.rc_drop_.expr, row, idx, env, subst);
     case EX_RC_PTR:
-        return collect_effects_in_expr(a, e->as.rc_ptr_.expr, row, idx, env);
+        return collect_effects_in_expr(a, e->as.rc_ptr_.expr, row, idx, env, subst);
     case EX_RC_COUNT:
-        return collect_effects_in_expr(a, e->as.rc_count_.expr, row, idx, env);
+        return collect_effects_in_expr(a, e->as.rc_count_.expr, row, idx, env, subst);
     case EX_RC_FROM_REF:
-        return collect_effects_in_expr(a, e->as.rc_from_ref_.expr, row, idx, env);
+        return collect_effects_in_expr(a, e->as.rc_from_ref_.expr, row, idx, env, subst);
     case EX_REF_FROM_RC:
-        return collect_effects_in_expr(a, e->as.ref_from_rc_.expr, row, idx, env);
+        return collect_effects_in_expr(a, e->as.ref_from_rc_.expr, row, idx, env, subst);
     case EX_WEAK:
-        return collect_effects_in_expr(a, e->as.weak_.expr, row, idx, env);
+        return collect_effects_in_expr(a, e->as.weak_.expr, row, idx, env, subst);
     case EX_WEAK_UPGRADE:
-        return collect_effects_in_expr(a, e->as.weak_upgrade_.expr, row, idx, env);
+        return collect_effects_in_expr(a, e->as.weak_upgrade_.expr, row, idx, env, subst);
     case EX_WEAK_PRED:
-        return collect_effects_in_expr(a, e->as.weak_pred_.expr, row, idx, env);
+        return collect_effects_in_expr(a, e->as.weak_pred_.expr, row, idx, env, subst);
     case EX_REF_PRED:
-        return collect_effects_in_expr(a, e->as.ref_pred_.expr, row, idx, env);
+        return collect_effects_in_expr(a, e->as.ref_pred_.expr, row, idx, env, subst);
 
     case EX_CLOSURE:
-        return collect_effects_in_expr(a, e->as.closure_.closure->fn->body, row, idx, env);
+        return collect_effects_in_expr(a, e->as.closure_.closure->fn->body, row, idx, env, subst);
 
     case EX_FN_DEF:
         /* Inner defn: do not recurse — that defn is processed separately. */
@@ -209,23 +230,23 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
 
     case EX_MAKE_STRUCT:
         for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++) {
-            row = collect_effects_in_expr(a, e->as.make_struct_.field_values[i], row, idx, env);
+            row = collect_effects_in_expr(a, e->as.make_struct_.field_values[i], row, idx, env, subst);
         }
         return row;
 
     case EX_GET_FIELD:
-        return collect_effects_in_expr(a, e->as.get_field_.struct_expr, row, idx, env);
+        return collect_effects_in_expr(a, e->as.get_field_.struct_expr, row, idx, env, subst);
 
     case EX_CONT_PRED:
-        return collect_effects_in_expr(a, e->as.cont_pred_.expr, row, idx, env);
+        return collect_effects_in_expr(a, e->as.cont_pred_.expr, row, idx, env, subst);
 
     case EX_SET_DEREF:
-        row = collect_effects_in_expr(a, e->as.set_deref_.ref,   row, idx, env);
-        return collect_effects_in_expr(a, e->as.set_deref_.value, row, idx, env);
+        row = collect_effects_in_expr(a, e->as.set_deref_.ref,   row, idx, env, subst);
+        return collect_effects_in_expr(a, e->as.set_deref_.value, row, idx, env, subst);
 
     case EX_DISCONTINUE:
-        row = collect_effects_in_expr(a, e->as.discontinue_.discontinue->k,         row, idx, env);
-        return collect_effects_in_expr(a, e->as.discontinue_.discontinue->exception, row, idx, env);
+        row = collect_effects_in_expr(a, e->as.discontinue_.discontinue->k,         row, idx, env, subst);
+        return collect_effects_in_expr(a, e->as.discontinue_.discontinue->exception, row, idx, env, subst);
 
     default:
         return row;
@@ -333,9 +354,13 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
 
             FnDef *fn = item->as.fn_def_.fn;
 
+            /* Phase P19-4: create a fresh substitution for each function analysis.
+             * This allows row-variable bindings to be computed per-invocation. */
+            EffectRowSubst *subst = effect_row_subst_new(a);
+
             /* Start with the empty row for this iteration. */
             EffectRow *fresh = collect_effects_in_expr(
-                a, fn->body, effect_row_empty(a), &idx, env);
+                a, fn->body, effect_row_empty(a), &idx, env, subst);
 
             /* Check if the row grew compared to the previous iteration. */
             EffectRow *prev = fn->inferred_effect_row;

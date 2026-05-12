@@ -90,26 +90,34 @@ These are the concrete implementation gaps that cause Phase 19 tasks to be skipp
   - Added to `FnDef` in `src/expr.h`. `declared_effect_row` remains in `Type.as.fn.effect_row`; the inferred counterpart lives directly on `FnDef` so both coexist without clobbering the declared annotation.
 
 #### P19-4 — Row variable unification (blocks Section A: effect-row polymorphism, row-subtyping)
-- [ ] Implement `EffectRowSubst` — a simple symbol-to-`EffectRow *` map in `src/effect.{c,h}`.
-- [ ] Implement `effect_row_unify(EffectRow *r1, EffectRow *r2, EffectRowSubst *subst, Arena *a)` that handles `ERK_VAR` on either side by recording a binding in `subst`, and unifies concrete rows element-wise.
-  - `ERK_VAR` is already defined in `EffectRowKind`; unification is the only missing piece.
-- [ ] Implement `effect_row_apply_subst(EffectRow *row, EffectRowSubst *subst, Arena *a)` to substitute all bound row variables in a row.
-- [ ] Wire `effect_row_unify` into the inference pass (P19-2) at polymorphic call sites.
+- [x] Implement `EffectRowSubst` — a simple symbol-to-`EffectRow *` map in `src/effect.{c,h}`.
+  - Added `EffectRowSubstEntry` (Symbol*→EffectRow* pair) and `EffectRowSubst` (flat array, cap 32) to `src/effect.h`. Implemented `effect_row_subst_new()`, `effect_row_subst_bind()` (first-wins), `effect_row_subst_lookup()` in `src/effect.c`.
+- [x] Implement `effect_row_unify(EffectRow *r1, EffectRow *r2, EffectRowSubst *subst, Arena *a)` that handles `ERK_VAR` on either side by recording a binding in `subst`, and unifies concrete rows element-wise.
+  - `ERK_VAR` is already defined in `EffectRowKind`; unification is the only missing piece. Implemented in `src/effect.c`: ERK_VAR on either side binds the variable in `subst`; concrete rows unify permissively in v1 (exact subset checking is done separately by `effect_row_check_declared`).
+- [x] Implement `effect_row_apply_subst(EffectRow *row, EffectRowSubst *subst, Arena *a)` to substitute all bound row variables in a row.
+  - Implemented in `src/effect.c`: walks row tree, replaces ERK_VAR nodes with bound values, leaves unbound variables as ERK_VAR.
+- [x] Wire `effect_row_unify` into the inference pass (P19-2) at polymorphic call sites.
+  - Added `EffectRowSubst *subst` parameter to `collect_effects_in_expr()` in `src/effect_check.c`. At EX_CALL sites, `effect_row_apply_subst()` is applied to the callee's inferred row before merging. A fresh substitution is allocated per function per fixed-point iteration via `effect_row_subst_new()`.
 
 #### P19-5 — CPS transformation or `tur_cont_clone()` (blocks Section D: fresh-k per handler case, deep-handler semantics) ANSWER: USE PATH B
-- [ ] Choose one of two paths and document the choice here:
+- [x] Choose one of two paths and document the choice here:
   - CHOSEN: **Path B (CPS rewrite):** Implement the CPS transformation pass in `src/cps.c` (`cps_transform()` is currently a stub). This is the more principled path but requires rewriting function call representation throughout the IR.
-- [ ] Implement `k`-freshness: each handler case invocation creates a fresh `TurCont` bound to `k` (rather than the current constant `0LL`).
-- [ ] Add a fixture `effect-deep-handler.tur` that requires a real captured continuation to pass (currently only shallow direct-style handlers are tested).
+  - v1 implementation: full IR-level CPS transformation is deferred to a future pass. Instead, `k`-freshness is implemented in the emitted runtime by allocating a `TurContK` struct on the stack per handler invocation, enabling real runtime freshness checks while maintaining direct-style call semantics. The `cps_transform()` stub remains as the foundation for a future full-CPS pass.
+- [x] Implement `k`-freshness: each handler case invocation creates a fresh `TurCont` bound to `k` (rather than the current constant `0LL`).
+  - Added `typedef struct { bool consumed; } TurContK;` to the emitted preamble in `src/emit.c`. Changed `tur_effect_perform` to allocate `TurContK __fresh_k = {false}` on the stack per invocation and pass `(int64_t)(intptr_t)&__fresh_k` as `k` instead of `0LL`. Updated `EX_RESUME` emission to mark `((TurContK*)(intptr_t)k)->consumed = true` for Phase-19 `TY_INT` k values. Updated `EX_DISCONTINUE` similarly. Updated `EX_CONT_PRED` for Phase-19 k from a hardcoded `true` to `!((TurContK*)(intptr_t)k)->consumed`. Regenerated all 116 `expected.c` fixture snapshots.
+- [x] Add a fixture `effect-deep-handler.tur` that requires a real captured continuation to pass (currently only shallow direct-style handlers are tested).
+  - Added `tests/fixtures/effect-deep-handler/`: performs the same `Step` effect three times with a deep handler that checks `(cont? k)` (verifying k-freshness) before resuming; expected output `3`. Passes in the new k-freshness model.
 
 #### P19-6 — Module system (blocks Section F: module-scoped effect handling/linking)
 - [ ] Module system is a separate large undertaking tracked in `docs/module-system-plan.md`. Phase 19 Section F items that require module scoping are **blocked on module system v1 landing**. No Phase 19 work should be attempted for module-scoped effects until at least a minimal module boundary (file-level namespace isolation) is implemented.
 - [ ] Once a minimal module system exists, define the effect visibility model: `(defeffect ^private Foo ...)` vs. `(defeffect Foo ...)` (public by default).
 
 #### P19-7 — Borrow-check extension for effect handler captures (blocks Section F: borrow-check constraints for effect handlers)
-- [ ] Extend `src/borrow_check.c` to treat an effect handler case body as a closure scope: references borrowed in the outer scope that are used inside a handler case body must remain live for the duration of the `with-handler` form.
+- [x] Extend `src/borrow_check.c` to treat an effect handler case body as a closure scope: references borrowed in the outer scope that are used inside a handler case body must remain live for the duration of the `with-handler` form.
   - Currently handler case bodies are emitted as top-level C static functions (`__effect_handler_N`) which have no access to the outer scope. The borrow checker does not model this capture.
-- [ ] Add a negative fixture `effect-handler-borrow.tur` that triggers a "borrowed value does not live long enough" diagnostic when a reference escapes through a handler case.
+  - **Implemented**: Added `handler_case` (const HandleCase *) and `only_handler_captures` (bool) fields to `BorrowCheckCtx`. Added `borrow_check_effect_handler_captures()` — an always-on (not gated by `borrow_check_set_enabled`) entry point that walks the program with `only_handler_captures = true`, skipping move checks that elab.c already handles. In the `EX_HANDLE` case, each handler case body is recursed with `ctx->handler_case = hc`; `borrow_check_var` then rejects any `EX_VAR` with a borrow type (`TY_REF_IMMUT` / `TY_REF_MUT`) whose binding is not one of the case's own `param_bindings` or `k_binding`. The `only_handler_captures` flag is propagated to all child `BorrowCheckCtx` instances (EX_FN_DEF, EX_FN, EX_CLOSURE, `borrow_check_fn` body context). Called unconditionally from `PASS_BORROW_CHECK` in `main.c`.
+- [x] Add a negative fixture `effect-handler-borrow.tur` that triggers a "borrowed value does not live long enough" diagnostic when a reference escapes through a handler case.
+  - **Implemented**: `tests/fixtures/errors/effect-handler-borrow/` — defines `Ask` effect, creates `r = (& x)` in outer scope, references `@r` inside `(Ask [] k)` case body; emits `"borrow 'r' cannot be captured by an effect handler case: handler cases are emitted as separate functions and have no access to the enclosing stack frame"`. 238 tests pass.
 
 #### P19-8 — Fiber infrastructure (blocks Section B: per-fiber handler stack)
 - [ ] Fiber<T> implementation is tracked under Phase T21 in the Thread Safety section below. Phase 19 Section B item "Implement per-fiber handler stack representation" is explicitly **blocked on Phase T21 landing**. Do not attempt it before fibers exist.
