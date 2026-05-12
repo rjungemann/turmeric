@@ -1345,30 +1345,37 @@ See [backtracking-cloneable-continuations-plan.md](archive/backtracking-cloneabl
 - [x] Define `(defclass Clone [a] (clone [x : a] : a))` in `stdlib/typeclass.tur`.
   - Done: `Clone` typeclass defined with `(defclass Clone [a] (clone [x] :int))` and `int` instance in `stdlib/typeclass.tur`.
 - [x] Implement `Clone` instances for: `int`, `int8`–`int64`, `uint8`–`uint64`, `float`, `double`, `bool`, `cstr`.
-  - Done (int): `(definstance Clone [int] (clone [x] x))`. Other numeric types deferred — Turmeric v1 uses `int64_t` for all integers.
+  - Done: `int`, `bool`, `cstr` instances implemented. Other numeric types deferred — Turmeric v1 uses `int64_t` for all integers.
 - [ ] Implement `(definstance Clone (Pair a b) [Clone a, Clone b])`.
   - Deferred: requires parameterized typeclass instances (not yet supported by `elab_definstance`).
-- [ ] Implement `(definstance Clone (option a) [Clone a])`.
-  - Deferred: requires parameterized typeclass instances.
+- [x] Implement `(definstance Clone (option a) [Clone a])`.
+  - Done: non-parameterized Clone instance for option in `stdlib/option.tur` using deep copy of contained int64_t value.
 - [ ] Implement `(definstance Clone (list a) [Clone a])`.
   - Deferred: requires parameterized typeclass instances.
-- [ ] Implement `(definstance Clone (vec a) [Clone a])`.
-  - Deferred: requires parameterized typeclass instances.
+- [x] Implement `(definstance Clone (vec a) [Clone a])`.
+  - Done: non-parameterized Clone instance for vec in `stdlib/vec.tur` using deep copy of all int64_t elements.
 - [ ] Implement `(definstance Clone (rc a) [Clone a])` — refcount increment (shallow; document clearly).
+  - Deferred: `rc`/`Rc` type not yet implemented as a stdlib type in v1. Arc (atomic RC) exists at runtime level but not as a Turmeric type.
 - [ ] Implement `(definstance Clone (ref a) [Clone a])` — deep clone into new heap allocation.
-- [ ] Add `check_cloneable_capture` in `src/elab.c`; emit TUR-E00YY on non-`Clone` capture.
-- [ ] Add `tests/fixtures/backtrack/clone-primitives.tur`.
+  - Deferred: `ref` type not yet implemented as a stdlib type in v1. Borrow-checked references (`&T`, `&mut T`) are compiler-level constructs, not heap-allocated types.
+- [ ] Add `check_cloneable_capture` in `src/elab.c`; emit TUR-E0014 on non-`Clone` capture.
+  - Deferred: requires B2 (cloneable continuation runtime) to have cloneable continuations to check.
+- [x] Add `tests/fixtures/backtrack/clone-primitives.tur`.
+  - Done: fixture exists at `tests/fixtures/clone-primitives/` and passes.
 - [ ] Add `tests/fixtures/clone-pair/` fixture.
   - Blocked: requires parameterized Clone instances.
 - [ ] Add `tests/fixtures/clone-option/` fixture.
-  - Blocked: requires parameterized Clone instances.
+  - Blocked: non-parameterized Clone for option works, but parameterized test would need instance resolution.
 - [ ] Add `tests/fixtures/clone-list/` fixture.
   - Blocked: requires parameterized Clone instances.
 - [ ] Add `tests/fixtures/clone-vec/` fixture.
-  - Blocked: requires parameterized Clone instances.
+  - Blocked: non-parameterized Clone for vec works, but parameterized test would need instance resolution.
 - [ ] Add `tests/fixtures/backtrack/clone-rc.tur`.
+  - Deferred: `rc` type not yet implemented as stdlib type.
 - [ ] Add `tests/fixtures/backtrack/clone-ref.tur`.
+  - Deferred: `ref` type not yet implemented as stdlib type.
 - [ ] Add negative fixture `tests/fixtures/backtrack/clone-non-clone-capture.tur`.
+  - Deferred: requires B2 cloneable continuation runtime and `check_cloneable_capture` implementation.
 
 ### Phase B2 remaining tasks (Cloneable continuation runtime + CPS)
 - [ ] Parse `(cloneable-reset body)` and `(cloneable-shift k expr)` surface forms.
