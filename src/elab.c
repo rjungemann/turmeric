@@ -2110,8 +2110,8 @@ static Expr *elab_unsafe(Elab *e, const Form *call) {
     uint32_t n = call->as.list.len - 1;
     if (n == 0) return e_nil(e, call->span);
 
-    e->unsafe_depth++;
     Expr **items = (Expr **)arena_alloc(e->arena, n * sizeof(Expr *));
+    e->unsafe_depth++;
     for (uint32_t i = 0; i < n; i++) {
         items[i] = elab_form(e, call->as.list.items[1 + i]);
         if (!items[i]) {
