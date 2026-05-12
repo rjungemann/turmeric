@@ -350,7 +350,7 @@ struct FiberBlock {
     int parked; /* Phase T21: scheduler park/unpark */
     int64_t result;
     int64_t arg;
-    void *handler_chain;
+    void *effect_handler_chain; /* Phase P19-8: per-fiber effect handler chain */
     void (*entry_fn)(void);
     void *fiber_local; /* Phase T21: fiber-local storage */
     void *task_group; /* Parent TaskGroup for cancellation */
@@ -702,8 +702,8 @@ static __thread EffectHandlerFrame *global_effect_handler_chain = NULL;
 
 static int64_t tur_effect_perform(const char *name, int64_t *args, int n_args) {
     EffectHandlerFrame *frame =
-        (tur_current_fiber && tur_current_fiber->handler_chain)
-        ? (EffectHandlerFrame *)tur_current_fiber->handler_chain
+        (tur_current_fiber && tur_current_fiber->effect_handler_chain)
+        ? (EffectHandlerFrame *)tur_current_fiber->effect_handler_chain
         : global_effect_handler_chain;
     while (frame) {
         for (int __i = 0; __i < frame->n_cases; __i++) {
@@ -1106,7 +1106,7 @@ static int64_t use_both() {
 
 int main(void) {
     EffectHandlerFrame __eff_frame_6;
-    EffectHandlerFrame **__eff_chain_6 = (tur_current_fiber ? (EffectHandlerFrame **)&tur_current_fiber->handler_chain : &global_effect_handler_chain);
+    EffectHandlerFrame **__eff_chain_6 = (tur_current_fiber ? (EffectHandlerFrame **)&tur_current_fiber->effect_handler_chain : &global_effect_handler_chain);
     __eff_frame_6.parent = *__eff_chain_6;
     __eff_frame_6.n_cases = 2;
     __eff_frame_6.cases[0].effect_name = "Ask";

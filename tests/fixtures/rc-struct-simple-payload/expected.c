@@ -350,7 +350,7 @@ struct FiberBlock {
     int parked; /* Phase T21: scheduler park/unpark */
     int64_t result;
     int64_t arg;
-    void *handler_chain;
+    void *effect_handler_chain; /* Phase P19-8: per-fiber effect handler chain */
     void (*entry_fn)(void);
     void *fiber_local; /* Phase T21: fiber-local storage */
     void *task_group; /* Parent TaskGroup for cancellation */
@@ -702,8 +702,8 @@ static __thread EffectHandlerFrame *global_effect_handler_chain = NULL;
 
 static int64_t tur_effect_perform(const char *name, int64_t *args, int n_args) {
     EffectHandlerFrame *frame =
-        (tur_current_fiber && tur_current_fiber->handler_chain)
-        ? (EffectHandlerFrame *)tur_current_fiber->handler_chain
+        (tur_current_fiber && tur_current_fiber->effect_handler_chain)
+        ? (EffectHandlerFrame *)tur_current_fiber->effect_handler_chain
         : global_effect_handler_chain;
     while (frame) {
         for (int __i = 0; __i < frame->n_cases; __i++) {
@@ -1086,7 +1086,7 @@ int main() {
         {
             Point *__t1 = (Point *)malloc(sizeof(Point));
             *__t1 = (Point){.x = INT64_C(42), .y = INT64_C(99)};
-            RcControlBlock *__t2 = rc_cb_alloc(0, 17, NULL);
+            RcControlBlock *__t2 = rc_cb_alloc(0, 18, NULL);
             __t2->value = __t1;
             RcControlBlock * p_2 = __t2;
             (void)p_2;

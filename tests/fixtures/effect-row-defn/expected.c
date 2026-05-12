@@ -350,7 +350,7 @@ struct FiberBlock {
     int parked; /* Phase T21: scheduler park/unpark */
     int64_t result;
     int64_t arg;
-    void *handler_chain;
+    void *effect_handler_chain; /* Phase P19-8: per-fiber effect handler chain */
     void (*entry_fn)(void);
     void *fiber_local; /* Phase T21: fiber-local storage */
     void *task_group; /* Parent TaskGroup for cancellation */
@@ -702,8 +702,8 @@ static __thread EffectHandlerFrame *global_effect_handler_chain = NULL;
 
 static int64_t tur_effect_perform(const char *name, int64_t *args, int n_args) {
     EffectHandlerFrame *frame =
-        (tur_current_fiber && tur_current_fiber->handler_chain)
-        ? (EffectHandlerFrame *)tur_current_fiber->handler_chain
+        (tur_current_fiber && tur_current_fiber->effect_handler_chain)
+        ? (EffectHandlerFrame *)tur_current_fiber->effect_handler_chain
         : global_effect_handler_chain;
     while (frame) {
         for (int __i = 0; __i < frame->n_cases; __i++) {
@@ -1133,7 +1133,7 @@ static int64_t __effect_handler_15(int64_t *__effect_args, int __n_effect_args, 
 
 int main() {
         EffectHandlerFrame __eff_frame_8;
-        EffectHandlerFrame **__eff_chain_8 = (tur_current_fiber ? (EffectHandlerFrame **)&tur_current_fiber->handler_chain : &global_effect_handler_chain);
+        EffectHandlerFrame **__eff_chain_8 = (tur_current_fiber ? (EffectHandlerFrame **)&tur_current_fiber->effect_handler_chain : &global_effect_handler_chain);
         __eff_frame_8.parent = *__eff_chain_8;
         __eff_frame_8.n_cases = 1;
         __eff_frame_8.cases[0].effect_name = "Log";
@@ -1147,7 +1147,7 @@ int main() {
         *__eff_chain_8 = (*__eff_chain_8)->parent;
         {
             EffectHandlerFrame __eff_frame_13;
-            EffectHandlerFrame **__eff_chain_13 = (tur_current_fiber ? (EffectHandlerFrame **)&tur_current_fiber->handler_chain : &global_effect_handler_chain);
+            EffectHandlerFrame **__eff_chain_13 = (tur_current_fiber ? (EffectHandlerFrame **)&tur_current_fiber->effect_handler_chain : &global_effect_handler_chain);
             __eff_frame_13.parent = *__eff_chain_13;
             __eff_frame_13.n_cases = 1;
             __eff_frame_13.cases[0].effect_name = "Log";
@@ -1155,7 +1155,7 @@ int main() {
             __eff_frame_13.cases[0].env = NULL;
             *__eff_chain_13 = &__eff_frame_13;
             EffectHandlerFrame __eff_frame_16;
-            EffectHandlerFrame **__eff_chain_16 = (tur_current_fiber ? (EffectHandlerFrame **)&tur_current_fiber->handler_chain : &global_effect_handler_chain);
+            EffectHandlerFrame **__eff_chain_16 = (tur_current_fiber ? (EffectHandlerFrame **)&tur_current_fiber->effect_handler_chain : &global_effect_handler_chain);
             __eff_frame_16.parent = *__eff_chain_16;
             __eff_frame_16.n_cases = 1;
             __eff_frame_16.cases[0].effect_name = "Ask";

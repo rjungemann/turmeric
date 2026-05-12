@@ -350,7 +350,7 @@ struct FiberBlock {
     int parked; /* Phase T21: scheduler park/unpark */
     int64_t result;
     int64_t arg;
-    void *handler_chain;
+    void *effect_handler_chain; /* Phase P19-8: per-fiber effect handler chain */
     void (*entry_fn)(void);
     void *fiber_local; /* Phase T21: fiber-local storage */
     void *task_group; /* Parent TaskGroup for cancellation */
@@ -702,8 +702,8 @@ static __thread EffectHandlerFrame *global_effect_handler_chain = NULL;
 
 static int64_t tur_effect_perform(const char *name, int64_t *args, int n_args) {
     EffectHandlerFrame *frame =
-        (tur_current_fiber && tur_current_fiber->handler_chain)
-        ? (EffectHandlerFrame *)tur_current_fiber->handler_chain
+        (tur_current_fiber && tur_current_fiber->effect_handler_chain)
+        ? (EffectHandlerFrame *)tur_current_fiber->effect_handler_chain
         : global_effect_handler_chain;
     while (frame) {
         for (int __i = 0; __i < frame->n_cases; __i++) {
@@ -1110,7 +1110,7 @@ static int64_t __effect_handler_6(int64_t *__effect_args, int __n_effect_args, i
 
 int main() {
         EffectHandlerFrame __eff_frame_3;
-        EffectHandlerFrame **__eff_chain_3 = (tur_current_fiber ? (EffectHandlerFrame **)&tur_current_fiber->handler_chain : &global_effect_handler_chain);
+        EffectHandlerFrame **__eff_chain_3 = (tur_current_fiber ? (EffectHandlerFrame **)&tur_current_fiber->effect_handler_chain : &global_effect_handler_chain);
         __eff_frame_3.parent = *__eff_chain_3;
         __eff_frame_3.n_cases = 1;
         __eff_frame_3.cases[0].effect_name = "Write";
@@ -1118,7 +1118,7 @@ int main() {
         __eff_frame_3.cases[0].env = NULL;
         *__eff_chain_3 = &__eff_frame_3;
         EffectHandlerFrame __eff_frame_9;
-        EffectHandlerFrame **__eff_chain_9 = (tur_current_fiber ? (EffectHandlerFrame **)&tur_current_fiber->handler_chain : &global_effect_handler_chain);
+        EffectHandlerFrame **__eff_chain_9 = (tur_current_fiber ? (EffectHandlerFrame **)&tur_current_fiber->effect_handler_chain : &global_effect_handler_chain);
         __eff_frame_9.parent = *__eff_chain_9;
         __eff_frame_9.n_cases = 2;
         __eff_frame_9.cases[0].effect_name = "Log";
