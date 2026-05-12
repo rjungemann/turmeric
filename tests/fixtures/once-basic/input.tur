@@ -1,0 +1,75 @@
+;; Phase T19: once-basic — one-time initialization via pthread_once.
+;;
+;; pthread_once_t ensures that an init function runs at most once regardless
+;; of how many times pthread_once is called.  Represented as a :ptr<void>
+;; to a heap-allocated pthread_once_t initialised to PTHREAD_ONCE_INIT.
+
+;; Global counter to verify the init function runs exactly once.
+;; Using an atomic cell so the pattern is thread-safe.
+(defn counter-new [] :ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  if (!p) { fprintf(stderr, "counter-new: oom\n"); abort(); }
+  __atomic_store_n(p, (int64_t)0, __ATOMIC_SEQ_CST);
+  return (void *)p;
+  ```)
+
+(defn counter-inc [p :ptr<void>] :nil
+  ```c
+  __atomic_fetch_add((int64_t *)p, (int64_t)1, __ATOMIC_SEQ_CST);
+  ```)
+
+(defn counter-get [p :ptr<void>] :int
+  ```c
+  return (int64_t)__atomic_load_n((int64_t *)p, __ATOMIC_SEQ_CST);
+  ```)
+
+(defn counter-free [p :ptr<void>] :nil
+  ```c
+  free(p);
+  ```)
+
+;; once-flag-new : unit → ptr<void>
+;; Allocate a pthread_once_t flag initialised to PTHREAD_ONCE_INIT.
+(defn once-flag-new [] :ptr<void>
+  ```c
+  pthread_once_t *o = (pthread_once_t *)malloc(sizeof(pthread_once_t));
+  if (!o) { fprintf(stderr, "once-flag-new: oom\n"); abort(); }
+  pthread_once_t init = PTHREAD_ONCE_INIT;
+  memmove(o, &init, sizeof(pthread_once_t));
+  return (void *)o;
+  ```)
+
+(defn once-flag-free [o :ptr<void>] :nil
+  ```c
+  free(o);
+  ```)
+
+;; The one-time init function — increments a globally known counter.
+;; pthread_once requires a void (*)(void) — no argument.
+;; We use a static global pointer to our counter cell for simplicity.
+(defn init-counter-global [] :nil
+  ```c
+  /* This function is called by pthread_once; no arg passing possible. */
+  /* In production code this would initialise a static resource. */
+  /* Here we just print a marker to show it ran. */
+  printf("init\n");
+  ```)
+
+;; once-call : ptr<void> → nil
+;; Call init-counter-global at most once via the given once flag.
+(defn once-call [o :ptr<void>] :nil
+  ```c
+  pthread_once((pthread_once_t *)o,
+      (void (*)(void))init_counter_global);
+  ```)
+
+(defn main [] :int
+  (let [flag (once-flag-new)]
+    ;; Call three times — init-counter-global should print exactly once.
+    (once-call flag)
+    (once-call flag)
+    (once-call flag)
+    (println 3)
+    (once-flag-free flag))
+  0)

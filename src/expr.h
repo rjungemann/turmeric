@@ -122,6 +122,11 @@ struct FnDef {
     LifetimeContext lifetime_ctx;  /* Lifetime parameters and constraints for this function */
     /* Phase 15: Typeclass constraints */
     ConstraintSet  constraints;    /* Typeclass constraints for this function */
+    /* Phase P19-3: Inferred effect row for this function.
+     * NULL until the effect-row inference pass (P19-2) runs.
+     * declared_effect_row lives in Type.as.fn.effect_row (the annotated row);
+     * this field carries the pass-computed row so both can coexist. */
+    EffectRow     *inferred_effect_row;
 };
 
 /* Phase 2: ExternC represents an (extern-c ...) declaration. */

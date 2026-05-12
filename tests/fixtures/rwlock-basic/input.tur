@@ -1,0 +1,66 @@
+;; Phase T19: rwlock-basic — read/write lock via pthread_rwlock_t.
+;;
+;; Multiple readers can hold the lock concurrently; writers get exclusive access.
+;; Represented as a :ptr<void> to a heap-allocated pthread_rwlock_t.
+
+(defn rwlock-new [] :ptr<void>
+  ```c
+  pthread_rwlock_t *rw = (pthread_rwlock_t *)malloc(sizeof(pthread_rwlock_t));
+  if (!rw) { fprintf(stderr, "rwlock-new: oom\n"); abort(); }
+  pthread_rwlock_init(rw, NULL);
+  return (void *)rw;
+  ```)
+
+(defn rwlock-rdlock [rw :ptr<void>] :nil
+  ```c
+  pthread_rwlock_rdlock((pthread_rwlock_t *)rw);
+  ```)
+
+(defn rwlock-wrlock [rw :ptr<void>] :nil
+  ```c
+  pthread_rwlock_wrlock((pthread_rwlock_t *)rw);
+  ```)
+
+(defn rwlock-try-rdlock [rw :ptr<void>] :bool
+  ```c
+  return pthread_rwlock_tryrdlock((pthread_rwlock_t *)rw) == 0;
+  ```)
+
+(defn rwlock-try-wrlock [rw :ptr<void>] :bool
+  ```c
+  return pthread_rwlock_trywrlock((pthread_rwlock_t *)rw) == 0;
+  ```)
+
+(defn rwlock-unlock [rw :ptr<void>] :nil
+  ```c
+  pthread_rwlock_unlock((pthread_rwlock_t *)rw);
+  ```)
+
+(defn rwlock-free [rw :ptr<void>] :nil
+  ```c
+  pthread_rwlock_destroy((pthread_rwlock_t *)rw);
+  free(rw);
+  ```)
+
+(defn main [] :int
+  (let [rw (rwlock-new)]
+    ;; write lock / unlock
+    (rwlock-wrlock rw)
+    (println 1)
+    (rwlock-unlock rw)
+
+    ;; read lock / unlock
+    (rwlock-rdlock rw)
+    (println 2)
+    (rwlock-unlock rw)
+
+    ;; try-rdlock succeeds when unlocked
+    (let [got-r (rwlock-try-rdlock rw)]
+      (println got-r)
+      ;; try-wrlock fails when read lock is held
+      (let [got-w (rwlock-try-wrlock rw)]
+        (println got-w))
+      (rwlock-unlock rw))
+
+    (rwlock-free rw))
+  0)

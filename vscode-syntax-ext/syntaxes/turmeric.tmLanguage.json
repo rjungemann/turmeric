@@ -1,0 +1,257 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Turmeric",
+  "scopeName": "source.turmeric",
+  "fileTypes": ["tur"],
+  "uuid": "D8D5E82E-3D5B-46B8-8981-C61B89F00D57",
+  "patterns": [
+    {"include": "#comment"},
+    {"include": "#string"},
+    {"include": "#number"},
+    {"include": "#boolean"},
+    {"include": "#character"},
+    {"include": "#keywords"},
+    {"include": "#operators"},
+    {"include": "#quote"},
+    {"include": "#sexp"},
+    {"include": "#illegal"}
+  ],
+  "repository": {
+    "comment": {
+      "patterns": [
+        {
+          "name": "comment.line.semicolon.turmeric",
+          "begin": ";",
+          "end": "$",
+          "captures": {
+            "0": {
+              "name": "punctuation.definition.comment.turmeric"
+            }
+          }
+        },
+        {
+          "name": "comment.block.turmeric",
+          "begin": "#\\|",
+          "end": "\\|#",
+          "captures": {
+            "0": {
+              "name": "punctuation.definition.comment.turmeric"
+            }
+          }
+        }
+      ]
+    },
+    "string": {
+      "name": "string.quoted.double.turmeric",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.turmeric",
+          "match": "\\\\([\"\\\\abfnrtv]|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|x[0-9a-fA-F]{2})"
+        },
+        {
+          "name": "invalid.illegal.unrecognized-string-escape.turmeric",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "number": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.turmeric",
+          "match": "(?<![\\w#])0x[0-9a-fA-F]+(?![\\w])"
+        },
+        {
+          "name": "constant.numeric.binary.turmeric",
+          "match": "(?<![\\w#])0b[01]+(?![\\w])"
+        },
+        {
+          "name": "constant.numeric.float.turmeric",
+          "match": "(?<![\\w#])-?(\\d+\\.\\d*|\\.\\d+)([eE][+-]?\\d+)?(?![\\w])"
+        },
+        {
+          "name": "constant.numeric.integer.turmeric",
+          "match": "(?<![\\w#])-?\\d+(?![\\w])"
+        }
+      ]
+    },
+    "boolean": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.true.turmeric",
+          "match": "(?<![\\w#])#t(?![\\w])"
+        },
+        {
+          "name": "constant.language.boolean.false.turmeric",
+          "match": "(?<![\\w#])#f(?![\\w])"
+        }
+      ]
+    },
+    "character": {
+      "name": "constant.character.turmeric",
+      "match": "#\\\\(?:[a-zA-Z]|nul|null|backspace|tab|newline|linefeed|vtab|page|return|space|rubout)"
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.turmeric",
+          "match": "(?<![\\w-])(if|cond|case|match|loop|while|for|break|continue|return|and|or|not)(?![\\w-])"
+        },
+        {
+          "name": "keyword.definition.turmeric",
+          "match": "(?<![\\w-])(def|defn|defmacro|defmodule|use|import|export)(?![\\w-])"
+        },
+        {
+          "name": "keyword.type.turmeric",
+          "match": "(?<![\\w-])(type|typeclass|impl|where|forall|generic|trait)(?![\\w-])"
+        },
+        {
+          "name": "keyword.effect.turmeric",
+          "match": "(?<![\\w-])(effect|handle|do|perform|with)(?![\\w-])"
+        },
+        {
+          "name": "keyword.exception.turmeric",
+          "match": "(?<![\\w-])(try|catch|throw|finally|raise)(?![\\w-])"
+        },
+        {
+          "name": "keyword.other.turmeric",
+          "match": "(?<![\\w-])(let|let\\*|lambda|fn|quote|unquote|quasiquote|begin|lambda|fn|defstruct|deftuple)(?![\\w-])"
+        },
+        {
+          "name": "keyword.constant.null.turmeric",
+          "match": "(?<![\\w-])(nil|null|none|unit)(?![\\w-])"
+        },
+        {
+          "name": "support.function.builtin.turmeric",
+          "match": "(?<![\\w-])(vec|push|pop|len|nth|set-nth!|append|first|rest|cons|reverse|list|type-of|is-a\\?|apply|map|filter|reduce|fold|print|println|read|str|concat|split|string\\?|vector\\?|list\\?|number\\?|symbol\\?|boolean\\?|null\\?|atom\\?|pair\\?|empty\\?)(?![\\w-])"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.arithmetic.turmeric",
+          "match": "[+\\-*/%]|\\*\\*"
+        },
+        {
+          "name": "keyword.operator.comparison.turmeric",
+          "match": "=|!=|<|>|<=|>="
+        },
+        {
+          "name": "keyword.operator.special.turmeric",
+          "match": "->|=>|-->|::|\\|>"
+        },
+        {
+          "name": "keyword.operator.assignment.turmeric",
+          "match": "!"
+        }
+      ]
+    },
+    "quote": {
+      "patterns": [
+        {
+          "name": "meta.quote.turmeric",
+          "match": "('|`|,@?)",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.quote.turmeric"
+            }
+          }
+        }
+      ]
+    },
+    "sexp": {
+      "patterns": [
+        {
+          "name": "meta.sexp.turmeric",
+          "begin": "(\\()",
+          "end": "(\\))",
+          "beginCaptures": {
+            "1": {
+              "name": "punctuation.section.sexp.begin.turmeric"
+            }
+          },
+          "endCaptures": {
+            "1": {
+              "name": "punctuation.section.sexp.end.turmeric"
+            }
+          },
+          "patterns": [
+            {"include": "#comment"},
+            {"include": "#string"},
+            {"include": "#number"},
+            {"include": "#boolean"},
+            {"include": "#character"},
+            {"include": "#keywords"},
+            {"include": "#operators"},
+            {"include": "#quote"},
+            {"include": "#functionCall"},
+            {"include": "#sexp"},
+            {"include": "#symbol"}
+          ]
+        },
+        {
+          "name": "meta.bracket.turmeric",
+          "begin": "(\\[)",
+          "end": "(\\])",
+          "beginCaptures": {
+            "1": {
+              "name": "punctuation.section.bracket.begin.turmeric"
+            }
+          },
+          "endCaptures": {
+            "1": {
+              "name": "punctuation.section.bracket.end.turmeric"
+            }
+          },
+          "patterns": [
+            {"include": "$self"}
+          ]
+        },
+        {
+          "name": "meta.brace.turmeric",
+          "begin": "(\\{)",
+          "end": "(\\})",
+          "beginCaptures": {
+            "1": {
+              "name": "punctuation.section.brace.begin.turmeric"
+            }
+          },
+          "endCaptures": {
+            "1": {
+              "name": "punctuation.section.brace.end.turmeric"
+            }
+          },
+          "patterns": [
+            {"include": "$self"}
+          ]
+        }
+      ]
+    },
+    "functionCall": {
+      "patterns": [
+        {
+          "name": "entity.name.function.turmeric",
+          "match": "(?<![\\w-])[a-zA-Z_][a-zA-Z0-9_?!*+\\-/<>=]*(?![\\w-])"
+        }
+      ]
+    },
+    "symbol": {
+      "patterns": [
+        {
+          "name": "variable.other.turmeric",
+          "match": "(?<![\\w-])[a-zA-Z_][a-zA-Z0-9_?!*+\\-/<>=]*(?![\\w-])"
+        }
+      ]
+    },
+    "illegal": {
+      "patterns": [
+        {
+          "name": "invalid.illegal.unmatched-paren.turmeric",
+          "match": "[\\)\\]\\}]"
+        }
+      ]
+    }
+  }
+}

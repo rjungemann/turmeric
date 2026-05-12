@@ -14,11 +14,13 @@
 #include "borrow_check.h"  /* Phase 14 */
 #include "cps.h"          /* Phase 18: CPS transformation */
 #include "diag.h"
+#include "effect_check.h" /* Phase P19-2: effect-row inference */
 #include "elab.h"
 #include "emit.h"
 #include "effect_lower.h" /* Phase 19: Effect lowering */
 #include "expr.h"
 #include "forms.h"
+#include "pass.h"         /* Phase P19-1: pass scheduling */
 #include "reader.h"
 #include "symbols.h"
 
@@ -71,6 +73,55 @@ static int read_entire_file(const char *path, char **out, size_t *out_len) {
     buf[size] = '\0';
     *out = buf;
     *out_len = (size_t)size;
+    return 0;
+}
+
+/* Ordered list of compiler passes executed for every compilation unit.
+ * To insert a new pass: add a PassKind constant to pass.h, add a case here,
+ * and add the case in run_core_passes() below.                              */
+static const PassKind core_passes[] = {
+    PASS_ELABORATE,
+    PASS_EFFECT_LOWER,
+    PASS_EFFECT_ROW_INFER,  /* P19-2: stub slot — no-op until inference lands */
+    PASS_CPS,
+    PASS_BORROW_CHECK,
+};
+static const int n_core_passes = (int)(sizeof(core_passes) / sizeof(core_passes[0]));
+
+/* Run all core compiler passes in order.  ctx->forms/nforms must be set
+ * before calling; ctx->prog and ctx->effect_env are populated by the passes.
+ * Returns 0 on success, 1 on the first pass failure.                        */
+static int run_core_passes(PassContext *ctx) {
+    for (int i = 0; i < n_core_passes; i++) {
+        switch (core_passes[i]) {
+        case PASS_ELABORATE:
+            ctx->prog = elaborate_program(ctx->arena, ctx->st,
+                                          ctx->forms, ctx->nforms);
+            if (!ctx->prog || diag_had_error()) return 1;
+            break;
+        case PASS_EFFECT_LOWER:
+            /* Phase 19: transform perform/handle into shift/reset. */
+            ctx->effect_env = effect_env_new(ctx->arena);
+            ctx->prog = effect_lower(ctx->arena, ctx->st,
+                                     ctx->prog, ctx->effect_env);
+            if (!ctx->prog || diag_had_error()) return 1;
+            break;
+        case PASS_EFFECT_ROW_INFER:
+            /* P19-2: effect-row inference and validation pass. */
+            if (effect_check_pass(ctx->arena, ctx->prog, ctx->effect_env) != 0)
+                return 1;
+            break;
+        case PASS_CPS:
+            /* Phase 18: CPS transformation for shift/reset. */
+            ctx->prog = cps_transform(ctx->arena, ctx->prog);
+            if (!ctx->prog || diag_had_error()) return 1;
+            break;
+        case PASS_BORROW_CHECK:
+            /* Phase 14: ownership, move, and borrow analysis. */
+            if (!borrow_check_program(ctx->prog)) return 1;
+            break;
+        }
+    }
     return 0;
 }
 
@@ -175,27 +226,14 @@ static int compile_to_c(const char *path, Buf *out_c) {
     if (!forms || diag_had_error()) {
         rc = 1;
     } else {
-        Expr *prog = elaborate_program(&arena, &st, forms, nforms);
-        if (!prog || diag_had_error()) {
+        PassContext ctx = {0};
+        ctx.arena = &arena;
+        ctx.st    = &st;
+        ctx.forms  = forms;
+        ctx.nforms = nforms;
+        rc = run_core_passes(&ctx);
+        if (rc == 0 && emit_program(out_c, ctx.prog) != 0) {
             rc = 1;
-        } else {
-            /* Phase 19: Effect lowering - transform perform/handle to shift/reset */
-            EffectEnv *effect_env = effect_env_new(&arena);
-            prog = effect_lower(&arena, &st, prog, effect_env);
-            if (!prog || diag_had_error()) {
-                rc = 1;
-            } else {
-                /* Phase 18: CPS transformation for shift/reset */
-                prog = cps_transform(&arena, prog);
-                if (!prog || diag_had_error()) {
-                    rc = 1;
-                } else if (!borrow_check_program(prog)) {
-                    /* Phase 14: Borrow checker pass */
-                    rc = 1;
-                } else if (emit_program(out_c, prog) != 0) {
-                    rc = 1;
-                }
-            }
         }
     }
 
@@ -236,27 +274,14 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name) {
     if (!forms || diag_had_error()) {
         rc = 1;
     } else {
-        Expr *prog = elaborate_program(&arena, &st, forms, nforms);
-        if (!prog || diag_had_error()) {
+        PassContext ctx = {0};
+        ctx.arena  = &arena;
+        ctx.st     = &st;
+        ctx.forms  = forms;
+        ctx.nforms = nforms;
+        rc = run_core_passes(&ctx);
+        if (rc == 0 && emit_header(out_h, module_name, ctx.prog) != 0) {
             rc = 1;
-        } else {
-            /* Phase 19: Effect lowering - transform perform/handle to shift/reset */
-            EffectEnv *effect_env = effect_env_new(&arena);
-            prog = effect_lower(&arena, &st, prog, effect_env);
-            if (!prog || diag_had_error()) {
-                rc = 1;
-            } else {
-                /* Phase 18: CPS transformation for shift/reset */
-                prog = cps_transform(&arena, prog);
-                if (!prog || diag_had_error()) {
-                    rc = 1;
-                } else if (!borrow_check_program(prog)) {
-                    /* Phase 14: Borrow checker pass */
-                    rc = 1;
-                } else if (emit_header(out_h, module_name, prog) != 0) {
-                    rc = 1;
-                }
-            }
         }
     }
 
@@ -297,27 +322,14 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
     if (!forms || diag_had_error()) {
         rc = 1;
     } else {
-        Expr *prog = elaborate_program(&arena, &st, forms, nforms);
-        if (!prog || diag_had_error()) {
+        PassContext ctx = {0};
+        ctx.arena  = &arena;
+        ctx.st     = &st;
+        ctx.forms  = forms;
+        ctx.nforms = nforms;
+        rc = run_core_passes(&ctx);
+        if (rc == 0 && emit_implementation(out_c, module_name, ctx.prog) != 0) {
             rc = 1;
-        } else {
-            /* Phase 19: Effect lowering - transform perform/handle to shift/reset */
-            EffectEnv *effect_env = effect_env_new(&arena);
-            prog = effect_lower(&arena, &st, prog, effect_env);
-            if (!prog || diag_had_error()) {
-                rc = 1;
-            } else {
-                /* Phase 18: CPS transformation for shift/reset */
-                prog = cps_transform(&arena, prog);
-                if (!prog || diag_had_error()) {
-                    rc = 1;
-                } else if (!borrow_check_program(prog)) {
-                    /* Phase 14: Borrow checker pass */
-                    rc = 1;
-                } else if (emit_implementation(out_c, module_name, prog) != 0) {
-                    rc = 1;
-                }
-            }
         }
     }
 

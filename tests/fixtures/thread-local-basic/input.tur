@@ -1,0 +1,84 @@
+;; Phase T19: thread-local-basic — __thread TLS variables per-thread isolation.
+;;
+;; Each thread has its own copy of a __thread variable.  Writes in one thread
+;; are not visible in another.  Demonstrated here with two threads each writing
+;; their thread-id into a TLS slot and reading it back.
+
+;; tls-set!/tls-get operate on a named __thread int64_t.
+;; We use a single named global TLS var for the test.
+(defn tls-set [val :int] :nil
+  ```c
+  static __thread int64_t tls_val = 0;
+  tls_val = (int64_t)val;
+  ```)
+
+(defn tls-get [] :int
+  ```c
+  static __thread int64_t tls_val = 0;
+  return tls_val;
+  ```)
+
+;; Thread argument: (id: int, result: int)
+(defn targ-new [id :int] :ptr<void>
+  ```c
+  typedef struct { int64_t id; int64_t result; } TArg;
+  TArg *a = (TArg *)malloc(sizeof(TArg));
+  if (!a) { fprintf(stderr, "targ-new: oom\n"); abort(); }
+  a->id = (int64_t)id; a->result = 0;
+  return (void *)a;
+  ```)
+
+(defn targ-result [a :ptr<void>] :int
+  ```c
+  typedef struct { int64_t id; int64_t result; } TArg;
+  return (int64_t)((TArg *)a)->result;
+  ```)
+
+(defn targ-free [a :ptr<void>] :nil
+  ```c
+  free(a);
+  ```)
+
+;; Worker: sets TLS to its id, does some work, then reads it back.
+;; If TLS were shared, threads would clobber each other.
+(defn thread-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  typedef struct { int64_t id; int64_t result; } TArg;
+  static __thread int64_t tls_val = 0;
+  TArg *a = (TArg *)arg;
+  tls_val = a->id;
+  /* Simulate some work */
+  int64_t sum = 0;
+  int64_t i;
+  for (i = 0; i < 1000; i++) sum += tls_val;
+  a->result = tls_val; /* should equal id, not another thread's id */
+  return NULL;
+  ```)
+
+(defn thread-spawn [arg :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  if (!t) { fprintf(stderr, "thread-spawn: oom\n"); abort(); }
+  pthread_create(t, NULL, (void *(*)(void *))thread_worker, arg);
+  return (void *)t;
+  ```)
+
+(defn thread-join [t :ptr<void>] :nil
+  ```c
+  pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  ```)
+
+(defn main [] :int
+  (let [a1 (targ-new 7)]
+    (let [a2 (targ-new 13)]
+      (let [t1 (thread-spawn a1)]
+        (let [t2 (thread-spawn a2)]
+          (thread-join t1)
+          (thread-join t2)))
+      ;; Each thread should have seen its own id
+      (println (targ-result a1))    ;; 7
+      (println (targ-result a2))    ;; 13
+      (targ-free a1)
+      (targ-free a2)))
+  0)

@@ -1,0 +1,51 @@
+{
+  "name": "turmeric-syntax",
+  "displayName": "Turmeric Syntax Highlighting",
+  "description": "Syntax highlighting for Turmeric (.tur) files with sweet-exp support",
+  "version": "0.1.0",
+  "publisher": "fith-lang",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.50.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "turmeric",
+    "tur",
+    "lisp",
+    "scheme",
+    "sweet-exp"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "turmeric",
+        "aliases": [
+          "Turmeric",
+          "turmeric"
+        ],
+        "extensions": [
+          ".tur"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "turmeric",
+        "scopeName": "source.turmeric",
+        "path": "./syntaxes/turmeric.tmLanguage.json"
+      }
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fith-lang/fith"
+  },
+  "bugs": {
+    "url": "https://github.com/fith-lang/fith/issues"
+  },
+  "homepage": "https://github.com/fith-lang/fith#readme"
+}

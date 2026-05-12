@@ -1,0 +1,13 @@
+.git
+.gitignore
+.vscode/
+.vscode-test/
+test/
+out/
+dist/
+*.vsix
+node_modules/
+*.d.ts
+**/*.map
+.editorconfig
+*.log
