@@ -1,0 +1,59 @@
+;; Phase HKT H6: HKT + closures integration.
+;; Closures can be passed to fmap, enabling higher-order container transformations.
+
+(defclass Functor [^f]
+  (fmap [container fn] :int))
+
+;; Option helpers
+(defn __opt_some [x] :int
+  ```c
+  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
+  r->is_some = true;
+  r->value = x;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(defn __opt_some? [o] :bool
+  ```c
+  struct { bool is_some; int64_t value; } *p =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)o;
+  return p != 0 && p->is_some;
+  ```)
+
+(defn __opt_unwrap [o] :int
+  ```c
+  struct { bool is_some; int64_t value; } *p =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)o;
+  return (int)(p->value);
+  ```)
+
+(defn __fmap_option [container fn] :int
+  ```c
+  struct { bool is_some; int64_t value; } *c =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)container;
+  if (!c || !c->is_some) return 0;
+  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
+  r->is_some = true;
+  r->value = ((int64_t(*)(int64_t))(intptr_t)fn)(c->value);
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(definstance Functor [option]
+  (fmap [container fn] (__fmap_option container fn)))
+
+(defn main [] :int
+  (do
+    ;; Inline closure with no capture (adds 5 directly)
+    (let [opt (__opt_some 10)]
+      (let [result (__fmap_option opt (fn [x] (+ x 5)))]
+        (do
+          (println (__opt_some? result))   ;; true
+          (println (__opt_unwrap result)))))  ;; 15
+
+    ;; fmap with an inline closure (squared)
+    (let [opt2 (__opt_some 7)]
+      (let [result2 (__fmap_option opt2 (fn [x] (* x x)))]
+        (do
+          (println (__opt_some? result2))  ;; true
+          (println (__opt_unwrap result2)))))  ;; 49
+    0))

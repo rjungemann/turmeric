@@ -1,0 +1,41 @@
+;; Phase HKT H3: All five built-in HKT typeclasses declared together.
+;; This compilation test verifies that Functor, Applicative, Monad,
+;; Foldable, and Traversable can all be defined in the same program
+;; and that instances compile cleanly.
+
+(defclass Functor [^f]
+  (fmap [container fn] :int))
+
+(defclass Applicative [^f]
+  (pure [x] :int)
+  (ap [ff fa] :int))
+
+(defclass Monad [^m]
+  (bind [ma fn] :int))
+
+(defclass Foldable [^t]
+  (foldl [ta init fn] :int)
+  (foldr [ta init fn] :int))
+
+(defclass Traversable [^t]
+  (traverse [ta fn] :int))
+
+;; Minimal instances so the typeclasses are exercised.
+(definstance Functor [option]
+  (fmap [container fn] 0))
+
+(definstance Applicative [option]
+  (pure [x] 0)
+  (ap [ff fa] 0))
+
+(definstance Monad [option]
+  (bind [ma fn] 0))
+
+(definstance Foldable [vec]
+  (foldl [ta init fn] init)
+  (foldr [ta init fn] init))
+
+(definstance Traversable [option]
+  (traverse [ta fn] 0))
+
+(defn main [] :int 0)

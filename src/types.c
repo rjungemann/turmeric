@@ -363,7 +363,10 @@ const char *type_c_name(Type t) {
             return "tur_cont *";
         /* Phase 11: Struct types lower to the struct name in C */
         case TY_STRUCT:
-            return t.as.struct_.def ? t.as.struct_.def->name : "void *";
+            /* Phase HKT H3: TY_STRUCT without a concrete StructDef represents an
+             * opaque HKT type-constructor argument; it is stored as int64_t at
+             * runtime (container values are int64_t-sized opaque handles). */
+            return t.as.struct_.def ? t.as.struct_.def->name : "int64_t";
     }
     return "void";
 }
@@ -380,14 +383,20 @@ bool kind_eq(Kind a, Kind b) {
 
 const char *kind_to_string(Kind k) {
     switch (k) {
-        case KIND_STAR:  return "*";
-        case KIND_ARROW: return "* -> *";
+        case KIND_STAR:   return "*";
+        case KIND_ARROW:  return "* -> *";
+        case KIND_ARROW2: return "* -> * -> *";
     }
     return "*";  /* default */
 }
 
 Kind kind_parse(const char *s) {
     if (!s) return KIND_STAR;
+    if (s[0] == '*' && s[1] == ' ' && s[2] == '-' && s[3] == '>' &&
+        s[4] == ' ' && s[5] == '*' && s[6] == ' ' && s[7] == '-' &&
+        s[8] == '>' && s[9] == ' ' && s[10] == '*' && s[11] == '\0') {
+        return KIND_ARROW2;
+    }
     if (s[0] == '*' && s[1] == ' ' && s[2] == '-' && s[3] == '>' &&
         s[4] == ' ' && s[5] == '*' && s[6] == '\0') {
         return KIND_ARROW;

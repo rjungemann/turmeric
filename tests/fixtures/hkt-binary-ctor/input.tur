@@ -1,0 +1,48 @@
+;; Phase HKT H5: Bifunctor instance for a pair type.
+;; bimap applies fn-left to fst and fn-right to snd.
+
+(defclass Bifunctor [^^f]
+  (bimap [container fn-left fn-right] :int))
+
+;; Pair helpers (inline layout: { int64_t fst; int64_t snd; })
+(defn __pair_make [a b] :int
+  ```c
+  struct { int64_t fst; int64_t snd; } *r = malloc(sizeof(*r));
+  r->fst = a; r->snd = b;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(defn __pair_fst [p] :int
+  ```c
+  return ((struct { int64_t fst; int64_t snd; } *)(intptr_t)p)->fst;
+  ```)
+
+(defn __pair_snd [p] :int
+  ```c
+  return ((struct { int64_t fst; int64_t snd; } *)(intptr_t)p)->snd;
+  ```)
+
+;; Bifunctor[pair]: apply fn-left to fst, fn-right to snd.
+(defn __bimap_pair [container fn-left fn-right] :int
+  ```c
+  struct { int64_t fst; int64_t snd; } *p =
+      (struct { int64_t fst; int64_t snd; } *)(intptr_t)container;
+  struct { int64_t fst; int64_t snd; } *r = malloc(sizeof(*r));
+  r->fst = ((int64_t(*)(int64_t))(intptr_t)fn_left)(p->fst);
+  r->snd = ((int64_t(*)(int64_t))(intptr_t)fn_right)(p->snd);
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(definstance Bifunctor [pair]
+  (bimap [container fn-left fn-right] (__bimap_pair container fn-left fn-right)))
+
+(defn inc [x] :int (+ x 1))
+(defn negate [x] :int (* x -1))
+
+(defn main [] :int
+  (let [p (__pair_make 10 20)]
+    (let [mapped (__bimap_pair p inc negate)]
+      (do
+        (println (__pair_fst mapped))
+        (println (__pair_snd mapped))
+        0))))

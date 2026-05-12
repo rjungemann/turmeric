@@ -1,4 +1,8 @@
-;; Phase HKT H0: reserved typeclass names should produce a clear diagnostic.
-;; Functor is reserved for the higher-kinded typeclass system.
-(defclass Functor [f]
-  (fmap [f a b] :int))
+;; Phase HKT H3: once Functor (or any other HKT typeclass) has been defined,
+;; attempting to redefine it should produce a clear "already defined" diagnostic.
+;; Defining Functor the first time succeeds; redefining it immediately fails.
+(defclass Functor [^f]
+  (fmap [container fn] :int))
+;; This second definition must fail.
+(defclass Functor [a]
+  (map [x fn] :int))

@@ -1,0 +1,51 @@
+;; Phase HKT H4: Kind-polymorphic function with multiple kind-variable annotations.
+;; Multiple ^-prefixed annotations can appear before the runtime parameters.
+;; All kind-variable annotations are type-level only and are erased at runtime;
+;; the function compiles to a regular function that takes container and fn.
+
+
+(defclass Functor [^f]
+  (fmap [container fn] :int))
+
+(defn __opt_some [x] :int
+  ```c
+  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
+  r->is_some = true; r->value = x;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(defn __opt_unwrap [o] :int
+  ```c
+  struct { bool is_some; int64_t value; } *p =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)o;
+  return (int)(p->value);
+  ```)
+
+(defn __fmap_option [container fn] :int
+  ```c
+  struct { bool is_some; int64_t value; } *c =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)container;
+  if (!c || !c->is_some) return 0;
+  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
+  r->is_some = true;
+  r->value = ((int64_t(*)(int64_t))(intptr_t)fn)(c->value);
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(definstance Functor [option]
+  (fmap [container fn] (__fmap_option container fn)))
+
+;; Both ^f and ^g kind-variable annotations are erased at runtime.
+;; The function receives only the concrete container and fn parameters.
+(defn fmap-twice [^f ^g container fn] :int
+  (.fmap (.fmap container fn) fn))
+
+(defn inc [x] :int (+ x 1))
+
+(defn main [] :int
+  (do
+    ;; fmap-twice (some 10) inc => some 12
+    (let [opt (__opt_some 10)]
+      (let [result (fmap-twice opt inc)]
+        (println (__opt_unwrap result))))
+    0))

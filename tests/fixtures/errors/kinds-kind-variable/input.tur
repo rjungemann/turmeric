@@ -1,7 +1,8 @@
-;; Phase HKT H0: kind-variable annotations (^f) in defn params should produce
-;; a clear "not yet supported" diagnostic instead of "typeclass 'f' not defined".
+;; Phase HKT H4: kind-variable annotations (^f) in defn params are now
+;; erased at runtime (Phase H4 complete).  The :a return type keyword is
+;; not a built-in type; using it produces a clear "unsupported" diagnostic.
 (defclass Eq [a]
   (eq? [a a] :bool))
 
-(defn map [^f a x :a] :a
+(defn map [^f a x] :a
   x)

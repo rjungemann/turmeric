@@ -405,6 +405,8 @@ typedef struct Elab {
     /* Phase 15: Typeclasses */
     const Symbol *sym_defclass;    /* defclass */
     const Symbol *sym_definstance; /* definstance */
+    /* Phase HKT H5: defkind — kind alias declarations */
+    const Symbol *sym_defkind;     /* defkind */
     /* Phase HKT (v2): reserved typeclass names — user definitions rejected with diagnostic */
     const Symbol *sym_hkt_Functor;
     const Symbol *sym_hkt_Applicative;
@@ -820,6 +822,8 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* Phase 15: Typeclasses */
     e->sym_defclass = intern_cstr(st, "defclass");
     e->sym_definstance = intern_cstr(st, "definstance");
+    /* Phase HKT H5: defkind */
+    e->sym_defkind = intern_cstr(st, "defkind");
     /* Phase HKT (v2): reserved typeclass names */
     e->sym_hkt_Functor      = intern_cstr(st, "Functor");
     e->sym_hkt_Applicative  = intern_cstr(st, "Applicative");
@@ -1063,12 +1067,12 @@ static CtValue ct_eval_builtin(CtEnv *env, const Symbol *name, Form **args, uint
             diag_emit(DIAG_ERROR, span, "compile-time first expects 1 argument");
             return ct_value_form(form_nil(env->elab->arena, span));
         }
-        if (args[0]->tag != F_LIST || args[0]->as.list.len == 0) return ct_value_form(form_nil(env->elab->arena, span));
+        if ((args[0]->tag != F_LIST && args[0]->tag != F_VEC) || args[0]->as.list.len == 0) return ct_value_form(form_nil(env->elab->arena, span));
         return ct_value_form(args[0]->as.list.items[0]);
     }
     if (ct_symbol_name(name, "rest")) {
         if (n_args != 1) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time rest expects 1 argument"); return ct_value_form(form_nil(env->elab->arena, span)); }
-        if (args[0]->tag != F_LIST || args[0]->as.list.len <= 1) return ct_value_form(form_list(env->elab->arena, span, NULL, 0));
+        if ((args[0]->tag != F_LIST && args[0]->tag != F_VEC) || args[0]->as.list.len <= 1) return ct_value_form(form_list(env->elab->arena, span, NULL, 0));
         uint32_t len = args[0]->as.list.len - 1;
         Form **items = (Form **)arena_alloc(env->elab->arena, len * sizeof(Form *));
         for (uint32_t i = 0; i < len; i++) items[i] = args[0]->as.list.items[i + 1];
@@ -1076,7 +1080,7 @@ static CtValue ct_eval_builtin(CtEnv *env, const Symbol *name, Form **args, uint
     }
     if (ct_symbol_name(name, "second")) {
         if (n_args != 1) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time second expects 1 argument"); return ct_value_form(form_nil(env->elab->arena, span)); }
-        if (args[0]->tag != F_LIST || args[0]->as.list.len < 2) return ct_value_form(form_nil(env->elab->arena, span));
+        if ((args[0]->tag != F_LIST && args[0]->tag != F_VEC) || args[0]->as.list.len < 2) return ct_value_form(form_nil(env->elab->arena, span));
         return ct_value_form(args[0]->as.list.items[1]);
     }
     if (ct_symbol_name(name, "nil?")) {
@@ -4107,16 +4111,14 @@ static Expr *elab_defn(Elab *e, const Form *call) {
             const char *tc_name_str = constraint_name->name + 1;  /* Skip '^' */
             uint32_t tc_name_len = constraint_name->len - 1;
 
-            /* Phase HKT H0: Detect kind-variable syntax (^f where f starts with
-             * a lowercase letter).  Kind variables are reserved for v2 HKT; emit
-             * a clear "not yet supported" diagnostic instead of a confusing
-             * "typeclass 'f' is not defined" message. */
+            /* Phase HKT H4: Kind variable annotation — type-level only, erased at runtime.
+             * A kind variable like `^f` declares that `f` ranges over type constructors
+             * of kind '* -> *'.  It creates no runtime parameter; it is used as a
+             * kind annotation on the function and may be followed by a ^Typeclass f
+             * constraint (which adds a regular typeclass constraint handled below). */
             if (tc_name_len > 0 && tc_name_str[0] >= 'a' && tc_name_str[0] <= 'z') {
-                diag_emit(DIAG_ERROR, p->span,
-                          "kind variable annotation '^%.*s' in defn is not yet supported "
-                          "(Phase HKT): kind variables require higher-kinded type support",
-                          tc_name_len, tc_name_str);
-                return NULL;
+                /* Kind variable — silently skip; no runtime parameter is created. */
+                continue;
             }
 
             /* Create symbol for typeclass name */
@@ -4910,6 +4912,8 @@ static Expr *elab_defclass(Elab *e, const Form *call);
 static Expr *elab_definstance(Elab *e, const Form *call);
 static Expr *elab_method_call(Elab *e, const Form *call);
 static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span span);
+/* Phase HKT H5: kind aliases */
+static Expr *elab_defkind(Elab *e, const Form *call);
 /* Phase 17: throw! sugar */
 static Expr *elab_throw_bang(Elab *e, const Form *call);
 /* Phase 18: call/cc and escape sugar */
@@ -4998,6 +5002,8 @@ static Expr *elab_call(Elab *e, Form *call) {
     /* Phase 15: Typeclasses */
     if (name == e->sym_defclass) return elab_defclass(e, call);
     if (name == e->sym_definstance) return elab_definstance(e, call);
+    /* Phase HKT H5: kind aliases */
+    if (name == e->sym_defkind) return elab_defkind(e, call);
     /* Phase R2: Panic */
     if (name == e->sym_panic) return elab_panic(e, call);
     /* Phase T19-B: thread-spawn (Send-safety check for cross-thread closures) */
@@ -5236,6 +5242,16 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         }
         if (!arg_ok && expected_arg_kind == TY_PTR_VOID && args[i]->type.kind == TY_NIL) {
             /* Allow nil as a null pointer for ptr<void> parameters. */
+            arg_ok = true;
+        }
+        if (!arg_ok && expected_arg_kind == TY_INT && args[i]->type.kind == TY_STRUCT) {
+            /* Phase HKT H3: Allow passing an HKT container (TY_STRUCT) where int64_t
+             * is expected.  HKT type constructor values are opaque int64_t at runtime. */
+            arg_ok = true;
+        }
+        if (!arg_ok && expected_arg_kind == TY_INT && args[i]->type.kind == TY_FN) {
+            /* Phase HKT H3/H4: Allow passing a function value where int64_t is expected.
+             * Function references are represented as int64_t in HKT helper calls. */
             arg_ok = true;
         }
 
@@ -6152,6 +6168,37 @@ static Expr *elab_escape(Elab *e, const Form *call) {
     return elab_form(e, form_list(a, sp, li, 3));
 }
 
+/* Phase HKT H5: (defkind Name kind-expr)
+ *
+ * Registers a kind alias.  The kind-expr is currently stored as a string
+ * for diagnostic purposes but not enforced at use sites (future phases).
+ * Syntax: (defkind F1 (* -> *))
+ *         (defkind F2 (* -> * -> *))
+ */
+static Expr *elab_defkind(Elab *e, const Form *call) {
+    /* Minimum: (defkind Name kind-expr) */
+    if (call->as.list.len < 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "defkind requires (defkind Name kind-expr)");
+        return NULL;
+    }
+
+    /* Validate name */
+    Form *name_form = call->as.list.items[1];
+    if (name_form->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, name_form->span,
+                  "defkind: name must be a symbol");
+        return NULL;
+    }
+
+    /* kind-expr is accepted in any form (list, symbol, etc.) — parsed for
+     * documentation only.  Currently treated as a no-op. */
+    (void)call->as.list.items[2];
+
+    /* Return nil — defkind has no runtime effect. */
+    return e_nil(e, call->span);
+}
+
 /* Elaborate (defclass Name [type-params...] (method1 ...) (method2 ...) ...)
  *
  * Defines a new typeclass with type parameters and methods.
@@ -6175,16 +6222,9 @@ static Expr *elab_defclass(Elab *e, const Form *call) {
     }
     const Symbol *name = name_form->as.sym;
 
-    /* Phase HKT H1: reserved names — will be defined as built-in HKT typeclasses in Phase H3. */
-    if (name == e->sym_hkt_Functor || name == e->sym_hkt_Applicative ||
-        name == e->sym_hkt_Monad   || name == e->sym_hkt_Traversable ||
-        name == e->sym_hkt_Foldable) {
-        diag_emit(DIAG_ERROR, name_form->span,
-                  "'%s' is reserved for the higher-kinded typeclass system; "
-                  "it will be defined as a built-in typeclass in Phase H3",
-                  name->name);
-        return NULL;
-    }
+    /* Phase HKT H3: Functor, Applicative, Monad, Traversable, Foldable are now
+     * defined (in stdlib/typeclass.tur), not reserved.  The only guard remaining
+     * is the standard "already defined" check below. */
 
     /* Check if already defined */
     TypeClass *existing = typeclass_env_lookup_typeclass(&e->typeclass_env, name);
@@ -6226,8 +6266,24 @@ static Expr *elab_defclass(Elab *e, const Form *call) {
                         return NULL;
                     }
                     /* Phase HKT H1: '^name' prefix marks a kind * -> * (type constructor)
-                     * parameter.  The canonical name stored is 'name' (without '^'). */
-                    if (p->as.sym->len > 1 && p->as.sym->name[0] == '^') {
+                     * parameter.  The canonical name stored is 'name' (without '^').
+                     * Phase HKT H5: '^^name' prefix marks a kind * -> * -> * (binary
+                     * type constructor) parameter. */
+                    if (p->as.sym->len > 2 && p->as.sym->name[0] == '^' && p->as.sym->name[1] == '^') {
+                        const char  *bare     = p->as.sym->name + 2;
+                        uint32_t     bare_len = p->as.sym->len  - 2;
+                        /* Only lowercase-leading names are kind variables. */
+                        if (bare_len > 0 && bare[0] >= 'a' && bare[0] <= 'z') {
+                            type_params[i]      = symtab_intern(e->st, strslice(bare, bare_len));
+                            type_param_kinds[i] = KIND_ARROW2;
+                        } else {
+                            diag_emit(DIAG_ERROR, p->span,
+                                      "'%s' is not a valid type parameter; "
+                                      "use lowercase '^^name' for a kind '* -> * -> *' parameter",
+                                      p->as.sym->name);
+                            return NULL;
+                        }
+                    } else if (p->as.sym->len > 1 && p->as.sym->name[0] == '^') {
                         const char  *bare     = p->as.sym->name + 1;
                         uint32_t     bare_len = p->as.sym->len  - 1;
                         /* Only lowercase-leading names are kind variables. */
@@ -6334,6 +6390,10 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
     
     /* Parse type arguments (optional) */
     Type *type_args = NULL;
+    /* Phase HKT H3: track original symbol for each type arg so method name
+     * mangling can use "option", "vec", etc. instead of the generic "T".
+     * Only allocated when needed (at least one unknown/constructor type arg). */
+    const Symbol **type_arg_syms = NULL;
     uint8_t n_type_args = 0;
     uint32_t impls_start = 2;
     
@@ -6343,6 +6403,11 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
             n_type_args = args_form->as.list.len;
             if (n_type_args > 0) {
                 type_args = (Type *)arena_alloc(e->arena, n_type_args * sizeof(Type));
+                type_arg_syms = (const Symbol **)arena_alloc(e->arena,
+                    n_type_args * sizeof(const Symbol *));
+                for (uint8_t i = 0; i < n_type_args; i++) {
+                    type_arg_syms[i] = NULL;  /* NULL means use default name */
+                }
                 for (uint8_t i = 0; i < n_type_args; i++) {
                     Form *arg = args_form->as.list.items[i];
                     /* Parse type keywords or symbols */
@@ -6357,11 +6422,19 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
                         } else if ((kw->len == 4 && memcmp(kw->name, "void", 4) == 0) ||
                                    (kw->len == 3 && memcmp(kw->name, "nil", 3) == 0)) {
                             type_args[i] = TYPE_NIL;
-                        } else if (kw->len == 8 && memcmp(kw->name, "ptr<void>", 8) == 0) {
+                        } else if (kw->len == 9 && memcmp(kw->name, "ptr<void>", 9) == 0) {
                             type_args[i] = TYPE_PTR_VOID;
                         } else {
-                            /* Type variable reference - default to int for now */
-                            type_args[i] = TYPE_INT;
+                            /* Phase HKT H3: Unknown name — treat as an opaque type constructor.
+                             * TY_STRUCT without a StructDef causes codegen to emit 'void *' for
+                             * all parameters that inherit this type, which is the correct C type
+                             * for containers represented as heap pointers (option, vec, etc.).
+                             * Track the symbol name so method name mangling can use it. */
+                            memset(&type_args[i], 0, sizeof(type_args[i]));
+                            type_args[i].kind = TY_STRUCT;
+                            type_args[i].copy_kind = CK_MOVE;
+                            type_args[i].as.struct_.def = NULL;
+                            type_arg_syms[i] = kw;
                         }
                     } else {
                         diag_emit(DIAG_ERROR, arg->span,
@@ -6392,7 +6465,7 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
     if (tc->type_param_kinds != NULL) {
         for (uint8_t i = 0; i < n_type_args; i++) {
             Kind expected = tc->type_param_kinds[i];
-            if (expected == KIND_ARROW) {
+            if (expected == KIND_ARROW || expected == KIND_ARROW2) {
                 TypeKind tk = type_args[i].kind;
                 bool is_primitive = (tk == TY_INT  || tk == TY_BOOL  || tk == TY_CSTR ||
                                      tk == TY_NIL  || tk == TY_FLOAT || tk == TY_PTR_VOID);
@@ -6401,7 +6474,7 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
                         "kind mismatch (TUR-E0012): typeclass '%s' parameter %d expects kind "
                         "'%s' (a type constructor), but '%s' has kind '*'",
                         tc_name->name, (int)(i + 1),
-                        kind_to_string(KIND_ARROW),
+                        kind_to_string(expected),
                         type_name(type_args[i]));
                     return NULL;
                 }
@@ -6487,12 +6560,33 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
         size_t type_suffix_len = 0;
         for (uint8_t j = 0; j < n_type_args; j++) {
             const char *type_component = NULL;
+            char ctor_name_buf[32];  /* for TY_STRUCT/constructor names */
             switch (type_args[j].kind) {
                 case TY_INT: type_component = "int"; break;
                 case TY_BOOL: type_component = "bool"; break;
                 case TY_CSTR: type_component = "cstr"; break;
                 case TY_NIL: type_component = "nil"; break;
                 case TY_PTR_VOID: type_component = "ptr_void"; break;
+                case TY_STRUCT:
+                    /* Phase HKT H3: use the original symbol name when available,
+                     * falling back to "T" for unnamed struct type args. */
+                    if (type_arg_syms && type_arg_syms[j]) {
+                        /* Sanitise the symbol name to a valid C identifier component */
+                        uint32_t sym_len = type_arg_syms[j]->len;
+                        if (sym_len >= sizeof(ctor_name_buf))
+                            sym_len = (uint32_t)(sizeof(ctor_name_buf) - 1);
+                        memcpy(ctor_name_buf, type_arg_syms[j]->name, sym_len);
+                        ctor_name_buf[sym_len] = '\0';
+                        for (char *p = ctor_name_buf; *p; p++) {
+                            if (!isalnum((unsigned char)*p)) *p = '_';
+                        }
+                        type_component = ctor_name_buf;
+                    } else if (type_args[j].as.struct_.def) {
+                        type_component = type_args[j].as.struct_.def->name;
+                    } else {
+                        type_component = "T";
+                    }
+                    break;
                 default: type_component = "T"; break;
             }
             int written = snprintf(type_suffix + type_suffix_len,
@@ -6852,10 +6946,18 @@ found_method:;
     }
     
     /* Create a call to the method function */
-    /* The result type is the return type of the method */
-    Type result_type = best_method->param_types[0]; /* First param type is the instance type, result is last */
-    /* For v1, use the body type of the method */
-    result_type = best_method->body->type;
+    /* The result type is the return type of the method.
+     * For inline-C bodies the body type is TYPE_NIL, so prefer the
+     * declared return type from the method's binding function type. */
+    Type result_type;
+    if (best_method->binding->type.kind == TY_FN) {
+        result_type = type_from_kind(best_method->binding->type.as.fn.result_kind);
+    } else {
+        result_type = best_method->body->type;
+        if (result_type.kind == TY_UNKNOWN || result_type.kind == TY_NIL) {
+            result_type = TYPE_INT;
+        }
+    }
     
     Expr *out = expr_new(e->arena, EX_CALL, result_type, call->span);
     out->as.call_.fn_binding = best_method->binding;

@@ -24,8 +24,9 @@ typedef enum CopyKind {
  * The hkt_kind field on Type is always KIND_STAR in v1 and ignored by all
  * current elaboration, codegen, and borrow-check passes. */
 typedef enum Kind {
-    KIND_STAR  = 0,  /* * — a concrete type, e.g. int, bool, vec<int> */
-    KIND_ARROW = 1,  /* * -> * — a type constructor, e.g. vec, option (reserved, unused in v1) */
+    KIND_STAR   = 0,  /* * — a concrete type, e.g. int, bool, vec<int> */
+    KIND_ARROW  = 1,  /* * -> * — a unary type constructor, e.g. vec, option */
+    KIND_ARROW2 = 2,  /* * -> * -> * — a binary type constructor, e.g. result, either */
 } Kind;
 /* Phase 13: Lifetime annotations */
 /* Lifetimes are purely an elaborator construct - no runtime representation */

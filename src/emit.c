@@ -1286,7 +1286,28 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             char **arg_strs = (char **)malloc(e->as.call_.n_args * sizeof(char *));
             if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
-                arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
+                char *raw = emit_value(ctx, body, e->as.call_.args[i]);
+                /* Phase HKT H3/H4: When a function-reference (TY_FN) is passed to an
+                 * int64_t parameter, emit an explicit (int64_t)(intptr_t) cast so the
+                 * generated C99 code is valid.  Function pointers cannot be implicitly
+                 * converted to integers in C99; a reinterpret via intptr_t is needed. */
+                bool needs_fn_cast = (e->as.call_.args[i]->type.kind == TY_FN);
+                if (needs_fn_cast && fn_binding->type.kind == TY_FN) {
+                    uint8_t n_fnparams = fn_binding->type.as.fn.arity;
+                    uint8_t param_idx = (i < n_fnparams) ? i : (n_fnparams > 0 ? n_fnparams - 1 : 0);
+                    TypeKind pk = fn_binding->type.as.fn.arg_kinds[param_idx];
+                    /* Apply cast when param is int64_t in C: TY_INT or opaque TY_STRUCT (HKT container) */
+                    needs_fn_cast = (pk == TY_INT || pk == TY_STRUCT);
+                }
+                if (needs_fn_cast) {
+                    Buf cast; buf_init(&cast);
+                    buf_printf(&cast, "(int64_t)(intptr_t)(%s)", raw);
+                    buf_putc(&cast, '\0');
+                    free(raw);
+                    raw = strdup(cast.data);
+                    buf_free(&cast);
+                }
+                arg_strs[i] = raw;
             }
             Buf out; buf_init(&out);
             buf_printf(&out, "%s(", fn_name);
@@ -2177,8 +2198,17 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                 /* Build function pointer type */
                 buf_puts(ctx->file, "    ");
                 
-                /* Return type */
-                const char *ret_c_name = type_c_name(method_impl->body->type);
+                /* Return type — prefer the declared return type from the binding
+                 * (inline-C bodies have TY_NIL body type which would wrongly emit
+                 * "void"; use the fn result_kind from the binding instead). */
+                Type ret_type = method_impl->body->type;
+                if ((ret_type.kind == TY_NIL || ret_type.kind == TY_UNKNOWN)
+                    && method_impl->binding
+                    && method_impl->binding->type.kind == TY_FN) {
+                    ret_type = type_from_kind(
+                        method_impl->binding->type.as.fn.result_kind);
+                }
+                const char *ret_c_name = type_c_name(ret_type);
                 buf_printf(ctx->file, "%s", ret_c_name);
                 buf_puts(ctx->file, " (*");
                 buf_printf(ctx->file, "%s", sanitized_method_name);
@@ -2209,10 +2239,16 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                 
                 buf_puts(ctx->file, "    ");
                 buf_printf(ctx->file, ".%s = ", sanitized_method_name);
-                /* Method implementation function name - use sanitized method name */
-                buf_printf(ctx->file, "__inst_%s_%s", tc->name->name, sanitized_method_name);
-                /* Add type suffix */
-                buf_puts(ctx->file, type_suffix);
+                /* Phase HKT H3: Use the binding name directly — it already encodes
+                 * the correct type-arg suffix (e.g. _option, _vec) as computed in
+                 * elab_definstance, so we avoid a second, potentially wrong suffix. */
+                FnDef *method_impl_ref = inst->method_impls[i];
+                if (method_impl_ref && method_impl_ref->binding) {
+                    buf_printf(ctx->file, "%s", method_impl_ref->binding->name->name);
+                } else {
+                    buf_printf(ctx->file, "__inst_%s_%s", tc->name->name, sanitized_method_name);
+                    buf_puts(ctx->file, type_suffix);
+                }
                 buf_puts(ctx->file, ",\n");
             }
             buf_printf(ctx->file, "};\n\n");
