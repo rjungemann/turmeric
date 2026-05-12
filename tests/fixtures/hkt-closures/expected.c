@@ -1119,8 +1119,15 @@ static bool gc_is_alive(RcControlBlock *cb) {
 }
 
 static int64_t __inst_Functor_fmap_option(int64_t, int64_t);
-static int64_t __fn_27(void *, int64_t);
-static int64_t __fn_37(void *, int64_t);
+static int64_t __fn_47(void *, int64_t);
+static int64_t __fn_57(void *, int64_t);
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
 static int64_t __opt_some(int64_t);
 static bool __opt_some_(int64_t);
 static int64_t __opt_unwrap(int64_t);
@@ -1141,16 +1148,73 @@ static dict_Functor_option dict_Functor_option_singleton = {
     .fmap = __inst_Functor_fmap_option,
 };
 
-struct __env_29 { int64_t __fn; int64_t n; };
-static int64_t __fn_27(void * __env_p_30, int64_t x) {
-        struct __env_29 *__env___env_29 = (struct __env_29 *)__env_p_30;
-        return ((x) + (__env___env_29->n));
+struct __env_49 { int64_t __fn; int64_t n; };
+static int64_t __fn_47(void * __env_p_50, int64_t x) {
+        struct __env_49 *__env___env_49 = (struct __env_49 *)__env_p_50;
+        return ((x) + (__env___env_49->n));
 }
 
-struct __env_39 { int64_t __fn; int64_t a; int64_t b; };
-static int64_t __fn_37(void * __env_p_40, int64_t x) {
-        struct __env_39 *__env___env_39 = (struct __env_39 *)__env_p_40;
-        return ((x) + (((__env___env_39->a) + (__env___env_39->b))));
+struct __env_59 { int64_t __fn; int64_t a; int64_t b; };
+static int64_t __fn_57(void * __env_p_60, int64_t x) {
+        struct __env_59 *__env___env_59 = (struct __env_59 *)__env_p_60;
+        return ((x) + (((__env___env_59->a) + (__env___env_59->b))));
+}
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
 }
 
 static int64_t __opt_some(int64_t x) {
@@ -1209,62 +1273,62 @@ static int64_t __square(int64_t x) {
 
 int main() {
         {
-            int64_t opt_20 = __opt_some(INT64_C(10));
-            (void)opt_20;
+            int64_t opt_40 = __opt_some(INT64_C(10));
+            (void)opt_40;
             {
-                int64_t result_21 = __fmap_option(opt_20, (int64_t)(intptr_t)(__add5));
-                (void)result_21;
-                puts((__opt_some_(result_21)) ? "true" : "false");
-                printf("%lld\n", (long long)(__opt_unwrap(result_21)));
+                int64_t result_41 = __fmap_option(opt_40, (int64_t)(intptr_t)(__add5));
+                (void)result_41;
+                puts((__opt_some_(result_41)) ? "true" : "false");
+                printf("%lld\n", (long long)(__opt_unwrap(result_41)));
             }
         }
         {
-            int64_t opt2_22 = __opt_some(INT64_C(7));
-            (void)opt2_22;
+            int64_t opt2_42 = __opt_some(INT64_C(7));
+            (void)opt2_42;
             {
-                int64_t result2_23 = __fmap_option(opt2_22, (int64_t)(intptr_t)(__square));
-                (void)result2_23;
-                puts((__opt_some_(result2_23)) ? "true" : "false");
-                printf("%lld\n", (long long)(__opt_unwrap(result2_23)));
+                int64_t result2_43 = __fmap_option(opt2_42, (int64_t)(intptr_t)(__square));
+                (void)result2_43;
+                puts((__opt_some_(result2_43)) ? "true" : "false");
+                printf("%lld\n", (long long)(__opt_unwrap(result2_43)));
             }
         }
         {
-            int64_t n_24 = INT64_C(5);
-            (void)n_24;
+            int64_t n_44 = INT64_C(5);
+            (void)n_44;
             {
-                int64_t opt3_25 = __opt_some(INT64_C(10));
-                (void)opt3_25;
+                int64_t opt3_45 = __opt_some(INT64_C(10));
+                (void)opt3_45;
                 {
-                    struct __env_29 *__t0 = (struct __env_29 *)malloc(sizeof(struct __env_29));
-                    __t0->__fn = (int64_t)(intptr_t)__fn_27;
-                    __t0->n = n_24;
+                    struct __env_49 *__t0 = (struct __env_49 *)malloc(sizeof(struct __env_49));
+                    __t0->__fn = (int64_t)(intptr_t)__fn_47;
+                    __t0->n = n_44;
                     void *__t1 = __t0;
-                    int64_t result3_32 = __fmap_option_clos(opt3_25, (int64_t)(intptr_t)(__t1));
-                    (void)result3_32;
-                    puts((__opt_some_(result3_32)) ? "true" : "false");
-                    printf("%lld\n", (long long)(__opt_unwrap(result3_32)));
+                    int64_t result3_52 = __fmap_option_clos(opt3_45, (int64_t)(intptr_t)(__t1));
+                    (void)result3_52;
+                    puts((__opt_some_(result3_52)) ? "true" : "false");
+                    printf("%lld\n", (long long)(__opt_unwrap(result3_52)));
                 }
             }
         }
         {
-            int64_t a_33 = INT64_C(3);
-            (void)a_33;
+            int64_t a_53 = INT64_C(3);
+            (void)a_53;
             {
-                int64_t b_34 = INT64_C(4);
-                (void)b_34;
+                int64_t b_54 = INT64_C(4);
+                (void)b_54;
                 {
-                    int64_t opt4_35 = __opt_some(INT64_C(10));
-                    (void)opt4_35;
+                    int64_t opt4_55 = __opt_some(INT64_C(10));
+                    (void)opt4_55;
                     {
-                        struct __env_39 *__t2 = (struct __env_39 *)malloc(sizeof(struct __env_39));
-                        __t2->__fn = (int64_t)(intptr_t)__fn_37;
-                        __t2->a = a_33;
-                        __t2->b = b_34;
+                        struct __env_59 *__t2 = (struct __env_59 *)malloc(sizeof(struct __env_59));
+                        __t2->__fn = (int64_t)(intptr_t)__fn_57;
+                        __t2->a = a_53;
+                        __t2->b = b_54;
                         void *__t3 = __t2;
-                        int64_t result4_42 = __fmap_option_clos(opt4_35, (int64_t)(intptr_t)(__t3));
-                        (void)result4_42;
-                        puts((__opt_some_(result4_42)) ? "true" : "false");
-                        printf("%lld\n", (long long)(__opt_unwrap(result4_42)));
+                        int64_t result4_62 = __fmap_option_clos(opt4_55, (int64_t)(intptr_t)(__t3));
+                        (void)result4_62;
+                        puts((__opt_some_(result4_62)) ? "true" : "false");
+                        printf("%lld\n", (long long)(__opt_unwrap(result4_62)));
                     }
                 }
             }

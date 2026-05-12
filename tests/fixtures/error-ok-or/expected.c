@@ -1118,12 +1118,76 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
 static void * some(int64_t);
 static void * none();
 static bool ok_(void *);
 static int64_t ok_val(void *);
 static void * ok_or(void *, int64_t);
 static const char * show_err_code(int64_t);
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
+}
 
 static void * some(int64_t x) {
         struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
@@ -1176,25 +1240,25 @@ static const char * show_err_code(int64_t code) {
 
 int main() {
         {
-            void * opt1_13 = some(INT64_C(42));
-            (void)opt1_13;
+            void * opt1_33 = some(INT64_C(42));
+            (void)opt1_33;
             {
-                void * r1_14 = ok_or(opt1_13, INT64_C(1));
-                (void)r1_14;
-                if (ok_(r1_14)) {
-                    printf("%lld\n", (long long)(ok_val(r1_14)));
+                void * r1_34 = ok_or(opt1_33, INT64_C(1));
+                (void)r1_34;
+                if (ok_(r1_34)) {
+                    printf("%lld\n", (long long)(ok_val(r1_34)));
                 } else {
                     puts("unexpected err");
                 }
             }
         }
         {
-            void * opt2_15 = none();
-            (void)opt2_15;
+            void * opt2_35 = none();
+            (void)opt2_35;
             {
-                void * r2_16 = ok_or(opt2_15, INT64_C(1));
-                (void)r2_16;
-                if (ok_(r2_16)) {
+                void * r2_36 = ok_or(opt2_35, INT64_C(1));
+                (void)r2_36;
+                if (ok_(r2_36)) {
                     puts("unexpected ok");
                 } else {
                     puts(show_err_code(INT64_C(1)));
@@ -1202,12 +1266,12 @@ int main() {
             }
         }
         {
-            void * opt3_17 = none();
-            (void)opt3_17;
+            void * opt3_37 = none();
+            (void)opt3_37;
             {
-                void * r3_18 = ok_or(opt3_17, INT64_C(2));
-                (void)r3_18;
-                if (ok_(r3_18)) {
+                void * r3_38 = ok_or(opt3_37, INT64_C(2));
+                (void)r3_38;
+                if (ok_(r3_38)) {
                     puts("unexpected ok");
                 } else {
                     puts(show_err_code(INT64_C(2)));

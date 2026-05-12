@@ -1134,7 +1134,71 @@ static void __defer_5(void *__env) {
     rc_free_queue_drain();
 }
 
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
 static int64_t rc_auto_drop_nested_scope();
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
+}
 
 static int64_t rc_auto_drop_nested_scope() {
         int64_t __t0;
@@ -1143,11 +1207,11 @@ static int64_t rc_auto_drop_nested_scope() {
             *__t1 = INT64_C(10);
             RcControlBlock *__t2 = rc_cb_alloc(0, 3, NULL);
             __t2->value = __t1;
-            RcControlBlock * outer_1 = __t2;
-            (void)outer_1;
+            RcControlBlock * outer_21 = __t2;
+            (void)outer_21;
             tur_frame __frame_3;
             tur_frame_init(&__frame_3, NULL);
-            struct __defer_env_4 __t6 = {.outer = outer_1};
+            struct __defer_env_4 __t6 = {.outer = outer_21};
             tur_frame_push_defer(&__frame_3, __defer_5, &__t6);
             int64_t __t7;
             int64_t __t8;
@@ -1156,15 +1220,15 @@ static int64_t rc_auto_drop_nested_scope() {
                 *__t9 = INT64_C(20);
                 RcControlBlock *__t10 = rc_cb_alloc(0, 3, NULL);
                 __t10->value = __t9;
-                RcControlBlock * inner_2 = __t10;
-                (void)inner_2;
+                RcControlBlock * inner_22 = __t10;
+                (void)inner_22;
                 tur_frame __frame_11;
                 tur_frame_init(&__frame_11, &__frame_3);
-                struct __defer_env_12 __t14 = {.inner = inner_2};
+                struct __defer_env_12 __t14 = {.inner = inner_22};
                 tur_frame_push_defer(&__frame_11, __defer_13, &__t14);
                 int64_t __t15;
-                int64_t __t16 = rc_strong_count(outer_1);
-                int64_t __t17 = rc_strong_count(inner_2);
+                int64_t __t16 = rc_strong_count(outer_21);
+                int64_t __t17 = rc_strong_count(inner_22);
                 __t15 = ((__t16) + (__t17));
                 tur_frame_fire_lifo(&__frame_11);
                 __t8 = __t15;

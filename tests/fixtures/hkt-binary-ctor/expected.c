@@ -1119,6 +1119,13 @@ static bool gc_is_alive(RcControlBlock *cb) {
 }
 
 static int64_t __inst_Bifunctor_bimap_pair(int64_t, int64_t, int64_t);
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
 static int64_t __pair_make(int64_t, int64_t);
 static int64_t __pair_fst(int64_t);
 static int64_t __pair_snd(int64_t);
@@ -1137,6 +1144,63 @@ typedef struct dict_Bifunctor_pair {
 static dict_Bifunctor_pair dict_Bifunctor_pair_singleton = {
     .bimap = __inst_Bifunctor_bimap_pair,
 };
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
+}
 
 static int64_t __pair_make(int64_t a, int64_t b) {
         struct { int64_t fst; int64_t snd; } *r = malloc(sizeof(*r));
@@ -1176,14 +1240,14 @@ static int64_t negate(int64_t x) {
 int main() {
         int64_t __t0;
         {
-            int64_t p_20 = __pair_make(INT64_C(10), INT64_C(20));
-            (void)p_20;
+            int64_t p_40 = __pair_make(INT64_C(10), INT64_C(20));
+            (void)p_40;
             int64_t __t1;
             {
-                int64_t mapped_21 = __bimap_pair(p_20, (int64_t)(intptr_t)(inc), (int64_t)(intptr_t)(negate));
-                (void)mapped_21;
-                printf("%lld\n", (long long)(__pair_fst(mapped_21)));
-                printf("%lld\n", (long long)(__pair_snd(mapped_21)));
+                int64_t mapped_41 = __bimap_pair(p_40, (int64_t)(intptr_t)(inc), (int64_t)(intptr_t)(negate));
+                (void)mapped_41;
+                printf("%lld\n", (long long)(__pair_fst(mapped_41)));
+                printf("%lld\n", (long long)(__pair_snd(mapped_41)));
                 int64_t __t2;
                 __t2 = INT64_C(0);
                 __t1 = __t2;

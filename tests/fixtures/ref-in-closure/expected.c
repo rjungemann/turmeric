@@ -1129,38 +1129,102 @@ static void __defer_2(void *__env) {
     puts("ref-scope-exiting");
 }
 
-static int64_t __fn_3(void *);
+static int64_t __fn_23(void *);
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
 
-struct __env_5 { int64_t __fn; int64_t v; };
-static int64_t __fn_3(void * __env_p_6) {
-        struct __env_5 *__env___env_5 = (struct __env_5 *)__env_p_6;
-        return __env___env_5->v;
+struct __env_25 { int64_t __fn; int64_t v; };
+static int64_t __fn_23(void * __env_p_26) {
+        struct __env_25 *__env___env_25 = (struct __env_25 *)__env_p_26;
+        return __env___env_25->v;
+}
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
 }
 
 int main() {
         {
             void * __t0 = malloc(sizeof(int64_t));
             *((int64_t *)__t0) = INT64_C(42);
-            void * r_1 = __t0;
-            (void)r_1;
+            void * r_21 = __t0;
+            (void)r_21;
             tur_frame __frame_1;
             tur_frame_init(&__frame_1, NULL);
             tur_frame_push_defer(&__frame_1, __defer_2, NULL);
             {
-                int64_t __t3 = *((int64_t *)r_1);
-                int64_t v_2 = __t3;
-                (void)v_2;
+                int64_t __t3 = *((int64_t *)r_21);
+                int64_t v_22 = __t3;
+                (void)v_22;
                 {
-                    struct __env_5 *__t4 = (struct __env_5 *)malloc(sizeof(struct __env_5));
-                    __t4->__fn = (int64_t)(intptr_t)__fn_3;
-                    __t4->v = v_2;
+                    struct __env_25 *__t4 = (struct __env_25 *)malloc(sizeof(struct __env_25));
+                    __t4->__fn = (int64_t)(intptr_t)__fn_23;
+                    __t4->v = v_22;
                     void *__t5 = __t4;
-                    void * f_8 = __t5;
-                    (void)f_8;
-                    printf("%lld\n", (long long)(__fn_3(f_8)));
+                    void * f_28 = __t5;
+                    (void)f_28;
+                    printf("%lld\n", (long long)(__fn_23(f_28)));
                 }
             }
-            struct __defer_env_6 __t8 = {.r = r_1};
+            struct __defer_env_6 __t8 = {.r = r_21};
             tur_frame_push_defer(&__frame_1, __defer_7, &__t8);
             tur_frame_fire_lifo(&__frame_1);
         }

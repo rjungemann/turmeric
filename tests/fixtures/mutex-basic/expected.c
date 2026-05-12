@@ -1118,11 +1118,75 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
 static void * mutex_new();
 static void mutex_lock(void *);
 static void mutex_unlock(void *);
 static bool mutex_try_lock(void *);
 static void mutex_free(void *);
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
+}
 
 static void * mutex_new() {
         pthread_mutex_t *m = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
@@ -1155,24 +1219,24 @@ static void mutex_free(void * m) {
 
 int main() {
         {
-            void * m_10 = mutex_new();
-            (void)m_10;
-            mutex_lock(m_10);
+            void * m_30 = mutex_new();
+            (void)m_30;
+            mutex_lock(m_30);
             printf("%lld\n", (long long)(INT64_C(1)));
-            mutex_unlock(m_10);
+            mutex_unlock(m_30);
             printf("%lld\n", (long long)(INT64_C(2)));
             {
-                bool got_11 = mutex_try_lock(m_10);
-                (void)got_11;
-                puts((got_11) ? "true" : "false");
+                bool got_31 = mutex_try_lock(m_30);
+                (void)got_31;
+                puts((got_31) ? "true" : "false");
                 {
-                    bool got2_12 = mutex_try_lock(m_10);
-                    (void)got2_12;
-                    puts((got2_12) ? "true" : "false");
+                    bool got2_32 = mutex_try_lock(m_30);
+                    (void)got2_32;
+                    puts((got2_32) ? "true" : "false");
                 }
-                mutex_unlock(m_10);
+                mutex_unlock(m_30);
             }
-            mutex_free(m_10);
+            mutex_free(m_30);
         }
         int64_t __t0;
         __t0 = INT64_C(0);

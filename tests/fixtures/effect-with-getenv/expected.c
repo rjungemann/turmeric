@@ -1120,14 +1120,80 @@ static bool gc_is_alive(RcControlBlock *cb) {
 
 extern const char * getenv(const char *);
 
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
+
 static int64_t __effect_handler_0(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_0(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    const char * key_3 = (const char *)__effect_args[0];
-    int64_t k_4 = __k;
-    if (((TurContK *)(intptr_t)k_4)->origin_fiber != (void *)tur_current_fiber) { fprintf(stderr, "continuation error: resume on wrong fiber\n"); abort(); }
-    ((TurContK *)(intptr_t)k_4)->consumed = true;
-    return (int64_t)getenv(key_3);
+    const char * key_23 = (const char *)__effect_args[0];
+    int64_t k_24 = __k;
+    if (((TurContK *)(intptr_t)k_24)->origin_fiber != (void *)tur_current_fiber) { fprintf(stderr, "continuation error: resume on wrong fiber\n"); abort(); }
+    ((TurContK *)(intptr_t)k_24)->consumed = true;
+    return (int64_t)getenv(key_23);
 }
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
+}
+
 
 int main(void) {
     EffectHandlerFrame __eff_frame_1;
@@ -1142,8 +1208,8 @@ int main(void) {
         int64_t __t3[1];
         __t3[0] = (int64_t)"PATH";
         const char * __t4 = (const char *)tur_effect_perform("GetEnv", __t3, 1);
-        const char * __2 = __t4;
-        (void)__2;
+        const char * __22 = __t4;
+        (void)__22;
         puts("getenv ok");
     }
     *__eff_chain_1 = (*__eff_chain_1)->parent;

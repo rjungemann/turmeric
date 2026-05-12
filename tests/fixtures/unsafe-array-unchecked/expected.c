@@ -350,7 +350,7 @@ struct FiberBlock {
     int parked; /* Phase T21: scheduler park/unpark */
     int64_t result;
     int64_t arg;
-    void *handler_chain;
+    void *effect_handler_chain; /* Phase P19-8: per-fiber effect handler chain */
     void (*entry_fn)(void);
     void *fiber_local; /* Phase T21: fiber-local storage */
     void *task_group; /* Parent TaskGroup for cancellation */
@@ -581,66 +581,129 @@ static void tur_scheduler_unpark(FiberBlock *f) {
 #pragma clang diagnostic pop
 #endif
 
-/* Phase T21-F: async/await runtime */
-typedef struct TurAsyncTask TurAsyncTask;
-struct TurAsyncTask {
-    pthread_mutex_t lock;
-    pthread_cond_t  ready;
-    int64_t         value;
-    int             done;
+static void tur_scheduler_run_one(TurScheduler *s) {
+    FiberBlock *f = tur_scheduler_dequeue(s);
+    if (!f) { return; }
+    s->current_fiber = f;
+    tur_fiber_block_resume(f, 0);
+    s->current_fiber = NULL;
+    if (!f->done && !f->parked) tur_scheduler_enqueue(s, f);
+}
+
+/* Phase T21-F: async/await runtime - fiber-based Futures */
+typedef enum { FUTURE_PENDING, FUTURE_FULFILLED, FUTURE_REJECTED } TurFutureStatus;
+
+typedef struct TurFuture TurFuture;
+struct TurFuture {
+    TurFutureStatus status;
+    int64_t value;
+    const char *error;  /* NULL if no error */
+    FiberBlock *fiber;  /* The fiber running the async task */
+    struct { void (*fn)(TurFuture *, int64_t); void *env; } on_complete;
 };
 
-typedef struct { TurAsyncTask *cell; int64_t (*fn)(void *env); void *env; } TurAsyncArg;
-
-static void *tur_async_trampoline(void *raw) {
-    TurAsyncArg *a = (TurAsyncArg *)raw;
-    int64_t result = a->fn(a->env);
-    pthread_mutex_lock(&a->cell->lock);
-    a->cell->value = result;
-    a->cell->done  = 1;
-    pthread_cond_broadcast(&a->cell->ready);
-    pthread_mutex_unlock(&a->cell->lock);
-    free(a);
-    return NULL;
+/* Create a new pending future */
+static TurFuture *tur_future_new(void) {
+    TurFuture *f = (TurFuture *)calloc(1, sizeof(TurFuture));
+    if (!f) { fprintf(stderr, "future: oom\n"); abort(); }
+    f->status = FUTURE_PENDING;
+    f->fiber = NULL;
+    f->on_complete.fn = NULL;
+    return f;
 }
 
-static TurAsyncTask *tur_async_call(int64_t (*fn)(void *env), void *env) {
-    TurAsyncTask *cell = (TurAsyncTask *)malloc(sizeof(TurAsyncTask));
-    if (!cell) { fprintf(stderr, "async: oom\n"); abort(); }
-    pthread_mutex_init(&cell->lock, NULL);
-    pthread_cond_init(&cell->ready, NULL);
-    cell->value = 0; cell->done = 0;
-    TurAsyncArg *arg = (TurAsyncArg *)malloc(sizeof(TurAsyncArg));
-    if (!arg) { free(cell); fprintf(stderr, "async: oom\n"); abort(); }
-    arg->cell = cell; arg->fn = fn; arg->env = env;
-    pthread_t __tid;
-    pthread_create(&__tid, NULL, tur_async_trampoline, arg);
-    pthread_detach(__tid);
-    return cell;
+/* Fulfill a future with a value */
+static void tur_future_fulfill(TurFuture *f, int64_t value) {
+    if (!f || f->status != FUTURE_PENDING) return;
+    f->status = FUTURE_FULFILLED;
+    f->value = value;
+    if (f->on_complete.fn) f->on_complete.fn(f, value);
 }
 
-static int64_t tur_await_future(TurAsyncTask *cell) {
-    pthread_mutex_lock(&cell->lock);
-    while (!cell->done)
-        pthread_cond_wait(&cell->ready, &cell->lock);
-    int64_t v = cell->value;
-    pthread_mutex_unlock(&cell->lock);
-    return v;
+/* Reject a future with an error message */
+static void tur_future_reject(TurFuture *f, const char *error) {
+    if (!f || f->status != FUTURE_PENDING) return;
+    f->status = FUTURE_REJECTED;
+    f->error = error;
 }
 
-static void tur_async_free(TurAsyncTask *cell) {
-    if (!cell) return;
-    pthread_mutex_destroy(&cell->lock);
-    pthread_cond_destroy(&cell->ready);
-    free(cell);
+/* Check if future is done (fulfilled or rejected) */
+static int tur_future_done(TurFuture *f) {
+    return f && (f->status == FUTURE_FULFILLED || f->status == FUTURE_REJECTED);
 }
+
+/* Get future value (only valid if fulfilled) */
+static int64_t tur_future_get(TurFuture *f) {
+    if (!f || f->status != FUTURE_FULFILLED) return 0;
+    return f->value;
+}
+
+static TurFuture *tur_async_fiber(int64_t (*fn)(void)) {
+    TurFuture *future = tur_future_new();
+    if (!tur_scheduler) {
+        /* AW-005: Initialize scheduler on first use */
+        tur_scheduler = tur_scheduler_new();
+    }
+    /* AW-005: Simplified v1 - call function directly and fulfill */
+    int64_t result = fn();
+    tur_future_fulfill(future, result);
+    return future;
+}
+
+/* AW-004: await lowering with shift + scheduler callback */
+static int64_t tur_await_future(TurFuture *f) {
+    if (!f) { fprintf(stderr, "await: null future\n"); abort(); }
+    if (tur_future_done(f)) {
+        if (f->status == FUTURE_REJECTED) {
+            fprintf(stderr, "await: future rejected: %s\n", f->error ? f->error : "unknown");
+            abort();
+        }
+        return f->value;
+    }
+    /* Future not ready */
+    if (!tur_current_fiber) {
+        /* Not in a fiber - run the scheduler until future is done */
+        if (!tur_scheduler) {
+            fprintf(stderr, "await: no scheduler and not in fiber\n");
+            abort();
+        }
+        while (!tur_future_done(f)) {
+            tur_scheduler_run_one(tur_scheduler);
+        }
+    } else {
+        /* In a fiber - yield and let scheduler resume us */
+        /* Register a callback to re-enqueue this fiber when future completes */
+        f->on_complete.fn = (void (*)(TurFuture *, int64_t))tur_fiber_block_resume;
+        f->on_complete.env = (void *)tur_current_fiber;
+        tur_fiber_block_yield(0);
+        /* When we resume, the future should be done */
+        if (tur_future_done(f) && f->status == FUTURE_REJECTED) {
+            fprintf(stderr, "await: future rejected: %s\n", f->error ? f->error : "unknown");
+            abort();
+        }
+        return f->value;
+    }
+    if (f->status == FUTURE_REJECTED) {
+        fprintf(stderr, "await: future rejected: %s\n", f->error ? f->error : "unknown");
+        abort();
+    }
+    return f->value;
+}
+
+static void tur_future_free(TurFuture *f) {
+    if (!f) return;
+    free(f);
+}
+
+/* Backward compatibility: TurAsyncTask = TurFuture */
+typedef TurFuture TurAsyncTask;
 
 static __thread EffectHandlerFrame *global_effect_handler_chain = NULL;
 
 static int64_t tur_effect_perform(const char *name, int64_t *args, int n_args) {
     EffectHandlerFrame *frame =
-        (tur_current_fiber && tur_current_fiber->handler_chain)
-        ? (EffectHandlerFrame *)tur_current_fiber->handler_chain
+        (tur_current_fiber && tur_current_fiber->effect_handler_chain)
+        ? (EffectHandlerFrame *)tur_current_fiber->effect_handler_chain
         : global_effect_handler_chain;
     while (frame) {
         for (int __i = 0; __i < frame->n_cases; __i++) {
@@ -1004,15 +1067,80 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
+}
+
 static int64_t __effect_handler_0(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_0(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t k_4 = __k;
+    int64_t k_24 = __k;
     return 0;
 }
 
 int main() {
         EffectHandlerFrame __eff_frame_1;
-        EffectHandlerFrame **__eff_chain_1 = (tur_current_fiber ? (EffectHandlerFrame **)&tur_current_fiber->handler_chain : &global_effect_handler_chain);
+        EffectHandlerFrame **__eff_chain_1 = (tur_current_fiber ? (EffectHandlerFrame **)&tur_current_fiber->effect_handler_chain : &global_effect_handler_chain);
         __eff_frame_1.parent = *__eff_chain_1;
         __eff_frame_1.n_cases = 1;
         __eff_frame_1.cases[0].effect_name = "Unsafe";
@@ -1021,21 +1149,21 @@ int main() {
         *__eff_chain_1 = &__eff_frame_1;
         int64_t __t3;
         {
-            void * arr_1 = malloc(INT64_C(16));
-            (void)arr_1;
-            memset(arr_1, INT64_C(0), INT64_C(16));
+            void * arr_21 = malloc(INT64_C(16));
+            (void)arr_21;
+            memset(arr_21, INT64_C(0), INT64_C(16));
             int64_t __t4;
             int64_t __t5;
             {
-                void * p_2 = (&(arr_1));
-                (void)p_2;
-                (*((int64_t *)p_2 + INT64_C(0)) = INT64_C(42));
+                void * p_22 = (&(arr_21));
+                (void)p_22;
+                (*((int64_t *)p_22 + INT64_C(0)) = INT64_C(42));
                 int64_t __t6;
                 int64_t __t7;
                 {
-                    int64_t v_3 = (*((int64_t *)p_2 + INT64_C(0)));
-                    (void)v_3;
-                    printf("%lld\n", (long long)(v_3));
+                    int64_t v_23 = (*((int64_t *)p_22 + INT64_C(0)));
+                    (void)v_23;
+                    printf("%lld\n", (long long)(v_23));
                     int64_t __t8;
                     __t8 = INT64_C(0);
                     __t7 = __t8;

@@ -1126,14 +1126,78 @@ static void __defer_6(void *__env) {
     rc_free_queue_drain();
 }
 
-static int64_t __fn_3(void *);
+static int64_t __fn_23(void *);
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
 static int64_t rc_auto_drop_closure_capture();
 
-struct __env_5 { int64_t __fn; RcControlBlock * x; };
-static int64_t __fn_3(void * __env_p_6) {
-        struct __env_5 *__env___env_5 = (struct __env_5 *)__env_p_6;
-        int64_t __t0 = rc_strong_count(__env___env_5->x);
+struct __env_25 { int64_t __fn; RcControlBlock * x; };
+static int64_t __fn_23(void * __env_p_26) {
+        struct __env_25 *__env___env_25 = (struct __env_25 *)__env_p_26;
+        int64_t __t0 = rc_strong_count(__env___env_25->x);
         return __t0;
+}
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
 }
 
 static int64_t rc_auto_drop_closure_capture() {
@@ -1143,22 +1207,22 @@ static int64_t rc_auto_drop_closure_capture() {
             *__t2 = INT64_C(7);
             RcControlBlock *__t3 = rc_cb_alloc(0, 3, NULL);
             __t3->value = __t2;
-            RcControlBlock * x_2 = __t3;
-            (void)x_2;
+            RcControlBlock * x_22 = __t3;
+            (void)x_22;
             tur_frame __frame_4;
             tur_frame_init(&__frame_4, NULL);
-            struct __defer_env_5 __t7 = {.x = x_2};
+            struct __defer_env_5 __t7 = {.x = x_22};
             tur_frame_push_defer(&__frame_4, __defer_6, &__t7);
             int64_t __t8;
             int64_t __t9;
             {
-                struct __env_5 *__t10 = (struct __env_5 *)malloc(sizeof(struct __env_5));
-                __t10->__fn = (int64_t)(intptr_t)__fn_3;
-                __t10->x = x_2;
+                struct __env_25 *__t10 = (struct __env_25 *)malloc(sizeof(struct __env_25));
+                __t10->__fn = (int64_t)(intptr_t)__fn_23;
+                __t10->x = x_22;
                 void *__t11 = __t10;
-                void * f_8 = __t11;
-                (void)f_8;
-                __t9 = __fn_3(f_8);
+                void * f_28 = __t11;
+                (void)f_28;
+                __t9 = __fn_23(f_28);
             }
             __t8 = __t9;
             tur_frame_fire_lifo(&__frame_4);

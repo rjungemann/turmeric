@@ -1123,7 +1123,71 @@ typedef struct Printer {
 } Printer;
 
 
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
 static void do_write_line(const char *);
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
+}
 
 static void do_write_line(const char * msg) {
         int64_t __t0[1];
@@ -1133,19 +1197,19 @@ static void do_write_line(const char * msg) {
 
 static int64_t __effect_handler_2(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_2(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    const char * s_5 = (const char *)__effect_args[0];
-    int64_t k_6 = __k;
-    puts(s_5);
-    if (((TurContK *)(intptr_t)k_6)->origin_fiber != (void *)tur_current_fiber) { fprintf(stderr, "continuation error: resume on wrong fiber\n"); abort(); }
-    ((TurContK *)(intptr_t)k_6)->consumed = true;
+    const char * s_25 = (const char *)__effect_args[0];
+    int64_t k_26 = __k;
+    puts(s_25);
+    if (((TurContK *)(intptr_t)k_26)->origin_fiber != (void *)tur_current_fiber) { fprintf(stderr, "continuation error: resume on wrong fiber\n"); abort(); }
+    ((TurContK *)(intptr_t)k_26)->consumed = true;
     return 0;
 }
 
 int main() {
         int64_t __t1;
         {
-            Printer cap_4 = (Printer){.print_line = (int64_t)(intptr_t)do_write_line};
-            (void)cap_4;
+            Printer cap_24 = (Printer){.print_line = (int64_t)(intptr_t)do_write_line};
+            (void)cap_24;
             EffectHandlerFrame __eff_frame_3;
             EffectHandlerFrame **__eff_chain_3 = (tur_current_fiber ? (EffectHandlerFrame **)&tur_current_fiber->effect_handler_chain : &global_effect_handler_chain);
             __eff_frame_3.parent = *__eff_chain_3;
@@ -1154,9 +1218,9 @@ int main() {
             __eff_frame_3.cases[0].handler_fn = __effect_handler_2;
             __eff_frame_3.cases[0].env = NULL;
             *__eff_chain_3 = &__eff_frame_3;
-            (void)(((int64_t (*)(const char *))(intptr_t)((cap_4).print_line))("hello"));
+            (void)(((int64_t (*)(const char *))(intptr_t)((cap_24).print_line))("hello"));
             int64_t __t5;
-            __t5 = ((int64_t (*)(const char *))(intptr_t)((cap_4).print_line))("world");
+            __t5 = ((int64_t (*)(const char *))(intptr_t)((cap_24).print_line))("world");
             int64_t __t4 = __t5;
             *__eff_chain_3 = (*__eff_chain_3)->parent;
             __t1 = __t4;

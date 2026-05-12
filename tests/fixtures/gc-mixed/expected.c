@@ -1126,6 +1126,71 @@ static void __defer_14(void *__env) {
     rc_free_queue_drain();
 }
 
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
+}
+
 int main() {
         gc_enable();
         int64_t __t0;
@@ -1135,38 +1200,38 @@ int main() {
             *__t2 = INT64_C(10);
             RcControlBlock *__t3 = rc_cb_alloc(0, 3, NULL);
             __t3->value = __t2;
-            RcControlBlock * x_1 = __t3;
-            (void)x_1;
+            RcControlBlock * x_21 = __t3;
+            (void)x_21;
             int64_t *__t4 = (int64_t *)malloc(sizeof(int64_t));
             *__t4 = INT64_C(20);
             RcControlBlock *__t5 = rc_cb_alloc(0, 3, NULL);
             __t5->value = __t4;
-            RcControlBlock * y_2 = __t5;
-            (void)y_2;
+            RcControlBlock * y_22 = __t5;
+            (void)y_22;
             int64_t __t6;
             int64_t __t7;
             {
-                RcControlBlock *__t8 = y_2; rc_weak_increment(y_2);
-                RcControlBlock * wy_3 = __t8;
-                (void)wy_3;
-                rc_strong_decrement(y_2);
+                RcControlBlock *__t8 = y_22; rc_weak_increment(y_22);
+                RcControlBlock * wy_23 = __t8;
+                (void)wy_23;
+                rc_strong_decrement(y_22);
                 rc_free_queue_drain();
                 gc_force();
-                int64_t __t9 = rc_strong_count(x_1);
+                int64_t __t9 = rc_strong_count(x_21);
                 printf("%lld\n", (long long)(__t9));
                 {
-                    RcControlBlock *__t10 = rc_upgrade(wy_3);
-                    RcControlBlock * uy_4 = __t10;
-                    (void)uy_4;
+                    RcControlBlock *__t10 = rc_upgrade(wy_23);
+                    RcControlBlock * uy_24 = __t10;
+                    (void)uy_24;
                     tur_frame __frame_11;
                     tur_frame_init(&__frame_11, NULL);
-                    int64_t __t12 = rc_strong_count(uy_4);
+                    int64_t __t12 = rc_strong_count(uy_24);
                     printf("%lld\n", (long long)(__t12));
-                    struct __defer_env_13 __t15 = {.uy = uy_4};
+                    struct __defer_env_13 __t15 = {.uy = uy_24};
                     tur_frame_push_defer(&__frame_11, __defer_14, &__t15);
                     tur_frame_fire_lifo(&__frame_11);
                 }
-                rc_strong_decrement(x_1);
+                rc_strong_decrement(x_21);
                 rc_free_queue_drain();
                 int64_t __t16;
                 __t16 = INT64_C(0);

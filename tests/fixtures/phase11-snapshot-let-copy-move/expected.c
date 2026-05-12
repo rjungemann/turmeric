@@ -1125,27 +1125,92 @@ static void __defer_4(void *__env) {
     free(__e->s);
 }
 
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
+}
+
 int main() {
         {
-            int64_t x_1 = INT64_C(1);
-            (void)x_1;
-            int64_t y_2 = x_1;
-            (void)y_2;
-            printf("%lld\n", (long long)(x_1));
-            printf("%lld\n", (long long)(y_2));
+            int64_t x_21 = INT64_C(1);
+            (void)x_21;
+            int64_t y_22 = x_21;
+            (void)y_22;
+            printf("%lld\n", (long long)(x_21));
+            printf("%lld\n", (long long)(y_22));
         }
         {
             void * __t0 = malloc(sizeof(int64_t));
             *((int64_t *)__t0) = INT64_C(4);
-            void * r_3 = __t0;
-            (void)r_3;
-            void * s_4 = r_3;
-            (void)s_4;
+            void * r_23 = __t0;
+            (void)r_23;
+            void * s_24 = r_23;
+            (void)s_24;
             tur_frame __frame_1;
             tur_frame_init(&__frame_1, NULL);
-            int64_t __t2 = *((int64_t *)s_4);
+            int64_t __t2 = *((int64_t *)s_24);
             printf("%lld\n", (long long)(__t2));
-            struct __defer_env_3 __t5 = {.s = s_4};
+            struct __defer_env_3 __t5 = {.s = s_24};
             tur_frame_push_defer(&__frame_1, __defer_4, &__t5);
             tur_frame_fire_lifo(&__frame_1);
         }

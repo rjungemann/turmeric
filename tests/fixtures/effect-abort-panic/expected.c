@@ -1118,7 +1118,71 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
 static int64_t safe_divide(int64_t, int64_t);
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
+}
 
 static int64_t safe_divide(int64_t n, int64_t d) {
         int64_t __t0;
@@ -1135,9 +1199,9 @@ static int64_t safe_divide(int64_t n, int64_t d) {
 
 static int64_t __effect_handler_3(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_3(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    const char * msg_4 = (const char *)__effect_args[0];
-    int64_t k_5 = __k;
-    tur_panic(msg_4);
+    const char * msg_24 = (const char *)__effect_args[0];
+    int64_t k_25 = __k;
+    tur_panic(msg_24);
     return 0;
 }
 
@@ -1153,9 +1217,9 @@ int main() {
             *__eff_chain_4 = &__eff_frame_4;
             int64_t __t5 = safe_divide(INT64_C(10), INT64_C(0));
             *__eff_chain_4 = (*__eff_chain_4)->parent;
-            int64_t r_6 = __t5;
-            (void)r_6;
-            printf("%lld\n", (long long)(r_6));
+            int64_t r_26 = __t5;
+            (void)r_26;
+            printf("%lld\n", (long long)(r_26));
         }
         int64_t __t6;
         __t6 = INT64_C(0);
