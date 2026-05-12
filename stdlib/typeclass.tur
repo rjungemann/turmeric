@@ -108,3 +108,121 @@
 ;;   In v1: simplified to bimap [container fn-left fn-right] :int
 (defclass Bifunctor [^^f]
   (bimap [container fn-left fn-right] :int))
+
+
+;; Phase R0: Display and Debug typeclasses for formatting
+;; Display - human-readable string representation (like Rust's Display)
+(defclass Display [a]
+  (display [x] :cstr))
+
+;; Debug - debug string representation (like Rust's Debug)
+(defclass Debug [a]
+  (debug [x] :cstr))
+
+;; Phase R0: Error typeclass (extends Show)
+;; Error - for types that represent errors
+(defclass Error [a]
+  (error-message [x] :cstr)
+  (error-cause [x] :ptr<void>))
+
+;; Instances for primitive types (Display/Debug)
+(definstance Display [int]
+  (display [x] :cstr "<int>"))
+
+(definstance Debug [int]
+  (debug [x] :cstr "<int>"))
+
+;; Phase R1: Display, Debug, Error instances for result<T, E>
+;; In v1, result is represented as ptr<void>
+(definstance Display [ptr<void>]
+  (display [x] :cstr
+    ```c
+    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
+    if (res == NULL) return "err";
+    if (res->is_ok) {
+        /* For simplicity, just return a placeholder - proper formatting requires type info */
+        return "ok";
+    } else {
+        return "err";
+    }
+    ```))
+
+(definstance Debug [ptr<void>]
+  (debug [x] :cstr
+    ```c
+    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
+    if (res == NULL) return "err";
+    if (res->is_ok) {
+        return "ok(...)";
+    } else {
+        return "err(...)";
+    }
+    ```))
+
+(definstance Error [ptr<void>]
+  (error-message [x] :cstr
+    ```c
+    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
+    if (res == NULL || res->is_ok) {
+        return "not an error";
+    } else {
+        /* err_val is an int code in v1, convert to string */
+        /* For simplicity, return a placeholder */
+        return "error";
+    }
+    ```)
+  (error-cause [x] :ptr<void>
+    ```c
+    /* In v1, result doesn't carry cause information */
+    return NULL;
+    ```))
+
+;; Phase R0: From/Into conversion typeclasses
+;; From[A B] - conversion from A to B
+(defclass From [a b]
+  (from [x] :b))
+
+;; Into[A B] - conversion from A to B (blanket derived from From[A B])
+(defclass Into [a b]
+  (into [x] :b))
+
+;; Phase R1: Implement From/Into instances for result<T, E>
+;; In v1, we implement basic instances for primitive types and result
+
+;; From int to ptr<void> (for wrapping in ok)
+(definstance From [int ptr<void>]
+  (from [x] :ptr<void>
+    (ok x)))
+
+;; Into int to ptr<void> (blanket derived from From)
+(definstance Into [int ptr<void>]
+  (into [x] :ptr<void>
+    (ok x)))
+
+;; Phase R3: From upcast instances for error types
+;; In v1, all error types are ptr<void>, so these are identity conversions
+;; that just document the intent. Full generic instances (IoError -> Error, etc.)
+;; deferred until proper typeclass support lands.
+(definstance From [ptr<void> ptr<void>]
+  (from [x] :ptr<void>
+    x))
+
+;; Phase R3: Error typeclass instances for stdlib error types
+;; In v1, we use ptr<void> as the type since the typeclass system doesn't
+;; support user-defined struct types directly yet. These instances are
+;; placeholders and will be refined when proper generic typeclass instance
+;; support lands.
+;; For now, implement Error instances using show-* functions which handle
+;; the specific struct types via C casts.
+;; Error instance for ptr<void> (handles all error types generically)
+;; This uses the show-* functions to extract error messages.
+;; Note: This is a simplified v1 implementation that assumes the ptr<void>
+;; points to one of the known error struct types.
+(definstance Error [ptr<void>]
+  (error-message [x] :cstr
+    ;; Use show-error as a fallback for Error type
+    ;; In practice, callers should use the type-specific show functions
+    (show-error x))
+  (error-cause [x] :ptr<void>
+    ;; For generic ptr<void>, return nil as cause
+    nil))
