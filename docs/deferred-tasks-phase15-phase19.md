@@ -151,6 +151,70 @@ These are the concrete implementation gaps that cause Phase 19 tasks to be skipp
 - [x] Define FFI calling convention documentation requirements for `c-call` and `extern-c`.
   - Decision: documentary only in v1. `c-call` and `extern-c` forms should be preceded by a `;;; FFI:` comment block documenting: the C function name, its C-level signature, calling convention (default: C cdecl), and ownership semantics for any returned pointer. No syntactic enforcement in v1; a future lint pass may enforce presence of `;;; FFI:` comments.
 
+### Phase HKT completion prerequisites (unblocking H5 deferred / H6 deferred)
+
+These prerequisites unblock the remaining deferred items in Phase H5 and H6. They must be resolved before those items can proceed.
+
+#### HKT-P1 — Type application (blocks H5 partial application)
+- [ ] Define `TY_APP` type application node in `src/types.h` to represent a partially-applied type constructor (e.g., `(result int)` producing a `* -> *` type).
+  - Add `TY_APP` to the `TypeKind` enum. The node stores a `Type *fn` (the constructor) and a `Type *arg` (the applied argument). The kind of the result is derived by `kind_of_type_app()`.
+- [ ] Implement `kind_of_type_app(Type *fn_type, Type *arg_type, Diag *d) → Kind` in `src/kind_check.c`.
+  - `fn_type` must have `KIND_ARROW` or `KIND_ARROW2`; strip one `* ->` level and return the remainder. Emit `TUR_E0012_KIND_MISMATCH` if `fn_type` has `KIND_STAR` (cannot apply a `*` type).
+- [ ] Decide and document type-level application surface syntax: `(type-app F A)` at type-annotation positions vs. `(F A)` as sugar for the same. Record decision here before implementing.
+- [ ] Wire `TY_APP` into `type_c_name()` in `src/types.c` so it emits a valid C representation (opaque `int64_t` in v1, same as `TY_STRUCT`).
+- [ ] Add fixture `hkt-type-app-kind.tur` verifying that a partially-applied two-argument type constructor has kind `* -> *` (advisory check in v1; kind mismatch emits `TUR-E0012`).
+
+#### HKT-P2 — Recursive types (blocks H5 Fix/Free monad)
+- [ ] Decide and document recursive type binder syntax before implementing.
+  - Recommendation: `(defrec Name [params] body)` where `Name` may appear in `body`. Example: `(defrec Fix [^f] (Fix (^f (Fix ^f))))`. Record final decision here.
+- [ ] Implement `TY_REC` node in `src/types.h`: stores a binding name and a body `Type *` in which the name is bound. Add `type_rec_unfold(Type *t) → Type *` (one-step unrolling without diverging).
+- [ ] Add occurs-check in `kind_check_pass` for `TY_REC` nodes to prevent infinite kind-inference loops.
+  - Track a `seen_rec_names` set (symbol names) during kind inference; emit an error and stop when the same `TY_REC` name is encountered recursively before resolution.
+- [ ] Add `elab_defrec` in `src/elab.c` that registers the recursive type binding in the type environment before walking the body.
+- [ ] Add fixture `hkt-defrec-fix.tur` declaring `Fix` and verifying it kind-checks (runtime evaluation not required; kind correctness in v1 is sufficient).
+
+#### HKT-P3 — Multi-capture closures (blocks H6 `for` comprehension)
+- [ ] Audit `src/emit.c` closure emission: document the current single-capture limitation (one `env0` field) and the struct layout change required for multi-capture environments.
+- [ ] Implement multi-capture closure environment structs in `src/emit.c`: each closure emits a uniquely-named `__closure_env_N` C struct containing all captured variables (`int64_t env0; int64_t env1; ...`), heap-allocated at closure-creation time.
+- [ ] Update `borrow_check_closure` in `src/borrow_check.c` to track all captured bindings (not just the first encountered).
+- [ ] Add fixture `closure-multi-capture.tur` — a closure captures three `let`-bindings and returns their sum; verifies correct environment layout and output.
+- [ ] Add fixture `closure-multi-capture-ref.tur` — a closure captures a `ref<T>` alongside plain values; verifies the borrow checker accepts the capture without false positives.
+
+#### HKT-P4 — Orphan instance detection (blocks H6 negative test for orphan instances)
+- [ ] Add `origin_file` (`const char *`) field to `TypeClass` in `src/typeclass.h` and to `TypeDef` in `src/types.h`. Populate during elaboration from the current source file path.
+- [ ] Implement orphan instance check in `elab_definstance` in `src/elab.c`: emit `TUR_E0013_ORPHAN_INSTANCE` (new diagnostic code) when neither the typeclass `origin_file` nor any type-argument `origin_file` matches the current file.
+  - Add `TUR_E0013_ORPHAN_INSTANCE` to the `DiagCode` enum in `src/diag.h` and `diag_code_to_string()` in `src/diag.c`.
+  - In v1 (single-file compilation), the orphan check is advisory (warning, not error) because all definitions share the same compilation unit. Promote to a hard error once a module system lands (see P19-6).
+- [ ] Add negative fixture `tests/fixtures/errors/typeclass-orphan-instance/` that triggers `TUR-E0013`.
+
+#### HKT-P5 — `tur explain` infrastructure (blocks H6 `tur explain` for kind errors)
+- [ ] Define a `DiagExplanation` table in `src/diag.c`: an array mapping each `DiagCode` to a `const char *` multi-line explanation string (modelled on `rustc --explain`).
+  - Populate entries at minimum for all kind-related codes: `TUR_E0010`, `TUR_E0011`, `TUR_E0012_KIND_MISMATCH`, and `TUR_E0013_ORPHAN_INSTANCE` (added by HKT-P4).
+- [ ] Implement `diag_explain(DiagCode code, FILE *out)` in `src/diag.c`. Returns `false` and writes nothing if the code has no explanation entry.
+- [ ] Add `--explain <code>` flag parsing in `src/main.c`: print the explanation for the given code and exit 0; exit 1 with a "no explanation for <code>" message for unknown codes.
+- [ ] Add test `tur-explain-kind-mismatch` verifying that `--explain TUR-E0012` produces non-empty output and exits 0.
+
+#### HKT-P6 — `--dump-kinds` infrastructure (blocks H6 `--dump-kinds` debugging flag)
+- [ ] Verify that `Kind` information on `Type.hkt_kind` and `TypeClass.type_param_kinds` is preserved through all compiler passes (elaborate → kind-check → effect-check → codegen). Add a debug-build assertion that fires if kind info is inadvertently cleared.
+- [ ] Implement `kind_dump_program(Expr *program, FILE *out)` in `src/kind_check.c`: walks the AST and prints each `defclass`, `definstance`, and `defn` with a non-`KIND_STAR` kind annotation in human-readable form.
+- [ ] Add `--dump-kinds` flag parsing in `src/main.c`: invoke `kind_dump_program()` after `PASS_KIND_CHECK` and before codegen; respect the `--output` redirection setting.
+- [ ] Add fixture/test `dump-kinds-basic` verifying that `--dump-kinds` produces non-empty output for a program containing a `KIND_ARROW` typeclass declaration.
+
+#### HKT-P7 — Benchmark runner infrastructure (blocks H6 dictionary-passing benchmark)
+- [ ] Define benchmark fixture convention: benchmark programs live in `tests/benchmarks/`; each is a `.tur` file with a `(defn bench-main [] ...)` entry point that prints one numeric result per iteration. An `expected.min-iterations` file (integer, default 1000) controls the loop count.
+- [ ] Implement `tests/run-bench.sh`: compile and run each benchmark fixture `N` times (from `expected.min-iterations`), then report wall-time min/mean/max per iteration to stdout using `clock_gettime(CLOCK_MONOTONIC)` or `date +%s%N`.
+- [ ] Add `tests/benchmarks/hkt-dict-pass/` — a micro-benchmark that invokes a HKT typeclass method in a tight loop (default 10 000 iterations); establishes a baseline for measuring dictionary-passing overhead.
+
+#### HKT-P8 — HKT stdlib instance completeness (blocks H6 stdlib migration)
+- [ ] Add `Functor` and `Monad` instances for `result<T, E>` in `stdlib/result.tur`.
+  - `Functor.fmap` maps over the `ok` branch and passes the `err` branch through unchanged. `Monad.bind` flat-maps the `ok` branch and short-circuits on `err`.
+  - Prerequisite: `From`/`Into` typeclasses must be at least declared (completed in Phase R0) so error types can appear in `bind` without requiring a concrete conversion at this stage.
+- [ ] Add `Traversable` and `Foldable` instances for `slice<T>` in `stdlib/slice.tur` (mirrors the `vec` instances added in H3).
+- [ ] Add `Functor` instance for `rc<T>` in `stdlib/rc.tur`: `fmap` clones the contained value, applies the function, and returns a new `rc`.
+- [ ] Verify `do-m` macro works end-to-end with `option`, `result`, and `vec` monad instances.
+  - Add fixture `hkt-do-m-result.tur` — chains two fallible computations via `do-m`; verifies short-circuit on `err`.
+  - Add fixture `hkt-do-m-option.tur` — chains two `option`-returning lookups via `do-m`; verifies `none` propagation.
+
 ---
 
 ## Actionable Remaining Tasks (Checkbox Backlog)
@@ -164,7 +228,18 @@ After prerequisites are complete, execute these implementation tasks.
   - Implemented: typeclass method signatures accept `#{Effect}` effect-row annotations in the advisory v1 mode (stored in AST, not enforced). Fixture `tests/fixtures/typeclass-effect-row/` passes.
 
 ### Phase 16 remaining tasks
-- [ ] Implement effect-polymorphic capability fields once effect-row model is finalized.
+- [x] Implement effect-polymorphic capability fields once effect-row model is finalized.
+  - Implemented in Phase 16 v2:
+    - `EffectRow *effect_row` added to `StructField` in `src/types.h`
+    - `:fn` added as valid field type in `parse_struct_field_type` in `src/elab.c`
+    - `TY_FN` fields allowed in `:copy` structs (stored as `int64_t`, trivially copyable)
+    - `elab_defstruct` extended to parse optional `#{Effect...}` effect-row annotation after `:fn` fields
+    - `elab_method_call` extended to emit indirect `EX_CALL` (via `fn_expr`) when calling a `TY_FN` struct field; falls back to global struct-def search when receiver type is `TY_UNKNOWN`/`TY_INT`
+    - Effect-row from field propagated to caller's inferred row in `src/effect_check.c`
+    - Indirect field call emitted as cast function pointer call in `src/emit.c`
+    - `mangle_field_name` helper added to emit.c so hyphenated field names (e.g. `print-line` → `print_line`) are valid C identifiers
+    - `fn_expr` copied in `src/cps.c` and `src/effect_lower.c`
+    - Fixture `tests/fixtures/capability-effect-poly/` passes
 
 ### Phase 17 remaining tasks
 - [x] Implement `(throw! "message")` sugar.

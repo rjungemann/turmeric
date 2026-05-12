@@ -65,9 +65,11 @@ typedef enum TypeKind {
 /* Phase 11: Struct field descriptor.
  * Stored inline in StructDef.fields[]. */
 typedef struct StructField {
-    TypeKind kind;       /* field type kind */
-    TypeKind inner_kind; /* for rc/ref/weak, the inner type; TY_UNKNOWN otherwise */
-    const char *name;    /* field name (interned string, NUL-terminated) */
+    TypeKind kind;               /* field type kind */
+    TypeKind inner_kind;         /* for rc/ref/weak, the inner type; TY_UNKNOWN otherwise */
+    const char *name;            /* field name (interned string, NUL-terminated) */
+    /* Phase 16 v2: effect-row annotation for :fn fields (NULL = no annotation) */
+    struct EffectRow *effect_row;
 } StructField;
 
 /* Phase 11: Struct type descriptor.

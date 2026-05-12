@@ -228,6 +228,26 @@ static void emit_pending_defer_thunks(EmitCtx *ctx, Buf *out) {
 
 
 
+
+/* Mangle a Turmeric struct field name to a valid C identifier.
+ * Replaces hyphens and other non-id-safe chars with underscores. Caller frees. */
+static char *mangle_field_name(const char *name) {
+    size_t len = strlen(name);
+    char *p = (char *)malloc(len + 1);
+    if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
+    for (size_t i = 0; i < len; i++) {
+        char c = name[i];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '_') {
+            p[i] = c;
+        } else {
+            p[i] = '_';
+        }
+    }
+    p[len] = '\0';
+    return p;
+}
+
 /* Return a sanitized C identifier for a Binding, without the ID suffix.
  * Used for function names and parameters. Caller frees. */
 static char *raw_name_for_binding(const Binding *b) {
@@ -1326,8 +1346,47 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             abort();
         case EX_CALL: {
             Binding *fn_binding = e->as.call_.fn_binding;
+
+            /* Phase 16 v2: indirect capability field call — fn_expr is EX_GET_FIELD.
+             * Emit: ((ret_t (*)(arg_t, ...))(intptr_t)(struct_val).field_name)(args...)
+             * Effect-row annotation is advisory (erased to a plain function pointer). */
+            if (e->as.call_.fn_expr) {
+                Expr *gf = e->as.call_.fn_expr;
+                char *fn_ptr_val = emit_value(ctx, body, gf);
+                const char *ret_c = type_c_name(e->type);
+
+                char **arg_strs = (char **)malloc(e->as.call_.n_args * sizeof(char *));
+                if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
+                for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                    arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
+                }
+
+                Buf out; buf_init(&out);
+                /* Cast function pointer to the right signature, then call. */
+                buf_printf(&out, "((%s (*)(", ret_c);
+                if (e->as.call_.n_args == 0) {
+                    buf_puts(&out, "void");
+                } else {
+                    for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                        if (i > 0) buf_puts(&out, ", ");
+                        buf_puts(&out, type_c_name(e->as.call_.args[i]->type));
+                    }
+                }
+                buf_printf(&out, "))(intptr_t)(%s))(", fn_ptr_val);
+                for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                    if (i > 0) buf_puts(&out, ", ");
+                    buf_puts(&out, arg_strs[i]);
+                }
+                buf_puts(&out, ")");
+                buf_putc(&out, '\0');
+                char *result = strdup(out.data);
+                buf_free(&out);
+                for (uint32_t i = 0; i < e->as.call_.n_args; i++) free(arg_strs[i]);
+                free(arg_strs);
+                free(fn_ptr_val);
+                return result;
+            }
             
-            /* Phase 3: Check if this is a closure call */
             if (fn_binding->closure_fn_binding) {
                 /* This is a closure - emit call to thunk function with closure value as first arg */
                 Binding *thunk_binding = fn_binding->closure_fn_binding;
@@ -2071,8 +2130,17 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_printf(&lit, "(%s){", def->name);
             for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++) {
                 char *fv = emit_value(ctx, body, e->as.make_struct_.field_values[i]);
+                bool is_fn_field = (def->fields[i].kind == TY_FN);
+                bool val_is_fn = (e->as.make_struct_.field_values[i]->type.kind == TY_FN);
                 if (i > 0) buf_puts(&lit, ", ");
-                buf_printf(&lit, ".%s = %s", def->fields[i].name, fv);
+                char *mfn = mangle_field_name(def->fields[i].name);
+                if (is_fn_field && val_is_fn) {
+                    /* Phase 16 v2: function pointer → int64_t field cast */
+                    buf_printf(&lit, ".%s = (int64_t)(intptr_t)%s", mfn, fv);
+                } else {
+                    buf_printf(&lit, ".%s = %s", mfn, fv);
+                }
+                free(mfn);
                 free(fv);
             }
             buf_puts(&lit, "}");
@@ -2085,11 +2153,13 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* (.field s) - emit s.field_name */
             char *sv = emit_value(ctx, body, e->as.get_field_.struct_expr);
             StructDef *def = e->as.get_field_.def;
-            const char *fname = def->fields[e->as.get_field_.field_idx].name;
+            const char *fname_raw = def->fields[e->as.get_field_.field_idx].name;
+            char *fname = mangle_field_name(fname_raw);
             Buf lit; buf_init(&lit);
             buf_printf(&lit, "(%s).%s", sv, fname);
             buf_putc(&lit, '\0');
             free(sv);
+            free(fname);
             char *result = strdup(lit.data);
             buf_free(&lit);
             return result;
@@ -2787,7 +2857,9 @@ int emit_program(Buf *out, const Expr *program) {
                     case TY_REF:      ctype = "void *"; break;
                     default:          ctype = "int64_t"; break;
                 }
-                buf_printf(&early_file, "    %s %s;\n", ctype, f->name);
+                char *mfn = mangle_field_name(f->name);
+                buf_printf(&early_file, "    %s %s;\n", ctype, mfn);
+                free(mfn);
             }
             buf_printf(&early_file, "} %s;\n\n", def->name);
             /* If any RC/ref/weak field, emit drop glue function */
@@ -2798,16 +2870,18 @@ int emit_program(Buf *out, const Expr *program) {
                 /* Drop fields in REVERSE order */
                 for (int32_t j = (int32_t)def->n_fields - 1; j >= 0; j--) {
                     StructField *f = &def->fields[j];
+                    char *mfn = mangle_field_name(f->name);
                     if (f->kind == TY_RC) {
                         buf_printf(&early_file, "    if (s->%s) { rc_strong_decrement(s->%s); rc_free_queue_drain(); }\n",
-                                   f->name, f->name);
+                                   mfn, mfn);
                     } else if (f->kind == TY_WEAK) {
                         buf_printf(&early_file, "    if (s->%s) rc_weak_decrement(s->%s);\n",
-                                   f->name, f->name);
+                                   mfn, mfn);
                     } else if (f->kind == TY_REF) {
                         buf_printf(&early_file, "    if (s->%s) free(s->%s);\n",
-                                   f->name, f->name);
+                                   mfn, mfn);
                     }
+                    free(mfn);
                 }
                 buf_printf(&early_file, "    free(ptr);\n");
                 buf_printf(&early_file, "}\n\n");
@@ -3107,6 +3181,7 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    char *stack;\n");
     buf_puts(out, "    size_t stack_size;\n");
     buf_puts(out, "    int done;\n");
+    buf_puts(out, "    int parked; /* Phase T21: scheduler park/unpark */\n");
     buf_puts(out, "    int64_t result;\n");
     buf_puts(out, "    int64_t arg;\n");
     buf_puts(out, "    void *handler_chain;\n");
@@ -3246,6 +3321,7 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "        s->current_fiber = f;\n");
     buf_puts(out, "        tur_fiber_block_resume(f, 0);\n");
     buf_puts(out, "        s->current_fiber = NULL;\n");
+    buf_puts(out, "        if (!f->done && !f->parked) tur_scheduler_enqueue(s, f);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    s->running = false;\n");
     buf_puts(out, "}\n\n");
@@ -3257,9 +3333,23 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "            s->current_fiber = f;\n");
     buf_puts(out, "            tur_fiber_block_resume(f, 0);\n");
     buf_puts(out, "            s->current_fiber = NULL;\n");
+    buf_puts(out, "            if (!f->done && !f->parked) tur_scheduler_enqueue(s, f);\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    s->running = false;\n");
+    buf_puts(out, "}\n\n");
+    /* Phase T21: Scheduler yield/park/unpark */
+    buf_puts(out, "static void tur_scheduler_yield(void) {\n");
+    buf_puts(out, "    tur_fiber_block_yield(0);\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static void tur_scheduler_park(void) {\n");
+    buf_puts(out, "    if (tur_current_fiber) tur_current_fiber->parked = 1;\n");
+    buf_puts(out, "    tur_fiber_block_yield(0);\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static void tur_scheduler_unpark(FiberBlock *f) {\n");
+    buf_puts(out, "    if (!f) return;\n");
+    buf_puts(out, "    f->parked = 0;\n");
+    buf_puts(out, "    if (tur_scheduler) tur_scheduler_enqueue(tur_scheduler, f);\n");
     buf_puts(out, "}\n\n");
 
     buf_puts(out, "#ifdef __clang__\n");
