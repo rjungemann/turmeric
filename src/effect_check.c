@@ -173,14 +173,30 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
 
     case EX_HANDLE: {
         /* Effects performed inside a handle body are handled (absorbed) by the
-         * handler; only effects NOT covered by a case bubble up to the caller.
-         * For v1 we conservatively treat the whole body as contributing its
-         * effects — a more precise analysis is deferred to P19-4. */
+         * handler when a matching case exists; only effects NOT covered by a
+         * case bubble up to the caller.
+         *
+         * Effect re-opening: a handler case body may itself perform effects
+         * (e.g., it calls (perform Write ...) while handling a Read effect).
+         * Those effects propagate to the enclosing function.
+         *
+         * Algorithm:
+         *   1. Collect the body's effect row into body_row.
+         *   2. For each handler case: remove its handled effect from body_row
+         *      (it is absorbed here) and collect the case body's effects into
+         *      the caller's row (they are re-opened / propagated outward).
+         *   3. Merge any unhandled body effects into the caller's row. */
         HandleExpr *h = e->as.handle_.handle;
-        row = collect_effects_in_expr(a, h->body, row, idx, env, subst);
+        EffectRow *body_row = collect_effects_in_expr(
+            a, h->body, effect_row_empty(a), idx, env, subst);
         for (uint8_t i = 0; i < h->n_cases; i++) {
+            /* Absorb the handled effect from the body row. */
+            body_row = effect_row_remove(body_row, h->cases[i].effect_name, a);
+            /* Propagate effects performed inside the handler case body. */
             row = collect_effects_in_expr(a, h->cases[i].body, row, idx, env, subst);
         }
+        /* Any body effects that were not covered by a case propagate upward. */
+        row = effect_row_merge(a, row, body_row);
         return row;
     }
 
@@ -326,6 +342,39 @@ int effect_row_check_declared(FnDef *fd, Arena *a) {
 int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
     if (!program || program->kind != EX_PROGRAM) return 0;
     if (!env) return 0;
+
+    /* --- Step -1: Populate the effect env from EX_DEFECT nodes.
+     * PASS_EFFECT_LOWER creates a fresh empty env; we scan the elaborated AST
+     * for (defeffect ...) nodes and register each one so the env is populated
+     * before ERK_UNRESOLVED resolution and inference run. --- */
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        Expr *item = program->as.program.items[i];
+        if (!item || item->kind != EX_DEFECT || !item->as.effect_def_.def) continue;
+        EffectDef *def = item->as.effect_def_.def;
+        /* Skip if already registered (idempotent). */
+        if (!effect_env_contains(env, def->name)) {
+            effect_env_register(env, a, def->name,
+                                def->param_names, def->param_types,
+                                def->n_params, def->result_type);
+        }
+    }
+
+    /* --- Step 0: Resolve ERK_UNRESOLVED declared effect rows.
+     * Effect row annotations are parsed during elaboration as ERK_UNRESOLVED
+     * (symbolic names).  Now that PASS_EFFECT_LOWER has populated the effect
+     * environment, we can resolve each annotation to ERK_CONCRETE/ERK_VAR. --- */
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        Expr *item = program->as.program.items[i];
+        if (!item || item->kind != EX_FN_DEF || !item->as.fn_def_.fn) continue;
+        FnDef *fn = item->as.fn_def_.fn;
+        if (fn->binding && fn->binding->type.as.fn.effect_row) {
+            EffectRow *decl = fn->binding->type.as.fn.effect_row;
+            if (decl->kind == ERK_UNRESOLVED) {
+                fn->binding->type.as.fn.effect_row =
+                    effect_row_resolve(decl, env, a);
+            }
+        }
+    }
 
     /* --- Step 1: Collect all top-level FnDef nodes into an index. --- */
     FnIndex idx;
