@@ -1067,9 +1067,107 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
+static void * atomic_new(int64_t);
+static int64_t atomic_load(void *);
+static int64_t atomic_add_(void *, int64_t);
+static void atomic_free(void *);
+static void * counter_arg_new(void *);
+static void * stress_worker(void *);
+static void * ts_thread_spawn(void *, void *);
+static void ts_thread_join(void *);
+static void * spawn_all(void *, int64_t);
+static void join_all(void *, int64_t);
+
+static void * atomic_new(int64_t init) {
+        int64_t *cell = (int64_t *)malloc(sizeof(int64_t));
+  if (!cell) { fprintf(stderr, "atomic-new: oom\n"); abort(); }
+  __atomic_store_n(cell, (int64_t)init, __ATOMIC_SEQ_CST);
+  return (void *)cell;
+  
+}
+
+static int64_t atomic_load(void * p) {
+        return (int64_t)__atomic_load_n((int64_t *)p, __ATOMIC_SEQ_CST);
+  
+}
+
+static int64_t atomic_add_(void * p, int64_t delta) {
+        return (int64_t)__atomic_fetch_add((int64_t *)p, (int64_t)delta, __ATOMIC_SEQ_CST);
+  
+}
+
+static void atomic_free(void * p) {
+        free(p);
+  
+}
+
+static void * counter_arg_new(void * counter) {
+        return counter;   /* pass counter directly as arg */
+  
+}
+
+static void * stress_worker(void * arg) {
+        __atomic_fetch_add((int64_t *)arg, (int64_t)1, __ATOMIC_SEQ_CST);
+  return NULL;
+  
+}
+
+static void * ts_thread_spawn(void * fn_ptr, void * arg) {
+        pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  if (!t) { fprintf(stderr, "ts-thread-spawn: oom\n"); abort(); }
+  pthread_create(t, NULL, (void *(*)(void *))fn_ptr, arg);
+  return (void *)t;
+  
+}
+
+static void ts_thread_join(void * t) {
+        pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  
+}
+
+static void * spawn_all(void * counter, int64_t n) {
+        pthread_t **handles = (pthread_t **)malloc((size_t)n * sizeof(pthread_t *));
+  if (!handles) { fprintf(stderr, "spawn-all: oom\n"); abort(); }
+  int64_t i;
+  for (i = 0; i < n; i++) {
+      pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+      if (!t) { fprintf(stderr, "spawn-all: thread oom\n"); abort(); }
+      pthread_create(t, NULL,
+          (void *(*)(void *))stress_worker,
+          (void *)counter);
+      handles[i] = t;
+  }
+  return (void *)handles;
+  
+}
+
+static void join_all(void * handles, int64_t n) {
+        pthread_t **hs = (pthread_t **)handles;
+  int64_t i;
+  for (i = 0; i < n; i++) {
+      pthread_join(*hs[i], NULL);
+      free(hs[i]);
+  }
+  free(hs);
+  
+}
+
 int main() {
-        printf("%lld\n", (long long)(INT64_C(0)));
-        return (int)0;
+        {
+            void * counter_25 = atomic_new(INT64_C(0));
+            (void)counter_25;
+            {
+                void * handles_26 = spawn_all(counter_25, INT64_C(100));
+                (void)handles_26;
+                join_all(handles_26, INT64_C(100));
+            }
+            printf("%lld\n", (long long)(atomic_load(counter_25)));
+            atomic_free(counter_25);
+        }
+        int64_t __t0;
+        __t0 = INT64_C(0);
+        return (int)__t0;
 }
 
 

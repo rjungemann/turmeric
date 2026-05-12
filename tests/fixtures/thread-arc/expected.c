@@ -1067,9 +1067,148 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
+static void * arc_new(int64_t);
+static void * arc_clone(void *);
+static int64_t arc_get(void *);
+static void arc_drop(void *);
+static int64_t arc_strong_count(void *);
+static void * thread_arg_new(void *);
+static int64_t thread_arg_result(void *);
+static void thread_arg_free(void *);
+static void * thread_worker(void *);
+static void * thread_spawn(void *);
+static void thread_join(void *);
+
+static void * arc_new(int64_t val) {
+        typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;
+  ArcCell *b = (ArcCell *)malloc(sizeof(ArcCell));
+  if (!b) { fprintf(stderr, "arc-new: oom\n"); abort(); }
+  __atomic_store_n(&b->strong, (uint64_t)1, __ATOMIC_RELAXED);
+  __atomic_store_n(&b->weak,   (uint64_t)1, __ATOMIC_RELAXED);
+  b->value = (int64_t)val;
+  return (void *)b;
+  
+}
+
+static void * arc_clone(void * p) {
+        typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;
+  ArcCell *b = (ArcCell *)p;
+  __atomic_fetch_add(&b->strong, (uint64_t)1, __ATOMIC_RELAXED);
+  return (void *)b;
+  
+}
+
+static int64_t arc_get(void * p) {
+        typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;
+  return (int64_t)((ArcCell *)p)->value;
+  
+}
+
+static void arc_drop(void * p) {
+        typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;
+  ArcCell *b = (ArcCell *)p;
+  uint64_t prev = __atomic_fetch_sub(&b->strong, (uint64_t)1, __ATOMIC_ACQ_REL);
+  if (prev == 1) {
+      if (__atomic_fetch_sub(&b->weak, (uint64_t)1, __ATOMIC_ACQ_REL) == 1)
+          free(b);
+  }
+  
+}
+
+static int64_t arc_strong_count(void * p) {
+        typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;
+  return (int64_t)__atomic_load_n(&((ArcCell *)p)->strong, __ATOMIC_SEQ_CST);
+  
+}
+
+static void * thread_arg_new(void * arc_clone_ptr) {
+        typedef struct { void *arc; int64_t result; } ThreadArg;
+  ThreadArg *a = (ThreadArg *)malloc(sizeof(ThreadArg));
+  if (!a) { fprintf(stderr, "thread-arg-new: oom\n"); abort(); }
+  a->arc    = arc_clone_ptr;
+  a->result = 0;
+  return (void *)a;
+  
+}
+
+static int64_t thread_arg_result(void * a) {
+        typedef struct { void *arc; int64_t result; } ThreadArg;
+  return (int64_t)((ThreadArg *)a)->result;
+  
+}
+
+static void thread_arg_free(void * a) {
+        free(a);
+  
+}
+
+static void * thread_worker(void * arg) {
+        typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;
+  typedef struct { void *arc; int64_t result; } ThreadArg;
+  ThreadArg *a = (ThreadArg *)arg;
+  int64_t v = ((ArcCell *)a->arc)->value;
+  a->result = v * 2;
+  return NULL;
+  
+}
+
+static void * thread_spawn(void * arg) {
+        pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  if (!t) { fprintf(stderr, "thread-spawn: oom\n"); abort(); }
+  pthread_create(t, NULL, (void *(*)(void *))thread_worker, arg);
+  return (void *)t;
+  
+}
+
+static void thread_join(void * t) {
+        pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  
+}
+
 int main() {
-        printf("%lld\n", (long long)(INT64_C(0)));
-        return (int)0;
+        {
+            void * shared_23 = arc_new(INT64_C(21));
+            (void)shared_23;
+            {
+                void * c1_24 = arc_clone(shared_23);
+                (void)c1_24;
+                {
+                    void * c2_25 = arc_clone(shared_23);
+                    (void)c2_25;
+                    printf("%lld\n", (long long)(arc_strong_count(shared_23)));
+                    {
+                        void * a1_26 = thread_arg_new(c1_24);
+                        (void)a1_26;
+                        {
+                            void * a2_27 = thread_arg_new(c2_25);
+                            (void)a2_27;
+                            {
+                                void * t1_28 = thread_spawn(a1_26);
+                                (void)t1_28;
+                                {
+                                    void * t2_29 = thread_spawn(a2_27);
+                                    (void)t2_29;
+                                    thread_join(t1_28);
+                                    thread_join(t2_29);
+                                }
+                            }
+                            printf("%lld\n", (long long)(thread_arg_result(a1_26)));
+                            printf("%lld\n", (long long)(thread_arg_result(a2_27)));
+                            arc_drop(c1_24);
+                            arc_drop(c2_25);
+                            printf("%lld\n", (long long)(arc_strong_count(shared_23)));
+                            thread_arg_free(a1_26);
+                            thread_arg_free(a2_27);
+                        }
+                    }
+                }
+            }
+            arc_drop(shared_23);
+        }
+        int64_t __t0;
+        __t0 = INT64_C(0);
+        return (int)__t0;
 }
 
 

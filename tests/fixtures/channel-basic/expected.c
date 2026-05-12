@@ -1067,9 +1067,204 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
+static void * chan_new(int64_t);
+static void chan_send(void *, int64_t);
+static int64_t chan_recv(void *);
+static void chan_free(void *);
+static void * targ_new(void *);
+static int64_t targ_result(void *);
+static void targ_free(void *);
+static void * producer(void *);
+static void * consumer(void *);
+static void * thread_spawn_fn(void *, void *);
+static void thread_join(void *);
+
+static void * chan_new(int64_t cap) {
+        typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t  not_full;
+      pthread_cond_t  not_empty;
+      int64_t        *buf;
+      int64_t         head;
+      int64_t         tail;
+      int64_t         count;
+      int64_t         cap;
+  } ChanBlock;
+  ChanBlock *ch = (ChanBlock *)malloc(sizeof(ChanBlock));
+  if (!ch) { fprintf(stderr, "chan-new: oom\n"); abort(); }
+  ch->buf = (int64_t *)malloc(sizeof(int64_t) * (size_t)cap);
+  if (!ch->buf) { free(ch); fprintf(stderr, "chan-new: buf oom\n"); abort(); }
+  pthread_mutex_init(&ch->lock, NULL);
+  pthread_cond_init(&ch->not_full, NULL);
+  pthread_cond_init(&ch->not_empty, NULL);
+  ch->head = 0; ch->tail = 0; ch->count = 0; ch->cap = (int64_t)cap;
+  return (void *)ch;
+  
+}
+
+static void chan_send(void * ch, int64_t val) {
+        typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+  } ChanBlock;
+  ChanBlock *c = (ChanBlock *)ch;
+  pthread_mutex_lock(&c->lock);
+  while (c->count == c->cap)
+      pthread_cond_wait(&c->not_full, &c->lock);
+  c->buf[c->tail] = (int64_t)val;
+  c->tail = (c->tail + 1) % c->cap;
+  c->count++;
+  pthread_cond_signal(&c->not_empty);
+  pthread_mutex_unlock(&c->lock);
+  
+}
+
+static int64_t chan_recv(void * ch) {
+        typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+  } ChanBlock;
+  ChanBlock *c = (ChanBlock *)ch;
+  pthread_mutex_lock(&c->lock);
+  while (c->count == 0)
+      pthread_cond_wait(&c->not_empty, &c->lock);
+  int64_t val = c->buf[c->head];
+  c->head = (c->head + 1) % c->cap;
+  c->count--;
+  pthread_cond_signal(&c->not_full);
+  pthread_mutex_unlock(&c->lock);
+  return val;
+  
+}
+
+static void chan_free(void * ch) {
+        typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+  } ChanBlock;
+  ChanBlock *c = (ChanBlock *)ch;
+  pthread_mutex_destroy(&c->lock);
+  pthread_cond_destroy(&c->not_full);
+  pthread_cond_destroy(&c->not_empty);
+  free(c->buf);
+  free(c);
+  
+}
+
+static void * targ_new(void * ch) {
+        typedef struct { void *ch; int64_t result; } TArg;
+  TArg *a = (TArg *)malloc(sizeof(TArg));
+  if (!a) { fprintf(stderr, "targ-new: oom\n"); abort(); }
+  a->ch = ch; a->result = 0;
+  return (void *)a;
+  
+}
+
+static int64_t targ_result(void * a) {
+        typedef struct { void *ch; int64_t result; } TArg;
+  return ((TArg *)a)->result;
+  
+}
+
+static void targ_free(void * a) {
+        free(a);
+  
+}
+
+static void * producer(void * arg) {
+        typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+  } ChanBlock;
+  typedef struct { void *ch; int64_t result; } TArg;
+  void *ch = ((TArg *)arg)->ch;
+  /* inline chan_send */
+  int64_t vals[3] = {1, 2, 3};
+  int i;
+  for (i = 0; i < 3; i++) {
+      ChanBlock *c = (ChanBlock *)ch;
+      pthread_mutex_lock(&c->lock);
+      while (c->count == c->cap) pthread_cond_wait(&c->not_full, &c->lock);
+      c->buf[c->tail] = vals[i];
+      c->tail = (c->tail + 1) % c->cap;
+      c->count++;
+      pthread_cond_signal(&c->not_empty);
+      pthread_mutex_unlock(&c->lock);
+  }
+  return NULL;
+  
+}
+
+static void * consumer(void * arg) {
+        typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+  } ChanBlock;
+  typedef struct { void *ch; int64_t result; } TArg;
+  TArg *a = (TArg *)arg;
+  void *ch = a->ch;
+  int64_t sum = 0;
+  int i;
+  for (i = 0; i < 3; i++) {
+      ChanBlock *c = (ChanBlock *)ch;
+      pthread_mutex_lock(&c->lock);
+      while (c->count == 0) pthread_cond_wait(&c->not_empty, &c->lock);
+      int64_t val = c->buf[c->head];
+      c->head = (c->head + 1) % c->cap;
+      c->count--;
+      pthread_cond_signal(&c->not_full);
+      pthread_mutex_unlock(&c->lock);
+      sum += val;
+  }
+  a->result = sum;
+  return NULL;
+  
+}
+
+static void * thread_spawn_fn(void * fn_ptr, void * arg) {
+        pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  if (!t) { fprintf(stderr, "thread-spawn: oom\n"); abort(); }
+  pthread_create(t, NULL, (void *(*)(void *))fn_ptr, arg);
+  return (void *)t;
+  
+}
+
+static void thread_join(void * t) {
+        pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  
+}
+
 int main() {
-        printf("%lld\n", (long long)(INT64_C(0)));
-        return (int)0;
+        {
+            void * ch_25 = chan_new(INT64_C(4));
+            (void)ch_25;
+            {
+                void * prod_arg_26 = targ_new(ch_25);
+                (void)prod_arg_26;
+                {
+                    void * cons_arg_27 = targ_new(ch_25);
+                    (void)cons_arg_27;
+                    {
+                        void * tp_28 = thread_spawn_fn(producer, prod_arg_26);
+                        (void)tp_28;
+                        {
+                            void * tc_29 = thread_spawn_fn(consumer, cons_arg_27);
+                            (void)tc_29;
+                            thread_join(tp_28);
+                            thread_join(tc_29);
+                        }
+                    }
+                    printf("%lld\n", (long long)(targ_result(cons_arg_27)));
+                    targ_free(prod_arg_26);
+                    targ_free(cons_arg_27);
+                }
+            }
+            chan_free(ch_25);
+        }
+        int64_t __t0;
+        __t0 = INT64_C(0);
+        return (int)__t0;
 }
 
 

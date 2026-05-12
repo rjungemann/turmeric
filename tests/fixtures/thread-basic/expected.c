@@ -1067,9 +1067,74 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
+static void * thread_arg_new(int64_t);
+static void thread_arg_free(void *);
+static void * thread_worker_fn(void *);
+static void * thread_spawn(void *);
+static void thread_join(void *);
+
+static void * thread_arg_new(int64_t val) {
+        int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  if (!p) { fprintf(stderr, "thread-arg-new: oom\n"); abort(); }
+  *p = (int64_t)val;
+  return (void *)p;
+  
+}
+
+static void thread_arg_free(void * p) {
+        free(p);
+  
+}
+
+static void * thread_worker_fn(void * arg) {
+        int64_t val = *(int64_t *)arg;
+  printf("%lld\n", (long long)val);
+  return NULL;
+  
+}
+
+static void * thread_spawn(void * arg) {
+        pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  if (!t) { fprintf(stderr, "thread-spawn: oom\n"); abort(); }
+  int rc = pthread_create(t, NULL,
+      (void *(*)(void *))thread_worker_fn,
+      (void *)arg);
+  if (rc != 0) { fprintf(stderr, "thread-spawn: pthread_create failed\n"); abort(); }
+  return (void *)t;
+  
+}
+
+static void thread_join(void * t) {
+        pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  
+}
+
 int main() {
+        {
+            void * arg1_11 = thread_arg_new(INT64_C(10));
+            (void)arg1_11;
+            {
+                void * t1_12 = thread_spawn(arg1_11);
+                (void)t1_12;
+                thread_join(t1_12);
+                thread_arg_free(arg1_11);
+            }
+        }
+        {
+            void * arg2_13 = thread_arg_new(INT64_C(20));
+            (void)arg2_13;
+            {
+                void * t2_14 = thread_spawn(arg2_13);
+                (void)t2_14;
+                thread_join(t2_14);
+                thread_arg_free(arg2_13);
+            }
+        }
         printf("%lld\n", (long long)(INT64_C(0)));
-        return (int)0;
+        int64_t __t0;
+        __t0 = INT64_C(0);
+        return (int)__t0;
 }
 
 

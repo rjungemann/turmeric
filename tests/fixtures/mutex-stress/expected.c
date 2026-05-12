@@ -1067,9 +1067,142 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
+static void * mutex_new();
+static void mutex_lock(void *);
+static void mutex_unlock(void *);
+static void mutex_free(void *);
+static void * ms_arg_new(void *, void *, int64_t);
+static void ms_arg_free(void *);
+static void * ms_counter_new();
+static int64_t ms_counter_load(void *);
+static void ms_counter_free(void *);
+static void * ms_worker(void *);
+static void * ms_spawn_all(void *, void *, void *, int64_t, int64_t);
+static void ms_join_all(void *, int64_t);
+
+static void * mutex_new() {
+        pthread_mutex_t *m = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
+  if (!m) { fprintf(stderr, "mutex-new: oom\n"); abort(); }
+  pthread_mutex_init(m, NULL);
+  return (void *)m;
+  
+}
+
+static void mutex_lock(void * m) {
+        pthread_mutex_lock((pthread_mutex_t *)m);
+  
+}
+
+static void mutex_unlock(void * m) {
+        pthread_mutex_unlock((pthread_mutex_t *)m);
+  
+}
+
+static void mutex_free(void * m) {
+        pthread_mutex_destroy((pthread_mutex_t *)m);
+  free(m);
+  
+}
+
+static void * ms_arg_new(void * mtx, void * counter, int64_t iters) {
+        typedef struct { void *mtx; int64_t *counter; int64_t iters; } MSArg;
+  MSArg *a = (MSArg *)malloc(sizeof(MSArg));
+  if (!a) { fprintf(stderr, "ms-arg-new: oom\n"); abort(); }
+  a->mtx     = mtx;
+  a->counter = (int64_t *)counter;
+  a->iters   = (int64_t)iters;
+  return (void *)a;
+  
+}
+
+static void ms_arg_free(void * a) {
+        free(a);
+  
+}
+
+static void * ms_counter_new() {
+        int64_t *c = (int64_t *)malloc(sizeof(int64_t));
+  if (!c) { fprintf(stderr, "ms-counter-new: oom\n"); abort(); }
+  *c = 0;
+  return (void *)c;
+  
+}
+
+static int64_t ms_counter_load(void * c) {
+        return *(int64_t *)c;
+  
+}
+
+static void ms_counter_free(void * c) {
+        free(c);
+  
+}
+
+static void * ms_worker(void * arg) {
+        typedef struct { void *mtx; int64_t *counter; int64_t iters; } MSArg;
+  MSArg *a = (MSArg *)arg;
+  pthread_mutex_t *mtx = (pthread_mutex_t *)a->mtx;
+  int64_t i;
+  for (i = 0; i < a->iters; i++) {
+      pthread_mutex_lock(mtx);
+      (*a->counter)++;
+      pthread_mutex_unlock(mtx);
+  }
+  return NULL;
+  
+}
+
+static void * ms_spawn_all(void * fn_ptr, void * mtx, void * counter, int64_t n, int64_t iters) {
+        typedef struct { void *mtx; int64_t *counter; int64_t iters; } MSArg;
+  pthread_t **handles = (pthread_t **)malloc((size_t)n * sizeof(pthread_t *));
+  if (!handles) { fprintf(stderr, "ms-spawn-all: oom\n"); abort(); }
+  int64_t i;
+  for (i = 0; i < n; i++) {
+      MSArg *a = (MSArg *)malloc(sizeof(MSArg));
+      if (!a) { fprintf(stderr, "ms-spawn-all: arg oom\n"); abort(); }
+      a->mtx     = mtx;
+      a->counter = (int64_t *)counter;
+      a->iters   = (int64_t)iters;
+      pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+      if (!t) { fprintf(stderr, "ms-spawn-all: thread oom\n"); abort(); }
+      pthread_create(t, NULL, (void *(*)(void *))fn_ptr, (void *)a);
+      handles[i] = t;
+  }
+  return (void *)handles;
+  
+}
+
+static void ms_join_all(void * handles, int64_t n) {
+        pthread_t **hs = (pthread_t **)handles;
+  int64_t i;
+  for (i = 0; i < n; i++) {
+      pthread_join(*hs[i], NULL);
+      free(hs[i]);
+  }
+  free(hs);
+  
+}
+
 int main() {
-        printf("%lld\n", (long long)(INT64_C(0)));
-        return (int)0;
+        {
+            void * mtx_30 = mutex_new();
+            (void)mtx_30;
+            {
+                void * counter_31 = ms_counter_new();
+                (void)counter_31;
+                {
+                    void * handles_32 = ms_spawn_all(ms_worker, mtx_30, counter_31, INT64_C(10), INT64_C(100));
+                    (void)handles_32;
+                    ms_join_all(handles_32, INT64_C(10));
+                }
+                printf("%lld\n", (long long)(ms_counter_load(counter_31)));
+                ms_counter_free(counter_31);
+            }
+            mutex_free(mtx_30);
+        }
+        int64_t __t0;
+        __t0 = INT64_C(0);
+        return (int)__t0;
 }
 
 

@@ -1067,9 +1067,162 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
+static void * tp_identity(void *);
+
+static void * tp_identity(void * arg) {
+        return arg;
+  
+}
+
 int main() {
-        printf("%lld\n", (long long)(INT64_C(0)));
-        return (int)0;
+        /* Create thread pool with 2 workers */
+  typedef struct {
+      void *queue;
+      pthread_t *threads;
+      int64_t n_threads;
+      volatile int stop_flag;
+  } ThreadPoolBlock;
+  
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count;
+      int64_t cap; int64_t alloc; int closed;
+  } TPQueueBlock;
+  
+  typedef struct {
+      void *(*fn)(void *);
+      void *arg;
+      void *promise_cell;
+  } ThreadPoolTask;
+  
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t ready;
+      int64_t value;
+      int64_t exn;
+      bool is_set;
+      bool is_ok;
+  } FutureCell;
+  
+  #define TP_CLOSED_SENTINEL INT64_MIN
+  
+  /* Worker function */
+  void *worker_fn(void *arg) {
+      ThreadPoolBlock *tp = (ThreadPoolBlock *)arg;
+      TPQueueBlock *q = (TPQueueBlock *)tp->queue;
+      while (1) {
+          int64_t task_ptr;
+          pthread_mutex_lock(&q->lock);
+          while (q->count == 0 && !q->closed)
+              pthread_cond_wait(&q->not_empty, &q->lock);
+          if (q->count == 0 && q->closed) {
+              pthread_mutex_unlock(&q->lock);
+              break;
+          }
+          task_ptr = q->buf[q->head];
+          int64_t mod = (q->cap > 0) ? q->cap : q->alloc;
+          q->head = (q->head + 1) % mod;
+          q->count--;
+          pthread_cond_signal(&q->not_full);
+          pthread_mutex_unlock(&q->lock);
+          if (task_ptr == TP_CLOSED_SENTINEL || task_ptr == 0) break;
+          ThreadPoolTask *task = (ThreadPoolTask *)(uintptr_t)task_ptr;
+          void *result = task->fn(task->arg);
+          FutureCell *fc = (FutureCell *)task->promise_cell;
+          pthread_mutex_lock(&fc->lock);
+          if (!fc->is_set) {
+              fc->value = (int64_t)(uintptr_t)result;
+              fc->is_set = true;
+              fc->is_ok = true;
+              pthread_cond_broadcast(&fc->ready);
+          }
+          pthread_mutex_unlock(&fc->lock);
+          free(task);
+      }
+      return NULL;
+  }
+  
+  /* Create thread pool */
+  ThreadPoolBlock *tp = (ThreadPoolBlock *)malloc(sizeof(ThreadPoolBlock));
+  tp->n_threads = 2; tp->stop_flag = 0;
+  TPQueueBlock *q = (TPQueueBlock *)malloc(sizeof(TPQueueBlock));
+  pthread_mutex_init(&q->lock, NULL);
+  pthread_cond_init(&q->not_full, NULL);
+  pthread_cond_init(&q->not_empty, NULL);
+  q->alloc = 16; q->buf = (int64_t *)malloc((size_t)q->alloc * sizeof(int64_t));
+  q->head = 0; q->tail = 0; q->count = 0; q->cap = 0; q->closed = 0;
+  tp->queue = (void *)q;
+  tp->threads = (pthread_t *)malloc(2 * sizeof(pthread_t));
+  for (int i = 0; i < 2; i++) {
+      pthread_create(&tp->threads[i], NULL, worker_fn, (void *)tp);
+  }
+  
+  /* Submit 10 tasks */
+  FutureCell *futures[10];
+  int sum = 0;
+  for (int i = 0; i < 10; i++) {
+      futures[i] = (FutureCell *)malloc(sizeof(FutureCell));
+      pthread_mutex_init(&futures[i]->lock, NULL);
+      pthread_cond_init(&futures[i]->ready, NULL);
+      futures[i]->is_set = false; futures[i]->is_ok = false;
+      
+      ThreadPoolTask *task = (ThreadPoolTask *)malloc(sizeof(ThreadPoolTask));
+      task->fn = (void *(*)(void *))tp_identity;
+      task->arg = (void *)(uintptr_t)i;
+      task->promise_cell = (void *)futures[i];
+      
+      pthread_mutex_lock(&q->lock);
+      if (q->count == q->alloc) {
+          int64_t new_alloc = q->alloc * 2;
+          int64_t *new_buf = (int64_t *)malloc((size_t)new_alloc * sizeof(int64_t));
+          for (int64_t j = 0; j < q->count; j++)
+              new_buf[j] = q->buf[(q->head + j) % q->alloc];
+          free(q->buf);
+          q->buf = new_buf; q->head = 0; q->tail = q->count; q->alloc = new_alloc;
+      }
+      q->buf[q->tail] = (int64_t)(uintptr_t)task;
+      q->tail = (q->tail + 1) % q->alloc;
+      q->count++;
+      pthread_cond_signal(&q->not_empty);
+      pthread_mutex_unlock(&q->lock);
+  }
+  
+  /* Collect results */
+  for (int i = 0; i < 10; i++) {
+      pthread_mutex_lock(&futures[i]->lock);
+      while (!futures[i]->is_set)
+          pthread_cond_wait(&futures[i]->ready, &futures[i]->lock);
+      sum += (int)futures[i]->value;
+      pthread_mutex_unlock(&futures[i]->lock);
+  }
+  printf("sum: %d\n", sum);
+  
+  /* Shutdown */
+  pthread_mutex_lock(&q->lock);
+  q->closed = 1;
+  pthread_cond_broadcast(&q->not_empty);
+  pthread_cond_broadcast(&q->not_full);
+  pthread_mutex_unlock(&q->lock);
+  for (int i = 0; i < 2; i++) {
+      pthread_join(tp->threads[i], NULL);
+  }
+  
+  /* Cleanup */
+  for (int i = 0; i < 10; i++) {
+      pthread_mutex_destroy(&futures[i]->lock);
+      pthread_cond_destroy(&futures[i]->ready);
+      free(futures[i]);
+  }
+  free(q->buf);
+  pthread_mutex_destroy(&q->lock);
+  pthread_cond_destroy(&q->not_full);
+  pthread_cond_destroy(&q->not_empty);
+  free(q);
+  free(tp->threads);
+  free(tp);
+  
+  return 0;
+  
 }
 
 

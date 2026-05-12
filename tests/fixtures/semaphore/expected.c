@@ -1067,9 +1067,136 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
+static void * sem_new(int64_t);
+static void sem_acquire(void *);
+static void sem_release(void *);
+static void sem_free(void *);
+static void * sem_arg_new(void *);
+static int64_t sem_arg_result(void *);
+static void sem_arg_free(void *);
+static void * sem_worker(void *);
+static void * sem_thread_spawn(void *, void *);
+static void sem_thread_join(void *);
+
+static void * sem_new(int64_t initial) {
+        typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
+  SemBlock *s = (SemBlock *)malloc(sizeof(SemBlock));
+  if (!s) { fprintf(stderr, "sem-new: oom\n"); abort(); }
+  pthread_mutex_init(&s->lock, NULL);
+  pthread_cond_init(&s->avail, NULL);
+  s->count = (int64_t)initial;
+  return (void *)s;
+  
+}
+
+static void sem_acquire(void * s) {
+        typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
+  SemBlock *sb = (SemBlock *)s;
+  pthread_mutex_lock(&sb->lock);
+  while (sb->count <= 0)
+      pthread_cond_wait(&sb->avail, &sb->lock);
+  sb->count--;
+  pthread_mutex_unlock(&sb->lock);
+  
+}
+
+static void sem_release(void * s) {
+        typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
+  SemBlock *sb = (SemBlock *)s;
+  pthread_mutex_lock(&sb->lock);
+  sb->count++;
+  pthread_cond_signal(&sb->avail);
+  pthread_mutex_unlock(&sb->lock);
+  
+}
+
+static void sem_free(void * s) {
+        typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
+  SemBlock *sb = (SemBlock *)s;
+  pthread_mutex_destroy(&sb->lock);
+  pthread_cond_destroy(&sb->avail);
+  free(sb);
+  
+}
+
+static void * sem_arg_new(void * s) {
+        typedef struct { void *sem; int64_t result; } SemArg;
+  SemArg *a = (SemArg *)malloc(sizeof(SemArg));
+  if (!a) { fprintf(stderr, "sem-arg-new: oom\n"); abort(); }
+  a->sem = s; a->result = 0;
+  return (void *)a;
+  
+}
+
+static int64_t sem_arg_result(void * a) {
+        typedef struct { void *sem; int64_t result; } SemArg;
+  return ((SemArg *)a)->result;
+  
+}
+
+static void sem_arg_free(void * a) {
+        free(a);
+  
+}
+
+static void * sem_worker(void * arg) {
+        typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
+  typedef struct { void *sem; int64_t result; } SemArg;
+  SemArg *a = (SemArg *)arg;
+  SemBlock *sb = (SemBlock *)a->sem;
+  pthread_mutex_lock(&sb->lock);
+  while (sb->count <= 0)
+      pthread_cond_wait(&sb->avail, &sb->lock);
+  sb->count--;
+  pthread_mutex_unlock(&sb->lock);
+  a->result = 42;
+  return NULL;
+  
+}
+
+static void * sem_thread_spawn(void * fn_ptr, void * arg) {
+        pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  if (!t) { fprintf(stderr, "sem-thread-spawn: oom\n"); abort(); }
+  pthread_create(t, NULL, (void *(*)(void *))fn_ptr, arg);
+  return (void *)t;
+  
+}
+
+static void sem_thread_join(void * t) {
+        pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  
+}
+
 int main() {
-        printf("%lld\n", (long long)(INT64_C(0)));
-        return (int)0;
+        {
+            void * s1_22 = sem_new(INT64_C(1));
+            (void)s1_22;
+            sem_acquire(s1_22);
+            sem_release(s1_22);
+            printf("%lld\n", (long long)(INT64_C(1)));
+            sem_free(s1_22);
+        }
+        {
+            void * s2_23 = sem_new(INT64_C(0));
+            (void)s2_23;
+            {
+                void * arg_24 = sem_arg_new(s2_23);
+                (void)arg_24;
+                {
+                    void * t_25 = sem_thread_spawn(sem_worker, arg_24);
+                    (void)t_25;
+                    sem_release(s2_23);
+                    sem_thread_join(t_25);
+                }
+                printf("%lld\n", (long long)(sem_arg_result(arg_24)));
+                sem_arg_free(arg_24);
+            }
+            sem_free(s2_23);
+        }
+        int64_t __t0;
+        __t0 = INT64_C(0);
+        return (int)__t0;
 }
 
 
