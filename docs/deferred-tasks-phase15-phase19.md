@@ -957,20 +957,22 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 
 **New prerequisites for TaskGroup::with-cancellation:**
 
-- [ ] **PR-TG-003-1** Design cancellation signal mechanism
-  - Blocked by: None
-  - Decide how cancellation signals are propagated to task body
-  - Options: thread-local flag, per-fiber flag, callback mechanism
-  - Should integrate with existing `fiber-cancelled?` function
+- [x] **PR-TG-003-1** Design cancellation signal mechanism
+  - **Decision**: Use existing thread-local `tur_fiber_cancelled_flag` mechanism
+  - Rationale: Already implemented and integrated with `fiber-cancelled?` function
+  - Thread-local storage provides per-thread (effectively per-fiber) cancellation state
+  - When task group is cancelled, `tur_fiber_set_cancelled(true)` sets the flag
+  - Tasks check via `fiber-cancelled?` or `task-group-cancelled? group`
+  - No additional infrastructure needed
 
 - [ ] **PR-TG-003-2** Add cancellation check point API
-  - Blocked by: PR-TG-003-1
+  - Blocked by: None (PR-TG-003-1 complete)
   - Provide a function that tasks can call to check if they should exit
   - Example: `(task-group-should-exit? group)` or `(fiber-should-exit?)`
   - Should return true if group was cancelled or if parent fiber was cancelled
 
 - [ ] **PR-TG-003-3** Implement `TaskGroup::with-cancellation` macro
-  - Blocked by: PR-TG-003-1, PR-TG-003-2
+  - Blocked by: PR-TG-003-2
   - Macro that sets up cancellation checking in the body
   - Body can periodically check cancellation status and exit early
 
