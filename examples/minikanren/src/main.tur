@@ -40,7 +40,7 @@
 
 (defn query-parents-of [child :int] :nil
   (do
-    (println "Parents:")
+    (println "Parents of:")
     (println (person-name child))
     (let [^mut p 0]
       (while (< p PERSON_COUNT)
@@ -52,7 +52,7 @@
 
 (defn query-children-of [parent :int] :nil
   (do
-    (println "Children:")
+    (println "Children of:")
     (println (person-name parent))
     (let [^mut c 0]
       (while (< c PERSON_COUNT)
@@ -64,7 +64,7 @@
 
 (defn query-grandparents-of [child :int] :nil
   (do
-    (println "Grandparents:")
+    (println "Grandparents of:")
     (println (person-name child))
     (let [^mut g 0]
       (while (< g PERSON_COUNT)
