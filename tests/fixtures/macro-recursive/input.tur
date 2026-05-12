@@ -1,0 +1,12 @@
+(defmacro print-all [& forms]
+  (if (empty? forms)
+      nil
+      (let [head (first forms)
+            tail (rest forms)]
+        (if (empty? tail)
+            head
+            (list do head (print-all ~@tail))))))
+
+(defn main [] :int
+  (print-all (println 1) (println 2) (println 3))
+  0)
