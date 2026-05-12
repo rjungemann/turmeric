@@ -3359,6 +3359,7 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "extern void abort(void);\n");
     buf_puts(out, "extern void *memset(void *, int, size_t);\n");
     buf_puts(out, "extern void *memmove(void *, const void *, size_t);\n");
+    buf_puts(out, "extern void *memcpy(void *, const void *, size_t);\n");
     /* Phase 19: strcmp for effect handler name matching */
     buf_puts(out, "extern int strcmp(const char *, const char *);\n");
     buf_puts(out, "\n");
@@ -3541,7 +3542,10 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "}\n\n");
 
     /* Phase R2: Panic with typed payload */
-    buf_puts(out, "/* Phase R2: tur_panic_with */\n");
+    /* tur_panic_with is forward-declared here; its body is emitted after
+     * FiberBlock in Phase T21 so it can dereference tur_current_fiber. */
+    buf_puts(out, "static void tur_panic_with(int type_tag, void *payload, const char *file, int line);\n\n");
+    buf_puts(out, "/* Phase R2: tur_panic_with types */\n");
     buf_puts(out, "typedef struct tur_panic_payload tur_panic_payload;\n");
     buf_puts(out, "struct tur_panic_payload {\n");
     buf_puts(out, "    int type_tag;\n");
@@ -3560,26 +3564,6 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "}\n\n");
     buf_puts(out, "static void panic_payload_free(tur_panic_payload *p) {\n");
     buf_puts(out, "    if (p) { free(p->value); free(p); }\n");
-    buf_puts(out, "}\n\n");
-    buf_puts(out, "static void tur_panic_with(int type_tag, void *payload, const char *file, int line) {\n");
-    buf_puts(out, "    if (tur_panic_in_progress) {\n");
-    buf_puts(out, "        fprintf(stderr, \"double panic: aborting\\n\");\n");
-    buf_puts(out, "        free(payload);\n");
-    buf_puts(out, "        abort();\n");
-    buf_puts(out, "    }\n");
-    buf_puts(out, "    tur_panic_in_progress = 1;\n");
-    /* Phase TG-004-2 PR: Check global handler first (try/catch has priority), then fiber */
-    buf_puts(out, "    if (global_panic_jmpbuf_valid) {\n");
-    buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line);\n");
-    buf_puts(out, "        longjmp(global_panic_jmpbuf, 1);\n");
-    buf_puts(out, "    } else if (tur_current_fiber && tur_current_fiber->panic_jmpbuf_valid) {\n");
-    buf_puts(out, "        /* Use per-fiber panic buffer - set up global payload for cleanup */\n");
-    buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line);\n");
-    buf_puts(out, "        longjmp(tur_current_fiber->panic_jmpbuf, 1);\n");
-    buf_puts(out, "    }\n");
-    buf_puts(out, "    fprintf(stderr, \"panic at %s:%d\\n\", file ? file : \"(unknown)\", line);\n");
-    buf_puts(out, "    free(payload);\n");
-    buf_puts(out, "    abort();\n");
     buf_puts(out, "}\n\n");
     /* Phase R2: Panic payload accessors */
     buf_puts(out, "static int tur_panic_payload_type(tur_panic_payload *p) {\n");
@@ -3711,10 +3695,34 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    bool panic_jmpbuf_valid; /* Whether this fiber's panic handler is active */\n");
     buf_puts(out, "};\n\n");
     buf_puts(out, "static __thread FiberBlock *tur_current_fiber = NULL;\n");
+    /* Phase R2: tur_panic_with body — placed here so FiberBlock and
+     * tur_current_fiber are in scope for the per-fiber panic check. */
+    buf_puts(out, "static void tur_panic_with(int type_tag, void *payload, const char *file, int line) {\n");
+    buf_puts(out, "    if (tur_panic_in_progress) {\n");
+    buf_puts(out, "        fprintf(stderr, \"double panic: aborting\\n\");\n");
+    buf_puts(out, "        free(payload);\n");
+    buf_puts(out, "        abort();\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    tur_panic_in_progress = 1;\n");
+    /* Phase TG-004-2 PR: Check global handler first (try/catch has priority), then fiber */
+    buf_puts(out, "    if (global_panic_jmpbuf_valid) {\n");
+    buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line);\n");
+    buf_puts(out, "        longjmp(global_panic_jmpbuf, 1);\n");
+    buf_puts(out, "    } else if (tur_current_fiber && tur_current_fiber->panic_jmpbuf_valid) {\n");
+    buf_puts(out, "        /* Use per-fiber panic buffer - set up global payload for cleanup */\n");
+    buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line);\n");
+    buf_puts(out, "        longjmp(tur_current_fiber->panic_jmpbuf, 1);\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    fprintf(stderr, \"panic at %s:%d\\n\", file ? file : \"(unknown)\", line);\n");
+    buf_puts(out, "    free(payload);\n");
+    buf_puts(out, "    abort();\n");
+    buf_puts(out, "}\n\n");
     /* Phase T22: Cooperative cancellation flag */
     buf_puts(out, "static __thread bool tur_fiber_cancelled_flag = false;\n\n");
     /* Phase T22: TaskGroup notification forward declaration */
-    buf_puts(out, "static void tur_task_group_notify_done(void *task_group);\n\n");
+    buf_puts(out, "static void tur_task_group_notify_done(void *task_group);\n");
+    /* Forward-declare tur_fiber_set_cancelled before tur_fiber_shim uses it */
+    buf_puts(out, "static void tur_fiber_set_cancelled(bool c);\n\n");
     buf_puts(out, "static void tur_fiber_shim(uint32_t hi, uint32_t lo) {\n");
     buf_puts(out, "    FiberBlock *f = (FiberBlock *)(((uintptr_t)hi << 32) | (uintptr_t)(uint32_t)lo);\n");
     /* Phase TG-004-3 PR: Per-fiber panic handling with auto-cancel on panic */
@@ -3771,6 +3779,8 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    swapcontext(&f->ctx, &f->caller_ctx);\n");
     buf_puts(out, "    abort();\n");
     buf_puts(out, "}\n\n");
+    /* Declare global_effect_handler_chain before tur_fiber_block_new uses it */
+    buf_puts(out, "static __thread EffectHandlerFrame *global_effect_handler_chain = NULL;\n\n");
     buf_puts(out, "static FiberBlock *tur_fiber_block_new(void (*fn)(void), size_t stack_size) {\n");
     buf_puts(out, "    if (!stack_size) stack_size = 1024 * 1024;\n");
     buf_puts(out, "    FiberBlock *f = (FiberBlock *)calloc(1, sizeof(FiberBlock));\n");
@@ -4141,7 +4151,7 @@ int emit_program(Buf *out, const Expr *program) {
     /* Keep old TurAsyncTask for backward compatibility */
     buf_puts(out, "/* Backward compatibility: TurAsyncTask = TurFuture */\n");
     buf_puts(out, "typedef TurFuture TurAsyncTask;\n\n");
-    buf_puts(out, "static __thread EffectHandlerFrame *global_effect_handler_chain = NULL;\n\n");
+    /* global_effect_handler_chain is declared earlier, before tur_fiber_block_new */
     buf_puts(out, "static int64_t tur_effect_perform(const char *name, int64_t *args, int n_args) {\n");
         /* T21-B: use fiber-local handler chain when inside a fiber */
     buf_puts(out, "    EffectHandlerFrame *frame =\n");
