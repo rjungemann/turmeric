@@ -1,0 +1,81 @@
+;; stdlib/sync.tur — Once and Semaphore primitives (Phase T19-C)
+;;
+;; Once: wraps pthread_once_t for one-time initialisation.
+;; Semaphore: counting semaphore implemented with mutex + condvar + counter
+;;            (pthread_sem_t is unavailable in unnamed form on macOS).
+;;
+;; Once API:
+;;   once-flag-new   []                              → ptr<void>
+;;   once-call       [flag :ptr<void>
+;;                    init-fn :ptr<void>]            → nil
+;;   once-flag-free  [flag :ptr<void>]               → nil
+;;
+;; Semaphore API:
+;;   sem-new         [initial :int]                  → ptr<void>
+;;   sem-acquire     [s :ptr<void>]                  → nil  (blocks when 0)
+;;   sem-release     [s :ptr<void>]                  → nil
+;;   sem-free        [s :ptr<void>]                  → nil
+
+;; ---- Once ----
+
+(defn once-flag-new [] :ptr<void>
+  ```c
+  pthread_once_t *o = (pthread_once_t *)malloc(sizeof(pthread_once_t));
+  if (!o) { fprintf(stderr, "once-flag-new: out of memory\n"); abort(); }
+  pthread_once_t init = PTHREAD_ONCE_INIT;
+  memmove(o, &init, sizeof(pthread_once_t));
+  return (void *)o;
+  ```)
+
+(defn once-call [flag :ptr<void> init-fn :ptr<void>] :nil
+  ```c
+  pthread_once((pthread_once_t *)flag, (void (*)(void))init_fn);
+  ```)
+
+(defn once-flag-free [flag :ptr<void>] :nil
+  ```c
+  free(flag);
+  ```)
+
+;; ---- Semaphore ----
+
+(defn sem-new [initial :int] :ptr<void>
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
+  SemBlock *s = (SemBlock *)malloc(sizeof(SemBlock));
+  if (!s) { fprintf(stderr, "sem-new: out of memory\n"); abort(); }
+  pthread_mutex_init(&s->lock, NULL);
+  pthread_cond_init(&s->avail, NULL);
+  s->count = (int64_t)initial;
+  return (void *)s;
+  ```)
+
+(defn sem-acquire [s :ptr<void>] :nil
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
+  SemBlock *sb = (SemBlock *)s;
+  pthread_mutex_lock(&sb->lock);
+  while (sb->count <= 0)
+      pthread_cond_wait(&sb->avail, &sb->lock);
+  sb->count--;
+  pthread_mutex_unlock(&sb->lock);
+  ```)
+
+(defn sem-release [s :ptr<void>] :nil
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
+  SemBlock *sb = (SemBlock *)s;
+  pthread_mutex_lock(&sb->lock);
+  sb->count++;
+  pthread_cond_signal(&sb->avail);
+  pthread_mutex_unlock(&sb->lock);
+  ```)
+
+(defn sem-free [s :ptr<void>] :nil
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
+  SemBlock *sb = (SemBlock *)s;
+  pthread_mutex_destroy(&sb->lock);
+  pthread_cond_destroy(&sb->avail);
+  free(sb);
+  ```)

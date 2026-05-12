@@ -1,0 +1,194 @@
+;; Phase T19-E: producer-consumer — async buffered channel with multiple items.
+;;
+;; Producer thread: sends values 10, 20, 30, 40, 50 then sends sentinel -1.
+;; Consumer thread: receives until sentinel, accumulates sum, stores in result.
+;;
+;; Channel: capacity 4, blocking send/recv.
+;; Expected output: 150  (10+20+30+40+50)
+
+;; -----------------------------------------------------------------------
+;; Channel (blocking FIFO, capacity CAP)
+;; Layout: { pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+;;           int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap; }
+
+(defn chan-new [cap :int] :ptr<void>
+  ```c
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t  not_full;
+      pthread_cond_t  not_empty;
+      int64_t        *buf;
+      int64_t         head;
+      int64_t         tail;
+      int64_t         count;
+      int64_t         cap;
+  } ChanBlock;
+  ChanBlock *ch = (ChanBlock *)malloc(sizeof(ChanBlock));
+  if (!ch) { fprintf(stderr, "chan-new: oom\n"); abort(); }
+  ch->buf = (int64_t *)malloc(sizeof(int64_t) * (size_t)cap);
+  if (!ch->buf) { free(ch); fprintf(stderr, "chan-new: buf oom\n"); abort(); }
+  pthread_mutex_init(&ch->lock, NULL);
+  pthread_cond_init(&ch->not_full, NULL);
+  pthread_cond_init(&ch->not_empty, NULL);
+  ch->head = 0; ch->tail = 0; ch->count = 0; ch->cap = (int64_t)cap;
+  return (void *)ch;
+  ```)
+
+(defn chan-send [ch :ptr<void> val :int] :nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+  } ChanBlock;
+  ChanBlock *c = (ChanBlock *)ch;
+  pthread_mutex_lock(&c->lock);
+  while (c->count == c->cap)
+      pthread_cond_wait(&c->not_full, &c->lock);
+  c->buf[c->tail] = (int64_t)val;
+  c->tail = (c->tail + 1) % c->cap;
+  c->count++;
+  pthread_cond_signal(&c->not_empty);
+  pthread_mutex_unlock(&c->lock);
+  ```)
+
+(defn chan-recv [ch :ptr<void>] :int
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+  } ChanBlock;
+  ChanBlock *c = (ChanBlock *)ch;
+  pthread_mutex_lock(&c->lock);
+  while (c->count == 0)
+      pthread_cond_wait(&c->not_empty, &c->lock);
+  int64_t val = c->buf[c->head];
+  c->head = (c->head + 1) % c->cap;
+  c->count--;
+  pthread_cond_signal(&c->not_full);
+  pthread_mutex_unlock(&c->lock);
+  return val;
+  ```)
+
+(defn chan-free [ch :ptr<void>] :nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+  } ChanBlock;
+  ChanBlock *c = (ChanBlock *)ch;
+  pthread_mutex_destroy(&c->lock);
+  pthread_cond_destroy(&c->not_full);
+  pthread_cond_destroy(&c->not_empty);
+  free(c->buf);
+  free(c);
+  ```)
+
+;; -----------------------------------------------------------------------
+;; Thread arg: { chan ptr, result slot }
+
+(defn targ-new [ch :ptr<void>] :ptr<void>
+  ```c
+  typedef struct { void *ch; int64_t result; } TArg;
+  TArg *a = (TArg *)malloc(sizeof(TArg));
+  if (!a) { fprintf(stderr, "targ-new: oom\n"); abort(); }
+  a->ch = ch; a->result = 0;
+  return (void *)a;
+  ```)
+
+(defn targ-result [a :ptr<void>] :int
+  ```c
+  typedef struct { void *ch; int64_t result; } TArg;
+  return ((TArg *)a)->result;
+  ```)
+
+(defn targ-free [a :ptr<void>] :nil
+  ```c
+  free(a);
+  ```)
+
+;; -----------------------------------------------------------------------
+;; Producer: sends 10, 20, 30, 40, 50 then sentinel -1.
+
+(defn producer [arg :ptr<void>] :ptr<void>
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+  } ChanBlock;
+  typedef struct { void *ch; int64_t result; } TArg;
+  void *ch = ((TArg *)arg)->ch;
+  int64_t vals[6] = {10, 20, 30, 40, 50, -1};
+  int i;
+  for (i = 0; i < 6; i++) {
+      ChanBlock *c = (ChanBlock *)ch;
+      pthread_mutex_lock(&c->lock);
+      while (c->count == c->cap) pthread_cond_wait(&c->not_full, &c->lock);
+      c->buf[c->tail] = vals[i];
+      c->tail = (c->tail + 1) % c->cap;
+      c->count++;
+      pthread_cond_signal(&c->not_empty);
+      pthread_mutex_unlock(&c->lock);
+  }
+  return NULL;
+  ```)
+
+;; Consumer: receives until -1 sentinel, accumulates sum into result slot.
+
+(defn consumer [arg :ptr<void>] :ptr<void>
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+  } ChanBlock;
+  typedef struct { void *ch; int64_t result; } TArg;
+  TArg *a = (TArg *)arg;
+  void *ch = a->ch;
+  int64_t sum = 0;
+  for (;;) {
+      ChanBlock *c = (ChanBlock *)ch;
+      pthread_mutex_lock(&c->lock);
+      while (c->count == 0) pthread_cond_wait(&c->not_empty, &c->lock);
+      int64_t val = c->buf[c->head];
+      c->head = (c->head + 1) % c->cap;
+      c->count--;
+      pthread_cond_signal(&c->not_full);
+      pthread_mutex_unlock(&c->lock);
+      if (val == -1) break;
+      sum += val;
+  }
+  a->result = sum;
+  return NULL;
+  ```)
+
+;; -----------------------------------------------------------------------
+;; Thread spawn/join helpers.
+
+(defn pc-thread-spawn [fn-ptr :ptr<void> arg :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  if (!t) { fprintf(stderr, "pc-thread-spawn: oom\n"); abort(); }
+  pthread_create(t, NULL, (void *(*)(void *))fn_ptr, arg);
+  return (void *)t;
+  ```)
+
+(defn pc-thread-join [t :ptr<void>] :nil
+  ```c
+  pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  ```)
+
+;; -----------------------------------------------------------------------
+
+(defn main [] :int
+  (let [ch (chan-new 4)]
+    (let [prod-arg (targ-new ch)]
+      (let [cons-arg (targ-new ch)]
+        (let [tp (pc-thread-spawn producer prod-arg)]
+          (let [tc (pc-thread-spawn consumer cons-arg)]
+            (pc-thread-join tp)
+            (pc-thread-join tc)))
+        (println (targ-result cons-arg))   ;; 150  (10+20+30+40+50)
+        (targ-free prod-arg)
+        (targ-free cons-arg)))
+    (chan-free ch))
+  0)

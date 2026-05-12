@@ -173,15 +173,18 @@ static int compile_to_c(const char *path, Buf *out_c) {
     const char *stdlib_files[] = {
         "stdlib/macros.tur",
         /* "stdlib/typeclass.tur" loaded on demand via (require typeclass) - Phase 15 */
+        /* Phase T19-C/D stdlib files (mutex, rwlock, condvar, sync, thread, chan,
+         * atomic) are NOT auto-loaded here to avoid polluting every program's
+         * generated C and invalidating codegen snapshots.  They are library files
+         * usable via `tur build <dir>` when placed next to user code, matching the
+         * pattern established by stdlib/atomic.tur.  An explicit `require` or
+         * module mechanism (planned post-T21) will provide auto-loading later. */
         NULL
     };
     
     uint32_t total_stdlib_forms = 0;
     Form **all_stdlib_forms = NULL;
     uint8_t file_id = 1;
-    
-    /* Allocate SourceFile on arena to avoid stack-use-after-scope */
-    SourceFile *stdlib_file = (SourceFile *)arena_alloc(&arena, sizeof(SourceFile));
     
     for (int i = 0; stdlib_files[i] != NULL; i++) {
         char *stdlib_src = NULL;
@@ -191,6 +194,9 @@ static int compile_to_c(const char *path, Buf *out_c) {
             char *src_copy = (char *)arena_alloc(&arena, stdlib_len);
             memcpy(src_copy, stdlib_src, stdlib_len);
             
+            /* Allocate a fresh SourceFile per stdlib file — each must have its
+             * own stable arena address since diag and reader store pointers.  */
+            SourceFile *stdlib_file = (SourceFile *)arena_alloc(&arena, sizeof(SourceFile));
             *stdlib_file = (SourceFile){0};
             stdlib_file->path = stdlib_files[i];
             stdlib_file->src = src_copy;

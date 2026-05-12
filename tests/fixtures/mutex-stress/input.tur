@@ -1,0 +1,124 @@
+;; Phase T19-E: mutex-stress — 10 threads contend on a mutex, each increments
+;; a shared counter 100 times under the lock.
+;; Expected final count: 1000.
+;;
+;; Designed as a TSan stress test; requires.tsan.
+
+;; Mutex helpers.
+(defn mutex-new [] :ptr<void>
+  ```c
+  pthread_mutex_t *m = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
+  if (!m) { fprintf(stderr, "mutex-new: oom\n"); abort(); }
+  pthread_mutex_init(m, NULL);
+  return (void *)m;
+  ```)
+
+(defn mutex-lock [m :ptr<void>] :nil
+  ```c
+  pthread_mutex_lock((pthread_mutex_t *)m);
+  ```)
+
+(defn mutex-unlock [m :ptr<void>] :nil
+  ```c
+  pthread_mutex_unlock((pthread_mutex_t *)m);
+  ```)
+
+(defn mutex-free [m :ptr<void>] :nil
+  ```c
+  pthread_mutex_destroy((pthread_mutex_t *)m);
+  free(m);
+  ```)
+
+;; Worker arg: { mutex ptr, counter ptr (plain int64_t*), iterations }
+(defn ms-arg-new [mtx :ptr<void> counter :ptr<void> iters :int] :ptr<void>
+  ```c
+  typedef struct { void *mtx; int64_t *counter; int64_t iters; } MSArg;
+  MSArg *a = (MSArg *)malloc(sizeof(MSArg));
+  if (!a) { fprintf(stderr, "ms-arg-new: oom\n"); abort(); }
+  a->mtx     = mtx;
+  a->counter = (int64_t *)counter;
+  a->iters   = (int64_t)iters;
+  return (void *)a;
+  ```)
+
+(defn ms-arg-free [a :ptr<void>] :nil
+  ```c
+  free(a);
+  ```)
+
+;; Shared non-atomic counter (protected by mutex).
+(defn ms-counter-new [] :ptr<void>
+  ```c
+  int64_t *c = (int64_t *)malloc(sizeof(int64_t));
+  if (!c) { fprintf(stderr, "ms-counter-new: oom\n"); abort(); }
+  *c = 0;
+  return (void *)c;
+  ```)
+
+(defn ms-counter-load [c :ptr<void>] :int
+  ```c
+  return *(int64_t *)c;
+  ```)
+
+(defn ms-counter-free [c :ptr<void>] :nil
+  ```c
+  free(c);
+  ```)
+
+;; Worker: locks mutex, increments counter iters times, unlocks.
+(defn ms-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  typedef struct { void *mtx; int64_t *counter; int64_t iters; } MSArg;
+  MSArg *a = (MSArg *)arg;
+  pthread_mutex_t *mtx = (pthread_mutex_t *)a->mtx;
+  int64_t i;
+  for (i = 0; i < a->iters; i++) {
+      pthread_mutex_lock(mtx);
+      (*a->counter)++;
+      pthread_mutex_unlock(mtx);
+  }
+  return NULL;
+  ```)
+
+;; Spawn/join N threads via inline C loop.
+(defn ms-spawn-all [fn-ptr :ptr<void> mtx :ptr<void> counter :ptr<void> n :int iters :int] :ptr<void>
+  ```c
+  typedef struct { void *mtx; int64_t *counter; int64_t iters; } MSArg;
+  pthread_t **handles = (pthread_t **)malloc((size_t)n * sizeof(pthread_t *));
+  if (!handles) { fprintf(stderr, "ms-spawn-all: oom\n"); abort(); }
+  int64_t i;
+  for (i = 0; i < n; i++) {
+      MSArg *a = (MSArg *)malloc(sizeof(MSArg));
+      if (!a) { fprintf(stderr, "ms-spawn-all: arg oom\n"); abort(); }
+      a->mtx     = mtx;
+      a->counter = (int64_t *)counter;
+      a->iters   = (int64_t)iters;
+      pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+      if (!t) { fprintf(stderr, "ms-spawn-all: thread oom\n"); abort(); }
+      pthread_create(t, NULL, (void *(*)(void *))fn_ptr, (void *)a);
+      handles[i] = t;
+  }
+  return (void *)handles;
+  ```)
+
+;; Note: per-thread MSArg is freed by join loop here.
+(defn ms-join-all [handles :ptr<void> n :int] :nil
+  ```c
+  pthread_t **hs = (pthread_t **)handles;
+  int64_t i;
+  for (i = 0; i < n; i++) {
+      pthread_join(*hs[i], NULL);
+      free(hs[i]);
+  }
+  free(hs);
+  ```)
+
+(defn main [] :int
+  (let [mtx     (mutex-new)]
+    (let [counter (ms-counter-new)]
+      (let [handles (ms-spawn-all ms-worker mtx counter 10 100)]
+        (ms-join-all handles 10))
+      (println (ms-counter-load counter))  ;; 1000
+      (ms-counter-free counter))
+    (mutex-free mtx))
+  0)

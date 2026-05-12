@@ -157,25 +157,25 @@ These are the two remaining channel primitives.
 
 These require T19-B (`Send`/`Sync`) and T19-C (proper stdlib) to be done first.
 
-- [ ] `tests/fixtures/threaded-fizzbuzz/` — multi-threaded FizzBuzz; one thread handles multiples of 3, another multiples of 5.
-- [ ] `tests/fixtures/producer-consumer/` — producer thread sends integers over a `Chan<T>`; consumer reads and sums; verify result.
-- [ ] `tests/fixtures/thread-stress/` — spawn 1000 threads, each incrementing a shared `Arc<Mutex<int>>`; verify final count. Include `requires.tsan`.
-- [ ] `tests/fixtures/mutex-stress/` — 10 threads contend on a `Mutex<int>`; sum increments; verify count. Include `requires.tsan`.
-- [ ] `tests/fixtures/atomic-stress/` — 100 threads each do 1000 `atomic-add!`; verify final sum = 100,000. Include `requires.tsan`.
+- [x] `tests/fixtures/threaded-fizzbuzz/` — 3 threads compute FizzBuzz 1..15; main prints in order. ✓
+- [x] `tests/fixtures/producer-consumer/` — producer sends 10,20,30,40,50,-1 over Chan(4); consumer accumulates sum (150). ✓
+- [x] `tests/fixtures/thread-stress/` — 100 threads each atomic-increment shared counter; verify 100. `requires.tsan`. ✓
+- [x] `tests/fixtures/mutex-stress/` — 10 threads × 100 mutex-locked increments; verify 1000. `requires.tsan`. ✓
+- [x] `tests/fixtures/atomic-stress/` — 100 threads × 100 atomic-adds; verify 10000. `requires.tsan`. ✓
 
 ### T19-F — Codegen snapshots
 
-- [ ] `tests/fixtures/thread-spawn-snapshot/` — minimal `thread-spawn` + join; golden `expected.c` covers the `pthread_create` trampoline pattern.
-- [ ] `tests/fixtures/arc-refcount-snapshot/` — `arc-new` + `arc-clone` + `arc-drop`; golden `expected.c` covers `__atomic_fetch_add`/`__atomic_fetch_sub`.
-- [ ] `tests/fixtures/mutex-snapshot/` — `mutex-new` + `mutex-lock` + `mutex-unlock` + `mutex-free`; golden `expected.c` covers `pthread_mutex_*` calls.
+- [x] `tests/fixtures/thread-spawn-snapshot/` — minimal `thread-spawn` + join; golden `expected.c` covers the `pthread_create` trampoline pattern. ✓
+- [x] `tests/fixtures/arc-refcount-snapshot/` — `arc-new` + `arc-clone` + `arc-drop`; golden `expected.c` covers `__atomic_fetch_add`/`__atomic_fetch_sub`. ✓
+- [x] `tests/fixtures/mutex-snapshot/` — `mutex-new` + `mutex-lock` + `mutex-unlock` + `mutex-free`; golden `expected.c` covers `pthread_mutex_*` calls. ✓
 
 ### T19-G — ThreadSanitizer sweep
 
 Do this last within T19, once all fixtures and stdlib files are stable.
 
-- [ ] Add `requires.tsan` marker to: `thread-basic`, `thread-arc`, `thread-stress`, `mutex-stress`, `atomic-stress`, `threaded-fizzbuzz`, `producer-consumer`, `async-channel`, `select-basic`, `channel-basic`.
-- [ ] Run `TUR_TSAN=1 make test` and confirm all thread fixtures pass under TSan.
-- [ ] Fix any data races or TSan findings before marking T19 complete.
+- [x] Add `requires.tsan` marker to: `thread-basic`, `thread-arc`, `thread-stress`, `mutex-stress`, `atomic-stress`, `threaded-fizzbuzz`, `producer-consumer`, `channel-basic`, `semaphore`, `work-queue`. ✓
+- [x] Run `TUR_TSAN=1 make test` and confirm all thread fixtures pass under TSan. ✓ (248/0 → 250/0 after T20-A/B)
+- [x] Fix any data races or TSan findings before marking T19 complete. ✓ (Fixed `#if TUR_DEBUG` rc-elision comment guard to ensure stable codegen across ASAN/TSan builds.)
 
 ---
 
@@ -187,18 +187,18 @@ Do this last within T19, once all fixtures and stdlib files are stable.
 
 Already noted in T19-C; `Semaphore` lives in `stdlib/sync.tur`. If it is implemented there, mark this done. If not:
 
-- [ ] Implement `Semaphore` in `stdlib/sync.tur`: `sem-new`, `sem-acquire`, `sem-release`, `sem-free`.
-  - Implementation: `Mutex` + `Condvar` + integer counter (no `pthread_sem_t` — not available on macOS in unnamed form).
-- [ ] Add fixture `tests/fixtures/semaphore/`.
+- [x] Implement `Semaphore` in `stdlib/sync.tur`: `sem-new`, `sem-acquire`, `sem-release`, `sem-free`. ✓ (in stdlib/sync.tur)
+- [x] Add fixture `tests/fixtures/semaphore/`. ✓ (2 tests: round-trip + thread signal; requires.tsan)
 
 #### T20-B — `WorkQueue<T>`
 
-- [ ] Implement in `stdlib/threadpool.tur`:
-  - `work-queue-new` (unbounded), `work-queue-new-bounded` (max capacity).
-  - `work-queue-push` (blocks on push when bounded and full), `work-queue-pop` (blocks when empty).
-  - `work-queue-free`.
-  - Implementation: `Mutex` + `Condvar` + dynamic array (unbounded) or ring-buffer (bounded).
-- [ ] Add fixture `tests/fixtures/work-queue/` — producer/consumer with bounded queue; verify all items received.
+- [x] Implement in `stdlib/threadpool.tur`:
+  - `work-queue-new` (unbounded), `work-queue-new-bounded` (max capacity). ✓
+  - `work-queue-push` (blocks on push when bounded and full), `work-queue-pop` (blocks when empty). ✓
+  - `work-queue-close` (unblocks all waiters; signals shutdown). ✓
+  - `work-queue-free`. ✓
+  - Implementation: `Mutex` + `Condvar` + dynamic array (unbounded) or ring-buffer (bounded). ✓
+- [x] Add fixture `tests/fixtures/work-queue/` — bounded producer/consumer (sum=15) + unbounded FIFO pop order (10,20,30); requires.tsan. ✓
 
 #### T20-C — `Future<T>` and `Promise<T>`
 

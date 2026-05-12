@@ -1,0 +1,171 @@
+;; stdlib/threadpool.tur — WorkQueue<T> (Phase T20-B)
+;;
+;; WorkQueue: thread-safe FIFO queue backed by a mutex + condvar.
+;;
+;; Two variants:
+;;   work-queue-new         — unbounded (grows as needed)
+;;   work-queue-new-bounded — bounded ring-buffer; push blocks when full
+;;
+;; Both variants share the same opaque WorkQueueBlock handle (ptr<void>).
+;; Items are int64_t values (the generic T is encoded as an integer handle).
+;; A sentinel value INT64_MIN (returned by pop after close) signals shutdown.
+;;
+;; API:
+;;   work-queue-new          []                    → ptr<void>
+;;   work-queue-new-bounded  [cap :int]            → ptr<void>
+;;   work-queue-push         [q :ptr<void> v :int] → nil  (blocks if bounded+full)
+;;   work-queue-pop          [q :ptr<void>]        → int  (blocks when empty; INT64_MIN when closed)
+;;   work-queue-close        [q :ptr<void>]        → nil  (unblocks all waiters)
+;;   work-queue-free         [q :ptr<void>]        → nil
+
+;; ---- WorkQueueBlock layout ----
+;; Unbounded: dynamic array (int64_t *buf, capacity doubles on resize)
+;;   bounded == 0
+;; Bounded: ring-buffer (fixed-size buf, head/tail wrap)
+;;   bounded == cap
+;; Both: mutex + not_full_cond + not_empty_cond + head + tail + count + cap + closed
+;;
+;; typedef struct {
+;;     pthread_mutex_t  lock;
+;;     pthread_cond_t   not_full;
+;;     pthread_cond_t   not_empty;
+;;     int64_t         *buf;
+;;     int64_t          head;
+;;     int64_t          tail;
+;;     int64_t          count;
+;;     int64_t          cap;      /* 0 = unbounded (dynamic); >0 = max items */
+;;     int64_t          alloc;    /* allocated slots (for unbounded growth) */
+;;     int              closed;   /* 1 after work-queue-close */
+;; } WorkQueueBlock;
+
+(defn work-queue-new [] :ptr<void>
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count;
+      int64_t cap; int64_t alloc; int closed;
+  } WorkQueueBlock;
+  WorkQueueBlock *q = (WorkQueueBlock *)malloc(sizeof(WorkQueueBlock));
+  if (!q) { fprintf(stderr, "work-queue-new: oom\n"); abort(); }
+  pthread_mutex_init(&q->lock, NULL);
+  pthread_cond_init(&q->not_full, NULL);
+  pthread_cond_init(&q->not_empty, NULL);
+  q->alloc = 16;
+  q->buf = (int64_t *)malloc((size_t)q->alloc * sizeof(int64_t));
+  if (!q->buf) { free(q); fprintf(stderr, "work-queue-new: buf oom\n"); abort(); }
+  q->head = 0; q->tail = 0; q->count = 0; q->cap = 0; q->closed = 0;
+  return (void *)q;
+  ```)
+
+(defn work-queue-new-bounded [cap :int] :ptr<void>
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count;
+      int64_t cap; int64_t alloc; int closed;
+  } WorkQueueBlock;
+  if (cap <= 0) { fprintf(stderr, "work-queue-new-bounded: cap must be > 0\n"); abort(); }
+  WorkQueueBlock *q = (WorkQueueBlock *)malloc(sizeof(WorkQueueBlock));
+  if (!q) { fprintf(stderr, "work-queue-new-bounded: oom\n"); abort(); }
+  pthread_mutex_init(&q->lock, NULL);
+  pthread_cond_init(&q->not_full, NULL);
+  pthread_cond_init(&q->not_empty, NULL);
+  q->buf = (int64_t *)malloc((size_t)cap * sizeof(int64_t));
+  if (!q->buf) { free(q); fprintf(stderr, "work-queue-new-bounded: buf oom\n"); abort(); }
+  q->head = 0; q->tail = 0; q->count = 0; q->cap = (int64_t)cap; q->alloc = (int64_t)cap; q->closed = 0;
+  return (void *)q;
+  ```)
+
+(defn work-queue-push [q :ptr<void> v :int] :nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count;
+      int64_t cap; int64_t alloc; int closed;
+  } WorkQueueBlock;
+  WorkQueueBlock *wq = (WorkQueueBlock *)q;
+  pthread_mutex_lock(&wq->lock);
+  if (wq->closed) { pthread_mutex_unlock(&wq->lock); return; }
+  if (wq->cap > 0) {
+      /* bounded: block while full */
+      while (wq->count == wq->cap && !wq->closed)
+          pthread_cond_wait(&wq->not_full, &wq->lock);
+      if (wq->closed) { pthread_mutex_unlock(&wq->lock); return; }
+      wq->buf[wq->tail] = (int64_t)v;
+      wq->tail = (wq->tail + 1) % wq->cap;
+  } else {
+      /* unbounded: grow if needed */
+      if (wq->count == wq->alloc) {
+          int64_t new_alloc = wq->alloc * 2;
+          int64_t *new_buf = (int64_t *)malloc((size_t)new_alloc * sizeof(int64_t));
+          if (!new_buf) { pthread_mutex_unlock(&wq->lock); fprintf(stderr, "work-queue-push: oom\n"); abort(); }
+          /* copy in order: head..tail */
+          int64_t i;
+          for (i = 0; i < wq->count; i++)
+              new_buf[i] = wq->buf[(wq->head + i) % wq->alloc];
+          free(wq->buf);
+          wq->buf = new_buf; wq->head = 0; wq->tail = wq->count; wq->alloc = new_alloc;
+      }
+      wq->buf[wq->tail] = (int64_t)v;
+      wq->tail = (wq->tail + 1) % wq->alloc;
+  }
+  wq->count++;
+  pthread_cond_signal(&wq->not_empty);
+  pthread_mutex_unlock(&wq->lock);
+  ```)
+
+(defn work-queue-pop [q :ptr<void>] :int
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count;
+      int64_t cap; int64_t alloc; int closed;
+  } WorkQueueBlock;
+  #define WQ_CLOSED_SENTINEL INT64_MIN
+  WorkQueueBlock *wq = (WorkQueueBlock *)q;
+  pthread_mutex_lock(&wq->lock);
+  while (wq->count == 0 && !wq->closed)
+      pthread_cond_wait(&wq->not_empty, &wq->lock);
+  if (wq->count == 0) {
+      /* closed and empty */
+      pthread_mutex_unlock(&wq->lock);
+      return (int64_t)WQ_CLOSED_SENTINEL;
+  }
+  int64_t val = wq->buf[wq->head];
+  int64_t mod = (wq->cap > 0) ? wq->cap : wq->alloc;
+  wq->head = (wq->head + 1) % mod;
+  wq->count--;
+  pthread_cond_signal(&wq->not_full);
+  pthread_mutex_unlock(&wq->lock);
+  return val;
+  ```)
+
+(defn work-queue-close [q :ptr<void>] :nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count;
+      int64_t cap; int64_t alloc; int closed;
+  } WorkQueueBlock;
+  WorkQueueBlock *wq = (WorkQueueBlock *)q;
+  pthread_mutex_lock(&wq->lock);
+  wq->closed = 1;
+  pthread_cond_broadcast(&wq->not_empty);
+  pthread_cond_broadcast(&wq->not_full);
+  pthread_mutex_unlock(&wq->lock);
+  ```)
+
+(defn work-queue-free [q :ptr<void>] :nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count;
+      int64_t cap; int64_t alloc; int closed;
+  } WorkQueueBlock;
+  WorkQueueBlock *wq = (WorkQueueBlock *)q;
+  pthread_mutex_destroy(&wq->lock);
+  pthread_cond_destroy(&wq->not_full);
+  pthread_cond_destroy(&wq->not_empty);
+  free(wq->buf);
+  free(wq);
+  ```)

@@ -1,0 +1,228 @@
+;; stdlib/chan.tur — Synchronous and async buffered channels (Phase T19-C/D)
+;;
+;; Both channel types share the same underlying ring-buffer struct.
+;; Chan:      blocking send/recv only.
+;; AsyncChan: blocking send/recv plus non-blocking try variants.
+;;
+;; Channel struct layout (ChanBlock):
+;;   { pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+;;     int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap; }
+;;
+;; Chan API (synchronous, blocking):
+;;   chan-new    [cap :int]                    → ptr<void>
+;;   chan-send   [ch :ptr<void> val :int]      → nil   (blocks when full)
+;;   chan-recv   [ch :ptr<void>]               → int   (blocks when empty)
+;;   chan-free   [ch :ptr<void>]               → nil
+;;
+;; AsyncChan API (buffered, non-blocking variants):
+;;   async-chan-new       [cap :int]                    → ptr<void>
+;;   async-chan-send      [ch :ptr<void> val :int]      → nil   (blocks when full)
+;;   async-chan-recv      [ch :ptr<void>]               → int   (blocks when empty)
+;;   async-chan-try-send  [ch :ptr<void> val :int]      → bool  (false = full)
+;;   async-chan-try-recv  [ch :ptr<void>]               → int   (INT64_MIN = empty)
+;;   async-chan-count     [ch :ptr<void>]               → int   (current item count)
+;;   async-chan-free      [ch :ptr<void>]               → nil
+
+;; ---- Chan (synchronous blocking) ----
+
+(defn chan-new [cap :int] :ptr<void>
+  ```c
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t  not_full;
+      pthread_cond_t  not_empty;
+      int64_t        *buf;
+      int64_t         head;
+      int64_t         tail;
+      int64_t         count;
+      int64_t         cap;
+  } ChanBlock;
+  ChanBlock *ch = (ChanBlock *)malloc(sizeof(ChanBlock));
+  if (!ch) { fprintf(stderr, "chan-new: out of memory\n"); abort(); }
+  ch->buf = (int64_t *)malloc(sizeof(int64_t) * (size_t)cap);
+  if (!ch->buf) { free(ch); fprintf(stderr, "chan-new: buf oom\n"); abort(); }
+  pthread_mutex_init(&ch->lock, NULL);
+  pthread_cond_init(&ch->not_full, NULL);
+  pthread_cond_init(&ch->not_empty, NULL);
+  ch->head = 0; ch->tail = 0; ch->count = 0; ch->cap = (int64_t)cap;
+  return (void *)ch;
+  ```)
+
+(defn chan-send [ch :ptr<void> val :int] :nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+  } ChanBlock;
+  ChanBlock *c = (ChanBlock *)ch;
+  pthread_mutex_lock(&c->lock);
+  while (c->count == c->cap)
+      pthread_cond_wait(&c->not_full, &c->lock);
+  c->buf[c->tail] = (int64_t)val;
+  c->tail = (c->tail + 1) % c->cap;
+  c->count++;
+  pthread_cond_signal(&c->not_empty);
+  pthread_mutex_unlock(&c->lock);
+  ```)
+
+(defn chan-recv [ch :ptr<void>] :int
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+  } ChanBlock;
+  ChanBlock *c = (ChanBlock *)ch;
+  pthread_mutex_lock(&c->lock);
+  while (c->count == 0)
+      pthread_cond_wait(&c->not_empty, &c->lock);
+  int64_t v = c->buf[c->head];
+  c->head = (c->head + 1) % c->cap;
+  c->count--;
+  pthread_cond_signal(&c->not_full);
+  pthread_mutex_unlock(&c->lock);
+  return v;
+  ```)
+
+(defn chan-free [ch :ptr<void>] :nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+  } ChanBlock;
+  ChanBlock *c = (ChanBlock *)ch;
+  pthread_mutex_destroy(&c->lock);
+  pthread_cond_destroy(&c->not_full);
+  pthread_cond_destroy(&c->not_empty);
+  free(c->buf);
+  free(c);
+  ```)
+
+;; ---- AsyncChan (buffered with try variants) ----
+;; Same underlying struct as Chan; same constructor logic.
+
+(defn async-chan-new [cap :int] :ptr<void>
+  ```c
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t  not_full;
+      pthread_cond_t  not_empty;
+      int64_t        *buf;
+      int64_t         head;
+      int64_t         tail;
+      int64_t         count;
+      int64_t         cap;
+  } ChanBlock;
+  ChanBlock *ch = (ChanBlock *)malloc(sizeof(ChanBlock));
+  if (!ch) { fprintf(stderr, "async-chan-new: out of memory\n"); abort(); }
+  ch->buf = (int64_t *)malloc(sizeof(int64_t) * (size_t)cap);
+  if (!ch->buf) { free(ch); fprintf(stderr, "async-chan-new: buf oom\n"); abort(); }
+  pthread_mutex_init(&ch->lock, NULL);
+  pthread_cond_init(&ch->not_full, NULL);
+  pthread_cond_init(&ch->not_empty, NULL);
+  ch->head = 0; ch->tail = 0; ch->count = 0; ch->cap = (int64_t)cap;
+  return (void *)ch;
+  ```)
+
+(defn async-chan-send [ch :ptr<void> val :int] :nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+  } ChanBlock;
+  ChanBlock *c = (ChanBlock *)ch;
+  pthread_mutex_lock(&c->lock);
+  while (c->count == c->cap)
+      pthread_cond_wait(&c->not_full, &c->lock);
+  c->buf[c->tail] = (int64_t)val;
+  c->tail = (c->tail + 1) % c->cap;
+  c->count++;
+  pthread_cond_signal(&c->not_empty);
+  pthread_mutex_unlock(&c->lock);
+  ```)
+
+(defn async-chan-recv [ch :ptr<void>] :int
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+  } ChanBlock;
+  ChanBlock *c = (ChanBlock *)ch;
+  pthread_mutex_lock(&c->lock);
+  while (c->count == 0)
+      pthread_cond_wait(&c->not_empty, &c->lock);
+  int64_t v = c->buf[c->head];
+  c->head = (c->head + 1) % c->cap;
+  c->count--;
+  pthread_cond_signal(&c->not_full);
+  pthread_mutex_unlock(&c->lock);
+  return v;
+  ```)
+
+(defn async-chan-try-send [ch :ptr<void> val :int] :bool
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+  } ChanBlock;
+  ChanBlock *c = (ChanBlock *)ch;
+  pthread_mutex_lock(&c->lock);
+  if (c->count == c->cap) {
+      pthread_mutex_unlock(&c->lock);
+      return 0; /* full */
+  }
+  c->buf[c->tail] = (int64_t)val;
+  c->tail = (c->tail + 1) % c->cap;
+  c->count++;
+  pthread_cond_signal(&c->not_empty);
+  pthread_mutex_unlock(&c->lock);
+  return 1; /* sent */
+  ```)
+
+;; async-chan-try-recv: returns INT64_MIN when the channel is empty.
+;; Callers should compare the result with INT64_MIN to detect "no item".
+(defn async-chan-try-recv [ch :ptr<void>] :int
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+  } ChanBlock;
+  ChanBlock *c = (ChanBlock *)ch;
+  pthread_mutex_lock(&c->lock);
+  if (c->count == 0) {
+      pthread_mutex_unlock(&c->lock);
+      return INT64_MIN; /* empty sentinel */
+  }
+  int64_t v = c->buf[c->head];
+  c->head = (c->head + 1) % c->cap;
+  c->count--;
+  pthread_cond_signal(&c->not_full);
+  pthread_mutex_unlock(&c->lock);
+  return v;
+  ```)
+
+(defn async-chan-count [ch :ptr<void>] :int
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+  } ChanBlock;
+  ChanBlock *c = (ChanBlock *)ch;
+  pthread_mutex_lock(&c->lock);
+  int64_t n = c->count;
+  pthread_mutex_unlock(&c->lock);
+  return n;
+  ```)
+
+(defn async-chan-free [ch :ptr<void>] :nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+  } ChanBlock;
+  ChanBlock *c = (ChanBlock *)ch;
+  pthread_mutex_destroy(&c->lock);
+  pthread_cond_destroy(&c->not_full);
+  pthread_cond_destroy(&c->not_empty);
+  free(c->buf);
+  free(c);
+  ```)

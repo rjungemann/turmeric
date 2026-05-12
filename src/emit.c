@@ -1486,10 +1486,8 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* (rc/clone r) - increment strong count, return same cb */
             char *inner = emit_value(ctx, body, e->as.rc_clone_.expr);
             if (e->as.rc_clone_.elide) {
-#if TUR_DEBUG
                 indent_buf(body, ctx->indent);
-                buf_printf(body, "/* rc-elision: skipped rc_strong_increment(%s) — last-use clone */\n", inner);
-#endif
+                buf_printf(body, "/* rc-elision: skipped rc_strong_increment(%s) \xe2\x80\x94 last-use clone */\n", inner);
             } else {
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "rc_strong_increment(%s);\n", inner);
@@ -1501,10 +1499,8 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* (rc/drop r) - decrement strong count */
             char *inner = emit_value(ctx, body, e->as.rc_drop_.expr);
             if (e->as.rc_drop_.elide) {
-#if TUR_DEBUG
                 indent_buf(body, ctx->indent);
-                buf_printf(body, "/* rc-elision: skipped rc_strong_decrement(%s) — matched elided clone */\n", inner);
-#endif
+                buf_printf(body, "/* rc-elision: skipped rc_strong_decrement(%s) \xe2\x80\x94 matched elided clone */\n", inner);
             } else {
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "rc_strong_decrement(%s);\n", inner);

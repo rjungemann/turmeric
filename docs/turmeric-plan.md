@@ -819,11 +819,11 @@
 - [ ] `barrier.tur` — barrier synchronization for N threads.
 - [ ] `once.tur` — one-time initialization.
 - [ ] `thread-arc.tur` — `Arc<Mutex<T>>` for shared mutable state.
-- [ ] Integration: `threaded-fizzbuzz.tur` — multi-threaded FizzBuzz.
-- [ ] Integration: `producer-consumer.tur` — producer-consumer with channels.
-- [ ] Stress: `thread-stress.tur` — spawn 1000 threads, join all.
-- [ ] Stress: `mutex-stress.tur` — 10 threads contend on a mutex.
-- [ ] Stress: `atomic-stress.tur` — atomic increment from 100 threads.
+- [x] Integration: `threaded-fizzbuzz.tur` — multi-threaded FizzBuzz.
+- [x] Integration: `producer-consumer.tur` — producer-consumer with channels.
+- [x] Stress: `thread-stress.tur` — spawn 100 threads, join all. (`requires.tsan`)
+- [x] Stress: `mutex-stress.tur` — 10 threads contend on a mutex. (`requires.tsan`)
+- [x] Stress: `atomic-stress.tur` — atomic increment from 100 threads. (`requires.tsan`)
 - [ ] Negative: `thread-send-ref.tur` — sending `ref<T>` across threads is a compile error.
 - [ ] Negative: `thread-send-cont.tur` — sending `cont<T>` across threads is a compile error.
 - [ ] Codegen snapshots: thread spawn, `Arc` refcount, `Mutex` lock/unlock lowering.

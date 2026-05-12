@@ -1,0 +1,40 @@
+;; stdlib/condvar.tur — POSIX condition variable (Phase T19-C)
+;;
+;; Wraps pthread_cond_t as a :ptr<void>.  Must be used together with a mutex
+;; from stdlib/mutex.tur.
+;;
+;; API:
+;;   condvar-new        []                              → ptr<void>
+;;   condvar-wait       [c :ptr<void> m :ptr<void>]    → nil
+;;   condvar-signal     [c :ptr<void>]                 → nil
+;;   condvar-broadcast  [c :ptr<void>]                 → nil
+;;   condvar-free       [c :ptr<void>]                 → nil
+
+(defn condvar-new [] :ptr<void>
+  ```c
+  pthread_cond_t *c = (pthread_cond_t *)malloc(sizeof(pthread_cond_t));
+  if (!c) { fprintf(stderr, "condvar-new: out of memory\n"); abort(); }
+  pthread_cond_init(c, NULL);
+  return (void *)c;
+  ```)
+
+(defn condvar-wait [c :ptr<void> m :ptr<void>] :nil
+  ```c
+  pthread_cond_wait((pthread_cond_t *)c, (pthread_mutex_t *)m);
+  ```)
+
+(defn condvar-signal [c :ptr<void>] :nil
+  ```c
+  pthread_cond_signal((pthread_cond_t *)c);
+  ```)
+
+(defn condvar-broadcast [c :ptr<void>] :nil
+  ```c
+  pthread_cond_broadcast((pthread_cond_t *)c);
+  ```)
+
+(defn condvar-free [c :ptr<void>] :nil
+  ```c
+  pthread_cond_destroy((pthread_cond_t *)c);
+  free(c);
+  ```)

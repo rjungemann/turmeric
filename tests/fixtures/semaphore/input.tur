@@ -1,0 +1,129 @@
+;; Phase T20-A: semaphore — counting semaphore via mutex+condvar.
+;;
+;; Inline implementation matching stdlib/sync.tur SemBlock layout.
+;; Tests:
+;;   1. Basic acquire/release round-trip (no blocking).
+;;   2. Thread-based acquire: sem initialised to 0; main thread releases once
+;;      a worker thread is waiting; worker unblocks and records a result.
+;; Expected output:
+;;   1       (release+acquire round-trip)
+;;   42      (worker received the semaphore signal)
+
+;; ---- Semaphore (inlined matching SemBlock in stdlib/sync.tur) ----
+
+(defn sem-new [initial :int] :ptr<void>
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
+  SemBlock *s = (SemBlock *)malloc(sizeof(SemBlock));
+  if (!s) { fprintf(stderr, "sem-new: oom\n"); abort(); }
+  pthread_mutex_init(&s->lock, NULL);
+  pthread_cond_init(&s->avail, NULL);
+  s->count = (int64_t)initial;
+  return (void *)s;
+  ```)
+
+(defn sem-acquire [s :ptr<void>] :nil
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
+  SemBlock *sb = (SemBlock *)s;
+  pthread_mutex_lock(&sb->lock);
+  while (sb->count <= 0)
+      pthread_cond_wait(&sb->avail, &sb->lock);
+  sb->count--;
+  pthread_mutex_unlock(&sb->lock);
+  ```)
+
+(defn sem-release [s :ptr<void>] :nil
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
+  SemBlock *sb = (SemBlock *)s;
+  pthread_mutex_lock(&sb->lock);
+  sb->count++;
+  pthread_cond_signal(&sb->avail);
+  pthread_mutex_unlock(&sb->lock);
+  ```)
+
+(defn sem-free [s :ptr<void>] :nil
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
+  SemBlock *sb = (SemBlock *)s;
+  pthread_mutex_destroy(&sb->lock);
+  pthread_cond_destroy(&sb->avail);
+  free(sb);
+  ```)
+
+;; ---- Thread arg: { sem ptr, result slot } ----
+
+(defn sem-arg-new [s :ptr<void>] :ptr<void>
+  ```c
+  typedef struct { void *sem; int64_t result; } SemArg;
+  SemArg *a = (SemArg *)malloc(sizeof(SemArg));
+  if (!a) { fprintf(stderr, "sem-arg-new: oom\n"); abort(); }
+  a->sem = s; a->result = 0;
+  return (void *)a;
+  ```)
+
+(defn sem-arg-result [a :ptr<void>] :int
+  ```c
+  typedef struct { void *sem; int64_t result; } SemArg;
+  return ((SemArg *)a)->result;
+  ```)
+
+(defn sem-arg-free [a :ptr<void>] :nil
+  ```c
+  free(a);
+  ```)
+
+;; ---- Worker: acquires semaphore, stores 42 in result ----
+
+(defn sem-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
+  typedef struct { void *sem; int64_t result; } SemArg;
+  SemArg *a = (SemArg *)arg;
+  SemBlock *sb = (SemBlock *)a->sem;
+  pthread_mutex_lock(&sb->lock);
+  while (sb->count <= 0)
+      pthread_cond_wait(&sb->avail, &sb->lock);
+  sb->count--;
+  pthread_mutex_unlock(&sb->lock);
+  a->result = 42;
+  return NULL;
+  ```)
+
+;; ---- Thread spawn/join ----
+
+(defn sem-thread-spawn [fn-ptr :ptr<void> arg :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  if (!t) { fprintf(stderr, "sem-thread-spawn: oom\n"); abort(); }
+  pthread_create(t, NULL, (void *(*)(void *))fn_ptr, arg);
+  return (void *)t;
+  ```)
+
+(defn sem-thread-join [t :ptr<void>] :nil
+  ```c
+  pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  ```)
+
+(defn main [] :int
+  ;; Test 1: basic acquire/release round-trip (no threads, count starts at 1).
+  (let [s1 (sem-new 1)]
+    (sem-acquire s1)
+    (sem-release s1)
+    (println 1)            ;; 1 — round-trip ok
+    (sem-free s1))
+
+  ;; Test 2: thread blocks on sem (count=0); main releases it; worker stores 42.
+  (let [s2 (sem-new 0)]
+    (let [arg (sem-arg-new s2)]
+      (let [t (sem-thread-spawn sem-worker arg)]
+        ;; Give the worker a moment to start blocking, then release.
+        (sem-release s2)
+        (sem-thread-join t))
+      (println (sem-arg-result arg))   ;; 42
+      (sem-arg-free arg))
+    (sem-free s2))
+
+  0)
