@@ -219,7 +219,6 @@ struct FiberBlock {
     int64_t arg;
     void *handler_chain;
     void (*entry_fn)(void);
-    void *fiber_local; /* Phase T21: fiber-local storage */
 };
 
 static __thread FiberBlock *tur_current_fiber = NULL;
@@ -267,124 +266,8 @@ static void tur_fiber_block_yield(int64_t value) {
     swapcontext(&f->ctx, &f->caller_ctx);
 }
 
-typedef struct FiberLocalEntry FiberLocalEntry;
-struct FiberLocalEntry {
-    int64_t key;
-    int64_t value;
-    FiberLocalEntry *next;
-};
-
-static void tur_fiber_local_free(FiberBlock *f) {
-    FiberLocalEntry *e = (FiberLocalEntry *)f->fiber_local;
-    while (e) { FiberLocalEntry *n = e->next; free(e); e = n; }
-}
-
-static int64_t tur_fiber_local_get(FiberBlock *f, int64_t key) {
-    FiberLocalEntry *e = (FiberLocalEntry *)f->fiber_local;
-    while (e) { if (e->key == key) return e->value; e = e->next; }
-    return 0;
-}
-
-static void tur_fiber_local_set(FiberBlock *f, int64_t key, int64_t value) {
-    FiberLocalEntry *e = (FiberLocalEntry *)f->fiber_local;
-    while (e) { if (e->key == key) { e->value = value; return; } e = e->next; }
-    FiberLocalEntry *n = (FiberLocalEntry *)malloc(sizeof(FiberLocalEntry));
-    if (!n) { fprintf(stderr, "fiber-local: oom\n"); abort(); }
-    n->key = key; n->value = value;
-    n->next = (FiberLocalEntry *)f->fiber_local;
-    f->fiber_local = (void *)n;
-}
-
 static void tur_fiber_block_free(FiberBlock *f) {
-    if (!f) return;
-    tur_fiber_local_free(f);
-    free(f->stack); free(f);
-}
-
-typedef struct TurScheduler TurScheduler;
-struct TurScheduler {
-    FiberBlock **run_queue;
-    int64_t run_queue_cap;
-    int64_t run_queue_len;
-    int64_t run_queue_head;
-    int64_t run_queue_tail;
-    FiberBlock *current_fiber;
-    bool running;
-};
-
-static TurScheduler *tur_scheduler = NULL;
-
-static TurScheduler *tur_scheduler_new(void) {
-    TurScheduler *s = (TurScheduler *)calloc(1, sizeof(TurScheduler));
-    if (!s) { fprintf(stderr, "scheduler: oom\n"); abort(); }
-    s->run_queue_cap = 64;
-    s->run_queue = (FiberBlock **)malloc(sizeof(FiberBlock *) * (size_t)s->run_queue_cap);
-    if (!s->run_queue) { free(s); fprintf(stderr, "scheduler: queue oom\n"); abort(); }
-    s->run_queue_len = 0;
-    s->run_queue_head = 0;
-    s->run_queue_tail = 0;
-    s->current_fiber = NULL;
-    s->running = false;
-    return s;
-}
-
-static TurScheduler *tur_scheduler_current(void) {
-    return tur_scheduler;
-}
-
-static void tur_scheduler_enqueue(TurScheduler *s, FiberBlock *f) {
-    if (s->run_queue_len >= s->run_queue_cap) {
-        int64_t new_cap = s->run_queue_cap * 2;
-        FiberBlock **new_q = (FiberBlock **)malloc(sizeof(FiberBlock *) * (size_t)new_cap);
-        if (!new_q) { fprintf(stderr, "scheduler: grow oom\n"); abort(); }
-        for (int64_t i = 0; i < s->run_queue_len; i++)
-            new_q[i] = s->run_queue[(s->run_queue_head + i) % s->run_queue_cap];
-        free(s->run_queue);
-        s->run_queue = new_q;
-        s->run_queue_cap = new_cap;
-        s->run_queue_head = 0;
-        s->run_queue_tail = s->run_queue_len;
-    }
-    s->run_queue[s->run_queue_tail] = f;
-    s->run_queue_tail = (s->run_queue_tail + 1) % s->run_queue_cap;
-    s->run_queue_len++;
-}
-
-static FiberBlock *tur_scheduler_dequeue(TurScheduler *s) {
-    if (s->run_queue_len == 0) return NULL;
-    FiberBlock *f = s->run_queue[s->run_queue_head];
-    s->run_queue_head = (s->run_queue_head + 1) % s->run_queue_cap;
-    s->run_queue_len--;
-    return f;
-}
-
-static void tur_scheduler_spawn(TurScheduler *s, FiberBlock *f) {
-    tur_scheduler_enqueue(s, f);
-}
-
-static void tur_scheduler_run(TurScheduler *s) {
-    s->running = true;
-    while (s->running) {
-        FiberBlock *f = tur_scheduler_dequeue(s);
-        if (!f) { break; }
-        s->current_fiber = f;
-        tur_fiber_block_resume(f, 0);
-        s->current_fiber = NULL;
-    }
-    s->running = false;
-}
-
-static void tur_scheduler_run_to_completion(TurScheduler *s) {
-    s->running = true;
-    while (s->run_queue_len > 0 && s->running) {
-        FiberBlock *f = tur_scheduler_dequeue(s);
-        if (f) {
-            s->current_fiber = f;
-            tur_fiber_block_resume(f, 0);
-            s->current_fiber = NULL;
-        }
-    }
-    s->running = false;
+    if (!f) return; free(f->stack); free(f);
 }
 
 #ifdef __clang__

@@ -6,6 +6,7 @@ cmake_minimum_required(VERSION 3.20)
 set(TUR_SOURCES
     arc.c
     arena.c
+    atomic_queue.c
     borrow_check.c
     buf.c
     builtins.c
@@ -31,6 +32,7 @@ set(TUR_SOURCES
     rc.c
     reader.c
     runtime.c
+    scheduler.c
     symbols.c
     typeclass.c
     types.c

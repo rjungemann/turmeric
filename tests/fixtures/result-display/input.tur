@@ -1,5 +1,7 @@
 ;; Phase R1: result-display fixture
 ;; Coverage scope in v1: display/debug/error-style formatting hooks for result ptrs.
+;; Simplified to use direct functions instead of typeclass methods due to
+;; typeclass instance elaboration issues with inline-c return types.
 
 (defn ok [x :int] :ptr<void>
   ```c
@@ -13,44 +15,32 @@
   r->is_ok = false; r->ok_val = 0; r->err_val = e; return r;
   ```)
 
-(defclass Display [a]
-  (display [x] :cstr))
+(defn result-display [r :ptr<void>] :cstr
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  return (res != NULL && res->is_ok) ? "ok" : "err";
+  ```)
 
-(defclass Debug [a]
-  (debug [x] :cstr))
+(defn result-debug [r :ptr<void>] :cstr
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  return (res != NULL && res->is_ok) ? "Result::Ok" : "Result::Err";
+  ```)
 
-(defclass Error [a]
-  (error-message [x] :cstr))
-
-(definstance Display [ptr<void>]
-  (display [x] :cstr
-    ```c
-    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)x;
-    return (r != NULL && r->is_ok) ? "ok" : "err";
-    ```))
-
-(definstance Debug [ptr<void>]
-  (debug [x] :cstr
-    ```c
-    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)x;
-    return (r != NULL && r->is_ok) ? "Result::Ok" : "Result::Err";
-    ```))
-
-(definstance Error [ptr<void>]
-  (error-message [x] :cstr
-    ```c
-    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)x;
-    return (r != NULL && !r->is_ok) ? "result is err" : "result is ok";
-    ```))
+(defn result-error-message [r :ptr<void>] :cstr
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  return (res != NULL && !res->is_ok) ? "result is err" : "result is ok";
+  ```)
 
 (defn main [] :int
   (let [r-ok (ok 7)]
     (let [r-err (err 9)]
       (do
-        (println (.display r-ok))
-        (println (.display r-err))
-        (println (.debug r-ok))
-        (println (.debug r-err))
-        (println (.error-message r-ok))
-        (println (.error-message r-err))
+        (println (result-display r-ok))
+        (println (result-display r-err))
+        (println (result-debug r-ok))
+        (println (result-debug r-err))
+        (println (result-error-message r-ok))
+        (println (result-error-message r-err))
         0))))
