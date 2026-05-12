@@ -905,57 +905,118 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 
 **Dependencies:** Phase 21 (T21 async/await core)
 
-- [x] Implement `TaskGroup` type: tracks spawned tasks, cancels all on error or scope exit.
-  - Implemented: `stdlib/taskgroup.tur` provides `task-group-new`, `task-group-spawn`, `task-group-cancel`, `task-group-wait`, `task-group-free`, `task-group-cancelled?`, `task-group-done?`, `task-group-task-done`. Uses mutex+condvar for synchronization.
-- [x] Implement `TaskGroup::with [group & body]` macro: creates group, runs body, waits for all tasks, then cancels any remaining.
-  - Implemented: `task-group-with` macro in `stdlib/taskgroup.tur` wraps body execution and calls `task-group-wait`.
-- [x] Implement `TaskGroup::spawn [group thunk]` — spawn a fiber in the group; returns a handle.
-  - Implemented: `task-group-spawn` in `stdlib/taskgroup.tur` increments task count and returns fiber handle. In v1, uses `tur_fiber_block_new` for fiber creation.
-- [x] Implement `TaskGroup::cancel [group]` — cooperatively cancel all running tasks in the group.
-  - Implemented: `task-group-cancel` sets cancelled flag and marks group as done, broadcasting to wake all waiters. Tasks must check `fiber-cancelled?` and exit cooperatively.
-- [x] Implement `TaskGroup::with-timeout [group ms & body]` — cancel group if body takes longer than `ms` milliseconds.
-  - Implemented: `task-group-with-timeout` macro spawns a background thread that sleeps for `ms` then calls `task-group-cancel`.
-- [ ] Implement cancellation propagation: if a child task errors, the group cancels remaining children and re-raises.
-  - Deferred: Requires error handling integration. Current v1 tasks must manually check `fiber-cancelled?` and propagate errors.
-- [x] Implement `Fiber::cancelled?` — check if the current fiber has been asked to cancel.
-  - Implemented: `fiber-cancelled?` in `stdlib/taskgroup.tur` calls `tur_fiber_cancelled()` (emitted in `src/emit.c`). Also added `tur_fiber_cancelled_flag` thread-local and `tur_fiber_set_cancelled()` helper.
-- [x] Add `tests/fixtures/taskgroup-basic.tur` — spawn and await two tasks in a group.
-  - Implemented: Fixture tests task group creation, spawning, completion signaling, and waiting. Expected output: 42.
-- [x] Add `tests/fixtures/taskgroup-cancel.tur` — one task errors; sibling is cancelled.
-  - Implemented: Fixture tests task group cancellation. Spawns tasks, cancels group, verifies wait returns. Expected output: "cancelled".
-- [x] Add `tests/fixtures/taskgroup-timeout.tur` — group times out; all tasks cancelled.
-  - Implemented: Fixture spawns timeout thread that cancels group after 100ms. Expected output: "timed out".
+**Purpose:** Provide scoped, cancellable concurrency with automatic error propagation and cleanup.
+
+##### TG-001 — TaskGroup core type
+- [x] Implement `TaskGroup` struct with task count, cancelled flag, mutex, condvar.
+  - Implemented: `stdlib/taskgroup.tur` provides opaque `ptr<void>` type for `TaskGroup`.
+- [x] Implement `task-group-new []` — create new task group.
+- [x] Implement `task-group-free [group]` — free task group resources.
+- [x] Implement `task-group-cancelled? [group]` — check if group was cancelled.
+- [x] Implement `task-group-done? [group]` — check if all tasks completed.
+- [x] Implement `task-group-task-done [group]` — signal task completion (manual).
+  - Note: Tasks must call this when done for accurate `task-group-done?` tracking.
+
+##### TG-002 — Task spawning and tracking
+- [x] Implement `TaskGroup::spawn [group thunk]` — spawn fiber in group, return handle.
+  - Implemented: Increments task count, creates fiber via `tur_fiber_block_new`.
+- [x] Implement task handle type for tracking spawned tasks.
+  - Note: v1 returns raw `FiberBlock*` as handle; future version could wrap in structured type.
+- [ ] Implement `task-group-join [group handle]` — await specific task completion.
+  - Deferred: Current v1 only supports waiting for all tasks via `task-group-wait`.
+
+##### TG-003 — Scoped execution (`with` macro)
+- [x] Implement `TaskGroup::with [group & body]` macro.
+  - Implemented: `task-group-with` macro creates group, executes body, calls `task-group-wait`.
+- [x] Implement `TaskGroup::with-timeout [group ms & body]` — auto-cancel on timeout.
+  - Implemented: Spawns background thread using `pthread_create` + `pthread_detach` that sleeps then cancels.
+- [ ] Implement `TaskGroup::with-cancellation [group & body]` — body can receive cancellation signal.
+  - Deferred: Requires cooperative cancellation integration.
+
+##### TG-004 — Cancellation
+- [x] Implement `TaskGroup::cancel [group]` — request all tasks cancel.
+  - Implemented: Sets `cancelled` flag, broadcasts to wake waiters. Tasks must check `fiber-cancelled?`.
+- [x] Implement `Fiber::cancelled? []` — check if current fiber was cancelled.
+  - Implemented: `fiber-cancelled?` in `stdlib/taskgroup.tur` accesses thread-local `tur_fiber_cancelled_flag`.
+- [ ] Implement automatic cancellation propagation.
+  - Deferred: If a child task panics/exceptions, parent should auto-cancel siblings. Requires exception handling integration.
+- [ ] Implement `task-group-cancel-reason [group]` — get why group was cancelled.
+  - Deferred: Would require storing error/exception in `TaskGroup` struct.
+
+##### TG-005 — Testing
+- [x] Add fixture: `taskgroup-basic.tur` — spawn 2 tasks, await completion.
+- [x] Add fixture: `taskgroup-cancel.tur` — manual cancel, verify tasks stop.
+- [x] Add fixture: `taskgroup-timeout.tur` — timeout-based cancel.
+- [ ] Add fixture: `taskgroup-nested.tur` — nested task groups with propagation.
+- [ ] Add fixture: `taskgroup-error-propagate.tur` — child error cancels siblings.
+- [ ] Add fixture: `taskgroup-panic-propagate.tur` — panic in child cancels group.
 - [ ] Add codegen snapshots for `TaskGroup::with` macro expansion.
-  - Deferred: Requires macro expansion snapshots. Current v1 tests use inline C for simplicity.
+
+##### TG-006 — Integration with async/await
+- [ ] Ensure `async` blocks can be spawned into `TaskGroup`.
+  - Deferred: Requires `async` to use fiber-based execution (currently pthread-based).
+- [ ] Add `task-group-async [group async-thunk]` — spawn async task into group.
+  - Deferred: Same as above.
 
 #### T23 — Multi-threaded work-stealing scheduler (Phase 23)
 
 **Dependencies:** Phase 21 (T21), Phase T19 (`Arc`/`Mutex`, thread primitives), Phase T20 (thread pool)
 
-- [x] Implement work-stealing scheduler: each OS thread has a local `deque` of fibers; idle threads steal from non-empty deques.
-  - Implemented: `src/scheduler.c` provides `TurSchedulerMT` with per-thread `WorkStealingDeque` and a global `AtomicQueue` for cross-thread submission. Worker threads run `scheduler_worker()` which first pops from their own deque, then steals from others, then checks the global queue.
-- [x] Implement per-thread run queues (LIFO deques for local work, FIFO steal end).
-  - Implemented: `WorkStealingDeque` in `src/scheduler.c` uses a ring buffer with `top` (steal index) and `bottom` (push/pop index). Push/pop from bottom (LIFO), steal from top (FIFO). Uses spinlocks in v1; can be upgraded to lock-free CAS later.
-- [x] Implement fiber migration between OS threads: fiber's `scheduler` field updated on steal.
-  - Implemented: When a thread steals a fiber from another thread's deque, the fiber runs on the stealing thread. The `tur_current_fiber` TLS is set appropriately during resume.
-- [x] Implement lock-free queue for cross-thread fiber submission (`AtomicQueue<Fiber>`).
-  - Implemented: `src/atomic_queue.{c,h}` provides `AtomicQueue` with lock-free `aq_push()` using `__atomic_compare_exchange_n` and relaxed memory ordering. `aq_pop()` is single-consumer (scheduler thread only).
-- [ ] Integrate with `ThreadPool` from T20: `Scheduler::new [num-threads]` creates a pool and distributes fibers across it.
-  - Deferred: Current `ThreadPool` in `stdlib/threadpool.tur` is separate. Integration would require unifying the two scheduler implementations.
-- [ ] Integrate I/O waiting: scheduler park/unpark hooks for I/O completion callbacks.
-  - Deferred: Requires platform-specific I/O event integration (epoll/kqueue/io_uring).
-- [x] Implement `Fiber::thread-id` — return the OS thread currently running this fiber (debug builds only).
-  - Implemented: `fiber-thread-id` in `stdlib/fiber.tur` and `tur_scheduler_mt_thread_id()` in `src/scheduler.c` return `(int64_t)(uintptr_t)pthread_self()`.
-- [ ] Migrate per-fiber effect handler chain (`tur_current_fiber->handler_chain`) to be safe under fiber migration.
-  - Deferred: Effect handlers already use `tur_current_fiber->handler_chain` (see `emit.c` line 3470). Cross-thread safety requires ensuring handler chain is not accessed after fiber migration; v1 defers this.
-- [x] Add `tests/fixtures/scheduler-multithread.tur` — two fibers run concurrently on a 2-thread scheduler.
-  - Implemented: Fixture creates 2-thread scheduler, spawns fibers that print thread IDs. Note: v1 scheduler threads start immediately and spin-wait for work.
-- [ ] Add `tests/fixtures/workstealing.tur` — CPU-bound fibers distributed across threads.
-  - Deferred: Requires more complex fiber workload and verification of even distribution.
+**Purpose:** Enable efficient parallel execution of fibers across multiple OS threads with work-stealing for load balancing.
+
+##### SCH-001 — Scheduler architecture
+- [x] Implement `TurSchedulerMT` struct with per-thread deques, global queue, thread management.
+  - Implemented: `src/scheduler.c` defines `TurSchedulerMT` with `n_threads`, `threads[]`, `deques[]`, `global_queue`, mutex/cond for stop coordination.
+- [x] Implement per-thread work deque (`WorkStealingDeque`).
+  - Implemented: Lock-based ring buffer with `top` (steal index) and `bottom` (push/pop). Uses `pthread_spinlock_t` in v1.
+- [x] Implement global `AtomicQueue` for cross-thread submission.
+  - Implemented: `src/atomic_queue.{c,h}` provides lock-free queue using `__atomic_compare_exchange_n`.
+- [x] Implement worker thread lifecycle: spawn, run loop, cleanup.
+  - Implemented: `scheduler_worker()` in `src/scheduler.c` loops: pop from own deque → steal from others → pop from global queue → park.
+
+##### SCH-002 — Work-stealing protocol
+- [x] Implement LIFO push/pop from bottom of deque (owner thread).
+- [x] Implement FIFO steal from top of deque (thief thread).
+- [x] Implement steal operation with fallback to global queue.
+- [x] Implement fiber migration: fiber runs on stealing thread.
+  - Implemented: `tur_current_fiber` TLS is set when resuming stolen fiber; effect handler chain travels with fiber.
+- [ ] Upgrade to lock-free deque operations.
+  - Deferred: Current v1 uses spinlocks for simplicity. CAS-based lock-free version would improve contention.
+
+##### SCH-003 — Integration with existing abstractions
+- [ ] Integrate with `ThreadPool` from T20: unify thread creation and management.
+  - **Deferred**: Current `ThreadPool` (`stdlib/threadpool.tur`) and `TurSchedulerMT` (`src/scheduler.c`) are separate. Should share worker thread pool.
+- [ ] Integrate I/O waiting: scheduler park/unpark on I/O completion.
+  - **Deferred**: Requires platform I/O event APIs (epoll/kqueue/io_uring) and callback registration.
+- [ ] Integrate with single-threaded scheduler (T21): same API, different implementation.
+  - **Deferred**: Single-threaded scheduler uses `FiberBlock` queue; MT scheduler uses `WorkStealingDeque`. API unification deferred.
+
+##### SCH-004 — Thread-local state and safety
+- [x] Implement `__thread` TLS for current scheduler and thread index.
+  - Implemented: `tur_current_scheduler_mt`, `tur_current_thread_idx`, `tur_current_thread_id` in `src/scheduler.c`.
+- [ ] Migrate per-fiber effect handler chain to be migration-safe.
+  - **Deferred**: Effect handlers use `tur_current_fiber->handler_chain`. Cross-thread migration requires ensuring chain is valid after steal. v1 defers this by not supporting effect handlers in migrated fibers.
+- [x] Implement `Fiber::thread-id` — get OS thread ID for debugging.
+  - Implemented: `fiber-thread-id` in `stdlib/fiber.tur` returns `(int64_t)pthread_self()`.
+
+##### SCH-005 — Testing and validation
+- [x] Add fixture: `scheduler-multithread.tur` — 2 fibers on 2 threads.
+  - Implemented: Creates 2-thread scheduler, spawns fibers that print thread IDs.
+- [ ] Add fixture: `workstealing-balance.tur` — verify even distribution.
+  - **Deferred**: Requires CPU-bound workload that demonstrates load balancing across threads.
+- [ ] Add fixture: `workstealing-steal.tur` — verify steal path is triggered.
+  - **Deferred**: Requires instrumentation to detect when stealing occurs.
+- [ ] Add fixture: `scheduler-io-park.tur` — park on I/O, resume on completion.
+  - **Deferred**: Requires SCH-003 integration.
 - [ ] Run all async fixtures under ThreadSanitizer.
-  - Deferred: Requires TSan CI integration.
-- [ ] Add codegen snapshots for multi-threaded scheduler wiring.
-  - Deferred: Snapshot would show `TurSchedulerMT` struct and worker thread emit patterns.
+  - **Deferred**: Requires TSan CI integration (see T19 tasks).
+- [ ] Add codegen snapshots for `TurSchedulerMT` struct and worker emit.
+  - **Deferred**: Snapshots would show scheduler initialization and worker thread spawning.
+
+##### SCH-006 — Performance considerations
+- [ ] Profile and tune work-stealing thresholds.
+- [ ] Benchmark against single-threaded scheduler.
+- [ ] Add metrics: steal count, queue lengths, thread utilization.
 
 #### T24 — Async I/O and timer integration (Phase 24)
 
