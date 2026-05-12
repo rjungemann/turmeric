@@ -57,4 +57,21 @@ FiberBlock *ws_deque_pop(WorkStealingDeque *d);
 FiberBlock *ws_deque_steal(WorkStealingDeque *d);
 bool ws_deque_empty(WorkStealingDeque *d);
 
+/* SCH-003: I/O integration */
+/* Register a fiber to wait on I/O events for a file descriptor */
+void tur_scheduler_mt_io_wait(TurSchedulerMT *s, int fd, int events, FiberBlock *f, void *user_data);
+
+/* Modify I/O interest for a file descriptor */
+void tur_scheduler_mt_io_modify(TurSchedulerMT *s, int fd, int events);
+
+/* Unregister I/O interest for a file descriptor */
+void tur_scheduler_mt_io_unregister(TurSchedulerMT *s, int fd);
+
+/* SCH-003: ThreadPool integration */
+/* Get the TurSchedulerMT from a ThreadPool (if ThreadPool uses scheduler threads) */
+TurSchedulerMT *tur_scheduler_mt_from_threadpool(void *threadpool);
+
+/* Set the TurSchedulerMT for a ThreadPool */
+void tur_scheduler_mt_set_for_threadpool(void *threadpool, TurSchedulerMT *s);
+
 #endif /* TUR_SCHEDULER_H */
