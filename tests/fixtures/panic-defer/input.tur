@@ -1,0 +1,5 @@
+;;; Phase R2: defer fires during panic unwinding
+(defn main [] :int
+  (defer (println "defer fired"))
+  (panic "test panic")
+  0)

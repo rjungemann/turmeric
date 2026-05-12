@@ -170,6 +170,19 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
 
     case EX_PANIC:
         return collect_effects_in_expr(a, e->as.panic_.payload, row, idx, env, subst);
+    case EX_PANIC_WITH:
+        return collect_effects_in_expr(a, e->as.panic_with_.payload, row, idx, env, subst);
+    case EX_CATCH_UNWIND:
+        return collect_effects_in_expr(a, e->as.catch_unwind_.thunk, row, idx, env, subst);
+    case EX_CATCH_PANIC_OF:
+        return collect_effects_in_expr(a, e->as.catch_panic_of_.thunk, row, idx, env, subst);
+    case EX_PANIC_PAYLOAD_TYPE:
+    case EX_PANIC_PAYLOAD_VALUE:
+    case EX_PANIC_PAYLOAD_FILE:
+    case EX_PANIC_PAYLOAD_LINE:
+        return collect_effects_in_expr(a, e->as.panic_payload_type_.payload, row, idx, env, subst);
+    case EX_PANIC_PAYLOAD_DOWNS:
+        return collect_effects_in_expr(a, e->as.panic_payload_downs_.payload, row, idx, env, subst);
 
     case EX_TRY:
         row = collect_effects_in_expr(a, e->as.try_.body, row, idx, env, subst);

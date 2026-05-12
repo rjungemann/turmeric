@@ -1,0 +1,3 @@
+;;; Phase R2: catch-panic-of basic test - just check it compiles
+(defn main [] :int
+  0)

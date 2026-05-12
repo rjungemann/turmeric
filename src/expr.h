@@ -88,6 +88,14 @@ typedef enum ExprKind {
     EX_TRY,            /* (try body (catch ...) (finally ...)) - try-catch-finally */
     /* Phase R2: Panic */
     EX_PANIC,          /* (panic msg) - print msg to stderr and abort */
+    EX_PANIC_WITH,     /* (panic-with payload) - panic with typed payload */
+    EX_CATCH_UNWIND,   /* (catch-unwind thunk) - catch any panic at boundary */
+    EX_CATCH_PANIC_OF, /* (catch-panic-of Type thunk) - catch panic of specific type */
+    EX_PANIC_PAYLOAD_TYPE,    /* (panic-payload-type p) - get type tag */
+    EX_PANIC_PAYLOAD_VALUE,   /* (panic-payload-value p) - get value */
+    EX_PANIC_PAYLOAD_FILE,    /* (panic-payload-file p) - get file */
+    EX_PANIC_PAYLOAD_LINE,    /* (panic-payload-line p) - get line */
+    EX_PANIC_PAYLOAD_DOWNS,   /* (panic-payload-downcast p Type) - downcast */
     /* Phase 18: Delimited continuations */
     EX_RESET,          /* (reset body) - establish continuation boundary */
     EX_SHIFT,          /* (shift k body) - capture continuation, pass to k */
@@ -286,6 +294,14 @@ struct Expr {
         struct { Expr *payload; }        throw_;    /* (throw expr) - expression to throw */
         /* Phase R2: Panic */
         struct { Expr *payload; }        panic_;    /* (panic msg) - message to print before abort */
+        struct { Expr *payload; }        panic_with_;    /* (panic-with payload) - typed payload */
+        struct { Expr *thunk; }        catch_unwind_;    /* (catch-unwind thunk) - thunk to call */
+        struct { TypeKind type_kind; Expr *thunk; } catch_panic_of_; /* (catch-panic-of Type thunk) */
+        struct { Expr *payload; }        panic_payload_type_;   /* (panic-payload-type p) */
+        struct { Expr *payload; }        panic_payload_value_;  /* (panic-payload-value p) */
+        struct { Expr *payload; }        panic_payload_file_;   /* (panic-payload-file p) */
+        struct { Expr *payload; }        panic_payload_line_;   /* (panic-payload-line p) */
+        struct { Expr *payload; TypeKind target_type; } panic_payload_downs_; /* (panic-payload-downcast p Type) */
         struct {
             Expr *body;              /* try body expression */
             TryCatchClause *clauses; /* catch clauses */
