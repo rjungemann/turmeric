@@ -1063,8 +1063,8 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 - [x] Implement steal operation with fallback to global queue.
 - [x] Implement fiber migration: fiber runs on stealing thread.
   - Implemented: `tur_current_fiber` TLS is set when resuming stolen fiber; effect handler chain travels with fiber.
-- [ ] Upgrade to lock-free deque operations.
-  - Deferred: Current v1 uses spinlocks for simplicity. CAS-based lock-free version would improve contention.
+- [x] Upgrade to lock-free deque operations.
+  - Implemented: Replaced `pthread_spinlock_t` with `_Atomic size_t` for `top` and `bottom` indices in `WorkStealingDeque`. Uses `__atomic_load_n`, `__atomic_store_n`, and `__atomic_compare_exchange_n` builtins for lock-free push/pop/steal operations. Removed spinlock dependency.
 
 ##### SCH-003 — Integration with existing abstractions
 - [x] Integrate with `ThreadPool` from T20: unify thread creation and management.
