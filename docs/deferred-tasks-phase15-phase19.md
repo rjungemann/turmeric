@@ -986,6 +986,27 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 - [ ] Add negative fixture `tests/fixtures/errors/async-effect-escape.tur` — effect handler continuation escapes async scope; runtime error.
 - [ ] Document panic + async task semantics in `docs/async-await-plan.md` before closing Phase R6 (see Phase R6 deferred item).
 
+### Unsafe Operations prerequisites (U0 — Blocking issues)
+
+#### U0-1 — Fix unsafe primitive symbol resolution
+- [ ] **CRITICAL**: Unsafe primitives (`ptr-deref`, `raw-malloc`, `ptr-of`, etc.) are implemented in `src/elab.c` (elab functions), `src/builtins.c` (builtin specs), and `src/emit.c` (codegen), but are not being recognized during elaboration.
+  - **Symptom**: `(raw-malloc 16)` produces `error: unknown function or operator 'raw-malloc'`
+  - **Root cause**: Symbol lookup mismatch between reader-interned symbols and elab-interned symbols, despite both using `symtab_intern` on the same symbol table.
+  - **Investigation needed**: Add debug output to `elab_call` to trace symbol comparison; verify `name == e->sym_raw_malloc` is evaluating correctly.
+  - **Blocking**: All U3 tasks, plus U2 containment enforcement (which may use U3 primitives).
+  - **Workaround**: None currently — primitives are unusable.
+
+#### U0-2 — Verify unsafe block dispatch order
+- [ ] Confirm that in `elab_call` (src/elab.c), the dispatch for U3 primitives (lines ~6030-6060) executes BEFORE macro lookup and user-defined function lookup, not after.
+  - **Current code**: Dispatch appears correct, but may be bypassed by earlier return paths.
+  - **Action**: Add trace logging to verify dispatch is reached for U3 primitive calls.
+
+#### U0-3 — Unsafe primitive builtin validation
+- [ ] Verify `builtins_init` (src/builtins.c) is called before any elaboration and that `table_[].name_sym` fields are properly populated.
+  - **Action**: Add assertion or debug check that `table_[i].name_sym != NULL` for all entries after `builtins_init`.
+
+---
+
 ### Unsafe Operations remaining tasks
 
 #### U1 — `Unsafe` effect in type system
@@ -1005,23 +1026,40 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 #### U2 — `unsafe { }` block sugar
 - [x] Parse `(unsafe expr...)` form in reader.
   - Implemented: `unsafe` is now a recognized special form in `src/elab.c` (`elab_unsafe`) and elaborates like `do` while entering an unsafe context.
-- [ ] Desugar to `try_with` with an `Unsafe` handler that discharges the effect within the block.
+- [x] Desugar to `handle` with an `Unsafe` handler that discharges the effect within the block.
+  - Implemented: `elab_unsafe` creates a `handle` expression with an Unsafe handler that resumes with nil.
+  - **Note**: Current implementation uses `handle`, not `try_with` as originally specified. This is functionally equivalent for v1.
 - [ ] Enforce containment: `unsafe` block cannot leak `Unsafe` to caller.
+  - **Requires**: U0-1 (unsafe primitives) to be fixed first, as containment checking may need to validate that no Unsafe-effect operations escape.
+  - **Action**: Add effect-row check in `elab_unsafe` that verifies the body's inferred effect row contains only `Unsafe` (no other effects leak).
 - [ ] Warn on empty and oversized `unsafe` blocks (configurable threshold).
+  - **Partially implemented**: Code exists in `elab_unsafe` (lines ~3070-3085) but is disabled by default (`g_unsafe_max_lines = 20`, `g_unsafe_warn_nested = false`).
+  - **Action**: Enable warnings via command-line flags (`--lint-unsafe`), add `unsafe-empty.tur` negative fixture.
 - [x] Add fixtures: `unsafe-basic.tur`, `unsafe-nested.tur`, `unsafe-defer.tur`.
   - Implemented: `tests/fixtures/unsafe-basic/`, `tests/fixtures/unsafe-nested/`, and `tests/fixtures/unsafe-defer/` validate ptr<void>-borrow usage inside unsafe blocks (including nested and defer cases).
 - [ ] Add negative fixture: `unsafe-empty.tur` (warning on empty block).
+  - **Action**: Create fixture that expects stderr substring `"empty unsafe block has no effect"`.
 - [ ] Add codegen snapshots for `unsafe` block lowering.
+  - **Action**: Regenerate `expected.c` for `unsafe-basic`, `unsafe-nested`, `unsafe-defer` after U0-1 is fixed.
+- [ ] **NEW**: Add containment test fixture: `unsafe-containment.tur` — verify that calling a `@ {Unsafe}` function outside an unsafe block fails.
 
 #### U3 — Unsafe primitive operations
-- [ ] Implement pointer operations: `ptr-deref`, `ptr-write`, `ptr-add`, `ptr-sub`, `ptr-null?`, `ptr-of`.
-- [ ] Implement type casting: `unsafe-cast`, `reinterpret` (with compile-time size check), `transmute`.
-- [ ] Implement unchecked array ops: `array-get-unchecked`, `array-set-unchecked`.
-- [ ] Implement raw memory management: `raw-malloc`, `raw-free`, `raw-realloc`, `raw-memcpy`, `raw-memset`.
-- [ ] Implement FFI primitives: `c-call`, `dlopen`, `dlsym`, `dlclose`.
+- [ ] **BLOCKED by U0-1**: Implement pointer operations: `ptr-deref`, `ptr-write`, `ptr-add`, `ptr-sub`, `ptr-null?`, `ptr-of`.
+  - **Status**: Code exists in `src/elab.c` (elab_ptr_deref, etc.), `src/builtins.c` (builtin specs), `src/emit.c` (emit_ptr_deref, etc.) but primitives are not recognized during elaboration.
+  - **Action**: Fix U0-1 first, then verify these primitives work.
+- [ ] **BLOCKED by U0-1**: Implement type casting: `unsafe-cast`, `reinterpret` (with compile-time size check), `transmute`.
+  - **Status**: Same as pointer operations — code exists but not functional.
+  - **Note**: `reinterpret` should verify size match at compile time for known types.
+- [ ] **BLOCKED by U0-1**: Implement unchecked array ops: `array-get-unchecked`, `array-set-unchecked`.
+- [ ] **BLOCKED by U0-1**: Implement raw memory management: `raw-malloc`, `raw-free`, `raw-realloc`, `raw-memcpy`, `raw-memset`.
+- [ ] **BLOCKED by U0-1**: Implement FFI primitives: `c-call`, `dlopen`, `dlsym`, `dlclose`.
+  - **Note**: These may require additional runtime support in `src/runtime.c`.
 - [ ] Add fixtures: `unsafe-ptr-deref.tur`, `unsafe-ptr-arith.tur`, `unsafe-cast.tur`, `unsafe-reinterpret.tur`, `unsafe-array-unchecked.tur`, `unsafe-malloc.tur`, `unsafe-memcpy.tur`.
+  - **BLOCKED by U0-1**: Cannot test until primitives are functional.
 - [ ] Add negative fixture: `unsafe-reinterpret-size-mismatch.tur`.
+  - **Action**: Test that `reinterpret` with mismatched sizes emits a compile-time error.
 - [ ] Add codegen snapshots for all unsafe primitives.
+  - **BLOCKED by U0-1**: Cannot generate snapshots until primitives work.
 
 #### U4 — Safe standard library wrappers
 - [ ] Implement bounds-checked `array-get`, `array-set`, `array-slice` returning `Option`.
