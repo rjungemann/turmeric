@@ -1,0 +1,56 @@
+;; Phase R1: result-display fixture
+;; Coverage scope in v1: display/debug/error-style formatting hooks for result ptrs.
+
+(defn ok [x :int] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = true; r->ok_val = x; r->err_val = 0; return r;
+  ```)
+
+(defn err [e :int] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = false; r->ok_val = 0; r->err_val = e; return r;
+  ```)
+
+(defclass Display [a]
+  (display [x] :cstr))
+
+(defclass Debug [a]
+  (debug [x] :cstr))
+
+(defclass Error [a]
+  (error-message [x] :cstr))
+
+(definstance Display [ptr<void>]
+  (display [x] :cstr
+    ```c
+    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)x;
+    return (r != NULL && r->is_ok) ? "ok" : "err";
+    ```))
+
+(definstance Debug [ptr<void>]
+  (debug [x] :cstr
+    ```c
+    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)x;
+    return (r != NULL && r->is_ok) ? "Result::Ok" : "Result::Err";
+    ```))
+
+(definstance Error [ptr<void>]
+  (error-message [x] :cstr
+    ```c
+    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = (void*)x;
+    return (r != NULL && !r->is_ok) ? "result is err" : "result is ok";
+    ```))
+
+(defn main [] :int
+  (let [r-ok (ok 7)]
+    (let [r-err (err 9)]
+      (do
+        (println (.display r-ok))
+        (println (.display r-err))
+        (println (.debug r-ok))
+        (println (.debug r-err))
+        (println (.error-message r-ok))
+        (println (.error-message r-err))
+        0))))
