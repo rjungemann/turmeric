@@ -1,0 +1,77 @@
+;; stdlib/scheduler_mt.tur — Multi-threaded work-stealing scheduler (Phase T23)
+;;
+;; This provides a higher-level API for the multi-threaded scheduler.
+;; The scheduler manages a pool of worker threads and distributes fibers
+;; across them using work-stealing.
+;;
+;; API:
+;;   scheduler-mt-new       [n_threads :int]              → ptr<void>
+;;   scheduler-mt-free      [sched :ptr<void>]             → nil
+;;   scheduler-mt-spawn    [sched :ptr<void> fiber :ptr<void>] → nil
+;;   scheduler-mt-run       [sched :ptr<void>]             → nil
+;;   scheduler-mt-thread-id []                             → int
+;;
+;; The scheduler uses work-stealing: each thread has its own deque of fibers.
+;; When a thread runs out of work, it steals from other threads' deques.
+
+;; Create a new multi-threaded scheduler with n_threads worker threads
+(defn scheduler-mt-new [n_threads :int] :ptr<void>
+  ```c
+  TurSchedulerMT *s = tur_scheduler_mt_new((size_t)n_threads);
+  if (!s) { fprintf(stderr, "scheduler-mt-new: oom\n"); abort(); }
+  return (void *)s;
+  ```)
+
+;; Free the scheduler (must be called after all threads have finished)
+(defn scheduler-mt-free [sched :ptr<void>] :nil
+  ```c
+  tur_scheduler_mt_free((TurSchedulerMT *)sched);
+  ```)
+
+;; Spawn a fiber on the scheduler
+(defn scheduler-mt-spawn [sched :ptr<void> fiber :ptr<void>] :nil
+  ```c
+  tur_scheduler_mt_spawn((TurSchedulerMT *)sched, (FiberBlock *)fiber);
+  ```)
+
+;; Run the scheduler on the current thread
+(defn scheduler-mt-run [sched :ptr<void>] :nil
+  ```c
+  tur_scheduler_mt_run((TurSchedulerMT *)sched);
+  ```)
+
+;; Get the current thread's ID (unique per OS thread)
+(defn scheduler-mt-thread-id [] :int
+  ```c
+  return (int64_t)tur_scheduler_mt_thread_id();
+  ```)
+
+;; Set the current scheduler for this thread (for testing)
+(defn scheduler-mt-set-current [sched :ptr<void>] :nil
+  ```c
+  tur_scheduler_mt_set_current((TurSchedulerMT *)sched);
+  ```)
+
+;; Get the current scheduler for this thread
+(defn scheduler-mt-current [] :ptr<void>
+  ```c
+  return (void *)tur_scheduler_mt_current();
+  ```)
+
+;; Yield the current fiber to allow other fibers to run
+(defn scheduler-mt-yield [] :nil
+  ```c
+  tur_scheduler_mt_yield();
+  ```)
+
+;; Park the current fiber until explicitly unparked
+(defn scheduler-mt-park [] :nil
+  ```c
+  tur_scheduler_mt_park();
+  ```)
+
+;; Unpark a specific fiber
+(defn scheduler-mt-unpark [fiber :ptr<void>] :nil
+  ```c
+  tur_scheduler_mt_unpark((FiberBlock *)fiber);
+  ```)

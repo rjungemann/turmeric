@@ -1,1 +1,1 @@
-? operator is not yet implemented (Phase R1)
+? operator can only be used in functions returning result<T, E> (ptr<void>)

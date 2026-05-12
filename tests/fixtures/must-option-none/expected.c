@@ -186,23 +186,6 @@ static void tur_panic(const char *msg) {
     abort();
 }
 
-static void tur_panic_with_file_line(const char *msg, const char *file, int line) {
-    if (tur_panic_in_progress) {
-        fprintf(stderr, "double panic: aborting\n");
-        abort();
-    }
-    tur_panic_in_progress = 1;
-    if (file && line > 0) {
-        fprintf(stderr, "panic at %s:%d: %s\n", file, line, msg ? msg : "(no message)");
-    } else {
-        fprintf(stderr, "panic: %s\n", msg ? msg : "(no message)");
-    }
-    if (global_panic_frame) {
-        tur_frame_fire_chain(global_panic_frame);
-    }
-    abort();
-}
-
 /* Phase 19: Algebraic effect handler chain */
 typedef struct { bool consumed; void *origin_fiber; } TurContK;
 

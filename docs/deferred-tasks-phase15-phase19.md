@@ -914,18 +914,30 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 
 **Dependencies:** Phase 21 (T21), Phase T19 (`Arc`/`Mutex`, thread primitives), Phase T20 (thread pool)
 
-- [ ] Implement work-stealing scheduler: each OS thread has a local `deque` of fibers; idle threads steal from non-empty deques.
-- [ ] Implement per-thread run queues (LIFO deques for local work, FIFO steal end).
-- [ ] Implement fiber migration between OS threads: fiber's `scheduler` field updated on steal.
-- [ ] Implement lock-free queue for cross-thread fiber submission (`AtomicQueue<Fiber>`).
+- [x] Implement work-stealing scheduler: each OS thread has a local `deque` of fibers; idle threads steal from non-empty deques.
+  - Implemented: `src/scheduler.c` provides `TurSchedulerMT` with per-thread `WorkStealingDeque` and a global `AtomicQueue` for cross-thread submission. Worker threads run `scheduler_worker()` which first pops from their own deque, then steals from others, then checks the global queue.
+- [x] Implement per-thread run queues (LIFO deques for local work, FIFO steal end).
+  - Implemented: `WorkStealingDeque` in `src/scheduler.c` uses a ring buffer with `top` (steal index) and `bottom` (push/pop index). Push/pop from bottom (LIFO), steal from top (FIFO). Uses spinlocks in v1; can be upgraded to lock-free CAS later.
+- [x] Implement fiber migration between OS threads: fiber's `scheduler` field updated on steal.
+  - Implemented: When a thread steals a fiber from another thread's deque, the fiber runs on the stealing thread. The `tur_current_fiber` TLS is set appropriately during resume.
+- [x] Implement lock-free queue for cross-thread fiber submission (`AtomicQueue<Fiber>`).
+  - Implemented: `src/atomic_queue.{c,h}` provides `AtomicQueue` with lock-free `aq_push()` using `__atomic_compare_exchange_n` and relaxed memory ordering. `aq_pop()` is single-consumer (scheduler thread only).
 - [ ] Integrate with `ThreadPool` from T20: `Scheduler::new [num-threads]` creates a pool and distributes fibers across it.
+  - Deferred: Current `ThreadPool` in `stdlib/threadpool.tur` is separate. Integration would require unifying the two scheduler implementations.
 - [ ] Integrate I/O waiting: scheduler park/unpark hooks for I/O completion callbacks.
-- [ ] Implement `Fiber::thread-id` — return the OS thread currently running this fiber (debug builds only).
+  - Deferred: Requires platform-specific I/O event integration (epoll/kqueue/io_uring).
+- [x] Implement `Fiber::thread-id` — return the OS thread currently running this fiber (debug builds only).
+  - Implemented: `fiber-thread-id` in `stdlib/fiber.tur` and `tur_scheduler_mt_thread_id()` in `src/scheduler.c` return `(int64_t)(uintptr_t)pthread_self()`.
 - [ ] Migrate per-fiber effect handler chain (`tur_current_fiber->handler_chain`) to be safe under fiber migration.
-- [ ] Add `tests/fixtures/scheduler-multithread.tur` — two fibers run concurrently on a 2-thread scheduler.
+  - Deferred: Effect handlers already use `tur_current_fiber->handler_chain` (see `emit.c` line 3470). Cross-thread safety requires ensuring handler chain is not accessed after fiber migration; v1 defers this.
+- [x] Add `tests/fixtures/scheduler-multithread.tur` — two fibers run concurrently on a 2-thread scheduler.
+  - Implemented: Fixture creates 2-thread scheduler, spawns fibers that print thread IDs. Note: v1 scheduler threads start immediately and spin-wait for work.
 - [ ] Add `tests/fixtures/workstealing.tur` — CPU-bound fibers distributed across threads.
+  - Deferred: Requires more complex fiber workload and verification of even distribution.
 - [ ] Run all async fixtures under ThreadSanitizer.
+  - Deferred: Requires TSan CI integration.
 - [ ] Add codegen snapshots for multi-threaded scheduler wiring.
+  - Deferred: Snapshot would show `TurSchedulerMT` struct and worker thread emit patterns.
 
 #### T24 — Async I/O and timer integration (Phase 24)
 

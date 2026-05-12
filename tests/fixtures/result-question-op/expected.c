@@ -179,10 +179,10 @@ static void tur_panic(const char *msg) {
         abort();
     }
     tur_panic_in_progress = 1;
+    fprintf(stderr, "panic: %s\n", msg ? msg : "(no message)");
     if (global_panic_frame) {
         tur_frame_fire_chain(global_panic_frame);
     }
-    fprintf(stderr, "panic: %s\n", msg ? msg : "(no message)");
     abort();
 }
 

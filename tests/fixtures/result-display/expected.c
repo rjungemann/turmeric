@@ -697,35 +697,63 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
-static void * some(int64_t);
-static int64_t option_must(void *);
-static int64_t option_expect(void *, const char *);
+static void * ok(int64_t);
+static void * err(int64_t);
+static const char * result_display(void *);
+static const char * result_debug(void *);
+static const char * result_error_message(void *);
 
-static void * some(int64_t x) {
-struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
-  opt->is_some = true; opt->value = x; return (void*)opt;
+static void * ok(int64_t x) {
+struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = true; r->ok_val = x; r->err_val = 0; return r;
           return 0;
 }
 
-static int64_t option_must(void * o) {
-struct { bool is_some; int64_t value; } *opt = (void*)o;
-  if (opt == NULL || !opt->is_some) { tur_panic("option-must: called on none"); }
-  return (int)opt->value;
+static void * err(int64_t e) {
+struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = false; r->ok_val = 0; r->err_val = e; return r;
           return 0;
 }
 
-static int64_t option_expect(void * o, const char * msg) {
-struct { bool is_some; int64_t value; } *opt = (void*)o;
-  if (opt == NULL || !opt->is_some) { tur_panic(msg); }
-  return (int)opt->value;
+static const char * result_display(void * r) {
+struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  return (res != NULL && res->is_ok) ? "ok" : "err";
+          return 0;
+}
+
+static const char * result_debug(void * r) {
+struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  return (res != NULL && res->is_ok) ? "Result::Ok" : "Result::Err";
+          return 0;
+}
+
+static const char * result_error_message(void * r) {
+struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  return (res != NULL && !res->is_ok) ? "result is err" : "result is ok";
           return 0;
 }
 
 int main() {
-        printf("%lld\n", (long long)(option_must(some(INT64_C(42)))));
-        printf("%lld\n", (long long)(option_expect(some(INT64_C(99)), "expected some")));
         int64_t __t0;
-        __t0 = INT64_C(0);
+        {
+            void * r_ok_11 = ok(INT64_C(7));
+            (void)r_ok_11;
+            int64_t __t1;
+            {
+                void * r_err_12 = err(INT64_C(9));
+                (void)r_err_12;
+                puts(result_display(r_ok_11));
+                puts(result_display(r_err_12));
+                puts(result_debug(r_ok_11));
+                puts(result_debug(r_err_12));
+                puts(result_error_message(r_ok_11));
+                puts(result_error_message(r_err_12));
+                int64_t __t2;
+                __t2 = INT64_C(0);
+                __t1 = __t2;
+            }
+            __t0 = __t1;
+        }
         return (int)__t0;
 }
 

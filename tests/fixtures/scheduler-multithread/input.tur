@@ -1,0 +1,36 @@
+;; Phase T23: scheduler-multithread — two fibers run concurrently on a 2-thread scheduler
+;;
+;; Tests:
+;;   1. Create a 2-thread scheduler
+;;   2. Spawn two fibers that each print their thread ID
+;;   3. Run the scheduler and wait
+;; Expected output: two different thread IDs (order may vary)
+
+(load "stdlib/fiber.tur")
+(load "stdlib/scheduler_mt.tur")
+
+(defn fiber-a [] :nil
+  (println (fiber-thread-id)))
+
+(defn fiber-b [] :nil
+  (println (fiber-thread-id)))
+
+(defn main [] :int
+  (let [sched (scheduler-mt-new 2)]
+    (let [fa (fiber-new fiber-a 0)]
+      (let [fb (fiber-new fiber-b 0)]
+        (scheduler-mt-spawn sched fa)
+        (scheduler-mt-spawn sched fb)
+        ;; Sleep to allow threads to process
+        (thread-sleep 100)
+        (scheduler-mt-free sched)
+        (fiber-free fa)
+        (fiber-free fb)))
+    0))
+
+(defn thread-sleep [ms :int] :nil
+  ```c
+  typedef struct { long tv_sec; long tv_nsec; } timespec;
+  timespec ts = { .tv_sec = ms / 1000, .tv_nsec = (ms % 1000) * 1000000 };
+  nanosleep(&ts, NULL);
+  ```)
