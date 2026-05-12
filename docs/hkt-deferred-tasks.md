@@ -21,6 +21,68 @@ most foundational (blocking the most other work) to the least.
 
 ---
 
+## Actionable prerequisites (ordered by critical path)
+
+The critical path from the dependency graph is **§5 → §1 → §2 → §3**. Work through
+prerequisites in this order to unblock the most downstream work as early as possible.
+
+### §5 — Multi-capture closures (no upstream dependencies — start here)
+
+- [ ] **emit.c** — extend `needs_fn_cast` to include `TY_PTR_VOID`
+- [ ] **elab.c** — introduce `EX_CAST` node; relax `TY_PTR_VOID` → `TY_INT` coercion at HKT call sites
+- [ ] **Verify closure safety** — confirm no dangling-env case when a closure outlives its enclosing function
+- [ ] **tests/fixtures/hkt-closures/** — replace literal-constant workaround with a genuine let-bound capture
+
+### §1 — Dictionary passing (unblocked after §5)
+
+- [ ] **IR** — add `EX_DICT` expression node (or extend `EX_CALL`) for implicit dictionary arguments
+- [ ] **elab.c** — update `elab_method_call` to emit a dictionary load at every `EX_METHOD_CALL` site
+- [ ] **emit.c** — emit `static const VTable_…` dictionary structs per `definstance`; add `const void *__dict` parameter to polymorphic functions
+- [ ] **typeclass.h** — replace compile-time first-match lookup with a dictionary-pointer-keyed dispatch table
+
+### §2 — Kind inference (unblocked after §1)
+
+- [ ] **kind_check.{c,h}** — add `KindEnv` (symbol → Kind map) with `kind_env_new`, `kind_env_bind`, `kind_env_lookup`
+- [ ] **kind_check.c** — implement `kind_unify(Kind k1, Kind k2, KindEnv *env, Diag *d)`
+- [ ] **kind_check.c** — walk type expressions in `defn`, `defclass`, `definstance`; infer kinds bottom-up; emit new `TUR_E0013_KIND_MISMATCH` diagnostic
+- [ ] **tests/fixtures/** — implement `kinds-inference.tur` fixture
+
+### §3 — Partial type application (unblocked after §2)
+
+- [ ] **types.h** — add `TY_APP` to `TypeKind` enum; add `TypeApp { Type fn; Type arg; }` struct
+- [ ] **reader.c / parser** — parse `(T arg)` in type position as `TY_APP`, not a value call
+- [ ] **elab.c** — update `elab_definstance` to recognise `TY_APP` and validate kind constraints
+- [ ] **kind_check.c** — validate `TY_APP fn arg`: `fn : KIND_ARROW`, `arg : KIND_STAR`; result `KIND_STAR` (or `KIND_ARROW` for `KIND_ARROW2`)
+- [ ] **emit.c** — generate correct C dictionary struct name for `TY_APP` instance declarations
+
+### §4 — Higher-kinded data types (unblocked after §3 + §5)
+
+- [ ] **types.c** — implement `type_is_guarded_recursive()` to allow guarded self-referential `deftype`
+- [ ] **elab.c / forms.c** — accept `^f`-prefixed kind parameters on `deftype` (extends H1 `defclass` work)
+- [ ] **stdlib/free.tur** — implement `cata` / `fold` for `Fix` after `Fix` compiles
+- [ ] **stdlib/free.tur** — implement `pure-free`, `liftF`, `interpret-free` for `Free` (also needs §5)
+
+### §6 — Stdlib HKT migration (unblocked after §1 + §5; §3 needed for `result` only)
+
+- [ ] **stdlib/option.tur** — complete `Applicative ap` and `Traversable traverse`
+- [ ] **stdlib/vec.tur** — complete `Applicative pure/ap`, `Monad bind`, `Traversable traverse`
+- [ ] **stdlib/slice.tur** — add `Functor` and `Foldable` instances
+- [ ] **stdlib/rc.tur** — add `Functor` instance
+- [ ] **stdlib/result.tur** — add `Functor`/`Applicative`/`Monad` instances (blocked on §3)
+
+### §7 — `for` comprehension macro (unblocked after §5)
+
+- [ ] **stdlib/typeclass.tur** — define `Alternative [^f]` typeclass with `empty` and `alt-or`; add `option` and `vec` instances
+- [ ] **stdlib/macros.tur** — implement `for` macro with recursive desugaring to `bind` / `pure` / `empty`
+- [ ] **interp.c / ct_eval** — handle `:when` as a keyword sentinel in `for` binding vector
+
+### §8 — Benchmark harness (unblocked after §1)
+
+- [ ] **benchmarks/** — create directory with `run-benchmarks.sh` and at least two `.tur` benchmark files
+- [ ] **benchmarks/** — capture monomorphic direct-call baseline to compute overhead ratio
+
+---
+
 ## §1 — Full multi-instance dictionary passing
 
 **Deferred from:** H2, H4
@@ -45,28 +107,28 @@ vtable scheme in `emit.c`.
 
 **Prerequisites:**
 
-1. **IR: dictionary value node** — Add `EX_DICT` or extend `EX_CALL` to carry an
-   implicit dictionary argument alongside each method call. The elaborator must
-   resolve which dictionary to pass at every `EX_METHOD_CALL` site.
+- [ ] **IR: dictionary value node** — Add `EX_DICT` or extend `EX_CALL` to carry an
+  implicit dictionary argument alongside each method call. The elaborator must
+  resolve which dictionary to pass at every `EX_METHOD_CALL` site.
 
-2. **elab.c — dictionary selection** — `elab_method_call` currently selects the
-   instance once and emits a direct call. It needs to select the instance and
-   emit a dictionary load (from a locally-bound dictionary parameter or from a
-   global singleton for monomorphic call sites).
+- [ ] **elab.c — dictionary selection** — `elab_method_call` currently selects the
+  instance once and emits a direct call. It needs to select the instance and
+  emit a dictionary load (from a locally-bound dictionary parameter or from a
+  global singleton for monomorphic call sites).
 
-3. **emit.c — dictionary structs** — Each `definstance` must emit a
-   `static const VTable_<class>_<type> __dict_<class>_<type>` struct. Polymorphic
-   functions accept an extra `const void *__dict` parameter and use it to dispatch.
+- [ ] **emit.c — dictionary structs** — Each `definstance` must emit a
+  `static const VTable_<class>_<type> __dict_<class>_<type>` struct. Polymorphic
+  functions accept an extra `const void *__dict` parameter and use it to dispatch.
 
-4. **typeclass.h — dispatch table keyed on dictionary pointer** — The current
-   `typeclass_env_lookup_instance_by_key` becomes the compile-time resolver;
-   runtime dispatch goes through the dictionary struct.
+- [ ] **typeclass.h — dispatch table keyed on dictionary pointer** — The current
+  `typeclass_env_lookup_instance_by_key` becomes the compile-time resolver;
+  runtime dispatch goes through the dictionary struct.
 
 **Acceptance criteria:**
-- Two instances of the same HKT typeclass coexist in one program and dispatch
+- [ ] Two instances of the same HKT typeclass coexist in one program and dispatch
   correctly at runtime.
-- All existing HKT fixtures still pass.
-- A new fixture `hkt-multi-instance.tur` passes.
+- [ ] All existing HKT fixtures still pass.
+- [ ] A new fixture `hkt-multi-instance.tur` passes.
 
 ---
 
@@ -90,28 +152,28 @@ the dictionary struct layout. The two features are best designed together.
 
 **Prerequisites:**
 
-1. **§1 (dictionary passing)** — kind information drives dictionary struct shape.
+- [ ] **§1 (dictionary passing)** — kind information drives dictionary struct shape.
 
-2. **Kind environment** — a `KindEnv` (symbol → Kind map) threaded through
-   `kind_check_pass`. Add `kind_env_new()`, `kind_env_bind()`, `kind_env_lookup()`
-   to `src/kind_check.{c,h}` (mirrors `typeclass_env_*` pattern).
+- [ ] **Kind environment** — a `KindEnv` (symbol → Kind map) threaded through
+  `kind_check_pass`. Add `kind_env_new()`, `kind_env_bind()`, `kind_env_lookup()`
+  to `src/kind_check.{c,h}` (mirrors `typeclass_env_*` pattern).
 
-3. **Kind unification** — `kind_unify(Kind k1, Kind k2, KindEnv *env, Diag *d)`.
-   KIND_STAR and KIND_ARROW are ground kinds; kind variables (a future
-   `KIND_VAR` enum member) can be unified freely.
+- [ ] **Kind unification** — `kind_unify(Kind k1, Kind k2, KindEnv *env, Diag *d)`.
+  KIND_STAR and KIND_ARROW are ground kinds; kind variables (a future
+  `KIND_VAR` enum member) can be unified freely.
 
-4. **Kind inference for type expressions** — walk each type expression in `defn`,
-   `defclass`, and `definstance`; infer and unify kinds bottom-up. Report
-   `TUR_E0013_KIND_MISMATCH` (new diag code) for inconsistencies.
+- [ ] **Kind inference for type expressions** — walk each type expression in `defn`,
+  `defclass`, and `definstance`; infer and unify kinds bottom-up. Report
+  `TUR_E0013_KIND_MISMATCH` (new diag code) for inconsistencies.
 
-5. **Fixture** — `tests/fixtures/kinds-inference.tur` (explicitly marked deferred
-   in the H0 checklist) can be implemented once this pass is complete.
+- [ ] **Fixture** — `tests/fixtures/kinds-inference.tur` (explicitly marked deferred
+  in the H0 checklist) can be implemented once this pass is complete.
 
 **Acceptance criteria:**
-- `^f` annotation on a `defclass` parameter is optional; the kind is inferred from
+- [ ] `^f` annotation on a `defclass` parameter is optional; the kind is inferred from
   how `f` is used inside the class body.
-- `kinds-inference.tur` fixture passes.
-- Existing `kinds-basic.tur`, `hkt-typeclass-declare.tur`, etc. still pass.
+- [ ] `kinds-inference.tur` fixture passes.
+- [ ] Existing `kinds-basic.tur`, `hkt-typeclass-declare.tur`, etc. still pass.
 
 ---
 
@@ -139,34 +201,34 @@ first-class concept.
 
 **Prerequisites:**
 
-1. **§2 (kind inference)** — the compiler must be able to determine that
-   `(result int)` has kind `* -> *` from the kinds of its parts.
+- [ ] **§2 (kind inference)** — the compiler must be able to determine that
+  `(result int)` has kind `* -> *` from the kinds of its parts.
 
-2. **TY_APP type node** — Add `TY_APP` to the `TypeKind` enum in `src/types.h`:
-   ```c
-   typedef struct { Type fn; Type arg; } TypeApp;
-   ```
-   `type_c_name` for `TY_APP` must recursively produce the appropriate C name.
+- [ ] **TY_APP type node** — Add `TY_APP` to the `TypeKind` enum in `src/types.h`:
+  ```c
+  typedef struct { Type fn; Type arg; } TypeApp;
+  ```
+  `type_c_name` for `TY_APP` must recursively produce the appropriate C name.
 
-3. **Parser / reader support** — `(result int)` in a type position must parse
-   as type application, not a value call.
+- [ ] **Parser / reader support** — `(result int)` in a type position must parse
+  as type application, not a value call.
 
-4. **elab_definstance** — recognise `TY_APP` in the type-argument position and
-   validate that the outer constructor has the right kind for a KIND_ARROW slot,
-   and that the argument has kind KIND_STAR.
+- [ ] **elab_definstance** — recognise `TY_APP` in the type-argument position and
+  validate that the outer constructor has the right kind for a KIND_ARROW slot,
+  and that the argument has kind KIND_STAR.
 
-5. **Kind-check pass** — validate `(TY_APP fn arg)`: `fn` must have kind
-   `KIND_ARROW`, `arg` must have kind `KIND_STAR`, and the result has `KIND_STAR`.
-   For `KIND_ARROW2`, `(TY_APP fn arg)` produces `KIND_ARROW`.
+- [ ] **Kind-check pass** — validate `(TY_APP fn arg)`: `fn` must have kind
+  `KIND_ARROW`, `arg` must have kind `KIND_STAR`, and the result has `KIND_STAR`.
+  For `KIND_ARROW2`, `(TY_APP fn arg)` produces `KIND_ARROW`.
 
-6. **emit.c** — `TY_APP` in instance declarations must produce the correct
-   C name for the generated dictionary struct name.
+- [ ] **emit.c** — `TY_APP` in instance declarations must produce the correct
+  C name for the generated dictionary struct name.
 
 **Acceptance criteria:**
-- `(definstance Functor [(result int)] ...)` compiles and dispatches correctly.
-- A new fixture `hkt-partial-app.tur` exercises at least one partial application
+- [ ] `(definstance Functor [(result int)] ...)` compiles and dispatches correctly.
+- [ ] A new fixture `hkt-partial-app.tur` exercises at least one partial application
   instance.
-- `TUR_E0013_KIND_MISMATCH` is emitted when `(result)` (zero args) is used in a
+- [ ] `TUR_E0013_KIND_MISMATCH` is emitted when `(result)` (zero args) is used in a
   `* -> *` slot.
 
 ---
@@ -196,29 +258,29 @@ not yet supported anywhere in the type system; they need either an explicit
 
 **Prerequisites:**
 
-1. **§3 (partial application)** — `Fix` and `Free` are inherently partially applied.
+- [ ] **§3 (partial application)** — `Fix` and `Free` are inherently partially applied.
 
-2. **Recursive type support** — The elaborator currently rejects self-referential
-   type definitions. A guarded recursion check (structurally recursive under at
-   least one type constructor) is needed. Add `type_is_guarded_recursive()`
-   in `src/types.c` that walks the definition and accepts guarded recursion
-   through a `TY_APP` or `TY_STRUCT` wrapper.
+- [ ] **Recursive type support** — The elaborator currently rejects self-referential
+  type definitions. A guarded recursion check (structurally recursive under at
+  least one type constructor) is needed. Add `type_is_guarded_recursive()`
+  in `src/types.c` that walks the definition and accepts guarded recursion
+  through a `TY_APP` or `TY_STRUCT` wrapper.
 
-3. **Kind-polymorphic type aliases / `deftype` HKT params** — `deftype` must
-   accept `^f`-prefixed (kind `* -> *`) type parameters, not only plain `*`-kinded
-   ones. This extends H1's `defclass` parameter work to the `deftype` form.
+- [ ] **Kind-polymorphic type aliases / `deftype` HKT params** — `deftype` must
+  accept `^f`-prefixed (kind `* -> *`) type parameters, not only plain `*`-kinded
+  ones. This extends H1's `defclass` parameter work to the `deftype` form.
 
-4. **`cata` / `fold` for `Fix`** — a useful runtime primitive: once `Fix` compiles,
-   add `(defn cata [[^f] fn (Fix f)] :int ...)` to stdlib.
+- [ ] **`cata` / `fold` for `Fix`** — a useful runtime primitive: once `Fix` compiles,
+  add `(defn cata [[^f] fn (Fix f)] :int ...)` to stdlib.
 
-5. **`Free` monad operations** — `pure-free`, `liftF`, `interpret-free` in
-   `stdlib/free.tur`. These all require multi-capture closures (§5) since
-   `interpret-free` must capture the natural transformation closure.
+- [ ] **`Free` monad operations** — `pure-free`, `liftF`, `interpret-free` in
+  `stdlib/free.tur`. These all require multi-capture closures (§5) since
+  `interpret-free` must capture the natural transformation closure.
 
 **Acceptance criteria:**
-- `(Fix option)` compiles as a type.
-- A Church-encoded list using `Fix` round-trips through `cata`.
-- A small interpreter written with `Free` passes a fixture test.
+- [ ] `(Fix option)` compiles as a type.
+- [ ] A Church-encoded list using `Fix` round-trips through `cata`.
+- [ ] A small interpreter written with `Free` passes a fixture test.
 
 ---
 
@@ -252,36 +314,36 @@ Two approaches exist and neither was ready:
 
 **Prerequisites for Approach B (recommended — minimal change):**
 
-1. **emit.c — `needs_fn_cast` extension** — The condition added in H6
-   (`pk == TY_INT || pk == TY_STRUCT`) must also cover `TY_PTR_VOID`:
-   ```c
-   needs_fn_cast = (pk == TY_INT || pk == TY_STRUCT || pk == TY_PTR_VOID);
-   ```
-   This allows `(int64_t)(intptr_t)` to be applied to closure values passed as
-   HKT function arguments.
+- [ ] **emit.c — `needs_fn_cast` extension** — The condition added in H6
+  (`pk == TY_INT || pk == TY_STRUCT`) must also cover `TY_PTR_VOID`:
+  ```c
+  needs_fn_cast = (pk == TY_INT || pk == TY_STRUCT || pk == TY_PTR_VOID);
+  ```
+  This allows `(int64_t)(intptr_t)` to be applied to closure values passed as
+  HKT function arguments.
 
-2. **elab.c — suppress type mismatch error** — `elab_call` rejects passing a
-   `TY_PTR_VOID` argument to a `TY_INT` parameter. The check must be relaxed
-   (or bypassed with an explicit cast node) for HKT typeclass method calls.
-   Introduce `EX_CAST` (or reuse existing pointer-cast nodes) to make the coercion
-   explicit in the IR rather than suppressing the error wholesale.
+- [ ] **elab.c — suppress type mismatch error** — `elab_call` rejects passing a
+  `TY_PTR_VOID` argument to a `TY_INT` parameter. The check must be relaxed
+  (or bypassed with an explicit cast node) for HKT typeclass method calls.
+  Introduce `EX_CAST` (or reuse existing pointer-cast nodes) to make the coercion
+  explicit in the IR rather than suppressing the error wholesale.
 
-3. **Closure safety** — heap-allocated closures are already safe (the env struct
-   is heap-allocated when there is capture). Stack-allocated closures (no capture,
-   plain function pointer) are also safe. Verify no dangling-env case slips
-   through when the closure outlives the enclosing function.
+- [ ] **Closure safety** — heap-allocated closures are already safe (the env struct
+  is heap-allocated when there is capture). Stack-allocated closures (no capture,
+  plain function pointer) are also safe. Verify no dangling-env case slips
+  through when the closure outlives the enclosing function.
 
-4. **Fixture** — replace the workaround in `tests/fixtures/hkt-closures/input.tur`
-   with a genuine multi-capture closure:
-   ```lisp
-   (let n 5
-     (fmap (__opt_some 10) (fn [x] (+ x n))))
-   ```
-   Expected output: `15`.
+- [ ] **Fixture** — replace the workaround in `tests/fixtures/hkt-closures/input.tur`
+  with a genuine multi-capture closure:
+  ```lisp
+  (let n 5
+    (fmap (__opt_some 10) (fn [x] (+ x n))))
+  ```
+  Expected output: `15`.
 
 **Acceptance criteria:**
-- `hkt-closures` uses a let-bound variable in the closure body and still passes.
-- No existing fixture regresses.
+- [ ] `hkt-closures` uses a let-bound variable in the closure body and still passes.
+- [ ] No existing fixture regresses.
 
 ---
 
@@ -309,25 +371,25 @@ cannot be written correctly.
 
 **Prerequisites:**
 
-1. **§1 (dictionary passing)** — multiple instances of the same typeclass must
-   coexist and dispatch correctly before adding more.
+- [ ] **§1 (dictionary passing)** — multiple instances of the same typeclass must
+  coexist and dispatch correctly before adding more.
 
-2. **§5 (multi-capture closures)** — stdlib implementations frequently pass closures
-   through typeclass methods.
+- [ ] **§5 (multi-capture closures)** — stdlib implementations frequently pass closures
+  through typeclass methods.
 
-3. **§3 (partial application)** — required for `result` instance only.
+- [ ] **§3 (partial application)** — required for `result` instance only.
 
-4. **Order of migration** — suggested sequence:
-   1. `option` (simplest, already partially done)
-   2. `vec` (no partial application needed)
-   3. `slice` (similar to `vec`)
-   4. `rc` (single-element container, easiest)
-   5. `result` (blocked on §3)
+- [ ] **Order of migration** — suggested sequence:
+  1. `option` (simplest, already partially done)
+  2. `vec` (no partial application needed)
+  3. `slice` (similar to `vec`)
+  4. `rc` (single-element container, easiest)
+  5. `result` (blocked on §3)
 
 **Acceptance criteria:**
-- All five stdlib types expose complete Functor + Foldable instances.
-- `option`, `vec`, and `result` additionally expose Applicative and Monad.
-- A fixture `hkt-stdlib-suite.tur` exercises at least `fmap`, `pure`, `bind`, and
+- [ ] All five stdlib types expose complete Functor + Foldable instances.
+- [ ] `option`, `vec`, and `result` additionally expose Applicative and Monad.
+- [ ] A fixture `hkt-stdlib-suite.tur` exercises at least `fmap`, `pure`, `bind`, and
   `foldl` on each migrated type.
 
 ---
@@ -360,31 +422,31 @@ variables, requiring multi-capture closures (§5).
 
 **Prerequisites:**
 
-1. **§5 (multi-capture closures)** — each `fn` in the desugared chain captures all
-   previously-bound variables.
+- [ ] **§5 (multi-capture closures)** — each `fn` in the desugared chain captures all
+  previously-bound variables.
 
-2. **`Alternative` / `MonadPlus` typeclass** — define in `stdlib/typeclass.tur`:
-   ```lisp
-   (defclass Alternative [^f]
-     (empty  [] :int)
-     (alt-or [a b] :int))
-   ```
-   Instances: `option` (`empty` = `none`), `vec` (`empty` = `[]`).
+- [ ] **`Alternative` / `MonadPlus` typeclass** — define in `stdlib/typeclass.tur`:
+  ```lisp
+  (defclass Alternative [^f]
+    (empty  [] :int)
+    (alt-or [a b] :int))
+  ```
+  Instances: `option` (`empty` = `none`), `vec` (`empty` = `[]`).
 
-3. **`for` macro desugaring** — implement in `stdlib/macros.tur`. The macro
-   processes the binding vector recursively:
-   - `[x expr & rest] body` → `(bind expr (fn [x] (for [& rest] body)))`
-   - `[:when pred & rest] body` → `(if pred (for [& rest] body) (empty))`
-   - `[] body` → `(pure body)`
+- [ ] **`for` macro desugaring** — implement in `stdlib/macros.tur`. The macro
+  processes the binding vector recursively:
+  - `[x expr & rest] body` → `(bind expr (fn [x] (for [& rest] body)))`
+  - `[:when pred & rest] body` → `(if pred (for [& rest] body) (empty))`
+  - `[] body` → `(pure body)`
 
-4. **CT evaluator `:when` keyword handling** — the CT evaluator must recognise
-   `:when` as a keyword sentinel (not a type annotation) inside the `for` binding
-   vector. Add a branch in `ct_eval_builtin`'s vector-walking logic.
+- [ ] **CT evaluator `:when` keyword handling** — the CT evaluator must recognise
+  `:when` as a keyword sentinel (not a type annotation) inside the `for` binding
+  vector. Add a branch in `ct_eval_builtin`'s vector-walking logic.
 
 **Acceptance criteria:**
-- `(for [x (vec 1 2 3)] (* x 2))` → `(vec 2 4 6)`.
-- `(for [x (vec 1 2 3) :when (> x 1)] x)` → `(vec 2 3)`.
-- A new fixture `hkt-for-comprehension.tur` passes.
+- [ ] `(for [x (vec 1 2 3)] (* x 2))` → `(vec 2 4 6)`.
+- [ ] `(for [x (vec 1 2 3) :when (> x 1)] x)` → `(vec 2 3)`.
+- [ ] A new fixture `hkt-for-comprehension.tur` passes.
 
 ---
 
@@ -404,20 +466,20 @@ first-match dispatch would not reflect the real dictionary-passing cost.
 
 **Prerequisites:**
 
-1. **§1 (dictionary passing)** — required to have something meaningful to measure.
+- [ ] **§1 (dictionary passing)** — required to have something meaningful to measure.
 
-2. **Benchmark harness** — add a `benchmarks/` directory with a `run-benchmarks.sh`
-   script analogous to `tests/run.sh`. Each benchmark is a `.tur` file + an
-   `expected.time` upper bound in milliseconds (used as a soft ceiling in CI).
+- [ ] **Benchmark harness** — add a `benchmarks/` directory with a `run-benchmarks.sh`
+  script analogous to `tests/run.sh`. Each benchmark is a `.tur` file + an
+  `expected.time` upper bound in milliseconds (used as a soft ceiling in CI).
 
-3. **Baseline** — capture the monomorphic direct-call baseline (non-HKT equivalent
-   of the benchmark) to compute the overhead ratio.
+- [ ] **Baseline** — capture the monomorphic direct-call baseline (non-HKT equivalent
+  of the benchmark) to compute the overhead ratio.
 
 **Acceptance criteria:**
-- At least two benchmarks: one exercising `fmap` over a large `vec`, one exercising
+- [ ] At least two benchmarks: one exercising `fmap` over a large `vec`, one exercising
   `bind` chaining over `option`.
-- Results written to a `benchmark-results.md` artifact by `run-benchmarks.sh`.
-- Overhead ratio documented; if overhead exceeds 2× vs. monomorphic, an issue is
+- [ ] Results written to a `benchmark-results.md` artifact by `run-benchmarks.sh`.
+- [ ] Overhead ratio documented; if overhead exceeds 2× vs. monomorphic, an issue is
   filed to investigate handler inlining (Phase 19 §G).
 
 ---
