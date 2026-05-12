@@ -93,6 +93,7 @@ static int  _food_y;
 static int  _score;
 static int  _grid_w;
 static int  _grid_h;
+static int  _rng_seeded;
 
 /* Initialise (or restart) the snake game. */
 void tur_snake_init(long long grid_w, long long grid_h) {
@@ -105,7 +106,10 @@ void tur_snake_init(long long grid_w, long long grid_h) {
     _segs[0] = (Seg){ _grid_w / 2,     _grid_h / 2 };
     _segs[1] = (Seg){ _grid_w / 2 - 1, _grid_h / 2 };
     _segs[2] = (Seg){ _grid_w / 2 - 2, _grid_h / 2 };
-    srand((unsigned int)time(NULL));
+    if (!_rng_seeded) {
+        srand((unsigned int)time(NULL));
+        _rng_seeded = 1;
+    }
     _food_x = rand() % _grid_w;
     _food_y = rand() % _grid_h;
 }
