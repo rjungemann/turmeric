@@ -94,8 +94,7 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
         /* Phase 16 v2: indirect capability field call — fn_expr is EX_GET_FIELD.
          * Propagate the effect-row annotation on the :fn struct field (if any). */
         if (e->as.call_.fn_expr &&
-            e->as.call_.fn_expr->kind == EX_GET_FIELD) {
-            Expr *gf = e->as.call_.fn_expr;
+            e->as.call_.fn_expr->kind == EX_GET_FIELD) {            Expr *gf = e->as.call_.fn_expr;
             StructDef *def = gf->as.get_field_.def;
             uint32_t fidx = gf->as.get_field_.field_idx;
             if (def && fidx < def->n_fields && def->fields[fidx].effect_row) {
@@ -105,6 +104,17 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
             }
             /* Also recurse into the struct expression and arguments. */
             row = collect_effects_in_expr(a, gf->as.get_field_.struct_expr, row, idx, env, subst);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                row = collect_effects_in_expr(a, e->as.call_.args[i], row, idx, env, subst);
+            }
+            return row;
+        }
+
+        /* Phase H §1: dict-dispatch call — fn_expr is EX_DICT (static singleton
+         * load).  No effect implications from the dictionary itself; just recurse
+         * into arguments. */
+        if (e->as.call_.fn_expr &&
+            e->as.call_.fn_expr->kind == EX_DICT) {
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                 row = collect_effects_in_expr(a, e->as.call_.args[i], row, idx, env, subst);
             }

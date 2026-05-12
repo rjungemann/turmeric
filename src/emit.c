@@ -1104,12 +1104,21 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_INSTANCE_DEF:
             /* Handled in emit_stmt - file scope only */
             return atom_nil();
-        /* Phase H §1: dictionary passing — load address of singleton as int64_t */
+        /* Phase H §1: dictionary passing — either load method field (for dict
+         * dispatch via fn_expr) or emit singleton address (bare dict value). */
         case EX_DICT: {
             char dict_name[128];
             emit_dict_name(dict_name, sizeof(dict_name), e->as.dict_.instance);
             Buf out; buf_init(&out);
-            buf_printf(&out, "(int64_t)(intptr_t)(&%s_singleton)", dict_name);
+            if (e->as.dict_.method_name[0] != '\0') {
+                /* Dictionary dispatch: emit function-pointer field access.
+                 * The EX_CALL indirect-call path then casts and calls it:
+                 *   ((ret_t (*)(...))(intptr_t)(dict_X_singleton.method))(args) */
+                buf_printf(&out, "%s_singleton.%s", dict_name, e->as.dict_.method_name);
+            } else {
+                /* Bare dictionary value: singleton address as int64_t. */
+                buf_printf(&out, "(int64_t)(intptr_t)(&%s_singleton)", dict_name);
+            }
             buf_putc(&out, '\0');
             char *result = strdup(out.data);
             buf_free(&out);
@@ -1630,7 +1639,20 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 char **arg_strs = (char **)malloc(e->as.call_.n_args * sizeof(char *));
                 if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
                 for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
-                    arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
+                    char *raw = emit_value(ctx, body, e->as.call_.args[i]);
+                    /* Apply same function-ptr → int64_t cast as the direct-call path:
+                     * C99 forbids implicit conversion from function pointer to integer. */
+                    bool needs_fn_cast = (e->as.call_.args[i]->type.kind == TY_FN ||
+                                          e->as.call_.args[i]->type.kind == TY_PTR_VOID);
+                    if (needs_fn_cast) {
+                        Buf cast; buf_init(&cast);
+                        buf_printf(&cast, "(int64_t)(intptr_t)(%s)", raw);
+                        buf_putc(&cast, '\0');
+                        free(raw);
+                        raw = strdup(cast.data);
+                        buf_free(&cast);
+                    }
+                    arg_strs[i] = raw;
                 }
 
                 Buf out; buf_init(&out);
