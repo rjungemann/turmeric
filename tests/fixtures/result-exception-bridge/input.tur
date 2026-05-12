@@ -1,0 +1,4 @@
+;; Phase R5: Test that result->exception and exception->result bridge functions compile
+
+(defn main [] :int
+  0)

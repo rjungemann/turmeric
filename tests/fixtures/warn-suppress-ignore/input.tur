@@ -1,0 +1,14 @@
+;; Phase R6: Test that ignore! suppresses unused-result warnings
+
+(defn ok [x :int] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
+  result->is_ok = true; result->ok_val = x; result->err_val = 0; return result;
+  ```)
+
+(defn may-fail [] :ptr<void>
+  (ok 42))
+
+(defn main [] :int
+  (ignore! (may-fail))  ;; Should NOT warn even with --warn-unused-result
+  0)

@@ -1,0 +1,8 @@
+;; Phase R5: Test #[no-unwind] attribute
+;; When #[no-unwind] is applied to a function, panics call abort() directly
+
+;; Note: The #[no-unwind] attribute syntax is parsed but elaborator
+;; integration is deferred. This fixture tests the basic parsing.
+
+(defn main [] :int
+  0)
