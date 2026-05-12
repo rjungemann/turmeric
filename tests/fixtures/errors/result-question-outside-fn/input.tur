@@ -1,0 +1,3 @@
+;; Phase R1: top-level `?` should be rejected.
+;; Current diagnostic is the reserved-operator message until `?` lowering lands.
+(? 42)
