@@ -6,17 +6,24 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Atomic type compatibility */
+#if defined(__clang__) || defined(__GNUC__)
+#define ATOMIC_T _Atomic
+#else
+#define ATOMIC_T volatile
+#endif
+
 /* Phase T23: Multi-threaded work-stealing scheduler implementation */
 /* SCH-003: I/O integration */
+/* SCH-002: Lock-free work-stealing deque */
 
 /* Per-thread work deque using a lock-free ring buffer */
 struct WorkStealingDeque {
     FiberBlock **buffer;
     size_t capacity;
     size_t mask;
-    size_t top;
-    size_t bottom;
-    pthread_spinlock_t lock;  /* For v1, use spinlock; upgrade to lock-free later */
+    ATOMIC_T size_t top;      /* Steal from top (FIFO for thieves) */
+    ATOMIC_T size_t bottom;   /* Push/pop from bottom (LIFO for owner) */
 };
 
 /* Multi-threaded scheduler */
@@ -79,74 +86,73 @@ WorkStealingDeque *ws_deque_new(size_t capacity) {
     
     d->capacity = capacity;
     d->mask = capacity - 1;
-    d->top = 0;
-    d->bottom = 0;
-    
-    pthread_spin_init(&d->lock, PTHREAD_PROCESS_PRIVATE);
+    /* Initialize atomic top and bottom to 0 */
+    __atomic_store_n((size_t *)&d->top, 0, __ATOMIC_RELAXED);
+    __atomic_store_n((size_t *)&d->bottom, 0, __ATOMIC_RELAXED);
     
     return d;
 }
 
 void ws_deque_free(WorkStealingDeque *d) {
     if (!d) return;
-    pthread_spin_destroy(&d->lock);
     free(d->buffer);
     free(d);
 }
 
-/* Push to the bottom (producer side) */
+/* Push to the bottom (producer side) - lock-free (SCH-002) */
 bool ws_deque_push(WorkStealingDeque *d, FiberBlock *f) {
-    pthread_spin_lock(&d->lock);
+    size_t b = __atomic_load_n((size_t *)&d->bottom, __ATOMIC_RELAXED);
+    size_t t = __atomic_load_n((size_t *)&d->top, __ATOMIC_ACQUIRE);
     
-    if (d->bottom - d->top >= d->capacity) {
-        pthread_spin_unlock(&d->lock);
+    if (b - t >= d->capacity) {
         return false;  /* Full */
     }
     
-    d->buffer[d->bottom & d->mask] = f;
-    d->bottom++;
-    
-    pthread_spin_unlock(&d->lock);
+    d->buffer[b & d->mask] = f;
+    /* Use release ordering to ensure buffer write is visible before bottom update */
+    __atomic_store_n((size_t *)&d->bottom, b + 1, __ATOMIC_RELEASE);
     return true;
 }
 
-/* Pop from the bottom (consumer side - same thread) */
+/* Pop from the bottom (consumer side - same thread) - lock-free (SCH-002) */
 FiberBlock *ws_deque_pop(WorkStealingDeque *d) {
-    pthread_spin_lock(&d->lock);
+    size_t b = __atomic_load_n((size_t *)&d->bottom, __ATOMIC_ACQUIRE);
+    size_t t = __atomic_load_n((size_t *)&d->top, __ATOMIC_ACQUIRE);
     
-    if (d->bottom == d->top) {
-        pthread_spin_unlock(&d->lock);
+    if (b == t) {
         return NULL;  /* Empty */
     }
     
-    d->bottom--;
-    FiberBlock *f = d->buffer[d->bottom & d->mask];
-    
-    pthread_spin_unlock(&d->lock);
+    b--;
+    FiberBlock *f = d->buffer[b & d->mask];
+    /* Use release ordering to ensure we've read the buffer before decrementing bottom */
+    __atomic_store_n((size_t *)&d->bottom, b, __ATOMIC_RELEASE);
     return f;
 }
 
-/* Steal from the top (other threads) */
+/* Steal from the top (other threads) - lock-free using CAS (SCH-002) */
 FiberBlock *ws_deque_steal(WorkStealingDeque *d) {
-    pthread_spin_lock(&d->lock);
+    size_t t = __atomic_load_n((size_t *)&d->top, __ATOMIC_ACQUIRE);
+    size_t b = __atomic_load_n((size_t *)&d->bottom, __ATOMIC_ACQUIRE);
     
-    if (d->bottom == d->top) {
-        pthread_spin_unlock(&d->lock);
+    if (b == t) {
         return NULL;  /* Empty */
     }
     
-    FiberBlock *f = d->buffer[d->top & d->mask];
-    d->top++;
-    
-    pthread_spin_unlock(&d->lock);
-    return f;
+    FiberBlock *f = d->buffer[t & d->mask];
+    /* Try to atomically increment top. If CAS succeeds, we got the item. */
+    if (__atomic_compare_exchange_n((size_t *)&d->top, &t, t + 1, 0,
+                                      __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        return f;
+    }
+    /* CAS failed - another thief stole first, or bottom changed */
+    return NULL;
 }
 
 bool ws_deque_empty(WorkStealingDeque *d) {
-    pthread_spin_lock(&d->lock);
-    bool empty = (d->bottom == d->top);
-    pthread_spin_unlock(&d->lock);
-    return empty;
+    size_t b = __atomic_load_n((size_t *)&d->bottom, __ATOMIC_ACQUIRE);
+    size_t t = __atomic_load_n((size_t *)&d->top, __ATOMIC_ACQUIRE);
+    return (b == t);
 }
 
 /* Scheduler worker thread function */
