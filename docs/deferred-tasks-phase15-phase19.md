@@ -781,8 +781,8 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 #### T20 — Thread pool and higher-level abstractions
 - [x] Implement `ThreadPool::new` with fixed size and `submit`/`shutdown`.
   - Implemented: `stdlib/threadpool.tur` provides `thread-pool-new`, `thread-pool-submit`, `thread-pool-shutdown`, `thread-pool-free` using worker threads with internal `WorkQueue<T>`. Each submit returns a `FutureCell*` promise. Fixtures `thread-pool-basic`, `thread-pool-shutdown` validate.
-- [ ] Implement `ThreadPool::new-dynamic` with auto-scaling.
-  - Deferred: `thread-pool-dynamic.tur` fixture exists but the auto-scaling implementation requires more complex runtime (work stealing, thread pool resizing). Current `thread-pool-new` is fixed-size only.
+- [x] Implement `ThreadPool::new-dynamic` with auto-scaling.
+  - Implemented: Added `thread-pool-new-dynamic`, `thread-pool-dynamic-submit`, `thread-pool-dynamic-shutdown`, `thread-pool-dynamic-free` in `stdlib/threadpool.tur`. Creates pool with min_threads, scales up to max_threads when all workers are busy.
 - [x] Implement `Future<T>` and `Promise<T>` with `get`, `done?`, `fulfill`, `fail`.
   - Implemented: `stdlib/future.tur` provides `future-cell-new`, `promise-new`, `promise-fulfill`, `promise-fail`, `future-done?`, `future-get`, `future-free`. `FutureCell` struct uses mutex+condvar for synchronization. Fixtures `future-basic`, `future-error` validate.
 - [x] Implement `WorkQueue<T>` — bounded and unbounded thread-safe queue.
@@ -790,9 +790,9 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 - [x] Implement `Semaphore` counting semaphore.
   - Implemented: `stdlib/sync.tur` provides `sem-new`, `sem-acquire`, `sem-release`, `sem-free` using mutex+condvar. Fixture `semaphore` validates.
 - [x] Add fixtures: `thread-pool-basic.tur`, `thread-pool-dynamic.tur`, `future-basic.tur`, `future-error.tur`, `work-queue.tur`, `semaphore.tur`.
-  - All six fixtures implemented and passing. `thread-pool-dynamic` tests fixed-size pool (auto-scaling deferred).
-- [ ] Add integration fixture: `raytracer.tur` (parallel ray-tracer using thread pool).
-  - Deferred: requires `ThreadPool::new-dynamic` auto-scaling for meaningful parallelism.
+  - All six fixtures implemented and passing. `thread-pool-dynamic` now uses `thread-pool-new-dynamic` with auto-scaling.
+- [x] Add integration fixture: `raytracer.tur` (parallel ray-tracer using thread pool).
+  - Implemented: Updated `tests/fixtures/raytracer/input.tur` to use `thread-pool-new-dynamic` and `thread-pool-dynamic-submit` from stdlib. Expected output: `hits: 4`.
 
 ##### T20-TC — Type Constructor Support
 - [x] Define `TY_APP` type application node in `src/types.h` to represent a partially-applied type constructor (e.g., `(result int)` producing a `* -> *` type).
