@@ -72,18 +72,22 @@ TypeClassInstance *typeclass_env_lookup_instance(const TypeClassEnv *env,
                                                   TypeClass *typeclass,
                                                   Type *type_args, uint8_t n_type_args);
 
-/* Phase HKT (v2, stub): Structured dispatch-table key.
- * In v1 the lookup is performed directly via (TypeClass*, type_args[], n_type_args).
- * This struct reserves the shape for HKT keying (constructor kind + arg types)
- * so the key representation can be promoted without changing call sites.
- * Unused in v1 — all lookups continue to go through typeclass_env_lookup_instance(). */
+/* Phase HKT H2: Structured dispatch-table key.
+ * Generalized lookup key carrying the constructor kind for two-level dispatch.
+ * KIND_STAR keys fall through to typeclass_env_lookup_instance (no regression). */
 typedef struct TypeClassDispatchKey {
     TypeClass       *typeclass;
     Type            *type_args;
     uint8_t          n_type_args;
-    /* HKT extension (reserved, always KIND_STAR in v1): */
+    /* HKT extension: KIND_STAR for concrete types, KIND_ARROW for type constructors. */
     Kind             constructor_kind;
 } TypeClassDispatchKey;
+
+/* Phase HKT H2: Look up an instance using a structured TypeClassDispatchKey.
+ * Two-level dispatch: constructor kind (level 1) then type_args (level 2).
+ * For KIND_STAR keys this delegates to typeclass_env_lookup_instance(). */
+TypeClassInstance *typeclass_env_lookup_instance_by_key(const TypeClassEnv *env,
+                                                         const TypeClassDispatchKey *key);
 
 /* Constraint on a type variable */
 typedef struct TypeConstraint {

@@ -1,0 +1,19 @@
+;; Phase HKT H2: Type-based dispatch — two instances of the same typeclass
+;; for different types (int and bool) must dispatch to the correct implementation.
+;; With the H2 type-aware lookup, (.show 42) calls __inst_MyShow_show_int and
+;; (.show true) calls __inst_MyShow_show_bool.
+
+(defclass MyShow [a]
+  (show [x] :cstr))
+
+(definstance MyShow [int]
+  (show [x] :cstr "int"))
+
+(definstance MyShow [bool]
+  (show [x] :cstr "bool"))
+
+(defn main [] :int
+  (do
+    (println (.show 42))
+    (println (.show true))
+    0))

@@ -1,0 +1,11 @@
+;; Phase HKT H1: Kind mismatch diagnostic.
+;; MyContainer expects a type constructor (kind * -> *) for its parameter ^f,
+;; but the definstance supplies 'int' which has kind '*'.
+;; Expected: TUR-E0012 kind mismatch error.
+
+(defclass MyContainer [^f]
+  (wrap [x :int] :int))
+
+;; Error: 'int' has kind '*' but MyContainer parameter '^f' expects kind '* -> *'.
+(definstance MyContainer [int]
+  (wrap [x] x))

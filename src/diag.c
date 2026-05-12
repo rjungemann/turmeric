@@ -104,6 +104,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0009_EFFECT_ROW_MISMATCH: return "TUR-E0009";
         case TUR_E0010_NOT_SEND:            return "TUR-E0010";
         case TUR_E0011_NOT_SYNC:            return "TUR-E0011";
+        case TUR_E0012_KIND_MISMATCH:       return "TUR-E0012";
         default:                          return "";
     }
 }

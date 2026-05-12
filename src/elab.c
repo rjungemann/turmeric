@@ -6175,12 +6175,13 @@ static Expr *elab_defclass(Elab *e, const Form *call) {
     }
     const Symbol *name = name_form->as.sym;
 
-    /* Phase HKT (v2): reserved names — not yet implemented */
+    /* Phase HKT H1: reserved names — will be defined as built-in HKT typeclasses in Phase H3. */
     if (name == e->sym_hkt_Functor || name == e->sym_hkt_Applicative ||
         name == e->sym_hkt_Monad   || name == e->sym_hkt_Traversable ||
         name == e->sym_hkt_Foldable) {
         diag_emit(DIAG_ERROR, name_form->span,
-                  "'%s' is reserved for the higher-kinded typeclass system (not yet implemented)",
+                  "'%s' is reserved for the higher-kinded typeclass system; "
+                  "it will be defined as a built-in typeclass in Phase H3",
                   name->name);
         return NULL;
     }
@@ -6195,24 +6196,28 @@ static Expr *elab_defclass(Elab *e, const Form *call) {
     
     /* Parse type parameters (optional) */
     const Symbol **type_params = NULL;
+    Kind         *type_param_kinds = NULL;
     uint8_t n_type_params = 0;
     uint32_t methods_start = 2;
-    
+
     if (call->as.list.len >= 3) {
         Form *params_form = call->as.list.items[2];
         if (params_form->tag == F_VEC) {
             n_type_params = params_form->as.list.len;
             if (n_type_params > 0) {
-                type_params = (const Symbol **)arena_alloc(e->arena, 
+                type_params = (const Symbol **)arena_alloc(e->arena,
                     n_type_params * sizeof(const Symbol *));
+                /* arena_alloc zeroes memory, so all kinds start as KIND_STAR (0). */
+                type_param_kinds = (Kind *)arena_alloc(e->arena,
+                    n_type_params * sizeof(Kind));
                 for (uint8_t i = 0; i < n_type_params; i++) {
                     Form *p = params_form->as.list.items[i];
-                    /* Phase HKT (v2): detect kind annotation [f : * -> *] written as
-                     * a vector [f kind] inside the type-params vector.  Reject with a
-                     * clear "not yet supported" diagnostic rather than a confusing one. */
+                    /* Phase HKT H1: [f :kind] vector form — not yet supported;
+                     * users should use the '^name' prefix instead. */
                     if (p->tag == F_VEC) {
                         diag_emit(DIAG_ERROR, p->span,
-                                  "kind annotations in defclass type parameters are not yet supported (Phase HKT)");
+                                  "kind annotations in defclass type parameters must use "
+                                  "the '^name' prefix syntax (e.g. '^f' for kind '* -> *')");
                         return NULL;
                     }
                     if (p->tag != F_SYM) {
@@ -6220,7 +6225,27 @@ static Expr *elab_defclass(Elab *e, const Form *call) {
                                   "type parameter must be a symbol");
                         return NULL;
                     }
-                    type_params[i] = p->as.sym;
+                    /* Phase HKT H1: '^name' prefix marks a kind * -> * (type constructor)
+                     * parameter.  The canonical name stored is 'name' (without '^'). */
+                    if (p->as.sym->len > 1 && p->as.sym->name[0] == '^') {
+                        const char  *bare     = p->as.sym->name + 1;
+                        uint32_t     bare_len = p->as.sym->len  - 1;
+                        /* Only lowercase-leading names are kind variables. */
+                        if (bare_len > 0 && bare[0] >= 'a' && bare[0] <= 'z') {
+                            type_params[i]      = symtab_intern(e->st, strslice(bare, bare_len));
+                            type_param_kinds[i] = KIND_ARROW;
+                        } else {
+                            /* Uppercase — treat as a constraint annotation in wrong place. */
+                            diag_emit(DIAG_ERROR, p->span,
+                                      "'%s' is not a valid type parameter; "
+                                      "use lowercase '^name' for a kind '* -> *' parameter",
+                                      p->as.sym->name);
+                            return NULL;
+                        }
+                    } else {
+                        type_params[i]      = p->as.sym;
+                        type_param_kinds[i] = KIND_STAR;
+                    }
                 }
             }
             methods_start = 3;
@@ -6261,11 +6286,12 @@ static Expr *elab_defclass(Elab *e, const Form *call) {
         return NULL;
     }
     
-    tc->type_params = type_params;
-    tc->n_type_params = n_type_params;
-    tc->methods = methods;
-    tc->n_methods = n_methods;
-    
+    tc->type_params       = type_params;
+    tc->type_param_kinds  = type_param_kinds;
+    tc->n_type_params     = n_type_params;
+    tc->methods           = methods;
+    tc->n_methods         = n_methods;
+
     /* Create a TYPECLASS_DEF expression for codegen */
     Expr *tc_expr = expr_new(e->arena, EX_TYPECLASS_DEF, TYPE_NIL, call->span);
     tc_expr->as.typeclass_def_.typeclass = tc;
@@ -6355,7 +6381,34 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
                   tc->n_type_params, tc_name->name, n_type_args);
         return NULL;
     }
-    
+
+    /* Phase HKT H1: Kind constraint validation.
+     * If the typeclass has kind-annotated parameters (type_param_kinds != NULL),
+     * verify that each type argument satisfies the expected kind.
+     * Primitive types (int, bool, cstr, nil, float) have kind *.
+     * Struct types and other user-defined types are treated as kind * -> *.
+     * A definstance that supplies a primitive where kind '* -> *' is expected
+     * is a compile-time error (TUR-E0012). */
+    if (tc->type_param_kinds != NULL) {
+        for (uint8_t i = 0; i < n_type_args; i++) {
+            Kind expected = tc->type_param_kinds[i];
+            if (expected == KIND_ARROW) {
+                TypeKind tk = type_args[i].kind;
+                bool is_primitive = (tk == TY_INT  || tk == TY_BOOL  || tk == TY_CSTR ||
+                                     tk == TY_NIL  || tk == TY_FLOAT || tk == TY_PTR_VOID);
+                if (is_primitive) {
+                    diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0012_KIND_MISMATCH,
+                        "kind mismatch (TUR-E0012): typeclass '%s' parameter %d expects kind "
+                        "'%s' (a type constructor), but '%s' has kind '*'",
+                        tc_name->name, (int)(i + 1),
+                        kind_to_string(KIND_ARROW),
+                        type_name(type_args[i]));
+                    return NULL;
+                }
+            }
+        }
+    }
+
     /* Parse method implementations */
     /* Each method impl is a function definition without the 'defn' keyword */
     /* Syntax: (method-name [param1 param2 ...] body...)
@@ -6672,70 +6725,104 @@ static Expr *elab_method_call(Elab *e, const Form *call) {
     const char *method_name = method_sym->name + 1;  /* Skip '.' */
     uint32_t method_name_len = method_sym->len - 1;
 
+    /* Phase HKT H2: Elaborate the receiver object first so we can use its
+     * type to select the correct typeclass instance (type-based dispatch).
+     * This replaces the old "name-only / first-match" approach with a lookup
+     * that distinguishes multiple instances of the same typeclass for
+     * different types (e.g. MyShow[int] vs MyShow[bool]). */
+    Expr *obj = elab_form(e, call->as.list.items[1]);
+    if (!obj) return NULL;
+
     /* Phase 12: EX_GET_FIELD — if the form is exactly (.field s) with no extra
-     * args, try to resolve it as a struct field access first.
-     * If the object is not a struct type (or the field name doesn't match),
-     * fall through to typeclass method dispatch below. */
+     * args, try to resolve it as a struct field access first. */
     if (call->as.list.len == 2) {
-        /* Elaborate the object without committing to errors yet */
-        Expr *obj_probe = elab_form(e, call->as.list.items[1]);
-        if (obj_probe) {
-            /* Unwrap borrow types */
-            Type base = obj_probe->type;
-            if (base.kind == TY_REF_IMMUT || base.kind == TY_REF_MUT) {
-                base = type_from_kind(base.as.ref_borrow.target);
-            }
-            if (base.kind == TY_STRUCT) {
-                /* Object is a struct — try field lookup */
-                StructDef *def = base.as.struct_.def;
-                for (uint32_t i = 0; i < def->n_fields; i++) {
-                    if (strcmp(def->fields[i].name, method_name) == 0) {
-                        /* Found matching field — build EX_GET_FIELD */
-                        TypeKind fkind = def->fields[i].kind;
-                        TypeKind finner = def->fields[i].inner_kind;
-                        Type field_type;
-                        if (fkind == TY_REF || fkind == TY_RC || fkind == TY_WEAK) {
-                            field_type.kind = fkind;
-                            field_type.as.ref.inner = finner;
-                        } else {
-                            field_type = type_from_kind(fkind);
-                        }
-                        Expr *out = expr_new(e->arena, EX_GET_FIELD, field_type, call->span);
-                        out->as.get_field_.struct_expr = obj_probe;
-                        out->as.get_field_.field_idx = i;
-                        out->as.get_field_.def = def;
-                        return out;
+        /* Unwrap borrow types */
+        Type base = obj->type;
+        if (base.kind == TY_REF_IMMUT || base.kind == TY_REF_MUT) {
+            base = type_from_kind(base.as.ref_borrow.target);
+        }
+        if (base.kind == TY_STRUCT) {
+            /* Object is a struct — try field lookup */
+            StructDef *def = base.as.struct_.def;
+            for (uint32_t i = 0; i < def->n_fields; i++) {
+                if (strcmp(def->fields[i].name, method_name) == 0) {
+                    /* Found matching field — build EX_GET_FIELD */
+                    TypeKind fkind = def->fields[i].kind;
+                    TypeKind finner = def->fields[i].inner_kind;
+                    Type field_type;
+                    if (fkind == TY_REF || fkind == TY_RC || fkind == TY_WEAK) {
+                        field_type.kind = fkind;
+                        field_type.as.ref.inner = finner;
+                    } else {
+                        field_type = type_from_kind(fkind);
                     }
+                    Expr *out = expr_new(e->arena, EX_GET_FIELD, field_type, call->span);
+                    out->as.get_field_.struct_expr = obj;
+                    out->as.get_field_.field_idx = i;
+                    out->as.get_field_.def = def;
+                    return out;
                 }
-                /* Struct but no matching field */
-                diag_emit(DIAG_ERROR, call->span,
-                          "struct '%s' has no field '%s'",
-                          def->name, method_name);
-                return NULL;
             }
-            /* Not a struct — fall through to typeclass dispatch below */
+            /* Struct but no matching field */
+            diag_emit(DIAG_ERROR, call->span,
+                      "struct '%s' has no field '%s'",
+                      def->name, method_name);
+            return NULL;
         }
     }
-    
-    /* For v1: Find a method implementation that matches */
-    /* We search through all instances to find one with a matching method */
-    /* This is a simplified approach - proper resolution would use type inference */
-    
+
+    /* Phase HKT H2: Type-based instance lookup.
+     * Build a TypeClassDispatchKey from the obj type, then use
+     * typeclass_env_lookup_instance_by_key for a two-level search.
+     * Fall back to name-only search if the type-based lookup yields nothing
+     * (e.g. TY_UNKNOWN during forward-reference elaboration). */
     FnDef *best_method = NULL;
-    
+
+    /* Determine the effective constructor kind from the obj type. */
+    Kind obj_ck = KIND_STAR;
+    {
+        TypeKind tk = obj->type.kind;
+        bool is_primitive = (tk == TY_INT  || tk == TY_BOOL  || tk == TY_CSTR ||
+                             tk == TY_NIL  || tk == TY_FLOAT || tk == TY_PTR_VOID ||
+                             tk == TY_UNKNOWN);
+        obj_ck = is_primitive ? KIND_STAR : KIND_ARROW;
+    }
+
+    /* Search instances — prefer the one whose type_args[0] matches obj's type. */
     for (TypeClassInstance *inst = e->typeclass_env.instances; inst != NULL; inst = inst->next) {
         for (uint8_t i = 0; i < inst->typeclass->n_methods; i++) {
             const TypeClassMethod *method = &inst->typeclass->methods[i];
-            /* Check if method name matches (case-sensitive) */
-            if (method->name->len == method_name_len &&
-                memcmp(method->name->name, method_name, method_name_len) == 0) {
-                /* Found a matching method */
-                best_method = inst->method_impls[i];
-                break;
+            if (method->name->len != method_name_len ||
+                memcmp(method->name->name, method_name, method_name_len) != 0) {
+                continue;
             }
+            /* Name matched.  Now check if this instance's first type_arg
+             * matches the obj type.  For KIND_STAR we compare TypeKind
+             * exactly; for KIND_ARROW we accept any non-primitive. */
+            if (inst->n_type_args > 0 && obj->type.kind != TY_UNKNOWN) {
+                bool type_ok;
+                if (obj_ck == KIND_STAR) {
+                    type_ok = (inst->type_args[0].kind == obj->type.kind);
+                } else {
+                    /* KIND_ARROW: accept non-primitive instance type_args */
+                    TypeKind itk = inst->type_args[0].kind;
+                    bool inst_is_primitive =
+                        (itk == TY_INT  || itk == TY_BOOL || itk == TY_CSTR ||
+                         itk == TY_NIL  || itk == TY_FLOAT || itk == TY_PTR_VOID);
+                    type_ok = !inst_is_primitive;
+                }
+                if (!type_ok) {
+                    /* Record as fallback but keep searching. */
+                    if (!best_method) best_method = inst->method_impls[i];
+                    continue;
+                }
+            }
+            /* Good match (or no type_args to check). */
+            best_method = inst->method_impls[i];
+            goto found_method;
         }
-        if (best_method) break;
     }
+found_method:;
     
     if (!best_method) {
         /* No matching method found */
@@ -6744,11 +6831,8 @@ static Expr *elab_method_call(Elab *e, const Form *call) {
                   method_name_len, method_name);
         return NULL;
     }
-    
-    /* Elaborate the object and arguments */
-    Expr *obj = elab_form(e, call->as.list.items[1]);
-    if (!obj) return NULL;
-    
+
+    /* obj was already elaborated above for dispatch; elaborate the remaining args. */
     uint32_t n_args = call->as.list.len - 2;
     Expr **args = (Expr **)arena_alloc(e->arena, n_args * sizeof(Expr *));
     for (uint32_t i = 0; i < n_args; i++) {

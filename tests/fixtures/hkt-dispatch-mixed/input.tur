@@ -1,0 +1,24 @@
+;; Phase HKT H2: Mixed dispatch — an HKT typeclass declaration alongside
+;; a KIND_STAR typeclass with multiple instances.
+;; Shows that HKT declarations do not interfere with KIND_STAR dispatch and
+;; that type-based lookup selects the correct instance for each call site.
+
+;; HKT typeclass (kind * -> *) — declared, not instantiated.
+(defclass MyFunctor [^f]
+  (fmap [x] :int))
+
+;; Regular KIND_STAR typeclass with two instances.
+(defclass MyLabel [a]
+  (label [x] :cstr))
+
+(definstance MyLabel [int]
+  (label [x] :cstr "number"))
+
+(definstance MyLabel [bool]
+  (label [x] :cstr "flag"))
+
+(defn main [] :int
+  (do
+    (println (.label 0))
+    (println (.label true))
+    0))

@@ -1,0 +1,12 @@
+;; Phase HKT H1: Declare a kind-polymorphic typeclass.
+;; The '^f' prefix marks a type parameter of kind '* -> *' (a type constructor).
+;; In Phase H1, '^f' is parsed and stored as KIND_ARROW; the declaration
+;; succeeds without error.
+
+(defclass MyFunctor [^f]
+  (fmap [x] :int))
+
+(defclass MyBifunctor [^f ^g]
+  (bimap [x y] :int))
+
+(defn main [] :int 0)
