@@ -1067,9 +1067,97 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
+static void * atomic_new(int64_t);
+static int64_t atomic_load(void *);
+static void atomic_free(void *);
+static void * as_arg_new(void *, int64_t);
+static void * as_worker(void *);
+static void * as_spawn_all(void *, void *, int64_t, int64_t);
+static void as_join_all(void *, int64_t);
+
+static void * atomic_new(int64_t init) {
+        int64_t *cell = (int64_t *)malloc(sizeof(int64_t));
+  if (!cell) { fprintf(stderr, "atomic-new: oom\n"); abort(); }
+  __atomic_store_n(cell, (int64_t)init, __ATOMIC_SEQ_CST);
+  return (void *)cell;
+  
+}
+
+static int64_t atomic_load(void * p) {
+        return (int64_t)__atomic_load_n((int64_t *)p, __ATOMIC_SEQ_CST);
+  
+}
+
+static void atomic_free(void * p) {
+        free(p);
+  
+}
+
+static void * as_arg_new(void * counter, int64_t iters) {
+        typedef struct { int64_t *counter; int64_t iters; } ASArg;
+  ASArg *a = (ASArg *)malloc(sizeof(ASArg));
+  if (!a) { fprintf(stderr, "as-arg-new: oom\n"); abort(); }
+  a->counter = (int64_t *)counter;
+  a->iters   = (int64_t)iters;
+  return (void *)a;
+  
+}
+
+static void * as_worker(void * arg) {
+        typedef struct { int64_t *counter; int64_t iters; } ASArg;
+  ASArg *a = (ASArg *)arg;
+  int64_t i;
+  for (i = 0; i < a->iters; i++)
+      __atomic_fetch_add(a->counter, (int64_t)1, __ATOMIC_SEQ_CST);
+  return NULL;
+  
+}
+
+static void * as_spawn_all(void * fn_ptr, void * counter, int64_t n, int64_t iters) {
+        typedef struct { int64_t *counter; int64_t iters; } ASArg;
+  pthread_t **handles = (pthread_t **)malloc((size_t)n * sizeof(pthread_t *));
+  if (!handles) { fprintf(stderr, "as-spawn-all: oom\n"); abort(); }
+  int64_t i;
+  for (i = 0; i < n; i++) {
+      ASArg *a = (ASArg *)malloc(sizeof(ASArg));
+      if (!a) { fprintf(stderr, "as-spawn-all: arg oom\n"); abort(); }
+      a->counter = (int64_t *)counter;
+      a->iters   = (int64_t)iters;
+      pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+      if (!t) { fprintf(stderr, "as-spawn-all: thread oom\n"); abort(); }
+      pthread_create(t, NULL, (void *(*)(void *))fn_ptr, (void *)a);
+      handles[i] = t;
+  }
+  return (void *)handles;
+  
+}
+
+static void as_join_all(void * handles, int64_t n) {
+        pthread_t **hs = (pthread_t **)handles;
+  int64_t i;
+  for (i = 0; i < n; i++) {
+      pthread_join(*hs[i], NULL);
+      free(hs[i]);
+  }
+  free(hs);
+  
+}
+
 int main() {
-        printf("%lld\n", (long long)(INT64_C(0)));
-        return (int)0;
+        {
+            void * counter_20 = atomic_new(INT64_C(0));
+            (void)counter_20;
+            {
+                void * handles_21 = as_spawn_all(as_worker, counter_20, INT64_C(100), INT64_C(100));
+                (void)handles_21;
+                as_join_all(handles_21, INT64_C(100));
+            }
+            printf("%lld\n", (long long)(atomic_load(counter_20)));
+            atomic_free(counter_20);
+        }
+        int64_t __t0;
+        __t0 = INT64_C(0);
+        return (int)__t0;
 }
 
 

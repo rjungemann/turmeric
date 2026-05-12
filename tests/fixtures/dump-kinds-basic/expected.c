@@ -1068,8 +1068,7 @@ static bool gc_is_alive(RcControlBlock *cb) {
 }
 
 int main() {
-        printf("%lld\n", (long long)(INT64_C(0)));
-        return (int)0;
+        return (int)INT64_C(0);
 }
 
 

@@ -1067,9 +1067,136 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
+static void * fb_results_new();
+static void fb_results_free(void *);
+static void * fb_range_new(void *, int64_t, int64_t);
+static void fb_range_free(void *);
+static void * fb_worker(void *);
+static void * fb_thread_spawn(void *, void *);
+static void fb_thread_join(void *);
+static void fb_print(void *, int64_t);
+
+static void * fb_results_new() {
+        int64_t *r = (int64_t *)malloc(15 * sizeof(int64_t));
+  if (!r) { fprintf(stderr, "fb-results-new: oom\n"); abort(); }
+  memset(r, 0, 15 * sizeof(int64_t));
+  return (void *)r;
+  
+}
+
+static void fb_results_free(void * r) {
+        free(r);
+  
+}
+
+static void * fb_range_new(void * results, int64_t start, int64_t count) {
+        typedef struct { int64_t *results; int64_t start; int64_t count; } FBRange;
+  FBRange *rng = (FBRange *)malloc(sizeof(FBRange));
+  if (!rng) { fprintf(stderr, "fb-range-new: oom\n"); abort(); }
+  rng->results = (int64_t *)results;
+  rng->start   = (int64_t)start;
+  rng->count   = (int64_t)count;
+  return (void *)rng;
+  
+}
+
+static void fb_range_free(void * rng) {
+        free(rng);
+  
+}
+
+static void * fb_worker(void * arg) {
+        typedef struct { int64_t *results; int64_t start; int64_t count; } FBRange;
+  FBRange *rng = (FBRange *)arg;
+  int64_t i;
+  for (i = 0; i < rng->count; i++) {
+      int64_t n = rng->start + i + 1;  /* 1-based number */
+      if      (n % 15 == 0) rng->results[rng->start + i] = -3;
+      else if (n %  3 == 0) rng->results[rng->start + i] = -1;
+      else if (n %  5 == 0) rng->results[rng->start + i] = -2;
+      else                  rng->results[rng->start + i] = n;
+  }
+  return NULL;
+  
+}
+
+static void * fb_thread_spawn(void * fn_ptr, void * arg) {
+        pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  if (!t) { fprintf(stderr, "fb-thread-spawn: oom\n"); abort(); }
+  pthread_create(t, NULL, (void *(*)(void *))fn_ptr, arg);
+  return (void *)t;
+  
+}
+
+static void fb_thread_join(void * t) {
+        pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  
+}
+
+static void fb_print(void * results, int64_t i) {
+        int64_t v = ((int64_t *)results)[i];
+  if      (v == -3) printf("fizzbuzz\n");
+  else if (v == -1) printf("fizz\n");
+  else if (v == -2) printf("buzz\n");
+  else              printf("%lld\n", (long long)v);
+  
+}
+
 int main() {
-        printf("%lld\n", (long long)(INT64_C(0)));
-        return (int)0;
+        {
+            void * results_20 = fb_results_new();
+            (void)results_20;
+            {
+                void * rng_a_21 = fb_range_new(results_20, INT64_C(0), INT64_C(5));
+                (void)rng_a_21;
+                {
+                    void * rng_b_22 = fb_range_new(results_20, INT64_C(5), INT64_C(5));
+                    (void)rng_b_22;
+                    {
+                        void * rng_c_23 = fb_range_new(results_20, INT64_C(10), INT64_C(5));
+                        (void)rng_c_23;
+                        {
+                            void * ta_24 = fb_thread_spawn(fb_worker, rng_a_21);
+                            (void)ta_24;
+                            {
+                                void * tb_25 = fb_thread_spawn(fb_worker, rng_b_22);
+                                (void)tb_25;
+                                {
+                                    void * tc_26 = fb_thread_spawn(fb_worker, rng_c_23);
+                                    (void)tc_26;
+                                    fb_thread_join(ta_24);
+                                    fb_thread_join(tb_25);
+                                    fb_thread_join(tc_26);
+                                }
+                            }
+                        }
+                        fb_print(results_20, INT64_C(0));
+                        fb_print(results_20, INT64_C(1));
+                        fb_print(results_20, INT64_C(2));
+                        fb_print(results_20, INT64_C(3));
+                        fb_print(results_20, INT64_C(4));
+                        fb_print(results_20, INT64_C(5));
+                        fb_print(results_20, INT64_C(6));
+                        fb_print(results_20, INT64_C(7));
+                        fb_print(results_20, INT64_C(8));
+                        fb_print(results_20, INT64_C(9));
+                        fb_print(results_20, INT64_C(10));
+                        fb_print(results_20, INT64_C(11));
+                        fb_print(results_20, INT64_C(12));
+                        fb_print(results_20, INT64_C(13));
+                        fb_print(results_20, INT64_C(14));
+                        fb_range_free(rng_a_21);
+                        fb_range_free(rng_b_22);
+                        fb_range_free(rng_c_23);
+                    }
+                }
+            }
+            fb_results_free(results_20);
+        }
+        int64_t __t0;
+        __t0 = INT64_C(0);
+        return (int)__t0;
 }
 
 

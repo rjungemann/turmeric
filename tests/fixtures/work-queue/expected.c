@@ -1067,9 +1067,282 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
+static void * work_queue_new_bounded(int64_t);
+static void * work_queue_new();
+static void work_queue_push(void *, int64_t);
+static int64_t work_queue_pop(void *);
+static void work_queue_close(void *);
+static void work_queue_free(void *);
+static void * wq_arg_new(void *);
+static int64_t wq_arg_result(void *);
+static void wq_arg_free(void *);
+static void * wq_producer(void *);
+static void * wq_consumer(void *);
+static void * wq_thread_spawn(void *, void *);
+static void wq_thread_join(void *);
+
+static void * work_queue_new_bounded(int64_t cap) {
+        typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count;
+      int64_t cap; int64_t alloc; int closed;
+  } WorkQueueBlock;
+  WorkQueueBlock *q = (WorkQueueBlock *)malloc(sizeof(WorkQueueBlock));
+  if (!q) { fprintf(stderr, "wq-new-bounded: oom\n"); abort(); }
+  pthread_mutex_init(&q->lock, NULL);
+  pthread_cond_init(&q->not_full, NULL);
+  pthread_cond_init(&q->not_empty, NULL);
+  q->buf = (int64_t *)malloc((size_t)cap * sizeof(int64_t));
+  if (!q->buf) { free(q); fprintf(stderr, "wq-new-bounded: buf oom\n"); abort(); }
+  q->head = 0; q->tail = 0; q->count = 0; q->cap = (int64_t)cap; q->alloc = (int64_t)cap; q->closed = 0;
+  return (void *)q;
+  
+}
+
+static void * work_queue_new() {
+        typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count;
+      int64_t cap; int64_t alloc; int closed;
+  } WorkQueueBlock;
+  WorkQueueBlock *q = (WorkQueueBlock *)malloc(sizeof(WorkQueueBlock));
+  if (!q) { fprintf(stderr, "wq-new: oom\n"); abort(); }
+  pthread_mutex_init(&q->lock, NULL);
+  pthread_cond_init(&q->not_full, NULL);
+  pthread_cond_init(&q->not_empty, NULL);
+  q->alloc = 16;
+  q->buf = (int64_t *)malloc((size_t)q->alloc * sizeof(int64_t));
+  if (!q->buf) { free(q); fprintf(stderr, "wq-new: buf oom\n"); abort(); }
+  q->head = 0; q->tail = 0; q->count = 0; q->cap = 0; q->closed = 0;
+  return (void *)q;
+  
+}
+
+static void work_queue_push(void * q, int64_t v) {
+        typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count;
+      int64_t cap; int64_t alloc; int closed;
+  } WorkQueueBlock;
+  WorkQueueBlock *wq = (WorkQueueBlock *)q;
+  pthread_mutex_lock(&wq->lock);
+  if (wq->closed) { pthread_mutex_unlock(&wq->lock); return; }
+  if (wq->cap > 0) {
+      while (wq->count == wq->cap && !wq->closed)
+          pthread_cond_wait(&wq->not_full, &wq->lock);
+      if (wq->closed) { pthread_mutex_unlock(&wq->lock); return; }
+      wq->buf[wq->tail] = (int64_t)v;
+      wq->tail = (wq->tail + 1) % wq->cap;
+  } else {
+      if (wq->count == wq->alloc) {
+          int64_t new_alloc = wq->alloc * 2;
+          int64_t *new_buf = (int64_t *)malloc((size_t)new_alloc * sizeof(int64_t));
+          if (!new_buf) { pthread_mutex_unlock(&wq->lock); fprintf(stderr, "wq-push: grow oom\n"); abort(); }
+          int64_t i;
+          for (i = 0; i < wq->count; i++)
+              new_buf[i] = wq->buf[(wq->head + i) % wq->alloc];
+          free(wq->buf);
+          wq->buf = new_buf; wq->head = 0; wq->tail = wq->count; wq->alloc = new_alloc;
+      }
+      wq->buf[wq->tail] = (int64_t)v;
+      wq->tail = (wq->tail + 1) % wq->alloc;
+  }
+  wq->count++;
+  pthread_cond_signal(&wq->not_empty);
+  pthread_mutex_unlock(&wq->lock);
+  
+}
+
+static int64_t work_queue_pop(void * q) {
+        typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count;
+      int64_t cap; int64_t alloc; int closed;
+  } WorkQueueBlock;
+  WorkQueueBlock *wq = (WorkQueueBlock *)q;
+  pthread_mutex_lock(&wq->lock);
+  while (wq->count == 0 && !wq->closed)
+      pthread_cond_wait(&wq->not_empty, &wq->lock);
+  if (wq->count == 0) {
+      pthread_mutex_unlock(&wq->lock);
+      return INT64_MIN;
+  }
+  int64_t val = wq->buf[wq->head];
+  int64_t mod = (wq->cap > 0) ? wq->cap : wq->alloc;
+  wq->head = (wq->head + 1) % mod;
+  wq->count--;
+  pthread_cond_signal(&wq->not_full);
+  pthread_mutex_unlock(&wq->lock);
+  return val;
+  
+}
+
+static void work_queue_close(void * q) {
+        typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count;
+      int64_t cap; int64_t alloc; int closed;
+  } WorkQueueBlock;
+  WorkQueueBlock *wq = (WorkQueueBlock *)q;
+  pthread_mutex_lock(&wq->lock);
+  wq->closed = 1;
+  pthread_cond_broadcast(&wq->not_empty);
+  pthread_cond_broadcast(&wq->not_full);
+  pthread_mutex_unlock(&wq->lock);
+  
+}
+
+static void work_queue_free(void * q) {
+        typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count;
+      int64_t cap; int64_t alloc; int closed;
+  } WorkQueueBlock;
+  WorkQueueBlock *wq = (WorkQueueBlock *)q;
+  pthread_mutex_destroy(&wq->lock);
+  pthread_cond_destroy(&wq->not_full);
+  pthread_cond_destroy(&wq->not_empty);
+  free(wq->buf);
+  free(wq);
+  
+}
+
+static void * wq_arg_new(void * q) {
+        typedef struct { void *q; int64_t result; } WQArg;
+  WQArg *a = (WQArg *)malloc(sizeof(WQArg));
+  if (!a) { fprintf(stderr, "wq-arg-new: oom\n"); abort(); }
+  a->q = q; a->result = 0;
+  return (void *)a;
+  
+}
+
+static int64_t wq_arg_result(void * a) {
+        typedef struct { void *q; int64_t result; } WQArg;
+  return ((WQArg *)a)->result;
+  
+}
+
+static void wq_arg_free(void * a) {
+        free(a);
+  
+}
+
+static void * wq_producer(void * arg) {
+        typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count;
+      int64_t cap; int64_t alloc; int closed;
+  } WorkQueueBlock;
+  typedef struct { void *q; int64_t result; } WQArg;
+  void *q = ((WQArg *)arg)->q;
+  int64_t vals[5] = {1, 2, 3, 4, 5};
+  int i;
+  for (i = 0; i < 5; i++) {
+      WorkQueueBlock *wq = (WorkQueueBlock *)q;
+      pthread_mutex_lock(&wq->lock);
+      if (wq->closed) { pthread_mutex_unlock(&wq->lock); return NULL; }
+      while (wq->count == wq->cap && !wq->closed)
+          pthread_cond_wait(&wq->not_full, &wq->lock);
+      if (wq->closed) { pthread_mutex_unlock(&wq->lock); return NULL; }
+      wq->buf[wq->tail] = vals[i];
+      wq->tail = (wq->tail + 1) % wq->cap;
+      wq->count++;
+      pthread_cond_signal(&wq->not_empty);
+      pthread_mutex_unlock(&wq->lock);
+  }
+  /* close the queue to signal consumer we're done */
+  WorkQueueBlock *wq = (WorkQueueBlock *)q;
+  pthread_mutex_lock(&wq->lock);
+  wq->closed = 1;
+  pthread_cond_broadcast(&wq->not_empty);
+  pthread_mutex_unlock(&wq->lock);
+  return NULL;
+  
+}
+
+static void * wq_consumer(void * arg) {
+        typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count;
+      int64_t cap; int64_t alloc; int closed;
+  } WorkQueueBlock;
+  typedef struct { void *q; int64_t result; } WQArg;
+  WQArg *a = (WQArg *)arg;
+  WorkQueueBlock *wq = (WorkQueueBlock *)a->q;
+  int64_t sum = 0;
+  for (;;) {
+      pthread_mutex_lock(&wq->lock);
+      while (wq->count == 0 && !wq->closed)
+          pthread_cond_wait(&wq->not_empty, &wq->lock);
+      if (wq->count == 0) { pthread_mutex_unlock(&wq->lock); break; }
+      int64_t val = wq->buf[wq->head];
+      int64_t mod = (wq->cap > 0) ? wq->cap : wq->alloc;
+      wq->head = (wq->head + 1) % mod;
+      wq->count--;
+      pthread_cond_signal(&wq->not_full);
+      pthread_mutex_unlock(&wq->lock);
+      sum += val;
+  }
+  a->result = sum;
+  return NULL;
+  
+}
+
+static void * wq_thread_spawn(void * fn_ptr, void * arg) {
+        pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  if (!t) { fprintf(stderr, "wq-thread-spawn: oom\n"); abort(); }
+  pthread_create(t, NULL, (void *(*)(void *))fn_ptr, arg);
+  return (void *)t;
+  
+}
+
+static void wq_thread_join(void * t) {
+        pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  
+}
+
 int main() {
-        printf("%lld\n", (long long)(INT64_C(0)));
-        return (int)0;
+        {
+            void * q_28 = work_queue_new_bounded(INT64_C(4));
+            (void)q_28;
+            {
+                void * prod_arg_29 = wq_arg_new(q_28);
+                (void)prod_arg_29;
+                {
+                    void * cons_arg_30 = wq_arg_new(q_28);
+                    (void)cons_arg_30;
+                    {
+                        void * tp_31 = wq_thread_spawn(wq_producer, prod_arg_29);
+                        (void)tp_31;
+                        {
+                            void * tc_32 = wq_thread_spawn(wq_consumer, cons_arg_30);
+                            (void)tc_32;
+                            wq_thread_join(tp_31);
+                            wq_thread_join(tc_32);
+                        }
+                    }
+                    printf("%lld\n", (long long)(wq_arg_result(cons_arg_30)));
+                    wq_arg_free(prod_arg_29);
+                    wq_arg_free(cons_arg_30);
+                }
+            }
+            work_queue_free(q_28);
+        }
+        {
+            void * uq_33 = work_queue_new();
+            (void)uq_33;
+            work_queue_push(uq_33, INT64_C(10));
+            work_queue_push(uq_33, INT64_C(20));
+            work_queue_push(uq_33, INT64_C(30));
+            printf("%lld\n", (long long)(work_queue_pop(uq_33)));
+            printf("%lld\n", (long long)(work_queue_pop(uq_33)));
+            printf("%lld\n", (long long)(work_queue_pop(uq_33)));
+            work_queue_free(uq_33);
+        }
+        int64_t __t0;
+        __t0 = INT64_C(0);
+        return (int)__t0;
 }
 
 

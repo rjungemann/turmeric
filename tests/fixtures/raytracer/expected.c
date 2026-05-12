@@ -1068,8 +1068,119 @@ static bool gc_is_alive(RcControlBlock *cb) {
 }
 
 int main() {
-        printf("%lld\n", (long long)(INT64_C(0)));
-        return (int)0;
+        typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t not_empty;
+      void **tasks;
+      int64_t task_head, task_tail, task_count, task_alloc;
+      pthread_t *threads;
+      int64_t n_threads;
+      int closed;
+  } RtPoolBlock;
+  typedef struct { void *(*fn)(void *); void *arg; void *future; } RtTask;
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int is_set; } RtFuture;
+
+  /* row argument: row index (as pointer cast) */
+  /* ray-sphere hit test for row i in 4x4 grid */
+  void *rt_row(void *a) {
+      int row = (int)(uintptr_t)a;
+      /* pixel y coords: {-0.75, -0.25, 0.25, 0.75} */
+      double ys[4] = {-0.75, -0.25, 0.25, 0.75};
+      double xs[4] = {-0.75, -0.25, 0.25, 0.75};
+      double y = ys[row];
+      int hits = 0;
+      for (int col = 0; col < 4; col++) {
+          double x = xs[col];
+          /* discriminant = 4 - 32*(x^2+y^2); hit when disc >= 0 */
+          double disc = 4.0 - 32.0 * (x*x + y*y);
+          if (disc >= 0.0) hits++;
+      }
+      return (void *)(uintptr_t)(int64_t)hits;
+  }
+
+  /* worker */
+  void *rt_worker(void *a) {
+      RtPoolBlock *p = (RtPoolBlock *)a;
+      pthread_mutex_lock(&p->lock);
+      for (;;) {
+          while (p->task_count == 0 && !p->closed)
+              pthread_cond_wait(&p->not_empty, &p->lock);
+          if (p->task_count == 0 && p->closed) break;
+          RtTask *t = (RtTask *)p->tasks[p->task_head];
+          p->task_head = (p->task_head + 1) % p->task_alloc;
+          p->task_count--;
+          pthread_mutex_unlock(&p->lock);
+          void *res = t->fn(t->arg);
+          RtFuture *fc = (RtFuture *)t->future;
+          pthread_mutex_lock(&fc->lock);
+          fc->value = (int64_t)(uintptr_t)res; fc->is_set = 1;
+          pthread_cond_broadcast(&fc->ready);
+          pthread_mutex_unlock(&fc->lock);
+          free(t);
+          pthread_mutex_lock(&p->lock);
+      }
+      pthread_mutex_unlock(&p->lock);
+      return NULL;
+  }
+
+  /* allocate pool with 2 workers */
+  RtPoolBlock *pool = (RtPoolBlock *)calloc(1, sizeof(RtPoolBlock));
+  if (!pool) abort();
+  pthread_mutex_init(&pool->lock, NULL); pthread_cond_init(&pool->not_empty, NULL);
+  pool->task_alloc = 8;
+  pool->tasks = (void **)malloc((size_t)pool->task_alloc * sizeof(void *));
+  if (!pool->tasks) abort();
+  pool->task_head = 0; pool->task_tail = 0; pool->task_count = 0;
+  pool->n_threads = 2; pool->closed = 0;
+  pool->threads = (pthread_t *)malloc(2 * sizeof(pthread_t));
+  if (!pool->threads) abort();
+  for (int i = 0; i < 2; i++)
+      pthread_create(&pool->threads[i], NULL, rt_worker, pool);
+
+  /* submit 4 scanline tasks */
+  RtFuture *futures[4];
+  for (int r = 0; r < 4; r++) {
+      futures[r] = (RtFuture *)calloc(1, sizeof(RtFuture));
+      if (!futures[r]) abort();
+      pthread_mutex_init(&futures[r]->lock, NULL); pthread_cond_init(&futures[r]->ready, NULL);
+      RtTask *task = (RtTask *)malloc(sizeof(RtTask));
+      if (!task) abort();
+      task->fn = rt_row; task->arg = (void *)(uintptr_t)r; task->future = futures[r];
+      pthread_mutex_lock(&pool->lock);
+      pool->tasks[pool->task_tail] = (void *)task;
+      pool->task_tail = (pool->task_tail + 1) % pool->task_alloc;
+      pool->task_count++;
+      pthread_cond_signal(&pool->not_empty);
+      pthread_mutex_unlock(&pool->lock);
+  }
+
+  /* collect results */
+  int64_t total_hits = 0;
+  for (int r = 0; r < 4; r++) {
+      pthread_mutex_lock(&futures[r]->lock);
+      while (!futures[r]->is_set)
+          pthread_cond_wait(&futures[r]->ready, &futures[r]->lock);
+      total_hits += futures[r]->value;
+      pthread_mutex_unlock(&futures[r]->lock);
+  }
+  printf("hits: %lld\n", (long long)total_hits);
+
+  /* shutdown */
+  pthread_mutex_lock(&pool->lock);
+  pool->closed = 1; pthread_cond_broadcast(&pool->not_empty);
+  pthread_mutex_unlock(&pool->lock);
+  for (int i = 0; i < 2; i++) pthread_join(pool->threads[i], NULL);
+
+  /* cleanup */
+  for (int r = 0; r < 4; r++) {
+      pthread_mutex_destroy(&futures[r]->lock); pthread_cond_destroy(&futures[r]->ready);
+      free(futures[r]);
+  }
+  free(pool->tasks); free(pool->threads);
+  pthread_mutex_destroy(&pool->lock); pthread_cond_destroy(&pool->not_empty);
+  free(pool);
+  return 0;
+  
 }
 
 
