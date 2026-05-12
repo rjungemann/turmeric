@@ -1,0 +1,141 @@
+;; Phase T20-C: future-error — Promise fail propagates error to Future.
+;;
+;; Test: worker thread fails a promise with error -1; main thread gets the error.
+;;
+;; Expected output:
+;;   err: -1
+
+;; Use inline C to avoid needing Send/Sync enforcement (T19-B) for closures.
+
+;; ---- FutureCell helpers (matching stdlib/future.tur layout) ----
+
+(defn fc-new [] :ptr<void>
+  ```c
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t  ready;
+      int64_t value;
+      int64_t exn;
+      bool is_set;
+      bool is_ok;
+  } FutureCell;
+  FutureCell *cell = (FutureCell *)malloc(sizeof(FutureCell));
+  if (!cell) { fprintf(stderr, "fc-new: oom\n"); abort(); }
+  pthread_mutex_init(&cell->lock, NULL);
+  pthread_cond_init(&cell->ready, NULL);
+  cell->is_set = false;
+  cell->is_ok = false;
+  cell->value = 0;
+  cell->exn = 0;
+  return (void *)cell;
+  ```)
+
+(defn fc-fail [fc :ptr<void> e :int] :nil
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *cell = (FutureCell *)fc;
+  pthread_mutex_lock(&cell->lock);
+  if (cell->is_set) { pthread_mutex_unlock(&cell->lock); return; }
+  cell->exn = (int64_t)e;
+  cell->is_set = true;
+  cell->is_ok = false;
+  pthread_cond_broadcast(&cell->ready);
+  pthread_mutex_unlock(&cell->lock);
+  ```)
+
+(defn fc-get [fc :ptr<void>] :ptr<void>
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *cell = (FutureCell *)fc;
+  pthread_mutex_lock(&cell->lock);
+  while (!cell->is_set)
+      pthread_cond_wait(&cell->ready, &cell->lock);
+  
+  typedef struct { bool is_ok; int64_t ok_val; int64_t err_val; } Result;
+  Result *r = (Result *)malloc(sizeof(Result));
+  if (!r) { pthread_mutex_unlock(&cell->lock); fprintf(stderr, "fc-get: oom\n"); abort(); }
+  r->is_ok = cell->is_ok;
+  r->ok_val = cell->value;
+  r->err_val = cell->exn;
+  pthread_mutex_unlock(&cell->lock);
+  return (void *)r;
+  ```)
+
+(defn fc-free [fc :ptr<void>] :nil
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *cell = (FutureCell *)fc;
+  pthread_mutex_destroy(&cell->lock);
+  pthread_cond_destroy(&cell->ready);
+  free(cell);
+  ```)
+
+;; Result helpers
+(defn result-ok? [r :ptr<void>] :bool
+  ```c
+  typedef struct { bool is_ok; int64_t ok_val; int64_t err_val; } Result;
+  Result *res = (Result *)r;
+  return res != NULL && res->is_ok;
+  ```)
+
+(defn result-err [r :ptr<void>] :int
+  ```c
+  typedef struct { bool is_ok; int64_t ok_val; int64_t err_val; } Result;
+  return (int)((Result *)r)->err_val;
+  ```)
+
+(defn result-free [r :ptr<void>] :nil
+  ```c
+  free(r);
+  ```)
+
+;; ---- Worker thread ----
+
+(defn future-error-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  void **args = (void **)arg;
+  void *cell_ptr = args[0];
+  int64_t err_code = (int64_t)(uintptr_t)args[1];
+  
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *cell = (FutureCell *)cell_ptr;
+  pthread_mutex_lock(&cell->lock);
+  if (!cell->is_set) {
+      cell->exn = err_code;
+      cell->is_set = true;
+      cell->is_ok = false;
+      pthread_cond_broadcast(&cell->ready);
+  }
+  pthread_mutex_unlock(&cell->lock);
+  free(arg);
+  return NULL;
+  ```)
+
+(defn thread-spawn-raw [fn-ptr :ptr<void> arg :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  if (!t) { fprintf(stderr, "thread-spawn-raw: oom\n"); abort(); }
+  pthread_create(t, NULL, (void *(*)(void *))fn-ptr, arg);
+  return (void *)t;
+  ```)
+
+(defn thread-join-raw [t :ptr<void>] :nil
+  ```c
+  pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  ```)
+
+(defn main [] :int
+  (let [fc (fc-new)]
+    (let [arg (malloc (* 2 (sizeof :ptr<void>)))]
+      (ptr-set! arg 0 fc)
+      (ptr-set! arg 1 -1)
+      (let [t (thread-spawn-raw future-error-worker arg)]
+        (let [result (fc-get fc)]
+          (if (result-ok? result)
+            (println "ok:" (int 0))
+            (println "err:" (result-err result)))
+          (result-free result)
+          (thread-join-raw t))
+        (fc-free fc)))
+    0)

@@ -1,0 +1,135 @@
+;; Phase T20-D: thread-pool-dynamic — dynamic-scaling thread pool.
+;;
+;; Creates a pool starting with min=1 workers, scaling up to max=4 when
+;; all workers are busy.  Submits 8 tasks and verifies that all produce
+;; correct results.
+;;
+;; Each task returns its index; expected sum = 0+1+2+3+4+5+6+7 = 28.
+;; Expected output:
+;;   sum: 28
+;;
+;; requires.tsan
+
+(defn main [] :int
+  ```c
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t not_empty;
+      void **tasks;
+      int64_t task_head, task_tail, task_count, task_alloc;
+      pthread_t *threads;
+      int64_t n_threads;
+      int64_t max_threads;
+      volatile int64_t idle_count;
+      int closed;
+  } DynPoolBlock;
+  typedef struct { void *(*fn)(void *); void *arg; void *future; } DynTask;
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int is_set; } FutureCell;
+
+  /* identity task: returns arg unchanged */
+  void *dyn_identity_fn(void *arg) { return arg; }
+
+  /* worker thread */
+  void *dyn_worker(void *a) {
+      DynPoolBlock *p = (DynPoolBlock *)a;
+      pthread_mutex_lock(&p->lock);
+      p->idle_count++;
+      pthread_cond_broadcast(&p->not_empty);
+      for (;;) {
+          while (p->task_count == 0 && !p->closed)
+              pthread_cond_wait(&p->not_empty, &p->lock);
+          if (p->task_count == 0 && p->closed) break;
+          DynTask *t = (DynTask *)p->tasks[p->task_head];
+          p->task_head = (p->task_head + 1) % p->task_alloc;
+          p->task_count--; p->idle_count--;
+          pthread_mutex_unlock(&p->lock);
+          void *res = t->fn(t->arg);
+          FutureCell *fc = (FutureCell *)t->future;
+          pthread_mutex_lock(&fc->lock);
+          fc->value = (int64_t)(uintptr_t)res; fc->is_set = 1;
+          pthread_cond_broadcast(&fc->ready);
+          pthread_mutex_unlock(&fc->lock);
+          free(t);
+          pthread_mutex_lock(&p->lock); p->idle_count++;
+      }
+      p->idle_count--;
+      pthread_mutex_unlock(&p->lock);
+      return NULL;
+  }
+
+  /* allocate pool */
+  DynPoolBlock *pool = (DynPoolBlock *)calloc(1, sizeof(DynPoolBlock));
+  if (!pool) abort();
+  pthread_mutex_init(&pool->lock, NULL); pthread_cond_init(&pool->not_empty, NULL);
+  pool->task_alloc = 16;
+  pool->tasks = (void **)malloc((size_t)pool->task_alloc * sizeof(void *));
+  if (!pool->tasks) abort();
+  pool->task_head = 0; pool->task_tail = 0; pool->task_count = 0;
+  pool->max_threads = 4;
+  pool->threads = (pthread_t *)calloc((size_t)pool->max_threads, sizeof(pthread_t));
+  if (!pool->threads) abort();
+  pool->n_threads = 0; pool->idle_count = 0; pool->closed = 0;
+
+  /* spawn initial worker, wait for it to be idle */
+  pthread_create(&pool->threads[pool->n_threads++], NULL, dyn_worker, pool);
+  pthread_mutex_lock(&pool->lock);
+  while (pool->idle_count == 0)
+      pthread_cond_wait(&pool->not_empty, &pool->lock);
+  pthread_mutex_unlock(&pool->lock);
+
+  /* submit 8 tasks */
+  FutureCell *futures[8];
+  for (int i = 0; i < 8; i++) {
+      futures[i] = (FutureCell *)calloc(1, sizeof(FutureCell));
+      if (!futures[i]) abort();
+      pthread_mutex_init(&futures[i]->lock, NULL); pthread_cond_init(&futures[i]->ready, NULL);
+      DynTask *task = (DynTask *)malloc(sizeof(DynTask));
+      if (!task) abort();
+      task->fn = dyn_identity_fn; task->arg = (void *)(uintptr_t)(int64_t)i;
+      task->future = (void *)futures[i];
+      pthread_mutex_lock(&pool->lock);
+      if (pool->task_count == pool->task_alloc) {
+          int64_t na = pool->task_alloc * 2;
+          void **nb = (void **)malloc((size_t)na * sizeof(void *));
+          if (!nb) abort();
+          for (int64_t j = 0; j < pool->task_count; j++)
+              nb[j] = pool->tasks[(pool->task_head + j) % pool->task_alloc];
+          free(pool->tasks);
+          pool->tasks = nb; pool->task_head = 0; pool->task_tail = pool->task_count; pool->task_alloc = na;
+      }
+      pool->tasks[pool->task_tail] = (void *)task;
+      pool->task_tail = (pool->task_tail + 1) % pool->task_alloc;
+      pool->task_count++;
+      if (pool->idle_count == 0 && pool->n_threads < pool->max_threads)
+          pthread_create(&pool->threads[pool->n_threads++], NULL, dyn_worker, pool);
+      pthread_cond_signal(&pool->not_empty);
+      pthread_mutex_unlock(&pool->lock);
+  }
+
+  /* collect results */
+  int64_t sum = 0;
+  for (int i = 0; i < 8; i++) {
+      pthread_mutex_lock(&futures[i]->lock);
+      while (!futures[i]->is_set)
+          pthread_cond_wait(&futures[i]->ready, &futures[i]->lock);
+      sum += futures[i]->value;
+      pthread_mutex_unlock(&futures[i]->lock);
+  }
+  printf("sum: %lld\n", (long long)sum);
+
+  /* shutdown */
+  pthread_mutex_lock(&pool->lock);
+  pool->closed = 1; pthread_cond_broadcast(&pool->not_empty);
+  pthread_mutex_unlock(&pool->lock);
+  for (int64_t i = 0; i < pool->n_threads; i++) pthread_join(pool->threads[i], NULL);
+
+  /* cleanup */
+  for (int i = 0; i < 8; i++) {
+      pthread_mutex_destroy(&futures[i]->lock); pthread_cond_destroy(&futures[i]->ready);
+      free(futures[i]);
+  }
+  free(pool->tasks); free(pool->threads);
+  pthread_mutex_destroy(&pool->lock); pthread_cond_destroy(&pool->not_empty);
+  free(pool);
+  return 0;
+  ```)

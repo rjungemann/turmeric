@@ -6,7 +6,11 @@
 #include <stdbool.h>
 #include <setjmp.h>
 #include <pthread.h>
+#define _XOPEN_SOURCE 700
+#include <ucontext.h>
+#undef _XOPEN_SOURCE
 extern void *malloc(size_t);
+extern void *calloc(size_t, size_t);
 extern void free(void *);
 extern void abort(void);
 extern void *memset(void *, int, size_t);
@@ -176,7 +180,7 @@ static void tur_panic(const char *msg) {
 }
 
 /* Phase 19: Algebraic effect handler chain */
-typedef struct { bool consumed; } TurContK;
+typedef struct { bool consumed; void *origin_fiber; } TurContK;
 
 typedef struct EffectHandlerCase EffectHandlerCase;
 struct EffectHandlerCase {
@@ -192,14 +196,88 @@ struct EffectHandlerFrame {
     EffectHandlerCase cases[8];
 };
 
+/* Phase T21: FiberBlock */
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+typedef struct FiberBlock FiberBlock;
+struct FiberBlock {
+    ucontext_t ctx;
+    ucontext_t caller_ctx;
+    char *stack;
+    size_t stack_size;
+    int done;
+    int64_t result;
+    int64_t arg;
+    void *handler_chain;
+    void (*entry_fn)(void);
+};
+
+static __thread FiberBlock *tur_current_fiber = NULL;
+
+static void tur_fiber_shim(uint32_t hi, uint32_t lo) {
+    FiberBlock *f = (FiberBlock *)(((uintptr_t)hi << 32) | (uintptr_t)(uint32_t)lo);
+    f->entry_fn();
+    f->done = 1;
+    swapcontext(&f->ctx, &f->caller_ctx);
+    abort();
+}
+
+static FiberBlock *tur_fiber_block_new(void (*fn)(void), size_t stack_size) {
+    if (!stack_size) stack_size = 1024 * 1024;
+    FiberBlock *f = (FiberBlock *)calloc(1, sizeof(FiberBlock));
+    if (!f) { fprintf(stderr, "fiber: oom\n"); abort(); }
+    f->stack = (char *)malloc(stack_size);
+    if (!f->stack) { free(f); abort(); }
+    f->stack_size = stack_size; f->entry_fn = fn; f->done = 0;
+    getcontext(&f->ctx);
+    f->ctx.uc_stack.ss_sp = f->stack;
+    f->ctx.uc_stack.ss_size = stack_size;
+    f->ctx.uc_link = NULL;
+    uintptr_t _fp = (uintptr_t)f;
+    uint32_t _hi = (uint32_t)(_fp >> 32);
+    uint32_t _lo = (uint32_t)(_fp & 0xFFFFFFFFU);
+    makecontext(&f->ctx, (void(*)(void))tur_fiber_shim, 2, _hi, _lo);
+    return f;
+}
+
+static int64_t tur_fiber_block_resume(FiberBlock *f, int64_t arg) {
+    if (!f || f->done) return f ? f->result : 0;
+    FiberBlock *_prev = tur_current_fiber;
+    tur_current_fiber = f;
+    f->arg = arg;
+    swapcontext(&f->caller_ctx, &f->ctx);
+    tur_current_fiber = _prev;
+    return f->result;
+}
+
+static void tur_fiber_block_yield(int64_t value) {
+    FiberBlock *f = tur_current_fiber;
+    if (!f) { fprintf(stderr, "fiber-yield: not in fiber\n"); abort(); }
+    f->result = value;
+    swapcontext(&f->ctx, &f->caller_ctx);
+}
+
+static void tur_fiber_block_free(FiberBlock *f) {
+    if (!f) return; free(f->stack); free(f);
+}
+
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
+
 static __thread EffectHandlerFrame *global_effect_handler_chain = NULL;
 
 static int64_t tur_effect_perform(const char *name, int64_t *args, int n_args) {
-    EffectHandlerFrame *frame = global_effect_handler_chain;
+    EffectHandlerFrame *frame =
+        (tur_current_fiber && tur_current_fiber->handler_chain)
+        ? (EffectHandlerFrame *)tur_current_fiber->handler_chain
+        : global_effect_handler_chain;
     while (frame) {
         for (int __i = 0; __i < frame->n_cases; __i++) {
             if (strcmp(frame->cases[__i].effect_name, name) == 0) {
-                TurContK __fresh_k = {false};
+                TurContK __fresh_k = {false, tur_current_fiber};
                 return frame->cases[__i].handler_fn(args, n_args, (int64_t)(intptr_t)&__fresh_k, frame->cases[__i].env);
             }
         }

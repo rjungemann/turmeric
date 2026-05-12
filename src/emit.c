@@ -2666,9 +2666,15 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "#include <setjmp.h>\n");
     /* Phase T19: Thread primitives - pthread on all supported platforms */
     buf_puts(out, "#include <pthread.h>\n");
+    /* Phase T21: Fiber context switching via ucontext_t (POSIX; deprecated on
+     * macOS but present; suppress warning). */
+    buf_puts(out, "#define _XOPEN_SOURCE 700\n");
+    buf_puts(out, "#include <ucontext.h>\n");
+    buf_puts(out, "#undef _XOPEN_SOURCE\n");
     /* Phase 5: Declare malloc and free for ref<T> without including stdlib.h
      * to avoid conflicts with user-declared functions like exit. */
     buf_puts(out, "extern void *malloc(size_t);\n");
+    buf_puts(out, "extern void *calloc(size_t, size_t);\n");
     buf_puts(out, "extern void free(void *);\n");
     /* Phase 9: Declare abort and memset for rc<T> support */
     buf_puts(out, "extern void abort(void);\n");
@@ -2847,7 +2853,7 @@ int emit_program(Buf *out, const Expr *program) {
      * Each tur_effect_perform call allocates one on the stack and passes its
      * address as `k` to the handler function.  `consumed` is set by (resume k v)
      * so that (cont? k) can verify freshness at runtime. */
-    buf_puts(out, "typedef struct { bool consumed; } TurContK;\n\n");
+    buf_puts(out, "typedef struct { bool consumed; void *origin_fiber; } TurContK;\n\n");
     buf_puts(out, "typedef struct EffectHandlerCase EffectHandlerCase;\n");
     buf_puts(out, "struct EffectHandlerCase {\n");
     buf_puts(out, "    const char *effect_name;\n");
@@ -2860,14 +2866,85 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    int n_cases;\n");
     buf_puts(out, "    EffectHandlerCase cases[8];\n");
     buf_puts(out, "};\n\n");
+        /* Phase T21-A/B: FiberBlock — cooperative fiber runtime via ucontext_t.
+     * tur_current_fiber is thread-local; set/restored by tur_fiber_block_resume.
+     * tur_effect_perform checks tur_current_fiber->handler_chain for fiber-local
+     * effect handler chains (Phase T21-B). */
+    buf_puts(out, "/* Phase T21: FiberBlock */\n");
+    buf_puts(out, "#ifdef __clang__\n");
+    buf_puts(out, "#pragma clang diagnostic push\n");
+    buf_puts(out, "#pragma clang diagnostic ignored \"-Wdeprecated-declarations\"\n");
+    buf_puts(out, "#endif\n");
+    buf_puts(out, "typedef struct FiberBlock FiberBlock;\n");
+    buf_puts(out, "struct FiberBlock {\n");
+    buf_puts(out, "    ucontext_t ctx;\n");
+    buf_puts(out, "    ucontext_t caller_ctx;\n");
+    buf_puts(out, "    char *stack;\n");
+    buf_puts(out, "    size_t stack_size;\n");
+    buf_puts(out, "    int done;\n");
+    buf_puts(out, "    int64_t result;\n");
+    buf_puts(out, "    int64_t arg;\n");
+    buf_puts(out, "    void *handler_chain;\n");
+    buf_puts(out, "    void (*entry_fn)(void);\n");
+    buf_puts(out, "};\n\n");
+    buf_puts(out, "static __thread FiberBlock *tur_current_fiber = NULL;\n\n");
+    buf_puts(out, "static void tur_fiber_shim(uint32_t hi, uint32_t lo) {\n");
+    buf_puts(out, "    FiberBlock *f = (FiberBlock *)(((uintptr_t)hi << 32) | (uintptr_t)(uint32_t)lo);\n");
+    buf_puts(out, "    f->entry_fn();\n");
+    buf_puts(out, "    f->done = 1;\n");
+    buf_puts(out, "    swapcontext(&f->ctx, &f->caller_ctx);\n");
+    buf_puts(out, "    abort();\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static FiberBlock *tur_fiber_block_new(void (*fn)(void), size_t stack_size) {\n");
+    buf_puts(out, "    if (!stack_size) stack_size = 1024 * 1024;\n");
+    buf_puts(out, "    FiberBlock *f = (FiberBlock *)calloc(1, sizeof(FiberBlock));\n");
+    buf_puts(out, "    if (!f) { fprintf(stderr, \"fiber: oom\\n\"); abort(); }\n");
+    buf_puts(out, "    f->stack = (char *)malloc(stack_size);\n");
+    buf_puts(out, "    if (!f->stack) { free(f); abort(); }\n");
+    buf_puts(out, "    f->stack_size = stack_size; f->entry_fn = fn; f->done = 0;\n");
+    buf_puts(out, "    getcontext(&f->ctx);\n");
+    buf_puts(out, "    f->ctx.uc_stack.ss_sp = f->stack;\n");
+    buf_puts(out, "    f->ctx.uc_stack.ss_size = stack_size;\n");
+    buf_puts(out, "    f->ctx.uc_link = NULL;\n");
+    buf_puts(out, "    uintptr_t _fp = (uintptr_t)f;\n");
+    buf_puts(out, "    uint32_t _hi = (uint32_t)(_fp >> 32);\n");
+    buf_puts(out, "    uint32_t _lo = (uint32_t)(_fp & 0xFFFFFFFFU);\n");
+    buf_puts(out, "    makecontext(&f->ctx, (void(*)(void))tur_fiber_shim, 2, _hi, _lo);\n");
+    buf_puts(out, "    return f;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static int64_t tur_fiber_block_resume(FiberBlock *f, int64_t arg) {\n");
+    buf_puts(out, "    if (!f || f->done) return f ? f->result : 0;\n");
+    buf_puts(out, "    FiberBlock *_prev = tur_current_fiber;\n");
+    buf_puts(out, "    tur_current_fiber = f;\n");
+    buf_puts(out, "    f->arg = arg;\n");
+    buf_puts(out, "    swapcontext(&f->caller_ctx, &f->ctx);\n");
+    buf_puts(out, "    tur_current_fiber = _prev;\n");
+    buf_puts(out, "    return f->result;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static void tur_fiber_block_yield(int64_t value) {\n");
+    buf_puts(out, "    FiberBlock *f = tur_current_fiber;\n");
+    buf_puts(out, "    if (!f) { fprintf(stderr, \"fiber-yield: not in fiber\\n\"); abort(); }\n");
+    buf_puts(out, "    f->result = value;\n");
+    buf_puts(out, "    swapcontext(&f->ctx, &f->caller_ctx);\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static void tur_fiber_block_free(FiberBlock *f) {\n");
+    buf_puts(out, "    if (!f) return; free(f->stack); free(f);\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "#ifdef __clang__\n");
+    buf_puts(out, "#pragma clang diagnostic pop\n");
+    buf_puts(out, "#endif\n\n");
     buf_puts(out, "static __thread EffectHandlerFrame *global_effect_handler_chain = NULL;\n\n");
     buf_puts(out, "static int64_t tur_effect_perform(const char *name, int64_t *args, int n_args) {\n");
-    buf_puts(out, "    EffectHandlerFrame *frame = global_effect_handler_chain;\n");
+        /* T21-B: use fiber-local handler chain when inside a fiber */
+    buf_puts(out, "    EffectHandlerFrame *frame =\n");
+    buf_puts(out, "        (tur_current_fiber && tur_current_fiber->handler_chain)\n");
+    buf_puts(out, "        ? (EffectHandlerFrame *)tur_current_fiber->handler_chain\n");
+    buf_puts(out, "        : global_effect_handler_chain;\n");
     buf_puts(out, "    while (frame) {\n");
     buf_puts(out, "        for (int __i = 0; __i < frame->n_cases; __i++) {\n");
     buf_puts(out, "            if (strcmp(frame->cases[__i].effect_name, name) == 0) {\n");
     /* Phase P19-5: allocate a fresh TurContK on the stack per invocation */
-    buf_puts(out, "                TurContK __fresh_k = {false};\n");
+    buf_puts(out, "                TurContK __fresh_k = {false, tur_current_fiber};\n");
     buf_puts(out, "                return frame->cases[__i].handler_fn(args, n_args, (int64_t)(intptr_t)&__fresh_k, frame->cases[__i].env);\n");
     buf_puts(out, "            }\n");
     buf_puts(out, "        }\n");
