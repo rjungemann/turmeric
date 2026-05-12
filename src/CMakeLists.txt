@@ -6,7 +6,6 @@ cmake_minimum_required(VERSION 3.20)
 set(TUR_SOURCES
     arc.c
     arena.c
-    atomic_queue.c
     borrow_check.c
     buf.c
     builtins.c
@@ -32,7 +31,6 @@ set(TUR_SOURCES
     rc.c
     reader.c
     runtime.c
-    scheduler.c
     symbols.c
     typeclass.c
     types.c
@@ -51,7 +49,7 @@ add_executable(tur ${TUR_SOURCES})
 
 # Common warning flags
 target_compile_options(tur PRIVATE
-    -Wall -Wextra -Werror -Wno-unused-parameter -std=c99 -pedantic
+    -Wall -Wextra -Werror -Wno-unused-parameter -std=c11 -pedantic
 )
 
 # Per-build-type flags
@@ -60,6 +58,10 @@ target_compile_options(tur PRIVATE
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
     $<$<CONFIG:TSan>:    -O1 -g -fsanitize=thread>
 )
+
+# Phase T19: Fiber work requires pthread for spinlocks
+target_compile_options(tur PRIVATE -pthread)
+target_link_options(tur PRIVATE -pthread)
 
 target_link_options(tur PRIVATE
     $<$<CONFIG:Debug>:   -fsanitize=address,undefined>

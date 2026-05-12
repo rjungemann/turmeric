@@ -3535,6 +3535,8 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "static __thread FiberBlock *tur_current_fiber = NULL;\n");
     /* Phase T22: Cooperative cancellation flag */
     buf_puts(out, "static __thread bool tur_fiber_cancelled_flag = false;\n\n");
+    /* Phase T22: TaskGroup notification forward declaration */
+    buf_puts(out, "static void tur_task_group_notify_done(void *task_group);\n\n");
     buf_puts(out, "static void tur_fiber_shim(uint32_t hi, uint32_t lo) {\n");
     buf_puts(out, "    FiberBlock *f = (FiberBlock *)(((uintptr_t)hi << 32) | (uintptr_t)(uint32_t)lo);\n");
     buf_puts(out, "    f->entry_fn();\n");
