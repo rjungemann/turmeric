@@ -31,6 +31,7 @@
 #include "cps.h"          /* Phase 18: CPS transformation */
 #include "diag.h"
 #include "effect_check.h" /* Phase P19-2: effect-row inference */
+#include "effect.h"       /* built-in effect registration */
 #include "kind_check.h"   /* Phase HKT H0: kind inference pass */
 #include "elab.h"
 #include "emit.h"
@@ -125,6 +126,9 @@ static int run_core_passes(PassContext *ctx) {
         case PASS_EFFECT_LOWER:
             /* Phase 19: transform perform/handle into shift/reset. */
             ctx->effect_env = effect_env_new(ctx->arena);
+            effect_env_register_builtin_unsafe(
+                ctx->effect_env, ctx->arena,
+                symtab_intern(ctx->st, strslice(EFFECT_NAME_UNSAFE, 6)));
             ctx->prog = effect_lower(ctx->arena, ctx->st,
                                      ctx->prog, ctx->effect_env);
             if (!ctx->prog || diag_had_error()) return 1;

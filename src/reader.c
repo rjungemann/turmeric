@@ -24,6 +24,8 @@ typedef struct Reader {
 /* Forward declarations for neoteric support */
 static int peek_neoteric_bracket(const Reader *r);
 static Form *read_neoteric_bracket(Reader *r, Form *atom, int bracket);
+static Form *read_seq(Reader *r, char open, char close, FormTag tag,
+                      const char *unterminated_msg);
 
 static Span span_from_to(const Reader *r,
                          uint32_t start_line, uint32_t start_col,
@@ -463,14 +465,22 @@ static Form *read_quasiquote(Reader *r) {
     return form_quasiquote(r->arena, span_from_to(r, start_line, start_col, start_off, inner->span.off_end), inner);
 }
 
-static Form *read_deref(struct Reader *r) {
-    /* Phase 5: (@ expr) reader macro - read as (deref expr) */
+static Form *read_at(struct Reader *r) {
+    /* '@' prefix has two roles:
+     *   1) Deref sugar: @x / @ x -> (deref x)
+     *   2) Effect-row annotation sugar: @{...} / @ {...} -> F_MAP {...}
+     */
     uint32_t start_line = r->line;
     uint32_t start_col = r->col;
     size_t start_off = r->pos;
     advance(r); /* consume '@' */
     skip_ws_and_comments(r);
-    
+
+    /* Effect-row annotation sugar for signatures. */
+    if (peek(r) == '{') {
+        return read_seq(r, '{', '}', F_MAP, "unterminated effect row (missing '}')");
+    }
+
     if (peek(r) == -1) {
         Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
         diag_emit(DIAG_ERROR, s, "@ requires an expression after it");
@@ -481,7 +491,7 @@ static Form *read_deref(struct Reader *r) {
     Form *inner = read_form(r);
     if (!inner) return NULL;
     
-    /* Create a list: (deref inner) */
+    /* Create a list: (deref inner). */
     Form **items = (Form **)arena_alloc(r->arena, 2 * sizeof(Form *));
     const Symbol *deref_sym = symtab_intern(r->st, strslice("deref", 5));
     items[0] = form_sym(r->arena, span_from_to(r, start_line, start_col, start_off, start_off + 1), deref_sym);
@@ -1006,8 +1016,8 @@ static Form *read_form(Reader *r) {
         }
     }
     if (c >= '0' && c <= '9') return read_number(r, 0);
-    /* Phase 5: @ as deref operator */
-    if (c == '@') return read_deref(r);
+    /* '@' as deref/effect-row prefix */
+    if (c == '@') return read_at(r);
     /* Phase 6: ' as quote operator */
     if (c == '\'') return read_quote(r);
     /* Phase 6: ~ as unquote operator (only valid inside quasiquote) */

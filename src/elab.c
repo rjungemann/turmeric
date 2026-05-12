@@ -380,6 +380,7 @@ typedef struct Elab {
     const Symbol *sym_try_with;   /* try-with (sugar for handle) */
     const Symbol *sym_resume;     /* resume */
     const Symbol *sym_discontinue;/* discontinue */
+    const Symbol *sym_effect_unsafe; /* built-in effect name: Unsafe */
     /* Phase 10: GC */
     const Symbol *sym_gc_force;    /* gc! */
     const Symbol *sym_gc_enable;   /* gc-enable! */
@@ -781,6 +782,8 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_resume = intern_cstr(st, "resume");
     e->sym_discontinue = intern_cstr(st, "discontinue");
     e->sym_cont_pred = intern_cstr(st, "cont?");
+    e->sym_effect_unsafe = intern_cstr(st, EFFECT_NAME_UNSAFE);
+    effect_env_register_builtin_unsafe(e->effect_env, e->arena, e->sym_effect_unsafe);
     /* Phase 19 TUR-E0008: Effect scope tracking */
     e->handled_effect_names = NULL;
     e->n_handled_effects = 0;
@@ -1728,6 +1731,31 @@ static Expr *elab_set_deref(Elab *e, const Form *call, const Form *deref_form);
 
 static int form_is_symbol_named(const Form *f, const Symbol *name) {
     return f && f->tag == F_SYM && f->as.sym == name;
+}
+
+static bool effect_row_contains_symbol(const EffectRow *row, const Symbol *name) {
+    if (!row || !name) return false;
+    switch (row->kind) {
+    case ERK_EMPTY:
+        return false;
+    case ERK_CONCRETE:
+        for (uint8_t i = 0; i < row->as.concrete.n_effects; i++) {
+            Effect *eff = row->as.concrete.effects[i];
+            if (eff && eff->name == name) return true;
+        }
+        return false;
+    case ERK_VAR:
+        return false;
+    case ERK_UNION:
+        return effect_row_contains_symbol(row->as.union_.left, name) ||
+               effect_row_contains_symbol(row->as.union_.right, name);
+    case ERK_UNRESOLVED:
+        for (uint8_t i = 0; i < row->as.unresolved.n_sym_names; i++) {
+            if (row->as.unresolved.sym_names[i] == name) return true;
+        }
+        return false;
+    }
+    return false;
 }
 
 static Expr *e_nil(Elab *e, Span span) {
@@ -4226,6 +4254,8 @@ static Expr *elab_defn(Elab *e, const Form *call) {
             body_start = 4;
         }
     }
+    bool fn_declared_unsafe =
+        effect_row_contains_symbol(declared_effect_row_defn, e->sym_effect_unsafe);
 
     /* Check for : return-type annotation */
     if (call->as.list.len >= (body_start + 1)) {
@@ -4281,19 +4311,33 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     Expr *body = e_nil(e, call->span);
     uint32_t n_body = call->as.list.len - body_start;
     e->fn_body_depth++;
+    if (fn_declared_unsafe) e->unsafe_depth++;
     if (n_body == 1) {
         body = elab_form(e, call->as.list.items[body_start]);
-        if (!body) { e->fn_body_depth--; e->scope = inner.parent; scope_free(&inner); return NULL; }
+        if (!body) {
+            if (fn_declared_unsafe) e->unsafe_depth--;
+            e->fn_body_depth--;
+            e->scope = inner.parent;
+            scope_free(&inner);
+            return NULL;
+        }
     } else {
         Expr **items = (Expr **)arena_alloc(e->arena, n_body * sizeof(Expr *));
         for (uint32_t i = 0; i < n_body; i++) {
             items[i] = elab_form(e, call->as.list.items[body_start + i]);
-            if (!items[i]) { e->fn_body_depth--; e->scope = inner.parent; scope_free(&inner); return NULL; }
+            if (!items[i]) {
+                if (fn_declared_unsafe) e->unsafe_depth--;
+                e->fn_body_depth--;
+                e->scope = inner.parent;
+                scope_free(&inner);
+                return NULL;
+            }
         }
         body = expr_new(e->arena, EX_DO, items[n_body - 1]->type, call->span);
         body->as.do_.items = items;
         body->as.do_.n = n_body;
     }
+    if (fn_declared_unsafe) e->unsafe_depth--;
     e->fn_body_depth--;
 
     /* Pop scope */
@@ -4423,6 +4467,8 @@ static Expr *elab_fn(Elab *e, const Form *call) {
             body_start = 3;
         }
     }
+    bool fn_declared_unsafe =
+        effect_row_contains_symbol(declared_effect_row_fn, e->sym_effect_unsafe);
 
     /* Check for : return-type annotation */
     if (call->as.list.len >= (body_start + 1)) {
@@ -4478,19 +4524,33 @@ static Expr *elab_fn(Elab *e, const Form *call) {
     Expr *body = e_nil(e, call->span);
     uint32_t n_body = call->as.list.len - body_start;
     e->fn_body_depth++;
+    if (fn_declared_unsafe) e->unsafe_depth++;
     if (n_body == 1) {
         body = elab_form(e, call->as.list.items[body_start]);
-        if (!body) { e->fn_body_depth--; e->scope = inner.parent; scope_free(&inner); /* params is arena-allocated */ return NULL; }
+        if (!body) {
+            if (fn_declared_unsafe) e->unsafe_depth--;
+            e->fn_body_depth--;
+            e->scope = inner.parent;
+            scope_free(&inner);
+            return NULL;
+        }
     } else {
         Expr **items = (Expr **)arena_alloc(e->arena, n_body * sizeof(Expr *));
         for (uint32_t i = 0; i < n_body; i++) {
             items[i] = elab_form(e, call->as.list.items[body_start + i]);
-            if (!items[i]) { e->fn_body_depth--; e->scope = inner.parent; scope_free(&inner); /* params is arena-allocated */ return NULL; }
+            if (!items[i]) {
+                if (fn_declared_unsafe) e->unsafe_depth--;
+                e->fn_body_depth--;
+                e->scope = inner.parent;
+                scope_free(&inner);
+                return NULL;
+            }
         }
         body = expr_new(e->arena, EX_DO, items[n_body - 1]->type, call->span);
         body->as.do_.items = items;
         body->as.do_.n = n_body;
     }
+    if (fn_declared_unsafe) e->unsafe_depth--;
     e->fn_body_depth--;
 
     /* Phase 3: Capture analysis - collect free variables in the body */
@@ -5121,6 +5181,15 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
     if (fn_type.kind != TY_FN && fn_type.kind != TY_CONT) {
         diag_emit(DIAG_ERROR, call->span,
                   "'%s' is not a function or continuation", fn_binding->name->name);
+        return NULL;
+    }
+
+    if (fn_type.kind == TY_FN &&
+        e->unsafe_depth == 0 &&
+        effect_row_contains_symbol(fn_type.as.fn.effect_row, e->sym_effect_unsafe)) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "unsafe function '%s' requires an enclosing (unsafe ...)",
+                  fn_binding->name->name);
         return NULL;
     }
 

@@ -27,6 +27,18 @@ typedef struct {
     uint32_t n;
 } FnIndex;
 
+static Effect *find_unsafe_effect(EffectEnv *env) {
+    if (!env) return NULL;
+    for (uint32_t i = 0; i < env->n_effects; i++) {
+        Effect *eff = env->effects[i];
+        if (eff && eff->name && eff->name->name &&
+            strcmp(eff->name->name, EFFECT_NAME_UNSAFE) == 0) {
+            return eff;
+        }
+    }
+    return NULL;
+}
+
 static void fn_index_add(FnIndex *idx, const Binding *b, FnDef *fn) {
     if (idx->n >= FN_INDEX_CAP) return; /* silently drop if full */
     idx->entries[idx->n].binding = b;
@@ -85,6 +97,15 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
             EffectRow *callee_row =
                 effect_row_apply_subst(callee->inferred_effect_row, subst, a);
             row = effect_row_merge(a, row, callee_row);
+            /* Explicit unsafe annotation on the callee should also propagate. */
+            Effect *unsafe_eff = find_unsafe_effect(env);
+            if (callee->binding &&
+                callee->binding->type.kind == TY_FN &&
+                callee->binding->type.as.fn.effect_row &&
+                unsafe_eff &&
+                effect_row_contains(callee->binding->type.as.fn.effect_row, unsafe_eff)) {
+                row = effect_row_merge(a, row, effect_row_single(a, unsafe_eff));
+            }
         } else if (e->as.call_.fn_binding) {
             /* Callee not in the top-level index (e.g., a higher-order param).
              * If the binding's declared effect row has been resolved via the
@@ -207,11 +228,25 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
     case EX_REF:
         return collect_effects_in_expr(a, e->as.ref_.expr, row, idx, env, subst);
     case EX_DEREF:
+        if (e->as.deref_.expr && e->as.deref_.expr->type.kind == TY_PTR_VOID) {
+            Effect *unsafe_eff = find_unsafe_effect(env);
+            if (unsafe_eff) row = effect_row_merge(a, row, effect_row_single(a, unsafe_eff));
+        }
         return collect_effects_in_expr(a, e->as.deref_.expr, row, idx, env, subst);
 
     case EX_BORROW_IMMUT:
+        if (e->as.borrow_immut_.expr &&
+            e->as.borrow_immut_.expr->type.kind == TY_PTR_VOID) {
+            Effect *unsafe_eff = find_unsafe_effect(env);
+            if (unsafe_eff) row = effect_row_merge(a, row, effect_row_single(a, unsafe_eff));
+        }
         return collect_effects_in_expr(a, e->as.borrow_immut_.expr, row, idx, env, subst);
     case EX_BORROW_MUT:
+        if (e->as.borrow_mut_.expr &&
+            e->as.borrow_mut_.expr->type.kind == TY_PTR_VOID) {
+            Effect *unsafe_eff = find_unsafe_effect(env);
+            if (unsafe_eff) row = effect_row_merge(a, row, effect_row_single(a, unsafe_eff));
+        }
         return collect_effects_in_expr(a, e->as.borrow_mut_.expr, row, idx, env, subst);
 
     case EX_RC_OF:
