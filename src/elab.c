@@ -4078,6 +4078,19 @@ static Expr *elab_defn(Elab *e, const Form *call) {
             /* Look up the typeclass (skip the ^ character) */
             const char *tc_name_str = constraint_name->name + 1;  /* Skip '^' */
             uint32_t tc_name_len = constraint_name->len - 1;
+
+            /* Phase HKT H0: Detect kind-variable syntax (^f where f starts with
+             * a lowercase letter).  Kind variables are reserved for v2 HKT; emit
+             * a clear "not yet supported" diagnostic instead of a confusing
+             * "typeclass 'f' is not defined" message. */
+            if (tc_name_len > 0 && tc_name_str[0] >= 'a' && tc_name_str[0] <= 'z') {
+                diag_emit(DIAG_ERROR, p->span,
+                          "kind variable annotation '^%.*s' in defn is not yet supported "
+                          "(Phase HKT): kind variables require higher-kinded type support",
+                          tc_name_len, tc_name_str);
+                return NULL;
+            }
+
             /* Create symbol for typeclass name */
             char tmp_name[64];
             snprintf(tmp_name, sizeof(tmp_name), "%.*s", tc_name_len, tc_name_str);

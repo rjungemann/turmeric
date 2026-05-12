@@ -6,7 +6,7 @@
  *   2. Adding a case in the run_core_passes() switch in main.c.
  *
  * Current pipeline order:
- *   PASS_ELABORATE → PASS_EFFECT_LOWER → PASS_EFFECT_ROW_INFER →
+ *   PASS_ELABORATE → PASS_KIND_CHECK → PASS_EFFECT_LOWER → PASS_EFFECT_ROW_INFER →
  *   PASS_CPS → PASS_BORROW_CHECK
  *
  * The emit step is NOT a PassKind because the three emit variants
@@ -30,6 +30,7 @@
  * run_core_passes().  New passes are inserted here and in the switch. */
 typedef enum PassKind {
     PASS_ELABORATE,        /* Form* → typed Expr (elaboration + type checking)      */
+    PASS_KIND_CHECK,       /* kind inference and validation (Phase HKT H0)          */
     PASS_EFFECT_LOWER,     /* perform/handle → shift/reset (effect lowering)         */
     PASS_EFFECT_ROW_INFER, /* infer and validate effect rows per function (P19-2)    */
     PASS_CPS,              /* continuation-passing-style transform for shift/reset   */

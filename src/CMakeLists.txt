@@ -22,6 +22,7 @@ set(TUR_SOURCES
     forms.c
     gc.c
     interp.c
+    kind_check.c
     lifetime_elision.c
     lifetimes.c
     main.c
