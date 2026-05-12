@@ -1301,18 +1301,18 @@ See [backtracking-cloneable-continuations-plan.md](archive/backtracking-cloneabl
   - Confirmed: Phase 18 complete; `tur_cont_alloc`/`tur_cont_resume`/`tur_cont_drop` are implemented.
 - [x] Phase 19 (Algebraic effects v1) is stable — handler infrastructure is in place for hybrid integration.
   - Confirmed: Phase 19 v1 complete; `defeffect`/`defhandler`/`perform`/`handle` all work.
-- [ ] Decide `Clone` vs `Copy` distinction: is `Clone` always deep? Is there a separate zero-cost `Copy` marker for bit-copyable types?
-  - Pending decision. Recommendation: `Clone` is always deep (allocates new memory); `Copy` is a future zero-cost marker (`int`, `bool`, `cstr` are `Copy`; `Copy` implies `Clone`). Ship `Clone` only in B1; reserve `Copy` for a later phase.
-- [ ] Decide `rc<T>` clone semantics: refcount increment (shallow) vs. deep clone of pointed-to value.
-  - Pending decision. See Phase B1 design: recommendation is refcount-increment for `rc<T>` (shared ownership), deep clone for `ref<T>` (independent ownership).
-- [ ] Confirm `cloneable-reset` / `cloneable-shift` syntax does not conflict with Phase 18 `reset`/`shift` in the reader or elaborator.
-  - Pending check. Both surface forms can coexist as separate elaboration branches (`elab_reset` vs. `elab_cloneable_reset`).
-- [ ] Define error codes TUR-E00YY (non-`Clone` capture) and TUR-E00YZ (`cloneable-shift` outside `cloneable-reset`).
-  - Pending: assign next available error codes when B1 elaborator work begins.
-- [ ] Decide whether `stdlib/logic.tur` depends on Phase P2 HAMT (`stdlib/hamt.tur`) for the persistent substitution map, or falls back to an association list.
-  - Pending decision. Recommendation: use association list in B4 v1; add a `(with-hamt-subst ...)` optimised variant when HAMT ships.
-- [ ] Define `--backtrack-depth N` flag design: per-call-site cap, global cap, or both?
-  - Pending decision. Recommendation: global cap applied at every `run-backtrack` call; per-call override via keyword argument `:depth N`.
+- [x] Decide `Clone` vs `Copy` distinction: is `Clone` always deep? Is there a separate zero-cost `Copy` marker for bit-copyable types?
+  - Decision: `Clone` is always deep (allocates new memory). `Copy` is a separate zero-cost marker trait for bit-copyable types (`int`, `bool`, `cstr` are `Copy`). `Copy` implies `Clone` (automatic blanket implementation). Ship `Clone` only in B1; `Copy` is reserved for a later phase.
+- [x] Decide `rc<T>` clone semantics: refcount increment (shallow) vs. deep clone of pointed-to value.
+  - Decision: `rc<T>` uses refcount increment (shallow clone, shared ownership). `ref<T>` uses deep clone (independent ownership, allocates new memory). This is documented in the Clone instance implementations.
+- [x] Confirm `cloneable-reset` / `cloneable-shift` syntax does not conflict with Phase 18 `reset`/`shift` in the reader or elaborator.
+  - Decision: No conflict. Both surface forms coexist as separate elaboration branches. `reset`/`shift` elaborate via `elab_reset`/`elab_shift`; `cloneable-reset`/`cloneable-shift` elaborate via `elab_cloneable_reset`/`elab_cloneable_shift`. The reader parses both identically; elaboration dispatch is based on the symbol name.
+- [x] Define error codes TUR-E00YY (non-`Clone` capture) and TUR-E00YZ (`cloneable-shift` outside `cloneable-reset`).
+  - Decision: Assign `TUR_E0014_NON_CLONE_CAPTURE` for captures of non-`Clone` types in cloneable continuations. Assign `TUR_E0015_CLONEABLE_SHIFT_OUTSIDE_RESET` for `cloneable-shift` used outside a `cloneable-reset` scope. Add to `DiagCode` enum in `src/diag.h` and `diag_code_to_string()` in `src/diag.c`.
+- [x] Decide whether `stdlib/logic.tur` depends on Phase P2 HAMT (`stdlib/hamt.tur`) for the persistent substitution map, or falls back to an association list.
+  - Decision: Use association list in B4 v1 for the persistent substitution map. Add a `(with-hamt-subst ...)` optimized variant when HAMT ships (Phase P2). The association list is simpler and sufficient for v1 workloads.
+- [x] Define `--backtrack-depth N` flag design: per-call-site cap, global cap, or both?
+  - Decision: Global cap applied at every `run-backtrack` call via `--backtrack-depth N` compiler flag (default: 1000). Per-call override via keyword argument `:depth N` in `run-backtrack` (e.g., `(run-backtrack :depth 5000 body)`). The global flag sets a default; per-call overrides take precedence.
 
 ---
 
