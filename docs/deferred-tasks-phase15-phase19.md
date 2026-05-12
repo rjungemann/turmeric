@@ -625,11 +625,13 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 - [ ] Add negative fixture `unsafe-leak.tur`.
 
 #### U2 — `unsafe { }` block sugar
-- [ ] Parse `(unsafe expr...)` form in reader.
+- [x] Parse `(unsafe expr...)` form in reader.
+  - Implemented: `unsafe` is now a recognized special form in `src/elab.c` (`elab_unsafe`) and elaborates like `do` while entering an unsafe context.
 - [ ] Desugar to `try_with` with an `Unsafe` handler that discharges the effect within the block.
 - [ ] Enforce containment: `unsafe` block cannot leak `Unsafe` to caller.
 - [ ] Warn on empty and oversized `unsafe` blocks (configurable threshold).
-- [ ] Add fixtures: `unsafe-basic.tur`, `unsafe-nested.tur`, `unsafe-defer.tur`.
+- [x] Add fixtures: `unsafe-basic.tur`, `unsafe-nested.tur`, `unsafe-defer.tur`.
+  - Implemented: `tests/fixtures/unsafe-basic/`, `tests/fixtures/unsafe-nested/`, and `tests/fixtures/unsafe-defer/` validate ptr<void>-borrow usage inside unsafe blocks (including nested and defer cases).
 - [ ] Add negative fixture: `unsafe-empty.tur` (warning on empty block).
 - [ ] Add codegen snapshots for `unsafe` block lowering.
 
