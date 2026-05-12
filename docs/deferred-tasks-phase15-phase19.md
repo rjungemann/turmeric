@@ -317,9 +317,9 @@ See [hkt-implementation-plan.md](hkt-implementation-plan.md) for the complete ro
 - [x] Add `Kind` field to `TypeVar` struct. (added as `type_param_kinds` on `TypeClass`)
 - [x] Add `Kind` field to `Type` struct for concrete types. (added `hkt_kind`)
 - [x] Implement `kind_eq()`, `kind_to_string()`, `kind_parse()`.
-- [ ] Implement kind inference pass (`src/kind_check.c`).
-- [ ] Reserve kind syntax (`: * -> *` annotations, `^f : * -> *` in `defn`/`defclass`).
-- [ ] Error on kind syntax use in v1 mode.
+- [x] Implement kind inference pass (`src/kind_check.c`). (v1 stub: no-op pass wired as `PASS_KIND_CHECK` after `PASS_ELABORATE`)
+- [x] Reserve kind syntax (`: * -> *` annotations, `^f : * -> *` in `defn`/`defclass`). (`^f` lowercase in `defn` emits "not yet supported (Phase HKT)")
+- [x] Error on kind syntax use in v1 mode. (fixture: `errors/kinds-kind-variable`)
 - [x] Add fixtures: `kinds-basic.tur`, `kinds-error.tur`. (`kinds-inference.tur` deferred — requires kind inference pass)
 
 #### H1 — Kind-polymorphic typeclasses

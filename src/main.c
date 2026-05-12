@@ -31,6 +31,7 @@
 #include "cps.h"          /* Phase 18: CPS transformation */
 #include "diag.h"
 #include "effect_check.h" /* Phase P19-2: effect-row inference */
+#include "kind_check.h"   /* Phase HKT H0: kind inference pass */
 #include "elab.h"
 #include "emit.h"
 #include "effect_lower.h" /* Phase 19: Effect lowering */
@@ -97,6 +98,7 @@ static int read_entire_file(const char *path, char **out, size_t *out_len) {
  * and add the case in run_core_passes() below.                              */
 static const PassKind core_passes[] = {
     PASS_ELABORATE,
+    PASS_KIND_CHECK,
     PASS_EFFECT_LOWER,
     PASS_EFFECT_ROW_INFER,  /* P19-2: stub slot — no-op until inference lands */
     PASS_CPS,
@@ -114,6 +116,11 @@ static int run_core_passes(PassContext *ctx) {
             ctx->prog = elaborate_program(ctx->arena, ctx->st,
                                           ctx->forms, ctx->nforms);
             if (!ctx->prog || diag_had_error()) return 1;
+            break;
+        case PASS_KIND_CHECK:
+            /* Phase HKT H0: kind inference and validation pass (v1 stub). */
+            if (kind_check_pass(ctx->arena, ctx->prog) != 0)
+                return 1;
             break;
         case PASS_EFFECT_LOWER:
             /* Phase 19: transform perform/handle into shift/reset. */
