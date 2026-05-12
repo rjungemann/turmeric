@@ -45,6 +45,9 @@ TypeClassInstance *typeclass_env_register_instance(TypeClassEnv *env, TypeClass 
     inst->n_method_impls = 0;
     inst->constraints = NULL;
     inst->n_constraints = 0;
+    /* Phase PTC1: Type parameter constraints */
+    inst->type_param_constraints = NULL;
+    inst->n_type_param_constraints = 0;
     inst->next = env->instances;
     env->instances = inst;
     

@@ -9,6 +9,7 @@
 
 /* Forward declarations */
 typedef struct TypeClassMethod TypeClassMethod;
+typedef struct TypeConstraint TypeConstraint;
 
 /* A method in a typeclass */
 struct TypeClassMethod {
@@ -53,6 +54,11 @@ struct TypeClassInstance {
     /* Constraints on type parameters (e.g., Eq a => Eq (List a)) */
     TypeClassInstance **constraints;
     uint8_t n_constraints;
+    /* Phase PTC1: Type parameter constraints (e.g., [Clone a, Clone b] in Clone [Pair a b])
+     * These are constraints that the type parameters must satisfy.
+     * Stored as TypeConstraint array for better type info tracking. */
+    TypeConstraint *type_param_constraints;
+    uint8_t n_type_param_constraints;
     /* Phase HKT-P4: file that defined this instance (for orphan instance check).
      * file_id mirrors Span.file_id; 0 means unknown. */
     uint16_t origin_file_id;

@@ -7851,6 +7851,170 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
         }
     }
     
+    /* Phase PTC1: Parse type parameter constraints (optional)
+     * Syntax: (definstance Clone [Pair a b] [(Clone a) (Clone b)] (clone [x] ...))
+     * Constraint vector is a vector of lists: [(Clone a) (Clone b)]
+     * Each constraint is a list (Clone a) where Clone is the typeclass and a is the type param.
+     * After type args at index 2, check for a constraint vector at index impls_start.
+     */
+    TypeConstraint *type_param_constraints = NULL;
+    uint8_t n_type_param_constraints = 0;
+    
+    if (call->as.list.len > impls_start) {
+        Form *next_form = call->as.list.items[impls_start];
+        if (next_form->tag == F_VEC && next_form->as.list.len > 0) {
+            /* Check if this is a constraint vector by looking at the first item */
+            /* If the first item is a list (F_LIST), it's likely [(Clone a) (Clone b)] */
+            /* If the first item is a symbol (F_SYM), it might be a flat [Clone a Clone b] vector */
+            bool is_constraint_vector = false;
+            if (next_form->as.list.len > 0) {
+                Form *first_item = next_form->as.list.items[0];
+                if (first_item->tag == F_LIST) {
+                    /* Vector of lists format: [(Clone a) (Clone b)] */
+                    is_constraint_vector = true;
+                    n_type_param_constraints = next_form->as.list.len;
+                } else if (next_form->as.list.len >= 2) {
+                    /* Could be flat format [Clone a Clone b ...] */
+                    /* Check if all items alternate between SYM (typeclass) and SYM/KEYWORD (type arg) */
+                    is_constraint_vector = true;
+                    n_type_param_constraints = next_form->as.list.len / 2;
+                }
+            }
+            
+            if (is_constraint_vector && n_type_param_constraints > 0) {
+                type_param_constraints = (TypeConstraint *)arena_alloc(
+                    e->arena, n_type_param_constraints * sizeof(TypeConstraint));
+                
+                Form *first_item = next_form->as.list.items[0];
+                if (first_item->tag == F_LIST) {
+                    /* Parse as vector of lists: [(Clone a) (Clone b)] */
+                    for (uint8_t i = 0; i < n_type_param_constraints; i++) {
+                        Form *constraint_form = next_form->as.list.items[i];
+                        if (constraint_form->tag != F_LIST || constraint_form->as.list.len < 1) {
+                            diag_emit(DIAG_ERROR, constraint_form->span,
+                                      "definstance: constraint must be a list like (Clone a), got tag %d with %d items",
+                                      constraint_form->tag, constraint_form->as.list.len);
+                            return NULL;
+                        }
+                        
+                        Form *tc_name_form = constraint_form->as.list.items[0];
+                        if (tc_name_form->tag != F_SYM) {
+                            diag_emit(DIAG_ERROR, tc_name_form->span,
+                                      "definstance: constraint typeclass name must be a symbol");
+                            return NULL;
+                        }
+                        
+                        TypeClass *constraint_tc = typeclass_env_lookup_typeclass(
+                            &e->typeclass_env, tc_name_form->as.sym);
+                        if (!constraint_tc) {
+                            diag_emit(DIAG_ERROR, tc_name_form->span,
+                                      "definstance: constraint typeclass '%s' is not defined",
+                                      tc_name_form->as.sym->name);
+                            return NULL;
+                        }
+                        
+                        /* Type argument being constrained (optional, at index 1) */
+                        Type constrained_type = TYPE_INT; /* Default */
+                        if (constraint_form->as.list.len >= 2) {
+                            Form *type_arg_form = constraint_form->as.list.items[1];
+                            if (type_arg_form->tag == F_SYM) {
+                                const Symbol *type_param_name = type_arg_form->as.sym;
+                                for (uint8_t j = 0; j < n_type_args; j++) {
+                                    if (type_arg_syms && type_arg_syms[j] &&
+                                        type_arg_syms[j] == type_param_name) {
+                                        constrained_type = type_args[j];
+                                        break;
+                                    }
+                                }
+                                if (constrained_type.kind == TY_INT) {
+                                    if (type_arg_form->as.sym->len == 3 &&
+                                        memcmp(type_arg_form->as.sym->name, "int", 3) == 0) {
+                                        constrained_type = TYPE_INT;
+                                    } else if (type_arg_form->as.sym->len == 4 &&
+                                               memcmp(type_arg_form->as.sym->name, "bool", 4) == 0) {
+                                        constrained_type = TYPE_BOOL;
+                                    } else if (type_arg_form->as.sym->len == 4 &&
+                                               memcmp(type_arg_form->as.sym->name, "cstr", 4) == 0) {
+                                        constrained_type = TYPE_CSTR;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        type_param_constraints[i] = (TypeConstraint){
+                            .typeclass = constraint_tc,
+                            .type_arg = constrained_type
+                        };
+                    }
+                } else {
+                    /* Parse as flat vector: [Clone a Clone b ...] */
+                    uint8_t n_items = next_form->as.list.len;
+                    if (n_items % 2 != 0) {
+                        diag_emit(DIAG_ERROR, next_form->span,
+                                  "definstance: flat constraint vector must have an even number of items");
+                        return NULL;
+                    }
+                    n_type_param_constraints = n_items / 2;
+                    /* Reallocate for flat format - old allocation will be GC'd with arena */
+                    type_param_constraints = (TypeConstraint *)arena_alloc(
+                        e->arena, n_type_param_constraints * sizeof(TypeConstraint));
+                    
+                    for (uint8_t i = 0; i < n_type_param_constraints; i++) {
+                        uint8_t idx = i * 2;
+                        Form *tc_name_form = next_form->as.list.items[idx];
+                        if (tc_name_form->tag != F_SYM) {
+                            diag_emit(DIAG_ERROR, tc_name_form->span,
+                                      "definstance: constraint typeclass name must be a symbol");
+                            return NULL;
+                        }
+                        
+                        TypeClass *constraint_tc = typeclass_env_lookup_typeclass(
+                            &e->typeclass_env, tc_name_form->as.sym);
+                        if (!constraint_tc) {
+                            diag_emit(DIAG_ERROR, tc_name_form->span,
+                                      "definstance: constraint typeclass '%s' is not defined",
+                                      tc_name_form->as.sym->name);
+                            return NULL;
+                        }
+                        
+                        Type constrained_type = TYPE_INT;
+                        if (idx + 1 < n_items) {
+                            Form *type_arg_form = next_form->as.list.items[idx + 1];
+                            if (type_arg_form->tag == F_SYM) {
+                                const Symbol *type_param_name = type_arg_form->as.sym;
+                                for (uint8_t j = 0; j < n_type_args; j++) {
+                                    if (type_arg_syms && type_arg_syms[j] &&
+                                        type_arg_syms[j] == type_param_name) {
+                                        constrained_type = type_args[j];
+                                        break;
+                                    }
+                                }
+                                if (constrained_type.kind == TY_INT) {
+                                    if (type_arg_form->as.sym->len == 3 &&
+                                        memcmp(type_arg_form->as.sym->name, "int", 3) == 0) {
+                                        constrained_type = TYPE_INT;
+                                    } else if (type_arg_form->as.sym->len == 4 &&
+                                               memcmp(type_arg_form->as.sym->name, "bool", 4) == 0) {
+                                        constrained_type = TYPE_BOOL;
+                                    } else if (type_arg_form->as.sym->len == 4 &&
+                                               memcmp(type_arg_form->as.sym->name, "cstr", 4) == 0) {
+                                        constrained_type = TYPE_CSTR;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        type_param_constraints[i] = (TypeConstraint){
+                            .typeclass = constraint_tc,
+                            .type_arg = constrained_type
+                        };
+                    }
+                }
+                impls_start++; /* Skip past the constraint vector */
+            }
+        }
+    }
+
     /* Validate type argument count matches typeclass parameters */
     if (n_type_args != tc->n_type_params) {
         diag_emit(DIAG_ERROR, call->span,
@@ -8183,6 +8347,9 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
     inst->type_arg_syms = type_arg_syms;  /* Phase HKT §1: store for dict naming */
     inst->method_impls = method_impls;
     inst->n_method_impls = tc->n_methods;
+    /* Phase PTC1: Store type parameter constraints */
+    inst->type_param_constraints = type_param_constraints;
+    inst->n_type_param_constraints = n_type_param_constraints;
     /* Phase HKT-P4: record the file that defined this instance. */
     inst->origin_file_id = call->span.file_id;
 
