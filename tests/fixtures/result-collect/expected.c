@@ -697,16 +697,244 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
-static void __defer_1(void *__env) {
-    puts("ref defer fired");
+static void * ok(int64_t);
+static void * err(int64_t);
+static bool ok_(void *);
+static bool err_(void *);
+static int64_t ok_val(void *);
+static void * ok_val_ptr(void *);
+static int64_t err_val(void *);
+static void * vec_new();
+static int64_t vec_len(void *);
+static int64_t vec_get(void *, int64_t);
+static void * vec_get_ptr(void *, int64_t);
+static void vec_push_(void *, int64_t);
+static void vec_push_ptr_(void *, void *);
+static void * result_collect(void *);
+static void * result_partition(void *);
+static void * result_partition_ok(void *);
+static void * result_partition_err(void *);
+
+static void * ok(int64_t x) {
+struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = true; r->ok_val = x; r->err_val = 0; return r;
+          return 0;
+}
+
+static void * err(int64_t e) {
+struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = false; r->ok_val = 0; r->err_val = e; return r;
+          return 0;
+}
+
+static bool ok_(void * r) {
+struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  return res != NULL && res->is_ok;
+          return false;
+}
+
+static bool err_(void * r) {
+struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  return res == NULL || !res->is_ok;
+          return false;
+}
+
+static int64_t ok_val(void * r) {
+struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  return (int)res->ok_val;
+          return 0;
+}
+
+static void * ok_val_ptr(void * r) {
+struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  return (void *)(intptr_t)res->ok_val;
+          return 0;
+}
+
+static int64_t err_val(void * r) {
+struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  return (int)res->err_val;
+          return 0;
+}
+
+static void * vec_new() {
+struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v->data = NULL; v->len = 0; v->cap = 0; return v;
+          return 0;
+}
+
+static int64_t vec_len(void * v) {
+struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  return (int)vec->len;
+          return 0;
+}
+
+static int64_t vec_get(void * v, int64_t i) {
+struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  if (i >= 0 && (size_t)i < vec->len) return (int)vec->data[i];
+  fprintf(stderr, "vec index out of bounds\n"); abort(); return 0;
+          return 0;
+}
+
+static void * vec_get_ptr(void * v, int64_t i) {
+struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  if (i >= 0 && (size_t)i < vec->len) return (void *)(intptr_t)vec->data[i];
+  fprintf(stderr, "vec index out of bounds\n"); abort(); return NULL;
+          return 0;
+}
+
+static void vec_push_(void * v, int64_t val) {
+        struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  if (vec->len >= vec->cap) {
+    size_t nc = vec->cap > 0 ? vec->cap * 2 : 4;
+    int64_t *nd = malloc(sizeof(int64_t) * nc);
+    for (size_t i = 0; i < vec->len; i++) nd[i] = vec->data[i];
+    free(vec->data); vec->data = nd; vec->cap = nc;
+  }
+  vec->data[vec->len++] = val;
+  
+}
+
+static void vec_push_ptr_(void * v, void * val) {
+        struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  if (vec->len >= vec->cap) {
+    size_t nc = vec->cap > 0 ? vec->cap * 2 : 4;
+    int64_t *nd = malloc(sizeof(int64_t) * nc);
+    for (size_t i = 0; i < vec->len; i++) nd[i] = vec->data[i];
+    free(vec->data); vec->data = nd; vec->cap = nc;
+  }
+  vec->data[vec->len++] = (int64_t)(intptr_t)val;
+  
+}
+
+static void * result_collect(void * v) {
+struct { int64_t *data; size_t len; size_t cap; } *vec =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *rp;
+  for (size_t i = 0; i < vec->len; i++) {
+    rp = (void *)(intptr_t)vec->data[i];
+    if (rp == NULL || !rp->is_ok) {
+      int64_t ev = rp ? rp->err_val : 0;
+      struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
+      out->is_ok = false; out->ok_val = 0; out->err_val = ev; return out;
+    }
+  }
+  struct { int64_t *data; size_t len; size_t cap; } *ov = malloc(sizeof(*ov));
+  ov->len = vec->len; ov->cap = vec->len;
+  ov->data = vec->len > 0 ? malloc(sizeof(int64_t) * vec->len) : NULL;
+  for (size_t i = 0; i < vec->len; i++) {
+    rp = (void *)(intptr_t)vec->data[i];
+    ov->data[i] = rp->ok_val;
+  }
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
+  out->is_ok = true; out->ok_val = (int64_t)(intptr_t)ov; out->err_val = 0;
+  return out;
+          return 0;
+}
+
+static void * result_partition(void * v) {
+struct { int64_t *data; size_t len; size_t cap; } *vec =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *rp;
+  struct { int64_t *data; size_t len; size_t cap; } *ov = malloc(sizeof(*ov));
+  ov->data = NULL; ov->len = 0; ov->cap = 0;
+  struct { int64_t *data; size_t len; size_t cap; } *ev2 = malloc(sizeof(*ev2));
+  ev2->data = NULL; ev2->len = 0; ev2->cap = 0;
+  for (size_t i = 0; i < vec->len; i++) {
+    rp = (void *)(intptr_t)vec->data[i];
+    int64_t val;
+    struct { int64_t *data; size_t len; size_t cap; } *dst;
+    if (rp != NULL && rp->is_ok) { val = rp->ok_val; dst = ov; }
+    else { val = rp ? rp->err_val : 0; dst = ev2; }
+    if (dst->len >= dst->cap) {
+      size_t nc = dst->cap > 0 ? dst->cap * 2 : 4;
+      int64_t *nd = malloc(sizeof(int64_t) * nc);
+      for (size_t j = 0; j < dst->len; j++) nd[j] = dst->data[j];
+      free(dst->data); dst->data = nd; dst->cap = nc;
+    }
+    dst->data[dst->len++] = val;
+  }
+  struct { void *ok_vec; void *err_vec; } *pair = malloc(sizeof(*pair));
+  pair->ok_vec = ov; pair->err_vec = ev2;
+  return pair;
+          return 0;
+}
+
+static void * result_partition_ok(void * pair) {
+struct { void *ok_vec; void *err_vec; } *p = (void*)pair;
+  return p->ok_vec;
+          return 0;
+}
+
+static void * result_partition_err(void * pair) {
+struct { void *ok_vec; void *err_vec; } *p = (void*)pair;
+  return p->err_vec;
+          return 0;
 }
 
 int main() {
-        tur_frame __frame_0;
-        tur_frame_init(&__frame_0, NULL);
-        tur_frame_push_defer(&__frame_0, __defer_1, NULL);
-        tur_panic_set_frame(&__frame_0);
-tur_panic("test panic with ref");
+        {
+            void * v1_38 = vec_new();
+            (void)v1_38;
+            vec_push_ptr_(v1_38, ok(INT64_C(10)));
+            vec_push_ptr_(v1_38, ok(INT64_C(20)));
+            vec_push_ptr_(v1_38, ok(INT64_C(30)));
+            {
+                void * c1_39 = result_collect(v1_38);
+                (void)c1_39;
+                puts((ok_(c1_39)) ? "true" : "false");
+                {
+                    void * ov_40 = ok_val_ptr(c1_39);
+                    (void)ov_40;
+                    printf("%lld\n", (long long)(vec_len(ov_40)));
+                    printf("%lld\n", (long long)(vec_get(ov_40, INT64_C(0))));
+                    printf("%lld\n", (long long)(vec_get(ov_40, INT64_C(1))));
+                    printf("%lld\n", (long long)(vec_get(ov_40, INT64_C(2))));
+                }
+            }
+        }
+        {
+            void * v2_41 = vec_new();
+            (void)v2_41;
+            vec_push_ptr_(v2_41, ok(INT64_C(1)));
+            vec_push_ptr_(v2_41, err(INT64_C(99)));
+            vec_push_ptr_(v2_41, ok(INT64_C(2)));
+            {
+                void * c2_42 = result_collect(v2_41);
+                (void)c2_42;
+                puts((err_(c2_42)) ? "true" : "false");
+                printf("%lld\n", (long long)(err_val(c2_42)));
+            }
+        }
+        {
+            void * v3_43 = vec_new();
+            (void)v3_43;
+            vec_push_ptr_(v3_43, ok(INT64_C(10)));
+            vec_push_ptr_(v3_43, err(INT64_C(1)));
+            vec_push_ptr_(v3_43, ok(INT64_C(20)));
+            vec_push_ptr_(v3_43, err(INT64_C(2)));
+            {
+                void * p_44 = result_partition(v3_43);
+                (void)p_44;
+                {
+                    void * oks_45 = result_partition_ok(p_44);
+                    (void)oks_45;
+                    {
+                        void * errs_46 = result_partition_err(p_44);
+                        (void)errs_46;
+                        printf("%lld\n", (long long)(vec_len(oks_45)));
+                        printf("%lld\n", (long long)(vec_get(oks_45, INT64_C(0))));
+                        printf("%lld\n", (long long)(vec_get(oks_45, INT64_C(1))));
+                        printf("%lld\n", (long long)(vec_len(errs_46)));
+                        printf("%lld\n", (long long)(vec_get(errs_46, INT64_C(0))));
+                        printf("%lld\n", (long long)(vec_get(errs_46, INT64_C(1))));
+                    }
+                }
+            }
+        }
+        int64_t __t0;
+        __t0 = INT64_C(0);
+        return (int)__t0;
 }
 
 
