@@ -463,6 +463,125 @@ static char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
             for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
             free(arg_strs);
             return atom_nil();
+        case BS_PTR_WRITE:
+            /* Special case for ptr-write: *ptr = value as a statement
+             * Emit: *((int64_t *)arg0) = arg1; as a statement, return nil
+             * We cast to int64_t * because all Turmeric values are int64_t in v1 */
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "*((int64_t *)%s) = %s;\n", arg_strs[0], arg_strs[1]);
+            buf_free(&out);
+            for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
+            free(arg_strs);
+            return atom_nil();
+        case BS_PTR_ARITH:
+            /* Pointer arithmetic: (char *)ptr op offset
+             * In C, pointer arithmetic requires a typed pointer, so we cast to char *
+             * Emit: (char *)arg0 op arg1 */
+            buf_printf(&out, "((char *)%s %s %s)", arg_strs[0], spec->c_op, arg_strs[1]);
+            break;
+        case BS_PTR_DEREF:
+            /* Pointer dereference: *((T *)ptr)
+             * c_op is the prefix like "*((int64_t *)" and we append arg + ")"
+             * Emit: c_op + arg + ")" */
+            buf_printf(&out, "%s%s)", spec->c_op, arg_strs[0]);
+            break;
+        /* Phase U3: Unsafe primitives - type casting */
+        case BS_UNSAFE_CAST:
+            /* unsafe-cast: C-style cast from one type to another
+             * arg0 = value to cast, arg1 = type keyword (we ignore it and cast to int64_t for v1)
+             * Emit: (int64_t)arg0 */
+            buf_printf(&out, "((int64_t)%s)", arg_strs[0]);
+            break;
+        case BS_REINTERPRET:
+            /* reinterpret: bitwise reinterpretation - same as unsafe-cast for v1
+             * Emit: (int64_t)arg0 */
+            buf_printf(&out, "((int64_t)%s)", arg_strs[0]);
+            break;
+        case BS_TRANSMUTE:
+            /* transmute: type-punning with compile-time size check
+             * For v1, we assume sizes match and emit a simple cast
+             * Emit: (int64_t)arg0 */
+            buf_printf(&out, "((int64_t)%s)", arg_strs[0]);
+            break;
+        /* Phase U3: Unsafe primitives - unchecked array ops */
+        case BS_ARRAY_GET_UNCHECKED:
+            /* array-get-unchecked: *(ptr + index)
+             * arg0 = pointer, arg1 = index
+             * Emit: *((int64_t *)arg0 + arg1) */
+            buf_printf(&out, "(*((int64_t *)%s + %s))", arg_strs[0], arg_strs[1]);
+            break;
+        case BS_ARRAY_SET_UNCHECKED:
+            /* array-set-unchecked: *(ptr + index) = value
+             * arg0 = pointer, arg1 = index, arg2 = value
+             * Emit as statement: *((int64_t *)arg0 + arg1) = arg2; */
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "(*((int64_t *)%s + %s) = %s);\n", arg_strs[0], arg_strs[1], arg_strs[2]);
+            buf_free(&out);
+            for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
+            free(arg_strs);
+            return atom_nil();
+        /* Phase U3: Unsafe primitives - raw memory */
+        case BS_RAW_MALLOC:
+            /* raw-malloc: malloc(size)
+             * arg0 = size
+             * Emit: malloc(arg0) */
+            buf_printf(&out, "malloc(%s)", arg_strs[0]);
+            break;
+        case BS_RAW_FREE:
+            /* raw-free: free(ptr)
+             * arg0 = pointer
+             * Emit as statement: free(arg0); */
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "free(%s);\n", arg_strs[0]);
+            buf_free(&out);
+            for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
+            free(arg_strs);
+            return atom_nil();
+        case BS_RAW_REALLOC:
+            /* raw-realloc: realloc(ptr, new_size)
+             * arg0 = pointer, arg1 = new size
+             * Emit: realloc(arg0, arg1) */
+            buf_printf(&out, "realloc(%s, %s)", arg_strs[0], arg_strs[1]);
+            break;
+        case BS_RAW_MEMCPY:
+            /* raw-memcpy: memcpy(dest, src, n)
+             * arg0 = dest, arg1 = src, arg2 = n
+             * Emit as statement: memcpy(arg0, arg1, arg2); */
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "memcpy(%s, %s, %s);\n", arg_strs[0], arg_strs[1], arg_strs[2]);
+            buf_free(&out);
+            for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
+            free(arg_strs);
+            return atom_nil();
+        case BS_RAW_MEMSET:
+            /* raw-memset: memset(dest, byte, n)
+             * arg0 = dest, arg1 = byte, arg2 = n
+             * Emit as statement: memset(arg0, arg1, arg2); */
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "memset(%s, %s, %s);\n", arg_strs[0], arg_strs[1], arg_strs[2]);
+            buf_free(&out);
+            for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
+            free(arg_strs);
+            return atom_nil();
+        /* Phase U3: FFI */
+        case BS_DLOPEN:
+            /* dlopen: dlopen(path, RTLD_LAZY)
+             * arg0 = path (cstr)
+             * Emit: dlopen(arg0, RTLD_LAZY) */
+            buf_printf(&out, "dlopen(%s, RTLD_LAZY)", arg_strs[0]);
+            break;
+        case BS_DLSYM:
+            /* dlsym: dlsym(handle, symbol)
+             * arg0 = handle (ptr<void>), arg1 = symbol (cstr)
+             * Emit: dlsym(arg0, arg1) */
+            buf_printf(&out, "dlsym(%s, %s)", arg_strs[0], arg_strs[1]);
+            break;
+        case BS_DLCLOSE:
+            /* dlclose: dlclose(handle)
+             * arg0 = handle (ptr<void>)
+             * Emit: dlclose(arg0) */
+            buf_printf(&out, "dlclose(%s)", arg_strs[0]);
+            break;
         default:
             /* unreachable for the shapes handled above */
             buf_puts(&out, "((void)0)");

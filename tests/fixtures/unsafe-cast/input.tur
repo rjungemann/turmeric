@@ -1,0 +1,10 @@
+(defn main [] :int
+  (unsafe
+    (let [x 42]
+      (let [y (unsafe-cast x :int)]
+        (println y)
+        (let [z (reinterpret x :int)]
+          (println z)
+          (let [w (transmute x :int)]
+            (println w)
+            0))))))
