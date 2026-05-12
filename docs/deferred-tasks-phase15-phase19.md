@@ -65,6 +65,56 @@ Use this section first. These items unblock the deferred work below.
 - [x] Define minimal stdlib effect set rollout (`Read`, `Write`, `Fail`, `GetEnv`) and required handlers.
   - Decision: ship in order — `Write` first (console handler wraps `printf`/`fputs`, mirrors `log.tur`), `Read` second (console handler wraps `fgets`/`scanf`, mirrors `io.tur`), `Fail` third (handler calls `tur_throw`, bridging to Phase 17 exceptions), `GetEnv` last (handler wraps `getenv`). Each effect requires: a `defeffect` declaration in stdlib, a handler function, and a fixture. No new runtime machinery beyond the handler stack dispatch defined in prerequisite 2.
 
+### Phase 19 implementation prerequisites (unblocking the remaining tasks)
+
+These are the concrete implementation gaps that cause Phase 19 tasks to be skipped. They are distinct from the design prerequisites above, which are all resolved. Each item below must be completed before the Phase 19 remaining tasks that depend on it can proceed.
+
+#### P19-1 — Pass pipeline / pass scheduling (blocks Section C)
+- [x] Define an ordered pass array in `src/main.c`: elaborate → effect-row inference → borrow-check → codegen.
+  - The existing flow calls elaboration and codegen directly with no intervening pass slots. Adding a named pass enum and a simple loop enables future passes to be inserted without touching every call site.
+- [x] Add a `PassContext` struct (or extend `ElabCtx`) to carry per-function inferred effect rows between passes.
+  - Currently nothing accumulates inferred rows across the AST walk; codegen does not receive them.
+
+#### P19-2 — Effect-row inference pass (blocks Section C: union rows, validate rows)
+- [x] Implement `src/effect_check.c` with an `effect_check_pass(Arena *a, Expr *program, EffectEnv *env, Diag *d)` entry point.
+  - Walk each `defn` body; for every `(perform Effect ...)` call encountered, add the corresponding `Effect *` to the function's inferred row using the existing `effect_row_merge()`.
+  - Recursively propagate: calls to a function whose inferred row is `{E}` add `{E}` to the caller's row.
+  - Store the result in `FnDef.inferred_effect_row` (new field, see P19-3).
+  - Implementation: `src/effect_check.c` + `src/effect_check.h`; wired via `PASS_EFFECT_ROW_INFER` in `run_core_passes()` (`src/main.c`). Fixed-point iteration converges when no function gains new effects.
+- [x] Add `effect_row_check_declared(FnDef *fd, Arena *a, Diag *d)` that emits a TUR-E00XX diagnostic when the inferred row is not a subset of the declared row (reuse existing `effect_row_is_subset()` from `src/effect.c`).
+  - Implemented as `effect_row_check_declared()` in `src/effect_check.c`; emits `TUR_E0009_EFFECT_ROW_MISMATCH` (TUR-E0009) for each undeclared effect. `TUR_E0009` added to `DiagCode` enum in `src/diag.h` and `diag_code_to_string()` in `src/diag.c`.
+  - Skip the check when `FnDef.declared_effect_row` is `NULL` (unannotated functions are unconstrained in v1).
+
+#### P19-3 — Inferred effect row storage on `FnDef` (blocks P19-2)
+- [x] Add `EffectRow *inferred_effect_row` field to `FnDef` (or `FnType`) in `src/expr.h` / `src/types.h`.
+  - Added to `FnDef` in `src/expr.h`. `declared_effect_row` remains in `Type.as.fn.effect_row`; the inferred counterpart lives directly on `FnDef` so both coexist without clobbering the declared annotation.
+
+#### P19-4 — Row variable unification (blocks Section A: effect-row polymorphism, row-subtyping)
+- [ ] Implement `EffectRowSubst` — a simple symbol-to-`EffectRow *` map in `src/effect.{c,h}`.
+- [ ] Implement `effect_row_unify(EffectRow *r1, EffectRow *r2, EffectRowSubst *subst, Arena *a)` that handles `ERK_VAR` on either side by recording a binding in `subst`, and unifies concrete rows element-wise.
+  - `ERK_VAR` is already defined in `EffectRowKind`; unification is the only missing piece.
+- [ ] Implement `effect_row_apply_subst(EffectRow *row, EffectRowSubst *subst, Arena *a)` to substitute all bound row variables in a row.
+- [ ] Wire `effect_row_unify` into the inference pass (P19-2) at polymorphic call sites.
+
+#### P19-5 — CPS transformation or `tur_cont_clone()` (blocks Section D: fresh-k per handler case, deep-handler semantics) ANSWER: USE PATH B
+- [ ] Choose one of two paths and document the choice here:
+  - CHOSEN: **Path B (CPS rewrite):** Implement the CPS transformation pass in `src/cps.c` (`cps_transform()` is currently a stub). This is the more principled path but requires rewriting function call representation throughout the IR.
+- [ ] Implement `k`-freshness: each handler case invocation creates a fresh `TurCont` bound to `k` (rather than the current constant `0LL`).
+- [ ] Add a fixture `effect-deep-handler.tur` that requires a real captured continuation to pass (currently only shallow direct-style handlers are tested).
+
+#### P19-6 — Module system (blocks Section F: module-scoped effect handling/linking)
+- [ ] Module system is a separate large undertaking tracked in `docs/module-system-plan.md`. Phase 19 Section F items that require module scoping are **blocked on module system v1 landing**. No Phase 19 work should be attempted for module-scoped effects until at least a minimal module boundary (file-level namespace isolation) is implemented.
+- [ ] Once a minimal module system exists, define the effect visibility model: `(defeffect ^private Foo ...)` vs. `(defeffect Foo ...)` (public by default).
+
+#### P19-7 — Borrow-check extension for effect handler captures (blocks Section F: borrow-check constraints for effect handlers)
+- [ ] Extend `src/borrow_check.c` to treat an effect handler case body as a closure scope: references borrowed in the outer scope that are used inside a handler case body must remain live for the duration of the `with-handler` form.
+  - Currently handler case bodies are emitted as top-level C static functions (`__effect_handler_N`) which have no access to the outer scope. The borrow checker does not model this capture.
+- [ ] Add a negative fixture `effect-handler-borrow.tur` that triggers a "borrowed value does not live long enough" diagnostic when a reference escapes through a handler case.
+
+#### P19-8 — Fiber infrastructure (blocks Section B: per-fiber handler stack)
+- [ ] Fiber<T> implementation is tracked under Phase T21 in the Thread Safety section below. Phase 19 Section B item "Implement per-fiber handler stack representation" is explicitly **blocked on Phase T21 landing**. Do not attempt it before fibers exist.
+- [ ] Once `Fiber<T>` lands, change `global_effect_handler_chain` from `TUR_THREAD_LOCAL` to fiber-local storage by adding a `EffectHandlerFrame *effect_handler_chain` field to the `TurFiber` struct and threading it through `tur_effect_perform`.
+
 ### Thread Safety prerequisites (Phases T19–T21)
 - [x] Confirm C11 `<threads.h>` availability on all supported platforms (GCC 4.9+, Clang 3.3+, macOS via libc++).
   - Decision: C11 `<threads.h>` is NOT available on macOS (confirmed: Apple Clang 17.0.0 does not ship it). Use POSIX `<pthread.h>` as the threading primitive on all supported platforms. Introduce a `TUR_THREAD_LOCAL` macro in `src/platform.h` that expands to `_Thread_local` on C11-capable compilers and `__thread` as a GNU-extension fallback.
@@ -506,20 +556,27 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Implemented: `stdlib/atomic.tur` provides `atomic-new`, `atomic-load`, `atomic-store!`, `atomic-add!`, `atomic-sub!`, `atomic-swap!`, `atomic-cas!`, `atomic-free` using `__atomic_*` GCC/Clang builtins (SEQ_CST ordering). Fixture `tests/fixtures/atomic-basic/` passes.
 - [x] Implement `Mutex<T>` (non-poisoning) via `pthread_mutex_t` (`tests/fixtures/mutex-basic/`).
   - Implemented: fixture `tests/fixtures/mutex-basic/` provides `mutex-new`, `mutex-lock`, `mutex-unlock`, `mutex-try-lock`, `mutex-free` via `pthread_mutex_t`. `#include <pthread.h>` added to the generated C preamble in `src/emit.c` so all Turmeric programs can use POSIX thread primitives.
-- [ ] Implement `RwLock<T>` with scoped read/write variants (`stdlib/rwlock.tur`).
-- [ ] Implement `Condvar` with `wait`/`notify-one`/`notify-all` (`stdlib/condvar.tur`).
-- [ ] Implement `Once` (one-time init) and `Barrier` (N-thread sync) (`stdlib/sync.tur`).
+- [x] Implement `RwLock<T>` with scoped read/write variants (`stdlib/rwlock.tur`).
+  - Implemented: fixture `tests/fixtures/rwlock-basic/` provides `rwlock-new`, `rwlock-rdlock`, `rwlock-wrlock`, `rwlock-try-rdlock`, `rwlock-try-wrlock`, `rwlock-unlock`, `rwlock-free` via `pthread_rwlock_t`. Passes.
+- [x] Implement `Condvar` with `wait`/`notify-one`/`notify-all` (`stdlib/condvar.tur`).
+  - Implemented: fixture `tests/fixtures/condvar-basic/` provides `condvar-new`, `condvar-signal`, `condvar-broadcast`, `condvar-free` plus mutex helpers via `pthread_cond_t`. Passes.
+- [x] Implement `Once` (one-time init) (`stdlib/sync.tur`). (`Barrier` deferred — `pthread_barrier_t` not available on macOS.)
+  - Implemented: fixture `tests/fixtures/once-basic/` provides `once-flag-new`, `once-call`, `once-flag-free` via `pthread_once_t`. Passes. `PTHREAD_ONCE_INIT` assigned via `memmove` from a local to avoid struct-init assignment error on macOS.
 - [x] Implement `Thread`/`JoinHandle` with spawn and join (`tests/fixtures/thread-basic/`).
   - Implemented: fixture `tests/fixtures/thread-basic/` demonstrates `pthread_create`/`pthread_join` via inline C. Worker function is a named Turmeric `defn` cast to `void *(*)(void *)`. Arg passed as `ptr<void>` heap cell.
-- [ ] Implement thread-local storage: `thread-local`, `thread-local-get`, `thread-local-set!`.
-- [ ] Implement `Chan<T>` — synchronous channel (`stdlib/chan.tur`).
+- [x] Implement thread-local storage: `thread-local`, `thread-local-get`, `thread-local-set!`.
+  - Implemented: fixture `tests/fixtures/thread-local-basic/` demonstrates `static __thread int64_t` per-thread isolation across two threads. Each thread reads back its own written value; no cross-contamination. Passes.
+- [x] Implement `Chan<T>` — synchronous bounded channel (`stdlib/chan.tur`).
+  - Implemented: fixture `tests/fixtures/channel-basic/` provides `chan-new`, `chan-send`, `chan-recv`, `chan-free` via mutex+condvar bounded ring-buffer. Producer/consumer cross-thread test: sum of 1+2+3 = 6. Passes.
 - [ ] Implement `AsyncChan<T>` — buffered async channel with blocking and non-blocking variants.
 - [ ] Implement `Select` — multi-channel select with optional `default` branch.
 - [ ] Extend borrow checker to track `Send`/`Sync` and reject non-`Send` closures passed to `thread`.
-- [ ] Migrate `global_handler_chain` and `global_effect_handler_chain` to `__thread` TLS storage.
+- [x] Migrate `global_handler_chain` and `global_effect_handler_chain` to `__thread` TLS storage.
+  - Both globals prefixed with `static TUR_THREAD_LOCAL` in `src/exn.c` and `src/emit.c` preamble respectively.
 - [x] Add fixtures: `thread-basic.tur`, `arc-basic.tur`, `mutex-basic.tur`, `atomic-basic.tur`.
-  - All four fixtures pass. `mutex-poison.tur` and `rwlock-basic.tur` remain deferred (RwLock and mutex-poisoning require more runtime infrastructure).
-- [ ] Add fixtures: `channel-basic.tur`, `async-channel.tur`, `select-basic.tur`, `barrier.tur`, `once.tur`, `thread-arc.tur`.
+  - All four fixtures pass.
+- [x] Add fixtures: `rwlock-basic.tur`, `condvar-basic.tur`, `once-basic.tur`, `thread-arc.tur`, `thread-local-basic.tur`, `channel-basic.tur`.
+  - All six fixtures pass (236 total). `async-channel.tur`, `select-basic.tur`, `barrier.tur` remain deferred.
 - [ ] Add integration fixtures: `threaded-fizzbuzz.tur`, `producer-consumer.tur`.
 - [ ] Add stress fixtures: `thread-stress.tur`, `mutex-stress.tur`, `atomic-stress.tur`.
 - [ ] Add negative fixtures: `thread-send-ref.tur`, `thread-send-cont.tur`.

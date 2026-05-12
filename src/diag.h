@@ -20,6 +20,8 @@ typedef enum DiagCode {
     TUR_E0006_OPERATOR_LOOKUP_FAILED,
     /* Capture errors */
     TUR_E0007_CAPTURE_ERROR,
+    /* Effect-row mismatch (P19-2) */
+    TUR_E0009_EFFECT_ROW_MISMATCH,
 } DiagCode;
 
 typedef enum DiagLevel {

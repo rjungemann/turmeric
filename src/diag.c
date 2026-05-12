@@ -101,6 +101,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0005_USE_AFTER_MOVE:    return "TUR-E0005";
         case TUR_E0006_OPERATOR_LOOKUP_FAILED: return "TUR-E0006";
         case TUR_E0007_CAPTURE_ERROR:     return "TUR-E0007";
+        case TUR_E0009_EFFECT_ROW_MISMATCH: return "TUR-E0009";
         default:                          return "";
     }
 }

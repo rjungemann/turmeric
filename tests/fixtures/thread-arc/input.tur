@@ -1,0 +1,126 @@
+;; Phase T19: thread-arc — threads share an Arc<T> atomic refcount cell.
+;;
+;; Two threads each receive a clone of an Arc (atomic int64_t cell).
+;; Each thread reads the value and stores a result in its own output cell.
+;; Main joins both threads then reads the results.
+;;
+;; Arc layout: struct { uint64_t strong; uint64_t weak; int64_t value; }
+
+(defn arc-new [val :int] :ptr<void>
+  ```c
+  typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;
+  ArcCell *b = (ArcCell *)malloc(sizeof(ArcCell));
+  if (!b) { fprintf(stderr, "arc-new: oom\n"); abort(); }
+  __atomic_store_n(&b->strong, (uint64_t)1, __ATOMIC_RELAXED);
+  __atomic_store_n(&b->weak,   (uint64_t)1, __ATOMIC_RELAXED);
+  b->value = (int64_t)val;
+  return (void *)b;
+  ```)
+
+(defn arc-clone [p :ptr<void>] :ptr<void>
+  ```c
+  typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;
+  ArcCell *b = (ArcCell *)p;
+  __atomic_fetch_add(&b->strong, (uint64_t)1, __ATOMIC_RELAXED);
+  return (void *)b;
+  ```)
+
+(defn arc-get [p :ptr<void>] :int
+  ```c
+  typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;
+  return (int64_t)((ArcCell *)p)->value;
+  ```)
+
+(defn arc-drop [p :ptr<void>] :nil
+  ```c
+  typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;
+  ArcCell *b = (ArcCell *)p;
+  uint64_t prev = __atomic_fetch_sub(&b->strong, (uint64_t)1, __ATOMIC_ACQ_REL);
+  if (prev == 1) {
+      if (__atomic_fetch_sub(&b->weak, (uint64_t)1, __ATOMIC_ACQ_REL) == 1)
+          free(b);
+  }
+  ```)
+
+(defn arc-strong-count [p :ptr<void>] :int
+  ```c
+  typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;
+  return (int64_t)__atomic_load_n(&((ArcCell *)p)->strong, __ATOMIC_SEQ_CST);
+  ```)
+
+;; Thread argument: contains the Arc clone and a result slot.
+;; Layout: { ptr arc_clone; int64_t result; }
+(defn thread-arg-new [arc-clone-ptr :ptr<void>] :ptr<void>
+  ```c
+  typedef struct { void *arc; int64_t result; } ThreadArg;
+  ThreadArg *a = (ThreadArg *)malloc(sizeof(ThreadArg));
+  if (!a) { fprintf(stderr, "thread-arg-new: oom\n"); abort(); }
+  a->arc    = arc_clone_ptr;
+  a->result = 0;
+  return (void *)a;
+  ```)
+
+(defn thread-arg-result [a :ptr<void>] :int
+  ```c
+  typedef struct { void *arc; int64_t result; } ThreadArg;
+  return (int64_t)((ThreadArg *)a)->result;
+  ```)
+
+(defn thread-arg-free [a :ptr<void>] :nil
+  ```c
+  free(a);
+  ```)
+
+;; Worker: reads value from Arc, multiplies by 2, stores in result slot.
+(defn thread-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcCell;
+  typedef struct { void *arc; int64_t result; } ThreadArg;
+  ThreadArg *a = (ThreadArg *)arg;
+  int64_t v = ((ArcCell *)a->arc)->value;
+  a->result = v * 2;
+  return NULL;
+  ```)
+
+(defn thread-spawn [arg :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  if (!t) { fprintf(stderr, "thread-spawn: oom\n"); abort(); }
+  pthread_create(t, NULL, (void *(*)(void *))thread_worker, arg);
+  return (void *)t;
+  ```)
+
+(defn thread-join [t :ptr<void>] :nil
+  ```c
+  pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  ```)
+
+(defn main [] :int
+  (let [shared (arc-new 21)]
+    ;; Two clones for the two threads
+    (let [c1 (arc-clone shared)]
+      (let [c2 (arc-clone shared)]
+        (println (arc-strong-count shared))   ;; 3
+
+        (let [a1 (thread-arg-new c1)]
+          (let [a2 (thread-arg-new c2)]
+            (let [t1 (thread-spawn a1)]
+              (let [t2 (thread-spawn a2)]
+                (thread-join t1)
+                (thread-join t2)))
+
+            ;; Both threads read 21 and doubled it
+            (println (thread-arg-result a1))  ;; 42
+            (println (thread-arg-result a2))  ;; 42
+
+            ;; Drop clones (threads are done)
+            (arc-drop c1)
+            (arc-drop c2)
+            (println (arc-strong-count shared))  ;; 1
+
+            (thread-arg-free a1)
+            (thread-arg-free a2)))))
+
+    (arc-drop shared))
+  0)

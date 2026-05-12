@@ -1,0 +1,72 @@
+;; Phase T19: condvar-basic — condition variable wait/signal/broadcast.
+;;
+;; pthread_cond_t paired with pthread_mutex_t.
+;; In this single-threaded test, signal and broadcast are called without a
+;; waiting thread to verify the API is accepted without deadlock.
+
+(defn mutex-new [] :ptr<void>
+  ```c
+  pthread_mutex_t *m = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
+  if (!m) { fprintf(stderr, "mutex-new: oom\n"); abort(); }
+  pthread_mutex_init(m, NULL);
+  return (void *)m;
+  ```)
+
+(defn mutex-lock [m :ptr<void>] :nil
+  ```c
+  pthread_mutex_lock((pthread_mutex_t *)m);
+  ```)
+
+(defn mutex-unlock [m :ptr<void>] :nil
+  ```c
+  pthread_mutex_unlock((pthread_mutex_t *)m);
+  ```)
+
+(defn mutex-free [m :ptr<void>] :nil
+  ```c
+  pthread_mutex_destroy((pthread_mutex_t *)m);
+  free(m);
+  ```)
+
+(defn condvar-new [] :ptr<void>
+  ```c
+  pthread_cond_t *c = (pthread_cond_t *)malloc(sizeof(pthread_cond_t));
+  if (!c) { fprintf(stderr, "condvar-new: oom\n"); abort(); }
+  pthread_cond_init(c, NULL);
+  return (void *)c;
+  ```)
+
+(defn condvar-signal [c :ptr<void>] :nil
+  ```c
+  pthread_cond_signal((pthread_cond_t *)c);
+  ```)
+
+(defn condvar-broadcast [c :ptr<void>] :nil
+  ```c
+  pthread_cond_broadcast((pthread_cond_t *)c);
+  ```)
+
+(defn condvar-free [c :ptr<void>] :nil
+  ```c
+  pthread_cond_destroy((pthread_cond_t *)c);
+  free(c);
+  ```)
+
+(defn main [] :int
+  (let [m (mutex-new)]
+    (let [c (condvar-new)]
+      ;; signal with no waiter is a no-op — must not hang
+      (mutex-lock m)
+      (condvar-signal c)
+      (println 1)
+      (mutex-unlock m)
+
+      ;; broadcast with no waiters is a no-op
+      (mutex-lock m)
+      (condvar-broadcast c)
+      (println 2)
+      (mutex-unlock m)
+
+      (condvar-free c))
+    (mutex-free m))
+  0)
