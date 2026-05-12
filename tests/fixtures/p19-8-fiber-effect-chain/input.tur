@@ -1,0 +1,61 @@
+;; Phase P19-8: Per-fiber effect handler chain (effect_handler_chain field).
+;;
+;; Verifies three-way isolation:
+;;   1. A handler installed inside fiber-1 only intercepts effects from fiber-1.
+;;   2. A handler installed inside fiber-2 only intercepts effects from fiber-2.
+;;   3. A handler installed in the main context handles effects from main,
+;;      without seeing effects that were already handled inside a fiber.
+;;
+;; Expected output:
+;;   fiber1:20
+;;   fiber2:30
+;;   main:99
+
+(defeffect Ask [] :int)
+
+(defn fiber-new-fn [fn :ptr<void> stack-size :int] :ptr<void>
+  ```c
+  return (void *)tur_fiber_block_new((void(*)(void))fn, (size_t)stack_size);
+  ```)
+
+(defn fiber-resume-fn [f :ptr<void> arg :int] :int
+  ```c
+  return tur_fiber_block_resume((FiberBlock *)f, (int64_t)arg);
+  ```)
+
+(defn fiber-free-fn [f :ptr<void>] :nil
+  ```c
+  tur_fiber_block_free((FiberBlock *)f);
+  ```)
+
+(defn fiber-yield-fn [v :int] :nil
+  ```c
+  tur_fiber_block_yield((int64_t)v);
+  ```)
+
+;; fiber-1 body: installs handler returning 20, yields result
+(defn fiber1-body [] :nil
+  (let [r (handle (perform (Ask))
+            (Ask [] k) (resume k 20))]
+    (fiber-yield-fn r)))
+
+;; fiber-2 body: installs handler returning 30, yields result
+(defn fiber2-body [] :nil
+  (let [r (handle (perform (Ask))
+            (Ask [] k) (resume k 30))]
+    (fiber-yield-fn r)))
+
+(defn main [] :int
+  (let [f1 (fiber-new-fn fiber1-body 0)]
+    (let [v1 (fiber-resume-fn f1 0)]
+      (fiber-free-fn f1)
+      (let [f2 (fiber-new-fn fiber2-body 0)]
+        (let [v2 (fiber-resume-fn f2 0)]
+          (fiber-free-fn f2)
+          ;; Main-thread handler: returns 99
+          (let [mv (handle (perform (Ask))
+                     (Ask [] k) (resume k 99))]
+            (println v1)
+            (println v2)
+            (println mv)
+            0))))))
