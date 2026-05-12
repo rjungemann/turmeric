@@ -431,3 +431,27 @@ const char *typekind_to_string(TypeKind k) {
         default:          return "<?>";
     }
 }
+
+TypeKind typekind_from_name(const char *name) {
+    if (!name) return TY_UNKNOWN;
+    if (strcmp(name, "unknown") == 0) return TY_UNKNOWN;
+    if (strcmp(name, "nil") == 0) return TY_NIL;
+    if (strcmp(name, "bool") == 0) return TY_BOOL;
+    if (strcmp(name, "int") == 0) return TY_INT;
+    if (strcmp(name, "float") == 0) return TY_FLOAT;
+    if (strcmp(name, "cstr") == 0) return TY_CSTR;
+    if (strcmp(name, "ptr-void") == 0 || strcmp(name, "ptr<void>") == 0) return TY_PTR_VOID;
+    if (strcmp(name, "fn") == 0) return TY_FN;
+    if (strcmp(name, "ref") == 0) return TY_REF;
+    if (strcmp(name, "rc") == 0) return TY_RC;
+    if (strcmp(name, "weak") == 0) return TY_WEAK;
+    if (strcmp(name, "&immut") == 0 || strcmp(name, "&") == 0) return TY_REF_IMMUT;
+    if (strcmp(name, "&mut") == 0) return TY_REF_MUT;
+    if (strcmp(name, "typeclass") == 0) return TY_TYPECLASS;
+    if (strcmp(name, "typeclass-inst") == 0) return TY_TYPECLASS_INST;
+    if (strcmp(name, "exception") == 0) return TY_EXCEPTION;
+    if (strcmp(name, "cont") == 0) return TY_CONT;
+    if (strcmp(name, "struct") == 0) return TY_STRUCT;
+    if (strcmp(name, "!") == 0 || strcmp(name, "never") == 0) return TY_NEVER;
+    return TY_UNKNOWN;
+}
