@@ -965,11 +965,11 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Tasks check via `fiber-cancelled?` or `task-group-cancelled? group`
   - No additional infrastructure needed
 
-- [ ] **PR-TG-003-2** Add cancellation check point API
-  - Blocked by: None (PR-TG-003-1 complete)
-  - Provide a function that tasks can call to check if they should exit
-  - Example: `(task-group-should-exit? group)` or `(fiber-should-exit?)`
-  - Should return true if group was cancelled or if parent fiber was cancelled
+- [x] **PR-TG-003-2** Add cancellation check point API
+  - Implemented in stdlib/taskgroup.tur
+  - Added `task-group-should-exit? [group]`: returns true if fiber or group was cancelled
+  - Added `fiber-should-exit? []`: wrapper for `fiber-cancelled?`
+  - Tasks can call these to check if they should exit due to cancellation
 
 - [ ] **PR-TG-003-3** Implement `TaskGroup::with-cancellation` macro
   - Blocked by: PR-TG-003-2
