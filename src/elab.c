@@ -453,6 +453,8 @@ typedef struct Elab {
     const Symbol *sym_panic_with;
     const Symbol *sym_catch_unwind;
     const Symbol *sym_catch_panic_of;
+    /* Phase R5: no-unwind attribute */
+    const Symbol *sym_no_unwind_attr;
     const Symbol *sym_panic_payload_type;
     const Symbol *sym_panic_payload_value;
     const Symbol *sym_panic_payload_file;
@@ -919,6 +921,8 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_catch_unwind = intern_cstr(st, "catch-unwind");
     e->sym_catch_panic_of = intern_cstr(st, "catch-panic-of");
     e->sym_panic_payload_type = intern_cstr(st, "panic-payload-type");
+    /* Phase R5: no-unwind attribute */
+    e->sym_no_unwind_attr = intern_cstr(st, "#no-unwind");
     e->sym_panic_payload_value = intern_cstr(st, "panic-payload-value");
     e->sym_panic_payload_file = intern_cstr(st, "panic-payload-file");
     e->sym_panic_payload_line = intern_cstr(st, "panic-payload-line");
@@ -1793,6 +1797,7 @@ static Binding *binding_new(Elab *e, const Symbol *name, Type type,
     b->closure_fn_binding = NULL;
     b->is_moved = false;  /* Phase 5: move semantics */
     b->moved_at = SPAN_UNKNOWN;
+    b->no_unwind = false;  /* Phase R5: #[no-unwind] attribute */
     return b;
 }
 
@@ -5047,15 +5052,24 @@ static Expr *elab_gensym(Elab *e, const Form *call) {
  * For now, we only support : int return type annotation. Param types are
  * inferred from usage. */
 static Expr *elab_defn(Elab *e, const Form *call) {
-    /* Minimum: (defn name []) */
-    if (call->as.list.len < 3) {
+    /* Phase R5: Check for #[no-unwind] attribute before name */
+    uint32_t name_idx = 1;  /* index of name in items (after 'defn') */
+    bool no_unwind = false;
+    Form *name_f = call->as.list.items[name_idx];
+    if (name_f->tag == F_SYM && name_f->as.sym == e->sym_no_unwind_attr) {
+        no_unwind = true;
+        name_idx++;
+        name_f = call->as.list.items[name_idx];
+    }
+
+    /* Minimum: (defn name []) or (defn #[no-unwind] name []) */
+    if (name_idx + 2 >= call->as.list.len) {  /* need name, params, body */
         diag_emit(DIAG_ERROR, call->span,
                   "defn requires (defn name [params...] body...)");
         return NULL;
     }
 
     /* Parse name */
-    Form *name_f = call->as.list.items[1];
     if (name_f->tag != F_SYM) {
         diag_emit(DIAG_ERROR, name_f->span, "defn name must be a symbol");
         return NULL;
@@ -5074,7 +5088,7 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     }
 
     /* Parse param vector */
-    Form *params_f = call->as.list.items[2];
+    Form *params_f = call->as.list.items[name_idx + 1];
     if (params_f->tag != F_VEC) {
         diag_emit(DIAG_ERROR, params_f->span,
                   "defn: parameter list must be a vector [name1 name2 ...]");
@@ -5242,15 +5256,16 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     /* Phase 13: Lifetime annotations parsing deferred - restore original simple parsing */
 
     /* Parse return type annotation and body */
+    /* body_start is the index of the first element after params (could be return type or body) */
     TypeKind return_kind = TY_NIL;
-    uint32_t body_start = 3;
+    uint32_t body_start = name_idx + 2;  /* name_idx + 1 = params, +1 = after params */
 
     /* Phase 19: Parse optional effect-row annotation #{Read Write} or #{e} before return type.
      * Uppercase names are concrete effects; lowercase are row variables.
      * The row is stored as ERK_UNRESOLVED and resolved after PASS_EFFECT_LOWER. */
     EffectRow *declared_effect_row_defn = NULL;
-    if (call->as.list.len >= 4) {
-        Form *maybe_row = call->as.list.items[3];
+    if (call->as.list.len >= body_start + 1) {
+        Form *maybe_row = call->as.list.items[body_start];
         if (maybe_row->tag == F_MAP) {
             uint8_t n_sym = (uint8_t)maybe_row->as.list.len;
             const Symbol **syms = (const Symbol **)arena_alloc(e->arena,
@@ -5263,7 +5278,7 @@ static Expr *elab_defn(Elab *e, const Form *call) {
                 }
             }
             declared_effect_row_defn = effect_row_unresolved(e->arena, syms, n_valid);
-            body_start = 4;
+            body_start++;  /* skip past the effect row map */
         }
     }
     bool fn_declared_unsafe =
@@ -5382,6 +5397,8 @@ static Expr *elab_defn(Elab *e, const Form *call) {
         b = binding_new(e, name_f->as.sym, fn_type, false, true, name_f->span);
         scope_add(&e->global, b);
     }
+    /* Phase R5: Store #[no-unwind] attribute on the binding */
+    b->no_unwind = no_unwind;
 
     /* Build FnDef */
     FnDef *fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));

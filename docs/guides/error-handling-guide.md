@@ -171,3 +171,37 @@ The following features are planned but not yet implemented:
 - `catch-unwind` — Phase R2; catch panics at a boundary.
 - `--warn-unused-result` compiler flag — Phase R6.
 - `--lint-panic` compiler flag — Phase R6.
+
+## Panic + Continuation/Effects Boundary Semantics (Phase R6)
+
+When a panic occurs inside an effect handler or continuation:
+
+1. **Effect handlers**: Panics that occur during effect handling are caught by the
+   `catch-unwind` boundary of the `with-handler` form. If no `catch-unwind` is present,
+   the panic propagates normally through the effect handler chain.
+
+2. **Continuations**: Panics that occur in code that has captured a continuation via
+   `shift`/`reset` will unwind the stack up to the continuation boundary. If the
+   continuation is resumed after a panic, the panic state is cleared and normal execution
+   continues. This means `(shift k ...)` forms do NOT automatically re-panic on resume.
+
+3. **Defer**: Defer thunks are fired during panic unwinding (Phase 17 mechanism).
+   If a defer thunk itself panics, the double-panic guard triggers `abort()`.
+
+## Panic + Async Task Semantics (Phase R6)
+
+When panics interact with async tasks:
+
+1. **Panic in async task**: A panic that occurs inside an async task is caught at the
+   task boundary. The task's future will resolve to an `Err` value containing the panic
+   payload. This can be caught using `catch-unwind` at the join point.
+
+2. **Panic during task cancellation**: If a task is cancelled while panicking, the
+   panic takes precedence. The cancellation is a no-op and the panic propagates.
+
+3. **Panic in async main**: In an async main function, an uncaught panic will terminate
+   the program with a nonzero exit code after all defer thunks have fired.
+
+4. **WASM target**: When targeting WebAssembly, panics are lowered to the WebAssembly
+   `unreachable` instruction, which traps the WebAssembly execution. This is consistent
+   with Rust's panic behavior in WASM.
