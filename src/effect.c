@@ -39,6 +39,45 @@ EffectRow *effect_row_union(Arena *a, EffectRow *left, EffectRow *right) {
     return row;
 }
 
+/* Create an unresolved (symbolic) effect row from an array of symbol names. */
+EffectRow *effect_row_unresolved(Arena *a, const Symbol **sym_names, uint8_t n_sym_names) {
+    if (n_sym_names == 0) return effect_row_empty(a);
+    EffectRow *row = arena_alloc(a, sizeof(EffectRow));
+    row->kind = ERK_UNRESOLVED;
+    row->as.unresolved.sym_names = arena_alloc(a, n_sym_names * sizeof(Symbol *));
+    for (uint8_t i = 0; i < n_sym_names; i++) {
+        row->as.unresolved.sym_names[i] = sym_names[i];
+    }
+    row->as.unresolved.n_sym_names = n_sym_names;
+    return row;
+}
+
+/* Resolve ERK_UNRESOLVED → concrete/var using the populated effect environment. */
+EffectRow *effect_row_resolve(EffectRow *row, EffectEnv *env, Arena *a) {
+    if (!row || row->kind != ERK_UNRESOLVED) return row;
+    if (row->as.unresolved.n_sym_names == 0) return effect_row_empty(a);
+
+    EffectRow *result = effect_row_empty(a);
+    for (uint8_t i = 0; i < row->as.unresolved.n_sym_names; i++) {
+        const Symbol *name = row->as.unresolved.sym_names[i];
+        if (!name || name->len == 0) continue;
+        /* Lowercase first character → row variable; uppercase → concrete effect. */
+        if (name->name[0] >= 'a' && name->name[0] <= 'z') {
+            EffectRow *var = arena_alloc(a, sizeof(EffectRow));
+            var->kind = ERK_VAR;
+            var->as.var.var_name = name;
+            result = effect_row_merge(a, result, var);
+        } else {
+            Effect *eff = effect_env_lookup(env, name);
+            if (eff) {
+                result = effect_row_merge(a, result, effect_row_single(a, eff));
+            }
+            /* Unknown uppercase name: silently skip (may be a typo or future effect). */
+        }
+    }
+    return result;
+}
+
 /* Check if an effect row is empty */
 bool effect_row_is_empty(EffectRow *row) {
     if (!row) return true;
@@ -71,6 +110,9 @@ bool effect_row_contains(EffectRow *row, Effect *effect) {
         case ERK_UNION:
             return effect_row_contains(row->as.union_.left, effect) ||
                    effect_row_contains(row->as.union_.right, effect);
+        case ERK_UNRESOLVED:
+            /* Unresolved row — conservatively say no. */
+            return false;
     }
     return false;
 }
@@ -180,6 +222,22 @@ EffectRow *effect_row_merge(Arena *a, EffectRow *r1, EffectRow *r2) {
     return effect_row_union(a, r1, r2);
 }
 
+/* Return a copy of `row` with the named effect removed (effect re-opening).
+ * Only ERK_CONCRETE rows are modified; other kinds are returned unchanged. */
+EffectRow *effect_row_remove(EffectRow *row, const Symbol *effect_name, Arena *a) {
+    if (!row || row->kind != ERK_CONCRETE) return row;
+    Effect *keep[32];
+    uint8_t n_keep = 0;
+    for (uint8_t i = 0; i < row->as.concrete.n_effects; i++) {
+        Effect *eff = row->as.concrete.effects[i];
+        if (eff->name != effect_name) {
+            keep[n_keep++] = eff;
+        }
+    }
+    if (n_keep == 0) return effect_row_empty(a);
+    return effect_row_concrete(a, keep, n_keep);
+}
+
 /* Print an effect row for debugging */
 void effect_row_print(Buf *b, EffectRow *row) {
     if (!row) {
@@ -208,6 +266,14 @@ void effect_row_print(Buf *b, EffectRow *row) {
             buf_puts(b, " | ");
             effect_row_print(b, row->as.union_.right);
             buf_puts(b, ")");
+            break;
+        case ERK_UNRESOLVED:
+            buf_puts(b, "#{");
+            for (uint8_t i = 0; i < row->as.unresolved.n_sym_names; i++) {
+                if (i > 0) buf_puts(b, " ");
+                buf_printf(b, "%s", row->as.unresolved.sym_names[i]->name);
+            }
+            buf_puts(b, "}");
             break;
     }
 }
@@ -366,6 +432,9 @@ EffectRow *effect_row_apply_subst(EffectRow *row,
         EffectRow *right = effect_row_apply_subst(row->as.union_.right, subst, a);
         return effect_row_union(a, left, right);
     }
+
+    case ERK_UNRESOLVED:
+        return row; /* Should be resolved before substitution; return as-is. */
     }
     return row; /* unreachable */
 }

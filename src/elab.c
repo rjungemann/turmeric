@@ -4192,13 +4192,24 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     TypeKind return_kind = TY_NIL;
     uint32_t body_start = 3;
 
-    /* Phase 19: Skip optional effect-row annotation #{Read Write} before return type.
-     * In v1 these are parsed and accepted but not enforced by the type checker. */
+    /* Phase 19: Parse optional effect-row annotation #{Read Write} or #{e} before return type.
+     * Uppercase names are concrete effects; lowercase are row variables.
+     * The row is stored as ERK_UNRESOLVED and resolved after PASS_EFFECT_LOWER. */
+    EffectRow *declared_effect_row_defn = NULL;
     if (call->as.list.len >= 4) {
         Form *maybe_row = call->as.list.items[3];
         if (maybe_row->tag == F_MAP) {
-            diag_emit(DIAG_NOTE, maybe_row->span,
-                      "effect-row annotations are not yet enforced (Phase 19 v1)");
+            uint8_t n_sym = (uint8_t)maybe_row->as.list.len;
+            const Symbol **syms = (const Symbol **)arena_alloc(e->arena,
+                                    (n_sym ? n_sym : 1) * sizeof(Symbol *));
+            uint8_t n_valid = 0;
+            for (uint32_t j = 0; j < maybe_row->as.list.len; j++) {
+                Form *item = maybe_row->as.list.items[j];
+                if (item->tag == F_SYM) {
+                    syms[n_valid++] = item->as.sym;
+                }
+            }
+            declared_effect_row_defn = effect_row_unresolved(e->arena, syms, n_valid);
             body_start = 4;
         }
     }
@@ -4310,6 +4321,10 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     fd->is_variadic = false;
     fd->closure = NULL;
     fd->inferred_effect_row = NULL;  /* must be NULL; effect_check_pass reads this */
+    /* Phase 19: Store declared effect row (ERK_UNRESOLVED until PASS_EFFECT_ROW_INFER). */
+    if (declared_effect_row_defn) {
+        b->type.as.fn.effect_row = declared_effect_row_defn;
+    }
     /* Store param types for codegen */
     fd->param_types = (Type *)arena_alloc(e->arena, n_params * sizeof(Type));
     for (uint8_t i = 0; i < n_params; i++) {
@@ -4376,12 +4391,22 @@ static Expr *elab_fn(Elab *e, const Form *call) {
     TypeKind return_kind = TY_NIL;
     uint32_t body_start = 2;
 
-    /* Phase 19: Skip optional effect-row annotation #{Read Write} before return type. */
+    /* Phase 19: Parse optional effect-row annotation #{Read Write} or #{e} before return type. */
+    EffectRow *declared_effect_row_fn = NULL;
     if (call->as.list.len >= 3) {
         Form *maybe_row = call->as.list.items[2];
         if (maybe_row->tag == F_MAP) {
-            diag_emit(DIAG_NOTE, maybe_row->span,
-                      "effect-row annotations are not yet enforced (Phase 19 v1)");
+            uint8_t n_sym = (uint8_t)maybe_row->as.list.len;
+            const Symbol **syms = (const Symbol **)arena_alloc(e->arena,
+                                    (n_sym ? n_sym : 1) * sizeof(Symbol *));
+            uint8_t n_valid = 0;
+            for (uint32_t j = 0; j < maybe_row->as.list.len; j++) {
+                Form *item = maybe_row->as.list.items[j];
+                if (item->tag == F_SYM) {
+                    syms[n_valid++] = item->as.sym;
+                }
+            }
+            declared_effect_row_fn = effect_row_unresolved(e->arena, syms, n_valid);
             body_start = 3;
         }
     }
@@ -4498,6 +4523,10 @@ static Expr *elab_fn(Elab *e, const Form *call) {
     fd->is_variadic = false;
     fd->closure = NULL;
     fd->inferred_effect_row = NULL;  /* must be NULL; effect_check_pass reads this */
+    /* Phase 19: Store declared effect row (ERK_UNRESOLVED until PASS_EFFECT_ROW_INFER). */
+    if (declared_effect_row_fn) {
+        b->type.as.fn.effect_row = declared_effect_row_fn;
+    }
     /* Store param types for codegen */
     fd->param_types = (Type *)arena_alloc(e->arena, n_params * sizeof(Type));
     for (uint8_t i = 0; i < n_params; i++) {

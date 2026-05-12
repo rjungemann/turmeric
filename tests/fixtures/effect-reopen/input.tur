@@ -1,0 +1,41 @@
+;; Phase 19 A: effect re-opening.
+;; A handler case body may itself perform effects that are handled by an outer
+;; handler.  This is "effect re-opening" — the handler opens a new effect scope
+;; inside its own body.
+;;
+;; The effect-row inference pass correctly subtracts absorbed effects from the
+;; body row (Log is absorbed by the inner with-handler) and propagates the
+;; case body's effects (Write) outward.
+
+(defeffect Log [msg :cstr] :nil)
+(defeffect Write [msg :cstr] :nil)
+(defeffect Counter [] :int)
+
+;; Computes a counter value, logging each step.
+(defn counted-sum [n :int] :int
+  (+ (perform (Counter)) n))
+
+(defn main [] :int
+  ;; Outer handler handles Write (re-opened by the Log handler case below).
+  (handle
+    ;; Inner handler handles Log; its case body re-opens Write.
+    (handle
+      (do
+        (perform (Log "start"))
+        (let [result (counted-sum 100)]
+          (do
+            (perform (Log "done"))
+            (println result)
+            0)))
+      ;; Log handler case: re-opens Write to emit to outer layer.
+      (Log [msg] k)
+        (do
+          (perform (Write msg))
+          (resume k 0))
+      ;; Counter handler case: resume with 42.
+      (Counter [] k)
+        (resume k 42))
+    ;; Outer Write handler: print to stdout.
+    (Write [msg] k)
+      (do (println msg) (resume k 0)))
+  0)

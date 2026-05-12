@@ -193,22 +193,30 @@ After prerequisites are complete, execute these implementation tasks.
   - Implemented: `{Effect1 Effect2}` brace syntax in return-type position is parsed and stored; advisory "not yet enforced" diagnostic emitted in v1 (see `src/elab.c` lines ~3597, ~3780).
 - [x] Implement empty-row purity marker (`{}`).
   - Implemented: `{}` in return-type position is parsed and stored; treated as advisory in v1 alongside the rest of the effect-row annotation.
-- [ ] Implement effect-row polymorphism.
-- [ ] Implement row union propagation at call sites.
-- [ ] Implement row-subtyping checks.
+- [x] Implement effect-row polymorphism.
+  - Implemented: `ERK_UNRESOLVED` kind added to `EffectRowKind`; `effect_row_unresolved()` created during elaboration; `effect_row_resolve()` converts symbolic names to concrete effects (uppercase → `ERK_CONCRETE` lookup, lowercase → `ERK_VAR`) in `PASS_EFFECT_ROW_INFER` Step 0. Fixture `tests/fixtures/effect-row-poly/` passes.
+- [x] Implement row union propagation at call sites.
+  - Implemented: effect inference fixed-point iteration propagates callee inferred rows to callers via `collect_effects_in_expr()` EX_CALL handling in `src/effect_check.c`.
+- [x] Implement row-subtyping checks.
+  - Implemented: `effect_row_check_declared()` in `src/effect_check.c` emits `TUR-E0009` when the inferred row contains effects not in the declared row. Fixture `tests/fixtures/errors/effect-row-mismatch/` validates.
 - [ ] Add effect scoping controls (module-private/exported effects).
-- [ ] Add effect re-opening support.
+  - BLOCKED: requires module system (P19-6).
+- [x] Add effect re-opening support.
+  - Implemented: `effect_row_remove()` added to `src/effect.c`; `EX_HANDLE` case in `collect_effects_in_expr()` removes handled effects from the body row and adds handler-case body effects (re-opened effects propagate out). Fixture `tests/fixtures/effect-reopen/` passes.
 
 #### B) Runtime handler pipeline
 - [ ] Implement per-fiber handler stack representation.
-  - Blocked: depends on fiber support (Phase T19). The current `global_effect_handler_chain` global serves single-threaded code correctly. Will become per-fiber storage when fibers land.
+  - UNBLOCKED: depends on fiber support (Phase T19). The current `global_effect_handler_chain` global serves single-threaded code correctly. Will become per-fiber storage when fibers land.
 - [x] Implement matching handler dispatch walk.
   - Done: `tur_effect_perform` in `src/emit.c` emits a runtime function that walks `global_effect_handler_chain`, iterates cases, and dispatches by effect name via `strcmp`. All effect fixtures confirm correct dispatch.
 
 #### C) Effect-row checking pass
-- [ ] Add pass scheduling after elaboration and before codegen.
-- [ ] Union effect rows per function from call sites.
-- [ ] Validate inferred rows against declared rows.
+- [x] Add pass scheduling after elaboration and before codegen.
+  - Implemented: `PASS_EFFECT_ROW_INFER` pass added to `run_core_passes()` in `src/main.c`, wired via `src/pass.h`.
+- [x] Union effect rows per function from call sites.
+  - Implemented: fixed-point iteration in `effect_check_pass()` (`src/effect_check.c`) unions `EX_PERFORM` effects and propagates callee rows to callers.
+- [x] Validate inferred rows against declared rows.
+  - Implemented: `effect_row_check_declared()` in `src/effect_check.c` validates inferred rows against declared rows; emits TUR-E0009.
 - [x] Add unhandled-effect diagnostics policy at top level. (TUR-E0008: static error for unhandled perform at top level; fn_body_depth exempt)
 - [x] Implement/decide advisory behavior for effect rows on `extern-c`.
   - Decision + implementation: `#{Effect...}` annotations on `extern-c` declarations are parsed and silently discarded (advisory). Added `F_MAP` skip in `elab_extern_c` before the return-type parse (`src/elab.c`). Fixture `tests/fixtures/effect-extern-c-row/` confirms advisory acceptance.
@@ -216,8 +224,8 @@ After prerequisites are complete, execute these implementation tasks.
 #### D) Handler scoping semantics
 - [x] Implement handler-parameter shadowing behavior.
   - Done: handler case bodies are emitted as top-level C static functions (`__effect_handler_N`), giving them their own scope. A handler case parameter (e.g., `x`) correctly shadows any outer `let` binding with the same name because the outer scope is not in scope inside the emitted C function. Fixture `tests/fixtures/effect-handler-shadow/` verifies: outer `x=1000`, handler `x=7` (effect arg), result `7*2=14`.
-- [ ] Ensure continuation binding `k` is fresh per handler case.
-  - Partial (v1 limitation): `k` is bound to `__k` (always `0LL`) in v1 direct-style mode. Each handler invocation gets a fresh `0LL` — not a real captured continuation. Real continuation capture requires CPS transformation or `setjmp`/`longjmp` capture (Phase 18 continuation infrastructure). Deferred.
+- [x] Ensure continuation binding `k` is fresh per handler case.
+  - Implemented (P19-5): each handler invocation allocates a fresh `TurContK` on the stack and passes its address as `k`. `EX_RESUME` and `EX_DISCONTINUE` mark it consumed; `cont?` checks the consumed flag.
 - [ ] Implement deep-handler continuation capture semantics.
   - Deferred: requires multi-shot continuation support (CPS pass or `setjmp`-based `clone`). Depends on Phase B2 (Cloneable continuation runtime).
 
@@ -242,7 +250,9 @@ After prerequisites are complete, execute these implementation tasks.
 #### F) Feature interactions and one-shot checks
 - [x] Enable macro-generated effectful code path and hygiene interactions. (with-write, with-fail-throw, with-getenv, with-read-console fixtures demonstrate this)
 - [ ] Implement module-scoped effect handling/linking behavior.
-- [ ] Integrate borrow-check constraints for effect handlers that capture references.
+  - BLOCKED: requires module system (P19-6).
+- [x] Integrate borrow-check constraints for effect handlers that capture references.
+  - Implemented (P19-7): `borrow_check_effect_handler_captures()` rejects references captured from outer scope in handler case bodies. Fixture `tests/fixtures/errors/effect-handler-borrow/` validates.
 - [x] Add static one-shot check: `resume` consumes continuation and rejects second use.
   - Implemented in borrow checker (`src/borrow_check.c`): `(resume k v)` marks `k` as moved. Fixture `tests/fixtures/errors/effect-double-resume/` validates the use-after-move diagnostic.
 - [x] Implement `cont?` predicate. (EX_CONT_PRED; Phase 18 tur_cont* checks tur_cont_consumed; Phase 19 k always true; effect-cont-pred fixture)

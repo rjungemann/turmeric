@@ -1,0 +1,17 @@
+;; Phase 19 C: row-subtyping check.
+;; A function declares #{Write} but performs Read — the inference pass should
+;; emit TUR-E0009 because the inferred row {Read} is not a subset of {Write}.
+
+(defeffect Write [msg :cstr] :nil)
+(defeffect Read [] :int)
+
+(defn bad-fn [] #{Write} :int
+  (perform (Read)))
+
+(defn main [] :int
+  (handle
+    (handle
+      (println (bad-fn))
+      (Write [msg] k) (do (println msg) (resume k 0)))
+    (Read [] k) (resume k 99))
+  0)

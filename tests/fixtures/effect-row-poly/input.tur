@@ -1,0 +1,41 @@
+;; Phase 19 A: effect-row polymorphism.
+;; Functions annotated with row variables ({e}) are polymorphic over effects.
+;; Row variables are lowercase names in #{...} annotations.
+;; This fixture verifies that:
+;;   1. Row-variable annotations #{e} are parsed and accepted.
+;;   2. The row-variable annotation does not constrain effectful calls.
+;;   3. Concrete effect annotations #{Write} are enforced (inferred subset of declared).
+
+(defeffect Write [msg :cstr] :nil)
+(defeffect Read [] :int)
+
+;; Pure function — no annotation needed.
+(defn add [x :int y :int] :int
+  (+ x y))
+
+;; Function with concrete row annotation — performs Write.
+(defn greet [name :cstr] #{Write} :nil
+  (perform (Write name)))
+
+;; Function with row-variable annotation — polymorphic over effects.
+;; In v1 the row variable `e` is stored but not enforced; the function
+;; may perform any effects (conservative permissive treatment).
+(defn run-twice [x :int] #{e} :int
+  (+ x x))
+
+;; Function that computes a value without effects.
+(defn scale [n :int] :int
+  (* n 2))
+
+(defn main [] :int
+  (handle
+    (do
+      (greet "hello")
+      (let [v (run-twice 5)]
+        (println v))
+      (println (add 3 4))
+      (println (scale 6))
+      0)
+    (Write [msg] k)
+      (do (println msg) (resume k 0)))
+  0)

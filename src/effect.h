@@ -47,8 +47,12 @@ struct Effect {
 typedef enum EffectRowKind {
     ERK_EMPTY,       /* {} - no effects */
     ERK_CONCRETE,    /* {E1, E2, ...} - specific effect set */
-    ERK_VAR,         /* {a} - effect variable */
+    ERK_VAR,         /* {a} - effect variable (lowercase name = row variable) */
     ERK_UNION,       /* {E1 | E2} - union (for type inference) */
+    ERK_UNRESOLVED,  /* #{Foo Bar e} - symbolic names parsed during elab; resolved
+                      * to ERK_CONCRETE/ERK_VAR after PASS_EFFECT_LOWER by
+                      * effect_row_resolve(). Uppercase names → concrete effects;
+                      * lowercase names → ERK_VAR row variables. */
 } EffectRowKind;
 
 struct EffectRow {
@@ -65,6 +69,10 @@ struct EffectRow {
             EffectRow *left;
             EffectRow *right;
         } union_;
+        struct {
+            const Symbol **sym_names; /* Unresolved symbolic names */
+            uint8_t n_sym_names;
+        } unresolved;
     } as;
 };
 
@@ -80,6 +88,11 @@ EffectRow *effect_row_concrete(Arena *a, Effect **effects, uint8_t n_effects);
 /* Create an effect row union */
 EffectRow *effect_row_union(Arena *a, EffectRow *left, EffectRow *right);
 
+/* Create an unresolved (symbolic) effect row from an array of symbol names.
+ * Uppercase names will resolve to concrete effects; lowercase to row variables.
+ * Must be resolved by effect_row_resolve() before the inference pass runs. */
+EffectRow *effect_row_unresolved(Arena *a, const Symbol **sym_names, uint8_t n_sym_names);
+
 /* Check if an effect row is empty */
 bool effect_row_is_empty(EffectRow *row);
 
@@ -92,6 +105,12 @@ bool effect_row_is_subset(EffectRow *r1, EffectRow *r2);
 /* Create a union of two effect rows */
 EffectRow *effect_row_merge(Arena *a, EffectRow *r1, EffectRow *r2);
 
+/* Return a copy of `row` with the named effect removed.
+ * Used during effect-row inference to absorb handled effects at EX_HANDLE nodes
+ * (effect re-opening: the remaining unhandled effects propagate to the caller).
+ * Only ERK_CONCRETE rows are modified; other kinds are returned unchanged. */
+EffectRow *effect_row_remove(EffectRow *row, const Symbol *effect_name, Arena *a);
+
 /* Print an effect row for debugging */
 void effect_row_print(Buf *b, EffectRow *row);
 
@@ -101,6 +120,12 @@ typedef struct EffectEnv {
     uint32_t n_effects;
     uint32_t cap_effects;
 } EffectEnv;
+
+/* Resolve an ERK_UNRESOLVED row against the populated effect environment.
+ * Uppercase symbol names are looked up in env and become ERK_CONCRETE entries;
+ * lowercase symbol names become ERK_VAR entries.  Unknown uppercase names are
+ * silently skipped.  Non-UNRESOLVED rows are returned unchanged. */
+EffectRow *effect_row_resolve(EffectRow *row, EffectEnv *env, Arena *a);
 
 EffectEnv *effect_env_new(Arena *a);
 
