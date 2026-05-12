@@ -320,3 +320,30 @@
   }
   return (int)res->ok_val;
   ```)
+
+;; Phase R5: Bridge functions between result and exception system
+
+;; Convert result to exception - throws if err
+(defn result->exception [r :ptr<void>] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  if (res == NULL || !res->is_ok) {
+    tur_exception e = {res->err_val, 0, TY_INT, NULL};
+    tur_throw(&e);
+    return NULL;
+  }
+  return (void*)(intptr_t)res->ok_val;
+  ```)
+
+;; Convert exception to result - returns ok if no exception, err if caught
+;; Note: This is a placeholder; actual implementation depends on exception handling
+(defn exception->result [e :ptr<void>] :ptr<void>
+  ```c
+  // In v1, exceptions are tur_exception structs
+  // If e is NULL, return ok(NULL), else return err with the exception payload
+  tur_exception *ex = (tur_exception*)e;
+  if (ex == NULL) {
+    return ok(0);
+  }
+  return err((int)(intptr_t)ex->payload);
+  ```)
