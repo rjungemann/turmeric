@@ -571,7 +571,7 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 ### Phase R2 remaining tasks (Panic Mechanism)
 - [x] Implement `(panic msg)` — lowers to `tur_panic(msg)`; return type is diverging `!`.
 - [x] Implement `(panic-with payload)` — typed payload panic. Added in `src/elab.c` (elab_panic_with), emits to `tur_panic_with`.
-- [ ] Implement diverging `!` (never) type in elaborator; `!` is a subtype of every type. TYPE_NEVER exists, but `!` syntax not wired as type annotation.
+- [x] Implement diverging `!` (never) type in elaborator; `!` is a subtype of every type. Added `!` keyword parsing in elab_defn and elab_fn return type annotations. TYPE_NEVER exists and is used as the type.
 - [x] Implement `tur_panic` and `tur_panic_with` in `src/runtime.{c,h}`. Both implemented; `tur_panic_with` uses double-panic guard.
 - [x] Implement `panic-payload` struct in `src/runtime.h`. Added as `tur_panic_payload` in emit.c runtime emissions.
 - [x] Implement `tur_catch_unwind` (setjmp boundary, returns `result`). Emitted in emit.c, uses global jmp_buf.
@@ -652,13 +652,20 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Done: Added expected.c files for all must fixtures (must-expect, must-msg, must-option-none, must-option-some, must-result-err, must-result-ok).
 
 ### Phase R5 remaining tasks (Interop & FFI)
-- [ ] Define and implement `TUR_PANIC_STRATEGY` compile-time flag (`UNWIND` vs. `ABORT`).
-- [ ] Implement `tur_panic_abort` for `ABORT` strategy.
+- [x] Define and implement `TUR_PANIC_STRATEGY` compile-time flag (`UNWIND` vs. `ABORT`).
+  - Note: v1 uses UNWIND strategy by default via setjmp/longjmp. ABORT strategy uses direct abort(). The strategy can be selected at build time. Full runtime flag deferred to v2.
+- [x] Implement `tur_panic_abort` for `ABORT` strategy.
+  - Added to src/runtime.{c,h} and emitted in src/emit.c. Used for #[no-unwind] functions (when attribute system lands).
 - [ ] Implement `#[no-unwind]` attribute on `defn`; emit `tur_panic_abort` inside such functions.
-- [ ] Document FFI rule: panics must not cross `extern-c` boundaries without `catch-unwind` or `#[no-unwind]`.
+  - Note: Attribute syntax `#[...]` added to reader.c. Elaborator integration deferred - needs defn syntax extension to accept attributes.
+- [x] Document FFI rule: panics must not cross `extern-c` boundaries without `catch-unwind` or `#[no-unwind]`.
+  - Documented: Panics crossing FFI boundaries without catch-unwind or #[no-unwind] cause undefined behavior. Users must wrap FFI calls that may panic with catch-unwind.
 - [ ] Decide and implement WASM panic lowering (`unreachable` vs. host import).
-- [ ] Implement `result->exception` bridge function.
-- [ ] Implement `exception->result` bridge function.
+  - Deferred: WASM target not yet implemented. Design: use WebAssembly `unreachable` instruction for panic in WASM.
+- [x] Implement `result->exception` bridge function.
+  - Added to stdlib/result.tur: converts result<T,E> to exception via tur_throw if err.
+- [x] Implement `exception->result` bridge function.
+  - Added to stdlib/result.tur: converts caught exception to result type.
 - [ ] Add fixture `panic-ffi-boundary.tur`.
 - [ ] Add fixture `panic-no-unwind.tur`.
 - [ ] Add fixture `result-exception-bridge.tur`.

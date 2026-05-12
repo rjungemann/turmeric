@@ -162,6 +162,7 @@ static bool is_sym_cont(int c) {
 }
 
 static Form *read_form(Reader *r);
+static Form *read_attribute(Reader *r);
 
 static Form *read_string(Reader *r) {
     uint32_t start_line = r->line;
@@ -702,6 +703,60 @@ static Form *read_map(Reader *r) {
     return read_seq(r, '{', '}', F_MAP, "unterminated map (missing '}')");
 }
 
+/* Phase R5: Read an attribute form: #[...] */
+static Form *read_attribute(Reader *r) {
+    uint32_t start_line = r->line;
+    uint32_t start_col = r->col;
+    size_t start_off = r->pos;
+
+    advance(r); /* consume '#' */
+    if (peek(r) != '[') {
+        Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
+        diag_emit(DIAG_ERROR, s, "expected '[' after '#' for attribute");
+        r->error = true;
+        return NULL;
+    }
+    advance(r); /* consume '[' */
+
+    /* Read the attribute name */
+    skip_ws_and_comments(r);
+    Form *attr_name = read_form(r);
+    if (!attr_name) {
+        r->error = true;
+        return NULL;
+    }
+
+    /* Check for closing ] */
+    skip_ws_and_comments(r);
+    if (peek(r) != ']') {
+        Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
+        diag_emit(DIAG_ERROR, s, "expected ']' to close attribute");
+        r->error = true;
+        return NULL;
+    }
+    advance(r); /* consume ']' */
+
+    Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
+    
+    if (attr_name->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, attr_name->span, "attribute name must be a symbol");
+        r->error = true;
+        return NULL;
+    }
+    
+    /* Create a symbol with "#" prefix: #no-unwind */
+    char attr_name_buf[64];
+    int written = snprintf(attr_name_buf, sizeof(attr_name_buf), "#%s", attr_name->as.sym->name);
+    if (written >= (int)sizeof(attr_name_buf)) {
+        diag_emit(DIAG_ERROR, span, "attribute name too long");
+        r->error = true;
+        return NULL;
+    }
+    StrSlice attr_slice = strslice(attr_name_buf, (uint32_t)written);
+    const Symbol *attr_sym = symtab_intern(r->st, attr_slice);
+    return form_sym(r->arena, span, attr_sym);
+}
+
 /* Read a C code block: ```c ... ``` or ``` c ... ``` */
 static Form *read_cblock(Reader *r) {
     uint32_t start_line = r->line;
@@ -979,6 +1034,10 @@ static Form *read_form(Reader *r) {
 
     if (c == '#' && peek2(r) == '{') {
         return read_map(r);
+    }
+    /* Phase R5: Attribute syntax #[...] */
+    if (c == '#' && peek2(r) == '[') {
+        return read_attribute(r);
     }
 
     /* Phase S1: Curly-infix support */
