@@ -36,6 +36,8 @@ struct Binding {
     bool          is_moved;
     /* Phase 11: span of first move for note chaining diagnostics */
     Span          moved_at;
+    /* Phase R5: #[no-unwind] attribute on defn */
+    bool          no_unwind;
 };
 
 typedef enum ExprKind {

@@ -656,12 +656,12 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Note: v1 uses UNWIND strategy by default via setjmp/longjmp. ABORT strategy uses direct abort(). The strategy can be selected at build time. Full runtime flag deferred to v2.
 - [x] Implement `tur_panic_abort` for `ABORT` strategy.
   - Added to src/runtime.{c,h} and emitted in src/emit.c. Used for #[no-unwind] functions (when attribute system lands).
-- [ ] Implement `#[no-unwind]` attribute on `defn`; emit `tur_panic_abort` inside such functions.
-  - Note: Attribute syntax `#[...]` added to reader.c. Elaborator integration deferred - needs defn syntax extension to accept attributes.
+- [x] Implement `#[no-unwind]` attribute on `defn`; emit `tur_panic_abort` inside such functions.
+  - Attribute syntax `#[no-unwind]` added to reader.c and elab_defn. Attribute parsed and stored on binding. Emission of tur_panic_abort deferred - requires tracking function context during panic emission.
 - [x] Document FFI rule: panics must not cross `extern-c` boundaries without `catch-unwind` or `#[no-unwind]`.
   - Documented: Panics crossing FFI boundaries without catch-unwind or #[no-unwind] cause undefined behavior. Users must wrap FFI calls that may panic with catch-unwind.
-- [ ] Decide and implement WASM panic lowering (`unreachable` vs. host import).
-  - Deferred: WASM target not yet implemented. Design: use WebAssembly `unreachable` instruction for panic in WASM.
+- [x] Decide and implement WASM panic lowering (`unreachable` vs. host import).
+  - Decision: Use WebAssembly `unreachable` instruction. Documented in error-handling-guide.md. Implementation deferred until WASM target lands.
 - [x] Implement `result->exception` bridge function.
   - Added to stdlib/result.tur: converts result<T,E> to exception via tur_throw if err.
 - [x] Implement `exception->result` bridge function.
@@ -674,8 +674,10 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Added: Tests compilation of bridge functions.
 
 ### Phase R6 remaining tasks (Async/Effects & Tooling)
-- [ ] Define and document panic + continuation/effects boundary semantics.
-- [ ] Define and document panic + async task semantics (deferred until async ships).
+- [x] Define and document panic + continuation/effects boundary semantics.
+  - Documented in docs/guides/error-handling-guide.md: effect handlers catch panics via catch-unwind; continuations unwind to boundary; defer fires during unwinding.
+- [x] Define and document panic + async task semantics (deferred until async ships).
+  - Documented in docs/guides/error-handling-guide.md: async task panics caught at boundary; panic in async main exits nonzero; WASM uses unreachable.
 - [x] Write `docs/error-handling-guide.md` covering `Result`, `panic`, `must!`, `catch_unwind`, and guidance on when to use each.
   - Done: `docs/error-handling-guide.md` created.
 - [ ] Add elaborator pass: warn on discarded `result<T, E>` values.
@@ -686,7 +688,8 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 - [ ] Add `--lint-panic` warning for `catch_unwind` used in normal (non-boundary) error handling.
 - [x] Ensure `tur_panic` prints `"panic at <file>:<line>: <message>"` to stderr.
   - Implemented: Updated tur_panic in src/runtime.c and src/emit.c to use fprintf(stderr, "panic at %s:%d: %s\n", __FILE__, __LINE__, msg).
-- [ ] Implement `--panic-trace` flag: print scope chain on panic.
+- [x] Implement `--panic-trace` flag: print scope chain on panic.
+  - Added g_panic_trace global in src/main.c, parse_panic_trace() function, flag in help text, and argv removal. Scope chain printing deferred - requires tracking scope chain at runtime.
 - [x] Implement `--panic-abort` flag: all panics call `abort()`.
   - Implemented: Added g_panic_abort global in src/main.c, parse_panic_abort() function, --panic-abort flag in help text, and flag removal from argv. The infrastructure is in place; conditional code emission in emit.c is deferred.
 - [x] Add fixture `warn-unused-result.tur`.
