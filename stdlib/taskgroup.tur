@@ -398,40 +398,12 @@
 ;; ---- Automatic cancellation propagation (Phase TG-004-1) ----
 ;; 
 ;; When a child task panics or throws an exception, the parent task group
-;; should automatically cancel all sibling tasks. This requires exception
-;; handling integration at the fiber level.
+;; is automatically cancelled with reason=1 (panic). This is implemented in
+;; the runtime's tur_fiber_shim function which wraps fiber execution with
+;; a setjmp/longjmp handler that catches panics and cancels the group.
 ;;
-;; For v1, this is implemented via a wrapper function that catches panics
-;; and cancels the group. Tasks should use `task-group-wrap-with-cancel-on-panic`
-;; to wrap their thunk if they want automatic cancellation propagation.
-
-;; Wrap a thunk so that if it panics, the task group is automatically cancelled
-;; with panic reason (1). This uses catch-unwind internally.
-;; Phase TG-004-1: Automatic cancellation propagation
-(defn task-group-wrap-with-cancel-on-panic [group :ptr<void> thunk :ptr<void>] :ptr<void>
-  ```c
-  /* Create a wrapper that catches panics and cancels the task group */
-  typedef struct { void *group; void *thunk; } WrapperArg;
-  WrapperArg *arg = (WrapperArg *)malloc(sizeof(WrapperArg));
-  if (!arg) { fprintf(stderr, "wrap-with-cancel: oom\n"); abort(); }
-  arg->group = group;
-  arg->thunk = thunk;
-  
-  /* Allocate a wrapper function on the heap */
-  void **wrapper_fn_ptr = (void **)malloc(sizeof(void *));
-  if (!wrapper_fn_ptr) { free(arg); fprintf(stderr, "wrap-with-cancel: oom\n"); abort(); }
-  
-  /* We need to create a function that calls thunk and catches panics */
-  /* For v1, we use a simple approach: store group in a global-ish location
-   * that the thunk can access. Actually, we need to use tur_catch_unwind. */
-  
-  /* For now, return the original thunk - full implementation requires
-   * integrating with the generated tur_catch_unwind infrastructure which
-   * may not be available in all contexts. */
-  free(arg);
-  free(wrapper_fn_ptr);
-  return thunk;
-  ```)
+;; No additional API needed - automatic cancellation propagation is built
+;; into fibers that have a task_group set.
 
 ;; ---- TaskGroup::with-cancellation macro (Phase TG-003) ----
 ;; 
