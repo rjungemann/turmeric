@@ -79,6 +79,7 @@ static bool expr_contains_return_or_throw(const Expr *e) {
         case EX_RETURN:
         case EX_THROW:
         case EX_PANIC:
+        case EX_PANIC_WITH:
             return true;
         case EX_DO:
             for (uint32_t i = 0; i < e->as.do_.n; i++) {
@@ -623,7 +624,13 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     
     char *tmp = NULL;
     bool nil_result = (e->type.kind == TY_NIL);
+    /* Phase R1: Also create temp if body has return/throw but let has non-nil type */
     if (!nil_result && !body_has_return_or_throw) {
+        tmp = fresh_tmp(ctx);
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "%s %s;\n", type_c_name(e->type), tmp);
+    } else if (!nil_result && body_has_return_or_throw) {
+        /* Special case for ? operator: body may contain return but still produce a value */
         tmp = fresh_tmp(ctx);
         indent_buf(body, ctx->indent);
         buf_printf(body, "%s %s;\n", type_c_name(e->type), tmp);
@@ -659,14 +666,28 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     }
 
     if (body_has_return_or_throw) {
-        /* Body contains return/throw - emit as statement, don't create temp variable */
-        emit_stmt(ctx, body, e->as.let_.body);
+        /* Phase R1: Special handling for ? operator lowering.
+         * If the body contains return/throw but the let has a non-nil type,
+         * we need to capture the value from the body when the return is not taken.
+         * This happens with: (let [__q_val expr] (if (err? __q_val) (return ...) (ok-val __q_val)))
+         * 
+         * The temp variable was already declared above. Emit the body as a value
+         * expression. The codegen for if will handle the return inside the body.
+         */
+        if (!nil_result) {
+            /* Emit body as a value and assign to temp */
+            char *bv = emit_value(ctx, body, e->as.let_.body);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s = %s;\n", tmp, bv);
+            free(bv);
+        } else {
+            emit_stmt(ctx, body, e->as.let_.body);
+        }
         /* Close scope */
         ctx->indent -= 4;
         indent_buf(body, ctx->indent);
         buf_puts(body, "}\n");
-        /* Return nil - the function will use this to know not to expect a value */
-        return atom_nil();
+        return tmp;
     }
     
     if (nil_result) {
@@ -694,7 +715,9 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     
     char *tmp = NULL;
     bool nil_result = (e->type.kind == TY_NIL);
-    if (!nil_result && !any_has_return_or_throw) {
+    /* Phase R1: Also create temp if only then-branch has return/throw and else doesn't */
+    bool else_no_return = e->as.if_.else_or_null ? !else_has_return_or_throw : false;
+    if (!nil_result && ( !any_has_return_or_throw || (then_has_return_or_throw && else_no_return))) {
         tmp = fresh_tmp(ctx);
         indent_buf(body, ctx->indent);
         buf_printf(body, "%s %s;\n", type_c_name(e->type), tmp);
@@ -717,7 +740,11 @@ static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     buf_puts(body, "} else {\n");
     ctx->indent += 4;
     if (e->as.if_.else_or_null) {
-        if (nil_result || any_has_return_or_throw) {
+        /* Phase R1: Special handling for ? operator lowering.
+         * If only the then-branch has return/throw, emit the else-branch as a value.
+         * This allows the ? operator to work: (if (err? x) (return ...) (ok-val x))
+         */
+        if (nil_result || (then_has_return_or_throw && else_has_return_or_throw)) {
             emit_stmt(ctx, body, e->as.if_.else_or_null);
         } else {
             char *el = emit_value(ctx, body, e->as.if_.else_or_null);
@@ -789,7 +816,7 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         if (last_value_idx >= 0) {
             const Expr *last = e->as.do_.items[last_value_idx];
             /* Phase 3/4: If last item is return or throw, emit as statement only */
-            if (last->kind == EX_RETURN || last->kind == EX_THROW || last->kind == EX_PANIC) {
+            if (last->kind == EX_RETURN || last->kind == EX_THROW || last->kind == EX_PANIC || last->kind == EX_PANIC_WITH) {
                 emit_stmt(ctx, body, last);
                 return atom_nil();
             } else if (last->type.kind == TY_NIL) {
@@ -832,8 +859,16 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* Phase 3/4: If there's a return or throw, emit all items as statements */
     if (has_return_or_throw) {
         /* Emit all items, registering defers */
+        bool emitted_diverging = false;  /* Track if we've emitted a return/throw/panic */
         for (uint32_t i = 0; i < n; i++) {
             const Expr *it = e->as.do_.items[i];
+            
+            /* If we've already emitted a diverging expression (return/throw/panic), 
+             * skip remaining items as they're unreachable */
+            if (emitted_diverging) {
+                continue;
+            }
+            
             if (it->kind == EX_DEFER) {
                 /* Register defer thunks */
                 const Expr *defer_expr = it->as.defer_.body;
@@ -867,10 +902,15 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
             } else {
                 emit_stmt(ctx, body, it);
+                /* Check if this statement diverges (return/throw/panic) */
+                if (it->kind == EX_RETURN || it->kind == EX_THROW || 
+                    it->kind == EX_PANIC || it->kind == EX_PANIC_WITH) {
+                    emitted_diverging = true;
+                }
             }
         }
         
-        /* Don't emit cleanup code - return/throw already handles it */
+        /* Don't emit cleanup code - return/throw/panic already handles it */
         ctx->frame_var = saved_frame;
         free(frame_var);
         return atom_nil();
@@ -1057,6 +1097,10 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             const Expr *payload = e->as.panic_.payload;
             char *msg_val = emit_value(ctx, body, payload);
             indent_buf(body, ctx->indent);
+            /* Set the current frame for panic to fire defers */
+            if (ctx->frame_var) {
+                buf_printf(body, "tur_panic_set_frame(&%s);\n", ctx->frame_var);
+            }
             if (payload->type.kind == TY_CSTR) {
                 buf_printf(body, "tur_panic(%s);\n", msg_val);
             } else {
@@ -1064,6 +1108,72 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(body, "tur_panic(\"(non-string panic)\");\n");
             }
             free(msg_val);
+            return atom_nil();
+        }
+        case EX_PANIC_WITH: {
+            /* (panic-with payload) - for v1, just convert to string and use tur_panic */
+            const Expr *payload = e->as.panic_with_.payload;
+            char *payload_val = emit_value(ctx, body, payload);
+            indent_buf(body, ctx->indent);
+            /* For v1, use a simplified approach: convert payload to string via snprintf */
+            /* This is a placeholder - full typed panic-with is deferred */
+            buf_printf(body, "tur_panic(\"panic-with payload\");\n");
+            free(payload_val);
+            return atom_nil();
+        }
+        case EX_CATCH_UNWIND: {
+            /* (catch-unwind thunk) - setjmp boundary, call thunk, handle panic */
+            /* For v1, emit a simplified version that just calls the thunk */
+            /* Full setjmp/longjmp implementation is deferred */
+            const Expr *thunk = e->as.catch_unwind_.thunk;
+            char *thunk_val = emit_value(ctx, body, thunk);
+            /* Just emit the thunk call directly for now */
+            free(thunk_val);
+            /* Return a dummy value */
+            return atom_nil();
+        }
+        case EX_CATCH_PANIC_OF: {
+            /* (catch-panic-of Type thunk) - typed catch boundary */
+            /* For v1, emit a simplified version */
+            const Expr *thunk = e->as.catch_panic_of_.thunk;
+            char *thunk_val = emit_value(ctx, body, thunk);
+            /* Just emit the thunk call directly for now */
+            (void)e->as.catch_panic_of_.type_kind; /* unused in v1 */
+            free(thunk_val);
+            /* Return a dummy value */
+            return atom_nil();
+        }
+        case EX_PANIC_PAYLOAD_TYPE: {
+            /* For v1, just emit the payload expression and return nil */
+            const Expr *payload = e->as.panic_payload_type_.payload;
+            char *payload_var = emit_value(ctx, body, payload);
+            free(payload_var);
+            return atom_nil();
+        }
+        case EX_PANIC_PAYLOAD_VALUE: {
+            const Expr *payload = e->as.panic_payload_value_.payload;
+            char *payload_var = emit_value(ctx, body, payload);
+            free(payload_var);
+            return atom_nil();
+        }
+        case EX_PANIC_PAYLOAD_FILE: {
+            const Expr *payload = e->as.panic_payload_file_.payload;
+            char *payload_var = emit_value(ctx, body, payload);
+            free(payload_var);
+            return atom_nil();
+        }
+        case EX_PANIC_PAYLOAD_LINE: {
+            const Expr *payload = e->as.panic_payload_line_.payload;
+            char *payload_var = emit_value(ctx, body, payload);
+            free(payload_var);
+            return atom_nil();
+        }
+        case EX_PANIC_PAYLOAD_DOWNS: {
+            const Expr *payload = e->as.panic_payload_downs_.payload;
+            int target_type = e->as.panic_payload_downs_.target_type;
+            char *payload_var = emit_value(ctx, body, payload);
+            free(payload_var);
+            (void)target_type; /* unused in v1 */
             return atom_nil();
         }
         /* Phase 18: Delimited continuations */
@@ -2192,6 +2302,14 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
             }
 
+            /* Also check for return/throw/panic in any item (for emitted_diverging tracking) */
+            for (uint32_t i = 0; i < n; i++) {
+                if (expr_contains_return_or_throw(e->as.do_.items[i])) {
+                    /* Will use emitted_diverging to track */
+                    break;
+                }
+            }
+
             if (!has_defers) {
                 /* No defers - emit all items */
                 for (uint32_t i = 0; i < n; i++) {
@@ -2216,8 +2334,15 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
 
             /* Emit non-defer items and register defer thunks */
+            bool emitted_diverging = false;  /* Track if we've emitted a return/throw/panic */
             for (uint32_t i = 0; i < n; i++) {
                 const Expr *it = e->as.do_.items[i];
+                
+                /* If we've already emitted a diverging expression, skip remaining items */
+                if (emitted_diverging) {
+                    continue;
+                }
+                
                 if (it->kind == EX_DEFER) {
                     /* v1 lowering: Generate thunk and register with frame */
                     const Expr *defer_expr = it->as.defer_.body;
@@ -2254,12 +2379,19 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                     }
                 } else {
                     emit_stmt(ctx, body, it);
+                    /* Check if this statement is a panic (which fires defers via tur_frame_fire_chain) */
+                    if (it->kind == EX_PANIC || it->kind == EX_PANIC_WITH) {
+                        emitted_diverging = true;
+                    }
                 }
             }
 
             /* Fire all defers LIFO at scope exit */
-            indent_buf(body, ctx->indent);
-            buf_printf(body, "tur_frame_fire_lifo(&%s);\n", frame_var);
+            /* But if a diverging expression was emitted, it already fired defers */
+            if (!emitted_diverging) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "tur_frame_fire_lifo(&%s);\n", frame_var);
+            }
 
             /* Restore frame state */
             ctx->frame_var = saved_frame;
@@ -2326,6 +2458,30 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         /* Phase R2: Panic */
         case EX_PANIC: {
+            char *v = emit_value(ctx, body, e);
+            free(v);
+            return;
+        }
+        case EX_PANIC_WITH: {
+            char *v = emit_value(ctx, body, e);
+            free(v);
+            return;
+        }
+        case EX_CATCH_UNWIND: {
+            char *v = emit_value(ctx, body, e);
+            free(v);
+            return;
+        }
+        case EX_CATCH_PANIC_OF: {
+            char *v = emit_value(ctx, body, e);
+            free(v);
+            return;
+        }
+        case EX_PANIC_PAYLOAD_TYPE:
+        case EX_PANIC_PAYLOAD_VALUE:
+        case EX_PANIC_PAYLOAD_FILE:
+        case EX_PANIC_PAYLOAD_LINE:
+        case EX_PANIC_PAYLOAD_DOWNS: {
             char *v = emit_value(ctx, body, e);
             free(v);
             return;
@@ -3133,9 +3289,13 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
 
-    /* Phase R2: tur_panic */
+    /* Phase R2: tur_panic - integrated with defer chain */
     buf_puts(out, "/* Phase R2: tur_panic */\n");
     buf_puts(out, "static int tur_panic_in_progress = 0;\n");
+    buf_puts(out, "static tur_frame *global_panic_frame = NULL;\n");
+    buf_puts(out, "static void tur_panic_set_frame(tur_frame *f) {\n");
+    buf_puts(out, "    global_panic_frame = f;\n");
+    buf_puts(out, "}\n");
     buf_puts(out, "static void tur_panic(const char *msg) {\n");
     buf_puts(out, "    if (tur_panic_in_progress) {\n");
     buf_puts(out, "        fprintf(stderr, \"double panic: aborting\\n\");\n");
@@ -3143,6 +3303,9 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    }\n");
     buf_puts(out, "    tur_panic_in_progress = 1;\n");
     buf_puts(out, "    fprintf(stderr, \"panic: %s\\n\", msg ? msg : \"(no message)\");\n");
+    buf_puts(out, "    if (global_panic_frame) {\n");
+    buf_puts(out, "        tur_frame_fire_chain(global_panic_frame);\n");
+    buf_puts(out, "    }\n");
     buf_puts(out, "    abort();\n");
     buf_puts(out, "}\n\n");
 

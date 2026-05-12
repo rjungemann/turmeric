@@ -373,6 +373,19 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
         /* Phase R2: Panic */
         case EX_PANIC:
             return borrow_check_expr_recursive(ctx, e->as.panic_.payload);
+        case EX_PANIC_WITH:
+            return borrow_check_expr_recursive(ctx, e->as.panic_with_.payload);
+        case EX_CATCH_UNWIND:
+            return borrow_check_expr_recursive(ctx, e->as.catch_unwind_.thunk);
+        case EX_CATCH_PANIC_OF:
+            return borrow_check_expr_recursive(ctx, e->as.catch_panic_of_.thunk);
+        case EX_PANIC_PAYLOAD_TYPE:
+        case EX_PANIC_PAYLOAD_VALUE:
+        case EX_PANIC_PAYLOAD_FILE:
+        case EX_PANIC_PAYLOAD_LINE:
+            return borrow_check_expr_recursive(ctx, e->as.panic_payload_type_.payload);
+        case EX_PANIC_PAYLOAD_DOWNS:
+            return borrow_check_expr_recursive(ctx, e->as.panic_payload_downs_.payload);
         case EX_TRY:
             /* Check try body and all handlers */
             if (!borrow_check_expr_recursive(ctx, e->as.try_.body)) {

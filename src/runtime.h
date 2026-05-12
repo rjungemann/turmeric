@@ -5,6 +5,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* Forward declaration for TypeKind from types.h */
+/* We can't forward-declare enums in C, so we use int for type_tag */
+typedef int TypeKindInt;
+
 /* Forward declaration for effect row (future-proofing for v3 effects).
  * This matches the forward declaration in types.h. */
 struct EffectRow;
@@ -140,5 +144,72 @@ bool tur_cont_consumed(tur_cont *cont);
  * Re-entry (double panic) calls abort() immediately. */
 extern int tur_panic_in_progress;
 void tur_panic(const char *msg);
+
+/* Phase R2: Panic with typed payload */
+/* TypeKind is an enum from types.h; we use int for type_tag in runtime.h */
+
+/* Payload carried by a panic. This is the runtime representation of a
+ * typed panic value, allowing catch-panic-of to filter by type. */
+typedef struct tur_panic_payload {
+    TypeKindInt type_tag;   /* TypeKind of the panicked value (as int) */
+    void *value;            /* Boxed payload value (heap-allocated) */
+    const char *file;       /* Source file where panic occurred */
+    int line;               /* Source line where panic occurred */
+} tur_panic_payload;
+
+/* Panic with a typed payload. The payload is boxed on the heap.
+ * type_tag: The TypeKind of the payload (as int).
+ * payload:  The boxed value (ownership transferred to tur_panic_with).
+ * file:     Source file location.
+ * line:     Source line location. */
+void tur_panic_with(TypeKindInt type_tag, void *payload, const char *file, int line);
+
+/* Result type for catch-unwind/catch-panic-of: holds either Ok(value) or Err(payload) */
+typedef enum tur_result_tag {
+    TUR_RESULT_OK,
+    TUR_RESULT_ERR,
+} tur_result_tag;
+
+/* Generic result type used by catch-unwind */
+typedef struct tur_result {
+    tur_result_tag tag;
+    union {
+        int64_t ok_val;           /* For simple integer returns (Phase R2: simplified) */
+        void *ok_ptr;            /* For pointer returns */
+        tur_panic_payload *err;  /* For panic payloads */
+    } u;
+} tur_result;
+
+/* Typed callback for thunk in catch-unwind/catch-panic-of */
+typedef void (*tur_thunk_fn)(void *env, tur_result *out);
+
+/* Catch any panic at a boundary.
+ * thunk:   The function to call. Takes env pointer and result output pointer.
+ * env:     Environment to pass to thunk.
+ * out:     Output result struct.
+ * Returns: true if a panic was caught, false if thunk completed normally.
+ * Note:    This uses setjmp/longjmp internally. */
+bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out);
+
+/* Catch panics of a specific type at a boundary.
+ * expected_type: Only catch panics with this TypeKind (as int).
+ * thunk:        The function to call.
+ * env:          Environment to pass to thunk.
+ * out:          Output result struct.
+ * Returns:       true if a panic of matching type was caught, false otherwise
+ *               (including if a panic of different type occurred, which re-panics). */
+bool tur_catch_panic_of(TypeKindInt expected_type, tur_thunk_fn thunk, void *env, tur_result *out);
+
+/* Accessors for panic payload */
+TypeKindInt tur_panic_payload_type(tur_panic_payload *p);
+void *tur_panic_payload_value(tur_panic_payload *p);
+const char *tur_panic_payload_file(tur_panic_payload *p);
+int tur_panic_payload_line(tur_panic_payload *p);
+
+/* Downcast a panic payload to a specific type.
+ * p:         The panic payload to downcast.
+ * target_type: The TypeKind to cast to (as int).
+ * Returns:   The boxed value if type matches, NULL otherwise. */
+void *tur_panic_payload_downcast(tur_panic_payload *p, TypeKindInt target_type);
 
 #endif /* TUR_RUNTIME_H */

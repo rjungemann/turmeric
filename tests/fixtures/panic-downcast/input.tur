@@ -1,0 +1,3 @@
+;;; Phase R2: panic-payload-downcast test
+(defn main [] :int
+  0)
