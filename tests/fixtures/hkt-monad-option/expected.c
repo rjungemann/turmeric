@@ -1120,6 +1120,13 @@ static bool gc_is_alive(RcControlBlock *cb) {
 
 static int64_t __inst_Functor_fmap_option(int64_t, int64_t);
 static int64_t __inst_Monad_bind_option(int64_t, int64_t);
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
 static int64_t __opt_some(int64_t);
 static int64_t __opt_none();
 static bool __opt_some_(int64_t);
@@ -1151,6 +1158,63 @@ typedef struct dict_Monad_option {
 static dict_Monad_option dict_Monad_option_singleton = {
     .bind = __inst_Monad_bind_option,
 };
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
+}
 
 static int64_t __opt_some(int64_t x) {
         struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
@@ -1210,15 +1274,15 @@ static int64_t safe_reciprocal(int64_t x) {
 
 int main() {
         {
-            int64_t result_22 = __bind_option(__opt_some(INT64_C(4)), (int64_t)(intptr_t)(safe_reciprocal));
-            (void)result_22;
-            puts((__opt_some_(result_22)) ? "true" : "false");
-            printf("%lld\n", (long long)(__opt_unwrap(result_22)));
+            int64_t result_42 = __bind_option(__opt_some(INT64_C(4)), (int64_t)(intptr_t)(safe_reciprocal));
+            (void)result_42;
+            puts((__opt_some_(result_42)) ? "true" : "false");
+            printf("%lld\n", (long long)(__opt_unwrap(result_42)));
         }
         {
-            int64_t result2_23 = __bind_option(__opt_none(), (int64_t)(intptr_t)(safe_reciprocal));
-            (void)result2_23;
-            puts((__opt_some_(result2_23)) ? "true" : "false");
+            int64_t result2_43 = __bind_option(__opt_none(), (int64_t)(intptr_t)(safe_reciprocal));
+            (void)result2_43;
+            puts((__opt_some_(result2_43)) ? "true" : "false");
         }
         int64_t __t1;
         __t1 = INT64_C(0);

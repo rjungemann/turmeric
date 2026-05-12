@@ -1125,14 +1125,78 @@ static void __defer_4(void *__env) {
     free(__e->base);
 }
 
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
 static int64_t sum_with_base();
 
 static int64_t __effect_handler_9(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_9(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t k_2 = __k;
-    if (((TurContK *)(intptr_t)k_2)->origin_fiber != (void *)tur_current_fiber) { fprintf(stderr, "continuation error: resume on wrong fiber\n"); abort(); }
-    ((TurContK *)(intptr_t)k_2)->consumed = true;
+    int64_t k_22 = __k;
+    if (((TurContK *)(intptr_t)k_22)->origin_fiber != (void *)tur_current_fiber) { fprintf(stderr, "continuation error: resume on wrong fiber\n"); abort(); }
+    ((TurContK *)(intptr_t)k_22)->consumed = true;
     return (int64_t)INT64_C(42);
+}
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
 }
 
 static int64_t sum_with_base() {
@@ -1140,14 +1204,14 @@ static int64_t sum_with_base() {
         {
             void * __t1 = malloc(sizeof(int64_t));
             *((int64_t *)__t1) = INT64_C(100);
-            void * base_1 = __t1;
-            (void)base_1;
+            void * base_21 = __t1;
+            (void)base_21;
             tur_frame __frame_2;
             tur_frame_init(&__frame_2, NULL);
-            struct __defer_env_3 __t5 = {.base = base_1};
+            struct __defer_env_3 __t5 = {.base = base_21};
             tur_frame_push_defer(&__frame_2, __defer_4, &__t5);
             int64_t __t6;
-            int64_t __t7 = *((int64_t *)base_1);
+            int64_t __t7 = *((int64_t *)base_21);
             int64_t __t8 = tur_effect_perform("GetBase", NULL, 0);
             __t6 = ((__t7) + (__t8));
             tur_frame_fire_lifo(&__frame_2);

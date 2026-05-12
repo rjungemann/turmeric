@@ -1118,6 +1118,13 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
 static void * fiber_new_fn(void *, int64_t);
 static int64_t fiber_resume_fn(void *);
 static bool fiber_done_(void *);
@@ -1131,6 +1138,63 @@ static void sched_run(void *);
 static void fiber_a();
 static void fiber_b();
 static void fiber_c();
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
+}
 
 static void * fiber_new_fn(void * fn, int64_t stack_size) {
         return (void *)tur_fiber_block_new((void(*)(void))fn, (size_t)stack_size);
@@ -1229,13 +1293,13 @@ static void fiber_c() {
 int main() {
         int64_t __t0;
         {
-            void * q_25 = sched_new();
-            (void)q_25;
-            sched_push(q_25, fiber_new_fn(fiber_a, INT64_C(0)));
-            sched_push(q_25, fiber_new_fn(fiber_b, INT64_C(0)));
-            sched_push(q_25, fiber_new_fn(fiber_c, INT64_C(0)));
-            sched_run(q_25);
-            sched_free(q_25);
+            void * q_45 = sched_new();
+            (void)q_45;
+            sched_push(q_45, fiber_new_fn(fiber_a, INT64_C(0)));
+            sched_push(q_45, fiber_new_fn(fiber_b, INT64_C(0)));
+            sched_push(q_45, fiber_new_fn(fiber_c, INT64_C(0)));
+            sched_run(q_45);
+            sched_free(q_45);
             puts("done");
             int64_t __t1;
             __t1 = INT64_C(0);

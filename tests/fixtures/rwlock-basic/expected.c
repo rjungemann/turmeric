@@ -1118,6 +1118,13 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
 static void * rwlock_new();
 static void rwlock_rdlock(void *);
 static void rwlock_wrlock(void *);
@@ -1125,6 +1132,63 @@ static bool rwlock_try_rdlock(void *);
 static bool rwlock_try_wrlock(void *);
 static void rwlock_unlock(void *);
 static void rwlock_free(void *);
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
+}
 
 static void * rwlock_new() {
         pthread_rwlock_t *rw = (pthread_rwlock_t *)malloc(sizeof(pthread_rwlock_t));
@@ -1167,26 +1231,26 @@ static void rwlock_free(void * rw) {
 
 int main() {
         {
-            void * rw_14 = rwlock_new();
-            (void)rw_14;
-            rwlock_wrlock(rw_14);
+            void * rw_34 = rwlock_new();
+            (void)rw_34;
+            rwlock_wrlock(rw_34);
             printf("%lld\n", (long long)(INT64_C(1)));
-            rwlock_unlock(rw_14);
-            rwlock_rdlock(rw_14);
+            rwlock_unlock(rw_34);
+            rwlock_rdlock(rw_34);
             printf("%lld\n", (long long)(INT64_C(2)));
-            rwlock_unlock(rw_14);
+            rwlock_unlock(rw_34);
             {
-                bool got_r_15 = rwlock_try_rdlock(rw_14);
-                (void)got_r_15;
-                puts((got_r_15) ? "true" : "false");
+                bool got_r_35 = rwlock_try_rdlock(rw_34);
+                (void)got_r_35;
+                puts((got_r_35) ? "true" : "false");
                 {
-                    bool got_w_16 = rwlock_try_wrlock(rw_14);
-                    (void)got_w_16;
-                    puts((got_w_16) ? "true" : "false");
+                    bool got_w_36 = rwlock_try_wrlock(rw_34);
+                    (void)got_w_36;
+                    puts((got_w_36) ? "true" : "false");
                 }
-                rwlock_unlock(rw_14);
+                rwlock_unlock(rw_34);
             }
-            rwlock_free(rw_14);
+            rwlock_free(rw_34);
         }
         int64_t __t0;
         __t0 = INT64_C(0);

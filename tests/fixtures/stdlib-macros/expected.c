@@ -1118,6 +1118,71 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
+}
+
 int main() {
         if (true) {
             puts("when-true");
@@ -1136,15 +1201,15 @@ int main() {
             puts("unless-true");
         }
         {
-            int64_t x_1 = INT64_C(5);
-            (void)x_1;
-            if (((x_1) == (INT64_C(1)))) {
+            int64_t x_21 = INT64_C(5);
+            (void)x_21;
+            if (((x_21) == (INT64_C(1)))) {
                 puts("one");
             } else {
-                if (((x_1) == (INT64_C(2)))) {
+                if (((x_21) == (INT64_C(2)))) {
                     puts("two");
                 } else {
-                    if (((x_1) == (INT64_C(5)))) {
+                    if (((x_21) == (INT64_C(5)))) {
                         puts("five");
                     } else {
                     }
@@ -1152,12 +1217,12 @@ int main() {
             }
         }
         {
-            int64_t y_2 = INT64_C(10);
-            (void)y_2;
-            if (((y_2) == (INT64_C(1)))) {
+            int64_t y_22 = INT64_C(10);
+            (void)y_22;
+            if (((y_22) == (INT64_C(1)))) {
                 puts("one");
             } else {
-                if (((y_2) == (INT64_C(2)))) {
+                if (((y_22) == (INT64_C(2)))) {
                     puts("two");
                 } else {
                     puts("other");

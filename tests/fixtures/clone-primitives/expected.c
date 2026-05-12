@@ -1119,6 +1119,13 @@ static bool gc_is_alive(RcControlBlock *cb) {
 }
 
 static int64_t __inst_Clone_clone_int(int64_t);
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
 
 static int64_t __inst_Clone_clone_int(int64_t x) {
         return x;
@@ -1132,23 +1139,80 @@ static dict_Clone_int dict_Clone_int_singleton = {
     .clone = __inst_Clone_clone_int,
 };
 
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
+}
+
 int main() {
         {
-            int64_t a_3 = INT64_C(42);
-            (void)a_3;
+            int64_t a_23 = INT64_C(42);
+            (void)a_23;
             {
-                int64_t b_4 = __inst_Clone_clone_int(a_3);
-                (void)b_4;
-                printf("%lld\n", (long long)(b_4));
+                int64_t b_24 = __inst_Clone_clone_int(a_23);
+                (void)b_24;
+                printf("%lld\n", (long long)(b_24));
             }
         }
         {
-            int64_t c_5 = INT64_C(99);
-            (void)c_5;
+            int64_t c_25 = INT64_C(99);
+            (void)c_25;
             {
-                int64_t d_6 = __inst_Clone_clone_int(c_5);
-                (void)d_6;
-                printf("%lld\n", (long long)(d_6));
+                int64_t d_26 = __inst_Clone_clone_int(c_25);
+                (void)d_26;
+                printf("%lld\n", (long long)(d_26));
             }
         }
         int64_t __t0;

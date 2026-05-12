@@ -1120,10 +1120,17 @@ static bool gc_is_alive(RcControlBlock *cb) {
 
 static int64_t __inst_Functor_fmap_option(int64_t, int64_t);
 static int64_t __inst_Monad_bind_option(int64_t, int64_t);
-static int64_t __fn_22(int64_t);
-static int64_t __fn_26(int64_t);
-static int64_t __fn_30(int64_t);
-static int64_t __fn_34(int64_t);
+static int64_t __fn_42(int64_t);
+static int64_t __fn_46(int64_t);
+static int64_t __fn_50(int64_t);
+static int64_t __fn_54(int64_t);
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
 static int64_t __opt_some(int64_t);
 static int64_t __opt_none();
 static bool __opt_some_(int64_t);
@@ -1155,20 +1162,77 @@ static dict_Monad_option dict_Monad_option_singleton = {
     .bind = __inst_Monad_bind_option,
 };
 
-static int64_t __fn_22(int64_t x) {
+static int64_t __fn_42(int64_t x) {
         return __opt_some(((x) * (INT64_C(3))));
 }
 
-static int64_t __fn_26(int64_t x) {
+static int64_t __fn_46(int64_t x) {
         return __opt_some(((x) * (INT64_C(3))));
 }
 
-static int64_t __fn_30(int64_t x) {
+static int64_t __fn_50(int64_t x) {
         return __opt_some(((x) * (INT64_C(2))));
 }
 
-static int64_t __fn_34(int64_t y) {
+static int64_t __fn_54(int64_t y) {
         return __opt_some(((y) + (INT64_C(1))));
+}
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
 }
 
 static int64_t __opt_some(int64_t x) {
@@ -1219,30 +1283,30 @@ static int64_t __bind_option(int64_t ma, int64_t fn) {
 
 int main() {
         {
-            int64_t result3_20 = __opt_some(INT64_C(99));
-            (void)result3_20;
-            puts((__opt_some_(result3_20)) ? "true" : "false");
-            printf("%lld\n", (long long)(__opt_unwrap(result3_20)));
+            int64_t result3_40 = __opt_some(INT64_C(99));
+            (void)result3_40;
+            puts((__opt_some_(result3_40)) ? "true" : "false");
+            printf("%lld\n", (long long)(__opt_unwrap(result3_40)));
         }
         {
-            int64_t result_24 = __inst_Monad_bind_option(__opt_some(INT64_C(5)), (int64_t)(intptr_t)(__fn_22));
-            (void)result_24;
-            puts((__opt_some_(result_24)) ? "true" : "false");
-            printf("%lld\n", (long long)(__opt_unwrap(result_24)));
+            int64_t result_44 = __inst_Monad_bind_option(__opt_some(INT64_C(5)), (int64_t)(intptr_t)(__fn_42));
+            (void)result_44;
+            puts((__opt_some_(result_44)) ? "true" : "false");
+            printf("%lld\n", (long long)(__opt_unwrap(result_44)));
         }
         {
-            int64_t result2_28 = __inst_Monad_bind_option(__opt_none(), (int64_t)(intptr_t)(__fn_26));
-            (void)result2_28;
-            puts((__opt_some_(result2_28)) ? "true" : "false");
+            int64_t result2_48 = __inst_Monad_bind_option(__opt_none(), (int64_t)(intptr_t)(__fn_46));
+            (void)result2_48;
+            puts((__opt_some_(result2_48)) ? "true" : "false");
         }
         {
-            int64_t step1_32 = __bind_option(__opt_some(INT64_C(3)), (int64_t)(intptr_t)(__fn_30));
-            (void)step1_32;
+            int64_t step1_52 = __bind_option(__opt_some(INT64_C(3)), (int64_t)(intptr_t)(__fn_50));
+            (void)step1_52;
             {
-                int64_t result4_36 = __bind_option(step1_32, (int64_t)(intptr_t)(__fn_34));
-                (void)result4_36;
-                puts((__opt_some_(result4_36)) ? "true" : "false");
-                printf("%lld\n", (long long)(__opt_unwrap(result4_36)));
+                int64_t result4_56 = __bind_option(step1_52, (int64_t)(intptr_t)(__fn_54));
+                (void)result4_56;
+                puts((__opt_some_(result4_56)) ? "true" : "false");
+                printf("%lld\n", (long long)(__opt_unwrap(result4_56)));
             }
         }
         int64_t __t0;

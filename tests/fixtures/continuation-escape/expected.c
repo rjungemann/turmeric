@@ -1118,34 +1118,98 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
-static int64_t __fn_5(int64_t);
-static int64_t __fn_8(int64_t);
-static int64_t __fn_12(int64_t);
+static int64_t __fn_25(int64_t);
+static int64_t __fn_28(int64_t);
+static int64_t __fn_32(int64_t);
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
 static int64_t test_escape_nested();
 static int64_t test_escape_let();
 
-static int64_t __fn_5(int64_t exit2) {
+static int64_t __fn_25(int64_t exit2) {
         return INT64_C(100);
 }
 
-static int64_t __fn_8(int64_t exit1) {
+static int64_t __fn_28(int64_t exit1) {
         int64_t __t0;
         {
-            int64_t (*__esc_f)(int64_t) = __fn_5;
+            int64_t (*__esc_f)(int64_t) = __fn_25;
             (void)__esc_f;
             __t0 = __esc_f(INT64_C(0));
         }
         return __t0;
 }
 
-static int64_t __fn_12(int64_t exit) {
+static int64_t __fn_32(int64_t exit) {
         return INT64_C(5);
+}
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
 }
 
 static int64_t test_escape_nested() {
         int64_t __t1;
         {
-            int64_t (*__esc_f)(int64_t) = __fn_8;
+            int64_t (*__esc_f)(int64_t) = __fn_28;
             (void)__esc_f;
             __t1 = __esc_f(INT64_C(0));
         }
@@ -1157,13 +1221,13 @@ static int64_t test_escape_let() {
         {
             int64_t __t3;
             {
-                int64_t (*__esc_f)(int64_t) = __fn_12;
+                int64_t (*__esc_f)(int64_t) = __fn_32;
                 (void)__esc_f;
                 __t3 = __esc_f(INT64_C(0));
             }
-            int64_t v_15 = __t3;
-            (void)v_15;
-            __t2 = ((v_15) + (INT64_C(10)));
+            int64_t v_35 = __t3;
+            (void)v_35;
+            __t2 = ((v_35) + (INT64_C(10)));
         }
         return __t2;
 }

@@ -1132,7 +1132,11 @@ static int64_t unbox(int64_t p) {
   
 }
 
-
-int main(void) {
-    return 0;
+int main() {
+        puts("arena test placeholder");
+        int64_t __t0;
+        __t0 = INT64_C(0);
+        return (int)__t0;
 }
+
+

@@ -1138,10 +1138,74 @@ static void __defer_1(void *__env) {
     puts("defer-1");
 }
 
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
 static int64_t test_return_no_defer();
 static int64_t test_return_with_defer();
 static int64_t test_return_in_nested_scope();
 static int64_t test_return_in_if();
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
+}
 
 static int64_t test_return_no_defer() {
         return INT64_C(42);
@@ -1159,15 +1223,15 @@ static int64_t test_return_with_defer() {
 static int64_t test_return_in_nested_scope() {
         int64_t __t2;
         {
-            int64_t x_5 = INT64_C(1);
-            (void)x_5;
+            int64_t x_25 = INT64_C(1);
+            (void)x_25;
             tur_frame __frame_3;
             tur_frame_init(&__frame_3, NULL);
             tur_frame_push_defer(&__frame_3, __defer_4, NULL);
             int64_t __t5;
             {
-                int64_t y_6 = INT64_C(2);
-                (void)y_6;
+                int64_t y_26 = INT64_C(2);
+                (void)y_26;
                 tur_frame __frame_6;
                 tur_frame_init(&__frame_6, &__frame_3);
                 tur_frame_push_defer(&__frame_6, __defer_7, NULL);
@@ -1200,27 +1264,27 @@ static int64_t test_return_in_if() {
 int main() {
         puts("Testing early return with defers...");
         {
-            int64_t r1_7 = test_return_no_defer();
-            (void)r1_7;
-            printf("%lld\n", (long long)(r1_7));
+            int64_t r1_27 = test_return_no_defer();
+            (void)r1_27;
+            printf("%lld\n", (long long)(r1_27));
         }
         puts("test-return-with-defer:");
         {
-            int64_t r2_8 = test_return_with_defer();
-            (void)r2_8;
-            printf("%lld\n", (long long)(r2_8));
+            int64_t r2_28 = test_return_with_defer();
+            (void)r2_28;
+            printf("%lld\n", (long long)(r2_28));
         }
         puts("test-return-in-nested-scope:");
         {
-            int64_t r3_9 = test_return_in_nested_scope();
-            (void)r3_9;
-            printf("%lld\n", (long long)(r3_9));
+            int64_t r3_29 = test_return_in_nested_scope();
+            (void)r3_29;
+            printf("%lld\n", (long long)(r3_29));
         }
         puts("test-return-in-if:");
         {
-            int64_t r4_10 = test_return_in_if();
-            (void)r4_10;
-            printf("%lld\n", (long long)(r4_10));
+            int64_t r4_30 = test_return_in_if();
+            (void)r4_30;
+            printf("%lld\n", (long long)(r4_30));
         }
         int64_t __t13;
         __t13 = INT64_C(0);

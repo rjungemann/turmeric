@@ -1,0 +1,1 @@
+unsafe block requires a ;;; SAFETY: comment documenting why unsafe code is needed

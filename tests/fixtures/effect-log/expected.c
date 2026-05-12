@@ -1118,7 +1118,71 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
 static int64_t process(int64_t);
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
+}
 
 static int64_t process(int64_t x) {
         int64_t __t0[2];
@@ -1128,14 +1192,14 @@ static int64_t process(int64_t x) {
         int64_t __t1;
         int64_t __t2;
         {
-            int64_t result_3 = ((x) * (INT64_C(2)));
-            (void)result_3;
+            int64_t result_23 = ((x) * (INT64_C(2)));
+            (void)result_23;
             int64_t __t3[2];
             __t3[0] = (int64_t)"info";
             __t3[1] = (int64_t)"done";
             tur_effect_perform("Log", __t3, 2);
             int64_t __t4;
-            __t4 = result_3;
+            __t4 = result_23;
             __t2 = __t4;
         }
         __t1 = __t2;
@@ -1144,22 +1208,22 @@ static int64_t process(int64_t x) {
 
 static int64_t __effect_handler_5(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_5(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    const char * level_4 = (const char *)__effect_args[0];
-    const char * msg_5 = (const char *)__effect_args[1];
-    int64_t k_6 = __k;
-    puts(msg_5);
-    if (((TurContK *)(intptr_t)k_6)->origin_fiber != (void *)tur_current_fiber) { fprintf(stderr, "continuation error: resume on wrong fiber\n"); abort(); }
-    ((TurContK *)(intptr_t)k_6)->consumed = true;
+    const char * level_24 = (const char *)__effect_args[0];
+    const char * msg_25 = (const char *)__effect_args[1];
+    int64_t k_26 = __k;
+    puts(msg_25);
+    if (((TurContK *)(intptr_t)k_26)->origin_fiber != (void *)tur_current_fiber) { fprintf(stderr, "continuation error: resume on wrong fiber\n"); abort(); }
+    ((TurContK *)(intptr_t)k_26)->consumed = true;
     return 0;
 }
 
 static int64_t __effect_handler_8(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_8(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    const char * level_8 = (const char *)__effect_args[0];
-    const char * msg_9 = (const char *)__effect_args[1];
-    int64_t k_10 = __k;
-    if (((TurContK *)(intptr_t)k_10)->origin_fiber != (void *)tur_current_fiber) { fprintf(stderr, "continuation error: resume on wrong fiber\n"); abort(); }
-    ((TurContK *)(intptr_t)k_10)->consumed = true;
+    const char * level_28 = (const char *)__effect_args[0];
+    const char * msg_29 = (const char *)__effect_args[1];
+    int64_t k_30 = __k;
+    if (((TurContK *)(intptr_t)k_30)->origin_fiber != (void *)tur_current_fiber) { fprintf(stderr, "continuation error: resume on wrong fiber\n"); abort(); }
+    ((TurContK *)(intptr_t)k_30)->consumed = true;
     return 0;
 }
 
@@ -1175,9 +1239,9 @@ int main() {
             *__eff_chain_6 = &__eff_frame_6;
             int64_t __t7 = process(INT64_C(21));
             *__eff_chain_6 = (*__eff_chain_6)->parent;
-            int64_t r1_7 = __t7;
-            (void)r1_7;
-            printf("%lld\n", (long long)(r1_7));
+            int64_t r1_27 = __t7;
+            (void)r1_27;
+            printf("%lld\n", (long long)(r1_27));
         }
         {
             EffectHandlerFrame __eff_frame_9;
@@ -1190,9 +1254,9 @@ int main() {
             *__eff_chain_9 = &__eff_frame_9;
             int64_t __t10 = process(INT64_C(5));
             *__eff_chain_9 = (*__eff_chain_9)->parent;
-            int64_t r2_11 = __t10;
-            (void)r2_11;
-            printf("%lld\n", (long long)(r2_11));
+            int64_t r2_31 = __t10;
+            (void)r2_31;
+            printf("%lld\n", (long long)(r2_31));
         }
         int64_t __t11;
         __t11 = INT64_C(0);

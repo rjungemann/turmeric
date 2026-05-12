@@ -1124,17 +1124,82 @@ typedef struct Point {
 } Point;
 
 
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
+}
+
 int main() {
         int64_t __t0;
         {
-            Point p_2 = (Point){.x = INT64_C(3), .y = INT64_C(4)};
-            (void)p_2;
-            printf("%lld\n", (long long)((p_2).x));
-            printf("%lld\n", (long long)((p_2).y));
+            Point p_22 = (Point){.x = INT64_C(3), .y = INT64_C(4)};
+            (void)p_22;
+            printf("%lld\n", (long long)((p_22).x));
+            printf("%lld\n", (long long)((p_22).y));
             {
-                const void * rx_3 = &(p_2).x;
-                (void)rx_3;
-                int64_t __t1 = *((int64_t *)rx_3);
+                const void * rx_23 = &(p_22).x;
+                (void)rx_23;
+                int64_t __t1 = *((int64_t *)rx_23);
                 printf("%lld\n", (long long)(__t1));
             }
             int64_t __t2;

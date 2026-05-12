@@ -1118,6 +1118,13 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
 static void * future_of(int64_t);
 static void * future_error_of(int64_t);
 static void future_free(void *);
@@ -1132,6 +1139,63 @@ static bool future_cancelled_(void *);
 static int64_t double_fn(int64_t);
 static void * times10_fn(int64_t);
 static void * make_unsettled();
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
+}
 
 static void * future_of(int64_t v) {
         typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
@@ -1302,119 +1366,119 @@ static void * make_unsettled() {
 
 int main() {
         {
-            void * f1_32 = future_of(INT64_C(42));
-            (void)f1_32;
-            printf("%lld\n", (long long)(future_get_ok(f1_32)));
-            future_free(f1_32);
+            void * f1_52 = future_of(INT64_C(42));
+            (void)f1_52;
+            printf("%lld\n", (long long)(future_get_ok(f1_52)));
+            future_free(f1_52);
         }
         {
-            void * f2_33 = future_error_of(INT64_C(-1));
-            (void)f2_33;
-            printf("%lld\n", (long long)(future_get_ok(f2_33)));
-            future_free(f2_33);
+            void * f2_53 = future_error_of(INT64_C(-1));
+            (void)f2_53;
+            printf("%lld\n", (long long)(future_get_ok(f2_53)));
+            future_free(f2_53);
         }
         {
-            void * f3_34 = future_of(INT64_C(10));
-            (void)f3_34;
+            void * f3_54 = future_of(INT64_C(10));
+            (void)f3_54;
             {
-                void * f3m_35 = future_map(f3_34, double_fn);
-                (void)f3m_35;
-                printf("%lld\n", (long long)(future_get_ok(f3m_35)));
-                future_free(f3_34);
-                future_free(f3m_35);
+                void * f3m_55 = future_map(f3_54, double_fn);
+                (void)f3m_55;
+                printf("%lld\n", (long long)(future_get_ok(f3m_55)));
+                future_free(f3_54);
+                future_free(f3m_55);
             }
         }
         {
-            void * f4_36 = future_error_of(INT64_C(-5));
-            (void)f4_36;
+            void * f4_56 = future_error_of(INT64_C(-5));
+            (void)f4_56;
             {
-                void * f4m_37 = future_map(f4_36, double_fn);
-                (void)f4m_37;
-                printf("%lld\n", (long long)(future_get_ok(f4m_37)));
-                future_free(f4_36);
-                future_free(f4m_37);
+                void * f4m_57 = future_map(f4_56, double_fn);
+                (void)f4m_57;
+                printf("%lld\n", (long long)(future_get_ok(f4m_57)));
+                future_free(f4_56);
+                future_free(f4m_57);
             }
         }
         {
-            void * f5_38 = future_of(INT64_C(7));
-            (void)f5_38;
+            void * f5_58 = future_of(INT64_C(7));
+            (void)f5_58;
             {
-                void * f5t_39 = future_then(f5_38, times10_fn);
-                (void)f5t_39;
-                printf("%lld\n", (long long)(future_get_ok(f5t_39)));
-                future_free(f5_38);
-                future_free(f5t_39);
+                void * f5t_59 = future_then(f5_58, times10_fn);
+                (void)f5t_59;
+                printf("%lld\n", (long long)(future_get_ok(f5t_59)));
+                future_free(f5_58);
+                future_free(f5t_59);
             }
         }
         {
-            void * f6_40 = future_error_of(INT64_C(-3));
-            (void)f6_40;
+            void * f6_60 = future_error_of(INT64_C(-3));
+            (void)f6_60;
             {
-                void * f6t_41 = future_then(f6_40, times10_fn);
-                (void)f6t_41;
-                printf("%lld\n", (long long)(future_get_ok(f6t_41)));
-                future_free(f6_40);
-                future_free(f6t_41);
+                void * f6t_61 = future_then(f6_60, times10_fn);
+                (void)f6t_61;
+                printf("%lld\n", (long long)(future_get_ok(f6t_61)));
+                future_free(f6_60);
+                future_free(f6t_61);
             }
         }
         {
-            void * fa_42 = future_of(INT64_C(100));
-            (void)fa_42;
+            void * fa_62 = future_of(INT64_C(100));
+            (void)fa_62;
             {
-                void * fb_43 = future_of(INT64_C(200));
-                (void)fb_43;
+                void * fb_63 = future_of(INT64_C(200));
+                (void)fb_63;
                 {
-                    void * fall_44 = future_all2(fa_42, fb_43);
-                    (void)fall_44;
-                    printf("%lld\n", (long long)(future_get_ok(fall_44)));
-                    future_free(fa_42);
-                    future_free(fb_43);
-                    future_free(fall_44);
+                    void * fall_64 = future_all2(fa_62, fb_63);
+                    (void)fall_64;
+                    printf("%lld\n", (long long)(future_get_ok(fall_64)));
+                    future_free(fa_62);
+                    future_free(fb_63);
+                    future_free(fall_64);
                 }
             }
         }
         {
-            void * fa2_45 = future_of(INT64_C(100));
-            (void)fa2_45;
+            void * fa2_65 = future_of(INT64_C(100));
+            (void)fa2_65;
             {
-                void * fb2_46 = future_error_of(INT64_C(-7));
-                (void)fb2_46;
+                void * fb2_66 = future_error_of(INT64_C(-7));
+                (void)fb2_66;
                 {
-                    void * fall2_47 = future_all2(fa2_45, fb2_46);
-                    (void)fall2_47;
-                    printf("%lld\n", (long long)(future_get_ok(fall2_47)));
-                    future_free(fa2_45);
-                    future_free(fb2_46);
-                    future_free(fall2_47);
+                    void * fall2_67 = future_all2(fa2_65, fb2_66);
+                    (void)fall2_67;
+                    printf("%lld\n", (long long)(future_get_ok(fall2_67)));
+                    future_free(fa2_65);
+                    future_free(fb2_66);
+                    future_free(fall2_67);
                 }
             }
         }
         {
-            void * fa3_48 = future_of(INT64_C(55));
-            (void)fa3_48;
+            void * fa3_68 = future_of(INT64_C(55));
+            (void)fa3_68;
             {
-                void * fb3_49 = future_error_of(INT64_C(-8));
-                (void)fb3_49;
+                void * fb3_69 = future_error_of(INT64_C(-8));
+                (void)fb3_69;
                 {
-                    void * fany_50 = future_any2(fa3_48, fb3_49);
-                    (void)fany_50;
-                    printf("%lld\n", (long long)(future_get_ok(fany_50)));
-                    future_free(fa3_48);
-                    future_free(fb3_49);
-                    future_free(fany_50);
+                    void * fany_70 = future_any2(fa3_68, fb3_69);
+                    (void)fany_70;
+                    printf("%lld\n", (long long)(future_get_ok(fany_70)));
+                    future_free(fa3_68);
+                    future_free(fb3_69);
+                    future_free(fany_70);
                 }
             }
         }
         {
-            void * fc_51 = make_unsettled();
-            (void)fc_51;
-            future_cancel(fc_51);
-            if (future_cancelled_(fc_51)) {
+            void * fc_71 = make_unsettled();
+            (void)fc_71;
+            future_cancel(fc_71);
+            if (future_cancelled_(fc_71)) {
                 puts("cancelled");
             } else {
                 puts("FAIL");
             }
-            future_free(fc_51);
+            future_free(fc_71);
         }
         int64_t __t0;
         __t0 = INT64_C(0);

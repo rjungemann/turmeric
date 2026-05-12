@@ -1146,6 +1146,71 @@ static void drop_glue_Wrapper(void *ptr) {
 }
 
 
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
+}
+
 int main() {
         int64_t __t0;
         {
@@ -1153,28 +1218,28 @@ int main() {
             *__t1 = INT64_C(10);
             RcControlBlock *__t2 = rc_cb_alloc(0, 3, NULL);
             __t2->value = __t1;
-            RcControlBlock * inner_2 = __t2;
-            (void)inner_2;
+            RcControlBlock * inner_22 = __t2;
+            (void)inner_22;
             tur_frame __frame_3;
             tur_frame_init(&__frame_3, NULL);
-            int64_t __t4 = rc_strong_count(inner_2);
+            int64_t __t4 = rc_strong_count(inner_22);
             printf("%lld\n", (long long)(__t4));
-            struct __defer_env_5 __t7 = {.inner = inner_2};
+            struct __defer_env_5 __t7 = {.inner = inner_22};
             tur_frame_push_defer(&__frame_3, __defer_6, &__t7);
             int64_t __t8;
             int64_t __t9;
             {
                 Wrapper *__t10 = (Wrapper *)malloc(sizeof(Wrapper));
-                *__t10 = (Wrapper){.val = inner_2};
+                *__t10 = (Wrapper){.val = inner_22};
                 RcControlBlock *__t11 = rc_cb_alloc(0, 18, drop_glue_Wrapper);
                 __t11->value = __t10;
-                RcControlBlock * w_3 = __t11;
-                (void)w_3;
+                RcControlBlock * w_23 = __t11;
+                (void)w_23;
                 tur_frame __frame_12;
                 tur_frame_init(&__frame_12, &__frame_3);
-                int64_t __t13 = rc_strong_count(w_3);
+                int64_t __t13 = rc_strong_count(w_23);
                 printf("%lld\n", (long long)(__t13));
-                struct __defer_env_14 __t16 = {.w = w_3};
+                struct __defer_env_14 __t16 = {.w = w_23};
                 tur_frame_push_defer(&__frame_12, __defer_15, &__t16);
                 int64_t __t17;
                 __t17 = INT64_C(0);

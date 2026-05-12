@@ -1118,28 +1118,92 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
-static int64_t __fn_2();
+static int64_t __fn_22();
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
 
-static int64_t __fn_2() {
+static int64_t __fn_22() {
         return INT64_C(42);
+}
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
 }
 
 static int64_t __effect_handler_1(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_1(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t k_1 = __k;
+    int64_t k_21 = __k;
     int64_t __t2;
     {
-        void *__t3 = (void *)tur_async_fiber((int64_t(*)(void))(intptr_t)__fn_2);
-        void * fut_4 = __t3;
-        (void)fut_4;
+        void *__t3 = (void *)tur_async_fiber((int64_t(*)(void))(intptr_t)__fn_22);
+        void * fut_24 = __t3;
+        (void)fut_24;
         int64_t __t4;
         {
-            int64_t __t5 = tur_await_future((TurFuture*)(intptr_t)fut_4);
-            int64_t val_5 = __t5;
-            (void)val_5;
-            if (((TurContK *)(intptr_t)k_1)->origin_fiber != (void *)tur_current_fiber) { fprintf(stderr, "continuation error: resume on wrong fiber\n"); abort(); }
-            ((TurContK *)(intptr_t)k_1)->consumed = true;
-            __t4 = val_5;
+            int64_t __t5 = tur_await_future((TurFuture*)(intptr_t)fut_24);
+            int64_t val_25 = __t5;
+            (void)val_25;
+            if (((TurContK *)(intptr_t)k_21)->origin_fiber != (void *)tur_current_fiber) { fprintf(stderr, "continuation error: resume on wrong fiber\n"); abort(); }
+            ((TurContK *)(intptr_t)k_21)->consumed = true;
+            __t4 = val_25;
         }
         __t2 = __t4;
     }
@@ -1160,9 +1224,9 @@ int main() {
             int64_t __t8 = tur_effect_perform("GetValue", NULL, 0);
             int64_t __t7 = __t8;
             *__eff_chain_6 = (*__eff_chain_6)->parent;
-            int64_t result_6 = __t7;
-            (void)result_6;
-            printf("%lld\n", (long long)(result_6));
+            int64_t result_26 = __t7;
+            (void)result_26;
+            printf("%lld\n", (long long)(result_26));
             int64_t __t9;
             __t9 = INT64_C(0);
             __t0 = __t9;

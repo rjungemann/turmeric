@@ -1134,6 +1134,71 @@ static void __defer_12(void *__env) {
     rc_free_queue_drain();
 }
 
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
+}
+
 int main() {
         gc_enable();
         {
@@ -1141,41 +1206,41 @@ int main() {
             *__t0 = INT64_C(1);
             RcControlBlock *__t1 = rc_cb_alloc(0, 3, NULL);
             __t1->value = __t0;
-            RcControlBlock * a_1 = __t1;
-            (void)a_1;
+            RcControlBlock * a_21 = __t1;
+            (void)a_21;
             int64_t *__t2 = (int64_t *)malloc(sizeof(int64_t));
             *__t2 = INT64_C(2);
             RcControlBlock *__t3 = rc_cb_alloc(0, 3, NULL);
             __t3->value = __t2;
-            RcControlBlock * b_2 = __t3;
-            (void)b_2;
+            RcControlBlock * b_22 = __t3;
+            (void)b_22;
             {
-                RcControlBlock *__t4 = a_1; rc_weak_increment(a_1);
-                RcControlBlock * wa_3 = __t4;
-                (void)wa_3;
-                RcControlBlock *__t5 = b_2; rc_weak_increment(b_2);
-                RcControlBlock * wb_4 = __t5;
-                (void)wb_4;
-                rc_strong_decrement(a_1);
+                RcControlBlock *__t4 = a_21; rc_weak_increment(a_21);
+                RcControlBlock * wa_23 = __t4;
+                (void)wa_23;
+                RcControlBlock *__t5 = b_22; rc_weak_increment(b_22);
+                RcControlBlock * wb_24 = __t5;
+                (void)wb_24;
+                rc_strong_decrement(a_21);
                 rc_free_queue_drain();
-                rc_strong_decrement(b_2);
+                rc_strong_decrement(b_22);
                 rc_free_queue_drain();
                 gc_force();
                 {
-                    RcControlBlock *__t6 = rc_upgrade(wa_3);
-                    RcControlBlock * ua_5 = __t6;
-                    (void)ua_5;
-                    RcControlBlock *__t7 = rc_upgrade(wb_4);
-                    RcControlBlock * ub_6 = __t7;
-                    (void)ub_6;
+                    RcControlBlock *__t6 = rc_upgrade(wa_23);
+                    RcControlBlock * ua_25 = __t6;
+                    (void)ua_25;
+                    RcControlBlock *__t7 = rc_upgrade(wb_24);
+                    RcControlBlock * ub_26 = __t7;
+                    (void)ub_26;
                     tur_frame __frame_8;
                     tur_frame_init(&__frame_8, NULL);
-                    int64_t __t9 = rc_strong_count(ua_5);
-                    int64_t __t10 = rc_strong_count(ub_6);
+                    int64_t __t9 = rc_strong_count(ua_25);
+                    int64_t __t10 = rc_strong_count(ub_26);
                     printf("%lld\n", (long long)(((__t9) + (__t10))));
-                    struct __defer_env_11 __t13 = {.ua = ua_5};
+                    struct __defer_env_11 __t13 = {.ua = ua_25};
                     tur_frame_push_defer(&__frame_8, __defer_12, &__t13);
-                    struct __defer_env_14 __t16 = {.ub = ub_6};
+                    struct __defer_env_14 __t16 = {.ub = ub_26};
                     tur_frame_push_defer(&__frame_8, __defer_15, &__t16);
                     tur_frame_fire_lifo(&__frame_8);
                 }

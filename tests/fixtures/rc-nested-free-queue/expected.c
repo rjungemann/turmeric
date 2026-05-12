@@ -1118,23 +1118,88 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
+}
+
 int main() {
         {
             int64_t *__t0 = (int64_t *)malloc(sizeof(int64_t));
             *__t0 = INT64_C(1);
             RcControlBlock *__t1 = rc_cb_alloc(0, 3, NULL);
             __t1->value = __t0;
-            RcControlBlock * inner_1 = __t1;
-            (void)inner_1;
+            RcControlBlock * inner_21 = __t1;
+            (void)inner_21;
             {
-                rc_strong_increment(inner_1);
-                RcControlBlock * outer_2 = inner_1;
-                (void)outer_2;
+                rc_strong_increment(inner_21);
+                RcControlBlock * outer_22 = inner_21;
+                (void)outer_22;
                 puts("Before inner drop");
-                rc_strong_decrement(inner_1);
+                rc_strong_decrement(inner_21);
                 rc_free_queue_drain();
                 puts("After inner drop");
-                rc_strong_decrement(outer_2);
+                rc_strong_decrement(outer_22);
                 rc_free_queue_drain();
                 puts("After outer drop");
             }
@@ -1144,28 +1209,28 @@ int main() {
             *__t2 = INT64_C(10);
             RcControlBlock *__t3 = rc_cb_alloc(0, 3, NULL);
             __t3->value = __t2;
-            RcControlBlock * a_3 = __t3;
-            (void)a_3;
+            RcControlBlock * a_23 = __t3;
+            (void)a_23;
             {
-                rc_strong_increment(a_3);
-                RcControlBlock * b_4 = a_3;
-                (void)b_4;
+                rc_strong_increment(a_23);
+                RcControlBlock * b_24 = a_23;
+                (void)b_24;
                 {
-                    rc_strong_increment(b_4);
-                    RcControlBlock * c_5 = b_4;
-                    (void)c_5;
+                    rc_strong_increment(b_24);
+                    RcControlBlock * c_25 = b_24;
+                    (void)c_25;
                     {
-                        rc_strong_increment(c_5);
-                        RcControlBlock * d_6 = c_5;
-                        (void)d_6;
+                        rc_strong_increment(c_25);
+                        RcControlBlock * d_26 = c_25;
+                        (void)d_26;
                         puts("Nested level 4");
-                        rc_strong_decrement(d_6);
+                        rc_strong_decrement(d_26);
                         rc_free_queue_drain();
-                        rc_strong_decrement(c_5);
+                        rc_strong_decrement(c_25);
                         rc_free_queue_drain();
-                        rc_strong_decrement(b_4);
+                        rc_strong_decrement(b_24);
                         rc_free_queue_drain();
-                        rc_strong_decrement(a_3);
+                        rc_strong_decrement(a_23);
                         rc_free_queue_drain();
                     }
                 }

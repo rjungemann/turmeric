@@ -1118,11 +1118,75 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
 static void * some(int64_t);
 static void * none();
 static bool some_(void *);
 static int64_t option_unwrap(void *);
 static void option_free(void *);
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
+}
 
 static void * some(int64_t x) {
         struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
@@ -1161,16 +1225,16 @@ static void option_free(void * o) {
 int main() {
         int64_t __t0;
         {
-            void * a_10 = some(INT64_C(42));
-            (void)a_10;
+            void * a_30 = some(INT64_C(42));
+            (void)a_30;
             int64_t __t1;
             {
-                void * b_11 = none();
-                (void)b_11;
-                puts((some_(a_10)) ? "true" : "false");
-                puts((some_(b_11)) ? "true" : "false");
-                printf("%lld\n", (long long)(option_unwrap(a_10)));
-                option_free(a_10);
+                void * b_31 = none();
+                (void)b_31;
+                puts((some_(a_30)) ? "true" : "false");
+                puts((some_(b_31)) ? "true" : "false");
+                printf("%lld\n", (long long)(option_unwrap(a_30)));
+                option_free(a_30);
                 int64_t __t2;
                 __t2 = INT64_C(0);
                 __t1 = __t2;

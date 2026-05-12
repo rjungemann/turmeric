@@ -259,8 +259,14 @@ run_happy() {
         return
     fi
 
+    # Read per-fixture compiler flags if present
+    local fixture_flags=""
+    if [ -f "$dir/flags" ]; then
+        fixture_flags=$(cat "$dir/flags")
+    fi
+
     if [ "$TUR_EMIT_C_MODE" = "always" ] || [ "$needs_codegen_check" -eq 1 ]; then
-        "$TUR" emit-c "$input" > "$actual_c" 2> "$out_dir/actual.stderr"
+        "$TUR" $fixture_flags emit-c "$input" > "$actual_c" 2> "$out_dir/actual.stderr"
         if [ $? -ne 0 ]; then
             {
                 echo "FAIL $name — tur emit-c failed"
@@ -273,7 +279,7 @@ run_happy() {
 
     local exe
     exe=$(mktemp -t tur-test-XXXXXX)
-    CC="$BUILD_CC" "$TUR" build "$input" -o "$exe" 2> "$out_dir/actual.stderr"
+    CC="$BUILD_CC" "$TUR" $fixture_flags build "$input" -o "$exe" 2> "$out_dir/actual.stderr"
     if [ $? -ne 0 ]; then
         {
             echo "FAIL $name — tur build failed"

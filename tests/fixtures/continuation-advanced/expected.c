@@ -1118,12 +1118,19 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
-static int64_t __fn_7(int64_t);
-static int64_t __fn_10(int64_t);
-static int64_t __fn_13(int64_t);
-static int64_t __fn_17(void *, int64_t);
-static int64_t __fn_23(int64_t);
-static int64_t __fn_29(void *, int64_t);
+static int64_t __fn_27(int64_t);
+static int64_t __fn_30(int64_t);
+static int64_t __fn_33(int64_t);
+static int64_t __fn_37(void *, int64_t);
+static int64_t __fn_43(int64_t);
+static int64_t __fn_49(void *, int64_t);
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
 static int64_t test_nested_reset();
 static int64_t test_shift_return_different();
 static int64_t test_multiple_shifts();
@@ -1131,62 +1138,119 @@ static int64_t test_shift_ignores_k();
 static int64_t test_reset_no_shift();
 static int64_t test_deeply_nested_shift();
 
-static int64_t __fn_7(int64_t v) {
+static int64_t __fn_27(int64_t v) {
         return ((v) * (INT64_C(2)));
 }
 
-static int64_t __fn_10(int64_t v) {
+static int64_t __fn_30(int64_t v) {
         return ((v) + (INT64_C(100)));
 }
 
-static int64_t __fn_13(int64_t v) {
+static int64_t __fn_33(int64_t v) {
         return ((v) * (INT64_C(2)));
 }
 
-struct __env_19 { int64_t __fn; int64_t x; };
-static int64_t __fn_17(void * __env_p_20, int64_t v) {
-        struct __env_19 *__env___env_19 = (struct __env_19 *)__env_p_20;
-        return ((__env___env_19->x) + (v));
+struct __env_39 { int64_t __fn; int64_t x; };
+static int64_t __fn_37(void * __env_p_40, int64_t v) {
+        struct __env_39 *__env___env_39 = (struct __env_39 *)__env_p_40;
+        return ((__env___env_39->x) + (v));
 }
 
-static int64_t __fn_23(int64_t v) {
+static int64_t __fn_43(int64_t v) {
         return INT64_C(42);
 }
 
-struct __env_31 { int64_t __fn; int64_t a; int64_t b; int64_t c; };
-static int64_t __fn_29(void * __env_p_32, int64_t v) {
-        struct __env_31 *__env___env_31 = (struct __env_31 *)__env_p_32;
-        return ((__env___env_31->a) + (((__env___env_31->b) + (((__env___env_31->c) + (v))))));
+struct __env_51 { int64_t __fn; int64_t a; int64_t b; int64_t c; };
+static int64_t __fn_49(void * __env_p_52, int64_t v) {
+        struct __env_51 *__env___env_51 = (struct __env_51 *)__env_p_52;
+        return ((__env___env_51->a) + (((__env___env_51->b) + (((__env___env_51->c) + (v))))));
+}
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
 }
 
 static int64_t test_nested_reset() {
-        int64_t __t0 = __fn_7(INT64_C(5));
+        int64_t __t0 = __fn_27(INT64_C(5));
         return ((INT64_C(1)) + (((INT64_C(10)) + (__t0))));
 }
 
 static int64_t test_shift_return_different() {
-        int64_t __t1 = __fn_10(INT64_C(7));
+        int64_t __t1 = __fn_30(INT64_C(7));
         return __t1;
 }
 
 static int64_t test_multiple_shifts() {
         int64_t __t2;
         {
-            int64_t __t3 = __fn_13(INT64_C(3));
-            int64_t x_15 = __t3;
-            (void)x_15;
-            struct __env_19 *__t5 = (struct __env_19 *)malloc(sizeof(struct __env_19));
-            __t5->__fn = (int64_t)(intptr_t)__fn_17;
-            __t5->x = x_15;
+            int64_t __t3 = __fn_33(INT64_C(3));
+            int64_t x_35 = __t3;
+            (void)x_35;
+            struct __env_39 *__t5 = (struct __env_39 *)malloc(sizeof(struct __env_39));
+            __t5->__fn = (int64_t)(intptr_t)__fn_37;
+            __t5->x = x_35;
             void *__t6 = __t5;
-            int64_t __t4 = __fn_17(__t6, INT64_C(4));
+            int64_t __t4 = __fn_37(__t6, INT64_C(4));
             __t2 = __t4;
         }
         return __t2;
 }
 
 static int64_t test_shift_ignores_k() {
-        int64_t __t7 = __fn_23(INT64_C(10));
+        int64_t __t7 = __fn_43(INT64_C(10));
         return __t7;
 }
 
@@ -1197,19 +1261,19 @@ static int64_t test_reset_no_shift() {
 static int64_t test_deeply_nested_shift() {
         int64_t __t8;
         {
-            int64_t a_25 = INT64_C(1);
-            (void)a_25;
-            int64_t b_26 = INT64_C(2);
-            (void)b_26;
-            int64_t c_27 = INT64_C(3);
-            (void)c_27;
-            struct __env_31 *__t10 = (struct __env_31 *)malloc(sizeof(struct __env_31));
-            __t10->__fn = (int64_t)(intptr_t)__fn_29;
-            __t10->a = a_25;
-            __t10->b = b_26;
-            __t10->c = c_27;
+            int64_t a_45 = INT64_C(1);
+            (void)a_45;
+            int64_t b_46 = INT64_C(2);
+            (void)b_46;
+            int64_t c_47 = INT64_C(3);
+            (void)c_47;
+            struct __env_51 *__t10 = (struct __env_51 *)malloc(sizeof(struct __env_51));
+            __t10->__fn = (int64_t)(intptr_t)__fn_49;
+            __t10->a = a_45;
+            __t10->b = b_46;
+            __t10->c = c_47;
             void *__t11 = __t10;
-            int64_t __t9 = __fn_29(__t11, INT64_C(10));
+            int64_t __t9 = __fn_49(__t11, INT64_C(10));
             __t8 = __t9;
         }
         return __t8;

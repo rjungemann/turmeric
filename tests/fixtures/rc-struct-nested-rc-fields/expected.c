@@ -1146,6 +1146,71 @@ static void drop_glue_Node(void *ptr) {
 }
 
 
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
+
+static void * array_get(void * arr, int64_t idx) {
+        struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    opt->is_some = true;
+    opt->value = array[idx];
+  } else {
+    opt->is_some = false;
+    opt->value = 0;
+  }
+  return opt;
+  
+}
+
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+        int64_t *array = (int64_t *)arr;
+  if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
+    array[idx] = value;
+    return 1;
+  }
+  return 0;
+  
+}
+
+static void * array_slice(void * arr, int64_t start, int64_t len) {
+        /* For v1, we return a new struct containing ptr and len */
+  struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
+  slice->ptr = (char *)arr + start * sizeof(int64_t);
+  slice->len = len;
+  return slice;
+  
+}
+
+static void * with_c_string(const char * s, int64_t f) {
+        /* For v1, we just call f with s directly since cstr is already a C string */
+  int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
+  return (void *)(intptr_t)fn(s);
+  
+}
+
+static const char * from_c_string(const char * s) {
+        return s;
+}
+
+static void * box(int64_t v) {
+        int64_t *boxed = malloc(sizeof(int64_t));
+  *boxed = v;
+  return boxed;
+  
+}
+
+static int64_t unbox(int64_t p) {
+        int64_t *boxed = (int64_t *)p;
+  return *boxed;
+  
+}
+
 int main() {
         int64_t __t0;
         {
@@ -1153,21 +1218,21 @@ int main() {
             *__t1 = INT64_C(42);
             RcControlBlock *__t2 = rc_cb_alloc(0, 3, NULL);
             __t2->value = __t1;
-            RcControlBlock * inner_2 = __t2;
-            (void)inner_2;
+            RcControlBlock * inner_22 = __t2;
+            (void)inner_22;
             Node *__t3 = (Node *)malloc(sizeof(Node));
-            *__t3 = (Node){.val = inner_2};
+            *__t3 = (Node){.val = inner_22};
             RcControlBlock *__t4 = rc_cb_alloc(0, 18, drop_glue_Node);
             __t4->value = __t3;
-            RcControlBlock * outer_3 = __t4;
-            (void)outer_3;
+            RcControlBlock * outer_23 = __t4;
+            (void)outer_23;
             tur_frame __frame_5;
             tur_frame_init(&__frame_5, NULL);
-            int64_t __t6 = rc_strong_count(outer_3);
+            int64_t __t6 = rc_strong_count(outer_23);
             printf("%lld\n", (long long)(__t6));
-            struct __defer_env_7 __t9 = {.inner = inner_2};
+            struct __defer_env_7 __t9 = {.inner = inner_22};
             tur_frame_push_defer(&__frame_5, __defer_8, &__t9);
-            struct __defer_env_10 __t12 = {.outer = outer_3};
+            struct __defer_env_10 __t12 = {.outer = outer_23};
             tur_frame_push_defer(&__frame_5, __defer_11, &__t12);
             int64_t __t13;
             __t13 = INT64_C(0);

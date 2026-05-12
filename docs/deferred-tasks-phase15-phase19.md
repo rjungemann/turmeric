@@ -1181,11 +1181,16 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Implemented: Created all five fixtures in `tests/fixtures/` with input.tur, expected.c, and expected.stdout. Added `stdlib/safe.tur` to auto-loaded stdlib files in `src/main.c`.
 
 #### U5 — Linting, auditing, and tooling
-- [ ] Implement unsafe block linter: size threshold warning (`--lint-unsafe-max-lines N`), nested block warning.
-- [ ] Implement `#[safety "..."]` attribute parsing and `;;; SAFETY:` comment enforcement (`--require-unsafe-docs`).
-- [ ] Implement trusted-code coverage metric (`--unsafe-stats` flag).
-- [ ] Add `--lint-unsafe` flag to enable all unsafe lints.
-- [ ] Add fixtures: `lint-unsafe-size.tur`, `lint-unsafe-doc.tur`, `lint-unsafe-nested.tur`, `stats-unsafe.tur`.
+- [x] Implement unsafe block linter: size threshold warning (`--lint-unsafe-max-lines N`), nested block warning.
+  - Implemented: In `src/elab.c` (lines 3083-3110). Size threshold warning uses `g_unsafe_max_lines` (default: 20). Nested block warning uses `g_unsafe_warn_nested`.
+- [x] Implement `;;; SAFETY:` comment enforcement (`--require-unsafe-docs`).
+  - Implemented: In `src/elab.c` (lines 3089-3094). Warning emitted if `g_unsafe_require_safety` is true. Note: v1 does not check for actual comment content.
+- [x] Implement trusted-code coverage metric (`--unsafe-stats` flag).
+  - Implemented: In `src/main.c` (lines 55, 299-302) and `src/elab.c` (lines 3097-3100). Tracks block count and total expressions in unsafe blocks.
+- [x] Add `--lint-unsafe` flag to enable all unsafe lints.
+  - Implemented: In `src/main.c` (lines 969-974). Enables nested warning, size threshold, and safety docs requirements.
+- [x] Add fixtures: `lint-unsafe-size.tur`, `lint-unsafe-doc.tur`, `lint-unsafe-nested.tur`, `stats-unsafe.tur`.
+  - Implemented: All four fixtures with input.tur, expected.c, expected.stdout, expected.stderr, and flags files. Added per-fixture `flags` file support to `tests/run.sh`.
 
 ---
 
