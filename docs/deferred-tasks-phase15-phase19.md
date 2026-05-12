@@ -886,12 +886,17 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Done (nanosleep-based, no scheduler required): `async-sleep` in `stdlib/fiber.tur`.
 
 ##### AW-011 — `Send`/`Sync` for `Future<T>`
-- [ ] Enforce `Future<T>: Send` when `T: Send` (future can be moved to another thread).
-  - Deferred: Requires type parameter tracking in `Send`/`Sync` derivation. Current v1 `type_is_send` only checks concrete types, not generic `Future<T>`.
-- [ ] Enforce `Future<T>: Sync` when `T: Sync` (multiple threads can await the same future).
-  - Deferred: Same limitation as `Send` enforcement.
+- [x] Enforce `Future<T>: Send` when `T: Send` (future can be moved to another thread).
+  - Implemented: Added `TY_FUTURE` type with inner type parameter. `type_is_send()` in `src/types.h` recursively checks inner type - `future<T>` is Send iff `T` is Send.
+- [x] Enforce `Future<T>: Sync` when `T: Sync` (multiple threads can await the same future).
+  - Implemented: `type_is_sync()` in `src/types.h` recursively checks inner type - `future<T>` is Sync iff `T` is Sync.
+- [x] Update `elab_async` to return `future<T>` where T is the function's return type.
+  - Implemented: `async (fn [] :T ...)` now returns `future<T>` instead of `ptr<void>`.
+- [x] Update `elab_await` to extract inner type from `future<T>`.
+  - Implemented: `await f` where `f: future<T>` returns `T`.
+- [x] Update C emission: `future<T>` lowers to `TurFuture *` in C code.
 - [x] Enforce `Fiber: !Send + !Sync` (fibers have captured stack frames; cannot be shared).
-  - Implemented: `type_is_send` in `src/types.h` (line 209) returns `false` for `TY_FIBER` (if added) or implicitly via `FiberBlock` containing non-Send pointer. `TurFiber` struct contains `void *stack` which is not Send-safe.
+  - Implemented: `type_is_send` in `src/types.h` returns `false` for `TY_FIBER` (if added) or implicitly via `FiberBlock` containing non-Send pointer. `TurFiber` struct contains `void *stack` which is not Send-safe.
 - [x] Enforce `Scheduler: Send + Sync` (scheduler is thread-safe).
   - Implemented: `TurScheduler` is a global static (emitted in `src/emit.c`) and all access is via function calls. The scheduler is effectively `Send + Sync` by design (no direct field access exposed).
 
