@@ -50,12 +50,13 @@ struct TypeClassInstance {
 
 /* Typeclass environment (global registry) */
 typedef struct TypeClassEnv {
+    Arena *arena;
     TypeClass *typeclasses;
     TypeClassInstance *instances;
 } TypeClassEnv;
 
 /* Initialize typeclass environment */
-void typeclass_env_init(TypeClassEnv *env);
+void typeclass_env_init(TypeClassEnv *env, Arena *arena);
 
 /* Register a typeclass */
 TypeClass *typeclass_env_register_typeclass(TypeClassEnv *env, const Symbol *name);

@@ -79,3 +79,14 @@ int buf_to_path(const Buf *b, const char *path) {
     fclose(f);
     return rc;
 }
+
+char *tur_strdup(const char *s) {
+    size_t n = strlen(s) + 1;
+    char *copy = (char *)malloc(n);
+    if (!copy) {
+        fprintf(stderr, "tur: out of memory\n");
+        abort();
+    }
+    memcpy(copy, s, n);
+    return copy;
+}

@@ -121,7 +121,7 @@ const char *type_name(Type t) {
             buf_puts(&tmp, ")");
             buf_putc(&tmp, '\0');
             /* This leaks but it's only used for diagnostics. */
-            return strdup(tmp.data);
+            return tur_strdup(tmp.data);
         }
         case TY_REF: {
             /* Build "ref<T>" name */
@@ -131,7 +131,7 @@ const char *type_name(Type t) {
             buf_puts(&tmp, type_name(type_from_kind(t.as.ref.inner)));
             buf_puts(&tmp, ">");
             buf_putc(&tmp, '\0');
-            return strdup(tmp.data);
+            return tur_strdup(tmp.data);
         }
         /* Phase 9: rc<T> and weak<T> */
         case TY_RC: {
@@ -142,7 +142,7 @@ const char *type_name(Type t) {
             buf_puts(&tmp, type_name(type_from_kind(t.as.rc.inner)));
             buf_puts(&tmp, ">");
             buf_putc(&tmp, '\0');
-            return strdup(tmp.data);
+            return tur_strdup(tmp.data);
         }
         case TY_WEAK: {
             /* Build "weak<T>" name */
@@ -152,7 +152,7 @@ const char *type_name(Type t) {
             buf_puts(&tmp, type_name(type_from_kind(t.as.rc.inner)));
             buf_puts(&tmp, ">");
             buf_putc(&tmp, '\0');
-            return strdup(tmp.data);
+            return tur_strdup(tmp.data);
         }
         /* Phase 12: Borrow types */
         case TY_REF_IMMUT: {
@@ -162,7 +162,7 @@ const char *type_name(Type t) {
             buf_puts(&tmp, "&");
             buf_puts(&tmp, type_name(type_from_kind(t.as.ref_borrow.target)));
             buf_putc(&tmp, '\0');
-            return strdup(tmp.data);
+            return tur_strdup(tmp.data);
         }
         case TY_REF_MUT: {
             /* Build "&mut T" name */
@@ -171,7 +171,7 @@ const char *type_name(Type t) {
             buf_puts(&tmp, "&mut ");
             buf_puts(&tmp, type_name(type_from_kind(t.as.ref_borrow.target)));
             buf_putc(&tmp, '\0');
-            return strdup(tmp.data);
+            return tur_strdup(tmp.data);
         }
         /* Phase 15: Typeclass types */
         case TY_TYPECLASS:
@@ -188,7 +188,7 @@ const char *type_name(Type t) {
             buf_puts(&tmp, type_name(type_from_kind(t.as.exn.payload_type)));
             buf_puts(&tmp, ">");
             buf_putc(&tmp, '\0');
-            return strdup(tmp.data);
+            return tur_strdup(tmp.data);
         }
         /* Phase 18: Continuation types */
         case TY_CONT: {
@@ -199,7 +199,7 @@ const char *type_name(Type t) {
             buf_puts(&tmp, type_name(type_from_kind(t.as.cont.returns)));
             buf_puts(&tmp, ">");
             buf_putc(&tmp, '\0');
-            return strdup(tmp.data);
+            return tur_strdup(tmp.data);
         }
         /* Phase 11: Struct types */
         case TY_STRUCT:

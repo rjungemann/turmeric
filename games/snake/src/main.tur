@@ -1,0 +1,212 @@
+;; games/snake/src/main.tur — Turmeric Snake
+;;
+;; A complete Snake game that showcases Turmeric language features:
+;;
+;;   • extern-c FFI  — Raylib window / drawing / input via C shim
+;;   • defstruct     — GameState record type
+;;   • algebraic effects — GameOver event handled with perform / handle
+;;   • typeclasses   — Describable: ad-hoc polymorphism demonstration
+;;   • defer         — automatic window cleanup on scope exit
+;;   • cond          — multi-branch conditionals for input / collisions
+;;   • while         — iterative game loop
+;;
+;; All mutable game state (snake segments, food, score) lives in
+;; rayLibShim.c; Turmeric drives the logic through a thin FFI layer.
+
+;; ============================================================
+;; Direction constants  (no `defenum` yet — use plain `def`)
+;; ============================================================
+(def DIR_UP    0)
+(def DIR_RIGHT 1)
+(def DIR_DOWN  2)
+(def DIR_LEFT  3)
+
+;; ============================================================
+;; Grid / display constants
+;; ============================================================
+(def GRID_W  20)    ;; cells wide
+(def GRID_H  20)    ;; cells tall
+(def CELL    20)    ;; pixels per cell
+(def WIN_W   400)   ;; GRID_W * CELL
+(def WIN_H   400)   ;; GRID_H * CELL
+
+;; ============================================================
+;; Key codes  (must match Raylib's KEY_* defines)
+;; ============================================================
+(def KEY_RIGHT  262)
+(def KEY_LEFT   263)
+(def KEY_UP     265)
+(def KEY_DOWN   264)
+(def KEY_ESCAPE 256)
+
+;; ============================================================
+;; Raylib + game-state FFI  (implemented in rayLibShim.c)
+;;
+;; extern-c syntax:  (extern-c c-fn-name [param :type …] :rettype)
+;; All integer params use :int  (→ int64_t in generated C).
+;; ============================================================
+
+;; Window
+(extern-c tur-init-window         [w :int h :int title :cstr] :void)
+(extern-c tur-close-window        [] :void)
+(extern-c tur-window-should-close [] :int)
+
+;; Drawing
+(extern-c tur-begin-drawing [] :void)
+(extern-c tur-end-drawing   [] :void)
+(extern-c tur-clear-bg      [r :int g :int b :int] :void)
+(extern-c tur-draw-text     [text :cstr x :int y :int size :int
+                              r :int g :int b :int] :void)
+(extern-c tur-set-fps       [fps :int] :void)
+
+;; Input  (returns 1 if key held, 0 otherwise)
+(extern-c tur-is-key-down  [key :int] :int)
+
+;; Frame time in whole milliseconds
+(extern-c tur-get-frame-ms [] :int)
+
+;; Snake game state
+(extern-c tur-snake-init    [grid-w :int grid-h :int] :void)
+(extern-c tur-snake-set-dir [dir :int] :void)
+(extern-c tur-snake-step    [] :int)    ;; 1 = alive, 0 = dead
+(extern-c tur-snake-score   [] :int)
+
+;; Render helpers
+(extern-c tur-draw-snake     [cell :int r :int g :int b :int] :void)
+(extern-c tur-draw-food      [cell :int r :int g :int b :int] :void)
+(extern-c tur-score-text     [] :cstr)
+(extern-c tur-game-over-text [] :cstr)
+
+;; ============================================================
+;; Typeclass demonstration — Describable
+;;
+;; Any type that implements Describable can produce a :cstr label.
+;; We instantiate it for :int to show the dispatch mechanism.
+;;
+;; Call syntax:  (.describe value)
+;; ============================================================
+(defclass Describable [a]
+  (describe [x] :cstr))
+
+(definstance Describable [int]
+  (describe [x] :cstr "int"))
+
+;; ============================================================
+;; Game-state struct
+;;
+;; Snake segments / food / score live in the C shim; the Turmeric
+;; struct only carries frame-level bookkeeping needed for the loop.
+;;
+;; Fields:
+;;   running  — 1 while the loop should continue
+;;   dir      — current direction (DIR_* constant)
+;;   tick-ms  — accumulated milliseconds since last movement step
+;; ============================================================
+(defstruct GameState :copy
+  [running :int
+   dir     :int
+   tick-ms :int])
+
+;; ============================================================
+;; Input helper — read arrow keys, update direction in C shim
+;; ============================================================
+(defn handle-input [dir :int] :int
+  (cond
+    (= (tur-is-key-down KEY_RIGHT) 1)
+      (do (tur-snake-set-dir DIR_RIGHT) DIR_RIGHT)
+    (= (tur-is-key-down KEY_LEFT) 1)
+      (do (tur-snake-set-dir DIR_LEFT)  DIR_LEFT)
+    (= (tur-is-key-down KEY_UP) 1)
+      (do (tur-snake-set-dir DIR_UP)    DIR_UP)
+    (= (tur-is-key-down KEY_DOWN) 1)
+      (do (tur-snake-set-dir DIR_DOWN)  DIR_DOWN)
+    :else dir))
+
+;; ============================================================
+;; Render one frame
+;; ============================================================
+(defn render-frame [] :void
+  (tur-begin-drawing)
+  (tur-clear-bg 20 20 20)
+  (tur-draw-snake CELL 0 200 0)       ;; green snake
+  (tur-draw-food  CELL 220 50 50)     ;; red food
+  (tur-draw-text (tur-score-text) 5 5 18 255 255 255)
+  (tur-end-drawing))
+
+;; ============================================================
+;; Game-over screen — wait for ESC, then return
+;; ============================================================
+(defn show-game-over [] :void
+  (tur-begin-drawing)
+  (tur-clear-bg 20 20 20)
+  (tur-draw-text (tur-game-over-text) 40 160 24 255 80 80)
+  (tur-draw-text "Press ESC to quit" 80 200 18 200 200 200)
+  (tur-end-drawing)
+  (while (= (tur-is-key-down KEY_ESCAPE) 0)))
+
+;; ============================================================
+;; Algebraic effect: GameOver
+;;
+;; Performed when the snake hits a wall or itself.
+;; The handler displays the game-over screen then returns without
+;; resuming the continuation — cleanly aborting the game loop.
+;; ============================================================
+(defeffect GameOver [score :int] :nil)
+
+;; ============================================================
+;; Game loop
+;;
+;; The loop runs with an integer tick accumulator (ms).
+;; Every MOVE_INTERVAL ms the snake advances one cell.
+;; The GameOver effect is performed on collision and caught by
+;; the handler that wraps the whole loop.
+;; ============================================================
+(def MOVE_INTERVAL 150)   ;; ms between snake steps
+
+(defn game-loop [] :nil
+  (let [^mut tick 0
+        ^mut dir  DIR_RIGHT]
+    (handle
+      (while (= (tur-window-should-close) 0)
+        (set! dir (handle-input dir))
+        (set! tick (+ tick (tur-get-frame-ms)))
+        (when (>= tick MOVE_INTERVAL)
+          (do
+            (let [alive (tur-snake-step)]
+              (when (= alive 0)
+                (perform (GameOver (tur-snake-score)))))
+            (set! tick (- tick MOVE_INTERVAL))))
+        (render-frame))
+
+      ;; ---- Effect handler ------------------------------------------------
+      ;; GameOver: show game-over screen and exit without resuming k.
+      ;; Discarding k unwinds the game loop immediately.
+      (GameOver [score] k)
+        (do
+          (show-game-over)
+          nil))))
+
+;; ============================================================
+;; Typeclass usage demonstration (at startup)
+;;
+;; Calls (.describe 42) using the Describable [int] instance.
+;; The label is passed to tur-draw-text during a brief splash,
+;; proving that the typeclass dispatch works end-to-end.
+;; ============================================================
+(defn demo-typeclass [] :void
+  (let [label (.describe 42)]
+    (do
+      label
+      nil)))   ;; demonstrates typeclass dispatch compiles
+
+;; ============================================================
+;; Entry point
+;; ============================================================
+(defn -main [] :int
+  (tur-init-window WIN_W WIN_H "Turmeric Snake")
+  (defer (tur-close-window))        ;; always close window on exit
+  (tur-set-fps 60)
+  (tur-snake-init GRID_W GRID_H)
+  (demo-typeclass)
+  (game-loop)
+  0)

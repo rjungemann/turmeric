@@ -1,0 +1,46 @@
+;; stdlib/raylib.tur — Turmeric FFI bindings for the Raylib game shim
+;;
+;; All functions are implemented in games/snake/src/rayLibShim.c.
+;; Integer parameters and return values use :int (Turmeric's int64_t).
+;; Void returns use :void.
+;;
+;; Key codes (subset matching Raylib defaults)
+(def KEY_RIGHT  262)
+(def KEY_LEFT   263)
+(def KEY_UP     265)
+(def KEY_DOWN   264)
+(def KEY_ESCAPE 256)
+(def KEY_ENTER  257)
+
+;; -- Window management ------------------------------------------------------
+(extern-c tur-init-window         [w :int h :int title :cstr] :void)
+(extern-c tur-close-window        [] :void)
+(extern-c tur-window-should-close [] :int)
+
+;; -- Drawing -----------------------------------------------------------------
+(extern-c tur-begin-drawing [] :void)
+(extern-c tur-end-drawing   [] :void)
+(extern-c tur-clear-bg      [r :int g :int b :int] :void)
+(extern-c tur-draw-text     [text :cstr x :int y :int size :int
+                              r :int g :int b :int] :void)
+(extern-c tur-set-fps       [fps :int] :void)
+
+;; -- Input -------------------------------------------------------------------
+(extern-c tur-is-key-down    [key :int] :int)
+
+;; -- Frame time (integer milliseconds) --------------------------------------
+(extern-c tur-get-frame-ms [] :int)
+
+;; -- Snake game state (owned by rayLibShim.c) --------------------------------
+;;   grid-w, grid-h : number of grid cells
+(extern-c tur-snake-init    [grid-w :int grid-h :int] :void)
+(extern-c tur-snake-set-dir [dir :int] :void)
+;;   returns 1 = alive, 0 = dead (wall or self collision)
+(extern-c tur-snake-step    [] :int)
+(extern-c tur-snake-score   [] :int)
+
+;; -- Render helpers ----------------------------------------------------------
+(extern-c tur-draw-snake    [cell :int r :int g :int b :int] :void)
+(extern-c tur-draw-food     [cell :int r :int g :int b :int] :void)
+(extern-c tur-score-text    [] :cstr)
+(extern-c tur-game-over-text [] :cstr)
