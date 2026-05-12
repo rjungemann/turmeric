@@ -1,0 +1,114 @@
+;; Phase T22: taskgroup-with-macro — codegen snapshot for TaskGroup::with macro expansion
+;;
+;; Tests the macro expansion of task-group-with by inlining its expansion
+;; Expected output: 42
+
+;; TaskGroupBlock inline definition
+(defn tg-new [] :ptr<void>
+  ```c
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t done_cond;
+      int64_t task_count;
+      int64_t completed_count;
+      bool cancelled;
+      bool done;
+  } TaskGroupBlock;
+  TaskGroupBlock *g = (TaskGroupBlock *)malloc(sizeof(TaskGroupBlock));
+  if (!g) { fprintf(stderr, "tg-new: oom\n"); abort(); }
+  pthread_mutex_init(&g->lock, NULL);
+  pthread_cond_init(&g->done_cond, NULL);
+  g->task_count = 0;
+  g->completed_count = 0;
+  g->cancelled = false;
+  g->done = false;
+  return (void *)g;
+  ```)
+
+(defn tg-wait [group :ptr<void>] :nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t done_cond;
+      int64_t task_count;
+      int64_t completed_count;
+      bool cancelled;
+      bool done;
+  } TaskGroupBlock;
+  TaskGroupBlock *g = (TaskGroupBlock *)group;
+  pthread_mutex_lock(&g->lock);
+  while (!g->done)
+      pthread_cond_wait(&g->done_cond, &g->lock);
+  pthread_mutex_unlock(&g->lock);
+  ```)
+
+(defn tg-spawn [group :ptr<void>] :nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t done_cond;
+      int64_t task_count;
+      int64_t completed_count;
+      bool cancelled;
+      bool done;
+  } TaskGroupBlock;
+  TaskGroupBlock *g = (TaskGroupBlock *)group;
+  pthread_mutex_lock(&g->lock);
+  g->task_count++;
+  pthread_mutex_unlock(&g->lock);
+  ```)
+
+(defn tg-task-done [group :ptr<void>] :nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t done_cond;
+      int64_t task_count;
+      int64_t completed_count;
+      bool cancelled;
+      bool done;
+  } TaskGroupBlock;
+  TaskGroupBlock *g = (TaskGroupBlock *)group;
+  if (!g) return;
+  pthread_mutex_lock(&g->lock);
+  g->completed_count++;
+  if (g->completed_count >= g->task_count && g->task_count > 0) {
+      g->done = true;
+      pthread_cond_broadcast(&g->done_cond);
+  }
+  pthread_mutex_unlock(&g->lock);
+  ```)
+
+(defn tg-free [group :ptr<void>] :nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t done_cond;
+      int64_t task_count;
+      int64_t completed_count;
+      bool cancelled;
+      bool done;
+  } TaskGroupBlock;
+  TaskGroupBlock *g = (TaskGroupBlock *)group;
+  pthread_mutex_destroy(&g->lock);
+  pthread_cond_destroy(&g->done_cond);
+  free(g);
+  ```)
+
+;; Manually inline the task-group-with macro expansion
+;; This is what the macro would expand to: (do body (tg-wait group))
+(defn main [] :int
+  (let [tg (tg-new)]
+    (tg-spawn tg)
+    (tg-spawn tg)
+    
+    ;; Manual expansion of: (task-group-with tg (tg-task-done tg) (tg-task-done tg) (println 42))
+    ;; Which expands to: (do (tg-task-done tg) (tg-task-done tg) (println 42) (tg-wait tg))
+    (do
+      (tg-task-done tg)
+      (tg-task-done tg)
+      (println 42)
+      (tg-wait tg))
+    
+    (tg-free tg)
+    0))
