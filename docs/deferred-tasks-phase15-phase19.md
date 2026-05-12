@@ -1284,26 +1284,26 @@ These prerequisites unblock parameterized typeclass instances, which are require
   - Stored from `elab_definstance` after parsing.
 
 ### PTC2 — Constraint validation during instance elaboration
-- [ ] Implement constraint lookup: for each constraint `[Clone a]`, verify that a `Clone` instance exists for type `a`.
+- [x] Implement constraint lookup: for each constraint `[Clone a]`, verify that a `Clone` instance exists for type `a`.
   - In v1: only check if `a` is a primitive type with a known Clone instance (int, bool, cstr).
   - For user-defined types (option, vec, Pair), the constraint is stored but not validated at elaboration time (deferred to PTC3).
-- [ ] Emit diagnostic `TUR-E0015_TYPECLASS_CONSTRAINT_NOT_SATISFIED` when a required constraint cannot be satisfied.
+- [x] Emit diagnostic `TUR-E0015_TYPECLASS_CONSTRAINT_NOT_SATISFIED` when a required constraint cannot be satisfied.
   - Example: `(definstance Foo [Pair a b] [Clone a] ...)` where no Clone instance exists for `a`.
   - Add to `DiagCode` enum in `src/diag.h` and `diag_code_to_string()` in `src/diag.c`.
 
 ### PTC3 — Constraint propagation and method resolution with parameters
-- [ ] Implement constraint-based instance selection in `typeclass_env_lookup_instance`.
+- [x] Implement constraint-based instance selection in `typeclass_env_lookup_instance`.
   - When looking up an instance for `Clone [Pair int bool]`, check if constraints `[Clone int, Clone bool]` are satisfied.
   - For primitive types with known instances, use the primitive instance directly.
   - For user-defined types, walk the constraint chain to find valid instances.
-- [ ] Extend method call elaboration to handle parameterized instances.
+- [x] Extend method call elaboration to handle parameterized instances.
   - When calling `(clone pair_val)` where `pair_val : Pair int bool`, find the `Clone [Pair int bool]` instance.
   - Propagate constraints through the call: if the instance requires `[Clone int, Clone bool]`, verify these exist.
 
 ### PTC4 — Test fixtures for parameterized typeclasses
-- [ ] Add `tests/fixtures/typeclass/parametric-clone-pair.tur` — Clone instance for `Pair a b` with constraints.
-- [ ] Add `tests/fixtures/typeclass/parametric-clone-list.tur` — Clone instance for `list a` with constraint `[Clone a]`.
-- [ ] Add negative fixture `tests/fixtures/errors/typeclass-constraint-unsatisfied.tur` — constraint error diagnostic.
+- [x] Add `tests/fixtures/typeclass/parametric-clone-pair.tur` — Clone instance for `Pair a b` with constraints.
+- [x] Add `tests/fixtures/typeclass/parametric-clone-list.tur` — Clone instance for `list a` with constraint `[Clone a]`.
+- [x] Add negative fixture `tests/fixtures/errors/typeclass-constraint-unsatisfied.tur` — constraint error diagnostic.
 
 ---
 
