@@ -947,11 +947,13 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 
 ##### TG-002 — Task spawning and tracking
 - [x] Implement `TaskGroup::spawn [group thunk]` — spawn fiber in group, return handle.
-  - Implemented: Increments task count, creates fiber via `tur_fiber_block_new`.
+  - Implemented in `stdlib/taskgroup.tur`: Increments task count, creates fiber via `tur_fiber_block_new`, sets `f->task_group` for notification.
 - [x] Implement task handle type for tracking spawned tasks.
-  - Note: v1 returns raw `FiberBlock*` as handle; future version could wrap in structured type.
-- [ ] Implement `task-group-join [group handle]` — await specific task completion.
-  - Deferred: Current v1 only supports waiting for all tasks via `task-group-wait`.
+  - Implemented: Returns `FiberBlock*` as handle; `FiberBlock` has `task_group` field for parent group tracking.
+- [x] Implement `task-group-join [group handle]` — await specific task completion.
+  - Implemented in `stdlib/taskgroup.tur`: Waits on group's condition variable, re-checks specific fiber's `done` flag. Uses v1 simplification (group-level CV) for efficiency.
+- [x] Implement `task-handle-done? [handle]` — check if specific task completed.
+  - Implemented in `stdlib/taskgroup.tur`: Non-blocking check of fiber's `done` flag.
 
 ##### TG-003 — Prerequisites: Cooperative cancellation integration
 
