@@ -331,6 +331,7 @@ typedef struct Elab {
     const Symbol *sym_let;
     const Symbol *sym_if;
     const Symbol *sym_do;
+    const Symbol *sym_unsafe;
     const Symbol *sym_when;
     const Symbol *sym_unless;
     const Symbol *sym_case;
@@ -435,6 +436,7 @@ typedef struct Elab {
     uint32_t n_handled_effects;
     uint32_t cap_handled_effects;
     uint32_t fn_body_depth;
+    uint32_t unsafe_depth;
     uint32_t macro_expand_depth;
     /* Phase 19: cont? predicate */
     const Symbol *sym_cont_pred; /* cont? */
@@ -729,6 +731,7 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_let       = intern_cstr(st, "let");
     e->sym_if        = intern_cstr(st, "if");
     e->sym_do        = intern_cstr(st, "do");
+    e->sym_unsafe    = intern_cstr(st, "unsafe");
     e->sym_when      = intern_cstr(st, "when");
     e->sym_unless    = intern_cstr(st, "unless");
     e->sym_case      = intern_cstr(st, "case");
@@ -783,6 +786,7 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->n_handled_effects = 0;
     e->cap_handled_effects = 0;
     e->fn_body_depth = 0;
+    e->unsafe_depth = 0;
     e->macro_expand_depth = 0;
     /* Phase 10: GC */
     e->sym_gc_force = intern_cstr(st, "gc!");
@@ -1696,6 +1700,7 @@ static Binding *binding_new(Elab *e, const Symbol *name, Type type,
 
 /* Forward declarations. */
 static Expr *elab_form(Elab *e, Form *f);
+static Expr *elab_unsafe(Elab *e, const Form *call);
 /* Phase 5 */
 static Expr *elab_ref(Elab *e, const Form *call);
 static Expr *elab_deref(Elab *e, const Form *call);
@@ -2094,6 +2099,28 @@ static Expr *elab_do(Elab *e, const Form *call) {
         items[i] = elab_form(e, call->as.list.items[1 + i]);
         if (!items[i]) return NULL;
     }
+    Expr *out = expr_new(e->arena, EX_DO, items[n - 1]->type, call->span);
+    out->as.do_.items = items;
+    out->as.do_.n = n;
+    return out;
+}
+
+static Expr *elab_unsafe(Elab *e, const Form *call) {
+    /* (unsafe body...) — elaborates like do, but enables unsafe-only operations. */
+    uint32_t n = call->as.list.len - 1;
+    if (n == 0) return e_nil(e, call->span);
+
+    e->unsafe_depth++;
+    Expr **items = (Expr **)arena_alloc(e->arena, n * sizeof(Expr *));
+    for (uint32_t i = 0; i < n; i++) {
+        items[i] = elab_form(e, call->as.list.items[1 + i]);
+        if (!items[i]) {
+            e->unsafe_depth--;
+            return NULL;
+        }
+    }
+    e->unsafe_depth--;
+
     Expr *out = expr_new(e->arena, EX_DO, items[n - 1]->type, call->span);
     out->as.do_.items = items;
     out->as.do_.n = n;
@@ -4813,6 +4840,7 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_let)    return elab_let   (e, call);
     if (name == e->sym_if)     return elab_if    (e, call);
     if (name == e->sym_do)     return elab_do    (e, call);
+    if (name == e->sym_unsafe) return elab_unsafe(e, call);
     if (name == e->sym_set)    return elab_set   (e, call);
     if (name == e->sym_while)  return elab_while (e, call);
     if (name == e->sym_case)   return elab_case  (e, call);
@@ -5595,9 +5623,8 @@ static Expr *elab_borrow_immut(Elab *e, const Form *call) {
         }
     }
     
-    /* Phase 12: Borrowing from ptr<void> requires (unsafe ...).
-     * Emit an error until (unsafe ...) is implemented. */
-    if (inner->type.kind == TY_PTR_VOID) {
+    /* Phase U: Borrowing from ptr<void> requires an unsafe context. */
+    if (inner->type.kind == TY_PTR_VOID && e->unsafe_depth == 0) {
         diag_emit(DIAG_ERROR, call->span,
                   "cannot borrow from ptr<void> outside (unsafe ...)");
         return NULL;
@@ -5658,9 +5685,8 @@ static Expr *elab_borrow_mut(Elab *e, const Form *call) {
         }
     }
     
-    /* Phase 12: Borrowing from ptr<void> requires (unsafe ...).
-     * Emit an error until (unsafe ...) is implemented. */
-    if (inner->type.kind == TY_PTR_VOID) {
+    /* Phase U: Borrowing from ptr<void> requires an unsafe context. */
+    if (inner->type.kind == TY_PTR_VOID && e->unsafe_depth == 0) {
         diag_emit(DIAG_ERROR, call->span,
                   "cannot borrow from ptr<void> outside (unsafe ...)");
         return NULL;
