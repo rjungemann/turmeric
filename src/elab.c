@@ -8407,6 +8407,51 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
  *   (& (.field s))   → EX_BORROW_IMMUT wrapping EX_GET_FIELD
  *   (&mut (.field s)) → EX_BORROW_MUT wrapping EX_GET_FIELD
  */
+
+/* Phase H §1: Build an EX_DICT node for a typeclass instance singleton.
+ * The dict_name field is computed from the instance's typeclass and type args
+ * using the same naming convention as emit.c (emit_dict_name / EX_INSTANCE_DEF).
+ * Returns a TY_PTR_VOID-typed Expr that, when emitted, yields the address of
+ * the global dictionary singleton cast to int64_t. */
+static Expr *make_dict_expr(Elab *e, TypeClassInstance *inst, Span span) {
+    Expr *d = expr_new(e->arena, EX_DICT, type_from_kind(TY_PTR_VOID), span);
+    d->as.dict_.instance = inst;
+
+    /* Compute dict_name: "dict_<TypeClass>_<typearg>..." */
+    const TypeClass *tc = inst->typeclass;
+    char *dst = d->as.dict_.dict_name;
+    size_t dstlen = sizeof(d->as.dict_.dict_name);
+    char type_suffix[64] = "";
+    for (uint8_t i = 0; i < inst->n_type_args; i++) {
+        if (i == 0) strncat(type_suffix, "_", sizeof(type_suffix) - strlen(type_suffix) - 1);
+        const char *component = "T";
+        switch (inst->type_args[i].kind) {
+            case TY_INT:      component = "int";      break;
+            case TY_BOOL:     component = "bool";     break;
+            case TY_CSTR:     component = "cstr";     break;
+            case TY_NIL:      component = "nil";      break;
+            case TY_PTR_VOID: component = "ptr_void"; break;
+            case TY_STRUCT:
+                if (inst->type_arg_syms && inst->type_arg_syms[i])
+                    component = inst->type_arg_syms[i]->name;
+                else if (inst->type_args[i].as.struct_.def &&
+                         inst->type_args[i].as.struct_.def->name)
+                    component = inst->type_args[i].as.struct_.def->name;
+                break;
+            default: break;
+        }
+        char comp_buf[32];
+        strncpy(comp_buf, component, sizeof(comp_buf) - 1);
+        comp_buf[sizeof(comp_buf) - 1] = '\0';
+        for (char *p = comp_buf; *p; p++) {
+            if (!isalnum((unsigned char)*p)) *p = '_';
+        }
+        strncat(type_suffix, comp_buf, sizeof(type_suffix) - strlen(type_suffix) - 1);
+    }
+    snprintf(dst, dstlen, "dict_%s%s", tc->name->name, type_suffix);
+    return d;
+}
+
 static Expr *elab_method_call(Elab *e, const Form *call) {
     /* call is (.method obj arg1 arg2 ...)
      * call->as.list.items[0] is the symbol .method
@@ -8566,6 +8611,8 @@ static Expr *elab_method_call(Elab *e, const Form *call) {
      * Fall back to name-only search if the type-based lookup yields nothing
      * (e.g. TY_UNKNOWN during forward-reference elaboration). */
     FnDef *best_method = NULL;
+    /* Phase H §1: Track the selected instance so we can build an EX_DICT node. */
+    TypeClassInstance *best_inst = NULL;
 
     /* Determine the effective constructor kind from the obj type. */
     Kind obj_ck = KIND_STAR;
@@ -8602,12 +8649,13 @@ static Expr *elab_method_call(Elab *e, const Form *call) {
                 }
                 if (!type_ok) {
                     /* Record as fallback but keep searching. */
-                    if (!best_method) best_method = inst->method_impls[i];
+                    if (!best_method) { best_method = inst->method_impls[i]; best_inst = inst; }
                     continue;
                 }
             }
             /* Good match (or no type_args to check). */
             best_method = inst->method_impls[i];
+            best_inst = inst;
             goto found_method;
         }
     }
@@ -8659,6 +8707,10 @@ found_method:;
     out->as.call_.args = call_args;
     out->as.call_.n_args = n_args + 1;
     out->as.call_.fn_expr = NULL;
+    /* Phase H §1: Annotate the call with the selected instance's dictionary.
+     * Full runtime dict passing is deferred; this field records which dictionary
+     * would be passed so future passes can use it without re-resolving. */
+    out->as.call_.dict_arg = best_inst ? make_dict_expr(e, best_inst, call->span) : NULL;
     return out;
 }
 

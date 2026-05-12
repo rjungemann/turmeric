@@ -1021,6 +1021,66 @@ static void emit_set_deref_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
 
 /* ------------ entry points ------------ */
 
+/* Phase H §1: Compute the C name of a typeclass instance's dictionary singleton.
+ * Mirrors the type_suffix logic in EX_INSTANCE_DEF (emit_stmt) so that the name
+ * is consistent wherever it needs to be referenced (EX_DICT emit_value, etc.).
+ * Writes "dict_<TypeClass>_<typeargs>" into buf (size buflen). */
+static void emit_dict_name(char *buf, size_t buflen, const TypeClassInstance *inst) {
+    const TypeClass *tc = inst->typeclass;
+    char type_suffix[64] = "";
+    for (uint8_t i = 0; i < inst->n_type_args; i++) {
+        if (i == 0) strncat(type_suffix, "_", sizeof(type_suffix) - strlen(type_suffix) - 1);
+        const char *component = "T";
+        switch (inst->type_args[i].kind) {
+            case TY_INT:      component = "int";      break;
+            case TY_BOOL:     component = "bool";     break;
+            case TY_CSTR:     component = "cstr";     break;
+            case TY_NIL:      component = "nil";      break;
+            case TY_PTR_VOID: component = "ptr_void"; break;
+            case TY_STRUCT:
+                if (inst->type_arg_syms && inst->type_arg_syms[i])
+                    component = inst->type_arg_syms[i]->name;
+                else if (inst->type_args[i].as.struct_.def &&
+                         inst->type_args[i].as.struct_.def->name)
+                    component = inst->type_args[i].as.struct_.def->name;
+                break;
+            case TY_APP: {
+                const char *fn_part  = "T";
+                const char *arg_part = "T";
+                if (inst->type_args[i].as.app.fn) {
+                    Type *fn = inst->type_args[i].as.app.fn;
+                    if (fn->kind == TY_REC && fn->as.rec.name)
+                        fn_part = fn->as.rec.name;
+                    else if (fn->kind == TY_STRUCT && fn->as.struct_.def &&
+                             fn->as.struct_.def->name)
+                        fn_part = fn->as.struct_.def->name;
+                }
+                if (inst->type_args[i].as.app.arg) {
+                    const char *n = type_name(*inst->type_args[i].as.app.arg);
+                    if (n) arg_part = n;
+                }
+                char app_comp[48];
+                snprintf(app_comp, sizeof(app_comp), "%s_%s", fn_part, arg_part);
+                for (char *p = app_comp; *p; p++) {
+                    if (!isalnum((unsigned char)*p)) *p = '_';
+                }
+                strncat(type_suffix, app_comp,
+                        sizeof(type_suffix) - strlen(type_suffix) - 1);
+                continue;
+            }
+            default: break;
+        }
+        char comp_buf[32];
+        strncpy(comp_buf, component, sizeof(comp_buf) - 1);
+        comp_buf[sizeof(comp_buf) - 1] = '\0';
+        for (char *p = comp_buf; *p; p++) {
+            if (!isalnum((unsigned char)*p)) *p = '_';
+        }
+        strncat(type_suffix, comp_buf, sizeof(type_suffix) - strlen(type_suffix) - 1);
+    }
+    snprintf(buf, buflen, "dict_%s%s", tc->name->name, type_suffix);
+}
+
 static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     switch (e->kind) {
         case EX_NIL_LIT:  return atom_nil();
@@ -1044,6 +1104,17 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_INSTANCE_DEF:
             /* Handled in emit_stmt - file scope only */
             return atom_nil();
+        /* Phase H §1: dictionary passing — load address of singleton as int64_t */
+        case EX_DICT: {
+            char dict_name[128];
+            emit_dict_name(dict_name, sizeof(dict_name), e->as.dict_.instance);
+            Buf out; buf_init(&out);
+            buf_printf(&out, "(int64_t)(intptr_t)(&%s_singleton)", dict_name);
+            buf_putc(&out, '\0');
+            char *result = strdup(out.data);
+            buf_free(&out);
+            return result;
+        }
         /* Phase 17: Exceptions */
         case EX_THROW: {
             /* (throw expr) - emit as tur_throw call */
@@ -2721,6 +2792,9 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_printf(ctx->file, "};\n\n");
             return;
         }
+        /* Phase H §1: dictionary passing — EX_DICT is a pure value node; no statement to emit */
+        case EX_DICT:
+            return;
         case EX_INLINE_C: {
             /* Emit the raw C code inline as a statement */
             InlineC *ic = e->as.inline_c_.inline_c;
