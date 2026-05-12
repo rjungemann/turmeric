@@ -1,0 +1,7 @@
+(defn main [] :int
+  (unsafe
+    (raw-malloc 8)
+    (raw-malloc 8)
+    (raw-malloc 8)
+    (raw-free (raw-malloc 8))
+    0))

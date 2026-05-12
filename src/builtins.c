@@ -74,6 +74,30 @@ static BuiltinSpec table_[] = {
     { "upgrade", NULL, 1, 1, {.kind=TY_WEAK}, {.kind=TY_UNKNOWN}, BS_PREFIX_UNARY, NULL },
     /* (weak? w) - check if w is a weak<T> */
     { "weak?", NULL, 1, 1, {.kind=TY_UNKNOWN}, {.kind=TY_BOOL}, BS_PREFIX_UNARY, NULL },
+    /* Phase U3: Unsafe primitives - pointer operations */
+    { "ptr-deref", NULL, 1, 1, {.kind=TY_PTR_VOID}, {.kind=TY_INT}, BS_PTR_DEREF, "*((int64_t *)" },
+    { "ptr-null?", NULL, 1, 1, {.kind=TY_PTR_VOID}, {.kind=TY_BOOL}, BS_PREFIX_UNARY, "!" },
+    { "ptr-of", NULL, 1, 1, {.kind=TY_UNKNOWN}, {.kind=TY_PTR_VOID}, BS_PREFIX_UNARY, "&" },
+    { "ptr-add", NULL, 2, 2, {.kind=TY_PTR_VOID}, {.kind=TY_PTR_VOID}, BS_PTR_ARITH, "+" },
+    { "ptr-sub", NULL, 2, 2, {.kind=TY_PTR_VOID}, {.kind=TY_PTR_VOID}, BS_PTR_ARITH, "-" },
+    { "ptr-write", NULL, 2, 2, {.kind=TY_PTR_VOID}, {.kind=TY_NIL}, BS_PTR_WRITE, NULL },
+    /* Phase U3: Unsafe primitives - type casting */
+    { "unsafe-cast", NULL, 2, 2, {.kind=TY_UNKNOWN}, {.kind=TY_UNKNOWN}, BS_UNSAFE_CAST, NULL },
+    { "reinterpret", NULL, 2, 2, {.kind=TY_UNKNOWN}, {.kind=TY_UNKNOWN}, BS_REINTERPRET, NULL },
+    { "transmute", NULL, 2, 2, {.kind=TY_UNKNOWN}, {.kind=TY_UNKNOWN}, BS_TRANSMUTE, NULL },
+    /* Phase U3: Unsafe primitives - unchecked array ops */
+    { "array-get-unchecked", NULL, 2, 2, {.kind=TY_PTR_VOID}, {.kind=TY_INT}, BS_ARRAY_GET_UNCHECKED, NULL },
+    { "array-set-unchecked", NULL, 3, 3, {.kind=TY_PTR_VOID}, {.kind=TY_NIL}, BS_ARRAY_SET_UNCHECKED, NULL },
+    /* Phase U3: Unsafe primitives - raw memory */
+    { "raw-malloc", NULL, 1, 1, {.kind=TY_INT}, {.kind=TY_PTR_VOID}, BS_RAW_MALLOC, NULL },
+    { "raw-free", NULL, 1, 1, {.kind=TY_PTR_VOID}, {.kind=TY_NIL}, BS_RAW_FREE, NULL },
+    { "raw-realloc", NULL, 2, 2, {.kind=TY_PTR_VOID}, {.kind=TY_PTR_VOID}, BS_RAW_REALLOC, NULL },
+    { "raw-memcpy", NULL, 3, 3, {.kind=TY_PTR_VOID}, {.kind=TY_NIL}, BS_RAW_MEMCPY, NULL },
+    { "raw-memset", NULL, 3, 3, {.kind=TY_PTR_VOID}, {.kind=TY_NIL}, BS_RAW_MEMSET, NULL },
+    /* Phase U3: Unsafe primitives - FFI */
+    { "dlopen", NULL, 1, 1, {.kind=TY_CSTR}, {.kind=TY_PTR_VOID}, BS_DLOPEN, NULL },
+    { "dlsym", NULL, 2, 2, {.kind=TY_PTR_VOID}, {.kind=TY_PTR_VOID}, BS_DLSYM, NULL },
+    { "dlclose", NULL, 1, 1, {.kind=TY_PTR_VOID}, {.kind=TY_INT}, BS_DLCLOSE, NULL },
 };
 
 #define TABLE_LEN (sizeof(table_) / sizeof(table_[0]))

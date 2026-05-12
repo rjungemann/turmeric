@@ -1,0 +1,7 @@
+(defn main [] :int
+  (unsafe
+    (let [x 42]
+      (unsafe
+        (let [y 99]
+          (println y)
+          0)))))
