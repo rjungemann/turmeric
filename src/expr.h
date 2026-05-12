@@ -102,6 +102,9 @@ typedef enum ExprKind {
     EX_RESET,          /* (reset body) - establish continuation boundary */
     EX_SHIFT,          /* (shift k body) - capture continuation, pass to k */
     EX_SHIFT0,         /* (shift0 k body) - one-shot shift */
+    /* Phase B2: Cloneable continuations */
+    EX_CLONEABLE_RESET, /* (cloneable-reset body) - continuation boundary with cloneable captures */
+    EX_CLONEABLE_SHIFT, /* (cloneable-shift k body) - capture cloneable continuation */
     /* Phase 19: Algebraic effects */
     EX_DEFECT,         /* (defeffect Name [params...] : result) - define an effect */
     EX_PERFORM,        /* (perform (EffectName args...)) - perform an effect */
@@ -323,6 +326,12 @@ struct Expr {
             Expr *k_fn;             /* (shift0 k body) - k is a function that cannot resume */
             Expr *body;             /* body to run */
         } shift0_;
+        /* Phase B2: Cloneable continuations */
+        struct { Expr *body; }         cloneable_reset_; /* (cloneable-reset body) */
+        struct { 
+            Expr *k_fn;             /* (cloneable-shift k body) - k receives cloneable continuation */
+            Expr *body;             /* body to run with captured cloneable continuation */
+        } cloneable_shift_;
         /* Phase 19: Algebraic effects */
         struct { EffectDef *def; }                   effect_def_;   /* (defeffect ...) */
         struct { PerformExpr *perform; }             perform_;     /* (perform ...) */

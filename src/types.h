@@ -58,6 +58,8 @@ typedef enum TypeKind {
     TY_EXCEPTION,    /* Exception type - wraps any value for throw/catch */
     /* Phase 18: Delimited continuations */
     TY_CONT,         /* cont<T> - captured continuation that returns T */
+    /* Phase B2: Cloneable continuations */
+    TY_CLONEABLE_CONT, /* cloneable_cont<T> - multi-shot continuation that returns T */
     /* Phase 11: User-defined struct types */
     TY_STRUCT,       /* user-defined struct type - see as.struct_ for StructDef */
     /* Phase R2: Panic - diverging/never type */
@@ -86,6 +88,9 @@ typedef struct StructDef {
     StructField *fields;    /* field array (malloc'd) */
     bool is_copy;           /* :copy annotation */
     bool needs_drop_glue;   /* true if any field is rc/ref/weak */
+    /* Phase HKT-P4: file that defined this struct (for orphan instance check).
+     * file_id mirrors Span.file_id; 0 means unknown/builtin. */
+    uint16_t origin_file_id;
 } StructDef;
 
 /* Phase 11: canonical default copy-kind by kind (typeclass path is primary; this
@@ -226,6 +231,7 @@ static inline bool type_is_send(Type t) {
         case TY_RC:
         case TY_WEAK:
         case TY_CONT:
+        case TY_CLONEABLE_CONT:
         case TY_REF_IMMUT:
         case TY_REF_MUT:
             return false;
@@ -396,6 +402,17 @@ static inline Type type_cont(TypeKind returns) {
     Type t;
     t.kind = TY_CONT;
     t.copy_kind = CK_MOVE;  /* Continuations are move-only (one-shot) */
+    t.n_lifetimes = 0;
+    t.as.cont.returns = returns;
+    return t;
+}
+
+/* Phase B2: Cloneable continuation type constructor */
+/* Create a cloneable continuation type cloneable_cont<T> that returns T */
+static inline Type type_cloneable_cont(TypeKind returns) {
+    Type t;
+    t.kind = TY_CLONEABLE_CONT;
+    t.copy_kind = CK_COPY;  /* Cloneable continuations can be copied (multi-shot) */
     t.n_lifetimes = 0;
     t.as.cont.returns = returns;
     return t;

@@ -261,18 +261,37 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
             }
             return true;
             
-        case EX_CLOSURE:
+        case EX_CLOSURE: {
+            /* HKT-P3: Validate all captured bindings at closure-creation site.
+             * Iterate every binding in closure->captures and verify that none
+             * of them has already been moved before the closure is formed. */
+            const struct Closure *cl = e->as.closure_.closure;
+            bool capture_ok = true;
+            if (cl) {
+                for (uint8_t ci = 0; ci < cl->n_captures; ci++) {
+                    const Binding *b = cl->captures[ci];
+                    if (!ctx->only_handler_captures && b && b->is_moved) {
+                        diag_emit(DIAG_ERROR, e->span,
+                                  "capture-after-move of '%s' in closure - "
+                                  "value was already moved",
+                                  b->name->name);
+                        ctx->error_count++;
+                        capture_ok = false;
+                    }
+                }
+            }
             /* Check closure body */
-            if (e->as.closure_.closure && e->as.closure_.closure->fn) {
+            if (cl && cl->fn) {
                 BorrowCheckCtx closure_ctx;
-                borrow_check_ctx_init(&closure_ctx, &e->as.closure_.closure->fn->lifetime_ctx, ctx->scope);
+                borrow_check_ctx_init(&closure_ctx, &cl->fn->lifetime_ctx, ctx->scope);
                 closure_ctx.only_handler_captures = ctx->only_handler_captures;
-                if (!borrow_check_fn(&closure_ctx, e->as.closure_.closure->fn)) {
+                if (!borrow_check_fn(&closure_ctx, cl->fn)) {
                     ctx->error_count += closure_ctx.error_count;
                     return false;
                 }
             }
-            return true;
+            return capture_ok;
+        }
             
         case EX_DEFER:
             /* Check defer body */
@@ -415,6 +434,15 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
             /* Check k function and body */
             if (!borrow_check_expr_recursive(ctx, e->as.shift0_.k_fn)) return false;
             if (!borrow_check_expr_recursive(ctx, e->as.shift0_.body)) return false;
+            return true;
+        /* Phase B2: Cloneable continuations */
+        case EX_CLONEABLE_RESET:
+            /* Check the cloneable-reset body */
+            return borrow_check_expr_recursive(ctx, e->as.cloneable_reset_.body);
+        case EX_CLONEABLE_SHIFT:
+            /* Check k function and body */
+            if (!borrow_check_expr_recursive(ctx, e->as.cloneable_shift_.k_fn)) return false;
+            if (!borrow_check_expr_recursive(ctx, e->as.cloneable_shift_.body)) return false;
             return true;
         /* Phase 19: Algebraic effects */
         case EX_DEFECT:

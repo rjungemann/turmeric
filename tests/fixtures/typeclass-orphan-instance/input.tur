@@ -1,0 +1,21 @@
+;; HKT-P4: Orphan instance smoke test — verifies no false-positive TUR-E0013.
+;;
+;; In v1 (single-file compilation) all definitions share the same file_id so
+;; the orphan check NEVER fires.  This fixture verifies:
+;;   a) no spurious TUR-E0013 warning is produced for a valid instance that is
+;;      defined in the same file as its typeclass.
+;;   b) the TUR-E0013 infrastructure (origin_file_id tracking) compiles and
+;;      runs without crashing.
+;;
+;; A multi-file negative fixture that DOES trigger the warning is deferred until
+;; P19-6 (module system) lands.
+
+(defclass Show [a]
+  (show-it [x] :int))
+
+(definstance Show [:int]
+  (show-it [x] (do (println x) x)))
+
+(defn main [] :int
+  (.show-it 42)
+  0)
