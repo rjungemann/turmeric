@@ -16,7 +16,6 @@ CPMAddPackage(
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-set(TUR_COMPILER "${CMAKE_SOURCE_DIR}/build/tur")
 set(TUR_SRCDIR   "${CMAKE_CURRENT_SOURCE_DIR}/src")
 set(TUR_OUTDIR   "${CMAKE_CURRENT_BINARY_DIR}")
 
@@ -30,9 +29,9 @@ set(TUR_OUTDIR   "${CMAKE_CURRENT_BINARY_DIR}")
 # ---------------------------------------------------------------------------
 add_custom_command(
   OUTPUT  "${TUR_OUTDIR}/snake_gen.c"
-  COMMAND /bin/sh -c "\"${TUR_COMPILER}\" emit-c \"${TUR_SRCDIR}/main.tur\" > \"${TUR_OUTDIR}/snake_gen.c\""
+  COMMAND /bin/sh -c "$<TARGET_FILE:tur> emit-c \"${TUR_SRCDIR}/main.tur\" > \"${TUR_OUTDIR}/snake_gen.c\""
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-  DEPENDS tur_compiler "${TUR_SRCDIR}/main.tur"
+  DEPENDS tur "${TUR_SRCDIR}/main.tur"
   COMMENT "Compiling main.tur → snake_gen.c"
   VERBATIM
 )
@@ -50,7 +49,7 @@ add_custom_command(
 # rayLibShim.c provides the definitions that satisfy those extern decls,
 # wrapping Raylib's API and owning all mutable C game state.
 # ---------------------------------------------------------------------------
-add_executable(snake
+add_executable(snake EXCLUDE_FROM_ALL
   "${TUR_OUTDIR}/snake_gen.c"
   "${TUR_SRCDIR}/rayLibShim.c"
 )

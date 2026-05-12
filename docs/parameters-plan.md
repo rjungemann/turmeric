@@ -46,25 +46,25 @@ The system is inspired by Racket's [parameterize](https://docs.racket-lang.org/r
 
 ```scheme
 ;; Parameter declaration - creates a new parameter with a default value
-(defparameter *debug-mode* :bool false)
+(defparameter debug-mode :bool false)
 
 ;; Parameter dereference - call the parameter like a function to get its current value
-(println (*debug-mode*))  ; => false
+(println (debug-mode))  ; => false
 
 ;; Parameterize - temporarily binds a parameter within a scope
 ;; Note: binding position uses the bare name to identify the parameter;
 ;;       body uses call syntax to dereference it
-(parameterize ([*debug-mode* true])
-  (println (*debug-mode*)))  ; => true
+(parameterize ([debug-mode true])
+  (println (debug-mode)))  ; => true
 
 ;; Nested parameterize - inner binding overrides outer
-(parameterize ([*debug-mode* true])
-  (println (*debug-mode*))  ; => true
-  (parameterize ([*debug-mode* false])
-    (println (*debug-mode*))))  ; => false
+(parameterize ([debug-mode true])
+  (println (debug-mode))  ; => true
+  (parameterize ([debug-mode false])
+    (println (debug-mode))))  ; => false
 
 ;; After parameterize, original value is restored
-(println (*debug-mode*))  ; => false
+(println (debug-mode))  ; => false
 ```
 
 ### Thread-Local Semantics
@@ -72,11 +72,11 @@ The system is inspired by Racket's [parameterize](https://docs.racket-lang.org/r
 By default, parameters are **thread-local**: each thread has its own stack of bindings.
 
 ```scheme
-(defparameter *thread-id* :int 0)
+(defparameter thread-id :int 0)
 
 (fn main [] :void
-  (parameterize ([*thread-id* 1])
-    (thread-spawn (fn [] (println (*thread-id*))))))  ; => 0 (child thread inherits parent's base value)
+  (parameterize ([thread-id 1])
+    (thread-spawn (fn [] (println (thread-id))))))  ; => 0 (child thread inherits parent's base value)
 ```
 
 ### Comparison with Racket
@@ -88,7 +88,7 @@ By default, parameters are **thread-local**: each thread has its own stack of bi
 | Thread-local default | No (process-global) | Yes |
 | CPS transformation | No | Yes (for continuations) |
 | Zero-cost when unused | No | Yes |
-| Call-style dereference | Yes (`(p)`) | Yes (`(*p*)`) |
+| Call-style dereference | Yes (`(p)`) | Yes (`(p)`) |
 
 ---
 
@@ -220,7 +220,7 @@ Parameters split into two tracks based on whether they require runtime type info
 - [ ] Validate type annotation is present and valid
 - [ ] Elaborate default value expression
 - [ ] Register parameter in global scope
-- [ ] Parse parameter dereference: recognize `(*param-name*)` (zero-arg call on a parameter symbol) as a dereference expression
+- [ ] Parse parameter dereference: recognize `(param-name)` (zero-arg call on a parameter symbol) as a dereference expression
 - [ ] Emit a compile-time error (`TUR-E0105`) when a parameter symbol appears in expression position without call syntax
 - [ ] Emit a compile-time error (`TUR-E0106`) when a parameter symbol is called with one or more arguments
 - [ ] Add `elab_resolve_param` helper to resolve parameter symbols
@@ -357,14 +357,14 @@ Parameters split into two tracks based on whether they require runtime type info
 
 ```scheme
 ;; Basic declaration with type and default
-(defparameter *debug* :bool false)
+(defparameter debug :bool false)
 
 ;; Declaration with complex default
-(defparameter *max-iterations* :int (* 1000 1000))
+(defparameter max-iterations :int (* 1000 1000))
 
 ;; Declaration referencing other bindings
 (defn get-default-timeout [] :int 5000)
-(defparameter *timeout* :int (get-default-timeout))
+(defparameter timeout :int (get-default-timeout))
 ```
 
 ### Dereference
@@ -374,53 +374,53 @@ Parameters must be **called with no arguments** to get their current value, just
 ```scheme
 ;; Dereference in a condition
 (defn log [msg :cstr] :void
-  (when (*debug*)
+  (when (debug)
     (println msg)))
 
 ;; Dereference in an expression
 (defn scale [x :int] :int
-  (* x (*scale-factor*)))
+  (* x (scale-factor)))
 
 ;; Error: bare parameter name in expression position
-(println *debug*)  ; TUR-E0105: *debug* is a parameter; use (*debug*) to dereference
+(println debug)  ; TUR-E0105: debug is a parameter; use (debug) to dereference
 ```
 
 ### Parameterize
 
 ```scheme
 ;; Single binding
-(parameterize ([*debug* true])
+(parameterize ([debug true])
   (do-something))
 
 ;; Multiple bindings
-(parameterize ([*debug* true]
-               [*timeout* 1000])
+(parameterize ([debug true]
+               [timeout 1000])
   (do-something))
 
 ;; Nested — bare name in binding position, call syntax in body
-(parameterize ([*a* 1])
-  (println (*a*))  ; => 1
-  (parameterize ([*a* 2])
-    (println (*a*))))  ; => 2
-  ; *a* restored to 1 here
-  (println (*a*)))  ; => 1
+(parameterize ([a 1])
+  (println (a))  ; => 1
+  (parameterize ([a 2])
+    (println (a))))  ; => 2
+  ; a restored to 1 here
+  (println (a)))  ; => 1
 ```
 
 ### Error Cases
 
 ```scheme
 ;; Error: undefined parameter
-(*undefined-param*)
+(undefined-param)
 ; TUR-E0100: undefined parameter: undefined-param
 
 ;; Error: bare parameter name in expression position (must call to dereference)
-(println *count*)
-; TUR-E0105: *count* is a parameter; use (*count*) to dereference
+(println count)
+; TUR-E0105: count is a parameter; use (count) to dereference
 
 ;; Error: type mismatch in parameterize
-(defparameter *count* :int 0)
-(parameterize ([*count* true]) ...)
-; TUR-E0102: parameterize: expected :int, got :bool for parameter *count*
+(defparameter count :int 0)
+(parameterize ([count true]) ...)
+; TUR-E0102: parameterize: expected :int, got :bool for parameter count
 
 ;; Error: not a parameter
 (defn foo [] :int 42)
@@ -428,8 +428,8 @@ Parameters must be **called with no arguments** to get their current value, just
 ; TUR-E0101: parameterize: foo is not a parameter
 
 ;; Error: calling a parameter with arguments
-(*count* 1)
-; TUR-E0106: parameter *count* takes no arguments; use (*count*) to dereference
+(count 1)
+; TUR-E0106: parameter count takes no arguments; use (count) to dereference
 ```
 
 ---
@@ -438,12 +438,12 @@ Parameters must be **called with no arguments** to get their current value, just
 
 ### Parameter Access
 
-Parameter dereferences — `(*param*)` call forms — are compiled to getter function calls. The bare name `*param*` is only valid in `defparameter` and `parameterize` binding positions; using it in expression position is a compile-time error.
+Parameter dereferences — `(param)` call forms — are compiled to getter function calls. The bare name `param` is only valid in `defparameter` and `parameterize` binding positions; using it in expression position is a compile-time error.
 
 ```scheme
 ;; Turmeric
-(defparameter *x* :int 0)
-(println (*x*))
+(defparameter x :int 0)
+(println (x))
 ```
 
 ```c
@@ -469,8 +469,8 @@ int main(void) {
 
 ```scheme
 ;; Turmeric
-(parameterize ([*x* 10])
-  (println (*x*)))
+(parameterize ([x 10])
+  (println (x)))
 ```
 
 ```c
@@ -504,8 +504,8 @@ When the compiler can prove no overrides are active:
 
 ```scheme
 ;; When no parameterize is in scope
-(defparameter *x* :int 0)
-(defn get-x [] :int (*x*))
+(defparameter x :int 0)
+(defn get-x [] :int (x))
 ```
 
 ```c
@@ -583,13 +583,13 @@ Parameters and effects compose naturally:
 ```scheme
 (defeffect Log [msg :cstr] :void)
 
-(defparameter *log-level* :int 1)
+(defparameter log-level :int 1)
 
 (defn do-log [msg :cstr] :void
-  (when (>= (*log-level*) 2)
+  (when (>= (log-level) 2)
     (perform (Log msg))))
 
-(parameterize ([*log-level* 3])
+(parameterize ([log-level 3])
   (handle (do-log "test")
     (Log [msg] k) (println msg)))
 ```
@@ -600,7 +600,7 @@ Macros can expand to parameter uses:
 
 ```scheme
 (defmacro with-debug [[msg :cstr] body ...]
-  `(parameterize ([*debug* true])
+  `(parameterize ([debug true])
      ,@body))
 
 (with-debug () (println "debugging"))
@@ -614,11 +614,11 @@ Parameters can be used in typeclass methods:
 (defclass Show a)
   (defn show [x :a] :cstr))
 
-(defparameter *show-depth* :int 0)
+(defparameter show-depth :int 0)
 
 (definstance Show (List a) where (Show a)
   (defn show [xs :(List a)] :cstr
-    (when (> (*show-depth*) 0)
+    (when (> (show-depth) 0)
       (list->string xs))))
 ```
 
@@ -631,10 +631,10 @@ Parameters can wrap C globals for FFI compatibility:
 (extern-c some_global :int)
 
 ;; Wrap in parameter
-(defparameter *some-global* :int (unsafe-get-global some_global))
+(defparameter some-global :int (unsafe-get-global some_global))
 
 ;; Now can use parameterize
-(parameterize ([*some-global* 42])
+(parameterize ([some-global 42])
   (call-c-function))
 ```
 
@@ -704,7 +704,7 @@ Add to `src/diag.c`:
 1. **Naming convention**: Should parameters have a naming convention (e.g., `*` prefix/suffix)?
    - **Pro**: Clear visual distinction, harder to accidentally shadow
    - **Con**: Extra typing, not idiomatic Lisp
-ANSWER: We should not enforce it, but we should use `*variable-name*` convention for parameters.
+ANSWER: No naming convention. Use bare names like Racket.
 
 2. **Parameter of parameters**: Should we allow parameters whose values are themselves parameters?
    - **Pro**: More flexible
@@ -753,7 +753,7 @@ Racket's parameter system is the primary inspiration:
 2. **Thread-local by default**: Racket parameters are process-global by default
 3. **Compile-time declaration**: All parameters must be declared at compile time
 4. **No guard procedures**: Racket allows guards for parameter values; Turmeric uses type system
-5. **Same call-style dereference**: Both Racket and Turmeric require calling the parameter with no arguments to read its value (`(p)` in Racket, `(*p*)` in Turmeric). Bare use of the name in expression position is an error in Turmeric (in Racket it's valid but refers to the procedure object).
+5. **Same call-style dereference**: Both Racket and Turmeric require calling the parameter with no arguments to read its value — `(p)` in both cases. Bare use of the name in expression position is an error in Turmeric (in Racket it's valid but refers to the procedure object).
 
 ---
 
@@ -763,15 +763,15 @@ Racket's parameter system is the primary inspiration:
 
 ```scheme
 ;; Library code
-(defparameter *log-level* :int 1)
+(defparameter log-level :int 1)
 
 (defn log [msg :cstr] :void
-  (when (>= (*log-level*) 2)
+  (when (>= (log-level) 2)
     (println msg)))
 
 ;; User code
 (defn process-data [data :cstr] :void
-  (parameterize ([*log-level* 3])
+  (parameterize ([log-level 3])
     (log "Processing...")
     ;; ... processing ...
     (log "Done")))
@@ -780,30 +780,30 @@ Racket's parameter system is the primary inspiration:
 ### Testing
 
 ```scheme
-(defparameter *test-mode* :bool false)
-(defparameter *test-verbose* :bool false)
+(defparameter test-mode :bool false)
+(defparameter test-verbose :bool false)
 
 (defn assert [condition :bool] :void
   (when (not condition)
-    (when (*test-verbose*)
+    (when (test-verbose)
       (print-stack-trace))
-    (when (*test-mode*)
+    (when (test-mode)
       (panic "assertion failed"))))
 
 ;; Test code
-(parameterize ([*test-mode* true]
-               [*test-verbose* true])
+(parameterize ([test-mode true]
+               [test-verbose true])
   (run-tests))
 ```
 
 ### Performance Profiling
 
 ```scheme
-(defparameter *profile-enabled* :bool false)
-(defparameter *profile-output* :cstr "profile.log")
+(defparameter profile-enabled :bool false)
+(defparameter profile-output :cstr "profile.log")
 
 (defn profile [name :cstr thunk :(fn [] :a)] :a
-  (if (*profile-enabled*)
+  (if (profile-enabled)
     (let [start (get-time)]
       (let [result (thunk)]
         (log-profile name (- (get-time) start))
@@ -811,20 +811,20 @@ Racket's parameter system is the primary inspiration:
     (thunk)))
 
 ;; Enable profiling for specific code
-(parameterize ([*profile-enabled* true])
+(parameterize ([profile-enabled true])
   (my-expensive-computation))
 ```
 
 ### Localization
 
 ```scheme
-(defparameter *locale* :cstr "en_US")
+(defparameter locale :cstr "en_US")
 
 (defn translate [key :cstr] :cstr
-  (locale-get-string (*locale*) key))
+  (locale-get-string (locale) key))
 
 ;; Temporarily switch locale
-(parameterize ([*locale* "fr_FR"])
+(parameterize ([locale "fr_FR"])
   (println (translate "hello")))
 ```
 
@@ -851,13 +851,13 @@ Instead of a dedicated parameter system, use typeclasses:
 Use global variables with macros for scoping:
 
 ```scheme
-(defglobal *debug* :bool false)
+(defglobal debug :bool false)
 
 (defmacro with-debug [body ...]
-  `(let [old-debug *debug*]
-     (set! *debug* true)
+  `(let [old-debug debug]
+     (set! debug true)
      ,@body
-     (set! *debug* old-debug)))
+     (set! debug old-debug)))
 ```
 
 **Rejected because:** Manual management, easy to forget to restore, doesn't compose well, not thread-safe by default.
@@ -867,8 +867,8 @@ Use global variables with macros for scoping:
 Compile parameterize to CPS:
 
 ```scheme
-(parameterize ([*x* 10]) body)
-;=> (let-cont k () body (with-parameter *x* 10 k))
+(parameterize ([x 10]) body)
+;=> (let-cont k () body (with-parameter x 10 k))
 ```
 
 **Rejected because:** More complex compilation, harder to optimize, and Turmeric already has effects for CPS.

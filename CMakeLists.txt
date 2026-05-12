@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(turmeric LANGUAGES C)
+project(turmeric LANGUAGES C ASM)
 
 # ---------------------------------------------------------------------------
 # CPM: package manager for fetching Raylib (and any future C dependencies).
@@ -7,25 +7,34 @@ project(turmeric LANGUAGES C)
 include(cmake/CPM.cmake)
 
 # ---------------------------------------------------------------------------
-# Turmeric compiler
-#
-# The compiler is built with the existing Makefile.  We expose the resulting
-# binary (build/tur) as an imported executable target so sub-directories can
-# depend on it.
+# Turmeric compiler (native CMake build)
 # ---------------------------------------------------------------------------
-add_custom_target(tur_compiler
-  COMMAND ${CMAKE_MAKE_PROGRAM} debug
+add_subdirectory(src)
+
+# ---------------------------------------------------------------------------
+# Tests (CTest)
+# ---------------------------------------------------------------------------
+enable_testing()
+
+add_test(
+  NAME tur_tests
+  COMMAND bash tests/run.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-  COMMENT "Building Turmeric compiler via Makefile"
-  VERBATIM
+)
+add_test(
+  NAME tur_cli_tests
+  COMMAND bash tests/run-cli.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+add_test(
+  NAME tur_span_tests
+  COMMAND bash tests/check-span-unknown.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 
-# Convenience target: run the full test suite
-add_custom_target(tur_tests
-  COMMAND ${CMAKE_MAKE_PROGRAM} test
-  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-  COMMENT "Running Turmeric tests"
-  VERBATIM
+# Make sure tur is built before any test is run
+set_tests_properties(tur_tests tur_cli_tests tur_span_tests
+  PROPERTIES DEPENDS tur
 )
 
 # ---------------------------------------------------------------------------
