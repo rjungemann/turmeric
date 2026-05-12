@@ -442,6 +442,8 @@ typedef struct Elab {
     const Symbol *sym_definstance; /* definstance */
     /* Phase HKT H5: defkind — kind alias declarations */
     const Symbol *sym_defkind;     /* defkind */
+    /* Phase HKT-P2: defrec — recursive type binders */
+    const Symbol *sym_defrec;      /* defrec */
     /* Phase HKT (v2): reserved typeclass names — user definitions rejected with diagnostic */
     const Symbol *sym_hkt_Functor;
     const Symbol *sym_hkt_Applicative;
@@ -909,6 +911,8 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_definstance = intern_cstr(st, "definstance");
     /* Phase HKT H5: defkind */
     e->sym_defkind = intern_cstr(st, "defkind");
+    /* Phase HKT-P2: defrec */
+    e->sym_defrec = intern_cstr(st, "defrec");
     /* Phase HKT (v2): reserved typeclass names */
     e->sym_hkt_Functor      = intern_cstr(st, "Functor");
     e->sym_hkt_Applicative  = intern_cstr(st, "Applicative");
@@ -5945,6 +5949,7 @@ static Expr *elab_method_call(Elab *e, const Form *call);
 static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span span);
 /* Phase HKT H5: kind aliases */
 static Expr *elab_defkind(Elab *e, const Form *call);
+static Expr *elab_defrec(Elab *e, const Form *call);  /* Phase HKT-P2 */
 /* Phase 17: throw! sugar */
 static Expr *elab_throw_bang(Elab *e, const Form *call);
 /* Phase 18: call/cc and escape sugar */
@@ -6035,6 +6040,8 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_definstance) return elab_definstance(e, call);
     /* Phase HKT H5: kind aliases */
     if (name == e->sym_defkind) return elab_defkind(e, call);
+    /* Phase HKT-P2: recursive type binders */
+    if (name == e->sym_defrec) return elab_defrec(e, call);
     /* Phase R2: Panic */
     if (name == e->sym_panic) return elab_panic(e, call);
     if (name == e->sym_panic_with) return elab_panic_with(e, call);
@@ -7445,6 +7452,61 @@ static Expr *elab_defkind(Elab *e, const Form *call) {
     (void)call->as.list.items[2];
 
     /* Return nil — defkind has no runtime effect. */
+    return e_nil(e, call->span);
+}
+
+/* Elaborate (defrec Name [params])
+ *
+ * Defines a recursive type constructor Name and registers it in global scope
+ * as a TY_REC binding with kind KIND_ARROW (i.e., kind * -> *).
+ * In v1 the body expression is accepted but not evaluated; TY_REC.body = NULL.
+ *
+ * Syntax: (defrec Fix [^f])
+ *         (defrec Name [params] body-ignored-in-v1)
+ */
+static Expr *elab_defrec(Elab *e, const Form *call) {
+    /* Minimum: (defrec Name) */
+    if (call->as.list.len < 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "defrec requires (defrec Name [params])");
+        return NULL;
+    }
+
+    /* Validate name */
+    Form *name_form = call->as.list.items[1];
+    if (name_form->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, name_form->span,
+                  "defrec: name must be a symbol");
+        return NULL;
+    }
+    const Symbol *name = name_form->as.sym;
+
+    /* Accept params if present (arg 2) — validate is a list/vector but ignore in v1 */
+    if (call->as.list.len >= 3) {
+        Form *params_f = call->as.list.items[2];
+        if (params_f->tag != F_LIST && params_f->tag != F_VEC) {
+            diag_emit(DIAG_ERROR, params_f->span,
+                      "defrec: expected parameter list");
+            return NULL;
+        }
+    }
+
+    /* Accept body form (arg 3) but ignore it in v1 */
+
+    /* Create TY_REC type: kind * -> * (recursive type constructor) */
+    Type rec_type;
+    memset(&rec_type, 0, sizeof(rec_type));
+    rec_type.kind      = TY_REC;
+    rec_type.copy_kind = CK_MOVE;
+    rec_type.hkt_kind  = KIND_ARROW;    /* defrec types are kind * -> * */
+    rec_type.as.rec.name = name->name;
+    rec_type.as.rec.body = NULL;        /* v1: body not yet evaluated */
+
+    /* Register in global scope */
+    Binding *b = binding_new(e, name, rec_type, false, true, name_form->span);
+    scope_add(&e->global, b);
+
+    /* defrec has no runtime effect */
     return e_nil(e, call->span);
 }
 

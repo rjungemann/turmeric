@@ -62,6 +62,10 @@ typedef enum TypeKind {
     TY_STRUCT,       /* user-defined struct type - see as.struct_ for StructDef */
     /* Phase R2: Panic - diverging/never type */
     TY_NEVER,        /* ! - diverging type (never returns; bottom type) */
+    /* Phase HKT-P1: Type application (partially-applied type constructor) */
+    TY_APP,          /* (type-app F A) — apply type constructor F to argument A */
+    /* Phase HKT-P2: Recursive types */
+    TY_REC,          /* (defrec Name [params] body) — recursive type binder */
 } TypeKind;
 
 /* Phase 11: Struct field descriptor.
@@ -107,7 +111,10 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
         case TY_CONT:
         case TY_STRUCT:   /* default move; actual copy_kind set via type_struct() */
         case TY_NEVER:     /* never type is move-only (no values exist) */
+        case TY_REC:       /* recursive type is move-only in v1 */
             return CK_MOVE;
+        case TY_APP:       /* type application — opaque int64_t handle, copy by value */
+            return CK_COPY;
         case TY_UNKNOWN:
         default:
             return CK_MOVE;
@@ -173,6 +180,16 @@ typedef struct Type {
         struct {
             StructDef *def;    /* The struct type descriptor */
         } struct_;
+        /* Phase HKT-P1: Type application — (type-app F A) */
+        struct {
+            struct Type *fn;   /* The type constructor being applied (kind * -> * or * -> * -> *) */
+            struct Type *arg;  /* The type argument (kind *) */
+        } app;
+        /* Phase HKT-P2: Recursive type binder — (defrec Name [params] body) */
+        struct {
+            const char *name;  /* Interned binder name (e.g. "Fix"); compare by pointer */
+            struct Type *body; /* Body type (NULL in v1 when body is not yet evaluated) */
+        } rec;
     } as;
 } Type;
 
@@ -401,6 +418,12 @@ static inline Type type_struct(StructDef *def) {
 int          type_eq(Type a, Type b);
 const char  *type_name(Type t);                   /* "int", "bool", … */
 const char  *type_c_name(Type t);                 /* "int64_t", "bool", … */
+
+/* Phase HKT-P2: One-step unrolling of a TY_REC type.
+ * Returns t->as.rec.body (the body with the recursive variable bound).
+ * In v1, the body is not substituted; returns the raw body pointer.
+ * Returns NULL if t is not TY_REC or body is not yet evaluated. */
+Type *type_rec_unfold(Type *t);
 void         type_print(Buf *b, Type t);
 
 /* Phase HKT H0: Kind utilities */
