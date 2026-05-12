@@ -178,7 +178,17 @@
 (defn double-fn [x :int] :int (* x 2))
 (defn times10-fn [x :int] :ptr<void> (future-of (* x 10)))
 
-;; ---- Main ----
+;; future-cancel: cancel an unsettled future → cancelled? returns true
+(defn make-unsettled [] :ptr<void>
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *cell = (FutureCell *)malloc(sizeof(FutureCell));
+  if (!cell) abort();
+  pthread_mutex_init(&cell->lock, NULL);
+  pthread_cond_init(&cell->ready, NULL);
+  cell->value = 0; cell->exn = 0; cell->is_set = false; cell->is_ok = false;
+  return (void *)cell;
+  ```)
 
 (defn main [] :int
   ;; future-of: pre-fulfilled future
@@ -246,8 +256,8 @@
         (future-free fb3)
         (future-free fany))))
 
-  ;; future-cancel: cancelled? returns true
-  (let [fc (future-of 99)]
+  ;; future-cancel: cancelled? returns true on unsettled future
+  (let [fc (make-unsettled)]
     (future-cancel fc)
     (if (future-cancelled? fc)
       (println "cancelled")  ;; cancelled

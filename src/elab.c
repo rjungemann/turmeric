@@ -6302,6 +6302,12 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
              * Function references are represented as int64_t in HKT helper calls. */
             arg_ok = true;
         }
+        if (!arg_ok && expected_arg_kind == TY_INT && args[i]->type.kind == TY_PTR_VOID) {
+            /* Phase HKT §5: Allow passing a capturing closure (heap-allocated env struct,
+             * TY_PTR_VOID) where int64_t is expected.  emit.c will apply the
+             * (int64_t)(intptr_t) cast so the generated C99 code is valid. */
+            arg_ok = true;
+        }
 
         if (!arg_ok) {
             /* Phase 8: Enhanced type mismatch with error code */

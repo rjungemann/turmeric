@@ -851,9 +851,8 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 
 ##### AW-010 — `Scheduler::timeout`
 - [ ] Implement `Scheduler::timeout [sched ms callback]` — schedule one-shot callback after `ms` milliseconds.
-  - Deferred: Requires timer wheel or platform timer integration (Phase 23).
-- [ ] Implement `async-sleep [ms]` stdlib helper using `Scheduler::timeout` + `Future`.
-  - Deferred: Depends on AW-010.
+- [x] Implement `async-sleep [ms]` stdlib helper using `Scheduler::timeout` + `Future`.
+  - Done (nanosleep-based, no scheduler required): `async-sleep` in `stdlib/fiber.tur`.
 
 ##### AW-011 — `Send`/`Sync` for `Future<T>`
 - [ ] Enforce `Future<T>: Send` when `T: Send` (future can be moved to another thread).

@@ -169,6 +169,10 @@ void tur_throw(int payload_type, void *payload, int line, const char *file) {
 
 /* Phase R2: tur_panic */
 static int tur_panic_in_progress = 0;
+static tur_frame *global_panic_frame = NULL;
+static void tur_panic_set_frame(tur_frame *f) {
+    global_panic_frame = f;
+}
 static void tur_panic(const char *msg) {
     if (tur_panic_in_progress) {
         fprintf(stderr, "double panic: aborting\n");
@@ -176,6 +180,9 @@ static void tur_panic(const char *msg) {
     }
     tur_panic_in_progress = 1;
     fprintf(stderr, "panic: %s\n", msg ? msg : "(no message)");
+    if (global_panic_frame) {
+        tur_frame_fire_chain(global_panic_frame);
+    }
     abort();
 }
 
@@ -208,6 +215,7 @@ struct FiberBlock {
     char *stack;
     size_t stack_size;
     int done;
+    int parked; /* Phase T21: scheduler park/unpark */
     int64_t result;
     int64_t arg;
     void *handler_chain;
@@ -363,6 +371,7 @@ static void tur_scheduler_run(TurScheduler *s) {
         s->current_fiber = f;
         tur_fiber_block_resume(f, 0);
         s->current_fiber = NULL;
+        if (!f->done && !f->parked) tur_scheduler_enqueue(s, f);
     }
     s->running = false;
 }
@@ -375,9 +384,25 @@ static void tur_scheduler_run_to_completion(TurScheduler *s) {
             s->current_fiber = f;
             tur_fiber_block_resume(f, 0);
             s->current_fiber = NULL;
+            if (!f->done && !f->parked) tur_scheduler_enqueue(s, f);
         }
     }
     s->running = false;
+}
+
+static void tur_scheduler_yield(void) {
+    tur_fiber_block_yield(0);
+}
+
+static void tur_scheduler_park(void) {
+    if (tur_current_fiber) tur_current_fiber->parked = 1;
+    tur_fiber_block_yield(0);
+}
+
+static void tur_scheduler_unpark(FiberBlock *f) {
+    if (!f) return;
+    f->parked = 0;
+    if (tur_scheduler) tur_scheduler_enqueue(tur_scheduler, f);
 }
 
 #ifdef __clang__

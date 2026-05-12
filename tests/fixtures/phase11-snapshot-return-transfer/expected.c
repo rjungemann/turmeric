@@ -215,6 +215,7 @@ struct FiberBlock {
     char *stack;
     size_t stack_size;
     int done;
+    int parked; /* Phase T21: scheduler park/unpark */
     int64_t result;
     int64_t arg;
     void *handler_chain;
@@ -370,6 +371,7 @@ static void tur_scheduler_run(TurScheduler *s) {
         s->current_fiber = f;
         tur_fiber_block_resume(f, 0);
         s->current_fiber = NULL;
+        if (!f->done && !f->parked) tur_scheduler_enqueue(s, f);
     }
     s->running = false;
 }
@@ -382,9 +384,25 @@ static void tur_scheduler_run_to_completion(TurScheduler *s) {
             s->current_fiber = f;
             tur_fiber_block_resume(f, 0);
             s->current_fiber = NULL;
+            if (!f->done && !f->parked) tur_scheduler_enqueue(s, f);
         }
     }
     s->running = false;
+}
+
+static void tur_scheduler_yield(void) {
+    tur_fiber_block_yield(0);
+}
+
+static void tur_scheduler_park(void) {
+    if (tur_current_fiber) tur_current_fiber->parked = 1;
+    tur_fiber_block_yield(0);
+}
+
+static void tur_scheduler_unpark(FiberBlock *f) {
+    if (!f) return;
+    f->parked = 0;
+    if (tur_scheduler) tur_scheduler_enqueue(tur_scheduler, f);
 }
 
 #ifdef __clang__
@@ -822,12 +840,17 @@ static int64_t ret_int(int64_t x) {
 }
 
 static void * ret_ref() {
+        void * __t0;
         {
-            void * __t0 = malloc(sizeof(int64_t));
-            *((int64_t *)__t0) = INT64_C(7);
-            void * r_4 = __t0;
+            void * __t1 = malloc(sizeof(int64_t));
+            *((int64_t *)__t1) = INT64_C(7);
+            void * r_4 = __t1;
             (void)r_4;
+            tur_frame __frame_2;
+            tur_frame_init(&__frame_2, NULL);
+            tur_frame_fire_chain(&__frame_2);
             return r_4;
+            __t0 = ((void)0);
         }
 }
 
@@ -835,9 +858,9 @@ int main() {
         printf("%lld\n", (long long)(ret_int(INT64_C(3))));
         (void)(ret_ref());
         printf("%lld\n", (long long)(INT64_C(0)));
-        int64_t __t1;
-        __t1 = INT64_C(0);
-        return (int)__t1;
+        int64_t __t3;
+        __t3 = INT64_C(0);
+        return (int)__t3;
 }
 
 

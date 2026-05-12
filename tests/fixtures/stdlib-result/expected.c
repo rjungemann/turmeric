@@ -215,6 +215,7 @@ struct FiberBlock {
     char *stack;
     size_t stack_size;
     int done;
+    int parked; /* Phase T21: scheduler park/unpark */
     int64_t result;
     int64_t arg;
     void *handler_chain;
@@ -268,6 +269,21 @@ static void tur_fiber_block_yield(int64_t value) {
 
 static void tur_fiber_block_free(FiberBlock *f) {
     if (!f) return; free(f->stack); free(f);
+}
+
+static void tur_scheduler_yield(void) {
+    tur_fiber_block_yield(0);
+}
+
+static void tur_scheduler_park(void) {
+    if (tur_current_fiber) tur_current_fiber->parked = 1;
+    tur_fiber_block_yield(0);
+}
+
+static void tur_scheduler_unpark(FiberBlock *f) {
+    if (!f) return;
+    f->parked = 0;
+    if (tur_scheduler) tur_scheduler_enqueue(tur_scheduler, f);
 }
 
 #ifdef __clang__
