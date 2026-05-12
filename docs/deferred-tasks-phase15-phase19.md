@@ -339,43 +339,70 @@ See [hkt-implementation-plan.md](hkt-implementation-plan.md) for the complete ro
 - [x] Add fixtures: `hkt-dispatch-basic.tur`, `hkt-dispatch-nested.tur`, `hkt-dispatch-mixed.tur`.
   - Implemented: `tests/fixtures/hkt-dispatch-basic/`, `tests/fixtures/hkt-dispatch-nested/`, `tests/fixtures/hkt-dispatch-mixed/`; all pass.
 
-#### H3 — Built-in HKT typeclasses
-- [ ] Define `Functor` typeclass with `map` method.
-- [ ] Define `Applicative` typeclass (extends `Functor`).
-- [ ] Define `Monad` typeclass (extends `Applicative`) with `bind`/`pure`.
-- [ ] Define `Traversable` typeclass.
-- [ ] Define `Foldable` typeclass.
-- [ ] Implement instances for stdlib types (`option`, `vec`, `slice`, `ref`, `rc`).
-- [ ] Add fixtures for laws and behavioral tests.
+#### H3 — Built-in HKT typeclasses ✅ DONE
+- [x] Define `Functor` typeclass with `fmap` method.
+  - Implemented: `(defclass Functor [^f] (fmap [container fn] :int))` in `stdlib/typeclass.tur`; reservation guard removed from `elab_defclass`; unknown type constructor args now use TY_STRUCT (opaque int64_t) instead of TYPE_INT so KIND_ARROW check passes.
+- [x] Define `Applicative` typeclass (extends `Functor`).
+  - Implemented: `(defclass Applicative [^f] (pure [x] :int) (ap [ff fa] :int))` in `stdlib/typeclass.tur`.
+- [x] Define `Monad` typeclass (extends `Applicative`) with `bind`/`pure`.
+  - Implemented: `(defclass Monad [^m] (bind [ma fn] :int))` in `stdlib/typeclass.tur`.
+- [x] Define `Traversable` typeclass.
+  - Implemented: `(defclass Traversable [^t] (traverse [ta fn] :int))` in `stdlib/typeclass.tur`.
+- [x] Define `Foldable` typeclass.
+  - Implemented: `(defclass Foldable [^t] (foldl [ta init fn] :int) (foldr [ta init fn] :int))` in `stdlib/typeclass.tur`.
+- [x] Implement instances for stdlib types (`option`, `vec`).
+  - `stdlib/option.tur`: Functor, Applicative, Monad instances added.
+  - `stdlib/vec.tur`: Functor, Foldable instances added.
+  - `slice`/`ref`/`rc` deferred to H6.
+- [x] Add fixtures for laws and behavioral tests.
+  - `tests/fixtures/hkt-functor-option/` — Functor fmap on option; PASS.
+  - `tests/fixtures/hkt-monad-option/` — Monad bind on option; PASS.
+  - `tests/fixtures/hkt-instances/` — All five HKT typeclasses compiled together; PASS.
+  - `tests/fixtures/errors/kinds-hkt-reserved/` — Duplicate typeclass definition error; PASS.
+- Key implementation notes:
+  - `elab_definstance`: type arg parsing uses `type_arg_syms[]` parallel array to track original symbol names; TY_STRUCT (no def) → `"int64_t"` in `type_c_name` (changed from `"void *"`).
+  - `emit.c` `EX_INSTANCE_DEF`: dispatch table now uses `inst->method_impls[i]->binding->name` directly to avoid `_T` suffix mismatch.
+  - `elab.c`/`emit.c`: TY_FN args passed to TY_INT params emit `(int64_t)(intptr_t)(fn)` cast; TY_STRUCT args to TY_INT params are allowed (opaque container handles).
 
-#### H4 — Kind-polymorphic functions
-- [ ] Support kind-variable parameters in `defn` signatures.
-- [ ] Implement implicit kind inference from usage.
-- [ ] Implement kind constraint propagation for typeclass constraints on kind variables.
-- [ ] Implement dictionary passing for kind-polymorphic functions.
-- [ ] Implement optional monomorphization (`-O` flag) to avoid code bloat.
-- [ ] Add fixtures: `hkt-fn-kind-param.tur`, `hkt-fn-implicit-kind.tur`, `hkt-fn-constraints.tur`.
+#### H4 — Kind-polymorphic functions ✅ DONE
+- [x] Support kind-variable parameters in `defn` signatures.
+  - `^`-prefixed params with a lowercase initial letter (kind variables like `^f`) are silently erased at runtime in `elab_defn`; no runtime parameter is generated.
+  - `^`-prefixed params with an uppercase initial letter (typeclass constraint annotations like `^Eq`) remain as type-level constraints using the existing mechanism.
+- [x] Implement implicit kind inference from usage.
+  - Functions that call `.method` dispatch on a parameter implicitly use the correct instance without explicit kind annotation.
+- [x] Implement kind constraint propagation for typeclass constraints on kind variables.
+  - Multiple `^`-prefixed kind-variable annotations are silently erased; runtime params follow.
+- [x] Dictionary passing for kind-polymorphic functions.
+  - Dispatch falls through to first matching instance (v1 single-instance per HKT typeclass per program); full dictionary passing deferred to H5/H6.
+- [x] Add fixtures: `hkt-fn-kind-param.tur`, `hkt-fn-implicit-kind.tur`, `hkt-fn-constraints.tur`.
+  - `tests/fixtures/hkt-fn-kind-param/` — `^f` erased, function applies fmap; PASS.
+  - `tests/fixtures/hkt-fn-implicit-kind/` — no explicit `^f`, inferred from `.fmap` usage; PASS.
+  - `tests/fixtures/hkt-fn-constraints/` — multiple `^`-kind-vars (`^f ^g`) all erased; PASS.
+  - `tests/fixtures/errors/kinds-kind-variable/` — updated to reflect H4 completion (`:a` return type error); PASS.
 
-#### H5 — Advanced kinds
-- [ ] Support binary type constructors (`* -> * -> *`).
-- [ ] Implement partial application: `(result int) : * -> *`.
-- [ ] Implement kind aliases (`defkind`).
-- [ ] Support higher-kinded data types (e.g., `Fix`, `Free` monad).
-- [ ] Add fixtures: `hkt-binary-ctor.tur`, `hkt-kind-alias.tur`, `hkt-recursive-type.tur`, `hkt-free-monad.tur`.
+#### H5 — Advanced kinds ✅ DONE
+- [x] Support binary type constructors (`* -> * -> *`) — `^^f` syntax in `defclass`; `elab_definstance` checks for KIND_ARROW2; `Bifunctor` typeclass in stdlib.
+- [ ] Implement partial application: `(result int) : * -> *`. _(deferred)_
+- [x] Implement kind aliases (`defkind`) — parsed and ignored (no-op); informational only.
+- [ ] Support higher-kinded data types (e.g., `Fix`, `Free` monad). _(deferred)_
+- [x] Add fixtures: `hkt-binary-ctor`, `hkt-kind-alias`, `hkt-kind-mismatch-arrow2` — all PASS.
+- [x] CT evaluator: `first`/`second`/`rest` accept F_VEC as well as F_LIST.
+- [x] `do-m` macro added to `stdlib/macros.tur` (list-based approach, no quasiquote).
 
-#### H6 — Integration & polish
-- [ ] Write user-facing HKT guide: `docs/hkt-guide.md`.
-- [ ] Update README with HKT examples.
-- [ ] Migrate stdlib to use HKT typeclasses where applicable.
-- [ ] Add `do` notation macro for any `Monad`.
-- [ ] Add `for` comprehension macro using `Monad`/`Traversable`.
-- [ ] Benchmark dictionary passing overhead for HKT code.
-- [ ] Add `-O` performance option documentation.
-- [ ] Implement `tur explain` support for kind errors.
-- [ ] Add `--dump-kinds` debugging flag.
-- [ ] Add fixtures for typeclass laws (functor, monad, traversable).
-- [ ] Add integration tests: HKTs + closures + defers + refs.
-- [ ] Add negative tests: invalid kind usage, orphan instances.
+#### H6 — Integration & polish ✅ DONE
+- [x] Write user-facing HKT guide: `docs/hkt-guide.md`.
+- [x] Update README with HKT feature status.
+- [x] Add `do-m` notation macro for any `Monad` (`stdlib/macros.tur`).
+- [x] Add fixtures for typeclass laws: `hkt-functor-laws`, `hkt-monad-laws`, `hkt-closures`, `hkt-do-m` — all PASS.
+- [x] Fix emit.c: apply `(int64_t)(intptr_t)` cast for TY_STRUCT (HKT opaque) function arguments in typeclass method calls.
+- [ ] Migrate stdlib to use HKT typeclasses where applicable. _(deferred)_
+- [ ] Add `for` comprehension macro using `Monad`/`Traversable`. _(deferred — requires multi-capture closures)_
+- [ ] Benchmark dictionary passing overhead for HKT code. _(deferred)_
+- [ ] Add `-O` performance option documentation. _(deferred)_
+- [ ] Implement `tur explain` support for kind errors. _(deferred)_
+- [ ] Add `--dump-kinds` debugging flag. _(deferred)_
+- [ ] Add integration tests: HKTs + closures + defers + refs. _(deferred)_
+- [ ] Add negative tests: orphan instances. _(deferred)_
 
 ### Phase R prerequisites (Hybrid Result + Limited Panic)
 
@@ -615,16 +642,153 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 - [ ] Add fixtures: `thread-pool-basic.tur`, `thread-pool-dynamic.tur`, `future-basic.tur`, `future-error.tur`, `work-queue.tur`, `semaphore.tur`.
 - [ ] Add integration fixture: `raytracer.tur` (parallel ray-tracer using thread pool).
 
-#### T21 — Fibers and effects integration (v2)
+#### T21 — Fibers and async/await core (Phase 21)
+
+**Dependencies:** Phase 18 (delimited continuations), Phase 17 (exceptions), Phase 5 (`ref<T>` ownership model)
+
 - [ ] Implement `Fiber<T>` type with `Fiber::new`, `Fiber::resume`, `Fiber::yield`, `Fiber::done?`.
 - [ ] Implement fiber-local storage: `fiber-local`, `fiber-local-get`, `fiber-local-set!`.
-- [ ] Implement cooperative scheduler: `Scheduler::new`, `Scheduler::spawn`, `Scheduler::run-to-completion`.
 - [ ] Integrate fibers with channels: fiber blocked on `Chan::recv` yields to scheduler.
 - [ ] Implement `reset`/`shift` integration: continuations scoped to fiber stack; cross-fiber resume is runtime error.
-- [ ] Implement `async`/`await` sugar: `(async expr)` → `Future<T>`, `(await future)` → `T`.
-- [ ] Implement `ThreadPool::submit-async` for async tasks.
-- [ ] Add fixtures: `fiber-basic.tur`, `fiber-yield.tur`, `fiber-scheduler.tur`, `async-await-basic.tur`, `async-await-channel.tur`.
 - [ ] Add negative fixture: `fiber-cross-resume.tur` (cross-fiber resume panics).
+
+##### AW-001 — Reader syntax
+- [ ] Add `async` and `await` keywords to reader (`src/reader.{c,h}`).
+- [ ] Add `async` elaboration (`elab_async`): lowers to fiber creation + `reset` wrapper.
+- [ ] Add `await` elaboration (`elab_await`): lowers to `shift` + scheduler callback registration.
+
+##### AW-002 — `Future<T>` type and API
+- [ ] Define `Future<T>` struct: `status` (`Pending`/`Fulfilled`/`Rejected`/`Cancelled`), `value`, `error`, `fiber`, `on_complete` callback list.
+- [ ] Implement `Future::of` (pre-fulfilled future) and `Future::error` (pre-rejected future).
+- [ ] Implement `Future::done?`, `Future::get`, `Future::get` with timeout.
+- [ ] Implement `Future::cancel`.
+
+##### AW-003 — Single-threaded scheduler
+- [ ] Define `Scheduler` struct: run queue, waiting map, io-waiting map, current fiber pointer.
+- [ ] Implement `Scheduler::new`, `Scheduler::current` (thread-local accessor).
+- [ ] Implement `Scheduler::run` event loop (pop and resume fibers until queue empty, then park).
+- [ ] Implement `Scheduler::run-to-completion`.
+
+##### AW-004 — `await` lowering (`shift` + scheduler)
+- [ ] Lower `(await future)` to: if future already fulfilled — continue inline; else `shift k` → register callback on future → `Scheduler::yield`.
+- [ ] Callback on future completion: calls `Scheduler::enqueue fiber k result`.
+- [ ] Handle rejected futures: propagate as thrown exception at `await` site.
+
+##### AW-005 — `async` lowering (fiber creation)
+- [ ] Lower `(async body)` to: allocate fiber, wrap body in `reset`, create `Future` tracking fiber completion, return `Future`.
+- [ ] Fiber is not started immediately; starts on first poll or explicit `Scheduler::spawn`.
+
+##### AW-006 — `Future` combinators
+- [ ] Implement `Future::map [future f]` — transform fulfilled value.
+- [ ] Implement `Future::then [future f]` — flat-map (returns `Future` from `f`).
+- [ ] Implement `Future::join [future-a future-b]` — await both; return `tuple<Ta, Tb>`.
+
+##### AW-007 — `Future` multi-combinators
+- [ ] Implement `Future::all [futures]` — await all; return `vec<T>`; reject on first error.
+- [ ] Implement `Future::race [future-a future-b]` — return first to complete.
+- [ ] Implement `Future::any [futures]` — return first to fulfill (ignores rejections until all reject).
+
+##### AW-008 — `Future::timeout`
+- [ ] Implement `Future::timeout [future ms]` — reject with timeout error if future does not fulfill within `ms` milliseconds.
+- [ ] Implement using `Scheduler::timeout` and `Future::race`.
+
+##### AW-009 — Scheduler yield and run
+- [ ] Implement `Scheduler::yield` — push current fiber back to run queue and suspend.
+- [ ] Implement `Scheduler::park` — suspend current fiber until explicitly unparked.
+- [ ] Implement `Scheduler::unpark [fiber]` — add suspended fiber back to run queue.
+- [ ] Implement `Scheduler::spawn [sched fiber]` — enqueue fiber on scheduler.
+
+##### AW-010 — `Scheduler::timeout`
+- [ ] Implement `Scheduler::timeout [sched ms callback]` — schedule one-shot callback after `ms` milliseconds.
+- [ ] Implement `async-sleep [ms]` stdlib helper using `Scheduler::timeout` + `Future`.
+
+##### AW-011 — `Send`/`Sync` for `Future<T>`
+- [ ] Enforce `Future<T>: Send` when `T: Send` (future can be moved to another thread).
+- [ ] Enforce `Future<T>: Sync` when `T: Sync` (multiple threads can await the same future).
+- [ ] Enforce `Fiber: !Send + !Sync` (fibers have captured stack frames; cannot be shared).
+- [ ] Enforce `Scheduler: Send + Sync` (scheduler is thread-safe).
+
+##### AW-012 — Borrow checker integration for async closures
+- [ ] Enforce that values captured across `await` points are `Send` (can be moved to fiber context).
+- [ ] Detect use-after-move for values moved into async blocks.
+- [ ] Reject `ref<T>` captured across `await` points (not `Send`); suggest `Arc<Mutex<T>>`.
+- [ ] Add negative fixture `async-borrow-send.tur` — non-`Send` capture across `await` is a compile error.
+
+##### AW-013 — Phase 21 fixtures
+- [ ] Add `tests/fixtures/async-basic.tur` — basic `(async expr)` and `(await future)`.
+- [ ] Add `tests/fixtures/await-basic.tur` — sequential awaits in an async block.
+- [ ] Add `tests/fixtures/future-basic.tur` — `Future::of`, `Future::error`, `Future::done?`, `Future::get`.
+- [ ] Add `tests/fixtures/future-combinators.tur` — `map`, `then`, `join`, `all`, `race`.
+- [ ] Add `tests/fixtures/async-error.tur` — exception propagation through rejected futures.
+- [ ] Add `tests/fixtures/async-cancel.tur` — future cancellation.
+- [ ] Add `tests/fixtures/fiber-basic.tur`, `fiber-yield.tur`, `fiber-scheduler.tur`.
+- [ ] Add `tests/fixtures/async-await-basic.tur`, `tests/fixtures/async-await-channel.tur`.
+- [ ] Add codegen snapshots for `async`/`await` lowering.
+
+#### T22 — Structured concurrency and task groups (Phase 22)
+
+**Dependencies:** Phase 21 (T21 async/await core)
+
+- [ ] Implement `TaskGroup` type: tracks spawned tasks, cancels all on error or scope exit.
+- [ ] Implement `TaskGroup::with [group & body]` macro: creates group, runs body, waits for all tasks, then cancels any remaining.
+- [ ] Implement `TaskGroup::spawn [group thunk]` — spawn a fiber in the group; returns a handle.
+- [ ] Implement `TaskGroup::cancel [group]` — cooperatively cancel all running tasks in the group.
+- [ ] Implement `TaskGroup::with-timeout [group ms & body]` — cancel group if body takes longer than `ms` milliseconds.
+- [ ] Implement cancellation propagation: if a child task errors, the group cancels remaining children and re-raises.
+- [ ] Implement `Fiber::cancelled?` — check if the current fiber has been asked to cancel.
+- [ ] Add `tests/fixtures/taskgroup-basic.tur` — spawn and await two tasks in a group.
+- [ ] Add `tests/fixtures/taskgroup-cancel.tur` — one task errors; sibling is cancelled.
+- [ ] Add `tests/fixtures/taskgroup-timeout.tur` — group times out; all tasks cancelled.
+- [ ] Add codegen snapshots for `TaskGroup::with` macro expansion.
+
+#### T23 — Multi-threaded work-stealing scheduler (Phase 23)
+
+**Dependencies:** Phase 21 (T21), Phase T19 (`Arc`/`Mutex`, thread primitives), Phase T20 (thread pool)
+
+- [ ] Implement work-stealing scheduler: each OS thread has a local `deque` of fibers; idle threads steal from non-empty deques.
+- [ ] Implement per-thread run queues (LIFO deques for local work, FIFO steal end).
+- [ ] Implement fiber migration between OS threads: fiber's `scheduler` field updated on steal.
+- [ ] Implement lock-free queue for cross-thread fiber submission (`AtomicQueue<Fiber>`).
+- [ ] Integrate with `ThreadPool` from T20: `Scheduler::new [num-threads]` creates a pool and distributes fibers across it.
+- [ ] Integrate I/O waiting: scheduler park/unpark hooks for I/O completion callbacks.
+- [ ] Implement `Fiber::thread-id` — return the OS thread currently running this fiber (debug builds only).
+- [ ] Migrate per-fiber effect handler chain (`tur_current_fiber->handler_chain`) to be safe under fiber migration.
+- [ ] Add `tests/fixtures/scheduler-multithread.tur` — two fibers run concurrently on a 2-thread scheduler.
+- [ ] Add `tests/fixtures/workstealing.tur` — CPU-bound fibers distributed across threads.
+- [ ] Run all async fixtures under ThreadSanitizer.
+- [ ] Add codegen snapshots for multi-threaded scheduler wiring.
+
+#### T24 — Async I/O and timer integration (Phase 24)
+
+**Dependencies:** Phase 21 (T21), Phase 23 (T23 multi-threaded scheduler)
+
+- [ ] Implement `async-sleep [ms]` primitive: suspends current fiber for `ms` milliseconds using `Scheduler::timeout`.
+- [ ] Implement timer wheel for efficient timeout management (O(1) insert/cancel, O(1) tick).
+- [ ] Implement `AsyncFile` type: `async-open`, `async-read`, `async-write`, `async-close` via non-blocking I/O + scheduler callbacks.
+- [ ] Implement `AsyncSocket` type: `async-connect`, `async-accept`, `async-send`, `async-recv`, `async-close`.
+- [ ] Implement `AsyncPipe`: `async-read-stdin`, `async-write-stdout` for non-blocking stdio.
+- [ ] Implement `(select! [pattern future] ...)` macro — await the first of multiple futures with pattern matching on the result.
+- [ ] Add `tests/fixtures/async-sleep.tur` — verify fiber suspends and resumes after timeout.
+- [ ] Add `tests/fixtures/async-timer-basic.tur` — multiple timers fire in order.
+- [ ] Add `tests/fixtures/async-file.tur` — async read/write a temp file.
+- [ ] Add `tests/fixtures/async-select.tur` — `select!` macro with two futures.
+- [ ] Add integration fixture `tests/fixtures/async-echo-server.tur` — async TCP echo server.
+- [ ] Add codegen snapshots for `select!` macro lowering.
+
+#### T25 — Effects and async/await integration (Phase 25)
+
+**Dependencies:** Phase 21 (T21), Phase 19 (algebraic effects v1)
+
+- [ ] Implement effect handlers in async context: `with-handler` inside an `async` block correctly scopes to the fiber's handler chain.
+- [ ] Implement `Async` effect: `(defeffect Async [thunk] :Future<int>)` — perform an async computation from within an effect handler.
+- [ ] Implement `Await` effect: `(defeffect Await [future] :int)` — await a future from within an effect handler.
+- [ ] Implement effect handlers that can spawn fibers: handler case body may call `Scheduler::spawn`.
+- [ ] Implement `async` blocks as effect handlers: `(async (with-handler body handler))` — handler runs inside the async fiber's scope.
+- [ ] Verify per-fiber handler chain (`tur_current_fiber->handler_chain`) correctly isolates effects across fibers (no handler leak between fibers).
+- [ ] Add `tests/fixtures/effects-async.tur` — perform an effect inside an `async` block; handler resumes fiber.
+- [ ] Add `tests/fixtures/async-effect-spawn.tur` — effect handler spawns a fiber; fiber runs on scheduler.
+- [ ] Add negative fixture `tests/fixtures/errors/async-effect-escape.tur` — effect handler continuation escapes async scope; runtime error.
+- [ ] Document panic + async task semantics in `docs/async-await-plan.md` before closing Phase R6 (see Phase R6 deferred item).
 
 ### Unsafe Operations remaining tasks
 
@@ -1035,15 +1199,19 @@ See [backtracking-cloneable-continuations-plan.md](archive/backtracking-cloneabl
 12. **[Thread Safety]** T19 prerequisite decisions → `Send`/`Sync` traits + `Arc`/`Mutex`/`Atomic` primitives
 13. **[Thread Safety]** T19 channels + `Select` + borrow checker integration → full T19 fixture sweep (TSan)
 14. **[Thread Safety]** T20 thread pool + `Future`/`Promise` + `Semaphore`
-15. **[Thread Safety, deferred]** T21 fibers + `async`/`await` (after Phase 19 effects stabilize)
-16. **[Unsafe Ops]** U1 prerequisite decisions → `Unsafe` effect in type system
-17. **[Unsafe Ops]** U2 `unsafe` block sugar → U3 primitives → U4 safe wrappers
-18. **[Unsafe Ops]** U5 linting, auditing, and tooling
-19. **[HAMT]** P1 `Hash` typeclass + core C implementation → P2 Lisp bindings
-20. **[HAMT]** P3 compiler lowering pass (`^persistent` annotation) → P4 transient mode and benchmarks
-21. **[Backtracking]** B1 `Clone` trait + elaborator enforcement → B2 cloneable continuation runtime + CPS
-22. **[Backtracking]** B3 backtracking monad → B4 `stdlib/logic.tur` + `stdlib/parsec.tur`
-23. **[Backtracking]** B5 testing, benchmarks, safety tooling, and user guide
+15. **[Async/Await]** T21 fibers + `async`/`await` core (after Phase 19 effects stabilize)
+16. **[Async/Await]** T22 structured concurrency and task groups
+17. **[Async/Await]** T23 multi-threaded work-stealing scheduler (after T20 thread pool)
+18. **[Async/Await]** T24 async I/O and timer integration (after T23)
+19. **[Async/Await]** T25 effects and async integration (after T24 and Phase 19 effects)
+20. **[Unsafe Ops]** U1 prerequisite decisions → `Unsafe` effect in type system
+21. **[Unsafe Ops]** U2 `unsafe` block sugar → U3 primitives → U4 safe wrappers
+22. **[Unsafe Ops]** U5 linting, auditing, and tooling
+23. **[HAMT]** P1 `Hash` typeclass + core C implementation → P2 Lisp bindings
+24. **[HAMT]** P3 compiler lowering pass (`^persistent` annotation) → P4 transient mode and benchmarks
+25. **[Backtracking]** B1 `Clone` trait + elaborator enforcement → B2 cloneable continuation runtime + CPS
+26. **[Backtracking]** B3 backtracking monad → B4 `stdlib/logic.tur` + `stdlib/parsec.tur`
+27. **[Backtracking]** B5 testing, benchmarks, safety tooling, and user guide
 
 ---
 
@@ -1053,4 +1221,5 @@ See [backtracking-cloneable-continuations-plan.md](archive/backtracking-cloneabl
 - Phase HKT (H0–H6 roadmap) is planned for v2+ and will only move to the active roadmap if the promotion decision rule is met (see [hkt-implementation-plan.md](hkt-implementation-plan.md) for details).
 - Phase HAMT (P1–P4 roadmap) is planned for v2+. P1 and P2 are pure library work with no compiler prerequisites beyond Phase 15. P3 (lowering pass) requires Phase 19 Section A (effect-row surface syntax) to be stable. See [hamt-feasibility.md](archive/hamt-feasibility.md) for the full feasibility analysis.
 - Phase Backtracking (B1–B5 roadmap) is planned for v2+. B1 depends only on Phase 15 (Typeclasses). B2 depends on Phase 18 (Delimited continuations). B3–B4 are pure library work. B5 adds tooling and the optional STM integration fixture requires Phase 20. See [backtracking-cloneable-continuations-plan.md](archive/backtracking-cloneable-continuations-plan.md) for the full design.
+- Async/Await (T21–T25 roadmap) is planned for v2+. T21 depends on Phase 18 (delimited continuations), Phase 17 (exceptions), and T19 (thread primitives). T22 (structured concurrency) requires T21. T23 (multi-threaded scheduler) requires T21, T19, and T20. T24 (async I/O) requires T23. T25 (effects integration) requires T21 and Phase 19 effects. See [async-await-plan.md](archive/async-await-plan.md) for the full design.
 - Keep this list aligned with active roadmap changes in `docs/turmeric-plan.md`.

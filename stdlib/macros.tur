@@ -30,3 +30,25 @@
 ;; Phase R6: ignore! — explicitly discard a result value (suppress unused-result warning)
 (defmacro ignore! [expr]
   (do expr nil))
+
+;;; SINCE: Phase HKT H6
+;; do-m: monadic do-notation using .bind dispatch
+;;
+;; Syntax (flat-binding):
+;;   (do-m var1 ma1 var2 ma2 ... body)
+;;
+;; Desugars to:
+;;   (.bind ma1 (fn [var1] (.bind ma2 (fn [var2] ... body))))
+;;
+;; Examples:
+;;   (do-m x (option-some 5) y (option-some 3) (option-some (+ x y)))
+;;   => (.bind (option-some 5) (fn [x] (.bind (option-some 3) (fn [y] (option-some (+ x y))))))
+;;
+;; The body (last arg) is emitted as-is when only one form remains.
+;; Requires a Monad instance with a .bind method.
+(defmacro do-m [& forms]
+  (if (empty? forms)
+    nil
+    (if (empty? (rest forms))
+      (first forms)
+      (list .bind (second forms) (list fn `[~(first forms)] (list do-m ~@(rest (rest forms))))))))

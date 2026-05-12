@@ -1,0 +1,53 @@
+;; Phase HKT H4: Kind-variable parameter in defn.
+;; A `^f` prefix in a defn parameter list declares a kind variable —
+;; it is a type-level annotation that is erased at runtime.
+;; The function below is polymorphic over a type constructor ^f but
+;; its runtime parameters are the concrete container and function values.
+
+
+(defclass Functor [^f]
+  (fmap [container fn] :int))
+
+;; Option helpers
+(defn __opt_some [x] :int
+  ```c
+  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
+  r->is_some = true; r->value = x;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(defn __opt_unwrap [o] :int
+  ```c
+  struct { bool is_some; int64_t value; } *p =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)o;
+  return (int)(p->value);
+  ```)
+
+(defn __fmap_option [container fn] :int
+  ```c
+  struct { bool is_some; int64_t value; } *c =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)container;
+  if (!c || !c->is_some) return 0;
+  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
+  r->is_some = true;
+  r->value = ((int64_t(*)(int64_t))(intptr_t)fn)(c->value);
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(definstance Functor [option]
+  (fmap [container fn] (__fmap_option container fn)))
+
+;; Kind-polymorphic function: ^f declares f as a type constructor of kind * -> *.
+;; At runtime the kind annotation is erased; the function receives the container
+;; and fn values as plain int64_t parameters and delegates to the fmap method.
+(defn apply-functor [^f container fn] :int
+  (.fmap container fn))
+
+(defn triple [x] :int (* x 3))
+
+(defn main [] :int
+  (do
+    (let [opt (__opt_some 7)]
+      (let [result (apply-functor opt triple)]
+        (println (__opt_unwrap result))))
+    0))

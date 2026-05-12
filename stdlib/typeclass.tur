@@ -60,3 +60,51 @@
 ;; Clone instances for primitive types
 (definstance Clone [int]
   (clone [x] x))
+
+;;; SINCE: Phase HKT H3
+;; Higher-kinded typeclasses — require kind '* -> *' type constructor parameters.
+;;
+;; These typeclasses follow the Haskell/PureScript convention.  In Turmeric v1
+;; the method signatures use :int as the return type (int64_t in C) so that
+;; container values, which are heap pointers, can be returned without a full
+;; parameterised type system.  Callers may cast the result to the concrete
+;; container pointer type using inline C or ptr<void> helpers.
+
+;; Functor — map a function over a container without changing its shape.
+;;   fmap :: (a -> b) -> f a -> f b
+;;   In v1: fmap [container fn] :int  (int64_t holds the result pointer)
+(defclass Functor [^f]
+  (fmap [container fn] :int))
+
+;; Applicative — container with a pure constructor and ap combinator.
+;;   pure :: a -> f a
+;;   ap   :: f (a -> b) -> f a -> f b
+(defclass Applicative [^f]
+  (pure [x] :int)
+  (ap [ff fa] :int))
+
+;; Monad — sequencing with flatMap/bind.
+;;   bind :: m a -> (a -> m b) -> m b
+(defclass Monad [^m]
+  (bind [ma fn] :int))
+
+;; Foldable — reduce a container to a summary value.
+;;   foldl :: b -> (b -> a -> b) -> t a -> b
+;;   foldr :: (a -> b -> b) -> b -> t a -> b
+(defclass Foldable [^t]
+  (foldl [ta init fn] :int)
+  (foldr [ta init fn] :int))
+
+;; Traversable — map with effects, collecting results.
+;;   traverse :: Applicative f => (a -> f b) -> t a -> f (t b)
+;;   In v1: simplified to traverse [ta fn] :int
+(defclass Traversable [^t]
+  (traverse [ta fn] :int))
+
+;;; SINCE: Phase HKT H5
+;; Bifunctor — map over both sides of a binary type constructor.
+;;   The canonical signature is:
+;;     bimap :: (a -> c) -> (b -> d) -> f a b -> f c d
+;;   In v1: simplified to bimap [container fn-left fn-right] :int
+(defclass Bifunctor [^^f]
+  (bimap [container fn-left fn-right] :int))

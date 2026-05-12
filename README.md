@@ -189,7 +189,7 @@ just test
 | Algebraic effects (`defeffect` / `perform` / `handle` / `resume`) | ✅ |
 | `extern-c`, inline-C blocks, FFI | ✅ |
 | Standard library: `option`, `result`, `vec`, `str`, `slice`, `io`, `log`, `test` | ✅ |
-| Higher-kinded types | 📋 Planned |
+| Higher-kinded types (Functor, Applicative, Monad, Foldable, Traversable, Bifunctor; `^f`/`^^f` syntax; `defkind`) | ✅ |
 | STM (`TVar`, `atomically`, `retry`) | 📋 Planned |
 | Persistent collections (HAMT) | 📋 Planned |
 | Backtracking / cloneable continuations | 📋 Planned |

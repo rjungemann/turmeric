@@ -64,3 +64,67 @@
   }
   return (int)opt->value;
   ```)
+
+;;; SINCE: Phase HKT H3
+;; Functor instance for option — apply fn to the contained value if some,
+;; return a none (NULL) option if the input is none.
+;; The fn argument is expected to be a function pointer cast to int64_t.
+(defn __functor_option_fmap [container fn] :int
+  ```c
+  struct { bool is_some; int64_t value; } *c =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)container;
+  if (!c || !c->is_some) return 0;
+  struct { bool is_some; int64_t value; } *r =
+      malloc(sizeof(struct { bool is_some; int64_t value; }));
+  r->is_some = true;
+  r->value = ((int64_t(*)(int64_t))(intptr_t)fn)(c->value);
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(definstance Functor [option]
+  (fmap [container fn] (__functor_option_fmap container fn)))
+
+;; Applicative instance for option.
+;;   pure x = some(x)
+;;   ap (some f) (some x) = some (f x)
+;;   ap none _            = none
+(defn __applicative_option_pure [x] :int
+  ```c
+  struct { bool is_some; int64_t value; } *r =
+      malloc(sizeof(struct { bool is_some; int64_t value; }));
+  r->is_some = true;
+  r->value = x;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(defn __applicative_option_ap [ff fa] :int
+  ```c
+  struct { bool is_some; int64_t value; } *f_opt =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)ff;
+  struct { bool is_some; int64_t value; } *a_opt =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)fa;
+  if (!f_opt || !f_opt->is_some || !a_opt || !a_opt->is_some) return 0;
+  struct { bool is_some; int64_t value; } *r =
+      malloc(sizeof(struct { bool is_some; int64_t value; }));
+  r->is_some = true;
+  r->value = ((int64_t(*)(int64_t))(intptr_t)f_opt->value)(a_opt->value);
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(definstance Applicative [option]
+  (pure [x] (__applicative_option_pure x))
+  (ap [ff fa] (__applicative_option_ap ff fa)))
+
+;; Monad instance for option.
+;;   bind (some x) f = f x
+;;   bind none     _ = none
+(defn __monad_option_bind [ma fn] :int
+  ```c
+  struct { bool is_some; int64_t value; } *opt =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)ma;
+  if (!opt || !opt->is_some) return 0;
+  return ((int64_t(*)(int64_t))(intptr_t)fn)(opt->value);
+  ```)
+
+(definstance Monad [option]
+  (bind [ma fn] (__monad_option_bind ma fn)))

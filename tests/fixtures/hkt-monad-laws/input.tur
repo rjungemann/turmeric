@@ -1,0 +1,60 @@
+;; Phase HKT H6: Monad laws for option.
+;; Left identity:   bind (pure a) f = f a
+;; Right identity:  bind m pure     = m
+
+(defclass Monad [^m]
+  (bind [ma fn] :int))
+
+;; Option helpers
+(defn __opt_some [x] :int
+  ```c
+  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
+  r->is_some = true;
+  r->value = x;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(defn __opt_none [] :int
+  ```c
+  return 0;
+  ```)
+
+(defn __opt_some? [o] :bool
+  ```c
+  struct { bool is_some; int64_t value; } *p =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)o;
+  return p != 0 && p->is_some;
+  ```)
+
+(defn __opt_unwrap [o] :int
+  ```c
+  struct { bool is_some; int64_t value; } *p =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)o;
+  return (int)(p->value);
+  ```)
+
+(defn __bind_option [ma fn] :int
+  ```c
+  struct { bool is_some; int64_t value; } *opt =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)ma;
+  if (!opt || !opt->is_some) return 0;
+  return ((int64_t(*)(int64_t))(intptr_t)fn)(opt->value);
+  ```)
+
+(definstance Monad [option]
+  (bind [ma fn] (__bind_option ma fn)))
+
+(defn main [] :int
+  (do
+    ;; Left identity: bind (some 5) f = f 5 = some 10
+    (let [result (__bind_option (__opt_some 5) (fn [x] (__opt_some (* x 2))))]
+      (do
+        (println (__opt_some? result))    ;; true
+        (println (__opt_unwrap result)))) ;; 10
+
+    ;; Right identity: bind (some 7) some = some 7
+    (let [result2 (__bind_option (__opt_some 7) __opt_some)]
+      (do
+        (println (__opt_some? result2))   ;; true
+        (println (__opt_unwrap result2)))) ;; 7
+    0))

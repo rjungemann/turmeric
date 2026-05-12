@@ -61,3 +61,55 @@
   free(vec->data);
   free(vec);
   ```)
+
+;;; SINCE: Phase HKT H3
+;; Functor instance for vec — apply fn to every element, return a new vec.
+(defn __functor_vec_fmap [container fn] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)container;
+  if (!v) return 0;
+  struct { int64_t *data; size_t len; size_t cap; } *r =
+      malloc(sizeof(struct { int64_t *data; size_t len; size_t cap; }));
+  r->len  = v->len;
+  r->cap  = v->len;
+  r->data = r->len > 0 ? malloc(sizeof(int64_t) * r->len) : NULL;
+  for (size_t i = 0; i < v->len; i++) {
+      r->data[i] = ((int64_t(*)(int64_t))(intptr_t)fn)(v->data[i]);
+  }
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(definstance Functor [vec]
+  (fmap [container fn] (__functor_vec_fmap container fn)))
+
+;; Foldable instance for vec.
+;;   foldl :: (b -> a -> b) -> b -> t a -> b   (left fold, strict)
+;;   foldr :: (a -> b -> b) -> b -> t a -> b   (right fold)
+(defn __foldable_vec_foldl [ta init fn] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)ta;
+  int64_t acc = init;
+  if (!v) return acc;
+  for (size_t i = 0; i < v->len; i++) {
+      acc = ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(acc, v->data[i]);
+  }
+  return acc;
+  ```)
+
+(defn __foldable_vec_foldr [ta init fn] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)ta;
+  int64_t acc = init;
+  if (!v) return acc;
+  for (size_t i = v->len; i-- > 0; ) {
+      acc = ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(v->data[i], acc);
+  }
+  return acc;
+  ```)
+
+(definstance Foldable [vec]
+  (foldl [ta init fn] (__foldable_vec_foldl ta init fn))
+  (foldr [ta init fn] (__foldable_vec_foldr ta init fn)))

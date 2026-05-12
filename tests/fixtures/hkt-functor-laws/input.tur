@@ -1,0 +1,68 @@
+;; Phase HKT H6: Functor laws for option.
+;; Identity law:     fmap id x     = x
+;; Composition law:  fmap (f . g) x = fmap f (fmap g x)
+
+(defclass Functor [^f]
+  (fmap [container fn] :int))
+
+;; Option helpers
+(defn __opt_some [x] :int
+  ```c
+  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
+  r->is_some = true;
+  r->value = x;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(defn __opt_some? [o] :bool
+  ```c
+  struct { bool is_some; int64_t value; } *p =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)o;
+  return p != 0 && p->is_some;
+  ```)
+
+(defn __opt_unwrap [o] :int
+  ```c
+  struct { bool is_some; int64_t value; } *p =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)o;
+  return (int)(p->value);
+  ```)
+
+(defn __fmap_option [container fn] :int
+  ```c
+  struct { bool is_some; int64_t value; } *c =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)container;
+  if (!c || !c->is_some) return 0;
+  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
+  r->is_some = true;
+  r->value = ((int64_t(*)(int64_t))(intptr_t)fn)(c->value);
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(definstance Functor [option]
+  (fmap [container fn] (__fmap_option container fn)))
+
+;; Helper functions
+(defn id [x] :int x)
+(defn times2 [x] :int (* x 2))
+(defn inc [x] :int (+ x 1))
+
+(defn main [] :int
+  (do
+    ;; Identity law: fmap id (some 42) = some 42
+    (let [opt (__opt_some 42)]
+      (let [result (__fmap_option opt id)]
+        (do
+          (println (__opt_some? result))   ;; true
+          (println (__opt_unwrap result))))) ;; 42
+
+    ;; Composition law: fmap (double . inc) (some 5) = fmap double (fmap inc (some 5))
+    ;; double(inc(5)) = double(6) = 12
+    (let [opt (__opt_some 5)]
+      (let [lhs (__fmap_option opt (fn [x] (times2 (inc x))))]
+        (let [rhs (__fmap_option (__fmap_option opt inc) times2)]
+          (do
+            (println (__opt_unwrap lhs))  ;; 12
+            (println (__opt_unwrap rhs))  ;; 12
+            (println (= (__opt_unwrap lhs) (__opt_unwrap rhs)))))))  ;; true
+    0))
