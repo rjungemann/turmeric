@@ -3472,9 +3472,14 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "        abort();\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    tur_panic_in_progress = 1;\n");
+    /* Phase TG-004-2 PR: Check global handler first (try/catch has priority), then fiber */
     buf_puts(out, "    if (global_panic_jmpbuf_valid) {\n");
     buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line);\n");
     buf_puts(out, "        longjmp(global_panic_jmpbuf, 1);\n");
+    buf_puts(out, "    } else if (tur_current_fiber && tur_current_fiber->panic_jmpbuf_valid) {\n");
+    buf_puts(out, "        /* Use per-fiber panic buffer - set up global payload for cleanup */\n");
+    buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line);\n");
+    buf_puts(out, "        longjmp(tur_current_fiber->panic_jmpbuf, 1);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    fprintf(stderr, \"panic at %s:%d\\n\", file ? file : \"(unknown)\", line);\n");
     buf_puts(out, "    free(payload);\n");
