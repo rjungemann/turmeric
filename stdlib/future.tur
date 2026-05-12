@@ -443,3 +443,191 @@
 
 (defn promise-new-pair [] :ptr<void>
   (promise-new))
+
+;; ---- AW-007: Variadic multi-combinators ---
+
+;; Race an array of futures. Returns a new future that resolves to the first settled future.
+;; Takes a ptr<void> to an array of FutureCell* and a count.
+(defn future-race-n [futures :ptr<void> n :int] :ptr<void>
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell **arr = (FutureCell **)futures;
+  for (int i = 0; i < (int)n; i++) {
+      pthread_mutex_lock(&arr[i]->lock);
+      if (arr[i]->is_set) {
+          bool ok = arr[i]->is_ok; int64_t val = arr[i]->value; int64_t exn = arr[i]->exn;
+          pthread_mutex_unlock(&arr[i]->lock);
+          for (int j = 0; j < i; j++) pthread_mutex_unlock(&arr[j]->lock);
+          for (int j = i + 1; j < (int)n; j++) pthread_mutex_unlock(&arr[j]->lock);
+          FutureCell *out = (FutureCell *)malloc(sizeof(FutureCell));
+          if (!out) { fprintf(stderr, "future-race-n: oom\n"); abort(); }
+          pthread_mutex_init(&out->lock, NULL); pthread_cond_init(&out->ready, NULL);
+          out->is_set = true; out->is_ok = ok; out->value = val; out->exn = exn;
+          return (void *)out;
+      }
+      pthread_mutex_unlock(&arr[i]->lock);
+  }
+  for (;;) {
+      for (int i = 0; i < (int)n; i++) {
+          pthread_mutex_lock(&arr[i]->lock);
+          if (arr[i]->is_set) {
+              bool ok = arr[i]->is_ok; int64_t val = arr[i]->value; int64_t exn = arr[i]->exn;
+              pthread_mutex_unlock(&arr[i]->lock);
+              for (int j = 0; j < (int)n; j++) {
+                  if (j != i) pthread_mutex_unlock(&arr[j]->lock);
+              }
+              FutureCell *out = (FutureCell *)malloc(sizeof(FutureCell));
+              if (!out) { fprintf(stderr, "future-race-n: oom\n"); abort(); }
+              pthread_mutex_init(&out->lock, NULL); pthread_cond_init(&out->ready, NULL);
+              out->is_set = true; out->is_ok = ok; out->value = val; out->exn = exn;
+              return (void *)out;
+          }
+      }
+      struct timespec ts = {0, 100000}; nanosleep(&ts, NULL);
+  }
+  ```)
+
+;; All of an array of futures.
+(defn future-all-n [futures :ptr<void> n :int] :ptr<void>
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell **arr = (FutureCell **)futures;
+  bool all_ok = true;
+  int64_t first_exn = 0;
+  for (int i = 0; i < (int)n; i++) {
+      pthread_mutex_lock(&arr[i]->lock);
+      while (!arr[i]->is_set) pthread_cond_wait(&arr[i]->ready, &arr[i]->lock);
+      if (!arr[i]->is_ok) {
+          if (all_ok) { all_ok = false; first_exn = arr[i]->exn; }
+      }
+      pthread_mutex_unlock(&arr[i]->lock);
+  }
+  FutureCell *out = (FutureCell *)malloc(sizeof(FutureCell));
+  if (!out) { fprintf(stderr, "future-all-n: oom\n"); abort(); }
+  pthread_mutex_init(&out->lock, NULL); pthread_cond_init(&out->ready, NULL);
+  out->is_set = true;
+  if (!all_ok) { out->is_ok = false; out->value = 0; out->exn = first_exn; }
+  else { out->is_ok = true; out->value = 0; out->exn = 0; }
+  return (void *)out;
+  ```)
+
+;; Any of an array of futures.
+(defn future-any-n [futures :ptr<void> n :int] :ptr<void>
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell **arr = (FutureCell **)futures;
+  for (int i = 0; i < (int)n; i++) {
+      pthread_mutex_lock(&arr[i]->lock);
+      while (!arr[i]->is_set) pthread_cond_wait(&arr[i]->ready, &arr[i]->lock);
+      if (arr[i]->is_ok) {
+          int64_t val = arr[i]->value;
+          for (int j = i + 1; j < (int)n; j++) pthread_mutex_unlock(&arr[j]->lock);
+          pthread_mutex_unlock(&arr[i]->lock);
+          FutureCell *out = (FutureCell *)malloc(sizeof(FutureCell));
+          if (!out) { fprintf(stderr, "future-any-n: oom\n"); abort(); }
+          pthread_mutex_init(&out->lock, NULL); pthread_cond_init(&out->ready, NULL);
+          out->is_set = true; out->is_ok = true; out->value = val; out->exn = 0;
+          return (void *)out;
+      }
+      pthread_mutex_unlock(&arr[i]->lock);
+  }
+  FutureCell *out = (FutureCell *)malloc(sizeof(FutureCell));
+  if (!out) { fprintf(stderr, "future-any-n: oom\n"); abort(); }
+  pthread_mutex_init(&out->lock, NULL); pthread_cond_init(&out->ready, NULL);
+  out->is_set = true; out->is_ok = false; out->value = 0; out->exn = 0;
+  return (void *)out;
+  ```)
+
+;; ---- AW-008: Future timeout ---
+
+;; Create a future that times out after ms milliseconds with error -1.
+(defn future-timeout [ms :int] :ptr<void>
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *fc = (FutureCell *)malloc(sizeof(FutureCell));
+  if (!fc) { fprintf(stderr, "future-timeout: oom\n"); abort(); }
+  pthread_mutex_init(&fc->lock, NULL);
+  pthread_cond_init(&fc->ready, NULL);
+  fc->is_set = false;
+  fc->is_ok = false;
+  fc->value = 0;
+  fc->exn = -1;
+  typedef struct { FutureCell *fc; int ms; } TimeoutArg;
+  TimeoutArg *arg = (TimeoutArg *)malloc(sizeof(TimeoutArg));
+  if (!arg) { free(fc); fprintf(stderr, "future-timeout: arg oom\n"); abort(); }
+  arg->fc = fc; arg->ms = ms;
+  pthread_t tid; pthread_attr_t attr;
+  pthread_attr_init(&attr); pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+  typedef struct { long tv_sec; long tv_nsec; } timespec;
+  void *thread_fn(void *raw) {
+      TimeoutArg *a = (TimeoutArg *)raw;
+      if (a->ms > 0) {
+          timespec ts; ts.tv_sec = a->ms / 1000; ts.tv_nsec = (a->ms % 1000) * 1000000L;
+          nanosleep(&ts, NULL);
+      }
+      pthread_mutex_lock(&a->fc->lock);
+      if (!a->fc->is_set) { a->fc->is_set = true; pthread_cond_broadcast(&a->fc->ready); }
+      pthread_mutex_unlock(&a->fc->lock);
+      free(a); return NULL;
+  }
+  pthread_create(&tid, &attr, thread_fn, arg);
+  pthread_attr_destroy(&attr);
+  return (void *)fc;
+  ```)
+
+;; Race a future against a timeout.
+(defn future-with-timeout [f :ptr<void> ms :int] :ptr<void>
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *fc = (FutureCell *)f;
+  FutureCell *out = (FutureCell *)malloc(sizeof(FutureCell));
+  if (!out) { fprintf(stderr, "future-with-timeout: oom\n"); abort(); }
+  pthread_mutex_init(&out->lock, NULL); pthread_cond_init(&out->ready, NULL);
+  out->is_set = false;
+  typedef struct { FutureCell *out; FutureCell *src; int ms; } TA;
+  TA *arg = (TA *)malloc(sizeof(TA));
+  if (!arg) { free(out); fprintf(stderr, "future-with-timeout: arg oom\n"); abort(); }
+  arg->out = out; arg->src = fc; arg->ms = ms;
+  pthread_t tid; pthread_attr_t attr;
+  pthread_attr_init(&attr); pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+  typedef struct { long tv_sec; long tv_nsec; } timespec;
+  void *tfn(void *raw) {
+      TA *a = (TA *)raw;
+      if (a->ms > 0) {
+          timespec ts; ts.tv_sec = a->ms / 1000; ts.tv_nsec = (a->ms % 1000) * 1000000L;
+          nanosleep(&ts, NULL);
+      }
+      pthread_mutex_lock(&a->out->lock);
+      if (!a->out->is_set) { a->out->is_set = true; a->out->is_ok = false; a->out->exn = -1; pthread_cond_broadcast(&a->out->ready); }
+      pthread_mutex_unlock(&a->out->lock);
+      free(a); return NULL;
+  }
+  pthread_create(&tid, &attr, tfn, arg); pthread_attr_destroy(&attr);
+  pthread_mutex_lock(&fc->lock);
+  if (fc->is_set) {
+      pthread_mutex_unlock(&fc->lock);
+      pthread_mutex_lock(&out->lock);
+      if (!out->is_set) { out->is_set = true; out->is_ok = fc->is_ok; out->value = fc->value; out->exn = fc->exn; pthread_cond_broadcast(&out->ready); }
+      pthread_mutex_unlock(&out->lock);
+  } else {
+      pthread_mutex_unlock(&fc->lock);
+      typedef struct { FutureCell *out; FutureCell *src; } WA;
+      WA *warg = (WA *)malloc(sizeof(WA));
+      if (!warg) { free(out); free(arg); fprintf(stderr, "future-with-timeout: warg oom\n"); abort(); }
+      warg->out = out; warg->src = fc;
+      void *wfn(void *raw) {
+          WA *a = (WA *)raw;
+          pthread_mutex_lock(&a->src->lock);
+          while (!a->src->is_set) pthread_cond_wait(&a->src->ready, &a->src->lock);
+          bool ok = a->src->is_ok; int64_t val = a->src->value; int64_t exn = a->src->exn;
+          pthread_mutex_unlock(&a->src->lock);
+          pthread_mutex_lock(&a->out->lock);
+          if (!a->out->is_set) { a->out->is_set = true; a->out->is_ok = ok; a->out->value = val; a->out->exn = exn; pthread_cond_broadcast(&a->out->ready); }
+          pthread_mutex_unlock(&a->out->lock);
+          free(a); return NULL;
+      }
+      pthread_t tid2; pthread_attr_t attr2; pthread_attr_init(&attr2); pthread_attr_setdetachstate(&attr2, PTHREAD_CREATE_DETACHED);
+      pthread_create(&tid2, &attr2, wfn, warg); pthread_attr_destroy(&attr2);
+  }
+  return (void *)out;
+  ```)

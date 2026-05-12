@@ -42,3 +42,11 @@
   ```c
   tur_scheduler_run_to_completion((TurScheduler *)sched);
   ```)
+
+;; Schedule a callback to be invoked after a delay (milliseconds).
+;; The callback receives the arg pointer.
+;; This is AW-010: Scheduler::timeout.
+(defn scheduler-timeout [ms :int cb :ptr<void> arg :ptr<void>] :nil
+  ```c
+  tur_scheduler_timeout((int64_t)ms, (void (*)(void *))cb, arg);
+  ```)

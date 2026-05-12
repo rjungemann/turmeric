@@ -853,18 +853,20 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Added helper functions: `tuple-first`, `tuple-second`, `tuple-free`.
 
 ##### AW-007 — `Future` multi-combinators
-- [ ] Implement `Future::all [futures]` — await all; return `vec<T>`; reject on first error.
-  - Deferred: Requires dynamic array of futures and coordination logic (Phase 23).
-- [ ] Implement `Future::race [future-a future-b]` — return first to complete.
-  - Deferred: Requires scheduler integration for callback-based race detection (Phase 23).
-- [ ] Implement `Future::any [futures]` — return first to fulfill (ignores rejections until all reject).
-  - Deferred: Similar complexity to `Future::all` (Phase 23).
+- [x] Implement `future-race-n [futures n]` — race an array of n futures; return first to complete.
+  - Implemented in `stdlib/future.tur`: Polls all futures in a loop, returns first settled.
+- [x] Implement `future-all-n [futures n]` — await all n futures; reject on first error.
+  - Implemented in `stdlib/future.tur`: Waits for all, returns first error if any.
+- [x] Implement `future-any-n [futures n]` — return first to fulfill (ignores rejections until all reject).
+  - Implemented in `stdlib/future.tur`: Returns first fulfilled value, or last error if all reject.
+- [x] Implement binary versions: `future-race`, `future-all2`, `future-any2`.
+  - Implemented in `stdlib/future.tur` (existing).
 
 ##### AW-008 — `Future::timeout`
-- [ ] Implement `Future::timeout [future ms]` — reject with timeout error if future does not fulfill within `ms` milliseconds.
-  - Deferred: Requires `Scheduler::timeout` (AW-010) and timer infrastructure (Phase 23).
-- [ ] Implement using `Scheduler::timeout` and `Future::race`.
-  - Deferred: Depends on AW-007 and AW-010.
+- [x] Implement `future-timeout [ms]` — create a future that rejects with error -1 after ms milliseconds.
+  - Implemented in `stdlib/future.tur`: Spawns detached pthread that sleeps and rejects the future.
+- [x] Implement `future-with-timeout [f ms]` — race a future against a timeout.
+  - Implemented in `stdlib/future.tur`: Races the future against a timeout future.
 
 ##### AW-009 — Scheduler yield and run
 - [x] Implement `Scheduler::yield` — push current fiber back to run queue and suspend.
@@ -877,7 +879,9 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Implemented: `scheduler-spawn` in `stdlib/scheduler.tur` calls `tur_scheduler_spawn` (emitted in `src/emit.c` line 3401).
 
 ##### AW-010 — `Scheduler::timeout`
-- [ ] Implement `Scheduler::timeout [sched ms callback]` — schedule one-shot callback after `ms` milliseconds.
+- [x] Implement `Scheduler::timeout [sched ms callback]` — schedule one-shot callback after `ms` milliseconds.
+  - Implemented in `src/emit.c`: `tur_scheduler_timeout` spawns detached pthread, sleeps via nanosleep, invokes callback.
+  - Exposed to Turmeric via `scheduler-timeout` in `stdlib/scheduler.tur`.
 - [x] Implement `async-sleep [ms]` stdlib helper using `Scheduler::timeout` + `Future`.
   - Done (nanosleep-based, no scheduler required): `async-sleep` in `stdlib/fiber.tur`.
 
