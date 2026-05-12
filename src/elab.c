@@ -718,7 +718,7 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->n_file_scope_defs = 0;
     e->cap_file_scope_defs = 0;
     /* Phase 15: Typeclass environment */
-    typeclass_env_init(&e->typeclass_env);
+    typeclass_env_init(&e->typeclass_env, arena);
     /* Phase 19: Effect environment */
     e->effect_env = effect_env_new(arena);
 
@@ -4972,10 +4972,6 @@ static Expr *elab_call(Elab *e, Form *call) {
     /* All args must match the spec's arg type. */
     for (uint32_t i = 0; i < n_args; i++) {
         if (!type_eq(args[i]->type, spec->arg_type)) {
-            /* Phase 8: Enhanced type mismatch diagnostic with error code */
-            DiagNote notes[1];
-            notes[0] = (DiagNote){DIAG_NOTE, args[i]->span, "argument has this type"};
-            
             const char *expected_str = type_name(spec->arg_type);
             const char *actual_str = type_name(args[i]->type);
             
@@ -5372,10 +5368,10 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
     uint32_t actual_n_fields = n_fields / 2;
 
     /* Allocate StructDef and field array */
-    StructDef *def = (StructDef *)malloc(sizeof(StructDef));
+    StructDef *def = (StructDef *)arena_alloc(e->arena, sizeof(StructDef));
     def->name = name->name;
     def->n_fields = actual_n_fields;
-    def->fields = (StructField *)malloc(actual_n_fields * sizeof(StructField));
+    def->fields = (StructField *)arena_alloc(e->arena, actual_n_fields * sizeof(StructField));
     def->is_copy = is_copy;
     def->needs_drop_glue = false;
 
@@ -5388,14 +5384,12 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
         if (field_name_form->tag != F_SYM) {
             diag_emit(DIAG_ERROR, field_name_form->span,
                       "defstruct field name must be a symbol");
-            free(def->fields); free(def);
             return NULL;
         }
         if (field_type_form->tag != F_KEYWORD) {
             diag_emit(DIAG_ERROR, field_type_form->span,
                       "defstruct field '%s' type must be a keyword like :int",
                       field_name_form->as.sym->name);
-            free(def->fields); free(def);
             return NULL;
         }
 
@@ -5408,7 +5402,6 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
             diag_emit(DIAG_ERROR, field_type_form->span,
                       "defstruct field '%s' has unrecognized type :%s",
                       field_name_form->as.sym->name, tname);
-            free(def->fields); free(def);
             return NULL;
         }
 
@@ -5417,7 +5410,6 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
             diag_emit(DIAG_ERROR, field_type_form->span,
                       "defstruct: field '%s' has non-copy type :%s and cannot be used in :copy struct",
                       field_name_form->as.sym->name, tname);
-            free(def->fields); free(def);
             return NULL;
         }
 
@@ -6224,10 +6216,15 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
         
         /* Create a synthetic name for this method implementation */
         /* Format: __inst_<typeclass>_<method>_<typeargs> e.g. __inst_MyEq_eq_int */
-        char method_name[128];
+        enum {
+            MAX_INSTANCE_METHOD_NAME_LEN = 192,
+            MAX_SANITIZED_METHOD_NAME_LEN = 64,
+            MAX_INSTANCE_TYPE_SUFFIX_LEN = 64,
+        };
+        char method_name[MAX_INSTANCE_METHOD_NAME_LEN];
         
         /* Sanitize method name for C identifier (replace invalid chars with _) */
-        char sanitized_method_name[64];
+        char sanitized_method_name[MAX_SANITIZED_METHOD_NAME_LEN];
         const char *method_name_str = tc->methods[i].name->name;
         uint32_t method_name_len = tc->methods[i].name->len;
         if (method_name_len >= sizeof(sanitized_method_name)) {
@@ -6242,22 +6239,36 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
         }
         
         /* Build type arg suffix */
-        char type_suffix[64] = "";
+        char type_suffix[MAX_INSTANCE_TYPE_SUFFIX_LEN] = "";
+        size_t type_suffix_len = 0;
         for (uint8_t j = 0; j < n_type_args; j++) {
-            if (j == 0) {
-                strcat(type_suffix, "_");
-            }
+            const char *type_component = NULL;
             switch (type_args[j].kind) {
-                case TY_INT: strcat(type_suffix, "int"); break;
-                case TY_BOOL: strcat(type_suffix, "bool"); break;
-                case TY_CSTR: strcat(type_suffix, "cstr"); break;
-                case TY_NIL: strcat(type_suffix, "nil"); break;
-                case TY_PTR_VOID: strcat(type_suffix, "ptr_void"); break;
-                default: strcat(type_suffix, "T"); break;
+                case TY_INT: type_component = "int"; break;
+                case TY_BOOL: type_component = "bool"; break;
+                case TY_CSTR: type_component = "cstr"; break;
+                case TY_NIL: type_component = "nil"; break;
+                case TY_PTR_VOID: type_component = "ptr_void"; break;
+                default: type_component = "T"; break;
             }
+            int written = snprintf(type_suffix + type_suffix_len,
+                                   sizeof(type_suffix) - type_suffix_len,
+                                   "%s%s", j == 0 ? "_" : "", type_component);
+            if (written < 0 || (size_t)written >= sizeof(type_suffix) - type_suffix_len) {
+                diag_emit(DIAG_ERROR, impl_form->span,
+                          "typeclass instance method name is too long");
+                return NULL;
+            }
+            type_suffix_len += (size_t)written;
         }
-        snprintf(method_name, sizeof(method_name), "__inst_%s_%s%s",
-                 tc_name->name, sanitized_method_name, type_suffix);
+        int method_name_written =
+            snprintf(method_name, sizeof(method_name), "__inst_%.*s_%s%s",
+                     (int)tc_name->len, tc_name->name, sanitized_method_name, type_suffix);
+        if (method_name_written < 0 || (size_t)method_name_written >= sizeof(method_name)) {
+            diag_emit(DIAG_ERROR, impl_form->span,
+                      "typeclass instance method name is too long");
+            return NULL;
+        }
         
         const Symbol *method_sym = symtab_intern(e->st, 
             strslice(method_name, (uint32_t)strlen(method_name)));
@@ -6659,6 +6670,9 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
     }
 
     scope_free(&e.global);
+    free(e.struct_defs);
+    free(e.handled_effect_names);
+    free(e.macros);
     if (rc != 0) return NULL;
 
     Expr *prog = expr_new(arena, EX_PROGRAM, TYPE_NIL,

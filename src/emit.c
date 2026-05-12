@@ -149,7 +149,7 @@ static void register_defer_thunk(EmitCtx *ctx, const char *name, const Expr *bod
     thunk->body = (Expr *)body;  /* Cast away const for storage */
     thunk->captures = captures;
     thunk->n_captures = n_captures;
-    thunk->env_name = env_name ? strdup(env_name) : NULL;
+    thunk->env_name = env_name ? tur_strdup(env_name) : NULL;
     thunk->next = ctx->pending_defer_thunks;
     ctx->pending_defer_thunks = thunk;
 }
@@ -333,12 +333,12 @@ static void emit_c_string(Buf *out, StrSlice s) {
 
 /* ------------ atomic emitters (no statements emitted) ------------ */
 
-static char *atom_nil(void)         { return strdup("((void)0)"); }
-static char *atom_bool(bool b)      { return strdup(b ? "true" : "false"); }
+static char *atom_nil(void)         { return tur_strdup("((void)0)"); }
+static char *atom_bool(bool b)      { return tur_strdup(b ? "true" : "false"); }
 static char *atom_int(int64_t i) {
     char buf[40];
     snprintf(buf, sizeof buf, "INT64_C(%lld)", (long long)i);
-    return strdup(buf);
+    return tur_strdup(buf);
 }
 static char *atom_float(double f) {
     char buf[64];
@@ -350,7 +350,7 @@ static char *atom_float(double f) {
         /* No decimal point or exponent - append .0 */
         strcat(buf, ".0");
     }
-    return strdup(buf);
+    return tur_strdup(buf);
 }
 static char *atom_var(EmitCtx *ctx, const Binding *b) {
     return name_for_binding(ctx, b);
@@ -360,7 +360,7 @@ static char *atom_cstr(StrSlice s) {
     Buf b; buf_init(&b);
     emit_c_string(&b, s);
     buf_putc(&b, '\0');
-    char *p = strdup(b.data);
+    char *p = tur_strdup(b.data);
     buf_free(&b);
     return p;
 }
@@ -469,7 +469,7 @@ static char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
             break;
     }
     buf_putc(&out, '\0');
-    char *result = strdup(out.data);
+    char *result = tur_strdup(out.data);
     buf_free(&out);
     for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
     free(arg_strs);
@@ -1236,7 +1236,7 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
                 buf_puts(&out, ")");
                 buf_putc(&out, '\0');
-                char *result = strdup(out.data);
+                char *result = tur_strdup(out.data);
                 buf_free(&out);
                 for (uint32_t i = 0; i <= e->as.call_.n_args; i++) free(arg_strs[i]);
                 free(arg_strs);
@@ -1271,7 +1271,7 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_puts(&out, ")");
                 buf_putc(&out, '\0');
 
-                char *result = strdup(out.data);
+                char *result = tur_strdup(out.data);
                 buf_free(&out);
                 for (uint32_t i = 0; i < e->as.call_.n_args; i++) free(arg_strs[i]);
                 free(arg_strs);
@@ -1296,7 +1296,7 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
             buf_puts(&out, ")");
             buf_putc(&out, '\0');
-            char *result = strdup(out.data);
+            char *result = tur_strdup(out.data);
             buf_free(&out);
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) free(arg_strs[i]);
             free(arg_strs);
@@ -1340,7 +1340,7 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             
             /* Emit: malloc + store value */
             char *tmp = fresh_tmp(ctx);
-            char *inner_type_c = strdup(type_c_name(e->as.ref_.expr->type));
+            char *inner_type_c = tur_strdup(type_c_name(e->as.ref_.expr->type));
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s %s = malloc(sizeof(%s));\n", 
                        type_c_name(e->type), tmp, inner_type_c);
@@ -1360,7 +1360,7 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             
             /* For ref<T>, we need to cast and dereference */
             if (e->as.deref_.expr->type.kind == TY_REF) {
-                char *inner_type_c = strdup(type_c_name(e->type));
+                char *inner_type_c = tur_strdup(type_c_name(e->type));
                 char *tmp = fresh_tmp(ctx);
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "%s %s = *((%s *)%s);\n", 
@@ -1450,7 +1450,7 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_RC_OF: {
             /* (rc/of x) - allocate control block, copy value into it */
             char *inner = emit_value(ctx, body, e->as.rc_of_.expr);
-            char *inner_type_c = strdup(type_c_name(e->as.rc_of_.expr->type));
+            char *inner_type_c = tur_strdup(type_c_name(e->as.rc_of_.expr->type));
             
             /* Emit: allocate value separately, then attach it to rc control block. */
             char *val_tmp = fresh_tmp(ctx);
@@ -1495,7 +1495,7 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(body, "rc_strong_increment(%s);\n", inner);
             }
             /* Return the same pointer (now with incremented count, or elided) */
-            return strdup(inner);
+            return tur_strdup(inner);
         }
         case EX_RC_DROP: {
             /* (rc/drop r) - decrement strong count */
@@ -1903,7 +1903,7 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
             buf_puts(&lit, "}");
             buf_putc(&lit, '\0');
-            char *result = strdup(lit.data);
+            char *result = tur_strdup(lit.data);
             buf_free(&lit);
             return result;
         }
@@ -1916,7 +1916,7 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_printf(&lit, "(%s).%s", sv, fname);
             buf_putc(&lit, '\0');
             free(sv);
-            char *result = strdup(lit.data);
+            char *result = tur_strdup(lit.data);
             buf_free(&lit);
             return result;
         }
@@ -2424,7 +2424,7 @@ static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                        env_param_name);
             free(env_param_name);
             /* Store the env variable name for use in name_for_binding */
-            ctx->env_var_name = strdup(env_var_name_buf);
+            ctx->env_var_name = tur_strdup(env_var_name_buf);
         }
     }
 
@@ -2451,9 +2451,9 @@ static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * Emit default based on return type. */
             free(ret_val);
             switch (result_kind) {
-                case TY_INT:   ret_val = strdup("0"); break;
-                case TY_BOOL:  ret_val = strdup("false"); break;
-                default:       ret_val = strdup("0"); break;
+                case TY_INT:   ret_val = tur_strdup("0"); break;
+                case TY_BOOL:  ret_val = tur_strdup("false"); break;
+                default:       ret_val = tur_strdup("0"); break;
             }
         }
         /* Special case: if this is main and it returns int64_t, cast to int */

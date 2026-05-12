@@ -4,7 +4,8 @@
 #include <string.h>
 
 /* Initialize typeclass environment */
-void typeclass_env_init(TypeClassEnv *env) {
+void typeclass_env_init(TypeClassEnv *env, Arena *arena) {
+    env->arena = arena;
     env->typeclasses = NULL;
     env->instances = NULL;
 }
@@ -17,7 +18,7 @@ TypeClass *typeclass_env_register_typeclass(TypeClassEnv *env, const Symbol *nam
         return existing;
     }
     
-    TypeClass *tc = (TypeClass *)malloc(sizeof(TypeClass));
+    TypeClass *tc = (TypeClass *)arena_alloc(env->arena, sizeof(TypeClass));
     if (!tc) return NULL;
     
     tc->name = name;
@@ -33,7 +34,7 @@ TypeClass *typeclass_env_register_typeclass(TypeClassEnv *env, const Symbol *nam
 
 /* Register a typeclass instance */
 TypeClassInstance *typeclass_env_register_instance(TypeClassEnv *env, TypeClass *typeclass) {
-    TypeClassInstance *inst = (TypeClassInstance *)malloc(sizeof(TypeClassInstance));
+    TypeClassInstance *inst = (TypeClassInstance *)arena_alloc(env->arena, sizeof(TypeClassInstance));
     if (!inst) return NULL;
     
     inst->typeclass = typeclass;
