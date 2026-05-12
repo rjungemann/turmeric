@@ -240,14 +240,16 @@ These prerequisites unblock the remaining deferred items in Phase H5 and H6. The
 - [ ] Add `tests/benchmarks/hkt-dict-pass/` — a micro-benchmark that invokes a HKT typeclass method in a tight loop (default 10 000 iterations); establishes a baseline for measuring dictionary-passing overhead.
 
 #### HKT-P8 — HKT stdlib instance completeness (blocks H6 stdlib migration)
-- [ ] Add `Functor` and `Monad` instances for `result<T, E>` in `stdlib/result.tur`.
-  - `Functor.fmap` maps over the `ok` branch and passes the `err` branch through unchanged. `Monad.bind` flat-maps the `ok` branch and short-circuits on `err`.
-  - Prerequisite: `From`/`Into` typeclasses must be at least declared (completed in Phase R0) so error types can appear in `bind` without requiring a concrete conversion at this stage.
-- [ ] Add `Traversable` and `Foldable` instances for `slice<T>` in `stdlib/slice.tur` (mirrors the `vec` instances added in H3).
-- [ ] Add `Functor` instance for `rc<T>` in `stdlib/rc.tur`: `fmap` clones the contained value, applies the function, and returns a new `rc`.
-- [ ] Verify `do-m` macro works end-to-end with `option`, `result`, and `vec` monad instances.
-  - Add fixture `hkt-do-m-result.tur` — chains two fallible computations via `do-m`; verifies short-circuit on `err`.
-  - Add fixture `hkt-do-m-option.tur` — chains two `option`-returning lookups via `do-m`; verifies `none` propagation.
+- [x] Add `Functor` and `Monad` instances for `result<T, E>` in `stdlib/result.tur`.
+  - Implemented: `__functor_result_fmap` and `__monad_result_bind` helper functions. `fmap` maps over `ok` branch preserving `err`; `bind` flat-maps on `ok` and short-circuits on `err`. Uses `ptr<void>` as the container type in v1.
+  - Prerequisite satisfied: `From`/`Into` typeclasses declared in Phase R0 (`stdlib/typeclass.tur`).
+- [x] Add `Traversable` and `Foldable` instances for `slice<T>` in `stdlib/slice.tur` (mirrors the `vec` instances added in H3).
+  - Implemented: `__functor_slice_fmap`, `__foldable_slice_foldl`, `__foldable_slice_foldr`, `__traversable_slice_traverse` helper functions. Uses `ptr<void>` as the container type.
+- [x] Add `Functor` instance for `rc<T>` in `stdlib/rc.tur`: `fmap` clones the contained value, applies the function, and returns a new `rc`.
+  - Implemented: Created `stdlib/rc.tur` with `__functor_rc_fmap` helper and `Functor [ptr<void>]` instance. Uses `tur_rc_clone`, `tur_rc_ptr`, `tur_rc_of`, `tur_rc_drop` runtime functions.
+- [x] Verify `do-m` macro works end-to-end with `option`, `result`, and `vec` monad instances.
+  - Implemented: Added `tests/fixtures/hkt-do-m-result/input.tur` testing `do-m` with result monad (short-circuit on err). Added `tests/fixtures/hkt-do-m-option/input.tur` testing `do-m` with option monad (none propagation). Both fixtures expected output: `PASS`.
+  - Note: `do-m` macro already exists in `stdlib/macros.tur`. `vec` Monad instance added in this PR.
 
 ---
 
@@ -461,7 +463,7 @@ See [hkt-implementation-plan.md](hkt-implementation-plan.md) for the complete ro
   - Implemented: `(defclass Foldable [^t] (foldl [ta init fn] :int) (foldr [ta init fn] :int))` in `stdlib/typeclass.tur`.
 - [x] Implement instances for stdlib types (`option`, `vec`).
   - `stdlib/option.tur`: Functor, Applicative, Monad instances added.
-  - `stdlib/vec.tur`: Functor, Foldable instances added.
+  - `stdlib/vec.tur`: Functor, Monad, Foldable, Traversable instances added.
   - `slice`/`ref`/`rc` deferred to H6.
 - [x] Add fixtures for laws and behavioral tests.
   - `tests/fixtures/hkt-functor-option/` — Functor fmap on option; PASS.
