@@ -1,0 +1,24 @@
+;; Phase T24: async-sleep — suspend current fiber for specified milliseconds
+;;
+;; Tests that async-sleep suspends the fiber and resumes after the timeout.
+;; Note: v1 uses nanosleep directly (blocks thread). Full scheduler-based
+;; timeout is deferred to Phase T24 proper.
+
+(defn async-sleep [ms :int] :nil
+  ```c
+  if (ms <= 0) return;
+  struct timespec ts;
+  ts.tv_sec = (time_t)((int64_t)ms / 1000);
+  ts.tv_nsec = (long)(((int64_t)ms % 1000) * 1000000L);
+  nanosleep(&ts, NULL);
+  ```)
+
+(defn main [] :int
+  (println "Starting async-sleep test...")
+  
+  ;; Sleep for 100ms
+  (async-sleep 100)
+  
+  (println "Slept for 100ms")
+  
+  0)
