@@ -344,6 +344,13 @@ bool effect_env_contains(EffectEnv *env, const Symbol *name) {
     return effect_env_lookup(env, name) != NULL;
 }
 
+Effect *effect_env_register_builtin_unsafe(EffectEnv *env, Arena *a,
+                                           const Symbol *unsafe_name) {
+    if (!env || !a || !unsafe_name) return NULL;
+    return effect_env_register(env, a, unsafe_name,
+                               NULL, NULL, 0, TY_NIL);
+}
+
 /* ---------------------------------------------------------------------------
  * Phase P19-4: EffectRowSubst — effect-row variable unification
  * --------------------------------------------------------------------------- */

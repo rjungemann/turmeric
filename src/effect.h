@@ -121,6 +121,9 @@ typedef struct EffectEnv {
     uint32_t cap_effects;
 } EffectEnv;
 
+/* Built-in effect names (v2+). */
+#define EFFECT_NAME_UNSAFE "Unsafe"
+
 /* Resolve an ERK_UNRESOLVED row against the populated effect environment.
  * Uppercase symbol names are looked up in env and become ERK_CONCRETE entries;
  * lowercase symbol names become ERK_VAR entries.  Unknown uppercase names are
@@ -139,6 +142,10 @@ Effect *effect_env_lookup(EffectEnv *env, const Symbol *name);
 
 /* Check if an effect is valid (exists in environment) */
 bool effect_env_contains(EffectEnv *env, const Symbol *name);
+
+/* Register built-in `Unsafe` effect (idempotent). */
+Effect *effect_env_register_builtin_unsafe(EffectEnv *env, Arena *a,
+                                           const Symbol *unsafe_name);
 
 /* ---------------------------------------------------------------------------
  * Phase P19-4: Effect-row substitution for row-variable unification.
