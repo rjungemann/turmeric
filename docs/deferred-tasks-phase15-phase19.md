@@ -156,26 +156,32 @@ These are the concrete implementation gaps that cause Phase 19 tasks to be skipp
 These prerequisites unblock the remaining deferred items in Phase H5 and H6. They must be resolved before those items can proceed.
 
 #### HKT-P1 — Type application (blocks H5 partial application)
-- [ ] Define `TY_APP` type application node in `src/types.h` to represent a partially-applied type constructor (e.g., `(result int)` producing a `* -> *` type).
+- [x] Define `TY_APP` type application node in `src/types.h` to represent a partially-applied type constructor (e.g., `(result int)` producing a `* -> *` type).
   - Add `TY_APP` to the `TypeKind` enum. The node stores a `Type *fn` (the constructor) and a `Type *arg` (the applied argument). The kind of the result is derived by `kind_of_type_app()`.
-- [ ] Implement `kind_of_type_app(Type *fn_type, Type *arg_type, Diag *d) → Kind` in `src/kind_check.c`.
+- [x] Implement `kind_of_type_app(Type fn_type, Type arg_type, Span span) → Kind` in `src/kind_check.c`.
   - `fn_type` must have `KIND_ARROW` or `KIND_ARROW2`; strip one `* ->` level and return the remainder. Emit `TUR_E0012_KIND_MISMATCH` if `fn_type` has `KIND_STAR` (cannot apply a `*` type).
-- [ ] Decide and document type-level application surface syntax: `(type-app F A)` at type-annotation positions vs. `(F A)` as sugar for the same. Record decision here before implementing.
-- [ ] Wire `TY_APP` into `type_c_name()` in `src/types.c` so it emits a valid C representation (opaque `int64_t` in v1, same as `TY_STRUCT`).
-- [ ] Add fixture `hkt-type-app-kind.tur` verifying that a partially-applied two-argument type constructor has kind `* -> *` (advisory check in v1; kind mismatch emits `TUR-E0012`).
+- [x] Decide and document type-level application surface syntax: `(type-app F A)` at type-annotation positions vs. `(F A)` as sugar for the same. Record decision here before implementing.
+  - **Decision**: `(type-app F A)` is the canonical syntax at type-annotation positions. `(F A)` as sugar is deferred to a future phase. In v1, `TY_APP` is a type-system node only; no surface parser production added yet.
+- [x] Wire `TY_APP` into `type_c_name()` in `src/types.c` so it emits a valid C representation (opaque `int64_t` in v1, same as `TY_STRUCT`).
+- [x] Add fixture `hkt-type-app-kind.tur` verifying that a partially-applied two-argument type constructor has kind `* -> *` (advisory check in v1; kind mismatch emits `TUR-E0012`).
+  - Fixture added at `tests/fixtures/hkt-type-app-kind/`.
 
 #### HKT-P2 — Recursive types (blocks H5 Fix/Free monad)
-- [ ] Decide and document recursive type binder syntax before implementing.
-  - Recommendation: `(defrec Name [params] body)` where `Name` may appear in `body`. Example: `(defrec Fix [^f] (Fix (^f (Fix ^f))))`. Record final decision here.
-- [ ] Implement `TY_REC` node in `src/types.h`: stores a binding name and a body `Type *` in which the name is bound. Add `type_rec_unfold(Type *t) → Type *` (one-step unrolling without diverging).
-- [ ] Add occurs-check in `kind_check_pass` for `TY_REC` nodes to prevent infinite kind-inference loops.
-  - Track a `seen_rec_names` set (symbol names) during kind inference; emit an error and stop when the same `TY_REC` name is encountered recursively before resolution.
-- [ ] Add `elab_defrec` in `src/elab.c` that registers the recursive type binding in the type environment before walking the body.
-- [ ] Add fixture `hkt-defrec-fix.tur` declaring `Fix` and verifying it kind-checks (runtime evaluation not required; kind correctness in v1 is sufficient).
+- [x] Decide and document recursive type binder syntax before implementing.
+  - **Decision**: `(defrec Name [params])` syntax adopted. Body form accepted in v1 but not evaluated. TY_REC body is NULL until a later phase adds full type-level expression evaluation.
+- [x] Implement `TY_REC` node in `src/types.h`: stores a binding name and a body `Type *` in which the name is bound. Add `type_rec_unfold(Type *t) → Type *` (one-step unrolling without diverging).
+- [x] Add occurs-check in `kind_check_pass` for `TY_REC` nodes to prevent infinite kind-inference loops.
+  - Implemented via `rec_name_occurs_unguarded()` in `src/kind_check.c`; check runs in the `EX_DEF` case of `kind_check_expr()`.
+- [x] Add `elab_defrec` in `src/elab.c` that registers the recursive type binding in the type environment before walking the body.
+  - `elab_defrec()` creates a TY_REC binding with `hkt_kind=KIND_ARROW` and registers it in `e->global` scope.
+- [x] Add fixture `hkt-defrec-fix.tur` declaring `Fix` and verifying it kind-checks (runtime evaluation not required; kind correctness in v1 is sufficient).
+  - Fixture added at `tests/fixtures/hkt-defrec-fix/`.
 
 #### HKT-P3 — Multi-capture closures (blocks H6 `for` comprehension)
-- [ ] Audit `src/emit.c` closure emission: document the current single-capture limitation (one `env0` field) and the struct layout change required for multi-capture environments.
-- [ ] Implement multi-capture closure environment structs in `src/emit.c`: each closure emits a uniquely-named `__closure_env_N` C struct containing all captured variables (`int64_t env0; int64_t env1; ...`), heap-allocated at closure-creation time.
+- [x] Audit `src/emit.c` closure emission: document the current single-capture limitation (one `env0` field) and the struct layout change required for multi-capture environments.
+  - Implemented: Limitation removed. Fat closure protocol now in place.
+- [x] Implement multi-capture closure environment structs in `src/emit.c`: each closure emits a uniquely-named `__closure_env_N` C struct containing all captured variables (`int64_t env0; int64_t env1; ...`), heap-allocated at closure-creation time.
+  - Implemented: `EX_CLOSURE` in `src/emit.c` emits `struct __env_N { int64_t __fn; int64_t cap0; int64_t cap1; ... }`, heap-allocated via `malloc`. `__fn` field (at offset 0) stores thunk pointer. Callers use the fat-closure protocol: `((int64_t(*)(void*,int64_t))(intptr_t)(fat->__fn))((void*)fat, arg)`.
 - [ ] Update `borrow_check_closure` in `src/borrow_check.c` to track all captured bindings (not just the first encountered).
 - [ ] Add fixture `closure-multi-capture.tur` — a closure captures three `let`-bindings and returns their sum; verifies correct environment layout and output.
 - [ ] Add fixture `closure-multi-capture-ref.tur` — a closure captures a `ref<T>` alongside plain values; verifies the borrow checker accepts the capture without false positives.
@@ -793,8 +799,8 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Implemented: `stdlib/future.tur` provides `future-cell-new` (allocates cell), `promise-fulfill` (sets value + signals), `promise-fail` (sets error + signals). Pre-fulfilled via immediate fulfill after creation.
 - [x] Implement `Future::done?`, `Future::get`, `Future::get` with timeout.
   - Implemented: `stdlib/future.tur` provides `future-done?` (non-blocking check), `future-get` (blocks on condvar). Timeout variant deferred to Phase 23.
-- [ ] Implement `Future::cancel`.
-  - Deferred: Requires `Fiber::cancelled?` integration (Phase 22). Current v1 futures are one-shot and cannot be cancelled.
+- [x] Implement `Future::cancel`.
+  - Implemented: `future-cancel` and `future-cancelled?` in `stdlib/future.tur`. Sets a `cancelled` flag on `FutureCell` and wakes any waiters. Tested by `async-cancel` fixture.
 
 ##### AW-003 — Single-threaded scheduler
 - [x] Define `Scheduler` struct: run queue, waiting map, io-waiting map, current fiber pointer.
@@ -821,20 +827,20 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Implemented: `tur_async_call` immediately spawns pthread via `pthread_create` + `pthread_detach`. Fiber-based scheduler spawn via `scheduler-spawn` available in `stdlib/scheduler.tur`.
 
 ##### AW-006 — `Future` combinators
-- [ ] Implement `Future::map [future f]` — transform fulfilled value.
-  - Deferred: Requires higher-order function support for closure passing. Current v1 `FutureCell` stores `int64_t` values only.
-- [ ] Implement `Future::then [future f]` — flat-map (returns `Future` from `f`).
-  - Deferred: Requires `Future` chaining which needs fiber-based async (Phase 23).
+- [x] Implement `Future::map [future f]` — transform fulfilled value.
+  - Implemented: `future-map` in `stdlib/future.tur` (spawns pthread to await + apply fn, fulfills new future). Tested in `future-combinators` fixture.
+- [x] Implement `Future::then [future f]` — flat-map (returns `Future` from `f`).
+  - Implemented: `future-then` in `stdlib/future.tur` (spawns pthread to await + call fn returning future, then awaits inner). Tested in `future-combinators` fixture.
 - [ ] Implement `Future::join [future-a future-b]` — await both; return `tuple<Ta, Tb>`.
   - Deferred: Requires `Future::all` or similar multi-future coordination (Phase 23).
 
 ##### AW-007 — `Future` multi-combinators
 - [ ] Implement `Future::all [futures]` — await all; return `vec<T>`; reject on first error.
-  - Deferred: Requires dynamic array of futures and coordination logic (Phase 23).
-- [ ] Implement `Future::race [future-a future-b]` — return first to complete.
-  - Deferred: Requires scheduler integration for callback-based race detection (Phase 23).
+  - Deferred: Variadic `future-all` not yet implemented. A 2-future variant `future-all2` exists in `stdlib/future.tur`.
+- [x] Implement `Future::race [future-a future-b]` — return first to complete.
+  - Implemented: `future-race` in `stdlib/future.tur`. Tested in `future-combinators` fixture.
 - [ ] Implement `Future::any [futures]` — return first to fulfill (ignores rejections until all reject).
-  - Deferred: Similar complexity to `Future::all` (Phase 23).
+  - Deferred: Variadic `future-any` not yet implemented. A 2-future variant `future-any2` exists in `stdlib/future.tur`.
 
 ##### AW-008 — `Future::timeout`
 - [ ] Implement `Future::timeout [future ms]` — reject with timeout error if future does not fulfill within `ms` milliseconds.
@@ -890,16 +896,16 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Implemented: Fixture exists and passes.
 - [x] Add `tests/fixtures/async-await-basic.tur` — async/await basic.
   - Implemented: Fixture exists and passes.
-- [ ] Add `tests/fixtures/future-combinators.tur` — `map`, `then`, `join`, `all`, `race`.
-  - Deferred: Requires AW-006 and AW-007 implementations.
-- [ ] Add `tests/fixtures/async-error.tur` — exception propagation through rejected futures.
-  - Deferred: Requires error field in `TurAsyncTask` and exception bridge.
-- [ ] Add `tests/fixtures/async-cancel.tur` — future cancellation.
-  - Deferred: Requires `Future::cancel` (AW-002).
+- [x] Add `tests/fixtures/future-combinators.tur` — `map`, `then`, `join`, `all`, `race`.
+  - Implemented: Fixture at `tests/fixtures/future-combinators/` exists and passes. Tests `future-map`, `future-then`, `future-race`, `future-all2`, `future-any2`, `future-cancel`. Note: uses pair variants (`all2`/`any2`) rather than variadic; `join` not yet covered.
+- [x] Add `tests/fixtures/async-error.tur` — exception propagation through rejected futures.
+  - Implemented: Fixture at `tests/fixtures/async-error/` exists and passes. Uses `promise-fail` + `future-get` to propagate error values.
+- [x] Add `tests/fixtures/async-cancel.tur` — future cancellation.
+  - Implemented: Fixture at `tests/fixtures/async-cancel/` exists and passes.
 - [ ] Add `tests/fixtures/async-await-channel.tur`.
   - Deferred: Requires non-blocking channel operations integrated with fibers.
-- [ ] Add codegen snapshots for `async`/`await` lowering.
-  - Deferred: Snapshots would show `tur_async_call`/`tur_await_future` emit patterns. Not yet captured.
+- [x] Add codegen snapshots for `async`/`await` lowering.
+  - Implemented: `expected.c` snapshots exist for `async-error`, `async-cancel`, and `future-combinators` fixtures.
 
 #### T22 — Structured concurrency and task groups (Phase 22)
 
@@ -1362,18 +1368,18 @@ See [backtracking-cloneable-continuations-plan.md](archive/backtracking-cloneabl
   - Confirmed: Phase 18 complete; `tur_cont_alloc`/`tur_cont_resume`/`tur_cont_drop` are implemented.
 - [x] Phase 19 (Algebraic effects v1) is stable — handler infrastructure is in place for hybrid integration.
   - Confirmed: Phase 19 v1 complete; `defeffect`/`defhandler`/`perform`/`handle` all work.
-- [ ] Decide `Clone` vs `Copy` distinction: is `Clone` always deep? Is there a separate zero-cost `Copy` marker for bit-copyable types?
-  - Pending decision. Recommendation: `Clone` is always deep (allocates new memory); `Copy` is a future zero-cost marker (`int`, `bool`, `cstr` are `Copy`; `Copy` implies `Clone`). Ship `Clone` only in B1; reserve `Copy` for a later phase.
-- [ ] Decide `rc<T>` clone semantics: refcount increment (shallow) vs. deep clone of pointed-to value.
-  - Pending decision. See Phase B1 design: recommendation is refcount-increment for `rc<T>` (shared ownership), deep clone for `ref<T>` (independent ownership).
-- [ ] Confirm `cloneable-reset` / `cloneable-shift` syntax does not conflict with Phase 18 `reset`/`shift` in the reader or elaborator.
-  - Pending check. Both surface forms can coexist as separate elaboration branches (`elab_reset` vs. `elab_cloneable_reset`).
-- [ ] Define error codes TUR-E00YY (non-`Clone` capture) and TUR-E00YZ (`cloneable-shift` outside `cloneable-reset`).
-  - Pending: assign next available error codes when B1 elaborator work begins.
-- [ ] Decide whether `stdlib/logic.tur` depends on Phase P2 HAMT (`stdlib/hamt.tur`) for the persistent substitution map, or falls back to an association list.
-  - Pending decision. Recommendation: use association list in B4 v1; add a `(with-hamt-subst ...)` optimised variant when HAMT ships.
-- [ ] Define `--backtrack-depth N` flag design: per-call-site cap, global cap, or both?
-  - Pending decision. Recommendation: global cap applied at every `run-backtrack` call; per-call override via keyword argument `:depth N`.
+- [x] Decide `Clone` vs `Copy` distinction: is `Clone` always deep? Is there a separate zero-cost `Copy` marker for bit-copyable types?
+  - Decision: `Clone` is always deep (allocates new memory). `Copy` is a separate zero-cost marker trait for bit-copyable types (`int`, `bool`, `cstr` are `Copy`). `Copy` implies `Clone` (automatic blanket implementation). Ship `Clone` only in B1; `Copy` is reserved for a later phase.
+- [x] Decide `rc<T>` clone semantics: refcount increment (shallow) vs. deep clone of pointed-to value.
+  - Decision: `rc<T>` uses refcount increment (shallow clone, shared ownership). `ref<T>` uses deep clone (independent ownership, allocates new memory). This is documented in the Clone instance implementations.
+- [x] Confirm `cloneable-reset` / `cloneable-shift` syntax does not conflict with Phase 18 `reset`/`shift` in the reader or elaborator.
+  - Decision: No conflict. Both surface forms coexist as separate elaboration branches. `reset`/`shift` elaborate via `elab_reset`/`elab_shift`; `cloneable-reset`/`cloneable-shift` elaborate via `elab_cloneable_reset`/`elab_cloneable_shift`. The reader parses both identically; elaboration dispatch is based on the symbol name.
+- [x] Define error codes TUR-E00YY (non-`Clone` capture) and TUR-E00YZ (`cloneable-shift` outside `cloneable-reset`).
+  - Decision: Assign `TUR_E0014_NON_CLONE_CAPTURE` for captures of non-`Clone` types in cloneable continuations. Assign `TUR_E0015_CLONEABLE_SHIFT_OUTSIDE_RESET` for `cloneable-shift` used outside a `cloneable-reset` scope. Add to `DiagCode` enum in `src/diag.h` and `diag_code_to_string()` in `src/diag.c`.
+- [x] Decide whether `stdlib/logic.tur` depends on Phase P2 HAMT (`stdlib/hamt.tur`) for the persistent substitution map, or falls back to an association list.
+  - Decision: Use association list in B4 v1 for the persistent substitution map. Add a `(with-hamt-subst ...)` optimized variant when HAMT ships (Phase P2). The association list is simpler and sufficient for v1 workloads.
+- [x] Define `--backtrack-depth N` flag design: per-call-site cap, global cap, or both?
+  - Decision: Global cap applied at every `run-backtrack` call via `--backtrack-depth N` compiler flag (default: 1000). Per-call override via keyword argument `:depth N` in `run-backtrack` (e.g., `(run-backtrack :depth 5000 body)`). The global flag sets a default; per-call overrides take precedence.
 
 ---
 

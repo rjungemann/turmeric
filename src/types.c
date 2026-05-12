@@ -63,6 +63,16 @@ int type_eq(Type a, Type b) {
     if (a.kind == TY_STRUCT) {
         return a.as.struct_.def == b.as.struct_.def;
     }
+    /* Phase HKT-P1: Type application - compare fn and arg */
+    if (a.kind == TY_APP) {
+        if (!a.as.app.fn || !b.as.app.fn) return a.as.app.fn == b.as.app.fn;
+        if (!a.as.app.arg || !b.as.app.arg) return a.as.app.arg == b.as.app.arg;
+        return type_eq(*a.as.app.fn, *b.as.app.fn) && type_eq(*a.as.app.arg, *b.as.app.arg);
+    }
+    /* Phase HKT-P2: Recursive types - identity by name pointer (interned) */
+    if (a.kind == TY_REC) {
+        return a.as.rec.name == b.as.rec.name;
+    }
     return 1;
 }
 
@@ -205,6 +215,21 @@ const char *type_name(Type t) {
         /* Phase 11: Struct types */
         case TY_STRUCT:
             return t.as.struct_.def ? t.as.struct_.def->name : "<struct>";
+        /* Phase HKT-P1: Type application */
+        case TY_APP: {
+            Buf tmp;
+            buf_init(&tmp);
+            buf_puts(&tmp, "(type-app ");
+            buf_puts(&tmp, t.as.app.fn ? type_name(*t.as.app.fn) : "?");
+            buf_putc(&tmp, ' ');
+            buf_puts(&tmp, t.as.app.arg ? type_name(*t.as.app.arg) : "?");
+            buf_putc(&tmp, ')');
+            buf_putc(&tmp, '\0');
+            return tur_strdup(tmp.data);
+        }
+        /* Phase HKT-P2: Recursive types */
+        case TY_REC:
+            return t.as.rec.name ? t.as.rec.name : "<rec>";
     }
     return "?";
 }
@@ -316,6 +341,20 @@ static void type_name_buf(Buf *b, Type t) {
             }
             break;
         }
+        /* Phase HKT-P1: Type application */
+        case TY_APP: {
+            buf_puts(b, "(type-app ");
+            if (t.as.app.fn) type_name_buf(b, *t.as.app.fn); else buf_puts(b, "?");
+            buf_putc(b, ' ');
+            if (t.as.app.arg) type_name_buf(b, *t.as.app.arg); else buf_puts(b, "?");
+            buf_putc(b, ')');
+            break;
+        }
+        /* Phase HKT-P2: Recursive types */
+        case TY_REC: {
+            buf_puts(b, t.as.rec.name ? t.as.rec.name : "<rec>");
+            break;
+        }
     }
 }
 
@@ -370,8 +409,23 @@ const char *type_c_name(Type t) {
              * opaque HKT type-constructor argument; it is stored as int64_t at
              * runtime (container values are int64_t-sized opaque handles). */
             return t.as.struct_.def ? t.as.struct_.def->name : "int64_t";
+        /* Phase HKT-P1: Type application — opaque int64_t handle in v1 */
+        case TY_APP:
+            return "int64_t";
+        /* Phase HKT-P2: Recursive types — opaque int64_t handle in v1 */
+        case TY_REC:
+            return "int64_t";
     }
     return "void";
+}
+
+/* Phase HKT-P2: One-step unrolling of a TY_REC type.
+ * Returns the body of the recursive type (the type with the binder variable in scope).
+ * In v1, simply returns the body pointer without substitution.
+ * Returns NULL if t is not TY_REC or body is not yet evaluated. */
+Type *type_rec_unfold(Type *t) {
+    if (!t || t->kind != TY_REC) return NULL;
+    return t->as.rec.body;
 }
 
 void type_print(Buf *b, Type t) {
