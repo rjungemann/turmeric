@@ -215,6 +215,7 @@ struct FiberBlock {
     char *stack;
     size_t stack_size;
     int done;
+    int parked; /* Phase T21: scheduler park/unpark */
     int64_t result;
     int64_t arg;
     void *handler_chain;
@@ -370,6 +371,7 @@ static void tur_scheduler_run(TurScheduler *s) {
         s->current_fiber = f;
         tur_fiber_block_resume(f, 0);
         s->current_fiber = NULL;
+        if (!f->done && !f->parked) tur_scheduler_enqueue(s, f);
     }
     s->running = false;
 }
@@ -382,9 +384,25 @@ static void tur_scheduler_run_to_completion(TurScheduler *s) {
             s->current_fiber = f;
             tur_fiber_block_resume(f, 0);
             s->current_fiber = NULL;
+            if (!f->done && !f->parked) tur_scheduler_enqueue(s, f);
         }
     }
     s->running = false;
+}
+
+static void tur_scheduler_yield(void) {
+    tur_fiber_block_yield(0);
+}
+
+static void tur_scheduler_park(void) {
+    if (tur_current_fiber) tur_current_fiber->parked = 1;
+    tur_fiber_block_yield(0);
+}
+
+static void tur_scheduler_unpark(FiberBlock *f) {
+    if (!f) return;
+    f->parked = 0;
+    if (tur_scheduler) tur_scheduler_enqueue(tur_scheduler, f);
 }
 
 #ifdef __clang__
@@ -814,10 +832,10 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
-struct __defer_env_4 {RcControlBlock * x; };
+struct __defer_env_6 {RcControlBlock * x; };
 
-static void __defer_5(void *__env) {
-    struct __defer_env_4 *__e = (struct __defer_env_4 *)__env;
+static void __defer_7(void *__env) {
+    struct __defer_env_6 *__e = (struct __defer_env_6 *)__env;
     rc_strong_decrement(__e->x);
     rc_free_queue_drain();
 }
@@ -825,32 +843,35 @@ static void __defer_5(void *__env) {
 static int64_t rc_auto_drop_early_return(bool);
 
 static int64_t rc_auto_drop_early_return(bool flag) {
+        int64_t __t0;
         {
-            int64_t *__t0 = (int64_t *)malloc(sizeof(int64_t));
-            *__t0 = INT64_C(42);
-            RcControlBlock *__t1 = rc_cb_alloc(0, 3, NULL);
-            __t1->value = __t0;
-            RcControlBlock * x_3 = __t1;
+            int64_t *__t1 = (int64_t *)malloc(sizeof(int64_t));
+            *__t1 = INT64_C(42);
+            RcControlBlock *__t2 = rc_cb_alloc(0, 3, NULL);
+            __t2->value = __t1;
+            RcControlBlock * x_3 = __t2;
             (void)x_3;
-            tur_frame __frame_2;
-            tur_frame_init(&__frame_2, NULL);
+            tur_frame __frame_3;
+            tur_frame_init(&__frame_3, NULL);
+            int64_t __t4;
             if (flag) {
-                tur_frame_fire_chain(&__frame_2);
-                                int64_t __t3 = rc_strong_count(x_3);
-return __t3;
+                tur_frame_fire_chain(&__frame_3);
+                                int64_t __t5 = rc_strong_count(x_3);
+return __t5;
             } else {
+                __t4 = INT64_C(0);
             }
-            struct __defer_env_4 __t6 = {.x = x_3};
-            tur_frame_push_defer(&__frame_2, __defer_5, &__t6);
-            tur_frame_fire_lifo(&__frame_2);
+            struct __defer_env_6 __t8 = {.x = x_3};
+            tur_frame_push_defer(&__frame_3, __defer_7, &__t8);
+            __t0 = ((void)0);
         }
 }
 
 int main() {
         printf("%lld\n", (long long)(rc_auto_drop_early_return(true)));
-        int64_t __t7;
-        __t7 = INT64_C(0);
-        return (int)__t7;
+        int64_t __t9;
+        __t9 = INT64_C(0);
+        return (int)__t9;
 }
 
 

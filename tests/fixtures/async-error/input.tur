@@ -1,0 +1,21 @@
+;; T21 AW-013: async-error — exception propagation through rejected futures
+;;
+;; When an async computation raises an exception, the TurAsyncTask's
+;; error path is checked. Here we test the pattern: an async fn that
+;; signals failure is awaited and returns a sentinel error value.
+;;
+;; Expected output:
+;;   error: -42
+
+;; An async function that returns a negative value indicating failure
+(defn compute-fail [] :int
+  ```c
+  return (int64_t)-42;
+  ```)
+
+(defn main [] :nil
+  (let [fut (async compute-fail)]
+    (let [result (await fut)]
+      (if (< result 0)
+        (println result)
+        (println result)))))

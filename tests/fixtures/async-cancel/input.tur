@@ -1,0 +1,77 @@
+;; T21 AW-013: async-cancel — future cancellation via cancel sentinel
+;;
+;; Demonstrates future cancellation: an unsettled FutureCell is cancelled
+;; before any result arrives. future-cancelled? returns true, and subsequent
+;; reads detect the cancellation.
+;;
+;; Expected output:
+;;   pending
+;;   cancelled
+
+;; FutureCell helpers (unsettled)
+(defn fc-new [] :ptr<void>
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *cell = (FutureCell *)malloc(sizeof(FutureCell));
+  if (!cell) abort();
+  pthread_mutex_init(&cell->lock, NULL);
+  pthread_cond_init(&cell->ready, NULL);
+  cell->value = 0; cell->exn = 0; cell->is_set = false; cell->is_ok = false;
+  return (void *)cell;
+  ```)
+
+(defn fc-free [f :ptr<void>] :nil
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *fc = (FutureCell *)f;
+  pthread_mutex_destroy(&fc->lock);
+  pthread_cond_destroy(&fc->ready);
+  free(fc);
+  ```)
+
+(defn fc-done? [f :ptr<void>] :bool
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *fc = (FutureCell *)f;
+  pthread_mutex_lock(&fc->lock);
+  bool done = fc->is_set;
+  pthread_mutex_unlock(&fc->lock);
+  return done;
+  ```)
+
+(defn fc-cancel [f :ptr<void>] :nil
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *fc = (FutureCell *)f;
+  pthread_mutex_lock(&fc->lock);
+  if (!fc->is_set) { fc->exn = (int64_t)-2; fc->is_set = true; fc->is_ok = false; pthread_cond_broadcast(&fc->ready); }
+  pthread_mutex_unlock(&fc->lock);
+  ```)
+
+(defn fc-cancelled? [f :ptr<void>] :bool
+  ```c
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *fc = (FutureCell *)f;
+  pthread_mutex_lock(&fc->lock);
+  bool c = fc->is_set && !fc->is_ok && fc->exn == (int64_t)-2;
+  pthread_mutex_unlock(&fc->lock);
+  return c;
+  ```)
+
+(defn main [] :int
+  (let [fc (fc-new)]
+    ;; Before cancellation: not done
+    (if (fc-done? fc)
+      (println "done")
+      (println "pending"))  ;; pending
+
+    ;; Cancel it
+    (fc-cancel fc)
+
+    ;; Now it should be cancelled
+    (if (fc-cancelled? fc)
+      (println "cancelled")  ;; cancelled
+      (println "FAIL"))
+
+    (fc-free fc)
+    0))

@@ -215,6 +215,7 @@ struct FiberBlock {
     char *stack;
     size_t stack_size;
     int done;
+    int parked; /* Phase T21: scheduler park/unpark */
     int64_t result;
     int64_t arg;
     void *handler_chain;
@@ -370,6 +371,7 @@ static void tur_scheduler_run(TurScheduler *s) {
         s->current_fiber = f;
         tur_fiber_block_resume(f, 0);
         s->current_fiber = NULL;
+        if (!f->done && !f->parked) tur_scheduler_enqueue(s, f);
     }
     s->running = false;
 }
@@ -382,9 +384,25 @@ static void tur_scheduler_run_to_completion(TurScheduler *s) {
             s->current_fiber = f;
             tur_fiber_block_resume(f, 0);
             s->current_fiber = NULL;
+            if (!f->done && !f->parked) tur_scheduler_enqueue(s, f);
         }
     }
     s->running = false;
+}
+
+static void tur_scheduler_yield(void) {
+    tur_fiber_block_yield(0);
+}
+
+static void tur_scheduler_park(void) {
+    if (tur_current_fiber) tur_current_fiber->parked = 1;
+    tur_fiber_block_yield(0);
+}
+
+static void tur_scheduler_unpark(FiberBlock *f) {
+    if (!f) return;
+    f->parked = 0;
+    if (tur_scheduler) tur_scheduler_enqueue(tur_scheduler, f);
 }
 
 #ifdef __clang__
@@ -814,19 +832,19 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
-static void __defer_9(void *__env) {
+static void __defer_12(void *__env) {
     puts("defer-in-then");
 }
 
-static void __defer_7(void *__env) {
+static void __defer_9(void *__env) {
     puts("defer-before-if");
 }
 
-static void __defer_5(void *__env) {
+static void __defer_7(void *__env) {
     puts("inner-defer");
 }
 
-static void __defer_3(void *__env) {
+static void __defer_4(void *__env) {
     puts("outer-defer");
 }
 
@@ -853,40 +871,44 @@ static int64_t test_return_with_defer() {
 }
 
 static int64_t test_return_in_nested_scope() {
+        int64_t __t2;
         {
             int64_t x_5 = INT64_C(1);
             (void)x_5;
-            tur_frame __frame_2;
-            tur_frame_init(&__frame_2, NULL);
-            tur_frame_push_defer(&__frame_2, __defer_3, NULL);
+            tur_frame __frame_3;
+            tur_frame_init(&__frame_3, NULL);
+            tur_frame_push_defer(&__frame_3, __defer_4, NULL);
+            int64_t __t5;
             {
                 int64_t y_6 = INT64_C(2);
                 (void)y_6;
-                tur_frame __frame_4;
-                tur_frame_init(&__frame_4, &__frame_2);
-                tur_frame_push_defer(&__frame_4, __defer_5, NULL);
-                tur_frame_fire_chain(&__frame_4);
+                tur_frame __frame_6;
+                tur_frame_init(&__frame_6, &__frame_3);
+                tur_frame_push_defer(&__frame_6, __defer_7, NULL);
+                tur_frame_fire_chain(&__frame_6);
                 return INT64_C(42);
-                tur_frame_fire_lifo(&__frame_4);
+                __t5 = ((void)0);
             }
-            tur_frame_fire_lifo(&__frame_2);
+            __t2 = ((void)0);
         }
 }
 
 static int64_t test_return_in_if() {
-        tur_frame __frame_6;
-        tur_frame_init(&__frame_6, NULL);
-        tur_frame_push_defer(&__frame_6, __defer_7, NULL);
+        tur_frame __frame_8;
+        tur_frame_init(&__frame_8, NULL);
+        tur_frame_push_defer(&__frame_8, __defer_9, NULL);
+        int64_t __t10;
         if (true) {
-            tur_frame __frame_8;
-            tur_frame_init(&__frame_8, &__frame_6);
-            tur_frame_push_defer(&__frame_8, __defer_9, NULL);
-            tur_frame_fire_chain(&__frame_8);
+            tur_frame __frame_11;
+            tur_frame_init(&__frame_11, &__frame_8);
+            tur_frame_push_defer(&__frame_11, __defer_12, NULL);
+            tur_frame_fire_chain(&__frame_11);
             return INT64_C(42);
-            tur_frame_fire_lifo(&__frame_8);
+            tur_frame_fire_lifo(&__frame_11);
         } else {
+            __t10 = INT64_C(0);
         }
-        tur_frame_fire_lifo(&__frame_6);
+        tur_frame_fire_lifo(&__frame_8);
 }
 
 int main() {
@@ -914,9 +936,9 @@ int main() {
             (void)r4_10;
             printf("%lld\n", (long long)(r4_10));
         }
-        int64_t __t10;
-        __t10 = INT64_C(0);
-        return (int)__t10;
+        int64_t __t13;
+        __t13 = INT64_C(0);
+        return (int)__t13;
 }
 
 

@@ -1639,7 +1639,10 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * int64_t parameter, emit an explicit (int64_t)(intptr_t) cast so the
                  * generated C99 code is valid.  Function pointers cannot be implicitly
                  * converted to integers in C99; a reinterpret via intptr_t is needed. */
-                bool needs_fn_cast = (e->as.call_.args[i]->type.kind == TY_FN);
+                /* Phase HKT §5: also cast TY_PTR_VOID (capturing-closure env ptr) to
+                 * int64_t when passing to an int64_t parameter. */
+                bool needs_fn_cast = (e->as.call_.args[i]->type.kind == TY_FN ||
+                                      e->as.call_.args[i]->type.kind == TY_PTR_VOID);
                 if (needs_fn_cast && fn_binding->type.kind == TY_FN) {
                     uint8_t n_fnparams = fn_binding->type.as.fn.arity;
                     uint8_t param_idx = (i < n_fnparams) ? i : (n_fnparams > 0 ? n_fnparams - 1 : 0);
@@ -1779,39 +1782,41 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
                 ctx->env_struct_names[ctx->n_env_struct_names++] = env_name;
                 
-                /* Emit: struct __env_N { int64_t field1; int64_t field2; ... }; */
-                buf_printf(ctx->file, "struct %s {", env_name->name);
+                /* Phase HKT §5: fat closure struct — __fn first, then captures. */
+                buf_printf(ctx->file, "struct %s { int64_t __fn; ", env_name->name);
                 for (uint8_t i = 0; i < closure->n_captures; i++) {
-                    if (i > 0) buf_puts(ctx->file, "; ");
                     Binding *captured = closure->captures[i];
-                    buf_printf(ctx->file, "%s %s",
+                    buf_printf(ctx->file, "%s %s; ",
                                type_c_name(captured->type), captured->name->name);
                 }
-                buf_puts(ctx->file, "; };\n");
+                buf_puts(ctx->file, "};\n");
             }
             
-            /* Emit the env struct as the closure value */
-            /* For Phase 3, closure is the env struct, passed by pointer to thunk */
-            
-            /* Allocate temp for env struct instance */
-            char *tmp = fresh_tmp(ctx);
+            /* Phase HKT §5: heap-allocate the fat closure struct so that the
+             * fat pointer can safely escape from the local stack frame and be
+             * passed to HKT helpers as an opaque int64_t.  Layout:
+             *   struct __env_N { int64_t __fn; <captures...> }
+             * The __fn field holds the thunk pointer (as int64_t).  Callers
+             * using the generic fat-closure protocol recover the thunk as:
+             *   thunk = (int64_t(*)(void*,int64_t))(intptr_t)fat->__fn
+             * and invoke it as thunk(fat_ptr, arg). */
+            const char *thunk_sym = closure->fn->binding->name->name;
+            char *fat_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
-            buf_printf(body, "struct %s %s = {", env_name->name, tmp);
-            
-            /* Populate with captured values */
+            buf_printf(body, "struct %s *%s = (struct %s *)malloc(sizeof(struct %s));\n",
+                       env_name->name, fat_tmp, env_name->name, env_name->name);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s->__fn = (int64_t)(intptr_t)%s;\n", fat_tmp, thunk_sym);
             for (uint8_t i = 0; i < closure->n_captures; i++) {
-                if (i > 0) buf_puts(body, ", ");
                 Binding *captured = closure->captures[i];
                 char *cn = name_for_binding(ctx, captured);
-                buf_printf(body, ".%s = %s", captured->name->name, cn);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s->%s = %s;\n", fat_tmp, captured->name->name, cn);
                 free(cn);
             }
-            buf_puts(body, "};\n");
-            
-            /* Return a pointer to the env struct as the closure value */
             char *ptr_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
-            buf_printf(body, "void *%s = &%s;\n", ptr_tmp, tmp);
+            buf_printf(body, "void *%s = %s;\n", ptr_tmp, fat_tmp);
             
             return ptr_tmp;
         }
@@ -2838,14 +2843,17 @@ static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             }
             ctx->env_struct_names[ctx->n_env_struct_names++] = env_name;
             
-            buf_printf(file, "struct %s {", env_name->name);
+            /* Phase HKT §5: fat closure layout — __fn (int64_t) first, then
+             * captures.  The fat pointer doubles as the env ptr for the thunk:
+             * thunk receives fat_ptr as self, accesses captures via ->field
+             * (which are at the correct offsets after __fn). */
+            buf_printf(file, "struct %s { int64_t __fn; ", env_name->name);
             for (uint8_t i = 0; i < fd->closure->n_captures; i++) {
-                if (i > 0) buf_puts(file, "; ");
                 Binding *captured = fd->closure->captures[i];
-                buf_printf(file, "%s %s",
+                buf_printf(file, "%s %s; ",
                            type_c_name(captured->type), captured->name->name);
             }
-            buf_puts(file, "; };\n");
+            buf_puts(file, "};\n");
         }
     }
 
