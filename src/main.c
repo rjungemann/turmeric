@@ -55,6 +55,9 @@ bool g_unsafe_require_safety = false;   /* disabled by default */
 bool g_unsafe_stats_enabled = false;   /* disabled by default */
 bool g_lint_unsafe_enabled = false;    /* master flag for all unsafe lints */
 
+/* Phase R5: Panic strategy configuration */
+bool g_panic_abort = false;            /* --panic-abort: all panics call abort() directly */
+
 /* Phase U5: Global statistics for unsafe linting */
 uint32_t g_unsafe_block_count = 0;     /* count of unsafe blocks seen */
 uint32_t g_unsafe_total_lines = 0;     /* total lines in unsafe blocks */
@@ -803,7 +806,8 @@ static int usage(void) {
         "global flags:\n"
         "  --no-color                       disable colored diagnostics\n"
         "  --json-diagnostics               output diagnostics as JSON (phase 8)\n"
-        "  --explain <code>                 compile code snippet and explain errors (phase 8)\n");
+        "  --explain <code>                 compile code snippet and explain errors (phase 8)\n"
+        "  --panic-abort                   all panics call abort() directly (Phase R5)\n");
     return 64;
 }
 
@@ -811,6 +815,16 @@ static int usage(void) {
 static bool parse_no_color(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--no-color") == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Phase R5: Handle --panic-abort flag */
+static bool parse_panic_abort(int argc, char **argv) {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--panic-abort") == 0) {
             return true;
         }
     }
@@ -867,9 +881,17 @@ int main(int argc, char **argv) {
     bool no_color = parse_no_color(argc, argv);
     bool explain_mode = false;
     const char *explain_code = NULL;
+    g_panic_abort = parse_panic_abort(argc, argv);
     
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--json-diagnostics") == 0) {
+        if (strcmp(argv[i], "--panic-abort") == 0) {
+            /* Already parsed, remove from argv */
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--json-diagnostics") == 0) {
             use_json_diagnostics = true;
             /* Remove from argv for command parsing */
             for (int j = i; j < argc - 1; j++) {

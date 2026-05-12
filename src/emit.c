@@ -10,6 +10,9 @@
 #include "rc_elision.h"
 #include "types.h"
 
+/* Phase R5: Global panic strategy flag (set by main.c --panic-abort) */
+extern bool g_panic_abort;
+
 /* Forward declarations */
 struct DeferThunk;
 
