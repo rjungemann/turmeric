@@ -1377,6 +1377,23 @@ See [backtracking-cloneable-continuations-plan.md](archive/backtracking-cloneabl
 - [ ] Add negative fixture `tests/fixtures/backtrack/clone-non-clone-capture.tur`.
   - Deferred: requires B2 cloneable continuation runtime and `check_cloneable_capture` implementation.
 
+### Phase B2 prerequisites
+
+These prerequisites must be completed before the remaining B2 implementation tasks can proceed.
+
+- [ ] Implement deep clone infrastructure for arbitrary types via `Clone` trait dispatch.
+  - Required for: `tur_cloneable_cont_clone` to deep copy captured environments.
+  - Blocking: The runtime needs to call type-specific clone functions for each captured value. In v1, only primitive types (`int`, `bool`, `cstr`) and `option`, `vec` have Clone instances. Parameterized instances (for `Pair`, `list`, etc.) and runtime dispatch via typeclass dictionaries are needed.
+- [ ] Implement cloneable continuation type tagging in `tur_cont` struct.
+  - Required for: distinguishing cloneable vs one-shot continuations at runtime.
+  - Action: Add `is_cloneable` bool field to `tur_cont` in `src/runtime.h`.
+- [ ] Extend defer mechanism to support `DEFER_SUSPENDED` and `DEFER_REPLAY` modes.
+  - Required for: `DEFER_SUSPENDED` (defer fires when suspension occurs), `DEFER_REPLAY` (defer fires on each replay/resume).
+  - Action: Add `DeferMode` enum (`DEFER_NORMAL`, `DEFER_SUSPENDED`, `DEFER_REPLAY`) and store mode per defer in `src/runtime.h`. Update `tur_defer_add` and `tur_defer_run` in `src/runtime.c`.
+- [ ] Implement CPS transformation pass for cloneable continuations.
+  - Required for: `needs_cloneable_cps` flag and `emit_capture_environment` with cloneable support.
+  - Action: Extend existing CPS pass in `src/cps.c` to handle `EX_CLONEABLE_RESET` and `EX_CLONEABLE_SHIFT` with environment capture that records `clone_fn` and `drop_fn` per binding.
+
 ### Phase B2 remaining tasks (Cloneable continuation runtime + CPS)
 - [x] Parse `(cloneable-reset body)` and `(cloneable-shift k expr)` surface forms.
   - Implemented: `elab_cloneable_reset` and `elab_cloneable_shift` in `src/elab.c`. Symbols registered and dispatch added.
@@ -1405,6 +1422,16 @@ See [backtracking-cloneable-continuations-plan.md](archive/backtracking-cloneabl
 - [ ] Add negative fixture `tests/fixtures/backtrack/cloneable-shift-outside-reset.tur`.
 - [ ] Add codegen snapshots for cloneable continuation lowering.
 
+### Phase B3 prerequisites
+
+These prerequisites must be completed before B3 (Backtracking monad) implementation can proceed.
+
+- [ ] Phase B2 cloneable continuation runtime must be complete and tested.
+  - Required for: All B3 tasks depend on working cloneable continuations.
+- [ ] Implement `run-backtrack` core function that collects all results from a backtracking computation.
+  - Required for: The backtracking monad's `run` operation.
+  - Action: `run-backtrack` takes a thunk `(-> (list (-> T)))` and returns `(list T)` containing all results produced by the backtracking computation.
+
 ### Phase B3 remaining tasks (Backtracking monad)
 - [ ] Implement `stdlib/backtrack.tur`: `mzero`, `mreturn`, `mplus`, `mbind`, `run-backtrack`, `run-backtrack-depth`, `choice`, `guard`, `fresh`, `once`, `interleave`.
 - [ ] Implement `(backtrack-do ...)` sequencing macro.
@@ -1419,6 +1446,19 @@ See [backtracking-cloneable-continuations-plan.md](archive/backtracking-cloneabl
 - [ ] Add `tests/fixtures/backtrack/backtrack-nested.tur`.
 - [ ] Add `tests/fixtures/backtrack/backtrack-ref.tur`.
 - [ ] Add codegen snapshots for `run-backtrack` and `mbind` lowering.
+
+### Phase B4 prerequisites
+
+These prerequisites must be completed before B4 (Standard library integration) implementation can proceed.
+
+- [ ] Phase B3 backtracking monad must be complete and tested.
+  - Required for: `stdlib/logic.tur` and `stdlib/parsec.tur` both use the backtracking monad.
+- [ ] Implement `Pair` type in stdlib for `logic.tur` term representation.
+  - Required for: `Term` type typically uses `Pair` for compound terms (e.g., `Cons(x, xs)`).
+  - Action: Add `(defstruct Pair [first second])` to `stdlib/pair.tur` or similar.
+- [ ] Implement persistent data structure primitives (or association list fallback).
+  - Required for: Logic programming substitution map in `stdlib/logic.tur`.
+  - Action: Use association list for v1 as decided in B1 prerequisites; HAMT-based variant deferred.
 
 ### Phase B4 remaining tasks (Standard library integration)
 - [ ] Implement `stdlib/logic.tur`: `LVar`, `UState`, `Term`, `Goal`, `unify`, `unify-var`, `walk`, `fresh-lvar`, `conjoined`, `disjoined`, `run-logic`, `reify`.
@@ -1438,6 +1478,16 @@ See [backtracking-cloneable-continuations-plan.md](archive/backtracking-cloneabl
 - [ ] Add `tests/fixtures/backtrack/parsec-full.tur`.
 - [ ] Add `tests/fixtures/backtrack/parsec-json-subset.tur`.
 - [ ] Add codegen snapshots for `or-parser` and `run-logic` lowering.
+
+### Phase B5 prerequisites
+
+These prerequisites must be completed before B5 (Testing, benchmarks, optimization) implementation can proceed.
+
+- [ ] Phases B2-B4 must be substantially complete.
+  - Required for: All B5 tasks depend on working backtracking infrastructure.
+- [ ] Implement `--backtrack-depth` global flag infrastructure in compiler driver.
+  - Required for: `src/main.c` argument parsing and pass-through to codegen.
+  - Action: Add flag parsing in `parse_args()`; store in global; emit as `#define BACKTRACK_DEPTH N` in generated C preamble.
 
 ### Phase B5 remaining tasks (Testing, benchmarks, optimization)
 - [ ] Add `--backtrack-depth N` global flag to `src/main.c` / `src/emit.{c,h}`.
