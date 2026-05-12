@@ -443,7 +443,8 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 - [ ] Add fixture `result-from-into.tur`.
 - [x] Add fixture `result-collect.tur`.
   - Done: `tests/fixtures/result-collect/` — covers `result-collect` (all-ok, first-err) and `result-partition`.
-- [ ] Add negative fixture `result-question-outside-fn.tur`.
+- [x] Add negative fixture `result-question-outside-fn.tur`.
+  - Done: `tests/fixtures/errors/result-question-outside-fn/` — verifies top-level `(? ...)` is rejected (currently via the reserved-operator diagnostic).
 - [ ] Add codegen snapshots for `ok`/`err` and `?` lowering.
 
 ### Phase R2 remaining tasks (Panic Mechanism)
@@ -541,8 +542,8 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 - [x] Write `docs/error-handling-guide.md` covering `Result`, `panic`, `must!`, `catch_unwind`, and guidance on when to use each.
   - Done: `docs/error-handling-guide.md` created.
 - [ ] Add elaborator pass: warn on discarded `result<T, E>` values.
-- [ ] Implement `(ignore! expr)` suppression helper.
-  <!-- Done: `ignore!` macro added to `stdlib/macros.tur`; discards result expression. -->
+- [x] Implement `(ignore! expr)` suppression helper.
+  - Done: `ignore!` macro added to `stdlib/macros.tur`; discards result expression.
 - [ ] Add `--warn-unused-result` / `--no-warn-unused-result` compiler flags.
 - [ ] Add `--lint-panic` linter flag: note when `panic` / `must!` appear outside test/main.
 - [ ] Add `--lint-panic` warning for `catch_unwind` used in normal (non-boundary) error handling.
