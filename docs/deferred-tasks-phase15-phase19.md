@@ -971,8 +971,8 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Added `fiber-should-exit? []`: wrapper for `fiber-cancelled?`
   - Tasks can call these to check if they should exit due to cancellation
 
-- [ ] **PR-TG-003-3** Implement `TaskGroup::with-cancellation` macro
-  - Blocked by: PR-TG-003-2
+- [x] **PR-TG-003-3** Implement `TaskGroup::with-cancellation` macro
+  - Implemented in `stdlib/taskgroup.tur`: macro checks for cancellation before executing body; if already cancelled, skips body and returns nil. Otherwise runs body and waits for all spawned tasks. Uses `task-group-should-exit?` (from PR-TG-003-2) for the check.
   - Macro that sets up cancellation checking in the body
   - Body can periodically check cancellation status and exit early
 
@@ -981,8 +981,8 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Implemented: `task-group-with` macro creates group, executes body, calls `task-group-wait`.
 - [x] Implement `TaskGroup::with-timeout [group ms & body]` — auto-cancel on timeout.
   - Implemented: Spawns background thread using `pthread_create` + `pthread_detach` that sleeps then cancels.
-- [ ] Implement `TaskGroup::with-cancellation [group & body]` — body can receive cancellation signal.
-  - Deferred: Requires PR-TG-003-1, PR-TG-003-2, PR-TG-003-3.
+- [x] Implement `TaskGroup::with-cancellation [group & body]` — body can receive cancellation signal.
+  - Implemented via PR-TG-003-3: checks for cancellation before executing body using `task-group-should-exit?`; skips body if already cancelled, otherwise runs body and waits.
 
 ##### TG-004 — Prerequisites: Per-fiber panic handling
 

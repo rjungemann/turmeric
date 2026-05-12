@@ -442,11 +442,15 @@
 ;; (task-group-cancelled? group) or (fiber-cancelled?) to check if it should
 ;; exit early.
 ;;
-;; This is essentially the same as task-group-with for v1, since cooperative
-;; cancellation requires the body to explicitly check. In future versions,
-;; this could provide automatic cancellation signal delivery.
-;;
-;; For now, this is an alias for task-group-with, with documentation about
-;; how to handle cancellation cooperatively.
+;; PR-TG-003-3: Implemented with entry-point cancellation check. Checks for
+;; cancellation before executing body; if already cancelled, skips body and
+;; returns nil. Otherwise runs body and waits for all spawned tasks. Cooperative
+;; cancellation within the body requires explicit checks using the provided
+;; cancellation check point API (task-group-should-exit? / fiber-should-exit?).
 (defmacro task-group-with-cancellation [group & body]
-  (task-group-with group body))
+  (list
+    (if (task-group-should-exit? group)
+        nil
+        (do
+          body
+          (task-group-wait group)))))
