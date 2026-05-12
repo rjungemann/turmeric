@@ -179,11 +179,143 @@ static void tur_panic(const char *msg) {
         abort();
     }
     tur_panic_in_progress = 1;
-    fprintf(stderr, "panic: %s\n", msg ? msg : "(no message)");
+    fprintf(stderr, "panic at %s:%d: %s\n", __FILE__, __LINE__, msg ? msg : "(no message)");
     if (global_panic_frame) {
         tur_frame_fire_chain(global_panic_frame);
     }
     abort();
+}
+
+/* Phase R5: tur_panic_abort - no unwinding, immediate abort */
+static void tur_panic_abort(const char *msg) {
+    fprintf(stderr, "panic (no unwind): %s\n", msg ? msg : "(no message)");
+    abort();
+}
+
+/* Phase R2: tur_panic_with */
+typedef struct tur_panic_payload tur_panic_payload;
+struct tur_panic_payload {
+    int type_tag;
+    void *value;
+    const char *file;
+    int line;
+};
+
+static tur_panic_payload *global_panic_payload = NULL;
+static jmp_buf global_panic_jmpbuf;
+static int global_panic_jmpbuf_valid = 0;
+
+static tur_panic_payload *panic_payload_new(int type_tag, void *payload, const char *file, int line) {
+    tur_panic_payload *p = (tur_panic_payload *)malloc(sizeof(tur_panic_payload));
+    if (!p) { fprintf(stderr, "panic: oom\n"); abort(); }
+    p->type_tag = type_tag; p->value = payload; p->file = file; p->line = line;
+    return p;
+}
+
+static void panic_payload_free(tur_panic_payload *p) {
+    if (p) { free(p->value); free(p); }
+}
+
+static void tur_panic_with(int type_tag, void *payload, const char *file, int line) {
+    if (tur_panic_in_progress) {
+        fprintf(stderr, "double panic: aborting\n");
+        free(payload);
+        abort();
+    }
+    tur_panic_in_progress = 1;
+    if (global_panic_jmpbuf_valid) {
+        global_panic_payload = panic_payload_new(type_tag, payload, file, line);
+        longjmp(global_panic_jmpbuf, 1);
+    }
+    fprintf(stderr, "panic at %s:%d\n", file ? file : "(unknown)", line);
+    free(payload);
+    abort();
+}
+
+static int tur_panic_payload_type(tur_panic_payload *p) {
+    return p ? p->type_tag : 0;
+}
+
+static void *tur_panic_payload_value(tur_panic_payload *p) {
+    return p ? p->value : NULL;
+}
+
+static const char *tur_panic_payload_file(tur_panic_payload *p) {
+    return p ? p->file : NULL;
+}
+
+static int tur_panic_payload_line(tur_panic_payload *p) {
+    return p ? p->line : 0;
+}
+
+static void *tur_panic_payload_downcast(tur_panic_payload *p, int target_type) {
+    if (!p || p->type_tag != target_type) return NULL;
+    return p->value;
+}
+
+/* Phase R2: catch-unwind/catch-panic-of */
+typedef enum { TUR_RESULT_OK, TUR_RESULT_ERR } tur_result_tag;
+typedef struct tur_result tur_result;
+struct tur_result {
+    tur_result_tag tag;
+    union { int64_t ok_val; void *ok_ptr; tur_panic_payload *err; } u;
+};
+
+typedef void (*tur_thunk_fn)(void *env, tur_result *out);
+
+static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
+    if (global_panic_jmpbuf_valid) {
+        thunk(env, out);
+        return false;
+    }
+    global_panic_jmpbuf_valid = 1;
+    if (setjmp(global_panic_jmpbuf) == 0) {
+        thunk(env, out);
+        global_panic_jmpbuf_valid = 0;
+        if (global_panic_payload) {
+            panic_payload_free(global_panic_payload);
+            global_panic_payload = NULL;
+        }
+        return false;
+    } else {
+        global_panic_jmpbuf_valid = 0;
+        out->tag = TUR_RESULT_ERR;
+        out->u.err = global_panic_payload;
+        global_panic_payload = NULL;
+        return true;
+    }
+}
+
+static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env, tur_result *out) {
+    if (global_panic_jmpbuf_valid) {
+        thunk(env, out);
+        return false;
+    }
+    global_panic_jmpbuf_valid = 1;
+    if (setjmp(global_panic_jmpbuf) == 0) {
+        thunk(env, out);
+        global_panic_jmpbuf_valid = 0;
+        if (global_panic_payload) {
+            panic_payload_free(global_panic_payload);
+            global_panic_payload = NULL;
+        }
+        return false;
+    } else {
+        global_panic_jmpbuf_valid = 0;
+        if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
+            out->tag = TUR_RESULT_ERR;
+            out->u.err = global_panic_payload;
+            global_panic_payload = NULL;
+            return true;
+        } else {
+        if (global_panic_payload) {
+            /* Type mismatch - re-panic */
+            tur_panic_with(global_panic_payload->type_tag, global_panic_payload->value,
+                           global_panic_payload->file, global_panic_payload->line);
+        }
+        return false;
+        }
+    }
 }
 
 /* Phase 19: Algebraic effect handler chain */
@@ -221,14 +353,20 @@ struct FiberBlock {
     void *handler_chain;
     void (*entry_fn)(void);
     void *fiber_local; /* Phase T21: fiber-local storage */
+    void *task_group; /* Parent TaskGroup for cancellation */
+    bool cancelled; /* Set when parent TaskGroup is cancelled */
 };
 
 static __thread FiberBlock *tur_current_fiber = NULL;
+static __thread bool tur_fiber_cancelled_flag = false;
+
+static void tur_task_group_notify_done(void *task_group);
 
 static void tur_fiber_shim(uint32_t hi, uint32_t lo) {
     FiberBlock *f = (FiberBlock *)(((uintptr_t)hi << 32) | (uintptr_t)(uint32_t)lo);
     f->entry_fn();
     f->done = 1;
+    tur_task_group_notify_done(f->task_group);
     swapcontext(&f->ctx, &f->caller_ctx);
     abort();
 }
@@ -253,6 +391,11 @@ static FiberBlock *tur_fiber_block_new(void (*fn)(void), size_t stack_size) {
 
 static int64_t tur_fiber_block_resume(FiberBlock *f, int64_t arg) {
     if (!f || f->done) return f ? f->result : 0;
+    if (f->cancelled) { f->done = 1; return 0; }
+    if (f->task_group) {
+        typedef struct TaskGroupBlock { bool cancelled; } TaskGroupBlock;
+        if (((TaskGroupBlock *)f->task_group)->cancelled) { f->cancelled = 1; f->done = 1; return 0; }
+    }
     FiberBlock *_prev = tur_current_fiber;
     tur_current_fiber = f;
     f->arg = arg;
@@ -300,6 +443,35 @@ static void tur_fiber_block_free(FiberBlock *f) {
     if (!f) return;
     tur_fiber_local_free(f);
     free(f->stack); free(f);
+}
+
+static bool tur_fiber_cancelled(void) {
+    return tur_fiber_cancelled_flag;
+}
+
+static void tur_fiber_set_cancelled(bool c) {
+    tur_fiber_cancelled_flag = c;
+}
+
+static void tur_task_group_notify_done(void *task_group) {
+    if (!task_group) return;
+    typedef struct TaskGroupBlock {
+        pthread_mutex_t lock;
+        pthread_cond_t done_cond;
+        int64_t task_count;
+        int64_t completed_count;
+        bool cancelled;
+        bool done;
+        pthread_t owner_thread;
+    } TaskGroupBlock;
+    TaskGroupBlock *g = (TaskGroupBlock *)task_group;
+    pthread_mutex_lock(&g->lock);
+    g->completed_count++;
+    if (g->completed_count >= g->task_count) {
+        g->done = true;
+        pthread_cond_broadcast(&g->done_cond);
+    }
+    pthread_mutex_unlock(&g->lock);
 }
 
 typedef struct TurScheduler TurScheduler;
@@ -409,59 +581,122 @@ static void tur_scheduler_unpark(FiberBlock *f) {
 #pragma clang diagnostic pop
 #endif
 
-/* Phase T21-F: async/await runtime */
-typedef struct TurAsyncTask TurAsyncTask;
-struct TurAsyncTask {
-    pthread_mutex_t lock;
-    pthread_cond_t  ready;
-    int64_t         value;
-    int             done;
+static void tur_scheduler_run_one(TurScheduler *s) {
+    FiberBlock *f = tur_scheduler_dequeue(s);
+    if (!f) { return; }
+    s->current_fiber = f;
+    tur_fiber_block_resume(f, 0);
+    s->current_fiber = NULL;
+    if (!f->done && !f->parked) tur_scheduler_enqueue(s, f);
+}
+
+/* Phase T21-F: async/await runtime - fiber-based Futures */
+typedef enum { FUTURE_PENDING, FUTURE_FULFILLED, FUTURE_REJECTED } TurFutureStatus;
+
+typedef struct TurFuture TurFuture;
+struct TurFuture {
+    TurFutureStatus status;
+    int64_t value;
+    const char *error;  /* NULL if no error */
+    FiberBlock *fiber;  /* The fiber running the async task */
+    struct { void (*fn)(TurFuture *, int64_t); void *env; } on_complete;
 };
 
-typedef struct { TurAsyncTask *cell; int64_t (*fn)(void *env); void *env; } TurAsyncArg;
-
-static void *tur_async_trampoline(void *raw) {
-    TurAsyncArg *a = (TurAsyncArg *)raw;
-    int64_t result = a->fn(a->env);
-    pthread_mutex_lock(&a->cell->lock);
-    a->cell->value = result;
-    a->cell->done  = 1;
-    pthread_cond_broadcast(&a->cell->ready);
-    pthread_mutex_unlock(&a->cell->lock);
-    free(a);
-    return NULL;
+/* Create a new pending future */
+static TurFuture *tur_future_new(void) {
+    TurFuture *f = (TurFuture *)calloc(1, sizeof(TurFuture));
+    if (!f) { fprintf(stderr, "future: oom\n"); abort(); }
+    f->status = FUTURE_PENDING;
+    f->fiber = NULL;
+    f->on_complete.fn = NULL;
+    return f;
 }
 
-static TurAsyncTask *tur_async_call(int64_t (*fn)(void *env), void *env) {
-    TurAsyncTask *cell = (TurAsyncTask *)malloc(sizeof(TurAsyncTask));
-    if (!cell) { fprintf(stderr, "async: oom\n"); abort(); }
-    pthread_mutex_init(&cell->lock, NULL);
-    pthread_cond_init(&cell->ready, NULL);
-    cell->value = 0; cell->done = 0;
-    TurAsyncArg *arg = (TurAsyncArg *)malloc(sizeof(TurAsyncArg));
-    if (!arg) { free(cell); fprintf(stderr, "async: oom\n"); abort(); }
-    arg->cell = cell; arg->fn = fn; arg->env = env;
-    pthread_t __tid;
-    pthread_create(&__tid, NULL, tur_async_trampoline, arg);
-    pthread_detach(__tid);
-    return cell;
+/* Fulfill a future with a value */
+static void tur_future_fulfill(TurFuture *f, int64_t value) {
+    if (!f || f->status != FUTURE_PENDING) return;
+    f->status = FUTURE_FULFILLED;
+    f->value = value;
+    if (f->on_complete.fn) f->on_complete.fn(f, value);
 }
 
-static int64_t tur_await_future(TurAsyncTask *cell) {
-    pthread_mutex_lock(&cell->lock);
-    while (!cell->done)
-        pthread_cond_wait(&cell->ready, &cell->lock);
-    int64_t v = cell->value;
-    pthread_mutex_unlock(&cell->lock);
-    return v;
+/* Reject a future with an error message */
+static void tur_future_reject(TurFuture *f, const char *error) {
+    if (!f || f->status != FUTURE_PENDING) return;
+    f->status = FUTURE_REJECTED;
+    f->error = error;
 }
 
-static void tur_async_free(TurAsyncTask *cell) {
-    if (!cell) return;
-    pthread_mutex_destroy(&cell->lock);
-    pthread_cond_destroy(&cell->ready);
-    free(cell);
+/* Check if future is done (fulfilled or rejected) */
+static int tur_future_done(TurFuture *f) {
+    return f && (f->status == FUTURE_FULFILLED || f->status == FUTURE_REJECTED);
 }
+
+/* Get future value (only valid if fulfilled) */
+static int64_t tur_future_get(TurFuture *f) {
+    if (!f || f->status != FUTURE_FULFILLED) return 0;
+    return f->value;
+}
+
+static TurFuture *tur_async_fiber(int64_t (*fn)(void)) {
+    TurFuture *future = tur_future_new();
+    if (!tur_scheduler) {
+        /* AW-005: Initialize scheduler on first use */
+        tur_scheduler = tur_scheduler_new();
+    }
+    /* AW-005: Simplified v1 - call function directly and fulfill */
+    int64_t result = fn();
+    tur_future_fulfill(future, result);
+    return future;
+}
+
+/* AW-004: await lowering with shift + scheduler callback */
+static int64_t tur_await_future(TurFuture *f) {
+    if (!f) { fprintf(stderr, "await: null future\n"); abort(); }
+    if (tur_future_done(f)) {
+        if (f->status == FUTURE_REJECTED) {
+            fprintf(stderr, "await: future rejected: %s\n", f->error ? f->error : "unknown");
+            abort();
+        }
+        return f->value;
+    }
+    /* Future not ready */
+    if (!tur_current_fiber) {
+        /* Not in a fiber - run the scheduler until future is done */
+        if (!tur_scheduler) {
+            fprintf(stderr, "await: no scheduler and not in fiber\n");
+            abort();
+        }
+        while (!tur_future_done(f)) {
+            tur_scheduler_run_one(tur_scheduler);
+        }
+    } else {
+        /* In a fiber - yield and let scheduler resume us */
+        /* Register a callback to re-enqueue this fiber when future completes */
+        f->on_complete.fn = (void (*)(TurFuture *, int64_t))tur_fiber_block_resume;
+        f->on_complete.env = (void *)tur_current_fiber;
+        tur_fiber_block_yield(0);
+        /* When we resume, the future should be done */
+        if (tur_future_done(f) && f->status == FUTURE_REJECTED) {
+            fprintf(stderr, "await: future rejected: %s\n", f->error ? f->error : "unknown");
+            abort();
+        }
+        return f->value;
+    }
+    if (f->status == FUTURE_REJECTED) {
+        fprintf(stderr, "await: future rejected: %s\n", f->error ? f->error : "unknown");
+        abort();
+    }
+    return f->value;
+}
+
+static void tur_future_free(TurFuture *f) {
+    if (!f) return;
+    free(f);
+}
+
+/* Backward compatibility: TurAsyncTask = TurFuture */
+typedef TurFuture TurAsyncTask;
 
 static __thread EffectHandlerFrame *global_effect_handler_chain = NULL;
 
@@ -835,8 +1070,8 @@ static bool gc_is_alive(RcControlBlock *cb) {
 static int64_t popcount(int64_t);
 
 static int64_t popcount(int64_t x) {
-__builtin_popcount(x);
-          return 0;
+        __builtin_popcount(x);
+  
 }
 
 int main() {
