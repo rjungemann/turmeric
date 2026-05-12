@@ -1,0 +1,6 @@
+; Phase HKT-P6 test fixture: a typeclass with a KIND_ARROW type parameter.
+; When compiled with --dump-kinds, the kind annotation should be printed.
+(defclass Functor [^f]
+  (fmap [container fn] :int))
+
+(defn main [] :int 0)

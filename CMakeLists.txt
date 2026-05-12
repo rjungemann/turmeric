@@ -31,9 +31,14 @@ add_test(
   COMMAND bash tests/check-span-unknown.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+add_test(
+  NAME tur_flags_tests
+  COMMAND bash tests/run-flags.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 
 # Make sure tur is built before any test is run
-set_tests_properties(tur_tests tur_cli_tests tur_span_tests
+set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
   PROPERTIES DEPENDS tur
 )
 

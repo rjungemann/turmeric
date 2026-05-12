@@ -110,6 +110,198 @@ const char *diag_code_to_string(DiagCode code) {
     }
 }
 
+/* Phase HKT-P5: DiagCode lookup by string (inverse of diag_code_to_string). */
+DiagCode diag_code_from_string(const char *s) {
+    if (!s) return DIAG_CODE_NONE;
+    if (strcmp(s, "TUR-E0001") == 0) return TUR_E0001_TYPE_MISMATCH;
+    if (strcmp(s, "TUR-E0002") == 0) return TUR_E0002_ARITY_MISMATCH;
+    if (strcmp(s, "TUR-E0003") == 0) return TUR_E0003_UNBOUND_SYMBOL;
+    if (strcmp(s, "TUR-E0004") == 0) return TUR_E0004_INVALID_SCOPE;
+    if (strcmp(s, "TUR-E0005") == 0) return TUR_E0005_USE_AFTER_MOVE;
+    if (strcmp(s, "TUR-E0006") == 0) return TUR_E0006_OPERATOR_LOOKUP_FAILED;
+    if (strcmp(s, "TUR-E0007") == 0) return TUR_E0007_CAPTURE_ERROR;
+    if (strcmp(s, "TUR-E0009") == 0) return TUR_E0009_EFFECT_ROW_MISMATCH;
+    if (strcmp(s, "TUR-E0010") == 0) return TUR_E0010_NOT_SEND;
+    if (strcmp(s, "TUR-E0011") == 0) return TUR_E0011_NOT_SYNC;
+    if (strcmp(s, "TUR-E0012") == 0) return TUR_E0012_KIND_MISMATCH;
+    if (strcmp(s, "TUR-E0013") == 0) return TUR_E0013_ORPHAN_INSTANCE;
+    return DIAG_CODE_NONE;
+}
+
+/* Phase HKT-P5: Long-form explanation table (modelled on rustc --explain).
+ * Each entry maps a DiagCode to a multi-paragraph explanation string. */
+typedef struct DiagExplanation {
+    DiagCode    code;
+    const char *text;
+} DiagExplanation;
+
+static const DiagExplanation diag_explanations_[] = {
+    { TUR_E0001_TYPE_MISMATCH,
+      "TUR-E0001: Type mismatch\n"
+      "\n"
+      "The type of an expression does not match the type expected in that\n"
+      "position.\n"
+      "\n"
+      "Example:\n"
+      "  (defn add [x :int y :int] :int (+ x y))\n"
+      "  (add 1 true)   ; error: expected :int, got :bool\n"
+      "\n"
+      "Ensure that argument types, return types, and binding types are\n"
+      "consistent.  Explicit type annotations help the compiler pinpoint the\n"
+      "mismatch.\n"
+    },
+    { TUR_E0002_ARITY_MISMATCH,
+      "TUR-E0002: Arity mismatch\n"
+      "\n"
+      "A function call provides a different number of arguments than the\n"
+      "function declares parameters.\n"
+      "\n"
+      "Example:\n"
+      "  (defn add [x :int y :int] :int (+ x y))\n"
+      "  (add 1)   ; error: expected 2 args, got 1\n"
+      "\n"
+      "Count the parameters in the function definition and match the number\n"
+      "of arguments at the call site.\n"
+    },
+    { TUR_E0003_UNBOUND_SYMBOL,
+      "TUR-E0003: Unbound symbol\n"
+      "\n"
+      "A name is used that has not been defined in any enclosing scope.\n"
+      "\n"
+      "Common causes:\n"
+      "  - Typo in the name.\n"
+      "  - Forgetting to import or require the file that defines the name.\n"
+      "  - Using a name before it is defined (Turmeric is sequential, not\n"
+      "    mutually recursive by default).\n"
+    },
+    { TUR_E0004_INVALID_SCOPE,
+      "TUR-E0004: Invalid scope\n"
+      "\n"
+      "A form is used in a position where it is not allowed.  For example,\n"
+      "using a top-level-only form (defn, defstruct) inside an expression\n"
+      "context, or a control-flow form outside a function body.\n"
+    },
+    { TUR_E0005_USE_AFTER_MOVE,
+      "TUR-E0005: Use after move\n"
+      "\n"
+      "A value was moved (transferred to another binding or passed to a\n"
+      "function that consumes it) and then used again after the move.\n"
+      "\n"
+      "Example:\n"
+      "  (let [r (ref 42)]\n"
+      "    (let [s r]     ; r is moved into s\n"
+      "      (deref r)))  ; error: r was already moved\n"
+      "\n"
+      "Clone or copy the value before moving if you need to use it again,\n"
+      "or restructure the code so ownership is only held in one place at a\n"
+      "time.\n"
+    },
+    { TUR_E0007_CAPTURE_ERROR,
+      "TUR-E0007: Capture error\n"
+      "\n"
+      "A closure or effect-handler case attempts to capture a variable that\n"
+      "cannot safely be captured in that context.\n"
+      "\n"
+      "Effect handler case bodies are emitted as separate C functions with\n"
+      "no access to the enclosing stack frame, so borrow-typed (&T / &mut T)\n"
+      "variables from the enclosing scope cannot be captured by them.\n"
+    },
+    { TUR_E0009_EFFECT_ROW_MISMATCH,
+      "TUR-E0009: Effect-row mismatch\n"
+      "\n"
+      "The effect row of a function call or expression does not match the\n"
+      "effect row expected by the enclosing context.\n"
+      "\n"
+      "Ensure that any algebraic effects used inside a function are listed\n"
+      "in its effect annotation (e.g., #{IO Write}) and that `handle`\n"
+      "blocks cover all effects that are performed inside them.\n"
+    },
+    { TUR_E0010_NOT_SEND,
+      "TUR-E0010: Type is not Send\n"
+      "\n"
+      "An attempt was made to transfer a value of a non-Send type across a\n"
+      "thread boundary (e.g., passing it to (spawn ...) or storing it in a\n"
+      "channel).\n"
+      "\n"
+      "Non-Send types include:\n"
+      "  - rc<T>  (reference-counted; not thread-safe)\n"
+      "  - weak<T> (weak reference into an rc; not thread-safe)\n"
+      "  - Borrow types (&T, &mut T) whose lifetimes do not cross threads.\n"
+      "\n"
+      "Use arc<T> (atomic reference count) or plain values for data that\n"
+      "must cross thread boundaries.\n"
+    },
+    { TUR_E0011_NOT_SYNC,
+      "TUR-E0011: Type is not Sync\n"
+      "\n"
+      "An attempt was made to share a reference to a non-Sync type across\n"
+      "thread boundaries (e.g., placing it behind a shared atomic).\n"
+      "\n"
+      "Non-Sync types include types with interior mutability that is not\n"
+      "protected by a synchronization primitive such as mutex<T> or\n"
+      "rwlock<T>.\n"
+      "\n"
+      "Wrap the value in mutex<T> or rwlock<T> to make shared mutable access\n"
+      "thread-safe.\n"
+    },
+    { TUR_E0012_KIND_MISMATCH,
+      "TUR-E0012: Kind mismatch\n"
+      "\n"
+      "A type expression is used where a type constructor of a different\n"
+      "kind is expected.\n"
+      "\n"
+      "Kinds describe the 'type of a type':\n"
+      "  *        — a fully applied, concrete type  (e.g., int, bool, vec<int>)\n"
+      "  * -> *   — a unary type constructor        (e.g., vec, option, rc)\n"
+      "  * -> * -> *  — a binary type constructor   (e.g., result, either)\n"
+      "\n"
+      "Example:\n"
+      "  (defclass Functor [^f]\n"
+      "    (fmap [container fn] :int))\n"
+      "  (definstance Functor [int])\n"
+      "  ; error: Functor expects a type constructor (kind * -> *),\n"
+      "  ; but int has kind *.\n"
+      "\n"
+      "Pass a type constructor (vec, option, rc, …) where kind '* -> *' is\n"
+      "required, and a concrete type (int, bool, …) where kind '*' is\n"
+      "required.\n"
+    },
+    { TUR_E0013_ORPHAN_INSTANCE,
+      "TUR-E0013: Orphan instance\n"
+      "\n"
+      "A typeclass instance is defined in a file that owns neither the\n"
+      "typeclass nor any of the type arguments of the instance.\n"
+      "\n"
+      "This mirrors the Rust / Haskell 'orphan rule': to avoid conflicting\n"
+      "instances when multiple modules are combined, every instance must be\n"
+      "defined in the same module as either the typeclass or at least one\n"
+      "of the concrete types it is instantiated for.\n"
+      "\n"
+      "In Turmeric v1 (single-file compilation) this diagnostic is advisory\n"
+      "(a warning, not an error) because all definitions share a single file.\n"
+      "It will be promoted to a hard error once the module system lands\n"
+      "(see P19-6).\n"
+      "\n"
+      "To silence the warning, move the instance definition into the file\n"
+      "that defines the typeclass or the file that defines one of the types\n"
+      "used as type arguments.\n"
+    },
+};
+
+#define N_DIAG_EXPLANATIONS \
+    ((int)(sizeof(diag_explanations_) / sizeof(diag_explanations_[0])))
+
+/* Phase HKT-P5: Print the long-form explanation for `code` to `out`.
+ * Returns true if an explanation was found and printed, false otherwise. */
+bool diag_explain(DiagCode code, FILE *out) {
+    for (int i = 0; i < N_DIAG_EXPLANATIONS; i++) {
+        if (diag_explanations_[i].code == code) {
+            fputs(diag_explanations_[i].text, out);
+            return true;
+        }
+    }
+    return false;
+}
 
 
 /* Render a multi-line snippet with context, underlines, and colors.

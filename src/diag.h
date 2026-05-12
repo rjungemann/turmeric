@@ -3,6 +3,7 @@
 
 #include <stdarg.h>
 #include <stdbool.h>
+#include <stdio.h>
 
 #include "forms.h"
 
@@ -156,5 +157,16 @@ void diag_set_json_output(bool enabled);
 
 /* Emit a diagnostic in JSON format */
 void diag_emit_json(DiagLevel level, Span span, DiagCode code, const char *message);
+
+/* Phase HKT-P5: Look up a long-form explanation for a diagnostic code.
+ * If an explanation exists, writes it to `out` and returns true.
+ * If no explanation is registered for `code`, returns false without writing.
+ * `code_str` must be a string like "TUR-E0012" (as returned by
+ * diag_code_to_string); `code` is the corresponding DiagCode enum value. */
+bool diag_explain(DiagCode code, FILE *out);
+
+/* Phase HKT-P5: Parse a TUR-E#### string into its DiagCode.
+ * Returns DIAG_CODE_NONE if the string is not recognised. */
+DiagCode diag_code_from_string(const char *s);
 
 #endif
