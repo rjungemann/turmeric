@@ -169,6 +169,10 @@ void tur_throw(int payload_type, void *payload, int line, const char *file) {
 
 /* Phase R2: tur_panic */
 static int tur_panic_in_progress = 0;
+static tur_frame *global_panic_frame = NULL;
+static void tur_panic_set_frame(tur_frame *f) {
+    global_panic_frame = f;
+}
 static void tur_panic(const char *msg) {
     if (tur_panic_in_progress) {
         fprintf(stderr, "double panic: aborting\n");
@@ -176,6 +180,9 @@ static void tur_panic(const char *msg) {
     }
     tur_panic_in_progress = 1;
     fprintf(stderr, "panic: %s\n", msg ? msg : "(no message)");
+    if (global_panic_frame) {
+        tur_frame_fire_chain(global_panic_frame);
+    }
     abort();
 }
 

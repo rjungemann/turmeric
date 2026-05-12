@@ -1,126 +1,91 @@
-;; Phase 17: Exception types for Turmeric
+;; Phase 17/Phase R3: Exception types for Turmeric
 ;; 
 ;; Standard exception types for error handling
+;; Phase R3: Using defstruct for proper typeclass integration
 
 (extern-c malloc [^int size] :ptr)
 (extern-c free [^ptr p] :void)
 
 ;; ============================================================================
-;; Base Error type
+;; Base Error type (Phase R3: using defstruct)
 ;; ============================================================================
 
 ;; Error - base error type with message and optional cause
-(defn Error-type []
-  ```c
-  typedef struct Error Error;
-  struct Error {
-      const char* message;
-      void* cause;  /* Pointer to another exception or NULL */
-  };
-  return NULL;
-  ```)
+(defstruct Error [message :cstr cause :ptr<void>])
 
-;; Create a new Error
-(defn Error. [message cause]
+;; Create a new Error on the heap
+(defn Error. [message :cstr cause :ptr<void>] :ptr<void>
   ```c
-  typedef struct Error Error;
   Error* err = (Error*)malloc(sizeof(Error));
   err->message = message;
   err->cause = cause;
   return (void*)err;
   ```)
 
-;; Get the message from an Error
-(defn Error-message [err]
+;; Get the message from an Error pointer
+(defn Error-message [err :ptr<void>] :cstr
   ```c
-  typedef struct Error Error;
   Error* e = (Error*)err;
   return (void*)e->message;
   ```)
 
-;; Get the cause from an Error
-(defn Error-cause [err]
+;; Get the cause from an Error pointer
+(defn Error-cause [err :ptr<void>] :ptr<void>
   ```c
-  typedef struct Error Error;
   Error* e = (Error*)err;
   return e->cause;
   ```)
 
 ;; Free an Error
-(defn Error-free [err]
+(defn Error-free [err :ptr<void>] :void
   ```c
   free(err);
   ```)
 
 ;; ============================================================================
-;; IoError type
+;; IoError type (Phase R3: using defstruct)
 ;; ============================================================================
 
-;; IoError - I/O error with message and errno
-(defn IoError-type []
-  ```c
-  typedef struct IoError IoError;
-  struct IoError {
-      const char* message;
-      int errno_;  /* System error number */
-  };
-  return NULL;
-  ```)
+(defstruct IoError [message :cstr errno_val :int])
 
-;; Create a new IoError
-(defn IoError. [message errno_val]
+;; Create a new IoError on the heap
+(defn IoError. [message :cstr errno-val :int] :ptr<void>
   ```c
-  typedef struct IoError IoError;
   IoError* err = (IoError*)malloc(sizeof(IoError));
   err->message = message;
-  err->errno_ = errno_val;
+  err->errno_val = errno_val;
   return (void*)err;
   ```)
 
-;; Get the message from an IoError
-(defn IoError-message [err]
+;; Get the message from an IoError pointer
+(defn IoError-message [err :ptr<void>] :cstr
   ```c
-  typedef struct IoError IoError;
   IoError* e = (IoError*)err;
   return (void*)e->message;
   ```)
 
-;; Get the errno from an IoError
-(defn IoError-errno [err]
+;; Get the errno from an IoError pointer
+(defn IoError-errno [err :ptr<void>] :int
   ```c
-  typedef struct IoError IoError;
   IoError* e = (IoError*)err;
-  return e->errno_;
+  return e->errno_val;
   ```)
 
 ;; Free an IoError
-(defn IoError-free [err]
+(defn IoError-free [err :ptr<void>] :void
   ```c
   free(err);
   ```)
 
 ;; ============================================================================
-;; ParseError type
+;; ParseError type (Phase R3: using defstruct)
 ;; ============================================================================
 
-;; ParseError - parsing error with message and source location
-;; Note: Span is passed as separate fields for now
-(defn ParseError-type []
-  ```c
-  typedef struct ParseError ParseError;
-  struct ParseError {
-      const char* message;
-      int line;
-      int col;
-      const char* file;
-  };
-  return NULL;
-  ```)
+(defstruct ParseError [message :cstr line :int col :int file :cstr])
 
-;; Create a new ParseError
-(defn ParseError. [message line col file]
+;; Create a new ParseError on the heap
+(defn ParseError. [message :cstr line :int col :int file :cstr] :ptr<void>
   ```c
-  typedef struct ParseError ParseError;
   ParseError* err = (ParseError*)malloc(sizeof(ParseError));
   err->message = message;
   err->line = line;
@@ -129,40 +94,36 @@
   return (void*)err;
   ```)
 
-;; Get the message from a ParseError
-(defn ParseError-message [err]
+;; Get the message from a ParseError pointer
+(defn ParseError-message [err :ptr<void>] :cstr
   ```c
-  typedef struct ParseError ParseError;
   ParseError* e = (ParseError*)err;
   return (void*)e->message;
   ```)
 
-;; Get the line from a ParseError
-(defn ParseError-line [err]
+;; Get the line from a ParseError pointer
+(defn ParseError-line [err :ptr<void>] :int
   ```c
-  typedef struct ParseError ParseError;
   ParseError* e = (ParseError*)err;
   return e->line;
   ```)
 
-;; Get the column from a ParseError
-(defn ParseError-col [err]
+;; Get the column from a ParseError pointer
+(defn ParseError-col [err :ptr<void>] :int
   ```c
-  typedef struct ParseError ParseError;
   ParseError* e = (ParseError*)err;
   return e->col;
   ```)
 
-;; Get the file from a ParseError
-(defn ParseError-file [err]
+;; Get the file from a ParseError pointer
+(defn ParseError-file [err :ptr<void>] :cstr
   ```c
-  typedef struct ParseError ParseError;
   ParseError* e = (ParseError*)err;
   return (void*)e->file;
   ```)
 
 ;; Free a ParseError
-(defn ParseError-free [err]
+(defn ParseError-free [err :ptr<void>] :void
   ```c
   free(err);
   ```)
@@ -172,21 +133,22 @@
 ;; ============================================================================
 
 ;; throw-error - sugar for (throw (Error. message nil))
-(defn throw-error [msg]
+(defn throw-error [msg :cstr] :!
   (throw (Error. msg nil)))
 
 ;; throw-io-error - sugar for (throw (IoError. message 0))
-(defn throw-io-error [msg]
+(defn throw-io-error [msg :cstr] :!
   (throw (IoError. msg 0)))
 
 ;; ============================================================================
 ;; ValidationError type (Phase R3)
 ;; ============================================================================
 
+(defstruct ValidationError [message :cstr field :cstr])
+
 (defn ValidationError. [message :cstr field :cstr] :ptr<void>
   ```c
-  typedef struct { const char *message; const char *field; } ValidationError;
-  ValidationError *err = (ValidationError*)malloc(sizeof(ValidationError));
+  ValidationError* err = (ValidationError*)malloc(sizeof(ValidationError));
   err->message = message;
   err->field = field;
   return (void*)err;
@@ -194,15 +156,13 @@
 
 (defn ValidationError-message [err :ptr<void>] :cstr
   ```c
-  typedef struct { const char *message; const char *field; } ValidationError;
-  ValidationError *e = (ValidationError*)err;
+  ValidationError* e = (ValidationError*)err;
   return e->message;
   ```)
 
 (defn ValidationError-field [err :ptr<void>] :cstr
   ```c
-  typedef struct { const char *message; const char *field; } ValidationError;
-  ValidationError *e = (ValidationError*)err;
+  ValidationError* e = (ValidationError*)err;
   return e->field ? e->field : "";
   ```)
 
@@ -215,18 +175,18 @@
 ;; NotFoundError type (Phase R3)
 ;; ============================================================================
 
+(defstruct NotFoundError [what :cstr])
+
 (defn NotFoundError. [what :cstr] :ptr<void>
   ```c
-  typedef struct { const char *what; } NotFoundError;
-  NotFoundError *err = (NotFoundError*)malloc(sizeof(NotFoundError));
-  err->what = (const char*)(intptr_t)what;
+  NotFoundError* err = (NotFoundError*)malloc(sizeof(NotFoundError));
+  err->what = what;
   return (void*)err;
   ```)
 
 (defn NotFoundError-what [err :ptr<void>] :cstr
   ```c
-  typedef struct { const char *what; } NotFoundError;
-  NotFoundError *e = (NotFoundError*)err;
+  NotFoundError* e = (NotFoundError*)err;
   return e->what;
   ```)
 
@@ -239,10 +199,11 @@
 ;; PermissionError type (Phase R3)
 ;; ============================================================================
 
+(defstruct PermissionError [message :cstr path :cstr])
+
 (defn PermissionError. [message :cstr path :cstr] :ptr<void>
   ```c
-  typedef struct { const char *message; const char *path; } PermissionError;
-  PermissionError *err = (PermissionError*)malloc(sizeof(PermissionError));
+  PermissionError* err = (PermissionError*)malloc(sizeof(PermissionError));
   err->message = message;
   err->path = path;
   return (void*)err;
@@ -250,15 +211,13 @@
 
 (defn PermissionError-message [err :ptr<void>] :cstr
   ```c
-  typedef struct { const char *message; const char *path; } PermissionError;
-  PermissionError *e = (PermissionError*)err;
+  PermissionError* e = (PermissionError*)err;
   return e->message;
   ```)
 
 (defn PermissionError-path [err :ptr<void>] :cstr
   ```c
-  typedef struct { const char *message; const char *path; } PermissionError;
-  PermissionError *e = (PermissionError*)err;
+  PermissionError* e = (PermissionError*)err;
   return e->path ? e->path : "";
   ```)
 
@@ -294,8 +253,7 @@
 ;; show-error — format Error as "Error: <message>"
 (defn show-error [err :ptr<void>] :cstr
   ```c
-  typedef struct { const char *message; void *cause; } Error;
-  Error *e = (Error*)err;
+  Error* e = (Error*)err;
   extern size_t strlen(const char*);
   size_t prefix_len = 7; /* "Error: " */
   size_t msg_len = strlen(e->message);
@@ -308,13 +266,12 @@
 ;; show-io-error — format IoError as "IoError: <message> (errno=N)"
 (defn show-io-error [err :ptr<void>] :cstr
   ```c
-  typedef struct { const char *message; int errno_; } IoError;
-  IoError *e = (IoError*)err;
+  IoError* e = (IoError*)err;
   extern size_t strlen(const char*);
   size_t msg_len = strlen(e->message);
   char *buf = (char*)malloc(msg_len + 32);
-  if (e->errno_ != 0) {
-    snprintf(buf, msg_len + 32, "IoError: %s (errno=%d)", e->message, e->errno_);
+  if (e->errno_val != 0) {
+    snprintf(buf, msg_len + 32, "IoError: %s (errno=%d)", e->message, e->errno_val);
   } else {
     snprintf(buf, msg_len + 32, "IoError: %s", e->message);
   }
@@ -324,8 +281,7 @@
 ;; show-parse-error — format ParseError as "ParseError: <message> at <file>:<line>:<col>"
 (defn show-parse-error [err :ptr<void>] :cstr
   ```c
-  typedef struct { const char *message; int line; int col; const char *file; } ParseError;
-  ParseError *e = (ParseError*)err;
+  ParseError* e = (ParseError*)err;
   extern size_t strlen(const char*);
   size_t msg_len = strlen(e->message);
   size_t file_len = strlen(e->file);
@@ -337,8 +293,7 @@
 ;; show-validation-error — format ValidationError as "ValidationError: <message> (field: <field>)"
 (defn show-validation-error [err :ptr<void>] :cstr
   ```c
-  typedef struct { const char *message; const char *field; } ValidationError;
-  ValidationError *e = (ValidationError*)err;
+  ValidationError* e = (ValidationError*)err;
   extern size_t strlen(const char*);
   size_t msg_len = strlen(e->message);
   char *buf;
@@ -356,8 +311,7 @@
 ;; show-not-found-error — format NotFoundError as "NotFoundError: <what> not found"
 (defn show-not-found-error [err :ptr<void>] :cstr
   ```c
-  typedef struct { const char *what; } NotFoundError;
-  NotFoundError *e = (NotFoundError*)err;
+  NotFoundError* e = (NotFoundError*)err;
   extern size_t strlen(const char*);
   size_t what_len = strlen(e->what);
   char *buf = (char*)malloc(what_len + 30);
@@ -368,8 +322,7 @@
 ;; show-permission-error — format PermissionError as "PermissionError: <message> (path: <path>)"
 (defn show-permission-error [err :ptr<void>] :cstr
   ```c
-  typedef struct { const char *message; const char *path; } PermissionError;
-  PermissionError *e = (PermissionError*)err;
+  PermissionError* e = (PermissionError*)err;
   extern size_t strlen(const char*);
   size_t msg_len = strlen(e->message);
   char *buf;
@@ -384,3 +337,20 @@
   return buf;
   ```)
 
+;; Phase R3: Error typeclass instances for stdlib error types
+;; These implement the Error typeclass (error-message, error-cause) for each error type.
+;;
+;; Note: In v1, all error types are represented as ptr<void> at the value level,
+;; but we use defstruct to give them nominal types for typeclass instance resolution.
+;;
+;; Error typeclass instances for each error struct type
+
+;; Error instance for Error (identity)
+;; Note: We can't define instances for defstruct types directly in v1
+;; because the typeclass system doesn't support user-defined struct types yet.
+;; These instances are deferred until proper generic typeclass support lands.
+;;
+;; For now, we implement Error typeclass instances for ptr<void> that handle
+;; each error type by casting and accessing the appropriate fields.
+;;
+;; See stdlib/typeclass.tur for the actual Error typeclass instance implementations.

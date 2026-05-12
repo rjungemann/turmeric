@@ -242,6 +242,47 @@ void expr_print(Buf *b, const Expr *e) {
             expr_print(b, e->as.panic_.payload);
             buf_putc(b, ')');
             break;
+        case EX_PANIC_WITH:
+            buf_puts(b, "(panic-with ");
+            expr_print(b, e->as.panic_with_.payload);
+            buf_putc(b, ')');
+            break;
+        case EX_CATCH_UNWIND:
+            buf_puts(b, "(catch-unwind ");
+            expr_print(b, e->as.catch_unwind_.thunk);
+            buf_putc(b, ')');
+            break;
+        case EX_CATCH_PANIC_OF:
+            buf_puts(b, "(catch-panic-of ");
+            buf_printf(b, "%s ", typekind_to_string(e->as.catch_panic_of_.type_kind));
+            expr_print(b, e->as.catch_panic_of_.thunk);
+            buf_putc(b, ')');
+            break;
+        case EX_PANIC_PAYLOAD_TYPE:
+            buf_puts(b, "(panic-payload-type ");
+            expr_print(b, e->as.panic_payload_type_.payload);
+            buf_putc(b, ')');
+            break;
+        case EX_PANIC_PAYLOAD_VALUE:
+            buf_puts(b, "(panic-payload-value ");
+            expr_print(b, e->as.panic_payload_value_.payload);
+            buf_putc(b, ')');
+            break;
+        case EX_PANIC_PAYLOAD_FILE:
+            buf_puts(b, "(panic-payload-file ");
+            expr_print(b, e->as.panic_payload_file_.payload);
+            buf_putc(b, ')');
+            break;
+        case EX_PANIC_PAYLOAD_LINE:
+            buf_puts(b, "(panic-payload-line ");
+            expr_print(b, e->as.panic_payload_line_.payload);
+            buf_putc(b, ')');
+            break;
+        case EX_PANIC_PAYLOAD_DOWNS:
+            buf_puts(b, "(panic-payload-downcast ");
+            expr_print(b, e->as.panic_payload_downs_.payload);
+            buf_printf(b, " %s)", typekind_to_string(e->as.panic_payload_downs_.target_type));
+            break;
         case EX_TRY:
             buf_puts(b, "(try ");
             expr_print(b, e->as.try_.body);
