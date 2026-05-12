@@ -382,6 +382,10 @@ typedef struct Elab {
     const Symbol *sym_shift0;     /* shift0 */
     const Symbol *sym_call_cc;    /* call/cc (sugar: (reset (shift k (f k)))) */
     const Symbol *sym_escape;     /* escape (sugar: (reset (shift k (f (fn [_] k))))) */
+    /* Phase B2: Cloneable continuations */
+    const Symbol *sym_cloneable_reset;   /* cloneable-reset */
+    const Symbol *sym_cloneable_shift;   /* cloneable-shift */
+    const Symbol *sym_call_cc_star;       /* call/cc* (sugar for cloneable call/cc) */
     /* Phase 19: Algebraic effects */
     const Symbol *sym_defeffect;  /* defeffect */
     const Symbol *sym_perform;    /* perform */
@@ -830,6 +834,10 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_shift0 = intern_cstr(st, "shift0");
     e->sym_call_cc = intern_cstr(st, "call/cc");
     e->sym_escape = intern_cstr(st, "escape");
+    /* Phase B2: Cloneable continuations */
+    e->sym_cloneable_reset = intern_cstr(st, "cloneable-reset");
+    e->sym_cloneable_shift = intern_cstr(st, "cloneable-shift");
+    e->sym_call_cc_star = intern_cstr(st, "call/cc*");
     /* Phase 19: Algebraic effects */
     e->sym_defeffect = intern_cstr(st, "defeffect");
     e->sym_perform = intern_cstr(st, "perform");
@@ -4423,6 +4431,83 @@ static Expr *elab_shift0(Elab *e, const Form *call) {
     return out;
 }
 
+/* Phase B2: Cloneable continuations */
+
+/* (cloneable-reset body) - Establish a continuation boundary with cloneable captures.
+ * Similar to reset, but all captured values must implement Clone.
+ * The body can use cloneable-shift to capture a cloneable continuation. */
+static Expr *elab_cloneable_reset(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(cloneable-reset body) requires exactly one argument");
+        return NULL;
+    }
+    Expr *body = elab_form(e, call->as.list.items[1]);
+    if (!body) return NULL;
+    Expr *out = expr_new(e->arena, EX_CLONEABLE_RESET, body->type, call->span);
+    out->as.cloneable_reset_.body = body;
+    return out;
+}
+
+/* (cloneable-shift k body) - Capture the current cloneable continuation.
+ * Similar to shift, but the continuation passed to k is cloneable (multi-shot).
+ * All captured environment values must implement Clone.
+ * k is a function that receives the cloneable continuation as its first argument.
+ */
+static Expr *elab_cloneable_shift(Elab *e, const Form *call) {
+    if (call->as.list.len != 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(cloneable-shift k body) requires exactly two arguments");
+        return NULL;
+    }
+    Expr *k_expr = elab_form(e, call->as.list.items[1]);
+    if (!k_expr) return NULL;
+    
+    /* Check if k_expr is a function, closure, or a var referencing a function */
+    bool is_function = false;
+    if (k_expr->kind == EX_FN || k_expr->kind == EX_CLOSURE) {
+        is_function = true;
+    } else if (k_expr->kind == EX_VAR) {
+        /* Check if the binding is a function */
+        Binding *b = k_expr->as.var.binding;
+        if (b && (b->type.kind == TY_FN || b->closure_fn_binding)) {
+            is_function = true;
+        }
+    }
+    
+    if (!is_function) {
+        diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
+                  "cloneable-shift requires a function as first argument");
+        return NULL;
+    }
+    
+    Expr *body = elab_form(e, call->as.list.items[2]);
+    if (!body) return NULL;
+    /* The result type of cloneable-shift is the result type of calling k_fn with
+     * a cloneable continuation and body's value. For now, use body's type as placeholder. */
+    Expr *out = expr_new(e->arena, EX_CLONEABLE_SHIFT, body->type, call->span);
+    out->as.cloneable_shift_.k_fn = k_expr;
+    out->as.cloneable_shift_.body = body;
+    return out;
+}
+
+/* (call/cc* f) - Sugar for (cloneable-reset (cloneable-shift k (f k)))
+ * Multi-shot call/cc that produces a cloneable continuation. */
+static Expr *elab_call_cc_star(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(call/cc* f) requires exactly one argument");
+        return NULL;
+    }
+    Expr *f_expr = elab_form(e, call->as.list.items[1]);
+    if (!f_expr) return NULL;
+    
+    /* For now, emit an error that this is not yet implemented. */
+    diag_emit(DIAG_ERROR, call->span,
+              "call/cc* sugar is not yet implemented (Phase B2)");
+    return NULL;
+}
+
 /* Phase 19: Algebraic effects */
 
 /* Forward declaration (defined after elab_defeffect) */
@@ -6017,6 +6102,10 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_shift0)     return elab_shift0(e, call);
     if (name == e->sym_call_cc)    return elab_call_cc(e, call);
     if (name == e->sym_escape)     return elab_escape(e, call);
+    /* Phase B2: Cloneable continuations */
+    if (name == e->sym_cloneable_reset)  return elab_cloneable_reset(e, call);
+    if (name == e->sym_cloneable_shift)  return elab_cloneable_shift(e, call);
+    if (name == e->sym_call_cc_star)      return elab_call_cc_star(e, call);
     /* Phase 19: Algebraic effects */
     if (name == e->sym_defeffect) return elab_defeffect(e, call);
     if (name == e->sym_perform)   return elab_perform(e, call);

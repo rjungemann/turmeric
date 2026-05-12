@@ -97,6 +97,8 @@ static bool expr_contains_effects(const Expr *e) {
         case EX_RESET:
         case EX_SHIFT:
         case EX_SHIFT0:
+        case EX_CLONEABLE_RESET:
+        case EX_CLONEABLE_SHIFT:
             /* These are already lowered or primitive - no further lowering */
             return false;
         default:
@@ -476,6 +478,23 @@ static Expr *lower_expr(Arena *a, SymbolTable *st, Expr *e, EffectEnv *effect_en
             Expr *out = expr_new(a, EX_SHIFT0, e->type, e->span);
             out->as.shift0_.k_fn = new_k_fn;
             out->as.shift0_.body = new_body;
+            return out;
+        }
+        
+        /* Phase B2: Cloneable continuations */
+        case EX_CLONEABLE_RESET: {
+            Expr *new_body = lower_expr(a, st, e->as.cloneable_reset_.body, effect_env);
+            Expr *out = expr_new(a, EX_CLONEABLE_RESET, e->type, e->span);
+            out->as.cloneable_reset_.body = new_body;
+            return out;
+        }
+        
+        case EX_CLONEABLE_SHIFT: {
+            Expr *new_k_fn = lower_expr(a, st, e->as.cloneable_shift_.k_fn, effect_env);
+            Expr *new_body = lower_expr(a, st, e->as.cloneable_shift_.body, effect_env);
+            Expr *out = expr_new(a, EX_CLONEABLE_SHIFT, e->type, e->span);
+            out->as.cloneable_shift_.k_fn = new_k_fn;
+            out->as.cloneable_shift_.body = new_body;
             return out;
         }
         

@@ -226,6 +226,14 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
         row = collect_effects_in_expr(a, e->as.shift0_.k_fn, row, idx, env, subst);
         return collect_effects_in_expr(a, e->as.shift0_.body, row, idx, env, subst);
 
+    /* Phase B2: Cloneable continuations */
+    case EX_CLONEABLE_RESET:
+        return collect_effects_in_expr(a, e->as.cloneable_reset_.body, row, idx, env, subst);
+
+    case EX_CLONEABLE_SHIFT:
+        row = collect_effects_in_expr(a, e->as.cloneable_shift_.k_fn, row, idx, env, subst);
+        return collect_effects_in_expr(a, e->as.cloneable_shift_.body, row, idx, env, subst);
+
     case EX_HANDLE: {
         /* Effects performed inside a handle body are handled (absorbed) by the
          * handler when a matching case exists; only effects NOT covered by a

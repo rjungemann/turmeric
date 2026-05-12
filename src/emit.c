@@ -1237,6 +1237,14 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* Emit body as an expression and return its value */
             return emit_value(ctx, body, e->as.reset_.body);
         }
+        /* Phase B2: Cloneable continuations */
+        case EX_CLONEABLE_RESET: {
+            /* (cloneable-reset body) - like reset but with cloneable captures
+             * For v1 without full cloneable CPS: just evaluate and return body.
+             * Full implementation requires cloneable continuation runtime.
+             */
+            return emit_value(ctx, body, e->as.cloneable_reset_.body);
+        }
         case EX_SHIFT: {
             /* (shift k body) - shift with continuation handler k and value body
              * 
@@ -1294,6 +1302,39 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             if (e->as.shift0_.k_fn->kind == EX_CLOSURE) {
                 /* For closures, k_fn is the env pointer, need to call thunk */
                 struct Closure *closure = e->as.shift0_.k_fn->as.closure_.closure;
+                char *thunk_name = (char *)malloc(64);
+                if (closure->fn->binding) {
+                    snprintf(thunk_name, 64, "%s", closure->fn->binding->name->name);
+                } else {
+                    snprintf(thunk_name, 64, "__fn_anon_%d", closure->fn->params[0]->id);
+                }
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s %s = %s(%s, %s);\n", 
+                          type_c_name(e->type), result, thunk_name, k_fn, body_val);
+                free(thunk_name);
+            } else {
+                /* Regular function call */
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s %s = %s(%s);\n", 
+                          type_c_name(e->type), result, k_fn, body_val);
+            }
+            free(k_fn);
+            free(body_val);
+            return result;
+        }
+        case EX_CLONEABLE_SHIFT: {
+            /* (cloneable-shift k body) - cloneable shift with continuation handler k
+             * For v1 without full cloneable CPS: similar to shift but with cloneable continuation.
+             * Full implementation requires cloneable continuation runtime.
+             */
+            char *body_val = emit_value(ctx, body, e->as.cloneable_shift_.body);
+            char *result = fresh_tmp(ctx);
+            char *k_fn = emit_value(ctx, body, e->as.cloneable_shift_.k_fn);
+            
+            /* For now, emit as a regular function call (same as shift)
+             * Full cloneable support requires runtime implementation */
+            if (e->as.cloneable_shift_.k_fn->kind == EX_CLOSURE) {
+                struct Closure *closure = e->as.cloneable_shift_.k_fn->as.closure_.closure;
                 char *thunk_name = (char *)malloc(64);
                 if (closure->fn->binding) {
                     snprintf(thunk_name, 64, "%s", closure->fn->binding->name->name);
@@ -2547,6 +2588,12 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_RESET:
         case EX_SHIFT:
         case EX_SHIFT0:
+            /* For now, emit a placeholder - full impl deferred */
+            buf_puts(body, "__builtin_trap();");
+            return;
+        /* Phase B2: Cloneable continuations */
+        case EX_CLONEABLE_RESET:
+        case EX_CLONEABLE_SHIFT:
             /* For now, emit a placeholder - full impl deferred */
             buf_puts(body, "__builtin_trap();");
             return;

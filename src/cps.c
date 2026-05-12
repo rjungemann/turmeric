@@ -29,6 +29,8 @@ bool cps_expr_contains_shift(const Expr *e) {
         case EX_RESET:
         case EX_SHIFT:
         case EX_SHIFT0:
+        case EX_CLONEABLE_RESET:
+        case EX_CLONEABLE_SHIFT:
             return true;
         case EX_LET:
             for (uint32_t i = 0; i < e->as.let_.n; i++) {
@@ -386,6 +388,23 @@ static Expr *cps_mark_expr(Arena *a, Expr *e) {
             Expr *out = expr_new(a, EX_SHIFT0, e->type, e->span);
             out->as.shift0_.k_fn = new_k_fn;
             out->as.shift0_.body = new_body;
+            return out;
+        }
+        
+        /* Phase B2: Cloneable continuations - pass through but mark */
+        case EX_CLONEABLE_RESET: {
+            Expr *new_body = cps_mark_expr(a, e->as.cloneable_reset_.body);
+            Expr *out = expr_new(a, EX_CLONEABLE_RESET, e->type, e->span);
+            out->as.cloneable_reset_.body = new_body;
+            return out;
+        }
+        
+        case EX_CLONEABLE_SHIFT: {
+            Expr *new_k_fn = cps_mark_expr(a, e->as.cloneable_shift_.k_fn);
+            Expr *new_body = cps_mark_expr(a, e->as.cloneable_shift_.body);
+            Expr *out = expr_new(a, EX_CLONEABLE_SHIFT, e->type, e->span);
+            out->as.cloneable_shift_.k_fn = new_k_fn;
+            out->as.cloneable_shift_.body = new_body;
             return out;
         }
         
