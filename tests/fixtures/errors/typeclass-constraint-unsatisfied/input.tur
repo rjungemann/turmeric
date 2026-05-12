@@ -1,0 +1,12 @@
+(defclass TC [a]
+  (method [x] :int))
+
+(definstance TC [int]
+  (method [x] x))
+
+;; This should fail: TC[cstr] requires [TC bool] but no TC[bool] instance exists
+(definstance TC [cstr]
+  [TC bool]
+  (method [x] 42))
+
+(defn main [] :int 0)

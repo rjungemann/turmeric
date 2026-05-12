@@ -1,0 +1,22 @@
+;; PTC3 Test: Constraint-based instance selection
+
+(defclass TC [a]
+  (method [x] :int))
+
+(definstance TC [int]
+  (method [x] x))
+
+(definstance TC [bool]
+  (method [x] 0))
+
+;; Instance with constraint - requires TC[int] to exist
+;; PTC3: When we look this up via method call, constraints are checked
+(definstance TC [cstr]
+  [TC int]
+  (method [x] 42))
+
+(defn main [] :int
+  (let [s "hello"]
+    ;; This triggers a lookup of TC[cstr], which checks that TC[int] exists
+    (let [result (.method s)]
+      0)))

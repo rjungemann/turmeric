@@ -30,6 +30,8 @@ typedef enum DiagCode {
     TUR_E0012_KIND_MISMATCH, /* type constructor kind does not match expected kind */
     /* Orphan instance (Phase HKT H4) */
     TUR_E0013_ORPHAN_INSTANCE, /* typeclass instance defined outside typeclass/type origin file */
+    /* Parameterized typeclass constraints (Phase PTC2) */
+    TUR_E0015_TYPECLASS_CONSTRAINT_NOT_SATISFIED, /* constraint cannot be satisfied for type */
 } DiagCode;
 
 typedef enum DiagLevel {

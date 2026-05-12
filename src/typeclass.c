@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+
+
 /* Initialize typeclass environment */
 void typeclass_env_init(TypeClassEnv *env, Arena *arena) {
     env->arena = arena;
@@ -69,7 +71,12 @@ TypeClass *typeclass_env_lookup_typeclass(const TypeClassEnv *env, const Symbol 
  * Phase HKT H2: Properly matches type_args by TypeKind (was "first match wins").
  * For KIND_STAR parameters, compares type_args[i].kind element-wise.
  * Falls back to the first matching typeclass if all type_args are unknown (TY_UNKNOWN).
- * This ensures no performance regression for existing KIND_STAR code paths. */
+ * This ensures no performance regression for existing KIND_STAR code paths.
+ * 
+ * Phase PTC3: Check type parameter constraints on matching instances.
+ * When an instance has constraints (e.g., Clone[Pair a b] requires [Clone a, Clone b]),
+ * verify that the required instances exist for the lookup type arguments.
+ */
 TypeClassInstance *typeclass_env_lookup_instance(const TypeClassEnv *env,
                                                   TypeClass *typeclass,
                                                   Type *type_args, uint8_t n_type_args) {
@@ -101,7 +108,17 @@ TypeClassInstance *typeclass_env_lookup_instance(const TypeClassEnv *env,
             if (!fallback) fallback = inst;
             continue;
         }
-        if (match) return inst;
+        if (!match) continue;
+        
+        /* Phase PTC3: Check type parameter constraints on this instance.
+         * If the instance has constraints like [Clone a, Clone b] for Clone[Pair a b],
+         * verify that Clone[int] and Clone[bool] exist when looking up Clone[Pair int bool]. */
+        if (!typeclass_instance_constraints_satisfied(inst, type_args, n_type_args, env)) {
+            /* Constraints not satisfied - skip this instance */
+            continue;
+        }
+        
+        return inst;
     }
 
     return fallback;
@@ -144,6 +161,53 @@ bool constraint_set_satisfied(const ConstraintSet *cs, Type type, const TypeClas
             return false;
         }
     }
+    return true;
+}
+
+/* Phase PTC3: Check if an instance's type parameter constraints are satisfied
+ * for the given type arguments.
+ * 
+ * For example, if instance is Clone[Pair a b] with constraints [Clone a, Clone b],
+ * and we're looking up Clone[Pair int bool], we need to check that
+ * Clone[int] and Clone[bool] instances exist.
+ * 
+ * The instance's type_param_constraints are stored as TypeConstraint array.
+ * Each TypeConstraint has a typeclass and a type_arg. The type_arg may be:
+ *   - A primitive type (int, bool, etc.) - check directly
+ *   - A type parameter of the instance - substitute with the corresponding type_arg
+ *     from the lookup (Phase PTC4).
+ * 
+ * In PTC3 v1: we only handle concrete type constraints (not type parameter
+ * substitution), which is sufficient for instances like Clone[MyPair] [Clone int].
+ */
+bool typeclass_instance_constraints_satisfied(const TypeClassInstance *inst,
+                                              Type *lookup_type_args, uint8_t n_lookup_args,
+                                              const TypeClassEnv *env) {
+    if (!inst->type_param_constraints || inst->n_type_param_constraints == 0) {
+        /* No constraints - instance is always valid */
+        return true;
+    }
+    
+    for (uint8_t i = 0; i < inst->n_type_param_constraints; i++) {
+        TypeClass *required_tc = inst->type_param_constraints[i].typeclass;
+        Type required_type = inst->type_param_constraints[i].type_arg;
+        
+        /* The required_type might be a type parameter of the instance.
+         * We need to substitute it with the corresponding lookup type argument.
+         * 
+         * For Phase PTC3 v1: We handle the case where required_type is a
+         * concrete type (primitive or struct). The constraint is checked by
+         * looking up an instance of required_tc for required_type.
+         * 
+         * Phase PTC4 will handle substitution of type parameters with
+         * their concrete types from the lookup. */
+        TypeClassInstance *constraint_inst = typeclass_env_lookup_instance(
+            env, required_tc, &required_type, 1);
+        if (!constraint_inst) {
+            return false;
+        }
+    }
+    
     return true;
 }
 

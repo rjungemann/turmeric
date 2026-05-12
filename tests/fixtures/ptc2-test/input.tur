@@ -1,0 +1,18 @@
+;; PTC2 Test: Constraint validation for primitive types
+
+(defclass TC [a]
+  (method [x] :int))
+
+(definstance TC [int]
+  (method [x] x))
+
+(definstance TC [bool]
+  (method [x] 0))
+
+;; Valid: TC[int] exists, so constraint [TC int] is satisfied
+(definstance TC [cstr]
+  [TC int]
+  (method [x] 42))
+
+(defn main [] :int
+  0)

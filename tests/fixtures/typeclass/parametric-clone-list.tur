@@ -1,0 +1,13 @@
+(defstruct list [head :int tail :ptr<void>])
+
+(defclass Clone [a]
+  (clone [x] :int))
+
+(definstance Clone [int]
+  (clone [x] x))
+
+(definstance Clone [list]
+  [Clone int]
+  (clone [x] x))
+
+(defn main [] :int 0)

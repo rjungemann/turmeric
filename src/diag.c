@@ -106,6 +106,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0011_NOT_SYNC:            return "TUR-E0011";
         case TUR_E0012_KIND_MISMATCH:       return "TUR-E0012";
         case TUR_E0013_ORPHAN_INSTANCE:     return "TUR-E0013";
+        case TUR_E0015_TYPECLASS_CONSTRAINT_NOT_SATISFIED: return "TUR-E0015";
         default:                          return "";
     }
 }
@@ -125,6 +126,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0011") == 0) return TUR_E0011_NOT_SYNC;
     if (strcmp(s, "TUR-E0012") == 0) return TUR_E0012_KIND_MISMATCH;
     if (strcmp(s, "TUR-E0013") == 0) return TUR_E0013_ORPHAN_INSTANCE;
+    if (strcmp(s, "TUR-E0015") == 0) return TUR_E0015_TYPECLASS_CONSTRAINT_NOT_SATISFIED;
     return DIAG_CODE_NONE;
 }
 
@@ -285,6 +287,24 @@ static const DiagExplanation diag_explanations_[] = {
       "To silence the warning, move the instance definition into the file\n"
       "that defines the typeclass or the file that defines one of the types\n"
       "used as type arguments.\n"
+    },
+    { TUR_E0015_TYPECLASS_CONSTRAINT_NOT_SATISFIED,
+      "TUR-E0015: Typeclass constraint not satisfied\n"
+      "\n"
+      "A typeclass instance declaration includes a constraint that cannot be\n"
+      "satisfied because no matching typeclass instance exists.\n"
+      "\n"
+      "Example:\n"
+      "  (defclass Clone [a] (clone [x : a] : a))\n"
+      "  (definstance Clone [int] (clone [x] x))\n"
+      "  (definstance Clone [Pair a b] [Clone a] ...)  ; error if Clone[a] missing\n"
+      "\n"
+      "In Phase PTC2 (v1), constraints are only validated for primitive types\n"
+      "(int, bool, cstr, nil, float, ptr<void>). Constraints on user-defined\n"
+      "types are stored but not validated until PTC3 lands.\n"
+      "\n"
+      "Define an instance of the required typeclass for the constrained type,\n"
+      "or remove the constraint if it is not needed.\n"
     },
 };
 
