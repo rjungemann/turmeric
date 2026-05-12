@@ -1,0 +1,9 @@
+(defn main [] :int
+  (let [r (rc/of 9)]
+    (let [p (rc->ptr r)]
+      (unsafe
+        (defer
+          (let [b (& p)]
+            (println 3)))
+        (println 1)))
+    0))
