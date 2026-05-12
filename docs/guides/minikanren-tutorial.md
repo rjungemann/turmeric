@@ -77,15 +77,15 @@ Although the implementation is explicit loops, the usage pattern matches miniKan
 ```text
 miniKanren-style relational example
 ----------------------------------
-Parents:
+Parents of:
 bart
 homer
 marge
-Children:
+Children of:
 homer
 bart
 lisa
-Grandparents:
+Grandparents of:
 bart
 abe
 mona
