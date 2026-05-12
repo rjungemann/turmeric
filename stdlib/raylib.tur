@@ -1,6 +1,6 @@
 ;; stdlib/raylib.tur — Turmeric FFI bindings for the Raylib game shim
 ;;
-;; All functions are implemented in games/snake/src/rayLibShim.c.
+;; All functions are implemented in examples/snake/src/rayLibShim.c.
 ;; Integer parameters and return values use :int (Turmeric's int64_t).
 ;; Void returns use :void.
 ;;

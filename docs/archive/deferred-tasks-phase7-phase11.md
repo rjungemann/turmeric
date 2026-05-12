@@ -73,16 +73,16 @@ implemented entirely in user-space Turmeric.
 #### A0a) Procedural / compile-time macro evaluation (prerequisite for user-land `cond`)
 *Blocks: A — `cond` user-land macro. Root cause: `elab.c` macro expansion uses template substitution only (`substitute_params`); `interp.c` has a partial Form-level evaluator (`interp_eval`) that is not wired into elaboration. `cond` requires the macro body to be executed as code at expansion time so it can inspect and recursively decompose its clause list.*
 
-- [ ] Audit `interp_eval` coverage gaps: document which special forms (`if`, `let`/`let*`, `do`, `fn`, `quote`, `quasiquote`) are missing or stubbed out.
-- [ ] Extend `interp_eval` in `interp.c` to evaluate `if` (conditional branch), `do` (sequential body), `let` (local binding), and `fn` (lambda) forms needed in macro bodies.
-- [ ] Extend `interp_eval` to handle quasiquote / unquote / unquote-splicing correctly (currently stubbed as `return f`). Reuse or adapt `quasiquote_expand_form` from `elab.c`.
-- [ ] Register compile-time form-manipulation builtins in the interpreter environment: `first`, `rest`, `second`, `nil?`, `empty?`, `list?`, `cons`, `list`, `=`, `not`. These receive and return `Form *` values (unevaluated AST nodes).
-- [ ] Wire `elab_expand_macro` in `elab.c` to use `interp_eval` to evaluate the macro body with parameters bound to their argument forms, instead of (or in addition to) calling `substitute_params`. The result is a `Form *` that is then passed to `elab_form` for elaboration.
-- [ ] Ensure recursive macro self-calls work end-to-end: when a macro body produces a form whose head is the same macro name, `elab_form` → macro lookup → `elab_expand_macro` chain re-enters correctly with a decremented depth guard (max depth from `interp.c` `MAX_MACRO_DEPTH`).
-- [ ] Add fixture `macro-body-if` — macro that uses `if` in its body to conditionally produce different output.
-- [ ] Add fixture `macro-body-let` — macro that uses `let` in its body to destructure or compute intermediate values.
-- [ ] Add fixture `macro-recursive` — a simple recursive macro (e.g., `my-or` expanding `(my-or a b c)` → `(if a a (my-or b c))`) that exercises re-entry through `elab_form`.
-- [ ] Add negative fixture `errors/macro-recursive-depth` — macro that recurses without a base case hits depth limit with a useful diagnostic.
+- [x] Audit `interp_eval` coverage gaps: document which special forms (`if`, `let`/`let*`, `do`, `fn`, `quote`, `quasiquote`) are missing or stubbed out.
+- [x] Extend `interp_eval` in `interp.c` to evaluate `if` (conditional branch), `do` (sequential body), `let` (local binding), and `fn` (lambda) forms needed in macro bodies.
+- [x] Extend `interp_eval` to handle quasiquote / unquote / unquote-splicing correctly (currently stubbed as `return f`). Reuse or adapt `quasiquote_expand_form` from `elab.c`.
+- [x] Register compile-time form-manipulation builtins in the interpreter environment: `first`, `rest`, `second`, `nil?`, `empty?`, `list?`, `cons`, `list`, `=`, `not`. These receive and return `Form *` values (unevaluated AST nodes).
+- [x] Wire `elab_expand_macro` in `elab.c` to use `interp_eval` to evaluate the macro body with parameters bound to their argument forms, instead of (or in addition to) calling `substitute_params`. The result is a `Form *` that is then passed to `elab_form` for elaboration.
+- [x] Ensure recursive macro self-calls work end-to-end: when a macro body produces a form whose head is the same macro name, `elab_form` → macro lookup → `elab_expand_macro` chain re-enters correctly with a decremented depth guard (max depth from `interp.c` `MAX_MACRO_DEPTH`).
+- [x] Add fixture `macro-body-if` — macro that uses `if` in its body to conditionally produce different output.
+- [x] Add fixture `macro-body-let` — macro that uses `let` in its body to destructure or compute intermediate values.
+- [x] Add fixture `macro-recursive` — a simple recursive macro (e.g., `my-or` expanding `(my-or a b c)` → `(if a a (my-or b c))`) that exercises re-entry through `elab_form`.
+- [x] Add negative fixture `errors/macro-recursive-depth` — macro that recurses without a base case hits depth limit with a useful diagnostic.
 
 #### A) Stdlib macro parity
 *Depends on A0 (variadic macros) and A0a (procedural macro evaluation) being complete.*

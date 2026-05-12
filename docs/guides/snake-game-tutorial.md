@@ -35,7 +35,7 @@ A **hands-on guide** to building the Snake game with CMake + CPM + Raylib + Turm
 
 ```bash
 # From fith/ root
-mkdir -p games/snake/src games/snake/assets cmake
+mkdir -p examples/snake/src examples/snake/assets cmake
 ```
 
 ### 0.2 Download CPM.cmake
@@ -57,19 +57,19 @@ include(cmake/CPM.cmake)
 # Build Turmeric compiler
 add_subdirectory(src)
 
-# Games
-add_subdirectory(games)
+# Examples
+add_subdirectory(examples)
 ```
 
 ### 0.4 Create Snake CMakeLists.txt
 
 ```cmake
-# fith/games/snake/CMakeLists.txt
+# fith/examples/snake/CMakeLists.txt
 CPMAddPackage(
   NAME raylib
   GITHUB_REPO raysan5/raylib
   VERSION 5.0
-  OPTIONS "BUILD_EXAMPLES OFF" "BUILD_GAMES OFF"
+  OPTIONS "BUILD_EXAMPLES OFF"
 )
 
 # The shim + main entry point
@@ -89,7 +89,7 @@ add_custom_command(
 ### 0.5 Create the C Shim
 
 ```c
-// fith/games/snake/src/rayLibShim.c
+// fith/examples/snake/src/rayLibShim.c
 #include <raylib.h>
 
 // Window
@@ -127,7 +127,7 @@ If this compiles, your project setup is correct. The next steps add Turmeric cod
 Create your first Turmeric file that opens a window.
 
 ```clojure
-;; fith/games/snake/src/main.tur
+;; fith/examples/snake/src/main.tur
 (module main)
 
 (extern-c init-window [^int w ^int h ^cstr title] : void)
@@ -149,7 +149,7 @@ Create your first Turmeric file that opens a window.
 - `-main` is the entry point
 - Window opens and stays open until you close it
 
-**Test:** Run `./games/snake/snake` — you should see a black window.
+**Test:** Run `./examples/snake/snake` — you should see a black window.
 
 ---
 
@@ -205,7 +205,7 @@ Draw a white rectangle in the middle of the screen.
 Introduce a struct to hold game state. This will eventually contain the snake, food, score, etc.
 
 ```clojure
-;; fith/games/snake/src/state.tur
+;; fith/examples/snake/src/state.tur
 (module state)
 
 (defstruct GameState
@@ -219,7 +219,7 @@ Introduce a struct to hold game state. This will eventually contain the snake, f
 ```
 
 ```clojure
-;; fith/games/snake/src/main.tur
+;; fith/examples/snake/src/main.tur
 (module main)
 (import state)
 
@@ -303,7 +303,7 @@ Make the rectangle move with arrow keys.
 Replace the single rectangle with a snake made of segments stored in a vector.
 
 ```clojure
-;; fith/games/snake/src/state.tur
+;; fith/examples/snake/src/state.tur
 (module state)
 
 (defstruct Segment [x : int, y : int])
@@ -320,7 +320,7 @@ Replace the single rectangle with a snake made of segments stored in a vector.
 ```
 
 ```clojure
-;; fith/games/snake/src/main.tur
+;; fith/examples/snake/src/main.tur
 (module main)
 (import state)
 
@@ -381,7 +381,7 @@ Replace the single rectangle with a snake made of segments stored in a vector.
 Use typeclasses to make drawing polymorphic — any type that implements `Drawable` can be drawn.
 
 ```clojure
-;; fith/games/snake/src/state.tur
+;; fith/examples/snake/src/state.tur
 (module state)
 
 (defclass Drawable [a]
@@ -414,7 +414,7 @@ Use typeclasses to make drawing polymorphic — any type that implements `Drawab
 ```
 
 ```clojure
-;; fith/games/snake/src/main.tur
+;; fith/examples/snake/src/main.tur
 (module main)
 (import state)
 
@@ -439,7 +439,7 @@ defn draw-state [^state/GameState s]
 This is where it gets interesting. Introduce algebraic effects to separate rendering logic from game logic.
 
 ```clojure
-;; fith/games/snake/src/effects.tur
+;; fith/examples/snake/src/effects.tur
 (module effects)
 
 ;; Define our effects
@@ -448,7 +448,7 @@ This is where it gets interesting. Introduce algebraic effects to separate rende
 ```
 
 ```clojure
-;; fith/games/snake/src/state.tur
+;; fith/examples/snake/src/state.tur
 (module state)
 (import effects)
 
@@ -482,7 +482,7 @@ This is where it gets interesting. Introduce algebraic effects to separate rende
 ```
 
 ```clojure
-;; fith/games/snake/src/main.tur
+;; fith/examples/snake/src/main.tur
 (module main)
 (import state)
 (import effects)
@@ -537,7 +537,7 @@ defn -main []
 Add wall and self-collision detection using pattern matching.
 
 ```clojure
-;; fith/games/snake/src/state.tur
+;; fith/examples/snake/src/state.tur
 (module state)
 (import effects)
 
@@ -586,7 +586,7 @@ defn check-collisions [^GameState state] : bool
 ```
 
 ```clojure
-;; fith/games/snake/src/main.tur
+;; fith/examples/snake/src/main.tur
 (module main)
 (import state)
 (import effects)
@@ -645,7 +645,7 @@ defn -main []
 Add food that the snake can eat, with score tracking.
 
 ```clojure
-;; fith/games/snake/src/state.tur
+;; fith/examples/snake/src/state.tur
 (module state)
 (import effects)
 
@@ -709,7 +709,7 @@ defn check-collisions [^GameState state] : (or bool GameState)
 ```
 
 ```clojure
-;; fith/games/snake/src/main.tur
+;; fith/examples/snake/src/main.tur
 (module main)
 (import state)
 (import effects)
@@ -773,7 +773,7 @@ defn -main []
 Properly handle game over with a clean exit and final score display.
 
 ```clojure
-;; fith/games/snake/src/main.tur
+;; fith/examples/snake/src/main.tur
 (module main)
 (import state)
 (import effects)
@@ -830,7 +830,7 @@ defn -main []
 Use `defer` to ensure the window is always closed, even if an error occurs.
 
 ```clojure
-;; fith/games/snake/src/main.tur
+;; fith/examples/snake/src/main.tur
 (module main)
 (import state)
 (import effects)
@@ -998,7 +998,7 @@ defn update-snake [^state/Snake snake ^float dt] : state/Snake
 Here's the final, polished game loop:
 
 ```clojure
-;; fith/games/snake/src/main.tur
+;; fith/examples/snake/src/main.tur
 (module main)
 (import state)
 (import effects)
@@ -1098,7 +1098,7 @@ fith/
 ├── CMakeLists.txt
 ├── cmake/
 │   └── CPM.cmake
-├── games/
+├── examples/
 │   └── snake/
 │       ├── CMakeLists.txt
 │       └── src/

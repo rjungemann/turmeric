@@ -99,6 +99,9 @@ typedef enum ExprKind {
     EX_RESUME,         /* (resume k value) - resume continuation with value */
     EX_DISCONTINUE,    /* (discontinue k exception) - discontinue with exception */
     EX_CONT_PRED,      /* (cont? k) - check if continuation is unconsumed */
+    /* Phase T21-F: async/await sugar */
+    EX_ASYNC,          /* (async fn-expr) - run no-arg fn in thread; return Future (ptr<void>) */
+    EX_AWAIT,          /* (await fut)     - block on Future; return int value */
     /* Phase 11: Struct operations */
     EX_MAKE_STRUCT,    /* (make-struct Name v1 v2 ...) - struct literal */
     EX_GET_FIELD,      /* (.field s) - struct field access */
@@ -306,6 +309,9 @@ struct Expr {
         struct { ResumeExpr *resume; }               resume_;      /* (resume k v) */
         struct { DiscontinueExpr *discontinue; }     discontinue_; /* (discontinue k e) */
         struct { Expr *expr; }                       cont_pred_;   /* (cont? k) */
+        /* Phase T21-F: async/await */
+        struct { Expr *fn_expr; }                    async_;       /* (async fn-expr) */
+        struct { Expr *fut_expr; }                   await_;       /* (await fut) */
 
         /* Phase 11: Struct operations */
         struct { StructDef *def; Expr **field_values; uint32_t n_fields; } make_struct_; /* (make-struct Name v1...) */

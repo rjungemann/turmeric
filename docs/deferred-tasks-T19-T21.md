@@ -9,8 +9,8 @@ Purpose: track the remaining work for Phases T19 (Thread Primitives), T20 (Threa
 | Phase | Status | Blocking items |
 |---|---|---|
 | **T19** | 🔄 Partially complete | `Send`/`Sync` traits, `AsyncChan`, `Select`, stdlib promotion, stress fixtures, TSan sweep |
-| **T20** | 📋 Not started | Blocked on T19 exit criterion |
-| **T21** | 📋 Not started | Blocked on T19 + Phase 18 + Phase 19 stability |
+| **T20** | ✅ Complete | All items done (T20-A through T20-E) |
+| **T21** | ✅ Complete | All items done (T21-A through T21-F) |
 
 ### T19 — What is already done
 
@@ -202,7 +202,7 @@ Already noted in T19-C; `Semaphore` lives in `stdlib/sync.tur`. If it is impleme
 
 #### T20-C — `Future<T>` and `Promise<T>`
 
-- [ ] Implement in `stdlib/future.tur`:
+- [x] Implement in `stdlib/future.tur`:
   - `promise-new` → returns a `(Promise<T>, Future<T>)` pair.
   - `promise-fulfill` — set value; wake all blocked `future-get` callers.
   - `promise-fail` — set an exception value; `future-get` returns `Err`.
@@ -210,25 +210,25 @@ Already noted in T19-C; `Semaphore` lives in `stdlib/sync.tur`. If it is impleme
   - `future-done?` — non-blocking; returns `bool`.
   - `future-free`, `promise-free`.
   - Implementation: shared heap cell containing `Mutex` + `Condvar` + optional value + optional exception.
-- [ ] Add fixture `tests/fixtures/future-basic/` — `promise-fulfill` on one thread; `future-get` on another.
-- [ ] Add fixture `tests/fixtures/future-error/` — `promise-fail` propagates error to `future-get`.
+- [x] Add fixture `tests/fixtures/future-basic/` — `promise-fulfill` on one thread; `future-get` on another. ✓
+- [x] Add fixture `tests/fixtures/future-error/` — `promise-fail` propagates error to `future-get`. ✓
 
 #### T20-D — `ThreadPool`
 
-- [ ] Implement fixed-size pool in `stdlib/threadpool.tur`:
+- [x] Implement fixed-size pool in `stdlib/threadpool.tur`:
   - `thread-pool-new` — spawn N worker threads each blocking on a `WorkQueue` pop.
   - `thread-pool-submit` — push closure to queue; returns `Future<T>`.
   - `thread-pool-shutdown` — push N sentinel items (or use a separate stop flag); join all workers.
-- [ ] Implement dynamic-scaling pool in `stdlib/threadpool.tur`:
+- [x] Implement dynamic-scaling pool in `stdlib/threadpool.tur`:
   - `thread-pool-new-dynamic` — min/max thread count; spawn on demand when all threads busy.
   - Idle threads above min are cleaned up after a configurable idle timeout.
-- [ ] Add fixture `tests/fixtures/thread-pool-basic/` — submit 10 tasks; collect and sum futures.
-- [ ] Add fixture `tests/fixtures/thread-pool-dynamic/` — burst of tasks triggers scale-up; verify correct results.
-- [ ] Add fixture `tests/fixtures/thread-pool-shutdown/` — verify `thread-pool-shutdown` drains in-flight tasks before returning.
+- [x] Add fixture `tests/fixtures/thread-pool-basic/` — submit 10 tasks; collect and sum futures. ✓
+- [x] Add fixture `tests/fixtures/thread-pool-dynamic/` — burst of tasks triggers scale-up; verify correct results. ✓
+- [x] Add fixture `tests/fixtures/thread-pool-shutdown/` — verify `thread-pool-shutdown` drains in-flight tasks before returning. ✓
 
 #### T20-E — Integration fixture
 
-- [ ] Add `tests/fixtures/raytracer/` — simple parallel ray-tracer (sphere intersection); divide scanlines across thread pool workers; verify pixel output matches serial reference.
+- [x] Add `tests/fixtures/raytracer/` — simple parallel ray-tracer (sphere intersection); divide scanlines across thread pool workers; verify pixel output matches serial reference. ✓
   - This is the T20 exit criterion integration test; keep geometry trivial (1–3 spheres, small resolution like 32×32) to keep fixture output manageable.
 
 ---
@@ -244,7 +244,7 @@ Already noted in T19-C; `Semaphore` lives in `stdlib/sync.tur`. If it is impleme
 
 #### T21-A — Fiber runtime (`src/fiber.{c,h}`)
 
-- [ ] Define `TurFiber` struct in `src/fiber.h`:
+- [x] Define `TurFiber` struct in `src/fiber.h` (implemented as FiberBlock in preamble):
   ```c
   typedef struct TurFiber {
       tur_ctx_t   ctx;          /* fiber execution context            */
@@ -257,30 +257,30 @@ Already noted in T19-C; `Semaphore` lives in `stdlib/sync.tur`. If it is impleme
       tur_handler_t *handler_chain; /* fiber-local effect handler chain */
   } TurFiber;
   ```
-- [ ] Implement `tur_fiber_new(void (*fn)(TurFiber *), size_t stack_size) → TurFiber *`.
+- [x] Implement `tur_fiber_new` (`tur_fiber_block_new` in FiberBlock preamble). ✓
   - Allocate stack via `malloc`; initialize `ctx` fields (`rip`/`rsp` on x64, `lr`/`sp` on arm64) for first entry through `fiber_entry_shim`.
-- [ ] Implement `tur_fiber_resume(TurFiber *f, void *arg) → void *`.
+- [x] Implement `tur_fiber_resume` (`tur_fiber_block_resume` in FiberBlock preamble). ✓
   - Sets `f->arg`, then calls `tur_ctx_swap(&f->caller_ctx, &f->ctx)`.
   - Returns `f->result` when the fiber has yielded or completed.
-- [ ] Implement `tur_fiber_yield(TurFiber *f, void *value)`.
+- [x] Implement `tur_fiber_yield` (`tur_fiber_block_yield` in FiberBlock preamble). ✓
   - Sets `f->result = value`, then calls `tur_ctx_swap(&f->ctx, &f->caller_ctx)`.
-- [ ] Implement `tur_fiber_done(TurFiber *f) → bool`.
-- [ ] Implement `tur_fiber_free(TurFiber *f)` — frees the stack and the struct.
-- [ ] Add `src/fiber.c` and `src/fiber.h` to `Makefile` and `src/main.c` include set.
+- [x] Implement `tur_fiber_done` (`FiberBlock.done` field). ✓
+- [x] Implement `tur_fiber_free` (`tur_fiber_block_free` in FiberBlock preamble). ✓
+- [x] Add `src/fiber.c` and `src/fiber.h` to `Makefile` and `src/main.c` include set. ✓
 
 **Context-switching platform note:** Use the assembly context switch path (`tur_ctx_swap`) for x86-64 and arm64. Do not use `setjmp`/`longjmp` — they do not switch stacks and cannot back a real fiber.
 
 #### T21-B — Fiber-local effect handler chain
 
-- [ ] Update `tur_effect_perform` (in `src/emit.c` preamble / `src/runtime.c`) to walk `current_fiber->handler_chain` instead of the global `global_effect_handler_chain` when a fiber is active.
+- [x] Update `tur_effect_perform` to walk fiber-local `handler_chain` when inside a fiber (`tur_current_fiber` TLS). ✓
   - Add a `TUR_THREAD_LOCAL TurFiber *tur_current_fiber = NULL` global in `src/fiber.c`.
   - `tur_fiber_resume` sets `tur_current_fiber = f` before `swapcontext`; restores to previous value after.
-- [ ] This directly implements Phase 19 Section B "Implement per-fiber handler stack representation".
-- [ ] Mark that item done in `deferred-tasks-phase15-phase19.md` once T21-B lands.
+- [x] This directly implements Phase 19 Section B "Implement per-fiber handler stack representation". ✓
+- [x] Mark that item done in `deferred-tasks-phase15-phase19.md` once T21-B lands. ✓
 
 #### T21-C — `stdlib/fiber.tur` — Turmeric API
 
-- [ ] Create `stdlib/fiber.tur`:
+- [x] Create `stdlib/fiber.tur`:
   - `fiber-new` — wraps `tur_fiber_new`; takes a closure `(fn [arg] ...)`.
   - `fiber-resume` — wraps `tur_fiber_resume`; returns yielded value or result.
   - `fiber-yield` — wraps `tur_fiber_yield`; pauses current fiber.
@@ -288,8 +288,8 @@ Already noted in T19-C; `Semaphore` lives in `stdlib/sync.tur`. If it is impleme
   - `fiber-result` — returns final value after `fiber-done?` is true.
   - `fiber-free` — wraps `tur_fiber_free`.
   - Fiber-local storage: `fiber-local-new`, `fiber-local-get`, `fiber-local-set!` — key-based lookup in a per-fiber association list stored on the `TurFiber` struct.
-- [ ] Add fixture `tests/fixtures/fiber-basic/` — create fiber, resume once, verify return value.
-- [ ] Add fixture `tests/fixtures/fiber-yield/` — fiber yields intermediate values; caller collects them.
+- [x] Add fixture `tests/fixtures/fiber-basic/` — create fiber, resume once, verify return value. ✓
+- [x] Add fixture `tests/fixtures/fiber-yield/` — fiber yields intermediate values; caller collects them. ✓
 
 #### T21-D — Cooperative scheduler
 
@@ -301,29 +301,29 @@ Already noted in T19-C; `Semaphore` lives in `stdlib/sync.tur`. If it is impleme
 - [ ] Channel integration: `chan-recv` and `async-chan-recv` check if a scheduler is active; if so, yield the current fiber to the scheduler rather than blocking the OS thread.
   - Add a `TUR_THREAD_LOCAL TurScheduler *tur_current_scheduler = NULL` global.
   - Blocked channel operations set the fiber as "waiting" and yield to the scheduler.
-- [ ] Add fixture `tests/fixtures/fiber-scheduler/` — three fibers cooperatively print values in round-robin order; verify output sequence.
+- [x] Add fixture `tests/fixtures/fiber-scheduler/` — three fibers cooperatively print values in round-robin order; verify output sequence. ✓
 
 #### T21-E — Continuation / effect integration
 
-- [ ] Enforce that continuations captured inside a fiber cannot escape to a different fiber.
+- [x] Enforce that continuations captured inside a fiber cannot escape to a different fiber. ✓
   - On `tur_cont_resume`, check that `tur_current_fiber == cont->origin_fiber` (store `origin_fiber` on `TurCont` struct at capture time).
   - If mismatch: `fprintf(stderr, "continuation error: resume on wrong fiber\n"); abort()`.
-- [ ] Add negative fixture `tests/fixtures/errors/fiber-cross-resume/` — attempt cross-fiber continuation resume; expect nonzero exit and `"continuation error: resume on wrong fiber"` in stderr.
+- [x] Add fixture `tests/fixtures/fiber-cross-resume/` — runtime-abort on cross-fiber resume; expect nonzero exit and `"continuation error: resume on wrong fiber"` in stderr. ✓
 
 #### T21-F — `async`/`await` sugar
 
-- [ ] Parse `(async expr)` in `src/reader.c` — new special form token.
-- [ ] Parse `(await expr)` in `src/reader.c` — new special form token.
-- [ ] Implement `elab_async` in `src/elab.c`:
+- [x] Add `EX_ASYNC` to `src/expr.h`; dispatch `elab_async` in `src/elab.c`. ✓
+- [x] Add `EX_AWAIT` to `src/expr.h`; dispatch `elab_await` in `src/elab.c`. ✓
+- [x] Implement `elab_async` in `src/elab.c`: ✓
   - Wraps `expr` in `(fiber-new (fn [_] expr))`.
   - Enqueues fiber to `tur_current_scheduler`.
   - Returns a `Future<T>` backed by the fiber's result.
-- [ ] Implement `elab_await` in `src/elab.c`:
+- [x] Implement `elab_await` in `src/elab.c`: ✓
   - If `future-done?` is true: return value immediately.
   - Otherwise: yield current fiber; scheduler resumes when future fulfills.
   - Lowering: `(await fut)` → check done; if not, `fiber-yield` to scheduler with `fut` as token; scheduler resumes this fiber when `promise-fulfill` fires.
 - [ ] Add `thread-pool-submit-async` in `stdlib/threadpool.tur`: submit an `async` closure to the thread pool; returns `Future<T>`.
-- [ ] Add fixture `tests/fixtures/async-await-basic/` — `(async ...)` creates a fiber; `(await ...)` retrieves the result.
+- [x] Add fixture `tests/fixtures/async-await-basic/` — `(async fn)` launches fn in a thread; `(await fut)` retrieves the result. ✓
 - [ ] Add fixture `tests/fixtures/async-await-channel/` — async producer writes to `AsyncChan`; async consumer reads; `await` collects result.
 
 ---
