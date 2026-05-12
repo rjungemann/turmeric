@@ -1,0 +1,4 @@
+(defn main [] :int
+  (let [r (ref 42)]
+    (thread-spawn (fn [] (println @r))))
+  0)

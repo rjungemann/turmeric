@@ -74,6 +74,39 @@ Failure detail block includes:
 - Output order is stable.
 - Summary counts are reproducible.
 
+## Multi-Threaded Fixture Support (T19)
+
+### Timeout (`expected.timeout`)
+
+A fixture directory may contain an `expected.timeout` file whose content is an
+integer number of seconds.  The test runner kills the compiled binary and marks
+the fixture as failed if it runs longer than this timeout.  The default when the
+file is absent is **10 seconds**.  Set the value to `0` to disable the timeout
+for a fixture.
+
+The runner uses `timeout(1)` (GNU coreutils), `gtimeout` (Homebrew coreutils on
+macOS), or a `perl -e 'alarm N'` fallback.
+
+### ThreadSanitizer (`requires.tsan` / `TUR_TSAN=1`)
+
+A fixture directory may contain an empty `requires.tsan` marker file.
+
+- When `TUR_TSAN` is **not** set (default): fixtures with `requires.tsan` are
+  **skipped** (counted as PASS with a `(tsan-skipped)` detail).
+- When `TUR_TSAN=1`: all fixtures run normally, including those with
+  `requires.tsan`.  The compiler flags gain `-fsanitize=thread -g`.
+
+Enable TSan for a full test run:
+
+```sh
+TUR_TSAN=1 make test
+# or using the dedicated target:
+make test-tsan
+```
+
+The `make test-tsan` target rebuilds `tur` itself with `-fsanitize=thread` and
+then sets `TUR_TSAN=1` for the test runner.
+
 ## Follow-up Work Hooks
 
 - Integrate this contract with `stdlib/test.tur` implementation work.

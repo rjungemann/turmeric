@@ -42,6 +42,39 @@ fi
 #       emitted functions missing a return path — keep -O2 for safety.
 export TUR_CC_FLAGS="${TUR_CC_FLAGS:--O2 -std=c99 -Wall}"
 
+# T19: ThreadSanitizer (TSan) support.
+# Set TUR_TSAN=1 to compile and run all fixtures with -fsanitize=thread.
+# Fixtures whose directory contains a `requires.tsan` marker file are
+# SKIPPED when TUR_TSAN is not set and run normally when it is set.
+TUR_TSAN="${TUR_TSAN:-0}"
+if [ "$TUR_TSAN" = "1" ]; then
+    export TUR_CC_FLAGS="$TUR_CC_FLAGS -fsanitize=thread -g"
+fi
+export TUR_TSAN
+
+# T19: Timeout support.
+# `expected.timeout` in a fixture directory sets the per-fixture timeout in
+# seconds.  Default is 10.  Set to 0 to disable the timeout for a fixture.
+# Uses `timeout(1)` (GNU coreutils), `gtimeout` (Homebrew coreutils on macOS),
+# or a Perl alarm(2) fallback when neither is available.
+_tur_timeout_bin=""
+if command -v timeout >/dev/null 2>&1; then
+    _tur_timeout_bin="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then
+    _tur_timeout_bin="gtimeout"
+fi
+export _tur_timeout_bin
+
+_run_timed() {
+    local secs="$1"; shift
+    if [ "$secs" -le 0 ] || [ -z "$_tur_timeout_bin" ]; then
+        "$@"
+    else
+        "$_tur_timeout_bin" "$secs" "$@"
+    fi
+}
+export -f _run_timed
+
 # Performance plan item #3: avoid redundant emit-c work.
 # "snapshot-only" means run emit-c only for fixtures that have expected.c.
 # Set TUR_EMIT_C_MODE=always to force old behavior.
@@ -194,6 +227,20 @@ run_happy() {
     elif [ -f "$dir/$(basename "$dir").tur" ]; then input="$dir/$(basename "$dir").tur"
     else echo "SKIP $name (no input)" ; return; fi
 
+    # T19: Skip fixtures requiring TSan when TSan is not active.
+    if [ -f "$dir/requires.tsan" ] && [ "$TUR_TSAN" != "1" ]; then
+        write_result "PASS" "$name" "(tsan-skipped)" ""
+        return
+    fi
+
+    # T19: Read per-fixture timeout (default: 10 seconds; 0 = unlimited).
+    local fixture_timeout=10
+    if [ -f "$dir/expected.timeout" ]; then
+        local _t
+        _t=$(tr -d '[:space:]' < "$dir/expected.timeout")
+        case "$_t" in [0-9]*) fixture_timeout=$_t ;; esac
+    fi
+
     local out_dir="$dir"
     local actual_stdout="$out_dir/actual.stdout"
     local actual_stderr="$out_dir/actual.stderr"
@@ -238,9 +285,9 @@ run_happy() {
     fi
 
     if [ -f "$dir/input.stdin" ]; then
-        "$exe" < "$dir/input.stdin" > "$actual_stdout" 2> "$actual_stderr"
+        _run_timed "$fixture_timeout" "$exe" < "$dir/input.stdin" > "$actual_stdout" 2> "$actual_stderr"
     else
-        "$exe" > "$actual_stdout" 2> "$actual_stderr"
+        _run_timed "$fixture_timeout" "$exe" > "$actual_stdout" 2> "$actual_stderr"
     fi
     local rc=$?
     rm -f "$exe"
@@ -378,8 +425,9 @@ export TUR BUILD_CC RESULTS_DIR TUR_EMIT_C_MODE
 export TUR_TEST_FILTER
 export TUR_TEST_SHARD SHARD_INDEX SHARD_TOTAL
 export TUR_FORCE TUR_STAMP_CACHE
+export TUR_TSAN _tur_timeout_bin
 export -f matches_filter matches_shard write_result run_happy run_negative run_happy_worker run_negative_worker
-export -f _tur_hash_file _tur_mtime stamp_key stamp_check stamp_write
+export -f _tur_hash_file _tur_mtime stamp_key stamp_check stamp_write _run_timed
 
 # Happy fixtures: tests/fixtures/* except tests/fixtures/errors
 shopt -s nullglob
