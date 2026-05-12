@@ -195,7 +195,9 @@
 ;; ============================================================
 (defn demo-typeclass [] :void
   (let [label (.describe 42)]
-    nil))   ;; label unused at runtime; demonstrates dispatch compiles
+    (do
+      label
+      nil)))   ;; demonstrates typeclass dispatch compiles
 
 ;; ============================================================
 ;; Entry point

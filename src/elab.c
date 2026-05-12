@@ -6272,10 +6272,15 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
         
         /* Create a synthetic name for this method implementation */
         /* Format: __inst_<typeclass>_<method>_<typeargs> e.g. __inst_MyEq_eq_int */
-        char method_name[192];
+        enum {
+            MAX_INSTANCE_METHOD_NAME_LEN = 192,
+            MAX_SANITIZED_METHOD_NAME_LEN = 64,
+            MAX_INSTANCE_TYPE_SUFFIX_LEN = 64,
+        };
+        char method_name[MAX_INSTANCE_METHOD_NAME_LEN];
         
         /* Sanitize method name for C identifier (replace invalid chars with _) */
-        char sanitized_method_name[64];
+        char sanitized_method_name[MAX_SANITIZED_METHOD_NAME_LEN];
         const char *method_name_str = tc->methods[i].name->name;
         uint32_t method_name_len = tc->methods[i].name->len;
         if (method_name_len >= sizeof(sanitized_method_name)) {
@@ -6290,7 +6295,7 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
         }
         
         /* Build type arg suffix */
-        char type_suffix[64] = "";
+        char type_suffix[MAX_INSTANCE_TYPE_SUFFIX_LEN] = "";
         size_t type_suffix_len = 0;
         for (uint8_t j = 0; j < n_type_args; j++) {
             const char *type_component = NULL;
