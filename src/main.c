@@ -212,6 +212,8 @@ static int compile_to_c(const char *path, Buf *out_c) {
      * For Phase 7, we load only macros.tur which contains when/unless macros. */
     const char *stdlib_files[] = {
         "stdlib/macros.tur",
+        "stdlib/safe.tur",
+        /* "stdlib/vec.tur" - has typeclass dependencies, not auto-loaded */
         /* "stdlib/typeclass.tur" loaded on demand via (require typeclass) - Phase 15 */
         /* Phase T19-C/D stdlib files (mutex, rwlock, condvar, sync, thread, chan,
          * atomic) are NOT auto-loaded here to avoid polluting every program's

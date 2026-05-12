@@ -1,0 +1,9 @@
+(defn main [] :int
+  (unsafe
+    (let [arr (raw-malloc 16)]
+      (raw-memset arr 0 16)
+      (let [p (ptr-of arr)]
+        (array-set-unchecked p 0 42)
+        (let [v (array-get-unchecked p 0)]
+          (println v)
+          0)))))

@@ -1,0 +1,9 @@
+(defn main [] :int
+  (unsafe
+    (let [arr (raw-malloc 16)]
+      (raw-memset arr 0 16)
+      (let [p (ptr-of arr)]
+        (ptr-write p 42)
+        (array-get p 0)
+        (println "array-get succeeded")
+        0))))

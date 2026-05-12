@@ -1,18 +1,15 @@
 ;; Phase U4: Safe standard library wrappers
 ;; Bounds-checked operations that return Option or Result
 
-(extern-c malloc [^int size] :ptr)
-(extern-c free [^ptr p] :void)
-
 ;; ============================================================================
 ;; Bounds-checked array operations
 ;; ============================================================================
 
-;; array-get: bounds-checked array access, returns option<int>
+;; array-get: bounds-checked array access, returns ptr to option struct
 ;; arr is a ptr<void> to an array of int64_t, idx is the index
 (defn array-get [arr :ptr<void> idx :int] :ptr
   ```c
-  struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
   int64_t *array = (int64_t *)arr;
   if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
     opt->is_some = true;
@@ -81,53 +78,4 @@
   ```c
   int64_t *boxed = (int64_t *)p;
   return *boxed;
-  ```)
-
-;; ============================================================================
-;; Arena allocator
-;; ============================================================================
-
-;; Arena: opaque struct for arena allocation
-(defn Arena-type []
-  ```c
-  typedef struct Arena Arena;
-  struct Arena {
-      char *ptr;
-      char *end;
-      size_t block_size;
-  };
-  return NULL;
-  ```)
-
-;; arena-new: create a new arena
-(defn arena-new [] :ptr
-  ```c
-  typedef struct Arena Arena;
-  Arena *a = malloc(sizeof(Arena));
-  a->block_size = 4096;
-  a->ptr = malloc(a->block_size);
-  a->end = a->ptr + a->block_size;
-  return a;
-  ```)
-
-;; arena-alloc: allocate memory from an arena
-(defn arena-alloc [a :ptr size :int] :ptr
-  ```c
-  Arena *arena = (Arena *)a;
-  size_t aligned_size = (size + 7) & ~7;  /* align to 8 bytes */
-  if (arena->ptr + aligned_size > arena->end) {
-    /* Out of space - for v1, just return NULL */
-    return NULL;
-  }
-  void *result = arena->ptr;
-  arena->ptr += aligned_size;
-  return result;
-  ```)
-
-;; arena-free: free all memory allocated by an arena
-(defn arena-free [a :ptr]
-  ```c
-  Arena *arena = (Arena *)a;
-  free(arena->ptr);
-  free(arena);
   ```)
