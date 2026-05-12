@@ -1237,6 +1237,14 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* Emit body as an expression and return its value */
             return emit_value(ctx, body, e->as.reset_.body);
         }
+        /* Phase B2: Cloneable continuations */
+        case EX_CLONEABLE_RESET: {
+            /* (cloneable-reset body) - like reset but with cloneable captures
+             * For v1 without full cloneable CPS: just evaluate and return body.
+             * Full implementation requires cloneable continuation runtime.
+             */
+            return emit_value(ctx, body, e->as.cloneable_reset_.body);
+        }
         case EX_SHIFT: {
             /* (shift k body) - shift with continuation handler k and value body
              * 
@@ -1294,6 +1302,39 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             if (e->as.shift0_.k_fn->kind == EX_CLOSURE) {
                 /* For closures, k_fn is the env pointer, need to call thunk */
                 struct Closure *closure = e->as.shift0_.k_fn->as.closure_.closure;
+                char *thunk_name = (char *)malloc(64);
+                if (closure->fn->binding) {
+                    snprintf(thunk_name, 64, "%s", closure->fn->binding->name->name);
+                } else {
+                    snprintf(thunk_name, 64, "__fn_anon_%d", closure->fn->params[0]->id);
+                }
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s %s = %s(%s, %s);\n", 
+                          type_c_name(e->type), result, thunk_name, k_fn, body_val);
+                free(thunk_name);
+            } else {
+                /* Regular function call */
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s %s = %s(%s);\n", 
+                          type_c_name(e->type), result, k_fn, body_val);
+            }
+            free(k_fn);
+            free(body_val);
+            return result;
+        }
+        case EX_CLONEABLE_SHIFT: {
+            /* (cloneable-shift k body) - cloneable shift with continuation handler k
+             * For v1 without full cloneable CPS: similar to shift but with cloneable continuation.
+             * Full implementation requires cloneable continuation runtime.
+             */
+            char *body_val = emit_value(ctx, body, e->as.cloneable_shift_.body);
+            char *result = fresh_tmp(ctx);
+            char *k_fn = emit_value(ctx, body, e->as.cloneable_shift_.k_fn);
+            
+            /* For now, emit as a regular function call (same as shift)
+             * Full cloneable support requires runtime implementation */
+            if (e->as.cloneable_shift_.k_fn->kind == EX_CLOSURE) {
+                struct Closure *closure = e->as.cloneable_shift_.k_fn->as.closure_.closure;
                 char *thunk_name = (char *)malloc(64);
                 if (closure->fn->binding) {
                     snprintf(thunk_name, 64, "%s", closure->fn->binding->name->name);
@@ -2191,7 +2232,7 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             indent_buf(body, ctx->indent);
             buf_printf(body,
                 "EffectHandlerFrame **%s = (tur_current_fiber"
-                " ? (EffectHandlerFrame **)&tur_current_fiber->handler_chain"
+                " ? (EffectHandlerFrame **)&tur_current_fiber->effect_handler_chain"
                 " : &global_effect_handler_chain);\n", chain_var);
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s.parent = *%s;\n", frame_var, chain_var);
@@ -2547,6 +2588,12 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_RESET:
         case EX_SHIFT:
         case EX_SHIFT0:
+            /* For now, emit a placeholder - full impl deferred */
+            buf_puts(body, "__builtin_trap();");
+            return;
+        /* Phase B2: Cloneable continuations */
+        case EX_CLONEABLE_RESET:
+        case EX_CLONEABLE_SHIFT:
             /* For now, emit a placeholder - full impl deferred */
             buf_puts(body, "__builtin_trap();");
             return;
@@ -3507,10 +3554,10 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    int n_cases;\n");
     buf_puts(out, "    EffectHandlerCase cases[8];\n");
     buf_puts(out, "};\n\n");
-        /* Phase T21-A/B: FiberBlock — cooperative fiber runtime via ucontext_t.
+        /* Phase T21-A/B / P19-8: FiberBlock — cooperative fiber runtime via ucontext_t.
      * tur_current_fiber is thread-local; set/restored by tur_fiber_block_resume.
-     * tur_effect_perform checks tur_current_fiber->handler_chain for fiber-local
-     * effect handler chains (Phase T21-B). */
+     * tur_effect_perform checks tur_current_fiber->effect_handler_chain for fiber-local
+     * effect handler chains (Phase T21-B / P19-8). */
     buf_puts(out, "/* Phase T21: FiberBlock */\n");
     buf_puts(out, "#ifdef __clang__\n");
     buf_puts(out, "#pragma clang diagnostic push\n");
@@ -3526,7 +3573,7 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    int parked; /* Phase T21: scheduler park/unpark */\n");
     buf_puts(out, "    int64_t result;\n");
     buf_puts(out, "    int64_t arg;\n");
-    buf_puts(out, "    void *handler_chain;\n");
+    buf_puts(out, "    void *effect_handler_chain; /* Phase P19-8: per-fiber effect handler chain */\n");
     buf_puts(out, "    void (*entry_fn)(void);\n");
     buf_puts(out, "    void *fiber_local; /* Phase T21: fiber-local storage */\n");
     /* Phase T22: Structured concurrency */
@@ -3866,8 +3913,8 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "static int64_t tur_effect_perform(const char *name, int64_t *args, int n_args) {\n");
         /* T21-B: use fiber-local handler chain when inside a fiber */
     buf_puts(out, "    EffectHandlerFrame *frame =\n");
-    buf_puts(out, "        (tur_current_fiber && tur_current_fiber->handler_chain)\n");
-    buf_puts(out, "        ? (EffectHandlerFrame *)tur_current_fiber->handler_chain\n");
+    buf_puts(out, "        (tur_current_fiber && tur_current_fiber->effect_handler_chain)\n");
+    buf_puts(out, "        ? (EffectHandlerFrame *)tur_current_fiber->effect_handler_chain\n");
     buf_puts(out, "        : global_effect_handler_chain;\n");
     buf_puts(out, "    while (frame) {\n");
     buf_puts(out, "        for (int __i = 0; __i < frame->n_cases; __i++) {\n");

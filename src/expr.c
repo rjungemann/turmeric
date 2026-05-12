@@ -320,6 +320,19 @@ void expr_print(Buf *b, const Expr *e) {
             expr_print(b, e->as.shift0_.body);
             buf_putc(b, ')');
             break;
+        /* Phase B2: Cloneable continuations */
+        case EX_CLONEABLE_RESET:
+            buf_puts(b, "(cloneable-reset ");
+            expr_print(b, e->as.cloneable_reset_.body);
+            buf_putc(b, ')');
+            break;
+        case EX_CLONEABLE_SHIFT:
+            buf_puts(b, "(cloneable-shift ");
+            expr_print(b, e->as.cloneable_shift_.k_fn);
+            buf_puts(b, " ");
+            expr_print(b, e->as.cloneable_shift_.body);
+            buf_putc(b, ')');
+            break;
         /* Phase 19: Algebraic effects */
         case EX_DEFECT:
             buf_puts(b, "(defeffect ");

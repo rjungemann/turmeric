@@ -61,6 +61,12 @@
 (definstance Clone [int]
   (clone [x] x))
 
+(definstance Clone [bool]
+  (clone [x] x))
+
+(definstance Clone [cstr]
+  (clone [x] x))
+
 ;;; SINCE: Phase HKT H3
 ;; Higher-kinded typeclasses — require kind '* -> *' type constructor parameters.
 ;;

@@ -128,3 +128,20 @@
 
 (definstance Monad [option]
   (bind [ma fn] (__monad_option_bind ma fn)))
+
+;; Phase B1: Clone instance for option
+;; Deep copies the option struct and its contained value (v1: int64_t only)
+(defn __clone_option_clone [x] :int
+  ```c
+  struct { bool is_some; int64_t value; } *opt =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)x;
+  if (!opt) return 0;
+  struct { bool is_some; int64_t value; } *r =
+      malloc(sizeof(struct { bool is_some; int64_t value; }));
+  r->is_some = opt->is_some;
+  r->value = opt->value;  /* v1: int64_t copy (deep clone for primitives) */
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(definstance Clone [option]
+  (clone [x] (__clone_option_clone x)))

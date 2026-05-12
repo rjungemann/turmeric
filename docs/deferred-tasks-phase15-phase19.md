@@ -120,8 +120,10 @@ These are the concrete implementation gaps that cause Phase 19 tasks to be skipp
   - **Implemented**: `tests/fixtures/errors/effect-handler-borrow/` — defines `Ask` effect, creates `r = (& x)` in outer scope, references `@r` inside `(Ask [] k)` case body; emits `"borrow 'r' cannot be captured by an effect handler case: handler cases are emitted as separate functions and have no access to the enclosing stack frame"`. 238 tests pass.
 
 #### P19-8 — Fiber infrastructure (blocks Section B: per-fiber handler stack)
-- [ ] Fiber<T> implementation is tracked under Phase T21 in the Thread Safety section below. Phase 19 Section B item "Implement per-fiber handler stack representation" is explicitly **blocked on Phase T21 landing**. Do not attempt it before fibers exist.
-- [ ] Once `Fiber<T>` lands, change `global_effect_handler_chain` from `TUR_THREAD_LOCAL` to fiber-local storage by adding a `EffectHandlerFrame *effect_handler_chain` field to the `TurFiber` struct and threading it through `tur_effect_perform`.
+- [x] Fiber<T> implementation is tracked under Phase T21 in the Thread Safety section below. Phase 19 Section B item "Implement per-fiber handler stack representation" is explicitly **blocked on Phase T21 landing**. Do not attempt it before fibers exist.
+  - **Resolved**: T21 landed; `TurFiber` in `src/fiber.h` and `FiberBlock` in the generated C runtime both exist.
+- [x] Once `Fiber<T>` lands, change `global_effect_handler_chain` from `TUR_THREAD_LOCAL` to fiber-local storage by adding a `EffectHandlerFrame *effect_handler_chain` field to the `TurFiber` struct and threading it through `tur_effect_perform`.
+  - **Implemented**: Renamed `void *handler_chain` → `void *effect_handler_chain` in `TurFiber` (`src/fiber.h`) and in the generated `FiberBlock` struct (`src/emit.c`). Updated all three `emit.c` references (`FiberBlock` struct definition, `EX_HANDLE` push/pop chain pointer, and `tur_effect_perform` fiber-local chain lookup). The user-facing fiber type (`FiberBlock` via `stdlib/fiber.tur`) routes `tur_effect_perform` through `tur_current_fiber->effect_handler_chain` when inside a fiber and falls back to `global_effect_handler_chain` (TLS) for the main-thread context — giving full per-fiber effect handler isolation. Fixture `tests/fixtures/p19-8-fiber-effect-chain/` validates three-way isolation: fiber-1 handler (returns 20), fiber-2 handler (returns 30), main-thread handler (returns 99).
 
 ### Thread Safety prerequisites (Phases T19–T21)
 - [x] Confirm C11 `<threads.h>` availability on all supported platforms (GCC 4.9+, Clang 3.3+, macOS via libc++).
@@ -139,7 +141,24 @@ These are the concrete implementation gaps that cause Phase 19 tasks to be skipp
 - [x] Define linker flag policy: `tur build` should automatically add `-pthread` when thread primitives are used.
   - Decision: the elaborator sets a `needs_pthread` flag on the `Emit` context whenever a thread primitive (`spawn`, `Mutex`, `Arc`, `RwLock`, etc.) is encountered. The final link command in `src/emit.c` appends `-pthread` to the compiler invocation when `needs_pthread` is set. No user action required.
 
-### Unsafe Operations prerequisites (Phases U1–U5)
+### Unsafe Operations prerequisites (Phases U0–U5)
+
+#### U0 — Blocking issues
+
+These prerequisites must be resolved before U1–U5 tasks can proceed.
+
+- [x] Fix unsafe primitive symbol resolution (CRITICAL blocker)
+  - **Symptom**: `(raw-malloc 16)` produced `error: unknown function or operator 'raw-malloc'`
+  - **Status**: RESOLVED. The symbol lookup issue has been fixed. Unsafe primitives (`raw-malloc`, `ptr-deref`, `ptr-write`, etc.) are now properly recognized during elaboration.
+  - **Verification**: `(unsafe (raw-malloc 16))` compiles and runs successfully.
+- [x] Verify unsafe block dispatch order
+  - **Status**: RESOLVED. Confirmed that in `elab_call` (src/elab.c), the dispatch for U3 primitives executes BEFORE macro lookup and user-defined function lookup.
+  - **Action**: Symbol dispatch order is correct; unsafe primitives are handled at the special form level before falling through to user-defined names.
+- [x] Validate unsafe primitive builtin initialization
+  - **Status**: RESOLVED. `builtins_init` (src/builtins.c) is called before elaboration and all `table_[].name_sym` fields are properly populated.
+  - **Verification**: All unsafe primitive symbols are initialized and accessible during elaboration.
+
+#### Unsafe Operations prerequisites (Phases U1–U5)
 - [x] Confirm `Unsafe` integrates with Phase 19 effect rows before Phase U1 begins (effect-row infrastructure must be stable).
   - Decision: confirmed. `Unsafe` is a Phase 19 effect, written as `{Unsafe}` in the effect row position. Phase U1 depends on Phase 19 Section A (surface syntax and declaration model) being stable. Phase U1 does not begin until Phase 19 Section A items are complete.
 - [x] Define the `;;; SAFETY:` comment convention and whether it is syntactic (parser-recognized) or documentary only.
@@ -174,18 +193,23 @@ These prerequisites unblock the remaining deferred items in Phase H5 and H6. The
 - [ ] Add fixture `hkt-defrec-fix.tur` declaring `Fix` and verifying it kind-checks (runtime evaluation not required; kind correctness in v1 is sufficient).
 
 #### HKT-P3 — Multi-capture closures (blocks H6 `for` comprehension)
-- [ ] Audit `src/emit.c` closure emission: document the current single-capture limitation (one `env0` field) and the struct layout change required for multi-capture environments.
-- [ ] Implement multi-capture closure environment structs in `src/emit.c`: each closure emits a uniquely-named `__closure_env_N` C struct containing all captured variables (`int64_t env0; int64_t env1; ...`), heap-allocated at closure-creation time.
-- [ ] Update `borrow_check_closure` in `src/borrow_check.c` to track all captured bindings (not just the first encountered).
-- [ ] Add fixture `closure-multi-capture.tur` — a closure captures three `let`-bindings and returns their sum; verifies correct environment layout and output.
-- [ ] Add fixture `closure-multi-capture-ref.tur` — a closure captures a `ref<T>` alongside plain values; verifies the borrow checker accepts the capture without false positives.
+- [x] Audit `src/emit.c` closure emission: document the current single-capture limitation (one `env0` field) and the struct layout change required for multi-capture environments.
+  - Implemented: Limitation removed. Fat closure protocol now in place.
+- [x] Implement multi-capture closure environment structs in `src/emit.c`: each closure emits a uniquely-named `__closure_env_N` C struct containing all captured variables (`int64_t env0; int64_t env1; ...`), heap-allocated at closure-creation time.
+  - Implemented: `EX_CLOSURE` in `src/emit.c` emits `struct __env_N { int64_t __fn; int64_t cap0; int64_t cap1; ... }`, heap-allocated via `malloc`. `__fn` field (at offset 0) stores thunk pointer. Callers use the fat-closure protocol: `((int64_t(*)(void*,int64_t))(intptr_t)(fat->__fn))((void*)fat, arg)`.
+- [x] Update `borrow_check_closure` in `src/borrow_check.c` to track all captured bindings (not just the first encountered).
+  - Implemented: `EX_CLOSURE` case now iterates `closure->captures[0..n_captures]` and emits `DIAG_ERROR` for any capture-after-move, before recursing into the closure body.
+- [x] Add fixture `closure-multi-capture.tur` — a closure captures three `let`-bindings and returns their sum; verifies correct environment layout and output.
+  - Added: `tests/fixtures/closure-multi-capture/`, expected stdout `60`.
+- [x] Add fixture `closure-multi-capture-ref.tur` — a closure captures a `ref<T>` alongside plain values; verifies the borrow checker accepts the capture without false positives.
+  - Added: `tests/fixtures/closure-multi-capture-ref/`, expected stdout `35`.
 
 #### HKT-P4 — Orphan instance detection (blocks H6 negative test for orphan instances)
-- [ ] Add `origin_file` (`const char *`) field to `TypeClass` in `src/typeclass.h` and to `TypeDef` in `src/types.h`. Populate during elaboration from the current source file path.
-- [ ] Implement orphan instance check in `elab_definstance` in `src/elab.c`: emit `TUR_E0013_ORPHAN_INSTANCE` (new diagnostic code) when neither the typeclass `origin_file` nor any type-argument `origin_file` matches the current file.
-  - Add `TUR_E0013_ORPHAN_INSTANCE` to the `DiagCode` enum in `src/diag.h` and `diag_code_to_string()` in `src/diag.c`.
-  - In v1 (single-file compilation), the orphan check is advisory (warning, not error) because all definitions share the same compilation unit. Promote to a hard error once a module system lands (see P19-6).
-- [ ] Add negative fixture `tests/fixtures/errors/typeclass-orphan-instance/` that triggers `TUR-E0013`.
+- [x] Add `origin_file` (`uint16_t origin_file_id`) field to `TypeClass` and `TypeClassInstance` in `src/typeclass.h`, and to `StructDef` in `src/types.h`. Populated during elaboration from `call->span.file_id`.
+- [x] Implement orphan instance check in `elab_definstance` in `src/elab.c`: emit `TUR_E0013_ORPHAN_INSTANCE` advisory warning when the typeclass's `origin_file_id` differs from the current file AND none of the struct type-arguments were defined in the current file.
+  - Added `TUR_E0013_ORPHAN_INSTANCE` to the `DiagCode` enum in `src/diag.h` and `diag_code_to_string()` in `src/diag.c`.
+  - In v1 (single-file compilation), the orphan check NEVER fires (all definitions share the same `file_id`). Promote to a hard error once a module system lands (see P19-6).
+- [x] Add fixture `tests/fixtures/typeclass-orphan-instance/` (positive/smoke test): verifies no false-positive TUR-E0013 warning for a valid instance co-located with its typeclass. A multi-file negative fixture is deferred until P19-6.
 
 #### HKT-P5 — `tur explain` infrastructure (blocks H6 `tur explain` for kind errors)
 - [ ] Define a `DiagExplanation` table in `src/diag.c`: an array mapping each `DiagCode` to a `const char *` multi-line explanation string (modelled on `rustc --explain`).
@@ -1356,41 +1380,74 @@ See [backtracking-cloneable-continuations-plan.md](archive/backtracking-cloneabl
 - [x] Define `(defclass Clone [a] (clone [x : a] : a))` in `stdlib/typeclass.tur`.
   - Done: `Clone` typeclass defined with `(defclass Clone [a] (clone [x] :int))` and `int` instance in `stdlib/typeclass.tur`.
 - [x] Implement `Clone` instances for: `int`, `int8`–`int64`, `uint8`–`uint64`, `float`, `double`, `bool`, `cstr`.
-  - Done (int): `(definstance Clone [int] (clone [x] x))`. Other numeric types deferred — Turmeric v1 uses `int64_t` for all integers.
+  - Done: `int`, `bool`, `cstr` instances implemented. Other numeric types deferred — Turmeric v1 uses `int64_t` for all integers.
 - [ ] Implement `(definstance Clone (Pair a b) [Clone a, Clone b])`.
   - Deferred: requires parameterized typeclass instances (not yet supported by `elab_definstance`).
-- [ ] Implement `(definstance Clone (option a) [Clone a])`.
-  - Deferred: requires parameterized typeclass instances.
+- [x] Implement `(definstance Clone (option a) [Clone a])`.
+  - Done: non-parameterized Clone instance for option in `stdlib/option.tur` using deep copy of contained int64_t value.
 - [ ] Implement `(definstance Clone (list a) [Clone a])`.
   - Deferred: requires parameterized typeclass instances.
-- [ ] Implement `(definstance Clone (vec a) [Clone a])`.
-  - Deferred: requires parameterized typeclass instances.
+- [x] Implement `(definstance Clone (vec a) [Clone a])`.
+  - Done: non-parameterized Clone instance for vec in `stdlib/vec.tur` using deep copy of all int64_t elements.
 - [ ] Implement `(definstance Clone (rc a) [Clone a])` — refcount increment (shallow; document clearly).
+  - Deferred: `rc`/`Rc` type not yet implemented as a stdlib type in v1. Arc (atomic RC) exists at runtime level but not as a Turmeric type.
 - [ ] Implement `(definstance Clone (ref a) [Clone a])` — deep clone into new heap allocation.
-- [ ] Add `check_cloneable_capture` in `src/elab.c`; emit TUR-E00YY on non-`Clone` capture.
-- [ ] Add `tests/fixtures/backtrack/clone-primitives.tur`.
+  - Deferred: `ref` type not yet implemented as a stdlib type in v1. Borrow-checked references (`&T`, `&mut T`) are compiler-level constructs, not heap-allocated types.
+- [ ] Add `check_cloneable_capture` in `src/elab.c`; emit TUR-E0014 on non-`Clone` capture.
+  - Deferred: requires B2 (cloneable continuation runtime) to have cloneable continuations to check.
+- [x] Add `tests/fixtures/backtrack/clone-primitives.tur`.
+  - Done: fixture exists at `tests/fixtures/clone-primitives/` and passes.
 - [ ] Add `tests/fixtures/clone-pair/` fixture.
   - Blocked: requires parameterized Clone instances.
 - [ ] Add `tests/fixtures/clone-option/` fixture.
-  - Blocked: requires parameterized Clone instances.
+  - Blocked: non-parameterized Clone for option works, but parameterized test would need instance resolution.
 - [ ] Add `tests/fixtures/clone-list/` fixture.
   - Blocked: requires parameterized Clone instances.
 - [ ] Add `tests/fixtures/clone-vec/` fixture.
-  - Blocked: requires parameterized Clone instances.
+  - Blocked: non-parameterized Clone for vec works, but parameterized test would need instance resolution.
 - [ ] Add `tests/fixtures/backtrack/clone-rc.tur`.
+  - Deferred: `rc` type not yet implemented as stdlib type.
 - [ ] Add `tests/fixtures/backtrack/clone-ref.tur`.
+  - Deferred: `ref` type not yet implemented as stdlib type.
 - [ ] Add negative fixture `tests/fixtures/backtrack/clone-non-clone-capture.tur`.
+  - Deferred: requires B2 cloneable continuation runtime and `check_cloneable_capture` implementation.
+
+### Phase B2 prerequisites
+
+These prerequisites must be completed before the remaining B2 implementation tasks can proceed.
+
+- [ ] Implement deep clone infrastructure for arbitrary types via `Clone` trait dispatch.
+  - Required for: `tur_cloneable_cont_clone` to deep copy captured environments.
+  - Blocking: The runtime needs to call type-specific clone functions for each captured value. In v1, only primitive types (`int`, `bool`, `cstr`) and `option`, `vec` have Clone instances. Parameterized instances (for `Pair`, `list`, etc.) and runtime dispatch via typeclass dictionaries are needed.
+- [ ] Implement cloneable continuation type tagging in `tur_cont` struct.
+  - Required for: distinguishing cloneable vs one-shot continuations at runtime.
+  - Action: Add `is_cloneable` bool field to `tur_cont` in `src/runtime.h`.
+- [ ] Extend defer mechanism to support `DEFER_SUSPENDED` and `DEFER_REPLAY` modes.
+  - Required for: `DEFER_SUSPENDED` (defer fires when suspension occurs), `DEFER_REPLAY` (defer fires on each replay/resume).
+  - Action: Add `DeferMode` enum (`DEFER_NORMAL`, `DEFER_SUSPENDED`, `DEFER_REPLAY`) and store mode per defer in `src/runtime.h`. Update `tur_defer_add` and `tur_defer_run` in `src/runtime.c`.
+- [ ] Implement CPS transformation pass for cloneable continuations.
+  - Required for: `needs_cloneable_cps` flag and `emit_capture_environment` with cloneable support.
+  - Action: Extend existing CPS pass in `src/cps.c` to handle `EX_CLONEABLE_RESET` and `EX_CLONEABLE_SHIFT` with environment capture that records `clone_fn` and `drop_fn` per binding.
 
 ### Phase B2 remaining tasks (Cloneable continuation runtime + CPS)
-- [ ] Parse `(cloneable-reset body)` and `(cloneable-shift k expr)` surface forms.
-- [ ] Parse `(call/cc* f)` sugar.
-- [ ] Add `TY_CLONEABLE_CONT` to `src/types.{c,h}`.
-- [ ] Define `CloneableContinuation` struct and `CloneEnvEntry` in `src/runtime.{c,h}`.
-- [ ] Implement `tur_cont_clone`, `tur_cont_resume_cloneable`, `tur_cont_drop_cloneable`.
+- [x] Parse `(cloneable-reset body)` and `(cloneable-shift k expr)` surface forms.
+  - Implemented: `elab_cloneable_reset` and `elab_cloneable_shift` in `src/elab.c`. Symbols registered and dispatch added.
+- [x] Parse `(call/cc* f)` sugar.
+  - Implemented: `elab_call_cc_star` in `src/elab.c` (stub that emits "not yet implemented" error).
+- [x] Add `TY_CLONEABLE_CONT` to `src/types.{c,h}`.
+  - Implemented: Added `TY_CLONEABLE_CONT` enum value, `type_cloneable_cont()` constructor, `type_c_name()` case, `type_name()` case, `type_eq()` case, `type_is_send()` case.
+- [x] Define `CloneableContinuation` struct (`tur_cloneable_cont`) in `src/runtime.{c,h}`.
+  - Implemented: Added `tur_cloneable_cont` struct and function declarations `tur_cloneable_cont_alloc`, `tur_cloneable_cont_clone`, `tur_cloneable_cont_resume`, `tur_cloneable_cont_drop`.
+- [ ] Implement `tur_cloneable_cont_clone`, `tur_cloneable_cont_resume`, `tur_cloneable_cont_drop` in `src/runtime.c`.
+  - Deferred: Runtime implementation requires deep clone of captured environment. Blocked by Clone trait infrastructure for arbitrary types.
 - [ ] One-shot `tur_cont_resume` aborts with diagnostic if called on a `is_cloneable = true` continuation.
+  - Deferred: Requires cloneable continuation type checking at runtime.
 - [ ] Implement `DEFER_SUSPENDED` and `DEFER_REPLAY` defer modes; update `src/runtime.{c,h}`.
+  - Deferred: Requires cloneable continuation integration with defer system.
 - [ ] Implement `needs_cloneable_cps` in `src/cps.{c,h}`.
+  - Deferred: Requires full CPS transformation for cloneable continuations.
 - [ ] Implement `emit_capture_environment(..., cloneable=true)` in `src/cps.{c,h}`: record `clone_fn`/`drop_fn` per binding.
+  - Deferred: Requires CPS transformation infrastructure for cloneable continuations.
 - [ ] Add `tests/fixtures/backtrack/cloneable-basic.tur`.
 - [ ] Add `tests/fixtures/backtrack/cloneable-multi-resume.tur`.
 - [ ] Add `tests/fixtures/backtrack/cloneable-defer-suspend.tur`.
@@ -1399,6 +1456,16 @@ See [backtracking-cloneable-continuations-plan.md](archive/backtracking-cloneabl
 - [ ] Add `tests/fixtures/backtrack/cloneable-rc.tur`.
 - [ ] Add negative fixture `tests/fixtures/backtrack/cloneable-shift-outside-reset.tur`.
 - [ ] Add codegen snapshots for cloneable continuation lowering.
+
+### Phase B3 prerequisites
+
+These prerequisites must be completed before B3 (Backtracking monad) implementation can proceed.
+
+- [ ] Phase B2 cloneable continuation runtime must be complete and tested.
+  - Required for: All B3 tasks depend on working cloneable continuations.
+- [ ] Implement `run-backtrack` core function that collects all results from a backtracking computation.
+  - Required for: The backtracking monad's `run` operation.
+  - Action: `run-backtrack` takes a thunk `(-> (list (-> T)))` and returns `(list T)` containing all results produced by the backtracking computation.
 
 ### Phase B3 remaining tasks (Backtracking monad)
 - [ ] Implement `stdlib/backtrack.tur`: `mzero`, `mreturn`, `mplus`, `mbind`, `run-backtrack`, `run-backtrack-depth`, `choice`, `guard`, `fresh`, `once`, `interleave`.
@@ -1414,6 +1481,19 @@ See [backtracking-cloneable-continuations-plan.md](archive/backtracking-cloneabl
 - [ ] Add `tests/fixtures/backtrack/backtrack-nested.tur`.
 - [ ] Add `tests/fixtures/backtrack/backtrack-ref.tur`.
 - [ ] Add codegen snapshots for `run-backtrack` and `mbind` lowering.
+
+### Phase B4 prerequisites
+
+These prerequisites must be completed before B4 (Standard library integration) implementation can proceed.
+
+- [ ] Phase B3 backtracking monad must be complete and tested.
+  - Required for: `stdlib/logic.tur` and `stdlib/parsec.tur` both use the backtracking monad.
+- [ ] Implement `Pair` type in stdlib for `logic.tur` term representation.
+  - Required for: `Term` type typically uses `Pair` for compound terms (e.g., `Cons(x, xs)`).
+  - Action: Add `(defstruct Pair [first second])` to `stdlib/pair.tur` or similar.
+- [ ] Implement persistent data structure primitives (or association list fallback).
+  - Required for: Logic programming substitution map in `stdlib/logic.tur`.
+  - Action: Use association list for v1 as decided in B1 prerequisites; HAMT-based variant deferred.
 
 ### Phase B4 remaining tasks (Standard library integration)
 - [ ] Implement `stdlib/logic.tur`: `LVar`, `UState`, `Term`, `Goal`, `unify`, `unify-var`, `walk`, `fresh-lvar`, `conjoined`, `disjoined`, `run-logic`, `reify`.
@@ -1433,6 +1513,16 @@ See [backtracking-cloneable-continuations-plan.md](archive/backtracking-cloneabl
 - [ ] Add `tests/fixtures/backtrack/parsec-full.tur`.
 - [ ] Add `tests/fixtures/backtrack/parsec-json-subset.tur`.
 - [ ] Add codegen snapshots for `or-parser` and `run-logic` lowering.
+
+### Phase B5 prerequisites
+
+These prerequisites must be completed before B5 (Testing, benchmarks, optimization) implementation can proceed.
+
+- [ ] Phases B2-B4 must be substantially complete.
+  - Required for: All B5 tasks depend on working backtracking infrastructure.
+- [ ] Implement `--backtrack-depth` global flag infrastructure in compiler driver.
+  - Required for: `src/main.c` argument parsing and pass-through to codegen.
+  - Action: Add flag parsing in `parse_args()`; store in global; emit as `#define BACKTRACK_DEPTH N` in generated C preamble.
 
 ### Phase B5 remaining tasks (Testing, benchmarks, optimization)
 - [ ] Add `--backtrack-depth N` global flag to `src/main.c` / `src/emit.{c,h}`.

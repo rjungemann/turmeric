@@ -59,6 +59,9 @@ int type_eq(Type a, Type b) {
     if (a.kind == TY_CONT) {
         return a.as.cont.returns == b.as.cont.returns;
     }
+    if (a.kind == TY_CLONEABLE_CONT) {
+        return a.as.cont.returns == b.as.cont.returns;
+    }
     /* Phase 11: Struct types - identity by StructDef pointer */
     if (a.kind == TY_STRUCT) {
         return a.as.struct_.def == b.as.struct_.def;
@@ -212,6 +215,16 @@ const char *type_name(Type t) {
             buf_putc(&tmp, '\0');
             return tur_strdup(tmp.data);
         }
+        case TY_CLONEABLE_CONT: {
+            /* Build "cloneable_cont<T>" name */
+            Buf tmp;
+            buf_init(&tmp);
+            buf_puts(&tmp, "cloneable_cont<");
+            buf_puts(&tmp, type_name(type_from_kind(t.as.cont.returns)));
+            buf_puts(&tmp, ">");
+            buf_putc(&tmp, '\0');
+            return tur_strdup(tmp.data);
+        }
         /* Phase 11: Struct types */
         case TY_STRUCT:
             return t.as.struct_.def ? t.as.struct_.def->name : "<struct>";
@@ -332,6 +345,12 @@ static void type_name_buf(Buf *b, Type t) {
             buf_puts(b, ">");
             break;
         }
+        case TY_CLONEABLE_CONT: {
+            buf_puts(b, "cloneable_cont<");
+            type_name_buf(b, type_from_kind(t.as.cont.returns));
+            buf_puts(b, ">");
+            break;
+        }
         /* Phase 11: Struct types */
         case TY_STRUCT: {
             if (t.as.struct_.def) {
@@ -403,6 +422,8 @@ const char *type_c_name(Type t) {
         /* Phase 18: Continuation types lower to a struct in C */
         case TY_CONT:
             return "tur_cont *";
+        case TY_CLONEABLE_CONT:
+            return "tur_cloneable_cont *";
         /* Phase 11: Struct types lower to the struct name in C */
         case TY_STRUCT:
             /* Phase HKT H3: TY_STRUCT without a concrete StructDef represents an
@@ -480,6 +501,7 @@ const char *typekind_to_string(TypeKind k) {
         case TY_TYPECLASS_INST: return "typeclass-inst";
         case TY_EXCEPTION: return "exception";
         case TY_CONT:     return "cont";
+        case TY_CLONEABLE_CONT: return "cloneable_cont";
         case TY_STRUCT:   return "struct";
         case TY_NEVER:    return "!";
         default:          return "<?>";

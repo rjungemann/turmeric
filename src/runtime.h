@@ -140,6 +140,41 @@ void tur_cont_drop(tur_cont *cont);
  * Returns: true if the continuation has been resumed, false otherwise. */
 bool tur_cont_consumed(tur_cont *cont);
 
+/* Phase B2: Cloneable continuations */
+
+/* A cloneable continuation can be resumed multiple times.
+ * Unlike tur_cont (one-shot), tur_cloneable_cont can be cloned before use.
+ * Each clone is a fresh continuation that can be resumed independently.
+ * All captured environment values must implement the Clone trait. */
+typedef struct tur_cloneable_cont {
+    void (*cont_fn)(void *env, int64_t value);  /* Function to call to resume */
+    void *env;                                     /* Captured environment (must be cloneable) */
+    struct tur_cloneable_cont *parent;           /* Parent cloneable continuation */
+    tur_frame *captured[TUR_CONT_MAX_CAPTURED_FRAMES];
+    int n_captured;
+    bool consumed;  /* One-shot per clone: true after resume */
+} tur_cloneable_cont;
+
+/* Allocate a new cloneable continuation.
+ * frame_chain: Array of tur_frame pointers to capture.
+ * n_frames:   Number of frames to capture.
+ * Returns:     New tur_cloneable_cont, or NULL on error. */
+tur_cloneable_cont *tur_cloneable_cont_alloc(tur_frame **frame_chain, int n_frames);
+
+/* Clone a cloneable continuation. Creates a fresh copy that can be resumed independently.
+ * cont:    The continuation to clone.
+ * Returns:  A new tur_cloneable_cont that is a copy of cont, or NULL on error. */
+tur_cloneable_cont *tur_cloneable_cont_clone(const tur_cloneable_cont *cont);
+
+/* Resume a cloneable continuation with a value. Consumes this clone (one-shot).
+ * cont:    The cloneable continuation to resume.
+ * value:   The value to pass to the continuation. */
+void tur_cloneable_cont_resume(tur_cloneable_cont *cont, int64_t value);
+
+/* Drop a cloneable continuation without resuming it. Fires defers on captured frames.
+ * cont:    The cloneable continuation to drop. */
+void tur_cloneable_cont_drop(tur_cloneable_cont *cont);
+
 /* Phase R2: Panic — print message to stderr, then abort.
  * Re-entry (double panic) calls abort() immediately. */
 extern int tur_panic_in_progress;
