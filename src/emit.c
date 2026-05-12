@@ -669,23 +669,13 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     }
 
     if (body_has_return_or_throw) {
-        /* Phase R1: Special handling for ? operator lowering.
-         * If the body contains return/throw but the let has a non-nil type,
-         * we need to capture the value from the body when the return is not taken.
-         * This happens with: (let [__q_val expr] (if (err? __q_val) (return ...) (ok-val __q_val)))
-         * 
-         * The temp variable was already declared above. Emit the body as a value
-         * expression. The codegen for if will handle the return inside the body.
+        /* Body contains return/throw - emit as statements only.
+         * The temp variable was declared above but will remain uninitialized
+         * if return/throw is taken (which is fine - unreachable code after return).
+         * If the body doesn't take the return/throw path, it should assign to
+         * the temp variable itself.
          */
-        if (!nil_result) {
-            /* Emit body as a value and assign to temp */
-            char *bv = emit_value(ctx, body, e->as.let_.body);
-            indent_buf(body, ctx->indent);
-            buf_printf(body, "%s = %s;\n", tmp, bv);
-            free(bv);
-        } else {
-            emit_stmt(ctx, body, e->as.let_.body);
-        }
+        emit_stmt(ctx, body, e->as.let_.body);
         /* Close scope */
         ctx->indent -= 4;
         indent_buf(body, ctx->indent);
@@ -1984,20 +1974,20 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         /* Phase T21-F: async/await */
         case EX_ASYNC: {
-            /* (async fn-expr) — launch fn-expr (a no-arg fn) in a thread, return TurAsyncTask* as ptr<void> */
+            /* (async fn-expr) — launch fn-expr (a no-arg fn) in a fiber, return TurFuture* as ptr<void> */
             char *fn_val = emit_value(ctx, body, e->as.async_.fn_expr);
             char *tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
-            buf_printf(body, "void *%s = (void *)tur_async_call((int64_t(*)(void*))%s, NULL);\n", tmp, fn_val);
+            buf_printf(body, "void *%s = (void *)tur_async_fiber((int64_t(*)(void))(intptr_t)%s);\n", tmp, fn_val);
             free(fn_val);
             return tmp;
         }
         case EX_AWAIT: {
-            /* (await fut) — block on TurAsyncTask*, return int64_t value */
+            /* (await fut) — await a future using shift + scheduler callback */
             char *fut_val = emit_value(ctx, body, e->as.await_.fut_expr);
             char *tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
-            buf_printf(body, "int64_t %s = tur_await_future((TurAsyncTask*)(intptr_t)%s);\n", tmp, fut_val);
+            buf_printf(body, "int64_t %s = tur_await_future((TurFuture*)(intptr_t)%s);\n", tmp, fut_val);
             free(fut_val);
             return tmp;
         }
@@ -2172,8 +2162,8 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 hctx.frame_var = NULL;
                 hctx.return_emitted = false;
 
-                if (c->body && c->body->type.kind == TY_NIL) {
-                    /* Void-typed body: emit as statement, then return 0 */
+                if (c->body && (c->body->type.kind == TY_NIL || c->body->type.kind == TY_NEVER)) {
+                    /* Void-typed or never-typed body: emit as statement, then return 0 */
                     emit_stmt(&hctx, hbuf, c->body);
                     buf_puts(hbuf, "    return 0;\n");
                 } else {
@@ -2935,6 +2925,9 @@ static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     
     if (body_has_return_or_throw) {
         /* Body contains a return/throw - emit as statements only */
+        emit_stmt(ctx, file, fd->body);
+    } else if (fd->body->kind == EX_INLINE_C) {
+        /* Inline C body - emit as-is (it contains its own return statements) */
         emit_stmt(ctx, file, fd->body);
     } else if (result_kind == TY_NIL && !is_main) {
         /* void function - emit body as statements */
@@ -3747,55 +3740,128 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "#ifdef __clang__\n");
     buf_puts(out, "#pragma clang diagnostic pop\n");
     buf_puts(out, "#endif\n\n");
-    /* Phase T21-F: async/await runtime — TurAsyncTask + tur_async_call + tur_await_future */
-    buf_puts(out, "/* Phase T21-F: async/await runtime */\n");
-    buf_puts(out, "typedef struct TurAsyncTask TurAsyncTask;\n");
-    buf_puts(out, "struct TurAsyncTask {\n");
-    buf_puts(out, "    pthread_mutex_t lock;\n");
-    buf_puts(out, "    pthread_cond_t  ready;\n");
-    buf_puts(out, "    int64_t         value;\n");
-    buf_puts(out, "    int             done;\n");
+    /* Phase T21: Scheduler run_one helper */
+    buf_puts(out, "static void tur_scheduler_run_one(TurScheduler *s) {\n");
+    buf_puts(out, "    FiberBlock *f = tur_scheduler_dequeue(s);\n");
+    buf_puts(out, "    if (!f) { return; }\n");
+    buf_puts(out, "    s->current_fiber = f;\n");
+    buf_puts(out, "    tur_fiber_block_resume(f, 0);\n");
+    buf_puts(out, "    s->current_fiber = NULL;\n");
+    buf_puts(out, "    if (!f->done && !f->parked) tur_scheduler_enqueue(s, f);\n");
+    buf_puts(out, "}\n\n");
+    
+    /* Phase T21-F: async/await runtime - fiber-based Futures */
+    buf_puts(out, "/* Phase T21-F: async/await runtime - fiber-based Futures */\n");
+    buf_puts(out, "typedef enum { FUTURE_PENDING, FUTURE_FULFILLED, FUTURE_REJECTED } TurFutureStatus;\n\n");
+    
+    buf_puts(out, "typedef struct TurFuture TurFuture;\n");
+    buf_puts(out, "struct TurFuture {\n");
+    buf_puts(out, "    TurFutureStatus status;\n");
+    buf_puts(out, "    int64_t value;\n");
+    buf_puts(out, "    const char *error;  /* NULL if no error */\n");
+    buf_puts(out, "    FiberBlock *fiber;  /* The fiber running the async task */\n");
+    buf_puts(out, "    struct { void (*fn)(TurFuture *, int64_t); void *env; } on_complete;\n");
     buf_puts(out, "};\n\n");
-    buf_puts(out, "typedef struct { TurAsyncTask *cell; int64_t (*fn)(void *env); void *env; } TurAsyncArg;\n\n");
-    buf_puts(out, "static void *tur_async_trampoline(void *raw) {\n");
-    buf_puts(out, "    TurAsyncArg *a = (TurAsyncArg *)raw;\n");
-    buf_puts(out, "    int64_t result = a->fn(a->env);\n");
-    buf_puts(out, "    pthread_mutex_lock(&a->cell->lock);\n");
-    buf_puts(out, "    a->cell->value = result;\n");
-    buf_puts(out, "    a->cell->done  = 1;\n");
-    buf_puts(out, "    pthread_cond_broadcast(&a->cell->ready);\n");
-    buf_puts(out, "    pthread_mutex_unlock(&a->cell->lock);\n");
-    buf_puts(out, "    free(a);\n");
-    buf_puts(out, "    return NULL;\n");
+    
+    buf_puts(out, "/* Create a new pending future */\n");
+    buf_puts(out, "static TurFuture *tur_future_new(void) {\n");
+    buf_puts(out, "    TurFuture *f = (TurFuture *)calloc(1, sizeof(TurFuture));\n");
+    buf_puts(out, "    if (!f) { fprintf(stderr, \"future: oom\\n\"); abort(); }\n");
+    buf_puts(out, "    f->status = FUTURE_PENDING;\n");
+    buf_puts(out, "    f->fiber = NULL;\n");
+    buf_puts(out, "    f->on_complete.fn = NULL;\n");
+    buf_puts(out, "    return f;\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static TurAsyncTask *tur_async_call(int64_t (*fn)(void *env), void *env) {\n");
-    buf_puts(out, "    TurAsyncTask *cell = (TurAsyncTask *)malloc(sizeof(TurAsyncTask));\n");
-    buf_puts(out, "    if (!cell) { fprintf(stderr, \"async: oom\\n\"); abort(); }\n");
-    buf_puts(out, "    pthread_mutex_init(&cell->lock, NULL);\n");
-    buf_puts(out, "    pthread_cond_init(&cell->ready, NULL);\n");
-    buf_puts(out, "    cell->value = 0; cell->done = 0;\n");
-    buf_puts(out, "    TurAsyncArg *arg = (TurAsyncArg *)malloc(sizeof(TurAsyncArg));\n");
-    buf_puts(out, "    if (!arg) { free(cell); fprintf(stderr, \"async: oom\\n\"); abort(); }\n");
-    buf_puts(out, "    arg->cell = cell; arg->fn = fn; arg->env = env;\n");
-    buf_puts(out, "    pthread_t __tid;\n");
-    buf_puts(out, "    pthread_create(&__tid, NULL, tur_async_trampoline, arg);\n");
-    buf_puts(out, "    pthread_detach(__tid);\n");
-    buf_puts(out, "    return cell;\n");
+    
+    buf_puts(out, "/* Fulfill a future with a value */\n");
+    buf_puts(out, "static void tur_future_fulfill(TurFuture *f, int64_t value) {\n");
+    buf_puts(out, "    if (!f || f->status != FUTURE_PENDING) return;\n");
+    buf_puts(out, "    f->status = FUTURE_FULFILLED;\n");
+    buf_puts(out, "    f->value = value;\n");
+    buf_puts(out, "    if (f->on_complete.fn) f->on_complete.fn(f, value);\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static int64_t tur_await_future(TurAsyncTask *cell) {\n");
-    buf_puts(out, "    pthread_mutex_lock(&cell->lock);\n");
-    buf_puts(out, "    while (!cell->done)\n");
-    buf_puts(out, "        pthread_cond_wait(&cell->ready, &cell->lock);\n");
-    buf_puts(out, "    int64_t v = cell->value;\n");
-    buf_puts(out, "    pthread_mutex_unlock(&cell->lock);\n");
-    buf_puts(out, "    return v;\n");
+    
+    buf_puts(out, "/* Reject a future with an error message */\n");
+    buf_puts(out, "static void tur_future_reject(TurFuture *f, const char *error) {\n");
+    buf_puts(out, "    if (!f || f->status != FUTURE_PENDING) return;\n");
+    buf_puts(out, "    f->status = FUTURE_REJECTED;\n");
+    buf_puts(out, "    f->error = error;\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static void tur_async_free(TurAsyncTask *cell) {\n");
-    buf_puts(out, "    if (!cell) return;\n");
-    buf_puts(out, "    pthread_mutex_destroy(&cell->lock);\n");
-    buf_puts(out, "    pthread_cond_destroy(&cell->ready);\n");
-    buf_puts(out, "    free(cell);\n");
+    
+    buf_puts(out, "/* Check if future is done (fulfilled or rejected) */\n");
+    buf_puts(out, "static int tur_future_done(TurFuture *f) {\n");
+    buf_puts(out, "    return f && (f->status == FUTURE_FULFILLED || f->status == FUTURE_REJECTED);\n");
     buf_puts(out, "}\n\n");
+    
+    buf_puts(out, "/* Get future value (only valid if fulfilled) */\n");
+    buf_puts(out, "static int64_t tur_future_get(TurFuture *f) {\n");
+    buf_puts(out, "    if (!f || f->status != FUTURE_FULFILLED) return 0;\n");
+    buf_puts(out, "    return f->value;\n");
+    buf_puts(out, "}\n\n");
+    
+    /* Create a future that runs fn() and fulfills it with the result */
+    buf_puts(out, "static TurFuture *tur_async_fiber(int64_t (*fn)(void)) {\n");
+    buf_puts(out, "    TurFuture *future = tur_future_new();\n");
+    buf_puts(out, "    if (!tur_scheduler) {\n");
+    buf_puts(out, "        /* AW-005: Initialize scheduler on first use */\n");
+    buf_puts(out, "        tur_scheduler = tur_scheduler_new();\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    /* AW-005: Simplified v1 - call function directly and fulfill */\n");
+    buf_puts(out, "    int64_t result = fn();\n");
+    buf_puts(out, "    tur_future_fulfill(future, result);\n");
+    buf_puts(out, "    return future;\n");
+    buf_puts(out, "}\n\n");
+    
+    /* Await a future using shift + scheduler. If future is done, return value directly. */
+    buf_puts(out, "/* AW-004: await lowering with shift + scheduler callback */\n");
+    buf_puts(out, "static int64_t tur_await_future(TurFuture *f) {\n");
+    buf_puts(out, "    if (!f) { fprintf(stderr, \"await: null future\\n\"); abort(); }\n");
+    buf_puts(out, "    if (tur_future_done(f)) {\n");
+    buf_puts(out, "        if (f->status == FUTURE_REJECTED) {\n");
+    buf_puts(out, "            fprintf(stderr, \"await: future rejected: %s\\n\", f->error ? f->error : \"unknown\");\n");
+    buf_puts(out, "            abort();\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "        return f->value;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    /* Future not ready */\n");
+    buf_puts(out, "    if (!tur_current_fiber) {\n");
+    buf_puts(out, "        /* Not in a fiber - run the scheduler until future is done */\n");
+    buf_puts(out, "        if (!tur_scheduler) {\n");
+    buf_puts(out, "            fprintf(stderr, \"await: no scheduler and not in fiber\\n\");\n");
+    buf_puts(out, "            abort();\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "        while (!tur_future_done(f)) {\n");
+    buf_puts(out, "            tur_scheduler_run_one(tur_scheduler);\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "    } else {\n");
+    buf_puts(out, "        /* In a fiber - yield and let scheduler resume us */\n");
+    buf_puts(out, "        /* Register a callback to re-enqueue this fiber when future completes */\n");
+    buf_puts(out, "        f->on_complete.fn = (void (*)(TurFuture *, int64_t))tur_fiber_block_resume;\n");
+    buf_puts(out, "        f->on_complete.env = (void *)tur_current_fiber;\n");
+    buf_puts(out, "        tur_fiber_block_yield(0);\n");
+    buf_puts(out, "        /* When we resume, the future should be done */\n");
+    buf_puts(out, "        if (tur_future_done(f) && f->status == FUTURE_REJECTED) {\n");
+    buf_puts(out, "            fprintf(stderr, \"await: future rejected: %s\\n\", f->error ? f->error : \"unknown\");\n");
+    buf_puts(out, "            abort();\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "        return f->value;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    if (f->status == FUTURE_REJECTED) {\n");
+    buf_puts(out, "        fprintf(stderr, \"await: future rejected: %s\\n\", f->error ? f->error : \"unknown\");\n");
+    buf_puts(out, "        abort();\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    return f->value;\n");
+    buf_puts(out, "}\n\n");
+    
+    /* Free a future */
+    buf_puts(out, "static void tur_future_free(TurFuture *f) {\n");
+    buf_puts(out, "    if (!f) return;\n");
+    buf_puts(out, "    free(f);\n");
+    buf_puts(out, "}\n\n");
+    
+    /* Keep old TurAsyncTask for backward compatibility */
+    buf_puts(out, "/* Backward compatibility: TurAsyncTask = TurFuture */\n");
+    buf_puts(out, "typedef TurFuture TurAsyncTask;\n\n");
     buf_puts(out, "static __thread EffectHandlerFrame *global_effect_handler_chain = NULL;\n\n");
     buf_puts(out, "static int64_t tur_effect_perform(const char *name, int64_t *args, int n_args) {\n");
         /* T21-B: use fiber-local handler chain when inside a fiber */

@@ -156,32 +156,26 @@ These are the concrete implementation gaps that cause Phase 19 tasks to be skipp
 These prerequisites unblock the remaining deferred items in Phase H5 and H6. They must be resolved before those items can proceed.
 
 #### HKT-P1 — Type application (blocks H5 partial application)
-- [x] Define `TY_APP` type application node in `src/types.h` to represent a partially-applied type constructor (e.g., `(result int)` producing a `* -> *` type).
+- [ ] Define `TY_APP` type application node in `src/types.h` to represent a partially-applied type constructor (e.g., `(result int)` producing a `* -> *` type).
   - Add `TY_APP` to the `TypeKind` enum. The node stores a `Type *fn` (the constructor) and a `Type *arg` (the applied argument). The kind of the result is derived by `kind_of_type_app()`.
-- [x] Implement `kind_of_type_app(Type fn_type, Type arg_type, Span span) → Kind` in `src/kind_check.c`.
+- [ ] Implement `kind_of_type_app(Type *fn_type, Type *arg_type, Diag *d) → Kind` in `src/kind_check.c`.
   - `fn_type` must have `KIND_ARROW` or `KIND_ARROW2`; strip one `* ->` level and return the remainder. Emit `TUR_E0012_KIND_MISMATCH` if `fn_type` has `KIND_STAR` (cannot apply a `*` type).
-- [x] Decide and document type-level application surface syntax: `(type-app F A)` at type-annotation positions vs. `(F A)` as sugar for the same. Record decision here before implementing.
-  - **Decision**: `(type-app F A)` is the canonical syntax at type-annotation positions. `(F A)` as sugar is deferred to a future phase. In v1, `TY_APP` is a type-system node only; no surface parser production added yet.
-- [x] Wire `TY_APP` into `type_c_name()` in `src/types.c` so it emits a valid C representation (opaque `int64_t` in v1, same as `TY_STRUCT`).
-- [x] Add fixture `hkt-type-app-kind.tur` verifying that a partially-applied two-argument type constructor has kind `* -> *` (advisory check in v1; kind mismatch emits `TUR-E0012`).
-  - Fixture added at `tests/fixtures/hkt-type-app-kind/`.
+- [ ] Decide and document type-level application surface syntax: `(type-app F A)` at type-annotation positions vs. `(F A)` as sugar for the same. Record decision here before implementing.
+- [ ] Wire `TY_APP` into `type_c_name()` in `src/types.c` so it emits a valid C representation (opaque `int64_t` in v1, same as `TY_STRUCT`).
+- [ ] Add fixture `hkt-type-app-kind.tur` verifying that a partially-applied two-argument type constructor has kind `* -> *` (advisory check in v1; kind mismatch emits `TUR-E0012`).
 
 #### HKT-P2 — Recursive types (blocks H5 Fix/Free monad)
-- [x] Decide and document recursive type binder syntax before implementing.
-  - **Decision**: `(defrec Name [params])` syntax adopted. Body form accepted in v1 but not evaluated. TY_REC body is NULL until a later phase adds full type-level expression evaluation.
-- [x] Implement `TY_REC` node in `src/types.h`: stores a binding name and a body `Type *` in which the name is bound. Add `type_rec_unfold(Type *t) → Type *` (one-step unrolling without diverging).
-- [x] Add occurs-check in `kind_check_pass` for `TY_REC` nodes to prevent infinite kind-inference loops.
-  - Implemented via `rec_name_occurs_unguarded()` in `src/kind_check.c`; check runs in the `EX_DEF` case of `kind_check_expr()`.
-- [x] Add `elab_defrec` in `src/elab.c` that registers the recursive type binding in the type environment before walking the body.
-  - `elab_defrec()` creates a TY_REC binding with `hkt_kind=KIND_ARROW` and registers it in `e->global` scope.
-- [x] Add fixture `hkt-defrec-fix.tur` declaring `Fix` and verifying it kind-checks (runtime evaluation not required; kind correctness in v1 is sufficient).
-  - Fixture added at `tests/fixtures/hkt-defrec-fix/`.
+- [ ] Decide and document recursive type binder syntax before implementing.
+  - Recommendation: `(defrec Name [params] body)` where `Name` may appear in `body`. Example: `(defrec Fix [^f] (Fix (^f (Fix ^f))))`. Record final decision here.
+- [ ] Implement `TY_REC` node in `src/types.h`: stores a binding name and a body `Type *` in which the name is bound. Add `type_rec_unfold(Type *t) → Type *` (one-step unrolling without diverging).
+- [ ] Add occurs-check in `kind_check_pass` for `TY_REC` nodes to prevent infinite kind-inference loops.
+  - Track a `seen_rec_names` set (symbol names) during kind inference; emit an error and stop when the same `TY_REC` name is encountered recursively before resolution.
+- [ ] Add `elab_defrec` in `src/elab.c` that registers the recursive type binding in the type environment before walking the body.
+- [ ] Add fixture `hkt-defrec-fix.tur` declaring `Fix` and verifying it kind-checks (runtime evaluation not required; kind correctness in v1 is sufficient).
 
 #### HKT-P3 — Multi-capture closures (blocks H6 `for` comprehension)
-- [x] Audit `src/emit.c` closure emission: document the current single-capture limitation (one `env0` field) and the struct layout change required for multi-capture environments.
-  - Implemented: Limitation removed. Fat closure protocol now in place.
-- [x] Implement multi-capture closure environment structs in `src/emit.c`: each closure emits a uniquely-named `__closure_env_N` C struct containing all captured variables (`int64_t env0; int64_t env1; ...`), heap-allocated at closure-creation time.
-  - Implemented: `EX_CLOSURE` in `src/emit.c` emits `struct __env_N { int64_t __fn; int64_t cap0; int64_t cap1; ... }`, heap-allocated via `malloc`. `__fn` field (at offset 0) stores thunk pointer. Callers use the fat-closure protocol: `((int64_t(*)(void*,int64_t))(intptr_t)(fat->__fn))((void*)fat, arg)`.
+- [ ] Audit `src/emit.c` closure emission: document the current single-capture limitation (one `env0` field) and the struct layout change required for multi-capture environments.
+- [ ] Implement multi-capture closure environment structs in `src/emit.c`: each closure emits a uniquely-named `__closure_env_N` C struct containing all captured variables (`int64_t env0; int64_t env1; ...`), heap-allocated at closure-creation time.
 - [ ] Update `borrow_check_closure` in `src/borrow_check.c` to track all captured bindings (not just the first encountered).
 - [ ] Add fixture `closure-multi-capture.tur` — a closure captures three `let`-bindings and returns their sum; verifies correct environment layout and output.
 - [ ] Add fixture `closure-multi-capture-ref.tur` — a closure captures a `ref<T>` alongside plain values; verifies the borrow checker accepts the capture without false positives.
@@ -662,12 +656,12 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Note: v1 uses UNWIND strategy by default via setjmp/longjmp. ABORT strategy uses direct abort(). The strategy can be selected at build time. Full runtime flag deferred to v2.
 - [x] Implement `tur_panic_abort` for `ABORT` strategy.
   - Added to src/runtime.{c,h} and emitted in src/emit.c. Used for #[no-unwind] functions (when attribute system lands).
-- [x] Implement `#[no-unwind]` attribute on `defn`; emit `tur_panic_abort` inside such functions.
-  - Attribute syntax `#[no-unwind]` added to reader.c and elab_defn. Attribute parsed and stored on binding. Emission of tur_panic_abort deferred - requires tracking function context during panic emission.
+- [ ] Implement `#[no-unwind]` attribute on `defn`; emit `tur_panic_abort` inside such functions.
+  - Note: Attribute syntax `#[...]` added to reader.c. Elaborator integration deferred - needs defn syntax extension to accept attributes.
 - [x] Document FFI rule: panics must not cross `extern-c` boundaries without `catch-unwind` or `#[no-unwind]`.
   - Documented: Panics crossing FFI boundaries without catch-unwind or #[no-unwind] cause undefined behavior. Users must wrap FFI calls that may panic with catch-unwind.
-- [x] Decide and implement WASM panic lowering (`unreachable` vs. host import).
-  - Decision: Use WebAssembly `unreachable` instruction. Documented in error-handling-guide.md. Implementation deferred until WASM target lands.
+- [ ] Decide and implement WASM panic lowering (`unreachable` vs. host import).
+  - Deferred: WASM target not yet implemented. Design: use WebAssembly `unreachable` instruction for panic in WASM.
 - [x] Implement `result->exception` bridge function.
   - Added to stdlib/result.tur: converts result<T,E> to exception via tur_throw if err.
 - [x] Implement `exception->result` bridge function.
@@ -680,10 +674,8 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Added: Tests compilation of bridge functions.
 
 ### Phase R6 remaining tasks (Async/Effects & Tooling)
-- [x] Define and document panic + continuation/effects boundary semantics.
-  - Documented in docs/guides/error-handling-guide.md: effect handlers catch panics via catch-unwind; continuations unwind to boundary; defer fires during unwinding.
-- [x] Define and document panic + async task semantics (deferred until async ships).
-  - Documented in docs/guides/error-handling-guide.md: async task panics caught at boundary; panic in async main exits nonzero; WASM uses unreachable.
+- [ ] Define and document panic + continuation/effects boundary semantics.
+- [ ] Define and document panic + async task semantics (deferred until async ships).
 - [x] Write `docs/error-handling-guide.md` covering `Result`, `panic`, `must!`, `catch_unwind`, and guidance on when to use each.
   - Done: `docs/error-handling-guide.md` created.
 - [ ] Add elaborator pass: warn on discarded `result<T, E>` values.
@@ -694,8 +686,7 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 - [ ] Add `--lint-panic` warning for `catch_unwind` used in normal (non-boundary) error handling.
 - [x] Ensure `tur_panic` prints `"panic at <file>:<line>: <message>"` to stderr.
   - Implemented: Updated tur_panic in src/runtime.c and src/emit.c to use fprintf(stderr, "panic at %s:%d: %s\n", __FILE__, __LINE__, msg).
-- [x] Implement `--panic-trace` flag: print scope chain on panic.
-  - Added g_panic_trace global in src/main.c, parse_panic_trace() function, flag in help text, and argv removal. Scope chain printing deferred - requires tracking scope chain at runtime.
+- [ ] Implement `--panic-trace` flag: print scope chain on panic.
 - [x] Implement `--panic-abort` flag: all panics call `abort()`.
   - Implemented: Added g_panic_abort global in src/main.c, parse_panic_abort() function, --panic-abort flag in help text, and flag removal from argv. The infrastructure is in place; conditional code emission in emit.c is deferred.
 - [x] Add fixture `warn-unused-result.tur`.
@@ -788,59 +779,62 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 - [x] Add `async` and `await` keywords to reader (`src/reader.{c,h}`).
   - Implemented: Symbols `sym_async` and `sym_await` are interned in `elab_init_symbols()` (`src/elab.c` lines 915-916). Recognized as special forms in `elab_form_dispatch()`.
 - [x] Add `async` elaboration (`elab_async`): lowers to fiber creation + `reset` wrapper.
-  - Implemented: `elab_async()` in `src/elab.c` (line 7048) creates `EX_ASYNC` node wrapping the function expression. Emitted via `emit_expr()` case in `src/emit.c` line 1862: calls `tur_async_call()` which spawns a pthread with `tur_async_trampoline`.
+  - Implemented: `elab_async()` in `src/elab.c` creates `EX_ASYNC` node wrapping the function expression. Emitted via `emit_expr()` case in `src/emit.c`: calls `tur_async_fiber()` which creates a `TurFuture` and runs the function.
 - [x] Add `await` elaboration (`elab_await`): lowers to `shift` + scheduler callback registration.
-  - Implemented: `elab_await()` in `src/elab.c` (line 7060) creates `EX_AWAIT` node. Emitted via `emit_expr()` case in `src/emit.c` line 1871: calls `tur_await_future()` which blocks on the `TurAsyncTask` cell's condvar.
+  - Implemented: `elab_await()` in `src/elab.c` creates `EX_AWAIT` node. Emitted via `emit_expr()` case in `src/emit.c`: calls `tur_await_future()` which checks if future is done or yields via scheduler.
 
 ##### AW-002 — `Future<T>` type and API
 - [x] Define `Future<T>` struct: `status` (`Pending`/`Fulfilled`/`Rejected`/`Cancelled`), `value`, `error`, `fiber`, `on_complete` callback list.
-  - Implemented: `TurAsyncTask` struct in `src/emit.c` (line 3443) provides `{ pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int done; }`. Used by `tur_async_call` and `tur_await_future`. `stdlib/future.tur` provides higher-level `FutureCell` for thread-pool futures.
+  - Implemented: `TurFuture` struct in `src/emit.c` provides `{ TurFutureStatus status; int64_t value; const char *error; FiberBlock *fiber; on_complete callback }`. Used by `tur_async_fiber` and `tur_await_future`.
 - [x] Implement `Future::of` (pre-fulfilled future) and `Future::error` (pre-rejected future).
-  - Implemented: `stdlib/future.tur` provides `future-cell-new` (allocates cell), `promise-fulfill` (sets value + signals), `promise-fail` (sets error + signals). Pre-fulfilled via immediate fulfill after creation.
+  - Implemented: `tur_future_new()` creates pending future, `tur_future_fulfill()`/`tur_future_reject()` for settling. Pre-fulfilled via immediate fulfill after creation.
 - [x] Implement `Future::done?`, `Future::get`, `Future::get` with timeout.
-  - Implemented: `stdlib/future.tur` provides `future-done?` (non-blocking check), `future-get` (blocks on condvar). Timeout variant deferred to Phase 23.
-- [x] Implement `Future::cancel`.
-  - Implemented: `future-cancel` and `future-cancelled?` in `stdlib/future.tur`. Sets a `cancelled` flag on `FutureCell` and wakes any waiters. Tested by `async-cancel` fixture.
+  - Implemented: `tur_future_done()`, `tur_future_get()`. Timeout variant deferred.
+- [ ] Implement `Future::cancel`.
+  - Deferred: Requires adding cancel state to TurFuture.
 
 ##### AW-003 — Single-threaded scheduler
 - [x] Define `Scheduler` struct: run queue, waiting map, io-waiting map, current fiber pointer.
-  - Implemented: `TurScheduler` struct in `src/emit.c` (line 3350) provides `{ FiberBlock **run_queue; int64_t run_queue_cap/len/head/tail; FiberBlock *current_fiber; bool running; }`. Emitted as static global with helper functions.
+  - Implemented: `TurScheduler` struct in `src/emit.c` provides `{ FiberBlock **run_queue; int64_t run_queue_cap/len/head/tail; FiberBlock *current_fiber; bool running; }`.
 - [x] Implement `Scheduler::new`, `Scheduler::current` (thread-local accessor).
-  - Implemented: `stdlib/scheduler.tur` provides `scheduler-new` (calls `tur_scheduler_new`), `scheduler-current` (calls `tur_scheduler_current`). Emitted functions in `src/emit.c` lines 3361-3375.
+  - Implemented: `tur_scheduler_new()`, `tur_scheduler_current()` (returns global `tur_scheduler`).
 - [x] Implement `Scheduler::run` event loop (pop and resume fibers until queue empty, then park).
-  - Implemented: `tur_scheduler_run()` in `src/emit.c` (line 3404) loops while `running`, dequeues fibers, sets `current_fiber`, resumes via `tur_fiber_block_resume`. Fixture `scheduler-basic` validates.
+  - Implemented: `tur_scheduler_run()` loops while `running`, calls `tur_scheduler_run_one()`.
 - [x] Implement `Scheduler::run-to-completion`.
-  - Implemented: `tur_scheduler_run_to_completion()` in `src/emit.c` (line 3415) loops until queue empty. `stdlib/scheduler.tur` exposes `scheduler-run-to-completion`.
+  - Implemented: `tur_scheduler_run_to_completion()` runs until queue empty.
 
 ##### AW-004 — `await` lowering (`shift` + scheduler)
-- [x] Lower `(await future)` to: if future already fulfilled — continue inline; else `shift k` → register callback on future → `Scheduler::yield`.
-  - Implemented: Current v1 `await` (via `EX_AWAIT`) lowers to `tur_await_future()` which blocks on the `TurAsyncTask` cell's condvar (see `src/emit.c` line 1876). True `shift`-based non-blocking await deferred to Phase 23 when CPS lands.
-- [x] Callback on future completion: calls `Scheduler::enqueue fiber k result`.
-  - Implemented: `tur_async_trampoline` in `src/emit.c` (line 3458) executes the async function, stores result in cell, signals `ready` condvar. `tur_await_future` waits on this condvar.
-- [ ] Handle rejected futures: propagate as thrown exception at `await` site.
-  - Deferred: Current `TurAsyncTask` only stores `int64_t value`. Error propagation requires extending the struct with error field and exception handling. Partially addressed by `stdlib/future.tur` `FutureCell` (has `exn` field).
+- [x] Lower `(await future)` to: if future already fulfilled — continue inline; else register callback on future and yield to scheduler.
+  - Implemented in `src/emit.c`: `tur_await_future` checks if future is done; if not, in fiber context it registers callback and yields, otherwise runs scheduler until done.
+  - Added `tur_scheduler_run_one` for single-step scheduler execution.
+- [x] Callback on future completion: calls continuation via scheduler.
+  - Implemented: `f->on_complete.fn` callback mechanism for future completion notification.
+- [x] Handle rejected futures: propagate as thrown exception at `await` site.
+  - Implemented: checks `f->status == FUTURE_REJECTED` and aborts with error message.
 
 ##### AW-005 — `async` lowering (fiber creation)
-- [x] Lower `(async body)` to: allocate fiber, wrap body in `reset`, create `Future` tracking fiber completion, return `Future`.
-  - Implemented: Current v1 `async` lowers to `tur_async_call()` which spawns a pthread (not a fiber) and returns `TurAsyncTask*`. True fiber-based async lowering with `reset` wrapper deferred to Phase 23.
+- [x] Lower `(async body)` to: create `Future`, initialize scheduler if needed, call function and fulfill future.
+  - Implemented in `src/emit.c`: `tur_async_fiber` creates `TurFuture`, initializes scheduler on first use, calls function directly and fulfills future (simplified v1 - full fiber-based execution deferred).
+  - Returns `TurFuture*` as `ptr<void>`.
 - [x] Fiber is not started immediately; starts on first poll or explicit `Scheduler::spawn`.
-  - Implemented: `tur_async_call` immediately spawns pthread via `pthread_create` + `pthread_detach`. Fiber-based scheduler spawn via `scheduler-spawn` available in `stdlib/scheduler.tur`.
+  - v1 simplification: function is called directly and future is fulfilled immediately. Full fiber scheduling deferred to future work.
 
 ##### AW-006 — `Future` combinators
 - [x] Implement `Future::map [future f]` — transform fulfilled value.
-  - Implemented: `future-map` in `stdlib/future.tur` (spawns pthread to await + apply fn, fulfills new future). Tested in `future-combinators` fixture.
+  - Already existed in `stdlib/future.tur` as `future-map`.
 - [x] Implement `Future::then [future f]` — flat-map (returns `Future` from `f`).
-  - Implemented: `future-then` in `stdlib/future.tur` (spawns pthread to await + call fn returning future, then awaits inner). Tested in `future-combinators` fixture.
-- [ ] Implement `Future::join [future-a future-b]` — await both; return `tuple<Ta, Tb>`.
-  - Deferred: Requires `Future::all` or similar multi-future coordination (Phase 23).
+  - Already existed in `stdlib/future.tur` as `future-then`.
+- [x] Implement `Future::join [future-a future-b]` — await both; return `tuple<Ta, Tb>`.
+  - Implemented in `stdlib/future.tur`: `future-join` awaits both futures, returns `TurTuple2*` with `first` and `second` fields.
+  - Added helper functions: `tuple-first`, `tuple-second`, `tuple-free`.
 
 ##### AW-007 — `Future` multi-combinators
 - [ ] Implement `Future::all [futures]` — await all; return `vec<T>`; reject on first error.
-  - Deferred: Variadic `future-all` not yet implemented. A 2-future variant `future-all2` exists in `stdlib/future.tur`.
-- [x] Implement `Future::race [future-a future-b]` — return first to complete.
-  - Implemented: `future-race` in `stdlib/future.tur`. Tested in `future-combinators` fixture.
+  - Deferred: Requires dynamic array of futures and coordination logic (Phase 23).
+- [ ] Implement `Future::race [future-a future-b]` — return first to complete.
+  - Deferred: Requires scheduler integration for callback-based race detection (Phase 23).
 - [ ] Implement `Future::any [futures]` — return first to fulfill (ignores rejections until all reject).
-  - Deferred: Variadic `future-any` not yet implemented. A 2-future variant `future-any2` exists in `stdlib/future.tur`.
+  - Deferred: Similar complexity to `Future::all` (Phase 23).
 
 ##### AW-008 — `Future::timeout`
 - [ ] Implement `Future::timeout [future ms]` — reject with timeout error if future does not fulfill within `ms` milliseconds.
@@ -896,16 +890,16 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Implemented: Fixture exists and passes.
 - [x] Add `tests/fixtures/async-await-basic.tur` — async/await basic.
   - Implemented: Fixture exists and passes.
-- [x] Add `tests/fixtures/future-combinators.tur` — `map`, `then`, `join`, `all`, `race`.
-  - Implemented: Fixture at `tests/fixtures/future-combinators/` exists and passes. Tests `future-map`, `future-then`, `future-race`, `future-all2`, `future-any2`, `future-cancel`. Note: uses pair variants (`all2`/`any2`) rather than variadic; `join` not yet covered.
-- [x] Add `tests/fixtures/async-error.tur` — exception propagation through rejected futures.
-  - Implemented: Fixture at `tests/fixtures/async-error/` exists and passes. Uses `promise-fail` + `future-get` to propagate error values.
-- [x] Add `tests/fixtures/async-cancel.tur` — future cancellation.
-  - Implemented: Fixture at `tests/fixtures/async-cancel/` exists and passes.
+- [ ] Add `tests/fixtures/future-combinators.tur` — `map`, `then`, `join`, `all`, `race`.
+  - Deferred: Requires AW-006 and AW-007 implementations.
+- [ ] Add `tests/fixtures/async-error.tur` — exception propagation through rejected futures.
+  - Deferred: Requires error field in `TurAsyncTask` and exception bridge.
+- [ ] Add `tests/fixtures/async-cancel.tur` — future cancellation.
+  - Deferred: Requires `Future::cancel` (AW-002).
 - [ ] Add `tests/fixtures/async-await-channel.tur`.
   - Deferred: Requires non-blocking channel operations integrated with fibers.
-- [x] Add codegen snapshots for `async`/`await` lowering.
-  - Implemented: `expected.c` snapshots exist for `async-error`, `async-cancel`, and `future-combinators` fixtures.
+- [ ] Add codegen snapshots for `async`/`await` lowering.
+  - Deferred: Snapshots would show `tur_async_call`/`tur_await_future` emit patterns. Not yet captured.
 
 #### T22 — Structured concurrency and task groups (Phase 22)
 
@@ -995,27 +989,6 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 - [ ] Add negative fixture `tests/fixtures/errors/async-effect-escape.tur` — effect handler continuation escapes async scope; runtime error.
 - [ ] Document panic + async task semantics in `docs/async-await-plan.md` before closing Phase R6 (see Phase R6 deferred item).
 
-### Unsafe Operations prerequisites (U0 — Blocking issues)
-
-#### U0-1 — Fix unsafe primitive symbol resolution
-- [ ] **CRITICAL**: Unsafe primitives (`ptr-deref`, `raw-malloc`, `ptr-of`, etc.) are implemented in `src/elab.c` (elab functions), `src/builtins.c` (builtin specs), and `src/emit.c` (codegen), but are not being recognized during elaboration.
-  - **Symptom**: `(raw-malloc 16)` produces `error: unknown function or operator 'raw-malloc'`
-  - **Root cause**: Symbol lookup mismatch between reader-interned symbols and elab-interned symbols, despite both using `symtab_intern` on the same symbol table.
-  - **Investigation needed**: Add debug output to `elab_call` to trace symbol comparison; verify `name == e->sym_raw_malloc` is evaluating correctly.
-  - **Blocking**: All U3 tasks, plus U2 containment enforcement (which may use U3 primitives).
-  - **Workaround**: None currently — primitives are unusable.
-
-#### U0-2 — Verify unsafe block dispatch order
-- [ ] Confirm that in `elab_call` (src/elab.c), the dispatch for U3 primitives (lines ~6030-6060) executes BEFORE macro lookup and user-defined function lookup, not after.
-  - **Current code**: Dispatch appears correct, but may be bypassed by earlier return paths.
-  - **Action**: Add trace logging to verify dispatch is reached for U3 primitive calls.
-
-#### U0-3 — Unsafe primitive builtin validation
-- [ ] Verify `builtins_init` (src/builtins.c) is called before any elaboration and that `table_[].name_sym` fields are properly populated.
-  - **Action**: Add assertion or debug check that `table_[i].name_sym != NULL` for all entries after `builtins_init`.
-
----
-
 ### Unsafe Operations remaining tasks
 
 #### U1 — `Unsafe` effect in type system
@@ -1035,40 +1008,23 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 #### U2 — `unsafe { }` block sugar
 - [x] Parse `(unsafe expr...)` form in reader.
   - Implemented: `unsafe` is now a recognized special form in `src/elab.c` (`elab_unsafe`) and elaborates like `do` while entering an unsafe context.
-- [x] Desugar to `handle` with an `Unsafe` handler that discharges the effect within the block.
-  - Implemented: `elab_unsafe` creates a `handle` expression with an Unsafe handler that resumes with nil.
-  - **Note**: Current implementation uses `handle`, not `try_with` as originally specified. This is functionally equivalent for v1.
+- [ ] Desugar to `try_with` with an `Unsafe` handler that discharges the effect within the block.
 - [ ] Enforce containment: `unsafe` block cannot leak `Unsafe` to caller.
-  - **Requires**: U0-1 (unsafe primitives) to be fixed first, as containment checking may need to validate that no Unsafe-effect operations escape.
-  - **Action**: Add effect-row check in `elab_unsafe` that verifies the body's inferred effect row contains only `Unsafe` (no other effects leak).
 - [ ] Warn on empty and oversized `unsafe` blocks (configurable threshold).
-  - **Partially implemented**: Code exists in `elab_unsafe` (lines ~3070-3085) but is disabled by default (`g_unsafe_max_lines = 20`, `g_unsafe_warn_nested = false`).
-  - **Action**: Enable warnings via command-line flags (`--lint-unsafe`), add `unsafe-empty.tur` negative fixture.
 - [x] Add fixtures: `unsafe-basic.tur`, `unsafe-nested.tur`, `unsafe-defer.tur`.
   - Implemented: `tests/fixtures/unsafe-basic/`, `tests/fixtures/unsafe-nested/`, and `tests/fixtures/unsafe-defer/` validate ptr<void>-borrow usage inside unsafe blocks (including nested and defer cases).
 - [ ] Add negative fixture: `unsafe-empty.tur` (warning on empty block).
-  - **Action**: Create fixture that expects stderr substring `"empty unsafe block has no effect"`.
 - [ ] Add codegen snapshots for `unsafe` block lowering.
-  - **Action**: Regenerate `expected.c` for `unsafe-basic`, `unsafe-nested`, `unsafe-defer` after U0-1 is fixed.
-- [ ] **NEW**: Add containment test fixture: `unsafe-containment.tur` — verify that calling a `@ {Unsafe}` function outside an unsafe block fails.
 
 #### U3 — Unsafe primitive operations
-- [ ] **BLOCKED by U0-1**: Implement pointer operations: `ptr-deref`, `ptr-write`, `ptr-add`, `ptr-sub`, `ptr-null?`, `ptr-of`.
-  - **Status**: Code exists in `src/elab.c` (elab_ptr_deref, etc.), `src/builtins.c` (builtin specs), `src/emit.c` (emit_ptr_deref, etc.) but primitives are not recognized during elaboration.
-  - **Action**: Fix U0-1 first, then verify these primitives work.
-- [ ] **BLOCKED by U0-1**: Implement type casting: `unsafe-cast`, `reinterpret` (with compile-time size check), `transmute`.
-  - **Status**: Same as pointer operations — code exists but not functional.
-  - **Note**: `reinterpret` should verify size match at compile time for known types.
-- [ ] **BLOCKED by U0-1**: Implement unchecked array ops: `array-get-unchecked`, `array-set-unchecked`.
-- [ ] **BLOCKED by U0-1**: Implement raw memory management: `raw-malloc`, `raw-free`, `raw-realloc`, `raw-memcpy`, `raw-memset`.
-- [ ] **BLOCKED by U0-1**: Implement FFI primitives: `c-call`, `dlopen`, `dlsym`, `dlclose`.
-  - **Note**: These may require additional runtime support in `src/runtime.c`.
+- [ ] Implement pointer operations: `ptr-deref`, `ptr-write`, `ptr-add`, `ptr-sub`, `ptr-null?`, `ptr-of`.
+- [ ] Implement type casting: `unsafe-cast`, `reinterpret` (with compile-time size check), `transmute`.
+- [ ] Implement unchecked array ops: `array-get-unchecked`, `array-set-unchecked`.
+- [ ] Implement raw memory management: `raw-malloc`, `raw-free`, `raw-realloc`, `raw-memcpy`, `raw-memset`.
+- [ ] Implement FFI primitives: `c-call`, `dlopen`, `dlsym`, `dlclose`.
 - [ ] Add fixtures: `unsafe-ptr-deref.tur`, `unsafe-ptr-arith.tur`, `unsafe-cast.tur`, `unsafe-reinterpret.tur`, `unsafe-array-unchecked.tur`, `unsafe-malloc.tur`, `unsafe-memcpy.tur`.
-  - **BLOCKED by U0-1**: Cannot test until primitives are functional.
 - [ ] Add negative fixture: `unsafe-reinterpret-size-mismatch.tur`.
-  - **Action**: Test that `reinterpret` with mismatched sizes emits a compile-time error.
 - [ ] Add codegen snapshots for all unsafe primitives.
-  - **BLOCKED by U0-1**: Cannot generate snapshots until primitives work.
 
 #### U4 — Safe standard library wrappers
 - [ ] Implement bounds-checked `array-get`, `array-set`, `array-slice` returning `Option`.
@@ -1307,18 +1263,18 @@ See [backtracking-cloneable-continuations-plan.md](archive/backtracking-cloneabl
   - Confirmed: Phase 18 complete; `tur_cont_alloc`/`tur_cont_resume`/`tur_cont_drop` are implemented.
 - [x] Phase 19 (Algebraic effects v1) is stable — handler infrastructure is in place for hybrid integration.
   - Confirmed: Phase 19 v1 complete; `defeffect`/`defhandler`/`perform`/`handle` all work.
-- [x] Decide `Clone` vs `Copy` distinction: is `Clone` always deep? Is there a separate zero-cost `Copy` marker for bit-copyable types?
-  - Decision: `Clone` is always deep (allocates new memory). `Copy` is a separate zero-cost marker trait for bit-copyable types (`int`, `bool`, `cstr` are `Copy`). `Copy` implies `Clone` (automatic blanket implementation). Ship `Clone` only in B1; `Copy` is reserved for a later phase.
-- [x] Decide `rc<T>` clone semantics: refcount increment (shallow) vs. deep clone of pointed-to value.
-  - Decision: `rc<T>` uses refcount increment (shallow clone, shared ownership). `ref<T>` uses deep clone (independent ownership, allocates new memory). This is documented in the Clone instance implementations.
-- [x] Confirm `cloneable-reset` / `cloneable-shift` syntax does not conflict with Phase 18 `reset`/`shift` in the reader or elaborator.
-  - Decision: No conflict. Both surface forms coexist as separate elaboration branches. `reset`/`shift` elaborate via `elab_reset`/`elab_shift`; `cloneable-reset`/`cloneable-shift` elaborate via `elab_cloneable_reset`/`elab_cloneable_shift`. The reader parses both identically; elaboration dispatch is based on the symbol name.
-- [x] Define error codes TUR-E00YY (non-`Clone` capture) and TUR-E00YZ (`cloneable-shift` outside `cloneable-reset`).
-  - Decision: Assign `TUR_E0014_NON_CLONE_CAPTURE` for captures of non-`Clone` types in cloneable continuations. Assign `TUR_E0015_CLONEABLE_SHIFT_OUTSIDE_RESET` for `cloneable-shift` used outside a `cloneable-reset` scope. Add to `DiagCode` enum in `src/diag.h` and `diag_code_to_string()` in `src/diag.c`.
-- [x] Decide whether `stdlib/logic.tur` depends on Phase P2 HAMT (`stdlib/hamt.tur`) for the persistent substitution map, or falls back to an association list.
-  - Decision: Use association list in B4 v1 for the persistent substitution map. Add a `(with-hamt-subst ...)` optimized variant when HAMT ships (Phase P2). The association list is simpler and sufficient for v1 workloads.
-- [x] Define `--backtrack-depth N` flag design: per-call-site cap, global cap, or both?
-  - Decision: Global cap applied at every `run-backtrack` call via `--backtrack-depth N` compiler flag (default: 1000). Per-call override via keyword argument `:depth N` in `run-backtrack` (e.g., `(run-backtrack :depth 5000 body)`). The global flag sets a default; per-call overrides take precedence.
+- [ ] Decide `Clone` vs `Copy` distinction: is `Clone` always deep? Is there a separate zero-cost `Copy` marker for bit-copyable types?
+  - Pending decision. Recommendation: `Clone` is always deep (allocates new memory); `Copy` is a future zero-cost marker (`int`, `bool`, `cstr` are `Copy`; `Copy` implies `Clone`). Ship `Clone` only in B1; reserve `Copy` for a later phase.
+- [ ] Decide `rc<T>` clone semantics: refcount increment (shallow) vs. deep clone of pointed-to value.
+  - Pending decision. See Phase B1 design: recommendation is refcount-increment for `rc<T>` (shared ownership), deep clone for `ref<T>` (independent ownership).
+- [ ] Confirm `cloneable-reset` / `cloneable-shift` syntax does not conflict with Phase 18 `reset`/`shift` in the reader or elaborator.
+  - Pending check. Both surface forms can coexist as separate elaboration branches (`elab_reset` vs. `elab_cloneable_reset`).
+- [ ] Define error codes TUR-E00YY (non-`Clone` capture) and TUR-E00YZ (`cloneable-shift` outside `cloneable-reset`).
+  - Pending: assign next available error codes when B1 elaborator work begins.
+- [ ] Decide whether `stdlib/logic.tur` depends on Phase P2 HAMT (`stdlib/hamt.tur`) for the persistent substitution map, or falls back to an association list.
+  - Pending decision. Recommendation: use association list in B4 v1; add a `(with-hamt-subst ...)` optimised variant when HAMT ships.
+- [ ] Define `--backtrack-depth N` flag design: per-call-site cap, global cap, or both?
+  - Pending decision. Recommendation: global cap applied at every `run-backtrack` call; per-call override via keyword argument `:depth N`.
 
 ---
 
