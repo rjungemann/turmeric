@@ -141,8 +141,98 @@
   (throw (IoError. msg 0)))
 
 ;; ============================================================================
+
+(defstruct ValidationError [message :cstr field :cstr])
+
+defn ValidationError. [message :cstr field :cstr] :ptr<void>
+  ```c
+  ValidationError* err = (ValidationError*)malloc(sizeof(ValidationError));
+  err->message = message;
+  err->field = field;
+  return (void*)err;
+  ```)
+
+defn ValidationError-message [err :ptr<void>] :cstr
+  ```c
+  ValidationError* e = (ValidationError*)err;
+  return e->message;
+  ```)
+
+defn ValidationError-field [err :ptr<void>] :cstr
+  ```c
+  ValidationError* e = (ValidationError*)err;
+  return e->field ? e->field : "";
+  ```)
+=======
+
+(defstruct ValidationError [message :cstr field :ptr<void>])
+
+defn ValidationError. [message :cstr field :ptr<void>] :ptr<void>
+  ```c
+  ValidationError* err = (ValidationError*)malloc(sizeof(ValidationError));
+  err->message = message;
+  err->field = field;
+  return (void*)err;
+  ```)
+
+defn ValidationError-message [err :ptr<void>] :cstr
+  ```c
+  ValidationError* e = (ValidationError*)err;
+  return e->message;
+  ```)
+
+defn ValidationError-field [err :ptr<void>] :ptr<void>
+  ```c
+  ValidationError* e = (ValidationError*)err;
+  return e->field;
+  ```)
+=======
 ;; ValidationError type (Phase R3)
 ;; ============================================================================
+
+(defstruct ValidationError [message :cstr field :cstr])
+
+defn ValidationError. [message :cstr field :cstr] :ptr<void>
+  ```c
+  ValidationError* err = (ValidationError*)malloc(sizeof(ValidationError));
+  err->message = message;
+  err->field = field;
+  return (void*)err;
+  ```)
+
+defn ValidationError-message [err :ptr<void>] :cstr
+  ```c
+  ValidationError* e = (ValidationError*)err;
+  return e->message;
+  ```)
+
+defn ValidationError-field [err :ptr<void>] :cstr
+  ```c
+  ValidationError* e = (ValidationError*)err;
+  return e->field ? e->field : "";
+  ```)============================================================================
+
+(defstruct ValidationError [message :cstr field :ptr<void>])
+
+defn ValidationError. [message :cstr field :ptr<void>] :ptr<void>
+  ```c
+  ValidationError* err = (ValidationError*)malloc(sizeof(ValidationError));
+  err->message = message;
+  err->field = field;
+  return (void*)err;
+  ```)
+
+defn ValidationError-message [err :ptr<void>] :cstr
+  ```c
+  ValidationError* e = (ValidationError*)err;
+  return e->message;
+  ```)
+
+defn ValidationError-field [err :ptr<void>] :ptr<void>
+  ```c
+  ValidationError* e = (ValidationError*)err;
+  return e->field;
+  ```)============================================================================
 
 (defstruct ValidationError [message :cstr field :cstr])
 
