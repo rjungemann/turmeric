@@ -226,6 +226,9 @@ static inline bool type_is_sync(Type t) {
 /* Convert TypeKind to string representation for debugging */
 const char *typekind_to_string(TypeKind k);
 
+/* Convert type name string to TypeKind */
+TypeKind typekind_from_name(const char *name);
+
 static inline Type type_simple(TypeKind kind, CopyKind copy_kind) {
     Type t = {0};
     t.kind = kind;

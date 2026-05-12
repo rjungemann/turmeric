@@ -1091,66 +1091,123 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             return atom_nil();
         }
         case EX_PANIC_WITH: {
-            /* (panic-with payload) - for v1, just convert to string and use tur_panic */
+            /* (panic-with payload) - panic with typed payload */
             const Expr *payload = e->as.panic_with_.payload;
             char *payload_val = emit_value(ctx, body, payload);
             indent_buf(body, ctx->indent);
-            /* For v1, use a simplified approach: convert payload to string via snprintf */
-            /* This is a placeholder - full typed panic-with is deferred */
-            buf_printf(body, "tur_panic(\"panic-with payload\");\n");
+            /* Set the current frame for panic to fire defers */
+            if (ctx->frame_var) {
+                buf_printf(body, "tur_panic_set_frame(&%s);\n", ctx->frame_var);
+            }
+            /* tur_panic_with takes type_tag (int), payload (void*), file, line */
+            /* For now, use a placeholder type_tag of 0 (TY_INT) */
+            buf_printf(body, "tur_panic_with(0, (void*)%s, __FILE__, __LINE__);\n", payload_val);
             free(payload_val);
             return atom_nil();
         }
         case EX_CATCH_UNWIND: {
             /* (catch-unwind thunk) - setjmp boundary, call thunk, handle panic */
-            /* For v1, emit a simplified version that just calls the thunk */
-            /* Full setjmp/longjmp implementation is deferred */
             const Expr *thunk = e->as.catch_unwind_.thunk;
+            indent_buf(body, ctx->indent);
+            /* Generate a unique result variable name */
+            char result_var[64];
+            snprintf(result_var, sizeof(result_var), "__catch_result_%d", ctx->tmp_n++);
+            /* Declare result variable */
+            buf_printf(body, "tur_result %s;\n", result_var);
+            indent_buf(body, ctx->indent);
+            /* Call tur_catch_unwind with the thunk */
             char *thunk_val = emit_value(ctx, body, thunk);
-            /* Just emit the thunk call directly for now */
+            /* The thunk is a function that takes (void* env, tur_result* out) */
+            /* For simplicity in v1, we use NULL as env and pass result_var as out */
+            buf_printf(body, "if (tur_catch_unwind((tur_thunk_fn)%s, NULL, &%s)) {\n", thunk_val, result_var);
             free(thunk_val);
-            /* Return a dummy value */
-            return atom_nil();
+            ctx->indent++;
+            indent_buf(body, ctx->indent);
+            /* Panic was caught - return the err payload as a result */
+            /* For v1, we return the payload pointer wrapped in err */
+            buf_printf(body, "/* panic caught */\n");
+            ctx->indent--;
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "} else {\n");
+            ctx->indent++;
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "/* normal completion - extract ok value */\n");
+            ctx->indent--;
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "}\n");
+            indent_buf(body, ctx->indent);
+            /* Return the result - for v1, just return the ok value or panic payload */
+            buf_printf(body, "/* v1: simplified - return result struct directly */\n");
+            /* Return the result variable as a pointer - cast to int64_t for ptr<void> */
+            return strdup(result_var);
         }
         case EX_CATCH_PANIC_OF: {
             /* (catch-panic-of Type thunk) - typed catch boundary */
-            /* For v1, emit a simplified version */
             const Expr *thunk = e->as.catch_panic_of_.thunk;
+            TypeKind type_kind = e->as.catch_panic_of_.type_kind;
+            indent_buf(body, ctx->indent);
+            /* Generate a unique result variable name */
+            char result_var[64];
+            snprintf(result_var, sizeof(result_var), "__catch_panic_of_result_%d", ctx->tmp_n++);
+            /* Declare result variable */
+            buf_printf(body, "tur_result %s;\n", result_var);
+            indent_buf(body, ctx->indent);
+            /* Call tur_catch_panic_of with type and thunk */
             char *thunk_val = emit_value(ctx, body, thunk);
-            /* Just emit the thunk call directly for now */
-            (void)e->as.catch_panic_of_.type_kind; /* unused in v1 */
+            buf_printf(body, "if (tur_catch_panic_of(%d, (tur_thunk_fn)%s, NULL, &%s)) {\n",
+                   (int)type_kind, thunk_val, result_var);
             free(thunk_val);
-            /* Return a dummy value */
-            return atom_nil();
+            ctx->indent++;
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "/* panic of matching type caught */\n");
+            ctx->indent--;
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "} else {\n");
+            ctx->indent++;
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "/* normal completion or type mismatch (re-panicked) */\n");
+            ctx->indent--;
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "}\n");
+            indent_buf(body, ctx->indent);
+            /* Return the result variable as a pointer */
+            return strdup(result_var);
         }
         case EX_PANIC_PAYLOAD_TYPE: {
-            /* For v1, just emit the payload expression and return nil */
             const Expr *payload = e->as.panic_payload_type_.payload;
             char *payload_var = emit_value(ctx, body, payload);
+            char *result = malloc(strlen(payload_var) + 64);
+            snprintf(result, strlen(payload_var) + 64, "(int64_t)tur_panic_payload_type((tur_panic_payload*)%s)", payload_var);
             free(payload_var);
-            return atom_nil();
+            return result;
         }
         case EX_PANIC_PAYLOAD_VALUE: {
             const Expr *payload = e->as.panic_payload_value_.payload;
             char *payload_var = emit_value(ctx, body, payload);
+            char *result = malloc(strlen(payload_var) + 64);
+            snprintf(result, strlen(payload_var) + 64, "tur_panic_payload_value((tur_panic_payload*)%s)", payload_var);
             free(payload_var);
-            return atom_nil();
+            return result;
         }
         case EX_PANIC_PAYLOAD_FILE: {
             const Expr *payload = e->as.panic_payload_file_.payload;
             char *payload_var = emit_value(ctx, body, payload);
+            char *result = malloc(strlen(payload_var) + 64);
+            snprintf(result, strlen(payload_var) + 64, "tur_panic_payload_file((tur_panic_payload*)%s)", payload_var);
             free(payload_var);
-            return atom_nil();
+            return result;
         }
         case EX_PANIC_PAYLOAD_LINE: {
             const Expr *payload = e->as.panic_payload_line_.payload;
             char *payload_var = emit_value(ctx, body, payload);
+            char *result = malloc(strlen(payload_var) + 64);
+            snprintf(result, strlen(payload_var) + 64, "(int64_t)tur_panic_payload_line((tur_panic_payload*)%s)", payload_var);
             free(payload_var);
-            return atom_nil();
+            return result;
         }
         case EX_PANIC_PAYLOAD_DOWNS: {
             const Expr *payload = e->as.panic_payload_downs_.payload;
-            int target_type = e->as.panic_payload_downs_.target_type;
+            TypeKind target_type = e->as.panic_payload_downs_.target_type;
             char *payload_var = emit_value(ctx, body, payload);
             free(payload_var);
             (void)target_type; /* unused in v1 */
@@ -2214,8 +2271,26 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:
         case EX_FLOAT_LIT: case EX_CSTR_LIT: case EX_VAR:
         case EX_TYPECLASS_DEF:
+        case EX_PANIC_PAYLOAD_TYPE:
+        case EX_PANIC_PAYLOAD_VALUE:
+        case EX_PANIC_PAYLOAD_FILE:
+        case EX_PANIC_PAYLOAD_LINE:
+        case EX_PANIC_PAYLOAD_DOWNS:
             /* No side effects — emit nothing. */
             return;
+        case EX_PANIC_WITH: {
+            /* Diverging - emit the panic */
+            char *v = emit_value(ctx, body, e);
+            free(v);
+            return;
+        }
+        case EX_CATCH_UNWIND:
+        case EX_CATCH_PANIC_OF: {
+            /* These produce values but also have side effects (setting up handlers) */
+            char *v = emit_value(ctx, body, e);
+            free(v);
+            return;
+        }
         case EX_WHILE: emit_while_stmt(ctx, body, e); return;
         case EX_SET:      emit_set_stmt(ctx, body, e);       return;
         case EX_SET_DEREF: emit_set_deref_stmt(ctx, body, e); return;
@@ -2392,30 +2467,7 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             free(v);
             return;
         }
-        case EX_PANIC_WITH: {
-            char *v = emit_value(ctx, body, e);
-            free(v);
-            return;
-        }
-        case EX_CATCH_UNWIND: {
-            char *v = emit_value(ctx, body, e);
-            free(v);
-            return;
-        }
-        case EX_CATCH_PANIC_OF: {
-            char *v = emit_value(ctx, body, e);
-            free(v);
-            return;
-        }
-        case EX_PANIC_PAYLOAD_TYPE:
-        case EX_PANIC_PAYLOAD_VALUE:
-        case EX_PANIC_PAYLOAD_FILE:
-        case EX_PANIC_PAYLOAD_LINE:
-        case EX_PANIC_PAYLOAD_DOWNS: {
-            char *v = emit_value(ctx, body, e);
-            free(v);
-            return;
-        }
+        /* These are handled in the main emit_expr switch above */
         case EX_TRY: {
             /* (try body (catch ...) (finally ...)) - emit as setjmp/longjmp */
             /* Delegate to emit_value which handles the full implementation */
@@ -3233,6 +3285,122 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "        tur_frame_fire_chain(global_panic_frame);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    abort();\n");
+    buf_puts(out, "}\n\n");
+
+    /* Phase R2: Panic with typed payload */
+    buf_puts(out, "/* Phase R2: tur_panic_with */\n");
+    buf_puts(out, "typedef struct tur_panic_payload tur_panic_payload;\n");
+    buf_puts(out, "struct tur_panic_payload {\n");
+    buf_puts(out, "    int type_tag;\n");
+    buf_puts(out, "    void *value;\n");
+    buf_puts(out, "    const char *file;\n");
+    buf_puts(out, "    int line;\n");
+    buf_puts(out, "};\n\n");
+    buf_puts(out, "static tur_panic_payload *global_panic_payload = NULL;\n");
+    buf_puts(out, "static jmp_buf global_panic_jmpbuf;\n");
+    buf_puts(out, "static int global_panic_jmpbuf_valid = 0;\n\n");
+    buf_puts(out, "static tur_panic_payload *panic_payload_new(int type_tag, void *payload, const char *file, int line) {\n");
+    buf_puts(out, "    tur_panic_payload *p = (tur_panic_payload *)malloc(sizeof(tur_panic_payload));\n");
+    buf_puts(out, "    if (!p) { fprintf(stderr, \"panic: oom\\n\"); abort(); }\n");
+    buf_puts(out, "    p->type_tag = type_tag; p->value = payload; p->file = file; p->line = line;\n");
+    buf_puts(out, "    return p;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static void panic_payload_free(tur_panic_payload *p) {\n");
+    buf_puts(out, "    if (p) { free(p->value); free(p); }\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static void tur_panic_with(int type_tag, void *payload, const char *file, int line) {\n");
+    buf_puts(out, "    if (tur_panic_in_progress) {\n");
+    buf_puts(out, "        fprintf(stderr, \"double panic: aborting\\n\");\n");
+    buf_puts(out, "        free(payload);\n");
+    buf_puts(out, "        abort();\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    tur_panic_in_progress = 1;\n");
+    buf_puts(out, "    if (global_panic_jmpbuf_valid) {\n");
+    buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line);\n");
+    buf_puts(out, "        longjmp(global_panic_jmpbuf, 1);\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    fprintf(stderr, \"panic at %s:%d\\n\", file ? file : \"(unknown)\", line);\n");
+    buf_puts(out, "    free(payload);\n");
+    buf_puts(out, "    abort();\n");
+    buf_puts(out, "}\n\n");
+    /* Phase R2: Panic payload accessors */
+    buf_puts(out, "static int tur_panic_payload_type(tur_panic_payload *p) {\n");
+    buf_puts(out, "    return p ? p->type_tag : 0;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static void *tur_panic_payload_value(tur_panic_payload *p) {\n");
+    buf_puts(out, "    return p ? p->value : NULL;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static const char *tur_panic_payload_file(tur_panic_payload *p) {\n");
+    buf_puts(out, "    return p ? p->file : NULL;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static int tur_panic_payload_line(tur_panic_payload *p) {\n");
+    buf_puts(out, "    return p ? p->line : 0;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static void *tur_panic_payload_downcast(tur_panic_payload *p, int target_type) {\n");
+    buf_puts(out, "    if (!p || p->type_tag != target_type) return NULL;\n");
+    buf_puts(out, "    return p->value;\n");
+    buf_puts(out, "}\n\n");
+    /* Phase R2: catch-unwind and catch-panic-of */
+    buf_puts(out, "/* Phase R2: catch-unwind/catch-panic-of */\n");
+    buf_puts(out, "typedef enum { TUR_RESULT_OK, TUR_RESULT_ERR } tur_result_tag;\n");
+    buf_puts(out, "typedef struct tur_result tur_result;\n");
+    buf_puts(out, "struct tur_result {\n");
+    buf_puts(out, "    tur_result_tag tag;\n");
+    buf_puts(out, "    union { int64_t ok_val; void *ok_ptr; tur_panic_payload *err; } u;\n");
+    buf_puts(out, "};\n\n");
+    buf_puts(out, "typedef void (*tur_thunk_fn)(void *env, tur_result *out);\n\n");
+    buf_puts(out, "static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {\n");
+    buf_puts(out, "    if (global_panic_jmpbuf_valid) {\n");
+    buf_puts(out, "        thunk(env, out);\n");
+    buf_puts(out, "        return false;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    global_panic_jmpbuf_valid = 1;\n");
+    buf_puts(out, "    if (setjmp(global_panic_jmpbuf) == 0) {\n");
+    buf_puts(out, "        thunk(env, out);\n");
+    buf_puts(out, "        global_panic_jmpbuf_valid = 0;\n");
+    buf_puts(out, "        if (global_panic_payload) {\n");
+    buf_puts(out, "            panic_payload_free(global_panic_payload);\n");
+    buf_puts(out, "            global_panic_payload = NULL;\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "        return false;\n");
+    buf_puts(out, "    } else {\n");
+    buf_puts(out, "        global_panic_jmpbuf_valid = 0;\n");
+    buf_puts(out, "        out->tag = TUR_RESULT_ERR;\n");
+    buf_puts(out, "        out->u.err = global_panic_payload;\n");
+    buf_puts(out, "        global_panic_payload = NULL;\n");
+    buf_puts(out, "        return true;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env, tur_result *out) {\n");
+    buf_puts(out, "    if (global_panic_jmpbuf_valid) {\n");
+    buf_puts(out, "        thunk(env, out);\n");
+    buf_puts(out, "        return false;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    global_panic_jmpbuf_valid = 1;\n");
+    buf_puts(out, "    if (setjmp(global_panic_jmpbuf) == 0) {\n");
+    buf_puts(out, "        thunk(env, out);\n");
+    buf_puts(out, "        global_panic_jmpbuf_valid = 0;\n");
+    buf_puts(out, "        if (global_panic_payload) {\n");
+    buf_puts(out, "            panic_payload_free(global_panic_payload);\n");
+    buf_puts(out, "            global_panic_payload = NULL;\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "        return false;\n");
+    buf_puts(out, "    } else {\n");
+    buf_puts(out, "        global_panic_jmpbuf_valid = 0;\n");
+    buf_puts(out, "        if (global_panic_payload && global_panic_payload->type_tag == expected_type) {\n");
+    buf_puts(out, "            out->tag = TUR_RESULT_ERR;\n");
+    buf_puts(out, "            out->u.err = global_panic_payload;\n");
+    buf_puts(out, "            global_panic_payload = NULL;\n");
+    buf_puts(out, "            return true;\n");
+    buf_puts(out, "        } else {\n");
+    buf_puts(out, "        if (global_panic_payload) {\n");
+    buf_puts(out, "            /* Type mismatch - re-panic */\n");
+    buf_puts(out, "            tur_panic_with(global_panic_payload->type_tag, global_panic_payload->value,\n");
+    buf_puts(out, "                           global_panic_payload->file, global_panic_payload->line);\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "        return false;\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
 
     /* Phase 19: Effect handler chain */
