@@ -25,6 +25,8 @@ typedef enum DiagCode {
     /* Thread safety (T19-B) */
     TUR_E0010_NOT_SEND,   /* type cannot be sent across thread boundaries */
     TUR_E0011_NOT_SYNC,   /* type cannot be shared across thread boundaries */
+    /* Kind mismatch (Phase HKT H1) */
+    TUR_E0012_KIND_MISMATCH, /* type constructor kind does not match expected kind */
 } DiagCode;
 
 typedef enum DiagLevel {

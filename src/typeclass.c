@@ -60,18 +60,47 @@ TypeClass *typeclass_env_lookup_typeclass(const TypeClassEnv *env, const Symbol 
     return NULL;
 }
 
-/* Look up instances for a typeclass and type arguments */
+/* Look up instances for a typeclass and type arguments.
+ *
+ * Phase HKT H2: Properly matches type_args by TypeKind (was "first match wins").
+ * For KIND_STAR parameters, compares type_args[i].kind element-wise.
+ * Falls back to the first matching typeclass if all type_args are unknown (TY_UNKNOWN).
+ * This ensures no performance regression for existing KIND_STAR code paths. */
 TypeClassInstance *typeclass_env_lookup_instance(const TypeClassEnv *env,
                                                   TypeClass *typeclass,
                                                   Type *type_args, uint8_t n_type_args) {
-    /* For now, just return the first matching instance */
-    /* A proper implementation would need to match type_args */
+    TypeClassInstance *fallback = NULL;
+
     for (TypeClassInstance *inst = env->instances; inst != NULL; inst = inst->next) {
-        if (inst->typeclass == typeclass) {
-            return inst;
+        if (inst->typeclass != typeclass) continue;
+
+        /* Arity must match. */
+        if (inst->n_type_args != n_type_args) continue;
+
+        /* Match element-wise by TypeKind (kind erasure: only the top-level kind
+         * is compared; inner types are not inspected in H2). */
+        bool match = true;
+        bool all_unknown = (n_type_args == 0);
+        for (uint8_t i = 0; i < n_type_args; i++) {
+            if (type_args[i].kind == TY_UNKNOWN) {
+                /* Caller does not know the type yet; defer to fallback. */
+                all_unknown = true;
+                break;
+            }
+            if (inst->type_args[i].kind != type_args[i].kind) {
+                match = false;
+                break;
+            }
         }
+        if (all_unknown) {
+            /* Record as fallback — used only when no typed match is found. */
+            if (!fallback) fallback = inst;
+            continue;
+        }
+        if (match) return inst;
     }
-    return NULL;
+
+    return fallback;
 }
 
 /* Initialize a constraint set */
@@ -129,4 +158,43 @@ bool typeclass_solve_constraints(ConstraintSet *constraints, Type *arg_types, ui
         }
     }
     return true;
+}
+
+/* Look up an instance using a structured TypeClassDispatchKey (Phase HKT H2).
+ *
+ * Two-level lookup:
+ *   Level 1 — constructor kind (KIND_STAR vs KIND_ARROW).
+ *   Level 2 — for KIND_STAR: exact TypeKind match on type_args.
+ *             for KIND_ARROW: match by typeclass only (constructor-name keying
+ *             is reserved for Phase H3+).
+ *
+ * No performance regression for the all-KIND_STAR fast path: KIND_STAR simply
+ * delegates to typeclass_env_lookup_instance().
+ */
+TypeClassInstance *typeclass_env_lookup_instance_by_key(const TypeClassEnv *env,
+                                                         const TypeClassDispatchKey *key) {
+    if (!key || !key->typeclass) return NULL;
+
+    /* Fast path: KIND_STAR — delegate to the typed lookup. */
+    if (key->constructor_kind == KIND_STAR) {
+        return typeclass_env_lookup_instance(env, key->typeclass,
+                                             key->type_args, key->n_type_args);
+    }
+
+    /* KIND_ARROW path: find the first instance whose first type_arg is a
+     * non-primitive (struct or user-defined type, effective kind * -> *).
+     * Phase H3 will add constructor-name keying for Functor, Monad, etc. */
+    for (TypeClassInstance *inst = env->instances; inst != NULL; inst = inst->next) {
+        if (inst->typeclass != key->typeclass) continue;
+        if (inst->n_type_args != key->n_type_args) continue;
+        if (inst->n_type_args > 0) {
+            TypeKind tk = inst->type_args[0].kind;
+            bool is_primitive = (tk == TY_INT  || tk == TY_BOOL  || tk == TY_CSTR ||
+                                 tk == TY_NIL  || tk == TY_FLOAT || tk == TY_PTR_VOID);
+            if (!is_primitive) return inst;
+        } else {
+            return inst;
+        }
+    }
+    return NULL;
 }
