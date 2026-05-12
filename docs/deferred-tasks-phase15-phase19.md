@@ -814,8 +814,8 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Implemented: `tur_future_new()` creates pending future, `tur_future_fulfill()`/`tur_future_reject()` for settling. Pre-fulfilled via immediate fulfill after creation.
 - [x] Implement `Future::done?`, `Future::get`, `Future::get` with timeout.
   - Implemented: `tur_future_done()`, `tur_future_get()`. Timeout variant deferred.
-- [ ] Implement `Future::cancel`.
-  - Deferred: Requires adding cancel state to TurFuture.
+- [x] Implement `Future::cancel`.
+  - Implemented: Added `FUTURE_CANCELLED` status to `TurFutureStatus`, `tur_future_cancel()` and `tur_future_cancelled()` functions. Exposed via `future-cancel` and `future-cancelled?` in `stdlib/scheduler.tur`. `await` checks for cancelled status.
 
 ##### AW-003 — Single-threaded scheduler
 - [x] Define `Scheduler` struct: run queue, waiting map, io-waiting map, current fiber pointer.
