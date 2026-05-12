@@ -1,0 +1,18 @@
+;; Phase R4: must-option-none — option-must on none panics
+
+(defn none [] :ptr<void>
+  ```c
+  return NULL;
+  ```)
+
+(defn option-must [o :ptr<void>] :int
+  ```c
+  struct { bool is_some; int64_t value; } *opt = (void*)o;
+  if (opt == NULL || !opt->is_some) { tur_panic("option-must: called on none"); }
+  return (int)opt->value;
+  ```)
+
+(defn main [] :int
+  (do
+    (option-must (none))
+    0))

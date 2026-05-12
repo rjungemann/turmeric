@@ -52,3 +52,11 @@
   (mul [x y] (* x y))
   (div [x y] (/ x y))
   (neg [x] (- 0 x)))
+
+;; Phase B1: Clone typeclass - deep copy of a value
+(defclass Clone [a]
+  (clone [x] :int))
+
+;; Clone instances for primitive types
+(definstance Clone [int]
+  (clone [x] x))

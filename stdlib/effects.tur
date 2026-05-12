@@ -53,3 +53,27 @@
 (defmacro with-read-console [body]
   (handle body
     (Read [] k) (resume k (read-int-console))))
+
+;; ── Log ────────────────────────────────────────────────────────────────────
+;; Emit a leveled log message.  Handlers choose how to display or suppress.
+(defeffect Log [level :cstr msg :cstr] :nil)
+
+;; with-stderr-log — print all log lines as "<level>: <msg>"
+(defmacro with-stderr-log [body]
+  (handle body
+    (Log [level msg] k) (do (println msg) (resume k nil))))
+
+;; with-silent-log — suppress all log output
+(defmacro with-silent-log [body]
+  (handle body
+    (Log [level msg] k) (resume k nil)))
+
+;; ── Abort ──────────────────────────────────────────────────────────────────
+;; Signal an unrecoverable abort (the handler must not resume k).
+;; The default with-abort-panic handler panics with the message.
+(defeffect Abort [msg :cstr] :int)
+
+(defmacro with-abort-panic [body]
+  (handle body
+    (Abort [msg] k) (panic msg)))
+

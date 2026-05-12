@@ -1,0 +1,99 @@
+;; Phase R3: Standard library error types
+;; Tests ValidationError, NotFoundError, PermissionError
+
+(defn ValidationError. [message :cstr field :cstr] :ptr<void>
+  ```c
+  typedef struct { const char *message; const char *field; } ValidationError;
+  ValidationError *err = (ValidationError*)malloc(sizeof(ValidationError));
+  err->message = message;
+  err->field = field;
+  return (void*)err;
+  ```)
+
+(defn ValidationError-message [err :ptr<void>] :cstr
+  ```c
+  typedef struct { const char *message; const char *field; } ValidationError;
+  ValidationError *e = (ValidationError*)err;
+  return e->message;
+  ```)
+
+(defn ValidationError-field [err :ptr<void>] :cstr
+  ```c
+  typedef struct { const char *message; const char *field; } ValidationError;
+  ValidationError *e = (ValidationError*)err;
+  return e->field ? e->field : "";
+  ```)
+
+(defn ValidationError-free [err :ptr<void>] :void
+  ```c
+  free(err);
+  ```)
+
+(defn NotFoundError. [what :cstr] :ptr<void>
+  ```c
+  typedef struct { const char *what; } NotFoundError;
+  NotFoundError *err = (NotFoundError*)malloc(sizeof(NotFoundError));
+  err->what = what;
+  return (void*)err;
+  ```)
+
+(defn NotFoundError-what [err :ptr<void>] :cstr
+  ```c
+  typedef struct { const char *what; } NotFoundError;
+  NotFoundError *e = (NotFoundError*)err;
+  return e->what;
+  ```)
+
+(defn NotFoundError-free [err :ptr<void>] :void
+  ```c
+  free(err);
+  ```)
+
+(defn PermissionError. [message :cstr path :cstr] :ptr<void>
+  ```c
+  typedef struct { const char *message; const char *path; } PermissionError;
+  PermissionError *err = (PermissionError*)malloc(sizeof(PermissionError));
+  err->message = message;
+  err->path = path;
+  return (void*)err;
+  ```)
+
+(defn PermissionError-message [err :ptr<void>] :cstr
+  ```c
+  typedef struct { const char *message; const char *path; } PermissionError;
+  PermissionError *e = (PermissionError*)err;
+  return e->message;
+  ```)
+
+(defn PermissionError-path [err :ptr<void>] :cstr
+  ```c
+  typedef struct { const char *message; const char *path; } PermissionError;
+  PermissionError *e = (PermissionError*)err;
+  return e->path ? e->path : "";
+  ```)
+
+(defn PermissionError-free [err :ptr<void>] :void
+  ```c
+  free(err);
+  ```)
+
+(defn main [] :int
+  (do
+    ;; ValidationError
+    (let [ve (ValidationError. "must be positive" "age")]
+      (do
+        (println (ValidationError-message ve))
+        (println (ValidationError-field ve))
+        (ValidationError-free ve)))
+    ;; NotFoundError
+    (let [ne (NotFoundError. "config.toml")]
+      (do
+        (println (NotFoundError-what ne))
+        (NotFoundError-free ne)))
+    ;; PermissionError
+    (let [pe (PermissionError. "read denied" "/etc/shadow")]
+      (do
+        (println (PermissionError-message pe))
+        (println (PermissionError-path pe))
+        (PermissionError-free pe)))
+    0))

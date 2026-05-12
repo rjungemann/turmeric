@@ -1,0 +1,66 @@
+;; Phase T19: thread-basic — spawn a thread and join it using pthread.
+;;
+;; Thread arguments are passed via a heap-allocated int64_t cell (ptr<void>).
+;; The thread function prints the argument value and exits.
+;; The main thread waits for completion via pthread_join.
+
+;; thread-arg-new : int → ptr<void>
+;; Allocate an int64_t argument cell for passing to a thread.
+(defn thread-arg-new [val :int] :ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  if (!p) { fprintf(stderr, "thread-arg-new: oom\n"); abort(); }
+  *p = (int64_t)val;
+  return (void *)p;
+  ```)
+
+;; thread-arg-free : ptr<void> → nil
+(defn thread-arg-free [p :ptr<void>] :nil
+  ```c
+  free(p);
+  ```)
+
+;; The worker thread function: prints the value in the arg cell.
+;; Must match void *(*)(void *) — defined as a named C static function.
+(defn thread-worker-fn [arg :ptr<void>] :ptr<void>
+  ```c
+  int64_t val = *(int64_t *)arg;
+  printf("%lld\n", (long long)val);
+  return NULL;
+  ```)
+
+;; thread-spawn : ptr<void> → ptr<void>
+;; Spawn a thread running thread-worker-fn with the given arg.
+;; Returns the pthread_t (stored in a heap-allocated slot) as ptr<void>.
+(defn thread-spawn [arg :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  if (!t) { fprintf(stderr, "thread-spawn: oom\n"); abort(); }
+  int rc = pthread_create(t, NULL,
+      (void *(*)(void *))thread_worker_fn,
+      (void *)arg);
+  if (rc != 0) { fprintf(stderr, "thread-spawn: pthread_create failed\n"); abort(); }
+  return (void *)t;
+  ```)
+
+;; thread-join : ptr<void> → nil
+;; Wait for a thread to finish and free the pthread_t handle.
+(defn thread-join [t :ptr<void>] :nil
+  ```c
+  pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  ```)
+
+(defn main [] :int
+  (let [arg1 (thread-arg-new 10)]
+    (let [t1 (thread-spawn arg1)]
+      (thread-join t1)
+      (thread-arg-free arg1)))
+
+  (let [arg2 (thread-arg-new 20)]
+    (let [t2 (thread-spawn arg2)]
+      (thread-join t2)
+      (thread-arg-free arg2)))
+
+  (println 0)
+  0)

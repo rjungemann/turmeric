@@ -4098,8 +4098,18 @@ static Expr *elab_extern_c(Elab *e, const Form *call) {
         params[n_params++] = b;
     }
 
-    /* Parse return type annotation */
-    Form *ret_f = call->as.list.items[3];
+    /* Parse return type annotation; optionally skip #{Effect...} advisory row */
+    uint32_t ret_idx = 3;
+    if (ret_idx < call->as.list.len && call->as.list.items[ret_idx]->tag == F_MAP) {
+        /* #{...} effect-row annotation: skip silently (advisory in v1) */
+        ret_idx++;
+    }
+    if (ret_idx >= call->as.list.len) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "extern-c requires (extern-c name [params...] : ret-type)");
+        return NULL;
+    }
+    Form *ret_f = call->as.list.items[ret_idx];
     if (ret_f->tag != F_KEYWORD) {
         diag_emit(DIAG_ERROR, ret_f->span,
                   "extern-c: return type must be a keyword (:int, :bool, :void, :cstr, :ptr)");

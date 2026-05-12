@@ -1,0 +1,37 @@
+;; Phase 19 A: effect-row annotation #{Effect} on defn signatures.
+;; Annotations are advisory in v1 — parsed and stored, not enforced.
+
+(defeffect Log [msg :cstr] :nil)
+(defeffect Ask [] :int)
+
+;; Single effect annotation
+(defn log-hello [] #{Log} :nil
+  (perform (Log "hello")))
+
+;; Multiple effects annotation
+(defn ask-and-log [] #{Ask Log} :int
+  (do
+    (let [n (perform (Ask))]
+      (do (perform (Log "asked")) n))))
+
+;; Pure function (no annotation needed, but empty row is valid)
+(defn add [x :int y :int] :int
+  (+ x y))
+
+(defn main [] :int
+  ;; Run log-hello under a Log handler
+  (handle
+    (do (log-hello) 0)
+    (Log [msg] k) (do (println msg) (resume k 0)))
+
+  ;; Run ask-and-log under Ask and Log handlers
+  (let [result
+    (handle
+      (handle
+        (ask-and-log)
+        (Ask [] k) (resume k 42))
+      (Log [msg] k) (do (println msg) (resume k 0)))]
+    (println result))
+
+  (println (add 3 4))
+  0)

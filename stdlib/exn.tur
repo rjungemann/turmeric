@@ -267,3 +267,120 @@
   free(err);
   ```)
 
+;; ============================================================================
+;; Convenience constructors (Phase R3)
+;; ============================================================================
+
+;; io-error — create an IoError with just a message (errno defaults to 0)
+(defn io-error [msg :cstr] :ptr<void>
+  (IoError. msg 0))
+
+;; io-error-with-errno — create an IoError with message and errno
+(defn io-error-with-errno [msg :cstr errno-val :int] :ptr<void>
+  (IoError. msg errno-val))
+
+;; parse-error — create a ParseError with message and location
+(defn parse-error [msg :cstr line :int col :int file :cstr] :ptr<void>
+  (ParseError. msg line col file))
+
+;; parse-error-simple — create a ParseError with just message and line
+(defn parse-error-simple [msg :cstr line :int] :ptr<void>
+  (ParseError. msg line 0 "<unknown>"))
+
+;; ============================================================================
+;; Show / display functions for error types (Phase R3)
+;; ============================================================================
+
+;; show-error — format Error as "Error: <message>"
+(defn show-error [err :ptr<void>] :cstr
+  ```c
+  typedef struct { const char *message; void *cause; } Error;
+  Error *e = (Error*)err;
+  extern size_t strlen(const char*);
+  size_t prefix_len = 7; /* "Error: " */
+  size_t msg_len = strlen(e->message);
+  char *buf = (char*)malloc(prefix_len + msg_len + 1);
+  memcpy(buf, "Error: ", prefix_len);
+  memcpy(buf + prefix_len, e->message, msg_len + 1);
+  return buf;
+  ```)
+
+;; show-io-error — format IoError as "IoError: <message> (errno=N)"
+(defn show-io-error [err :ptr<void>] :cstr
+  ```c
+  typedef struct { const char *message; int errno_; } IoError;
+  IoError *e = (IoError*)err;
+  extern size_t strlen(const char*);
+  size_t msg_len = strlen(e->message);
+  char *buf = (char*)malloc(msg_len + 32);
+  if (e->errno_ != 0) {
+    snprintf(buf, msg_len + 32, "IoError: %s (errno=%d)", e->message, e->errno_);
+  } else {
+    snprintf(buf, msg_len + 32, "IoError: %s", e->message);
+  }
+  return buf;
+  ```)
+
+;; show-parse-error — format ParseError as "ParseError: <message> at <file>:<line>:<col>"
+(defn show-parse-error [err :ptr<void>] :cstr
+  ```c
+  typedef struct { const char *message; int line; int col; const char *file; } ParseError;
+  ParseError *e = (ParseError*)err;
+  extern size_t strlen(const char*);
+  size_t msg_len = strlen(e->message);
+  size_t file_len = strlen(e->file);
+  char *buf = (char*)malloc(msg_len + file_len + 64);
+  snprintf(buf, msg_len + file_len + 64, "ParseError: %s at %s:%d:%d", e->message, e->file, e->line, e->col);
+  return buf;
+  ```)
+
+;; show-validation-error — format ValidationError as "ValidationError: <message> (field: <field>)"
+(defn show-validation-error [err :ptr<void>] :cstr
+  ```c
+  typedef struct { const char *message; const char *field; } ValidationError;
+  ValidationError *e = (ValidationError*)err;
+  extern size_t strlen(const char*);
+  size_t msg_len = strlen(e->message);
+  char *buf;
+  if (e->field && e->field[0] != '\0') {
+    size_t field_len = strlen(e->field);
+    buf = (char*)malloc(msg_len + field_len + 40);
+    snprintf(buf, msg_len + field_len + 40, "ValidationError: %s (field: %s)", e->message, e->field);
+  } else {
+    buf = (char*)malloc(msg_len + 20);
+    snprintf(buf, msg_len + 20, "ValidationError: %s", e->message);
+  }
+  return buf;
+  ```)
+
+;; show-not-found-error — format NotFoundError as "NotFoundError: <what> not found"
+(defn show-not-found-error [err :ptr<void>] :cstr
+  ```c
+  typedef struct { const char *what; } NotFoundError;
+  NotFoundError *e = (NotFoundError*)err;
+  extern size_t strlen(const char*);
+  size_t what_len = strlen(e->what);
+  char *buf = (char*)malloc(what_len + 30);
+  snprintf(buf, what_len + 30, "NotFoundError: %s not found", e->what);
+  return buf;
+  ```)
+
+;; show-permission-error — format PermissionError as "PermissionError: <message> (path: <path>)"
+(defn show-permission-error [err :ptr<void>] :cstr
+  ```c
+  typedef struct { const char *message; const char *path; } PermissionError;
+  PermissionError *e = (PermissionError*)err;
+  extern size_t strlen(const char*);
+  size_t msg_len = strlen(e->message);
+  char *buf;
+  if (e->path && e->path[0] != '\0') {
+    size_t path_len = strlen(e->path);
+    buf = (char*)malloc(msg_len + path_len + 40);
+    snprintf(buf, msg_len + path_len + 40, "PermissionError: %s (path: %s)", e->message, e->path);
+  } else {
+    buf = (char*)malloc(msg_len + 20);
+    snprintf(buf, msg_len + 20, "PermissionError: %s", e->message);
+  }
+  return buf;
+  ```)
+

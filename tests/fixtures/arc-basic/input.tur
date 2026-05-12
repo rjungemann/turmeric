@@ -1,0 +1,72 @@
+;; Phase T19: arc-basic — atomic reference counting (Arc<T>) using inline C.
+;;
+;; Arc is represented as a :ptr<void> pointing to an ArcBlock:
+;;   struct { uint64_t strong; uint64_t weak; int64_t value; }
+;; strong and weak are accessed via __atomic_* builtins.
+;; weak has a sentinel +1 while strong > 0 to keep the block alive.
+
+(defn arc-new [val :int] :ptr<void>
+  ```c
+  typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcBlock;
+  ArcBlock *b = (ArcBlock *)malloc(sizeof(ArcBlock));
+  if (!b) { fprintf(stderr, "arc-new: out of memory\n"); abort(); }
+  __atomic_store_n(&b->strong, (uint64_t)1, __ATOMIC_RELAXED);
+  __atomic_store_n(&b->weak,   (uint64_t)1, __ATOMIC_RELAXED);
+  b->value = (int64_t)val;
+  return (void *)b;
+  ```)
+
+(defn arc-get [p :ptr<void>] :int
+  ```c
+  typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcBlock;
+  ArcBlock *b = (ArcBlock *)p;
+  return (int64_t)b->value;
+  ```)
+
+(defn arc-clone [p :ptr<void>] :ptr<void>
+  ```c
+  typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcBlock;
+  ArcBlock *b = (ArcBlock *)p;
+  __atomic_fetch_add(&b->strong, (uint64_t)1, __ATOMIC_RELAXED);
+  return (void *)b;
+  ```)
+
+(defn arc-strong-count [p :ptr<void>] :int
+  ```c
+  typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcBlock;
+  ArcBlock *b = (ArcBlock *)p;
+  return (int64_t)__atomic_load_n(&b->strong, __ATOMIC_SEQ_CST);
+  ```)
+
+(defn arc-drop [p :ptr<void>] :nil
+  ```c
+  typedef struct { uint64_t strong; uint64_t weak; int64_t value; } ArcBlock;
+  ArcBlock *b = (ArcBlock *)p;
+  uint64_t prev_strong = __atomic_fetch_sub(&b->strong, (uint64_t)1, __ATOMIC_ACQ_REL);
+  if (prev_strong == 1) {
+      /* Last strong ref dropped: drop value, then drop sentinel weak ref */
+      uint64_t prev_weak = __atomic_fetch_sub(&b->weak, (uint64_t)1, __ATOMIC_ACQ_REL);
+      if (prev_weak == 1) {
+          free(b);
+      }
+  }
+  ```)
+
+(defn main [] :int
+  ;; create
+  (let [a (arc-new 42)]
+    (println (arc-get a))
+    (println (arc-strong-count a))
+
+    ;; clone — same underlying block, strong count increases
+    (let [b (arc-clone a)]
+      (println (arc-strong-count a))
+      (println (arc-get b))
+
+      ;; drop clone — strong count back to 1
+      (arc-drop b)
+      (println (arc-strong-count a)))
+
+    ;; drop original
+    (arc-drop a))
+  0)

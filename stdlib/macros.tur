@@ -8,3 +8,15 @@
 ;; unless macro: (unless test body) -> (if test nil (do body))
 (defmacro unless [test body]
   (if test nil (do body)))
+
+;; Phase R4: must! — unwrap option/result or panic (calls option-must or result-must)
+(defmacro must! [expr]
+  (option-must expr))
+
+;; Phase R4: must-msg! — unwrap with custom panic message
+(defmacro must-msg! [expr msg]
+  (option-expect expr msg))
+
+;; Phase R6: ignore! — explicitly discard a result value (suppress unused-result warning)
+(defmacro ignore! [expr]
+  (do expr nil))

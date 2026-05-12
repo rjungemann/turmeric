@@ -1,0 +1,17 @@
+;; Phase B1: Clone typeclass for primitive types
+
+(defclass Clone [a]
+  (clone [x] :int))
+
+(definstance Clone [int]
+  (clone [x] x))
+
+(defn main [] :int
+  (do
+    (let [a 42]
+      (let [b (.clone a)]
+        (println b)))
+    (let [c 99]
+      (let [d (.clone c)]
+        (println d)))
+    0))

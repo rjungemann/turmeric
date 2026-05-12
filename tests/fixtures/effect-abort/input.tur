@@ -1,0 +1,24 @@
+;; Phase 19 E: Abort effect — unrecoverable abort signal, handler panics.
+
+(defeffect Abort [msg :cstr] :int)
+
+(defmacro with-abort-panic [body]
+  (handle body
+    (Abort [msg] k) (panic msg)))
+
+;; safe-divide: returns n/d, or aborts if d==0
+(defn safe-divide [n :int d :int] :int
+  (if (= d 0)
+    (perform (Abort "division by zero"))
+    (/ n d)))
+
+(defn main [] :int
+  ;; Normal case: no abort triggered
+  (let [r1 (with-abort-panic (safe-divide 42 6))]
+    (println r1))
+
+  ;; Another normal case
+  (let [r2 (with-abort-panic (safe-divide 100 4))]
+    (println r2))
+
+  0)

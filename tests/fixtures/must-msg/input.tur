@@ -1,0 +1,33 @@
+;; Phase R4: must-msg — option-expect/result-must-msg with custom message
+
+(defn some [x :int] :ptr<void>
+  ```c
+  struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  opt->is_some = true; opt->value = x; return (void*)opt;
+  ```)
+
+(defn option-expect [o :ptr<void> msg :cstr] :int
+  ```c
+  struct { bool is_some; int64_t value; } *opt = (void*)o;
+  if (opt == NULL || !opt->is_some) { tur_panic(msg); }
+  return (int)opt->value;
+  ```)
+
+(defn ok [x :int] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = true; r->ok_val = x; return (void*)r;
+  ```)
+
+(defn result-must-msg [r :ptr<void> msg :cstr] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
+  if (res == NULL || !res->is_ok) { tur_panic(msg); }
+  return (int)res->ok_val;
+  ```)
+
+(defn main [] :int
+  (do
+    (println (option-expect (some 55) "expect: failed"))
+    (println (result-must-msg (ok 77) "result-must-msg: failed"))
+    0))

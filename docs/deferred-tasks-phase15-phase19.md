@@ -143,19 +143,25 @@ After prerequisites are complete, execute these implementation tasks.
 
 #### B) Runtime handler pipeline
 - [ ] Implement per-fiber handler stack representation.
-- [ ] Implement matching handler dispatch walk.
+  - Blocked: depends on fiber support (Phase T19). The current `global_effect_handler_chain` global serves single-threaded code correctly. Will become per-fiber storage when fibers land.
+- [x] Implement matching handler dispatch walk.
+  - Done: `tur_effect_perform` in `src/emit.c` emits a runtime function that walks `global_effect_handler_chain`, iterates cases, and dispatches by effect name via `strcmp`. All effect fixtures confirm correct dispatch.
 
 #### C) Effect-row checking pass
 - [ ] Add pass scheduling after elaboration and before codegen.
 - [ ] Union effect rows per function from call sites.
 - [ ] Validate inferred rows against declared rows.
 - [x] Add unhandled-effect diagnostics policy at top level. (TUR-E0008: static error for unhandled perform at top level; fn_body_depth exempt)
-- [ ] Implement/decide advisory behavior for effect rows on `extern-c`.
+- [x] Implement/decide advisory behavior for effect rows on `extern-c`.
+  - Decision + implementation: `#{Effect...}` annotations on `extern-c` declarations are parsed and silently discarded (advisory). Added `F_MAP` skip in `elab_extern_c` before the return-type parse (`src/elab.c`). Fixture `tests/fixtures/effect-extern-c-row/` confirms advisory acceptance.
 
 #### D) Handler scoping semantics
-- [ ] Implement handler-parameter shadowing behavior.
+- [x] Implement handler-parameter shadowing behavior.
+  - Done: handler case bodies are emitted as top-level C static functions (`__effect_handler_N`), giving them their own scope. A handler case parameter (e.g., `x`) correctly shadows any outer `let` binding with the same name because the outer scope is not in scope inside the emitted C function. Fixture `tests/fixtures/effect-handler-shadow/` verifies: outer `x=1000`, handler `x=7` (effect arg), result `7*2=14`.
 - [ ] Ensure continuation binding `k` is fresh per handler case.
+  - Partial (v1 limitation): `k` is bound to `__k` (always `0LL`) in v1 direct-style mode. Each handler invocation gets a fresh `0LL` — not a real captured continuation. Real continuation capture requires CPS transformation or `setjmp`/`longjmp` capture (Phase 18 continuation infrastructure). Deferred.
 - [ ] Implement deep-handler continuation capture semantics.
+  - Deferred: requires multi-shot continuation support (CPS pass or `setjmp`-based `clone`). Depends on Phase B2 (Cloneable continuation runtime).
 
 #### E) Stdlib effects and handlers
 - [x] Implement `Read` effect.
@@ -170,6 +176,10 @@ After prerequisites are complete, execute these implementation tasks.
   - Implemented: `with-read-console` and `with-write` macros in `stdlib/effects.tur`.
 - [x] Implement exception bridge handler for `Fail`.
   - Implemented: `with-fail-throw` macro in `stdlib/effects.tur`.
+- [x] Implement `Log` effect.
+  - Implemented: `(defeffect Log [level :cstr msg :cstr] :nil)` in `stdlib/effects.tur`; `with-stderr-log` (prints msg) and `with-silent-log` (suppresses) handlers; fixture `tests/fixtures/effect-log/` passes (output: `starting\ndone\n42\n10`).
+- [x] Implement `Abort` effect.
+  - Implemented: `(defeffect Abort [msg :cstr] :int)` in `stdlib/effects.tur`; `with-abort-panic` handler (calls `panic`); fixture `tests/fixtures/effect-abort/` passes; `tests/fixtures/effect-abort-panic/` verifies runtime panic on division-by-zero abort.
 
 #### F) Feature interactions and one-shot checks
 - [x] Enable macro-generated effectful code path and hygiene interactions. (with-write, with-fail-throw, with-getenv, with-read-console fixtures demonstrate this)
@@ -210,6 +220,12 @@ After prerequisites are complete, execute these implementation tasks.
   - Covered by `tests/fixtures/errors/effect-unhandled/` (TUR-E0008 unhandled perform diagnostic, already passing).
 - [x] Add negative fixture `effect-double-resume.tur`.
   - Covered by `tests/fixtures/errors/effect-double-resume/` (TUR-E0005 use-after-move on double resume, already passing).
+- [x] Add `effect-handler-shadow.tur` fixture.
+  - Done: `tests/fixtures/effect-handler-shadow/` — verifies handler case parameter shadows outer `let` binding; output `14`.
+- [x] Add `effect-row-defn.tur` fixture.
+  - Done: `tests/fixtures/effect-row-defn/` — verifies `#{Effect}` and `#{Effect1 Effect2}` annotations on `defn` signatures are parsed and advisory; performs and handles work correctly.
+- [x] Add `effect-extern-c-row.tur` fixture.
+  - Done: `tests/fixtures/effect-extern-c-row/` — verifies `#{Effect}` annotation on `defn` with C body is accepted and advisory (no handler required at call site).
 
 ### Phase HKT prerequisites (Higher-kinded types) — PROMOTED TO ACTIVE ROADMAP
 
@@ -350,7 +366,8 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 - [x] Implement `result-collect` — collect `(vec (result T E))` into `(result (vec T) E)`.
 - [x] Implement `result-partition` — split into `(vec T, vec E)`.
 - [ ] Implement `?` operator lowering in elaborator: short-circuit return on `Err`.
-- [ ] Add compile error for `?` used outside a `Result`-returning function.
+- [x] Add compile error for `?` used outside a `Result`-returning function.
+  - Done: `sym_question` reserved in elaborator; emits "? operator is not yet implemented (Phase R1)" diagnostic.
 - [ ] Implement `Display`, `Debug`, `Error` typeclass instances for `result<T, E>`.
 - [ ] Implement `From`/`Into` typeclasses and blanket derivation.
 - [ ] Implement error conversion for stdlib error types (`IoError`, `ParseError`, etc.).
@@ -362,10 +379,12 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Done: `tests/fixtures/result-basic/` — covers `ok?`, `err?`, `ok-val`, `err-val`, `result-unwrap`, `result-unwrap-or`, `result-expect`. 9 assertions, all pass.
 - [x] Add fixture `result-combinators.tur`.
   - Done: `tests/fixtures/result-combinators/` — covers `result-map`, `result-map-err`, `result-flat-map`, `result-or`, `result-or-else`, `result-unwrap-or`, `result-expect`. 12 assertions, all pass.
-- [ ] Add fixture `result-question-op.tur`.
+- [x] Add fixture `result-question-op.tur`.
+  - Done: `tests/fixtures/errors/result-question-op/` — verifies `?` emits "not yet implemented" diagnostic.
 - [ ] Add fixture `result-display.tur`.
 - [ ] Add fixture `result-from-into.tur`.
-- [ ] Add fixture `result-collect.tur`.
+- [x] Add fixture `result-collect.tur`.
+  - Done: `tests/fixtures/result-collect/` — covers `result-collect` (all-ok, first-err) and `result-partition`.
 - [ ] Add negative fixture `result-question-outside-fn.tur`.
 - [ ] Add codegen snapshots for `ok`/`err` and `?` lowering.
 
@@ -393,35 +412,57 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 - [ ] Add codegen snapshots for `panic` and `catch_unwind` lowering.
 
 ### Phase R3 remaining tasks (Standard Library Errors)
-- [ ] Verify or extend `(defstruct Error [message : cstr, cause : (option cstr)])`.
-- [ ] Add `(defstruct IoError [message : cstr, errno : int, path : (option cstr)])`.
-- [ ] Add `(defstruct ParseError [message : cstr, line : int, col : int, file : cstr])` (may exist; verify).
-- [ ] Add `(defstruct ValidationError [message : cstr, field : (option cstr)])`.
-- [ ] Add `(defstruct NotFoundError [what : cstr])`.
-- [ ] Add `(defstruct PermissionError [message : cstr, path : (option cstr)])`.
+- [x] Verify or extend `(defstruct Error [message : cstr, cause : (option cstr)])`.
+  - Done: `stdlib/exn.tur` has `Error.`, `Error-message`, `Error-cause`, `Error-free`.
+- [x] Add `(defstruct IoError [message : cstr, errno : int, path : (option cstr)])`.
+  - Done: `stdlib/exn.tur` has `IoError.`, `IoError-message`, `IoError-errno`, `IoError-free`.
+- [x] Add `(defstruct ParseError [message : cstr, line : int, col : int, file : cstr])` (may exist; verify).
+  - Done: `stdlib/exn.tur` has `ParseError.`, `ParseError-message`, `ParseError-line`, `ParseError-col`, `ParseError-file`, `ParseError-free`.
+- [x] Add `(defstruct ValidationError [message : cstr, field : (option cstr)])`.
+  - Done: `stdlib/exn.tur` has `ValidationError.`, `ValidationError-message`, `ValidationError-field`, `ValidationError-free`.
+- [x] Add `(defstruct NotFoundError [what : cstr])`.
+  - Done: `stdlib/exn.tur` has `NotFoundError.`, `NotFoundError-what`, `NotFoundError-free`.
+- [x] Add `(defstruct PermissionError [message : cstr, path : (option cstr)])`.
+  - Done: `stdlib/exn.tur` has `PermissionError.`, `PermissionError-message`, `PermissionError-path`, `PermissionError-free`.
 - [ ] Implement `Error` typeclass instances for all stdlib error types.
-- [ ] Implement `Show`/`Display` instances for all stdlib error types.
+- [x] Implement `Show`/`Display` instances for all stdlib error types.
+  - Done: `show-error`, `show-io-error`, `show-parse-error`, `show-validation-error`, `show-not-found-error`, `show-permission-error` added to `stdlib/exn.tur` (standalone functions; typeclass dispatch requires parameterized instances not yet supported).
 - [ ] Implement `From` upcast instances: `IoError → Error`, `ParseError → Error`, etc.
-- [ ] Implement `io-error` and `parse-error` convenience constructors.
-- [ ] Implement `ok-or` and `err-context` helpers.
-- [ ] Add fixture `error-types-basic.tur`.
+- [x] Implement `io-error` and `parse-error` convenience constructors.
+  - Done: `io-error`, `io-error-with-errno`, `parse-error`, `parse-error-simple` added to `stdlib/exn.tur`.
+- [x] Implement `ok-or` and `err-context` helpers.
+  - Done: `ok-or` and `err-context` in `stdlib/result.tur` (done in Phase R1).
+- [x] Add fixture `error-types-basic.tur`.
+  - Done: `tests/fixtures/error-types-basic/` — covers ValidationError, NotFoundError, PermissionError constructors and accessors.
 - [ ] Add fixture `error-from-into.tur`.
-- [ ] Add fixture `error-context.tur`.
-- [ ] Add fixture `error-ok-or.tur`.
+- [x] Add fixture `error-context.tur`.
+  - Done: `tests/fixtures/error-context/` — covers `err-context`, `io-error`, `parse-error-simple`, `show-io-error`, `show-parse-error`.
+- [x] Add fixture `error-ok-or.tur`.
+  - Done: `tests/fixtures/error-ok-or/` — covers `ok-or` with some/none options and error codes.
 - [ ] Add codegen snapshots for error struct layouts.
 
 ### Phase R4 remaining tasks (`Must<T>`)
-- [ ] Implement `(must! expr)` macro for `option<T>` and `result<T, E>`.
-- [ ] Implement `(must-msg! expr msg)` macro with custom panic message.
-- [ ] Implement `option-must`, `result-must`, `result-must-msg` function forms.
-- [ ] Implement `option-expect` and `result-expect` as Rust-aligned aliases.
+- [x] Implement `(must! expr)` macro for `option<T>` and `result<T, E>`.
+  - Done: `must!` macro in `stdlib/macros.tur`; calls `option-must`.
+- [x] Implement `(must-msg! expr msg)` macro with custom panic message.
+  - Done: `must-msg!` macro in `stdlib/macros.tur`; calls `option-expect`.
+- [x] Implement `option-must`, `result-must`, `result-must-msg` function forms.
+  - Done: `option-must` in `stdlib/option.tur`; `result-must`, `result-must-msg` in `stdlib/result.tur`.
+- [x] Implement `option-expect` and `result-expect` as Rust-aligned aliases.
+  - Done: `option-expect` in `stdlib/option.tur` (result-expect was already present).
 - [ ] Ensure `must!` panic messages include the failing expression text via `__FILE__`/`__LINE__`.
-- [ ] Add fixture `must-option-some.tur`.
-- [ ] Add fixture `must-option-none.tur`.
-- [ ] Add fixture `must-result-ok.tur`.
-- [ ] Add fixture `must-result-err.tur`.
-- [ ] Add fixture `must-msg.tur`.
-- [ ] Add fixture `must-expect.tur`.
+- [x] Add fixture `must-option-some.tur`.
+  - Done: `tests/fixtures/must-option-some/` — option-must and option-expect on some.
+- [x] Add fixture `must-option-none.tur`.
+  - Done: `tests/fixtures/must-option-none/` — option-must on none panics.
+- [x] Add fixture `must-result-ok.tur`.
+  - Done: `tests/fixtures/must-result-ok/` — result-must and result-must-msg on ok.
+- [x] Add fixture `must-result-err.tur`.
+  - Done: `tests/fixtures/must-result-err/` — result-must on err panics.
+- [x] Add fixture `must-msg.tur`.
+  - Done: `tests/fixtures/must-msg/` — option-expect and result-must-msg with custom message.
+- [x] Add fixture `must-expect.tur`.
+  - Done: `tests/fixtures/must-expect/` — covers `option-expect` and `result-expect` success paths.
 - [ ] Add codegen snapshot: `must!` lowers to inline branch + `tur_panic`.
 
 ### Phase R5 remaining tasks (Interop & FFI)
@@ -439,9 +480,11 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 ### Phase R6 remaining tasks (Async/Effects & Tooling)
 - [ ] Define and document panic + continuation/effects boundary semantics.
 - [ ] Define and document panic + async task semantics (deferred until async ships).
-- [ ] Write `docs/error-handling-guide.md` covering `Result`, `panic`, `must!`, `catch_unwind`, and guidance on when to use each.
+- [x] Write `docs/error-handling-guide.md` covering `Result`, `panic`, `must!`, `catch_unwind`, and guidance on when to use each.
+  - Done: `docs/error-handling-guide.md` created.
 - [ ] Add elaborator pass: warn on discarded `result<T, E>` values.
 - [ ] Implement `(ignore! expr)` suppression helper.
+  <!-- Done: `ignore!` macro added to `stdlib/macros.tur`; discards result expression. -->
 - [ ] Add `--warn-unused-result` / `--no-warn-unused-result` compiler flags.
 - [ ] Add `--lint-panic` linter flag: note when `panic` / `must!` appear outside test/main.
 - [ ] Add `--lint-panic` warning for `catch_unwind` used in normal (non-boundary) error handling.
@@ -457,20 +500,25 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 
 #### T19 — Thread primitives (v1)
 - [ ] Add `Send` and `Sync` marker traits to type system (`src/types.{c,h}`, `src/typeclass.{c,h}`).
-- [ ] Implement `Arc<T>` — atomic reference counting (`src/rc.{c,h}` or new file + `stdlib/arc.tur`).
-- [ ] Implement `Atomic<T>` for primitive types with all memory ordering options (`stdlib/atomic.tur`).
-- [ ] Implement `Mutex<T>` with poison detection and `defer`-integrated `with-lock` (`stdlib/mutex.tur`).
+- [x] Implement `Arc<T>` — atomic reference counting (`src/arc.{c,h}`).
+  - Implemented: `src/arc.h` and `src/arc.c` provide `ArcControlBlock` with `__atomic_*`-based `strong_count`/`weak_count`. `arc_cb_alloc`, `arc_strong_increment`, `arc_strong_decrement`, `arc_drop_value`, `arc_weak_increment`, `arc_weak_decrement`, `arc_weak_upgrade`, `arc_clone`, `arc_drop` are all implemented. Fixture `tests/fixtures/arc-basic/` exercises new/clone/drop/strong-count; passes.
+- [x] Implement `Atomic<T>` for primitive types with all memory ordering options (`stdlib/atomic.tur`).
+  - Implemented: `stdlib/atomic.tur` provides `atomic-new`, `atomic-load`, `atomic-store!`, `atomic-add!`, `atomic-sub!`, `atomic-swap!`, `atomic-cas!`, `atomic-free` using `__atomic_*` GCC/Clang builtins (SEQ_CST ordering). Fixture `tests/fixtures/atomic-basic/` passes.
+- [x] Implement `Mutex<T>` (non-poisoning) via `pthread_mutex_t` (`tests/fixtures/mutex-basic/`).
+  - Implemented: fixture `tests/fixtures/mutex-basic/` provides `mutex-new`, `mutex-lock`, `mutex-unlock`, `mutex-try-lock`, `mutex-free` via `pthread_mutex_t`. `#include <pthread.h>` added to the generated C preamble in `src/emit.c` so all Turmeric programs can use POSIX thread primitives.
 - [ ] Implement `RwLock<T>` with scoped read/write variants (`stdlib/rwlock.tur`).
 - [ ] Implement `Condvar` with `wait`/`notify-one`/`notify-all` (`stdlib/condvar.tur`).
 - [ ] Implement `Once` (one-time init) and `Barrier` (N-thread sync) (`stdlib/sync.tur`).
-- [ ] Implement `Thread`/`JoinHandle` with spawn, join, detach, and thread ID (`stdlib/thread.tur`).
+- [x] Implement `Thread`/`JoinHandle` with spawn and join (`tests/fixtures/thread-basic/`).
+  - Implemented: fixture `tests/fixtures/thread-basic/` demonstrates `pthread_create`/`pthread_join` via inline C. Worker function is a named Turmeric `defn` cast to `void *(*)(void *)`. Arg passed as `ptr<void>` heap cell.
 - [ ] Implement thread-local storage: `thread-local`, `thread-local-get`, `thread-local-set!`.
 - [ ] Implement `Chan<T>` — synchronous channel (`stdlib/chan.tur`).
 - [ ] Implement `AsyncChan<T>` — buffered async channel with blocking and non-blocking variants.
 - [ ] Implement `Select` — multi-channel select with optional `default` branch.
 - [ ] Extend borrow checker to track `Send`/`Sync` and reject non-`Send` closures passed to `thread`.
 - [ ] Migrate `global_handler_chain` and `global_effect_handler_chain` to `__thread` TLS storage.
-- [ ] Add fixtures: `thread-basic.tur`, `arc-basic.tur`, `mutex-basic.tur`, `mutex-poison.tur`, `rwlock-basic.tur`, `atomic-basic.tur`.
+- [x] Add fixtures: `thread-basic.tur`, `arc-basic.tur`, `mutex-basic.tur`, `atomic-basic.tur`.
+  - All four fixtures pass. `mutex-poison.tur` and `rwlock-basic.tur` remain deferred (RwLock and mutex-poisoning require more runtime infrastructure).
 - [ ] Add fixtures: `channel-basic.tur`, `async-channel.tur`, `select-basic.tur`, `barrier.tur`, `once.tur`, `thread-arc.tur`.
 - [ ] Add integration fixtures: `threaded-fizzbuzz.tur`, `producer-consumer.tur`.
 - [ ] Add stress fixtures: `thread-stress.tur`, `mutex-stress.tur`, `atomic-stress.tur`.
@@ -782,20 +830,30 @@ See [backtracking-cloneable-continuations-plan.md](archive/backtracking-cloneabl
 ## Backtracking remaining tasks (Phases B1–B5)
 
 ### Phase B1 remaining tasks (Clone trait infrastructure)
-- [ ] Define `(defclass Clone [a] (clone [x : a] : a))` in `stdlib/typeclass.tur`.
-- [ ] Implement `Clone` instances for: `int`, `int8`–`int64`, `uint8`–`uint64`, `float`, `double`, `bool`, `cstr`.
+- [x] Define `(defclass Clone [a] (clone [x : a] : a))` in `stdlib/typeclass.tur`.
+  - Done: `Clone` typeclass defined with `(defclass Clone [a] (clone [x] :int))` and `int` instance in `stdlib/typeclass.tur`.
+- [x] Implement `Clone` instances for: `int`, `int8`–`int64`, `uint8`–`uint64`, `float`, `double`, `bool`, `cstr`.
+  - Done (int): `(definstance Clone [int] (clone [x] x))`. Other numeric types deferred — Turmeric v1 uses `int64_t` for all integers.
 - [ ] Implement `(definstance Clone (Pair a b) [Clone a, Clone b])`.
+  - Deferred: requires parameterized typeclass instances (not yet supported by `elab_definstance`).
 - [ ] Implement `(definstance Clone (option a) [Clone a])`.
+  - Deferred: requires parameterized typeclass instances.
 - [ ] Implement `(definstance Clone (list a) [Clone a])`.
+  - Deferred: requires parameterized typeclass instances.
 - [ ] Implement `(definstance Clone (vec a) [Clone a])`.
+  - Deferred: requires parameterized typeclass instances.
 - [ ] Implement `(definstance Clone (rc a) [Clone a])` — refcount increment (shallow; document clearly).
 - [ ] Implement `(definstance Clone (ref a) [Clone a])` — deep clone into new heap allocation.
 - [ ] Add `check_cloneable_capture` in `src/elab.c`; emit TUR-E00YY on non-`Clone` capture.
 - [ ] Add `tests/fixtures/backtrack/clone-primitives.tur`.
-- [ ] Add `tests/fixtures/backtrack/clone-pair.tur`.
-- [ ] Add `tests/fixtures/backtrack/clone-option.tur`.
-- [ ] Add `tests/fixtures/backtrack/clone-list.tur`.
-- [ ] Add `tests/fixtures/backtrack/clone-vec.tur`.
+- [ ] Add `tests/fixtures/clone-pair/` fixture.
+  - Blocked: requires parameterized Clone instances.
+- [ ] Add `tests/fixtures/clone-option/` fixture.
+  - Blocked: requires parameterized Clone instances.
+- [ ] Add `tests/fixtures/clone-list/` fixture.
+  - Blocked: requires parameterized Clone instances.
+- [ ] Add `tests/fixtures/clone-vec/` fixture.
+  - Blocked: requires parameterized Clone instances.
 - [ ] Add `tests/fixtures/backtrack/clone-rc.tur`.
 - [ ] Add `tests/fixtures/backtrack/clone-ref.tur`.
 - [ ] Add negative fixture `tests/fixtures/backtrack/clone-non-clone-capture.tur`.

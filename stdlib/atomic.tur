@@ -1,0 +1,62 @@
+;; stdlib/atomic.tur — Atomic integer operations (Phase T19)
+;;
+;; Provides atomic load/store/add/sub/swap/cas on 64-bit integers,
+;; implemented using the __atomic_* GCC/Clang builtins in C blocks.
+;; All operations use sequentially-consistent ordering by default.
+;;
+;; An "atomic" value is represented as a :ptr<void> pointing to a
+;; heap-allocated int64_t cell.
+
+(defn atomic-new [init :int] :ptr<void>
+  ```c
+  int64_t *cell = (int64_t *)malloc(sizeof(int64_t));
+  if (!cell) { fprintf(stderr, "atomic-new: out of memory\n"); abort(); }
+  __atomic_store_n(cell, (int64_t)init, __ATOMIC_SEQ_CST);
+  return (void *)cell;
+  ```)
+
+(defn atomic-load [p :ptr<void>] :int
+  ```c
+  int64_t *cell = (int64_t *)p;
+  return (int64_t)__atomic_load_n(cell, __ATOMIC_SEQ_CST);
+  ```)
+
+(defn atomic-store! [p :ptr<void> v :int] :nil
+  ```c
+  int64_t *cell = (int64_t *)p;
+  __atomic_store_n(cell, (int64_t)v, __ATOMIC_SEQ_CST);
+  ```)
+
+(defn atomic-add! [p :ptr<void> delta :int] :int
+  ```c
+  int64_t *cell = (int64_t *)p;
+  return (int64_t)__atomic_fetch_add(cell, (int64_t)delta, __ATOMIC_SEQ_CST);
+  ```)
+
+(defn atomic-sub! [p :ptr<void> delta :int] :int
+  ```c
+  int64_t *cell = (int64_t *)p;
+  return (int64_t)__atomic_fetch_sub(cell, (int64_t)delta, __ATOMIC_SEQ_CST);
+  ```)
+
+(defn atomic-swap! [p :ptr<void> new-val :int] :int
+  ```c
+  int64_t *cell = (int64_t *)p;
+  int64_t tmp = (int64_t)new_val;
+  return (int64_t)__atomic_exchange_n(cell, tmp, __ATOMIC_SEQ_CST);
+  ```)
+
+(defn atomic-cas! [p :ptr<void> expected :int desired :int] :bool
+  ```c
+  int64_t *cell = (int64_t *)p;
+  int64_t exp_v = (int64_t)expected;
+  int64_t des_v = (int64_t)desired;
+  return (int64_t)__atomic_compare_exchange_n(
+      cell, &exp_v, des_v, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+  ```)
+
+(defn atomic-free [p :ptr<void>] :nil
+  ```c
+  free(p);
+  ```)
+
