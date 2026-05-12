@@ -676,7 +676,7 @@ defn chunked-stream [chunk-size : int, g : Goal, state : LogicState] : Stream
 |------|----------|--------|--------------|
 | Performance optimization (chunked streams) | Medium | Pending | Phase 3 |
 | Better error messages for unification failures | Low | Pending | Phase 3 |
-| Documentation and examples | Medium | Pending | Phase 3 |
+| Documentation and examples | Medium | Completed (initial tutorial + example) | Phase 3 |
 | Property-based tests | Medium | Pending | Phase 3 |
 | Integration with Phase 19 effects | Low | Pending | Phase 19 |
 
@@ -736,7 +736,14 @@ tests/
     └── puzzles.tur       # Logic puzzle examples
 
 docs/
-└── minikanren-guide.md   # User-facing documentation
+└── guides/
+    └── minikanren-tutorial.md   # User-facing tutorial
+
+examples/
+└── minikanren/
+    ├── CMakeLists.txt
+    └── src/
+        └── main.tur
 ```
 
 ---
