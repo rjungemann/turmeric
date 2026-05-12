@@ -15,7 +15,10 @@ struct TurFiber {
     bool done;
     void *result;
     void *arg;
-    void *handler_chain;
+    /* Phase P19-8: Per-fiber effect handler chain (mirrors FiberBlock.effect_handler_chain
+     * in the generated C runtime).  Typed void * because EffectHandlerFrame is defined
+     * only inside generated programs; cast to EffectHandlerFrame * at call sites. */
+    void *effect_handler_chain;
     void (*fn)(TurFiber *);
 };
 

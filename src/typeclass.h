@@ -29,6 +29,9 @@ struct TypeClass {
     uint8_t n_type_params;
     TypeClassMethod *methods;    /* Methods in this typeclass */
     uint8_t n_methods;
+    /* Phase HKT-P4: file that defined this typeclass (for orphan instance check).
+     * file_id mirrors Span.file_id; 0 means unknown/builtin. */
+    uint16_t origin_file_id;
     /* For linking */
     TypeClass *next;             /* Next typeclass in global registry */
 };
@@ -44,6 +47,9 @@ struct TypeClassInstance {
     /* Constraints on type parameters (e.g., Eq a => Eq (List a)) */
     TypeClassInstance **constraints;
     uint8_t n_constraints;
+    /* Phase HKT-P4: file that defined this instance (for orphan instance check).
+     * file_id mirrors Span.file_id; 0 means unknown. */
+    uint16_t origin_file_id;
     /* For linking */
     TypeClassInstance *next;      /* Next instance in global registry */
 };

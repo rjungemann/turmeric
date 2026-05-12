@@ -88,6 +88,9 @@ typedef struct StructDef {
     StructField *fields;    /* field array (malloc'd) */
     bool is_copy;           /* :copy annotation */
     bool needs_drop_glue;   /* true if any field is rc/ref/weak */
+    /* Phase HKT-P4: file that defined this struct (for orphan instance check).
+     * file_id mirrors Span.file_id; 0 means unknown/builtin. */
+    uint16_t origin_file_id;
 } StructDef;
 
 /* Phase 11: canonical default copy-kind by kind (typeclass path is primary; this

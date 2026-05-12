@@ -6751,6 +6751,8 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
     def->fields = (StructField *)arena_alloc(e->arena, actual_n_fields * sizeof(StructField));
     def->is_copy = is_copy;
     def->needs_drop_glue = false;
+    /* Phase HKT-P4: record the file that defined this struct. */
+    def->origin_file_id = call->span.file_id;
 
     /* Parse fields */
     {
@@ -7747,6 +7749,8 @@ static Expr *elab_defclass(Elab *e, const Form *call) {
     tc->n_type_params     = n_type_params;
     tc->methods           = methods;
     tc->n_methods         = n_methods;
+    /* Phase HKT-P4: record the file that defined this typeclass. */
+    tc->origin_file_id    = call->span.file_id;
 
     /* Create a TYPECLASS_DEF expression for codegen */
     Expr *tc_expr = expr_new(e->arena, EX_TYPECLASS_DEF, TYPE_NIL, call->span);
@@ -8178,6 +8182,38 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
     inst->n_type_args = n_type_args;
     inst->method_impls = method_impls;
     inst->n_method_impls = tc->n_methods;
+    /* Phase HKT-P4: record the file that defined this instance. */
+    inst->origin_file_id = call->span.file_id;
+
+    /* Phase HKT-P4: Orphan instance check (advisory in v1 — single-file
+     * compilation means all definitions share the same file_id, so this check
+     * never fires in v1 unless a module system is added later).
+     *
+     * Rule: an instance is "orphan" when NEITHER the typeclass NOR any
+     * struct-type type argument was defined in the current compilation unit.
+     * In Rust terms: you may only define Foo<Bar> if you own Foo or Bar.
+     *
+     * Promote to DIAG_ERROR once P19-6 (module system) lands. */
+    if (tc->origin_file_id != 0 && tc->origin_file_id != call->span.file_id) {
+        /* The typeclass is from a different file.
+         * Check if any struct type-arg was defined here. */
+        bool owns_a_type_arg = false;
+        for (uint8_t i = 0; i < n_type_args && !owns_a_type_arg; i++) {
+            if (type_args[i].kind == TY_STRUCT && type_args[i].as.struct_.def) {
+                if (type_args[i].as.struct_.def->origin_file_id == call->span.file_id) {
+                    owns_a_type_arg = true;
+                }
+            }
+        }
+        if (!owns_a_type_arg) {
+            diag_emit_with_code(DIAG_WARNING, call->span,
+                      TUR_E0013_ORPHAN_INSTANCE,
+                      "orphan instance: '%s' is defined in a different compilation "
+                      "unit and none of the type arguments are defined here; "
+                      "this may conflict when a module system is added (see P19-6)",
+                      tc_name->name);
+        }
+    }
     
     /* Create an INSTANCE_DEF expression for codegen */
     Expr *inst_expr = expr_new(e->arena, EX_INSTANCE_DEF, TYPE_NIL, call->span);

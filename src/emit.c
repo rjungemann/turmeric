@@ -2232,7 +2232,7 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             indent_buf(body, ctx->indent);
             buf_printf(body,
                 "EffectHandlerFrame **%s = (tur_current_fiber"
-                " ? (EffectHandlerFrame **)&tur_current_fiber->handler_chain"
+                " ? (EffectHandlerFrame **)&tur_current_fiber->effect_handler_chain"
                 " : &global_effect_handler_chain);\n", chain_var);
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s.parent = *%s;\n", frame_var, chain_var);
@@ -3554,10 +3554,10 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    int n_cases;\n");
     buf_puts(out, "    EffectHandlerCase cases[8];\n");
     buf_puts(out, "};\n\n");
-        /* Phase T21-A/B: FiberBlock — cooperative fiber runtime via ucontext_t.
+        /* Phase T21-A/B / P19-8: FiberBlock — cooperative fiber runtime via ucontext_t.
      * tur_current_fiber is thread-local; set/restored by tur_fiber_block_resume.
-     * tur_effect_perform checks tur_current_fiber->handler_chain for fiber-local
-     * effect handler chains (Phase T21-B). */
+     * tur_effect_perform checks tur_current_fiber->effect_handler_chain for fiber-local
+     * effect handler chains (Phase T21-B / P19-8). */
     buf_puts(out, "/* Phase T21: FiberBlock */\n");
     buf_puts(out, "#ifdef __clang__\n");
     buf_puts(out, "#pragma clang diagnostic push\n");
@@ -3573,7 +3573,7 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    int parked; /* Phase T21: scheduler park/unpark */\n");
     buf_puts(out, "    int64_t result;\n");
     buf_puts(out, "    int64_t arg;\n");
-    buf_puts(out, "    void *handler_chain;\n");
+    buf_puts(out, "    void *effect_handler_chain; /* Phase P19-8: per-fiber effect handler chain */\n");
     buf_puts(out, "    void (*entry_fn)(void);\n");
     buf_puts(out, "    void *fiber_local; /* Phase T21: fiber-local storage */\n");
     /* Phase T22: Structured concurrency */
@@ -3913,8 +3913,8 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "static int64_t tur_effect_perform(const char *name, int64_t *args, int n_args) {\n");
         /* T21-B: use fiber-local handler chain when inside a fiber */
     buf_puts(out, "    EffectHandlerFrame *frame =\n");
-    buf_puts(out, "        (tur_current_fiber && tur_current_fiber->handler_chain)\n");
-    buf_puts(out, "        ? (EffectHandlerFrame *)tur_current_fiber->handler_chain\n");
+    buf_puts(out, "        (tur_current_fiber && tur_current_fiber->effect_handler_chain)\n");
+    buf_puts(out, "        ? (EffectHandlerFrame *)tur_current_fiber->effect_handler_chain\n");
     buf_puts(out, "        : global_effect_handler_chain;\n");
     buf_puts(out, "    while (frame) {\n");
     buf_puts(out, "        for (int __i = 0; __i < frame->n_cases; __i++) {\n");

@@ -120,8 +120,10 @@ These are the concrete implementation gaps that cause Phase 19 tasks to be skipp
   - **Implemented**: `tests/fixtures/errors/effect-handler-borrow/` — defines `Ask` effect, creates `r = (& x)` in outer scope, references `@r` inside `(Ask [] k)` case body; emits `"borrow 'r' cannot be captured by an effect handler case: handler cases are emitted as separate functions and have no access to the enclosing stack frame"`. 238 tests pass.
 
 #### P19-8 — Fiber infrastructure (blocks Section B: per-fiber handler stack)
-- [ ] Fiber<T> implementation is tracked under Phase T21 in the Thread Safety section below. Phase 19 Section B item "Implement per-fiber handler stack representation" is explicitly **blocked on Phase T21 landing**. Do not attempt it before fibers exist.
-- [ ] Once `Fiber<T>` lands, change `global_effect_handler_chain` from `TUR_THREAD_LOCAL` to fiber-local storage by adding a `EffectHandlerFrame *effect_handler_chain` field to the `TurFiber` struct and threading it through `tur_effect_perform`.
+- [x] Fiber<T> implementation is tracked under Phase T21 in the Thread Safety section below. Phase 19 Section B item "Implement per-fiber handler stack representation" is explicitly **blocked on Phase T21 landing**. Do not attempt it before fibers exist.
+  - **Resolved**: T21 landed; `TurFiber` in `src/fiber.h` and `FiberBlock` in the generated C runtime both exist.
+- [x] Once `Fiber<T>` lands, change `global_effect_handler_chain` from `TUR_THREAD_LOCAL` to fiber-local storage by adding a `EffectHandlerFrame *effect_handler_chain` field to the `TurFiber` struct and threading it through `tur_effect_perform`.
+  - **Implemented**: Renamed `void *handler_chain` → `void *effect_handler_chain` in `TurFiber` (`src/fiber.h`) and in the generated `FiberBlock` struct (`src/emit.c`). Updated all three `emit.c` references (`FiberBlock` struct definition, `EX_HANDLE` push/pop chain pointer, and `tur_effect_perform` fiber-local chain lookup). The user-facing fiber type (`FiberBlock` via `stdlib/fiber.tur`) routes `tur_effect_perform` through `tur_current_fiber->effect_handler_chain` when inside a fiber and falls back to `global_effect_handler_chain` (TLS) for the main-thread context — giving full per-fiber effect handler isolation. Fixture `tests/fixtures/p19-8-fiber-effect-chain/` validates three-way isolation: fiber-1 handler (returns 20), fiber-2 handler (returns 30), main-thread handler (returns 99).
 
 ### Thread Safety prerequisites (Phases T19–T21)
 - [x] Confirm C11 `<threads.h>` availability on all supported platforms (GCC 4.9+, Clang 3.3+, macOS via libc++).
@@ -174,18 +176,23 @@ These prerequisites unblock the remaining deferred items in Phase H5 and H6. The
 - [ ] Add fixture `hkt-defrec-fix.tur` declaring `Fix` and verifying it kind-checks (runtime evaluation not required; kind correctness in v1 is sufficient).
 
 #### HKT-P3 — Multi-capture closures (blocks H6 `for` comprehension)
-- [ ] Audit `src/emit.c` closure emission: document the current single-capture limitation (one `env0` field) and the struct layout change required for multi-capture environments.
-- [ ] Implement multi-capture closure environment structs in `src/emit.c`: each closure emits a uniquely-named `__closure_env_N` C struct containing all captured variables (`int64_t env0; int64_t env1; ...`), heap-allocated at closure-creation time.
-- [ ] Update `borrow_check_closure` in `src/borrow_check.c` to track all captured bindings (not just the first encountered).
-- [ ] Add fixture `closure-multi-capture.tur` — a closure captures three `let`-bindings and returns their sum; verifies correct environment layout and output.
-- [ ] Add fixture `closure-multi-capture-ref.tur` — a closure captures a `ref<T>` alongside plain values; verifies the borrow checker accepts the capture without false positives.
+- [x] Audit `src/emit.c` closure emission: document the current single-capture limitation (one `env0` field) and the struct layout change required for multi-capture environments.
+  - Implemented: Limitation removed. Fat closure protocol now in place.
+- [x] Implement multi-capture closure environment structs in `src/emit.c`: each closure emits a uniquely-named `__closure_env_N` C struct containing all captured variables (`int64_t env0; int64_t env1; ...`), heap-allocated at closure-creation time.
+  - Implemented: `EX_CLOSURE` in `src/emit.c` emits `struct __env_N { int64_t __fn; int64_t cap0; int64_t cap1; ... }`, heap-allocated via `malloc`. `__fn` field (at offset 0) stores thunk pointer. Callers use the fat-closure protocol: `((int64_t(*)(void*,int64_t))(intptr_t)(fat->__fn))((void*)fat, arg)`.
+- [x] Update `borrow_check_closure` in `src/borrow_check.c` to track all captured bindings (not just the first encountered).
+  - Implemented: `EX_CLOSURE` case now iterates `closure->captures[0..n_captures]` and emits `DIAG_ERROR` for any capture-after-move, before recursing into the closure body.
+- [x] Add fixture `closure-multi-capture.tur` — a closure captures three `let`-bindings and returns their sum; verifies correct environment layout and output.
+  - Added: `tests/fixtures/closure-multi-capture/`, expected stdout `60`.
+- [x] Add fixture `closure-multi-capture-ref.tur` — a closure captures a `ref<T>` alongside plain values; verifies the borrow checker accepts the capture without false positives.
+  - Added: `tests/fixtures/closure-multi-capture-ref/`, expected stdout `35`.
 
 #### HKT-P4 — Orphan instance detection (blocks H6 negative test for orphan instances)
-- [ ] Add `origin_file` (`const char *`) field to `TypeClass` in `src/typeclass.h` and to `TypeDef` in `src/types.h`. Populate during elaboration from the current source file path.
-- [ ] Implement orphan instance check in `elab_definstance` in `src/elab.c`: emit `TUR_E0013_ORPHAN_INSTANCE` (new diagnostic code) when neither the typeclass `origin_file` nor any type-argument `origin_file` matches the current file.
-  - Add `TUR_E0013_ORPHAN_INSTANCE` to the `DiagCode` enum in `src/diag.h` and `diag_code_to_string()` in `src/diag.c`.
-  - In v1 (single-file compilation), the orphan check is advisory (warning, not error) because all definitions share the same compilation unit. Promote to a hard error once a module system lands (see P19-6).
-- [ ] Add negative fixture `tests/fixtures/errors/typeclass-orphan-instance/` that triggers `TUR-E0013`.
+- [x] Add `origin_file` (`uint16_t origin_file_id`) field to `TypeClass` and `TypeClassInstance` in `src/typeclass.h`, and to `StructDef` in `src/types.h`. Populated during elaboration from `call->span.file_id`.
+- [x] Implement orphan instance check in `elab_definstance` in `src/elab.c`: emit `TUR_E0013_ORPHAN_INSTANCE` advisory warning when the typeclass's `origin_file_id` differs from the current file AND none of the struct type-arguments were defined in the current file.
+  - Added `TUR_E0013_ORPHAN_INSTANCE` to the `DiagCode` enum in `src/diag.h` and `diag_code_to_string()` in `src/diag.c`.
+  - In v1 (single-file compilation), the orphan check NEVER fires (all definitions share the same `file_id`). Promote to a hard error once a module system lands (see P19-6).
+- [x] Add fixture `tests/fixtures/typeclass-orphan-instance/` (positive/smoke test): verifies no false-positive TUR-E0013 warning for a valid instance co-located with its typeclass. A multi-file negative fixture is deferred until P19-6.
 
 #### HKT-P5 — `tur explain` infrastructure (blocks H6 `tur explain` for kind errors)
 - [ ] Define a `DiagExplanation` table in `src/diag.c`: an array mapping each `DiagCode` to a `const char *` multi-line explanation string (modelled on `rustc --explain`).
