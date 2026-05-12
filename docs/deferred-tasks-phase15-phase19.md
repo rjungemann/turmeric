@@ -439,8 +439,10 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Done: `tests/fixtures/result-combinators/` — covers `result-map`, `result-map-err`, `result-flat-map`, `result-or`, `result-or-else`, `result-unwrap-or`, `result-expect`. 12 assertions, all pass.
 - [x] Add fixture `result-question-op.tur`.
   - Done: `tests/fixtures/errors/result-question-op/` — verifies `?` emits "not yet implemented" diagnostic.
-- [ ] Add fixture `result-display.tur`.
-- [ ] Add fixture `result-from-into.tur`.
+- [x] Add fixture `result-display.tur`.
+  - Done: `tests/fixtures/result-display/` — exercises display/debug/error-style result formatting hooks in a self-contained fixture.
+- [x] Add fixture `result-from-into.tur`.
+  - Done: `tests/fixtures/result-from-into/` — exercises two-parameter `From`/`Into` typeclass declarations and calls.
 - [x] Add fixture `result-collect.tur`.
   - Done: `tests/fixtures/result-collect/` — covers `result-collect` (all-ok, first-err) and `result-partition`.
 - [x] Add negative fixture `result-question-outside-fn.tur`.
