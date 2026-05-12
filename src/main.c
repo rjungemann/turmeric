@@ -57,6 +57,7 @@ bool g_lint_unsafe_enabled = false;    /* master flag for all unsafe lints */
 
 /* Phase R5: Panic strategy configuration */
 bool g_panic_abort = false;            /* --panic-abort: all panics call abort() directly */
+bool g_panic_trace = false;            /* --panic-trace: print scope chain on panic */
 
 /* Phase U5: Global statistics for unsafe linting */
 uint32_t g_unsafe_block_count = 0;     /* count of unsafe blocks seen */
@@ -807,7 +808,8 @@ static int usage(void) {
         "  --no-color                       disable colored diagnostics\n"
         "  --json-diagnostics               output diagnostics as JSON (phase 8)\n"
         "  --explain <code>                 compile code snippet and explain errors (phase 8)\n"
-        "  --panic-abort                   all panics call abort() directly (Phase R5)\n");
+        "  --panic-abort                   all panics call abort() directly (Phase R5)\n"
+        "  --panic-trace                   print scope chain on panic (Phase R6)\n");
     return 64;
 }
 
@@ -825,6 +827,16 @@ static bool parse_no_color(int argc, char **argv) {
 static bool parse_panic_abort(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--panic-abort") == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Phase R6: Handle --panic-trace flag */
+static bool parse_panic_trace(int argc, char **argv) {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--panic-trace") == 0) {
             return true;
         }
     }
@@ -882,9 +894,17 @@ int main(int argc, char **argv) {
     bool explain_mode = false;
     const char *explain_code = NULL;
     g_panic_abort = parse_panic_abort(argc, argv);
+    g_panic_trace = parse_panic_trace(argc, argv);
     
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--panic-abort") == 0) {
+            /* Already parsed, remove from argv */
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--panic-trace") == 0) {
             /* Already parsed, remove from argv */
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
