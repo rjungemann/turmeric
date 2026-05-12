@@ -1,0 +1,11 @@
+(defn main [] :int
+  (unsafe
+    (let [src (raw-malloc 8)]
+      (let [dst (raw-malloc 8)]
+        (ptr-write src 42)
+        (raw-memcpy dst src 8)
+        (let [v (ptr-deref dst)]
+          (println v))
+        (raw-free src)
+        (raw-free dst)
+        0))))

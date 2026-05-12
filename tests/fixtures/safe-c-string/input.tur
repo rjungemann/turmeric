@@ -1,0 +1,5 @@
+(defn main [] :int
+  (let [s "hello"]
+    (let [result (from-c-string s)]
+      (println "from-c-string succeeded")
+      0)))
