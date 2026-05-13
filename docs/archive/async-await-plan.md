@@ -1128,9 +1128,129 @@ For platforms without C11 threads:
 
 ---
 
-## 16. Appendix: Example Programs
+## 16. Panic and Async Task Semantics (Phase R6 / T25)
 
-### 16.1 Sequential Async
+### 16.1 Panic inside an async task
+
+When `(panic msg)` is called inside an async fiber, the behavior follows Turmeric's
+**Rust-inspired unwind model**:
+
+1. The fiber unwinds immediately — deferred cleanup forms (`defer`) inside the fiber
+   run in LIFO order, same as in a synchronous function.
+2. The fiber's `TurFuture` transitions to `FUTURE_REJECTED` with a `const char *error`
+   payload set to the panic message.
+3. The scheduler marks the fiber `done` and removes it from the run queue without
+   resuming any waiting awaiters yet.
+4. When the calling fiber later executes `(await fut)`, it receives the panic payload
+   and re-panics (propagates the panic up the await chain) unless the caller wraps the
+   await in a `catch-unwind` boundary.
+
+```
+(defn risky [] :int
+  (panic "something went wrong"))
+
+(defn main [] :int
+  (let [fut (async risky)]
+    ;; await propagates the panic if risky panicked
+    (await fut)
+    0))
+```
+
+### 16.2 `catch-unwind` at async boundaries
+
+To prevent a panicking task from taking down its parent, wrap the `await` in
+`(try … (catch …))`:
+
+```
+(defn main [] :int
+  (let [fut (async risky)]
+    (try
+      (await fut)
+      (catch e :cstr
+        (println "task panicked:" e)
+        1))))
+```
+
+The `try`/`catch` intercepts the re-panic emitted by `await` and allows the caller to
+handle or log the failure gracefully.
+
+### 16.3 Panic inside an effect handler running in an async scope
+
+Effect handlers execute synchronously on the fiber that called `(perform …)`. A panic
+inside a handler body therefore panics the fiber directly (not wrapped in a future):
+
+```
+(defeffect Fail [] :int)
+
+(defn main [] :int
+  (let [fut (async (fn [] :int
+                     (with-handler (perform (Fail))
+                       (Fail [] _k) (panic "handler panicked"))))]
+    (try
+      (await fut)
+      (catch _ :cstr 1))))
+```
+
+Because the handler runs on the async fiber, the panic unwinds the fiber stack, marks
+the future as `FUTURE_REJECTED`, and is caught by the outer `try`/`catch` on `await`.
+
+### 16.4 Continuation escape into async scope (TUR-E0017)
+
+Effect-handler continuations (`k` in a handler case) are **fiber-local**: they capture
+the suspension point of the fiber that called `perform`. If `k` were captured by an
+`(async …)` block and resumed from a different fiber, the fiber identity check in
+`tur_cont_resume` would fail at runtime with a fatal error.
+
+Turmeric catches this **at compile time** (Phase T25):
+
+```
+(defeffect GetK [] :int)
+
+(defn bad [] :int
+  (handle (perform (GetK))
+    (GetK [] k)
+      ;; ERROR TUR-E0017: k cannot escape into async scope
+      (await (async (fn [] :int (resume k 42)))))
+  0)
+```
+
+The rule: a handler continuation `k` may not appear in the captured-variable set of any
+`(async …)` block. The elaborator enforces this via the `is_continuation` flag on
+`Binding` and a free-variable scan in `elab_async`.
+
+**Correct pattern** — resume synchronously, then do async work:
+
+```
+(handle (perform (GetK))
+  (GetK [] k)
+    (let [v (await (async (fn [] :int 42)))]
+      (resume k v)))
+```
+
+### 16.5 `with-handler` sugar for async contexts
+
+`with-handler` is an alias for `handle`, intended to read naturally inside `async`
+blocks:
+
+```
+(defeffect AddTen [x :int] :int)
+
+(defn main [] :int
+  (let [fut (async (with-handler (perform (AddTen 5))
+                     (AddTen [x] k) (resume k (+ x 10))))]
+    (let [result (await fut)]
+      (println result)   ;; 15
+      0)))
+```
+
+The `async` codegen wraps the `with-handler` body in a static thunk so handler
+functions can be emitted at file scope (avoiding nested C function definitions).
+
+---
+
+## 17. Appendix: Example Programs
+
+### 17.1 Sequential Async
 
 ```clojure
 (defn main []
@@ -1141,7 +1261,7 @@ For platforms without C11 threads:
     (println (await result))))
 ```
 
-### 16.2 Parallel Async
+### 17.2 Parallel Async
 
 ```clojure
 (defn main []
@@ -1154,7 +1274,7 @@ For platforms without C11 threads:
       (println (await result)))))
 ```
 
-### 16.3 Task Group with Cancellation
+### 17.3 Task Group with Cancellation
 
 ```clojure
 (defn main []
@@ -1166,7 +1286,7 @@ For platforms without C11 threads:
         (await t2)))))
 ```
 
-### 16.4 Async HTTP Server
+### 17.4 Async HTTP Server
 
 ```clojure
 (defn handle-request [req]
@@ -1183,7 +1303,7 @@ For platforms without C11 threads:
     (Scheduler::run (Scheduler::new))))
 ```
 
-### 16.5 Producer-Consumer with Channels
+### 17.5 Producer-Consumer with Channels
 
 ```clojure
 (defn producer [ch n]
@@ -1208,7 +1328,7 @@ For platforms without C11 threads:
       (await c))))
 ```
 
-### 16.6 Async Pipeline
+### 17.6 Async Pipeline
 
 ```clojure
 (defn pipeline [input output transform]

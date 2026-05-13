@@ -1,0 +1,15 @@
+;; Phase T25: async-effect-escape — continuation escapes async scope
+;;
+;; Demonstrates compile-time detection of an effect handler continuation
+;; being captured by an async block. Resuming it from a different fiber
+;; would cause a runtime error; the compiler catches this statically.
+
+(defeffect GetK [] :int)
+
+(defn main [] :int
+  (handle (perform (GetK))
+    (GetK [] k)
+      ;; ERROR: continuation k captured by async fn — would escape its handler scope.
+      (await (async (fn [] :int
+                      (resume k 42)))))
+  0)

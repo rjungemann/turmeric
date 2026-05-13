@@ -38,6 +38,9 @@ struct Binding {
     Span          moved_at;
     /* Phase R5: #[no-unwind] attribute on defn */
     bool          no_unwind;
+    /* Phase T25: true if this binding is an algebraic-effect continuation (k in handle cases).
+     * Used to detect continuation escape into async blocks at compile time. */
+    bool          is_continuation;
     /* Phase M1: Module visibility */
     bool          is_exported;          /* listed in module's (export ...) */
     const Symbol *defining_module_name; /* owning module's name, or NULL for top-level */

@@ -2623,12 +2623,84 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         /* Phase T21-F: async/await */
         case EX_ASYNC: {
-            /* (async fn-expr) — launch fn-expr (a no-arg fn) in a fiber, return TurFuture* as ptr<void> */
-            char *fn_val = emit_value(ctx, body, e->as.async_.fn_expr);
+            /* (async fn-expr) — launch fn-expr in a fiber, return TurFuture* as ptr<void>.
+             *
+             * Two paths:
+             *  (a) fn-expr has type TY_FN (a no-arg function): use it as a function pointer
+             *      directly (existing behaviour).
+             *  (b) fn-expr is an expression (e.g., (handle ...) from (with-handler ...)):
+             *      T25 — wrap in a static thunk emitted at file scope, then call tur_async_fiber
+             *      with the thunk.  v1 limitation: the expression must not capture outer-scope
+             *      variables (same limitation as effect handler bodies). */
+            const Expr *fn_expr = e->as.async_.fn_expr;
             char *tmp = fresh_tmp(ctx);
-            indent_buf(body, ctx->indent);
-            buf_printf(body, "void *%s = (void *)tur_async_fiber((int64_t(*)(void))(intptr_t)%s);\n", tmp, fn_val);
-            free(fn_val);
+            if (fn_expr->type.kind == TY_FN) {
+                /* Path (a): fn-expr is already a function pointer */
+                char *fn_val = emit_value(ctx, body, fn_expr);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "void *%s = (void *)tur_async_fiber((int64_t(*)(void))(intptr_t)%s);\n", tmp, fn_val);
+                free(fn_val);
+            } else {
+                /* Path (b): wrap the expression in a static thunk (T25 with-handler support).
+                 *
+                 * Emission order is important: any nested handler functions (emitted to
+                 * pending_handler_fns) must appear BEFORE the thunk's opening brace in the
+                 * output.  We achieve this by:
+                 *   1. Emit the forward declaration to pbuf.
+                 *   2. Emit the thunk body into a separate temporary buffer (thunk_body_buf),
+                 *      routing pending_handler_fns to pbuf so nested handler fns land there.
+                 *   3. Write the thunk definition (brace + body buf + return + close) to pbuf.
+                 */
+                char *thunk_name = (char *)malloc(32);
+                snprintf(thunk_name, 32, "__async_thunk_%d", ctx->tmp_n++);
+
+                Buf *pbuf = ctx->pending_handler_fns;
+
+                /* Step 1: forward declaration */
+                buf_printf(pbuf, "static int64_t %s(void);\n", thunk_name);
+
+                /* Step 2: emit thunk body into a separate buffer */
+                Buf thunk_body_buf;
+                buf_init(&thunk_body_buf);
+
+                EmitCtx tctx = *ctx;
+                tctx.file = pbuf;
+                tctx.pending_handler_fns = pbuf; /* nested handler fns → pbuf (file scope) */
+                tctx.indent = 4;
+                tctx.fn_params = NULL;
+                tctx.n_fn_params = 0;
+                tctx.closure = NULL;
+                tctx.env_var_name = NULL;
+                tctx.defer_captures = NULL;
+                tctx.n_defer_captures = 0;
+                tctx.frame_var = NULL;
+                tctx.return_emitted = false;
+
+                char *ret = NULL;
+                if (fn_expr->type.kind == TY_NIL || fn_expr->type.kind == TY_NEVER) {
+                    emit_stmt(&tctx, &thunk_body_buf, fn_expr);
+                } else {
+                    ret = emit_value(&tctx, &thunk_body_buf, fn_expr);
+                }
+                ctx->tmp_n = tctx.tmp_n;
+
+                /* Step 3: write thunk definition to pbuf — after nested handler fns */
+                buf_printf(pbuf, "static int64_t %s(void) {\n", thunk_name);
+                if (thunk_body_buf.len > 0)
+                    buf_write(pbuf, thunk_body_buf.data, thunk_body_buf.len);
+                if (ret) {
+                    buf_printf(pbuf, "    return (int64_t)%s;\n", ret);
+                    free(ret);
+                } else {
+                    buf_puts(pbuf, "    return 0;\n");
+                }
+                buf_puts(pbuf, "}\n\n");
+                buf_free(&thunk_body_buf);
+
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "void *%s = (void *)tur_async_fiber(%s);\n", tmp, thunk_name);
+                free(thunk_name);
+            }
             return tmp;
         }
         case EX_AWAIT: {
@@ -4932,144 +5004,6 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    if (next < 0) return -1;\n");
     buf_puts(out, "    int64_t diff = (next - tur_monotonic_ns()) / 1000;\n");
     buf_puts(out, "    return diff > 0 ? diff : 0;\n");
-    buf_puts(out, "}\n\n");
-
-    /* Phase T24: Timer wheel — O(1) insert/cancel/tick */
-    buf_puts(out, "/* Phase T24: Timer wheel */\n");
-    buf_puts(out, "#define TUR_WHEEL_SLOTS 256\n");
-    buf_puts(out, "#define TUR_WHEEL_SLOT_MASK 255\n");
-    buf_puts(out, "typedef void (*tur_timer_cb_t)(void *);\n");
-    buf_puts(out, "typedef struct TurTimerNode TurTimerNode;\n");
-    buf_puts(out, "struct TurTimerNode {\n");
-    buf_puts(out, "    int64_t deadline_ms;\n");
-    buf_puts(out, "    tur_timer_cb_t callback;\n");
-    buf_puts(out, "    void *arg;\n");
-    buf_puts(out, "    bool cancelled;\n");
-    buf_puts(out, "    TurTimerNode *next;\n");
-    buf_puts(out, "    TurTimerNode *prev;\n");
-    buf_puts(out, "};\n");
-    buf_puts(out, "typedef struct {\n");
-    buf_puts(out, "    TurTimerNode *slots[TUR_WHEEL_SLOTS];\n");
-    buf_puts(out, "    int64_t current_ms;\n");
-    buf_puts(out, "    pthread_mutex_t lock;\n");
-    buf_puts(out, "    bool running;\n");
-    buf_puts(out, "    pthread_t thread;\n");
-    buf_puts(out, "} TurTimerWheel;\n\n");
-    buf_puts(out, "static int64_t tur_wheel_now_ms(void) {\n");
-    buf_puts(out, "    struct timespec _ts;\n");
-    buf_puts(out, "    clock_gettime(CLOCK_MONOTONIC, &_ts);\n");
-    buf_puts(out, "    return (int64_t)_ts.tv_sec * 1000LL + (int64_t)_ts.tv_nsec / 1000000LL;\n");
-    buf_puts(out, "}\n\n");
-    buf_puts(out, "static void tur_timer_wheel_tick(TurTimerWheel *w) {\n");
-    buf_puts(out, "    if (!w) return;\n");
-    buf_puts(out, "    int64_t now = tur_wheel_now_ms();\n");
-    buf_puts(out, "    int64_t elapsed = now - w->current_ms;\n");
-    buf_puts(out, "    if (elapsed <= 0) return;\n");
-    buf_puts(out, "    for (int64_t _t = 0; _t < elapsed; _t++) {\n");
-    buf_puts(out, "        w->current_ms++;\n");
-    buf_puts(out, "        int _slot = (int)(w->current_ms & TUR_WHEEL_SLOT_MASK);\n");
-    buf_puts(out, "        TurTimerNode *_to_fire = NULL;\n");
-    buf_puts(out, "        pthread_mutex_lock(&w->lock);\n");
-    buf_puts(out, "        TurTimerNode **_pp = &w->slots[_slot];\n");
-    buf_puts(out, "        while (*_pp) {\n");
-    buf_puts(out, "            TurTimerNode *_n = *_pp;\n");
-    buf_puts(out, "            if (_n->cancelled) {\n");
-    buf_puts(out, "                *_pp = _n->next;\n");
-    buf_puts(out, "                if (_n->next) _n->next->prev = _n->prev;\n");
-    buf_puts(out, "                free(_n);\n");
-    buf_puts(out, "            } else if (_n->deadline_ms <= w->current_ms) {\n");
-    buf_puts(out, "                *_pp = _n->next;\n");
-    buf_puts(out, "                if (_n->next) _n->next->prev = _n->prev;\n");
-    buf_puts(out, "                _n->next = _to_fire; _to_fire = _n;\n");
-    buf_puts(out, "            } else { _pp = &_n->next; }\n");
-    buf_puts(out, "        }\n");
-    buf_puts(out, "        pthread_mutex_unlock(&w->lock);\n");
-    buf_puts(out, "        while (_to_fire) {\n");
-    buf_puts(out, "            TurTimerNode *_nx = _to_fire->next;\n");
-    buf_puts(out, "            _to_fire->callback(_to_fire->arg);\n");
-    buf_puts(out, "            free(_to_fire);\n");
-    buf_puts(out, "            _to_fire = _nx;\n");
-    buf_puts(out, "        }\n");
-    buf_puts(out, "    }\n");
-    buf_puts(out, "}\n\n");
-    buf_puts(out, "static void *tur_timer_wheel_ticker(void *raw) {\n");
-    buf_puts(out, "    TurTimerWheel *w = (TurTimerWheel *)raw;\n");
-    buf_puts(out, "    while (w->running) {\n");
-    buf_puts(out, "        struct timespec _ts2 = { .tv_sec = 0, .tv_nsec = 1000000L };\n");
-    buf_puts(out, "        nanosleep(&_ts2, NULL);\n");
-    buf_puts(out, "        tur_timer_wheel_tick(w);\n");
-    buf_puts(out, "    }\n");
-    buf_puts(out, "    return NULL;\n");
-    buf_puts(out, "}\n\n");
-    buf_puts(out, "static TurTimerWheel *tur_timer_wheel_new(void) {\n");
-    buf_puts(out, "    TurTimerWheel *w = (TurTimerWheel *)calloc(1, sizeof(TurTimerWheel));\n");
-    buf_puts(out, "    if (!w) { fprintf(stderr, \"timer-wheel: oom\\n\"); abort(); }\n");
-    buf_puts(out, "    pthread_mutex_init(&w->lock, NULL);\n");
-    buf_puts(out, "    w->current_ms = tur_wheel_now_ms();\n");
-    buf_puts(out, "    w->running = true;\n");
-    buf_puts(out, "    pthread_create(&w->thread, NULL, tur_timer_wheel_ticker, w);\n");
-    buf_puts(out, "    return w;\n");
-    buf_puts(out, "}\n\n");
-    buf_puts(out, "static void tur_timer_wheel_free(TurTimerWheel *w) {\n");
-    buf_puts(out, "    if (!w) return;\n");
-    buf_puts(out, "    w->running = false;\n");
-    buf_puts(out, "    pthread_join(w->thread, NULL);\n");
-    buf_puts(out, "    for (int _i = 0; _i < TUR_WHEEL_SLOTS; _i++) {\n");
-    buf_puts(out, "        TurTimerNode *_n = w->slots[_i];\n");
-    buf_puts(out, "        while (_n) { TurTimerNode *_nx = _n->next; free(_n); _n = _nx; }\n");
-    buf_puts(out, "    }\n");
-    buf_puts(out, "    pthread_mutex_destroy(&w->lock);\n");
-    buf_puts(out, "    free(w);\n");
-    buf_puts(out, "}\n\n");
-    buf_puts(out, "static TurTimerNode *tur_timer_wheel_insert(TurTimerWheel *w, int64_t delay_ms,\n");
-    buf_puts(out, "                                              tur_timer_cb_t cb, void *arg) {\n");
-    buf_puts(out, "    if (!w || !cb) return NULL;\n");
-    buf_puts(out, "    TurTimerNode *node = (TurTimerNode *)calloc(1, sizeof(TurTimerNode));\n");
-    buf_puts(out, "    if (!node) { fprintf(stderr, \"timer-node: oom\\n\"); abort(); }\n");
-    buf_puts(out, "    node->deadline_ms = tur_wheel_now_ms() + delay_ms;\n");
-    buf_puts(out, "    node->callback = cb; node->arg = arg; node->cancelled = false;\n");
-    buf_puts(out, "    int _sl = (int)(node->deadline_ms & TUR_WHEEL_SLOT_MASK);\n");
-    buf_puts(out, "    pthread_mutex_lock(&w->lock);\n");
-    buf_puts(out, "    node->next = w->slots[_sl]; node->prev = NULL;\n");
-    buf_puts(out, "    if (w->slots[_sl]) w->slots[_sl]->prev = node;\n");
-    buf_puts(out, "    w->slots[_sl] = node;\n");
-    buf_puts(out, "    pthread_mutex_unlock(&w->lock);\n");
-    buf_puts(out, "    return node;\n");
-    buf_puts(out, "}\n\n");
-    buf_puts(out, "static void tur_timer_wheel_cancel(TurTimerNode *node) {\n");
-    buf_puts(out, "    if (node) node->cancelled = true;\n");
-    buf_puts(out, "}\n\n");
-
-    /* Phase T24 helper: generic fire-and-signal callback for tests */
-    buf_puts(out, "/* Phase T24: Timer fire context for recording ordered callbacks */\n");
-    buf_puts(out, "typedef struct {\n");
-    buf_puts(out, "    pthread_mutex_t lock;\n");
-    buf_puts(out, "    pthread_cond_t  cond;\n");
-    buf_puts(out, "    int             order[16]; /* ids in fire order */\n");
-    buf_puts(out, "    int             count;     /* timers fired so far */\n");
-    buf_puts(out, "    int             expected;  /* total to wait for   */\n");
-    buf_puts(out, "} TurTimerFireCtx;\n\n");
-    buf_puts(out, "/* arg must point to int64_t[2]: { ptr-as-int64 to TurTimerFireCtx, timer-id } */\n");
-    buf_puts(out, "static void tur_timer_fire_cb(void *arg) {\n");
-    buf_puts(out, "    int64_t *pair = (int64_t *)arg;\n");
-    buf_puts(out, "    TurTimerFireCtx *ctx = (TurTimerFireCtx *)(intptr_t)pair[0];\n");
-    buf_puts(out, "    int id = (int)pair[1];\n");
-    buf_puts(out, "    pthread_mutex_lock(&ctx->lock);\n");
-    buf_puts(out, "    if (ctx->count < 16) ctx->order[ctx->count] = id;\n");
-    buf_puts(out, "    ctx->count++;\n");
-    buf_puts(out, "    if (ctx->count >= ctx->expected) pthread_cond_broadcast(&ctx->cond);\n");
-    buf_puts(out, "    pthread_mutex_unlock(&ctx->lock);\n");
-    buf_puts(out, "}\n\n");
-
-    buf_puts(out, "/* Global timer wheel (created on first use) */\n");
-    buf_puts(out, "static TurTimerWheel *tur_global_timer_wheel = NULL;\n");
-    buf_puts(out, "static pthread_once_t tur_timer_wheel_once = PTHREAD_ONCE_INIT;\n");
-    buf_puts(out, "static void tur_timer_wheel_init_once(void) {\n");
-    buf_puts(out, "    tur_global_timer_wheel = tur_timer_wheel_new();\n");
-    buf_puts(out, "}\n");
-    buf_puts(out, "static TurTimerWheel *tur_get_timer_wheel(void) {\n");
-    buf_puts(out, "    pthread_once(&tur_timer_wheel_once, tur_timer_wheel_init_once);\n");
-    buf_puts(out, "    return tur_global_timer_wheel;\n");
     buf_puts(out, "}\n\n");
 
     buf_puts(out, "#ifdef __clang__\n");

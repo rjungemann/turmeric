@@ -35,6 +35,8 @@ typedef enum DiagCode {
     /* Phase B2: Cloneable continuation checks (CPS-CL7) */
     TUR_E0014_NOT_CLONE,                          /* captured binding does not implement Clone */
     TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET,      /* cloneable-shift used outside cloneable-reset */
+    /* Phase T25: Continuation escape into async scope */
+    TUR_E0017_CONT_ESCAPE_ASYNC,                  /* effect handler continuation captured by async block */
 } DiagCode;
 
 typedef enum DiagLevel {
