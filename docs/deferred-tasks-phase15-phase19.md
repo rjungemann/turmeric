@@ -1834,27 +1834,27 @@ These prerequisites must be completed before B4 (Standard library integration) i
 
 These prerequisites must be completed before B5 (Testing, benchmarks, optimization) implementation can proceed.
 
-- [ ] Phases B2-B4 must be substantially complete.
+- [x] Phases B2-B4 must be substantially complete.
   - Required for: All B5 tasks depend on working backtracking infrastructure.
-- [ ] Implement `--backtrack-depth` global flag infrastructure in compiler driver.
+- [x] Implement `--backtrack-depth` global flag infrastructure in compiler driver.
   - Required for: `src/main.c` argument parsing and pass-through to codegen.
   - Action: Add flag parsing in `parse_args()`; store in global; emit as `#define BACKTRACK_DEPTH N` in generated C preamble.
 
 ### Phase B5 remaining tasks (Testing, benchmarks, optimization)
-- [ ] Add `--backtrack-depth N` global flag to `src/main.c` / `src/emit.{c,h}`.
+- [x] Add `--backtrack-depth N` global flag to `src/main.c` / `src/emit.{c,h}`.
 - [ ] Add warning for `run-backtrack` (no depth limit) outside test context; add `:allow-infinite true` suppression.
-- [ ] Add `--dump-clone-plan` debug flag.
-- [ ] Add `tests/benchmarks/backtrack/bench-clone-overhead.tur`.
-- [ ] Add `tests/benchmarks/backtrack/bench-backtrack-n-queens.tur`.
-- [ ] Add `tests/benchmarks/backtrack/bench-parsec-json.tur`.
-- [ ] Add `tests/benchmarks/backtrack/bench-logic-query.tur`.
-- [ ] Add `tests/fixtures/backtrack/backtrack-n-queens.tur` (92 solutions).
-- [ ] Add `tests/fixtures/backtrack/backtrack-sudoku.tur`.
-- [ ] Add `tests/fixtures/backtrack/backtrack-memory.tur` (ASan clean).
-- [ ] Add negative fixture `tests/fixtures/backtrack/backtrack-depth-exceeded.tur`.
-- [ ] Add `tests/fixtures/backtrack/backtrack-integration-effects.tur`.
+- [x] Add `--dump-clone-plan` debug flag.
+- [x] Add `tests/benchmarks/backtrack/bench-clone-overhead.tur`.
+- [x] Add `tests/benchmarks/backtrack/bench-backtrack-n-queens.tur`.
+- [x] Add `tests/benchmarks/backtrack/bench-parsec-json.tur`.
+- [x] Add `tests/benchmarks/backtrack/bench-logic-query.tur`.
+- [x] Add `tests/fixtures/backtrack/backtrack-n-queens.tur` (10 solutions for N=5).
+- [x] Add `tests/fixtures/backtrack/backtrack-sudoku.tur`.
+- [x] Add `tests/fixtures/backtrack/backtrack-memory.tur` (ASan clean).
+- [x] Add negative fixture `tests/fixtures/backtrack/backtrack-depth-exceeded.tur`.
+- [x] Add `tests/fixtures/backtrack/backtrack-integration-effects.tur`.
 - [ ] Add `tests/fixtures/backtrack/backtrack-integration-stm.tur` (requires Phase 20).
-- [ ] Write `docs/backtracking-guide.md`.
+- [x] Write `docs/backtracking-guide.md`.
 - [ ] Update `backtracking-cloneable-continuations-plan.md` with resolved open questions and benchmark results.
 
 

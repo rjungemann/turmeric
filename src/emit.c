@@ -19,6 +19,11 @@ extern bool g_warn_unused_result;
 extern bool g_lint_panic;
 extern bool g_panic_trace;
 
+/* Phase B5: backtrack depth cap (set by main.c --backtrack-depth N) */
+extern int64_t g_backtrack_depth;
+/* Phase B5: dump cloneable capture plan (set by main.c --dump-clone-plan) */
+extern bool g_dump_clone_plan;
+
 /* Forward declarations */
 struct DeferThunk;
 
@@ -5147,6 +5152,8 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "\n");
     /* Phase 7 follow-up: minimal in-process test registry for stdlib/test.tur. */
     buf_puts(out, "#define TUR_TEST_REGISTRY_MAX 1024\n");
+    /* Phase B5: backtrack depth cap (0 = unlimited) */
+    buf_printf(out, "#define BACKTRACK_DEPTH_DEFAULT %lld\n", (long long)g_backtrack_depth);
     buf_puts(out, "typedef int64_t (*tur_test_callback_t)(void);\n");
     buf_puts(out, "static const char *tur_test_registry_names[TUR_TEST_REGISTRY_MAX];\n");
     buf_puts(out, "static tur_test_callback_t tur_test_registry_fns[TUR_TEST_REGISTRY_MAX];\n");

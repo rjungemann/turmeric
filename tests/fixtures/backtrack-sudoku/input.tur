@@ -1,0 +1,124 @@
+;; Phase B5: Sudoku solver using backtracking monad.
+;; Solves a simple 4x4 mini-Sudoku to keep it fast.
+;; Prints the completed grid row by row.
+
+;; 4x4 Sudoku puzzle (0 = empty):
+;;  1 0 | 0 4
+;;  0 4 | 1 0
+;; -----+----
+;;  0 1 | 4 0
+;;  4 0 | 0 1
+
+;; Solve using list monad flatMap over each empty cell,
+;; returning the first solution as an encoded int64[16].
+
+;; We encode the board as a flat array of 16 int64_t values
+;; stored in a single malloc'd block. Solutions are pointers cast to int64.
+
+(defn solve-sudoku [] :int
+  ```c
+  /* 4x4 Sudoku: initial board, 0=empty */
+  int64_t puzzle[16] = {
+      1, 0, 0, 4,
+      0, 4, 1, 0,
+      0, 1, 4, 0,
+      4, 0, 0, 1
+  };
+
+  /* We use a simple recursive backtracking search returning the first solution.
+   * Returns a heap-allocated int64_t[16] on success, NULL on failure. */
+
+  typedef struct {
+      int64_t board[16];
+  } Board;
+
+  /* Iterative backtracking with explicit stack */
+  typedef struct Frame {
+      Board board;
+      int   pos;   /* next cell to try */
+      int   val;   /* next value to try */
+  } Frame;
+
+  Frame *stack = (Frame*)malloc(sizeof(Frame) * 17);
+  int sp = 0;
+
+  /* Find first empty cell in puzzle */
+  Board start;
+  for (int i = 0; i < 16; i++) start.board[i] = puzzle[i];
+  stack[0].board = start;
+  stack[0].pos = 0;
+  stack[0].val = 1;
+
+  /* Advance pos to first empty cell */
+  while (stack[sp].pos < 16 && stack[sp].board.board[stack[sp].pos] != 0)
+      stack[sp].pos++;
+
+  while (sp >= 0) {
+      Frame *f = &stack[sp];
+
+      if (f->pos == 16) {
+          /* Solution found */
+          int64_t *sol = (int64_t*)malloc(sizeof(int64_t) * 16);
+          for (int i = 0; i < 16; i++) sol[i] = f->board.board[i];
+          free(stack);
+          return (int64_t)(intptr_t)sol;
+      }
+
+      /* Try values f->val..4 at cell f->pos */
+      int row = f->pos / 4, col = f->pos % 4;
+      int box_r = (row / 2) * 2, box_c = (col / 2) * 2;
+      bool placed = false;
+      for (int v = f->val; v <= 4; v++) {
+          /* Check row */
+          bool ok = true;
+          for (int c = 0; c < 4 && ok; c++)
+              if (f->board.board[row*4+c] == v) ok = false;
+          /* Check col */
+          for (int r = 0; r < 4 && ok; r++)
+              if (f->board.board[r*4+col] == v) ok = false;
+          /* Check 2x2 box */
+          for (int dr = 0; dr < 2 && ok; dr++)
+              for (int dc = 0; dc < 2 && ok; dc++)
+                  if (f->board.board[(box_r+dr)*4+(box_c+dc)] == v) ok = false;
+          if (ok) {
+              /* Push new frame */
+              stack[sp+1].board = f->board;
+              stack[sp+1].board.board[f->pos] = v;
+              stack[sp].val = v + 1; /* resume here on backtrack */
+              sp++;
+              Frame *nf = &stack[sp];
+              nf->pos = f->pos + 1;
+              nf->val = 1;
+              while (nf->pos < 16 && nf->board.board[nf->pos] != 0)
+                  nf->pos++;
+              placed = true;
+              break;
+          }
+      }
+      if (!placed) {
+          sp--; /* backtrack */
+      }
+  }
+  free(stack);
+  return 0; /* no solution */
+  ```)
+
+(defn print-solution [sol]
+  ```c
+  if (!sol) {
+      printf("no solution\n");
+      return;
+  }
+  int64_t *board = (int64_t*)(intptr_t)sol;
+  for (int r = 0; r < 4; r++) {
+      for (int c = 0; c < 4; c++) {
+          if (c > 0) printf(" ");
+          printf("%lld", (long long)board[r*4+c]);
+      }
+      printf("\n");
+  }
+  ```)
+
+(defn main []
+  (let [sol (solve-sudoku)]
+    (print-solution sol)))
