@@ -1,0 +1,51 @@
+;; Phase B3: Backtracking monad — fresh introduces a placeholder variable.
+;; fresh calls its fat-closure argument with 0 as the placeholder value.
+
+(defn mzero [] :int
+  ```c return 0; ```)
+
+(defn mreturn [x] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
+  cell->value = x;
+  cell->next = 0;
+  return (int64_t)(intptr_t)cell;
+  ```)
+
+(defn mplus [xs ys] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *xc = (Cell*)(intptr_t)xs;
+  if (!xc) return ys;
+  Cell *head = NULL, *tail = NULL;
+  while (xc) {
+      Cell *n = malloc(sizeof(Cell));
+      n->value = xc->value; n->next = 0;
+      if (tail) tail->next = (int64_t)(intptr_t)n; else head = n;
+      tail = n;
+      xc = (Cell*)(intptr_t)xc->next;
+  }
+  if (tail) tail->next = ys;
+  return (int64_t)(intptr_t)head;
+  ```)
+
+(defn fresh [f] :int
+  ```c
+  int64_t *fat = (int64_t*)(intptr_t)f;
+  int64_t thunk = fat[0];
+  return ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, 0);
+  ```)
+
+(defn bt-print [xs]
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *c = (Cell*)(intptr_t)xs;
+  while (c) {
+      printf("%lld\n", (long long)c->value);
+      c = (Cell*)(intptr_t)c->next;
+  }
+  ```)
+
+(defn main []
+  (let [k 99]
+    (bt-print (fresh (fn [x] (let [_ k] (mplus (mreturn x) (mreturn (+ x k)))))))))

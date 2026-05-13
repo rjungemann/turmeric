@@ -1,0 +1,53 @@
+;; Phase B3: Backtracking monad — once keeps only the first result.
+
+(defn mzero [] :int
+  ```c return 0; ```)
+
+(defn mreturn [x] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
+  cell->value = x;
+  cell->next = 0;
+  return (int64_t)(intptr_t)cell;
+  ```)
+
+(defn mplus [xs ys] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *xc = (Cell*)(intptr_t)xs;
+  if (!xc) return ys;
+  Cell *head = NULL, *tail = NULL;
+  while (xc) {
+      Cell *n = malloc(sizeof(Cell));
+      n->value = xc->value; n->next = 0;
+      if (tail) tail->next = (int64_t)(intptr_t)n; else head = n;
+      tail = n;
+      xc = (Cell*)(intptr_t)xc->next;
+  }
+  if (tail) tail->next = ys;
+  return (int64_t)(intptr_t)head;
+  ```)
+
+(defn once [xs] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *c = (Cell*)(intptr_t)xs;
+  if (!c) return 0;
+  Cell *n = malloc(sizeof(Cell));
+  n->value = c->value; n->next = 0;
+  return (int64_t)(intptr_t)n;
+  ```)
+
+(defn bt-print [xs]
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *c = (Cell*)(intptr_t)xs;
+  while (c) {
+      printf("%lld\n", (long long)c->value);
+      c = (Cell*)(intptr_t)c->next;
+  }
+  ```)
+
+(defn main []
+  (let [xs (mplus (mreturn 10) (mplus (mreturn 20) (mreturn 30)))]
+    (bt-print (once xs))))

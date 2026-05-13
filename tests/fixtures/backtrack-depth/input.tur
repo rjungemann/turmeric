@@ -1,0 +1,60 @@
+;; Phase B3: Backtracking monad — run-backtrack-depth limits result count.
+;; Takes the first n results from an alternatives list.
+
+(defn mzero [] :int
+  ```c return 0; ```)
+
+(defn mreturn [x] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
+  cell->value = x;
+  cell->next = 0;
+  return (int64_t)(intptr_t)cell;
+  ```)
+
+(defn mplus [xs ys] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *xc = (Cell*)(intptr_t)xs;
+  if (!xc) return ys;
+  Cell *head = NULL, *tail = NULL;
+  while (xc) {
+      Cell *n = malloc(sizeof(Cell));
+      n->value = xc->value; n->next = 0;
+      if (tail) tail->next = (int64_t)(intptr_t)n; else head = n;
+      tail = n;
+      xc = (Cell*)(intptr_t)xc->next;
+  }
+  if (tail) tail->next = ys;
+  return (int64_t)(intptr_t)head;
+  ```)
+
+(defn run-backtrack-depth [xs n] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *head = NULL, *tail = NULL, *c = (Cell*)(intptr_t)xs;
+  int64_t count = 0;
+  while (c && count < n) {
+      Cell *nc = malloc(sizeof(Cell));
+      nc->value = c->value; nc->next = 0;
+      if (tail) tail->next = (int64_t)(intptr_t)nc; else head = nc;
+      tail = nc;
+      count++;
+      c = (Cell*)(intptr_t)c->next;
+  }
+  return (int64_t)(intptr_t)head;
+  ```)
+
+(defn bt-print [xs]
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *c = (Cell*)(intptr_t)xs;
+  while (c) {
+      printf("%lld\n", (long long)c->value);
+      c = (Cell*)(intptr_t)c->next;
+  }
+  ```)
+
+(defn main []
+  (let [xs (mplus (mreturn 1) (mplus (mreturn 2) (mplus (mreturn 3) (mplus (mreturn 4) (mreturn 5)))))]
+    (bt-print (run-backtrack-depth xs 3))))
