@@ -375,6 +375,13 @@ struct Expr {
             /* CPS-CL3: the post-shift subtree (code that runs after this shift inside
              * the enclosing reset).  Set by cps_transform; NULL until then. */
             Expr       *cont_body;
+            /* CPS-CL11: per-capture deep-clone / drop function names recorded by
+             * cps_emit_capture_environment().  Each entry is parallel to
+             * live_captures[i]; an entry may be NULL when no Clone method is
+             * available (in which case emit.c falls back to a bitwise copy).
+             * Strings live in the arena and are safe to inline into emitted C. */
+            const char **capture_clone_fns;
+            const char **capture_drop_fns;
         } cloneable_shift_;
         /* Phase 19: Algebraic effects */
         struct { EffectDef *def; }                   effect_def_;   /* (defeffect ...) */

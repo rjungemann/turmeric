@@ -1477,8 +1477,8 @@ These prerequisites must be completed before the remaining B2 implementation tas
   - Done: See B2 prerequisites above.
 - [x] Implement `needs_cloneable_cps` in `src/cps.{c,h}`.
   - Done: `cps_expr_contains_cloneable_shift` and `cps_fn_needs_cloneable_transform` in `src/cps.{c,h}`. `cps_mark_expr` now calls `mark_fn_needs_cloneable_cps` (sets `may_capture`) for functions containing cloneable shift.
-- [ ] Implement `emit_capture_environment(..., cloneable=true)` in `src/cps.{c,h}`: record `clone_fn`/`drop_fn` per binding.
-  - Deferred: Requires CPS transformation infrastructure for cloneable continuations (full stack capture).
+- [x] Implement `emit_capture_environment(..., cloneable=true)` in `src/cps.{c,h}`: record `clone_fn`/`drop_fn` per binding.
+  - Done (CPS-CL11): `cps_emit_capture_environment` in `src/cps.c` walks every `EX_CLONEABLE_SHIFT`, looks up the `Clone` instance for each captured binding via `typeclass_env_lookup_instance`, and records `inst->method_impls[0]->binding->name->name` into the new `capture_clone_fns[]` array (parallel to `live_captures[]`) on the AST node (new fields in `expr.h`'s `cloneable_shift_`). Both `__clenv_<id>_clone` emission sites in `src/emit.c` now emit field-by-field deep-clone calls (`copy->name = clone_fn(s->name);`) using these names, falling back to bitwise copy when no `Clone` instance exists. `capture_drop_fns[]` is reserved (always `NULL`) until a `Drop` typeclass is introduced.
 - [x] Add `tests/fixtures/backtrack/cloneable-basic.tur`.
   - Done: `tests/fixtures/cloneable-basic/` passes (v1 simplified: cloneable-shift calls fn(val), outputs 15 and 42).
 - [x] Add `tests/fixtures/cloneable-multi-resume/` — done (CPS-CL9).

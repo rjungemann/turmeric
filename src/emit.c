@@ -1545,15 +1545,41 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         free(rn);
                     }
                     buf_printf(hb, "} __clenv_%d;\n", cont_id);
+                    /* CPS-CL11: per-field deep clone using each binding's
+                     * Clone instance method (recorded by
+                     * cps_emit_capture_environment in src/cps.c).  Falls
+                     * back to bitwise copy for fields whose binding has no
+                     * recorded clone fn (e.g. primitives without a Clone
+                     * instance, or when tc_env was not threaded). */
                     buf_printf(hb,
                         "static void *__clenv_%d_clone(const void *src) {\n"
                         "    __clenv_%d *copy = malloc(sizeof(__clenv_%d));\n"
                         "    if (!copy) abort();\n"
-                        "    *copy = *(__clenv_%d *)src;\n"
+                        "    const __clenv_%d *s = (const __clenv_%d *)src;\n",
+                        cont_id, cont_id, cont_id, cont_id, cont_id);
+                    for (uint32_t ci = 0;
+                         ci < shift->as.cloneable_shift_.n_live_captures; ci++) {
+                        Binding *cap = shift->as.cloneable_shift_.live_captures[ci];
+                        char *rn = raw_name_for_binding(cap);
+                        const char *clone_fn =
+                            shift->as.cloneable_shift_.capture_clone_fns
+                            ? shift->as.cloneable_shift_.capture_clone_fns[ci]
+                            : NULL;
+                        if (clone_fn) {
+                            buf_printf(hb,
+                                "    copy->%s = %s(s->%s);\n",
+                                rn, clone_fn, rn);
+                        } else {
+                            buf_printf(hb,
+                                "    copy->%s = s->%s;\n", rn, rn);
+                        }
+                        free(rn);
+                    }
+                    buf_printf(hb,
                         "    return copy;\n"
                         "}\n"
                         "static void __clenv_%d_drop(void *p) { free(p); }\n\n",
-                        cont_id, cont_id, cont_id, cont_id, cont_id);
+                        cont_id);
 
                     /* Alloc env in the function body */
                     env_var = fresh_tmp(ctx);
@@ -1788,15 +1814,36 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     free(rn);
                 }
                 buf_printf(hb, "} __clenv_%d;\n", cont_id);
+                /* CPS-CL11: per-field deep clone using recorded Clone fns. */
                 buf_printf(hb,
                     "static void *__clenv_%d_clone(const void *src) {\n"
                     "    __clenv_%d *copy = malloc(sizeof(__clenv_%d));\n"
                     "    if (!copy) abort();\n"
-                    "    *copy = *(__clenv_%d *)src;\n"
+                    "    const __clenv_%d *s = (const __clenv_%d *)src;\n",
+                    cont_id, cont_id, cont_id, cont_id, cont_id);
+                for (uint32_t ci = 0;
+                     ci < e->as.cloneable_shift_.n_live_captures; ci++) {
+                    Binding *cap = e->as.cloneable_shift_.live_captures[ci];
+                    char *rn = raw_name_for_binding(cap);
+                    const char *clone_fn =
+                        e->as.cloneable_shift_.capture_clone_fns
+                        ? e->as.cloneable_shift_.capture_clone_fns[ci]
+                        : NULL;
+                    if (clone_fn) {
+                        buf_printf(hb,
+                            "    copy->%s = %s(s->%s);\n",
+                            rn, clone_fn, rn);
+                    } else {
+                        buf_printf(hb,
+                            "    copy->%s = s->%s;\n", rn, rn);
+                    }
+                    free(rn);
+                }
+                buf_printf(hb,
                     "    return copy;\n"
                     "}\n"
                     "static void __clenv_%d_drop(void *p) { free(p); }\n\n",
-                    cont_id, cont_id, cont_id, cont_id, cont_id);
+                    cont_id);
 
                 /* Alloc env in function body */
                 env_var = fresh_tmp(ctx);
