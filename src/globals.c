@@ -28,3 +28,6 @@ bool g_dump_clone_plan = false;
 /* Phase U5: Global statistics for unsafe linting */
 uint32_t g_unsafe_block_count = 0;
 uint32_t g_unsafe_total_lines = 0;
+
+/* Phase P3: HAMT lowering - track if HAMT is needed for this compilation */
+bool g_needs_hamt = false;

@@ -1,0 +1,98 @@
+;;
+;; Phase P2: Lisp bindings basic test
+;; Tests basic API round-trip from Turmeric code.
+;; Uses the same helper style as hamt-basic (inline C, ptr=).
+
+(extern-c free [p :ptr] :void)
+
+(defn ptr= [a :ptr b :ptr] :bool
+  ```c
+  return a == b;
+  ```)
+
+(defn alloc-key [x :int] :ptr
+  ```c
+  int64_t *p = malloc(sizeof(int64_t));
+  *p = (int64_t)x;
+  return (void *)p;
+  ```)
+
+;; Test: hamt/new creates empty map
+(defn test-new [] :int
+  (let [m (hamt/new)]
+    (let [c (hamt/count m)]
+      (hamt/free m)
+      c)))
+
+;; Test: hamt/set and hamt/get round-trip
+(defn test-set-get [] :int
+  (let [k1 (alloc-key 42)]
+    (let [v1 (alloc-key 100)]
+      (let [m1 (hamt/new)]
+        (let [m2 (hamt/set m1 (hamt/hash-ptr k1) k1 v1)]
+          (let [result (hamt/get m2 (hamt/hash-ptr k1) k1)]
+            (hamt/free m1)
+            (hamt/free m2)
+            (free k1)
+            (free v1)
+            (if (ptr= result v1) 1 0)))))))
+
+;; Test: hamt/has?
+(defn test-has [] :int
+  (let [k1 (alloc-key 42)]
+    (let [v1 (alloc-key 100)]
+      (let [m1 (hamt/new)]
+        (let [m2 (hamt/set m1 (hamt/hash-ptr k1) k1 v1)]
+          (let [result (hamt/has? m2 (hamt/hash-ptr k1) k1)]
+            (hamt/free m1)
+            (hamt/free m2)
+            (free k1)
+            (free v1)
+            (if result 1 0)))))))
+
+;; Test: hamt/count
+(defn test-count [] :int
+  (let [k1 (alloc-key 1)]
+    (let [k2 (alloc-key 2)]
+      (let [k3 (alloc-key 3)]
+        (let [v1 (alloc-key 10)]
+          (let [v2 (alloc-key 20)]
+            (let [v3 (alloc-key 30)]
+              (let [m1 (hamt/new)]
+                (let [m2 (hamt/set m1 (hamt/hash-ptr k1) k1 v1)]
+                  (let [m3 (hamt/set m2 (hamt/hash-ptr k2) k2 v2)]
+                    (let [m4 (hamt/set m3 (hamt/hash-ptr k3) k3 v3)]
+                      (let [c (hamt/count m4)]
+                        (hamt/free m1)
+                        (hamt/free m2)
+                        (hamt/free m3)
+                        (hamt/free m4)
+                        (free k1)
+                        (free k2)
+                        (free k3)
+                        (free v1)
+                        (free v2)
+                        (free v3)
+                        c))))))))))))
+
+;; Test: hamt/del
+(defn test-del [] :int
+  (let [k1 (alloc-key 42)]
+    (let [v1 (alloc-key 100)]
+      (let [m1 (hamt/new)]
+        (let [m2 (hamt/set m1 (hamt/hash-ptr k1) k1 v1)]
+          (let [m3 (hamt/del m2 (hamt/hash-ptr k1) k1)]
+            (let [c (hamt/count m3)]
+              (let [has (hamt/has? m3 (hamt/hash-ptr k1) k1)]
+                (hamt/free m1)
+                (hamt/free m2)
+                (hamt/free m3)
+                (free k1)
+                (free v1)
+                (if (and (= c 0) (not has)) 1 0)))))))))
+
+(println (test-new))
+(println (test-set-get))
+(println (test-has))
+(println (test-count))
+(println (test-del))

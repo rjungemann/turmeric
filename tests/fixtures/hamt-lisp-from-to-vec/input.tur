@@ -1,0 +1,51 @@
+;;
+;; Phase P2: Lisp bindings from-vec/to-vec test
+;; Tests building a map from multiple entries and verifying all are retrievable
+
+(extern-c free [p :ptr] :void)
+
+(defn alloc-int [x :int] :ptr
+  ```c
+  int64_t *p = malloc(sizeof(int64_t));
+  *p = (int64_t)x;
+  return (void *)p;
+  ```)
+
+(defn int-val [p :ptr] :int
+  ```c
+  return (int64_t)(*(int64_t *)p);
+  ```)
+
+;; Test: build map from 3 key/val pairs, verify all 3 are accessible
+(defn test-from-entries [] :int
+  (let [k1 (alloc-int 1)]
+    (let [k2 (alloc-int 2)]
+      (let [k3 (alloc-int 3)]
+        (let [v1 (alloc-int 10)]
+          (let [v2 (alloc-int 20)]
+            (let [v3 (alloc-int 30)]
+              (let [m1 (hamt/new)]
+                (let [m2 (hamt/set m1 (hamt/hash-ptr k1) k1 v1)]
+                  (let [m3 (hamt/set m2 (hamt/hash-ptr k2) k2 v2)]
+                    (let [m4 (hamt/set m3 (hamt/hash-ptr k3) k3 v3)]
+                      (let [cnt (hamt/count m4)]
+                        (let [r1 (hamt/get m4 (hamt/hash-ptr k1) k1)]
+                          (let [r2 (hamt/get m4 (hamt/hash-ptr k2) k2)]
+                            (let [r3 (hamt/get m4 (hamt/hash-ptr k3) k3)]
+                              (let [ok (and (= cnt 3)
+                                            (= (int-val r1) 10)
+                                            (= (int-val r2) 20)
+                                            (= (int-val r3) 30))]
+                                (hamt/free m1)
+                                (hamt/free m2)
+                                (hamt/free m3)
+                                (hamt/free m4)
+                                (free k1)
+                                (free k2)
+                                (free k3)
+                                (free v1)
+                                (free v2)
+                                (free v3)
+                                (if ok 1 0)))))))))))))))))
+
+(println (test-from-entries))

@@ -1,0 +1,38 @@
+; hamt-bench-snapshot.tur
+; Benchmark: 1,000 snapshots (fork + 1 insert each)
+; Verifies that structural sharing keeps snapshot cost low
+
+(defn bench-hamt-snapshot [n :int] :int
+  ```c
+  void *base = hamt_new();
+  for (int64_t i = 0; i < 100; i++) {
+      int64_t *k = (int64_t *)malloc(sizeof(int64_t));
+      int64_t *v = (int64_t *)malloc(sizeof(int64_t));
+      *k = i;
+      *v = i;
+      uint64_t h = (uint64_t)i * 2654435761ULL;
+      void *m2 = hamt_set(base, (int64_t)h, (void *)k, (void *)v);
+      if (m2 != base) { hamt_free(base); }
+      base = m2;
+  }
+  int64_t total_count = 0;
+  for (int64_t i = 0; i < n; i++) {
+      int64_t *k = (int64_t *)malloc(sizeof(int64_t));
+      int64_t *v = (int64_t *)malloc(sizeof(int64_t));
+      *k = 10000 + i;
+      *v = i;
+      uint64_t h = (uint64_t)(10000 + i) * 2654435761ULL;
+      void *snap = hamt_set(base, (int64_t)h, (void *)k, (void *)v);
+      total_count += hamt_count(snap);
+      hamt_free(snap);
+  }
+  hamt_free(base);
+  return total_count;
+  ```)
+
+(defn main [] :int
+  (let [n 1000]
+    (let [total (bench-hamt-snapshot n)]
+      ; Each snapshot should have 101 entries: 100 + 1 new
+      (println (/ total n))
+      0)))

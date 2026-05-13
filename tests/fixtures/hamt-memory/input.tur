@@ -1,0 +1,41 @@
+;;
+;; Phase P1: HAMT memory test - structural sharing and ref counting
+
+(extern-c free [p :ptr] :void)
+
+(defn alloc-int [x :int] :ptr
+  ```c
+  int64_t *p = malloc(sizeof(int64_t));
+  *p = (int64_t)x;
+  return (void *)p;
+  ```)
+
+(defn test-memory [] :int
+  (let [k1 (alloc-int 1)]
+    (let [k2 (alloc-int 2)]
+      (let [v1 (alloc-int 10)]
+        (let [v2 (alloc-int 20)]
+          (let [m1 (hamt/new)]
+            (let [h1 (hamt/hash-ptr k1)]
+              (let [h2 (hamt/hash-ptr k2)]
+                (let [m2 (hamt/set m1 h1 k1 v1)]
+                  (let [m1-count (hamt/count m1)]
+                    (let [m2-count (hamt/count m2)]
+                      (let [m3 (hamt/set m2 h2 k2 v2)]
+                        (let [m2-count2 (hamt/count m2)]
+                          (let [m3-count (hamt/count m3)]
+                            (hamt/free m1)
+                            (hamt/free m2)
+                            (hamt/free m3)
+                            (free k1)
+                            (free k2)
+                            (free v1)
+                            (free v2)
+                            (if (and (= m1-count 0)
+                                     (= m2-count 1)
+                                     (= m2-count2 1)
+                                     (= m3-count 2))
+                              1
+                              0)))))))))))))))
+
+(println (test-memory))

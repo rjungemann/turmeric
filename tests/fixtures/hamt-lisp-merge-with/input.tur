@@ -1,0 +1,63 @@
+;;
+;; Phase P2: Lisp bindings merge-with test
+;; Tests hamt/merge-with where duplicate keys are merged via a function
+
+(extern-c free [p :ptr] :void)
+
+(defn alloc-int [x :int] :ptr
+  ```c
+  int64_t *p = malloc(sizeof(int64_t));
+  *p = (int64_t)x;
+  return (void *)p;
+  ```)
+
+(defn int-val [p :ptr] :int
+  ```c
+  return (int64_t)(*(int64_t *)p);
+  ```)
+
+;; Conflict resolver: allocate new int = va + vb
+(defn add-vals [va :ptr vb :ptr ctx :ptr] :ptr
+  ```c
+  int64_t a = *(int64_t *)va;
+  int64_t b = *(int64_t *)vb;
+  int64_t *result = malloc(sizeof(int64_t));
+  *result = a + b;
+  return (void *)result;
+  ```)
+
+;; Test: merge-with adds values for duplicate keys
+(defn test-merge-with [] :int
+  (let [k1 (alloc-int 1)]
+    (let [k2 (alloc-int 2)]
+      (let [v1a (alloc-int 10)]
+        (let [v1b (alloc-int 20)]
+          (let [v2 (alloc-int 100)]
+            (let [m1 (hamt/new)]
+              (let [m2 (hamt/set m1 (hamt/hash-ptr k1) k1 v1a)]
+                (let [m3 (hamt/new)]
+                  (let [m4 (hamt/set m3 (hamt/hash-ptr k1) k1 v1b)]
+                    (let [m5 (hamt/set m4 (hamt/hash-ptr k2) k2 v2)]
+                      (let [m6 (hamt/merge-with m2 m5 add-vals m2)]
+                        ;; k1 should be 10+20=30; k2 should be 100
+                        (let [r1 (hamt/get m6 (hamt/hash-ptr k1) k1)]
+                          (let [r2 (hamt/get m6 (hamt/hash-ptr k2) k2)]
+                            (let [cnt (hamt/count m6)]
+                              (let [ok (and (= cnt 2)
+                                            (= (int-val r1) 30)
+                                            (= (int-val r2) 100))]
+                                (free r1)
+                                (hamt/free m1)
+                                (hamt/free m2)
+                                (hamt/free m3)
+                                (hamt/free m4)
+                                (hamt/free m5)
+                                (hamt/free m6)
+                                (free k1)
+                                (free k2)
+                                (free v1a)
+                                (free v1b)
+                                (free v2)
+                                (if ok 1 0)))))))))))))))))
+
+(println (test-merge-with))

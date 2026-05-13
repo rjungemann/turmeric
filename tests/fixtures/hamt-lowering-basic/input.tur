@@ -1,0 +1,20 @@
+; Phase P3: Test that persistent map operations are lowered to HAMT calls
+; Create a persistent map and perform operations
+
+(defn main [] :int
+  (let [^persistent m (map-new)]
+    ; m is empty
+    (println (count m))
+    (let [^persistent m2 (assoc m "key1" "value1")]
+      ; m2 has 1 entry
+      (println (count m2))
+      (println (has? m2 "key1"))
+      (let [^persistent m3 (assoc m2 "key2" "value2")]
+        ; m3 has 2 entries
+        (println (count m3))
+        (let [^persistent m4 (dissoc m3 "key1")]
+          ; m4 has 1 entry (key2 remains)
+          (println (count m4))
+          (println (has? m4 "key1"))
+          (println (has? m4 "key2"))
+          0)))))

@@ -1,0 +1,27 @@
+; hamt-bench-insert.tur
+; Benchmark: 100,000 sequential inserts into a persistent HAMT
+; Compare vs mutable hash table baseline (target: < 3x overhead)
+
+(defn bench-hamt-insert [n :int] :int
+  ```c
+  void *m = hamt_new();
+  for (int64_t i = 0; i < n; i++) {
+      int64_t *k = (int64_t *)malloc(sizeof(int64_t));
+      int64_t *v = (int64_t *)malloc(sizeof(int64_t));
+      *k = i;
+      *v = i * 2;
+      uint64_t h = (uint64_t)i * 2654435761ULL;
+      void *m2 = hamt_set(m, (int64_t)h, (void *)k, (void *)v);
+      if (m2 != m) { hamt_free(m); }
+      m = m2;
+  }
+  int64_t count = hamt_count(m);
+  hamt_free(m);
+  return count;
+  ```)
+
+(defn main [] :int
+  (let [n 100000]
+    (let [count (bench-hamt-insert n)]
+      (println count)
+      0)))

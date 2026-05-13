@@ -1,0 +1,38 @@
+;; stdlib/map.tur — Map operations (mutable and persistent)
+;;
+;; This module provides the basic map operations that can be used with both
+;; mutable and persistent maps. When a map is annotated with ^persistent,
+;; the compiler will lower these operations to HAMT calls automatically.
+;;
+;; For now, we delegate to hamt.tur functions (which is auto-loaded).
+;; See docs/hamt-plan.md Phase P3 for the lowering pass design.
+
+;; Create an empty map
+(defn map-new [] :ptr<void>
+  (hamt/new))
+
+;; Insert or update a key/value pair. Returns a new map.
+;; For persistent maps, this creates a new version with structural sharing.
+;; For mutable maps, this modifies the map in place (future phase).
+(defn assoc [m :ptr<void> key :ptr<void> val :ptr<void>] :ptr<void>
+  (hamt/set m (hamt/hash-ptr key) key val))
+
+;; Delete a key. Returns a new map.
+(defn dissoc [m :ptr<void> key :ptr<void>] :ptr<void>
+  (hamt/del m (hamt/hash-ptr key) key))
+
+;; Get the value for a key. Returns NULL if not found.
+(defn get [m :ptr<void> key :ptr<void>] :ptr<void>
+  (hamt/get m (hamt/hash-ptr key) key))
+
+;; Check if a key exists in the map.
+(defn has? [m :ptr<void> key :ptr<void>] :bool
+  (hamt/has? m (hamt/hash-ptr key) key))
+
+;; Get the number of key/value pairs in the map.
+(defn count [m :ptr<void>] :int
+  (hamt/count m))
+
+;; Merge two maps. b wins on collision.
+(defn merge [a :ptr<void> b :ptr<void>] :ptr<void>
+  (hamt/merge a b))

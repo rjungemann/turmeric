@@ -74,11 +74,8 @@ add_test(
 
 # Make sure tur is built before any test is run
 set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
-                     tur_repl_tests tur_repl_smoke tur_eval_import
+                     tur_repl_tests tur_repl_smoke tur_eval_import tur_eval_basic
   PROPERTIES DEPENDS tur
-)
-set_tests_properties(tur_eval_basic
-  PROPERTIES DEPENDS tur_eval_basic
 )
 
 # ---------------------------------------------------------------------------

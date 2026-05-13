@@ -1,0 +1,33 @@
+; P4: Transient isolation — original map unchanged after transient mutations
+
+(defn alloc-str [s :cstr] :ptr<void>
+  ```c
+  #include <string.h>
+  char *p = (char *)malloc(strlen(s) + 1);
+  memcpy(p, s, strlen(s) + 1);
+  return (void *)p;
+  ```)
+
+(defn build-base [] :ptr<void>
+  (let [k1 (alloc-str "key1")]
+    (let [v1 (alloc-str "val1")]
+      (let [m0 (hamt/new)]
+        (hamt/set m0 (hamt/hash-str "key1") k1 v1)))))
+
+(defn main [] :int
+  (let [k1 (alloc-str "key1")]
+    (let [m1 (build-base)]
+      (let [t (hamt/transient m1)]
+        (let [k2 (alloc-str "key2")]
+          (let [v2 (alloc-str "val2")]
+            (hamt/transient-set! t (hamt/hash-str "key2") k2 v2)
+            (let [m2 (hamt/persistent! t)]
+              ; m1 should still have 1 entry
+              (println (hamt/count m1))
+              ; m2 should have 2 entries
+              (println (hamt/count m2))
+              ; k1 is the same pointer used in build-base hamt/set via hash
+              ; Since the key stored is alloc-str inside build-base, use hash lookup
+              ; We just verify counts are correct for isolation
+              (println (hamt/has? m2 (hamt/hash-str "key2") k2))
+              0)))))))
