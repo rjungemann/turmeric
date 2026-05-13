@@ -1,0 +1,29 @@
+;; Phase B3: Backtracking monad — mzero is the empty computation.
+;; bt-length of mzero should be 0; bt-print of mzero prints nothing.
+
+(defn mzero [] :int
+  ```c return 0; ```)
+
+(defn bt-length [xs] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  int64_t n = 0;
+  Cell *c = (Cell*)(intptr_t)xs;
+  while (c) { n++; c = (Cell*)(intptr_t)c->next; }
+  return n;
+  ```)
+
+(defn bt-print [xs]
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *c = (Cell*)(intptr_t)xs;
+  while (c) {
+      printf("%lld\n", (long long)c->value);
+      c = (Cell*)(intptr_t)c->next;
+  }
+  ```)
+
+(defn main []
+  (let [empty (mzero)]
+    (bt-print empty)
+    (println (bt-length empty))))

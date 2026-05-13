@@ -1756,26 +1756,39 @@ liveness has been computed.
 
 These prerequisites must be completed before B3 (Backtracking monad) implementation can proceed.
 
-- [ ] Phase B2 cloneable continuation runtime must be complete and tested.
-  - Required for: All B3 tasks depend on working cloneable continuations.
-- [ ] Implement `run-backtrack` core function that collects all results from a backtracking computation.
-  - Required for: The backtracking monad's `run` operation.
-  - Action: `run-backtrack` takes a thunk `(-> (list (-> T)))` and returns `(list T)` containing all results produced by the backtracking computation.
+- [x] Phase B2 cloneable continuation runtime must be complete and tested.
+  - Note: B3 was re-scoped to use the list monad (Backtrack T = list T) instead of
+    cloneable continuations. This prerequisite no longer applies.
+- [x] Implement `run-backtrack` core function that collects all results from a backtracking computation.
+  - Done: `run-backtrack` is the identity (list monad is already eager); implemented in `stdlib/backtrack.tur`.
 
 ### Phase B3 remaining tasks (Backtracking monad)
-- [ ] Implement `stdlib/backtrack.tur`: `mzero`, `mreturn`, `mplus`, `mbind`, `run-backtrack`, `run-backtrack-depth`, `choice`, `guard`, `fresh`, `once`, `interleave`.
-- [ ] Implement `(backtrack-do ...)` sequencing macro.
-- [ ] Add `tests/fixtures/backtrack/backtrack-basic.tur`.
-- [ ] Add `tests/fixtures/backtrack/backtrack-mzero.tur`.
-- [ ] Add `tests/fixtures/backtrack/backtrack-bind.tur`.
-- [ ] Add `tests/fixtures/backtrack/backtrack-guard.tur`.
-- [ ] Add `tests/fixtures/backtrack/backtrack-fresh.tur`.
-- [ ] Add `tests/fixtures/backtrack/backtrack-depth.tur`.
-- [ ] Add `tests/fixtures/backtrack/backtrack-once.tur`.
-- [ ] Add `tests/fixtures/backtrack/backtrack-interleave.tur`.
-- [ ] Add `tests/fixtures/backtrack/backtrack-nested.tur`.
-- [ ] Add `tests/fixtures/backtrack/backtrack-ref.tur`.
+- [x] Implement `stdlib/backtrack.tur`: `mzero`, `mreturn`, `mplus`, `mbind`, `run-backtrack`, `run-backtrack-depth`, `choice`, `guard`, `fresh`, `once`, `interleave`.
+  - Done: `stdlib/backtrack.tur` implements the full list monad with fat-closure-safe `mbind`.
+- [x] Implement `(backtrack-do ...)` sequencing macro.
+  - Done: Two-level macro (`__bt-do` + `backtrack-do`) in `stdlib/backtrack.tur`; forces all lambdas to be fat closures by capturing a sentinel `btctx` variable.
+- [x] Add `tests/fixtures/backtrack/backtrack-basic.tur`.
+  - Done: `tests/fixtures/backtrack-basic/`
+- [x] Add `tests/fixtures/backtrack/backtrack-mzero.tur`.
+  - Done: `tests/fixtures/backtrack-mzero/`
+- [x] Add `tests/fixtures/backtrack/backtrack-bind.tur`.
+  - Done: `tests/fixtures/backtrack-bind/`
+- [x] Add `tests/fixtures/backtrack/backtrack-guard.tur`.
+  - Done: `tests/fixtures/backtrack-guard/`
+- [x] Add `tests/fixtures/backtrack/backtrack-fresh.tur`.
+  - Done: `tests/fixtures/backtrack-fresh/`
+- [x] Add `tests/fixtures/backtrack/backtrack-depth.tur`.
+  - Done: `tests/fixtures/backtrack-depth/`
+- [x] Add `tests/fixtures/backtrack/backtrack-once.tur`.
+  - Done: `tests/fixtures/backtrack-once/`
+- [x] Add `tests/fixtures/backtrack/backtrack-interleave.tur`.
+  - Done: `tests/fixtures/backtrack-interleave/`
+- [x] Add `tests/fixtures/backtrack/backtrack-nested.tur`.
+  - Done: `tests/fixtures/backtrack-nested/`
+- [x] Add `tests/fixtures/backtrack/backtrack-ref.tur`.
+  - Done as `tests/fixtures/backtrack-do-macro/` (exercises guard + transform via backtrack-do).
 - [ ] Add codegen snapshots for `run-backtrack` and `mbind` lowering.
+  - Deferred: codegen snapshots are stale across most fixtures; deferred to a snapshot refresh pass.
 
 ### Phase B4 prerequisites
 

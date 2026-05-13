@@ -1,0 +1,97 @@
+;; Phase B3: Backtracking monad — guard filters results.
+;; guard returns mreturn(0) when pred is true, mzero otherwise.
+;; backtrack-do ensures all lambdas are fat closures.
+
+(defn mzero [] :int
+  ```c return 0; ```)
+
+(defn mreturn [x] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
+  cell->value = x;
+  cell->next = 0;
+  return (int64_t)(intptr_t)cell;
+  ```)
+
+(defn mplus [xs ys] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *xc = (Cell*)(intptr_t)xs;
+  if (!xc) return ys;
+  Cell *head = NULL, *tail = NULL;
+  while (xc) {
+      Cell *n = malloc(sizeof(Cell));
+      n->value = xc->value; n->next = 0;
+      if (tail) tail->next = (int64_t)(intptr_t)n; else head = n;
+      tail = n;
+      xc = (Cell*)(intptr_t)xc->next;
+  }
+  if (tail) tail->next = ys;
+  return (int64_t)(intptr_t)head;
+  ```)
+
+(defn mbind [ma fn] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *cell = (Cell*)(intptr_t)ma;
+  if (!cell) return 0;
+  int64_t *fat = (int64_t*)(intptr_t)fn;
+  int64_t thunk = fat[0];
+  Cell *rev = NULL;
+  while (cell) {
+      int64_t sub = ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, cell->value);
+      Cell *sc = (Cell*)(intptr_t)sub;
+      while (sc) {
+          Cell *n = malloc(sizeof(Cell));
+          n->value = sc->value;
+          n->next = (int64_t)(intptr_t)rev;
+          rev = n;
+          sc = (Cell*)(intptr_t)sc->next;
+      }
+      cell = (Cell*)(intptr_t)cell->next;
+  }
+  Cell *result = NULL;
+  while (rev) {
+      Cell *tmp = (Cell*)(intptr_t)rev->next;
+      rev->next = (int64_t)(intptr_t)result;
+      result = rev;
+      rev = tmp;
+  }
+  return (int64_t)(intptr_t)result;
+  ```)
+
+(defn guard [pred :bool] :int
+  (if pred (mreturn 0) (mzero)))
+
+(defn bt-print [xs]
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *c = (Cell*)(intptr_t)xs;
+  while (c) {
+      printf("%lld\n", (long long)c->value);
+      c = (Cell*)(intptr_t)c->next;
+  }
+  ```)
+
+(defmacro __bt-do [ctx un & forms]
+  (if (empty? forms)
+    (list mzero)
+    (if (empty? (rest forms))
+      (first forms)
+      (let [var (first forms)
+            ma  (second forms)
+            rest-forms (rest (rest forms))]
+        (list let `[~ctx 0]
+          (list mbind ma
+            (list fn `[~var]
+              (list let `[~un ~ctx]
+                (list __bt-do ~ctx ~un ~@rest-forms)))))))))
+
+(defmacro backtrack-do [& forms]
+  (__bt-do btctx btunused ~@forms))
+
+(defn main []
+  (let [xs (mplus (mreturn 1) (mplus (mreturn 2) (mplus (mreturn 3) (mplus (mreturn 4) (mreturn 5)))))]
+    (bt-print (backtrack-do x xs
+                             _ (guard (> x 2))
+                             (mreturn x)))))

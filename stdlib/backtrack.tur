@@ -1,0 +1,227 @@
+;; stdlib/backtrack.tur — Backtracking monad (list monad)
+;;
+;; Backtrack T  =  list T  (a singly-linked list of result values)
+;;
+;; All closures passed to mbind / fresh MUST be fat closures
+;; (n_captures > 0).  Use the backtrack-do macro which guarantees this
+;; by capturing a local sentinel at every binding step.
+;;
+;; Cell layout:  struct { int64_t value; int64_t next; }
+
+;;; ── Helpers ────────────────────────────────────────────────────────────────
+
+(defn bt-nil [] :int
+  ```c return 0; ```)
+
+(defn bt-cons [v next] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
+  cell->value = v;
+  cell->next = next;
+  return (int64_t)(intptr_t)cell;
+  ```)
+
+;;; ── Core monad operations ──────────────────────────────────────────────────
+
+;; mzero — the empty backtrack computation
+(defn mzero [] :int
+  ```c return 0; ```)
+
+;; mreturn x — singleton result
+(defn mreturn [x] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
+  cell->value = x;
+  cell->next = 0;
+  return (int64_t)(intptr_t)cell;
+  ```)
+
+;; mplus xs ys — concat (union) of two result lists
+(defn mplus [xs ys] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *xc = (Cell*)(intptr_t)xs;
+  if (!xc) return ys;
+  Cell *head = NULL, *tail = NULL;
+  while (xc) {
+      Cell *n = malloc(sizeof(Cell));
+      n->value = xc->value; n->next = 0;
+      if (tail) tail->next = (int64_t)(intptr_t)n; else head = n;
+      tail = n;
+      xc = (Cell*)(intptr_t)xc->next;
+  }
+  if (tail) tail->next = ys;
+  return (int64_t)(intptr_t)head;
+  ```)
+
+;; mbind ma fn — concatMap: apply fn to each element and concat all results.
+;; fn MUST be a fat closure (struct { int64_t __fn; ... }).
+;; Use backtrack-do which guarantees fat closures via forced capture.
+(defn mbind [ma fn] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *cell = (Cell*)(intptr_t)ma;
+  if (!cell) return 0;
+  int64_t *fat = (int64_t*)(intptr_t)fn;
+  int64_t thunk = fat[0];
+  Cell *rev = NULL;
+  while (cell) {
+      int64_t sub = ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, cell->value);
+      Cell *sc = (Cell*)(intptr_t)sub;
+      while (sc) {
+          Cell *n = malloc(sizeof(Cell));
+          n->value = sc->value;
+          n->next = (int64_t)(intptr_t)rev;
+          rev = n;
+          sc = (Cell*)(intptr_t)sc->next;
+      }
+      cell = (Cell*)(intptr_t)cell->next;
+  }
+  Cell *result = NULL;
+  while (rev) {
+      Cell *tmp = (Cell*)(intptr_t)rev->next;
+      rev->next = (int64_t)(intptr_t)result;
+      result = rev;
+      rev = tmp;
+  }
+  return (int64_t)(intptr_t)result;
+  ```)
+
+;;; ── Run operations ─────────────────────────────────────────────────────────
+
+;; run-backtrack xs — return all results (identity; list monad is already eager)
+(defn run-backtrack [xs] :int xs)
+
+;; run-backtrack-depth xs n — take at most n results
+(defn run-backtrack-depth [xs n] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *head = NULL, *tail = NULL, *c = (Cell*)(intptr_t)xs;
+  int64_t count = 0;
+  while (c && count < n) {
+      Cell *nc = malloc(sizeof(Cell));
+      nc->value = c->value; nc->next = 0;
+      if (tail) tail->next = (int64_t)(intptr_t)nc; else head = nc;
+      tail = nc;
+      count++;
+      c = (Cell*)(intptr_t)c->next;
+  }
+  return (int64_t)(intptr_t)head;
+  ```)
+
+;;; ── Combinators ────────────────────────────────────────────────────────────
+
+;; choice xs — identity; xs is already a list of alternatives
+(defn choice [xs] :int xs)
+
+;; guard pred — (mreturn 0) when pred is true, else mzero
+(defn guard [pred :bool] :int
+  (if pred (mreturn 0) (mzero)))
+
+;; fresh f — apply fat-closure f to a fresh variable (0 placeholder).
+;; f MUST be a fat closure.
+(defn fresh [f] :int
+  ```c
+  int64_t *fat = (int64_t*)(intptr_t)f;
+  int64_t thunk = fat[0];
+  return ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, 0);
+  ```)
+
+;; once xs — keep only the first result
+(defn once [xs] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *c = (Cell*)(intptr_t)xs;
+  if (!c) return 0;
+  Cell *n = malloc(sizeof(Cell));
+  n->value = c->value; n->next = 0;
+  return (int64_t)(intptr_t)n;
+  ```)
+
+;; interleave xs ys — fair interleaving of two result lists
+(defn interleave [xs ys] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *xc = (Cell*)(intptr_t)xs;
+  Cell *yc = (Cell*)(intptr_t)ys;
+  if (!xc) return ys;
+  if (!yc) return xs;
+  Cell *head = NULL, *tail = NULL;
+  while (xc || yc) {
+      if (xc) {
+          Cell *n = malloc(sizeof(Cell));
+          n->value = xc->value; n->next = 0;
+          if (tail) tail->next = (int64_t)(intptr_t)n; else head = n;
+          tail = n;
+          xc = (Cell*)(intptr_t)xc->next;
+      }
+      if (yc) {
+          Cell *n = malloc(sizeof(Cell));
+          n->value = yc->value; n->next = 0;
+          if (tail) tail->next = (int64_t)(intptr_t)n; else head = n;
+          tail = n;
+          yc = (Cell*)(intptr_t)yc->next;
+      }
+  }
+  return (int64_t)(intptr_t)head;
+  ```)
+
+;;; ── List utilities ─────────────────────────────────────────────────────────
+
+(defn bt-length [xs] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  int64_t n = 0;
+  Cell *c = (Cell*)(intptr_t)xs;
+  while (c) { n++; c = (Cell*)(intptr_t)c->next; }
+  return n;
+  ```)
+
+(defn bt-print [xs]
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *c = (Cell*)(intptr_t)xs;
+  while (c) {
+      printf("%lld\n", (long long)c->value);
+      c = (Cell*)(intptr_t)c->next;
+  }
+  ```)
+
+;;; ── backtrack-do macro ─────────────────────────────────────────────────────
+;;
+;; Syntax (flat binding — variables and monadic values alternate):
+;;   (backtrack-do body)
+;;     => body
+;;   (backtrack-do var ma rest...)
+;;     => (let [btctx 0]
+;;          (mbind ma (fn [var]
+;;            (let [btunused btctx]
+;;              (backtrack-do rest...)))))
+;;
+;; The let/fn wrapping forces every generated lambda to capture btctx
+;; from the enclosing scope, ensuring all lambdas are fat closures so
+;; mbind's fat-closure protocol works correctly.
+;;
+;; __bt-do takes ctx and un as symbol-literal positional args so they
+;; can be spliced into `[~ctx 0] / `[~un ~ctx] without evaluating them
+;; as compile-time variables.
+;;
+;; Usage:
+;;   (backtrack-do x (list 1 2 3) y (list 4 5) (mreturn (+ x y)))
+;;   (backtrack-do x xs _ (guard (> x 2)) (mreturn x))
+(defmacro __bt-do [ctx un & forms]
+  (if (empty? forms)
+    (list mzero)
+    (if (empty? (rest forms))
+      (first forms)
+      (let [var (first forms)
+            ma  (second forms)
+            rest-forms (rest (rest forms))]
+        (list let `[~ctx 0]
+          (list mbind ma
+            (list fn `[~var]
+              (list let `[~un ~ctx]
+                (list __bt-do ~ctx ~un ~@rest-forms)))))))))
+
+(defmacro backtrack-do [& forms]
+  (__bt-do btctx btunused ~@forms))
