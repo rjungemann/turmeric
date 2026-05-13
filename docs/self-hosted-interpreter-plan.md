@@ -324,7 +324,37 @@ before it.
 
 ---
 
-### Phase S7: Polish and Documentation
+### Phase S7: Async/Await in Eval
+
+**Goal:** `(async ...)` and `(await ...)` work inside the interpreter with a
+cooperative fiber scheduler.
+
+**Exit criterion:** Async examples from the test suite run through `turi_eval`.
+
+- [ ] Single-threaded cooperative fiber scheduler in `libturi`
+- [ ] `Fiber` struct in `TuriEnv`: runnable stack, suspended state, yield point
+- [ ] `async` expression: create a new fiber, return a future/task handle
+- [ ] `await` expression: suspend current fiber if future not ready, resume when ready
+- [ ] Fiber preemption: yield at function calls and loop iterations
+- [ ] Integration with effect handlers: handlers persist across `await` points
+- [ ] `TuriValue` variant for futures/tasks (`TURI_FUTURE`)
+- [ ] Non-blocking I/O primitives: `read-async`, `write-async`, etc.
+- [ ] Cancellation: `cancel-task`, `task-cancelled?`
+
+**Implementation details:**
+- The fiber scheduler is event-loop based, not OS threads
+- Futures can be composed: `(await (async ...))` chains correctly
+- Async functions use the same `TuriEnv` and handler chain as sync code
+- Errors in async tasks propagate as `Result` values, not unhandled exceptions
+
+**Fixtures:**
+- [ ] `tests/turi/eval-async-basic.tur` — simple async/await round-trip
+- [ ] `tests/turi/eval-async-composition.tur` — chained awaits and task composition
+- [ ] `tests/turi/eval-async-effects.tur` — effects + async interaction
+
+---
+
+### Phase S8: Polish and Documentation
 
 - [ ] `docs/eval-api.md` — user guide for `(import turi/eval)` and C embedding
 - [ ] `docs/repl.md` — REPL reference (meta-commands, customisation)

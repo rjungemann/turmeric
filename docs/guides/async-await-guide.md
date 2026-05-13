@@ -1,0 +1,146 @@
+# Async/Await Guide
+
+Ergonomic asynchronous programming in Turmeric using fibers and delimited continuations.
+
+## Overview
+
+Turmeric's `async`/`await` syntax enables direct-style asynchronous programming for I/O-bound and concurrent tasks. The implementation builds on Phase 18's delimited continuations and integrates with Turmeric's effect system.
+
+## Quick Start
+
+```turmeric
+;; Define an async function
+(async
+  (def data (await (read-file "data.txt")))
+  (def result (await (process-data data)))
+  (println result))
+
+;; Type: returns a Future<T>
+(def fut (async
+  (+ 1 (await (fetch 2)))))
+
+;; Block until completion
+(println (await fut))  ; => 3
+```
+
+## Core Concepts
+
+### Fibers
+
+A **fiber** is a user-space thread (lightweight thread) that:
+- Has its own execution state (implemented via delimited continuations)
+- Can **yield** (suspend) and **resume**
+- Runs on an OS thread managed by a scheduler
+- Has no separate OS stack (avoids thread creation overhead)
+
+### Async Blocks
+
+- **`(async body)`** — Creates a fiber that executes `body`. Returns a `Future<T>` that can be awaited.
+- **`(await fut)`** — Suspends the current fiber until `fut` completes. Used only inside `async` blocks.
+
+### Futures
+
+- **`Future<T>`** — Represents a computation that may not be done yet.
+- Can be awaited with `(await fut)`.
+- Composable: multiple `await`s sequence operations.
+
+### Scheduling
+
+**v1 (Phase 20):** Single-threaded scheduler — all fibers run on one OS thread. Simpler; no data races.
+
+**v2 (Phase 21+):** Multi-threaded scheduler — fibers run on a thread pool. Higher throughput.
+
+## Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| **Fiber-based model** | Leverages delimited continuations; avoids C stack issues |
+| **`await` desugars to `shift`** | Integrates with existing CPS infrastructure |
+| **`async` desugars to `reset`** | Minimal new machinery; natural fit for the foundation |
+| **`Future<T>` as return type** | Composable, can be awaited or passed to other code |
+| **No implicit thread spawning** | Explicit control for predictable performance |
+| **Integration with `defer`** | Cleanup on fiber completion; consistent with scope model |
+
+## Under the Hood
+
+### Desugaring
+
+```turmeric
+;; Surface syntax
+(async (+ 1 (await (fetch 2))))
+
+;; Desugars to (conceptually)
+(reset
+  (fn []
+    (+ 1 (shift k
+      (fiber-suspend (fetch 2) k)))))
+
+;; The scheduler later resumes k with the result of (fetch 2)
+```
+
+### Comparison to Threads
+
+| Feature | Threads (Phase 19) | Async/Await (Phase 20) |
+|---------|-------------------|----------------------|
+| **Model** | OS-level 1:1 threads | User-space fibers |
+| **Overhead** | ~10-100μs per thread | ~1μs per fiber |
+| **Scalability** | 100s-1000s max | 100k+ feasible |
+| **Stack** | Real OS stack | CPS-based (heap) |
+| **Use case** | CPU-bound parallelism | I/O-bound concurrency |
+
+## Common Patterns
+
+### Sequential Operations
+
+```turmeric
+(async
+  (def a (await (fetch-a)))
+  (def b (await (fetch-b)))
+  (process a b))
+```
+
+### Concurrent Operations
+
+```turmeric
+;; Fork two concurrent operations; wait for both
+(async
+  (let [fut-a (async (fetch-a))
+        fut-b (async (fetch-b))]
+    (let [a (await fut-a)
+          b (await fut-b)]
+      (process a b))))
+```
+
+### Error Handling
+
+Effects-based try/catch works within async blocks (see [Effects System Guide](effects-system-guide.md)):
+
+```turmeric
+(async
+  (try-with
+    (fn []
+      (await (fetch-file "missing.txt")))
+    (fn [e k]
+      (match e
+        (FileNotFound _) -> (continue k "default")))))
+```
+
+## I/O Bindings
+
+Turmeric doesn't provide built-in async I/O primitives. Import via FFI:
+
+```turmeric
+;; Example: libuv or custom C bindings
+(defn read-file [path]
+  (with-future-from-ffi "libuv_read" path))
+
+(async
+  (println (await (read-file "data.txt"))))
+```
+
+## See Also
+
+- [Effects System Guide](effects-system-guide.md) — Effects foundation
+- [Threading Guide](threading-guide.md) — OS-level threads and primitives
+- [STM Tutorial](stm-tutorial.md) — Composable concurrent transactions
+- [turmeric-plan.md](../turmeric-plan.md) §18 — Delimited continuations (foundation)
