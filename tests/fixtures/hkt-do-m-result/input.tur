@@ -1,47 +1,79 @@
 ;; Phase HKT-P8: do-m with result monad
 ;; Tests that do-m works with result<T, E> and short-circuits on err
 
-;; Create an ok result with value
-(defn ok-result [x] (ok x))
+(defclass Monad [^m]
+  (bind [ma fn] :int))
 
-;; Create an err result
-(defn err-result [e] (err e))
+(defn __res_ok [x] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = true; r->ok_val = x; r->err_val = 0;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(defn __res_err [e] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = false; r->ok_val = 0; r->err_val = e;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(defn __res_ok? [r] :bool
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *p =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r;
+  return p != NULL && p->is_ok;
+  ```)
+
+(defn __res_unwrap [r] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *p =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r;
+  return p->ok_val;
+  ```)
+
+(defn __res_err_val [r] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *p =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r;
+  return p->err_val;
+  ```)
+
+(defn __res_free [r] :nil
+  ```c
+  free((void *)(intptr_t)r);
+  ```)
+
+(defn __bind_result [ma fn] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)ma;
+  if (!res || !res->is_ok) return ma;
+  /* fn is a closure env struct; first field is the function pointer */
+  int64_t fn_ptr = *(int64_t *)(intptr_t)fn;
+  return ((int64_t(*)(void*, int64_t))(intptr_t)fn_ptr)((void*)(intptr_t)fn, res->ok_val);
+  ```)
+
+(definstance Monad [result]
+  (bind [ma fn] (__bind_result ma fn)))
 
 ;; Helper: add two results, propagating err
-(defn add-results [a b]
+(defn add-results [a b] :int
   (do-m
    x a
    y b
-   (ok-result (+ x y))))
+   (__res_ok (+ x y))))
 
 (defn main [] :int
-  ```c
-  /* Test 1: ok + ok = ok(sum) */
-  void *r1 = add_results((void*)(intptr_t)ok-result(10), (void*)(intptr_t)ok-result(20));
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result1 = (void*)r1;
-  if (!result1 || !result1->is_ok) {
-      printf("FAIL: add-results(ok(10), ok(20)) should be ok(30)\n");
-      return 1;
-  }
-  if (result1->ok_val != 30) {
-      printf("FAIL: expected 30, got %lld\n", (long long)result1->ok_val);
-      return 1;
-  }
-  result-free(r1);
-  
-  /* Test 2: err + ok = err */
-  void *r2 = add_results((void*)(intptr_t)err-result(999), (void*)(intptr_t)ok-result(20));
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result2 = (void*)r2;
-  if (!result2 || result2->is_ok) {
-      printf("FAIL: add-results(err(999), ok(20)) should be err\n");
-      return 1;
-  }
-  if (result2->err_val != 999) {
-      printf("FAIL: expected err 999, got %lld\n", (long long)result2->err_val);
-      return 1;
-  }
-  result-free(r2);
-  
-  printf("PASS\n");
-  return 0;
-  ```)
+  (let [r1 (add-results (__res_ok 10) (__res_ok 20))]
+    (let [r2 (add-results (__res_err 999) (__res_ok 20))]
+      (let [r3 (add-results (__res_ok 10) (__res_err 42))]
+        (println (__res_ok? r1))      ;; true
+        (println (__res_unwrap r1))   ;; 30
+        (println (__res_ok? r2))      ;; false
+        (println (__res_err_val r2))  ;; 999
+        (println (__res_ok? r3))      ;; false
+        (__res_free r1)
+        (__res_free r2)
+        (__res_free r3)
+        0))))

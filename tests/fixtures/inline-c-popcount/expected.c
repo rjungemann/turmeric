@@ -1261,12 +1261,15 @@ static int64_t unbox(int64_t p) {
 }
 
 static int64_t popcount(int64_t x) {
-        __builtin_popcount(x);
+        return __builtin_popcount(x);
   
 }
 
 int main() {
-        return (int)popcount(INT64_C(7));
+        printf("%lld\n", (long long)(popcount(INT64_C(7))));
+        int64_t __t0;
+        __t0 = INT64_C(0);
+        return (int)__t0;
 }
 
 
