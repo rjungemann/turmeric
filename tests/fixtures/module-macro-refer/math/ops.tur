@@ -1,0 +1,4 @@
+(defmodule math/ops
+  (export add-one double-it)
+  (defmacro add-one [x] (+ x 1))
+  (defmacro double-it [x] (* x 2)))
