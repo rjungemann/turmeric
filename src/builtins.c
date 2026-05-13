@@ -49,11 +49,69 @@ static BuiltinSpec table_[] = {
     { "or",  NULL, 2, -1, {.kind=TY_BOOL}, {.kind=TY_BOOL}, BS_OR_SC,       NULL },
     { "not", NULL, 1,  1, {.kind=TY_BOOL}, {.kind=TY_BOOL}, BS_PREFIX_UNARY, "!" },
 
+    /* Phase N: Arithmetic for signed integer types int8/int16/int32. */
+#define SINT_OPS(TK) \
+    { "+",   NULL, 2, -1, {.kind=TK}, {.kind=TK}, BS_VARIADIC_FOLD, "+" }, \
+    { "-",   NULL, 2, -1, {.kind=TK}, {.kind=TK}, BS_VARIADIC_FOLD, "-" }, \
+    { "*",   NULL, 2, -1, {.kind=TK}, {.kind=TK}, BS_VARIADIC_FOLD, "*" }, \
+    { "/",   NULL, 2,  2, {.kind=TK}, {.kind=TK}, BS_DIV_CHECK,    "/" }, \
+    { "mod", NULL, 2,  2, {.kind=TK}, {.kind=TK}, BS_BIN_INFIX,    "%" }, \
+    { "=",    NULL, 2, 2, {.kind=TK}, {.kind=TY_BOOL}, BS_BIN_INFIX, "==" }, \
+    { "<",    NULL, 2, 2, {.kind=TK}, {.kind=TY_BOOL}, BS_BIN_INFIX, "<"  }, \
+    { ">",    NULL, 2, 2, {.kind=TK}, {.kind=TY_BOOL}, BS_BIN_INFIX, ">"  }, \
+    { "<=",   NULL, 2, 2, {.kind=TK}, {.kind=TY_BOOL}, BS_BIN_INFIX, "<=" }, \
+    { ">=",   NULL, 2, 2, {.kind=TK}, {.kind=TY_BOOL}, BS_BIN_INFIX, ">=" }, \
+    { "not=", NULL, 2, 2, {.kind=TK}, {.kind=TY_BOOL}, BS_BIN_INFIX, "!=" }
+    SINT_OPS(TY_INT8),
+    SINT_OPS(TY_INT16),
+    SINT_OPS(TY_INT32),
+#undef SINT_OPS
+
+    /* Phase N: Arithmetic for unsigned integer types. */
+#define UINT_OPS(TK) \
+    { "+",   NULL, 2, -1, {.kind=TK}, {.kind=TK}, BS_VARIADIC_FOLD, "+" }, \
+    { "-",   NULL, 2, -1, {.kind=TK}, {.kind=TK}, BS_VARIADIC_FOLD, "-" }, \
+    { "*",   NULL, 2, -1, {.kind=TK}, {.kind=TK}, BS_VARIADIC_FOLD, "*" }, \
+    { "/",   NULL, 2,  2, {.kind=TK}, {.kind=TK}, BS_DIV_CHECK,    "/" }, \
+    { "mod", NULL, 2,  2, {.kind=TK}, {.kind=TK}, BS_BIN_INFIX,    "%" }, \
+    { "=",    NULL, 2, 2, {.kind=TK}, {.kind=TY_BOOL}, BS_BIN_INFIX, "==" }, \
+    { "<",    NULL, 2, 2, {.kind=TK}, {.kind=TY_BOOL}, BS_BIN_INFIX, "<"  }, \
+    { ">",    NULL, 2, 2, {.kind=TK}, {.kind=TY_BOOL}, BS_BIN_INFIX, ">"  }, \
+    { "<=",   NULL, 2, 2, {.kind=TK}, {.kind=TY_BOOL}, BS_BIN_INFIX, "<=" }, \
+    { ">=",   NULL, 2, 2, {.kind=TK}, {.kind=TY_BOOL}, BS_BIN_INFIX, ">=" }, \
+    { "not=", NULL, 2, 2, {.kind=TK}, {.kind=TY_BOOL}, BS_BIN_INFIX, "!=" }
+    UINT_OPS(TY_UINT8),
+    UINT_OPS(TY_UINT16),
+    UINT_OPS(TY_UINT32),
+    UINT_OPS(TY_UINT64),
+#undef UINT_OPS
+
+    /* Phase N: Arithmetic for float32. */
+    { "+",   NULL, 2, -1, {.kind=TY_FLOAT32}, {.kind=TY_FLOAT32}, BS_VARIADIC_FOLD, "+" },
+    { "-",   NULL, 2, -1, {.kind=TY_FLOAT32}, {.kind=TY_FLOAT32}, BS_VARIADIC_FOLD, "-" },
+    { "*",   NULL, 2, -1, {.kind=TY_FLOAT32}, {.kind=TY_FLOAT32}, BS_VARIADIC_FOLD, "*" },
+    { "/",   NULL, 2,  2, {.kind=TY_FLOAT32}, {.kind=TY_FLOAT32}, BS_DIV_CHECK,    "/" },
+    { "=",    NULL, 2, 2, {.kind=TY_FLOAT32}, {.kind=TY_BOOL}, BS_BIN_INFIX, "==" },
+    { "<",    NULL, 2, 2, {.kind=TY_FLOAT32}, {.kind=TY_BOOL}, BS_BIN_INFIX, "<"  },
+    { ">",    NULL, 2, 2, {.kind=TY_FLOAT32}, {.kind=TY_BOOL}, BS_BIN_INFIX, ">"  },
+    { "<=",   NULL, 2, 2, {.kind=TY_FLOAT32}, {.kind=TY_BOOL}, BS_BIN_INFIX, "<=" },
+    { ">=",   NULL, 2, 2, {.kind=TY_FLOAT32}, {.kind=TY_BOOL}, BS_BIN_INFIX, ">=" },
+    { "not=", NULL, 2, 2, {.kind=TY_FLOAT32}, {.kind=TY_BOOL}, BS_BIN_INFIX, "!=" },
+
     /* println — separate entries per arg type, dispatched on arg type. */
     { "println", NULL, 1, 1, {.kind=TY_INT},  {.kind=TY_NIL}, BS_PRINTLN_INT,  NULL },
     { "println", NULL, 1, 1, {.kind=TY_FLOAT}, {.kind=TY_NIL}, BS_PRINTLN_FLOAT, NULL },
     { "println", NULL, 1, 1, {.kind=TY_BOOL}, {.kind=TY_NIL}, BS_PRINTLN_BOOL, NULL },
     { "println", NULL, 1, 1, {.kind=TY_CSTR}, {.kind=TY_NIL}, BS_PRINTLN_CSTR, NULL },
+    /* Phase N: println for new numeric types */
+    { "println", NULL, 1, 1, {.kind=TY_INT8},   {.kind=TY_NIL}, BS_PRINTLN_INT,  NULL },
+    { "println", NULL, 1, 1, {.kind=TY_INT16},  {.kind=TY_NIL}, BS_PRINTLN_INT,  NULL },
+    { "println", NULL, 1, 1, {.kind=TY_INT32},  {.kind=TY_NIL}, BS_PRINTLN_INT,  NULL },
+    { "println", NULL, 1, 1, {.kind=TY_UINT8},  {.kind=TY_NIL}, BS_PRINTLN_UINT, NULL },
+    { "println", NULL, 1, 1, {.kind=TY_UINT16}, {.kind=TY_NIL}, BS_PRINTLN_UINT, NULL },
+    { "println", NULL, 1, 1, {.kind=TY_UINT32}, {.kind=TY_NIL}, BS_PRINTLN_UINT, NULL },
+    { "println", NULL, 1, 1, {.kind=TY_UINT64}, {.kind=TY_NIL}, BS_PRINTLN_UINT, NULL },
+    { "println", NULL, 1, 1, {.kind=TY_FLOAT32},{.kind=TY_NIL}, BS_PRINTLN_FLOAT32, NULL },
     /* Phase 5: ref drop */
     { "drop!", NULL, 1, 1, {.kind=TY_UNKNOWN}, {.kind=TY_NIL}, BS_PREFIX_UNARY_FREE, "free" },
 

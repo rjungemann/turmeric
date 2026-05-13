@@ -42,8 +42,18 @@ static Type type_from_kind(TypeKind k) {
 /* Helper to convert a type name string to TypeKind (Phase 19). */
 static TypeKind typekind_from_symbol(const char *name) {
     if (strcmp(name, "int") == 0) return TY_INT;
+    if (strcmp(name, "int64") == 0) return TY_INT;       /* alias */
     if (strcmp(name, "bool") == 0) return TY_BOOL;
     if (strcmp(name, "float") == 0) return TY_FLOAT;
+    if (strcmp(name, "float64") == 0) return TY_FLOAT;   /* alias */
+    if (strcmp(name, "int8") == 0) return TY_INT8;
+    if (strcmp(name, "int16") == 0) return TY_INT16;
+    if (strcmp(name, "int32") == 0) return TY_INT32;
+    if (strcmp(name, "uint8") == 0) return TY_UINT8;
+    if (strcmp(name, "uint16") == 0) return TY_UINT16;
+    if (strcmp(name, "uint32") == 0) return TY_UINT32;
+    if (strcmp(name, "uint64") == 0) return TY_UINT64;
+    if (strcmp(name, "float32") == 0) return TY_FLOAT32;
     if (strcmp(name, "cstr") == 0) return TY_CSTR;
     if (strcmp(name, "nil") == 0) return TY_NIL;
     if (strcmp(name, "ptr-void") == 0) return TY_PTR_VOID;
@@ -61,6 +71,14 @@ static int type_size_bytes(TypeKind kind) {
         case TY_BOOL:     return 1;   /* bool → 1 byte in C */
         case TY_INT:      return 8;   /* int64_t → 8 bytes */
         case TY_FLOAT:    return 8;   /* double → 8 bytes */
+        case TY_INT8:     return 1;
+        case TY_INT16:    return 2;
+        case TY_INT32:    return 4;
+        case TY_UINT8:    return 1;
+        case TY_UINT16:   return 2;
+        case TY_UINT32:   return 4;
+        case TY_UINT64:   return 8;
+        case TY_FLOAT32:  return 4;
         case TY_CSTR:     return 8;   /* const char* → pointer size */
         case TY_PTR_VOID: return 8;   /* void* → pointer size */
         case TY_NIL:      return 0;   /* unit / void — no size */
@@ -585,6 +603,7 @@ typedef struct Elab {
     const Symbol *sym_export;     /* export */
     const Symbol *sym_import;     /* import */
     const Symbol *sym_load;       /* load */
+    const Symbol *sym_as;         /* as  — for (as Type expr) numeric cast */
     const Symbol *kw_as;          /* :as */
     const Symbol *kw_refer;       /* :refer */
     bool has_defmodule;           /* whether defmodule has been seen in this file */
@@ -1068,7 +1087,8 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_export = intern_cstr(st, "export");
     e->sym_import = intern_cstr(st, "import");
     e->sym_load = intern_cstr(st, "load");
-    e->kw_as = intern_cstr(st, "as");
+    e->sym_as = intern_cstr(st, "as");   /* Phase N: (as Type expr) cast */
+    e->kw_as = intern_cstr(st, "as");   /* same interned symbol, used as :as keyword */
     e->kw_refer = intern_cstr(st, "refer");
     e->has_defmodule = false;
     e->current_module_name = NULL;
@@ -1972,6 +1992,8 @@ static Binding *binding_new(Elab *e, const Symbol *name, Type type,
 static Binding *elab_lookup_sym(Elab *e, const Symbol *sym, Span span, bool *had_error); /* Phase M1 */
 static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span span);             /* Phase M2 */
 static Expr *elab_form(Elab *e, Form *f);
+static bool typekind_is_numeric(TypeKind k);             /* Phase N */
+static Expr *elab_as_cast(Elab *e, const Form *call);   /* Phase N */
 static Expr *elab_unsafe(Elab *e, const Form *call);
 /* Phase 5 */
 static Expr *elab_ref(Elab *e, const Form *call);
@@ -6338,17 +6360,16 @@ static Expr *elab_extern_c(Elab *e, const Form *call) {
                 return NULL;
             }
             const Symbol *kw = p->as.sym;
-            TypeKind pk = TY_INT;
-            if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0)        pk = TY_INT;
-            else if (kw->len == 5 && memcmp(kw->name, "float", 5) == 0) pk = TY_FLOAT;
-            else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0)  pk = TY_BOOL;
-            else if (kw->len == 4 && memcmp(kw->name, "cstr", 4) == 0)  pk = TY_CSTR;
-            else if (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0)   pk = TY_PTR_VOID;
-            else if (kw->len == 4 && memcmp(kw->name, "void", 4) == 0)  pk = TY_NIL;
-            else {
-                diag_emit(DIAG_ERROR, p->span,
-                          "extern-c: unsupported parameter type :%s", kw->name);
-                return NULL;
+            TypeKind pk = typekind_from_symbol(kw->name);
+            if (pk == TY_UNKNOWN) {
+                /* Legacy fallback names */
+                if (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0) pk = TY_PTR_VOID;
+                else if (kw->len == 4 && memcmp(kw->name, "void", 4) == 0) pk = TY_NIL;
+                else {
+                    diag_emit(DIAG_ERROR, p->span,
+                              "extern-c: unsupported parameter type :%s", kw->name);
+                    return NULL;
+                }
             }
             param_kinds[n_params - 1] = pk;
             params[n_params - 1]->type = type_from_kind(pk);
@@ -6391,22 +6412,17 @@ static Expr *elab_extern_c(Elab *e, const Form *call) {
         return NULL;
     }
 
-    TypeKind return_kind = TY_NIL;
-    const Symbol *kw = ret_f->as.sym;
-    if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
-        return_kind = TY_INT;
-    } else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0) {
-        return_kind = TY_BOOL;
-    } else if (kw->len == 4 && memcmp(kw->name, "void", 4) == 0) {
-        return_kind = TY_NIL;
-    } else if (kw->len == 4 && memcmp(kw->name, "cstr", 4) == 0) {
-        return_kind = TY_CSTR;
-    } else if (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0) {
-        return_kind = TY_PTR_VOID;
-    } else {
-        diag_emit(DIAG_ERROR, ret_f->span,
-                  "extern-c: unsupported return type :%s", kw->name);
-        return NULL;
+    TypeKind return_kind = typekind_from_symbol(ret_f->as.sym->name);
+    if (return_kind == TY_UNKNOWN) {
+        /* Legacy fallback names */
+        const Symbol *kw = ret_f->as.sym;
+        if (kw->len == 4 && memcmp(kw->name, "void", 4) == 0) return_kind = TY_NIL;
+        else if (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0) return_kind = TY_PTR_VOID;
+        else {
+            diag_emit(DIAG_ERROR, ret_f->span,
+                      "extern-c: unsupported return type :%s", kw->name);
+            return NULL;
+        }
     }
 
     /* Create function type */
@@ -6599,6 +6615,8 @@ static Expr *elab_call(Elab *e, Form *call) {
                   "import is only allowed inside defmodule");
         return NULL;
     }
+    /* Phase N: numeric cast */
+    if (name == e->sym_as) return elab_as_cast(e, call);
     /* Phase 11: defstruct */
     if (name == e->sym_defstruct) return elab_defstruct(e, call);
     if (name == e->sym_make_struct) return elab_make_struct(e, call);
@@ -6789,8 +6807,11 @@ static Expr *elab_call(Elab *e, Form *call) {
             const char *suggestion = NULL;
             if (args[i]->type.kind == TY_BOOL && spec->arg_type.kind == TY_INT) {
                 suggestion = "try wrapping the bool in (if x 1 0)";
+            } else if (typekind_is_numeric(args[i]->type.kind) &&
+                       typekind_is_numeric(spec->arg_type.kind)) {
+                suggestion = "use (as <type> expr) for explicit numeric conversion";
             }
-            
+
             diag_emit_with_code(DIAG_ERROR, args[i]->span, TUR_E0001_TYPE_MISMATCH,
                                 "'%s' arg %u: type mismatch - expected %s, got %s",
                                 name->name, i + 1, expected_str, actual_str);
@@ -7648,6 +7669,68 @@ static Binding *elab_lookup_sym(Elab *e, const Symbol *sym, Span span, bool *had
     return NULL; /* Not a recognised qualified name; caller handles "unbound" */
 }
 
+/* Phase N: (as TargetType expr) — explicit numeric coercion.
+ * Syntax: (as type-name expr)
+ * Both source and target must be numeric (int/uint/float variants).
+ * A cast between identical types is allowed (no-op). */
+static bool typekind_is_numeric(TypeKind k) {
+    switch (k) {
+        case TY_INT: case TY_FLOAT:
+        case TY_INT8: case TY_INT16: case TY_INT32:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT32:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static Expr *elab_as_cast(Elab *e, const Form *call) {
+    if (call->as.list.len != 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "'as' requires exactly two arguments: (as type expr)");
+        return NULL;
+    }
+    Form *type_form = call->as.list.items[1];
+    Form *expr_form = call->as.list.items[2];
+
+    if (type_form->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, type_form->span,
+                  "'as' expects a type name as first argument");
+        return NULL;
+    }
+    TypeKind target_kind = typekind_from_symbol(type_form->as.sym->name);
+    if (target_kind == TY_UNKNOWN) {
+        diag_emit(DIAG_ERROR, type_form->span,
+                  "unknown type '%s' in 'as' cast", type_form->as.sym->name);
+        return NULL;
+    }
+    if (!typekind_is_numeric(target_kind)) {
+        diag_emit(DIAG_ERROR, type_form->span,
+                  "'as' casts are only valid for numeric types");
+        return NULL;
+    }
+
+    Expr *inner = elab_form(e, expr_form);
+    if (!inner) return NULL;
+
+    if (!typekind_is_numeric(inner->type.kind)) {
+        diag_emit(DIAG_ERROR, expr_form->span,
+                  "cannot cast non-numeric type '%s' with 'as'",
+                  type_name(inner->type));
+        return NULL;
+    }
+
+    /* No-op cast: same type */
+    if (inner->type.kind == target_kind) return inner;
+
+    Type result_type = type_simple(target_kind, CK_COPY);
+    Expr *out = expr_new(e->arena, EX_CAST, result_type, call->span);
+    out->as.cast_.expr = inner;
+    out->as.cast_.target_kind = target_kind;
+    return out;
+}
+
 static Expr *elab_form(Elab *e, Form *f) {
     switch (f->tag) {
         case F_NIL:  return e_nil(e, f->span);
@@ -7657,12 +7740,16 @@ static Expr *elab_form(Elab *e, Form *f) {
             return out;
         }
         case F_INT: {
-            Expr *out = expr_new(e->arena, EX_INT_LIT, TYPE_INT, f->span);
+            TypeKind k = (f->lit_kind != TY_UNKNOWN) ? (TypeKind)f->lit_kind : TY_INT;
+            Type t = type_simple(k, CK_COPY);
+            Expr *out = expr_new(e->arena, EX_INT_LIT, t, f->span);
             out->as.i = f->as.i;
             return out;
         }
         case F_FLOAT: {
-            Expr *out = expr_new(e->arena, EX_FLOAT_LIT, TYPE_FLOAT, f->span);
+            TypeKind k = (f->lit_kind != TY_UNKNOWN) ? (TypeKind)f->lit_kind : TY_FLOAT;
+            Type t = type_simple(k, CK_COPY);
+            Expr *out = expr_new(e->arena, EX_FLOAT_LIT, t, f->span);
             out->as.f = f->as.f;
             return out;
         }
@@ -7788,8 +7875,18 @@ static void parse_struct_field_type(const char *tname, uint32_t tlen,
     *out_inner = TY_UNKNOWN;
 
     if (tlen == 3  && memcmp(tname, "int",   3) == 0) { *out_kind = TY_INT;      return; }
+    if (tlen == 5  && memcmp(tname, "int64", 5) == 0) { *out_kind = TY_INT;      return; }
     if (tlen == 4  && memcmp(tname, "bool",  4) == 0) { *out_kind = TY_BOOL;     return; }
     if (tlen == 5  && memcmp(tname, "float", 5) == 0) { *out_kind = TY_FLOAT;    return; }
+    if (tlen == 7  && memcmp(tname, "float64", 7) == 0) { *out_kind = TY_FLOAT;  return; }
+    if (tlen == 4  && memcmp(tname, "int8",  4) == 0) { *out_kind = TY_INT8;     return; }
+    if (tlen == 5  && memcmp(tname, "int16", 5) == 0) { *out_kind = TY_INT16;    return; }
+    if (tlen == 5  && memcmp(tname, "int32", 5) == 0) { *out_kind = TY_INT32;    return; }
+    if (tlen == 5  && memcmp(tname, "uint8", 5) == 0) { *out_kind = TY_UINT8;    return; }
+    if (tlen == 6  && memcmp(tname, "uint16", 6) == 0) { *out_kind = TY_UINT16;  return; }
+    if (tlen == 6  && memcmp(tname, "uint32", 6) == 0) { *out_kind = TY_UINT32;  return; }
+    if (tlen == 6  && memcmp(tname, "uint64", 6) == 0) { *out_kind = TY_UINT64;  return; }
+    if (tlen == 7  && memcmp(tname, "float32", 7) == 0) { *out_kind = TY_FLOAT32; return; }
     if (tlen == 4  && memcmp(tname, "cstr",  4) == 0) { *out_kind = TY_CSTR;     return; }
     if (tlen == 3  && memcmp(tname, "nil",   3) == 0) { *out_kind = TY_NIL;      return; }
     if (tlen == 4  && memcmp(tname, "void",  4) == 0) { *out_kind = TY_NIL;      return; }
@@ -7827,6 +7924,9 @@ static bool typekind_is_copy_for_struct(TypeKind k) {
     switch (k) {
         case TY_INT: case TY_BOOL: case TY_FLOAT: case TY_CSTR:
         case TY_PTR_VOID: case TY_NIL:
+        case TY_INT8: case TY_INT16: case TY_INT32:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT32:
         /* Phase 16 v2: :fn fields are stored as int64_t at the C level, so they are
          * trivially copyable (function pointer stored as an integer value). */
         case TY_FN:
@@ -9547,25 +9647,31 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
                         } else if (kw->len == 9 && memcmp(kw->name, "ptr<void>", 9) == 0) {
                             type_args[i] = TYPE_PTR_VOID;
                         } else {
-                            /* Check if this name refers to a known struct type.
-                             * If so, preserve the StructDef pointer so the kind
-                             * system can distinguish concrete structs (kind *)
-                             * from opaque type constructors (kind * -> *). */
-                            Binding *sb = scope_lookup(e->scope, kw);
-                            if (sb && sb->type.kind == TY_STRUCT && sb->type.as.struct_.def) {
-                                type_args[i] = sb->type;
+                            /* Phase N4: Try new numeric type names first. */
+                            TypeKind nk = typekind_from_symbol(kw->name);
+                            if (nk != TY_UNKNOWN) {
+                                type_args[i] = type_simple(nk, CK_COPY);
                             } else {
-                                /* Phase HKT H3: Unknown name — treat as an opaque type constructor.
-                                 * TY_STRUCT without a StructDef causes codegen to emit 'void *' for
-                                 * all parameters that inherit this type, which is the correct C type
-                                 * for containers represented as heap pointers (option, vec, etc.).
-                                 * Track the symbol name so method name mangling can use it. */
-                                memset(&type_args[i], 0, sizeof(type_args[i]));
-                                type_args[i].kind = TY_STRUCT;
-                                type_args[i].copy_kind = CK_MOVE;
-                                type_args[i].as.struct_.def = NULL;
+                                /* Check if this name refers to a known struct type.
+                                 * If so, preserve the StructDef pointer so the kind
+                                 * system can distinguish concrete structs (kind *)
+                                 * from opaque type constructors (kind * -> *). */
+                                Binding *sb = scope_lookup(e->scope, kw);
+                                if (sb && sb->type.kind == TY_STRUCT && sb->type.as.struct_.def) {
+                                    type_args[i] = sb->type;
+                                } else {
+                                    /* Phase HKT H3: Unknown name — treat as an opaque type constructor.
+                                     * TY_STRUCT without a StructDef causes codegen to emit 'void *' for
+                                     * all parameters that inherit this type, which is the correct C type
+                                     * for containers represented as heap pointers (option, vec, etc.).
+                                     * Track the symbol name so method name mangling can use it. */
+                                    memset(&type_args[i], 0, sizeof(type_args[i]));
+                                    type_args[i].kind = TY_STRUCT;
+                                    type_args[i].copy_kind = CK_MOVE;
+                                    type_args[i].as.struct_.def = NULL;
+                                }
+                                type_arg_syms[i] = kw;
                             }
-                            type_arg_syms[i] = kw;
                         }
                     } else if (arg->tag == F_LIST && arg->as.list.len == 2) {
                         /* Phase HKT §3: (constructor arg) — partial type application.

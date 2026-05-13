@@ -1,0 +1,5 @@
+; Phase N7: extern-c declarations with new numeric types compile without error
+; Use strlen which returns size_t (mapped to int here for simplicity)
+(extern-c strlen [s :cstr] :uint64)
+(println (strlen "hello"))
+(println (strlen ""))

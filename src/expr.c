@@ -394,5 +394,11 @@ void expr_print(Buf *b, const Expr *e) {
         case EX_DEFMODULE:
             buf_printf(b, "<defmodule %s>", e->as.defmodule_.mod->name->name);
             break;
+        /* Phase N: numeric cast */
+        case EX_CAST:
+            buf_puts(b, "(as ");
+            expr_print(b, e->as.cast_.expr);
+            buf_putc(b, ')');
+            break;
     }
 }

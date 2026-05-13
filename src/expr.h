@@ -131,6 +131,8 @@ typedef enum ExprKind {
     EX_PROGRAM,
     /* Phase M0: Module system */
     EX_DEFMODULE,      /* (defmodule name [docstring] (export ...) (import ...) body...) */
+    /* Phase N: Numeric type cast */
+    EX_CAST,           /* (as TargetType expr) — explicit numeric coercion */
 } ExprKind;
 
 /* Phase 2: FnDef represents a function definition from defn or lifted fn. */
@@ -411,6 +413,8 @@ struct Expr {
 
         /* Phase M0: Module system */
         struct { struct DefModule *mod; }                                   defmodule_;
+        /* Phase N: Numeric cast — (as TargetType expr) */
+        struct { Expr *expr; TypeKind target_kind; }                       cast_;
     } as;
 };
 

@@ -1,0 +1,165 @@
+;; Conway's Game of Life — A cellular automaton example for Turmeric
+;;
+;; This demonstrates cellular automata using Turmeric's core language.
+;; Focuses on the rule logic and pattern evolution.
+
+;; Count live neighbors at position (x, y) in a grid
+;; Returns: number of live neighbors (0-8)
+(defn count-neighbors [grid :ptr<void>, x :int, y :int, w :int, h :int] :int
+  ```c
+  int64_t *g = (int64_t *)grid;
+  int count = 0;
+  for (int dx = -1; dx <= 1; dx++) {
+    for (int dy = -1; dy <= 1; dy++) {
+      if (dx == 0 && dy == 0) continue;  // skip center
+      int nx = x + dx;
+      int ny = y + dy;
+      if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+        if (g[ny * w + nx] == 1) count++;
+      }
+    }
+  }
+  return count;
+  ```)
+
+;; Apply Conway's rules to a single cell
+;; Returns: 1 if alive in next generation, 0 if dead
+(defn life-rule [alive :int, neighbors :int] :int
+  (cond
+    (and (= alive 1) (< neighbors 2)) 0       ;; underpopulation
+    (and (= alive 1) (> neighbors 3)) 0       ;; overpopulation
+    (and (= alive 1) (or (= neighbors 2) (= neighbors 3))) 1  ;; survival
+    (and (= alive 0) (= neighbors 3)) 1       ;; reproduction
+    :else alive))
+
+;; Compute one generation step
+(defn life-step [grid :ptr<void>, w :int, h :int, out :ptr<void>] :nil
+  ```c
+  int64_t *g = (int64_t *)grid;
+  int64_t *o = (int64_t *)out;
+  
+  for (int y = 0; y < h; y++) {
+    for (int x = 0; x < w; x++) {
+      int idx = y * w + x;
+      int alive = g[idx];
+      int neighbors = 0;
+      
+      // Count live neighbors
+      for (int dx = -1; dx <= 1; dx++) {
+        for (int dy = -1; dy <= 1; dy++) {
+          if (dx == 0 && dy == 0) continue;
+          int nx = x + dx;
+          int ny = y + dy;
+          if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+            if (g[ny * w + nx] == 1) neighbors++;
+          }
+        }
+      }
+      
+      // Apply Conway's rules
+      if (alive == 1 && neighbors < 2) {
+        o[idx] = 0;
+      } else if (alive == 1 && neighbors > 3) {
+        o[idx] = 0;
+      } else if (alive == 1 && (neighbors == 2 || neighbors == 3)) {
+        o[idx] = 1;
+      } else if (alive == 0 && neighbors == 3) {
+        o[idx] = 1;
+      } else {
+        o[idx] = alive;
+      }
+    }
+  }
+  ```)
+
+;; Print a grid to stdout in ASCII format
+(defn grid-print [grid :ptr<void>, w :int, h :int] :nil
+  ```c
+  int64_t *g = (int64_t *)grid;
+  
+  for (int y = 0; y < h; y++) {
+    for (int x = 0; x < w; x++) {
+      printf("%c", g[y * w + x] ? '#' : '.');
+    }
+    printf("\n");
+  }
+  ```)
+
+;; Create a blinker pattern (oscillates with period 2)
+(defn pattern-blinker [] :ptr<void>
+  ```c
+  static int64_t pattern[25] = {
+    0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0,
+    0, 1, 1, 1, 0,
+    0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0
+  };
+  return (void *)pattern;
+  ```)
+
+;; Create a block pattern (stable, unchanging)
+(defn pattern-block [] :ptr<void>
+  ```c
+  static int64_t pattern[16] = {
+    0, 0, 0, 0,
+    0, 1, 1, 0,
+    0, 1, 1, 0,
+    0, 0, 0, 0
+  };
+  return (void *)pattern;
+  ```)
+
+;; Create a glider pattern (moves diagonally)
+(defn pattern-glider [] :ptr<void>
+  ```c
+  static int64_t pattern[25] = {
+    0, 1, 0, 0, 0,
+    0, 0, 1, 0, 0,
+    1, 1, 1, 0, 0,
+    0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0
+  };
+  return (void *)pattern;
+  ```)
+
+;; Demo/main
+(defn main [] :int
+  ```c
+  printf("Conway's Game of Life\n");
+  printf("=====================\n\n");
+  
+  // Test 1: Blinker pattern
+  printf("Test 1: Blinker Pattern (5x5, oscillates with period 2)\n");
+  printf("Generation 0:\n");
+  grid_print(pattern_blinker(), 5, 5);
+  
+  printf("\nGeneration 1:\n");
+  int64_t *g0 = (int64_t *)pattern_blinker();
+  int64_t *g1 = (int64_t *)malloc(25 * sizeof(int64_t));
+  life_step((void *)g0, 5, 5, (void *)g1);
+  grid_print((void *)g1, 5, 5);
+  
+  printf("\nGeneration 2 (should match Generation 0):\n");
+  int64_t *g2 = (int64_t *)malloc(25 * sizeof(int64_t));
+  life_step((void *)g1, 5, 5, (void *)g2);
+  grid_print((void *)g2, 5, 5);
+  
+  // Test 2: Block pattern
+  printf("\n\nTest 2: Block Pattern (4x4, stable/unchanging)\n");
+  printf("Generation 0:\n");
+  grid_print(pattern_block(), 4, 4);
+  
+  printf("\nGeneration 1 (should match Generation 0):\n");
+  int64_t *b0 = (int64_t *)pattern_block();
+  int64_t *b1 = (int64_t *)malloc(16 * sizeof(int64_t));
+  life_step((void *)b0, 4, 4, (void *)b1);
+  grid_print((void *)b1, 4, 4);
+  
+  // Cleanup
+  free(g1);
+  free(g2);
+  free(b1);
+  
+  return 0;
+  ```)

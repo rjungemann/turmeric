@@ -1,4 +1,5 @@
 #include "reader.h"
+#include "types.h"   /* Phase N: TypeKind constants for literal suffixes */
 
 #include <ctype.h>
 #include <stdlib.h>
@@ -338,9 +339,72 @@ static Form *read_number(Reader *r, int sign) {
         return NULL;
     }
 
+    /* Phase N: Optional type suffix — i8/i16/i32/i64/u8/u16/u32/u64/f32/f64.
+     * The suffix is only consumed when followed by a non-alphanumeric character
+     * (so `42int` is `42` + symbol `int`, not a parse of suffix `int`). */
+    int lit_kind = 0; /* TY_UNKNOWN */
+    {
+        /* Read up to 3 suffix chars from the raw source without advancing */
+        int s0 = peek(r), s1 = peek2(r), s2 = peek3(r);
+
+        /* Helper: what comes after a 2-char suffix? */
+#define AFTER2 (r->pos + 2 < r->len ? (unsigned char)r->src[r->pos + 2] : -1)
+#define AFTER3 (r->pos + 3 < r->len ? (unsigned char)r->src[r->pos + 3] : -1)
+
+        /* 3-char suffixes (check before 2-char to avoid prefix match) */
+        if (s0 == 'i' && s1 == '1' && s2 == '6' && !isalnum(AFTER3) && AFTER3 != '_') {
+            advance(r); advance(r); advance(r); lit_kind = TY_INT16;
+        } else if (s0 == 'i' && s1 == '3' && s2 == '2' && !isalnum(AFTER3) && AFTER3 != '_') {
+            advance(r); advance(r); advance(r); lit_kind = TY_INT32;
+        } else if (s0 == 'i' && s1 == '6' && s2 == '4' && !isalnum(AFTER3) && AFTER3 != '_') {
+            advance(r); advance(r); advance(r); lit_kind = TY_INT;   /* i64 aliases int */
+        } else if (s0 == 'u' && s1 == '1' && s2 == '6' && !isalnum(AFTER3) && AFTER3 != '_') {
+            advance(r); advance(r); advance(r); lit_kind = TY_UINT16;
+        } else if (s0 == 'u' && s1 == '3' && s2 == '2' && !isalnum(AFTER3) && AFTER3 != '_') {
+            advance(r); advance(r); advance(r); lit_kind = TY_UINT32;
+        } else if (s0 == 'u' && s1 == '6' && s2 == '4' && !isalnum(AFTER3) && AFTER3 != '_') {
+            advance(r); advance(r); advance(r); lit_kind = TY_UINT64;
+        } else if (s0 == 'f' && s1 == '3' && s2 == '2' && !isalnum(AFTER3) && AFTER3 != '_') {
+            if (!is_float) fval = (double)ival;
+            advance(r); advance(r); advance(r); is_float = true; lit_kind = TY_FLOAT32;
+        } else if (s0 == 'f' && s1 == '6' && s2 == '4' && !isalnum(AFTER3) && AFTER3 != '_') {
+            if (!is_float) fval = (double)ival;
+            advance(r); advance(r); advance(r); is_float = true; lit_kind = TY_FLOAT; /* f64 aliases float */
+        /* 2-char suffixes */
+        } else if (s0 == 'i' && s1 == '8' && !isalnum(AFTER2) && AFTER2 != '_') {
+            advance(r); advance(r); lit_kind = TY_INT8;
+        } else if (s0 == 'u' && s1 == '8' && !isalnum(AFTER2) && AFTER2 != '_') {
+            advance(r); advance(r); lit_kind = TY_UINT8;
+        }
+
+#undef AFTER2
+#undef AFTER3
+
+        /* Range checks for suffixed integer literals */
+        if (!is_float && lit_kind != TY_UNKNOWN) {
+            bool overflow = false;
+            switch ((TypeKind)lit_kind) {
+                case TY_INT8:   overflow = (ival < -128 || ival > 127); break;
+                case TY_INT16:  overflow = (ival < -32768 || ival > 32767); break;
+                case TY_INT32:  overflow = (ival < -2147483648LL || ival > 2147483647LL); break;
+                case TY_UINT8:  overflow = (ival < 0 || ival > 255); break;
+                case TY_UINT16: overflow = (ival < 0 || ival > 65535); break;
+                case TY_UINT32: overflow = (ival < 0 || ival > 4294967295LL); break;
+                case TY_UINT64: overflow = (ival < 0); break;  /* basic check */
+                default: break;
+            }
+            if (overflow) {
+                Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
+                diag_emit(DIAG_ERROR, s, "literal value out of range for its type suffix");
+                r->error = true;
+                return NULL;
+            }
+        }
+    }
+
     Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
     Form *atom;
-    
+
     if (is_float) {
         if (sign < 0) fval = -fval;
         atom = form_float(r->arena, span, fval);
@@ -348,6 +412,7 @@ static Form *read_number(Reader *r, int sign) {
         if (sign < 0) ival = -ival;
         atom = form_int(r->arena, span, ival);
     }
+    atom->lit_kind = lit_kind;
     
     /* Phase S2: Check for neoteric bracket immediately following number */
     if (r->neoteric_enabled) {

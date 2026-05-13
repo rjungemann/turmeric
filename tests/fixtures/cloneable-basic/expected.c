@@ -1151,6 +1151,141 @@ static void tur_scheduler_run_one(TurScheduler *s) {
     if (!f->done && !f->parked) tur_scheduler_enqueue(s, f);
 }
 
+/* Phase T23: Multi-threaded scheduler */
+typedef struct TurSchedulerMT {
+    pthread_t       *threads;
+    size_t           n_threads;
+    pthread_mutex_t  lock;
+    pthread_cond_t   cond;
+    FiberBlock     **queue;
+    size_t           qhead;
+    size_t           qtail;
+    size_t           qcap;
+    bool             running;
+    int              active;
+} TurSchedulerMT;
+
+static __thread TurSchedulerMT *tur_current_scheduler_mt = NULL;
+
+static void tur_scheduler_mt_enqueue_locked(TurSchedulerMT *s, FiberBlock *f) {
+    if (((s->qtail + 1) % s->qcap) == s->qhead) {
+        size_t ncap = s->qcap * 2;
+        FiberBlock **nq = (FiberBlock **)calloc(ncap, sizeof(FiberBlock *));
+        size_t k = 0;
+        for (size_t i = s->qhead; i != s->qtail; i = (i + 1) % s->qcap) nq[k++] = s->queue[i];
+        free(s->queue);
+        s->queue = nq; s->qcap = ncap; s->qhead = 0; s->qtail = k;
+    }
+    s->queue[s->qtail] = f;
+    s->qtail = (s->qtail + 1) % s->qcap;
+}
+
+static void *tur_scheduler_mt_worker(void *arg) {
+    TurSchedulerMT *s = (TurSchedulerMT *)arg;
+    tur_current_scheduler_mt = s;
+    for (;;) {
+        pthread_mutex_lock(&s->lock);
+        while (s->running && s->qhead == s->qtail) {
+            pthread_cond_wait(&s->cond, &s->lock);
+        }
+        if (!s->running && s->qhead == s->qtail) {
+            pthread_mutex_unlock(&s->lock);
+            break;
+        }
+        FiberBlock *f = s->queue[s->qhead];
+        s->qhead = (s->qhead + 1) % s->qcap;
+        s->active++;
+        pthread_mutex_unlock(&s->lock);
+        tur_fiber_block_resume(f, 0);
+        pthread_mutex_lock(&s->lock);
+        s->active--;
+        if (!f->done && !f->parked) tur_scheduler_mt_enqueue_locked(s, f);
+        pthread_cond_broadcast(&s->cond);
+        pthread_mutex_unlock(&s->lock);
+    }
+    return NULL;
+}
+
+static TurSchedulerMT *tur_scheduler_mt_new(size_t n_threads) {
+    if (n_threads == 0) n_threads = 1;
+    TurSchedulerMT *s = (TurSchedulerMT *)calloc(1, sizeof(TurSchedulerMT));
+    if (!s) return NULL;
+    pthread_mutex_init(&s->lock, NULL);
+    pthread_cond_init(&s->cond, NULL);
+    s->qcap = 32;
+    s->queue = (FiberBlock **)calloc(s->qcap, sizeof(FiberBlock *));
+    s->n_threads = n_threads;
+    s->threads = (pthread_t *)calloc(n_threads, sizeof(pthread_t));
+    s->running = true;
+    for (size_t i = 0; i < n_threads; i++) {
+        pthread_create(&s->threads[i], NULL, tur_scheduler_mt_worker, s);
+    }
+    return s;
+}
+
+static void tur_scheduler_mt_free(TurSchedulerMT *s) {
+    if (!s) return;
+    pthread_mutex_lock(&s->lock);
+    /* Drain: wait until queue is empty and no fiber is active */
+    while (s->qhead != s->qtail || s->active > 0) {
+        pthread_cond_wait(&s->cond, &s->lock);
+    }
+    s->running = false;
+    pthread_cond_broadcast(&s->cond);
+    pthread_mutex_unlock(&s->lock);
+    for (size_t i = 0; i < s->n_threads; i++) pthread_join(s->threads[i], NULL);
+    pthread_mutex_destroy(&s->lock);
+    pthread_cond_destroy(&s->cond);
+    free(s->queue); free(s->threads); free(s);
+}
+
+static void tur_scheduler_mt_spawn(TurSchedulerMT *s, FiberBlock *f) {
+    if (!s || !f) return;
+    pthread_mutex_lock(&s->lock);
+    tur_scheduler_mt_enqueue_locked(s, f);
+    pthread_cond_signal(&s->cond);
+    pthread_mutex_unlock(&s->lock);
+}
+
+static void tur_scheduler_mt_run(TurSchedulerMT *s) {
+    /* Worker threads run automatically; this is a no-op for the
+     * shared-queue impl.  Kept for API compatibility. */
+    (void)s;
+}
+
+static int64_t tur_scheduler_mt_thread_id(void) {
+    return (int64_t)(uintptr_t)pthread_self();
+}
+
+static void tur_scheduler_mt_set_current(TurSchedulerMT *s) {
+    tur_current_scheduler_mt = s;
+}
+
+static TurSchedulerMT *tur_scheduler_mt_current(void) {
+    return tur_current_scheduler_mt;
+}
+
+static void tur_scheduler_mt_yield(void) {
+    /* Cooperative yield: re-enqueues current fiber via the worker loop. */
+    tur_fiber_block_yield(0);
+}
+
+static void tur_scheduler_mt_park(void) {
+    FiberBlock *f = tur_current_fiber;
+    if (f) f->parked = 1;
+    tur_fiber_block_yield(0);
+}
+
+static void tur_scheduler_mt_unpark(FiberBlock *f) {
+    TurSchedulerMT *s = tur_current_scheduler_mt;
+    if (!f || !s) return;
+    f->parked = 0;
+    pthread_mutex_lock(&s->lock);
+    tur_scheduler_mt_enqueue_locked(s, f);
+    pthread_cond_signal(&s->cond);
+    pthread_mutex_unlock(&s->lock);
+}
+
 /* Phase T21-F: async/await runtime - fiber-based Futures */
 typedef enum { FUTURE_PENDING, FUTURE_FULFILLED, FUTURE_REJECTED } TurFutureStatus;
 

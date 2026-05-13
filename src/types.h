@@ -39,8 +39,17 @@ typedef enum TypeKind {
     TY_UNKNOWN = 0,   /* not-yet-resolved (elaboration in progress) */
     TY_NIL,           /* unit / void; (do) with no body, (println …) result */
     TY_BOOL,
-    TY_INT,           /* int64_t */
-    TY_FLOAT,         /* Phase 1: double-precision floating point */
+    TY_INT,           /* int64_t — default signed integer; alias for int64 */
+    TY_FLOAT,         /* double — default float; alias for float64 */
+    /* Numeric types (Phase N): fixed-width integers and float32 */
+    TY_INT8,          /* int8_t   — 8-bit signed integer */
+    TY_INT16,         /* int16_t  — 16-bit signed integer */
+    TY_INT32,         /* int32_t  — 32-bit signed integer */
+    TY_UINT8,         /* uint8_t  — 8-bit unsigned integer */
+    TY_UINT16,        /* uint16_t — 16-bit unsigned integer */
+    TY_UINT32,        /* uint32_t — 32-bit unsigned integer */
+    TY_UINT64,        /* uint64_t — 64-bit unsigned integer */
+    TY_FLOAT32,       /* float    — 32-bit IEEE 754 single-precision */
     TY_CSTR,          /* const char* — string literal type for now */
     TY_PTR_VOID,      /* void* — for extern-c and raw pointers */
     TY_FN,            /* function type — requires checking as.fn */
@@ -102,6 +111,14 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
         case TY_BOOL:
         case TY_INT:
         case TY_FLOAT:
+        case TY_INT8:
+        case TY_INT16:
+        case TY_INT32:
+        case TY_UINT8:
+        case TY_UINT16:
+        case TY_UINT32:
+        case TY_UINT64:
+        case TY_FLOAT32:
         case TY_CSTR:
         case TY_PTR_VOID:
         case TY_FN:
@@ -268,6 +285,14 @@ static inline Type type_simple(TypeKind kind, CopyKind copy_kind) {
 #define TYPE_BOOL     (type_simple(TY_BOOL, CK_COPY))
 #define TYPE_INT      (type_simple(TY_INT, CK_COPY))
 #define TYPE_FLOAT    (type_simple(TY_FLOAT, CK_COPY))
+#define TYPE_INT8     (type_simple(TY_INT8, CK_COPY))
+#define TYPE_INT16    (type_simple(TY_INT16, CK_COPY))
+#define TYPE_INT32    (type_simple(TY_INT32, CK_COPY))
+#define TYPE_UINT8    (type_simple(TY_UINT8, CK_COPY))
+#define TYPE_UINT16   (type_simple(TY_UINT16, CK_COPY))
+#define TYPE_UINT32   (type_simple(TY_UINT32, CK_COPY))
+#define TYPE_UINT64   (type_simple(TY_UINT64, CK_COPY))
+#define TYPE_FLOAT32  (type_simple(TY_FLOAT32, CK_COPY))
 #define TYPE_CSTR     (type_simple(TY_CSTR, CK_COPY))
 #define TYPE_PTR_VOID (type_simple(TY_PTR_VOID, CK_COPY))
 #define TYPE_NEVER    (type_simple(TY_NEVER, CK_MOVE))
