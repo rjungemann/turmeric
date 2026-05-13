@@ -1,0 +1,103 @@
+;; Signal Processing with Arrows - Tutorial Step 1: Basics
+;; 
+;; This example demonstrates the basic Arrow typeclass and how to use it
+;; for signal processing.
+
+(import stdlib/arrow.tur)
+
+;; =============================================================================
+;; Step 1: Understanding Arrows
+;; =============================================================================
+
+;; An Arrow is a typeclass that generalizes the notion of computation.
+;; The canonical example is the function arrow, where:
+;;   - arr f: lifts a pure function f to an arrow
+;;   - f >>> g: composes two arrows sequentially
+;;   - first f: applies f to the first component of a product
+;;   - second f: applies f to the second component of a product
+
+;; Example: Function arrow
+(defn example-function-arrow []
+  : ()
+  (let [;; Create arrows from functions
+        add1 (arr (fn [x] (+ x 1)))
+        double (arr (fn [x] (* x 2)))
+        
+        ;; Compose arrows: first add 1, then double
+        add1-then-double (>>> add1 double)]
+    
+    ;; Test
+    (println "add1 5 = " (add1 5))               ;; Should print: add1 5 = 6
+    (println "double 5 = " (double 5))            ;; Should print: double 5 = 10
+    (println "(add1 >>> double) 5 = " (add1-then-double 5))  ;; Should print: (add1 >>> double) 5 = 12
+    
+    (println "\nFunction arrow example complete!")))
+
+;; =============================================================================
+;; Step 2: Arrow Laws
+;; =============================================================================
+
+;; Arrow instances must satisfy certain laws:
+;; 1. Identity: arr id >>> f = f
+;; 2. Composition: arr (f . g) = arr f >>> arr g
+;; 3. Associativity: (f >>> g) >>> h = f >>> (g >>> h)
+
+(defn example-arrow-laws []
+  : ()
+  (let [;; Create some arrows
+        add1 (arr (fn [x] (+ x 1)))
+        double (arr (fn [x] (* x 2)))
+        subtract3 (arr (fn [x] (- x 3)))
+        
+        ;; Test identity: arr id >>> f = f
+        id-arr (arr (fn [x] x))
+        id-then-add1 (>>> id-arr add1)
+        
+        ;; Test associativity: (f >>> g) >>> h = f >>> (g >>> h)
+        left-assoc (>>> (>>> add1 double) subtract3)
+        right-assoc (>>> add1 (>>> double subtract3))]
+    
+    (println "\nTesting Arrow Laws:")
+    (println "Identity: (arr id >>> add1) 5 = " (id-then-add1 5) " (should be 6)")
+    (println "Associativity: ((add1 >>> double) >>> subtract3) 5 = " (left-assoc 5) " (should be " ((add1 >>> double) subtract3) 5 ")")
+    (println "Associativity: (add1 >>> (double >>> subtract3)) 5 = " (right-assoc 5) " (should be same)")
+    
+    (println "\nArrow laws example complete!")))
+
+;; =============================================================================
+;; Step 3: Product and Sum Types
+;; =============================================================================
+
+;; Arrows can work with product types (tuples) and sum types (Either)
+
+(defn example-products-sums []
+  : ()
+  (let [add1 (arr (fn [x] (+ x 1)))
+        
+        ;; first: apply to first component
+        first-add1 (first add1)
+        
+        ;; second: apply to second component
+        second-add1 (second add1)]
+    
+    (println "\nProduct and Sum Examples:")
+    (println "first add1 [5, 10] = " (first-add1 [5 10]) " (should be [6, 10])")
+    (println "second add1 [5, 10] = " (second-add1 [5 10]) " (should be [5, 11])")
+    
+    (println "\nProducts and sums example complete!")))
+
+;; =============================================================================
+;; Main Entry Point
+;; =============================================================================
+
+(defn main []
+  : int
+  (println "Signal Processing with Arrows - Step 1: Basics")
+  (println "==================================================")
+  
+  (example-function-arrow)
+  (example-arrow-laws)
+  (example-products-sums)
+  
+  (println "\nAll Step 1 examples completed successfully!")
+  0)
