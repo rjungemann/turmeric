@@ -3,20 +3,57 @@
 #include <stddef.h>
 #include <stdio.h>
 
-/* Fire all defers in LIFO order and reset the frame.
- * 
+/* Phase B2: Push a defer thunk with an explicit DeferMode. */
+int tur_frame_push_defer_mode(tur_frame *f, defer_fn_t thunk, void *env, DeferMode mode) {
+    if (f->n >= TUR_FRAME_MAX_DEFERS) {
+        return -1; /* Frame full */
+    }
+    f->defers[f->n] = thunk;
+    f->envs[f->n] = env;
+    f->modes[f->n] = mode;
+    f->n++;
+    return 0;
+}
+
+/* Fire all DEFER_NORMAL defers in LIFO order and reset the frame.
+ *
  * Per effects-plan.md §6.10, this implements the unified defer model where
  * defers are entries in a list-on-frame, not codegen labels. Each defer is
  * a thunk function pointer that gets invoked here with its corresponding
  * env pointer. The frame's n is reset to 0 after firing so the same frame
  * can be reused (though in v0/v1 frames are stack-allocated per scope and
- * not reused). */
+ * not reused).
+ *
+ * Phase B2: only DEFER_NORMAL defers are fired here.  DEFER_SUSPENDED and
+ * DEFER_REPLAY defers are fired by the mode-specific variants below. */
 void tur_frame_fire_lifo(tur_frame *f) {
-    /* Fire defers in reverse order (LIFO) */
+    /* Fire defers in reverse order (LIFO), DEFER_NORMAL only */
     for (int i = f->n - 1; i >= 0; i--) {
-        f->defers[i](f->envs[i]);
+        if (f->modes[i] == DEFER_NORMAL) {
+            f->defers[i](f->envs[i]);
+        }
     }
     f->n = 0;
+}
+
+/* Fire all DEFER_SUSPENDED defers in LIFO order (does NOT reset n).
+ * Called when a cloneable continuation suspends the current scope. */
+void tur_frame_fire_lifo_for_suspend(tur_frame *f) {
+    for (int i = f->n - 1; i >= 0; i--) {
+        if (f->modes[i] == DEFER_SUSPENDED) {
+            f->defers[i](f->envs[i]);
+        }
+    }
+}
+
+/* Fire all DEFER_REPLAY defers in LIFO order (does NOT reset n).
+ * Called on each resume of a cloneable continuation. */
+void tur_frame_fire_lifo_for_replay(tur_frame *f) {
+    for (int i = f->n - 1; i >= 0; i--) {
+        if (f->modes[i] == DEFER_REPLAY) {
+            f->defers[i](f->envs[i]);
+        }
+    }
 }
 
 /* Fire all defers in this frame and all parent frames in the chain.
@@ -28,19 +65,32 @@ void tur_frame_fire_lifo(tur_frame *f) {
  * Per effects-plan.md §6.10, this supports the v3 effects strategy where
  * defers may need to be fired across multiple scope levels during continuation
  * capture or unwinding. */
+/* Fire ALL defers in a single frame (all modes) and reset n.
+ * Used internally by tur_frame_fire_chain for full-unwind semantics. */
+static void tur_frame_fire_lifo_all(tur_frame *f) {
+    for (int i = f->n - 1; i >= 0; i--) {
+        f->defers[i](f->envs[i]);
+    }
+    f->n = 0;
+}
+
+/* Fire all defers (all modes) and walk up the parent chain firing each
+ * frame's defers.  Used for unwinding through multiple scope levels on
+ * return or panic — all defers are fired regardless of mode since the
+ * continuation is being abandoned. */
 void tur_frame_fire_chain(tur_frame *f) {
-    /* Collect all frames in the chain first (to avoid issues if 
+    /* Collect all frames in the chain first (to avoid issues if
      * firing a defer in an outer frame invalidates an inner frame). */
     tur_frame *frames[64];  /* Max nesting depth - should be plenty */
     int n_frames = 0;
-    
+
     for (tur_frame *cur = f; cur != NULL && n_frames < 64; cur = cur->parent) {
         frames[n_frames++] = cur;
     }
-    
+
     /* Fire from innermost to outermost (reverse order of collection) */
     for (int i = n_frames - 1; i >= 0; i--) {
-        tur_frame_fire_lifo(frames[i]);
+        tur_frame_fire_lifo_all(frames[i]);
     }
 }
 
@@ -64,6 +114,7 @@ tur_cont *tur_cont_alloc(tur_frame **frame_chain, int n_frames) {
     cont->parent = NULL;
     cont->n_captured = 0;
     cont->consumed = false;
+    cont->is_cloneable = false;
     
     /* Copy captured frames */
     for (int i = 0; i < n_frames; i++) {
@@ -80,6 +131,14 @@ void tur_cont_resume(tur_cont *cont, int64_t value) {
     if (!cont || cont->consumed) {
         /* Already consumed - continuation escape/double-resume is a hard error */
         fprintf(stderr, "continuation error: resume of already-consumed continuation\n");
+        abort();
+    }
+    /* Phase B2: guard against mis-routing cloneable continuations through the
+     * one-shot resume path.  Callers should use tur_cloneable_cont_resume()
+     * for continuations that were allocated with is_cloneable = true. */
+    if (cont->is_cloneable) {
+        fprintf(stderr, "continuation error: tur_cont_resume called on a cloneable "
+                        "continuation — use tur_cloneable_cont_resume() instead\n");
         abort();
     }
     
@@ -112,6 +171,101 @@ void tur_cont_drop(tur_cont *cont) {
 bool tur_cont_consumed(tur_cont *cont) {
     if (!cont) return true;  /* NULL is considered consumed */
     return cont->consumed;
+}
+
+/* Phase B2: Cloneable continuation implementations */
+
+/* Allocate a new cloneable continuation with captured frame chain. */
+tur_cloneable_cont *tur_cloneable_cont_alloc(tur_frame **frame_chain, int n_frames) {
+    if (n_frames > TUR_CONT_MAX_CAPTURED_FRAMES) {
+        return NULL;  /* Too many frames to capture */
+    }
+
+    tur_cloneable_cont *cont =
+        (tur_cloneable_cont *)malloc(sizeof(tur_cloneable_cont));
+    if (!cont) {
+        return NULL;
+    }
+
+    cont->cont_fn = NULL;
+    cont->env = NULL;
+    cont->parent = NULL;
+    cont->n_captured = 0;
+    cont->consumed = false;
+
+    for (int i = 0; i < n_frames; i++) {
+        if (i >= TUR_CONT_MAX_CAPTURED_FRAMES) break;
+        cont->captured[i] = frame_chain[i];
+        cont->n_captured++;
+    }
+
+    return cont;
+}
+
+/* Clone a cloneable continuation.
+ *
+ * v1 (shallow clone): allocates a new tur_cloneable_cont and copies all
+ * fields.  The env pointer is NOT deep-cloned — both the original and the
+ * clone share the same captured environment.  This is correct for primitive
+ * (int64_t) captures but not for heap-allocated mutable state.  A full deep
+ * clone via typeclass dispatch is deferred to a later phase.
+ *
+ * The clone starts with consumed = false so it can be resumed independently
+ * of the original. */
+tur_cloneable_cont *tur_cloneable_cont_clone(const tur_cloneable_cont *cont) {
+    if (!cont) return NULL;
+
+    tur_cloneable_cont *clone =
+        (tur_cloneable_cont *)malloc(sizeof(tur_cloneable_cont));
+    if (!clone) return NULL;
+
+    /* Shallow copy of all fields */
+    clone->cont_fn = cont->cont_fn;
+    clone->env = cont->env;        /* v1: shared env (not deep-cloned) */
+    clone->parent = cont->parent;  /* v1: shared parent */
+    clone->n_captured = cont->n_captured;
+    clone->consumed = false;       /* fresh clone — ready to resume */
+
+    for (int i = 0; i < cont->n_captured; i++) {
+        clone->captured[i] = cont->captured[i]; /* v1: shared frames */
+    }
+
+    return clone;
+}
+
+/* Resume a cloneable continuation with a value.
+ * Consumes this clone (one-shot per clone); call tur_cloneable_cont_clone()
+ * first if further resumes of the same continuation are needed. */
+void tur_cloneable_cont_resume(tur_cloneable_cont *cont, int64_t value) {
+    if (!cont || cont->consumed) {
+        fprintf(stderr, "continuation error: resume of already-consumed "
+                        "cloneable continuation\n");
+        abort();
+    }
+
+    /* Fire DEFER_REPLAY defers on captured frames before resuming */
+    for (int i = 0; i < cont->n_captured; i++) {
+        tur_frame_fire_lifo_for_replay(cont->captured[i]);
+    }
+
+    cont->consumed = true;
+
+    if (cont->cont_fn) {
+        cont->cont_fn(cont->env, value);
+    }
+}
+
+/* Drop a cloneable continuation without resuming it.
+ * Fires DEFER_SUSPENDED defers on captured frames and frees the struct. */
+void tur_cloneable_cont_drop(tur_cloneable_cont *cont) {
+    if (!cont) return;
+
+    /* Fire DEFER_SUSPENDED defers — the continuation is being abandoned */
+    for (int i = 0; i < cont->n_captured; i++) {
+        tur_frame_fire_lifo_for_suspend(cont->captured[i]);
+    }
+
+    free(cont);
 }
 
 /* Phase R2: Panic */

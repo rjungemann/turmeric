@@ -24,6 +24,19 @@ struct EffectRow;
  * For defers without captures, NULL is passed (though the thunk ignores it). */
 typedef void (*defer_fn_t)(void *env);
 
+/* Phase B2: DeferMode controls when a registered defer thunk fires.
+ *   DEFER_NORMAL    — fires on normal scope exit (original behaviour).
+ *   DEFER_SUSPENDED — fires when the owning continuation is suspended
+ *                     (e.g. when cloneable-shift captures the frame).
+ *   DEFER_REPLAY    — fires on every resume of a cloneable continuation.
+ * The default mode for tur_frame_push_defer() is DEFER_NORMAL.
+ * Use tur_frame_push_defer_mode() to register a defer with another mode. */
+typedef enum {
+    DEFER_NORMAL    = 0,
+    DEFER_SUSPENDED = 1,
+    DEFER_REPLAY    = 2,
+} DeferMode;
+
 /* Maximum number of defers per frame. This is a compile-time limit.
  * In practice, scopes rarely have more than a handful of defers. */
 #define TUR_FRAME_MAX_DEFERS 32
@@ -52,6 +65,11 @@ typedef void (*defer_fn_t)(void *env);
 typedef struct tur_frame {
     defer_fn_t defers[TUR_FRAME_MAX_DEFERS];
     void *envs[TUR_FRAME_MAX_DEFERS];      /* Env pointers for captured defers */
+    /* Phase B2: per-defer firing mode (DEFER_NORMAL / DEFER_SUSPENDED / DEFER_REPLAY).
+     * Initialised to DEFER_NORMAL by tur_frame_push_defer().
+     * tur_frame_fire_lifo() fires only DEFER_NORMAL defers; use the mode-specific
+     * variants for the other modes. */
+    DeferMode modes[TUR_FRAME_MAX_DEFERS];
     int n;
     struct tur_frame *parent;
     /* Future-proofing fields - unused in v0/v1 but reserved for v3 effects */
@@ -68,8 +86,8 @@ static inline void tur_frame_init(tur_frame *f, tur_frame *parent) {
     f->effect_row = NULL;
 }
 
-/* Push a defer thunk onto the frame's defer list.
- * The thunk will be called in LIFO order when the frame is fired.
+/* Push a defer thunk onto the frame's defer list with DEFER_NORMAL mode.
+ * The thunk will be called in LIFO order when the frame is fired at scope exit.
  * env: The environment pointer for captured defers, or NULL if no captures.
  * Returns 0 on success, -1 if the frame is full (shouldn't happen in practice). */
 static inline int tur_frame_push_defer(tur_frame *f, defer_fn_t thunk, void *env) {
@@ -78,16 +96,31 @@ static inline int tur_frame_push_defer(tur_frame *f, defer_fn_t thunk, void *env
     }
     f->defers[f->n] = thunk;
     f->envs[f->n] = env;
+    f->modes[f->n] = DEFER_NORMAL;
     f->n++;
     return 0;
 }
 
-/* Fire all defers in LIFO order and reset the frame.
- * This is called at scope exit (normal, return, or error). */
+/* Push a defer thunk with an explicit DeferMode.
+ * Use this when registering DEFER_SUSPENDED or DEFER_REPLAY defers for
+ * cloneable continuation interaction. */
+int tur_frame_push_defer_mode(tur_frame *f, defer_fn_t thunk, void *env, DeferMode mode);
+
+/* Fire all DEFER_NORMAL defers in LIFO order and reset the frame.
+ * This is called at scope exit (normal, return, or error).
+ * DEFER_SUSPENDED and DEFER_REPLAY defers are NOT fired here. */
 void tur_frame_fire_lifo(tur_frame *f);
 
-/* Fire all defers and walk up the parent chain firing each frame's defers.
- * This is used for unwinding through multiple scope levels (e.g., on return). */
+/* Fire all DEFER_SUSPENDED defers in LIFO order (does NOT reset n).
+ * Called when a cloneable continuation suspends the current scope. */
+void tur_frame_fire_lifo_for_suspend(tur_frame *f);
+
+/* Fire all DEFER_REPLAY defers in LIFO order (does NOT reset n).
+ * Called on each resume of a cloneable continuation. */
+void tur_frame_fire_lifo_for_replay(tur_frame *f);
+
+/* Fire all defers (all modes) and walk up the parent chain firing each frame's defers.
+ * This is used for unwinding through multiple scope levels (e.g., on return or panic). */
 void tur_frame_fire_chain(tur_frame *f);
 
 /* Phase 18: Delimited continuations */
@@ -114,7 +147,11 @@ typedef struct tur_cont {
     struct tur_cont *parent;                      /* Parent continuation */
     tur_frame *captured[TUR_CONT_MAX_CAPTURED_FRAMES];
     int n_captured;
-    bool consumed;  /* One-shot: true after resume */
+    bool consumed;     /* One-shot: true after resume */
+    /* Phase B2: Marks this continuation as a cloneable one.  If true,
+     * tur_cont_resume() will abort with a diagnostic — callers must use
+     * tur_cloneable_cont_resume() instead. */
+    bool is_cloneable;
 } tur_cont;
 
 /* Allocate a new continuation with captured frame chain.
@@ -145,7 +182,11 @@ bool tur_cont_consumed(tur_cont *cont);
 /* A cloneable continuation can be resumed multiple times.
  * Unlike tur_cont (one-shot), tur_cloneable_cont can be cloned before use.
  * Each clone is a fresh continuation that can be resumed independently.
- * All captured environment values must implement the Clone trait. */
+ * All captured environment values must implement the Clone trait.
+ *
+ * v1 note: Clone performs a shallow copy of env (not a deep clone).  Full
+ * deep-clone support requires typeclass dispatch via Clone instances and is
+ * deferred to a later phase. */
 typedef struct tur_cloneable_cont {
     void (*cont_fn)(void *env, int64_t value);  /* Function to call to resume */
     void *env;                                     /* Captured environment (must be cloneable) */

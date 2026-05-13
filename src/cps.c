@@ -126,16 +126,85 @@ bool cps_expr_contains_shift(const Expr *e) {
     }
 }
 
-/* Check if a function definition needs CPS transformation */
+/* Check if a function definition needs (one-shot) CPS transformation */
 bool cps_fn_needs_transform(const FnDef *fd) {
     if (!fd) return false;
     return cps_expr_contains_shift(fd->body);
 }
 
-/* Helper: mark a function as may_capture (for future CPS) */
+/* Phase B2: Check if an expression contains cloneable-shift or cloneable-reset. */
+bool cps_expr_contains_cloneable_shift(const Expr *e) {
+    if (!e) return false;
+
+    switch (e->kind) {
+        case EX_CLONEABLE_RESET:
+        case EX_CLONEABLE_SHIFT:
+            return true;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++) {
+                if (cps_expr_contains_cloneable_shift(e->as.let_.bindings[i].init))
+                    return true;
+            }
+            return cps_expr_contains_cloneable_shift(e->as.let_.body);
+        case EX_IF:
+            if (cps_expr_contains_cloneable_shift(e->as.if_.cond)) return true;
+            if (cps_expr_contains_cloneable_shift(e->as.if_.then_)) return true;
+            return e->as.if_.else_or_null &&
+                   cps_expr_contains_cloneable_shift(e->as.if_.else_or_null);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++) {
+                if (cps_expr_contains_cloneable_shift(e->as.do_.items[i]))
+                    return true;
+            }
+            return false;
+        case EX_WHILE:
+            return cps_expr_contains_cloneable_shift(e->as.while_.cond) ||
+                   cps_expr_contains_cloneable_shift(e->as.while_.body);
+        case EX_FN_DEF:
+            return cps_fn_needs_cloneable_transform(e->as.fn_def_.fn);
+        case EX_FN:
+            return cps_fn_needs_cloneable_transform(e->as.fn_.fn);
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                if (cps_expr_contains_cloneable_shift(e->as.call_.args[i]))
+                    return true;
+            }
+            return false;
+        case EX_CLOSURE:
+            return cps_fn_needs_cloneable_transform(e->as.closure_.closure->fn);
+        case EX_RETURN:
+            return e->as.return_.value &&
+                   cps_expr_contains_cloneable_shift(e->as.return_.value);
+        case EX_PROGRAM:
+            for (uint32_t i = 0; i < e->as.program.n; i++) {
+                if (cps_expr_contains_cloneable_shift(e->as.program.items[i]))
+                    return true;
+            }
+            return false;
+        default:
+            return false;
+    }
+}
+
+/* Phase B2: Check if a function definition needs cloneable CPS transformation. */
+bool cps_fn_needs_cloneable_transform(const FnDef *fd) {
+    if (!fd) return false;
+    return cps_expr_contains_cloneable_shift(fd->body);
+}
+
+/* Helper: mark a function as may_capture (for future one-shot CPS) */
 static void mark_fn_may_capture(FnDef *fd) {
     if (fd) {
         fd->may_capture = true;
+    }
+}
+
+/* Phase B2: mark a function as needing cloneable CPS.
+ * Sets may_capture so the emitter knows the function interacts with
+ * continuations, even before the full cloneable CPS pass is implemented. */
+static void mark_fn_needs_cloneable_cps(FnDef *fd) {
+    if (fd) {
+        fd->may_capture = true;  /* subsumes may_capture for now */
     }
 }
 
@@ -233,6 +302,10 @@ static Expr *cps_mark_expr(Arena *a, Expr *e) {
             if (cps_fn_needs_transform(fd)) {
                 mark_fn_may_capture(fd);
             }
+            /* Phase B2: also mark functions needing cloneable CPS */
+            if (cps_fn_needs_cloneable_transform(fd)) {
+                mark_fn_needs_cloneable_cps(fd);
+            }
             FnDef *new_fd = arena_alloc(a, sizeof(FnDef));
             *new_fd = *fd;
             new_fd->body = cps_mark_expr(a, fd->body);
@@ -240,11 +313,15 @@ static Expr *cps_mark_expr(Arena *a, Expr *e) {
             out->as.fn_def_.fn = new_fd;
             return out;
         }
-        
+
         case EX_FN: {
             FnDef *fn = e->as.fn_.fn;
             if (cps_fn_needs_transform(fn)) {
                 mark_fn_may_capture(fn);
+            }
+            /* Phase B2: also mark functions needing cloneable CPS */
+            if (cps_fn_needs_cloneable_transform(fn)) {
+                mark_fn_needs_cloneable_cps(fn);
             }
             FnDef *new_fn = arena_alloc(a, sizeof(FnDef));
             *new_fn = *fn;
