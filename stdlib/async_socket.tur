@@ -1,0 +1,104 @@
+;; stdlib/async_socket.tur — Async socket I/O (Phase T24)
+;;
+;; Non-blocking TCP socket operations using poll(2) for readiness
+;; detection.  Each socket is created with SOCK_STREAM; callers should
+;; set O_NONBLOCK after calling async-socket-tcp if desired.
+;;
+;; API:
+;;   (async-socket-tcp)                     -> fd :int
+;;   (async-bind    fd port)                -> rc :int
+;;   (async-listen  fd backlog)             -> rc :int
+;;   (async-connect fd port timeout-ms)     -> rc :int
+;;   (async-accept  fd timeout-ms)          -> client-fd :int
+;;   (async-send    fd buf len timeout-ms)  -> n  :int
+;;   (async-recv    fd buf len timeout-ms)  -> n  :int
+;;   (async-socket-close fd)               -> nil
+
+(defn async-socket-tcp [] :int
+  ```c
+  extern int socket(int domain, int type, int protocol);
+  return (int64_t)socket(2, 1, 0);   /* AF_INET, SOCK_STREAM, 0 */
+  ```)
+
+(defn async-bind [fd :int port :int] :int
+  ```c
+  extern int bind(int fd, const void *addr, unsigned int addrlen);
+  typedef struct { unsigned short fam; unsigned short port; unsigned int addr; char z[8]; } _SIn;
+  _SIn a;
+  memset(&a, 0, sizeof(a));
+  a.fam  = 2; /* AF_INET */
+  /* htons(port) on little-endian */
+  unsigned short p = (unsigned short)(uint16_t)port;
+  a.port = (unsigned short)((p >> 8) | (p << 8));
+  return (int64_t)bind((int)fd, &a, sizeof(a));
+  ```)
+
+(defn async-listen [fd :int backlog :int] :int
+  ```c
+  extern int listen(int fd, int backlog);
+  return (int64_t)listen((int)fd, (int)backlog);
+  ```)
+
+(defn async-connect [fd :int port :int timeout-ms :int] :int
+  ```c
+  extern int connect(int fd, const void *addr, unsigned int addrlen);
+  extern int poll(void *fds, unsigned int nfds, int timeout_ms);
+  extern int getsockopt(int fd, int level, int optname, void *optval, unsigned int *optlen);
+  #define POLLOUT 0x0004
+  typedef struct { unsigned short fam; unsigned short port; unsigned int addr; char z[8]; } _SIn2;
+  typedef struct { int fd; short events; short revents; } _PFD;
+  _SIn2 a;
+  memset(&a, 0, sizeof(a));
+  a.fam  = 2;
+  unsigned short p = (unsigned short)(uint16_t)port;
+  a.port = (unsigned short)((p >> 8) | (p << 8));
+  /* 127.0.0.1 in network byte order (little-endian host) */
+  a.addr = 0x0100007fU;
+  int _rc = connect((int)fd, &a, sizeof(a));
+  if (_rc == 0) return 0;
+  /* Wait for async connect */
+  _PFD pfd = { (int)fd, POLLOUT, 0 };
+  if (poll(&pfd, 1, (int)timeout_ms) <= 0) return -1;
+  int _err = 0; unsigned int _elen = sizeof(_err);
+  getsockopt((int)fd, 0xffff, 0x1007, &_err, &_elen);
+  return (_err == 0) ? 0 : -1;
+  ```)
+
+(defn async-accept [fd :int timeout-ms :int] :int
+  ```c
+  extern int accept(int fd, void *addr, unsigned int *addrlen);
+  extern int poll(void *fds, unsigned int nfds, int timeout_ms);
+  #define POLLIN 0x0001
+  typedef struct { int fd; short events; short revents; } _PFD2;
+  _PFD2 pfd = { (int)fd, POLLIN, 0 };
+  if (poll(&pfd, 1, (int)timeout_ms) <= 0) return -1;
+  return (int64_t)accept((int)fd, NULL, NULL);
+  ```)
+
+(defn async-send [fd :int buf :ptr<void> len :int timeout-ms :int] :int
+  ```c
+  extern ssize_t send(int fd, const void *buf, size_t len, int flags);
+  extern int poll(void *fds, unsigned int nfds, int timeout_ms);
+  #define POLLOUT 0x0004
+  typedef struct { int fd; short events; short revents; } _PFD3;
+  _PFD3 pfd = { (int)fd, POLLOUT, 0 };
+  if (poll(&pfd, 1, (int)timeout_ms) <= 0) return -1;
+  return (int64_t)send((int)fd, (const void *)(intptr_t)buf, (size_t)len, 0);
+  ```)
+
+(defn async-recv [fd :int buf :ptr<void> len :int timeout-ms :int] :int
+  ```c
+  extern ssize_t recv(int fd, void *buf, size_t len, int flags);
+  extern int poll(void *fds, unsigned int nfds, int timeout_ms);
+  #define POLLIN 0x0001
+  typedef struct { int fd; short events; short revents; } _PFD4;
+  _PFD4 pfd = { (int)fd, POLLIN, 0 };
+  if (poll(&pfd, 1, (int)timeout_ms) <= 0) return -1;
+  return (int64_t)recv((int)fd, (void *)(intptr_t)buf, (size_t)len, 0);
+  ```)
+
+(defn async-socket-close [fd :int] :nil
+  ```c
+  extern int close(int fd);
+  close((int)fd);
+  ```)

@@ -1,0 +1,51 @@
+;; Phase T24: async-file — async read/write a temp file
+;;
+;; Creates a temporary file, writes a known string to it, reads it back,
+;; and prints the contents.  Uses POSIX file APIs via extern declarations
+;; to avoid #include conflicts inside inline-C function bodies.
+
+(defn async-file-test [] :int
+  ```c
+  extern int mkstemp(char *tmpl);
+  extern ssize_t write(int fd, const void *buf, size_t n);
+  extern ssize_t read(int fd, void *buf, size_t n);
+  extern int close(int fd);
+  extern int unlink(const char *path);
+  extern off_t lseek(int fd, off_t offset, int whence);
+  #define SEEK_SET 0
+
+  char path[] = "/tmp/tur-async-file-XXXXXX";
+  int fd = mkstemp(path);
+  if (fd < 0) { fprintf(stderr, "async-file: mkstemp failed\n"); return 1; }
+
+  const char *data = "hello async\n";
+  size_t dlen = 12;  /* strlen("hello async\n") */
+  ssize_t written = write(fd, data, dlen);
+  if (written < 0 || (size_t)written != dlen) {
+      fprintf(stderr, "async-file: write failed\n");
+      close(fd); unlink(path); return 1;
+  }
+
+  if (lseek(fd, 0, SEEK_SET) < 0) {
+      fprintf(stderr, "async-file: lseek failed\n");
+      close(fd); unlink(path); return 1;
+  }
+
+  char buf[64];
+  memset(buf, 0, sizeof(buf));
+  ssize_t n = read(fd, buf, sizeof(buf) - 1);
+  if (n <= 0) {
+      fprintf(stderr, "async-file: read failed\n");
+      close(fd); unlink(path); return 1;
+  }
+  buf[n] = '\0';
+  if (n > 0 && buf[n - 1] == '\n') buf[n - 1] = '\0';
+  printf("read: %s\n", buf);
+
+  close(fd);
+  unlink(path);
+  return 0;
+  ```)
+
+(defn main [] :int
+  (async-file-test))

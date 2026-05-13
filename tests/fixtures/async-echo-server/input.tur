@@ -1,0 +1,128 @@
+;; Phase T24: async-echo-server — async TCP echo server
+;;
+;; Starts a non-blocking TCP server on a loopback port, connects a client,
+;; sends a message, and verifies the echoed response.
+;;
+;; Module-level extern declarations and helper defns are used to avoid
+;; #include directives or nested function definitions inside inline-C bodies.
+
+;; ---- Byte-order helpers (manual, avoids including sys/socket.h) ------
+
+(defn echo-htons [x :int] :int
+  ```c
+  unsigned short v = (unsigned short)(uint16_t)x;
+  return (int64_t)(unsigned short)((v >> 8) | (v << 8));
+  ```)
+
+(defn echo-htonl [x :int] :int
+  ```c
+  unsigned int v = (unsigned int)(uint32_t)x;
+  return (int64_t)(((v >> 24) & 0xffu) | ((v >> 8) & 0xff00u) |
+                   ((v << 8) & 0xff0000u) | ((v << 24) & 0xff000000u));
+  ```)
+
+;; ---- Server accept thread: accepts one client, echoes one message ----
+
+(defn echo-server-thread [arg :ptr<void>] :ptr<void>
+  ```c
+  extern int accept(int fd, void *addr, unsigned int *addrlen);
+  extern ssize_t recv(int fd, void *buf, size_t len, int flags);
+  extern ssize_t send(int fd, const void *buf, size_t len, int flags);
+  extern int close(int fd);
+  extern int poll(void *fds, unsigned int nfds, int timeout_ms);
+  #define POLLIN 0x0001
+  typedef struct { int fd; short events; short revents; } PFD;
+
+  int srv_fd = (int)(intptr_t)arg;
+  PFD pfd = { srv_fd, POLLIN, 0 };
+  if (poll(&pfd, 1, 2000) <= 0) return NULL;
+  int cfd = accept(srv_fd, NULL, NULL);
+  if (cfd < 0) return NULL;
+  char buf[256];
+  ssize_t n = recv(cfd, buf, sizeof(buf) - 1, 0);
+  if (n > 0) { buf[n] = '\0'; send(cfd, buf, (size_t)n, 0); }
+  close(cfd);
+  return NULL;
+  ```)
+
+;; ---- Main test logic -------------------------------------------------
+
+(defn echo-server-test [] :int
+  ```c
+  extern int socket(int domain, int type, int protocol);
+  extern int bind(int fd, const void *addr, unsigned int addrlen);
+  extern int listen(int fd, int backlog);
+  extern int connect(int fd, const void *addr, unsigned int addrlen);
+  extern ssize_t send(int fd, const void *buf, size_t len, int flags);
+  extern ssize_t recv(int fd, void *buf, size_t len, int flags);
+  extern int close(int fd);
+  extern int setsockopt(int fd, int level, int optname, const void *optval, unsigned int optlen);
+  extern int getsockname(int fd, void *addr, unsigned int *addrlen);
+  extern int poll(void *fds, unsigned int nfds, int timeout_ms);
+
+  #define AF_INET      2
+  #define SOCK_STREAM  1
+  #define SOL_SOCKET   0xffff
+  #define SO_REUSEADDR 4
+  #define POLLIN       0x0001
+  #define POLLOUT      0x0004
+
+  typedef struct { unsigned short family; unsigned short port; unsigned int addr; char zero[8]; } SockIn;
+  typedef struct { int fd; short events; short revents; } PFD2;
+
+  int srv = socket(AF_INET, SOCK_STREAM, 0);
+  if (srv < 0) { fprintf(stderr, "echo: socket\n"); return 1; }
+  int opt = 1;
+  setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+  SockIn addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.family = AF_INET;
+  if (bind(srv, &addr, sizeof(addr)) < 0) {
+      fprintf(stderr, "echo: bind\n"); close(srv); return 1;
+  }
+  if (listen(srv, 5) < 0) {
+      fprintf(stderr, "echo: listen\n"); close(srv); return 1;
+  }
+
+  SockIn bound;
+  unsigned int blen = sizeof(bound);
+  getsockname(srv, &bound, &blen);
+  /* port is already in network byte order from getsockname; convert to host */
+  int port = (int)echo_htons((int64_t)(unsigned short)bound.port);
+
+  pthread_t tid;
+  pthread_create(&tid, NULL, echo_server_thread, (void *)(intptr_t)srv);
+
+  int cli = socket(AF_INET, SOCK_STREAM, 0);
+  if (cli < 0) { fprintf(stderr, "echo: cli socket\n"); close(srv); return 1; }
+
+  SockIn caddr;
+  memset(&caddr, 0, sizeof(caddr));
+  caddr.family = AF_INET;
+  caddr.addr   = (unsigned int)echo_htonl(0x7f000001);  /* 127.0.0.1 */
+  caddr.port   = (unsigned short)echo_htons(port);
+  connect(cli, &caddr, sizeof(caddr));
+
+  PFD2 cpfd = { cli, POLLOUT, 0 };
+  poll(&cpfd, 1, 2000);
+
+  send(cli, "hello", 5, 0);
+
+  char rbuf[64];
+  memset(rbuf, 0, sizeof(rbuf));
+  PFD2 rpfd = { cli, POLLIN, 0 };
+  if (poll(&rpfd, 1, 2000) > 0) {
+      ssize_t nr = recv(cli, rbuf, sizeof(rbuf) - 1, 0);
+      if (nr > 0) rbuf[nr] = '\0';
+  }
+  printf("echo: %s\n", rbuf);
+
+  close(cli);
+  pthread_join(tid, NULL);
+  close(srv);
+  return 0;
+  ```)
+
+(defn main [] :int
+  (echo-server-test))

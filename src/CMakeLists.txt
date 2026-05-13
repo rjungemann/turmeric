@@ -35,6 +35,7 @@ set(TUR_SOURCES
     runtime.c
     scheduler.c
     scheduler_common.c
+    timer_wheel.c
     symbols.c
     typeclass.c
     types.c
