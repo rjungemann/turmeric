@@ -9,6 +9,7 @@ TuriEnv *turi_env_new(void) {
     arena_init(&env->sym_arena, 0);
     symtab_init(&env->st, &env->sym_arena);
     buf_init(&env->src_acc);
+    env->max_eval_depth = 4096;
     return env;
 }
 

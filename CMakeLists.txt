@@ -71,10 +71,23 @@ add_test(
   COMMAND "${CMAKE_BINARY_DIR}/tur_eval_basic"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Phase S3: algebraic effects via eval core
+add_test(
+  NAME tur_eval_effects
+  COMMAND bash tests/turi/eval-effects.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# Phase S4: structs, exceptions, defer
+add_test(
+  NAME tur_eval_s4
+  COMMAND bash tests/turi/eval-s4.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 
 # Make sure tur is built before any test is run
 set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
                      tur_repl_tests tur_repl_smoke tur_eval_import tur_eval_basic
+                     tur_eval_effects tur_eval_s4
   PROPERTIES DEPENDS tur
 )
 

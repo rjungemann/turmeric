@@ -1,0 +1,43 @@
+;; Phase S3: basic effect round-trip through the eval core.
+;; Expected stdout:
+;;   42
+;;   104
+;;   99
+;;   52
+
+;; --- Test 1: basic perform / resume -----------------------------------
+(defeffect Ask [] :int)
+
+(defn use-ask [] :int
+  (+ 1 (perform (Ask))))
+
+(println (handle (use-ask)
+  (Ask [] k) (resume k 41)))
+
+;; --- Test 2: multiple performs (deep handler) -------------------------
+(defeffect Add [x :int] :int)
+(defeffect Mul [x :int] :int)
+
+(defn compute [] :int
+  (* (perform (Add 3)) (perform (Mul 4))))
+
+(println (handle (compute)
+  (Add [x] k) (resume k (+ x 10))
+  (Mul [x] k) (resume k (* x 2))))
+
+;; --- Test 3: handler that does not resume (abort) --------------------
+(defeffect Abort [] :int)
+
+(println (handle (do (perform (Abort)) 0)
+  (Abort [] k) 99))
+
+;; --- Test 4: nested handles ------------------------------------------
+(defeffect Val [] :int)
+
+(defn get-val [] :int (perform (Val)))
+
+(println (handle
+  (+ (get-val)
+     (handle (get-val)
+       (Val [] k) (resume k 42)))
+  (Val [] k) (resume k 10)))

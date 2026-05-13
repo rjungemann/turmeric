@@ -18,6 +18,10 @@
 #  ifndef _DARWIN_C_SOURCE
 #    define _DARWIN_C_SOURCE
 #  endif
+/* ucontext on macOS requires _XOPEN_SOURCE */
+#  ifndef _XOPEN_SOURCE
+#    define _XOPEN_SOURCE 700
+#  endif
 #else
 #  ifndef _POSIX_C_SOURCE
 #    define _POSIX_C_SOURCE 200809L
@@ -30,6 +34,22 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+
+/* ucontext is POSIX and deprecated on macOS but still functional.
+ * Suppress the deprecation warning so -Werror doesn't fail the build. */
+#if defined(__APPLE__)
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+#include <ucontext.h>
+#if defined(__APPLE__)
+#  pragma clang diagnostic pop
+#endif
+
+#ifndef MAP_ANONYMOUS
+#  define MAP_ANONYMOUS MAP_ANON
+#endif
 
 /* Pull in all the compiler internal headers from the parent src/ directory.
  * CMake adds src/ to the include path so these resolve correctly. */
@@ -118,6 +138,296 @@ static TuriValue eval_lookup(TuriEnv *env, EvalFrame *frame, const char *name) {
         }
     }
     return turi_env_get(env, name);
+}
+
+/* Early forward declaration (needed by fire_defers_to_mark below) */
+static TuriValue eval_expr(TuriEnv *env, EvalFrame *frame, const Expr *e);
+
+/* -------------------------------------------------------------------------
+ * Phase S4: Struct, throw, and defer runtime types
+ * ---------------------------------------------------------------------- */
+
+/* Full definition of TuriStruct (forward-declared in value.h).
+ * Fields are stored in order matching StructDef->fields[]. */
+struct TuriStruct {
+    const char  *name;     /* struct name (for debugging) */
+    uint32_t     n_fields;
+    TuriValue   *fields;   /* heap-allocated array */
+};
+
+static TuriValue make_struct_val(const char *name, uint32_t n, TuriValue *fields) {
+    TuriStruct *s = (TuriStruct *)malloc(sizeof(TuriStruct));
+    s->name     = name;
+    s->n_fields = n;
+    s->fields   = (TuriValue *)malloc(n * sizeof(TuriValue));
+    for (uint32_t i = 0; i < n; i++) s->fields[i] = fields[i];
+    return turi_struct_val(s);
+}
+
+/* Full definition of TuriThrow (forward-declared in value.h). */
+struct TuriThrow {
+    TuriValue   value;      /* the thrown Turmeric value */
+    TypeKind    type_kind;  /* type hint for typed catch clauses */
+};
+
+static TuriValue make_throw_val(TuriValue v, TypeKind tk) {
+    TuriThrow *t = (TuriThrow *)malloc(sizeof(TuriThrow));
+    t->value     = v;
+    t->type_kind = tk;
+    return turi_throw_val(t);
+}
+
+/* Defer item: body expression + snapshot frame of captured values. */
+typedef struct DeferItem {
+    Expr             *body;
+    EvalFrame        *snapshot;   /* captured variable values at defer-call time */
+    struct DeferItem *next;
+} DeferItem;
+
+/* Execute all defers pushed above mark (LIFO) and free them.
+ * Errors inside defers are silently discarded (like in most languages). */
+static void fire_defers_to_mark(TuriEnv *env, DeferItem *mark,
+                                  EvalFrame *fallback_frame) {
+    bool saved_throwing  = env->throwing;
+    TuriValue saved_tv   = env->throw_value;
+    bool saved_returning = env->returning;
+    TuriValue saved_rv   = env->return_value;
+
+    while (env->defer_stack != mark) {
+        DeferItem *item = (DeferItem *)env->defer_stack;
+        env->defer_stack = item->next;
+
+        /* Reset signals so defer body runs cleanly. */
+        env->throwing  = false;
+        env->returning = false;
+
+        /* Evaluate with snapshot frame; fall back to fallback for globals. */
+        EvalFrame *dframe = item->snapshot;
+        if (dframe) dframe->parent = fallback_frame;
+        eval_expr(env, dframe, item->body);
+
+        eval_frame_free(item->snapshot);
+        free(item);
+    }
+
+    /* Restore signals (caller decides what to do with them). */
+    env->throwing     = saved_throwing;
+    env->throw_value  = saved_tv;
+    env->returning    = saved_returning;
+    env->return_value = saved_rv;
+}
+
+/* -------------------------------------------------------------------------
+ * Phase S3: Algebraic effects — TuriEffectCont and TuriHandlerFrame
+ *
+ * Design:
+ *  - Each (handle BODY cases...) creates a TuriEffectCont that runs BODY in
+ *    a separate ucontext fiber.  When BODY performs an effect, the fiber
+ *    yields back to the handle frame, which dispatches the matching case.
+ *  - (resume k v) switches back into the body fiber with v as the result of
+ *    perform.  The body may then perform again (handled recursively) or
+ *    finish, at which point its result propagates back through resume.
+ *  - Deep handler semantics: the handler remains in scope during body
+ *    execution, but is not in scope while the handler case body runs.
+ *  - handler_stack in TuriEnv is a linked list of TuriHandlerFrame; cast
+ *    from void* to TuriHandlerFrame* inside eval.c.
+ * ---------------------------------------------------------------------- */
+
+#define EFFECT_CONT_STACK_SIZE (256 * 1024)  /* 256 KB per body fiber */
+
+/* Full definition of TuriEffectCont (forward-declared in value.h). */
+struct TuriEffectCont {
+    ucontext_t         body_ctx;      /* fiber context for body execution */
+    ucontext_t         handler_ctx;   /* most-recent handler context */
+    char              *body_stack;    /* mmap'd body fiber stack */
+
+    /* body → handler communication (valid while body is suspended) */
+    const char        *perf_name;     /* NULL when body finishes normally */
+    TuriValue         *perf_args;     /* points into body's stack frame */
+    uint8_t            n_perf_args;
+
+    /* handler → body communication */
+    TuriValue          resume_val;
+
+    /* result when body finishes */
+    TuriValue          body_result;
+    bool               done;
+
+    /* context for body evaluation (set before first swapcontext) */
+    TuriEnv           *env;
+    EvalFrame         *body_frame;
+    const Expr        *body_expr;
+
+    /* handle expression and frame for re-dispatching on multiple performs */
+    const HandleExpr  *handle_expr;
+    EvalFrame         *handle_frame;
+};
+
+/* Internal handler frame stored on TuriEnv.handler_stack. */
+typedef struct TuriHandlerFrame {
+    HandleCase              *cases;
+    uint8_t                  n_cases;
+    TuriEffectCont          *cont;
+    struct TuriHandlerFrame *prev;
+} TuriHandlerFrame;
+
+/* Thread-local used to pass TuriEffectCont* into the body thunk.
+ * makecontext only supports int arguments, so we use this side channel. */
+static _Thread_local TuriEffectCont *g_pending_cont;
+
+/* Forward-declare eval_handle_inner (eval_expr is declared above). */
+static TuriValue eval_handle_inner(TuriEnv *env, EvalFrame *frame,
+                                   const HandleExpr *h,
+                                   TuriEffectCont *cont);
+
+/* Body thunk: runs inside the body fiber, switches back on perform or done. */
+#if defined(__APPLE__)
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+static void eval_body_thunk(void) {
+    TuriEffectCont *cont = g_pending_cont;
+
+    /* Evaluate the body expression. */
+    cont->body_result = eval_expr(cont->env, cont->body_frame, cont->body_expr);
+    cont->done        = true;
+
+    /* Return to the most-recent handler context. */
+    swapcontext(&cont->body_ctx, &cont->handler_ctx);
+
+    /* Should never be reached. */
+    abort();
+}
+#if defined(__APPLE__)
+#  pragma clang diagnostic pop
+#endif
+
+/* Resume body fiber with value val; return body's next result (or final). */
+static TuriValue eval_resume_cont(TuriEnv *env, EvalFrame *frame,
+                                   TuriEffectCont *cont, TuriValue val) {
+    cont->resume_val = val;
+
+    /* Re-install handler frame around the body re-entry (deep semantics). */
+    TuriHandlerFrame hf;
+    hf.cases          = cont->handle_expr->cases;
+    hf.n_cases        = cont->handle_expr->n_cases;
+    hf.cont           = cont;
+    hf.prev           = (TuriHandlerFrame *)env->handler_stack;
+    env->handler_stack = &hf;
+
+#if defined(__APPLE__)
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+    swapcontext(&cont->handler_ctx, &cont->body_ctx);
+#if defined(__APPLE__)
+#  pragma clang diagnostic pop
+#endif
+
+    /* Pop handler frame now that body has yielded control back. */
+    env->handler_stack = hf.prev;
+
+    if (cont->done) {
+        return cont->body_result;
+    }
+
+    /* Body performed again; dispatch handler body recursively. */
+    return eval_handle_inner(env, frame, cont->handle_expr, cont);
+}
+
+/* Dispatch the handler case for the current perform signal on cont. */
+static TuriValue eval_handle_inner(TuriEnv *env, EvalFrame *frame,
+                                    const HandleExpr *h,
+                                    TuriEffectCont *cont) {
+    /* Find matching case. */
+    HandleCase *matched = NULL;
+    for (uint8_t i = 0; i < h->n_cases; i++) {
+        if (strcmp(h->cases[i].effect_name->name, cont->perf_name) == 0) {
+            matched = &h->cases[i];
+            break;
+        }
+    }
+    if (!matched) {
+        return turi_errorf("eval: unhandled effect: %s", cont->perf_name);
+    }
+
+    /* Bind params and k in a new frame. */
+    EvalFrame *hframe = eval_frame_new(frame);
+    for (uint8_t i = 0; i < matched->n_params && i < cont->n_perf_args; i++) {
+        const char *pname = matched->param_bindings[i]->name->name;
+        frame_bind(hframe, pname, cont->perf_args[i]);
+    }
+    frame_bind(hframe, matched->k_binding->name->name, turi_effect_cont(cont));
+
+    TuriValue result = eval_expr(env, hframe, matched->body);
+    eval_frame_free(hframe);
+    return result;
+}
+
+/* Evaluate a (handle BODY cases...) expression. */
+static TuriValue eval_handle(TuriEnv *env, EvalFrame *frame,
+                              const HandleExpr *h) {
+    /* Allocate and initialise the continuation. */
+    TuriEffectCont *cont = (TuriEffectCont *)calloc(1, sizeof(TuriEffectCont));
+    if (!cont) return turi_error("eval: out of memory allocating continuation");
+
+    cont->env          = env;
+    cont->body_frame   = frame;
+    cont->body_expr    = h->body;
+    cont->handle_expr  = h;
+    cont->handle_frame = frame;
+    cont->done         = false;
+
+    /* Allocate body fiber stack. */
+    cont->body_stack = (char *)mmap(NULL, EFFECT_CONT_STACK_SIZE,
+                                    PROT_READ | PROT_WRITE,
+                                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (cont->body_stack == MAP_FAILED) {
+        free(cont);
+        return turi_error("eval: mmap failed for continuation stack");
+    }
+
+#if defined(__APPLE__)
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+    /* Set up the body fiber context. */
+    getcontext(&cont->body_ctx);
+    cont->body_ctx.uc_stack.ss_sp   = cont->body_stack;
+    cont->body_ctx.uc_stack.ss_size = EFFECT_CONT_STACK_SIZE;
+    cont->body_ctx.uc_link          = NULL;
+    g_pending_cont = cont;
+    makecontext(&cont->body_ctx, eval_body_thunk, 0);
+
+    /* Push handler frame so body can find our cases during perform. */
+    TuriHandlerFrame hf;
+    hf.cases           = h->cases;
+    hf.n_cases         = h->n_cases;
+    hf.cont            = cont;
+    hf.prev            = (TuriHandlerFrame *)env->handler_stack;
+    env->handler_stack = &hf;
+
+    /* Switch to body; saves current context into handler_ctx. */
+    swapcontext(&cont->handler_ctx, &cont->body_ctx);
+#if defined(__APPLE__)
+#  pragma clang diagnostic pop
+#endif
+
+    /* Body has yielded control; pop handler frame. */
+    env->handler_stack = hf.prev;
+
+    TuriValue result;
+    if (cont->done) {
+        /* Body finished without performing — return body result directly. */
+        result = cont->body_result;
+    } else {
+        /* Body performed an effect; dispatch handler case. */
+        result = eval_handle_inner(env, frame, h, cont);
+    }
+
+    munmap(cont->body_stack, EFFECT_CONT_STACK_SIZE);
+    free(cont);
+    return result;
 }
 
 /* -------------------------------------------------------------------------
@@ -294,12 +604,6 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
 }
 
 /* -------------------------------------------------------------------------
- * Forward declarations
- * ---------------------------------------------------------------------- */
-
-static TuriValue eval_expr(TuriEnv *env, EvalFrame *frame, const Expr *e);
-
-/* -------------------------------------------------------------------------
  * Function application
  * ---------------------------------------------------------------------- */
 
@@ -318,16 +622,25 @@ static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
         frame_bind(call_frame, fn->params[i]->name->name, args[i]);
     }
 
-    /* Evaluate the body; handle early-return signal */
-    bool was_returning   = env->returning;
-    env->returning       = false;
+    /* Mark the defer stack; defers registered during this call fire on exit. */
+    DeferItem *defer_mark = (DeferItem *)env->defer_stack;
+
+    /* Evaluate the body; handle early-return and throw signals. */
+    bool was_returning = env->returning;
+    env->returning     = false;
 
     TuriValue result = eval_expr(env, call_frame, fn->body);
+
+    /* Fire defers (LIFO) registered in this call scope. */
+    fire_defers_to_mark(env, defer_mark, NULL);
 
     TuriValue ret;
     if (env->returning) {
         ret = env->return_value;
         env->returning = was_returning; /* restore caller's return state */
+    } else if (env->throwing) {
+        /* Throw propagates through function calls; leave env->throwing set. */
+        ret = env->throw_value;
     } else {
         ret = result;
     }
@@ -342,11 +655,22 @@ static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
 
 #define MAX_EVAL_ARGS 64
 
+static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e);
+
 static TuriValue eval_expr(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     if (!e) return turi_nil();
-
-    /* Propagate signals without evaluating further */
     if (env->returning) return env->return_value;
+    if (env->throwing)  return env->throw_value;
+    if (env->eval_depth >= env->max_eval_depth)
+        return turi_error("eval: recursion limit exceeded");
+    env->eval_depth++;
+    TuriValue r = eval_expr_impl(env, frame, e);
+    env->eval_depth--;
+    return r;
+}
+
+static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
+    if (!e) return turi_nil();
 
     switch (e->kind) {
 
@@ -381,6 +705,7 @@ static TuriValue eval_expr(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         for (uint32_t i = 0; i < e->as.let_.n; i++) {
             TuriValue v = eval_expr(env, new_frame, e->as.let_.bindings[i].init);
             if (turi_is_error(v)) { eval_frame_free(new_frame); return v; }
+            if (env->throwing)   { eval_frame_free(new_frame); return env->throw_value; }
             if (env->returning)  { eval_frame_free(new_frame); return env->return_value; }
             frame_bind(new_frame, e->as.let_.bindings[i].binding->name->name, v);
         }
@@ -392,7 +717,7 @@ static TuriValue eval_expr(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     /* --- If -------------------------------------------------------------- */
     case EX_IF: {
         TuriValue cond = eval_expr(env, frame, e->as.if_.cond);
-        if (turi_is_error(cond) || env->returning) return cond;
+        if (turi_is_error(cond) || env->returning || env->throwing) return cond;
         if (turi_is_truthy(cond)) {
             return eval_expr(env, frame, e->as.if_.then_);
         } else if (e->as.if_.else_or_null) {
@@ -409,7 +734,7 @@ static TuriValue eval_expr(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriValue last = turi_nil();
         for (uint32_t i = 0; i < n; i++) {
             last = eval_expr(env, frame, items[i]);
-            if (turi_is_error(last) || env->returning) return last;
+            if (turi_is_error(last) || env->returning || env->throwing) return last;
         }
         return last;
     }
@@ -418,7 +743,7 @@ static TuriValue eval_expr(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_WHILE: {
         while (1) {
             TuriValue cond = eval_expr(env, frame, e->as.while_.cond);
-            if (turi_is_error(cond) || env->returning) return cond;
+            if (turi_is_error(cond) || env->returning || env->throwing) return cond;
             if (!turi_is_truthy(cond)) break;
             TuriValue body = eval_expr(env, frame, e->as.while_.body);
             if (turi_is_error(body) || env->returning) return body;
@@ -429,7 +754,7 @@ static TuriValue eval_expr(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     /* --- Set ------------------------------------------------------------- */
     case EX_SET: {
         TuriValue v = eval_expr(env, frame, e->as.set_.value);
-        if (turi_is_error(v) || env->returning) return v;
+        if (turi_is_error(v) || env->returning || env->throwing) return v;
         const char *name = e->as.set_.target->name->name;
         if (!eval_frame_update(frame, name, v)) {
             turi_env_set(env, name, v);
@@ -440,7 +765,7 @@ static TuriValue eval_expr(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     /* --- Def (top-level binding) ---------------------------------------- */
     case EX_DEF: {
         TuriValue v = eval_expr(env, frame, e->as.def_.init);
-        if (turi_is_error(v) || env->returning) return v;
+        if (turi_is_error(v) || env->returning || env->throwing) return v;
         turi_env_set(env, e->as.def_.binding->name->name, v);
         return v;
     }
@@ -454,7 +779,7 @@ static TuriValue eval_expr(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
         for (uint32_t i = 0; i < n; i++) {
             args[i] = eval_expr(env, frame, e->as.builtin.args[i]);
-            if (turi_is_error(args[i]) || env->returning) return args[i];
+            if (turi_is_error(args[i]) || env->returning || env->throwing) return args[i];
         }
         return eval_builtin(env, e->as.builtin.spec, args, n);
     }
@@ -488,7 +813,7 @@ static TuriValue eval_expr(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         } else {
             return turi_error("eval: call with no function");
         }
-        if (turi_is_error(fn_val) || env->returning) return fn_val;
+        if (turi_is_error(fn_val) || env->returning || env->throwing) return fn_val;
         if (fn_val.tag != TURI_CLOSURE)
             return turi_errorf("eval: expected function, got tag %d", fn_val.tag);
 
@@ -499,7 +824,7 @@ static TuriValue eval_expr(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
         for (uint32_t i = 0; i < n_args; i++) {
             args[i] = eval_expr(env, frame, e->as.call_.args[i]);
-            if (turi_is_error(args[i]) || env->returning) return args[i];
+            if (turi_is_error(args[i]) || env->returning || env->throwing) return args[i];
         }
         return eval_apply(env, fn_val.as_closure, args, n_args);
     }
@@ -527,12 +852,237 @@ static TuriValue eval_expr(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriValue  last = turi_nil();
         for (uint32_t i = 0; i < mod->n_body; i++) {
             last = eval_expr(env, frame, mod->body[i]);
-            if (turi_is_error(last) || env->returning) return last;
+            if (turi_is_error(last) || env->returning || env->throwing) return last;
         }
         return last;
     }
 
-    /* --- Everything else — silently return nil for Phase S0 -------------- */
+    /* --- Phase S4: Structs ---------------------------------------------- */
+
+    case EX_MAKE_STRUCT: {
+        uint32_t  n = e->as.make_struct_.n_fields;
+        TuriValue fields[MAX_EVAL_ARGS];
+        if (n > MAX_EVAL_ARGS)
+            return turi_errorf("eval: struct has too many fields (%u)", n);
+
+        for (uint32_t i = 0; i < n; i++) {
+            fields[i] = eval_expr(env, frame, e->as.make_struct_.field_values[i]);
+            if (turi_is_error(fields[i]) || env->returning || env->throwing)
+                return fields[i];
+        }
+        const char *sname = e->as.make_struct_.def
+                            ? e->as.make_struct_.def->name : "<struct>";
+        return make_struct_val(sname, n, fields);
+    }
+
+    case EX_GET_FIELD: {
+        TuriValue sv = eval_expr(env, frame, e->as.get_field_.struct_expr);
+        if (turi_is_error(sv) || env->returning || env->throwing) return sv;
+        if (sv.tag != TURI_STRUCT)
+            return turi_errorf("eval: field access on non-struct (tag %d)", sv.tag);
+        uint32_t idx = e->as.get_field_.field_idx;
+        if (idx >= sv.as_struct->n_fields)
+            return turi_errorf("eval: field index %u out of bounds (%u fields)",
+                               idx, sv.as_struct->n_fields);
+        return sv.as_struct->fields[idx];
+    }
+
+    /* --- Phase S4: Exceptions ------------------------------------------- */
+
+    /* (throw expr) — raise an exception. */
+    case EX_THROW: {
+        TuriValue v = eval_expr(env, frame, e->as.throw_.payload);
+        if (turi_is_error(v) || env->returning || env->throwing) return v;
+        TypeKind tk = TY_UNKNOWN;
+        switch (v.tag) {
+            case TURI_INT:   tk = TY_INT;   break;
+            case TURI_BOOL:  tk = TY_BOOL;  break;
+            case TURI_FLOAT: tk = TY_FLOAT; break;
+            case TURI_CSTR:  tk = TY_CSTR;  break;
+            default:         tk = TY_UNKNOWN; break;
+        }
+        env->throwing    = true;
+        env->throw_value = make_throw_val(v, tk);
+        return env->throw_value;
+    }
+
+    /* (try BODY (catch [e] HANDLER) ... (finally FBLOCK)) */
+    case EX_TRY: {
+        TuriValue result = eval_expr(env, frame, e->as.try_.body);
+
+        if (env->throwing) {
+            TuriThrow *t = env->throw_value.as_throw;
+            /* Try each catch clause. */
+            for (uint8_t i = 0; i < e->as.try_.n_clauses; i++) {
+                TryCatchClause *cl = &e->as.try_.clauses[i];
+                /* TY_NIL = no type annotation = catch-all (elaborator convention) */
+                bool match = (cl->catch_type == TY_NIL)
+                          || (t && t->type_kind == cl->catch_type);
+                if (match) {
+                    /* Clear throw signal and bind the exception variable. */
+                    TuriValue exc_val = t ? t->value : turi_nil();
+                    free(t);
+                    env->throwing = false;
+
+                    EvalFrame *cframe = eval_frame_new(frame);
+                    if (cl->binding) {
+                        frame_bind(cframe, cl->binding->name->name, exc_val);
+                    }
+                    result = eval_expr(env, cframe, cl->handler);
+                    eval_frame_free(cframe);
+                    break;
+                }
+            }
+            /* If no clause matched, throw continues to propagate. */
+        }
+
+        /* Evaluate finally block regardless of throw/return state. */
+        if (e->as.try_.finally_body) {
+            bool save_throwing  = env->throwing;
+            TuriValue save_tv   = env->throw_value;
+            bool save_returning = env->returning;
+            TuriValue save_rv   = env->return_value;
+
+            env->throwing  = false;
+            env->returning = false;
+            eval_expr(env, frame, e->as.try_.finally_body);
+
+            /* Restore saved signals (throw/return take priority over finally). */
+            env->throwing     = save_throwing;
+            env->throw_value  = save_tv;
+            env->returning    = save_returning;
+            env->return_value = save_rv;
+        }
+
+        return result;
+    }
+
+    /* --- Phase S4: Defer ------------------------------------------------ */
+
+    /* (defer body) — register body to fire at enclosing function exit. */
+    case EX_DEFER: {
+        /* Snapshot the captured bindings at defer-call time. */
+        EvalFrame *snap = eval_frame_new(NULL);
+        for (uint8_t i = 0; i < e->as.defer_.n_captures; i++) {
+            Binding *b = e->as.defer_.captures[i];
+            TuriValue v = eval_lookup(env, frame, b->name->name);
+            frame_bind(snap, b->name->name, v);
+        }
+        DeferItem *item = (DeferItem *)malloc(sizeof(DeferItem));
+        item->body     = e->as.defer_.body;
+        item->snapshot = snap;
+        item->next     = (DeferItem *)env->defer_stack;
+        env->defer_stack = item;
+        return turi_nil();
+    }
+
+    /* --- Phase S4: Algebraic effects ------------------------------------ */
+
+    /* (defeffect Name [...] :type) — type-level only; no runtime action. */
+    case EX_DEFECT:
+        return turi_nil();
+
+    /* (perform (EffectName arg1 ...)) — yield to nearest handler. */
+    case EX_PERFORM: {
+        PerformExpr *pe = e->as.perform_.perform;
+        const char  *effect_name = pe->effect_name->name;
+
+        TuriValue args[MAX_EVAL_ARGS];
+        uint8_t   n_args = pe->n_args;
+        if (n_args > MAX_EVAL_ARGS)
+            return turi_errorf("eval: too many effect arguments (%u)", n_args);
+
+        for (uint8_t i = 0; i < n_args; i++) {
+            args[i] = eval_expr(env, frame, pe->args[i]);
+            if (turi_is_error(args[i]) || env->returning || env->throwing) return args[i];
+        }
+
+        /* Walk handler stack for a matching case. */
+        TuriHandlerFrame *hf = (TuriHandlerFrame *)env->handler_stack;
+        while (hf) {
+            for (uint8_t i = 0; i < hf->n_cases; i++) {
+                if (strcmp(hf->cases[i].effect_name->name, effect_name) == 0) {
+                    TuriEffectCont *cont = hf->cont;
+                    cont->perf_name   = effect_name;
+                    cont->perf_args   = args;
+                    cont->n_perf_args = n_args;
+#if defined(__APPLE__)
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+                    swapcontext(&cont->body_ctx, &cont->handler_ctx);
+#if defined(__APPLE__)
+#  pragma clang diagnostic pop
+#endif
+                    /* Resumed: return the value sent by resume k v. */
+                    return cont->resume_val;
+                }
+            }
+            hf = hf->prev;
+        }
+        return turi_errorf("eval: unhandled effect: %s", effect_name);
+    }
+
+    /* (handle BODY cases...) — install handler, run BODY in a fiber. */
+    case EX_HANDLE:
+        return eval_handle(env, frame, e->as.handle_.handle);
+
+    /* (resume k value) — resume a live continuation with a value. */
+    case EX_RESUME: {
+        ResumeExpr *re = e->as.resume_.resume;
+        TuriValue k   = eval_expr(env, frame, re->k);
+        if (turi_is_error(k) || env->returning || env->throwing) return k;
+        TuriValue val = eval_expr(env, frame, re->value);
+        if (turi_is_error(val) || env->returning || env->throwing) return val;
+
+        if (k.tag != TURI_EFFECT_CONT)
+            return turi_error("eval: resume: not a continuation");
+
+        return eval_resume_cont(env, frame, k.as_cont, val);
+    }
+
+    /* (discontinue k exception) — abort the body with an error. */
+    case EX_DISCONTINUE: {
+        DiscontinueExpr *de = e->as.discontinue_.discontinue;
+        TuriValue k = eval_expr(env, frame, de->k);
+        if (turi_is_error(k) || env->returning || env->throwing) return k;
+        TuriValue exc = eval_expr(env, frame, de->exception);
+        if (turi_is_error(exc) || env->returning || env->throwing) return exc;
+
+        if (k.tag != TURI_EFFECT_CONT)
+            return turi_error("eval: discontinue: not a continuation");
+
+        TuriEffectCont *cont = k.as_cont;
+        cont->body_result = turi_is_error(exc)
+                            ? exc
+                            : turi_errorf("eval: discontinue: %s",
+                                          exc.tag == TURI_CSTR ? exc.as_cstr : "exception");
+        cont->done = true;
+#if defined(__APPLE__)
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+        swapcontext(&cont->body_ctx, &cont->handler_ctx);
+#if defined(__APPLE__)
+#  pragma clang diagnostic pop
+#endif
+        return turi_nil(); /* unreachable from caller's perspective */
+    }
+
+    /* (cont? k) — true if k is an unconsumed continuation. */
+    case EX_CONT_PRED: {
+        TuriValue k = eval_expr(env, frame, e->as.cont_pred_.expr);
+        if (turi_is_error(k) || env->returning || env->throwing) return k;
+        return turi_bool(k.tag == TURI_EFFECT_CONT && k.as_cont != NULL);
+    }
+
+    /* --- Phase S5: inline-C is not executable in the tree-walk eval ------- */
+    case EX_INLINE_C:
+        if (env->sandboxed)
+            return turi_error("eval: inline-C not allowed in sandboxed environment");
+        return turi_error("eval: inline-C blocks cannot be executed by the interpreter");
+
+    /* --- Everything else — silently return nil --------------------------- */
     default:
         return turi_nil();
     }
@@ -606,6 +1156,21 @@ TuriValue turi_eval(TuriEnv *env, const char *src) {
         if (env->returning) {
             last = env->return_value;
             env->returning = false;
+        }
+        /* Convert an uncaught throw into a TURI_ERROR */
+        if (env->throwing) {
+            env->throwing = false;
+            TuriValue tv = env->throw_value;
+            if (tv.tag == TURI_THROW && tv.as_throw) {
+                TuriValue inner = tv.as_throw->value;
+                if (inner.tag == TURI_CSTR && inner.as_cstr)
+                    last = turi_errorf("uncaught exception: %s", inner.as_cstr);
+                else
+                    last = turi_error("uncaught exception");
+            } else {
+                last = turi_error("uncaught exception");
+            }
+            break;
         }
         if (turi_is_error(last)) break;
     }
@@ -684,6 +1249,17 @@ void turi_value_repr(char *buf, size_t cap, TuriValue v) {
     }
     case TURI_ERROR:
         snprintf(buf, cap, "#<error: %s>", v.as_error ? v.as_error : "");
+        break;
+    case TURI_EFFECT_CONT:
+        snprintf(buf, cap, "#<continuation>");
+        break;
+    case TURI_STRUCT: {
+        const char *n = v.as_struct ? v.as_struct->name : "?";
+        snprintf(buf, cap, "#<struct %s>", n ? n : "?");
+        break;
+    }
+    case TURI_THROW:
+        snprintf(buf, cap, "#<exception>");
         break;
     }
 }

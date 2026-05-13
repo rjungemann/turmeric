@@ -45,5 +45,14 @@ void turi_print_value(FILE *out, TuriValue v) {
     case TURI_ERROR:
         fprintf(out, "#<error: %s>", v.as_error ? v.as_error : "");
         break;
+    case TURI_EFFECT_CONT:
+        fprintf(out, "#<continuation>");
+        break;
+    case TURI_STRUCT:
+        fprintf(out, "#<struct>");
+        break;
+    case TURI_THROW:
+        fprintf(out, "#<exception>");
+        break;
     }
 }

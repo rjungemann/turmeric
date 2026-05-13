@@ -36,6 +36,16 @@ typedef struct TuriEnv {
     /* Return-signal state: set by EX_RETURN, cleared by function application */
     bool        returning;
     TuriValue   return_value;
+    /* Phase S3: effect handler stack (TuriHandlerFrame*, defined in eval.c) */
+    void       *handler_stack;
+    /* Phase S4: in-flight exception state (like returning, but for throw) */
+    bool        throwing;
+    TuriValue   throw_value;
+    /* Phase S4: defer stack (DeferItem*, defined in eval.c) */
+    void       *defer_stack;
+    /* Phase S5: recursion depth guard */
+    uint32_t    eval_depth;
+    uint32_t    max_eval_depth;
 } TuriEnv;
 
 /* Create a new unrestricted environment. */
