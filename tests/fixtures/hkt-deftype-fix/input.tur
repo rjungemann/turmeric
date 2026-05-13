@@ -1,0 +1,15 @@
+;; Phase HKT-P2: deftype with kind-polymorphic parameters and guarded recursion
+;; This tests that deftype accepts ^f prefixed kind parameters
+;; and validates guarded recursion for Fix and Free types.
+
+;; Fix is the fixed-point type constructor: Fix[f] ≅ f(Fix[f])
+;; Body must have guarded recursion: Fix appears under f, not at top level
+(deftype Fix [^f] (f (Fix f)))
+
+;; Free is the free monad type constructor
+;; Free f a = f (Free f a)  (simplified for v1 - no sum type)
+;; Note: must use nesting (f (Free f a)) not (f Free f a)
+(deftype Free [^f ^a] (f ((Free f) a)))
+
+;; Verify that Fix and Free can be used as types in definitions
+(defn main [] :int 0)

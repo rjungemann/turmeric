@@ -1,0 +1,7 @@
+(defmodule mymod
+  (export run)
+  (defn secret [] :int 42)
+  (defn run [] :int (secret)))
+
+(defn main [] :int
+  (secret))

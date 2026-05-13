@@ -1,0 +1,3 @@
+(defmodule mymod
+  (export nonexistent)
+  (defn main [] :int 0))

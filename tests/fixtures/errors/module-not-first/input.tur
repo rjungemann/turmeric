@@ -1,0 +1,3 @@
+(defn helper [] :int 42)
+(defmodule mymod
+  (defn main [] :int 0))

@@ -455,6 +455,9 @@ bool         kind_eq(Kind a, Kind b);             /* true if a == b */
 const char  *kind_to_string(Kind k);              /* "*", "* -> *", … */
 Kind         kind_parse(const char *s);           /* parse "*" / "* -> *"; default KIND_STAR */
 
+/* Phase HKT-P2: Recursive type guards */
+bool         type_is_guarded_recursive(Type t, const char *rec_name);
+
 /* Phase 11: Copy/Move trait helpers */
 /* Returns true if the type is Copy (bitwise duplication allowed) */
 static inline bool type_is_copy(Type t) {

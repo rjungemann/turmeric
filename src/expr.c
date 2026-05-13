@@ -390,5 +390,9 @@ void expr_print(Buf *b, const Expr *e) {
         case EX_GET_FIELD:
             buf_puts(b, "<get-field>");
             break;
+        /* Phase M0: Module system */
+        case EX_DEFMODULE:
+            buf_printf(b, "<defmodule %s>", e->as.defmodule_.mod->name->name);
+            break;
     }
 }

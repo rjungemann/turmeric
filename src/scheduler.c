@@ -6,6 +6,17 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Forward declarations */
+static void scheduler_mt_poll_io(TurSchedulerMT *s, int timeout_ms);
+
+/* tur_fiber_block_resume is defined in generated output; this stub satisfies
+ * the reference in the scheduler without pulling in generated code. */
+static int64_t tur_fiber_block_resume(FiberBlock *f, int64_t arg) {
+    (void)f; (void)arg;
+    /* FiberBlock is opaque here; real implementation is in emitted runtime. */
+    return 0;
+}
+
 /* Atomic type compatibility */
 #if defined(__clang__) || defined(__GNUC__)
 #define ATOMIC_T _Atomic
