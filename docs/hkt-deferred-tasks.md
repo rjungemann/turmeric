@@ -77,14 +77,17 @@ prerequisites in this order to unblock the most downstream work as early as poss
 
 ### §7 — `for` comprehension macro (unblocked after §5)
 
-- [ ] **stdlib/typeclass.tur** — define `Alternative [^f]` typeclass with `empty` and `alt-or`; add `option` and `vec` instances
-- [ ] **stdlib/macros.tur** — implement `for` macro with recursive desugaring to `bind` / `pure` / `empty`
-- [ ] **interp.c / ct_eval** — handle `:when` as a keyword sentinel in `for` binding vector
+- [x] **stdlib/typeclass.tur** — define `Alternative [^f]` typeclass with `empty` and `alt-or`; add `option` and `vec` instances
+- [x] **stdlib/macros.tur** — implement `for` macro with flat `[x coll :when pred]` syntax, recursive desugaring to `bind` / `pure` / `empty`
+- [x] **interp.c / ct_eval** — `:when` keyword sentinel handled via `(= first-b :when)` comparison in pure-`if` macro body (no special ct_eval changes needed)
+- [x] **stdlib/typeclass.tur** — `Alternative.empty` signature updated to `(empty [a] :int)` to allow dispatch via type-witness argument
+- [x] **tests/fixtures/hkt-for-comprehension/** — new fixture: basic for, none propagation, `:when` pass, `:when` fail; all tests pass
 
 ### §8 — Benchmark harness (unblocked after §1)
 
-- [ ] **benchmarks/** — create directory with `run-benchmarks.sh` and at least two `.tur` benchmark files
-- [ ] **benchmarks/** — capture monomorphic direct-call baseline to compute overhead ratio
+- [x] **benchmarks/** — `run-benchmarks.sh` runner with `BUILD_CC` fix and `tur emit-c` pipeline; `fmap-vec.tur` and `bind-option.tur` benchmark files
+- [x] **benchmarks/** — monomorphic baselines in `fmap-vec-baseline.c` and `bind-option-baseline.c`; overhead ratio computed and written to `benchmark-results.md`
+- [x] **benchmarks/benchmark-results.md** — fmap-vec: 228ms vs 224ms baseline (1.01× overhead); bind-option: 215ms; both within limits
 
 ---
 

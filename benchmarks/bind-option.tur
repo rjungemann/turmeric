@@ -1,28 +1,58 @@
-;; Phase HKT-P2: Benchmark for bind over option (§8)
+;; Phase HKT §8: bind-option benchmark
 ;;
-;; This benchmark measures the overhead of dictionary passing by comparing
-;; the HKT-based bind (which uses dictionary dispatch) against a monomorphic
-;; direct call baseline.
+;; Measures the overhead of typeclass Monad.bind dispatch over a chain of
+;; option values compared with the monomorphic baseline in bind-option-baseline.c.
 ;;
-;; The test chains Monad.bind operations over a sequence of option values,
-;; exercising the typeclass dispatch mechanism.
+;; The benchmark chains N bind operations: some(0) >>= (+1) >>= (+1) >>= ../..
+;; using a loop with a mutable accumulator.
 
-;; Number of bind operations to chain
-(defn N [] :int 100000)
+(defclass Applicative [^f]
+  (pure [a] :int))
 
-;; Simple increment function that returns an option
-(defn inc-some [x :int] :int (some (+ x 1)))
+(defclass Monad [^m]
+  (bind [m f] :int))
 
-;; Main benchmark: chain bind operations using typeclass dispatch
-;; Uses .bind to call the Monad.bind method through the typeclass
-(defn benchmark [] :int
-  (let result
-        (let [acc (some 0)]
-             (dotimes [i (N)]
-               (.bind acc (fn [v] (inc-some v)))))
-        result))
+;; Option helpers — plain calling convention (non-capturing lambdas)
+(defn __bench_opt_some [v] :int
+  ```c
+  int64_t *p = malloc(sizeof(int64_t) * 2);
+  p[0] = 1; p[1] = v;
+  return (int64_t)(intptr_t)p;
+  ```)
+
+(defn __bench_opt_none [] :int
+  ```c
+  int64_t *p = malloc(sizeof(int64_t));
+  p[0] = 0;
+  return (int64_t)(intptr_t)p;
+  ```)
+
+(defn __bench_opt_bind [m f] :int
+  ```c
+  int64_t *p = (int64_t *)(intptr_t)m;
+  if (p[0] == 0) return m;
+  return ((int64_t(*)(int64_t))(intptr_t)f)(p[1]);
+  ```)
+
+(defn __bench_opt_pure [a] :int (__bench_opt_some a))
+
+(defn __bench_opt_val [m] :int
+  ```c
+  int64_t *p = (int64_t *)(intptr_t)m; return p[1];
+  ```)
+
+(definstance Applicative [option] (pure [a] (__bench_opt_pure a)))
+(definstance Monad [option] (bind [m f] (__bench_opt_bind m f)))
+
+;; The function applied at each bind step: increment the value
+(defn add1 [x] :int (__bench_opt_some (+ x 1)))
 
 (defn main [] :int
-  ;; Run benchmark and return 0 (we measure time externally)
-  (benchmark)
+  (let [^mut acc (__bench_opt_some 0)]
+    (let [^mut i 0]
+      (while (< i 100000)
+        (set! acc (.bind acc add1))
+        (set! i (+ i 1))))
+    ;; Print final value (should be 100000) to prevent dead-code elimination
+    (println (__bench_opt_val acc)))
   0)

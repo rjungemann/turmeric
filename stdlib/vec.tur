@@ -265,7 +265,7 @@
   __monad_vec_concat)
 
 (definstance Alternative [vec]
-  (empty [] (__alternative_vec_empty))
+  (empty [_] (__alternative_vec_empty))
   (alt-or [a b] (__alternative_vec_alt_or a b)))
 
 ;; Phase B1: Clone instance for vec

@@ -18,6 +18,9 @@ cd "$(dirname "$0")/.."
 TUR="./build/tur"
 [ -x "$TUR" ] || { echo "benchmarks: $TUR not built; run 'cmake --build build --target tur' first" >&2; exit 2; }
 
+# C compiler — honour CC env var, fall back to cc
+BUILD_CC="${CC:-cc}"
+
 # Default compiler flags for benchmark builds
 # Use -O2 for realistic performance measurement
 export TUR_CC_FLAGS="${TUR_CC_FLAGS:--O2 -std=c99 -Wall}"
@@ -59,8 +62,8 @@ run_benchmark() {
     
     echo -n "Running benchmark: ${name}... "
     
-    # Compile the benchmark to C
-    if ! $TUR build "$tur_file" -o "$c_file" >/dev/null 2>&1; then
+    # Emit the benchmark to C using tur emit-c
+    if ! $TUR emit-c "$tur_file" > "$c_file" 2>/dev/null; then
         echo -e "${RED}FAIL${NC} (compilation failed)"
         return 1
     fi

@@ -221,7 +221,7 @@
   ```)
 
 (definstance Alternative [option]
-  (empty [] (__alternative_option_empty))
+  (empty [_] (__alternative_option_empty))
   (alt-or [a b] (__alternative_option_alt_or a b)))
 
 ;; Phase B1: Clone instance for option
