@@ -121,6 +121,7 @@ static Expr *perform_to_shift(Arena *a, SymbolTable *st, const PerformExpr *perf
     
     /* Create continuation parameter binding */
     Binding *k_binding = arena_alloc(a, sizeof(Binding));
+    memset(k_binding, 0, sizeof(Binding));
     k_binding->name = symtab_intern(st, strslice("__k", 3));
     /* Use a generic continuation type - we'll use TY_CONT which is the effect type */
     Type k_type;

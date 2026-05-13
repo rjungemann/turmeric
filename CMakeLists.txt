@@ -43,6 +43,12 @@ set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
 )
 
 # ---------------------------------------------------------------------------
-# Examples
+# Examples (opt-in — requires Raylib)
+# OFF by default so that `cmake --build` / `ctest` never trigger a Raylib
+# compile.  Enable with:  cmake -DTUR_EXAMPLES=ON ...
+# or via:  just configure-examples
 # ---------------------------------------------------------------------------
-add_subdirectory(examples)
+option(TUR_EXAMPLES "Build example programs (requires Raylib)" OFF)
+if (TUR_EXAMPLES)
+    add_subdirectory(examples)
+endif()

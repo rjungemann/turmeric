@@ -1360,7 +1360,7 @@ static void tg_cancel_panic(void * group) {
   pthread_mutex_lock(&g->lock);
   g->cancelled = true;
   g->done = true;
-  g->cancel_reason = 1;  ;; panic reason
+  g->cancel_reason = 1;  /* panic reason */
   pthread_cond_broadcast(&g->done_cond);
   pthread_mutex_unlock(&g->lock);
   

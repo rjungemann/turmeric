@@ -1852,12 +1852,18 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
 
                 char **arg_strs = (char **)malloc(e->as.call_.n_args * sizeof(char *));
                 if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
+                bool *arg_cast = (bool *)malloc(e->as.call_.n_args * sizeof(bool));
+                if (!arg_cast) { fprintf(stderr, "tur: oom\n"); abort(); }
                 for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                     char *raw = emit_value(ctx, body, e->as.call_.args[i]);
                     /* Apply same function-ptr → int64_t cast as the direct-call path:
-                     * C99 forbids implicit conversion from function pointer to integer. */
+                     * C99 forbids implicit conversion from function pointer to integer.
+                     * Track which args were cast so the signature uses int64_t, not
+                     * void *, for those positions — passing int64_t to void * is
+                     * -Wint-conversion error in C99. */
                     bool needs_fn_cast = (e->as.call_.args[i]->type.kind == TY_FN ||
                                           e->as.call_.args[i]->type.kind == TY_PTR_VOID);
+                    arg_cast[i] = needs_fn_cast;
                     if (needs_fn_cast) {
                         Buf cast; buf_init(&cast);
                         buf_printf(&cast, "(int64_t)(intptr_t)(%s)", raw);
@@ -1877,9 +1883,16 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 } else {
                     for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                         if (i > 0) buf_puts(&out, ", ");
-                        buf_puts(&out, type_c_name(e->as.call_.args[i]->type));
+                        /* If we cast this arg to int64_t above, the signature must
+                         * say int64_t (not void *) to avoid -Wint-conversion. */
+                        if (arg_cast[i]) {
+                            buf_puts(&out, "int64_t");
+                        } else {
+                            buf_puts(&out, type_c_name(e->as.call_.args[i]->type));
+                        }
                     }
                 }
+                free(arg_cast);
                 buf_printf(&out, "))(intptr_t)(%s))(", fn_ptr_val);
                 for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                     if (i > 0) buf_puts(&out, ", ");

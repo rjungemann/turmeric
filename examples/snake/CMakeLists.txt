@@ -1,17 +1,23 @@
 cmake_minimum_required(VERSION 3.20)
 
 # ---------------------------------------------------------------------------
-# Raylib via CPM
+# Raylib — prefer a system-installed copy to avoid recompiling from source.
+# Install once with:  brew install raylib   (macOS)
+#                     apt install libraylib-dev  (Debian/Ubuntu)
+# Falls back to CPM download+compile when no system copy is found.
 # ---------------------------------------------------------------------------
-CPMAddPackage(
-  NAME raylib
-  GITHUB_REPOSITORY raysan5/raylib
-  GIT_TAG 5.0
-  OPTIONS
-    "BUILD_EXAMPLES OFF"
-    "BUILD_GAMES    OFF"
-    "WITH_PIC       ON"
-)
+find_package(raylib 5.0 QUIET)
+if (NOT raylib_FOUND)
+    CPMAddPackage(
+      NAME raylib
+      GITHUB_REPOSITORY raysan5/raylib
+      GIT_TAG 5.0
+      OPTIONS
+        "BUILD_EXAMPLES OFF"
+        "BUILD_GAMES    OFF"
+        "WITH_PIC       ON"
+    )
+endif()
 
 # ---------------------------------------------------------------------------
 # Paths
