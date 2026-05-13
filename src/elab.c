@@ -365,7 +365,8 @@ typedef struct Elab {
     const Symbol *sym_defn;     /* Phase 2 */
     const Symbol *sym_fn;       /* Phase 2 */
     const Symbol *sym_extern_c; /* Phase 2 */
-    const Symbol *sym_caret_mut;   /* ^mut */
+    const Symbol *sym_caret_mut;     /* ^mut */
+    const Symbol *sym_caret_private; /* ^private — module-private visibility annotation */
     const Symbol *sym_defer;      /* Phase 4 */
     const Symbol *sym_return;     /* return - early return with defer firing */
     /* Phase 5 */
@@ -850,7 +851,8 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_defn      = intern_cstr(st, "defn");
     e->sym_fn        = intern_cstr(st, "fn");
     e->sym_extern_c  = intern_cstr(st, "extern-c");
-    e->sym_caret_mut = intern_cstr(st, "^mut");
+    e->sym_caret_mut     = intern_cstr(st, "^mut");
+    e->sym_caret_private = intern_cstr(st, "^private");
     e->sym_defer     = intern_cstr(st, "defer");
     e->sym_return    = intern_cstr(st, "return");
     /* Phase 5 */
@@ -4671,18 +4673,33 @@ static Expr *elab_try_with(Elab *e, const Form *call) {
 }
 
 /* (defeffect Name [param1 : T1, param2 : T2, ...] : R)
+ * (defeffect ^private Name [param1 : T1, param2 : T2, ...] : R)
  * Declares a new algebraic effect with parameters and a result type.
+ * The optional ^private annotation restricts the effect to the defining module.
  */
 static Expr *elab_defeffect(Elab *e, const Form *call) {
-    /* Minimum: (defeffect Name [params...] :ret-type) */
+    /* Minimum: (defeffect Name [params...] :ret-type)
+     * Or with visibility: (defeffect ^private Name [params...] :ret-type) */
     if (call->as.list.len < 4) {
         diag_emit(DIAG_ERROR, call->span,
                   "defeffect requires (defeffect Name [params...] result-type)");
         return NULL;
     }
-    
+
+    /* Phase P19-6: Parse optional ^private visibility annotation */
+    bool is_private = false;
+    uint32_t name_idx = 1;  /* index of the effect name form */
+    if (call->as.list.len >= 5) {
+        Form *maybe_private = call->as.list.items[1];
+        if (maybe_private->tag == F_SYM
+            && maybe_private->as.sym == e->sym_caret_private) {
+            is_private = true;
+            name_idx = 2;
+        }
+    }
+
     /* Parse effect name */
-    Form *name_f = call->as.list.items[1];
+    Form *name_f = call->as.list.items[name_idx];
     if (name_f->tag != F_SYM) {
         diag_emit(DIAG_ERROR, name_f->span, "defeffect: effect name must be a symbol");
         return NULL;
@@ -4696,8 +4713,8 @@ static Expr *elab_defeffect(Elab *e, const Form *call) {
         return NULL;
     }
     
-    /* Parse parameter list */
-    Form *params_f = call->as.list.items[2];
+    /* Parse parameter list (index shifts by 1 when ^private is present) */
+    Form *params_f = call->as.list.items[name_idx + 1];
     if (params_f->tag != F_LIST && params_f->tag != F_VEC) {
         diag_emit(DIAG_ERROR, params_f->span,
                   "defeffect: expected parameter list, got %s",
@@ -4756,7 +4773,7 @@ static Expr *elab_defeffect(Elab *e, const Form *call) {
      *   (defeffect E [] int)
      *   (defeffect E [] :int)
      */
-    Form *ret_f = call->as.list.items[3];
+    Form *ret_f = call->as.list.items[name_idx + 2];
     if (ret_f->tag != F_SYM && ret_f->tag != F_KEYWORD) {
         diag_emit(DIAG_ERROR, ret_f->span,
                   "defeffect: return type annotation must be a symbol or keyword like :int");
@@ -4770,9 +4787,10 @@ static Expr *elab_defeffect(Elab *e, const Form *call) {
         return NULL;
     }
     
-    /* Register the effect */
+    /* Register the effect — pass module visibility info (Phase P19-6) */
     Effect *effect = effect_env_register(e->effect_env, e->arena, name,
-                                          param_names, param_types, n_params, result_type);
+                                          param_names, param_types, n_params, result_type,
+                                          e->current_module_name, is_private);
     if (!effect) return NULL;
     
     /* Create the effect definition expression */
@@ -4782,7 +4800,9 @@ static Expr *elab_defeffect(Elab *e, const Form *call) {
     def->param_types = param_types;
     def->n_params = n_params;
     def->result_type = result_type;
-    
+    def->is_private = is_private;
+    def->defining_module_name = e->current_module_name;
+
     Expr *out = expr_new(e->arena, EX_DEFECT, TYPE_NIL, call->span);
     out->as.effect_def_.def = def;
     return out;
@@ -4845,6 +4865,19 @@ static Expr *elab_perform(Elab *e, const Form *call) {
     if (!effect) {
         diag_emit(DIAG_ERROR, name_f->span,
                   "perform: unknown effect '%s'", effect_name->name);
+        return NULL;
+    }
+
+    /* Phase P19-6: Enforce effect visibility — private effects cannot be
+     * performed from outside their defining module. */
+    if (effect->is_private
+        && effect->defining_module_name != NULL
+        && effect->defining_module_name != e->current_module_name) {
+        diag_emit(DIAG_ERROR, name_f->span,
+                  "effect '%s' is private to module '%s'",
+                  effect_name->name, effect->defining_module_name->name);
+        diag_emit(DIAG_NOTE, name_f->span,
+                  "remove ^private from the defeffect declaration to make it public");
         return NULL;
     }
 
@@ -4991,7 +5024,19 @@ static Expr *elab_handle(Elab *e, const Form *call) {
         
         /* Look up effect definition to get param types */
         Effect *eff = effect_env_lookup(e->effect_env, cases[i].effect_name);
-        
+
+        /* Phase P19-6: Enforce effect visibility in handler declarations */
+        if (eff && eff->is_private
+            && eff->defining_module_name != NULL
+            && eff->defining_module_name != e->current_module_name) {
+            diag_emit(DIAG_ERROR, name_f->span,
+                      "effect '%s' is private to module '%s'",
+                      cases[i].effect_name->name, eff->defining_module_name->name);
+            diag_emit(DIAG_NOTE, name_f->span,
+                      "remove ^private from the defeffect declaration to make it public");
+            return NULL;
+        }
+
         /* Create a handler scope with bindings for params and k */
         Scope handler_scope;
         scope_init(&handler_scope, e->scope);

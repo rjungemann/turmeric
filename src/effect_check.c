@@ -442,7 +442,8 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
         if (!effect_env_contains(env, def->name)) {
             effect_env_register(env, a, def->name,
                                 def->param_names, def->param_types,
-                                def->n_params, def->result_type);
+                                def->n_params, def->result_type,
+                                def->defining_module_name, def->is_private);
         }
     }
 
