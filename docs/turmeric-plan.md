@@ -16,9 +16,10 @@
 | H0–H6 | 📋 **Planned (v2)** | Higher-kinded types | Six-phase roadmap: kind system (H0), kind-polymorphic typeclasses (H1), HKT dispatch (H2), built-in typeclass library (H3), kind-polymorphic functions (H4), advanced kinds (H5), integration & polish (H6). Entry point for generic `Functor`, `Monad`, `Traversable`. See [hkt-implementation-plan.md](hkt-implementation-plan.md) for full design. |
 | B1–B2 | 📋 **Planned (v2)** | Clone trait + cloneable continuations | Multi-shot continuations via `Clone` trait; cloneable continuation runtime. See [backtracking-cloneable-continuations-plan.md](archive/backtracking-cloneable-continuations-plan.md). |
 | B3 | ✅ **Complete** | Backtracking monad (list monad) | `stdlib/backtrack.tur`: `mzero`, `mreturn`, `mplus`, `mbind`, `run-backtrack`, `guard`, `fresh`, `once`, `interleave`, `backtrack-do` macro; 10 fixtures pass. |
-| B4–B5 | 📋 **Planned (v2)** | Logic programming + parsec + benchmarks | `stdlib/logic.tur`, `stdlib/parsec.tur`, benchmarks. Depends on B3. |
+| B4 | ✅ **Complete** | Standard library integration | `stdlib/parsec.tur` (parser combinators) and `stdlib/logic.tur` (miniKanren logic programming) complete; 6 parsec + 8 logic fixtures pass. |
+| B5 | 📋 **Planned (v2)** | Testing, benchmarks, and optimization | Benchmarks, `--backtrack-depth` flag, documentation. Depends on B4. |
 
-**Last updated:** 2026-05-11 (Phase 19: Algebraic effects v1. HKT roadmap added. STM phases 20–21 added. HAMT phases P1–P4 added. Backtracking phases B1–B5 added.)
+**Last updated:** 2026-05-13 (Phase B4: `stdlib/parsec.tur` and `stdlib/logic.tur` complete; 14 new fixtures pass.)
 
 ---
 

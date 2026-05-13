@@ -1,0 +1,382 @@
+;; stdlib/parsec.tur — Parser combinator library
+;;
+;; Built on the backtracking monad (list monad, inlined from backtrack.tur).
+;;
+;; Parser<a> = fat-closure: Input -> list (Pair a Input)
+;;
+;;   Input  = { int64_t str (cstr as int64_t), int64_t pos }
+;;   Pair   = { int64_t first, int64_t second }
+;;   Cell   = { int64_t value, int64_t next }  (backtrack result list)
+;;
+;; Calling conventions:
+;;   • Parser constructors return :ptr<void>  (fat closure pointer)
+;;   • Functions accepting parsers take :int  (the int64_t of the pointer)
+;;   • Function parameters used in inner lambdas MUST be bound to local
+;;     variables first (params are not captured by collect_free_vars).
+
+;;; ── Backtracking monad (inlined from backtrack.tur) ──────────────────────────
+
+(defn mzero [] :int
+  ```c return 0; ```)
+
+(defn mreturn [x] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
+  cell->value = x; cell->next = 0;
+  return (int64_t)(intptr_t)cell;
+  ```)
+
+(defn mplus [xs ys] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *xc = (Cell*)(intptr_t)xs;
+  if (!xc) return ys;
+  Cell *head = NULL, *tail = NULL;
+  while (xc) {
+      Cell *n = malloc(sizeof(Cell));
+      n->value = xc->value; n->next = 0;
+      if (tail) tail->next = (int64_t)(intptr_t)n; else head = n;
+      tail = n; xc = (Cell*)(intptr_t)xc->next;
+  }
+  if (tail) tail->next = ys;
+  return (int64_t)(intptr_t)head;
+  ```)
+
+(defn mbind [ma fn] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *cell = (Cell*)(intptr_t)ma;
+  if (!cell) return 0;
+  int64_t *fat = (int64_t*)(intptr_t)fn;
+  int64_t thunk = fat[0];
+  Cell *rev = NULL;
+  while (cell) {
+      int64_t sub = ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, cell->value);
+      Cell *sc = (Cell*)(intptr_t)sub;
+      while (sc) {
+          Cell *n = malloc(sizeof(Cell));
+          n->value = sc->value; n->next = (int64_t)(intptr_t)rev; rev = n;
+          sc = (Cell*)(intptr_t)sc->next;
+      }
+      cell = (Cell*)(intptr_t)cell->next;
+  }
+  Cell *result = NULL;
+  while (rev) {
+      Cell *tmp = (Cell*)(intptr_t)rev->next;
+      rev->next = (int64_t)(intptr_t)result; result = rev; rev = tmp;
+  }
+  return (int64_t)(intptr_t)result;
+  ```)
+
+(defn bt-nil [] :int ```c return 0; ```)
+
+(defn bt-cons [v nxt] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
+  cell->value = v; cell->next = nxt;
+  return (int64_t)(intptr_t)cell;
+  ```)
+
+(defn bt-length [xs] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  int64_t n = 0;
+  Cell *c = (Cell*)(intptr_t)xs;
+  while (c) { n++; c = (Cell*)(intptr_t)c->next; }
+  return n;
+  ```)
+
+;;; ── Pair helpers ─────────────────────────────────────────────────────────────
+
+(defn pair-new [a b] :int
+  ```c
+  struct { int64_t first; int64_t second; } *p = malloc(sizeof(*p));
+  p->first = a; p->second = b;
+  return (int64_t)(intptr_t)p;
+  ```)
+
+(defn pair-first [p] :int
+  ```c return ((struct { int64_t first; int64_t second; } *)(intptr_t)p)->first; ```)
+
+(defn pair-second [p] :int
+  ```c return ((struct { int64_t first; int64_t second; } *)(intptr_t)p)->second; ```)
+
+;;; ── Input ────────────────────────────────────────────────────────────────────
+;;
+;; Input stores the source string as int64_t (raw pointer) to allow capture
+;; in fat closures without cstr-to-int64_t coercion issues.
+
+(defn input-new [s :cstr pos] :int
+  ```c
+  struct { int64_t str; int64_t pos; } *inp = malloc(sizeof(*inp));
+  inp->str = (int64_t)(intptr_t)s; inp->pos = pos;
+  return (int64_t)(intptr_t)inp;
+  ```)
+
+(defn input-at-end [inp] :bool
+  ```c
+  struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
+  const char *s = (const char*)(intptr_t)i->str;
+  return s[i->pos] == '\0';
+  ```)
+
+(defn input-current-char [inp] :int
+  ```c
+  struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
+  const char *s = (const char*)(intptr_t)i->str;
+  return (int64_t)(unsigned char)s[i->pos];
+  ```)
+
+(defn input-advance [inp] :int
+  ```c
+  struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
+  struct { int64_t str; int64_t pos; } *n = malloc(sizeof(*n));
+  n->str = i->str; n->pos = i->pos + 1;
+  return (int64_t)(intptr_t)n;
+  ```)
+
+(defn input-pos [inp] :int
+  ```c return ((struct { int64_t str; int64_t pos; } *)(intptr_t)inp)->pos; ```)
+
+(defn input-remaining [inp] :int
+  ```c
+  struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
+  const char *s = (const char*)(intptr_t)i->str;
+  int64_t len = 0; while (s[i->pos + len]) len++;
+  return len;
+  ```)
+
+;;; ── Fat-closure and parser application ───────────────────────────────────────
+
+;; apply-fat: call any fat closure with a single int64_t argument
+(defn apply-fat [f arg] :int
+  ```c
+  int64_t *fat = (int64_t*)(intptr_t)f;
+  int64_t thunk = fat[0];
+  return ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, arg);
+  ```)
+
+;; apply-parser: call a parser fat closure with an Input
+(defn apply-parser [p inp] :int
+  ```c
+  int64_t *fat = (int64_t*)(intptr_t)p;
+  int64_t thunk = fat[0];
+  return ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, inp);
+  ```)
+
+;;; ── Core parsers ─────────────────────────────────────────────────────────────
+
+;; pfail: always fails
+(defn pfail [] :ptr<void>
+  (let [sentinel 0]
+    (fn [inp] (let [_ sentinel] (mzero)))))
+
+;; pure v: succeed with v, consume no input
+(defn pure-impl [_v inp] :int
+  (mreturn (pair-new _v inp)))
+
+(defn pure [v] :ptr<void>
+  (let [_v v]
+    (fn [inp] (let [_ _v] (pure-impl _v inp)))))
+
+;; item: consume one character; fail at end of input
+(defn item-impl [inp] :int
+  (if (input-at-end inp)
+    (mzero)
+    (mreturn (pair-new (input-current-char inp) (input-advance inp)))))
+
+(defn item [] :ptr<void>
+  (let [sentinel 0]
+    (fn [inp] (let [_ sentinel] (item-impl inp)))))
+
+;; pchar c: consume if current char equals c (c is ASCII int)
+(defn pchar-impl [_c inp] :int
+  (if (input-at-end inp)
+    (mzero)
+    (if (= (input-current-char inp) _c)
+      (mreturn (pair-new _c (input-advance inp)))
+      (mzero))))
+
+(defn pchar [c] :ptr<void>
+  (let [_c c]
+    (fn [inp] (let [_ _c] (pchar-impl _c inp)))))
+
+;; pstring s: consume if input starts with the C string s (passed as :cstr)
+(defn pstring-c-impl [s_raw inp] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  typedef struct { int64_t first; int64_t second; } Pair;
+  typedef struct { int64_t str; int64_t pos; } Input;
+  extern size_t strlen(const char *);
+  const char *s = (const char*)(intptr_t)s_raw;
+  Input *i = (Input*)(intptr_t)inp;
+  const char *src = (const char*)(intptr_t)i->str;
+  size_t slen = strlen(s);
+  for (size_t j = 0; j < slen; j++) {
+      if (src[i->pos + j] != s[j]) return 0;
+  }
+  Input *new_inp = malloc(sizeof(Input));
+  new_inp->str = i->str; new_inp->pos = i->pos + (int64_t)slen;
+  Pair *pr = malloc(sizeof(Pair)); pr->first = s_raw; pr->second = (int64_t)(intptr_t)new_inp;
+  Cell *cell = malloc(sizeof(Cell)); cell->value = (int64_t)(intptr_t)pr; cell->next = 0;
+  return (int64_t)(intptr_t)cell;
+  ```)
+
+(defn cstr->int [s :cstr] :int
+  ```c return (int64_t)(intptr_t)s; ```)
+
+(defn pstring [s :cstr] :ptr<void>
+  (let [_s (cstr->int s)]
+    (fn [inp] (let [_ _s] (pstring-c-impl _s inp)))))
+
+;;; ── Combinators ──────────────────────────────────────────────────────────────
+
+;; or-parser p q: try p, then q, return all successes (backtracking)
+(defn or-parser-impl [lp lq inp] :int
+  (mplus (apply-parser lp inp) (apply-parser lq inp)))
+
+(defn or-parser [p q] :ptr<void>
+  (let [lp p lq q]
+    (fn [inp] (let [_ lp] (or-parser-impl lp lq inp)))))
+
+;; bind-parser p f: apply p, then for each (v, inp'), apply (f v) as a parser
+;; f must be a fat closure: value -> Parser
+(defn bind-parser-inner [lf pair] :int
+  (let [lf2 lf]
+    (apply-parser (apply-fat lf2 (pair-first pair)) (pair-second pair))))
+
+(defn bind-parser-impl [lp lf inp] :int
+  (let [lf2 lf]
+    (mbind (apply-parser lp inp)
+           (fn [pair] (let [_ lf2] (bind-parser-inner lf2 pair))))))
+
+(defn bind-parser [p f] :ptr<void>
+  (let [lp p lf f]
+    (fn [inp] (let [_ lp] (bind-parser-impl lp lf inp)))))
+
+;; then-parser p q: apply p, discard result, apply q
+(defn then-parser-impl [lp lq inp] :int
+  (let [lq2 lq]
+    (mbind (apply-parser lp inp)
+           (fn [pair] (let [_ lq2] (apply-parser lq2 (pair-second pair)))))))
+
+(defn then-parser [p q] :ptr<void>
+  (let [lp p lq q]
+    (fn [inp] (let [_ lp] (then-parser-impl lp lq inp)))))
+
+;; many p: match p zero or more times (greedy); returns one result
+(defn many-c-impl [p_raw inp] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  typedef struct { int64_t first; int64_t second; } Pair;
+  typedef struct { int64_t str; int64_t pos; } Input;
+  int64_t *fat_p = (int64_t*)(intptr_t)p_raw;
+  int64_t thunk_p = fat_p[0];
+  int64_t current_inp = inp;
+  Cell *rev_list = NULL;
+  for (;;) {
+      int64_t matches = ((int64_t(*)(void*, int64_t))(intptr_t)thunk_p)((void*)fat_p, current_inp);
+      if (!matches) break;
+      Cell *match_cell = (Cell*)(intptr_t)matches;
+      Pair *pr = (Pair*)(intptr_t)match_cell->value;
+      Input *old_i = (Input*)(intptr_t)current_inp;
+      Input *new_i = (Input*)(intptr_t)pr->second;
+      if (new_i->pos <= old_i->pos) break;
+      Cell *nc = malloc(sizeof(Cell)); nc->value = pr->first; nc->next = (int64_t)(intptr_t)rev_list; rev_list = nc;
+      current_inp = pr->second;
+  }
+  Cell *fwd = NULL;
+  while (rev_list) {
+      Cell *tmp = (Cell*)(intptr_t)rev_list->next;
+      rev_list->next = (int64_t)(intptr_t)fwd; fwd = rev_list; rev_list = tmp;
+  }
+  Pair *result_pair = malloc(sizeof(Pair)); result_pair->first = (int64_t)(intptr_t)fwd; result_pair->second = current_inp;
+  Cell *result_cell = malloc(sizeof(Cell)); result_cell->value = (int64_t)(intptr_t)result_pair; result_cell->next = 0;
+  return (int64_t)(intptr_t)result_cell;
+  ```)
+
+(defn many [p] :ptr<void>
+  (let [_p p]
+    (fn [inp] (let [_ _p] (many-c-impl _p inp)))))
+
+;; many1 p: one or more; fails if p doesn't match at least once
+(defn many1-impl [_p inp] :int
+  (if (input-at-end inp)
+    (mzero)
+    (let [first-results (apply-parser _p inp)]
+      (if (= first-results 0)
+        (mzero)
+        (many-c-impl _p inp)))))
+
+(defn many1 [p] :ptr<void>
+  (let [_p p]
+    (fn [inp] (let [_ _p] (many1-impl _p inp)))))
+
+;; optional p: match p zero or one times; 0 = none, pair-first = some-value
+(defn optional-impl [_p inp] :int
+  (mplus (apply-parser _p inp)
+         (mreturn (pair-new 0 inp))))
+
+(defn optional [p] :ptr<void>
+  (let [_p p]
+    (fn [inp] (let [_ _p] (optional-impl _p inp)))))
+
+;;; ── Runners ──────────────────────────────────────────────────────────────────
+
+;; run-parser p s: run parser p on string s; return all partial+full parses
+(defn run-parser [p s :cstr] :int
+  (let [inp (input-new s 0)]
+    (apply-parser p inp)))
+
+;; run-parser-full p s: return mreturn(value) for first full-input parse, mzero if none
+(defn run-parser-full-c [results] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  typedef struct { int64_t first; int64_t second; } Pair;
+  typedef struct { int64_t str; int64_t pos; } Input;
+  Cell *c = (Cell*)(intptr_t)results;
+  while (c) {
+      Pair *pr = (Pair*)(intptr_t)c->value;
+      Input *inp_p = (Input*)(intptr_t)pr->second;
+      const char *s = (const char*)(intptr_t)inp_p->str;
+      if (s[inp_p->pos] == '\0') {
+          Cell *r = malloc(sizeof(Cell)); r->value = pr->first; r->next = 0;
+          return (int64_t)(intptr_t)r;
+      }
+      c = (Cell*)(intptr_t)c->next;
+  }
+  return 0;
+  ```)
+
+(defn run-parser-full [p s :cstr] :int
+  (run-parser-full-c (run-parser p s)))
+
+;;; ── Result helpers ───────────────────────────────────────────────────────────
+
+;; parse-value: extract value from first parse result (first = result value)
+(defn parse-value [results] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  typedef struct { int64_t first; int64_t second; } Pair;
+  Cell *c = (Cell*)(intptr_t)results;
+  if (!c) return 0;
+  Pair *pr = (Pair*)(intptr_t)c->value;
+  return pr->first;
+  ```)
+
+;; parse-result-count: count number of parse results
+(defn parse-result-count [results] :int
+  (bt-length results))
+
+;; print-char-list: print a linked list of character values
+(defn print-char-list [lst]
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *c = (Cell*)(intptr_t)lst;
+  while (c) { printf("%lld", (long long)c->value); if (c->next) printf(" "); c = (Cell*)(intptr_t)c->next; }
+  printf("\n");
+  ```)
+
+;; char-list-length: count elements in a bt-cons list
+(defn char-list-length [lst] :int
+  (bt-length lst))

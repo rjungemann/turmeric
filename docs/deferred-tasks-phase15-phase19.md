@@ -1798,34 +1798,37 @@ These prerequisites must be completed before B3 (Backtracking monad) implementat
 
 These prerequisites must be completed before B4 (Standard library integration) implementation can proceed.
 
-- [ ] Phase B3 backtracking monad must be complete and tested.
+- [x] Phase B3 backtracking monad must be complete and tested.
   - Required for: `stdlib/logic.tur` and `stdlib/parsec.tur` both use the backtracking monad.
-- [ ] Implement `Pair` type in stdlib for `logic.tur` term representation.
-  - Required for: `Term` type typically uses `Pair` for compound terms (e.g., `Cons(x, xs)`).
-  - **Note**: This is also a B1 prerequisite for parameterized Clone instances.
-  - Action: Add `(defstruct Pair [first second])` to `stdlib/pair.tur` or similar.
-- [ ] Implement persistent data structure primitives (or association list fallback).
+- [x] Implement `Pair` type in stdlib for `logic.tur` term representation.
+  - Required for: `Term` type typically uses `Pair` for compound terms.
+  - Resolved: `Term` uses a tagged heap struct `{tag, data1, data2}`; no stdlib Pair type needed.
+- [x] Implement persistent data structure primitives (or association list fallback).
   - Required for: Logic programming substitution map in `stdlib/logic.tur`.
-  - Action: Use association list for v1 as decided in B1 prerequisites; HAMT-based variant deferred.
+  - Resolved: Using association list (singly-linked `{var_id, term_ptr, next}`) as decided in B1 prerequisites.
 
-### Phase B4 remaining tasks (Standard library integration)
-- [ ] Implement `stdlib/logic.tur`: `LVar`, `UState`, `Term`, `Goal`, `unify`, `unify-var`, `walk`, `fresh-lvar`, `conjoined`, `disjoined`, `run-logic`, `reify`.
-- [ ] Implement `stdlib/parsec.tur`: `Input`, `Parser<a>`, `pure`, `pfail`, `item`, `pchar`, `pstring`, `or-parser`, `bind-parser`, `then-parser`, `many`, `many1`, `optional`, `run-parser`, `run-parser-full`.
-- [ ] Add `tests/fixtures/backtrack/logic-unify-basic.tur`.
-- [ ] Add `tests/fixtures/backtrack/logic-unify-fail.tur`.
-- [ ] Add `tests/fixtures/backtrack/logic-fresh.tur`.
-- [ ] Add `tests/fixtures/backtrack/logic-conjoined.tur`.
-- [ ] Add `tests/fixtures/backtrack/logic-disjoined.tur`.
-- [ ] Add `tests/fixtures/backtrack/logic-occurs-check.tur`.
-- [ ] Add `tests/fixtures/backtrack/logic-reify.tur`.
-- [ ] Add `tests/fixtures/backtrack/logic-query.tur`.
-- [ ] Add `tests/fixtures/backtrack/parsec-basic.tur`.
-- [ ] Add `tests/fixtures/backtrack/parsec-or.tur`.
-- [ ] Add `tests/fixtures/backtrack/parsec-many.tur`.
-- [ ] Add `tests/fixtures/backtrack/parsec-sequence.tur`.
-- [ ] Add `tests/fixtures/backtrack/parsec-full.tur`.
-- [ ] Add `tests/fixtures/backtrack/parsec-json-subset.tur`.
-- [ ] Add codegen snapshots for `or-parser` and `run-logic` lowering.
+### Phase B4 remaining tasks (Standard library integration) — ✓ COMPLETE
+- [x] Implement `stdlib/parsec.tur`: `Input`, `Parser<a>`, `pure`, `pfail`, `item`, `pchar`, `pstring`, `or-parser`, `bind-parser`, `then-parser`, `many`, `many1`, `optional`, `run-parser`, `run-parser-full`.
+  - All parsers return `:ptr<void>` (fat closures). Input stores string as `int64_t` for closure capture.
+  - Key convention: params must be bound to locals before capture; C literals in separate `defn` helpers.
+- [x] Implement `stdlib/logic.tur`: `LVar`, `UState`, `Term`, `Goal`, `logic-walk`, `logic-unify`, `lequal`, `succeed`, `fail`, `conjoined`, `disjoined`, `fresh`, `run-logic`, `reify-walk`.
+  - Term = tagged struct `{tag, data1, data2}`; Subs = alist; Goal = fat closure.
+  - `logic-unify` C literal calls `logic_walk` (forward-declared) and itself recursively for PAIR.
+- [x] Add `tests/fixtures/parsec-basic/`.
+- [x] Add `tests/fixtures/parsec-or/`.
+- [x] Add `tests/fixtures/parsec-many/`.
+- [x] Add `tests/fixtures/parsec-sequence/`.
+- [x] Add `tests/fixtures/parsec-full/`.
+- [x] Add `tests/fixtures/parsec-json-subset/`.
+- [x] Add `tests/fixtures/logic-unify-basic/`.
+- [x] Add `tests/fixtures/logic-unify-fail/`.
+- [x] Add `tests/fixtures/logic-fresh/`.
+- [x] Add `tests/fixtures/logic-conjoined/`.
+- [x] Add `tests/fixtures/logic-disjoined/`.
+- [x] Add `tests/fixtures/logic-occurs-check/`.
+- [x] Add `tests/fixtures/logic-reify/`.
+- [x] Add `tests/fixtures/logic-query/`.
+- [ ] Add codegen snapshots for `or-parser` and `run-logic` lowering. (deferred)
 
 ### Phase B5 prerequisites
 
