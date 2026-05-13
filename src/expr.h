@@ -350,7 +350,11 @@ struct Expr {
         struct { Expr *fn_expr; }                    async_;       /* (async fn-expr) */
         struct { Expr *fut_expr; }                   await_;       /* (await fut) */
         /* Phase H §1: dictionary passing */
-        struct { TypeClassInstance *instance; char dict_name[128]; } dict_; /* (dict Instance) */
+        struct {
+            TypeClassInstance *instance;
+            char dict_name[128];  /* "dict_<Class>_<type>" singleton name */
+            char method_name[64]; /* sanitized method field name; '\0' = address-only mode */
+        } dict_; /* (dict Instance) */
 
         /* Phase 11: Struct operations */
         struct { StructDef *def; Expr **field_values; uint32_t n_fields; } make_struct_; /* (make-struct Name v1...) */

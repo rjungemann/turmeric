@@ -9,20 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Common backend vtable */
-struct IOBackendVTable {
-    void (*free)(IOBackend *backend);
-    int (*register_fd)(IOBackend *backend, int fd, int events, io_callback_t callback, void *user_data);
-    int (*modify_fd)(IOBackend *backend, int fd, int events);
-    int (*unregister_fd)(IOBackend *backend, int fd);
-    int (*poll)(IOBackend *backend, int timeout_ms);
-    void (*wake)(IOBackend *backend);
-};
-
-/* Base backend structure */
-struct IOBackend {
-    const struct IOBackendVTable *vtable;
-};
+/* IOBackend and IOBackendVTable are defined in io.h */
 
 /* Platform-specific constructors */
 #if defined(IO_BACKEND_EPOLL)

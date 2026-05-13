@@ -448,6 +448,8 @@ typedef struct Elab {
     const Symbol *sym_defkind;     /* defkind */
     /* Phase HKT-P2: defrec — recursive type binders */
     const Symbol *sym_defrec;      /* defrec */
+    /* Phase HKT-P1: type-app — type-level application */
+    const Symbol *sym_type_app;    /* type-app */
     /* Phase HKT (v2): reserved typeclass names — user definitions rejected with diagnostic */
     const Symbol *sym_hkt_Functor;
     const Symbol *sym_hkt_Applicative;
@@ -921,6 +923,8 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_defkind = intern_cstr(st, "defkind");
     /* Phase HKT-P2: defrec */
     e->sym_defrec = intern_cstr(st, "defrec");
+    /* Phase HKT-P1: type-app */
+    e->sym_type_app = intern_cstr(st, "type-app");
     /* Phase HKT (v2): reserved typeclass names */
     e->sym_hkt_Functor      = intern_cstr(st, "Functor");
     e->sym_hkt_Applicative  = intern_cstr(st, "Applicative");
@@ -6035,6 +6039,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
 /* Phase HKT H5: kind aliases */
 static Expr *elab_defkind(Elab *e, const Form *call);
 static Expr *elab_defrec(Elab *e, const Form *call);  /* Phase HKT-P2 */
+static Expr *elab_type_app(Elab *e, const Form *call);  /* Phase HKT-P1 */
 /* Phase 17: throw! sugar */
 static Expr *elab_throw_bang(Elab *e, const Form *call);
 /* Phase 18: call/cc and escape sugar */
@@ -6131,6 +6136,8 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_defkind) return elab_defkind(e, call);
     /* Phase HKT-P2: recursive type binders */
     if (name == e->sym_defrec) return elab_defrec(e, call);
+    /* Phase HKT-P1: type-level application */
+    if (name == e->sym_type_app) return elab_type_app(e, call);
     /* Phase R2: Panic */
     if (name == e->sym_panic) return elab_panic(e, call);
     if (name == e->sym_panic_with) return elab_panic_with(e, call);
@@ -6408,6 +6415,11 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         if (!arg_ok && expected_arg_kind == TY_INT && args[i]->type.kind == TY_STRUCT) {
             /* Phase HKT H3: Allow passing an HKT container (TY_STRUCT) where int64_t
              * is expected.  HKT type constructor values are opaque int64_t at runtime. */
+            arg_ok = true;
+        }
+        if (!arg_ok && expected_arg_kind == TY_INT && args[i]->type.kind == TY_APP) {
+            /* Phase HKT §3: Allow passing a partially-applied type (TY_APP) where int64_t
+             * is expected.  Partial type application values are opaque int64_t at runtime. */
             arg_ok = true;
         }
         if (!arg_ok && expected_arg_kind == TY_INT && args[i]->type.kind == TY_FN) {
@@ -7258,6 +7270,33 @@ static Expr *elab_async(Elab *e, const Form *call) {
     }
     Expr *fn_expr = elab_form(e, call->as.list.items[1]);
     if (!fn_expr) return NULL;
+    
+    /* AW-012 / AW-011B-1: Send-check for async closures.
+     * Values captured in async blocks must be Send (can be moved to fiber context). */
+    if (fn_expr->kind == EX_FN || fn_expr->kind == EX_CLOSURE) {
+        const struct Closure *cl = NULL;
+        if (fn_expr->kind == EX_CLOSURE) {
+            cl = fn_expr->as.closure_.closure;
+        } else if (fn_expr->kind == EX_FN) {
+            cl = fn_expr->as.fn_.closure;
+        }
+        if (cl) {
+            bool had_error = false;
+            for (uint8_t i = 0; i < cl->n_captures; i++) {
+                Binding *cap = cl->captures[i];
+                if (!type_is_send(cap->type)) {
+                    diag_emit_with_code(DIAG_ERROR, call->span,
+                        TUR_E0010_NOT_SEND,
+                        "type `%s` cannot be sent across thread boundaries "
+                        "(not `Send`); captured variable `%s` in async block",
+                        type_name(cap->type), cap->name->name);
+                    had_error = true;
+                }
+            }
+            if (had_error) return NULL;
+        }
+    }
+    
     Expr *out = expr_new(e->arena, EX_ASYNC, TYPE_PTR_VOID, call->span);
     out->as.async_.fn_expr = fn_expr;
     return out;
@@ -7572,7 +7611,8 @@ static Expr *elab_defrec(Elab *e, const Form *call) {
     }
     const Symbol *name = name_form->as.sym;
 
-    /* Accept params if present (arg 2) — validate is a list/vector but ignore in v1 */
+    /* Accept params if present (arg 2) — validate is a list/vector */
+    uint32_t body_idx = 2;
     if (call->as.list.len >= 3) {
         Form *params_f = call->as.list.items[2];
         if (params_f->tag != F_LIST && params_f->tag != F_VEC) {
@@ -7580,9 +7620,13 @@ static Expr *elab_defrec(Elab *e, const Form *call) {
                       "defrec: expected parameter list");
             return NULL;
         }
+        body_idx = 3;
     }
 
-    /* Accept body form (arg 3) but ignore it in v1 */
+    /* Parse body form (arg body_idx) — optional in v1 */
+    /* The body can reference the recursive type itself, creating a circular dependency.
+     * In v1, we just store the form without elaborating it. */
+    Form *body_form = (call->as.list.len >= body_idx + 1) ? call->as.list.items[body_idx] : NULL;
 
     /* Create TY_REC type: kind * -> * (recursive type constructor) */
     Type rec_type;
@@ -7591,13 +7635,119 @@ static Expr *elab_defrec(Elab *e, const Form *call) {
     rec_type.copy_kind = CK_MOVE;
     rec_type.hkt_kind  = KIND_ARROW;    /* defrec types are kind * -> * */
     rec_type.as.rec.name = name->name;
-    rec_type.as.rec.body = NULL;        /* v1: body not yet evaluated */
+    rec_type.as.rec.body = NULL;        /* v1: body not yet evaluated, but we store the form for future use */
+    
+    /* If a body was provided, store it for later elaboration */
+    if (body_form) {
+        /* For now, we just note that a body exists but don't elaborate it */
+        /* This is a placeholder for when full recursive type support is added */
+    }
 
     /* Register in global scope */
     Binding *b = binding_new(e, name, rec_type, false, true, name_form->span);
     scope_add(&e->global, b);
 
     /* defrec has no runtime effect */
+    return e_nil(e, call->span);
+}
+
+/* Elaborate (type-app F A)
+ *
+ * Type-level application: applies type constructor F to type argument A.
+ * Creates a TY_APP type and validates kind constraints.
+ *
+ * Syntax: (type-app result int)
+ *         (type-app Fix (result int))
+ *
+ * The result kind is derived from F's kind:
+ *   - If F has kind KIND_ARROW (* -> *), result is KIND_STAR
+ *   - If F has kind KIND_ARROW2 (* -> * -> *), result is KIND_ARROW
+ *
+ * Phase HKT-P1.
+ */
+static Expr *elab_type_app(Elab *e, const Form *call) {
+    /* Minimum: (type-app F A) */
+    if (call->as.list.len < 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "type-app requires (type-app F A)");
+        return NULL;
+    }
+
+    /* Parse type constructor F (arg 1) - must be a symbol */
+    Form *fn_form = call->as.list.items[1];
+    if (fn_form->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, fn_form->span,
+                  "type-app: type constructor must be a symbol");
+        return NULL;
+    }
+
+    /* Look up F in the type environment */
+    Binding *fn_binding = scope_lookup(e->scope, fn_form->as.sym);
+    if (!fn_binding) {
+        fn_binding = scope_lookup(&e->global, fn_form->as.sym);
+    }
+    if (!fn_binding) {
+        diag_emit(DIAG_ERROR, fn_form->span,
+                  "type-app: unknown type constructor '%s'", fn_form->as.sym->name);
+        return NULL;
+    }
+    Type fn_type = fn_binding->type;
+
+    /* Parse type argument A (arg 2) - can be a symbol, keyword, or nested type-app */
+    Form *arg_form = call->as.list.items[2];
+    Type arg_type;
+    
+    if (arg_form->tag == F_SYM || arg_form->tag == F_KEYWORD) {
+        const Symbol *arg_sym = arg_form->as.sym;
+        /* Try primitive types first */
+        if (arg_sym == e->sym_int || (arg_sym->len == 3 && memcmp(arg_sym->name, "int", 3) == 0)) {
+            arg_type = TYPE_INT;
+        } else if (arg_sym == e->sym_bool || (arg_sym->len == 4 && memcmp(arg_sym->name, "bool", 4) == 0)) {
+            arg_type = TYPE_BOOL;
+        } else if (arg_sym->len == 4 && memcmp(arg_sym->name, "cstr", 4) == 0) {
+            arg_type = TYPE_CSTR;
+        } else if ((arg_sym->len == 4 && memcmp(arg_sym->name, "void", 4) == 0) ||
+                   (arg_sym->len == 3 && memcmp(arg_sym->name, "nil", 3) == 0)) {
+            arg_type = TYPE_NIL;
+        } else if (arg_sym->len == 9 && memcmp(arg_sym->name, "ptr<void>", 9) == 0) {
+            arg_type = TYPE_PTR_VOID;
+        } else {
+            /* Look up as a type binding */
+            Binding *arg_binding = scope_lookup(e->scope, arg_sym);
+            if (!arg_binding) {
+                arg_binding = scope_lookup(&e->global, arg_sym);
+            }
+            if (!arg_binding) {
+                diag_emit(DIAG_ERROR, arg_form->span,
+                          "type-app: unknown type '%s'", arg_sym->name);
+                return NULL;
+            }
+            arg_type = arg_binding->type;
+        }
+    } else if (arg_form->tag == F_LIST) {
+        /* Nested type application: (type-app result (type-app option int))
+         * For now, recursively elaborate as type-app */
+        Expr *arg_expr = elab_type_app(e, arg_form);
+        if (!arg_expr) {
+            return NULL;
+        }
+        diag_emit(DIAG_ERROR, arg_form->span,
+                  "type-app: nested type applications not yet supported");
+        return NULL;
+    } else {
+        diag_emit(DIAG_ERROR, arg_form->span,
+                  "type-app: type argument must be a symbol, keyword, or type application");
+        return NULL;
+    }
+
+    /* Create TY_APP type using the type_app helper */
+    /* The type is computed but not stored - in v1, type-app is a compile-time-only
+     * construct that validates the kind application. Future work will register
+     * the result type for use in type annotations. */
+    Type app_type = type_app(e->arena, fn_type, arg_type, call->span);
+    (void)app_type;  /* Suppress unused variable warning in v1 */
+
+    /* type-app has no runtime effect; return nil */
     return e_nil(e, call->span);
 }
 
@@ -7845,6 +7995,64 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
                             type_args[i].as.struct_.def = NULL;
                             type_arg_syms[i] = kw;
                         }
+                    } else if (arg->tag == F_LIST && arg->as.list.len == 2) {
+                        /* Phase HKT §3: (constructor arg) — partial type application.
+                         * Parses `(result int)` in type position as TY_APP where
+                         * fn = TY_STRUCT(constructor, KIND_ARROW2) and arg = concrete type.
+                         * This allows `(definstance Functor [(result int)] ...)`. */
+                        Form *ctor_form = arg->as.list.items[0];
+                        Form *aarg_form = arg->as.list.items[1];
+                        if (ctor_form->tag != F_SYM && ctor_form->tag != F_KEYWORD) {
+                            diag_emit(DIAG_ERROR, ctor_form->span,
+                                      "type application constructor must be a symbol");
+                            return NULL;
+                        }
+                        const Symbol *ctor_sym = ctor_form->as.sym;
+                        /* Parse the argument type (must be a primitive or known sym) */
+                        Type app_arg_type;
+                        if (aarg_form->tag == F_SYM || aarg_form->tag == F_KEYWORD) {
+                            const Symbol *akw = aarg_form->as.sym;
+                            if (akw->len == 3 && memcmp(akw->name, "int", 3) == 0) {
+                                app_arg_type = TYPE_INT;
+                            } else if (akw->len == 4 && memcmp(akw->name, "bool", 4) == 0) {
+                                app_arg_type = TYPE_BOOL;
+                            } else if (akw->len == 4 && memcmp(akw->name, "cstr", 4) == 0) {
+                                app_arg_type = TYPE_CSTR;
+                            } else if ((akw->len == 4 && memcmp(akw->name, "void", 4) == 0) ||
+                                       (akw->len == 3 && memcmp(akw->name, "nil", 3) == 0)) {
+                                app_arg_type = TYPE_NIL;
+                            } else {
+                                /* Unknown type arg — treat as opaque struct */
+                                memset(&app_arg_type, 0, sizeof(app_arg_type));
+                                app_arg_type.kind = TY_STRUCT;
+                                app_arg_type.copy_kind = CK_MOVE;
+                                app_arg_type.as.struct_.def = NULL;
+                            }
+                        } else {
+                            diag_emit(DIAG_ERROR, aarg_form->span,
+                                      "type application argument must be a type keyword or symbol");
+                            return NULL;
+                        }
+                        /* Build fn type: TY_STRUCT with no def, KIND_ARROW2 (binary constructor) */
+                        Type *fn_type = (Type *)arena_alloc(e->arena, sizeof(Type));
+                        memset(fn_type, 0, sizeof(Type));
+                        fn_type->kind = TY_STRUCT;
+                        fn_type->copy_kind = CK_MOVE;
+                        fn_type->hkt_kind = KIND_ARROW2;
+                        fn_type->as.struct_.def = NULL;
+                        /* Build arg type on arena */
+                        Type *arg_type_ptr = (Type *)arena_alloc(e->arena, sizeof(Type));
+                        *arg_type_ptr = app_arg_type;
+                        /* Assemble TY_APP */
+                        memset(&type_args[i], 0, sizeof(type_args[i]));
+                        type_args[i].kind = TY_APP;
+                        type_args[i].copy_kind = CK_MOVE;
+                        /* fn of KIND_ARROW2 applied to one arg → KIND_ARROW */
+                        type_args[i].hkt_kind = KIND_ARROW;
+                        type_args[i].as.app.fn  = fn_type;
+                        type_args[i].as.app.arg = arg_type_ptr;
+                        /* Store constructor sym for name mangling (e.g. "result") */
+                        type_arg_syms[i] = ctor_sym;
                     } else {
                         diag_emit(DIAG_ERROR, arg->span,
                                   "unsupported type argument in definstance");
@@ -8204,6 +8412,24 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
                         type_component = "T";
                     }
                     break;
+                case TY_APP: {
+                    /* Phase HKT §3: partial type application — encode as "ctor_arg" */
+                    const char *ctor_part = "T";
+                    const char *arg_part  = "T";
+                    if (type_arg_syms && type_arg_syms[j]) {
+                        ctor_part = type_arg_syms[j]->name;
+                    }
+                    if (type_args[j].as.app.arg) {
+                        const char *n = type_name(*type_args[j].as.app.arg);
+                        if (n) arg_part = n;
+                    }
+                    snprintf(ctor_name_buf, sizeof(ctor_name_buf), "%s_%s", ctor_part, arg_part);
+                    for (char *p = ctor_name_buf; *p; p++) {
+                        if (!isalnum((unsigned char)*p)) *p = '_';
+                    }
+                    type_component = ctor_name_buf;
+                    break;
+                }
                 default: type_component = "T"; break;
             }
             int written = snprintf(type_suffix + type_suffix_len,
@@ -8370,6 +8596,8 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
         method_fd->is_variadic = false;
         method_fd->closure = NULL;
         method_fd->param_types = method_param_types;
+        method_fd->may_capture = false;
+        method_fd->inferred_effect_row = NULL;  /* must be NULL; effect_check_pass reads this */
         constraint_set_init(&method_fd->constraints);
         
         /* Register the method function at file scope */
@@ -8760,15 +8988,37 @@ found_method:;
         }
     }
     
+    /* Phase H §1 (dict load): Build an EX_DICT node that carries both the
+     * singleton identity AND the method field name.  When fn_expr is this
+     * node, emit.c dispatches through the dictionary struct at the call site:
+     *   dict_<Class>_<type>_singleton.<method>(args...)
+     * instead of a direct call to the impl function.  Fall back to the direct
+     * binding if, for some reason, no instance was resolved. */
+    Expr *dict_expr = NULL;
+    if (best_inst) {
+        dict_expr = make_dict_expr(e, best_inst, call->span);
+        /* Copy the method name into the EX_DICT node and sanitize for C. */
+        strncpy(dict_expr->as.dict_.method_name, method_name,
+                sizeof(dict_expr->as.dict_.method_name) - 1);
+        dict_expr->as.dict_.method_name[sizeof(dict_expr->as.dict_.method_name) - 1] = '\0';
+        for (char *p = dict_expr->as.dict_.method_name; *p; p++) {
+            if (!isalnum((unsigned char)*p) && *p != '_') *p = '_';
+        }
+    }
+
     Expr *out = expr_new(e->arena, EX_CALL, result_type, call->span);
-    out->as.call_.fn_binding = best_method->binding;
-    out->as.call_.args = call_args;
-    out->as.call_.n_args = n_args + 1;
-    out->as.call_.fn_expr = NULL;
-    /* Phase H §1: Annotate the call with the selected instance's dictionary.
-     * Full runtime dict passing is deferred; this field records which dictionary
-     * would be passed so future passes can use it without re-resolving. */
-    out->as.call_.dict_arg = best_inst ? make_dict_expr(e, best_inst, call->span) : NULL;
+    if (dict_expr) {
+        /* Dictionary dispatch: indirect call through the vtable field. */
+        out->as.call_.fn_binding = NULL;
+        out->as.call_.fn_expr    = dict_expr;
+    } else {
+        /* Fallback: direct call (no instance resolved — should not happen). */
+        out->as.call_.fn_binding = best_method->binding;
+        out->as.call_.fn_expr    = NULL;
+    }
+    out->as.call_.args    = call_args;
+    out->as.call_.n_args  = n_args + 1;
+    out->as.call_.dict_arg = dict_expr;  /* annotation for downstream passes */
     return out;
 }
 
@@ -8794,12 +9044,20 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                 if (head->as.sym == e.sym_defn) {
                     /* Parse defn declaration without body */
                     if (f->as.list.len >= 3) {
-                        Form *name_f = f->as.list.items[1];
+                        /* Phase R5: skip optional #[no-unwind] attribute */
+                        uint32_t name_idx = 1;
+                        if (f->as.list.items[1]->tag == F_SYM &&
+                            f->as.list.items[1]->as.sym == e.sym_no_unwind_attr) {
+                            name_idx = 2;
+                        }
+                        if ((uint32_t)f->as.list.len <= name_idx) goto next_form;
+                        Form *name_f = f->as.list.items[name_idx];
                         if (name_f->tag == F_SYM) {
                             /* Parse return type annotation if present */
                             TypeKind return_kind = TY_INT; /* default */
-                            if (f->as.list.len >= 4) {
-                                Form *ret_f = f->as.list.items[3];
+                            uint32_t ret_idx = name_idx + 2; /* name params :ret */
+                            if (f->as.list.len > ret_idx) {
+                                Form *ret_f = f->as.list.items[ret_idx];
                                 if (ret_f->tag == F_KEYWORD) {
                                     const Symbol *kw = ret_f->as.sym;
                                     if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
@@ -8822,6 +9080,7 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                             scope_add(&e.global, b);
                         }
                     }
+                    next_form:;
                 }
             }
         }

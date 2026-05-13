@@ -347,3 +347,41 @@
   }
   return err((int)(intptr_t)ex->payload);
   ```)
+
+
+;;; SINCE: Phase HKT H3 / Phase R0
+;; Functor and Monad instances for result<T, E>
+
+;; Functor for result - map over the ok value, pass err through unchanged
+;; fmap :: (a -> b) -> result a e -> result b e
+(defn __functor_result_fmap [container fn] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)container;
+  if (!res || !res->is_ok) return (void*)res;  /* propagate err */
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out =
+      malloc(sizeof(struct { bool is_ok; int64_t ok_val; int64_t err_val; }));
+  if (!out) return NULL;
+  out->is_ok = true;
+  out->ok_val = ((int64_t(*)(int64_t))(intptr_t)fn)(res->ok_val);
+  out->err_val = res->err_val;  /* preserve error */
+  return (void*)out;
+  ```)
+
+(definstance Functor [ptr<void>]
+  (fmap [container fn] (__functor_result_fmap container fn)))
+
+;; Monad for result - bind (flat-map) with short-circuit on err
+;; bind :: result a e -> (a -> result b e) -> result b e
+(defn __monad_result_bind [ma fn] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)ma;
+  if (!res || !res->is_ok) return (void*)res;  /* propagate err */
+  /* fn: int64_t -> result pointer. Apply fn to ok_val, return the result. */
+  int64_t result_ptr = ((int64_t(*)(int64_t))(intptr_t)fn)(res->ok_val);
+  return (void*)result_ptr;
+  ```)
+
+(definstance Monad [ptr<void>]
+  (bind [ma fn] (__monad_result_bind ma fn)))

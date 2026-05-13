@@ -29,7 +29,18 @@ set(TUR_SOURCES
     rc_elision.c
     rc_free_queue.c
     rc.c
+    io.c
+>>>>>>> 57dbe9b4f48d40fca23c3d33076ff777f8723afa
+    runtime.c
+=======
     reader.c
+    io.c
+    io_epoll.c
+    io_kqueue.c
+    runtime.c
+=======
+    io.c
+>>>>>>> 57dbe9b4f48d40fca23c3d33076ff777f8723afa
     runtime.c
     symbols.c
     typeclass.c
@@ -43,6 +54,15 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
     list(APPEND TUR_SOURCES fiber_ctx_x64.S)
 else()
     message(FATAL_ERROR "Unsupported architecture '${CMAKE_SYSTEM_PROCESSOR}'; expected arm64/aarch64/x86_64/amd64")
+endif()
+
+# Platform-specific I/O backends
+if(UNIX AND NOT APPLE AND NOT FREEBSD AND NOT OPENBSD AND NOT NETBSD)
+    # Linux - use epoll
+    list(APPEND TUR_SOURCES io_epoll.c)
+elseif(APPLE OR FREEBSD OR OPENBSD OR NETBSD)
+    # BSD/macOS - use kqueue
+    list(APPEND TUR_SOURCES io_kqueue.c)
 endif()
 
 add_executable(tur ${TUR_SOURCES})

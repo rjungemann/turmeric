@@ -70,7 +70,7 @@ bool aq_push(AtomicQueue *q, AtomicQueueItem item) {
     }
 
     /* Try to atomically reserve a slot */
-    if (!__atomic_compare_exchange_n(&q->tail, &tail, new_tail, 0, 
+    if (!__atomic_compare_exchange_n((size_t *)&q->tail, &tail, new_tail, 0, 
                                        __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
         return false;  /* CAS failed, retry */
     }
@@ -83,8 +83,8 @@ bool aq_push(AtomicQueue *q, AtomicQueueItem item) {
 
 /* Pop an item from the queue (single-threaded consumer) */
 AtomicQueueItem aq_pop(AtomicQueue *q, bool *success) {
-    size_t head = q->head;
-    size_t tail = q->tail;
+    size_t head = __atomic_load_n((size_t *)&q->head, __ATOMIC_RELAXED);
+    size_t tail = __atomic_load_n((size_t *)&q->tail, __ATOMIC_RELAXED);
 
     if (head >= tail) {
         *success = false;
@@ -92,12 +92,14 @@ AtomicQueueItem aq_pop(AtomicQueue *q, bool *success) {
     }
 
     AtomicQueueItem item = __atomic_load_n(&q->buffer[head & q->mask], __ATOMIC_ACQUIRE);
-    q->head = head + 1;
+    __atomic_store_n((size_t *)&q->head, head + 1, __ATOMIC_RELEASE);
 
     *success = true;
     return item;
 }
 
 bool aq_empty(AtomicQueue *q) {
-    return q->head >= q->tail;
+    size_t head = __atomic_load_n((size_t *)&q->head, __ATOMIC_RELAXED);
+    size_t tail = __atomic_load_n((size_t *)&q->tail, __ATOMIC_RELAXED);
+    return head >= tail;
 }
