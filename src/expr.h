@@ -135,6 +135,8 @@ typedef enum ExprKind {
     EX_TVAR_MODIFY,    /* (TVar::modify tvar fn) - modify TVar within stm block */
     EX_TVAR_SWAP,      /* (TVar::swap tvar new) - swap TVar value within stm block */
     EX_TVAR_CAS,       /* (TVar::cas tvar old new) - compare-and-swap within stm block */
+    /* Phase N: numeric cast */
+    EX_CAST,           /* (as TargetType expr) — explicit numeric cast */
     /* Phase H §1: dictionary passing */
     EX_DICT,           /* implicit dictionary argument — address of a typeclass instance singleton */
     /* Phase 11: Struct operations */
@@ -143,8 +145,6 @@ typedef enum ExprKind {
     EX_PROGRAM,
     /* Phase M0: Module system */
     EX_DEFMODULE,      /* (defmodule name [docstring] (export ...) (import ...) body...) */
-    /* Phase N: Numeric type cast */
-    EX_CAST,           /* (as TargetType expr) — explicit numeric coercion */
 } ExprKind;
 
 /* Phase 2: FnDef represents a function definition from defn or lifted fn. */
@@ -422,6 +422,8 @@ struct Expr {
         struct { Expr *tvar; Expr *fn; }              tvar_modify_; /* (TVar::modify tvar fn) */
         struct { Expr *tvar; Expr *new_val; }         tvar_swap_;   /* (TVar::swap tvar new) */
         struct { Expr *tvar; Expr *old_val; Expr *new_val; } tvar_cas_; /* (TVar::cas tvar old new) */
+        /* Phase N: numeric cast */
+        struct { Expr *expr; TypeKind target_kind; } cast_;        /* (as T e) */
         /* Phase H §1: dictionary passing */
         struct {
             TypeClassInstance *instance;
@@ -437,8 +439,6 @@ struct Expr {
 
         /* Phase M0: Module system */
         struct { struct DefModule *mod; }                                   defmodule_;
-        /* Phase N: Numeric cast — (as TargetType expr) */
-        struct { Expr *expr; TypeKind target_kind; }                       cast_;
     } as;
 };
 

@@ -46,14 +46,6 @@ static TypeKind typekind_from_symbol(const char *name) {
     if (strcmp(name, "bool") == 0) return TY_BOOL;
     if (strcmp(name, "float") == 0) return TY_FLOAT;
     if (strcmp(name, "float64") == 0) return TY_FLOAT;   /* alias */
-    if (strcmp(name, "int8") == 0) return TY_INT8;
-    if (strcmp(name, "int16") == 0) return TY_INT16;
-    if (strcmp(name, "int32") == 0) return TY_INT32;
-    if (strcmp(name, "uint8") == 0) return TY_UINT8;
-    if (strcmp(name, "uint16") == 0) return TY_UINT16;
-    if (strcmp(name, "uint32") == 0) return TY_UINT32;
-    if (strcmp(name, "uint64") == 0) return TY_UINT64;
-    if (strcmp(name, "float32") == 0) return TY_FLOAT32;
     if (strcmp(name, "cstr") == 0) return TY_CSTR;
     if (strcmp(name, "nil") == 0) return TY_NIL;
     if (strcmp(name, "ptr-void") == 0) return TY_PTR_VOID;
@@ -62,7 +54,31 @@ static TypeKind typekind_from_symbol(const char *name) {
     if (strcmp(name, "weak") == 0) return TY_WEAK;
     if (strcmp(name, "exception") == 0) return TY_EXCEPTION;
     if (strcmp(name, "cont") == 0) return TY_CONT;
+    /* Phase N: fixed-width numeric types */
+    if (strcmp(name, "int8")   == 0) return TY_INT8;
+    if (strcmp(name, "int16")  == 0) return TY_INT16;
+    if (strcmp(name, "int32")  == 0) return TY_INT32;
+    if (strcmp(name, "int64")  == 0) return TY_INT64;
+    if (strcmp(name, "uint8")  == 0) return TY_UINT8;
+    if (strcmp(name, "uint16") == 0) return TY_UINT16;
+    if (strcmp(name, "uint32") == 0) return TY_UINT32;
+    if (strcmp(name, "uint64") == 0) return TY_UINT64;
+    if (strcmp(name, "float32") == 0) return TY_FLOAT32;
+    if (strcmp(name, "float64") == 0) return TY_FLOAT64;
     return TY_UNKNOWN;
+}
+
+/* Phase N: returns true if kind is any numeric type */
+static bool typekind_is_numeric(TypeKind k) {
+    switch (k) {
+        case TY_INT: case TY_FLOAT:
+        case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT32: case TY_FLOAT64:
+            return true;
+        default:
+            return false;
+    }
 }
 
 /* Helper to get the compile-time size of a type in bytes (0 = unknown). */
@@ -71,20 +87,23 @@ static int type_size_bytes(TypeKind kind) {
         case TY_BOOL:     return 1;   /* bool → 1 byte in C */
         case TY_INT:      return 8;   /* int64_t → 8 bytes */
         case TY_FLOAT:    return 8;   /* double → 8 bytes */
-        case TY_INT8:     return 1;
-        case TY_INT16:    return 2;
-        case TY_INT32:    return 4;
-        case TY_UINT8:    return 1;
-        case TY_UINT16:   return 2;
-        case TY_UINT32:   return 4;
-        case TY_UINT64:   return 8;
-        case TY_FLOAT32:  return 4;
         case TY_CSTR:     return 8;   /* const char* → pointer size */
         case TY_PTR_VOID: return 8;   /* void* → pointer size */
         case TY_NIL:      return 0;   /* unit / void — no size */
         case TY_REF:      return 8;   /* heap pointer */
         case TY_RC:       return 8;   /* rc pointer */
         case TY_WEAK:     return 8;   /* weak pointer */
+        /* Phase N: fixed-width numeric types */
+        case TY_INT8:   return 1;
+        case TY_INT16:  return 2;
+        case TY_INT32:  return 4;
+        case TY_INT64:  return 8;
+        case TY_UINT8:  return 1;
+        case TY_UINT16: return 2;
+        case TY_UINT32: return 4;
+        case TY_UINT64: return 8;
+        case TY_FLOAT32: return 4;
+        case TY_FLOAT64: return 8;
         default:          return 0;   /* unknown / composite */
     }
 }
@@ -590,6 +609,8 @@ typedef struct Elab {
     const Symbol *sym_tvar_modify;   /* tvar/modify */
     const Symbol *sym_tvar_swap;     /* tvar/swap */
     const Symbol *sym_tvar_cas;      /* tvar/cas */
+    /* Phase N: (as TargetType expr) numeric cast */
+    const Symbol *sym_as;
     /* Phase 13: Lifetime annotations */
     /* We recognize lifetime annotations as symbols starting with '\'' */
     /* No specific symbol needed - we check the symbol name at runtime */
@@ -628,7 +649,6 @@ typedef struct Elab {
     const Symbol *sym_export;     /* export */
     const Symbol *sym_import;     /* import */
     const Symbol *sym_load;       /* load */
-    const Symbol *sym_as;         /* as  — for (as Type expr) numeric cast */
     const Symbol *kw_as;          /* :as */
     const Symbol *kw_refer;       /* :refer */
     bool has_defmodule;           /* whether defmodule has been seen in this file */
@@ -6595,6 +6615,9 @@ static Expr *elab_tvar_modify(Elab *e, const Form *call);
 static Expr *elab_tvar_swap(Elab *e, const Form *call);
 static Expr *elab_tvar_cas(Elab *e, const Form *call);
 
+/* Phase N: (as TargetType expr) — explicit numeric cast (defined later) */
+static Expr *elab_as_cast(Elab *e, const Form *call);
+
 /* ---- general elab ---- */
 
 static Expr *elab_call(Elab *e, Form *call) {
@@ -7770,22 +7793,6 @@ static Binding *elab_lookup_sym(Elab *e, const Symbol *sym, Span span, bool *had
     return NULL; /* Not a recognised qualified name; caller handles "unbound" */
 }
 
-/* Phase N: (as TargetType expr) — explicit numeric coercion.
- * Syntax: (as type-name expr)
- * Both source and target must be numeric (int/uint/float variants).
- * A cast between identical types is allowed (no-op). */
-static bool typekind_is_numeric(TypeKind k) {
-    switch (k) {
-        case TY_INT: case TY_FLOAT:
-        case TY_INT8: case TY_INT16: case TY_INT32:
-        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
-        case TY_FLOAT32:
-            return true;
-        default:
-            return false;
-    }
-}
-
 static Expr *elab_as_cast(Elab *e, const Form *call) {
     if (call->as.list.len != 3) {
         diag_emit(DIAG_ERROR, call->span,
@@ -7841,16 +7848,37 @@ static Expr *elab_form(Elab *e, Form *f) {
             return out;
         }
         case F_INT: {
-            TypeKind k = (f->lit_kind != TY_UNKNOWN) ? (TypeKind)f->lit_kind : TY_INT;
-            Type t = type_simple(k, CK_COPY);
-            Expr *out = expr_new(e->arena, EX_INT_LIT, t, f->span);
-            out->as.i = f->as.i;
+            /* Phase N: dispatch to fixed-width type based on suffix */
+            Type lit_type;
+            switch (f->lit_suffix) {
+                case LIT_SUF_I8:  lit_type = TYPE_INT8;    break;
+                case LIT_SUF_I16: lit_type = TYPE_INT16;   break;
+                case LIT_SUF_I32: lit_type = TYPE_INT32;   break;
+                case LIT_SUF_I64: lit_type = TYPE_INT64;   break;
+                case LIT_SUF_U8:  lit_type = TYPE_UINT8;   break;
+                case LIT_SUF_U16: lit_type = TYPE_UINT16;  break;
+                case LIT_SUF_U32: lit_type = TYPE_UINT32;  break;
+                case LIT_SUF_U64: lit_type = TYPE_UINT64;  break;
+                case LIT_SUF_F32: lit_type = TYPE_FLOAT32; break;
+                case LIT_SUF_F64: lit_type = TYPE_FLOAT64; break;
+                default:          lit_type = TYPE_INT;     break;
+            }
+            bool is_float_suffix = (f->lit_suffix == LIT_SUF_F32 || f->lit_suffix == LIT_SUF_F64);
+            ExprKind ek = is_float_suffix ? EX_FLOAT_LIT : EX_INT_LIT;
+            Expr *out = expr_new(e->arena, ek, lit_type, f->span);
+            if (is_float_suffix) out->as.f = (double)f->as.i;
+            else                 out->as.i = f->as.i;
             return out;
         }
         case F_FLOAT: {
-            TypeKind k = (f->lit_kind != TY_UNKNOWN) ? (TypeKind)f->lit_kind : TY_FLOAT;
-            Type t = type_simple(k, CK_COPY);
-            Expr *out = expr_new(e->arena, EX_FLOAT_LIT, t, f->span);
+            /* Phase N: dispatch float suffix */
+            Type lit_type;
+            switch (f->lit_suffix) {
+                case LIT_SUF_F32: lit_type = TYPE_FLOAT32; break;
+                case LIT_SUF_F64: lit_type = TYPE_FLOAT64; break;
+                default:          lit_type = TYPE_FLOAT;   break;
+            }
+            Expr *out = expr_new(e->arena, EX_FLOAT_LIT, lit_type, f->span);
             out->as.f = f->as.f;
             return out;
         }
