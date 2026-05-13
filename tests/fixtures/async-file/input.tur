@@ -1,51 +1,96 @@
-;; Phase T24: async-file — async read/write a temp file
+;; Phase T24: async-file — async write to a temp file, read it back.
 ;;
-;; Creates a temporary file, writes a known string to it, reads it back,
-;; and prints the contents.  Uses POSIX file APIs via extern declarations
-;; to avoid #include conflicts inside inline-C function bodies.
+;; Two fibers run under the scheduler:
+;;   1. Writer: opens /tmp/tur-async-file-test.txt, writes "hello async world",
+;;      closes the file, then prints "wrote".
+;;   2. Reader: sleeps briefly to ensure writer finishes, opens the file,
+;;      reads contents, prints them, closes the file.
+;;
+;; Note: On regular files, O_NONBLOCK doesn't actually make reads/writes
+;; non-blocking on most OSes (including macOS/Linux). But the API still works
+;; correctly — reads/writes just complete immediately rather than parking.
+;;
+;; Expected output:
+;;   start
+;;   wrote 17 bytes
+;;   read 17 bytes: hello async world
+;;   all done
 
-(defn async-file-test [] :int
+;; Note: open/write/read/close are available via the headers included in the
+;; runtime preamble (unistd.h, fcntl.h) — no extern-c needed.
+
+(defn mk-scheduler [] :ptr<void>
   ```c
-  extern int mkstemp(char *tmpl);
-  extern ssize_t write(int fd, const void *buf, size_t n);
-  extern ssize_t read(int fd, void *buf, size_t n);
-  extern int close(int fd);
-  extern int unlink(const char *path);
-  extern off_t lseek(int fd, off_t offset, int whence);
-  #define SEEK_SET 0
+  TurScheduler *s = tur_scheduler_new();
+  tur_scheduler = s;
+  return (void *)s;
+  ```)
 
-  char path[] = "/tmp/tur-async-file-XXXXXX";
-  int fd = mkstemp(path);
-  if (fd < 0) { fprintf(stderr, "async-file: mkstemp failed\n"); return 1; }
+(defn mk-fiber [fn :ptr<void>] :ptr<void>
+  ```c
+  return (void *)tur_fiber_block_new((void(*)(void))fn, 0);
+  ```)
 
-  const char *data = "hello async\n";
-  size_t dlen = 12;  /* strlen("hello async\n") */
-  ssize_t written = write(fd, data, dlen);
-  if (written < 0 || (size_t)written != dlen) {
-      fprintf(stderr, "async-file: write failed\n");
-      close(fd); unlink(path); return 1;
-  }
+(defn sched-spawn [s :ptr<void> f :ptr<void>] :nil
+  ```c
+  tur_scheduler_spawn((TurScheduler *)s, (FiberBlock *)f);
+  ```)
 
-  if (lseek(fd, 0, SEEK_SET) < 0) {
-      fprintf(stderr, "async-file: lseek failed\n");
-      close(fd); unlink(path); return 1;
-  }
+(defn sched-run [s :ptr<void>] :nil
+  ```c
+  tur_scheduler_run((TurScheduler *)s);
+  ```)
 
-  char buf[64];
-  memset(buf, 0, sizeof(buf));
-  ssize_t n = read(fd, buf, sizeof(buf) - 1);
-  if (n <= 0) {
-      fprintf(stderr, "async-file: read failed\n");
-      close(fd); unlink(path); return 1;
-  }
-  buf[n] = '\0';
-  if (n > 0 && buf[n - 1] == '\n') buf[n - 1] = '\0';
-  printf("read: %s\n", buf);
+(defn timer-sleep-ms [ms :int] :nil
+  ```c
+  if (ms <= 0) return;
+  FiberBlock *me = tur_current_fiber;
+  if (!me || !tur_scheduler) return;
+  if (!tur_global_timers) tur_global_timers = tur_timer_wheel_new();
+  int64_t deadline = tur_monotonic_ns() + (int64_t)ms * 1000000LL;
+  tur_timer_wheel_insert(tur_global_timers, deadline,
+      (void(*)(void*))tur_scheduler_unpark, me);
+  me->parked = 1;
+  tur_fiber_block_yield(0);
+  ```)
 
+;; --- Fiber bodies ---
+
+(defn fiber-writer [] :nil
+  ```c
+  int fd = open("/tmp/tur-async-file-test.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fd < 0) { fprintf(stderr, "open write failed\n"); abort(); }
+  const char *msg = "hello async world";
+  ssize_t n = write(fd, msg, 17);
   close(fd);
-  unlink(path);
-  return 0;
+  printf("wrote %d bytes\n", (int)n);
+  ```)
+
+(defn fiber-reader [] :nil
+  ```c
+  /* Sleep briefly to let writer finish */
+  FiberBlock *me = tur_current_fiber;
+  if (!tur_global_timers) tur_global_timers = tur_timer_wheel_new();
+  int64_t deadline = tur_monotonic_ns() + 50LL * 1000000LL;
+  tur_timer_wheel_insert(tur_global_timers, deadline,
+      (void(*)(void*))tur_scheduler_unpark, me);
+  me->parked = 1;
+  tur_fiber_block_yield(0);
+
+  int fd = open("/tmp/tur-async-file-test.txt", O_RDONLY, 0);
+  if (fd < 0) { fprintf(stderr, "open read failed\n"); abort(); }
+  char buf[256];
+  memset(buf, 0, 256);
+  ssize_t n = read(fd, buf, 255);
+  close(fd);
+  printf("read %d bytes: %s\n", (int)n, buf);
   ```)
 
 (defn main [] :int
-  (async-file-test))
+  (println "start")
+  (let [s (mk-scheduler)]
+    (sched-spawn s (mk-fiber fiber-writer))
+    (sched-spawn s (mk-fiber fiber-reader))
+    (sched-run s)
+    (println "all done")
+    0))

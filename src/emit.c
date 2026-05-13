@@ -3922,6 +3922,15 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "extern void *memcpy(void *, const void *, size_t);\n");
     /* Phase 19: strcmp for effect handler name matching */
     buf_puts(out, "extern int strcmp(const char *, const char *);\n");
+    /* Phase T24: Headers for timer wheel, async I/O, and networking */
+    buf_puts(out, "#include <time.h>\n");
+    buf_puts(out, "#include <unistd.h>\n");
+    buf_puts(out, "#include <fcntl.h>\n");
+    buf_puts(out, "#include <errno.h>\n");
+    buf_puts(out, "#include <sys/select.h>\n");
+    buf_puts(out, "#include <sys/socket.h>\n");
+    buf_puts(out, "#include <netinet/in.h>\n");
+    buf_puts(out, "#include <arpa/inet.h>\n");
     buf_puts(out, "\n");
     /* Phase 7 follow-up: minimal in-process test registry for stdlib/test.tur. */
     buf_puts(out, "#define TUR_TEST_REGISTRY_MAX 1024\n");
@@ -4520,6 +4529,61 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    }\n");
     buf_puts(out, "    pthread_mutex_unlock(&g->lock);\n");
     buf_puts(out, "}\n\n");
+    /* Phase T24: Forward declarations for timer wheel and IO waiters
+     * (defined after scheduler, but referenced in scheduler run loops) */
+    /* Phase T24: Timer wheel structs + globals (defined early so scheduler
+     * run loops and helper functions can reference them) */
+    buf_puts(out, "static int64_t tur_monotonic_ns(void) {\n");
+    buf_puts(out, "    struct timespec ts;\n");
+    buf_puts(out, "    clock_gettime(CLOCK_MONOTONIC, &ts);\n");
+    buf_puts(out, "    return (int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec;\n");
+    buf_puts(out, "}\n\n");
+
+    buf_puts(out, "typedef struct TurTimerEntry {\n");
+    buf_puts(out, "    int64_t deadline_ns;\n");
+    buf_puts(out, "    void (*callback)(void *);\n");
+    buf_puts(out, "    void *arg;\n");
+    buf_puts(out, "    int64_t id;\n");
+    buf_puts(out, "    bool cancelled;\n");
+    buf_puts(out, "} TurTimerEntry;\n\n");
+
+    buf_puts(out, "typedef struct TurTimerWheel {\n");
+    buf_puts(out, "    TurTimerEntry **heap;\n");
+    buf_puts(out, "    int64_t len;\n");
+    buf_puts(out, "    int64_t cap;\n");
+    buf_puts(out, "    int64_t next_id;\n");
+    buf_puts(out, "} TurTimerWheel;\n\n");
+
+    buf_puts(out, "static TurTimerWheel *tur_global_timers = NULL;\n\n");
+
+    buf_puts(out, "#define TUR_IO_READ  1\n");
+    buf_puts(out, "#define TUR_IO_WRITE 2\n\n");
+
+    buf_puts(out, "typedef struct TurIOWaiter {\n");
+    buf_puts(out, "    int fd;\n");
+    buf_puts(out, "    int events;\n");
+    buf_puts(out, "    FiberBlock *fiber;\n");
+    buf_puts(out, "    struct TurIOWaiter *next;\n");
+    buf_puts(out, "} TurIOWaiter;\n\n");
+
+    buf_puts(out, "static TurIOWaiter *tur_io_waiters = NULL;\n\n");
+
+    /* Forward-declare timer/IO functions used in scheduler run loops */
+    buf_puts(out, "static void tur_timer_wheel_tick(TurTimerWheel *w);\n");
+    buf_puts(out, "static int64_t tur_timer_wheel_next_deadline_ns(TurTimerWheel *w);\n");
+    buf_puts(out, "static int64_t tur_timer_wheel_insert(TurTimerWheel *w, int64_t deadline_ns, void (*cb)(void *), void *arg);\n");
+    buf_puts(out, "static void tur_timer_wheel_cancel(TurTimerWheel *w, int64_t id);\n");
+    buf_puts(out, "static TurTimerWheel *tur_timer_wheel_new(void);\n");
+    buf_puts(out, "static void tur_io_register(int fd, int events, FiberBlock *fiber);\n");
+    buf_puts(out, "static void tur_io_unregister(int fd);\n");
+    buf_puts(out, "static void tur_io_poll(int64_t timeout_us);\n");
+    buf_puts(out, "static void tur_scheduler_timeout(int64_t ms, void (*callback)(void *arg), void *arg);\n");
+    buf_puts(out, "static void tur_tick_timers(void);\n");
+    buf_puts(out, "static void tur_poll_io(int64_t timeout_us);\n");
+    buf_puts(out, "static bool tur_has_pending_timers(void);\n");
+    buf_puts(out, "static bool tur_has_pending_io(void);\n");
+    buf_puts(out, "static int64_t tur_next_timer_wait_us(void);\n\n");
+
     /* Phase T21: Cooperative Scheduler for fibers */
     buf_puts(out, "typedef struct TurScheduler TurScheduler;\n");
     buf_puts(out, "struct TurScheduler {\n");
@@ -4578,8 +4642,18 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "static void tur_scheduler_run(TurScheduler *s) {\n");
     buf_puts(out, "    s->running = true;\n");
     buf_puts(out, "    while (s->running) {\n");
+    buf_puts(out, "        /* Phase T24: tick timers and poll IO before dequeuing */\n");
+    buf_puts(out, "        tur_tick_timers();\n");
+    buf_puts(out, "        tur_poll_io(0);\n");
     buf_puts(out, "        FiberBlock *f = tur_scheduler_dequeue(s);\n");
-    buf_puts(out, "        if (!f) { break; }\n");
+    buf_puts(out, "        if (!f) {\n");
+    buf_puts(out, "            if (!tur_has_pending_timers() && !tur_has_pending_io()) break;\n");
+    buf_puts(out, "            int64_t sleep_us = tur_next_timer_wait_us();\n");
+    buf_puts(out, "            if (sleep_us < 0) sleep_us = 1000;\n");
+    buf_puts(out, "            if (tur_has_pending_io()) tur_poll_io(sleep_us);\n");
+    buf_puts(out, "            else { struct timespec ts = {0, sleep_us * 1000}; nanosleep(&ts, NULL); }\n");
+    buf_puts(out, "            continue;\n");
+    buf_puts(out, "        }\n");
     buf_puts(out, "        s->current_fiber = f;\n");
     buf_puts(out, "        tur_fiber_block_resume(f, 0);\n");
     buf_puts(out, "        s->current_fiber = NULL;\n");
@@ -4589,13 +4663,21 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "}\n\n");
     buf_puts(out, "static void tur_scheduler_run_to_completion(TurScheduler *s) {\n");
     buf_puts(out, "    s->running = true;\n");
-    buf_puts(out, "    while (s->run_queue_len > 0 && s->running) {\n");
+    buf_puts(out, "    while (s->running) {\n");
+    buf_puts(out, "        tur_tick_timers();\n");
+    buf_puts(out, "        tur_poll_io(0);\n");
     buf_puts(out, "        FiberBlock *f = tur_scheduler_dequeue(s);\n");
     buf_puts(out, "        if (f) {\n");
     buf_puts(out, "            s->current_fiber = f;\n");
     buf_puts(out, "            tur_fiber_block_resume(f, 0);\n");
     buf_puts(out, "            s->current_fiber = NULL;\n");
     buf_puts(out, "            if (!f->done && !f->parked) tur_scheduler_enqueue(s, f);\n");
+    buf_puts(out, "        } else {\n");
+    buf_puts(out, "            if (!tur_has_pending_timers() && !tur_has_pending_io()) break;\n");
+    buf_puts(out, "            int64_t sleep_us = tur_next_timer_wait_us();\n");
+    buf_puts(out, "            if (sleep_us < 0) sleep_us = 1000;\n");
+    buf_puts(out, "            if (tur_has_pending_io()) tur_poll_io(sleep_us);\n");
+    buf_puts(out, "            else { struct timespec ts = {0, sleep_us * 1000}; nanosleep(&ts, NULL); }\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    s->running = false;\n");
@@ -4614,55 +4696,195 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    if (tur_scheduler) tur_scheduler_enqueue(tur_scheduler, f);\n");
     buf_puts(out, "}\n\n");
 
-    /* AW-010: Scheduler timeout - schedule callback after delay */
-    buf_puts(out, "typedef struct TurTimeout TurTimeout;\n");
-    buf_puts(out, "struct TurTimeout {\n");
-    buf_puts(out, "    int64_t ms;\n");
-    buf_puts(out, "    void (*callback)(void *arg);\n");
-    buf_puts(out, "    void *arg;\n");
-    buf_puts(out, "    pthread_t thread;\n");
-    buf_puts(out, "    TurTimeout *next;\n");
-    buf_puts(out, "};\n\n");
-    buf_puts(out, "static TurTimeout *tur_timeout_list = NULL;\n");
-    buf_puts(out, "static pthread_mutex_t tur_timeout_lock = PTHREAD_MUTEX_INITIALIZER;\n\n");
-    
-    buf_puts(out, "static void *tur_timeout_thread(void *raw) {\n");
-    buf_puts(out, "    TurTimeout *t = (TurTimeout *)raw;\n");
-    buf_puts(out, "    if (t->ms > 0) {\n");
-    buf_puts(out, "        struct timespec ts;\n");
-    buf_puts(out, "        ts.tv_sec = t->ms / 1000;\n");
-    buf_puts(out, "        ts.tv_nsec = (t->ms % 1000) * 1000000L;\n");
-    buf_puts(out, "        nanosleep(&ts, NULL);\n");
-    buf_puts(out, "    }\n");
-    buf_puts(out, "    t->callback(t->arg);\n");
-    buf_puts(out, "    pthread_mutex_lock(&tur_timeout_lock);\n");
-    buf_puts(out, "    TurTimeout *prev = NULL;\n");
-    buf_puts(out, "    TurTimeout *curr = tur_timeout_list;\n");
-    buf_puts(out, "    while (curr && curr != t) { prev = curr; curr = curr->next; }\n");
-    buf_puts(out, "    if (prev) prev->next = t->next;\n");
-    buf_puts(out, "    else tur_timeout_list = t->next;\n");
-    buf_puts(out, "    pthread_mutex_unlock(&tur_timeout_lock);\n");
-    buf_puts(out, "    free(t);\n");
-    buf_puts(out, "    return NULL;\n");
+    /* Phase T24: Timer wheel function implementations
+     * (structs, globals, and tur_monotonic_ns defined earlier before scheduler) */
+    buf_puts(out, "static TurTimerWheel *tur_timer_wheel_new(void) {\n");
+    buf_puts(out, "    TurTimerWheel *w = (TurTimerWheel *)calloc(1, sizeof(TurTimerWheel));\n");
+    buf_puts(out, "    if (!w) { fprintf(stderr, \"timer wheel: oom\\n\"); abort(); }\n");
+    buf_puts(out, "    w->cap = 64;\n");
+    buf_puts(out, "    w->heap = (TurTimerEntry **)malloc(sizeof(TurTimerEntry *) * (size_t)w->cap);\n");
+    buf_puts(out, "    if (!w->heap) { free(w); fprintf(stderr, \"timer wheel: heap oom\\n\"); abort(); }\n");
+    buf_puts(out, "    w->len = 0;\n");
+    buf_puts(out, "    w->next_id = 1;\n");
+    buf_puts(out, "    return w;\n");
     buf_puts(out, "}\n\n");
-    
+
+    /* Min-heap helpers: sift up and sift down by deadline */
+    buf_puts(out, "static void tur_timer_heap_sift_up(TurTimerWheel *w, int64_t idx) {\n");
+    buf_puts(out, "    while (idx > 0) {\n");
+    buf_puts(out, "        int64_t parent = (idx - 1) / 2;\n");
+    buf_puts(out, "        if (w->heap[parent]->deadline_ns <= w->heap[idx]->deadline_ns) break;\n");
+    buf_puts(out, "        TurTimerEntry *tmp = w->heap[parent];\n");
+    buf_puts(out, "        w->heap[parent] = w->heap[idx];\n");
+    buf_puts(out, "        w->heap[idx] = tmp;\n");
+    buf_puts(out, "        idx = parent;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "}\n\n");
+
+    buf_puts(out, "static void tur_timer_heap_sift_down(TurTimerWheel *w, int64_t idx) {\n");
+    buf_puts(out, "    while (1) {\n");
+    buf_puts(out, "        int64_t smallest = idx;\n");
+    buf_puts(out, "        int64_t left = 2 * idx + 1;\n");
+    buf_puts(out, "        int64_t right = 2 * idx + 2;\n");
+    buf_puts(out, "        if (left < w->len && w->heap[left]->deadline_ns < w->heap[smallest]->deadline_ns)\n");
+    buf_puts(out, "            smallest = left;\n");
+    buf_puts(out, "        if (right < w->len && w->heap[right]->deadline_ns < w->heap[smallest]->deadline_ns)\n");
+    buf_puts(out, "            smallest = right;\n");
+    buf_puts(out, "        if (smallest == idx) break;\n");
+    buf_puts(out, "        TurTimerEntry *tmp = w->heap[smallest];\n");
+    buf_puts(out, "        w->heap[smallest] = w->heap[idx];\n");
+    buf_puts(out, "        w->heap[idx] = tmp;\n");
+    buf_puts(out, "        idx = smallest;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "}\n\n");
+
+    buf_puts(out, "static int64_t tur_timer_wheel_insert(TurTimerWheel *w, int64_t deadline_ns,\n");
+    buf_puts(out, "                                       void (*cb)(void *), void *arg) {\n");
+    buf_puts(out, "    if (w->len >= w->cap) {\n");
+    buf_puts(out, "        int64_t new_cap = w->cap * 2;\n");
+    buf_puts(out, "        TurTimerEntry **nh = (TurTimerEntry **)malloc(sizeof(TurTimerEntry *) * (size_t)new_cap);\n");
+    buf_puts(out, "        if (!nh) { fprintf(stderr, \"timer wheel: grow oom\\n\"); abort(); }\n");
+    buf_puts(out, "        for (int64_t i = 0; i < w->len; i++) nh[i] = w->heap[i];\n");
+    buf_puts(out, "        free(w->heap);\n");
+    buf_puts(out, "        w->heap = nh;\n");
+    buf_puts(out, "        w->cap = new_cap;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    TurTimerEntry *e = (TurTimerEntry *)malloc(sizeof(TurTimerEntry));\n");
+    buf_puts(out, "    if (!e) { fprintf(stderr, \"timer entry: oom\\n\"); abort(); }\n");
+    buf_puts(out, "    e->deadline_ns = deadline_ns;\n");
+    buf_puts(out, "    e->callback = cb;\n");
+    buf_puts(out, "    e->arg = arg;\n");
+    buf_puts(out, "    e->id = w->next_id++;\n");
+    buf_puts(out, "    e->cancelled = false;\n");
+    buf_puts(out, "    w->heap[w->len] = e;\n");
+    buf_puts(out, "    tur_timer_heap_sift_up(w, w->len);\n");
+    buf_puts(out, "    w->len++;\n");
+    buf_puts(out, "    return e->id;\n");
+    buf_puts(out, "}\n\n");
+
+    buf_puts(out, "static void tur_timer_wheel_cancel(TurTimerWheel *w, int64_t id) {\n");
+    buf_puts(out, "    for (int64_t i = 0; i < w->len; i++) {\n");
+    buf_puts(out, "        if (w->heap[i]->id == id) { w->heap[i]->cancelled = true; return; }\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "}\n\n");
+
+    buf_puts(out, "static void tur_timer_wheel_tick(TurTimerWheel *w) {\n");
+    buf_puts(out, "    int64_t now = tur_monotonic_ns();\n");
+    buf_puts(out, "    while (w->len > 0 && w->heap[0]->deadline_ns <= now) {\n");
+    buf_puts(out, "        TurTimerEntry *e = w->heap[0];\n");
+    buf_puts(out, "        w->len--;\n");
+    buf_puts(out, "        if (w->len > 0) {\n");
+    buf_puts(out, "            w->heap[0] = w->heap[w->len];\n");
+    buf_puts(out, "            tur_timer_heap_sift_down(w, 0);\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "        if (!e->cancelled) e->callback(e->arg);\n");
+    buf_puts(out, "        free(e);\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "}\n\n");
+
+    buf_puts(out, "static int64_t tur_timer_wheel_next_deadline_ns(TurTimerWheel *w) {\n");
+    buf_puts(out, "    while (w->len > 0 && w->heap[0]->cancelled) {\n");
+    buf_puts(out, "        TurTimerEntry *e = w->heap[0];\n");
+    buf_puts(out, "        w->len--;\n");
+    buf_puts(out, "        if (w->len > 0) {\n");
+    buf_puts(out, "            w->heap[0] = w->heap[w->len];\n");
+    buf_puts(out, "            tur_timer_heap_sift_down(w, 0);\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "        free(e);\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    if (w->len == 0) return -1;\n");
+    buf_puts(out, "    return w->heap[0]->deadline_ns;\n");
+    buf_puts(out, "}\n\n");
+
+    /* tur_scheduler_timeout: same API, now uses timer wheel instead of thread-per-timeout */
     buf_puts(out, "static void tur_scheduler_timeout(int64_t ms, void (*callback)(void *arg), void *arg) {\n");
-    buf_puts(out, "    TurTimeout *t = (TurTimeout *)malloc(sizeof(TurTimeout));\n");
-    buf_puts(out, "    if (!t) { fprintf(stderr, \"timeout: oom\\n\"); abort(); }\n");
-    buf_puts(out, "    t->ms = ms;\n");
-    buf_puts(out, "    t->callback = callback;\n");
-    buf_puts(out, "    t->arg = arg;\n");
-    buf_puts(out, "    t->next = NULL;\n");
-    buf_puts(out, "    pthread_mutex_lock(&tur_timeout_lock);\n");
-    buf_puts(out, "    t->next = tur_timeout_list;\n");
-    buf_puts(out, "    tur_timeout_list = t;\n");
-    buf_puts(out, "    pthread_mutex_unlock(&tur_timeout_lock);\n");
-    buf_puts(out, "    pthread_attr_t attr;\n");
-    buf_puts(out, "    pthread_attr_init(&attr);\n");
-    buf_puts(out, "    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);\n");
-    buf_puts(out, "    pthread_t tid;\n");
-    buf_puts(out, "    pthread_create(&tid, &attr, tur_timeout_thread, t);\n");
-    buf_puts(out, "    pthread_attr_destroy(&attr);\n");
+    buf_puts(out, "    if (!tur_global_timers) tur_global_timers = tur_timer_wheel_new();\n");
+    buf_puts(out, "    int64_t deadline = tur_monotonic_ns() + ms * 1000000LL;\n");
+    buf_puts(out, "    tur_timer_wheel_insert(tur_global_timers, deadline, callback, arg);\n");
+    buf_puts(out, "}\n\n");
+
+    /* Phase T24: IO waiter function implementations
+     * (struct, defines, and global defined earlier before scheduler) */
+    buf_puts(out, "static void tur_io_register(int fd, int events, FiberBlock *fiber) {\n");
+    buf_puts(out, "    TurIOWaiter *w = (TurIOWaiter *)malloc(sizeof(TurIOWaiter));\n");
+    buf_puts(out, "    if (!w) { fprintf(stderr, \"io waiter: oom\\n\"); abort(); }\n");
+    buf_puts(out, "    w->fd = fd;\n");
+    buf_puts(out, "    w->events = events;\n");
+    buf_puts(out, "    w->fiber = fiber;\n");
+    buf_puts(out, "    w->next = tur_io_waiters;\n");
+    buf_puts(out, "    tur_io_waiters = w;\n");
+    buf_puts(out, "}\n\n");
+
+    buf_puts(out, "static void tur_io_unregister(int fd) {\n");
+    buf_puts(out, "    TurIOWaiter **pp = &tur_io_waiters;\n");
+    buf_puts(out, "    while (*pp) {\n");
+    buf_puts(out, "        if ((*pp)->fd == fd) {\n");
+    buf_puts(out, "            TurIOWaiter *tmp = *pp;\n");
+    buf_puts(out, "            *pp = tmp->next;\n");
+    buf_puts(out, "            free(tmp);\n");
+    buf_puts(out, "            return;\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "        pp = &(*pp)->next;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "}\n\n");
+
+    buf_puts(out, "static void tur_io_poll(int64_t timeout_us) {\n");
+    buf_puts(out, "    if (!tur_io_waiters) return;\n");
+    buf_puts(out, "    fd_set rfds, wfds;\n");
+    buf_puts(out, "    FD_ZERO(&rfds);\n");
+    buf_puts(out, "    FD_ZERO(&wfds);\n");
+    buf_puts(out, "    int maxfd = -1;\n");
+    buf_puts(out, "    for (TurIOWaiter *w = tur_io_waiters; w; w = w->next) {\n");
+    buf_puts(out, "        if (w->events & TUR_IO_READ)  FD_SET(w->fd, &rfds);\n");
+    buf_puts(out, "        if (w->events & TUR_IO_WRITE) FD_SET(w->fd, &wfds);\n");
+    buf_puts(out, "        if (w->fd > maxfd) maxfd = w->fd;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    struct timeval tv;\n");
+    buf_puts(out, "    tv.tv_sec = (long)(timeout_us / 1000000);\n");
+    buf_puts(out, "    tv.tv_usec = (long)(timeout_us % 1000000);\n");
+    buf_puts(out, "    int ret = select(maxfd + 1, &rfds, &wfds, NULL, &tv);\n");
+    buf_puts(out, "    if (ret <= 0) return;\n");
+    buf_puts(out, "    TurIOWaiter **pp = &tur_io_waiters;\n");
+    buf_puts(out, "    while (*pp) {\n");
+    buf_puts(out, "        TurIOWaiter *w = *pp;\n");
+    buf_puts(out, "        bool ready = false;\n");
+    buf_puts(out, "        if ((w->events & TUR_IO_READ)  && FD_ISSET(w->fd, &rfds))  ready = true;\n");
+    buf_puts(out, "        if ((w->events & TUR_IO_WRITE) && FD_ISSET(w->fd, &wfds)) ready = true;\n");
+    buf_puts(out, "        if (ready) {\n");
+    buf_puts(out, "            FiberBlock *f = w->fiber;\n");
+    buf_puts(out, "            *pp = w->next;\n");
+    buf_puts(out, "            free(w);\n");
+    buf_puts(out, "            tur_scheduler_unpark(f);\n");
+    buf_puts(out, "        } else {\n");
+    buf_puts(out, "            pp = &w->next;\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "}\n\n");
+
+    /* Phase T24: Helper functions for scheduler integration (implementations
+     * of the forward-declared functions used in the scheduler run loops) */
+    buf_puts(out, "static void tur_tick_timers(void) {\n");
+    buf_puts(out, "    if (tur_global_timers) tur_timer_wheel_tick(tur_global_timers);\n");
+    buf_puts(out, "}\n\n");
+
+    buf_puts(out, "static void tur_poll_io(int64_t timeout_us) {\n");
+    buf_puts(out, "    if (tur_io_waiters) tur_io_poll(timeout_us);\n");
+    buf_puts(out, "}\n\n");
+
+    buf_puts(out, "static bool tur_has_pending_timers(void) {\n");
+    buf_puts(out, "    return tur_global_timers && tur_global_timers->len > 0;\n");
+    buf_puts(out, "}\n\n");
+
+    buf_puts(out, "static bool tur_has_pending_io(void) {\n");
+    buf_puts(out, "    return tur_io_waiters != NULL;\n");
+    buf_puts(out, "}\n\n");
+
+    buf_puts(out, "static int64_t tur_next_timer_wait_us(void) {\n");
+    buf_puts(out, "    if (!tur_global_timers || tur_global_timers->len == 0) return -1;\n");
+    buf_puts(out, "    int64_t next = tur_timer_wheel_next_deadline_ns(tur_global_timers);\n");
+    buf_puts(out, "    if (next < 0) return -1;\n");
+    buf_puts(out, "    int64_t diff = (next - tur_monotonic_ns()) / 1000;\n");
+    buf_puts(out, "    return diff > 0 ? diff : 0;\n");
     buf_puts(out, "}\n\n");
 
     /* Phase T24: Timer wheel — O(1) insert/cancel/tick */

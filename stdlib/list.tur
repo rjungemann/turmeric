@@ -83,3 +83,163 @@
     dst->next  = x.next;
     return (int64_t)(intptr_t)dst;
     ```))
+
+;;; SINCE: Phase HKT §6 — Stdlib HKT migration
+;; HKT typeclass instances for singly-linked list (Cons/nil).
+
+;; Functor instance for list.
+;; fmap :: (a -> b) -> list a -> list b
+;; Maps fn over every element, building a new list.
+(defn __functor_list_fmap [container fn] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell =
+      (struct { int64_t value; int64_t next; } *)(intptr_t)container;
+  if (!cell) return 0; /* nil -> nil */
+  /* Build result list in reverse, then reverse it */
+  struct { int64_t value; int64_t next; } *rev = NULL;
+  while (cell) {
+      struct { int64_t value; int64_t next; } *n = malloc(sizeof(*n));
+      n->value = ((int64_t(*)(int64_t))(intptr_t)fn)(cell->value);
+      n->next = (int64_t)(intptr_t)rev;
+      rev = n;
+      cell = (struct { int64_t value; int64_t next; } *)(intptr_t)cell->next;
+  }
+  /* Reverse */
+  struct { int64_t value; int64_t next; } *result = NULL;
+  while (rev) {
+      struct { int64_t value; int64_t next; } *tmp =
+          (struct { int64_t value; int64_t next; } *)(intptr_t)rev->next;
+      rev->next = (int64_t)(intptr_t)result;
+      result = rev;
+      rev = tmp;
+  }
+  return (int64_t)(intptr_t)result;
+  ```)
+
+(definstance Functor [list]
+  (fmap [container fn] (__functor_list_fmap container fn)))
+
+;; Foldable instance for list.
+;; foldl :: (b -> a -> b) -> b -> list a -> b
+;; foldr :: (a -> b -> b) -> b -> list a -> b
+(defn __foldable_list_foldl [ta init fn] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell =
+      (struct { int64_t value; int64_t next; } *)(intptr_t)ta;
+  int64_t acc = init;
+  while (cell) {
+      acc = ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(acc, cell->value);
+      cell = (struct { int64_t value; int64_t next; } *)(intptr_t)cell->next;
+  }
+  return acc;
+  ```)
+
+(defn __foldable_list_foldr [ta init fn] :int
+  ```c
+  /* Count elements first, then process in reverse order via stack */
+  struct { int64_t value; int64_t next; } *cell =
+      (struct { int64_t value; int64_t next; } *)(intptr_t)ta;
+  /* Count */
+  size_t count = 0;
+  struct { int64_t value; int64_t next; } *tmp = cell;
+  while (tmp) { count++; tmp = (struct { int64_t value; int64_t next; } *)(intptr_t)tmp->next; }
+  if (count == 0) return init;
+  /* Collect values into stack array */
+  int64_t *vals = malloc(sizeof(int64_t) * count);
+  tmp = cell;
+  for (size_t i = 0; i < count; i++) {
+      vals[i] = tmp->value;
+      tmp = (struct { int64_t value; int64_t next; } *)(intptr_t)tmp->next;
+  }
+  /* Fold from right */
+  int64_t acc = init;
+  for (size_t i = count; i-- > 0; ) {
+      acc = ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(vals[i], acc);
+  }
+  free(vals);
+  return acc;
+  ```)
+
+(definstance Foldable [list]
+  (foldl [ta init fn] (__foldable_list_foldl ta init fn))
+  (foldr [ta init fn] (__foldable_list_foldr ta init fn)))
+
+;; Applicative instance for list.
+;;   pure x = cons(x, nil)
+;;   ap [f1, f2, ...] [x1, x2, ...] = [f1 x1, f1 x2, ..., f2 x1, ...]
+(defn __applicative_list_pure [x] :int
+  (cons x (nil-value)))
+
+(defn __applicative_list_ap [ff fa] :int
+  ```c
+  struct { int64_t value; int64_t next; } *fs =
+      (struct { int64_t value; int64_t next; } *)(intptr_t)ff;
+  struct { int64_t value; int64_t next; } *as =
+      (struct { int64_t value; int64_t next; } *)(intptr_t)fa;
+  if (!fs || !as) return 0;
+  /* Build result in reverse, then reverse */
+  struct { int64_t value; int64_t next; } *rev = NULL;
+  struct { int64_t value; int64_t next; } *fc = fs;
+  while (fc) {
+      struct { int64_t value; int64_t next; } *ac = as;
+      while (ac) {
+          struct { int64_t value; int64_t next; } *n = malloc(sizeof(*n));
+          n->value = ((int64_t(*)(int64_t))(intptr_t)fc->value)(ac->value);
+          n->next = (int64_t)(intptr_t)rev;
+          rev = n;
+          ac = (struct { int64_t value; int64_t next; } *)(intptr_t)ac->next;
+      }
+      fc = (struct { int64_t value; int64_t next; } *)(intptr_t)fc->next;
+  }
+  /* Reverse */
+  struct { int64_t value; int64_t next; } *result = NULL;
+  while (rev) {
+      struct { int64_t value; int64_t next; } *tmp =
+          (struct { int64_t value; int64_t next; } *)(intptr_t)rev->next;
+      rev->next = (int64_t)(intptr_t)result;
+      result = rev;
+      rev = tmp;
+  }
+  return (int64_t)(intptr_t)result;
+  ```)
+
+(definstance Applicative [list]
+  (pure [x] (__applicative_list_pure x))
+  (ap [ff fa] (__applicative_list_ap ff fa)))
+
+;; Monad instance for list.
+;;   bind [a1, a2, ...] f = concat [f a1, f a2, ...]
+(defn __monad_list_bind [ma fn] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell =
+      (struct { int64_t value; int64_t next; } *)(intptr_t)ma;
+  if (!cell) return 0;
+  /* For each element, apply fn (returns a list), then concat all results */
+  struct { int64_t value; int64_t next; } *rev = NULL;
+  while (cell) {
+      int64_t sub_list = ((int64_t(*)(int64_t))(intptr_t)fn)(cell->value);
+      struct { int64_t value; int64_t next; } *sub =
+          (struct { int64_t value; int64_t next; } *)(intptr_t)sub_list;
+      while (sub) {
+          struct { int64_t value; int64_t next; } *n = malloc(sizeof(*n));
+          n->value = sub->value;
+          n->next = (int64_t)(intptr_t)rev;
+          rev = n;
+          sub = (struct { int64_t value; int64_t next; } *)(intptr_t)sub->next;
+      }
+      cell = (struct { int64_t value; int64_t next; } *)(intptr_t)cell->next;
+  }
+  /* Reverse */
+  struct { int64_t value; int64_t next; } *result = NULL;
+  while (rev) {
+      struct { int64_t value; int64_t next; } *tmp =
+          (struct { int64_t value; int64_t next; } *)(intptr_t)rev->next;
+      rev->next = (int64_t)(intptr_t)result;
+      result = rev;
+      rev = tmp;
+  }
+  return (int64_t)(intptr_t)result;
+  ```)
+
+(definstance Monad [list]
+  (bind [ma fn] (__monad_list_bind ma fn)))

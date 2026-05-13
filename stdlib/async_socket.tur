@@ -1,104 +1,178 @@
-;; stdlib/async_socket.tur — Async socket I/O (Phase T24)
+;; stdlib/async_socket.tur — Async TCP socket I/O for Turmeric (Phase T24)
 ;;
-;; Non-blocking TCP socket operations using poll(2) for readiness
-;; detection.  Each socket is created with SOCK_STREAM; callers should
-;; set O_NONBLOCK after calling async-socket-tcp if desired.
+;; Non-blocking TCP socket operations that integrate with the cooperative
+;; scheduler via IO waiters and select()-based polling.
 ;;
 ;; API:
-;;   (async-socket-tcp)                     -> fd :int
-;;   (async-bind    fd port)                -> rc :int
-;;   (async-listen  fd backlog)             -> rc :int
-;;   (async-connect fd port timeout-ms)     -> rc :int
-;;   (async-accept  fd timeout-ms)          -> client-fd :int
-;;   (async-send    fd buf len timeout-ms)  -> n  :int
-;;   (async-recv    fd buf len timeout-ms)  -> n  :int
-;;   (async-socket-close fd)               -> nil
+;;   async-socket-listen  [port backlog]  -> listen-fd
+;;   async-socket-accept  [listen-fd]     -> client-fd (parks until connection)
+;;   async-socket-connect [host port]     -> fd
+;;   async-socket-send    [fd data len]   -> bytes-sent
+;;   async-socket-recv    [fd buf-size]   -> bytes-read
+;;   async-socket-close   [fd]            -> nil
 
-(defn async-socket-tcp [] :int
+;; Create a listening TCP socket on the given port.
+;; Returns the listen fd, or -1 on error.
+(defn async-socket-listen [port :int backlog :int] :int
   ```c
-  extern int socket(int domain, int type, int protocol);
-  return (int64_t)socket(2, 1, 0);   /* AF_INET, SOCK_STREAM, 0 */
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return -1;
+  int opt = 1;
+  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+  /* Set non-blocking */
+  int flags = fcntl(fd, F_GETFL, 0);
+  fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_ANY);
+  addr.sin_port = htons((uint16_t)port);
+  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+    close(fd);
+    return -1;
+  }
+  if (listen(fd, (int)backlog) < 0) {
+    close(fd);
+    return -1;
+  }
+  return (int64_t)fd;
   ```)
 
-(defn async-bind [fd :int port :int] :int
+;; Accept a connection on the listen fd.
+;; Parks the current fiber until a connection arrives.
+;; Returns the client fd, or -1 on error.
+(defn async-socket-accept [listen-fd :int] :int
   ```c
-  extern int bind(int fd, const void *addr, unsigned int addrlen);
-  typedef struct { unsigned short fam; unsigned short port; unsigned int addr; char z[8]; } _SIn;
-  _SIn a;
-  memset(&a, 0, sizeof(a));
-  a.fam  = 2; /* AF_INET */
-  /* htons(port) on little-endian */
-  unsigned short p = (unsigned short)(uint16_t)port;
-  a.port = (unsigned short)((p >> 8) | (p << 8));
-  return (int64_t)bind((int)fd, &a, sizeof(a));
+  while (1) {
+    int cfd = accept((int)listen_fd, NULL, NULL);
+    if (cfd >= 0) {
+      /* Set client socket non-blocking */
+      int flags = fcntl(cfd, F_GETFL, 0);
+      fcntl(cfd, F_SETFL, flags | O_NONBLOCK);
+      return (int64_t)cfd;
+    }
+    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      FiberBlock *me = tur_current_fiber;
+      if (me && tur_scheduler) {
+        tur_io_register((int)listen_fd, TUR_IO_READ, me);
+        me->parked = 1;
+        tur_fiber_block_yield(0);
+        continue;
+      }
+    }
+    return -1;
+  }
   ```)
 
-(defn async-listen [fd :int backlog :int] :int
+;; Connect to a TCP server at host:port.
+;; host should be an IPv4 address string (e.g. "127.0.0.1").
+;; Parks the fiber until the connection completes.
+;; Returns the fd, or -1 on error.
+(defn async-socket-connect [host :cstr port :int] :int
   ```c
-  extern int listen(int fd, int backlog);
-  return (int64_t)listen((int)fd, (int)backlog);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return -1;
+  int flags = fcntl(fd, F_GETFL, 0);
+  fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons((uint16_t)port);
+  inet_pton(AF_INET, host, &addr.sin_addr);
+  int ret = connect(fd, (struct sockaddr *)&addr, sizeof(addr));
+  if (ret == 0) return (int64_t)fd;
+  if (errno == EINPROGRESS) {
+    FiberBlock *me = tur_current_fiber;
+    if (me && tur_scheduler) {
+      tur_io_register(fd, TUR_IO_WRITE, me);
+      me->parked = 1;
+      tur_fiber_block_yield(0);
+      /* Check if connection succeeded */
+      int err = 0;
+      socklen_t errlen = sizeof(err);
+      getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &errlen);
+      if (err == 0) return (int64_t)fd;
+    }
+  }
+  close(fd);
+  return -1;
   ```)
 
-(defn async-connect [fd :int port :int timeout-ms :int] :int
+;; Send data on a connected socket.
+;; Parks the fiber on EAGAIN.
+;; Returns bytes sent, or -1 on error.
+(defn async-socket-send [fd :int data :cstr len :int] :int
   ```c
-  extern int connect(int fd, const void *addr, unsigned int addrlen);
-  extern int poll(void *fds, unsigned int nfds, int timeout_ms);
-  extern int getsockopt(int fd, int level, int optname, void *optval, unsigned int *optlen);
-  #define POLLOUT 0x0004
-  typedef struct { unsigned short fam; unsigned short port; unsigned int addr; char z[8]; } _SIn2;
-  typedef struct { int fd; short events; short revents; } _PFD;
-  _SIn2 a;
-  memset(&a, 0, sizeof(a));
-  a.fam  = 2;
-  unsigned short p = (unsigned short)(uint16_t)port;
-  a.port = (unsigned short)((p >> 8) | (p << 8));
-  /* 127.0.0.1 in network byte order (little-endian host) */
-  a.addr = 0x0100007fU;
-  int _rc = connect((int)fd, &a, sizeof(a));
-  if (_rc == 0) return 0;
-  /* Wait for async connect */
-  _PFD pfd = { (int)fd, POLLOUT, 0 };
-  if (poll(&pfd, 1, (int)timeout_ms) <= 0) return -1;
-  int _err = 0; unsigned int _elen = sizeof(_err);
-  getsockopt((int)fd, 0xffff, 0x1007, &_err, &_elen);
-  return (_err == 0) ? 0 : -1;
+  int64_t total = 0;
+  while (total < len) {
+    ssize_t n = send((int)fd, data + total, (size_t)(len - total), 0);
+    if (n >= 0) {
+      total += n;
+      continue;
+    }
+    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      FiberBlock *me = tur_current_fiber;
+      if (me && tur_scheduler) {
+        tur_io_register((int)fd, TUR_IO_WRITE, me);
+        me->parked = 1;
+        tur_fiber_block_yield(0);
+        continue;
+      }
+    }
+    return -1;
+  }
+  return total;
   ```)
 
-(defn async-accept [fd :int timeout-ms :int] :int
+;; Receive data from a connected socket.
+;; Parks the fiber on EAGAIN.
+;; Returns bytes received, 0 on close, -1 on error.
+;; The received data is stored in fiber-local storage (key 0xA51C50C0)
+;; and can be retrieved with async-socket-recv-buf.
+(defn async-socket-recv [fd :int buf-size :int] :int
   ```c
-  extern int accept(int fd, void *addr, unsigned int *addrlen);
-  extern int poll(void *fds, unsigned int nfds, int timeout_ms);
-  #define POLLIN 0x0001
-  typedef struct { int fd; short events; short revents; } _PFD2;
-  _PFD2 pfd = { (int)fd, POLLIN, 0 };
-  if (poll(&pfd, 1, (int)timeout_ms) <= 0) return -1;
-  return (int64_t)accept((int)fd, NULL, NULL);
+  char *buf = (char *)malloc((size_t)buf_size);
+  if (!buf) return -1;
+  while (1) {
+    ssize_t n = recv((int)fd, buf, (size_t)buf_size, 0);
+    if (n >= 0) {
+      if (tur_current_fiber) {
+        tur_fiber_local_set(tur_current_fiber, 0xA51C50C0, (int64_t)(intptr_t)buf);
+        tur_fiber_local_set(tur_current_fiber, 0xA51C50C1, n);
+      }
+      return (int64_t)n;
+    }
+    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      FiberBlock *me = tur_current_fiber;
+      if (me && tur_scheduler) {
+        tur_io_register((int)fd, TUR_IO_READ, me);
+        me->parked = 1;
+        tur_fiber_block_yield(0);
+        continue;
+      }
+    }
+    free(buf);
+    return -1;
+  }
   ```)
 
-(defn async-send [fd :int buf :ptr<void> len :int timeout-ms :int] :int
+;; Retrieve the receive buffer pointer after async-socket-recv.
+(defn async-socket-recv-buf [] :ptr<void>
   ```c
-  extern ssize_t send(int fd, const void *buf, size_t len, int flags);
-  extern int poll(void *fds, unsigned int nfds, int timeout_ms);
-  #define POLLOUT 0x0004
-  typedef struct { int fd; short events; short revents; } _PFD3;
-  _PFD3 pfd = { (int)fd, POLLOUT, 0 };
-  if (poll(&pfd, 1, (int)timeout_ms) <= 0) return -1;
-  return (int64_t)send((int)fd, (const void *)(intptr_t)buf, (size_t)len, 0);
+  if (!tur_current_fiber) return NULL;
+  return (void*)(intptr_t)tur_fiber_local_get(tur_current_fiber, 0xA51C50C0);
   ```)
 
-(defn async-recv [fd :int buf :ptr<void> len :int timeout-ms :int] :int
+;; Retrieve the number of bytes from the last async-socket-recv.
+(defn async-socket-recv-len [] :int
   ```c
-  extern ssize_t recv(int fd, void *buf, size_t len, int flags);
-  extern int poll(void *fds, unsigned int nfds, int timeout_ms);
-  #define POLLIN 0x0001
-  typedef struct { int fd; short events; short revents; } _PFD4;
-  _PFD4 pfd = { (int)fd, POLLIN, 0 };
-  if (poll(&pfd, 1, (int)timeout_ms) <= 0) return -1;
-  return (int64_t)recv((int)fd, (void *)(intptr_t)buf, (size_t)len, 0);
+  if (!tur_current_fiber) return 0;
+  return tur_fiber_local_get(tur_current_fiber, 0xA51C50C1);
   ```)
 
+;; Close a socket and unregister it from IO polling.
 (defn async-socket-close [fd :int] :nil
   ```c
-  extern int close(int fd);
+  tur_io_unregister((int)fd);
   close((int)fd);
   ```)

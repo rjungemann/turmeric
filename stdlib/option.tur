@@ -129,6 +129,29 @@
 (definstance Monad [option]
   (bind [ma fn] (__monad_option_bind ma fn)))
 
+;; Foldable instance for option.
+;; foldl :: (b -> a -> b) -> b -> option a -> b
+;; foldr :: (a -> b -> b) -> b -> option a -> b
+(defn __foldable_option_foldl [ta init fn] :int
+  ```c
+  struct { bool is_some; int64_t value; } *opt =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)ta;
+  if (!opt || !opt->is_some) return init;
+  return ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(init, opt->value);
+  ```)
+
+(defn __foldable_option_foldr [ta init fn] :int
+  ```c
+  struct { bool is_some; int64_t value; } *opt =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)ta;
+  if (!opt || !opt->is_some) return init;
+  return ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(opt->value, init);
+  ```)
+
+(definstance Foldable [option]
+  (foldl [ta init fn] (__foldable_option_foldl ta init fn))
+  (foldr [ta init fn] (__foldable_option_foldr ta init fn)))
+
 ;; Traversable instance for option.
 ;; traverse :: Applicative f => (a -> f b) -> option a -> f (option b)
 ;; For option as traversable:

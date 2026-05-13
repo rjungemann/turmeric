@@ -18,6 +18,14 @@ extern void *memset(void *, int, size_t);
 extern void *memmove(void *, const void *, size_t);
 extern void *memcpy(void *, const void *, size_t);
 extern int strcmp(const char *, const char *);
+#include <time.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #define TUR_TEST_REGISTRY_MAX 1024
 typedef int64_t (*tur_test_callback_t)(void);
@@ -552,6 +560,56 @@ static void tur_task_group_notify_done(void *task_group) {
     pthread_mutex_unlock(&g->lock);
 }
 
+static int64_t tur_monotonic_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec;
+}
+
+typedef struct TurTimerEntry {
+    int64_t deadline_ns;
+    void (*callback)(void *);
+    void *arg;
+    int64_t id;
+    bool cancelled;
+} TurTimerEntry;
+
+typedef struct TurTimerWheel {
+    TurTimerEntry **heap;
+    int64_t len;
+    int64_t cap;
+    int64_t next_id;
+} TurTimerWheel;
+
+static TurTimerWheel *tur_global_timers = NULL;
+
+#define TUR_IO_READ  1
+#define TUR_IO_WRITE 2
+
+typedef struct TurIOWaiter {
+    int fd;
+    int events;
+    FiberBlock *fiber;
+    struct TurIOWaiter *next;
+} TurIOWaiter;
+
+static TurIOWaiter *tur_io_waiters = NULL;
+
+static void tur_timer_wheel_tick(TurTimerWheel *w);
+static int64_t tur_timer_wheel_next_deadline_ns(TurTimerWheel *w);
+static int64_t tur_timer_wheel_insert(TurTimerWheel *w, int64_t deadline_ns, void (*cb)(void *), void *arg);
+static void tur_timer_wheel_cancel(TurTimerWheel *w, int64_t id);
+static TurTimerWheel *tur_timer_wheel_new(void);
+static void tur_io_register(int fd, int events, FiberBlock *fiber);
+static void tur_io_unregister(int fd);
+static void tur_io_poll(int64_t timeout_us);
+static void tur_scheduler_timeout(int64_t ms, void (*callback)(void *arg), void *arg);
+static void tur_tick_timers(void);
+static void tur_poll_io(int64_t timeout_us);
+static bool tur_has_pending_timers(void);
+static bool tur_has_pending_io(void);
+static int64_t tur_next_timer_wait_us(void);
+
 typedef struct TurScheduler TurScheduler;
 struct TurScheduler {
     FiberBlock **run_queue;
@@ -616,8 +674,18 @@ static void tur_scheduler_spawn(TurScheduler *s, FiberBlock *f) {
 static void tur_scheduler_run(TurScheduler *s) {
     s->running = true;
     while (s->running) {
+        /* Phase T24: tick timers and poll IO before dequeuing */
+        tur_tick_timers();
+        tur_poll_io(0);
         FiberBlock *f = tur_scheduler_dequeue(s);
-        if (!f) { break; }
+        if (!f) {
+            if (!tur_has_pending_timers() && !tur_has_pending_io()) break;
+            int64_t sleep_us = tur_next_timer_wait_us();
+            if (sleep_us < 0) sleep_us = 1000;
+            if (tur_has_pending_io()) tur_poll_io(sleep_us);
+            else { struct timespec ts = {0, sleep_us * 1000}; nanosleep(&ts, NULL); }
+            continue;
+        }
         s->current_fiber = f;
         tur_fiber_block_resume(f, 0);
         s->current_fiber = NULL;
@@ -628,13 +696,21 @@ static void tur_scheduler_run(TurScheduler *s) {
 
 static void tur_scheduler_run_to_completion(TurScheduler *s) {
     s->running = true;
-    while (s->run_queue_len > 0 && s->running) {
+    while (s->running) {
+        tur_tick_timers();
+        tur_poll_io(0);
         FiberBlock *f = tur_scheduler_dequeue(s);
         if (f) {
             s->current_fiber = f;
             tur_fiber_block_resume(f, 0);
             s->current_fiber = NULL;
             if (!f->done && !f->parked) tur_scheduler_enqueue(s, f);
+        } else {
+            if (!tur_has_pending_timers() && !tur_has_pending_io()) break;
+            int64_t sleep_us = tur_next_timer_wait_us();
+            if (sleep_us < 0) sleep_us = 1000;
+            if (tur_has_pending_io()) tur_poll_io(sleep_us);
+            else { struct timespec ts = {0, sleep_us * 1000}; nanosleep(&ts, NULL); }
         }
     }
     s->running = false;
@@ -655,55 +731,187 @@ static void tur_scheduler_unpark(FiberBlock *f) {
     if (tur_scheduler) tur_scheduler_enqueue(tur_scheduler, f);
 }
 
-typedef struct TurTimeout TurTimeout;
-struct TurTimeout {
-    int64_t ms;
-    void (*callback)(void *arg);
-    void *arg;
-    pthread_t thread;
-    TurTimeout *next;
-};
+static TurTimerWheel *tur_timer_wheel_new(void) {
+    TurTimerWheel *w = (TurTimerWheel *)calloc(1, sizeof(TurTimerWheel));
+    if (!w) { fprintf(stderr, "timer wheel: oom\n"); abort(); }
+    w->cap = 64;
+    w->heap = (TurTimerEntry **)malloc(sizeof(TurTimerEntry *) * (size_t)w->cap);
+    if (!w->heap) { free(w); fprintf(stderr, "timer wheel: heap oom\n"); abort(); }
+    w->len = 0;
+    w->next_id = 1;
+    return w;
+}
 
-static TurTimeout *tur_timeout_list = NULL;
-static pthread_mutex_t tur_timeout_lock = PTHREAD_MUTEX_INITIALIZER;
-
-static void *tur_timeout_thread(void *raw) {
-    TurTimeout *t = (TurTimeout *)raw;
-    if (t->ms > 0) {
-        struct timespec ts;
-        ts.tv_sec = t->ms / 1000;
-        ts.tv_nsec = (t->ms % 1000) * 1000000L;
-        nanosleep(&ts, NULL);
+static void tur_timer_heap_sift_up(TurTimerWheel *w, int64_t idx) {
+    while (idx > 0) {
+        int64_t parent = (idx - 1) / 2;
+        if (w->heap[parent]->deadline_ns <= w->heap[idx]->deadline_ns) break;
+        TurTimerEntry *tmp = w->heap[parent];
+        w->heap[parent] = w->heap[idx];
+        w->heap[idx] = tmp;
+        idx = parent;
     }
-    t->callback(t->arg);
-    pthread_mutex_lock(&tur_timeout_lock);
-    TurTimeout *prev = NULL;
-    TurTimeout *curr = tur_timeout_list;
-    while (curr && curr != t) { prev = curr; curr = curr->next; }
-    if (prev) prev->next = t->next;
-    else tur_timeout_list = t->next;
-    pthread_mutex_unlock(&tur_timeout_lock);
-    free(t);
-    return NULL;
+}
+
+static void tur_timer_heap_sift_down(TurTimerWheel *w, int64_t idx) {
+    while (1) {
+        int64_t smallest = idx;
+        int64_t left = 2 * idx + 1;
+        int64_t right = 2 * idx + 2;
+        if (left < w->len && w->heap[left]->deadline_ns < w->heap[smallest]->deadline_ns)
+            smallest = left;
+        if (right < w->len && w->heap[right]->deadline_ns < w->heap[smallest]->deadline_ns)
+            smallest = right;
+        if (smallest == idx) break;
+        TurTimerEntry *tmp = w->heap[smallest];
+        w->heap[smallest] = w->heap[idx];
+        w->heap[idx] = tmp;
+        idx = smallest;
+    }
+}
+
+static int64_t tur_timer_wheel_insert(TurTimerWheel *w, int64_t deadline_ns,
+                                       void (*cb)(void *), void *arg) {
+    if (w->len >= w->cap) {
+        int64_t new_cap = w->cap * 2;
+        TurTimerEntry **nh = (TurTimerEntry **)malloc(sizeof(TurTimerEntry *) * (size_t)new_cap);
+        if (!nh) { fprintf(stderr, "timer wheel: grow oom\n"); abort(); }
+        for (int64_t i = 0; i < w->len; i++) nh[i] = w->heap[i];
+        free(w->heap);
+        w->heap = nh;
+        w->cap = new_cap;
+    }
+    TurTimerEntry *e = (TurTimerEntry *)malloc(sizeof(TurTimerEntry));
+    if (!e) { fprintf(stderr, "timer entry: oom\n"); abort(); }
+    e->deadline_ns = deadline_ns;
+    e->callback = cb;
+    e->arg = arg;
+    e->id = w->next_id++;
+    e->cancelled = false;
+    w->heap[w->len] = e;
+    tur_timer_heap_sift_up(w, w->len);
+    w->len++;
+    return e->id;
+}
+
+static void tur_timer_wheel_cancel(TurTimerWheel *w, int64_t id) {
+    for (int64_t i = 0; i < w->len; i++) {
+        if (w->heap[i]->id == id) { w->heap[i]->cancelled = true; return; }
+    }
+}
+
+static void tur_timer_wheel_tick(TurTimerWheel *w) {
+    int64_t now = tur_monotonic_ns();
+    while (w->len > 0 && w->heap[0]->deadline_ns <= now) {
+        TurTimerEntry *e = w->heap[0];
+        w->len--;
+        if (w->len > 0) {
+            w->heap[0] = w->heap[w->len];
+            tur_timer_heap_sift_down(w, 0);
+        }
+        if (!e->cancelled) e->callback(e->arg);
+        free(e);
+    }
+}
+
+static int64_t tur_timer_wheel_next_deadline_ns(TurTimerWheel *w) {
+    while (w->len > 0 && w->heap[0]->cancelled) {
+        TurTimerEntry *e = w->heap[0];
+        w->len--;
+        if (w->len > 0) {
+            w->heap[0] = w->heap[w->len];
+            tur_timer_heap_sift_down(w, 0);
+        }
+        free(e);
+    }
+    if (w->len == 0) return -1;
+    return w->heap[0]->deadline_ns;
 }
 
 static void tur_scheduler_timeout(int64_t ms, void (*callback)(void *arg), void *arg) {
-    TurTimeout *t = (TurTimeout *)malloc(sizeof(TurTimeout));
-    if (!t) { fprintf(stderr, "timeout: oom\n"); abort(); }
-    t->ms = ms;
-    t->callback = callback;
-    t->arg = arg;
-    t->next = NULL;
-    pthread_mutex_lock(&tur_timeout_lock);
-    t->next = tur_timeout_list;
-    tur_timeout_list = t;
-    pthread_mutex_unlock(&tur_timeout_lock);
-    pthread_attr_t attr;
-    pthread_attr_init(&attr);
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    pthread_t tid;
-    pthread_create(&tid, &attr, tur_timeout_thread, t);
-    pthread_attr_destroy(&attr);
+    if (!tur_global_timers) tur_global_timers = tur_timer_wheel_new();
+    int64_t deadline = tur_monotonic_ns() + ms * 1000000LL;
+    tur_timer_wheel_insert(tur_global_timers, deadline, callback, arg);
+}
+
+static void tur_io_register(int fd, int events, FiberBlock *fiber) {
+    TurIOWaiter *w = (TurIOWaiter *)malloc(sizeof(TurIOWaiter));
+    if (!w) { fprintf(stderr, "io waiter: oom\n"); abort(); }
+    w->fd = fd;
+    w->events = events;
+    w->fiber = fiber;
+    w->next = tur_io_waiters;
+    tur_io_waiters = w;
+}
+
+static void tur_io_unregister(int fd) {
+    TurIOWaiter **pp = &tur_io_waiters;
+    while (*pp) {
+        if ((*pp)->fd == fd) {
+            TurIOWaiter *tmp = *pp;
+            *pp = tmp->next;
+            free(tmp);
+            return;
+        }
+        pp = &(*pp)->next;
+    }
+}
+
+static void tur_io_poll(int64_t timeout_us) {
+    if (!tur_io_waiters) return;
+    fd_set rfds, wfds;
+    FD_ZERO(&rfds);
+    FD_ZERO(&wfds);
+    int maxfd = -1;
+    for (TurIOWaiter *w = tur_io_waiters; w; w = w->next) {
+        if (w->events & TUR_IO_READ)  FD_SET(w->fd, &rfds);
+        if (w->events & TUR_IO_WRITE) FD_SET(w->fd, &wfds);
+        if (w->fd > maxfd) maxfd = w->fd;
+    }
+    struct timeval tv;
+    tv.tv_sec = (long)(timeout_us / 1000000);
+    tv.tv_usec = (long)(timeout_us % 1000000);
+    int ret = select(maxfd + 1, &rfds, &wfds, NULL, &tv);
+    if (ret <= 0) return;
+    TurIOWaiter **pp = &tur_io_waiters;
+    while (*pp) {
+        TurIOWaiter *w = *pp;
+        bool ready = false;
+        if ((w->events & TUR_IO_READ)  && FD_ISSET(w->fd, &rfds))  ready = true;
+        if ((w->events & TUR_IO_WRITE) && FD_ISSET(w->fd, &wfds)) ready = true;
+        if (ready) {
+            FiberBlock *f = w->fiber;
+            *pp = w->next;
+            free(w);
+            tur_scheduler_unpark(f);
+        } else {
+            pp = &w->next;
+        }
+    }
+}
+
+static void tur_tick_timers(void) {
+    if (tur_global_timers) tur_timer_wheel_tick(tur_global_timers);
+}
+
+static void tur_poll_io(int64_t timeout_us) {
+    if (tur_io_waiters) tur_io_poll(timeout_us);
+}
+
+static bool tur_has_pending_timers(void) {
+    return tur_global_timers && tur_global_timers->len > 0;
+}
+
+static bool tur_has_pending_io(void) {
+    return tur_io_waiters != NULL;
+}
+
+static int64_t tur_next_timer_wait_us(void) {
+    if (!tur_global_timers || tur_global_timers->len == 0) return -1;
+    int64_t next = tur_timer_wheel_next_deadline_ns(tur_global_timers);
+    if (next < 0) return -1;
+    int64_t diff = (next - tur_monotonic_ns()) / 1000;
+    return diff > 0 ? diff : 0;
 }
 
 #ifdef __clang__
@@ -1194,13 +1402,13 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
-static void * array_get(void *, int64_t);
-static int64_t array_set(void *, int64_t, int64_t);
-static void * array_slice(void *, int64_t, int64_t);
-static void * with_c_string(const char *, int64_t);
-static const char * from_c_string(const char *);
-static void * box(int64_t);
-static int64_t unbox(int64_t);
+void * array_get(void *, int64_t);
+int64_t array_set(void *, int64_t, int64_t);
+void * array_slice(void *, int64_t, int64_t);
+void * with_c_string(const char *, int64_t);
+const char * from_c_string(const char *);
+void * box(int64_t);
+int64_t unbox(int64_t);
 static void * chan_new(int64_t);
 static void chan_send(void *, int64_t);
 static int64_t chan_recv(void *);
@@ -1213,7 +1421,7 @@ static void * consumer(void *);
 static void * thread_spawn_fn(void *, void *);
 static void thread_join(void *);
 
-static void * array_get(void * arr, int64_t idx) {
+void * array_get(void * arr, int64_t idx) {
         struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
   int64_t *array = (int64_t *)arr;
   if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
@@ -1227,7 +1435,7 @@ static void * array_get(void * arr, int64_t idx) {
   
 }
 
-static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+int64_t array_set(void * arr, int64_t idx, int64_t value) {
         int64_t *array = (int64_t *)arr;
   if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
     array[idx] = value;
@@ -1237,7 +1445,7 @@ static int64_t array_set(void * arr, int64_t idx, int64_t value) {
   
 }
 
-static void * array_slice(void * arr, int64_t start, int64_t len) {
+void * array_slice(void * arr, int64_t start, int64_t len) {
         /* For v1, we return a new struct containing ptr and len */
   struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
   slice->ptr = (char *)arr + start * sizeof(int64_t);
@@ -1246,25 +1454,25 @@ static void * array_slice(void * arr, int64_t start, int64_t len) {
   
 }
 
-static void * with_c_string(const char * s, int64_t f) {
+void * with_c_string(const char * s, int64_t f) {
         /* For v1, we just call f with s directly since cstr is already a C string */
   int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
   return (void *)(intptr_t)fn(s);
   
 }
 
-static const char * from_c_string(const char * s) {
+const char * from_c_string(const char * s) {
         return s;
 }
 
-static void * box(int64_t v) {
+void * box(int64_t v) {
         int64_t *boxed = malloc(sizeof(int64_t));
   *boxed = v;
   return boxed;
   
 }
 
-static int64_t unbox(int64_t p) {
+int64_t unbox(int64_t p) {
         int64_t *boxed = (int64_t *)p;
   return *boxed;
   

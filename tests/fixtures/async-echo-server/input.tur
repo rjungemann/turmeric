@@ -1,128 +1,197 @@
-;; Phase T24: async-echo-server — async TCP echo server
+;; Phase T24: async-echo-server — async TCP echo server + client.
 ;;
-;; Starts a non-blocking TCP server on a loopback port, connects a client,
-;; sends a message, and verifies the echoed response.
+;; Two fibers run under the scheduler:
+;;   1. Server: listens on a port, accepts one connection, reads a message,
+;;      sends it back (echo), closes the connection.
+;;   2. Client: sleeps briefly to let server start, connects, sends a message,
+;;      reads the echo, prints it, closes.
 ;;
-;; Module-level extern declarations and helper defns are used to avoid
-;; #include directives or nested function definitions inside inline-C bodies.
+;; Expected output:
+;;   start
+;;   server listening
+;;   client connected
+;;   server got: hello echo
+;;   client got: hello echo
+;;   all done
 
-;; ---- Byte-order helpers (manual, avoids including sys/socket.h) ------
-
-(defn echo-htons [x :int] :int
+(defn mk-scheduler [] :ptr<void>
   ```c
-  unsigned short v = (unsigned short)(uint16_t)x;
-  return (int64_t)(unsigned short)((v >> 8) | (v << 8));
+  TurScheduler *s = tur_scheduler_new();
+  tur_scheduler = s;
+  return (void *)s;
   ```)
 
-(defn echo-htonl [x :int] :int
+(defn mk-fiber [fn :ptr<void>] :ptr<void>
   ```c
-  unsigned int v = (unsigned int)(uint32_t)x;
-  return (int64_t)(((v >> 24) & 0xffu) | ((v >> 8) & 0xff00u) |
-                   ((v << 8) & 0xff0000u) | ((v << 24) & 0xff000000u));
+  return (void *)tur_fiber_block_new((void(*)(void))fn, 0);
   ```)
 
-;; ---- Server accept thread: accepts one client, echoes one message ----
-
-(defn echo-server-thread [arg :ptr<void>] :ptr<void>
+(defn sched-spawn [s :ptr<void> f :ptr<void>] :nil
   ```c
-  extern int accept(int fd, void *addr, unsigned int *addrlen);
-  extern ssize_t recv(int fd, void *buf, size_t len, int flags);
-  extern ssize_t send(int fd, const void *buf, size_t len, int flags);
-  extern int close(int fd);
-  extern int poll(void *fds, unsigned int nfds, int timeout_ms);
-  #define POLLIN 0x0001
-  typedef struct { int fd; short events; short revents; } PFD;
-
-  int srv_fd = (int)(intptr_t)arg;
-  PFD pfd = { srv_fd, POLLIN, 0 };
-  if (poll(&pfd, 1, 2000) <= 0) return NULL;
-  int cfd = accept(srv_fd, NULL, NULL);
-  if (cfd < 0) return NULL;
-  char buf[256];
-  ssize_t n = recv(cfd, buf, sizeof(buf) - 1, 0);
-  if (n > 0) { buf[n] = '\0'; send(cfd, buf, (size_t)n, 0); }
-  close(cfd);
-  return NULL;
+  tur_scheduler_spawn((TurScheduler *)s, (FiberBlock *)f);
   ```)
 
-;; ---- Main test logic -------------------------------------------------
-
-(defn echo-server-test [] :int
+(defn sched-run [s :ptr<void>] :nil
   ```c
-  extern int socket(int domain, int type, int protocol);
-  extern int bind(int fd, const void *addr, unsigned int addrlen);
-  extern int listen(int fd, int backlog);
-  extern int connect(int fd, const void *addr, unsigned int addrlen);
-  extern ssize_t send(int fd, const void *buf, size_t len, int flags);
-  extern ssize_t recv(int fd, void *buf, size_t len, int flags);
-  extern int close(int fd);
-  extern int setsockopt(int fd, int level, int optname, const void *optval, unsigned int optlen);
-  extern int getsockname(int fd, void *addr, unsigned int *addrlen);
-  extern int poll(void *fds, unsigned int nfds, int timeout_ms);
+  tur_scheduler_run((TurScheduler *)s);
+  ```)
 
-  #define AF_INET      2
-  #define SOCK_STREAM  1
-  #define SOL_SOCKET   0xffff
-  #define SO_REUSEADDR 4
-  #define POLLIN       0x0001
-  #define POLLOUT      0x0004
+(defn timer-sleep-ms [ms :int] :nil
+  ```c
+  if (ms <= 0) return;
+  FiberBlock *me = tur_current_fiber;
+  if (!me || !tur_scheduler) return;
+  if (!tur_global_timers) tur_global_timers = tur_timer_wheel_new();
+  int64_t deadline = tur_monotonic_ns() + (int64_t)ms * 1000000LL;
+  tur_timer_wheel_insert(tur_global_timers, deadline,
+      (void(*)(void*))tur_scheduler_unpark, me);
+  me->parked = 1;
+  tur_fiber_block_yield(0);
+  ```)
 
-  typedef struct { unsigned short family; unsigned short port; unsigned int addr; char zero[8]; } SockIn;
-  typedef struct { int fd; short events; short revents; } PFD2;
+;; We use port 0 to let the OS assign an ephemeral port, then store it
+;; in a global so the client can connect.
+;; For simplicity, use a fixed port with SO_REUSEADDR.
 
-  int srv = socket(AF_INET, SOCK_STREAM, 0);
-  if (srv < 0) { fprintf(stderr, "echo: socket\n"); return 1; }
+(defn fiber-server [] :nil
+  ```c
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) { perror("socket"); abort(); }
   int opt = 1;
-  setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+  int flags = fcntl(fd, F_GETFL, 0);
+  fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 
-  SockIn addr;
+  struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
-  addr.family = AF_INET;
-  if (bind(srv, &addr, sizeof(addr)) < 0) {
-      fprintf(stderr, "echo: bind\n"); close(srv); return 1;
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port = htons(19847);
+  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { perror("bind"); abort(); }
+  if (listen(fd, 1) < 0) { perror("listen"); abort(); }
+  printf("server listening\n");
+
+  /* Accept — park until connection arrives */
+  int cfd;
+  while (1) {
+    cfd = accept(fd, NULL, NULL);
+    if (cfd >= 0) break;
+    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      FiberBlock *me = tur_current_fiber;
+      tur_io_register(fd, TUR_IO_READ, me);
+      me->parked = 1;
+      tur_fiber_block_yield(0);
+      continue;
+    }
+    perror("accept"); abort();
   }
-  if (listen(srv, 5) < 0) {
-      fprintf(stderr, "echo: listen\n"); close(srv); return 1;
+  int cflags = fcntl(cfd, F_GETFL, 0);
+  fcntl(cfd, F_SETFL, cflags | O_NONBLOCK);
+
+  /* Read message */
+  char buf[256];
+  memset(buf, 0, 256);
+  ssize_t n;
+  while (1) {
+    n = recv(cfd, buf, 255, 0);
+    if (n > 0) break;
+    if (n == 0) break; /* client closed */
+    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      FiberBlock *me = tur_current_fiber;
+      tur_io_register(cfd, TUR_IO_READ, me);
+      me->parked = 1;
+      tur_fiber_block_yield(0);
+      continue;
+    }
+    break;
+  }
+  printf("server got: %s\n", buf);
+
+  /* Echo back */
+  while (1) {
+    ssize_t w = send(cfd, buf, (size_t)n, 0);
+    if (w >= 0) break;
+    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      FiberBlock *me = tur_current_fiber;
+      tur_io_register(cfd, TUR_IO_WRITE, me);
+      me->parked = 1;
+      tur_fiber_block_yield(0);
+      continue;
+    }
+    break;
   }
 
-  SockIn bound;
-  unsigned int blen = sizeof(bound);
-  getsockname(srv, &bound, &blen);
-  /* port is already in network byte order from getsockname; convert to host */
-  int port = (int)echo_htons((int64_t)(unsigned short)bound.port);
+  close(cfd);
+  close(fd);
+  ```)
 
-  pthread_t tid;
-  pthread_create(&tid, NULL, echo_server_thread, (void *)(intptr_t)srv);
+(defn fiber-client [] :nil
+  ```c
+  /* Brief sleep to let server start listening */
+  FiberBlock *me = tur_current_fiber;
+  if (!tur_global_timers) tur_global_timers = tur_timer_wheel_new();
+  int64_t deadline = tur_monotonic_ns() + 50LL * 1000000LL;
+  tur_timer_wheel_insert(tur_global_timers, deadline,
+      (void(*)(void*))tur_scheduler_unpark, me);
+  me->parked = 1;
+  tur_fiber_block_yield(0);
 
-  int cli = socket(AF_INET, SOCK_STREAM, 0);
-  if (cli < 0) { fprintf(stderr, "echo: cli socket\n"); close(srv); return 1; }
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) { perror("socket"); abort(); }
+  int flags = fcntl(fd, F_GETFL, 0);
+  fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 
-  SockIn caddr;
-  memset(&caddr, 0, sizeof(caddr));
-  caddr.family = AF_INET;
-  caddr.addr   = (unsigned int)echo_htonl(0x7f000001);  /* 127.0.0.1 */
-  caddr.port   = (unsigned short)echo_htons(port);
-  connect(cli, &caddr, sizeof(caddr));
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port = htons(19847);
 
-  PFD2 cpfd = { cli, POLLOUT, 0 };
-  poll(&cpfd, 1, 2000);
-
-  send(cli, "hello", 5, 0);
-
-  char rbuf[64];
-  memset(rbuf, 0, sizeof(rbuf));
-  PFD2 rpfd = { cli, POLLIN, 0 };
-  if (poll(&rpfd, 1, 2000) > 0) {
-      ssize_t nr = recv(cli, rbuf, sizeof(rbuf) - 1, 0);
-      if (nr > 0) rbuf[nr] = '\0';
+  int ret = connect(fd, (struct sockaddr *)&addr, sizeof(addr));
+  if (ret < 0 && errno == EINPROGRESS) {
+    me = tur_current_fiber;
+    tur_io_register(fd, TUR_IO_WRITE, me);
+    me->parked = 1;
+    tur_fiber_block_yield(0);
+    /* Check connection result */
+    int err = 0;
+    socklen_t errlen = sizeof(err);
+    getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &errlen);
+    if (err != 0) { fprintf(stderr, "connect failed: %d\n", err); abort(); }
+  } else if (ret < 0) {
+    perror("connect"); abort();
   }
-  printf("echo: %s\n", rbuf);
+  printf("client connected\n");
 
-  close(cli);
-  pthread_join(tid, NULL);
-  close(srv);
-  return 0;
+  /* Send message */
+  const char *msg = "hello echo";
+  send(fd, msg, 10, 0);
+
+  /* Read echo */
+  char buf[256];
+  memset(buf, 0, 256);
+  while (1) {
+    ssize_t n = recv(fd, buf, 255, 0);
+    if (n > 0) break;
+    if (n == 0) break;
+    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      me = tur_current_fiber;
+      tur_io_register(fd, TUR_IO_READ, me);
+      me->parked = 1;
+      tur_fiber_block_yield(0);
+      continue;
+    }
+    break;
+  }
+  printf("client got: %s\n", buf);
+  close(fd);
   ```)
 
 (defn main [] :int
-  (echo-server-test))
+  (println "start")
+  (let [s (mk-scheduler)]
+    (sched-spawn s (mk-fiber fiber-server))
+    (sched-spawn s (mk-fiber fiber-client))
+    (sched-run s)
+    (println "all done")
+    0))

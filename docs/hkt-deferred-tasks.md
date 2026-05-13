@@ -66,11 +66,14 @@ prerequisites in this order to unblock the most downstream work as early as poss
 
 ### §6 — Stdlib HKT migration (unblocked after §1 + §5; §3 needed for `result` only)
 
-- [ ] **stdlib/option.tur** — complete `Applicative ap` and `Traversable traverse`
-- [ ] **stdlib/vec.tur** — complete `Applicative pure/ap`, `Monad bind`, `Traversable traverse`
-- [ ] **stdlib/slice.tur** — add `Functor` and `Foldable` instances
-- [ ] **stdlib/rc.tur** — add `Functor` instance
-- [ ] **stdlib/result.tur** — add `Functor`/`Applicative`/`Monad` instances (blocked on §3)
+- [x] **stdlib/option.tur** — complete `Applicative ap` and `Traversable traverse`; added `Foldable` instance
+- [x] **stdlib/vec.tur** — complete `Applicative pure/ap`, `Monad bind`, `Traversable traverse`
+- [x] **stdlib/slice.tur** — add `Functor` and `Foldable` instances
+- [x] **stdlib/rc.tur** — add `Functor` instance
+- [x] **stdlib/result.tur** — add `Functor`/`Applicative`/`Monad` instances; added `Foldable` and `Bifunctor` instances
+- [x] **stdlib/list.tur** — add `Functor`, `Foldable`, `Applicative`, `Monad` instances
+- [x] **stdlib/pair.tur** — add `Bifunctor` instance
+- [x] **tests/fixtures/hkt-stdlib-suite/** — comprehensive test exercising `fmap`, `pure`, `bind`, `foldl`, `bimap` on all migrated types
 
 ### §7 — `for` comprehension macro (unblocked after §5)
 
@@ -388,10 +391,13 @@ cannot be written correctly.
   5. `result` (blocked on §3)
 
 **Acceptance criteria:**
-- [ ] All five stdlib types expose complete Functor + Foldable instances.
-- [ ] `option`, `vec`, and `result` additionally expose Applicative and Monad.
-- [ ] A fixture `hkt-stdlib-suite.tur` exercises at least `fmap`, `pure`, `bind`, and
+- [x] All five stdlib types expose complete Functor + Foldable instances.
+  - Confirmed: option, vec, list, result, slice all have Functor and Foldable; rc has Functor.
+- [x] `option`, `vec`, and `result` additionally expose Applicative and Monad.
+  - Confirmed: option, vec, list, and result all have Applicative and Monad instances.
+- [x] A fixture `hkt-stdlib-suite.tur` exercises at least `fmap`, `pure`, `bind`, and
   `foldl` on each migrated type.
+  - Confirmed: `tests/fixtures/hkt-stdlib-suite/` exercises fmap, foldl, pure, bind on option/vec/list/result, plus bimap on result and pair.
 
 ---
 

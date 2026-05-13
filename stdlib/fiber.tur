@@ -94,10 +94,24 @@ defn scheduler-unpark! [f :ptr<void>] :nil
   ```)
 
 ;; Convenience: async-sleep [ms] — sleep for approximately ms milliseconds.
-;; Uses nanosleep; does not require a scheduler.
+;; Phase T24: When running under a scheduler, parks the current fiber and
+;; uses the timer wheel to resume it after the delay (cooperative, non-blocking).
+;; Falls back to nanosleep when no scheduler is active.
 defn async-sleep [ms :int] :nil
   ```c
   if (ms <= 0) return;
+  FiberBlock *me = tur_current_fiber;
+  if (me && tur_scheduler) {
+    /* Timer-wheel path: park fiber, register wakeup timer, yield */
+    if (!tur_global_timers) tur_global_timers = tur_timer_wheel_new();
+    int64_t deadline = tur_monotonic_ns() + (int64_t)ms * 1000000LL;
+    tur_timer_wheel_insert(tur_global_timers, deadline,
+        (void(*)(void*))tur_scheduler_unpark, me);
+    me->parked = 1;
+    tur_fiber_block_yield(0);
+    return;
+  }
+  /* Fallback: no scheduler, block with nanosleep */
   struct timespec ts;
   ts.tv_sec  = (time_t)((int64_t)ms / 1000);
   ts.tv_nsec = (long)(((int64_t)ms % 1000) * 1000000L);

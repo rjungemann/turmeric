@@ -1,1 +1,4 @@
-read: hello async
+start
+wrote 17 bytes
+read 17 bytes: hello async world
+all done

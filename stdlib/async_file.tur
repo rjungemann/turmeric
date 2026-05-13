@@ -1,73 +1,104 @@
-;; stdlib/async_file.tur — Async file I/O (Phase T24)
+;; stdlib/async_file.tur — Async file I/O for Turmeric (Phase T24)
 ;;
-;; Provides non-blocking-style file operations backed by the OS.
-;; Regular files cannot be made truly non-blocking on most POSIX systems;
-;; these wrappers delegate to the blocking syscalls directly and are
-;; labelled "async" to match the T24 API surface.  A future revision will
-;; use a thread-pool for genuine non-blocking behaviour.
+;; Non-blocking file operations that integrate with the cooperative scheduler.
+;; When an operation would block (EAGAIN/EWOULDBLOCK), the current fiber is
+;; parked and an IO waiter is registered; the scheduler polls and resumes
+;; the fiber when the fd becomes ready.
 ;;
 ;; API:
-;;   (async-open  path flags) -> fd :int
-;;   (async-read  fd buf len) -> n  :int
-;;   (async-write fd buf len) -> n  :int
-;;   (async-close fd)         -> nil
-;;
-;; AsyncPipe:
-;;   (async-read-stdin  buf len) -> n :int
-;;   (async-write-stdout buf len) -> n :int
+;;   async-file-open  [path flags]    -> fd (int), -1 on error
+;;   async-file-read  [fd buf-size]   -> bytes-read (int), 0 on EOF, -1 on error
+;;   async-file-write [fd data len]   -> bytes-written (int), -1 on error
+;;   async-file-close [fd]            -> 0 on success, -1 on error
 
-;; ---- async-open -------------------------------------------------------
-
-(defn async-open [path :cstr flags :int] :int
+;; Open a file with O_NONBLOCK set.
+;; flags: 0 = O_RDONLY, 1 = O_WRONLY|O_CREAT|O_TRUNC, 2 = O_RDWR
+(defn async-file-open [path :cstr flags :int] :int
   ```c
-  extern int open(const char *path, int flags, ...);
-  #define O_RDONLY  0
-  #define O_WRONLY  1
-  #define O_RDWR    2
-  #define O_CREAT   0x0200
-  #define O_TRUNC   0x0400
-  int _fd = open((const char *)(intptr_t)path, (int)flags, 0644);
-  return (int64_t)_fd;
+  int oflags;
+  switch ((int)flags) {
+    case 1:  oflags = O_WRONLY | O_CREAT | O_TRUNC; break;
+    case 2:  oflags = O_RDWR; break;
+    default: oflags = O_RDONLY; break;
+  }
+  int fd = open(path, oflags | O_NONBLOCK, 0644);
+  return (int64_t)fd;
   ```)
 
-;; ---- async-read -------------------------------------------------------
-
-(defn async-read [fd :int buf :ptr<void> len :int] :int
+;; Read up to buf-size bytes from fd.
+;; Returns number of bytes read, 0 on EOF, -1 on error.
+;; If running under a scheduler, parks the fiber on EAGAIN.
+(defn async-file-read [fd :int buf-size :int] :int
   ```c
-  extern ssize_t read(int fd, void *buf, size_t n);
-  ssize_t _n = read((int)fd, (void *)(intptr_t)buf, (size_t)len);
-  return (int64_t)_n;
+  char *buf = (char *)malloc((size_t)buf_size);
+  if (!buf) return -1;
+  while (1) {
+    ssize_t n = read((int)fd, buf, (size_t)buf_size);
+    if (n >= 0) {
+      /* Store buf pointer in fiber-local for retrieval */
+      if (tur_current_fiber) {
+        tur_fiber_local_set(tur_current_fiber, 0xA51CF11E, (int64_t)(intptr_t)buf);
+        tur_fiber_local_set(tur_current_fiber, 0xA51CF11F, n);
+      }
+      return (int64_t)n;
+    }
+    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      FiberBlock *me = tur_current_fiber;
+      if (me && tur_scheduler) {
+        tur_io_register((int)fd, TUR_IO_READ, me);
+        me->parked = 1;
+        tur_fiber_block_yield(0);
+        continue;
+      }
+    }
+    free(buf);
+    return -1;
+  }
   ```)
 
-;; ---- async-write ------------------------------------------------------
-
-(defn async-write [fd :int buf :ptr<void> len :int] :int
+;; Write len bytes from data to fd.
+;; If running under a scheduler, parks the fiber on EAGAIN.
+(defn async-file-write [fd :int data :cstr len :int] :int
   ```c
-  extern ssize_t write(int fd, const void *buf, size_t n);
-  ssize_t _n = write((int)fd, (const void *)(intptr_t)buf, (size_t)len);
-  return (int64_t)_n;
+  int64_t total = 0;
+  while (total < len) {
+    ssize_t n = write((int)fd, data + total, (size_t)(len - total));
+    if (n >= 0) {
+      total += n;
+      continue;
+    }
+    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      FiberBlock *me = tur_current_fiber;
+      if (me && tur_scheduler) {
+        tur_io_register((int)fd, TUR_IO_WRITE, me);
+        me->parked = 1;
+        tur_fiber_block_yield(0);
+        continue;
+      }
+    }
+    return -1;
+  }
+  return total;
   ```)
 
-;; ---- async-close ------------------------------------------------------
-
-(defn async-close [fd :int] :nil
+;; Close a file descriptor.
+(defn async-file-close [fd :int] :int
   ```c
-  extern int close(int fd);
-  close((int)fd);
+  tur_io_unregister((int)fd);
+  return (int64_t)close((int)fd);
   ```)
 
-;; ---- AsyncPipe: async-read-stdin / async-write-stdout -----------------
-
-(defn async-read-stdin [buf :ptr<void> len :int] :int
+;; Retrieve the internal read buffer pointer after async-file-read.
+;; Returns a pointer to the buffer (caller must free).
+(defn async-file-read-buf [] :ptr<void>
   ```c
-  extern ssize_t read(int fd, void *buf, size_t n);
-  ssize_t _n = read(0, (void *)(intptr_t)buf, (size_t)len);
-  return (int64_t)_n;
+  if (!tur_current_fiber) return NULL;
+  return (void*)(intptr_t)tur_fiber_local_get(tur_current_fiber, 0xA51CF11E);
   ```)
 
-(defn async-write-stdout [buf :ptr<void> len :int] :int
+;; Retrieve the number of bytes from the last async-file-read.
+(defn async-file-read-len [] :int
   ```c
-  extern ssize_t write(int fd, const void *buf, size_t n);
-  ssize_t _n = write(1, (const void *)(intptr_t)buf, (size_t)len);
-  return (int64_t)_n;
+  if (!tur_current_fiber) return 0;
+  return tur_fiber_local_get(tur_current_fiber, 0xA51CF11F);
   ```)

@@ -353,6 +353,53 @@
 ;; Note: result is a binary type constructor (kind * -> * -> *).
 ;; These instances are for result<error, T> which has kind * -> *.
 
+;; Foldable instance for result.
+;; foldl/foldr operate on the ok value only; err is skipped.
+(defn __foldable_result_foldl [ta init fn] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)ta;
+  if (!res || !res->is_ok) return (void*)(intptr_t)init;
+  return (void*)(intptr_t)((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(init, res->ok_val);
+  ```)
+
+(defn __foldable_result_foldr [ta init fn] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)ta;
+  if (!res || !res->is_ok) return (void*)(intptr_t)init;
+  return (void*)(intptr_t)((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(res->ok_val, init);
+  ```)
+
+(definstance Foldable [ptr<void>]
+  (foldl [ta init fn] (__foldable_result_foldl ta init fn))
+  (foldr [ta init fn] (__foldable_result_foldr ta init fn)))
+
+;; Bifunctor instance for result.
+;; bimap :: (e -> e') -> (a -> b) -> result e a -> result e' b
+;; Maps fn-left over err, fn-right over ok.
+(defn __bifunctor_result_bimap [container fn-left fn-right] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)container;
+  if (!res) return NULL;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out =
+      malloc(sizeof(*out));
+  if (res->is_ok) {
+      out->is_ok   = true;
+      out->ok_val  = ((int64_t(*)(int64_t))(intptr_t)fn_right)(res->ok_val);
+      out->err_val = 0;
+  } else {
+      out->is_ok   = false;
+      out->ok_val  = 0;
+      out->err_val = ((int64_t(*)(int64_t))(intptr_t)fn_left)(res->err_val);
+  }
+  return out;
+  ```)
+
+(definstance Bifunctor [ptr<void>]
+  (bimap [container fn-left fn-right] (__bifunctor_result_bimap container fn-left fn-right)))
+
 ;; Functor instance for result.
 ;; fmap :: (a -> b) -> result e a -> result e b
 ;; Maps a function over the ok value, leaving err unchanged.
