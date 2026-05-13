@@ -1,0 +1,295 @@
+# Performance Comparison Plan: C, Turmeric, Clojure, Racket, and Python
+
+## Overview
+
+This document outlines a plan for conducting performance comparisons between five programming languages — C, Turmeric, Clojure, Racket, and Python — on similar computational tasks. The goal is to identify relative strengths, weaknesses, and trade-offs for different categories of programming problems.
+
+---
+
+## Objectives
+
+1. **Benchmark Execution Speed**: Measure raw computation speed across languages
+2. **Memory Usage Analysis**: Track memory consumption patterns
+3. **Startup Time Comparison**: Measure cold-start and warm-start performance
+4. **Idiomatic Code Performance**: Compare performance of idiomatic implementations
+5. **Scalability Testing**: Observe behavior with increasing workload sizes
+6. **Identify Language Strengths**: Determine which language excels at which task types
+
+---
+
+## Languages and Versions
+
+| Language | Version | Implementation | Notes |
+|----------|---------|----------------|-------|
+| C | C17/C23 | clang/gcc | Baseline for compiled performance |
+| Turmeric | latest | Custom | Primary subject of comparison |
+| Clojure | 1.11+ | JVM | Functional, dynamic, hosted |
+| Racket | 8.11+ | Chez Scheme | Functional, dynamic, with JIT |
+| Python | 3.11+ | CPython | Dynamic, interpreted |
+
+---
+
+## Task Categories
+
+### 1. Numerical Computation
+Tasks involving heavy arithmetic, matrix operations, and mathematical algorithms.
+
+| Task | Description | Metrics |
+|------|-------------|---------|
+| Fibonacci sequence | Recursive and iterative implementations | Time, stack usage |
+| Prime number generation | Sieve of Eratosthenes, trial division | Time, memory |
+| Matrix multiplication | N×N matrix multiplication | Time, memory |
+| Floating-point operations | Monte Carlo π estimation, mandelbrot | Time, precision |
+| Fast Fourier Transform | FFT on generated signal data | Time, accuracy |
+
+### 2. Data Structure Operations
+Tasks testing memory access patterns and data structure performance.
+
+| Task | Description | Metrics |
+|------|-------------|---------|
+| List operations | Append, prepend, reverse, sort | Time per operation |
+| Hash map operations | Insert, lookup, delete (1K, 10K, 100K entries) | Time per operation |
+| Tree traversal | Binary search tree operations | Time, memory |
+| Graph algorithms | BFS, DFS, shortest path | Time, memory |
+| Sorting algorithms | QuickSort, MergeSort on random and sorted data | Time |
+
+### 3. String and Text Processing
+Tasks involving string manipulation and text parsing.
+
+| Task | Description | Metrics |
+|------|-------------|---------|
+| String concatenation | Build large string from many small strings | Time, memory |
+| Regex matching | Pattern matching on large text corpus | Time |
+| JSON parsing | Parse and validate JSON documents | Time, memory |
+| CSV parsing | Read and process CSV data | Time |
+| Text search | Find all occurrences of substring | Time |
+
+### 4. Concurrency and Parallelism
+Tasks measuring multi-threaded and parallel processing capabilities.
+
+| Task | Description | Metrics |
+|------|-------------|---------|
+| Thread creation | Create and join N threads | Time |
+| Parallel map | Map function over list in parallel | Time, speedup |
+| Producer-consumer | Thread-safe queue operations | Throughput |
+| Web server | Handle concurrent HTTP requests | Requests/sec, latency |
+| Lock contention | Measure overhead of synchronization primitives | Time |
+
+### 5. Memory and Garbage Collection
+Tasks testing memory allocation patterns and GC behavior.
+
+| Task | Description | Metrics |
+|------|-------------|---------|
+| Object allocation | Allocate N objects in loop | Time, memory growth |
+| Memory churn | Repeated allocation and deallocation | Time, peak memory |
+| GC pressure | Create short-lived objects | Time, GC pauses |
+| Large data structures | Build and traverse large arrays/maps | Memory, time |
+
+### 6. Recursion and Stack Usage
+Tasks testing function call overhead and stack behavior.
+
+| Task | Description | Metrics |
+|------|-------------|---------|
+| Deep recursion | Recursive factorial with large N | Time, stack depth |
+| Tail recursion | Tail-recursive implementations | Time, stack usage |
+| Mutual recursion | Two functions calling each other | Time, stack depth |
+| Trampolining | Trampolined recursion | Time, memory |
+
+### 7. I/O Operations
+Tasks measuring file and network I/O performance.
+
+| Task | Description | Metrics |
+|------|-------------|---------|
+| File read | Read large file sequentially | Time, throughput |
+| File write | Write large data to file | Time, throughput |
+| Random file access | Random reads from large file | Time, seek performance |
+| Network requests | HTTP GET requests to local server | Time, requests/sec |
+
+### 8. Real-world Algorithms
+Complex, realistic algorithms that combine multiple aspects.
+
+| Task | Description | Metrics |
+|------|-------------|---------|
+| Ray tracing | Render simple 3D scene | Time |
+| N-body simulation | Simulate gravitational interactions | Time |
+| K-means clustering | Cluster N points in D dimensions | Time, iterations |
+| PageRank | Compute PageRank on web graph | Time, memory |
+| SQL query processing | Parse and execute SQL-like queries | Time |
+
+---
+
+## Methodology
+
+### Test Environment
+- **Hardware**: Same machine for all tests (specify CPU, RAM, storage type)
+- **OS**: Linux/macOS (specify version)
+- **Compiler/Interpreter versions**: Document exact versions
+- **Optimization flags**: -O3 for C, standard for others
+- **Run multiple iterations**: At least 5-10 runs per test, discard outliers
+- **Warm-up runs**: Perform warm-up iterations before measurement
+
+### Measurement Tools
+- **Time**: Use high-resolution timers (C: `clock_gettime`, Python: `time.perf_counter`, etc.)
+- **Memory**: Use language-specific tools (C: `getrusage`, JVM: JMX, Python: `tracemalloc`)
+- **CPU**: Track CPU usage percentage
+- **External validation**: Use `/usr/bin/time -v` for cross-validation
+
+### Test Harness Requirements
+1. Each language has identical test harness structure
+2. Input generation is consistent across languages
+3. Output validation ensures correctness before benchmarking
+4. Results logged in structured format (JSON/CSV)
+
+---
+
+## Implementation Plan
+
+### Phase 1: Setup (Week 1)
+- [ ] Define exact versions of all language runtimes
+- [ ] Set up consistent build/environment configuration
+- [ ] Create template repository structure for each language
+- [ ] Implement input generation utilities (shared where possible)
+- [ ] Set up automated test runner
+
+### Phase 2: Core Tasks (Weeks 2-4)
+- [ ] Implement numerical computation benchmarks
+- [ ] Implement data structure benchmarks
+- [ ] Implement string processing benchmarks
+- [ ] Implement concurrency benchmarks
+- [ ] Implement memory/GC benchmarks
+- [ ] Implement recursion benchmarks
+
+### Phase 3: I/O and Real-world (Weeks 5-6)
+- [ ] Implement I/O benchmarks
+- [ ] Implement real-world algorithm benchmarks
+- [ ] Add micro-benchmarks for specific operations
+
+### Phase 4: Validation (Week 7)
+- [ ] Verify correctness of all implementations
+- [ ] Run full benchmark suite multiple times
+- [ ] Validate results are reproducible
+- [ ] Identify and fix any benchmarking issues
+
+### Phase 5: Analysis and Documentation (Week 8)
+- [ ] Aggregate and normalize results
+- [ ] Create visualizations (charts, graphs)
+- [ ] Write analysis and conclusions
+- [ ] Document limitations and caveats
+
+---
+
+## Expected Outputs
+
+### Data Files
+- `results/numerical.json` - Raw numerical computation results
+- `results/data_structures.json` - Raw data structure results
+- `results/string_processing.json` - Raw string processing results
+- `results/concurrency.json` - Raw concurrency results
+- `results/memory.json` - Raw memory results
+- `results/recursion.json` - Raw recursion results
+- `results/io.json` - Raw I/O results
+- `results/real_world.json` - Raw real-world algorithm results
+
+### Analysis Files
+- `analysis/comparison.md` - Detailed comparison with charts
+- `analysis/by_category.md` - Breakdown by task category
+- `analysis/by_language.md` - Breakdown by language
+- `analysis/conclusions.md` - Key findings and recommendations
+
+### Visualizations
+- Bar charts comparing execution times
+- Line graphs for scalability tests
+- Heatmaps for multi-dimensional comparisons
+- Box plots for result distributions
+
+---
+
+## File Structure
+
+```
+performance-comparison/
+├── benchmarks/
+│   ├── numerical/
+│   │   ├── c/
+│   │   ├── turmeric/
+│   │   ├── clojure/
+│   │   ├── racket/
+│   │   └── python/
+│   ├── data_structures/
+│   │   ├── c/
+│   │   ├── turmeric/
+│   │   ├── clojure/
+│   │   ├── racket/
+│   │   └── python/
+│   └── ... (other categories)
+├── inputs/
+│   ├── small/
+│   ├── medium/
+│   └── large/
+├── results/
+│   ├── raw/
+│   └── processed/
+├── scripts/
+│   ├── run_all.sh
+│   ├── analyze.py
+│   └── visualize.py
+├── docs/
+│   └── methodology.md
+└── README.md
+```
+
+---
+
+## Success Criteria
+
+1. **Reproducibility**: Any researcher can replicate results with provided code
+2. **Fairness**: Each language uses idiomatic, optimized implementations
+3. **Comprehensiveness**: Cover all major performance dimensions
+4. **Transparency**: Full disclosure of methodology, environment, and caveats
+5. **Statistical Rigor**: Sufficient iterations and proper statistical analysis
+
+---
+
+## Risks and Mitigations
+
+| Risk | Mitigation |
+|------|------------|
+| Language expertise gaps | Consult community experts for idiomatic code |
+| Environment differences | Use containerized environments (Docker) |
+| Version differences | Pin exact versions, document everything |
+| Optimization skew | Test both optimized and unoptimized builds |
+| Result interpretation | Include multiple perspectives in analysis |
+| Time constraints | Prioritize core tasks, defer nice-to-haves |
+
+---
+
+## Hypotheses
+
+1. **C will be fastest** for low-level numerical computation and memory operations
+2. **Turmeric will be competitive** with C on many tasks, possibly faster on functional patterns
+3. **Clojure will have JVM warm-up overhead** but strong sustained performance
+4. **Racket will show good performance** on functional tasks with JIT compilation
+5. **Python will be slowest** on CPU-bound tasks but potentially fast for I/O and glue code
+6. **Memory usage will vary significantly** based on GC strategies and object models
+
+---
+
+## Questions to Answer
+
+1. How does Turmeric compare to C for systems programming tasks?
+2. Where does Turmeric outperform more established languages?
+3. What are the memory usage patterns for each language?
+4. How do startup times compare for scripting vs. compiled languages?
+5. Which language has the most predictable performance characteristics?
+6. Are there tasks where dynamic typing provides performance benefits?
+7. How does immutability impact performance in functional languages?
+
+---
+
+## Next Steps
+
+1. Review and refine this plan
+2. Set up initial environment and templates
+3. Begin with numerical computation benchmarks as proof of concept
+4. Iterate on methodology based on early results
+5. Expand to full benchmark suite

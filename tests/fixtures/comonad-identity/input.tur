@@ -1,0 +1,64 @@
+;; Test Comonad typeclass: Identity comonad with extract/extend/duplicate.
+
+(defclass Comonad [^w]
+  (extract   [wa]     :int)
+  (extend    [wa fn]  :int)
+  (duplicate [wa]     :int))
+
+;; ── Identity comonad ─────────────────────────────────────────────────────────
+;; Represented as a heap-allocated int64_t.
+
+(defn identity-new [x] :int
+  ```c
+  int64_t *p = malloc(sizeof(int64_t));
+  *p = x;
+  return (int64_t)(intptr_t)p;
+  ```)
+
+(defn identity-get [wa] :int
+  ```c
+  return *(int64_t *)(intptr_t)wa;
+  ```)
+
+(defn __identity_extend_impl [wa fn] :int
+  ```c
+  int64_t result = ((int64_t(*)(int64_t))(intptr_t)fn)(wa);
+  int64_t *p = malloc(sizeof(int64_t));
+  *p = result;
+  return (int64_t)(intptr_t)p;
+  ```)
+
+(defn __identity_duplicate_impl [wa] :int
+  ```c
+  int64_t *p = malloc(sizeof(int64_t));
+  *p = wa;
+  return (int64_t)(intptr_t)p;
+  ```)
+
+(definstance Comonad [identity]
+  (extract   [wa]    (identity-get wa))
+  (extend    [wa fn] (__identity_extend_impl wa fn))
+  (duplicate [wa]    (__identity_duplicate_impl wa)))
+
+(defn main [] :int
+  (let [w (identity-new 42)]
+    (do
+      ;; extract returns the inner value
+      (println (.extract w))                                       ;; 42
+
+      ;; extend applies f to the whole comonad, wraps result
+      (let [w2 (.extend w (fn [wa] (+ (identity-get wa) 1)))]
+        (println (.extract w2)))                                   ;; 43
+
+      ;; Law: extract . extend f w = f w
+      (let [f  (fn [wa] (* (identity-get wa) 2))
+            lhs (.extract (.extend w f))
+            rhs (f w)]
+        (println (= lhs rhs)))                                     ;; true
+
+      ;; duplicate: extract . extract . duplicate = extract
+      (let [dup   (.duplicate w)
+            inner (identity-get dup)]
+        (println (identity-get inner)))                            ;; 42
+
+      0)))

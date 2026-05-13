@@ -376,50 +376,12 @@
 
 ;; Phase R0: From/Into conversion typeclasses
 ;; From[A B] - conversion from A to B
+;; Note: return type is :int (int64_t holds pointers in v1)
 (defclass From [a b]
-  (from [x] :b))
+  (from [x] :int))
 
 ;; Into[A B] - conversion from A to B (blanket derived from From[A B])
 (defclass Into [a b]
-  (into [x] :b))
+  (into [x] :int))
 
-;; Phase R1: Implement From/Into instances for result<T, E>
-;; In v1, we implement basic instances for primitive types and result
 
-;; From int to ptr<void> (for wrapping in ok)
-(definstance From [int ptr<void>]
-  (from [x] :ptr<void>
-    (ok x)))
-
-;; Into int to ptr<void> (blanket derived from From)
-(definstance Into [int ptr<void>]
-  (into [x] :ptr<void>
-    (ok x)))
-
-;; Phase R3: From upcast instances for error types
-;; In v1, all error types are ptr<void>, so these are identity conversions
-;; that just document the intent. Full generic instances (IoError -> Error, etc.)
-;; deferred until proper typeclass support lands.
-(definstance From [ptr<void> ptr<void>]
-  (from [x] :ptr<void>
-    x))
-
-;; Phase R3: Error typeclass instances for stdlib error types
-;; In v1, we use ptr<void> as the type since the typeclass system doesn't
-;; support user-defined struct types directly yet. These instances are
-;; placeholders and will be refined when proper generic typeclass instance
-;; support lands.
-;; For now, implement Error instances using show-* functions which handle
-;; the specific struct types via C casts.
-;; Error instance for ptr<void> (handles all error types generically)
-;; This uses the show-* functions to extract error messages.
-;; Note: This is a simplified v1 implementation that assumes the ptr<void>
-;; points to one of the known error struct types.
-(definstance Error [ptr<void>]
-  (error-message [x] :cstr
-    ;; Use show-error as a fallback for Error type
-    ;; In practice, callers should use the type-specific show functions
-    (show-error x))
-  (error-cause [x] :ptr<void>
-    ;; For generic ptr<void>, return nil as cause
-    nil))

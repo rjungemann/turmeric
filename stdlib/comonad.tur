@@ -1,0 +1,126 @@
+;; Phase CA0: Comonad typeclass — dual of Monad.
+;;
+;; Laws:
+;;   extract (extend f w) = f w           (left identity)
+;;   extend extract w     = w             (right identity)
+;;   extend f (extend g w) = extend (fn [w'] (f (extend g w'))) w  (associativity)
+;;
+;; In v1: all container values are int64_t (holding heap pointers).
+;; extract :: w a -> a
+;; extend  :: (w a -> b) -> w a -> w b
+;; duplicate :: w a -> w (w a)   (derived: extend id)
+
+(defclass Comonad [^w]
+  (extract   [wa]     :int)
+  (extend    [wa fn]  :int)
+  (duplicate [wa]     :int))
+
+;; ── Identity comonad ────────────────────────────────────────────────────────
+;; Identity w a = Identity a
+;; Represented as a heap-allocated { int64_t value; } struct.
+;; extract (Identity a) = a
+;; extend f (Identity a) = Identity (f (Identity a))
+
+(defn __identity_new [x] :int
+  ```c
+  int64_t *p = malloc(sizeof(int64_t));
+  *p = x;
+  return (int64_t)(intptr_t)p;
+  ```)
+
+(defn __identity_get [wa] :int
+  ```c
+  int64_t *p = (int64_t *)(intptr_t)wa;
+  return *p;
+  ```)
+
+(defn __identity_extract [wa] :int
+  ```c
+  int64_t *p = (int64_t *)(intptr_t)wa;
+  return *p;
+  ```)
+
+(defn __identity_extend [wa fn] :int
+  ```c
+  /* extend f w = Identity (f w) */
+  int64_t result = ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(wa, 0);
+  int64_t *p = malloc(sizeof(int64_t));
+  *p = result;
+  return (int64_t)(intptr_t)p;
+  ```)
+
+(defn __identity_duplicate [wa] :int
+  ```c
+  /* duplicate w = Identity w   (the outer Identity wraps the original) */
+  int64_t *p = malloc(sizeof(int64_t));
+  *p = wa;
+  return (int64_t)(intptr_t)p;
+  ```)
+
+(definstance Comonad [identity]
+  (extract   [wa]    (__identity_extract wa))
+  (extend    [wa fn] (__identity_extend wa fn))
+  (duplicate [wa]    (__identity_duplicate wa)))
+
+;; ── Pair (Product) comonad ──────────────────────────────────────────────────
+;; Pair e a = (e, a)   — carries a fixed environment e alongside a value a.
+;; Represented as { int64_t env; int64_t val; }.
+;; extract (e, a) = a
+;; extend f (e, a) = (e, f (e, a))
+
+(defn __pair_new [env val] :int
+  ```c
+  struct { int64_t env; int64_t val; } *p = malloc(sizeof(*p));
+  p->env = env;
+  p->val = val;
+  return (int64_t)(intptr_t)p;
+  ```)
+
+(defn __pair_env [wa] :int
+  ```c
+  struct { int64_t env; int64_t val; } *p =
+      (struct { int64_t env; int64_t val; } *)(intptr_t)wa;
+  return p->env;
+  ```)
+
+(defn __pair_val [wa] :int
+  ```c
+  struct { int64_t env; int64_t val; } *p =
+      (struct { int64_t env; int64_t val; } *)(intptr_t)wa;
+  return p->val;
+  ```)
+
+(defn __pair_extract [wa] :int
+  ```c
+  struct { int64_t env; int64_t val; } *p =
+      (struct { int64_t env; int64_t val; } *)(intptr_t)wa;
+  return p->val;
+  ```)
+
+(defn __pair_extend [wa fn] :int
+  ```c
+  /* extend f (e, a) = (e, f (e, a)) */
+  struct { int64_t env; int64_t val; } *src =
+      (struct { int64_t env; int64_t val; } *)(intptr_t)wa;
+  int64_t new_val = ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(wa, 0);
+  struct { int64_t env; int64_t val; } *p = malloc(sizeof(*p));
+  p->env = src->env;
+  p->val = new_val;
+  return (int64_t)(intptr_t)p;
+  ```)
+
+(defn __pair_duplicate [wa] :int
+  ```c
+  /* duplicate (e, a) = (e, (e, a)) */
+  struct { int64_t env; int64_t val; } *src =
+      (struct { int64_t env; int64_t val; } *)(intptr_t)wa;
+  struct { int64_t env; int64_t val; } *p = malloc(sizeof(*p));
+  p->env = src->env;
+  p->val = wa;
+  return (int64_t)(intptr_t)p;
+  ```)
+
+(definstance Comonad [pair]
+  (extract   [wa]    (__pair_extract wa))
+  (extend    [wa fn] (__pair_extend wa fn))
+  (duplicate [wa]    (__pair_duplicate wa)))
