@@ -13,8 +13,10 @@ extern void *malloc(size_t);
 extern void *calloc(size_t, size_t);
 extern void free(void *);
 extern void abort(void);
+extern int atexit(void (*)(void));
 extern void *memset(void *, int, size_t);
 extern void *memmove(void *, const void *, size_t);
+extern void *memcpy(void *, const void *, size_t);
 extern int strcmp(const char *, const char *);
 
 #define TUR_TEST_REGISTRY_MAX 1024
@@ -167,12 +169,27 @@ void tur_throw(int payload_type, void *payload, int line, const char *file) {
     }
 }
 
-/* Phase R2: tur_panic */
+/* Phase R2/R6: tur_panic */
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
+static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
+static void tur_panic_print_scope_chain(void) {
+    if (!g_panic_trace || !global_panic_frame) return;
+    fprintf(stderr, "  scope chain:\n");
+    tur_frame *frames[64];
+    int n_frames = 0;
+    for (tur_frame *cur = global_panic_frame; cur != NULL && n_frames < 64; cur = cur->parent) {
+        frames[n_frames++] = cur;
+    }
+    for (int i = 0; i < n_frames; i++) {
+        fprintf(stderr, "    at frame %p (parent: %p, n_defers: %d)\n",
+                (void*)frames[i], (void*)frames[i]->parent, frames[i]->n);
+    }
+}
+
 static void tur_panic(const char *msg) {
     if (tur_panic_in_progress) {
         fprintf(stderr, "double panic: aborting\n");
@@ -180,6 +197,7 @@ static void tur_panic(const char *msg) {
     }
     tur_panic_in_progress = 1;
     fprintf(stderr, "panic at %s:%d: %s\n", __FILE__, __LINE__, msg ? msg : "(no message)");
+    tur_panic_print_scope_chain();
     if (global_panic_frame) {
         tur_frame_fire_chain(global_panic_frame);
     }
@@ -192,7 +210,9 @@ static void tur_panic_abort(const char *msg) {
     abort();
 }
 
-/* Phase R2: tur_panic_with */
+static void tur_panic_with(int type_tag, void *payload, const char *file, int line);
+
+/* Phase R2: tur_panic_with types */
 typedef struct tur_panic_payload tur_panic_payload;
 struct tur_panic_payload {
     int type_tag;
@@ -214,22 +234,6 @@ static tur_panic_payload *panic_payload_new(int type_tag, void *payload, const c
 
 static void panic_payload_free(tur_panic_payload *p) {
     if (p) { free(p->value); free(p); }
-}
-
-static void tur_panic_with(int type_tag, void *payload, const char *file, int line) {
-    if (tur_panic_in_progress) {
-        fprintf(stderr, "double panic: aborting\n");
-        free(payload);
-        abort();
-    }
-    tur_panic_in_progress = 1;
-    if (global_panic_jmpbuf_valid) {
-        global_panic_payload = panic_payload_new(type_tag, payload, file, line);
-        longjmp(global_panic_jmpbuf, 1);
-    }
-    fprintf(stderr, "panic at %s:%d\n", file ? file : "(unknown)", line);
-    free(payload);
-    abort();
 }
 
 static int tur_panic_payload_type(tur_panic_payload *p) {
@@ -351,25 +355,97 @@ struct FiberBlock {
     int64_t result;
     int64_t arg;
     void *effect_handler_chain; /* Phase P19-8: per-fiber effect handler chain */
+    bool migration_safe; /* SCH-004: true if effect handlers are safe for cross-thread migration */
     void (*entry_fn)(void);
     void *fiber_local; /* Phase T21: fiber-local storage */
     void *task_group; /* Parent TaskGroup for cancellation */
     bool cancelled; /* Set when parent TaskGroup is cancelled */
+    jmp_buf panic_jmpbuf; /* Per-fiber panic recovery buffer */
+    bool panic_jmpbuf_valid; /* Whether this fiber's panic handler is active */
 };
 
 static __thread FiberBlock *tur_current_fiber = NULL;
+static void tur_panic_with(int type_tag, void *payload, const char *file, int line) {
+    if (tur_panic_in_progress) {
+        fprintf(stderr, "double panic: aborting\n");
+        free(payload);
+        abort();
+    }
+    tur_panic_in_progress = 1;
+    if (global_panic_jmpbuf_valid) {
+        global_panic_payload = panic_payload_new(type_tag, payload, file, line);
+        longjmp(global_panic_jmpbuf, 1);
+    } else if (tur_current_fiber && tur_current_fiber->panic_jmpbuf_valid) {
+        /* Use per-fiber panic buffer - set up global payload for cleanup */
+        global_panic_payload = panic_payload_new(type_tag, payload, file, line);
+        longjmp(tur_current_fiber->panic_jmpbuf, 1);
+    }
+    fprintf(stderr, "panic at %s:%d\n", file ? file : "(unknown)", line);
+    free(payload);
+    abort();
+}
+
 static __thread bool tur_fiber_cancelled_flag = false;
 
 static void tur_task_group_notify_done(void *task_group);
+static void tur_fiber_set_cancelled(bool c);
 
 static void tur_fiber_shim(uint32_t hi, uint32_t lo) {
     FiberBlock *f = (FiberBlock *)(((uintptr_t)hi << 32) | (uintptr_t)(uint32_t)lo);
-    f->entry_fn();
+    void *task_group = f->task_group;
+    if (task_group) {
+        /* Save previous global panic handler state */
+        int prev_global_valid = global_panic_jmpbuf_valid;
+        jmp_buf prev_global_buf;
+        if (prev_global_valid) memcpy(&prev_global_buf, &global_panic_jmpbuf, sizeof(jmp_buf));
+        /* Clear global to prevent interference */
+        global_panic_jmpbuf_valid = 0;
+        /* Set up per-fiber panic handler */
+        if (setjmp(f->panic_jmpbuf) == 0) {
+            f->panic_jmpbuf_valid = 1;
+            tur_current_fiber = f;
+            f->entry_fn();
+            tur_current_fiber = NULL;
+            f->panic_jmpbuf_valid = 0;
+            if (global_panic_payload) {
+                panic_payload_free(global_panic_payload);
+                global_panic_payload = NULL;
+            }
+            /* Restore previous global panic handler */
+            global_panic_jmpbuf_valid = prev_global_valid;
+            if (prev_global_valid) memcpy(&global_panic_jmpbuf, &prev_global_buf, sizeof(jmp_buf));
+        } else {
+            /* Panic caught - auto-cancel task group (TG-004-3) */
+            f->panic_jmpbuf_valid = 0;
+            tur_current_fiber = NULL;
+            if (global_panic_payload) {
+                typedef struct TaskGroupBlock { bool cancelled; bool done; int64_t cancel_reason; pthread_mutex_t lock; pthread_cond_t done_cond; } TaskGroupBlock;
+                TaskGroupBlock *g = (TaskGroupBlock *)task_group;
+                pthread_mutex_lock(&g->lock);
+                g->cancelled = true;
+                g->done = true;
+                g->cancel_reason = 1; /* panic reason (TG-004-2) */
+                pthread_cond_broadcast(&g->done_cond);
+                pthread_mutex_unlock(&g->lock);
+                tur_fiber_set_cancelled(true);
+                panic_payload_free(global_panic_payload);
+                global_panic_payload = NULL;
+            }
+            /* Restore previous global panic handler */
+            global_panic_jmpbuf_valid = prev_global_valid;
+            if (prev_global_valid) memcpy(&global_panic_jmpbuf, &prev_global_buf, sizeof(jmp_buf));
+        }
+    } else {
+        /* No task group, just run the function normally */
+        f->entry_fn();
+    }
     f->done = 1;
-    tur_task_group_notify_done(f->task_group);
+    if (task_group) tur_task_group_notify_done(task_group);
     swapcontext(&f->ctx, &f->caller_ctx);
     abort();
 }
+
+static __thread EffectHandlerFrame *global_effect_handler_chain = NULL;
 
 static FiberBlock *tur_fiber_block_new(void (*fn)(void), size_t stack_size) {
     if (!stack_size) stack_size = 1024 * 1024;
@@ -378,6 +454,8 @@ static FiberBlock *tur_fiber_block_new(void (*fn)(void), size_t stack_size) {
     f->stack = (char *)malloc(stack_size);
     if (!f->stack) { free(f); abort(); }
     f->stack_size = stack_size; f->entry_fn = fn; f->done = 0;
+    f->migration_safe = true;
+    f->effect_handler_chain = (void *)global_effect_handler_chain;
     getcontext(&f->ctx);
     f->ctx.uc_stack.ss_sp = f->stack;
     f->ctx.uc_stack.ss_size = stack_size;
@@ -748,8 +826,6 @@ static void tur_future_free(TurFuture *f) {
 
 /* Backward compatibility: TurAsyncTask = TurFuture */
 typedef TurFuture TurAsyncTask;
-
-static __thread EffectHandlerFrame *global_effect_handler_chain = NULL;
 
 static int64_t tur_effect_perform(const char *name, int64_t *args, int n_args) {
     EffectHandlerFrame *frame =
@@ -1274,23 +1350,23 @@ static int64_t __effect_handler_15(int64_t *__effect_args, int __n_effect_args, 
 int main() {
         int64_t __t8;
         {
-            void * f1_37 = fiber_new_fn(fiber1_body, INT64_C(0));
+            void * f1_37 = fiber_new_fn((void *)(intptr_t)(fiber1_body), INT64_C(0));
             (void)f1_37;
             int64_t __t9;
             {
-                int64_t v1_38 = fiber_resume_fn(f1_37, INT64_C(0));
+                int64_t v1_38 = fiber_resume_fn((void *)(intptr_t)(f1_37), INT64_C(0));
                 (void)v1_38;
-                fiber_free_fn(f1_37);
+                fiber_free_fn((void *)(intptr_t)(f1_37));
                 int64_t __t10;
                 int64_t __t11;
                 {
-                    void * f2_39 = fiber_new_fn(fiber2_body, INT64_C(0));
+                    void * f2_39 = fiber_new_fn((void *)(intptr_t)(fiber2_body), INT64_C(0));
                     (void)f2_39;
                     int64_t __t12;
                     {
-                        int64_t v2_40 = fiber_resume_fn(f2_39, INT64_C(0));
+                        int64_t v2_40 = fiber_resume_fn((void *)(intptr_t)(f2_39), INT64_C(0));
                         (void)v2_40;
-                        fiber_free_fn(f2_39);
+                        fiber_free_fn((void *)(intptr_t)(f2_39));
                         int64_t __t13;
                         int64_t __t14;
                         {

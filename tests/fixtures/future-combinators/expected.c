@@ -13,8 +13,10 @@ extern void *malloc(size_t);
 extern void *calloc(size_t, size_t);
 extern void free(void *);
 extern void abort(void);
+extern int atexit(void (*)(void));
 extern void *memset(void *, int, size_t);
 extern void *memmove(void *, const void *, size_t);
+extern void *memcpy(void *, const void *, size_t);
 extern int strcmp(const char *, const char *);
 
 #define TUR_TEST_REGISTRY_MAX 1024
@@ -167,12 +169,27 @@ void tur_throw(int payload_type, void *payload, int line, const char *file) {
     }
 }
 
-/* Phase R2: tur_panic */
+/* Phase R2/R6: tur_panic */
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
+static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
+static void tur_panic_print_scope_chain(void) {
+    if (!g_panic_trace || !global_panic_frame) return;
+    fprintf(stderr, "  scope chain:\n");
+    tur_frame *frames[64];
+    int n_frames = 0;
+    for (tur_frame *cur = global_panic_frame; cur != NULL && n_frames < 64; cur = cur->parent) {
+        frames[n_frames++] = cur;
+    }
+    for (int i = 0; i < n_frames; i++) {
+        fprintf(stderr, "    at frame %p (parent: %p, n_defers: %d)\n",
+                (void*)frames[i], (void*)frames[i]->parent, frames[i]->n);
+    }
+}
+
 static void tur_panic(const char *msg) {
     if (tur_panic_in_progress) {
         fprintf(stderr, "double panic: aborting\n");
@@ -180,6 +197,7 @@ static void tur_panic(const char *msg) {
     }
     tur_panic_in_progress = 1;
     fprintf(stderr, "panic at %s:%d: %s\n", __FILE__, __LINE__, msg ? msg : "(no message)");
+    tur_panic_print_scope_chain();
     if (global_panic_frame) {
         tur_frame_fire_chain(global_panic_frame);
     }
@@ -192,7 +210,9 @@ static void tur_panic_abort(const char *msg) {
     abort();
 }
 
-/* Phase R2: tur_panic_with */
+static void tur_panic_with(int type_tag, void *payload, const char *file, int line);
+
+/* Phase R2: tur_panic_with types */
 typedef struct tur_panic_payload tur_panic_payload;
 struct tur_panic_payload {
     int type_tag;
@@ -214,22 +234,6 @@ static tur_panic_payload *panic_payload_new(int type_tag, void *payload, const c
 
 static void panic_payload_free(tur_panic_payload *p) {
     if (p) { free(p->value); free(p); }
-}
-
-static void tur_panic_with(int type_tag, void *payload, const char *file, int line) {
-    if (tur_panic_in_progress) {
-        fprintf(stderr, "double panic: aborting\n");
-        free(payload);
-        abort();
-    }
-    tur_panic_in_progress = 1;
-    if (global_panic_jmpbuf_valid) {
-        global_panic_payload = panic_payload_new(type_tag, payload, file, line);
-        longjmp(global_panic_jmpbuf, 1);
-    }
-    fprintf(stderr, "panic at %s:%d\n", file ? file : "(unknown)", line);
-    free(payload);
-    abort();
 }
 
 static int tur_panic_payload_type(tur_panic_payload *p) {
@@ -351,25 +355,97 @@ struct FiberBlock {
     int64_t result;
     int64_t arg;
     void *effect_handler_chain; /* Phase P19-8: per-fiber effect handler chain */
+    bool migration_safe; /* SCH-004: true if effect handlers are safe for cross-thread migration */
     void (*entry_fn)(void);
     void *fiber_local; /* Phase T21: fiber-local storage */
     void *task_group; /* Parent TaskGroup for cancellation */
     bool cancelled; /* Set when parent TaskGroup is cancelled */
+    jmp_buf panic_jmpbuf; /* Per-fiber panic recovery buffer */
+    bool panic_jmpbuf_valid; /* Whether this fiber's panic handler is active */
 };
 
 static __thread FiberBlock *tur_current_fiber = NULL;
+static void tur_panic_with(int type_tag, void *payload, const char *file, int line) {
+    if (tur_panic_in_progress) {
+        fprintf(stderr, "double panic: aborting\n");
+        free(payload);
+        abort();
+    }
+    tur_panic_in_progress = 1;
+    if (global_panic_jmpbuf_valid) {
+        global_panic_payload = panic_payload_new(type_tag, payload, file, line);
+        longjmp(global_panic_jmpbuf, 1);
+    } else if (tur_current_fiber && tur_current_fiber->panic_jmpbuf_valid) {
+        /* Use per-fiber panic buffer - set up global payload for cleanup */
+        global_panic_payload = panic_payload_new(type_tag, payload, file, line);
+        longjmp(tur_current_fiber->panic_jmpbuf, 1);
+    }
+    fprintf(stderr, "panic at %s:%d\n", file ? file : "(unknown)", line);
+    free(payload);
+    abort();
+}
+
 static __thread bool tur_fiber_cancelled_flag = false;
 
 static void tur_task_group_notify_done(void *task_group);
+static void tur_fiber_set_cancelled(bool c);
 
 static void tur_fiber_shim(uint32_t hi, uint32_t lo) {
     FiberBlock *f = (FiberBlock *)(((uintptr_t)hi << 32) | (uintptr_t)(uint32_t)lo);
-    f->entry_fn();
+    void *task_group = f->task_group;
+    if (task_group) {
+        /* Save previous global panic handler state */
+        int prev_global_valid = global_panic_jmpbuf_valid;
+        jmp_buf prev_global_buf;
+        if (prev_global_valid) memcpy(&prev_global_buf, &global_panic_jmpbuf, sizeof(jmp_buf));
+        /* Clear global to prevent interference */
+        global_panic_jmpbuf_valid = 0;
+        /* Set up per-fiber panic handler */
+        if (setjmp(f->panic_jmpbuf) == 0) {
+            f->panic_jmpbuf_valid = 1;
+            tur_current_fiber = f;
+            f->entry_fn();
+            tur_current_fiber = NULL;
+            f->panic_jmpbuf_valid = 0;
+            if (global_panic_payload) {
+                panic_payload_free(global_panic_payload);
+                global_panic_payload = NULL;
+            }
+            /* Restore previous global panic handler */
+            global_panic_jmpbuf_valid = prev_global_valid;
+            if (prev_global_valid) memcpy(&global_panic_jmpbuf, &prev_global_buf, sizeof(jmp_buf));
+        } else {
+            /* Panic caught - auto-cancel task group (TG-004-3) */
+            f->panic_jmpbuf_valid = 0;
+            tur_current_fiber = NULL;
+            if (global_panic_payload) {
+                typedef struct TaskGroupBlock { bool cancelled; bool done; int64_t cancel_reason; pthread_mutex_t lock; pthread_cond_t done_cond; } TaskGroupBlock;
+                TaskGroupBlock *g = (TaskGroupBlock *)task_group;
+                pthread_mutex_lock(&g->lock);
+                g->cancelled = true;
+                g->done = true;
+                g->cancel_reason = 1; /* panic reason (TG-004-2) */
+                pthread_cond_broadcast(&g->done_cond);
+                pthread_mutex_unlock(&g->lock);
+                tur_fiber_set_cancelled(true);
+                panic_payload_free(global_panic_payload);
+                global_panic_payload = NULL;
+            }
+            /* Restore previous global panic handler */
+            global_panic_jmpbuf_valid = prev_global_valid;
+            if (prev_global_valid) memcpy(&global_panic_jmpbuf, &prev_global_buf, sizeof(jmp_buf));
+        }
+    } else {
+        /* No task group, just run the function normally */
+        f->entry_fn();
+    }
     f->done = 1;
-    tur_task_group_notify_done(f->task_group);
+    if (task_group) tur_task_group_notify_done(task_group);
     swapcontext(&f->ctx, &f->caller_ctx);
     abort();
 }
+
+static __thread EffectHandlerFrame *global_effect_handler_chain = NULL;
 
 static FiberBlock *tur_fiber_block_new(void (*fn)(void), size_t stack_size) {
     if (!stack_size) stack_size = 1024 * 1024;
@@ -378,6 +454,8 @@ static FiberBlock *tur_fiber_block_new(void (*fn)(void), size_t stack_size) {
     f->stack = (char *)malloc(stack_size);
     if (!f->stack) { free(f); abort(); }
     f->stack_size = stack_size; f->entry_fn = fn; f->done = 0;
+    f->migration_safe = true;
+    f->effect_handler_chain = (void *)global_effect_handler_chain;
     getcontext(&f->ctx);
     f->ctx.uc_stack.ss_sp = f->stack;
     f->ctx.uc_stack.ss_size = stack_size;
@@ -748,8 +826,6 @@ static void tur_future_free(TurFuture *f) {
 
 /* Backward compatibility: TurAsyncTask = TurFuture */
 typedef TurFuture TurAsyncTask;
-
-static __thread EffectHandlerFrame *global_effect_handler_chain = NULL;
 
 static int64_t tur_effect_perform(const char *name, int64_t *args, int n_args) {
     EffectHandlerFrame *frame =
@@ -1368,57 +1444,57 @@ int main() {
         {
             void * f1_52 = future_of(INT64_C(42));
             (void)f1_52;
-            printf("%lld\n", (long long)(future_get_ok(f1_52)));
-            future_free(f1_52);
+            printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f1_52))));
+            future_free((void *)(intptr_t)(f1_52));
         }
         {
             void * f2_53 = future_error_of(INT64_C(-1));
             (void)f2_53;
-            printf("%lld\n", (long long)(future_get_ok(f2_53)));
-            future_free(f2_53);
+            printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f2_53))));
+            future_free((void *)(intptr_t)(f2_53));
         }
         {
             void * f3_54 = future_of(INT64_C(10));
             (void)f3_54;
             {
-                void * f3m_55 = future_map(f3_54, double_fn);
+                void * f3m_55 = future_map((void *)(intptr_t)(f3_54), (void *)(intptr_t)(double_fn));
                 (void)f3m_55;
-                printf("%lld\n", (long long)(future_get_ok(f3m_55)));
-                future_free(f3_54);
-                future_free(f3m_55);
+                printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f3m_55))));
+                future_free((void *)(intptr_t)(f3_54));
+                future_free((void *)(intptr_t)(f3m_55));
             }
         }
         {
             void * f4_56 = future_error_of(INT64_C(-5));
             (void)f4_56;
             {
-                void * f4m_57 = future_map(f4_56, double_fn);
+                void * f4m_57 = future_map((void *)(intptr_t)(f4_56), (void *)(intptr_t)(double_fn));
                 (void)f4m_57;
-                printf("%lld\n", (long long)(future_get_ok(f4m_57)));
-                future_free(f4_56);
-                future_free(f4m_57);
+                printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f4m_57))));
+                future_free((void *)(intptr_t)(f4_56));
+                future_free((void *)(intptr_t)(f4m_57));
             }
         }
         {
             void * f5_58 = future_of(INT64_C(7));
             (void)f5_58;
             {
-                void * f5t_59 = future_then(f5_58, times10_fn);
+                void * f5t_59 = future_then((void *)(intptr_t)(f5_58), (void *)(intptr_t)(times10_fn));
                 (void)f5t_59;
-                printf("%lld\n", (long long)(future_get_ok(f5t_59)));
-                future_free(f5_58);
-                future_free(f5t_59);
+                printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f5t_59))));
+                future_free((void *)(intptr_t)(f5_58));
+                future_free((void *)(intptr_t)(f5t_59));
             }
         }
         {
             void * f6_60 = future_error_of(INT64_C(-3));
             (void)f6_60;
             {
-                void * f6t_61 = future_then(f6_60, times10_fn);
+                void * f6t_61 = future_then((void *)(intptr_t)(f6_60), (void *)(intptr_t)(times10_fn));
                 (void)f6t_61;
-                printf("%lld\n", (long long)(future_get_ok(f6t_61)));
-                future_free(f6_60);
-                future_free(f6t_61);
+                printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f6t_61))));
+                future_free((void *)(intptr_t)(f6_60));
+                future_free((void *)(intptr_t)(f6t_61));
             }
         }
         {
@@ -1428,12 +1504,12 @@ int main() {
                 void * fb_63 = future_of(INT64_C(200));
                 (void)fb_63;
                 {
-                    void * fall_64 = future_all2(fa_62, fb_63);
+                    void * fall_64 = future_all2((void *)(intptr_t)(fa_62), (void *)(intptr_t)(fb_63));
                     (void)fall_64;
-                    printf("%lld\n", (long long)(future_get_ok(fall_64)));
-                    future_free(fa_62);
-                    future_free(fb_63);
-                    future_free(fall_64);
+                    printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(fall_64))));
+                    future_free((void *)(intptr_t)(fa_62));
+                    future_free((void *)(intptr_t)(fb_63));
+                    future_free((void *)(intptr_t)(fall_64));
                 }
             }
         }
@@ -1444,12 +1520,12 @@ int main() {
                 void * fb2_66 = future_error_of(INT64_C(-7));
                 (void)fb2_66;
                 {
-                    void * fall2_67 = future_all2(fa2_65, fb2_66);
+                    void * fall2_67 = future_all2((void *)(intptr_t)(fa2_65), (void *)(intptr_t)(fb2_66));
                     (void)fall2_67;
-                    printf("%lld\n", (long long)(future_get_ok(fall2_67)));
-                    future_free(fa2_65);
-                    future_free(fb2_66);
-                    future_free(fall2_67);
+                    printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(fall2_67))));
+                    future_free((void *)(intptr_t)(fa2_65));
+                    future_free((void *)(intptr_t)(fb2_66));
+                    future_free((void *)(intptr_t)(fall2_67));
                 }
             }
         }
@@ -1460,25 +1536,25 @@ int main() {
                 void * fb3_69 = future_error_of(INT64_C(-8));
                 (void)fb3_69;
                 {
-                    void * fany_70 = future_any2(fa3_68, fb3_69);
+                    void * fany_70 = future_any2((void *)(intptr_t)(fa3_68), (void *)(intptr_t)(fb3_69));
                     (void)fany_70;
-                    printf("%lld\n", (long long)(future_get_ok(fany_70)));
-                    future_free(fa3_68);
-                    future_free(fb3_69);
-                    future_free(fany_70);
+                    printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(fany_70))));
+                    future_free((void *)(intptr_t)(fa3_68));
+                    future_free((void *)(intptr_t)(fb3_69));
+                    future_free((void *)(intptr_t)(fany_70));
                 }
             }
         }
         {
             void * fc_71 = make_unsettled();
             (void)fc_71;
-            future_cancel(fc_71);
-            if (future_cancelled_(fc_71)) {
+            future_cancel((void *)(intptr_t)(fc_71));
+            if (future_cancelled_((void *)(intptr_t)(fc_71))) {
                 puts("cancelled");
             } else {
                 puts("FAIL");
             }
-            future_free(fc_71);
+            future_free((void *)(intptr_t)(fc_71));
         }
         int64_t __t0;
         __t0 = INT64_C(0);

@@ -21,59 +21,141 @@
 ;;
 ;; requires.tsan
 
+;; Ray-sphere hit test for one row.
+(defn rt-row-fn [arg :ptr<void>] :ptr<void>
+  ```c
+  int row = (int)(uintptr_t)arg;
+  double ys[4] = {-0.75, -0.25, 0.25, 0.75};
+  double xs[4] = {-0.75, -0.25, 0.25, 0.75};
+  double y = ys[row];
+  int hits = 0;
+  for (int col = 0; col < 4; col++) {
+      double x = xs[col];
+      double disc = 4.0 - 32.0 * (x*x + y*y);
+      if (disc >= 0.0) hits++;
+  }
+  return (void *)(uintptr_t)(int64_t)hits;
+  ```)
+
+;; Worker thread for the ray-tracing thread pool.
+(defn rt-worker-fn [arg :ptr<void>] :ptr<void>
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count;
+      int64_t alloc; int closed;
+  } RTQBlock;
+  typedef struct { void *(*fn)(void *); void *arg; void *future_cell; } RTTask;
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t ready;
+      int64_t value; bool is_set;
+  } RTFutCell;
+  RTQBlock *q = (RTQBlock *)arg;
+  while (1) {
+      int64_t task_ptr;
+      pthread_mutex_lock(&q->lock);
+      while (q->count == 0 && !q->closed)
+          pthread_cond_wait(&q->not_empty, &q->lock);
+      if (q->count == 0 && q->closed) {
+          pthread_mutex_unlock(&q->lock);
+          break;
+      }
+      task_ptr = q->buf[q->head];
+      q->head = (q->head + 1) % q->alloc;
+      q->count--;
+      pthread_mutex_unlock(&q->lock);
+      if (task_ptr == 0) break;
+      RTTask *task = (RTTask *)(uintptr_t)task_ptr;
+      void *result = task->fn(task->arg);
+      RTFutCell *fc = (RTFutCell *)task->future_cell;
+      pthread_mutex_lock(&fc->lock);
+      if (!fc->is_set) {
+          fc->value = (int64_t)(uintptr_t)result;
+          fc->is_set = true;
+          pthread_cond_broadcast(&fc->ready);
+      }
+      pthread_mutex_unlock(&fc->lock);
+      free(task);
+  }
+  return NULL;
+  ```)
+
 (defn main [] :int
   ```c
-  /* ray-sphere hit test for row i in 4x4 grid */
-  void *rt_row_fn(void *a) {
-      int row = (int)(uintptr_t)a;
-      double ys[4] = {-0.75, -0.25, 0.25, 0.75};
-      double xs[4] = {-0.75, -0.25, 0.25, 0.75};
-      double y = ys[row];
-      int hits = 0;
-      for (int col = 0; col < 4; col++) {
-          double x = xs[col];
-          /* discriminant = 4 - 32*(x^2+y^2); hit when disc >= 0 */
-          double disc = 4.0 - 32.0 * (x*x + y*y);
-          if (disc >= 0.0) hits++;
-      }
-      return (void *)(uintptr_t)(int64_t)hits;
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count;
+      int64_t alloc; int closed;
+  } RTQBlock;
+  typedef struct { void *(*fn)(void *); void *arg; void *future_cell; } RTTask;
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t ready;
+      int64_t value; bool is_set;
+  } RTFutCell;
+
+  /* Create queue and spawn 2 workers */
+  RTQBlock *q = (RTQBlock *)malloc(sizeof(RTQBlock));
+  pthread_mutex_init(&q->lock, NULL);
+  pthread_cond_init(&q->not_empty, NULL);
+  q->alloc = 16; q->buf = (int64_t *)malloc((size_t)q->alloc * sizeof(int64_t));
+  q->head = 0; q->tail = 0; q->count = 0; q->closed = 0;
+  pthread_t workers[2];
+  for (int i = 0; i < 2; i++) {
+      pthread_create(&workers[i], NULL,
+                     (void *(*)(void *))rt_worker_fn, (void *)q);
   }
 
-  /* Create dynamic pool with min=2, max=4 workers */
-  void *tp = thread_pool_new_dynamic(2, 4);
-
-  /* submit 4 scanline tasks */
+  /* Submit 4 scanline tasks */
+  RTFutCell *futures[4];
   int64_t total_hits = 0;
   for (int r = 0; r < 4; r++) {
-      void *fc = thread_pool_dynamic_submit(tp, rt_row_fn, (void *)(uintptr_t)r);
-      
-      /* Wait for future to be ready and collect result */
-      typedef struct {
-          pthread_mutex_t lock;
-          pthread_cond_t ready;
-          int64_t value;
-          int64_t exn;
-          bool is_set;
-          bool is_ok;
-      } FutureCell;
-      FutureCell *future = (FutureCell *)fc;
-      pthread_mutex_lock(&future->lock);
-      while (!future->is_set)
-          pthread_cond_wait(&future->ready, &future->lock);
-      total_hits += future->value;
-      pthread_mutex_unlock(&future->lock);
-      
-      /* Clean up future */
-      pthread_mutex_destroy(&future->lock);
-      pthread_cond_destroy(&future->ready);
-      free(future);
+      futures[r] = (RTFutCell *)malloc(sizeof(RTFutCell));
+      pthread_mutex_init(&futures[r]->lock, NULL);
+      pthread_cond_init(&futures[r]->ready, NULL);
+      futures[r]->is_set = false;
+
+      RTTask *task = (RTTask *)malloc(sizeof(RTTask));
+      task->fn = (void *(*)(void *))rt_row_fn;
+      task->arg = (void *)(uintptr_t)(int64_t)r;
+      task->future_cell = (void *)futures[r];
+
+      pthread_mutex_lock(&q->lock);
+      q->buf[q->tail] = (int64_t)(uintptr_t)task;
+      q->tail = (q->tail + 1) % q->alloc;
+      q->count++;
+      pthread_cond_signal(&q->not_empty);
+      pthread_mutex_unlock(&q->lock);
   }
 
+  /* Collect results */
+  for (int r = 0; r < 4; r++) {
+      pthread_mutex_lock(&futures[r]->lock);
+      while (!futures[r]->is_set)
+          pthread_cond_wait(&futures[r]->ready, &futures[r]->lock);
+      total_hits += futures[r]->value;
+      pthread_mutex_unlock(&futures[r]->lock);
+  }
   printf("hits: %lld\n", (long long)total_hits);
 
-  /* shutdown and free */
-  thread_pool_dynamic_shutdown(tp);
-  thread_pool_dynamic_free(tp);
-  
+  /* Shutdown */
+  pthread_mutex_lock(&q->lock);
+  q->closed = 1;
+  pthread_cond_broadcast(&q->not_empty);
+  pthread_mutex_unlock(&q->lock);
+  for (int i = 0; i < 2; i++) {
+      pthread_join(workers[i], NULL);
+  }
+
+  /* Cleanup */
+  for (int r = 0; r < 4; r++) {
+      pthread_mutex_destroy(&futures[r]->lock);
+      pthread_cond_destroy(&futures[r]->ready);
+      free(futures[r]);
+  }
+  free(q->buf);
+  pthread_mutex_destroy(&q->lock);
+  pthread_cond_destroy(&q->not_empty);
+  free(q);
+
   return 0;
   ```)

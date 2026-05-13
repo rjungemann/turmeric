@@ -728,7 +728,8 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 ### Phase R6 remaining tasks (Async/Effects & Tooling)
 - [x] Define and document panic + continuation/effects boundary semantics.
   - Done: Added to `docs/guides/error-handling-guide.md`.
-- [ ] Define and document panic + async task semantics (deferred until async ships).
+- [x] Define and document panic + async task semantics (deferred until async ships).
+  - Done: T21 async/await has shipped. Documented in `docs/guides/error-handling-guide.md` — v1 behavior (panics propagate through the async boundary, no task-boundary catch) and the v2 target (panic caught at task boundary, surfaces as `Err(PanicPayload)` at the join point).
 - [x] Write `docs/error-handling-guide.md` covering `Result`, `panic`, `must!`, `catch_unwind`, and guidance on when to use each.
   - Done: `docs/guides/error-handling-guide.md` created.
 - [x] Add elaborator pass: warn on discarded `result<T, E>` values.
@@ -799,8 +800,11 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Both in `tests/fixtures/errors/`. `thread-send-ref` rejects `(ref 42)` capture in closure passed to `thread-spawn` with TUR-E0010. `thread-send-cont` rejects captured continuation with same error.
 - [x] Add codegen snapshots for thread spawn, `Arc` refcount, `Mutex` lock/unlock.
   - `thread-spawn-snapshot` in `tests/fixtures/` validates spawn codegen. `arc-refcount-snapshot` validates Arc refcounting emit. `mutex-snapshot` validates mutex lock/unlock emit.
-- [ ] Run all thread fixtures under ThreadSanitizer (TSan).
-  - Fixtures with `requires.tsan` file are skipped when TUR_TSAN not set. Full TSan integration and CI pipeline deferred.
+- [x] Run all thread fixtures under ThreadSanitizer (TSan).
+  - All 16 TSan fixtures pass under `TUR_TSAN=1`: `thread-basic`, `thread-arc`, `thread-stress`, `mutex-stress`, `atomic-stress`, `channel-basic`, `producer-consumer`, `threaded-fizzbuzz`, `thread-pool-basic`, `thread-pool-shutdown`, `thread-pool-dynamic`, `raytracer`, `semaphore`, `work-queue`, `future-basic`, `future-error`.
+  - Fixed emit.c: `TY_PTR_VOID` arguments passed to `TY_PTR_VOID` parameters now emit `(void *)(intptr_t)` cast instead of `(int64_t)(intptr_t)`, which is C99-valid and required for `-fsanitize=thread`.
+  - Fixed fixtures: `future-basic` and `future-error` had unbalanced parentheses and used invalid `(sizeof :ptr<void>)` syntax; rewritten with `make-worker-arg` inline-C helper. Four thread-pool/raytracer fixtures had nested C function definitions (GNU extension) inside inline C blocks; extracted to top-level `defn` functions.
+  - CI integration: run with `TUR_TSAN=1 bash tests/run.sh` or `just test-tsan`.
 
 #### T20 — Thread pool and higher-level abstractions
 - [x] Implement `ThreadPool::new` with fixed size and `submit`/`shutdown`.
