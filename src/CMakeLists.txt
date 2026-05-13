@@ -1,9 +1,18 @@
 cmake_minimum_required(VERSION 3.20)
 
 # ---------------------------------------------------------------------------
-# Compiler sources
+# Phase S0: turi eval core sources (shared between tur and libturi)
 # ---------------------------------------------------------------------------
-set(TUR_SOURCES
+set(TURI_EVAL_SOURCES
+    turi/value.c
+    turi/env.c
+    turi/eval.c
+)
+
+# ---------------------------------------------------------------------------
+# Compiler sources (all except main.c and turi eval core)
+# ---------------------------------------------------------------------------
+set(TUR_CORE_SOURCES
     arc.c
     arena.c
     atomic_queue.c
@@ -22,11 +31,11 @@ set(TUR_SOURCES
     fiber.c
     forms.c
     gc.c
+    globals.c
     interp.c
     kind_check.c
     lifetime_elision.c
     lifetimes.c
-    main.c
     rc_elision.c
     rc_free_queue.c
     rc.c
@@ -40,13 +49,14 @@ set(TUR_SOURCES
     symbols.c
     typeclass.c
     types.c
+    ${TURI_EVAL_SOURCES}
 )
 
-# Architecture-specific assembly
+# Architecture-specific assembly (added to both tur and libturi)
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
-    list(APPEND TUR_SOURCES fiber_ctx_arm64.S)
+    list(APPEND TUR_CORE_SOURCES fiber_ctx_arm64.S)
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
-    list(APPEND TUR_SOURCES fiber_ctx_x64.S)
+    list(APPEND TUR_CORE_SOURCES fiber_ctx_x64.S)
 else()
     message(FATAL_ERROR "Unsupported architecture '${CMAKE_SYSTEM_PROCESSOR}'; expected arm64/aarch64/x86_64/amd64")
 endif()
@@ -54,13 +64,38 @@ endif()
 # Platform-specific I/O backends
 if(UNIX AND NOT APPLE AND NOT FREEBSD AND NOT OPENBSD AND NOT NETBSD)
     # Linux - use epoll
-    list(APPEND TUR_SOURCES io_epoll.c)
+    list(APPEND TUR_CORE_SOURCES io_epoll.c)
 elseif(APPLE OR FREEBSD OR OPENBSD OR NETBSD)
     # BSD/macOS - use kqueue
-    list(APPEND TUR_SOURCES io_kqueue.c)
+    list(APPEND TUR_CORE_SOURCES io_kqueue.c)
 endif()
 
-add_executable(tur ${TUR_SOURCES})
+# ---------------------------------------------------------------------------
+# tur_core: OBJECT library shared by tur executable and libturi
+# ---------------------------------------------------------------------------
+add_library(tur_core OBJECT ${TUR_CORE_SOURCES})
+
+# turi/ sources need src/ on the include path (they use #include "arena.h" etc.)
+target_include_directories(tur_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Common warning flags
+target_compile_options(tur_core PRIVATE
+    -Wall -Wextra -Werror -Wno-unused-parameter -std=c11 -pedantic -pthread
+)
+# Per-build-type flags
+target_compile_options(tur_core PRIVATE
+    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+    $<$<CONFIG:TSan>:    -O1 -g -fsanitize=thread>
+)
+
+# ---------------------------------------------------------------------------
+# tur: main compiler executable
+# ---------------------------------------------------------------------------
+add_executable(tur main.c $<TARGET_OBJECTS:tur_core>)
+
+# tur also needs src/ on the include path for main.c -> turi/eval.h
+target_include_directories(tur PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Common warning flags
 target_compile_options(tur PRIVATE
@@ -86,5 +121,31 @@ target_link_options(tur PRIVATE
 # Ensure the compiler binary ends up at build/tur (same path the test scripts
 # and games expect).
 set_target_properties(tur PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# ---------------------------------------------------------------------------
+# Phase S0: libturi — static library for C embedding of the eval API
+# ---------------------------------------------------------------------------
+add_library(libturi STATIC $<TARGET_OBJECTS:tur_core>)
+set_target_properties(libturi PROPERTIES OUTPUT_NAME "turi")
+target_include_directories(libturi PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_options(libturi INTERFACE -pthread)
+
+# ---------------------------------------------------------------------------
+# Phase S0: tur_eval_basic — C embedding smoke test
+# ---------------------------------------------------------------------------
+add_executable(tur_eval_basic ${CMAKE_SOURCE_DIR}/tests/turi/eval-basic.c)
+target_include_directories(tur_eval_basic PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(tur_eval_basic PRIVATE libturi)
+target_compile_options(tur_eval_basic PRIVATE
+    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
+    $<$<CONFIG:Debug>:   -Og -g -fsanitize=address,undefined -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_eval_basic PRIVATE -pthread
+    $<$<CONFIG:Debug>:   -fsanitize=address,undefined>
+)
+set_target_properties(tur_eval_basic PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )

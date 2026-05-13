@@ -390,9 +390,7 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
              */
             return borrow_check_expr_recursive(ctx, e->as.await_.fut_expr);
         }
-        /* Phase N: numeric cast */
-        case EX_CAST:
-            return borrow_check_expr_recursive(ctx, e->as.cast_.expr);
+        /* Phase N: numeric cast — handled at line 169 in the literals group */
 
         case EX_BUILTIN:
             /* Check builtin arguments */

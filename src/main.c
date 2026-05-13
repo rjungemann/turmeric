@@ -42,6 +42,10 @@
 #include "pass.h"         /* Phase P19-1: pass scheduling */
 #include "reader.h"
 #include "symbols.h"
+/* Phase S0: eval API for tur repl */
+#include "turi/eval.h"
+/* Global configuration variables — defined in globals.c */
+#include "globals.h"
 
 /* Extract basename from a path. */
 static const char *basename_of(const char *path) {
@@ -49,33 +53,9 @@ static const char *basename_of(const char *path) {
     return s ? s + 1 : path;
 }
 
-/* Phase U5: Global configuration for unsafe linting */
-uint32_t g_unsafe_max_lines = 20;      /* default threshold */
-bool g_unsafe_warn_nested = false;      /* disabled by default */
-bool g_unsafe_require_safety = false;   /* disabled by default */
-bool g_unsafe_stats_enabled = false;   /* disabled by default */
-bool g_lint_unsafe_enabled = false;    /* master flag for all unsafe lints */
-
-/* Phase R5: Panic strategy configuration */
-bool g_panic_abort = false;            /* --panic-abort: all panics call abort() directly */
-bool g_panic_trace = false;            /* --panic-trace: print scope chain on panic */
-
-/* Phase R6: Result/panic linting configuration */
-bool g_warn_unused_result = false;     /* --warn-unused-result: warn on discarded result values */
-bool g_lint_panic = false;              /* --lint-panic: lint panic/must! usage */
-
+/* Global configuration variables — defined in globals.c (part of tur_core) */
 /* Phase HKT-P6: --dump-kinds flag: print kind annotations after kind-check */
 static bool g_dump_kinds = false;
-
-/* Phase B5: --backtrack-depth N global flag (0 = unlimited) */
-int64_t g_backtrack_depth = 0;
-
-/* Phase B5: --dump-clone-plan flag: print cloneable capture plan after CPS */
-bool g_dump_clone_plan = false;
-
-/* Phase U5: Global statistics for unsafe linting */
-uint32_t g_unsafe_block_count = 0;     /* count of unsafe blocks seen */
-uint32_t g_unsafe_total_lines = 0;     /* total lines in unsafe blocks */
 
 /* Helper to detect language and adjust source for #lang directive */
 static ReaderType detect_and_adjust_lang(const char *path, char *src, size_t len,
@@ -886,6 +866,72 @@ static int is_directory(const char *path) {
     return S_ISDIR(st.st_mode);
 }
 
+/* Phase S0: tur repl — interactive read-eval-print loop. */
+static int cmd_repl(void) {
+    printf("Turmeric v0.x.0  (type :help for help, :quit to exit)\n");
+    fflush(stdout);
+
+    TuriEnv *env = turi_env_new();
+    if (!env) {
+        fprintf(stderr, "tur repl: failed to create eval environment\n");
+        return 1;
+    }
+
+    char line[4096];
+    while (1) {
+        printf("turmeric> ");
+        fflush(stdout);
+
+        if (!fgets(line, sizeof(line), stdin)) {
+            printf("\n");
+            break;
+        }
+
+        /* Strip trailing newline */
+        size_t len = strlen(line);
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+            line[--len] = '\0';
+
+        if (len == 0) continue;
+
+        /* Meta-commands */
+        if (strcmp(line, ":quit") == 0 || strcmp(line, ":q") == 0) {
+            break;
+        }
+        if (strcmp(line, ":help") == 0) {
+            printf("Meta-commands:\n"
+                   "  :help          show this help\n"
+                   "  :quit  :q      exit the REPL\n"
+                   "\n"
+                   "Expressions are evaluated and the result printed.\n"
+                   "Definitions (defn, def) are stored for subsequent expressions.\n");
+            continue;
+        }
+
+        /* Evaluate */
+        TuriValue result = turi_eval(env, line);
+
+        if (turi_is_error(result)) {
+            /* Parse/elaboration errors are already emitted to stderr by the
+             * diagnostics system; only print runtime errors separately. */
+            const char *msg = turi_error_message(result);
+            if (msg &&
+                strcmp(msg, "parse error") != 0 &&
+                strcmp(msg, "elaboration error") != 0) {
+                fprintf(stderr, "error: %s\n", msg);
+            }
+        } else {
+            char repr[256];
+            turi_value_repr(repr, sizeof(repr), result);
+            printf("=> %s\n", repr);
+        }
+        fflush(stdout);
+    }
+
+    turi_env_free(env);
+    return 0;
+}
+
 static int usage(void) {
     fprintf(stderr,
         "tur: the Turmeric compiler (phase 8)\n"
@@ -896,6 +942,7 @@ static int usage(void) {
         "  tur emit-c <input.tur>            print the generated C to stdout\n"
         "  tur emit-h <input.tur>            print the generated header to stdout\n"
         "  tur run <input.tur>               build + execute a single file\n"
+        "  tur repl                          interactive REPL (Phase S0)\n"
         "  tur test <dir>                    run all .tur files in a directory\n"
         "  tur check <input.tur>             type-check only, no codegen (phase 8)\n"
         "\n"
@@ -1224,6 +1271,10 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "run") == 0) {
         if (argc != 3) return usage();
         return cmd_run(argv[2]);
+    }
+    if (strcmp(cmd, "repl") == 0) {
+        /* Phase S0: interactive REPL */
+        return cmd_repl();
     }
     if (strcmp(cmd, "test") == 0) {
         if (argc != 3) return usage();

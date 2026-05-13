@@ -212,17 +212,17 @@ arithmetic, `let`, `if`, `do`, `fn`, and `defn`.
 
 **Exit criterion:** The REPL can evaluate `(+ 1 2)` and define a function.
 
-- [ ] `src/turi/eval.c` / `src/turi/eval.h` — tree-walk evaluator over `Expr` AST
-- [ ] `src/turi/env.c` / `src/turi/env.h` — persistent `TuriEnv` (hash map of
+- [x] `src/turi/eval.c` / `src/turi/eval.h` — tree-walk evaluator over `Expr` AST
+- [x] `src/turi/env.c` / `src/turi/env.h` — persistent `TuriEnv` (hash map of
   `Symbol → TuriValue`)
-- [ ] `src/turi/value.c` / `src/turi/value.h` — `TuriValue` tagged union +
+- [x] `src/turi/value.c` / `src/turi/value.h` — `TuriValue` tagged union +
   accessors
-- [ ] Wire into existing `src/reader.c` + `src/elab.c` (read-only path)
-- [ ] `CMakeLists.txt`: build `libturi.{a,dylib,so}` alongside `tur`
-- [ ] `tur repl` subcommand skeleton: read line → `turi_eval` → print result
+- [x] Wire into existing `src/reader.c` + `src/elab.c` (read-only path)
+- [x] `CMakeLists.txt`: build `libturi.{a,dylib,so}` alongside `tur`
+- [x] `tur repl` subcommand skeleton: read line → `turi_eval` → print result
 
 **Fixtures:**
-- [ ] `tests/turi/eval-basic.c` — C embedding smoke test
+- [x] `tests/turi/eval-basic.c` — C embedding smoke test
 
 ---
 

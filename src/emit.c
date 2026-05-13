@@ -537,6 +537,7 @@ static char *atom_float(double f) {
 }
 
 /* Phase N: type-dispatched float literal emitter */
+static char *atom_float_typed(TypeKind k, double f) __attribute__((unused));
 static char *atom_float_typed(TypeKind k, double f) {
     if (k == TY_FLOAT32) {
         char buf[64];
