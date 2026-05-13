@@ -44,6 +44,10 @@ typedef struct EmitCtx {
     /* Phase 19: Buffer for effect handler functions that must be emitted just
      * before the enclosing function definition (never inside a function body). */
     Buf *pending_handler_fns;
+    /* Phase R5: true when currently emitting a #[no-unwind] function body;
+     * causes EX_PANIC/EX_PANIC_WITH to emit tur_panic_abort instead of
+     * tur_panic so that no setjmp/longjmp unwinding is attempted. */
+    bool no_unwind;
 } EmitCtx;
 
 /* Phase 4 v1: Defer thunk tracking */
@@ -1166,19 +1170,28 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         /* Phase R2: Panic */
         case EX_PANIC: {
-            /* (panic msg) - evaluate msg (cstr), call tur_panic, abort */
+            /* (panic msg) - evaluate msg (cstr), call tur_panic[_abort] */
             const Expr *payload = e->as.panic_.payload;
             char *msg_val = emit_value(ctx, body, payload);
             indent_buf(body, ctx->indent);
-            /* Set the current frame for panic to fire defers */
-            if (ctx->frame_var) {
-                buf_printf(body, "tur_panic_set_frame(&%s);\n", ctx->frame_var);
-            }
-            if (payload->type.kind == TY_CSTR) {
-                buf_printf(body, "tur_panic(%s);\n", msg_val);
+            if (ctx->no_unwind) {
+                /* Phase R5: #[no-unwind] — abort directly; skip defer chain */
+                if (payload->type.kind == TY_CSTR) {
+                    buf_printf(body, "tur_panic_abort(%s);\n", msg_val);
+                } else {
+                    buf_puts(body, "tur_panic_abort(\"(non-string panic)\");\n");
+                }
             } else {
-                /* For non-cstr, use a generic message */
-                buf_printf(body, "tur_panic(\"(non-string panic)\");\n");
+                /* Set the current frame for panic to fire defers */
+                if (ctx->frame_var) {
+                    buf_printf(body, "tur_panic_set_frame(&%s);\n", ctx->frame_var);
+                }
+                if (payload->type.kind == TY_CSTR) {
+                    buf_printf(body, "tur_panic(%s);\n", msg_val);
+                } else {
+                    /* For non-cstr, use a generic message */
+                    buf_printf(body, "tur_panic(\"(non-string panic)\");\n");
+                }
             }
             free(msg_val);
             return atom_nil();
@@ -1188,13 +1201,18 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             const Expr *payload = e->as.panic_with_.payload;
             char *payload_val = emit_value(ctx, body, payload);
             indent_buf(body, ctx->indent);
-            /* Set the current frame for panic to fire defers */
-            if (ctx->frame_var) {
-                buf_printf(body, "tur_panic_set_frame(&%s);\n", ctx->frame_var);
+            if (ctx->no_unwind) {
+                /* Phase R5: #[no-unwind] — abort directly; skip defer chain */
+                buf_puts(body, "tur_panic_abort(\"(panic-with)\");\n");
+            } else {
+                /* Set the current frame for panic to fire defers */
+                if (ctx->frame_var) {
+                    buf_printf(body, "tur_panic_set_frame(&%s);\n", ctx->frame_var);
+                }
+                /* tur_panic_with takes type_tag (int), payload (void*), file, line */
+                /* For now, use a placeholder type_tag of 0 (TY_INT) */
+                buf_printf(body, "tur_panic_with(0, (void*)%s, __FILE__, __LINE__);\n", payload_val);
             }
-            /* tur_panic_with takes type_tag (int), payload (void*), file, line */
-            /* For now, use a placeholder type_tag of 0 (TY_INT) */
-            buf_printf(body, "tur_panic_with(0, (void*)%s, __FILE__, __LINE__);\n", payload_val);
             free(payload_val);
             return atom_nil();
         }
@@ -2723,6 +2741,25 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                             component = inst->type_args[i].as.struct_.def->name;
                         }
                         break;
+                    case TY_APP: {
+                        /* Phase HKT §3: partial type application — encode as "ctor_arg"
+                         * e.g. (result int) → "result_int" → dict_Functor_result_int */
+                        const char *fn_part  = "T";
+                        const char *arg_part = "T";
+                        if (inst->type_arg_syms && inst->type_arg_syms[i])
+                            fn_part = inst->type_arg_syms[i]->name;
+                        if (inst->type_args[i].as.app.arg) {
+                            const char *n = type_name(*inst->type_args[i].as.app.arg);
+                            if (n) arg_part = n;
+                        }
+                        char app_comp[48];
+                        snprintf(app_comp, sizeof(app_comp), "%s_%s", fn_part, arg_part);
+                        for (char *p = app_comp; *p; p++) {
+                            if (!isalnum((unsigned char)*p)) *p = '_';
+                        }
+                        strncat(type_suffix, app_comp, sizeof(type_suffix) - strlen(type_suffix) - 1);
+                        continue;
+                    }
                     default: break;
                 }
                 /* Sanitise component: replace non-alnum chars with _ */
@@ -3060,6 +3097,10 @@ static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     ctx->fn_params = fd->params;
     ctx->n_fn_params = fd->n_params;
 
+    /* Phase R5: Set no_unwind context from the function's binding attribute */
+    bool saved_no_unwind = ctx->no_unwind;
+    ctx->no_unwind = fd->binding->no_unwind;
+
     /* Phase 3: Set up closure context if this is a closure thunk */
     struct Closure *saved_closure = ctx->closure;
     const char *saved_env_var_name = ctx->env_var_name;
@@ -3128,6 +3169,7 @@ static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* Restore previous context */
     ctx->fn_params = saved_params;
     ctx->n_fn_params = saved_n_params;
+    ctx->no_unwind = saved_no_unwind;  /* Phase R5 */
     ctx->closure = saved_closure;
     free((void*)ctx->env_var_name);
     ctx->env_var_name = saved_env_var_name;
@@ -3201,6 +3243,8 @@ int emit_program(Buf *out, const Expr *program) {
     /* Phase 19: Pending effect handler function buffer */
     Buf pending_hfns; buf_init(&pending_hfns);
     ctx.pending_handler_fns = &pending_hfns;
+    /* Phase R5: no-unwind context (false at top level; set per-function) */
+    ctx.no_unwind = false;
 
     /* Check if user defined a main function */
     bool user_has_main = false;
@@ -4644,6 +4688,8 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program) 
     /* Phase 19: Pending effect handler function buffer */
     Buf pending_hfns2; buf_init(&pending_hfns2);
     ctx.pending_handler_fns = &pending_hfns2;
+    /* Phase R5: no-unwind context (false at top level; set per-function) */
+    ctx.no_unwind = false;
     char guard[256];
     sanitize_module_name(guard, module_name, sizeof(guard));
 

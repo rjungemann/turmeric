@@ -1,0 +1,97 @@
+;; Phase HKT §3: Partial type application — (result int) as a * -> * type constructor.
+;; Verifies that (definstance Functor [(result int)] ...) compiles and the method
+;; implementation dispatches correctly, where result is a binary type constructor
+;; (KIND_ARROW2) partially applied to fix the error type as int.
+
+(defclass Functor [^container]
+  (fmap [container fn] :int))
+
+;; ── Inline result helpers (avoid stdlib dependency) ─────────────────────────
+
+(defn __res_ok [x] :int
+  ```c
+  struct __res { bool is_ok; int64_t ok_val; int64_t err_val; };
+  struct __res *r = malloc(sizeof(*r));
+  r->is_ok = true; r->ok_val = x; r->err_val = 0;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(defn __res_err [e] :int
+  ```c
+  struct __res { bool is_ok; int64_t ok_val; int64_t err_val; };
+  struct __res *r = malloc(sizeof(*r));
+  r->is_ok = false; r->ok_val = 0; r->err_val = e;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(defn __res_ok? [r] :bool
+  ```c
+  struct __res { bool is_ok; int64_t ok_val; int64_t err_val; };
+  struct __res *p = (struct __res *)(intptr_t)r;
+  return p != NULL && p->is_ok;
+  ```)
+
+(defn __res_ok-val [r] :int
+  ```c
+  struct __res { bool is_ok; int64_t ok_val; int64_t err_val; };
+  struct __res *p = (struct __res *)(intptr_t)r;
+  return (int)p->ok_val;
+  ```)
+
+(defn __res_err-val [r] :int
+  ```c
+  struct __res { bool is_ok; int64_t ok_val; int64_t err_val; };
+  struct __res *p = (struct __res *)(intptr_t)r;
+  return (int)p->err_val;
+  ```)
+
+;; ── fmap implementation for (result int): maps ok branch, passes err through ──
+
+(defn __functor_result_int_fmap [container fn] :int
+  ```c
+  struct __res { bool is_ok; int64_t ok_val; int64_t err_val; };
+  struct __res *r = (struct __res *)(intptr_t)container;
+  if (!r || !r->is_ok) return (int64_t)(intptr_t)r;
+  struct __res *out = malloc(sizeof(*out));
+  out->is_ok = true;
+  out->ok_val = ((int64_t(*)(int64_t))(intptr_t)fn)(r->ok_val);
+  out->err_val = 0;
+  return (int64_t)(intptr_t)out;
+  ```)
+
+;; Partially-applied instance: Functor over (result int), i.e., result<int, _>
+;; This exercises the §3 TY_APP parsing and name mangling:
+;;   type arg (result int) → TY_APP(fn=TY_STRUCT(result), arg=TYPE_INT)
+;;   method name: __inst_Functor_fmap_result_int
+;;   dict struct: dict_Functor_result_int
+(definstance Functor [(result int)]
+  (fmap [container fn] (__functor_result_int_fmap container fn)))
+
+;; ── Tests ────────────────────────────────────────────────────────────────────
+
+(defn main [] :int
+  (do
+    ;; Call via the typeclass method impl directly (all HKT values are int64_t)
+    ;; fmap f (ok 5) => ok (f 5)
+    (let [r0 (__res_ok 5)]
+      (let [r1 (__functor_result_int_fmap r0 (fn [x] (* x 3)))]
+        (do
+          (println (__res_ok? r1))      ;; true
+          (println (__res_ok-val r1))))) ;; 15
+
+    ;; fmap f (err 7) => err 7 (pass-through)
+    (let [r2 (__res_err 7)]
+      (let [r3 (__functor_result_int_fmap r2 (fn [x] (* x 3)))]
+        (do
+          (println (__res_ok? r3))      ;; false
+          (println (__res_err-val r3))))) ;; 7
+
+    ;; fmap can be chained: fmap (+1) (fmap (*2) (ok 4)) => ok 9
+    (let [r4 (__res_ok 4)]
+      (let [r5 (__functor_result_int_fmap r4 (fn [x] (* x 2)))]
+        (let [r6 (__functor_result_int_fmap r5 (fn [x] (+ x 1)))]
+          (do
+            (println (__res_ok? r6))      ;; true
+            (println (__res_ok-val r6)))))) ;; 9
+
+    0))

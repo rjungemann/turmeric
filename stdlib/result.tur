@@ -347,3 +347,36 @@
   }
   return err((int)(intptr_t)ex->payload);
   ```)
+
+;;; SINCE: Phase HKT-P8
+;; Functor instance for result — fmap applies fn to the ok value and returns a
+;; new ok wrapping the result; an err value is passed through unchanged.
+(defn __functor_result_fmap [container fn] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)container;
+  if (!r || !r->is_ok) return (int64_t)(intptr_t)r;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out =
+      malloc(sizeof(struct { bool is_ok; int64_t ok_val; int64_t err_val; }));
+  out->is_ok   = true;
+  out->ok_val  = ((int64_t(*)(int64_t))(intptr_t)fn)(r->ok_val);
+  out->err_val = 0;
+  return (int64_t)(intptr_t)out;
+  ```)
+
+(definstance Functor [result]
+  (fmap [container fn] (__functor_result_fmap container fn)))
+
+;; Monad instance for result — bind applies fn to the ok value and returns the
+;; resulting result; an err value short-circuits and is returned unchanged.
+;; fn must be a function that takes an int64_t and returns a ptr<void> result.
+(defn __monad_result_bind [ma fn] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)ma;
+  if (!r || !r->is_ok) return (int64_t)(intptr_t)r;
+  return ((int64_t(*)(int64_t))(intptr_t)fn)(r->ok_val);
+  ```)
+
+(definstance Monad [result]
+  (bind [ma fn] (__monad_result_bind ma fn)))
