@@ -55,6 +55,22 @@ static TypeKind typekind_from_symbol(const char *name) {
     return TY_UNKNOWN;
 }
 
+/* Helper to get the compile-time size of a type in bytes (0 = unknown). */
+static int type_size_bytes(TypeKind kind) {
+    switch (kind) {
+        case TY_BOOL:     return 1;   /* bool → 1 byte in C */
+        case TY_INT:      return 8;   /* int64_t → 8 bytes */
+        case TY_FLOAT:    return 8;   /* double → 8 bytes */
+        case TY_CSTR:     return 8;   /* const char* → pointer size */
+        case TY_PTR_VOID: return 8;   /* void* → pointer size */
+        case TY_NIL:      return 0;   /* unit / void — no size */
+        case TY_REF:      return 8;   /* heap pointer */
+        case TY_RC:       return 8;   /* rc pointer */
+        case TY_WEAK:     return 8;   /* weak pointer */
+        default:          return 0;   /* unknown / composite */
+    }
+}
+
 /* ---- scope ---- */
 
 /* Phase 12: Borrow tracking in Scope */
@@ -2269,7 +2285,23 @@ static Expr *elab_reinterpret(Elab *e, const Form *call) {
     }
     Expr *value = elab_form(e, call->as.list.items[1]);
     if (!value) return NULL;
-    /* For v1, we don't do the compile-time size check yet */
+    /* Compile-time size check: source and target types must have the same size */
+    Form *to_type_form = call->as.list.items[2];
+    TypeKind target_kind = TY_UNKNOWN;
+    if (to_type_form && to_type_form->tag == F_KEYWORD) {
+        target_kind = typekind_from_symbol(to_type_form->as.sym->name);
+    } else if (to_type_form && to_type_form->tag == F_SYM) {
+        target_kind = typekind_from_symbol(to_type_form->as.sym->name);
+    }
+    int src_size = type_size_bytes(value->type.kind);
+    int dst_size = (target_kind != TY_UNKNOWN) ? type_size_bytes(target_kind) : 0;
+    if (src_size > 0 && dst_size > 0 && src_size != dst_size) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "reinterpret: size mismatch — source type '%s' (%d bytes) vs target type '%s' (%d bytes)",
+                  type_name(value->type), src_size,
+                  to_type_form->as.sym->name, dst_size);
+        return NULL;
+    }
     const BuiltinSpec *spec = builtin_lookup(e->sym_reinterpret, value->type, 2);
     if (!spec) {
         diag_emit(DIAG_ERROR, call->span, "reinterpret: builtin lookup failed");
