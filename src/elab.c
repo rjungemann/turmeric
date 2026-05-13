@@ -8060,6 +8060,53 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
                     }
                 }
             }
+            /* Phase HKT-P1: After parsing individual type arguments, combine consecutive
+             * symbols into TY_APP for implicit type application syntax [result int].
+             * This allows both [(result int)] (explicit) and [result int] (implicit). */
+            if (n_type_args > 0) {
+                /* First pass: count actual type args and identify TY_STRUCT constructors */
+                uint8_t actual_count = n_type_args;
+                for (uint8_t i = 0; i < n_type_args; ) {
+                    if (i + 1 < n_type_args) {
+                        /* Check if current is TY_STRUCT (potential constructor) and next is a type */
+                        if (type_args[i].kind == TY_STRUCT && type_args[i].as.struct_.def == NULL) {
+                            Type *next_type = &type_args[i + 1];
+                            /* Next can be any concrete type (primitive, TY_STRUCT, or TY_APP) */
+                            if (next_type->kind != TY_UNKNOWN) {
+                                /* Combine into TY_APP */
+                                Type *fn_type = (Type *)arena_alloc(e->arena, sizeof(Type));
+                                *fn_type = type_args[i];  /* Copy the constructor type */
+                                fn_type->hkt_kind = KIND_ARROW2;  /* Assume binary constructor */
+                                
+                                Type *arg_type_ptr = (Type *)arena_alloc(e->arena, sizeof(Type));
+                                *arg_type_ptr = type_args[i + 1];
+                                
+                                /* Create TY_APP */
+                                type_args[i].kind = TY_APP;
+                                type_args[i].copy_kind = CK_MOVE;
+                                type_args[i].hkt_kind = KIND_ARROW;  /* ARROW2 applied to 1 arg */
+                                type_args[i].as.app.fn = fn_type;
+                                type_args[i].as.app.arg = arg_type_ptr;
+                                /* Store constructor sym for name mangling if we have it */
+                                /* type_arg_syms[i] already contains the constructor symbol */
+                                
+                                /* Remove the second type arg by shifting */
+                                for (uint8_t j = i + 1; j < n_type_args - 1; j++) {
+                                    type_args[j] = type_args[j + 1];
+                                    if (type_arg_syms) {
+                                        type_arg_syms[j] = type_arg_syms[j + 1];
+                                    }
+                                }
+                                n_type_args--;
+                                actual_count--;
+                                /* Don't advance i - recheck current position */
+                                continue;
+                            }
+                        }
+                    }
+                    i++;
+                }
+            }
             impls_start = 3;
         }
     }
