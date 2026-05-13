@@ -1,0 +1,4 @@
+(defmodule math/ops
+  (export add sub)
+  (defn add [a b] :int (+ a b))
+  (defn sub [a b] :int (- a b)))

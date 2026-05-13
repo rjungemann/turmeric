@@ -1,0 +1,8 @@
+(defmodule myapp
+  (export run)
+  (import math/utils :as mu)
+  (defn run [] :int
+    (println (mu/twice 5))
+    (println (mu/thrice 4))
+    0)
+  (defn main [] :int (run)))
