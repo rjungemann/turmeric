@@ -1,0 +1,237 @@
+;; Signal Processing Arrows Library
+;; Haskell-style Arrow typeclass hierarchy for Turmeric
+;;
+;; This module implements the Arrow typeclass hierarchy for building
+;; composable signal processing pipelines.
+
+;; Phase HKT: We use defclass with ^ prefix for higher-kinded type parameters
+;; The arrow type constructor arr has kind: * -> * -> *
+
+;; =============================================================================
+;; Arrow Typeclass Hierarchy
+;; =============================================================================
+
+;; Arrow - Base typeclass for arrow-like structures
+;; 
+;; An Arrow arr is a type constructor that takes two type parameters (input and output)
+;; and supports the following operations:
+;;   - arr: lift a function to an arrow
+;;   - >>>: compose two arrows sequentially
+;;   - first: apply arrow to first component of a product
+;;   - second: apply arrow to second component of a product
+(defclass Arrow [^arr]
+  ;; Lift a pure function to an arrow
+  (arr [a b] :(-> a b) (arr a b))
+  
+  ;; Sequential composition: f >>> g means "first f, then g"
+  (>>> [a b c] :(arr a b) (arr b c) (arr a c))
+  
+  ;; Apply arrow to first component of a product
+  (first [a b c] :(arr a b) (arr (Tuple a c) (Tuple b c)))
+  
+  ;; Apply arrow to second component of a product
+  (second [a b c] :(arr a b) (arr (Tuple c a) (Tuple c b))))
+
+;; =============================================================================
+;; Arrow Instances
+;; =============================================================================
+
+;; Function Arrow Instance
+;; The canonical Arrow instance: functions themselves form an Arrow
+(definstance Arrow-Function Arrow (->)
+  (arr [a b] f :(-> a b))
+    f
+  
+  (>>> [a b c] f :(-> a b) g :(-> b c))
+    (fn [x] (g (f x)))
+  
+  (first [a b c] f :(-> a b))
+    (fn [[x z]] [(f x) z])
+  
+  (second [a b c] f :(-> a b))
+    (fn [[z x]] [z (f x)]))
+
+;; =============================================================================
+;; Extended Arrow Classes
+;; =============================================================================
+
+;; ArrowZero - Arrows with an empty/zero element
+(defclass ArrowZero [^arr] (Arrow arr)
+  ;; The zero arrow: produces no output
+  (zeroArrow [a b] :(arr a b)))
+
+;; ArrowPlus - Arrows that can be combined
+(defclass ArrowPlus [^arr] (Arrow arr)
+  ;; Combine two arrows in parallel
+  (<+> [a b] :(arr a b) (arr a b) (arr a b)))
+
+;; ArrowChoice - Arrows with choice/alternation
+;; Allows arrows to be applied to sum types (Either)
+(defclass ArrowChoice [^arr] (Arrow arr)
+  ;; Apply arrow to left component of a sum
+  (left [a b c] :(arr a b) (arr (Either a c) (Either b c)))
+  
+  ;; Apply arrow to right component of a sum
+  (right [a b c] :(arr a b) (arr (Either c a) (Either c b)))
+  
+  ;; Parallel composition for sums (fanin)
+  (+++ [a b c d] :(arr a b) (arr c d) (arr (Either a c) (Either b d)))
+  
+  ;; Fanin: combine two arrows on a sum
+  (||| [a b c d] :(arr a c) (arr b d) (arr (Either a b) (Either c d))))
+
+;; Default implementations for ArrowChoice based on left/right
+(definstance ArrowChoice-Defaults ArrowChoice [^arr] (Arrow arr)
+  (left [a b c] f :(arr a b))
+    (+++ f (zeroArrow b c))
+  
+  (right [a b c] f :(arr a b))
+    (+++ (zeroArrow a c) f)
+  
+  (+++ [a b c d] f :(arr a b) g :(arr c d))
+    (||| f (zeroArrow a d) (zeroArrow c b) g)
+  
+  (||| [a b c d] f :(arr a c) g :(arr b d))
+    (+++ f g))
+
+;; ArrowLoop - Arrows with feedback loops
+;; Allows implementation of recursive signal processors
+(defclass ArrowLoop [^arr] (Arrow arr)
+  ;; Feedback loop: takes an arrow that processes (a, c) to (b, c)
+  ;; and produces an arrow that processes a to b, feeding output c back as input c
+  (loop [a b c] :(arr (Tuple a c) (Tuple b c)) (arr a b)))
+
+;; ArrowApply - Arrows that support application (for Arrow monads)
+;; This makes arrows as powerful as monads
+(defclass ArrowApply [^arr] (Arrow arr)
+  ;; Apply: takes an arrow that produces arrows and applies it
+  (app [a b] :(arr a (arr a b)) (arr a b)))
+
+;; =============================================================================
+;; Utility Functions
+;; =============================================================================
+
+;; Identity arrow
+(defn arrow-id [^arr : (Arrow arr) a]
+  : (arr a a)
+  (arr (fn [x] x)))
+
+;; Arrow composition operator alias
+(defn arrow-comp [^arr : (Arrow arr) a b c] [f : (arr a b)] [g : (arr b c)]
+  : (arr a c)
+  (>>> f g))
+
+;; Lift a binary function to an arrow on products
+(defn arrow-lift-a2 [^arr : (Arrow arr) a b c]
+  : (-> (-> a b c) (arr (Tuple a a) b))
+  (fn [f]
+    (>>> (first (arr f)) (arr (fn [[b _]] b)))))
+
+;; Fanout: send input to both arrows and combine results
+;; &&& f g = arr (\x -> (f x, g x))
+(defn fanout [^arr : (Arrow arr) a b c] [f : (arr a b)] [g : (arr a c)]
+  : (arr a (Tuple b c))
+  (>>> f (>>> (first g) (arr (fn [[b c]] (Tuple b c))))))
+
+;; Fanin: combine two arrows on a sum
+;; This is the (+++) operator from ArrowChoice
+(defn fanin [^arr : (ArrowChoice arr) a b c d] [f : (arr a b)] [g : (arr c d)]
+  : (arr (Either a c) (Either b d))
+  (+++ f g))
+
+;; =============================================================================
+;; Function Arrow Utilities
+;; =============================================================================
+
+;; For the function arrow (->), we can define additional utilities
+
+;; Parallel composition: (f *** g) (x, y) = (f x, g y)
+(defn par-comp [a b c d] [f :(-> a b)] [g :(-> c d)]
+  :(-> (Tuple a c) (Tuple b d))
+  (fn [[x y]] [(f x) (g y)]))
+
+;; Split: duplicate input to both functions
+;; f &&& g = \x -> (f x, g x)
+(defn split [a b c] [f :(-> a b)] [g :(-> a c)]
+  :(-> a (Tuple b c))
+  (fn [x] [(f x) (g x)]))
+
+;; =============================================================================
+;; ArrowChoice instance for Function Arrow
+;; =============================================================================
+
+(definstance ArrowChoice-Function ArrowChoice (->)
+  (left [a b c] f :(-> a b))
+    (fn [eac]
+      (case eac
+        (Left a) (Left (f a))
+        (Right c) (Right c)))
+  
+  (right [a b c] f :(-> a b))
+    (fn [eca]
+      (case eca
+        (Left c) (Left c)
+        (Right a) (Right (f a))))
+  
+  (+++ [a b c d] f :(-> a b) g :(-> c d))
+    (fn [eac]
+      (case eac
+        (Left a) (Left (f a))
+        (Right c) (Right (g c))))
+  
+  (||| [a b c d] f :(-> a c) g :(-> b d))
+    (fn [eab]
+      (case eab
+        (Left a) (Left (f a))
+        (Right b) (Right (g b)))))
+
+;; =============================================================================
+;; ArrowLoop instance for Function Arrow
+;; =============================================================================
+
+(definstance ArrowLoop-Function ArrowLoop (->)
+  (loop [a b c] f :(-> (Tuple a c) (Tuple b c)))
+    (fn [a]
+      (let [;; Fixpoint: we need to find c such that c = second (f (a, c))
+            ;; For functions, this is only possible if we have a fixed point
+            ;; In the function case, we use the Y combinator approach
+            ;; but for simplicity and to avoid infinite recursion, we use
+            ;; a mutable reference for the feedback value
+            ;; Note: This uses mutation and is not purely functional
+            c-ref (ref (error "ArrowLoop: uninitialized feedback"))]
+        (fn [a]
+          (let [;; First approximation: use a dummy value
+                ;; For a proper implementation, we'd need to pass through
+                ;; the current c-ref value, compute new c, and update
+                ;; But this creates infinite recursion in the pure case
+                dummy-c (error "ArrowLoop for functions requires lazy evaluation or mutation")
+                result (f (Tuple a dummy-c))
+                new-c (second result)]
+            (set! c-ref new-c)
+            (first result))))))
+
+;; Note: The ArrowLoop instance for functions is problematic in a strict
+;; language like Turmeric without lazy evaluation. For signal processing,
+;; we'll implement ArrowLoop properly for the SF (Signal Function) type.
+
+;; =============================================================================
+;; ArrowZero and ArrowPlus instances for Function Arrow
+;; =============================================================================
+
+(definstance ArrowZero-Function ArrowZero (->)
+  (zeroArrow [a b])
+    (fn [_] (error "zeroArrow for functions: no value")))
+
+(definstance ArrowPlus-Function ArrowPlus (->)
+  (<+> [a b] f g)
+    (fn [x] (error "ArrowPlus for functions: choice not defined")))
+
+;; =============================================================================
+;; ArrowApply instance for Function Arrow (Reader monad)
+;; =============================================================================
+
+;; For functions (-> r), ArrowApply makes it a monad (Reader monad)
+(definstance ArrowApply-Function ArrowApply (->)
+  (app [a b] f :(-> a (-> a b)))
+    (fn [a]
+      ((f a) a)))

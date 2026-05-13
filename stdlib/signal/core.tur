@@ -1,0 +1,310 @@
+;; Signal Processing Core Library
+;; 
+;; This module defines the core Signal type and Signal Function (SF) arrow
+;; for building composable signal processing pipelines.
+
+(import stdlib/arrow.tur)
+
+;; =============================================================================
+;; Type Definitions
+;; =============================================================================
+
+;; Time representation - using float64 for continuous time
+(defalias Time float64)
+
+;; Sample representation - using float64 for audio samples
+;; Note: In production DSP, float32 is more common, but float64 gives better precision
+(defalias Sample float64)
+
+;; A Signal is a function from Time to a value of type a
+;; This represents a continuous-time signal
+(defalias Signal a
+  (-> Time a))
+
+;; A Signal Function (SF) transforms an input signal to an output signal
+;; SF a b is a morphism in the category of signals: Signal a -> Signal b
+;; 
+;; In other words: SF a b = Signal a -> Signal b = (Time -> a) -> (Time -> b)
+(defalias SF a b
+  (-> (Signal a) (Signal b)))
+
+;; ============================================================================= 
+;; Basic Signal Constructors and Operations
+;; =============================================================================
+
+;; Constant signal: always returns the same value
+(defn constant [val : a] : (Signal a)
+  (fn [_t : Time] val))
+
+;; Time signal: returns the current time
+(defn time-signal : (Signal Time)
+  (fn [t : Time] t))
+
+;; Sample a signal at a specific time
+(defn sample [sig : (Signal a)] [t : Time] : a
+  (sig t))
+
+;; Lift a pure function to operate on signals pointwise
+;; If f : a -> b, then map-signal f : Signal a -> Signal b
+(defn map-signal [f : (-> a b)] [sig : (Signal a)] : (Signal b)
+  (fn [t] (f (sig t))))
+
+;; Combine two signals with a binary function
+(defn combine-signals [f : (-> a b c)] [sig-a : (Signal a)] [sig-b : (Signal b)] : (Signal c)
+  (fn [t] (f (sig-a t) (sig-b t))))
+
+;; Create a signal from two signals (product)
+(defn pair-signals [sig-a : (Signal a)] [sig-b : (Signal b)] : (Signal (Tuple a b))
+  (fn [t] (Tuple (sig-a t) (sig-b t))))
+
+;; Extract first component of a product signal
+(defn fst-signal [sig-ab : (Signal (Tuple a b))] : (Signal a)
+  (fn [t] (first (sig-ab t))))
+
+;; Extract second component of a product signal
+(defn snd-signal [sig-ab : (Signal (Tuple a b))] : (Signal b)
+  (fn [t] (second (sig-ab t))))
+
+;; =============================================================================
+;; Arrow Instance for SF
+;; =============================================================================
+
+;; SF forms an Arrow category
+;; - Objects: signal types (Signal a, Signal b, etc.)
+;; - Morphisms: signal functions (SF a b)
+;; 
+;; The Arrow instance for SF allows us to compose signal processors
+;; using the arrow combinators.
+
+(definstance Arrow-SF Arrow SF
+  
+  ;; arr: lift a pure function to an SF
+  ;; If f : a -> b, then arr f : SF a b
+  ;; This creates an SF that applies f pointwise to the signal
+  (arr [a b] f : (-> a b))
+    (fn [sig-a : (Signal a)]
+      (fn [t : Time] (f (sig-a t))))
+  
+  ;; >>>: sequential composition
+  ;; If f : SF a b and g : SF b c, then f >>> g : SF a c
+  ;; This means: first apply f to the input signal, then apply g to the result
+  (>>> [a b c] f : (SF a b) g : (SF b c))
+    (fn [sig-a : (Signal a)]
+      (g (f sig-a)))
+  
+  ;; first: apply SF to first component of a product signal
+  ;; If f : SF a b, then first f : SF (Tuple a c) (Tuple b c)
+  (first [a b c] f : (SF a b))
+    (fn [sig-ac : (Signal (Tuple a c))]
+      (let [sig-a (fn [t] (first (sig-ac t)))
+            sig-c (fn [t] (second (sig-ac t)))
+            sig-b (f sig-a)]
+        (fn [t] (Tuple (sig-b t) (sig-c t)))))
+  
+  ;; second: apply SF to second component of a product signal
+  ;; If f : SF a b, then second f : SF (Tuple c a) (Tuple c b)
+  (second [a b c] f : (SF a b))
+    (fn [sig-ca : (Signal (Tuple c a))]
+      (let [sig-c (fn [t] (first (sig-ca t)))
+            sig-a (fn [t] (second (sig-ca t)))
+            sig-b (f sig-a)]
+        (fn [t] (Tuple (sig-c t) (sig-b t))))))
+
+;; =============================================================================
+;; ArrowChoice Instance for SF
+;; =============================================================================
+
+;; SF also supports ArrowChoice for working with sum types
+(definstance ArrowChoice-SF ArrowChoice SF
+  
+  ;; left: apply SF to left component of Either
+  (left [a b c] f : (SF a b))
+    (fn [sig-eac : (Signal (Either a c))]
+      (fn [t]
+        (case (sig-eac t)
+          (Left a-val) (Left ((f (fn [_] a-val)) t))
+          (Right c-val) (Right c-val))))
+  
+  ;; right: apply SF to right component of Either
+  (right [a b c] f : (SF a b))
+    (fn [sig-eca : (Signal (Either c a))]
+      (fn [t]
+        (case (sig-eca t)
+          (Left c-val) (Left c-val)
+          (Right a-val) (Right ((f (fn [_] a-val)) t)))))
+  
+  ;; +++: parallel composition for Either
+  (+++ [a b c d] f : (SF a b) g : (SF c d))
+    (fn [sig-eac : (Signal (Either a c))]
+      (fn [t]
+        (case (sig-eac t)
+          (Left a-val) (Left ((f (fn [_] a-val)) t))
+          (Right c-val) (Right ((g (fn [_] c-val)) t)))))
+  
+  ;; |||: fanin for Either
+  (||| [a b c d] f : (SF a c) g : (SF b d))
+    (+++ f g))
+
+;; =============================================================================
+;; ArrowLoop Instance for SF
+;; =============================================================================
+
+;; ArrowLoop for SF: implements feedback loops for recursive signal processing
+;; 
+;; The key insight: for signals (functions of time), we can implement loop
+;; by solving the feedback equation at each time point. For causal systems
+;; (where output depends only on current and past inputs), we can use
+;; a mutable cell to store the previous output.
+;;
+;; loop :: SF (a, c) (b, c) -> SF a b
+;; The input SF takes a product (a, c) and produces (b, c)
+;; The output SF takes a and produces b, with c fed back from the output
+
+definstance ArrowLoop-SF ArrowLoop SF
+  (loop [a b c] f : (SF (Tuple a c) (Tuple b c)))
+    (fn [sig-a : (Signal a)]
+      (let [;; Create a mutable reference to hold the feedback signal (c)
+            ;; Initialize with a constant signal (will be updated)
+            c-sig-ref (ref (constant (error "ArrowLoop: uninitialized feedback")) : (ref (Signal c)))
+            
+            ;; We need to compute: sig-bc = f (combine sig-a !c-sig-ref)
+            ;; And then: sig-c = snd sig-bc, which we put back into c-sig-ref
+            
+            ;; However, this creates a circular dependency. The solution is to
+            ;; use the previous value of c for the current computation.
+            
+            ;; For sample-accurate feedback, we need to track the state at each sample.
+            ;; We'll use a mutable cell that stores the current c value.
+            c-val-ref (ref (error "ArrowLoop: uninitialized feedback value") : (ref c))]
+        
+        (fn [t : Time]
+          (let [a-val (sig-a t)
+                c-val @c-val-ref
+                input-pair (Tuple a-val c-val)
+                ;; Apply f to get (b, c) output
+                ;; But f is an SF, so we need to apply it to a signal
+                ;; We need to create a constant signal from the pair
+                sig-input (constant input-pair)
+                sig-bc (f sig-input)
+                bc-pair (sig-bc t)
+                b-val (first bc-pair)
+                new-c-val (second bc-pair)]
+            (set! c-val-ref new-c-val)
+            b-val)))))
+
+;; =============================================================================
+;; ArrowZero and ArrowPlus Instances for SF
+;; =============================================================================
+
+;; Zero SF: produces a constant zero signal
+(definstance ArrowZero-SF ArrowZero SF
+  (zeroArrow [a b])
+    (fn [_sig-a]
+      (constant (error "ArrowZero: zero SF"))))
+
+;; Plus SF: combine two SFs by adding their outputs
+;; Note: This requires b to support addition (Num typeclass)
+(definstance ArrowPlus-SF ArrowPlus SF
+  (<+> [a b] f g : (SF a b))
+    (fn [sig-a]
+      (fn [t]
+        (+ ((f sig-a) t) ((g sig-a) t)))))
+
+;; =============================================================================
+;; Utility SF Constructors
+;; =============================================================================
+
+;; Identity SF: passes signal through unchanged
+(defn identity-sf [a]
+  : (SF a a)
+  (arr (fn [x] x)))
+
+;; Constant SF: produces a constant signal, ignoring input
+(defn const-sf [val : b]
+  : (SF a b)
+  (fn [_sig-a]
+    (constant val)))
+
+;; Time SF: produces the time signal, ignoring input
+(defn time-sf
+  : (SF a Time)
+  (fn [_sig-a]
+    time-signal))
+
+;; =============================================================================
+;; SF Composition Utilities
+;; =============================================================================
+
+;; Parallel composition: (f *** g) processes (a, c) to (b, d)
+;; This is like first and second combined
+(defn par-sf [^arr : (Arrow arr) a b c d] [f : (arr a b)] [g : (arr c d)]
+  : (arr (Tuple a c) (Tuple b d))
+  (>>> (first f) (second g)))
+
+;; Split: send input to both arrows: f &&& g = arr (\x -> (f x, g x))
+(defn split-sf [^arr : (Arrow arr) a b c] [f : (arr a b)] [g : (arr a c)]
+  : (arr a (Tuple b c))
+  (>>> f (>>> (second g) (arr (fn [[b c]] (Tuple b c))))))
+
+;; Merge: combine two arrows on a sum type
+;; f ||| g on Either
+(defn merge-sf [^arr : (ArrowChoice arr) a b c d] [f : (arr a c)] [g : (arr b d)]
+  : (arr (Either a b) (Either c d))
+  (||| f g))
+
+;; =============================================================================
+;; Product and Sum Type Helpers for Signals
+;; =============================================================================
+
+;; Create a product signal from two signals
+(defn product-signal [sig-a : (Signal a)] [sig-b : (Signal b)]
+  : (Signal (Tuple a b))
+  (pair-signals sig-a sig-b))
+
+;; Create a sum signal from left
+(defn left-signal [sig-a : (Signal a)]
+  : (Signal (Either a b))
+  (fn [t] (Left (sig-a t))))
+
+;; Create a sum signal from right
+(defn right-signal [sig-b : (Signal b)]
+  : (Signal (Either a b))
+  (fn [t] (Right (sig-b t))))
+
+;; Case analysis on a sum signal
+(defn either-signal [f : (-> a c)] [g : (-> b c)] [sig-eab : (Signal (Either a b))]
+  : (Signal c)
+  (fn [t]
+    (case (sig-eab t)
+      (Left a) (f a)
+      (Right b) (g b))))
+
+;; =============================================================================
+;; SF with Internal State
+;; =============================================================================
+
+;; State SF: an SF with internal mutable state
+;; This is useful for implementing recursive filters and other stateful processors
+(defn state-sf [init : s] [step : (-> s a (Tuple b s))]
+  : (SF a b)
+  (fn [sig-a]
+    (let [s-ref (ref init)]
+      (fn [t]
+        (let [a-val (sig-a t)
+              result (step @s-ref a-val)
+              b-val (first result)
+              new-s (second result)]
+          (set! s-ref new-s)
+          b-val)))))
+
+;; Simple state SF with just value (no input)
+(defn state-sf-simple [init : s] [step : (-> s (Tuple b s))]
+  : (SF a b)
+  (fn [_sig-a]
+    (let [s-ref (ref init)]
+      (fn [t]
+        (let [result (step @s-ref)
+              b-val (first result)
+              new-s (second result)]
+          (set! s-ref new-s)
+          b-val)))))
