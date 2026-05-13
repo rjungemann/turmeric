@@ -1,22 +1,44 @@
 ;; Phase B1: Clone trait for Pair type
+;;
+;; Demonstrates that (definstance Clone [Pair] ...) can deep-copy a Pair
+;; struct value into a heap-allocated copy and return a pointer as int64_t.
 
 (defstruct Pair [first :int second :int])
 
-(defn clone-pair [x] :int
+(defclass Clone [a]
+  (clone [x] :int))
+
+(definstance Clone [int]
+  (clone [x] x))
+
+;; Clone [Pair]: deep-copy the struct value into a heap allocation and
+;; return the result as an int64_t pointer.  x has type Pair (struct value)
+;; inside the generated C function, so field access uses x.first / x.second.
+(definstance Clone [Pair]
+  (clone [x] :int
+    ```c
+    struct { int64_t first; int64_t second; } *dst = malloc(sizeof(Pair));
+    dst->first = x.first;
+    dst->second = x.second;
+    return (int64_t)(intptr_t)dst;
+    ```))
+
+;; Accessors for a heap-allocated Pair pointer (returned by Clone.clone).
+(defn heap-pair-first [p] :int
   ```c
-  struct { int64_t first; int64_t second; } *p = (struct { int64_t first; int64_t second; } *)(intptr_t)x;
-  if (!p) return 0;
-  struct { int64_t first; int64_t second; } *r = malloc(sizeof(struct { int64_t first; int64_t second; }));
-  r->first = p->first;
-  r->second = p->second;
-  return (int64_t)(intptr_t)r;
+  struct { int64_t first; int64_t second; } *pair = (void *)(intptr_t)p;
+  return pair->first;
+  ```)
+
+(defn heap-pair-second [p] :int
+  ```c
+  struct { int64_t first; int64_t second; } *pair = (void *)(intptr_t)p;
+  return pair->second;
   ```)
 
 (defn main [] :int
-  (do
-    (let [p (make-struct Pair 10 20)]
-      (let [p2 (clone-pair p)]
-        (if (not (= p2 0))
-          (println 1)
-          (println 0))))
-    0))
+  ;; Clone a Pair(10, 20) and verify the copy has the same fields (sum = 30).
+  (let [p (make-struct Pair 10 20)]
+    (let [p2 (.clone p)]
+      (println (+ (heap-pair-first p2) (heap-pair-second p2)))))
+  0)

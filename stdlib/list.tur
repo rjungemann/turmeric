@@ -70,7 +70,16 @@
   return len;
   ```)
 
-;; Phase B1: Clone support for list
-;; The Clone instance for Cons is defined separately in the file that uses
-;; both this type and the Clone typeclass (to avoid circular dependencies).
-;; A non-parameterized Clone instance can be added by including typeclass.tur.
+;; Phase B1: Clone instance for Cons
+;; Requires the Clone typeclass to already be in scope (from stdlib/typeclass.tur).
+;; Shallow-copies a single Cons cell into a new heap allocation (does NOT recursively
+;; clone the tail — use clone-list for a deep list clone).
+;; x has type Cons (struct value) inside the generated C method.
+(definstance Clone [Cons]
+  (clone [x] :int
+    ```c
+    struct { int64_t value; int64_t next; } *dst = malloc(sizeof(Cons));
+    dst->value = x.value;
+    dst->next  = x.next;
+    return (int64_t)(intptr_t)dst;
+    ```))
