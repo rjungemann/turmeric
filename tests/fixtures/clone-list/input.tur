@@ -1,0 +1,38 @@
+;; Phase B1: Clone trait for linked list (Cons) type
+;;
+;; Demonstrates that (definstance Clone [Cons] ...) can deep-copy a Cons
+;; struct value (a singly-linked list cell) into a heap-allocated copy.
+
+(defstruct Cons [value :int next :int])
+
+(defclass Clone [a]
+  (clone [x] :int))
+
+(definstance Clone [int]
+  (clone [x] x))
+
+;; Clone [Cons]: deep-copy a Cons cell into a heap allocation.
+;; x has type Cons (struct value) inside the generated C function;
+;; field access uses x.value / x.next.
+(definstance Clone [Cons]
+  (clone [x] :int
+    ```c
+    struct { int64_t value; int64_t next; } *dst = malloc(sizeof(Cons));
+    dst->value = x.value;
+    dst->next  = x.next;
+    return (int64_t)(intptr_t)dst;
+    ```))
+
+;; Accessor for a heap-allocated Cons pointer (returned by Clone.clone).
+(defn heap-cons-value [p] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell = (void *)(intptr_t)p;
+  return cell ? cell->value : 0;
+  ```)
+
+(defn main [] :int
+  ;; Clone a Cons(42, 0) and verify the cloned cell has the same value.
+  (let [cell (make-struct Cons 42 0)]
+    (let [cell2 (.clone cell)]
+      (println (heap-cons-value cell2))))
+  0)

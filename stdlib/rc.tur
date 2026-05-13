@@ -46,3 +46,27 @@
 ;; Note: Uses ptr<void> as the type constructor representation in v1
 (definstance Functor [ptr<void>]
   (fmap [container fn] (__functor_rc_fmap container fn)))
+
+;;; SINCE: Phase B1
+;; Clone instance for rc<T> — shallow clone (refcount increment).
+;;
+;; Cloning an rc<T> does NOT copy the contained value.  It increments the
+;; reference count and returns a second owning handle to the SAME allocation.
+;; This mirrors Rust's Rc::clone semantics.
+;;
+;; In v1, rc is a built-in type (TY_RC) represented as a void* pointer to an
+;; RcControlBlock.  The inline C body calls tur_rc_clone() directly to avoid
+;; the TY_RC→int64_t type mismatch that arises when using the (rc/clone x)
+;; special form in a typeclass method body.
+(defn __clone_rc_shallow [x] :int
+  ```c
+  /* x is passed as int64_t (void* cast) — the rc pointer. */
+  void *rc_ptr = (void *)(intptr_t)x;
+  if (!rc_ptr) return 0;
+  void *cloned = tur_rc_clone(rc_ptr);
+  return (int64_t)(intptr_t)cloned;
+  ```)
+
+(definstance Clone [ptr<void>]
+  (clone [x] (__clone_rc_shallow x)))
+

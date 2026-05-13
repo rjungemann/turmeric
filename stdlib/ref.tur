@@ -31,7 +31,15 @@
   free((void*)(intptr_t)r);
   ```)
 
-;; Phase B1: Clone support for ref
-;; The Clone instance for Ref is defined separately in the file that uses
-;; both this type and the Clone typeclass (to avoid circular dependencies).
-;; A non-parameterized Clone instance can be added by including typeclass.tur.
+;; Phase B1: Clone instance for Ref
+;; Requires the Clone typeclass to already be in scope (from stdlib/typeclass.tur).
+;; Deep clone: allocates a new Ref struct on the heap with a copy of the contained
+;; int64_t value (independent ownership).
+;; x has type Ref (struct value) inside the generated C method.
+(definstance Clone [Ref]
+  (clone [x] :int
+    ```c
+    struct { int64_t value; } *dst = malloc(sizeof(Ref));
+    dst->value = x.value;
+    return (int64_t)(intptr_t)dst;
+    ```))

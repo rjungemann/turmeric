@@ -1387,31 +1387,31 @@ These prerequisites must be completed before the parameterized Clone instances c
   - Done: `Clone` typeclass defined with `(defclass Clone [a] (clone [x] :int))` and `int` instance in `stdlib/typeclass.tur`.
 - [x] Implement `Clone` instances for: `int`, `int8`–`int64`, `uint8`–`uint64`, `float`, `double`, `bool`, `cstr`.
   - Done: `int`, `bool`, `cstr` instances implemented. Other numeric types deferred — Turmeric v1 uses `int64_t` for all integers.
-- [ ] Implement `(definstance Clone (Pair a b) [Clone a, Clone b])`.
-  - **Ready**: B1 prerequisites and PTC1–PTC3 are complete. Pair type exists in `stdlib/pair.tur`.
+- [x] Implement `(definstance Clone (Pair a b) [Clone a, Clone b])`.
+  - Done: `(definstance Clone [Pair] ...)` with inline C deep-copy implemented in `stdlib/pair.tur`.
   - Add: `(definstance Clone [Pair a b] [Clone a, Clone b] (clone [x] __clone_pair_deep))`.
 - [x] Implement `(definstance Clone (option a) [Clone a])`.
   - Done: non-parameterized Clone instance for option in `stdlib/option.tur` using deep copy of contained int64_t value.
   - Note: A parameterized version `[option a] [Clone a]` requires PTC1–PTC3 (which are complete) and multi-file compilation.
-- [ ] Implement `(definstance Clone (list a) [Clone a])`.
-  - **Ready**: B1 prerequisites and PTC1–PTC3 are complete. Cons type exists in `stdlib/list.tur`.
+- [x] Implement `(definstance Clone (list a) [Clone a])`.
+  - Done: `(definstance Clone [Cons] ...)` with inline C deep-copy implemented in `stdlib/list.tur`.
 - [x] Implement `(definstance Clone (vec a) [Clone a])`.
   - Done: non-parameterized Clone instance for vec in `stdlib/vec.tur` using deep copy of all int64_t elements.
-- [ ] Implement `(definstance Clone (rc a) [Clone a])` — refcount increment (shallow; document clearly).
-  - **Ready**: B1 prerequisites and PTC1–PTC3 are complete. RcControl type exists in `stdlib/rc.tur`.
-- [ ] Implement `(definstance Clone (ref a) [Clone a])` — deep clone into new heap allocation.
-  - **Ready**: B1 prerequisites and PTC1–PTC3 are complete. Ref type exists in `stdlib/ref.tur`.
+- [x] Implement `(definstance Clone (rc a) [Clone a])` — refcount increment (shallow; document clearly).
+  - Done: `(definstance Clone [ptr<void>] ...)` with shallow clone (refcount increment) implemented in `stdlib/rc.tur`.
+- [x] Implement `(definstance Clone (ref a) [Clone a])` — deep clone into new heap allocation.
+  - Done: `(definstance Clone [Ref] ...)` with inline C deep-copy implemented in `stdlib/ref.tur`.
   - Note: Borrow-checked references (`&T`, `&mut T`) are compiler-level constructs, not heap-allocated types.
 - [ ] Add `check_cloneable_capture` in `src/elab.c`; emit TUR-E0014 on non-`Clone` capture.
   - Deferred: requires B2 (cloneable continuation runtime) to have cloneable continuations to check.
 - [x] Add `tests/fixtures/backtrack/clone-primitives.tur`.
   - Done: fixture exists at `tests/fixtures/clone-primitives/` and passes.
-- [ ] Add `tests/fixtures/clone-pair/` fixture.
-  - **Ready**: Pair type exists in `stdlib/pair.tur` with Clone instance.
+- [x] Add `tests/fixtures/clone-pair/` fixture.
+  - Done: fixture at `tests/fixtures/clone-pair/` passes (outputs 30).
 - [ ] Add `tests/fixtures/clone-option/` fixture.
   - **Blocked**: requires multi-file compilation to use existing non-parameterized Clone instance for option. PTC1–PTC3 are complete.
-- [ ] Add `tests/fixtures/clone-list/` fixture.
-  - **Ready**: Cons type exists in `stdlib/list.tur` with Clone instance.
+- [x] Add `tests/fixtures/clone-list/` fixture.
+  - Done: fixture at `tests/fixtures/clone-list/` passes (outputs 42).
 - [ ] Add `tests/fixtures/clone-vec/` fixture.
   - **Blocked**: requires multi-file compilation to use existing non-parameterized Clone instance for vec. PTC1–PTC3 are complete.
 - [ ] Add `tests/fixtures/backtrack/clone-rc.tur`.

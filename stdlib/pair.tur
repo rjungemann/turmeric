@@ -33,7 +33,16 @@
   free((void*)(intptr_t)p);
   ```)
 
-;; Phase B1: Clone support for Pair
-;; The Clone instance for Pair is defined separately in the file that uses
-;; both this type and the Clone typeclass (to avoid circular dependencies).
-;; A non-parameterized Clone instance can be added by including typeclass.tur.
+;; Phase B1: Clone instance for Pair
+;; Requires the Clone typeclass to already be in scope (from stdlib/typeclass.tur).
+;; Deep-copies the struct value into a new heap allocation and returns it as int64_t.
+;; x has type Pair (struct value) inside the generated C method, so x.first / x.second
+;; are valid field accesses.
+(definstance Clone [Pair]
+  (clone [x] :int
+    ```c
+    struct { int64_t first; int64_t second; } *dst = malloc(sizeof(Pair));
+    dst->first = x.first;
+    dst->second = x.second;
+    return (int64_t)(intptr_t)dst;
+    ```))
