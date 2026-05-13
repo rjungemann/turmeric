@@ -41,6 +41,8 @@ struct Binding {
     /* Phase M1: Module visibility */
     bool          is_exported;          /* listed in module's (export ...) */
     const Symbol *defining_module_name; /* owning module's name, or NULL for top-level */
+    /* Phase M6: explicit C symbol name from ^:export-as attribute, or NULL */
+    const char   *c_export_name;
 };
 
 typedef enum ExprKind {

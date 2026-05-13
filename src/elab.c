@@ -476,6 +476,8 @@ typedef struct Elab {
     const Symbol *sym_catch_panic_of;
     /* Phase R5: no-unwind attribute */
     const Symbol *sym_no_unwind_attr;
+    /* Phase M6: (export-as "c_name") attribute for explicit C symbol naming */
+    const Symbol *sym_export_as_attr;
     const Symbol *sym_panic_payload_type;
     const Symbol *sym_panic_payload_value;
     const Symbol *sym_panic_payload_file;
@@ -980,6 +982,8 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_panic_payload_type = intern_cstr(st, "panic-payload-type");
     /* Phase R5: no-unwind attribute */
     e->sym_no_unwind_attr = intern_cstr(st, "#no-unwind");
+    /* Phase M6: (export-as "c_name") attribute head symbol */
+    e->sym_export_as_attr = intern_cstr(st, "export-as");
     e->sym_panic_payload_value = intern_cstr(st, "panic-payload-value");
     e->sym_panic_payload_file = intern_cstr(st, "panic-payload-file");
     e->sym_panic_payload_line = intern_cstr(st, "panic-payload-line");
@@ -1893,6 +1897,7 @@ static Binding *binding_new(Elab *e, const Symbol *name, Type type,
     b->no_unwind = false;  /* Phase R5: #[no-unwind] attribute */
     b->is_exported = false;
     b->defining_module_name = e->current_module_name;
+    b->c_export_name = NULL;  /* Phase M6: ^:export-as C name */
     return b;
 }
 
@@ -5271,6 +5276,27 @@ static Expr *elab_defn(Elab *e, const Form *call) {
         name_f = call->as.list.items[name_idx];
     }
 
+    /* Phase M6: Check for (export-as "c_name") attribute before name.
+     * Syntax: (defn (export-as "c_name") fname [...] :ret body...)
+     * The attribute is a list whose head is the symbol export-as. */
+    const char *c_export_name = NULL;
+    if (name_f->tag == F_LIST && name_f->as.list.len == 2 &&
+        name_f->as.list.items[0]->tag == F_SYM &&
+        name_f->as.list.items[0]->as.sym == e->sym_export_as_attr) {
+        Form *cname_arg = name_f->as.list.items[1];
+        if (cname_arg->tag != F_STR) {
+            diag_emit(DIAG_ERROR, name_f->span,
+                      "^:export-as argument must be a string literal: (export-as \"c_name\")");
+            return NULL;
+        }
+        char *cname_buf = (char *)arena_alloc(e->arena, cname_arg->as.s.len + 1);
+        memcpy(cname_buf, cname_arg->as.s.p, cname_arg->as.s.len);
+        cname_buf[cname_arg->as.s.len] = '\0';
+        c_export_name = cname_buf;
+        name_idx++;
+        name_f = call->as.list.items[name_idx];
+    }
+
     /* Minimum: (defn name []) or (defn #[no-unwind] name []) */
     if (name_idx + 2 >= call->as.list.len) {  /* need name, params, body */
         diag_emit(DIAG_ERROR, call->span,
@@ -5608,6 +5634,8 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     }
     /* Phase R5: Store #[no-unwind] attribute on the binding */
     b->no_unwind = no_unwind;
+    /* Phase M6: Store ^:export-as C name on the binding */
+    b->c_export_name = c_export_name;
 
     /* Build FnDef */
     FnDef *fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));
@@ -10154,6 +10182,48 @@ found_method:;
 }
 
 
+/* Phase M6: Compute the mangled C name for an exported binding.
+ * Mirrors the logic in emit.c:raw_name_for_binding.
+ * Returns a malloc'd string that the caller must free. */
+static char *elab_mangle_binding_name(const Binding *b) {
+    if (b->c_export_name) return strdup(b->c_export_name);
+
+    char mod_prefix[512];
+    size_t mod_prefix_len = 0;
+    bool is_main_binding = (b->name->len == 4 &&
+                             memcmp(b->name->name, "main", 4) == 0);
+    if (b->defining_module_name != NULL && !is_main_binding) {
+        const char *mn = b->defining_module_name->name;
+        size_t mn_len  = b->defining_module_name->len;
+        size_t j = 0;
+        for (size_t i = 0; i < mn_len && j < sizeof(mod_prefix) - 3; i++) {
+            char c = mn[i];
+            if (c == '/') { mod_prefix[j++] = '_'; mod_prefix[j++] = '_'; }
+            else if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                     (c >= '0' && c <= '9') || c == '_') { mod_prefix[j++] = c; }
+            else { mod_prefix[j++] = '_'; }
+        }
+        mod_prefix[j++] = '_';
+        mod_prefix[j++] = '_';
+        mod_prefix[j]   = '\0';
+        mod_prefix_len  = j;
+    }
+
+    size_t total = mod_prefix_len + b->name->len + 1;
+    char *p = (char *)malloc(total);
+    if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
+    size_t k = 0;
+    if (mod_prefix_len > 0) { memcpy(p, mod_prefix, mod_prefix_len); k = mod_prefix_len; }
+    for (uint32_t i = 0; i < b->name->len; i++) {
+        char c = b->name->name[i];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '_') { p[k++] = c; }
+        else { p[k++] = '_'; }
+    }
+    p[k] = '\0';
+    return p;
+}
+
 Expr *elaborate_program(Arena *arena, SymbolTable *st,
                         Form *const *forms, uint32_t nforms,
                         uint32_t stdlib_prefix,
@@ -10185,6 +10255,14 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                         if (f->as.list.items[1]->tag == F_SYM &&
                             f->as.list.items[1]->as.sym == e.sym_no_unwind_attr) {
                             name_idx = 2;
+                        }
+                        /* Phase M6: skip optional (export-as "c_name") attribute */
+                        if ((uint32_t)f->as.list.len > name_idx &&
+                            f->as.list.items[name_idx]->tag == F_LIST &&
+                            f->as.list.items[name_idx]->as.list.len == 2 &&
+                            f->as.list.items[name_idx]->as.list.items[0]->tag == F_SYM &&
+                            f->as.list.items[name_idx]->as.list.items[0]->as.sym == e.sym_export_as_attr) {
+                            name_idx += 1; /* skip (export-as "c_name") */
                         }
                         if ((uint32_t)f->as.list.len <= name_idx) goto next_form;
                         Form *name_f = f->as.list.items[name_idx];
@@ -10268,6 +10346,53 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
         nforms += e.n_file_scope_defs;
         /* Free the malloc'd file_scope_defs array */
         free(e.file_scope_defs);
+    }
+
+    /* Phase M6: Check for C symbol name collisions among exported bindings.
+     * Two exported bindings from different modules collide when their mangled
+     * C names are identical (e.g. module "my-lib" and "my_lib" both exporting
+     * "foo" would both produce "my_lib__foo"). */
+    if (rc == 0) {
+        uint32_t n_exp = 0;
+        for (uint32_t i = 0; i < e.global.n; i++) {
+            if (e.global.bindings[i]->is_exported &&
+                e.global.bindings[i]->defining_module_name != NULL)
+                n_exp++;
+        }
+        if (n_exp > 1) {
+            char **mangled = (char **)malloc(n_exp * sizeof(char *));
+            Binding **exp_bindings = (Binding **)malloc(n_exp * sizeof(Binding *));
+            if (!mangled || !exp_bindings) { fprintf(stderr, "tur: oom\n"); abort(); }
+            uint32_t idx = 0;
+            for (uint32_t i = 0; i < e.global.n; i++) {
+                Binding *b = e.global.bindings[i];
+                if (b->is_exported && b->defining_module_name != NULL) {
+                    mangled[idx] = elab_mangle_binding_name(b);
+                    exp_bindings[idx] = b;
+                    idx++;
+                }
+            }
+            for (uint32_t i = 0; i < n_exp; i++) {
+                for (uint32_t j = i + 1; j < n_exp; j++) {
+                    if (exp_bindings[i] == exp_bindings[j]) continue;
+                    if (strcmp(mangled[i], mangled[j]) == 0) {
+                        diag_emit(DIAG_ERROR, exp_bindings[j]->span,
+                                  "exported symbol '%s' from module '%s' mangles to "
+                                  "the same C name '%s' as '%s' from module '%s'; "
+                                  "rename one or use (export-as \"...\") to assign a unique C name",
+                                  exp_bindings[j]->name->name,
+                                  exp_bindings[j]->defining_module_name->name,
+                                  mangled[j],
+                                  exp_bindings[i]->name->name,
+                                  exp_bindings[i]->defining_module_name->name);
+                        rc = -1;
+                    }
+                }
+            }
+            for (uint32_t i = 0; i < n_exp; i++) free(mangled[i]);
+            free(mangled);
+            free(exp_bindings);
+        }
     }
 
     scope_free(&e.global);

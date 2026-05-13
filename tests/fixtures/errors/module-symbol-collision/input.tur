@@ -1,0 +1,5 @@
+(defmodule myapp
+  (export bar-baz bar_baz)
+  (defn bar-baz [] :int 1)
+  (defn bar_baz [] :int 2)
+  (defn main [] :int 0))
