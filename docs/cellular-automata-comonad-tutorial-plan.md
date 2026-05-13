@@ -1,9 +1,17 @@
 # Cellular Automata with Comonads — Tutorial & Example Plan for Turmeric
 
-> **Status:** Draft — Not Started  
+> **Status:** Complete  
 > **Prerequisite:** HKT Phase H3 (Functor, Applicative, Monad typeclasses) complete  
-> **Target:** v2 or later (with HKT support)  
 > **Related:** [higher-kinded-types-plan.md](../archive/higher-kinded-types-plan.md)
+
+**Deliverables shipped:**
+- `stdlib/comonad.tur` — Comonad typeclass + Identity + Pair instances ✓
+- `stdlib/zipper.tur` — 1D Zipper comonad for 1D cellular automata ✓
+- `stdlib/grid.tur` — GridCtx comonad for 2D cellular automata ✓
+- `examples/cellular-automata.tur` — Conway's Game of Life (imperative + comonadic) ✓
+- `docs/guides/cellular-automata-comonad-tutorial.md` — Step-by-step tutorial ✓
+- Test fixtures: `grid-basic`, `grid-comonad`, `game-of-life-blinker`, `game-of-life-block`,
+  `zipper-comonad`, `comonad-identity`, `flat-array-access` ✓
 
 ---
 
