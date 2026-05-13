@@ -115,51 +115,6 @@ rebuild_cache:
 rebuild_cache/fast: rebuild_cache
 .PHONY : rebuild_cache/fast
 
-# Special rule for the target list_install_components
-list_install_components:
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --cyan "Available install components are: \"Unspecified\""
-.PHONY : list_install_components
-
-# Special rule for the target list_install_components
-list_install_components/fast: list_install_components
-.PHONY : list_install_components/fast
-
-# Special rule for the target install
-install: preinstall
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --cyan "Install the project..."
-	/opt/homebrew/bin/cmake -P cmake_install.cmake
-.PHONY : install
-
-# Special rule for the target install
-install/fast: preinstall/fast
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --cyan "Install the project..."
-	/opt/homebrew/bin/cmake -P cmake_install.cmake
-.PHONY : install/fast
-
-# Special rule for the target install/local
-install/local: preinstall
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --cyan "Installing only the local directory..."
-	/opt/homebrew/bin/cmake -DCMAKE_INSTALL_LOCAL_ONLY=1 -P cmake_install.cmake
-.PHONY : install/local
-
-# Special rule for the target install/local
-install/local/fast: preinstall/fast
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --cyan "Installing only the local directory..."
-	/opt/homebrew/bin/cmake -DCMAKE_INSTALL_LOCAL_ONLY=1 -P cmake_install.cmake
-.PHONY : install/local/fast
-
-# Special rule for the target install/strip
-install/strip: preinstall
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --cyan "Installing the project stripped..."
-	/opt/homebrew/bin/cmake -DCMAKE_INSTALL_DO_STRIP=1 -P cmake_install.cmake
-.PHONY : install/strip
-
-# Special rule for the target install/strip
-install/strip/fast: preinstall/fast
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --cyan "Installing the project stripped..."
-	/opt/homebrew/bin/cmake -DCMAKE_INSTALL_DO_STRIP=1 -P cmake_install.cmake
-.PHONY : install/strip/fast
-
 # The main all target
 all: cmake_check_build_system
 	cd /Users/rjungemann/Projects/turmeric/build-rel && $(CMAKE_COMMAND) -E cmake_progress_start /Users/rjungemann/Projects/turmeric/build-rel/CMakeFiles /Users/rjungemann/Projects/turmeric/build-rel/src//CMakeFiles/progress.marks
@@ -1005,6 +960,30 @@ symbols.c.s:
 	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/symbols.c.s
 .PHONY : symbols.c.s
 
+timer_wheel.o: timer_wheel.c.o
+.PHONY : timer_wheel.o
+
+# target to build an object file
+timer_wheel.c.o:
+	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/timer_wheel.c.o
+.PHONY : timer_wheel.c.o
+
+timer_wheel.i: timer_wheel.c.i
+.PHONY : timer_wheel.i
+
+# target to preprocess a source file
+timer_wheel.c.i:
+	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/timer_wheel.c.i
+.PHONY : timer_wheel.c.i
+
+timer_wheel.s: timer_wheel.c.s
+.PHONY : timer_wheel.s
+
+# target to generate assembly for a file
+timer_wheel.c.s:
+	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/timer_wheel.c.s
+.PHONY : timer_wheel.c.s
+
 typeclass.o: typeclass.c.o
 .PHONY : typeclass.o
 
@@ -1060,10 +1039,6 @@ help:
 	@echo "... clean"
 	@echo "... depend"
 	@echo "... edit_cache"
-	@echo "... install"
-	@echo "... install/local"
-	@echo "... install/strip"
-	@echo "... list_install_components"
 	@echo "... package"
 	@echo "... package_source"
 	@echo "... rebuild_cache"
@@ -1169,6 +1144,9 @@ help:
 	@echo "... symbols.o"
 	@echo "... symbols.i"
 	@echo "... symbols.s"
+	@echo "... timer_wheel.o"
+	@echo "... timer_wheel.i"
+	@echo "... timer_wheel.s"
 	@echo "... typeclass.o"
 	@echo "... typeclass.i"
 	@echo "... typeclass.s"

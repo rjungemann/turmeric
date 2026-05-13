@@ -424,6 +424,11 @@ fixtures/turi-test/
 - [ ] Integration with `tur` compiler (optional)
 - [ ] Cross-compilation support
 - [ ] Packaging for distribution
+- [ ] **Interpreter as a Turmeric library** — expose the interpreter as a `require`-able module (e.g. `(require turi/interp)`) so Turmeric programs can embed, extend, or script the interpreter at runtime
+  - [ ] `src/turi/lib.tur` — public library API (`eval-string`, `eval-ast`, `make-env`, `interp-step`, etc.)
+  - [ ] `stdlib/turi/interp.tur` — stdlib-side re-export shim
+  - [ ] Document library API in `docs/turi-lib.md`
+  - [ ] `fixtures/turi/lib-usage.tur` — example of embedding the interpreter via `require`
 
 ---
 
@@ -601,6 +606,7 @@ Root (fith/)
 - [ ] Performance meets targets
 - [ ] Documentation complete
 - [ ] Packaged for distribution
+- [ ] Interpreter available as a `require`-able Turmeric library (see Phase S7)
 
 ---
 

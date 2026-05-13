@@ -68,6 +68,8 @@ file(REMOVE_RECURSE
   "CMakeFiles/tur.dir/scheduler_common.c.o.d"
   "CMakeFiles/tur.dir/symbols.c.o"
   "CMakeFiles/tur.dir/symbols.c.o.d"
+  "CMakeFiles/tur.dir/timer_wheel.c.o"
+  "CMakeFiles/tur.dir/timer_wheel.c.o.d"
   "CMakeFiles/tur.dir/typeclass.c.o"
   "CMakeFiles/tur.dir/typeclass.c.o.d"
   "CMakeFiles/tur.dir/types.c.o"

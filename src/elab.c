@@ -584,6 +584,7 @@ typedef struct Elab {
     const Symbol *sym_defmodule;  /* defmodule */
     const Symbol *sym_export;     /* export */
     const Symbol *sym_import;     /* import */
+    const Symbol *sym_load;       /* load */
     const Symbol *kw_as;          /* :as */
     const Symbol *kw_refer;       /* :refer */
     bool has_defmodule;           /* whether defmodule has been seen in this file */
@@ -1066,6 +1067,7 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_defmodule = intern_cstr(st, "defmodule");
     e->sym_export = intern_cstr(st, "export");
     e->sym_import = intern_cstr(st, "import");
+    e->sym_load = intern_cstr(st, "load");
     e->kw_as = intern_cstr(st, "as");
     e->kw_refer = intern_cstr(st, "refer");
     e->has_defmodule = false;
@@ -6480,6 +6482,7 @@ static Expr *elab_def(Elab *e, const Form *call) {
 static Expr *elab_defn(Elab *e, const Form *call);
 static Expr *elab_fn(Elab *e, const Form *call);
 /* Phase M0: Module system */
+static Expr *elab_load(Elab *e, const Form *call);
 static Expr *elab_defmodule(Elab *e, const Form *call);
 static Expr *elab_extern_c(Elab *e, const Form *call);
 static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding);
@@ -6584,6 +6587,7 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_gc_enable)   return elab_gc_enable(e, call);
     if (name == e->sym_gc_disable)  return elab_gc_disable(e, call);
     /* Phase M0: Module system */
+    if (name == e->sym_load)      return elab_load(e, call);
     if (name == e->sym_defmodule) return elab_defmodule(e, call);
     if (name == e->sym_export) {
         diag_emit(DIAG_ERROR, call->span,
@@ -6964,6 +6968,23 @@ static bool module_name_valid(const char *name, uint32_t len) {
     /* Must not start or end with '/' */
     if (name[0] == '/' || name[len - 1] == '/') return false;
     return true;
+}
+
+/* Phase M: (load "path") — source-file inclusion form.
+ * Reads the file at the given path, elaborates all its top-level forms into
+ * the current module's scope, and returns nil.  Uses the loaded_modules
+ * registry (keyed by interned path) to prevent duplicate loads.
+ *
+ * Syntax: (load "relative/or/absolute/path.tur")
+ */
+/* Phase M: (load "path") — handled by load-expansion preprocessor in
+ * elaborate_program before the two-pass elab.  This dispatch path should be
+ * unreachable for top-level loads; we return nil to allow stray (load ...)
+ * inside e.g. (do ...) blocks to no-op (loaded forms are already expanded
+ * at top level by then).  See expand_loads_in_forms. */
+static Expr *elab_load(Elab *e, const Form *call) {
+    (void)call;
+    return expr_new(e->arena, EX_NIL_LIT, TYPE_NIL, call->span);
 }
 
 /* Phase M2: Load and elaborate an imported module file.
@@ -10672,9 +10693,123 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
     e.separate_compilation = separate_compilation;
     builtins_init(st);
 
+    int rc = 0;
+
+    /* Phase M: (load "path") preprocessing.
+     * Recursively expand all top-level (load "path") forms in place by
+     * parsing the referenced file and splicing its forms into the form list.
+     * Tracks visited paths to prevent duplicate loads and detect cycles.
+     * Loaded forms then participate in the normal two-pass elaboration. */
+    {
+        const Symbol **loaded = NULL;
+        uint32_t n_loaded = 0, cap_loaded = 0;
+        Form **work = (Form **)arena_alloc(arena, nforms * sizeof(Form *));
+        for (uint32_t i = 0; i < nforms; i++) work[i] = forms[i];
+        uint32_t n_work = nforms;
+        uint32_t cap_work = nforms;
+        bool changed = true;
+        while (changed) {
+            changed = false;
+            uint32_t out_n = 0;
+            uint32_t out_cap = n_work + 16;
+            Form **out = (Form **)arena_alloc(arena, out_cap * sizeof(Form *));
+            for (uint32_t i = 0; i < n_work; i++) {
+                Form *f = work[i];
+                bool is_load = false;
+                const Form *path_f = NULL;
+                if (f->tag == F_LIST && f->as.list.len == 2 &&
+                    f->as.list.items[0]->tag == F_SYM &&
+                    f->as.list.items[0]->as.sym == e.sym_load &&
+                    f->as.list.items[1]->tag == F_STR) {
+                    is_load = true;
+                    path_f = f->as.list.items[1];
+                }
+                if (!is_load) {
+                    if (out_n >= out_cap) {
+                        out_cap *= 2;
+                        Form **nout = (Form **)arena_alloc(arena, out_cap * sizeof(Form *));
+                        for (uint32_t k = 0; k < out_n; k++) nout[k] = out[k];
+                        out = nout;
+                    }
+                    out[out_n++] = f;
+                    continue;
+                }
+                /* (load "path") — read & parse */
+                uint32_t plen = path_f->as.s.len;
+                if (plen == 0 || plen >= 4096) {
+                    diag_emit(DIAG_ERROR, path_f->span,
+                              "load: path must be non-empty and < 4096 chars");
+                    rc = -1;
+                    continue;
+                }
+                char path_buf[4096];
+                memcpy(path_buf, path_f->as.s.p, plen);
+                path_buf[plen] = '\0';
+                const Symbol *key = intern_cstr(st, path_buf);
+                /* Already loaded? Skip silently (idempotent). */
+                bool already = false;
+                for (uint32_t k = 0; k < n_loaded; k++) {
+                    if (loaded[k] == key) { already = true; break; }
+                }
+                if (already) continue;
+                if (n_loaded >= cap_loaded) {
+                    cap_loaded = cap_loaded ? cap_loaded * 2 : 8;
+                    loaded = (const Symbol **)realloc((void *)loaded,
+                              cap_loaded * sizeof(const Symbol *));
+                    if (!loaded) { fprintf(stderr, "tur: oom\n"); abort(); }
+                }
+                loaded[n_loaded++] = key;
+                /* Read source */
+                char *src_raw = NULL;
+                size_t src_len = 0;
+                if (elab_read_file(path_buf, &src_raw, &src_len) != 0) {
+                    diag_emit(DIAG_ERROR, path_f->span,
+                              "load: cannot open '%s'", path_buf);
+                    rc = -1;
+                    continue;
+                }
+                char *src_copy = (char *)arena_alloc(arena, src_len + 1);
+                memcpy(src_copy, src_raw, src_len);
+                src_copy[src_len] = '\0';
+                free(src_raw);
+                char *path_copy = (char *)arena_alloc(arena, plen + 1);
+                memcpy(path_copy, path_buf, plen + 1);
+                SourceFile *sfile = (SourceFile *)arena_alloc(arena, sizeof(SourceFile));
+                *sfile = (SourceFile){0};
+                sfile->path = path_copy;
+                sfile->src = src_copy;
+                sfile->len = src_len;
+                sfile->file_id = e.next_import_file_id++;
+                sfile->reader_type = reader_type_from_extension(path_buf);
+                if (sfile->reader_type == READER_UNKNOWN) sfile->reader_type = READER_TURMERIC;
+                diag_register_file(sfile);
+                uint32_t lf_n = 0;
+                Form **lf = read_all(arena, st, sfile, &lf_n);
+                if (!lf) { rc = -1; continue; }
+                /* Splice loaded forms into output list */
+                if (out_n + lf_n > out_cap) {
+                    while (out_n + lf_n > out_cap) out_cap *= 2;
+                    Form **nout = (Form **)arena_alloc(arena, out_cap * sizeof(Form *));
+                    for (uint32_t k = 0; k < out_n; k++) nout[k] = out[k];
+                    out = nout;
+                }
+                for (uint32_t k = 0; k < lf_n; k++) out[out_n++] = lf[k];
+                changed = true; /* a new load may appear in loaded forms */
+            }
+            work = out;
+            n_work = out_n;
+            cap_work = out_cap;
+            (void)cap_work;
+        }
+        free((void *)loaded);
+        /* Replace forms/nforms with the expanded list for the rest of
+         * elaborate_program.  Cast away const since we're in our own copy. */
+        forms = (Form *const *)work;
+        nforms = n_work;
+    }
+
     Expr **items = (nforms == 0) ? NULL :
         (Expr **)arena_alloc(arena, nforms * sizeof(Expr *));
-    int rc = 0;
 
     /* Phase 2: Two-pass elaboration for mutual recursion support.
      * Pass 1: Collect all top-level defn declarations and add them to scope.

@@ -13,4 +13,3 @@ set_tests_properties([=[tur_span_tests]=] PROPERTIES  DEPENDS "tur" WORKING_DIRE
 add_test([=[tur_flags_tests]=] "bash" "tests/run-flags.sh")
 set_tests_properties([=[tur_flags_tests]=] PROPERTIES  DEPENDS "tur" WORKING_DIRECTORY "/Users/rjungemann/Projects/turmeric" _BACKTRACE_TRIPLES "/Users/rjungemann/Projects/turmeric/CMakeLists.txt;34;add_test;/Users/rjungemann/Projects/turmeric/CMakeLists.txt;0;")
 subdirs("src")
-subdirs("examples")

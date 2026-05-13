@@ -506,10 +506,24 @@ src/CMakeFiles/tur.dir/scheduler_common.c.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/tur.dir/scheduler_common.c.s"
 	cd /Users/rjungemann/Projects/turmeric/build-rel/src && /usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/rjungemann/Projects/turmeric/src/scheduler_common.c -o CMakeFiles/tur.dir/scheduler_common.c.s
 
+src/CMakeFiles/tur.dir/timer_wheel.c.o: src/CMakeFiles/tur.dir/flags.make
+src/CMakeFiles/tur.dir/timer_wheel.c.o: /Users/rjungemann/Projects/turmeric/src/timer_wheel.c
+src/CMakeFiles/tur.dir/timer_wheel.c.o: src/CMakeFiles/tur.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/rjungemann/Projects/turmeric/build-rel/CMakeFiles --progress-num=$(CMAKE_PROGRESS_32) "Building C object src/CMakeFiles/tur.dir/timer_wheel.c.o"
+	cd /Users/rjungemann/Projects/turmeric/build-rel/src && /usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT src/CMakeFiles/tur.dir/timer_wheel.c.o -MF CMakeFiles/tur.dir/timer_wheel.c.o.d -o CMakeFiles/tur.dir/timer_wheel.c.o -c /Users/rjungemann/Projects/turmeric/src/timer_wheel.c
+
+src/CMakeFiles/tur.dir/timer_wheel.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/tur.dir/timer_wheel.c.i"
+	cd /Users/rjungemann/Projects/turmeric/build-rel/src && /usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/rjungemann/Projects/turmeric/src/timer_wheel.c > CMakeFiles/tur.dir/timer_wheel.c.i
+
+src/CMakeFiles/tur.dir/timer_wheel.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/tur.dir/timer_wheel.c.s"
+	cd /Users/rjungemann/Projects/turmeric/build-rel/src && /usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/rjungemann/Projects/turmeric/src/timer_wheel.c -o CMakeFiles/tur.dir/timer_wheel.c.s
+
 src/CMakeFiles/tur.dir/symbols.c.o: src/CMakeFiles/tur.dir/flags.make
 src/CMakeFiles/tur.dir/symbols.c.o: /Users/rjungemann/Projects/turmeric/src/symbols.c
 src/CMakeFiles/tur.dir/symbols.c.o: src/CMakeFiles/tur.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/rjungemann/Projects/turmeric/build-rel/CMakeFiles --progress-num=$(CMAKE_PROGRESS_32) "Building C object src/CMakeFiles/tur.dir/symbols.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/rjungemann/Projects/turmeric/build-rel/CMakeFiles --progress-num=$(CMAKE_PROGRESS_33) "Building C object src/CMakeFiles/tur.dir/symbols.c.o"
 	cd /Users/rjungemann/Projects/turmeric/build-rel/src && /usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT src/CMakeFiles/tur.dir/symbols.c.o -MF CMakeFiles/tur.dir/symbols.c.o.d -o CMakeFiles/tur.dir/symbols.c.o -c /Users/rjungemann/Projects/turmeric/src/symbols.c
 
 src/CMakeFiles/tur.dir/symbols.c.i: cmake_force
@@ -523,7 +537,7 @@ src/CMakeFiles/tur.dir/symbols.c.s: cmake_force
 src/CMakeFiles/tur.dir/typeclass.c.o: src/CMakeFiles/tur.dir/flags.make
 src/CMakeFiles/tur.dir/typeclass.c.o: /Users/rjungemann/Projects/turmeric/src/typeclass.c
 src/CMakeFiles/tur.dir/typeclass.c.o: src/CMakeFiles/tur.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/rjungemann/Projects/turmeric/build-rel/CMakeFiles --progress-num=$(CMAKE_PROGRESS_33) "Building C object src/CMakeFiles/tur.dir/typeclass.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/rjungemann/Projects/turmeric/build-rel/CMakeFiles --progress-num=$(CMAKE_PROGRESS_34) "Building C object src/CMakeFiles/tur.dir/typeclass.c.o"
 	cd /Users/rjungemann/Projects/turmeric/build-rel/src && /usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT src/CMakeFiles/tur.dir/typeclass.c.o -MF CMakeFiles/tur.dir/typeclass.c.o.d -o CMakeFiles/tur.dir/typeclass.c.o -c /Users/rjungemann/Projects/turmeric/src/typeclass.c
 
 src/CMakeFiles/tur.dir/typeclass.c.i: cmake_force
@@ -537,7 +551,7 @@ src/CMakeFiles/tur.dir/typeclass.c.s: cmake_force
 src/CMakeFiles/tur.dir/types.c.o: src/CMakeFiles/tur.dir/flags.make
 src/CMakeFiles/tur.dir/types.c.o: /Users/rjungemann/Projects/turmeric/src/types.c
 src/CMakeFiles/tur.dir/types.c.o: src/CMakeFiles/tur.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/rjungemann/Projects/turmeric/build-rel/CMakeFiles --progress-num=$(CMAKE_PROGRESS_34) "Building C object src/CMakeFiles/tur.dir/types.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/rjungemann/Projects/turmeric/build-rel/CMakeFiles --progress-num=$(CMAKE_PROGRESS_35) "Building C object src/CMakeFiles/tur.dir/types.c.o"
 	cd /Users/rjungemann/Projects/turmeric/build-rel/src && /usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT src/CMakeFiles/tur.dir/types.c.o -MF CMakeFiles/tur.dir/types.c.o.d -o CMakeFiles/tur.dir/types.c.o -c /Users/rjungemann/Projects/turmeric/src/types.c
 
 src/CMakeFiles/tur.dir/types.c.i: cmake_force
@@ -550,7 +564,7 @@ src/CMakeFiles/tur.dir/types.c.s: cmake_force
 
 src/CMakeFiles/tur.dir/fiber_ctx_arm64.S.o: src/CMakeFiles/tur.dir/flags.make
 src/CMakeFiles/tur.dir/fiber_ctx_arm64.S.o: /Users/rjungemann/Projects/turmeric/src/fiber_ctx_arm64.S
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/rjungemann/Projects/turmeric/build-rel/CMakeFiles --progress-num=$(CMAKE_PROGRESS_35) "Building ASM object src/CMakeFiles/tur.dir/fiber_ctx_arm64.S.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/rjungemann/Projects/turmeric/build-rel/CMakeFiles --progress-num=$(CMAKE_PROGRESS_36) "Building ASM object src/CMakeFiles/tur.dir/fiber_ctx_arm64.S.o"
 	cd /Users/rjungemann/Projects/turmeric/build-rel/src && /usr/bin/cc $(ASM_DEFINES) $(ASM_INCLUDES) $(ASM_FLAGS) -o CMakeFiles/tur.dir/fiber_ctx_arm64.S.o -c /Users/rjungemann/Projects/turmeric/src/fiber_ctx_arm64.S
 
 src/CMakeFiles/tur.dir/fiber_ctx_arm64.S.i: cmake_force
@@ -564,7 +578,7 @@ src/CMakeFiles/tur.dir/fiber_ctx_arm64.S.s: cmake_force
 src/CMakeFiles/tur.dir/io_kqueue.c.o: src/CMakeFiles/tur.dir/flags.make
 src/CMakeFiles/tur.dir/io_kqueue.c.o: /Users/rjungemann/Projects/turmeric/src/io_kqueue.c
 src/CMakeFiles/tur.dir/io_kqueue.c.o: src/CMakeFiles/tur.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/rjungemann/Projects/turmeric/build-rel/CMakeFiles --progress-num=$(CMAKE_PROGRESS_36) "Building C object src/CMakeFiles/tur.dir/io_kqueue.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/rjungemann/Projects/turmeric/build-rel/CMakeFiles --progress-num=$(CMAKE_PROGRESS_37) "Building C object src/CMakeFiles/tur.dir/io_kqueue.c.o"
 	cd /Users/rjungemann/Projects/turmeric/build-rel/src && /usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT src/CMakeFiles/tur.dir/io_kqueue.c.o -MF CMakeFiles/tur.dir/io_kqueue.c.o.d -o CMakeFiles/tur.dir/io_kqueue.c.o -c /Users/rjungemann/Projects/turmeric/src/io_kqueue.c
 
 src/CMakeFiles/tur.dir/io_kqueue.c.i: cmake_force
@@ -608,6 +622,7 @@ tur_OBJECTS = \
 "CMakeFiles/tur.dir/runtime.c.o" \
 "CMakeFiles/tur.dir/scheduler.c.o" \
 "CMakeFiles/tur.dir/scheduler_common.c.o" \
+"CMakeFiles/tur.dir/timer_wheel.c.o" \
 "CMakeFiles/tur.dir/symbols.c.o" \
 "CMakeFiles/tur.dir/typeclass.c.o" \
 "CMakeFiles/tur.dir/types.c.o" \
@@ -648,6 +663,7 @@ tur: src/CMakeFiles/tur.dir/reader.c.o
 tur: src/CMakeFiles/tur.dir/runtime.c.o
 tur: src/CMakeFiles/tur.dir/scheduler.c.o
 tur: src/CMakeFiles/tur.dir/scheduler_common.c.o
+tur: src/CMakeFiles/tur.dir/timer_wheel.c.o
 tur: src/CMakeFiles/tur.dir/symbols.c.o
 tur: src/CMakeFiles/tur.dir/typeclass.c.o
 tur: src/CMakeFiles/tur.dir/types.c.o
@@ -655,7 +671,7 @@ tur: src/CMakeFiles/tur.dir/fiber_ctx_arm64.S.o
 tur: src/CMakeFiles/tur.dir/io_kqueue.c.o
 tur: src/CMakeFiles/tur.dir/build.make
 tur: src/CMakeFiles/tur.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/Users/rjungemann/Projects/turmeric/build-rel/CMakeFiles --progress-num=$(CMAKE_PROGRESS_37) "Linking C executable ../tur"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/Users/rjungemann/Projects/turmeric/build-rel/CMakeFiles --progress-num=$(CMAKE_PROGRESS_38) "Linking C executable ../tur"
 	cd /Users/rjungemann/Projects/turmeric/build-rel/src && $(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/tur.dir/link.txt --verbose=$(VERBOSE)
 
 # Rule to build all files generated by this target.
