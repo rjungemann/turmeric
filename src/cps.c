@@ -967,3 +967,73 @@ Expr *cps_transform(Arena *a, Expr *program, TypeClassEnv *tc_env) {
 
     return result;
 }
+
+/* Phase B5: --dump-clone-plan
+ * Walk the program and print a summary of every EX_CLONEABLE_SHIFT site. */
+static void cps_dump_clone_plan_expr(const Expr *e, FILE *out, int depth) {
+    if (!e) return;
+    switch (e->kind) {
+        case EX_CLONEABLE_SHIFT: {
+            fprintf(out, "[shift %d] %u captured bindings:\n",
+                    (int)e->span.line,
+                    e->as.cloneable_shift_.n_live_captures);
+            for (uint32_t i = 0; i < e->as.cloneable_shift_.n_live_captures; i++) {
+                Binding *b = e->as.cloneable_shift_.live_captures[i];
+                const char *clone_fn =
+                    (e->as.cloneable_shift_.capture_clone_fns &&
+                     e->as.cloneable_shift_.capture_clone_fns[i])
+                    ? e->as.cloneable_shift_.capture_clone_fns[i]
+                    : "(bitwise copy)";
+                const char *bname = (b && b->name) ? b->name->name : "?";
+                fprintf(out, "  [%u] %s -> %s\n", i, bname, clone_fn);
+            }
+            cps_dump_clone_plan_expr(e->as.cloneable_shift_.k_fn, out, depth + 1);
+            cps_dump_clone_plan_expr(e->as.cloneable_shift_.body, out, depth + 1);
+            break;
+        }
+        case EX_CLONEABLE_RESET:
+            cps_dump_clone_plan_expr(e->as.cloneable_reset_.body, out, depth + 1);
+            break;
+        case EX_PROGRAM:
+            for (uint32_t i = 0; i < e->as.program.n; i++)
+                cps_dump_clone_plan_expr(e->as.program.items[i], out, depth);
+            break;
+        case EX_FN_DEF:
+            if (e->as.fn_def_.fn && e->as.fn_def_.fn->body)
+                cps_dump_clone_plan_expr(e->as.fn_def_.fn->body, out, depth);
+            break;
+        case EX_FN:
+            if (e->as.fn_.fn && e->as.fn_.fn->body)
+                cps_dump_clone_plan_expr(e->as.fn_.fn->body, out, depth);
+            break;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                cps_dump_clone_plan_expr(e->as.let_.bindings[i].init, out, depth);
+            cps_dump_clone_plan_expr(e->as.let_.body, out, depth);
+            break;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                cps_dump_clone_plan_expr(e->as.do_.items[i], out, depth);
+            break;
+        case EX_IF:
+            cps_dump_clone_plan_expr(e->as.if_.cond, out, depth);
+            cps_dump_clone_plan_expr(e->as.if_.then_, out, depth);
+            cps_dump_clone_plan_expr(e->as.if_.else_or_null, out, depth);
+            break;
+        case EX_CALL:
+            cps_dump_clone_plan_expr(e->as.call_.fn_expr, out, depth);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                cps_dump_clone_plan_expr(e->as.call_.args[i], out, depth);
+            break;
+        default:
+            break;
+    }
+    (void)depth;
+}
+
+void cps_dump_clone_plan(const Expr *program, FILE *out) {
+    if (!program) return;
+    fprintf(out, "=== clone plan ===\n");
+    cps_dump_clone_plan_expr(program, out, 0);
+    fprintf(out, "=== end clone plan ===\n");
+}

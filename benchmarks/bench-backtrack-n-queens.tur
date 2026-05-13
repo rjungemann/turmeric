@@ -1,0 +1,74 @@
+;; Phase B5: Backtracking N-Queens benchmark
+;;
+;; Solves N-Queens for N=8 repeatedly to measure backtracking monad throughput.
+;; Baseline: same algorithm in plain C (bench-backtrack-n-queens-baseline.c).
+
+(defn nqueens [n] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+
+  Cell *boards = malloc(sizeof(Cell));
+  boards->value = 0; boards->next = 0;
+
+  for (int64_t row = 0; row < n; row++) {
+      Cell *next_boards = NULL, *tail = NULL;
+      Cell *b = boards;
+      while (b) {
+          int64_t packed = b->value;
+          for (int64_t col = 1; col <= n; col++) {
+              bool safe = true;
+              for (int64_t r = 0; r < row; r++) {
+                  int64_t scale = 1;
+                  for (int64_t i = 0; i < r; i++) scale *= (n + 1);
+                  int64_t prev = (packed / scale) % (n + 1);
+                  int64_t diff = row - r;
+                  if (prev == col || prev == col - diff || prev == col + diff) {
+                      safe = false; break;
+                  }
+              }
+              if (safe) {
+                  int64_t scale = 1;
+                  for (int64_t i = 0; i < row; i++) scale *= (n + 1);
+                  Cell *nc = malloc(sizeof(Cell));
+                  nc->value = packed + col * scale; nc->next = 0;
+                  if (tail) tail->next = (int64_t)(intptr_t)nc; else next_boards = nc;
+                  tail = nc;
+              }
+          }
+          b = (Cell*)(intptr_t)b->next;
+      }
+      /* free old boards */
+      Cell *tmp = boards;
+      while (tmp) {
+          Cell *nx = (Cell*)(intptr_t)tmp->next;
+          free(tmp);
+          tmp = nx;
+      }
+      boards = next_boards;
+  }
+
+  /* count and free */
+  int64_t count = 0;
+  Cell *c = boards;
+  while (c) {
+      Cell *nx = (Cell*)(intptr_t)c->next;
+      free(c);
+      c = nx;
+      count++;
+  }
+  return count;
+  ```)
+
+(defn main [] :int
+  ```c
+  /* Warm up */
+  nqueens(6);
+
+  /* Benchmark: 200 iterations of N=8 */
+  int64_t total = 0;
+  for (int i = 0; i < 200; i++) {
+      total += nqueens(8);
+  }
+  printf("%lld\n", (long long)(total / 200));
+  return 0;
+  ```)

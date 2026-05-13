@@ -45,4 +45,9 @@ bool cps_fn_needs_cloneable_transform(const FnDef *fd);
  * liveness and capture-checking, before emit.c. */
 void cps_emit_capture_environment(Arena *a, Expr *program, TypeClassEnv *tc_env);
 
+/* Phase B5: --dump-clone-plan: walk the program and print a summary of every
+ * EX_CLONEABLE_SHIFT site — its location and the clone function selected for
+ * each captured binding (NULL = bitwise copy fallback). */
+void cps_dump_clone_plan(const Expr *program, FILE *out);
+
 #endif

@@ -1,0 +1,194 @@
+;; Phase B5: N-Queens solver using backtracking monad (N=5 for fast fixture).
+;; Each solution is a list of column placements (one per row).
+;; Expected: 10 solutions for N=5.
+
+(defn mzero [] :int
+  ```c return 0; ```)
+
+(defn mreturn [x] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
+  cell->value = x;
+  cell->next = 0;
+  return (int64_t)(intptr_t)cell;
+  ```)
+
+(defn mplus [xs ys] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *xc = (Cell*)(intptr_t)xs;
+  if (!xc) return ys;
+  Cell *head = NULL, *tail = NULL;
+  while (xc) {
+      Cell *n = malloc(sizeof(Cell));
+      n->value = xc->value; n->next = 0;
+      if (tail) tail->next = (int64_t)(intptr_t)n; else head = n;
+      tail = n;
+      xc = (Cell*)(intptr_t)xc->next;
+  }
+  if (tail) tail->next = ys;
+  return (int64_t)(intptr_t)head;
+  ```)
+
+(defn mbind [ma f] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *cell = (Cell*)(intptr_t)ma;
+  if (!cell) return 0;
+  int64_t *fat = (int64_t*)(intptr_t)f;
+  int64_t thunk = fat[0];
+  Cell *rev = NULL;
+  while (cell) {
+      int64_t sub = ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, cell->value);
+      Cell *sc = (Cell*)(intptr_t)sub;
+      while (sc) {
+          Cell *n = malloc(sizeof(Cell));
+          n->value = sc->value;
+          n->next = (int64_t)(intptr_t)rev;
+          rev = n;
+          sc = (Cell*)(intptr_t)sc->next;
+      }
+      cell = (Cell*)(intptr_t)cell->next;
+  }
+  Cell *result = NULL;
+  while (rev) {
+      Cell *tmp = (Cell*)(intptr_t)rev->next;
+      rev->next = (int64_t)(intptr_t)result;
+      result = rev;
+      rev = tmp;
+  }
+  return (int64_t)(intptr_t)result;
+  ```)
+
+(defn guard [pred :bool] :int
+  (if pred (mreturn 0) (mzero)))
+
+;; List utilities using inline C for compactness
+
+;; Create an int list from 1..n
+(defn range1 [n] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *head = NULL, *tail = NULL;
+  for (int64_t i = 1; i <= n; i++) {
+      Cell *c = malloc(sizeof(Cell));
+      c->value = i; c->next = 0;
+      if (tail) tail->next = (int64_t)(intptr_t)c; else head = c;
+      tail = c;
+  }
+  return (int64_t)(intptr_t)head;
+  ```)
+
+;; Prepend value to list (encoded as a pair: hi=len, rest=packed int list)
+;; We encode solutions as a single int64 using base-N+1 encoding.
+(defn encode-col [packed col row n] :int
+  ```c
+  int64_t scale = 1;
+  for (int64_t i = 0; i < row; i++) scale *= (n + 1);
+  return packed + col * scale;
+  ```)
+
+;; Check safety: given packed placement, is col at row safe?
+(defn safe [packed col row n] :bool
+  ```c
+  for (int64_t r = 0; r < row; r++) {
+      int64_t scale = 1;
+      for (int64_t i = 0; i < r; i++) scale *= (n + 1);
+      int64_t prev_col = (packed / scale) % (n + 1);
+      if (prev_col == col) return false;
+      int64_t diff = row - r;
+      if (prev_col == col - diff || prev_col == col + diff) return false;
+  }
+  return true;
+  ```)
+
+;; place-row: for a given row, return all placements (as packed ints)
+;; We iterate over columns 1..n and filter by safety.
+(defn place-row [row n packed] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *head = NULL, *tail = NULL;
+  for (int64_t col = 1; col <= n; col++) {
+      /* check safety */
+      int64_t p = packed;
+      bool safe = true;
+      for (int64_t r = 0; r < row; r++) {
+          int64_t scale = 1;
+          for (int64_t i = 0; i < r; i++) scale *= (n + 1);
+          int64_t prev = (p / scale) % (n + 1);
+          int64_t diff = row - r;
+          if (prev == col || prev == col - diff || prev == col + diff) {
+              safe = false; break;
+          }
+      }
+      if (safe) {
+          int64_t scale = 1;
+          for (int64_t i = 0; i < row; i++) scale *= (n + 1);
+          int64_t new_packed = p + col * scale;
+          Cell *c = malloc(sizeof(Cell));
+          c->value = new_packed; c->next = 0;
+          if (tail) tail->next = (int64_t)(intptr_t)c; else head = c;
+          tail = c;
+      }
+  }
+  return (int64_t)(intptr_t)head;
+  ```)
+
+;; Solve N-Queens iteratively using the list monad.
+;; Start with a list containing 0 (empty board), then for each row
+;; flatmap over place-row.
+(defn nqueens [n] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+
+  /* Initial: singleton [0] */
+  Cell *boards = malloc(sizeof(Cell));
+  boards->value = 0; boards->next = 0;
+
+  for (int64_t row = 0; row < n; row++) {
+      Cell *next_boards = NULL, *tail = NULL;
+      Cell *b = boards;
+      while (b) {
+          /* expand each board with valid placements at this row */
+          int64_t packed = b->value;
+          for (int64_t col = 1; col <= n; col++) {
+              bool safe = true;
+              for (int64_t r = 0; r < row; r++) {
+                  int64_t scale = 1;
+                  for (int64_t i = 0; i < r; i++) scale *= (n + 1);
+                  int64_t prev = (packed / scale) % (n + 1);
+                  int64_t diff = row - r;
+                  if (prev == col || prev == col - diff || prev == col + diff) {
+                      safe = false; break;
+                  }
+              }
+              if (safe) {
+                  int64_t scale = 1;
+                  for (int64_t i = 0; i < row; i++) scale *= (n + 1);
+                  Cell *nc = malloc(sizeof(Cell));
+                  nc->value = packed + col * scale; nc->next = 0;
+                  if (tail) tail->next = (int64_t)(intptr_t)nc; else next_boards = nc;
+                  tail = nc;
+              }
+          }
+          b = (Cell*)(intptr_t)b->next;
+      }
+      boards = next_boards;
+  }
+  return (int64_t)(intptr_t)boards;
+  ```)
+
+;; Count solutions
+(defn count-solutions [xs] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *c = (Cell*)(intptr_t)xs;
+  int64_t count = 0;
+  while (c) { count++; c = (Cell*)(intptr_t)c->next; }
+  return count;
+  ```)
+
+(defn main []
+  (let [solutions (nqueens 5)]
+    (let [n (count-solutions solutions)]
+      (println n))))

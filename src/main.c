@@ -67,6 +67,12 @@ bool g_lint_panic = false;              /* --lint-panic: lint panic/must! usage 
 /* Phase HKT-P6: --dump-kinds flag: print kind annotations after kind-check */
 static bool g_dump_kinds = false;
 
+/* Phase B5: --backtrack-depth N global flag (0 = unlimited) */
+int64_t g_backtrack_depth = 0;
+
+/* Phase B5: --dump-clone-plan flag: print cloneable capture plan after CPS */
+bool g_dump_clone_plan = false;
+
 /* Phase U5: Global statistics for unsafe linting */
 uint32_t g_unsafe_block_count = 0;     /* count of unsafe blocks seen */
 uint32_t g_unsafe_total_lines = 0;     /* total lines in unsafe blocks */
@@ -202,6 +208,8 @@ static int run_core_passes(PassContext *ctx) {
             /* Phase 18: CPS transformation for shift/reset. */
             ctx->prog = cps_transform(ctx->arena, ctx->prog, &ctx->tc_env);
             if (!ctx->prog || diag_had_error()) return 1;
+            /* Phase B5: --dump-clone-plan: print cloneable capture plan after CPS */
+            if (g_dump_clone_plan) cps_dump_clone_plan(ctx->prog, stderr);
 #ifndef NDEBUG
             /* Phase HKT-P6: verify kind info preserved after CPS */
             assert(kind_verify_program(ctx->prog) && "Kind info cleared after PASS_CPS");
@@ -897,6 +905,8 @@ static int usage(void) {
         "  --explain <TUR-E####>            print explanation for a diagnostic code (HKT-P5)\n"
         "  --explain <snippet>              compile code snippet and explain errors (phase 8)\n"
         "  --dump-kinds                     dump kind annotations after kind-check (HKT-P6)\n"
+        "  --backtrack-depth <N>            cap run-backtrack at N results (0=unlimited) (Phase B5)\n"
+        "  --dump-clone-plan                dump cloneable capture plan after CPS (Phase B5)\n"
         "  --panic-abort                   all panics call abort() directly (Phase R5)\n"
         "  --panic-trace                   print scope chain on panic (Phase R6)\n"
         "  --warn-unused-result             warn on discarded result values (Phase R6)\n"
@@ -1126,6 +1136,29 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "--dump-kinds") == 0) {
             /* Phase HKT-P6: enable kind-annotation dump after kind-check */
             g_dump_kinds = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strncmp(argv[i], "--backtrack-depth=", 18) == 0) {
+            /* Phase B5: cap run-backtrack at N results (0 = unlimited) */
+            g_backtrack_depth = (int64_t)atoll(argv[i] + 18);
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--backtrack-depth") == 0 && i + 1 < argc) {
+            g_backtrack_depth = (int64_t)atoll(argv[i + 1]);
+            for (int j = i; j < argc - 2; j++) {
+                argv[j] = argv[j + 2];
+            }
+            argc -= 2;
+            i--;
+        } else if (strcmp(argv[i], "--dump-clone-plan") == 0) {
+            /* Phase B5: dump cloneable capture plan after CPS */
+            g_dump_clone_plan = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

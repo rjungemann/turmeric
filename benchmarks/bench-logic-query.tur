@@ -1,0 +1,83 @@
+;; Phase B5: Logic query benchmark
+;;
+;; Simulates a miniKanren-style logic query using the backtracking monad.
+;; Searches for all pairs (x, y) where x + y = 20, x in 1..10.
+;; Benchmark: run 10000 iterations of this search.
+
+(defn mzero [] :int
+  ```c return 0; ```)
+
+(defn mreturn [x] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
+  cell->value = x;
+  cell->next = 0;
+  return (int64_t)(intptr_t)cell;
+  ```)
+
+(defn mplus [xs ys] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *xc = (Cell*)(intptr_t)xs;
+  if (!xc) return ys;
+  Cell *head = NULL, *tail = NULL;
+  while (xc) {
+      Cell *n = malloc(sizeof(Cell));
+      n->value = xc->value; n->next = 0;
+      if (tail) tail->next = (int64_t)(intptr_t)n; else head = n;
+      tail = n;
+      xc = (Cell*)(intptr_t)xc->next;
+  }
+  if (tail) tail->next = ys;
+  return (int64_t)(intptr_t)head;
+  ```)
+
+(defn bt-count [xs] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *c = (Cell*)(intptr_t)xs; int64_t n = 0;
+  while (c) { n++; c = (Cell*)(intptr_t)c->next; }
+  return n;
+  ```)
+
+(defn bt-free [xs]
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *c = (Cell*)(intptr_t)xs;
+  while (c) { Cell *nx = (Cell*)(intptr_t)c->next; free(c); c = nx; }
+  ```)
+
+;; Find all (x, y) where x + y = target, x in 1..max_x
+;; Returns encoded pairs as x * 100 + y (assumes y < 100)
+(defn logic-query [target max-x] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *result = NULL, *tail = NULL;
+  for (int64_t x = 1; x <= max_x; x++) {
+      int64_t y = target - x;
+      if (y >= 1 && y <= max_x) {
+          Cell *c = malloc(sizeof(Cell));
+          c->value = x * 100 + y; c->next = 0;
+          if (tail) tail->next = (int64_t)(intptr_t)c; else result = c;
+          tail = c;
+      }
+  }
+  return (int64_t)(intptr_t)result;
+  ```)
+
+(defn main [] :int
+  ```c
+  int64_t total = 0;
+  for (int iter = 0; iter < 10000; iter++) {
+      int64_t results = logic_query(20, 19);
+      /* count */
+      typedef struct { int64_t value; int64_t next; } Cell;
+      Cell *c = (Cell*)(intptr_t)results;
+      while (c) { total++; c = (Cell*)(intptr_t)c->next; }
+      /* free */
+      c = (Cell*)(intptr_t)results;
+      while (c) { Cell *nx = (Cell*)(intptr_t)c->next; free(c); c = nx; }
+  }
+  printf("%lld\n", (long long)(total / 10000));
+  return 0;
+  ```)

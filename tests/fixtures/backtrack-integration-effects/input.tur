@@ -1,0 +1,37 @@
+;; Phase B5: Backtracking monad integrated with algebraic effects.
+;; A Choose effect is handled by always picking the first option.
+;; The backtracking monad collects the final result as a singleton list.
+
+(defeffect Choose [a :int b :int] :int)
+
+(defn mreturn [x] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
+  cell->value = x;
+  cell->next = 0;
+  return (int64_t)(intptr_t)cell;
+  ```)
+
+(defn bt-print [xs]
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *c = (Cell*)(intptr_t)xs;
+  while (c) {
+      printf("%lld\n", (long long)c->value);
+      c = (Cell*)(intptr_t)c->next;
+  }
+  ```)
+
+;; Compute a value using two Choose effects, then wrap in mreturn
+(defn make-choices [] :int
+  (let [x (perform (Choose 10 20))]
+    (let [y (perform (Choose 1 2))]
+      (mreturn (+ x y)))))
+
+(defn main []
+  ;; Handle Choose by selecting the first option (deterministic)
+  (let [result
+        (handle (make-choices)
+          (Choose [a b] k)
+          (resume k a))]
+    (bt-print result)))

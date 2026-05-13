@@ -1,0 +1,73 @@
+;; Phase B5: Backtracking monad — memory allocation correctness.
+;; Exercises many allocations in the list monad to verify memory safety.
+;; Builds a list of 1..100 and takes the first 50 elements, then sums them.
+
+(defn mreturn [x] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
+  cell->value = x;
+  cell->next = 0;
+  return (int64_t)(intptr_t)cell;
+  ```)
+
+(defn mplus [xs ys] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *xc = (Cell*)(intptr_t)xs;
+  if (!xc) return ys;
+  Cell *head = NULL, *tail = NULL;
+  while (xc) {
+      Cell *n = malloc(sizeof(Cell));
+      n->value = xc->value; n->next = 0;
+      if (tail) tail->next = (int64_t)(intptr_t)n; else head = n;
+      tail = n;
+      xc = (Cell*)(intptr_t)xc->next;
+  }
+  if (tail) tail->next = ys;
+  return (int64_t)(intptr_t)head;
+  ```)
+
+(defn run-backtrack-depth [xs n] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *head = NULL, *tail = NULL, *c = (Cell*)(intptr_t)xs;
+  int64_t count = 0;
+  while (c && count < n) {
+      Cell *nc = malloc(sizeof(Cell));
+      nc->value = c->value; nc->next = 0;
+      if (tail) tail->next = (int64_t)(intptr_t)nc; else head = nc;
+      tail = nc;
+      count++;
+      c = (Cell*)(intptr_t)c->next;
+  }
+  return (int64_t)(intptr_t)head;
+  ```)
+
+(defn bt-sum [xs] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *c = (Cell*)(intptr_t)xs;
+  int64_t sum = 0;
+  while (c) { sum += c->value; c = (Cell*)(intptr_t)c->next; }
+  return sum;
+  ```)
+
+;; Build alternatives 1..100 by chaining mreturn and mplus
+(defn make-list [n] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *head = NULL, *tail = NULL;
+  for (int64_t i = 1; i <= n; i++) {
+      Cell *c = malloc(sizeof(Cell));
+      c->value = i; c->next = 0;
+      if (tail) tail->next = (int64_t)(intptr_t)c; else head = c;
+      tail = c;
+  }
+  return (int64_t)(intptr_t)head;
+  ```)
+
+;; Sum 1..50 = 1275
+(defn main []
+  (let [xs (make-list 100)]
+    (let [first50 (run-backtrack-depth xs 50)]
+      (println (bt-sum first50)))))
