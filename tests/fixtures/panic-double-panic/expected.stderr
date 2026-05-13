@@ -1,2 +1,3 @@
-panic: outer panic
+panic at
+outer panic
 double panic: aborting

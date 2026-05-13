@@ -291,9 +291,9 @@ run_happy() {
     fi
 
     if [ -f "$dir/input.stdin" ]; then
-        _run_timed "$fixture_timeout" "$exe" < "$dir/input.stdin" > "$actual_stdout" 2> "$actual_stderr"
+        _run_timed "$fixture_timeout" "$exe" < "$dir/input.stdin" > "$actual_stdout" 2>> "$actual_stderr"
     else
-        _run_timed "$fixture_timeout" "$exe" > "$actual_stdout" 2> "$actual_stderr"
+        _run_timed "$fixture_timeout" "$exe" > "$actual_stdout" 2>> "$actual_stderr"
     fi
     local rc=$?
     rm -f "$exe"

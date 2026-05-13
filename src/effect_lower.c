@@ -132,6 +132,13 @@ static Expr *perform_to_shift(Arena *a, SymbolTable *st, const PerformExpr *perf
     k_binding->is_global = false;
     k_binding->id = 0;
     k_binding->is_moved = false;
+    k_binding->is_exported = false;
+    k_binding->defining_module_name = NULL;
+    k_binding->c_export_name = NULL;
+    k_binding->no_unwind = false;
+    k_binding->closure_fn_binding = NULL;
+    k_binding->span = span;
+    k_binding->moved_at = span;
     
     /* Create the handler function that just calls k with a value */
     /* For now, use 0 as the value (this is a placeholder) */

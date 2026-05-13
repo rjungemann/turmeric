@@ -513,6 +513,10 @@ See [hkt-implementation-plan.md](hkt-implementation-plan.md) for the complete ro
 - [x] `do-m` macro added to `stdlib/macros.tur` (list-based approach, no quasiquote).
 - [x] Add `type-app` fixture (`tests/fixtures/type-app/`).
 - [x] Add `hkt-defrec-fix-with-body` fixture (placeholder for recursive type body parsing).
+- [ ] Support typeclass names as type constructors in `(type-app F A)` so `tests/fixtures/type-app/` passes.
+  - **Context:** `(type-app Functor option)` fails with "unknown type constructor 'Functor'" because `elab_type_app` only looks up struct-level type constructors, not typeclass names. The fixture declares `Functor` via `defclass`, then tries to partially apply it to `option`.
+  - **What to implement:** In `elab_type_app` (or wherever the `type-app` form is elaborated in `src/elab.c`), add a lookup against the typeclass environment (`typeclass_env_lookup_typeclass`) when the ordinary type-constructor lookup fails. A typeclass used as a type constructor should produce a `TY_STRUCT`-like opaque type node tagged with the typeclass identity so that `definstance` matching can later resolve it.
+  - **Acceptance:** `tests/fixtures/type-app/` passes; `tests/fixtures/hkt-type-app-kind/` continues to pass; codegen snapshot updated.
 
 #### H6 — Integration & polish ✅ DONE
 - [x] Write user-facing HKT guide: `docs/hkt-guide.md`.
@@ -617,6 +621,10 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Done: `tests/fixtures/errors/result-question-outside-fn/` — verifies top-level `(? ...)` is rejected (currently via the reserved-operator diagnostic).
 - [x] Add codegen snapshots for `ok`/`err` and `?` lowering.
   - Added expected.c files for `tests/fixtures/result-question-op/` and `tests/fixtures/result-question-simple/` fixtures.
+- [ ] Complete `?` operator lowering in elaborator so `tests/fixtures/result-question-op/` passes.
+  - **Context:** The elaborator currently reserves `?` and emits "? operator is not yet implemented (Phase R1)". The positive fixture `tests/fixtures/result-question-op/` expects the operator to actually work — it defines a `use-question` function that calls `(? (get-value b))` inside a result-returning function. The negative fixtures (`errors/result-question-op/`, `errors/result-question-outside-fn/`) already pass.
+  - **What to implement:** `elab_question` in `src/elab.c` should push the current function's return type onto a stack during `elab_defn`/`elab_fn`, then lower `(? expr)` to `(let [__q expr] (if (err? __q) (return (err (err-val __q))) (ok-val __q)))`. The return-type stack allows the outer-function return type check without re-parsing the signature.
+  - **Acceptance:** `tests/fixtures/result-question-op/` passes; `tests/fixtures/errors/result-question-op/` and `tests/fixtures/errors/result-question-outside-fn/` continue to pass; `expected.c` snapshot updated.
 
 ### Phase R2 remaining tasks (Panic Mechanism)
 - [x] Implement `(panic msg)` — lowers to `tur_panic(msg)`; return type is diverging `!`.
@@ -1140,6 +1148,11 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 ##### SCH-005 — Testing and validation
 - [x] Add fixture: `scheduler-multithread.tur` — 2 fibers on 2 threads.
   - Implemented: Creates 2-thread scheduler, spawns fibers that print thread IDs.
+- [ ] Fix `tests/fixtures/scheduler-multithread/` — currently fails because the fixture uses `(load "stdlib/fiber.tur")` and `(load "stdlib/scheduler_mt.tur")`, which are not implemented (compiler emits "unknown function or operator 'load'").
+  - **Context:** The fixture was written assuming a `(load ...)` file-inclusion form, but that form was never implemented. The compiler does not have a module loader; all stdlib is compiled into the runtime preamble emitted by `src/emit.c`.
+  - **Option A (preferred):** Rewrite the fixture to inline the required helpers directly (no `load`) and use only currently-available `fiber-*` and `scheduler-mt-*` builtins from the runtime preamble.
+  - **Option B:** Implement `(load path)` as a source-file inclusion form in `src/elab.c` (reads and parses the target file, elaborates it into the current module). This is the larger change and should be tracked as a separate task under Phase M (module system).
+  - **Acceptance:** `tests/fixtures/scheduler-multithread/` passes with either option; output shows two distinct thread IDs.
 - [x] Add fixture: `workstealing-balance.tur` — verify even distribution.
   - Implemented: `tests/fixtures/workstealing-balance/`. Inlines the work-stealing deque algorithm. Spawns 2 OS threads; one pops from its own deque, the other steals. Verifies all 8 items are processed (deterministic count). Has `requires.tsan` for ThreadSanitizer coverage. Includes `expected.c` codegen snapshot showing worker thread spawn pattern.
 - [x] Add fixture: `workstealing-steal.tur` — verify steal path is triggered.
