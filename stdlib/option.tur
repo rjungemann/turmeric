@@ -65,6 +65,34 @@
   return (int)opt->value;
   ```)
 
+;;; SINCE: Phase HKT §6
+;; Foldable instance for option.
+;;   foldl :: b -> (b -> a -> b) -> option a -> b
+;;     none    → init
+;;     some(x) → fn(init, x)
+;;   foldr :: (a -> b -> b) -> b -> option a -> b
+;;     none    → init
+;;     some(x) → fn(x, init)
+(defn __foldable_option_foldl [ta init fn] :int
+  ```c
+  struct { bool is_some; int64_t value; } *opt =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)ta;
+  if (!opt || !opt->is_some) return init;
+  return ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(init, opt->value);
+  ```)
+
+(defn __foldable_option_foldr [ta init fn] :int
+  ```c
+  struct { bool is_some; int64_t value; } *opt =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)ta;
+  if (!opt || !opt->is_some) return init;
+  return ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(opt->value, init);
+  ```)
+
+(definstance Foldable [option]
+  (foldl [ta init fn] (__foldable_option_foldl ta init fn))
+  (foldr [ta init fn] (__foldable_option_foldr ta init fn)))
+
 ;;; SINCE: Phase HKT H3
 ;; Functor instance for option — apply fn to the contained value if some,
 ;; return a none (NULL) option if the input is none.

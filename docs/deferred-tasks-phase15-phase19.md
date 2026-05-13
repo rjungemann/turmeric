@@ -1719,9 +1719,40 @@ paths once the CPS pass is working.
 - [x] `tests/fixtures/cloneable-rc/` — cloneable continuation capturing an `rc` value;
   each clone increments the refcount via `Clone [ptr<void>]`.
 - [x] `tests/fixtures/errors/cloneable-shift-outside-reset/` — negative fixture for TUR-E0016.
-- [ ] `tests/fixtures/errors/cloneable-non-clone-capture/` — negative fixture for TUR-E0014 (deferred: requires typeclass env in CPS pass).
+- [ ] `tests/fixtures/errors/cloneable-non-clone-capture/` — negative fixture for TUR-E0014 (deferred: requires typeclass env in CPS pass; see CPS-CL10).
 - [x] Add `expected.c` codegen snapshot for at least one of the above (e.g.
   `cloneable-multi-resume`) to lock in the lowered C output.
+
+#### CPS-CL10 — Thread TypeClassEnv into the CPS pass for Clone capture checking
+
+The `check_cloneable_capture` in `src/elab.c` (CPS-CL7) runs at elaboration time,
+before `cps_compute_live_at_shift` has populated `live_captures`.  As a result the
+check is effectively a no-op and `TUR-E0014` is never emitted.  The CPS pass
+(`src/cps.c`) needs access to `TypeClassEnv` so it can validate captures after
+liveness has been computed.
+
+- [ ] Update `cps_transform` signature in `src/cps.h` and `src/cps.c` to accept a
+  `TypeClassEnv *` (and a `DiagCtx *` / file/line info for error reporting):
+  ```c
+  Expr *cps_transform(Arena *a, Expr *program,
+                      TypeClassEnv *tc_env, DiagCtx *diag);
+  ```
+  Update all call sites in the compilation pipeline accordingly.
+- [ ] Implement `cps_check_cloneable_captures(Arena *a, Expr *program,
+  TypeClassEnv *tc_env, DiagCtx *diag)` in `src/cps.c`:
+  - Walk the elaborated program for every `EX_CLONEABLE_SHIFT` node.
+  - For each binding in `live_captures`, call
+    `typeclass_env_lookup_instance(tc_env, clone_tc, binding->type)`.
+  - If no `Clone` instance is found, emit `TUR_E0014_NOT_CLONE` via `diag_error`.
+  - Call this function from `cps_transform` after `cps_compute_live_at_shift`
+    has run (or as a separate post-liveness pass invoked from the pipeline).
+- [ ] Remove (or demote to `[-]`) the now-redundant early call to
+  `check_cloneable_capture` in `elab_cloneable_shift` in `src/elab.c`, since the
+  authoritative check now happens after live_captures are populated.
+- [ ] Add `tests/fixtures/errors/cloneable-non-clone-capture/` — negative fixture
+  for `TUR-E0014`: a `cloneable-shift` that captures a value whose type has no
+  `Clone` instance; verify the compiler emits `error[TUR-E0014]` and exits
+  non-zero.  (Unblocks the deferred entry in CPS-CL9 above.)
 
 ### Phase B3 prerequisites
 

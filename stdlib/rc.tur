@@ -47,6 +47,33 @@
 (definstance Functor [ptr<void>]
   (fmap [container fn] (__functor_rc_fmap container fn)))
 
+;;; SINCE: Phase HKT §6
+;; Foldable instance for rc<T>.
+;; An rc contains exactly one value, so:
+;;   foldl init fn (rc v) = fn(init, v)
+;;   foldr fn init (rc v) = fn(v, init)
+(defn __foldable_rc_foldl [ta init fn] :int
+  ```c
+  /* In v1, rc<T> is an RcControlBlock*.  tur_rc_ptr returns the
+   * pointer to the stored value (an int64_t in v1). */
+  void *rc_ptr = (void *)(intptr_t)ta;
+  if (!rc_ptr) return init;
+  int64_t value = *(int64_t *)tur_rc_ptr(rc_ptr);
+  return ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(init, value);
+  ```)
+
+(defn __foldable_rc_foldr [ta init fn] :int
+  ```c
+  void *rc_ptr = (void *)(intptr_t)ta;
+  if (!rc_ptr) return init;
+  int64_t value = *(int64_t *)tur_rc_ptr(rc_ptr);
+  return ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(value, init);
+  ```)
+
+(definstance Foldable [ptr<void>]
+  (foldl [ta init fn] (__foldable_rc_foldl ta init fn))
+  (foldr [ta init fn] (__foldable_rc_foldr ta init fn)))
+
 ;;; SINCE: Phase B1
 ;; Clone instance for rc<T> — shallow clone (refcount increment).
 ;;
