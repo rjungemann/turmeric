@@ -8456,6 +8456,9 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
             } else if ((kw->len == 4 && memcmp(kw->name, "void", 4) == 0) ||
                        (kw->len == 3 && memcmp(kw->name, "nil", 3) == 0)) {
                 return_type = TYPE_NIL;
+            } else if ((kw->len == 9 && memcmp(kw->name, "ptr<void>", 9) == 0) ||
+                       (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0)) {
+                return_type = TYPE_PTR_VOID;
             } else {
                 diag_emit(DIAG_ERROR, ret_form->span,
                           "unsupported return type in typeclass method");
@@ -10198,6 +10201,9 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
                 } else if ((kw->len == 4 && memcmp(kw->name, "void", 4) == 0) ||
                            (kw->len == 3 && memcmp(kw->name, "nil", 3) == 0)) {
                     return_type = TYPE_NIL;
+                } else if ((kw->len == 9 && memcmp(kw->name, "ptr<void>", 9) == 0) ||
+                           (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0)) {
+                    return_type = TYPE_PTR_VOID;
                 }
                 impl_body_start = 3;
             }

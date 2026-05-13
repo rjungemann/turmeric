@@ -1,0 +1,36 @@
+;; Test flat 2D array with row-major indexing.
+;; index(x, y) = y * width + x
+;; Used as the foundation for GridCtx in CA2.
+
+(defn flat-new [n] :int
+  ```c
+  return (int64_t)(intptr_t)calloc((size_t)n, sizeof(int64_t));
+  ```)
+
+(defn flat-get [arr x y width] :int
+  ```c
+  int64_t *a = (int64_t *)(intptr_t)arr;
+  return a[y * width + x];
+  ```)
+
+(defn flat-set [arr x y width val] :int
+  ```c
+  int64_t *a = (int64_t *)(intptr_t)arr;
+  a[y * width + x] = val;
+  return 0;
+  ```)
+
+(defn main [] :int
+  (let [w 4
+        h 3
+        arr (flat-new (* w h))]
+    (do
+      ;; Fill: value = y*10 + x
+      (flat-set arr 0 0 w 0)  (flat-set arr 1 0 w 1)  (flat-set arr 2 0 w 2)  (flat-set arr 3 0 w 3)
+      (flat-set arr 0 1 w 10) (flat-set arr 1 1 w 11) (flat-set arr 2 1 w 12) (flat-set arr 3 1 w 13)
+      (flat-set arr 0 2 w 20) (flat-set arr 1 2 w 21) (flat-set arr 2 2 w 22) (flat-set arr 3 2 w 23)
+      (println (flat-get arr 0 0 w))   ;; 0
+      (println (flat-get arr 3 0 w))   ;; 3
+      (println (flat-get arr 0 1 w))   ;; 10
+      (println (flat-get arr 2 2 w))   ;; 22
+      0)))

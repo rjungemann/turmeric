@@ -1,0 +1,259 @@
+;; Phase CA0: Zipper comonad — 1D list zipper with a cursor.
+;;
+;; A Zipper is (left_list, focus, right_list) where focus is the current element.
+;; The Comonad instance lets us apply a function to every position simultaneously,
+;; which is the key operation for 1D cellular automata.
+;;
+;; Representation in v1 (all values are int64_t):
+;;   A Zipper is a heap struct:
+;;     { int64_t *left;  size_t left_len;   -- elements to the left, nearest-first
+;;       int64_t focus;
+;;       int64_t *right; size_t right_len;  -- elements to the right, nearest-first
+;;     }
+;;
+;; Layout of the C struct (must match all inline C below):
+;;   struct tur_zipper {
+;;     int64_t *left;   size_t left_len;
+;;     int64_t  focus;
+;;     int64_t *right;  size_t right_len;
+;;   };
+
+;; ── Comonad typeclass (must be declared in the same file or loaded before use) ──
+;; NOTE: include typeclass.tur declarations if needed in user code.
+
+;; ── Constructor helpers ───────────────────────────────────────────────────────
+
+(defn zipper-new [left-arr left-len focus right-arr right-len] :int
+  ```c
+  struct tur_zipper {
+    int64_t *left;  size_t left_len;
+    int64_t  focus;
+    int64_t *right; size_t right_len;
+  };
+  struct tur_zipper *z = malloc(sizeof(struct tur_zipper));
+  z->left      = (int64_t *)(intptr_t)left_arr;
+  z->left_len  = (size_t)left_len;
+  z->focus     = focus;
+  z->right     = (int64_t *)(intptr_t)right_arr;
+  z->right_len = (size_t)right_len;
+  return (int64_t)(intptr_t)z;
+  ```)
+
+;; Build a Zipper from a flat C array at index idx.
+;; All elements outside [0, len) are treated as 0.
+(defn zipper-from-array [arr len idx] :int
+  ```c
+  #define TUR_ZIPPER_STRUCT struct { int64_t *left; size_t left_len; \
+                                     int64_t focus; \
+                                     int64_t *right; size_t right_len; }
+  int64_t *src = (int64_t *)(intptr_t)arr;
+  size_t n = (size_t)len;
+  size_t i = (size_t)idx;
+  if (i >= n) i = 0;
+
+  size_t ll = i;
+  size_t rl = n - i - 1;
+
+  int64_t *left  = ll ? malloc(ll * sizeof(int64_t)) : NULL;
+  int64_t *right = rl ? malloc(rl * sizeof(int64_t)) : NULL;
+
+  /* left: nearest-first (index i-1, i-2, ...) */
+  for (size_t k = 0; k < ll; k++) left[k] = src[i - 1 - k];
+  /* right: nearest-first (index i+1, i+2, ...) */
+  for (size_t k = 0; k < rl; k++) right[k] = src[i + 1 + k];
+
+  TUR_ZIPPER_STRUCT *z = malloc(sizeof(*z));
+  z->left      = left;
+  z->left_len  = ll;
+  z->focus     = src[i];
+  z->right     = right;
+  z->right_len = rl;
+  return (int64_t)(intptr_t)z;
+  ```)
+
+;; Get focused element
+(defn zipper-focus [z] :int
+  ```c
+  struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *p =
+      (void *)(intptr_t)z;
+  return p->focus;
+  ```)
+
+;; Total length of the zipper
+(defn zipper-len [z] :int
+  ```c
+  struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *p =
+      (void *)(intptr_t)z;
+  return (int64_t)(p->left_len + 1 + p->right_len);
+  ```)
+
+;; Get element at offset from focus (0 = focus, -1 = left neighbour, +1 = right neighbour)
+;; Returns def_val if out of bounds.
+(defn zipper-peek [z offset def-val] :int
+  ```c
+  struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *p =
+      (void *)(intptr_t)z;
+  if (offset == 0) return p->focus;
+  if (offset < 0) {
+    size_t k = (size_t)(-offset) - 1;
+    if (k < p->left_len) return p->left[k];
+    return def_val;
+  } else {
+    size_t k = (size_t)offset - 1;
+    if (k < p->right_len) return p->right[k];
+    return def_val;
+  }
+  ```)
+
+;; Move focus one step left; returns original if already at left edge.
+(defn zipper-left [z] :int
+  ```c
+  struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *src =
+      (void *)(intptr_t)z;
+  if (src->left_len == 0) return z;
+
+  size_t new_ll = src->left_len - 1;
+  size_t new_rl = src->right_len + 1;
+
+  struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *nz =
+      malloc(sizeof(*nz));
+  nz->focus    = src->left[0];
+  nz->left     = new_ll ? malloc(new_ll * sizeof(int64_t)) : NULL;
+  nz->left_len = new_ll;
+  if (new_ll) memcpy(nz->left, src->left + 1, new_ll * sizeof(int64_t));
+
+  nz->right = malloc(new_rl * sizeof(int64_t));
+  nz->right[0] = src->focus;
+  if (src->right_len) memcpy(nz->right + 1, src->right, src->right_len * sizeof(int64_t));
+  nz->right_len = new_rl;
+  return (int64_t)(intptr_t)nz;
+  ```)
+
+;; Move focus one step right; returns original if already at right edge.
+(defn zipper-right [z] :int
+  ```c
+  struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *src =
+      (void *)(intptr_t)z;
+  if (src->right_len == 0) return z;
+
+  size_t new_ll = src->left_len + 1;
+  size_t new_rl = src->right_len - 1;
+
+  struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *nz =
+      malloc(sizeof(*nz));
+  nz->focus    = src->right[0];
+  nz->right    = new_rl ? malloc(new_rl * sizeof(int64_t)) : NULL;
+  nz->right_len = new_rl;
+  if (new_rl) memcpy(nz->right, src->right + 1, new_rl * sizeof(int64_t));
+
+  nz->left = malloc(new_ll * sizeof(int64_t));
+  nz->left[0] = src->focus;
+  if (src->left_len) memcpy(nz->left + 1, src->left, src->left_len * sizeof(int64_t));
+  nz->left_len = new_ll;
+  return (int64_t)(intptr_t)nz;
+  ```)
+
+;; Flatten a Zipper back to a left-to-right flat array (returned as ptr<void>).
+;; Caller is responsible for interpreting the int64_t* pointer.
+(defn zipper-to-array [z] :int
+  ```c
+  struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } *p =
+      (void *)(intptr_t)z;
+  size_t total = p->left_len + 1 + p->right_len;
+  int64_t *out = malloc(total * sizeof(int64_t));
+  /* reconstruct left portion (nearest-first -> farthest is last) */
+  for (size_t k = 0; k < p->left_len; k++) out[k] = p->left[p->left_len - 1 - k];
+  out[p->left_len] = p->focus;
+  for (size_t k = 0; k < p->right_len; k++) out[p->left_len + 1 + k] = p->right[k];
+  return (int64_t)(intptr_t)out;
+  ```)
+
+;; ── Comonad instance for zipper ───────────────────────────────────────────────
+;;
+;; extract z = focus z
+;; extend f z = zipper where each position holds (f (z focused at that position))
+;; duplicate z = zipper of zippers
+
+(defclass Comonad [^w]
+  (extract   [wa]     :int)
+  (extend    [wa fn]  :int)
+  (duplicate [wa]     :int))
+
+(defn __zipper_extract [z] :int (zipper-focus z))
+
+;; extend f z: for each position i in z, compute f(z shifted to i).
+;; Returns a new Zipper of the same length.
+(defn __zipper_extend [z fn] :int
+  ```c
+  #define ZP struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; }
+  ZP *src = (ZP *)(intptr_t)z;
+  size_t total = src->left_len + 1 + src->right_len;
+  int64_t *results = malloc(total * sizeof(int64_t));
+
+  /* Walk all positions by shifting the zipper */
+  /* We need a fresh zipper at each position. */
+  /* Strategy: go to leftmost, then walk right collecting f(z_i). */
+
+  /* Helper: shift to leftmost */
+  ZP *cur = src;
+  while (cur->left_len > 0) {
+    ZP *nz = malloc(sizeof(*nz));
+    nz->focus = cur->left[0];
+    size_t nl = cur->left_len - 1;
+    nz->left = nl ? malloc(nl * sizeof(int64_t)) : NULL;
+    nz->left_len = nl;
+    if (nl) memcpy(nz->left, cur->left + 1, nl * sizeof(int64_t));
+    size_t nr = cur->right_len + 1;
+    nz->right = malloc(nr * sizeof(int64_t));
+    nz->right[0] = cur->focus;
+    if (cur->right_len) memcpy(nz->right + 1, cur->right, cur->right_len * sizeof(int64_t));
+    nz->right_len = nr;
+    cur = nz;
+  }
+
+  for (size_t i = 0; i < total; i++) {
+    results[i] = ((int64_t(*)(int64_t))(intptr_t)fn)((int64_t)(intptr_t)cur);
+    if (i + 1 < total) {
+      /* shift right */
+      ZP *nz = malloc(sizeof(*nz));
+      nz->focus = cur->right[0];
+      size_t nl = cur->left_len + 1;
+      nz->left = malloc(nl * sizeof(int64_t));
+      nz->left[0] = cur->focus;
+      if (cur->left_len) memcpy(nz->left + 1, cur->left, cur->left_len * sizeof(int64_t));
+      nz->left_len = nl;
+      size_t nr = cur->right_len - 1;
+      nz->right = nr ? malloc(nr * sizeof(int64_t)) : NULL;
+      nz->right_len = nr;
+      if (nr) memcpy(nz->right, cur->right + 1, nr * sizeof(int64_t));
+      cur = nz;
+    }
+  }
+
+  /* Build result zipper: focus at the original focus position */
+  size_t fi = src->left_len;  /* index of original focus in results array */
+  size_t new_ll = fi;
+  size_t new_rl = total - fi - 1;
+
+  ZP *out = malloc(sizeof(*out));
+  out->focus = results[fi];
+  out->left  = new_ll ? malloc(new_ll * sizeof(int64_t)) : NULL;
+  out->left_len = new_ll;
+  /* left: nearest-first */
+  for (size_t k = 0; k < new_ll; k++) out->left[k] = results[fi - 1 - k];
+  out->right = new_rl ? malloc(new_rl * sizeof(int64_t)) : NULL;
+  out->right_len = new_rl;
+  for (size_t k = 0; k < new_rl; k++) out->right[k] = results[fi + 1 + k];
+
+  free(results);
+  return (int64_t)(intptr_t)out;
+  ```)
+
+;; duplicate z = extend id z  (each position becomes a zipper focussed there)
+(defn __zipper_duplicate [z] :int
+  (__zipper_extend z (fn [zi] zi)))
+
+(definstance Comonad [zipper]
+  (extract   [wa]    (__zipper_extract wa))
+  (extend    [wa fn] (__zipper_extend wa fn))
+  (duplicate [wa]    (__zipper_duplicate wa)))

@@ -1,0 +1,170 @@
+;; Test Zipper Comonad: basic operations and 1D cellular automata step.
+
+;; ── Comonad typeclass ────────────────────────────────────────────────────────
+(defclass Comonad [^w]
+  (extract   [wa]     :int)
+  (extend    [wa fn]  :int)
+  (duplicate [wa]     :int))
+
+;; ── Zipper helpers ────────────────────────────────────────────────────────────
+;; Struct layout (shared across all inline C):
+;;   { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; }
+
+(defn zipper-from-array [arr len idx] :int
+  ```c
+  typedef struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } Zip;
+  int64_t *src = (int64_t *)(intptr_t)arr;
+  size_t n = (size_t)len, i = (size_t)idx;
+  if (i >= n) i = 0;
+  size_t ll = i, rl = n - i - 1;
+  Zip *z = malloc(sizeof(Zip));
+  z->left = ll ? malloc(ll * sizeof(int64_t)) : NULL; z->left_len = ll;
+  for (size_t k = 0; k < ll; k++) z->left[k] = src[i - 1 - k];
+  z->focus = src[i];
+  z->right = rl ? malloc(rl * sizeof(int64_t)) : NULL; z->right_len = rl;
+  for (size_t k = 0; k < rl; k++) z->right[k] = src[i + 1 + k];
+  return (int64_t)(intptr_t)z;
+  ```)
+
+(defn zipper-focus [z] :int
+  ```c
+  typedef struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } Zip;
+  return ((Zip *)(intptr_t)z)->focus;
+  ```)
+
+(defn zipper-len [z] :int
+  ```c
+  typedef struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } Zip;
+  Zip *p = (Zip *)(intptr_t)z;
+  return (int64_t)(p->left_len + 1 + p->right_len);
+  ```)
+
+(defn zipper-peek [z offset def-val] :int
+  ```c
+  typedef struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } Zip;
+  Zip *p = (Zip *)(intptr_t)z;
+  if (offset == 0) return p->focus;
+  if (offset < 0) { size_t k = (size_t)(-offset)-1; return k < p->left_len  ? p->left[k]  : def_val; }
+  size_t k = (size_t)offset - 1; return k < p->right_len ? p->right[k] : def_val;
+  ```)
+
+(defn zipper-to-array [z] :int
+  ```c
+  typedef struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } Zip;
+  Zip *p = (Zip *)(intptr_t)z;
+  size_t total = p->left_len + 1 + p->right_len;
+  int64_t *out = malloc(total * sizeof(int64_t));
+  for (size_t k = 0; k < p->left_len; k++) out[k] = p->left[p->left_len - 1 - k];
+  out[p->left_len] = p->focus;
+  for (size_t k = 0; k < p->right_len; k++) out[p->left_len + 1 + k] = p->right[k];
+  return (int64_t)(intptr_t)out;
+  ```)
+
+;; ── Comonad extend for zipper ────────────────────────────────────────────────
+
+(defn __zipper_extend [z fn] :int
+  ```c
+  typedef struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } Zip;
+  Zip *src = (Zip *)(intptr_t)z;
+  size_t total = src->left_len + 1 + src->right_len;
+  int64_t *results = malloc(total * sizeof(int64_t));
+  /* go to leftmost position */
+  Zip *cur = src;
+  while (cur->left_len > 0) {
+    Zip *nz = malloc(sizeof(Zip));
+    nz->focus = cur->left[0];
+    size_t nl = cur->left_len - 1; nz->left_len = nl;
+    nz->left = nl ? malloc(nl * sizeof(int64_t)) : NULL;
+    if (nl) memcpy(nz->left, cur->left + 1, nl * sizeof(int64_t));
+    size_t nr = cur->right_len + 1; nz->right_len = nr;
+    nz->right = malloc(nr * sizeof(int64_t));
+    nz->right[0] = cur->focus;
+    if (cur->right_len) memcpy(nz->right + 1, cur->right, cur->right_len * sizeof(int64_t));
+    cur = nz;
+  }
+  for (size_t i = 0; i < total; i++) {
+    results[i] = ((int64_t(*)(int64_t))(intptr_t)fn)((int64_t)(intptr_t)cur);
+    if (i + 1 < total) {
+      Zip *nz = malloc(sizeof(Zip));
+      nz->focus = cur->right[0];
+      size_t nl = cur->left_len + 1; nz->left_len = nl;
+      nz->left = malloc(nl * sizeof(int64_t));
+      nz->left[0] = cur->focus;
+      if (cur->left_len) memcpy(nz->left + 1, cur->left, cur->left_len * sizeof(int64_t));
+      size_t nr = cur->right_len - 1; nz->right_len = nr;
+      nz->right = nr ? malloc(nr * sizeof(int64_t)) : NULL;
+      if (nr) memcpy(nz->right, cur->right + 1, nr * sizeof(int64_t));
+      cur = nz;
+    }
+  }
+  size_t fi = src->left_len;
+  size_t new_ll = fi, new_rl = total - fi - 1;
+  Zip *out = malloc(sizeof(Zip));
+  out->focus = results[fi];
+  out->left = new_ll ? malloc(new_ll * sizeof(int64_t)) : NULL; out->left_len = new_ll;
+  for (size_t k = 0; k < new_ll; k++) out->left[k] = results[fi - 1 - k];
+  out->right = new_rl ? malloc(new_rl * sizeof(int64_t)) : NULL; out->right_len = new_rl;
+  for (size_t k = 0; k < new_rl; k++) out->right[k] = results[fi + 1 + k];
+  free(results);
+  return (int64_t)(intptr_t)out;
+  ```)
+
+(definstance Comonad [zipper]
+  (extract   [wa]    (zipper-focus wa))
+  (extend    [wa fn] (__zipper_extend wa fn))
+  (duplicate [wa]    (__zipper_extend wa (fn [zi] zi))))
+
+;; ── 1D CA rule ───────────────────────────────────────────────────────────────
+;; new[i] = (left + focus + right) mod 2 (XOR of 3 neighbours)
+
+(defn ca-rule [z] :int
+  ```c
+  typedef struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } Zip;
+  Zip *p = (Zip *)(intptr_t)z;
+  int64_t l = p->left_len  > 0 ? p->left[0]  : 0;
+  int64_t r = p->right_len > 0 ? p->right[0] : 0;
+  return (l + p->focus + r) & 1;
+  ```)
+
+;; ── Helpers ───────────────────────────────────────────────────────────────────
+
+(defn zap-array [n] :int
+  ```c
+  return (int64_t)(intptr_t)calloc((size_t)n, sizeof(int64_t));
+  ```)
+
+(defn zap-set [arr i val] :int
+  ```c
+  ((int64_t *)(intptr_t)arr)[i] = val;
+  return 0;
+  ```)
+
+(defn print-row [z] :int
+  ```c
+  typedef struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } Zip;
+  Zip *p = (Zip *)(intptr_t)z;
+  size_t total = p->left_len + 1 + p->right_len;
+  /* rebuild left-to-right */
+  for (size_t k = 0; k < p->left_len; k++) putchar(p->left[p->left_len - 1 - k] ? '#' : '.');
+  putchar(p->focus ? '#' : '.');
+  for (size_t k = 0; k < p->right_len; k++) putchar(p->right[k] ? '#' : '.');
+  putchar('\n');
+  (void)total;
+  return 0;
+  ```)
+
+(defn main [] :int
+  (let [n   9
+        arr (zap-array n)]
+    (do
+      (zap-set arr 4 1)
+      (let [z0 (zipper-from-array arr n 4)]
+        (do
+          (print-row z0)                         ;; ....#....
+          (let [z1 (.extend z0 ca-rule)]
+            (do
+              (print-row z1)                     ;; ...###...
+              (let [z2 (.extend z1 ca-rule)]
+                (do
+                  (print-row z2)                 ;; ..##.##..
+                  0)))))))))
