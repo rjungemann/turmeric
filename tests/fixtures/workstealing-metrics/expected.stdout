@@ -1,0 +1,5 @@
+push-count: 6
+pop-count: 2
+steal-count: 4
+queue-length: 0
+deque-empty: true
