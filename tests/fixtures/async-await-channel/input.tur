@@ -1,0 +1,187 @@
+;; Phase T21 AW-013: async-await-channel
+;;
+;; Demonstrates non-blocking channel operations (async-chan-try-recv) integrated
+;; with the fiber scheduler. A producer fiber sends values 1, 2, 3 to a buffered
+;; async channel. A consumer fiber polls with try-recv, yielding when the channel
+;; is empty. The cooperative fiber scheduler interleaves them.
+;;
+;; Channel cap=2 forces at least one yield:
+;;   - Producer sends 1, 2 (fills channel), yields on 3.
+;;   - Consumer receives 1, 2, yields when empty.
+;;   - Producer sends 3, done.
+;;   - Consumer receives 3, done.
+;;
+;; Expected output:
+;;   recv: 1
+;;   recv: 2
+;;   recv: 3
+;;   done
+
+;; ---- Channel global singleton (getter/setter via function-static) ----
+;; Call with store=1 to write ch; call with store=0 to read current value.
+(defn chan-slot [ch :ptr<void> store :int] :ptr<void>
+  ```c
+  static void *g = NULL;
+  if ((int64_t)store) g = ch;
+  return g;
+  ```)
+
+;; ---- AsyncChan construction/destruction ----
+(defn achan-new [cap :int] :ptr<void>
+  ```c
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t  not_full;
+      pthread_cond_t  not_empty;
+      int64_t        *buf;
+      int64_t         head;
+      int64_t         tail;
+      int64_t         count;
+      int64_t         cap;
+  } AchanBlock;
+  AchanBlock *ch = (AchanBlock *)malloc(sizeof(AchanBlock));
+  if (!ch) { fprintf(stderr, "achan-new: oom\n"); abort(); }
+  ch->buf = (int64_t *)malloc(sizeof(int64_t) * (size_t)cap);
+  if (!ch->buf) { free(ch); fprintf(stderr, "achan-new: buf oom\n"); abort(); }
+  pthread_mutex_init(&ch->lock, NULL);
+  pthread_cond_init(&ch->not_full, NULL);
+  pthread_cond_init(&ch->not_empty, NULL);
+  ch->head = 0; ch->tail = 0; ch->count = 0; ch->cap = (int64_t)cap;
+  return (void *)ch;
+  ```)
+
+(defn achan-free [ch :ptr<void>] :nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+  } AchanBlock;
+  AchanBlock *c = (AchanBlock *)ch;
+  pthread_mutex_destroy(&c->lock);
+  pthread_cond_destroy(&c->not_full);
+  pthread_cond_destroy(&c->not_empty);
+  free(c->buf);
+  free(c);
+  ```)
+
+;; ---- Fiber helpers (wrap built-in tur_fiber_block_* runtime) ----
+(defn fiber-new-fn [fn :ptr<void>] :ptr<void>
+  ```c
+  return (void *)tur_fiber_block_new((void(*)(void))fn, 0);
+  ```)
+
+(defn fiber-free [f :ptr<void>] :nil
+  ```c
+  tur_fiber_block_free((FiberBlock *)f);
+  ```)
+
+;; ---- Simple FIFO fiber scheduler (circular buffer, cap 16) ----
+(defn sched-new [] :ptr<void>
+  ```c
+  typedef struct { void *fibers[16]; int head; int tail; int count; } SchedQ;
+  SchedQ *q = (SchedQ *)calloc(1, sizeof(SchedQ));
+  if (!q) abort();
+  return (void *)q;
+  ```)
+
+(defn sched-push [q :ptr<void> f :ptr<void>] :nil
+  ```c
+  typedef struct { void *fibers[16]; int head; int tail; int count; } SchedQ;
+  SchedQ *sq = (SchedQ *)q;
+  if (sq->count >= 16) { fprintf(stderr, "sched: full\n"); abort(); }
+  sq->fibers[sq->tail] = f;
+  sq->tail = (sq->tail + 1) % 16;
+  sq->count++;
+  ```)
+
+(defn sched-free [q :ptr<void>] :nil
+  ```c
+  free(q);
+  ```)
+
+;; Run scheduler until all fibers are done.
+(defn sched-run [q :ptr<void>] :nil
+  ```c
+  typedef struct { void *fibers[16]; int head; int tail; int count; } SchedQ;
+  SchedQ *sq = (SchedQ *)q;
+  while (sq->count > 0) {
+      void *f = sq->fibers[sq->head];
+      sq->head = (sq->head + 1) % 16;
+      sq->count--;
+      tur_fiber_block_resume((FiberBlock *)f, 0);
+      if (!((FiberBlock *)f)->done) {
+          sq->fibers[sq->tail] = f;
+          sq->tail = (sq->tail + 1) % 16;
+          sq->count++;
+      } else {
+          tur_fiber_block_free((FiberBlock *)f);
+      }
+  }
+  ```)
+
+;; ---- Producer fiber: sends 1, 2, 3 to global channel ----
+;; Yields if the channel is full (non-blocking try-send with backpressure).
+(defn producer [] :nil
+  ```c
+  void *ch = chan_slot(NULL, 0);
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+  } AchanBlock;
+  int64_t vals[3] = {1, 2, 3};
+  for (int i = 0; i < 3; i++) {
+      AchanBlock *c = (AchanBlock *)ch;
+      while (1) {
+          pthread_mutex_lock(&c->lock);
+          if (c->count < c->cap) {
+              c->buf[c->tail] = vals[i];
+              c->tail = (c->tail + 1) % c->cap;
+              c->count++;
+              pthread_mutex_unlock(&c->lock);
+              break;
+          }
+          pthread_mutex_unlock(&c->lock);
+          tur_fiber_block_yield(0);  /* channel full: yield to scheduler */
+      }
+  }
+  ```)
+
+;; ---- Consumer fiber: receives 3 items from global channel ----
+;; Yields if the channel is empty (non-blocking try-recv with backpressure).
+(defn consumer [] :nil
+  ```c
+  void *ch = chan_slot(NULL, 0);
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+  } AchanBlock;
+  int received = 0;
+  while (received < 3) {
+      AchanBlock *c = (AchanBlock *)ch;
+      pthread_mutex_lock(&c->lock);
+      if (c->count > 0) {
+          int64_t v = c->buf[c->head];
+          c->head = (c->head + 1) % c->cap;
+          c->count--;
+          pthread_mutex_unlock(&c->lock);
+          printf("recv: %lld\n", (long long)v);
+          received++;
+      } else {
+          pthread_mutex_unlock(&c->lock);
+          tur_fiber_block_yield(0);  /* channel empty: yield to scheduler */
+      }
+  }
+  ```)
+
+;; ---- Main: create channel, schedule fibers, run to completion ----
+(defn main [] :int
+  (let [ch (achan-new 2)]           ;; buffered channel, cap=2
+    (chan-slot ch 1)                  ;; store channel in global singleton
+    (let [q (sched-new)]
+      (sched-push q (fiber-new-fn producer))
+      (sched-push q (fiber-new-fn consumer))
+      (sched-run q)
+      (sched-free q))
+    (achan-free ch)
+    (println "done")
+    0))

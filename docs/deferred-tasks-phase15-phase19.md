@@ -985,8 +985,8 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Implemented: Fixture exists and tests error handling. Uses `promise-fail` and `promise-fulfill` from `stdlib/future.tur`.
 - [x] Add `tests/fixtures/async-cancel.tur` — future cancellation.
   - Implemented: Fixture exists and tests `future-cancel` and `future-cancelled?` for pthread-based `FutureCell`. Note: Uses inline C with `FutureCell` struct. Build may fail due to pre-existing `-Wint-conversion` warnings.
-- [ ] Add `tests/fixtures/async-await-channel.tur`.
-  - Deferred: Requires non-blocking channel operations integrated with fibers.
+- [x] Add `tests/fixtures/async-await-channel.tur`.
+  - Implemented: Fixture uses a fiber-based cooperative scheduler with `async-chan-try-recv` + `tur_fiber_block_yield`. A producer fiber sends 1, 2, 3 to a buffered channel (cap=2); a consumer fiber polls with non-blocking try-recv, yielding when empty. Channel global shared via a function-static getter/setter (`chan-slot`). Includes `expected.c` snapshot and `expected.stdout`.
 - [x] Add codegen snapshots for `async`/`await` lowering.
   - Implemented: All async/await fixtures include `expected.c` snapshots showing `tur_async_fiber` and `tur_await_future` emission patterns.
 
