@@ -1,0 +1,248 @@
+;; Signal Processing with Arrows - Tutorial Step 3: DSP Primitives
+;; 
+;; This example demonstrates digital signal processing primitives
+;; like oscillators, filters, and effects.
+
+(import stdlib/signal/core.tur)
+(import stdlib/signal/dsp.tur)
+
+;; =============================================================================
+;; Step 1: Basic Signal Sources (Oscillators)
+;; ==============================================================================
+
+(defn example-oscillators []
+  : ()
+  (println "\nBasic Oscillators:")
+  (println "==================")
+  
+  (let [;; Sine wave at 440 Hz (A4 note)
+        sine-440 (sine 440.0 0.0)
+        
+        ;; Square wave at 220 Hz (A3 note)
+        square-220 (square 220.0 0.5)
+        
+        ;; Sawtooth wave at 110 Hz (A2 note)
+        sawtooth-110 (sawtooth 110.0)
+        
+        ;; Triangle wave at 55 Hz (A1 note)
+        triangle-55 (triangle 55.0)
+        
+        ;; Dummy input signal (ignored by these oscillators)
+        dummy-sig (constant ())]
+    
+    (println "Sine 440 Hz:")
+    (println "  t=0.0: " ((sine-440 dummy-sig) 0.0))
+    (println "  t=0.001: " ((sine-440 dummy-sig) 0.001))
+    (println "  t=0.002: " ((sine-440 dummy-sig) 0.002))
+    
+    (println "\nSquare 220 Hz:")
+    (println "  t=0.0: " ((square-220 dummy-sig) 0.0))
+    (println "  t=0.001: " ((square-220 dummy-sig) 0.001))
+    (println "  t=0.002: " ((square-220 dummy-sig) 0.002))
+    
+    (println "\nSawtooth 110 Hz:")
+    (println "  t=0.0: " ((sawtooth-110 dummy-sig) 0.0))
+    (println "  t=0.005: " ((sawtooth-110 dummy-sig) 0.005))
+    
+    (println "\nTriangle 55 Hz:")
+    (println "  t=0.0: " ((triangle-55 dummy-sig) 0.0))
+    (println "  t=0.01: " ((triangle-55 dummy-sig) 0.01))
+    
+    (println "\nOscillators example complete!"))))
+
+;; =============================================================================
+;; Step 2: Basic Signal Processors
+;; ==============================================================================
+
+(defn example-processors []
+  : ()
+  (println "\nBasic Signal Processors:")
+  (println "=========================")
+  
+  (let [;; Input signal: sine wave
+        sine-440 (sine 440.0 0.0)
+        dummy-sig (constant ())
+        input (sine-440 dummy-sig)
+        
+        ;; Gain (amplitude scaling)
+        gain-0.5 (gain 0.5)
+        gained (gain-0.5 input)
+        
+        ;; Offset
+        offset-0.5 (offset 0.5)
+        offsetted (offset-0.5 input)
+        
+        ;; Invert
+        inverted (invert input)
+        
+        ;; Absolute value
+        abs-sig ((abs-sf) input)]
+    
+    (let [t 0.001]
+      (println "Input at t=" t ": " (input t))
+      (println "Gain 0.5 at t=" t ": " (gained t))
+      (println "Offset 0.5 at t=" t ": " (offsetted t))
+      (println "Inverted at t=" t ": " (inverted t))
+      (println "Absolute at t=" t ": " (abs-sig t))
+      
+      (println "\nProcessors example complete!")))))
+
+;; =============================================================================
+;; Step 3: Mixing and Combining Signals
+;; ==============================================================================
+
+(defn example-mixing []
+  : ()
+  (println "\nMixing and Combining Signals:")
+  (println "==============================")
+  
+  (let [;; Create two oscillator signals
+        sine-440 (sine 440.0 0.0)
+        sine-660 (sine 660.0 0.0)  ;; E5 note (perfect fifth)
+        dummy-sig (constant ())
+        
+        sig1 (sine-440 dummy-sig)
+        sig2 (sine-660 dummy-sig)
+        
+        ;; Add signals together
+        adder (add)
+        sum-sig (adder (pair-signals sig1 sig2))
+        
+        ;; Mix with ratio 0.3 (30% sig1, 70% sig2)
+        mixer (mix 0.3)
+        mixed-sig (mixer (pair-signals sig1 sig2))
+        
+        ;; Multiply signals
+        multiplier (multiply)
+        product-sig (multiplier (pair-signals sig1 sig2))]
+    
+    (let [t 0.001]
+      (println "Sig1 (440 Hz) at t=" t ": " (sig1 t))
+      (println "Sig2 (660 Hz) at t=" t ": " (sig2 t))
+      (println "Sum at t=" t ": " (sum-sig t))
+      (println "Mixed (30/70) at t=" t ": " (mixed-sig t))
+      (println "Product at t=" t ": " (product-sig t))
+      
+      (println "\nMixing example complete!")))))
+
+;; =============================================================================
+;; Step 4: Filters
+;; ==============================================================================
+
+(defn example-filters []
+  : ()
+  (println "\nFilters:")
+  (println "========")
+  
+  (let [;; Create a signal with a step change
+        step-sig (fn [t] (if (< t 0.001) 0.0 1.0))
+        
+        ;; Low-pass filter (smoothing)
+        lp-0.1 (low-pass 0.1)
+        lp-out (lp-0.1 step-sig)
+        
+        lp-0.5 (low-pass 0.5)
+        lp-out-0.5 (lp-0.5 step-sig)
+        
+        lp-0.9 (low-pass 0.9)
+        lp-out-0.9 (lp-0.9 step-sig)
+        
+        ;; High-pass filter
+        hp-0.1 (high-pass 0.1)
+        hp-out (hp-0.1 step-sig)]
+    
+    (let [t1 0.0
+          t2 0.002
+          t3 0.01]
+      (println "Input step signal:")
+      (println "  t=" t1 ": " (step-sig t1))
+      (println "  t=" t2 ": " (step-sig t2))
+      (println "  t=" t3 ": " (step-sig t3))
+      
+      (println "\nLow-pass (alpha=0.1):")
+      (println "  t=" t1 ": " (lp-out t1))
+      (println "  t=" t2 ": " (lp-out t2))
+      (println "  t=" t3 ": " (lp-out t3))
+      
+      (println "\nLow-pass (alpha=0.5):")
+      (println "  t=" t1 ": " (lp-out-0.5 t1))
+      (println "  t=" t2 ": " (lp-out-0.5 t2))
+      (println "  t=" t3 ": " (lp-out-0.5 t3))
+      
+      (println "\nLow-pass (alpha=0.9):")
+      (println "  t=" t1 ": " (lp-out-0.9 t1))
+      (println "  t=" t2 ": " (lp-out-0.9 t2))
+      (println "  t=" t3 ": " (lp-out-0.9 t3))
+      
+      (println "\nHigh-pass (alpha=0.1):")
+      (println "  t=" t1 ": " (hp-out t1))
+      (println "  t=" t2 ": " (hp-out t2))
+      (println "  t=" t3 ": " (hp-out t3))
+      
+      (println "\nFilters example complete!")))))
+
+;; =============================================================================
+;; Step 5: Building a Signal Processing Chain
+;; ==============================================================================
+
+(defn example-chain []
+  : ()
+  (println "\nBuilding a Signal Processing Chain:")
+  (println "====================================")
+  
+  (let [;; Input: sine oscillator
+        sine-440 (sine 440.0 0.0)
+        dummy-sig (constant ())
+        input (sine-440 dummy-sig)
+        
+        ;; Processing chain:
+        ;; 1. Apply gain of 0.5
+        step1 (gain 0.5)
+        
+        ;; 2. Apply low-pass filter
+        step2 (low-pass 0.1)
+        
+        ;; 3. Add a DC offset
+        step3 (offset 0.1)
+        
+        ;; 4. Clip to range [-0.8, 0.8]
+        step4 (clip -0.8 0.8)
+        
+        ;; Compose the chain
+        chain (>>> (>>> (>>> step1 step2) step3) step4)
+        
+        ;; Apply to input
+        output (chain input)]
+    
+    (let [t1 0.0
+          t2 0.001
+          t3 0.002]
+      (println "Input signal:")
+      (println "  t=" t1 ": " (input t1))
+      (println "  t=" t2 ": " (input t2))
+      (println "  t=" t3 ": " (input t3))
+      
+      (println "\nOutput after chain:")
+      (println "  t=" t1 ": " (output t1))
+      (println "  t=" t2 ": " (output t2))
+      (println "  t=" t3 ": " (output t3))
+      
+      (println "\nChain example complete!")))))
+
+;; =============================================================================
+;; Main Entry Point
+;; =============================================================================
+
+(defn main []
+  : int
+  (println "Signal Processing with Arrows - Step 3: DSP Primitives")
+  (println "============================================================")
+  
+  (example-oscillators)
+  (example-processors)
+  (example-mixing)
+  (example-filters)
+  (example-chain)
+  
+  (println "\nAll Step 3 examples completed successfully!")
+  0)

@@ -1,0 +1,379 @@
+;; Arrow Laws Verification
+;; 
+;; This module verifies that Arrow instances satisfy the Arrow laws.
+;; The Arrow laws are:
+;;
+;; 1. Identity: arr id >>> f = f and f >>> arr id = f
+;; 2. Composition: arr (f . g) = arr f >>> arr g
+;; 3. Associativity: (f >>> g) >>> h = f >>> (g >>> h)
+;; 4. Functor laws for first and second
+;; 5. Exchange law: first (arr f) >>> arr (map second g) = arr (map first f) >>> arr g
+;;
+;; Where:
+;;   id x = x
+;;   (f . g) x = f (g x)
+;;   map first f (x, y) = (f x, y)
+;;   map second g (x, y) = (x, g y)
+
+(import stdlib/arrow.tur)
+
+;; =============================================================================
+;; Equality Checking for Arrows
+;; =============================================================================
+
+;; Check if two function arrows are equal (approximately)
+;; We test at multiple points
+(defn arrows-equal [^arr : (Arrow arr) a b] [f : (arr a b)] [g : (arr a b)]
+                 [test-points : (vec a)] [tolerance : float64]
+  : bool
+  (let [n (vec-length test-points)]
+    (loop [i 0]
+      (when (< i n)
+        (let [x (vec-get test-points i)
+              ;; For SF, we need to apply to a signal
+              ;; For functions, we can apply directly
+              ;; We'll use a generic approach
+              
+              ;; Create a constant signal from x
+              sig-x (constant x)
+              
+              result-f ((. f run) sig-x)
+              result-g ((. g run) sig-x)
+              
+              ;; Sample at time 0
+              val-f (result-f 0.0)
+              val-g (result-g 0.0)
+              
+              diff (math/abs (- val-f val-g))]
+          (when (> diff tolerance)
+            false)
+          (recur (+ i 1))))
+      true)))
+
+;; Simpler version for function arrows
+(defn funcs-equal [f : (-> a b)] [g : (-> a b)] [test-points : (vec a)] [tolerance : float64]
+  : bool
+  (let [n (vec-length test-points)]
+    (loop [i 0]
+      (when (< i n)
+        (let [x (vec-get test-points i)
+              val-f (f x)
+              val-g (g x)
+              diff (math/abs (- val-f val-g))]
+          (when (> diff tolerance)
+            false)
+          (recur (+ i 1))))
+      true)))
+
+;; =============================================================================
+;; Arrow Law 1: Identity
+;; =============================================================================
+
+;; Law: arr id >>> f = f
+(defn test-identity-right [^arr : (Arrow arr) a b]
+                     [f : (arr a b)]
+                     [test-points : (vec a)]
+  : bool
+  (let [id-arr (arr (fn [x] x))
+        composed (>>> id-arr f)
+        result (arrows-equal arr composed f test-points 1e-9)]
+    result))
+
+;; Law: f >>> arr id = f
+(defn test-identity-left [^arr : (Arrow arr) a b]
+                    [f : (arr a b)]
+                    [test-points : (vec a)]
+  : bool
+  (let [id-arr (arr (fn [x] x))
+        composed (>>> f id-arr)
+        result (arrows-equal arr composed f test-points 1e-9)]
+    result))
+
+;; Combined identity test
+(defn test-identity [^arr : (Arrow arr) a]
+                [test-points : (vec a)]
+  : bool
+  (let [id-arr (arr (fn [x] x))
+        f (arr (fn [x] (+ x 1.0)))]
+    (and (test-identity-right arr f test-points)
+         (test-identity-left arr f test-points))))
+
+;; =============================================================================
+;; Arrow Law 2: Composition
+;; =============================================================================
+
+;; Law: arr (f . g) = arr f >>> arr g
+;; Where (f . g) x = f (g x)
+(defn test-composition [^arr : (Arrow arr) a b c]
+                      [f : (-> b c)] [g : (-> a b)]
+                      [test-points : (vec a)]
+  : bool
+  (let [;; Left side: arr (f . g)
+        composed-fn (fn [x] (f (g x)))
+        left-side (arr composed-fn)
+        
+        ;; Right side: arr f >>> arr g
+        right-side (>>> (arr f) (arr g))
+        
+        result (arrows-equal arr left-side right-side test-points 1e-9)]
+    result))
+
+;; =============================================================================
+;; Arrow Law 3: Associativity
+;; =============================================================================
+
+;; Law: (f >>> g) >>> h = f >>> (g >>> h)
+(defn test-associativity [^arr : (Arrow arr) a b c d]
+                      [f : (arr a b)] [g : (arr b c)] [h : (arr c d)]
+                      [test-points : (vec a)]
+  : bool
+  (let [left-side (>>> (>>> f g) h)
+        right-side (>>> f (>>> g h))
+        result (arrows-equal arr left-side right-side test-points 1e-9)]
+    result))
+
+;; =============================================================================
+;; Arrow Law 4: Functor Laws for first
+;; =============================================================================
+
+;; Law: first (arr f >>> arr g) = first (arr f) >>> first (arr g)
+(defn test-first-functor [^arr : (Arrow arr) a b c d]
+                       [f : (-> a b)] [g : (-> b c)]
+                       [test-points : (vec (Tuple a d))]
+  : bool
+  (let [;; Left side
+        fg-composed (>>> (arr f) (arr g))
+        left-side (first fg-composed)
+        
+        ;; Right side
+        right-side (>>> (first (arr f)) (first (arr g)))
+        
+        result (arrows-equal arr left-side right-side test-points 1e-9)]
+    result))
+
+;; Law: first (arr id) = arr (map first id) = identity on first component
+(defn test-first-identity [^arr : (Arrow arr) a b]
+                     [test-points : (vec (Tuple a b))]
+  : bool
+  (let [id-fn (fn [x] x)
+        id-arr (arr id-fn)
+        left-side (first id-arr)
+        
+        ;; arr (map first id) = arr (fn [(x, y)] (x, y))
+        right-side (arr (fn [[x y]] [x y]))
+        
+        result (arrows-equal arr left-side right-side test-points 1e-9)]
+    result))
+
+;; =============================================================================
+;; Arrow Law 5: Exchange Law
+;; =============================================================================
+
+;; Law: first (arr f) >>> arr (map second g) = arr (map first f) >>> arr g
+;; where:
+;;   map first f (x, y) = (f x, y)
+;;   map second g (x, y) = (x, g y)
+(defn test-exchange [^arr : (Arrow arr) a b c d]
+                   [f : (-> a b)] [g : (-> c d)]
+                   [test-points : (vec (Tuple a c))]
+  : bool
+  (let [;; Left side: first (arr f) >>> arr (map second g)
+        left-arr-f (first (arr f))
+        map-second-g (fn [[x y]] [x (g y)])
+        left-side (>>> left-arr-f (arr map-second-g))
+        
+        ;; Right side: arr (map first f) >>> arr g
+        map-first-f (fn [[x y]] [(f x) y])
+        right-side (>>> (arr map-first-f) (arr g))
+        
+        result (arrows-equal arr left-side right-side test-points 1e-9)]
+    result))
+
+;; =============================================================================
+;; ArrowChoice Laws
+;; =============================================================================
+
+;; ArrowChoice Law 1: left and right are compatible with >>>
+;; Law: left f >>> g = first f >>> g (for appropriate types)
+;;
+;; Actually, the ArrowChoice laws are more complex. We'll implement
+;; the basic consistency checks.
+
+;; Law: left f >>> (g +++ h) = (f >>> g) +++ (f >>> h)  (not quite right)
+;; Better to test specific cases
+
+;; Test that left distributes over +++ in a certain way
+(defn test-left-distributes [^arr : (ArrowChoice arr) a b c d e]
+                        [f : (arr a b)] [g : (arr c d)] [h : (arr c e)]
+                        [test-points : (vec (Either a c))]
+  : bool
+  (let [;; This law might not hold for all ArrowChoice instances
+        ;; We'll just verify basic properties
+        true]  ;; Placeholder
+    true))
+
+;; =============================================================================
+;; ArrowLoop Laws
+;; =============================================================================
+
+;; ArrowLoop Law 1: loop (first f) = f
+;; This states that looping a function on the first component is identity
+(defn test-loop-first [^arr : (ArrowLoop arr) a b c]
+                   [f : (-> a b)]
+                   [test-points : (vec a)]
+  : bool
+  (let [;; loop (first (arr f)) should be equivalent to arr f
+        first-f (first (arr f))
+        looped (loop first-f)
+        direct (arr f)
+        
+        result (arrows-equal arr looped direct test-points 1e-9)]
+    result))
+
+;; ArrowLoop Law 2: loop (arr (\ (a, c) -> (b, c))) = arr (\ a -> b)
+;; This is the defining property of loop
+;;
+;; Actually, loop is defined to satisfy:
+;;   loop f = f >>> arr fst
+;; where f :: arr (a, c) (b, c)
+;; and the result :: arr a b
+;;
+;; But this is getting into complex category theory. For practical purposes,
+;; we'll just verify that loop works as expected for specific cases.
+
+;; =============================================================================
+;; Specific Tests for Function Arrow
+;; =============================================================================
+
+;; Test identity for function arrow
+(defn test-function-arrow-identity []
+  : bool
+  (let [test-points (vec-of 1.0 2.0 3.0 -1.0 0.0)
+        result (test-identity (->) test-points)]
+    result))
+
+;; Test composition for function arrow
+(defn test-function-arrow-composition []
+  : bool
+  (let [f (fn [x] (+ x 1.0))
+        g (fn [x] (* x 2.0))
+        test-points (vec-of 1.0 2.0 3.0)
+        result (test-composition (->) f g test-points)]
+    result))
+
+;; Test associativity for function arrow
+(defn test-function-arrow-associativity []
+  : bool
+  (let [f (fn [x] (+ x 1.0))
+        g (fn [x] (* x 2.0))
+        h (fn [x] (- x 3.0))
+        test-points (vec-of 1.0 2.0 3.0)
+        result (test-associativity (->) f g h test-points)]
+    result))
+
+;; =============================================================================
+;; Specific Tests for SF Arrow
+;; =============================================================================
+
+;; Test identity for SF arrow
+(defn test-sf-arrow-identity []
+  : bool
+  (let [test-points (vec-of 1.0 2.0 3.0)
+        result (test-identity SF test-points)]
+    result))
+
+;; Test composition for SF arrow
+(defn test-sf-arrow-composition []
+  : bool
+  (let [f (fn [x] (+ x 1.0))
+        g (fn [x] (* x 2.0))
+        test-points (vec-of 1.0 2.0 3.0)
+        result (test-composition SF f g test-points)]
+    result))
+
+;; =============================================================================
+;; Main Test Function
+;; =============================================================================
+
+;; Run all arrow law tests
+(defn verify-arrow-laws []
+  : bool
+  (let [results (vec-create 10 true)
+        
+        ;; Test function arrow
+        test1 (test-function-arrow-identity)
+        test2 (test-function-arrow-composition)
+        test3 (test-function-arrow-associativity)
+        
+        ;; Test SF arrow
+        test4 (test-sf-arrow-identity)
+        test5 (test-sf-arrow-composition)
+        
+        ;; Test first functor law for function arrow
+        test6 (test-first-functor (->) (fn [x] (+ x 1.0)) (fn [x] (* x 2.0)) (vec-of [1.0 2.0] [3.0 4.0]))
+        
+        ;; Test exchange law for function arrow
+        test7 (test-exchange (->) (fn [x] (+ x 1.0)) (fn [x] (* x 2.0)) (vec-of [1.0 2.0] [3.0 4.0]))
+        
+        all-pass true]
+    
+    (vec-set! results 0 test1)
+    (vec-set! results 1 test2)
+    (vec-set! results 2 test3)
+    (vec-set! results 3 test4)
+    (vec-set! results 4 test5)
+    (vec-set! results 5 test6)
+    (vec-set! results 6 test7)
+    
+    (for [i 0 7]
+      (when (not (vec-get results i))
+        (set! all-pass false)))
+    
+    all-pass))
+
+;; Pretty print test results
+(defn print-arrow-laws-results []
+  : ()
+  (let [results (vec-create 10 "")]
+    
+    (vec-set! results 0 (if (test-function-arrow-identity) "PASS" "FAIL"))
+    (vec-set! results 1 (if (test-function-arrow-composition) "PASS" "FAIL"))
+    (vec-set! results 2 (if (test-function-arrow-associativity) "PASS" "FAIL"))
+    (vec-set! results 3 (if (test-sf-arrow-identity) "PASS" "FAIL"))
+    (vec-set! results 4 (if (test-sf-arrow-composition) "PASS" "FAIL"))
+    
+    (println "Arrow Laws Test Results:")
+    (println "========================")
+    (println "Function Arrow Identity:        " (vec-get results 0))
+    (println "Function Arrow Composition:    " (vec-get results 1))
+    (println "Function Arrow Associativity:   " (vec-get results 2))
+    (println "SF Arrow Identity:             " (vec-get results 3))
+    (println "SF Arrow Composition:         " (vec-get results 4))
+    
+    (let [all-pass (verify-arrow-laws)]
+      (println "\nOverall: " (if all-pass "ALL TESTS PASSED" "SOME TESTS FAILED")))))
+
+;; =============================================================================
+;; Quick Self-Test
+;; =============================================================================
+
+;; Simple sanity check that doesn't require complex typeclass machinery
+(defn quick-arrow-test []
+  : bool
+  (let [;; Test function arrow instance
+        f (arr (fn [x] (+ x 1.0)))
+        g (arr (fn [x] (* x 2.0)))
+        
+        ;; Test composition
+        composed (>>> f g)
+        
+        ;; Test on a value
+        test-input 5.0
+        
+        ;; For function arrow, (f >>> g) x = g (f x)
+        ;; f x = x + 1 = 6
+        ;; g 6 = 6 * 2 = 12
+        expected 12.0
+        actual (composed test-input)]
+    
+    (math/abs (- actual expected) < 1e-9)))

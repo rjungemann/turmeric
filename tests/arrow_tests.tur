@@ -1,0 +1,351 @@
+;; Arrow Tests
+;; 
+;; Test suite for Arrow typeclass implementations and signal processing.
+
+(import stdlib/arrow.tur)
+(import stdlib/arrow_laws.tur)
+(import stdlib/signal/core.tur)
+(import stdlib/signal/dsp.tur)
+(import stdlib/signal/envelope.tur)
+
+;; =============================================================================
+;; Basic Arrow Tests
+;; =============================================================================
+
+;; Test that Arrow instance for functions works
+(defn test-arrow-function-basics []
+  : bool
+  (let [;; Create some simple arrows (functions)
+        f (arr (fn [x] (+ x 1.0)))
+        g (arr (fn [x] (* x 2.0)))
+        
+        ;; Test arr
+        test-arr (arr (fn [x] (+ x 10.0)))
+        
+        ;; Test >>>
+        composed (>>> f g)
+        
+        ;; Test first
+        first-f (first f)
+        
+        ;; Test second
+        second-f (second f)]
+    
+    ;; Test arr
+    (and (= (test-arr 5.0) 15.0)
+         
+         ;; Test >>>: (f >>> g) x = g (f x) = g (x + 1) = 2*(x + 1)
+         (= (composed 5.0) 12.0)
+         
+         ;; Test first: first f (x, y) = (f x, y) = (x + 1, y)
+         (= (first-f [5.0 10.0]) [6.0 10.0])
+         
+         ;; Test second: second f (x, y) = (x, f y) = (x, y + 1)
+         (= (second-f [5.0 10.0]) [5.0 11.0]))))
+
+;; Test ArrowChoice for functions
+(defn test-arrow-choice-function []
+  : bool
+  (let [f (arr (fn [x] (+ x 1.0)))
+        
+        ;; Test left
+        left-f (left f)
+        
+        ;; Test right
+        right-f (right f)
+        
+        ;; Test +++
+        g (arr (fn [x] (* x 2.0)))
+        plus-f (+++ f g)
+        
+        ;; Test |||
+        or-f (||| f g)]
+    
+    (and ;; left f (Left a) = Left (f a)
+         (= (left-f (Left 5.0)) (Left 6.0))
+         ;; left f (Right c) = Right c
+         (= (left-f (Right 5.0)) (Right 5.0))
+         
+         ;; right f (Left c) = Left c
+         (= (right-f (Left 5.0)) (Left 5.0))
+         ;; right f (Right a) = Right (f a)
+         (= (right-f (Right 5.0)) (Right 6.0))
+         
+         ;; (f +++ g) (Left a) = Left (f a)
+         (= (plus-f (Left 5.0)) (Left 6.0))
+         ;; (f +++ g) (Right c) = Right (g c)
+         (= (plus-f (Right 5.0)) (Right 10.0))
+         
+         ;; (f ||| g) (Left a) = Left (f a)
+         (= (or-f (Left 5.0)) (Left 6.0))
+         ;; (f ||| g) (Right b) = Right (g b)
+         (= (or-f (Right 5.0)) (Right 10.0)))))
+
+;; =============================================================================
+;; SF (Signal Function) Tests
+;; =============================================================================
+
+;; Test basic SF operations
+(defn test-sf-basics []
+  : bool
+  (let [;; Create a constant SF
+        const-5 (arr (fn [_] 5.0))
+        
+        ;; Create a time-based SF
+        time-sf (fn [_sig] (fn [t] t))
+        
+        ;; Test composition
+        composed (>>> const-5 (arr (fn [x] (* x 2.0))))
+        
+        ;; Create a signal (function of time)
+        sig (constant 3.0)]
+    
+    (and ;; const-5 applied to any signal should give constant 5
+         (= ((const-5 sig) 0.0) 5.0)
+         (= ((const-5 sig) 1.0) 5.0)
+         
+         ;; Composed should give 10
+         (= ((composed sig) 0.0) 10.0)
+         
+         ;; Time SF should return input time
+         (= ((time-sf sig) 5.0) 5.0))))
+
+;; Test SF with first and second
+(defn test-sf-first-second []
+  : bool
+  (let [f (arr (fn [x] (+ x 1.0)))
+        
+        ;; first f
+        first-f (first f)
+        
+        ;; second f
+        second-f (second f)
+        
+        ;; Create a product signal
+        sig-prod (pair-signals (constant 5.0) (constant 10.0))]
+    
+    (and ;; first f should add 1 to first component
+         (= ((first-f sig-prod) 0.0) [6.0 10.0])
+         
+         ;; second f should add 1 to second component
+         (= ((second-f sig-prod) 0.0) [5.0 11.0]))))
+
+;; Test ArrowChoice for SF
+(defn test-sf-arrow-choice []
+  : bool
+  (let [f (arr (fn [x] (+ x 1.0)))
+        g (arr (fn [x] (* x 2.0)))
+        
+        ;; left f
+        left-f (left f)
+        
+        ;; Create a sum signal
+        sig-left (left-signal (constant 5.0))
+        sig-right (right-signal (constant 10.0))]
+    
+    (and ;; left f on Left should apply f
+         (= ((left-f sig-left) 0.0) (Left 6.0))
+         
+         ;; left f on Right should pass through
+         (= ((left-f sig-right) 0.0) (Right 10.0)))))
+
+;; =============================================================================
+;; DSP Primitive Tests
+;; =============================================================================
+
+;; Test oscillators
+(defn test-oscillators []
+  : bool
+  (let [;; Sine oscillator at 440 Hz
+        sine-440 (sine 440.0 0.0)
+        
+        ;; Square oscillator
+        square-440 (square 440.0 0.5)
+        
+        ;; Sawtooth oscillator
+        saw-440 (sawtooth 440.0)
+        
+        sig (constant ())]
+    
+    (and ;; Sine at t=0 should be 0
+         (< (math/abs ((sine-440 sig) 0.0)) 0.001)
+         
+         ;; Sine at t=1/440 should be approximately sin(2*pi) = 0
+         (< (math/abs ((sine-440 sig) (/ 1.0 440.0))) 0.001)
+         
+         ;; Square should be either 1 or -1
+         (or (= ((square-440 sig) 0.0) 1.0) (= ((square-440 sig) 0.0) -1.0))
+         
+         ;; Sawtooth should be in [0, 1)
+         (and (>= ((saw-440 sig) 0.0) 0.0) (< ((saw-440 sig) 0.0) 1.0)))))
+
+;; Test filters
+(defn test-filters []
+  : bool
+  (let [;; Low-pass filter with alpha = 0.5
+        lp (low-pass 0.5)
+        
+        ;; High-pass filter
+        hp (high-pass 0.5)
+        
+        ;; Step input signal
+        step-sig (fn [t] (if (< t 0.5) 0.0 1.0))
+        
+        ;; Apply low-pass to step
+        lp-out (lp step-sig)]
+    
+    (and ;; Low-pass should smooth the step
+         ;; At t=0, output should be 0
+         (< (math/abs (lp-out 0.0)) 0.001)
+         
+         ;; At t=1.0 (after step), output should be > 0 but < 1
+         (and (> (lp-out 1.0) 0.0) (< (lp-out 1.0) 1.0)))))
+
+;; Test gain and mixing
+(defn test-gain-mix []
+  : bool
+  (let [sig1 (constant 0.5)
+        sig2 (constant 0.3)
+        
+        ;; Gain
+        gain-2 (gain 2.0)
+        amplified (gain-2 sig1)
+        
+        ;; Mix
+        mixer (mix 0.5)
+        prod-sig (pair-signals sig1 sig2)
+        mixed (mixer prod-sig)
+        
+        ;; Add
+        adder (add)
+        sum-sig (adder prod-sig)]
+    
+    (and ;; Gain should multiply by 2
+         (< (math/abs (- (amplified 0.0) 1.0)) 0.001)
+         
+         ;; Mix at 0.5 should give average
+         (< (math/abs (- (mixed 0.0) 0.4)) 0.001)
+         
+         ;; Add should sum
+         (< (math/abs (- (sum-sig 0.0) 0.8)) 0.001))))
+
+;; =============================================================================
+;; Envelope Tests
+;; =============================================================================
+
+;; Test ADSR envelope
+(defn test-adsr-envelope []
+  : bool
+  (let [params (ADSRParams 0.1 0.1 0.5 0.1)
+        
+        ;; Fixed gate duration
+        gate-duration 1.0
+        
+        env (adsr-fixed params gate-duration)
+        sig (constant ())]
+    
+    (and ;; At t=0, should be 0
+         (< (math/abs ((env sig) 0.0)) 0.001)
+         
+         ;; At t=0.05 (halfway through attack), should be ~0.5
+         (and (> ((env sig) 0.05) 0.4) (< ((env sig) 0.05) 0.6))
+         
+         ;; At t=0.1 (attack done), should be ~1.0
+         (> ((env sig) 0.1) 0.9)
+         
+         ;; At t=0.2 (decay done), should be at sustain level
+         (< (math/abs (- ((env sig) 0.2) 0.5)) 0.05)
+         
+         ;; At t=1.1 (release done), should be ~0
+         (< ((env sig) 1.1) 0.1))))
+
+;; =============================================================================
+;; Synthesizer Tests
+;; =============================================================================
+
+;; Test simple voice
+(defn test-simple-voice []
+  : bool
+  (let [params (ADSRParams 0.01 0.1 0.7 0.2)
+        freq 440.0
+        gate-duration 0.5
+        gate-sig (fn [t] (and (>= t 0.0) (< t gate-duration)))
+        
+        voice-out (voice freq params gate-sig 0.5 0.3)]
+    
+    (and ;; At t=0, should be near 0
+         (< (math/abs (voice-out 0.0)) 0.01)
+         
+         ;; At t=0.1 (in sustain), should be non-zero
+         (> (math/abs (voice-out 0.1)) 0.1)
+         
+         ;; At t=0.6 (after release), should be decaying
+         (< (math/abs (voice-out 0.6)) 0.5))))
+
+;; =============================================================================
+;; Arrow Law Tests
+;; =============================================================================
+
+;; Run all arrow law verification tests
+(defn test-arrow-laws []
+  : bool
+  (verify-arrow-laws))
+
+;; =============================================================================
+;; Main Test Suite
+;; =============================================================================
+
+;; Run all tests and report results
+(defn run-all-tests []
+  : (vec bool)
+  (vec-of
+    (test-arrow-function-basics)
+    (test-arrow-choice-function)
+    (test-sf-basics)
+    (test-sf-first-second)
+    (test-sf-arrow-choice)
+    (test-oscillators)
+    (test-filters)
+    (test-gain-mix)
+    (test-adsr-envelope)
+    (test-simple-voice)
+    (test-arrow-laws)))
+
+;; Print test results
+(defn print-test-results []
+  : ()
+  (let [results (run-all-tests)
+        names (vec-of
+                "Arrow Function Basics"
+                "ArrowChoice Function"
+                "SF Basics"
+                "SF first/second"
+                "SF ArrowChoice"
+                "Oscillators"
+                "Filters"
+                "Gain/Mix"
+                "ADSR Envelope"
+                "Simple Voice"
+                "Arrow Laws")]
+    
+    (println "\nTest Results:")
+    (println "=============")
+    
+    (for [i 0 (vec-length results)]
+      (let [name (nth names i)
+            result (nth results i)]
+        (println (str name ": " (if result "PASS" "FAIL")))))
+    
+    (let [total (vec-length results)
+          passed (count (fn [r] r) results)
+          failed (- total passed)]
+      (println "\n" passed " passed, " failed " failed out of " total " tests"))
+    
+    (when (= failed 0)
+      (println "ALL TESTS PASSED!"))))
+
+;; Entry point
+(defn main []
+  : int
+  (print-test-results)
+  0)
