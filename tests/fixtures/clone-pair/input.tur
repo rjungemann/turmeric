@@ -1,0 +1,22 @@
+;; Phase B1: Clone trait for Pair type
+
+(defstruct Pair [first :int second :int])
+
+(defn clone-pair [x] :int
+  ```c
+  struct { int64_t first; int64_t second; } *p = (struct { int64_t first; int64_t second; } *)(intptr_t)x;
+  if (!p) return 0;
+  struct { int64_t first; int64_t second; } *r = malloc(sizeof(struct { int64_t first; int64_t second; }));
+  r->first = p->first;
+  r->second = p->second;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(defn main [] :int
+  (do
+    (let [p (make-struct Pair 10 20)]
+      (let [p2 (clone-pair p)]
+        (if (not (= p2 0))
+          (println 1)
+          (println 0))))
+    0))

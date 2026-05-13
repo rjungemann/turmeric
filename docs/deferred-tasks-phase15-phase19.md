@@ -1310,6 +1310,25 @@ These prerequisites unblock parameterized typeclass instances, which are require
 
 ---
 
+## Phase B1 prerequisites (Clone trait infrastructure)
+
+These prerequisites must be completed before the parameterized Clone instances can be implemented.
+
+- [x] Implement `Pair` type in stdlib.
+  - Required for: `(definstance Clone (Pair a b) [Clone a, Clone b])`.
+  - Implemented: `(defstruct Pair [first second])` in `stdlib/pair.tur` with Clone instance.
+- [x] Implement `list` type in stdlib.
+  - Required for: `(definstance Clone (list a) [Clone a])`.
+  - Implemented: `(defstruct Cons [value next])` in `stdlib/list.tur` with nil, cons, head, tail, list-free, list-length, and Clone instance.
+- [x] Implement `rc` type in stdlib.
+  - Required for: `(definstance Clone (rc a) [Clone a])`.
+  - Implemented: `(defstruct RcControl [refcount ptr])` in `stdlib/rc.tur` with rc-new, rc-get, rc-clone, rc-drop, rc-count, and Clone instance (shallow - refcount increment).
+- [x] Implement `ref` type in stdlib.
+  - Required for: `(definstance Clone (ref a) [Clone a])`.
+  - Implemented: `(defstruct Ref [value])` in `stdlib/ref.tur` with ref-new, ref-get, ref-free, and Clone instance (v1: shallow clone of pointer).
+
+---
+
 ## Backtracking remaining tasks (Phases B1–B5)
 
 ### Phase B1 remaining tasks (Clone trait infrastructure)
@@ -1318,32 +1337,32 @@ These prerequisites unblock parameterized typeclass instances, which are require
 - [x] Implement `Clone` instances for: `int`, `int8`–`int64`, `uint8`–`uint64`, `float`, `double`, `bool`, `cstr`.
   - Done: `int`, `bool`, `cstr` instances implemented. Other numeric types deferred — Turmeric v1 uses `int64_t` for all integers.
 - [ ] Implement `(definstance Clone (Pair a b) [Clone a, Clone b])`.
-  - **Blocked**: requires PTC1–PTC3 (parameterized typeclass constraints).
-  - Once PTC prerequisites land, add: `(definstance Clone [Pair a b] [Clone a, Clone b] (clone [x] __clone_pair))`.
+  - **Ready**: B1 prerequisites and PTC1–PTC3 are complete. Pair type exists in `stdlib/pair.tur`.
+  - Add: `(definstance Clone [Pair a b] [Clone a, Clone b] (clone [x] __clone_pair_deep))`.
 - [x] Implement `(definstance Clone (option a) [Clone a])`.
   - Done: non-parameterized Clone instance for option in `stdlib/option.tur` using deep copy of contained int64_t value.
-  - Note: A parameterized version `[option a] [Clone a]` requires PTC1–PTC3.
+  - Note: A parameterized version `[option a] [Clone a]` requires PTC1–PTC3 (which are complete) and multi-file compilation.
 - [ ] Implement `(definstance Clone (list a) [Clone a])`.
-  - **Blocked**: requires PTC1–PTC3 (parameterized typeclass constraints) and list type in stdlib.
+  - **Ready**: B1 prerequisites and PTC1–PTC3 are complete. Cons type exists in `stdlib/list.tur`.
 - [x] Implement `(definstance Clone (vec a) [Clone a])`.
   - Done: non-parameterized Clone instance for vec in `stdlib/vec.tur` using deep copy of all int64_t elements.
 - [ ] Implement `(definstance Clone (rc a) [Clone a])` — refcount increment (shallow; document clearly).
-  - **Blocked**: requires PTC1–PTC3 and `rc`/`Rc` type in stdlib.
+  - **Ready**: B1 prerequisites and PTC1–PTC3 are complete. RcControl type exists in `stdlib/rc.tur`.
 - [ ] Implement `(definstance Clone (ref a) [Clone a])` — deep clone into new heap allocation.
-  - **Blocked**: requires PTC1–PTC3 and `ref` type in stdlib.
+  - **Ready**: B1 prerequisites and PTC1–PTC3 are complete. Ref type exists in `stdlib/ref.tur`.
   - Note: Borrow-checked references (`&T`, `&mut T`) are compiler-level constructs, not heap-allocated types.
 - [ ] Add `check_cloneable_capture` in `src/elab.c`; emit TUR-E0014 on non-`Clone` capture.
   - Deferred: requires B2 (cloneable continuation runtime) to have cloneable continuations to check.
 - [x] Add `tests/fixtures/backtrack/clone-primitives.tur`.
   - Done: fixture exists at `tests/fixtures/clone-primitives/` and passes.
 - [ ] Add `tests/fixtures/clone-pair/` fixture.
-  - **Blocked**: requires PTC1–PTC3 (parameterized Clone instance) and Pair type in stdlib.
+  - **Ready**: Pair type exists in `stdlib/pair.tur` with Clone instance.
 - [ ] Add `tests/fixtures/clone-option/` fixture.
-  - **Blocked**: requires PTC1–PTC3 for parameterized Clone instance, or a working multi-file compilation to use existing non-parameterized instance.
+  - **Blocked**: requires multi-file compilation to use existing non-parameterized Clone instance for option. PTC1–PTC3 are complete.
 - [ ] Add `tests/fixtures/clone-list/` fixture.
-  - **Blocked**: requires PTC1–PTC3 and list type in stdlib.
+  - **Ready**: Cons type exists in `stdlib/list.tur` with Clone instance.
 - [ ] Add `tests/fixtures/clone-vec/` fixture.
-  - **Blocked**: requires PTC1–PTC3 for parameterized Clone instance, or a working multi-file compilation to use existing non-parameterized instance.
+  - **Blocked**: requires multi-file compilation to use existing non-parameterized Clone instance for vec. PTC1–PTC3 are complete.
 - [ ] Add `tests/fixtures/backtrack/clone-rc.tur`.
   - Deferred: `rc` type not yet implemented as stdlib type.
 - [ ] Add `tests/fixtures/backtrack/clone-ref.tur`.
@@ -1357,7 +1376,7 @@ These prerequisites must be completed before the remaining B2 implementation tas
 
 - [ ] Implement deep clone infrastructure for arbitrary types via `Clone` trait dispatch.
   - Required for: `tur_cloneable_cont_clone` to deep copy captured environments.
-  - Blocking: The runtime needs to call type-specific clone functions for each captured value. In v1, only primitive types (`int`, `bool`, `cstr`) and non-parameterized `option`, `vec` have Clone instances. Full support requires PTC1–PTC3 (parameterized instances for `Pair`, `list`, etc.) and runtime dispatch via typeclass dictionaries.
+  - Blocking: The runtime needs to call type-specific clone functions for each captured value. B1 prerequisites (Pair, list, rc, ref types) are complete. Now needs parameterized Clone instances and runtime dispatch via typeclass dictionaries. Full support requires PTC1–PTC3 parameterized instance lookup.
 - [ ] Implement cloneable continuation type tagging in `tur_cont` struct.
   - Required for: distinguishing cloneable vs one-shot continuations at runtime.
   - Action: Add `is_cloneable` bool field to `tur_cont` in `src/runtime.h`.
@@ -1429,6 +1448,7 @@ These prerequisites must be completed before B4 (Standard library integration) i
   - Required for: `stdlib/logic.tur` and `stdlib/parsec.tur` both use the backtracking monad.
 - [ ] Implement `Pair` type in stdlib for `logic.tur` term representation.
   - Required for: `Term` type typically uses `Pair` for compound terms (e.g., `Cons(x, xs)`).
+  - **Note**: This is also a B1 prerequisite for parameterized Clone instances.
   - Action: Add `(defstruct Pair [first second])` to `stdlib/pair.tur` or similar.
 - [ ] Implement persistent data structure primitives (or association list fallback).
   - Required for: Logic programming substitution map in `stdlib/logic.tur`.

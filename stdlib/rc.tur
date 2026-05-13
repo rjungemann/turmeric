@@ -1,0 +1,65 @@
+;; Rc (Reference Counted) type for Turmeric
+;; Shared ownership pointer with reference counting
+;; Phase B1: Clone trait infrastructure
+
+(defstruct RcControl [refcount :int ptr :int])
+
+;; Create a new Rc from a value (takes ownership)
+(defn rc-new [value] :int
+  ```c
+  struct { uint64_t refcount; int64_t ptr; } *rc =
+      malloc(sizeof(struct { uint64_t refcount; int64_t ptr; }));
+  rc->refcount = 1;
+  rc->ptr = value;
+  return (int64_t)(intptr_t)rc;
+  ```)
+
+;; Get the contained value from an Rc
+(defn rc-get [rc] :int
+  ```c
+  struct { uint64_t refcount; int64_t ptr; } *r =
+      (struct { uint64_t refcount; int64_t ptr; } *)(intptr_t)rc;
+  if (!r) {
+    fprintf(stderr, "rc-get: null rc\n");
+    exit(1);
+  }
+  return r->ptr;
+  ```)
+
+;; Clone an Rc - increments refcount (shallow copy, shared ownership)
+;; This is the Clone instance behavior for rc<T>
+(defn rc-clone [rc] :int
+  ```c
+  struct { uint64_t refcount; int64_t ptr; } *r =
+      (struct { uint64_t refcount; int64_t ptr; } *)(intptr_t)rc;
+  if (!r) return 0;
+  r->refcount++;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+;; Decrement refcount and free if zero
+(defn rc-drop [rc]
+  ```c
+  struct { uint64_t refcount; int64_t ptr; } *r =
+      (struct { uint64_t refcount; int64_t ptr; } *)(intptr_t)rc;
+  if (!r) return;
+  r->refcount--;
+  if (r->refcount == 0) {
+    free((void*)(intptr_t)r->ptr);  /* Free the contained value */
+    free(r);
+  }
+  ```)
+
+;; Get the reference count (for debugging/testing)
+(defn rc-count [rc] :int
+  ```c
+  struct { uint64_t refcount; int64_t ptr; } *r =
+      (struct { uint64_t refcount; int64_t ptr; } *)(intptr_t)rc;
+  if (!r) return 0;
+  return (int)r->refcount;
+  ```)
+
+;; Phase B1: Clone support for rc
+;; The Clone instance for RcControl is defined separately in the file that uses
+;; both this type and the Clone typeclass (to avoid circular dependencies).
+;; A non-parameterized Clone instance can be added by including typeclass.tur.
