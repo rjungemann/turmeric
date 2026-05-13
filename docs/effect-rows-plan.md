@@ -1,0 +1,462 @@
+# Effect Rows — Full Enforcement Plan (ER0–ER6)
+
+> **Status:** ER0 complete (inferred-vs-declared check). ER1–ER6 planned.
+>
+> **Prerequisites:** Phase 19 algebraic effects complete (shift/reset substrate,
+> handler dispatch runtime, `EffectRow` types, `effect_check.c` inference pass,
+> row-variable substitution). All prerequisite infrastructure is in `src/effect.h`,
+> `src/effect_check.c`, and `src/effect_lower.c`.
+>
+> **Last updated:** 2026-05-13
+
+---
+
+## Motivation
+
+Phase 19 shipped `#{Effect}` annotations that are **inferred and checked** against
+annotated functions. However several properties remain advisory or unimplemented:
+
+| Property | Today | Goal |
+|---|---|---|
+| Annotated function performs unlisted effect | **Error** (ER0 done) | ✅ keep |
+| Unannotated function performs any effect | **Silent** (open row) | ER1: `--strict-effects` opt-in |
+| `#{}` pure annotation enforced | **Partial** — annotation stored, checked | ER1: fully reject `perform` |
+| Row variable `#{e}` propagation | **Permissive** — stored, not unified | ER2: enforce via unification |
+| Higher-order effect propagation | **Partial** — only resolved rows propagate | ER2: full row-variable binding |
+| Typeclass method effect rows | **Advisory** — not checked | ER3: instance must match declared row |
+| `fn []` subtype with narrower row | **Not checked** | ER4: row subtyping |
+| Private effects escape module | **Not checked** | ER5: module-level visibility |
+| `try-with` sugar | **Missing** | ER6: surface syntax |
+| Capability field effect polymorphism | **Not implemented** | ER6 |
+
+---
+
+## Architecture Overview
+
+```
+src/reader.c        ─ parses #{...} → ERK_UNRESOLVED
+src/elab.c          ─ elaborates defn/defeffect; stores EffectRow on FnDef
+src/effect_lower.c  ─ perform → shift, handle → reset; populates EffectEnv
+src/effect_check.c  ─ fixed-point inference + declared-vs-inferred check (TUR-E0009)
+src/effect.h/.c     ─ EffectRow algebra (empty, concrete, var, union, unresolved)
+                      EffectRowSubst for row-variable unification
+src/types.h         ─ effect_row field on fn Type; subtype relation
+src/typeclass.c     ─ dict passing; will carry effect rows on methods (ER3)
+```
+
+The existing inference pass (`effect_check_pass`) already:
+1. Resolves `ERK_UNRESOLVED` rows after `PASS_EFFECT_LOWER` populates the env.
+2. Runs a fixed-point propagation through the call graph.
+3. Absorbs handled effects at `EX_HANDLE` nodes (effect re-opening).
+4. Emits `TUR-E0009` when `inferred ⊄ declared`.
+
+---
+
+## Phase ER0 — Baseline enforcement ✅ Complete
+
+**What was delivered in Phase 19 (already done):**
+
+- `EffectRow` type with `ERK_EMPTY`, `ERK_CONCRETE`, `ERK_VAR`, `ERK_UNION`,
+  `ERK_UNRESOLVED` kinds (`src/effect.h`).
+- `effect_check_pass`: fixed-point call-graph inference; absorb at `EX_HANDLE`;
+  `TUR-E0009` on mismatch (`src/effect_check.c`).
+- `EffectRowSubst` / `effect_row_unify` / `effect_row_apply_subst` for row-variable
+  instantiation (`src/effect.h`).
+- `#{Effect ...}` and `#{e}` parsed, resolved, stored on `FnDef`.
+- Fixtures: `effect-row-defn.tur`, `effect-row-poly.tur`, `effect-extern-c-row.tur`,
+  `errors/effect-row-mismatch/`.
+- `Unsafe` effect propagated from raw-pointer dereferences and unsafe casts.
+- `is_private` / `defining_module_name` fields on `Effect` for module visibility
+  (not yet enforced — see ER5).
+
+**Exit criterion:** ✅ Annotated functions with wrong effects produce `TUR-E0009`.
+
+---
+
+## Phase ER1 — Pure-function enforcement and `--strict-effects`
+
+**Goal:** Make `#{}` a hard purity guarantee, and offer an opt-in mode where
+*all* unannotated functions are treated as open-row (explicitly tracked), not
+silently unconstrained.
+
+### Compiler flag
+
+- [ ] Add `--strict-effects` flag; stored in `CompilerOptions`.
+- [ ] Under `--strict-effects`, unannotated functions emit a warning (`TUR-W0030`)
+  when their inferred row is non-empty. This nudges gradual annotation without
+  breaking existing code.
+- [ ] Under `--strict-effects`, calling an unannotated function from an annotated
+  function propagates the callee's inferred row (already done) **and** treats it
+  as if it were declared — i.e., generates no suppressed-warning gap.
+
+### Pure annotation enforcement
+
+- [ ] `#{}` (empty row) on a `defn` is already parsed as `ERK_EMPTY`; the check
+  pass already validates it via `effect_row_is_subset`. Confirm round-trip works
+  for closures and inner defns.
+- [ ] Inner `(fn [...] ...)` literals inherit the enclosing function's row when
+  no annotation is given. Currently they are unconstrained.
+- [ ] `(fn [...] #{} ...)` closure annotation: emit `TUR-E0009` if the closure
+  body performs any effect.
+- [ ] Error message improvement: when the inferred row is empty but the declared
+  row is non-empty (over-annotation), emit `TUR-W0031` ("function declares
+  `#{Write}` but never performs it").
+
+### `main` purity
+
+- [ ] `main` has no explicit annotation; under `--strict-effects` it is treated
+  as having an implicit open row (any unhandled effect leaks to the OS).
+- [ ] Provide a convention: annotating `main` with `#{}` is a correctness
+  assertion that all effects are handled before return. Emit `TUR-E0009` if any
+  effect escapes `main`.
+
+### Fixtures
+
+- [ ] `effect-pure-closure.tur` — `(fn [] #{} ...)` closure rejected when body
+  performs an effect.
+- [ ] `effect-strict-mode.tur` — `--strict-effects` warns on unannotated effectful
+  function.
+- [ ] `effect-main-pure.tur` — `main [] #{}` accepted when all effects handled.
+- [ ] Negative: `errors/effect-main-leak.tur` — `main [] #{}` rejected when
+  effect escapes.
+- [ ] Negative: `errors/effect-over-annotated.tur` — `TUR-W0031` for declared but
+  never-performed effect.
+
+**Exit criterion:** `#{}` on a `defn` or closure is enforced by the check pass;
+`--strict-effects` propagates warnings to unannotated callers.
+
+---
+
+## Phase ER2 — Row-variable enforcement and higher-order propagation
+
+**Goal:** Row variables (`#{e}` where `e` is lowercase) are unified at call sites
+so that a higher-order function's row constraint propagates through the passed
+function.
+
+### Background
+
+Currently `#{e}` is stored as `ERK_VAR` and handled permissively
+(`effect_row_apply_subst` substitutes known bindings, but binding is only done
+for resolved concrete rows). A function declared `#{e}` is treated as having an
+open row.
+
+### Row-variable unification at call sites
+
+- [ ] When calling a function `f` with signature `(fn [g :(fn [] #{e} :T)] #{e} :R)`,
+  bind the row variable `e` to the inferred row of the actual argument passed for
+  `g` at each call site.
+- [ ] This binding is per-call-site (not global), consistent with the existing
+  `EffectRowSubst` design.
+- [ ] `effect_row_unify` (`src/effect.h`) is already implemented; wire it into
+  the call-site inference in `collect_effects_in_expr` for `EX_CALL` nodes.
+- [ ] When a function-typed argument is a closure literal, its body is
+  re-analysed in the current substitution scope (avoids false positives).
+
+### Callee row propagation from row variables
+
+- [ ] After unifying the row variable with the actual argument's row, apply the
+  substitution to the callee's declared row and merge the result into the
+  caller's inferred row.
+- [ ] Example:
+  ```turmeric
+  ;; run-twice propagates the row of f to its caller
+  (defn run-twice [f :(fn [] #{e} :int)] #{e} :int
+    (+ (f) (f)))
+
+  ;; Inferred row of the call below is #{Ask}
+  (handle
+    (run-twice (fn [] (perform (Ask))))
+    (Ask [] k) (resume k 42))
+  ```
+- [ ] When the actual argument is not a closure but a named function, look up that
+  function's declared or inferred row and unify.
+
+### Constraints on row variables across defn bodies
+
+- [ ] A `defn` annotated `#{e}` that calls `(perform (Write ...))` inside its
+  body: the `Write` effect is added to `e`'s binding; this updates the caller's
+  row when the defn is instantiated.
+- [ ] Under `--strict-effects`, emit `TUR-W0032` ("row variable `e` is always
+  concrete `{Write}`; consider replacing `#{e}` with `#{Write}`") as a hint.
+
+### Fixtures
+
+- [ ] `effect-row-ho.tur` — `map`-style higher-order function with row variable;
+  verify caller's inferred row includes mapped function's effects.
+- [ ] `effect-row-compose.tur` — two functions with different row variables
+  composed; verify union propagates correctly.
+- [ ] `effect-row-var-unused.tur` — row variable that is never bound stays open.
+- [ ] Negative: `errors/effect-row-var-mismatch.tur` — row variable bound to
+  `{Write}` but caller declares `#{}` → `TUR-E0009`.
+
+**Exit criterion:** Higher-order functions with row-variable annotations correctly
+propagate their argument's effects to callers; unification is enforced, not just
+stored.
+
+---
+
+## Phase ER3 — Typeclass method effect rows
+
+**Goal:** `defclass` method signatures may carry effect row annotations, and
+`definstance` bodies are checked against them.
+
+### Background
+
+The `typeclass-effect-row.tur` fixture shows that `#{Write}` on a method is
+currently advisory. The elaborator stores the annotation on the method signature's
+`Type` but `typeclass.c` does not pass it to `effect_check_pass`.
+
+### Typeclass method row annotation
+
+- [ ] `defclass` method syntax already accepts `#{...}` after argument list (parsed
+  in `src/reader.c`). Verify the annotation is stored in the `TypeClass` struct's
+  method signature (`src/typeclass.h`).
+- [ ] Add `effect_row` field to `MethodSig` in `src/typeclass.h` if not present.
+- [ ] In `effect_check_pass`, include method bodies from `definstance` forms
+  (`EX_DEFINSTANCE` nodes). The declared row for an instance method is the row
+  from the typeclass's method signature.
+- [ ] Emit `TUR-E0009` if an instance method body's inferred row is not a subset
+  of the declared method row.
+
+### Calling effectful methods from pure contexts
+
+- [ ] When resolving a method call in `collect_effects_in_expr`, look up the
+  method's declared row from the typeclass and merge it into the caller's row.
+- [ ] This enables: a function calling `.io-show` on an `IOShow`-constrained type
+  has `#{Write}` added to its inferred row automatically.
+- [ ] Error: calling `.io-show` from a function declared `#{}` → `TUR-E0009`.
+
+### Default method bodies
+
+- [ ] If a `defclass` provides a default method body, check it against the method's
+  declared effect row.
+
+### Fixtures
+
+- [ ] `typeclass-effect-row-enforced.tur` — instance method body that violates
+  declared row produces `TUR-E0009`.
+- [ ] `typeclass-effect-row-caller.tur` — calling an effectful method propagates
+  the method's row to the caller.
+- [ ] `typeclass-effect-row-pure-ctx.tur` — calling an effectful method from a
+  `#{}` function is rejected.
+- [ ] `typeclass-effect-row-default.tur` — default method body checked against
+  declared row.
+
+**Exit criterion:** Method effect rows in typeclasses are enforced in instance
+bodies and propagated to callers.
+
+---
+
+## Phase ER4 — Effect row subtyping in function types
+
+**Goal:** A function type `(fn [] #{Write} :nil)` is a subtype of
+`(fn [] #{Write Log} :nil)`. Assignments, capability fields, and higher-order
+arguments respect this.
+
+### Subtype relation
+
+The existing `effect_row_is_subset` implements `r1 ⊆ r2`. The missing piece is
+wiring this into the function-type subtype check in `src/types.c`.
+
+- [ ] In `type_is_subtype` (or equivalent), for `TY_FN` types: the argument rows
+  are contravariant (`r2_param ⊆ r1_param`), the return row is covariant
+  (`r1_ret ⊆ r2_ret`). For the common case (no row parameters), covariant
+  return row is sufficient.
+- [ ] Assignments: `let f : (fn [] #{Write} :nil) = g` where `g : (fn [] #{} :nil)`
+  — accepted (narrow row is a subtype of wider row).
+- [ ] Capability fields: a struct field typed `(fn [] #{Write} :nil)` can hold a
+  function with row `#{}` (narrower satisfies wider capability).
+- [ ] Higher-order argument: `(run-twice g)` where `run-twice` expects
+  `(fn [] #{Write Log} :nil)` accepts `g : (fn [] #{Write} :nil)`.
+
+### Effect row in structural type equality
+
+- [ ] Two function types with different effect rows are **not** equal but may be
+  **subtypes** of each other. The elaborator's type unification must be updated
+  to accept subtype assignments.
+- [ ] Codegen: no runtime change — effect rows are erased at codegen; subtyping
+  is purely a compile-time check.
+
+### Capability field effect polymorphism (partial ER6 pull-forward)
+
+- [ ] Struct fields that hold function pointers can carry an effect-row annotation
+  on the field type:
+  ```turmeric
+  (defstruct Runner
+    [run : (fn [] #{e} :nil)])
+  ```
+- [ ] A `Runner` constructed with a concrete `run` function binds `e` to that
+  function's row.
+- [ ] Accessing `(.run r)` propagates `e`'s row to the caller.
+
+### Fixtures
+
+- [ ] `effect-subtype-assign.tur` — assigning a narrow-row function to a
+  wide-row variable is accepted.
+- [ ] `effect-subtype-ho.tur` — passing a narrow-row function to a wide-row
+  higher-order parameter is accepted.
+- [ ] `effect-subtype-capability.tur` — capability field accepts narrow-row
+  function.
+- [ ] Negative: `errors/effect-subtype-violation.tur` — assigning a wide-row
+  function to a narrow-row variable is rejected.
+
+**Exit criterion:** Function type subtyping respects effect rows; capability fields
+accept narrower-row functions.
+
+---
+
+## Phase ER5 — Module effect visibility
+
+**Goal:** Effects declared with `^private` are invisible outside their defining
+module; cross-module effect-row checking works correctly.
+
+### Background
+
+`Effect` already has `is_private` and `defining_module_name` fields populated by
+`effect_env_register`. The enforcement is missing.
+
+### Private effect enforcement
+
+- [ ] In `effect_env_lookup`, when looking up an effect from a different module,
+  return `NULL` if `is_private` is true and the current module does not match
+  `defining_module_name`. Emit `TUR-E0021` ("effect `Foo` is private to module
+  `bar`").
+- [ ] `perform (PrivateEffect ...)` from outside the defining module: elaborator
+  emits `TUR-E0021` during `EX_PERFORM` elaboration.
+- [ ] `handle ... (PrivateEffect [...] k) ...` from outside: same check in the
+  handler parser.
+
+### Cross-module row propagation
+
+- [ ] When a function from module `A` is called from module `B`, and `A`'s
+  function has an inferred row containing a private effect of `A`, that private
+  effect is **not** visible in `B`'s inferred row. Instead, `B` sees an opaque
+  `#{A/...}` placeholder (or the effect is treated as an external/concrete
+  effect `A:PrivateEffect` with a fully-qualified name).
+- [ ] Exported effects (non-private) are fully visible across modules; their rows
+  propagate normally.
+
+### Module-level `provide` for effects
+
+- [ ] `(provide (effect Write))` in a module's provide list makes `Write` public.
+- [ ] `(provide (effect ^private InternalCache))` is a compile error (private
+  cannot be provided).
+- [ ] `(require mod (effect Write))` in a consumer imports only `Write`'s
+  declaration, not any implementation.
+
+### Fixtures
+
+- [ ] `module-effect-private.tur` — private effect not accessible from importing
+  module; `TUR-E0021` emitted.
+- [ ] `module-effect-public.tur` — public effect accessible after `require`;
+  handler and perform work cross-module.
+- [ ] `module-effect-row-cross.tur` — effect row annotation on a cross-module
+  `defn` resolves correctly.
+
+**Exit criterion:** Private effects are enforced at module boundaries; exported
+effects propagate correctly in cross-module row inference.
+
+---
+
+## Phase ER6 — Integration, polish, and surface ergonomics
+
+**Goal:** Round out the effect-row system with `try-with` sugar, `--dump-effects`
+diagnostics, IDE support, stdlib annotation, and the remaining deferred items.
+
+### `try-with` sugar
+
+- [ ] `(try-with body handler)` desugars to `(reset (handle body handler))`.
+  Implement as a macro in `stdlib/effects.tur` or as a special form in
+  `src/reader.c`.
+- [ ] `handler` is a list of `(EffectName [params...] k) body` clauses (same
+  syntax as `handle`).
+
+### `--dump-effects` flag
+
+- [ ] Print every top-level `defn`'s inferred effect row after `effect_check_pass`.
+  Format: `fn-name : #{Effect1 Effect2}` (or `#{}` for pure).
+- [ ] Useful for auditing which functions are effectful, similar to `--dump-kinds`.
+
+### `--lint-effects` flag
+
+- [ ] Like `--lint-unsafe`, scan for functions without row annotations whose
+  inferred row is non-empty and emit advisory warnings.
+
+### Static one-shot enforcement for `resume`
+
+- [ ] Currently dynamic: `tur_cont_resume` sets `consumed = true` and panics on
+  second call. Promote to a static check.
+- [ ] Mark `k` in a handler case as a move-only binding (already `TY_CONT` with
+  `CK_MOVE`). The borrow checker should report use-after-move if `k` is used
+  twice. Wire `EX_RESUME` and `EX_DISCONTINUE` into the borrow checker's
+  move-consumption tracking.
+- [ ] Negative fixture: `errors/effect-double-resume-static.tur` — caught at
+  compile time, not runtime.
+
+### `cont?` predicate
+
+- [ ] `(cont? x)` returns `true` if `x` holds a live (non-consumed) continuation.
+  Implement as `EX_CONT_PRED` (partially present in the codebase) lowered to a
+  null-check on the continuation pointer.
+
+### Stdlib effect row annotations
+
+- [ ] Annotate all stdlib `defn`s with effect rows. Initially under
+  `--strict-effects`; promoted to mandatory in a future release.
+- [ ] Priority stdlib files: `stdlib/effects.tur`, `stdlib/vec.tur`,
+  `stdlib/log.tur`, `stdlib/async.tur`, `stdlib/thread.tur`.
+
+### Capability field effect polymorphism (remainder)
+
+- [ ] Finish ER4 capability-field work: struct fields typed `(fn [] #{e} :T)`
+  bind `e` at construction time and propagate at call sites.
+- [ ] `(defstruct Runner [run : (fn [] #{e} :nil)])` is parametric in `e`.
+  Checked against the caller's declared row when `.run` is called.
+
+### IDE / tooling
+
+- [ ] `--check` mode reports effect-row errors without emitting code.
+- [ ] Language server hover: show inferred effect row for a `defn`.
+- [ ] Inline hint: display `#{...}` annotation suggestion for unannotated
+  effectful functions (under `--strict-effects`).
+
+### Fixtures
+
+- [ ] `try-with-basic.tur` — `try-with` sugar works for Write/Read effects.
+- [ ] `try-with-nested.tur` — nested `try-with` handlers.
+- [ ] `effect-dump.tur` — `--dump-effects` output matches expected rows.
+- [ ] `effect-cont-pred.tur` — `cont?` returns correct values (extends existing
+  `effect-cont-pred.tur`).
+- [ ] `effect-double-resume-static.tur` — static use-after-move on `k`.
+- [ ] `stdlib-effects-annotated.tur` — stdlib `Write`/`Read`/`Fail`/`Log`/`Abort`
+  functions all have row annotations; callers propagate correctly.
+
+**Exit criterion:** `try-with` works; `--dump-effects` / `--lint-effects` produce
+useful output; static one-shot check catches double-resume at compile time;
+priority stdlib functions are fully annotated.
+
+---
+
+## Summary Roadmap
+
+| Phase | Goal | Key Files | Status |
+|---|---|---|---|
+| ER0 | Baseline inference + `TUR-E0009` | `effect_check.c`, `effect.h` | ✅ Complete |
+| ER1 | Pure `#{}` + `--strict-effects` | `effect_check.c`, `main.c` | 📋 Planned |
+| ER2 | Row-variable unification + HO propagation | `effect_check.c`, `effect.h` | 📋 Planned |
+| ER3 | Typeclass method effect rows | `typeclass.c`, `typeclass.h`, `effect_check.c` | 📋 Planned |
+| ER4 | Row subtyping in function types | `types.c`, `elab.c` | 📋 Planned |
+| ER5 | Module effect visibility | `elab.c`, `effect.c` | 📋 Planned |
+| ER6 | `try-with`, `--dump-effects`, static one-shot, stdlib | Multiple | 📋 Planned |
+
+## Dependencies
+
+```
+ER0 (done)
+  └─ ER1 (pure enforcement, flag)
+       └─ ER2 (row-var unification)
+            ├─ ER3 (typeclass rows)   ← also needs Phase 15 typeclasses
+            └─ ER4 (subtyping)
+                 └─ ER5 (modules)    ← also needs M0–M7 modules
+                      └─ ER6 (polish)
+```
