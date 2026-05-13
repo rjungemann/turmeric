@@ -526,8 +526,8 @@ See [hkt-implementation-plan.md](hkt-implementation-plan.md) for the complete ro
 - [ ] Add `-O` performance option documentation. _(deferred)_
 - [x] Implement `tur explain` support for kind errors. _(HKT-P5 complete)_
 - [x] Add `--dump-kinds` debugging flag. _(HKT-P6 complete)_
-- [ ] Add integration tests: HKTs + closures + defers + refs. _(deferred)_
-- [ ] Add negative tests: orphan instances. _(deferred)_
+- [x] Add integration tests: HKTs + closures + defers + refs. `tests/fixtures/hkt-closures-defers-refs/` — PASS.
+- [x] Add negative tests: orphan instances. `tests/fixtures/errors/hkt-orphan-instance/` — orphan check promoted to `DIAG_ERROR` (was `DIAG_WARNING`); PASS.
 
 ### Phase R prerequisites (Hybrid Result + Limited Panic)
 
