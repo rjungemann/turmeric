@@ -1,0 +1,57 @@
+; Phase P1: Persistent HAMT - External C declarations
+(extern-c hamt_new [] :ptr)
+(extern-c hamt_free [m :ptr] :void)
+(extern-c hamt_retain [m :ptr] :ptr)
+(extern-c hamt_count [m :ptr] :int)
+(extern-c hamt_set [m :ptr hash :int key :ptr val :ptr] :ptr)
+(extern-c hamt_del [m :ptr hash :int key :ptr] :ptr)
+(extern-c hamt_has [m :ptr hash :int key :ptr] :bool)
+(extern-c hamt_get [m :ptr hash :int key :ptr] :ptr)
+(extern-c hamt_merge [a :ptr b :ptr] :ptr)
+(extern-c hamt_hash_str [str :cstr] :int)
+(extern-c hamt_hash_ptr [ptr :ptr] :int)
+
+;; ============================================================================
+;; Core API
+;; ============================================================================
+
+;; Create a new empty HAMT
+(defn hamt/new [] :ptr<void>
+  (hamt_new))
+
+;; Free a HAMT (decrement ref count, free if zero)
+(defn hamt/free [m :ptr<void>] :void
+  (hamt_free m))
+
+;; Increment ref count
+(defn hamt/retain [m :ptr<void>] :ptr<void>
+  (hamt_retain m))
+
+;; Insert or update a key/value pair. Returns a new HAMT.
+;; hash: full 64-bit hash of the key (passed as int, which is int64_t)
+;; key: key pointer
+;; val: value pointer
+;; Note: caller retains ownership of key and val pointers (HAMT does not copy them)
+(defn hamt/set [m :ptr<void> hash :int key :ptr<void> val :ptr<void>] :ptr<void>
+  (hamt_set m hash key val))
+
+;; Delete a key. Returns a new HAMT.
+(defn hamt/del [m :ptr<void> hash :int key :ptr<void>] :ptr<void>
+  (hamt_del m hash key))
+
+;; Get the value for a key. Returns NULL if not found.
+(defn hamt/get [m :ptr<void> hash :int key :ptr<void>] :ptr<void>
+  (hamt_get m hash key))
+
+;; Check if a key exists in the HAMT.
+(defn hamt/has? [m :ptr<void> hash :int key :ptr<void>] :bool
+  (hamt_has m hash key))
+
+;; Get the number of key/value pairs in the HAMT.
+(defn hamt/count [m :ptr<void>] :int
+  (hamt_count m))
+
+;; Merge two HAMTs. If a key exists in both, the value from b is kept.
+;; Returns a new HAMT.
+(defn hamt/merge [a :ptr<void> b :ptr<void>] :ptr<void>
+  (hamt_merge a b))

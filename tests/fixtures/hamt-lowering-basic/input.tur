@@ -1,0 +1,10 @@
+; Phase P3: Test that persistent map operations are lowered to HAMT calls
+; Create a persistent map and perform operations
+
+(defn main [] :int
+  (let [^persistent m (map-new)]
+    (let [^persistent m2 (assoc m "key1" "value1")]
+      (let [val (get m2 "key1")]
+        (let [^persistent m3 (dissoc m2 "key1")]
+          (let [c (count m3)]
+            c))))))

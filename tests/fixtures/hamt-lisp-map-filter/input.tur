@@ -1,0 +1,114 @@
+;;
+;; Phase P2: Lisp bindings map/filter/reduce test
+
+(import stdlib/hamt.tur)
+
+(extern-c malloc [^int size] :ptr<void>)
+(extern-c free [^ptr<void> p] :void)
+
+(defn alloc-key [x]
+  (let [p (malloc 8)]
+    (ptr-set! (cast p :ptr<int>) 0 x)
+    p))
+
+;; Helper: double a value (as int64_t)
+(defn double-ptr [p :ptr<void>] :ptr<void>
+  (let [result (malloc 8)]
+    (ptr-set! (cast result :ptr<int>) 0 (* (ptr-get (cast p :ptr<int>) 0) 2))
+    result))
+
+;; Helper: check if value > 100
+(defn gt-100? [p :ptr<void>] :bool
+  (> (ptr-get (cast p :ptr<int>) 0) 100))
+
+;; Helper: add two ints from ptrs
+(defn add-ptr [acc :ptr<void> val :ptr<void>] :ptr<void>
+  (let [result (malloc 8)]
+    (ptr-set! (cast result :ptr<int>) 0 (+ (ptr-get (cast acc :ptr<int>) 0) (ptr-get (cast val :ptr<int>) 0)))
+    (free acc)
+    result))
+
+;; Test: hamt/map
+(defn test-map [] :int
+  (let [k1 (alloc-key 1)]
+    (let [k2 (alloc-key 2)]
+      (let [v1 (alloc-key 50)]
+        (let [v2 (alloc-key 75)]
+          (let [m1 (hamt/new)]
+            (let [m2 (hamt/set m1 (hamt_hash_ptr k1) k1 v1)]
+              (let [m3 (hamt/set m2 (hamt_hash_ptr k2) k2 v2)]
+                (let [m4 (hamt/map double-ptr m3)]
+                  (let [v1-doubled (hamt/get m4 (hamt_hash_ptr k1) k1)]
+                    (let [v2-doubled (hamt/get m4 (hamt_hash_ptr k2) k2)]
+                      (hamt/free m1)
+                      (hamt/free m2)
+                      (hamt/free m3)
+                      (hamt/free m4)
+                      (free k1)
+                      (free k2)
+                      (free v1)
+                      (free v2)
+                      (let [v1d-val (ptr-get (cast v1-doubled :ptr<int>) 0)]
+                        (let [v2d-val (ptr-get (cast v2-doubled :ptr<int>) 0)]
+                          (free v1-doubled)
+                          (free v2-doubled)
+                          (if (and (= v1d-val 100) (= v2d-val 150)) 1 0)))))))))))))))
+
+;; Test: hamt/filter
+(defn test-filter [] :int
+  (let [k1 (alloc-key 1)]
+    (let [k2 (alloc-key 2)]
+      (let [k3 (alloc-key 3)]
+        (let [v1 (alloc-key 50)]  ; will be filtered out
+          (let [v2 (alloc-key 150)] ; will be kept
+            (let [v3 (alloc-key 200)] ; will be kept
+              (let [m1 (hamt/new)]
+                (let [m2 (hamt/set m1 (hamt_hash_ptr k1) k1 v1)]
+                  (let [m3 (hamt/set m2 (hamt_hash_ptr k2) k2 v2)]
+                    (let [m4 (hamt/set m3 (hamt_hash_ptr k3) k3 v3)]
+                      (let [m5 (hamt/filter gt-100? m4)]
+                        (let [c (hamt/count m5)]
+                          (let [has-k1 (hamt/has? m5 (hamt_hash_ptr k1) k1)]
+                            (let [has-k2 (hamt/has? m5 (hamt_hash_ptr k2) k2)]
+                              (let [has-k3 (hamt/has? m5 (hamt_hash_ptr k3) k3)]
+                                (hamt/free m1)
+                                (hamt/free m2)
+                                (hamt/free m3)
+                                (hamt/free m4)
+                                (hamt/free m5)
+                                (free k1)
+                                (free k2)
+                                (free k3)
+                                (free v1)
+                                (free v2)
+                                (free v3)
+                                (if (and (= c 2) (not has-k1) has-k2 has-k3) 1 0)))))))))))))))))))
+
+;; Test: hamt/reduce
+(defn test-reduce [] :int
+  (let [k1 (alloc-key 1)]
+    (let [k2 (alloc-key 2)]
+      (let [k3 (alloc-key 3)]
+        (let [v1 (alloc-key 10)]
+          (let [v2 (alloc-key 20)]
+            (let [v3 (alloc-key 30)]
+              (let [m1 (hamt/new)]
+                (let [m2 (hamt/set m1 (hamt_hash_ptr k1) k1 v1)]
+                  (let [m3 (hamt/set m2 (hamt_hash_ptr k2) k2 v2)]
+                    (let [m4 (hamt/set m3 (hamt_hash_ptr k3) k3 v3)]
+                      (let [init (alloc-key 0)]
+                        (let [result (hamt/reduce add-ptr init m4)]
+                          (let [sum (ptr-get (cast result :ptr<int>) 0)]
+                            (hamt/free m1)
+                            (hamt/free m2)
+                            (hamt/free m3)
+                            (hamt/free m4)
+                            (free k1)
+                            (free k2)
+                            (free k3)
+                            (free v1)
+                            (free v2)
+                            (free v3)
+                            (free init)
+                            (free result)
+                            (if (= sum 60) 1 0)))))))))))))))))

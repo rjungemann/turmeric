@@ -64,6 +64,9 @@ bool g_panic_trace = false;            /* --panic-trace: print scope chain on pa
 bool g_warn_unused_result = false;     /* --warn-unused-result: warn on discarded result values */
 bool g_lint_panic = false;              /* --lint-panic: lint panic/must! usage */
 
+/* Phase P3: HAMT lowering - track if HAMT is needed for this compilation */
+bool g_needs_hamt = false;
+
 /* Phase HKT-P6: --dump-kinds flag: print kind annotations after kind-check */
 static bool g_dump_kinds = false;
 
@@ -259,6 +262,9 @@ static int compile_to_c(const char *path, Buf *out_c) {
     const char *stdlib_files[] = {
         "stdlib/macros.tur",
         "stdlib/safe.tur",
+        /* Phase P3: HAMT lowering - auto-load hamt.tur and map.tur */
+        "stdlib/hamt.tur",
+        "stdlib/map.tur",
         /* "stdlib/vec.tur" - has typeclass dependencies, not auto-loaded */
         /* "stdlib/typeclass.tur" loaded on demand via (require typeclass) - Phase 15 */
         /* Phase T19-C/D stdlib files (mutex, rwlock, condvar, sync, thread, chan,

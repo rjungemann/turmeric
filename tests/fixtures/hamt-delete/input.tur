@@ -1,0 +1,79 @@
+;;
+;; Phase P1: HAMT delete test
+;; Tests hamt/del on present and absent keys; count decrements correctly.
+
+(extern-c hamt_new [] :ptr<void>)
+(extern-c hamt_free [^ptr<void> m] :void)
+(extern-c hamt_set [^ptr<void> m ^uint64 hash ^ptr<void> key ^ptr<void> val] :ptr<void>)
+(extern-c hamt_del [^ptr<void> m ^uint64 hash ^ptr<void> key] :ptr<void>)
+(extern-c hamt_get [^ptr<void> m ^uint64 hash ^ptr<void> key] :ptr<void>)
+(extern-c hamt_has [^ptr<void> m ^uint64 hash ^ptr<void> key] :bool)
+(extern-c hamt_count [^ptr<void> m] :int)
+(extern-c hamt_hash_ptr [^ptr<void> ptr] :uint64)
+(extern-c malloc [^int size] :ptr<void>)
+(extern-c free [^ptr<void> p] :void)
+
+(defn alloc-key [x]
+  (let [p (malloc 8)]
+    (let [vp (cast p :ptr<int>)]
+      (ptr-set! vp 0 x)
+      p)))
+
+;; Test: delete present key
+(defn test-del-present [] :int
+  (let [k1 (alloc-key 42)]
+    (let [v1 (alloc-key 100)]
+      (let [m1 (hamt_new)]
+        (let [h1 (hamt_hash_ptr k1)]
+          (let [m2 (hamt_set m1 h1 k1 v1)]
+            (let [m3 (hamt_del m2 h1 k1)]
+              (let [has (hamt_has m3 h1 k1)]
+                (let [count (hamt_count m3)]
+                  (hamt_free m1)
+                  (hamt_free m2)
+                  (hamt_free m3)
+                  (free k1)
+                  (free v1)
+                  (if (and (not has) (= count 0)) 1 0)))))))))))
+
+;; Test: delete absent key returns same map
+(defn test-del-absent [] :int
+  (let [k1 (alloc-key 42)]
+    (let [k2 (alloc-key 43)]
+      (let [v1 (alloc-key 100)]
+        (let [m1 (hamt_new)]
+          (let [h1 (hamt_hash_ptr k1)]
+            (let [h2 (hamt_hash_ptr k2)]
+              (let [m2 (hamt_set m1 h1 k1 v1)]
+                (let [m3 (hamt_del m2 h2 k2)]
+                  ;; m3 should be same as m2 since k2 wasn't present
+                  (let [same (== m2 m3)]
+                    (let [count (hamt_count m2)]
+                      (hamt_free m1)
+                      (hamt_free m2)
+                      (if same (hamt_free m3))
+                      (free k1)
+                      (free k2)
+                      (free v1)
+                      (if (and same (= count 1)) 1 0))))))))))))
+
+;; Test: delete then re-insert
+(defn test-del-reinsert [] :int
+  (let [k1 (alloc-key 42)]
+    (let [v1 (alloc-key 100)]
+      (let [v2 (alloc-key 200)]
+        (let [m1 (hamt_new)]
+          (let [h1 (hamt_hash_ptr k1)]
+            (let [m2 (hamt_set m1 h1 k1 v1)]
+              (let [m3 (hamt_del m2 h1 k1)]
+                (let [m4 (hamt_set m3 h1 k1 v2)]
+                  (let [count (hamt_count m4)]
+                    (let [val (hamt_get m4 h1 k1)]
+                      (hamt_free m1)
+                      (hamt_free m2)
+                      (hamt_free m3)
+                      (hamt_free m4)
+                      (free k1)
+                      (free v1)
+                      (free v2)
+                      (if (and (= count 1) (= val v2)) 1 0))))))))))))

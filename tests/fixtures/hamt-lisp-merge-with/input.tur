@@ -1,0 +1,55 @@
+;;
+;; Phase P2: Lisp bindings merge-with test
+
+(import stdlib/hamt.tur)
+
+(extern-c malloc [^int size] :ptr<void>)
+(extern-c free [^ptr<void> p] :void)
+
+(defn alloc-key [x]
+  (let [p (malloc 8)]
+    (ptr-set! (cast p :ptr<int>) 0 x)
+    p))
+
+;; Combiner function that adds two int values
+(defn add-combiner [a :ptr<void> b :ptr<void>] :ptr<void>
+  (let [result (malloc 8)]
+    (ptr-set! (cast result :ptr<int>) 0 (+ (ptr-get (cast a :ptr<int>) 0) (ptr-get (cast b :ptr<int>) 0)))
+    result))
+
+;; Test: hamt/merge-with with overlapping keys
+(defn test-merge-with [] :int
+  (let [k1 (alloc-key 1)]
+    (let [k2 (alloc-key 2)]
+      (let [v1a (alloc-key 10)]
+        (let [v2a (alloc-key 20)]
+          (let [v1b (alloc-key 100)]
+            (let [v2b (alloc-key 200)]
+              (let [m1 (hamt/new)]
+                (let [m2 (hamt/set m1 (hamt_hash_ptr k1) k1 v1a)]
+                  (let [m3 (hamt/set m2 (hamt_hash_ptr k2) k2 v2a)]
+                    (let [m4 (hamt/new)]
+                      (let [m5 (hamt/set m4 (hamt_hash_ptr k1) k1 v1b)]
+                        (let [m6 (hamt/set m5 (hamt_hash_ptr k2) k2 v2b)]
+                          (let [merged (hamt/merge-with add-combiner m3 m6)]
+                            (let [count (hamt/count merged)]
+                              (let [val1 (hamt/get merged (hamt_hash_ptr k1) k1)]
+                                (let [val2 (hamt/get merged (hamt_hash_ptr k2) k2)]
+                                  (hamt/free m1)
+                                  (hamt/free m2)
+                                  (hamt/free m3)
+                                  (hamt/free m4)
+                                  (hamt/free m5)
+                                  (hamt/free m6)
+                                  (hamt/free merged)
+                                  (free k1)
+                                  (free k2)
+                                  (free v1a)
+                                  (free v2a)
+                                  (free v1b)
+                                  (free v2b)
+                                  (let [v1-result (ptr-get (cast val1 :ptr<int>) 0)]
+                                    (let [v2-result (ptr-get (cast val2 :ptr<int>) 0)]
+                                      (free val1)
+                                      (free val2)
+                                      (if (and (= count 2) (= v1-result 110) (= v2-result 220)) 1 0)))))))))))))))))))))

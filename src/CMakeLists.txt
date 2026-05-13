@@ -22,6 +22,7 @@ set(TUR_SOURCES
     fiber.c
     forms.c
     gc.c
+    hamt.c
     interp.c
     kind_check.c
     lifetime_elision.c

@@ -43,6 +43,8 @@ struct Binding {
     const Symbol *defining_module_name; /* owning module's name, or NULL for top-level */
     /* Phase M6: explicit C symbol name from ^:export-as attribute, or NULL */
     const char   *c_export_name;
+    /* Phase P3: HAMT lowering - whether this binding is ^persistent (immutable map) */
+    bool          is_persistent;
 };
 
 typedef enum ExprKind {

@@ -1,0 +1,51 @@
+;;
+;; Phase P2: Lisp bindings snapshot test
+;; Tests take snapshot with hamt/set, verify original unchanged
+
+(import stdlib/hamt.tur)
+
+(extern-c malloc [^int size] :ptr<void>)
+(extern-c free [^ptr<void> p] :void)
+
+(defn alloc-key [x]
+  (let [p (malloc 8)]
+    (ptr-set! (cast p :ptr<int>) 0 x)
+    p))
+
+;; Test: snapshot test - m1 unchanged after m2 modification
+(defn test-snapshot [] :int
+  (let [k1 (alloc-key 1)]
+    (let [k2 (alloc-key 2)]
+      (let [v1 (alloc-key 100)]
+        (let [v2 (alloc-key 200)]
+          (let [m1 (hamt/new)]
+            (let [m2 (hamt/set m1 (hamt_hash_ptr k1) k1 v1)]
+              (let [m3 (hamt/set m2 (hamt_hash_ptr k2) k2 v2)]
+                ;; m1 should still be empty
+                (let [m1-count (hamt/count m1)]
+                  (let [m1-get-k1 (hamt/get m1 (hamt_hash_ptr k1) k1)]
+                    ;; m2 should have only k1
+                    (let [m2-count (hamt/count m2)]
+                      (let [m2-get-k1 (hamt/get m2 (hamt_hash_ptr k1) k1)]
+                        (let [m2-get-k2 (hamt/get m2 (hamt_hash_ptr k2) k2)]
+                          ;; m3 should have both
+                          (let [m3-count (hamt/count m3)]
+                            (let [m3-get-k1 (hamt/get m3 (hamt_hash_ptr k1) k1)]
+                              (let [m3-get-k2 (hamt/get m3 (hamt_hash_ptr k2) k2)]
+                                (hamt/free m1)
+                                (hamt/free m2)
+                                (hamt/free m3)
+                                (free k1)
+                                (free k2)
+                                (free v1)
+                                (free v2)
+                                (if (and (= m1-count 0)
+                                         (= m1-get-k1 NULL)
+                                         (= m2-count 1)
+                                         (= m2-get-k1 v1)
+                                         (= m2-get-k2 NULL)
+                                         (= m3-count 2)
+                                         (= m3-get-k1 v1)
+                                         (= m3-get-k2 v2))
+                                  1
+                                  0)))))))))))))))))))

@@ -1,0 +1,34 @@
+;;
+;; Phase P1: HAMT structural sharing test
+
+(defn test-structural-sharing [] :int
+  ```c
+  #include "hamt.h"
+  Hamt *m1 = hamt_new();
+  int64_t k1 = 1, k2 = 2, v1 = 100, v2 = 200, v3 = 300;
+  uint64_t h1 = hamt_hash_ptr(&k1);
+  uint64_t h2 = hamt_hash_ptr(&k2);
+  
+  Hamt *m2 = hamt_set(m1, h1, &k1, &v1);
+  Hamt *m3 = hamt_set(m2, h2, &k2, &v2);
+  
+  // m1 should be unchanged (empty)
+  int m1_count = hamt_count(m1);
+  // m2 should have only k1
+  int m2_count = hamt_count(m2);
+  void *m2_val1 = hamt_get(m2, h1, &k1);
+  // m3 should have both
+  int m3_count = hamt_count(m3);
+  void *m3_val1 = hamt_get(m3, h1, &k1);
+  void *m3_val2 = hamt_get(m3, h2, &k2);
+  
+  hamt_free(m1);
+  hamt_free(m2);
+  hamt_free(m3);
+  
+  if (m1_count == 0 && m2_count == 1 && m2_val1 == &v1 &&
+      m3_count == 2 && m3_val1 == &v1 && m3_val2 == &v2) {
+    return 1;
+  }
+  return 0;
+  ```)

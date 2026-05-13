@@ -1,0 +1,46 @@
+;;
+;; Phase P1: HAMT memory test
+;; Tests ASan clean: insert, snapshot, mutate snapshot, free both versions.
+
+(extern-c hamt_new [] :ptr<void>)
+(extern-c hamt_free [^ptr<void> m] :void)
+(extern-c hamt_set [^ptr<void> m ^uint64 hash ^ptr<void> key ^ptr<void> val] :ptr<void>)
+(extern-c hamt_get [^ptr<void> m ^uint64 hash ^ptr<void> key] :ptr<void>)
+(extern-c hamt_count [^ptr<void> m] :int)
+(extern-c hamt_hash_ptr [^ptr<void> ptr] :uint64)
+(extern-c malloc [^int size] :ptr<void>)
+(extern-c free [^ptr<void> p] :void)
+
+(defn test-memory [] :int
+  (let [k1 (malloc 8)]
+    (let [k2 (malloc 8)]
+      (let [v1 (malloc 8)]
+        (let [v2 (malloc 8)]
+          (ptr-set! (cast v1 :ptr<int>) 0 100)
+          (ptr-set! (cast v2 :ptr<int>) 0 200)
+          
+          (let [m1 (hamt_new)]
+            (let [h1 (hamt_hash_ptr k1)]
+              (let [h2 (hamt_hash_ptr k2)]
+                (let [m2 (hamt_set m1 h1 k1 v1)]
+                  ;; m1 and m2 share structure; m1 has 0 entries, m2 has 1
+                  (let [m1-count (hamt_count m1)]
+                    (let [m2-count (hamt_count m2)]
+                      (let [m3 (hamt_set m2 h2 k2 v2)]
+                        ;; m3 has 2 entries, m2 still has 1
+                        (let [m2-count2 (hamt_count m2)]
+                          (let [m3-count (hamt_count m3)]
+                            ;; Free all maps
+                            (hamt_free m1)
+                            (hamt_free m2)
+                            (hamt_free m3)
+                            (free k1)
+                            (free k2)
+                            (free v1)
+                            (free v2)
+                            (if (and (= m1-count 0)
+                                     (= m2-count 1)
+                                     (= m2-count2 1)
+                                     (= m3-count 2))
+                              1
+                              0)))))))))))))))

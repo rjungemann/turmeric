@@ -1,0 +1,54 @@
+;;
+;; Phase P1: HAMT large-scale test
+;; Tests insert 10,000 unique keys; verify count and random-sample lookups.
+
+(extern-c hamt_new [] :ptr<void>)
+(extern-c hamt_free [^ptr<void> m] :void)
+(extern-c hamt_set [^ptr<void> m ^uint64 hash ^ptr<void> key ^ptr<void> val] :ptr<void>)
+(extern-c hamt_get [^ptr<void> m ^uint64 hash ^ptr<void> key] :ptr<void>)
+(extern-c hamt_count [^ptr<void> m] :int)
+(extern-c hamt_hash_ptr [^ptr<void> ptr] :uint64)
+(extern-c malloc [^int size] :ptr<void>)
+(extern-c free [^ptr<void> p] :void)
+
+(defn test-large [] :int
+  (let [n 10000]
+    (let [m (hamt_new)]
+      (let [keys (malloc (* n 8))]
+        (let [vals (malloc (* n 8))]
+          (loop [i 0]
+            (if (< i n)
+              (do
+                (let [ki (ptr-offset keys i)]
+                  (let [vi (ptr-offset vals i)]
+                    (ptr-set! (cast ki :ptr<int>) 0 i)
+                    (ptr-set! (cast vi :ptr<int>) 0 (* i 2))
+                    (let [old-m m]
+                      (set! m (hamt_set m (hamt_hash_ptr ki) ki vi))
+                      (hamt_free old-m)))))
+                (recur (+ i 1)))
+              (let [count (hamt_count m)]
+                ;; Verify count
+                (if (not= count n)
+                  (do
+                    (hamt_free m)
+                    (free keys)
+                    (free vals)
+                    0)
+                  ;; Verify random samples
+                  (let [success true]
+                    (let [i 0]
+                      (loop []
+                        (if (< i 100)
+                          (do
+                            (let [ki (ptr-offset keys (mod i 17))]
+                              (let [expected-vi (ptr-offset vals (mod i 17))]
+                                (let [actual (hamt_get m (hamt_hash_ptr ki) ki)]
+                                  (if (not= actual expected-vi)
+                                    (set! success false)))))
+                            (recur (+ i 1)))
+                          (do
+                            (hamt_free m)
+                            (free keys)
+                            (free vals)
+                            (if success 1 0))))))))))))))))

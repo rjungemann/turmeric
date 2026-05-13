@@ -1,0 +1,70 @@
+;;
+;; Phase P1: HAMT iteration test
+;; Tests iterate all key/value pairs; no duplicates, no omissions.
+
+(extern-c hamt_new [] :ptr<void>)
+(extern-c hamt_free [^ptr<void> m] :void)
+(extern-c hamt_set [^ptr<void> m ^uint64 hash ^ptr<void> key ^ptr<void> val] :ptr<void>)
+(extern-c hamt_iter_init [^ptr<void> iter ^ptr<void> m] :void)
+(extern-c hamt_iter_free [^ptr<void> iter] :void)
+(extern-c hamt_iter_next [^ptr<void> iter ^ptr<uint64> hash_out ^ptr<ptr<void>> key_out ^ptr<ptr<void>> val_out] :bool)
+(extern-c hamt_count [^ptr<void> m] :int)
+(extern-c hamt_hash_ptr [^ptr<void> ptr] :uint64)
+(extern-c malloc [^int size] :ptr<void>)
+(extern-c free [^ptr<void> p] :void)
+
+(defn alloc-key [x]
+  (let [p (malloc 8)]
+    (ptr-set! (cast p :ptr<int>) 0 x)
+    p)))
+
+(defn test-iteration [] :int
+  (let [k1 (alloc-key 1)]
+    (let [k2 (alloc-key 2)]
+      (let [k3 (alloc-key 3)]
+        (let [v1 (alloc-key 10)]
+          (let [v2 (alloc-key 20)]
+            (let [v3 (alloc-key 30)]
+              (let [m1 (hamt_new)]
+                (let [h1 (hamt_hash_ptr k1)]
+                  (let [h2 (hamt_hash_ptr k2)]
+                    (let [h3 (hamt_hash_ptr k3)]
+                      (let [m2 (hamt_set (hamt_set (hamt_set m1 h1 k1 v1) h2 k2 v2) h3 k3 v3)]
+                        (let [count (hamt_count m2)]
+                          (let [iter (malloc 128)]
+                            (hamt_iter_init iter m2)
+                            (let [hash (malloc 8)]
+                              (let [key (malloc 8)]
+                                (let [val (malloc 8)]
+                                  (let [iterated-count 0]
+                                    (let [found-k1 false]
+                                      (let [found-k2 false]
+                                        (let [found-k3 false]
+                                          (loop []
+                                            (if (hamt_iter_next iter hash key val)
+                                              (do
+                                                (set! iterated-count (+ iterated-count 1))
+                                                (set! found-k1 (or found-k1 (= (deref ptr<void> key) k1)))
+                                                (set! found-k2 (or found-k2 (= (deref ptr<void> key) k2)))
+                                                (set! found-k3 (or found-k3 (= (deref ptr<void> key) k3)))
+                                                (recur))
+                                              (do
+                                                (hamt_iter_free iter)
+                                                (free hash)
+                                                (free key)
+                                                (free val)
+                                                (free iter)
+                                                (hamt_free m1)
+                                                (hamt_free m2)
+                                                (free k1)
+                                                (free k2)
+                                                (free k3)
+                                                (free v1)
+                                                (free v2)
+                                                (free v3)
+                                                (if (and (= iterated-count count)
+                                                         found-k1
+                                                         found-k2
+                                                         found-k3)
+                                                  1
+                                                  0)))))))))))))))))))))))))))

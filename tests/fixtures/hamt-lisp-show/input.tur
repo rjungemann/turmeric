@@ -1,0 +1,39 @@
+;;
+;; Phase P2: Lisp bindings Show instance test
+
+(import stdlib/hamt.tur)
+
+(extern-c malloc [^int size] :ptr<void>)
+(extern-c free [^ptr<void> p] :void)
+(extern-c strlen [^cstr s] :int)
+(extern-c strcmp [^cstr a ^cstr b] :int)
+
+(defn alloc-key [x]
+  (let [p (malloc 8)]
+    (ptr-set! (cast p :ptr<int>) 0 x)
+    p))
+
+;; Test: Show instance for empty map
+(defn test-show-empty [] :int
+  (let [m (hamt/new)]
+    (let [s (show m)]
+      (let [expected "{}"]
+        (hamt/free m)
+        (free s)
+        (if (= (strlen expected) (strlen s)) 1 0)))))
+
+;; Test: Show instance for non-empty map
+(defn test-show-nonempty [] :int
+  (let [k1 (alloc-key 1)]
+    (let [v1 (alloc-key 100)]
+      (let [m1 (hamt/new)]
+        (let [m2 (hamt/set m1 (hamt_hash_ptr k1) k1 v1)]
+          (let [s (show m2)]
+            (hamt/free m1)
+            (hamt/free m2)
+            (free k1)
+            (free v1)
+            (let [len (strlen s)]
+              (free s)
+              ;; Should have "{" "}" and some content
+              (if (> len 2) 1 0)))))))))

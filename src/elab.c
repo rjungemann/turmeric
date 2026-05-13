@@ -383,6 +383,24 @@ typedef struct Elab {
     const Symbol *sym_extern_c; /* Phase 2 */
     const Symbol *sym_caret_mut;     /* ^mut */
     const Symbol *sym_caret_private; /* ^private — module-private visibility annotation */
+    /* Phase P3: HAMT lowering */
+    const Symbol *sym_caret_persistent; /* ^persistent — immutable map annotation */
+    const Symbol *sym_map_new;    /* map-new - create new map */
+    const Symbol *sym_assoc;      /* assoc - insert/update key-value */
+    const Symbol *sym_dissoc;     /* dissoc - delete key */
+    const Symbol *sym_map_get;    /* get - get value by key */
+    const Symbol *sym_map_has;    /* has? - check key exists */
+    const Symbol *sym_map_count;  /* count - number of entries */
+    const Symbol *sym_map_merge;  /* merge - merge two maps */
+    /* HAMT function symbols for lowering */
+    const Symbol *sym_hamt_new;   /* hamt/new */
+    const Symbol *sym_hamt_set;   /* hamt/set */
+    const Symbol *sym_hamt_del;   /* hamt/del */
+    const Symbol *sym_hamt_get;   /* hamt/get */
+    const Symbol *sym_hamt_has;   /* hamt/has? */
+    const Symbol *sym_hamt_count; /* hamt/count */
+    const Symbol *sym_hamt_merge; /* hamt/merge */
+    const Symbol *sym_hamt_hash_ptr; /* hamt_hash_ptr */
     const Symbol *sym_defer;      /* Phase 4 */
     const Symbol *sym_return;     /* return - early return with defer firing */
     /* Phase 5 */
@@ -568,6 +586,8 @@ typedef struct Elab {
     /* Phase B2 CPS-CL7: tracks nesting depth of cloneable-reset for
      * detecting cloneable-shift outside any reset boundary. */
     int              cloneable_reset_depth;
+    /* Phase P3: HAMT lowering - track if HAMT functions are used */
+    bool             needs_hamt;
 } Elab;
 
 /* Phase 6: Macro definition */
@@ -872,6 +892,24 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_extern_c  = intern_cstr(st, "extern-c");
     e->sym_caret_mut     = intern_cstr(st, "^mut");
     e->sym_caret_private = intern_cstr(st, "^private");
+    /* Phase P3: HAMT lowering */
+    e->sym_caret_persistent = intern_cstr(st, "^persistent");
+    e->sym_map_new = intern_cstr(st, "map-new");
+    e->sym_assoc = intern_cstr(st, "assoc");
+    e->sym_dissoc = intern_cstr(st, "dissoc");
+    e->sym_map_get = intern_cstr(st, "get");
+    e->sym_map_has = intern_cstr(st, "has?");
+    e->sym_map_count = intern_cstr(st, "count");
+    e->sym_map_merge = intern_cstr(st, "merge");
+    /* HAMT function symbols for lowering */
+    e->sym_hamt_new = intern_cstr(st, "hamt/new");
+    e->sym_hamt_set = intern_cstr(st, "hamt/set");
+    e->sym_hamt_del = intern_cstr(st, "hamt/del");
+    e->sym_hamt_get = intern_cstr(st, "hamt/get");
+    e->sym_hamt_has = intern_cstr(st, "hamt/has?");
+    e->sym_hamt_count = intern_cstr(st, "hamt/count");
+    e->sym_hamt_merge = intern_cstr(st, "hamt/merge");
+    e->sym_hamt_hash_ptr = intern_cstr(st, "hamt_hash_ptr");
     e->sym_defer     = intern_cstr(st, "defer");
     e->sym_return    = intern_cstr(st, "return");
     /* Phase 5 */
@@ -1043,6 +1081,8 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->separate_compilation = false;
     e->macro_expansion_module = NULL;
     e->cloneable_reset_depth = 0;
+    /* Phase P3: HAMT lowering */
+    e->needs_hamt = false;
 }
 
 /* Phase 13: Lifetime annotation helpers (deferred - infrastructure in place) */
@@ -2829,10 +2869,6 @@ static Expr *elab_dlclose(Elab *e, const Form *call) {
 
 /* ---- helpers ---- */
 
-static int form_is_symbol_named(const Form *f, const Symbol *name) {
-    return f && f->tag == F_SYM && f->as.sym == name;
-}
-
 static bool effect_row_contains_symbol(const EffectRow *row, const Symbol *name) {
     if (!row || !name) return false;
     switch (row->kind) {
@@ -2877,7 +2913,7 @@ static Expr *elab_let(Elab *e, const Form *call) {
         return NULL;
     }
 
-    /* Parse bindings: walk left-to-right, optional ^mut prefix per entry. */
+    /* Parse bindings: walk left-to-right, optional ^mut / ^persistent prefix per entry. */
     LetBinding *binds = NULL;
     bool       *binding_moved_during_init = NULL; /* tracks moves of preceding bindings during each init elaboration */
     uint32_t    n_binds = 0, cap = 0;
@@ -2890,11 +2926,22 @@ static Expr *elab_let(Elab *e, const Form *call) {
     while (i < bindings_form->as.list.len) {
         Form *cur = bindings_form->as.list.items[i];
         bool is_mut = false;
-        if (form_is_symbol_named(cur, e->sym_caret_mut)) {
+        bool is_persistent = false;
+        /* Phase P3: Check for ^mut or ^persistent annotation */
+        while (cur->tag == F_SYM && cur->as.sym == e->sym_caret_mut) {
             is_mut = true;
             i++;
             if (i >= bindings_form->as.list.len) {
                 diag_emit(DIAG_ERROR, cur->span, "trailing ^mut with no binding name");
+                rc = -1; break;
+            }
+            cur = bindings_form->as.list.items[i];
+        }
+        while (cur->tag == F_SYM && cur->as.sym == e->sym_caret_persistent) {
+            is_persistent = true;
+            i++;
+            if (i >= bindings_form->as.list.len) {
+                diag_emit(DIAG_ERROR, cur->span, "trailing ^persistent with no binding name");
                 rc = -1; break;
             }
             cur = bindings_form->as.list.items[i];
@@ -2949,6 +2996,7 @@ static Expr *elab_let(Elab *e, const Form *call) {
         }
 
         Binding *b = binding_new(e, name, init->type, is_mut, false, name_span);
+        b->is_persistent = is_persistent;
         scope_add(&inner, b);
 
         if (n_binds == cap) {
@@ -6395,11 +6443,25 @@ static Expr *elab_extern_c(Elab *e, const Form *call) {
 }
 
 static Expr *elab_def(Elab *e, const Form *call) {
-    if (call->as.list.len != 3) {
-        diag_emit(DIAG_ERROR, call->span, "def takes (def name init)");
+    /* Phase P3: Check for ^persistent annotation before name */
+    /* Syntax: (def ^persistent name init) */
+    uint32_t name_idx = 1;
+    bool is_persistent = false;
+    
+    if (call->as.list.len > 3) {
+        Form *first = call->as.list.items[name_idx];
+        if (first->tag == F_SYM && first->as.sym == e->sym_caret_persistent) {
+            is_persistent = true;
+            name_idx++;
+        }
+    }
+    
+    if (name_idx + 2 != call->as.list.len) {
+        diag_emit(DIAG_ERROR, call->span, "def takes (def [^persistent] name init)");
         return NULL;
     }
-    Form *name_f = call->as.list.items[1];
+    
+    Form *name_f = call->as.list.items[name_idx];
     if (name_f->tag != F_SYM) {
         diag_emit(DIAG_ERROR, name_f->span, "def name must be a symbol");
         return NULL;
@@ -6414,7 +6476,7 @@ static Expr *elab_def(Elab *e, const Form *call) {
                   "def: '%s' is already defined", name_f->as.sym->name);
         return NULL;
     }
-    Expr *init = elab_form(e, call->as.list.items[2]);
+    Expr *init = elab_form(e, call->as.list.items[name_idx + 1]);
     if (!init) return NULL;
 
     /* Phase 5: ref<T> is scope-local only — disallow at top-level def */
@@ -6427,6 +6489,7 @@ static Expr *elab_def(Elab *e, const Form *call) {
 
     Binding *b = binding_new(e, name_f->as.sym, init->type,
                              /*is_mut=*/false, /*is_global=*/true, name_f->span);
+    b->is_persistent = is_persistent;
     scope_add(&e->global, b);
 
     Expr *out = expr_new(e->arena, EX_DEF, TYPE_NIL, call->span);
@@ -6434,6 +6497,242 @@ static Expr *elab_def(Elab *e, const Form *call) {
     out->as.def_.init = init;
     out->as.def_.struct_def = NULL;
     return out;
+}
+
+/* Phase P3: HAMT lowering - forward declarations */
+static Expr *elab_call_hamt_fn(Elab *e, Span span, const Symbol *fn_name, uint32_t n_args, Expr **args);
+static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding);
+
+/* Phase P3: HAMT lowering - create a call to a HAMT function binding */
+static Expr *elab_call_hamt_fn(Elab *e, Span span, const Symbol *fn_name, uint32_t n_args, Expr **args) {
+    /* Look up the HAMT function binding */
+    bool fn_qual_err = false;
+    Binding *fn_binding = elab_lookup_sym(e, fn_name, span, &fn_qual_err);
+    if (!fn_binding && fn_qual_err) return NULL;
+    if (!fn_binding) {
+        /* HAMT module not imported - for now, we require it to be imported */
+        diag_emit(DIAG_ERROR, span, "HAMT module must be imported to use persistent maps");
+        return NULL;
+    }
+    
+    /* Create the EX_CALL expression directly */
+    Expr *out = expr_new(e->arena, EX_CALL, fn_binding->type, span);
+    out->as.call_.fn_binding = fn_binding;
+    out->as.call_.args = args;
+    out->as.call_.n_args = n_args;
+    out->as.call_.fn_expr = NULL;
+    return out;
+}
+
+/* Phase P3: HAMT lowering - lower map function calls when first arg is persistent */
+static Expr *elab_lower_map_call(Elab *e, const Form *call, const Symbol *name) {
+    uint32_t n_args = call->as.list.len - 1;
+    
+    /* Elaborate the first argument to check if it's a persistent binding */
+    /* For map-new, there are no arguments, so we skip the first arg check */
+    if (n_args == 0) {
+        /* Only map-new takes 0 arguments */
+        if (name != e->sym_map_new) {
+            diag_emit(DIAG_ERROR, call->span, "map function '%s' requires at least 1 argument", name->name);
+            return NULL;
+        }
+        /* For map-new, we don't need to check the first arg since there isn't one */
+    }
+    
+    Expr *first_arg = NULL;
+    if (n_args > 0) {
+        first_arg = elab_form(e, call->as.list.items[1]);
+        if (!first_arg) return NULL;
+    }
+    
+    /* Check if first argument is a variable reference to a persistent binding */
+    /* For map-new, first_arg is NULL, so we treat it as non-persistent (it creates a new map) */
+    bool is_persistent_map = false;
+    if (first_arg && first_arg->kind == EX_VAR && first_arg->as.var.binding->is_persistent) {
+        is_persistent_map = true;
+    }
+    
+    if (!is_persistent_map) {
+        /* Not a persistent binding - fall through to normal elaboration */
+        /* Re-elaborate all args together */
+        Expr **args = (Expr **)arena_alloc(e->arena, n_args * sizeof(Expr *));
+        if (n_args > 0) {
+            args[0] = first_arg;
+            for (uint32_t i = 1; i < n_args; i++) {
+                args[i] = elab_form(e, call->as.list.items[1 + i]);
+                if (!args[i]) return NULL;
+            }
+        }
+        
+        /* Look up the function binding */
+        bool fn_qual_err = false;
+        Binding *fn_binding = elab_lookup_sym(e, name, call->as.list.items[0]->span, &fn_qual_err);
+        if (!fn_binding && fn_qual_err) return NULL;
+        if (!fn_binding) {
+            diag_emit(DIAG_ERROR, call->span, "unknown function '%s'", name->name);
+            return NULL;
+        }
+        return elab_call_fn(e, call, fn_binding);
+    }
+    
+    /* Mark that we need HAMT */
+    e->needs_hamt = true;
+    /* Phase P3: Set global flag for emit phase */
+    extern bool g_needs_hamt;
+    g_needs_hamt = true;
+    
+    /* Elaborate remaining arguments (for map-new, n_args is 0, so this is safe) */
+    Expr **args = (Expr **)arena_alloc(e->arena, n_args * sizeof(Expr *));
+    if (n_args > 0) {
+        args[0] = first_arg;
+        for (uint32_t i = 1; i < n_args; i++) {
+            args[i] = elab_form(e, call->as.list.items[1 + i]);
+            if (!args[i]) return NULL;
+        }
+    }
+    
+    /* Transform based on the function name */
+    if (name == e->sym_map_new) {
+        if (n_args != 0) {
+            diag_emit(DIAG_ERROR, call->span, "map-new takes 0 arguments");
+            return NULL;
+        }
+        /* map-new -> (hamt/new) */
+        return elab_call_hamt_fn(e, call->span, e->sym_hamt_new, 0, NULL);
+    } else if (name == e->sym_assoc) {
+        if (n_args != 3) {
+            diag_emit(DIAG_ERROR, call->span, "assoc takes 3 arguments: (assoc map key value)");
+            return NULL;
+        }
+        /* assoc m k v -> (hamt/set m (hamt_hash_ptr k) k v) */
+        /* First, compute the hash: (hamt_hash_ptr k) */
+        bool hash_qual_err = false;
+        Binding *hash_binding = elab_lookup_sym(e, e->sym_hamt_hash_ptr, call->span, &hash_qual_err);
+        if (!hash_binding && hash_qual_err) return NULL;
+        if (!hash_binding) {
+            diag_emit(DIAG_ERROR, call->span, "HAMT module must be imported to use persistent maps");
+            return NULL;
+        }
+        
+        /* Create the hash argument */
+        Expr **hash_args = (Expr **)arena_alloc(e->arena, 1 * sizeof(Expr *));
+        hash_args[0] = args[1];  /* key */
+        Expr *hash_call = expr_new(e->arena, EX_CALL, hash_binding->type, call->span);
+        hash_call->as.call_.fn_binding = hash_binding;
+        hash_call->as.call_.args = hash_args;
+        hash_call->as.call_.n_args = 1;
+        hash_call->as.call_.fn_expr = NULL;
+        
+        /* Create args for hamt/set: m, hash, k, v */
+        Expr **set_args = (Expr **)arena_alloc(e->arena, 4 * sizeof(Expr *));
+        set_args[0] = args[0];  /* m */
+        set_args[1] = hash_call;  /* hash */
+        set_args[2] = args[1];  /* k */
+        set_args[3] = args[2];  /* v */
+        
+        return elab_call_hamt_fn(e, call->span, e->sym_hamt_set, 4, set_args);
+    } else if (name == e->sym_dissoc) {
+        if (n_args != 2) {
+            diag_emit(DIAG_ERROR, call->span, "dissoc takes 2 arguments: (dissoc map key)");
+            return NULL;
+        }
+        /* dissoc m k -> (hamt/del m (hamt_hash_ptr k) k) */
+        bool hash_qual_err2 = false;
+        Binding *hash_binding = elab_lookup_sym(e, e->sym_hamt_hash_ptr, call->span, &hash_qual_err2);
+        if (!hash_binding && hash_qual_err2) return NULL;
+        if (!hash_binding) {
+            diag_emit(DIAG_ERROR, call->span, "HAMT module must be imported to use persistent maps");
+            return NULL;
+        }
+        
+        Expr **hash_args = (Expr **)arena_alloc(e->arena, 1 * sizeof(Expr *));
+        hash_args[0] = args[1];
+        Expr *hash_call = expr_new(e->arena, EX_CALL, hash_binding->type, call->span);
+        hash_call->as.call_.fn_binding = hash_binding;
+        hash_call->as.call_.args = hash_args;
+        hash_call->as.call_.n_args = 1;
+        hash_call->as.call_.fn_expr = NULL;
+        
+        Expr **del_args = (Expr **)arena_alloc(e->arena, 3 * sizeof(Expr *));
+        del_args[0] = args[0];  /* m */
+        del_args[1] = hash_call;  /* hash */
+        del_args[2] = args[1];  /* k */
+        
+        return elab_call_hamt_fn(e, call->span, e->sym_hamt_del, 3, del_args);
+    } else if (name == e->sym_map_get) {
+        if (n_args != 2) {
+            diag_emit(DIAG_ERROR, call->span, "get takes 2 arguments: (get map key)");
+            return NULL;
+        }
+        /* get m k -> (hamt/get m (hamt_hash_ptr k) k) */
+        bool hash_qual_err4 = false;
+        Binding *hash_binding = elab_lookup_sym(e, e->sym_hamt_hash_ptr, call->span, &hash_qual_err4);
+        if (!hash_binding && hash_qual_err4) return NULL;
+        if (!hash_binding) {
+            diag_emit(DIAG_ERROR, call->span, "HAMT module must be imported to use persistent maps");
+            return NULL;
+        }
+        
+        Expr **hash_args = (Expr **)arena_alloc(e->arena, 1 * sizeof(Expr *));
+        hash_args[0] = args[1];
+        Expr *hash_call = expr_new(e->arena, EX_CALL, hash_binding->type, call->span);
+        hash_call->as.call_.fn_binding = hash_binding;
+        hash_call->as.call_.args = hash_args;
+        hash_call->as.call_.n_args = 1;
+        hash_call->as.call_.fn_expr = NULL;
+        
+        Expr **get_args = (Expr **)arena_alloc(e->arena, 3 * sizeof(Expr *));
+        get_args[0] = args[0];  /* m */
+        get_args[1] = hash_call;  /* hash */
+        get_args[2] = args[1];  /* k */
+        
+        return elab_call_hamt_fn(e, call->span, e->sym_hamt_get, 3, get_args);
+    } else if (name == e->sym_map_has) {
+        if (n_args != 2) {
+            diag_emit(DIAG_ERROR, call->span, "has? takes 2 arguments: (has? map key)");
+            return NULL;
+        }
+        /* has? m k -> (hamt/has? m (hamt_hash_ptr k) k) */
+        bool hash_qual_err3 = false;
+        Binding *hash_binding = elab_lookup_sym(e, e->sym_hamt_hash_ptr, call->span, &hash_qual_err3);
+        if (!hash_binding && hash_qual_err3) return NULL;
+        if (!hash_binding) {
+            diag_emit(DIAG_ERROR, call->span, "HAMT module must be imported to use persistent maps");
+            return NULL;
+        }
+        
+        Expr **hash_args = (Expr **)arena_alloc(e->arena, 1 * sizeof(Expr *));
+        hash_args[0] = args[1];
+        Expr *hash_call = expr_new(e->arena, EX_CALL, hash_binding->type, call->span);
+        hash_call->as.call_.fn_binding = hash_binding;
+        hash_call->as.call_.args = hash_args;
+        hash_call->as.call_.n_args = 1;
+        hash_call->as.call_.fn_expr = NULL;
+        
+        Expr **has_args = (Expr **)arena_alloc(e->arena, 3 * sizeof(Expr *));
+        has_args[0] = args[0];  /* m */
+        has_args[1] = hash_call;  /* hash */
+        has_args[2] = args[1];  /* k */
+        
+        return elab_call_hamt_fn(e, call->span, e->sym_hamt_has, 3, has_args);
+    } else if (name == e->sym_map_count) {
+        if (n_args != 1) {
+            diag_emit(DIAG_ERROR, call->span, "count takes 1 argument: (count map)");
+            return NULL;
+        }
+        /* count m -> (hamt/count m) */
+        return elab_call_hamt_fn(e, call->span, e->sym_hamt_count, 1, args);
+    } else if (name == e->sym_map_merge) {
+        if (n_args != 2) {
+            diag_emit(DIAG_ERROR, call->span, "merge takes 2 arguments: (merge a b)");
+            return NULL;
+        }
+        /* merge a b -> (hamt/merge a b) */
+        return elab_call_hamt_fn(e, call->span, e->sym_hamt_merge, 2, args);
+    }
+    
+    diag_emit(DIAG_ERROR, call->span, "unexpected map function '%s'", name->name);
+    return NULL;
 }
 
 /* ---- Phase 2: defn, fn, extern-c ---- */
@@ -6639,6 +6938,13 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_defn)    return elab_defn  (e, call);
     if (name == e->sym_fn)      return elab_fn    (e, call);
     if (name == e->sym_extern_c) return elab_extern_c(e, call);
+
+    /* Phase P3: HAMT lowering - lower map function calls when first arg is persistent */
+    if (name == e->sym_map_new || name == e->sym_assoc || name == e->sym_dissoc ||
+        name == e->sym_map_get || name == e->sym_map_has || name == e->sym_map_count ||
+        name == e->sym_map_merge) {
+        return elab_lower_map_call(e, call, name);
+    }
 
     /* Phase 6: Check if it's a macro call */
     MacroDef *macro = elab_lookup_macro(e, name);

@@ -18,6 +18,8 @@ extern bool g_panic_abort;
 extern bool g_warn_unused_result;
 extern bool g_lint_panic;
 extern bool g_panic_trace;
+/* Phase P3: HAMT lowering - track if HAMT is needed */
+extern bool g_needs_hamt;
 
 /* Forward declarations */
 struct DeferThunk;
@@ -3896,6 +3898,10 @@ int emit_program(Buf *out, const Expr *program) {
      * but not exercised by every program.  Both GCC and Clang honour these. */
     buf_puts(out, "#pragma GCC diagnostic ignored \"-Wunused-function\"\n");
     buf_puts(out, "#pragma GCC diagnostic ignored \"-Wunused-variable\"\n");
+    /* Phase P3: HAMT lowering - include HAMT header when needed */
+    if (g_needs_hamt) {
+        buf_puts(out, "#include \"hamt.h\"\n");
+    }
     buf_puts(out, "#include <stdio.h>\n");
     buf_puts(out, "#include <stdint.h>\n");
     buf_puts(out, "#include <stdbool.h>\n");

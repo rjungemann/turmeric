@@ -1,0 +1,52 @@
+;;
+;; Phase P1: HAMT collision test
+;; Tests insert multiple keys with the same hash; all retrievable.
+
+(extern-c hamt_new [] :ptr<void>)
+(extern-c hamt_free [^ptr<void> m] :void)
+(extern-c hamt_set [^ptr<void> m ^uint64 hash ^ptr<void> key ^ptr<void> val] :ptr<void>)
+(extern-c hamt_get [^ptr<void> m ^uint64 hash ^ptr<void> key] :ptr<void>)
+(extern-c hamt_has [^ptr<void> m ^uint64 hash ^ptr<void> key] :bool)
+(extern-c hamt_count [^ptr<void> m] :int)
+(extern-c malloc [^int size] :ptr<void>)
+(extern-c free [^ptr<void> p] :void)
+
+;; For collision test, we need keys with same hash but different pointers
+;; We'll use a fixed hash value and different key pointers
+(defn test-collision [] :int
+  (let [fixed-hash (cast 0x123456789ABCDEF0 :uint64)]
+    (let [k1 (malloc 8)]
+      (let [k2 (malloc 8)]
+        (let [k3 (malloc 8)]
+          (let [v1 (malloc 8)]
+            (let [v2 (malloc 8)]
+              (let [v3 (malloc 8)]
+                ;; Set different values for each key
+                (ptr-set! (cast v1 :ptr<int>) 0 100)
+                (ptr-set! (cast v2 :ptr<int>) 0 200)
+                (ptr-set! (cast v3 :ptr<int>) 0 300)
+                
+                (let [m1 (hamt_new)]
+                  (let [m2 (hamt_set m1 fixed-hash k1 v1)]
+                    (let [m3 (hamt_set m2 fixed-hash k2 v2)]
+                      (let [m4 (hamt_set m3 fixed-hash k3 v3)]
+                        (let [count (hamt_count m4)]
+                          (let [val1 (hamt_get m4 fixed-hash k1)]
+                            (let [val2 (hamt_get m4 fixed-hash k2)]
+                              (let [val3 (hamt_get m4 fixed-hash k3)]
+                                (hamt_free m1)
+                                (hamt_free m2)
+                                (hamt_free m3)
+                                (hamt_free m4)
+                                (free k1)
+                                (free k2)
+                                (free k3)
+                                (free v1)
+                                (free v2)
+                                (free v3)
+                                (if (and (= count 3)
+                                         (= val1 v1)
+                                         (= val2 v2)
+                                         (= val3 v3))
+                                  1
+                                  0)))))))))))))))))))

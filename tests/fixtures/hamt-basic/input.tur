@@ -1,0 +1,56 @@
+;;
+;; Phase P1: HAMT basic operations test
+
+(defn test-empty [] :int
+  ```c
+  #include "/Users/rjungemann/Projects/turmeric2/src/hamt.h"
+  Hamt *m = hamt_new();
+  int c = hamt_count(m);
+  hamt_free(m);
+  return c;
+  ```)
+
+(defn test-single [] :int
+  ```c
+  #include "/Users/rjungemann/Projects/turmeric2/src/hamt.h"
+  int64_t k = 42;
+  int64_t v = 100;
+  Hamt *m1 = hamt_new();
+  uint64_t h = hamt_hash_ptr(&k);
+  Hamt *m2 = hamt_set(m1, h, &k, &v);
+  void *r = hamt_get(m2, h, &k);
+  hamt_free(m1);
+  hamt_free(m2);
+  return (r == &v) ? 1 : 0;
+  ```)
+
+(defn test-has [] :int
+  ```c
+  #include "/Users/rjungemann/Projects/turmeric2/src/hamt.h"
+  int64_t k = 42;
+  int64_t v = 100;
+  Hamt *m1 = hamt_new();
+  uint64_t h = hamt_hash_ptr(&k);
+  Hamt *m2 = hamt_set(m1, h, &k, &v);
+  bool r = hamt_has(m2, h, &k);
+  hamt_free(m1);
+  hamt_free(m2);
+  return r ? 1 : 0;
+  ```)
+
+(defn test-count [] :int
+  ```c
+  #include "/Users/rjungemann/Projects/turmeric2/src/hamt.h"
+  int64_t k1 = 1, k2 = 2;
+  int64_t v1 = 10, v2 = 20;
+  Hamt *m1 = hamt_new();
+  uint64_t h1 = hamt_hash_ptr(&k1);
+  uint64_t h2 = hamt_hash_ptr(&k2);
+  Hamt *m2 = hamt_set(m1, h1, &k1, &v1);
+  Hamt *m3 = hamt_set(m2, h2, &k2, &v2);
+  int c = hamt_count(m3);
+  hamt_free(m1);
+  hamt_free(m2);
+  hamt_free(m3);
+  return c;
+  ```)

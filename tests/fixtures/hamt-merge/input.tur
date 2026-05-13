@@ -1,0 +1,72 @@
+;;
+;; Phase P1: HAMT merge test
+;; Tests merge two disjoint maps; merge with overlapping keys (last writer wins).
+
+(extern-c hamt_new [] :ptr<void>)
+(extern-c hamt_free [^ptr<void> m] :void)
+(extern-c hamt_set [^ptr<void> m ^uint64 hash ^ptr<void> key ^ptr<void> val] :ptr<void>)
+(extern-c hamt_get [^ptr<void> m ^uint64 hash ^ptr<void> key] :ptr<void>)
+(extern-c hamt_merge [^ptr<void> a ^ptr<void> b] :ptr<void>)
+(extern-c hamt_count [^ptr<void> m] :int)
+(extern-c hamt_hash_ptr [^ptr<void> ptr] :uint64)
+(extern-c malloc [^int size] :ptr<void>)
+(extern-c free [^ptr<void> p] :void)
+
+(defn alloc-key [x]
+  (let [p (malloc 8)]
+    (ptr-set! (cast p :ptr<int>) 0 x)
+    p)))
+
+;; Test: merge disjoint maps
+(defn test-merge-disjoint [] :int
+  (let [k1 (alloc-key 1)]
+    (let [k2 (alloc-key 2)]
+      (let [v1 (alloc-key 10)]
+        (let [v2 (alloc-key 20)]
+          (let [m1 (hamt_new)]
+            (let [h1 (hamt_hash_ptr k1)]
+              (let [m2 (hamt_set m1 h1 k1 v1)]
+                (let [m3 (hamt_new)]
+                  (let [h2 (hamt_hash_ptr k2)]
+                    (let [m4 (hamt_set m3 h2 k2 v2)]
+                      (let [merged (hamt_merge m2 m4)]
+                        (let [count (hamt_count merged)]
+                          (let [val1 (hamt_get merged h1 k1)]
+                            (let [val2 (hamt_get merged h2 k2)]
+                              (hamt_free m1)
+                              (hamt_free m2)
+                              (hamt_free m3)
+                              (hamt_free m4)
+                              (hamt_free merged)
+                              (free k1)
+                              (free k2)
+                              (free v1)
+                              (free v2)
+                              (if (and (= count 2)
+                                       (= val1 v1)
+                                       (= val2 v2))
+                                1
+                                0)))))))))))))))))
+
+;; Test: merge with overlapping keys (b wins)
+(defn test-merge-overlapping [] :int
+  (let [k1 (alloc-key 1)]
+    (let [v1 (alloc-key 10)]
+      (let [v2 (alloc-key 20)]
+        (let [m1 (hamt_new)]
+          (let [h1 (hamt_hash_ptr k1)]
+            (let [m2 (hamt_set m1 h1 k1 v1)]
+              (let [m3 (hamt_new)]
+                (let [m4 (hamt_set m3 h1 k1 v2)]
+                  (let [merged (hamt_merge m2 m4)]
+                    (let [count (hamt_count merged)]
+                      (let [val (hamt_get merged h1 k1)]
+                        (hamt_free m1)
+                        (hamt_free m2)
+                        (hamt_free m3)
+                        (hamt_free m4)
+                        (hamt_free merged)
+                        (free k1)
+                        (free v1)
+                        (free v2)
+                        (if (and (= count 1) (= val v2)) 1 0)))))))))))))))
