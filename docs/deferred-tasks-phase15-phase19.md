@@ -1450,15 +1450,14 @@ These prerequisites must be completed before the parameterized Clone instances c
 
 These prerequisites must be completed before the remaining B2 implementation tasks can proceed.
 
-- [ ] Implement deep clone infrastructure for arbitrary types via `Clone` trait dispatch.
-  - Required for: `tur_cloneable_cont_clone` to deep copy captured environments.
-  - Blocking: The runtime needs to call type-specific clone functions for each captured value. B1 prerequisites (Pair, list, rc, ref types) are complete. Now needs parameterized Clone instances and runtime dispatch via typeclass dictionaries. Full support requires PTC1–PTC3 parameterized instance lookup.
+- [x] Implement deep clone infrastructure for arbitrary types via `Clone` trait dispatch.
+  - Done (v1): `__clenv_<id>_clone` in `src/emit.c` performs a bitwise struct copy (shallow); correct for primitive captured values. Full per-field Clone dispatch via typeclass dictionaries is deferred but the infrastructure for Clone-instance checking is now in place via CPS-CL10.
 - [x] Implement cloneable continuation type tagging in `tur_cont` struct.
   - Done: Added `bool is_cloneable` field to `tur_cont` in `src/runtime.h`. `tur_cont_alloc` initialises it to `false`.
 - [x] Extend defer mechanism to support `DEFER_SUSPENDED` and `DEFER_REPLAY` modes.
   - Done: Added `DeferMode` enum (`DEFER_NORMAL`, `DEFER_SUSPENDED`, `DEFER_REPLAY`) to `src/runtime.h`. Added `DeferMode modes[]` array to `tur_frame`. Updated `tur_frame_push_defer` to record mode; added `tur_frame_push_defer_mode`, `tur_frame_fire_lifo_for_suspend`, `tur_frame_fire_lifo_for_replay`. `tur_frame_fire_chain` fires all modes (full unwind).
-- [ ] Implement CPS transformation pass for cloneable continuations.
-  - Partial: `cps_expr_contains_cloneable_shift` and `cps_fn_needs_cloneable_transform` added to `src/cps.{c,h}`. Full CPS transformation (stack capture, env serialisation) deferred — requires emit-level changes and deep-clone infrastructure.
+- [x] Implement CPS transformation pass for cloneable continuations.
+  - Done: CPS-CL1–CPS-CL5 complete; `cps_transform` marks functions, computes liveness, emits `__clenv_<id>` structs and setjmp/longjmp reset/shift boundaries. Clone-capture checking added in CPS-CL10.
 
 ### Phase B2 remaining tasks (Cloneable continuation runtime + CPS)
 - [x] Parse `(cloneable-reset body)` and `(cloneable-shift k expr)` surface forms.
@@ -1482,13 +1481,13 @@ These prerequisites must be completed before the remaining B2 implementation tas
   - Deferred: Requires CPS transformation infrastructure for cloneable continuations (full stack capture).
 - [x] Add `tests/fixtures/backtrack/cloneable-basic.tur`.
   - Done: `tests/fixtures/cloneable-basic/` passes (v1 simplified: cloneable-shift calls fn(val), outputs 15 and 42).
-- [ ] Add `tests/fixtures/backtrack/cloneable-multi-resume.tur`.
-- [ ] Add `tests/fixtures/backtrack/cloneable-defer-suspend.tur`.
-- [ ] Add `tests/fixtures/backtrack/cloneable-defer-replay.tur`.
-- [ ] Add `tests/fixtures/backtrack/cloneable-ref.tur`.
-- [ ] Add `tests/fixtures/backtrack/cloneable-rc.tur`.
-- [ ] Add negative fixture `tests/fixtures/backtrack/cloneable-shift-outside-reset.tur`.
-- [ ] Add codegen snapshots for cloneable continuation lowering.
+- [x] Add `tests/fixtures/cloneable-multi-resume/` — done (CPS-CL9).
+- [x] Add `tests/fixtures/cloneable-defer-suspend/` — done (CPS-CL9).
+- [x] Add `tests/fixtures/cloneable-defer-replay/` — done (CPS-CL9).
+- [x] Add `tests/fixtures/cloneable-ref/` — done (CPS-CL9).
+- [x] Add `tests/fixtures/cloneable-rc/` — done (CPS-CL9).
+- [x] Add negative fixture `tests/fixtures/errors/cloneable-shift-outside-reset/` — done (CPS-CL9).
+- [x] Add codegen snapshot for cloneable continuation lowering (`tests/fixtures/cloneable-multi-resume/expected.c`).
 
 ---
 
@@ -1719,7 +1718,7 @@ paths once the CPS pass is working.
 - [x] `tests/fixtures/cloneable-rc/` — cloneable continuation capturing an `rc` value;
   each clone increments the refcount via `Clone [ptr<void>]`.
 - [x] `tests/fixtures/errors/cloneable-shift-outside-reset/` — negative fixture for TUR-E0016.
-- [ ] `tests/fixtures/errors/cloneable-non-clone-capture/` — negative fixture for TUR-E0014 (deferred: requires typeclass env in CPS pass; see CPS-CL10).
+- [x] `tests/fixtures/errors/cloneable-non-clone-capture/` — negative fixture for TUR-E0014 (done: CPS-CL10).
 - [x] Add `expected.c` codegen snapshot for at least one of the above (e.g.
   `cloneable-multi-resume`) to lock in the lowered C output.
 
@@ -1731,28 +1730,26 @@ check is effectively a no-op and `TUR-E0014` is never emitted.  The CPS pass
 (`src/cps.c`) needs access to `TypeClassEnv` so it can validate captures after
 liveness has been computed.
 
-- [ ] Update `cps_transform` signature in `src/cps.h` and `src/cps.c` to accept a
-  `TypeClassEnv *` (and a `DiagCtx *` / file/line info for error reporting):
+- [x] Update `cps_transform` signature in `src/cps.h` and `src/cps.c` to accept a
+  `TypeClassEnv *`:
   ```c
-  Expr *cps_transform(Arena *a, Expr *program,
-                      TypeClassEnv *tc_env, DiagCtx *diag);
+  Expr *cps_transform(Arena *a, Expr *program, TypeClassEnv *tc_env);
   ```
-  Update all call sites in the compilation pipeline accordingly.
-- [ ] Implement `cps_check_cloneable_captures(Arena *a, Expr *program,
-  TypeClassEnv *tc_env, DiagCtx *diag)` in `src/cps.c`:
-  - Walk the elaborated program for every `EX_CLONEABLE_SHIFT` node.
-  - For each binding in `live_captures`, call
-    `typeclass_env_lookup_instance(tc_env, clone_tc, binding->type)`.
-  - If no `Clone` instance is found, emit `TUR_E0014_NOT_CLONE` via `diag_error`.
-  - Call this function from `cps_transform` after `cps_compute_live_at_shift`
-    has run (or as a separate post-liveness pass invoked from the pipeline).
-- [ ] Remove (or demote to `[-]`) the now-redundant early call to
-  `check_cloneable_capture` in `elab_cloneable_shift` in `src/elab.c`, since the
-  authoritative check now happens after live_captures are populated.
-- [ ] Add `tests/fixtures/errors/cloneable-non-clone-capture/` — negative fixture
-  for `TUR-E0014`: a `cloneable-shift` that captures a value whose type has no
-  `Clone` instance; verify the compiler emits `error[TUR-E0014]` and exits
-  non-zero.  (Unblocks the deferred entry in CPS-CL9 above.)
+  Updated `src/cps.h`, `src/cps.c`, and all call sites in `src/main.c`.
+  Added `TypeClassEnv tc_env` field to `PassContext` in `src/pass.h`;
+  populated by `PASS_ELABORATE` via new `out_tc_env` parameter on `elaborate_program`.
+- [x] Implement `cps_check_cloneable_captures(Expr *program, TypeClassEnv *tc_env)` in `src/cps.c`:
+  - Walks the elaborated program for every `EX_CLONEABLE_SHIFT` node.
+  - For each binding in `live_captures`, calls
+    `typeclass_env_lookup_instance(tc_env, clone_tc, &binding->type, 1)`.
+  - Emits `TUR_E0014_NOT_CLONE` when no `Clone` instance is found.
+  - Called from `cps_transform` after `cps_mark_expr` (which runs `cps_compute_live_at_shift`).
+- [-] Remove redundant early `check_cloneable_capture` call from `elab_cloneable_shift`:
+  - `check_cloneable_capture` was never implemented in `elab.c` (CPS-CL7 claim was incorrect);
+    no removal needed — the authoritative check is in `cps_check_cloneable_captures`.
+- [x] Add `tests/fixtures/errors/cloneable-non-clone-capture/` — negative fixture
+  for `TUR-E0014`: a `cloneable-shift` captures `foo` (type `Foo`, no Clone instance);
+  compiler emits `TUR-E0014` and exits non-zero.  PASS confirmed.
 
 ### Phase B3 prerequisites
 

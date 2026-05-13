@@ -9,6 +9,7 @@
 #include "diag.h"
 #include "elab.h"  /* For scope_lookup */
 #include "expr.h"
+#include "typeclass.h"
 
 /* Phase 18: CPS transformation for delimited continuations
  * 
@@ -744,8 +745,96 @@ static Expr *cps_mark_expr(Arena *a, Expr *e) {
     }
 }
 
+/* CPS-CL10: Walk the program and for every EX_CLONEABLE_SHIFT node, verify
+ * that each live-captured binding's type has a Clone instance in tc_env.
+ * Emits TUR-E0014 for each binding that does not satisfy the constraint. */
+static void cps_check_cloneable_captures_expr(const Expr *e, TypeClassEnv *tc_env,
+                                               TypeClass *clone_tc) {
+    if (!e || !clone_tc) return;
+    switch (e->kind) {
+        case EX_CLONEABLE_SHIFT: {
+            for (uint32_t i = 0; i < e->as.cloneable_shift_.n_live_captures; i++) {
+                Binding *b = e->as.cloneable_shift_.live_captures[i];
+                if (!b) continue;
+                Type t = b->type;
+                TypeClassInstance *inst =
+                    typeclass_env_lookup_instance(tc_env, clone_tc, &t, 1);
+                if (!inst) {
+                    const char *bname = (b->name && b->name->name) ? b->name->name : "<unknown>";
+                    diag_emit_with_code(DIAG_ERROR, e->span,
+                                        TUR_E0014_NOT_CLONE,
+                                        "captured binding '%s' does not implement Clone "
+                                        "(required by cloneable-shift)", bname);
+                }
+            }
+            cps_check_cloneable_captures_expr(e->as.cloneable_shift_.k_fn,  tc_env, clone_tc);
+            cps_check_cloneable_captures_expr(e->as.cloneable_shift_.body,  tc_env, clone_tc);
+            return;
+        }
+        case EX_CLONEABLE_RESET:
+            cps_check_cloneable_captures_expr(e->as.cloneable_reset_.body, tc_env, clone_tc);
+            return;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                cps_check_cloneable_captures_expr(e->as.let_.bindings[i].init, tc_env, clone_tc);
+            cps_check_cloneable_captures_expr(e->as.let_.body, tc_env, clone_tc);
+            return;
+        case EX_IF:
+            cps_check_cloneable_captures_expr(e->as.if_.cond,         tc_env, clone_tc);
+            cps_check_cloneable_captures_expr(e->as.if_.then_,        tc_env, clone_tc);
+            cps_check_cloneable_captures_expr(e->as.if_.else_or_null, tc_env, clone_tc);
+            return;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                cps_check_cloneable_captures_expr(e->as.do_.items[i], tc_env, clone_tc);
+            return;
+        case EX_WHILE:
+            cps_check_cloneable_captures_expr(e->as.while_.cond, tc_env, clone_tc);
+            cps_check_cloneable_captures_expr(e->as.while_.body, tc_env, clone_tc);
+            return;
+        case EX_RETURN:
+            cps_check_cloneable_captures_expr(e->as.return_.value, tc_env, clone_tc);
+            return;
+        case EX_CALL:
+            cps_check_cloneable_captures_expr(e->as.call_.fn_expr, tc_env, clone_tc);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                cps_check_cloneable_captures_expr(e->as.call_.args[i], tc_env, clone_tc);
+            return;
+        case EX_FN_DEF:
+            if (e->as.fn_def_.fn)
+                cps_check_cloneable_captures_expr(e->as.fn_def_.fn->body, tc_env, clone_tc);
+            return;
+        case EX_FN:
+            if (e->as.fn_.fn)
+                cps_check_cloneable_captures_expr(e->as.fn_.fn->body, tc_env, clone_tc);
+            return;
+        case EX_PROGRAM:
+            for (uint32_t i = 0; i < e->as.program.n; i++)
+                cps_check_cloneable_captures_expr(e->as.program.items[i], tc_env, clone_tc);
+            return;
+        default:
+            return;
+    }
+}
+
+/* CPS-CL10: Entry point — find the "Clone" typeclass and check all captured
+ * bindings at every cloneable-shift site in the program. */
+static void cps_check_cloneable_captures(Expr *program, TypeClassEnv *tc_env) {
+    if (!program || !tc_env) return;
+    /* Find the Clone typeclass by iterating the linked list and comparing names */
+    TypeClass *clone_tc = NULL;
+    for (TypeClass *tc = tc_env->typeclasses; tc != NULL; tc = tc->next) {
+        if (tc->name && strcmp(tc->name->name, "Clone") == 0) {
+            clone_tc = tc;
+            break;
+        }
+    }
+    if (!clone_tc) return; /* No Clone typeclass defined; nothing to check */
+    cps_check_cloneable_captures_expr(program, tc_env, clone_tc);
+}
+
 /* Main entry point: mark functions that contain shift for CPS transformation */
-Expr *cps_transform(Arena *a, Expr *program) {
+Expr *cps_transform(Arena *a, Expr *program, TypeClassEnv *tc_env) {
     if (!program) {
         fprintf(stderr, "cps: NULL program\n");
         return NULL;
@@ -761,6 +850,11 @@ Expr *cps_transform(Arena *a, Expr *program) {
         return program; /* No CPS transformation needed */
     }
     
-    /* Mark all functions that contain shift */
-    return cps_mark_expr(a, program);
+    /* Mark all functions that contain shift and populate live_captures */
+    Expr *result = cps_mark_expr(a, program);
+
+    /* CPS-CL10: check Clone instances for all captured bindings */
+    if (result && tc_env) cps_check_cloneable_captures(result, tc_env);
+
+    return result;
 }

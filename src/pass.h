@@ -25,6 +25,7 @@
 #include "expr.h"
 #include "forms.h"
 #include "symbols.h"
+#include "typeclass.h"
 
 /* Compiler pass identifiers.  Ordered to match the pipeline sequence used in
  * run_core_passes().  New passes are inserted here and in the switch. */
@@ -56,6 +57,7 @@ typedef struct PassContext {
     Arena       *arena;
     SymbolTable *st;
     EffectEnv   *effect_env;  /* NULL until PASS_EFFECT_LOWER completes */
+    TypeClassEnv tc_env;      /* populated by PASS_ELABORATE             */
     Expr        *prog;        /* NULL until PASS_ELABORATE completes     */
     Form       **forms;       /* input to PASS_ELABORATE                 */
     uint32_t     nforms;

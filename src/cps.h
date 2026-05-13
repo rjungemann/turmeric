@@ -3,12 +3,16 @@
 
 #include "expr.h"
 #include "arena.h"
+#include "typeclass.h"
 
 /* Phase 18: CPS transformation for delimited continuations */
 
 /* Transform a program to CPS form.
- * Returns the transformed program, or NULL on error. */
-Expr *cps_transform(Arena *a, Expr *program);
+ * Returns the transformed program, or NULL on error.
+ * `tc_env` (CPS-CL10): if non-NULL, captured bindings at each cloneable-shift
+ * site are checked for a Clone typeclass instance; missing instances are
+ * diagnosed as TUR-E0014. */
+Expr *cps_transform(Arena *a, Expr *program, TypeClassEnv *tc_env);
 
 /* Check if an expression contains shift or shift0 */
 bool cps_expr_contains_shift(const Expr *e);
