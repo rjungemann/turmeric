@@ -1,0 +1,20 @@
+; P4: Using a transient after persistent! should abort with an error
+
+(defn alloc-str [s :cstr] :ptr<void>
+  ```c
+  #include <string.h>
+  char *p = (char *)malloc(strlen(s) + 1);
+  memcpy(p, s, strlen(s) + 1);
+  return (void *)p;
+  ```)
+
+(defn main [] :int
+  (let [m0 (hamt/new)]
+    (let [t (hamt/transient m0)]
+      (let [k1 (alloc-str "key1")]
+        (let [v1 (alloc-str "val1")]
+          ; Seal the transient
+          (let [_m1 (hamt/persistent! t)]
+            ; Now try to use the invalidated transient — should abort
+            (hamt/transient-set! t (hamt/hash-str "key1") k1 v1)
+            0))))))

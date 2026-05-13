@@ -1,0 +1,78 @@
+;;
+;; Phase P1: HAMT delete test
+
+(extern-c free [p :ptr] :void)
+
+(defn ptr= [a :ptr b :ptr] :bool
+  ```c
+  return a == b;
+  ```)
+
+(defn alloc-int [x :int] :ptr
+  ```c
+  int64_t *p = malloc(sizeof(int64_t));
+  *p = (int64_t)x;
+  return (void *)p;
+  ```)
+
+;; Test: delete present key
+(defn test-del-present [] :int
+  (let [k1 (alloc-int 42)]
+    (let [v1 (alloc-int 100)]
+      (let [m1 (hamt/new)]
+        (let [h1 (hamt/hash-ptr k1)]
+          (let [m2 (hamt/set m1 h1 k1 v1)]
+            (let [m3 (hamt/del m2 h1 k1)]
+              (let [has (hamt/has? m3 h1 k1)]
+                (let [c (hamt/count m3)]
+                  (hamt/free m1)
+                  (hamt/free m2)
+                  (hamt/free m3)
+                  (free k1)
+                  (free v1)
+                  (if (and (not has) (= c 0)) 1 0))))))))))
+
+;; Test: delete absent key - count unchanged
+(defn test-del-absent [] :int
+  (let [k1 (alloc-int 42)]
+    (let [k2 (alloc-int 43)]
+      (let [v1 (alloc-int 100)]
+        (let [m1 (hamt/new)]
+          (let [h1 (hamt/hash-ptr k1)]
+            (let [h2 (hamt/hash-ptr k2)]
+              (let [m2 (hamt/set m1 h1 k1 v1)]
+                (let [m3 (hamt/del m2 h2 k2)]
+                  (let [c2 (hamt/count m2)]
+                    (let [c3 (hamt/count m3)]
+                      (hamt/free m1)
+                      (hamt/free m2)
+                      (hamt/free m3)
+                      (free k1)
+                      (free k2)
+                      (free v1)
+                      (if (and (= c2 1) (= c3 1)) 1 0))))))))))))
+
+;; Test: delete then re-insert
+(defn test-del-reinsert [] :int
+  (let [k1 (alloc-int 42)]
+    (let [v1 (alloc-int 100)]
+      (let [v2 (alloc-int 200)]
+        (let [m1 (hamt/new)]
+          (let [h1 (hamt/hash-ptr k1)]
+            (let [m2 (hamt/set m1 h1 k1 v1)]
+              (let [m3 (hamt/del m2 h1 k1)]
+                (let [m4 (hamt/set m3 h1 k1 v2)]
+                  (let [c (hamt/count m4)]
+                    (let [val (hamt/get m4 h1 k1)]
+                      (hamt/free m1)
+                      (hamt/free m2)
+                      (hamt/free m3)
+                      (hamt/free m4)
+                      (free k1)
+                      (free v1)
+                      (free v2)
+                      (if (and (= c 1) (ptr= val v2)) 1 0))))))))))))
+
+(println (test-del-present))
+(println (test-del-absent))
+(println (test-del-reinsert))

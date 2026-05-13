@@ -26,3 +26,6 @@ extern bool g_dump_clone_plan;
 /* Phase U5: unsafe linting statistics */
 extern uint32_t g_unsafe_block_count;
 extern uint32_t g_unsafe_total_lines;
+
+/* Phase P3: HAMT lowering */
+extern bool g_needs_hamt;

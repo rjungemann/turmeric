@@ -1,0 +1,29 @@
+; P4: Transient basic test — fork, mutate, seal; verify result
+
+(defn alloc-str [s :cstr] :ptr<void>
+  ```c
+  #include <string.h>
+  char *p = (char *)malloc(strlen(s) + 1);
+  memcpy(p, s, strlen(s) + 1);
+  return (void *)p;
+  ```)
+
+(defn main [] :int
+  ; Start from empty map, build a transient
+  (let [m0 (hamt/new)]
+    (let [t (hamt/transient m0)]
+      (let [k1 (alloc-str "key1")]
+        (let [v1 (alloc-str "val1")]
+          (let [k2 (alloc-str "key2")]
+            (let [v2 (alloc-str "val2")]
+              ; Insert two entries
+              (hamt/transient-set! t (hamt/hash-str "key1") k1 v1)
+              (hamt/transient-set! t (hamt/hash-str "key2") k2 v2)
+              ; Seal into immutable map
+              (let [m1 (hamt/persistent! t)]
+                ; Should have 2 entries
+                (println (hamt/count m1))
+                ; Both keys present
+                (println (hamt/has? m1 (hamt/hash-str "key1") k1))
+                (println (hamt/has? m1 (hamt/hash-str "key2") k2))
+                0))))))))

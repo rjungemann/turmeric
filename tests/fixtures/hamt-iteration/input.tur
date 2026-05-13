@@ -1,0 +1,45 @@
+;;
+;; Phase P1: HAMT iteration test
+
+(defn test-iteration [] :int
+  ```c
+  void *k1 = malloc(8), *k2 = malloc(8), *k3 = malloc(8);
+  void *v1 = malloc(8), *v2 = malloc(8), *v3 = malloc(8);
+  int64_t h1 = tur_hamt_hash_ptr(k1);
+  int64_t h2 = tur_hamt_hash_ptr(k2);
+  int64_t h3 = tur_hamt_hash_ptr(k3);
+  void *m1 = tur_hamt_new();
+  void *ma = tur_hamt_set(m1, h1, k1, v1);
+  void *mb = tur_hamt_set(ma, h2, k2, v2);
+  void *m2 = tur_hamt_set(mb, h3, k3, v3);
+  int64_t c = tur_hamt_count(m2);
+  uint64_t iter_buf[32];
+  memset(iter_buf, 0, sizeof(iter_buf));
+  tur_hamt_iter_init(iter_buf, m2);
+  void *hash_buf = malloc(8);
+  void *key_buf = malloc(8);
+  void *val_buf = malloc(8);
+  int n = 0;
+  int found_k1 = 0, found_k2 = 0, found_k3 = 0;
+  while (tur_hamt_iter_next(iter_buf, hash_buf, key_buf, val_buf)) {
+    void *k = *(void **)key_buf;
+    n++;
+    if (k == k1) found_k1 = 1;
+    if (k == k2) found_k2 = 1;
+    if (k == k3) found_k3 = 1;
+  }
+  tur_hamt_iter_free(iter_buf);
+  free(hash_buf);
+  free(key_buf);
+  free(val_buf);
+  tur_hamt_free(ma);
+  tur_hamt_free(mb);
+  tur_hamt_free(m2);
+  free(k1); free(k2); free(k3);
+  free(v1); free(v2); free(v3);
+  int64_t result = 0;
+  if ((int64_t)n == c && found_k1 && found_k2 && found_k3) result = 1;
+  return result;
+  ```)
+
+(println (test-iteration))

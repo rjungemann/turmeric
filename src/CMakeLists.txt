@@ -45,6 +45,7 @@ set(TUR_CORE_SOURCES
     forms.c
     gc.c
     globals.c
+    hamt.c
     interp.c
     kind_check.c
     lifetime_elision.c

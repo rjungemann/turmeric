@@ -1,0 +1,45 @@
+;;
+;; Phase P2: Lisp bindings show test
+;; Tests hamt/show returns a string representation
+
+(extern-c free [p :ptr] :void)
+(extern-c strlen [s :cstr] :int)
+
+(defn cstr-free [s :cstr] :void
+  ```c
+  free((void *)s);
+  ```)
+
+(defn alloc-key [x :int] :ptr
+  ```c
+  int64_t *p = malloc(sizeof(int64_t));
+  *p = (int64_t)x;
+  return (void *)p;
+  ```)
+
+;; Test: show empty map
+(defn test-show-empty [] :int
+  (let [m (hamt/new)]
+    (let [s (hamt/show m)]
+      (let [len (strlen s)]
+        (hamt/free m)
+        (cstr-free s)
+        (if (= len 2) 1 0)))))
+
+;; Test: show non-empty map has content > 2 chars
+(defn test-show-nonempty [] :int
+  (let [k1 (alloc-key 1)]
+    (let [v1 (alloc-key 100)]
+      (let [m1 (hamt/new)]
+        (let [m2 (hamt/set m1 (hamt/hash-ptr k1) k1 v1)]
+          (let [s (hamt/show m2)]
+            (let [len (strlen s)]
+              (hamt/free m1)
+              (hamt/free m2)
+              (free k1)
+              (free v1)
+              (cstr-free s)
+              (if (> len 2) 1 0))))))))
+
+(println (test-show-empty))
+(println (test-show-nonempty))

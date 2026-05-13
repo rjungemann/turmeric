@@ -6,6 +6,155 @@
 #include <stdbool.h>
 #include <setjmp.h>
 #include <pthread.h>
+#include <stdlib.h>
+#include <stdbool.h>
+/* STM types (Phase 21) */
+typedef void *(*stm_fn_t)(void *env);
+typedef struct TVar { void *value; uint64_t version; pthread_mutex_t lock; pthread_cond_t cond; } TVar;
+typedef struct STM_Transaction STM_Transaction;
+struct STM_Transaction {
+    TVar *read_set[256];
+    uint64_t read_versions[256];
+    int read_count;
+    TVar *write_set[128];
+    void *new_values[128];
+    int write_count;
+    bool retry_requested;
+    bool aborted;
+    bool committed;
+};
+static __thread STM_Transaction *__stm_current_tx = NULL;
+STM_Transaction *tur_stm_current_tx(void) { return __stm_current_tx; }
+void tur_stm_set_current_tx(STM_Transaction *tx) { __stm_current_tx = tx; }
+static int __stm_lock_cmp(const void *a, const void *b) {
+    const TVar *tv_a = *(const TVar **)a;
+    const TVar *tv_b = *(const TVar **)b;
+    if (tv_a < tv_b) return -1;
+    if (tv_a > tv_b) return 1;
+    return 0;
+}
+STM_Transaction *tur_stm_new_transaction(void) {
+    STM_Transaction *tx = calloc(1, sizeof(STM_Transaction));
+    return tx;
+}
+TVar *tur_tvar_new(void *type, void *initial_value) {
+    (void)type; /* unused in emitted code */
+    TVar *tv = malloc(sizeof(TVar));
+    tv->value = initial_value; tv->version = 1;
+    pthread_mutex_init(&tv->lock, NULL);
+    pthread_cond_init(&tv->cond, NULL);
+    return tv;
+}
+void *tur_tvar_read(STM_Transaction *tx, TVar *tv) {
+    for (int i = 0; i < tx->write_count; i++) {
+        if (tx->write_set[i] == tv) return tx->new_values[i];
+    }
+    if (tx->read_count < 256) {
+        for (int i = 0; i < tx->read_count; i++) {
+            if (tx->read_set[i] == tv) break;
+        }
+        tx->read_set[tx->read_count] = tv;
+        tx->read_versions[tx->read_count++] = tv->version;
+    }
+    return tv->value;
+}
+void tur_tvar_write(STM_Transaction *tx, TVar *tv, void *value) {
+    for (int i = 0; i < tx->write_count; i++) {
+        if (tx->write_set[i] == tv) { tx->new_values[i] = value; return; }
+    }
+    /* Remove from read set if present */
+    for (int i = 0; i < tx->read_count; i++) {
+        if (tx->read_set[i] == tv) {
+            for (int j = i; j < tx->read_count - 1; j++) {
+                tx->read_set[j] = tx->read_set[j+1];
+                tx->read_versions[j] = tx->read_versions[j+1];
+            }
+            tx->read_count--;
+            break;
+        }
+    }
+    if (tx->write_count < 128) {
+        tx->write_set[tx->write_count] = tv;
+        tx->new_values[tx->write_count++] = value;
+    }
+}
+static bool __tur_stm_validate(STM_Transaction *tx) {
+    for (int i = 0; i < tx->read_count; i++) {
+        if (tx->read_set[i]->version != tx->read_versions[i]) return false;
+    }
+    return true;
+}
+bool tur_stm_commit(STM_Transaction *tx) {
+    /* Sort write set by address for lock ordering */
+    qsort(tx->write_set, tx->write_count, sizeof(TVar *), __stm_lock_cmp);
+    /* Acquire locks in address order */
+    for (int i = 0; i < tx->write_count; i++) {
+        pthread_mutex_lock(&tx->write_set[i]->lock);
+    }
+    /* Validate */
+    if (!__tur_stm_validate(tx)) {
+        for (int i = 0; i < tx->write_count; i++) {
+            pthread_mutex_unlock(&tx->write_set[i]->lock);
+        }
+        return false;
+    }
+    /* Apply writes */
+    for (int i = 0; i < tx->write_count; i++) {
+        tx->write_set[i]->value = tx->new_values[i];
+        tx->write_set[i]->version++;
+    }
+    /* Notify waiters */
+    for (int i = 0; i < tx->write_count; i++) {
+        pthread_cond_broadcast(&tx->write_set[i]->cond);
+    }
+    tx->committed = true;
+    /* Release locks in reverse order */
+    for (int i = tx->write_count - 1; i >= 0; i--) {
+        pthread_mutex_unlock(&tx->write_set[i]->lock);
+    }
+    return true;
+}
+void tur_stm_retry(STM_Transaction *tx) { tx->retry_requested = true; }
+void tur_stm_check(bool condition) { if (!condition) tur_stm_retry(tur_stm_current_tx()); }
+/* Retry with blocking on condition variables (Phase 21) */
+static bool __tur_stm_should_retry(STM_Transaction *tx) {
+    if (tx->retry_requested) return true;
+    if (tx->aborted) return true;
+    return false;
+}
+void *tur_atomically(void *(*fn)(void *), void *env) {
+    STM_Transaction *tx = tur_stm_new_transaction();
+    STM_Transaction *prev = tur_stm_current_tx();
+    while (1) {
+        tx->retry_requested = false;
+        tx->aborted = false;
+        tx->read_count = 0;
+        tx->write_count = 0;
+        tur_stm_set_current_tx(tx);
+        fn(env);
+        if (__tur_stm_should_retry(tx)) {
+            tur_stm_set_current_tx(prev);
+            /* Block on first read TVar's condition variable if retry requested */
+            if (tx->retry_requested && tx->read_count > 0) {
+                TVar *tv = tx->read_set[0];
+                pthread_mutex_lock(&tv->lock);
+                while (tx->retry_requested) {
+                    pthread_cond_wait(&tv->cond, &tv->lock);
+                }
+                pthread_mutex_unlock(&tv->lock);
+            }
+            continue;
+        }
+        if (tur_stm_commit(tx)) {
+            tur_stm_set_current_tx(prev);
+            void *ret = tx->write_count > 0 ? tx->new_values[tx->write_count - 1] : NULL;
+            free(tx);
+            return ret;
+        }
+        /* Commit failed - retry */
+        tur_stm_set_current_tx(prev);
+    }
+}
 #define _XOPEN_SOURCE 700
 #include <ucontext.h>
 #undef _XOPEN_SOURCE
@@ -28,6 +177,7 @@ extern int strcmp(const char *, const char *);
 #include <arpa/inet.h>
 
 #define TUR_TEST_REGISTRY_MAX 1024
+#define BACKTRACK_DEPTH_DEFAULT 0
 typedef int64_t (*tur_test_callback_t)(void);
 static const char *tur_test_registry_names[TUR_TEST_REGISTRY_MAX];
 static tur_test_callback_t tur_test_registry_fns[TUR_TEST_REGISTRY_MAX];
@@ -939,150 +1089,6 @@ static int64_t tur_next_timer_wait_us(void) {
     return diff > 0 ? diff : 0;
 }
 
-/* Phase T24: Timer wheel */
-#define TUR_WHEEL_SLOTS 256
-#define TUR_WHEEL_SLOT_MASK 255
-typedef void (*tur_timer_cb_t)(void *);
-typedef struct TurTimerNode TurTimerNode;
-struct TurTimerNode {
-    int64_t deadline_ms;
-    tur_timer_cb_t callback;
-    void *arg;
-    bool cancelled;
-    TurTimerNode *next;
-    TurTimerNode *prev;
-};
-typedef struct {
-    TurTimerNode *slots[TUR_WHEEL_SLOTS];
-    int64_t current_ms;
-    pthread_mutex_t lock;
-    bool running;
-    pthread_t thread;
-} TurTimerWheel;
-
-static int64_t tur_wheel_now_ms(void) {
-    struct timespec _ts;
-    clock_gettime(CLOCK_MONOTONIC, &_ts);
-    return (int64_t)_ts.tv_sec * 1000LL + (int64_t)_ts.tv_nsec / 1000000LL;
-}
-
-static void tur_timer_wheel_tick(TurTimerWheel *w) {
-    if (!w) return;
-    int64_t now = tur_wheel_now_ms();
-    int64_t elapsed = now - w->current_ms;
-    if (elapsed <= 0) return;
-    for (int64_t _t = 0; _t < elapsed; _t++) {
-        w->current_ms++;
-        int _slot = (int)(w->current_ms & TUR_WHEEL_SLOT_MASK);
-        TurTimerNode *_to_fire = NULL;
-        pthread_mutex_lock(&w->lock);
-        TurTimerNode **_pp = &w->slots[_slot];
-        while (*_pp) {
-            TurTimerNode *_n = *_pp;
-            if (_n->cancelled) {
-                *_pp = _n->next;
-                if (_n->next) _n->next->prev = _n->prev;
-                free(_n);
-            } else if (_n->deadline_ms <= w->current_ms) {
-                *_pp = _n->next;
-                if (_n->next) _n->next->prev = _n->prev;
-                _n->next = _to_fire; _to_fire = _n;
-            } else { _pp = &_n->next; }
-        }
-        pthread_mutex_unlock(&w->lock);
-        while (_to_fire) {
-            TurTimerNode *_nx = _to_fire->next;
-            _to_fire->callback(_to_fire->arg);
-            free(_to_fire);
-            _to_fire = _nx;
-        }
-    }
-}
-
-static void *tur_timer_wheel_ticker(void *raw) {
-    TurTimerWheel *w = (TurTimerWheel *)raw;
-    while (w->running) {
-        struct timespec _ts2 = { .tv_sec = 0, .tv_nsec = 1000000L };
-        nanosleep(&_ts2, NULL);
-        tur_timer_wheel_tick(w);
-    }
-    return NULL;
-}
-
-static TurTimerWheel *tur_timer_wheel_new(void) {
-    TurTimerWheel *w = (TurTimerWheel *)calloc(1, sizeof(TurTimerWheel));
-    if (!w) { fprintf(stderr, "timer-wheel: oom\n"); abort(); }
-    pthread_mutex_init(&w->lock, NULL);
-    w->current_ms = tur_wheel_now_ms();
-    w->running = true;
-    pthread_create(&w->thread, NULL, tur_timer_wheel_ticker, w);
-    return w;
-}
-
-static void tur_timer_wheel_free(TurTimerWheel *w) {
-    if (!w) return;
-    w->running = false;
-    pthread_join(w->thread, NULL);
-    for (int _i = 0; _i < TUR_WHEEL_SLOTS; _i++) {
-        TurTimerNode *_n = w->slots[_i];
-        while (_n) { TurTimerNode *_nx = _n->next; free(_n); _n = _nx; }
-    }
-    pthread_mutex_destroy(&w->lock);
-    free(w);
-}
-
-static TurTimerNode *tur_timer_wheel_insert(TurTimerWheel *w, int64_t delay_ms,
-                                              tur_timer_cb_t cb, void *arg) {
-    if (!w || !cb) return NULL;
-    TurTimerNode *node = (TurTimerNode *)calloc(1, sizeof(TurTimerNode));
-    if (!node) { fprintf(stderr, "timer-node: oom\n"); abort(); }
-    node->deadline_ms = tur_wheel_now_ms() + delay_ms;
-    node->callback = cb; node->arg = arg; node->cancelled = false;
-    int _sl = (int)(node->deadline_ms & TUR_WHEEL_SLOT_MASK);
-    pthread_mutex_lock(&w->lock);
-    node->next = w->slots[_sl]; node->prev = NULL;
-    if (w->slots[_sl]) w->slots[_sl]->prev = node;
-    w->slots[_sl] = node;
-    pthread_mutex_unlock(&w->lock);
-    return node;
-}
-
-static void tur_timer_wheel_cancel(TurTimerNode *node) {
-    if (node) node->cancelled = true;
-}
-
-/* Phase T24: Timer fire context for recording ordered callbacks */
-typedef struct {
-    pthread_mutex_t lock;
-    pthread_cond_t  cond;
-    int             order[16]; /* ids in fire order */
-    int             count;     /* timers fired so far */
-    int             expected;  /* total to wait for   */
-} TurTimerFireCtx;
-
-/* arg must point to int64_t[2]: { ptr-as-int64 to TurTimerFireCtx, timer-id } */
-static void tur_timer_fire_cb(void *arg) {
-    int64_t *pair = (int64_t *)arg;
-    TurTimerFireCtx *ctx = (TurTimerFireCtx *)(intptr_t)pair[0];
-    int id = (int)pair[1];
-    pthread_mutex_lock(&ctx->lock);
-    if (ctx->count < 16) ctx->order[ctx->count] = id;
-    ctx->count++;
-    if (ctx->count >= ctx->expected) pthread_cond_broadcast(&ctx->cond);
-    pthread_mutex_unlock(&ctx->lock);
-}
-
-/* Global timer wheel (created on first use) */
-static TurTimerWheel *tur_global_timer_wheel = NULL;
-static pthread_once_t tur_timer_wheel_once = PTHREAD_ONCE_INIT;
-static void tur_timer_wheel_init_once(void) {
-    tur_global_timer_wheel = tur_timer_wheel_new();
-}
-static TurTimerWheel *tur_get_timer_wheel(void) {
-    pthread_once(&tur_timer_wheel_once, tur_timer_wheel_init_once);
-    return tur_global_timer_wheel;
-}
-
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif
@@ -1720,18 +1726,76 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
-void * array_get(void *, int64_t);
-int64_t array_set(void *, int64_t, int64_t);
-void * array_slice(void *, int64_t, int64_t);
-void * with_c_string(const char *, int64_t);
-const char * from_c_string(const char *);
-void * box(int64_t);
-int64_t unbox(int64_t);
+extern void * tur_hamt_new();
+extern void tur_hamt_free(void *);
+extern void * tur_hamt_retain(void *);
+extern int64_t tur_hamt_count(void *);
+extern void * tur_hamt_set(void *, int64_t, void *, void *);
+extern void * tur_hamt_del(void *, int64_t, void *);
+extern bool tur_hamt_has(void *, int64_t, void *);
+extern void * tur_hamt_get(void *, int64_t, void *);
+extern void * tur_hamt_merge(void *, void *);
+extern int64_t tur_hamt_hash_str(const char *);
+extern int64_t tur_hamt_hash_ptr(void *);
+extern void tur_hamt_iter_init(void *, void *);
+extern void tur_hamt_iter_free(void *);
+extern bool tur_hamt_iter_next(void *, void *, void *, void *);
+extern void * tur_hamt_map(void *, void *, void *);
+extern void * tur_hamt_filter(void *, void *, void *);
+extern void * tur_hamt_reduce(void *, void *, void *, void *);
+extern void * tur_hamt_merge_with(void *, void *, void *, void *);
+extern const char * tur_hamt_show(void *);
+extern void tur_hamt_dump_dot(void *, void *);
+extern void tur_hamt_dump_dot_stderr(void *);
+extern void * tur_hamt_transient(void *);
+extern void tur_hamt_transient_set(void *, int64_t, void *, void *);
+extern void tur_hamt_transient_del(void *, int64_t, void *);
+extern void * tur_hamt_persistent(void *);
+
+static void * array_get(void *, int64_t);
+static int64_t array_set(void *, int64_t, int64_t);
+static void * array_slice(void *, int64_t, int64_t);
+static void * with_c_string(const char *, int64_t);
+static const char * from_c_string(const char *);
+static void * box(int64_t);
+static int64_t unbox(int64_t);
+static void * hamt_new();
+static void hamt_free(void *);
+static void * hamt_retain(void *);
+static void * hamt_set(void *, int64_t, void *, void *);
+static void * hamt_del(void *, int64_t, void *);
+static void * hamt_get(void *, int64_t, void *);
+static bool hamt_has_(void *, int64_t, void *);
+static int64_t hamt_count(void *);
+static void * hamt_merge(void *, void *);
+static int64_t hamt_hash_str(const char *);
+static int64_t hamt_hash_ptr(void *);
+static void hamt_iter_init(void *, void *);
+static void hamt_iter_free(void *);
+static bool hamt_iter_next(void *, void *, void *, void *);
+static void * hamt_map(void *, void *, void *);
+static void * hamt_filter(void *, void *, void *);
+static void * hamt_reduce(void *, void *, void *, void *);
+static void * hamt_merge_with(void *, void *, void *, void *);
+static const char * hamt_show(void *);
+static void hamt_dump(void *);
+static void * hamt_transient(void *);
+static void hamt_transient_set_(void *, int64_t, void *, void *);
+static void hamt_transient_del_(void *, int64_t, void *);
+static void * hamt_persistent_(void *);
+static int64_t hamt_autolink_hint();
+static void * map_new();
+static void * assoc(void *, void *, void *);
+static void * dissoc(void *, void *);
+static void * get(void *, void *);
+static bool has_(void *, void *);
+static int64_t count(void *);
+static void * merge(void *, void *);
 static void * some(int64_t);
 static int64_t option_must(void *);
 static int64_t option_expect(void *, const char *);
 
-void * array_get(void * arr, int64_t idx) {
+static void * array_get(void * arr, int64_t idx) {
         struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
   int64_t *array = (int64_t *)arr;
   if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
@@ -1745,7 +1809,7 @@ void * array_get(void * arr, int64_t idx) {
   
 }
 
-int64_t array_set(void * arr, int64_t idx, int64_t value) {
+static int64_t array_set(void * arr, int64_t idx, int64_t value) {
         int64_t *array = (int64_t *)arr;
   if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
     array[idx] = value;
@@ -1755,7 +1819,7 @@ int64_t array_set(void * arr, int64_t idx, int64_t value) {
   
 }
 
-void * array_slice(void * arr, int64_t start, int64_t len) {
+static void * array_slice(void * arr, int64_t start, int64_t len) {
         /* For v1, we return a new struct containing ptr and len */
   struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
   slice->ptr = (char *)arr + start * sizeof(int64_t);
@@ -1764,28 +1828,158 @@ void * array_slice(void * arr, int64_t start, int64_t len) {
   
 }
 
-void * with_c_string(const char * s, int64_t f) {
+static void * with_c_string(const char * s, int64_t f) {
         /* For v1, we just call f with s directly since cstr is already a C string */
   int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
   return (void *)(intptr_t)fn(s);
   
 }
 
-const char * from_c_string(const char * s) {
+static const char * from_c_string(const char * s) {
         return s;
 }
 
-void * box(int64_t v) {
+static void * box(int64_t v) {
         int64_t *boxed = malloc(sizeof(int64_t));
   *boxed = v;
   return boxed;
   
 }
 
-int64_t unbox(int64_t p) {
+static int64_t unbox(int64_t p) {
         int64_t *boxed = (int64_t *)p;
   return *boxed;
   
+}
+
+static void * hamt_new() {
+        return tur_hamt_new();
+}
+
+static void hamt_free(void * m) {
+        tur_hamt_free((void *)(intptr_t)(m));
+}
+
+static void * hamt_retain(void * m) {
+        return tur_hamt_retain((void *)(intptr_t)(m));
+}
+
+static void * hamt_set(void * m, int64_t hash, void * key, void * val) {
+        return tur_hamt_set((void *)(intptr_t)(m), hash, (void *)(intptr_t)(key), (void *)(intptr_t)(val));
+}
+
+static void * hamt_del(void * m, int64_t hash, void * key) {
+        return tur_hamt_del((void *)(intptr_t)(m), hash, (void *)(intptr_t)(key));
+}
+
+static void * hamt_get(void * m, int64_t hash, void * key) {
+        return tur_hamt_get((void *)(intptr_t)(m), hash, (void *)(intptr_t)(key));
+}
+
+static bool hamt_has_(void * m, int64_t hash, void * key) {
+        return tur_hamt_has((void *)(intptr_t)(m), hash, (void *)(intptr_t)(key));
+}
+
+static int64_t hamt_count(void * m) {
+        return tur_hamt_count((void *)(intptr_t)(m));
+}
+
+static void * hamt_merge(void * a, void * b) {
+        return tur_hamt_merge((void *)(intptr_t)(a), (void *)(intptr_t)(b));
+}
+
+static int64_t hamt_hash_str(const char * str) {
+        return tur_hamt_hash_str(str);
+}
+
+static int64_t hamt_hash_ptr(void * ptr) {
+        return tur_hamt_hash_ptr((void *)(intptr_t)(ptr));
+}
+
+static void hamt_iter_init(void * iter, void * m) {
+        tur_hamt_iter_init((void *)(intptr_t)(iter), (void *)(intptr_t)(m));
+}
+
+static void hamt_iter_free(void * iter) {
+        tur_hamt_iter_free((void *)(intptr_t)(iter));
+}
+
+static bool hamt_iter_next(void * iter, void * hash_out, void * key_out, void * val_out) {
+        return tur_hamt_iter_next((void *)(intptr_t)(iter), (void *)(intptr_t)(hash_out), (void *)(intptr_t)(key_out), (void *)(intptr_t)(val_out));
+}
+
+static void * hamt_map(void * m, void * fn, void * ctx) {
+        return tur_hamt_map((void *)(intptr_t)(m), (void *)(intptr_t)(fn), (void *)(intptr_t)(ctx));
+}
+
+static void * hamt_filter(void * m, void * fn, void * ctx) {
+        return tur_hamt_filter((void *)(intptr_t)(m), (void *)(intptr_t)(fn), (void *)(intptr_t)(ctx));
+}
+
+static void * hamt_reduce(void * m, void * fn, void * init, void * ctx) {
+        return tur_hamt_reduce((void *)(intptr_t)(m), (void *)(intptr_t)(fn), (void *)(intptr_t)(init), (void *)(intptr_t)(ctx));
+}
+
+static void * hamt_merge_with(void * a, void * b, void * fn, void * ctx) {
+        return tur_hamt_merge_with((void *)(intptr_t)(a), (void *)(intptr_t)(b), (void *)(intptr_t)(fn), (void *)(intptr_t)(ctx));
+}
+
+static const char * hamt_show(void * m) {
+        return tur_hamt_show((void *)(intptr_t)(m));
+}
+
+static void hamt_dump(void * m) {
+        tur_hamt_dump_dot_stderr((void *)(intptr_t)(m));
+}
+
+static void * hamt_transient(void * m) {
+        return tur_hamt_transient((void *)(intptr_t)(m));
+}
+
+static void hamt_transient_set_(void * t, int64_t hash, void * key, void * val) {
+        tur_hamt_transient_set((void *)(intptr_t)(t), hash, (void *)(intptr_t)(key), (void *)(intptr_t)(val));
+}
+
+static void hamt_transient_del_(void * t, int64_t hash, void * key) {
+        tur_hamt_transient_del((void *)(intptr_t)(t), hash, (void *)(intptr_t)(key));
+}
+
+static void * hamt_persistent_(void * t) {
+        return tur_hamt_persistent((void *)(intptr_t)(t));
+}
+
+static int64_t hamt_autolink_hint() {
+        /* __tur_autolink__: src/hamt.c -Isrc */
+  return 0;
+  
+}
+
+static void * map_new() {
+        return hamt_new();
+}
+
+static void * assoc(void * m, void * key, void * val) {
+        return hamt_set((void *)(intptr_t)(m), hamt_hash_ptr((void *)(intptr_t)(key)), (void *)(intptr_t)(key), (void *)(intptr_t)(val));
+}
+
+static void * dissoc(void * m, void * key) {
+        return hamt_del((void *)(intptr_t)(m), hamt_hash_ptr((void *)(intptr_t)(key)), (void *)(intptr_t)(key));
+}
+
+static void * get(void * m, void * key) {
+        return hamt_get((void *)(intptr_t)(m), hamt_hash_ptr((void *)(intptr_t)(key)), (void *)(intptr_t)(key));
+}
+
+static bool has_(void * m, void * key) {
+        return hamt_has_((void *)(intptr_t)(m), hamt_hash_ptr((void *)(intptr_t)(key)), (void *)(intptr_t)(key));
+}
+
+static int64_t count(void * m) {
+        return hamt_count((void *)(intptr_t)(m));
+}
+
+static void * merge(void * a, void * b) {
+        return hamt_merge((void *)(intptr_t)(a), (void *)(intptr_t)(b));
 }
 
 static void * some(int64_t x) {
