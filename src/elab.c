@@ -8306,6 +8306,191 @@ static Expr *elab_defrec(Elab *e, const Form *call) {
 
     /* defrec has no runtime effect */
     return e_nil(e, call->span);
+}
+
+/* Helper: parse a type expression form into a Type for deftype body.
+ * Supports:
+ *   - Symbols: primitive types (int, bool, etc.) or type bindings
+ *   - Type parameters: ^f, ^^f (stripped to f and looked up in type_params)
+ *   - Type applications: (ctor arg) -> TY_APP
+ *   - Recursive references: the type name being defined
+ * Returns NULL on error. */
+static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
+                                  const Symbol **type_params, Kind *type_param_kinds,
+                                  uint8_t n_type_params) {
+    if (form->tag == F_SYM) {
+        const Symbol *sym = form->as.sym;
+        
+        /* Check if it's the recursive type name */
+        if (sym == rec_name) {
+            /* Return a TY_REC type referencing itself (will be resolved later) */
+            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+            memset(t, 0, sizeof(Type));
+            t->kind = TY_REC;
+            t->copy_kind = CK_MOVE;
+            t->hkt_kind = KIND_STAR; /* Will be updated based on context */
+            t->as.rec.name = rec_name->name;
+            t->as.rec.body = NULL; /* Circular - will be filled in later */
+            return t;
+        }
+        
+        /* Check if it's a type parameter (^f or ^^f) */
+        if (sym->len > 1 && sym->name[0] == '^') {
+            /* Strip the ^ prefix(es) and look up in type_params */
+            const char *bare = NULL;
+            uint32_t bare_len = 0;
+            uint8_t param_idx = 0;
+            bool found = false;
+            
+            if (sym->len > 2 && sym->name[0] == '^' && sym->name[1] == '^') {
+                bare = sym->name + 2;
+                bare_len = sym->len - 2;
+                /* Look for the bare name in type_params (which stores the stripped name) */
+                for (param_idx = 0; param_idx < n_type_params; param_idx++) {
+                    if (type_params[param_idx] && 
+                        type_params[param_idx]->len == bare_len &&
+                        memcmp(type_params[param_idx]->name, bare, bare_len) == 0) {
+                        found = true;
+                        break;
+                    }
+                }
+            } else if (sym->len > 1) {
+                bare = sym->name + 1;
+                bare_len = sym->len - 1;
+                /* Look for the bare name in type_params */
+                for (param_idx = 0; param_idx < n_type_params; param_idx++) {
+                    if (type_params[param_idx] && 
+                        type_params[param_idx]->len == bare_len &&
+                        memcmp(type_params[param_idx]->name, bare, bare_len) == 0) {
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            
+            if (found) {
+                /* Return a type variable - represented as TY_STRUCT with no def
+                 * The kind is stored in type_param_kinds[param_idx] */
+                Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                memset(t, 0, sizeof(Type));
+                t->kind = TY_STRUCT;
+                t->copy_kind = CK_MOVE;
+                t->hkt_kind = type_param_kinds[param_idx];
+                t->as.struct_.def = NULL;
+                return t;
+            }
+            /* If not found, fall through to look up as a type binding */
+        }
+        
+        /* Check if it's a bare type parameter name (without ^ prefix) */
+        if (n_type_params > 0) {
+            for (uint8_t i = 0; i < n_type_params; i++) {
+                if (type_params[i] && type_params[i] == sym) {
+                    /* Return a type variable */
+                    Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                    memset(t, 0, sizeof(Type));
+                    t->kind = TY_STRUCT;
+                    t->copy_kind = CK_MOVE;
+                    t->hkt_kind = type_param_kinds[i];
+                    t->as.struct_.def = NULL;
+                    return t;
+                }
+            }
+        }
+        
+        /* Look up as a type binding (primitive or user-defined type) */
+        Binding *b = scope_lookup(e->scope, sym);
+        if (!b) {
+            b = scope_lookup(&e->global, sym);
+        }
+        if (b) {
+            /* Return a copy of the binding's type */
+            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *t = b->type;
+            return t;
+        }
+        
+        /* Primitive type keywords */
+        if (sym->len == 3 && memcmp(sym->name, "int", 3) == 0) {
+            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *t = TYPE_INT;
+            return t;
+        } else if (sym->len == 4 && memcmp(sym->name, "bool", 4) == 0) {
+            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *t = TYPE_BOOL;
+            return t;
+        } else if (sym->len == 4 && memcmp(sym->name, "cstr", 4) == 0) {
+            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *t = TYPE_CSTR;
+            return t;
+        } else if ((sym->len == 4 && memcmp(sym->name, "void", 4) == 0) ||
+                   (sym->len == 3 && memcmp(sym->name, "nil", 3) == 0)) {
+            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *t = TYPE_NIL;
+            return t;
+        } else if (sym->len == 9 && memcmp(sym->name, "ptr<void>", 9) == 0) {
+            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *t = TYPE_PTR_VOID;
+            return t;
+        }
+        
+        /* Unknown - return as opaque struct */
+        Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+        memset(t, 0, sizeof(Type));
+        t->kind = TY_STRUCT;
+        t->copy_kind = CK_MOVE;
+        t->hkt_kind = KIND_STAR;
+        t->as.struct_.def = NULL;
+        return t;
+    } else if (form->tag == F_LIST) {
+        /* Type application: (ctor arg1 arg2 ...) is right-associative
+         * (ctor arg1 arg2) == (ctor (arg1 arg2)) for binary constructors
+         * But for simplicity in v1, we only support (ctor arg) with exactly 2 elements.
+         * N-ary applications like (Free f a) need to be written as (Free (f a)). */
+        if (form->as.list.len != 2) {
+            diag_emit(DIAG_ERROR, form->span,
+                      "type expression must be a symbol or (ctor arg) application with exactly 2 elements; "
+                      "for n-ary applications, use nesting: (Free (f a)) not (Free f a)");
+            return NULL;
+        }
+        
+        /* Parse constructor */
+        Type *ctor_type = type_expr_from_form(e, form->as.list.items[0], rec_name,
+                                              type_params, type_param_kinds, n_type_params);
+        if (!ctor_type) return NULL;
+        
+        /* Parse argument */
+        Type *arg_type = type_expr_from_form(e, form->as.list.items[1], rec_name,
+                                              type_params, type_param_kinds, n_type_params);
+        if (!arg_type) return NULL;
+        
+        /* Create TY_APP */
+        Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+        memset(t, 0, sizeof(Type));
+        t->kind = TY_APP;
+        t->copy_kind = CK_COPY;
+        /* Derive kind: if ctor is KIND_ARROW, result is KIND_STAR */
+        if (ctor_type->hkt_kind == KIND_ARROW) {
+            t->hkt_kind = KIND_STAR;
+        } else if (ctor_type->hkt_kind == KIND_ARROW2) {
+            t->hkt_kind = KIND_ARROW;
+        } else {
+            t->hkt_kind = KIND_STAR;
+        }
+        t->as.app.fn = ctor_type;
+        t->as.app.arg = arg_type;
+        return t;
+    } else if (form->tag == F_KEYWORD) {
+        /* Keywords are also valid type names */
+        return type_expr_from_form(e, (const Form *)form, rec_name,
+                                     type_params, type_param_kinds, n_type_params);
+    } else {
+        diag_emit(DIAG_ERROR, form->span,
+                  "unsupported type expression form (expected symbol, keyword, or list)");
+        return NULL;
+    }
+}
+
 /* Elaborate (deftype Name [type-params...] body)
  *
  * Defines a recursive type alias with kind-polymorphic parameters.
@@ -8412,11 +8597,24 @@ static Expr *elab_deftype(Elab *e, const Form *call) {
     }
     Form *body_form = call->as.list.items[body_index];
 
-    /* Phase HKT-P2: In v1, we accept the body but don't fully elaborate it.
-     * We just need to validate it exists and is a valid form.
-     * For now, we'll store it as a TY_REC with NULL body.
-     * Future work: fully elaborate the body and validate guarded recursion. */
-    (void)body_form;  /* Body is accepted but not processed in v1 */
+    /* Parse the body as a type expression */
+    Type *body_type = type_expr_from_form(e, body_form, name,
+                                          type_params, type_param_kinds, n_type_params);
+    if (!body_type) {
+        return NULL;
+    }
+
+    /* Phase HKT-P2: Validate guarded recursion
+     * The recursive type name must only appear under type constructors
+     * (i.e., as an argument to a type constructor, not at the top level) */
+    if (!type_is_guarded_recursive(*body_type, name->name)) {
+        diag_emit(DIAG_ERROR, body_form->span,
+                  "recursive type '%s' must have guarded recursion: "
+                  "'%s' appears at top level of its own body; "
+                  "wrap it in a type constructor (e.g., (Fix (f (Fix f))) not (Fix Fix))",
+                  name->name, name->name);
+        return NULL;
+    }
 
     /* Determine the kind of this deftype:
      * - If there are kind parameters, the result kind is KIND_ARROW or KIND_ARROW2
@@ -8446,8 +8644,7 @@ static Expr *elab_deftype(Elab *e, const Form *call) {
     rec_type.copy_kind = CK_MOVE;
     rec_type.hkt_kind  = result_kind;
     rec_type.as.rec.name = name->name;
-    /* v1: body not yet evaluated - we'd need a full type elaborator to handle it */
-    rec_type.as.rec.body = NULL;
+    rec_type.as.rec.body = body_type;
 
     /* Register in global scope */
     Binding *b = binding_new(e, name, rec_type, false, true, name_form->span);
@@ -8455,7 +8652,6 @@ static Expr *elab_deftype(Elab *e, const Form *call) {
 
     /* deftype has no runtime effect */
     return e_nil(e, call->span);
-}
 }
 
 /* Elaborate (type-app F A)

@@ -203,8 +203,8 @@ These prerequisites unblock the remaining deferred items in Phase H5 and H6. The
   - Track a `seen_rec_names` set (symbol names) during kind inference; emit an error and stop when the same `TY_REC` name is encountered recursively before resolution.
 - [x] Add `elab_defrec` in `src/elab.c` that registers the recursive type binding in the type environment. Body is parsed but not fully elaborated in v1.
 - [x] Add fixture `hkt-defrec-fix.tur` declaring `Fix` and verifying it compiles (runtime evaluation and full kind-checking deferred to v2).
-- [ ] Extend type expression parser to support recursive type references (e.g., `Fix` appearing in its own body). _BLOCKS: H5 Fix/Free monad._
-- [ ] Add fixture `hkt-defrec-fix-with-body.tur` with full recursive definition.
+- [x] Extend type expression parser to support recursive type references (e.g., `Fix` appearing in its own body). Implemented via `type_expr_from_form()` in `src/elab.c` which parses type expressions including recursive references and type applications.
+- [x] Add fixture `hkt-defrec-fix-with-body.tur` with full recursive definition. Updated to use `deftype` with guarded recursive bodies: `(deftype Fix [^f] (f (Fix f)))`.
 
 #### HKT-P3 — Multi-capture closures (blocks H6 `for` comprehension)
 - [x] Audit `src/emit.c` closure emission: document the current single-capture limitation (one `env0` field) and the struct layout change required for multi-capture environments.

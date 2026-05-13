@@ -4,12 +4,12 @@
 ;; Fix f is the fixed-point combinator for type constructors.
 ;; Fix[f] ≅ f(Fix[f])
 ;; This allows recursive types like Fix[option] which is an infinite nested option.
-(deftype Fix [^f] Fix)
+(deftype Fix [^f] (f (Fix f)))
 
 ;; Free f a is the free monad over a functor f.
-;; Free f a = Pure a | Free (f (Free f a))
+;; Free f a ≅ f (Free f a)  (simplified for v1 - no sum type)
 ;; This represents computations with effects described by f.
-(deftype Free [^f ^a] Free)
+(deftype Free [^f ^a] (f (Free f a)))
 
 ;; ==========================================================
 ;; Fix catamorphism (fold)
@@ -19,9 +19,9 @@
 ;; For Fix f, the algebra is a function (f a -> a) that describes how to
 ;; convert one layer of the functor into the result.
 ;;
-;; Signature: (defn cata [^f ^a fn (Fix f)] :a ...)
-;; But in v1, we can't express the constraint that fn : f a -> a properly,
-;; so we use a simpler signature with int as placeholder.
+;; In v1, this is a stub since we don't have ADTs or pattern matching.
+;; The type signature would be: (defn cata [^f ^a fn (Fix f)] :a ...)
+;; but we use int as placeholder.
 (defn cata [f fn x] :int 0)
 
 ;; ==========================================================
@@ -29,14 +29,16 @@
 ;; ==========================================================
 
 ;; pure-free: lift a value into the Free monad
-;; Signature: pure-free : forall f a. a -> Free f a
+;; In v1, this is a stub. The actual implementation would construct
+;; a Pure value, but we don't have sum types yet.
 (defn pure-free [x] :int 0)
 
 ;; liftF: lift a functor action into the Free monad
-;; Signature: liftF : forall f a. f a -> Free f a
+;; In v1, this is a stub. The actual implementation would construct
+;; a Free (f a) value.
 (defn liftF [fa] :int 0)
 
 ;; interpret-free: run a Free monad computation with an interpreter
-;; Signature: interpret-free : forall f a. (forall r. f r -> r) -> Free f a -> a
-;; In v1, we use int as placeholder for the result type.
+;; In v1, this is a stub. The actual implementation would recursively
+;; process the Free structure, applying the interpreter to each layer.
 (defn interpret-free [interp free] :int 0)
