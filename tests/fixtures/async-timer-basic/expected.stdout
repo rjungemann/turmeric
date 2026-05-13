@@ -1,3 +1,5 @@
-timer:1
-timer:2
-timer:3
+start
+fiber-fast done (50ms)
+fiber-medium done (100ms)
+fiber-slow done (150ms)
+all done

@@ -33,6 +33,23 @@
   free((void*)(intptr_t)p);
   ```)
 
+;;; SINCE: Phase HKT §6 — Stdlib HKT migration
+;; Bifunctor instance for Pair.
+;; bimap :: (a -> c) -> (b -> d) -> pair a b -> pair c d
+(defn __bifunctor_pair_bimap [container fn-left fn-right] :int
+  ```c
+  struct { int64_t first; int64_t second; } *p =
+      (struct { int64_t first; int64_t second; } *)(intptr_t)container;
+  if (!p) return 0;
+  struct { int64_t first; int64_t second; } *r = malloc(sizeof(*r));
+  r->first  = ((int64_t(*)(int64_t))(intptr_t)fn_left)(p->first);
+  r->second = ((int64_t(*)(int64_t))(intptr_t)fn_right)(p->second);
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(definstance Bifunctor [Pair]
+  (bimap [container fn-left fn-right] (__bifunctor_pair_bimap container fn-left fn-right)))
+
 ;; Phase B1: Clone instance for Pair
 ;; Requires the Clone typeclass to already be in scope (from stdlib/typeclass.tur).
 ;; Deep-copies the struct value into a new heap allocation and returns it as int64_t.

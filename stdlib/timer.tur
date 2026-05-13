@@ -1,36 +1,45 @@
-;; stdlib/timer.tur — Timer wheel API (Phase T24)
+;; stdlib/timer.tur — Timer API for Turmeric (Phase T24)
 ;;
-;; Provides O(1) insert/cancel via the global TurTimerWheel that is emitted
-;; into every compiled Turmeric program.
+;; Provides high-level timer operations backed by the min-heap timer wheel
+;; emitted in the runtime preamble.
 ;;
-;; Typical usage:
-;;   (let [h (timer-insert! 500 my-callback nil)]
-;;     ...
-;;     (timer-cancel! h))   ; cancel before it fires
+;; API:
+;;   timer-set    [ms callback arg]  -> timer-id (int)
+;;   timer-cancel [id]               -> nil
+;;   timer-sleep  [ms]               -> nil  (parks fiber, requires scheduler)
 
-;; Insert a one-shot timer.
-;;   delay-ms  : milliseconds from now until the callback fires
-;;   callback  : (ptr<void> -> nil) function pointer
-;;   arg       : opaque argument passed to callback
-;; Returns a handle (ptr<void>) that can be passed to timer-cancel!.
-(defn timer-insert! [delay-ms :int callback :ptr<void> arg :ptr<void>] :ptr<void>
+;; Schedule a callback to fire after ms milliseconds.
+;; Returns a timer ID that can be passed to timer-cancel.
+(defn timer-set [ms :int callback :ptr<void> arg :ptr<void>] :int
   ```c
-  return (void *)tur_timer_wheel_insert(
-      tur_get_timer_wheel(),
-      (int64_t)delay_ms,
-      (tur_timer_cb_t)(intptr_t)callback,
-      (void *)(intptr_t)arg);
+  if (!tur_global_timers) tur_global_timers = tur_timer_wheel_new();
+  int64_t deadline = tur_monotonic_ns() + (int64_t)ms * 1000000LL;
+  return tur_timer_wheel_insert(tur_global_timers, deadline,
+      (void(*)(void*))callback, arg);
   ```)
 
-;; Cancel a pending timer.  If the timer has already fired, this is a no-op.
-;; handle : value returned by timer-insert!
-(defn timer-cancel! [handle :ptr<void>] :nil
+;; Cancel a previously scheduled timer by ID.
+;; If the timer has already fired, this is a no-op.
+(defn timer-cancel [id :int] :nil
   ```c
-  tur_timer_wheel_cancel((TurTimerNode *)(intptr_t)handle);
+  if (tur_global_timers) tur_timer_wheel_cancel(tur_global_timers, id);
   ```)
 
-;; Return the current monotonic time in milliseconds.
-(defn timer-now-ms [] :int
+;; Sleep the current fiber for ms milliseconds using the timer wheel.
+;; Requires that a scheduler is active and the caller is running in a fiber.
+;; For a version that falls back to nanosleep, use async-sleep from fiber.tur.
+(defn timer-sleep [ms :int] :nil
   ```c
-  return tur_wheel_now_ms();
+  if (ms <= 0) return;
+  FiberBlock *me = tur_current_fiber;
+  if (!me || !tur_scheduler) {
+    fprintf(stderr, "timer-sleep: must be called from a fiber under a scheduler\n");
+    abort();
+  }
+  if (!tur_global_timers) tur_global_timers = tur_timer_wheel_new();
+  int64_t deadline = tur_monotonic_ns() + (int64_t)ms * 1000000LL;
+  tur_timer_wheel_insert(tur_global_timers, deadline,
+      (void(*)(void*))tur_scheduler_unpark, me);
+  me->parked = 1;
+  tur_fiber_block_yield(0);
   ```)

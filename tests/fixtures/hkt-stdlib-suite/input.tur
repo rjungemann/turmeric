@@ -1,0 +1,714 @@
+;; Phase HKT §6: Stdlib HKT migration suite.
+;; Exercises fmap, pure, bind, foldl, and bimap on each migrated stdlib type.
+
+;; ── Typeclass declarations ──────────────────────────────────────────────────
+(defclass Functor [^f]
+  (fmap [container fn] :int))
+
+(defclass Applicative [^f]
+  (pure [x] :int)
+  (ap [ff fa] :int))
+
+(defclass Monad [^m]
+  (bind [ma fn] :int))
+
+(defclass Foldable [^t]
+  (foldl [ta init fn] :int)
+  (foldr [ta init fn] :int))
+
+(defclass Bifunctor [^^f]
+  (bimap [container fn-left fn-right] :int))
+
+;; ── Option helpers ──────────────────────────────────────────────────────────
+(defn __opt_some [x] :int
+  ```c
+  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
+  r->is_some = true;
+  r->value = x;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(defn __opt_none [] :int
+  ```c
+  return 0;
+  ```)
+
+(defn __opt_some? [o] :bool
+  ```c
+  struct { bool is_some; int64_t value; } *p =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)o;
+  return p != 0 && p->is_some;
+  ```)
+
+(defn __opt_unwrap [o] :int
+  ```c
+  struct { bool is_some; int64_t value; } *p =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)o;
+  return (int64_t)(p->value);
+  ```)
+
+;; Option Functor
+(defn __fmap_option [container fn] :int
+  ```c
+  struct { bool is_some; int64_t value; } *c =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)container;
+  if (!c || !c->is_some) return 0;
+  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
+  r->is_some = true;
+  r->value = ((int64_t(*)(int64_t))(intptr_t)fn)(c->value);
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(definstance Functor [option]
+  (fmap [container fn] (__fmap_option container fn)))
+
+;; Option Foldable
+(defn __foldable_option_foldl [ta init fn] :int
+  ```c
+  struct { bool is_some; int64_t value; } *opt =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)ta;
+  if (!opt || !opt->is_some) return init;
+  return ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(init, opt->value);
+  ```)
+
+(defn __foldable_option_foldr [ta init fn] :int
+  ```c
+  struct { bool is_some; int64_t value; } *opt =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)ta;
+  if (!opt || !opt->is_some) return init;
+  return ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(opt->value, init);
+  ```)
+
+(definstance Foldable [option]
+  (foldl [ta init fn] (__foldable_option_foldl ta init fn))
+  (foldr [ta init fn] (__foldable_option_foldr ta init fn)))
+
+;; Option Applicative
+(defn __applicative_option_pure [x] :int
+  (__opt_some x))
+
+(defn __applicative_option_ap [ff fa] :int
+  ```c
+  struct { bool is_some; int64_t value; } *f_opt =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)ff;
+  struct { bool is_some; int64_t value; } *a_opt =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)fa;
+  if (!f_opt || !f_opt->is_some || !a_opt || !a_opt->is_some) return 0;
+  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
+  r->is_some = true;
+  r->value = ((int64_t(*)(int64_t))(intptr_t)f_opt->value)(a_opt->value);
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(definstance Applicative [option]
+  (pure [x] (__applicative_option_pure x))
+  (ap [ff fa] (__applicative_option_ap ff fa)))
+
+;; Option Monad
+(defn __monad_option_bind [ma fn] :int
+  ```c
+  struct { bool is_some; int64_t value; } *opt =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)ma;
+  if (!opt || !opt->is_some) return 0;
+  return ((int64_t(*)(int64_t))(intptr_t)fn)(opt->value);
+  ```)
+
+(definstance Monad [option]
+  (bind [ma fn] (__monad_option_bind ma fn)))
+
+;; ── Vec helpers ─────────────────────────────────────────────────────────────
+(defn __vec_new [] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v->data = NULL; v->len = 0; v->cap = 0;
+  return (int64_t)(intptr_t)v;
+  ```)
+
+(defn __vec_push [v val] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
+  if (vec->len >= vec->cap) {
+      size_t new_cap = vec->cap > 0 ? vec->cap * 2 : 4;
+      int64_t *new_data = malloc(sizeof(int64_t) * new_cap);
+      for (size_t i = 0; i < vec->len; i++) new_data[i] = vec->data[i];
+      free(vec->data);
+      vec->data = new_data;
+      vec->cap = new_cap;
+  }
+  vec->data[vec->len++] = val;
+  return v;
+  ```)
+
+(defn __vec_get [v i] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
+  return vec->data[(size_t)i];
+  ```)
+
+(defn __vec_len [v] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
+  return (int64_t)vec->len;
+  ```)
+
+;; Vec Functor
+(defn __fmap_vec [container fn] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)container;
+  if (!v) return 0;
+  struct { int64_t *data; size_t len; size_t cap; } *r = malloc(sizeof(*r));
+  r->len = v->len; r->cap = v->len;
+  r->data = r->len > 0 ? malloc(sizeof(int64_t) * r->len) : NULL;
+  for (size_t i = 0; i < v->len; i++) {
+      r->data[i] = ((int64_t(*)(int64_t))(intptr_t)fn)(v->data[i]);
+  }
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(definstance Functor [vec]
+  (fmap [container fn] (__fmap_vec container fn)))
+
+;; Vec Foldable
+(defn __foldable_vec_foldl [ta init fn] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)ta;
+  int64_t acc = init;
+  if (!v) return acc;
+  for (size_t i = 0; i < v->len; i++) {
+      acc = ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(acc, v->data[i]);
+  }
+  return acc;
+  ```)
+
+(defn __foldable_vec_foldr [ta init fn] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)ta;
+  int64_t acc = init;
+  if (!v) return acc;
+  for (size_t i = v->len; i-- > 0; ) {
+      acc = ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(v->data[i], acc);
+  }
+  return acc;
+  ```)
+
+(definstance Foldable [vec]
+  (foldl [ta init fn] (__foldable_vec_foldl ta init fn))
+  (foldr [ta init fn] (__foldable_vec_foldr ta init fn)))
+
+;; Vec Applicative
+(defn __applicative_vec_pure [x] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v->len = 1; v->cap = 1;
+  v->data = malloc(sizeof(int64_t));
+  v->data[0] = x;
+  return (int64_t)(intptr_t)v;
+  ```)
+
+(definstance Applicative [vec]
+  (pure [x] (__applicative_vec_pure x))
+  (ap [ff fa] 0))
+
+;; Vec Monad
+(defn __monad_vec_bind [ma fn] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)ma;
+  if (!v) return 0;
+  /* Collect all sub-vecs */
+  size_t total = 0;
+  for (size_t i = 0; i < v->len; i++) {
+      int64_t sub = ((int64_t(*)(int64_t))(intptr_t)fn)(v->data[i]);
+      struct { int64_t *data; size_t len; size_t cap; } *sv =
+          (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)sub;
+      if (sv) total += sv->len;
+  }
+  struct { int64_t *data; size_t len; size_t cap; } *r = malloc(sizeof(*r));
+  r->len = total; r->cap = total;
+  r->data = total > 0 ? malloc(sizeof(int64_t) * total) : NULL;
+  size_t idx = 0;
+  for (size_t i = 0; i < v->len; i++) {
+      int64_t sub = ((int64_t(*)(int64_t))(intptr_t)fn)(v->data[i]);
+      struct { int64_t *data; size_t len; size_t cap; } *sv =
+          (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)sub;
+      if (sv) {
+          for (size_t j = 0; j < sv->len; j++) r->data[idx++] = sv->data[j];
+      }
+  }
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(definstance Monad [vec]
+  (bind [ma fn] (__monad_vec_bind ma fn)))
+
+;; ── List (Cons/nil) helpers ─────────────────────────────────────────────────
+(defn __list_nil [] :int
+  ```c
+  return 0;
+  ```)
+
+(defn __list_cons [value next] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
+  cell->value = value;
+  cell->next = next;
+  return (int64_t)(intptr_t)cell;
+  ```)
+
+(defn __list_head [lst] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell =
+      (struct { int64_t value; int64_t next; } *)(intptr_t)lst;
+  return cell->value;
+  ```)
+
+(defn __list_tail [lst] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell =
+      (struct { int64_t value; int64_t next; } *)(intptr_t)lst;
+  return cell->next;
+  ```)
+
+(defn __list_nil? [lst] :bool
+  ```c
+  return lst == 0;
+  ```)
+
+;; List Functor
+(defn __fmap_list [container fn] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell =
+      (struct { int64_t value; int64_t next; } *)(intptr_t)container;
+  if (!cell) return 0;
+  struct { int64_t value; int64_t next; } *rev = NULL;
+  while (cell) {
+      struct { int64_t value; int64_t next; } *n = malloc(sizeof(*n));
+      n->value = ((int64_t(*)(int64_t))(intptr_t)fn)(cell->value);
+      n->next = (int64_t)(intptr_t)rev;
+      rev = n;
+      cell = (struct { int64_t value; int64_t next; } *)(intptr_t)cell->next;
+  }
+  struct { int64_t value; int64_t next; } *result = NULL;
+  while (rev) {
+      struct { int64_t value; int64_t next; } *tmp =
+          (struct { int64_t value; int64_t next; } *)(intptr_t)rev->next;
+      rev->next = (int64_t)(intptr_t)result;
+      result = rev;
+      rev = tmp;
+  }
+  return (int64_t)(intptr_t)result;
+  ```)
+
+(definstance Functor [list]
+  (fmap [container fn] (__fmap_list container fn)))
+
+;; List Foldable
+(defn __foldable_list_foldl [ta init fn] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell =
+      (struct { int64_t value; int64_t next; } *)(intptr_t)ta;
+  int64_t acc = init;
+  while (cell) {
+      acc = ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(acc, cell->value);
+      cell = (struct { int64_t value; int64_t next; } *)(intptr_t)cell->next;
+  }
+  return acc;
+  ```)
+
+(defn __foldable_list_foldr [ta init fn] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell =
+      (struct { int64_t value; int64_t next; } *)(intptr_t)ta;
+  size_t count = 0;
+  struct { int64_t value; int64_t next; } *tmp = cell;
+  while (tmp) { count++; tmp = (struct { int64_t value; int64_t next; } *)(intptr_t)tmp->next; }
+  if (count == 0) return init;
+  int64_t *vals = malloc(sizeof(int64_t) * count);
+  tmp = cell;
+  for (size_t i = 0; i < count; i++) {
+      vals[i] = tmp->value;
+      tmp = (struct { int64_t value; int64_t next; } *)(intptr_t)tmp->next;
+  }
+  int64_t acc = init;
+  for (size_t i = count; i-- > 0; ) {
+      acc = ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(vals[i], acc);
+  }
+  free(vals);
+  return acc;
+  ```)
+
+(definstance Foldable [list]
+  (foldl [ta init fn] (__foldable_list_foldl ta init fn))
+  (foldr [ta init fn] (__foldable_list_foldr ta init fn)))
+
+;; List Applicative
+(defn __applicative_list_pure [x] :int
+  (__list_cons x (__list_nil)))
+
+(definstance Applicative [list]
+  (pure [x] (__applicative_list_pure x))
+  (ap [ff fa] 0))
+
+;; List Monad
+(defn __monad_list_bind [ma fn] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell =
+      (struct { int64_t value; int64_t next; } *)(intptr_t)ma;
+  if (!cell) return 0;
+  struct { int64_t value; int64_t next; } *rev = NULL;
+  while (cell) {
+      int64_t sub_list = ((int64_t(*)(int64_t))(intptr_t)fn)(cell->value);
+      struct { int64_t value; int64_t next; } *sub =
+          (struct { int64_t value; int64_t next; } *)(intptr_t)sub_list;
+      while (sub) {
+          struct { int64_t value; int64_t next; } *n = malloc(sizeof(*n));
+          n->value = sub->value;
+          n->next = (int64_t)(intptr_t)rev;
+          rev = n;
+          sub = (struct { int64_t value; int64_t next; } *)(intptr_t)sub->next;
+      }
+      cell = (struct { int64_t value; int64_t next; } *)(intptr_t)cell->next;
+  }
+  struct { int64_t value; int64_t next; } *result = NULL;
+  while (rev) {
+      struct { int64_t value; int64_t next; } *tmp =
+          (struct { int64_t value; int64_t next; } *)(intptr_t)rev->next;
+      rev->next = (int64_t)(intptr_t)result;
+      result = rev;
+      rev = tmp;
+  }
+  return (int64_t)(intptr_t)result;
+  ```)
+
+(definstance Monad [list]
+  (bind [ma fn] (__monad_list_bind ma fn)))
+
+;; ── Result helpers ──────────────────────────────────────────────────────────
+(defn __res_ok [x] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = true; r->ok_val = x; r->err_val = 0;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(defn __res_err [e] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = false; r->ok_val = 0; r->err_val = e;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(defn __res_ok? [r] :bool
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r;
+  return res != NULL && res->is_ok;
+  ```)
+
+(defn __res_ok_val [r] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r;
+  return res->ok_val;
+  ```)
+
+(defn __res_err_val [r] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r;
+  return res->err_val;
+  ```)
+
+;; Result Functor (maps over ok value)
+(defn __fmap_result [container fn] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)container;
+  if (!res || !res->is_ok) return container;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
+  out->is_ok = true;
+  out->ok_val = ((int64_t(*)(int64_t))(intptr_t)fn)(res->ok_val);
+  out->err_val = 0;
+  return (int64_t)(intptr_t)out;
+  ```)
+
+(definstance Functor [result]
+  (fmap [container fn] (__fmap_result container fn)))
+
+;; Result Foldable
+(defn __foldable_result_foldl [ta init fn] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)ta;
+  if (!res || !res->is_ok) return init;
+  return ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(init, res->ok_val);
+  ```)
+
+(defn __foldable_result_foldr [ta init fn] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)ta;
+  if (!res || !res->is_ok) return init;
+  return ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(res->ok_val, init);
+  ```)
+
+(definstance Foldable [result]
+  (foldl [ta init fn] (__foldable_result_foldl ta init fn))
+  (foldr [ta init fn] (__foldable_result_foldr ta init fn)))
+
+;; Result Applicative
+(defn __applicative_result_pure [x] :int
+  (__res_ok x))
+
+(definstance Applicative [result]
+  (pure [x] (__applicative_result_pure x))
+  (ap [ff fa] 0))
+
+;; Result Monad
+(defn __monad_result_bind [ma fn] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)ma;
+  if (!res || !res->is_ok) return ma;
+  return ((int64_t(*)(int64_t))(intptr_t)fn)(res->ok_val);
+  ```)
+
+(definstance Monad [result]
+  (bind [ma fn] (__monad_result_bind ma fn)))
+
+;; Result Bifunctor
+(defn __bimap_result [container fn-left fn-right] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)container;
+  if (!res) return 0;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
+  if (res->is_ok) {
+      out->is_ok = true;
+      out->ok_val = ((int64_t(*)(int64_t))(intptr_t)fn_right)(res->ok_val);
+      out->err_val = 0;
+  } else {
+      out->is_ok = false;
+      out->ok_val = 0;
+      out->err_val = ((int64_t(*)(int64_t))(intptr_t)fn_left)(res->err_val);
+  }
+  return (int64_t)(intptr_t)out;
+  ```)
+
+(definstance Bifunctor [result]
+  (bimap [container fn-left fn-right] (__bimap_result container fn-left fn-right)))
+
+;; ── Pair helpers ────────────────────────────────────────────────────────────
+(defn __pair_make [a b] :int
+  ```c
+  struct { int64_t fst; int64_t snd; } *r = malloc(sizeof(*r));
+  r->fst = a; r->snd = b;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(defn __pair_fst [p] :int
+  ```c
+  return ((struct { int64_t fst; int64_t snd; } *)(intptr_t)p)->fst;
+  ```)
+
+(defn __pair_snd [p] :int
+  ```c
+  return ((struct { int64_t fst; int64_t snd; } *)(intptr_t)p)->snd;
+  ```)
+
+;; Pair Bifunctor
+(defn __bimap_pair [container fn-left fn-right] :int
+  ```c
+  struct { int64_t fst; int64_t snd; } *p =
+      (struct { int64_t fst; int64_t snd; } *)(intptr_t)container;
+  struct { int64_t fst; int64_t snd; } *r = malloc(sizeof(*r));
+  r->fst = ((int64_t(*)(int64_t))(intptr_t)fn_left)(p->fst);
+  r->snd = ((int64_t(*)(int64_t))(intptr_t)fn_right)(p->snd);
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(definstance Bifunctor [pair]
+  (bimap [container fn-left fn-right] (__bimap_pair container fn-left fn-right)))
+
+;; ── Shared helpers ──────────────────────────────────────────────────────────
+(defn twice [x] :int (* x 2))
+(defn inc [x] :int (+ x 1))
+(defn negate [x] :int (* x -1))
+(defn add [a b] :int (+ a b))
+
+;; Helper: print all elements of a list
+(defn print-list [lst]
+  ```c
+  struct { int64_t value; int64_t next; } *cell =
+      (struct { int64_t value; int64_t next; } *)(intptr_t)lst;
+  while (cell) {
+      printf("%lld\n", (long long)cell->value);
+      cell = (struct { int64_t value; int64_t next; } *)(intptr_t)cell->next;
+  }
+  ```)
+
+;; Helper: print all elements of a vec
+(defn print-vec [v]
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
+  for (size_t i = 0; i < vec->len; i++) {
+      printf("%lld\n", (long long)vec->data[i]);
+  }
+  ```)
+
+;; Helper: bind function that duplicates a value into a list [x, x+10]
+(defn dup-list [x] :int
+  (__list_cons x (__list_cons (+ x 10) (__list_nil))))
+
+;; Helper: bind function that duplicates a value into a vec [x, x+10]
+(defn dup-vec [x] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v->len = 2; v->cap = 2;
+  v->data = malloc(sizeof(int64_t) * 2);
+  v->data[0] = x;
+  v->data[1] = x + 10;
+  return (int64_t)(intptr_t)v;
+  ```)
+
+;; Helper: result bind — double ok value
+(defn res-double [x] :int
+  (__res_ok (* x 2)))
+
+(defn main [] :int
+  (do
+    ;; ── Option tests ──────────────────────────────────────────────
+    ;; fmap double (some 5) => some 10
+    (let [o (__opt_some 5)]
+      (let [mapped (__fmap_option o twice)]
+        (do
+          (println (__opt_some? mapped))     ;; true
+          (println (__opt_unwrap mapped))))) ;; 10
+
+    ;; fmap double none => none
+    (println (__opt_some? (__fmap_option (__opt_none) twice)))  ;; false
+
+    ;; foldl add 0 (some 7) => 7
+    (println (__foldable_option_foldl (__opt_some 7) 0 add))   ;; 7
+
+    ;; foldl add 0 none => 0
+    (println (__foldable_option_foldl (__opt_none) 0 add))     ;; 0
+
+    ;; pure 42 => some 42
+    (let [p (__applicative_option_pure 42)]
+      (do
+        (println (__opt_some? p))           ;; true
+        (println (__opt_unwrap p))))        ;; 42
+
+    ;; bind (some 10) double-ok => some 20
+    (let [b (__monad_option_bind (__opt_some 10) (fn [x] (__opt_some (* x 2))))]
+      (do
+        (println (__opt_some? b))           ;; true
+        (println (__opt_unwrap b))))        ;; 20
+
+    ;; bind none fn => none
+    (println (__opt_some? (__monad_option_bind (__opt_none) (fn [x] (__opt_some x)))))  ;; false
+
+    ;; ── Vec tests ─────────────────────────────────────────────────
+    ;; fmap double [1, 2, 3] => [2, 4, 6]
+    (let [v (__vec_push (__vec_push (__vec_push (__vec_new) 1) 2) 3)]
+      (print-vec (__fmap_vec v twice)))    ;; 2 4 6
+
+    ;; foldl add 0 [1, 2, 3] => 6
+    (let [v2 (__vec_push (__vec_push (__vec_push (__vec_new) 1) 2) 3)]
+      (println (__foldable_vec_foldl v2 0 add)))  ;; 6
+
+    ;; pure 99 => [99]
+    (let [pv (__applicative_vec_pure 99)]
+      (do
+        (println (__vec_len pv))            ;; 1
+        (println (__vec_get pv 0))))        ;; 99
+
+    ;; bind [1, 2] dup-vec => [1, 11, 2, 12]
+    (let [v3 (__vec_push (__vec_push (__vec_new) 1) 2)]
+      (print-vec (__monad_vec_bind v3 dup-vec)))   ;; 1 11 2 12
+
+    ;; ── List tests ────────────────────────────────────────────────
+    ;; fmap double (cons 3 (cons 4 nil)) => (cons 6 (cons 8 nil))
+    (let [l (__list_cons 3 (__list_cons 4 (__list_nil)))]
+      (print-list (__fmap_list l twice)))  ;; 6 8
+
+    ;; foldl add 0 (cons 1 (cons 2 (cons 3 nil))) => 6
+    (let [l2 (__list_cons 1 (__list_cons 2 (__list_cons 3 (__list_nil))))]
+      (println (__foldable_list_foldl l2 0 add)))  ;; 6
+
+    ;; pure 77 => (cons 77 nil)
+    (let [lp (__applicative_list_pure 77)]
+      (do
+        (println (__list_head lp))          ;; 77
+        (println (__list_nil? (__list_tail lp)))))  ;; true
+
+    ;; bind (cons 1 (cons 2 nil)) dup-list => (cons 1 (cons 11 (cons 2 (cons 12 nil))))
+    (let [l3 (__list_cons 1 (__list_cons 2 (__list_nil)))]
+      (print-list (__monad_list_bind l3 dup-list)))  ;; 1 11 2 12
+
+    ;; ── Result tests ──────────────────────────────────────────────
+    ;; fmap double (ok 5) => ok 10
+    (let [r (__fmap_result (__res_ok 5) twice)]
+      (do
+        (println (__res_ok? r))             ;; true
+        (println (__res_ok_val r))))        ;; 10
+
+    ;; fmap double (err 99) => err 99
+    (let [r2 (__fmap_result (__res_err 99) twice)]
+      (do
+        (println (__res_ok? r2))            ;; false
+        (println (__res_err_val r2))))      ;; 99
+
+    ;; foldl add 0 (ok 5) => 5
+    (println (__foldable_result_foldl (__res_ok 5) 0 add))   ;; 5
+
+    ;; foldl add 0 (err 99) => 0
+    (println (__foldable_result_foldl (__res_err 99) 0 add)) ;; 0
+
+    ;; pure 42 => ok 42
+    (let [rp (__applicative_result_pure 42)]
+      (do
+        (println (__res_ok? rp))            ;; true
+        (println (__res_ok_val rp))))       ;; 42
+
+    ;; bind (ok 7) res-double => ok 14
+    (let [rb (__monad_result_bind (__res_ok 7) res-double)]
+      (do
+        (println (__res_ok? rb))            ;; true
+        (println (__res_ok_val rb))))       ;; 14
+
+    ;; bind (err 1) fn => err 1
+    (let [re (__monad_result_bind (__res_err 1) res-double)]
+      (do
+        (println (__res_ok? re))            ;; false
+        (println (__res_err_val re))))      ;; 1
+
+    ;; bimap inc negate (ok 9) => ok -9
+    (let [rb2 (__bimap_result (__res_ok 9) inc negate)]
+      (do
+        (println (__res_ok? rb2))           ;; true
+        (println (__res_ok_val rb2))))      ;; -9
+
+    ;; bimap inc negate (err 4) => err 5
+    (let [rb3 (__bimap_result (__res_err 4) inc negate)]
+      (do
+        (println (__res_ok? rb3))           ;; false
+        (println (__res_err_val rb3))))     ;; 5
+
+    ;; ── Pair Bifunctor tests ──────────────────────────────────────
+    ;; bimap double inc (10, 20) => (20, 21)
+    (let [p (__pair_make 10 20)]
+      (let [mapped (__bimap_pair p twice inc)]
+        (do
+          (println (__pair_fst mapped))     ;; 20
+          (println (__pair_snd mapped)))))  ;; 21
+
+    0))

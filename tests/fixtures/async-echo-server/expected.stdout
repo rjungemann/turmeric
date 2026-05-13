@@ -1,1 +1,6 @@
-echo: hello
+start
+server listening
+client connected
+server got: hello echo
+client got: hello echo
+all done
