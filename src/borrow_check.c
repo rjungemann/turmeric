@@ -317,8 +317,6 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
         case EX_WEAK_PRED:
         case EX_REF_PRED:
         case EX_CONT_PRED:
-        case EX_ASYNC:
-        case EX_AWAIT:
             /* These are reference operations - check the inner expression */
             if (e->kind == EX_REF) {
                 return borrow_check_expr_recursive(ctx, e->as.ref_.expr);
@@ -361,7 +359,7 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
                 if (fn_expr->kind == EX_CLOSURE) {
                     cl = fn_expr->as.closure_.closure;
                 } else if (fn_expr->kind == EX_FN) {
-                    cl = fn_expr->as.fn_.closure;
+                    cl = fn_expr->as.fn_.fn->closure;
                 }
                 if (cl) {
                     for (uint8_t i = 0; i < cl->n_captures; i++) {
@@ -414,7 +412,15 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
 
         case EX_GET_FIELD:
             return borrow_check_expr_recursive(ctx, e->as.get_field_.struct_expr);
-            
+
+        case EX_DEFMODULE: {
+            DefModule *mod = e->as.defmodule_.mod;
+            for (uint32_t i = 0; i < mod->n_body; i++) {
+                if (!borrow_check_expr_recursive(ctx, mod->body[i])) return false;
+            }
+            return true;
+        }
+
         case EX_PROGRAM:
             for (uint32_t i = 0; i < e->as.program.n; i++) {
                 if (!borrow_check_expr_recursive(ctx, e->as.program.items[i])) {

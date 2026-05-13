@@ -1,0 +1,4 @@
+(defmodule mymod/first
+  (defn helper [] :int 1))
+(defmodule mymod/second
+  (defn main [] :int 0))

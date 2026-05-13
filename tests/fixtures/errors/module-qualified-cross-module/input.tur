@@ -1,0 +1,6 @@
+(defmodule mymod
+  (export run)
+  (import other :as oth)
+  (defn run [] :int
+    (oth/some-fn 1 2))
+  (defn main [] :int (run)))

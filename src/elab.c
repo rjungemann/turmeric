@@ -507,6 +507,16 @@ typedef struct Elab {
     StructDef **struct_defs;
     uint32_t n_struct_defs;
     uint32_t cap_struct_defs;
+    /* Phase M0: Module system */
+    const Symbol *sym_defmodule;  /* defmodule */
+    const Symbol *sym_export;     /* export */
+    const Symbol *sym_import;     /* import */
+    const Symbol *kw_as;          /* :as */
+    const Symbol *kw_refer;       /* :refer */
+    bool has_defmodule;           /* whether defmodule has been seen in this file */
+    /* Phase M1: Module namespace system */
+    const Symbol    *current_module_name; /* name of module being elaborated, or NULL */
+    const DefModule *current_module;      /* DefModule being elaborated, or NULL */
 } Elab;
 
 /* Phase 6: Macro definition */
@@ -954,6 +964,15 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->macros = NULL;
     e->n_macros = 0;
     e->cap_macros = 0;
+    /* Phase M0: Module system */
+    e->sym_defmodule = intern_cstr(st, "defmodule");
+    e->sym_export = intern_cstr(st, "export");
+    e->sym_import = intern_cstr(st, "import");
+    e->kw_as = intern_cstr(st, "as");
+    e->kw_refer = intern_cstr(st, "refer");
+    e->has_defmodule = false;
+    e->current_module_name = NULL;
+    e->current_module = NULL;
 }
 
 /* Phase 13: Lifetime annotation helpers (deferred - infrastructure in place) */
@@ -1814,10 +1833,13 @@ static Binding *binding_new(Elab *e, const Symbol *name, Type type,
     b->is_moved = false;  /* Phase 5: move semantics */
     b->moved_at = SPAN_UNKNOWN;
     b->no_unwind = false;  /* Phase R5: #[no-unwind] attribute */
+    b->is_exported = false;
+    b->defining_module_name = e->current_module_name;
     return b;
 }
 
 /* Forward declarations. */
+static Binding *elab_lookup_sym(Elab *e, const Symbol *sym, Span span, bool *had_error); /* Phase M1 */
 static Expr *elab_form(Elab *e, Form *f);
 static Expr *elab_unsafe(Elab *e, const Form *call);
 /* Phase 5 */
@@ -6023,6 +6045,8 @@ static Expr *elab_def(Elab *e, const Form *call) {
 
 static Expr *elab_defn(Elab *e, const Form *call);
 static Expr *elab_fn(Elab *e, const Form *call);
+/* Phase M0: Module system */
+static Expr *elab_defmodule(Elab *e, const Form *call);
 static Expr *elab_extern_c(Elab *e, const Form *call);
 static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding);
 /* Phase 11: defstruct */
@@ -6123,6 +6147,18 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_gc_force)    return elab_gc_force(e, call);
     if (name == e->sym_gc_enable)   return elab_gc_enable(e, call);
     if (name == e->sym_gc_disable)  return elab_gc_disable(e, call);
+    /* Phase M0: Module system */
+    if (name == e->sym_defmodule) return elab_defmodule(e, call);
+    if (name == e->sym_export) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "export is only allowed inside defmodule");
+        return NULL;
+    }
+    if (name == e->sym_import) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "import is only allowed inside defmodule");
+        return NULL;
+    }
     /* Phase 11: defstruct */
     if (name == e->sym_defstruct) return elab_defstruct(e, call);
     if (name == e->sym_make_struct) return elab_make_struct(e, call);
@@ -6237,14 +6273,17 @@ static Expr *elab_call(Elab *e, Form *call) {
         return out;
     }
 
-    /* Phase 2: Check if it's a user-defined function call */
-    Binding *fn_binding = scope_lookup(e->scope, name);
-    if (fn_binding && (fn_binding->type.kind == TY_FN || 
-                       (fn_binding->type.kind == TY_PTR_VOID && fn_binding->closure_fn_binding) || 
+    /* Phase 2: Check if it's a user-defined function call.
+     * M1: Use elab_lookup_sym for visibility + qualified name resolution. */
+    bool fn_qual_err = false;
+    Binding *fn_binding = elab_lookup_sym(e, name, head->span, &fn_qual_err);
+    if (!fn_binding && fn_qual_err) return NULL;
+    if (fn_binding && (fn_binding->type.kind == TY_FN ||
+                       (fn_binding->type.kind == TY_PTR_VOID && fn_binding->closure_fn_binding) ||
                        fn_binding->closure_fn_binding)) {
         return elab_call_fn(e, call, fn_binding);
     }
-    
+
     /* Phase 19: Allow calling any binding (for function parameters, higher-order functions) */
     if (fn_binding) {
         return elab_call_fn(e, call, fn_binding);
@@ -6469,6 +6508,385 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
     return out;
 }
 
+/* Phase M0: Module system */
+
+/* Validate that a module name only contains [a-zA-Z0-9_\-/] */
+static bool module_name_valid(const char *name, uint32_t len) {
+    if (len == 0) return false;
+    for (uint32_t i = 0; i < len; i++) {
+        char c = name[i];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '/') {
+            continue;
+        }
+        return false;
+    }
+    /* Must not start or end with '/' */
+    if (name[0] == '/' || name[len - 1] == '/') return false;
+    return true;
+}
+
+/* Parse a single (import module-name [:as alias] [:refer [syms...]]) form */
+static bool parse_import_spec(Elab *e, const Form *f, ImportSpec *out) {
+    if (f->tag != F_LIST || f->as.list.len < 2) {
+        diag_emit(DIAG_ERROR, f->span,
+                  "import requires a module name: (import module-name [:as alias] [:refer [syms...]])");
+        return false;
+    }
+    Form *head = f->as.list.items[0];
+    if (head->tag != F_SYM || head->as.sym != e->sym_import) {
+        diag_emit(DIAG_ERROR, f->span, "expected (import ...)");
+        return false;
+    }
+    Form *name_f = f->as.list.items[1];
+    if (name_f->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, name_f->span, "import module name must be a symbol");
+        return false;
+    }
+    if (!module_name_valid(name_f->as.sym->name, name_f->as.sym->len)) {
+        diag_emit(DIAG_ERROR, name_f->span,
+                  "invalid module name '%s': only alphanumeric, '-', '_', '/' allowed",
+                  name_f->as.sym->name);
+        return false;
+    }
+    out->module_name = name_f->as.sym;
+    out->alias = NULL;
+    out->refer_syms = NULL;
+    out->n_refer = 0;
+    out->span = f->span;
+
+    uint32_t i = 2;
+    while (i < f->as.list.len) {
+        Form *kw = f->as.list.items[i];
+        if (kw->tag == F_KEYWORD && kw->as.sym == e->kw_as) {
+            i++;
+            if (i >= f->as.list.len) {
+                diag_emit(DIAG_ERROR, kw->span, ":as requires an alias symbol");
+                return false;
+            }
+            Form *alias_f = f->as.list.items[i];
+            if (alias_f->tag != F_SYM) {
+                diag_emit(DIAG_ERROR, alias_f->span, ":as alias must be a symbol");
+                return false;
+            }
+            out->alias = alias_f->as.sym;
+            i++;
+        } else if (kw->tag == F_KEYWORD && kw->as.sym == e->kw_refer) {
+            i++;
+            if (i >= f->as.list.len) {
+                diag_emit(DIAG_ERROR, kw->span, ":refer requires a vector of symbols");
+                return false;
+            }
+            Form *refer_f = f->as.list.items[i];
+            if (refer_f->tag != F_VEC) {
+                diag_emit(DIAG_ERROR, refer_f->span, ":refer requires a vector [sym1 sym2 ...]");
+                return false;
+            }
+            uint32_t n = refer_f->as.list.len;
+            const Symbol **syms = (n == 0) ? NULL :
+                (const Symbol **)arena_alloc(e->arena, n * sizeof(Symbol *));
+            for (uint32_t j = 0; j < n; j++) {
+                Form *sf = refer_f->as.list.items[j];
+                if (sf->tag != F_SYM) {
+                    diag_emit(DIAG_ERROR, sf->span, ":refer list must contain only symbols");
+                    return false;
+                }
+                syms[j] = sf->as.sym;
+            }
+            out->refer_syms = syms;
+            out->n_refer = n;
+            i++;
+        } else {
+            diag_emit(DIAG_ERROR, kw->span,
+                      "unexpected token in import; expected :as or :refer");
+            return false;
+        }
+    }
+    return true;
+}
+
+static Expr *elab_defmodule(Elab *e, const Form *call) {
+    /* Only valid at the top level */
+    if (e->scope != &e->global) {
+        diag_emit(DIAG_ERROR, call->span, "defmodule is only valid at the top level");
+        return NULL;
+    }
+    /* Syntax: (defmodule name [docstring] (export ...) (import ...)... body...) */
+    if (call->as.list.len < 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "defmodule requires a module name: (defmodule name ...)");
+        return NULL;
+    }
+    Form *name_f = call->as.list.items[1];
+    if (name_f->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, name_f->span, "defmodule name must be a symbol");
+        return NULL;
+    }
+    if (!module_name_valid(name_f->as.sym->name, name_f->as.sym->len)) {
+        diag_emit(DIAG_ERROR, name_f->span,
+                  "invalid module name '%s': only alphanumeric, '-', '_', '/' allowed",
+                  name_f->as.sym->name);
+        return NULL;
+    }
+    if (e->has_defmodule) {
+        diag_emit(DIAG_ERROR, call->span, "only one defmodule is allowed per file");
+        return NULL;
+    }
+    e->has_defmodule = true;
+
+    uint32_t i = 2;
+    const char *docstring = NULL;
+
+    /* Optional docstring */
+    if (i < call->as.list.len && call->as.list.items[i]->tag == F_STR) {
+        docstring = call->as.list.items[i]->as.s.p;
+        i++;
+    }
+
+    /* Collect export symbols */
+    const Symbol **exports = NULL;
+    uint32_t n_exports = 0;
+    uint32_t cap_exports = 0;
+
+    /* Collect import specs */
+    ImportSpec *imports = NULL;
+    uint32_t n_imports = 0;
+    uint32_t cap_imports = 0;
+
+    /* Consume (export ...) and (import ...) forms */
+    while (i < call->as.list.len) {
+        Form *item = call->as.list.items[i];
+        if (item->tag != F_LIST || item->as.list.len == 0) break;
+        Form *head = item->as.list.items[0];
+        if (head->tag != F_SYM) break;
+
+        if (head->as.sym == e->sym_export) {
+            /* Parse (export sym1 sym2 ...) */
+            for (uint32_t j = 1; j < item->as.list.len; j++) {
+                Form *sf = item->as.list.items[j];
+                if (sf->tag != F_SYM) {
+                    diag_emit(DIAG_ERROR, sf->span, "export list must contain only symbols");
+                    free(exports); free(imports);
+                    return NULL;
+                }
+                if (n_exports >= cap_exports) {
+                    cap_exports = cap_exports ? cap_exports * 2 : 4;
+                    exports = (const Symbol **)realloc(exports, cap_exports * sizeof(Symbol *));
+                }
+                exports[n_exports++] = sf->as.sym;
+            }
+            i++;
+        } else if (head->as.sym == e->sym_import) {
+            /* Parse (import module-name [:as alias] [:refer [syms...]]) */
+            if (n_imports >= cap_imports) {
+                cap_imports = cap_imports ? cap_imports * 2 : 4;
+                imports = (ImportSpec *)realloc(imports, cap_imports * sizeof(ImportSpec));
+            }
+            if (!parse_import_spec(e, item, &imports[n_imports])) {
+                free(exports); free(imports);
+                return NULL;
+            }
+            n_imports++;
+            i++;
+        } else {
+            break; /* Body starts here */
+        }
+    }
+
+    uint32_t body_start = i;
+
+    /* M1: Allocate module struct early and populate imports so elab_lookup_sym
+     * can resolve qualified names and import aliases during body elaboration. */
+    DefModule *mod = (DefModule *)arena_alloc(e->arena, sizeof(DefModule));
+    memset(mod, 0, sizeof(DefModule));
+    mod->name = name_f->as.sym;
+    mod->docstring = docstring;
+
+    /* Copy exports to arena (used for marking after pass 2) */
+    if (n_exports > 0) {
+        mod->exports = (const Symbol **)arena_alloc(e->arena, n_exports * sizeof(Symbol *));
+        for (uint32_t j = 0; j < n_exports; j++) mod->exports[j] = exports[j];
+        mod->n_exports = n_exports;
+    }
+    free(exports); exports = NULL;
+
+    /* Copy imports to arena (needed for alias resolution during elaboration) */
+    if (n_imports > 0) {
+        mod->imports = (ImportSpec *)arena_alloc(e->arena, n_imports * sizeof(ImportSpec));
+        for (uint32_t j = 0; j < n_imports; j++) mod->imports[j] = imports[j];
+        mod->n_imports = n_imports;
+    }
+    free(imports); imports = NULL;
+
+    /* M1: Set module context — body bindings will inherit defining_module_name */
+    e->current_module_name = mod->name;
+    e->current_module = mod;
+
+    /* Pass 1: forward-declare all defn bodies (for mutual recursion) */
+    for (uint32_t j = body_start; j < call->as.list.len; j++) {
+        Form *f = call->as.list.items[j];
+        if (f->tag == F_LIST && f->as.list.len > 0) {
+            Form *h = f->as.list.items[0];
+            if (h->tag == F_SYM && h->as.sym == e->sym_defn) {
+                if (f->as.list.len >= 3) {
+                    uint32_t name_idx = 1;
+                    if (f->as.list.items[1]->tag == F_SYM &&
+                        f->as.list.items[1]->as.sym == e->sym_no_unwind_attr) {
+                        name_idx = 2;
+                    }
+                    if ((uint32_t)f->as.list.len <= name_idx) continue;
+                    Form *fn_name_f = f->as.list.items[name_idx];
+                    if (fn_name_f->tag == F_SYM) {
+                        /* Check not already defined */
+                        if (!scope_lookup(&e->global, fn_name_f->as.sym)) {
+                            TypeKind arg_kinds[1] = {TY_INT};
+                            Type fn_type = type_fn(arg_kinds, 1, TY_INT);
+                            Binding *b = binding_new(e, fn_name_f->as.sym, fn_type, false, true, f->span);
+                            scope_add(&e->global, b);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /* Pass 2: elaborate body forms */
+    uint32_t n_body = call->as.list.len - body_start;
+    Expr **body = (n_body == 0) ? NULL :
+        (Expr **)arena_alloc(e->arena, n_body * sizeof(Expr *));
+    uint32_t actual_n_body = 0;
+
+    for (uint32_t j = body_start; j < call->as.list.len; j++) {
+        Expr *be = elab_form(e, call->as.list.items[j]);
+        if (!be) {
+            e->current_module_name = NULL;
+            e->current_module = NULL;
+            return NULL;
+        }
+        body[actual_n_body++] = be;
+    }
+
+    mod->body = body;
+    mod->n_body = actual_n_body;
+
+    /* M1: Mark exported bindings and validate they exist in this module */
+    for (uint32_t j = 0; j < mod->n_exports; j++) {
+        Binding *exp_b = scope_lookup(&e->global, mod->exports[j]);
+        if (!exp_b || exp_b->defining_module_name != mod->name) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "exported symbol '%s' is not defined in this module",
+                      mod->exports[j]->name);
+            e->current_module_name = NULL;
+            e->current_module = NULL;
+            return NULL;
+        }
+        exp_b->is_exported = true;
+    }
+
+    /* Reset module context */
+    e->current_module_name = NULL;
+    e->current_module = NULL;
+
+    Expr *out = expr_new(e->arena, EX_DEFMODULE, TYPE_NIL, call->span);
+    out->as.defmodule_.mod = mod;
+    return out;
+}
+
+/* M1: Resolve a symbol with module visibility and qualified name support.
+ * Returns the binding on success.
+ * Returns NULL with *had_error = false: symbol not found, caller emits "unbound".
+ * Returns NULL with *had_error = true: error already emitted, caller returns NULL. */
+static Binding *elab_lookup_sym(Elab *e, const Symbol *sym, Span span, bool *had_error) {
+    *had_error = false;
+
+    /* Direct scope lookup */
+    Binding *b = scope_lookup(e->scope, sym);
+    if (b) {
+        /* Visibility: private symbol accessed from outside its module */
+        if (b->defining_module_name != NULL
+            && e->current_module_name != b->defining_module_name
+            && !b->is_exported) {
+            diag_emit(DIAG_ERROR, span,
+                      "symbol '%s' is private to module '%s'",
+                      sym->name, b->defining_module_name->name);
+            *had_error = true;
+            return NULL;
+        }
+        return b;
+    }
+
+    /* Qualified name resolution — only if symbol contains '/' */
+    const char *sym_str = sym->name;
+    uint32_t    sym_len = sym->len;
+    bool has_slash = false;
+    for (uint32_t i = 0; i < sym_len; i++) {
+        if (sym_str[i] == '/') { has_slash = true; break; }
+    }
+    if (!has_slash) return NULL;
+
+    /* Self-qualified: current module name is a prefix */
+    if (e->current_module_name != NULL) {
+        const Symbol *mn = e->current_module_name;
+        if (sym_len > mn->len + 1
+            && sym_str[mn->len] == '/'
+            && memcmp(sym_str, mn->name, mn->len) == 0) {
+            const char *suffix     = sym_str + mn->len + 1;
+            uint32_t    suffix_len = sym_len - mn->len - 1;
+            const Symbol *ss = symtab_intern(e->st, strslice(suffix, suffix_len));
+            Binding *b2 = scope_lookup(e->scope, ss);
+            if (b2) return b2;
+            diag_emit_with_code(DIAG_ERROR, span, TUR_E0003_UNBOUND_SYMBOL,
+                                "unbound symbol '%.*s' in module '%s'",
+                                (int)suffix_len, suffix, mn->name);
+            *had_error = true;
+            return NULL;
+        }
+    }
+
+    /* Cross-module qualified: alias/sym */
+    if (e->current_module != NULL) {
+        for (uint32_t i = 0; i < e->current_module->n_imports; i++) {
+            const ImportSpec *imp = &e->current_module->imports[i];
+            if (imp->alias) {
+                const Symbol *alias = imp->alias;
+                if (sym_len > alias->len + 1
+                    && sym_str[alias->len] == '/'
+                    && memcmp(sym_str, alias->name, alias->len) == 0) {
+                    const char *sym_part     = sym_str + alias->len + 1;
+                    uint32_t    sym_part_len = sym_len - alias->len - 1;
+                    diag_emit(DIAG_ERROR, span,
+                              "qualified symbol '%.*s' from module '%s' (alias '%.*s'): "
+                              "cross-module resolution is not yet supported (Phase M2)",
+                              (int)sym_part_len, sym_part,
+                              imp->module_name->name,
+                              (int)alias->len, alias->name);
+                    *had_error = true;
+                    return NULL;
+                }
+            }
+        }
+        /* Cross-module qualified: full-module-name/sym */
+        for (uint32_t i = 0; i < e->current_module->n_imports; i++) {
+            const ImportSpec *imp = &e->current_module->imports[i];
+            const Symbol *mn = imp->module_name;
+            if (sym_len > mn->len + 1
+                && sym_str[mn->len] == '/'
+                && memcmp(sym_str, mn->name, mn->len) == 0) {
+                const char *sym_part     = sym_str + mn->len + 1;
+                uint32_t    sym_part_len = sym_len - mn->len - 1;
+                diag_emit(DIAG_ERROR, span,
+                          "qualified symbol '%.*s' from module '%s': "
+                          "cross-module resolution is not yet supported (Phase M2)",
+                          (int)sym_part_len, sym_part, mn->name);
+                *had_error = true;
+                return NULL;
+            }
+        }
+    }
+
+    return NULL; /* Not a recognised qualified name; caller handles "unbound" */
+}
+
 static Expr *elab_form(Elab *e, Form *f) {
     switch (f->tag) {
         case F_NIL:  return e_nil(e, f->span);
@@ -6497,13 +6915,14 @@ static Expr *elab_form(Elab *e, Form *f) {
                       "phase 1: keywords are only allowed as :else in cond or case");
             return NULL;
         case F_SYM: {
-            Binding *b = scope_lookup(e->scope, f->as.sym);
+            /* M1: Use elab_lookup_sym for visibility + qualified name resolution */
+            bool sym_qual_err = false;
+            Binding *b = elab_lookup_sym(e, f->as.sym, f->span, &sym_qual_err);
             if (!b) {
+                if (sym_qual_err) return NULL; /* error already emitted */
                 /* Phase 8: Enhanced unbound symbol diagnostic with suggestions */
-                /* Try to find similar symbols in scope for "did you mean" suggestions */
                 const Symbol *best_match = NULL;
-                int best_distance = 3; /* Max edit distance for suggestions */
-                
+                int best_distance = 3;
                 for (Scope *cur = e->scope; cur; cur = cur->parent) {
                     for (uint32_t i = 0; i < cur->n; i++) {
                         Binding *candidate = cur->bindings[i];
@@ -6514,7 +6933,6 @@ static Expr *elab_form(Elab *e, Form *f) {
                         }
                     }
                 }
-                
                 if (best_match) {
                     char msg[256];
                     snprintf(msg, sizeof(msg), "unbound symbol '%s'", f->as.sym->name);
@@ -7278,7 +7696,7 @@ static Expr *elab_async(Elab *e, const Form *call) {
         if (fn_expr->kind == EX_CLOSURE) {
             cl = fn_expr->as.closure_.closure;
         } else if (fn_expr->kind == EX_FN) {
-            cl = fn_expr->as.fn_.closure;
+            cl = fn_expr->as.fn_.fn->closure;
         }
         if (cl) {
             bool had_error = false;
@@ -7700,9 +8118,9 @@ static Expr *elab_type_app(Elab *e, const Form *call) {
     if (arg_form->tag == F_SYM || arg_form->tag == F_KEYWORD) {
         const Symbol *arg_sym = arg_form->as.sym;
         /* Try primitive types first */
-        if (arg_sym == e->sym_int || (arg_sym->len == 3 && memcmp(arg_sym->name, "int", 3) == 0)) {
+        if (arg_sym->len == 3 && memcmp(arg_sym->name, "int", 3) == 0) {
             arg_type = TYPE_INT;
-        } else if (arg_sym == e->sym_bool || (arg_sym->len == 4 && memcmp(arg_sym->name, "bool", 4) == 0)) {
+        } else if (arg_sym->len == 4 && memcmp(arg_sym->name, "bool", 4) == 0) {
             arg_type = TYPE_BOOL;
         } else if (arg_sym->len == 4 && memcmp(arg_sym->name, "cstr", 4) == 0) {
             arg_type = TYPE_CSTR;
@@ -9024,7 +9442,8 @@ found_method:;
 
 
 Expr *elaborate_program(Arena *arena, SymbolTable *st,
-                        Form *const *forms, uint32_t nforms) {
+                        Form *const *forms, uint32_t nforms,
+                        uint32_t stdlib_prefix) {
     Elab e;
     elab_init_state(&e, arena, st);
     builtins_init(st);
@@ -9084,6 +9503,29 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                 }
             }
         }
+    }
+
+    /* Phase M0: Validate defmodule position — must be the first user form */
+    for (uint32_t i = stdlib_prefix; i < nforms; i++) {
+        Form *f = forms[i];
+        if (f->tag == F_LIST && f->as.list.len > 0) {
+            Form *head = f->as.list.items[0];
+            if (head->tag == F_SYM && head->as.sym == e.sym_defmodule) {
+                if (i != stdlib_prefix) {
+                    diag_emit(DIAG_ERROR, head->span,
+                              "defmodule must be the first form in the file");
+                    rc = -1;
+                }
+                break; /* only check the first occurrence */
+            }
+        }
+    }
+    if (rc != 0) {
+        scope_free(&e.global);
+        free(e.struct_defs);
+        free(e.handled_effect_names);
+        free(e.macros);
+        return NULL;
     }
 
     /* Pass 2: Elaborate all forms */

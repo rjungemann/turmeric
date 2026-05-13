@@ -133,7 +133,8 @@ static int run_core_passes(PassContext *ctx) {
         switch (core_passes[i]) {
         case PASS_ELABORATE:
             ctx->prog = elaborate_program(ctx->arena, ctx->st,
-                                          ctx->forms, ctx->nforms);
+                                          ctx->forms, ctx->nforms,
+                                          ctx->stdlib_prefix);
             if (!ctx->prog || diag_had_error()) return 1;
             break;
         case PASS_KIND_CHECK:
@@ -290,6 +291,7 @@ static int compile_to_c(const char *path, Buf *out_c) {
         ctx.st    = &st;
         ctx.forms  = forms;
         ctx.nforms = nforms;
+        ctx.stdlib_prefix = total_stdlib_forms;
         rc = run_core_passes(&ctx);
         if (rc == 0 && emit_program(out_c, ctx.prog) != 0) {
             rc = 1;
@@ -905,7 +907,7 @@ static int cmd_explain(const char *code) {
         return 1;
     }
 
-    Expr *prog = elaborate_program(&arena, &st, forms, nforms);
+    Expr *prog = elaborate_program(&arena, &st, forms, nforms, 0);
     if (!prog || diag_had_error()) {
         /* Error already emitted */
         symtab_free(&st);
