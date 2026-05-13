@@ -7,6 +7,7 @@
 
 #include "builtins.h"
 #include "diag.h"
+#include "reader.h"    /* Phase M2: read_all for module loading */
 #include "typeclass.h"  /* Phase 15 */
 #include "types.h"
 #include "effect.h"    /* Phase 19 */
@@ -320,6 +321,14 @@ static Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_pa
 
 /* ---- elaborator state ---- */
 
+/* Phase M2: A loaded module's exported bindings. */
+typedef struct ElabModule {
+    const Symbol *name;          /* module name (interned) */
+    Binding     **exports;       /* exported bindings (each has .name for lookup) */
+    uint32_t      n_exports;
+    bool          is_loading;    /* circular import detection */
+} ElabModule;
+
 typedef struct Elab {
     Arena       *arena;
     SymbolTable *st;
@@ -517,6 +526,14 @@ typedef struct Elab {
     /* Phase M1: Module namespace system */
     const Symbol    *current_module_name; /* name of module being elaborated, or NULL */
     const DefModule *current_module;      /* DefModule being elaborated, or NULL */
+    /* Phase M2: Module registry */
+    const char      *module_base_dir;     /* base dir for resolving module file paths */
+    struct ElabModule *loaded_modules;    /* registry of loaded modules */
+    uint32_t         n_loaded_modules;
+    uint32_t         cap_loaded_modules;
+    uint16_t         next_import_file_id; /* file_id counter for imported source files */
+    /* Phase M3: Separate compilation — skip inlining imported modules */
+    bool             separate_compilation;
 } Elab;
 
 /* Phase 6: Macro definition */
@@ -973,6 +990,13 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->has_defmodule = false;
     e->current_module_name = NULL;
     e->current_module = NULL;
+    /* Phase M2: Module registry */
+    e->module_base_dir = ".";
+    e->loaded_modules = NULL;
+    e->n_loaded_modules = 0;
+    e->cap_loaded_modules = 0;
+    e->next_import_file_id = 10; /* 0-9 reserved for main + stdlib files */
+    e->separate_compilation = false;
 }
 
 /* Phase 13: Lifetime annotation helpers (deferred - infrastructure in place) */
@@ -1840,6 +1864,7 @@ static Binding *binding_new(Elab *e, const Symbol *name, Type type,
 
 /* Forward declarations. */
 static Binding *elab_lookup_sym(Elab *e, const Symbol *sym, Span span, bool *had_error); /* Phase M1 */
+static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span span);             /* Phase M2 */
 static Expr *elab_form(Elab *e, Form *f);
 static Expr *elab_unsafe(Elab *e, const Form *call);
 /* Phase 5 */
@@ -1899,6 +1924,34 @@ static Expr *elab_panic_payload_value(Elab *e, const Form *call);
 static Expr *elab_panic_payload_file(Elab *e, const Form *call);
 static Expr *elab_panic_payload_line(Elab *e, const Form *call);
 static Expr *elab_panic_payload_downcast(Elab *e, const Form *call);
+
+/* Phase M2: File reading helper — returns 0 on success, -1 on failure. */
+static int elab_read_file(const char *path, char **out, size_t *out_len) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return -1; }
+    long size = ftell(f);
+    if (size < 0) { fclose(f); return -1; }
+    if (fseek(f, 0, SEEK_SET) != 0) { fclose(f); return -1; }
+    char *buf = (char *)malloc((size_t)size + 1);
+    if (!buf) { fclose(f); return -1; }
+    size_t n = fread(buf, 1, (size_t)size, f);
+    fclose(f);
+    if (n != (size_t)size) { free(buf); return -1; }
+    buf[size] = '\0';
+    *out = buf;
+    *out_len = (size_t)size;
+    return 0;
+}
+
+/* Phase M2: Find a loaded module in the registry by interned name. */
+static ElabModule *elab_find_loaded_module(Elab *e, const Symbol *name) {
+    for (uint32_t i = 0; i < e->n_loaded_modules; i++) {
+        if (e->loaded_modules[i].name == name)
+            return &e->loaded_modules[i];
+    }
+    return NULL;
+}
 
 /* Phase U3: Unsafe primitives implementations */
 
@@ -6526,6 +6579,136 @@ static bool module_name_valid(const char *name, uint32_t len) {
     return true;
 }
 
+/* Phase M2: Load and elaborate an imported module file.
+ * Returns the registry entry (may have 0 exports on parse/elab failure).
+ * Returns NULL only on fatal error (circular import or OOM). */
+static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_span) {
+    /* Already in registry? */
+    ElabModule *existing = elab_find_loaded_module(e, name);
+    if (existing) {
+        if (existing->is_loading) {
+            diag_emit(DIAG_ERROR, import_span,
+                      "circular import: module '%s' is already being loaded", name->name);
+            return NULL;
+        }
+        return existing;
+    }
+
+    /* Reserve a registry slot first (for circular-import detection). */
+    if (e->n_loaded_modules >= e->cap_loaded_modules) {
+        e->cap_loaded_modules = e->cap_loaded_modules ? e->cap_loaded_modules * 2 : 8;
+        e->loaded_modules = (ElabModule *)realloc(e->loaded_modules,
+                             e->cap_loaded_modules * sizeof(ElabModule));
+        if (!e->loaded_modules) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    ElabModule *slot = &e->loaded_modules[e->n_loaded_modules++];
+    slot->name = name;
+    slot->exports = NULL;
+    slot->n_exports = 0;
+    slot->is_loading = true;
+
+    /* Build file path: 'geom/vector' -> '{base_dir}/geom/vector.tur'
+     * The '/' in module names maps directly to directory separators. */
+    char path_buf[4096];
+    const char *base = e->module_base_dir ? e->module_base_dir : ".";
+    int plen = snprintf(path_buf, sizeof(path_buf), "%s/%s.tur", base, name->name);
+    if (plen < 0 || (size_t)plen >= sizeof(path_buf)) {
+        diag_emit(DIAG_ERROR, import_span,
+                  "module path too long for '%s'", name->name);
+        slot->is_loading = false;
+        return NULL;
+    }
+
+    /* Read source file. */
+    char *src_raw = NULL;
+    size_t src_len = 0;
+    if (elab_read_file(path_buf, &src_raw, &src_len) != 0) {
+        diag_emit(DIAG_ERROR, import_span,
+                  "module '%s' not found (looked for '%s')", name->name, path_buf);
+        slot->is_loading = false;
+        return NULL;
+    }
+
+    /* Copy source into the arena so it outlives the load. */
+    char *src_copy = (char *)arena_alloc(e->arena, src_len + 1);
+    memcpy(src_copy, src_raw, src_len);
+    src_copy[src_len] = '\0';
+    free(src_raw);
+
+    /* Register the source file for diagnostics.  Path must also live in arena. */
+    char *path_copy = (char *)arena_alloc(e->arena, (size_t)plen + 1);
+    memcpy(path_copy, path_buf, (size_t)plen + 1);
+
+    SourceFile *sfile = (SourceFile *)arena_alloc(e->arena, sizeof(SourceFile));
+    *sfile = (SourceFile){0};
+    sfile->path = path_copy;
+    sfile->src = src_copy;
+    sfile->len = src_len;
+    sfile->file_id = e->next_import_file_id++;
+    sfile->reader_type = READER_TURMERIC;
+    diag_register_file(sfile);
+
+    /* Parse the source into forms. */
+    uint32_t nforms = 0;
+    Form **forms = read_all(e->arena, e->st, sfile, &nforms);
+    if (!forms) {
+        slot->is_loading = false;
+        return NULL;
+    }
+
+    /* Elaborate the imported module's forms.
+     * Save and restore fields that track the current defmodule context so the
+     * outer caller's state is not corrupted. */
+    bool         saved_has_defmodule   = e->has_defmodule;
+    const Symbol *saved_module_name    = e->current_module_name;
+    const DefModule *saved_module      = e->current_module;
+    e->has_defmodule       = false;
+    e->current_module_name = NULL;
+    e->current_module      = NULL;
+
+    for (uint32_t i = 0; i < nforms; i++) {
+        Expr *ex = elab_form(e, forms[i]);
+        if (!ex) {
+            e->has_defmodule       = saved_has_defmodule;
+            e->current_module_name = saved_module_name;
+            e->current_module      = saved_module;
+            slot->is_loading = false;
+            return NULL;
+        }
+        /* Register EX_DEFMODULE into file_scope_defs so its body gets emitted.
+         * emit.c's flatten_program_items expands these into top-level C items.
+         * Phase M3: Skip inlining when compiling each module separately; the
+         * implementation file #includes the imported module's header instead. */
+        if (ex->kind == EX_DEFMODULE && !e->separate_compilation) {
+            elab_register_file_def(e, ex);
+        }
+    }
+
+    e->has_defmodule       = saved_has_defmodule;
+    e->current_module_name = saved_module_name;
+    e->current_module      = saved_module;
+
+    /* Collect exported bindings: those in the global scope owned by this module. */
+    uint32_t n_exp = 0;
+    for (uint32_t i = 0; i < e->global.n; i++) {
+        Binding *b = e->global.bindings[i];
+        if (b->defining_module_name == name && b->is_exported) n_exp++;
+    }
+    Binding **exp_arr = (n_exp == 0) ? NULL :
+        (Binding **)arena_alloc(e->arena, n_exp * sizeof(Binding *));
+    uint32_t idx = 0;
+    for (uint32_t i = 0; i < e->global.n; i++) {
+        Binding *b = e->global.bindings[i];
+        if (b->defining_module_name == name && b->is_exported)
+            exp_arr[idx++] = b;
+    }
+
+    slot->exports   = exp_arr;
+    slot->n_exports = n_exp;
+    slot->is_loading = false;
+    return slot;
+}
+
 /* Parse a single (import module-name [:as alias] [:refer [syms...]]) form */
 static bool parse_import_spec(Elab *e, const Form *f, ImportSpec *out) {
     if (f->tag != F_LIST || f->as.list.len < 2) {
@@ -6722,6 +6905,37 @@ static Expr *elab_defmodule(Elab *e, const Form *call) {
     e->current_module_name = mod->name;
     e->current_module = mod;
 
+    /* M2: Process imports — load each referenced module and inject :refer symbols. */
+    for (uint32_t j = 0; j < mod->n_imports; j++) {
+        const ImportSpec *imp = &mod->imports[j];
+        ElabModule *loaded = elab_load_module(e, imp->module_name, imp->span);
+        if (!loaded) {
+            e->current_module_name = NULL;
+            e->current_module = NULL;
+            return NULL;
+        }
+        /* :refer — add each referred symbol directly to the current scope. */
+        for (uint32_t k = 0; k < imp->n_refer; k++) {
+            const Symbol *ref_sym = imp->refer_syms[k];
+            Binding *ref_b = NULL;
+            for (uint32_t m = 0; m < loaded->n_exports; m++) {
+                if (loaded->exports[m]->name == ref_sym) {
+                    ref_b = loaded->exports[m];
+                    break;
+                }
+            }
+            if (!ref_b) {
+                diag_emit(DIAG_ERROR, imp->span,
+                          "symbol '%s' is not exported from module '%s'",
+                          ref_sym->name, imp->module_name->name);
+                e->current_module_name = NULL;
+                e->current_module = NULL;
+                return NULL;
+            }
+            scope_add(&e->global, ref_b);
+        }
+    }
+
     /* Pass 1: forward-declare all defn bodies (for mutual recursion) */
     for (uint32_t j = body_start; j < call->as.list.len; j++) {
         Form *f = call->as.list.items[j];
@@ -6843,29 +7057,39 @@ static Binding *elab_lookup_sym(Elab *e, const Symbol *sym, Span span, bool *had
         }
     }
 
-    /* Cross-module qualified: alias/sym */
+    /* M2: Cross-module qualified resolution. */
     if (e->current_module != NULL) {
+        /* alias/sym — match by :as alias */
         for (uint32_t i = 0; i < e->current_module->n_imports; i++) {
             const ImportSpec *imp = &e->current_module->imports[i];
-            if (imp->alias) {
-                const Symbol *alias = imp->alias;
-                if (sym_len > alias->len + 1
-                    && sym_str[alias->len] == '/'
-                    && memcmp(sym_str, alias->name, alias->len) == 0) {
-                    const char *sym_part     = sym_str + alias->len + 1;
-                    uint32_t    sym_part_len = sym_len - alias->len - 1;
+            if (!imp->alias) continue;
+            const Symbol *alias = imp->alias;
+            if (sym_len > alias->len + 1
+                && sym_str[alias->len] == '/'
+                && memcmp(sym_str, alias->name, alias->len) == 0) {
+                const char *sym_part     = sym_str + alias->len + 1;
+                uint32_t    sym_part_len = sym_len - alias->len - 1;
+                const Symbol *sym_key = symtab_intern(e->st, strslice(sym_part, sym_part_len));
+                ElabModule *loaded = elab_find_loaded_module(e, imp->module_name);
+                if (!loaded) {
                     diag_emit(DIAG_ERROR, span,
-                              "qualified symbol '%.*s' from module '%s' (alias '%.*s'): "
-                              "cross-module resolution is not yet supported (Phase M2)",
-                              (int)sym_part_len, sym_part,
-                              imp->module_name->name,
-                              (int)alias->len, alias->name);
+                              "module '%s' (alias '%s') was not loaded",
+                              imp->module_name->name, alias->name);
                     *had_error = true;
                     return NULL;
                 }
+                for (uint32_t m = 0; m < loaded->n_exports; m++) {
+                    if (loaded->exports[m]->name == sym_key)
+                        return loaded->exports[m];
+                }
+                diag_emit(DIAG_ERROR, span,
+                          "symbol '%s' is not exported from module '%s'",
+                          sym_key->name, imp->module_name->name);
+                *had_error = true;
+                return NULL;
             }
         }
-        /* Cross-module qualified: full-module-name/sym */
+        /* full-module-name/sym — match by full module name */
         for (uint32_t i = 0; i < e->current_module->n_imports; i++) {
             const ImportSpec *imp = &e->current_module->imports[i];
             const Symbol *mn = imp->module_name;
@@ -6874,10 +7098,21 @@ static Binding *elab_lookup_sym(Elab *e, const Symbol *sym, Span span, bool *had
                 && memcmp(sym_str, mn->name, mn->len) == 0) {
                 const char *sym_part     = sym_str + mn->len + 1;
                 uint32_t    sym_part_len = sym_len - mn->len - 1;
+                const Symbol *sym_key = symtab_intern(e->st, strslice(sym_part, sym_part_len));
+                ElabModule *loaded = elab_find_loaded_module(e, mn);
+                if (!loaded) {
+                    diag_emit(DIAG_ERROR, span,
+                              "module '%s' was not loaded", mn->name);
+                    *had_error = true;
+                    return NULL;
+                }
+                for (uint32_t m = 0; m < loaded->n_exports; m++) {
+                    if (loaded->exports[m]->name == sym_key)
+                        return loaded->exports[m];
+                }
                 diag_emit(DIAG_ERROR, span,
-                          "qualified symbol '%.*s' from module '%s': "
-                          "cross-module resolution is not yet supported (Phase M2)",
-                          (int)sym_part_len, sym_part, mn->name);
+                          "symbol '%s' is not exported from module '%s'",
+                          sym_key->name, mn->name);
                 *had_error = true;
                 return NULL;
             }
@@ -9443,9 +9678,13 @@ found_method:;
 
 Expr *elaborate_program(Arena *arena, SymbolTable *st,
                         Form *const *forms, uint32_t nforms,
-                        uint32_t stdlib_prefix) {
+                        uint32_t stdlib_prefix,
+                        const char *module_base_dir,
+                        bool separate_compilation) {
     Elab e;
     elab_init_state(&e, arena, st);
+    e.module_base_dir = module_base_dir ? module_base_dir : ".";
+    e.separate_compilation = separate_compilation;
     builtins_init(st);
 
     Expr **items = (nforms == 0) ? NULL :
@@ -9557,6 +9796,7 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
     free(e.struct_defs);
     free(e.handled_effect_names);
     free(e.macros);
+    free(e.loaded_modules); /* Phase M2 */
     if (rc != 0) return NULL;
 
     Expr *prog = expr_new(arena, EX_PROGRAM, TYPE_NIL,

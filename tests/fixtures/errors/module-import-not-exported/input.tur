@@ -1,0 +1,3 @@
+(defmodule myapp
+  (import math/secret :refer [private-fn])
+  (defn main [] :int (private-fn)))

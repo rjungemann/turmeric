@@ -48,6 +48,9 @@ typedef struct EmitCtx {
      * causes EX_PANIC/EX_PANIC_WITH to emit tur_panic_abort instead of
      * tur_panic so that no setjmp/longjmp unwinding is attempted. */
     bool no_unwind;
+    /* Phase M3: when true, each module is compiled to its own .c/.h pair;
+     * exported functions are not static and headers are export-filtered. */
+    bool separate_compilation;
 } EmitCtx;
 
 /* Phase 4 v1: Defer thunk tracking */
@@ -286,12 +289,48 @@ static char *mangle_field_name(const char *name) {
 }
 
 /* Return a sanitized C identifier for a Binding, without the ID suffix.
- * Used for function names and parameters. Caller frees. */
+ * Used for function names and parameters. Caller frees.
+ *
+ * Phase M3: For module-level bindings (defining_module_name != NULL), the
+ * C name is prefixed with the mangled module name: geom/vector → geom__vector__,
+ * so binding `add2` in module `geom/vector` → `geom__vector__add2`. */
 static char *raw_name_for_binding(const Binding *b) {
-    /* Sanitize the raw name: mangle non-id-safe chars to underscores. */
-    char *p = (char *)malloc(b->name->len + 1);
+    /* Build module prefix if this binding belongs to a named module.
+     * Exception: `main` is always the C entry point, never prefixed. */
+    char mod_prefix[512];
+    size_t mod_prefix_len = 0;
+    bool is_main_binding = (b->name->len == 4 &&
+                             memcmp(b->name->name, "main", 4) == 0);
+    if (b->defining_module_name != NULL && !is_main_binding) {
+        const char *mn = b->defining_module_name->name;
+        size_t mn_len = b->defining_module_name->len;
+        size_t j = 0;
+        for (size_t i = 0; i < mn_len && j < sizeof(mod_prefix) - 3; i++) {
+            char c = mn[i];
+            if (c == '/') {
+                mod_prefix[j++] = '_';
+                mod_prefix[j++] = '_';
+            } else if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                       (c >= '0' && c <= '9') || c == '_') {
+                mod_prefix[j++] = c;
+            } else {
+                mod_prefix[j++] = '_';
+            }
+        }
+        mod_prefix[j++] = '_';
+        mod_prefix[j++] = '_';
+        mod_prefix[j]   = '\0';
+        mod_prefix_len  = j;
+    }
+
+    size_t total = mod_prefix_len + b->name->len + 1;
+    char *p = (char *)malloc(total);
     if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
     size_t k = 0;
+    if (mod_prefix_len > 0) {
+        memcpy(p, mod_prefix, mod_prefix_len);
+        k = mod_prefix_len;
+    }
     for (uint32_t i = 0; i < b->name->len; i++) {
         char c = b->name->name[i];
         if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
@@ -3084,9 +3123,14 @@ static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
 
     /* Emit function signature */
-    /* Special case: C's main() must return int, not int64_t */
+    /* Special case: C's main() must return int, not int64_t.
+     * fn_name is already the mangled name; main is never module-prefixed. */
     bool is_main = (strcmp(fn_name, "main") == 0);
-    if (!is_main) {
+    /* Phase M3: In separate compilation mode, exported functions get extern
+     * linkage (no static) so they can be called from other compilation units. */
+    bool needs_static = !is_main &&
+        !(ctx->separate_compilation && fd->binding->is_exported);
+    if (needs_static) {
         buf_printf(file, "static ");
     }
     /* Return type from fn_type */
@@ -4613,7 +4657,7 @@ int emit_program(Buf *out, const Expr *program) {
 
 /* ------------ Phase 2: Multi-file support ------------ */
 
-/* Sanitize a module name for use in C header guards. */
+/* Sanitize a module name for use in C header guards (single underscore for / and -). */
 static void sanitize_module_name(char *out, const char *name, size_t cap) {
     size_t k = 0;
     for (size_t i = 0; name[i] && k < cap - 1; i++) {
@@ -4626,8 +4670,32 @@ static void sanitize_module_name(char *out, const char *name, size_t cap) {
     out[k] = '\0';
 }
 
-/* Emit a C header file for a module. Contains declarations (not definitions). */
-int emit_header(Buf *out, const char *module_name, const Expr *program) {
+/* Mangle a module name for use as a C file base name / symbol prefix.
+ * Uses double underscore for '/' (so geom/vector → geom__vector) and
+ * single underscore for '-'. */
+static void mangle_module_name(char *out, const char *name, size_t cap) {
+    size_t k = 0;
+    for (size_t i = 0; name[i] && k < cap - 2; i++) {
+        char c = name[i];
+        if (c == '/') {
+            out[k++] = '_';
+            out[k++] = '_';
+        } else if (c == '-') {
+            out[k++] = '_';
+        } else if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                   (c >= '0' && c <= '9') || c == '_') {
+            out[k++] = c;
+        } else {
+            out[k++] = '_';
+        }
+    }
+    out[k] = '\0';
+}
+
+/* Emit a C header file for a module. Contains declarations (not definitions).
+ * When separate_compilation is true (Phase M3): only exported functions are
+ * declared, and #includes for each imported module's header are emitted. */
+int emit_header(Buf *out, const char *module_name, const Expr *program, bool separate_compilation) {
     if (!program || program->kind != EX_PROGRAM) {
         fprintf(stderr, "tur: emit_header: expected EX_PROGRAM\n");
         return -1;
@@ -4648,7 +4716,25 @@ int emit_header(Buf *out, const char *module_name, const Expr *program) {
     buf_puts(out, "#include <stdlib.h>\n");
     buf_puts(out, "#include <string.h>\n\n");
 
-    /* Forward declarations for functions */
+    /* Phase M3: When separate compilation, emit #includes for imported modules. */
+    if (separate_compilation) {
+        for (uint32_t i = 0; i < program->as.program.n; i++) {
+            const Expr *e = program->as.program.items[i];
+            if (e->kind == EX_DEFMODULE) {
+                const DefModule *mod = e->as.defmodule_.mod;
+                for (uint32_t j = 0; j < mod->n_imports; j++) {
+                    char imp_mangled[256];
+                    mangle_module_name(imp_mangled, mod->imports[j].module_name->name,
+                                       sizeof(imp_mangled));
+                    buf_printf(out, "#include \"%s.h\"\n", imp_mangled);
+                }
+                if (mod->n_imports > 0) buf_putc(out, '\n');
+            }
+        }
+    }
+
+    /* Forward declarations for functions.
+     * In separate_compilation mode, only emit exported symbols. */
     uint32_t h_n_items;
     const Expr **h_items = flatten_program_items(program, &h_n_items);
     for (uint32_t i = 0; i < h_n_items; i++) {
@@ -4656,9 +4742,14 @@ int emit_header(Buf *out, const char *module_name, const Expr *program) {
         if (e->kind == EX_FN_DEF) {
             FnDef *fd = e->as.fn_def_.fn;
             const char *fn_name = raw_name_for_binding(fd->binding);
-            bool is_main = (strcmp(fn_name, "main") == 0);
+            bool is_main = (strcmp(fd->binding->name->name, "main") == 0);
 
-            if (is_main) { free((void*)fn_name); continue; } /* main is not exported */
+            if (is_main) { free((void*)fn_name); continue; }
+
+            /* In separate_compilation mode, only declare exported symbols. */
+            if (separate_compilation && !fd->binding->is_exported) {
+                free((void*)fn_name); continue;
+            }
 
             /* Emit function declaration */
             if (e->type.kind == TY_FN) {
@@ -4676,7 +4767,6 @@ int emit_header(Buf *out, const char *module_name, const Expr *program) {
             free((void*)fn_name);
         } else if (e->kind == EX_EXTERN_C) {
             ExternC *ec = e->as.extern_c_.ext;
-            /* Emit extern-c declaration in header */
             buf_printf(out, "extern %s %s(",
                        type_c_name(ec->return_type),
                        ec->c_name->name);
@@ -4699,7 +4789,10 @@ int emit_header(Buf *out, const char *module_name, const Expr *program) {
 }
 
 /* Emit a C implementation file for a module. Contains definitions. */
-int emit_implementation(Buf *out, const char *module_name, const Expr *program) {
+/* Emit a C implementation file for a module. Contains definitions.
+ * When separate_compilation is true (Phase M3): #includes imported modules'
+ * headers instead of emitting their code inline. */
+int emit_implementation(Buf *out, const char *module_name, const Expr *program, bool separate_compilation) {
     if (!program || program->kind != EX_PROGRAM) {
         fprintf(stderr, "tur: emit_implementation: expected EX_PROGRAM\n");
         return -1;
@@ -4729,10 +4822,14 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program) 
     ctx.pending_handler_fns = &pending_hfns2;
     /* Phase R5: no-unwind context (false at top level; set per-function) */
     ctx.no_unwind = false;
+    /* Phase M3: separate compilation mode */
+    ctx.separate_compilation = separate_compilation;
+
     char guard[256];
     sanitize_module_name(guard, module_name, sizeof(guard));
 
-    /* Include the corresponding header */
+    /* Include the corresponding header (which already pulls in imported headers
+     * when separate_compilation is true). */
     buf_printf(out, "/* generated by tur (phase 2) */\n");
     buf_printf(out, "#include \"%s.h\"\n\n", guard);
 
@@ -4786,10 +4883,13 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program) 
     }
     free(impl_items);
 
-    /* Assemble: includes + file-scope decls + body (initializers) */
+    /* Assemble: includes + file-scope decls + body (initializers).
+     * In separate_compilation (M3) mode, never emit an auto-generated main():
+     * each module is compiled independently and the user is responsible for
+     * providing exactly one explicit main() across all modules. */
     if (file.len) { buf_write(out, file.data, file.len); buf_putc(out, '\n'); }
-    if (!user_has_main) {
-        /* Only generate main() if user didn't define one */
+    if (!separate_compilation && !user_has_main) {
+        /* Only generate main() if user didn't define one (single-file mode) */
         buf_puts(out, "int main(void) {\n");
         if (body.len) buf_write(out, body.data, body.len);
         buf_puts(out, "    return 0;\n");

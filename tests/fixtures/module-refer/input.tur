@@ -1,0 +1,8 @@
+(defmodule calculator
+  (export run)
+  (import math/ops :refer [add sub])
+  (defn run [] :int
+    (println (add 10 3))
+    (println (sub 10 3))
+    0)
+  (defn main [] :int (run)))

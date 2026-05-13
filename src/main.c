@@ -90,6 +90,20 @@ static ReaderType detect_and_adjust_lang(const char *path, char *src, size_t len
     return detected_type;
 }
 
+/* Compute the directory part of a file path (Phase M2: module base dir). */
+static void dir_of_path(const char *path, char *out, size_t cap) {
+    const char *last_slash = strrchr(path, '/');
+    if (!last_slash) {
+        out[0] = '.'; out[1] = '\0';
+    } else {
+        size_t n = (size_t)(last_slash - path);
+        if (n == 0) n = 1; /* handle "/foo" → "/" */
+        if (n >= cap) n = cap - 1;
+        memcpy(out, path, n);
+        out[n] = '\0';
+    }
+}
+
 static int read_entire_file(const char *path, char **out, size_t *out_len) {
     FILE *f = fopen(path, "rb");
     if (!f) {
@@ -134,7 +148,9 @@ static int run_core_passes(PassContext *ctx) {
         case PASS_ELABORATE:
             ctx->prog = elaborate_program(ctx->arena, ctx->st,
                                           ctx->forms, ctx->nforms,
-                                          ctx->stdlib_prefix);
+                                          ctx->stdlib_prefix,
+                                          ctx->module_base_dir,
+                                          ctx->separate_compilation);
             if (!ctx->prog || diag_had_error()) return 1;
             break;
         case PASS_KIND_CHECK:
@@ -286,12 +302,15 @@ static int compile_to_c(const char *path, Buf *out_c) {
     if (!forms || diag_had_error()) {
         rc = 1;
     } else {
+        char base_dir[4096];
+        dir_of_path(path, base_dir, sizeof(base_dir));
         PassContext ctx = {0};
         ctx.arena = &arena;
         ctx.st    = &st;
         ctx.forms  = forms;
         ctx.nforms = nforms;
         ctx.stdlib_prefix = total_stdlib_forms;
+        ctx.module_base_dir = base_dir;
         rc = run_core_passes(&ctx);
         if (rc == 0 && emit_program(out_c, ctx.prog) != 0) {
             rc = 1;
@@ -341,13 +360,17 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name) {
     if (!forms || diag_had_error()) {
         rc = 1;
     } else {
+        char base_dir[4096];
+        dir_of_path(path, base_dir, sizeof(base_dir));
         PassContext ctx = {0};
         ctx.arena  = &arena;
         ctx.st     = &st;
         ctx.forms  = forms;
         ctx.nforms = nforms;
+        ctx.module_base_dir = base_dir;
+        ctx.separate_compilation = true;
         rc = run_core_passes(&ctx);
-        if (rc == 0 && emit_header(out_h, module_name, ctx.prog) != 0) {
+        if (rc == 0 && emit_header(out_h, module_name, ctx.prog, true) != 0) {
             rc = 1;
         }
     }
@@ -389,13 +412,17 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
     if (!forms || diag_had_error()) {
         rc = 1;
     } else {
+        char base_dir[4096];
+        dir_of_path(path, base_dir, sizeof(base_dir));
         PassContext ctx = {0};
         ctx.arena  = &arena;
         ctx.st     = &st;
         ctx.forms  = forms;
         ctx.nforms = nforms;
+        ctx.module_base_dir = base_dir;
+        ctx.separate_compilation = true;
         rc = run_core_passes(&ctx);
-        if (rc == 0 && emit_implementation(out_c, module_name, ctx.prog) != 0) {
+        if (rc == 0 && emit_implementation(out_c, module_name, ctx.prog, true) != 0) {
             rc = 1;
         }
     }
@@ -429,6 +456,25 @@ static int cmd_emit_c(const char *path) {
     Buf out;
     buf_init(&out);
     int rc = compile_to_c(path, &out);
+    if (rc == 0) buf_to_file(&out, stdout);
+    buf_free(&out);
+    return rc;
+}
+
+/* Phase M3: emit the .h for a single module file to stdout. */
+static int cmd_emit_h(const char *path) {
+    const char *base = basename_of(path);
+    size_t base_len = strlen(base);
+    char mod_name[256];
+    size_t n = (base_len >= 4 && strcmp(base + base_len - 4, ".tur") == 0)
+               ? base_len - 4 : base_len;
+    if (n >= sizeof(mod_name)) n = sizeof(mod_name) - 1;
+    memcpy(mod_name, base, n);
+    mod_name[n] = '\0';
+
+    Buf out;
+    buf_init(&out);
+    int rc = compile_to_h(path, &out, mod_name);
     if (rc == 0) buf_to_file(&out, stdout);
     buf_free(&out);
     return rc;
@@ -810,6 +856,7 @@ static int usage(void) {
         "  tur build <file.tur> [-o <out>]    build a single file\n"
         "  tur build <dir> [-o <out>]         build all .tur files in directory\n"
         "  tur emit-c <input.tur>            print the generated C to stdout\n"
+        "  tur emit-h <input.tur>            print the generated header to stdout\n"
         "  tur run <input.tur>               build + execute a single file\n"
         "  tur test <dir>                    run all .tur files in a directory\n"
         "  tur check <input.tur>             type-check only, no codegen (phase 8)\n"
@@ -907,7 +954,7 @@ static int cmd_explain(const char *code) {
         return 1;
     }
 
-    Expr *prog = elaborate_program(&arena, &st, forms, nforms, 0);
+    Expr *prog = elaborate_program(&arena, &st, forms, nforms, 0, ".", false);
     if (!prog || diag_had_error()) {
         /* Error already emitted */
         symtab_free(&st);
@@ -1033,6 +1080,10 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "emit-c") == 0) {
         if (argc != 3) return usage();
         return cmd_emit_c(argv[2]);
+    }
+    if (strcmp(cmd, "emit-h") == 0) {
+        if (argc != 3) return usage();
+        return cmd_emit_h(argv[2]);
     }
     if (strcmp(cmd, "check") == 0) {
         /* Phase 8: tur check subcommand - type-check only, no codegen */
