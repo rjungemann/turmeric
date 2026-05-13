@@ -533,6 +533,48 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
             if (!borrow_check_expr_recursive(ctx, e->as.discontinue_.discontinue->k)) return false;
             if (!borrow_check_expr_recursive(ctx, e->as.discontinue_.discontinue->exception)) return false;
             return true;
+        /* Phase 20: Software Transactional Memory */
+        case EX_STM: {
+            /* Check all body expressions */
+            for (uint32_t i = 0; i < e->as.stm_.n_body; i++) {
+                if (!borrow_check_expr_recursive(ctx, e->as.stm_.body[i])) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        case EX_ATOMICALLY:
+            return borrow_check_expr_recursive(ctx, e->as.atomically_.stm_expr);
+        case EX_RETRY:
+            /* retry has no children */
+            return true;
+        case EX_CHECK:
+            return borrow_check_expr_recursive(ctx, e->as.check_.cond);
+        case EX_OR_ELSE:
+            if (!borrow_check_expr_recursive(ctx, e->as.or_else_.stm1)) return false;
+            if (!borrow_check_expr_recursive(ctx, e->as.or_else_.stm2)) return false;
+            return true;
+        case EX_TVAR_NEW:
+            return borrow_check_expr_recursive(ctx, e->as.tvar_new_.init);
+        case EX_TVAR_READ:
+            return borrow_check_expr_recursive(ctx, e->as.tvar_read_.tvar);
+        case EX_TVAR_WRITE:
+            if (!borrow_check_expr_recursive(ctx, e->as.tvar_write_.tvar)) return false;
+            if (!borrow_check_expr_recursive(ctx, e->as.tvar_write_.value)) return false;
+            return true;
+        case EX_TVAR_MODIFY:
+            if (!borrow_check_expr_recursive(ctx, e->as.tvar_modify_.tvar)) return false;
+            if (!borrow_check_expr_recursive(ctx, e->as.tvar_modify_.fn)) return false;
+            return true;
+        case EX_TVAR_SWAP:
+            if (!borrow_check_expr_recursive(ctx, e->as.tvar_swap_.tvar)) return false;
+            if (!borrow_check_expr_recursive(ctx, e->as.tvar_swap_.new_val)) return false;
+            return true;
+        case EX_TVAR_CAS:
+            if (!borrow_check_expr_recursive(ctx, e->as.tvar_cas_.tvar)) return false;
+            if (!borrow_check_expr_recursive(ctx, e->as.tvar_cas_.old_val)) return false;
+            if (!borrow_check_expr_recursive(ctx, e->as.tvar_cas_.new_val)) return false;
+            return true;
     }
     
     return true;

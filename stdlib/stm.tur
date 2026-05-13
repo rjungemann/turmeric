@@ -1,0 +1,38 @@
+;; stdlib/stm.tur - Software Transactional Memory (Phase 20/21)
+;;
+;; Minimal version for STM primitives
+
+(extern-c malloc [^int size] :ptr)
+(extern-c free [^ptr p] :void)
+
+(defn ptr/null [] :ptr
+  ```c
+  return NULL;
+  ```)
+
+(defn tvar/new [init] :ptr
+  ```c
+  TVar *tv = tur_tvar_new(NULL, (void*)(intptr_t)init);
+  return (void*)tv;
+  ```)
+
+(defn tvar/read [tv :ptr] :ptr
+  ```c
+  return (void*)tur_tvar_read(tur_stm_current_tx(), (TVar*)tv);
+  ```)
+
+(defn tvar/write [tv :ptr val :ptr] :nil
+  ```c
+  tur_tvar_write(tur_stm_current_tx(), (TVar*)tv, (void*)val);
+  return 0;
+  ```)
+
+(defn tvar/swap [tv :ptr new :ptr] :ptr
+  ```c
+  return (void*)tur_tvar_swap(tur_stm_current_tx(), (TVar*)tv, (void*)new);
+  ```)
+
+(defn tvar/cas [tv :ptr old :ptr new :ptr] :bool
+  ```c
+  return tur_tvar_cas(tur_stm_current_tx(), (TVar*)tv, (void*)old, (void*)new);
+  ```)
