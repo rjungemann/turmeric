@@ -44,6 +44,8 @@
 #include "symbols.h"
 /* Phase S0: eval API for tur repl */
 #include "turi/eval.h"
+/* Phase S1: REPL with libedit, multi-line input, :type/:doc/:reload */
+#include "turi/repl.h"
 /* Global configuration variables — defined in globals.c */
 #include "globals.h"
 
@@ -868,68 +870,7 @@ static int is_directory(const char *path) {
 
 /* Phase S0: tur repl — interactive read-eval-print loop. */
 static int cmd_repl(void) {
-    printf("Turmeric v0.x.0  (type :help for help, :quit to exit)\n");
-    fflush(stdout);
-
-    TuriEnv *env = turi_env_new();
-    if (!env) {
-        fprintf(stderr, "tur repl: failed to create eval environment\n");
-        return 1;
-    }
-
-    char line[4096];
-    while (1) {
-        printf("turmeric> ");
-        fflush(stdout);
-
-        if (!fgets(line, sizeof(line), stdin)) {
-            printf("\n");
-            break;
-        }
-
-        /* Strip trailing newline */
-        size_t len = strlen(line);
-        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
-            line[--len] = '\0';
-
-        if (len == 0) continue;
-
-        /* Meta-commands */
-        if (strcmp(line, ":quit") == 0 || strcmp(line, ":q") == 0) {
-            break;
-        }
-        if (strcmp(line, ":help") == 0) {
-            printf("Meta-commands:\n"
-                   "  :help          show this help\n"
-                   "  :quit  :q      exit the REPL\n"
-                   "\n"
-                   "Expressions are evaluated and the result printed.\n"
-                   "Definitions (defn, def) are stored for subsequent expressions.\n");
-            continue;
-        }
-
-        /* Evaluate */
-        TuriValue result = turi_eval(env, line);
-
-        if (turi_is_error(result)) {
-            /* Parse/elaboration errors are already emitted to stderr by the
-             * diagnostics system; only print runtime errors separately. */
-            const char *msg = turi_error_message(result);
-            if (msg &&
-                strcmp(msg, "parse error") != 0 &&
-                strcmp(msg, "elaboration error") != 0) {
-                fprintf(stderr, "error: %s\n", msg);
-            }
-        } else {
-            char repr[256];
-            turi_value_repr(repr, sizeof(repr), result);
-            printf("=> %s\n", repr);
-        }
-        fflush(stdout);
-    }
-
-    turi_env_free(env);
-    return 0;
+    return turi_repl_run();
 }
 
 static int usage(void) {
@@ -942,7 +883,7 @@ static int usage(void) {
         "  tur emit-c <input.tur>            print the generated C to stdout\n"
         "  tur emit-h <input.tur>            print the generated header to stdout\n"
         "  tur run <input.tur>               build + execute a single file\n"
-        "  tur repl                          interactive REPL (Phase S0)\n"
+        "  tur repl                          interactive REPL (Phase S1)\n"
         "  tur test <dir>                    run all .tur files in a directory\n"
         "  tur check <input.tur>             type-check only, no codegen (phase 8)\n"
         "\n"

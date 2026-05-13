@@ -1,12 +1,25 @@
 cmake_minimum_required(VERSION 3.20)
 
 # ---------------------------------------------------------------------------
+# Phase S1: detect libedit for REPL line editing + history
+# ---------------------------------------------------------------------------
+find_library(LIBEDIT_LIB edit)
+if(LIBEDIT_LIB)
+    set(HAVE_EDITLINE 1)
+    message(STATUS "libedit found: ${LIBEDIT_LIB} — enabling REPL line editing")
+else()
+    set(HAVE_EDITLINE 0)
+    message(STATUS "libedit not found — REPL will use plain fgets")
+endif()
+
+# ---------------------------------------------------------------------------
 # Phase S0: turi eval core sources (shared between tur and libturi)
 # ---------------------------------------------------------------------------
 set(TURI_EVAL_SOURCES
     turi/value.c
     turi/env.c
     turi/eval.c
+    turi/repl.c
 )
 
 # ---------------------------------------------------------------------------
@@ -88,6 +101,10 @@ target_compile_options(tur_core PRIVATE
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
     $<$<CONFIG:TSan>:    -O1 -g -fsanitize=thread>
 )
+# Phase S1: editline feature flag
+if(HAVE_EDITLINE)
+    target_compile_definitions(tur_core PRIVATE TURI_HAVE_EDITLINE=1)
+endif()
 
 # ---------------------------------------------------------------------------
 # tur: main compiler executable
@@ -118,6 +135,12 @@ target_link_options(tur PRIVATE
     $<$<CONFIG:TSan>:    -fsanitize=thread>
 )
 
+# Phase S1: link libedit when available
+if(HAVE_EDITLINE)
+    target_link_libraries(tur PRIVATE ${LIBEDIT_LIB})
+    target_compile_definitions(tur PRIVATE TURI_HAVE_EDITLINE=1)
+endif()
+
 # Ensure the compiler binary ends up at build/tur (same path the test scripts
 # and games expect).
 set_target_properties(tur PROPERTIES
@@ -131,6 +154,9 @@ add_library(libturi STATIC $<TARGET_OBJECTS:tur_core>)
 set_target_properties(libturi PROPERTIES OUTPUT_NAME "turi")
 target_include_directories(libturi PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_options(libturi INTERFACE -pthread)
+if(HAVE_EDITLINE)
+    target_link_libraries(libturi INTERFACE ${LIBEDIT_LIB})
+endif()
 
 # ---------------------------------------------------------------------------
 # Phase S0: tur_eval_basic — C embedding smoke test
