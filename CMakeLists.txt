@@ -49,6 +49,23 @@ add_test(
   COMMAND bash tests/turi/repl-smoke.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Phase S2: (import turi/eval) from Turmeric source
+add_test(
+  NAME tur_eval_import
+  COMMAND bash tests/turi/eval-import.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# Set TUR_CC_FLAGS so the generated C can find turi/eval.h and libturi.a.
+# In Debug builds libturi.a is ASAN-instrumented so we must also pass
+# -fsanitize=address,undefined to avoid undefined ASAN symbol errors.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  set(_eval_import_asan " -fsanitize=address,undefined")
+else()
+  set(_eval_import_asan "")
+endif()
+set_tests_properties(tur_eval_import PROPERTIES
+  ENVIRONMENT "TUR_CC_FLAGS=-O2 -std=c99 -Wall${_eval_import_asan} -I${CMAKE_CURRENT_SOURCE_DIR}/src -L${CMAKE_CURRENT_BINARY_DIR}/src"
+)
 add_test(
   NAME tur_eval_basic
   COMMAND "${CMAKE_BINARY_DIR}/tur_eval_basic"
@@ -57,7 +74,7 @@ add_test(
 
 # Make sure tur is built before any test is run
 set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
-                     tur_repl_tests tur_repl_smoke
+                     tur_repl_tests tur_repl_smoke tur_eval_import
   PROPERTIES DEPENDS tur
 )
 set_tests_properties(tur_eval_basic
