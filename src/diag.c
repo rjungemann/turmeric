@@ -109,6 +109,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0015_TYPECLASS_CONSTRAINT_NOT_SATISFIED: return "TUR-E0015";
         case TUR_E0014_NOT_CLONE:                        return "TUR-E0014";
         case TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET:    return "TUR-E0016";
+        case TUR_E0017_CONT_ESCAPE_ASYNC:                return "TUR-E0017";
         default:                          return "";
     }
 }
@@ -131,6 +132,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0015") == 0) return TUR_E0015_TYPECLASS_CONSTRAINT_NOT_SATISFIED;
     if (strcmp(s, "TUR-E0014") == 0) return TUR_E0014_NOT_CLONE;
     if (strcmp(s, "TUR-E0016") == 0) return TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET;
+    if (strcmp(s, "TUR-E0017") == 0) return TUR_E0017_CONT_ESCAPE_ASYNC;
     return DIAG_CODE_NONE;
 }
 
@@ -340,6 +342,32 @@ static const DiagExplanation diag_explanations_[] = {
       "\n"
       "Wrap the cloneable-shift in a cloneable-reset:\n"
       "  (cloneable-reset (cloneable-shift (fn [k] 42) 0))\n"
+    },
+    { TUR_E0017_CONT_ESCAPE_ASYNC,
+      "TUR-E0017: Continuation escape into async scope\n"
+      "\n"
+      "An effect-handler continuation `k` was captured by an async block.  Effect\n"
+      "handler continuations are bound to the fiber that performed the effect; if `k`\n"
+      "is resumed from a different fiber (spawned by async), the fiber identity check\n"
+      "in tur_cont_resume will fail at runtime with a fatal error.\n"
+      "\n"
+      "Example of the problem:\n"
+      "  (defeffect GetK [] :int)\n"
+      "  (handle (perform (GetK))\n"
+      "    (GetK [] k)\n"
+      "      (await (async (fn [] :int (resume k 42)))))  ; ERROR: k escapes\n"
+      "\n"
+      "Instead, resume the continuation synchronously inside the handler body:\n"
+      "  (defeffect GetK [] :int)\n"
+      "  (handle (perform (GetK))\n"
+      "    (GetK [] k) (resume k 42))\n"
+      "\n"
+      "Or, if you need async work before resuming, perform the async computation and\n"
+      "pass the result back synchronously:\n"
+      "  (handle (perform (GetK))\n"
+      "    (GetK [] k)\n"
+      "      (let [v (await (async (fn [] :int 42)))]\n"
+      "        (resume k v)))\n"
     },
 };
 

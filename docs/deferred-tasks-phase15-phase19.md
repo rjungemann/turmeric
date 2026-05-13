@@ -1215,13 +1215,17 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 - [x] Implement effect handlers that can spawn fibers: handler case body may call `async` to spawn a fiber.
   - Implemented: Effect handlers can use `async` to spawn fibers. The spawned fiber runs on the scheduler.
   - Test: `tests/fixtures/async-effect-spawn/` validates fiber spawning from effect handlers.
-- [ ] Implement `async` blocks as effect handlers: `(async (with-handler body handler))` — handler runs inside the async fiber's scope.
+- [x] Implement `async` blocks as effect handlers: `(async (with-handler body handler))` — handler runs inside the async fiber's scope.
+  - Implemented: `with-handler` is an alias for `handle` (dispatches to `elab_handle`). The `EX_ASYNC` codegen path wraps non-fn-ptr bodies in a static thunk so handlers can be emitted at file scope.
+  - Test: `tests/fixtures/async-with-handler/` validates effect handler inside an async block.
 - [x] Verify per-fiber handler chain (`tur_current_fiber->handler_chain`) correctly isolates effects across fibers (no handler leak between fibers).
   - Implemented: Per-fiber handler chain is set via `tur_effect_perform` using `tur_current_fiber->handler_chain`. Test: `tests/fixtures/fiber-effect/` verifies fiber-local handlers don't leak to main context.
 - [x] Add `tests/fixtures/effects-async/` — perform an effect inside an `async` block; handler resumes fiber.
 - [x] Add `tests/fixtures/async-effect-spawn/` — effect handler spawns a fiber; fiber runs on scheduler.
-- [ ] Add negative fixture `tests/fixtures/errors/async-effect-escape.tur` — effect handler continuation escapes async scope; runtime error.
-- [ ] Document panic + async task semantics in `docs/async-await-plan.md` before closing Phase R6 (see Phase R6 deferred item).
+- [x] Add negative fixture `tests/fixtures/errors/async-effect-escape/` — effect handler continuation captures async scope; compile-time error TUR-E0017.
+  - Implemented: `is_continuation` flag on `Binding` marks handler `k` bindings; `elab_async` checks closure captures for escaped continuations. Fixed `collect_free_vars` to traverse `EX_RESUME` children so `k` is visible as a closure free variable.
+- [x] Document panic + async task semantics in `docs/archive/async-await-plan.md` before closing Phase R6 (see Phase R6 deferred item).
+  - Added Section 16 covering: panic inside async tasks (future transitions to FUTURE_REJECTED), `catch-unwind` at await boundaries, panic inside effect handlers in async scope, continuation escape (TUR-E0017), and `with-handler` sugar.
 
 ### Unsafe Operations remaining tasks
 

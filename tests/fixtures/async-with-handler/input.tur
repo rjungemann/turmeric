@@ -1,0 +1,16 @@
+;; Phase T25: async-with-handler — (async (with-handler body handler))
+;;
+;; Tests that with-handler (sugar for handle) can be used directly inside
+;; an async block without an explicit (fn [] ...) wrapper. The handler runs
+;; inside the async fiber's scope.
+
+(defeffect AddTen [x :int] :int)
+
+(defn main [] :int
+  ;; (async (with-handler body cases...)) — handler runs inside the async scope.
+  ;; with-handler is an alias for handle; (async expr) wraps expr in a thunk.
+  (let [fut (async (with-handler (perform (AddTen 5))
+                     (AddTen [x] k) (resume k (+ x 10))))]
+    (let [result (await fut)]
+      (println result)
+      0)))

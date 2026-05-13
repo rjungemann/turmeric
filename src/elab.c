@@ -330,6 +330,41 @@ static Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_pa
             case EX_GET_FIELD:
                 stack[sp++] = cur->as.get_field_.struct_expr;
                 break;
+            /* Phase 19: Algebraic effects */
+            case EX_PERFORM:
+                for (uint8_t i = cur->as.perform_.perform->n_args; i > 0; i--) {
+                    stack[sp++] = cur->as.perform_.perform->args[i-1];
+                }
+                break;
+            case EX_HANDLE:
+                stack[sp++] = cur->as.handle_.handle->body;
+                for (uint8_t i = cur->as.handle_.handle->n_cases; i > 0; i--) {
+                    stack[sp++] = cur->as.handle_.handle->cases[i-1].body;
+                }
+                break;
+            case EX_RESUME:
+                stack[sp++] = cur->as.resume_.resume->k;
+                stack[sp++] = cur->as.resume_.resume->value;
+                break;
+            case EX_DISCONTINUE:
+                stack[sp++] = cur->as.discontinue_.discontinue->k;
+                stack[sp++] = cur->as.discontinue_.discontinue->exception;
+                break;
+            /* Phase T21: Async/await */
+            case EX_ASYNC:
+                stack[sp++] = cur->as.async_.fn_expr;
+                break;
+            case EX_AWAIT:
+                stack[sp++] = cur->as.await_.fut_expr;
+                break;
+            /* Phase 3/4: Return */
+            case EX_RETURN:
+                if (cur->as.return_.value) stack[sp++] = cur->as.return_.value;
+                break;
+            /* Phase R2: Panic */
+            case EX_PANIC:
+                stack[sp++] = cur->as.panic_.payload;
+                break;
             default:
                 break;
         }
@@ -424,6 +459,7 @@ typedef struct Elab {
     const Symbol *sym_perform;    /* perform */
     const Symbol *sym_handle;     /* handle */
     const Symbol *sym_try_with;   /* try-with (sugar for handle) */
+    const Symbol *sym_with_handler; /* with-handler (sugar for handle; async-friendly alias) */
     const Symbol *sym_resume;     /* resume */
     const Symbol *sym_discontinue;/* discontinue */
     const Symbol *sym_k;          /* continuation parameter name k */
@@ -913,6 +949,7 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_perform = intern_cstr(st, "perform");
     e->sym_handle = intern_cstr(st, "handle");
     e->sym_try_with = intern_cstr(st, "try-with");
+    e->sym_with_handler = intern_cstr(st, "with-handler");
     e->sym_resume = intern_cstr(st, "resume");
     e->sym_discontinue = intern_cstr(st, "discontinue");
     e->sym_k = intern_cstr(st, "k");
@@ -5155,9 +5192,11 @@ static Expr *elab_handle(Elab *e, const Form *call) {
         }
         
         /* Create binding for k (dummy continuation — int64).
-         * Marked CK_MOVE so the one-shot check fires on a second resume/discontinue. */
+         * Marked CK_MOVE so the one-shot check fires on a second resume/discontinue.
+         * Marked is_continuation so async Send checks can detect continuation escape. */
         Binding *kb = binding_new(e, cases[i].k_name, TYPE_INT, false, false, k_f->span);
         kb->type.copy_kind = CK_MOVE;
+        kb->is_continuation = true;
         cases[i].k_binding = kb;
         scope_add(&handler_scope, kb);
         
@@ -6534,8 +6573,9 @@ static Expr *elab_call(Elab *e, Form *call) {
     /* Phase 19: Algebraic effects */
     if (name == e->sym_defeffect) return elab_defeffect(e, call);
     if (name == e->sym_perform)   return elab_perform(e, call);
-    if (name == e->sym_handle)    return elab_handle(e, call);
-    if (name == e->sym_try_with)  return elab_try_with(e, call);
+    if (name == e->sym_handle)       return elab_handle(e, call);
+    if (name == e->sym_try_with)     return elab_try_with(e, call);
+    if (name == e->sym_with_handler) return elab_handle(e, call);  /* T25: sugar for handle in async context */
     if (name == e->sym_resume)    return elab_resume(e, call);
     if (name == e->sym_discontinue) return elab_discontinue(e, call);
     if (name == e->sym_cont_pred)   return elab_cont_pred(e, call);
@@ -8390,7 +8430,9 @@ static Expr *elab_async(Elab *e, const Form *call) {
     if (!fn_expr) return NULL;
     
     /* AW-012 / AW-011B-1: Send-check for async closures.
-     * Values captured in async blocks must be Send (can be moved to fiber context). */
+     * Values captured in async blocks must be Send (can be moved to fiber context).
+     * T25: Also check that no effect-handler continuation (k) escapes into an async
+     * block, which would cause a resume-on-wrong-fiber runtime error. */
     if (fn_expr->kind == EX_FN || fn_expr->kind == EX_CLOSURE) {
         const struct Closure *cl = NULL;
         if (fn_expr->kind == EX_CLOSURE) {
@@ -8408,6 +8450,19 @@ static Expr *elab_async(Elab *e, const Form *call) {
                         "type `%s` cannot be sent across thread boundaries "
                         "(not `Send`); captured variable `%s` in async block",
                         type_name(cap->type), cap->name->name);
+                    had_error = true;
+                }
+                /* T25: Prevent continuation escape into async scope.
+                 * A handler continuation k cannot be captured by an async block because
+                 * the continuation is bound to the fiber where perform was called; resuming
+                 * it from a different fiber produces a runtime error. Catching this at
+                 * compile time is safer. */
+                if (cap->is_continuation) {
+                    diag_emit_with_code(DIAG_ERROR, call->span,
+                        TUR_E0017_CONT_ESCAPE_ASYNC,
+                        "effect handler continuation `%s` cannot be captured by an async block; "
+                        "resuming it from a different fiber would cause a runtime error",
+                        cap->name->name);
                     had_error = true;
                 }
             }

@@ -376,6 +376,15 @@ static void tur_cloneable_cont_drop(int64_t cont_int) {
     free(cont);
 }
 
+/* CPS-CL4: cloneable-reset context */
+typedef struct tur_cloneable_reset_ctx {
+    jmp_buf jmp;
+    int64_t result;  /* k_fn return value, set by shift before longjmp */
+    struct tur_cloneable_reset_ctx *prev; /* for nested resets */
+} tur_cloneable_reset_ctx;
+
+static __thread tur_cloneable_reset_ctx *tur_current_reset_ctx = NULL;
+
 /* Phase 19: Algebraic effect handler chain */
 typedef struct { bool consumed; void *origin_fiber; } TurContK;
 
@@ -958,150 +967,6 @@ static int64_t tur_next_timer_wait_us(void) {
     if (next < 0) return -1;
     int64_t diff = (next - tur_monotonic_ns()) / 1000;
     return diff > 0 ? diff : 0;
-}
-
-/* Phase T24: Timer wheel */
-#define TUR_WHEEL_SLOTS 256
-#define TUR_WHEEL_SLOT_MASK 255
-typedef void (*tur_timer_cb_t)(void *);
-typedef struct TurTimerNode TurTimerNode;
-struct TurTimerNode {
-    int64_t deadline_ms;
-    tur_timer_cb_t callback;
-    void *arg;
-    bool cancelled;
-    TurTimerNode *next;
-    TurTimerNode *prev;
-};
-typedef struct {
-    TurTimerNode *slots[TUR_WHEEL_SLOTS];
-    int64_t current_ms;
-    pthread_mutex_t lock;
-    bool running;
-    pthread_t thread;
-} TurTimerWheel;
-
-static int64_t tur_wheel_now_ms(void) {
-    struct timespec _ts;
-    clock_gettime(CLOCK_MONOTONIC, &_ts);
-    return (int64_t)_ts.tv_sec * 1000LL + (int64_t)_ts.tv_nsec / 1000000LL;
-}
-
-static void tur_timer_wheel_tick(TurTimerWheel *w) {
-    if (!w) return;
-    int64_t now = tur_wheel_now_ms();
-    int64_t elapsed = now - w->current_ms;
-    if (elapsed <= 0) return;
-    for (int64_t _t = 0; _t < elapsed; _t++) {
-        w->current_ms++;
-        int _slot = (int)(w->current_ms & TUR_WHEEL_SLOT_MASK);
-        TurTimerNode *_to_fire = NULL;
-        pthread_mutex_lock(&w->lock);
-        TurTimerNode **_pp = &w->slots[_slot];
-        while (*_pp) {
-            TurTimerNode *_n = *_pp;
-            if (_n->cancelled) {
-                *_pp = _n->next;
-                if (_n->next) _n->next->prev = _n->prev;
-                free(_n);
-            } else if (_n->deadline_ms <= w->current_ms) {
-                *_pp = _n->next;
-                if (_n->next) _n->next->prev = _n->prev;
-                _n->next = _to_fire; _to_fire = _n;
-            } else { _pp = &_n->next; }
-        }
-        pthread_mutex_unlock(&w->lock);
-        while (_to_fire) {
-            TurTimerNode *_nx = _to_fire->next;
-            _to_fire->callback(_to_fire->arg);
-            free(_to_fire);
-            _to_fire = _nx;
-        }
-    }
-}
-
-static void *tur_timer_wheel_ticker(void *raw) {
-    TurTimerWheel *w = (TurTimerWheel *)raw;
-    while (w->running) {
-        struct timespec _ts2 = { .tv_sec = 0, .tv_nsec = 1000000L };
-        nanosleep(&_ts2, NULL);
-        tur_timer_wheel_tick(w);
-    }
-    return NULL;
-}
-
-static TurTimerWheel *tur_timer_wheel_new(void) {
-    TurTimerWheel *w = (TurTimerWheel *)calloc(1, sizeof(TurTimerWheel));
-    if (!w) { fprintf(stderr, "timer-wheel: oom\n"); abort(); }
-    pthread_mutex_init(&w->lock, NULL);
-    w->current_ms = tur_wheel_now_ms();
-    w->running = true;
-    pthread_create(&w->thread, NULL, tur_timer_wheel_ticker, w);
-    return w;
-}
-
-static void tur_timer_wheel_free(TurTimerWheel *w) {
-    if (!w) return;
-    w->running = false;
-    pthread_join(w->thread, NULL);
-    for (int _i = 0; _i < TUR_WHEEL_SLOTS; _i++) {
-        TurTimerNode *_n = w->slots[_i];
-        while (_n) { TurTimerNode *_nx = _n->next; free(_n); _n = _nx; }
-    }
-    pthread_mutex_destroy(&w->lock);
-    free(w);
-}
-
-static TurTimerNode *tur_timer_wheel_insert(TurTimerWheel *w, int64_t delay_ms,
-                                              tur_timer_cb_t cb, void *arg) {
-    if (!w || !cb) return NULL;
-    TurTimerNode *node = (TurTimerNode *)calloc(1, sizeof(TurTimerNode));
-    if (!node) { fprintf(stderr, "timer-node: oom\n"); abort(); }
-    node->deadline_ms = tur_wheel_now_ms() + delay_ms;
-    node->callback = cb; node->arg = arg; node->cancelled = false;
-    int _sl = (int)(node->deadline_ms & TUR_WHEEL_SLOT_MASK);
-    pthread_mutex_lock(&w->lock);
-    node->next = w->slots[_sl]; node->prev = NULL;
-    if (w->slots[_sl]) w->slots[_sl]->prev = node;
-    w->slots[_sl] = node;
-    pthread_mutex_unlock(&w->lock);
-    return node;
-}
-
-static void tur_timer_wheel_cancel(TurTimerNode *node) {
-    if (node) node->cancelled = true;
-}
-
-/* Phase T24: Timer fire context for recording ordered callbacks */
-typedef struct {
-    pthread_mutex_t lock;
-    pthread_cond_t  cond;
-    int             order[16]; /* ids in fire order */
-    int             count;     /* timers fired so far */
-    int             expected;  /* total to wait for   */
-} TurTimerFireCtx;
-
-/* arg must point to int64_t[2]: { ptr-as-int64 to TurTimerFireCtx, timer-id } */
-static void tur_timer_fire_cb(void *arg) {
-    int64_t *pair = (int64_t *)arg;
-    TurTimerFireCtx *ctx = (TurTimerFireCtx *)(intptr_t)pair[0];
-    int id = (int)pair[1];
-    pthread_mutex_lock(&ctx->lock);
-    if (ctx->count < 16) ctx->order[ctx->count] = id;
-    ctx->count++;
-    if (ctx->count >= ctx->expected) pthread_cond_broadcast(&ctx->cond);
-    pthread_mutex_unlock(&ctx->lock);
-}
-
-/* Global timer wheel (created on first use) */
-static TurTimerWheel *tur_global_timer_wheel = NULL;
-static pthread_once_t tur_timer_wheel_once = PTHREAD_ONCE_INIT;
-static void tur_timer_wheel_init_once(void) {
-    tur_global_timer_wheel = tur_timer_wheel_new();
-}
-static TurTimerWheel *tur_get_timer_wheel(void) {
-    pthread_once(&tur_timer_wheel_once, tur_timer_wheel_init_once);
-    return tur_global_timer_wheel;
 }
 
 #ifdef __clang__
