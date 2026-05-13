@@ -111,11 +111,23 @@
   return NULL;
   ```)
 
+;; make-worker-arg : ptr<void> × int → ptr<void>
+;; Packs (cell, value) into a heap-allocated void*[2] for passing to a thread.
+;; The worker thread is responsible for freeing this allocation.
+(defn make-worker-arg [cell :ptr<void> val :int] :ptr<void>
+  ```c
+  void **a = (void **)malloc(2 * sizeof(void *));
+  if (!a) { fprintf(stderr, "make-worker-arg: oom\n"); abort(); }
+  a[0] = cell;
+  a[1] = (void *)(uintptr_t)(int64_t)val;
+  return (void *)a;
+  ```)
+
 (defn thread-spawn-raw [fn-ptr :ptr<void> arg :ptr<void>] :ptr<void>
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
   if (!t) { fprintf(stderr, "thread-spawn-raw: oom\n"); abort(); }
-  pthread_create(t, NULL, (void *(*)(void *))fn-ptr, arg);
+  pthread_create(t, NULL, (void *(*)(void *))fn_ptr, arg);
   return (void *)t;
   ```)
 
@@ -125,17 +137,20 @@
   free(t);
   ```)
 
+(defn print-labelled [label :cstr val :int] :nil
+  ```c
+  printf("%s %lld\n", label, (long long)val);
+  ```)
+
 (defn main [] :int
   (let [fc (fc-new)]
-    (let [arg (malloc (* 2 (sizeof :ptr<void>)))]
-      (ptr-set! arg 0 fc)
-      (ptr-set! arg 1 -1)
+    (let [arg (make-worker-arg fc -1)]
       (let [t (thread-spawn-raw future-error-worker arg)]
         (let [result (fc-get fc)]
           (if (result-ok? result)
-            (println "ok:" (int 0))
-            (println "err:" (result-err result)))
+            (print-labelled "ok:" 0)
+            (print-labelled "err:" (result-err result)))
           (result-free result)
           (thread-join-raw t))
         (fc-free fc)))
-    0)
+    0))

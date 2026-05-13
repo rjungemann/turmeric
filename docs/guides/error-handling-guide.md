@@ -190,18 +190,30 @@ When a panic occurs inside an effect handler or continuation:
 
 ## Panic + Async Task Semantics (Phase R6)
 
-When panics interact with async tasks:
+**v1 behavior:** In the current implementation, `(async fn)` calls the async function
+directly and synchronously (no actual fibers or scheduler suspension). A panic inside an
+async body propagates normally through the call stack — it is NOT caught at the task
+boundary. If the panic is unhandled it terminates the process.
 
-1. **Panic in async task**: A panic that occurs inside an async task is caught at the
-   task boundary. The task's future will resolve to an `Err` value containing the panic
-   payload. This can be caught using `catch-unwind` at the join point.
+Similarly, a rejected `future` (one settled via `tur_future_reject`) causes `abort()` when
+awaited; it does not surface as `Err` at the `await` site.
 
-2. **Panic during task cancellation**: If a task is cancelled while panicking, the
-   panic takes precedence. The cancellation is a no-op and the panic propagates.
+**v2 target behavior** (for reference when true fiber-based async lands):
 
-3. **Panic in async main**: In an async main function, an uncaught panic will terminate
-   the program with a nonzero exit code after all defer thunks have fired.
+1. **Panic in async task**: A panic inside an async task will be caught at the task
+   boundary via an implicit `catch-unwind`. The task's future will resolve to a rejected
+   state carrying the panic payload as `Err(PanicPayload)`. Use `catch-unwind` at the
+   join point to recover.
 
-4. **WASM target**: When targeting WebAssembly, panics are lowered to the WebAssembly
-   `unreachable` instruction, which traps the WebAssembly execution. This is consistent
-   with Rust's panic behavior in WASM.
+2. **Panic during task cancellation**: If a task is cancelled while a panic is in
+   progress, the panic takes precedence; cancellation is a no-op and the panic propagates.
+
+3. **Panic in async main**: An uncaught panic terminates the program with a nonzero exit
+   code after all defer thunks have fired.
+
+4. **WASM target**: Panics lower to the WebAssembly `unreachable` instruction (traps
+   execution). Deferred until a WASM codegen backend is added.
+
+5. **Defer inside async**: Defer thunks registered inside an async block fire in reverse
+   order during the normal unwind or panic unwind of that async block, consistent with
+   Phase 17 defer semantics.

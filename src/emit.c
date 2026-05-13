@@ -1866,18 +1866,35 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * int64_t when passing to an int64_t parameter. */
                 bool needs_fn_cast = (e->as.call_.args[i]->type.kind == TY_FN ||
                                       e->as.call_.args[i]->type.kind == TY_PTR_VOID);
+                /* When param expects void * (TY_PTR_VOID), cast to void * not int64_t.
+                 * Passing int64_t to void * is invalid in C99 (-Wint-conversion error). */
+                bool cast_to_void_ptr = false;
                 if (needs_fn_cast && fn_binding->type.kind == TY_FN) {
                     uint8_t n_fnparams = fn_binding->type.as.fn.arity;
                     uint8_t param_idx = (i < n_fnparams) ? i : (n_fnparams > 0 ? n_fnparams - 1 : 0);
                     TypeKind pk = fn_binding->type.as.fn.arg_kinds[param_idx];
                     /* Apply cast when param is int64_t in C: TY_INT, opaque TY_STRUCT
-                     * (HKT container), or TY_PTR_VOID (fat-closure env ptr passed as
-                     * void * to a polymorphic HKT helper). */
-                    needs_fn_cast = (pk == TY_INT || pk == TY_STRUCT || pk == TY_PTR_VOID);
+                     * (HKT container). */
+                    if (pk == TY_INT || pk == TY_STRUCT) {
+                        needs_fn_cast = true;
+                        cast_to_void_ptr = false;
+                    } else if (pk == TY_PTR_VOID) {
+                        /* Param is void * — cast to void * via intptr_t, not int64_t.
+                         * Needed when a TY_FN (stored as int64_t) is passed as void *;
+                         * harmless no-op when a TY_PTR_VOID (already void *) is passed. */
+                        needs_fn_cast = true;
+                        cast_to_void_ptr = true;
+                    } else {
+                        needs_fn_cast = false;
+                    }
                 }
                 if (needs_fn_cast) {
                     Buf cast; buf_init(&cast);
-                    buf_printf(&cast, "(int64_t)(intptr_t)(%s)", raw);
+                    if (cast_to_void_ptr) {
+                        buf_printf(&cast, "(void *)(intptr_t)(%s)", raw);
+                    } else {
+                        buf_printf(&cast, "(int64_t)(intptr_t)(%s)", raw);
+                    }
                     buf_putc(&cast, '\0');
                     free(raw);
                     raw = strdup(cast.data);
