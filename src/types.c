@@ -120,6 +120,14 @@ const char *type_name(Type t) {
         case TY_BOOL:    return "bool";
         case TY_INT:     return "int";
         case TY_FLOAT:   return "float";
+        case TY_INT8:    return "int8";
+        case TY_INT16:   return "int16";
+        case TY_INT32:   return "int32";
+        case TY_UINT8:   return "uint8";
+        case TY_UINT16:  return "uint16";
+        case TY_UINT32:  return "uint32";
+        case TY_UINT64:  return "uint64";
+        case TY_FLOAT32: return "float32";
         case TY_CSTR:    return "cstr";
         case TY_PTR_VOID: return "ptr<void>";
         case TY_NEVER:   return "!";
@@ -256,6 +264,14 @@ static void type_name_buf(Buf *b, Type t) {
         case TY_BOOL:    buf_puts(b, "bool"); break;
         case TY_INT:     buf_puts(b, "int"); break;
         case TY_FLOAT:   buf_puts(b, "float"); break;
+        case TY_INT8:    buf_puts(b, "int8"); break;
+        case TY_INT16:   buf_puts(b, "int16"); break;
+        case TY_INT32:   buf_puts(b, "int32"); break;
+        case TY_UINT8:   buf_puts(b, "uint8"); break;
+        case TY_UINT16:  buf_puts(b, "uint16"); break;
+        case TY_UINT32:  buf_puts(b, "uint32"); break;
+        case TY_UINT64:  buf_puts(b, "uint64"); break;
+        case TY_FLOAT32: buf_puts(b, "float32"); break;
         case TY_CSTR:    buf_puts(b, "cstr"); break;
         case TY_PTR_VOID: buf_puts(b, "ptr<void>"); break;
         case TY_NEVER:   buf_puts(b, "!"); break;
@@ -386,6 +402,14 @@ const char *type_c_name(Type t) {
         case TY_BOOL:    return "bool";
         case TY_INT:     return "int64_t";
         case TY_FLOAT:   return "double";
+        case TY_INT8:    return "int8_t";
+        case TY_INT16:   return "int16_t";
+        case TY_INT32:   return "int32_t";
+        case TY_UINT8:   return "uint8_t";
+        case TY_UINT16:  return "uint16_t";
+        case TY_UINT32:  return "uint32_t";
+        case TY_UINT64:  return "uint64_t";
+        case TY_FLOAT32: return "float";
         case TY_CSTR:    return "const char *";
         case TY_PTR_VOID: return "void *";
         case TY_NEVER:   return "void";  /* never type has no values, use void */
@@ -563,6 +587,14 @@ static bool type_is_guarded_recursive_helper(const Type *t, const char *rec_name
         case TY_BOOL:
         case TY_INT:
         case TY_FLOAT:
+        case TY_INT8:
+        case TY_INT16:
+        case TY_INT32:
+        case TY_UINT8:
+        case TY_UINT16:
+        case TY_UINT32:
+        case TY_UINT64:
+        case TY_FLOAT32:
         case TY_CSTR:
         case TY_PTR_VOID:
         case TY_TYPECLASS:
@@ -610,6 +642,14 @@ const char *typekind_to_string(TypeKind k) {
         case TY_BOOL:     return "bool";
         case TY_INT:      return "int";
         case TY_FLOAT:    return "float";
+        case TY_INT8:     return "int8";
+        case TY_INT16:    return "int16";
+        case TY_INT32:    return "int32";
+        case TY_UINT8:    return "uint8";
+        case TY_UINT16:   return "uint16";
+        case TY_UINT32:   return "uint32";
+        case TY_UINT64:   return "uint64";
+        case TY_FLOAT32:  return "float32";
         case TY_CSTR:     return "cstr";
         case TY_PTR_VOID: return "ptr-void";
         case TY_FN:       return "fn";
@@ -635,7 +675,17 @@ TypeKind typekind_from_name(const char *name) {
     if (strcmp(name, "nil") == 0) return TY_NIL;
     if (strcmp(name, "bool") == 0) return TY_BOOL;
     if (strcmp(name, "int") == 0) return TY_INT;
+    if (strcmp(name, "int64") == 0) return TY_INT;      /* alias */
     if (strcmp(name, "float") == 0) return TY_FLOAT;
+    if (strcmp(name, "float64") == 0) return TY_FLOAT;  /* alias */
+    if (strcmp(name, "int8") == 0) return TY_INT8;
+    if (strcmp(name, "int16") == 0) return TY_INT16;
+    if (strcmp(name, "int32") == 0) return TY_INT32;
+    if (strcmp(name, "uint8") == 0) return TY_UINT8;
+    if (strcmp(name, "uint16") == 0) return TY_UINT16;
+    if (strcmp(name, "uint32") == 0) return TY_UINT32;
+    if (strcmp(name, "uint64") == 0) return TY_UINT64;
+    if (strcmp(name, "float32") == 0) return TY_FLOAT32;
     if (strcmp(name, "cstr") == 0) return TY_CSTR;
     if (strcmp(name, "ptr-void") == 0 || strcmp(name, "ptr<void>") == 0) return TY_PTR_VOID;
     if (strcmp(name, "fn") == 0) return TY_FN;

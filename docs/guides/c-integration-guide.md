@@ -75,8 +75,18 @@ is no validation against an actual header file.
 
 | Turmeric type | Generated C type | Notes |
 |---------------|-----------------|-------|
-| `:int`        | `int64_t`       | All integers are 64-bit |
-| `:float`      | `double`        | All floats are `double` |
+| `:int`        | `int64_t`       | Alias for `int64` |
+| `:int8`       | `int8_t`        | −128 … 127 |
+| `:int16`      | `int16_t`       | −32 768 … 32 767 |
+| `:int32`      | `int32_t`       | −2 147 483 648 … 2 147 483 647 |
+| `:int64`      | `int64_t`       | Alias for `int` |
+| `:uint8`      | `uint8_t`       | 0 … 255 |
+| `:uint16`     | `uint16_t`      | 0 … 65 535 |
+| `:uint32`     | `uint32_t`      | 0 … 4 294 967 295 |
+| `:uint64`     | `uint64_t`      | 0 … 18 446 744 073 709 551 615 |
+| `:float`      | `double`        | Alias for `float64` |
+| `:float32`    | `float`         | IEEE 754 single-precision |
+| `:float64`    | `double`        | IEEE 754 double-precision |
 | `:bool`       | `bool`          | `<stdbool.h>` |
 | `:cstr`       | `const char *`  | Null-terminated, borrowed |
 | `:ptr`        | `void *`        | Untyped pointer |

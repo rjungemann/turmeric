@@ -60,6 +60,10 @@ typedef struct FormList {
 struct Form {
     FormTag tag;
     Span    span;
+    /* Phase N: For F_INT and F_FLOAT, the explicit numeric type from a suffix
+     * (e.g. 42i8 -> TY_INT8, 3.14f32 -> TY_FLOAT32). TY_UNKNOWN means unsuffixed
+     * (defaults to TY_INT for integers, TY_FLOAT for floats). */
+    int     lit_kind;   /* TypeKind value; int to avoid circular include */
     union {
         bool          b;
         int64_t       i;

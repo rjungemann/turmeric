@@ -12,6 +12,31 @@
 (definstance Eq [bool]
   (eq? [x y] (= x y)))
 
+;; Phase N4: Eq instances for new numeric types
+(definstance Eq [int8]
+  (eq? [x y] (= x y)))
+
+(definstance Eq [int16]
+  (eq? [x y] (= x y)))
+
+(definstance Eq [int32]
+  (eq? [x y] (= x y)))
+
+(definstance Eq [uint8]
+  (eq? [x y] (= x y)))
+
+(definstance Eq [uint16]
+  (eq? [x y] (= x y)))
+
+(definstance Eq [uint32]
+  (eq? [x y] (= x y)))
+
+(definstance Eq [uint64]
+  (eq? [x y] (= x y)))
+
+(definstance Eq [float32]
+  (eq? [x y] (= x y)))
+
 ;; Ord typeclass - ordering
 (defclass Ord [a]
   (lt? [x y] :bool)
@@ -21,6 +46,55 @@
 
 ;; Instances for primitive types
 (definstance Ord [int]
+  (lt? [x y] (< x y))
+  (lte? [x y] (<= x y))
+  (gt? [x y] (> x y))
+  (gte? [x y] (>= x y)))
+
+;; Phase N4: Ord instances for new numeric types
+(definstance Ord [int8]
+  (lt? [x y] (< x y))
+  (lte? [x y] (<= x y))
+  (gt? [x y] (> x y))
+  (gte? [x y] (>= x y)))
+
+(definstance Ord [int16]
+  (lt? [x y] (< x y))
+  (lte? [x y] (<= x y))
+  (gt? [x y] (> x y))
+  (gte? [x y] (>= x y)))
+
+(definstance Ord [int32]
+  (lt? [x y] (< x y))
+  (lte? [x y] (<= x y))
+  (gt? [x y] (> x y))
+  (gte? [x y] (>= x y)))
+
+(definstance Ord [uint8]
+  (lt? [x y] (< x y))
+  (lte? [x y] (<= x y))
+  (gt? [x y] (> x y))
+  (gte? [x y] (>= x y)))
+
+(definstance Ord [uint16]
+  (lt? [x y] (< x y))
+  (lte? [x y] (<= x y))
+  (gt? [x y] (> x y))
+  (gte? [x y] (>= x y)))
+
+(definstance Ord [uint32]
+  (lt? [x y] (< x y))
+  (lte? [x y] (<= x y))
+  (gt? [x y] (> x y))
+  (gte? [x y] (>= x y)))
+
+(definstance Ord [uint64]
+  (lt? [x y] (< x y))
+  (lte? [x y] (<= x y))
+  (gt? [x y] (> x y))
+  (gte? [x y] (>= x y)))
+
+(definstance Ord [float32]
   (lt? [x y] (< x y))
   (lte? [x y] (<= x y))
   (gt? [x y] (> x y))
@@ -36,6 +110,31 @@
 
 (definstance Show [cstr]
   (show [x] x))
+
+;; Phase N4: Show instances for new numeric types (placeholder, same as int)
+(definstance Show [int8]
+  (show [x] :cstr "<int8>"))
+
+(definstance Show [int16]
+  (show [x] :cstr "<int16>"))
+
+(definstance Show [int32]
+  (show [x] :cstr "<int32>"))
+
+(definstance Show [uint8]
+  (show [x] :cstr "<uint8>"))
+
+(definstance Show [uint16]
+  (show [x] :cstr "<uint16>"))
+
+(definstance Show [uint32]
+  (show [x] :cstr "<uint32>"))
+
+(definstance Show [uint64]
+  (show [x] :cstr "<uint64>"))
+
+(definstance Show [float32]
+  (show [x] :cstr "<float32>"))
 
 ;; Num typeclass - numeric operations
 (defclass Num [a]
@@ -53,6 +152,63 @@
   (div [x y] (/ x y))
   (neg [x] (- 0 x)))
 
+;; Phase N4: Num instances for new numeric types
+(definstance Num [int8]
+  (add [x y] (+ x y))
+  (sub [x y] (- x y))
+  (mul [x y] (* x y))
+  (div [x y] (/ x y))
+  (neg [x] (- 0i8 x)))
+
+(definstance Num [int16]
+  (add [x y] (+ x y))
+  (sub [x y] (- x y))
+  (mul [x y] (* x y))
+  (div [x y] (/ x y))
+  (neg [x] (- 0i16 x)))
+
+(definstance Num [int32]
+  (add [x y] (+ x y))
+  (sub [x y] (- x y))
+  (mul [x y] (* x y))
+  (div [x y] (/ x y))
+  (neg [x] (- 0i32 x)))
+
+(definstance Num [uint8]
+  (add [x y] (+ x y))
+  (sub [x y] (- x y))
+  (mul [x y] (* x y))
+  (div [x y] (/ x y))
+  (neg [x] (- 0u8 x)))
+
+(definstance Num [uint16]
+  (add [x y] (+ x y))
+  (sub [x y] (- x y))
+  (mul [x y] (* x y))
+  (div [x y] (/ x y))
+  (neg [x] (- 0u16 x)))
+
+(definstance Num [uint32]
+  (add [x y] (+ x y))
+  (sub [x y] (- x y))
+  (mul [x y] (* x y))
+  (div [x y] (/ x y))
+  (neg [x] (- 0u32 x)))
+
+(definstance Num [uint64]
+  (add [x y] (+ x y))
+  (sub [x y] (- x y))
+  (mul [x y] (* x y))
+  (div [x y] (/ x y))
+  (neg [x] (- 0u64 x)))
+
+(definstance Num [float32]
+  (add [x y] (+ x y))
+  (sub [x y] (- x y))
+  (mul [x y] (* x y))
+  (div [x y] (/ x y))
+  (neg [x] (- 0.0f32 x)))
+
 ;; Phase B1: Clone typeclass - deep copy of a value
 (defclass Clone [a]
   (clone [x] :int))
@@ -65,6 +221,31 @@
   (clone [x] x))
 
 (definstance Clone [cstr]
+  (clone [x] x))
+
+;; Phase N4: Clone instances for new numeric types (all are trivially copyable)
+(definstance Clone [int8]
+  (clone [x] x))
+
+(definstance Clone [int16]
+  (clone [x] x))
+
+(definstance Clone [int32]
+  (clone [x] x))
+
+(definstance Clone [uint8]
+  (clone [x] x))
+
+(definstance Clone [uint16]
+  (clone [x] x))
+
+(definstance Clone [uint32]
+  (clone [x] x))
+
+(definstance Clone [uint64]
+  (clone [x] x))
+
+(definstance Clone [float32]
   (clone [x] x))
 
 ;;; SINCE: Phase HKT H3

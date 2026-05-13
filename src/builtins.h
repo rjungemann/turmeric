@@ -14,10 +14,12 @@ typedef enum BuiltinShape {
     BS_VARIADIC_FOLD,    /* "((a) <op> (b)) <op> (c) ..." (left-fold) */
     BS_PREFIX_UNARY,     /* "<op>(a)" */
     BS_PREFIX_UNARY_FREE,/* "free(a)" - special case for ref drop */
-    BS_PRINTLN_INT,      /* printf("%lld\n", x)         */
-    BS_PRINTLN_FLOAT,    /* printf("%.15g\n", x)       */
-    BS_PRINTLN_BOOL,     /* puts(x ? "true" : "false")  */
-    BS_PRINTLN_CSTR,     /* puts(x)                     */
+    BS_PRINTLN_INT,      /* printf("%lld\n", (long long)(x))           */
+    BS_PRINTLN_FLOAT,    /* printf("%g\n", x)                          */
+    BS_PRINTLN_BOOL,     /* puts(x ? "true" : "false")                 */
+    BS_PRINTLN_CSTR,     /* puts(x)                                    */
+    BS_PRINTLN_UINT,     /* printf("%llu\n", (unsigned long long)(x))  */
+    BS_PRINTLN_FLOAT32,  /* printf("%.7g\n", (double)(x))              */
     BS_DIV_CHECK,        /* Division with zero check: (a / b) with runtime check */
     BS_AND_SC,           /* short-circuit (handled in codegen)   */
     BS_OR_SC,            /* short-circuit (handled in codegen)   */

@@ -1,0 +1,2 @@
+; Phase N8: numeric type mismatch should suggest as-cast
+(println (+ 42 10i8))

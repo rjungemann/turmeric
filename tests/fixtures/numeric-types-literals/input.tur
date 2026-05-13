@@ -1,0 +1,13 @@
+; Phase N1: literal suffix syntax for all new numeric types
+(println 42i8)
+(println 127i8)
+(println 1000i16)
+(println 32767i16)
+(println 1000000i32)
+(println 2147483647i32)
+(println 42i64)
+(println 255u8)
+(println 65535u16)
+(println 4294967295u32)
+(println 100u64)
+(println 3.14f32)

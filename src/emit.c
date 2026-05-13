@@ -495,11 +495,22 @@ static void emit_c_string(Buf *out, StrSlice s) {
 
 static char *atom_nil(void)         { return strdup("((void)0)"); }
 static char *atom_bool(bool b)      { return strdup(b ? "true" : "false"); }
-static char *atom_int(int64_t i) {
-    char buf[40];
-    snprintf(buf, sizeof buf, "INT64_C(%lld)", (long long)i);
+/* Phase N: type-dispatched integer literal emitter */
+static char *atom_int_typed(TypeKind k, int64_t i) {
+    char buf[64];
+    switch (k) {
+        case TY_INT8:   snprintf(buf, sizeof buf, "INT8_C(%lld)",   (long long)i); break;
+        case TY_INT16:  snprintf(buf, sizeof buf, "INT16_C(%lld)",  (long long)i); break;
+        case TY_INT32:  snprintf(buf, sizeof buf, "INT32_C(%lld)",  (long long)i); break;
+        case TY_UINT8:  snprintf(buf, sizeof buf, "UINT8_C(%llu)",  (unsigned long long)(uint64_t)i); break;
+        case TY_UINT16: snprintf(buf, sizeof buf, "UINT16_C(%llu)", (unsigned long long)(uint64_t)i); break;
+        case TY_UINT32: snprintf(buf, sizeof buf, "UINT32_C(%llu)", (unsigned long long)(uint64_t)i); break;
+        case TY_UINT64: snprintf(buf, sizeof buf, "UINT64_C(%llu)", (unsigned long long)(uint64_t)i); break;
+        default:        snprintf(buf, sizeof buf, "INT64_C(%lld)",  (long long)i); break;
+    }
     return strdup(buf);
 }
+
 static char *atom_float(double f) {
     char buf[64];
     snprintf(buf, sizeof buf, "%.15g", f);
@@ -511,6 +522,16 @@ static char *atom_float(double f) {
         strcat(buf, ".0");
     }
     return strdup(buf);
+}
+
+/* Phase N: type-dispatched float literal emitter */
+static char *atom_float_typed(TypeKind k, double f) {
+    if (k == TY_FLOAT32) {
+        char buf[64];
+        snprintf(buf, sizeof buf, "(float)(%.7g)", f);
+        return strdup(buf);
+    }
+    return atom_float(f);
 }
 static char *atom_var(EmitCtx *ctx, const Binding *b) {
     return name_for_binding(ctx, b);
@@ -562,7 +583,9 @@ static char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
     if (spec->shape == BS_PRINTLN_INT ||
         spec->shape == BS_PRINTLN_FLOAT ||
         spec->shape == BS_PRINTLN_BOOL ||
-        spec->shape == BS_PRINTLN_CSTR) {
+        spec->shape == BS_PRINTLN_CSTR ||
+        spec->shape == BS_PRINTLN_UINT ||
+        spec->shape == BS_PRINTLN_FLOAT32) {
         char *arg = emit_value(ctx, body, args[0]);
         indent_buf(body, ctx->indent);
         switch (spec->shape) {
@@ -577,6 +600,12 @@ static char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
                 break;
             case BS_PRINTLN_CSTR:
                 buf_printf(body, "puts(%s);\n", arg);
+                break;
+            case BS_PRINTLN_UINT:
+                buf_printf(body, "printf(\"%%llu\\n\", (unsigned long long)(%s));\n", arg);
+                break;
+            case BS_PRINTLN_FLOAT32:
+                buf_printf(body, "printf(\"%%.7g\\n\", (double)(%s));\n", arg);
                 break;
             default: break;
         }
@@ -1538,10 +1567,22 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     switch (e->kind) {
         case EX_NIL_LIT:  return atom_nil();
         case EX_BOOL_LIT: return atom_bool(e->as.b);
-        case EX_INT_LIT:  return atom_int(e->as.i);
-        case EX_FLOAT_LIT: return atom_float(e->as.f);
+        case EX_INT_LIT:   return atom_int_typed(e->type.kind, e->as.i);
+        case EX_FLOAT_LIT: return atom_float_typed(e->type.kind, e->as.f);
         case EX_CSTR_LIT: return atom_cstr(e->as.s);
         case EX_VAR:      return atom_var(ctx, e->as.var.binding);
+        case EX_CAST: {
+            /* (as TargetType expr) — emit as C cast: (target_c_type)(inner) */
+            char *inner = emit_value(ctx, body, e->as.cast_.expr);
+            Type target = type_simple(e->as.cast_.target_kind, CK_COPY);
+            Buf out; buf_init(&out);
+            buf_printf(&out, "((%s)(%s))", type_c_name(target), inner);
+            buf_putc(&out, '\0');
+            free(inner);
+            char *result = strdup(out.data);
+            buf_free(&out);
+            return result;
+        }
         case EX_LET:      return emit_let_value(ctx, body, e);
         case EX_IF:       return emit_if_value(ctx, body, e);
         case EX_DO:       return emit_do_value(ctx, body, e);
@@ -3668,6 +3709,7 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
     switch (e->kind) {
         case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:
         case EX_FLOAT_LIT: case EX_CSTR_LIT: case EX_VAR:
+        case EX_CAST:       /* pure expression, no stmt-level side effects */
         case EX_TYPECLASS_DEF:
         case EX_DEFMODULE: /* Phase M0: module metadata — nothing to emit */
         case EX_PANIC_PAYLOAD_TYPE:
@@ -4477,6 +4519,15 @@ int emit_program(Buf *out, const Expr *program) {
                     case TY_RC:
                     case TY_WEAK:     ctype = "RcControlBlock *"; break;
                     case TY_REF:      ctype = "void *"; break;
+                    /* Phase N6: new numeric field types */
+                    case TY_INT8:     ctype = "int8_t"; break;
+                    case TY_INT16:    ctype = "int16_t"; break;
+                    case TY_INT32:    ctype = "int32_t"; break;
+                    case TY_UINT8:    ctype = "uint8_t"; break;
+                    case TY_UINT16:   ctype = "uint16_t"; break;
+                    case TY_UINT32:   ctype = "uint32_t"; break;
+                    case TY_UINT64:   ctype = "uint64_t"; break;
+                    case TY_FLOAT32:  ctype = "float"; break;
                     default:          ctype = "int64_t"; break;
                 }
                 char *mfn = mangle_field_name(f->name);

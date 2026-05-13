@@ -166,6 +166,8 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
         case EX_FLOAT_LIT:
         case EX_CSTR_LIT:
             return true;
+        case EX_CAST:
+            return borrow_check_expr_recursive(ctx, e->as.cast_.expr);
             
         case EX_VAR:
             return borrow_check_var(ctx, e);

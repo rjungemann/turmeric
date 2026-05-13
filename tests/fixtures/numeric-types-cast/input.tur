@@ -1,0 +1,12 @@
+; Phase N2: explicit as-casts between numeric types
+(println (as int8 42))
+(println (as int16 42))
+(println (as int32 42))
+(println (as uint8 200))
+(println (as uint16 1000))
+(println (as uint32 100000))
+(println (as uint64 999999))
+(println (as float32 3))
+(println (as int32 42i8))
+(println (as int64 42i32))
+(println (as float32 (as int8 -128)))
