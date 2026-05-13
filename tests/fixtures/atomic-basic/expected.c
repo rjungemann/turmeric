@@ -333,6 +333,17 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
 /* Phase 19: Algebraic effect handler chain */
 typedef struct { bool consumed; void *origin_fiber; } TurContK;
 
+/* Phase 19D: Effect-capture continuation context */
+typedef struct TurEffectCaptureCtx TurEffectCaptureCtx;
+struct TurEffectCaptureCtx {
+    bool has_pending_effect;
+    const char *eff_name;
+    int64_t eff_args[8];  /* v1: max 8 args */
+    int eff_n_args;
+    int64_t (*dispatch)(void *ctx, int64_t k, int64_t v);
+    void *body_env;  /* heap-allocated env for body captures */
+};
+
 typedef struct EffectHandlerCase EffectHandlerCase;
 struct EffectHandlerCase {
     const char *effect_name;
@@ -370,6 +381,7 @@ struct FiberBlock {
     bool cancelled; /* Set when parent TaskGroup is cancelled */
     jmp_buf panic_jmpbuf; /* Per-fiber panic recovery buffer */
     bool panic_jmpbuf_valid; /* Whether this fiber's panic handler is active */
+    void *eff_ctx;  /* Phase 19D: NULL for regular fibers, TurEffectCaptureCtx* for effect-capture fibers */
 };
 
 static __thread FiberBlock *tur_current_fiber = NULL;
@@ -495,6 +507,19 @@ static void tur_fiber_block_yield(int64_t value) {
     if (!f) { fprintf(stderr, "fiber-yield: not in fiber\n"); abort(); }
     f->result = value;
     swapcontext(&f->ctx, &f->caller_ctx);
+}
+
+/* Phase 19D: Effect-capture continuation helpers */
+static int64_t tur_effect_cont_resume(int64_t k_as_int64, int64_t v) {
+    FiberBlock *fiber = (FiberBlock *)(intptr_t)k_as_int64;
+    TurEffectCaptureCtx *ctx = (TurEffectCaptureCtx *)fiber->eff_ctx;
+    if (!ctx) { fprintf(stderr, "continuation error: not a capturable continuation\n"); abort(); }
+    return ctx->dispatch(ctx, k_as_int64, v);
+}
+
+static bool tur_effect_cont_valid(int64_t k_as_int64) {
+    FiberBlock *fiber = (FiberBlock *)(intptr_t)k_as_int64;
+    return !fiber->done;
 }
 
 typedef struct FiberLocalEntry FiberLocalEntry;
@@ -914,6 +939,150 @@ static int64_t tur_next_timer_wait_us(void) {
     return diff > 0 ? diff : 0;
 }
 
+/* Phase T24: Timer wheel */
+#define TUR_WHEEL_SLOTS 256
+#define TUR_WHEEL_SLOT_MASK 255
+typedef void (*tur_timer_cb_t)(void *);
+typedef struct TurTimerNode TurTimerNode;
+struct TurTimerNode {
+    int64_t deadline_ms;
+    tur_timer_cb_t callback;
+    void *arg;
+    bool cancelled;
+    TurTimerNode *next;
+    TurTimerNode *prev;
+};
+typedef struct {
+    TurTimerNode *slots[TUR_WHEEL_SLOTS];
+    int64_t current_ms;
+    pthread_mutex_t lock;
+    bool running;
+    pthread_t thread;
+} TurTimerWheel;
+
+static int64_t tur_wheel_now_ms(void) {
+    struct timespec _ts;
+    clock_gettime(CLOCK_MONOTONIC, &_ts);
+    return (int64_t)_ts.tv_sec * 1000LL + (int64_t)_ts.tv_nsec / 1000000LL;
+}
+
+static void tur_timer_wheel_tick(TurTimerWheel *w) {
+    if (!w) return;
+    int64_t now = tur_wheel_now_ms();
+    int64_t elapsed = now - w->current_ms;
+    if (elapsed <= 0) return;
+    for (int64_t _t = 0; _t < elapsed; _t++) {
+        w->current_ms++;
+        int _slot = (int)(w->current_ms & TUR_WHEEL_SLOT_MASK);
+        TurTimerNode *_to_fire = NULL;
+        pthread_mutex_lock(&w->lock);
+        TurTimerNode **_pp = &w->slots[_slot];
+        while (*_pp) {
+            TurTimerNode *_n = *_pp;
+            if (_n->cancelled) {
+                *_pp = _n->next;
+                if (_n->next) _n->next->prev = _n->prev;
+                free(_n);
+            } else if (_n->deadline_ms <= w->current_ms) {
+                *_pp = _n->next;
+                if (_n->next) _n->next->prev = _n->prev;
+                _n->next = _to_fire; _to_fire = _n;
+            } else { _pp = &_n->next; }
+        }
+        pthread_mutex_unlock(&w->lock);
+        while (_to_fire) {
+            TurTimerNode *_nx = _to_fire->next;
+            _to_fire->callback(_to_fire->arg);
+            free(_to_fire);
+            _to_fire = _nx;
+        }
+    }
+}
+
+static void *tur_timer_wheel_ticker(void *raw) {
+    TurTimerWheel *w = (TurTimerWheel *)raw;
+    while (w->running) {
+        struct timespec _ts2 = { .tv_sec = 0, .tv_nsec = 1000000L };
+        nanosleep(&_ts2, NULL);
+        tur_timer_wheel_tick(w);
+    }
+    return NULL;
+}
+
+static TurTimerWheel *tur_timer_wheel_new(void) {
+    TurTimerWheel *w = (TurTimerWheel *)calloc(1, sizeof(TurTimerWheel));
+    if (!w) { fprintf(stderr, "timer-wheel: oom\n"); abort(); }
+    pthread_mutex_init(&w->lock, NULL);
+    w->current_ms = tur_wheel_now_ms();
+    w->running = true;
+    pthread_create(&w->thread, NULL, tur_timer_wheel_ticker, w);
+    return w;
+}
+
+static void tur_timer_wheel_free(TurTimerWheel *w) {
+    if (!w) return;
+    w->running = false;
+    pthread_join(w->thread, NULL);
+    for (int _i = 0; _i < TUR_WHEEL_SLOTS; _i++) {
+        TurTimerNode *_n = w->slots[_i];
+        while (_n) { TurTimerNode *_nx = _n->next; free(_n); _n = _nx; }
+    }
+    pthread_mutex_destroy(&w->lock);
+    free(w);
+}
+
+static TurTimerNode *tur_timer_wheel_insert(TurTimerWheel *w, int64_t delay_ms,
+                                              tur_timer_cb_t cb, void *arg) {
+    if (!w || !cb) return NULL;
+    TurTimerNode *node = (TurTimerNode *)calloc(1, sizeof(TurTimerNode));
+    if (!node) { fprintf(stderr, "timer-node: oom\n"); abort(); }
+    node->deadline_ms = tur_wheel_now_ms() + delay_ms;
+    node->callback = cb; node->arg = arg; node->cancelled = false;
+    int _sl = (int)(node->deadline_ms & TUR_WHEEL_SLOT_MASK);
+    pthread_mutex_lock(&w->lock);
+    node->next = w->slots[_sl]; node->prev = NULL;
+    if (w->slots[_sl]) w->slots[_sl]->prev = node;
+    w->slots[_sl] = node;
+    pthread_mutex_unlock(&w->lock);
+    return node;
+}
+
+static void tur_timer_wheel_cancel(TurTimerNode *node) {
+    if (node) node->cancelled = true;
+}
+
+/* Phase T24: Timer fire context for recording ordered callbacks */
+typedef struct {
+    pthread_mutex_t lock;
+    pthread_cond_t  cond;
+    int             order[16]; /* ids in fire order */
+    int             count;     /* timers fired so far */
+    int             expected;  /* total to wait for   */
+} TurTimerFireCtx;
+
+/* arg must point to int64_t[2]: { ptr-as-int64 to TurTimerFireCtx, timer-id } */
+static void tur_timer_fire_cb(void *arg) {
+    int64_t *pair = (int64_t *)arg;
+    TurTimerFireCtx *ctx = (TurTimerFireCtx *)(intptr_t)pair[0];
+    int id = (int)pair[1];
+    pthread_mutex_lock(&ctx->lock);
+    if (ctx->count < 16) ctx->order[ctx->count] = id;
+    ctx->count++;
+    if (ctx->count >= ctx->expected) pthread_cond_broadcast(&ctx->cond);
+    pthread_mutex_unlock(&ctx->lock);
+}
+
+/* Global timer wheel (created on first use) */
+static TurTimerWheel *tur_global_timer_wheel = NULL;
+static pthread_once_t tur_timer_wheel_once = PTHREAD_ONCE_INIT;
+static void tur_timer_wheel_init_once(void) {
+    tur_global_timer_wheel = tur_timer_wheel_new();
+}
+static TurTimerWheel *tur_get_timer_wheel(void) {
+    pthread_once(&tur_timer_wheel_once, tur_timer_wheel_init_once);
+    return tur_global_timer_wheel;
+}
+
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif
@@ -1043,6 +1212,20 @@ static int64_t tur_effect_perform(const char *name, int64_t *args, int n_args) {
     while (frame) {
         for (int __i = 0; __i < frame->n_cases; __i++) {
             if (strcmp(frame->cases[__i].effect_name, name) == 0) {
+                if (frame->cases[__i].handler_fn == NULL) {
+                    /* Phase 19D: intercept case - yield fiber to parent dispatch loop */
+                    FiberBlock *__cur = tur_current_fiber;
+                    if (!__cur || !__cur->eff_ctx) { fprintf(stderr, "Unhandled effect: %s\n", name); abort(); }
+                    TurEffectCaptureCtx *__cap = (TurEffectCaptureCtx *)__cur->eff_ctx;
+                    __cap->eff_name = name;
+                    int __cn = n_args < 8 ? n_args : 8;
+                    for (int __ai = 0; __ai < __cn; __ai++) __cap->eff_args[__ai] = args[__ai];
+                    __cap->eff_n_args = n_args;
+                    __cap->has_pending_effect = true;
+                    tur_fiber_block_yield(0);
+                    __cap->has_pending_effect = false;
+                    return __cur->arg;
+                }
                 TurContK __fresh_k = {false, tur_current_fiber};
                 return frame->cases[__i].handler_fn(args, n_args, (int64_t)(intptr_t)&__fresh_k, frame->cases[__i].env);
             }
@@ -1402,13 +1585,13 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
-static void * array_get(void *, int64_t);
-static int64_t array_set(void *, int64_t, int64_t);
-static void * array_slice(void *, int64_t, int64_t);
-static void * with_c_string(const char *, int64_t);
-static const char * from_c_string(const char *);
-static void * box(int64_t);
-static int64_t unbox(int64_t);
+void * array_get(void *, int64_t);
+int64_t array_set(void *, int64_t, int64_t);
+void * array_slice(void *, int64_t, int64_t);
+void * with_c_string(const char *, int64_t);
+const char * from_c_string(const char *);
+void * box(int64_t);
+int64_t unbox(int64_t);
 static void * atomic_new(int64_t);
 static int64_t atomic_load(void *);
 static void atomic_store_(void *, int64_t);
@@ -1418,7 +1601,7 @@ static int64_t atomic_swap_(void *, int64_t);
 static bool atomic_cas_(void *, int64_t, int64_t);
 static void atomic_free(void *);
 
-static void * array_get(void * arr, int64_t idx) {
+void * array_get(void * arr, int64_t idx) {
         struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
   int64_t *array = (int64_t *)arr;
   if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
@@ -1432,7 +1615,7 @@ static void * array_get(void * arr, int64_t idx) {
   
 }
 
-static int64_t array_set(void * arr, int64_t idx, int64_t value) {
+int64_t array_set(void * arr, int64_t idx, int64_t value) {
         int64_t *array = (int64_t *)arr;
   if (idx >= 0 && (size_t)idx < 1024) {  /* v1: use a reasonable upper bound */
     array[idx] = value;
@@ -1442,7 +1625,7 @@ static int64_t array_set(void * arr, int64_t idx, int64_t value) {
   
 }
 
-static void * array_slice(void * arr, int64_t start, int64_t len) {
+void * array_slice(void * arr, int64_t start, int64_t len) {
         /* For v1, we return a new struct containing ptr and len */
   struct { void *ptr; size_t len; } *slice = malloc(sizeof(*slice));
   slice->ptr = (char *)arr + start * sizeof(int64_t);
@@ -1451,25 +1634,25 @@ static void * array_slice(void * arr, int64_t start, int64_t len) {
   
 }
 
-static void * with_c_string(const char * s, int64_t f) {
+void * with_c_string(const char * s, int64_t f) {
         /* For v1, we just call f with s directly since cstr is already a C string */
   int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
   return (void *)(intptr_t)fn(s);
   
 }
 
-static const char * from_c_string(const char * s) {
+const char * from_c_string(const char * s) {
         return s;
 }
 
-static void * box(int64_t v) {
+void * box(int64_t v) {
         int64_t *boxed = malloc(sizeof(int64_t));
   *boxed = v;
   return boxed;
   
 }
 
-static int64_t unbox(int64_t p) {
+int64_t unbox(int64_t p) {
         int64_t *boxed = (int64_t *)p;
   return *boxed;
   

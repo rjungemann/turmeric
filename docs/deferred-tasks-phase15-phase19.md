@@ -344,8 +344,12 @@ After prerequisites are complete, execute these implementation tasks.
   - Done: handler case bodies are emitted as top-level C static functions (`__effect_handler_N`), giving them their own scope. A handler case parameter (e.g., `x`) correctly shadows any outer `let` binding with the same name because the outer scope is not in scope inside the emitted C function. Fixture `tests/fixtures/effect-handler-shadow/` verifies: outer `x=1000`, handler `x=7` (effect arg), result `7*2=14`.
 - [x] Ensure continuation binding `k` is fresh per handler case.
   - Implemented (P19-5): each handler invocation allocates a fresh `TurContK` on the stack and passes its address as `k`. `EX_RESUME` and `EX_DISCONTINUE` mark it consumed; `cont?` checks the consumed flag.
-- [ ] Implement deep-handler continuation capture semantics.
-  - Deferred: requires multi-shot continuation support (CPS pass or `setjmp`-based `clone`). Depends on Phase B2 (Cloneable continuation runtime).
+- [x] Implement deep-handler continuation capture semantics.
+  - Implemented (P19D-fiber): Uses fiber infrastructure from Phase T21. Each `handle` form runs its body in a dedicated `FiberBlock`. When the body performs an effect, the fiber yields to the parent; the handler case receives `k` as a `FiberBlock*` (cast to `int64_t`). Deferred resumption is supported: `k` can be stored and resumed after the handler returns. `resume k v` calls `tur_effect_cont_resume`, `cont? k` calls `tur_effect_cont_valid`, and `discontinue k e` marks the fiber done and throws.
+  - Handler cases with `handler_fn == NULL` act as intercept markers; `tur_effect_perform` yields the current fiber when it sees such a case, storing the effect name/args in a `TurEffectCaptureCtx` attached to the fiber.
+  - Outer variables referenced in the handle body are captured into a heap-allocated env struct (analogous to closure capture), collected by `collect_handle_captures` in `emit.c`.
+  - Known limitation: single-shot only (no multi-shot / cloneable continuations). Full multi-shot support still requires Phase B2 (CPS or `setjmp`-based clone).
+  - Fixture: `tests/fixtures/effect-capture-k/` — stores `k` from an `Ask` handler and resumes it after the handler returns; output `0\n10\n`.
 
 #### E) Stdlib effects and handlers
 - [x] Implement `Read` effect.
