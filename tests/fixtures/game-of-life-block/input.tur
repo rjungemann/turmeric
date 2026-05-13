@@ -1,0 +1,101 @@
+;; Test: Conway's Game of Life block using GridCtx Comonad.
+;; Block is a stable still-life: it does not change under any generation step.
+;; Verifies that extend conway-rule leaves the block pattern unchanged.
+
+(defclass Comonad [^w]
+  (extract   [wa]     :int)
+  (extend    [wa fn]  :int)
+  (duplicate [wa]     :int))
+
+(defn gctx-new [width height] :int
+  ```c
+  typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
+  GCtx *g = malloc(sizeof(GCtx));
+  g->data   = calloc((size_t)(width * height), sizeof(int64_t));
+  g->width  = width; g->height = height; g->cx = 0; g->cy = 0;
+  return (int64_t)(intptr_t)g;
+  ```)
+
+(defn gctx-set [g x y val] :int
+  ```c
+  typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
+  GCtx *p = (GCtx *)(intptr_t)g;
+  if (x >= 0 && x < p->width && y >= 0 && y < p->height) p->data[y * p->width + x] = val;
+  return 0;
+  ```)
+
+(defn gctx-focus [g] :int
+  ```c
+  typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
+  GCtx *p = (GCtx *)(intptr_t)g;
+  return p->data[p->cy * p->width + p->cx];
+  ```)
+
+(defn gctx-print [g] :int
+  ```c
+  typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
+  GCtx *p = (GCtx *)(intptr_t)g;
+  for (int64_t y = 0; y < p->height; y++) {
+    for (int64_t x = 0; x < p->width; x++) putchar(p->data[y * p->width + x] ? '#' : '.');
+    putchar('\n');
+  }
+  return 0;
+  ```)
+
+(defn __gridctx_extend [g fn] :int
+  ```c
+  typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
+  GCtx *src = (GCtx *)(intptr_t)g;
+  int64_t w = src->width, h = src->height;
+  int64_t *out_data = malloc((size_t)(w * h) * sizeof(int64_t));
+  GCtx tmp; tmp.data = src->data; tmp.width = w; tmp.height = h;
+  for (int64_t y = 0; y < h; y++) {
+    for (int64_t x = 0; x < w; x++) {
+      tmp.cx = x; tmp.cy = y;
+      out_data[y * w + x] = ((int64_t(*)(int64_t))(intptr_t)fn)((int64_t)(intptr_t)&tmp);
+    }
+  }
+  GCtx *out = malloc(sizeof(GCtx));
+  out->data = out_data; out->width = w; out->height = h;
+  out->cx = src->cx; out->cy = src->cy;
+  return (int64_t)(intptr_t)out;
+  ```)
+
+(definstance Comonad [gridctx]
+  (extract   [wa]    (gctx-focus wa))
+  (extend    [wa fn] (__gridctx_extend wa fn))
+  (duplicate [wa]    (__gridctx_extend wa (fn [g] g))))
+
+(defn conway-rule [g] :int
+  ```c
+  typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
+  GCtx *p = (GCtx *)(intptr_t)g;
+  int64_t alive = p->data[p->cy * p->width + p->cx];
+  int n = 0;
+  for (int dy = -1; dy <= 1; dy++) {
+    for (int dx = -1; dx <= 1; dx++) {
+      if (dx == 0 && dy == 0) continue;
+      int nx = (int)p->cx + dx, ny = (int)p->cy + dy;
+      if (nx >= 0 && nx < (int)p->width && ny >= 0 && ny < (int)p->height)
+        if (p->data[ny * p->width + nx]) n++;
+    }
+  }
+  if (alive && n < 2) return 0;
+  if (alive && n > 3) return 0;
+  if (alive)          return 1;
+  if (n == 3)         return 1;
+  return 0;
+  ```)
+
+(defn main [] :int
+  (let [g0 (gctx-new 4 4)]
+    (do
+      (gctx-set g0 1 1 1)
+      (gctx-set g0 2 1 1)
+      (gctx-set g0 1 2 1)
+      (gctx-set g0 2 2 1)
+      (gctx-print g0)                         ;; block (stable still-life)
+      (let [g1 (.extend g0 conway-rule)]
+        (do
+          (gctx-print g1)                     ;; must match gen 0
+          0)))))

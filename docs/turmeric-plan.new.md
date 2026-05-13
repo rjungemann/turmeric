@@ -4,7 +4,7 @@
 
 ---
 
-## Progress Summary (Phases 15–19 Complete; HKT v2-targeted; HRT/GADTs/SerialCont added)
+## Progress Summary (Phases 15–19 Complete; HKT v2-targeted; HRT/GADTs/SerialCont/Arrows/Comonads added)
 
 | Phase | Status | Exit Criterion | Notes |
 |---|---|---|---|
@@ -22,8 +22,10 @@
 | G0–G4 | 📋 **Planned (v4)** | Generalized Algebraic Data Types (GADTs) | Five-phase roadmap: plain ADTs with `defdata`/`match` (G0), GADT syntax & AST (G1), type refinement in `match` arms via skolem equalities (G2), first-class equality witnesses `Equal`/`coerce` (G3), integration & polish (G4). Enables typed ASTs, length-indexed vectors, type-safe printf, proof-carrying data. Prerequisites: Phase 15, HRT0–HRT2. See [gadts-plan.md](archive/gadts-plan.md). |
 | R0–R8 | 📋 **Planned (v1 or v2)** | Module system (Racket-style) | Eight-phase roadmap: `module` form & language parameter (R0), `provide` combinators (R1), `require` combinators (R2), phased imports (R3), submodules (R4), separate compilation (R5), language protocol (R6), units & signatures (R7), integration (R8). Enables multi-module files, test co-location, DSL authoring, explicit phase separation, separate compilation. Compare with existing Clojure-style plan. See [module-system-racket-alt-plan.md](module-system-racket-alt-plan.md) for full design. |
 | SC-A–SC-F | 📋 **Planned (v3+)** | Serializable continuations | Six-phase roadmap: `Serializable` typeclass & primitives (SC-A), frame annotation & symbol registry (SC-B), wire format & codec (SC-C), elaborator integration (SC-D), surface syntax & stdlib (SC-E), tests & docs (SC-F). Enables persistent workflows, migrable tasks, checkpointed computations, web-session continuations. Prerequisites: Phases 18–19, B1–B5 recommended. See [serializable-continuations-plan.md](archive/serializable-continuations-plan.md). |
+| AW0–AW13 | 📋 **Planned (v2)** | Arrows & Arrow Categories | Arrow typeclass hierarchy for signal processing, parsing, and effectful computations. Includes `Arrow`, `ArrowChoice`, `ArrowLoop`, `ArrowApply` typeclasses with stdlib instances. See [signal-processing-arrows-plan.md](archive/signal-processing-arrows-plan.md). |
+| CO0–CO5 | 📋 **Planned (v2+)** | Comonads | Comonadic interfaces for contextual computations; `Comonad` typeclass with `extract` and `extend`; `Store` comonad for cells/zipper-like structures; `Traced` comonad for logging; cellular automata applications. See [cellular-automata-comonad-tutorial-plan.md](archive/cellular-automata-comonad-tutorial-plan.md). |
 
-**Last updated:** 2026-05-11 (Phase 19: Algebraic effects v1. HKT roadmap added. STM phases 20–21 added. HAMT phases P1–P4 added. Backtracking phases B1–B5 added. HRT phases HRT0–HRT5 added. GADT phases G0–G4 added. Module system phases R0–R8 added. Serializable-continuation phases SC-A–SC-F added.)
+**Last updated:** 2026-05-13 (Phase 19: Algebraic effects v1 complete. Backtracking B3: list monad stdlib + fixtures complete. Arrows library (arrow.tur, arrow_laws.tur) added with signal processing stdlib. Comonads library (comonad.tur) added with zipper.tur support. Set literal syntax plan added. Cellular automata example with comonads added. HKT roadmap added. STM phases 20–21 added. HAMT phases P1–P4 added. Backtracking phases B1–B5 added. HRT phases HRT0–HRT5 added. GADT phases G0–G4 added. Module system phases R0–R8 added. Serializable-continuation phases SC-A–SC-F added. Arrows phases AW0–AW13 added. Comonads phases CO0–CO5 added.)
 
 ---
 
@@ -1221,7 +1223,7 @@
 
 ## Backtracking with Cloneable Continuations (Phases B1–B5)
 
-**Status:** Planned (v2 stretch goal). Prerequisites: Phase 15 (Typeclasses — `Clone` trait dispatch), Phase 18 (Delimited continuations — `shift`/`reset` substrate), Phase 19 (Algebraic effects — handler infrastructure). See [backtracking-cloneable-continuations-plan.md](archive/backtracking-cloneable-continuations-plan.md) for full design.
+**Status:** Planned (v2 stretch goal). B3 (Backtracking monad) implementation complete with stdlib + 10 fixtures. Prerequisites: Phase 15 (Typeclasses — `Clone` trait dispatch), Phase 18 (Delimited continuations — `shift`/`reset` substrate), Phase 19 (Algebraic effects — handler infrastructure). See [backtracking-cloneable-continuations-plan.md](archive/backtracking-cloneable-continuations-plan.md) for full design.
 
 **Key design decisions:**
 - **Core abstraction:** `cloneable_continuation<T>` — a continuation that can be resumed multiple times. All types captured by the continuation must satisfy the `Clone` typeclass constraint, enforced by the elaborator.
@@ -1344,34 +1346,34 @@
 **Goal:** Implement `Backtrack<T>` as a list-of-thunks monad on top of cloneable continuations. This is a pure library phase — no compiler changes.
 
 **New file** — `stdlib/backtrack.tur`
-- [ ] Define `(defalias Backtrack<T> (-> (list (-> T))))` — a computation yielding zero or more results.
-- [ ] Implement `(defn mzero [] : (Backtrack a))` — empty search; returns `[]`.
-- [ ] Implement `(defn mreturn [x : a] : (Backtrack a))` — single result.
-- [ ] Implement `(defn mplus [^Clone a fs gs : (Backtrack a)] : (Backtrack a))` — concatenate two result streams.
-- [ ] Implement `(defn mbind [^Clone a b f : (-> a (Backtrack b)) xs : (Backtrack a)] : (Backtrack b))` — monadic bind.
-- [ ] Implement `(defn run-backtrack [^Clone a m : (Backtrack a)] : (list a))` — execute and collect all results.
-- [ ] Implement `(defn run-backtrack-depth [^Clone a depth : int, m : (Backtrack a)] : (list a))` — depth-limited version; returns at most `depth` results.
-- [ ] Implement `(defn choice [^Clone a x y : (Backtrack a)] : (Backtrack a))` — try first, then second.
-- [ ] Implement `(defn guard [cond : bool] : (Backtrack unit))` — succeed only if `cond` is true; otherwise `mzero`.
-- [ ] Implement `(defn fresh [^Clone a n : int, f : (-> int (Backtrack a))] : (Backtrack a))` — enumerate `n` alternatives.
-- [ ] Implement `(defn once [^Clone a m : (Backtrack a)] : (Backtrack a))` — take at most one result; cut remaining search.
-- [ ] Implement `(defn interleave [^Clone a xs ys : (Backtrack a)] : (Backtrack a))` — fair interleaving of two streams.
-- [ ] Implement `do`-notation helper macro `(backtrack-do ...)` for sequencing backtracking computations.
+- [x] Define `(defalias Backtrack<T> (-> (list (-> T))))` — a computation yielding zero or more results.
+- [x] Implement `(defn mzero [] : (Backtrack a))` — empty search; returns `[]`.
+- [x] Implement `(defn mreturn [x : a] : (Backtrack a))` — single result.
+- [x] Implement `(defn mplus [^Clone a fs gs : (Backtrack a)] : (Backtrack a))` — concatenate two result streams.
+- [x] Implement `(defn mbind [^Clone a b f : (-> a (Backtrack b)) xs : (Backtrack a)] : (Backtrack b))` — monadic bind.
+- [x] Implement `(defn run-backtrack [^Clone a m : (Backtrack a)] : (list a))` — execute and collect all results.
+- [x] Implement `(defn run-backtrack-depth [^Clone a depth : int, m : (Backtrack a)] : (list a))` — depth-limited version; returns at most `depth` results.
+- [x] Implement `(defn choice [^Clone a x y : (Backtrack a)] : (Backtrack a))` — try first, then second.
+- [x] Implement `(defn guard [cond : bool] : (Backtrack unit))` — succeed only if `cond` is true; otherwise `mzero`.
+- [x] Implement `(defn fresh [^Clone a n : int, f : (-> int (Backtrack a))] : (Backtrack a))` — enumerate `n` alternatives.
+- [x] Implement `(defn once [^Clone a m : (Backtrack a)] : (Backtrack a))` — take at most one result; cut remaining search.
+- [x] Implement `(defn interleave [^Clone a xs ys : (Backtrack a)] : (Backtrack a))` — fair interleaving of two streams.
+- [x] Implement `do`-notation helper macro `(backtrack-do ...)` for sequencing backtracking computations.
 
 **Fixtures** — `tests/fixtures/backtrack/`
-- [ ] `backtrack-basic.tur` — `choice`, `mreturn`, `run-backtrack`; verify both branches returned.
-- [ ] `backtrack-mzero.tur` — `mzero` produces empty result list.
-- [ ] `backtrack-bind.tur` — `mbind` composes two choice computations; verify Cartesian product.
-- [ ] `backtrack-guard.tur` — `guard true` succeeds; `guard false` prunes.
-- [ ] `backtrack-fresh.tur` — `fresh 5 id` produces 5 results `[0 1 2 3 4]`.
-- [ ] `backtrack-depth.tur` — `run-backtrack-depth 3` returns at most 3 results from an infinite search.
-- [ ] `backtrack-once.tur` — `once` returns exactly one result.
-- [ ] `backtrack-interleave.tur` — `interleave` fairly alternates two infinite streams.
-- [ ] `backtrack-nested.tur` — nested `choice` inside `mbind`; verify all combinations.
-- [ ] `backtrack-ref.tur` — backtracking with `ref<T>` state; each branch sees independent state.
-- [ ] Codegen snapshots: `run-backtrack` and `mbind` lowering.
+- [x] `backtrack-basic.tur` — `choice`, `mreturn`, `run-backtrack`; verify both branches returned.
+- [x] `backtrack-mzero.tur` — `mzero` produces empty result list.
+- [x] `backtrack-bind.tur` — `mbind` composes two choice computations; verify Cartesian product.
+- [x] `backtrack-guard.tur` — `guard true` succeeds; `guard false` prunes.
+- [x] `backtrack-fresh.tur` — `fresh 5 id` produces 5 results `[0 1 2 3 4]`.
+- [x] `backtrack-depth.tur` — `run-backtrack-depth 3` returns at most 3 results from an infinite search.
+- [x] `backtrack-once.tur` — `once` returns exactly one result.
+- [x] `backtrack-interleave.tur` — `interleave` fairly alternates two infinite streams.
+- [x] `backtrack-nested.tur` — nested `choice` inside `mbind`; verify all combinations.
+- [x] `backtrack-ref.tur` — backtracking with `ref<T>` state; each branch sees independent state.
+- [x] Codegen snapshots: `run-backtrack` and `mbind` lowering.
 
-**Exit criterion:** all monad combinators work correctly; depth limiting prevents divergence; `ref<T>` state is properly isolated across branches; fixture suite passes.
+**Exit criterion:** ✅ all monad combinators work correctly; depth limiting prevents divergence; `ref<T>` state is properly isolated across branches; 10 fixtures pass.
 
 ---
 
@@ -3064,4 +3066,4 @@ See [module-system-plan.md](module-system-plan.md) for the full task breakdown (
 
 ---
 
-*This plan extends [turmeric-plan.md](turmeric-plan.md). Phases 0–14 are archived in [turmeric-plan.archive.md](turmeric-plan.archive.md). The phase groups detailed here include: Phases 15–19 (completed core features), H0–H6 (Higher-kinded Types), P1–P4 (Persistent Collections/HAMT), B1–B5 (Backtracking/Cloneable Continuations), R0–R8 (Module System — Racket-style alternative), HRT0–HRT5 (Higher-ranked Types), G0–G4 (Generalized Algebraic Data Types), U1–U5 (Unsafe Operations), T19–T21 (Thread Primitives & Fibers), and SC-A–SC-F (Serializable Continuations). Full standalone design documents remain in their respective plan files or in the `archive/` directory.*
+*This plan extends [turmeric-plan.md](turmeric-plan.md). Phases 0–14 are archived in [turmeric-plan.archive.md](turmeric-plan.archive.md). The phase groups detailed here include: Phases 15–19 (completed core features), H0–H6 (Higher-kinded Types), P1–P4 (Persistent Collections/HAMT), B1–B5 (Backtracking/Cloneable Continuations), R0–R8 (Module System — Racket-style alternative), HRT0–HRT5 (Higher-ranked Types), G0–G4 (Generalized Algebraic Data Types), U1–U5 (Unsafe Operations), T19–T21 (Thread Primitives & Fibers), SC-A–SC-F (Serializable Continuations), AW0–AW13 (Arrows & Arrow Categories), and CO0–CO5 (Comonads). Full standalone design documents remain in their respective plan files or in the `archive/` directory.*

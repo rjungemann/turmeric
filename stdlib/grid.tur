@@ -1,0 +1,183 @@
+;; Phase CA2: GridCtx comonad — 2D grid with a focused position.
+;;
+;; GridCtx is a flat row-major array with a current focus (cx, cy).
+;; Comonad extend walks every cell, passing each focused sub-grid to
+;; a rule function — the backbone of cellular automata.
+;;
+;; C struct layout (every inline C block redefines this typedef):
+;;   typedef struct {
+;;     int64_t *data;            -- flat row-major array, width*height elements
+;;     int64_t  width, height;
+;;     int64_t  cx, cy;          -- current focus position
+;;   } GCtx;
+;;
+;; Index formula: data[y * width + x]
+
+;; ── Comonad typeclass ────────────────────────────────────────────────────────
+(defclass Comonad [^w]
+  (extract   [wa]     :int)
+  (extend    [wa fn]  :int)
+  (duplicate [wa]     :int))
+
+;; ── Constructor ───────────────────────────────────────────────────────────────
+
+;; Allocate a zero-filled width×height grid; focus starts at (0, 0).
+(defn grid-new [width height] :int
+  ```c
+  typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
+  GCtx *g = malloc(sizeof(GCtx));
+  g->data   = calloc((size_t)(width * height), sizeof(int64_t));
+  g->width  = width;
+  g->height = height;
+  g->cx = 0;
+  g->cy = 0;
+  return (int64_t)(intptr_t)g;
+  ```)
+
+;; ── Accessors ─────────────────────────────────────────────────────────────────
+
+;; Get value at (x, y); returns 0 if out of bounds.
+(defn grid-get [g x y] :int
+  ```c
+  typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
+  GCtx *p = (GCtx *)(intptr_t)g;
+  if (x < 0 || x >= p->width || y < 0 || y >= p->height) return 0;
+  return p->data[y * p->width + x];
+  ```)
+
+;; Set value at (x, y) in-place; no-op if out of bounds.  Returns 0.
+(defn grid-set [g x y val] :int
+  ```c
+  typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
+  GCtx *p = (GCtx *)(intptr_t)g;
+  if (x < 0 || x >= p->width || y < 0 || y >= p->height) return 0;
+  p->data[y * p->width + x] = val;
+  return 0;
+  ```)
+
+;; Return the value at the current focus (cx, cy).
+(defn grid-focus [g] :int
+  ```c
+  typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
+  GCtx *p = (GCtx *)(intptr_t)g;
+  return p->data[p->cy * p->width + p->cx];
+  ```)
+
+(defn grid-width [g] :int
+  ```c
+  typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
+  return ((GCtx *)(intptr_t)g)->width;
+  ```)
+
+(defn grid-height [g] :int
+  ```c
+  typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
+  return ((GCtx *)(intptr_t)g)->height;
+  ```)
+
+(defn grid-cx [g] :int
+  ```c
+  typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
+  return ((GCtx *)(intptr_t)g)->cx;
+  ```)
+
+(defn grid-cy [g] :int
+  ```c
+  typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
+  return ((GCtx *)(intptr_t)g)->cy;
+  ```)
+
+;; ── Mutation / copy ───────────────────────────────────────────────────────────
+
+;; Deep-copy a grid (new GCtx and new data array; cx/cy preserved).
+(defn grid-clone [g] :int
+  ```c
+  typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
+  GCtx *src = (GCtx *)(intptr_t)g;
+  GCtx *dst  = malloc(sizeof(GCtx));
+  size_t sz  = (size_t)(src->width * src->height) * sizeof(int64_t);
+  dst->data   = malloc(sz);
+  memcpy(dst->data, src->data, sz);
+  dst->width  = src->width;
+  dst->height = src->height;
+  dst->cx     = src->cx;
+  dst->cy     = src->cy;
+  return (int64_t)(intptr_t)dst;
+  ```)
+
+;; ── Neighbourhood ─────────────────────────────────────────────────────────────
+
+;; Count live (non-zero) Moore 8-neighbours at the current focus (cx, cy).
+(defn grid-count-neighbors [g] :int
+  ```c
+  typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
+  GCtx *p = (GCtx *)(intptr_t)g;
+  int count = 0;
+  for (int dy = -1; dy <= 1; dy++) {
+    for (int dx = -1; dx <= 1; dx++) {
+      if (dx == 0 && dy == 0) continue;
+      int nx = (int)p->cx + dx;
+      int ny = (int)p->cy + dy;
+      if (nx >= 0 && nx < (int)p->width && ny >= 0 && ny < (int)p->height) {
+        if (p->data[ny * p->width + nx]) count++;
+      }
+    }
+  }
+  return (int64_t)count;
+  ```)
+
+;; ── Visualisation ─────────────────────────────────────────────────────────────
+
+;; Print grid as ASCII: '#' for live, '.' for dead, newline after each row.
+(defn grid-print [g] :int
+  ```c
+  typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
+  GCtx *p = (GCtx *)(intptr_t)g;
+  for (int64_t y = 0; y < p->height; y++) {
+    for (int64_t x = 0; x < p->width; x++) {
+      putchar(p->data[y * p->width + x] ? '#' : '.');
+    }
+    putchar('\n');
+  }
+  return 0;
+  ```)
+
+;; ── Comonad instance for gridctx ─────────────────────────────────────────────
+;;
+;; extract g     = data[cy * width + cx]
+;; extend f g    = new grid where cell(x,y) = f(g focused at (x,y))
+;; duplicate g   = extend id g
+
+;; extend: walk every (x, y), use a temporary on-stack GCtx sharing the same
+;; data pointer, call fn, collect results into a fresh output grid.
+(defn __gridctx_extend [g fn] :int
+  ```c
+  typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
+  GCtx *src = (GCtx *)(intptr_t)g;
+  int64_t w = src->width, h = src->height;
+  int64_t *out_data = malloc((size_t)(w * h) * sizeof(int64_t));
+  /* Temporary GCtx reused for every cell — shares src->data (read-only during step). */
+  GCtx tmp;
+  tmp.data   = src->data;
+  tmp.width  = w;
+  tmp.height = h;
+  for (int64_t y = 0; y < h; y++) {
+    for (int64_t x = 0; x < w; x++) {
+      tmp.cx = x;
+      tmp.cy = y;
+      out_data[y * w + x] = ((int64_t(*)(int64_t))(intptr_t)fn)((int64_t)(intptr_t)&tmp);
+    }
+  }
+  GCtx *out = malloc(sizeof(GCtx));
+  out->data   = out_data;
+  out->width  = w;
+  out->height = h;
+  out->cx     = src->cx;
+  out->cy     = src->cy;
+  return (int64_t)(intptr_t)out;
+  ```)
+
+(definstance Comonad [gridctx]
+  (extract   [wa]    (grid-focus wa))
+  (extend    [wa fn] (__gridctx_extend wa fn))
+  (duplicate [wa]    (__gridctx_extend wa (fn [g] g))))

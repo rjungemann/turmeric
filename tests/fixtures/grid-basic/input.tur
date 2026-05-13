@@ -1,0 +1,98 @@
+;; Test GridCtx: creation, get/set, clone, width/height accessors.
+
+;; C struct layout shared by all inline C blocks:
+;;   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
+
+(defn grid-new [width height] :int
+  ```c
+  typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
+  GCtx *g = malloc(sizeof(GCtx));
+  g->data   = calloc((size_t)(width * height), sizeof(int64_t));
+  g->width  = width;
+  g->height = height;
+  g->cx = 0;
+  g->cy = 0;
+  return (int64_t)(intptr_t)g;
+  ```)
+
+(defn grid-get [g x y] :int
+  ```c
+  typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
+  GCtx *p = (GCtx *)(intptr_t)g;
+  if (x < 0 || x >= p->width || y < 0 || y >= p->height) return 0;
+  return p->data[y * p->width + x];
+  ```)
+
+(defn grid-set [g x y val] :int
+  ```c
+  typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
+  GCtx *p = (GCtx *)(intptr_t)g;
+  if (x < 0 || x >= p->width || y < 0 || y >= p->height) return 0;
+  p->data[y * p->width + x] = val;
+  return 0;
+  ```)
+
+(defn grid-width [g] :int
+  ```c
+  typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
+  return ((GCtx *)(intptr_t)g)->width;
+  ```)
+
+(defn grid-height [g] :int
+  ```c
+  typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
+  return ((GCtx *)(intptr_t)g)->height;
+  ```)
+
+(defn grid-clone [g] :int
+  ```c
+  typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
+  GCtx *src = (GCtx *)(intptr_t)g;
+  GCtx *dst  = malloc(sizeof(GCtx));
+  size_t sz  = (size_t)(src->width * src->height) * sizeof(int64_t);
+  dst->data   = malloc(sz);
+  memcpy(dst->data, src->data, sz);
+  dst->width  = src->width;
+  dst->height = src->height;
+  dst->cx     = src->cx;
+  dst->cy     = src->cy;
+  return (int64_t)(intptr_t)dst;
+  ```)
+
+(defn grid-print [g] :int
+  ```c
+  typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
+  GCtx *p = (GCtx *)(intptr_t)g;
+  for (int64_t y = 0; y < p->height; y++) {
+    for (int64_t x = 0; x < p->width; x++) {
+      putchar(p->data[y * p->width + x] ? '#' : '.');
+    }
+    putchar('\n');
+  }
+  return 0;
+  ```)
+
+(defn main [] :int
+  (let [g (grid-new 4 3)]
+    (do
+      ;; Verify dimensions
+      (println (grid-width g))   ;; 4
+      (println (grid-height g))  ;; 3
+      ;; Set some values
+      (grid-set g 0 0 1)
+      (grid-set g 3 2 9)
+      (grid-set g 1 1 5)
+      ;; Read them back
+      (println (grid-get g 0 0))  ;; 1
+      (println (grid-get g 3 2))  ;; 9
+      (println (grid-get g 1 1))  ;; 5
+      (println (grid-get g 2 0))  ;; 0  (unset, should be zero)
+      ;; Clone: mutation of clone must not affect original
+      (let [c (grid-clone g)]
+        (do
+          (grid-set c 0 0 99)
+          (println (grid-get g 0 0))  ;; 1  (original unchanged)
+          (println (grid-get c 0 0))  ;; 99 (clone changed)
+          ;; Print original grid
+          (grid-print g)
+          0)))))
