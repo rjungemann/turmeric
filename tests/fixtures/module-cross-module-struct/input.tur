@@ -1,0 +1,8 @@
+;; Demonstrates a struct type defined in one module being constructed
+;; and field-accessed in another via cross-module export.
+(defmodule app
+  (import geom :refer [Point])
+  (defn main [] :int
+    (let [p (make-struct Point 3 4)]
+      (println (+ (.x p) (.y p)))
+      0)))

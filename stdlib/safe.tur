@@ -1,5 +1,12 @@
 ;; Phase U4: Safe standard library wrappers
 ;; Bounds-checked operations that return Option or Result
+;; Phase M7: Wrapped in (defmodule tur/safe ...). Auto-loaded; exports below
+;; remain globally visible without explicit import.
+
+(defmodule tur/safe
+  (export array-get array-set array-slice
+          with-c-string from-c-string
+          box unbox)
 
 ;; ============================================================================
 ;; Bounds-checked array operations
@@ -78,4 +85,4 @@
   ```c
   int64_t *boxed = (int64_t *)p;
   return *boxed;
-  ```)
+  ```))
