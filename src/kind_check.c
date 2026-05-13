@@ -109,13 +109,20 @@ Kind kind_unify(Kind k1, Kind k2, Span span) {
 
 /* Returns the effective kind of a Type value in H1.
  * Primitive scalar types are KIND_STAR.
- * Struct types (user-defined, can wrap an inner type) are KIND_ARROW.
+ * Struct types: concrete structs (def != NULL) are KIND_STAR; opaque type
+ *   constructor references (def == NULL, used in HKT instance declarations)
+ *   are KIND_ARROW.
  * TY_APP: result kind is computed from fn's kind (see kind_of_type_app).
  * TY_REC: kind is KIND_ARROW (recursive type constructors have kind * -> *).
  * All other types default to KIND_STAR in H1. */
 static Kind type_effective_kind(Type t) {
     switch (t.kind) {
-        case TY_STRUCT: return KIND_ARROW;
+        case TY_STRUCT:
+            /* Concrete struct types (with a StructDef) have kind * — they are
+             * fully-applied types like Pair, Error, etc.  Opaque type constructor
+             * references (def == NULL) are used in HKT contexts (e.g. option in
+             * (definstance Functor [option])) and default to KIND_ARROW. */
+            return (t.as.struct_.def != NULL) ? KIND_STAR : KIND_ARROW;
         case TY_REC:    return KIND_ARROW;  /* Phase HKT-P2 */
         case TY_APP:
             /* Phase HKT-P1: result kind depends on fn's kind */
