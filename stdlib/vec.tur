@@ -83,6 +83,50 @@
 (definstance Functor [vec]
   (fmap [container fn] (__functor_vec_fmap container fn)))
 
+;; Monad instance for vec.
+;;   bind :: vec a -> (a -> vec b) -> vec b
+;;   Flatten the result of mapping a vec-returning function over the vec.
+(defn __monad_vec_bind [ma fn] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)ma;
+  if (!v) return 0;  /* none case */
+  /* Collect all elements from applying fn to each element */
+  /* fn: int64_t -> vec pointer (int64_t) */
+  size_t total_len = 0;
+  /* First pass: compute total length */
+  for (size_t i = 0; i < v->len; i++) {
+      int64_t nested_vec_ptr = ((int64_t(*)(int64_t))(intptr_t)fn)(v->data[i]);
+      struct { int64_t *data; size_t len; size_t cap; } *nested =
+          (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)nested_vec_ptr;
+      if (nested) total_len += nested->len;
+  }
+  /* Allocate result vec */
+  struct { int64_t *data; size_t len; size_t cap; } *result =
+      malloc(sizeof(struct { int64_t *data; size_t len; size_t cap; }));
+  if (!result) return 0;
+  result->len = total_len;
+  result->cap = total_len;
+  result->data = malloc(sizeof(int64_t) * total_len);
+  if (!result->data) { free(result); return 0; }
+  /* Second pass: collect elements */
+  size_t out_idx = 0;
+  for (size_t i = 0; i < v->len; i++) {
+      int64_t nested_vec_ptr = ((int64_t(*)(int64_t))(intptr_t)fn)(v->data[i]);
+      struct { int64_t *data; size_t len; size_t cap; } *nested =
+          (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)nested_vec_ptr;
+      if (nested) {
+          for (size_t j = 0; j < nested->len; j++) {
+              result->data[out_idx++] = nested->data[j];
+          }
+      }
+  }
+  return (int64_t)(intptr_t)result;
+  ```)
+
+(definstance Monad [vec]
+  (bind [ma fn] (__monad_vec_bind ma fn)))
+
 ;; Foldable instance for vec.
 ;;   foldl :: (b -> a -> b) -> b -> t a -> b   (left fold, strict)
 ;;   foldr :: (a -> b -> b) -> b -> t a -> b   (right fold)
@@ -113,6 +157,36 @@
 (definstance Foldable [vec]
   (foldl [ta init fn] (__foldable_vec_foldl ta init fn))
   (foldr [ta init fn] (__foldable_vec_foldr ta init fn)))
+
+;; Traversable instance for vec.
+;;   traverse :: (Applicative f) => (a -> f b) -> vec a -> f (vec b)
+;;   In v1, we use the Applicative's pure/ap with int64_t return values.
+;;   This simplifies to: map the function over the vec and collect results.
+;;   For vec as the container, traverse with a vec-returning function is just map + flatten.
+(defn __traversable_vec_traverse [ta fn] :int
+  ```c
+  /* In v1 with int64_t returns, traverse for vec simplifies to map + collect.
+   * We apply fn to each element and assume it returns an int64_t (the "applicative" result).
+   * For vec<vec<T>> this is flatten; for other applicatives the caller handles wrapping.
+   */
+  struct { int64_t *data; size_t len; size_t cap; } *v =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)ta;
+  if (!v) return 0;
+  struct { int64_t *data; size_t len; size_t cap; } *result =
+      malloc(sizeof(struct { int64_t *data; size_t len; size_t cap; }));
+  if (!result) return 0;
+  result->len = v->len;
+  result->cap = v->len;
+  result->data = malloc(sizeof(int64_t) * v->len);
+  if (!result->data) { free(result); return 0; }
+  for (size_t i = 0; i < v->len; i++) {
+      result->data[i] = ((int64_t(*)(int64_t))(intptr_t)fn)(v->data[i]);
+  }
+  return (int64_t)(intptr_t)result;
+  ```)
+
+(definstance Traversable [vec]
+  (traverse [ta fn] (__traversable_vec_traverse ta fn)))
 
 ;; Phase B1: Clone instance for vec
 ;; Deep copies the vec struct and all its elements (v1: int64_t only)

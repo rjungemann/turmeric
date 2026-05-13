@@ -1,5 +1,7 @@
 #include "types.h"
 #include "typeclass.h"  /* Phase 15 */
+#include "kind_check.h"  /* Phase HKT-P1: for kind_of_type_app */
+#include "forms.h"      /* Phase HKT-P1: for Span */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -438,6 +440,30 @@ const char *type_c_name(Type t) {
             return "int64_t";
     }
     return "void";
+}
+
+/* Phase HKT-P1: Type application constructor.
+ * Creates a TY_APP type node with the given fn and arg types.
+ * The result kind is computed using kind_of_type_app. */
+Type type_app(Arena *a, Type fn, Type arg, Span span) {
+    Type t;
+    memset(&t, 0, sizeof(t));
+    t.kind = TY_APP;
+    t.copy_kind = CK_COPY;  /* TY_APP is an opaque handle, copy by value */
+    t.n_lifetimes = 0;
+    t.typeclass_instances = NULL;
+    t.n_typeclass_instances = 0;
+    
+    /* Allocate memory for fn and arg on the arena */
+    t.as.app.fn = (Type *)arena_alloc(a, sizeof(Type));
+    memcpy(t.as.app.fn, &fn, sizeof(Type));
+    t.as.app.arg = (Type *)arena_alloc(a, sizeof(Type));
+    memcpy(t.as.app.arg, &arg, sizeof(Type));
+    
+    /* Compute the result kind */
+    t.hkt_kind = kind_of_type_app(fn, arg, span);
+    
+    return t;
 }
 
 /* Phase HKT-P2: One-step unrolling of a TY_REC type.

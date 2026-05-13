@@ -348,12 +348,48 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
                 return borrow_check_expr_recursive(ctx, e->as.ref_pred_.expr);
             } else if (e->kind == EX_CONT_PRED) {
                 return borrow_check_expr_recursive(ctx, e->as.cont_pred_.expr);
-            } else if (e->kind == EX_ASYNC) {
-                return borrow_check_expr_recursive(ctx, e->as.async_.fn_expr);
-            } else if (e->kind == EX_AWAIT) {
-                return borrow_check_expr_recursive(ctx, e->as.await_.fut_expr);
             }
             return true;
+        
+        case EX_ASYNC: {
+            /* AW-011B-2: Move tracking for async blocks.
+             * When a value is captured by an async block, it is moved into the async context.
+             * Mark all captured bindings as moved. */
+            Expr *fn_expr = e->as.async_.fn_expr;
+            if (fn_expr->kind == EX_FN || fn_expr->kind == EX_CLOSURE) {
+                const struct Closure *cl = NULL;
+                if (fn_expr->kind == EX_CLOSURE) {
+                    cl = fn_expr->as.closure_.closure;
+                } else if (fn_expr->kind == EX_FN) {
+                    cl = fn_expr->as.fn_.closure;
+                }
+                if (cl) {
+                    for (uint8_t i = 0; i < cl->n_captures; i++) {
+                        Binding *cap = cl->captures[i];
+                        if (cap && !cap->is_moved) {
+                            cap->is_moved = true;
+                            cap->moved_at = e->span;
+                        }
+                    }
+                }
+            }
+            return borrow_check_expr_recursive(ctx, e->as.async_.fn_expr);
+        }
+        
+        case EX_AWAIT: {
+            /* AW-012 / AW-011B-1: Enforce Send for values live across await points.
+             * When we reach an await point, all currently live bindings (captured
+             * by the enclosing async closure and not yet moved) must be Send.
+             * Walk the current scope's bindings and check.
+             */
+            /* For now, just recurse into the future expression.
+             * Full Send checking across await points requires tracking which
+             * specific bindings cross each await, which needs Phase 23.
+             * The Send check at async boundary (AW-012 task 1) covers the
+             * common case where non-Send values are captured at all.
+             */
+            return borrow_check_expr_recursive(ctx, e->as.await_.fut_expr);
+        }
             
         case EX_BUILTIN:
             /* Check builtin arguments */

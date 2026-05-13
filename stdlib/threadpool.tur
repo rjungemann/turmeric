@@ -441,3 +441,294 @@ defn thread-pool-free [tp :ptr<void>] :nil
   free(q);
   free(pool);
   ```)
+
+
+;; =============================================================================
+;; Dynamic ThreadPool (Phase T20-D — auto-scaling)
+;; =============================================================================
+
+;; Create a dynamically-scaling ThreadPool with min_threads and max_threads.
+;; Starts with min_threads workers, scales up to max_threads when all are busy.
+defn thread-pool-new-dynamic [min_threads :int max_threads :int] :ptr<void>
+  ```c
+  if (min_threads <= 0 || max_threads < min_threads) {
+      fprintf(stderr, "thread-pool-new-dynamic: 0 < min_threads <= max_threads required\n");
+      abort();
+  }
+  
+  typedef struct {
+      void *queue;
+      pthread_t *threads;
+      int64_t n_threads;
+      int64_t max_threads;
+      volatile int64_t idle_count;
+      volatile int stop_flag;
+  } DynThreadPoolBlock;
+  DynThreadPoolBlock *tp = (DynThreadPoolBlock *)malloc(sizeof(DynThreadPoolBlock));
+  if (!tp) { fprintf(stderr, "thread-pool-new-dynamic: tp oom\n"); abort(); }
+  tp->n_threads = 0;
+  tp->max_threads = (int64_t)max_threads;
+  tp->idle_count = 0;
+  tp->stop_flag = 0;
+  
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count;
+      int64_t cap; int64_t alloc; int closed;
+  } TPQueueBlock;
+  TPQueueBlock *q = (TPQueueBlock *)malloc(sizeof(TPQueueBlock));
+  if (!q) { free(tp); fprintf(stderr, "thread-pool-new-dynamic: q oom\n"); abort(); }
+  pthread_mutex_init(&q->lock, NULL);
+  pthread_cond_init(&q->not_full, NULL);
+  pthread_cond_init(&q->not_empty, NULL);
+  q->alloc = 16;
+  q->buf = (int64_t *)malloc((size_t)q->alloc * sizeof(int64_t));
+  if (!q->buf) {
+      pthread_mutex_destroy(&q->lock);
+      pthread_cond_destroy(&q->not_full);
+      pthread_cond_destroy(&q->not_empty);
+      free(q); free(tp);
+      fprintf(stderr, "thread-pool-new-dynamic: buf oom\n"); abort();
+  }
+  q->head = 0; q->tail = 0; q->count = 0; q->cap = 0; q->closed = 0;
+  tp->queue = (void *)q;
+  
+  tp->threads = (pthread_t *)malloc((size_t)max_threads * sizeof(pthread_t));
+  if (!tp->threads) {
+      free(q->buf);
+      pthread_mutex_destroy(&q->lock);
+      pthread_cond_destroy(&q->not_full);
+      pthread_cond_destroy(&q->not_empty);
+      free(q); free(tp);
+      fprintf(stderr, "thread-pool-new-dynamic: threads oom\n"); abort();
+  }
+  
+  for (int i = 0; i < min_threads; i++) {
+      int rc = pthread_create(&tp->threads[tp->n_threads++], NULL, (void *(*)(void *))tp_dyn_worker, (void *)tp);
+      if (rc != 0) {
+          fprintf(stderr, "thread-pool-new-dynamic: pthread_create failed (%d)\n", rc);
+          abort();
+      }
+  }
+  
+  return (void *)tp;
+  ```)
+
+;; Worker for dynamic thread pool.
+defn tp-dyn-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  typedef struct {
+      void *queue;
+      pthread_t *threads;
+      int64_t n_threads;
+      int64_t max_threads;
+      volatile int64_t idle_count;
+      volatile int stop_flag;
+  } DynThreadPoolBlock;
+  DynThreadPoolBlock *tp = (DynThreadPoolBlock *)arg;
+  
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count;
+      int64_t cap; int64_t alloc; int closed;
+  } TPQueueBlock;
+  TPQueueBlock *q = (TPQueueBlock *)tp->queue;
+  
+  typedef struct {
+      void *(*fn)(void *);
+      void *arg;
+      void *promise_cell;
+  } ThreadPoolTask;
+  
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t ready;
+      int64_t value;
+      int64_t exn;
+      bool is_set;
+      bool is_ok;
+  } FutureCell;
+  
+  #define TP_CLOSED_SENTINEL INT64_MIN
+  
+  pthread_mutex_lock(&q->lock);
+  tp->idle_count++;
+  pthread_cond_broadcast(&q->not_empty);
+  pthread_mutex_unlock(&q->lock);
+  
+  while (1) {
+      int64_t task_ptr;
+      pthread_mutex_lock(&q->lock);
+      while (q->count == 0 && !q->closed)
+          pthread_cond_wait(&q->not_empty, &q->lock);
+      if (q->count == 0 && q->closed) {
+          pthread_mutex_unlock(&q->lock);
+          break;
+      }
+      task_ptr = q->buf[q->head];
+      int64_t mod = (q->cap > 0) ? q->cap : q->alloc;
+      q->head = (q->head + 1) % mod;
+      q->count--;
+      tp->idle_count--;
+      pthread_cond_signal(&q->not_full);
+      pthread_mutex_unlock(&q->lock);
+      
+      if (task_ptr == TP_CLOSED_SENTINEL || task_ptr == 0) break;
+      
+      ThreadPoolTask *task = (ThreadPoolTask *)(uintptr_t)task_ptr;
+      void *result = task->fn(task->arg);
+      
+      FutureCell *fc = (FutureCell *)task->promise_cell;
+      pthread_mutex_lock(&fc->lock);
+      if (!fc->is_set) {
+          fc->value = (int64_t)(uintptr_t)result;
+          fc->is_set = true;
+          fc->is_ok = true;
+          pthread_cond_broadcast(&fc->ready);
+      }
+      pthread_mutex_unlock(&fc->lock);
+      
+      free(task);
+      
+      pthread_mutex_lock(&q->lock);
+      tp->idle_count++;
+      pthread_cond_broadcast(&q->not_empty);
+      pthread_mutex_unlock(&q->lock);
+  }
+  
+  tp->idle_count--;
+  return NULL;
+  ```)
+
+;; Submit a task to the dynamic thread pool. Returns a Future cell.
+defn thread-pool-dynamic-submit [tp :ptr<void> task_fn :ptr<void> task_arg :ptr<void>] :ptr<void>
+  ```c
+  typedef struct {
+      void *queue;
+      pthread_t *threads;
+      int64_t n_threads;
+      int64_t max_threads;
+      volatile int64_t idle_count;
+      volatile int stop_flag;
+  } DynThreadPoolBlock;
+  DynThreadPoolBlock *pool = (DynThreadPoolBlock *)tp;
+  
+  typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
+  FutureCell *fc = (FutureCell *)malloc(sizeof(FutureCell));
+  if (!fc) { fprintf(stderr, "thread-pool-dynamic-submit: fc oom\n"); abort(); }
+  pthread_mutex_init(&fc->lock, NULL);
+  pthread_cond_init(&fc->ready, NULL);
+  fc->is_set = false; fc->is_ok = false; fc->value = 0; fc->exn = 0;
+  
+  typedef struct { void *(*fn)(void *); void *arg; void *promise_cell; } ThreadPoolTask;
+  ThreadPoolTask *task = (ThreadPoolTask *)malloc(sizeof(ThreadPoolTask));
+  if (!task) {
+      pthread_mutex_destroy(&fc->lock);
+      pthread_cond_destroy(&fc->ready);
+      free(fc);
+      fprintf(stderr, "thread-pool-dynamic-submit: task oom\n"); abort();
+  }
+  task->fn = (void *(*)(void *))task_fn;
+  task->arg = task_arg;
+  task->promise_cell = (void *)fc;
+  
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count;
+      int64_t cap; int64_t alloc; int closed;
+  } TPQueueBlock;
+  TPQueueBlock *q = (TPQueueBlock *)pool->queue;
+  pthread_mutex_lock(&q->lock);
+  if (q->cap > 0) {
+      while (q->count == q->cap && !q->closed)
+          pthread_cond_wait(&q->not_full, &q->lock);
+      if (q->closed) { pthread_mutex_unlock(&q->lock); free(task); free(fc); return NULL; }
+      q->buf[q->tail] = (int64_t)(uintptr_t)task;
+      q->tail = (q->tail + 1) % q->cap;
+  } else {
+      if (q->count == q->alloc) {
+          int64_t new_alloc = q->alloc * 2;
+          int64_t *new_buf = (int64_t *)malloc((size_t)new_alloc * sizeof(int64_t));
+          if (!new_buf) { pthread_mutex_unlock(&q->lock); free(task); free(fc); fprintf(stderr, "dyn-submit: grow oom\n"); abort(); }
+          for (int64_t i = 0; i < q->count; i++)
+              new_buf[i] = q->buf[(q->head + i) % q->alloc];
+          free(q->buf);
+          q->buf = new_buf; q->head = 0; q->tail = q->count; q->alloc = new_alloc;
+      }
+      q->buf[q->tail] = (int64_t)(uintptr_t)task;
+      q->tail = (q->tail + 1) % q->alloc;
+  }
+  q->count++;
+  
+  if (pool->idle_count == 0 && pool->n_threads < pool->max_threads) {
+      int rc = pthread_create(&pool->threads[pool->n_threads++], NULL, (void *(*)(void *))tp_dyn_worker, (void *)pool);
+      if (rc != 0) {
+          fprintf(stderr, "thread-pool-dynamic-submit: pthread_create failed (%d)\n", rc);
+          abort();
+      }
+  }
+  
+  pthread_cond_signal(&q->not_empty);
+  pthread_mutex_unlock(&q->lock);
+  
+  return (void *)fc;
+  ```)
+
+;; Shutdown the dynamic thread pool.
+defn thread-pool-dynamic-shutdown [tp :ptr<void>] :nil
+  ```c
+  typedef struct {
+      void *queue;
+      pthread_t *threads;
+      int64_t n_threads;
+      int64_t max_threads;
+      volatile int64_t idle_count;
+      volatile int stop_flag;
+  } DynThreadPoolBlock;
+  DynThreadPoolBlock *pool = (DynThreadPoolBlock *)tp;
+  
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count;
+      int64_t cap; int64_t alloc; int closed;
+  } TPQueueBlock;
+  TPQueueBlock *q = (TPQueueBlock *)pool->queue;
+  pthread_mutex_lock(&q->lock);
+  q->closed = 1;
+  pthread_cond_broadcast(&q->not_empty);
+  pthread_cond_broadcast(&q->not_full);
+  pthread_mutex_unlock(&q->lock);
+  
+  for (int64_t i = 0; i < pool->n_threads; i++) {
+      pthread_join(pool->threads[i], NULL);
+  }
+  ```)
+
+;; Free the dynamic thread pool (must be called after shutdown).
+defn thread-pool-dynamic-free [tp :ptr<void>] :nil
+  ```c
+  typedef struct {
+      void *queue;
+      pthread_t *threads;
+      int64_t n_threads;
+      int64_t max_threads;
+      volatile int64_t idle_count;
+      volatile int stop_flag;
+  } DynThreadPoolBlock;
+  DynThreadPoolBlock *pool = (DynThreadPoolBlock *)tp;
+  
+  free(pool->threads);
+  
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count;
+      int64_t cap; int64_t alloc; int closed;
+  } TPQueueBlock;
+  TPQueueBlock *q = (TPQueueBlock *)pool->queue;
+  pthread_mutex_destroy(&q->lock);
+  pthread_cond_destroy(&q->not_full);
+  pthread_cond_destroy(&q->not_empty);
+  free(q->buf);
+  free(q);
+  free(pool);
+  ```)
