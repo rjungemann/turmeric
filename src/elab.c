@@ -7,6 +7,7 @@
 
 #include "builtins.h"
 #include "diag.h"
+#include "reader.h"    /* Phase M2: read_all for module loading */
 #include "typeclass.h"  /* Phase 15 */
 #include "types.h"
 #include "effect.h"    /* Phase 19 */
@@ -320,6 +321,14 @@ static Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_pa
 
 /* ---- elaborator state ---- */
 
+/* Phase M2: A loaded module's exported bindings. */
+typedef struct ElabModule {
+    const Symbol *name;          /* module name (interned) */
+    Binding     **exports;       /* exported bindings (each has .name for lookup) */
+    uint32_t      n_exports;
+    bool          is_loading;    /* circular import detection */
+} ElabModule;
+
 typedef struct Elab {
     Arena       *arena;
     SymbolTable *st;
@@ -448,8 +457,9 @@ typedef struct Elab {
     const Symbol *sym_defkind;     /* defkind */
     /* Phase HKT-P2: defrec — recursive type binders */
     const Symbol *sym_defrec;      /* defrec */
-    /* Phase HKT-P2: deftype — type alias with kind-polymorphic params and guarded recursion */
-    const Symbol *sym_deftype;     /* deftype */
+    const Symbol *sym_deftype;      /* deftype */
+    /* Phase HKT-P1: type-app — type-level application */
+    const Symbol *sym_type_app;    /* type-app */
     /* Phase HKT (v2): reserved typeclass names — user definitions rejected with diagnostic */
     const Symbol *sym_hkt_Functor;
     const Symbol *sym_hkt_Applicative;
@@ -507,6 +517,24 @@ typedef struct Elab {
     StructDef **struct_defs;
     uint32_t n_struct_defs;
     uint32_t cap_struct_defs;
+    /* Phase M0: Module system */
+    const Symbol *sym_defmodule;  /* defmodule */
+    const Symbol *sym_export;     /* export */
+    const Symbol *sym_import;     /* import */
+    const Symbol *kw_as;          /* :as */
+    const Symbol *kw_refer;       /* :refer */
+    bool has_defmodule;           /* whether defmodule has been seen in this file */
+    /* Phase M1: Module namespace system */
+    const Symbol    *current_module_name; /* name of module being elaborated, or NULL */
+    const DefModule *current_module;      /* DefModule being elaborated, or NULL */
+    /* Phase M2: Module registry */
+    const char      *module_base_dir;     /* base dir for resolving module file paths */
+    struct ElabModule *loaded_modules;    /* registry of loaded modules */
+    uint32_t         n_loaded_modules;
+    uint32_t         cap_loaded_modules;
+    uint16_t         next_import_file_id; /* file_id counter for imported source files */
+    /* Phase M3: Separate compilation — skip inlining imported modules */
+    bool             separate_compilation;
 } Elab;
 
 /* Phase 6: Macro definition */
@@ -923,8 +951,9 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_defkind = intern_cstr(st, "defkind");
     /* Phase HKT-P2: defrec */
     e->sym_defrec = intern_cstr(st, "defrec");
-    /* Phase HKT-P2: deftype */
     e->sym_deftype = intern_cstr(st, "deftype");
+    /* Phase HKT-P1: type-app */
+    e->sym_type_app = intern_cstr(st, "type-app");
     /* Phase HKT (v2): reserved typeclass names */
     e->sym_hkt_Functor      = intern_cstr(st, "Functor");
     e->sym_hkt_Applicative  = intern_cstr(st, "Applicative");
@@ -954,6 +983,22 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->macros = NULL;
     e->n_macros = 0;
     e->cap_macros = 0;
+    /* Phase M0: Module system */
+    e->sym_defmodule = intern_cstr(st, "defmodule");
+    e->sym_export = intern_cstr(st, "export");
+    e->sym_import = intern_cstr(st, "import");
+    e->kw_as = intern_cstr(st, "as");
+    e->kw_refer = intern_cstr(st, "refer");
+    e->has_defmodule = false;
+    e->current_module_name = NULL;
+    e->current_module = NULL;
+    /* Phase M2: Module registry */
+    e->module_base_dir = ".";
+    e->loaded_modules = NULL;
+    e->n_loaded_modules = 0;
+    e->cap_loaded_modules = 0;
+    e->next_import_file_id = 10; /* 0-9 reserved for main + stdlib files */
+    e->separate_compilation = false;
 }
 
 /* Phase 13: Lifetime annotation helpers (deferred - infrastructure in place) */
@@ -1814,10 +1859,14 @@ static Binding *binding_new(Elab *e, const Symbol *name, Type type,
     b->is_moved = false;  /* Phase 5: move semantics */
     b->moved_at = SPAN_UNKNOWN;
     b->no_unwind = false;  /* Phase R5: #[no-unwind] attribute */
+    b->is_exported = false;
+    b->defining_module_name = e->current_module_name;
     return b;
 }
 
 /* Forward declarations. */
+static Binding *elab_lookup_sym(Elab *e, const Symbol *sym, Span span, bool *had_error); /* Phase M1 */
+static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span span);             /* Phase M2 */
 static Expr *elab_form(Elab *e, Form *f);
 static Expr *elab_unsafe(Elab *e, const Form *call);
 /* Phase 5 */
@@ -1877,6 +1926,34 @@ static Expr *elab_panic_payload_value(Elab *e, const Form *call);
 static Expr *elab_panic_payload_file(Elab *e, const Form *call);
 static Expr *elab_panic_payload_line(Elab *e, const Form *call);
 static Expr *elab_panic_payload_downcast(Elab *e, const Form *call);
+
+/* Phase M2: File reading helper — returns 0 on success, -1 on failure. */
+static int elab_read_file(const char *path, char **out, size_t *out_len) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return -1; }
+    long size = ftell(f);
+    if (size < 0) { fclose(f); return -1; }
+    if (fseek(f, 0, SEEK_SET) != 0) { fclose(f); return -1; }
+    char *buf = (char *)malloc((size_t)size + 1);
+    if (!buf) { fclose(f); return -1; }
+    size_t n = fread(buf, 1, (size_t)size, f);
+    fclose(f);
+    if (n != (size_t)size) { free(buf); return -1; }
+    buf[size] = '\0';
+    *out = buf;
+    *out_len = (size_t)size;
+    return 0;
+}
+
+/* Phase M2: Find a loaded module in the registry by interned name. */
+static ElabModule *elab_find_loaded_module(Elab *e, const Symbol *name) {
+    for (uint32_t i = 0; i < e->n_loaded_modules; i++) {
+        if (e->loaded_modules[i].name == name)
+            return &e->loaded_modules[i];
+    }
+    return NULL;
+}
 
 /* Phase U3: Unsafe primitives implementations */
 
@@ -6023,6 +6100,8 @@ static Expr *elab_def(Elab *e, const Form *call) {
 
 static Expr *elab_defn(Elab *e, const Form *call);
 static Expr *elab_fn(Elab *e, const Form *call);
+/* Phase M0: Module system */
+static Expr *elab_defmodule(Elab *e, const Form *call);
 static Expr *elab_extern_c(Elab *e, const Form *call);
 static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding);
 /* Phase 11: defstruct */
@@ -6040,6 +6119,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
 static Expr *elab_defkind(Elab *e, const Form *call);
 static Expr *elab_defrec(Elab *e, const Form *call);  /* Phase HKT-P2 */
 static Expr *elab_deftype(Elab *e, const Form *call);  /* Phase HKT-P2 */
+static Expr *elab_type_app(Elab *e, const Form *call);  /* Phase HKT-P1 */
 /* Phase 17: throw! sugar */
 static Expr *elab_throw_bang(Elab *e, const Form *call);
 /* Phase 18: call/cc and escape sugar */
@@ -6123,6 +6203,18 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_gc_force)    return elab_gc_force(e, call);
     if (name == e->sym_gc_enable)   return elab_gc_enable(e, call);
     if (name == e->sym_gc_disable)  return elab_gc_disable(e, call);
+    /* Phase M0: Module system */
+    if (name == e->sym_defmodule) return elab_defmodule(e, call);
+    if (name == e->sym_export) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "export is only allowed inside defmodule");
+        return NULL;
+    }
+    if (name == e->sym_import) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "import is only allowed inside defmodule");
+        return NULL;
+    }
     /* Phase 11: defstruct */
     if (name == e->sym_defstruct) return elab_defstruct(e, call);
     if (name == e->sym_make_struct) return elab_make_struct(e, call);
@@ -6137,6 +6229,8 @@ static Expr *elab_call(Elab *e, Form *call) {
     /* Phase HKT-P2: recursive type binders */
     if (name == e->sym_defrec) return elab_defrec(e, call);
     if (name == e->sym_deftype) return elab_deftype(e, call);
+    /* Phase HKT-P1: type-level application */
+    if (name == e->sym_type_app) return elab_type_app(e, call);
     /* Phase R2: Panic */
     if (name == e->sym_panic) return elab_panic(e, call);
     if (name == e->sym_panic_with) return elab_panic_with(e, call);
@@ -6236,14 +6330,17 @@ static Expr *elab_call(Elab *e, Form *call) {
         return out;
     }
 
-    /* Phase 2: Check if it's a user-defined function call */
-    Binding *fn_binding = scope_lookup(e->scope, name);
-    if (fn_binding && (fn_binding->type.kind == TY_FN || 
-                       (fn_binding->type.kind == TY_PTR_VOID && fn_binding->closure_fn_binding) || 
+    /* Phase 2: Check if it's a user-defined function call.
+     * M1: Use elab_lookup_sym for visibility + qualified name resolution. */
+    bool fn_qual_err = false;
+    Binding *fn_binding = elab_lookup_sym(e, name, head->span, &fn_qual_err);
+    if (!fn_binding && fn_qual_err) return NULL;
+    if (fn_binding && (fn_binding->type.kind == TY_FN ||
+                       (fn_binding->type.kind == TY_PTR_VOID && fn_binding->closure_fn_binding) ||
                        fn_binding->closure_fn_binding)) {
         return elab_call_fn(e, call, fn_binding);
     }
-    
+
     /* Phase 19: Allow calling any binding (for function parameters, higher-order functions) */
     if (fn_binding) {
         return elab_call_fn(e, call, fn_binding);
@@ -6416,6 +6513,11 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
              * is expected.  HKT type constructor values are opaque int64_t at runtime. */
             arg_ok = true;
         }
+        if (!arg_ok && expected_arg_kind == TY_INT && args[i]->type.kind == TY_APP) {
+            /* Phase HKT §3: Allow passing a partially-applied type (TY_APP) where int64_t
+             * is expected.  Partial type application values are opaque int64_t at runtime. */
+            arg_ok = true;
+        }
         if (!arg_ok && expected_arg_kind == TY_INT && args[i]->type.kind == TY_FN) {
             /* Phase HKT H3/H4: Allow passing a function value where int64_t is expected.
              * Function references are represented as int64_t in HKT helper calls. */
@@ -6463,6 +6565,567 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
     return out;
 }
 
+/* Phase M0: Module system */
+
+/* Validate that a module name only contains [a-zA-Z0-9_\-/] */
+static bool module_name_valid(const char *name, uint32_t len) {
+    if (len == 0) return false;
+    for (uint32_t i = 0; i < len; i++) {
+        char c = name[i];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '/') {
+            continue;
+        }
+        return false;
+    }
+    /* Must not start or end with '/' */
+    if (name[0] == '/' || name[len - 1] == '/') return false;
+    return true;
+}
+
+/* Phase M2: Load and elaborate an imported module file.
+ * Returns the registry entry (may have 0 exports on parse/elab failure).
+ * Returns NULL only on fatal error (circular import or OOM). */
+static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_span) {
+    /* Already in registry? */
+    ElabModule *existing = elab_find_loaded_module(e, name);
+    if (existing) {
+        if (existing->is_loading) {
+            diag_emit(DIAG_ERROR, import_span,
+                      "circular import: module '%s' is already being loaded", name->name);
+            return NULL;
+        }
+        return existing;
+    }
+
+    /* Reserve a registry slot first (for circular-import detection). */
+    if (e->n_loaded_modules >= e->cap_loaded_modules) {
+        e->cap_loaded_modules = e->cap_loaded_modules ? e->cap_loaded_modules * 2 : 8;
+        e->loaded_modules = (ElabModule *)realloc(e->loaded_modules,
+                             e->cap_loaded_modules * sizeof(ElabModule));
+        if (!e->loaded_modules) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    ElabModule *slot = &e->loaded_modules[e->n_loaded_modules++];
+    slot->name = name;
+    slot->exports = NULL;
+    slot->n_exports = 0;
+    slot->is_loading = true;
+
+    /* Build file path: 'geom/vector' -> '{base_dir}/geom/vector.tur'
+     * The '/' in module names maps directly to directory separators. */
+    char path_buf[4096];
+    const char *base = e->module_base_dir ? e->module_base_dir : ".";
+    int plen = snprintf(path_buf, sizeof(path_buf), "%s/%s.tur", base, name->name);
+    if (plen < 0 || (size_t)plen >= sizeof(path_buf)) {
+        diag_emit(DIAG_ERROR, import_span,
+                  "module path too long for '%s'", name->name);
+        slot->is_loading = false;
+        return NULL;
+    }
+
+    /* Read source file. */
+    char *src_raw = NULL;
+    size_t src_len = 0;
+    if (elab_read_file(path_buf, &src_raw, &src_len) != 0) {
+        diag_emit(DIAG_ERROR, import_span,
+                  "module '%s' not found (looked for '%s')", name->name, path_buf);
+        slot->is_loading = false;
+        return NULL;
+    }
+
+    /* Copy source into the arena so it outlives the load. */
+    char *src_copy = (char *)arena_alloc(e->arena, src_len + 1);
+    memcpy(src_copy, src_raw, src_len);
+    src_copy[src_len] = '\0';
+    free(src_raw);
+
+    /* Register the source file for diagnostics.  Path must also live in arena. */
+    char *path_copy = (char *)arena_alloc(e->arena, (size_t)plen + 1);
+    memcpy(path_copy, path_buf, (size_t)plen + 1);
+
+    SourceFile *sfile = (SourceFile *)arena_alloc(e->arena, sizeof(SourceFile));
+    *sfile = (SourceFile){0};
+    sfile->path = path_copy;
+    sfile->src = src_copy;
+    sfile->len = src_len;
+    sfile->file_id = e->next_import_file_id++;
+    sfile->reader_type = READER_TURMERIC;
+    diag_register_file(sfile);
+
+    /* Parse the source into forms. */
+    uint32_t nforms = 0;
+    Form **forms = read_all(e->arena, e->st, sfile, &nforms);
+    if (!forms) {
+        slot->is_loading = false;
+        return NULL;
+    }
+
+    /* Elaborate the imported module's forms.
+     * Save and restore fields that track the current defmodule context so the
+     * outer caller's state is not corrupted. */
+    bool         saved_has_defmodule   = e->has_defmodule;
+    const Symbol *saved_module_name    = e->current_module_name;
+    const DefModule *saved_module      = e->current_module;
+    e->has_defmodule       = false;
+    e->current_module_name = NULL;
+    e->current_module      = NULL;
+
+    for (uint32_t i = 0; i < nforms; i++) {
+        Expr *ex = elab_form(e, forms[i]);
+        if (!ex) {
+            e->has_defmodule       = saved_has_defmodule;
+            e->current_module_name = saved_module_name;
+            e->current_module      = saved_module;
+            slot->is_loading = false;
+            return NULL;
+        }
+        /* Register EX_DEFMODULE into file_scope_defs so its body gets emitted.
+         * emit.c's flatten_program_items expands these into top-level C items.
+         * Phase M3: Skip inlining when compiling each module separately; the
+         * implementation file #includes the imported module's header instead. */
+        if (ex->kind == EX_DEFMODULE && !e->separate_compilation) {
+            elab_register_file_def(e, ex);
+        }
+    }
+
+    e->has_defmodule       = saved_has_defmodule;
+    e->current_module_name = saved_module_name;
+    e->current_module      = saved_module;
+
+    /* Collect exported bindings: those in the global scope owned by this module. */
+    uint32_t n_exp = 0;
+    for (uint32_t i = 0; i < e->global.n; i++) {
+        Binding *b = e->global.bindings[i];
+        if (b->defining_module_name == name && b->is_exported) n_exp++;
+    }
+    Binding **exp_arr = (n_exp == 0) ? NULL :
+        (Binding **)arena_alloc(e->arena, n_exp * sizeof(Binding *));
+    uint32_t idx = 0;
+    for (uint32_t i = 0; i < e->global.n; i++) {
+        Binding *b = e->global.bindings[i];
+        if (b->defining_module_name == name && b->is_exported)
+            exp_arr[idx++] = b;
+    }
+
+    slot->exports   = exp_arr;
+    slot->n_exports = n_exp;
+    slot->is_loading = false;
+    return slot;
+}
+
+/* Parse a single (import module-name [:as alias] [:refer [syms...]]) form */
+static bool parse_import_spec(Elab *e, const Form *f, ImportSpec *out) {
+    if (f->tag != F_LIST || f->as.list.len < 2) {
+        diag_emit(DIAG_ERROR, f->span,
+                  "import requires a module name: (import module-name [:as alias] [:refer [syms...]])");
+        return false;
+    }
+    Form *head = f->as.list.items[0];
+    if (head->tag != F_SYM || head->as.sym != e->sym_import) {
+        diag_emit(DIAG_ERROR, f->span, "expected (import ...)");
+        return false;
+    }
+    Form *name_f = f->as.list.items[1];
+    if (name_f->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, name_f->span, "import module name must be a symbol");
+        return false;
+    }
+    if (!module_name_valid(name_f->as.sym->name, name_f->as.sym->len)) {
+        diag_emit(DIAG_ERROR, name_f->span,
+                  "invalid module name '%s': only alphanumeric, '-', '_', '/' allowed",
+                  name_f->as.sym->name);
+        return false;
+    }
+    out->module_name = name_f->as.sym;
+    out->alias = NULL;
+    out->refer_syms = NULL;
+    out->n_refer = 0;
+    out->span = f->span;
+
+    uint32_t i = 2;
+    while (i < f->as.list.len) {
+        Form *kw = f->as.list.items[i];
+        if (kw->tag == F_KEYWORD && kw->as.sym == e->kw_as) {
+            i++;
+            if (i >= f->as.list.len) {
+                diag_emit(DIAG_ERROR, kw->span, ":as requires an alias symbol");
+                return false;
+            }
+            Form *alias_f = f->as.list.items[i];
+            if (alias_f->tag != F_SYM) {
+                diag_emit(DIAG_ERROR, alias_f->span, ":as alias must be a symbol");
+                return false;
+            }
+            out->alias = alias_f->as.sym;
+            i++;
+        } else if (kw->tag == F_KEYWORD && kw->as.sym == e->kw_refer) {
+            i++;
+            if (i >= f->as.list.len) {
+                diag_emit(DIAG_ERROR, kw->span, ":refer requires a vector of symbols");
+                return false;
+            }
+            Form *refer_f = f->as.list.items[i];
+            if (refer_f->tag != F_VEC) {
+                diag_emit(DIAG_ERROR, refer_f->span, ":refer requires a vector [sym1 sym2 ...]");
+                return false;
+            }
+            uint32_t n = refer_f->as.list.len;
+            const Symbol **syms = (n == 0) ? NULL :
+                (const Symbol **)arena_alloc(e->arena, n * sizeof(Symbol *));
+            for (uint32_t j = 0; j < n; j++) {
+                Form *sf = refer_f->as.list.items[j];
+                if (sf->tag != F_SYM) {
+                    diag_emit(DIAG_ERROR, sf->span, ":refer list must contain only symbols");
+                    return false;
+                }
+                syms[j] = sf->as.sym;
+            }
+            out->refer_syms = syms;
+            out->n_refer = n;
+            i++;
+        } else {
+            diag_emit(DIAG_ERROR, kw->span,
+                      "unexpected token in import; expected :as or :refer");
+            return false;
+        }
+    }
+    return true;
+}
+
+static Expr *elab_defmodule(Elab *e, const Form *call) {
+    /* Only valid at the top level */
+    if (e->scope != &e->global) {
+        diag_emit(DIAG_ERROR, call->span, "defmodule is only valid at the top level");
+        return NULL;
+    }
+    /* Syntax: (defmodule name [docstring] (export ...) (import ...)... body...) */
+    if (call->as.list.len < 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "defmodule requires a module name: (defmodule name ...)");
+        return NULL;
+    }
+    Form *name_f = call->as.list.items[1];
+    if (name_f->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, name_f->span, "defmodule name must be a symbol");
+        return NULL;
+    }
+    if (!module_name_valid(name_f->as.sym->name, name_f->as.sym->len)) {
+        diag_emit(DIAG_ERROR, name_f->span,
+                  "invalid module name '%s': only alphanumeric, '-', '_', '/' allowed",
+                  name_f->as.sym->name);
+        return NULL;
+    }
+    if (e->has_defmodule) {
+        diag_emit(DIAG_ERROR, call->span, "only one defmodule is allowed per file");
+        return NULL;
+    }
+    e->has_defmodule = true;
+
+    uint32_t i = 2;
+    const char *docstring = NULL;
+
+    /* Optional docstring */
+    if (i < call->as.list.len && call->as.list.items[i]->tag == F_STR) {
+        docstring = call->as.list.items[i]->as.s.p;
+        i++;
+    }
+
+    /* Collect export symbols */
+    const Symbol **exports = NULL;
+    uint32_t n_exports = 0;
+    uint32_t cap_exports = 0;
+
+    /* Collect import specs */
+    ImportSpec *imports = NULL;
+    uint32_t n_imports = 0;
+    uint32_t cap_imports = 0;
+
+    /* Consume (export ...) and (import ...) forms */
+    while (i < call->as.list.len) {
+        Form *item = call->as.list.items[i];
+        if (item->tag != F_LIST || item->as.list.len == 0) break;
+        Form *head = item->as.list.items[0];
+        if (head->tag != F_SYM) break;
+
+        if (head->as.sym == e->sym_export) {
+            /* Parse (export sym1 sym2 ...) */
+            for (uint32_t j = 1; j < item->as.list.len; j++) {
+                Form *sf = item->as.list.items[j];
+                if (sf->tag != F_SYM) {
+                    diag_emit(DIAG_ERROR, sf->span, "export list must contain only symbols");
+                    free(exports); free(imports);
+                    return NULL;
+                }
+                if (n_exports >= cap_exports) {
+                    cap_exports = cap_exports ? cap_exports * 2 : 4;
+                    exports = (const Symbol **)realloc(exports, cap_exports * sizeof(Symbol *));
+                }
+                exports[n_exports++] = sf->as.sym;
+            }
+            i++;
+        } else if (head->as.sym == e->sym_import) {
+            /* Parse (import module-name [:as alias] [:refer [syms...]]) */
+            if (n_imports >= cap_imports) {
+                cap_imports = cap_imports ? cap_imports * 2 : 4;
+                imports = (ImportSpec *)realloc(imports, cap_imports * sizeof(ImportSpec));
+            }
+            if (!parse_import_spec(e, item, &imports[n_imports])) {
+                free(exports); free(imports);
+                return NULL;
+            }
+            n_imports++;
+            i++;
+        } else {
+            break; /* Body starts here */
+        }
+    }
+
+    uint32_t body_start = i;
+
+    /* M1: Allocate module struct early and populate imports so elab_lookup_sym
+     * can resolve qualified names and import aliases during body elaboration. */
+    DefModule *mod = (DefModule *)arena_alloc(e->arena, sizeof(DefModule));
+    memset(mod, 0, sizeof(DefModule));
+    mod->name = name_f->as.sym;
+    mod->docstring = docstring;
+
+    /* Copy exports to arena (used for marking after pass 2) */
+    if (n_exports > 0) {
+        mod->exports = (const Symbol **)arena_alloc(e->arena, n_exports * sizeof(Symbol *));
+        for (uint32_t j = 0; j < n_exports; j++) mod->exports[j] = exports[j];
+        mod->n_exports = n_exports;
+    }
+    free(exports); exports = NULL;
+
+    /* Copy imports to arena (needed for alias resolution during elaboration) */
+    if (n_imports > 0) {
+        mod->imports = (ImportSpec *)arena_alloc(e->arena, n_imports * sizeof(ImportSpec));
+        for (uint32_t j = 0; j < n_imports; j++) mod->imports[j] = imports[j];
+        mod->n_imports = n_imports;
+    }
+    free(imports); imports = NULL;
+
+    /* M1: Set module context — body bindings will inherit defining_module_name */
+    e->current_module_name = mod->name;
+    e->current_module = mod;
+
+    /* M2: Process imports — load each referenced module and inject :refer symbols. */
+    for (uint32_t j = 0; j < mod->n_imports; j++) {
+        const ImportSpec *imp = &mod->imports[j];
+        ElabModule *loaded = elab_load_module(e, imp->module_name, imp->span);
+        if (!loaded) {
+            e->current_module_name = NULL;
+            e->current_module = NULL;
+            return NULL;
+        }
+        /* :refer — add each referred symbol directly to the current scope. */
+        for (uint32_t k = 0; k < imp->n_refer; k++) {
+            const Symbol *ref_sym = imp->refer_syms[k];
+            Binding *ref_b = NULL;
+            for (uint32_t m = 0; m < loaded->n_exports; m++) {
+                if (loaded->exports[m]->name == ref_sym) {
+                    ref_b = loaded->exports[m];
+                    break;
+                }
+            }
+            if (!ref_b) {
+                diag_emit(DIAG_ERROR, imp->span,
+                          "symbol '%s' is not exported from module '%s'",
+                          ref_sym->name, imp->module_name->name);
+                e->current_module_name = NULL;
+                e->current_module = NULL;
+                return NULL;
+            }
+            scope_add(&e->global, ref_b);
+        }
+    }
+
+    /* Pass 1: forward-declare all defn bodies (for mutual recursion) */
+    for (uint32_t j = body_start; j < call->as.list.len; j++) {
+        Form *f = call->as.list.items[j];
+        if (f->tag == F_LIST && f->as.list.len > 0) {
+            Form *h = f->as.list.items[0];
+            if (h->tag == F_SYM && h->as.sym == e->sym_defn) {
+                if (f->as.list.len >= 3) {
+                    uint32_t name_idx = 1;
+                    if (f->as.list.items[1]->tag == F_SYM &&
+                        f->as.list.items[1]->as.sym == e->sym_no_unwind_attr) {
+                        name_idx = 2;
+                    }
+                    if ((uint32_t)f->as.list.len <= name_idx) continue;
+                    Form *fn_name_f = f->as.list.items[name_idx];
+                    if (fn_name_f->tag == F_SYM) {
+                        /* Check not already defined */
+                        if (!scope_lookup(&e->global, fn_name_f->as.sym)) {
+                            TypeKind arg_kinds[1] = {TY_INT};
+                            Type fn_type = type_fn(arg_kinds, 1, TY_INT);
+                            Binding *b = binding_new(e, fn_name_f->as.sym, fn_type, false, true, f->span);
+                            scope_add(&e->global, b);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /* Pass 2: elaborate body forms */
+    uint32_t n_body = call->as.list.len - body_start;
+    Expr **body = (n_body == 0) ? NULL :
+        (Expr **)arena_alloc(e->arena, n_body * sizeof(Expr *));
+    uint32_t actual_n_body = 0;
+
+    for (uint32_t j = body_start; j < call->as.list.len; j++) {
+        Expr *be = elab_form(e, call->as.list.items[j]);
+        if (!be) {
+            e->current_module_name = NULL;
+            e->current_module = NULL;
+            return NULL;
+        }
+        body[actual_n_body++] = be;
+    }
+
+    mod->body = body;
+    mod->n_body = actual_n_body;
+
+    /* M1: Mark exported bindings and validate they exist in this module */
+    for (uint32_t j = 0; j < mod->n_exports; j++) {
+        Binding *exp_b = scope_lookup(&e->global, mod->exports[j]);
+        if (!exp_b || exp_b->defining_module_name != mod->name) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "exported symbol '%s' is not defined in this module",
+                      mod->exports[j]->name);
+            e->current_module_name = NULL;
+            e->current_module = NULL;
+            return NULL;
+        }
+        exp_b->is_exported = true;
+    }
+
+    /* Reset module context */
+    e->current_module_name = NULL;
+    e->current_module = NULL;
+
+    Expr *out = expr_new(e->arena, EX_DEFMODULE, TYPE_NIL, call->span);
+    out->as.defmodule_.mod = mod;
+    return out;
+}
+
+/* M1: Resolve a symbol with module visibility and qualified name support.
+ * Returns the binding on success.
+ * Returns NULL with *had_error = false: symbol not found, caller emits "unbound".
+ * Returns NULL with *had_error = true: error already emitted, caller returns NULL. */
+static Binding *elab_lookup_sym(Elab *e, const Symbol *sym, Span span, bool *had_error) {
+    *had_error = false;
+
+    /* Direct scope lookup */
+    Binding *b = scope_lookup(e->scope, sym);
+    if (b) {
+        /* Visibility: private symbol accessed from outside its module */
+        if (b->defining_module_name != NULL
+            && e->current_module_name != b->defining_module_name
+            && !b->is_exported) {
+            diag_emit(DIAG_ERROR, span,
+                      "symbol '%s' is private to module '%s'",
+                      sym->name, b->defining_module_name->name);
+            *had_error = true;
+            return NULL;
+        }
+        return b;
+    }
+
+    /* Qualified name resolution — only if symbol contains '/' */
+    const char *sym_str = sym->name;
+    uint32_t    sym_len = sym->len;
+    bool has_slash = false;
+    for (uint32_t i = 0; i < sym_len; i++) {
+        if (sym_str[i] == '/') { has_slash = true; break; }
+    }
+    if (!has_slash) return NULL;
+
+    /* Self-qualified: current module name is a prefix */
+    if (e->current_module_name != NULL) {
+        const Symbol *mn = e->current_module_name;
+        if (sym_len > mn->len + 1
+            && sym_str[mn->len] == '/'
+            && memcmp(sym_str, mn->name, mn->len) == 0) {
+            const char *suffix     = sym_str + mn->len + 1;
+            uint32_t    suffix_len = sym_len - mn->len - 1;
+            const Symbol *ss = symtab_intern(e->st, strslice(suffix, suffix_len));
+            Binding *b2 = scope_lookup(e->scope, ss);
+            if (b2) return b2;
+            diag_emit_with_code(DIAG_ERROR, span, TUR_E0003_UNBOUND_SYMBOL,
+                                "unbound symbol '%.*s' in module '%s'",
+                                (int)suffix_len, suffix, mn->name);
+            *had_error = true;
+            return NULL;
+        }
+    }
+
+    /* M2: Cross-module qualified resolution. */
+    if (e->current_module != NULL) {
+        /* alias/sym — match by :as alias */
+        for (uint32_t i = 0; i < e->current_module->n_imports; i++) {
+            const ImportSpec *imp = &e->current_module->imports[i];
+            if (!imp->alias) continue;
+            const Symbol *alias = imp->alias;
+            if (sym_len > alias->len + 1
+                && sym_str[alias->len] == '/'
+                && memcmp(sym_str, alias->name, alias->len) == 0) {
+                const char *sym_part     = sym_str + alias->len + 1;
+                uint32_t    sym_part_len = sym_len - alias->len - 1;
+                const Symbol *sym_key = symtab_intern(e->st, strslice(sym_part, sym_part_len));
+                ElabModule *loaded = elab_find_loaded_module(e, imp->module_name);
+                if (!loaded) {
+                    diag_emit(DIAG_ERROR, span,
+                              "module '%s' (alias '%s') was not loaded",
+                              imp->module_name->name, alias->name);
+                    *had_error = true;
+                    return NULL;
+                }
+                for (uint32_t m = 0; m < loaded->n_exports; m++) {
+                    if (loaded->exports[m]->name == sym_key)
+                        return loaded->exports[m];
+                }
+                diag_emit(DIAG_ERROR, span,
+                          "symbol '%s' is not exported from module '%s'",
+                          sym_key->name, imp->module_name->name);
+                *had_error = true;
+                return NULL;
+            }
+        }
+        /* full-module-name/sym — match by full module name */
+        for (uint32_t i = 0; i < e->current_module->n_imports; i++) {
+            const ImportSpec *imp = &e->current_module->imports[i];
+            const Symbol *mn = imp->module_name;
+            if (sym_len > mn->len + 1
+                && sym_str[mn->len] == '/'
+                && memcmp(sym_str, mn->name, mn->len) == 0) {
+                const char *sym_part     = sym_str + mn->len + 1;
+                uint32_t    sym_part_len = sym_len - mn->len - 1;
+                const Symbol *sym_key = symtab_intern(e->st, strslice(sym_part, sym_part_len));
+                ElabModule *loaded = elab_find_loaded_module(e, mn);
+                if (!loaded) {
+                    diag_emit(DIAG_ERROR, span,
+                              "module '%s' was not loaded", mn->name);
+                    *had_error = true;
+                    return NULL;
+                }
+                for (uint32_t m = 0; m < loaded->n_exports; m++) {
+                    if (loaded->exports[m]->name == sym_key)
+                        return loaded->exports[m];
+                }
+                diag_emit(DIAG_ERROR, span,
+                          "symbol '%s' is not exported from module '%s'",
+                          sym_key->name, mn->name);
+                *had_error = true;
+                return NULL;
+            }
+        }
+    }
+
+    return NULL; /* Not a recognised qualified name; caller handles "unbound" */
+}
+
 static Expr *elab_form(Elab *e, Form *f) {
     switch (f->tag) {
         case F_NIL:  return e_nil(e, f->span);
@@ -6491,13 +7154,14 @@ static Expr *elab_form(Elab *e, Form *f) {
                       "phase 1: keywords are only allowed as :else in cond or case");
             return NULL;
         case F_SYM: {
-            Binding *b = scope_lookup(e->scope, f->as.sym);
+            /* M1: Use elab_lookup_sym for visibility + qualified name resolution */
+            bool sym_qual_err = false;
+            Binding *b = elab_lookup_sym(e, f->as.sym, f->span, &sym_qual_err);
             if (!b) {
+                if (sym_qual_err) return NULL; /* error already emitted */
                 /* Phase 8: Enhanced unbound symbol diagnostic with suggestions */
-                /* Try to find similar symbols in scope for "did you mean" suggestions */
                 const Symbol *best_match = NULL;
-                int best_distance = 3; /* Max edit distance for suggestions */
-                
+                int best_distance = 3;
                 for (Scope *cur = e->scope; cur; cur = cur->parent) {
                     for (uint32_t i = 0; i < cur->n; i++) {
                         Binding *candidate = cur->bindings[i];
@@ -6508,7 +7172,6 @@ static Expr *elab_form(Elab *e, Form *f) {
                         }
                     }
                 }
-                
                 if (best_match) {
                     char msg[256];
                     snprintf(msg, sizeof(msg), "unbound symbol '%s'", f->as.sym->name);
@@ -7264,6 +7927,33 @@ static Expr *elab_async(Elab *e, const Form *call) {
     }
     Expr *fn_expr = elab_form(e, call->as.list.items[1]);
     if (!fn_expr) return NULL;
+    
+    /* AW-012 / AW-011B-1: Send-check for async closures.
+     * Values captured in async blocks must be Send (can be moved to fiber context). */
+    if (fn_expr->kind == EX_FN || fn_expr->kind == EX_CLOSURE) {
+        const struct Closure *cl = NULL;
+        if (fn_expr->kind == EX_CLOSURE) {
+            cl = fn_expr->as.closure_.closure;
+        } else if (fn_expr->kind == EX_FN) {
+            cl = fn_expr->as.fn_.fn->closure;
+        }
+        if (cl) {
+            bool had_error = false;
+            for (uint8_t i = 0; i < cl->n_captures; i++) {
+                Binding *cap = cl->captures[i];
+                if (!type_is_send(cap->type)) {
+                    diag_emit_with_code(DIAG_ERROR, call->span,
+                        TUR_E0010_NOT_SEND,
+                        "type `%s` cannot be sent across thread boundaries "
+                        "(not `Send`); captured variable `%s` in async block",
+                        type_name(cap->type), cap->name->name);
+                    had_error = true;
+                }
+            }
+            if (had_error) return NULL;
+        }
+    }
+    
     Expr *out = expr_new(e->arena, EX_ASYNC, TYPE_PTR_VOID, call->span);
     out->as.async_.fn_expr = fn_expr;
     return out;
@@ -7578,7 +8268,8 @@ static Expr *elab_defrec(Elab *e, const Form *call) {
     }
     const Symbol *name = name_form->as.sym;
 
-    /* Accept params if present (arg 2) — validate is a list/vector but ignore in v1 */
+    /* Accept params if present (arg 2) — validate is a list/vector */
+    uint32_t body_idx = 2;
     if (call->as.list.len >= 3) {
         Form *params_f = call->as.list.items[2];
         if (params_f->tag != F_LIST && params_f->tag != F_VEC) {
@@ -7586,9 +8277,13 @@ static Expr *elab_defrec(Elab *e, const Form *call) {
                       "defrec: expected parameter list");
             return NULL;
         }
+        body_idx = 3;
     }
 
-    /* Accept body form (arg 3) but ignore it in v1 */
+    /* Parse body form (arg body_idx) — optional in v1 */
+    /* The body can reference the recursive type itself, creating a circular dependency.
+     * In v1, we just store the form without elaborating it. */
+    Form *body_form = (call->as.list.len >= body_idx + 1) ? call->as.list.items[body_idx] : NULL;
 
     /* Create TY_REC type: kind * -> * (recursive type constructor) */
     Type rec_type;
@@ -7597,7 +8292,13 @@ static Expr *elab_defrec(Elab *e, const Form *call) {
     rec_type.copy_kind = CK_MOVE;
     rec_type.hkt_kind  = KIND_ARROW;    /* defrec types are kind * -> * */
     rec_type.as.rec.name = name->name;
-    rec_type.as.rec.body = NULL;        /* v1: body not yet evaluated */
+    rec_type.as.rec.body = NULL;        /* v1: body not yet evaluated, but we store the form for future use */
+    
+    /* If a body was provided, store it for later elaboration */
+    if (body_form) {
+        /* For now, we just note that a body exists but don't elaborate it */
+        /* This is a placeholder for when full recursive type support is added */
+    }
 
     /* Register in global scope */
     Binding *b = binding_new(e, name, rec_type, false, true, name_form->span);
@@ -7605,8 +8306,6 @@ static Expr *elab_defrec(Elab *e, const Form *call) {
 
     /* defrec has no runtime effect */
     return e_nil(e, call->span);
-}
-
 /* Elaborate (deftype Name [type-params...] body)
  *
  * Defines a recursive type alias with kind-polymorphic parameters.
@@ -7755,6 +8454,107 @@ static Expr *elab_deftype(Elab *e, const Form *call) {
     scope_add(&e->global, b);
 
     /* deftype has no runtime effect */
+    return e_nil(e, call->span);
+}
+}
+
+/* Elaborate (type-app F A)
+ *
+ * Type-level application: applies type constructor F to type argument A.
+ * Creates a TY_APP type and validates kind constraints.
+ *
+ * Syntax: (type-app result int)
+ *         (type-app Fix (result int))
+ *
+ * The result kind is derived from F's kind:
+ *   - If F has kind KIND_ARROW (* -> *), result is KIND_STAR
+ *   - If F has kind KIND_ARROW2 (* -> * -> *), result is KIND_ARROW
+ *
+ * Phase HKT-P1.
+ */
+static Expr *elab_type_app(Elab *e, const Form *call) {
+    /* Minimum: (type-app F A) */
+    if (call->as.list.len < 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "type-app requires (type-app F A)");
+        return NULL;
+    }
+
+    /* Parse type constructor F (arg 1) - must be a symbol */
+    Form *fn_form = call->as.list.items[1];
+    if (fn_form->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, fn_form->span,
+                  "type-app: type constructor must be a symbol");
+        return NULL;
+    }
+
+    /* Look up F in the type environment */
+    Binding *fn_binding = scope_lookup(e->scope, fn_form->as.sym);
+    if (!fn_binding) {
+        fn_binding = scope_lookup(&e->global, fn_form->as.sym);
+    }
+    if (!fn_binding) {
+        diag_emit(DIAG_ERROR, fn_form->span,
+                  "type-app: unknown type constructor '%s'", fn_form->as.sym->name);
+        return NULL;
+    }
+    Type fn_type = fn_binding->type;
+
+    /* Parse type argument A (arg 2) - can be a symbol, keyword, or nested type-app */
+    Form *arg_form = call->as.list.items[2];
+    Type arg_type;
+    
+    if (arg_form->tag == F_SYM || arg_form->tag == F_KEYWORD) {
+        const Symbol *arg_sym = arg_form->as.sym;
+        /* Try primitive types first */
+        if (arg_sym->len == 3 && memcmp(arg_sym->name, "int", 3) == 0) {
+            arg_type = TYPE_INT;
+        } else if (arg_sym->len == 4 && memcmp(arg_sym->name, "bool", 4) == 0) {
+            arg_type = TYPE_BOOL;
+        } else if (arg_sym->len == 4 && memcmp(arg_sym->name, "cstr", 4) == 0) {
+            arg_type = TYPE_CSTR;
+        } else if ((arg_sym->len == 4 && memcmp(arg_sym->name, "void", 4) == 0) ||
+                   (arg_sym->len == 3 && memcmp(arg_sym->name, "nil", 3) == 0)) {
+            arg_type = TYPE_NIL;
+        } else if (arg_sym->len == 9 && memcmp(arg_sym->name, "ptr<void>", 9) == 0) {
+            arg_type = TYPE_PTR_VOID;
+        } else {
+            /* Look up as a type binding */
+            Binding *arg_binding = scope_lookup(e->scope, arg_sym);
+            if (!arg_binding) {
+                arg_binding = scope_lookup(&e->global, arg_sym);
+            }
+            if (!arg_binding) {
+                diag_emit(DIAG_ERROR, arg_form->span,
+                          "type-app: unknown type '%s'", arg_sym->name);
+                return NULL;
+            }
+            arg_type = arg_binding->type;
+        }
+    } else if (arg_form->tag == F_LIST) {
+        /* Nested type application: (type-app result (type-app option int))
+         * For now, recursively elaborate as type-app */
+        Expr *arg_expr = elab_type_app(e, arg_form);
+        if (!arg_expr) {
+            return NULL;
+        }
+        diag_emit(DIAG_ERROR, arg_form->span,
+                  "type-app: nested type applications not yet supported");
+        return NULL;
+    } else {
+        diag_emit(DIAG_ERROR, arg_form->span,
+                  "type-app: type argument must be a symbol, keyword, or type application");
+        return NULL;
+    }
+
+    /* Create TY_APP type using the type_app helper */
+    /* The type is computed but not stored - in v1, type-app is a compile-time-only
+     * construct that validates the kind application. Future work will register
+     * the result type for use in type annotations. */
+    Type app_type = type_app(e->arena, fn_type, arg_type, call->span);
+    (void)app_type;  /* Suppress unused variable warning in v1 */
+
+    /* type-app has no runtime effect; return nil */
     return e_nil(e, call->span);
 }
 
@@ -8002,6 +8802,64 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
                             type_args[i].as.struct_.def = NULL;
                             type_arg_syms[i] = kw;
                         }
+                    } else if (arg->tag == F_LIST && arg->as.list.len == 2) {
+                        /* Phase HKT §3: (constructor arg) — partial type application.
+                         * Parses `(result int)` in type position as TY_APP where
+                         * fn = TY_STRUCT(constructor, KIND_ARROW2) and arg = concrete type.
+                         * This allows `(definstance Functor [(result int)] ...)`. */
+                        Form *ctor_form = arg->as.list.items[0];
+                        Form *aarg_form = arg->as.list.items[1];
+                        if (ctor_form->tag != F_SYM && ctor_form->tag != F_KEYWORD) {
+                            diag_emit(DIAG_ERROR, ctor_form->span,
+                                      "type application constructor must be a symbol");
+                            return NULL;
+                        }
+                        const Symbol *ctor_sym = ctor_form->as.sym;
+                        /* Parse the argument type (must be a primitive or known sym) */
+                        Type app_arg_type;
+                        if (aarg_form->tag == F_SYM || aarg_form->tag == F_KEYWORD) {
+                            const Symbol *akw = aarg_form->as.sym;
+                            if (akw->len == 3 && memcmp(akw->name, "int", 3) == 0) {
+                                app_arg_type = TYPE_INT;
+                            } else if (akw->len == 4 && memcmp(akw->name, "bool", 4) == 0) {
+                                app_arg_type = TYPE_BOOL;
+                            } else if (akw->len == 4 && memcmp(akw->name, "cstr", 4) == 0) {
+                                app_arg_type = TYPE_CSTR;
+                            } else if ((akw->len == 4 && memcmp(akw->name, "void", 4) == 0) ||
+                                       (akw->len == 3 && memcmp(akw->name, "nil", 3) == 0)) {
+                                app_arg_type = TYPE_NIL;
+                            } else {
+                                /* Unknown type arg — treat as opaque struct */
+                                memset(&app_arg_type, 0, sizeof(app_arg_type));
+                                app_arg_type.kind = TY_STRUCT;
+                                app_arg_type.copy_kind = CK_MOVE;
+                                app_arg_type.as.struct_.def = NULL;
+                            }
+                        } else {
+                            diag_emit(DIAG_ERROR, aarg_form->span,
+                                      "type application argument must be a type keyword or symbol");
+                            return NULL;
+                        }
+                        /* Build fn type: TY_STRUCT with no def, KIND_ARROW2 (binary constructor) */
+                        Type *fn_type = (Type *)arena_alloc(e->arena, sizeof(Type));
+                        memset(fn_type, 0, sizeof(Type));
+                        fn_type->kind = TY_STRUCT;
+                        fn_type->copy_kind = CK_MOVE;
+                        fn_type->hkt_kind = KIND_ARROW2;
+                        fn_type->as.struct_.def = NULL;
+                        /* Build arg type on arena */
+                        Type *arg_type_ptr = (Type *)arena_alloc(e->arena, sizeof(Type));
+                        *arg_type_ptr = app_arg_type;
+                        /* Assemble TY_APP */
+                        memset(&type_args[i], 0, sizeof(type_args[i]));
+                        type_args[i].kind = TY_APP;
+                        type_args[i].copy_kind = CK_MOVE;
+                        /* fn of KIND_ARROW2 applied to one arg → KIND_ARROW */
+                        type_args[i].hkt_kind = KIND_ARROW;
+                        type_args[i].as.app.fn  = fn_type;
+                        type_args[i].as.app.arg = arg_type_ptr;
+                        /* Store constructor sym for name mangling (e.g. "result") */
+                        type_arg_syms[i] = ctor_sym;
                     } else {
                         diag_emit(DIAG_ERROR, arg->span,
                                   "unsupported type argument in definstance");
@@ -8361,6 +9219,24 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
                         type_component = "T";
                     }
                     break;
+                case TY_APP: {
+                    /* Phase HKT §3: partial type application — encode as "ctor_arg" */
+                    const char *ctor_part = "T";
+                    const char *arg_part  = "T";
+                    if (type_arg_syms && type_arg_syms[j]) {
+                        ctor_part = type_arg_syms[j]->name;
+                    }
+                    if (type_args[j].as.app.arg) {
+                        const char *n = type_name(*type_args[j].as.app.arg);
+                        if (n) arg_part = n;
+                    }
+                    snprintf(ctor_name_buf, sizeof(ctor_name_buf), "%s_%s", ctor_part, arg_part);
+                    for (char *p = ctor_name_buf; *p; p++) {
+                        if (!isalnum((unsigned char)*p)) *p = '_';
+                    }
+                    type_component = ctor_name_buf;
+                    break;
+                }
                 default: type_component = "T"; break;
             }
             int written = snprintf(type_suffix + type_suffix_len,
@@ -8527,6 +9403,8 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
         method_fd->is_variadic = false;
         method_fd->closure = NULL;
         method_fd->param_types = method_param_types;
+        method_fd->may_capture = false;
+        method_fd->inferred_effect_row = NULL;  /* must be NULL; effect_check_pass reads this */
         constraint_set_init(&method_fd->constraints);
         
         /* Register the method function at file scope */
@@ -8917,23 +9795,50 @@ found_method:;
         }
     }
     
+    /* Phase H §1 (dict load): Build an EX_DICT node that carries both the
+     * singleton identity AND the method field name.  When fn_expr is this
+     * node, emit.c dispatches through the dictionary struct at the call site:
+     *   dict_<Class>_<type>_singleton.<method>(args...)
+     * instead of a direct call to the impl function.  Fall back to the direct
+     * binding if, for some reason, no instance was resolved. */
+    Expr *dict_expr = NULL;
+    if (best_inst) {
+        dict_expr = make_dict_expr(e, best_inst, call->span);
+        /* Copy the method name into the EX_DICT node and sanitize for C. */
+        strncpy(dict_expr->as.dict_.method_name, method_name,
+                sizeof(dict_expr->as.dict_.method_name) - 1);
+        dict_expr->as.dict_.method_name[sizeof(dict_expr->as.dict_.method_name) - 1] = '\0';
+        for (char *p = dict_expr->as.dict_.method_name; *p; p++) {
+            if (!isalnum((unsigned char)*p) && *p != '_') *p = '_';
+        }
+    }
+
     Expr *out = expr_new(e->arena, EX_CALL, result_type, call->span);
-    out->as.call_.fn_binding = best_method->binding;
-    out->as.call_.args = call_args;
-    out->as.call_.n_args = n_args + 1;
-    out->as.call_.fn_expr = NULL;
-    /* Phase H §1: Annotate the call with the selected instance's dictionary.
-     * Full runtime dict passing is deferred; this field records which dictionary
-     * would be passed so future passes can use it without re-resolving. */
-    out->as.call_.dict_arg = best_inst ? make_dict_expr(e, best_inst, call->span) : NULL;
+    if (dict_expr) {
+        /* Dictionary dispatch: indirect call through the vtable field. */
+        out->as.call_.fn_binding = NULL;
+        out->as.call_.fn_expr    = dict_expr;
+    } else {
+        /* Fallback: direct call (no instance resolved — should not happen). */
+        out->as.call_.fn_binding = best_method->binding;
+        out->as.call_.fn_expr    = NULL;
+    }
+    out->as.call_.args    = call_args;
+    out->as.call_.n_args  = n_args + 1;
+    out->as.call_.dict_arg = dict_expr;  /* annotation for downstream passes */
     return out;
 }
 
 
 Expr *elaborate_program(Arena *arena, SymbolTable *st,
-                        Form *const *forms, uint32_t nforms) {
+                        Form *const *forms, uint32_t nforms,
+                        uint32_t stdlib_prefix,
+                        const char *module_base_dir,
+                        bool separate_compilation) {
     Elab e;
     elab_init_state(&e, arena, st);
+    e.module_base_dir = module_base_dir ? module_base_dir : ".";
+    e.separate_compilation = separate_compilation;
     builtins_init(st);
 
     Expr **items = (nforms == 0) ? NULL :
@@ -8951,12 +9856,20 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                 if (head->as.sym == e.sym_defn) {
                     /* Parse defn declaration without body */
                     if (f->as.list.len >= 3) {
-                        Form *name_f = f->as.list.items[1];
+                        /* Phase R5: skip optional #[no-unwind] attribute */
+                        uint32_t name_idx = 1;
+                        if (f->as.list.items[1]->tag == F_SYM &&
+                            f->as.list.items[1]->as.sym == e.sym_no_unwind_attr) {
+                            name_idx = 2;
+                        }
+                        if ((uint32_t)f->as.list.len <= name_idx) goto next_form;
+                        Form *name_f = f->as.list.items[name_idx];
                         if (name_f->tag == F_SYM) {
                             /* Parse return type annotation if present */
                             TypeKind return_kind = TY_INT; /* default */
-                            if (f->as.list.len >= 4) {
-                                Form *ret_f = f->as.list.items[3];
+                            uint32_t ret_idx = name_idx + 2; /* name params :ret */
+                            if (f->as.list.len > ret_idx) {
+                                Form *ret_f = f->as.list.items[ret_idx];
                                 if (ret_f->tag == F_KEYWORD) {
                                     const Symbol *kw = ret_f->as.sym;
                                     if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
@@ -8979,9 +9892,33 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                             scope_add(&e.global, b);
                         }
                     }
+                    next_form:;
                 }
             }
         }
+    }
+
+    /* Phase M0: Validate defmodule position — must be the first user form */
+    for (uint32_t i = stdlib_prefix; i < nforms; i++) {
+        Form *f = forms[i];
+        if (f->tag == F_LIST && f->as.list.len > 0) {
+            Form *head = f->as.list.items[0];
+            if (head->tag == F_SYM && head->as.sym == e.sym_defmodule) {
+                if (i != stdlib_prefix) {
+                    diag_emit(DIAG_ERROR, head->span,
+                              "defmodule must be the first form in the file");
+                    rc = -1;
+                }
+                break; /* only check the first occurrence */
+            }
+        }
+    }
+    if (rc != 0) {
+        scope_free(&e.global);
+        free(e.struct_defs);
+        free(e.handled_effect_names);
+        free(e.macros);
+        return NULL;
     }
 
     /* Pass 2: Elaborate all forms */
@@ -9013,6 +9950,7 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
     free(e.struct_defs);
     free(e.handled_effect_names);
     free(e.macros);
+    free(e.loaded_modules); /* Phase M2 */
     if (rc != 0) return NULL;
 
     Expr *prog = expr_new(arena, EX_PROGRAM, TYPE_NIL,

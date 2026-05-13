@@ -1,0 +1,3 @@
+(defmodule myapp
+  (import mod/a :as ma)
+  (defn main [] :int (ma/fa)))
