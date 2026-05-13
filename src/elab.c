@@ -10609,7 +10609,8 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                         Form *const *forms, uint32_t nforms,
                         uint32_t stdlib_prefix,
                         const char *module_base_dir,
-                        bool separate_compilation) {
+                        bool separate_compilation,
+                        TypeClassEnv *out_tc_env) {
     Elab e;
     elab_init_state(&e, arena, st);
     e.module_base_dir = module_base_dir ? module_base_dir : ".";
@@ -10820,5 +10821,7 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                           nforms > 0 ? forms[0]->span : (Span){0,0,0,0,0,0});
     prog->as.program.items = items;
     prog->as.program.n = nforms;
+    /* CPS-CL10: expose typeclass env to callers (e.g. cps_transform) */
+    if (out_tc_env) *out_tc_env = e.typeclass_env;
     return prog;
 }

@@ -1,0 +1,22 @@
+;; CPS-CL9/CPS-CL10: Negative fixture for TUR-E0014.
+;; A captured binding at a cloneable-shift site must implement Clone.
+;; Foo has no Clone instance, so capturing it is an error.
+
+(defclass Clone [a]
+  (clone [x] :int))
+
+(definstance Clone [int]
+  (clone [x] x))
+
+;; Foo: a struct with no Clone instance
+(defstruct Foo :copy [x :int])
+
+(defn k-discard [k] :int 0)
+
+(defn test [] :int
+  (let [foo (make-struct Foo 42)]
+    (cloneable-reset
+      (cloneable-shift k-discard foo))))
+
+(defn main [] :int
+  (test))

@@ -1,0 +1,138 @@
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_a_tur.c:936:3: error: typedef redefinition with different types ('struct TurTimerWheel' (aka 'TurTimerWheel') vs 'struct TurTimerWheel')
+  936 | } TurTimerWheel;
+      |   ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_a_tur.c:582:3: note: previous definition is here
+  582 | } TurTimerWheel;
+      |   ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_a_tur.c:944:13: error: redefinition of 'tur_timer_wheel_tick'
+  944 | static void tur_timer_wheel_tick(TurTimerWheel *w) {
+      |             ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_a_tur.c:803:13: note: previous definition is here
+  803 | static void tur_timer_wheel_tick(TurTimerWheel *w) {
+      |             ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_a_tur.c:947:32: error: no member named 'current_ms' in 'struct TurTimerWheel'
+  947 |     int64_t elapsed = now - w->current_ms;
+      |                             ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_a_tur.c:950:12: error: no member named 'current_ms' in 'struct TurTimerWheel'
+  950 |         w->current_ms++;
+      |         ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_a_tur.c:951:30: error: no member named 'current_ms' in 'struct TurTimerWheel'
+  951 |         int _slot = (int)(w->current_ms & TUR_WHEEL_SLOT_MASK);
+      |                           ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_a_tur.c:953:32: error: no member named 'lock' in 'struct TurTimerWheel'
+  953 |         pthread_mutex_lock(&w->lock);
+      |                             ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_a_tur.c:954:34: error: no member named 'slots' in 'struct TurTimerWheel'
+  954 |         TurTimerNode **_pp = &w->slots[_slot];
+      |                               ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_a_tur.c:961:46: error: no member named 'current_ms' in 'struct TurTimerWheel'
+  961 |             } else if (_n->deadline_ms <= w->current_ms) {
+      |                                           ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_a_tur.c:967:34: error: no member named 'lock' in 'struct TurTimerWheel'
+  967 |         pthread_mutex_unlock(&w->lock);
+      |                               ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_a_tur.c:979:15: error: no member named 'running' in 'struct TurTimerWheel'
+  979 |     while (w->running) {
+      |            ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_a_tur.c:987:23: error: redefinition of 'tur_timer_wheel_new'
+  987 | static TurTimerWheel *tur_timer_wheel_new(void) {
+      |                       ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_a_tur.c:734:23: note: previous definition is here
+  734 | static TurTimerWheel *tur_timer_wheel_new(void) {
+      |                       ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_a_tur.c:990:28: error: no member named 'lock' in 'struct TurTimerWheel'
+  990 |     pthread_mutex_init(&w->lock, NULL);
+      |                         ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_a_tur.c:991:8: error: no member named 'current_ms' in 'struct TurTimerWheel'
+  991 |     w->current_ms = tur_wheel_now_ms();
+      |     ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_a_tur.c:992:8: error: no member named 'running' in 'struct TurTimerWheel'
+  992 |     w->running = true;
+      |     ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_a_tur.c:993:24: error: no member named 'thread' in 'struct TurTimerWheel'
+  993 |     pthread_create(&w->thread, NULL, tur_timer_wheel_ticker, w);
+      |                     ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_a_tur.c:999:8: error: no member named 'running' in 'struct TurTimerWheel'
+  999 |     w->running = false;
+      |     ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_a_tur.c:1000:21: error: no member named 'thread' in 'struct TurTimerWheel'
+ 1000 |     pthread_join(w->thread, NULL);
+      |                  ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_a_tur.c:1002:31: error: no member named 'slots' in 'struct TurTimerWheel'
+ 1002 |         TurTimerNode *_n = w->slots[_i];
+      |                            ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_a_tur.c:1005:31: error: no member named 'lock' in 'struct TurTimerWheel'
+ 1005 |     pthread_mutex_destroy(&w->lock);
+      |                            ~  ^
+fatal error: too many errors emitted, stopping now [-ferror-limit=]
+20 errors generated.
+tur: cc invocation failed (status 256)
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_b_tur.c:936:3: error: typedef redefinition with different types ('struct TurTimerWheel' (aka 'TurTimerWheel') vs 'struct TurTimerWheel')
+  936 | } TurTimerWheel;
+      |   ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_b_tur.c:582:3: note: previous definition is here
+  582 | } TurTimerWheel;
+      |   ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_b_tur.c:944:13: error: redefinition of 'tur_timer_wheel_tick'
+  944 | static void tur_timer_wheel_tick(TurTimerWheel *w) {
+      |             ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_b_tur.c:803:13: note: previous definition is here
+  803 | static void tur_timer_wheel_tick(TurTimerWheel *w) {
+      |             ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_b_tur.c:947:32: error: no member named 'current_ms' in 'struct TurTimerWheel'
+  947 |     int64_t elapsed = now - w->current_ms;
+      |                             ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_b_tur.c:950:12: error: no member named 'current_ms' in 'struct TurTimerWheel'
+  950 |         w->current_ms++;
+      |         ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_b_tur.c:951:30: error: no member named 'current_ms' in 'struct TurTimerWheel'
+  951 |         int _slot = (int)(w->current_ms & TUR_WHEEL_SLOT_MASK);
+      |                           ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_b_tur.c:953:32: error: no member named 'lock' in 'struct TurTimerWheel'
+  953 |         pthread_mutex_lock(&w->lock);
+      |                             ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_b_tur.c:954:34: error: no member named 'slots' in 'struct TurTimerWheel'
+  954 |         TurTimerNode **_pp = &w->slots[_slot];
+      |                               ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_b_tur.c:961:46: error: no member named 'current_ms' in 'struct TurTimerWheel'
+  961 |             } else if (_n->deadline_ms <= w->current_ms) {
+      |                                           ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_b_tur.c:967:34: error: no member named 'lock' in 'struct TurTimerWheel'
+  967 |         pthread_mutex_unlock(&w->lock);
+      |                               ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_b_tur.c:979:15: error: no member named 'running' in 'struct TurTimerWheel'
+  979 |     while (w->running) {
+      |            ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_b_tur.c:987:23: error: redefinition of 'tur_timer_wheel_new'
+  987 | static TurTimerWheel *tur_timer_wheel_new(void) {
+      |                       ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_b_tur.c:734:23: note: previous definition is here
+  734 | static TurTimerWheel *tur_timer_wheel_new(void) {
+      |                       ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_b_tur.c:990:28: error: no member named 'lock' in 'struct TurTimerWheel'
+  990 |     pthread_mutex_init(&w->lock, NULL);
+      |                         ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_b_tur.c:991:8: error: no member named 'current_ms' in 'struct TurTimerWheel'
+  991 |     w->current_ms = tur_wheel_now_ms();
+      |     ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_b_tur.c:992:8: error: no member named 'running' in 'struct TurTimerWheel'
+  992 |     w->running = true;
+      |     ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_b_tur.c:993:24: error: no member named 'thread' in 'struct TurTimerWheel'
+  993 |     pthread_create(&w->thread, NULL, tur_timer_wheel_ticker, w);
+      |                     ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_b_tur.c:999:8: error: no member named 'running' in 'struct TurTimerWheel'
+  999 |     w->running = false;
+      |     ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_b_tur.c:1000:21: error: no member named 'thread' in 'struct TurTimerWheel'
+ 1000 |     pthread_join(w->thread, NULL);
+      |                  ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_b_tur.c:1002:31: error: no member named 'slots' in 'struct TurTimerWheel'
+ 1002 |         TurTimerNode *_n = w->slots[_i];
+      |                            ~  ^
+/tmp/tur-build/tests_cli_tur-test-success_cases_pass_b_tur.c:1005:31: error: no member named 'lock' in 'struct TurTimerWheel'
+ 1005 |     pthread_mutex_destroy(&w->lock);
+      |                            ~  ^
+fatal error: too many errors emitted, stopping now [-ferror-limit=]
+20 errors generated.
+tur: cc invocation failed (status 256)

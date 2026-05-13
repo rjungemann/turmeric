@@ -155,7 +155,8 @@ static int run_core_passes(PassContext *ctx) {
                                           ctx->forms, ctx->nforms,
                                           ctx->stdlib_prefix,
                                           ctx->module_base_dir,
-                                          ctx->separate_compilation);
+                                          ctx->separate_compilation,
+                                          &ctx->tc_env);
             if (!ctx->prog || diag_had_error()) return 1;
 #ifndef NDEBUG
             /* Phase HKT-P6: verify kind info is preserved after elaboration */
@@ -199,7 +200,7 @@ static int run_core_passes(PassContext *ctx) {
             break;
         case PASS_CPS:
             /* Phase 18: CPS transformation for shift/reset. */
-            ctx->prog = cps_transform(ctx->arena, ctx->prog);
+            ctx->prog = cps_transform(ctx->arena, ctx->prog, &ctx->tc_env);
             if (!ctx->prog || diag_had_error()) return 1;
 #ifndef NDEBUG
             /* Phase HKT-P6: verify kind info preserved after CPS */
@@ -1009,7 +1010,7 @@ static int cmd_explain(const char *code) {
         return 1;
     }
 
-    Expr *prog = elaborate_program(&arena, &st, forms, nforms, 0, ".", false);
+    Expr *prog = elaborate_program(&arena, &st, forms, nforms, 0, ".", false, NULL);
     if (!prog || diag_had_error()) {
         /* Error already emitted */
         symtab_free(&st);
