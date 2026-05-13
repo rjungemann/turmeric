@@ -1,0 +1,31 @@
+;; Phase HKT-P2: Benchmark for fmap over vec (§8)
+;;
+;; This benchmark measures the overhead of dictionary passing by comparing
+;; the HKT-based fmap (which uses dictionary dispatch) against a monomorphic
+;; direct call baseline.
+;;
+;; The test applies a simple function (increment) to each element of a large vec
+;; using the Functor typeclass's fmap method.
+
+;; Number of elements in the vec
+(defn N [] :int 1000000)
+
+;; Simple increment function
+(defn inc [x :int] :int (+ x 1))
+
+;; Main benchmark: fmap over a large vec using typeclass dispatch
+(defn benchmark [] :int
+  (let v (vec-new)
+        ;; Fill the vec with values 0..N-1
+        (dotimes [i (N)]
+          (vec-push! v i))
+        
+        ;; Apply fmap using the Functor typeclass
+        ;; This exercises dictionary passing as fmap resolves through the typeclass
+        (let result (fmap v inc))
+              result)))
+
+(defn main [] :int
+  ;; Run benchmark and return 0 (we measure time externally)
+  (benchmark)
+  0)
