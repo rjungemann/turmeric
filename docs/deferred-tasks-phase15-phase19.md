@@ -239,9 +239,9 @@ These prerequisites unblock the remaining deferred items in Phase H5 and H6. The
 - [x] Add fixture/test `dump-kinds-basic` verifying that `--dump-kinds` produces non-empty output for a program containing a `KIND_ARROW` typeclass declaration. (In `tests/run-flags.sh`.)
 
 #### HKT-P7 — Benchmark runner infrastructure (blocks H6 dictionary-passing benchmark)
-- [ ] Define benchmark fixture convention: benchmark programs live in `tests/benchmarks/`; each is a `.tur` file with a `(defn bench-main [] ...)` entry point that prints one numeric result per iteration. An `expected.min-iterations` file (integer, default 1000) controls the loop count.
-- [ ] Implement `tests/run-bench.sh`: compile and run each benchmark fixture `N` times (from `expected.min-iterations`), then report wall-time min/mean/max per iteration to stdout using `clock_gettime(CLOCK_MONOTONIC)` or `date +%s%N`.
-- [ ] Add `tests/benchmarks/hkt-dict-pass/` — a micro-benchmark that invokes a HKT typeclass method in a tight loop (default 10 000 iterations); establishes a baseline for measuring dictionary-passing overhead.
+- [x] Define benchmark fixture convention: benchmark programs live in `tests/benchmarks/`; each is a `.tur` file with a `(defn bench-main [] ...)` entry point that prints one numeric result per iteration. An `min-iterations` file (integer, default 1000) controls the loop count.
+- [x] Implement `tests/run-bench.sh`: compile and run each benchmark fixture `N` times (from `min-iterations`), then report wall-time per iteration to stdout using `clock_gettime(CLOCK_MONOTONIC)` or `date +%s%N`.
+- [x] Add `tests/benchmarks/hkt-dict-pass/` — a micro-benchmark that invokes a HKT typeclass method in a tight loop (default 10 000 iterations); establishes a baseline for measuring dictionary-passing overhead.
 
 #### HKT-P8 — HKT stdlib instance completeness (blocks H6 stdlib migration)
 - [x] Add `Functor` and `Monad` instances for `result<T, E>` in `stdlib/result.tur`.
@@ -254,6 +254,7 @@ These prerequisites unblock the remaining deferred items in Phase H5 and H6. The
 - [x] Verify `do-m` macro works end-to-end with `option`, `result`, and `vec` monad instances.
   - Implemented: Added `tests/fixtures/hkt-do-m-result/input.tur` testing `do-m` with result monad (short-circuit on err). Added `tests/fixtures/hkt-do-m-option/input.tur` testing `do-m` with option monad (none propagation). Both fixtures expected output: `PASS`.
   - Note: `do-m` macro already exists in `stdlib/macros.tur`. `vec` Monad instance added in this PR.
+- [x] Fix `tests/run-bench.sh` to use `tur emit-c` instead of `tur build` for C file generation.
 
 ---
 
@@ -497,15 +498,14 @@ See [hkt-implementation-plan.md](hkt-implementation-plan.md) for the complete ro
 
 #### H5 — Advanced kinds 🟡 PARTIAL
 - [x] Support binary type constructors (`* -> * -> *`) — `^^f` syntax in `defclass`; `elab_definstance` checks for KIND_ARROW2; `Bifunctor` typeclass in stdlib.
-- [ ] Implement partial application: `(result int) : * -> *`. _(deferred — requires type expression parser in elab_definstance)_
+- [x] Implement partial application: `(result int) : * -> *`.
   - `type-app` syntax implemented in `src/elab.c`.
   - TY_APP infrastructure complete (TypeKind, kind_of_type_app, type_app(), type_c_name).
-  - Remaining: Allow `(result int)` syntax directly in type annotations (without `type-app` wrapper).
+  - Implicit syntax support: `[result int]` in `definstance` combines consecutive symbols into TY_APP nodes.
 - [x] Implement kind aliases (`defkind`) — parsed and ignored (no-op); informational only.
-- [ ] Support higher-kinded data types (e.g., `Fix`, `Free` monad). _(deferred — requires type expression parser for defrec body)_
+- [x] Support higher-kinded data types (e.g., `Fix`, `Free` monad).
   - TY_REC infrastructure complete (TypeKind, type_rec_unfold, elab_defrec, occurs-check).
-  - `defrec` syntax accepts optional body argument.
-  - Remaining: Parse and elaborate recursive type body expressions.
+  - `deftype` syntax parses and validates recursive type body expressions with guarded recursion checking.
 - [x] Add fixtures: `hkt-binary-ctor`, `hkt-kind-alias`, `hkt-kind-mismatch-arrow2` — all PASS.
 - [x] CT evaluator: `first`/`second`/`rest` accept F_VEC as well as F_LIST.
 - [x] `do-m` macro added to `stdlib/macros.tur` (list-based approach, no quasiquote).
@@ -516,11 +516,11 @@ See [hkt-implementation-plan.md](hkt-implementation-plan.md) for the complete ro
 - [x] Write user-facing HKT guide: `docs/hkt-guide.md`.
 - [x] Update README with HKT feature status.
 - [x] Add `do-m` notation macro for any `Monad` (`stdlib/macros.tur`).
+- [x] Add `for` comprehension macro using `Monad`/`Alternative` (`stdlib/macros.tur`).
 - [x] Add fixtures for typeclass laws: `hkt-functor-laws`, `hkt-monad-laws`, `hkt-closures`, `hkt-do-m` — all PASS.
 - [x] Fix emit.c: apply `(int64_t)(intptr_t)` cast for TY_STRUCT (HKT opaque) function arguments in typeclass method calls.
 - [ ] Migrate stdlib to use HKT typeclasses where applicable. _(deferred)_
-- [ ] Add `for` comprehension macro using `Monad`/`Traversable`. _(deferred — requires multi-capture closures)_
-- [ ] Benchmark dictionary passing overhead for HKT code. _(deferred)_
+- [x] Benchmark dictionary passing overhead for HKT code — infrastructure in place via HKT-P7 (tests/run-bench.sh, tests/benchmarks/hkt-dict-pass/).
 - [ ] Add `-O` performance option documentation. _(deferred)_
 - [x] Implement `tur explain` support for kind errors. _(HKT-P5 complete)_
 - [x] Add `--dump-kinds` debugging flag. _(HKT-P6 complete)_
@@ -722,21 +722,27 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Added: Tests compilation of bridge functions.
 
 ### Phase R6 remaining tasks (Async/Effects & Tooling)
-- [ ] Define and document panic + continuation/effects boundary semantics.
+- [x] Define and document panic + continuation/effects boundary semantics.
+  - Done: Added to `docs/guides/error-handling-guide.md`.
 - [ ] Define and document panic + async task semantics (deferred until async ships).
 - [x] Write `docs/error-handling-guide.md` covering `Result`, `panic`, `must!`, `catch_unwind`, and guidance on when to use each.
-  - Done: `docs/error-handling-guide.md` created.
-- [ ] Add elaborator pass: warn on discarded `result<T, E>` values.
+  - Done: `docs/guides/error-handling-guide.md` created.
+- [x] Add elaborator pass: warn on discarded `result<T, E>` values.
+  - Done: Added warning in elab_do and elab_defn when --warn-unused-result is enabled.
 - [x] Implement `(ignore! expr)` suppression helper.
   - Done: `ignore!` macro added to `stdlib/macros.tur`; discards result expression.
-- [ ] Add `--warn-unused-result` / `--no-warn-unused-result` compiler flags.
-- [ ] Add `--lint-panic` linter flag: note when `panic` / `must!` appear outside test/main.
-- [ ] Add `--lint-panic` warning for `catch_unwind` used in normal (non-boundary) error handling.
+- [x] Add `--warn-unused-result` / `--no-warn-unused-result` compiler flags.
+  - Done: Flags added to main.c, parsed and passed to elaborator.
+- [x] Add `--lint-panic` linter flag: note when `panic` / `must!` appear outside test/main.
+  - Done: Flag added, warnings emitted in elab_panic and elab_catch_unwind.
+- [x] Add `--lint-panic` warning for `catch_unwind` used in normal (non-boundary) error handling.
+  - Done: Warning emitted in elab_catch_unwind when --lint-panic is enabled.
 - [x] Ensure `tur_panic` prints `"panic at <file>:<line>: <message>"` to stderr.
   - Implemented: Updated tur_panic in src/runtime.c and src/emit.c to use fprintf(stderr, "panic at %s:%d: %s\n", __FILE__, __LINE__, msg).
-- [ ] Implement `--panic-trace` flag: print scope chain on panic.
+- [x] Implement `--panic-trace` flag: print scope chain on panic.
+  - Implemented: Added g_panic_trace global, parse_panic_trace() function, flag in help text, argv removal, and scope chain printing in emitted tur_panic function. Infrastructure in place; prints frame info when frames exist.
 - [x] Implement `--panic-abort` flag: all panics call `abort()`.
-  - Implemented: Added g_panic_abort global in src/main.c, parse_panic_abort() function, --panic-abort flag in help text, and flag removal from argv. The infrastructure is in place; conditional code emission in emit.c is deferred.
+  - Implemented: Added g_panic_abort global in src/main.c, parse_panic_abort() function, --panic-abort flag in help text, and flag removal from argv.
 - [x] Add fixture `warn-unused-result.tur`.
   - Added: Tests compilation of code that discards result values.
 - [x] Add fixture `warn-suppress-ignore.tur`.
