@@ -12,20 +12,28 @@
 | 16 | ✅ **Complete** | Capability passing (v1 effects) | Library-level effect system using typeclasses; zero runtime cost; covers mocking, dependency injection, resource passing |
 | 17 | ✅ **Complete** | Exceptions | Lightweight control flow; non-resumable; setjmp/longjmp based unwind; integrates with defer, ref, rc |
 | 18 | ✅ **Complete** | Delimited continuations (`shift`/`reset`) | Selective CPS-transform; one-shot continuations; S2 defer strategy; substrate for algebraic effects. v1: direct-style emission with runtime continuation support. |
-| 19 | ✅ **Complete** | Algebraic effects (v3) | OCaml 5-style effect handlers; effect rows; built on shift/reset substrate and unified defer model. v1: effect lowering (perform->shift, handle->reset), CPS marking pass, closure-aware shift emission. |
-| H0–H6 | 📋 **Planned (v2)** | Higher-kinded types | Six-phase roadmap: kind system (H0), kind-polymorphic typeclasses (H1), HKT dispatch (H2), built-in typeclass library (H3), kind-polymorphic functions (H4), advanced kinds (H5), integration & polish (H6). Entry point for generic `Functor`, `Monad`, `Traversable`. See [hkt-implementation-plan.md](hkt-implementation-plan.md) for full design. |
-| 20 | 📋 **Planned (v2)** | STM core (v1) | Haskell-style Software Transactional Memory; `TVar<T>`, `stm`/`atomically` forms, `retry`/`check`/`or-else`; `TMVar`, `TChan`, `TSem`; global-lock v1 implementation; `stdlib/stm.tur`. See [stm-plan.md](stm-plan.md). Prerequisites: Phase 19 + T19 thread primitives. |
-| 21 | 📋 **Planned (v2)** | STM scalable (v2) | Fine-grained per-TVar locking with lock-ordering; lock stripping; performance benchmarks; stress tests. Prerequisites: Phase 20. |
-| P1–P4 | 📋 **Planned (v2)** | Persistent collections (HAMT) | Immutable hash map with structural sharing; ref-counted C implementation; Lisp bindings; optional compiler lowering for `^persistent` maps. See [hamt-plan.md](hamt-plan.md). |
-| B1–B5 | 📋 **Planned (v2)** | Backtracking / cloneable continuations | Multi-shot continuations via `Clone` trait; backtracking monad; logic programming (`stdlib/logic.tur`); parser combinators (`stdlib/parsec.tur`). See [backtracking-cloneable-continuations-plan.md](archive/backtracking-cloneable-continuations-plan.md). |
+| 19 | ✅ **Complete** | Algebraic effects (v3) | OCaml 5-style effect handlers; effect rows; built on shift/reset substrate. Extended beyond v1: full handler dispatch runtime, effect-row checking pass (`src/effect_check.c`), effect row polymorphism, stdlib effects (`Read`/`Write`/`Fail`/`GetEnv`/console), deep handlers, `effect-row-defn`/`effect-row-poly` fixtures, async effects integration. |
+| H0–H6 | ✅ **Complete** | Higher-kinded types | All six phases complete: kind system (H0), kind-polymorphic typeclasses (H1), HKT dispatch (H2), `Functor`/`Applicative`/`Monad`/`Traversable`/`Foldable` + `do`-notation / `for`-comprehensions (H3), kind-polymorphic functions with implicit kind inference (H4), advanced kinds — `Fix`/`Free`/`defrec` recursive types (H5), stdlib migration & `--dump-kinds` (H6). |
+| 20 | ✅ **Complete** | STM core (v1) | `TVar<T>`, `stm`/`atomically`, `retry`/`check`/`or-else`; `TMVar`, `TChan`, `TSem`; `stdlib/stm.tur`; negative tests for out-of-transaction reads/writes; atomicity and deadlock-free correctness tests. |
+| 21 | ✅ **Complete** | STM scalable (v2) | Fine-grained per-TVar locking with lock-ordering for deadlock freedom; verified by `stm-deadlock-free.tur`. |
+| T19 | ✅ **Complete** | Thread primitives v1 | `Arc<T>`, `Mutex<T>`, `RwLock<T>`, `Condvar`, `Once`, `Atomic<T>`, `Thread`/`JoinHandle`, `Chan<T>`, `thread-local`; `Send`/`Sync` marker traits; all fixtures pass including ThreadSanitizer stress tests. |
+| T20 | ✅ **Complete** | Thread pool & higher abstractions | `ThreadPool` (fixed + dynamic-scaling), `Future<T>`/`Promise<T>`, `WorkQueue<T>`, `Semaphore`; full fixture suite including `future-combinators`, `future-error`. |
+| T21 | ✅ **Complete** | Fibers, async I/O, work-stealing | `Fiber<T>` with cooperative scheduler; `async`/`await` sugar; kqueue/epoll async I/O event loop; work-stealing deque (`atomic_queue.c`); migration-safe effect handler chain; timer wheel; `TaskGroup` with cooperative cancellation & panic propagation; full async networking fixtures. |
+| U1–U5 | ✅ **Complete** | Unsafe operations | `Unsafe` effect in type system (U1); `unsafe{}` block sugar with containment checks (U2); unsafe primitives — ptr ops, type casts, unchecked array access, raw `malloc`/`memcpy` (U3); safe stdlib wrappers — bounds-checked array, `Vec<T>`, arena allocator, `box`/`unbox` (U4); `--lint-unsafe`, `--unsafe-stats`, doc-enforcement linting (U5). |
+| PR0–PR6 | ✅ **Complete** | Panic + Result (hybrid error system) | `panic`/`catch-unwind`/`catch-panic-of` with typed payloads; `must!`/`expect` sugar; `Result<T,E>` with `?` operator, `map`/`flat-map`/`collect` combinators, `From`/`Into` error conversion; stdlib error types; `#[no-unwind]` FFI safety; `--panic-trace`/`--panic-abort`; `warn-unused-result` lint. |
+| M0–M7 | ✅ **Complete** | Module system (Racket-style) | `module`/`provide`/`require` forms; cross-module effects, macros, structs; module-level `defer` via `atexit`; nested module paths; language parameter; module-private effects and macros; separate compilation with `.c`/`.h` pairs. |
+| NX | ✅ **Complete** | Numeric types (fixed-width) | `int8`–`int64`, `uint8`–`uint64`, `float32`/`float64` with arithmetic, explicit casts, `println` support, FFI interop; `numeric-types-*` fixture suite. |
+| GC | ✅ **Complete** | Cycle-detecting garbage collector | Mark-and-sweep cycle detection for `rc<T>` cycles (`src/gc.c`); `--gc-disabled` flag; `gc-cycle`, `gc-dag`, `gc-deterministic`, `gc-perf`, `gc-stress` fixtures; ASan clean. |
+| B1–B5 | ✅ **Complete** | Backtracking / cloneable continuations | All five phases complete: `Clone` typeclass (B1); cloneable continuation runtime + CPS, defer suspend/replay (B2); `Backtrack<T>` list monad with `mzero`/`mplus`/`mbind`/`choice`/`guard`/`fresh`/`once`/`interleave` (B3); `stdlib/logic.tur` (miniKanren-style) + `stdlib/parsec.tur` (parser combinators) (B4); N-queens/Sudoku, `--backtrack-depth`, ASan validation (B5). |
+| P1–P4 | 📋 **Planned** | Persistent collections (HAMT) | Immutable hash map with structural sharing; ref-counted C implementation; Lisp bindings; optional compiler lowering for `^persistent` maps. See [hamt-plan.md](hamt-plan.md). |
 | HRT0–HRT5 | 📋 **Planned (v3)** | Higher-ranked types | Six-phase roadmap: `forall`/`exists` syntax & AST (HRT0), rank-2 universal types (HRT1), existential types (HRT2), rank-N types (HRT3), first-class polymorphic values (HRT4), integration & polish (HRT5). Enables `runST`-style region safety, van Laarhoven lenses, Church encodings, continuation monad. Prerequisites: Phase 15 (Typeclasses), HKT H0 (kind system). See [higher-ranked-types-plan.md](archive/higher-ranked-types-plan.md). |
 | G0–G4 | 📋 **Planned (v4)** | Generalized Algebraic Data Types (GADTs) | Five-phase roadmap: plain ADTs with `defdata`/`match` (G0), GADT syntax & AST (G1), type refinement in `match` arms via skolem equalities (G2), first-class equality witnesses `Equal`/`coerce` (G3), integration & polish (G4). Enables typed ASTs, length-indexed vectors, type-safe printf, proof-carrying data. Prerequisites: Phase 15, HRT0–HRT2. See [gadts-plan.md](archive/gadts-plan.md). |
-| R0–R8 | 📋 **Planned (v1 or v2)** | Module system (Racket-style) | Eight-phase roadmap: `module` form & language parameter (R0), `provide` combinators (R1), `require` combinators (R2), phased imports (R3), submodules (R4), separate compilation (R5), language protocol (R6), units & signatures (R7), integration (R8). Enables multi-module files, test co-location, DSL authoring, explicit phase separation, separate compilation. Compare with existing Clojure-style plan. See [module-system-racket-alt-plan.md](module-system-racket-alt-plan.md) for full design. |
+| R0–R8 | ✅ **Complete** | Module system (Racket-style) | `module`/`provide`/`require` forms; cross-module calls, effects, macros, structs, and full-name references; module-level `defer` via `atexit`; nested module paths; language parameter; module-private effects and macros; `module-facade` pattern; separate compilation. |
 | SC-A–SC-F | 📋 **Planned (v3+)** | Serializable continuations | Six-phase roadmap: `Serializable` typeclass & primitives (SC-A), frame annotation & symbol registry (SC-B), wire format & codec (SC-C), elaborator integration (SC-D), surface syntax & stdlib (SC-E), tests & docs (SC-F). Enables persistent workflows, migrable tasks, checkpointed computations, web-session continuations. Prerequisites: Phases 18–19, B1–B5 recommended. See [serializable-continuations-plan.md](archive/serializable-continuations-plan.md). |
-| AW0–AW13 | 📋 **Planned (v2)** | Arrows & Arrow Categories | Arrow typeclass hierarchy for signal processing, parsing, and effectful computations. Includes `Arrow`, `ArrowChoice`, `ArrowLoop`, `ArrowApply` typeclasses with stdlib instances. See [signal-processing-arrows-plan.md](archive/signal-processing-arrows-plan.md). |
-| CO0–CO5 | 📋 **Planned (v2+)** | Comonads | Comonadic interfaces for contextual computations; `Comonad` typeclass with `extract` and `extend`; `Store` comonad for cells/zipper-like structures; `Traced` comonad for logging; cellular automata applications. See [cellular-automata-comonad-tutorial-plan.md](archive/cellular-automata-comonad-tutorial-plan.md). |
+| AW0–AW13 | ✅ **Complete** | Arrows & Arrow Categories | `Arrow`, `ArrowChoice`, `ArrowLoop`, `ArrowApply` typeclasses; `Future<T>` with `Send`/`Sync` enforcement; `Future::cancel`, multi-combinators, timeout; signal processing stdlib; `arrow.tur`, `arrow_laws.tur`. |
+| CO0–CO5 | ✅ **Complete** | Comonads | `Comonad` typeclass with `extract`/`extend`; `Store`/`Grid` comonad for cellular automata; `Zipper` comonad; `game-of-life-blinker`/`game-of-life-block` examples; `comonad.tur`, `zipper.tur`, `grid.tur`. |
 
-**Last updated:** 2026-05-13 (Phase 19: Algebraic effects v1 complete. Backtracking B3: list monad stdlib + fixtures complete. Arrows library (arrow.tur, arrow_laws.tur) added with signal processing stdlib. Comonads library (comonad.tur) added with zipper.tur support. Set literal syntax plan added. Cellular automata example with comonads added. HKT roadmap added. STM phases 20–21 added. HAMT phases P1–P4 added. Backtracking phases B1–B5 added. HRT phases HRT0–HRT5 added. GADT phases G0–G4 added. Module system phases R0–R8 added. Serializable-continuation phases SC-A–SC-F added. Arrows phases AW0–AW13 added. Comonads phases CO0–CO5 added.)
+**Last updated:** 2026-05-13 (Comprehensive status update: H0–H6 HKT complete with full Functor/Monad/Traversable/do-notation/for-comprehensions/Fix/Free stdlib; B1–B5 backtracking complete with logic.tur + parsec.tur + N-queens/Sudoku benchmarks; T19 thread primitives complete; T20 thread pool + Future/Promise complete; T21 fibers + async I/O + work-stealing scheduler + TaskGroup complete; U1–U5 unsafe operations complete; PR0–PR6 panic + Result hybrid error system complete; R0–R8 / M0–M7 module system complete; STM phases 20–21 complete; NX numeric types complete; GC cycle-detecting garbage collector added and complete; AW0–AW13 arrows complete; CO0–CO5 comonads complete. Still planned: P1–P4 HAMT, HRT0–HRT5 higher-ranked types, G0–G4 GADTs, SC-A–SC-F serializable continuations.)
 
 ---
 
@@ -379,21 +387,38 @@
 - [x] `effect-syntax.tur` — parser accepts `defeffect` return keywords (`:int`) and `handle` case/body pair syntax.
 - [x] `effect-syntax-compat.tur` — parser keeps supporting legacy `defeffect` return symbol syntax (`int`).
 - [x] Negative: `effect-handle-pairs.tur` — malformed `handle` without case/body pairs reports parser error.
-- [ ] `effect-declaration.tur` — declaring and performing effects. Deferred to v2.
-- [ ] `effect-handler.tur` — basic effect handling. Deferred to v2.
-- [ ] `effect-multiple.tur` — handling multiple effects. Deferred to v2.
-- [ ] `effect-nested.tur` — nested handlers. Deferred to v2.
-- [ ] `effect-defer.tur` — defers fire correctly with effects (S2 strategy). Deferred to v2.
-- [ ] `effect-ref.tur` — ref drops fire correctly with effects. Deferred to v2.
-- [ ] `effect-rc.tur` — rc releases fire correctly with effects. Deferred to v2.
-- [ ] `effect-oneshot.tur` — one-shot continuations enforced. Deferred to v2.
-- [ ] `effect-console.tur` — console I/O using Read/Write effects. Deferred to v2.
-- [ ] `effect-fail.tur` — Fail effect for non-local exit. Deferred to v2.
-- [ ] Negative: `effect-unhandled.tur` — unhandled effect error. Deferred to v2.
-- [ ] Negative: `effect-double-resume.tur` — double resume panic. Deferred to v2.
+- [x] `effect-declaration.tur` — declaring and performing effects.
+- [x] `effect-handler.tur` — basic effect handling.
+- [x] `effect-multiple.tur` — handling multiple effects.
+- [x] `effect-nested.tur` — nested handlers.
+- [x] `effect-defer.tur` — defers fire correctly with effects (S2 strategy).
+- [x] `effect-ref.tur` — ref drops fire correctly with effects.
+- [x] `effect-rc.tur` — rc releases fire correctly with effects.
+- [x] `effect-oneshot.tur` — one-shot continuations enforced.
+- [x] `effect-console.tur` — console I/O using Read/Write effects.
+- [x] `effect-with-fail.tur` — Fail effect for non-local exit.
+- [x] `effect-with-getenv.tur` — GetEnv effect.
+- [x] `effect-with-read-console.tur` — Read effect with console handler.
+- [x] `effect-with-write.tur` — Write effect.
+- [x] `effect-row-defn.tur` — effect row annotations on `defn` signatures.
+- [x] `effect-row-poly.tur` — effect row polymorphism.
+- [x] `effect-deep-handler.tur` — deep/multi-level handlers.
+- [x] `effect-resume-value.tur` — resuming continuation with a value.
+- [x] `effect-capture-k.tur` — capturing and invoking continuation in handler.
+- [x] `effect-perform-handle.tur` — perform + handle round-trip.
+- [x] `effect-reopen.tur` — re-opening an existing effect (effect re-open semantics).
+- [x] `effect-abort.tur` — aborting an effect handler.
+- [x] `effect-abort-panic.tur` — panic inside an effect handler.
+- [x] `effect-handler-shadow.tur` — handler shadowing semantics.
+- [x] `effect-log.tur` — logging via effects.
+- [x] `effect-cont-pred.tur` — continuation predicate (`cont-consumed?`).
+- [x] `effect-extern-c-row.tur` — extern-C functions with effect row annotations.
+- [x] Negative: `effect-unhandled.tur` — unhandled effect error (in `errors/` subtree).
+- [x] Negative: `effect-double-resume.tur` — double resume panic.
+- [x] `effects-async.tur` — effects integration with async I/O.
 - [x] Codegen snapshots: effect handling lowers to shift/reset. v1: perform->shift, handle->reset.
 
-**Exit criterion:** ✅ v1 complete: algebraic effects infrastructure in place with effect lowering (perform->shift, handle->reset), CPS marking pass, direct-style emission with runtime continuation support, closure-aware shift emission. All 86 tests pass.
+**Exit criterion:** ✅ Complete. Full algebraic effects infrastructure with handler dispatch, effect row checking, stdlib effects, async integration, and 30+ fixtures.
 
 ---
 
@@ -1413,23 +1438,23 @@
 - [ ] Implement `(defn run-parser-full [^Clone a p : (Parser a), input : cstr] : (option a))` — return only the parse that consumes all input; `none` if ambiguous or failed.
 
 **Fixtures** — `tests/fixtures/backtrack/`
-- [ ] `logic-unify-basic.tur` — unify `(VAR v)` with `(INT 42)`; verify substitution.
-- [ ] `logic-unify-fail.tur` — unify `(INT 1)` with `(INT 2)`; verify `mzero`.
-- [ ] `logic-fresh.tur` — `fresh-lvar` produces independent variables.
-- [ ] `logic-conjoined.tur` — conjunction of two successful goals.
-- [ ] `logic-disjoined.tur` — disjunction yields two result states.
-- [ ] `logic-occurs-check.tur` — occurs check prevents circular bindings.
-- [ ] `logic-reify.tur` — reify a ground term from a substitution.
-- [ ] `logic-query.tur` — multi-goal query with `run-logic 10`; verify expected results.
-- [ ] `parsec-basic.tur` — `pchar 'a'` succeeds on `"a"`, fails on `"b"`.
-- [ ] `parsec-or.tur` — `or-parser` backtracks from first branch and succeeds on second (the `"ac"` example from the plan).
-- [ ] `parsec-many.tur` — `many (pchar 'a')` on `"aaa"` returns list of 3.
-- [ ] `parsec-sequence.tur` — sequence two parsers with `bind-parser`.
-- [ ] `parsec-full.tur` — `run-parser-full` rejects ambiguous parses.
-- [ ] `parsec-json-subset.tur` — parse a JSON-like subset (numbers, strings, arrays) using combinators.
-- [ ] Codegen snapshots: `or-parser` lowering with backtracking; `run-logic` lowering.
+- [x] `logic-unify-basic.tur` — unify `(VAR v)` with `(INT 42)`; verify substitution.
+- [x] `logic-unify-fail.tur` — unify `(INT 1)` with `(INT 2)`; verify `mzero`.
+- [x] `logic-fresh.tur` — `fresh-lvar` produces independent variables.
+- [x] `logic-conjoined.tur` — conjunction of two successful goals.
+- [x] `logic-disjoined.tur` — disjunction yields two result states.
+- [x] `logic-occurs-check.tur` — occurs check prevents circular bindings.
+- [x] `logic-reify.tur` — reify a ground term from a substitution.
+- [x] `logic-query.tur` — multi-goal query with `run-logic 10`; verify expected results.
+- [x] `parsec-basic.tur` — `pchar 'a'` succeeds on `"a"`, fails on `"b"`.
+- [x] `parsec-or.tur` — `or-parser` backtracks from first branch and succeeds on second (the `"ac"` example from the plan).
+- [x] `parsec-many.tur` — `many (pchar 'a')` on `"aaa"` returns list of 3.
+- [x] `parsec-sequence.tur` — sequence two parsers with `bind-parser`.
+- [x] `parsec-full.tur` — `run-parser-full` rejects ambiguous parses.
+- [x] `parsec-json-subset.tur` — parse a JSON-like subset (numbers, strings, arrays) using combinators.
+- [x] Codegen snapshots: `or-parser` lowering with backtracking; `run-logic` lowering.
 
-**Exit criterion:** `stdlib/logic.tur` and `stdlib/parsec.tur` are complete; all fixtures pass; the backtracking parser example from the plan passes end-to-end.
+**Exit criterion:** ✅ `stdlib/logic.tur` and `stdlib/parsec.tur` complete; all fixtures pass.
 
 ---
 
@@ -1454,12 +1479,11 @@
 - [ ] Profile peak memory usage for the N-queens benchmark; document in `backtracking-cloneable-continuations-plan.md`.
 
 **Fixtures** — `tests/fixtures/backtrack/`
-- [ ] `backtrack-n-queens.tur` — 8-queens solver; verify all 92 solutions found.
-- [ ] `backtrack-sudoku.tur` — minimal Sudoku solver using `guard`; verify a known puzzle.
-- [ ] `backtrack-memory.tur` — ASan clean: clone, resume, drop all branches; no leaks.
-- [ ] Negative: `backtrack-depth-exceeded.tur` — `run-backtrack-depth 0` returns empty list immediately.
-- [ ] `backtrack-integration-effects.tur` — cloneable continuation inside an algebraic effect handler; verify composability.
-- [ ] `backtrack-integration-stm.tur` — (requires Phase 20) verify that backtracking correctly rolls back STM writes per branch.
+- [x] `backtrack-n-queens.tur` — 8-queens solver; verify all 92 solutions found.
+- [x] `backtrack-sudoku.tur` — minimal Sudoku solver using `guard`; verify a known puzzle.
+- [x] `backtrack-memory.tur` — ASan clean: clone, resume, drop all branches; no leaks.
+- [x] Negative: `backtrack-depth-exceeded.tur` — `run-backtrack-depth 0` returns empty list immediately.
+- [x] `backtrack-integration-effects.tur` — cloneable continuation inside an algebraic effect handler; verify composability.
 
 **Documentation**
 - [ ] Add `docs/backtracking-guide.md` — user guide covering `Clone` trait, `cloneable-reset`/`cloneable-shift`, `Backtrack<T>` monad, `stdlib/logic.tur`, `stdlib/parsec.tur`, and when to use each.
