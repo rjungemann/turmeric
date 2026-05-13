@@ -326,6 +326,9 @@ typedef struct ElabModule {
     const Symbol *name;          /* module name (interned) */
     Binding     **exports;       /* exported bindings (each has .name for lookup) */
     uint32_t      n_exports;
+    /* Phase M4: exported macros from this module */
+    struct MacroDef **exported_macros;
+    uint32_t         n_exported_macros;
     bool          is_loading;    /* circular import detection */
 } ElabModule;
 
@@ -535,6 +538,9 @@ typedef struct Elab {
     uint16_t         next_import_file_id; /* file_id counter for imported source files */
     /* Phase M3: Separate compilation — skip inlining imported modules */
     bool             separate_compilation;
+    /* Phase M4: During macro expansion, the defining module of the currently
+     * expanding macro (so private helper macros from that module are visible). */
+    const Symbol    *macro_expansion_module;
 } Elab;
 
 /* Phase 6: Macro definition */
@@ -546,6 +552,12 @@ typedef struct MacroDef {
     const Symbol *rest_param; /* rest-arg symbol name, or NULL */
     Form *body;
     Span span;
+    /* Phase M4: module that defined this macro (NULL = stdlib/pre-module) */
+    const Symbol *defining_module_name;
+    /* Phase M4: true when injected via :refer — visible in any module context
+     * but defining_module_name still holds the original module so private
+     * helpers of that module remain accessible during expansion. */
+    bool is_referred;
 } MacroDef;
 
 typedef enum CtValueTag {
@@ -999,6 +1011,7 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->cap_loaded_modules = 0;
     e->next_import_file_id = 10; /* 0-9 reserved for main + stdlib files */
     e->separate_compilation = false;
+    e->macro_expansion_module = NULL;
 }
 
 /* Phase 13: Lifetime annotation helpers (deferred - infrastructure in place) */
@@ -1007,9 +1020,19 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
 /* Phase 6: Macro lookup */
 static MacroDef *elab_lookup_macro(Elab *e, const Symbol *name) {
     for (uint32_t i = 0; i < e->n_macros; i++) {
-        if (e->macros[i]->name == name) {
-            return e->macros[i];
-        }
+        MacroDef *m = e->macros[i];
+        if (m->name != name) continue;
+        /* Phase M4: visibility rules.
+         * - is_referred: injected via :refer — always visible.
+         * - defining_module_name == NULL: stdlib/pre-module — always visible.
+         * - defining_module_name == current module: visible within the defining module.
+         * - defining_module_name == macro_expansion_module: private helper called from
+         *   an exported macro of the same module that is currently being expanded. */
+        if (m->is_referred) return m;
+        if (m->defining_module_name == NULL) return m;
+        if (m->defining_module_name == e->current_module_name) return m;
+        if (e->macro_expansion_module != NULL &&
+            m->defining_module_name == e->macro_expansion_module) return m;
     }
     return NULL;
 }
@@ -1806,13 +1829,20 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
 
 /* Phase 6: Expand a macro call with arguments */
 static Form *elab_expand_macro(Elab *e, MacroDef *macro, Form **args, uint32_t n_args) {
+    /* Phase M4: set expansion-origin module so private helper macros of the
+     * same module are accessible during this expansion. Restore on every exit. */
+    const Symbol *saved_expansion_mod = e->macro_expansion_module;
+    e->macro_expansion_module = macro->defining_module_name;
+
+#define EXPAND_RESTORE() (e->macro_expansion_module = saved_expansion_mod)
+
     /* Check arity */
     if (macro->is_variadic) {
         if (n_args < macro->n_params) {
             diag_emit(DIAG_ERROR, macro->span,
                       "macro '%s' expects at least %u arguments, got %u",
                       macro->name->name, macro->n_params, n_args);
-            return NULL;
+            EXPAND_RESTORE(); return NULL;
         }
         /* Build augmented args: fixed args + packed rest list at index n_params */
         Form **aug_args = (Form **)arena_alloc(e->arena, (macro->n_params + 1) * sizeof(Form *));
@@ -1828,22 +1858,24 @@ static Form *elab_expand_macro(Elab *e, MacroDef *macro, Form **args, uint32_t n
         Span rest_span = n_rest > 0 ? args[macro->n_params]->span : macro->span;
         aug_args[macro->n_params] = form_list(e->arena, rest_span, rest_items, n_rest);
         Form *templ = substitute_params(e, macro->body, macro, aug_args);
-        if (!templ) return NULL;
-        if (!form_contains_ct_builtins(templ)) return templ;
-        return elab_eval_macro_form(e, templ);
+        if (!templ) { EXPAND_RESTORE(); return NULL; }
+        Form *result = form_contains_ct_builtins(templ) ? elab_eval_macro_form(e, templ) : templ;
+        EXPAND_RESTORE(); return result;
     }
     if (n_args != macro->n_params) {
         diag_emit(DIAG_ERROR, macro->span,
                   "macro '%s' expects %u arguments, got %u",
                   macro->name->name, macro->n_params, n_args);
-        return NULL;
+        EXPAND_RESTORE(); return NULL;
     }
-    
+
     /* Substitute parameters in the macro body */
     Form *templ = substitute_params(e, macro->body, macro, args);
-    if (!templ) return NULL;
-    if (!form_contains_ct_builtins(templ)) return templ;
-    return elab_eval_macro_form(e, templ);
+    if (!templ) { EXPAND_RESTORE(); return NULL; }
+    Form *result = form_contains_ct_builtins(templ) ? elab_eval_macro_form(e, templ) : templ;
+    EXPAND_RESTORE(); return result;
+
+#undef EXPAND_RESTORE
 }
 
 static Binding *binding_new(Elab *e, const Symbol *name, Type type,
@@ -5165,6 +5197,7 @@ static Expr *elab_defmacro(Elab *e, const Form *call) {
     macro->rest_param = rest_param;
     macro->body = body;
     macro->span = call->span;
+    macro->defining_module_name = e->current_module_name; /* Phase M4 */
 
     /* Register the macro */
     elab_register_macro(e, macro);
@@ -6323,9 +6356,14 @@ static Expr *elab_call(Elab *e, Form *call) {
             e->macro_expand_depth--;
             return NULL;
         }
-        
-        /* Recursively elaborate the expanded form */
+
+        /* Phase M4: Keep the expansion-module context active while elaborating
+         * the expanded form so private helper macros from the same module are
+         * visible when the expansion calls them (e.g. triple → helper-double). */
+        const Symbol *saved_expansion = e->macro_expansion_module;
+        e->macro_expansion_module = macro->defining_module_name;
         Expr *out = elab_form(e, expanded);
+        e->macro_expansion_module = saved_expansion;
         e->macro_expand_depth--;
         return out;
     }
@@ -6670,6 +6708,9 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
     e->current_module_name = NULL;
     e->current_module      = NULL;
 
+    /* Phase M4: capture the DefModule so we can check its export list for macros. */
+    const DefModule *loaded_defmod = NULL;
+
     for (uint32_t i = 0; i < nforms; i++) {
         Expr *ex = elab_form(e, forms[i]);
         if (!ex) {
@@ -6683,8 +6724,9 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
          * emit.c's flatten_program_items expands these into top-level C items.
          * Phase M3: Skip inlining when compiling each module separately; the
          * implementation file #includes the imported module's header instead. */
-        if (ex->kind == EX_DEFMODULE && !e->separate_compilation) {
-            elab_register_file_def(e, ex);
+        if (ex->kind == EX_DEFMODULE) {
+            loaded_defmod = ex->as.defmodule_.mod; /* Phase M4 */
+            if (!e->separate_compilation) elab_register_file_def(e, ex);
         }
     }
 
@@ -6709,6 +6751,40 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
 
     slot->exports   = exp_arr;
     slot->n_exports = n_exp;
+
+    /* Phase M4: Collect exported macros from this module.
+     * A macro is exported if its defining_module_name matches this module's name
+     * AND its name appears in the module's (export ...) list. */
+    slot->exported_macros   = NULL;
+    slot->n_exported_macros = 0;
+    if (loaded_defmod != NULL && loaded_defmod->n_exports > 0) {
+        uint32_t n_mexp = 0;
+        for (uint32_t i = 0; i < e->n_macros; i++) {
+            MacroDef *m = e->macros[i];
+            if (m->defining_module_name != name) continue;
+            /* Check if this macro's name is in the export list */
+            for (uint32_t j = 0; j < loaded_defmod->n_exports; j++) {
+                if (loaded_defmod->exports[j] == m->name) { n_mexp++; break; }
+            }
+        }
+        if (n_mexp > 0) {
+            struct MacroDef **mexp_arr =
+                (struct MacroDef **)arena_alloc(e->arena, n_mexp * sizeof(struct MacroDef *));
+            uint32_t midx = 0;
+            for (uint32_t i = 0; i < e->n_macros; i++) {
+                MacroDef *m = e->macros[i];
+                if (m->defining_module_name != name) continue;
+                for (uint32_t j = 0; j < loaded_defmod->n_exports; j++) {
+                    if (loaded_defmod->exports[j] == m->name) {
+                        mexp_arr[midx++] = m; break;
+                    }
+                }
+            }
+            slot->exported_macros   = mexp_arr;
+            slot->n_exported_macros = n_mexp;
+        }
+    }
+
     slot->is_loading = false;
     return slot;
 }
@@ -6918,9 +6994,11 @@ static Expr *elab_defmodule(Elab *e, const Form *call) {
             e->current_module = NULL;
             return NULL;
         }
-        /* :refer — add each referred symbol directly to the current scope. */
+        /* :refer — add each referred symbol (binding or macro) to the current scope. */
         for (uint32_t k = 0; k < imp->n_refer; k++) {
             const Symbol *ref_sym = imp->refer_syms[k];
+
+            /* First check bindings. */
             Binding *ref_b = NULL;
             for (uint32_t m = 0; m < loaded->n_exports; m++) {
                 if (loaded->exports[m]->name == ref_sym) {
@@ -6928,15 +7006,45 @@ static Expr *elab_defmodule(Elab *e, const Form *call) {
                     break;
                 }
             }
-            if (!ref_b) {
-                diag_emit(DIAG_ERROR, imp->span,
-                          "symbol '%s' is not exported from module '%s'",
-                          ref_sym->name, imp->module_name->name);
-                e->current_module_name = NULL;
-                e->current_module = NULL;
-                return NULL;
+            if (ref_b) {
+                scope_add(&e->global, ref_b);
+                continue;
             }
-            scope_add(&e->global, ref_b);
+
+            /* Phase M4: Check exported macros. */
+            MacroDef *ref_macro = NULL;
+            for (uint32_t m = 0; m < loaded->n_exported_macros; m++) {
+                if (loaded->exported_macros[m]->name == ref_sym) {
+                    ref_macro = loaded->exported_macros[m];
+                    break;
+                }
+            }
+            if (ref_macro) {
+                /* Inject an alias that is visible everywhere via is_referred,
+                 * but keeps defining_module_name so private helpers of the
+                 * original module remain accessible during expansion. */
+                MacroDef *alias = (MacroDef *)arena_alloc(e->arena, sizeof(MacroDef));
+                *alias = *ref_macro;
+                alias->is_referred = true;
+                /* Check for name collision with existing global macros. */
+                if (elab_lookup_macro(e, ref_sym) != NULL) {
+                    diag_emit(DIAG_ERROR, imp->span,
+                              "macro '%s' from module '%s' conflicts with an existing macro",
+                              ref_sym->name, imp->module_name->name);
+                    e->current_module_name = NULL;
+                    e->current_module = NULL;
+                    return NULL;
+                }
+                elab_register_macro(e, alias);
+                continue;
+            }
+
+            diag_emit(DIAG_ERROR, imp->span,
+                      "symbol '%s' is not exported from module '%s'",
+                      ref_sym->name, imp->module_name->name);
+            e->current_module_name = NULL;
+            e->current_module = NULL;
+            return NULL;
         }
     }
 
@@ -6987,18 +7095,32 @@ static Expr *elab_defmodule(Elab *e, const Form *call) {
     mod->body = body;
     mod->n_body = actual_n_body;
 
-    /* M1: Mark exported bindings and validate they exist in this module */
+    /* M1: Mark exported bindings and validate they exist in this module.
+     * Phase M4: macro names in the export list are also valid exports. */
     for (uint32_t j = 0; j < mod->n_exports; j++) {
         Binding *exp_b = scope_lookup(&e->global, mod->exports[j]);
         if (!exp_b || exp_b->defining_module_name != mod->name) {
-            diag_emit(DIAG_ERROR, call->span,
-                      "exported symbol '%s' is not defined in this module",
-                      mod->exports[j]->name);
-            e->current_module_name = NULL;
-            e->current_module = NULL;
-            return NULL;
+            /* Not a binding — check if it's a macro defined in this module. */
+            bool found_macro = false;
+            for (uint32_t k = 0; k < e->n_macros; k++) {
+                if (e->macros[k]->name == mod->exports[j] &&
+                    e->macros[k]->defining_module_name == mod->name) {
+                    found_macro = true;
+                    break;
+                }
+            }
+            if (!found_macro) {
+                diag_emit(DIAG_ERROR, call->span,
+                          "exported symbol '%s' is not defined in this module",
+                          mod->exports[j]->name);
+                e->current_module_name = NULL;
+                e->current_module = NULL;
+                return NULL;
+            }
+            /* Macro exports don't need is_exported flag; they're collected by elab_load_module. */
+        } else {
+            exp_b->is_exported = true;
         }
-        exp_b->is_exported = true;
     }
 
     /* Reset module context */
