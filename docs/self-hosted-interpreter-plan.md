@@ -1,4 +1,4 @@
-# Self-Hosted Turmeric Interpreter Plan
+# Turmeric Interpreter: Eval API and REPL
 
 > **Status:** Speculative — Future Project  
 > **Prerequisite:** Phase 19 complete (algebraic effects), stable Turmeric compiler  
@@ -9,569 +9,360 @@
 
 ## Executive Summary
 
-This document outlines the design and implementation of a **self-hosted Turmeric interpreter** — an interpreter for Turmeric largely written in Turmeric itself, bootstrapped on top of a minimal C interpreter. This project serves two purposes:
+This document describes the design and implementation of a **Turmeric interpreter
+runtime** whose two primary deliverables are:
 
-1. **Language dogfooding** — Demonstrate Turmeric's capability by implementing a significant system (an interpreter) in itself
-2. **Comprehensive testing** — Exercise all of Turmeric's functionality: type system, effects, typeclasses, FFI, macros, pattern matching, etc.
+1. **An importable `eval` API** — a C library (`libturi`) that any Turmeric program (or
+   C program) can link against and call to evaluate Turmeric expressions at runtime.
+   Enables live coding, scripting plugins, configuration DSLs, and user-extensible
+   programs.
 
-The interpreter will be a **separate executable** (`turi`) distinct from the compiler (`tur`).
+2. **A REPL** (`tur repl`) — an interactive read-eval-print loop built directly into
+   the `tur` CLI, backed by the same `libturi` eval core.
+
+Everything else — self-hosting, language dogfooding, comprehensive testing — is
+a **secondary benefit** of having a correct eval core, not a goal in its own right.
 
 ---
 
-## Architecture Overview
+## Primary Goals
 
-```mermaid
-graph TD
-    Bootstrap["Bootstrap Interpreter (C)"]
-    SHI["Self-Hosted Interpreter (Turmeric)"]
-    FFI["FFI Layer (C)"]
-    MiniReader["Mini-Reader (C)"]
-    Source["Turmeric Source Code"]
-    CoreTypes["Interpreter Core Types<br/>Value (tagged union)<br/>Environment (persistent hash map)<br/>Continuation (for effects)<br/>Thunk (delayed computation)"]
+### 1. Importable Eval
 
-    Bootstrap -->|"runs"| SHI
-    SHI -->|"calls into"| FFI
-    Bootstrap --> MiniReader
-    MiniReader -->|"parses"| Source
-    Source -->|"interpreted by"| SHI
-    CoreTypes -->|"used by"| FFI
+Any Turmeric program can call `eval` at runtime:
+
+```scheme
+(import turi/eval)
+
+(defn main [] :int
+  (let [result (eval "(+ 1 2)")]
+    (println result)   ;; 3
+    0))
 ```
 
-### Components
+From C (embedding):
+
+```c
+#include "turi/eval.h"
+
+int main(void) {
+    TuriEnv *env = turi_env_new();
+    TuriValue result = turi_eval(env, "(+ 1 2)");
+    printf("%lld\n", turi_as_int(result));
+    turi_env_free(env);
+}
+```
+
+The eval API supports:
+- **Stateful environments**: define functions and values across multiple `eval` calls
+- **Effect handling**: effects performed inside `eval` are handled by the caller's
+  handler chain
+- **Error propagation**: parse errors and runtime errors surface as Turmeric
+  `Result`/exception values, not process aborts
+- **Sandboxing**: `turi_env_new_sandboxed()` restricts I/O and FFI for untrusted input
+
+### 2. REPL
+
+`tur repl` launches an interactive session:
+
+```
+$ tur repl
+Turmeric v0.x.0  (type :help for help, :quit to exit)
+turmeric> (defn square [x :int] :int (* x x))
+=> #<fn square>
+turmeric> (square 7)
+=> 49
+turmeric> (defeffect Ask [] :cstr)
+=> #<effect Ask>
+turmeric> (handle (perform (Ask))
+       ..   (Ask [] k) (resume k "hello"))
+=> "hello"
+turmeric> :quit
+```
+
+Features:
+- Persistent environment across expressions
+- Multi-line input with `..` continuation prompt
+- `:doc symbol` — show type and docstring
+- `:type expr` — print inferred type without evaluating
+- `:reload file` — re-evaluate a source file into the current environment
+- Readline integration (history, tab completion)
+- Colour diagnostics matching `tur check` output
+
+---
+
+## Secondary Goals
+
+These follow naturally from having a correct eval core and are worth implementing,
+but they do not drive the design:
+
+- **Self-hosting**: the interpreter can eventually be rewritten in Turmeric, providing
+  language dogfooding and a large real-world test case
+- **Scripting / shebang**: `#!/usr/bin/env tur repl --script` for small Turmeric scripts
+  without a compile step
+- **Test harness**: run Turmeric test suites through the interpreter to cross-check
+  compiler semantics
+- **Language server**: the eval core can back a live-evaluation feature in an LSP
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    libturi (eval core)                  │
+│                                                         │
+│  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐  │
+│  │  Reader  │→ │  Elab*   │→ │  Tree-walk Evaluator │  │
+│  │ (C, AST) │  │ (subset) │  │  (walk Expr tree)    │  │
+│  └──────────┘  └──────────┘  └──────────────────────┘  │
+│                                    │                    │
+│                              ┌─────┴──────┐             │
+│                              │  TuriEnv   │             │
+│                              │(persistent │             │
+│                              │  env map)  │             │
+│                              └────────────┘             │
+└─────────────────────────────────────────────────────────┘
+        ↑                              ↑
+  tur repl                  (import turi/eval) / C embed
+```
+
+*Elab\*: a read-only subset of the elaborator — type-checks expressions without
+emitting C. The evaluator walks the elaborated `Expr` tree directly.*
+
+### Key Components
 
 | Component | Language | Purpose |
 |---|---|---|
-| Bootstrap Interpreter | C | Minimal interpreter to run self-hosted code |
-| Mini-Reader | C | Parses Turmeric s-expressions for bootstrap |
-| Self-Hosted Interpreter | Turmeric | Full interpreter implementation |
-| FFI Layer | C | Bridges C and Turmeric for I/O, etc. |
+| Reader | C (existing `src/reader.c`) | Parse source → `Form` AST |
+| Elab subset | C (thin wrapper over `src/elab.c`) | Type-check → `Expr` tree |
+| Tree-walk evaluator | C | Walk `Expr` tree, produce `TuriValue` |
+| `TuriEnv` | C | Persistent binding environment across eval calls |
+| `libturi` | C shared/static library | Public eval API |
+| REPL | C + optional Turmeric | `tur repl` subcommand |
 
----
+### Value Representation
 
-## Design Goals
+```c
+typedef enum {
+    TURI_NIL,
+    TURI_BOOL,
+    TURI_INT,
+    TURI_FLOAT,
+    TURI_CSTR,
+    TURI_CLOSURE,
+    TURI_STRUCT,
+    TURI_EFFECT_CONT,   /* live continuation from handle/perform */
+} TuriTag;
 
-### Primary Goals
-- **Self-hosting**: The interpreter reads, evaluates, and prints Turmeric code
-- **Completeness**: Support full Turmeric language semantics
-- **Correctness**: Faithfully implement Turmeric's operational semantics
-- **Performance**: Reasonable performance for an interpreter (not a compiler)
+typedef struct TuriValue {
+    TuriTag tag;
+    union {
+        bool       as_bool;
+        int64_t    as_int;
+        double     as_float;
+        char      *as_cstr;
+        void      *as_ptr;   /* closure, struct, continuation */
+    };
+} TuriValue;
+```
 
-### Secondary Goals
-- **Debuggability**: Provide good error messages and introspection
-- **REPL**: Interactive read-eval-print loop
-- **Scripting**: Shebang support for Turmeric scripts
-- **Testing**: Comprehensive test suite for Turmeric features
+### Public C API (`turi/eval.h`)
 
-### Non-Goals
-- **Compiler replacement**: This is an interpreter, not a compiler
-- **Optimization**: No JIT, no aggressive optimization passes
-- **Parallelism**: Single-threaded execution model
+```c
+/* Environment lifecycle */
+TuriEnv *turi_env_new(void);
+TuriEnv *turi_env_new_sandboxed(void);
+void     turi_env_free(TuriEnv *);
+
+/* Evaluation */
+TuriValue turi_eval(TuriEnv *, const char *src);
+TuriValue turi_eval_file(TuriEnv *, const char *path);
+
+/* Error handling */
+bool        turi_is_error(TuriValue);
+const char *turi_error_message(TuriValue);
+
+/* Value accessors */
+bool        turi_as_bool(TuriValue);
+int64_t     turi_as_int(TuriValue);
+double      turi_as_float(TuriValue);
+const char *turi_as_cstr(TuriValue);
+```
+
+### Turmeric-facing module (`turi/eval`)
+
+```scheme
+(import turi/eval)
+
+;; Create an isolated evaluation environment
+(let [env (Env/new)]
+  (eval! env "(defn double [x :int] :int (* 2 x))")
+  (eval  env "(double 21)"))   ;; => 42
+```
 
 ---
 
 ## Implementation Phases
 
-### Phase S0: Project Setup & Bootstrap Foundation
+### Phase S0: Eval Core (C)
 
-**Goal:** Establish the build infrastructure and minimal bootstrap interpreter.
+**Goal:** `libturi` compiles and `turi_eval` handles expressions through basic
+arithmetic, `let`, `if`, `do`, `fn`, and `defn`.
 
-**Exit Criterion:** Can compile and run a trivial Turmeric program via bootstrap.
+**Exit criterion:** The REPL can evaluate `(+ 1 2)` and define a function.
 
-#### Bootstrap Interpreter (`src/bootstrap/`)
+- [ ] `src/turi/eval.c` / `src/turi/eval.h` — tree-walk evaluator over `Expr` AST
+- [ ] `src/turi/env.c` / `src/turi/env.h` — persistent `TuriEnv` (hash map of
+  `Symbol → TuriValue`)
+- [ ] `src/turi/value.c` / `src/turi/value.h` — `TuriValue` tagged union +
+  accessors
+- [ ] Wire into existing `src/reader.c` + `src/elab.c` (read-only path)
+- [ ] `CMakeLists.txt`: build `libturi.{a,dylib,so}` alongside `tur`
+- [ ] `tur repl` subcommand skeleton: read line → `turi_eval` → print result
 
-- [ ] `bootstrap/interp.c` — Core interpretation loop in C
-- [ ] `bootstrap/interp.h` — Public interface
-- [ ] `bootstrap/value.c` — Tagged union value representation
-- [ ] `bootstrap/value.h` — Value type definitions
-- [ ] `bootstrap/env.c` — Environment implementation (hash map)
-- [ ] `bootstrap/env.h` — Environment interface
-- [ ] `bootstrap/mini_reader.c` — Minimal s-expression reader
-- [ ] `bootstrap/mini_reader.h` — Reader interface
-
-#### Value Representation
-
-```c
-// Tagged union for Turmeric values
-typedef enum {
-    VAL_NIL,
-    VAL_BOOL,
-    VAL_INT,
-    VAL_FLOAT,
-    VAL_SYMBOL,
-    VAL_STRING,
-    VAL_PAIR,
-    VAL_VECTOR,
-    VAL_CLOSURE,
-    VAL_PRIMITIVE,
-    VAL_STRUCT,
-    VAL_TYPECLASS_DICT,
-} ValueTag;
-
-typedef struct Value Value;
-struct Value {
-    ValueTag tag;
-    union {
-        bool as_bool;
-        int64_t as_int;
-        double as_float;
-        char* as_string;
-        struct { Value* car; Value* cdr; } as_pair;
-        struct { Value* data; size_t len; size_t cap; } as_vector;
-        struct { Value* (*fn)(Value*, Value*); char* name; } as_primitive;
-        struct { Value* env; Value* params; Value* body; } as_closure;
-        struct { char* name; Value* fields; } as_struct;
-    } data;
-};
-```
-
-#### Build System
-
-- [ ] `CMakeLists.txt` for `turi` executable
-- [ ] Separate from main `tur` compiler build
-- [ ] Shared libraries where applicable (reader, gc)
-
-#### Fixtures
-- [ ] `fixtures/bootstrap/hello.tur` — Simple program that runs
-- [ ] `fixtures/bootstrap/arithmetic.tur` — Basic math operations
-- [ ] `fixtures/bootstrap/conditionals.tur` — If expressions
+**Fixtures:**
+- [ ] `tests/turi/eval-basic.c` — C embedding smoke test
 
 ---
 
-### Phase S1: Self-Hosted Core (Minimal Viable Interpreter)
+### Phase S1: REPL Polish
 
-**Goal:** Implement a minimal but functional interpreter in Turmeric that can run on the bootstrap.
+**Goal:** `tur repl` is usable for everyday exploration.
 
-**Exit Criterion:** Self-hosted interpreter can evaluate basic Turmeric expressions.
+**Exit criterion:** Multi-line input, history, `:type`, `:doc`, and `:quit` work.
 
-#### Core Types (`src/turi/core.tur`)
+- [ ] Readline/libedit integration (via FFI)
+- [ ] Multi-line continuation detection (open parens)
+- [ ] REPL meta-commands: `:help`, `:quit`, `:type <expr>`, `:doc <sym>`,
+  `:reload <file>`
+- [ ] Pretty-printer for `TuriValue`
+- [ ] Colour diagnostics (reuse `src/diag.c`)
+- [ ] Persistent history file (`~/.tur_history`)
 
-```scheme
-;; Value type - mirrors C representation
-(deftype Value
-  (Nil)
-  (Bool bool)
-  (Int int64)
-  (Float double)
-  (Symbol cstr)
-  (String cstr)
-  (Pair Value Value)
-  (Vector (ref (Vec Value)))
-  (Closure Env Ast)
-  (Primitive (cfn *))
-  (Struct cstr (ref (HashMap cstr Value))))
-
-;; Environment - persistent hash map
-(deftype Env (ref (HashMap cstr Value)))
-
-;; Interpreter result
-(deftype Result
-  (Ok Value)
-  (Err cstr))
-```
-
-#### Core Functions
-
-- [ ] `src/turi/reader.tur` — S-expression reader in Turmeric
-- [ ] `src/turi/eval.tur` — Core evaluation loop
-- [ ] `src/turi/env.tur` — Environment operations (lookup, extend)
-- [ ] `src/turi/apply.tur` — Function application
-- [ ] `src/turi/special.tur` — Special forms (defn, if, lambda, etc.)
-
-#### Bootstrap Integration
-
-- [ ] `src/turi/main.c` — Entry point that loads self-hosted code
-- [ ] FFI bindings for bootstrap to call Turmeric interpreter
-- [ ] Mechanism to pass control from C to Turmeric
-
-#### Fixtures
-- [ ] `fixtures/turi/basic.tur` — All special forms work
-- [ ] `fixtures/turi/functions.tur` — Function definition and calls
-- [ ] `fixtures/turi/recursion.tur` — Recursive functions
+**Fixtures:**
+- [ ] `tests/turi/repl-smoke.sh` — scripted REPL session test
 
 ---
 
-### Phase S2: Language Completeness
+### Phase S2: Turmeric Import API
 
-**Goal:** Support all Turmeric language features in the interpreter.
+**Goal:** `(import turi/eval)` works from Turmeric programs.
 
-**Exit Criterion:** All Phase 1-19 language features work in the interpreter.
+**Exit criterion:** The factorial example in the appendix compiles and runs.
 
-#### Type System
-- [ ] `src/turi/types.tur` — Type representation at runtime
-- [ ] Type checking mode (optional, for debugging)
-- [ ] Type introspection functions
+- [ ] `stdlib/turi/eval.tur` — Turmeric bindings over `libturi` C API
+- [ ] `Env` struct wrapper with `Env/new`, `Env/new-sandboxed`, `eval`, `eval!`
+- [ ] Error type: `(deftype EvalError (ParseError cstr) (RuntimeError cstr))`
+- [ ] FFI declarations for `libturi` symbols
+- [ ] Linker flag injection so `(import turi/eval)` auto-links `-lturi`
 
-#### Data Structures
-- [ ] `src/turi/struct.tur` — `defstruct` support
-- [ ] `src/turi/pair.tur` — Pair operations
-- [ ] `src/turi/vector.tur` — Vector operations
-- [ ] `src/turi/hashmap.tur` — Hash map operations
-- [ ] `src/turi/string.tur` — String operations
-
-#### Control Flow
-- [ ] `src/turi/pattern.tur` — Pattern matching
-- [ ] `src/turi/loop.tur` — Loop constructs
-- [ ] `src/turi/exception.tur` — Exception handling
-
-#### Fixtures
-- [ ] `fixtures/turi/structs.tur` — Struct definition and access
-- [ ] `fixtures/turi/pattern-match.tur` — Pattern matching examples
-- [ ] `fixtures/turi/loops.tur` — Various loop constructs
+**Fixtures:**
+- [ ] `tests/fixtures/eval-import/` — `eval` called from Turmeric source
 
 ---
 
-### Phase S3: Advanced Features
+### Phase S3: Effects and Continuations in Eval
 
-**Goal:** Implement Turmeric's advanced features in the interpreter.
+**Goal:** `handle`, `perform`, `resume`, and `with-handler` work inside `eval`.
 
-**Exit Criterion:** Typeclasses, effects, and macros work in the interpreter.
+**Exit criterion:** Effect examples from the existing test suite run through `turi_eval`.
 
-#### Typeclasses
-- [ ] `src/turi/typeclass.tur` — Typeclass dictionary support
-- [ ] Instance resolution at runtime
-- [ ] Constraint satisfaction checking
-- [ ] Built-in typeclasses (Eq, Ord, Show, Num)
+- [ ] Effect handler stack threaded through `TuriEnv`
+- [ ] `TuriValue` variant for live continuations (`TURI_EFFECT_CONT`)
+- [ ] `perform` suspends the eval loop and invokes the nearest handler
+- [ ] `resume k v` re-enters the saved continuation
+- [ ] Async `await` deferred (async requires fiber scheduler — note in docs)
 
-#### Effects & Continuations
-- [ ] `src/turi/effect.tur` — Effect handling
-- [ ] `src/turi/continuation.tur` — Delimited continuations
-- [ ] Effect row tracking
-- [ ] Handler composition
-
-#### Macros
-- [ ] `src/turi/macro.tur` — Macro expansion
-- [ ] Macro environment
-- [ ] Hygienic macro support
-
-#### Fixtures
-- [ ] `fixtures/turi/typeclass.tur` — Typeclass usage
-- [ ] `fixtures/turi/effects.tur` — Effect examples
-- [ ] `fixtures/turi/macros.tur` — Macro examples
+**Fixtures:**
+- [ ] `tests/turi/eval-effects.tur` — basic effect round-trip through eval
 
 ---
 
-### Phase S4: FFI and I/O
+### Phase S4: Language Completeness
 
-**Goal:** Connect the interpreter to the outside world.
+**Goal:** All non-async Turmeric features evaluate correctly.
 
-**Exit Criterion:** Can perform I/O and call C functions from interpreted code.
+**Exit criterion:** The Phase 1–19 test fixtures pass when run via `turi_eval`.
 
-#### FFI Layer
-- [ ] `src/turi/ffi.tur` — FFI bindings in Turmeric
-- [ ] C function calling
-- [ ] C struct access
-- [ ] Memory management for FFI
-
-#### I/O Operations
-- [ ] `src/turi/io.tur` — File I/O
-- [ ] `src/turi/console.tur` — Console I/O
-- [ ] `src/turi/process.tur` — Process operations
-
-#### Standard Library
-- [ ] `stdlib/turi/prelude.tur` — Prelude for interpreted code
-- [ ] Port necessary stdlib functions to work in interpreter
-
-#### Fixtures
-- [ ] `fixtures/turi/io.tur` — File reading and writing
-- [ ] `fixtures/turi/ffi.tur` — Calling C functions
-- [ ] `fixtures/turi/system.tur` — System operations
+- [ ] `defstruct` / struct literals / field access
+- [ ] Pattern matching (`case`)
+- [ ] Typeclasses and instance resolution at runtime (dictionary-passing)
+- [ ] Macros (re-use existing `src/interp.c` macro expander)
+- [ ] Module loading (`import`) — evaluate imported file into child env
+- [ ] Exception handling (`try`/`catch`/`throw`)
+- [ ] Defer (LIFO on env scope exit)
 
 ---
 
-### Phase S5: REPL and Tooling
+### Phase S5: I/O, FFI, and Sandboxing
 
-**Goal:** Build a usable interactive environment and command-line tool.
+**Goal:** Eval can do I/O and call C; sandboxed eval blocks both.
 
-**Exit Criterion:** Working REPL with history, completion, and scripting support.
+**Exit criterion:** `(println "hi")` works; sandboxed env raises on `println`.
 
-#### REPL Implementation
-- [ ] `src/turi/repl.tur` — REPL in Turmeric
-- [ ] Readline integration (via FFI)
-- [ ] History support
-- [ ] Tab completion
-- [ ] Pretty printing
-
-#### Command-Line Interface
-- [ ] `src/turi/main.c` — CLI argument parsing
-- [ ] File execution: `turi file.tur`
-- [ ] REPL mode: `turi` (no args)
-- [ ] Script mode: shebang support
-- [ ] Options: `-v` (verbose), `-d` (debug), `--type-check`
-
-#### Debugging Tools
-- [ ] `src/turi/debug.tur` — Debugging utilities
-- [ ] Stack trace on error
-- [ ] Value inspection
-- [ ] Environment inspection
-
-#### Fixtures
-- [ ] Test REPL interaction
-- [ ] Test file execution
-- [ ] Test error reporting
+- [ ] I/O primitives wired through `TuriEnv` capability flags
+- [ ] `turi_env_new_sandboxed()` disables I/O and raw FFI
+- [ ] Inline-C blocks (`\`\`\`c ... \`\`\``) disabled in sandboxed mode
+- [ ] Resource limits: max eval depth, max allocations
 
 ---
 
-### Phase S6: Testing and Validation
+### Phase S6: Self-Hosted Rewrite (Optional)
 
-**Goal:** Comprehensive testing of Turmeric functionality through the interpreter.
+**Goal:** Rewrite the tree-walk evaluator in Turmeric itself, bootstrapped via the
+Phase S0 C core.
 
-**Exit Criterion:** All major Turmeric features validated via interpreter tests.
+This phase is **optional** and does not block any of the above. It is valuable as a
+large real-world Turmeric program (dogfooding), but `libturi` is already useful
+before it.
 
-#### Test Suite Structure
-
-```
-fixtures/turi-test/
-├── phase01-basic/
-│   ├── arithmetic.tur
-│   ├── booleans.tur
-│   └── conditionals.tur
-├── phase02-types/
-│   ├── structs.tur
-│   ├── enums.tur
-│   └── type-aliases.tur
-├── phase03-functions/
-│   ├── closures.tur
-│   ├── recursion.tur
-│   └── higher-order.tur
-├── phase04-control/
-│   ├── pattern-matching.tur
-│   ├── loops.tur
-│   └── exceptions.tur
-├── phase05-modules/
-│   ├── import-export.tur
-│   ├── namespaces.tur
-│   └── circular.tur
-├── phase06-macros/
-│   ├── defmacro.tur
-│   ├── hygiene.tur
-│   └── syntax-rules.tur
-├── phase07-ffi/
-│   ├── c-calls.tur
-│   ├── c-structs.tur
-│   └── callbacks.tur
-├── phase08-async/
-│   ├── threads.tur
-│   ├── futures.tur
-│   └── async-await.tur
-├── phase09-gc/
-│   ├── rc.tur
-│   ├── ref.tur
-│   └── borrow.tur
-├── phase10-advanced-gc/
-│   ├── cycle-collection.tur
-│   └── weak-refs.tur
-├── phase11-owner/
-│   ├── ownership.tur
-│   └── borrowing.tur
-├── phase12-lifetimes/
-│   ├── explicit-lifetimes.tur
-│   └── lifetime-elision.tur
-├── phase13-defer/
-│   ├── defer.tur
-│   └── cleanup.tur
-├── phase14-continuations/
-│   ├── shift-reset.tur
-│   └── continuations.tur
-├── phase15-typeclasses/
-│   ├── defclass.tur
-│   ├── definstance.tur
-│   └── constraints.tur
-├── phase16-effects/
-│   ├── defeffect.tur
-│   ├── perform.tur
-│   └── handle.tur
-├── phase17-exceptions/
-│   ├── try-catch.tur
-│   └── throw.tur
-├── phase18-continuations-v2/
-│   └── delimited.tur
-└── phase19-algebraic-effects/
-    ├── effect-rows.tur
-    └── handlers.tur
-```
-
-#### Test Runner
-- [ ] `src/turi/test_runner.tur` — Automated test execution
-- [ ] Test discovery
-- [ ] Test reporting
-- [ ] Failure analysis
-
-#### Validation Tests
-- [ ] `tests/validate_phases.tur` — Validate each phase's features
-- [ ] `tests/validate_interop.tur` — Validate C interop
-- [ ] `tests/validate_performance.tur` — Performance benchmarks
+- [ ] `src/turi/eval.tur` — tree-walk evaluator in Turmeric
+- [ ] Bootstrap: C core runs `eval.tur`, which then handles subsequent eval calls
+- [ ] Performance parity with C evaluator within 2×
+- [ ] All Phase S0–S5 fixtures pass through the self-hosted path
 
 ---
 
 ### Phase S7: Polish and Documentation
 
-**Goal:** Final polish, documentation, and release preparation.
-
-**Exit Criterion:** Interpreter is documented, tested, and ready for use.
-
-#### Documentation
-- [ ] `docs/turi.md` — User documentation
-- [ ] `docs/turi-internals.md` — Internals documentation
-- [ ] Examples and tutorials
-- [ ] API reference
-
-#### Performance
-- [ ] Profiling and optimization
-- [ ] Memory usage analysis
-- [ ] Startup time optimization
-
-#### Integration
-- [ ] Integration with `tur` compiler (optional)
-- [ ] Cross-compilation support
-- [ ] Packaging for distribution
-- [ ] **Interpreter as a Turmeric library** — expose the interpreter as a `require`-able module (e.g. `(require turi/interp)`) so Turmeric programs can embed, extend, or script the interpreter at runtime
-  - [ ] `src/turi/lib.tur` — public library API (`eval-string`, `eval-ast`, `make-env`, `interp-step`, etc.)
-  - [ ] `stdlib/turi/interp.tur` — stdlib-side re-export shim
-  - [ ] Document library API in `docs/turi-lib.md`
-  - [ ] `fixtures/turi/lib-usage.tur` — example of embedding the interpreter via `require`
-
----
-
-## Testing Strategy
-
-### Unit Tests
-Each module in `src/turi/` has corresponding unit tests in `tests/turi/`.
-
-### Integration Tests
-Tests that exercise multiple features together.
-
-### Validation Tests
-Tests that validate Turmeric's functionality by running programs that use specific features.
-
-### Comparison Tests
-Compare interpreter output with compiler output for the same programs.
-
-### Fuzzing
-Random program generation to find edge cases.
-
----
-
-## Build and Dependency Structure
-
-```
-Root (fith/)
-├── src/
-│   ├── bootstrap/           # Bootstrap interpreter (C)
-│   │   ├── interp.c
-│   │   ├── interp.h
-│   │   ├── value.c
-│   │   ├── value.h
-│   │   ├── env.c
-│   │   ├── env.h
-│   │   ├── mini_reader.c
-│   │   └── mini_reader.h
-│   └── turi/                # Self-hosted interpreter (Turmeric)
-│       ├── main.c          # Entry point
-│       ├── core.tur
-│       ├── reader.tur
-│       ├── eval.tur
-│       ├── env.tur
-│       ├── apply.tur
-│       ├── special.tur
-│       ├── types.tur
-│       ├── struct.tur
-│       ├── pair.tur
-│       ├── vector.tur
-│       ├── string.tur
-│       ├── pattern.tur
-│       ├── loop.tur
-│       ├── exception.tur
-│       ├── typeclass.tur
-│       ├── effect.tur
-│       ├── continuation.tur
-│       ├── macro.tur
-│       ├── ffi.tur
-│       ├── io.tur
-│       ├── console.tur
-│       ├── repl.tur
-│       ├── debug.tur
-│       └── test_runner.tur
-├── fixtures/
-│   ├── bootstrap/          # Bootstrap test fixtures
-│   └── turi/               # Self-hosted test fixtures
-│       └── turi-test/      # Comprehensive feature tests
-├── tests/
-│   ├── turi/               # Unit tests
-│   └── validate/           # Validation tests
-└── CMakeLists.txt           # Build configuration
-```
+- [ ] `docs/eval-api.md` — user guide for `(import turi/eval)` and C embedding
+- [ ] `docs/repl.md` — REPL reference (meta-commands, customisation)
+- [ ] Man page for `tur repl`
+- [ ] Performance profiling; optimise hot eval paths
+- [ ] Package `libturi` as an installable library
 
 ---
 
 ## Key Design Decisions
 
-### Decision 1: Interpretation Strategy
+### Decision 1: Eval walks elaborated `Expr` tree, not `Form` AST
 
-**Options:**
-- (a) Direct interpretation (AST walking)
-- (b) Bytecode interpretation
-- (c) CPS-based interpretation
+Re-using the existing elaborator means the eval core gets type-checking, macro
+expansion, and name resolution for free. The evaluator never sees raw forms.
+Alternative — a separate interpreter over `Form` — would duplicate all that logic.
 
-**Decision:** (a) Direct interpretation with (c) CPS for effects
+### Decision 2: `libturi` is a separate shared library, not baked into `tur`
 
-**Rationale:** Direct interpretation is simplest and most natural for a Lisp. CPS transformation handles effects naturally.
+This allows programs to link `libturi` without depending on the compiler binary.
+The REPL and `(import turi/eval)` both use the same library.
 
-### Decision 2: Value Representation
+### Decision 3: Effects in eval use a handler stack on `TuriEnv`
 
-**Options:**
-- (a) Tagged union (nan-boxing for numbers)
-- (b) Separate allocations for each type
-- (c) Two-word representation (tag + pointer)
+The handler stack is separate from the compiled-code handler chain
+(`tur_current_fiber->effect_handler_chain`). Calling `turi_eval` from a compiled
+handler body correctly places the eval handler stack "above" the compiled chain.
 
-**Decision:** (a) Tagged union with nan-boxing
+### Decision 4: Async deferred to a later phase
 
-**Rationale:** Memory efficient, good cache locality, and natural for a dynamic interpreter.
+`(async ...)` and `(await ...)` require the fiber scheduler, which is complex to
+thread through the evaluator. The eval core treats them as errors in Phase S0–S4;
+Phase S5+ can add a single-threaded cooperative scheduler if needed.
 
-### Decision 3: Environment Representation
+### Decision 5: REPL lives in `tur` CLI, not a separate binary
 
-**Options:**
-- (a) Linked list of frames
-- (b) Hash map
-- (c) Persistent hash map
-
-**Decision:** (c) Persistent hash map
-
-**Rationale:** Enables efficient shadowing and copying, matches functional semantics.
-
-### Decision 4: FFI Strategy
-
-**Options:**
-- (a) Direct C calls via function pointers
-- (b) Wrapper functions in C
-- (c) libffi-based approach
-
-**Decision:** (a) Direct C calls with (b) wrappers for complex cases
-
-**Rationale:** Direct calls are fastest; wrappers handle marshalling.
-
-### Decision 5: REPL Architecture
-
-**Options:**
-- (a) Pure Turmeric REPL
-- (b) C-based REPL with Turmeric evaluation
-- (c) Hybrid approach
-
-**Decision:** (b) C-based REPL
-
-**Rationale:** Better integration with readline, easier signal handling.
-
----
-
-## Performance Considerations
-
-| Operation | Target Performance |
-|---|---|
-| Function call | < 100ns |
-| Variable lookup | < 50ns |
-| Arithmetic operation | < 20ns |
-| FFI call | < 500ns |
-| Pattern match | < 1us per alternative |
-| Typeclass resolution | < 1us |
+Adding `tur repl` keeps distribution simple. A standalone `turi` wrapper can be
+added later as a thin shim over `tur repl`.
 
 ---
 
@@ -579,159 +370,89 @@ Root (fith/)
 
 | Risk | Probability | Impact | Mitigation |
 |---|---|---|---|
-| Bootstrap interpreter too slow | Medium | High | Optimize critical paths, profile early |
-| Self-hosted code too large for bootstrap | Low | High | Keep bootstrap minimal, test incrementally |
-| Memory management issues | High | High | Use existing Turmeric GC, careful testing |
-| FFI complexity | Medium | Medium | Start with simple cases, build up |
-| Performance insufficient | Medium | Medium | Profile, optimize hot paths |
-| Feature gaps in Turmeric | Medium | High | Work with compiler team, use workarounds |
+| Elaborator not reentrant | Medium | High | Audit global state; add `Elab` instance per eval call |
+| Mutable globals in runtime.c | Medium | Medium | Thread env pointer through; audit on entry |
+| Performance too slow for interactive use | Low | Medium | Eval only needs to be "fast enough" for REPL; JIT deferred |
+| Effect continuation lifetime | Medium | High | Continuations pinned to `TuriEnv`; freed on `turi_env_free` |
+| Self-hosted bootstrap complexity (S6) | High | Low | S6 is optional; skip if not needed |
 
 ---
 
 ## Success Criteria
 
-### Minimum Viable (Phase S1 Complete)
-- [ ] Can evaluate basic Turmeric expressions
-- [ ] REPL works for simple interactions
-- [ ] Can run small Turmeric programs
+### Minimum Viable (S0 + S1 complete)
+- [ ] `tur repl` launches and evaluates arithmetic, `let`, `fn`, `defn`
+- [ ] `turi_eval` linkable from C; embedding example in docs compiles and runs
 
-### Feature Complete (Phase S4 Complete)
-- [ ] All Phase 1-19 features work
-- [ ] I/O operations work
-- [ ] FFI works
-- [ ] Can run stdlib code
+### Useful (S2 + S3 complete)
+- [ ] `(import turi/eval)` works from Turmeric programs
+- [ ] Effects and continuations work inside `eval`
+- [ ] REPL has readline, history, `:type`, `:doc`
 
-### Production Ready (Phase S7 Complete)
-- [ ] Comprehensive test suite passes
-- [ ] Performance meets targets
-- [ ] Documentation complete
-- [ ] Packaged for distribution
-- [ ] Interpreter available as a `require`-able Turmeric library (see Phase S7)
-
----
-
-## Timeline Estimate
-
-| Phase | Estimated Duration |
-|---|---|
-| S0: Project Setup & Bootstrap | 2-4 weeks |
-| S1: Self-Hosted Core | 4-6 weeks |
-| S2: Language Completeness | 6-8 weeks |
-| S3: Advanced Features | 6-8 weeks |
-| S4: FFI and I/O | 4-6 weeks |
-| S5: REPL and Tooling | 4-6 weeks |
-| S6: Testing and Validation | 4-6 weeks |
-| S7: Polish and Documentation | 2-4 weeks |
-| **Total** | **32-48 weeks** |
-
----
-
-## Resources Required
-
-- 1-2 core developers
-- Access to Turmeric compiler team for questions
-- CI infrastructure for testing
-- Documentation infrastructure
-
----
-
-## Related Documents
-
-- [turmeric-plan.md](turmeric-plan.md) — Main compiler roadmap
-- [effects-plan.md](archive/effects-plan.md) — Effect system design
-- [typeclass-plan.md](typeclass-plan.md) — Typeclass design
-- [module-system-plan.md](module-system-plan.md) — Module system design
+### Complete (S4 + S5 complete)
+- [ ] All non-async Phase 1–19 features work through eval
+- [ ] Sandboxed eval mode available
+- [ ] `eval-import` fixture in test suite passes
 
 ---
 
 ## Appendix A: Example Programs
 
-### Example 1: Factorial
+### Eval from Turmeric
 
 ```scheme
-(defn factorial [n : int] : int
-  (if (<= n 1)
-      1
-      (* n (factorial (- n 1)))))
+(import turi/eval)
 
-(factorial 10)  ; => 3628800
+(defn run-user-expr [src :cstr] :int
+  (let [env (Env/new-sandboxed)]
+    (let [result (eval env src)]
+      (case result
+        (:ok v)  (v->int v)
+        (:err e) (do (println "eval error:" e) -1)))))
+
+(defn main [] :int
+  (run-user-expr "(+ 40 2)"))  ;; 42
 ```
 
-### Example 2: REPL Session
+### Embedding in C
 
-```
-$ turi
-Turmeric Interpreter v0.1.0
-turmeric> (defn square [x] (* x x))
-#<function square>
-turmeric> (square 5)
-25
-turmeric> (defstruct Point [x y])
-#<type Point>
-turmeric> (defn distance [p1 p2] (sqrt (+ (square (- p1.x p2.x)) (square (- p1.y p2.y)))))
-#<function distance>
-turmeric> (distance (Point 0 0) (Point 3 4))
-5.0
-```
+```c
+#include "turi/eval.h"
 
-### Example 3: Typeclass Usage
+int main(void) {
+    TuriEnv *env = turi_env_new();
 
-```scheme
-(defclass Show [a]
-  (show [x : a] : cstr))
+    turi_eval(env, "(defn double [x :int] :int (* 2 x))");
 
-(definstance Show int
-  (show [x] (int->cstr x)))
+    TuriValue v = turi_eval(env, "(double 21)");
+    printf("result: %lld\n", turi_as_int(v));  // 42
 
-(defn print-show [^Show a x : a]
-  (printf "%s\n" (show x)))
-
-(print-show 42)  ; prints "42"
+    turi_env_free(env);
+    return 0;
+}
 ```
 
-### Example 4: Effect Usage
+### REPL Session
 
-```scheme
-(defeffect Console
-  (print [s : cstr]))
-
-(defn greet [name]
-  (perform (Console.print) "Hello, ")
-  (perform (Console.print) name)
-  (perform (Console.print) "!\n"))
-
-(handle
-  (greet "World")
-  (Console => [print]
-    (fn [s] (printf "%s" s))))
-; prints "Hello, World!"
+```
+$ tur repl
+Turmeric v0.x.0  (:help for help, :quit to exit)
+turmeric> (defn fib [n :int] :int
+       ..   (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
+=> #<fn fib>
+turmeric> (fib 10)
+=> 55
+turmeric> :type fib
+fib : [:int] -> :int
+turmeric> (defeffect Log [msg :cstr] :nil)
+=> #<effect Log>
+turmeric> (handle (do (perform (Log "hello")) 42)
+       ..   (Log [msg] k) (do (println "[log]" msg) (resume k nil)))
+[log] hello
+=> 42
+turmeric> :quit
 ```
 
 ---
 
-## Appendix B: Bootstrap Process
-
-The bootstrap process works as follows:
-
-1. **C Bootstrap Interpreter** compiles to native code via standard C compiler
-2. **Self-Hosted Interpreter** is written in Turmeric and compiled to C by the main `tur` compiler
-3. **Bootstrap** loads the compiled self-hosted interpreter as a library
-4. **Control Transfer** happens from C to Turmeric
-5. **Interpretation** proceeds in Turmeric code
-
-This is a **two-stage bootstrap**: C interpreter → Self-hosted interpreter.
-
----
-
-## Appendix C: Comparison with Other Approaches
-
-| Approach | Pros | Cons |
-|---|---|---|
-| Pure C Interpreter | Fast startup, no compiler dependency | Harder to maintain, less dogfooding |
-| Full Self-Hosting (no C) | Maximum dogfooding | Chicken-and-egg problem |
-| Bytecode VM | Fast execution, portable | Complex, another IR |
-| **Our Approach** | Good dogfooding, manageable complexity | Two-stage bootstrap |
-
----
-
-*Last updated: 2026-05-10*
+*Last updated: 2026-05-13*
