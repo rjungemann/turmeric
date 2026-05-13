@@ -1,0 +1,71 @@
+;; Reference-counted owning pointer type (Phase 9)
+;;
+;; rc<T> provides shared ownership of T via reference counting.
+;; Multiple rc<T> pointers can point to the same value; the value is
+;; freed when the last rc<T> is dropped.
+
+(extern-c malloc [^int size] :ptr<void>)
+(extern-c free [^ptr<void> p] :void)
+
+;; Create a new rc<T> from a value.
+;; Note: In v1, we use a simplified representation where rc<T> is
+;; a pointer to a struct containing the refcount and the value.
+;; For int values, we store them directly.
+(defn rc-new [x :int] :int
+  ```c
+  // In v1, rc<int> is represented as RcControlBlock* which is int64_t
+  // For simplicity in stdlib, we use the C API directly
+  tur_rc_new_int(x);
+  return 0;  // Placeholder - actual implementation uses compiler intrinsics
+  ```)
+
+;; Clone an rc<T> (increment refcount)
+(defn rc-clone [r :int] :int
+  ```c
+  // In v1, rc is RcControlBlock*, cloning increments the strong count
+  RcControlBlock *cb = (RcControlBlock *)(intptr_t)r;
+  if (cb) rc_strong_increment(cb);
+  return r;
+  ```)
+
+;; Drop an rc<T> (decrement refcount, possibly free)
+(defn rc-drop [r :int]
+  ```c
+  RcControlBlock *cb = (RcControlBlock *)(intptr_t)r;
+  if (cb) rc_strong_decrement(cb);
+  ```)
+
+;; Get the reference count of an rc<T>
+(defn rc-count [r :int] :int
+  ```c
+  RcControlBlock *cb = (RcControlBlock *)(intptr_t)r;
+  if (!cb) return 0;
+  return (int)rc_strong_count(cb);
+  ```)
+
+;;; SINCE: Phase HKT H3
+;; Functor instance for rc.
+;; fmap :: (a -> b) -> rc a -> rc b
+;; Maps a function over the contained value, returning a new rc<b>.
+;; Note: This creates a new rc<b> with refcount 1; the original rc<a> is unchanged.
+(defn __functor_rc_fmap [container fn] :int
+  ```c
+  // container is RcControlBlock*
+  RcControlBlock *old_cb = (RcControlBlock *)(intptr_t)container;
+  if (!old_cb) return 0;
+  
+  // Get the old value
+  void *old_value = rc_get_value(old_cb);
+  
+  // Apply fn to the old value
+  int64_t new_value = ((int64_t(*)(int64_t))(intptr_t)fn)((int64_t)(intptr_t)old_value);
+  
+  // Create a new rc with the new value
+  // In v1, we use the compiler's rc allocation
+  // For simplicity, we use tur_rc_from_ref which creates an rc from a ref value
+  // But we need to handle int values specially
+  return tur_rc_new_int(new_value);
+  ```)
+
+(definstance Functor [rc]
+  (fmap [container fn] (__functor_rc_fmap container fn)))

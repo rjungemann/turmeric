@@ -33,3 +33,57 @@
   free(s);
   return 0;
   ```)
+
+;;; SINCE: Phase HKT H3
+;; Functor instance for slice — apply fn to every element, return a new slice.
+;; Note: slice is a borrowed view, so we need to create a new slice for the result.
+(defn __functor_slice_fmap [container fn] :int
+  ```c
+  struct { int64_t *p; size_t len; } *s =
+      (struct { int64_t *p; size_t len; } *)(intptr_t)container;
+  if (!s) return 0;
+  /* Create new slice with same length */
+  struct { int64_t *p; size_t len; } *r =
+      malloc(sizeof(struct { int64_t *p; size_t len; }));
+  r->len = s->len;
+  /* Allocate new array for results */
+  r->p = r->len > 0 ? malloc(sizeof(int64_t) * r->len) : NULL;
+  for (size_t i = 0; i < s->len; i++) {
+      r->p[i] = ((int64_t(*)(int64_t))(intptr_t)fn)(s->p[i]);
+  }
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(definstance Functor [slice]
+  (fmap [container fn] (__functor_slice_fmap container fn)))
+
+;; Foldable instance for slice.
+;;   foldl :: (b -> a -> b) -> b -> slice a -> b   (left fold, strict)
+;;   foldr :: (a -> b -> b) -> b -> slice a -> b   (right fold)
+(defn __foldable_slice_foldl [ta init fn] :int
+  ```c
+  struct { int64_t *p; size_t len; } *s =
+      (struct { int64_t *p; size_t len; } *)(intptr_t)ta;
+  int64_t acc = init;
+  if (!s) return acc;
+  for (size_t i = 0; i < s->len; i++) {
+      acc = ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(acc, s->p[i]);
+  }
+  return acc;
+  ```)
+
+(defn __foldable_slice_foldr [ta init fn] :int
+  ```c
+  struct { int64_t *p; size_t len; } *s =
+      (struct { int64_t *p; size_t len; } *)(intptr_t)ta;
+  int64_t acc = init;
+  if (!s) return acc;
+  for (size_t i = s->len; i-- > 0; ) {
+      acc = ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(s->p[i], acc);
+  }
+  return acc;
+  ```)
+
+(definstance Foldable [slice]
+  (foldl [ta init fn] (__foldable_slice_foldl ta init fn))
+  (foldr [ta init fn] (__foldable_slice_foldr ta init fn)))

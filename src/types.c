@@ -459,6 +459,101 @@ bool kind_eq(Kind a, Kind b) {
     return a == b;
 }
 
+/* Phase HKT-P2: Check if a type body is guarded-recursive.
+ * A recursive reference to `rec_name` is guarded if it appears under at least
+ * one type constructor (TY_APP or TY_STRUCT). This prevents infinite types
+ * like `(defrec X [] X)` while allowing `(defrec Fix [f] (Fix (f Fix)))`.
+ *
+ * `t`: the type body to check
+ * `rec_name`: the name of the recursive type binder
+ * `depth`: current nesting depth of type constructors (guard count)
+ * Returns true if all occurrences of rec_name are guarded (depth >= 1),
+ * or if there are no occurrences of rec_name at all.
+ */
+static bool type_is_guarded_recursive_helper(const Type *t, const char *rec_name, int depth) {
+    if (!t) return true;
+
+    switch (t->kind) {
+        case TY_REC: {
+            /* A nested TY_REC with a different name is fine.
+             * Same name at depth 0 means unguarded recursion -> reject. */
+            if (t->as.rec.name && strcmp(t->as.rec.name, rec_name) == 0) {
+                return depth > 0;  /* Guarded iff under a type constructor */
+            }
+            /* Different name or no name - recurse into body */
+            return type_is_guarded_recursive_helper(t->as.rec.body, rec_name, depth);
+        }
+
+        case TY_APP: {
+            /* TY_APP is a type constructor - it guards recursion */
+            int new_depth = depth + 1;
+            /* Check both the function and argument types */
+            if (!type_is_guarded_recursive_helper(t->as.app.fn, rec_name, new_depth))
+                return false;
+            if (!type_is_guarded_recursive_helper(t->as.app.arg, rec_name, new_depth))
+                return false;
+            return true;
+        }
+
+        case TY_STRUCT: {
+            /* TY_STRUCT is a type constructor - it guards recursion */
+            /* In v1, StructDef stores TypeKind, not full Type structs.
+             * This is a limitation - we can only check TY_APP and TY_REC properly.
+             * For v1, we assume struct fields are fine and just return true.
+             * The recursion checking only works for TY_APP and TY_REC. */
+            (void)depth;  /* Unused in this branch */
+            return true;
+        }
+
+        case TY_FN: {
+            /* Function types: in v1, TY_FN stores TypeKind arrays, not full Type structs */
+            /* So we can't recursively check - this is a v1 limitation */
+            (void)depth;  /* Unused in this branch */
+            return true;
+        }
+
+        case TY_REF:
+        case TY_RC:
+        case TY_WEAK:
+        case TY_REF_IMMUT:
+        case TY_REF_MUT: {
+            /* In v1, these store TypeKind not Type, so we can't recurse.
+             * Just return true and assume no unguarded recursion. */
+            (void)depth;  /* Unused in this branch */
+            return true;
+        }
+
+        case TY_EXCEPTION:
+        case TY_CONT:
+        case TY_CLONEABLE_CONT: {
+            /* In v1, they store TypeKind, not Type */
+            (void)depth;  /* Unused in this branch */
+            return true;
+        }
+
+        /* Leaf types - no recursion possible */
+        case TY_UNKNOWN:
+        case TY_NIL:
+        case TY_BOOL:
+        case TY_INT:
+        case TY_FLOAT:
+        case TY_CSTR:
+        case TY_PTR_VOID:
+        case TY_TYPECLASS:
+        case TY_TYPECLASS_INST:
+        case TY_NEVER:
+            return true;
+    }
+
+    return true;  /* Unknown type kind - assume safe */
+}
+
+bool type_is_guarded_recursive(Type t, const char *rec_name) {
+    /* Start with depth 0 - we need at least one type constructor
+     * (TY_APP or TY_STRUCT) before we hit the recursive reference */
+    return type_is_guarded_recursive_helper(&t, rec_name, 0);
+}
+
 const char *kind_to_string(Kind k) {
     switch (k) {
         case KIND_STAR:   return "*";

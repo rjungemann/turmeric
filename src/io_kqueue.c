@@ -50,10 +50,11 @@ static int kqueue_flags_to_io(int flags) {
 }
 
 /* Get event flags from kevent */
-static int kevent_fflags_to_io(int fflags) {
-    (void)fflags; /* Not used for basic read/write */
+/* Unused in v1 - kqueue flags not yet fully integrated */
+/* static int kevent_fflags_to_io(int fflags) {
+    (void)fflags;  Not used for basic read/write
     return 0;
-}
+} */
 
 /* Find registration by fd */
 static FDRegistration *find_registration(struct KqueueBackend *backend, int fd) {
@@ -134,7 +135,7 @@ static int kqueue_register(IOBackend *backend, int fd, int events, io_callback_t
     int filters = io_events_to_kqueue_filters(events);
     if (filters == 0) return 0; /* No events to monitor */
     
-    struct keventkev;
+    struct kevent kev;
     EV_SET(&kev, fd, filters, EV_ADD | EV_CLEAR, 0, 0, NULL);
     
     if (kevent(kb->kq_fd, &kev, 1, NULL, 0, NULL) == 0) {

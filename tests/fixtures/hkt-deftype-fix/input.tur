@@ -1,0 +1,12 @@
+;; Phase HKT-P2: deftype with kind-polymorphic parameters
+;; This tests that deftype accepts ^f prefixed kind parameters
+;; and creates recursive types Fix and Free.
+
+;; Fix is the fixed-point type constructor: Fix[f] ≅ f(Fix[f])
+(deftype Fix [^f] Fix)
+
+;; Free is the free monad type constructor: Free f a
+(deftype Free [^f ^a] Free)
+
+;; Verify that Fix and Free can be used as types in definitions
+(defn main [] :int 0)

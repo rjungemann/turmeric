@@ -448,6 +448,8 @@ typedef struct Elab {
     const Symbol *sym_defkind;     /* defkind */
     /* Phase HKT-P2: defrec — recursive type binders */
     const Symbol *sym_defrec;      /* defrec */
+    /* Phase HKT-P2: deftype — type alias with kind-polymorphic params and guarded recursion */
+    const Symbol *sym_deftype;     /* deftype */
     /* Phase HKT (v2): reserved typeclass names — user definitions rejected with diagnostic */
     const Symbol *sym_hkt_Functor;
     const Symbol *sym_hkt_Applicative;
@@ -921,6 +923,8 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_defkind = intern_cstr(st, "defkind");
     /* Phase HKT-P2: defrec */
     e->sym_defrec = intern_cstr(st, "defrec");
+    /* Phase HKT-P2: deftype */
+    e->sym_deftype = intern_cstr(st, "deftype");
     /* Phase HKT (v2): reserved typeclass names */
     e->sym_hkt_Functor      = intern_cstr(st, "Functor");
     e->sym_hkt_Applicative  = intern_cstr(st, "Applicative");
@@ -6035,6 +6039,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
 /* Phase HKT H5: kind aliases */
 static Expr *elab_defkind(Elab *e, const Form *call);
 static Expr *elab_defrec(Elab *e, const Form *call);  /* Phase HKT-P2 */
+static Expr *elab_deftype(Elab *e, const Form *call);  /* Phase HKT-P2 */
 /* Phase 17: throw! sugar */
 static Expr *elab_throw_bang(Elab *e, const Form *call);
 /* Phase 18: call/cc and escape sugar */
@@ -6131,6 +6136,7 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_defkind) return elab_defkind(e, call);
     /* Phase HKT-P2: recursive type binders */
     if (name == e->sym_defrec) return elab_defrec(e, call);
+    if (name == e->sym_deftype) return elab_deftype(e, call);
     /* Phase R2: Panic */
     if (name == e->sym_panic) return elab_panic(e, call);
     if (name == e->sym_panic_with) return elab_panic_with(e, call);
@@ -7598,6 +7604,157 @@ static Expr *elab_defrec(Elab *e, const Form *call) {
     scope_add(&e->global, b);
 
     /* defrec has no runtime effect */
+    return e_nil(e, call->span);
+}
+
+/* Elaborate (deftype Name [type-params...] body)
+ *
+ * Defines a recursive type alias with kind-polymorphic parameters.
+ * Similar to defrec but accepts kind annotations on parameters and a body.
+ * In v1, the body is stored but not fully validated.
+ *
+ * Syntax: (deftype Fix [^f] (Fix (f (Fix f))))
+ *         (deftype Name [^f ^a] body)
+ *
+ * The kind of the deftype is determined by the kind parameters:
+ *   []        -> KIND_STAR
+ *   [^f]      -> KIND_ARROW
+ *   [^f ^a]   -> KIND_ARROW (if ^f is *->* and ^a is *)
+ *   [^^f]     -> KIND_ARROW2
+ *
+ * Phase HKT-P2: This is the primary mechanism for defining Fix and Free.
+ */
+static Expr *elab_deftype(Elab *e, const Form *call) {
+    /* Minimum: (deftype Name [params] body) or (deftype Name body) */
+    if (call->as.list.len < 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "deftype requires a name: (deftype Name [params] body)");
+        return NULL;
+    }
+
+    /* Parse name */
+    Form *name_form = call->as.list.items[1];
+    if (name_form->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, name_form->span,
+                  "deftype name must be a symbol");
+        return NULL;
+    }
+    const Symbol *name = name_form->as.sym;
+
+    /* Parse type parameters (optional) - arg 2 */
+    const Symbol **type_params = NULL;
+    Kind         *type_param_kinds = NULL;
+    uint8_t n_type_params = 0;
+    uint32_t body_index = 2;
+
+    if (call->as.list.len >= 3) {
+        Form *params_form = call->as.list.items[2];
+        if (params_form->tag == F_VEC) {
+            n_type_params = params_form->as.list.len;
+            if (n_type_params > 0) {
+                type_params = (const Symbol **)arena_alloc(e->arena,
+                    n_type_params * sizeof(const Symbol *));
+                type_param_kinds = (Kind *)arena_alloc(e->arena,
+                    n_type_params * sizeof(Kind));
+                for (uint8_t i = 0; i < n_type_params; i++) {
+                    type_param_kinds[i] = KIND_STAR;  /* Default kind */
+                }
+
+                for (uint8_t i = 0; i < n_type_params; i++) {
+                    Form *p = params_form->as.list.items[i];
+                    if (p->tag != F_SYM) {
+                        diag_emit(DIAG_ERROR, p->span,
+                                  "deftype type parameter must be a symbol");
+                        return NULL;
+                    }
+                    /* Phase HKT H1: '^name' prefix marks a kind * -> * (type constructor) */
+                    /* Phase HKT H1: '^^name' prefix marks a kind * -> * -> * (binary type constructor) */
+                    if (p->as.sym->len > 2 && p->as.sym->name[0] == '^' && p->as.sym->name[1] == '^') {
+                        const char  *bare     = p->as.sym->name + 2;
+                        uint32_t     bare_len = p->as.sym->len  - 2;
+                        if (bare_len > 0 && bare[0] >= 'a' && bare[0] <= 'z') {
+                            type_params[i]      = symtab_intern(e->st, strslice(bare, bare_len));
+                            type_param_kinds[i] = KIND_ARROW2;
+                        } else {
+                            diag_emit(DIAG_ERROR, p->span,
+                                      "'%s' is not a valid type parameter; "
+                                      "use lowercase '^^name' for a kind '* -> * -> *' parameter",
+                                      p->as.sym->name);
+                            return NULL;
+                        }
+                    } else if (p->as.sym->len > 1 && p->as.sym->name[0] == '^') {
+                        const char  *bare     = p->as.sym->name + 1;
+                        uint32_t     bare_len = p->as.sym->len  - 1;
+                        if (bare_len > 0 && bare[0] >= 'a' && bare[0] <= 'z') {
+                            type_params[i]      = symtab_intern(e->st, strslice(bare, bare_len));
+                            type_param_kinds[i] = KIND_ARROW;
+                        } else {
+                            diag_emit(DIAG_ERROR, p->span,
+                                      "'%s' is not a valid type parameter; "
+                                      "use lowercase '^name' for a kind '* -> *' parameter",
+                                      p->as.sym->name);
+                            return NULL;
+                        }
+                    } else {
+                        type_params[i]      = p->as.sym;
+                        type_param_kinds[i] = KIND_STAR;
+                    }
+                }
+            }
+            body_index = 3;
+        }
+    }
+
+    /* Parse body - required */
+    if (call->as.list.len <= body_index) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "deftype requires a body type expression");
+        return NULL;
+    }
+    Form *body_form = call->as.list.items[body_index];
+
+    /* Phase HKT-P2: In v1, we accept the body but don't fully elaborate it.
+     * We just need to validate it exists and is a valid form.
+     * For now, we'll store it as a TY_REC with NULL body.
+     * Future work: fully elaborate the body and validate guarded recursion. */
+    (void)body_form;  /* Body is accepted but not processed in v1 */
+
+    /* Determine the kind of this deftype:
+     * - If there are kind parameters, the result kind is KIND_ARROW or KIND_ARROW2
+     *   based on the number and kinds of parameters.
+     * - If there are no parameters, it's KIND_STAR.
+     * For simplicity in v1, we just check: if any param is KIND_ARROW2, result is KIND_ARROW2.
+     * Otherwise, if any param is KIND_ARROW, result is KIND_ARROW.
+     * Otherwise, KIND_STAR. */
+    Kind result_kind = KIND_STAR;
+    if (n_type_params > 0) {
+        result_kind = KIND_STAR;
+        for (uint8_t i = 0; i < n_type_params; i++) {
+            if (type_param_kinds[i] == KIND_ARROW2) {
+                result_kind = KIND_ARROW2;
+                break;
+            }
+            if (type_param_kinds[i] == KIND_ARROW) {
+                result_kind = KIND_ARROW;
+            }
+        }
+    }
+
+    /* Create TY_REC type */
+    Type rec_type;
+    memset(&rec_type, 0, sizeof(rec_type));
+    rec_type.kind      = TY_REC;
+    rec_type.copy_kind = CK_MOVE;
+    rec_type.hkt_kind  = result_kind;
+    rec_type.as.rec.name = name->name;
+    /* v1: body not yet evaluated - we'd need a full type elaborator to handle it */
+    rec_type.as.rec.body = NULL;
+
+    /* Register in global scope */
+    Binding *b = binding_new(e, name, rec_type, false, true, name_form->span);
+    scope_add(&e->global, b);
+
+    /* deftype has no runtime effect */
     return e_nil(e, call->span);
 }
 

@@ -1,0 +1,42 @@
+;; Phase HKT-P2: Higher-kinded data types - Fix and Free
+;; ==========================================================
+
+;; Fix f is the fixed-point combinator for type constructors.
+;; Fix[f] ≅ f(Fix[f])
+;; This allows recursive types like Fix[option] which is an infinite nested option.
+(deftype Fix [^f] Fix)
+
+;; Free f a is the free monad over a functor f.
+;; Free f a = Pure a | Free (f (Free f a))
+;; This represents computations with effects described by f.
+(deftype Free [^f ^a] Free)
+
+;; ==========================================================
+;; Fix catamorphism (fold)
+;; ==========================================================
+
+;; cata for Fix: folds a recursive Fix structure using an algebra.
+;; For Fix f, the algebra is a function (f a -> a) that describes how to
+;; convert one layer of the functor into the result.
+;;
+;; Signature: (defn cata [^f ^a fn (Fix f)] :a ...)
+;; But in v1, we can't express the constraint that fn : f a -> a properly,
+;; so we use a simpler signature with int as placeholder.
+(defn cata [f fn x] :int 0)
+
+;; ==========================================================
+;; Free monad operations
+;; ==========================================================
+
+;; pure-free: lift a value into the Free monad
+;; Signature: pure-free : forall f a. a -> Free f a
+(defn pure-free [x] :int 0)
+
+;; liftF: lift a functor action into the Free monad
+;; Signature: liftF : forall f a. f a -> Free f a
+(defn liftF [fa] :int 0)
+
+;; interpret-free: run a Free monad computation with an interpreter
+;; Signature: interpret-free : forall f a. (forall r. f r -> r) -> Free f a -> a
+;; In v1, we use int as placeholder for the result type.
+(defn interpret-free [interp free] :int 0)

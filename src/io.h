@@ -11,8 +11,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* Forward declaration */
+/* Forward declarations */
 typedef struct IOBackend IOBackend;
+typedef struct IOBackendVTable IOBackendVTable;
 
 /**
  * IO event types
@@ -32,6 +33,21 @@ typedef enum {
  * user_data: user-provided context pointer
  */
 typedef void (*io_callback_t)(int fd, int events, void *user_data);
+
+/* I/O backend vtable - defined here so platform-specific implementations can use it */
+struct IOBackendVTable {
+    void (*free)(IOBackend *backend);
+    int (*register_fd)(IOBackend *backend, int fd, int events, io_callback_t callback, void *user_data);
+    int (*modify_fd)(IOBackend *backend, int fd, int events);
+    int (*unregister_fd)(IOBackend *backend, int fd);
+    int (*poll)(IOBackend *backend, int timeout_ms);
+    void (*wake)(IOBackend *backend);
+};
+
+/* Base backend structure - defined here so platform-specific implementations can use it */
+struct IOBackend {
+    const struct IOBackendVTable *vtable;
+};
 
 /**
  * Create a new I/O polling backend for the current platform

@@ -52,3 +52,48 @@
     (if (empty? (rest forms))
       (first forms)
       (list .bind (second forms) (list fn `[~(first forms)] (list do-m ~@(rest (rest forms))))))))
+
+;;; SINCE: Phase HKT H7
+;; for: monadic comprehension with guards
+;;
+;; Syntax:
+;;   (for [x coll] body)                => (.bind coll (fn [x] (.pure body)))
+;;   (for [x coll :when pred] body)     => (.bind coll (fn [x] (if pred (.pure body) (.empty))))
+;;   (for [x coll1 y coll2] body)       => (.bind coll1 (fn [x] (.bind coll2 (fn [y] (.pure body)))))
+;;
+;; The binding vector format: [x coll1 y coll2 :when pred1 :when pred2 ...]
+;; Variables and collections alternate, with :when clauses appearing inline.
+;;
+;; Requires Monad and Alternative instances for the collection type.
+(defmacro for [& binding-vec body]
+  (let [bindings (first binding-vec)]
+    (if (empty? bindings)
+      ;; No bindings: just return pure body
+      (list .pure body)
+      (let [first-b (first bindings)
+            rest-b (rest bindings)]
+        (cond
+          ;; :when guard - wrap the rest with if
+          (= first-b :when)
+          (if (empty? rest-b)
+            ;; :when without predicate - error, just return empty
+            (list .empty)
+            (let [pred (first rest-b)]
+              (list if pred
+                    (list for (list ~@rest-b) ~body)
+                    (list .empty))))
+          
+          ;; Normal case: first-b is a variable, rest-b starts with a collection
+          (not (empty? rest-b))
+          (let [var first-b
+                coll (first rest-b)
+                more (rest rest-b)]
+            (if (empty? more)
+              ;; No more bindings after this one
+              (list .bind coll (list fn `[~var] (list .pure body)))
+              ;; More bindings to process
+              (list .bind coll (list fn `[~var] (list for (list ~@more) ~body)))))
+          
+          ;; Fallback: single binding without collection
+          true
+          (list .pure body))))))

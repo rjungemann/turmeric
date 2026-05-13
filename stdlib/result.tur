@@ -347,3 +347,83 @@
   }
   return err((int)(intptr_t)ex->payload);
   ```)
+
+;;; SINCE: Phase HKT H3
+;; Typeclass instances for result.
+;; Note: result is a binary type constructor (kind * -> * -> *).
+;; These instances are for result<error, T> which has kind * -> *.
+
+;; Functor instance for result.
+;; fmap :: (a -> b) -> result e a -> result e b
+;; Maps a function over the ok value, leaving err unchanged.
+(defn __functor_result_fmap [container fn] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)container;
+  if (!res) return NULL;
+  if (!res->is_ok) {
+      /* Propagate err */
+      struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out =
+          malloc(sizeof(*out));
+      out->is_ok   = false;
+      out->ok_val  = 0;
+      out->err_val = res->err_val;
+      return out;
+  }
+  /* Apply fn to ok value */
+  int64_t new_val = ((int64_t(*)(int64_t))(intptr_t)fn)(res->ok_val);
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out =
+      malloc(sizeof(*out));
+  out->is_ok   = true;
+  out->ok_val  = new_val;
+  out->err_val = 0;
+  return out;
+  ```)
+
+(definstance Functor [ptr<void>]
+  (fmap [container fn] (__functor_result_fmap container fn)))
+
+;; Applicative instance for result.
+;;   pure x = ok(x)
+;;   ap (ok f) (ok x) = ok (f x)
+;;   ap (err e) _      = err e
+;;   ap _ (err e)       = err e
+(defn __applicative_result_pure [x] :ptr<void>
+  (ok x))
+
+(defn __applicative_result_ap [ff fa] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *f_res =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)ff;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a_res =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)fa;
+  
+  /* If either is err, return err */
+  if (!f_res || !f_res->is_ok) return ff;
+  if (!a_res || !a_res->is_ok) return fa;
+  
+  /* Both are ok: apply function to value */
+  int64_t result = ((int64_t(*)(int64_t))(intptr_t)(int64_t)f_res->ok_val)(a_res->ok_val);
+  return ok(result);
+  ```)
+
+(definstance Applicative [ptr<void>]
+  (pure [x] (__applicative_result_pure x))
+  (ap [ff fa] (__applicative_result_ap ff fa)))
+
+;; Monad instance for result.
+;;   bind (ok x) f = f x
+;;   bind (err e) _ = err e
+(defn __monad_result_bind [ma fn] :ptr<void>
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)ma;
+  if (!res || !res->is_ok) return ma; /* Propagate err */
+  
+  /* Apply fn to ok value */
+  int64_t mb = ((int64_t(*)(int64_t))(intptr_t)fn)(res->ok_val);
+  return (void *)mb;
+  ```)
+
+(definstance Monad [ptr<void>]
+  (bind [ma fn] (__monad_result_bind ma fn)))
