@@ -32,6 +32,9 @@ typedef enum DiagCode {
     TUR_E0013_ORPHAN_INSTANCE, /* typeclass instance defined outside typeclass/type origin file */
     /* Parameterized typeclass constraints (Phase PTC2) */
     TUR_E0015_TYPECLASS_CONSTRAINT_NOT_SATISFIED, /* constraint cannot be satisfied for type */
+    /* Phase B2: Cloneable continuation checks (CPS-CL7) */
+    TUR_E0014_NOT_CLONE,                          /* captured binding does not implement Clone */
+    TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET,      /* cloneable-shift used outside cloneable-reset */
 } DiagCode;
 
 typedef enum DiagLevel {

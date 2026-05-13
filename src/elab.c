@@ -565,6 +565,9 @@ typedef struct Elab {
     /* Phase M4: During macro expansion, the defining module of the currently
      * expanding macro (so private helper macros from that module are visible). */
     const Symbol    *macro_expansion_module;
+    /* Phase B2 CPS-CL7: tracks nesting depth of cloneable-reset for
+     * detecting cloneable-shift outside any reset boundary. */
+    int              cloneable_reset_depth;
 } Elab;
 
 /* Phase 6: Macro definition */
@@ -1039,6 +1042,7 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->next_import_file_id = 10; /* 0-9 reserved for main + stdlib files */
     e->separate_compilation = false;
     e->macro_expansion_module = NULL;
+    e->cloneable_reset_depth = 0;
 }
 
 /* Phase 13: Lifetime annotation helpers (deferred - infrastructure in place) */
@@ -4648,7 +4652,10 @@ static Expr *elab_cloneable_reset(Elab *e, const Form *call) {
                   "(cloneable-reset body) requires exactly one argument");
         return NULL;
     }
+    /* CPS-CL7: track nesting depth so cloneable-shift can detect missing reset */
+    e->cloneable_reset_depth++;
     Expr *body = elab_form(e, call->as.list.items[1]);
+    e->cloneable_reset_depth--;
     if (!body) return NULL;
     Expr *out = expr_new(e->arena, EX_CLONEABLE_RESET, body->type, call->span);
     out->as.cloneable_reset_.body = body;
@@ -4666,9 +4673,18 @@ static Expr *elab_cloneable_shift(Elab *e, const Form *call) {
                   "(cloneable-shift k body) requires exactly two arguments");
         return NULL;
     }
+
+    /* CPS-CL7: cloneable-shift must be inside a cloneable-reset */
+    if (e->cloneable_reset_depth == 0) {
+        diag_emit_with_code(DIAG_ERROR, call->span,
+                            TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET,
+                            "cloneable-shift used outside of any cloneable-reset boundary");
+        return NULL;
+    }
+
     Expr *k_expr = elab_form(e, call->as.list.items[1]);
     if (!k_expr) return NULL;
-    
+
     /* Check if k_expr is a function, closure, or a var referencing a function */
     bool is_function = false;
     if (k_expr->kind == EX_FN || k_expr->kind == EX_CLOSURE) {
@@ -4680,13 +4696,13 @@ static Expr *elab_cloneable_shift(Elab *e, const Form *call) {
             is_function = true;
         }
     }
-    
+
     if (!is_function) {
         diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
                   "cloneable-shift requires a function as first argument");
         return NULL;
     }
-    
+
     Expr *body = elab_form(e, call->as.list.items[2]);
     if (!body) return NULL;
     /* The result type of cloneable-shift is the result type of calling k_fn with
@@ -4694,6 +4710,7 @@ static Expr *elab_cloneable_shift(Elab *e, const Form *call) {
     Expr *out = expr_new(e->arena, EX_CLONEABLE_SHIFT, body->type, call->span);
     out->as.cloneable_shift_.k_fn = k_expr;
     out->as.cloneable_shift_.body = body;
+    out->as.cloneable_shift_.cont_body = NULL;
     return out;
 }
 
@@ -4707,11 +4724,38 @@ static Expr *elab_call_cc_star(Elab *e, const Form *call) {
     }
     Expr *f_expr = elab_form(e, call->as.list.items[1]);
     if (!f_expr) return NULL;
-    
-    /* For now, emit an error that this is not yet implemented. */
-    diag_emit(DIAG_ERROR, call->span,
-              "call/cc* sugar is not yet implemented (Phase B2)");
-    return NULL;
+
+    /* CPS-CL8: Desugar (call/cc* f) into:
+     *   (cloneable-reset (cloneable-shift f 0))
+     *
+     * The shift emitter allocates a continuation and passes it to k_fn (= f).
+     * So f receives the continuation directly — no wrapper needed. */
+
+    /* Determine f's return type */
+    Type call_result_type = TYPE_INT;
+    if (f_expr->kind == EX_VAR && f_expr->as.var.binding
+        && f_expr->as.var.binding->type.kind == TY_FN) {
+        call_result_type = type_from_kind(
+            f_expr->as.var.binding->type.as.fn.result_kind);
+    }
+
+    /* Build EX_INT_LIT for the default value 0 */
+    Expr *zero = expr_new(e->arena, EX_INT_LIT, TYPE_INT, call->span);
+    zero->as.i = 0;
+
+    /* Build EX_CLONEABLE_SHIFT: (cloneable-shift f 0) */
+    Expr *shift = expr_new(e->arena, EX_CLONEABLE_SHIFT, call_result_type, call->span);
+    shift->as.cloneable_shift_.k_fn = f_expr;
+    shift->as.cloneable_shift_.body = zero;
+    shift->as.cloneable_shift_.live_captures = NULL;
+    shift->as.cloneable_shift_.n_live_captures = 0;
+    shift->as.cloneable_shift_.cont_body = NULL;
+
+    /* Build EX_CLONEABLE_RESET wrapping the shift */
+    Expr *reset = expr_new(e->arena, EX_CLONEABLE_RESET, call_result_type, call->span);
+    reset->as.cloneable_reset_.body = shift;
+
+    return reset;
 }
 
 /* Phase 19: Algebraic effects */

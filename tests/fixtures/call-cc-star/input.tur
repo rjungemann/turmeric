@@ -1,0 +1,10 @@
+;; CPS-CL8: Verify that (call/cc* f) produces a cloneable continuation
+;; that f can resume multiple times.
+
+(defn grab-cont [k] :int k)
+
+(defn main [] :int
+  (let [k (call/cc* grab-cont)]
+    (println (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) 100))
+    (println (tur_cloneable_cont_resume k 200)))
+  0)

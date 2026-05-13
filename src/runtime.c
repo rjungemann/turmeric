@@ -189,6 +189,8 @@ tur_cloneable_cont *tur_cloneable_cont_alloc(tur_frame **frame_chain, int n_fram
 
     cont->cont_fn = NULL;
     cont->env = NULL;
+    cont->clone_env = NULL;
+    cont->drop_env = NULL;
     cont->parent = NULL;
     cont->n_captured = 0;
     cont->consumed = false;
@@ -219,9 +221,11 @@ tur_cloneable_cont *tur_cloneable_cont_clone(const tur_cloneable_cont *cont) {
         (tur_cloneable_cont *)malloc(sizeof(tur_cloneable_cont));
     if (!clone) return NULL;
 
-    /* Shallow copy of all fields */
+    /* Copy fields; deep-clone env via clone_env if available (CPS-CL6) */
     clone->cont_fn = cont->cont_fn;
-    clone->env = cont->env;        /* v1: shared env (not deep-cloned) */
+    clone->env = cont->clone_env ? cont->clone_env(cont->env) : cont->env;
+    clone->clone_env = cont->clone_env;
+    clone->drop_env = cont->drop_env;
     clone->parent = cont->parent;  /* v1: shared parent */
     clone->n_captured = cont->n_captured;
     clone->consumed = false;       /* fresh clone — ready to resume */
@@ -259,6 +263,9 @@ void tur_cloneable_cont_resume(tur_cloneable_cont *cont, int64_t value) {
  * Fires DEFER_SUSPENDED defers on captured frames and frees the struct. */
 void tur_cloneable_cont_drop(tur_cloneable_cont *cont) {
     if (!cont) return;
+
+    /* CPS-CL6: release captured environment via drop_env if available */
+    if (cont->drop_env && cont->env) cont->drop_env(cont->env);
 
     /* Fire DEFER_SUSPENDED defers — the continuation is being abandoned */
     for (int i = 0; i < cont->n_captured; i++) {
