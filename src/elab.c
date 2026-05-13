@@ -21,6 +21,10 @@ extern bool g_lint_unsafe_enabled;
 extern uint32_t g_unsafe_block_count;
 extern uint32_t g_unsafe_total_lines;
 
+/* Phase R6: Result/panic linting flags */
+extern bool g_warn_unused_result;
+extern bool g_lint_panic;
+
 #define ELAB_MAX_MACRO_EXPANSION_DEPTH 256
 
 /* Helper to create a Type from TypeKind. */
@@ -502,6 +506,7 @@ typedef struct Elab {
     uint32_t n_handled_effects;
     uint32_t cap_handled_effects;
     uint32_t fn_body_depth;
+    const Symbol *current_fn_name;  /* Phase R6: track current function name for linting */
     uint32_t unsafe_depth;
     uint32_t macro_expand_depth;
     /* Phase U5: Unsafe linting configuration */
@@ -3146,6 +3151,25 @@ static Expr *elab_do(Elab *e, const Form *call) {
         items[i] = elab_form(e, call->as.list.items[1 + i]);
         if (!items[i]) return NULL;
     }
+    
+    /* Phase R6: Warn on discarded result values */
+    if (g_warn_unused_result) {
+        /* Check if this is an ignore! pattern: (do <expr> nil) */
+        bool is_ignore_pattern = (n == 2 && items[1]->kind == EX_NIL_LIT);
+        
+        for (uint32_t i = 0; i < n - 1; i++) {
+            /* All items except the last have their values discarded */
+            if (items[i]->type.kind == TY_PTR_VOID) {
+                /* This is a ptr<void> value being discarded - likely a Result */
+                /* Skip warning if this is the ignore! pattern: (do expr nil) */
+                if (!is_ignore_pattern || i != 0) {
+                    diag_emit(DIAG_WARNING, items[i]->span,
+                              "discarded result value of type ptr<void>; use ignore! to suppress this warning");
+                }
+            }
+        }
+    }
+    
     Expr *out = expr_new(e->arena, EX_DO, items[n - 1]->type, call->span);
     out->as.do_.items = items;
     out->as.do_.n = n;
@@ -5509,13 +5533,18 @@ static Expr *elab_defn(Elab *e, const Form *call) {
 
     Expr *body = e_nil(e, call->span);
     uint32_t n_body = call->as.list.len - body_start;
+
     e->fn_body_depth++;
+    /* Phase R6: Track current function name for linting */
+    e->current_fn_name = name_f->as.sym;
     if (fn_declared_unsafe) e->unsafe_depth++;
     if (n_body == 1) {
         body = elab_form(e, call->as.list.items[body_start]);
         if (!body) {
             if (fn_declared_unsafe) e->unsafe_depth--;
             e->fn_body_depth--;
+            /* Phase R6: Reset current function name */
+            e->current_fn_name = NULL;
             e->scope = inner.parent;
             scope_free(&inner);
             return NULL;
@@ -5527,9 +5556,20 @@ static Expr *elab_defn(Elab *e, const Form *call) {
             if (!items[i]) {
                 if (fn_declared_unsafe) e->unsafe_depth--;
                 e->fn_body_depth--;
+                /* Phase R6: Reset current function name */
+                e->current_fn_name = NULL;
                 e->scope = inner.parent;
                 scope_free(&inner);
                 return NULL;
+            }
+        }
+        /* Phase R6: Warn on discarded result values in function bodies */
+        if (g_warn_unused_result) {
+            for (uint32_t i = 0; i < n_body - 1; i++) {
+                if (items[i]->type.kind == TY_PTR_VOID) {
+                    diag_emit(DIAG_WARNING, items[i]->span,
+                              "discarded result value of type ptr<void>; use ignore! to suppress this warning");
+                }
             }
         }
         body = expr_new(e->arena, EX_DO, items[n_body - 1]->type, call->span);
@@ -5538,6 +5578,8 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     }
     if (fn_declared_unsafe) e->unsafe_depth--;
     e->fn_body_depth--;
+    /* Phase R6: Reset current function name */
+    e->current_fn_name = NULL;
 
     /* Pop scope */
     e->scope = inner.parent;
@@ -7977,6 +8019,23 @@ static Expr *elab_await(Elab *e, const Form *call) {
  * msg must be of type :cstr (or a string literal).
  * Return type is TYPE_NEVER (diverging; caller never observes a value). */
 static Expr *elab_panic(Elab *e, const Form *call) {
+    /* Phase R6: Lint panic usage */
+    if (g_lint_panic && e->fn_body_depth > 0) {
+        /* We're inside a function body - check if it's main or a test function */
+        bool in_test_or_main = false;
+        if (e->current_fn_name) {
+            if (strcmp(e->current_fn_name->name, "main") == 0) {
+                in_test_or_main = true;
+            } else if (strncmp(e->current_fn_name->name, "test-", 5) == 0) {
+                in_test_or_main = true;
+            }
+        }
+        if (!in_test_or_main) {
+            diag_emit(DIAG_WARNING, call->span,
+                      "panic called outside of main or test function; consider using Result instead");
+        }
+    }
+    
     if (call->as.list.len != 2) {
         diag_emit(DIAG_ERROR, call->span,
                   "(panic msg) requires exactly one argument");
@@ -8009,6 +8068,12 @@ static Expr *elab_panic_with(Elab *e, const Form *call) {
  * thunk is a nullary function; returns result<T, panic-payload>.
  * In v1, result is ptr<void> and lowering uses tur_catch_unwind from runtime. */
 static Expr *elab_catch_unwind(Elab *e, const Form *call) {
+    /* Phase R6: Lint catch_unwind usage */
+    if (g_lint_panic) {
+        diag_emit(DIAG_WARNING, call->span,
+                  "catch_unwind should only be used at effect boundaries, not for normal error handling; consider using Result instead");
+    }
+    
     if (call->as.list.len != 2) {
         diag_emit(DIAG_ERROR, call->span,
                   "(catch-unwind thunk) requires exactly one argument");
@@ -9061,6 +9126,50 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
                                   "unsupported type argument in definstance");
                         return NULL;
                     }
+                }
+            }
+            /* Phase HKT-P1: After parsing individual type arguments, combine consecutive
+             * symbols into TY_APP for implicit type application syntax [result int].
+             * This allows both [(result int)] (explicit) and [result int] (implicit). */
+            if (n_type_args > 0) {
+                for (uint8_t i = 0; i < n_type_args; ) {
+                    if (i + 1 < n_type_args) {
+                        /* Check if current is TY_STRUCT (potential constructor) and next is a type */
+                        if (type_args[i].kind == TY_STRUCT && type_args[i].as.struct_.def == NULL) {
+                            Type *next_type = &type_args[i + 1];
+                            /* Next can be any concrete type (primitive, TY_STRUCT, or TY_APP) */
+                            if (next_type->kind != TY_UNKNOWN) {
+                                /* Combine into TY_APP */
+                                Type *fn_type = (Type *)arena_alloc(e->arena, sizeof(Type));
+                                *fn_type = type_args[i];  /* Copy the constructor type */
+                                fn_type->hkt_kind = KIND_ARROW2;  /* Assume binary constructor */
+                                
+                                Type *arg_type_ptr = (Type *)arena_alloc(e->arena, sizeof(Type));
+                                *arg_type_ptr = type_args[i + 1];
+                                
+                                /* Create TY_APP */
+                                type_args[i].kind = TY_APP;
+                                type_args[i].copy_kind = CK_MOVE;
+                                type_args[i].hkt_kind = KIND_ARROW;  /* ARROW2 applied to 1 arg */
+                                type_args[i].as.app.fn = fn_type;
+                                type_args[i].as.app.arg = arg_type_ptr;
+                                /* Store constructor sym for name mangling if we have it */
+                                /* type_arg_syms[i] already contains the constructor symbol */
+                                
+                                /* Remove the second type arg by shifting */
+                                for (uint8_t j = i + 1; j < n_type_args - 1; j++) {
+                                    type_args[j] = type_args[j + 1];
+                                    if (type_arg_syms) {
+                                        type_arg_syms[j] = type_arg_syms[j + 1];
+                                    }
+                                }
+                                n_type_args--;
+                                /* Don't advance i - recheck current position */
+                                continue;
+                            }
+                        }
+                    }
+                    i++;
                 }
             }
             impls_start = 3;

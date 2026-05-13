@@ -60,6 +60,10 @@ bool g_lint_unsafe_enabled = false;    /* master flag for all unsafe lints */
 bool g_panic_abort = false;            /* --panic-abort: all panics call abort() directly */
 bool g_panic_trace = false;            /* --panic-trace: print scope chain on panic */
 
+/* Phase R6: Result/panic linting configuration */
+bool g_warn_unused_result = false;     /* --warn-unused-result: warn on discarded result values */
+bool g_lint_panic = false;              /* --lint-panic: lint panic/must! usage */
+
 /* Phase HKT-P6: --dump-kinds flag: print kind annotations after kind-check */
 static bool g_dump_kinds = false;
 
@@ -893,7 +897,10 @@ static int usage(void) {
         "  --explain <snippet>              compile code snippet and explain errors (phase 8)\n"
         "  --dump-kinds                     dump kind annotations after kind-check (HKT-P6)\n"
         "  --panic-abort                   all panics call abort() directly (Phase R5)\n"
-        "  --panic-trace                   print scope chain on panic (Phase R6)\n");
+        "  --panic-trace                   print scope chain on panic (Phase R6)\n"
+        "  --warn-unused-result             warn on discarded result values (Phase R6)\n"
+        "  --no-warn-unused-result          disable --warn-unused-result (Phase R6)\n"
+        "  --lint-panic                     lint panic/must! usage (Phase R6)\n");
     return 64;
 }
 
@@ -921,6 +928,29 @@ static bool parse_panic_abort(int argc, char **argv) {
 static bool parse_panic_trace(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--panic-trace") == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Phase R6: Handle --warn-unused-result flag */
+static bool parse_warn_unused_result(int argc, char **argv) {
+    bool enabled = false;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--warn-unused-result") == 0) {
+            enabled = true;
+        } else if (strcmp(argv[i], "--no-warn-unused-result") == 0) {
+            enabled = false;
+        }
+    }
+    return enabled;
+}
+
+/* Phase R6: Handle --lint-panic flag */
+static bool parse_lint_panic(int argc, char **argv) {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--lint-panic") == 0) {
             return true;
         }
     }
@@ -1006,6 +1036,8 @@ int main(int argc, char **argv) {
     const char *explain_code = NULL;
     g_panic_abort = parse_panic_abort(argc, argv);
     g_panic_trace = parse_panic_trace(argc, argv);
+    g_warn_unused_result = parse_warn_unused_result(argc, argv);
+    g_lint_panic = parse_lint_panic(argc, argv);
     
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--panic-abort") == 0) {
@@ -1016,6 +1048,21 @@ int main(int argc, char **argv) {
             argc--;
             i--;
         } else if (strcmp(argv[i], "--panic-trace") == 0) {
+            /* Already parsed, remove from argv */
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--warn-unused-result") == 0 ||
+                   strcmp(argv[i], "--no-warn-unused-result") == 0) {
+            /* Already parsed, remove from argv */
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--lint-panic") == 0) {
             /* Already parsed, remove from argv */
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];

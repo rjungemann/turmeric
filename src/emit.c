@@ -13,6 +13,11 @@
 /* Phase R5: Global panic strategy flag (set by main.c --panic-abort) */
 extern bool g_panic_abort;
 
+/* Phase R6: Result/panic linting flags (set by main.c) */
+extern bool g_warn_unused_result;
+extern bool g_lint_panic;
+extern bool g_panic_trace;
+
 /* Forward declarations */
 struct DeferThunk;
 
@@ -3157,6 +3162,14 @@ static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
     buf_puts(file, ") {\n");
 
+    /* Phase R6: Inject g_panic_trace initialization at start of main */
+    if (is_main && g_panic_trace) {
+        ctx->indent += 4;
+        indent_buf(file, ctx->indent);
+        buf_puts(file, "g_panic_trace = 1;\n");
+        ctx->indent -= 4;
+    }
+
     /* Phase 9 follow-up: Run last-use elision analysis on the function body
      * before emitting.  This marks eligible EX_RC_CLONE/EX_RC_DROP nodes so
      * the emitter can skip redundant rc_strong_increment/decrement pairs. */
@@ -3638,12 +3651,27 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "}\n\n");
 
     /* Phase R2: tur_panic - integrated with defer chain */
-    buf_puts(out, "/* Phase R2: tur_panic */\n");
+    /* Phase R6: Add g_panic_trace flag for scope chain printing */
+    buf_puts(out, "/* Phase R2/R6: tur_panic */\n");
     buf_puts(out, "static int tur_panic_in_progress = 0;\n");
     buf_puts(out, "static tur_frame *global_panic_frame = NULL;\n");
+    buf_puts(out, "static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */\n");
     buf_puts(out, "static void tur_panic_set_frame(tur_frame *f) {\n");
     buf_puts(out, "    global_panic_frame = f;\n");
     buf_puts(out, "}\n");
+    buf_puts(out, "static void tur_panic_print_scope_chain(void) {\n");
+    buf_puts(out, "    if (!g_panic_trace || !global_panic_frame) return;\n");
+    buf_puts(out, "    fprintf(stderr, \"  scope chain:\\n\");\n");
+    buf_puts(out, "    tur_frame *frames[64];\n");
+    buf_puts(out, "    int n_frames = 0;\n");
+    buf_puts(out, "    for (tur_frame *cur = global_panic_frame; cur != NULL && n_frames < 64; cur = cur->parent) {\n");
+    buf_puts(out, "        frames[n_frames++] = cur;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    for (int i = 0; i < n_frames; i++) {\n");
+    buf_puts(out, "        fprintf(stderr, \"    at frame %p (parent: %p, n_defers: %d)\\n\",\n");
+    buf_puts(out, "                (void*)frames[i], (void*)frames[i]->parent, frames[i]->n);\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "}\n\n");
     buf_puts(out, "static void tur_panic(const char *msg) {\n");
     buf_puts(out, "    if (tur_panic_in_progress) {\n");
     buf_puts(out, "        fprintf(stderr, \"double panic: aborting\\n\");\n");
@@ -3651,6 +3679,7 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    }\n");
     buf_puts(out, "    tur_panic_in_progress = 1;\n");
     buf_puts(out, "    fprintf(stderr, \"panic at %s:%d: %s\\n\", __FILE__, __LINE__, msg ? msg : \"(no message)\");\n");
+    buf_puts(out, "    tur_panic_print_scope_chain();\n");
     buf_puts(out, "    if (global_panic_frame) {\n");
     buf_puts(out, "        tur_frame_fire_chain(global_panic_frame);\n");
     buf_puts(out, "    }\n");
@@ -4644,6 +4673,10 @@ int emit_program(Buf *out, const Expr *program) {
     if (!user_has_main) {
         /* Only generate main() if user didn't define one */
         buf_puts(out, "int main(void) {\n");
+        /* Phase R6: Set g_panic_trace from compiler flag */
+        if (g_panic_trace) {
+            buf_puts(out, "    g_panic_trace = 1;\n");
+        }
         if (body.len) buf_write(out, body.data, body.len);
         buf_puts(out, "    return 0;\n");
         buf_puts(out, "}\n");
@@ -4891,6 +4924,10 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program, 
     if (!separate_compilation && !user_has_main) {
         /* Only generate main() if user didn't define one (single-file mode) */
         buf_puts(out, "int main(void) {\n");
+        /* Phase R6: Set g_panic_trace from compiler flag */
+        if (g_panic_trace) {
+            buf_puts(out, "    g_panic_trace = 1;\n");
+        }
         if (body.len) buf_write(out, body.data, body.len);
         buf_puts(out, "    return 0;\n");
         buf_puts(out, "}\n");

@@ -1,0 +1,53 @@
+;; Phase HKT-P7: Micro-benchmark for dictionary passing overhead
+;;
+;; This benchmark exercises the HKT typeclass dispatch mechanism.
+;;
+;; Uses a simple option type and Functor instance.
+
+;; Option type helpers
+(defn option-some [x :int] :int
+  ```c
+  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
+  r->is_some = true;
+  r->value = x;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(defn option-free [o :int] :void
+  ```c
+  free((void *)(intptr_t)o);
+  ```)
+
+;; Functor typeclass
+(defclass Functor [^container]
+  (fmap [container fn] :int))
+
+;; fmap for option
+(defn __fmap_option [container fn] :int
+  ```c
+  struct { bool is_some; int64_t value; } *c =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)container;
+  if (!c || !c->is_some) return 0;
+  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
+  r->is_some = true;
+  r->value = ((int64_t(*)(int64_t))(intptr_t)fn)(c->value);
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(definstance Functor [option]
+  (fmap [container fn] (__fmap_option container fn)))
+
+;; Increment function
+(defn inc [x :int] :int (+ x 1))
+
+;; Main benchmark entry point
+(defn bench-main [] :int
+  (let [v (option-some 42)]
+    ;; Apply fmap using typeclass dispatch
+    (let [result (.fmap v inc)]
+      (option-free result))
+    (option-free v)
+    0))
+
+;; Standard main for standalone execution
+(defn main [] :int (bench-main))
