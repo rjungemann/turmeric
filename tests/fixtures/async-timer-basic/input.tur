@@ -1,0 +1,44 @@
+;; Phase T24: async-timer-basic — multiple timers fire in deadline order
+;;
+;; Schedules three timers (10 ms, 20 ms, 30 ms) using the global timer
+;; wheel emitted into every compiled program.  Verifies they fire in
+;; ascending-deadline order by recording the sequence into TurTimerFireCtx,
+;; then printing the results after all three have fired.
+
+(defn timer-basic-run [] :int
+  ```c
+  TurTimerFireCtx ctx;
+  memset(&ctx, 0, sizeof(ctx));
+  pthread_mutex_init(&ctx.lock, NULL);
+  pthread_cond_init(&ctx.cond, NULL);
+  ctx.expected = 3;
+
+  /* Heap-allocate int64_t[2] arg pairs: { ctx-ptr-as-int64, timer-id } */
+  int64_t *args[3];
+  for (int i = 0; i < 3; i++) {
+      args[i] = (int64_t *)malloc(2 * sizeof(int64_t));
+      args[i][0] = (int64_t)(intptr_t)&ctx;
+      args[i][1] = (int64_t)(i + 1);
+  }
+
+  /* 10 ms < 20 ms < 30 ms — fire in id order 1, 2, 3 */
+  tur_timer_wheel_insert(tur_get_timer_wheel(),  10, tur_timer_fire_cb, args[0]);
+  tur_timer_wheel_insert(tur_get_timer_wheel(),  20, tur_timer_fire_cb, args[1]);
+  tur_timer_wheel_insert(tur_get_timer_wheel(),  30, tur_timer_fire_cb, args[2]);
+
+  pthread_mutex_lock(&ctx.lock);
+  while (ctx.count < ctx.expected) pthread_cond_wait(&ctx.cond, &ctx.lock);
+  pthread_mutex_unlock(&ctx.lock);
+
+  for (int i = 0; i < ctx.count; i++) {
+      printf("timer:%d\n", ctx.order[i]);
+  }
+
+  for (int i = 0; i < 3; i++) free(args[i]);
+  pthread_mutex_destroy(&ctx.lock);
+  pthread_cond_destroy(&ctx.cond);
+  return 0;
+  ```)
+
+(defn main [] :int
+  (timer-basic-run))

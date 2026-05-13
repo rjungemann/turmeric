@@ -1,0 +1,73 @@
+;; stdlib/async_file.tur — Async file I/O (Phase T24)
+;;
+;; Provides non-blocking-style file operations backed by the OS.
+;; Regular files cannot be made truly non-blocking on most POSIX systems;
+;; these wrappers delegate to the blocking syscalls directly and are
+;; labelled "async" to match the T24 API surface.  A future revision will
+;; use a thread-pool for genuine non-blocking behaviour.
+;;
+;; API:
+;;   (async-open  path flags) -> fd :int
+;;   (async-read  fd buf len) -> n  :int
+;;   (async-write fd buf len) -> n  :int
+;;   (async-close fd)         -> nil
+;;
+;; AsyncPipe:
+;;   (async-read-stdin  buf len) -> n :int
+;;   (async-write-stdout buf len) -> n :int
+
+;; ---- async-open -------------------------------------------------------
+
+(defn async-open [path :cstr flags :int] :int
+  ```c
+  extern int open(const char *path, int flags, ...);
+  #define O_RDONLY  0
+  #define O_WRONLY  1
+  #define O_RDWR    2
+  #define O_CREAT   0x0200
+  #define O_TRUNC   0x0400
+  int _fd = open((const char *)(intptr_t)path, (int)flags, 0644);
+  return (int64_t)_fd;
+  ```)
+
+;; ---- async-read -------------------------------------------------------
+
+(defn async-read [fd :int buf :ptr<void> len :int] :int
+  ```c
+  extern ssize_t read(int fd, void *buf, size_t n);
+  ssize_t _n = read((int)fd, (void *)(intptr_t)buf, (size_t)len);
+  return (int64_t)_n;
+  ```)
+
+;; ---- async-write ------------------------------------------------------
+
+(defn async-write [fd :int buf :ptr<void> len :int] :int
+  ```c
+  extern ssize_t write(int fd, const void *buf, size_t n);
+  ssize_t _n = write((int)fd, (const void *)(intptr_t)buf, (size_t)len);
+  return (int64_t)_n;
+  ```)
+
+;; ---- async-close ------------------------------------------------------
+
+(defn async-close [fd :int] :nil
+  ```c
+  extern int close(int fd);
+  close((int)fd);
+  ```)
+
+;; ---- AsyncPipe: async-read-stdin / async-write-stdout -----------------
+
+(defn async-read-stdin [buf :ptr<void> len :int] :int
+  ```c
+  extern ssize_t read(int fd, void *buf, size_t n);
+  ssize_t _n = read(0, (void *)(intptr_t)buf, (size_t)len);
+  return (int64_t)_n;
+  ```)
+
+(defn async-write-stdout [buf :ptr<void> len :int] :int
+  ```c
+  extern ssize_t write(int fd, const void *buf, size_t n);
+  ssize_t _n = write(1, (const void *)(intptr_t)buf, (size_t)len);
+  return (int64_t)_n;
+  ```)

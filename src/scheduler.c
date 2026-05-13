@@ -2,9 +2,24 @@
 #include "fiber.h"
 #include "atomic_queue.h"
 #include "io.h"
+#include "timer_wheel.h"
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* Phase T24: Per-scheduler timer wheel */
+static TurTimerWheel *tur_scheduler_mt_timer_wheel = NULL;
+static pthread_once_t tur_timer_wheel_once = PTHREAD_ONCE_INIT;
+
+static void tur_timer_wheel_init_once(void) {
+    tur_scheduler_mt_timer_wheel = tur_timer_wheel_new();
+}
+
+TurTimerWheel *tur_scheduler_mt_get_timer_wheel(TurSchedulerMT *s) {
+    (void)s;
+    pthread_once(&tur_timer_wheel_once, tur_timer_wheel_init_once);
+    return tur_scheduler_mt_timer_wheel;
+}
 
 /* Forward declarations */
 static void scheduler_mt_poll_io(TurSchedulerMT *s, int timeout_ms);

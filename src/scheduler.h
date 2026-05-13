@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "timer_wheel.h"
 
 /* Forward declaration */
 typedef struct FiberBlock FiberBlock;
@@ -70,6 +71,9 @@ void tur_scheduler_mt_io_unregister(TurSchedulerMT *s, int fd);
 /* SCH-003: ThreadPool integration */
 /* Get the TurSchedulerMT from a ThreadPool (if ThreadPool uses scheduler threads) */
 TurSchedulerMT *tur_scheduler_mt_from_threadpool(void *threadpool);
+
+/* Phase T24: Timer wheel integration */
+TurTimerWheel *tur_scheduler_mt_get_timer_wheel(TurSchedulerMT *s);
 
 /* Set the TurSchedulerMT for a ThreadPool */
 void tur_scheduler_mt_set_for_threadpool(void *threadpool, TurSchedulerMT *s);

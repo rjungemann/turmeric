@@ -1,0 +1,36 @@
+;; stdlib/timer.tur — Timer wheel API (Phase T24)
+;;
+;; Provides O(1) insert/cancel via the global TurTimerWheel that is emitted
+;; into every compiled Turmeric program.
+;;
+;; Typical usage:
+;;   (let [h (timer-insert! 500 my-callback nil)]
+;;     ...
+;;     (timer-cancel! h))   ; cancel before it fires
+
+;; Insert a one-shot timer.
+;;   delay-ms  : milliseconds from now until the callback fires
+;;   callback  : (ptr<void> -> nil) function pointer
+;;   arg       : opaque argument passed to callback
+;; Returns a handle (ptr<void>) that can be passed to timer-cancel!.
+(defn timer-insert! [delay-ms :int callback :ptr<void> arg :ptr<void>] :ptr<void>
+  ```c
+  return (void *)tur_timer_wheel_insert(
+      tur_get_timer_wheel(),
+      (int64_t)delay_ms,
+      (tur_timer_cb_t)(intptr_t)callback,
+      (void *)(intptr_t)arg);
+  ```)
+
+;; Cancel a pending timer.  If the timer has already fired, this is a no-op.
+;; handle : value returned by timer-insert!
+(defn timer-cancel! [handle :ptr<void>] :nil
+  ```c
+  tur_timer_wheel_cancel((TurTimerNode *)(intptr_t)handle);
+  ```)
+
+;; Return the current monotonic time in milliseconds.
+(defn timer-now-ms [] :int
+  ```c
+  return tur_wheel_now_ms();
+  ```)
