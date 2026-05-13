@@ -1,0 +1,7 @@
+(defmodule myapp
+  (defer (println "third"))
+  (defer (println "second"))
+  (defer (println "first"))
+  (defn main [] :int
+    (println "start")
+    0))

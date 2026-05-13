@@ -1,0 +1,5 @@
+(defmodule myapp
+  (defer (println "goodbye"))
+  (defn main [] :int
+    (println "hello")
+    0))
