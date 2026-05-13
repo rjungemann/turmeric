@@ -1,0 +1,46 @@
+;; Phase HKT-P8: do-m with option monad
+;; Tests that do-m works with option<T> and short-circuits on none
+
+;; Helper: add two options, propagating none
+(defn add-options [a b]
+  (do-m
+   x a
+   y b
+   (some (+ x y))))
+
+(defn main [] :int
+  ```c
+  /* Test 1: some + some = some(sum) */
+  void *o1 = add-options((void*)(intptr_t)some(10), (void*)(intptr_t)some(20));
+  struct { bool is_some; int64_t value; } *opt1 = (void*)o1;
+  if (!opt1 || !opt1->is_some) {
+      printf("FAIL: add-options(some(10), some(20)) should be some(30)\n");
+      return 1;
+  }
+  if (opt1->value != 30) {
+      printf("FAIL: expected 30, got %lld\n", (long long)opt1->value);
+      return 1;
+  }
+  option-free(o1);
+  
+  /* Test 2: none + some = none */
+  void *o2 = add-options(NULL, (void*)(intptr_t)some(20));
+  struct { bool is_some; int64_t value; } *opt2 = (void*)o2;
+  if (!opt2 || opt2->is_some) {
+      printf("FAIL: add-options(none, some(20)) should be none\n");
+      return 1;
+  }
+  if (opt2) option-free(o2);
+  
+  /* Test 3: some + none = none */
+  void *o3 = add-options((void*)(intptr_t)some(10), NULL);
+  struct { bool is_some; int64_t value; } *opt3 = (void*)o3;
+  if (!opt3 || opt3->is_some) {
+      printf("FAIL: add-options(some(10), none) should be none\n");
+      return 1;
+  }
+  if (opt3) option-free(o3);
+  
+  printf("PASS\n");
+  return 0;
+  ```)

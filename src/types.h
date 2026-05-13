@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include "buf.h"
 #include "lifetimes.h"  /* Phase 13: Lifetime annotations */
+#include "forms.h"      /* Phase HKT-P1: for Span */
 
 /* Forward declarations for typeclasses (Phase 15) */
 typedef struct TypeClass TypeClass;
@@ -384,6 +385,12 @@ static inline Type type_typeclass_inst(TypeClassInstance *inst) {
     t.as.typeclass_inst.instance = inst;
     return t;
 }
+
+/* Phase HKT-P1: Type application constructor */
+/* Create a TY_APP type representing (F A) where F is a type constructor and A is a type argument.
+ * Both fn and arg are copied into newly-allocated memory on the arena.
+ * The result kind is computed from fn's kind using kind_of_type_app. */
+Type type_app(Arena *a, Type fn, Type arg, Span span);
 
 /* Phase 17: Exception type constructor */
 /* Create an exception type wrapping a payload of the given type */
