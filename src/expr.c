@@ -390,6 +390,40 @@ void expr_print(Buf *b, const Expr *e) {
         case EX_GET_FIELD:
             buf_puts(b, "<get-field>");
             break;
+        /* Phase 20: Software Transactional Memory */
+        case EX_STM:
+            buf_puts(b, "<stm>");
+            break;
+        case EX_ATOMICALLY:
+            buf_puts(b, "<atomically>");
+            break;
+        case EX_RETRY:
+            buf_puts(b, "<retry>");
+            break;
+        case EX_CHECK:
+            buf_puts(b, "<check>");
+            break;
+        case EX_OR_ELSE:
+            buf_puts(b, "<or-else>");
+            break;
+        case EX_TVAR_NEW:
+            buf_puts(b, "<TVar::new>");
+            break;
+        case EX_TVAR_READ:
+            buf_puts(b, "<TVar::read>");
+            break;
+        case EX_TVAR_WRITE:
+            buf_puts(b, "<TVar::write>");
+            break;
+        case EX_TVAR_MODIFY:
+            buf_puts(b, "<TVar::modify>");
+            break;
+        case EX_TVAR_SWAP:
+            buf_puts(b, "<TVar::swap>");
+            break;
+        case EX_TVAR_CAS:
+            buf_puts(b, "<TVar::cas>");
+            break;
         /* Phase M0: Module system */
         case EX_DEFMODULE:
             buf_printf(b, "<defmodule %s>", e->as.defmodule_.mod->name->name);

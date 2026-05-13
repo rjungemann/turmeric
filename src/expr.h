@@ -120,6 +120,18 @@ typedef enum ExprKind {
     /* Phase T21-F: async/await sugar */
     EX_ASYNC,          /* (async fn-expr) - run no-arg fn in thread; return Future (ptr<void>) */
     EX_AWAIT,          /* (await fut)     - block on Future; return int value */
+    /* Phase 20: Software Transactional Memory */
+    EX_STM,            /* (stm & body) - STM transaction block */
+    EX_ATOMICALLY,     /* (atomically stm-block) - execute STM transaction atomically */
+    EX_RETRY,          /* (retry) - retry transaction from within stm block */
+    EX_CHECK,          /* (check cond) - abort transaction if cond is false */
+    EX_OR_ELSE,        /* (or-else stm1 stm2) - try stm1, retry with stm2 if retry */
+    EX_TVAR_NEW,       /* (TVar::new init) - create new TVar */
+    EX_TVAR_READ,      /* (TVar::read tvar) - read TVar within stm block */
+    EX_TVAR_WRITE,     /* (TVar::write tvar value) - write TVar within stm block */
+    EX_TVAR_MODIFY,    /* (TVar::modify tvar fn) - modify TVar within stm block */
+    EX_TVAR_SWAP,      /* (TVar::swap tvar new) - swap TVar value within stm block */
+    EX_TVAR_CAS,       /* (TVar::cas tvar old new) - compare-and-swap within stm block */
     /* Phase H §1: dictionary passing */
     EX_DICT,           /* implicit dictionary argument — address of a typeclass instance singleton */
     /* Phase 11: Struct operations */
@@ -383,6 +395,18 @@ struct Expr {
         /* Phase T21-F: async/await */
         struct { Expr *fn_expr; }                    async_;       /* (async fn-expr) */
         struct { Expr *fut_expr; }                   await_;       /* (await fut) */
+        /* Phase 20: Software Transactional Memory */
+        struct { Expr **body; uint32_t n_body; }      stm_;         /* (stm expr1 expr2 ...) */
+        struct { Expr *stm_expr; }                   atomically_;  /* (atomically stm-expr) */
+        struct { Span dummy; }                       retry_;       /* (retry) - no fields, dummy for GNU */
+        struct { Expr *cond; }                       check_;       /* (check cond) */
+        struct { Expr *stm1; Expr *stm2; }           or_else_;     /* (or-else stm1 stm2) */
+        struct { Expr *init; }                       tvar_new_;    /* (TVar::new init) */
+        struct { Expr *tvar; }                       tvar_read_;   /* (TVar::read tvar) */
+        struct { Expr *tvar; Expr *value; }           tvar_write_;  /* (TVar::write tvar value) */
+        struct { Expr *tvar; Expr *fn; }              tvar_modify_; /* (TVar::modify tvar fn) */
+        struct { Expr *tvar; Expr *new_val; }         tvar_swap_;   /* (TVar::swap tvar new) */
+        struct { Expr *tvar; Expr *old_val; Expr *new_val; } tvar_cas_; /* (TVar::cas tvar old new) */
         /* Phase H §1: dictionary passing */
         struct {
             TypeClassInstance *instance;

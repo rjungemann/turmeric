@@ -511,6 +511,31 @@ typedef struct Elab {
     /* Phase T21-F: async/await forms */
     const Symbol *sym_async;
     const Symbol *sym_await;
+    /* Phase 20: Software Transactional Memory */
+    const Symbol *sym_stm;           /* stm */
+    const Symbol *sym_atomically;    /* atomically */
+    const Symbol *sym_retry;         /* retry */
+    const Symbol *sym_check;         /* check */
+    const Symbol *sym_or_else;       /* or-else */
+    const Symbol *sym_tvar;          /* tvar (type name) */
+    const Symbol *sym_new;           /* new (for tvar/new, etc.) */
+    const Symbol *sym_read;          /* read (for tvar/read, etc.) */
+    const Symbol *sym_write;         /* write (for tvar/write, etc.) */
+    const Symbol *sym_modify;        /* modify (for tvar/modify, etc.) */
+    const Symbol *sym_swap;          /* swap (for tvar/swap, etc.) */
+    const Symbol *sym_cas;           /* cas (for tvar/cas, etc.) */
+    const Symbol *sym_tmvar;         /* tmvar (type name) */
+    const Symbol *sym_tchan;         /* tchan (type name) */
+    const Symbol *sym_tsem;          /* tsem (type name) */
+    const Symbol *sym_dosync;        /* dosync (macro) */
+    const Symbol *sym_with_tvar;     /* with-tvar (macro) */
+    /* Legacy symbols for TVar:: syntax (kept for compatibility) */
+    const Symbol *sym_tvar_new;      /* tvar/new */
+    const Symbol *sym_tvar_read;     /* tvar/read */
+    const Symbol *sym_tvar_write;    /* tvar/write */
+    const Symbol *sym_tvar_modify;   /* tvar/modify */
+    const Symbol *sym_tvar_swap;     /* tvar/swap */
+    const Symbol *sym_tvar_cas;      /* tvar/cas */
     /* Phase 13: Lifetime annotations */
     /* We recognize lifetime annotations as symbols starting with '\'' */
     /* No specific symbol needed - we check the symbol name at runtime */
@@ -1018,6 +1043,31 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* Phase T21-F: async/await */
     e->sym_async = intern_cstr(st, "async");
     e->sym_await = intern_cstr(st, "await");
+    /* Phase 20: Software Transactional Memory */
+    e->sym_stm = intern_cstr(st, "stm");
+    e->sym_atomically = intern_cstr(st, "atomically");
+    e->sym_retry = intern_cstr(st, "retry");
+    e->sym_check = intern_cstr(st, "check");
+    e->sym_or_else = intern_cstr(st, "or-else");
+    e->sym_tvar = intern_cstr(st, "tvar");
+    e->sym_new = intern_cstr(st, "new");
+    e->sym_read = intern_cstr(st, "read");
+    e->sym_write = intern_cstr(st, "write");
+    e->sym_modify = intern_cstr(st, "modify");
+    e->sym_swap = intern_cstr(st, "swap");
+    e->sym_cas = intern_cstr(st, "cas");
+    e->sym_tmvar = intern_cstr(st, "tmvar");
+    e->sym_tchan = intern_cstr(st, "tchan");
+    e->sym_tsem = intern_cstr(st, "tsem");
+    e->sym_dosync = intern_cstr(st, "dosync");
+    e->sym_with_tvar = intern_cstr(st, "with-tvar");
+    /* Legacy symbols for tvar/ syntax */
+    e->sym_tvar_new = intern_cstr(st, "tvar/new");
+    e->sym_tvar_read = intern_cstr(st, "tvar/read");
+    e->sym_tvar_write = intern_cstr(st, "tvar/write");
+    e->sym_tvar_modify = intern_cstr(st, "tvar/modify");
+    e->sym_tvar_swap = intern_cstr(st, "tvar/swap");
+    e->sym_tvar_cas = intern_cstr(st, "tvar/cas");
     /* Macro storage */
     e->macros = NULL;
     e->n_macros = 0;
@@ -6323,6 +6373,18 @@ static Expr *elab_thread_spawn(Elab *e, const Form *call);
 /* Phase T21-F: async/await sugar */
 static Expr *elab_async(Elab *e, const Form *call);
 static Expr *elab_await(Elab *e, const Form *call);
+/* Phase 20: Software Transactional Memory */
+static Expr *elab_stm(Elab *e, const Form *call);
+static Expr *elab_atomically(Elab *e, const Form *call);
+static Expr *elab_retry(Elab *e, const Form *call);
+static Expr *elab_check(Elab *e, const Form *call);
+static Expr *elab_or_else(Elab *e, const Form *call);
+static Expr *elab_tvar_new(Elab *e, const Form *call);
+static Expr *elab_tvar_read(Elab *e, const Form *call);
+static Expr *elab_tvar_write(Elab *e, const Form *call);
+static Expr *elab_tvar_modify(Elab *e, const Form *call);
+static Expr *elab_tvar_swap(Elab *e, const Form *call);
+static Expr *elab_tvar_cas(Elab *e, const Form *call);
 
 /* ---- general elab ---- */
 
@@ -6470,6 +6532,45 @@ static Expr *elab_call(Elab *e, Form *call) {
         return elab_async(e, call);
     if (name == e->sym_await && call->as.list.len == 2)
         return elab_await(e, call);
+    /* Phase 20: Software Transactional Memory */
+    if (name == e->sym_stm) return elab_stm(e, call);
+    if (name == e->sym_atomically && call->as.list.len == 2)
+        return elab_atomically(e, call);
+    if (name == e->sym_retry) return elab_retry(e, call);
+    if (name == e->sym_check && call->as.list.len == 2)
+        return elab_check(e, call);
+    if (name == e->sym_or_else && call->as.list.len == 3)
+        return elab_or_else(e, call);
+    if (name == e->sym_tvar_new && call->as.list.len == 2)
+        return elab_tvar_new(e, call);
+    if (name == e->sym_tvar_read && call->as.list.len == 2)
+        return elab_tvar_read(e, call);
+    if (name == e->sym_tvar_write && call->as.list.len == 3)
+        return elab_tvar_write(e, call);
+    if (name == e->sym_tvar_modify && call->as.list.len == 3)
+        return elab_tvar_modify(e, call);
+    if (name == e->sym_tvar_swap && call->as.list.len == 3)
+        return elab_tvar_swap(e, call);
+    if (name == e->sym_tvar_cas && call->as.list.len == 4)
+        return elab_tvar_cas(e, call);
+    /* TVar operations with / syntax */
+    if (name == e->sym_tvar && call->as.list.len >= 2) {
+        Form *op = call->as.list.items[1];
+        if (op->tag == F_SYM) {
+            if (op->as.sym == e->sym_new && call->as.list.len == 3)
+                return elab_tvar_new(e, call);
+            if (op->as.sym == e->sym_read && call->as.list.len == 3)
+                return elab_tvar_read(e, call);
+            if (op->as.sym == e->sym_write && call->as.list.len == 4)
+                return elab_tvar_write(e, call);
+            if (op->as.sym == e->sym_modify && call->as.list.len == 4)
+                return elab_tvar_modify(e, call);
+            if (op->as.sym == e->sym_swap && call->as.list.len == 4)
+                return elab_tvar_swap(e, call);
+            if (op->as.sym == e->sym_cas && call->as.list.len == 5)
+                return elab_tvar_cas(e, call);
+        }
+    }
     /* Phase R1: ? operator (reserved, not yet implemented) */
     if (name == e->sym_question) {
         diag_emit(DIAG_ERROR, call->span,
@@ -10672,4 +10773,269 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
     prog->as.program.items = items;
     prog->as.program.n = nforms;
     return prog;
+}
+
+/* ============================================================================
+ * Phase 20: Software Transactional Memory - Elaboration
+ * ============================================================================ */
+
+/* Track whether we're inside an stm block for TUR-E0009 checking */
+static bool elab_in_stm = false;
+
+static Expr *elab_stm(Elab *e, const Form *call) {
+    if (call->as.list.len < 1) {
+        diag_emit(DIAG_ERROR, call->span, "stm requires at least one body expression");
+        return NULL;
+    }
+
+    /* Save previous stm state */
+    bool prev_in_stm = elab_in_stm;
+    elab_in_stm = true;
+
+    /* Elaborate body expressions */
+    Expr **body = arena_alloc(e->arena, (call->as.list.len - 1) * sizeof(Expr *));
+    uint32_t n_body = 0;
+    for (uint32_t i = 1; i < call->as.list.len; i++) {
+        Expr *expr = elab_form(e, call->as.list.items[i]);
+        if (!expr) {
+            elab_in_stm = prev_in_stm;
+            return NULL;
+        }
+        body[n_body++] = expr;
+    }
+
+    /* Create STM block expression */
+    /* The type is the type of the last expression, or NIL if empty */
+    Type result_type = TYPE_NIL;
+    if (n_body > 0) {
+        result_type = body[n_body - 1]->type;
+    }
+    Expr *result = expr_new(e->arena, EX_STM, result_type, call->span);
+    result->as.stm_.body = body;
+    result->as.stm_.n_body = n_body;
+
+    /* Restore stm state */
+    elab_in_stm = prev_in_stm;
+
+    return result;
+}
+
+static Expr *elab_atomically(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span, "atomically requires exactly one stm block argument");
+        return NULL;
+    }
+
+    Form *arg = call->as.list.items[1];
+
+    /* The argument should be an stm block or something that evaluates to one */
+    /* For v1, we just wrap it in atomically */
+    Expr *stm_expr = elab_form(e, arg);
+    if (!stm_expr) return NULL;
+
+    /* Check if it's already an stm block */
+    if (stm_expr->kind != EX_STM) {
+        diag_emit(DIAG_ERROR, call->span, "atomically requires an stm block as argument");
+        return NULL;
+    }
+
+    Expr *result = expr_new(e->arena, EX_ATOMICALLY, stm_expr->type, call->span);
+    result->as.atomically_.stm_expr = stm_expr;
+    return result;
+}
+
+static Expr *elab_retry(Elab *e, const Form *call) {
+    if (!elab_in_stm) {
+        diag_emit(DIAG_ERROR, call->span, "retry can only be used inside an stm block (TUR-E0009)");
+        return NULL;
+    }
+
+    Expr *result = expr_new(e->arena, EX_RETRY, TYPE_NIL, call->span);
+    return result;
+}
+
+static Expr *elab_check(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span, "check requires exactly one condition argument");
+        return NULL;
+    }
+
+    if (!elab_in_stm) {
+        diag_emit(DIAG_ERROR, call->span, "check can only be used inside an stm block (TUR-E0009)");
+        return NULL;
+    }
+
+    Expr *cond = elab_form(e, call->as.list.items[1]);
+    if (!cond) return NULL;
+
+    /* Check should return bool */
+    if (cond->type.kind != TY_BOOL) {
+        diag_emit(DIAG_ERROR, call->span, "check condition must be a bool");
+        return NULL;
+    }
+
+    Expr *result = expr_new(e->arena, EX_CHECK, TYPE_NIL, call->span);
+    result->as.check_.cond = cond;
+    return result;
+}
+
+static Expr *elab_or_else(Elab *e, const Form *call) {
+    if (call->as.list.len != 3) {
+        diag_emit(DIAG_ERROR, call->span, "or-else requires exactly two stm block arguments");
+        return NULL;
+    }
+
+    if (!elab_in_stm) {
+        diag_emit(DIAG_ERROR, call->span, "or-else can only be used inside an stm block (TUR-E0009)");
+        return NULL;
+    }
+
+    Expr *stm1 = elab_form(e, call->as.list.items[1]);
+    Expr *stm2 = elab_form(e, call->as.list.items[2]);
+    if (!stm1 || !stm2) return NULL;
+
+    if (stm1->kind != EX_STM) {
+        diag_emit(DIAG_ERROR, call->as.list.items[1]->span, "or-else first argument must be an stm block");
+        return NULL;
+    }
+    if (stm2->kind != EX_STM) {
+        diag_emit(DIAG_ERROR, call->as.list.items[2]->span, "or-else second argument must be an stm block");
+        return NULL;
+    }
+
+    /* or-else result type is the common type of both branches */
+    /* For simplicity, use stm2's type (the fallback branch) */
+    Type result_type = stm2->type;
+    /* If stm2 returns nil, try stm1's type */
+    if (result_type.kind == TY_NIL) {
+        result_type = stm1->type;
+    }
+
+    Expr *result = expr_new(e->arena, EX_OR_ELSE, result_type, call->span);
+    result->as.or_else_.stm1 = stm1;
+    result->as.or_else_.stm2 = stm2;
+    return result;
+}
+
+static Expr *elab_tvar_new(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span, "TVar/new requires exactly one initial value argument");
+        return NULL;
+    }
+
+    Expr *init = elab_form(e, call->as.list.items[1]);
+    if (!init) return NULL;
+
+    /* TVar::new returns a TVar pointer (ptr), not the type of the initial value */
+    Expr *result = expr_new(e->arena, EX_TVAR_NEW, TYPE_PTR_VOID, call->span);
+    result->as.tvar_new_.init = init;
+    return result;
+}
+
+static Expr *elab_tvar_read(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span, "TVar/read requires exactly one TVar argument");
+        return NULL;
+    }
+
+    if (!elab_in_stm) {
+        diag_emit(DIAG_ERROR, call->span, "TVar/read can only be used inside an stm block (TUR-E0009)");
+        return NULL;
+    }
+
+    Expr *tvar = elab_form(e, call->as.list.items[1]);
+    if (!tvar) return NULL;
+
+    /* TVar/read returns the value stored in the TVar, which is a ptr<void> */
+    Expr *result = expr_new(e->arena, EX_TVAR_READ, TYPE_PTR_VOID, call->span);
+    result->as.tvar_read_.tvar = tvar;
+    return result;
+}
+
+static Expr *elab_tvar_write(Elab *e, const Form *call) {
+    if (call->as.list.len != 3) {
+        diag_emit(DIAG_ERROR, call->span, "TVar/write requires exactly two arguments: tvar and value");
+        return NULL;
+    }
+
+    if (!elab_in_stm) {
+        diag_emit(DIAG_ERROR, call->span, "TVar/write can only be used inside an stm block (TUR-E0009)");
+        return NULL;
+    }
+
+    Expr *tvar = elab_form(e, call->as.list.items[1]);
+    Expr *value = elab_form(e, call->as.list.items[2]);
+    if (!tvar || !value) return NULL;
+
+    Expr *result = expr_new(e->arena, EX_TVAR_WRITE, TYPE_NIL, call->span);
+    result->as.tvar_write_.tvar = tvar;
+    result->as.tvar_write_.value = value;
+    return result;
+}
+
+static Expr *elab_tvar_modify(Elab *e, const Form *call) {
+    if (call->as.list.len != 3) {
+        diag_emit(DIAG_ERROR, call->span, "TVar/modify requires exactly two arguments: tvar and function");
+        return NULL;
+    }
+
+    if (!elab_in_stm) {
+        diag_emit(DIAG_ERROR, call->span, "TVar/modify can only be used inside an stm block (TUR-E0009)");
+        return NULL;
+    }
+
+    Expr *tvar = elab_form(e, call->as.list.items[1]);
+    Expr *fn = elab_form(e, call->as.list.items[2]);
+    if (!tvar || !fn) return NULL;
+
+    /* TVar/modify returns the old value, which is a ptr<void> */
+    Expr *result = expr_new(e->arena, EX_TVAR_MODIFY, TYPE_PTR_VOID, call->span);
+    result->as.tvar_modify_.tvar = tvar;
+    result->as.tvar_modify_.fn = fn;
+    return result;
+}
+
+static Expr *elab_tvar_swap(Elab *e, const Form *call) {
+    if (call->as.list.len != 3) {
+        diag_emit(DIAG_ERROR, call->span, "TVar/swap requires exactly two arguments: tvar and new value");
+        return NULL;
+    }
+
+    if (!elab_in_stm) {
+        diag_emit(DIAG_ERROR, call->span, "TVar/swap can only be used inside an stm block (TUR-E0009)");
+        return NULL;
+    }
+
+    Expr *tvar = elab_form(e, call->as.list.items[1]);
+    Expr *new_val = elab_form(e, call->as.list.items[2]);
+    if (!tvar || !new_val) return NULL;
+
+    /* TVar/swap returns the old value, which is a ptr<void> */
+    Expr *result = expr_new(e->arena, EX_TVAR_SWAP, TYPE_PTR_VOID, call->span);
+    result->as.tvar_swap_.tvar = tvar;
+    result->as.tvar_swap_.new_val = new_val;
+    return result;
+}
+
+static Expr *elab_tvar_cas(Elab *e, const Form *call) {
+    if (call->as.list.len != 4) {
+        diag_emit(DIAG_ERROR, call->span, "TVar/cas requires exactly three arguments: tvar, old value, new value");
+        return NULL;
+    }
+
+    if (!elab_in_stm) {
+        diag_emit(DIAG_ERROR, call->span, "TVar/cas can only be used inside an stm block (TUR-E0009)");
+        return NULL;
+    }
+
+    Expr *tvar = elab_form(e, call->as.list.items[1]);
+    Expr *old_val = elab_form(e, call->as.list.items[2]);
+    Expr *new_val = elab_form(e, call->as.list.items[3]);
+    if (!tvar || !old_val || !new_val) return NULL;
+
+    Expr *result = expr_new(e->arena, EX_TVAR_CAS, TYPE_BOOL, call->span);
+    result->as.tvar_cas_.tvar = tvar;
+    result->as.tvar_cas_.old_val = old_val;
+    result->as.tvar_cas_.new_val = new_val;
+    return result;
 }

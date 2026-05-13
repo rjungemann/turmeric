@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/rjungemann/Projects/turmeric4/build-tsan/_deps/raylib-subbuild/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
