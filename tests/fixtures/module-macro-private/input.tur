@@ -1,0 +1,5 @@
+(defmodule myapp
+  (import math/helpers :as h :refer [triple])
+  (defn main [] :int
+    (println (triple 4))
+    0))

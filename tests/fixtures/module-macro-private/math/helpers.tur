@@ -1,0 +1,4 @@
+(defmodule math/helpers
+  (export triple)
+  (defmacro helper-double [x] (* x 2))
+  (defmacro triple [x] (+ x (helper-double x))))

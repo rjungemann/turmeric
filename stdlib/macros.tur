@@ -1,5 +1,11 @@
 ;; Standard library macros for Turmeric
 ;; Phase 7: Core macros
+;; Phase M7: Wrapped in (defmodule tur/macros ...). The auto-loader treats
+;; modules under the `tur/` namespace as implicitly imported, so the macros
+;; below remain visible globally just like in pre-module code.
+
+(defmodule tur/macros
+  (export cond when unless must! must-msg! ignore! do-m for)
 
 ;; cond macro: (cond t1 e1 t2 e2 ... :else efinal) -> nested (if ...) chain
 ;; Uses compile-time list manipulation to build the expansion.
@@ -84,7 +90,7 @@
               (list if pred
                     (list for binding-vec ~@body)
                     (list .empty))))
-          
+
           ;; Normal case: first-b is a variable, rest-b starts with a collection
           (not (empty? rest-b))
           (let [var first-b
@@ -95,7 +101,8 @@
               (list .bind coll (list fn `[~var] (list .pure (list do ~@body))))
               ;; More bindings to process
               (list .bind coll (list fn `[~var] (list for (list ~@more) ~@body)))))
-          
+
           ;; Fallback: single binding without collection
           true
           (list .pure (list do ~@body)))))))
+)
