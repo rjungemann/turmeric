@@ -1,95 +1,47 @@
-;; Phase HKT-P8: do-m with result monad.
-;; Verifies that do-m desugars correctly using Monad.bind on result,
-;; short-circuiting on the first err value.
-;; Multi-binding do-m with cross-lambda captures is tested via direct bind calls
-;; (same approach as hkt-do-m) to avoid the compiler closure-capture type issue.
+;; Phase HKT-P8: do-m with result monad
+;; Tests that do-m works with result<T, E> and short-circuits on err
 
-(defclass Monad [^m]
-  (bind [ma fn] :int))
+;; Create an ok result with value
+(defn ok-result [x] (ok x))
 
-;; ── Inline result helpers (avoid stdlib dependency for snapshot clarity) ─────
+;; Create an err result
+(defn err-result [e] (err e))
 
-(defn __res_ok [x] :int
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
-  r->is_ok = true; r->ok_val = x; r->err_val = 0;
-  return (int64_t)(intptr_t)r;
-  ```)
-
-(defn __res_err [e] :int
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
-  r->is_ok = false; r->ok_val = 0; r->err_val = e;
-  return (int64_t)(intptr_t)r;
-  ```)
-
-(defn __res_ok? [r] :bool
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *p =
-      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r;
-  return p != NULL && p->is_ok;
-  ```)
-
-(defn __res_ok-val [r] :int
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *p =
-      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r;
-  return (int)p->ok_val;
-  ```)
-
-(defn __res_err-val [r] :int
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *p =
-      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r;
-  return (int)p->err_val;
-  ```)
-
-;; ── Monad[result]: bind short-circuits on err ────────────────────────────────
-
-(defn __monad_result_bind [ma fn] :int
-  ```c
-  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r =
-      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)ma;
-  if (!r || !r->is_ok) return (int64_t)(intptr_t)r;
-  return ((int64_t(*)(int64_t))(intptr_t)fn)(r->ok_val);
-  ```)
-
-(definstance Monad [result]
-  (bind [ma fn] (__monad_result_bind ma fn)))
-
-;; ── Tests ────────────────────────────────────────────────────────────────────
+;; Helper: add two results, propagating err
+(defn add-results [a b]
+  (do-m
+   x a
+   y b
+   (ok-result (+ x y))))
 
 (defn main [] :int
-  (do
-    ;; do-m base case: single expression — returned directly
-    (let [r0 (do-m (__res_ok 42))]
-      (do
-        (println (__res_ok? r0))      ;; true
-        (println (__res_ok-val r0)))) ;; 42
-
-    ;; do-m with one binding: ok(3) >>= \x -> ok(x*2) => ok(6)
-    (let [r1 (do-m x (__res_ok 3) (__res_ok (* x 2)))]
-      (do
-        (println (__res_ok? r1))      ;; true
-        (println (__res_ok-val r1)))) ;; 6
-
-    ;; do-m with one binding: err short-circuits
-    (let [r2 (do-m x (__res_err 99) (__res_ok (* x 2)))]
-      (println (__res_ok? r2)))       ;; false
-
-    ;; Chained bind via __monad_result_bind directly (no cross-lambda captures):
-    ;; ok(4) >>= \x -> ok(x*2) = ok(8) >>= \y -> ok(y+1) = ok(9)
-    (let [step1 (__monad_result_bind (__res_ok 4) (fn [x] (__res_ok (* x 2))))]
-      (let [r3 (__monad_result_bind step1 (fn [y] (__res_ok (+ y 1))))]
-        (do
-          (println (__res_ok? r3))      ;; true
-          (println (__res_ok-val r3))))) ;; 9
-
-    ;; Chained bind with first step err: err(7) >>= ... => err(7) (short-circuit)
-    (let [step2 (__monad_result_bind (__res_err 7) (fn [x] (__res_ok (* x 2))))]
-      (let [r4 (__monad_result_bind step2 (fn [y] (__res_ok (+ y 1))))]
-        (do
-          (println (__res_ok? r4))       ;; false
-          (println (__res_err-val r4))))) ;; 7
-
-    0))
+  ```c
+  /* Test 1: ok + ok = ok(sum) */
+  void *r1 = add_results((void*)(intptr_t)ok-result(10), (void*)(intptr_t)ok-result(20));
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result1 = (void*)r1;
+  if (!result1 || !result1->is_ok) {
+      printf("FAIL: add-results(ok(10), ok(20)) should be ok(30)\n");
+      return 1;
+  }
+  if (result1->ok_val != 30) {
+      printf("FAIL: expected 30, got %lld\n", (long long)result1->ok_val);
+      return 1;
+  }
+  result-free(r1);
+  
+  /* Test 2: err + ok = err */
+  void *r2 = add_results((void*)(intptr_t)err-result(999), (void*)(intptr_t)ok-result(20));
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result2 = (void*)r2;
+  if (!result2 || result2->is_ok) {
+      printf("FAIL: add-results(err(999), ok(20)) should be err\n");
+      return 1;
+  }
+  if (result2->err_val != 999) {
+      printf("FAIL: expected err 999, got %lld\n", (long long)result2->err_val);
+      return 1;
+  }
+  result-free(r2);
+  
+  printf("PASS\n");
+  return 0;
+  ```)
