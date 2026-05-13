@@ -430,6 +430,9 @@ OPENGL_VERSION:STRING=OFF
 //Platform to build for.
 PLATFORM:STRING=Desktop
 
+//Build example programs (requires Raylib)
+TUR_EXAMPLES:BOOL=OFF
+
 //Link raylib against system GLFW instead of embedded one
 USE_EXTERNAL_GLFW:STRING=OFF
 
@@ -602,7 +605,7 @@ CMAKE_MODULE_LINKER_FLAGS_RELWITHDEBINFO-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: CMAKE_NM
 CMAKE_NM-ADVANCED:INTERNAL=1
 //number of local generators
-CMAKE_NUMBER_OF_MAKEFILES:INTERNAL=9
+CMAKE_NUMBER_OF_MAKEFILES:INTERNAL=2
 //ADVANCED property for variable: CMAKE_OBJCOPY
 CMAKE_OBJCOPY-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: CMAKE_OBJDUMP
@@ -667,7 +670,7 @@ CPM_DRY_RUN:INTERNAL=OFF
 CPM_FILE:INTERNAL=/Users/rjungemann/Projects/turmeric/build-rel/cmake/CPM.cmake
 CPM_INDENT:INTERNAL=CPM:
 CPM_MODULE_PATH:INTERNAL=/Users/rjungemann/Projects/turmeric/build-rel/CPM_modules
-CPM_PACKAGES:INTERNAL=raylib
+CPM_PACKAGES:INTERNAL=
 CPM_PACKAGE_LOCK_FILE:INTERNAL=/Users/rjungemann/Projects/turmeric/build-rel/cpm-package-lock.cmake
 CPM_PACKAGE_raylib_BINARY_DIR:INTERNAL=/Users/rjungemann/Projects/turmeric/build-rel/_deps/raylib-build
 CPM_PACKAGE_raylib_SOURCE_DIR:INTERNAL=/Users/rjungemann/Projects/turmeric/build-rel/_deps/raylib-src

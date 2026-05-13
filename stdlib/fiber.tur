@@ -59,12 +59,12 @@
   ```)
 
 ;; Current fiber versions - use tur_current_fiber implicitly
-defn fiber-local-current-get [key :int] :int
+(defn fiber-local-current-get [key :int] :int
   ```c
   return tur_fiber_local_get(tur_current_fiber, (int64_t)key);
   ```)
 
-defn fiber-local-current-set! [key :int value :int] :nil
+(defn fiber-local-current-set! [key :int value :int] :nil
   ```c
   tur_fiber_local_set(tur_current_fiber, (int64_t)key, (int64_t)value);
   ```)
@@ -75,20 +75,20 @@ defn fiber-local-current-set! [key :int value :int] :nil
 ;; Must be called from within a fiber running under a TurScheduler.
 
 ;; Yield the current fiber back to the scheduler (re-enqueues it for next turn).
-defn scheduler-yield! [] :nil
+(defn scheduler-yield! [] :nil
   ```c
   tur_scheduler_yield();
   ```)
 
 ;; Park the current fiber: suspend without re-enqueueing.
 ;; The fiber stays parked until scheduler-unpark! is called on it.
-defn scheduler-park! [] :nil
+(defn scheduler-park! [] :nil
   ```c
   tur_scheduler_park();
   ```)
 
 ;; Unpark a fiber: clear its parked flag and add it back to the scheduler queue.
-defn scheduler-unpark! [f :ptr<void>] :nil
+(defn scheduler-unpark! [f :ptr<void>] :nil
   ```c
   tur_scheduler_unpark((FiberBlock *)f);
   ```)
@@ -97,7 +97,7 @@ defn scheduler-unpark! [f :ptr<void>] :nil
 ;; Phase T24: When running under a scheduler, parks the current fiber and
 ;; uses the timer wheel to resume it after the delay (cooperative, non-blocking).
 ;; Falls back to nanosleep when no scheduler is active.
-defn async-sleep [ms :int] :nil
+(defn async-sleep [ms :int] :nil
   ```c
   if (ms <= 0) return;
   FiberBlock *me = tur_current_fiber;
@@ -119,7 +119,7 @@ defn async-sleep [ms :int] :nil
   ```)
 
 ;; Phase T23: Get the current OS thread ID
-defn fiber-thread-id [] :int
+(defn fiber-thread-id [] :int
   ```c
   return (int64_t)(uintptr_t)pthread_self();
   ```)

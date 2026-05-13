@@ -51,6 +51,7 @@ set(CMAKE_DEPENDS_DEPENDENCY_FILES
   "/Users/rjungemann/Projects/turmeric/src/scheduler.c" "src/CMakeFiles/tur.dir/scheduler.c.o" "gcc" "src/CMakeFiles/tur.dir/scheduler.c.o.d"
   "/Users/rjungemann/Projects/turmeric/src/scheduler_common.c" "src/CMakeFiles/tur.dir/scheduler_common.c.o" "gcc" "src/CMakeFiles/tur.dir/scheduler_common.c.o.d"
   "/Users/rjungemann/Projects/turmeric/src/symbols.c" "src/CMakeFiles/tur.dir/symbols.c.o" "gcc" "src/CMakeFiles/tur.dir/symbols.c.o.d"
+  "/Users/rjungemann/Projects/turmeric/src/timer_wheel.c" "src/CMakeFiles/tur.dir/timer_wheel.c.o" "gcc" "src/CMakeFiles/tur.dir/timer_wheel.c.o.d"
   "/Users/rjungemann/Projects/turmeric/src/typeclass.c" "src/CMakeFiles/tur.dir/typeclass.c.o" "gcc" "src/CMakeFiles/tur.dir/typeclass.c.o.d"
   "/Users/rjungemann/Projects/turmeric/src/types.c" "src/CMakeFiles/tur.dir/types.c.o" "gcc" "src/CMakeFiles/tur.dir/types.c.o.d"
   )
