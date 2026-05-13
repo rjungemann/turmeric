@@ -1,0 +1,39 @@
+;; Pair type for Turmeric
+;; A generic pair of values (a, b) - stored as int64_t
+;; Phase B1: Clone trait infrastructure
+
+(defstruct Pair [first :int second :int])
+
+;; Create a new Pair
+(defn pair-new [a b] :int
+  ```c
+  struct { int64_t first; int64_t second; } *p = malloc(sizeof(*p));
+  p->first = a;
+  p->second = b;
+  return (int64_t)(intptr_t)p;
+  ```)
+
+;; Get first element
+(defn pair-first [p] :int
+  ```c
+  struct { int64_t first; int64_t second; } *pair = (void*)(intptr_t)p;
+  return pair->first;
+  ```)
+
+;; Get second element
+(defn pair-second [p] :int
+  ```c
+  struct { int64_t first; int64_t second; } *pair = (void*)(intptr_t)p;
+  return pair->second;
+  ```)
+
+;; Free a Pair (does NOT free the contained values - shallow free)
+(defn pair-free [p]
+  ```c
+  free((void*)(intptr_t)p);
+  ```)
+
+;; Phase B1: Clone support for Pair
+;; The Clone instance for Pair is defined separately in the file that uses
+;; both this type and the Clone typeclass (to avoid circular dependencies).
+;; A non-parameterized Clone instance can be added by including typeclass.tur.

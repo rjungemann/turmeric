@@ -1,0 +1,37 @@
+;; Ref (Reference) type for Turmeric
+;; Heap-allocated container with independent ownership
+;; Phase B1: Clone trait infrastructure
+
+(defstruct Ref [value :int])
+
+;; Create a new Ref from a value (takes ownership of the pointer)
+;; The caller is responsible for ensuring the value is heap-allocated
+;; if it needs to outlive the Ref.
+(defn ref-new [value] :int
+  ```c
+  struct { int64_t value; } *ref = malloc(sizeof(struct { int64_t value; }));
+  ref->value = value;
+  return (int64_t)(intptr_t)ref;
+  ```)
+
+;; Get the contained value from a Ref
+(defn ref-get [r] :int
+  ```c
+  struct { int64_t value; } *ref = (struct { int64_t value; } *)(intptr_t)r;
+  if (!ref) {
+    fprintf(stderr, "ref-get: null ref\n");
+    exit(1);
+  }
+  return ref->value;
+  ```)
+
+;; Free a Ref (does NOT free the contained value - shallow free)
+(defn ref-free [r]
+  ```c
+  free((void*)(intptr_t)r);
+  ```)
+
+;; Phase B1: Clone support for ref
+;; The Clone instance for Ref is defined separately in the file that uses
+;; both this type and the Clone typeclass (to avoid circular dependencies).
+;; A non-parameterized Clone instance can be added by including typeclass.tur.
