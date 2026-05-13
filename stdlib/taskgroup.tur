@@ -456,38 +456,70 @@
           (task-group-wait group)))))
 
 ;; ---- TG-006: Integration with async/await ----
-;; 
-;; NOTE: These functions require async/await to use fiber-based execution.
-;; Currently (v1), async uses pthread-based execution via tur_async_fiber which
-;; calls the function directly without creating a fiber. Fiber-based async
-;; execution is tracked in Phase AW-005. Until then, these functions are
-;; stubs that document the intended API.
+;;
+;; Fiber-based async integration: task-group-spawn-async creates a real fiber
+;; for the computation, registers it with the task group, and returns a Future.
+;; The future is fulfilled when the fiber completes. The caller drives the
+;; fiber by awaiting the future (which runs the scheduler until done).
+
+;; Entry point for fibers spawned by task-group-spawn-async.
+;; Reads the fn pointer and future from fiber_local, calls fn, fulfills future.
+(defn __tg-async-entry [] :nil
+  ```c
+  typedef struct { int64_t (*fn)(void); void *future; } TgAsyncArg;
+  FiberBlock *self = tur_current_fiber;
+  if (!self) return;
+  TgAsyncArg *a = (TgAsyncArg *)self->fiber_local;
+  if (!a) return;
+  int64_t result = a->fn();
+  tur_future_fulfill((TurFuture *)a->future, result);
+  free(a);
+  self->fiber_local = NULL;
+  ```)
 
 ;; Spawn an async computation into a task group.
-;; Takes a no-argument function that returns int64, spawns it as a fiber in the group,
-;; and returns a Future that will be fulfilled with the result.
-;; TG-006: Enables async blocks to be spawned into TaskGroup for tracking.
-;; DEPENDENCY: Requires async to use fiber-based execution (Phase AW-005).
+;; Takes a no-argument function that returns int64, spawns it as a fiber in the
+;; group, and returns a Future that will be fulfilled with the result.
+;; The fiber runs when the scheduler is driven (e.g., by (await future)).
+;; TG-006: Fiber-based async integrated with TaskGroup lifecycle.
 (defn task-group-spawn-async [group :ptr<void> f :ptr<void>] :ptr<void>
   ```c
-  /* TG-006: Stub implementation - requires fiber-based async */
-  /* When async uses fibers, this will:
-     1. Increment task count for the group
-     2. Create a future
-     3. Spawn a fiber with f as entry, future passed as arg
-     4. Set fiber's task_group to group
-     5. Set future callback to notify group on completion
-     6. Return future
-  */
-  fprintf(stderr, "task-group-spawn-async: requires fiber-based async (Phase AW-005)\n");
-  abort();
-  return NULL;
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t  done_cond;
+      int64_t task_count;
+      int64_t completed_count;
+      bool cancelled;
+      bool done;
+  } TaskGroupBlock;
+  typedef struct { int64_t (*fn)(void); void *future; } TgAsyncArg;
+
+  TaskGroupBlock *g = (TaskGroupBlock *)group;
+  pthread_mutex_lock(&g->lock);
+  g->task_count++;
+  pthread_mutex_unlock(&g->lock);
+
+  if (!tur_scheduler) tur_scheduler = tur_scheduler_new();
+
+  TurFuture *future = tur_future_new();
+  TgAsyncArg *arg = (TgAsyncArg *)malloc(sizeof(TgAsyncArg));
+  if (!arg) { fprintf(stderr, "task-group-spawn-async: oom\n"); abort(); }
+  arg->fn = (int64_t (*)(void))(intptr_t)f;
+  arg->future = (void *)future;
+
+  FiberBlock *fiber = tur_fiber_block_new((void(*)(void))__tg_async_entry, 0);
+  if (!fiber) { fprintf(stderr, "task-group-spawn-async: fiber oom\n"); abort(); }
+  fiber->fiber_local = (void *)arg;
+  fiber->task_group  = (void *)g;
+  fiber->cancelled   = g->cancelled;
+
+  tur_scheduler_spawn(tur_scheduler, fiber);
+  return (void *)future;
   ```)
 
 ;; Macro: Spawn an async block into a task group
 ;; TG-006: task-group-async [group async-thunk] — spawn async task into group
 ;; The async-thunk is a no-argument function that returns a value.
-;; Returns a future that can be awaited.
-;; DEPENDENCY: Requires async to use fiber-based execution (Phase AW-005).
+;; Returns a future that can be awaited to drive the fiber to completion.
 (defmacro task-group-async [group async-thunk]
   (list (task-group-spawn-async group async-thunk)))

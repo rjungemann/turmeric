@@ -1,0 +1,155 @@
+;; Phase T22 TG-006: taskgroup-async — async computations inside a TaskGroup
+;;
+;; Demonstrates fiber-based async/await integrated with TaskGroup lifecycle:
+;;   1. Two async computations are spawned into a TaskGroup via tg-spawn-async.
+;;   2. Each spawned computation runs as a real fiber in the cooperative scheduler.
+;;   3. The caller drives execution by awaiting each returned Future.
+;;   4. The TaskGroup tracks completion; done=true when all tasks finish.
+;;
+;; (await fut-a) drives the scheduler until fiber-A completes → a=10.
+;; (await fut-b) drives the scheduler until fiber-B completes → b=20.
+;;
+;; Expected output:
+;;   10
+;;   20
+;;   30
+;;   done
+
+;; ---- Helper: fiber entry point for tg-spawn-async ----
+;;
+;; Each async fiber stores a {fn, future} pair in fiber_local.
+;; This entry function reads that pair, calls fn(), and fulfills the future.
+;; tur_fiber_shim sets tur_current_fiber before calling entry_fn, so
+;; tur_current_fiber is valid here.
+(defn __tg-async-entry [] :nil
+  ```c
+  typedef struct { int64_t (*fn)(void); void *future; } TgAsyncArg;
+  FiberBlock *self = tur_current_fiber;
+  if (!self) return;
+  TgAsyncArg *a = (TgAsyncArg *)self->fiber_local;
+  if (!a) return;
+  int64_t result = a->fn();
+  tur_future_fulfill((TurFuture *)a->future, result);
+  free(a);
+  self->fiber_local = NULL;
+  ```)
+
+;; ---- TaskGroup core (matching stdlib/taskgroup.tur layout) ----
+
+(defn tg-new [] :ptr<void>
+  ```c
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t  done_cond;
+      int64_t task_count;
+      int64_t completed_count;
+      bool cancelled;
+      bool done;
+  } TaskGroupBlock;
+  TaskGroupBlock *g = (TaskGroupBlock *)malloc(sizeof(TaskGroupBlock));
+  if (!g) { fprintf(stderr, "tg-new: oom\n"); abort(); }
+  pthread_mutex_init(&g->lock, NULL);
+  pthread_cond_init(&g->done_cond, NULL);
+  g->task_count = 0;
+  g->completed_count = 0;
+  g->cancelled = false;
+  g->done = false;
+  return (void *)g;
+  ```)
+
+(defn tg-done? [group :ptr<void>] :bool
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t done_cond;
+      int64_t task_count; int64_t completed_count;
+      bool cancelled; bool done;
+  } TaskGroupBlock;
+  TaskGroupBlock *g = (TaskGroupBlock *)group;
+  pthread_mutex_lock(&g->lock);
+  bool d = g->done;
+  pthread_mutex_unlock(&g->lock);
+  return d;
+  ```)
+
+(defn tg-free [group :ptr<void>] :nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t done_cond;
+      int64_t task_count; int64_t completed_count;
+      bool cancelled; bool done;
+  } TaskGroupBlock;
+  TaskGroupBlock *g = (TaskGroupBlock *)group;
+  pthread_mutex_destroy(&g->lock);
+  pthread_cond_destroy(&g->done_cond);
+  free(g);
+  ```)
+
+;; ---- tg-spawn-async: fiber-based async in a TaskGroup (TG-006) ----
+;;
+;; Allocates a TgAsyncArg{fn, future}, creates a fiber with __tg-async-entry
+;; as its entry point, and enqueues it in the scheduler. Sets fiber->task_group
+;; so tur_fiber_shim calls tur_task_group_notify_done on completion.
+;; Returns the (pending) TurFuture* for the caller to await.
+(defn tg-spawn-async [group :ptr<void> f :ptr<void>] :ptr<void>
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t done_cond;
+      int64_t task_count; int64_t completed_count;
+      bool cancelled; bool done;
+  } TaskGroupBlock;
+  typedef struct { int64_t (*fn)(void); void *future; } TgAsyncArg;
+
+  TaskGroupBlock *g = (TaskGroupBlock *)group;
+  pthread_mutex_lock(&g->lock);
+  g->task_count++;
+  pthread_mutex_unlock(&g->lock);
+
+  /* Ensure scheduler exists */
+  if (!tur_scheduler) tur_scheduler = tur_scheduler_new();
+
+  /* Create future and pack arg struct for the fiber */
+  TurFuture *future = tur_future_new();
+  TgAsyncArg *arg = (TgAsyncArg *)malloc(sizeof(TgAsyncArg));
+  if (!arg) { fprintf(stderr, "tg-spawn-async: oom\n"); abort(); }
+  arg->fn     = (int64_t (*)(void))(intptr_t)f;
+  arg->future = (void *)future;
+
+  /* Spawn fiber: entry reads fn+future from fiber_local */
+  FiberBlock *fiber = tur_fiber_block_new((void(*)(void))__tg_async_entry, 0);
+  if (!fiber) { fprintf(stderr, "tg-spawn-async: fiber oom\n"); abort(); }
+  fiber->fiber_local = (void *)arg;
+  fiber->task_group  = (void *)g;   /* enables auto-notify on done */
+  fiber->cancelled   = g->cancelled;
+
+  tur_scheduler_spawn(tur_scheduler, fiber);
+  return (void *)future;
+  ```)
+
+;; ---- Async computations ----
+
+(defn compute-a [] :int
+  ```c
+  return (int64_t)10;
+  ```)
+
+(defn compute-b [] :int
+  ```c
+  return (int64_t)20;
+  ```)
+
+;; ---- Main ----
+;;
+;; Spawn two async computations into a task group. Each (await) drives the
+;; scheduler until that computation's fiber completes.
+(defn main [] :int
+  (let [tg (tg-new)]
+    (let [fut-a (tg-spawn-async tg compute-a)]
+      (let [fut-b (tg-spawn-async tg compute-b)]
+        (let [a (await fut-a)]       ;; runs fiber-A → 10
+          (let [b (await fut-b)]     ;; runs fiber-B → 20
+            (println a)              ;; 10
+            (println b)              ;; 20
+            (println (+ a b))        ;; 30
+            (tg-free tg)
+            (println "done")
+            0))))))
