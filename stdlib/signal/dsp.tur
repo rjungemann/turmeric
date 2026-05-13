@@ -1,0 +1,436 @@
+;; Signal Processing DSP Primitives
+;; 
+;; This module provides digital signal processing primitives as Signal Functions (SF).
+;; All primitives are implemented using the Arrow typeclass hierarchy.
+
+(import stdlib/signal/core.tur)
+
+;; =============================================================================
+;; Basic Signal Sources
+;; =============================================================================
+
+;; Sine wave oscillator
+;; freq: frequency in Hz
+;; phase: phase offset in radians
+;; Output: sine wave with amplitude [-1, 1]
+(defn sine-osc [freq : Sample] [phase : Sample]
+  : (SF () Sample)
+  (arr (fn [_]
+    (let [t (error "sine-osc needs time - use time-sine-osc")]
+      (math/sin (+ (* 2.0 math/PI freq t) phase))))))
+
+;; Time-aware sine oscillator
+;; Takes a time signal as input
+(defn time-sine-osc [freq : Sample] [phase : Sample]
+  : (SF Time Sample)
+  (arr (fn [t]
+    (math/sin (+ (* 2.0 math/PI freq t) phase)))))
+
+;; Sine oscillator that ignores input and uses global time
+;; This is the most useful form: just provide frequency and phase
+(defn sine [freq : Sample] [phase : Sample]
+  : (SF () Sample)
+  (fn [_sig]
+    (fn [t]
+      (math/sin (+ (* 2.0 math/PI freq t) phase)))))
+
+;; Square wave oscillator
+;; freq: frequency in Hz
+;; duty: duty cycle (0.0 to 1.0), fraction of period that is high
+;; Output: square wave with amplitude [-1, 1]
+(defn square [freq : Sample] [duty : Sample]
+  : (SF () Sample)
+  (fn [_sig]
+    (fn [t]
+      (let [saw (mod (* freq t) 1.0)]
+        (if (< saw duty) 1.0 -1.0)))))
+
+;; Sawtooth wave oscillator
+;; freq: frequency in Hz
+;; Output: sawtooth wave with amplitude [0, 1)
+(defn sawtooth [freq : Sample]
+  : (SF () Sample)
+  (fn [_sig]
+    (fn [t]
+      (mod (* freq t) 1.0))))
+
+;; Triangle wave oscillator
+;; freq: frequency in Hz
+;; Output: triangle wave with amplitude [-1, 1]
+(defn triangle [freq : Sample]
+  : (SF () Sample)
+  (fn [_sig]
+    (fn [t]
+      (let [x (mod (* freq t) 1.0)]
+        (if (< x 0.5)
+          (* 2.0 x)
+          (* -2.0 (- x 1.0)))))))
+
+;; White noise generator
+;; Uses a simple pseudo-random number generator
+;; Note: This is not cryptographically secure, just for audio
+(defn white-noise []
+  : (SF () Sample)
+  (fn [_sig]
+    (let [seed-ref (ref 42)]
+      (fn [t]
+        ;; Simple linear congruential generator
+        (let [seed (* 1664525 @seed-ref + 1013904223)
+              new-seed (mod seed 4294967296)]
+          (set! seed-ref new-seed)
+          ;; Convert to [-1, 1]
+          (/ (* 2.0 new-seed) 4294967296.0 - 1.0)))))))
+
+;; Impulse train (periodic impulses)
+;; freq: frequency in Hz
+;; width: width of each impulse in seconds
+;; Output: 1.0 during impulse, 0.0 otherwise
+(defn impulse [freq : Sample] [width : Sample]
+  : (SF () Sample)
+  (fn [_sig]
+    (fn [t]
+      (let [phase (mod (* freq t) 1.0)]
+        (if (< phase (* freq width)) 1.0 0.0))))))
+
+;; =============================================================================
+;; Basic Signal Processors
+;; =============================================================================
+
+;; Gain (amplitude scaling)
+;; gain g x = g * x
+(defn gain [g : Sample]
+  : (SF Sample Sample)
+  (arr (fn [x] (* g x))))
+
+;; Offset (DC bias)
+;; offset o x = x + o
+(defn offset [o : Sample]
+  : (SF Sample Sample)
+  (arr (fn [x] (+ x o))))
+
+;; Invert signal (multiply by -1)
+(defn invert []
+  : (SF Sample Sample)
+  (gain -1.0))
+
+;; Absolute value
+(defn abs-sf []
+  : (SF Sample Sample)
+  (arr (fn [x] (math/abs x))))
+
+;; Clip signal to range [min, max]
+(defn clip [min-val : Sample] [max-val : Sample]
+  : (SF Sample Sample)
+  (arr (fn [x]
+    (math/clamp x min-val max-val))))
+
+;; =============================================================================
+;; Mixing and Combining
+;; =============================================================================
+
+;; Add two signals
+;; Input: Tuple of two signals, Output: their sum
+(defn add []
+  : (SF (Tuple Sample Sample) Sample)
+  (arr (fn [[x y]] (+ x y))))
+
+;; Subtract two signals (first - second)
+(defn subtract []
+  : (SF (Tuple Sample Sample) Sample)
+  (arr (fn [[x y]] (- x y))))
+
+;; Multiply two signals
+(defn multiply []
+  : (SF (Tuple Sample Sample) Sample)
+  (arr (fn [[x y]] (* x y))))
+
+;; Mix two signals with a ratio
+;; ratio = 0.0 -> all second signal
+;; ratio = 1.0 -> all first signal
+;; ratio = 0.5 -> equal mix
+(defn mix [ratio : Sample]
+  : (SF (Tuple Sample Sample) Sample)
+  (arr (fn [[x y]] (+ (* ratio x) (* (- 1.0 ratio) y)))))
+
+;; Average multiple signals
+(defn average [n : int]
+  : (SF (vec Sample) Sample)
+  (arr (fn [samples]
+    (let [sum (reduce + 0.0 samples)]
+      (/ sum n)))))
+
+;; =============================================================================
+;; Filters
+;; =============================================================================
+
+;; One-pole low-pass filter
+;; alpha: smoothing factor (0.0 to 1.0)
+;;   - 0.0: no smoothing (output = input)
+;;   - 1.0: maximum smoothing (output approaches input very slowly)
+;; y[n] = alpha * x[n] + (1 - alpha) * y[n-1]
+;;
+;; Using the state-sf helper from core.tur
+(defn low-pass [alpha : Sample]
+  : (SF Sample Sample)
+  (state-sf 0.0
+    (fn [y-prev x]
+      (let [y (+ (* alpha x) (* (- 1.0 alpha) y-prev))]
+        (Tuple y y)))))
+
+;; One-pole high-pass filter
+;; alpha: smoothing factor
+;; y[n] = alpha * (y[n-1] + x[n] - x[n-1])
+;;
+;; Implementation uses two state variables: x-prev and y-prev
+(defn high-pass [alpha : Sample]
+  : (SF Sample Sample)
+  (fn [sig-in]
+    (let [x-prev (ref 0.0)
+          y-prev (ref 0.0)]
+      (fn [t]
+        (let [x (sig-in t)
+              y (+ (* alpha (+ x (- @y-prev) (- x @x-prev))) @y-prev)]
+          (set! x-prev x)
+          (set! y-prev y)
+          y)))))
+
+;; Simple state variable filter (SVF)
+;; Implements a resonant filter with low-pass, band-pass, and high-pass outputs
+;; freq: cutoff frequency (normalized: 0.0 to 1.0, where 1.0 = Nyquist)
+;; q: resonance/quality factor
+;; mode: 0 = low-pass, 1 = band-pass, 2 = high-pass
+;;
+;; Returns a tuple of (low-pass, band-pass, high-pass) outputs
+(defn svf [freq : Sample] [q : Sample]
+  : (SF Sample (Tuple Sample Sample Sample))
+  (fn [sig-in]
+    (let [z1 (ref 0.0)
+          z2 (ref 0.0)]
+      (fn [t]
+        (let [x (sig-in t)
+              ;; SVF equations
+              v1 (- x @z1)
+              v2 (- @z1 @z2)
+              v3 (- @z2 (* q v2))
+              v4 (- v3 @z2)
+              
+              ;; Update state
+              z1-new (+ @z1 (* freq v1))
+              z2-new (+ @z2 (* freq v3))]
+          (set! z1 z1-new)
+          (set! z2 z2-new)
+          (Tuple @z1 v4 (- v1 (* q v3))))))))
+
+;; Low-pass filter using SVF
+(defn svf-low-pass [freq : Sample] [q : Sample]
+  : (SF Sample Sample)
+  (>>> (svf freq q) (arr (fn [[lp _ _]] lp))))
+
+;; Band-pass filter using SVF
+(defn svf-band-pass [freq : Sample] [q : Sample]
+  : (SF Sample Sample)
+  (>>> (svf freq q) (arr (fn [[_ bp _]] bp))))
+
+;; High-pass filter using SVF
+(defn svf-high-pass [freq : Sample] [q : Sample]
+  : (SF Sample Sample)
+  (>>> (svf freq q) (arr (fn [[_ _ hp]] hp))))
+
+;; All-pass filter
+;; Adds phase shift without affecting amplitude
+(defn all-pass [freq : Sample] [q : Sample]
+  : (SF Sample Sample)
+  (fn [sig-in]
+    (let [z1 (ref 0.0)
+          z2 (ref 0.0)]
+      (fn [t]
+        (let [x (sig-in t)
+              v1 (- x @z1)
+              v2 (- @z1 @z2)
+              v3 (- @z2 (* q v2))
+              
+              z1-new (+ @z1 (* freq v1))
+              z2-new (+ @z2 (* freq v3))
+              
+              ;; All-pass output: v1 - 2*v3
+              y (- v1 (* 2.0 v3))]
+          (set! z1 z1-new)
+          (set! z2 z2-new)
+          y)))))
+
+;; =============================================================================
+;; Delay and Echo Effects
+;; =============================================================================
+
+;; Simple delay with feedback
+;; delay-time: delay in seconds
+;; feedback: feedback gain (0.0 to 1.0)
+;; Note: This is a simplified implementation using a circular buffer
+;; For production use, a proper circular buffer with interpolation would be needed
+(defn delay [delay-time : Sample] [feedback : Sample] [max-delay : int]
+  : (SF Sample Sample)
+  (fn [sig-in]
+    (let [;; Circular buffer implementation
+          buffer (vec-create max-delay 0.0)
+          write-pos (ref 0)
+          ;; Calculate delay in samples (assuming 44100 Hz sample rate)
+          sample-rate 44100.0
+          delay-samples (int (math/round (* delay-time sample-rate)))
+          read-pos-calc (fn [wp] (mod (- wp delay-samples) max-delay))]
+      
+      (fn [t]
+        (let [x (sig-in t)
+              wp @write-pos
+              rp (read-pos-calc wp)
+              y (vec-get buffer rp)
+              new-val (+ x (* feedback y))]
+          (vec-set! buffer wp new-val)
+          (set! write-pos (mod (+ wp 1) max-delay))
+          new-val)))))
+
+;; Simple echo effect
+;; delay-time: delay in seconds
+;; decay: decay factor per echo
+;; num-echos: number of echoes
+(defn echo [delay-time : Sample] [decay : Sample] [num-echos : int]
+  : (SF Sample Sample)
+  (fn [sig-in]
+    (let [delays (map (fn [i] (* delay-time (+ i 1.0))) (range 0 num-echos))
+          feedbacks (map (fn [i] (math/pow decay i)) (range 0 num-echos))]
+      (fn [t]
+        (let [x (sig-in t)
+              ;; Sum original with delayed versions
+              result (ref x)]
+          (for [i 0 num-echos]
+            (let [d (nth delays i)
+                  fb (nth feedbacks i)
+                  delayed (sig-in (- t d))]
+              (set! result (+ @result (* fb delayed)))))
+          @result)))))
+
+;; =============================================================================
+;; Non-linear Processors
+;; =============================================================================
+
+;; Hard clipping distortion
+;; threshold: clipping threshold
+(defn hard-clip [threshold : Sample]
+  : (SF Sample Sample)
+  (arr (fn [x]
+    (math/clamp x (- threshold) threshold))))
+
+;; Soft clipping (tanh)
+;; drive: amount of distortion (0.0 = no distortion, higher = more distortion)
+(defn soft-clip [drive : Sample]
+  : (SF Sample Sample)
+  (arr (fn [x]
+    (/ (math/tanh (* drive x)) (math/tanh drive)))))
+
+;; Bit crushing
+;; bits: number of bits to quantize to (1 to 16)
+(defn bit-crush [bits : int]
+  : (SF Sample Sample)
+  (let [scale (math/pow 2.0 bits)
+        max-val (- scale 1.0)]
+    (arr (fn [x]
+      (let [scaled (* 0.5 (+ x 1.0) max-val)
+            quantized (math/round scaled)
+            result (/ quantized max-val)]
+        (* 2.0 result - 1.0))))))
+
+;; =============================================================================
+;; Envelope Followers and Dynamics
+;; =============================================================================
+
+;; Simple envelope follower (absolute value + low-pass)
+;; attack: attack time constant (0.0 to 1.0)
+;; release: release time constant (0.0 to 1.0)
+(defn envelope-follower [attack : Sample] [release : Sample]
+  : (SF Sample Sample)
+  (fn [sig-in]
+    (let [env (ref 0.0)]
+      (fn [t]
+        (let [x (sig-in t)
+              abs-x (math/abs x)
+              coeff-attack (* attack (- 1.0 @env))
+              coeff-release (* release (- abs-x @env))]
+          (if (> abs-x @env)
+            (do (set! env (+ @env coeff-attack)) @env)
+            (do (set! env (+ @env coeff-release)) @env)))))))
+
+;; Simple compressor
+;; threshold: compression threshold
+;; ratio: compression ratio (e.g., 4.0 = 4:1 compression)
+;; attack: attack time constant
+;; release: release time constant
+(defn compressor [threshold : Sample] [ratio : Sample] [attack : Sample] [release : Sample]
+  : (SF Sample Sample)
+  (let [env-follower (envelope-follower attack release)]
+    (fn [sig-in]
+      (let [env (env-follower sig-in)
+            gain-signal (fn [t] (if (> (env t) threshold) (math/pow (/ (env t) threshold) (- (/ 1.0 ratio))) 1.0))]
+        (fn [t] (* (sig-in t) (gain-signal t)))))))
+
+;; =============================================================================
+;; Utility Functions
+;; =============================================================================
+
+;; DC blocker (removes DC offset)
+;; Useful for ensuring signals are centered around zero
+(defn dc-blocker [alpha : Sample]
+  : (SF Sample Sample)
+  (fn [sig-in]
+    (let [prev (ref 0.0)
+          dc (ref 0.0)]
+      (fn [t]
+        (let [x (sig-in t)
+              y (- x @dc)
+              new-dc (+ @dc (* alpha y))
+              new-prev x]
+          (set! dc new-dc)
+          (set! prev new-prev)
+          y)))))
+
+;; Sample and hold
+;; freq: sampling frequency in Hz
+(defn sample-and-hold [freq : Sample]
+  : (SF Sample Sample)
+  (fn [sig-in]
+    (let [held (ref 0.0)
+          phase (ref 0.0)]
+      (fn [t]
+        (let [x (sig-in t)
+              new-phase (mod (+ @phase (* freq t)) 1.0)]
+          (set! phase new-phase)
+          (if (< new-phase @phase)  ;; Phase wrapped around
+            (set! held x))
+          @held)))))
+
+;; =============================================================================
+;; Filter Banks
+;; =============================================================================
+
+;; Simple 3-band EQ
+;; low-gain: gain for low frequencies
+;; mid-gain: gain for mid frequencies  
+;; high-gain: gain for high frequencies
+;; low-freq: crossover between low and mid
+;; high-freq: crossover between mid and high
+(defn eq-3band [low-gain : Sample] [mid-gain : Sample] [high-gain : Sample]
+               [low-freq : Sample] [high-freq : Sample]
+  : (SF Sample Sample)
+  (let [lp (low-pass low-freq)
+        hp (high-pass high-freq)
+        bp (band-pass (sqrt (* low-freq high-freq)) 1.0)]
+    (fn [sig-in]
+      (let [low (lp sig-in)
+            high (hp sig-in)
+            mid (bp sig-in)]
+        (fn [t] (+ (* low-gain (low t)) (* mid-gain (mid t)) (* high-gain (high t))))))))
+
+;; Band-pass filter using low-pass and high-pass in series
+(defn band-pass-simple [low-freq : Sample] [high-freq : Sample]
+  : (SF Sample Sample)
+  (let [lp (low-pass high-freq)
+        hp (high-pass low-freq)]
+    (>>> hp lp)))
