@@ -117,6 +117,39 @@ static void indent_buf(Buf *b, int n) {
     for (int i = 0; i < n; i++) buf_putc(b, ' ');
 }
 
+/* Phase R1: Helper to check if an expression is fully divergent (never
+ * produces a value).  Used by emit_let_value to decide whether to assign
+ * the body's emitted value to the let's result tmp: a divergent body
+ * emits no value to assign. */
+static bool expr_is_divergent(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_RETURN:
+        case EX_THROW:
+        case EX_PANIC:
+        case EX_PANIC_WITH:
+        case EX_DISCONTINUE:
+            return true;
+        case EX_DO:
+            if (e->as.do_.n == 0) return false;
+            /* find last non-defer item */
+            for (int i = (int)e->as.do_.n - 1; i >= 0; i--) {
+                if (e->as.do_.items[i]->kind != EX_DEFER) {
+                    return expr_is_divergent(e->as.do_.items[i]);
+                }
+            }
+            return false;
+        case EX_LET:
+            return expr_is_divergent(e->as.let_.body);
+        case EX_IF:
+            if (!e->as.if_.else_or_null) return false;
+            return expr_is_divergent(e->as.if_.then_) &&
+                   expr_is_divergent(e->as.if_.else_or_null);
+        default:
+            return false;
+    }
+}
+
 /* Phase 3/4: Helper to check if an expression contains return or throw */
 static bool expr_contains_return_or_throw(const Expr *e) {
     if (!e) return false;
@@ -754,13 +787,25 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     }
 
     if (body_has_return_or_throw) {
-        /* Body contains return/throw - emit as statements only.
-         * The temp variable was declared above but will remain uninitialized
-         * if return/throw is taken (which is fine - unreachable code after return).
-         * If the body doesn't take the return/throw path, it should assign to
-         * the temp variable itself.
-         */
-        emit_stmt(ctx, body, e->as.let_.body);
+        /* Body contains return/throw but may still produce a value on the
+         * non-diverging path (e.g. the `?` operator: an if whose then-branch
+         * returns and whose else-branch yields the unwrapped ok value).
+         *
+         * When the let has a non-nil result type AND the body itself can
+         * yield a value (i.e. is not fully divergent), evaluate it as a
+         * value expression and assign the inner result to `tmp`.  Fully
+         * divergent bodies (e.g. `(do (defer ...) (return 42))`) produce
+         * `(void)0` from emit_value; in that case we emit as a statement
+         * and leave `tmp` uninitialised — the divergent path never reads
+         * it. */
+        if (!nil_result && !expr_is_divergent(e->as.let_.body)) {
+            char *bv = emit_value(ctx, body, e->as.let_.body);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s = %s;\n", tmp, bv);
+            free(bv);
+        } else {
+            emit_stmt(ctx, body, e->as.let_.body);
+        }
         /* Close scope */
         ctx->indent -= 4;
         indent_buf(body, ctx->indent);
@@ -936,23 +981,41 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
 
     /* Phase 3/4: If there's a return or throw, emit all items as statements */
     if (has_return_or_throw) {
+        /* Phase R1: The do may still produce a value on the non-divergent
+         * path (e.g. `(do (if cond (return ...) ...) (defer ...))` whose
+         * last non-defer item is the if, and the if's else branch yields
+         * a value).  If the last value-producing item is non-divergent
+         * and the do has a non-nil result type, materialise it into a
+         * result tmp; otherwise fall back to statement-only emission. */
+        const Expr *last_value = (last_value_idx >= 0)
+                                     ? e->as.do_.items[last_value_idx] : NULL;
+        bool last_yields_value = last_value &&
+                                 e->type.kind != TY_NIL &&
+                                 !expr_is_divergent(last_value);
+        char *result_tmp = NULL;
+        if (last_yields_value) {
+            result_tmp = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s %s;\n", type_c_name(e->type), result_tmp);
+        }
+
         /* Emit all items, registering defers */
         bool emitted_diverging = false;  /* Track if we've emitted a return/throw/panic */
         for (uint32_t i = 0; i < n; i++) {
             const Expr *it = e->as.do_.items[i];
-            
-            /* If we've already emitted a diverging expression (return/throw/panic), 
+
+            /* If we've already emitted a diverging expression (return/throw/panic),
              * skip remaining items as they're unreachable */
             if (emitted_diverging) {
                 continue;
             }
-            
+
             if (it->kind == EX_DEFER) {
                 /* Register defer thunks */
                 const Expr *defer_expr = it->as.defer_.body;
                 const uint8_t n_captures = it->as.defer_.n_captures;
                 Binding **captures = it->as.defer_.captures;
-                
+
                 if (n_captures == 0) {
                     char *thunk_name = fresh_defer_thunk(ctx);
                     register_defer_thunk(ctx, thunk_name, defer_expr, captures, n_captures, NULL);
@@ -962,7 +1025,7 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     char *env_name = fresh_defer_env(ctx);
                     char *thunk_name = fresh_defer_thunk(ctx);
                     register_defer_thunk(ctx, thunk_name, defer_expr, captures, n_captures, env_name);
-                    
+
                     char *env_tmp = fresh_tmp(ctx);
                     indent_buf(body, ctx->indent);
                     buf_printf(body, "struct %s %s = {", env_name, env_tmp);
@@ -973,25 +1036,37 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                         free(cn);
                     }
                     buf_puts(body, "};\n");
-                    
+
                     indent_buf(body, ctx->indent);
                     buf_printf(body, "tur_frame_push_defer(&%s, %s, &%s);\n", frame_var, thunk_name, env_tmp);
                     free(env_tmp);
                 }
+            } else if (last_yields_value && (int)i == last_value_idx) {
+                char *bv = emit_value(ctx, body, it);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s = %s;\n", result_tmp, bv);
+                free(bv);
             } else {
                 emit_stmt(ctx, body, it);
                 /* Check if this statement diverges (return/throw/panic) */
-                if (it->kind == EX_RETURN || it->kind == EX_THROW || 
+                if (it->kind == EX_RETURN || it->kind == EX_THROW ||
                     it->kind == EX_PANIC || it->kind == EX_PANIC_WITH) {
                     emitted_diverging = true;
                 }
             }
         }
-        
-        /* Don't emit cleanup code - return/throw/panic already handles it */
+
+        /* Fire frame defers on the non-divergent path before producing the
+         * do's value.  Divergent paths already fired via tur_frame_fire_chain
+         * in the emitted return/throw/panic statement. */
+        if (last_yields_value && !emitted_diverging) {
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "tur_frame_fire_lifo(&%s);\n", frame_var);
+        }
+
         ctx->frame_var = saved_frame;
         free(frame_var);
-        return atom_nil();
+        return result_tmp ? result_tmp : atom_nil();
     }
 
     /* Emit non-defer items and register defer thunks */

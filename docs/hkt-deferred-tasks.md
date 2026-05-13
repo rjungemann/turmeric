@@ -109,20 +109,20 @@ vtable scheme in `emit.c`.
 
 **Prerequisites:**
 
-- [ ] **IR: dictionary value node** — Add `EX_DICT` or extend `EX_CALL` to carry an
+- [x] **IR: dictionary value node** — Add `EX_DICT` or extend `EX_CALL` to carry an
   implicit dictionary argument alongside each method call. The elaborator must
   resolve which dictionary to pass at every `EX_METHOD_CALL` site.
 
-- [ ] **elab.c — dictionary selection** — `elab_method_call` currently selects the
+- [x] **elab.c — dictionary selection** — `elab_method_call` currently selects the
   instance once and emits a direct call. It needs to select the instance and
   emit a dictionary load (from a locally-bound dictionary parameter or from a
   global singleton for monomorphic call sites).
 
-- [ ] **emit.c — dictionary structs** — Each `definstance` must emit a
+- [x] **emit.c — dictionary structs** — Each `definstance` must emit a
   `static const VTable_<class>_<type> __dict_<class>_<type>` struct. Polymorphic
   functions accept an extra `const void *__dict` parameter and use it to dispatch.
 
-- [ ] **typeclass.h — dispatch table keyed on dictionary pointer** — The current
+- [x] **typeclass.h — dispatch table keyed on dictionary pointer** — The current
   `typeclass_env_lookup_instance_by_key` becomes the compile-time resolver;
   runtime dispatch goes through the dictionary struct.
 
@@ -154,7 +154,7 @@ the dictionary struct layout. The two features are best designed together.
 
 **Prerequisites:**
 
-- [ ] **§1 (dictionary passing)** — kind information drives dictionary struct shape.
+- [x] **§1 (dictionary passing)** — kind information drives dictionary struct shape.
 
 - [x] **Kind environment** — a `KindEnv` (symbol → Kind map) threaded through
   `kind_check_pass`. Added `kind_env_new()`, `kind_env_bind()`, `kind_env_lookup()`
@@ -201,7 +201,7 @@ first-class concept.
 
 **Prerequisites:**
 
-- [ ] **§2 (kind inference)** — the compiler must be able to determine that
+- [x] **§2 (kind inference)** — the compiler must be able to determine that
   `(result int)` has kind `* -> *` from the kinds of its parts.
 
 - [x] **TY_APP type node** — Add `TY_APP` to the `TypeKind` enum in `src/types.h`:
@@ -259,15 +259,15 @@ not yet supported anywhere in the type system; they need either an explicit
 
 **Prerequisites:**
 
-- [ ] **§3 (partial application)** — `Fix` and `Free` are inherently partially applied.
+- [x] **§3 (partial application)** — `Fix` and `Free` are inherently partially applied.
 
-- [ ] **Recursive type support** — The elaborator currently rejects self-referential
+- [x] **Recursive type support** — The elaborator currently rejects self-referential
   type definitions. A guarded recursion check (structurally recursive under at
   least one type constructor) is needed. Add `type_is_guarded_recursive()`
   in `src/types.c` that walks the definition and accepts guarded recursion
   through a `TY_APP` or `TY_STRUCT` wrapper.
 
-- [ ] **Kind-polymorphic type aliases / `deftype` HKT params** — `deftype` must
+- [x] **Kind-polymorphic type aliases / `deftype` HKT params** — `deftype` must
   accept `^f`-prefixed (kind `* -> *`) type parameters, not only plain `*`-kinded
   ones. This extends H1's `defclass` parameter work to the `deftype` form.
 
@@ -315,7 +315,7 @@ Two approaches exist and neither was ready:
 
 **Prerequisites for Approach B (recommended — minimal change):**
 
-- [ ] **emit.c — `needs_fn_cast` extension** — The condition added in H6
+- [x] **emit.c — `needs_fn_cast` extension** — The condition added in H6
   (`pk == TY_INT || pk == TY_STRUCT`) must also cover `TY_PTR_VOID`:
   ```c
   needs_fn_cast = (pk == TY_INT || pk == TY_STRUCT || pk == TY_PTR_VOID);
@@ -323,18 +323,18 @@ Two approaches exist and neither was ready:
   This allows `(int64_t)(intptr_t)` to be applied to closure values passed as
   HKT function arguments.
 
-- [ ] **elab.c — suppress type mismatch error** — `elab_call` rejects passing a
+- [x] **elab.c — suppress type mismatch error** — `elab_call` rejects passing a
   `TY_PTR_VOID` argument to a `TY_INT` parameter. The check must be relaxed
   (or bypassed with an explicit cast node) for HKT typeclass method calls.
   Introduce `EX_CAST` (or reuse existing pointer-cast nodes) to make the coercion
   explicit in the IR rather than suppressing the error wholesale.
 
-- [ ] **Closure safety** — heap-allocated closures are already safe (the env struct
+- [x] **Closure safety** — heap-allocated closures are already safe (the env struct
   is heap-allocated when there is capture). Stack-allocated closures (no capture,
   plain function pointer) are also safe. Verify no dangling-env case slips
   through when the closure outlives the enclosing function.
 
-- [ ] **Fixture** — replace the workaround in `tests/fixtures/hkt-closures/input.tur`
+- [x] **Fixture** — replace the workaround in `tests/fixtures/hkt-closures/input.tur`
   with a genuine multi-capture closure:
   ```lisp
   (let n 5

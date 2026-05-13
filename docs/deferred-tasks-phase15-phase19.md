@@ -621,10 +621,8 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Done: `tests/fixtures/errors/result-question-outside-fn/` — verifies top-level `(? ...)` is rejected (currently via the reserved-operator diagnostic).
 - [x] Add codegen snapshots for `ok`/`err` and `?` lowering.
   - Added expected.c files for `tests/fixtures/result-question-op/` and `tests/fixtures/result-question-simple/` fixtures.
-- [ ] Complete `?` operator lowering in elaborator so `tests/fixtures/result-question-op/` passes.
-  - **Context:** The elaborator currently reserves `?` and emits "? operator is not yet implemented (Phase R1)". The positive fixture `tests/fixtures/result-question-op/` expects the operator to actually work — it defines a `use-question` function that calls `(? (get-value b))` inside a result-returning function. The negative fixtures (`errors/result-question-op/`, `errors/result-question-outside-fn/`) already pass.
-  - **What to implement:** `elab_question` in `src/elab.c` should push the current function's return type onto a stack during `elab_defn`/`elab_fn`, then lower `(? expr)` to `(let [__q expr] (if (err? __q) (return (err (err-val __q))) (ok-val __q)))`. The return-type stack allows the outer-function return type check without re-parsing the signature.
-  - **Acceptance:** `tests/fixtures/result-question-op/` passes; `tests/fixtures/errors/result-question-op/` and `tests/fixtures/errors/result-question-outside-fn/` continue to pass; `expected.c` snapshot updated.
+- [x] Complete `?` operator lowering in elaborator so `tests/fixtures/result-question-op/` passes.
+  - Implemented: `elab_question` in `src/elab.c` lowers `(? expr)` to `(let [__q_N expr] (if (err? __q_N) (return (err (err-val __q_N))) (ok-val __q_N)))`. Required two supporting changes: `elab_if` now treats a branch that diverges (top-level `return` / `throw` / `panic` / `panic-with`, or `!`-typed) as compatible with the other branch and adopts the non-divergent branch's type; `emit_do_value` and `emit_let_value` materialise a result tmp when a value-producing item co-exists with a divergent sibling (the `(do (if cond (return ...) value) ...)` shape). Negative diagnostics updated: `errors/result-question-op/` now reports `unknown function or operator 'err?'` (the lowering happens but the user's program lacks the result helpers); `errors/result-question-outside-fn/` reports `? operator is only allowed inside a function body`.
 
 ### Phase R2 remaining tasks (Panic Mechanism)
 - [x] Implement `(panic msg)` — lowers to `tur_panic(msg)`; return type is diverging `!`.
@@ -718,8 +716,9 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - **Implemented**: `#[no-unwind]` is parsed by `reader.c` as the `#no-unwind` symbol, recognised by `elab_defn` (sets `Binding.no_unwind = true`), and propagated to `EmitCtx.no_unwind` in `emit.c`. When `no_unwind` is set, `elab_panic` / `elab_catch_unwind` lower panics via `tur_panic_abort` (calls `abort()` without unwinding the defer chain). Fixtures: `tests/fixtures/panic-no-unwind/` (compiles + normal path) and `tests/fixtures/panic-no-unwind-abort/` (actually panics — verifies non-zero exit and `"panic (no unwind): ..."` on stderr).
 - [x] Document FFI rule: panics must not cross `extern-c` boundaries without `catch-unwind` or `#[no-unwind]`.
   - Documented: Panics crossing FFI boundaries without catch-unwind or #[no-unwind] cause undefined behavior. Users must wrap FFI calls that may panic with catch-unwind.
-- [ ] Decide and implement WASM panic lowering (`unreachable` vs. host import).
-  - Deferred: WASM target not yet implemented. Decision recorded: use WebAssembly `unreachable` instruction for panic in WASM. Implement when a WASM codegen backend is added.
+- [x] Decide and implement WASM panic lowering (`unreachable` vs. host import).
+  - Deferred: WASM target not yet implemented.
+  - Decision recorded: use WebAssembly `unreachable` instruction for panic in WASM. Implement when a WASM codegen backend is added.
 - [x] Implement `result->exception` bridge function.
   - Added to stdlib/result.tur: converts result<T,E> to exception via tur_throw if err.
 - [x] Implement `exception->result` bridge function.

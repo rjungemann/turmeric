@@ -1,4 +1,6 @@
-;; Phase R1: The ? operator is reserved but not yet implemented.
+;; Phase R1: `?` lowers to a use of the result helpers `err?`, `err`, `err-val`,
+;; `ok-val`.  When those helpers aren't in scope the lowering must fail with a
+;; name-resolution diagnostic rather than silently miscompiling.
 (defn main [] :int
   (do
     (? 42)
