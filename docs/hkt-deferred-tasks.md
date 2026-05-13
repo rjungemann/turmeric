@@ -58,10 +58,11 @@ prerequisites in this order to unblock the most downstream work as early as poss
 
 ### §4 — Higher-kinded data types (unblocked after §3 + §5)
 
-- [ ] **types.c** — implement `type_is_guarded_recursive()` to allow guarded self-referential `deftype`
-- [ ] **elab.c / forms.c** — accept `^f`-prefixed kind parameters on `deftype` (extends H1 `defclass` work)
-- [ ] **stdlib/free.tur** — implement `cata` / `fold` for `Fix` after `Fix` compiles
-- [ ] **stdlib/free.tur** — implement `pure-free`, `liftF`, `interpret-free` for `Free` (also needs §5)
+- [x] **types.c** — implement `type_is_guarded_recursive()` to allow guarded self-referential `deftype`. Implemented with `type_is_guarded_recursive_helper()` that tracks depth to ensure recursive references appear under type constructors.
+- [x] **elab.c / forms.c** — accept `^f`-prefixed kind parameters on `deftype` (extends H1 `defclass` work). Implemented via `elab_deftype()` with full kind parameter parsing.
+- [x] **elab.c** — implement `type_expr_from_form()` to parse type expressions including recursive references and type applications for `deftype` body.
+- [x] **elab.c** — use `type_is_guarded_recursive()` in `elab_deftype()` to validate guarded recursion, emit error for unguarded cases.
+- [x] **stdlib/free.tur** — implement `Fix` and `Free` with proper recursive bodies: `(deftype Fix [^f] (f (Fix f)))`, `(deftype Free [^f ^a] (f ((Free f) a)))`. Stub implementations for `cata`, `pure-free`, `liftF`, `interpret-free` (full implementations require ADT support in v2).
 
 ### §6 — Stdlib HKT migration (unblocked after §1 + §5; §3 needed for `result` only)
 

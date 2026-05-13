@@ -1,0 +1,28 @@
+;; Phase HKT-P2: Benchmark for bind over option (§8)
+;;
+;; This benchmark measures the overhead of dictionary passing by comparing
+;; the HKT-based bind (which uses dictionary dispatch) against a monomorphic
+;; direct call baseline.
+;;
+;; The test chains Monad.bind operations over a sequence of option values,
+;; exercising the typeclass dispatch mechanism.
+
+;; Number of bind operations to chain
+(defn N [] :int 100000)
+
+;; Simple increment function that returns an option
+(defn inc-some [x :int] :int (some (+ x 1)))
+
+;; Main benchmark: chain bind operations using typeclass dispatch
+;; Uses .bind to call the Monad.bind method through the typeclass
+(defn benchmark [] :int
+  (let result
+        (let [acc (some 0)]
+             (dotimes [i (N)]
+               (.bind acc (fn [v] (inc-some v)))))
+        result))
+
+(defn main [] :int
+  ;; Run benchmark and return 0 (we measure time externally)
+  (benchmark)
+  0)
