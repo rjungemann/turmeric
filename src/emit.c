@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "builtins.h"
+#include "cps.h"
 #include "rc.h"
 #include "rc_elision.h"
 #include "types.h"
@@ -1418,11 +1419,125 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         /* Phase B2: Cloneable continuations */
         case EX_CLONEABLE_RESET: {
-            /* (cloneable-reset body) - like reset but with cloneable captures
-             * For v1 without full cloneable CPS: just evaluate and return body.
-             * Full implementation requires cloneable continuation runtime.
+            /* (cloneable-reset body) - evaluate body within a cloneable reset boundary.
+             *
+             * CPS-CL3 + CPS-CL5: When the body IS a cloneable-shift (Case 1), use the
+             * full CPS path: emit a trivial __cont_fn, alloc a tur_cloneable_cont, and
+             * call k_fn with the continuation.  The reset's value = k_fn's return value.
+             *
+             * Fallback: body contains no shift — just evaluate and return body value.
              */
-            return emit_value(ctx, body, e->as.cloneable_reset_.body);
+            const Expr *rb = e->as.cloneable_reset_.body;
+            if (rb->kind == EX_CLONEABLE_SHIFT) {
+                /* Full CPS: shift is the entire reset body (Case 1 — trivial continuation). */
+                const Expr *shift = rb;
+                int cont_id = ctx->tmp_n++;
+
+                /* CPS-CL3: Emit trivial continuation function to pending_handler_fns.
+                 * Appears at file scope before the enclosing function definition. */
+                if (ctx->pending_handler_fns) {
+                    buf_printf(ctx->pending_handler_fns,
+                        "static int64_t __cont_fn_%d(void *__env, int64_t __value) {"
+                        " (void)__env; return __value; }\n\n", cont_id);
+                }
+
+                /* CPS-CL2: Emit env struct + alloc if there are live captures.
+                 * (For the trivial continuation the env is unused; emit placeholder.) */
+                char *env_val_str  = NULL;   /* NULL → "NULL" in format */
+                char *clone_fn_str = NULL;
+                char *drop_fn_str  = NULL;
+                char *env_var = NULL;
+                bool has_env = (shift->as.cloneable_shift_.n_live_captures > 0
+                                && ctx->pending_handler_fns != NULL);
+                if (has_env) {
+                    /* Emit a struct with one field per live capture */
+                    Buf *hb = ctx->pending_handler_fns;
+                    buf_printf(hb, "typedef struct { ");
+                    for (uint32_t ci = 0;
+                         ci < shift->as.cloneable_shift_.n_live_captures; ci++) {
+                        Binding *cap = shift->as.cloneable_shift_.live_captures[ci];
+                        char *rn = raw_name_for_binding(cap);
+                        buf_printf(hb, "%s %s; ", type_c_name(cap->type), rn);
+                        free(rn);
+                    }
+                    buf_printf(hb, "} __clenv_%d;\n", cont_id);
+                    buf_printf(hb,
+                        "static void *__clenv_%d_clone(const void *src) {\n"
+                        "    __clenv_%d *copy = malloc(sizeof(__clenv_%d));\n"
+                        "    if (!copy) abort();\n"
+                        "    *copy = *(__clenv_%d *)src;\n"
+                        "    return copy;\n"
+                        "}\n"
+                        "static void __clenv_%d_drop(void *p) { free(p); }\n\n",
+                        cont_id, cont_id, cont_id, cont_id, cont_id);
+
+                    /* Alloc env in the function body */
+                    env_var = fresh_tmp(ctx);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "__clenv_%d *%s = malloc(sizeof(__clenv_%d));\n",
+                               cont_id, env_var, cont_id);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "if (!%s) abort();\n", env_var);
+                    for (uint32_t ci = 0;
+                         ci < shift->as.cloneable_shift_.n_live_captures; ci++) {
+                        Binding *cap = shift->as.cloneable_shift_.live_captures[ci];
+                        char *rn = raw_name_for_binding(cap);
+                        char *cn = name_for_binding(ctx, cap);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "%s->%s = %s;\n", env_var, rn, cn);
+                        free(rn);
+                        free(cn);
+                    }
+                    clone_fn_str = malloc(32);
+                    drop_fn_str  = malloc(32);
+                    snprintf(clone_fn_str, 32, "__clenv_%d_clone", cont_id);
+                    snprintf(drop_fn_str,  32, "__clenv_%d_drop",  cont_id);
+                    env_val_str = env_var;
+                }
+
+                /* CPS-CL5: Alloc the continuation */
+                char *cont_var = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body,
+                    "tur_cloneable_cont *%s = tur_cloneable_cont_alloc("
+                    "__cont_fn_%d, %s, %s, %s);\n",
+                    cont_var, cont_id,
+                    env_val_str  ? env_val_str  : "NULL",
+                    clone_fn_str ? clone_fn_str : "NULL",
+                    drop_fn_str  ? drop_fn_str  : "NULL");
+
+                /* CPS-CL5: Evaluate k_fn, then call k_fn(cont_as_int64) */
+                char *k_fn_val = emit_value(ctx, body, shift->as.cloneable_shift_.k_fn);
+                char *result   = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                if (shift->as.cloneable_shift_.k_fn->kind == EX_CLOSURE) {
+                    struct Closure *closure =
+                        shift->as.cloneable_shift_.k_fn->as.closure_.closure;
+                    char *thunk_name;
+                    if (closure->fn->binding) {
+                        thunk_name = raw_name_for_binding(closure->fn->binding);
+                    } else {
+                        thunk_name = malloc(64);
+                        snprintf(thunk_name, 64, "__fn_anon_%d",
+                                 closure->fn->n_params > 0
+                                     ? closure->fn->params[0]->id : 0);
+                    }
+                    buf_printf(body, "%s %s = %s(%s, (int64_t)(intptr_t)%s);\n",
+                               type_c_name(e->type), result,
+                               thunk_name, k_fn_val, cont_var);
+                    free(thunk_name);
+                } else {
+                    buf_printf(body, "%s %s = %s((int64_t)(intptr_t)%s);\n",
+                               type_c_name(e->type), result, k_fn_val, cont_var);
+                }
+                free(k_fn_val);
+                if (env_var)      free(env_var);
+                if (clone_fn_str) free(clone_fn_str);
+                if (drop_fn_str)  free(drop_fn_str);
+                return result;
+            }
+            /* Fallback: no shift in direct body — just evaluate and return */
+            return emit_value(ctx, body, rb);
         }
         case EX_SHIFT: {
             /* (shift k body) - shift with continuation handler k and value body
@@ -3870,6 +3985,58 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "        }\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
+
+    /* Phase B2: Cloneable continuation runtime (inline in generated C).
+     * Only emitted when the program actually uses cloneable-shift/reset so
+     * that programs that don't use cloneable continuations don't get
+     * spurious extra declarations in their generated C output. */
+    if (cps_expr_contains_cloneable_shift(program)) {
+    buf_puts(out, "/* Phase B2: Cloneable continuation runtime */\n");
+    buf_puts(out, "typedef struct tur_cloneable_cont tur_cloneable_cont;\n");
+    buf_puts(out, "struct tur_cloneable_cont {\n");
+    buf_puts(out, "    int64_t (*cont_fn)(void *env, int64_t value);\n");
+    buf_puts(out, "    void *env;\n");
+    buf_puts(out, "    void *(*clone_env)(const void *env);\n");
+    buf_puts(out, "    void (*drop_env)(void *env);\n");
+    buf_puts(out, "};\n\n");
+    /* Internal allocator — takes explicit function pointers */
+    buf_puts(out, "static tur_cloneable_cont *tur_cloneable_cont_alloc(\n");
+    buf_puts(out, "    int64_t (*cont_fn)(void *, int64_t),\n");
+    buf_puts(out, "    void *env,\n");
+    buf_puts(out, "    void *(*clone_env)(const void *),\n");
+    buf_puts(out, "    void (*drop_env)(void *)) {\n");
+    buf_puts(out, "    tur_cloneable_cont *c = malloc(sizeof(tur_cloneable_cont));\n");
+    buf_puts(out, "    if (!c) abort();\n");
+    buf_puts(out, "    c->cont_fn = cont_fn; c->env = env;\n");
+    buf_puts(out, "    c->clone_env = clone_env; c->drop_env = drop_env;\n");
+    buf_puts(out, "    return c;\n");
+    buf_puts(out, "}\n\n");
+    /* User-facing: resume — cont is an opaque int64_t (pointer cast) */
+    buf_puts(out, "static int64_t tur_cloneable_cont_resume(int64_t cont_int, int64_t value) {\n");
+    buf_puts(out, "    tur_cloneable_cont *cont = (tur_cloneable_cont *)(intptr_t)cont_int;\n");
+    buf_puts(out, "    if (!cont || !cont->cont_fn) abort();\n");
+    buf_puts(out, "    return cont->cont_fn(cont->env, value);\n");
+    buf_puts(out, "}\n\n");
+    /* User-facing: clone — deep-copy env via clone_env function pointer */
+    buf_puts(out, "static int64_t tur_cloneable_cont_clone(int64_t cont_int) {\n");
+    buf_puts(out, "    tur_cloneable_cont *cont = (tur_cloneable_cont *)(intptr_t)cont_int;\n");
+    buf_puts(out, "    if (!cont) return 0;\n");
+    buf_puts(out, "    tur_cloneable_cont *copy = malloc(sizeof(tur_cloneable_cont));\n");
+    buf_puts(out, "    if (!copy) abort();\n");
+    buf_puts(out, "    copy->cont_fn   = cont->cont_fn;\n");
+    buf_puts(out, "    copy->clone_env = cont->clone_env;\n");
+    buf_puts(out, "    copy->drop_env  = cont->drop_env;\n");
+    buf_puts(out, "    copy->env = cont->clone_env ? cont->clone_env(cont->env) : cont->env;\n");
+    buf_puts(out, "    return (int64_t)(intptr_t)copy;\n");
+    buf_puts(out, "}\n\n");
+    /* User-facing: drop — fire drop_env, then free struct */
+    buf_puts(out, "static void tur_cloneable_cont_drop(int64_t cont_int) {\n");
+    buf_puts(out, "    tur_cloneable_cont *cont = (tur_cloneable_cont *)(intptr_t)cont_int;\n");
+    buf_puts(out, "    if (!cont) return;\n");
+    buf_puts(out, "    if (cont->env && cont->drop_env) cont->drop_env(cont->env);\n");
+    buf_puts(out, "    free(cont);\n");
+    buf_puts(out, "}\n\n");
+    } /* end if (cps_expr_contains_cloneable_shift(program)) */
 
     /* Phase 19: Effect handler chain */
     buf_puts(out, "/* Phase 19: Algebraic effect handler chain */\n");

@@ -1,15 +1,17 @@
-;; Phase B2: Cloneable continuations — basic test (v1 simplified semantics)
+;; Phase B2: Cloneable continuations — basic test (full CPS semantics)
 ;;
-;; In v1, cloneable-reset evaluates its body directly, and
-;; (cloneable-shift fn value) calls fn(value).  Full multi-shot resumption
-;; requires the CPS transformation pass (deferred).
+;; In full CPS, (cloneable-shift k_fn val) creates a cloneable continuation
+;; and calls k_fn with it.  The reset's result is whatever k_fn returns.
+;; (cloneable-reset body) evaluates body and returns k_fn's return value.
 
-(defn add10 [v] :int (+ v 10))
+;; k-returns-15: receives the continuation k (as int64_t), ignores it, returns 15
+(defn k-returns-15 [k] :int 15)
 
-;; cloneable-shift calls add10(5) = 15; cloneable-reset returns the result.
+;; test-basic: shift creates a trivial continuation and calls k-returns-15(cont).
+;; k-returns-15 ignores the continuation and returns 15.
 (defn test-basic [] :int
   (cloneable-reset
-    (cloneable-shift add10 5)))
+    (cloneable-shift k-returns-15 0)))
 
 ;; cloneable-reset with no shift just evaluates its body.
 (defn test-reset-passthrough [] :int

@@ -192,6 +192,199 @@ bool cps_fn_needs_cloneable_transform(const FnDef *fd) {
     return cps_expr_contains_cloneable_shift(fd->body);
 }
 
+/* -------------------------------------------------------------------------
+ * CPS-CL1: Liveness analysis for cloneable-shift sites
+ * -------------------------------------------------------------------------
+ * Conservative approach: collect every local (non-global) Binding referenced
+ * via EX_VAR anywhere in the enclosing function body.  This over-captures but
+ * is always correct; the env struct may be slightly larger than necessary.
+ * -------------------------------------------------------------------------*/
+
+/* Add b to *out (malloc'd, grown as needed) if it is local and not yet present. */
+static void add_unique_local(Binding *b, Binding ***out, uint32_t *n, uint32_t *cap) {
+    if (!b || b->is_global) return;
+    for (uint32_t i = 0; i < *n; i++) {
+        if ((*out)[i] == b) return; /* already present */
+    }
+    if (*n == *cap) {
+        *cap = *cap ? *cap * 2 : 8;
+        *out = realloc(*out, *cap * sizeof(Binding *));
+    }
+    (*out)[(*n)++] = b;
+}
+
+/* Recursively walk e, collecting unique local bindings into *out. */
+static void collect_local_vars_expr(const Expr *e,
+                                    Binding ***out, uint32_t *n, uint32_t *cap) {
+    if (!e) return;
+    switch (e->kind) {
+        case EX_VAR:
+            add_unique_local(e->as.var.binding, out, n, cap);
+            return;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                collect_local_vars_expr(e->as.let_.bindings[i].init, out, n, cap);
+            collect_local_vars_expr(e->as.let_.body, out, n, cap);
+            return;
+        case EX_IF:
+            collect_local_vars_expr(e->as.if_.cond, out, n, cap);
+            collect_local_vars_expr(e->as.if_.then_, out, n, cap);
+            collect_local_vars_expr(e->as.if_.else_or_null, out, n, cap);
+            return;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                collect_local_vars_expr(e->as.do_.items[i], out, n, cap);
+            return;
+        case EX_WHILE:
+            collect_local_vars_expr(e->as.while_.cond, out, n, cap);
+            collect_local_vars_expr(e->as.while_.body, out, n, cap);
+            return;
+        case EX_SET:
+            collect_local_vars_expr(e->as.set_.value, out, n, cap);
+            return;
+        case EX_DEF:
+            collect_local_vars_expr(e->as.def_.init, out, n, cap);
+            return;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                collect_local_vars_expr(e->as.builtin.args[i], out, n, cap);
+            return;
+        case EX_CALL:
+            collect_local_vars_expr(e->as.call_.fn_expr, out, n, cap);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                collect_local_vars_expr(e->as.call_.args[i], out, n, cap);
+            return;
+        case EX_RETURN:
+            collect_local_vars_expr(e->as.return_.value, out, n, cap);
+            return;
+        case EX_THROW:
+            collect_local_vars_expr(e->as.throw_.payload, out, n, cap);
+            return;
+        case EX_PANIC:
+            collect_local_vars_expr(e->as.panic_.payload, out, n, cap);
+            return;
+        case EX_TRY:
+            collect_local_vars_expr(e->as.try_.body, out, n, cap);
+            for (uint8_t i = 0; i < e->as.try_.n_clauses; i++)
+                collect_local_vars_expr(e->as.try_.clauses[i].handler, out, n, cap);
+            collect_local_vars_expr(e->as.try_.finally_body, out, n, cap);
+            return;
+        case EX_DEFER:
+            collect_local_vars_expr(e->as.defer_.body, out, n, cap);
+            return;
+        case EX_RESET:
+            collect_local_vars_expr(e->as.reset_.body, out, n, cap);
+            return;
+        case EX_SHIFT:
+            collect_local_vars_expr(e->as.shift_.k_fn, out, n, cap);
+            collect_local_vars_expr(e->as.shift_.body, out, n, cap);
+            return;
+        case EX_SHIFT0:
+            collect_local_vars_expr(e->as.shift0_.k_fn, out, n, cap);
+            collect_local_vars_expr(e->as.shift0_.body, out, n, cap);
+            return;
+        case EX_CLONEABLE_RESET:
+            collect_local_vars_expr(e->as.cloneable_reset_.body, out, n, cap);
+            return;
+        case EX_CLONEABLE_SHIFT:
+            collect_local_vars_expr(e->as.cloneable_shift_.k_fn, out, n, cap);
+            collect_local_vars_expr(e->as.cloneable_shift_.body, out, n, cap);
+            return;
+        /* Closures/fns: do NOT recurse into nested fn bodies — they have their
+         * own capture analysis.  The closure itself may reference locals via
+         * EX_VAR in the capture list, but EX_CLOSURE doesn't expose that here.
+         * Fine for the conservative over-approximation. */
+        default:
+            return;
+    }
+}
+
+/* Recursively patch all EX_CLONEABLE_SHIFT nodes in e with the given locals
+ * (forward-declared so cps_compute_live_at_shift can call it). */
+static void patch_cloneable_shifts(Arena *a, Expr *e,
+                                   Binding **locals, uint32_t n_locals);
+
+/* Populate live_captures on every EX_CLONEABLE_SHIFT inside fn_body.
+ * Conservative: all local vars in the entire fn body become live_captures. */
+static void cps_compute_live_at_shift(Arena *a, Expr *fn_body) {
+    if (!fn_body) return;
+    if (!cps_expr_contains_cloneable_shift(fn_body)) return;
+
+    Binding **locals = NULL;
+    uint32_t n_locals = 0, cap_locals = 0;
+    collect_local_vars_expr(fn_body, &locals, &n_locals, &cap_locals);
+
+    if (n_locals == 0) {
+        free(locals);
+        return;
+    }
+
+    /* Copy into arena (shared across all shift sites in this fn). */
+    Binding **arena_locals = arena_alloc(a, n_locals * sizeof(Binding *));
+    memcpy(arena_locals, locals, n_locals * sizeof(Binding *));
+    free(locals);
+
+    patch_cloneable_shifts(a, fn_body, arena_locals, n_locals);
+}
+
+/* Recursively patch all EX_CLONEABLE_SHIFT nodes in e with the given locals. */
+static void patch_cloneable_shifts(Arena *a, Expr *e,
+                                   Binding **locals, uint32_t n_locals) {
+    if (!e) return;
+    (void)a; /* arena already used to allocate locals */
+    switch (e->kind) {
+        case EX_CLONEABLE_SHIFT:
+            e->as.cloneable_shift_.live_captures  = locals;
+            e->as.cloneable_shift_.n_live_captures = n_locals;
+            patch_cloneable_shifts(a, e->as.cloneable_shift_.k_fn,  locals, n_locals);
+            patch_cloneable_shifts(a, e->as.cloneable_shift_.body,  locals, n_locals);
+            return;
+        case EX_CLONEABLE_RESET:
+            patch_cloneable_shifts(a, e->as.cloneable_reset_.body, locals, n_locals);
+            return;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                patch_cloneable_shifts(a, e->as.let_.bindings[i].init, locals, n_locals);
+            patch_cloneable_shifts(a, e->as.let_.body, locals, n_locals);
+            return;
+        case EX_IF:
+            patch_cloneable_shifts(a, e->as.if_.cond, locals, n_locals);
+            patch_cloneable_shifts(a, e->as.if_.then_, locals, n_locals);
+            patch_cloneable_shifts(a, e->as.if_.else_or_null, locals, n_locals);
+            return;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                patch_cloneable_shifts(a, e->as.do_.items[i], locals, n_locals);
+            return;
+        case EX_WHILE:
+            patch_cloneable_shifts(a, e->as.while_.cond, locals, n_locals);
+            patch_cloneable_shifts(a, e->as.while_.body, locals, n_locals);
+            return;
+        case EX_RETURN:
+            patch_cloneable_shifts(a, e->as.return_.value, locals, n_locals);
+            return;
+        case EX_THROW:
+            patch_cloneable_shifts(a, e->as.throw_.payload, locals, n_locals);
+            return;
+        case EX_DEFER:
+            patch_cloneable_shifts(a, e->as.defer_.body, locals, n_locals);
+            return;
+        case EX_TRY:
+            patch_cloneable_shifts(a, e->as.try_.body, locals, n_locals);
+            for (uint8_t i = 0; i < e->as.try_.n_clauses; i++)
+                patch_cloneable_shifts(a, e->as.try_.clauses[i].handler, locals, n_locals);
+            patch_cloneable_shifts(a, e->as.try_.finally_body, locals, n_locals);
+            return;
+        case EX_CALL:
+            patch_cloneable_shifts(a, e->as.call_.fn_expr, locals, n_locals);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                patch_cloneable_shifts(a, e->as.call_.args[i], locals, n_locals);
+            return;
+        default:
+            return;
+    }
+}
+
 /* Helper: mark a function as may_capture (for future one-shot CPS) */
 static void mark_fn_may_capture(FnDef *fd) {
     if (fd) {
@@ -309,6 +502,10 @@ static Expr *cps_mark_expr(Arena *a, Expr *e) {
             FnDef *new_fd = arena_alloc(a, sizeof(FnDef));
             *new_fd = *fd;
             new_fd->body = cps_mark_expr(a, fd->body);
+            /* CPS-CL1: populate live_captures at each cloneable-shift site */
+            if (cps_fn_needs_cloneable_transform(new_fd)) {
+                cps_compute_live_at_shift(a, new_fd->body);
+            }
             Expr *out = expr_new(a, EX_FN_DEF, e->type, e->span);
             out->as.fn_def_.fn = new_fd;
             return out;
@@ -326,6 +523,10 @@ static Expr *cps_mark_expr(Arena *a, Expr *e) {
             FnDef *new_fn = arena_alloc(a, sizeof(FnDef));
             *new_fn = *fn;
             new_fn->body = cps_mark_expr(a, fn->body);
+            /* CPS-CL1: populate live_captures at each cloneable-shift site */
+            if (cps_fn_needs_cloneable_transform(new_fn)) {
+                cps_compute_live_at_shift(a, new_fn->body);
+            }
             Expr *out = expr_new(a, EX_FN, e->type, e->span);
             out->as.fn_.fn = new_fn;
             return out;
@@ -483,6 +684,9 @@ static Expr *cps_mark_expr(Arena *a, Expr *e) {
             Expr *out = expr_new(a, EX_CLONEABLE_SHIFT, e->type, e->span);
             out->as.cloneable_shift_.k_fn = new_k_fn;
             out->as.cloneable_shift_.body = new_body;
+            /* live_captures will be filled by cps_compute_live_at_shift */
+            out->as.cloneable_shift_.live_captures   = NULL;
+            out->as.cloneable_shift_.n_live_captures = 0;
             return out;
         }
         
