@@ -687,6 +687,8 @@ static Expr *cps_mark_expr(Arena *a, Expr *e) {
             /* live_captures will be filled by cps_compute_live_at_shift */
             out->as.cloneable_shift_.live_captures   = NULL;
             out->as.cloneable_shift_.n_live_captures = 0;
+            /* CPS-CL3: cont_body is set later if needed for full continuation splitting */
+            out->as.cloneable_shift_.cont_body = NULL;
             return out;
         }
         

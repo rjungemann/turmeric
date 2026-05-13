@@ -190,6 +190,8 @@ bool tur_cont_consumed(tur_cont *cont);
 typedef struct tur_cloneable_cont {
     void (*cont_fn)(void *env, int64_t value);  /* Function to call to resume */
     void *env;                                     /* Captured environment (must be cloneable) */
+    void *(*clone_env)(const void *env);         /* Deep-clone the captured env (CPS-CL6) */
+    void  (*drop_env)(void *env);                /* Release the captured env (CPS-CL6) */
     struct tur_cloneable_cont *parent;           /* Parent cloneable continuation */
     tur_frame *captured[TUR_CONT_MAX_CAPTURED_FRAMES];
     int n_captured;

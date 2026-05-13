@@ -39,6 +39,8 @@ typedef enum BuiltinShape {
     BS_DLOPEN,           /* dlopen: dlopen(path, RTLD_LAZY) */
     BS_DLSYM,           /* dlsym: dlsym(handle, symbol) */
     BS_DLCLOSE,          /* dlclose: dlclose(handle) */
+    /* Generic function-call shape: c_op(arg0, arg1, ...) */
+    BS_FUNC_CALL,        /* c_op(args...) */
 } BuiltinShape;
 
 struct BuiltinSpec {

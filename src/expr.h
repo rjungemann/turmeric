@@ -372,6 +372,9 @@ struct Expr {
             /* CPS-CL1: live locals at this shift site (arena-allocated, set by cps_transform) */
             Binding   **live_captures;
             uint32_t    n_live_captures;
+            /* CPS-CL3: the post-shift subtree (code that runs after this shift inside
+             * the enclosing reset).  Set by cps_transform; NULL until then. */
+            Expr       *cont_body;
         } cloneable_shift_;
         /* Phase 19: Algebraic effects */
         struct { EffectDef *def; }                   effect_def_;   /* (defeffect ...) */

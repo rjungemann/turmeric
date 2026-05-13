@@ -107,6 +107,8 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0012_KIND_MISMATCH:       return "TUR-E0012";
         case TUR_E0013_ORPHAN_INSTANCE:     return "TUR-E0013";
         case TUR_E0015_TYPECLASS_CONSTRAINT_NOT_SATISFIED: return "TUR-E0015";
+        case TUR_E0014_NOT_CLONE:                        return "TUR-E0014";
+        case TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET:    return "TUR-E0016";
         default:                          return "";
     }
 }
@@ -127,6 +129,8 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0012") == 0) return TUR_E0012_KIND_MISMATCH;
     if (strcmp(s, "TUR-E0013") == 0) return TUR_E0013_ORPHAN_INSTANCE;
     if (strcmp(s, "TUR-E0015") == 0) return TUR_E0015_TYPECLASS_CONSTRAINT_NOT_SATISFIED;
+    if (strcmp(s, "TUR-E0014") == 0) return TUR_E0014_NOT_CLONE;
+    if (strcmp(s, "TUR-E0016") == 0) return TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET;
     return DIAG_CODE_NONE;
 }
 
@@ -305,6 +309,37 @@ static const DiagExplanation diag_explanations_[] = {
       "\n"
       "Define an instance of the required typeclass for the constrained type,\n"
       "or remove the constraint if it is not needed.\n"
+    },
+    { TUR_E0014_NOT_CLONE,
+      "TUR-E0014: Captured binding does not implement Clone\n"
+      "\n"
+      "A cloneable-shift captures a local variable whose type does not have a\n"
+      "Clone instance.  Because cloneable continuations can be resumed multiple\n"
+      "times, every value captured across the shift boundary must be deep-\n"
+      "cloneable so that each clone of the continuation gets an independent copy.\n"
+      "\n"
+      "Example:\n"
+      "  (let [x (make-non-cloneable)]\n"
+      "    (cloneable-reset\n"
+      "      (cloneable-shift (fn [k] k) x)))  ; error: x is not Clone\n"
+      "\n"
+      "Add a (definstance Clone [YourType] ...) to make the type cloneable,\n"
+      "or restructure the code so the non-cloneable value is not captured.\n"
+    },
+    { TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET,
+      "TUR-E0016: cloneable-shift outside cloneable-reset\n"
+      "\n"
+      "A cloneable-shift form was used outside of any enclosing cloneable-reset\n"
+      "boundary.  cloneable-shift captures the current continuation up to the\n"
+      "nearest enclosing cloneable-reset; without one, there is no continuation\n"
+      "to capture.\n"
+      "\n"
+      "Example:\n"
+      "  (defn bad [] :int\n"
+      "    (cloneable-shift (fn [k] 42) 0))  ; error: no enclosing cloneable-reset\n"
+      "\n"
+      "Wrap the cloneable-shift in a cloneable-reset:\n"
+      "  (cloneable-reset (cloneable-shift (fn [k] 42) 0))\n"
     },
 };
 

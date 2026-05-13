@@ -1,0 +1,10 @@
+;; CPS-CL9: Verify DEFER_SUSPENDED fires on capture, not resume.
+;; When cloneable-shift captures a continuation, DEFER_SUSPENDED defers fire.
+
+(defn k-returns-42 [k] :int 42)
+
+(defn main [] :int
+  (let [result (cloneable-reset
+                 (cloneable-shift k-returns-42 0))]
+    (println result))
+  0)

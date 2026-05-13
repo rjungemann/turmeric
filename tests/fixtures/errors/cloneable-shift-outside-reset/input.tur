@@ -1,0 +1,7 @@
+;; CPS-CL9: Negative fixture for TUR-E0016.
+;; cloneable-shift must be inside a cloneable-reset.
+
+(defn k-identity [k] :int k)
+
+(defn main [] :int
+  (cloneable-shift k-identity 0))

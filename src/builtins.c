@@ -98,6 +98,11 @@ static BuiltinSpec table_[] = {
     { "dlopen", NULL, 1, 1, {.kind=TY_CSTR}, {.kind=TY_PTR_VOID}, BS_DLOPEN, NULL },
     { "dlsym", NULL, 2, 2, {.kind=TY_PTR_VOID}, {.kind=TY_PTR_VOID}, BS_DLSYM, NULL },
     { "dlclose", NULL, 1, 1, {.kind=TY_PTR_VOID}, {.kind=TY_INT}, BS_DLCLOSE, NULL },
+
+    /* Cloneable continuation operations */
+    { "tur_cloneable_cont_resume", NULL, 2, 2, {.kind=TY_INT}, {.kind=TY_INT}, BS_FUNC_CALL, "tur_cloneable_cont_resume" },
+    { "tur_cloneable_cont_clone",  NULL, 1, 1, {.kind=TY_INT}, {.kind=TY_INT}, BS_FUNC_CALL, "tur_cloneable_cont_clone" },
+    { "tur_cloneable_cont_drop",   NULL, 1, 1, {.kind=TY_INT}, {.kind=TY_NIL}, BS_FUNC_CALL, "tur_cloneable_cont_drop" },
 };
 
 #define TABLE_LEN (sizeof(table_) / sizeof(table_[0]))
