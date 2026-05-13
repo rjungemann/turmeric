@@ -1,0 +1,9 @@
+;; Demonstrates a facade module that wraps and re-exports functions from
+;; an internal module. Users depend only on the facade; the internal
+;; module can change without breaking them.
+(defmodule app
+  (import math-facade :refer [twice thrice])
+  (defn main [] :int
+    (println (twice 5))
+    (println (thrice 4))
+    0))

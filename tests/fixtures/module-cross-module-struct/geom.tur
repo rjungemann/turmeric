@@ -1,0 +1,3 @@
+(defmodule geom
+  (export Point)
+  (defstruct Point :copy [x :int y :int]))
