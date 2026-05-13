@@ -833,6 +833,111 @@ static void cps_check_cloneable_captures(Expr *program, TypeClassEnv *tc_env) {
     cps_check_cloneable_captures_expr(program, tc_env, clone_tc);
 }
 
+/* CPS-CL11: Per-binding clone/drop function name resolution.
+ * --------------------------------------------------------------------------
+ * For every EX_CLONEABLE_SHIFT, allocate parallel arrays capture_clone_fns[]
+ * and capture_drop_fns[] of length n_live_captures.  For each captured
+ * binding b, look up the Clone instance for b->type and record the C name
+ * of its `clone` method (typically `inst->method_impls[0]->binding->name`).
+ *
+ * Slots are NULL when no Clone instance is found; emit.c handles NULL by
+ * falling back to a bitwise field copy.  The strings stored point into the
+ * symbol table (which lives in the same arena as the rest of the program),
+ * so they are stable for the remainder of compilation.
+ * --------------------------------------------------------------------------*/
+static void cps_emit_capture_environment_expr(Arena *a, Expr *e,
+                                              TypeClassEnv *tc_env,
+                                              TypeClass *clone_tc) {
+    if (!e) return;
+    switch (e->kind) {
+        case EX_CLONEABLE_SHIFT: {
+            uint32_t n = e->as.cloneable_shift_.n_live_captures;
+            if (n > 0 && !e->as.cloneable_shift_.capture_clone_fns) {
+                const char **clone_fns = arena_alloc(a, n * sizeof(const char *));
+                const char **drop_fns  = arena_alloc(a, n * sizeof(const char *));
+                memset(clone_fns, 0, n * sizeof(const char *));
+                memset(drop_fns,  0, n * sizeof(const char *));
+                for (uint32_t i = 0; i < n; i++) {
+                    Binding *b = e->as.cloneable_shift_.live_captures[i];
+                    if (!b || !clone_tc) continue;
+                    Type t = b->type;
+                    TypeClassInstance *inst =
+                        typeclass_env_lookup_instance(tc_env, clone_tc, &t, 1);
+                    if (!inst) continue;
+                    /* Clone has exactly one method (`clone`), at index 0. */
+                    if (inst->n_method_impls > 0 && inst->method_impls[0]
+                        && inst->method_impls[0]->binding
+                        && inst->method_impls[0]->binding->name) {
+                        clone_fns[i] = inst->method_impls[0]->binding->name->name;
+                    }
+                    /* Drop typeclass not yet implemented; leave NULL. */
+                }
+                e->as.cloneable_shift_.capture_clone_fns = clone_fns;
+                e->as.cloneable_shift_.capture_drop_fns  = drop_fns;
+            }
+            cps_emit_capture_environment_expr(a, e->as.cloneable_shift_.k_fn, tc_env, clone_tc);
+            cps_emit_capture_environment_expr(a, e->as.cloneable_shift_.body, tc_env, clone_tc);
+            return;
+        }
+        case EX_CLONEABLE_RESET:
+            cps_emit_capture_environment_expr(a, e->as.cloneable_reset_.body, tc_env, clone_tc);
+            return;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                cps_emit_capture_environment_expr(a, e->as.let_.bindings[i].init, tc_env, clone_tc);
+            cps_emit_capture_environment_expr(a, e->as.let_.body, tc_env, clone_tc);
+            return;
+        case EX_IF:
+            cps_emit_capture_environment_expr(a, e->as.if_.cond,         tc_env, clone_tc);
+            cps_emit_capture_environment_expr(a, e->as.if_.then_,        tc_env, clone_tc);
+            cps_emit_capture_environment_expr(a, e->as.if_.else_or_null, tc_env, clone_tc);
+            return;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                cps_emit_capture_environment_expr(a, e->as.do_.items[i], tc_env, clone_tc);
+            return;
+        case EX_WHILE:
+            cps_emit_capture_environment_expr(a, e->as.while_.cond, tc_env, clone_tc);
+            cps_emit_capture_environment_expr(a, e->as.while_.body, tc_env, clone_tc);
+            return;
+        case EX_RETURN:
+            cps_emit_capture_environment_expr(a, e->as.return_.value, tc_env, clone_tc);
+            return;
+        case EX_CALL:
+            cps_emit_capture_environment_expr(a, e->as.call_.fn_expr, tc_env, clone_tc);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                cps_emit_capture_environment_expr(a, e->as.call_.args[i], tc_env, clone_tc);
+            return;
+        case EX_FN_DEF:
+            if (e->as.fn_def_.fn)
+                cps_emit_capture_environment_expr(a, e->as.fn_def_.fn->body, tc_env, clone_tc);
+            return;
+        case EX_FN:
+            if (e->as.fn_.fn)
+                cps_emit_capture_environment_expr(a, e->as.fn_.fn->body, tc_env, clone_tc);
+            return;
+        case EX_PROGRAM:
+            for (uint32_t i = 0; i < e->as.program.n; i++)
+                cps_emit_capture_environment_expr(a, e->as.program.items[i], tc_env, clone_tc);
+            return;
+        default:
+            return;
+    }
+}
+
+void cps_emit_capture_environment(Arena *a, Expr *program, TypeClassEnv *tc_env) {
+    if (!program || !tc_env) return;
+    TypeClass *clone_tc = NULL;
+    for (TypeClass *tc = tc_env->typeclasses; tc != NULL; tc = tc->next) {
+        if (tc->name && strcmp(tc->name->name, "Clone") == 0) {
+            clone_tc = tc;
+            break;
+        }
+    }
+    /* If Clone isn't defined we still walk so capture_*_fns gets nulled out. */
+    cps_emit_capture_environment_expr(a, program, tc_env, clone_tc);
+}
+
 /* Main entry point: mark functions that contain shift for CPS transformation */
 Expr *cps_transform(Arena *a, Expr *program, TypeClassEnv *tc_env) {
     if (!program) {
@@ -855,6 +960,10 @@ Expr *cps_transform(Arena *a, Expr *program, TypeClassEnv *tc_env) {
 
     /* CPS-CL10: check Clone instances for all captured bindings */
     if (result && tc_env) cps_check_cloneable_captures(result, tc_env);
+
+    /* CPS-CL11: record per-binding clone/drop fn names so emit.c can produce
+     * field-by-field deep-clone code instead of the v1 bitwise copy. */
+    if (result && tc_env) cps_emit_capture_environment(a, result, tc_env);
 
     return result;
 }
