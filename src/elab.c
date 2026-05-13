@@ -9989,15 +9989,13 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
     /* Phase HKT-P4: record the file that defined this instance. */
     inst->origin_file_id = call->span.file_id;
 
-    /* Phase HKT-P4: Orphan instance check (advisory in v1 — single-file
-     * compilation means all definitions share the same file_id, so this check
-     * never fires in v1 unless a module system is added later).
+    /* Phase HKT-P4: Orphan instance check.
      *
      * Rule: an instance is "orphan" when NEITHER the typeclass NOR any
      * struct-type type argument was defined in the current compilation unit.
      * In Rust terms: you may only define Foo<Bar> if you own Foo or Bar.
      *
-     * Promote to DIAG_ERROR once P19-6 (module system) lands. */
+     * Now a hard DIAG_ERROR since the module system (P19-6) has landed. */
     if (tc->origin_file_id != 0 && tc->origin_file_id != call->span.file_id) {
         /* The typeclass is from a different file.
          * Check if any struct type-arg was defined here. */
@@ -10010,11 +10008,12 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
             }
         }
         if (!owns_a_type_arg) {
-            diag_emit_with_code(DIAG_WARNING, call->span,
+            diag_emit_with_code(DIAG_ERROR, call->span,
                       TUR_E0013_ORPHAN_INSTANCE,
-                      "orphan instance: '%s' is defined in a different compilation "
-                      "unit and none of the type arguments are defined here; "
-                      "this may conflict when a module system is added (see P19-6)",
+                      "orphan instance: typeclass '%s' is defined in a different "
+                      "module and none of the type arguments belong to this module; "
+                      "move the instance to the module that defines the typeclass or "
+                      "one of the type arguments",
                       tc_name->name);
         }
     }

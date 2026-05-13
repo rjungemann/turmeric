@@ -1,0 +1,55 @@
+;; Phase H6: Integration test — HKTs + closures + defers + refs.
+;;
+;; Scenario:
+;;   1. A Functor typeclass is applied via a capturing closure.
+;;   2. A ref<int> holds a counter that the closure captures by borrow.
+;;   3. A defer in main logs "done" on scope exit.
+;;   4. The combined result is printed.
+
+(defclass Functor [^f]
+  (fmap [container fn] :int))
+
+;; Option helpers
+(defn __opt_some [x] :int
+  ```c
+  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
+  r->is_some = true;
+  r->value = x;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(defn __opt_unwrap [o] :int
+  ```c
+  struct { bool is_some; int64_t value; } *p =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)o;
+  return (int)(p->value);
+  ```)
+
+;; fmap using fat-closure calling convention
+(defn __fmap_option_clos [container fn] :int
+  ```c
+  typedef struct { int64_t __fn; } __tur_fat_hdr;
+  struct { bool is_some; int64_t value; } *c =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)container;
+  if (!c || !c->is_some) return 0;
+  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
+  r->is_some = true;
+  __tur_fat_hdr *fat = (__tur_fat_hdr *)(intptr_t)fn;
+  r->value = ((int64_t(*)(void *, int64_t))(intptr_t)(fat->__fn))((void *)fat, c->value);
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(definstance Functor [option]
+  (fmap [container fn] (__fmap_option_clos container fn)))
+
+(defn main [] :int
+  (do
+    ;; ref holds the addend; closure captures it via borrow
+    (let [addend (ref 7)]
+      (let [b (& addend)]
+        (defer (println "done"))           ;; fires last, after result printed
+        (let [opt (__opt_some 10)]
+          (let [result (__fmap_option_clos opt (fn [x] (+ x @b)))]
+            (println (__opt_unwrap result)))) ;; 17
+        (drop! addend)))
+    0))
