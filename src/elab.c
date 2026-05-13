@@ -3408,7 +3408,29 @@ static Expr *elab_if(Elab *e, const Form *call) {
         }
         free(else_states);
 
-        if (!type_eq(then_->type, else_->type)) {
+        /* A branch that diverges — its top-level expression is a return,
+         * throw, panic, panic-with, or has `!` (TYPE_NEVER) type — is
+         * compatible with any other branch.  The if's result type is then
+         * the non-diverging branch's type.  This lets `(? expr)` lower to
+         * `(if cond (return ...) ok-val)` even when the two branch types
+         * differ. */
+        bool then_div = (then_->type.kind == TY_NEVER) ||
+                        (then_->kind == EX_RETURN) ||
+                        (then_->kind == EX_THROW)  ||
+                        (then_->kind == EX_PANIC)  ||
+                        (then_->kind == EX_PANIC_WITH);
+        bool else_div = (else_->type.kind == TY_NEVER) ||
+                        (else_->kind == EX_RETURN) ||
+                        (else_->kind == EX_THROW)  ||
+                        (else_->kind == EX_PANIC)  ||
+                        (else_->kind == EX_PANIC_WITH);
+        if (then_div && else_div) {
+            result_t = then_->type;  /* both diverge; pick either */
+        } else if (then_div) {
+            result_t = else_->type;
+        } else if (else_div) {
+            result_t = then_->type;
+        } else if (!type_eq(then_->type, else_->type)) {
             free(then_states);
             free(move_bindings);
             free(before_states);
@@ -3416,8 +3438,9 @@ static Expr *elab_if(Elab *e, const Form *call) {
                       "if branches have mismatched types: then=%s else=%s",
                       type_name(then_->type), type_name(else_->type));
             return NULL;
+        } else {
+            result_t = then_->type;
         }
-        result_t = then_->type;
     } else {
         /* Without else, then-branch moves are not guaranteed after the if. */
         move_state_restore(move_bindings, before_states, n_move_bindings);
@@ -5364,6 +5387,89 @@ static Expr *elab_gensym(Elab *e, const Form *call) {
     return out;
 }
 
+/* Phase R1: ? operator — (? expr)
+ *
+ * Lowers to:
+ *   (let [__q_N expr]
+ *     (if (err? __q_N)
+ *         (return (err (err-val __q_N)))
+ *         (ok-val __q_N)))
+ *
+ * Requires `err?`, `err`, `err-val`, and `ok-val` to be in scope (the fixture
+ * defines these alongside the result-shaped type).  Must appear inside a
+ * function body.  The if branches have types `!` (from `return`) and the
+ * unwrapped ok type; `elab_if` accepts NEVER as compatible with any type and
+ * propagates the other branch's type as the result.
+ */
+static Expr *elab_question(Elab *e, const Form *call) {
+    if (e->fn_body_depth == 0) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "? operator is only allowed inside a function body");
+        return NULL;
+    }
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "? operator requires exactly one argument: (? expr)");
+        return NULL;
+    }
+
+    Form *inner = call->as.list.items[1];
+    Span span = call->span;
+
+    /* Fresh symbol __q_N to avoid multiple evaluation of expr. */
+    char q_name[32];
+    snprintf(q_name, sizeof(q_name), "__q_%u", e->next_gensym_id++);
+    const Symbol *q_sym = symtab_intern(e->st,
+        strslice(q_name, (uint32_t)strlen(q_name)));
+    Form *q_sym_f = form_sym(e->arena, span, q_sym);
+
+    /* User-defined result helpers — looked up by name in scope. */
+    const Symbol *sym_err_q   = symtab_intern(e->st, strslice("err?",    4));
+    const Symbol *sym_err     = symtab_intern(e->st, strslice("err",     3));
+    const Symbol *sym_err_val = symtab_intern(e->st, strslice("err-val", 7));
+    const Symbol *sym_ok_val  = symtab_intern(e->st, strslice("ok-val",  6));
+
+    Form *err_q_f   = form_sym(e->arena, span, sym_err_q);
+    Form *err_f     = form_sym(e->arena, span, sym_err);
+    Form *err_val_f = form_sym(e->arena, span, sym_err_val);
+    Form *ok_val_f  = form_sym(e->arena, span, sym_ok_val);
+    Form *if_f      = form_sym(e->arena, span, e->sym_if);
+    Form *let_f     = form_sym(e->arena, span, e->sym_let);
+    Form *return_f  = form_sym(e->arena, span, e->sym_return);
+
+    /* (err? __q) */
+    Form *test_items[2] = { err_q_f, q_sym_f };
+    Form *test_form = form_list(e->arena, span, test_items, 2);
+
+    /* (err-val __q) */
+    Form *err_val_items[2] = { err_val_f, q_sym_f };
+    Form *err_val_form = form_list(e->arena, span, err_val_items, 2);
+
+    /* (err (err-val __q)) */
+    Form *err_call_items[2] = { err_f, err_val_form };
+    Form *err_call_form = form_list(e->arena, span, err_call_items, 2);
+
+    /* (return (err (err-val __q))) */
+    Form *return_items[2] = { return_f, err_call_form };
+    Form *return_form = form_list(e->arena, span, return_items, 2);
+
+    /* (ok-val __q) */
+    Form *ok_val_items[2] = { ok_val_f, q_sym_f };
+    Form *ok_val_form = form_list(e->arena, span, ok_val_items, 2);
+
+    /* (if (err? __q) (return (err (err-val __q))) (ok-val __q)) */
+    Form *if_items[4] = { if_f, test_form, return_form, ok_val_form };
+    Form *if_form = form_list(e->arena, span, if_items, 4);
+
+    /* (let [__q expr] if_form) */
+    Form *bind_vec_items[2] = { q_sym_f, inner };
+    Form *bind_vec = form_vec(e->arena, span, bind_vec_items, 2);
+    Form *let_items[3] = { let_f, bind_vec, if_form };
+    Form *let_form = form_list(e->arena, span, let_items, 3);
+
+    return elab_form(e, let_form);
+}
+
 /* Phase 2: defn — (defn name [param1 param2 ...] : return-type body...)
  * For now, we only support : int return type annotation. Param types are
  * inferred from usage. */
@@ -6471,11 +6577,9 @@ static Expr *elab_call(Elab *e, Form *call) {
         return elab_async(e, call);
     if (name == e->sym_await && call->as.list.len == 2)
         return elab_await(e, call);
-    /* Phase R1: ? operator (reserved, not yet implemented) */
+    /* Phase R1: ? operator — lowers to early-return on err */
     if (name == e->sym_question) {
-        diag_emit(DIAG_ERROR, call->span,
-            "? operator is not yet implemented (Phase R1)");
-        return NULL;
+        return elab_question(e, call);
     }
     /* Phase 15: Method call syntax - (.method obj arg1 arg2) */
     if (name->len > 0 && name->name[0] == '.') {

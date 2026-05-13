@@ -706,6 +706,150 @@ static void tur_scheduler_timeout(int64_t ms, void (*callback)(void *arg), void 
     pthread_attr_destroy(&attr);
 }
 
+/* Phase T24: Timer wheel */
+#define TUR_WHEEL_SLOTS 256
+#define TUR_WHEEL_SLOT_MASK 255
+typedef void (*tur_timer_cb_t)(void *);
+typedef struct TurTimerNode TurTimerNode;
+struct TurTimerNode {
+    int64_t deadline_ms;
+    tur_timer_cb_t callback;
+    void *arg;
+    bool cancelled;
+    TurTimerNode *next;
+    TurTimerNode *prev;
+};
+typedef struct {
+    TurTimerNode *slots[TUR_WHEEL_SLOTS];
+    int64_t current_ms;
+    pthread_mutex_t lock;
+    bool running;
+    pthread_t thread;
+} TurTimerWheel;
+
+static int64_t tur_wheel_now_ms(void) {
+    struct timespec _ts;
+    clock_gettime(CLOCK_MONOTONIC, &_ts);
+    return (int64_t)_ts.tv_sec * 1000LL + (int64_t)_ts.tv_nsec / 1000000LL;
+}
+
+static void tur_timer_wheel_tick(TurTimerWheel *w) {
+    if (!w) return;
+    int64_t now = tur_wheel_now_ms();
+    int64_t elapsed = now - w->current_ms;
+    if (elapsed <= 0) return;
+    for (int64_t _t = 0; _t < elapsed; _t++) {
+        w->current_ms++;
+        int _slot = (int)(w->current_ms & TUR_WHEEL_SLOT_MASK);
+        TurTimerNode *_to_fire = NULL;
+        pthread_mutex_lock(&w->lock);
+        TurTimerNode **_pp = &w->slots[_slot];
+        while (*_pp) {
+            TurTimerNode *_n = *_pp;
+            if (_n->cancelled) {
+                *_pp = _n->next;
+                if (_n->next) _n->next->prev = _n->prev;
+                free(_n);
+            } else if (_n->deadline_ms <= w->current_ms) {
+                *_pp = _n->next;
+                if (_n->next) _n->next->prev = _n->prev;
+                _n->next = _to_fire; _to_fire = _n;
+            } else { _pp = &_n->next; }
+        }
+        pthread_mutex_unlock(&w->lock);
+        while (_to_fire) {
+            TurTimerNode *_nx = _to_fire->next;
+            _to_fire->callback(_to_fire->arg);
+            free(_to_fire);
+            _to_fire = _nx;
+        }
+    }
+}
+
+static void *tur_timer_wheel_ticker(void *raw) {
+    TurTimerWheel *w = (TurTimerWheel *)raw;
+    while (w->running) {
+        struct timespec _ts2 = { .tv_sec = 0, .tv_nsec = 1000000L };
+        nanosleep(&_ts2, NULL);
+        tur_timer_wheel_tick(w);
+    }
+    return NULL;
+}
+
+static TurTimerWheel *tur_timer_wheel_new(void) {
+    TurTimerWheel *w = (TurTimerWheel *)calloc(1, sizeof(TurTimerWheel));
+    if (!w) { fprintf(stderr, "timer-wheel: oom\n"); abort(); }
+    pthread_mutex_init(&w->lock, NULL);
+    w->current_ms = tur_wheel_now_ms();
+    w->running = true;
+    pthread_create(&w->thread, NULL, tur_timer_wheel_ticker, w);
+    return w;
+}
+
+static void tur_timer_wheel_free(TurTimerWheel *w) {
+    if (!w) return;
+    w->running = false;
+    pthread_join(w->thread, NULL);
+    for (int _i = 0; _i < TUR_WHEEL_SLOTS; _i++) {
+        TurTimerNode *_n = w->slots[_i];
+        while (_n) { TurTimerNode *_nx = _n->next; free(_n); _n = _nx; }
+    }
+    pthread_mutex_destroy(&w->lock);
+    free(w);
+}
+
+static TurTimerNode *tur_timer_wheel_insert(TurTimerWheel *w, int64_t delay_ms,
+                                              tur_timer_cb_t cb, void *arg) {
+    if (!w || !cb) return NULL;
+    TurTimerNode *node = (TurTimerNode *)calloc(1, sizeof(TurTimerNode));
+    if (!node) { fprintf(stderr, "timer-node: oom\n"); abort(); }
+    node->deadline_ms = tur_wheel_now_ms() + delay_ms;
+    node->callback = cb; node->arg = arg; node->cancelled = false;
+    int _sl = (int)(node->deadline_ms & TUR_WHEEL_SLOT_MASK);
+    pthread_mutex_lock(&w->lock);
+    node->next = w->slots[_sl]; node->prev = NULL;
+    if (w->slots[_sl]) w->slots[_sl]->prev = node;
+    w->slots[_sl] = node;
+    pthread_mutex_unlock(&w->lock);
+    return node;
+}
+
+static void tur_timer_wheel_cancel(TurTimerNode *node) {
+    if (node) node->cancelled = true;
+}
+
+/* Phase T24: Timer fire context for recording ordered callbacks */
+typedef struct {
+    pthread_mutex_t lock;
+    pthread_cond_t  cond;
+    int             order[16]; /* ids in fire order */
+    int             count;     /* timers fired so far */
+    int             expected;  /* total to wait for   */
+} TurTimerFireCtx;
+
+/* arg must point to int64_t[2]: { ptr-as-int64 to TurTimerFireCtx, timer-id } */
+static void tur_timer_fire_cb(void *arg) {
+    int64_t *pair = (int64_t *)arg;
+    TurTimerFireCtx *ctx = (TurTimerFireCtx *)(intptr_t)pair[0];
+    int id = (int)pair[1];
+    pthread_mutex_lock(&ctx->lock);
+    if (ctx->count < 16) ctx->order[ctx->count] = id;
+    ctx->count++;
+    if (ctx->count >= ctx->expected) pthread_cond_broadcast(&ctx->cond);
+    pthread_mutex_unlock(&ctx->lock);
+}
+
+/* Global timer wheel (created on first use) */
+static TurTimerWheel *tur_global_timer_wheel = NULL;
+static pthread_once_t tur_timer_wheel_once = PTHREAD_ONCE_INIT;
+static void tur_timer_wheel_init_once(void) {
+    tur_global_timer_wheel = tur_timer_wheel_new();
+}
+static TurTimerWheel *tur_get_timer_wheel(void) {
+    pthread_once(&tur_timer_wheel_once, tur_timer_wheel_init_once);
+    return tur_global_timer_wheel;
+}
+
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif
@@ -1194,10 +1338,10 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
-struct __defer_env_6 {RcControlBlock * x; };
+struct __defer_env_7 {RcControlBlock * x; };
 
-static void __defer_7(void *__env) {
-    struct __defer_env_6 *__e = (struct __defer_env_6 *)__env;
+static void __defer_8(void *__env) {
+    struct __defer_env_7 *__e = (struct __defer_env_7 *)__env;
     rc_strong_decrement(__e->x);
     rc_free_queue_drain();
 }
@@ -1280,24 +1424,27 @@ static int64_t rc_auto_drop_early_return(bool flag) {
             tur_frame __frame_3;
             tur_frame_init(&__frame_3, NULL);
             int64_t __t4;
+            int64_t __t5;
             if (flag) {
                 tur_frame_fire_chain(&__frame_3);
-                                int64_t __t5 = rc_strong_count(x_23);
-return __t5;
+                                int64_t __t6 = rc_strong_count(x_23);
+return __t6;
             } else {
-                __t4 = INT64_C(0);
+                __t5 = INT64_C(0);
             }
-            struct __defer_env_6 __t8 = {.x = x_23};
-            tur_frame_push_defer(&__frame_3, __defer_7, &__t8);
+            __t4 = __t5;
+            struct __defer_env_7 __t9 = {.x = x_23};
+            tur_frame_push_defer(&__frame_3, __defer_8, &__t9);
             tur_frame_fire_lifo(&__frame_3);
+            __t0 = __t4;
         }
 }
 
 int main() {
         printf("%lld\n", (long long)(rc_auto_drop_early_return(true)));
-        int64_t __t9;
-        __t9 = INT64_C(0);
-        return (int)__t9;
+        int64_t __t10;
+        __t10 = INT64_C(0);
+        return (int)__t10;
 }
 
 
