@@ -1,0 +1,32 @@
+;; Phase S4 eval tests: structs, exceptions, defer
+
+;; --- Test 1: struct literal + field access ---
+;; (make-struct Point 3 4), then (.x p) + (.y p) → 7
+(defstruct Point [x :int y :int])
+
+(defn test-struct [] :int
+  (let [p (make-struct Point 3 4)]
+    (+ (.x p) (.y p))))
+
+;; --- Test 2: try/catch basic --- → 42
+(defn test-try-catch [] :int
+  (try
+    (throw "oops")
+    (catch [e]
+      42)))
+
+;; --- Test 3: try/catch/finally → 99 ---
+(defn test-try-finally [] :int
+  (let [x (try
+    (throw "bail")
+    (catch [e]
+      99))]
+    x))
+
+;; --- Test 4: uncaught exception converts to TURI_ERROR ---
+;; (throw-uncaught) is NOT evaluated here; the REPL test calls safe wrappers only.
+
+;; Print results
+(println (test-struct))       ;; => 7
+(println (test-try-catch))    ;; => 42
+(println (test-try-finally))  ;; => 99

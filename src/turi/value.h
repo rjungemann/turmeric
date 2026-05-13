@@ -5,8 +5,11 @@
 #include <stdbool.h>
 #include <stdio.h>
 
-/* Forward declaration */
-typedef struct TuriClosure TuriClosure;
+/* Forward declarations */
+typedef struct TuriClosure    TuriClosure;
+typedef struct TuriEffectCont TuriEffectCont;  /* defined in eval.c */
+typedef struct TuriStruct     TuriStruct;      /* defined in eval.c */
+typedef struct TuriThrow      TuriThrow;       /* defined in eval.c */
 
 /* Tagged value type for the eval runtime. */
 typedef enum TuriTag {
@@ -17,17 +20,23 @@ typedef enum TuriTag {
     TURI_CSTR,
     TURI_CLOSURE,
     TURI_ERROR,          /* parse/runtime error: as_error holds message */
+    TURI_EFFECT_CONT,    /* live continuation from handle/perform (Phase S3) */
+    TURI_STRUCT,         /* struct instance: TuriStruct* (Phase S4) */
+    TURI_THROW,          /* in-flight exception: TuriThrow* (Phase S4) */
 } TuriTag;
 
 typedef struct TuriValue {
     TuriTag tag;
     union {
-        bool         as_bool;
-        int64_t      as_int;
-        double       as_float;
-        const char  *as_cstr;    /* borrowed or malloc'd string */
-        TuriClosure *as_closure;
-        const char  *as_error;   /* malloc'd error message */
+        bool              as_bool;
+        int64_t           as_int;
+        double            as_float;
+        const char       *as_cstr;    /* borrowed or malloc'd string */
+        TuriClosure      *as_closure;
+        const char       *as_error;   /* malloc'd error message */
+        TuriEffectCont   *as_cont;    /* live effect continuation */
+        TuriStruct       *as_struct;  /* struct instance */
+        TuriThrow        *as_throw;   /* in-flight exception */
     };
 } TuriValue;
 
@@ -40,6 +49,16 @@ static inline TuriValue turi_cstr(const char *s){ return (TuriValue){TURI_CSTR, 
 static inline TuriValue turi_closure(TuriClosure *cl) {
     return (TuriValue){TURI_CLOSURE, .as_closure = cl};
 }
+static inline TuriValue turi_effect_cont(TuriEffectCont *c) {
+    return (TuriValue){TURI_EFFECT_CONT, .as_cont = c};
+}
+static inline TuriValue turi_struct_val(TuriStruct *s) {
+    return (TuriValue){TURI_STRUCT, .as_struct = s};
+}
+static inline TuriValue turi_throw_val(TuriThrow *t) {
+    return (TuriValue){TURI_THROW, .as_throw = t};
+}
+static inline bool turi_is_throw(TuriValue v) { return v.tag == TURI_THROW; }
 
 /* Create an error value (message is strdup'd) */
 TuriValue turi_error(const char *msg);

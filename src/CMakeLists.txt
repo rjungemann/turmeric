@@ -102,6 +102,10 @@ target_compile_options(tur_core PRIVATE
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
     $<$<CONFIG:TSan>:    -O1 -g -fsanitize=thread>
 )
+# Phase S3: ucontext_t is deprecated on macOS but still functional
+if(APPLE)
+    target_compile_options(tur_core PRIVATE -Wno-deprecated-declarations)
+endif()
 # Phase S1: editline feature flag
 if(HAVE_EDITLINE)
     target_compile_definitions(tur_core PRIVATE TURI_HAVE_EDITLINE=1)

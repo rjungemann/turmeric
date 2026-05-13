@@ -268,14 +268,14 @@ arithmetic, `let`, `if`, `do`, `fn`, and `defn`.
 
 **Exit criterion:** Effect examples from the existing test suite run through `turi_eval`.
 
-- [ ] Effect handler stack threaded through `TuriEnv`
-- [ ] `TuriValue` variant for live continuations (`TURI_EFFECT_CONT`)
-- [ ] `perform` suspends the eval loop and invokes the nearest handler
-- [ ] `resume k v` re-enters the saved continuation
-- [ ] Async `await` deferred (async requires fiber scheduler — note in docs)
+- [x] Effect handler stack threaded through `TuriEnv`
+- [x] `TuriValue` variant for live continuations (`TURI_EFFECT_CONT`)
+- [x] `perform` suspends the eval loop and invokes the nearest handler
+- [x] `resume k v` re-enters the saved continuation
+- [x] Async `await` deferred (async requires fiber scheduler — note in docs)
 
 **Fixtures:**
-- [ ] `tests/turi/eval-effects.tur` — basic effect round-trip through eval
+- [x] `tests/turi/eval-effects.tur` — basic effect round-trip through eval
 
 ---
 
@@ -285,13 +285,13 @@ arithmetic, `let`, `if`, `do`, `fn`, and `defn`.
 
 **Exit criterion:** The Phase 1–19 test fixtures pass when run via `turi_eval`.
 
-- [ ] `defstruct` / struct literals / field access
+- [x] `defstruct` / struct literals / field access (`EX_MAKE_STRUCT`, `EX_GET_FIELD`, `TuriStruct`)
 - [ ] Pattern matching (`case`)
 - [ ] Typeclasses and instance resolution at runtime (dictionary-passing)
 - [ ] Macros (re-use existing `src/interp.c` macro expander)
 - [ ] Module loading (`import`) — evaluate imported file into child env
-- [ ] Exception handling (`try`/`catch`/`throw`)
-- [ ] Defer (LIFO on env scope exit)
+- [x] Exception handling (`try`/`catch`/`throw`) — `EX_THROW`, `EX_TRY`, `TuriThrow`, `env->throwing`
+- [x] Defer (LIFO on env scope exit) — `EX_DEFER`, `DeferItem` stack, fired by `eval_apply`
 
 ---
 
@@ -301,10 +301,10 @@ arithmetic, `let`, `if`, `do`, `fn`, and `defn`.
 
 **Exit criterion:** `(println "hi")` works; sandboxed env raises on `println`.
 
-- [ ] I/O primitives wired through `TuriEnv` capability flags
-- [ ] `turi_env_new_sandboxed()` disables I/O and raw FFI
-- [ ] Inline-C blocks (`\`\`\`c ... \`\`\``) disabled in sandboxed mode
-- [ ] Resource limits: max eval depth, max allocations
+- [x] I/O primitives wired through `TuriEnv` capability flags (`env->sandboxed` gates `println` and FFI builtins)
+- [x] `turi_env_new_sandboxed()` disables I/O and raw FFI
+- [x] Inline-C blocks (`\`\`\`c ... \`\`\``) disabled in sandboxed mode (EX_INLINE_C returns error)
+- [x] Resource limits: max eval depth via `env->max_eval_depth` (default 4096) with wrapper guard
 
 ---
 
