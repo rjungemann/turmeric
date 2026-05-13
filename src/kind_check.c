@@ -453,3 +453,100 @@ void kind_dump_program(Expr *program, FILE *out) {
     }
 }
 
+/* ---------------------------------------------------------------------------
+ * Phase HKT-P6: kind_verify_program — debug assertion
+ * Verifies that Kind information is preserved through all compiler passes.
+ * --------------------------------------------------------------------------- */
+
+/* Helper: recursively verify kind info is present on types */
+static bool kind_verify_type(const Type *t) {
+    if (!t) return true;
+    /* All types should have a valid hkt_kind (KIND_STAR, KIND_ARROW, or KIND_ARROW2) */
+    if (t->hkt_kind != KIND_STAR && t->hkt_kind != KIND_ARROW && t->hkt_kind != KIND_ARROW2) {
+        return false;
+    }
+    switch (t->kind) {
+        case TY_APP:
+            return kind_verify_type(t->as.app.fn) && kind_verify_type(t->as.app.arg);
+        case TY_REC:
+            return kind_verify_type(t->as.rec.body);
+        default:
+            /* Most types don't have nested kind info in v1 */
+            return true;
+    }
+}
+
+/* Helper: recursively verify kind info on typeclass instances */
+static bool kind_verify_typeclass_instance(const TypeClassInstance *inst) {
+    if (!inst) return true;
+    /* Verify typeclass has kind info on its parameters */
+    if (inst->typeclass && inst->typeclass->type_param_kinds) {
+        for (uint8_t i = 0; i < inst->typeclass->n_type_params; i++) {
+            Kind k = inst->typeclass->type_param_kinds[i];
+            if (k != KIND_STAR && k != KIND_ARROW && k != KIND_ARROW2) {
+                return false;
+            }
+        }
+    }
+    /* Verify type args have kind info */
+    for (uint8_t i = 0; i < inst->n_type_args; i++) {
+        if (!kind_verify_type(&inst->type_args[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Helper: recursively verify kind info on expressions */
+static bool kind_verify_expr(const Expr *e) {
+    if (!e) return true;
+    
+    switch (e->kind) {
+        case EX_DEF:
+            /* Check the type of the binding */
+            if (e->as.def_.binding && !kind_verify_type(&e->as.def_.binding->type)) {
+                return false;
+            }
+            return kind_verify_expr(e->as.def_.init);
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++) {
+                if (e->as.let_.bindings[i].binding && 
+                    !kind_verify_type(&e->as.let_.bindings[i].binding->type)) {
+                    return false;
+                }
+            }
+            return kind_verify_expr(e->as.let_.body);
+        case EX_TYPECLASS_DEF:
+            if (e->as.typeclass_def_.typeclass && e->as.typeclass_def_.typeclass->type_param_kinds) {
+                for (uint8_t i = 0; i < e->as.typeclass_def_.typeclass->n_type_params; i++) {
+                    Kind k = e->as.typeclass_def_.typeclass->type_param_kinds[i];
+                    if (k != KIND_STAR && k != KIND_ARROW && k != KIND_ARROW2) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        case EX_INSTANCE_DEF:
+            return kind_verify_typeclass_instance(e->as.instance_def_.instance);
+        case EX_PROGRAM:
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++) {
+                if (!kind_verify_expr(e->as.do_.items[i])) {
+                    return false;
+                }
+            }
+            return true;
+        default:
+            return true;
+    }
+}
+
+/* Verify that Kind information is preserved on the program.
+ * In debug builds, this can be called after each pass to ensure
+ * kind info is not inadvertently cleared. Returns true if all
+ * kind info appears valid, false otherwise. */
+bool kind_verify_program(const Expr *program) {
+    if (!program) return true;
+    return kind_verify_expr(program);
+}
+

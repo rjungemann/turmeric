@@ -26,6 +26,7 @@
 #include <sys/wait.h>
 
 #include "arena.h"
+#include "assert.h"
 #include "buf.h"
 #include "borrow_check.h"  /* Phase 14 */
 #include "cps.h"          /* Phase 18: CPS transformation */
@@ -152,6 +153,10 @@ static int run_core_passes(PassContext *ctx) {
                                           ctx->module_base_dir,
                                           ctx->separate_compilation);
             if (!ctx->prog || diag_had_error()) return 1;
+#ifndef NDEBUG
+            /* Phase HKT-P6: verify kind info is preserved after elaboration */
+            assert(kind_verify_program(ctx->prog) && "Kind info cleared after PASS_ELABORATE");
+#endif
             break;
         case PASS_KIND_CHECK:
             /* Phase HKT H0: kind inference and validation pass (v1 stub). */
@@ -160,6 +165,10 @@ static int run_core_passes(PassContext *ctx) {
             /* Phase HKT-P6: optionally dump kind annotations for debugging. */
             if (g_dump_kinds)
                 kind_dump_program(ctx->prog, stdout);
+#ifndef NDEBUG
+            /* Phase HKT-P6: verify kind info is preserved after kind-check */
+            assert(kind_verify_program(ctx->prog) && "Kind info cleared after PASS_KIND_CHECK");
+#endif
             break;
         case PASS_EFFECT_LOWER:
             /* Phase 19: transform perform/handle into shift/reset. */
@@ -170,16 +179,28 @@ static int run_core_passes(PassContext *ctx) {
             ctx->prog = effect_lower(ctx->arena, ctx->st,
                                      ctx->prog, ctx->effect_env);
             if (!ctx->prog || diag_had_error()) return 1;
+#ifndef NDEBUG
+            /* Phase HKT-P6: verify kind info preserved after effect-lower */
+            assert(kind_verify_program(ctx->prog) && "Kind info cleared after PASS_EFFECT_LOWER");
+#endif
             break;
         case PASS_EFFECT_ROW_INFER:
             /* P19-2: effect-row inference and validation pass. */
             if (effect_check_pass(ctx->arena, ctx->prog, ctx->effect_env) != 0)
                 return 1;
+#ifndef NDEBUG
+            /* Phase HKT-P6: verify kind info preserved after effect-row-infer */
+            assert(kind_verify_program(ctx->prog) && "Kind info cleared after PASS_EFFECT_ROW_INFER");
+#endif
             break;
         case PASS_CPS:
             /* Phase 18: CPS transformation for shift/reset. */
             ctx->prog = cps_transform(ctx->arena, ctx->prog);
             if (!ctx->prog || diag_had_error()) return 1;
+#ifndef NDEBUG
+            /* Phase HKT-P6: verify kind info preserved after CPS */
+            assert(kind_verify_program(ctx->prog) && "Kind info cleared after PASS_CPS");
+#endif
             break;
         case PASS_BORROW_CHECK:
             /* Phase 14: ownership, move, and borrow analysis. */
@@ -187,6 +208,10 @@ static int run_core_passes(PassContext *ctx) {
             /* Phase P19-7: Always-on check that handler case bodies do not
              * capture borrow-typed variables from the enclosing scope. */
             if (!borrow_check_effect_handler_captures(ctx->prog)) return 1;
+#ifndef NDEBUG
+            /* Phase HKT-P6: verify kind info preserved after borrow-check */
+            assert(kind_verify_program(ctx->prog) && "Kind info cleared after PASS_BORROW_CHECK");
+#endif
             break;
         }
     }
