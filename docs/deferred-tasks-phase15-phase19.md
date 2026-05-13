@@ -109,8 +109,10 @@ These are the concrete implementation gaps that cause Phase 19 tasks to be skipp
   - Added `tests/fixtures/effect-deep-handler/`: performs the same `Step` effect three times with a deep handler that checks `(cont? k)` (verifying k-freshness) before resuming; expected output `3`. Passes in the new k-freshness model.
 
 #### P19-6 — Module system (blocks Section F: module-scoped effect handling/linking)
-- [ ] Module system is a separate large undertaking tracked in `docs/module-system-plan.md`. Phase 19 Section F items that require module scoping are **blocked on module system v1 landing**. No Phase 19 work should be attempted for module-scoped effects until at least a minimal module boundary (file-level namespace isolation) is implemented.
-- [ ] Once a minimal module system exists, define the effect visibility model: `(defeffect ^private Foo ...)` vs. `(defeffect Foo ...)` (public by default).
+- [x] Module system is a separate large undertaking tracked in `docs/module-system-plan.md`. Phase 19 Section F items that require module scoping are **blocked on module system v1 landing**. No Phase 19 work should be attempted for module-scoped effects until at least a minimal module boundary (file-level namespace isolation) is implemented.
+  - **Resolved**: Module system (M0–M7) landed; file-level namespace isolation, import/export, separate compilation, macro export, and C symbol mangling are all implemented.
+- [x] Once a minimal module system exists, define the effect visibility model: `(defeffect ^private Foo ...)` vs. `(defeffect Foo ...)` (public by default).
+  - **Implemented**: Added `is_private` and `defining_module_name` fields to `Effect` (in `src/effect.h`) and `EffectDef` (in `src/expr.h`). `elab_defeffect` parses the optional `^private` annotation and stores module info. `elab_perform` and `elab_handle` enforce visibility: using a `^private` effect from outside its defining module emits `"effect 'X' is private to module 'Y'"`. Fixtures: `tests/fixtures/module-effect-private/` (positive) and `tests/fixtures/errors/module-effect-private-access/` (negative).
 
 #### P19-7 — Borrow-check extension for effect handler captures (blocks Section F: borrow-check constraints for effect handlers)
 - [x] Extend `src/borrow_check.c` to treat an effect handler case body as a closure scope: references borrowed in the outer scope that are used inside a handler case body must remain live for the duration of the `with-handler` form.
@@ -315,8 +317,8 @@ After prerequisites are complete, execute these implementation tasks.
   - Implemented: effect inference fixed-point iteration propagates callee inferred rows to callers via `collect_effects_in_expr()` EX_CALL handling in `src/effect_check.c`.
 - [x] Implement row-subtyping checks.
   - Implemented: `effect_row_check_declared()` in `src/effect_check.c` emits `TUR-E0009` when the inferred row contains effects not in the declared row. Fixture `tests/fixtures/errors/effect-row-mismatch/` validates.
-- [ ] Add effect scoping controls (module-private/exported effects).
-  - BLOCKED: requires module system (P19-6).
+- [x] Add effect scoping controls (module-private/exported effects).
+  - **Implemented (P19-6/P19-A)**: `(defeffect ^private Name ...)` restricts an effect to its defining module. `elab_perform` and `elab_handle` enforce the restriction at elaboration time. Public effects (no annotation) are accessible from any importing module via the shared `effect_env`. Fixtures: `tests/fixtures/module-effect-private/` (positive), `tests/fixtures/errors/module-effect-private-access/` (negative), `tests/fixtures/module-cross-module-effect/` (cross-module public effect), `tests/fixtures/errors/module-cross-module-private-effect/` (cross-module private effect blocked).
 - [x] Add effect re-opening support.
   - Implemented: `effect_row_remove()` added to `src/effect.c`; `EX_HANDLE` case in `collect_effects_in_expr()` removes handled effects from the body row and adds handler-case body effects (re-opened effects propagate out). Fixture `tests/fixtures/effect-reopen/` passes.
 
@@ -365,8 +367,8 @@ After prerequisites are complete, execute these implementation tasks.
 
 #### F) Feature interactions and one-shot checks
 - [x] Enable macro-generated effectful code path and hygiene interactions. (with-write, with-fail-throw, with-getenv, with-read-console fixtures demonstrate this)
-- [ ] Implement module-scoped effect handling/linking behavior.
-  - BLOCKED: requires module system (P19-6).
+- [x] Implement module-scoped effect handling/linking behavior.
+  - **Implemented (P19-A/F)**: Effects declared in a module are registered in the shared `effect_env` when the module is loaded. Public effects from an imported module are usable by name in `perform` and `handle` from any importing module without qualification. Private effects (`^private`) are blocked across module boundaries at elaboration time. Fixture `tests/fixtures/module-cross-module-effect/` demonstrates a public effect declared in `effects/ask`, performed in that module's `ask-effect` function, and handled in the importing `myapp` module.
 - [x] Integrate borrow-check constraints for effect handlers that capture references.
   - Implemented (P19-7): `borrow_check_effect_handler_captures()` rejects references captured from outer scope in handler case bodies. Fixture `tests/fixtures/errors/effect-handler-borrow/` validates.
 - [x] Add static one-shot check: `resume` consumes continuation and rejects second use.
@@ -704,12 +706,12 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Note: v1 uses UNWIND strategy by default via setjmp/longjmp. ABORT strategy uses direct abort(). The strategy can be selected at build time. Full runtime flag deferred to v2.
 - [x] Implement `tur_panic_abort` for `ABORT` strategy.
   - Added to src/runtime.{c,h} and emitted in src/emit.c. Used for #[no-unwind] functions (when attribute system lands).
-- [ ] Implement `#[no-unwind]` attribute on `defn`; emit `tur_panic_abort` inside such functions.
-  - Note: Attribute syntax `#[...]` added to reader.c. Elaborator integration deferred - needs defn syntax extension to accept attributes.
+- [x] Implement `#[no-unwind]` attribute on `defn`; emit `tur_panic_abort` inside such functions.
+  - **Implemented**: `#[no-unwind]` is parsed by `reader.c` as the `#no-unwind` symbol, recognised by `elab_defn` (sets `Binding.no_unwind = true`), and propagated to `EmitCtx.no_unwind` in `emit.c`. When `no_unwind` is set, `elab_panic` / `elab_catch_unwind` lower panics via `tur_panic_abort` (calls `abort()` without unwinding the defer chain). Fixtures: `tests/fixtures/panic-no-unwind/` (compiles + normal path) and `tests/fixtures/panic-no-unwind-abort/` (actually panics — verifies non-zero exit and `"panic (no unwind): ..."` on stderr).
 - [x] Document FFI rule: panics must not cross `extern-c` boundaries without `catch-unwind` or `#[no-unwind]`.
   - Documented: Panics crossing FFI boundaries without catch-unwind or #[no-unwind] cause undefined behavior. Users must wrap FFI calls that may panic with catch-unwind.
 - [ ] Decide and implement WASM panic lowering (`unreachable` vs. host import).
-  - Decided: WASM target not yet implemented. Design: use WebAssembly `unreachable` instruction for panic in WASM.
+  - Deferred: WASM target not yet implemented. Decision recorded: use WebAssembly `unreachable` instruction for panic in WASM. Implement when a WASM codegen backend is added.
 - [x] Implement `result->exception` bridge function.
   - Added to stdlib/result.tur: converts result<T,E> to exception via tur_throw if err.
 - [x] Implement `exception->result` bridge function.
@@ -717,7 +719,9 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
 - [x] Add fixture `panic-ffi-boundary.tur`.
   - Added: Documents the FFI rule; tests compilation.
 - [x] Add fixture `panic-no-unwind.tur`.
-  - Added: Tests basic compilation; elaborator integration for attribute deferred.
+  - Added: Tests basic compilation and correct C emission (`tur_panic_abort` in function body).
+- [x] Add fixture `panic-no-unwind-abort.tur`.
+  - Added: Tests runtime behavior — process exits non-zero with `"panic (no unwind):"` on stderr.
 - [x] Add fixture `result-exception-bridge.tur`.
   - Added: Tests compilation of bridge functions.
 

@@ -1,0 +1,14 @@
+;; Phase P19-A/F: Cross-module effect usage.
+;; Module effects/ask defines a public Ask effect and ask-effect function.
+;; Module myapp imports it, calls ask-effect, and provides the handler.
+(defmodule myapp
+  (export run)
+  (import effects/ask :as ea)
+  (defn run [] :int
+    (handle
+      (ea/ask-effect)
+      (Ask [] k)
+      (resume k 99)))
+  (defn main [] :int
+    (println (run))
+    0))

@@ -169,12 +169,27 @@ void tur_throw(int payload_type, void *payload, int line, const char *file) {
     }
 }
 
-/* Phase R2: tur_panic */
+/* Phase R2/R6: tur_panic */
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
+static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
+static void tur_panic_print_scope_chain(void) {
+    if (!g_panic_trace || !global_panic_frame) return;
+    fprintf(stderr, "  scope chain:\n");
+    tur_frame *frames[64];
+    int n_frames = 0;
+    for (tur_frame *cur = global_panic_frame; cur != NULL && n_frames < 64; cur = cur->parent) {
+        frames[n_frames++] = cur;
+    }
+    for (int i = 0; i < n_frames; i++) {
+        fprintf(stderr, "    at frame %p (parent: %p, n_defers: %d)\n",
+                (void*)frames[i], (void*)frames[i]->parent, frames[i]->n);
+    }
+}
+
 static void tur_panic(const char *msg) {
     if (tur_panic_in_progress) {
         fprintf(stderr, "double panic: aborting\n");
@@ -182,6 +197,7 @@ static void tur_panic(const char *msg) {
     }
     tur_panic_in_progress = 1;
     fprintf(stderr, "panic at %s:%d: %s\n", __FILE__, __LINE__, msg ? msg : "(no message)");
+    tur_panic_print_scope_chain();
     if (global_panic_frame) {
         tur_frame_fire_chain(global_panic_frame);
     }

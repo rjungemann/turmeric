@@ -202,6 +202,9 @@ typedef struct EffectDef {
     TypeKind *param_types;       /* Parameter types (TypeKind for now) */
     uint8_t n_params;
     TypeKind result_type;        /* Result type of the effect operation */
+    /* Phase P19-6: Module visibility */
+    bool          is_private;           /* declared with ^private */
+    const Symbol *defining_module_name; /* module that declared this effect, or NULL */
 } EffectDef;
 
 /* Perform expression: (perform (EffectName arg1 arg2 ...)) */

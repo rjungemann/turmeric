@@ -33,6 +33,9 @@ struct Effect {
     const Symbol *name;           /* Effect name */
     EffectConstructor *constructor; /* The effect constructor */
     bool is_polymorphic;          /* Whether this effect is generic over type parameters */
+    /* Phase P19-6: Module visibility */
+    bool          is_private;           /* declared with ^private — only visible within defining module */
+    const Symbol *defining_module_name; /* module that declared this effect, or NULL for top-level */
 };
 
 /* Effect row represents a set of effects that a function may perform.
@@ -132,10 +135,13 @@ EffectRow *effect_row_resolve(EffectRow *row, EffectEnv *env, Arena *a);
 
 EffectEnv *effect_env_new(Arena *a);
 
-/* Register a new effect in the environment */
+/* Register a new effect in the environment.
+ * defining_module_name: the module that declares this effect (NULL = top-level/stdlib).
+ * is_private: true if declared with ^private; only visible within defining_module_name. */
 Effect *effect_env_register(EffectEnv *env, Arena *a, const Symbol *name,
                             const Symbol **param_names, TypeKind *param_types,
-                            uint8_t n_params, TypeKind result_type);
+                            uint8_t n_params, TypeKind result_type,
+                            const Symbol *defining_module_name, bool is_private);
 
 /* Look up an effect by name */
 Effect *effect_env_lookup(EffectEnv *env, const Symbol *name);

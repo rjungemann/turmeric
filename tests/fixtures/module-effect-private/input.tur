@@ -1,0 +1,16 @@
+;; Phase P19-6: Private effect visibility — positive test.
+;; A ^private effect declared and used entirely within its defining module.
+(defmodule mymod
+  (export run)
+
+  (defeffect ^private Ask [] :int)
+
+  (defn run [] :int
+    (handle
+      (do
+        (let [x (perform (Ask))]
+          (println x)))
+      (Ask [] k)
+      (resume k 42)))
+
+  (defn main [] :int (run)))

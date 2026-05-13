@@ -290,14 +290,15 @@ EffectEnv *effect_env_new(Arena *a) {
 /* Register a new effect in the environment */
 Effect *effect_env_register(EffectEnv *env, Arena *a, const Symbol *name,
                             const Symbol **param_names, TypeKind *param_types,
-                            uint8_t n_params, TypeKind result_type) {
+                            uint8_t n_params, TypeKind result_type,
+                            const Symbol *defining_module_name, bool is_private) {
     /* Check if already exists */
     for (uint32_t i = 0; i < env->n_effects; i++) {
         if (env->effects[i]->name == name) {
             return env->effects[i]; /* Already registered */
         }
     }
-    
+
     /* Allocate space if needed */
     if (env->n_effects >= env->cap_effects) {
         uint32_t new_cap = env->cap_effects ? env->cap_effects * 2 : 8;
@@ -308,12 +309,14 @@ Effect *effect_env_register(EffectEnv *env, Arena *a, const Symbol *name,
         env->effects = new_array;
         env->cap_effects = new_cap;
     }
-    
+
     /* Create the effect */
     Effect *effect = arena_alloc(a, sizeof(Effect));
     effect->name = name;
     effect->is_polymorphic = false; /* For now, all effects are monomorphic */
-    
+    effect->defining_module_name = defining_module_name;
+    effect->is_private = is_private;
+
     /* Create the constructor (1:1 for now) */
     EffectConstructor *ctor = arena_alloc(a, sizeof(EffectConstructor));
     ctor->name = name;
@@ -322,9 +325,9 @@ Effect *effect_env_register(EffectEnv *env, Arena *a, const Symbol *name,
     ctor->n_params = n_params;
     ctor->result_type = result_type;
     ctor->effect = effect;
-    
+
     effect->constructor = ctor;
-    
+
     env->effects[env->n_effects++] = effect;
     return effect;
 }
@@ -348,7 +351,7 @@ Effect *effect_env_register_builtin_unsafe(EffectEnv *env, Arena *a,
                                            const Symbol *unsafe_name) {
     if (!env || !a || !unsafe_name) return NULL;
     return effect_env_register(env, a, unsafe_name,
-                               NULL, NULL, 0, TY_NIL);
+                               NULL, NULL, 0, TY_NIL, NULL, false);
 }
 
 /* ---------------------------------------------------------------------------
