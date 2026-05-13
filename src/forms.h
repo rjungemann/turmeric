@@ -30,6 +30,23 @@ static inline Span span_from_offsets(uint16_t file_id, uint32_t off_start, uint3
     return (Span){file_id, 0, 0, 0, off_start, off_end};
 }
 
+/* Phase N: Literal suffix tag for typed integer/float literals (42i8, 3.14f32, etc.)
+ * This mirrors TypeKind for numeric types but lives in forms.h to avoid a
+ * circular dependency (types.h already includes forms.h for Span). */
+typedef enum LiteralSuffix {
+    LIT_SUF_NONE = 0,  /* unsuffixed — default type (int64 / double) */
+    LIT_SUF_I8,        /* i8  → int8   */
+    LIT_SUF_I16,       /* i16 → int16  */
+    LIT_SUF_I32,       /* i32 → int32  */
+    LIT_SUF_I64,       /* i64 → int64  */
+    LIT_SUF_U8,        /* u8  → uint8  */
+    LIT_SUF_U16,       /* u16 → uint16 */
+    LIT_SUF_U32,       /* u32 → uint32 */
+    LIT_SUF_U64,       /* u64 → uint64 */
+    LIT_SUF_F32,       /* f32 → float32 */
+    LIT_SUF_F64,       /* f64 → float64 */
+} LiteralSuffix;
+
 typedef enum FormTag {
     F_NIL  = 0,
     F_BOOL,
@@ -58,12 +75,9 @@ typedef struct FormList {
 } FormList;
 
 struct Form {
-    FormTag tag;
-    Span    span;
-    /* Phase N: For F_INT and F_FLOAT, the explicit numeric type from a suffix
-     * (e.g. 42i8 -> TY_INT8, 3.14f32 -> TY_FLOAT32). TY_UNKNOWN means unsuffixed
-     * (defaults to TY_INT for integers, TY_FLOAT for floats). */
-    int     lit_kind;   /* TypeKind value; int to avoid circular include */
+    FormTag       tag;
+    Span          span;
+    LiteralSuffix lit_suffix; /* Phase N: type suffix for F_INT/F_FLOAT; LIT_SUF_NONE otherwise */
     union {
         bool          b;
         int64_t       i;

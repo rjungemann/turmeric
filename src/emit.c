@@ -495,19 +495,26 @@ static void emit_c_string(Buf *out, StrSlice s) {
 
 static char *atom_nil(void)         { return strdup("((void)0)"); }
 static char *atom_bool(bool b)      { return strdup(b ? "true" : "false"); }
-/* Phase N: type-dispatched integer literal emitter */
-static char *atom_int_typed(TypeKind k, int64_t i) {
+/* Phase N: emit integer literal with correct C macro for fixed-width type */
+static char *atom_int_typed(int64_t i, TypeKind k) {
     char buf[64];
     switch (k) {
         case TY_INT8:   snprintf(buf, sizeof buf, "INT8_C(%lld)",   (long long)i); break;
         case TY_INT16:  snprintf(buf, sizeof buf, "INT16_C(%lld)",  (long long)i); break;
         case TY_INT32:  snprintf(buf, sizeof buf, "INT32_C(%lld)",  (long long)i); break;
+        case TY_INT64:  snprintf(buf, sizeof buf, "INT64_C(%lld)",  (long long)i); break;
         case TY_UINT8:  snprintf(buf, sizeof buf, "UINT8_C(%llu)",  (unsigned long long)(uint64_t)i); break;
         case TY_UINT16: snprintf(buf, sizeof buf, "UINT16_C(%llu)", (unsigned long long)(uint64_t)i); break;
         case TY_UINT32: snprintf(buf, sizeof buf, "UINT32_C(%llu)", (unsigned long long)(uint64_t)i); break;
         case TY_UINT64: snprintf(buf, sizeof buf, "UINT64_C(%llu)", (unsigned long long)(uint64_t)i); break;
         default:        snprintf(buf, sizeof buf, "INT64_C(%lld)",  (long long)i); break;
     }
+    return strdup(buf);
+}
+/* Phase N: emit float32 literal as a (float) cast */
+static char *atom_float32(double f) {
+    char buf[80];
+    snprintf(buf, sizeof buf, "((float)%.9g)", f);
     return strdup(buf);
 }
 
@@ -593,7 +600,7 @@ static char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(body, "printf(\"%%lld\\n\", (long long)(%s));\n", arg);
                 break;
             case BS_PRINTLN_FLOAT:
-                buf_printf(body, "printf(\"%%g\\n\", %s);\n", arg);
+                buf_printf(body, "printf(\"%%g\\n\", (double)(%s));\n", arg);
                 break;
             case BS_PRINTLN_BOOL:
                 buf_printf(body, "puts((%s) ? \"true\" : \"false\");\n", arg);
@@ -1567,8 +1574,10 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     switch (e->kind) {
         case EX_NIL_LIT:  return atom_nil();
         case EX_BOOL_LIT: return atom_bool(e->as.b);
-        case EX_INT_LIT:   return atom_int_typed(e->type.kind, e->as.i);
-        case EX_FLOAT_LIT: return atom_float_typed(e->type.kind, e->as.f);
+        case EX_INT_LIT:  return atom_int_typed(e->as.i, e->type.kind);
+        case EX_FLOAT_LIT:
+            if (e->type.kind == TY_FLOAT32) return atom_float32(e->as.f);
+            return atom_float(e->as.f);
         case EX_CSTR_LIT: return atom_cstr(e->as.s);
         case EX_VAR:      return atom_var(ctx, e->as.var.binding);
         case EX_CAST: {

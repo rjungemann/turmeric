@@ -67,6 +67,12 @@ static int peek3(const Reader *r) {
     return (unsigned char)r->src[r->pos + 2];
 }
 
+/* Phase N: Peek at character n positions ahead (0-based from current pos). */
+static int peek_at(const Reader *r, size_t n) {
+    if (r->pos + n >= r->len) return -1;
+    return (unsigned char)r->src[r->pos + n];
+}
+
 static int advance(Reader *r) {
     if (r->pos >= r->len) return -1;
     int c = (unsigned char)r->src[r->pos++];
@@ -339,68 +345,27 @@ static Form *read_number(Reader *r, int sign) {
         return NULL;
     }
 
-    /* Phase N: Optional type suffix — i8/i16/i32/i64/u8/u16/u32/u64/f32/f64.
-     * The suffix is only consumed when followed by a non-alphanumeric character
-     * (so `42int` is `42` + symbol `int`, not a parse of suffix `int`). */
-    int lit_kind = 0; /* TY_UNKNOWN */
-    {
-        /* Read up to 3 suffix chars from the raw source without advancing */
-        int s0 = peek(r), s1 = peek2(r), s2 = peek3(r);
-
-        /* Helper: what comes after a 2-char suffix? */
-#define AFTER2 (r->pos + 2 < r->len ? (unsigned char)r->src[r->pos + 2] : -1)
-#define AFTER3 (r->pos + 3 < r->len ? (unsigned char)r->src[r->pos + 3] : -1)
-
-        /* 3-char suffixes (check before 2-char to avoid prefix match) */
-        if (s0 == 'i' && s1 == '1' && s2 == '6' && !isalnum(AFTER3) && AFTER3 != '_') {
-            advance(r); advance(r); advance(r); lit_kind = TY_INT16;
-        } else if (s0 == 'i' && s1 == '3' && s2 == '2' && !isalnum(AFTER3) && AFTER3 != '_') {
-            advance(r); advance(r); advance(r); lit_kind = TY_INT32;
-        } else if (s0 == 'i' && s1 == '6' && s2 == '4' && !isalnum(AFTER3) && AFTER3 != '_') {
-            advance(r); advance(r); advance(r); lit_kind = TY_INT;   /* i64 aliases int */
-        } else if (s0 == 'u' && s1 == '1' && s2 == '6' && !isalnum(AFTER3) && AFTER3 != '_') {
-            advance(r); advance(r); advance(r); lit_kind = TY_UINT16;
-        } else if (s0 == 'u' && s1 == '3' && s2 == '2' && !isalnum(AFTER3) && AFTER3 != '_') {
-            advance(r); advance(r); advance(r); lit_kind = TY_UINT32;
-        } else if (s0 == 'u' && s1 == '6' && s2 == '4' && !isalnum(AFTER3) && AFTER3 != '_') {
-            advance(r); advance(r); advance(r); lit_kind = TY_UINT64;
-        } else if (s0 == 'f' && s1 == '3' && s2 == '2' && !isalnum(AFTER3) && AFTER3 != '_') {
-            if (!is_float) fval = (double)ival;
-            advance(r); advance(r); advance(r); is_float = true; lit_kind = TY_FLOAT32;
-        } else if (s0 == 'f' && s1 == '6' && s2 == '4' && !isalnum(AFTER3) && AFTER3 != '_') {
-            if (!is_float) fval = (double)ival;
-            advance(r); advance(r); advance(r); is_float = true; lit_kind = TY_FLOAT; /* f64 aliases float */
-        /* 2-char suffixes */
-        } else if (s0 == 'i' && s1 == '8' && !isalnum(AFTER2) && AFTER2 != '_') {
-            advance(r); advance(r); lit_kind = TY_INT8;
-        } else if (s0 == 'u' && s1 == '8' && !isalnum(AFTER2) && AFTER2 != '_') {
-            advance(r); advance(r); lit_kind = TY_UINT8;
-        }
-
-#undef AFTER2
-#undef AFTER3
-
-        /* Range checks for suffixed integer literals */
-        if (!is_float && lit_kind != TY_UNKNOWN) {
-            bool overflow = false;
-            switch ((TypeKind)lit_kind) {
-                case TY_INT8:   overflow = (ival < -128 || ival > 127); break;
-                case TY_INT16:  overflow = (ival < -32768 || ival > 32767); break;
-                case TY_INT32:  overflow = (ival < -2147483648LL || ival > 2147483647LL); break;
-                case TY_UINT8:  overflow = (ival < 0 || ival > 255); break;
-                case TY_UINT16: overflow = (ival < 0 || ival > 65535); break;
-                case TY_UINT32: overflow = (ival < 0 || ival > 4294967295LL); break;
-                case TY_UINT64: overflow = (ival < 0); break;  /* basic check */
-                default: break;
-            }
-            if (overflow) {
-                Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
-                diag_emit(DIAG_ERROR, s, "literal value out of range for its type suffix");
-                r->error = true;
-                return NULL;
-            }
-        }
+    /* Phase N: Scan optional type suffix (i8, i16, i32, i64, u8, u16, u32, u64, f32, f64). */
+    LiteralSuffix lit_suf = LIT_SUF_NONE;
+    if (!is_float) {
+        /* Integer suffixes */
+        if      (peek(r) == 'i' && peek2(r) == '8'  && !is_sym_cont(peek_at(r, 2))) { advance(r); advance(r); lit_suf = LIT_SUF_I8; }
+        else if (peek(r) == 'i' && peek2(r) == '1'  && peek3(r) == '6' && !is_sym_cont(peek_at(r, 3))) { advance(r); advance(r); advance(r); lit_suf = LIT_SUF_I16; }
+        else if (peek(r) == 'i' && peek2(r) == '3'  && peek3(r) == '2' && !is_sym_cont(peek_at(r, 3))) { advance(r); advance(r); advance(r); lit_suf = LIT_SUF_I32; }
+        else if (peek(r) == 'i' && peek2(r) == '6'  && peek3(r) == '4' && !is_sym_cont(peek_at(r, 3))) { advance(r); advance(r); advance(r); lit_suf = LIT_SUF_I64; }
+        else if (peek(r) == 'u' && peek2(r) == '8'  && !is_sym_cont(peek_at(r, 2))) { advance(r); advance(r); lit_suf = LIT_SUF_U8; }
+        else if (peek(r) == 'u' && peek2(r) == '1'  && peek3(r) == '6' && !is_sym_cont(peek_at(r, 3))) { advance(r); advance(r); advance(r); lit_suf = LIT_SUF_U16; }
+        else if (peek(r) == 'u' && peek2(r) == '3'  && peek3(r) == '2' && !is_sym_cont(peek_at(r, 3))) { advance(r); advance(r); advance(r); lit_suf = LIT_SUF_U32; }
+        else if (peek(r) == 'u' && peek2(r) == '6'  && peek3(r) == '4' && !is_sym_cont(peek_at(r, 3))) { advance(r); advance(r); advance(r); lit_suf = LIT_SUF_U64; }
+        /* Float suffixes on integer-looking literals (e.g. 1f32) */
+        else if (peek(r) == 'f' && peek2(r) == '3'  && peek3(r) == '2' && !is_sym_cont(peek_at(r, 3))) { advance(r); advance(r); advance(r); lit_suf = LIT_SUF_F32; is_float = true; fval = (double)ival; }
+        else if (peek(r) == 'f' && peek2(r) == '6'  && peek3(r) == '4' && !is_sym_cont(peek_at(r, 3))) { advance(r); advance(r); advance(r); lit_suf = LIT_SUF_F64; is_float = true; fval = (double)ival; }
+    } else {
+        /* Float suffixes */
+        if      (peek(r) == 'f' && peek2(r) == '3'  && peek3(r) == '2' && !is_sym_cont(peek_at(r, 3))) { advance(r); advance(r); advance(r); lit_suf = LIT_SUF_F32; }
+        else if (peek(r) == 'f' && peek2(r) == '6'  && peek3(r) == '4' && !is_sym_cont(peek_at(r, 3))) { advance(r); advance(r); advance(r); lit_suf = LIT_SUF_F64; }
     }
+
 
     Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
     Form *atom;
@@ -411,9 +376,46 @@ static Form *read_number(Reader *r, int sign) {
     } else {
         if (sign < 0) ival = -ival;
         atom = form_int(r->arena, span, ival);
+        /* Overflow checks for small integer types */
+        if (lit_suf == LIT_SUF_I8 && (ival < -128 || ival > 127)) {
+            diag_emit(DIAG_ERROR, span, "integer literal overflows int8 range (-128..127)");
+            r->error = true;
+            return NULL;
+        }
+        if (lit_suf == LIT_SUF_I16 && (ival < -32768 || ival > 32767)) {
+            diag_emit(DIAG_ERROR, span, "integer literal overflows int16 range (-32768..32767)");
+            r->error = true;
+            return NULL;
+        }
+        if (lit_suf == LIT_SUF_I32 && (ival < -2147483648LL || ival > 2147483647LL)) {
+            diag_emit(DIAG_ERROR, span, "integer literal overflows int32 range");
+            r->error = true;
+            return NULL;
+        }
+        if (lit_suf == LIT_SUF_U8 && (ival < 0 || ival > 255)) {
+            diag_emit(DIAG_ERROR, span, "integer literal overflows uint8 range (0..255)");
+            r->error = true;
+            return NULL;
+        }
+        if (lit_suf == LIT_SUF_U16 && (ival < 0 || ival > 65535)) {
+            diag_emit(DIAG_ERROR, span, "integer literal overflows uint16 range (0..65535)");
+            r->error = true;
+            return NULL;
+        }
+        if (lit_suf == LIT_SUF_U32 && (ival < 0 || ival > 4294967295LL)) {
+            diag_emit(DIAG_ERROR, span, "integer literal overflows uint32 range (0..4294967295)");
+            r->error = true;
+            return NULL;
+        }
+        if (lit_suf == LIT_SUF_U64 && ival < 0) {
+            diag_emit(DIAG_ERROR, span, "integer literal overflows uint64 range (must be non-negative)");
+            r->error = true;
+            return NULL;
+        }
     }
-    atom->lit_kind = lit_kind;
-    
+    atom->lit_suffix = lit_suf;
+
+
     /* Phase S2: Check for neoteric bracket immediately following number */
     if (r->neoteric_enabled) {
         int bracket = peek_neoteric_bracket(r);
