@@ -1091,13 +1091,10 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Implemented: `taskgroup-with-macro` fixture with expected.c snapshot showing macro inlines body followed by `tg-wait`.
 
 ##### TG-006 — Integration with async/await
-- [ ] Ensure `async` blocks can be spawned into `TaskGroup`.
-  - Deferred: Requires `async` to use fiber-based execution (currently pthread-based via `tur_async_fiber`).
-  - Fiber-based async is tracked in Phase AW-005. The `TurFuture` and scheduler infrastructure exists but async bypasses it in v1 by calling functions directly.
+- [x] Ensure `async` blocks can be spawned into `TaskGroup`.
+  - Implemented via `task-group-spawn-async` / `task-group-async` in `stdlib/taskgroup.tur`. Uses fiber-based execution: creates a `TurFuture`, allocates a `TgAsyncArg{fn, future}` struct, spawns a real fiber with `__tg-async-entry` as entry point (reads fn+future from `fiber_local`, calls fn, fulfills future), and sets `fiber->task_group` so `tur_fiber_shim` calls `tur_task_group_notify_done` on completion. The caller drives the fiber by awaiting the returned future, which runs `tur_scheduler_run_one` until the future is fulfilled. Note: the `(async ...)` keyword itself still runs synchronously (AW-005 full fiber-based async remains deferred), but `task-group-spawn-async` provides the fiber path for explicit TaskGroup spawning.
 - [x] Add `task-group-async [group async-thunk]` — spawn async task into group.
-  - Implemented in `stdlib/taskgroup.tur`: Added `task-group-async` macro and `task-group-spawn-async` stub function.
-  - Currently aborts with "requires fiber-based async (Phase AW-005)" message.
-  - Once async uses fibers (AW-005), this will: increment task count, create future, spawn fiber with `task_group` set, and return future.
+  - Implemented in `stdlib/taskgroup.tur`: `task-group-spawn-async` is now a working fiber-based implementation (not a stub). Added `__tg-async-entry` helper defn as the fiber entry point. `task-group-async` macro wraps `task-group-spawn-async`. Added fixture `tests/fixtures/taskgroup-async/` with `expected.stdout` and `expected.c` snapshots.
 
 #### T23 — Multi-threaded work-stealing scheduler (Phase 23)
 
