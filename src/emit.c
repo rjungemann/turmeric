@@ -293,8 +293,12 @@ static char *mangle_field_name(const char *name) {
  *
  * Phase M3: For module-level bindings (defining_module_name != NULL), the
  * C name is prefixed with the mangled module name: geom/vector → geom__vector__,
- * so binding `add2` in module `geom/vector` → `geom__vector__add2`. */
+ * so binding `add2` in module `geom/vector` → `geom__vector__add2`.
+ * Phase M6: If b->c_export_name is set, use it directly (bypasses mangling). */
 static char *raw_name_for_binding(const Binding *b) {
+    if (b->c_export_name) {
+        return strdup(b->c_export_name);
+    }
     /* Build module prefix if this binding belongs to a named module.
      * Exception: `main` is always the C entry point, never prefixed. */
     char mod_prefix[512];
@@ -3401,8 +3405,13 @@ int emit_program(Buf *out, const Expr *program) {
             FnDef *fd = e->as.fn_def_.fn;
             /* Skip main - it's not called from other functions in the same file */
             if (strcmp(fd->binding->name->name, "main") == 0) continue;
-            /* Emit forward declaration with static */
-            buf_puts(&fwd_decls, "static ");
+            /* Phase M6: exported module functions don't need static on their
+             * forward declaration — they already get external linkage in emit_fn_def
+             * when separate_compilation is true. In single-file mode (the common
+             * case here) all functions are still static. */
+            if (!ctx.separate_compilation || !fd->binding->is_exported) {
+                buf_puts(&fwd_decls, "static ");
+            }
             if (e->type.kind == TY_FN) {
                 TypeKind result = e->type.as.fn.result_kind;
                 buf_puts(&fwd_decls, type_c_name(type_from_kind(result)));
@@ -4820,6 +4829,15 @@ int emit_header(Buf *out, const char *module_name, const Expr *program, bool sep
                 buf_puts(out, type_c_name(ec->param_types[j]));
             }
             buf_puts(out, ");\n");
+        } else if (e->kind == EX_DEF && !e->as.def_.struct_def) {
+            /* Phase M6: exported global variables need extern declarations
+             * in the header so other modules can reference them. */
+            if (separate_compilation && e->as.def_.binding->is_exported) {
+                const char *var_name = raw_name_for_binding(e->as.def_.binding);
+                buf_printf(out, "extern %s %s;\n",
+                           type_c_name(e->as.def_.binding->type), var_name);
+                free((void*)var_name);
+            }
         }
     }
     free(h_items);
@@ -4917,7 +4935,12 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program, 
             continue;
         } else if (e->kind == EX_DEF) {
             char *bn = name_for_binding(&ctx, e->as.def_.binding);
-            buf_printf(&file, "static %s %s;\n",
+            /* Phase M6: exported def bindings get extern linkage in separate
+             * compilation mode so other modules can reference them. */
+            bool def_needs_static = !(separate_compilation &&
+                                      e->as.def_.binding->is_exported);
+            buf_printf(&file, "%s%s %s;\n",
+                       def_needs_static ? "static " : "",
                        type_c_name(e->as.def_.binding->type), bn);
             if (e->as.def_.init) {
                 char *iv = emit_value(&ctx, &body, e->as.def_.init);
