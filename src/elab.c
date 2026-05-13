@@ -6410,6 +6410,11 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
              * is expected.  HKT type constructor values are opaque int64_t at runtime. */
             arg_ok = true;
         }
+        if (!arg_ok && expected_arg_kind == TY_INT && args[i]->type.kind == TY_APP) {
+            /* Phase HKT §3: Allow passing a partially-applied type (TY_APP) where int64_t
+             * is expected.  Partial type application values are opaque int64_t at runtime. */
+            arg_ok = true;
+        }
         if (!arg_ok && expected_arg_kind == TY_INT && args[i]->type.kind == TY_FN) {
             /* Phase HKT H3/H4: Allow passing a function value where int64_t is expected.
              * Function references are represented as int64_t in HKT helper calls. */
@@ -7845,6 +7850,64 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
                             type_args[i].as.struct_.def = NULL;
                             type_arg_syms[i] = kw;
                         }
+                    } else if (arg->tag == F_LIST && arg->as.list.len == 2) {
+                        /* Phase HKT §3: (constructor arg) — partial type application.
+                         * Parses `(result int)` in type position as TY_APP where
+                         * fn = TY_STRUCT(constructor, KIND_ARROW2) and arg = concrete type.
+                         * This allows `(definstance Functor [(result int)] ...)`. */
+                        Form *ctor_form = arg->as.list.items[0];
+                        Form *aarg_form = arg->as.list.items[1];
+                        if (ctor_form->tag != F_SYM && ctor_form->tag != F_KEYWORD) {
+                            diag_emit(DIAG_ERROR, ctor_form->span,
+                                      "type application constructor must be a symbol");
+                            return NULL;
+                        }
+                        const Symbol *ctor_sym = ctor_form->as.sym;
+                        /* Parse the argument type (must be a primitive or known sym) */
+                        Type app_arg_type;
+                        if (aarg_form->tag == F_SYM || aarg_form->tag == F_KEYWORD) {
+                            const Symbol *akw = aarg_form->as.sym;
+                            if (akw->len == 3 && memcmp(akw->name, "int", 3) == 0) {
+                                app_arg_type = TYPE_INT;
+                            } else if (akw->len == 4 && memcmp(akw->name, "bool", 4) == 0) {
+                                app_arg_type = TYPE_BOOL;
+                            } else if (akw->len == 4 && memcmp(akw->name, "cstr", 4) == 0) {
+                                app_arg_type = TYPE_CSTR;
+                            } else if ((akw->len == 4 && memcmp(akw->name, "void", 4) == 0) ||
+                                       (akw->len == 3 && memcmp(akw->name, "nil", 3) == 0)) {
+                                app_arg_type = TYPE_NIL;
+                            } else {
+                                /* Unknown type arg — treat as opaque struct */
+                                memset(&app_arg_type, 0, sizeof(app_arg_type));
+                                app_arg_type.kind = TY_STRUCT;
+                                app_arg_type.copy_kind = CK_MOVE;
+                                app_arg_type.as.struct_.def = NULL;
+                            }
+                        } else {
+                            diag_emit(DIAG_ERROR, aarg_form->span,
+                                      "type application argument must be a type keyword or symbol");
+                            return NULL;
+                        }
+                        /* Build fn type: TY_STRUCT with no def, KIND_ARROW2 (binary constructor) */
+                        Type *fn_type = (Type *)arena_alloc(e->arena, sizeof(Type));
+                        memset(fn_type, 0, sizeof(Type));
+                        fn_type->kind = TY_STRUCT;
+                        fn_type->copy_kind = CK_MOVE;
+                        fn_type->hkt_kind = KIND_ARROW2;
+                        fn_type->as.struct_.def = NULL;
+                        /* Build arg type on arena */
+                        Type *arg_type_ptr = (Type *)arena_alloc(e->arena, sizeof(Type));
+                        *arg_type_ptr = app_arg_type;
+                        /* Assemble TY_APP */
+                        memset(&type_args[i], 0, sizeof(type_args[i]));
+                        type_args[i].kind = TY_APP;
+                        type_args[i].copy_kind = CK_MOVE;
+                        /* fn of KIND_ARROW2 applied to one arg → KIND_ARROW */
+                        type_args[i].hkt_kind = KIND_ARROW;
+                        type_args[i].as.app.fn  = fn_type;
+                        type_args[i].as.app.arg = arg_type_ptr;
+                        /* Store constructor sym for name mangling (e.g. "result") */
+                        type_arg_syms[i] = ctor_sym;
                     } else {
                         diag_emit(DIAG_ERROR, arg->span,
                                   "unsupported type argument in definstance");
@@ -8204,6 +8267,24 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
                         type_component = "T";
                     }
                     break;
+                case TY_APP: {
+                    /* Phase HKT §3: partial type application — encode as "ctor_arg" */
+                    const char *ctor_part = "T";
+                    const char *arg_part  = "T";
+                    if (type_arg_syms && type_arg_syms[j]) {
+                        ctor_part = type_arg_syms[j]->name;
+                    }
+                    if (type_args[j].as.app.arg) {
+                        const char *n = type_name(*type_args[j].as.app.arg);
+                        if (n) arg_part = n;
+                    }
+                    snprintf(ctor_name_buf, sizeof(ctor_name_buf), "%s_%s", ctor_part, arg_part);
+                    for (char *p = ctor_name_buf; *p; p++) {
+                        if (!isalnum((unsigned char)*p)) *p = '_';
+                    }
+                    type_component = ctor_name_buf;
+                    break;
+                }
                 default: type_component = "T"; break;
             }
             int written = snprintf(type_suffix + type_suffix_len,
@@ -8818,12 +8899,20 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                 if (head->as.sym == e.sym_defn) {
                     /* Parse defn declaration without body */
                     if (f->as.list.len >= 3) {
-                        Form *name_f = f->as.list.items[1];
+                        /* Phase R5: skip optional #[no-unwind] attribute */
+                        uint32_t name_idx = 1;
+                        if (f->as.list.items[1]->tag == F_SYM &&
+                            f->as.list.items[1]->as.sym == e.sym_no_unwind_attr) {
+                            name_idx = 2;
+                        }
+                        if ((uint32_t)f->as.list.len <= name_idx) goto next_form;
+                        Form *name_f = f->as.list.items[name_idx];
                         if (name_f->tag == F_SYM) {
                             /* Parse return type annotation if present */
                             TypeKind return_kind = TY_INT; /* default */
-                            if (f->as.list.len >= 4) {
-                                Form *ret_f = f->as.list.items[3];
+                            uint32_t ret_idx = name_idx + 2; /* name params :ret */
+                            if (f->as.list.len > ret_idx) {
+                                Form *ret_f = f->as.list.items[ret_idx];
                                 if (ret_f->tag == F_KEYWORD) {
                                     const Symbol *kw = ret_f->as.sym;
                                     if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
@@ -8846,6 +8935,7 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                             scope_add(&e.global, b);
                         }
                     }
+                    next_form:;
                 }
             }
         }

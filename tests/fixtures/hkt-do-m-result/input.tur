@@ -1,0 +1,95 @@
+;; Phase HKT-P8: do-m with result monad.
+;; Verifies that do-m desugars correctly using Monad.bind on result,
+;; short-circuiting on the first err value.
+;; Multi-binding do-m with cross-lambda captures is tested via direct bind calls
+;; (same approach as hkt-do-m) to avoid the compiler closure-capture type issue.
+
+(defclass Monad [^m]
+  (bind [ma fn] :int))
+
+;; ── Inline result helpers (avoid stdlib dependency for snapshot clarity) ─────
+
+(defn __res_ok [x] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = true; r->ok_val = x; r->err_val = 0;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(defn __res_err [e] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = false; r->ok_val = 0; r->err_val = e;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(defn __res_ok? [r] :bool
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *p =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r;
+  return p != NULL && p->is_ok;
+  ```)
+
+(defn __res_ok-val [r] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *p =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r;
+  return (int)p->ok_val;
+  ```)
+
+(defn __res_err-val [r] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *p =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r;
+  return (int)p->err_val;
+  ```)
+
+;; ── Monad[result]: bind short-circuits on err ────────────────────────────────
+
+(defn __monad_result_bind [ma fn] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)ma;
+  if (!r || !r->is_ok) return (int64_t)(intptr_t)r;
+  return ((int64_t(*)(int64_t))(intptr_t)fn)(r->ok_val);
+  ```)
+
+(definstance Monad [result]
+  (bind [ma fn] (__monad_result_bind ma fn)))
+
+;; ── Tests ────────────────────────────────────────────────────────────────────
+
+(defn main [] :int
+  (do
+    ;; do-m base case: single expression — returned directly
+    (let [r0 (do-m (__res_ok 42))]
+      (do
+        (println (__res_ok? r0))      ;; true
+        (println (__res_ok-val r0)))) ;; 42
+
+    ;; do-m with one binding: ok(3) >>= \x -> ok(x*2) => ok(6)
+    (let [r1 (do-m x (__res_ok 3) (__res_ok (* x 2)))]
+      (do
+        (println (__res_ok? r1))      ;; true
+        (println (__res_ok-val r1)))) ;; 6
+
+    ;; do-m with one binding: err short-circuits
+    (let [r2 (do-m x (__res_err 99) (__res_ok (* x 2)))]
+      (println (__res_ok? r2)))       ;; false
+
+    ;; Chained bind via __monad_result_bind directly (no cross-lambda captures):
+    ;; ok(4) >>= \x -> ok(x*2) = ok(8) >>= \y -> ok(y+1) = ok(9)
+    (let [step1 (__monad_result_bind (__res_ok 4) (fn [x] (__res_ok (* x 2))))]
+      (let [r3 (__monad_result_bind step1 (fn [y] (__res_ok (+ y 1))))]
+        (do
+          (println (__res_ok? r3))      ;; true
+          (println (__res_ok-val r3))))) ;; 9
+
+    ;; Chained bind with first step err: err(7) >>= ... => err(7) (short-circuit)
+    (let [step2 (__monad_result_bind (__res_err 7) (fn [x] (__res_ok (* x 2))))]
+      (let [r4 (__monad_result_bind step2 (fn [y] (__res_ok (+ y 1))))]
+        (do
+          (println (__res_ok? r4))       ;; false
+          (println (__res_err-val r4))))) ;; 7
+
+    0))
