@@ -1294,8 +1294,8 @@ See [backtracking-cloneable-continuations-plan.md](archive/backtracking-cloneabl
   - Decision: `(clone rc-val)` increments the reference count and returns the same pointer (shallow, shared ownership — consistent with Rust's `Rc::clone`). Deep clone of the pointed-to value is explicitly not `rc<T>` clone semantics. When `ref<T>` exists as a heap-allocated type, its `Clone` instance performs a deep clone into a new heap allocation (independent ownership). The distinction is: `rc<T>` clone = share; `ref<T>` clone = copy.
 - [x] Confirm `cloneable-reset` / `cloneable-shift` syntax does not conflict with Phase 18 `reset`/`shift` in the reader or elaborator.
   - Decision: No conflict. Confirmed by inspection of `src/elab.c`: `cloneable-reset` and `cloneable-shift` are already implemented as distinct interned symbols (`sym_cloneable_reset`, `sym_cloneable_shift`) with separate dispatch branches (`elab_cloneable_reset` at line 4439/6106, `elab_cloneable_shift` at line 4457/6107) that are entirely independent of `elab_reset`/`elab_shift`. The reader interns all four as distinct symbols; no ambiguity or conflict exists at any layer.
-- [x] Define error codes TUR-E00YY (non-`Clone` capture) and TUR-E00YZ (`cloneable-shift` outside `cloneable-reset`).
-  - Decision: The next available codes after `TUR_E0013_ORPHAN_INSTANCE` (the current last entry in `src/diag.h`) are assigned as follows: `TUR_E0014_NOT_CLONE` (TUR-E0014) — emitted when a non-`Clone` type is captured inside a `cloneable-reset`/`cloneable-shift` scope; `TUR_E0015_CLONEABLE_SHIFT_OUTSIDE_RESET` (TUR-E0015) — emitted when `cloneable-shift` is used outside any enclosing `cloneable-reset` boundary. Both codes must be added to the `DiagCode` enum in `src/diag.h` and to `diag_code_to_string()`/`diag_explain()` in `src/diag.c` when the B1/B2 elaborator work begins.
+- [x] Define error codes for non-`Clone` capture and `cloneable-shift` outside `cloneable-reset`.
+  - Decision: `TUR_E0014_NOT_CLONE` (TUR-E0014) — emitted when a non-`Clone` type is captured inside a `cloneable-reset`/`cloneable-shift` scope. `TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET` (TUR-E0016) — emitted when `cloneable-shift` is used outside any enclosing `cloneable-reset` boundary. (E0015 is already taken by `TUR_E0015_TYPECLASS_CONSTRAINT_NOT_SATISFIED`.) Both codes must be added to the `DiagCode` enum in `src/diag.h` and to `diag_code_to_string()`/`diag_explain()` in `src/diag.c` in CPS-CL7.
 - [x] Decide whether `stdlib/logic.tur` depends on Phase P2 HAMT (`stdlib/hamt.tur`) for the persistent substitution map, or falls back to an association list.
   - Decision: Use association list for B4 v1. The substitution map `UState` is a singly-linked list of `(LVar . Term)` association pairs; `unify` and `walk` traverse it linearly. No dependency on Phase P2 HAMT. An optimized `(with-hamt-subst ...)` variant backed by `stdlib/hamt.tur` is a deferred follow-on; it will use the same `run-logic` API and require no user-visible changes.
 - [x] Define `--backtrack-depth N` flag design: per-call-site cap, global cap, or both?
@@ -1428,15 +1428,12 @@ These prerequisites must be completed before the remaining B2 implementation tas
 - [ ] Implement deep clone infrastructure for arbitrary types via `Clone` trait dispatch.
   - Required for: `tur_cloneable_cont_clone` to deep copy captured environments.
   - Blocking: The runtime needs to call type-specific clone functions for each captured value. B1 prerequisites (Pair, list, rc, ref types) are complete. Now needs parameterized Clone instances and runtime dispatch via typeclass dictionaries. Full support requires PTC1–PTC3 parameterized instance lookup.
-- [ ] Implement cloneable continuation type tagging in `tur_cont` struct.
-  - Required for: distinguishing cloneable vs one-shot continuations at runtime.
-  - Action: Add `is_cloneable` bool field to `tur_cont` in `src/runtime.h`.
-- [ ] Extend defer mechanism to support `DEFER_SUSPENDED` and `DEFER_REPLAY` modes.
-  - Required for: `DEFER_SUSPENDED` (defer fires when suspension occurs), `DEFER_REPLAY` (defer fires on each replay/resume).
-  - Action: Add `DeferMode` enum (`DEFER_NORMAL`, `DEFER_SUSPENDED`, `DEFER_REPLAY`) and store mode per defer in `src/runtime.h`. Update `tur_defer_add` and `tur_defer_run` in `src/runtime.c`.
+- [x] Implement cloneable continuation type tagging in `tur_cont` struct.
+  - Done: Added `bool is_cloneable` field to `tur_cont` in `src/runtime.h`. `tur_cont_alloc` initialises it to `false`.
+- [x] Extend defer mechanism to support `DEFER_SUSPENDED` and `DEFER_REPLAY` modes.
+  - Done: Added `DeferMode` enum (`DEFER_NORMAL`, `DEFER_SUSPENDED`, `DEFER_REPLAY`) to `src/runtime.h`. Added `DeferMode modes[]` array to `tur_frame`. Updated `tur_frame_push_defer` to record mode; added `tur_frame_push_defer_mode`, `tur_frame_fire_lifo_for_suspend`, `tur_frame_fire_lifo_for_replay`. `tur_frame_fire_chain` fires all modes (full unwind).
 - [ ] Implement CPS transformation pass for cloneable continuations.
-  - Required for: `needs_cloneable_cps` flag and `emit_capture_environment` with cloneable support.
-  - Action: Extend existing CPS pass in `src/cps.c` to handle `EX_CLONEABLE_RESET` and `EX_CLONEABLE_SHIFT` with environment capture that records `clone_fn` and `drop_fn` per binding.
+  - Partial: `cps_expr_contains_cloneable_shift` and `cps_fn_needs_cloneable_transform` added to `src/cps.{c,h}`. Full CPS transformation (stack capture, env serialisation) deferred — requires emit-level changes and deep-clone infrastructure.
 
 ### Phase B2 remaining tasks (Cloneable continuation runtime + CPS)
 - [x] Parse `(cloneable-reset body)` and `(cloneable-shift k expr)` surface forms.
@@ -1447,17 +1444,19 @@ These prerequisites must be completed before the remaining B2 implementation tas
   - Implemented: Added `TY_CLONEABLE_CONT` enum value, `type_cloneable_cont()` constructor, `type_c_name()` case, `type_name()` case, `type_eq()` case, `type_is_send()` case.
 - [x] Define `CloneableContinuation` struct (`tur_cloneable_cont`) in `src/runtime.{c,h}`.
   - Implemented: Added `tur_cloneable_cont` struct and function declarations `tur_cloneable_cont_alloc`, `tur_cloneable_cont_clone`, `tur_cloneable_cont_resume`, `tur_cloneable_cont_drop`.
-- [ ] Implement `tur_cloneable_cont_clone`, `tur_cloneable_cont_resume`, `tur_cloneable_cont_drop` in `src/runtime.c`.
-  - Deferred: Runtime implementation requires deep clone of captured environment. Blocked by Clone trait infrastructure for arbitrary types.
-- [ ] One-shot `tur_cont_resume` aborts with diagnostic if called on a `is_cloneable = true` continuation.
-  - Deferred: Requires cloneable continuation type checking at runtime.
-- [ ] Implement `DEFER_SUSPENDED` and `DEFER_REPLAY` defer modes; update `src/runtime.{c,h}`.
-  - Deferred: Requires cloneable continuation integration with defer system.
-- [ ] Implement `needs_cloneable_cps` in `src/cps.{c,h}`.
-  - Deferred: Requires full CPS transformation for cloneable continuations.
+- [x] Implement `tur_cloneable_cont_clone`, `tur_cloneable_cont_resume`, `tur_cloneable_cont_drop` in `src/runtime.c`.
+  - Done: `tur_cloneable_cont_alloc`, `tur_cloneable_cont_clone` (v1 shallow — env pointer not deep-cloned), `tur_cloneable_cont_resume` (fires DEFER_REPLAY defers, then calls cont_fn), `tur_cloneable_cont_drop` (fires DEFER_SUSPENDED defers, frees struct).
+  - Note: `tur_cloneable_cont_clone` is a v1 shallow clone; deep clone via typeclass dispatch is deferred.
+- [x] One-shot `tur_cont_resume` aborts with diagnostic if called on a `is_cloneable = true` continuation.
+  - Done: `tur_cont_resume` checks `cont->is_cloneable` and calls `abort()` with a clear diagnostic message.
+- [x] Implement `DEFER_SUSPENDED` and `DEFER_REPLAY` defer modes; update `src/runtime.{c,h}`.
+  - Done: See B2 prerequisites above.
+- [x] Implement `needs_cloneable_cps` in `src/cps.{c,h}`.
+  - Done: `cps_expr_contains_cloneable_shift` and `cps_fn_needs_cloneable_transform` in `src/cps.{c,h}`. `cps_mark_expr` now calls `mark_fn_needs_cloneable_cps` (sets `may_capture`) for functions containing cloneable shift.
 - [ ] Implement `emit_capture_environment(..., cloneable=true)` in `src/cps.{c,h}`: record `clone_fn`/`drop_fn` per binding.
-  - Deferred: Requires CPS transformation infrastructure for cloneable continuations.
-- [ ] Add `tests/fixtures/backtrack/cloneable-basic.tur`.
+  - Deferred: Requires CPS transformation infrastructure for cloneable continuations (full stack capture).
+- [x] Add `tests/fixtures/backtrack/cloneable-basic.tur`.
+  - Done: `tests/fixtures/cloneable-basic/` passes (v1 simplified: cloneable-shift calls fn(val), outputs 15 and 42).
 - [ ] Add `tests/fixtures/backtrack/cloneable-multi-resume.tur`.
 - [ ] Add `tests/fixtures/backtrack/cloneable-defer-suspend.tur`.
 - [ ] Add `tests/fixtures/backtrack/cloneable-defer-replay.tur`.
@@ -1465,6 +1464,239 @@ These prerequisites must be completed before the remaining B2 implementation tas
 - [ ] Add `tests/fixtures/backtrack/cloneable-rc.tur`.
 - [ ] Add negative fixture `tests/fixtures/backtrack/cloneable-shift-outside-reset.tur`.
 - [ ] Add codegen snapshots for cloneable continuation lowering.
+
+---
+
+### Phase B2: Full CPS pass for cloneable continuations
+
+The tasks below implement the full CPS transformation required for multi-shot
+cloneable continuations.  The B2 prerequisites (runtime structs, DeferMode,
+`cps_fn_needs_cloneable_transform` marker) are already in place.  The tasks
+must be completed in roughly the order listed since each builds on the previous.
+
+**Dependency chain:**
+CPS-CL1 (liveness) → CPS-CL2 (env struct) → CPS-CL3 (split) →
+CPS-CL4 (reset emitter) + CPS-CL5 (shift emitter) →
+CPS-CL6 (deep clone) → CPS-CL7 (elaborator checks) → CPS-CL8 (call/cc*) → CPS-CL9 (fixtures).
+
+#### CPS-CL1 — Liveness analysis at cloneable-shift sites
+
+- [ ] Implement `cps_compute_live_at_shift(Arena *a, Expr *reset_body)` in `src/cps.c`.
+  - For each `EX_CLONEABLE_SHIFT` node within a reset block, compute the set of
+    `Binding *` values that are *live after* the shift point — i.e., appear free
+    in any code that runs after the shift within the enclosing `EX_CLONEABLE_RESET`.
+  - Standard approach: walk the expression tree twice.
+    - Pass 1 (use-def): build a set of all `EX_VAR` bindings referenced in the
+      subtree that follows each shift.
+    - Pass 2: annotate the shift node with the intersection of "defined before
+      the shift" and "used after the shift."
+  - Output: add `Binding **live_captures` and `uint32_t n_live_captures` fields
+    to the `cloneable_shift_` member of `Expr.as` in `src/expr.h` (arena-allocated).
+  - Call `cps_compute_live_at_shift` from `cps_transform` for any program that
+    `cps_fn_needs_cloneable_transform` returns true for.
+
+#### CPS-CL2 — Per-shift-site environment struct and clone/drop helpers
+
+- [ ] Implement `emit_cloneable_env_structs(EmitCtx *ctx, Buf *out, const Expr *program)` in `src/emit.c`.
+  - Walk the program for every `EX_CLONEABLE_SHIFT` node that has `n_live_captures > 0`.
+  - For each such node (identified by a stable sequential id `__clenv_<id>`):
+    - Emit a C struct:
+      ```c
+      typedef struct __clenv_<id> {
+          int64_t <capture_name>; /* one field per live binding */
+          …
+      } __clenv_<id>;
+      ```
+    - Emit a deep-clone helper:
+      ```c
+      static __clenv_<id> *__clenv_<id>_clone(const __clenv_<id> *src) {
+          __clenv_<id> *dst = malloc(sizeof(__clenv_<id>));
+          /* for each field, call the Clone typeclass method for that type */
+          dst-><name> = <clone_dispatch>(src-><name>);
+          …
+          return dst;
+      }
+      ```
+      Use `typeclass_env_lookup_instance` (already wired in `src/emit.c`) to find
+      the `Clone` instance for each captured type.  For primitive types (`int`,
+      `bool`, `cstr`) the identity function is correct.
+    - Emit a drop helper `__clenv_<id>_drop(__clenv_<id> *e)` (currently a no-op
+      for primitives; calls user Drop when that trait is implemented).
+  - The id must be deterministic (e.g. `<source_line>_<source_col>` or a
+    per-emit counter reset at the start of each compilation) so that `expected.c`
+    snapshots remain stable across unrelated changes.
+
+#### CPS-CL3 — Continuation function splitting at shift sites
+
+- [ ] Implement `emit_continuation_fn_for_shift` in `src/emit.c`.
+  - For each `EX_CLONEABLE_SHIFT` inside an `EX_CLONEABLE_RESET`, the code that
+    follows the shift (the "rest of the reset body") becomes a new forward-declared
+    C function:
+    ```c
+    static int64_t __cont_<id>(void *env, int64_t value);
+    ```
+  - The function body:
+    1. Casts `env` to `__clenv_<id> *e`.
+    2. Re-binds each captured variable: `int64_t <name> = e-><name>;`.
+    3. Executes the original post-shift expression tree (emitted with the
+       re-bound variables in scope).
+  - For nested shifts (shift inside the continuation of another shift), each
+    shift gets its own continuation function, chained.
+  - Emit these helper functions in a forward-declaration section before the
+    function that contains the reset, to avoid use-before-definition errors.
+  - Update `cps_mark_expr` / `cps_transform` to record the post-shift subtree
+    on each `EX_CLONEABLE_SHIFT` node; add an `Expr *cont_body` field to the
+    `cloneable_shift_` member in `src/expr.h`.
+
+#### CPS-CL4 — cloneable-reset emitter: setjmp boundary + reset context
+
+- [ ] Add `tur_cloneable_reset_ctx` to `src/runtime.h`:
+  ```c
+  typedef struct tur_cloneable_reset_ctx {
+      jmp_buf jmp;
+      tur_cloneable_cont *result; /* set by shift before longjmp */
+      struct tur_cloneable_reset_ctx *prev; /* for nested resets */
+  } tur_cloneable_reset_ctx;
+  ```
+  Use a thread-local (or explicit stack parameter) `tur_cloneable_reset_ctx *tur_current_reset_ctx`.
+  Declare `TUR_THREAD_LOCAL tur_cloneable_reset_ctx *tur_current_reset_ctx;` in `src/runtime.h`
+  and define it in `src/runtime.c`.  (Use `_Thread_local` / `__thread` per platform.)
+
+- [ ] Update `EX_CLONEABLE_RESET` emission in `src/emit.c`:
+  ```c
+  /* push a new reset context */
+  tur_cloneable_reset_ctx __rctx_<id>;
+  __rctx_<id>.result = NULL;
+  __rctx_<id>.prev = tur_current_reset_ctx;
+  tur_current_reset_ctx = &__rctx_<id>;
+  int64_t <result>;
+  if (setjmp(__rctx_<id>.jmp) == 0) {
+      <result> = <body>;         /* normal path */
+  } else {
+      /* shift fired — __rctx_<id>.result is the tur_cloneable_cont* */
+      <result> = (int64_t)(intptr_t)__rctx_<id>.result;
+  }
+  tur_current_reset_ctx = __rctx_<id>.prev; /* pop context */
+  ```
+  The reset expression's value is either the body's result (no shift) or the
+  captured continuation pointer (shift fired), cast to `int64_t`.
+
+  Also emit `tur_current_reset_ctx` as a forward declaration in the generated
+  C preamble alongside the other runtime helpers.
+
+#### CPS-CL5 — cloneable-shift emitter: pack env, allocate cont, longjmp
+
+- [ ] Update `EX_CLONEABLE_SHIFT` emission in `src/emit.c`:
+  1. Evaluate `k_fn` (the handler function that will receive the continuation).
+  2. Pack live-capture bindings into a heap-allocated `__clenv_<id>`:
+     ```c
+     __clenv_<id> *__env_<id> = malloc(sizeof(__clenv_<id>));
+     __env_<id>-><name> = <binding_value>;
+     …
+     ```
+  3. Allocate a `tur_cloneable_cont`:
+     ```c
+     tur_cloneable_cont *__cont_<id> = tur_cloneable_cont_alloc(NULL, 0);
+     __cont_<id>->cont_fn = __cont_fn_<id>;   /* from CPS-CL3 */
+     __cont_<id>->env     = __env_<id>;
+     __cont_<id>->clone_env = (void *(*)(const void *))__clenv_<id>_clone;
+     __cont_<id>->drop_env  = (void (*)(void *))__clenv_<id>_drop;
+     ```
+     (The `clone_env`/`drop_env` fields are added in CPS-CL6.)
+  4. Fire `DEFER_SUSPENDED` defers on any currently active frames:
+     ```c
+     if (tur_current_frame) tur_frame_fire_lifo_for_suspend(tur_current_frame);
+     ```
+  5. Store the continuation in the reset context and longjmp:
+     ```c
+     tur_current_reset_ctx->result = __cont_<id>;
+     longjmp(tur_current_reset_ctx->jmp, 1);
+     ```
+  - The `k_fn` argument in the surface syntax is passed `__cont_<id>` cast to
+    `int64_t`; the shift expression's value is whatever `k_fn` returns.
+  - Add `tur_current_frame` as a thread-local frame pointer (the innermost active
+    `tur_frame *`) to `src/runtime.h`; maintain it in the emitted frame init/exit
+    code in `src/emit.c`.
+
+#### CPS-CL6 — Deep clone via typeclass dispatch in tur_cloneable_cont_clone
+
+- [ ] Add `clone_env` and `drop_env` function pointer fields to `tur_cloneable_cont`
+  in `src/runtime.h`:
+  ```c
+  void *(*clone_env)(const void *env); /* deep-clone the captured env */
+  void  (*drop_env)(void *env);        /* release the captured env */
+  ```
+- [ ] Update `tur_cloneable_cont_clone` in `src/runtime.c` to use them:
+  ```c
+  clone->env = cont->clone_env ? cont->clone_env(cont->env) : cont->env;
+  clone->clone_env = cont->clone_env;
+  clone->drop_env  = cont->drop_env;
+  ```
+- [ ] Update `tur_cloneable_cont_drop` to call `drop_env` before freeing:
+  ```c
+  if (cont->drop_env && cont->env) cont->drop_env(cont->env);
+  ```
+- [ ] Update `tur_cloneable_cont_alloc` (or add `tur_cloneable_cont_alloc_with_fns`)
+  to accept and store `clone_env` / `drop_env`.
+
+#### CPS-CL7 — Elaborator: check_cloneable_capture and shift-outside-reset diagnostic
+
+- [ ] Add `TUR_E0014_NOT_CLONE` to `DiagCode` in `src/diag.h`; add the string
+  `"TUR-E0014"` and an `--explain` entry in `src/diag.c`.
+- [ ] Add `TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET` to `DiagCode` in `src/diag.h`
+  (E0015 is already taken by `TUR_E0015_TYPECLASS_CONSTRAINT_NOT_SATISFIED`);
+  add string and `--explain` entry in `src/diag.c`.
+  - Note: update the doc note at line ~1298 that incorrectly plans E0015 for this.
+- [ ] Implement `check_cloneable_capture(Elab *e, const Expr *shift_expr)` in
+  `src/elab.c`:
+  - Called from `elab_cloneable_shift` after CPS-CL1 has annotated live captures.
+  - For each live capture binding, look up a `Clone` instance via
+    `typeclass_env_lookup_instance`; if none found, emit `TUR-E0014`.
+- [ ] Add reset-boundary depth tracking to `Elab`:
+  - Add `int cloneable_reset_depth;` to the `Elab` struct.
+  - Increment in `elab_cloneable_reset`, decrement on exit.
+  - In `elab_cloneable_shift`, check `e->cloneable_reset_depth == 0` and emit
+    `TUR-E0016` if so.
+- [ ] Remove the `B1` deferred stub for `check_cloneable_capture` (line ~1405) once
+  this is implemented and mark it `[x]`.
+
+#### CPS-CL8 — Complete call/cc* desugaring
+
+- [ ] Complete `elab_call_cc_star` in `src/elab.c` (currently emits "not yet
+  implemented" error).
+  - Desugar `(call/cc* f)` to `(cloneable-reset (cloneable-shift (fn [k] (f k)) 0))`.
+  - `k` receives a `tur_cloneable_cont*` cast to `int64_t`, representing the
+    current continuation up to the enclosing reset.
+  - Requires CPS-CL4 and CPS-CL5 to be complete so that `cloneable-shift`
+    actually captures the continuation rather than just calling `k`.
+  - Add a `tests/fixtures/call-cc-star/` fixture verifying that `(call/cc* f)`
+    produces a cloneable continuation that `f` can resume multiple times.
+
+#### CPS-CL9 — Integration test fixtures (require CPS-CL1–CPS-CL5 complete)
+
+These fixtures are already listed under B2 remaining tasks; they are blocked by
+the full CPS pass above.  Update the task entries to point to the new fixture
+paths once the CPS pass is working.
+
+- [ ] `tests/fixtures/cloneable-multi-resume/` — resume the same continuation twice:
+  ```scheme
+  (defn main [] :int
+    (let [k (cloneable-reset (cloneable-shift (fn [k] k) 0))]
+      (println (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) 10))
+      (println (tur_cloneable_cont_resume k 20)))
+    0)
+  ```
+  Expected: two independent results (10, then 20, or via the continuation body).
+- [ ] `tests/fixtures/cloneable-defer-suspend/` — verify `DEFER_SUSPENDED` fires on capture, not resume.
+- [ ] `tests/fixtures/cloneable-defer-replay/` — verify `DEFER_REPLAY` fires once per resume.
+- [ ] `tests/fixtures/cloneable-ref/` — cloneable continuation capturing a `Ref` value;
+  each clone has an independent copy via `Clone [Ref]`.
+- [ ] `tests/fixtures/cloneable-rc/` — cloneable continuation capturing an `rc` value;
+  each clone increments the refcount via `Clone [ptr<void>]`.
+- [ ] `tests/fixtures/errors/cloneable-shift-outside-reset/` — negative fixture for TUR-E0016.
+- [ ] `tests/fixtures/errors/cloneable-non-clone-capture/` — negative fixture for TUR-E0014.
+- [ ] Add `expected.c` codegen snapshot for at least one of the above (e.g.
+  `cloneable-multi-resume`) to lock in the lowered C output.
 
 ### Phase B3 prerequisites
 

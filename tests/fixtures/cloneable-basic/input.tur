@@ -1,0 +1,21 @@
+;; Phase B2: Cloneable continuations — basic test (v1 simplified semantics)
+;;
+;; In v1, cloneable-reset evaluates its body directly, and
+;; (cloneable-shift fn value) calls fn(value).  Full multi-shot resumption
+;; requires the CPS transformation pass (deferred).
+
+(defn add10 [v] :int (+ v 10))
+
+;; cloneable-shift calls add10(5) = 15; cloneable-reset returns the result.
+(defn test-basic [] :int
+  (cloneable-reset
+    (cloneable-shift add10 5)))
+
+;; cloneable-reset with no shift just evaluates its body.
+(defn test-reset-passthrough [] :int
+  (cloneable-reset 42))
+
+(defn main [] :int
+  (println (test-basic))
+  (println (test-reset-passthrough))
+  0)
