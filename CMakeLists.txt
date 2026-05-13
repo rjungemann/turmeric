@@ -43,6 +43,12 @@ add_test(
   COMMAND bash tests/turi/eval-test.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Phase S1: REPL smoke tests (multi-line, :type, :doc, :reload, history)
+add_test(
+  NAME tur_repl_smoke
+  COMMAND bash tests/turi/repl-smoke.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 add_test(
   NAME tur_eval_basic
   COMMAND "${CMAKE_BINARY_DIR}/tur_eval_basic"
@@ -51,7 +57,7 @@ add_test(
 
 # Make sure tur is built before any test is run
 set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
-                     tur_repl_tests
+                     tur_repl_tests tur_repl_smoke
   PROPERTIES DEPENDS tur
 )
 set_tests_properties(tur_eval_basic

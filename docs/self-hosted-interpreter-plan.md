@@ -232,16 +232,16 @@ arithmetic, `let`, `if`, `do`, `fn`, and `defn`.
 
 **Exit criterion:** Multi-line input, history, `:type`, `:doc`, and `:quit` work.
 
-- [ ] Readline/libedit integration (via FFI)
-- [ ] Multi-line continuation detection (open parens)
-- [ ] REPL meta-commands: `:help`, `:quit`, `:type <expr>`, `:doc <sym>`,
+- [x] Readline/libedit integration (via FFI)
+- [x] Multi-line continuation detection (open parens)
+- [x] REPL meta-commands: `:help`, `:quit`, `:type <expr>`, `:doc <sym>`,
   `:reload <file>`
-- [ ] Pretty-printer for `TuriValue`
-- [ ] Colour diagnostics (reuse `src/diag.c`)
-- [ ] Persistent history file (`~/.tur_history`)
+- [x] Pretty-printer for `TuriValue`
+- [x] Colour diagnostics (reuse `src/diag.c`)
+- [x] Persistent history file (`~/.tur_history`)
 
 **Fixtures:**
-- [ ] `tests/turi/repl-smoke.sh` — scripted REPL session test
+- [x] `tests/turi/repl-smoke.sh` — scripted REPL session test
 
 ---
 
