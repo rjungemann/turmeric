@@ -13,6 +13,7 @@ extern void *malloc(size_t);
 extern void *calloc(size_t, size_t);
 extern void free(void *);
 extern void abort(void);
+extern int atexit(void (*)(void));
 extern void *memset(void *, int, size_t);
 extern void *memmove(void *, const void *, size_t);
 extern void *memcpy(void *, const void *, size_t);

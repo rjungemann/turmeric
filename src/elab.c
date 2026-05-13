@@ -3619,11 +3619,17 @@ static Expr *elab_defer(Elab *e, const Form *call) {
         diag_emit(DIAG_ERROR, call->span, "defer requires an expression");
         return NULL;
     }
-    /* Defer is only valid inside scope-introducing forms */
+    /* Phase M5: module-level defer (top-level scope) is allowed.
+     * The body runs at process exit via atexit(). No captures — at global
+     * scope all referenced names are already global bindings. */
     if (e->scope == &e->global) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "defer is not allowed at module top level");
-        return NULL;
+        Expr *body = elab_form(e, call->as.list.items[1]);
+        if (!body) return NULL;
+        Expr *out = expr_new(e->arena, EX_DEFER, TYPE_NIL, call->span);
+        out->as.defer_.body       = body;
+        out->as.defer_.captures   = NULL;
+        out->as.defer_.n_captures = 0;
+        return out;
     }
     /* Elaborate the body expression */
     Expr *body = elab_form(e, call->as.list.items[1]);
