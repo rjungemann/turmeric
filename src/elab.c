@@ -7150,6 +7150,10 @@ static Expr *elab_defmodule(Elab *e, const Form *call) {
                 diag_emit(DIAG_ERROR, call->span,
                           "exported symbol '%s' is not defined in this module",
                           mod->exports[j]->name);
+                diag_emit(DIAG_NOTE, call->span,
+                          "ensure '%s' has a matching (defn ...) or (defmacro ...) inside the (defmodule %s ...) body, "
+                          "and check for typos in the (export ...) list",
+                          mod->exports[j]->name, mod->name->name);
                 e->current_module_name = NULL;
                 e->current_module = NULL;
                 return NULL;
@@ -7185,6 +7189,9 @@ static Binding *elab_lookup_sym(Elab *e, const Symbol *sym, Span span, bool *had
             && !b->is_exported) {
             diag_emit(DIAG_ERROR, span,
                       "symbol '%s' is private to module '%s'",
+                      sym->name, b->defining_module_name->name);
+            diag_emit(DIAG_NOTE, b->span,
+                      "defined here; add '%s' to module '%s''s (export ...) list to expose it",
                       sym->name, b->defining_module_name->name);
             *had_error = true;
             return NULL;
@@ -7245,9 +7252,23 @@ static Binding *elab_lookup_sym(Elab *e, const Symbol *sym, Span span, bool *had
                     if (loaded->exports[m]->name == sym_key)
                         return loaded->exports[m];
                 }
+                /* M7: check if the symbol IS defined in that module but private. */
+                Binding *priv = NULL;
+                for (uint32_t k = 0; k < e->global.n; k++) {
+                    Binding *gb = e->global.bindings[k];
+                    if (gb->name == sym_key &&
+                        gb->defining_module_name == imp->module_name) {
+                        priv = gb; break;
+                    }
+                }
                 diag_emit(DIAG_ERROR, span,
                           "symbol '%s' is not exported from module '%s'",
                           sym_key->name, imp->module_name->name);
+                if (priv) {
+                    diag_emit(DIAG_NOTE, priv->span,
+                              "'%s' is defined here but is private; add it to module '%s''s (export ...) list",
+                              sym_key->name, imp->module_name->name);
+                }
                 *had_error = true;
                 return NULL;
             }
@@ -7273,9 +7294,22 @@ static Binding *elab_lookup_sym(Elab *e, const Symbol *sym, Span span, bool *had
                     if (loaded->exports[m]->name == sym_key)
                         return loaded->exports[m];
                 }
+                /* M7: check if the symbol IS defined in that module but private. */
+                Binding *priv = NULL;
+                for (uint32_t k = 0; k < e->global.n; k++) {
+                    Binding *gb = e->global.bindings[k];
+                    if (gb->name == sym_key && gb->defining_module_name == mn) {
+                        priv = gb; break;
+                    }
+                }
                 diag_emit(DIAG_ERROR, span,
                           "symbol '%s' is not exported from module '%s'",
                           sym_key->name, mn->name);
+                if (priv) {
+                    diag_emit(DIAG_NOTE, priv->span,
+                              "'%s' is defined here but is private; add it to module '%s''s (export ...) list",
+                              sym_key->name, mn->name);
+                }
                 *had_error = true;
                 return NULL;
             }
@@ -10313,6 +10347,8 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                 if (i != stdlib_prefix) {
                     diag_emit(DIAG_ERROR, head->span,
                               "defmodule must be the first form in the file");
+                    diag_emit(DIAG_NOTE, forms[stdlib_prefix]->span,
+                              "this form comes before defmodule; move it inside the defmodule body or below it");
                     rc = -1;
                 }
                 break; /* only check the first occurrence */
