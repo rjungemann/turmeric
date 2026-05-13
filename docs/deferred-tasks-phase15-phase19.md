@@ -181,8 +181,11 @@ These prerequisites unblock the remaining deferred items in Phase H5 and H6. The
 - [x] Implement `kind_of_type_app(Type *fn_type, Type *arg_type, Diag *d) → Kind` in `src/kind_check.c`.
   - `fn_type` must have `KIND_ARROW` or `KIND_ARROW2`; strip one `* ->` level and return the remainder. Emit `TUR_E0012_KIND_MISMATCH` if `fn_type` has `KIND_STAR` (cannot apply a `*` type).
   - Implemented: `kind_of_type_app()` in `src/kind_check.c` (line 154). `KIND_ARROW` fn → `KIND_STAR` result; `KIND_ARROW2` fn → `KIND_ARROW` result; `KIND_STAR` fn → emits `TUR_E0012_KIND_MISMATCH` and returns `KIND_STAR`.
-- [x] Decide and document type-level application surface syntax: `(type-app F A)` at type-annotation positions vs. `(F A)` as sugar for the same. Record decision here before implementing.
-  - Decision: `(type-app F A)` is the canonical form at type-annotation positions. `(F A)` sugar is not yet implemented. `TY_APP` nodes are created internally by the kind checker during kind-check pass. Full surface syntax parsing of `(type-app F A)` as a special form is deferred to a follow-on task once partial application is promoted off the deferred list.
+- [x] Decide and document type-level application surface syntax: `(type-app F A)` is the canonical syntax at type-annotation positions. `(F A)` as sugar is deferred to v2.
+- [x] Add `type_app()` helper function in `src/types.c` to construct TY_APP nodes.
+- [x] Implement `elab_type_app()` in `src/elab.c` to parse `(type-app F A)` syntax.
+- [x] Add fixture `hkt-type-app-kind.tur` verifying that a partially-applied two-argument type constructor has kind `* -> *` (advisory check in v1; kind mismatch emits `TUR-E0012`).
+- [ ] Extend type argument parser in `elab_definstance` to support TY_APP in type positions (e.g., `[result int]`). _BLOCKS: H5 partial application._
 - [x] Wire `TY_APP` into `type_c_name()` in `src/types.c` so it emits a valid C representation (opaque `int64_t` in v1, same as `TY_STRUCT`).
   - Implemented: `type_c_name()` in `src/types.c` returns `"int64_t"` for `TY_APP` (line 434–436), consistent with `TY_STRUCT` opaque handle semantics.
 - [x] Add fixture `hkt-type-app-kind.tur` verifying that a partially-applied two-argument type constructor has kind `* -> *` (advisory check in v1; kind mismatch emits `TUR-E0012`).
@@ -192,15 +195,15 @@ These prerequisites unblock the remaining deferred items in Phase H5 and H6. The
 - [x] Decide and document recursive type binder syntax before implementing.
   - Recommendation: `(defrec Name [params] body)` where `Name` may appear in `body`. Example: `(defrec Fix [^f] (Fix (^f (Fix ^f))))`. Record final decision here.
   - Decision: `(defrec Name [params])` syntax adopted. The body expression is accepted in v1 but not evaluated for kind correctness; `TY_REC` types are kind `* -> *` (KIND_ARROW). Full body evaluation is deferred.
+- [x] Decide and document recursive type binder syntax.
+  - Decision: `(defrec Name [params] body)` where `Name` may appear in `body`. Example: `(defrec Fix [^f] (Fix (^f (Fix ^f))))`.
 - [x] Implement `TY_REC` node in `src/types.h`: stores a binding name and a body `Type *` in which the name is bound. Add `type_rec_unfold(Type *t) → Type *` (one-step unrolling without diverging).
-  - Implemented: `TY_REC` added to `TypeKind` enum in `src/types.h` (line 70). Node layout: `const char *name` and `Type *body` in `Type.as.rec`. `type_rec_unfold()` in `src/types.c` (line 447) returns the body pointer (v1: no substitution, `NULL` if body not set). `TY_REC` is move-only (`type_is_copy` returns false).
 - [x] Add occurs-check in `kind_check_pass` for `TY_REC` nodes to prevent infinite kind-inference loops.
   - Track a `seen_rec_names` set (symbol names) during kind inference; emit an error and stop when the same `TY_REC` name is encountered recursively before resolution.
-  - Implemented: `rec_name_occurs_unguarded()` helper in `src/kind_check.c` (line 178) walks a type tree and returns `true` if a given `TY_REC` binding name appears in an unguarded position (not under a `TY_APP`). The kind-check pass calls this after resolving a `TY_REC` body binding and emits `TUR_E0012_KIND_MISMATCH` on unguarded self-recursion.
-- [x] Add `elab_defrec` in `src/elab.c` that registers the recursive type binding in the type environment before walking the body.
-  - Implemented: `elab_defrec()` in `src/elab.c` (line 7558). Parses `(defrec Name [params])`, registers `TY_REC` type with `KIND_ARROW` in the type environment, and returns an `EX_TYPE_DEF` node with no runtime effect.
-- [x] Add fixture `hkt-defrec-fix.tur` declaring `Fix` and verifying it kind-checks (runtime evaluation not required; kind correctness in v1 is sufficient).
-  - Added: `tests/fixtures/hkt-defrec-fix/` — declares `(defrec Fix [^f])` and calls `(defn main [] :int 0)`; verifies `defrec` elaboration succeeds with kind `* -> *`.
+- [x] Add `elab_defrec` in `src/elab.c` that registers the recursive type binding in the type environment. Body is parsed but not fully elaborated in v1.
+- [x] Add fixture `hkt-defrec-fix.tur` declaring `Fix` and verifying it compiles (runtime evaluation and full kind-checking deferred to v2).
+- [ ] Extend type expression parser to support recursive type references (e.g., `Fix` appearing in its own body). _BLOCKS: H5 Fix/Free monad._
+- [ ] Add fixture `hkt-defrec-fix-with-body.tur` with full recursive definition.
 
 #### HKT-P3 — Multi-capture closures (blocks H6 `for` comprehension)
 - [x] Audit `src/emit.c` closure emission: document the current single-capture limitation (one `env0` field) and the struct layout change required for multi-capture environments.
@@ -491,14 +494,22 @@ See [hkt-implementation-plan.md](hkt-implementation-plan.md) for the complete ro
   - `tests/fixtures/hkt-fn-constraints/` — multiple `^`-kind-vars (`^f ^g`) all erased; PASS.
   - `tests/fixtures/errors/kinds-kind-variable/` — updated to reflect H4 completion (`:a` return type error); PASS.
 
-#### H5 — Advanced kinds ✅ DONE
+#### H5 — Advanced kinds 🟡 PARTIAL
 - [x] Support binary type constructors (`* -> * -> *`) — `^^f` syntax in `defclass`; `elab_definstance` checks for KIND_ARROW2; `Bifunctor` typeclass in stdlib.
-- [ ] Implement partial application: `(result int) : * -> *`. _(deferred)_
+- [ ] Implement partial application: `(result int) : * -> *`. _(deferred — requires type expression parser in elab_definstance)_
+  - `type-app` syntax implemented in `src/elab.c`.
+  - TY_APP infrastructure complete (TypeKind, kind_of_type_app, type_app(), type_c_name).
+  - Remaining: Allow `(result int)` syntax directly in type annotations (without `type-app` wrapper).
 - [x] Implement kind aliases (`defkind`) — parsed and ignored (no-op); informational only.
-- [ ] Support higher-kinded data types (e.g., `Fix`, `Free` monad). _(deferred)_
+- [ ] Support higher-kinded data types (e.g., `Fix`, `Free` monad). _(deferred — requires type expression parser for defrec body)_
+  - TY_REC infrastructure complete (TypeKind, type_rec_unfold, elab_defrec, occurs-check).
+  - `defrec` syntax accepts optional body argument.
+  - Remaining: Parse and elaborate recursive type body expressions.
 - [x] Add fixtures: `hkt-binary-ctor`, `hkt-kind-alias`, `hkt-kind-mismatch-arrow2` — all PASS.
 - [x] CT evaluator: `first`/`second`/`rest` accept F_VEC as well as F_LIST.
 - [x] `do-m` macro added to `stdlib/macros.tur` (list-based approach, no quasiquote).
+- [x] Add `type-app` fixture (`tests/fixtures/type-app/`).
+- [x] Add `hkt-defrec-fix-with-body` fixture (placeholder for recursive type body parsing).
 
 #### H6 — Integration & polish ✅ DONE
 - [x] Write user-facing HKT guide: `docs/hkt-guide.md`.
