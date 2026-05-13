@@ -1,0 +1,104 @@
+;; hkt-for-comprehension: test the (for [...] body) monadic comprehension macro.
+;;
+;; The `for` macro desugars flat binding vectors to .bind/.pure/.empty chains:
+;;   (for [x coll] body)               => (.bind coll (fn [x] (.pure body)))
+;;   (for [x coll :when pred] body)    => (.bind coll (fn [x] (if pred (.pure body) (.empty x))))
+;;   (for [x c1 y c2] body)            => (.bind c1 (fn [x] (.bind c2 (fn [y] (.pure body)))))
+;;
+;; Tests use the option monad (single-instance dispatch is stable).
+
+;;; ── Typeclass declarations ────────────────────────────────────────────────
+
+(defclass Applicative [^f]
+  (pure [a] :int))
+
+(defclass Monad [^m]
+  (bind [m f] :int))
+
+(defclass Alternative [^f]
+  (empty [a] :int)
+  (alt-or [a b] :int))
+
+;;; ── Option helpers (inline C) ─────────────────────────────────────────────
+
+(defn __opt_some [v] :int
+  ```c
+  struct { bool is_some; int64_t value; } *p = malloc(sizeof(*p));
+  p->is_some = true; p->value = v;
+  return (int64_t)(intptr_t)p;
+  ```)
+
+(defn __opt_none [] :int
+  ```c
+  return 0;
+  ```)
+
+(defn __opt_bind [m f] :int
+  ```c
+  struct { bool is_some; int64_t value; } *p =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)m;
+  if (!p || !p->is_some) return 0;
+  return ((int64_t(*)(int64_t))(intptr_t)f)(p->value);
+  ```)
+
+(defn __opt_pure [a] :int (__opt_some a))
+
+(defn __opt_alt_or [a b] :int
+  ```c
+  struct { bool is_some; int64_t value; } *p =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)a;
+  return (p && p->is_some) ? a : b;
+  ```)
+
+(defn __opt_is_some [m] :int
+  ```c
+  struct { bool is_some; int64_t value; } *p =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)m;
+  return (p && p->is_some) ? 1 : 0;
+  ```)
+
+(defn __opt_val [m] :int
+  ```c
+  struct { bool is_some; int64_t value; } *p =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)m;
+  return p->value;
+  ```)
+
+;;; ── Option typeclass instances ────────────────────────────────────────────
+
+(definstance Applicative [option]
+  (pure [a] (__opt_pure a)))
+
+(definstance Monad [option]
+  (bind [m f] (__opt_bind m f)))
+
+(definstance Alternative [option]
+  (empty [_] (__opt_none))
+  (alt-or [a b] (__opt_alt_or a b)))
+
+;;; ── Tests ─────────────────────────────────────────────────────────────────
+
+(defn main [] :int
+  ;; §7-T1: basic for — single binding, no guard
+  ;; (for [x (some 5)] (* x 2)) => some(10)
+  (let [r1 (for [x (__opt_some 5)] (* x 2))]
+    (println (= 1 (__opt_is_some r1)))    ;; true
+    (println (__opt_val r1)))             ;; 10
+
+  ;; §7-T2: none propagates through bind
+  ;; (for [x none] (* x 2)) => none
+  (let [r2 (for [x (__opt_none)] (* x 2))]
+    (println (= 0 (__opt_is_some r2))))   ;; true
+
+  ;; §7-T3: :when guard passes — predicate is true
+  ;; (for [x (some 5) :when (> x 3)] x) => some(5)
+  (let [r3 (for [x (__opt_some 5) :when (> x 3)] x)]
+    (println (= 1 (__opt_is_some r3)))    ;; true
+    (println (__opt_val r3)))             ;; 5
+
+  ;; §7-T4: :when guard fails — predicate is false, returns empty
+  ;; (for [x (some 2) :when (> x 3)] x) => none
+  (let [r4 (for [x (__opt_some 2) :when (> x 3)] x)]
+    (println (= 0 (__opt_is_some r4))))   ;; true
+
+  0)

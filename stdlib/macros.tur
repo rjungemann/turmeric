@@ -62,47 +62,51 @@
 ;;; SINCE: Phase HKT H7
 ;; for: monadic comprehension with guards
 ;;
-;; Syntax:
-;;   (for [x coll] body)                => (.bind coll (fn [x] (.pure body)))
-;;   (for [x coll :when pred] body)     => (.bind coll (fn [x] (if pred (.pure body) (.empty))))
-;;   (for [x coll1 y coll2] body)       => (.bind coll1 (fn [x] (.bind coll2 (fn [y] (.pure body)))))
+;; Syntax (flat binding vector — variables and collections alternate):
+;;   (for [x coll] body)
+;;     => (.bind coll (fn [x] (.pure body)))
+;;   (for [x coll :when pred] body)
+;;     => (.bind coll (fn [x] (if pred (.pure body) (.empty x))))
+;;   (for [x coll1 y coll2] body)
+;;     => (.bind coll1 (fn [x] (.bind coll2 (fn [y] (.pure body)))))
+;;   (for [x coll1 :when pred y coll2] body)
+;;     => (.bind coll1 (fn [x] (if pred (.bind coll2 (fn [y] (.pure body))) (.empty x))))
 ;;
-;; The binding vector format: [x coll1 y coll2 :when pred1 :when pred2 ...]
-;; Variables and collections alternate, with :when clauses appearing inline.
-;;
-;; Requires Monad and Alternative instances for the collection type.
-;; Syntax: (for [[x coll] [y seq] :when pred] body-expr...)
-;; binding-vec is first param, body is rest param (captures remaining expressions)
+;; Requires Monad, Applicative, and Alternative instances for the container type.
+;; Alternative.empty takes a dummy type-witness arg for dispatch.
+;; Uses plain if/let throughout to avoid nested macro expansion issues in ct_eval.
 (defmacro for [binding-vec & body]
-  (let [bindings (first binding-vec)]
-    (if (empty? bindings)
-      ;; No bindings: just return pure body (as a do block for multiple expressions)
-      (list .pure (list do ~@body))
-      (let [first-b (first bindings)
-            rest-b (rest bindings)]
-        (cond
-          ;; :when guard - wrap the rest with if
-          (= first-b :when)
-          (if (empty? rest-b)
-            ;; :when without predicate - error, just return empty
-            (list .empty)
-            (let [pred (first rest-b)]
-              (list if pred
-                    (list for binding-vec ~@body)
-                    (list .empty))))
-
-          ;; Normal case: first-b is a variable, rest-b starts with a collection
-          (not (empty? rest-b))
-          (let [var first-b
-                coll (first rest-b)
-                more (rest rest-b)]
-            (if (empty? more)
-              ;; No more bindings after this one
-              (list .bind coll (list fn `[~var] (list .pure (list do ~@body))))
-              ;; More bindings to process
-              (list .bind coll (list fn `[~var] (list for (list ~@more) ~@body)))))
-
-          ;; Fallback: single binding without collection
-          true
-          (list .pure (list do ~@body)))))))
+  (if (empty? binding-vec)
+    ;; No bindings: wrap body in pure
+    (list .pure (list do ~@body))
+    (let [first-b (first binding-vec)
+          rest-bv  (rest binding-vec)]
+      (if (= first-b :when)
+        ;; :when guard at the head of the binding vector
+        (let [pred (first rest-bv)
+              more (rest rest-bv)]
+          (if (empty? more)
+            (list if pred (list .pure (list do ~@body)) (list .empty 0))
+            (list if pred (list for (list ~@more) ~@body) (list .empty 0))))
+        ;; var/coll pair — var is first-b, coll is next element
+        (let [var  first-b
+              coll (first rest-bv)
+              more (rest rest-bv)]
+          (if (empty? more)
+            ;; Last binding: .bind coll (fn [var] (.pure body))
+            (list .bind coll (list fn `[~var] (list .pure (list do ~@body))))
+            ;; More bindings remain — check if next is :when
+            (let [next-first (first more)
+                  next-rest  (rest more)]
+              (if (= next-first :when)
+                ;; Inline :when — use var as type witness for .empty dispatch
+                (let [pred  (first next-rest)
+                      after (rest next-rest)]
+                  (if (empty? after)
+                    (list .bind coll (list fn `[~var]
+                      (list if pred (list .pure (list do ~@body)) (list .empty var))))
+                    (list .bind coll (list fn `[~var]
+                      (list if pred (list for (list ~@after) ~@body) (list .empty var))))))
+                ;; More var/coll bindings remain
+                (list .bind coll (list fn `[~var] (list for (list ~@more) ~@body)))))))))))
 )
