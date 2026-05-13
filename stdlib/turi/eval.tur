@@ -1,0 +1,145 @@
+;; stdlib/turi/eval.tur -- Turmeric bindings for the libturi eval API (Phase S2)
+;;
+;; Usage example:
+;;
+;;   (defmodule myplugin/core
+;;     (import turi/eval :refer [Env/new Env/free eval eval-ok? eval-as-int])
+;;     (defn main [] :int
+;;       (let [env (Env/new)]
+;;         (let [r (eval env "(+ 40 2)")]
+;;           (let [result (if (eval-ok? r)
+;;                           (eval-as-int r)
+;;                           -1)]
+;;             (Env/free env)
+;;             (println result)
+;;             0)))))
+;;
+;; The TuriEnv handle is opaque (:ptr<void>).
+;; Eval results are boxed TuriValue pointers (:ptr<void>).
+;; Always call eval-free on the result and Env/free on the env when done.
+
+(defmodule turi/eval
+  (export turi-eval-autolink-hint
+          Env/new Env/new-sandboxed Env/free
+          eval eval-file eval! eval-free
+          eval-ok? eval-err? eval-err-msg
+          eval-as-int eval-as-bool eval-as-cstr eval-tag)
+
+  ;; Autolink + include hints consumed by cmd_build in src/main.c.
+  ;; __tur_autolink__: appends -lturi to cc invocation.
+  ;; __tur_include__: injects file-level #include before the generated C.
+  (defn turi-eval-autolink-hint [] :int
+    ```c
+    /* __tur_autolink__: -lturi */
+    /* __tur_include__: #include "turi/eval.h" */
+    /* __tur_include__: #include "turi/env.h" */
+    return 0;
+    ```)
+
+  ;; Create a new unrestricted evaluation environment.
+  (defn Env/new [] :ptr<void>
+    ```c
+    return (void *)turi_env_new();
+    ```)
+
+  ;; Create a sandboxed environment (I/O and FFI builtins disabled).
+  (defn Env/new-sandboxed [] :ptr<void>
+    ```c
+    return (void *)turi_env_new_sandboxed();
+    ```)
+
+  ;; Free all resources owned by env.
+  (defn Env/free [env :ptr<void>] :void
+    ```c
+    turi_env_free((TuriEnv *)env);
+    ```)
+
+  ;; Evaluate a Turmeric source string. Returns a boxed TuriValue. Free with eval-free.
+  (defn eval [env :ptr<void> src :cstr] :ptr<void>
+    ```c
+    TuriValue v = turi_eval((TuriEnv *)env, src);
+    TuriValue *p = malloc(sizeof(TuriValue));
+    *p = v;
+    return (void *)p;
+    ```)
+
+  ;; Evaluate file contents in the given environment.
+  (defn eval-file [env :ptr<void> path :cstr] :ptr<void>
+    ```c
+    TuriValue v = turi_eval_file((TuriEnv *)env, path);
+    TuriValue *p = malloc(sizeof(TuriValue));
+    *p = v;
+    return (void *)p;
+    ```)
+
+  ;; eval! is like eval but panics on error.
+  (defn eval! [env :ptr<void> src :cstr] :ptr<void>
+    ```c
+    TuriValue v = turi_eval((TuriEnv *)env, src);
+    if (v.tag == TURI_ERROR) { tur_panic_abort(v.as_error ? v.as_error : "eval error"); }
+    TuriValue *p = malloc(sizeof(TuriValue));
+    *p = v;
+    return (void *)p;
+    ```)
+
+  ;; Free a boxed TuriValue returned by eval or eval-file.
+  (defn eval-free [result :ptr<void>] :void
+    ```c
+    free(result);
+    ```)
+
+  ;; True if the eval result is NOT an error.
+  (defn eval-ok? [result :ptr<void>] :bool
+    ```c
+    TuriValue *p = (TuriValue *)result;
+    return p != NULL && p->tag != TURI_ERROR;
+    ```)
+
+  ;; True if the eval result is an error.
+  (defn eval-err? [result :ptr<void>] :bool
+    ```c
+    TuriValue *p = (TuriValue *)result;
+    return p == NULL || p->tag == TURI_ERROR;
+    ```)
+
+  ;; Get the error message (only valid when eval-err? is true).
+  (defn eval-err-msg [result :ptr<void>] :cstr
+    ```c
+    TuriValue *p = (TuriValue *)result;
+    if (p == NULL || p->tag != TURI_ERROR) return "<not-an-error>";
+    return p->as_error ? p->as_error : "<unknown error>";
+    ```)
+
+  ;; Extract int value (valid for TURI_INT results).
+  (defn eval-as-int [result :ptr<void>] :int
+    ```c
+    TuriValue *p = (TuriValue *)result;
+    if (p == NULL || p->tag != TURI_INT) return 0;
+    return p->as_int;
+    ```)
+
+  ;; Extract bool value (valid for TURI_BOOL results).
+  (defn eval-as-bool [result :ptr<void>] :bool
+    ```c
+    TuriValue *p = (TuriValue *)result;
+    if (p == NULL || p->tag != TURI_BOOL) return false;
+    return p->as_bool;
+    ```)
+
+  ;; Extract cstr value (valid for TURI_CSTR results).
+  (defn eval-as-cstr [result :ptr<void>] :cstr
+    ```c
+    TuriValue *p = (TuriValue *)result;
+    if (p == NULL || p->tag != TURI_CSTR) return "";
+    return p->as_cstr ? p->as_cstr : "";
+    ```)
+
+  ;; Get the tag as integer: 0=nil 1=bool 2=int 3=float 4=cstr 5=closure 6=error
+  (defn eval-tag [result :ptr<void>] :int
+    ```c
+    TuriValue *p = (TuriValue *)result;
+    if (p == NULL) return 0;
+    return (int64_t)p->tag;
+    ```)
+
+) ;; end defmodule turi/eval

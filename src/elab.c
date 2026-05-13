@@ -657,6 +657,7 @@ typedef struct Elab {
     const DefModule *current_module;      /* DefModule being elaborated, or NULL */
     /* Phase M2: Module registry */
     const char      *module_base_dir;     /* base dir for resolving module file paths */
+    const char      *module_stdlib_dir;   /* stdlib fallback dir (e.g. "stdlib") */
     struct ElabModule *loaded_modules;    /* registry of loaded modules */
     uint32_t         n_loaded_modules;
     uint32_t         cap_loaded_modules;
@@ -7176,10 +7177,26 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
     char *src_raw = NULL;
     size_t src_len = 0;
     if (elab_read_file(path_buf, &src_raw, &src_len) != 0) {
-        diag_emit(DIAG_ERROR, import_span,
-                  "module '%s' not found (looked for '%s')", name->name, path_buf);
-        slot->is_loading = false;
-        return NULL;
+        /* Fallback: try the stdlib directory (e.g. for `import turi/eval`). */
+        bool found_in_stdlib = false;
+        if (e->module_stdlib_dir) {
+            char stdlib_path[4096];
+            int splen = snprintf(stdlib_path, sizeof(stdlib_path), "%s/%s.tur",
+                                 e->module_stdlib_dir, name->name);
+            if (splen > 0 && (size_t)splen < sizeof(stdlib_path)) {
+                if (elab_read_file(stdlib_path, &src_raw, &src_len) == 0) {
+                    memcpy(path_buf, stdlib_path, (size_t)splen + 1);
+                    plen = splen;
+                    found_in_stdlib = true;
+                }
+            }
+        }
+        if (!found_in_stdlib) {
+            diag_emit(DIAG_ERROR, import_span,
+                      "module '%s' not found (looked for '%s')", name->name, path_buf);
+            slot->is_loading = false;
+            return NULL;
+        }
     }
 
     /* Copy source into the arena so it outlives the load. */
@@ -10931,6 +10948,11 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
     Elab e;
     elab_init_state(&e, arena, st);
     e.module_base_dir = module_base_dir ? module_base_dir : ".";
+    /* stdlib fallback: TUR_STDLIB_DIR env var, else "stdlib" */
+    {
+        const char *sdir = getenv("TUR_STDLIB_DIR");
+        e.module_stdlib_dir = (sdir && *sdir) ? sdir : "stdlib";
+    }
     e.separate_compilation = separate_compilation;
     builtins_init(st);
 

@@ -251,14 +251,14 @@ arithmetic, `let`, `if`, `do`, `fn`, and `defn`.
 
 **Exit criterion:** The factorial example in the appendix compiles and runs.
 
-- [ ] `stdlib/turi/eval.tur` — Turmeric bindings over `libturi` C API
-- [ ] `Env` struct wrapper with `Env/new`, `Env/new-sandboxed`, `eval`, `eval!`
-- [ ] Error type: `(deftype EvalError (ParseError cstr) (RuntimeError cstr))`
-- [ ] FFI declarations for `libturi` symbols
-- [ ] Linker flag injection so `(import turi/eval)` auto-links `-lturi`
+- [x] `stdlib/turi/eval.tur` — Turmeric bindings over `libturi` C API
+- [x] `Env` struct wrapper with `Env/new`, `Env/new-sandboxed`, `eval`, `eval!`
+- [x] Error type: `(deftype EvalError (ParseError cstr) (RuntimeError cstr))`
+- [x] FFI declarations for `libturi` symbols
+- [x] Linker flag injection so `(import turi/eval)` auto-links `-lturi`
 
 **Fixtures:**
-- [ ] `tests/fixtures/eval-import/` — `eval` called from Turmeric source
+- [x] `tests/fixtures/eval-import/` — `eval` called from Turmeric source
 
 ---
 
@@ -331,26 +331,104 @@ cooperative fiber scheduler.
 
 **Exit criterion:** Async examples from the test suite run through `turi_eval`.
 
-- [ ] Single-threaded cooperative fiber scheduler in `libturi`
-- [ ] `Fiber` struct in `TuriEnv`: runnable stack, suspended state, yield point
-- [ ] `async` expression: create a new fiber, return a future/task handle
-- [ ] `await` expression: suspend current fiber if future not ready, resume when ready
-- [ ] Fiber preemption: yield at function calls and loop iterations
-- [ ] Integration with effect handlers: handlers persist across `await` points
-- [ ] `TuriValue` variant for futures/tasks (`TURI_FUTURE`)
-- [ ] Non-blocking I/O primitives: `read-async`, `write-async`, etc.
-- [ ] Cancellation: `cancel-task`, `task-cancelled?`
-
 **Implementation details:**
 - The fiber scheduler is event-loop based, not OS threads
 - Futures can be composed: `(await (async ...))` chains correctly
 - Async functions use the same `TuriEnv` and handler chain as sync code
 - Errors in async tasks propagate as `Result` values, not unhandled exceptions
 
+#### S7.1: Fiber Scheduler Infrastructure
+
+- [ ] `src/turi/fiber.c` / `src/turi/fiber.h` — `TuriFiber` struct with runnable stack, suspended state, and yield point
+- [ ] Stack allocation for fibers: fixed-size pool using `mmap`; configurable stack size via `TuriEnv`
+- [ ] Context save/restore using `ucontext_t` (POSIX) with `makecontext`/`swapcontext`
+- [ ] Ready queue in `TuriEnv`: linked list or ring buffer of runnable fibers
+- [ ] Suspended set in `TuriEnv`: fibers blocked waiting on an unresolved future
+- [ ] `turi_scheduler_tick(env)` — dequeue one ready fiber and resume it
+- [ ] `turi_run_event_loop(env)` — run scheduler until all fibers complete or event loop is empty
+- [ ] Fiber preemption: yield at function calls and loop iterations via eval hook
+
+#### S7.2: Future/Task Primitives
+
+- [ ] `TuriFuture` struct: state (`PENDING` / `RESOLVED` / `REJECTED`), result `TuriValue`, waker list
+- [ ] `turi_future_new(env)` — allocate a pending future pinned to `TuriEnv`
+- [ ] `turi_future_resolve(future, value)` — settle future with a result, move wakers to ready queue
+- [ ] `turi_future_reject(future, error)` — settle future with an error
+- [ ] `turi_future_poll(future)` — non-blocking check: returns result or `PENDING` sentinel
+- [ ] `TuriValue` variant for futures (`TURI_FUTURE`); accessor `turi_as_future(value)`
+- [ ] `turi_task_spawn(env, thunk_src)` — create a new fiber from source, return future handle
+- [ ] `turi_task_join(env, future)` — suspend current fiber until future resolves
+- [ ] Waker mechanism: suspended fiber registers itself on the future; `turi_future_resolve` wakes all registered fibers
+
+#### S7.3: `async` / `await` Expression Support
+
+- [ ] Elaborator: recognise `async` form — type `(async expr)` → `Task<T>`; wrap body in implicit fiber thunk
+- [ ] Elaborator: recognise `await` form — type `(await task-expr)` → `T`; reject `await` outside async context
+- [ ] Eval: `async` node creates fiber via `turi_task_spawn`, returns `TURI_FUTURE` value
+- [ ] Eval: `await` node calls `turi_task_join`; suspends current fiber if future is pending
+- [ ] `async` body captures the enclosing `TuriEnv` binding scope (closure semantics)
+- [ ] Effect handler chain is preserved across `await` suspension points
+- [ ] `(async-fn ...)` sugar for defining functions that return a `Task<T>`
+
+#### S7.4: Timer and Timeout Support
+
+- [ ] Min-heap of timer events polled inside `turi_run_event_loop`
+- [ ] `(sleep-async ms)` — suspend current fiber for N milliseconds; resolves with `nil`
+- [ ] `(with-timeout ms expr)` — race `expr` against a deadline; resolves to `(:ok v)` or `(:timeout nil)`
+- [ ] Timer resolution uses `clock_gettime(CLOCK_MONOTONIC)`; no OS threads required
+
+#### S7.5: Task Composition
+
+- [ ] `(async-all tasks)` — create a join future that resolves when all tasks complete; returns vec of results
+- [ ] `(async-any tasks)` — resolves with the first task to complete (index + value)
+- [ ] `(async-race tasks)` — like `async-any` but cancels remaining tasks on first completion
+- [ ] Composition helpers are implemented in Turmeric stdlib (`stdlib/turi/async.tur`) over the C primitives
+
+#### S7.6: Error Propagation
+
+- [ ] Unhandled exception in async task body settles the future with `turi_future_reject`
+- [ ] `(await task)` on a rejected future re-raises the stored error in the awaiting fiber
+- [ ] `(async-try expr)` — catches exceptions inside async body, returns `Result` future
+- [ ] Unhandled task errors (never awaited) are reported via `TuriEnv` error callback at event-loop exit
+
+#### S7.7: Non-Blocking I/O
+
+- [ ] Scheduler integrates a `poll()`-based I/O readiness check between fiber ticks
+- [ ] `(read-async fd)` — suspend fiber until fd is readable; returns bytes as `:str`
+- [ ] `(write-async fd data)` — suspend fiber until write drains; returns bytes written
+- [ ] File I/O wrappers: `(open-async path flags)`, `(close-async fd)`
+- [ ] Non-blocking I/O is disabled in sandboxed environments (`turi_env_new_sandboxed`)
+
+#### S7.8: Cancellation
+
+- [ ] `cancel-task` sets the fiber's cancelled flag and rejects its future
+- [ ] `task-cancelled?` — predicate checks cancelled flag on current fiber
+- [ ] Cancellation is cooperative: checked at `await` points and loop-iteration yields
+- [ ] Cancellation propagates through `async-race` (cancels losers) and `with-timeout` (cancels timed-out task)
+
+#### S7.9: C API Additions
+
+```c
+/* Scheduler */
+void      turi_run_event_loop(TuriEnv *);
+
+/* Task / future */
+TuriValue turi_task_spawn(TuriEnv *, const char *src);
+void      turi_task_cancel(TuriValue task);
+TuriValue turi_future_poll(TuriValue future);   /* TURI_FUTURE → result or pending */
+
+/* Timer */
+TuriValue turi_sleep_async(TuriEnv *, uint64_t ms);
+```
+
 **Fixtures:**
-- [ ] `tests/turi/eval-async-basic.tur` — simple async/await round-trip
-- [ ] `tests/turi/eval-async-composition.tur` — chained awaits and task composition
-- [ ] `tests/turi/eval-async-effects.tur` — effects + async interaction
+- [ ] `tests/turi/eval-async-basic.tur` — simple `async`/`await` round-trip; `(await (async (+ 1 2)))` = 3
+- [ ] `tests/turi/eval-async-composition.tur` — `async-all`, `async-any`, chained awaits
+- [ ] `tests/turi/eval-async-effects.tur` — effect handlers persist across `await` points
+- [ ] `tests/turi/eval-async-timeout.tur` — `with-timeout` resolves correctly on slow and fast tasks
+- [ ] `tests/turi/eval-async-cancel.tur` — cancelled tasks reject their futures; `task-cancelled?` returns true
+- [ ] `tests/turi/eval-async-error.tur` — exception in async body propagates through `await`
+- [ ] `tests/turi/eval-async-io.tur` — `read-async`/`write-async` round-trip on a pipe fd
 
 ---
 

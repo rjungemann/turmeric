@@ -567,6 +567,34 @@ static int cmd_build(const char *input, const char *out_path) {
         tf = fdopen(fd, "wb");
         memcpy(tmpl, fallback, sizeof(fallback));
     }
+    /* Phase S2: scan for __tur_include__ directives and inject them at the
+     * top of the generated C so stdlib modules can add file-level includes.
+     * The marker format is: slash-star __tur_include__: LINE star-slash */
+    {
+        const char *inc_mark = "/* __tur_include__: ";
+        size_t inc_mlen = strlen(inc_mark);
+        const char *p = csrc.data;
+        Buf hdr;
+        buf_init(&hdr);
+        while (p && (p = strstr(p, inc_mark)) != NULL) {
+            p += inc_mlen;
+            const char *end = strstr(p, " */");
+            if (!end) break;
+            buf_write(&hdr, p, (size_t)(end - p));
+            buf_putc(&hdr, '\n');
+            p = end + 3;
+        }
+        if (hdr.len > 0) {
+            Buf new_csrc;
+            buf_init(&new_csrc);
+            buf_write(&new_csrc, hdr.data, hdr.len);
+            buf_write(&new_csrc, csrc.data, csrc.len);
+            buf_free(&csrc);
+            csrc = new_csrc;
+        }
+        buf_free(&hdr);
+    }
+
     if (!tf || fwrite(csrc.data, 1, csrc.len, tf) != csrc.len) {
         fprintf(stderr, "tur: write failed\n");
         if (tf) fclose(tf);
@@ -574,6 +602,26 @@ static int cmd_build(const char *input, const char *out_path) {
         return 2;
     }
     fclose(tf);
+
+    /* Phase S2: scan generated C for __tur_autolink__ comments and collect
+     * any linker flags they embed (e.g. -lturi from stdlib/turi/eval.tur).
+     * The marker format is: slash-star __tur_autolink__: FLAGS star-slash */
+    Buf autolink;
+    buf_init(&autolink);
+    {
+        const char *marker = "/* __tur_autolink__: ";
+        size_t mlen = strlen(marker);
+        const char *p = csrc.data;
+        while (p && (p = strstr(p, marker)) != NULL) {
+            p += mlen;
+            const char *end = strstr(p, " */");
+            if (!end) break;
+            if (autolink.len > 0) buf_putc(&autolink, ' ');
+            buf_write(&autolink, p, (size_t)(end - p));
+            p = end + 3;
+        }
+        if (autolink.len > 0) buf_putc(&autolink, '\0');
+    }
     buf_free(&csrc);
 
     char chosen_out[1024];
@@ -593,6 +641,9 @@ static int cmd_build(const char *input, const char *out_path) {
     Buf cmd;
     buf_init(&cmd);
     buf_printf(&cmd, "%s %s -o %s %s", cc, cc_flags, out_path, tmpl);
+    /* Append any __tur_autolink__ flags discovered in the generated C. */
+    if (autolink.len > 0) buf_printf(&cmd, " %s", autolink.data);
+    buf_free(&autolink);
     int sys_rc = system(cmd.data);
     buf_free(&cmd);
     /* Leave the stable temp file for ccache; only unlink random fallbacks. */
