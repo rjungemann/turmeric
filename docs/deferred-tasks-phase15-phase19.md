@@ -1361,6 +1361,21 @@ These prerequisites must be completed before the parameterized Clone instances c
 
 ---
 
+## B1 Blocker: HKT Kind System Incompatibility ✅ RESOLVED
+
+**Issue:** The HKT kind system (as of HKT-P6) assigned kind `* -> *` (KIND_ARROW) to ALL struct types via `type_effective_kind()` in `src/kind_check.c`. This caused a fundamental incompatibility with the Clone typeclass and parameterized instances for struct types.
+
+**Resolution:** Fixed by distinguishing concrete struct types (with a `StructDef`, kind `*`) from opaque type constructor references (without a `StructDef`, kind `* -> *`) in `type_effective_kind()`. Additionally, `elab_definstance` now looks up known struct types in scope when parsing type arguments, preserving the `StructDef` pointer so the kind system can correctly assign kind `*` to concrete structs like `Pair`. HKT inference for opaque type constructors (e.g., `option` in `(definstance Functor [option])`) continues to work correctly.
+
+**Changes:**
+- `src/kind_check.c`: `type_effective_kind()` returns `KIND_STAR` for `TY_STRUCT` with `def != NULL`, `KIND_ARROW` for `def == NULL`
+- `src/types.h`: `type_struct()` explicitly sets `hkt_kind = KIND_STAR`
+- `src/elab.c`: `elab_definstance` type arg parsing looks up known struct defs in scope
+
+---
+
+---
+
 ## Backtracking remaining tasks (Phases B1–B5)
 
 ### Phase B1 remaining tasks (Clone trait infrastructure)

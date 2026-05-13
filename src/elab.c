@@ -9245,15 +9245,24 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
                         } else if (kw->len == 9 && memcmp(kw->name, "ptr<void>", 9) == 0) {
                             type_args[i] = TYPE_PTR_VOID;
                         } else {
-                            /* Phase HKT H3: Unknown name — treat as an opaque type constructor.
-                             * TY_STRUCT without a StructDef causes codegen to emit 'void *' for
-                             * all parameters that inherit this type, which is the correct C type
-                             * for containers represented as heap pointers (option, vec, etc.).
-                             * Track the symbol name so method name mangling can use it. */
-                            memset(&type_args[i], 0, sizeof(type_args[i]));
-                            type_args[i].kind = TY_STRUCT;
-                            type_args[i].copy_kind = CK_MOVE;
-                            type_args[i].as.struct_.def = NULL;
+                            /* Check if this name refers to a known struct type.
+                             * If so, preserve the StructDef pointer so the kind
+                             * system can distinguish concrete structs (kind *)
+                             * from opaque type constructors (kind * -> *). */
+                            Binding *sb = scope_lookup(e->scope, kw);
+                            if (sb && sb->type.kind == TY_STRUCT && sb->type.as.struct_.def) {
+                                type_args[i] = sb->type;
+                            } else {
+                                /* Phase HKT H3: Unknown name — treat as an opaque type constructor.
+                                 * TY_STRUCT without a StructDef causes codegen to emit 'void *' for
+                                 * all parameters that inherit this type, which is the correct C type
+                                 * for containers represented as heap pointers (option, vec, etc.).
+                                 * Track the symbol name so method name mangling can use it. */
+                                memset(&type_args[i], 0, sizeof(type_args[i]));
+                                type_args[i].kind = TY_STRUCT;
+                                type_args[i].copy_kind = CK_MOVE;
+                                type_args[i].as.struct_.def = NULL;
+                            }
                             type_arg_syms[i] = kw;
                         }
                     } else if (arg->tag == F_LIST && arg->as.list.len == 2) {

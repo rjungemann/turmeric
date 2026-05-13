@@ -429,12 +429,10 @@ static inline Type type_cloneable_cont(TypeKind returns) {
 /* Create a TY_STRUCT type referencing the given StructDef.
  * copy_kind is taken from def->is_copy. */
 static inline Type type_struct(StructDef *def) {
-    Type t;
+    Type t = {0};
     t.kind = TY_STRUCT;
     t.copy_kind = def->is_copy ? CK_COPY : CK_MOVE;
-    t.n_lifetimes = 0;
-    t.typeclass_instances = NULL;
-    t.n_typeclass_instances = 0;
+    t.hkt_kind = KIND_STAR;
     t.as.struct_.def = def;
     return t;
 }
