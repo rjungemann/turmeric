@@ -37,9 +37,25 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 
+# Phase S0: tur repl / libturi smoke tests
+add_test(
+  NAME tur_repl_tests
+  COMMAND bash tests/turi/eval-test.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+add_test(
+  NAME tur_eval_basic
+  COMMAND "${CMAKE_BINARY_DIR}/tur_eval_basic"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+
 # Make sure tur is built before any test is run
 set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
+                     tur_repl_tests
   PROPERTIES DEPENDS tur
+)
+set_tests_properties(tur_eval_basic
+  PROPERTIES DEPENDS tur_eval_basic
 )
 
 # ---------------------------------------------------------------------------

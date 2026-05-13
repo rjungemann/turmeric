@@ -123,18 +123,6 @@ const char *type_name(Type t) {
         case TY_INT8:    return "int8";
         case TY_INT16:   return "int16";
         case TY_INT32:   return "int32";
-        case TY_UINT8:   return "uint8";
-        case TY_UINT16:  return "uint16";
-        case TY_UINT32:  return "uint32";
-        case TY_UINT64:  return "uint64";
-        case TY_FLOAT32: return "float32";
-        case TY_CSTR:    return "cstr";
-        case TY_PTR_VOID: return "ptr<void>";
-        case TY_NEVER:   return "!";
-        /* Phase N: fixed-width numeric types */
-        case TY_INT8:    return "int8";
-        case TY_INT16:   return "int16";
-        case TY_INT32:   return "int32";
         case TY_INT64:   return "int64";
         case TY_UINT8:   return "uint8";
         case TY_UINT16:  return "uint16";
@@ -142,6 +130,9 @@ const char *type_name(Type t) {
         case TY_UINT64:  return "uint64";
         case TY_FLOAT32: return "float32";
         case TY_FLOAT64: return "float64";
+        case TY_CSTR:    return "cstr";
+        case TY_PTR_VOID: return "ptr<void>";
+        case TY_NEVER:   return "!";
         case TY_FN: {
             /* Build into a buf, then strdup. */
             Buf tmp;
@@ -278,11 +269,13 @@ static void type_name_buf(Buf *b, Type t) {
         case TY_INT8:    buf_puts(b, "int8"); break;
         case TY_INT16:   buf_puts(b, "int16"); break;
         case TY_INT32:   buf_puts(b, "int32"); break;
+        case TY_INT64:   buf_puts(b, "int64"); break;
         case TY_UINT8:   buf_puts(b, "uint8"); break;
         case TY_UINT16:  buf_puts(b, "uint16"); break;
         case TY_UINT32:  buf_puts(b, "uint32"); break;
         case TY_UINT64:  buf_puts(b, "uint64"); break;
         case TY_FLOAT32: buf_puts(b, "float32"); break;
+        case TY_FLOAT64: buf_puts(b, "float64"); break;
         case TY_CSTR:    buf_puts(b, "cstr"); break;
         case TY_PTR_VOID: buf_puts(b, "ptr<void>"); break;
         case TY_NEVER:   buf_puts(b, "!"); break;
@@ -403,17 +396,6 @@ static void type_name_buf(Buf *b, Type t) {
             buf_puts(b, t.as.rec.name ? t.as.rec.name : "<rec>");
             break;
         }
-        /* Phase N: fixed-width numeric types */
-        case TY_INT8:    buf_puts(b, "int8");    break;
-        case TY_INT16:   buf_puts(b, "int16");   break;
-        case TY_INT32:   buf_puts(b, "int32");   break;
-        case TY_INT64:   buf_puts(b, "int64");   break;
-        case TY_UINT8:   buf_puts(b, "uint8");   break;
-        case TY_UINT16:  buf_puts(b, "uint16");  break;
-        case TY_UINT32:  buf_puts(b, "uint32");  break;
-        case TY_UINT64:  buf_puts(b, "uint64");  break;
-        case TY_FLOAT32: buf_puts(b, "float32"); break;
-        case TY_FLOAT64: buf_puts(b, "float64"); break;
     }
 }
 
@@ -427,11 +409,13 @@ const char *type_c_name(Type t) {
         case TY_INT8:    return "int8_t";
         case TY_INT16:   return "int16_t";
         case TY_INT32:   return "int32_t";
+        case TY_INT64:   return "int64_t";
         case TY_UINT8:   return "uint8_t";
         case TY_UINT16:  return "uint16_t";
         case TY_UINT32:  return "uint32_t";
         case TY_UINT64:  return "uint64_t";
         case TY_FLOAT32: return "float";
+        case TY_FLOAT64: return "double";
         case TY_CSTR:    return "const char *";
         case TY_PTR_VOID: return "void *";
         case TY_NEVER:   return "void";  /* never type has no values, use void */
@@ -484,17 +468,6 @@ const char *type_c_name(Type t) {
         /* Phase HKT-P2: Recursive types — opaque int64_t handle in v1 */
         case TY_REC:
             return "int64_t";
-        /* Phase N: fixed-width numeric types */
-        case TY_INT8:    return "int8_t";
-        case TY_INT16:   return "int16_t";
-        case TY_INT32:   return "int32_t";
-        case TY_INT64:   return "int64_t";
-        case TY_UINT8:   return "uint8_t";
-        case TY_UINT16:  return "uint16_t";
-        case TY_UINT32:  return "uint32_t";
-        case TY_UINT64:  return "uint64_t";
-        case TY_FLOAT32: return "float";
-        case TY_FLOAT64: return "double";
     }
     return "void";
 }
@@ -623,20 +596,6 @@ static bool type_is_guarded_recursive_helper(const Type *t, const char *rec_name
         case TY_INT8:
         case TY_INT16:
         case TY_INT32:
-        case TY_UINT8:
-        case TY_UINT16:
-        case TY_UINT32:
-        case TY_UINT64:
-        case TY_FLOAT32:
-        case TY_CSTR:
-        case TY_PTR_VOID:
-        case TY_TYPECLASS:
-        case TY_TYPECLASS_INST:
-        case TY_NEVER:
-        /* Phase N: fixed-width numeric types are leaf types */
-        case TY_INT8:
-        case TY_INT16:
-        case TY_INT32:
         case TY_INT64:
         case TY_UINT8:
         case TY_UINT16:
@@ -644,6 +603,11 @@ static bool type_is_guarded_recursive_helper(const Type *t, const char *rec_name
         case TY_UINT64:
         case TY_FLOAT32:
         case TY_FLOAT64:
+        case TY_CSTR:
+        case TY_PTR_VOID:
+        case TY_TYPECLASS:
+        case TY_TYPECLASS_INST:
+        case TY_NEVER:
             return true;
     }
 
@@ -689,11 +653,13 @@ const char *typekind_to_string(TypeKind k) {
         case TY_INT8:     return "int8";
         case TY_INT16:    return "int16";
         case TY_INT32:    return "int32";
+        case TY_INT64:    return "int64";
         case TY_UINT8:    return "uint8";
         case TY_UINT16:   return "uint16";
         case TY_UINT32:   return "uint32";
         case TY_UINT64:   return "uint64";
         case TY_FLOAT32:  return "float32";
+        case TY_FLOAT64:  return "float64";
         case TY_CSTR:     return "cstr";
         case TY_PTR_VOID: return "ptr-void";
         case TY_FN:       return "fn";
@@ -709,17 +675,6 @@ const char *typekind_to_string(TypeKind k) {
         case TY_CLONEABLE_CONT: return "cloneable_cont";
         case TY_STRUCT:   return "struct";
         case TY_NEVER:    return "!";
-        /* Phase N: fixed-width numeric types */
-        case TY_INT8:    return "int8";
-        case TY_INT16:   return "int16";
-        case TY_INT32:   return "int32";
-        case TY_INT64:   return "int64";
-        case TY_UINT8:   return "uint8";
-        case TY_UINT16:  return "uint16";
-        case TY_UINT32:  return "uint32";
-        case TY_UINT64:  return "uint64";
-        case TY_FLOAT32: return "float32";
-        case TY_FLOAT64: return "float64";
         default:          return "<?>";
     }
 }
