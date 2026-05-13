@@ -67,6 +67,35 @@ static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e);
 
 /* ------------ helpers ------------ */
 
+/* Phase M0: Flatten EX_PROGRAM items into a contiguous array, expanding any
+ * EX_DEFMODULE nodes into their body items. The returned array is malloc'd
+ * and must be freed by the caller. */
+static const Expr **flatten_program_items(const Expr *program, uint32_t *out_n) {
+    uint32_t total = 0;
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        const Expr *e = program->as.program.items[i];
+        if (e->kind == EX_DEFMODULE)
+            total += e->as.defmodule_.mod->n_body;
+        else
+            total += 1;
+    }
+    const Expr **flat = (const Expr **)malloc(total * sizeof(Expr *));
+    if (!flat && total > 0) { fprintf(stderr, "tur: oom\n"); abort(); }
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        const Expr *e = program->as.program.items[i];
+        if (e->kind == EX_DEFMODULE) {
+            DefModule *mod = e->as.defmodule_.mod;
+            for (uint32_t j = 0; j < mod->n_body; j++)
+                flat[k++] = mod->body[j];
+        } else {
+            flat[k++] = e;
+        }
+    }
+    *out_n = total;
+    return flat;
+}
+
 /* Helper to create a Type from TypeKind (mirrors the one in types.c). */
 static Type type_from_kind(TypeKind k) {
     Type t;
@@ -1102,6 +1131,7 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_SET_DEREF: emit_set_deref_stmt(ctx, body, e); return atom_nil();
         case EX_DEF:      /* handled at top level — shouldn't appear nested. */
         case EX_PROGRAM:
+        case EX_DEFMODULE: /* Phase M0: module metadata node */
         case EX_TYPECLASS_DEF:
             /* Typeclass definitions are compile-time only - no runtime code */
             return atom_nil();
@@ -2493,6 +2523,7 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:
         case EX_FLOAT_LIT: case EX_CSTR_LIT: case EX_VAR:
         case EX_TYPECLASS_DEF:
+        case EX_DEFMODULE: /* Phase M0: module metadata — nothing to emit */
         case EX_PANIC_PAYLOAD_TYPE:
         case EX_PANIC_PAYLOAD_VALUE:
         case EX_PANIC_PAYLOAD_FILE:
@@ -3246,10 +3277,14 @@ int emit_program(Buf *out, const Expr *program) {
     /* Phase R5: no-unwind context (false at top level; set per-function) */
     ctx.no_unwind = false;
 
+    /* Phase M0: Flatten program items, expanding EX_DEFMODULE body. */
+    uint32_t n_items;
+    const Expr **items = flatten_program_items(program, &n_items);
+
     /* Check if user defined a main function */
     bool user_has_main = false;
-    for (uint32_t i = 0; i < program->as.program.n; i++) {
-        const Expr *e = program->as.program.items[i];
+    for (uint32_t i = 0; i < n_items; i++) {
+        const Expr *e = items[i];
         if (e->kind == EX_FN_DEF) {
             FnDef *fd = e->as.fn_def_.fn;
             if (strcmp(fd->binding->name->name, "main") == 0) {
@@ -3261,8 +3296,8 @@ int emit_program(Buf *out, const Expr *program) {
 
     /* Phase 2: Two-pass emission for mutual recursion support.
      * Pass 0: Emit struct typedefs + drop glue (must precede function forward decls). */
-    for (uint32_t i = 0; i < program->as.program.n; i++) {
-        const Expr *e = program->as.program.items[i];
+    for (uint32_t i = 0; i < n_items; i++) {
+        const Expr *e = items[i];
         if (e->kind == EX_DEF && e->as.def_.struct_def) {
             StructDef *def = e->as.def_.struct_def;
             /* Emit: typedef struct Name { fields... } Name; */
@@ -3316,8 +3351,8 @@ int emit_program(Buf *out, const Expr *program) {
     /* Pass 1: Emit forward declarations for all functions.
      * Written to fwd_decls buffer (emitted before pending_handler_fns in final
      * assembly) so that effect handler functions can call user-defined functions. */
-    for (uint32_t i = 0; i < program->as.program.n; i++) {
-        const Expr *e = program->as.program.items[i];
+    for (uint32_t i = 0; i < n_items; i++) {
+        const Expr *e = items[i];
         if (e->kind == EX_FN_DEF) {
             FnDef *fd = e->as.fn_def_.fn;
             /* Skip main - it's not called from other functions in the same file */
@@ -3342,8 +3377,8 @@ int emit_program(Buf *out, const Expr *program) {
     }
 
     /* Pass 2: collect all top-level defs and fn_defs. */
-    for (uint32_t i = 0; i < program->as.program.n; i++) {
-        const Expr *e = program->as.program.items[i];
+    for (uint32_t i = 0; i < n_items; i++) {
+        const Expr *e = items[i];
         if (e->kind == EX_DEF) {
             /* Phase 11: skip struct typedefs — already emitted in Pass 0 */
             if (e->as.def_.struct_def) continue;
@@ -4572,6 +4607,7 @@ int emit_program(Buf *out, const Expr *program) {
 
     buf_free(&file);
     buf_free(&body);
+    free(items);
     return 0;
 }
 
@@ -4613,14 +4649,16 @@ int emit_header(Buf *out, const char *module_name, const Expr *program) {
     buf_puts(out, "#include <string.h>\n\n");
 
     /* Forward declarations for functions */
-    for (uint32_t i = 0; i < program->as.program.n; i++) {
-        const Expr *e = program->as.program.items[i];
+    uint32_t h_n_items;
+    const Expr **h_items = flatten_program_items(program, &h_n_items);
+    for (uint32_t i = 0; i < h_n_items; i++) {
+        const Expr *e = h_items[i];
         if (e->kind == EX_FN_DEF) {
             FnDef *fd = e->as.fn_def_.fn;
             const char *fn_name = raw_name_for_binding(fd->binding);
             bool is_main = (strcmp(fn_name, "main") == 0);
 
-            if (is_main) continue; /* main is not exported */
+            if (is_main) { free((void*)fn_name); continue; } /* main is not exported */
 
             /* Emit function declaration */
             if (e->type.kind == TY_FN) {
@@ -4649,6 +4687,7 @@ int emit_header(Buf *out, const char *module_name, const Expr *program) {
             buf_puts(out, ");\n");
         }
     }
+    free(h_items);
 
     if (out->len > 0 && out->data[out->len - 1] != '\n') {
         buf_putc(out, '\n');
@@ -4697,10 +4736,13 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program) 
     buf_printf(out, "/* generated by tur (phase 2) */\n");
     buf_printf(out, "#include \"%s.h\"\n\n", guard);
 
+    uint32_t impl_n_items;
+    const Expr **impl_items = flatten_program_items(program, &impl_n_items);
+
     /* Check if user defined a main function */
     bool user_has_main = false;
-    for (uint32_t i = 0; i < program->as.program.n; i++) {
-        const Expr *e = program->as.program.items[i];
+    for (uint32_t i = 0; i < impl_n_items; i++) {
+        const Expr *e = impl_items[i];
         if (e->kind == EX_FN_DEF) {
             FnDef *fd = e->as.fn_def_.fn;
             if (strcmp(fd->binding->name->name, "main") == 0) {
@@ -4711,8 +4753,8 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program) 
     }
 
     /* Pass 1: emit all top-level definitions */
-    for (uint32_t i = 0; i < program->as.program.n; i++) {
-        const Expr *e = program->as.program.items[i];
+    for (uint32_t i = 0; i < impl_n_items; i++) {
+        const Expr *e = impl_items[i];
         if (e->kind == EX_DEF) {
             char *bn = name_for_binding(&ctx, e->as.def_.binding);
             buf_printf(&file, "static %s %s;\n",
@@ -4742,6 +4784,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program) 
             emit_stmt(&ctx, &body, e);
         }
     }
+    free(impl_items);
 
     /* Assemble: includes + file-scope decls + body (initializers) */
     if (file.len) { buf_write(out, file.data, file.len); buf_putc(out, '\n'); }

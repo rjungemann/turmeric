@@ -11,6 +11,7 @@
  *
  * `arena` and `st` must outlive the returned Expr (it points into them). */
 Expr *elaborate_program(Arena *arena, SymbolTable *st,
-                        Form *const *forms, uint32_t nforms);
+                        Form *const *forms, uint32_t nforms,
+                        uint32_t stdlib_prefix);
 
 #endif

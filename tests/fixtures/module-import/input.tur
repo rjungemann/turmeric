@@ -1,0 +1,8 @@
+(defmodule myapp/core
+  (import geom/vector :as gv :refer [add2])
+  (export greet)
+  (defn greet [] :void
+    (println "hello"))
+  (defn main [] :int
+    (greet)
+    0))

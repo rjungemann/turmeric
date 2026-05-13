@@ -59,6 +59,7 @@ typedef struct PassContext {
     Expr        *prog;        /* NULL until PASS_ELABORATE completes     */
     Form       **forms;       /* input to PASS_ELABORATE                 */
     uint32_t     nforms;
+    uint32_t     stdlib_prefix; /* number of leading forms from stdlib   */
 } PassContext;
 
 #endif /* TUR_PASS_H */

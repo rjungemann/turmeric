@@ -36,13 +36,14 @@ typedef struct {
     TurSchedulerIOWaits io_waits;
 } TurSchedulerCommonMT;
 
-/* Forward declarations for ST scheduler (generated functions) */
-extern void tur_scheduler_spawn_st(void *s, FiberBlock *f);
-extern void tur_scheduler_run_st(void *s);
-extern void tur_scheduler_run_to_completion_st(void *s);
-extern void tur_scheduler_yield_st(void);
-extern void tur_scheduler_park_st(FiberBlock *f);
-extern void tur_scheduler_unpark_st(FiberBlock *f);
+/* ST scheduler functions — real implementations are in generated output.
+ * These stubs satisfy the linker when building the compiler binary itself. */
+__attribute__((weak)) void tur_scheduler_spawn_st(void *s, FiberBlock *f) { (void)s; (void)f; }
+__attribute__((weak)) void tur_scheduler_run_st(void *s) { (void)s; }
+__attribute__((weak)) void tur_scheduler_run_to_completion_st(void *s) { (void)s; }
+__attribute__((weak)) void tur_scheduler_yield_st(void) {}
+__attribute__((weak)) void tur_scheduler_park_st(FiberBlock *f) { (void)f; }
+__attribute__((weak)) void tur_scheduler_unpark_st(FiberBlock *f) { (void)f; }
 
 /* ST scheduler implementations */
 static void scheduler_st_spawn(TurSchedulerCommon *s, FiberBlock *f) {
@@ -188,6 +189,7 @@ void tur_scheduler_common_set_current(TurSchedulerCommon *s) {
 }
 
 /* I/O wait management */
+static void io_waiter_free(TurIOWaiter *waiter) __attribute__((unused));
 static void io_waiter_free(TurIOWaiter *waiter) {
     if (waiter) {
         io_waiter_free(waiter->next);
