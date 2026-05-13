@@ -160,6 +160,14 @@ write_result() {
         printf '%s\n' "$detail"
         printf '%s\n' "$log_file"
     } > "$RESULTS_DIR/$id.result"
+    # Immediately print outcome so progress is visible during parallel runs.
+    # Single-line echo calls are atomic on Linux/macOS (under PIPE_BUF),
+    # so lines from concurrent workers do not interleave.
+    if [ "$kind" = "PASS" ]; then
+        echo "PASS $name"
+    elif [ "$kind" = "FAIL" ]; then
+        echo "FAIL $name${detail:+ — $detail}"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -484,7 +492,7 @@ for result_file in "$RESULTS_DIR"/*.result; do
 
     if [ "$kind" = "PASS" ]; then
         PASS=$((PASS + 1))
-        echo "PASS $name"
+        # PASS line already printed by the worker for live progress.
     elif [ "$kind" = "FAIL" ]; then
         FAIL=$((FAIL + 1))
         FAILED+=("$name ($detail)")

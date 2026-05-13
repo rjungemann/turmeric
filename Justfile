@@ -32,7 +32,7 @@ reconfigure:
 # ---------------------------------------------------------------------------
 
 test: build
-    ctest --output-on-failure --test-dir build
+    ctest --output-on-failure --progress --test-dir build
 
 test-tsan: tsan
     TUR_TSAN=1 ctest --output-on-failure --test-dir build
@@ -69,7 +69,13 @@ emit-c file:
 # Games
 # ---------------------------------------------------------------------------
 
-games:
+# Enable the examples subtree (Raylib) and build the snake target.
+# On a cold build, prefer installing raylib via your package manager first
+# (e.g. `brew install raylib`) so CPM does not need to compile it from source.
+configure-examples:
+    cmake -S . -B build -DTUR_EXAMPLES=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+games: configure-examples
     cmake --build build --target snake
 
 run-snake: games

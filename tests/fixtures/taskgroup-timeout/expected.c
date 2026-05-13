@@ -1205,6 +1205,7 @@ static void * tg_new();
 static void tg_cancel(void *);
 static void tg_wait(void *);
 static void tg_free(void *);
+static void * tg_timeout_fn(void *);
 static void * spawn_timeout_thread(void *, int64_t);
 static void join_timeout_thread(void *);
 
@@ -1337,41 +1338,41 @@ static void tg_free(void * group) {
   
 }
 
+static void * tg_timeout_fn(void * raw) {
+        typedef struct { void *tg; int ms; } TimeoutArg;
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t done_cond;
+      int64_t task_count;
+      int64_t completed_count;
+      bool cancelled;
+      bool done;
+  } TaskGroupBlock;
+  TimeoutArg *a = (TimeoutArg *)raw;
+  struct timespec ts;
+  ts.tv_sec = a->ms / 1000;
+  ts.tv_nsec = (a->ms % 1000) * 1000000L;
+  nanosleep(&ts, NULL);
+  TaskGroupBlock *g = (TaskGroupBlock *)a->tg;
+  pthread_mutex_lock(&g->lock);
+  g->cancelled = true;
+  g->done = true;
+  pthread_cond_broadcast(&g->done_cond);
+  pthread_mutex_unlock(&g->lock);
+  free(a);
+  return NULL;
+  
+}
+
 static void * spawn_timeout_thread(void * tg, int64_t ms) {
         pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
   if (!t) { fprintf(stderr, "spawn-timeout: oom\n"); abort(); }
-  
   typedef struct { void *tg; int ms; } TimeoutArg;
   TimeoutArg *arg = (TimeoutArg *)malloc(sizeof(TimeoutArg));
   if (!arg) { free(t); fprintf(stderr, "spawn-timeout: arg oom\n"); abort(); }
   arg->tg = tg;
   arg->ms = (int)ms;
-  
-  /* Timeout function */
-  void timeout_fn(void *raw) {
-      TimeoutArg *a = (TimeoutArg *)raw;
-      typedef struct { long tv_sec; long tv_nsec; } timespec;
-      timespec ts = { .tv_sec = a->ms / 1000, .tv_nsec = (a->ms % 1000) * 1000000 };
-      nanosleep(&ts, NULL);
-      
-      typedef struct {
-          pthread_mutex_t lock;
-          pthread_cond_t done_cond;
-          int64_t task_count;
-          int64_t completed_count;
-          bool cancelled;
-          bool done;
-      } TaskGroupBlock;
-      TaskGroupBlock *g = (TaskGroupBlock *)a->tg;
-      pthread_mutex_lock(&g->lock);
-      g->cancelled = true;
-      g->done = true;
-      pthread_cond_broadcast(&g->done_cond);
-      pthread_mutex_unlock(&g->lock);
-      free(a);
-  }
-  
-  pthread_create(t, NULL, (void *(*)(void *))timeout_fn, arg);
+  pthread_create(t, NULL, tg_timeout_fn, arg);
   pthread_detach(*t);
   return (void *)t;
   
@@ -1387,15 +1388,15 @@ static void join_timeout_thread(void * t) {
 int main() {
         int64_t __t0;
         {
-            void * tg_33 = tg_new();
-            (void)tg_33;
+            void * tg_35 = tg_new();
+            (void)tg_35;
             {
-                void * timeout_34 = spawn_timeout_thread((void *)(intptr_t)(tg_33), INT64_C(100));
-                (void)timeout_34;
-                tg_wait((void *)(intptr_t)(tg_33));
-                join_timeout_thread((void *)(intptr_t)(timeout_34));
+                void * timeout_36 = spawn_timeout_thread((void *)(intptr_t)(tg_35), INT64_C(100));
+                (void)timeout_36;
+                tg_wait((void *)(intptr_t)(tg_35));
+                join_timeout_thread((void *)(intptr_t)(timeout_36));
                 puts("timed out");
-                tg_free((void *)(intptr_t)(tg_33));
+                tg_free((void *)(intptr_t)(tg_35));
             }
             int64_t __t1;
             __t1 = INT64_C(0);

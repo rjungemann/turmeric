@@ -1379,11 +1379,11 @@ int main() {
             (void)tg_32;
             int64_t __t1;
             {
-                void * fut_a_33 = tg_spawn_async(tg_32, compute_a);
+                void * fut_a_33 = tg_spawn_async((void *)(intptr_t)(tg_32), (void *)(intptr_t)(compute_a));
                 (void)fut_a_33;
                 int64_t __t2;
                 {
-                    void * fut_b_34 = tg_spawn_async(tg_32, compute_b);
+                    void * fut_b_34 = tg_spawn_async((void *)(intptr_t)(tg_32), (void *)(intptr_t)(compute_b));
                     (void)fut_b_34;
                     int64_t __t3;
                     {
@@ -1398,7 +1398,7 @@ int main() {
                             printf("%lld\n", (long long)(a_35));
                             printf("%lld\n", (long long)(b_36));
                             printf("%lld\n", (long long)(((a_35) + (b_36))));
-                            tg_free(tg_32);
+                            tg_free((void *)(intptr_t)(tg_32));
                             puts("done");
                             int64_t __t7;
                             __t7 = INT64_C(0);

@@ -1908,6 +1908,7 @@ static Form *elab_expand_macro(Elab *e, MacroDef *macro, Form **args, uint32_t n
 static Binding *binding_new(Elab *e, const Symbol *name, Type type,
                             bool is_mut, bool is_global, Span span) {
     Binding *b = (Binding *)arena_alloc(e->arena, sizeof(Binding));
+    memset(b, 0, sizeof(Binding));
     b->name = name;
     b->type = type;
     b->is_mut = is_mut;
