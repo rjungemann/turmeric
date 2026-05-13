@@ -5628,6 +5628,9 @@ static Expr *elab_defn(Elab *e, const Form *call) {
         b = existing;
         b->type = fn_type;
         b->span = name_f->span;
+        /* Phase M7: Forward declarations from pass 1 don't know module context.
+         * Override defining_module_name with the actual module the defn is in. */
+        b->defining_module_name = e->current_module_name;
     } else {
         b = binding_new(e, name_f->as.sym, fn_type, false, true, name_f->span);
         scope_add(&e->global, b);
@@ -10192,7 +10195,8 @@ static char *elab_mangle_binding_name(const Binding *b) {
     size_t mod_prefix_len = 0;
     bool is_main_binding = (b->name->len == 4 &&
                              memcmp(b->name->name, "main", 4) == 0);
-    if (b->defining_module_name != NULL && !is_main_binding) {
+    /* Phase M7: mirror emit.c — only globals get module-prefixed C names. */
+    if (b->defining_module_name != NULL && !is_main_binding && b->is_global) {
         const char *mn = b->defining_module_name->name;
         size_t mn_len  = b->defining_module_name->len;
         size_t j = 0;
@@ -10327,6 +10331,37 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
     for (uint32_t i = 0; i < nforms; i++) {
         items[i] = elab_form(&e, forms[i]);
         if (!items[i]) { rc = -1; /* keep going to surface more diagnostics */ }
+
+        /* Phase M7: Each auto-loaded stdlib file is conceptually its own file,
+         * so reset has_defmodule after each stdlib defmodule. Otherwise the
+         * second stdlib (safe.tur after macros.tur) trips the "one defmodule
+         * per file" check. */
+        if (i < stdlib_prefix && items[i] && items[i]->kind == EX_DEFMODULE) {
+            e.has_defmodule = false;
+        }
+
+        /* Phase M7: Promote auto-loaded stdlib module exports back to
+         * "stdlib pre-module" status (defining_module_name = NULL) so they
+         * remain globally visible from user code without explicit import.
+         * Triggered after the last stdlib form has been processed. */
+        if (i + 1 == stdlib_prefix && stdlib_prefix > 0) {
+            for (uint32_t k = 0; k < e.global.n; k++) {
+                Binding *gb = e.global.bindings[k];
+                if (gb->defining_module_name != NULL &&
+                    gb->defining_module_name->len >= 4 &&
+                    memcmp(gb->defining_module_name->name, "tur/", 4) == 0) {
+                    gb->defining_module_name = NULL;
+                }
+            }
+            for (uint32_t k = 0; k < e.n_macros; k++) {
+                MacroDef *m = e.macros[k];
+                if (m->defining_module_name != NULL &&
+                    m->defining_module_name->len >= 4 &&
+                    memcmp(m->defining_module_name->name, "tur/", 4) == 0) {
+                    m->defining_module_name = NULL;
+                }
+            }
+        }
     }
 
     /* Phase 3: Prepend file-scope definitions (from nested fn) */

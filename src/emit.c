@@ -305,7 +305,10 @@ static char *raw_name_for_binding(const Binding *b) {
     size_t mod_prefix_len = 0;
     bool is_main_binding = (b->name->len == 4 &&
                              memcmp(b->name->name, "main", 4) == 0);
-    if (b->defining_module_name != NULL && !is_main_binding) {
+    /* Phase M7: Only globals get module-prefixed C names. Function parameters
+     * and locals are scoped to their function, so they don't collide across
+     * modules — and inline-C bodies reference them by their source names. */
+    if (b->defining_module_name != NULL && !is_main_binding && b->is_global) {
         const char *mn = b->defining_module_name->name;
         size_t mn_len = b->defining_module_name->len;
         size_t j = 0;
