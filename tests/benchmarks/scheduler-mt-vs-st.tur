@@ -1,0 +1,55 @@
+;; Phase T23 / SCH-006: scheduler-mt-vs-st -- throughput baseline benchmark.
+;;
+;; Measures the overhead of sequentially dispatching N items through a single-
+;; threaded queue structure (the ST scheduler baseline).  A companion profile
+;; pass with workstealing-deque-bench shows the MT deque overhead; comparing
+;; the two gives the "scheduling tax" per task.
+;;
+;; bench-main performs one iteration:
+;;   1. Allocate a simple LIFO node stack (single-threaded queue).
+;;   2. Push 64 items.
+;;   3. Pop all 64 items.
+;;   4. Verify the count.
+;;
+;; Why single-threaded baseline matters (SCH-006):
+;;   - The MT work-stealing deque uses atomic CAS, which costs 2-5x a
+;;     regular load/store on arm64.  workstealing-deque-bench shows that cost.
+;;   - This benchmark shows the pure dispatch overhead WITHOUT atomics
+;;     (equivalent to what a generated ST scheduler pays per fiber dispatch).
+;;   - If MT bench/iter > ST bench/iter * thread-count, stealing has net
+;;     negative scaling -- a sign that deque capacity or idle thresholds need
+;;     tuning.  With default 1024-capacity deques and 0.1ms idle sleep the
+;;     crossover is typically at 4+ threads for CPU-bound workloads.
+;;
+;; Run with: ./tests/run-bench.sh scheduler-mt-vs-st
+
+(defn bench-main [] :int
+  ```c
+  /* Single-threaded LIFO queue -- no atomics, no locks.
+   * This is the ST scheduler's inner dispatch loop in microcosm. */
+  typedef struct Node { struct Node *next; } Node;
+
+  Node pool[64];
+  Node *top = NULL;
+  int pushed = 0;
+  int popped = 0;
+
+  /* Push 64 items */
+  for (int i = 0; i < 64; i++) {
+      pool[i].next = top;
+      top = &pool[i];
+      pushed++;
+  }
+
+  /* Pop all 64 items */
+  while (top) {
+      Node *n = top;
+      top = n->next;
+      popped++;
+  }
+
+  /* Return 0 on success */
+  return (int64_t)(pushed == 64 && popped == 64 ? 0 : 1);
+  ```)
+
+(defn main [] :int (bench-main))

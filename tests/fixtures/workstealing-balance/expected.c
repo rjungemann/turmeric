@@ -1201,17 +1201,19 @@ static void * with_c_string(const char *, int64_t);
 static const char * from_c_string(const char *);
 static void * box(int64_t);
 static int64_t unbox(int64_t);
-static void * chan_slot(void *, int64_t);
-static void * achan_new(int64_t);
-static void achan_free(void *);
-static void * fiber_new_fn(void *);
-static void fiber_free(void *);
-static void * sched_new();
-static void sched_push(void *, void *);
-static void sched_free(void *);
-static void sched_run(void *);
-static void producer();
-static void consumer();
+static void * g_state(void *);
+static void * bwsd_new(int64_t);
+static void bwsd_push(void *, void *);
+static void * bwsd_pop(void *);
+static void * bwsd_steal(void *);
+static void bwsd_free(void *);
+static void * bal_worker(void *);
+static void * launch_workers(void *);
+static void join_workers(void *);
+static void * make_state(void *, void *, int64_t);
+static int64_t wait_done(void *);
+static void print_count(int64_t);
+static void free_state(void *);
 
 static void * array_get(void * arr, int64_t idx) {
         struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
@@ -1270,170 +1272,272 @@ static int64_t unbox(int64_t p) {
   
 }
 
-static void * chan_slot(void * ch, int64_t store) {
-        static void *g = NULL;
-  if ((int64_t)store) g = ch;
-  return g;
+static void * g_state(void * set_to) {
+        static void *s = NULL;
+  if (set_to) s = set_to;
+  return s;
   
 }
 
-static void * achan_new(int64_t cap) {
+static void * bwsd_new(int64_t cap) {
         typedef struct {
-      pthread_mutex_t lock;
-      pthread_cond_t  not_full;
-      pthread_cond_t  not_empty;
-      int64_t        *buf;
-      int64_t         head;
-      int64_t         tail;
-      int64_t         count;
-      int64_t         cap;
-  } AchanBlock;
-  AchanBlock *ch = (AchanBlock *)malloc(sizeof(AchanBlock));
-  if (!ch) { fprintf(stderr, "achan-new: oom\n"); abort(); }
-  ch->buf = (int64_t *)malloc(sizeof(int64_t) * (size_t)cap);
-  if (!ch->buf) { free(ch); fprintf(stderr, "achan-new: buf oom\n"); abort(); }
-  pthread_mutex_init(&ch->lock, NULL);
-  pthread_cond_init(&ch->not_full, NULL);
-  pthread_cond_init(&ch->not_empty, NULL);
-  ch->head = 0; ch->tail = 0; ch->count = 0; ch->cap = (int64_t)cap;
-  return (void *)ch;
+      void  **buffer;
+      size_t  capacity;
+      size_t  mask;
+      size_t  top;
+      size_t  bottom;
+  } BWsd;
+  BWsd *d = (BWsd *)calloc(1, sizeof(BWsd));
+  if (!d) { fprintf(stderr, "bwsd-new: oom\n"); abort(); }
+  d->buffer = (void **)calloc((size_t)cap, sizeof(void *));
+  if (!d->buffer) { free(d); fprintf(stderr, "bwsd-new: buf oom\n"); abort(); }
+  d->capacity = (size_t)cap;
+  d->mask     = (size_t)cap - 1;
+  __atomic_store_n((size_t *)&d->top,    (size_t)0, __ATOMIC_RELAXED);
+  __atomic_store_n((size_t *)&d->bottom, (size_t)0, __ATOMIC_RELAXED);
+  return (void *)d;
   
 }
 
-static void achan_free(void * ch) {
+static void bwsd_push(void * d, void * item) {
         typedef struct {
-      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
-      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
-  } AchanBlock;
-  AchanBlock *c = (AchanBlock *)ch;
-  pthread_mutex_destroy(&c->lock);
-  pthread_cond_destroy(&c->not_full);
-  pthread_cond_destroy(&c->not_empty);
-  free(c->buf);
-  free(c);
+      void  **buffer;
+      size_t  capacity;
+      size_t  mask;
+      size_t  top;
+      size_t  bottom;
+  } BWsd;
+  BWsd *dq = (BWsd *)d;
+  size_t b = __atomic_load_n((size_t *)&dq->bottom, __ATOMIC_RELAXED);
+  size_t t = __atomic_load_n((size_t *)&dq->top,    __ATOMIC_ACQUIRE);
+  if (b - t >= dq->capacity) { fprintf(stderr, "bwsd-push: full\n"); abort(); }
+  dq->buffer[b & dq->mask] = item;
+  __atomic_store_n((size_t *)&dq->bottom, b + 1, __ATOMIC_RELEASE);
   
 }
 
-static void * fiber_new_fn(void * fn) {
-        return (void *)tur_fiber_block_new((void(*)(void))fn, 0);
+static void * bwsd_pop(void * d) {
+        typedef struct {
+      void  **buffer;
+      size_t  capacity;
+      size_t  mask;
+      size_t  top;
+      size_t  bottom;
+  } BWsd;
+  BWsd *dq = (BWsd *)d;
+  size_t b = __atomic_load_n((size_t *)&dq->bottom, __ATOMIC_ACQUIRE);
+  size_t t = __atomic_load_n((size_t *)&dq->top,    __ATOMIC_ACQUIRE);
+  if (b == t) return NULL;
+  b--;
+  void *item = dq->buffer[b & dq->mask];
+  __atomic_store_n((size_t *)&dq->bottom, b, __ATOMIC_RELEASE);
+  return item;
   
 }
 
-static void fiber_free(void * f) {
-        tur_fiber_block_free((FiberBlock *)f);
-  
-}
-
-static void * sched_new() {
-        typedef struct { void *fibers[16]; int head; int tail; int count; } SchedQ;
-  SchedQ *q = (SchedQ *)calloc(1, sizeof(SchedQ));
-  if (!q) abort();
-  return (void *)q;
-  
-}
-
-static void sched_push(void * q, void * f) {
-        typedef struct { void *fibers[16]; int head; int tail; int count; } SchedQ;
-  SchedQ *sq = (SchedQ *)q;
-  if (sq->count >= 16) { fprintf(stderr, "sched: full\n"); abort(); }
-  sq->fibers[sq->tail] = f;
-  sq->tail = (sq->tail + 1) % 16;
-  sq->count++;
-  
-}
-
-static void sched_free(void * q) {
-        free(q);
-  
-}
-
-static void sched_run(void * q) {
-        typedef struct { void *fibers[16]; int head; int tail; int count; } SchedQ;
-  SchedQ *sq = (SchedQ *)q;
-  while (sq->count > 0) {
-      void *f = sq->fibers[sq->head];
-      sq->head = (sq->head + 1) % 16;
-      sq->count--;
-      tur_fiber_block_resume((FiberBlock *)f, 0);
-      if (!((FiberBlock *)f)->done) {
-          sq->fibers[sq->tail] = f;
-          sq->tail = (sq->tail + 1) % 16;
-          sq->count++;
-      } else {
-          tur_fiber_block_free((FiberBlock *)f);
-      }
+static void * bwsd_steal(void * d) {
+        typedef struct {
+      void  **buffer;
+      size_t  capacity;
+      size_t  mask;
+      size_t  top;
+      size_t  bottom;
+  } BWsd;
+  BWsd *dq = (BWsd *)d;
+  size_t t   = __atomic_load_n((size_t *)&dq->top,    __ATOMIC_ACQUIRE);
+  size_t bot = __atomic_load_n((size_t *)&dq->bottom, __ATOMIC_ACQUIRE);
+  if (bot == t) return NULL;
+  void *item = dq->buffer[t & dq->mask];
+  if (__atomic_compare_exchange_n((size_t *)&dq->top, &t, t + 1,
+                                   0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+      return item;
   }
+  return NULL;
   
 }
 
-static void producer() {
-        void *ch = chan_slot(NULL, 0);
-  typedef struct {
-      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
-      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
-  } AchanBlock;
-  int64_t vals[3] = {1, 2, 3};
-  for (int i = 0; i < 3; i++) {
-      AchanBlock *c = (AchanBlock *)ch;
-      while (1) {
-          pthread_mutex_lock(&c->lock);
-          if (c->count < c->cap) {
-              c->buf[c->tail] = vals[i];
-              c->tail = (c->tail + 1) % c->cap;
-              c->count++;
-              pthread_mutex_unlock(&c->lock);
-              break;
+static void bwsd_free(void * d) {
+        typedef struct {
+      void  **buffer;
+      size_t  capacity;
+      size_t  mask;
+      size_t  top;
+      size_t  bottom;
+  } BWsd;
+  BWsd *dq = (BWsd *)d;
+  free(dq->buffer);
+  free(dq);
+  
+}
+
+static void * bal_worker(void * arg) {
+        typedef struct {
+      void  **deques;   /* void *[2] */
+      int64_t counter;  /* items processed so far (atomic) */
+      int64_t target;
+      pthread_mutex_t done_lock;
+      pthread_cond_t  done_cond;
+  } BalState;
+  /* g_state is the C name for Turmeric's g-state function */
+  BalState *state = (BalState *)g_state(NULL);
+  int my    = (int)(intptr_t)arg;
+  int other = 1 - my;
+  void **deques = (void **)state->deques;
+
+  while (1) {
+      int64_t cnt = __atomic_load_n(&state->counter, __ATOMIC_ACQUIRE);
+      if (cnt >= state->target) break;
+
+      /* Try own deque, then steal */
+      void *item = bwsd_pop(deques[my]);
+      if (!item) item = bwsd_steal(deques[other]);
+
+      if (item) {
+          int64_t new_cnt = __atomic_add_fetch(&state->counter, 1, __ATOMIC_SEQ_CST);
+          if (new_cnt >= state->target) {
+              pthread_mutex_lock(&state->done_lock);
+              pthread_cond_broadcast(&state->done_cond);
+              pthread_mutex_unlock(&state->done_lock);
           }
-          pthread_mutex_unlock(&c->lock);
-          tur_fiber_block_yield(0);  /* channel full: yield to scheduler */
+      } else {
+          /* Yield briefly to avoid busy-spin hogging a core */
+          struct timespec ts = { .tv_sec = 0, .tv_nsec = 100000 };
+          nanosleep(&ts, NULL);
       }
   }
+  return NULL;
   
 }
 
-static void consumer() {
-        void *ch = chan_slot(NULL, 0);
-  typedef struct {
-      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
-      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
-  } AchanBlock;
-  int received = 0;
-  while (received < 3) {
-      AchanBlock *c = (AchanBlock *)ch;
-      pthread_mutex_lock(&c->lock);
-      if (c->count > 0) {
-          int64_t v = c->buf[c->head];
-          c->head = (c->head + 1) % c->cap;
-          c->count--;
-          pthread_mutex_unlock(&c->lock);
-          printf("recv: %lld\n", (long long)v);
-          received++;
-      } else {
-          pthread_mutex_unlock(&c->lock);
-          tur_fiber_block_yield(0);  /* channel empty: yield to scheduler */
-      }
+static void * launch_workers(void * fn) {
+        pthread_t *threads = (pthread_t *)malloc(2 * sizeof(pthread_t));
+  if (!threads) { fprintf(stderr, "launch-workers: oom\n"); abort(); }
+  for (int i = 0; i < 2; i++) {
+      pthread_create(&threads[i], NULL,
+                     (void *(*)(void *))fn,
+                     (void *)(intptr_t)i);
   }
+  return (void *)threads;
+  
+}
+
+static void join_workers(void * handles) {
+        pthread_t *threads = (pthread_t *)handles;
+  for (int i = 0; i < 2; i++) pthread_join(threads[i], NULL);
+  free(threads);
+  
+}
+
+static void * make_state(void * deque0, void * deque1, int64_t n) {
+        typedef struct {
+      void  **deques;
+      int64_t counter;
+      int64_t target;
+      pthread_mutex_t done_lock;
+      pthread_cond_t  done_cond;
+  } BalState;
+  void **dq = (void **)malloc(2 * sizeof(void *));
+  if (!dq) { fprintf(stderr, "make-state: oom\n"); abort(); }
+  dq[0] = deque0;
+  dq[1] = deque1;
+  BalState *s = (BalState *)calloc(1, sizeof(BalState));
+  if (!s) { free(dq); fprintf(stderr, "make-state: oom\n"); abort(); }
+  s->deques  = dq;
+  __atomic_store_n(&s->counter, (int64_t)0, __ATOMIC_RELAXED);
+  s->target  = (int64_t)n;
+  pthread_mutex_init(&s->done_lock, NULL);
+  pthread_cond_init(&s->done_cond, NULL);
+  /* Register in global so bal_worker can find it */
+  g_state((void *)s);
+  return (void *)s;
+  
+}
+
+static int64_t wait_done(void * state) {
+        typedef struct {
+      void  **deques;
+      int64_t counter;
+      int64_t target;
+      pthread_mutex_t done_lock;
+      pthread_cond_t  done_cond;
+  } BalState;
+  BalState *s = (BalState *)state;
+  pthread_mutex_lock(&s->done_lock);
+  while (__atomic_load_n(&s->counter, __ATOMIC_ACQUIRE) < s->target) {
+      pthread_cond_wait(&s->done_cond, &s->done_lock);
+  }
+  pthread_mutex_unlock(&s->done_lock);
+  return (int64_t)__atomic_load_n(&s->counter, __ATOMIC_ACQUIRE);
+  
+}
+
+static void print_count(int64_t count) {
+        printf("items-processed: %lld\n", (long long)count);
+  
+}
+
+static void free_state(void * state) {
+        typedef struct {
+      void  **deques;
+      int64_t counter;
+      int64_t target;
+      pthread_mutex_t done_lock;
+      pthread_cond_t  done_cond;
+  } BalState;
+  BalState *s = (BalState *)state;
+  pthread_mutex_destroy(&s->done_lock);
+  pthread_cond_destroy(&s->done_cond);
+  free(s->deques);
+  free(s);
   
 }
 
 int main() {
         int64_t __t0;
         {
-            void * ch_42 = achan_new(INT64_C(2));
-            (void)ch_42;
-            (void)(chan_slot((void *)(intptr_t)(ch_42), INT64_C(1)));
-            {
-                void * q_43 = sched_new();
-                (void)q_43;
-                sched_push((void *)(intptr_t)(q_43), (void *)(intptr_t)(fiber_new_fn((void *)(intptr_t)(producer))));
-                sched_push((void *)(intptr_t)(q_43), (void *)(intptr_t)(fiber_new_fn((void *)(intptr_t)(consumer))));
-                sched_run((void *)(intptr_t)(q_43));
-                sched_free((void *)(intptr_t)(q_43));
-            }
-            achan_free((void *)(intptr_t)(ch_42));
-            puts("done");
+            void * d0_50 = bwsd_new(INT64_C(16));
+            (void)d0_50;
             int64_t __t1;
-            __t1 = INT64_C(0);
+            {
+                void * d1_51 = bwsd_new(INT64_C(16));
+                (void)d1_51;
+                bwsd_push((void *)(intptr_t)(d0_50), (void *)(intptr_t)(d0_50));
+                bwsd_push((void *)(intptr_t)(d0_50), (void *)(intptr_t)(d0_50));
+                bwsd_push((void *)(intptr_t)(d0_50), (void *)(intptr_t)(d0_50));
+                bwsd_push((void *)(intptr_t)(d0_50), (void *)(intptr_t)(d0_50));
+                bwsd_push((void *)(intptr_t)(d0_50), (void *)(intptr_t)(d0_50));
+                bwsd_push((void *)(intptr_t)(d0_50), (void *)(intptr_t)(d0_50));
+                bwsd_push((void *)(intptr_t)(d0_50), (void *)(intptr_t)(d0_50));
+                bwsd_push((void *)(intptr_t)(d0_50), (void *)(intptr_t)(d0_50));
+                int64_t __t2;
+                int64_t __t3;
+                {
+                    void * state_52 = make_state((void *)(intptr_t)(d0_50), (void *)(intptr_t)(d1_51), INT64_C(8));
+                    (void)state_52;
+                    int64_t __t4;
+                    {
+                        void * handles_53 = launch_workers((void *)(intptr_t)(bal_worker));
+                        (void)handles_53;
+                        int64_t __t5;
+                        {
+                            int64_t count_54 = wait_done((void *)(intptr_t)(state_52));
+                            (void)count_54;
+                            join_workers((void *)(intptr_t)(handles_53));
+                            print_count(count_54);
+                            free_state((void *)(intptr_t)(state_52));
+                            bwsd_free((void *)(intptr_t)(d0_50));
+                            bwsd_free((void *)(intptr_t)(d1_51));
+                            int64_t __t6;
+                            __t6 = INT64_C(0);
+                            __t5 = __t6;
+                        }
+                        __t4 = __t5;
+                    }
+                    __t3 = __t4;
+                }
+                __t2 = __t3;
+                __t1 = __t2;
+            }
             __t0 = __t1;
         }
         return (int)__t0;

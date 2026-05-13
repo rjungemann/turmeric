@@ -1201,17 +1201,7 @@ static void * with_c_string(const char *, int64_t);
 static const char * from_c_string(const char *);
 static void * box(int64_t);
 static int64_t unbox(int64_t);
-static void * chan_slot(void *, int64_t);
-static void * achan_new(int64_t);
-static void achan_free(void *);
-static void * fiber_new_fn(void *);
-static void fiber_free(void *);
-static void * sched_new();
-static void sched_push(void *, void *);
-static void sched_free(void *);
-static void sched_run(void *);
-static void producer();
-static void consumer();
+static int64_t run_steal_test();
 
 static void * array_get(void * arr, int64_t idx) {
         struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
@@ -1270,172 +1260,68 @@ static int64_t unbox(int64_t p) {
   
 }
 
-static void * chan_slot(void * ch, int64_t store) {
-        static void *g = NULL;
-  if ((int64_t)store) g = ch;
-  return g;
-  
-}
-
-static void * achan_new(int64_t cap) {
-        typedef struct {
-      pthread_mutex_t lock;
-      pthread_cond_t  not_full;
-      pthread_cond_t  not_empty;
-      int64_t        *buf;
-      int64_t         head;
-      int64_t         tail;
-      int64_t         count;
-      int64_t         cap;
-  } AchanBlock;
-  AchanBlock *ch = (AchanBlock *)malloc(sizeof(AchanBlock));
-  if (!ch) { fprintf(stderr, "achan-new: oom\n"); abort(); }
-  ch->buf = (int64_t *)malloc(sizeof(int64_t) * (size_t)cap);
-  if (!ch->buf) { free(ch); fprintf(stderr, "achan-new: buf oom\n"); abort(); }
-  pthread_mutex_init(&ch->lock, NULL);
-  pthread_cond_init(&ch->not_full, NULL);
-  pthread_cond_init(&ch->not_empty, NULL);
-  ch->head = 0; ch->tail = 0; ch->count = 0; ch->cap = (int64_t)cap;
-  return (void *)ch;
-  
-}
-
-static void achan_free(void * ch) {
-        typedef struct {
-      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
-      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
-  } AchanBlock;
-  AchanBlock *c = (AchanBlock *)ch;
-  pthread_mutex_destroy(&c->lock);
-  pthread_cond_destroy(&c->not_full);
-  pthread_cond_destroy(&c->not_empty);
-  free(c->buf);
-  free(c);
-  
-}
-
-static void * fiber_new_fn(void * fn) {
-        return (void *)tur_fiber_block_new((void(*)(void))fn, 0);
-  
-}
-
-static void fiber_free(void * f) {
-        tur_fiber_block_free((FiberBlock *)f);
-  
-}
-
-static void * sched_new() {
-        typedef struct { void *fibers[16]; int head; int tail; int count; } SchedQ;
-  SchedQ *q = (SchedQ *)calloc(1, sizeof(SchedQ));
-  if (!q) abort();
-  return (void *)q;
-  
-}
-
-static void sched_push(void * q, void * f) {
-        typedef struct { void *fibers[16]; int head; int tail; int count; } SchedQ;
-  SchedQ *sq = (SchedQ *)q;
-  if (sq->count >= 16) { fprintf(stderr, "sched: full\n"); abort(); }
-  sq->fibers[sq->tail] = f;
-  sq->tail = (sq->tail + 1) % 16;
-  sq->count++;
-  
-}
-
-static void sched_free(void * q) {
-        free(q);
-  
-}
-
-static void sched_run(void * q) {
-        typedef struct { void *fibers[16]; int head; int tail; int count; } SchedQ;
-  SchedQ *sq = (SchedQ *)q;
-  while (sq->count > 0) {
-      void *f = sq->fibers[sq->head];
-      sq->head = (sq->head + 1) % 16;
-      sq->count--;
-      tur_fiber_block_resume((FiberBlock *)f, 0);
-      if (!((FiberBlock *)f)->done) {
-          sq->fibers[sq->tail] = f;
-          sq->tail = (sq->tail + 1) % 16;
-          sq->count++;
-      } else {
-          tur_fiber_block_free((FiberBlock *)f);
-      }
-  }
-  
-}
-
-static void producer() {
-        void *ch = chan_slot(NULL, 0);
+static int64_t run_steal_test() {
+        /* Minimal work-stealing deque — mirrors scheduler.c WSD implementation.
+   * Fields use plain size_t; atomic builtins receive (size_t *) casts,
+   * matching the ATOMIC_T / (size_t *) pattern in scheduler.c. */
   typedef struct {
-      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
-      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
-  } AchanBlock;
-  int64_t vals[3] = {1, 2, 3};
-  for (int i = 0; i < 3; i++) {
-      AchanBlock *c = (AchanBlock *)ch;
-      while (1) {
-          pthread_mutex_lock(&c->lock);
-          if (c->count < c->cap) {
-              c->buf[c->tail] = vals[i];
-              c->tail = (c->tail + 1) % c->cap;
-              c->count++;
-              pthread_mutex_unlock(&c->lock);
-              break;
-          }
-          pthread_mutex_unlock(&c->lock);
-          tur_fiber_block_yield(0);  /* channel full: yield to scheduler */
-      }
-  }
-  
-}
+      void  **buffer;
+      size_t  capacity;
+      size_t  mask;
+      size_t  top;      /* accessed only via __atomic builtins */
+      size_t  bottom;   /* accessed only via __atomic builtins */
+  } TestWSD;
 
-static void consumer() {
-        void *ch = chan_slot(NULL, 0);
-  typedef struct {
-      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
-      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
-  } AchanBlock;
-  int received = 0;
-  while (received < 3) {
-      AchanBlock *c = (AchanBlock *)ch;
-      pthread_mutex_lock(&c->lock);
-      if (c->count > 0) {
-          int64_t v = c->buf[c->head];
-          c->head = (c->head + 1) % c->cap;
-          c->count--;
-          pthread_mutex_unlock(&c->lock);
-          printf("recv: %lld\n", (long long)v);
-          received++;
-      } else {
-          pthread_mutex_unlock(&c->lock);
-          tur_fiber_block_yield(0);  /* channel empty: yield to scheduler */
+  /* Allocate deque with capacity 16 */
+  TestWSD *d = (TestWSD *)calloc(1, sizeof(TestWSD));
+  if (!d) { fprintf(stderr, "workstealing-steal: oom\n"); abort(); }
+  d->buffer   = (void **)calloc(16, sizeof(void *));
+  if (!d->buffer) { free(d); fprintf(stderr, "workstealing-steal: buf oom\n"); abort(); }
+  d->capacity = 16;
+  d->mask     = 15;
+  __atomic_store_n((size_t *)&d->top,    (size_t)0, __ATOMIC_RELAXED);
+  __atomic_store_n((size_t *)&d->bottom, (size_t)0, __ATOMIC_RELAXED);
+
+  /* Push 4 non-null sentinel items (owner / bottom side) */
+  for (int i = 1; i <= 4; i++) {
+      size_t b = __atomic_load_n((size_t *)&d->bottom, __ATOMIC_RELAXED);
+      size_t t = __atomic_load_n((size_t *)&d->top,    __ATOMIC_ACQUIRE);
+      if (b - t >= d->capacity) { fprintf(stderr, "workstealing-steal: deque full\n"); abort(); }
+      d->buffer[b & d->mask] = (void *)(uintptr_t)i;
+      __atomic_store_n((size_t *)&d->bottom, b + 1, __ATOMIC_RELEASE);
+  }
+
+  /* Steal all items from the top (thief / CAS path) */
+  int stolen = 0;
+  while (1) {
+      size_t t   = __atomic_load_n((size_t *)&d->top,    __ATOMIC_ACQUIRE);
+      size_t bot = __atomic_load_n((size_t *)&d->bottom, __ATOMIC_ACQUIRE);
+      if (bot == t) break;
+      /* CAS to claim the item at top */
+      if (__atomic_compare_exchange_n((size_t *)&d->top, &t, t + 1,
+                                       0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+          stolen++;
       }
   }
+
+  /* Verify deque is empty */
+  size_t t2  = __atomic_load_n((size_t *)&d->top,    __ATOMIC_ACQUIRE);
+  size_t b2  = __atomic_load_n((size_t *)&d->bottom, __ATOMIC_ACQUIRE);
+  int    emp = (b2 == t2) ? 1 : 0;
+
+  free(d->buffer);
+  free(d);
+
+  printf("steal-count: %d\n", stolen);
+  printf("deque-empty: %s\n", emp ? "true" : "false");
+  return (int64_t)(stolen == 4 && emp);
   
 }
 
 int main() {
+        (void)(run_steal_test());
         int64_t __t0;
-        {
-            void * ch_42 = achan_new(INT64_C(2));
-            (void)ch_42;
-            (void)(chan_slot((void *)(intptr_t)(ch_42), INT64_C(1)));
-            {
-                void * q_43 = sched_new();
-                (void)q_43;
-                sched_push((void *)(intptr_t)(q_43), (void *)(intptr_t)(fiber_new_fn((void *)(intptr_t)(producer))));
-                sched_push((void *)(intptr_t)(q_43), (void *)(intptr_t)(fiber_new_fn((void *)(intptr_t)(consumer))));
-                sched_run((void *)(intptr_t)(q_43));
-                sched_free((void *)(intptr_t)(q_43));
-            }
-            achan_free((void *)(intptr_t)(ch_42));
-            puts("done");
-            int64_t __t1;
-            __t1 = INT64_C(0);
-            __t0 = __t1;
-        }
+        __t0 = INT64_C(0);
         return (int)__t0;
 }
 

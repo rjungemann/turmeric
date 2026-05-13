@@ -1,0 +1,150 @@
+;; Phase T23 / SCH-003: scheduler-io-park — park on I/O, resume on completion.
+;;
+;; Demonstrates the scheduler park / unpark mechanism in an I/O context:
+;;
+;;   1. Create a single-threaded scheduler.
+;;   2. Spawn fiber-A, which parks itself waiting for an I/O-style event.
+;;   3. Spawn fiber-B, which writes a value to a pipe and then explicitly
+;;      unparks fiber-A (simulating an I/O-completion callback).
+;;   4. The scheduler resumes fiber-A; it reads from the pipe and prints
+;;      the received value.
+;;
+;; The single-threaded scheduler is used because its park/unpark are fully
+;; implemented; the MT scheduler's park is a v1 no-op.
+;;
+;; Expected output:
+;;   fiber-a got: 42
+;;   io-park: ok
+
+;; ---- Pipe helpers ----
+
+(defn pipe-new [] :ptr<void>
+  ```c
+  extern int pipe(int[2]);
+  int *fds = (int *)malloc(2 * sizeof(int));
+  if (!fds) { fprintf(stderr, "pipe-new: oom\n"); abort(); }
+  if (pipe(fds) != 0) { perror("pipe"); free(fds); abort(); }
+  return (void *)fds;
+  ```)
+
+(defn pipe-close [p :ptr<void>] :nil
+  ```c
+  extern int close(int);
+  int *fds = (int *)p;
+  close(fds[0]);
+  close(fds[1]);
+  free(fds);
+  ```)
+
+;; ---- Shared IOState: { pipe_fds ptr, fiber_a ptr } ----
+
+;; Global IOState cell — the same static is returned every time,
+;; so fiber bodies can call io_state_cell(NULL) from C to read it.
+(defn io-state-cell [val :ptr<void>] :ptr<void>
+  ```c
+  static void *g_io_state = NULL;
+  if (val) g_io_state = val;
+  return g_io_state;
+  ```)
+
+(defn io-state-new [pipe :ptr<void> fa :ptr<void>] :ptr<void>
+  ```c
+  typedef struct { void *pipe; void *fiber_a; } IOState;
+  IOState *st = (IOState *)malloc(sizeof(IOState));
+  if (!st) { fprintf(stderr, "io-state-new: oom\n"); abort(); }
+  st->pipe    = pipe;
+  st->fiber_a = fa;
+  return (void *)st;
+  ```)
+
+(defn io-state-free [st :ptr<void>] :nil
+  ```c
+  free(st);
+  ```)
+
+;; ---- Scheduler helpers (wraps compiler-generated single-threaded scheduler) ----
+
+(defn sched-new-fn [] :ptr<void>
+  ```c
+  TurScheduler *s = tur_scheduler_new();
+  tur_scheduler = s;
+  return (void *)s;
+  ```)
+
+(defn sched-spawn [sched :ptr<void> f :ptr<void>] :nil
+  ```c
+  tur_scheduler_spawn((TurScheduler *)sched, (FiberBlock *)f);
+  ```)
+
+(defn sched-run-to-completion [sched :ptr<void>] :nil
+  ```c
+  tur_scheduler_run_to_completion((TurScheduler *)sched);
+  ```)
+
+;; ---- Fiber helpers ----
+
+(defn fiber-new-fn [fn :ptr<void>] :ptr<void>
+  ```c
+  return (void *)tur_fiber_block_new((void(*)(void))fn, 0);
+  ```)
+
+(defn fiber-free-fn [f :ptr<void>] :nil
+  ```c
+  tur_fiber_block_free((FiberBlock *)f);
+  ```)
+
+;; ---- Fiber bodies ----
+
+;; fiber-A: park self, wait for I/O notification, read from pipe.
+(defn fiber-a-fn [] :nil
+  ```c
+  extern ssize_t read(int, void *, size_t);
+  typedef struct { void *pipe; void *fiber_a; } IOState;
+  IOState *st = (IOState *)io_state_cell(NULL);
+
+  /* Park self — fiber-B will unpark us after writing to the pipe.
+   * tur_scheduler_park() marks the fiber parked and yields. */
+  tur_scheduler_park();
+
+  /* Resumed: fiber-B wrote to the pipe and called unpark.
+   * Read the I/O payload. */
+  int *fds = (int *)st->pipe;
+  int64_t val = 0;
+  read(fds[0], &val, sizeof(val));
+  printf("fiber-a got: %lld\n", (long long)val);
+  ```)
+
+;; fiber-B: write I/O payload to pipe, then unpark fiber-A.
+(defn fiber-b-fn [] :nil
+  ```c
+  extern ssize_t write(int, const void *, size_t);
+  typedef struct { void *pipe; void *fiber_a; } IOState;
+  IOState *st = (IOState *)io_state_cell(NULL);
+
+  /* Simulate I/O completion: write value to pipe */
+  int *fds = (int *)st->pipe;
+  int64_t payload = 42;
+  write(fds[1], &payload, sizeof(payload));
+
+  /* Unpark fiber-A (mirrors what tur_scheduler_unpark does in SCH-003 callback) */
+  tur_scheduler_unpark((FiberBlock *)st->fiber_a);
+  ```)
+
+;; ---- Main ----
+
+(defn main [] :int
+  (let [p     (pipe-new)]
+    (let [sched (sched-new-fn)]
+      (let [fa (fiber-new-fn fiber-a-fn)]
+        (let [fb (fiber-new-fn fiber-b-fn)]
+          (let [st (io-state-new p fa)]
+            (io-state-cell st)
+            (sched-spawn sched fa)
+            (sched-spawn sched fb)
+            (sched-run-to-completion sched)
+            (println "io-park: ok")
+            (pipe-close p)
+            (fiber-free-fn fa)
+            (fiber-free-fn fb)
+            (io-state-free st)
+            0))))))

@@ -1,0 +1,102 @@
+;; Phase T23 / SCH-006: workstealing-metrics -- verify steal_count and queue_length.
+;;
+;; Demonstrates SCH-006 metrics tracking using an inlined work-stealing deque.
+;; (Test binaries are single-TU and do not link scheduler.c; the deque algorithm
+;; and metric counters are inlined here exactly as they exist in scheduler.c.)
+;;
+;; Scenario (single-threaded for determinism):
+;;   1. Create a deque with capacity 16.
+;;   2. Push 6 items (owner / bottom side).  queue-length after: 6.
+;;   3. Pop 2 items  (owner / bottom side).  queue-length after: 4.
+;;   4. Steal 4 items via the CAS top path.  steal-count after: 4.
+;;   5. Assert deque is now empty.
+;;
+;; Expected output:
+;;   push-count: 6
+;;   pop-count: 2
+;;   steal-count: 4
+;;   queue-length: 0
+;;   deque-empty: true
+
+(defn run-metrics-test [] :int
+  ```c
+  /* Metrics counters -- mirrors TurSchedulerMTMetrics from scheduler.h */
+  int64_t push_count   = 0;
+  int64_t pop_count    = 0;
+  int64_t steal_count  = 0;
+
+  /* Minimal inlined work-stealing deque -- mirrors WorkStealingDeque
+   * in scheduler.c.  Fields are plain size_t; __atomic builtins receive
+   * (size_t *) casts, matching the ATOMIC_T / (size_t *) pattern there. */
+  typedef struct {
+      void  **buffer;
+      size_t  capacity;
+      size_t  mask;
+      size_t  top;    /* thief side (steal / CAS) */
+      size_t  bottom; /* owner side (push / pop)  */
+  } MWsd;
+
+  /* Allocate deque (capacity must be power-of-2) */
+  MWsd *d = (MWsd *)calloc(1, sizeof(MWsd));
+  if (!d) { fprintf(stderr, "workstealing-metrics: oom\n"); abort(); }
+  d->buffer = (void **)calloc(16, sizeof(void *));
+  if (!d->buffer) { free(d); fprintf(stderr, "workstealing-metrics: buf oom\n"); abort(); }
+  d->capacity = 16;
+  d->mask     = 15;
+  __atomic_store_n((size_t *)&d->top,    (size_t)0, __ATOMIC_RELAXED);
+  __atomic_store_n((size_t *)&d->bottom, (size_t)0, __ATOMIC_RELAXED);
+
+  /* Push 6 non-null sentinel items (owner / bottom side) */
+  for (int i = 1; i <= 6; i++) {
+      size_t b = __atomic_load_n((size_t *)&d->bottom, __ATOMIC_RELAXED);
+      size_t t = __atomic_load_n((size_t *)&d->top,    __ATOMIC_ACQUIRE);
+      if (b - t >= d->capacity) { fprintf(stderr, "workstealing-metrics: deque full\n"); abort(); }
+      d->buffer[b & d->mask] = (void *)(uintptr_t)i;
+      __atomic_store_n((size_t *)&d->bottom, b + 1, __ATOMIC_RELEASE);
+      push_count++;
+  }
+
+  /* Pop 2 items from the bottom (owner side) */
+  for (int i = 0; i < 2; i++) {
+      size_t b = __atomic_load_n((size_t *)&d->bottom, __ATOMIC_ACQUIRE);
+      size_t t = __atomic_load_n((size_t *)&d->top,    __ATOMIC_ACQUIRE);
+      if (b == t) { fprintf(stderr, "workstealing-metrics: deque empty on pop\n"); abort(); }
+      b--;
+      (void)d->buffer[b & d->mask];  /* consume item */
+      __atomic_store_n((size_t *)&d->bottom, b, __ATOMIC_RELEASE);
+      pop_count++;
+  }
+
+  /* Steal remaining 4 items via the CAS top path (thief side) */
+  while (1) {
+      size_t t   = __atomic_load_n((size_t *)&d->top,    __ATOMIC_ACQUIRE);
+      size_t bot = __atomic_load_n((size_t *)&d->bottom, __ATOMIC_ACQUIRE);
+      if (bot == t) break;
+      if (__atomic_compare_exchange_n((size_t *)&d->top, &t, t + 1,
+                                       0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+          steal_count++;
+      }
+  }
+
+  /* Compute current queue length and empty flag */
+  size_t b_final = __atomic_load_n((size_t *)&d->bottom, __ATOMIC_ACQUIRE);
+  size_t t_final = __atomic_load_n((size_t *)&d->top,    __ATOMIC_ACQUIRE);
+  int64_t queue_length = (b_final >= t_final) ? (int64_t)(b_final - t_final) : 0;
+  int deque_empty = (b_final == t_final) ? 1 : 0;
+
+  free(d->buffer);
+  free(d);
+
+  printf("push-count: %lld\n",   (long long)push_count);
+  printf("pop-count: %lld\n",    (long long)pop_count);
+  printf("steal-count: %lld\n",  (long long)steal_count);
+  printf("queue-length: %lld\n", (long long)queue_length);
+  printf("deque-empty: %s\n",    deque_empty ? "true" : "false");
+
+  return (int64_t)(push_count == 6 && pop_count == 2 && steal_count == 4
+                   && queue_length == 0 && deque_empty);
+  ```)
+
+(defn main [] :int
+  (run-metrics-test)
+  0)

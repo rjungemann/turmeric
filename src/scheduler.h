@@ -74,4 +74,24 @@ TurSchedulerMT *tur_scheduler_mt_from_threadpool(void *threadpool);
 /* Set the TurSchedulerMT for a ThreadPool */
 void tur_scheduler_mt_set_for_threadpool(void *threadpool, TurSchedulerMT *s);
 
+/* SCH-006: Performance metrics */
+
+/* Snapshot of scheduler performance counters. */
+typedef struct {
+    int64_t steal_count;    /* Successful work steals across all threads */
+    int64_t steal_attempts; /* Total steal attempts (includes failures) */
+    int64_t global_pops;    /* Items taken from the global queue */
+    int64_t busy_iters;     /* Worker loop iterations that found and ran work */
+    int64_t idle_iters;     /* Worker loop iterations that found no work */
+} TurSchedulerMTMetrics;
+
+/* Fill *out with a consistent snapshot of the current metrics. */
+void tur_scheduler_mt_get_metrics(TurSchedulerMT *s, TurSchedulerMTMetrics *out);
+
+/* Reset all metric counters to zero. */
+void tur_scheduler_mt_reset_metrics(TurSchedulerMT *s);
+
+/* Return the current number of items in one thread's deque (approximate). */
+size_t tur_scheduler_mt_deque_length(TurSchedulerMT *s, size_t thread_idx);
+
 #endif /* TUR_SCHEDULER_H */

@@ -1,0 +1,77 @@
+;; Phase T23 / SCH-006: workstealing-deque-bench
+;;
+;; Micro-benchmark for the work-stealing deque (push / pop / steal cycle).
+;;
+;; bench-main performs one iteration:
+;;   - Push 64 sentinel items onto a deque (owner side).
+;;   - Pop 32 from the bottom (owner side).
+;;   - Steal the remaining 32 from the top via CAS (thief side).
+;;   - Free the deque.
+;;
+;; This exercises the hot path in the scheduler worker loop.
+;; Run with: ./tests/run-bench.sh workstealing-deque-bench
+;;
+;; Tuning notes (SCH-006):
+;;   - The deque capacity defaults to 64 here (adequate for 64-item workload).
+;;     Production uses 1024 (scheduler.c); over-sizing wastes TLB entries.
+;;   - The steal CAS retry loop is O(1) in the single-thief case; real
+;;     multi-thief contention adds retries whose count grows with thread count.
+;;   - Benchmark guidance: if per-iteration time drops below ~200ns on a
+;;     modern CPU, the deque overhead is negligible vs. fiber context-switch cost.
+
+(defn bench-main [] :int
+  ```c
+  /* Inline the deque so the benchmark is self-contained (no scheduler.c link). */
+  typedef struct {
+      void  **buffer;
+      size_t  capacity;
+      size_t  mask;
+      size_t  top;
+      size_t  bottom;
+  } BenchWsd;
+
+  /* Allocate deque with capacity 64 */
+  BenchWsd *d = (BenchWsd *)calloc(1, sizeof(BenchWsd));
+  if (!d) return 1;
+  d->buffer = (void **)calloc(64, sizeof(void *));
+  if (!d->buffer) { free(d); return 1; }
+  d->capacity = 64;
+  d->mask     = 63;
+  __atomic_store_n((size_t *)&d->top,    (size_t)0, __ATOMIC_RELAXED);
+  __atomic_store_n((size_t *)&d->bottom, (size_t)0, __ATOMIC_RELAXED);
+
+  /* Push 64 sentinel items (owner / bottom side) */
+  for (int i = 1; i <= 64; i++) {
+      size_t b = __atomic_load_n((size_t *)&d->bottom, __ATOMIC_RELAXED);
+      d->buffer[b & d->mask] = (void *)(uintptr_t)i;
+      __atomic_store_n((size_t *)&d->bottom, b + 1, __ATOMIC_RELEASE);
+  }
+
+  /* Pop 32 items from the bottom (owner side, LIFO path) */
+  for (int i = 0; i < 32; i++) {
+      size_t b = __atomic_load_n((size_t *)&d->bottom, __ATOMIC_ACQUIRE);
+      b--;
+      (void)d->buffer[b & d->mask];
+      __atomic_store_n((size_t *)&d->bottom, b, __ATOMIC_RELEASE);
+  }
+
+  /* Steal the remaining 32 from the top (thief / CAS path) */
+  int stolen = 0;
+  while (stolen < 32) {
+      size_t t   = __atomic_load_n((size_t *)&d->top,    __ATOMIC_ACQUIRE);
+      size_t bot = __atomic_load_n((size_t *)&d->bottom, __ATOMIC_ACQUIRE);
+      if (bot == t) break;
+      if (__atomic_compare_exchange_n((size_t *)&d->top, &t, t + 1,
+                                       0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+          stolen++;
+      }
+  }
+
+  free(d->buffer);
+  free(d);
+
+  /* Return 0 on success; non-zero causes the benchmark runner to report FAIL. */
+  return (int64_t)(stolen == 32 ? 0 : 1);
+  ```)
+
+(defn main [] :int (bench-main))

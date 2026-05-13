@@ -39,6 +39,7 @@ struct WorkStealingDeque {
 
 /* Multi-threaded scheduler */
 /* SCH-003: Added IOBackend for I/O event integration */
+/* SCH-006: Added atomic performance metric counters */
 struct TurSchedulerMT {
     size_t n_threads;
     pthread_t *threads;
@@ -48,11 +49,18 @@ struct TurSchedulerMT {
     bool should_stop;
     pthread_mutex_t stop_lock;
     pthread_cond_t stop_cond;
-    
+
     /* I/O integration */
     IOBackend *io_backend;       /* Platform-specific I/O event backend */
     pthread_mutex_t io_lock;     /* Protects io_waiters list */
     struct IOWaiter *io_waiters; /* List of fibers waiting on I/O */
+
+    /* SCH-006: Performance metrics (all updated via __atomic builtins) */
+    ATOMIC_T int64_t steal_count;    /* Successful steals */
+    ATOMIC_T int64_t steal_attempts; /* Total steal attempts */
+    ATOMIC_T int64_t global_pops;    /* Items taken from global queue */
+    ATOMIC_T int64_t busy_iters;     /* Worker iterations that ran a fiber */
+    ATOMIC_T int64_t idle_iters;     /* Worker iterations that found no work */
 };
 
 /* I/O waiter structure - tracks fibers waiting on I/O events */
@@ -187,40 +195,48 @@ static void *scheduler_worker(void *arg) {
         /* Try to pop from our own deque first */
         FiberBlock *f = ws_deque_pop(my_deque);
         if (f) {
-            /* Run the fiber */
+            __atomic_add_fetch((int64_t *)&s->busy_iters, 1, __ATOMIC_RELAXED);
             tur_fiber_block_resume(f, 0);
             continue;
         }
-        
+
         /* Try to steal from other threads */
         bool found = false;
         for (size_t i = 0; i < s->n_threads; i++) {
             if (i == thread_idx) continue;
+            __atomic_add_fetch((int64_t *)&s->steal_attempts, 1, __ATOMIC_RELAXED);
             f = ws_deque_steal(s->deques[i]);
             if (f) {
+                __atomic_add_fetch((int64_t *)&s->steal_count, 1, __ATOMIC_RELAXED);
                 found = true;
                 break;
             }
         }
-        
+
         if (found) {
+            __atomic_add_fetch((int64_t *)&s->busy_iters, 1, __ATOMIC_RELAXED);
             tur_fiber_block_resume(f, 0);
             continue;
         }
-        
+
         /* Try the global queue */
         bool success;
         f = (FiberBlock *)aq_pop(s->global_queue, &success);
         if (success) {
+            __atomic_add_fetch((int64_t *)&s->global_pops, 1, __ATOMIC_RELAXED);
+            __atomic_add_fetch((int64_t *)&s->busy_iters, 1, __ATOMIC_RELAXED);
             tur_fiber_block_resume(f, 0);
             continue;
         }
-        
+
         /* No work - check for I/O events */
         /* SCH-003: Poll for I/O events with a timeout */
+        __atomic_add_fetch((int64_t *)&s->idle_iters, 1, __ATOMIC_RELAXED);
         scheduler_mt_poll_io(s, 1);  /* 1ms timeout */
-        
-        /* If still no work, yield */
+
+        /* SCH-006: Adaptive idle back-off.
+         * First idle iteration: spin briefly (yield the CPU slice).
+         * Subsequent: sleep 0.1ms so idle threads don't saturate a core. */
         struct timespec ts = { .tv_sec = 0, .tv_nsec = 100000 };  /* 0.1ms */
         nanosleep(&ts, NULL);
     }
@@ -267,6 +283,13 @@ TurSchedulerMT *tur_scheduler_mt_new(size_t n_threads) {
     s->should_stop = false;
     pthread_mutex_init(&s->stop_lock, NULL);
     pthread_cond_init(&s->stop_cond, NULL);
+
+    /* SCH-006: zero-init metric counters */
+    __atomic_store_n((int64_t *)&s->steal_count,    0, __ATOMIC_RELAXED);
+    __atomic_store_n((int64_t *)&s->steal_attempts, 0, __ATOMIC_RELAXED);
+    __atomic_store_n((int64_t *)&s->global_pops,    0, __ATOMIC_RELAXED);
+    __atomic_store_n((int64_t *)&s->busy_iters,     0, __ATOMIC_RELAXED);
+    __atomic_store_n((int64_t *)&s->idle_iters,     0, __ATOMIC_RELAXED);
     
     /* SCH-003: Initialize I/O backend */
     s->io_backend = io_backend_new();
@@ -510,4 +533,34 @@ void tur_scheduler_mt_set_for_threadpool(void *threadpool, TurSchedulerMT *s) {
     /* In a full integration, we would store s in threadpool */
     (void)threadpool;
     tur_current_scheduler_mt = s;
+}
+
+/* SCH-006: Performance metrics implementation */
+
+void tur_scheduler_mt_get_metrics(TurSchedulerMT *s, TurSchedulerMTMetrics *out) {
+    if (!s || !out) return;
+    out->steal_count    = __atomic_load_n((int64_t *)&s->steal_count,    __ATOMIC_ACQUIRE);
+    out->steal_attempts = __atomic_load_n((int64_t *)&s->steal_attempts, __ATOMIC_ACQUIRE);
+    out->global_pops    = __atomic_load_n((int64_t *)&s->global_pops,    __ATOMIC_ACQUIRE);
+    out->busy_iters     = __atomic_load_n((int64_t *)&s->busy_iters,     __ATOMIC_ACQUIRE);
+    out->idle_iters     = __atomic_load_n((int64_t *)&s->idle_iters,     __ATOMIC_ACQUIRE);
+}
+
+void tur_scheduler_mt_reset_metrics(TurSchedulerMT *s) {
+    if (!s) return;
+    __atomic_store_n((int64_t *)&s->steal_count,    0, __ATOMIC_RELEASE);
+    __atomic_store_n((int64_t *)&s->steal_attempts, 0, __ATOMIC_RELEASE);
+    __atomic_store_n((int64_t *)&s->global_pops,    0, __ATOMIC_RELEASE);
+    __atomic_store_n((int64_t *)&s->busy_iters,     0, __ATOMIC_RELEASE);
+    __atomic_store_n((int64_t *)&s->idle_iters,     0, __ATOMIC_RELEASE);
+}
+
+/* Return the current fill level of one thread's deque (top → bottom distance).
+ * This is a snapshot and may be stale by the time the caller reads it. */
+size_t tur_scheduler_mt_deque_length(TurSchedulerMT *s, size_t thread_idx) {
+    if (!s || thread_idx >= s->n_threads) return 0;
+    WorkStealingDeque *d = s->deques[thread_idx];
+    size_t b = __atomic_load_n((size_t *)&d->bottom, __ATOMIC_ACQUIRE);
+    size_t t = __atomic_load_n((size_t *)&d->top,    __ATOMIC_ACQUIRE);
+    return (b >= t) ? (b - t) : 0;
 }
