@@ -84,4 +84,9 @@ Kind kind_of_type_app(Type fn_type, Type arg_type, Span span);
  * the --dump-kinds flag. */
 void kind_dump_program(Expr *program, FILE *out);
 
+/* Phase HKT-P6: Verify that Kind information is preserved through all compiler
+ * passes. Returns true if all kind info appears valid, false otherwise.
+ * Used in debug builds to catch accidental clearing of kind annotations. */
+bool kind_verify_program(const Expr *program);
+
 #endif /* TUR_KIND_CHECK_H */

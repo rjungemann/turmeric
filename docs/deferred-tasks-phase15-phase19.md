@@ -233,7 +233,7 @@ These prerequisites unblock the remaining deferred items in Phase H5 and H6. The
 - [x] Add test `tur-explain-kind-mismatch` verifying that `--explain TUR-E0012` produces non-empty output and exits 0. (In `tests/run-flags.sh`; also tests all 12 codes + unknown code + TUR-E0013.)
 
 #### HKT-P6 — `--dump-kinds` infrastructure (blocks H6 `--dump-kinds` debugging flag)
-- [ ] Verify that `Kind` information on `Type.hkt_kind` and `TypeClass.type_param_kinds` is preserved through all compiler passes (elaborate → kind-check → effect-check → codegen). Add a debug-build assertion that fires if kind info is inadvertently cleared. _(assertion deferred; pass-through preservation confirmed by hkt-functor-option fixture)_
+- [x] Verify that `Kind` information on `Type.hkt_kind` and `TypeClass.type_param_kinds` is preserved through all compiler passes (elaborate → kind-check → effect-check → codegen). Implemented `kind_verify_program()` in `src/kind_check.c` with debug assertions after each pass (PASS_ELABORATE, PASS_KIND_CHECK, PASS_EFFECT_LOWER, PASS_EFFECT_ROW_INFER, PASS_CPS, PASS_BORROW_CHECK). In debug builds (`!NDEBUG`), assertions fire if kind info is inadvertently cleared.
 - [x] Implement `kind_dump_program(Expr *program, FILE *out)` in `src/kind_check.c`: walks the AST and prints each `defclass` and `definstance` with a non-`KIND_STAR` kind annotation in human-readable form.
 - [x] Add `--dump-kinds` flag parsing in `src/main.c`: invoke `kind_dump_program()` after `PASS_KIND_CHECK` and before codegen; output goes to stdout.
 - [x] Add fixture/test `dump-kinds-basic` verifying that `--dump-kinds` produces non-empty output for a program containing a `KIND_ARROW` typeclass declaration. (In `tests/run-flags.sh`.)
