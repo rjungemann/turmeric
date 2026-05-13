@@ -185,7 +185,8 @@ These prerequisites unblock the remaining deferred items in Phase H5 and H6. The
 - [x] Add `type_app()` helper function in `src/types.c` to construct TY_APP nodes.
 - [x] Implement `elab_type_app()` in `src/elab.c` to parse `(type-app F A)` syntax.
 - [x] Add fixture `hkt-type-app-kind.tur` verifying that a partially-applied two-argument type constructor has kind `* -> *` (advisory check in v1; kind mismatch emits `TUR-E0012`).
-- [ ] Extend type argument parser in `elab_definstance` to support TY_APP in type positions (e.g., `[result int]`). _BLOCKS: H5 partial application._
+- [x] Extend type argument parser in `elab_definstance` to support TY_APP in type positions (e.g., `[result int]`). _BLOCKS: H5 partial application._
+  - Implemented: Added implicit type application syntax support in elab_definstance. Consecutive symbols like `[result int]` are now combined into TY_APP nodes, allowing both `[(result int)]` (explicit) and `[result int]` (implicit) syntax for partial type application.
 - [x] Wire `TY_APP` into `type_c_name()` in `src/types.c` so it emits a valid C representation (opaque `int64_t` in v1, same as `TY_STRUCT`).
   - Implemented: `type_c_name()` in `src/types.c` returns `"int64_t"` for `TY_APP` (line 434–436), consistent with `TY_STRUCT` opaque handle semantics.
 - [x] Add fixture `hkt-type-app-kind.tur` verifying that a partially-applied two-argument type constructor has kind `* -> *` (advisory check in v1; kind mismatch emits `TUR-E0012`).
