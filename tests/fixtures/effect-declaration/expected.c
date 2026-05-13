@@ -333,6 +333,17 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
 /* Phase 19: Algebraic effect handler chain */
 typedef struct { bool consumed; void *origin_fiber; } TurContK;
 
+/* Phase 19D: Effect-capture continuation context */
+typedef struct TurEffectCaptureCtx TurEffectCaptureCtx;
+struct TurEffectCaptureCtx {
+    bool has_pending_effect;
+    const char *eff_name;
+    int64_t eff_args[8];  /* v1: max 8 args */
+    int eff_n_args;
+    int64_t (*dispatch)(void *ctx, int64_t k, int64_t v);
+    void *body_env;  /* heap-allocated env for body captures */
+};
+
 typedef struct EffectHandlerCase EffectHandlerCase;
 struct EffectHandlerCase {
     const char *effect_name;
@@ -370,6 +381,7 @@ struct FiberBlock {
     bool cancelled; /* Set when parent TaskGroup is cancelled */
     jmp_buf panic_jmpbuf; /* Per-fiber panic recovery buffer */
     bool panic_jmpbuf_valid; /* Whether this fiber's panic handler is active */
+    void *eff_ctx;  /* Phase 19D: NULL for regular fibers, TurEffectCaptureCtx* for effect-capture fibers */
 };
 
 static __thread FiberBlock *tur_current_fiber = NULL;
@@ -495,6 +507,19 @@ static void tur_fiber_block_yield(int64_t value) {
     if (!f) { fprintf(stderr, "fiber-yield: not in fiber\n"); abort(); }
     f->result = value;
     swapcontext(&f->ctx, &f->caller_ctx);
+}
+
+/* Phase 19D: Effect-capture continuation helpers */
+static int64_t tur_effect_cont_resume(int64_t k_as_int64, int64_t v) {
+    FiberBlock *fiber = (FiberBlock *)(intptr_t)k_as_int64;
+    TurEffectCaptureCtx *ctx = (TurEffectCaptureCtx *)fiber->eff_ctx;
+    if (!ctx) { fprintf(stderr, "continuation error: not a capturable continuation\n"); abort(); }
+    return ctx->dispatch(ctx, k_as_int64, v);
+}
+
+static bool tur_effect_cont_valid(int64_t k_as_int64) {
+    FiberBlock *fiber = (FiberBlock *)(intptr_t)k_as_int64;
+    return !fiber->done;
 }
 
 typedef struct FiberLocalEntry FiberLocalEntry;
@@ -914,6 +939,150 @@ static int64_t tur_next_timer_wait_us(void) {
     return diff > 0 ? diff : 0;
 }
 
+/* Phase T24: Timer wheel */
+#define TUR_WHEEL_SLOTS 256
+#define TUR_WHEEL_SLOT_MASK 255
+typedef void (*tur_timer_cb_t)(void *);
+typedef struct TurTimerNode TurTimerNode;
+struct TurTimerNode {
+    int64_t deadline_ms;
+    tur_timer_cb_t callback;
+    void *arg;
+    bool cancelled;
+    TurTimerNode *next;
+    TurTimerNode *prev;
+};
+typedef struct {
+    TurTimerNode *slots[TUR_WHEEL_SLOTS];
+    int64_t current_ms;
+    pthread_mutex_t lock;
+    bool running;
+    pthread_t thread;
+} TurTimerWheel;
+
+static int64_t tur_wheel_now_ms(void) {
+    struct timespec _ts;
+    clock_gettime(CLOCK_MONOTONIC, &_ts);
+    return (int64_t)_ts.tv_sec * 1000LL + (int64_t)_ts.tv_nsec / 1000000LL;
+}
+
+static void tur_timer_wheel_tick(TurTimerWheel *w) {
+    if (!w) return;
+    int64_t now = tur_wheel_now_ms();
+    int64_t elapsed = now - w->current_ms;
+    if (elapsed <= 0) return;
+    for (int64_t _t = 0; _t < elapsed; _t++) {
+        w->current_ms++;
+        int _slot = (int)(w->current_ms & TUR_WHEEL_SLOT_MASK);
+        TurTimerNode *_to_fire = NULL;
+        pthread_mutex_lock(&w->lock);
+        TurTimerNode **_pp = &w->slots[_slot];
+        while (*_pp) {
+            TurTimerNode *_n = *_pp;
+            if (_n->cancelled) {
+                *_pp = _n->next;
+                if (_n->next) _n->next->prev = _n->prev;
+                free(_n);
+            } else if (_n->deadline_ms <= w->current_ms) {
+                *_pp = _n->next;
+                if (_n->next) _n->next->prev = _n->prev;
+                _n->next = _to_fire; _to_fire = _n;
+            } else { _pp = &_n->next; }
+        }
+        pthread_mutex_unlock(&w->lock);
+        while (_to_fire) {
+            TurTimerNode *_nx = _to_fire->next;
+            _to_fire->callback(_to_fire->arg);
+            free(_to_fire);
+            _to_fire = _nx;
+        }
+    }
+}
+
+static void *tur_timer_wheel_ticker(void *raw) {
+    TurTimerWheel *w = (TurTimerWheel *)raw;
+    while (w->running) {
+        struct timespec _ts2 = { .tv_sec = 0, .tv_nsec = 1000000L };
+        nanosleep(&_ts2, NULL);
+        tur_timer_wheel_tick(w);
+    }
+    return NULL;
+}
+
+static TurTimerWheel *tur_timer_wheel_new(void) {
+    TurTimerWheel *w = (TurTimerWheel *)calloc(1, sizeof(TurTimerWheel));
+    if (!w) { fprintf(stderr, "timer-wheel: oom\n"); abort(); }
+    pthread_mutex_init(&w->lock, NULL);
+    w->current_ms = tur_wheel_now_ms();
+    w->running = true;
+    pthread_create(&w->thread, NULL, tur_timer_wheel_ticker, w);
+    return w;
+}
+
+static void tur_timer_wheel_free(TurTimerWheel *w) {
+    if (!w) return;
+    w->running = false;
+    pthread_join(w->thread, NULL);
+    for (int _i = 0; _i < TUR_WHEEL_SLOTS; _i++) {
+        TurTimerNode *_n = w->slots[_i];
+        while (_n) { TurTimerNode *_nx = _n->next; free(_n); _n = _nx; }
+    }
+    pthread_mutex_destroy(&w->lock);
+    free(w);
+}
+
+static TurTimerNode *tur_timer_wheel_insert(TurTimerWheel *w, int64_t delay_ms,
+                                              tur_timer_cb_t cb, void *arg) {
+    if (!w || !cb) return NULL;
+    TurTimerNode *node = (TurTimerNode *)calloc(1, sizeof(TurTimerNode));
+    if (!node) { fprintf(stderr, "timer-node: oom\n"); abort(); }
+    node->deadline_ms = tur_wheel_now_ms() + delay_ms;
+    node->callback = cb; node->arg = arg; node->cancelled = false;
+    int _sl = (int)(node->deadline_ms & TUR_WHEEL_SLOT_MASK);
+    pthread_mutex_lock(&w->lock);
+    node->next = w->slots[_sl]; node->prev = NULL;
+    if (w->slots[_sl]) w->slots[_sl]->prev = node;
+    w->slots[_sl] = node;
+    pthread_mutex_unlock(&w->lock);
+    return node;
+}
+
+static void tur_timer_wheel_cancel(TurTimerNode *node) {
+    if (node) node->cancelled = true;
+}
+
+/* Phase T24: Timer fire context for recording ordered callbacks */
+typedef struct {
+    pthread_mutex_t lock;
+    pthread_cond_t  cond;
+    int             order[16]; /* ids in fire order */
+    int             count;     /* timers fired so far */
+    int             expected;  /* total to wait for   */
+} TurTimerFireCtx;
+
+/* arg must point to int64_t[2]: { ptr-as-int64 to TurTimerFireCtx, timer-id } */
+static void tur_timer_fire_cb(void *arg) {
+    int64_t *pair = (int64_t *)arg;
+    TurTimerFireCtx *ctx = (TurTimerFireCtx *)(intptr_t)pair[0];
+    int id = (int)pair[1];
+    pthread_mutex_lock(&ctx->lock);
+    if (ctx->count < 16) ctx->order[ctx->count] = id;
+    ctx->count++;
+    if (ctx->count >= ctx->expected) pthread_cond_broadcast(&ctx->cond);
+    pthread_mutex_unlock(&ctx->lock);
+}
+
+/* Global timer wheel (created on first use) */
+static TurTimerWheel *tur_global_timer_wheel = NULL;
+static pthread_once_t tur_timer_wheel_once = PTHREAD_ONCE_INIT;
+static void tur_timer_wheel_init_once(void) {
+    tur_global_timer_wheel = tur_timer_wheel_new();
+}
+static TurTimerWheel *tur_get_timer_wheel(void) {
+    pthread_once(&tur_timer_wheel_once, tur_timer_wheel_init_once);
+    return tur_global_timer_wheel;
+}
+
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif
@@ -1043,6 +1212,20 @@ static int64_t tur_effect_perform(const char *name, int64_t *args, int n_args) {
     while (frame) {
         for (int __i = 0; __i < frame->n_cases; __i++) {
             if (strcmp(frame->cases[__i].effect_name, name) == 0) {
+                if (frame->cases[__i].handler_fn == NULL) {
+                    /* Phase 19D: intercept case - yield fiber to parent dispatch loop */
+                    FiberBlock *__cur = tur_current_fiber;
+                    if (!__cur || !__cur->eff_ctx) { fprintf(stderr, "Unhandled effect: %s\n", name); abort(); }
+                    TurEffectCaptureCtx *__cap = (TurEffectCaptureCtx *)__cur->eff_ctx;
+                    __cap->eff_name = name;
+                    int __cn = n_args < 8 ? n_args : 8;
+                    for (int __ai = 0; __ai < __cn; __ai++) __cap->eff_args[__ai] = args[__ai];
+                    __cap->eff_n_args = n_args;
+                    __cap->has_pending_effect = true;
+                    tur_fiber_block_yield(0);
+                    __cap->has_pending_effect = false;
+                    return __cur->arg;
+                }
                 TurContK __fresh_k = {false, tur_current_fiber};
                 return frame->cases[__i].handler_fn(args, n_args, (int64_t)(intptr_t)&__fresh_k, frame->cases[__i].env);
             }
@@ -1411,13 +1594,46 @@ static void * box(int64_t);
 static int64_t unbox(int64_t);
 static int64_t add_with_effect(int64_t);
 
-static int64_t __effect_handler_2(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
-static int64_t __effect_handler_2(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
+static int64_t __effect_handler_3(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
+static int64_t __effect_handler_3(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
     int64_t n_22 = (int64_t)__effect_args[0];
     int64_t k_23 = __k;
-    if (((TurContK *)(intptr_t)k_23)->origin_fiber != (void *)tur_current_fiber) { fprintf(stderr, "continuation error: resume on wrong fiber\n"); abort(); }
-    ((TurContK *)(intptr_t)k_23)->consumed = true;
-    return (int64_t)n_22;
+    int64_t __t4 = tur_effect_cont_resume((int64_t)(intptr_t)k_23, (int64_t)n_22);
+    return (int64_t)__t4;
+}
+
+static void __handle_body_2(void);
+static void __handle_body_2(void) {
+    tur_current_fiber->result = (int64_t)add_with_effect(INT64_C(5));
+}
+
+static int64_t __dispatch_2(void *__ctx_void, int64_t __k_int, int64_t __resume_val);
+static int64_t __dispatch_2(void *__ctx_void, int64_t __k_int, int64_t __resume_val) {
+    TurEffectCaptureCtx *__dcap = (TurEffectCaptureCtx *)__ctx_void;
+    FiberBlock *__fiber = (FiberBlock *)(intptr_t)__k_int;
+    int64_t __r = tur_fiber_block_resume(__fiber, __resume_val);
+    if (__fiber->done) { return __fiber->result; }
+    if (!__dcap->has_pending_effect) return __r;
+    if (strcmp(__dcap->eff_name, "Increment") == 0) {
+        return __effect_handler_3(__dcap->eff_args, __dcap->eff_n_args, __k_int, NULL);
+    } else {
+        /* Phase 19D: bubble up unhandled effect to outer fiber */
+        FiberBlock *__outer_f = tur_current_fiber;
+        if (__outer_f && __outer_f->eff_ctx) {
+            TurEffectCaptureCtx *__outer_cap = (TurEffectCaptureCtx *)__outer_f->eff_ctx;
+            __outer_cap->eff_name = __dcap->eff_name;
+            int __bun = __dcap->eff_n_args < 8 ? __dcap->eff_n_args : 8;
+            for (int __bi = 0; __bi < __bun; __bi++) __outer_cap->eff_args[__bi] = __dcap->eff_args[__bi];
+            __outer_cap->eff_n_args = __dcap->eff_n_args;
+            __outer_cap->has_pending_effect = true;
+            tur_fiber_block_yield(0);
+            __outer_cap->has_pending_effect = false;
+            return __dispatch_2(__ctx_void, __k_int, __outer_f->arg);
+        }
+        fprintf(stderr, "dispatch: unhandled effect: %s\n", __dcap->eff_name);
+        abort();
+    }
+    return 0;
 }
 
 static void * array_get(void * arr, int64_t idx) {
@@ -1486,16 +1702,24 @@ static int64_t add_with_effect(int64_t x) {
 
 
 int main(void) {
-    EffectHandlerFrame __eff_frame_3;
-    EffectHandlerFrame **__eff_chain_3 = (tur_current_fiber ? (EffectHandlerFrame **)&tur_current_fiber->effect_handler_chain : &global_effect_handler_chain);
-    __eff_frame_3.parent = *__eff_chain_3;
-    __eff_frame_3.n_cases = 1;
-    __eff_frame_3.cases[0].effect_name = "Increment";
-    __eff_frame_3.cases[0].handler_fn = __effect_handler_2;
-    __eff_frame_3.cases[0].env = NULL;
-    *__eff_chain_3 = &__eff_frame_3;
-    int64_t __t4 = add_with_effect(INT64_C(5));
-    *__eff_chain_3 = (*__eff_chain_3)->parent;
-    printf("%lld\n", (long long)(__t4));
+    TurEffectCaptureCtx __cap_2;
+    __cap_2.has_pending_effect = false;
+    __cap_2.eff_name = NULL;
+    __cap_2.eff_n_args = 0;
+    __cap_2.dispatch = __dispatch_2;
+    __cap_2.body_env = NULL;
+    FiberBlock *__fiber_2 = tur_fiber_block_new(__handle_body_2, 0);
+    __fiber_2->eff_ctx = &__cap_2;
+    EffectHandlerFrame *__parent_chain_2 = (tur_current_fiber ? (EffectHandlerFrame *)tur_current_fiber->effect_handler_chain : global_effect_handler_chain);
+    EffectHandlerFrame __eff_frame_2;
+    __eff_frame_2.parent = __parent_chain_2;
+    __eff_frame_2.n_cases = 1;
+    __eff_frame_2.cases[0].effect_name = "Increment";
+    __eff_frame_2.cases[0].handler_fn = NULL;
+    __eff_frame_2.cases[0].env = NULL;
+    __fiber_2->effect_handler_chain = &__eff_frame_2;
+    int64_t __t5 = (int64_t)__dispatch_2(&__cap_2, (int64_t)(intptr_t)__fiber_2, 0);
+    if (__fiber_2->done) { free(__fiber_2->stack); free(__fiber_2); }
+    printf("%lld\n", (long long)(__t5));
     return 0;
 }
