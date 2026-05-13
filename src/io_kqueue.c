@@ -50,11 +50,11 @@ static int kqueue_flags_to_io(int flags) {
 }
 
 /* Get event flags from kevent */
-/* Unused in v1 - kqueue flags not yet fully integrated */
-/* static int kevent_fflags_to_io(int fflags) {
-    (void)fflags;  Not used for basic read/write
+static int kevent_fflags_to_io(int fflags) __attribute__((unused));
+static int kevent_fflags_to_io(int fflags) {
+    (void)fflags; /* Not used for basic read/write */
     return 0;
-} */
+}
 
 /* Find registration by fd */
 static FDRegistration *find_registration(struct KqueueBackend *backend, int fd) {

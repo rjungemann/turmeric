@@ -11,9 +11,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* Forward declarations */
+/* Forward declaration so IOBackendVTable can use IOBackend * parameters */
 typedef struct IOBackend IOBackend;
-typedef struct IOBackendVTable IOBackendVTable;
 
 /**
  * IO event types
@@ -34,7 +33,7 @@ typedef enum {
  */
 typedef void (*io_callback_t)(int fd, int events, void *user_data);
 
-/* I/O backend vtable - defined here so platform-specific implementations can use it */
+/* Backend vtable — platform backends embed this via struct IOBackend base. */
 struct IOBackendVTable {
     void (*free)(IOBackend *backend);
     int (*register_fd)(IOBackend *backend, int fd, int events, io_callback_t callback, void *user_data);
@@ -44,7 +43,7 @@ struct IOBackendVTable {
     void (*wake)(IOBackend *backend);
 };
 
-/* Base backend structure - defined here so platform-specific implementations can use it */
+/* Base backend structure — cast-compatible with KqueueBackend, EpollBackend etc. */
 struct IOBackend {
     const struct IOBackendVTable *vtable;
 };

@@ -1,0 +1,76 @@
+;; List type for Turmeric
+;; Singly-linked list: Cons(value, next) or nil
+;; Phase B1: Clone trait infrastructure
+
+(defstruct Cons [value :int next :int])
+
+;; nil-value - empty list (NULL pointer)
+(defn nil-value []
+  ```c
+  return 0;
+  ```)
+
+;; Check if list is nil
+(defn list-nil? [lst] :bool
+  ```c
+  return lst == 0;
+  ```)
+
+;; Create a new Cons cell (prepend to list)
+(defn cons [value next] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
+  cell->value = value;
+  cell->next = next;
+  return (int64_t)(intptr_t)cell;
+  ```)
+
+;; Get the value of the first Cons cell
+(defn head [lst] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell = (void*)(intptr_t)lst;
+  if (!cell) {
+    fprintf(stderr, "head: empty list\n");
+    exit(1);
+  }
+  return cell->value;
+  ```)
+
+;; Get the tail of the list (next pointer)
+(defn tail [lst] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell = (void*)(intptr_t)lst;
+  if (!cell) {
+    fprintf(stderr, "tail: empty list\n");
+    exit(1);
+  }
+  return cell->next;
+  ```)
+
+;; Free the entire list (does NOT free contained values - shallow free)
+(defn list-free [lst]
+  ```c
+  struct { int64_t value; int64_t next; } *cell = (void*)(intptr_t)lst;
+  while (cell) {
+    struct { int64_t value; int64_t next; } *next = (void*)(intptr_t)cell->next;
+    free(cell);
+    cell = next;
+  }
+  ```)
+
+;; Get the length of the list
+(defn list-length [lst] :int
+  ```c
+  int len = 0;
+  struct { int64_t value; int64_t next; } *cell = (void*)(intptr_t)lst;
+  while (cell) {
+    len++;
+    cell = (void*)(intptr_t)cell->next;
+  }
+  return len;
+  ```)
+
+;; Phase B1: Clone support for list
+;; The Clone instance for Cons is defined separately in the file that uses
+;; both this type and the Clone typeclass (to avoid circular dependencies).
+;; A non-parameterized Clone instance can be added by including typeclass.tur.

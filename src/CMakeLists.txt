@@ -6,7 +6,6 @@ cmake_minimum_required(VERSION 3.20)
 set(TUR_SOURCES
     arc.c
     arena.c
-    atomic_queue.c
     borrow_check.c
     buf.c
     builtins.c
@@ -30,8 +29,18 @@ set(TUR_SOURCES
     rc_elision.c
     rc_free_queue.c
     rc.c
+    io.c
+>>>>>>> 57dbe9b4f48d40fca23c3d33076ff777f8723afa
+    runtime.c
+=======
     reader.c
     io.c
+    io_epoll.c
+    io_kqueue.c
+    runtime.c
+=======
+    io.c
+>>>>>>> 57dbe9b4f48d40fca23c3d33076ff777f8723afa
     runtime.c
     symbols.c
     typeclass.c

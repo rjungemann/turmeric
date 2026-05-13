@@ -44,6 +44,10 @@ typedef struct EmitCtx {
     /* Phase 19: Buffer for effect handler functions that must be emitted just
      * before the enclosing function definition (never inside a function body). */
     Buf *pending_handler_fns;
+    /* Phase R5: true when currently emitting a #[no-unwind] function body;
+     * causes EX_PANIC/EX_PANIC_WITH to emit tur_panic_abort instead of
+     * tur_panic so that no setjmp/longjmp unwinding is attempted. */
+    bool no_unwind;
 } EmitCtx;
 
 /* Phase 4 v1: Defer thunk tracking */
@@ -1104,12 +1108,21 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_INSTANCE_DEF:
             /* Handled in emit_stmt - file scope only */
             return atom_nil();
-        /* Phase H §1: dictionary passing — load address of singleton as int64_t */
+        /* Phase H §1: dictionary passing — either load method field (for dict
+         * dispatch via fn_expr) or emit singleton address (bare dict value). */
         case EX_DICT: {
             char dict_name[128];
             emit_dict_name(dict_name, sizeof(dict_name), e->as.dict_.instance);
             Buf out; buf_init(&out);
-            buf_printf(&out, "(int64_t)(intptr_t)(&%s_singleton)", dict_name);
+            if (e->as.dict_.method_name[0] != '\0') {
+                /* Dictionary dispatch: emit function-pointer field access.
+                 * The EX_CALL indirect-call path then casts and calls it:
+                 *   ((ret_t (*)(...))(intptr_t)(dict_X_singleton.method))(args) */
+                buf_printf(&out, "%s_singleton.%s", dict_name, e->as.dict_.method_name);
+            } else {
+                /* Bare dictionary value: singleton address as int64_t. */
+                buf_printf(&out, "(int64_t)(intptr_t)(&%s_singleton)", dict_name);
+            }
             buf_putc(&out, '\0');
             char *result = strdup(out.data);
             buf_free(&out);
@@ -1157,19 +1170,28 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         /* Phase R2: Panic */
         case EX_PANIC: {
-            /* (panic msg) - evaluate msg (cstr), call tur_panic, abort */
+            /* (panic msg) - evaluate msg (cstr), call tur_panic[_abort] */
             const Expr *payload = e->as.panic_.payload;
             char *msg_val = emit_value(ctx, body, payload);
             indent_buf(body, ctx->indent);
-            /* Set the current frame for panic to fire defers */
-            if (ctx->frame_var) {
-                buf_printf(body, "tur_panic_set_frame(&%s);\n", ctx->frame_var);
-            }
-            if (payload->type.kind == TY_CSTR) {
-                buf_printf(body, "tur_panic(%s);\n", msg_val);
+            if (ctx->no_unwind) {
+                /* Phase R5: #[no-unwind] — abort directly; skip defer chain */
+                if (payload->type.kind == TY_CSTR) {
+                    buf_printf(body, "tur_panic_abort(%s);\n", msg_val);
+                } else {
+                    buf_puts(body, "tur_panic_abort(\"(non-string panic)\");\n");
+                }
             } else {
-                /* For non-cstr, use a generic message */
-                buf_printf(body, "tur_panic(\"(non-string panic)\");\n");
+                /* Set the current frame for panic to fire defers */
+                if (ctx->frame_var) {
+                    buf_printf(body, "tur_panic_set_frame(&%s);\n", ctx->frame_var);
+                }
+                if (payload->type.kind == TY_CSTR) {
+                    buf_printf(body, "tur_panic(%s);\n", msg_val);
+                } else {
+                    /* For non-cstr, use a generic message */
+                    buf_printf(body, "tur_panic(\"(non-string panic)\");\n");
+                }
             }
             free(msg_val);
             return atom_nil();
@@ -1179,13 +1201,18 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             const Expr *payload = e->as.panic_with_.payload;
             char *payload_val = emit_value(ctx, body, payload);
             indent_buf(body, ctx->indent);
-            /* Set the current frame for panic to fire defers */
-            if (ctx->frame_var) {
-                buf_printf(body, "tur_panic_set_frame(&%s);\n", ctx->frame_var);
+            if (ctx->no_unwind) {
+                /* Phase R5: #[no-unwind] — abort directly; skip defer chain */
+                buf_puts(body, "tur_panic_abort(\"(panic-with)\");\n");
+            } else {
+                /* Set the current frame for panic to fire defers */
+                if (ctx->frame_var) {
+                    buf_printf(body, "tur_panic_set_frame(&%s);\n", ctx->frame_var);
+                }
+                /* tur_panic_with takes type_tag (int), payload (void*), file, line */
+                /* For now, use a placeholder type_tag of 0 (TY_INT) */
+                buf_printf(body, "tur_panic_with(0, (void*)%s, __FILE__, __LINE__);\n", payload_val);
             }
-            /* tur_panic_with takes type_tag (int), payload (void*), file, line */
-            /* For now, use a placeholder type_tag of 0 (TY_INT) */
-            buf_printf(body, "tur_panic_with(0, (void*)%s, __FILE__, __LINE__);\n", payload_val);
             free(payload_val);
             return atom_nil();
         }
@@ -1630,7 +1657,20 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 char **arg_strs = (char **)malloc(e->as.call_.n_args * sizeof(char *));
                 if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
                 for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
-                    arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
+                    char *raw = emit_value(ctx, body, e->as.call_.args[i]);
+                    /* Apply same function-ptr → int64_t cast as the direct-call path:
+                     * C99 forbids implicit conversion from function pointer to integer. */
+                    bool needs_fn_cast = (e->as.call_.args[i]->type.kind == TY_FN ||
+                                          e->as.call_.args[i]->type.kind == TY_PTR_VOID);
+                    if (needs_fn_cast) {
+                        Buf cast; buf_init(&cast);
+                        buf_printf(&cast, "(int64_t)(intptr_t)(%s)", raw);
+                        buf_putc(&cast, '\0');
+                        free(raw);
+                        raw = strdup(cast.data);
+                        buf_free(&cast);
+                    }
+                    arg_strs[i] = raw;
                 }
 
                 Buf out; buf_init(&out);
@@ -2701,6 +2741,25 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                             component = inst->type_args[i].as.struct_.def->name;
                         }
                         break;
+                    case TY_APP: {
+                        /* Phase HKT §3: partial type application — encode as "ctor_arg"
+                         * e.g. (result int) → "result_int" → dict_Functor_result_int */
+                        const char *fn_part  = "T";
+                        const char *arg_part = "T";
+                        if (inst->type_arg_syms && inst->type_arg_syms[i])
+                            fn_part = inst->type_arg_syms[i]->name;
+                        if (inst->type_args[i].as.app.arg) {
+                            const char *n = type_name(*inst->type_args[i].as.app.arg);
+                            if (n) arg_part = n;
+                        }
+                        char app_comp[48];
+                        snprintf(app_comp, sizeof(app_comp), "%s_%s", fn_part, arg_part);
+                        for (char *p = app_comp; *p; p++) {
+                            if (!isalnum((unsigned char)*p)) *p = '_';
+                        }
+                        strncat(type_suffix, app_comp, sizeof(type_suffix) - strlen(type_suffix) - 1);
+                        continue;
+                    }
                     default: break;
                 }
                 /* Sanitise component: replace non-alnum chars with _ */
@@ -3038,6 +3097,10 @@ static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     ctx->fn_params = fd->params;
     ctx->n_fn_params = fd->n_params;
 
+    /* Phase R5: Set no_unwind context from the function's binding attribute */
+    bool saved_no_unwind = ctx->no_unwind;
+    ctx->no_unwind = fd->binding->no_unwind;
+
     /* Phase 3: Set up closure context if this is a closure thunk */
     struct Closure *saved_closure = ctx->closure;
     const char *saved_env_var_name = ctx->env_var_name;
@@ -3106,6 +3169,7 @@ static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* Restore previous context */
     ctx->fn_params = saved_params;
     ctx->n_fn_params = saved_n_params;
+    ctx->no_unwind = saved_no_unwind;  /* Phase R5 */
     ctx->closure = saved_closure;
     free((void*)ctx->env_var_name);
     ctx->env_var_name = saved_env_var_name;
@@ -3179,6 +3243,8 @@ int emit_program(Buf *out, const Expr *program) {
     /* Phase 19: Pending effect handler function buffer */
     Buf pending_hfns; buf_init(&pending_hfns);
     ctx.pending_handler_fns = &pending_hfns;
+    /* Phase R5: no-unwind context (false at top level; set per-function) */
+    ctx.no_unwind = false;
 
     /* Check if user defined a main function */
     bool user_has_main = false;
@@ -3337,6 +3403,7 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "extern void abort(void);\n");
     buf_puts(out, "extern void *memset(void *, int, size_t);\n");
     buf_puts(out, "extern void *memmove(void *, const void *, size_t);\n");
+    buf_puts(out, "extern void *memcpy(void *, const void *, size_t);\n");
     /* Phase 19: strcmp for effect handler name matching */
     buf_puts(out, "extern int strcmp(const char *, const char *);\n");
     buf_puts(out, "\n");
@@ -3519,7 +3586,10 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "}\n\n");
 
     /* Phase R2: Panic with typed payload */
-    buf_puts(out, "/* Phase R2: tur_panic_with */\n");
+    /* tur_panic_with is forward-declared here; its body is emitted after
+     * FiberBlock in Phase T21 so it can dereference tur_current_fiber. */
+    buf_puts(out, "static void tur_panic_with(int type_tag, void *payload, const char *file, int line);\n\n");
+    buf_puts(out, "/* Phase R2: tur_panic_with types */\n");
     buf_puts(out, "typedef struct tur_panic_payload tur_panic_payload;\n");
     buf_puts(out, "struct tur_panic_payload {\n");
     buf_puts(out, "    int type_tag;\n");
@@ -3538,26 +3608,6 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "}\n\n");
     buf_puts(out, "static void panic_payload_free(tur_panic_payload *p) {\n");
     buf_puts(out, "    if (p) { free(p->value); free(p); }\n");
-    buf_puts(out, "}\n\n");
-    buf_puts(out, "static void tur_panic_with(int type_tag, void *payload, const char *file, int line) {\n");
-    buf_puts(out, "    if (tur_panic_in_progress) {\n");
-    buf_puts(out, "        fprintf(stderr, \"double panic: aborting\\n\");\n");
-    buf_puts(out, "        free(payload);\n");
-    buf_puts(out, "        abort();\n");
-    buf_puts(out, "    }\n");
-    buf_puts(out, "    tur_panic_in_progress = 1;\n");
-    /* Phase TG-004-2 PR: Check global handler first (try/catch has priority), then fiber */
-    buf_puts(out, "    if (global_panic_jmpbuf_valid) {\n");
-    buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line);\n");
-    buf_puts(out, "        longjmp(global_panic_jmpbuf, 1);\n");
-    buf_puts(out, "    } else if (tur_current_fiber && tur_current_fiber->panic_jmpbuf_valid) {\n");
-    buf_puts(out, "        /* Use per-fiber panic buffer - set up global payload for cleanup */\n");
-    buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line);\n");
-    buf_puts(out, "        longjmp(tur_current_fiber->panic_jmpbuf, 1);\n");
-    buf_puts(out, "    }\n");
-    buf_puts(out, "    fprintf(stderr, \"panic at %s:%d\\n\", file ? file : \"(unknown)\", line);\n");
-    buf_puts(out, "    free(payload);\n");
-    buf_puts(out, "    abort();\n");
     buf_puts(out, "}\n\n");
     /* Phase R2: Panic payload accessors */
     buf_puts(out, "static int tur_panic_payload_type(tur_panic_payload *p) {\n");
@@ -3689,10 +3739,34 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    bool panic_jmpbuf_valid; /* Whether this fiber's panic handler is active */\n");
     buf_puts(out, "};\n\n");
     buf_puts(out, "static __thread FiberBlock *tur_current_fiber = NULL;\n");
+    /* Phase R2: tur_panic_with body — placed here so FiberBlock and
+     * tur_current_fiber are in scope for the per-fiber panic check. */
+    buf_puts(out, "static void tur_panic_with(int type_tag, void *payload, const char *file, int line) {\n");
+    buf_puts(out, "    if (tur_panic_in_progress) {\n");
+    buf_puts(out, "        fprintf(stderr, \"double panic: aborting\\n\");\n");
+    buf_puts(out, "        free(payload);\n");
+    buf_puts(out, "        abort();\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    tur_panic_in_progress = 1;\n");
+    /* Phase TG-004-2 PR: Check global handler first (try/catch has priority), then fiber */
+    buf_puts(out, "    if (global_panic_jmpbuf_valid) {\n");
+    buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line);\n");
+    buf_puts(out, "        longjmp(global_panic_jmpbuf, 1);\n");
+    buf_puts(out, "    } else if (tur_current_fiber && tur_current_fiber->panic_jmpbuf_valid) {\n");
+    buf_puts(out, "        /* Use per-fiber panic buffer - set up global payload for cleanup */\n");
+    buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line);\n");
+    buf_puts(out, "        longjmp(tur_current_fiber->panic_jmpbuf, 1);\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    fprintf(stderr, \"panic at %s:%d\\n\", file ? file : \"(unknown)\", line);\n");
+    buf_puts(out, "    free(payload);\n");
+    buf_puts(out, "    abort();\n");
+    buf_puts(out, "}\n\n");
     /* Phase T22: Cooperative cancellation flag */
     buf_puts(out, "static __thread bool tur_fiber_cancelled_flag = false;\n\n");
     /* Phase T22: TaskGroup notification forward declaration */
-    buf_puts(out, "static void tur_task_group_notify_done(void *task_group);\n\n");
+    buf_puts(out, "static void tur_task_group_notify_done(void *task_group);\n");
+    /* Forward-declare tur_fiber_set_cancelled before tur_fiber_shim uses it */
+    buf_puts(out, "static void tur_fiber_set_cancelled(bool c);\n\n");
     buf_puts(out, "static void tur_fiber_shim(uint32_t hi, uint32_t lo) {\n");
     buf_puts(out, "    FiberBlock *f = (FiberBlock *)(((uintptr_t)hi << 32) | (uintptr_t)(uint32_t)lo);\n");
     /* Phase TG-004-3 PR: Per-fiber panic handling with auto-cancel on panic */
@@ -3749,6 +3823,8 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    swapcontext(&f->ctx, &f->caller_ctx);\n");
     buf_puts(out, "    abort();\n");
     buf_puts(out, "}\n\n");
+    /* Declare global_effect_handler_chain before tur_fiber_block_new uses it */
+    buf_puts(out, "static __thread EffectHandlerFrame *global_effect_handler_chain = NULL;\n\n");
     buf_puts(out, "static FiberBlock *tur_fiber_block_new(void (*fn)(void), size_t stack_size) {\n");
     buf_puts(out, "    if (!stack_size) stack_size = 1024 * 1024;\n");
     buf_puts(out, "    FiberBlock *f = (FiberBlock *)calloc(1, sizeof(FiberBlock));\n");
@@ -4119,7 +4195,7 @@ int emit_program(Buf *out, const Expr *program) {
     /* Keep old TurAsyncTask for backward compatibility */
     buf_puts(out, "/* Backward compatibility: TurAsyncTask = TurFuture */\n");
     buf_puts(out, "typedef TurFuture TurAsyncTask;\n\n");
-    buf_puts(out, "static __thread EffectHandlerFrame *global_effect_handler_chain = NULL;\n\n");
+    /* global_effect_handler_chain is declared earlier, before tur_fiber_block_new */
     buf_puts(out, "static int64_t tur_effect_perform(const char *name, int64_t *args, int n_args) {\n");
         /* T21-B: use fiber-local handler chain when inside a fiber */
     buf_puts(out, "    EffectHandlerFrame *frame =\n");
@@ -4612,6 +4688,8 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program) 
     /* Phase 19: Pending effect handler function buffer */
     Buf pending_hfns2; buf_init(&pending_hfns2);
     ctx.pending_handler_fns = &pending_hfns2;
+    /* Phase R5: no-unwind context (false at top level; set per-function) */
+    ctx.no_unwind = false;
     char guard[256];
     sanitize_module_name(guard, module_name, sizeof(guard));
 

@@ -36,7 +36,7 @@ prerequisites in this order to unblock the most downstream work as early as poss
 ### §1 — Dictionary passing (unblocked after §5)
 
 - [x] **IR** — add `EX_DICT` expression node (or extend `EX_CALL`) for implicit dictionary arguments _(deferred: full runtime dict passing; compile-time dispatch sufficient for multi-instance)_
-- [ ] **elab.c** — update `elab_method_call` to emit a dictionary load at every `EX_METHOD_CALL` site _(deferred)_
+- [x] **elab.c** — update `elab_method_call` to emit a dictionary load at every `EX_METHOD_CALL` site
 - [x] **emit.c** — emit `static dict_<Class>_<type>_singleton` dictionary structs per `definstance` with symbol-based naming (avoids struct collisions between same-class instances)
 - [x] **typeclass.h / elab.c** — added `type_arg_syms` to `TypeClassInstance`; multi-instance dispatch via compile-time type-based selection (first-match per call-site type)
 - [x] **tests/fixtures/hkt-multi-instance/** — two `Functor` instances (`[option]` and `[vec]`) coexist and dispatch correctly
@@ -50,11 +50,11 @@ prerequisites in this order to unblock the most downstream work as early as poss
 
 ### §3 — Partial type application (unblocked after §2)
 
-- [ ] **types.h** — add `TY_APP` to `TypeKind` enum; add `TypeApp { Type fn; Type arg; }` struct
-- [ ] **reader.c / parser** — parse `(T arg)` in type position as `TY_APP`, not a value call
-- [ ] **elab.c** — update `elab_definstance` to recognise `TY_APP` and validate kind constraints
-- [ ] **kind_check.c** — validate `TY_APP fn arg`: `fn : KIND_ARROW`, `arg : KIND_STAR`; result `KIND_STAR` (or `KIND_ARROW` for `KIND_ARROW2`)
-- [ ] **emit.c** — generate correct C dictionary struct name for `TY_APP` instance declarations
+- [x] **types.h** — add `TY_APP` to `TypeKind` enum; add `TypeApp { Type fn; Type arg; }` struct
+- [x] **reader.c / parser** — parse `(T arg)` in type position as `TY_APP`, not a value call
+- [x] **elab.c** — update `elab_definstance` to recognise `TY_APP` and validate kind constraints
+- [x] **kind_check.c** — validate `TY_APP fn arg`: `fn : KIND_ARROW`, `arg : KIND_STAR`; result `KIND_STAR` (or `KIND_ARROW` for `KIND_ARROW2`)
+- [x] **emit.c** — generate correct C dictionary struct name for `TY_APP` instance declarations
 
 ### §4 — Higher-kinded data types (unblocked after §3 + §5)
 
@@ -203,32 +203,33 @@ first-class concept.
 - [ ] **§2 (kind inference)** — the compiler must be able to determine that
   `(result int)` has kind `* -> *` from the kinds of its parts.
 
-- [ ] **TY_APP type node** — Add `TY_APP` to the `TypeKind` enum in `src/types.h`:
+- [x] **TY_APP type node** — Add `TY_APP` to the `TypeKind` enum in `src/types.h`:
   ```c
   typedef struct { Type fn; Type arg; } TypeApp;
   ```
   `type_c_name` for `TY_APP` must recursively produce the appropriate C name.
 
-- [ ] **Parser / reader support** — `(result int)` in a type position must parse
-  as type application, not a value call.
+- [x] **Parser / reader support** — `(result int)` in a type position must parse
+  as type application, not a value call. Handled in `elab_definstance` for
+  the `[...]` type-argument vector: F_LIST of 2 items → `TY_APP`.
 
-- [ ] **elab_definstance** — recognise `TY_APP` in the type-argument position and
+- [x] **elab_definstance** — recognise `TY_APP` in the type-argument position and
   validate that the outer constructor has the right kind for a KIND_ARROW slot,
   and that the argument has kind KIND_STAR.
 
-- [ ] **Kind-check pass** — validate `(TY_APP fn arg)`: `fn` must have kind
+- [x] **Kind-check pass** — validate `(TY_APP fn arg)`: `fn` must have kind
   `KIND_ARROW`, `arg` must have kind `KIND_STAR`, and the result has `KIND_STAR`.
   For `KIND_ARROW2`, `(TY_APP fn arg)` produces `KIND_ARROW`.
 
-- [ ] **emit.c** — `TY_APP` in instance declarations must produce the correct
+- [x] **emit.c** — `TY_APP` in instance declarations must produce the correct
   C name for the generated dictionary struct name.
 
 **Acceptance criteria:**
-- [ ] `(definstance Functor [(result int)] ...)` compiles and dispatches correctly.
-- [ ] A new fixture `hkt-partial-app.tur` exercises at least one partial application
+- [x] `(definstance Functor [(result int)] ...)` compiles and dispatches correctly.
+- [x] A new fixture `hkt-partial-app.tur` exercises at least one partial application
   instance.
-- [ ] `TUR_E0013_KIND_MISMATCH` is emitted when `(result)` (zero args) is used in a
-  `* -> *` slot.
+- [x] `TUR_E0012_KIND_MISMATCH` is emitted when a primitive (kind `*`) is used in a
+  `* -> *` slot (e.g. `(definstance Functor [int] ...)`).
 
 ---
 

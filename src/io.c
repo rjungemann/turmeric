@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* IOBackend and IOBackendVTable are defined in io.h */
+
 /* Platform-specific constructors */
 #if defined(IO_BACKEND_EPOLL)
 IOBackend *io_epoll_new(void);

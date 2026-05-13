@@ -1,8 +1,20 @@
-;; Phase R5: Test #[no-unwind] attribute
-;; When #[no-unwind] is applied to a function, panics call abort() directly
+;; Phase R5: Test #[no-unwind] attribute on defn.
+;; A function marked #[no-unwind] emits tur_panic_abort (direct abort, no
+;; setjmp/longjmp unwinding) instead of tur_panic when it panics.
 
-;; Note: The #[no-unwind] attribute syntax is parsed but elaborator
-;; integration is deferred. This fixture tests the basic parsing.
+;; A plain function to confirm normal execution still works.
+(defn safe-add [x y] :int
+  (+ x y))
+
+;; A #[no-unwind] function: any panic inside it must emit tur_panic_abort.
+;; This function is never actually called on the panic path in this fixture,
+;; but the emitted C must contain tur_panic_abort for its body.
+(defn #[no-unwind] unsafe-op [x] :int
+  (do
+    (panic "abort!")
+    x))
 
 (defn main [] :int
-  0)
+  (do
+    (println (safe-add 3 4))   ;; 7
+    0))

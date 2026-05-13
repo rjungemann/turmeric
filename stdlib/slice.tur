@@ -34,32 +34,32 @@
   return 0;
   ```)
 
+
 ;;; SINCE: Phase HKT H3
-;; Functor instance for slice — apply fn to every element, return a new slice.
-;; Note: slice is a borrowed view, so we need to create a new slice for the result.
+;; Functor, Foldable, and Traversable instances for slice<T>
+
+;; Functor for slice - map a function over each element
 (defn __functor_slice_fmap [container fn] :int
   ```c
   struct { int64_t *p; size_t len; } *s =
       (struct { int64_t *p; size_t len; } *)(intptr_t)container;
   if (!s) return 0;
-  /* Create new slice with same length */
   struct { int64_t *p; size_t len; } *r =
       malloc(sizeof(struct { int64_t *p; size_t len; }));
+  if (!r) return 0;
   r->len = s->len;
-  /* Allocate new array for results */
-  r->p = r->len > 0 ? malloc(sizeof(int64_t) * r->len) : NULL;
+  r->p = malloc(sizeof(int64_t) * s->len);
+  if (!r->p) { free(r); return 0; }
   for (size_t i = 0; i < s->len; i++) {
       r->p[i] = ((int64_t(*)(int64_t))(intptr_t)fn)(s->p[i]);
   }
   return (int64_t)(intptr_t)r;
   ```)
 
-(definstance Functor [slice]
+(definstance Functor [ptr<void>]
   (fmap [container fn] (__functor_slice_fmap container fn)))
 
-;; Foldable instance for slice.
-;;   foldl :: (b -> a -> b) -> b -> slice a -> b   (left fold, strict)
-;;   foldr :: (a -> b -> b) -> b -> slice a -> b   (right fold)
+;; Foldable for slice - left and right folds
 (defn __foldable_slice_foldl [ta init fn] :int
   ```c
   struct { int64_t *p; size_t len; } *s =
@@ -84,6 +84,28 @@
   return acc;
   ```)
 
-(definstance Foldable [slice]
+(definstance Foldable [ptr<void>]
   (foldl [ta init fn] (__foldable_slice_foldl ta init fn))
   (foldr [ta init fn] (__foldable_slice_foldr ta init fn)))
+
+;; Traversable for slice - map with effects
+;; In v1, simplifies to map since we use int64_t returns
+(defn __traversable_slice_traverse [ta fn] :int
+  ```c
+  struct { int64_t *p; size_t len; } *s =
+      (struct { int64_t *p; size_t len; } *)(intptr_t)ta;
+  if (!s) return 0;
+  struct { int64_t *p; size_t len; } *r =
+      malloc(sizeof(struct { int64_t *p; size_t len; }));
+  if (!r) return 0;
+  r->len = s->len;
+  r->p = malloc(sizeof(int64_t) * s->len);
+  if (!r->p) { free(r); return 0; }
+  for (size_t i = 0; i < s->len; i++) {
+      r->p[i] = ((int64_t(*)(int64_t))(intptr_t)fn)(s->p[i]);
+  }
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(definstance Traversable [ptr<void>]
+  (traverse [ta fn] (__traversable_slice_traverse ta fn)))
