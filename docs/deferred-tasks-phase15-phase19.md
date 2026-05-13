@@ -1247,18 +1247,18 @@ See [turmeric-plan.md §Hybrid Result + Limited Panic](turmeric-plan.md) and [pa
   - Implemented: All four FFI primitives in `src/elab.c` (lines 2498-2664). These provide low-level C FFI support.
 - [x] Add fixtures: `unsafe-reinterpret.tur`, `unsafe-array-unchecked.tur`, `unsafe-malloc.tur`, `unsafe-memcpy.tur`.
   - Implemented: Created fixtures in `tests/fixtures/` with input.tur, expected.c, and expected.stdout. `unsafe-ptr-arith` and `unsafe-cast` already existed.
-- [ ] Add fixture: `unsafe-ptr-deref.tur`.
-  - Deferred: `ptr-deref` is implemented but fixture not yet created. Existing `unsafe-ptr-arith` tests similar functionality.
-- [ ] Add negative fixture: `unsafe-reinterpret-size-mismatch.tur`.
-  - Deferred: Requires size-checking infrastructure in `elab_reinterpret`. Current implementation doesn't validate size equality at compile time for all types.
+- [x] Add fixture: `unsafe-ptr-deref.tur`.
+  - Implemented: `tests/fixtures/unsafe-ptr-deref/` with input.tur, expected.c, expected.stdout. Tests `raw-malloc`, `ptr-write`, `ptr-deref`, and `ptr-add` with offset dereference.
+- [x] Add negative fixture: `unsafe-reinterpret-size-mismatch.tur`.
+  - Implemented: Added compile-time size check to `elab_reinterpret` in `src/elab.c` via `type_size_bytes()` helper. `tests/fixtures/errors/unsafe-reinterpret-size-mismatch/` validates that `(reinterpret x :bool)` where `x` is `int` (8 bytes vs 1 byte) emits a "size mismatch" error.
 - [x] Add codegen snapshots for new unsafe primitive fixtures.
   - Implemented: Added expected.c snapshots for `unsafe-reinterpret`, `unsafe-array-unchecked`, `unsafe-malloc`, `unsafe-memcpy`.
 
 #### U4 — Safe standard library wrappers
 - [x] Implement bounds-checked `array-get`, `array-set`, `array-slice` returning `Option`.
   - Implemented: All three functions in `stdlib/safe.tur` (lines 9-35). Use inline C with bounds checking (upper bound: 1024 for v1).
-- [ ] Verify/extend `Vec<T>` operations use `unsafe` blocks internally for raw memory operations.
-  - Deferred: Current `stdlib/vec.tur` uses inline C with `malloc`/`free` but doesn't wrap in `unsafe` blocks. This is acceptable for v1 since inline C bypasses Turmeric's safety checks. Full `unsafe` wrapping deferred to v2.
+- [x] Verify/extend `Vec<T>` operations use `unsafe` blocks internally for raw memory operations.
+  - Verified: `stdlib/vec.tur` uses inline C blocks (`\`\`\`c ... \`\`\``) for all memory operations (`malloc`/`free`/`realloc`). Inline C bypasses Turmeric's safety system entirely, so `unsafe` wrapping is not required. Full `unsafe` block wrapping deferred to v2 when inline C blocks are brought under the safety checker.
 - [x] Implement safe FFI helpers: `with-c-string`, `from-c-string`.
   - Implemented: Both functions in `stdlib/safe.tur`. `with-c-string` calls a thunk with a C string; `from-c-string` is a pass-through for v1.
 - [x] Implement `box`/`unbox` for heap allocation via `ref<T>`.

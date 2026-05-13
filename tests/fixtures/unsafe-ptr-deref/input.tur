@@ -1,0 +1,14 @@
+(defn main [] :int
+  (unsafe
+    ;; Allocate memory, write a value, then dereference to read it back
+    (let [p (raw-malloc 16)]
+      (ptr-write p 99)
+      (let [v (ptr-deref p)]
+        (println v)
+        ;; Write and deref at an offset via ptr-add
+        (let [p2 (ptr-add p 8)]
+          (ptr-write p2 200)
+          (let [v2 (ptr-deref p2)]
+            (println v2)
+            (raw-free p)
+            0))))))
