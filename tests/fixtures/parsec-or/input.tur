@@ -1,0 +1,107 @@
+;; Phase B4: Parser combinators — or-parser tries both alternatives.
+;; (or-parser pa pb) succeeds on "abc" (matches 'a'), "bcd" (matches 'b'),
+;; and fails on "xyz" (neither 'a' nor 'b').
+
+(defn mzero [] :int ```c return 0; ```)
+
+(defn mreturn [x] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
+  cell->value = x; cell->next = 0;
+  return (int64_t)(intptr_t)cell;
+  ```)
+
+(defn mplus [xs ys] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *xc = (Cell*)(intptr_t)xs;
+  if (!xc) return ys;
+  Cell *head = NULL, *tail = NULL;
+  while (xc) {
+      Cell *n = malloc(sizeof(Cell));
+      n->value = xc->value; n->next = 0;
+      if (tail) tail->next = (int64_t)(intptr_t)n; else head = n;
+      tail = n; xc = (Cell*)(intptr_t)xc->next;
+  }
+  if (tail) tail->next = ys;
+  return (int64_t)(intptr_t)head;
+  ```)
+
+(defn bt-length [xs] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  int64_t n = 0; Cell *c = (Cell*)(intptr_t)xs;
+  while (c) { n++; c = (Cell*)(intptr_t)c->next; }
+  return n;
+  ```)
+
+(defn pair-new [a b] :int
+  ```c
+  struct { int64_t first; int64_t second; } *p = malloc(sizeof(*p));
+  p->first = a; p->second = b;
+  return (int64_t)(intptr_t)p;
+  ```)
+
+(defn input-new [s :cstr pos] :int
+  ```c
+  struct { int64_t str; int64_t pos; } *inp = malloc(sizeof(*inp));
+  inp->str = (int64_t)(intptr_t)s; inp->pos = pos;
+  return (int64_t)(intptr_t)inp;
+  ```)
+
+(defn input-at-end [inp] :bool
+  ```c
+  struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
+  return ((const char*)(intptr_t)i->str)[i->pos] == '\0';
+  ```)
+
+(defn input-current-char [inp] :int
+  ```c
+  struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
+  return (int64_t)(unsigned char)((const char*)(intptr_t)i->str)[i->pos];
+  ```)
+
+(defn input-advance [inp] :int
+  ```c
+  struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
+  struct { int64_t str; int64_t pos; } *n = malloc(sizeof(*n));
+  n->str = i->str; n->pos = i->pos + 1;
+  return (int64_t)(intptr_t)n;
+  ```)
+
+(defn apply-parser [p inp] :int
+  ```c
+  int64_t *fat = (int64_t*)(intptr_t)p;
+  return ((int64_t(*)(void*, int64_t))(intptr_t)fat[0])((void*)fat, inp);
+  ```)
+
+(defn pchar-impl [_c inp] :int
+  (if (input-at-end inp)
+    (mzero)
+    (if (= (input-current-char inp) _c)
+      (mreturn (pair-new _c (input-advance inp)))
+      (mzero))))
+
+(defn pchar [c] :ptr<void>
+  (let [_c c]
+    (fn [inp] (let [_ _c] (pchar-impl _c inp)))))
+
+(defn or-parser-impl [lp lq inp] :int
+  (mplus (apply-parser lp inp) (apply-parser lq inp)))
+
+(defn or-parser [p q] :ptr<void>
+  (let [lp p lq q]
+    (fn [inp] (let [_ lp] (or-parser-impl lp lq inp)))))
+
+(defn run-parser [p s :cstr] :int
+  (let [inp (input-new s 0)]
+    (apply-parser p inp)))
+
+(defn main []
+  (let [p (or-parser (pchar 97) (pchar 98))
+        r1 (bt-length (run-parser p "abc"))
+        r2 (bt-length (run-parser p "bcd"))
+        r3 (bt-length (run-parser p "xyz"))]
+    (println r1)
+    (println r2)
+    (println r3)))

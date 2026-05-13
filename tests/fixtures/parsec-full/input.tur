@@ -1,0 +1,104 @@
+;; Phase B4: Parser combinators — run-parser-full requires full input consumption.
+;; (run-parser-full (pchar 97) "a") → 1 result (consumes all of "a").
+;; (run-parser-full (pchar 97) "ab") → 0 results (only consumes 'a', leaving "b").
+
+(defn mzero [] :int ```c return 0; ```)
+
+(defn mreturn [x] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
+  cell->value = x; cell->next = 0;
+  return (int64_t)(intptr_t)cell;
+  ```)
+
+(defn bt-length [xs] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  int64_t n = 0; Cell *c = (Cell*)(intptr_t)xs;
+  while (c) { n++; c = (Cell*)(intptr_t)c->next; }
+  return n;
+  ```)
+
+(defn pair-new [a b] :int
+  ```c
+  struct { int64_t first; int64_t second; } *p = malloc(sizeof(*p));
+  p->first = a; p->second = b;
+  return (int64_t)(intptr_t)p;
+  ```)
+
+(defn input-new [s :cstr pos] :int
+  ```c
+  struct { int64_t str; int64_t pos; } *inp = malloc(sizeof(*inp));
+  inp->str = (int64_t)(intptr_t)s; inp->pos = pos;
+  return (int64_t)(intptr_t)inp;
+  ```)
+
+(defn input-at-end [inp] :bool
+  ```c
+  struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
+  return ((const char*)(intptr_t)i->str)[i->pos] == '\0';
+  ```)
+
+(defn input-current-char [inp] :int
+  ```c
+  struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
+  return (int64_t)(unsigned char)((const char*)(intptr_t)i->str)[i->pos];
+  ```)
+
+(defn input-advance [inp] :int
+  ```c
+  struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
+  struct { int64_t str; int64_t pos; } *n = malloc(sizeof(*n));
+  n->str = i->str; n->pos = i->pos + 1;
+  return (int64_t)(intptr_t)n;
+  ```)
+
+(defn apply-parser [p inp] :int
+  ```c
+  int64_t *fat = (int64_t*)(intptr_t)p;
+  return ((int64_t(*)(void*, int64_t))(intptr_t)fat[0])((void*)fat, inp);
+  ```)
+
+(defn pchar-impl [_c inp] :int
+  (if (input-at-end inp)
+    (mzero)
+    (if (= (input-current-char inp) _c)
+      (mreturn (pair-new _c (input-advance inp)))
+      (mzero))))
+
+(defn pchar [c] :ptr<void>
+  (let [_c c]
+    (fn [inp] (let [_ _c] (pchar-impl _c inp)))))
+
+(defn run-parser [p s :cstr] :int
+  (let [inp (input-new s 0)]
+    (apply-parser p inp)))
+
+(defn run-parser-full-c [results] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  typedef struct { int64_t first; int64_t second; } Pair;
+  typedef struct { int64_t str; int64_t pos; } Input;
+  Cell *c = (Cell*)(intptr_t)results;
+  while (c) {
+      Pair *pr = (Pair*)(intptr_t)c->value;
+      Input *inp_p = (Input*)(intptr_t)pr->second;
+      const char *s = (const char*)(intptr_t)inp_p->str;
+      if (s[inp_p->pos] == '\0') {
+          Cell *r = malloc(sizeof(Cell)); r->value = pr->first; r->next = 0;
+          return (int64_t)(intptr_t)r;
+      }
+      c = (Cell*)(intptr_t)c->next;
+  }
+  return 0;
+  ```)
+
+(defn run-parser-full [p s :cstr] :int
+  (run-parser-full-c (run-parser p s)))
+
+(defn main []
+  (let [p (pchar 97)
+        r1 (run-parser-full p "a")
+        r2 (run-parser-full p "ab")]
+    (println (bt-length r1))
+    (println (bt-length r2))))

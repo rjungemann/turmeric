@@ -1,0 +1,75 @@
+;; Phase B4: Logic programming — unification failure.
+;; Unify (term-int 1) with (term-int 2): fails, 0 results.
+
+(defn mzero [] :int ```c return 0; ```)
+(defn mreturn [x] :int
+  ```c struct { int64_t value; int64_t next; } *c = malloc(sizeof(*c));
+  c->value = x; c->next = 0; return (int64_t)(intptr_t)c; ```)
+(defn bt-length [xs] :int
+  ```c typedef struct { int64_t value; int64_t next; } Cell;
+  int64_t n = 0; Cell *c = (Cell*)(intptr_t)xs;
+  while (c) { n++; c = (Cell*)(intptr_t)c->next; } return n; ```)
+
+(defn term-int [n] :int
+  ```c struct { int64_t tag; int64_t data1; int64_t data2; } *t = malloc(sizeof(*t));
+  t->tag = 0; t->data1 = n; t->data2 = 0; return (int64_t)(intptr_t)t; ```)
+
+(defn logic-walk [t subs] :int
+  ```c
+  typedef struct { int64_t tag; int64_t data1; int64_t data2; } Term;
+  typedef struct { int64_t var_id; int64_t term_ptr; int64_t next; } SubsE;
+  int64_t cur = t;
+  for (;;) {
+      Term *ct = (Term*)(intptr_t)cur;
+      if (ct->tag != 1) return cur;
+      int64_t vid = ct->data1;
+      SubsE *s = (SubsE*)(intptr_t)subs;
+      int64_t found = 0;
+      while (s) { if (s->var_id == vid) { found = s->term_ptr; break; } s = (SubsE*)(intptr_t)s->next; }
+      if (!found) return cur;
+      cur = found;
+  }
+  ```)
+
+(defn logic-unify [t1 t2 subs] :int
+  ```c
+  typedef struct { int64_t tag; int64_t data1; int64_t data2; } Term;
+  typedef struct { int64_t var_id; int64_t term_ptr; int64_t next; } SubsE;
+  int64_t wt1 = logic_walk(t1, subs); int64_t wt2 = logic_walk(t2, subs);
+  Term *ct1 = (Term*)(intptr_t)wt1; Term *ct2 = (Term*)(intptr_t)wt2;
+  if (ct1->tag == 1 && ct2->tag == 1 && ct1->data1 == ct2->data1) return subs;
+  if (ct1->tag == 0 && ct2->tag == 0 && ct1->data1 == ct2->data1) return subs;
+  if (ct1->tag == 3 && ct2->tag == 3) return subs;
+  if (ct1->tag == 1) { SubsE *e = malloc(sizeof(SubsE)); e->var_id = ct1->data1; e->term_ptr = wt2; e->next = subs; return (int64_t)(intptr_t)e; }
+  if (ct2->tag == 1) { SubsE *e = malloc(sizeof(SubsE)); e->var_id = ct2->data1; e->term_ptr = wt1; e->next = subs; return (int64_t)(intptr_t)e; }
+  if (ct1->tag == 2 && ct2->tag == 2) { int64_t s2 = logic_unify(ct1->data1, ct2->data1, subs); if (s2 == -1) return -1; return logic_unify(ct1->data2, ct2->data2, s2); }
+  return -1;
+  ```)
+
+(defn apply-goal [g state] :int
+  ```c int64_t *fat = (int64_t*)(intptr_t)g;
+  return ((int64_t(*)(void*, int64_t))(intptr_t)fat[0])((void*)fat, state); ```)
+
+(defn unify-goal-impl [lt1 lt2 state] :int
+  (let [ns (logic-unify lt1 lt2 state)]
+    (if (= ns -1) (mzero) (mreturn ns))))
+
+(defn lequal [t1 t2] :ptr<void>
+  (let [lt1 t1 lt2 t2]
+    (fn [state] (let [_ lt1] (unify-goal-impl lt1 lt2 state)))))
+
+(defn take-n [n lst] :int
+  ```c typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *result = NULL, *tail = NULL; Cell *c = (Cell*)(intptr_t)lst; int64_t count = 0;
+  while (c && count < n) { Cell *nc = malloc(sizeof(Cell)); nc->value = c->value; nc->next = 0;
+      if (tail) tail->next = (int64_t)(intptr_t)nc; else result = nc; tail = nc;
+      c = (Cell*)(intptr_t)c->next; count++; }
+  return (int64_t)(intptr_t)result; ```)
+
+(defn run-logic [n g] :int
+  (let [init 0] (take-n n (apply-goal g init))))
+
+(defn main []
+  (let [goal (lequal (term-int 1) (term-int 2))
+        results (run-logic 1 goal)]
+    (println (bt-length results))))

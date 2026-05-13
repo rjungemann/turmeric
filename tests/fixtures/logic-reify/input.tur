@@ -1,0 +1,144 @@
+;; Phase B4: Logic programming — nested fresh and reify-walk.
+;; Two fresh vars x(id=0),y(id=1): conjoin (x=10),(y=20); walk both to confirm.
+;; Uses defn helpers to avoid let-inside-lambda capture issues.
+
+(defn mzero [] :int ```c return 0; ```)
+(defn mreturn [x] :int
+  ```c struct { int64_t value; int64_t next; } *c = malloc(sizeof(*c));
+  c->value = x; c->next = 0; return (int64_t)(intptr_t)c; ```)
+(defn mbind [ma fn] :int
+  ```c
+  typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *cell = (Cell*)(intptr_t)ma; if (!cell) return 0;
+  int64_t *fat = (int64_t*)(intptr_t)fn; int64_t thunk = fat[0];
+  Cell *rev = NULL;
+  while (cell) {
+      int64_t sub = ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, cell->value);
+      Cell *sc = (Cell*)(intptr_t)sub;
+      while (sc) { Cell *n = malloc(sizeof(Cell)); n->value = sc->value; n->next = (int64_t)(intptr_t)rev; rev = n; sc = (Cell*)(intptr_t)sc->next; }
+      cell = (Cell*)(intptr_t)cell->next;
+  }
+  Cell *result = NULL;
+  while (rev) { Cell *tmp = (Cell*)(intptr_t)rev->next; rev->next = (int64_t)(intptr_t)result; result = rev; rev = tmp; }
+  return (int64_t)(intptr_t)result;
+  ```)
+(defn bt-length [xs] :int
+  ```c typedef struct { int64_t value; int64_t next; } Cell;
+  int64_t n = 0; Cell *c = (Cell*)(intptr_t)xs;
+  while (c) { n++; c = (Cell*)(intptr_t)c->next; } return n; ```)
+
+(defn term-int [n] :int
+  ```c struct { int64_t tag; int64_t data1; int64_t data2; } *t = malloc(sizeof(*t));
+  t->tag = 0; t->data1 = n; t->data2 = 0; return (int64_t)(intptr_t)t; ```)
+(defn term-var [id] :int
+  ```c struct { int64_t tag; int64_t data1; int64_t data2; } *t = malloc(sizeof(*t));
+  t->tag = 1; t->data1 = id; t->data2 = 0; return (int64_t)(intptr_t)t; ```)
+(defn term-int-val [t] :int
+  ```c return ((struct { int64_t tag; int64_t data1; int64_t data2; } *)(intptr_t)t)->data1; ```)
+
+(defn lvar-next [] :int ```c static int64_t n = 0; return n++; ```)
+
+(defn logic-walk [t subs] :int
+  ```c
+  typedef struct { int64_t tag; int64_t data1; int64_t data2; } Term;
+  typedef struct { int64_t var_id; int64_t term_ptr; int64_t next; } SubsE;
+  int64_t cur = t; for (;;) {
+      Term *ct = (Term*)(intptr_t)cur; if (ct->tag != 1) return cur;
+      int64_t vid = ct->data1; SubsE *s = (SubsE*)(intptr_t)subs; int64_t found = 0;
+      while (s) { if (s->var_id == vid) { found = s->term_ptr; break; } s = (SubsE*)(intptr_t)s->next; }
+      if (!found) return cur; cur = found;
+  }
+  ```)
+
+(defn logic-unify [t1 t2 subs] :int
+  ```c
+  typedef struct { int64_t tag; int64_t data1; int64_t data2; } Term;
+  typedef struct { int64_t var_id; int64_t term_ptr; int64_t next; } SubsE;
+  int64_t wt1 = logic_walk(t1, subs); int64_t wt2 = logic_walk(t2, subs);
+  Term *ct1 = (Term*)(intptr_t)wt1; Term *ct2 = (Term*)(intptr_t)wt2;
+  if (ct1->tag == 1 && ct2->tag == 1 && ct1->data1 == ct2->data1) return subs;
+  if (ct1->tag == 0 && ct2->tag == 0 && ct1->data1 == ct2->data1) return subs;
+  if (ct1->tag == 3 && ct2->tag == 3) return subs;
+  if (ct1->tag == 1) { SubsE *e = malloc(sizeof(SubsE)); e->var_id = ct1->data1; e->term_ptr = wt2; e->next = subs; return (int64_t)(intptr_t)e; }
+  if (ct2->tag == 1) { SubsE *e = malloc(sizeof(SubsE)); e->var_id = ct2->data1; e->term_ptr = wt1; e->next = subs; return (int64_t)(intptr_t)e; }
+  if (ct1->tag == 2 && ct2->tag == 2) { int64_t s2 = logic_unify(ct1->data1, ct2->data1, subs); if (s2 == -1) return -1; return logic_unify(ct1->data2, ct2->data2, s2); }
+  return -1;
+  ```)
+
+(defn apply-fat [f arg] :int
+  ```c int64_t *fat = (int64_t*)(intptr_t)f;
+  return ((int64_t(*)(void*, int64_t))(intptr_t)fat[0])((void*)fat, arg); ```)
+
+(defn apply-goal [g state] :int
+  ```c int64_t *fat = (int64_t*)(intptr_t)g;
+  return ((int64_t(*)(void*, int64_t))(intptr_t)fat[0])((void*)fat, state); ```)
+
+(defn unify-goal-impl [lt1 lt2 state] :int
+  (let [ns (logic-unify lt1 lt2 state)]
+    (if (= ns -1) (mzero) (mreturn ns))))
+
+(defn lequal [t1 t2] :ptr<void>
+  (let [lt1 t1 lt2 t2]
+    (fn [state] (let [_ lt1] (unify-goal-impl lt1 lt2 state)))))
+
+(defn conjoined-inner [lg22 s] :int
+  (let [lg2 lg22] (apply-goal lg2 s)))
+
+(defn conjoined-impl [lg1 lg2 state] :int
+  (let [lg22 lg2]
+    (mbind (apply-goal lg1 state)
+           (fn [s] (let [_ lg22] (conjoined-inner lg22 s))))))
+
+(defn conjoined [g1 g2] :ptr<void>
+  (let [lg1 g1 lg2 g2]
+    (fn [state] (let [_ lg1] (conjoined-impl lg1 lg2 state)))))
+
+(defn fresh-impl [lf state] :int
+  (let [nv (term-var (lvar-next))
+        lf2 lf]
+    (apply-goal (apply-fat lf2 nv) state)))
+
+(defn fresh [f] :ptr<void>
+  (let [lf f]
+    (fn [state] (let [_ lf] (fresh-impl lf state)))))
+
+(defn take-n [n lst] :int
+  ```c typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *result = NULL, *tail = NULL; Cell *c = (Cell*)(intptr_t)lst; int64_t count = 0;
+  while (c && count < n) { Cell *nc = malloc(sizeof(Cell)); nc->value = c->value; nc->next = 0;
+      if (tail) tail->next = (int64_t)(intptr_t)nc; else result = nc; tail = nc;
+      c = (Cell*)(intptr_t)c->next; count++; }
+  return (int64_t)(intptr_t)result; ```)
+
+(defn run-logic [n g] :int
+  (let [init 0] (take-n n (apply-goal g init))))
+
+(defn first-state [results] :int
+  ```c typedef struct { int64_t value; int64_t next; } Cell;
+  Cell *c = (Cell*)(intptr_t)results; return c ? c->value : 0; ```)
+
+;; inner-goal: conjoin (lx=10) and (y=20)
+(defn inner-goal [lx y] :ptr<void>
+  (conjoined (lequal lx (term-int 10)) (lequal y (term-int 20))))
+
+;; make-inner-fn: given lx (term), returns fat closure (y -> goal)
+(defn make-inner-fn [lx] :ptr<void>
+  (let [lx2 lx]
+    (fn [y] (let [_ lx2] (inner-goal lx2 y)))))
+
+;; outer-body: given x (term), produce the inner fresh goal
+(defn outer-body [x] :ptr<void>
+  (fresh (make-inner-fn x)))
+
+;; make-outer-fn: returns fat closure (x -> goal) for outer fresh
+(defn make-outer-fn [] :ptr<void>
+  (let [dummy 0]
+    (fn [x] (let [_ dummy] (outer-body x)))))
+
+(defn main []
+  (let [goal (fresh (make-outer-fn))
+        results (run-logic 1 goal)
+        subs (first-state results)]
+    (println (bt-length results))
+    (println (term-int-val (logic-walk (term-var 0) subs)))
+    (println (term-int-val (logic-walk (term-var 1) subs)))))
