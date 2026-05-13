@@ -366,9 +366,12 @@ struct Expr {
         } shift0_;
         /* Phase B2: Cloneable continuations */
         struct { Expr *body; }         cloneable_reset_; /* (cloneable-reset body) */
-        struct { 
+        struct {
             Expr *k_fn;             /* (cloneable-shift k body) - k receives cloneable continuation */
             Expr *body;             /* body to run with captured cloneable continuation */
+            /* CPS-CL1: live locals at this shift site (arena-allocated, set by cps_transform) */
+            Binding   **live_captures;
+            uint32_t    n_live_captures;
         } cloneable_shift_;
         /* Phase 19: Algebraic effects */
         struct { EffectDef *def; }                   effect_def_;   /* (defeffect ...) */

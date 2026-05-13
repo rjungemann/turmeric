@@ -322,6 +322,52 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
     }
 }
 
+/* Phase B2: Cloneable continuation runtime */
+typedef struct tur_cloneable_cont tur_cloneable_cont;
+struct tur_cloneable_cont {
+    int64_t (*cont_fn)(void *env, int64_t value);
+    void *env;
+    void *(*clone_env)(const void *env);
+    void (*drop_env)(void *env);
+};
+
+static tur_cloneable_cont *tur_cloneable_cont_alloc(
+    int64_t (*cont_fn)(void *, int64_t),
+    void *env,
+    void *(*clone_env)(const void *),
+    void (*drop_env)(void *)) {
+    tur_cloneable_cont *c = malloc(sizeof(tur_cloneable_cont));
+    if (!c) abort();
+    c->cont_fn = cont_fn; c->env = env;
+    c->clone_env = clone_env; c->drop_env = drop_env;
+    return c;
+}
+
+static int64_t tur_cloneable_cont_resume(int64_t cont_int, int64_t value) {
+    tur_cloneable_cont *cont = (tur_cloneable_cont *)(intptr_t)cont_int;
+    if (!cont || !cont->cont_fn) abort();
+    return cont->cont_fn(cont->env, value);
+}
+
+static int64_t tur_cloneable_cont_clone(int64_t cont_int) {
+    tur_cloneable_cont *cont = (tur_cloneable_cont *)(intptr_t)cont_int;
+    if (!cont) return 0;
+    tur_cloneable_cont *copy = malloc(sizeof(tur_cloneable_cont));
+    if (!copy) abort();
+    copy->cont_fn   = cont->cont_fn;
+    copy->clone_env = cont->clone_env;
+    copy->drop_env  = cont->drop_env;
+    copy->env = cont->clone_env ? cont->clone_env(cont->env) : cont->env;
+    return (int64_t)(intptr_t)copy;
+}
+
+static void tur_cloneable_cont_drop(int64_t cont_int) {
+    tur_cloneable_cont *cont = (tur_cloneable_cont *)(intptr_t)cont_int;
+    if (!cont) return;
+    if (cont->env && cont->drop_env) cont->drop_env(cont->env);
+    free(cont);
+}
+
 /* Phase 19: Algebraic effect handler chain */
 typedef struct { bool consumed; void *origin_fiber; } TurContK;
 
@@ -1201,7 +1247,7 @@ static void * with_c_string(const char *, int64_t);
 static const char * from_c_string(const char *);
 static void * box(int64_t);
 static int64_t unbox(int64_t);
-static int64_t add10(int64_t);
+static int64_t k_returns_15(int64_t);
 static int64_t test_basic();
 static int64_t test_reset_passthrough();
 
@@ -1262,13 +1308,16 @@ static int64_t unbox(int64_t p) {
   
 }
 
-static int64_t add10(int64_t v) {
-        return ((v) + (INT64_C(10)));
+static int64_t k_returns_15(int64_t k) {
+        return INT64_C(15);
 }
 
+static int64_t __cont_fn_0(void *__env, int64_t __value) { (void)__env; return __value; }
+
 static int64_t test_basic() {
-        int64_t __t0 = add10(INT64_C(5));
-        return __t0;
+        tur_cloneable_cont *__t1 = tur_cloneable_cont_alloc(__cont_fn_0, NULL, NULL, NULL);
+        int64_t __t2 = k_returns_15((int64_t)(intptr_t)__t1);
+        return __t2;
 }
 
 static int64_t test_reset_passthrough() {
@@ -1278,9 +1327,9 @@ static int64_t test_reset_passthrough() {
 int main() {
         printf("%lld\n", (long long)(test_basic()));
         printf("%lld\n", (long long)(test_reset_passthrough()));
-        int64_t __t1;
-        __t1 = INT64_C(0);
-        return (int)__t1;
+        int64_t __t3;
+        __t3 = INT64_C(0);
+        return (int)__t3;
 }
 
 
