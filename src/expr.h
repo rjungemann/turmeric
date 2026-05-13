@@ -38,6 +38,9 @@ struct Binding {
     Span          moved_at;
     /* Phase R5: #[no-unwind] attribute on defn */
     bool          no_unwind;
+    /* Phase M1: Module visibility */
+    bool          is_exported;          /* listed in module's (export ...) */
+    const Symbol *defining_module_name; /* owning module's name, or NULL for top-level */
 };
 
 typedef enum ExprKind {
@@ -121,6 +124,8 @@ typedef enum ExprKind {
     EX_MAKE_STRUCT,    /* (make-struct Name v1 v2 ...) - struct literal */
     EX_GET_FIELD,      /* (.field s) - struct field access */
     EX_PROGRAM,
+    /* Phase M0: Module system */
+    EX_DEFMODULE,      /* (defmodule name [docstring] (export ...) (import ...) body...) */
 } ExprKind;
 
 /* Phase 2: FnDef represents a function definition from defn or lifted fn. */
@@ -233,6 +238,27 @@ typedef struct DiscontinueExpr {
     Expr *k;                   /* The continuation to discontinue */
     Expr *exception;           /* The exception to raise */
 } DiscontinueExpr;
+
+/* Phase M0: Module system */
+
+typedef struct {
+    const Symbol *module_name;   /* module to import, e.g. "geom/vector" */
+    const Symbol *alias;         /* :as alias (or NULL) */
+    const Symbol **refer_syms;  /* :refer list (or NULL = none) */
+    uint32_t n_refer;
+    Span span;
+} ImportSpec;
+
+typedef struct DefModule {
+    const Symbol *name;          /* module name, e.g. "geom/vector" */
+    const char *docstring;       /* optional docstring (or NULL) */
+    const Symbol **exports;      /* exported symbols */
+    uint32_t n_exports;
+    ImportSpec *imports;         /* import specs */
+    uint32_t n_imports;
+    Expr **body;                 /* elaborated body expressions */
+    uint32_t n_body;
+} DefModule;
 
 struct Expr {
     ExprKind kind;
@@ -361,6 +387,9 @@ struct Expr {
         struct { Expr *struct_expr; uint32_t field_idx; StructDef *def; } get_field_; /* (.field s) - field read */
 
         struct { Expr **items; uint32_t n; }                               program;
+
+        /* Phase M0: Module system */
+        struct { struct DefModule *mod; }                                   defmodule_;
     } as;
 };
 

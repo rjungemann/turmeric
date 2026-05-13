@@ -1,0 +1,3 @@
+.F
+2 tests, 1 passed, 1 failed
+FAIL tests/cli/tur-test-mixed/cases/z_fail.tur

@@ -107,6 +107,16 @@
 (defclass Traversable [^t]
   (traverse [ta fn] :int))
 
+;;; SINCE: Phase HKT H7
+;; Alternative — typeclass for types with an "empty" value and a way to combine alternatives.
+;; Similar to MonadPlus/ApplicativePlus in Haskell.
+;;   empty :: f a           (the empty/zero value)
+;;   alt-or :: f a -> f a -> f a   (combine two alternatives)
+;; In v1: empty [] :int and alt-or [a b] :int
+(defclass Alternative [^f]
+  (empty [] :int)
+  (alt-or [a b] :int))
+
 ;;; SINCE: Phase HKT H5
 ;; Bifunctor — map over both sides of a binary type constructor.
 ;;   The canonical signature is:
