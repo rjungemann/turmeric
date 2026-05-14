@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/Users/rjungemann/Projects/turmeric/build-norel/_deps/raylib-subbuild/cmake_install.cmake"
-	],
-	"Parallel" : false
-}
