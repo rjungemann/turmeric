@@ -1,0 +1,56 @@
+/tmp/tur-build/tests_cli_tur-test-failure_cases_fail_one_tur.c:306:8: error: unknown type name 'jmp_buf'
+  306 | static jmp_buf global_panic_jmpbuf;
+      |        ^
+/tmp/tur-build/tests_cli_tur-test-failure_cases_fail_one_tur.c:357:9: error: call to undeclared function 'setjmp'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+  357 |     if (setjmp(global_panic_jmpbuf) == 0) {
+      |         ^
+/tmp/tur-build/tests_cli_tur-test-failure_cases_fail_one_tur.c:380:9: error: call to undeclared function 'setjmp'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+  380 |     if (setjmp(global_panic_jmpbuf) == 0) {
+      |         ^
+/tmp/tur-build/tests_cli_tur-test-failure_cases_fail_one_tur.c:455:5: error: unknown type name 'jmp_buf'
+  455 |     jmp_buf panic_jmpbuf; /* Per-fiber panic recovery buffer */
+      |     ^
+/tmp/tur-build/tests_cli_tur-test-failure_cases_fail_one_tur.c:470:9: error: call to undeclared function 'longjmp'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+  470 |         longjmp(global_panic_jmpbuf, 1);
+      |         ^
+/tmp/tur-build/tests_cli_tur-test-failure_cases_fail_one_tur.c:474:9: error: call to undeclared function 'longjmp'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+  474 |         longjmp(tur_current_fiber->panic_jmpbuf, 1);
+      |         ^
+/tmp/tur-build/tests_cli_tur-test-failure_cases_fail_one_tur.c:492:9: error: use of undeclared identifier 'jmp_buf'
+  492 |         jmp_buf prev_global_buf;
+      |         ^
+/tmp/tur-build/tests_cli_tur-test-failure_cases_fail_one_tur.c:493:86: error: use of undeclared identifier 'jmp_buf'
+  493 |         if (prev_global_valid) memcpy(&prev_global_buf, &global_panic_jmpbuf, sizeof(jmp_buf));
+      |                                                                                      ^
+/tmp/tur-build/tests_cli_tur-test-failure_cases_fail_one_tur.c:493:40: error: use of undeclared identifier 'prev_global_buf'; did you mean 'prev_global_valid'?
+  493 |         if (prev_global_valid) memcpy(&prev_global_buf, &global_panic_jmpbuf, sizeof(jmp_buf));
+      |                                        ^~~~~~~~~~~~~~~
+      |                                        prev_global_valid
+/tmp/tur-build/tests_cli_tur-test-failure_cases_fail_one_tur.c:491:13: note: 'prev_global_valid' declared here
+  491 |         int prev_global_valid = global_panic_jmpbuf_valid;
+      |             ^
+/tmp/tur-build/tests_cli_tur-test-failure_cases_fail_one_tur.c:497:13: error: call to undeclared function 'setjmp'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+  497 |         if (setjmp(f->panic_jmpbuf) == 0) {
+      |             ^
+/tmp/tur-build/tests_cli_tur-test-failure_cases_fail_one_tur.c:509:90: error: use of undeclared identifier 'jmp_buf'
+  509 |             if (prev_global_valid) memcpy(&global_panic_jmpbuf, &prev_global_buf, sizeof(jmp_buf));
+      |                                                                                          ^
+/tmp/tur-build/tests_cli_tur-test-failure_cases_fail_one_tur.c:509:66: error: use of undeclared identifier 'prev_global_buf'; did you mean 'prev_global_valid'?
+  509 |             if (prev_global_valid) memcpy(&global_panic_jmpbuf, &prev_global_buf, sizeof(jmp_buf));
+      |                                                                  ^~~~~~~~~~~~~~~
+      |                                                                  prev_global_valid
+/tmp/tur-build/tests_cli_tur-test-failure_cases_fail_one_tur.c:491:13: note: 'prev_global_valid' declared here
+  491 |         int prev_global_valid = global_panic_jmpbuf_valid;
+      |             ^
+/tmp/tur-build/tests_cli_tur-test-failure_cases_fail_one_tur.c:529:90: error: use of undeclared identifier 'jmp_buf'
+  529 |             if (prev_global_valid) memcpy(&global_panic_jmpbuf, &prev_global_buf, sizeof(jmp_buf));
+      |                                                                                          ^
+/tmp/tur-build/tests_cli_tur-test-failure_cases_fail_one_tur.c:529:66: error: use of undeclared identifier 'prev_global_buf'; did you mean 'prev_global_valid'?
+  529 |             if (prev_global_valid) memcpy(&global_panic_jmpbuf, &prev_global_buf, sizeof(jmp_buf));
+      |                                                                  ^~~~~~~~~~~~~~~
+      |                                                                  prev_global_valid
+/tmp/tur-build/tests_cli_tur-test-failure_cases_fail_one_tur.c:491:13: note: 'prev_global_valid' declared here
+  491 |         int prev_global_valid = global_panic_jmpbuf_valid;
+      |             ^
+14 errors generated.
+tur: cc invocation failed (status 256)
