@@ -1,0 +1,218 @@
+;;
+;; Tidal Transform Combinators Tests
+;; Phase D tests from tidalcycles-dsl-plan.md
+;;
+
+(import tidal/pattern tidal/transform)
+
+;; ============================================================
+;; Numeric Transformation Tests
+;; ============================================================
+
+(defn test-add-constant []
+  (let [p (add (const 10) 5)]
+    (assert (== (p 0.0) 15) "Add constant should work")
+    (assert (== (p 1.0) 15) "Add constant at any time should work")
+    true))
+
+(defn test-add-pattern []
+  (let [p (add (const 10) (const 5))]
+    (assert (== (p 0.0) 15) "Add pattern should work")
+    true))
+
+(defn test-add-cycle []
+  (let [p (add (cycle 1 2 3) (cycle 10 20 30))]
+    (assert (== (p 0.0) 11) "Add cycles should work")
+    (assert (== (p 1.0) 22) "Add cycles at time 1 should work")
+    true))
+
+(defn test-mul-constant []
+  (let [p (mul (const 10) 2)]
+    (assert (== (p 0.0) 20) "Multiply constant should work")
+    true))
+
+(defn test-mul-pattern []
+  (let [p (mul (const 10) (const 2))]
+    (assert (== (p 0.0) 20) "Multiply pattern should work")
+    true))
+
+(defn test-sub-constant []
+  (let [p (sub (const 10) 5)]
+    (assert (== (p 0.0) 5) "Subtract constant should work")
+    true))
+
+(defn test-div-constant []
+  (let [p (div (const 10) 2)]
+    (assert (== (p 0.0) 5) "Divide constant should work")
+    true))
+
+;; ============================================================
+;; Range Mapping Tests
+;; ============================================================
+
+(defn test-range []
+  (let [p (range (const 0.5) 0.0 1.0 100.0 200.0)]
+    (assert (== (p 0.0) 150.0) "Range mapping should work")
+    true))
+
+(defn test-range-cycle []
+  (let [p (range (cycle 0.0 0.5 1.0) 0.0 1.0 0.0 100.0)]
+    (assert (== (p 0.0) 0.0) "Range with cycle at 0 should map to 0")
+    (assert (== (p 1.0) 50.0) "Range with cycle at 0.5 should map to 50")
+    (assert (== (p 2.0) 100.0) "Range with cycle at 1 should map to 100")
+    true))
+
+(defn test-clamp []
+  (let [p (clamp (cycle -5 5 15) -1.0 1.0)]
+    (assert (== (p 0.0) -1.0) "Clamp below min should work")
+    (assert (== (p 1.0) 1.0) "Clamp above max should work")
+    (assert (== (p 2.0) 1.0) "Clamp at 15 should be clamped to 1")
+    true))
+
+(defn test-clamp-within-range []
+  (let [p (clamp (const 0.5) 0.0 1.0)]
+    (assert (== (p 0.0) 0.5) "Clamp within range should pass through")
+    true))
+
+;; ============================================================
+;; Randomness Tests
+;; ============================================================
+
+(defn test-jitter []
+  (let [p (jitter (const 10.0) 1.0 0.0)]
+    (let [result (p 0.0)]
+      (assert (float? result) "Jitter should return float")
+      ;; Can't test exact value due to randomness
+      true)))
+
+(defn test-rand-select []
+  (let [p (rand-select (const 1) (const 2) (const 3))]
+    (let [result (p 0.0)]
+      (assert (or (== result 1) (== result 2) (== result 3)) "Rand-select should return one of the values")
+      true)))
+
+(defn test-noise []
+  (let [p (noise 1.0 0.0)]
+    (let [result (p 0.0)]
+      (assert (float? result) "Noise should return float")
+      true)))
+
+(defn test-white-noise []
+  (let [p (white-noise)]
+    (let [result (p 0.0)]
+      (assert (float? result) "White noise should return float")
+      true)))
+
+;; ============================================================
+;; Waveform Pattern Tests
+;; ============================================================
+
+(defn test-sine-wave []
+  (let [p (sine 1.0 1.0 0.0)]
+    (assert (== (p 0.0) 0.0) "Sine at 0 should be 0")
+    (assert (approx== (p 0.25) 1.0 0.01) "Sine at 0.25 should be ~1")
+    (assert (approx== (p 0.5) 0.0 0.01) "Sine at 0.5 should be ~0")
+    (assert (approx== (p 0.75) -1.0 0.01) "Sine at 0.75 should be ~-1")
+    true))
+
+(defn test-sine-freq []
+  (let [p (sine 2.0 1.0 0.0)]
+    (assert (approx== (p 0.25) 0.0 0.01) "Sine at 2x freq at 0.25 should be ~0")
+    true))
+
+(defn test-square-wave []
+  (let [p (square 1.0 1.0 0.5)]
+    (assert (== (p 0.0) 1.0) "Square at 0 should be 1")
+    (assert (== (p 0.25) 1.0) "Square at 0.25 should be 1")
+    (assert (== (p 0.5) -1.0) "Square at 0.5 should be -1")
+    (assert (== (p 0.75) -1.0) "Square at 0.75 should be -1")
+    true))
+
+(defn test-saw-wave []
+  (let [p (saw 1.0 1.0)]
+    (assert (== (p 0.0) 1.0) "Saw at 0 should be 1")
+    (assert (approx== (p 0.5) 0.5 0.01) "Saw at 0.5 should be ~0.5")
+    (assert (== (p 1.0) 1.0) "Saw at 1 should be 1")
+    true))
+
+(defn test-tri-wave []
+  (let [p (tri 1.0 1.0)]
+    (assert (== (p 0.0) 0.0) "Triangle at 0 should be 0")
+    (assert (approx== (p 0.25) 0.5 0.01) "Triangle at 0.25 should be ~0.5")
+    (assert (approx== (p 0.5) 1.0 0.01) "Triangle at 0.5 should be ~1")
+    (assert (approx== (p 0.75) 0.5 0.01) "Triangle at 0.75 should be ~0.5")
+    true))
+
+;; ============================================================
+;; Envelope Tests
+;; ============================================================
+
+(defn test-adsr []
+  (let [p (adsr 0.1 0.1 0.5 0.1 (const true))]
+    (assert (float? (p 0.0)) "ADSR should return float")
+    true))
+
+(defn test-ar []
+  (let [p (ar 0.1 0.1 (const true))]
+    (assert (float? (p 0.0)) "AR should return float")
+    true))
+
+;; ============================================================
+;; Combined Transformations
+;; ============================================================
+
+(defn test-add-then-mul []
+  (let [p (mul (add (const 10) 5) 2)]
+    (assert (== (p 0.0) 30) "Combined add then mul should work")
+    true))
+
+(defn test-range-then-clamp []
+  (let [p (clamp (range (const 2.0) 0.0 1.0 0.0 1.0) 0.0 1.0)]
+    (assert (== (p 0.0) 1.0) "Range then clamp should work")
+    true))
+
+;; ============================================================
+;; Main Test Runner
+;; ============================================================
+
+(defn run-all-tests []
+  (let [tests [
+    ["add constant" test-add-constant]
+    ["add pattern" test-add-pattern]
+    ["add cycle" test-add-cycle]
+    ["mul constant" test-mul-constant]
+    ["mul pattern" test-mul-pattern]
+    ["sub constant" test-sub-constant]
+    ["div constant" test-div-constant]
+    ["range" test-range]
+    ["range cycle" test-range-cycle]
+    ["clamp" test-clamp]
+    ["clamp within range" test-clamp-within-range]
+    ["jitter" test-jitter]
+    ["rand-select" test-rand-select]
+    ["noise" test-noise]
+    ["white-noise" test-white-noise]
+    ["sine wave" test-sine-wave]
+    ["sine freq" test-sine-freq]
+    ["square wave" test-square-wave]
+    ["saw wave" test-saw-wave]
+    ["tri wave" test-tri-wave]
+    ["adsr" test-adsr]
+    ["ar" test-ar]
+    ["add then mul" test-add-then-mul]
+    ["range then clamp" test-range-then-clamp]
+  ]]
+    (doseq [[name test-fn] tests]
+      (print (str "Testing: " name " ... "))
+      (try
+        (let [result (test-fn)]
+          (if result
+            (println " PASS")
+            (println " FAIL")))
+        (catch e
+          (println (str " ERROR: " (error->string e))))))
+    (println "\nTransform combinators tests complete.")))
+
+;; Run tests if executed directly
+(when (== (get *argv* 0) "run")
+  (run-all-tests))

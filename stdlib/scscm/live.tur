@@ -1,0 +1,277 @@
+;; stdlib/scscm/live.tur — Live-Coding Integration
+;;
+;; This module provides a REPL-friendly evaluation system for live-coding
+;; with hcsynth. It enables hot-reloading of synth patches and patterns.
+
+(import scscm/synth :synth)
+(import scscm/params :params)
+(import scscm/types :types)
+
+;; ============================================================================
+;; Time Utilities
+;; ============================================================================
+
+;; Get current time in samples (relative to world creation)
+;; For now, this is a simple counter - in future could use hcsynth timing
+(defstruct TimeState
+  [samples :int64])
+
+(defn time-state-new []
+  {:samples 0})
+
+(defn time-advance! [state samples]
+  (set! state (update state :samples + samples)))
+
+(defn now-samples [state]
+  (:samples state))
+
+;; ============================================================================
+;; Live-Coding Session
+;; ============================================================================
+
+;; Extended session for live-coding with additional state
+(defstruct LiveSession
+  [base :synth/ScscmSession
+   time-state :TimeState
+   scheduled-fns :(vec<fn>)
+   pattern-players :(map<int fn>)
+   next-player-id :int])
+
+;; Create a new live-coding session
+;;
+;; @param sample_rate Audio sample rate (default: 48000)
+;; @param block_size Audio block size (default: 512)
+;; @return LiveSession
+(defn live-session-new [& [sample_rate types/DEFAULT_SAMPLE_RATE
+                           block_size types/DEFAULT_BLOCK_SIZE]]
+  {:base (synth/session-new sample_rate block_size)
+   :time-state (time-state-new)
+   :scheduled-fns []
+   :pattern-players {}
+   :next-player-id 0})
+
+;; Destroy a live session
+(defn live-session-destroy [session]
+  (synth/session-destroy (:base session)))
+
+;; ============================================================================
+;; Synth Replacement (Hot-Reloading)
+;; ============================================================================
+
+;; Replace a running synth with a new one, preserving parameters
+;;
+;; This is the core of live-coding: when you redefine a synth, existing
+;; instances can be replaced with the new definition while preserving
+;; their current parameter values.
+;;
+;; @param session Live session
+;; @param old-node-id Node ID of synth to replace
+;; @param new-synthdef-name Name of new SynthDef
+;; @param preserve-params? Whether to copy parameters from old synth (default: true)
+;; @return Node ID of new synth, or nil on error
+(defn synth-replace [session old-node-id new-synthdef-name & [preserve-params? true]]
+  (let [old-synth (get (get-in session [:base :active-synths]) old-node-id)]
+    (when old-synth
+      ;; Get current parameter values (simplified - in real implementation
+      ;; we'd query the actual values from scsynth)
+      ;; For now, we just create a new synth with default params
+      
+      (let [new-node-id (synth/node-id-alloc (get-in session [:base :node-allocator]))]
+        (let [result (synth/synth-new (:world-id (:base session)) new-synthdef-name new-node-id)]
+          (if (== result 0)
+            (do
+              ;; Update session tracking
+              (set! session (update-in session [:base :active-synths] dissoc old-node-id))
+              (set! session (update-in session [:base :active-synths] assoc new-node-id new-synthdef-name))
+              
+              ;; Free old synth
+              (synth/synth-free (:world-id (:base session)) old-node-id)
+              
+              new-node-id)
+            nil))))))
+
+;; Play a note with automatic cleanup after duration
+;;
+;; @param session Live session
+;; @param synthdef-name Name of SynthDef to use
+;; @param note MIDI note number
+;; @param vel MIDI velocity (0-127)
+;; @param duration Duration in seconds
+;; @return Node ID of created synth
+(defn play-note [session synthdef-name note vel duration]
+  (let [synth-node (synth/session-synth-new (:base session) synthdef-name)]
+    ;; Set note parameters
+    (let [freq (params/midi->hz note)
+          amp (params/vel->amp vel)]
+      ;; Assuming synth has freq and amp controls at indices 0 and 1
+      ;; In a real implementation, this would use the SynthDef spec
+      (synth/session-synth-set (:base session) synth-node {0 freq 1 amp}))
+    
+    ;; Schedule cleanup
+    (let [samples-ahead (types/sec->samples duration (synth/world-sample-rate (:world-id (:base session))))]
+      (set! session (update session :scheduled-fns conj 
+                       (fn []
+                         (synth/session-synth-free (:base session) synth-node)))))
+    
+    synth-node))
+
+;; ============================================================================
+;; Scheduling
+;; ============================================================================
+
+;; Schedule a function to run after a delay
+;;
+;; @param session Live session
+;; @param samples Delay in samples
+;; @param thunk Function to call
+(defn schedule-after [session samples thunk]
+  (set! session (update session :scheduled-fns conj 
+                   (fn []
+                     (time-advance! (:time-state session) samples)
+                     (thunk)))))
+
+;; Process scheduled functions
+;;
+;; Call this each block to execute scheduled functions whose time has come
+;;
+;; @param session Live session
+;; @param block-size Current block size in samples
+(defn process-scheduled [session block-size]
+  (let [scheduled (:scheduled-fns session)]
+    (when (not (empty? scheduled))
+      (let [new-scheduled (vec (rest scheduled))]
+        (let [fn-to-run (first scheduled)]
+          (fn-to-run))
+        (set! session (assoc session :scheduled-fns new-scheduled))))))
+
+;; ============================================================================
+;; Pattern Players
+;; ============================================================================
+
+;; A pattern player is a function that generates events at regular intervals
+(defn pattern-player-new [session synthdef-name pattern-fn interval-samples]
+  (let [player-id (:next-player-id session)]
+    (set! session (update session :next-player-id inc))
+    
+    (let [player-fn (fn []
+                      (let [params (pattern-fn (now-samples (:time-state session)))]
+                        (synth/session-synth-new (:base session) synthdef-name params)))]
+      
+      ;; Store player for later removal
+      (set! session (update session :pattern-players assoc player-id player-fn))
+      
+      ;; Schedule the first run
+      (schedule-after session interval-samples 
+                       (fn []
+                         (player-fn)
+                         (schedule-after session interval-samples 
+                                        (get (:pattern-players session) player-id))))
+      
+      player-id)))
+
+;; Stop a pattern player
+(defn pattern-player-stop [session player-id]
+  (set! session (update session :pattern-players dissoc player-id)))
+
+;; ============================================================================
+;; Live-Coding Evaluation
+;; ============================================================================
+
+;; Evaluate code in live-coding context
+;;
+;; This function provides the evaluation context for live-coding.
+;; It makes session and utility functions available to user code.
+;;
+;; @param session Live session
+;; @param code Code string to evaluate
+;; @return Result of evaluation, or error
+(defn live-eval [session code]
+  ;; In Turmeric, we'd use eval or similar
+  ;; For now, this is a placeholder that shows the concept
+  
+  ;; Bind session and utilities into evaluation context
+  (let [context {
+          'session session
+          'base (:base session)
+          'synth-new (fn [def-name & params] 
+                       (synth/session-synth-new (:base session) def-name params))
+          'synth-free (fn [node-id] 
+                         (synth/session-synth-free (:base session) node-id))
+          'synth-set (fn [node-id params] 
+                         (synth/session-synth-set (:base session) node-id params))
+          'play-note play-note
+          'midi->hz params/midi->hz
+          'vel->amp params/vel->amp
+          'db->amp params/db->amp
+          'amp->db params/amp->db
+          'now (fn [] (now-samples (:time-state session)))
+        }]
+    ;; In a real implementation, we'd evaluate code with this context
+    ;; For now, just return the code as-is (conceptual)
+    code))
+
+;; ============================================================================
+;; Utility Functions
+;; ============================================================================
+
+;; BPM to beats per second
+(defn bpm->beats-per-sec [bpm]
+  (/ bpm 60.0))
+
+;; Beats to seconds
+(defn beats->sec [beats bpm]
+  (/ beats (bpm->beats-per-sec bpm)))
+
+;; Seconds to beats
+(defn sec->beats [sec bpm]
+  (* sec (bpm->beats-per-sec bpm)))
+
+;; Schedule a pattern to play at a given BPM
+;;
+;; @param session Live session
+;; @param synthdef-name SynthDef name
+;; @param pattern-fn Function: beats -> param-map
+;; @param bpm Tempo in beats per minute
+;; @param interval-beats Interval between pattern triggers (default: 1 = every beat)
+;; @return Pattern player ID
+(defn play-pattern [session synthdef-name pattern-fn bpm & [interval-beats 1]]
+  (let [sample-rate (synth/world-sample-rate (:world-id (:base session)))
+        interval-samples (types/sec->samples (beats->sec interval-beats bpm) sample-rate)]
+    (pattern-player-new session synthdef-name pattern-fn interval-samples)))
+
+;; Simple constant pattern
+(defn const-pattern [value]
+  (fn [_] value))
+
+;; Cycle through values
+(defn cycle-pattern [& values]
+  (let [index 0]
+    (fn [beats]
+      (let [idx (mod (floor beats) (len values))]
+        (get values idx)))))
+
+;; Every N beats
+(defn every-n [n pattern-fn]
+  (fn [beats]
+    (when (== 0 (mod (floor beats) n))
+      (pattern-fn beats))))
+
+;; ============================================================================
+;; Session Rendering with Scheduling
+;; ============================================================================
+
+;; Render a block and process scheduled functions
+;;
+;; @param session Live session
+;; @param output_buffer Output buffer
+;; @param num_samples Number of samples to render
+;; @param num_channels Number of output channels
+(defn live-session-render [session output_buffer num_samples num_channels]
+  ;; Process scheduled functions first
+  (process-scheduled session num_samples)
+  
+  ;; Advance time
+  (time-advance! (:time-state session) num_samples)
+  
+  ;; Render audio
+  (synth/world-render (:world-id (:base session)) output_buffer num_samples num_channels))

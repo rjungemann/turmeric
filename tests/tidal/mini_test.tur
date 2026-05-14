@@ -1,0 +1,189 @@
+;;
+;; Tidal Mini-Notation Tests
+;; Phase I tests from tidalcycles-dsl-plan.md
+;;
+
+(import tidal/mini tidal/pattern)
+
+;; ============================================================
+;; Tokenizer Tests
+;; ============================================================
+
+(defn test-tokenize-empty []
+  (let [tokens (mini-tokenize "")]
+    (assert (== (len tokens) 0) "Empty string should produce empty tokens")
+    true))
+
+(defn test-tokenize-single-number []
+  (let [tokens (mini-tokenize "1")]
+    (assert (== (len tokens) 1) "Single number should produce 1 token")
+    true))
+
+(defn test-tokenize-multiple-numbers []
+  (let [tokens (mini-tokenize "1 2 3")]
+    (assert (== (len tokens) 3) "Multiple numbers should produce multiple tokens")
+    true))
+
+(defn test-tokenize-with-operators []
+  (let [tokens (mini-tokenize "1 + 2 * 3")]
+    (assert (> (len tokens) 3) "String with operators should produce tokens")
+    true))
+
+;; ============================================================
+;; Parser Tests
+;; ============================================================
+
+(defn test-parse-mini-single []
+  (let [p (parse-mini "1")]
+    (assert (fn? p) "parse-mini should return a function")
+    (assert (== (p 0.0) 1) "Parsed single number should work")
+    true))
+
+(defn test-parse-mini-multiple []
+  (let [p (parse-mini "1 2 3")]
+    (assert (== (p 0.0) 1) "Parsed multiple numbers should cycle")
+    (assert (== (p 1.0) 2) "Parsed at time 1 should return 2")
+    true))
+
+(defn test-parse-mini-with-operators []
+  (let [p (parse-mini "1 + 2")]
+    (assert (fn? p) "parse-mini with operators should work")
+    true))
+
+;; ============================================================
+;; s Macro Tests
+;; ============================================================
+
+(defn test-s-macro-single []
+  (let [p (s "1")]
+    (assert (fn? p) "s macro should return a function")
+    (assert (== (p 0.0) 1) "s macro with single number should work")
+    true))
+
+(defn test-s-macro-multiple []
+  (let [p (s "1 2 3")]
+    (assert (== (p 0.0) 1) "s macro with multiple numbers should work")
+    (assert (== (p 1.0) 2) "s macro at time 1 should return 2")
+    true))
+
+;; ============================================================
+;; Drum Notation Tests
+;; ============================================================
+
+(defn test-parse-drums-single []
+  (let [p (parse-drums "bd")]
+    (assert (fn? p) "parse-drums should return a function")
+    true))
+
+(defn test-parse-drums-multiple []
+  (let [p (parse-drums "bd sd")]
+    (assert (fn? p) "parse-drums with multiple should work")
+    true))
+
+(defn test-parse-drums-values []
+  (let [p (parse-drums "bd sd")]
+    (let [result (p 0.0)]
+      (assert (map? result) "Drum pattern should return map")
+      (assert (contains? result :note) "Should have note key")
+      true)))
+
+;; ============================================================
+;; Operator Application Tests
+;; ============================================================
+
+(defn test-mini-apply-op-add []
+  (let [left (const 1)
+        right (const 2)
+        result (mini-apply-op "+" left right)]
+    (assert (== (result 0.0) 3) "Addition operator should work")
+    true))
+
+(defn test-mini-apply-op-mul []
+  (let [left (const 2)
+        right (const 3)
+        result (mini-apply-op "*" left right)]
+    (assert (== (result 0.0) 6) "Multiplication operator should work")
+    true))
+
+(defn test-mini-apply-op-unsupported []
+  (let [left (const 1)
+        right (const 2)
+        result (mini-apply-op "?" left right)]
+    ;; Unsupported operator should return const 0
+    (assert (== (result 0.0) 0) "Unsupported operator should return 0")
+    true))
+
+;; ============================================================
+;; Mini-notation Parsing Tests
+;; ============================================================
+
+(defn test-parse-mini-expr []
+  (let [p (mini-parse "1 2 3")]
+    (assert (fn? p) "mini-parse should return a function")
+    true))
+
+(defn test-parse-mini-with-parens []
+  (let [p (mini-parse "(1 2)")]
+    (assert (fn? p) "mini-parse with parens should work")
+    true))
+
+;; ============================================================
+;; Edge Cases
+;; ============================================================
+
+(defn test-tokenize-whitespace []
+  (let [tokens (mini-tokenize "   ")]
+    (assert (== (len tokens) 0) "Whitespace only should produce no tokens")
+    true))
+
+(defn test-parse-mini-empty []
+  (let [p (parse-mini "")]
+    ;; Empty string might return nil or a no-op pattern
+    true))
+
+(defn test-parse-mini-invalid []
+  (let [p (parse-mini "invalid!")]
+    ;; Invalid string should be handled gracefully
+    true))
+
+;; ============================================================
+;; Main Test Runner
+;; ============================================================
+
+(defn run-all-tests []
+  (let [tests [
+    ["tokenize empty" test-tokenize-empty]
+    ["tokenize single number" test-tokenize-single-number]
+    ["tokenize multiple numbers" test-tokenize-multiple-numbers]
+    ["tokenize with operators" test-tokenize-with-operators]
+    ["parse-mini single" test-parse-mini-single]
+    ["parse-mini multiple" test-parse-mini-multiple]
+    ["parse-mini with operators" test-parse-mini-with-operators]
+    ["s macro single" test-s-macro-single]
+    ["s macro multiple" test-s-macro-multiple]
+    ["parse-drums single" test-parse-drums-single]
+    ["parse-drums multiple" test-parse-drums-multiple]
+    ["parse-drums values" test-parse-drums-values]
+    ["mini-apply-op add" test-mini-apply-op-add]
+    ["mini-apply-op mul" test-mini-apply-op-mul]
+    ["mini-apply-op unsupported" test-mini-apply-op-unsupported]
+    ["parse-mini expr" test-parse-mini-expr]
+    ["parse-mini with parens" test-parse-mini-with-parens]
+    ["tokenize whitespace" test-tokenize-whitespace]
+    ["parse-mini empty" test-parse-mini-empty]
+    ["parse-mini invalid" test-parse-mini-invalid]
+  ]]
+    (doseq [[name test-fn] tests]
+      (print (str "Testing: " name " ... "))
+      (try
+        (let [result (test-fn)]
+          (if result
+            (println " PASS")
+            (println " FAIL")))
+        (catch e
+          (println (str " ERROR: " (error->string e))))))
+    (println "\nMini-notation tests complete.")))
+
+;; Run tests if executed directly
+(when (== (get *argv* 0) "run")
+  (run-all-tests))

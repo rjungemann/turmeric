@@ -1,0 +1,230 @@
+;;
+;; SCSCM Parameter System Tests
+;; Phase D tests from scscm-hcsynth-livecoding-plan.md
+;;
+
+(import scscm/types scscm/params scscm/synth)
+
+;; ============================================================
+;; Parameter Specification Tests
+;; ============================================================
+
+(defn test-param-spec-creation []
+  ;; Test creating a parameter specification
+  (let [spec (make-param-spec "freq" 440.0 20.0 20000.0 "Hz" :exp)]
+    (assert (== (:name spec) "freq") "Name should be 'freq'")
+    (assert (== (:default spec) 440.0) "Default should be 440.0")
+    (assert (== (:min spec) 20.0) "Min should be 20.0")
+    (assert (== (:max spec) 20000.0) "Max should be 20000.0")
+    (assert (== (:unit spec) "Hz") "Unit should be 'Hz'")
+    (assert (== (:warp spec) :exp) "Warp should be :exp")
+    true))
+
+(defn test-param-spec-linear []
+  ;; Test linear parameter specification
+  (let [spec (make-param-spec "amp" 0.5 0.0 1.0 "" :linear)]
+    (assert (== (:warp spec) :linear) "Warp should be linear")
+    true))
+
+(defn test-param-spec-db []
+  ;; Test dB parameter specification
+  (let [spec (make-param-spec "gain" -12.0 -60.0 12.0 "dB" :db)]
+    (assert (== (:warp spec) :db) "Warp should be dB")
+    true))
+
+;; ============================================================
+;; Warping Function Tests
+;; ============================================================
+
+(defn test-warp-linear []
+  ;; Test linear warping (identity)
+  (let [spec (make-param-spec "test" 0.0 -1.0 1.0 "" :linear)]
+    (assert (== (warp-value spec 0.5) 0.5) "Linear warp should be identity")
+    (assert (== (warp-value spec -0.5) -0.5) "Linear warp should be identity for negative")
+    true))
+
+(defn test-warp-exp []
+  ;; Test exponential warping (for frequencies)
+  (let [spec (make-param-spec "freq" 0.0 -12.0 12.0 "octaves" :exp)]
+    ;; exp warp: value -> 2^(value/12) for octave to ratio
+    (let [warped (warp-value spec 12.0)]
+      (assert (approx== warped (math/pow 2.0 1.0) 0.001) "12 semitones should be ~2.0")
+      true)))
+
+(defn test-warp-log []
+  ;; Test logarithmic warping
+  (let [spec (make-param-spec "ratio" 1.0 0.5 4.0 "" :log)]
+    ;; log warp: ratio -> 12 * log2(ratio) for ratio to octave
+    (let [warped (warp-value spec 2.0)]
+      (assert (approx== warped 12.0 0.001) "Ratio of 2 should be ~12 semitones")
+      true)))
+
+(defn test-warp-db []
+  ;; Test dB warping
+  (let [spec (make-param-spec "amp" 0.0 -60.0 12.0 "dB" :db)]
+    ;; db warp: dB -> 10^(dB/20) for dB to amplitude
+    (let [warped (warp-value spec 0.0)]
+      (assert (approx== warped 1.0 0.001) "0 dB should be 1.0")
+      true)))
+
+(defn test-warp-db2 []
+  ;; Test dB2 warping (amplitude to dB)
+  (let [spec (make-param-spec "amp" 0.0 -60.0 12.0 "dB" :db2)]
+    ;; db2 warp: amplitude -> 20 * log10(amplitude)
+    (let [warped (warp-value spec 1.0)]
+      (assert (approx== warped 0.0 0.001) "Amplitude 1.0 should be 0 dB")
+      true)))
+
+;; ============================================================
+;; Parameter Clamping Tests
+;; ============================================================
+
+(defn test-clamp-value []
+  ;; Test value clamping to range
+  (let [spec (make-param-spec "test" 0.0 -1.0 1.0 "" :linear)]
+    (assert (== (math/clamp -5.0 (:min spec) (:max spec)) -1.0) "Should clamp below min")
+    (assert (== (math/clamp 5.0 (:min spec) (:max spec)) 1.0) "Should clamp above max")
+    (assert (== (math/clamp 0.5 (:min spec) (:max spec)) 0.5) "Should not clamp within range")
+    true))
+
+(defn test-param-osc-conversion []
+  ;; Test full parameter to OSC conversion
+  (let [spec (make-param-spec "freq" 440.0 20.0 20000.0 "Hz" :linear)]
+    (let [osc-val (param->osc spec 100.0)]
+      (assert (== osc-val 100.0) "Linear param should pass through")
+      true)))
+
+(defn test-param-osc-conversion-clamped []
+  ;; Test parameter to OSC conversion with clamping
+  (let [spec (make-param-spec "amp" 0.5 0.0 1.0 "" :linear)]
+    (let [osc-val (param->osc spec -0.5)]
+      (assert (== osc-val 0.0) "Should clamp to min")
+      true)))
+
+;; ============================================================
+;; SynthDef Specification Tests
+;; ============================================================
+
+(defn test-synthdef-spec-creation []
+  ;; Test creating a SynthDef specification
+  (let [params [
+    (make-param-spec "freq" 440.0 20.0 20000.0 "Hz" :exp)
+    (make-param-spec "amp" 0.5 0.0 1.0 "" :linear)
+    (make-param-spec "pan" 0.0 -1.0 1.0 "" :linear)
+  ]]
+    (let [spec (make-synthdef-spec "sine" params)]
+      (assert (== (:name spec) "sine") "SynthDef name should match")
+      (assert (== (len (:params spec)) 3) "Should have 3 parameters")
+      true)))
+
+(defn test-find-param []
+  ;; Test finding a parameter by name
+  (let [params [
+    (make-param-spec "freq" 440.0 20.0 20000.0 "Hz" :exp)
+    (make-param-spec "amp" 0.5 0.0 1.0 "" :linear)
+  ]]
+    (let [spec (make-synthdef-spec "test" params)]
+      (let [freq-spec (find-param spec "freq")]
+        (assert (some? freq-spec) "Should find freq parameter")
+        (assert (== (:name freq-spec) "freq") "Found param should be freq")
+        true))))
+
+(defn test-find-param-not-found []
+  ;; Test finding a non-existent parameter
+  (let [params [(make-param-spec "freq" 440.0 20.0 20000.0 "Hz" :exp)]]
+    (let [spec (make-synthdef-spec "test" params)]
+      (let [pan-spec (find-param spec "pan")]
+        (assert (none? pan-spec) "Should not find pan parameter")
+        true))))
+
+;; ============================================================
+;; SynthController Tests
+;; ============================================================
+
+(defn test-synth-controller-creation []
+  ;; Test creating a synth controller
+  ;; This requires scsynth to be running with the 'sine' SynthDef
+  (let [ctrl (synth-controller "sine")]
+    (assert (> (:node-id ctrl) 0) "Should have valid node-id")
+    (assert (some? (:spec ctrl)) "Should have spec")
+    ;; Clean up
+    (synth-free (:node-id ctrl))
+    true))
+
+(defn test-ctrl-set []
+  ;; Test setting parameter through controller
+  (let [ctrl (synth-controller "sine")]
+    (defer (synth-free (:node-id ctrl)))
+    (ctrl-set ctrl "freq" 880.0)
+    (ctrl-set ctrl "amp" 0.25)
+    true))
+
+(defn test-ctrl-get []
+  ;; Test getting parameter through controller (if implemented)
+  true)
+
+;; ============================================================
+;; Warping Edge Cases
+;; ============================================================
+
+(defn test-warp-boundary-values []
+  ;; Test warping at boundary values
+  (let [spec (make-param-spec "test" 0.0 0.0 1.0 "" :linear)]
+    (assert (== (warp-value spec 0.0) 0.0) "Warp at min should be min")
+    (assert (== (warp-value spec 1.0) 1.0) "Warp at max should be max")
+    true))
+
+(defn test-warp-zero []
+  ;; Test warping zero values
+  (let [spec (make-param-spec "test" 0.0 0.0 1.0 "" :linear)]
+    (assert (== (warp-value spec 0.0) 0.0) "Warp at zero should be zero")
+    true))
+
+(defn test-log-warp-zero []
+  ;; Test log warping at zero (should be handled carefully)
+  (let [spec (make-param-spec "test" 1.0 0.5 2.0 "" :log)]
+    (let [warped (warp-value spec 1.0)]
+      (assert (== warped 0.0) "Log of 1 should be 0")
+      true)))
+
+;; ============================================================
+;; Main Test Runner
+;; ============================================================
+
+(defn run-all-tests []
+  (let [tests [
+    ["param-spec creation" test-param-spec-creation]
+    ["param-spec linear" test-param-spec-linear]
+    ["param-spec db" test-param-spec-db]
+    ["warp linear" test-warp-linear]
+    ["warp exp" test-warp-exp]
+    ["warp log" test-warp-log]
+    ["warp db" test-warp-db]
+    ["warp db2" test-warp-db2]
+    ["clamp value" test-clamp-value]
+    ["param osc conversion" test-param-osc-conversion]
+    ["param osc conversion clamped" test-param-osc-conversion-clamped]
+    ["synthdef-spec creation" test-synthdef-spec-creation]
+    ["find param" test-find-param]
+    ["find param not found" test-find-param-not-found]
+    ["synth-controller creation" test-synth-controller-creation]
+    ["ctrl-set" test-ctrl-set]
+    ["ctrl-get" test-ctrl-get]
+    ["warp boundary values" test-warp-boundary-values]
+    ["warp zero" test-warp-zero]
+    ["log warp zero" test-log-warp-zero]
+  ]]
+    (doseq [[name test-fn] tests]
+      (print (str "Testing: " name " ... "))
+      (try
+        (let [result (test-fn)]
+          (if result
+            (println " PASS")
+            (println " FAIL")))
+        (catch e
+          (println (str " ERROR: " (error->string e))))))
+    (println "\nParameter system tests complete.")))
+
+;; Run tests if executed directly
+(when (== (get *argv* 0) "run")
+  (run-all-tests))

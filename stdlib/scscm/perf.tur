@@ -1,0 +1,350 @@
+;; stdlib/scscm/perf.tur — Performance Optimization
+;;
+;; This module provides performance-optimized versions of SCSCM operations
+;; for high-frequency OSC message sending and audio processing.
+
+(import scscm/ffi :ffi)
+(import scscm/synth :synth)
+(import scscm/types :types)
+
+;; ============================================================================
+;; Inline-C Optimized Functions
+;; ============================================================================
+
+;; Inline-C version of synth-set for maximum performance
+;; This bypasses Turmeric function call overhead for the hot path
+;;
+;; @param world_id World handle
+;; @param node_id Node ID
+;; @param control_index Control index
+;; @param value Value to set
+;; @return 0 on success, -1 on error
+(defn synth-set-inline [world_id node_id control_index value]
+  ```c
+  return hc_wasm_synth_set(world_id, node_id, control_index, value);
+  ```)
+
+;; Inline-C version of synth-new
+;;
+;; @param world_id World handle
+;; @param synthdef_name SynthDef name
+;; @param node_id Node ID
+;; @param action Add action
+;; @param target_id Target node ID
+;; @return 0 on success, -1 on error
+(defn synth-new-inline [world_id synthdef_name node_id action target_id]
+  ```c
+  return hc_wasm_synth_new(world_id, synthdef_name, node_id, action, target_id);
+  ```)
+
+;; Inline-C version of synth-free
+;;
+;; @param world_id World handle
+;; @param node_id Node ID
+;; @return 0 on success, -1 on error
+(defn synth-free-inline [world_id node_id]
+  ```c
+  return hc_wasm_synth_free(world_id, node_id);
+  ```)
+
+;; ============================================================================
+;; Message Batching
+;; ============================================================================
+
+;; Batch multiple synth control operations into a single call
+;;
+;; This reduces FFI call overhead by batching multiple parameter changes.
+;;
+;; @param world_id World handle
+;; @param operations Vector of operation maps:
+;;                  [{:type :set, :node_id id, :index idx, :value val}
+;;                   {:type :free, :node_id id}
+;;                   ...]
+;; @return 0 on success, -1 on error
+(defn batch-operations [world_id operations]
+  (let [result 0]
+    (for [op operations]
+      (case (:type op)
+        :set (when (== result 0)
+               (set! result (synth-set-inline world_id (:node_id op) (:index op) (:value op))))
+        :free (when (== result 0)
+                (set! result (synth-free-inline world_id (:node_id op))))
+        :new (when (== result 0)
+               (set! result (synth-new-inline world_id (:synthdef_name op) (:node_id op)
+                                             (:action op types/ADD_TO_TAIL) (:target_id op types/ROOT_GROUP_ID))))
+        nil))
+    result))
+
+;; ============================================================================
+;; Message Pooling
+;; ============================================================================
+
+;; A pool of pre-allocated buffers for common operations
+;; This reduces malloc/free overhead in hot paths
+;;
+;; Note: This is a conceptual implementation. Actual pooling requires
+;; more complex C-side support for efficient reuse.
+
+(defstruct BufferPool
+  [buffers :(vec<ptr<void>>)
+   free-list :(vec<ptr<void>>)
+   buffer-size :int])
+
+;; Create a buffer pool
+;;
+;; @param num-buffers Number of buffers to pre-allocate
+;; @param buffer-size Size of each buffer in bytes
+;; @return BufferPool
+(defn buffer-pool-new [num-buffers buffer-size]
+  (let [buffers (vec (for [i (range num-buffers)] (malloc buffer-size)))]
+    {:buffers buffers
+     :free-list buffers
+     :buffer-size buffer-size}))
+
+;; Get a buffer from the pool
+;;
+;; @param pool Buffer pool
+;; @return Pointer to buffer, or NULL if pool exhausted
+(defn buffer-pool-get [pool]
+  (if (not (empty? (:free-list pool)))
+    (let [buffer (first (:free-list pool))]
+      (set! pool (update pool :free-list rest))
+      buffer)
+    nil))
+
+;; Return a buffer to the pool
+;;
+;; @param pool Buffer pool
+;; @param buffer Buffer to return
+(defn buffer-pool-return [pool buffer]
+  (set! pool (update pool :free-list conj buffer)))
+
+;; Destroy a buffer pool
+;;
+;; @param pool Buffer pool to destroy
+(defn buffer-pool-destroy [pool]
+  (doseq [buffer (:buffers pool)]
+    (free buffer)))
+
+;; ============================================================================
+;; Inline OSC Message Building
+;; ============================================================================
+
+;; Build and send an OSC message in a single inline-C call
+;; This avoids multiple FFI calls for message building
+;;
+;; @param world_id World handle
+;; @param address OSC address string
+;; @param num-args Number of arguments
+;; @param args Array of argument values (interleaved type tags and values)
+;; @return 0 on success, -1 on error
+(defn osc-send-inline [world_id address num-args args]
+  ```c
+  // This is a conceptual implementation
+  // In practice, we'd need to build the OSC message in C
+  // For now, this just calls the existing dispatch function
+  
+  // Simplified: just dispatch a pre-built message
+  // Real implementation would build OSC packet here
+  const char* msg = address;
+  size_t msg_size = strlen(address) + 1;
+  return hc_wasm_osc_dispatch(world_id, msg, msg_size);
+  ```)
+
+;; ============================================================================
+;; Fast Synth Parameter Setting
+;; ============================================================================
+
+;; Set multiple parameters with inline-C for speed
+;;
+;; @param world_id World handle
+;; @param node_id Node ID
+;; @param count Number of parameters
+;; @param indices Array of control indices
+;; @param values Array of control values
+;; @return 0 on success, -1 on error
+(defn synth-set-multi-inline [world_id node_id count indices values]
+  ```c
+  return hc_wasm_synth_set_multi(world_id, node_id, count, indices, values);
+  ```)
+
+;; ============================================================================
+;; Rendering Optimizations
+;; ============================================================================
+
+;; Pre-allocate render buffer for reuse
+(defstruct RenderBuffer
+  [data :ptr<float>
+   size :int  ;; Size in samples
+   channels :int])
+
+;; Create a render buffer
+;;
+;; @param size Size in samples
+;; @param channels Number of channels
+;; @return RenderBuffer
+(defn render-buffer-new [size channels]
+  {:data (malloc (* size channels (size-of float)))
+   :size size
+   :channels channels})
+
+;; Destroy a render buffer
+;;
+;; @param buffer Render buffer
+(defn render-buffer-destroy [buffer]
+  (free (:data buffer)))
+
+;; Render audio using pre-allocated buffer
+;;
+;; @param world_id World handle
+;; @param buffer Pre-allocated render buffer
+;; @param num_samples Number of samples to render
+;; @return 0 on success, -1 on error
+(defn world-render-fast [world_id buffer num_samples]
+  (ffi/hc_wasm_render world_id (:data buffer) num_samples (:channels buffer)))
+
+;; ============================================================================
+;; Benchmarking Utilities
+;; ============================================================================
+
+;; Benchmark a function
+;;
+;; @param fn Function to benchmark
+;; @param iterations Number of iterations
+;; @param warmup Iterations for warmup (default: 10)
+;; @return Map with :total-time, :avg-time, :iterations
+(defn benchmark [fn iterations & [warmup 10]]
+  (let [start-time (time/mono-ns)]
+    
+    ;; Warmup
+    (for [i (range warmup)]
+      (fn))
+    
+    (let [bench-start (time/mono-ns)]
+      (for [i (range iterations)]
+        (fn))
+      (let [bench-end (time/mono-ns)
+            total-ns (- bench-end bench-start)]
+        {:total-ns total-ns
+         :avg-ns (/ total-ns iterations)
+         :iterations iterations}))))
+
+;; Benchmark synth parameter setting
+;;
+;; @param world_id World
+;; @param node_id Node
+;; @param iterations Number of iterations
+;; @return Benchmark results
+(defn bench-synth-set [world_id node_id iterations]
+  (benchmark (fn [] (ffi/hc_wasm_synth_set world_id node_id 0 0.5)) iterations))
+
+;; Benchmark synth creation
+;;
+;; @param world_id World
+;; @param synthdef_name SynthDef name
+;; @param iterations Number of iterations
+;; @return Benchmark results
+(defn bench-synth-new [world_id synthdef_name iterations]
+  (let [node-pool (node-id-pool-new 10000)]
+    (benchmark (fn []
+                (let [node_id (node-id-pool-alloc node-pool)]
+                  (ffi/hc_wasm_synth_new world_id synthdef_name node_id 2 1)
+                  (node-id-pool-free node-pool node_id)))
+              iterations)))
+
+;; ============================================================================
+;; Cached SynthDef Lookup
+;; ============================================================================
+
+;; Cache for SynthDef metadata to avoid repeated lookups
+(defstruct SynthDefCache
+  [cache :(map<cstr map>)])
+
+;; Create a new SynthDef cache
+(defn synthdef-cache-new []
+  {:cache {}})
+
+;; Get SynthDef info from cache or load it
+;;
+;; @param cache Cache
+;; @param world_id World
+;; @param synthdef_name SynthDef name
+;; @return Cached info or nil
+(defn synthdef-cache-get [cache world_id synthdef_name]
+  (or (get (:cache cache) synthdef_name)
+      (let [info (load-synthdef-info world_id synthdef_name)]
+        (set! cache (update cache :cache assoc synthdef_name info))
+        info)))
+
+;; Note: load-synthdef-info would need to be implemented using
+;; hcsynth API for SynthDef introspection
+
+;; ============================================================================
+;; Optimized Session
+;; ============================================================================
+
+;; A performance-optimized session that uses inline functions
+(defstruct PerfSession
+  [world-id :types/WorldHandle
+   node-pool :NodeIDPool
+   active-synths :(map<int cstr>)
+   render-buffer :RenderBuffer])
+
+;; Create a performance-optimized session
+;;
+;; @param sample_rate Audio sample rate
+;; @param block_size Audio block size
+;; @param num-channels Number of output channels
+;; @return PerfSession
+(defn perf-session-new [sample_rate block_size num-channels]
+  {:world-id (ffi/hc_wasm_world_create sample_rate block_size)
+   :node-pool (node-id-pool-new)
+   :active-synths {}
+   :render-buffer (render-buffer-new block_size num-channels)})
+
+;; Destroy a performance session
+;;
+;; @param session PerfSession
+(defn perf-session-destroy [session]
+  (ffi/hc_wasm_world_destroy (:world-id session))
+  (render-buffer-destroy (:render-buffer session)))
+
+;; Create a synth in performance session (inline version)
+;;
+;; @param session PerfSession
+;; @param synthdef_name SynthDef name
+;; @return Node ID
+(defn perf-session-synth-new [session synthdef_name]
+  (let [node_id (node-id-pool-alloc (:node-pool session))]
+    (synth-new-inline (:world-id session) synthdef_name node_id types/ADD_TO_TAIL types/ROOT_GROUP_ID)
+    (set! session (update session :active-synths assoc node_id synthdef_name))
+    node_id))
+
+;; Set synth parameter in performance session (inline version)
+;;
+;; @param session PerfSession
+;; @param node_id Node ID
+;; @param index Control index
+;; @param value Value
+(defn perf-session-synth-set [session node_id index value]
+  (synth-set-inline (:world-id session) node_id index value))
+
+;; Free synth in performance session (inline version)
+;;
+;; @param session PerfSession
+;; @param node_id Node ID
+(defn perf-session-synth-free [session node_id]
+  (synth-free-inline (:world-id session) node_id)
+  (set! session (update session :active-synths dissoc node_id))
+  (node-id-pool-free (:node-pool session) node_id))
+
+;; Render audio in performance session
+;;
+;; @param session PerfSession
+;; @param num_samples Number of samples
+;; @return 0 on success, -1 on error
+(defn perf-session-render [session num_samples]
+  (ffi/hc_wasm_render (:world-id session) 
+                    (:data (:render-buffer session)) 
+                    num_samples 
+                    (:channels (:render-buffer session))))
