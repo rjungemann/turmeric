@@ -1,0 +1,8 @@
+; Phase HRT4: error — cannot pass a non-function local binding as a rank-2 poly fn.
+; `apply-poly` requires a `(forall [a] (-> a a))` argument but gets a plain int.
+(defn apply-poly [f (forall [a] (-> a a)) x :int] :int
+  (f x))
+
+(defn main [] :int
+  (let [not-a-fn 5]
+    (apply-poly not-a-fn 42)))

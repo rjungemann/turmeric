@@ -51,6 +51,9 @@ struct Binding {
     /* Phase HRT1: rank-2 polymorphic function parameter */
     bool          is_poly_fn;     /* true if this binding is a rank-2 poly fn param */
     const struct Type *poly_type; /* full TY_FORALL type, NULL if not rank-2 */
+    /* Phase HRT4: for let-bound aliases of global functions, tracks the original
+     * function binding so poly_arg_fn_binding can find the callable C name. */
+    struct Binding *source_binding;
 };
 
 typedef enum ExprKind {

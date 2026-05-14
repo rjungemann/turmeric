@@ -3241,6 +3241,20 @@ static Expr *elab_let(Elab *e, const Form *call) {
             struct Closure *closure = init->as.closure_.closure;
             b->closure_fn_binding = closure->fn->binding;
         }
+        /* Phase HRT4: propagate poly fn metadata through let-bindings.
+         * (let [g f] ...) where f is is_poly_fn → g inherits is_poly_fn.
+         * (let [g id] ...) where id is a global TY_FN → g.source_binding = id. */
+        if (init && init->kind == EX_VAR) {
+            Binding *init_b = init->as.var.binding;
+            if (init_b->is_poly_fn) {
+                b->is_poly_fn = true;
+                b->poly_type  = init_b->poly_type;
+            } else if (init_b->type.kind == TY_FN) {
+                /* Follow any existing source chain to the root global fn. */
+                Binding *root = init_b->source_binding ? init_b->source_binding : init_b;
+                if (root->is_global) b->source_binding = root;
+            }
+        }
         
         binds[n_binds].binding = b;
         binds[n_binds].init = init;
@@ -7452,25 +7466,32 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             return NULL;
         }
 
-        /* Phase HRT1: wrap rank-2 args with EX_POLY_WRAP + create wrapper thunk */
+        /* Phase HRT1/HRT4: wrap rank-2 args with EX_POLY_WRAP + create wrapper thunk.
+         * Phase HRT4: also handles TY_PTR_VOID is_poly_fn bindings (pass-through). */
         if (is_rank2_param && (args[i]->type.kind == TY_FN ||
                                 args[i]->type.kind == TY_FORALL ||
-                                args[i]->type.kind == TY_EXISTS)) {
+                                args[i]->type.kind == TY_EXISTS ||
+                                args[i]->type.kind == TY_PTR_VOID)) {
             Binding *inner_fn_b = poly_arg_fn_binding(args[i]);
             if (!inner_fn_b) {
                 diag_emit(DIAG_ERROR, args[i]->span,
                           "rank-2 argument must be a named function (capturing closures not yet supported)");
                 return NULL;
             }
-            uint8_t inner_arity = (inner_fn_b->type.kind == TY_FN)
-                ? inner_fn_b->type.as.fn.arity : 1;
-            /* Closures have an env param counted in arity — subtract it */
-            if (inner_fn_b->closure_fn_binding) inner_arity--;
-            Binding *wrapper_b = make_poly_wrapper(e, inner_fn_b, inner_arity, args[i]->span);
-            if (!wrapper_b) return NULL;
             Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, args[i]->span);
             wrap->as.poly_wrap_.inner = args[i];
-            wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
+            if (inner_fn_b->is_poly_fn) {
+                /* HRT4: pass-through — binding is already a tur_poly_fn_t, no wrapper needed. */
+                wrap->as.poly_wrap_.wrapper_binding = NULL;
+            } else {
+                uint8_t inner_arity = (inner_fn_b->type.kind == TY_FN)
+                    ? inner_fn_b->type.as.fn.arity : 1;
+                /* Closures have an env param counted in arity — subtract it */
+                if (inner_fn_b->closure_fn_binding) inner_arity--;
+                Binding *wrapper_b = make_poly_wrapper(e, inner_fn_b, inner_arity, args[i]->span);
+                if (!wrapper_b) return NULL;
+                wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
+            }
             args[i] = wrap;
         }
 
@@ -10399,10 +10420,18 @@ static Binding *make_poly_wrapper(Elab *e, Binding *inner_b, uint8_t inner_arity
     return wb;
 }
 
-/* Phase HRT1: Helper to extract the underlying fn binding from a poly arg expression.
- * Handles EX_VAR and EX_ASCRIBE(EX_VAR). Returns NULL if not a simple fn ref. */
+/* Phase HRT1/HRT4: Helper to extract the underlying fn binding from a poly arg expression.
+ * Handles EX_VAR and EX_ASCRIBE(EX_VAR). Returns NULL if not a simple fn ref.
+ * Phase HRT4: follows source_binding for let-bound aliases of global functions. */
 static Binding *poly_arg_fn_binding(Expr *arg) {
-    if (arg->kind == EX_VAR) return arg->as.var.binding;
+    if (arg->kind == EX_VAR) {
+        Binding *b = arg->as.var.binding;
+        /* For is_poly_fn bindings (already tur_poly_fn_t), return as-is — caller uses passthrough. */
+        if (b->is_poly_fn) return b;
+        /* Follow source_binding chain to resolve let-bound aliases back to global fns. */
+        if (b->source_binding) return b->source_binding;
+        return b;
+    }
     if (arg->kind == EX_ASCRIBE) return poly_arg_fn_binding(arg->as.ascribe_.inner);
     return NULL;
 }
@@ -10430,21 +10459,26 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
             for (uint32_t i = 0; i < n_args && i < (uint32_t)pbody->as.fn.arity; i++) {
                 const Type *aft = pbody->as.fn.arg_full_types[i];
                 if (aft && aft->kind == TY_FORALL) {
-                    /* Arg i is a nested poly fn — wrap it */
+                    /* Arg i is a nested poly fn — wrap it or pass through if already poly fn. */
                     Binding *inner_b = poly_arg_fn_binding(args[i]);
                     if (!inner_b) {
                         diag_emit(DIAG_ERROR, call->as.list.items[1 + i]->span,
                                   "rank-3: polymorphic function argument must be a named function");
                         return NULL;
                     }
-                    uint8_t inner_arity = (inner_b->type.kind == TY_FN)
-                        ? (uint8_t)inner_b->type.as.fn.arity : 1;
-                    Binding *wrapper_b = make_poly_wrapper(e, inner_b, inner_arity, args[i]->span);
-                    if (!wrapper_b) return NULL;
                     Expr *orig_arg = args[i];
                     Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, orig_arg->span);
                     wrap->as.poly_wrap_.inner = orig_arg;
-                    wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
+                    if (inner_b->is_poly_fn) {
+                        /* HRT4: pass-through — already a tur_poly_fn_t. */
+                        wrap->as.poly_wrap_.wrapper_binding = NULL;
+                    } else {
+                        uint8_t inner_arity = (inner_b->type.kind == TY_FN)
+                            ? (uint8_t)inner_b->type.as.fn.arity : 1;
+                        Binding *wrapper_b = make_poly_wrapper(e, inner_b, inner_arity, args[i]->span);
+                        if (!wrapper_b) return NULL;
+                        wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
+                    }
                     args[i] = wrap;
                     poly_arg_mask |= (1u << i);
                 }
@@ -11772,9 +11806,10 @@ found_method:;
         if (!args[i]) return NULL;
     }
 
-    /* Phase HRT3: For methods with rank-N (poly fn) parameters, wrap matching args
+    /* Phase HRT3/HRT4: For methods with rank-N (poly fn) parameters, wrap matching args
      * as EX_POLY_WRAP so they can be passed as tur_poly_fn_t.
-     * params[0] is the receiver (obj), so method param i+1 matches arg i. */
+     * params[0] is the receiver (obj), so method param i+1 matches arg i.
+     * Phase HRT4: if the arg is already is_poly_fn, use pass-through (wrapper_binding=NULL). */
     bool has_poly_params = false;
     /* Check params[0] which corresponds to obj (the first/receiver argument). */
     if (best_method->n_params > 0 && best_method->params[0]->is_poly_fn) {
@@ -11785,13 +11820,17 @@ found_method:;
                       "rank-N typeclass method argument must be a named function");
             return NULL;
         }
-        uint8_t inner_arity = (inner_b->type.kind == TY_FN)
-            ? (uint8_t)inner_b->type.as.fn.arity : 1;
-        Binding *wrapper_b = make_poly_wrapper(e, inner_b, inner_arity, obj->span);
-        if (!wrapper_b) return NULL;
         Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, obj->span);
         wrap->as.poly_wrap_.inner = obj;
-        wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
+        if (inner_b->is_poly_fn) {
+            wrap->as.poly_wrap_.wrapper_binding = NULL; /* HRT4: pass-through */
+        } else {
+            uint8_t inner_arity = (inner_b->type.kind == TY_FN)
+                ? (uint8_t)inner_b->type.as.fn.arity : 1;
+            Binding *wrapper_b = make_poly_wrapper(e, inner_b, inner_arity, obj->span);
+            if (!wrapper_b) return NULL;
+            wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
+        }
         obj = wrap;
     }
     for (uint32_t i = 0; i < n_args; i++) {
@@ -11804,14 +11843,18 @@ found_method:;
                           "rank-N typeclass method argument must be a named function");
                 return NULL;
             }
-            uint8_t inner_arity = (inner_b->type.kind == TY_FN)
-                ? (uint8_t)inner_b->type.as.fn.arity : 1;
-            Binding *wrapper_b = make_poly_wrapper(e, inner_b, inner_arity, args[i]->span);
-            if (!wrapper_b) return NULL;
             Expr *orig = args[i];
             Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, orig->span);
             wrap->as.poly_wrap_.inner = orig;
-            wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
+            if (inner_b->is_poly_fn) {
+                wrap->as.poly_wrap_.wrapper_binding = NULL; /* HRT4: pass-through */
+            } else {
+                uint8_t inner_arity = (inner_b->type.kind == TY_FN)
+                    ? (uint8_t)inner_b->type.as.fn.arity : 1;
+                Binding *wrapper_b = make_poly_wrapper(e, inner_b, inner_arity, args[i]->span);
+                if (!wrapper_b) return NULL;
+                wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
+            }
             args[i] = wrap;
         }
     }

@@ -845,6 +845,9 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                            type_c_name(type_from_kind(b->type.as.fn.arg_kinds[j])));
             }
             buf_printf(body, ") = %s;\n", iv);
+        } else if (b->is_poly_fn) {
+            /* Phase HRT4: let-bound poly fn alias — declare as tur_poly_fn_t. */
+            buf_printf(body, "tur_poly_fn_t %s = %s;\n", bn, iv);
         } else {
             buf_printf(body, "%s %s = %s;\n", type_c_name(b->type), bn, iv);
         }
@@ -3822,6 +3825,10 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         /* Phase HRT1: rank-2 polymorphic function wrapper */
         case EX_POLY_WRAP: {
+            if (!e->as.poly_wrap_.wrapper_binding) {
+                /* Phase HRT4: pass-through — inner is already a tur_poly_fn_t, emit directly. */
+                return emit_value(ctx, body, e->as.poly_wrap_.inner);
+            }
             /* Emit (tur_poly_fn_t){ NULL, wrapper_fn_name } */
             char *wn = raw_name_for_binding(e->as.poly_wrap_.wrapper_binding);
             Buf out; buf_init(&out);
