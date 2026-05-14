@@ -5,11 +5,16 @@
   "version": "0.1.0",
   "publisher": "fith-lang",
   "license": "MIT",
+  "main": "./extension.js",
   "engines": {
     "vscode": "^1.50.0"
   },
+  "activationEvents": [
+    "onLanguage:turmeric"
+  ],
   "categories": [
-    "Programming Languages"
+    "Programming Languages",
+    "Formatters"
   ],
   "keywords": [
     "turmeric",
@@ -19,6 +24,12 @@
     "sweet-exp"
   ],
   "contributes": {
+    "commands": [
+      {
+        "command": "turmeric.formatDocument",
+        "title": "Format Turmeric Document"
+      }
+    ],
     "languages": [
       {
         "id": "turmeric",
