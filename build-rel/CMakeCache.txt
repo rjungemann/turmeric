@@ -257,6 +257,97 @@ FETCHCONTENT_QUIET:BOOL=ON
 //Enables UPDATE_DISCONNECTED behavior for all content population
 FETCHCONTENT_UPDATES_DISCONNECTED:BOOL=OFF
 
+<<<<<<< HEAD
+||||||| parent of 6e96c3bb (WIP: Fix failing tests)
+//Enables UPDATE_DISCONNECTED behavior just for population of raylib
+FETCHCONTENT_UPDATES_DISCONNECTED_RAYLIB:BOOL=OFF
+
+//Git command line client
+GIT_EXECUTABLE:FILEPATH=/opt/homebrew/bin/git
+
+//Value Computed by CMake
+GLFW_BINARY_DIR:STATIC=/Users/rjungemann/Projects/turmeric/build-rel/_deps/raylib-build/raylib/external/glfw
+
+//Build support for Cocoa
+GLFW_BUILD_COCOA:BOOL=ON
+
+//Build the GLFW documentation
+GLFW_BUILD_DOCS:BOOL=OFF
+
+//Build the GLFW example programs
+GLFW_BUILD_EXAMPLES:BOOL=OFF
+
+//Build the GLFW test programs
+GLFW_BUILD_TESTS:BOOL=OFF
+
+//Generate installation target
+GLFW_INSTALL:BOOL=OFF
+
+//Value Computed by CMake
+GLFW_IS_TOP_LEVEL:STATIC=OFF
+
+//Library type override for GLFW (SHARED, STATIC, OBJECT, or empty
+// to follow BUILD_SHARED_LIBS)
+GLFW_LIBRARY_TYPE:STRING=
+
+//Value Computed by CMake
+GLFW_SOURCE_DIR:STATIC=/Users/rjungemann/Projects/turmeric/build-rel/_deps/raylib-src/src/external/glfw
+
+GLFW_USE_WAYLAND:BOOL=
+
+//Include everything disabled by default (for CI usage
+INCLUDE_EVERYTHING:BOOL=OFF
+
+//Build fat library for both i386 and x86_64 on macOS
+MACOS_FATLIB:BOOL=OFF
+
+=======
+//Enables UPDATE_DISCONNECTED behavior just for population of raylib
+FETCHCONTENT_UPDATES_DISCONNECTED_RAYLIB:BOOL=OFF
+
+//Git command line client
+GIT_EXECUTABLE:FILEPATH=/opt/homebrew/bin/git
+
+//Value Computed by CMake
+GLFW_BINARY_DIR:STATIC=/Users/rjungemann/Projects/turmeric/build-rel/_deps/raylib-build/raylib/external/glfw
+
+//Build support for Cocoa
+GLFW_BUILD_COCOA:BOOL=ON
+
+//Build the GLFW documentation
+GLFW_BUILD_DOCS:BOOL=OFF
+
+//Build the GLFW example programs
+GLFW_BUILD_EXAMPLES:BOOL=OFF
+
+//Build the GLFW test programs
+GLFW_BUILD_TESTS:BOOL=OFF
+
+//Generate installation target
+GLFW_INSTALL:BOOL=OFF
+
+//Value Computed by CMake
+GLFW_IS_TOP_LEVEL:STATIC=OFF
+
+//Library type override for GLFW (SHARED, STATIC, OBJECT, or empty
+// to follow BUILD_SHARED_LIBS)
+GLFW_LIBRARY_TYPE:STRING=
+
+//Value Computed by CMake
+GLFW_SOURCE_DIR:STATIC=/Users/rjungemann/Projects/turmeric/build-rel/_deps/raylib-src/src/external/glfw
+
+GLFW_USE_WAYLAND:BOOL=
+
+//Include everything disabled by default (for CI usage
+INCLUDE_EVERYTHING:BOOL=OFF
+
+//Path to a library.
+LIBEDIT_LIB:FILEPATH=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib/libedit.tbd
+
+//Build fat library for both i386 and x86_64 on macOS
+MACOS_FATLIB:BOOL=OFF
+
+>>>>>>> 6e96c3bb (WIP: Fix failing tests)
 //Path to a library.
 LIBEDIT_LIB:FILEPATH=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib/libedit.tbd
 

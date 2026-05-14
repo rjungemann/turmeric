@@ -5,7 +5,13 @@
 # compile C with /usr/bin/cc
 ASM_DEFINES = -DTURI_HAVE_EDITLINE=1
 
+<<<<<<< HEAD
 ASM_INCLUDES = -I/Users/rjungemann/Projects/turmeric2/src
+||||||| parent of 6e96c3bb (WIP: Fix failing tests)
+ASM_INCLUDES = 
+=======
+ASM_INCLUDES = -I/Users/rjungemann/Projects/turmeric/src
+>>>>>>> 6e96c3bb (WIP: Fix failing tests)
 
 ASM_FLAGSarm64 = -O3 -DNDEBUG -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -Wall -Wextra -Werror -Wno-unused-parameter -std=c11 -pedantic -O2 -DNDEBUG -pthread
 
@@ -13,7 +19,13 @@ ASM_FLAGS = -O3 -DNDEBUG -arch arm64 -isysroot /Applications/Xcode.app/Contents/
 
 C_DEFINES = -DTURI_HAVE_EDITLINE=1
 
+<<<<<<< HEAD
 C_INCLUDES = -I/Users/rjungemann/Projects/turmeric2/src
+||||||| parent of 6e96c3bb (WIP: Fix failing tests)
+C_INCLUDES = 
+=======
+C_INCLUDES = -I/Users/rjungemann/Projects/turmeric/src
+>>>>>>> 6e96c3bb (WIP: Fix failing tests)
 
 C_FLAGSarm64 = -O3 -DNDEBUG -arch arm64 -Wall -Wextra -Werror -Wno-unused-parameter -std=c11 -pedantic -O2 -DNDEBUG -pthread
 
