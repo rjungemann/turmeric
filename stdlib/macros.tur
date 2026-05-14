@@ -7,8 +7,7 @@
 (defmodule tur/macros
   (export cond when unless must! must-msg! ignore! do-m for
           assert! assert-msg! require! require-msg!
-          ensure! ensure-msg! invariant! invariant-msg!
-          contract-enabled?)
+          ensure! ensure-msg! invariant! invariant-msg!)
 
 ;; cond macro: (cond t1 e1 t2 e2 ... :else efinal) -> nested (if ...) chain
 ;; Uses compile-time list manipulation to build the expansion.
@@ -114,46 +113,9 @@
                 (list .bind coll (list fn `[~var] (list for (list ~@more) ~@body)))))))))))
 
 ;;; Phase C1: Runtime contract macros
-;; These are defined here so they are available via the auto-loaded tur/macros
-;; module with the existing binary. When the binary is rebuilt they will also be
-;; available from stdlib/contract.tur which is added to the auto-load list.
-;;
-;; Design note: variadic macros have a known ct_eval limitation -- the equality
-;; operator = is evaluated at compile time when used as a macro parameter inside
-;; a variadic body, producing incorrect results for runtime variables. To avoid
-;; this, each contract type is split into two fixed-arity macros (following the
-;; same convention as must!/must-msg!). Fixed-arity macros use the template
-;; body approach which correctly preserves all conditions as runtime expressions.
-;;
-;; Implementation note: macros expand to a call to tur-contract-check/
-;; tur-contract-check-inv rather than (unless condition ...). The unless
-;; approach causes the code generator to drop the return statement when the
-;; same variable is used in both the condition and the return expression
-;; (move semantics / borrow issue). Passing the condition as a :bool argument
-;; to a helper function forces evaluation before the call, leaving the
-;; original variable available for the subsequent return.
-
-;; contract-enabled? -- returns true when contracts are active.
-;; In v1 contracts are always enabled (no --release stripping yet).
-(defn contract-enabled? [] :bool
-  true)
-
-;; tur-contract-check -- internal helper called by contract macros.
-;; Panics with msg if condition is false. Takes condition as :bool so it is
-;; fully evaluated before the call, leaving the caller's variable intact.
-(defn tur-contract-check [condition :bool msg :cstr] :void
-  ```c
-  if (!condition) { tur_panic((const char*)msg); }
-  ```)
-
-;; tur-contract-check-inv -- internal helper for invariant macros.
-;; Calls pred(obj) and panics with msg if the result is false.
-(defn tur-contract-check-inv [obj :int pred :int msg :cstr] :void
-  ```c
-  typedef int64_t (*pred_fn)(int64_t);
-  pred_fn f = (pred_fn)(intptr_t)pred;
-  if (!f(obj)) { tur_panic((const char*)msg); }
-  ```)
+;; contract-enabled?, tur-contract-check, and tur-contract-check-inv are
+;; defined in stdlib/contract.tur (tur/contract module), which is auto-loaded
+;; before this file. The macros below expand to calls to those helpers.
 
 ;; assert! -- unconditional sanity check (no custom message).
 ;; Panics with "Assertion failed" if condition is false.

@@ -4541,6 +4541,7 @@ int emit_program(Buf *out, const Expr *program) {
     Buf early_file;  buf_init(&early_file);
     Buf fwd_decls;   buf_init(&fwd_decls);
     Buf extern_decls; buf_init(&extern_decls);
+    Buf defer_thunks; buf_init(&defer_thunks);
 
     EmitCtx ctx;
     ctx.file = &file;
@@ -4735,9 +4736,11 @@ int emit_program(Buf *out, const Expr *program) {
             if (g_needs_hamt && strncmp(ec->c_name->name, "tur_hamt_", 9) == 0) {
                 /* Suppress: declared by #include "hamt.h" */
             } else {
+            char *ec_mangled = mangle_field_name(ec->c_name->name);
             buf_printf(&extern_decls, "extern %s %s(",
                        type_c_name(ec->return_type),
-                       ec->c_name->name);
+                       ec_mangled);
+            free(ec_mangled);
             for (uint8_t j = 0; j < ec->n_params; j++) {
                 if (j > 0) buf_puts(&extern_decls, ", ");
                 buf_printf(&extern_decls, "%s", type_c_name(ec->param_types[j]));
@@ -6574,23 +6577,28 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    return (cb->color == GC_BLACK || cb->color == GC_GREY);\n");
     buf_puts(out, "}\n\n");
     
-    /* Phase 4 v1: Emit all defer thunks at file scope (after tur_frame defs) */
-    emit_pending_defer_thunks(&ctx, out);
+    /* Phase 4 v1: Collect all defer thunks into a buffer so they can be
+     * emitted after extern_decls and fwd_decls (defer bodies may call
+     * extern-c functions or forward-declared Turmeric functions). */
+    emit_pending_defer_thunks(&ctx, &defer_thunks);
 
     /* Final assembly order (ensures correct C visibility):
      *  1. early_file  - struct typedefs + drop glue (visible to everything)
      *  2. extern_decls - user extern-c declarations
      *  3. fwd_decls   - Turmeric function forward declarations (visible to handlers)
-     *  4. pending_handler_fns - effect handler functions (can call Turmeric fns)
-     *  5. file        - Turmeric function definitions (can reference handler fns by name)
-     *  6. main()      - entry point body
+     *  4. defer_thunks - defer body functions (may call extern-c or Turmeric fns)
+     *  5. pending_handler_fns - effect handler functions (can call Turmeric fns)
+     *  6. file        - Turmeric function definitions (can reference handler fns by name)
+     *  7. main()      - entry point body
      */
     if (early_file.len)  { buf_write(out, early_file.data, early_file.len); buf_putc(out, '\n'); }
     if (extern_decls.len){ buf_write(out, extern_decls.data, extern_decls.len); buf_putc(out, '\n'); }
     if (fwd_decls.len)   { buf_write(out, fwd_decls.data, fwd_decls.len); buf_putc(out, '\n'); }
+    if (defer_thunks.len){ buf_write(out, defer_thunks.data, defer_thunks.len); buf_putc(out, '\n'); }
     buf_free(&early_file);
     buf_free(&extern_decls);
     buf_free(&fwd_decls);
+    buf_free(&defer_thunks);
 
     /* Phase 19: Effect handler functions (after fwd_decls so they can call
      * user-defined Turmeric functions, before file so fn defs can reference them). */
@@ -6732,9 +6740,11 @@ int emit_header(Buf *out, const char *module_name, const Expr *program, bool sep
             free((void*)fn_name);
         } else if (e->kind == EX_EXTERN_C) {
             ExternC *ec = e->as.extern_c_.ext;
+            char *ec_mangled = mangle_field_name(ec->c_name->name);
             buf_printf(out, "extern %s %s(",
                        type_c_name(ec->return_type),
-                       ec->c_name->name);
+                       ec_mangled);
+            free(ec_mangled);
             for (uint8_t j = 0; j < ec->n_params; j++) {
                 if (j > 0) buf_puts(out, ", ");
                 buf_puts(out, type_c_name(ec->param_types[j]));
@@ -6870,9 +6880,11 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program, 
         } else if (e->kind == EX_EXTERN_C) {
             /* In implementation, just emit the extern declaration reference */
             ExternC *ec = e->as.extern_c_.ext;
+            char *ec_mangled = mangle_field_name(ec->c_name->name);
             buf_printf(&file, "extern %s %s(",
                        type_c_name(ec->return_type),
-                       ec->c_name->name);
+                       ec_mangled);
+            free(ec_mangled);
             for (uint8_t j = 0; j < ec->n_params; j++) {
                 if (j > 0) buf_puts(&file, ", ");
                 buf_puts(&file, type_c_name(ec->param_types[j]));

@@ -56,6 +56,9 @@ clean-test:
 # Utility
 # ---------------------------------------------------------------------------
 
+repl: build
+    ./build/tur repl
+
 run file:
     ./build/tur run {{file}}
 
@@ -66,7 +69,7 @@ emit-c file:
     ./build/tur emit-c {{file}}
 
 # ---------------------------------------------------------------------------
-# Games
+# Games / Examples (CMake targets — require Raylib)
 # ---------------------------------------------------------------------------
 
 # Enable the examples subtree (Raylib) and build the snake target.
@@ -75,11 +78,65 @@ emit-c file:
 configure-examples:
     cmake -S . -B build -DTUR_EXAMPLES=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 
-games: configure-examples
+snake: configure-examples
     cmake --build build --target snake
 
-run-snake: games
+minikanren: configure-examples
+    cmake --build build --target minikanren
+
+roguelike: configure-examples
+    cmake --build build --target roguelike
+
+games: snake minikanren roguelike
+
+run-snake: snake
     ./build/examples/snake/snake
+
+run-minikanren: minikanren
+    ./build/examples/minikanren/minikanren
+
+run-roguelike: roguelike
+    ./build/examples/roguelike-raylib/roguelike
+
+# ---------------------------------------------------------------------------
+# Script examples (interpreted via `tur run`)
+# ---------------------------------------------------------------------------
+
+run-cellular-automata: build
+    ./build/tur run examples/cellular-automata.tur
+
+run-scscm-basic: build
+    ./build/tur run examples/scscm/basic.tur
+
+run-scscm-live-coding: build
+    ./build/tur run examples/scscm/live-coding.tur
+
+run-scscm-pattern-demo: build
+    ./build/tur run examples/scscm/pattern-demo.tur
+
+run-signal-processing-basics: build
+    ./build/tur run examples/signal-processing/01_basics.tur
+
+run-signal-processing-signals: build
+    ./build/tur run examples/signal-processing/02_signals.tur
+
+run-signal-processing-dsp: build
+    ./build/tur run examples/signal-processing/03_dsp.tur
+
+run-tidal-basic: build
+    ./build/tur run examples/tidal/basic.tur
+
+run-tidal-drums: build
+    ./build/tur run examples/tidal/drums.tur
+
+run-tidal-generative: build
+    ./build/tur run examples/tidal/generative.tur
+
+run-tidal-livecoding: build
+    ./build/tur run examples/tidal/livecoding.tur
+
+run-tidal-melody: build
+    ./build/tur run examples/tidal/melody.tur
 
 # ---------------------------------------------------------------------------
 # Full rebuild

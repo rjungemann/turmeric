@@ -1321,7 +1321,7 @@ TuriValue turi_eval(TuriEnv *env, const char *src) {
     sfile->src         = src_copy;
     sfile->len         = src_len;
     sfile->file_id     = 0;
-    sfile->reader_type = READER_TURMERIC;
+    sfile->reader_type = env->reader_type;
     diag_register_file(sfile);
 
     /* 5. Parse. */

@@ -12,6 +12,7 @@
 #endif
 
 #include <stdbool.h>
+#include "../diag.h"
 
 #ifndef __EMSCRIPTEN__
 #  if defined(__APPLE__)
@@ -112,6 +113,8 @@ typedef struct TuriEnv {
     int         test_pipe_wfd;
     /* Performance S8: hash table for O(1) global lookup */
     EnvHashTable globals_ht;
+    /* Active reader syntax mode — settable via #lang in the REPL */
+    ReaderType   reader_type;
 } TuriEnv;
 
 /* Create a new unrestricted environment. */
