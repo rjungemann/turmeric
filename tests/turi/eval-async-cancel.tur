@@ -1,0 +1,20 @@
+;; Phase S7: task cancellation.
+;; Expected stdout:
+;;   cancelled
+;;   false
+
+;; --- Test 1: cancel-task rejects the future --------------------------------
+;; Cancel a task before it runs; await throws an exception we catch.
+(let [task (async (fn [] :int 99))]
+  (do
+    (cancel-task task)
+    (try
+      (do (await task) (println "not-cancelled"))
+      (catch [e]
+        (println "cancelled")))))
+
+;; --- Test 2: uncancelled task completes normally (not-cancelled = 0) ---------
+;; Spawn a normal (non-cancelled) task; it completes with 0 (not-cancelled).
+(let [check (async (fn [] :int 0))]
+  (let [r (await check)]
+    (if (= r 0) (println "false") (println "unexpected"))))

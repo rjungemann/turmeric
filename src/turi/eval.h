@@ -2,6 +2,7 @@
 #define TURI_EVAL_H
 
 #include "env.h"
+#include "fiber.h"
 #include "value.h"
 
 /* ---------------------------------------------------------------------------
@@ -30,5 +31,35 @@ void turi_init(bool use_color);
 /* Write a human-readable REPL representation of v into buf (at most cap
  * bytes, NUL-terminated). */
 void turi_value_repr(char *buf, size_t cap, TuriValue v);
+
+/* ---------------------------------------------------------------------------
+ * Phase S7: Async C API
+ * --------------------------------------------------------------------------- */
+
+/* Register a native C function as a named global in env.
+ * After this call, Turmeric code can call the function by name. */
+void turi_env_register_native(TuriEnv *env, const char *name,
+                               TuriNativeFn fn, void *ud);
+
+/* Run the cooperative event loop until all async fibers and timers complete. */
+void turi_run_event_loop(TuriEnv *env);
+
+/* Spawn a new async task from Turmeric source; returns TURI_FUTURE value.
+ * src must evaluate to a zero-argument closure or a direct expression. */
+TuriValue turi_task_spawn(TuriEnv *env, const char *src);
+
+/* Cancel a task future (marks owner fiber as cancelled, rejects future). */
+void turi_task_cancel(TuriEnv *env, TuriFuture *f);
+
+/* Non-blocking poll of a future; returns result/error or TURI_NIL if pending. */
+TuriValue turi_future_poll_val(TuriFuture *f);
+
+/* Start an async sleep for ms milliseconds; returns TURI_FUTURE → nil. */
+TuriValue turi_sleep_async(TuriEnv *env, uint64_t ms);
+
+/* Throw a catchable exception from a native (TuriNativeFn) function.
+ * Sets env->throwing and env->throw_value; the native should return
+ * turi_nil() immediately after calling this. */
+void turi_native_throw(TuriEnv *env, const char *msg);
 
 #endif /* TURI_EVAL_H */

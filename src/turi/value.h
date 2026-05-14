@@ -10,6 +10,8 @@ typedef struct TuriClosure    TuriClosure;
 typedef struct TuriEffectCont TuriEffectCont;  /* defined in eval.c */
 typedef struct TuriStruct     TuriStruct;      /* defined in eval.c */
 typedef struct TuriThrow      TuriThrow;       /* defined in eval.c */
+typedef struct TuriFuture     TuriFuture;      /* defined in turi/fiber.h */
+typedef struct TuriEnv        TuriEnv;         /* from env.h */
 
 /* Tagged value type for the eval runtime. */
 typedef enum TuriTag {
@@ -23,6 +25,7 @@ typedef enum TuriTag {
     TURI_EFFECT_CONT,    /* live continuation from handle/perform (Phase S3) */
     TURI_STRUCT,         /* struct instance: TuriStruct* (Phase S4) */
     TURI_THROW,          /* in-flight exception: TuriThrow* (Phase S4) */
+    TURI_FUTURE,         /* async future handle: TuriFuture* (Phase S7) */
 } TuriTag;
 
 typedef struct TuriValue {
@@ -37,6 +40,7 @@ typedef struct TuriValue {
         TuriEffectCont   *as_cont;    /* live effect continuation */
         TuriStruct       *as_struct;  /* struct instance */
         TuriThrow        *as_throw;   /* in-flight exception */
+        TuriFuture       *as_future;  /* async future handle (Phase S7) */
     };
 } TuriValue;
 
@@ -83,5 +87,9 @@ static inline const char *turi_error_message(TuriValue v) { return v.as_error; }
 
 /* Print a TuriValue in REPL repr format (e.g. "42", "\"hello\"", "#<fn foo>") */
 void turi_print_value(FILE *out, TuriValue v);
+
+/* Phase S7: native function pointer type (for async builtins registered at runtime).
+ * Must come after TuriValue and TuriEnv are fully declared. */
+typedef TuriValue (*TuriNativeFn)(TuriEnv *env, TuriValue *args, uint32_t n, void *ud);
 
 #endif /* TURI_VALUE_H */

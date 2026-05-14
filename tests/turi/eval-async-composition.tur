@@ -1,0 +1,26 @@
+;; Phase S7: task composition — multiple concurrent tasks, chained awaits.
+;; Expected stdout:
+;;   30
+;;   100
+;;   200
+
+;; --- Test 1: two independent tasks await'd sequentially --------------------
+(defn task-a [] :int 10)
+(defn task-b [] :int 20)
+(let [fa (async task-a)
+      fb (async task-b)]
+  (let [a (await fa)
+        b (await fb)]
+    (println (+ a b))))
+
+;; --- Test 2: chained await (result of first feeds second) ------------------
+(defn double [x :int] :int (* 2 x))
+(let [f1 (async (fn [] :int 50))]
+  (let [v1 (await f1)]
+    (let [f2 (async (fn [] :int (double v1)))]
+      (println (await f2)))))
+
+;; --- Test 3: async-all2 helper (adds two future values) --------------------
+(let [fa (async (fn [] :int 80))
+      fb (async (fn [] :int 120))]
+  (println (async-all2 fa fb)))

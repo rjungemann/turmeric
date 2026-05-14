@@ -1,12 +1,37 @@
 #ifndef TURI_ENV_H
 #define TURI_ENV_H
 
+/* Platform macros before system headers */
+#ifndef _DEFAULT_SOURCE
+#  define _DEFAULT_SOURCE
+#endif
+#if defined(__APPLE__)
+#  ifndef _XOPEN_SOURCE
+#    define _XOPEN_SOURCE 700
+#  endif
+#endif
+
 #include <stdbool.h>
+
+#if defined(__APPLE__)
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+#include <ucontext.h>
+#if defined(__APPLE__)
+#  pragma clang diagnostic pop
+#endif
 
 #include "arena.h"
 #include "buf.h"
 #include "symbols.h"
 #include "value.h"
+
+/* Phase S7: forward-declare async scheduler types (defined in turi/fiber.h) */
+typedef struct TuriFiber    TuriFiber;
+typedef struct TuriFuture   TuriFuture;
+typedef struct TuriTimer    TuriTimer;
+typedef struct TuriIoPending TuriIoPending;
 
 /* A per-eval-call arena node, kept alive until TuriEnv is freed.
  * Closures may hold Expr* pointers into these arenas. */
@@ -46,6 +71,19 @@ typedef struct TuriEnv {
     /* Phase S5: recursion depth guard */
     uint32_t    eval_depth;
     uint32_t    max_eval_depth;
+    /* Phase S7: cooperative async scheduler */
+    TuriFiber  *sched_ready_head;   /* ready queue head (FIFO) */
+    TuriFiber  *sched_ready_tail;   /* ready queue tail */
+    TuriFiber  *current_fiber;      /* fiber currently executing (NULL = main) */
+    ucontext_t  sched_ctx;          /* context to swap back to from fibers */
+    TuriTimer  *timers_head;        /* sorted timer list (ascending deadline) */
+    TuriIoPending *io_pending_head; /* pending non-blocking I/O entries */
+    uint32_t    io_pending_count;
+    /* All allocated futures (linked list for bulk free in turi_env_free) */
+    TuriFuture *all_futures;
+    /* Pipe fds for the built-in test I/O pipe (S7.7 tests) */
+    int         test_pipe_rfd;
+    int         test_pipe_wfd;
 } TuriEnv;
 
 /* Create a new unrestricted environment. */

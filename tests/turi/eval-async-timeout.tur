@@ -1,0 +1,25 @@
+;; Phase S7: sleep-async and with-timeout.
+;; Expected stdout:
+;;   slept
+;;   42
+;;   timeout
+
+;; --- Test 1: sleep-async suspends and resumes after delay -----------------
+(await (sleep-async 20))
+(println "slept")
+
+;; --- Test 2: with-timeout on a fast task resolves normally ----------------
+(let [task (async (fn [] :int 42))]
+  (let [result (with-timeout 2000 task)]
+    (if (= result 42)
+      (println result)
+      (println "unexpected"))))
+
+;; --- Test 3: with-timeout fires when task takes too long -----------------
+;; (We simulate a slow task with a long sleep-async; timeout fires first.)
+(let [slow-task (async (fn [] :int (do (await (sleep-async 5000)) 99)))]
+  (try
+    (let [result (with-timeout 50 slow-task)]
+      (println "should-not-reach"))
+    (catch [e]
+      (println "timeout"))))

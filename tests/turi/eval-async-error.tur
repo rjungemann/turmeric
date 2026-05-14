@@ -1,0 +1,20 @@
+;; Phase S7: exception propagation through async boundaries.
+;; Expected stdout:
+;;   caught: boom
+;;   42
+
+;; --- Test 1: exception in async body propagates through await -------------
+(try
+  (await (async (fn [] :int (throw "boom"))))
+  (catch [e :cstr]
+    (do (println "caught:") (println e))))
+
+;; --- Test 2: successful async task prints its value -----------------------
+(defn might-fail [fail :bool] :int
+  (if fail (throw "error") 42))
+
+(let [task (async (fn [] :int (might-fail false)))]
+  (try
+    (println (await task))
+    (catch [e :cstr]
+      (println "unexpected-error"))))

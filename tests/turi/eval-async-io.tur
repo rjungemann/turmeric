@@ -1,0 +1,14 @@
+;; Phase S7: non-blocking I/O round-trip on a pipe fd (S7.7).
+;; Expected stdout:
+;;   5
+;;   hello
+
+;; Set up the built-in test pipe.
+(async-pipe-init)
+
+(let [rfd (async-pipe-rfd)
+      wfd (async-pipe-wfd)]
+  (let [written (await (write-async wfd "hello"))]
+    (println written))
+  (let [data (await (read-async rfd 5))]
+    (println data)))

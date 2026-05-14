@@ -1,4 +1,5 @@
 #include "env.h"
+#include "fiber.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -10,6 +11,10 @@ TuriEnv *turi_env_new(void) {
     symtab_init(&env->st, &env->sym_arena);
     buf_init(&env->src_acc);
     env->max_eval_depth = 4096;
+    /* Phase S7: initialise async scheduler state */
+    turi_sched_init(env);
+    /* Register async native builtins (sleep-async, with-timeout, etc.) */
+    turi_async_register_builtins(env);
     return env;
 }
 
@@ -21,6 +26,9 @@ TuriEnv *turi_env_new_sandboxed(void) {
 
 void turi_env_free(TuriEnv *env) {
     if (!env) return;
+
+    /* Phase S7: free async scheduler state */
+    turi_sched_free(env);
 
     /* Free all per-call arenas */
     ArenaNode *node = env->eval_arenas;

@@ -1,0 +1,25 @@
+;; Phase S7: effect handlers persist correctly across await suspension points.
+;; Expected stdout:
+;;   before-await
+;;   after-await
+;;   42
+;;   hello
+
+;; --- Test 1: println across await (basic I/O across yield) ----------------
+(defn inner [] :int
+  (do
+    (println "before-await")
+    (let [v (await (async (fn [] :int 42)))]
+      (println "after-await")
+      v)))
+(println (inner))
+
+;; --- Test 2: algebraic effect used inside an async body -------------------
+(defeffect LogEff [msg :cstr] :nil)
+
+(handle
+  (do
+    (await (async (fn [] :nil (perform (LogEff "hello")))))
+    nil)
+  (LogEff [msg] k)
+    (do (println msg) (resume k nil)))
