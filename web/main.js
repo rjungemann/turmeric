@@ -544,37 +544,34 @@ function configureMonaco() {
         base: 'vs-dark',
         inherit: true,
         rules: [
-            { token: 'comment', foreground: '6a9955' },
-            { token: 'string', foreground: '98c379' },
-            { token: 'number', foreground: 'ce9178' },
-            { token: 'keyword', foreground: '569cd6', fontStyle: 'bold' },
-            { token: 'keyword.operator', foreground: '569cd6' },
-            { token: 'type', foreground: 'dcdcaa' },
-            { token: 'operator', foreground: '4ec9b0' },
-            { token: 'delimiter', foreground: 'd4d4d4' },
-            { token: 'identifier', foreground: 'd4d4d4' }
+            // Dark Spice Market syntax colors from design-notes.md
+            { token: 'comment', foreground: '48433D', fontStyle: 'italic' },
+            { token: 'string', foreground: 'D9735A' },
+            { token: 'number', foreground: 'A8C98A' },
+            { token: 'number.float', foreground: 'A8C98A' },
+            { token: 'keyword', foreground: 'EFA030', fontStyle: 'bold' },
+            { token: 'keyword.operator', foreground: 'C4A0E8' },
+            { token: 'type', foreground: '7AC4B8' },
+            { token: 'operator', foreground: '6A5F58' },
+            { token: 'delimiter', foreground: '5A5448' },
+            { token: 'identifier', foreground: 'EAE0D2' }
         ],
         colors: {
-            'editor.background': '#1e1e1e',
-            'editor.foreground': '#d4d4d4',
-            'editorCursor.foreground': '#ffffff',
-            'editor.lineHighlightBackground': '#2d2d2d',
-            'editorLineNumber.foreground': '#6a6a6a',
-            'editor.selectionBackground': 'rgba(255, 255, 255, 0.3)',
-            'editor.inactiveSelectionBackground': 'rgba(255, 255, 255, 0.1)',
-            'editorIndentGuide.background': '#404040',
-            'editorIndentGuide.activeBackground': '#6a6a6a'
+            // Dark Spice Market background colors
+            'editor.background': '#0C0A08',
+            'editor.foreground': '#EAE0D2',
+            'editorCursor.foreground': '#D48B1C',
+            'editor.lineHighlightBackground': '#131109',
+            'editorLineNumber.foreground': '#453F39',
+            'editor.selectionBackground': 'rgba(212, 139, 28, 0.15)',
+            'editor.inactiveSelectionBackground': 'rgba(212, 139, 28, 0.08)',
+            'editorIndentGuide.background': '#252119',
+            'editorIndentGuide.activeBackground': '#3E3830'
         }
     });
     
-    // Set default theme
-    const isDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    monaco.editor.setTheme(isDarkMode ? 'turmeric-dark' : 'turmeric-light');
-    
-    // Listen for theme changes
-    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
-        monaco.editor.setTheme(e.matches ? 'turmeric-dark' : 'turmeric-light');
-    });
+    // Always use dark theme to match Dark Spice Market design
+    monaco.editor.setTheme('turmeric-dark');
 }
 
 /**

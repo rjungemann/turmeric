@@ -823,6 +823,45 @@ footer {
   opacity: 1;
   transform: none;
 }
+
+/* ── CODE SYNTAX TOGGLE ───────────────── */
+.code-card-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.code-syntax-toggle {
+  margin-left: auto;
+  display: flex;
+  border: 1px solid var(--border-mid);
+  border-radius: 6px;
+  overflow: hidden;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+}
+.seg-btn {
+  padding: 4px 10px;
+  background: transparent;
+  color: var(--text-dim);
+  border: none;
+  cursor: pointer;
+  transition: all 0.14s;
+}
+.seg-btn:hover { color: var(--text-sec); background: var(--bg-hover); }
+.seg-btn.active {
+  color: var(--gold-bright);
+  background: var(--gold-subtle);
+  border: 1px solid var(--gold-line);
+}
+.code-card-body {
+  position: relative;
+}
+.code-version {
+  white-space: pre;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  line-height: 1.75;
+}
 </style>
 </head>
 <body>
@@ -877,32 +916,35 @@ footer {
           <div class="win-dot wd-r"></div>
           <div class="win-dot wd-y"></div>
           <div class="win-dot wd-g"></div>
-          <span class="code-card-filename">quickstart.tmrc</span>
+          <span class="code-card-filename" id="code-filename">effects.tur</span>
+          <div class="code-syntax-toggle">
+            <button class="seg-btn active" data-syntax="turmeric">turmeric</button>
+            <button class="seg-btn" data-syntax="sweet-exp">sweet-exp</button>
+          </div>
         </div>
-        <div class="code-card-body"><span class="cmt">;; Algebraic data types and pattern matching</span>
+        <div class="code-card-body">
+          <div class="code-version turmeric-version">
+<span class="cmt">;; Algebraic effects in Turmeric</span>
 
-<span class="kw">deftype</span> <span class="tp">Tree</span> <span class="pnc">(</span>a<span class="pnc">)</span>
-  <span class="op">|</span> Leaf
-  <span class="op">|</span> Node a <span class="pnc">(</span><span class="tp">Tree</span> a<span class="pnc">)</span> <span class="pnc">(</span><span class="tp">Tree</span> a<span class="pnc">)</span>
+<span class="kw">defeffect</span> <span class="tp">Ask</span> <span class="pnc">[</span><span class="pnc">]</span> :<span class="tp">int</span>
 
-<span class="cmt">;; Typeclass with a default implementation</span>
-<span class="kw">defclass</span> <span class="pnc">(</span><span class="tp">Container</span> f<span class="pnc">)</span>
-  <span class="pnc">(</span><span class="fn">size</span>   : <span class="pnc">(</span>-> <span class="pnc">(</span>f a<span class="pnc">)</span> <span class="tp">Int</span><span class="pnc">))</span>
-  <span class="pnc">(</span><span class="fn">empty?</span> : <span class="pnc">(</span>-> <span class="pnc">(</span>f a<span class="pnc">)</span> <span class="tp">Bool</span><span class="pnc">)</span>
-    <span class="kw">default</span> <span class="pnc">(</span><span class="fn">fn</span> <span class="pnc">(</span>c<span class="pnc">)</span> <span class="pnc">(</span>zero? <span class="pnc">(</span><span class="fn">size</span> c<span class="pnc">))))</span>
+<span class="kw">defn</span> <span class="fn">use-ask</span> <span class="pnc">[</span><span class="pnc">]</span> :<span class="tp">int</span>
+  <span class="pnc">(</span><span class="kw">+</span> <span class="num">1</span> <span class="pnc">(</span><span class="fn">perform</span> <span class="pnc">(</span><span class="tp">Ask</span><span class="pnc">)))</span>
 
-<span class="cmt">;; Efficient tree fold using algebraic effects</span>
-<span class="hl"><span class="kw">defn</span> <span class="fn">fold-tree</span> <span class="pnc">(</span>f init tree<span class="pnc">)</span></span>
-  <span class="hl">  <span class="pnc">(</span><span class="kw">match</span> tree</span></span>
-  <span class="hl">    <span class="op">|</span> Leaf         <span class="op">=></span> init</span></span>
-  <span class="hl">    <span class="op">|</span> <span class="pnc">(</span>Node v l r<span class="pnc">)</span> <span class="op">=></span> <span class="pnc">(</span>f v <span class="pnc">(</span><span class="fn">fold-tree</span> f init l<span class="pnc">)</span></span></span>
-  <span class="hl">                          <span class="pnc">(</span><span class="fn">fold-tree</span> f init r<span class="pnc">)))</span></span>
+<span class="pnc">(</span><span class="fn">println</span> <span class="pnc">(</span><span class="fn">handle</span> <span class="pnc">(</span><span class="fn">use-ask</span><span class="pnc">)</span>
+  <span class="pnc">(</span><span class="tp">Ask</span> <span class="pnc">[</span><span class="pnc">]</span> k<span class="pnc">)</span> <span class="pnc">(</span><span class="fn">resume</span> k <span class="num">41</span><span class="pnc">)))</span>
+          </div>
+          <div class="code-version sweet-exp-version" style="display: none;">
+<span class="cmt">;; Algebraic effects in sweet-exp syntax</span>
 
-<span class="kw">defn</span> <span class="fn">main</span> <span class="pnc">()</span>
-  <span class="pnc">(</span><span class="kw">let</span> tree <span class="pnc">(</span>Node <span class="num">5</span>
-                <span class="pnc">(</span>Node <span class="num">3</span> Leaf Leaf<span class="pnc">)</span>
-                <span class="pnc">(</span>Node <span class="num">8</span> Leaf Leaf<span class="pnc">))</span>
-    <span class="pnc">(</span><span class="fn">println</span> <span class="pnc">(</span><span class="fn">fold-tree</span> + <span class="num">0</span> tree<span class="pnc">)))</span>  <span class="cmt">; => 16</span></div>
+<span class="kw">defeffect</span> <span class="tp">Ask</span> <span class="pnc">[</span><span class="pnc">]</span> :<span class="tp">int</span>
+
+<span class="kw">defn</span> <span class="fn">use-ask</span> <span class="pnc">[</span><span class="pnc">]</span> :<span class="tp">int</span>
+  <span class="pnc">{</span><span class="kw">+</span> <span class="num">1</span> <span class="pnc">{</span><span class="fn">perform</span> <span class="pnc">{</span><span class="tp">Ask</span><span class="pnc">}</span><span class="pnc">}</span>
+
+<span class="fn">println</span> <span class="pnc">{</span><span class="fn">handle</span> <span class="pnc">{</span><span class="fn">use-ask</span><span class="pnc">}</span> <span class="pnc">{</span><span class="tp">Ask</span> <span class="pnc">[</span><span class="pnc">]</span> k<span class="pnc">}</span> <span class="pnc">{</span><span class="fn">resume</span> k <span class="num">41</span><span class="pnc">}</span>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -1201,6 +1243,29 @@ document.querySelectorAll('.reveal').forEach((el, i) => {
   el.style.transitionDelay = (i === 0 ? 0.1 : 0) + 's';
   obs.observe(el);
 });
+
+// Syntax toggle for code examples
+const syntaxToggle = document.querySelector('.code-syntax-toggle');
+if (syntaxToggle) {
+  syntaxToggle.addEventListener('click', (e) => {
+    if (e.target.classList.contains('seg-btn')) {
+      const syntax = e.target.dataset.syntax;
+      // Update active button
+      syntaxToggle.querySelectorAll('.seg-btn').forEach(btn => {
+        btn.classList.toggle('active', btn === e.target);
+      });
+      // Update filename
+      const filenameEl = document.getElementById('code-filename');
+      if (filenameEl) {
+        filenameEl.textContent = syntax === 'turmeric' ? 'effects.tur' : 'effects.tursweet';
+      }
+      // Show/hide code versions
+      document.querySelectorAll('.code-version').forEach(version => {
+        version.style.display = version.classList.contains(syntax + '-version') ? '' : 'none';
+      });
+    }
+  });
+}
 </script>
 </body>
 </html>
