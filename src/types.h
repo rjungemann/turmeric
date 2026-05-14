@@ -80,6 +80,8 @@ typedef enum TypeKind {
     TY_UINT64,       /* uint64_t */
     TY_FLOAT32,      /* float */
     TY_FLOAT64,      /* double (alias for TY_FLOAT) */
+    /* Phase X3: Set literal type — sorted int64_t array at runtime */
+    TY_SET,          /* set — tur_set_t * */
 } TypeKind;
 
 /* Phase 11: Struct field descriptor.
@@ -130,6 +132,8 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
         case TY_NEVER:     /* never type is move-only (no values exist) */
         case TY_REC:       /* recursive type is move-only in v1 */
             return CK_MOVE;
+        case TY_SET:       /* heap-allocated sorted array — pointer-copied in v1 */
+            return CK_COPY;
         case TY_APP:       /* type application — opaque int64_t handle, copy by value */
             return CK_COPY;
         /* Phase N: fixed-width numeric types are all Copy */

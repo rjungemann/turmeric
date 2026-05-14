@@ -747,6 +747,8 @@ static Form *read_seq(Reader *r, char open, char close, FormTag tag,
         seq = form_list(r->arena, span, items, (uint32_t)n);
     } else if (tag == F_VEC) {
         seq = form_vec(r->arena, span, items, (uint32_t)n);
+    } else if (tag == F_SET) {
+        seq = form_set(r->arena, span, items, (uint32_t)n);
     } else {
         seq = form_map(r->arena, span, items, (uint32_t)n);
     }
@@ -768,6 +770,12 @@ static Form *read_map(Reader *r) {
     }
 
     return read_seq(r, '{', '}', F_MAP, "unterminated map (missing '}')");
+}
+
+static Form *read_set(Reader *r) {
+    advance(r); /* consume '#' */
+    advance(r); /* consume 's' */
+    return read_seq(r, '(', ')', F_SET, "unterminated set (missing ')')");
 }
 
 /* Phase R5: Read an attribute form: #[...] */
@@ -1101,6 +1109,9 @@ static Form *read_form(Reader *r) {
 
     if (c == '#' && peek2(r) == '{') {
         return read_map(r);
+    }
+    if (c == '#' && peek2(r) == 's' && peek3(r) == '(') {
+        return read_set(r);
     }
     /* Phase R5: Attribute syntax #[...] */
     if (c == '#' && peek2(r) == '[') {

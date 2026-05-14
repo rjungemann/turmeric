@@ -1,0 +1,23 @@
+; Phase X3: basic set literal tests -- construction, membership, count.
+
+(defn set-member? [s :set x] :bool
+  ```c
+  return tur_set_member(s, x);
+  ```)
+
+(defn set-count [s :set] :int
+  ```c
+  return s ? (int64_t)s->n : 0;
+  ```)
+
+(def s #s(1 2 3))
+
+(println (set-member? s 1))   ; true
+(println (set-member? s 2))   ; true
+(println (set-member? s 3))   ; true
+(println (set-member? s 4))   ; false
+(println (set-count s))       ; 3
+
+(def empty #s())
+(println (set-count empty))   ; 0
+(println (set-member? empty 1)) ; false

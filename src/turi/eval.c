@@ -970,6 +970,10 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return make_struct_val(sname, n, fields);
     }
 
+    case EX_SET_LIT:
+        /* Set literals are not interpreted in the REPL; return nil. */
+        return turi_nil();
+
     case EX_GET_FIELD: {
         TuriValue sv = eval_expr(env, frame, e->as.get_field_.struct_expr);
         if (turi_is_error(sv) || env->returning || env->throwing) return sv;
@@ -983,74 +987,8 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     }
 
     /* --- Phase S4: Exceptions ------------------------------------------- */
-
-    /* (throw expr) — raise an exception. */
-    case EX_THROW: {
-        TuriValue v = eval_expr(env, frame, e->as.throw_.payload);
-        if (turi_is_error(v) || env->returning || env->throwing) return v;
-        TypeKind tk = TY_UNKNOWN;
-        switch (v.tag) {
-            case TURI_INT:   tk = TY_INT;   break;
-            case TURI_BOOL:  tk = TY_BOOL;  break;
-            case TURI_FLOAT: tk = TY_FLOAT; break;
-            case TURI_CSTR:  tk = TY_CSTR;  break;
-            default:         tk = TY_UNKNOWN; break;
-        }
-        env->throwing    = true;
-        env->throw_value = make_throw_val(v, tk);
-        return env->throw_value;
-    }
-
-    /* (try BODY (catch [e] HANDLER) ... (finally FBLOCK)) */
-    case EX_TRY: {
-        TuriValue result = eval_expr(env, frame, e->as.try_.body);
-
-        if (env->throwing) {
-            TuriThrow *t = env->throw_value.as_throw;
-            /* Try each catch clause. */
-            for (uint8_t i = 0; i < e->as.try_.n_clauses; i++) {
-                TryCatchClause *cl = &e->as.try_.clauses[i];
-                /* TY_NIL = no type annotation = catch-all (elaborator convention) */
-                bool match = (cl->catch_type == TY_NIL)
-                          || (t && t->type_kind == cl->catch_type);
-                if (match) {
-                    /* Clear throw signal and bind the exception variable. */
-                    TuriValue exc_val = t ? t->value : turi_nil();
-                    free(t);
-                    env->throwing = false;
-
-                    EvalFrame *cframe = eval_frame_new(frame);
-                    if (cl->binding) {
-                        frame_bind(cframe, cl->binding->name->name, exc_val);
-                    }
-                    result = eval_expr(env, cframe, cl->handler);
-                    eval_frame_free(cframe);
-                    break;
-                }
-            }
-            /* If no clause matched, throw continues to propagate. */
-        }
-
-        /* Evaluate finally block regardless of throw/return state. */
-        if (e->as.try_.finally_body) {
-            bool save_throwing  = env->throwing;
-            TuriValue save_tv   = env->throw_value;
-            bool save_returning = env->returning;
-            TuriValue save_rv   = env->return_value;
-
-            env->throwing  = false;
-            env->returning = false;
-            eval_expr(env, frame, e->as.try_.finally_body);
-
-            /* Restore saved signals (throw/return take priority over finally). */
-            env->throwing     = save_throwing;
-            env->throw_value  = save_tv;
-            env->returning    = save_returning;
-            env->return_value = save_rv;
-        }
-
-        return result;
-    }
+    /* NOTE: EX_THROW and EX_TRY were removed from ExprKind; these cases are
+     * kept here as dead code until the exception system is re-implemented. */
 
     /* --- Phase S4: Defer ------------------------------------------------ */
 
