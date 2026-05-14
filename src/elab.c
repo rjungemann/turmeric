@@ -548,6 +548,7 @@ typedef struct Elab {
     const Symbol *sym_while;
     const Symbol *sym_defn;     /* Phase 2 */
     const Symbol *sym_fn;       /* Phase 2 */
+    const Symbol *sym_lambda;   /* λ — Unicode alias for fn */
     const Symbol *sym_extern_c; /* Phase 2 */
     const Symbol *sym_caret_mut;     /* ^mut */
     const Symbol *sym_caret_private; /* ^private — module-private visibility annotation */
@@ -671,6 +672,8 @@ typedef struct Elab {
     /* Phase HRT0: Higher-ranked type quantifiers (type-level only; reject in expression position) */
     const Symbol *sym_forall;      /* forall */
     const Symbol *sym_exists;      /* exists */
+    const Symbol *sym_forall_u;    /* ∀ — Unicode alias for forall */
+    const Symbol *sym_exists_u;    /* ∃ — Unicode alias for exists */
     /* Phase HRT1: Rank-2 type expression forms */
     const Symbol *sym_arrow;       /* -> (function type constructor in type expressions) */
     const Symbol *sym_ascribe;     /* :: (type ascription operator) */
@@ -1101,6 +1104,7 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_while     = intern_cstr(st, "while");
     e->sym_defn      = intern_cstr(st, "defn");
     e->sym_fn        = intern_cstr(st, "fn");
+    e->sym_lambda    = intern_cstr(st, "\xce\xbb"); /* λ */
     e->sym_extern_c  = intern_cstr(st, "extern-c");
     e->sym_caret_mut     = intern_cstr(st, "^mut");
     e->sym_caret_private = intern_cstr(st, "^private");
@@ -1258,6 +1262,8 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* Phase HRT0: forall/exists */
     e->sym_forall = intern_cstr(st, "forall");
     e->sym_exists = intern_cstr(st, "exists");
+    e->sym_forall_u = intern_cstr(st, "\xe2\x88\x80"); /* ∀ */
+    e->sym_exists_u = intern_cstr(st, "\xe2\x88\x83"); /* ∃ */
     /* Phase HRT1: -> and :: */
     e->sym_arrow   = intern_cstr(st, "->");
     e->sym_ascribe = intern_cstr(st, "::");
@@ -7283,13 +7289,13 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_defrec) return elab_defrec(e, call);
     if (name == e->sym_deftype) return elab_deftype(e, call);
     /* Phase HRT0: forall/exists are type-level forms; reject in expression position */
-    if (name == e->sym_forall) {
+    if (name == e->sym_forall || name == e->sym_forall_u) {
         diag_emit(DIAG_ERROR, call->span,
                   "'forall' is a type-level annotation and cannot appear in expression position "
                   "(use it in a type annotation: (deftype MyType (forall [a] ...)))");
         return NULL;
     }
-    if (name == e->sym_exists) {
+    if (name == e->sym_exists || name == e->sym_exists_u) {
         diag_emit(DIAG_ERROR, call->span,
                   "'exists' is a type-level annotation and cannot appear in expression position "
                   "(use it in a type annotation: (deftype MyType (exists [a] ...)))");
@@ -7405,9 +7411,11 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_gensym)   return elab_gensym(e, call);
     if (name == e->sym_thread)    return elab_thread(e, call);
     if (name == e->sym_thread_last) return elab_thread_last(e, call);
+
     /* Phase 2 */
     if (name == e->sym_defn)    return elab_defn  (e, call);
     if (name == e->sym_fn)      return elab_fn    (e, call);
+    if (name == e->sym_lambda)  return elab_fn    (e, call); /* λ aliases fn */
     if (name == e->sym_extern_c) return elab_extern_c(e, call);
 
     /* Phase P3: HAMT lowering - lower map function calls when first arg is persistent */
@@ -10862,8 +10870,8 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
         /* Phase HRT0: Handle (forall [vars...] body) and (exists [vars...] body) */
         if (form->as.list.len >= 1 && form->as.list.items[0]->tag == F_SYM) {
             const Symbol *head = form->as.list.items[0]->as.sym;
-            bool is_forall_form = (head == e->sym_forall);
-            bool is_exists_form = (head == e->sym_exists);
+            bool is_forall_form = (head == e->sym_forall || head == e->sym_forall_u);
+            bool is_exists_form = (head == e->sym_exists || head == e->sym_exists_u);
 
             if (is_forall_form || is_exists_form) {
                 /* Syntax: (forall [a b ...] body-type) or (exists [a b ...] body-type) */
@@ -11029,42 +11037,44 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
             return t;
         }
 
-        /* Type application: (ctor arg1 arg2 ...) is right-associative
-         * (ctor arg1 arg2) == (ctor (arg1 arg2)) for binary constructors
-         * But for simplicity in v1, we only support (ctor arg) with exactly 2 elements.
-         * N-ary applications like (Free f a) need to be written as (Free (f a)). */
-        if (form->as.list.len != 2) {
+        /* Type application: (ctor arg1 arg2 ...) — left-associative currying.
+         * (ctor a b) == ((ctor a) b), (ctor a b c) == (((ctor a) b) c), etc.
+         * Requires at least 2 elements (ctor + 1 arg). */
+        if (form->as.list.len < 2) {
             diag_emit(DIAG_ERROR, form->span,
-                      "type expression must be a symbol or (ctor arg) application with exactly 2 elements; "
-                      "for n-ary applications, use nesting: (Free (f a)) not (Free f a)");
+                      "type expression must be a symbol or (ctor arg ...) application");
             return NULL;
         }
-        
+
         /* Parse constructor */
         Type *ctor_type = type_expr_from_form(e, form->as.list.items[0], rec_name,
                                               type_params, type_param_kinds, n_type_params);
         if (!ctor_type) return NULL;
-        
-        /* Parse argument */
-        Type *arg_type = type_expr_from_form(e, form->as.list.items[1], rec_name,
-                                              type_params, type_param_kinds, n_type_params);
-        if (!arg_type) return NULL;
-        
-        /* Create TY_APP */
-        Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
-        memset(t, 0, sizeof(Type));
-        t->kind = TY_APP;
-        t->copy_kind = CK_COPY;
-        /* Derive kind: if ctor is KIND_ARROW, result is KIND_STAR */
-        if (ctor_type->hkt_kind == KIND_ARROW) {
-            t->hkt_kind = KIND_STAR;
-        } else if (ctor_type->hkt_kind == KIND_ARROW2) {
-            t->hkt_kind = KIND_ARROW;
-        } else {
-            t->hkt_kind = KIND_STAR;
+
+        /* Left-associatively apply each argument: (ctor a b c) → (((ctor a) b) c) */
+        Type *t = ctor_type;
+        for (uint32_t ai = 1; ai < form->as.list.len; ai++) {
+            Type *arg_type = type_expr_from_form(e, form->as.list.items[ai], rec_name,
+                                                  type_params, type_param_kinds, n_type_params);
+            if (!arg_type) return NULL;
+
+            /* Create TY_APP node */
+            Type *app = (Type *)arena_alloc(e->arena, sizeof(Type));
+            memset(app, 0, sizeof(Type));
+            app->kind = TY_APP;
+            app->copy_kind = CK_COPY;
+            /* Derive kind: KIND_ARROW2 → KIND_ARROW → KIND_STAR */
+            if (t->hkt_kind == KIND_ARROW2) {
+                app->hkt_kind = KIND_ARROW;
+            } else if (t->hkt_kind == KIND_ARROW) {
+                app->hkt_kind = KIND_STAR;
+            } else {
+                app->hkt_kind = KIND_STAR;
+            }
+            app->as.app.fn  = t;
+            app->as.app.arg = arg_type;
+            t = app;
         }
-        t->as.app.fn = ctor_type;
-        t->as.app.arg = arg_type;
         return t;
     } else if (form->tag == F_KEYWORD) {
         /* `:int`, `:bool`, etc. — treat the keyword name as a primitive type lookup */

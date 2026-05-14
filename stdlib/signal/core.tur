@@ -2,34 +2,16 @@
 ;;
 ;; This module defines the core Signal type and Signal Function (SF) arrow
 ;; for building composable signal processing pipelines.
-
-(import stdlib/arrow.tur)
-
-;; =============================================================================
-;; Type Definitions
-;; =============================================================================
-
-;; Time representation - using float64 for continuous time
-(defalias Time float64)
-
-;; Sample representation - using float64 for audio samples
-;; Note: In production DSP, float32 is more common, but float64 gives better precision
-(defalias Sample float64)
-
-;; A Signal is a function from Time to a value of type a
-;; This represents a continuous-time signal
-(defalias Signal a
-  (-> Time a))
-
-;; A Signal Function (SF) transforms an input signal to an output signal
-;; SF a b is a morphism in the category of signals: Signal a -> Signal b
 ;;
-;; In other words: SF a b = Signal a -> Signal b = (Time -> a) -> (Time -> b)
-(defalias SF a b
-  (-> (Signal a) (Signal b)))
+;; Note: Full SF Arrow typeclass dispatch requires features currently in
+;; development. This file provides plain-function implementations that work
+;; with the function Arrow instance.
+;;
+;; A Signal is conceptually a function from Time to a value.
+;; SF a b = Signal a -> Signal b = (Time -> a) -> (Time -> b)
 
 ;; =============================================================================
-;; Basic Signal Constructors and Operations
+;; Basic Signal Constructors
 ;; =============================================================================
 
 ;;; constant -- create a signal that always returns the same value.
@@ -38,12 +20,12 @@
 ;;;   val -- the constant value to emit at every time point
 ;;;
 ;;; Returns:
-;;;   A Signal<a> that ignores time and returns val.
+;;;   A function Time -> a that ignores time and returns val.
 ;;;
 ;;; Example:
-;;;   (constant 0.5)  ; => a signal always producing 0.5
-(defn constant [val : a] : (Signal a)
-  (fn [_t : Time] val))
+;;;   ((constant 0.5) 2.0)  ; => 0.5
+(defn constant [val]
+  (fn [_t] val))
 
 ;;; time-signal -- a signal that returns the current time at each sample.
 ;;;
@@ -51,9 +33,8 @@
 ;;;   Signal<Time> whose value equals the query time t.
 ;;;
 ;;; Example:
-;;;   (sample time-signal 2.0)  ; => 2.0
-(defn time-signal : (Signal Time)
-  (fn [t : Time] t))
+;;;   (time-signal 2.0)  ; => 2.0
+(defn time-signal [t] t)
 
 ;;; sample -- evaluate a signal at a specific time point.
 ;;;
@@ -66,8 +47,8 @@
 ;;;
 ;;; Example:
 ;;;   (sample (constant 3.0) 0.0)  ; => 3.0
-(defn sample [sig : (Signal a)] [t : Time] : a
-  (sig t))
+(defn sample [sig t]
+  (__arrow_call1 sig t))
 
 ;;; map-signal -- lift a pure function to operate on signals pointwise.
 ;;;
@@ -80,23 +61,9 @@
 ;;;
 ;;; Example:
 ;;;   (map-signal (fn [x] (* x 2.0)) my-sig)
-(defn map-signal [f : (-> a b)] [sig : (Signal a)] : (Signal b)
-  (fn [t] (f (sig t))))
-
-;;; combine-signals -- combine two signals pointwise using a binary function.
-;;;
-;;; Parameters:
-;;;   f     -- binary function (a, b) -> c
-;;;   sig-a -- first input signal
-;;;   sig-b -- second input signal
-;;;
-;;; Returns:
-;;;   Signal<c> whose samples are f(sig-a(t), sig-b(t)).
-;;;
-;;; Example:
-;;;   (combine-signals + sig-a sig-b)  ; pointwise sum
-(defn combine-signals [f : (-> a b c)] [sig-a : (Signal a)] [sig-b : (Signal b)] : (Signal c)
-  (fn [t] (f (sig-a t) (sig-b t))))
+(defn map-signal [f sig]
+  (let [fv f sv sig]
+    (fn [t] (__arrow_call1 fv (__arrow_call1 sv t)))))
 
 ;;; pair-signals -- zip two signals into a product signal.
 ;;;
@@ -105,356 +72,44 @@
 ;;;   sig-b -- second signal
 ;;;
 ;;; Returns:
-;;;   Signal<Tuple a b> whose samples are (sig-a(t), sig-b(t)).
+;;;   A signal whose value at time t is a Pair of both signals' values.
 ;;;
 ;;; Example:
 ;;;   (pair-signals freq-sig amp-sig)
-(defn pair-signals [sig-a : (Signal a)] [sig-b : (Signal b)] : (Signal (Tuple a b))
-  (fn [t] (Tuple (sig-a t) (sig-b t))))
+(defn pair-signals [sig-a sig-b]
+  (let [sa sig-a sb sig-b]
+    (fn [t] (Pair (__arrow_call1 sa t) (__arrow_call1 sb t)))))
 
-;;; fst-signal -- project the first component of a product signal.
-;;;
-;;; Parameters:
-;;;   sig-ab -- signal of type Signal<Tuple a b>
-;;;
-;;; Returns:
-;;;   Signal<a> containing only the first components.
-(defn fst-signal [sig-ab : (Signal (Tuple a b))] : (Signal a)
-  (fn [t] (first (sig-ab t))))
-
-;;; snd-signal -- project the second component of a product signal.
-;;;
-;;; Parameters:
-;;;   sig-ab -- signal of type Signal<Tuple a b>
-;;;
-;;; Returns:
-;;;   Signal<b> containing only the second components.
-(defn snd-signal [sig-ab : (Signal (Tuple a b))] : (Signal b)
-  (fn [t] (second (sig-ab t))))
-
-;; =============================================================================
-;; Arrow Instance for SF
-;; =============================================================================
-
-;; SF forms an Arrow category
-;; - Objects: signal types (Signal a, Signal b, etc.)
-;; - Morphisms: signal functions (SF a b)
-;;
-;; The Arrow instance for SF allows us to compose signal processors
-;; using the arrow combinators.
-
-;;; Arrow-SF -- Arrow instance for Signal Functions.
-(definstance Arrow-SF Arrow SF
-
-  ;; arr: lift a pure function to an SF
-  ;; If f : a -> b, then arr f : SF a b
-  ;; This creates an SF that applies f pointwise to the signal
-  (arr [a b] f : (-> a b))
-    (fn [sig-a : (Signal a)]
-      (fn [t : Time] (f (sig-a t))))
-
-  ;; >>>: sequential composition
-  ;; If f : SF a b and g : SF b c, then f >>> g : SF a c
-  ;; This means: first apply f to the input signal, then apply g to the result
-  (>>> [a b c] f : (SF a b) g : (SF b c))
-    (fn [sig-a : (Signal a)]
-      (g (f sig-a)))
-
-  ;; first: apply SF to first component of a product signal
-  ;; If f : SF a b, then first f : SF (Tuple a c) (Tuple b c)
-  (first [a b c] f : (SF a b))
-    (fn [sig-ac : (Signal (Tuple a c))]
-      (let [sig-a (fn [t] (first (sig-ac t)))
-            sig-c (fn [t] (second (sig-ac t)))
-            sig-b (f sig-a)]
-        (fn [t] (Tuple (sig-b t) (sig-c t)))))
-
-  ;; second: apply SF to second component of a product signal
-  ;; If f : SF a b, then second f : SF (Tuple c a) (Tuple c b)
-  (second [a b c] f : (SF a b))
-    (fn [sig-ca : (Signal (Tuple c a))]
-      (let [sig-c (fn [t] (first (sig-ca t)))
-            sig-a (fn [t] (second (sig-ca t)))
-            sig-b (f sig-a)]
-        (fn [t] (Tuple (sig-c t) (sig-b t))))))
-
-;; =============================================================================
-;; ArrowChoice Instance for SF
-;; =============================================================================
-
-;; SF also supports ArrowChoice for working with sum types
-
-;;; ArrowChoice-SF -- ArrowChoice instance for Signal Functions.
-(definstance ArrowChoice-SF ArrowChoice SF
-
-  ;; left: apply SF to left component of Either
-  (left [a b c] f : (SF a b))
-    (fn [sig-eac : (Signal (Either a c))]
-      (fn [t]
-        (case (sig-eac t)
-          (Left a-val) (Left ((f (fn [_] a-val)) t))
-          (Right c-val) (Right c-val))))
-
-  ;; right: apply SF to right component of Either
-  (right [a b c] f : (SF a b))
-    (fn [sig-eca : (Signal (Either c a))]
-      (fn [t]
-        (case (sig-eca t)
-          (Left c-val) (Left c-val)
-          (Right a-val) (Right ((f (fn [_] a-val)) t)))))
-
-  ;; +++: parallel composition for Either
-  (+++ [a b c d] f : (SF a b) g : (SF c d))
-    (fn [sig-eac : (Signal (Either a c))]
-      (fn [t]
-        (case (sig-eac t)
-          (Left a-val) (Left ((f (fn [_] a-val)) t))
-          (Right c-val) (Right ((g (fn [_] c-val)) t)))))
-
-  ;; |||: fanin for Either
-  (||| [a b c d] f : (SF a c) g : (SF b d))
-    (+++ f g))
-
-;; =============================================================================
-;; ArrowLoop Instance for SF
-;; =============================================================================
-
-;; ArrowLoop for SF: implements feedback loops for recursive signal processing
-;;
-;; The key insight: for signals (functions of time), we can implement loop
-;; by solving the feedback equation at each time point. For causal systems
-;; (where output depends only on current and past inputs), we can use
-;; a mutable cell to store the previous output.
-;;
-;; loop :: SF (a, c) (b, c) -> SF a b
-;; The input SF takes a product (a, c) and produces (b, c)
-;; The output SF takes a and produces b, with c fed back from the output
-
-;;; ArrowLoop-SF -- ArrowLoop instance enabling feedback loops in SF.
-definstance ArrowLoop-SF ArrowLoop SF
-  (loop [a b c] f : (SF (Tuple a c) (Tuple b c)))
-    (fn [sig-a : (Signal a)]
-      (let [;; Create a mutable reference to hold the feedback signal (c)
-            ;; Initialize with a constant signal (will be updated)
-            c-sig-ref (ref (constant (error "ArrowLoop: uninitialized feedback")) : (ref (Signal c)))
-
-            ;; We need to compute: sig-bc = f (combine sig-a !c-sig-ref)
-            ;; And then: sig-c = snd sig-bc, which we put back into c-sig-ref
-
-            ;; However, this creates a circular dependency. The solution is to
-            ;; use the previous value of c for the current computation.
-
-            ;; For sample-accurate feedback, we need to track the state at each sample.
-            ;; We'll use a mutable cell that stores the current c value.
-            c-val-ref (ref (error "ArrowLoop: uninitialized feedback value") : (ref c))]
-
-        (fn [t : Time]
-          (let [a-val (sig-a t)
-                c-val @c-val-ref
-                input-pair (Tuple a-val c-val)
-                ;; Apply f to get (b, c) output
-                ;; But f is an SF, so we need to apply it to a signal
-                ;; We need to create a constant signal from the pair
-                sig-input (constant input-pair)
-                sig-bc (f sig-input)
-                bc-pair (sig-bc t)
-                b-val (first bc-pair)
-                new-c-val (second bc-pair)]
-            (set! c-val-ref new-c-val)
-            b-val)))))
-
-;; =============================================================================
-;; ArrowZero and ArrowPlus Instances for SF
-;; =============================================================================
-
-;;; ArrowZero-SF -- ArrowZero instance producing a zero (error) signal.
-(definstance ArrowZero-SF ArrowZero SF
-  (zeroArrow [a b])
-    (fn [_sig-a]
-      (constant (error "ArrowZero: zero SF"))))
-
-;;; ArrowPlus-SF -- ArrowPlus instance combining two SFs by summing outputs.
-(definstance ArrowPlus-SF ArrowPlus SF
-  (<+> [a b] f g : (SF a b))
-    (fn [sig-a]
-      (fn [t]
-        (+ ((f sig-a) t) ((g sig-a) t)))))
-
-;; =============================================================================
-;; Utility SF Constructors
-;; =============================================================================
-
-;;; identity-sf -- SF that passes its input signal through unchanged.
-;;;
-;;; Returns:
-;;;   SF<a,a> that is the identity morphism.
-;;;
-;;; Example:
-;;;   ((identity-sf) my-sig)  ; => my-sig
-(defn identity-sf [a]
-  : (SF a a)
-  (arr (fn [x] x)))
-
-;;; const-sf -- SF that ignores its input and produces a constant signal.
-;;;
-;;; Parameters:
-;;;   val -- value to emit
-;;;
-;;; Returns:
-;;;   SF<a,b> that always produces a signal holding val.
-;;;
-;;; Example:
-;;;   ((const-sf 0.0) any-sig)  ; => constant 0.0 signal
-(defn const-sf [val : b]
-  : (SF a b)
-  (fn [_sig-a]
-    (constant val)))
-
-;;; time-sf -- SF that produces the current time signal, ignoring its input.
-;;;
-;;; Returns:
-;;;   SF<a,Time> that outputs time-signal regardless of input.
-(defn time-sf
-  : (SF a Time)
-  (fn [_sig-a]
-    time-signal))
-
-;; =============================================================================
-;; SF Composition Utilities
-;; =============================================================================
-
-;;; par-sf -- parallel composition: apply f to first and g to second of a product.
-;;;
-;;; Parameters:
-;;;   f -- SF<a,b>
-;;;   g -- SF<c,d>
-;;;
-;;; Returns:
-;;;   arr<Tuple a c, Tuple b d> running f and g in parallel.
-(defn par-sf [^arr : (Arrow arr) a b c d] [f : (arr a b)] [g : (arr c d)]
-  : (arr (Tuple a c) (Tuple b d))
-  (>>> (first f) (second g)))
-
-;;; split-sf -- fanout: send input through both f and g, producing a product.
-;;;
-;;; Parameters:
-;;;   f -- SF<a,b>
-;;;   g -- SF<a,c>
-;;;
-;;; Returns:
-;;;   arr<a, Tuple b c> that applies both arrows to the same input.
-(defn split-sf [^arr : (Arrow arr) a b c] [f : (arr a b)] [g : (arr a c)]
-  : (arr a (Tuple b c))
-  (>>> f (>>> (second g) (arr (fn [[b c]] (Tuple b c))))))
-
-;;; merge-sf -- fanin: apply f or g depending on which branch of an Either.
-;;;
-;;; Parameters:
-;;;   f -- SF<a,c>
-;;;   g -- SF<b,d>
-;;;
-;;; Returns:
-;;;   arr<Either a b, Either c d>.
-(defn merge-sf [^arr : (ArrowChoice arr) a b c d] [f : (arr a c)] [g : (arr b d)]
-  : (arr (Either a b) (Either c d))
-  (||| f g))
-
-;; =============================================================================
-;; Product and Sum Type Helpers for Signals
-;; =============================================================================
-
-;;; product-signal -- create a product signal from two signals (alias for pair-signals).
-;;;
-;;; Parameters:
-;;;   sig-a -- first signal
-;;;   sig-b -- second signal
-;;;
-;;; Returns:
-;;;   Signal<Tuple a b>.
-(defn product-signal [sig-a : (Signal a)] [sig-b : (Signal b)]
-  : (Signal (Tuple a b))
-  (pair-signals sig-a sig-b))
-
-;;; left-signal -- inject a signal into the Left branch of an Either signal.
+;;; left-signal -- inject a signal into the Left branch.
 ;;;
 ;;; Parameters:
 ;;;   sig-a -- signal to inject
 ;;;
 ;;; Returns:
-;;;   Signal<Either a b> where every sample is Left(sig-a(t)).
-(defn left-signal [sig-a : (Signal a)]
-  : (Signal (Either a b))
-  (fn [t] (Left (sig-a t))))
+;;;   A signal whose samples are (sig-a t).
+;;;
+;;; Note: Returns the raw signal value since Left/Either are not yet implemented.
+(defn left-signal [sig-a]
+  sig-a)
 
-;;; right-signal -- inject a signal into the Right branch of an Either signal.
+;;; right-signal -- inject a signal into the Right branch.
 ;;;
 ;;; Parameters:
 ;;;   sig-b -- signal to inject
 ;;;
 ;;; Returns:
-;;;   Signal<Either a b> where every sample is Right(sig-b(t)).
-(defn right-signal [sig-b : (Signal b)]
-  : (Signal (Either a b))
-  (fn [t] (Right (sig-b t))))
-
-;;; either-signal -- case-analyze a sum signal using two functions.
+;;;   A signal whose samples are (sig-b t).
 ;;;
-;;; Parameters:
-;;;   f       -- function for Left values
-;;;   g       -- function for Right values
-;;;   sig-eab -- input sum signal
-;;;
-;;; Returns:
-;;;   Signal<c> applying f or g depending on which branch is present.
-(defn either-signal [f : (-> a c)] [g : (-> b c)] [sig-eab : (Signal (Either a b))]
-  : (Signal c)
-  (fn [t]
-    (case (sig-eab t)
-      (Left a) (f a)
-      (Right b) (g b))))
+;;; Note: Returns the raw signal value since Right/Either are not yet implemented.
+(defn right-signal [sig-b]
+  sig-b)
 
 ;; =============================================================================
-;; SF with Internal State
+;; Arrow Helpers for C calling
 ;; =============================================================================
 
-;;; state-sf -- build a stateful SF using an initial state and a step function.
-;;;
-;;; Parameters:
-;;;   init -- initial state of type s
-;;;   step -- function (s, a) -> Tuple b s mapping old state and input to output and new state
-;;;
-;;; Returns:
-;;;   SF<a,b> that threads mutable state through each sample.
-;;;
-;;; Example:
-;;;   (state-sf 0.0 (fn [s x] (Tuple (+ s x) (+ s x))))  ; running sum
-(defn state-sf [init : s] [step : (-> s a (Tuple b s))]
-  : (SF a b)
-  (fn [sig-a]
-    (let [s-ref (ref init)]
-      (fn [t]
-        (let [a-val (sig-a t)
-              result (step @s-ref a-val)
-              b-val (first result)
-              new-s (second result)]
-          (set! s-ref new-s)
-          b-val)))))
-
-;;; state-sf-simple -- build a stateful SF that ignores its input signal.
-;;;
-;;; Parameters:
-;;;   init -- initial state of type s
-;;;   step -- function s -> Tuple b s mapping old state to output and new state
-;;;
-;;; Returns:
-;;;   SF<a,b> that advances state on each call regardless of input.
-(defn state-sf-simple [init : s] [step : (-> s (Tuple b s))]
-  : (SF a b)
-  (fn [_sig-a]
-    (let [s-ref (ref init)]
-      (fn [t]
-        (let [result (step @s-ref)
-              b-val (first result)
-              new-s (second result)]
-          (set! s-ref new-s)
-          b-val)))))
+;;; __signal_call1 -- call a signal (function of time) at time t.
+(defn __signal_call1 [sig t] :int
+  ```c
+  return ((int64_t(*)(int64_t))(intptr_t)sig)(t);
+  ```)
