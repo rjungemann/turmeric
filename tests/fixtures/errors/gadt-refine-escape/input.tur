@@ -1,0 +1,8 @@
+(defgadt Box [a]
+  (MkBox a : (Box a)))
+
+(defn unbox [b] :int
+  (match b
+    (MkBox x) x))
+
+(defn main [] :int 0)

@@ -1,0 +1,12 @@
+(defdata Color
+  (Red)
+  (Green)
+  (Blue))
+
+(defn main [] :int
+  (let [c (Red)]
+    (match c
+      (Red)   (println "red")
+      (Green) (println "green")
+      (Blue)  (println "blue"))
+    0))

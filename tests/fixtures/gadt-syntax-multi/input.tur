@@ -1,0 +1,8 @@
+(defgadt Pair [a b]
+  (MkPair int int : (Pair a b)))
+
+(defn main [] :int
+  (let [p (MkPair 3 4)]
+    (match p
+      (MkPair x y) (println (+ x y)))
+    0))

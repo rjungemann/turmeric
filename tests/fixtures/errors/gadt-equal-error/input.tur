@@ -1,0 +1,5 @@
+(defgadt Equal [a b]
+  (Refl : (Equal a a)))
+
+(defn main [] :int
+  (coerce 42 100))

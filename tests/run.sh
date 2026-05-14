@@ -391,7 +391,11 @@ run_negative() {
         return
     fi
 
-    "$TUR" emit-c "$input" > /dev/null 2> "$dir/actual.stderr"
+    local neg_flags=""
+    if [ -f "$dir/flags" ]; then
+        neg_flags=$(cat "$dir/flags")
+    fi
+    $TUR $neg_flags emit-c "$input" > /dev/null 2> "$dir/actual.stderr"
     local rc=$?
     if [ $rc -eq 0 ]; then
         {

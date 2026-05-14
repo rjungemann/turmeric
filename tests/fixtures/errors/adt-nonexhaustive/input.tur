@@ -1,0 +1,4 @@
+(defdata Color (Red) (Green) (Blue))
+(defn main [] :int
+  (match (Red)
+    (Red) 0))

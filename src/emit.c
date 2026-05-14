@@ -2433,6 +2433,43 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 return result;
             }
             
+            /* Phase G0: 0-arg constructor call — emit ctor_Name() */
+            if (fn_binding->type.kind == TY_ADT) {
+                Buf out; buf_init(&out);
+                buf_printf(&out, "ctor_%s()", fn_binding->name->name);
+                buf_putc(&out, '\0');
+                char *result = strdup(out.data);
+                buf_free(&out);
+                return result;
+            }
+
+            /* Phase G0: N-arg constructor call — fn has TY_FN w/ result TY_ADT,
+             * but the fn name is the constructor name so we emit ctor_Name(args).
+             * Phase G3: result_full_type is set for non-constructor ADT-returning
+             * functions (e.g. equal-sym) — those must fall through to regular calls. */
+            if (fn_binding->type.kind == TY_FN &&
+                fn_binding->type.as.fn.result_kind == TY_ADT &&
+                !fn_binding->type.as.fn.result_full_type) {
+                char **arg_strs = (char **)malloc(e->as.call_.n_args * sizeof(char *));
+                if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
+                for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                    arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
+                }
+                Buf out; buf_init(&out);
+                buf_printf(&out, "ctor_%s(", fn_binding->name->name);
+                for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                    if (i > 0) buf_puts(&out, ", ");
+                    buf_puts(&out, arg_strs[i]);
+                }
+                buf_puts(&out, ")");
+                buf_putc(&out, '\0');
+                char *result = strdup(out.data);
+                buf_free(&out);
+                for (uint32_t i = 0; i < e->as.call_.n_args; i++) free(arg_strs[i]);
+                free(arg_strs);
+                return result;
+            }
+
             /* Regular function call */
             /* Emit function call: fn(arg1, arg2, ...) */
             /* Use raw name for function calls (functions are defined with raw names) */
@@ -3930,6 +3967,103 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_puts(body, "}\n");
             return nil_result ? atom_nil() : tmp;
         }
+        /* Phase G0: EX_DEFDATA — nothing to emit in value position (handled in Pass 0) */
+        case EX_DEFDATA:
+        /* Phase G1: EX_DEFGADT — same as EX_DEFDATA, handled in Pass 0 */
+        case EX_DEFGADT:
+            return atom_nil();
+
+        /* Phase G0: EX_MATCH — emit as statement-expression ({ ... result; }) */
+        case EX_MATCH: {
+            AdtDef *adt = e->as.match_.scrutinee->type.as.adt_.def;
+            char adt_c_name[256];
+            snprintf(adt_c_name, sizeof(adt_c_name), "tur_adt_%s", adt->name);
+
+            bool nil_result = (e->type.kind == TY_NIL);
+            char *tmp = NULL;
+            if (!nil_result) {
+                tmp = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                /* Initialize to zero to silence -Wsometimes-uninitialized; exhaustiveness
+                 * is guaranteed by the elaborator so the default branch is unreachable. */
+                buf_printf(body, "%s %s = 0;\n", type_c_name(e->type), tmp);
+            }
+
+            /* Emit scrutinee */
+            char *scrut_val = emit_value(ctx, body, e->as.match_.scrutinee);
+
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "{\n");
+            ctx->indent += 4;
+
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s *__scrut = (%s *)(intptr_t)(%s);\n",
+                       adt_c_name, adt_c_name, scrut_val);
+            free(scrut_val);
+
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "switch (__scrut->tag) {\n");
+
+            bool has_default = false;
+            for (uint32_t ai = 0; ai < e->as.match_.n_arms; ai++) {
+                MatchArm *arm = &e->as.match_.arms[ai];
+                MatchPattern *pat = &arm->pattern;
+
+                indent_buf(body, ctx->indent);
+                if (pat->is_wildcard || pat->is_var) {
+                    buf_puts(body, "default: {\n");
+                    has_default = true;
+                } else {
+                    buf_printf(body, "case %u: {\n", pat->ctor->tag);
+                }
+                ctx->indent += 4;
+
+                /* Bind field variables for constructor patterns */
+                if (!pat->is_wildcard && !pat->is_var && pat->ctor) {
+                    for (uint32_t bi = 0; bi < pat->n_bindings; bi++) {
+                        Binding *fb = pat->bindings[bi];
+                        const char *ctype = type_c_name(fb->type);
+                        /* Use name_for_binding to get the canonical C name */
+                        char *bname = name_for_binding(ctx, fb);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "%s %s = (%s)__scrut->as.%s._%u;\n",
+                                   ctype, bname, ctype, pat->ctor->name, bi);
+                        free(bname);
+                    }
+                }
+
+                /* Emit body */
+                if (!nil_result) {
+                    char *bv = emit_value(ctx, body, arm->body);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "%s = %s;\n", tmp, bv);
+                    free(bv);
+                } else {
+                    emit_stmt(ctx, body, arm->body);
+                }
+
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "break;\n");
+                ctx->indent -= 4;
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "}\n");
+            }
+
+            /* If no default/wildcard arm, add a default that does nothing
+             * (exhaustiveness is checked at elab time) */
+            if (!has_default) {
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "default: break;\n");
+            }
+
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "}\n");
+            ctx->indent -= 4;
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "}\n");
+
+            return nil_result ? atom_nil() : tmp;
+        }
     }
     return atom_nil();
 }
@@ -3950,6 +4084,7 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_POLY_WRAP:   /* Phase HRT1: pure struct literal, no stmt-level side effects */
         case EX_ASCRIBE:     /* Phase HRT1: type erased, delegate to inner */
         case EX_EXISTS_PACK: /* Phase HRT2: pure boxing, no stmt-level side effects */
+        case EX_DEFGADT:     /* Phase G1: ADT definition — handled in Pass 0 */
             /* No side effects — emit nothing. */
             return;
         case EX_EXISTS_OPEN: { /* Phase HRT2: run open body for side effects */
@@ -4107,6 +4242,19 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_DEF: case EX_PROGRAM:
             /* shouldn't reach here at expr level */
             return;
+        case EX_DEFDATA:
+            /* Phase G0/G1: ADT definition — emitted in Pass 0, nothing to do here */
+            return;
+        case EX_MATCH: {
+            /* Phase G0: emit match in stmt position — discard result */
+            char *v = emit_value(ctx, body, e);
+            if (v && e->type.kind != TY_NIL) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "(void)(%s);\n", v);
+            }
+            free(v);
+            return;
+        }
         /* Phase 2 */
         case EX_FN_DEF:
             /* shouldn't reach here in stmt position */
@@ -4819,6 +4967,89 @@ int emit_program(Buf *out, const Expr *program) {
                 buf_printf(&early_file, "}\n\n");
             }
         }
+        /* Phase G0/G1: ADT typedef + constructor functions */
+        else if (e->kind == EX_DEFDATA || e->kind == EX_DEFGADT) {
+            AdtDef *def = (e->kind == EX_DEFGADT) ? e->as.defgadt_.def : e->as.defdata_.def;
+            char adt_c_name[256];
+            snprintf(adt_c_name, sizeof(adt_c_name), "tur_adt_%s", def->name);
+            buf_printf(&early_file, "typedef struct %s {\n", adt_c_name);
+            buf_printf(&early_file, "    int tag;\n");
+            buf_printf(&early_file, "    union {\n");
+            for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+                CtorDef *ctor = def->ctors[ci];
+                buf_printf(&early_file, "        struct {");
+                for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                    const char *ctype;
+                    switch (ctor->fields[fi].kind) {
+                        case TY_INT:      ctype = "int64_t"; break;
+                        case TY_BOOL:     ctype = "bool"; break;
+                        case TY_FLOAT:    ctype = "double"; break;
+                        case TY_CSTR:     ctype = "const char *"; break;
+                        case TY_PTR_VOID: ctype = "void *"; break;
+                        case TY_RC:
+                        case TY_WEAK:     ctype = "RcControlBlock *"; break;
+                        case TY_REF:      ctype = "void *"; break;
+                        case TY_INT8:     ctype = "int8_t"; break;
+                        case TY_INT16:    ctype = "int16_t"; break;
+                        case TY_INT32:    ctype = "int32_t"; break;
+                        case TY_INT64:    ctype = "int64_t"; break;
+                        case TY_UINT8:    ctype = "uint8_t"; break;
+                        case TY_UINT16:   ctype = "uint16_t"; break;
+                        case TY_UINT32:   ctype = "uint32_t"; break;
+                        case TY_UINT64:   ctype = "uint64_t"; break;
+                        case TY_FLOAT32:  ctype = "float"; break;
+                        case TY_FLOAT64:  ctype = "double"; break;
+                        default:          ctype = "int64_t"; break;
+                    }
+                    buf_printf(&early_file, " %s _%u;", ctype, fi);
+                }
+                buf_printf(&early_file, " } %s;\n", ctor->name);
+            }
+            buf_printf(&early_file, "    } as;\n");
+            buf_printf(&early_file, "} %s;\n\n", adt_c_name);
+
+            /* Emit constructor functions */
+            for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+                CtorDef *ctor = def->ctors[ci];
+                buf_printf(&early_file, "static int64_t ctor_%s(", ctor->name);
+                for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                    if (fi > 0) buf_puts(&early_file, ", ");
+                    const char *ctype;
+                    switch (ctor->fields[fi].kind) {
+                        case TY_INT:      ctype = "int64_t"; break;
+                        case TY_BOOL:     ctype = "bool"; break;
+                        case TY_FLOAT:    ctype = "double"; break;
+                        case TY_CSTR:     ctype = "const char *"; break;
+                        case TY_PTR_VOID: ctype = "void *"; break;
+                        case TY_RC:
+                        case TY_WEAK:     ctype = "RcControlBlock *"; break;
+                        case TY_REF:      ctype = "void *"; break;
+                        case TY_INT8:     ctype = "int8_t"; break;
+                        case TY_INT16:    ctype = "int16_t"; break;
+                        case TY_INT32:    ctype = "int32_t"; break;
+                        case TY_INT64:    ctype = "int64_t"; break;
+                        case TY_UINT8:    ctype = "uint8_t"; break;
+                        case TY_UINT16:   ctype = "uint16_t"; break;
+                        case TY_UINT32:   ctype = "uint32_t"; break;
+                        case TY_UINT64:   ctype = "uint64_t"; break;
+                        case TY_FLOAT32:  ctype = "float"; break;
+                        case TY_FLOAT64:  ctype = "double"; break;
+                        default:          ctype = "int64_t"; break;
+                    }
+                    buf_printf(&early_file, "%s _%u", ctype, fi);
+                }
+                buf_printf(&early_file, ") {\n");
+                buf_printf(&early_file, "    %s *__r = (%s *)malloc(sizeof(%s));\n",
+                           adt_c_name, adt_c_name, adt_c_name);
+                buf_printf(&early_file, "    __r->tag = %u;\n", ctor->tag);
+                for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                    buf_printf(&early_file, "    __r->as.%s._%u = _%u;\n",
+                               ctor->name, fi, fi);
+                }
+                buf_printf(&early_file, "    return (int64_t)(intptr_t)__r;\n");
+                buf_printf(&early_file, "}\n\n");
+            }
+        }
     }
 
     /* Pass 1: Emit forward declarations for all functions.
@@ -4879,6 +5110,9 @@ int emit_program(Buf *out, const Expr *program) {
         const Expr *e = items[i];
         if (e->kind == EX_DEFER) {
             /* Phase M5: module-level defers handled after this pass. */
+            continue;
+        } else if (e->kind == EX_DEFDATA) {
+            /* Phase G0: ADT typedefs and constructor functions already emitted in Pass 0 */
             continue;
         } else if (e->kind == EX_DEF) {
             /* Phase 11: skip struct typedefs — already emitted in Pass 0 */
