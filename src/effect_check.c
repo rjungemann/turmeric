@@ -329,6 +329,12 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
         }
         return row;
 
+    case EX_SET_LIT:
+        for (uint32_t i = 0; i < e->as.set_lit_.n; i++) {
+            row = collect_effects_in_expr(a, e->as.set_lit_.items[i], row, idx, env, subst);
+        }
+        return row;
+
     case EX_GET_FIELD:
         return collect_effects_in_expr(a, e->as.get_field_.struct_expr, row, idx, env, subst);
 

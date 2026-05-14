@@ -58,6 +58,7 @@ typedef enum FormTag {
     F_LIST,       /* (a b c) */
     F_VEC,        /* [a b c]  — same payload as F_LIST */
     F_MAP,        /* #{k1 v1 k2 v2} — same payload as F_LIST */
+    F_SET,        /* #s(a b c) — same payload as F_LIST */
     F_CBLOCK,     /* ```c ... ``` C code block (Phase 2) */
     /* Phase 6: quote/quasiquote */
     F_QUOTE,      /* (quote x) - literal expression */
@@ -100,6 +101,7 @@ Form *form_keyword(Arena *a, Span span, const Symbol *sym);
 Form *form_list   (Arena *a, Span span, Form **items, uint32_t len);
 Form *form_vec    (Arena *a, Span span, Form **items, uint32_t len);
 Form *form_map    (Arena *a, Span span, Form **items, uint32_t len);
+Form *form_set    (Arena *a, Span span, Form **items, uint32_t len);
 Form *form_cblock (Arena *a, Span span, StrSlice code);
 /* Phase 6 */
 Form *form_quote  (Arena *a, Span span, Form *quoted);

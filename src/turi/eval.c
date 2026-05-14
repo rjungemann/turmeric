@@ -1004,6 +1004,10 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return make_struct_val(sname, n, fields);
     }
 
+    case EX_SET_LIT:
+        /* Set literals are not interpreted in the REPL; return nil. */
+        return turi_nil();
+
     case EX_GET_FIELD: {
         TuriValue sv = eval_expr(env, frame, e->as.get_field_.struct_expr);
         if (turi_is_error(sv) || env->returning || env->throwing) return sv;

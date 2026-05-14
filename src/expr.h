@@ -147,6 +147,8 @@ typedef enum ExprKind {
     /* Phase 21: Serializable continuations */
     EX_SERIAL_RESET,   /* (serial-reset body) - establish serializable continuation boundary */
     EX_SERIAL_SHIFT,   /* (serial-shift k body) - capture serializable continuation */
+    /* Phase X3: Set literal */
+    EX_SET_LIT,        /* #s(e1 e2 ...) - set literal */
 } ExprKind;
 
 /* Phase 2: FnDef represents a function definition from defn or lifted fn. */
@@ -422,6 +424,9 @@ struct Expr {
         struct { Expr *struct_expr; uint32_t field_idx; StructDef *def; } get_field_; /* (.field s) - field read */
 
         struct { Expr **items; uint32_t n; }                               program;
+
+        /* Phase X3: Set literal */
+        struct { Expr **items; uint32_t n; }                               set_lit_;
 
         /* Phase M0: Module system */
         struct { struct DefModule *mod; }                                   defmodule_;
