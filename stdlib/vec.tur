@@ -268,6 +268,28 @@
   (empty [_] (__alternative_vec_empty))
   (alt-or [a b] (__alternative_vec_alt_or a b)))
 
+;; Phase E1: vec-eq? -- compare two vecs element-wise using a comparator fn.
+;; cmp-fn must be a fn [a :int b :int] :bool
+(defn vec-eq? [v1 v2 cmp-fn] :bool
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *a =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v1;
+  struct { int64_t *data; size_t len; size_t cap; } *b =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v2;
+  if (a == b) return true;
+  if (!a || !b) return false;
+  if (a->len != b->len) return false;
+  for (size_t i = 0; i < a->len; i++) {
+      if (!((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->data[i], b->data[i])) {
+          return false;
+      }
+  }
+  return true;
+  ```)
+
+(definstance Eq [vec]
+  (eq? [x y] (vec-eq? x y (fn [a b] (= a b)))))
+
 ;; Phase B1: Clone instance for vec
 ;; Deep copies the vec struct and all its elements (v1: int64_t only)
 (defn __clone_vec_clone [x] :int

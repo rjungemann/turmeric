@@ -36,3 +36,33 @@
 ;; Merge two maps. b wins on collision.
 (defn merge [a :ptr<void> b :ptr<void>] :ptr<void>
   (hamt/merge a b))
+
+;; Phase E1: map-eq? -- compare two maps for structural equality.
+;; Keys are compared by pointer identity (same limitation as hamt/get).
+;; val-cmp must be a fn [a :int b :int] :bool
+;; Known limitation: key equality uses pointer identity. Maps keyed by
+;; value-equal but distinct-address values will not compare correctly.
+;; A Phase E2 follow-on will accept a key-hash and key-cmp argument.
+(defn map-eq? [m1 m2 val-cmp] :bool
+  ```c
+  if (tur_hamt_count((void*)(intptr_t)m1) !=
+      tur_hamt_count((void*)(intptr_t)m2)) return false;
+  uint64_t iter_buf[32];
+  for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
+  tur_hamt_iter_init(iter_buf, (void*)(intptr_t)m1);
+  uint64_t hash_out;
+  void *key_out = NULL, *val_out = NULL;
+  while (tur_hamt_iter_next(iter_buf, &hash_out, &key_out, &val_out)) {
+      void *val_in_b = tur_hamt_get(
+          (void*)(intptr_t)m2, (int64_t)hash_out, key_out);
+      if (!val_in_b) { tur_hamt_iter_free(iter_buf); return false; }
+      bool vals_eq = ((bool(*)(int64_t, int64_t))(intptr_t)val_cmp)(
+          (int64_t)(intptr_t)val_out, (int64_t)(intptr_t)val_in_b);
+      if (!vals_eq) { tur_hamt_iter_free(iter_buf); return false; }
+  }
+  tur_hamt_iter_free(iter_buf);
+  return true;
+  ```)
+;; Note: No (definstance Eq [map] ...) is provided in Phase E1.
+;; The Eq typeclass dispatch uses eq? with two arguments and cannot pass val-cmp.
+;; See Phase E2 task E2-6 for the constrained Eq[map] instance.

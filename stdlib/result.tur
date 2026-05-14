@@ -196,6 +196,27 @@
 
 ;; ── Memory management ────────────────────────────────────────────────────────
 
+;; Phase E1: result-eq? -- compare two results using separate comparators for ok and err values.
+;; ok-cmp and err-cmp must each be fn [a :int b :int] :bool
+(defn result-eq? [r1 r2 ok-cmp err-cmp] :bool
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r1;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r2;
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  if (a->is_ok != b->is_ok) return false;
+  if (a->is_ok) {
+      return ((bool(*)(int64_t, int64_t))(intptr_t)ok_cmp)(a->ok_val, b->ok_val);
+  } else {
+      return ((bool(*)(int64_t, int64_t))(intptr_t)err_cmp)(a->err_val, b->err_val);
+  }
+  ```)
+
+(definstance Eq [result]
+  (eq? [x y] (result-eq? x y (fn [a b] (= a b)) (fn [a b] (= a b)))))
+
 ;; Free a result (does not free the contained value)
 (defn result-free [r :ptr<void>]
   ```c
