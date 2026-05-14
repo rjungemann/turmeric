@@ -224,6 +224,24 @@
   (empty [_] (__alternative_option_empty))
   (alt-or [a b] (__alternative_option_alt_or a b)))
 
+;; Phase E1: option-eq? -- compare two options using a comparator fn for the contained value.
+;; cmp-fn must be a fn [a :int b :int] :bool
+(defn option-eq? [o1 o2 cmp-fn] :bool
+  ```c
+  struct { bool is_some; int64_t value; } *a =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)o1;
+  struct { bool is_some; int64_t value; } *b =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)o2;
+  bool a_some = a && a->is_some;
+  bool b_some = b && b->is_some;
+  if (!a_some && !b_some) return true;
+  if (a_some != b_some)   return false;
+  return ((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->value, b->value);
+  ```)
+
+(definstance Eq [option]
+  (eq? [x y] (option-eq? x y (fn [a b] (= a b)))))
+
 ;; Phase B1: Clone instance for option
 ;; Deep copies the option struct and its contained value (v1: int64_t only)
 (defn __clone_option_clone [x] :int

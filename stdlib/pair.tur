@@ -50,6 +50,22 @@
 (definstance Bifunctor [Pair]
   (bimap [container fn-left fn-right] (__bifunctor_pair_bimap container fn-left fn-right)))
 
+;; Phase E1: pair-eq? -- compare two Pairs element-wise using a comparator fn.
+;; cmp-fn must be a fn [a :int b :int] :bool
+(defn pair-eq? [p1 p2 cmp-fn] :bool
+  ```c
+  struct { int64_t first; int64_t second; } *a = (void*)(intptr_t)p1;
+  struct { int64_t first; int64_t second; } *b = (void*)(intptr_t)p2;
+  if (a == b) return true;
+  if (!a || !b) return false;
+  bool first_eq  = ((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->first,  b->first);
+  bool second_eq = ((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->second, b->second);
+  return first_eq && second_eq;
+  ```)
+
+(definstance Eq [Pair]
+  (eq? [x y] (pair-eq? x y (fn [a b] (= a b)))))
+
 ;; Phase B1: Clone instance for Pair
 ;; Requires the Clone typeclass to already be in scope (from stdlib/typeclass.tur).
 ;; Deep-copies the struct value into a new heap allocation and returns it as int64_t.

@@ -1,7 +1,7 @@
 # Structural Equality for Compound Types — Implementation Plan
 
 > **Status:** Planned
-> **Prerequisites:** None — stdlib-only work; no compiler changes required for Phase 1
+> **Prerequisites:** Phase E1 has no prerequisites (stdlib-only). Phase E2 requires PE2-1, PE2-2, and PE2-3 (see [Prerequisites for Phase E2](#prerequisites-for-phase-e2) below).
 > **Related:** `stdlib/typeclass.tur` (Eq class), `stdlib/vec.tur`, `stdlib/list.tur`, `stdlib/pair.tur`, `stdlib/option.tur`, `stdlib/result.tur`, `stdlib/hamt.tur`, `stdlib/map.tur`, `stdlib/str.tur`
 
 ---
@@ -22,6 +22,35 @@ This plan is split into two phases:
 
 - **Phase E1 (stdlib-only):** Add `eq?` instances for types whose elements are always comparable by value (`option` of int, `result` of int, `Pair` of int). Add standalone structural-equality helpers (`vec-eq?`, `list-eq?`, `pair-eq?`, `option-eq?`, `result-eq?`, `map-eq?`) that accept an element-comparator function argument.
 - **Phase E2 (stretch):** If the compiler grows support for constrained typeclass dispatch (e.g., `Eq a => Eq (vec a)`), update the `definstance` forms to use recursive `eq?` dispatch instead of explicit comparator arguments.
+
+---
+
+## Prerequisites for Phase E2
+
+Phase E2 depends on compiler infrastructure and the completion of Phase E1. The following must be completed before starting Phase E2:
+
+### Prerequisite PE2-1: Complete Phase E1
+All Phase E1 tasks (E1-1 through E1-8) must be implemented and tested. Phase E2 builds on the standalone equality helpers (`vec-eq?`, `list-eq?`, etc.) and replaces their explicit comparator arguments with typeclass-driven recursive dispatch. Without Phase E1 in place, there are no equality functions to upgrade.
+
+**Acceptance criteria:** All E1-1 through E1-8 tasks pass their acceptance tests.
+
+### Prerequisite PE2-2: Verify PTC1 and PTC3 are functional
+PTC1 (constraint vector parsing in `definstance`) and PTC3 (constraint checking for concrete types) are marked as done, but Phase E2 requires them to be verified as working correctly. Add a minimal test case that exercises constrained instances with concrete types to confirm the infrastructure is operational.
+
+**Test case:** Create a simple constrained instance (e.g., a test typeclass with a constraint on a concrete type like `int`) and verify it elaborates and runs correctly.
+
+**File:** `tests/typeclass_constraint_test.tur` (new file)
+
+### Prerequisite PE2-3: Resolve `result` type identity
+Currently `result` is represented as `TY_PTR_VOID` at the type level, making `Eq[result]` indistinguishable from `Eq[ptr<void>]` during instance lookup. This blocks adding a constrained `Eq[result]` instance.
+
+**Options:**
+- Introduce `TY_RESULT` as a new `TypeKind` in `src/types.h`, and update `typekind_from_symbol` in `src/elab.c` to return it for the symbol `"result"`.
+- Register `result` as a synthetic struct type with a fixed `StructDef` so it gets `TY_STRUCT` with a known name (matching the pattern for `Pair` and `Cons`).
+
+**File:** `src/types.h`, `src/elab.c`
+
+**Acceptance criteria:** A `definstance` for `Eq[result]` can be looked up distinctly from `Eq[ptr<void>]`.
 
 ---
 
@@ -306,6 +335,8 @@ Use the existing `stdlib/test.tur` assertion helpers.
 
 ## Phase E2 — Constrained Typeclass Dispatch
 
+> **Note:** Before starting Phase E2, complete all prerequisites: [PE2-1](#prerequisite-pe2-1-complete-phase-e1), [PE2-2](#prerequisite-pe2-2-verify-ptc1-and-ptc3-are-functional), and [PE2-3](#prerequisite-pe2-3-resolve-result-type-identity).
+
 Phase E2 upgrades the compiler so that `definstance` declarations can carry constraints (`[(Eq a)]`) that are satisfied at each call site by substituting concrete type arguments and threading the resolved method implementation as a function pointer. This eliminates the need to pass comparators explicitly and makes `eq?` work uniformly for nested compound types.
 
 ### Background: what the compiler already has
@@ -550,6 +581,9 @@ Write tests specifically exercising the constrained dispatch path (things that f
 
 | Task | File(s) | Deliverable |
 |---|---|---|
+| PE2-1 | E1-1 through E1-8 | Complete all Phase E1 tasks and tests |
+| PE2-2 | `tests/typeclass_constraint_test.tur` | Test that PTC1 and PTC3 work with concrete constrained instances |
+| PE2-3 | `src/types.h`, `src/elab.c` | Give `result` a distinct type identity for instance lookup |
 | E1-1 | `stdlib/str.tur` | `(definstance Eq [str] ...)` wired to `str-eq?` |
 | E1-2 | `stdlib/pair.tur` | `pair-eq?` + `(definstance Eq [Pair] ...)` |
 | E1-3 | `stdlib/option.tur` | `option-eq?` + `(definstance Eq [option] ...)` |

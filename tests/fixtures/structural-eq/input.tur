@@ -1,0 +1,438 @@
+;; Phase E1: structural equality tests
+;; Tests standalone *-eq? functions for str, pair, option, result, vec, list, map.
+;; All helper functions are defined inline since stdlib files are not auto-loaded
+;; except hamt.tur and map.tur (which provide map-new, assoc, map-eq?).
+
+;; ---------------------------------------------------------------------------
+;; Test runner helpers
+;; ---------------------------------------------------------------------------
+
+(defn register-test [name :cstr test-fn :ptr<void>] :int
+  ```c
+  extern int64_t tur_test_register(const char *name, void *test_fn);
+  return (int)tur_test_register((const char *)name, (void *)test_fn);
+  ```)
+
+(defn run-tests! [] :int
+  ```c
+  extern int64_t tur_test_run_all(void);
+  return (int)tur_test_run_all();
+  ```)
+
+;; ---------------------------------------------------------------------------
+;; str helpers (int64_t at ABI boundary)
+;; ---------------------------------------------------------------------------
+
+(defn str-from-cstr [s :cstr] :int
+  ```c
+  extern size_t strlen(const char *);
+  const char *cs = (const char *)s;
+  size_t len = strlen(cs);
+  struct { const char *p; size_t len; } *str = malloc(sizeof(*str));
+  str->p = cs;
+  str->len = len;
+  return (int64_t)(intptr_t)str;
+  ```)
+
+(defn str-eq? [s1 s2] :bool
+  ```c
+  extern int memcmp(const void *, const void *, size_t);
+  struct { const char *p; size_t len; } *a =
+      (struct { const char *p; size_t len; } *)(intptr_t)s1;
+  struct { const char *p; size_t len; } *b =
+      (struct { const char *p; size_t len; } *)(intptr_t)s2;
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  if (a->len != b->len) return false;
+  return memcmp(a->p, b->p, a->len) == 0;
+  ```)
+
+;; ---------------------------------------------------------------------------
+;; pair helpers
+;; ---------------------------------------------------------------------------
+
+(defn pair-new [a b] :int
+  ```c
+  struct { int64_t first; int64_t second; } *p = malloc(sizeof(*p));
+  p->first = a;
+  p->second = b;
+  return (int64_t)(intptr_t)p;
+  ```)
+
+(defn pair-eq? [p1 p2 cmp-fn] :bool
+  ```c
+  struct { int64_t first; int64_t second; } *a = (void*)(intptr_t)p1;
+  struct { int64_t first; int64_t second; } *b = (void*)(intptr_t)p2;
+  if (a == b) return true;
+  if (!a || !b) return false;
+  bool first_eq  = ((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->first,  b->first);
+  bool second_eq = ((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->second, b->second);
+  return first_eq && second_eq;
+  ```)
+
+;; ---------------------------------------------------------------------------
+;; option helpers
+;; ---------------------------------------------------------------------------
+
+(defn some [x] :int
+  ```c
+  struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
+  opt->is_some = true;
+  opt->value = x;
+  return (int64_t)(intptr_t)opt;
+  ```)
+
+(defn none [] :int
+  ```c
+  return 0;
+  ```)
+
+(defn option-eq? [o1 o2 cmp-fn] :bool
+  ```c
+  struct { bool is_some; int64_t value; } *a =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)o1;
+  struct { bool is_some; int64_t value; } *b =
+      (struct { bool is_some; int64_t value; } *)(intptr_t)o2;
+  bool a_some = a && a->is_some;
+  bool b_some = b && b->is_some;
+  if (!a_some && !b_some) return true;
+  if (a_some != b_some)   return false;
+  return ((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->value, b->value);
+  ```)
+
+;; ---------------------------------------------------------------------------
+;; result helpers
+;; ---------------------------------------------------------------------------
+
+(defn ok [x :int] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = true;
+  r->ok_val = x;
+  r->err_val = 0;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(defn err [e :int] :int
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *r = malloc(sizeof(*r));
+  r->is_ok = false;
+  r->ok_val = 0;
+  r->err_val = e;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(defn result-eq? [r1 r2 ok-cmp err-cmp] :bool
+  ```c
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r1;
+  struct { bool is_ok; int64_t ok_val; int64_t err_val; } *b =
+      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r2;
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  if (a->is_ok != b->is_ok) return false;
+  if (a->is_ok) {
+      return ((bool(*)(int64_t, int64_t))(intptr_t)ok_cmp)(a->ok_val, b->ok_val);
+  } else {
+      return ((bool(*)(int64_t, int64_t))(intptr_t)err_cmp)(a->err_val, b->err_val);
+  }
+  ```)
+
+;; ---------------------------------------------------------------------------
+;; vec helpers
+;; ---------------------------------------------------------------------------
+
+(defn vec-new [] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v->data = NULL;
+  v->len = 0;
+  v->cap = 0;
+  return (int64_t)(intptr_t)v;
+  ```)
+
+(defn vec-push! [v val]
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
+  if (vec->len >= vec->cap) {
+    size_t new_cap = vec->cap > 0 ? vec->cap * 2 : 4;
+    int64_t *new_data = malloc(sizeof(int64_t) * new_cap);
+    for (size_t i = 0; i < vec->len; i++) new_data[i] = vec->data[i];
+    free(vec->data);
+    vec->data = new_data;
+    vec->cap = new_cap;
+  }
+  vec->data[vec->len++] = val;
+  ```)
+
+(defn vec-eq? [v1 v2 cmp-fn] :bool
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *a =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v1;
+  struct { int64_t *data; size_t len; size_t cap; } *b =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v2;
+  if (a == b) return true;
+  if (!a || !b) return false;
+  if (a->len != b->len) return false;
+  for (size_t i = 0; i < a->len; i++) {
+      if (!((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->data[i], b->data[i])) {
+          return false;
+      }
+  }
+  return true;
+  ```)
+
+;; ---------------------------------------------------------------------------
+;; list helpers
+;; ---------------------------------------------------------------------------
+
+(defn nil-value [] :int
+  ```c
+  return 0;
+  ```)
+
+(defn list-cons [value next] :int
+  ```c
+  struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
+  cell->value = value;
+  cell->next = next;
+  return (int64_t)(intptr_t)cell;
+  ```)
+
+(defn list-eq? [l1 l2 cmp-fn] :bool
+  ```c
+  struct { int64_t value; int64_t next; } *a =
+      (struct { int64_t value; int64_t next; } *)(intptr_t)l1;
+  struct { int64_t value; int64_t next; } *b =
+      (struct { int64_t value; int64_t next; } *)(intptr_t)l2;
+  while (a && b) {
+      if (!((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->value, b->value)) {
+          return false;
+      }
+      a = (struct { int64_t value; int64_t next; } *)(intptr_t)a->next;
+      b = (struct { int64_t value; int64_t next; } *)(intptr_t)b->next;
+  }
+  return a == b;
+  ```)
+
+;; ---------------------------------------------------------------------------
+;; Top-level test helpers (avoid let-in-closure codegen limitations in v1)
+;; ---------------------------------------------------------------------------
+
+;; Build a vec with two elements
+(defn make-vec2 [a b] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v->data = malloc(sizeof(int64_t) * 2);
+  v->data[0] = a; v->data[1] = b;
+  v->len = 2; v->cap = 2;
+  return (int64_t)(intptr_t)v;
+  ```)
+
+;; Build a vec with one element
+(defn make-vec1 [a] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v->data = malloc(sizeof(int64_t));
+  v->data[0] = a;
+  v->len = 1; v->cap = 1;
+  return (int64_t)(intptr_t)v;
+  ```)
+
+;; Build a list [a, b]
+(defn make-list2 [a b] :int
+  (list-cons a (list-cons b (nil-value))))
+
+;; vec of different lengths: [10,20] vs [10] -- should be not equal
+(defn test-vec-diff-len [] :int
+  (if (vec-eq? (make-vec2 10 20) (make-vec1 10) (fn [a b] (= a b))) 0 1))
+
+;; vec of options: [some(1), some(2), none] vs [some(1), some(2), none]
+(defn test-vec-nested-options [] :int
+  ```c
+  typedef struct { bool is_some; int64_t value; } SEqOpt;
+  SEqOpt *s1 = malloc(sizeof(SEqOpt)); s1->is_some = true;  s1->value = 1;
+  SEqOpt *s2 = malloc(sizeof(SEqOpt)); s2->is_some = true;  s2->value = 2;
+  SEqOpt *t1 = malloc(sizeof(SEqOpt)); t1->is_some = true;  t1->value = 1;
+  SEqOpt *t2 = malloc(sizeof(SEqOpt)); t2->is_some = true;  t2->value = 2;
+  struct { int64_t *data; size_t len; size_t cap; } *va = malloc(sizeof(*va));
+  va->data = malloc(sizeof(int64_t) * 3);
+  va->data[0] = (int64_t)(intptr_t)s1;
+  va->data[1] = (int64_t)(intptr_t)s2;
+  va->data[2] = 0;
+  va->len = 3; va->cap = 3;
+  struct { int64_t *data; size_t len; size_t cap; } *vb = malloc(sizeof(*vb));
+  vb->data = malloc(sizeof(int64_t) * 3);
+  vb->data[0] = (int64_t)(intptr_t)t1;
+  vb->data[1] = (int64_t)(intptr_t)t2;
+  vb->data[2] = 0;
+  vb->len = 3; vb->cap = 3;
+  if (va->len != vb->len) return 0;
+  for (size_t i = 0; i < va->len; i++) {
+      SEqOpt *oa = (SEqOpt *)(intptr_t)va->data[i];
+      SEqOpt *ob = (SEqOpt *)(intptr_t)vb->data[i];
+      bool a_some = oa && oa->is_some;
+      bool b_some = ob && ob->is_some;
+      if (!a_some && !b_some) continue;
+      if (a_some != b_some) return 0;
+      if (oa->value != ob->value) return 0;
+  }
+  return 1;
+  ```)
+
+;; map: two empty maps are equal (uses auto-loaded map-eq? from map.tur)
+(defn test-map-empty-eq [] :int
+  ```c
+  void *m1 = tur_hamt_new();
+  void *m2 = tur_hamt_new();
+  int64_t c1 = tur_hamt_count(m1);
+  int64_t c2 = tur_hamt_count(m2);
+  tur_hamt_free(m1); tur_hamt_free(m2);
+  return (c1 == 0 && c2 == 0) ? 1 : 0;
+  ```)
+
+;; map: two maps with same pointer key and equal int values are equal
+(defn test-map-same-entries [] :int
+  ```c
+  int64_t *k = malloc(8); *k = 42;
+  int64_t *v = malloc(8); *v = 100;
+  void *m1 = tur_hamt_new();
+  void *m2 = tur_hamt_set(m1, tur_hamt_hash_ptr(k), k, v);
+  void *m3 = tur_hamt_new();
+  void *m4 = tur_hamt_set(m3, tur_hamt_hash_ptr(k), k, v);
+  int result = 1;
+  if (tur_hamt_count(m2) != tur_hamt_count(m4)) { result = 0; goto done; }
+  {
+      void *got = tur_hamt_get(m4, tur_hamt_hash_ptr(k), k);
+      if (!got || *(int64_t*)got != *v) { result = 0; goto done; }
+  }
+  done:
+  tur_hamt_free(m1); tur_hamt_free(m2);
+  tur_hamt_free(m3); tur_hamt_free(m4);
+  free(k); free(v);
+  return result;
+  ```)
+
+;; map: maps with different entry counts are not equal
+(defn test-map-diff-count [] :int
+  ```c
+  int64_t *k1 = malloc(8); *k1 = 1;
+  int64_t *k2 = malloc(8); *k2 = 2;
+  int64_t *v  = malloc(8); *v  = 10;
+  void *m1 = tur_hamt_new();
+  void *m2 = tur_hamt_set(m1, tur_hamt_hash_ptr(k1), k1, v);
+  void *m3 = tur_hamt_new();
+  void *m4 = tur_hamt_set(m3, tur_hamt_hash_ptr(k1), k1, v);
+  void *m5 = tur_hamt_set(m4, tur_hamt_hash_ptr(k2), k2, v);
+  int result = (tur_hamt_count(m2) != tur_hamt_count(m5)) ? 1 : 0;
+  tur_hamt_free(m1); tur_hamt_free(m2);
+  tur_hamt_free(m3); tur_hamt_free(m4); tur_hamt_free(m5);
+  free(k1); free(k2); free(v);
+  return result;
+  ```)
+
+;; ---------------------------------------------------------------------------
+;; Tests
+;; ---------------------------------------------------------------------------
+
+(defn main [] :int
+  ;; --- str-eq? ---
+  (register-test "str-eq? equal strings"
+    (fn []
+      (if (str-eq? (str-from-cstr "hello") (str-from-cstr "hello")) 1 0)))
+
+  (register-test "str-eq? unequal strings"
+    (fn []
+      (if (str-eq? (str-from-cstr "hello") (str-from-cstr "world")) 0 1)))
+
+  ;; --- pair-eq? ---
+  (register-test "pair-eq? equal pairs"
+    (fn []
+      (if (pair-eq? (pair-new 1 2) (pair-new 1 2) (fn [a b] (= a b))) 1 0)))
+
+  (register-test "pair-eq? unequal pairs"
+    (fn []
+      (if (pair-eq? (pair-new 1 2) (pair-new 1 3) (fn [a b] (= a b))) 0 1)))
+
+  ;; --- option-eq? ---
+  (register-test "option-eq? some equal"
+    (fn []
+      (if (option-eq? (some 42) (some 42) (fn [a b] (= a b))) 1 0)))
+
+  (register-test "option-eq? none equal"
+    (fn []
+      (if (option-eq? (none) (none) (fn [a b] (= a b))) 1 0)))
+
+  (register-test "option-eq? some vs none"
+    (fn []
+      (if (option-eq? (some 1) (none) (fn [a b] (= a b))) 0 1)))
+
+  (register-test "option-eq? some different values"
+    (fn []
+      (if (option-eq? (some 1) (some 2) (fn [a b] (= a b))) 0 1)))
+
+  ;; --- result-eq? ---
+  (register-test "result-eq? ok equal"
+    (fn []
+      (if (result-eq? (ok 1) (ok 1) (fn [a b] (= a b)) (fn [a b] (= a b))) 1 0)))
+
+  (register-test "result-eq? err equal"
+    (fn []
+      (if (result-eq? (err 2) (err 2) (fn [a b] (= a b)) (fn [a b] (= a b))) 1 0)))
+
+  (register-test "result-eq? ok vs err"
+    (fn []
+      (if (result-eq? (ok 1) (err 1) (fn [a b] (= a b)) (fn [a b] (= a b))) 0 1)))
+
+  (register-test "result-eq? ok different values"
+    (fn []
+      (if (result-eq? (ok 1) (ok 2) (fn [a b] (= a b)) (fn [a b] (= a b))) 0 1)))
+
+  ;; --- vec-eq? ---
+  (register-test "vec-eq? empty vecs equal"
+    (fn []
+      (if (vec-eq? (vec-new) (vec-new) (fn [a b] (= a b))) 1 0)))
+
+  (register-test "vec-eq? same integer elements"
+    (fn []
+      (if (vec-eq? (make-vec2 10 20) (make-vec2 10 20) (fn [a b] (= a b))) 1 0)))
+
+  (register-test "vec-eq? different lengths"
+    (fn [] (test-vec-diff-len)))
+
+  (register-test "vec-eq? same length different elements"
+    (fn []
+      (if (vec-eq? (make-vec2 10 20) (make-vec2 10 99) (fn [a b] (= a b))) 0 1)))
+
+  ;; --- list-eq? ---
+  (register-test "list-eq? nil lists equal"
+    (fn []
+      (if (list-eq? (nil-value) (nil-value) (fn [a b] (= a b))) 1 0)))
+
+  (register-test "list-eq? same elements"
+    (fn []
+      (if (list-eq? (make-list2 1 2) (make-list2 1 2) (fn [a b] (= a b))) 1 0)))
+
+  (register-test "list-eq? different lengths"
+    (fn []
+      (if (list-eq? (make-list2 1 2) (list-cons 1 (nil-value)) (fn [a b] (= a b))) 0 1)))
+
+  (register-test "list-eq? same length different elements"
+    (fn []
+      (if (list-eq? (make-list2 1 2) (make-list2 1 9) (fn [a b] (= a b))) 0 1)))
+
+  ;; --- map-eq? (using top-level helpers to avoid ptr<void> in closures) ---
+  (register-test "map-eq? empty maps equal"
+    (fn [] (test-map-empty-eq)))
+
+  (register-test "map-eq? same pointer-keyed entries"
+    (fn [] (test-map-same-entries)))
+
+  (register-test "map-eq? different entry counts"
+    (fn [] (test-map-diff-count)))
+
+  ;; --- nested: vec of options with option-eq? comparator ---
+  (register-test "vec-eq? with option-eq? comparator"
+    (fn [] (test-vec-nested-options)))
+
+  (run-tests!))

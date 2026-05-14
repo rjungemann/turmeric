@@ -243,3 +243,24 @@
 
 (definstance Monad [list]
   (bind [ma fn] (__monad_list_bind ma fn)))
+
+;; Phase E1: list-eq? -- compare two singly-linked lists element-wise using a comparator fn.
+;; cmp-fn must be a fn [a :int b :int] :bool
+(defn list-eq? [l1 l2 cmp-fn] :bool
+  ```c
+  struct { int64_t value; int64_t next; } *a =
+      (struct { int64_t value; int64_t next; } *)(intptr_t)l1;
+  struct { int64_t value; int64_t next; } *b =
+      (struct { int64_t value; int64_t next; } *)(intptr_t)l2;
+  while (a && b) {
+      if (!((bool(*)(int64_t, int64_t))(intptr_t)cmp_fn)(a->value, b->value)) {
+          return false;
+      }
+      a = (struct { int64_t value; int64_t next; } *)(intptr_t)a->next;
+      b = (struct { int64_t value; int64_t next; } *)(intptr_t)b->next;
+  }
+  return a == b;
+  ```)
+
+(definstance Eq [list]
+  (eq? [x y] (list-eq? x y (fn [a b] (= a b)))))
