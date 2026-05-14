@@ -1,0 +1,18 @@
+; Phase HRT4: poly fn param used in multiple positions inside a function body,
+; including through a let-binding alias and in a conditional branch.
+(defn apply-poly [f (forall [a] (-> a a)) x :int] :int
+  (f x))
+
+(defn use-many-ways [f (forall [a] (-> a a)) x :int] :int
+  (let [g f]
+    (let [a (apply-poly f x)]
+      (let [b (apply-poly g (+ a 1))]
+        (if (> b 0)
+          b
+          0)))))
+
+(defn inc [x :int] :int (+ x 1))
+
+(defn main [] :int
+  (println (use-many-ways inc 5))
+  0)

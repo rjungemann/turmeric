@@ -1,0 +1,19 @@
+; Phase HRT2: counter module with hidden state.
+; The counter's internal int is hidden behind an existential (void*).
+(defn make-counter [n :int] :ptr<void>
+  (pack n (exists [a] a)))
+
+(defn counter-get [c :ptr<void>] :int
+  (open c [a v] v))
+
+(defn counter-incr [c :ptr<void>] :ptr<void>
+  (open c [a v]
+    (pack (+ v 1) (exists [a] a))))
+
+(defn main [] :int
+  (let [c0 (make-counter 0)
+        c1 (counter-incr c0)
+        c2 (counter-incr c1)
+        c3 (counter-incr c2)]
+    (println (counter-get c3)))
+  0)

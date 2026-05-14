@@ -48,6 +48,12 @@ struct Binding {
     const char   *c_export_name;
     /* Phase P3: HAMT lowering - whether this binding is ^persistent (immutable map) */
     bool          is_persistent;
+    /* Phase HRT1: rank-2 polymorphic function parameter */
+    bool          is_poly_fn;     /* true if this binding is a rank-2 poly fn param */
+    const struct Type *poly_type; /* full TY_FORALL type, NULL if not rank-2 */
+    /* Phase HRT4: for let-bound aliases of global functions, tracks the original
+     * function binding so poly_arg_fn_binding can find the callable C name. */
+    struct Binding *source_binding;
 };
 
 typedef enum ExprKind {
@@ -149,6 +155,12 @@ typedef enum ExprKind {
     EX_SERIAL_SHIFT,   /* (serial-shift k body) - capture serializable continuation */
     /* Phase X3: Set literal */
     EX_SET_LIT,        /* #s(e1 e2 ...) - set literal */
+    /* Phase HRT1: Rank-2 higher-ranked types */
+    EX_POLY_WRAP,      /* wraps a fn/closure as tur_poly_fn_t for rank-2 param passing */
+    EX_ASCRIBE,        /* (:: expr type) — inline type ascription; erased at codegen */
+    /* Phase HRT2: Existential types */
+    EX_EXISTS_PACK,    /* (pack expr (exists [a] T)) — boxes value as existential */
+    EX_EXISTS_OPEN,    /* (open packed [a v] body) — unboxes existential, binds v */
 } ExprKind;
 
 /* Phase 2: FnDef represents a function definition from defn or lifted fn. */
@@ -307,7 +319,11 @@ struct Expr {
          * so the information is available for future passes. */
         struct { Binding *fn_binding; Expr **args; uint32_t n_args;
                  struct Expr *fn_expr;
-                 struct Expr *dict_arg; }                                   call_;
+                 struct Expr *dict_arg;
+                 bool is_poly_call;   /* Phase HRT1: call through rank-2 poly fn param */
+                 uint32_t poly_arg_mask; /* Phase HRT3: bitmask of args that are nested poly fns.
+                                          * In poly_call: bit i → pass arg by pointer (stack-alloc).
+                                          * In direct call: bit i → deref int64_t arg as tur_poly_fn_t*. */ } call_;
         struct { FnDef *fn; }                                               fn_;
         struct { ExternC *ext; }                                            extern_c_;
         struct { InlineC *inline_c; }                                       inline_c_;
@@ -436,6 +452,21 @@ struct Expr {
             Expr *k_fn;   /* function receiving the serial continuation */
             Expr *body;   /* body expression */
         } serial_shift_;
+        /* Phase HRT1: Higher-ranked types */
+        struct {
+            struct Expr    *inner;           /* the fn/closure being wrapped */
+            struct Binding *wrapper_binding; /* the __poly_N wrapper thunk binding */
+        } poly_wrap_;
+        struct { struct Expr *inner; } ascribe_; /* (:: expr type) — type erased at codegen */
+        /* Phase HRT2: Existential types */
+        struct {
+            struct Expr *value;   /* the value being packed as an existential */
+        } exists_pack_;
+        struct {
+            struct Expr    *packed;      /* the packed existential expression */
+            struct Binding *var_binding; /* binding for v (the unboxed inner value) */
+            struct Expr    *body;        /* the open body expression */
+        } exists_open_;
     } as;
 };
 

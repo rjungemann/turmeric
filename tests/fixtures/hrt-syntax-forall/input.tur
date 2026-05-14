@@ -1,0 +1,8 @@
+; Phase HRT0: forall parses in type annotation position.
+; (deftype PolyId (forall [a] a)) defines a universally-quantified type alias.
+; No runtime code is generated for deftype — this purely tests that the
+; forall quantifier is recognized and stored in the AST.
+(deftype PolyId (forall [a] a))
+
+(defn main [] :int
+  0)

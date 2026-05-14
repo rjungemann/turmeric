@@ -1,0 +1,14 @@
+; Phase HRT3: rank-2 poly fn used inside a typeclass instance method.
+; Combines HKT (typeclass with no type params) with rank-N poly fn parameters.
+(defclass PolyMap []
+  (poly-map [[f (forall [a] (-> a a))] x] :int))
+
+(definstance PolyMap []
+  (poly-map [f x] (f x)))
+
+(defn add-self [x :int] :int
+  (+ x x))
+
+(defn main [] :int
+  (println (.poly-map add-self 10))
+  0)
