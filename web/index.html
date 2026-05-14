@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Try Turmeric</title>
+    <meta name="description" content="Try Turmeric online - A web-based REPL for the Turmeric programming language">
+    <meta name="keywords" content="Turmeric, Lisp, REPL, WebAssembly, Programming Language">
+    <meta name="author" content="Turmeric Language Team">
+    <meta property="og:title" content="Try Turmeric">
+    <meta property="og:description" content="Experiment with Turmeric code directly in your browser">
+    <meta property="og:type" content="website">
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <div class="logo">
+                    <a href="/">
+                        <svg class="logo-svg" viewBox="0 0 200 60" xmlns="http://www.w3.org/2000/svg">
+                            <text x="10" y="35" font-family="monospace" font-size="24" font-weight="bold" fill="#d4a574">turmeric</text>
+                        </svg>
+                    </a>
+                </div>
+                <nav class="nav">
+                    <a href="/" class="nav-link active">Try REPL</a>
+                    <a href="/tutorials" class="nav-link">Tutorials</a>
+                    <a href="https://github.com/turmeric-lang/turmeric" class="nav-link external" target="_blank" rel="noopener">GitHub</a>
+                </nav>
+            </div>
+        </header>
+
+        <!-- Main Layout -->
+        <main class="main">
+            <div class="repl-container">
+                <!-- Editor Pane -->
+                <div class="editor-pane">
+                    <div class="editor-header">
+                        <div class="editor-tabs">
+                            <button class="tab-button active" data-tab="main">main.tur</button>
+                            <button class="tab-button" data-tab="new">+ New</button>
+                        </div>
+                        <div class="editor-actions">
+                            <button class="btn btn-icon" id="run-btn" title="Run (Ctrl+Enter)">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M8 5v14l11-7z"/>
+                                </svg>
+                                Run
+                            </button>
+                            <button class="btn btn-icon" id="clear-btn" title="Clear">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+                                </svg>
+                                Clear
+                            </button>
+                            <button class="btn btn-icon" id="share-btn" title="Share">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"/>
+                                </svg>
+                                Share
+                            </button>
+                            <select class="btn select" id="examples-select" title="Load Example">
+                                <option value="">Load Example</option>
+                                <option value="hello">Hello World</option>
+                                <option value="math">Basic Math</option>
+                                <option value="factorial">Factorial</option>
+                                <option value="fibonacci">Fibonacci</option>
+                                <option value="closure">Closures</option>
+                                <option value="effects">Effects</option>
+                                <option value="rc">Reference Counting</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="editor-wrapper">
+                        <div id="editor" class="monaco-editor"></div>
+                        <div id="editor-loading" class="loading-spinner">
+                            <div class="spinner"></div>
+                            <p>Loading editor...</p>
+                        </div>
+                    </div>
+                    <div class="editor-footer">
+                        <span class="status-indicator" id="wasm-status">
+                            <span class="dot offline"></span>
+                            <span id="wasm-status-text">Initializing WASM...</span>
+                        </span>
+                        <span class="cursor-position" id="cursor-pos">Line 1, Column 1</span>
+                    </div>
+                </div>
+
+                <!-- Console Pane -->
+                <div class="console-pane">
+                    <div class="console-header">
+                        <span class="console-title">Console</span>
+                        <div class="console-actions">
+                            <button class="btn btn-icon btn-sm" id="clear-console-btn" title="Clear Console">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+                                </svg>
+                            </button>
+                            <button class="btn btn-icon btn-sm" id="copy-console-btn" title="Copy Console">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="console-wrapper">
+                        <div id="console" class="console-output">
+                            <div class="console-welcome">
+                                <p><strong>Welcome to Try Turmeric!</strong></p>
+                                <p>Type Turmeric code in the editor and press <kbd>Ctrl+Enter</kbd> or click <strong>Run</strong>.</p>
+                                <p>Try an example from the dropdown, or start with:</p>
+                                <pre>(println "Hello, World!")</pre>
+                            </div>
+                        </div>
+                        <div id="console-loading" class="loading-spinner" style="display: none;">
+                            <div class="spinner"></div>
+                            <p>Evaluating...</p>
+                        </div>
+                    </div>
+                    <div class="repl-input-row" id="repl-input-row">
+                        <span class="repl-prompt">turi&gt;</span>
+                        <input type="text" id="repl-input" class="repl-input"
+                               placeholder="Enter an expression…"
+                               autocomplete="off" spellcheck="false" disabled />
+                    </div>
+                    <div class="console-footer">
+                        <span class="execution-time" id="exec-time">Ready</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tutorial Overlay (hidden by default) -->
+            <div id="tutorial-overlay" class="overlay" style="display: none;">
+                <div class="overlay-content">
+                    <div class="overlay-header">
+                        <h2>Tutorials</h2>
+                        <button class="btn-close" id="tutorial-close">&times;</button>
+                    </div>
+                    <div class="tutorial-list" id="tutorial-list">
+                        <div class="tutorial-card">
+                            <h3>Basics</h3>
+                            <p>Learn the fundamentals of Turmeric syntax</p>
+                            <button class="btn btn-primary" data-tutorial="basics">Start</button>
+                        </div>
+                        <div class="tutorial-card">
+                            <h3>Data Structures</h3>
+                            <p>Work with vectors, structs, and pattern matching</p>
+                            <button class="btn btn-primary" data-tutorial="data-structures">Start</button>
+                        </div>
+                        <div class="tutorial-card">
+                            <h3>Type System</h3>
+                            <p>Understand type annotations and inference</p>
+                            <button class="btn btn-primary" data-tutorial="type-system">Start</button>
+                        </div>
+                        <div class="tutorial-card">
+                            <h3>Functions</h3>
+                            <p>Closures, recursion, and higher-order functions</p>
+                            <button class="btn btn-primary" data-tutorial="functions">Start</button>
+                        </div>
+                        <div class="tutorial-card">
+                            <h3>Effects</h3>
+                            <p>Algebraic effects and handlers</p>
+                            <button class="btn btn-primary" data-tutorial="effects">Start</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Loading Overlay -->
+            <div id="loading-overlay" class="overlay loading" style="display: none;">
+                <div class="loading-content">
+                    <div class="spinner large"></div>
+                    <p>Loading Turmeric WASM module...</p>
+                    <progress id="wasm-progress" value="0" max="100"></progress>
+                </div>
+            </div>
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <div class="footer-content">
+                <p>Try Turmeric &mdash; A web-based REPL for the <a href="https://github.com/turmeric-lang/turmeric">Turmeric language</a></p>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Scripts -->
+    <!-- turmeric.js is an Emscripten UMD build; load before main.js so
+         window.TurmericModule is available when main.js runs. -->
+    <script src="/turmeric.js"></script>
+    <script type="module" src="/main.js"></script>
+</body>
+</html>

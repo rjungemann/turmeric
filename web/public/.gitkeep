@@ -1,0 +1,2 @@
+# This directory contains static files for the web app
+# The turmeric.js WASM module will be placed here after building

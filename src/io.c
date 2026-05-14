@@ -18,7 +18,7 @@ IOBackend *io_epoll_new(void);
 IOBackend *io_kqueue_new(void);
 #elif defined(IO_BACKEND_IOCP)
 IOBackend *io_iocp_new(void);
-#else
+#elif !defined(__EMSCRIPTEN__)
 #error "No I/O backend available for this platform"
 #endif
 
@@ -30,7 +30,7 @@ IOBackend *io_backend_new(void) {
 #elif defined(IO_BACKEND_IOCP)
     return io_iocp_new();
 #else
-    return NULL;
+    return NULL; /* WASM: no I/O backend */
 #endif
 }
 

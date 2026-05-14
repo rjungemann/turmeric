@@ -1,0 +1,224 @@
+import { test, expect } from '@playwright/test';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+async function waitForReady(page) {
+    await expect(page.locator('#wasm-status-text')).toHaveText('Ready', { timeout: 30_000 });
+}
+
+async function setCode(page, code) {
+    await page.evaluate((c) => window._turiEditor.setValue(c), code);
+}
+
+async function runAndGetConsole(page) {
+    const before = await page.locator('#console').textContent();
+    await page.click('#run-btn');
+    // Wait for new content to appear
+    await page.waitForFunction(
+        (prev) => document.getElementById('console').textContent !== prev,
+        before,
+        { timeout: 10_000 }
+    );
+    return page.locator('#console').textContent();
+}
+
+async function hasNoEvalError(page) {
+    // console-error spans that come from the Turmeric evaluator start with #<error
+    const errors = await page.locator('#console .console-error').allTextContents();
+    return errors.every(e => !e.startsWith('#<error'));
+}
+
+// ---------------------------------------------------------------------------
+// Core smoke tests
+// ---------------------------------------------------------------------------
+
+test.describe('Try Turmeric smoke tests', () => {
+    test('page loads and WASM initializes', async ({ page }) => {
+        const jsErrors = [];
+        page.on('console', msg => {
+            if (msg.type() === 'error') jsErrors.push(msg.text());
+        });
+
+        await page.goto('/');
+        await waitForReady(page);
+
+        expect(jsErrors.filter(e => e.includes('TypeError') || e.includes('Failed to'))).toHaveLength(0);
+    });
+
+    test('evaluates (+ 1 2) and shows result 3', async ({ page }) => {
+        await page.goto('/');
+        await waitForReady(page);
+        await setCode(page, '(+ 1 2)');
+        await page.click('#run-btn');
+        await expect(page.locator('#console')).toContainText('3', { timeout: 10_000 });
+        await expect(page.locator('#console .console-error')).toHaveCount(0);
+    });
+
+    test('evaluates println and shows output', async ({ page }) => {
+        await page.goto('/');
+        await waitForReady(page);
+        await setCode(page, '(println "hello from test")');
+        await page.click('#run-btn');
+        await expect(page.locator('#console')).toContainText('hello from test', { timeout: 10_000 });
+    });
+
+    test('REPL input evaluates expression in same context', async ({ page }) => {
+        await page.goto('/');
+        await waitForReady(page);
+
+        // Define a function via the editor
+        await setCode(page, '(defn double [x :int] (* x 2))');
+        await page.click('#run-btn');
+        await page.waitForTimeout(500);
+
+        // Call it from the REPL — same env
+        const replInput = page.locator('#repl-input');
+        await replInput.click();
+        await replInput.fill('(double 21)');
+        await replInput.press('Enter');
+
+        await expect(page.locator('#console')).toContainText('42', { timeout: 10_000 });
+    });
+
+    test('REPL history navigates with arrow keys', async ({ page }) => {
+        await page.goto('/');
+        await waitForReady(page);
+
+        const replInput = page.locator('#repl-input');
+        await replInput.click();
+
+        await replInput.fill('(+ 1 1)');
+        await replInput.press('Enter');
+        await page.waitForTimeout(300);
+
+        await replInput.fill('(+ 2 2)');
+        await replInput.press('Enter');
+        await page.waitForTimeout(300);
+
+        // ArrowUp should recall last entry
+        await replInput.press('ArrowUp');
+        await expect(replInput).toHaveValue('(+ 2 2)');
+
+        await replInput.press('ArrowUp');
+        await expect(replInput).toHaveValue('(+ 1 1)');
+
+        await replInput.press('ArrowDown');
+        await expect(replInput).toHaveValue('(+ 2 2)');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Example dropdown smoke tests
+// ---------------------------------------------------------------------------
+
+test.describe('Examples', () => {
+    // Load the page once per describe block via beforeEach
+    test.beforeEach(async ({ page }) => {
+        await page.goto('/');
+        await waitForReady(page);
+    });
+
+    test('hello world — prints Hello, Turmeric!', async ({ page }) => {
+        await setCode(page, '(println "Hello, Turmeric!")');
+        await runAndGetConsole(page);
+        await expect(page.locator('#console')).toContainText('Hello, Turmeric!');
+        expect(await hasNoEvalError(page)).toBe(true);
+    });
+
+    test('math — last expression (** 2 8) returns 256', async ({ page }) => {
+        await setCode(page, [
+            '(+ 1 2 3)',
+            '(- 10 5)',
+            '(* 2 3 4)',
+            '(/ 100 4)',
+            '(% 10 3)',
+            '(** 2 8)',
+        ].join('\n'));
+        await runAndGetConsole(page);
+        await expect(page.locator('#console')).toContainText('256');
+        expect(await hasNoEvalError(page)).toBe(true);
+    });
+
+    test('factorial — (factorial 10) returns 3628800', async ({ page }) => {
+        await setCode(page, [
+            '(defn factorial [n :int] :int',
+            '  (if (<= n 1) 1 (* n (factorial (- n 1)))))',
+            '(factorial 10)',
+        ].join('\n'));
+        await runAndGetConsole(page);
+        await expect(page.locator('#console')).toContainText('3628800');
+        expect(await hasNoEvalError(page)).toBe(true);
+    });
+
+    test('fibonacci — (fib 10) returns 55', async ({ page }) => {
+        await setCode(page, [
+            '(defn fib [n :int] :int',
+            '  (if (<= n 1) n (+ (fib (- n 1)) (fib (- n 2)))))',
+            '(fib 10)',
+        ].join('\n'));
+        await runAndGetConsole(page);
+        await expect(page.locator('#console')).toContainText('55');
+        expect(await hasNoEvalError(page)).toBe(true);
+    });
+
+    test('type annotations — (add 1 2) returns 3', async ({ page }) => {
+        await setCode(page, [
+            '(defn add [a :int b :int] :int (+ a b))',
+            '(add 1 2)',
+        ].join('\n'));
+        await runAndGetConsole(page);
+        await expect(page.locator('#console')).toContainText('3');
+        expect(await hasNoEvalError(page)).toBe(true);
+    });
+
+    test('higher-order — (twice inc 5) returns 7', async ({ page }) => {
+        await setCode(page, [
+            '(defn twice [f :(fn [a] :a) x :a] :a (f (f x)))',
+            '(defn inc [x :int] :int (+ x 1))',
+            '(twice inc 5)',
+        ].join('\n'));
+        await runAndGetConsole(page);
+        await expect(page.locator('#console')).toContainText('7');
+        expect(await hasNoEvalError(page)).toBe(true);
+    });
+
+    test('closures — make-adder(5)(10) prints 15', async ({ page }) => {
+        await setCode(page, [
+            '(defn make-adder [x :int] (fn [y :int] (+ x y)))',
+            '(let [add5 (make-adder 5)]',
+            '  (println (add5 10)))',
+        ].join('\n'));
+        await runAndGetConsole(page);
+        await expect(page.locator('#console')).toContainText('15');
+        expect(await hasNoEvalError(page)).toBe(true);
+    });
+
+    test('effects — (perform Ask) resumes with 41 → prints 42', async ({ page }) => {
+        await setCode(page, [
+            '(defeffect Ask [] :int)',
+            '(defn use-ask [] :int',
+            '  (+ 1 (perform (Ask))))',
+            '(println (handle (use-ask)',
+            '  (Ask [] k) (resume k 41)))',
+        ].join('\n'));
+        await runAndGetConsole(page);
+        await expect(page.locator('#console')).toContainText('42');
+        expect(await hasNoEvalError(page)).toBe(true);
+    });
+
+    test('pattern matching — factorial(5) returns 120', async ({ page }) => {
+        await setCode(page, [
+            '(defn factorial [n :int] :int',
+            '  (match n',
+            '    0 1',
+            '    1 1',
+            '    _ (* n (factorial (- n 1)))))',
+            '(factorial 5)',
+        ].join('\n'));
+        await runAndGetConsole(page);
+        await expect(page.locator('#console')).toContainText('120');
+        expect(await hasNoEvalError(page)).toBe(true);
+    });
+});

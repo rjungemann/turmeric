@@ -1,0 +1,30 @@
+{
+  "name": "try-turmeric",
+  "version": "0.1.0",
+  "description": "Try Turmeric - Web-based REPL for the Turmeric language",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "npm run build && wrangler dev",
+    "deploy": "npm run build && wrangler deploy",
+    "test": "playwright test"
+  },
+  "dependencies": {
+    "monaco-editor": "^0.45.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.36.4",
+    "@playwright/test": "^1.49.0",
+    "vite": "^6.4.2",
+    "wrangler": "^4.90.1"
+  },
+  "keywords": [
+    "turmeric",
+    "lisp",
+    "repl",
+    "webassembly"
+  ],
+  "author": "Turmeric Language Team",
+  "license": "MIT"
+}

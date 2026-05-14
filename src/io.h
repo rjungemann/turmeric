@@ -117,7 +117,9 @@ void io_wake(IOBackend *backend);
 /**
  * Platform-specific backend types
  */
-#if defined(__linux__)
+#if defined(__EMSCRIPTEN__)
+/* No I/O backend in WASM sandbox */
+#elif defined(__linux__)
 #define IO_BACKEND_EPOLL 1
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 #define IO_BACKEND_KQUEUE 1

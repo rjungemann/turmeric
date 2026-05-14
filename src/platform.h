@@ -42,7 +42,10 @@
 #endif
 
 /* ── Architecture tags ────────────────────────────────────────────────────── */
-#if defined(__aarch64__) || defined(_M_ARM64)
+#if defined(__EMSCRIPTEN__)
+/* WebAssembly target: no native context switching needed. */
+#  define TUR_ARCH_WASM 1
+#elif defined(__aarch64__) || defined(_M_ARM64)
 #  define TUR_ARCH_ARM64 1
 #elif defined(__x86_64__) || defined(_M_X64)
 #  define TUR_ARCH_X64 1

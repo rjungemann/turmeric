@@ -1,0 +1,130 @@
+# Try Turmeric Web
+
+A web-based REPL for the [Turmeric programming language](https://github.com/turmeric-lang/turmeric) that runs entirely in the browser using WebAssembly.
+
+## Features
+
+- **WASM-powered Turmeric runtime** - Full Turmeric evaluation in the browser
+- **Monaco Editor** - Professional code editing with syntax highlighting
+- **Interactive Console** - ANSI-colored output with execution history
+- **Code Examples** - Pre-loaded examples covering key language features
+- **URL Sharing** - Share your code via compressed URL hash
+- **Tutorial System** - Guided learning with interactive tutorials (CLI only for now)
+- **Responsive Design** - Works on desktop and mobile devices
+
+## Quick Start
+
+### Development
+
+1. Install dependencies:
+   ```bash
+   cd web
+   npm install
+   ```
+
+2. Build the WASM module (requires [Emscripten](https://emscripten.org)):
+   ```bash
+   just configure-wasm
+   just wasm
+   ```
+
+3. Run the development server:
+   ```bash
+   just web-dev
+   ```
+
+4. Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+### Production Build
+
+```bash
+just web
+```
+
+This will:
+1. Build the WASM module
+2. Install web dependencies
+3. Create a production-optimized bundle in `web/dist/`
+
+### Deploy
+
+```bash
+just deploy-web
+```
+
+This will deploy the web app to GitHub Pages.
+
+## Project Structure
+
+```
+web/
+├── index.html          # Main HTML page
+├── main.js             # Main JavaScript with WASM integration
+├── styles.css          # Styling
+├── examples.js         # Example code snippets
+├── package.json        # Node dependencies
+├── vite.config.js      # Vite build configuration
+└── public/
+    └── turmeric.js      # Compiled WASM module (generated)
+```
+
+## Configuration
+
+The web REPL can be configured via the `CONFIG` object in `main.js`:
+
+```javascript
+const CONFIG = {
+    DEFAULT_CODE: `(println "Hello, Turmeric!")`,
+    EXECUTION_TIMEOUT: 5000,    // 5 seconds
+    MAX_OUTPUT_LENGTH: 10000
+};
+```
+
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+Enter` | Run code |
+| `Ctrl+S` | Save to URL hash |
+
+## Tutorial System
+
+The tutorial system provides interactive learning. In the CLI REPL, use:
+
+```
+:tutorial              # List available tutorials
+:tutorial basics      # Start the basics tutorial
+:next                 # Go to next step
+:prev                 # Go to previous step
+:hint                 # Show hint for current step
+:skip                 # Skip current step
+:quit-tutorial        # Exit tutorial mode
+```
+
+The web version will have tutorial integration in a future update.
+
+## Technical Details
+
+### WASM API
+
+The WASM module exposes the following functions:
+
+- `turi_wasm_init()` - Initialize the runtime
+- `turi_wasm_reset()` - Reset the evaluation environment
+- `turi_wasm_shutdown()` - Shutdown the runtime
+- `turi_wasm_eval(input)` - Evaluate code and return result as string
+- `turi_wasm_eval_ex(input, out_result, out_error)` - Evaluate with separate result/error
+- `turi_wasm_version()` - Get version string
+
+### Monaco Editor Configuration
+
+The editor is configured with:
+- Turmeric language support with custom syntax highlighting
+- Light and dark themes that match system preferences
+- Auto-closing brackets and quotes
+- Line numbers and cursor position display
+- Word wrap and smooth scrolling
+
+## License
+
+MIT License - see the main [Turmeric LICENSE](https://github.com/turmeric-lang/turmeric/blob/main/LICENSE) for details.

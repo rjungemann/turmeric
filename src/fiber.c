@@ -33,6 +33,7 @@ TurFiber *tur_fiber_new(void (*fn)(TurFiber *), size_t stack_size) {
     f->fn = fn;
 
     void *sp = tur_align_down_16((char *)f->stack + stack_size);
+    (void)sp; /* may be unused in WASM */
 
 #if defined(TUR_ARCH_X64)
     f->ctx.rip = (uintptr_t)fiber_entry_shim;
@@ -43,6 +44,7 @@ TurFiber *tur_fiber_new(void (*fn)(TurFiber *), size_t stack_size) {
     f->ctx.sp = (uintptr_t)sp;
     f->ctx.x19 = (uintptr_t)f;
 #endif
+    /* TUR_ARCH_WASM: tur_ctx_t is a stub; context switching is a no-op. */
 
     return f;
 }

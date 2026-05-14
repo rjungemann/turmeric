@@ -28,17 +28,19 @@
 #include "eval.h"
 
 #include <errno.h>
-#include <fcntl.h>
-#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
 #include <time.h>
-#include <unistd.h>
 
-#ifndef MAP_ANONYMOUS
-#  define MAP_ANONYMOUS MAP_ANON
+#ifndef __EMSCRIPTEN__
+#  include <fcntl.h>
+#  include <poll.h>
+#  include <sys/mman.h>
+#  include <unistd.h>
+#  ifndef MAP_ANONYMOUS
+#    define MAP_ANONYMOUS MAP_ANON
+#  endif
 #endif
 
 /* -------------------------------------------------------------------------
@@ -167,7 +169,10 @@ static uint64_t next_timer_deadline(TuriEnv *env) {
 
 /* -------------------------------------------------------------------------
  * Non-blocking I/O (S7.7)
+ * Not available in WASM — all functions are stubbed out.
  * ---------------------------------------------------------------------- */
+
+#ifndef __EMSCRIPTEN__
 
 void turi_io_read_async(TuriEnv *env, int fd, int n, TuriFuture *future,
                         TuriFiber *fiber) {
@@ -268,6 +273,24 @@ static void poll_io(TuriEnv *env, int timeout_ms) {
     free(pfds);
     free(pptrs);
 }
+
+#else  /* __EMSCRIPTEN__ — stub out POSIX I/O */
+
+void turi_io_read_async(TuriEnv *env, int fd, int n, TuriFuture *future,
+                        TuriFiber *fiber) {
+    (void)env; (void)fd; (void)n; (void)fiber;
+    turi_future_reject(env, future, turi_error("read-async: not supported in WASM"));
+}
+
+void turi_io_write_async(TuriEnv *env, int fd, const char *data, int len,
+                         TuriFuture *future, TuriFiber *fiber) {
+    (void)env; (void)fd; (void)data; (void)len; (void)fiber;
+    turi_future_reject(env, future, turi_error("write-async: not supported in WASM"));
+}
+
+static void poll_io(TuriEnv *env, int timeout_ms) { (void)env; (void)timeout_ms; }
+
+#endif /* __EMSCRIPTEN__ */
 
 /* -------------------------------------------------------------------------
  * Cancellation
@@ -553,6 +576,7 @@ static TuriValue native_cancel_task(TuriEnv *env, TuriValue *args, uint32_t n,
 }
 
 /* async-pipe-init : () -> nil  (sets up test pipe in env) */
+#ifndef __EMSCRIPTEN__
 static TuriValue native_async_pipe_init(TuriEnv *env, TuriValue *args,
                                         uint32_t n, void *ud) {
     (void)args; (void)n; (void)ud;
@@ -566,6 +590,13 @@ static TuriValue native_async_pipe_init(TuriEnv *env, TuriValue *args,
     env->test_pipe_wfd = fds[1];
     return turi_nil();
 }
+#else
+static TuriValue native_async_pipe_init(TuriEnv *env, TuriValue *args,
+                                        uint32_t n, void *ud) {
+    (void)env; (void)args; (void)n; (void)ud;
+    return turi_error("async-pipe-init: not supported in WASM");
+}
+#endif
 
 /* async-pipe-rfd / async-pipe-wfd : () -> int */
 static TuriValue native_async_pipe_rfd(TuriEnv *env, TuriValue *args,
@@ -584,6 +615,7 @@ static TuriValue native_async_pipe_wfd(TuriEnv *env, TuriValue *args,
 }
 
 /* read-async : (fd :int, n :int) -> Future[cstr] */
+#ifndef __EMSCRIPTEN__
 static TuriValue native_read_async(TuriEnv *env, TuriValue *args, uint32_t n,
                                    void *ud) {
     (void)ud;
@@ -630,8 +662,16 @@ static TuriValue native_read_async(TuriEnv *env, TuriValue *args, uint32_t n,
     }
     return turi_future_val(f);
 }
+#else
+static TuriValue native_read_async(TuriEnv *env, TuriValue *args, uint32_t n,
+                                   void *ud) {
+    (void)env; (void)args; (void)n; (void)ud;
+    return turi_error("read-async: not supported in WASM");
+}
+#endif
 
 /* write-async : (fd :int, data :cstr) -> Future[int] */
+#ifndef __EMSCRIPTEN__
 static TuriValue native_write_async(TuriEnv *env, TuriValue *args, uint32_t n,
                                     void *ud) {
     (void)ud;
@@ -672,6 +712,13 @@ static TuriValue native_write_async(TuriEnv *env, TuriValue *args, uint32_t n,
     }
     return turi_future_val(f);
 }
+#else
+static TuriValue native_write_async(TuriEnv *env, TuriValue *args, uint32_t n,
+                                    void *ud) {
+    (void)env; (void)args; (void)n; (void)ud;
+    return turi_error("write-async: not supported in WASM");
+}
+#endif
 
 /* async-all2 : (fa :Future, fb :Future) -> (a + b) as int — simplified
  * (a real implementation would need a list type; this is a test helper) */
@@ -764,6 +811,8 @@ void turi_sched_free(TuriEnv *env) {
     env->all_futures = NULL;
 
     /* Close test pipe fds. */
+#ifndef __EMSCRIPTEN__
     if (env->test_pipe_rfd >= 0) { close(env->test_pipe_rfd); env->test_pipe_rfd = -1; }
     if (env->test_pipe_wfd >= 0) { close(env->test_pipe_wfd); env->test_pipe_wfd = -1; }
+#endif
 }
