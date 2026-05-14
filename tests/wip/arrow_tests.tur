@@ -13,8 +13,7 @@
 ;; =============================================================================
 
 ;; Test that Arrow instance for functions works
-(defn test-arrow-function-basics []
-  : bool
+(defn test-arrow-function-basics [] :bool
   (let [;; Create some simple arrows (functions)
         f (arr (fn [x] (+ x 1.0)))
         g (arr (fn [x] (* x 2.0)))
@@ -44,8 +43,7 @@
          (= (second-f [5.0 10.0]) [5.0 11.0]))))
 
 ;; Test ArrowChoice for functions
-(defn test-arrow-choice-function []
-  : bool
+(defn test-arrow-choice-function [] :bool
   (let [f (arr (fn [x] (+ x 1.0)))
         
         ;; Test left
@@ -86,8 +84,7 @@
 ;; =============================================================================
 
 ;; Test basic SF operations
-(defn test-sf-basics []
-  : bool
+(defn test-sf-basics [] :bool
   (let [;; Create a constant SF
         const-5 (arr (fn [_] 5.0))
         
@@ -111,8 +108,7 @@
          (= ((time-sf sig) 5.0) 5.0))))
 
 ;; Test SF with first and second
-(defn test-sf-first-second []
-  : bool
+(defn test-sf-first-second [] :bool
   (let [f (arr (fn [x] (+ x 1.0)))
         
         ;; first f
@@ -131,8 +127,7 @@
          (= ((second-f sig-prod) 0.0) [5.0 11.0]))))
 
 ;; Test ArrowChoice for SF
-(defn test-sf-arrow-choice []
-  : bool
+(defn test-sf-arrow-choice [] :bool
   (let [f (arr (fn [x] (+ x 1.0)))
         g (arr (fn [x] (* x 2.0)))
         
@@ -154,8 +149,7 @@
 ;; =============================================================================
 
 ;; Test oscillators
-(defn test-oscillators []
-  : bool
+(defn test-oscillators [] :bool
   (let [;; Sine oscillator at 440 Hz
         sine-440 (sine 440.0 0.0)
         
@@ -180,8 +174,7 @@
          (and (>= ((saw-440 sig) 0.0) 0.0) (< ((saw-440 sig) 0.0) 1.0)))))
 
 ;; Test filters
-(defn test-filters []
-  : bool
+(defn test-filters [] :bool
   (let [;; Low-pass filter with alpha = 0.5
         lp (low-pass 0.5)
         
@@ -202,8 +195,7 @@
          (and (> (lp-out 1.0) 0.0) (< (lp-out 1.0) 1.0)))))
 
 ;; Test gain and mixing
-(defn test-gain-mix []
-  : bool
+(defn test-gain-mix [] :bool
   (let [sig1 (constant 0.5)
         sig2 (constant 0.3)
         
@@ -234,8 +226,7 @@
 ;; =============================================================================
 
 ;; Test ADSR envelope
-(defn test-adsr-envelope []
-  : bool
+(defn test-adsr-envelope [] :bool
   (let [params (ADSRParams 0.1 0.1 0.5 0.1)
         
         ;; Fixed gate duration
@@ -264,8 +255,7 @@
 ;; =============================================================================
 
 ;; Test simple voice
-(defn test-simple-voice []
-  : bool
+(defn test-simple-voice [] :bool
   (let [params (ADSRParams 0.01 0.1 0.7 0.2)
         freq 440.0
         gate-duration 0.5
@@ -287,8 +277,7 @@
 ;; =============================================================================
 
 ;; Run all arrow law verification tests
-(defn test-arrow-laws []
-  : bool
+(defn test-arrow-laws [] :bool
   (verify-arrow-laws))
 
 ;; =============================================================================
@@ -296,8 +285,7 @@
 ;; =============================================================================
 
 ;; Run all tests and report results
-(defn run-all-tests []
-  : (vec bool)
+(defn run-all-tests [] :(vec bool)
   (vec-of
     (test-arrow-function-basics)
     (test-arrow-choice-function)
@@ -312,8 +300,7 @@
     (test-arrow-laws)))
 
 ;; Print test results
-(defn print-test-results []
-  : ()
+(defn print-test-results [] :()
   (let [results (run-all-tests)
         names (vec-of
                 "Arrow Function Basics"
@@ -345,7 +332,6 @@
       (println "ALL TESTS PASSED!"))))
 
 ;; Entry point
-(defn main []
-  : int
+(defn main [] :int
   (print-test-results)
   0)

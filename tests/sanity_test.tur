@@ -1,0 +1,16 @@
+;; Sanity test — verifies that basic Turmeric constructs compile and run.
+;; arrow_tests.tur depends on stdlib arrow/signal files that use compound-type
+;; annotations not yet supported by the reader; it lives in tests/wip/ until
+;; that feature lands.
+
+(defn add [a :int b :int] :int
+  (+ a b))
+
+(defn factorial [n :int] :int
+  (if (<= n 1) 1 (* n (factorial (- n 1)))))
+
+(defn main [] :int
+  (assert! (= (add 1 2) 3))
+  (assert! (= (factorial 5) 120))
+  (assert! (= (factorial 10) 3628800))
+  0)
