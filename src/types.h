@@ -80,6 +80,9 @@ typedef enum TypeKind {
     TY_UINT64,       /* uint64_t */
     TY_FLOAT32,      /* float */
     TY_FLOAT64,      /* double (alias for TY_FLOAT) */
+    /* Phase HRT0: Higher-ranked types */
+    TY_FORALL,       /* (forall [a ...] T) — universally quantified type (rank-2+) */
+    TY_EXISTS,       /* (exists [a ...] T) — existentially quantified type */
 } TypeKind;
 
 /* Phase 11: Struct field descriptor.
@@ -144,6 +147,10 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
         case TY_FLOAT32:
         case TY_FLOAT64:
             return CK_COPY;
+        /* Phase HRT0: Quantified types — move-only (no concrete values) */
+        case TY_FORALL:
+        case TY_EXISTS:
+            return CK_MOVE;
         case TY_UNKNOWN:
         default:
             return CK_MOVE;
@@ -219,6 +226,13 @@ typedef struct Type {
             const char *name;  /* Interned binder name (e.g. "Fix"); compare by pointer */
             struct Type *body; /* Body type (NULL in v1 when body is not yet evaluated) */
         } rec;
+        /* Phase HRT0: Universally/existentially quantified types */
+        struct {
+            const char **var_names; /* bound variable names (interned, arena-allocated) */
+            Kind        *var_kinds; /* kinds of bound variables (arena-allocated) */
+            uint8_t      n_vars;
+            struct Type *body;      /* body type (arena-allocated) */
+        } forall_;
     } as;
 } Type;
 
@@ -474,6 +488,8 @@ static inline Type type_struct(StructDef *def) {
 int          type_eq(Type a, Type b);
 const char  *type_name(Type t);                   /* "int", "bool", … */
 const char  *type_c_name(Type t);                 /* "int64_t", "bool", … */
+/* Phase HRT0: compute the rank of a type (0 = monotype, 1 = rank-1, ≥2 = higher-ranked) */
+int          type_rank(const Type *t);
 
 /* Phase HKT-P2: One-step unrolling of a TY_REC type.
  * Returns t->as.rec.body (the body with the recursive variable bound).

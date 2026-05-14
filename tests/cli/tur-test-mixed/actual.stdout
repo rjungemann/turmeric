@@ -1,3 +1,4 @@
-.F
-2 tests, 1 passed, 1 failed
+FF
+2 tests, 0 passed, 2 failed
+FAIL tests/cli/tur-test-mixed/cases/a_pass.tur
 FAIL tests/cli/tur-test-mixed/cases/z_fail.tur

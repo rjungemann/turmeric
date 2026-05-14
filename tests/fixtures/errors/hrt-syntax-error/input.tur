@@ -1,0 +1,6 @@
+; Phase HRT0: forall in expression position must be rejected.
+; (forall [a] a) is a type-level form and cannot appear where a value is expected.
+(def x (forall [a] a))
+
+(defn main [] :int
+  0)

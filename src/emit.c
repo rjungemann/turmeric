@@ -4778,6 +4778,7 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "#define _XOPEN_SOURCE 700\n");
     buf_puts(out, "#include <ucontext.h>\n");
     buf_puts(out, "#undef _XOPEN_SOURCE\n");
+    buf_puts(out, "#include <setjmp.h>\n");
     buf_puts(out, "#include <stdio.h>\n");
     buf_puts(out, "#include <stdint.h>\n");
     buf_puts(out, "#include <stdbool.h>\n");

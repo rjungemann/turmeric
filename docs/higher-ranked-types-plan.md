@@ -497,36 +497,36 @@ Before starting Phase HRT0, verify:
 
 ### Tasks
 
-#### Surface syntax (`src/reader.c`)
-- [ ] Recognize `forall` as a reserved type-level keyword: `(forall [a] (-> a a))`
-- [ ] Recognize `exists` as a reserved type-level keyword: `(exists [a] [a (-> a string)])`
-- [ ] Support multiple bound variables: `(forall [a b] (-> a b a))`
-- [ ] Support kind-annotated bound variables: `(forall [f : * -> *] (-> (f int) (f string)))`
-- [ ] Reject `forall`/`exists` in expression position (type annotations only for now)
-- [ ] Disambiguate `forall` from user-defined bindings in expression context
+#### Surface syntax (`src/reader.c`, `src/elab.c`)
+- [x] Recognize `forall` as a reserved type-level keyword: `(forall [a] (-> a a))`
+- [x] Recognize `exists` as a reserved type-level keyword: `(exists [a] [a (-> a string)])`
+- [x] Support multiple bound variables: `(forall [a b] (-> a b a))`
+- [ ] Support kind-annotated bound variables: `(forall [f : * -> *] (-> (f int) (f string)))` — deferred to HRT1
+- [x] Reject `forall`/`exists` in expression position (type annotations only for now)
+- [x] Disambiguate `forall` from user-defined bindings in expression context
 
 #### AST extensions (`src/expr.h`, `src/types.h`)
-- [ ] Add `TY_FORALL` node: `{ vars: [(name, kind)], body: Type }`
-- [ ] Add `TY_EXISTS` node: `{ vars: [(name, kind)], body: Type }`
-- [ ] Distinguish bound (`forall`-introduced) from free type variables at the AST level
-- [ ] Add `rank()` helper that computes the rank of a `Type` node (0 = monotype, 1 = rank-1, etc.)
-- [ ] Preserve source location through quantifier nodes for diagnostics
+- [x] Add `TY_FORALL` node: `{ vars: [(name, kind)], body: Type }`
+- [x] Add `TY_EXISTS` node: `{ vars: [(name, kind)], body: Type }`
+- [ ] Distinguish bound (`forall`-introduced) from free type variables at the AST level — deferred to HRT1
+- [x] Add `rank()` helper that computes the rank of a `Type` node (0 = monotype, 1 = rank-1, etc.)
+- [ ] Preserve source location through quantifier nodes for diagnostics — deferred to HRT1
 
 #### Pretty-printing (`src/types.c`)
-- [ ] Print `TY_FORALL` as `(forall [a ...] T)`
-- [ ] Print `TY_EXISTS` as `(exists [a ...] T)`
-- [ ] In error messages, always print quantifiers explicitly (never elide `forall`)
+- [x] Print `TY_FORALL` as `(forall [a ...] T)`
+- [x] Print `TY_EXISTS` as `(exists [a ...] T)`
+- [ ] In error messages, always print quantifiers explicitly (never elide `forall`) — deferred to HRT1
 
 #### Validation pass
-- [ ] Scope check: all type variables in `body` that appear in `vars` are bound
-- [ ] No shadowing: warn if a `forall`-bound variable shadows an outer type variable
-- [ ] Kind check: bound variables carry valid kinds (default `*` when unannotated)
+- [x] Scope check: all type variables in `body` that appear in `vars` are bound (via extended type_params)
+- [x] No shadowing: warn if a `forall`-bound variable shadows an outer type variable
+- [ ] Kind check: bound variables carry valid kinds (default `*` when unannotated) — deferred to HRT1
 
 ### Fixtures
-- [ ] `hrt-syntax-forall.tur` — `forall` parses in type annotation position
-- [ ] `hrt-syntax-exists.tur` — `exists` parses in type annotation position
-- [ ] `hrt-syntax-multi.tur` — multiple bound variables in one quantifier
-- [ ] `hrt-syntax-error.tur` — `forall` in expression position is rejected
+- [x] `hrt-syntax-forall.tur` — `forall` parses in type annotation position
+- [x] `hrt-syntax-exists.tur` — `exists` parses in type annotation position
+- [x] `hrt-syntax-multi.tur` — multiple bound variables in one quantifier
+- [x] `hrt-syntax-error.tur` — `forall` in expression position is rejected
 
 ### Exit criterion
 All syntax fixtures parse; `forall`/`exists` AST nodes printed correctly in diagnostics; scope and kind checks pass; no runtime codegen yet.

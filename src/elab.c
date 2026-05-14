@@ -656,6 +656,9 @@ typedef struct Elab {
     const Symbol *sym_deftype;      /* deftype */
     /* Phase HKT-P1: type-app — type-level application */
     const Symbol *sym_type_app;    /* type-app */
+    /* Phase HRT0: Higher-ranked type quantifiers (type-level only; reject in expression position) */
+    const Symbol *sym_forall;      /* forall */
+    const Symbol *sym_exists;      /* exists */
     /* Phase HKT (v2): reserved typeclass names — user definitions rejected with diagnostic */
     const Symbol *sym_hkt_Functor;
     const Symbol *sym_hkt_Applicative;
@@ -1202,6 +1205,9 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_deftype = intern_cstr(st, "deftype");
     /* Phase HKT-P1: type-app */
     e->sym_type_app = intern_cstr(st, "type-app");
+    /* Phase HRT0: forall/exists */
+    e->sym_forall = intern_cstr(st, "forall");
+    e->sym_exists = intern_cstr(st, "exists");
     /* Phase HKT (v2): reserved typeclass names */
     e->sym_hkt_Functor      = intern_cstr(st, "Functor");
     e->sym_hkt_Applicative  = intern_cstr(st, "Applicative");
@@ -6956,6 +6962,19 @@ static Expr *elab_call(Elab *e, Form *call) {
     /* Phase HKT-P2: recursive type binders */
     if (name == e->sym_defrec) return elab_defrec(e, call);
     if (name == e->sym_deftype) return elab_deftype(e, call);
+    /* Phase HRT0: forall/exists are type-level forms; reject in expression position */
+    if (name == e->sym_forall) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "'forall' is a type-level annotation and cannot appear in expression position "
+                  "(use it in a type annotation: (deftype MyType (forall [a] ...)))");
+        return NULL;
+    }
+    if (name == e->sym_exists) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "'exists' is a type-level annotation and cannot appear in expression position "
+                  "(use it in a type annotation: (deftype MyType (exists [a] ...)))");
+        return NULL;
+    }
     /* Phase HKT-P1: type-level application */
     if (name == e->sym_type_app) return elab_type_app(e, call);
     /* Phase R2: Panic */
@@ -9497,6 +9516,100 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
         t->as.struct_.def = NULL;
         return t;
     } else if (form->tag == F_LIST) {
+        /* Phase HRT0: Handle (forall [vars...] body) and (exists [vars...] body) */
+        if (form->as.list.len >= 1 && form->as.list.items[0]->tag == F_SYM) {
+            const Symbol *head = form->as.list.items[0]->as.sym;
+            bool is_forall_form = (head == e->sym_forall);
+            bool is_exists_form = (head == e->sym_exists);
+
+            if (is_forall_form || is_exists_form) {
+                /* Syntax: (forall [a b ...] body-type) or (exists [a b ...] body-type) */
+                if (form->as.list.len != 3) {
+                    diag_emit(DIAG_ERROR, form->span,
+                              "'%s' requires exactly two elements: a variable list and a body type",
+                              is_forall_form ? "forall" : "exists");
+                    return NULL;
+                }
+                Form *vars_form = form->as.list.items[1];
+                Form *body_form = form->as.list.items[2];
+
+                if (vars_form->tag != F_VEC) {
+                    diag_emit(DIAG_ERROR, vars_form->span,
+                              "'%s' variable list must be a vector, e.g. [a b]",
+                              is_forall_form ? "forall" : "exists");
+                    return NULL;
+                }
+
+                uint8_t n_bound = (uint8_t)vars_form->as.list.len;
+                if (n_bound == 0) {
+                    diag_emit(DIAG_ERROR, vars_form->span,
+                              "'%s' requires at least one bound variable",
+                              is_forall_form ? "forall" : "exists");
+                    return NULL;
+                }
+
+                /* Collect bound variable names and kinds */
+                const char **var_names = (const char **)arena_alloc(
+                    e->arena, n_bound * sizeof(const char *));
+                Kind *var_kinds = (Kind *)arena_alloc(
+                    e->arena, n_bound * sizeof(Kind));
+
+                /* Build extended type_params including the new bound variables */
+                uint8_t n_extended = n_type_params + n_bound;
+                const Symbol **ext_params = (const Symbol **)arena_alloc(
+                    e->arena, n_extended * sizeof(const Symbol *));
+                Kind *ext_kinds = (Kind *)arena_alloc(
+                    e->arena, n_extended * sizeof(Kind));
+
+                /* Copy existing type params */
+                for (uint8_t i = 0; i < n_type_params; i++) {
+                    ext_params[i] = type_params[i];
+                    ext_kinds[i] = type_param_kinds[i];
+                }
+
+                /* Parse each bound variable */
+                for (uint8_t i = 0; i < n_bound; i++) {
+                    Form *vf = vars_form->as.list.items[i];
+                    if (vf->tag != F_SYM) {
+                        diag_emit(DIAG_ERROR, vf->span,
+                                  "'%s' bound variable must be a symbol",
+                                  is_forall_form ? "forall" : "exists");
+                        return NULL;
+                    }
+                    /* Reject shadowing of outer type params */
+                    for (uint8_t j = 0; j < n_type_params; j++) {
+                        if (type_params[j] == vf->as.sym) {
+                            diag_emit(DIAG_WARNING, vf->span,
+                                      "'%s' bound variable '%s' shadows an outer type variable",
+                                      is_forall_form ? "forall" : "exists",
+                                      vf->as.sym->name);
+                        }
+                    }
+                    var_names[i] = vf->as.sym->name;
+                    var_kinds[i] = KIND_STAR;  /* default kind */
+                    ext_params[n_type_params + i] = vf->as.sym;
+                    ext_kinds[n_type_params + i] = KIND_STAR;
+                }
+
+                /* Parse the body type with bound vars in scope */
+                Type *body_type = type_expr_from_form(e, body_form, rec_name,
+                    ext_params, ext_kinds, n_extended);
+                if (!body_type) return NULL;
+
+                /* Build the TY_FORALL or TY_EXISTS node */
+                Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                memset(t, 0, sizeof(Type));
+                t->kind = is_forall_form ? TY_FORALL : TY_EXISTS;
+                t->copy_kind = CK_MOVE;
+                t->hkt_kind = KIND_STAR;
+                t->as.forall_.var_names = var_names;
+                t->as.forall_.var_kinds = var_kinds;
+                t->as.forall_.n_vars = n_bound;
+                t->as.forall_.body = body_type;
+                return t;
+            }
+        }
+
         /* Type application: (ctor arg1 arg2 ...) is right-associative
          * (ctor arg1 arg2) == (ctor (arg1 arg2)) for binary constructors
          * But for simplicity in v1, we only support (ctor arg) with exactly 2 elements.
