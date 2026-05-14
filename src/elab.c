@@ -4823,6 +4823,36 @@ static Expr *elab_shift0(Elab *e, const Form *call) {
 
 /* Phase B2: Cloneable continuations */
 
+/* CPS-CL10 (elab-time): Walk all local bindings visible at a cloneable-shift
+ * site and emit TUR-E0014 for any that lack a Clone instance.  This is a
+ * conservative check — it covers every binding in scope, not just those that
+ * are actually live at the shift; liveness-precise checking would require the
+ * CPS pass.  Running early (in elab) gives diagnostics before codegen. */
+static void check_cloneable_capture(Elab *e, Span span) {
+    const Symbol *clone_sym = intern_cstr(e->st, "Clone");
+    TypeClass *clone_tc = typeclass_env_lookup_typeclass(&e->typeclass_env, clone_sym);
+    if (!clone_tc) return; /* No Clone typeclass in scope; nothing to check */
+
+    for (Scope *s = e->scope; s != NULL && s != &e->global; s = s->parent) {
+        for (uint32_t i = 0; i < s->n; i++) {
+            Binding *b = s->bindings[i];
+            if (!b || !b->name) continue;
+            Type t = b->type;
+            /* Primitive/function/continuation types are always safe to capture */
+            if (t.kind == TY_NIL || t.kind == TY_FN ||
+                t.kind == TY_CLONEABLE_CONT) continue;
+            TypeClassInstance *inst =
+                typeclass_env_lookup_instance(&e->typeclass_env, clone_tc, &t, 1);
+            if (!inst) {
+                diag_emit_with_code(DIAG_ERROR, span,
+                                    TUR_E0014_NOT_CLONE,
+                                    "captured binding '%s' does not implement Clone "
+                                    "(required by cloneable-shift)", b->name->name);
+            }
+        }
+    }
+}
+
 /* (cloneable-reset body) - Establish a continuation boundary with cloneable captures.
  * Similar to reset, but all captured values must implement Clone.
  * The body can use cloneable-shift to capture a cloneable continuation. */
@@ -4891,6 +4921,8 @@ static Expr *elab_cloneable_shift(Elab *e, const Form *call) {
     out->as.cloneable_shift_.k_fn = k_expr;
     out->as.cloneable_shift_.body = body;
     out->as.cloneable_shift_.cont_body = NULL;
+    /* CPS-CL10: verify all local captures implement Clone at elaboration time */
+    check_cloneable_capture(e, call->span);
     return out;
 }
 
