@@ -147,6 +147,7 @@ static bool is_sym_start(int c) {
         case '_': case '$': case '&':
         case '.':            /* Phase 15: enables .method for typeclass method calls */
         case '^':            /* enables ^mut, ^int as sym-shaped metadata */
+        case '|':            /* enables |>, |||, and similar pipe-shaped operators */
         case 39:             /* single quote ' - enables lifetime annotations like 'a */
             return true;
     }
@@ -162,6 +163,7 @@ static bool is_sym_cont(int c) {
         case '!': case '?':
         case '_': case '$': case '&':
         case '.': case '#': case '^':
+        case '|':            /* enables |>, |||, and similar pipe-shaped operators */
         case 39:             /* single quote ' - allows ' in lifetime symbols like 'a */
             return true;
     }
