@@ -517,10 +517,8 @@ See [hkt-implementation-plan.md](hkt-implementation-plan.md) for the complete ro
 - [x] `do-m` macro added to `stdlib/macros.tur` (list-based approach, no quasiquote).
 - [x] Add `type-app` fixture (`tests/fixtures/type-app/`).
 - [x] Add `hkt-defrec-fix-with-body` fixture (placeholder for recursive type body parsing).
-- [ ] Support typeclass names as type constructors in `(type-app F A)` so `tests/fixtures/type-app/` passes.
-  - **Context:** `(type-app Functor option)` fails with "unknown type constructor 'Functor'" because `elab_type_app` only looks up struct-level type constructors, not typeclass names. The fixture declares `Functor` via `defclass`, then tries to partially apply it to `option`.
-  - **What to implement:** In `elab_type_app` (or wherever the `type-app` form is elaborated in `src/elab.c`), add a lookup against the typeclass environment (`typeclass_env_lookup_typeclass`) when the ordinary type-constructor lookup fails. A typeclass used as a type constructor should produce a `TY_STRUCT`-like opaque type node tagged with the typeclass identity so that `definstance` matching can later resolve it.
-  - **Acceptance:** `tests/fixtures/type-app/` passes; `tests/fixtures/hkt-type-app-kind/` continues to pass; codegen snapshot updated.
+- [x] Support typeclass names as type constructors in `(type-app F A)` so `tests/fixtures/type-app/` passes.
+  - Implemented in `elab_type_app` ([src/elab.c:9815](../src/elab.c#L9815)): falls back to `typeclass_env_lookup_typeclass` when the ordinary binding lookup fails; `type_typeclass` produces the opaque type node with the correct `hkt_kind`. Both `type-app` and `hkt-type-app-kind` fixtures PASS.
 
 #### H6 — Integration & polish ✅ DONE
 - [x] Write user-facing HKT guide: `docs/hkt-guide.md`.
@@ -1432,23 +1430,22 @@ These prerequisites must be completed before the parameterized Clone instances c
 - [x] Implement `(definstance Clone (ref a) [Clone a])` — deep clone into new heap allocation.
   - Done: `(definstance Clone [Ref] ...)` with inline C deep-copy implemented in `stdlib/ref.tur`.
   - Note: Borrow-checked references (`&T`, `&mut T`) are compiler-level constructs, not heap-allocated types.
-- [ ] Add `check_cloneable_capture` in `src/elab.c`; emit TUR-E0014 on non-`Clone` capture.
-  - Deferred: requires B2 (cloneable continuation runtime) to have cloneable continuations to check.
+- [x] Add `check_cloneable_capture` in `src/elab.c`; emit TUR-E0014 on non-`Clone` capture.
+  - Done: static function `check_cloneable_capture` added to `src/elab.c` ([src/elab.c:4826](../src/elab.c#L4826)); called from `elab_cloneable_shift`. Walks local scope chain at each `cloneable-shift` site and emits TUR-E0014 for any binding lacking a Clone instance. Duplicate CPS-CL10 check removed from `src/cps.c`.
 - [x] Add `tests/fixtures/backtrack/clone-primitives.tur`.
   - Done: fixture exists at `tests/fixtures/clone-primitives/` and passes.
 - [x] Add `tests/fixtures/clone-pair/` fixture.
   - Done: fixture at `tests/fixtures/clone-pair/` passes (outputs 30).
-- [ ] Add `tests/fixtures/clone-option/` fixture.
-  - **Blocked**: requires multi-file compilation to use existing non-parameterized Clone instance for option. PTC1–PTC3 are complete.
+- [x] Add `tests/fixtures/clone-option/` fixture.
+  - Done: `tests/fixtures/clone-option/` passes (outputs 55). Uses inline user-defined `Option` struct (mirrors option layout) to avoid the kind `* -> *` conflict with `Clone [int]`.
 - [x] Add `tests/fixtures/clone-list/` fixture.
   - Done: fixture at `tests/fixtures/clone-list/` passes (outputs 42).
-- [ ] Add `tests/fixtures/clone-vec/` fixture.
-  - **Blocked**: requires multi-file compilation to use existing non-parameterized Clone instance for vec. PTC1–PTC3 are complete.
+- [x] Add `tests/fixtures/clone-vec/` fixture.
+  - Done: `tests/fixtures/clone-vec/` passes (outputs 60). Uses a `Vec [ptr :int len :int]` struct with inline C deep-copy of the element array.
 - [x] Add `tests/fixtures/backtrack/clone-rc.tur`.
   - Done: `tests/fixtures/backtrack-clone-rc/` passes. Added `(definstance Clone [rc] ...)` inline (TY_RC → `rc_strong_increment` shallow clone). Also added `Clone [rc]` to `stdlib/rc.tur`.
-- [ ] Add `tests/fixtures/backtrack/clone-ref.tur`.
-  - Deferred: `ref` type not yet implemented as stdlib type.
-  - `Clone [ref]` instance (deep copy via malloc) added to `stdlib/ref.tur`; fixture itself deferred.
+- [x] Add `tests/fixtures/backtrack/clone-ref.tur`.
+  - Done: `tests/fixtures/backtrack-clone-ref/` passes (outputs 42). Uses `(definstance Clone [Ref] ...)` inline with deep-copy malloc; mirrors `backtrack-clone-rc` pattern for the Ref type.
 - [x] Add negative fixture `tests/fixtures/backtrack/clone-non-clone-capture.tur`.
   - Done: `tests/fixtures/errors/backtrack-clone-non-clone-capture/` passes. Non-Clone struct captured at `cloneable-shift` correctly emits TUR-E0014.
 

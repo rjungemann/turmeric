@@ -1,0 +1,56 @@
+;; Phase B1: Clone trait for a vec-like struct type
+;;
+;; Uses a user-defined Vec struct holding a heap data pointer and length
+;; to demonstrate that Clone performs a deep copy of the element array,
+;; giving the clone independent ownership of its data.
+
+;; Vec stores a heap data pointer (as int64_t) and element count.
+(defstruct Vec [ptr :int len :int])
+
+(defclass Clone [a]
+  (clone [x] :int))
+
+(definstance Clone [int]
+  (clone [x] x))
+
+;; Clone [Vec]: allocate a new data array and copy all elements.
+;; x has type Vec (struct value) in the generated C function;
+;; x.ptr is the int64_t-cast data pointer, x.len is element count.
+(definstance Clone [Vec]
+  (clone [x] :int
+    ```c
+    int64_t *src = (int64_t *)(intptr_t)x.ptr;
+    int64_t *dst_data = (int64_t *)malloc(sizeof(int64_t) * (size_t)x.len);
+    for (int64_t i = 0; i < x.len; i++) dst_data[i] = src[i];
+    struct { int64_t ptr; int64_t len; } *dst =
+        malloc(sizeof(struct { int64_t ptr; int64_t len; }));
+    dst->ptr = (int64_t)(intptr_t)dst_data;
+    dst->len = x.len;
+    return (int64_t)(intptr_t)dst;
+    ```))
+
+;; Allocate a 3-element heap array and return its address as int64_t.
+(defn make-data [a b c] :int
+  ```c
+  int64_t *data = (int64_t *)malloc(3 * sizeof(int64_t));
+  data[0] = a; data[1] = b; data[2] = c;
+  return (int64_t)(intptr_t)data;
+  ```)
+
+;; Access element i of a heap Vec pointer (returned by Clone.clone).
+(defn heap-vec-get [p i] :int
+  ```c
+  struct { int64_t ptr; int64_t len; } *v = (void *)(intptr_t)p;
+  int64_t *data = (int64_t *)(intptr_t)v->ptr;
+  return data[i];
+  ```)
+
+(defn main [] :int
+  ;; Build Vec([10, 20, 30]), clone it, verify the clone's element sum is 60.
+  (let [data (make-data 10 20 30)]
+    (let [v  (make-struct Vec data 3)]
+      (let [v2 (.clone v)]
+        (println (+ (heap-vec-get v2 0)
+                    (+ (heap-vec-get v2 1)
+                       (heap-vec-get v2 2)))))))
+  0)
