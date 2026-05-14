@@ -1,0 +1,1 @@
+* λ and higher-ranked type symbols (forall ∀, exists ∃)
