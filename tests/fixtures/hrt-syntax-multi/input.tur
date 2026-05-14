@@ -1,0 +1,8 @@
+; Phase HRT0: multiple bound variables in a single quantifier.
+; Tests that (forall [a b] a) and (exists [a b c] a) parse correctly
+; with two and three bound variables respectively.
+(deftype Pair (forall [a b] a))
+(deftype Triple (exists [a b c] a))
+
+(defn main [] :int
+  0)

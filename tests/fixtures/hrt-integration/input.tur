@@ -1,0 +1,32 @@
+; Phase HRT5: Integration fixture combining HRT + typeclasses + let-binding.
+; Demonstrates:
+;   - Typeclass with rank-2 method (Transform)
+;   - let-bound poly fn alias forwarded to typeclass method
+;   - Recursive poly fn using typeclass dispatch internally
+;   - apply-twice using the typeclass for both applications
+
+(defclass Transform []
+  (transform [[f (forall [a] (-> a a))] x] :int))
+
+(definstance Transform []
+  (transform [f x] (f x)))
+
+(defn apply-twice [f (forall [a] (-> a a)) x :int] :int
+  (.transform f (.transform f x)))
+
+(defn church-apply [f (forall [a] (-> a a)) n :int x :int] :int
+  (if (<= n 0)
+    x
+    (church-apply f (- n 1) (.transform f x))))
+
+(defn inc [x :int] :int (+ x 1))
+
+(defn main [] :int
+  ; let-bound poly fn through typeclass: inc(10) = 11
+  (let [poly-id inc]
+    (println (.transform poly-id 10)))
+  ; apply-twice through typeclass: inc(inc(5)) = 7
+  (println (apply-twice inc 5))
+  ; church-apply via typeclass dispatch inside: inc 4 times from 0 = 4
+  (println (church-apply inc 4 0))
+  0)

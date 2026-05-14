@@ -78,6 +78,13 @@ int type_eq(Type a, Type b) {
     if (a.kind == TY_REC) {
         return a.as.rec.name == b.as.rec.name;
     }
+    /* Phase HRT0: Quantified types — structural equality on n_vars and body */
+    if (a.kind == TY_FORALL || a.kind == TY_EXISTS) {
+        if (a.as.forall_.n_vars != b.as.forall_.n_vars) return 0;
+        if (!a.as.forall_.body || !b.as.forall_.body)
+            return a.as.forall_.body == b.as.forall_.body;
+        return type_eq(*a.as.forall_.body, *b.as.forall_.body);
+    }
     return 1;
 }
 
@@ -258,6 +265,27 @@ const char *type_name(Type t) {
         /* Phase X3: Set literal */
         case TY_SET:
             return "set";
+        /* Phase HRT0: Quantified types */
+        case TY_FORALL:
+        case TY_EXISTS: {
+            Buf tmp;
+            buf_init(&tmp);
+            buf_puts(&tmp, t.kind == TY_FORALL ? "(forall [" : "(exists [");
+            for (uint8_t i = 0; i < t.as.forall_.n_vars; i++) {
+                if (i > 0) buf_putc(&tmp, ' ');
+                buf_puts(&tmp, t.as.forall_.var_names && t.as.forall_.var_names[i]
+                                ? t.as.forall_.var_names[i] : "?");
+            }
+            buf_puts(&tmp, "] ");
+            if (t.as.forall_.body) {
+                buf_puts(&tmp, type_name(*t.as.forall_.body));
+            } else {
+                buf_puts(&tmp, "?");
+            }
+            buf_putc(&tmp, ')');
+            buf_putc(&tmp, '\0');
+            return tur_strdup(tmp.data);
+        }
     }
     return "?";
 }
@@ -404,6 +432,21 @@ static void type_name_buf(Buf *b, Type t) {
             buf_puts(b, "set");
             break;
         }
+        /* Phase HRT0: Quantified types — always print quantifiers explicitly */
+        case TY_FORALL:
+        case TY_EXISTS: {
+            buf_puts(b, t.kind == TY_FORALL ? "(forall [" : "(exists [");
+            for (uint8_t i = 0; i < t.as.forall_.n_vars; i++) {
+                if (i > 0) buf_putc(b, ' ');
+                buf_puts(b, t.as.forall_.var_names && t.as.forall_.var_names[i]
+                             ? t.as.forall_.var_names[i] : "?");
+            }
+            buf_puts(b, "] ");
+            if (t.as.forall_.body) type_name_buf(b, *t.as.forall_.body);
+            else buf_puts(b, "?");
+            buf_putc(b, ')');
+            break;
+        }
     }
 }
 
@@ -479,6 +522,10 @@ const char *type_c_name(Type t) {
         /* Phase X3: Set literal — sorted int64_t array */
         case TY_SET:
             return "tur_set_t *";
+        /* Phase HRT0: Quantified types — no runtime representation in HRT0 */
+        case TY_FORALL:
+        case TY_EXISTS:
+            return "void *";
     }
     return "void";
 }
@@ -598,6 +645,13 @@ static bool type_is_guarded_recursive_helper(const Type *t, const char *rec_name
             return true;
         }
 
+        /* Phase HRT0: Quantified types guard recursion (the forall/exists is itself a constructor) */
+        case TY_FORALL:
+        case TY_EXISTS: {
+            int new_depth = depth + 1;
+            return type_is_guarded_recursive_helper(t->as.forall_.body, rec_name, new_depth);
+        }
+
         /* Leaf types - no recursion possible */
         case TY_UNKNOWN:
         case TY_NIL:
@@ -688,7 +742,29 @@ const char *typekind_to_string(TypeKind k) {
         case TY_STRUCT:   return "struct";
         case TY_NEVER:    return "!";
         case TY_SET:      return "set";
+        /* Phase HRT0 */
+        case TY_FORALL:   return "forall";
+        case TY_EXISTS:   return "exists";
         default:          return "<?>";
+    }
+}
+
+/* Phase HRT0: Compute the rank of a type.
+ * Rank 0 = monotype (no quantifiers).
+ * Rank 1 = forall/exists at the outermost level.
+ * Rank N = forall/exists nested N levels deep (each level adds 1).
+ * Note: full rank computation requires Type* args in TY_FN (deferred to HRT1).
+ */
+int type_rank(const Type *t) {
+    if (!t) return 0;
+    switch (t->kind) {
+        case TY_FORALL:
+        case TY_EXISTS: {
+            int body_rank = type_rank(t->as.forall_.body);
+            return body_rank + 1;
+        }
+        default:
+            return 0;
     }
 }
 

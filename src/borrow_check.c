@@ -563,6 +563,17 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
         case EX_SERIAL_SHIFT:
             if (!borrow_check_expr_recursive(ctx, e->as.serial_shift_.k_fn)) return false;
             return borrow_check_expr_recursive(ctx, e->as.serial_shift_.body);
+        /* Phase HRT1: poly wrap is pure (no borrows), ascribe just delegates */
+        case EX_POLY_WRAP:
+            return borrow_check_expr_recursive(ctx, e->as.poly_wrap_.inner);
+        case EX_ASCRIBE:
+            return borrow_check_expr_recursive(ctx, e->as.ascribe_.inner);
+        /* Phase HRT2: existential pack/open */
+        case EX_EXISTS_PACK:
+            return borrow_check_expr_recursive(ctx, e->as.exists_pack_.value);
+        case EX_EXISTS_OPEN:
+            if (!borrow_check_expr_recursive(ctx, e->as.exists_open_.packed)) return false;
+            return borrow_check_expr_recursive(ctx, e->as.exists_open_.body);
     }
 
     return true;
