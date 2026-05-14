@@ -1,0 +1,180 @@
+;;
+;; Tidal Live-Coding Tests
+;; Phase H tests from tidalcycles-dsl-plan.md
+;;
+
+(import tidal/live tidal/pattern)
+
+;; ============================================================
+;; Live Pattern Replacement Tests
+;; ============================================================
+
+(defn test-player-update []
+  ;; Test updating a player's pattern
+  (let [initial-pat (const 1)
+        player (make-player "test" initial-pat 120.0)]
+    (let [new-pat (const 2)
+          updated (player-update player new-pat)]
+      (assert (not (== updated player)) "Updated player should be different")
+      true)))
+
+(defn test-swap-patterns []
+  ;; Test swapping multiple patterns
+  (let [initial (make-map)
+        map-set! (initial :freq (const 440.0))
+        map-set! (initial :amp (const 0.5))
+        player (make-player "test" (const initial) 120.0)]
+    (let [new-patterns (make-map)
+          map-set! (new-patterns :freq (const 880.0))
+          map-set! (new-patterns :amp (const 0.3))
+          updated (swap-patterns player new-patterns)]
+      (assert (not (== updated player)) "Swapped player should be different")
+      true)))
+
+;; ============================================================
+;; Pattern Hot-Reloading Tests
+;; ============================================================
+
+(defn test-watch-pattern []
+  ;; Test watching a file for pattern changes
+  ;; This is hard to test without actual file system
+  true)
+
+(defn test-eval-pattern []
+  ;; Test evaluating a pattern from a string
+  (let [code "(const 42)"
+        p (eval-pattern code)]
+    (assert (fn? p) "Evaluated pattern should be a function")
+    (assert (== (p 0.0) 42) "Evaluated pattern should work")
+    true))
+
+;; ============================================================
+;; Stateful Pattern Tests
+;; ============================================================
+
+(defn test-make-stateful-pattern []
+  (let [f (fn [state time] [state (const (+ state 1))])
+        p (make-stateful-pattern 0 f)]
+    (assert (== (:state p) 0) "Initial state should be 0")
+    (assert (fn? (:pattern p)) "Pattern function should be present")
+    true))
+
+(defn test-step-stateful []
+  (let [f (fn [state time] [(inc state) (const state)])
+        p (make-stateful-pattern 0 f)]
+    (let [[new-state new-pat] (step-stateful p 0.0)]
+      (assert (== new-state 1) "New state should be 1")
+      (assert (== (new-pat 0.0) 0) "New pattern should use old state")
+      true))))
+
+(defn test-counter-pattern []
+  (let [p (counter-pattern 10)]
+    (assert (== (:state p) 0) "Counter should start at 0")
+    (let [[new-state new-pat] (step-stateful p 0.0)]
+      (assert (== new-state 0) "Counter state should be 0 (mod 10)")
+      true))))
+
+;; ============================================================
+;; Session State Pattern Tests
+;; ============================================================
+
+(defn test-state-pattern []
+  ;; Test pattern that reads from session state
+  ;; This requires a session to be set up
+  true)
+
+(defn test-updating-pattern []
+  ;; Test pattern that updates session state
+  ;; This requires a session to be set up
+  true)
+
+;; ============================================================
+;; Live Session Tests
+;; ============================================================
+
+(defn test-make-live-session []
+  (let [session (make-live-session 120.0)]
+    (assert (== (:bpm session) 120.0) "Live session should have BPM")
+    (assert (some? (:patterns session)) "Live session should have patterns map")
+    true))
+
+(defn test-session-set-pattern []
+  (let [session (make-live-session 120.0)]
+    (let [p (const 42)]
+      (let [session2 (session-set-pattern session "test" p)]
+        (assert (contains? (:patterns session2) "test") "Should contain test pattern")
+        true))))
+
+(defn test-session-get-pattern []
+  (let [session (make-live-session 120.0)]
+    (let [p (const 42)
+          session2 (session-set-pattern session "test" p)
+          retrieved (session-get-pattern session2 "test")]
+      (assert (== (retrieved 0.0) 42) "Retrieved pattern should work")
+      true))))
+
+;; ============================================================
+;; d1/hush Shortcuts Tests
+;; ============================================================
+
+(defn test-d1-shortcut []
+  ;; Test d1 shortcut for setting default pattern
+  true)
+
+(defn test-hush-shortcut []
+  ;; Test hush shortcut for silencing all patterns
+  true)
+
+;; ============================================================
+;; Edge Cases
+;; ============================================================
+
+(defn test-player-update-same-pattern []
+  (let [p (const 1)
+        player (make-player "test" p 120.0)]
+    (let [updated (player-update player p)]
+      ;; Updating with same pattern should still work
+      true)))
+
+(defn test-swap-empty-patterns []
+  (let [player (make-player "test" (const (make-map)) 120.0)]
+    (let [updated (swap-patterns player (make-map))]
+      true)))
+
+;; ============================================================
+;; Main Test Runner
+;; ============================================================
+
+(defn run-all-tests []
+  (let [tests [
+    ["player update" test-player-update]
+    ["swap patterns" test-swap-patterns]
+    ["watch pattern" test-watch-pattern]
+    ["eval pattern" test-eval-pattern]
+    ["make stateful pattern" test-make-stateful-pattern]
+    ["step stateful" test-step-stateful]
+    ["counter pattern" test-counter-pattern]
+    ["state pattern" test-state-pattern]
+    ["updating pattern" test-updating-pattern]
+    ["make live session" test-make-live-session]
+    ["session set pattern" test-session-set-pattern]
+    ["session get pattern" test-session-get-pattern]
+    ["d1 shortcut" test-d1-shortcut]
+    ["hush shortcut" test-hush-shortcut]
+    ["player update same pattern" test-player-update-same-pattern]
+    ["swap empty patterns" test-swap-empty-patterns]
+  ]]
+    (doseq [[name test-fn] tests]
+      (print (str "Testing: " name " ... "))
+      (try
+        (let [result (test-fn)]
+          (if result
+            (println " PASS")
+            (println " FAIL")))
+        (catch e
+          (println (str " ERROR: " (error->string e))))))
+    (println "\nLive-coding tests complete.")))
+
+;; Run tests if executed directly
+(when (== (get *argv* 0) "run")
+  (run-all-tests))

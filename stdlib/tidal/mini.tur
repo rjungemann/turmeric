@@ -1,0 +1,350 @@
+;; stdlib/tidal/mini.tur — Mini-Notation Parser
+;;
+;; This module provides a TidalCycles-style mini-notation system for
+;; concise pattern specification using string syntax.
+
+(import tidal/pattern :pattern)
+(import tidal/structural :structural)
+(import tidal/temporal :temporal)
+(import tidal/transform :transform)
+
+;; ============================================================================
+;; Mini-Notation Token Types
+;; ============================================================================
+
+;; Token types for mini-notation
+(def-type MiniTokenType :enum [ :num :op :paren-open :paren-close :bracket-open :bracket-close :brace-open :brace-close :comma :space ])
+
+;; Token structure
+(defstruct MiniToken
+  [type :MiniTokenType
+   value :cstr
+   position :int])
+
+;; ============================================================================
+;; Mini-Notation Tokenizer
+;; ============================================================================
+
+;; Tokenize a mini-notation string into tokens
+;;
+;; @param s Mini-notation string
+;; @return Vector of MiniToken
+(defn mini-tokenize [s]
+  (let [tokens []
+        len (str/len s)]
+    (var i 0)
+    (while (< i len)
+      (let [c (str/get s i)]
+        (cond
+          (str/is-digit c)
+          (let [start i]
+            (while (< i len) (let [cc (str/get s i)] (when (str/is-digit cc) (set! i (inc i)))))
+            (set! tokens (conj tokens {:type :num :value (str/substring s start i) :position start}))
+            )
+          
+          (or (= c '+') (= c '-') (= c '*') (= c '/') (= c '%') (= c '~') (= c '?') (= c '<') (= c '>') (= c '^'))
+          (do
+            (set! tokens (conj tokens {:type :op :value (str c) :position i}))
+            (set! i (inc i)))
+          
+          (= c '(')
+          (do
+            (set! tokens (conj tokens {:type :paren-open :value "(" :position i}))
+            (set! i (inc i)))
+          
+          (= c ')')
+          (do
+            (set! tokens (conj tokens {:type :paren-close :value ")" :position i}))
+            (set! i (inc i)))
+          
+          (= c '[')
+          (do
+            (set! tokens (conj tokens {:type :bracket-open :value "[" :position i}))
+            (set! i (inc i)))
+          
+          (= c ']')
+          (do
+            (set! tokens (conj tokens {:type :bracket-close :value "]" :position i}))
+            (set! i (inc i)))
+          
+          (= c '{')
+          (do
+            (set! tokens (conj tokens {:type :brace-open :value "{" :position i}))
+            (set! i (inc i)))
+          
+          (= c '}')
+          (do
+            (set! tokens (conj tokens {:type :brace-close :value "}" :position i}))
+            (set! i (inc i)))
+          
+          (= c ',')
+          (do
+            (set! tokens (conj tokens {:type :comma :value "," :position i}))
+            (set! i (inc i)))
+          
+          (str/is-whitespace c)
+          (do
+            (set! tokens (conj tokens {:type :space :value (str c) :position i}))
+            (set! i (inc i)))
+          
+          :else
+          (do
+            (set! i (inc i))))))
+    tokens))
+
+;; ============================================================================
+;; Mini-Notation Parser
+;; ============================================================================
+
+;; Parse mini-notation tokens into a pattern
+;;
+;; @param tokens Vector of MiniToken
+;; @param index Current index in tokens
+;; @return tuple<pattern NumPattern remaining-index>
+(defn parse-expr [tokens index]
+  (if (>= index (len tokens))
+    [(pattern/const 0) index]
+    (let [token (get tokens index)]
+      (case (:type token)
+        :num
+        [(pattern/const (str/to-float (:value token))) (inc index)]
+        
+        :op
+        (let [op (:value token)]
+          (if (= op "-")  ;; Unary minus
+            (let [[right right-index] (parse-expr tokens (inc index))]
+              [(transform/mul right -1) right-index])
+            (let [[left left-index] (parse-expr tokens (inc index))
+                  [right right-index] (parse-expr tokens left-index)]
+              [(apply-op op left right) right-index])))
+        
+        :paren-open
+        (let [[expr expr-index] (parse-expr tokens (inc index))]
+          (if (< expr-index (len tokens)) (let [next (get tokens expr-index)] (= (:type next) :paren-close))
+            [(structural/seq expr) (inc expr-index)]
+            [(structural/stack expr) expr-index]))
+        
+        :bracket-open
+        (let [[expr expr-index] (parse-expr tokens (inc index))]
+          (if (< expr-index (len tokens)) (let [next (get tokens expr-index)] (= (:type next) :bracket-close))
+            [(temporal/fast 2 expr) (inc expr-index)]
+            [(temporal/fast 2 expr) expr-index]))
+        
+        :space
+        (parse-expr tokens (inc index))
+        
+        _
+        [(pattern/const 0) (inc index)])))))
+
+;; Apply an operator to two patterns
+;;
+;; @param op Operator character
+;; @param left Left pattern
+;; @param right Right pattern
+;; @return NumPattern with operator applied
+(defn apply-op [op left right]
+  (case op
+    "+" (transform/add left right)
+    "-" (transform/sub left right)
+    "*" (transform/mul left right)
+    "/" (transform/div left right)
+    "%" (transform/mod-pat left right)
+    "~" (transform/jitter right 0.1)  ;; Add small jitter
+    "?" (structural/rand-select left right)  ;; Randomly select
+    "<" (temporal/slow 2 left)  ;; Slow down
+    ">" (temporal/fast 2 left)  ;; Speed up
+    "^" (transform/pow-pat left right)  ;; Power
+    (pattern/const 0)))
+
+;; Parse a mini-notation string
+;;
+;; @param s Mini-notation string
+;; @return NumPattern
+(defn parse-mini [s]
+  (let [tokens (mini-tokenize s)
+        [parsed _] (parse-expr tokens 0)]
+    parsed))
+
+;; ============================================================================
+;; Mini-Notation Macros
+;; ============================================================================
+
+;; Macro for inline mini-notation
+;; (s "1 2 3") expands to (parse-mini "1 2 3")
+(defmacro s [expr]
+  `(parse-mini ~expr))
+
+;; ============================================================================
+;; Drum Notation
+;; ============================================================================
+
+;; Drum name to pattern mapping
+(def DRUM_NAMES
+  {"bd" (pattern/const "bd")
+   "sd" (pattern/const "sd")
+   "hh" (pattern/const "hh")
+   "oh" (pattern/const "oh")
+   "cp" (pattern/const "cp")
+   "ch" (pattern/const "ch")
+   "rd" (pattern/const "rd")
+   "tm" (pattern/const "tm")
+   "th" (pattern/const "th")
+   "cb" (pattern/const "cb")})
+
+;; Parse drum mini-notation
+;;
+;; @param s Drum mini-notation string
+;; @return Pattern<map> that produces drum parameters
+(defn parse-drums [s]
+  (let [tokens (str/split s " ")
+        patterns (map (fn [token]
+                        (or (get DRUM_NAMES token)
+                            (pattern/const nil))) tokens)]
+    (structural/seq patterns...)))
+
+;; Drum pattern macro
+;; (d "bd sd") expands to (parse-drums "bd sd")
+(defmacro d [expr]
+  `(parse-drums ~expr))
+
+;; ============================================================================
+;; Note Notation
+;; ============================================================================
+
+;; Note names to MIDI note numbers (C4 = 60)
+(def NOTE_NAMES
+  {"c" 0 "c#" 1 "db" 1 "d" 2 "d#" 3 "eb" 3 "e" 4 "f" 5 "f#" 6 "gb" 6 
+   "g" 7 "g#" 8 "ab" 8 "a" 9 "a#" 10 "bb" 10 "b" 11})
+
+;; Octave multiplier
+(def OCTAVE_MULT 12)
+
+;; Parse a note name (e.g., "c4", "g#5", "eb3")
+;;
+;; @param note-str Note string (e.g., "c4", "g#", "eb3")
+;; @param default-octave Default octave if not specified (default: 4)
+;; @return MIDI note number
+(defn parse-note [note-str & [default-octave 4]]
+  (let [str-len (str/len note-str)
+        i 0]
+    (while (< i str-len)
+      (let [c (str/get note-str i)]
+        (when (not (str/is-alpha c))
+          (return (let [note-part (str/substring note-str 0 i)
+                        octave-part (str/substring note-str i)
+                        note-val (get NOTE_NAMES note-part 0)
+                        octave (if (empty? octave-part) default-octave (str/to-int octave-part))]
+                    (+ (* octave OCTAVE_MULT) note-val))))
+          (set! i (inc i)))))
+    60))  ;; Default to middle C
+
+;; Parse note mini-notation
+;;
+;; @param s Note mini-notation string (e.g., "c4 e4 g4")
+;; @return NumPattern of MIDI notes
+(defn parse-notes [s]
+  (let [tokens (str/split s " ")
+        notes (map parse-note tokens)]
+    (apply pattern/cycle notes)))
+
+;; Note pattern macro
+;; (n "c4 e4 g4") expands to (parse-notes "c4 e4 g4")
+(defmacro n [expr]
+  `(parse-notes ~expr))
+
+;; ============================================================================
+;; Chord Notation
+;; ============================================================================
+
+;; Parse chord mini-notation (e.g., "[c4 e4 g4]")
+;;
+;; @param s Chord mini-notation string
+;; @return Pattern<vec<int>> of MIDI notes
+(defn parse-chord [s]
+  (let [clean (str/replace (str/replace s "[" "") "]" "")
+        notes (str/split clean " ")
+        midi-notes (map parse-note notes)]
+    (pattern/const (vec midi-notes))))
+
+;; Chord macro
+;; (chord "[c4 e4 g4]") expands to (parse-chord "[c4 e4 g4]")
+(defmacro chord [expr]
+  `(parse-chord ~expr))
+
+;; ============================================================================
+;; Shorthand Notation
+;; ============================================================================
+
+;; Parse shorthand rhythm notation (e.g., "x o x o" for kick-snare pattern)
+;;
+;; @param s Shorthand string (x = hit, o = rest)
+;; @param hit-value Value for hits (default: 1)
+;; @param rest-value Value for rests (default: 0)
+;; @return NumPattern
+(defn parse-rhythm [s & [hit-value 1 rest-value 0]]
+  (let [chars (str/chars s)
+        values (map (fn [c] (if (= c 'x') hit-value rest-value)) chars)]
+    (apply pattern/cycle values)))
+
+;; Rhythm macro
+;; (r "x o x o") expands to (parse-rhythm "x o x o")
+(defmacro r [expr]
+  `(parse-rhythm ~expr))
+
+;; ============================================================================
+;; Pattern Repetition Notation
+;; ============================================================================
+
+;; Parse pattern with repetition (e.g., "bd*2 sd" = bd bd sd)
+;;
+;; @param s Pattern string with *n notation
+;; @return NumPattern
+(defn parse-with-repeat [s]
+  (let [tokens (str/split s " ")
+        expanded []]
+    (doseq [token tokens]
+      (let [[base repeat] (if-let [star-pos (str/index-of token "*")]
+                            [(str/substring token 0 star-pos) 
+                             (str/to-int (str/substring token (inc star-pos)))]
+                            [token 1])]
+        (dotimes [i repeat]
+          (set! expanded (conj expanded base)))))
+    (apply pattern/cycle expanded)))
+
+;; ============================================================================
+;; Combined Mini-Notation Parser
+;; ============================================================================
+
+;; Parse a complete mini-notation expression
+;; Handles numbers, operators, parentheses, brackets, etc.
+;;
+;; @param s Mini-notation string
+;; @return NumPattern
+(defn mini [s]
+  (parse-mini s))
+
+;; ============================================================================
+;; Mini-Notation Examples
+;; ============================================================================
+
+;; Simple sequence: "1 2 3" -> (cycle 1 2 3)
+(def EXAMPLE_1 (s "1 2 3"))
+
+;; Fast: "[1 2 3]" -> (fast 2 (cycle 1 2 3))
+(def EXAMPLE_2 (s "[1 2 3]"))
+
+;; With operators: "1*2 3" -> (mul (cycle 1 2) 3) 
+;; Actually, this would be parsed as applying * operator
+(def EXAMPLE_3 (s "1 2 3"))
+
+;; Drum pattern: "bd sd bd sd" -> kick-snare pattern
+(def EXAMPLE_DRUM (d "bd sd bd sd"))
+
+;; Note pattern: "c4 e4 g4" -> C major arpeggio
+(def EXAMPLE_NOTE (n "c4 e4 g4"))
+
+;; Chord: "[c4 e4 g4]" -> C major chord
+(def EXAMPLE_CHORD (chord "[c4 e4 g4]"))
+
+;; Rhythm: "x o x o" -> alternating hits and rests
+(def EXAMPLE_RHYTHM (r "x o x o"))

@@ -1,0 +1,161 @@
+;; stdlib/scscm/types.tur — Type definitions for SCSCM library
+;;
+;; This module defines type aliases and basic types for the SuperCollider
+;; synth control library.
+
+;; ============================================================================
+;; OSC (Open Sound Control) Types
+;; ============================================================================
+
+;; OSC argument types
+(def-type OscInt int32)
+(def-type OscFloat float)
+(def-type OscString cstr)
+(def-type OscBlob slice<uint8>)
+(def-type OscTime int64)  ;; NTP timestamp
+
+;; OSC address patterns
+(def-type OscAddress cstr)
+
+;; OSC message type tag characters
+(def OSC_TAG_INT 'i')
+(def OSC_TAG_FLOAT 'f')
+(def OSC_TAG_STRING 's')
+(def OSC_TAG_BLOB 'b')
+(def OSC_TAG_TIME 't')
+(def OSC_TAG_TRUE 'T')
+(def OSC_TAG_FALSE 'F')
+(def OSC_TAG_NIL 'N')
+(def OSC_TAG_INFINITUM 'I')
+
+;; ============================================================================
+;; SuperCollider Server Types
+;; ============================================================================
+
+;; Node ID - corresponds to scsynth node IDs (int, 0 means allocate new)
+;; In hcsynth, node IDs are assigned by the caller
+(def-type NodeID int32)
+
+;; Synth definition name
+(def-type SynthDefName cstr)
+
+;; Group node type (also represented as NodeID)
+(def-type Group NodeID)
+
+;; Synth node type (also represented as NodeID)
+(def-type Synth NodeID)
+
+;; Action types for /n_set, /n_free, node placement, etc.
+(def-type NodeAction :enum [ :add-to-head :add-to-tail :add-before :add-after :replace ])
+
+;; Control parameter index
+(def-type ControlIndex int32)
+
+;; Control parameter value
+(def-type ControlValue float)
+
+;; ============================================================================
+;; Parameter Warping Types
+;; ============================================================================
+
+;; Warp types for parameter mapping
+(def-type WarpType :enum [ :linear :exp :log :db :db2 ])
+
+;; ============================================================================
+;; World/Server Types
+;; ============================================================================
+
+;; World/Engine handle
+(def-type WorldHandle int)
+
+;; Server address and port
+(def-type ServerAddr cstr)
+(def-type ServerPort int)
+
+;; ============================================================================
+;; SynthDef Specification Types
+;; ============================================================================
+
+;; Parameter specification for a SynthDef control
+(defstruct ParamSpec
+  [name :cstr
+   default :float
+   min :float
+   max :float
+   unit :cstr    ;; "", "Hz", "dB", "sec", etc.
+   warp :WarpType])
+
+;; SynthDef specification - metadata about a SynthDef's parameters
+(def-type SynthDefSpec (vec<ParamSpec>))
+
+;; ============================================================================
+;; Session Types
+;; ============================================================================
+
+;; Error types for SCSCM operations
+(def-type ScscmError :enum
+  [ :connection-failed
+    :send-failed
+    :invalid-args
+    :synth-not-found
+    :out-of-nodes
+    :world-not-found
+    :synthdef-not-found
+    :memory-error ])
+
+;; Result type for operations that can fail
+(defstruct ScscmResult<T>
+  [ok :bool
+   value :T
+   error :ScscmError])
+
+;; ============================================================================
+;; Pattern Types (for future Pattern Library)
+;; ============================================================================
+
+;; Time representations
+(def-type Beats float)  ;; Time in beats
+(def-type Seconds float)
+(def-type Samples int64)
+
+;; Pattern function type: time -> value
+;; This will be used in the optional pattern library
+;; (def-type Pattern<T> (fn [Beats] :T))
+
+;; ============================================================================
+;; Utility Constants
+;; ============================================================================
+
+;; Default server settings
+(def DEFAULT_SERVER_ADDR "127.0.0.1")
+(def DEFAULT_SERVER_PORT 57110)
+
+;; Default audio settings
+(def DEFAULT_SAMPLE_RATE 48000)
+(def DEFAULT_BLOCK_SIZE 512)
+
+;; Root group node ID (standard in SuperCollider)
+(def ROOT_GROUP_ID 1)
+
+;; Default node ID allocation starting point
+(def DEFAULT_NODE_ID_START 1000)
+
+;; MIDI note constants
+(def MIDDLE_C 60)
+(def A440_MIDI 69)  ;; MIDI note for A4 (440 Hz)
+
+;; Frequency constants
+(def A440_FREQ 440.0)
+
+;; Time conversion utilities
+(defn sec->samples [sec sample_rate]
+  (* sec sample_rate))
+
+(defn samples->sec [samples sample_rate]
+  (/ samples sample_rate))
+
+(defn ms->samples [ms sample_rate]
+  (* ms 0.001 sample_rate))
+
+(defn samples->ms [samples sample_rate]
+  (* (/ samples sample_rate) 1000.0))

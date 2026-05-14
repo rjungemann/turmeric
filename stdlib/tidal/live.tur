@@ -1,0 +1,401 @@
+;; stdlib/tidal/live.tur — Live-Coding Integration
+;;
+;; This module provides live-coding workflow support for Tidal patterns.
+;; It enables pattern modification and re-evaluation in a REPL context.
+
+(import tidal/pattern :pattern)
+(import tidal/synth :synth)
+(import tidal/structural :structural)
+
+;; ============================================================================
+;; Live Pattern Replacement
+;; ============================================================================
+
+;; Replace a pattern in a running player
+;;
+;; @param player PatternPlayer to update
+;; @param new-pattern New pattern to use
+(defn player-update [player new-pattern]
+  (synth/player-update player new-pattern))
+
+;; Swap patterns atomically in a player
+;;
+;; @param player PatternPlayer to update
+;; @param new-param-map New parameter map pattern
+(defn player-swap [player new-param-map]
+  (synth/player-swap player new-param-map))
+
+;; Reload a player with a new pattern
+;;
+;; @param player PatternPlayer to reload
+;; @param new-pattern New pattern
+(defn player-reload [player new-pattern]
+  (synth/player-stop player)
+  (player-update player new-pattern)
+  (synth/player-start player))
+
+;; ============================================================================
+;; Pattern Hot-Reloading
+;; ============================================================================
+
+;; Watch a file for changes and reload patterns
+;;
+;; This is a conceptual implementation. In a real REPL, this would
+;; integrate with the file system monitoring.
+;;
+;; @param path File path to watch
+;; @param session scscm session
+;; @param def-name SynthDef name
+;; @param initial-pattern Initial pattern
+;; @param bpm Tempo
+;; @return PatternPlayer
+(defn watch-pattern [path session def-name initial-pattern bpm]
+  (let [player (synth/synth-pattern-player session def-name 
+                                               (synth/synth-params 
+                                                 initial-pattern
+                                                 (pattern/const 1.0)
+                                                 (pattern/const 0.0))
+                                               bpm)
+        last-mod (file/mod-time path)]
+    
+    ;; In a real implementation, we'd spawn a background task to watch the file
+    ;; For now, we just return the player
+    player))
+
+;; ============================================================================
+;; Pattern State Management
+;; ============================================================================
+
+;; Pattern with internal state
+(defstruct StatefulPattern<T>
+  [pattern :(fn [T time/Beats] :tuple<T (pattern/Pattern<T>)>)
+   state :T])
+
+;; Create a stateful pattern
+;;
+;; @param initial Initial state value
+;; @param f Function: state -> Beats -> tuple<new-state new-pattern>
+;; @return StatefulPattern<T>
+(defn make-stateful-pattern [initial f]
+  {:pattern f
+   :state initial})
+
+;; Step a stateful pattern forward in time
+;;
+;; @param sp StatefulPattern<T>
+;; @param time Current time in beats
+;; @return tuple<new-state updated-StatefulPattern>
+(defn step-stateful [sp time]
+  (let [[new-state new-pat] ((:pattern sp) (:state sp) time)]
+    [new-state (assoc sp :state new-state :pattern (fn [_ _] [new-state new-pat]))]))
+
+;; Evaluate a stateful pattern at a specific time
+;;
+;; @param sp StatefulPattern<T>
+;; @param time Current time in beats
+;; @return Pattern value at that time
+(defn eval-stateful [sp time]
+  (let [[_ new-pat] ((:pattern sp) (:state sp) time)]
+    (new-pat time)))
+
+;; ============================================================================
+;; Example: Counter Pattern
+;; ============================================================================
+
+;; Counter pattern that increments on each beat
+;;
+;; @param max Maximum count value (wraps around)
+;; @return StatefulPattern<int>
+(defn counter-pattern [max]
+  (make-stateful-pattern 0
+    (fn [count time]
+      (let [new-count (mod (inc count) max)]
+        [new-count (pattern/const new-count)]))))
+
+;; ============================================================================
+;; Session State Patterns
+;; ============================================================================
+
+;; Pattern that reads from session state
+;;
+;; @param key State key
+;; @param f Function to transform state value into a pattern
+;; @return Pattern<U>
+(defn state-pattern [key f]
+  (fn [time]
+    (let [value (scscm/session-get key)]
+      (f value time))))
+
+;; Pattern that updates session state
+;;
+;; @param key State key
+;; @param initial Initial state value
+;; @param f Function: current-state -> Beats -> tuple<new-state output-value>
+;; @return Pattern<U>
+(defn updating-pattern [key initial f]
+  (fn [time]
+    (let [current (scscm/session-get key)
+          [new-state value] (f current time)]
+      (scscm/session-set key new-state)
+      value)))
+
+;; ============================================================================
+;; Live-Coding Session
+;; ============================================================================
+
+;; A session for live-coding with patterns
+(defstruct LiveSession
+  [scscm-session :scscm/ScscmSession
+   players :(map<int synth/PatternPlayer>)
+   next-player-id :int
+   patterns :(map<cstr pattern/Pattern<map>>)
+   state :(map<cstr any>)])
+
+;; Create a new live-coding session
+;;
+;; @param sample-rate Audio sample rate
+;; @param block-size Audio block size
+;; @return LiveSession
+(defn live-session-new [& [sample-rate time/DEFAULT_SAMPLE_RATE
+                             block-size time/DEFAULT_BLOCK_SIZE]]
+  {:scscm-session (scscm/session-new sample-rate block-size)
+   :players {}
+   :next-player-id 0
+   :patterns {}
+   :state {}})
+
+;; Destroy a live-coding session
+;;
+;; @param session LiveSession to destroy
+(defn live-session-destroy [session]
+  (doseq [player (vals (:players session))]
+    (synth/player-stop player))
+  (scscm/session-destroy (:scscm-session session)))
+
+;; Add a pattern to the session
+;;
+;; @param session LiveSession
+;; @param name Pattern name
+;; @param pattern Pattern to add
+(defn live-session-add-pattern [session name pattern]
+  (update session :patterns assoc name pattern))
+
+;; Get a pattern from the session
+;;
+;; @param session LiveSession
+;; @param name Pattern name
+;; @return Pattern or nil
+(defn live-session-get-pattern [session name]
+  (get (:patterns session) name))
+
+;; Update a pattern in the session
+;;
+;; @param session LiveSession
+;; @param name Pattern name
+;; @param new-pattern New pattern
+(defn live-session-update-pattern [session name new-pattern]
+  (update session :patterns assoc name new-pattern))
+
+;; Create a player in the session
+;;
+;; @param session LiveSession
+;; @param def-name SynthDef name
+;; @param pattern-name Pattern name
+;; @param bpm Tempo
+;; @return Player ID
+(defn live-session-add-player [session def-name pattern-name bpm]
+  (let [player-id (:next-player-id session)
+        pattern (live-session-get-pattern session pattern-name)]
+    (when pattern
+      (let [player (synth/synth-pattern-player (:scscm-session session) 
+                                            def-name 
+                                            pattern 
+                                            bpm)]
+        (update session 
+                :players assoc player-id player
+                :next-player-id inc)))))
+
+;; Stop and remove a player
+;;
+;; @param session LiveSession
+;; @param player-id Player ID to remove
+(defn live-session-remove-player [session player-id]
+  (when-let [player (get (:players session) player-id)]
+    (synth/player-stop player)
+    (update session :players dissoc player-id)))
+
+;; ============================================================================
+;; Pattern Evaluation Context
+;; ============================================================================
+
+;; Create a live-coding evaluation context
+;;
+;; This provides the bindings available in a live-coding session
+;;
+;; @param session LiveSession
+;; @return Map of bindings
+(defn live-context [session]
+  {
+    ;; Time and pattern utilities
+    'bpm->bps time/bpm->bps
+    'bpm->spb time/bpm->spb
+    'beats->sec time/beats->sec
+    'sec->beats time/sec->beats
+    'cycle pattern/cycle
+    'const pattern/const
+    'P pattern/P
+    
+    ;; Temporal combinators
+    'slow temporal/slow
+    'fast temporal/fast
+    'shift temporal/shift
+    'rot temporal/rot
+    'mirror temporal/mirror
+    'rev temporal/rev
+    'repeat temporal/repeat
+    
+    ;; Structural combinators
+    'seq structural/seq
+    'stack structural/stack
+    'sum structural/sum
+    'multiply structural/multiply
+    'when structural/when
+    'every structural/every
+    'euclid structural/euclid
+    
+    ;; Transform combinators
+    'add transform/add
+    'mul transform/mul
+    'range transform/range
+    'clamp transform/clamp
+    'sine transform/sine
+    'square transform/square
+    'saw transform/saw
+    'tri transform/tri
+    
+    ;; Synth integration
+    'note-pattern synth/note-pattern
+    'note->freq synth/note->freq
+    'vel->amp synth/vel->amp
+    'kick synth/kick
+    'snare synth/snare
+    'hat synth/hat
+    
+    ;; Session access
+    'session session
+    'get-pattern (fn [name] (live-session-get-pattern session name))
+    'set-pattern (fn [name p] (live-session-update-pattern session name p))
+    'add-player (fn [def-name pat-name bpm] (live-session-add-player session def-name pat-name bpm))
+    'remove-player (fn [player-id] (live-session-remove-player session player-id))
+    
+    ;; Polyrhythm
+    'polyrhythm polyrhythm/polyrhythm
+    'canon polyrhythm/canon
+    'spread polyrhythm/spread
+  })
+
+;; Evaluate code in live-coding context
+;;
+;; @param session LiveSession
+;; @param code Code string to evaluate
+;; @return Result of evaluation
+(defn live-eval [session code]
+  (let [context (live-context session)]
+    ;; In Turmeric, we'd use eval with this context
+    ;; For now, this is a placeholder
+    code))
+
+;; ============================================================================
+;; Pattern Live-Coding Helpers
+;; ============================================================================
+
+;; Set a pattern by name in the session
+;;
+;; @param session LiveSession
+;; @param name Pattern name
+;; @param code Code that evaluates to a pattern
+(defn def-pattern [session name code]
+  (let [pattern (live-eval session code)]
+    (live-session-add-pattern session name pattern)))
+
+;; Update a running player with a new pattern
+;;
+;; @param session LiveSession
+;; @param player-id Player ID
+;; @param code Code that evaluates to a pattern
+(defn set-player-pattern [session player-id code]
+  (when-let [player (get (:players session) player-id)]
+    (let [pattern (live-eval session code)]
+      (player-update player pattern))))
+
+;; ============================================================================
+;; Live-Coding Shortcuts
+;; ============================================================================
+
+;; Define and play a pattern in one step
+;;
+;; @param session LiveSession
+;; @param name Pattern name
+;; @param code Code that evaluates to a pattern
+;; @param def-name SynthDef name
+;; @param bpm Tempo
+;; @return Player ID
+(defn d1 [session name code def-name bpm]
+  (def-pattern session name code)
+  (live-session-add-player session def-name name bpm))
+
+;; Stop all patterns
+;;
+;; @param session LiveSession
+(defn hush [session]
+  (doseq [[player-id player] (:players session)]
+    (synth/player-stop player))
+  (update session :players empty-map)))
+
+;; ============================================================================
+;; Pattern Recording
+;; ============================================================================
+
+;; Record pattern events over time
+(defstruct PatternRecorder
+  [session :LiveSession
+   player-id :int
+   events :(vec<map>)
+   recording :bool])
+
+;; Start recording a player's pattern output
+;;
+;; @param session LiveSession
+;; @param player-id Player ID to record
+;; @return PatternRecorder
+(defn record-start [session player-id]
+  {:session session
+   :player-id player-id
+   :events []
+   :recording true})
+
+;; Stop recording
+;;
+;; @param recorder PatternRecorder
+;; @return Recorded events
+(defn record-stop [recorder]
+  (assoc recorder :recording false))
+
+;; Get recorded events
+;;
+;; @param recorder PatternRecorder
+;; @return Vector of recorded events
+(defn record-get [recorder]
+  (:events recorder))
+
+;; Play back recorded events
+;;
+;; @param session LiveSession
+;; @param recorder PatternRecorder
+;; @param def-name SynthDef name
+;; @param bpm Tempo
+;; @return Player ID
+(defn record-play [session recorder def-name bpm]
+  (let [events (:events recorder)
+        player-id (:next-player-id session)]
+    (update session :next-player-id inc)))

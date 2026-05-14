@@ -1,0 +1,261 @@
+;;
+;; Tidal Examples: Generative Music Patterns
+;; Demonstrates algorithmic and generative pattern creation
+;;
+
+(import tidal/pattern tidal/temporal tidal/structural tidal/transform tidal/polyrhythm tidal/perf)
+
+;; ============================================================
+;; 1. Random-Based Patterns
+;; ============================================================
+
+;; Random pitch pattern
+(def random-pitch (jitter (cycle 60 62 64 67) 2.0 60.0))
+
+;; Random velocity pattern
+(def random-velocity (rand-select (const 60) (const 80) (const 100) (const 120)))
+
+;; Completely random notes
+(def random-notes (jitter (cycle 48 50 52 55 57 60) 5.0 60.0))
+
+;; ============================================================
+;; 2. Stochastic Patterns
+;; ============================================================
+
+;; Markov chain-like pattern with weighted randomness
+(def markov-pattern 
+  (let [base (cycle 60 62 64 67 69 72)]
+    (add base (jitter (const 0) 1.0 -1.0))))
+
+;; Random walk pattern
+(def random-walk 
+  (let [start 60]
+    (let [steps (cycle -2 -1 0 1 2)]
+      (add (const start) (range (cycle 0 1 2 3 4) -10 10)))))
+
+;; ============================================================
+;; 3. Euclidean Patterns
+;; ============================================================
+
+;; Euclidean rhythm for melody triggers
+(def euclid-melody-trigger (euclid 16 5))
+
+;; Euclidean melody pattern
+(def euclid-melody 
+  (let [trigger (euclid 8 3)]
+    (when (fn [t] (> (trigger t) 0.5)) (cycle 60 64 67 72) 0)))
+
+;; Multiple Euclidean patterns combined
+(def euclid-harmony (stack 
+  (when (fn [t] (> ((euclid 8 3) t) 0.5)) (const 60) 0)
+  (when (fn [t] (> ((euclid 8 5) t) 0.5)) (const 64) 0)
+  (when (fn [t] (> ((euclid 8 7) t) 0.5)) (const 67) 0)))
+
+;; ============================================================
+;; 4. Polyrhythmic Generative Patterns
+;; ============================================================
+
+;; Polyrhythm with different scales
+(def poly-scales (stack-polymeter [
+  [(cycle 60 62 64) 1.0]
+  [(cycle 67 69 71) 1.5]
+  [(cycle 72 74 76) 2.0]
+]))
+
+;; Canon with random offsets
+(def random-canon 
+  (let [base (cycle 60 64 67 72)]
+    (canon base 4 (rand-float))))
+
+;; Spread with random phase
+(def random-spread 
+  (let [base (cycle 60 64 67 72)]
+    (spread base 5 (rand-float))))
+
+;; ============================================================
+;; 5. Time Signature Patterns
+;; ============================================================
+
+;; Changing time signatures
+(def changing-meters (timesig (cycle 60 62 64) [
+  (4.0 4)   ;; 4/4
+  (3.0 4)   ;; 3/4
+  (5.0 4)   ;; 5/4
+]))
+
+;; Polymeter patterns
+(def polymeter-melody (polymeter 1.5 (cycle 60 64 67)))
+
+;; ============================================================
+;; 6. Algorithmically Generated Patterns
+;; ============================================================
+
+;; Fibonacci sequence as melody
+(def fibonacci-melody 
+  (let [fib [0 1 1 2 3 5 8 13 21 34]]
+    (cycle (map (fn [n] (+ 60 (mod n 24))) fib))))
+
+;; Prime number melody
+(def prime-melody 
+  (let [primes [2 3 5 7 11 13 17 19 23 29]]
+    (cycle (map (fn [p] (+ 60 (mod p 12))) primes))))
+
+;; L-system inspired pattern
+(def l-system-pattern 
+  (let [rules {"a" ["a" "b"] "b" ["a"]}]
+    (cycle 60 62 64 65 67 69)))
+
+;; ============================================================
+;; 7. Waveform-Based Generative Patterns
+;; ============================================================
+
+;; Sine wave melody
+(def sine-melody (add (const 64) (sine 0.5 4.0)))
+
+;; Multiple sine waves combined
+(def multi-sine-melody (sum 
+  (sine 0.25 2.0)
+  (sine 0.5 1.5)
+  (sine 1.0 1.0)))
+
+;; Noise-based melody
+(def noise-melody (add (const 64) (noise 0.5)))
+
+;; ============================================================
+;; 8. Envelope-Based Generative Patterns
+;; ============================================================
+
+;; Random envelopes
+(def random-envelope 
+  (let [attack (jitter (const 0.1) 0.05 0.0)]
+    (ar attack (jitter (const 0.5) 0.2 0.0) (const true))))
+
+;; ============================================================
+;; 9. Performance-Optimized Patterns
+;; ============================================================
+
+;; Cached pattern for better performance
+(def cached-random (cached (jitter (cycle 60 62 64) 2.0 60.0) 1024))
+
+;; Inlined pattern
+(def inlined-pattern (inline-pattern (fast 2 (cycle 60 64 67))))
+
+;; Fused pattern (combines multiple operations)
+(def fused-pattern (fuse-pattern (slow 2 (fast 2 (cycle 60 64)))))
+
+;; ============================================================
+;; 10. Self-Modifying Patterns
+;; ============================================================
+
+;; Pattern that gradually changes
+(def evolving-pattern 
+  (let [phase (ref 0.0)]
+    (fn [t]
+      (let [current (ref-get phase)]
+        (ref-set! phase (+ current 0.01))
+        (+ 60.0 (* 10.0 (math/sin current)))))))
+
+;; Feedback-based pattern
+(def feedback-pattern 
+  (let [history (ref [])]
+    (fn [t]
+      (let [h (ref-get history)
+            last (if (> (len h) 0) (last h) 60)
+            next (if (> (rand-float) 0.5)
+                   (+ last (rand-int 5) -2)
+                   last)]
+        (ref-set! history (conj h next))
+        next))))
+
+;; ============================================================
+;; 11. Combined Generative Examples
+;; ============================================================
+
+;; Ambient pad with slow changes and randomness
+(def ambient-pad (sum 
+  (slow 16 (jitter (cycle 48 53 55 58) 1.0 48.0))
+  (noise 0.1)))
+
+;; Generative drum and bass pattern
+(def generative-dnb (stack 
+  ;; Kick with euclidean rhythm
+  (when (fn [t] (> ((euclid 16 5) t) 0.5)) (const 36) 0)
+  
+  ;; Snare with different euclidean rhythm
+  (when (fn [t] (> ((euclid 16 7) t) 0.5)) (const 38) 0)
+  
+  ;; Random hats
+  (jitter (cycle 42 42 42 42) 0.0 42.0)
+  
+  ;; Random bass notes
+  (jitter (cycle 36 40 43 48) 3.0 36.0)))
+
+;; Algorithmic melody with harmony
+(def algorithmic-piece (stack 
+  ;; Main melody
+  (fibonacci-melody)
+  
+  ;; Harmony (parallel fifths)
+  (add fibonacci-melody (const 7))
+  
+  ;; Bass (octave down)
+  (slow 2 (sub fibonacci-melody (const 12)))
+  
+  ;; Random accent notes
+  (when (fn [t] (> (rand-float) 0.9)) (jitter (const 72) 5.0 72.0) 0)))
+
+;; ============================================================
+;; Helper Functions
+;; ============================================================
+
+(defn print-generative [name p times]
+  (println (str "\n" name ":"))
+  (doseq [t times]
+    (println (str "  time " t ": " (p t)))))
+
+;; ============================================================
+;; Main Demo Function
+;; ============================================================
+
+(defn run-demos []
+  (println "\n" (repeat 50 "="))
+  (println "TIDAL GENERATIVE MUSIC PATTERNS DEMO")
+  (println (repeat 50 "="))
+  
+  (println "\n--- Random Patterns ---")
+  (print-generative "Random pitch" random-pitch [0.0 1.0 2.0 3.0])
+  (print-generative "Random velocity" random-velocity [0.0 1.0 2.0 3.0])
+  
+  (println "\n--- Euclidean Patterns ---")
+  (print-generative "Euclid melody" euclid-melody [0.0 1.0 2.0 3.0 4.0 5.0 6.0 7.0])
+  (print-generative "Euclid harmony" euclid-harmony [0.0 1.0 2.0 3.0 4.0 5.0 6.0 7.0])
+  
+  (println "\n--- Polyrhythmic Patterns ---")
+  (print-generative "Poly scales" poly-scales [0.0 1.0 2.0 3.0])
+  (print-generative "Random canon" random-canon [0.0 0.25 0.5 0.75])
+  
+  (println "\n--- Algorithmic Patterns ---")
+  (print-generative "Fibonacci melody" fibonacci-melody [0.0 1.0 2.0 3.0 4.0 5.0 6.0 7.0])
+  (print-generative "Prime melody" prime-melody [0.0 1.0 2.0 3.0 4.0 5.0 6.0 7.0])
+  
+  (println "\n--- Waveform Patterns ---")
+  (print-generative "Sine melody" sine-melody [0.0 2.0 4.0 6.0])
+  (print-generative "Multi-sine melody" multi-sine-melody [0.0 2.0 4.0 6.0])
+  
+  (println "\n--- Time Signature Patterns ---")
+  (print-generative "Changing meters" changing-meters [0.0 4.0 7.0 12.0])
+  
+  (println "\n--- Combined Examples ---")
+  (print-generative "Ambient pad" ambient-pad [0.0 16.0 32.0])
+  (print-generative "Generative DnB" generative-dnb [0.0 1.0 2.0 3.0])
+  (print-generative "Algorithmic piece" algorithmic-piece [0.0 1.0 2.0 3.0])
+  
+  (println "\n" (repeat 50 "="))
+  (println "Generative music patterns demo complete!")
+  (println (repeat 50 "="))
+  
+  nil)
+
+;; Run demos if executed directly
+(when (== (get *argv* 0) "run")
+  (run-demos))

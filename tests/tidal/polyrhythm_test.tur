@@ -1,0 +1,201 @@
+;;
+;; Tidal Polyrhythm Tests
+;; Phase E tests from tidalcycles-dsl-plan.md
+;;
+
+(import tidal/pattern tidal/polyrhythm)
+
+;; ============================================================
+;; Polymeter Tests
+;; ============================================================
+
+(defn test-polymeter []
+  (let [p (polymeter 2.0 (cycle 1 2))]
+    ;; Pattern runs at 2x speed
+    (assert (== (p 0.0) 1) "Polymeter at time 0 should return 1")
+    (assert (== (p 0.5) 2) "Polymeter at time 0.5 should return 2 (2x speed)")
+    (assert (== (p 1.0) 1) "Polymeter at time 1.0 should return 1")
+    true))
+
+(defn test-polymeter-slow []
+  (let [p (polymeter 0.5 (cycle 1 2))]
+    ;; Pattern runs at 0.5x speed (slower)
+    (assert (== (p 0.0) 1) "Slow polymeter at time 0 should return 1")
+    (assert (== (p 1.0) 1) "Slow polymeter at time 1 should still return 1")
+    (assert (== (p 2.0) 2) "Slow polymeter at time 2 should return 2")
+    true))
+
+;; ============================================================
+;; Polyrhythm Tests
+;; ============================================================
+
+(defn test-polyrhythm []
+  (let [p (polyrhythm (const 1) 1.0 (const 2) 2.0)]
+    (let [result (p 0.0)]
+      (assert (tuple? result) "Polyrhythm should return a tuple")
+      true)))
+
+(defn test-polyrhythm-values []
+  (let [p (polyrhythm (cycle 1 2) 1.0 (cycle 10 20) 2.0)]
+    (let [result (p 0.0)]
+      (assert (== (fst result) 1) "First pattern should return 1")
+      (assert (== (snd result) 10) "Second pattern should return 10")
+      true)))
+
+;; ============================================================
+;; Nested Pattern Tests
+;; ============================================================
+
+(defn test-nest []
+  (let [outer (cycle (const 1) (const 2))
+        p (nest outer 1.0)]
+    (assert (== (p 0.0) 1) "Nested pattern at time 0 should return 1")
+    (assert (== (p 1.0) 2) "Nested pattern at time 1 should return 2")
+    true))
+
+(defn test-nest-time-scale []
+  (let [outer (cycle (const 1) (const 2))
+        p (nest outer 2.0)]
+    (assert (== (p 0.0) 1) "Nested with time scale at time 0 should return 1")
+    (assert (== (p 0.5) 1) "Nested with time scale at time 0.5 should still return 1")
+    (assert (== (p 1.0) 2) "Nested with time scale at time 1 should return 2")
+    true))
+
+;; ============================================================
+;; Stack Polymeter Tests
+;; ============================================================
+
+(defn test-stack-polymeter []
+  (let [p (stack-polymeter [(const 1) 1.0] [(const 2) 2.0] [(const 3) 0.5])]
+    (let [result (p 0.0)]
+      (assert (vec? result) "Stack polymeter should return vector")
+      (assert (== (len result) 3) "Should have 3 elements")
+      true)))
+
+(defn test-stack-polymeter-values []
+  (let [p (stack-polymeter [(cycle 1 2) 1.0] [(cycle 10 20) 2.0])]
+    (let [result (p 0.0)]
+      (assert (== (get result 0) 1) "First pattern should return 1")
+      (assert (== (get result 1) 10) "Second pattern should return 10")
+      true)))
+
+;; ============================================================
+;; Canon Tests
+;; ============================================================
+
+(defn test-canon []
+  (let [p (canon (const 1) 3 0.25)]
+    (let [result (p 0.0)]
+      (assert (vec? result) "Canon should return vector")
+      (assert (== (len result) 3) "Canon should have 3 copies")
+      true)))
+
+(defn test-canon-values []
+  (let [p (canon (cycle 1 2) 2 0.5)]
+    (let [result (p 0.0)]
+      (assert (== (get result 0) 1) "First copy should return 1")
+      (assert (== (get result 1) 1) "Second copy at offset 0.5 should also return 1")
+      true)))
+
+;; ============================================================
+;; Spread Tests
+;; ============================================================
+
+(defn test-spread []
+  (let [p (spread (const 1) 3 1.0)]
+    (let [result (p 0.0)]
+      (assert (vec? result) "Spread should return vector")
+      (assert (== (len result) 3) "Spread should have 3 copies")
+      true)))
+
+(defn test-spread-values []
+  (let [p (spread (cycle 1 2 3) 3 1.0)]
+    (let [result (p 0.0)]
+      (assert (== (get result 0) 1) "First spread copy should return 1")
+      true)))
+
+;; ============================================================
+;; Time Signature Tests
+;; ============================================================
+
+(defn test-timesig []
+  (let [p (timesig (cycle 1 2 3) [(2.0 4)])]
+    (assert (== (p 0.0) 1) "Timesig pattern should work")
+    true))
+
+(defn test-timesig-multiple []
+  (let [p (timesig (cycle 1 2 3 4) [(2.0 4) (3.0 4)])]
+    (assert (== (p 0.0) 1) "Timesig with multiple signatures should work")
+    true))
+
+(defn test-timesig-values []
+  (let [p (timesig (cycle 1 2) [(3.0 4)])]
+    ;; In 3/4 time, the pattern should repeat every 3 beats
+    (assert (== (p 0.0) 1) "Timesig at time 0 should return 1")
+    (assert (== (p 1.0) 2) "Timesig at time 1 should return 2")
+    (assert (== (p 2.0) 1) "Timesig at time 2 should return 1")
+    true))
+
+;; ============================================================
+;; Edge Cases
+;; ============================================================
+
+(defn test-polymeter-zero []
+  ;; Polymeter with zero ratio
+  (try
+    (let [p (polymeter 0.0 (cycle 1 2))]
+      false)
+    (catch _ true)))
+
+(defn test-polymeter-negative []
+  ;; Polymeter with negative ratio
+  (let [p (polymeter -1.0 (cycle 1 2))]
+    (assert (== (p 0.0) 1) "Negative polymeter should work")
+    true))
+
+(defn test-canon-zero-copies []
+  ;; Canon with zero copies
+  (let [p (canon (const 1) 0 0.25)]
+    (let [result (p 0.0)]
+      (assert (== (len result) 0) "Zero copies should return empty vector")
+      true)))
+
+;; ============================================================
+;; Main Test Runner
+;; ============================================================
+
+(defn run-all-tests []
+  (let [tests [
+    ["polymeter" test-polymeter]
+    ["polymeter slow" test-polymeter-slow]
+    ["polyrhythm" test-polyrhythm]
+    ["polyrhythm values" test-polyrhythm-values]
+    ["nest" test-nest]
+    ["nest time scale" test-nest-time-scale]
+    ["stack polymeter" test-stack-polymeter]
+    ["stack polymeter values" test-stack-polymeter-values]
+    ["canon" test-canon]
+    ["canon values" test-canon-values]
+    ["spread" test-spread]
+    ["spread values" test-spread-values]
+    ["timesig" test-timesig]
+    ["timesig multiple" test-timesig-multiple]
+    ["timesig values" test-timesig-values]
+    ["polymeter zero" test-polymeter-zero]
+    ["polymeter negative" test-polymeter-negative]
+    ["canon zero copies" test-canon-zero-copies]
+  ]]
+    (doseq [[name test-fn] tests]
+      (print (str "Testing: " name " ... "))
+      (try
+        (let [result (test-fn)]
+          (if result
+            (println " PASS")
+            (println " FAIL")))
+        (catch e
+          (println (str " ERROR: " (error->string e))))))
+    (println "\nPolyrhythm tests complete.")))
+
+;; Run tests if executed directly
+(when (== (get *argv* 0) "run")
+  (run-all-tests))

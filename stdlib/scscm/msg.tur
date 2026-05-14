@@ -1,0 +1,239 @@
+;; stdlib/scscm/msg.tur — OSC message construction
+;;
+;; This module provides an ergonomic API for constructing and sending
+;; OSC messages to SuperCollider server (scsynth) via hcsynth.
+;;
+;; Note: For most use cases, the higher-level synth.tur API is preferred.
+;; This module is useful for low-level OSC message manipulation.
+
+(import scscm/ffi :ffi)
+(import scscm/types :types)
+
+;; ============================================================================
+;; OSC Message Memory Management
+;; ============================================================================
+
+;; Allocate an OSC message
+;; 
+;; @param address_pattern OSC address pattern (e.g., "/s_new")
+;; @return Pointer to allocated message, or NULL on error
+(extern-c hc_osc_alloc_message [^cstr address_pattern] :ptr<void>)
+
+;; Free an OSC message
+;; 
+;; @param msg Pointer to message to free
+(extern-c hc_osc_free_message [^ptr<void> msg] :void)
+
+;; ============================================================================
+;; OSC Argument Addition
+;; ============================================================================
+
+;; Add int32 argument to OSC message
+(extern-c hc_osc_message_add_int32 [^ptr<void> ^int32] :int)
+
+;; Add float argument to OSC message
+(extern-c hc_osc_message_add_float [^ptr<void> ^float] :int)
+
+;; Add string argument to OSC message
+(extern-c hc_osc_message_add_string [^ptr<void> ^cstr] :int)
+
+;; Add blob argument to OSC message
+(extern-c hc_osc_message_add_blob [^ptr<void> ^ptr<void> ^int] :int)
+
+;; ============================================================================
+;; OSC Message Construction
+;; ============================================================================
+
+;; Create a new OSC message with address
+;; Returns a message that must be sent or freed with osc-free!
+(defn osc-message [address]
+  (ffi/hc_osc_alloc_message address))
+
+;; Free an OSC message
+(defn osc-free! [msg]
+  (when (not (null? msg))
+    (ffi/hc_osc_free_message msg)))
+
+;; Add typed argument to OSC message
+;; Supports int32, float, cstr, and slice<uint8> (blob)
+(defn osc-add! [msg arg]
+  (cond
+    (int32? arg) (ffi/hc_osc_message_add_int32 msg arg)
+    (float? arg) (ffi/hc_osc_message_add_float msg arg)
+    (cstr? arg)  (ffi/hc_osc_message_add_string msg arg)
+    (slice<uint8>? arg) (do
+                      (let [data (slice/ptr arg)
+                            len (slice/len arg)]
+                        (ffi/hc_osc_message_add_blob msg data len)))
+    :else (panic (str "Unsupported OSC type: " (type-of arg))))
+
+;; ============================================================================
+;; Message Sending
+;; ============================================================================
+
+;; Send an OSC message to scsynth
+;; 
+;; @param world_id Target world handle
+;; @param msg OSC message pointer
+;; @return 0 on success, -1 on error
+(extern-c hc_osc_send [world_id :int ^ptr<void> msg] :int)
+
+;; Send an OSC message and free it
+;; 
+;; @param world_id Target world handle
+;; @param msg OSC message pointer (will be freed)
+;; @return 0 on success, -1 on error
+(defn osc-send! [world_id msg]
+  (let [result (hc_osc_send world_id msg)]
+    (osc-free! msg)
+    result))
+
+;; ============================================================================
+;; Convenience: Build and Send in One
+;; ============================================================================
+
+;; Create, populate, and send an OSC message in one call
+;; Uses defer for automatic cleanup on error
+(defn osc-send [world_id address & args]
+  (let [msg (osc-message address)]
+    (defer (osc-free! msg))
+    (doseq [arg args]
+      (osc-add! msg arg))
+    (hc_osc_send world_id msg)))
+
+;; ============================================================================
+;; Scoped Message Building Macro
+;; ============================================================================
+
+;; Macro for exception-safe message building
+;; Automatically frees message on exit (normal or exceptional)
+(defmacro with-osc-message [[msg-var address] world_id & body]
+  `(let [~msg-var (osc-message ~address)]
+     (defer (osc-free! ~msg-var))
+     ~@body
+     (hc_osc_send ~world_id ~msg-var)))
+
+;; ============================================================================
+;; Common SCSCM OSC Messages
+;; ============================================================================
+
+;; Send /ping message to check server responsiveness
+(defn osc-ping [world_id]
+  (osc-send world_id "/ping"))
+
+;; Send /status message to get server status
+(defn osc-status [world_id]
+  (osc-send world_id "/status"))
+
+;; Send /sync message to synchronize
+(defn osc-sync [world_id]
+  (osc-send world_id "/sync"))
+
+;; ============================================================================
+;; Synth Control Messages
+;; ============================================================================
+
+;; Send /s_new message to create a new synth instance
+;; 
+;; Parameters:
+;; - synthdef_name: Name of the SynthDef to instantiate
+;; - node_id: Node ID to use (0 for auto-allocate)
+;; - add_action: :add-to-head, :add-to-tail, :add-before, :add-after, :replace
+;; - target: Target node ID (typically ROOT_GROUP_ID = 1)
+;; - args: Control parameter values
+(defn osc-s_new [world_id synthdef_name node_id add_action target & args]
+  (osc-send world_id "/s_new" synthdef_name node_id add_action target args...))
+
+;; Send /n_set message to set control parameters on a synth
+;; 
+;; Parameters:
+;; - node_id: Target synth node ID
+;; - param-value-pairs: Alternating parameter name and value pairs
+(defn osc-n_set [world_id node_id & param-value-pairs]
+  (let [msg (osc-message "/n_set")]
+    (defer (osc-free! msg))
+    (osc-add! msg node_id)
+    (doseq [pair (chunk 2 param-value-pairs)]
+      (let [[param value] pair]
+        (osc-add! msg param)
+        (osc-add! msg value)))
+    (hc_osc_send world_id msg)))
+
+;; Send /n_free message to free a synth node
+(defn osc-n_free [world_id node_id]
+  (osc-send world_id "/n_free" node_id))
+
+;; Send /n_run message to start a synth running
+(defn osc-n_run [world_id node_id run?]
+  (osc-send world_id "/n_run" node_id (if run? 1 0)))
+
+;; Send /n_free_all message to free all nodes
+(defn osc-n_free_all [world_id]
+  (osc-send world_id "/n_free_all"))
+
+;; ============================================================================
+;; Group Control Messages
+;; ============================================================================
+
+;; Send /g_new message to create a new group
+;; 
+;; Parameters:
+;; - node_id: Node ID to use (0 for auto-allocate)
+;; - add_action: Where to add the group
+;; - target: Target node ID
+(defn osc-g_new [world_id node_id add_action target]
+  (osc-send world_id "/g_new" node_id add_action target))
+
+;; Send /g_free message to free a group
+(defn osc-g_free [world_id node_id]
+  (osc-send world_id "/g_free" node_id))
+
+;; ============================================================================
+;; SynthDef Management Messages
+;; ============================================================================
+
+;; Send /d_load message to load a SynthDef
+(defn osc-d_load [world_id synthdef_name]
+  (osc-send world_id "/d_load" synthdef_name))
+
+;; Send /d_free message to unload a SynthDef
+(defn osc-d_free [world_id synthdef_name]
+  (osc-send world_id "/d_free" synthdef_name))
+
+;; Send /d_recv message to receive SynthDef notifications
+(defn osc-d_recv [world_id on?]
+  (osc-send world_id "/d_recv" (if on? 1 0)))
+
+;; ============================================================================
+;; Audio Control Messages
+;; ============================================================================
+
+;; Send /notify message
+(defn osc-notify [world_id on?]
+  (osc-send world_id "/notify" (if on? 1 0)))
+
+;; Send /clearSched message to clear the scheduler
+(defn osc-clear-sched [world_id]
+  (osc-send world_id "/clearSched"))
+
+;; ============================================================================
+;; Utility Functions
+;; ============================================================================
+
+;; Convert MIDI note to frequency (Hz)
+(defn midi->hz [note]
+  (* 440.0 (math/pow 2.0 (/ (- note 69.0) 12.0))))
+
+;; Convert velocity (0-127) to amplitude (0-1)
+(defn vel->amp [vel]
+  (/ vel 127.0))
+
+;; Convert dB to amplitude
+(defn db->amp [db]
+  (math/pow 10.0 (/ db 20.0)))
+
+;; Convert amplitude to dB
+(defn amp->db [amp]
+  (if (> amp 0)
+    (* 20.0 (math/log10 amp))
+    -90.0))
