@@ -17,6 +17,12 @@
 /* We need to include the turi headers. src/ is in the include path. */
 #include "turi/env.h"
 #include "turi/eval.h"
+#include "arena.h"
+#include "buf.h"
+#include "diag.h"
+#include "fmt.h"
+#include "reader.h"
+#include "symbols.h"
 
 /* ---------------------------------------------------------------------------
  * Global state for the WASM module
@@ -202,6 +208,55 @@ int turi_wasm_eval_batch(const char **inputs, int count, char **outputs) {
     }
     
     return success_count;
+}
+
+/* Format a Turmeric source string.
+ * Returns a malloc'd formatted string, or NULL on parse error.
+ * Caller must free with turi_wasm_free_string(). */
+char *turi_wasm_format(const char *input) {
+    if (!input) return NULL;
+
+    size_t input_len = strlen(input);
+
+    SourceFile file = {0};
+    file.path        = "<format>";
+    file.src         = input;
+    file.len         = input_len;
+    file.file_id     = 0;
+    file.reader_type = READER_TURMERIC;
+    diag_register_file(&file);
+
+    Arena arena;
+    arena_init(&arena, 0);
+    SymbolTable st;
+    symtab_init(&st, &arena);
+
+    uint32_t nforms = 0;
+    Form **forms = read_all(&arena, &st, &file, &nforms);
+
+    char *result = NULL;
+
+    if (forms && !diag_had_error()) {
+        FmtOptions opts = {0};
+        opts.indent_width = 2;
+        opts.line_width   = 80;
+        opts.src          = input;
+        opts.src_len      = input_len;
+
+        Buf out;
+        buf_init(&out);
+        if (fmt_print(&out, forms, nforms, opts) == 0) {
+            result = turi_wasm_strdup(out.data ? out.data : "");
+        }
+        buf_free(&out);
+    }
+
+    symtab_free(&st);
+    arena_free(&arena);
+    /* Reset error state so subsequent eval calls are not poisoned */
+    diag_reset();
+
+    return result;
 }
 
 /* Shutdown the Turmeric WASM runtime.

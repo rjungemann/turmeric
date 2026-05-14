@@ -682,6 +682,19 @@ async function initEditor() {
             showStatus('Code saved to URL', 'success');
         }
     );
+
+    // Handle Alt+Shift+F to format
+    editor.addCommand(
+        monaco.KeyMod.Alt | monaco.KeyMod.Shift | monaco.KeyCode.KeyF,
+        () => formatCode()
+    );
+
+    // Register as Monaco document formatter so "Format Document" also works
+    monaco.languages.registerDocumentFormattingEditProvider('turmeric', {
+        provideDocumentFormattingEdits() {
+            return formatCode().then(() => []);
+        }
+    });
     
     // Initialize cursor position display
     updateCursorPosition();
@@ -739,6 +752,36 @@ async function runCode() {
         appendToConsole(`<span class="console-error">Error: ${escapeHtml(error.message)}</span>`);
         updateExecTime(0);
     }
+}
+
+/**
+ * Format the editor contents using turi_wasm_format
+ */
+async function formatCode() {
+    if (wasmState !== WASM_STATE.READY) {
+        showStatus('WASM not ready', 'error');
+        return;
+    }
+    const code = editor.getValue();
+    if (!code.trim()) return;
+
+    const inputLen = turiModule.lengthBytesUTF8(code) + 1;
+    const inputPtr = turiModule._malloc(inputLen);
+    turiModule.stringToUTF8(code, inputPtr, inputLen);
+
+    const resultPtr = turiModule._turi_wasm_format(inputPtr);
+    turiModule._free(inputPtr);
+
+    if (!resultPtr) {
+        showStatus('Format failed', 'error');
+        return;
+    }
+
+    const formatted = turiModule.UTF8ToString(resultPtr);
+    turiModule._free(resultPtr);
+
+    editor.setValue(formatted);
+    showStatus('Formatted', 'success');
 }
 
 /**
@@ -848,6 +891,9 @@ function initEventListeners() {
     
     // Clear button
     document.getElementById('clear-btn')?.addEventListener('click', clearEditor);
+
+    // Format button
+    document.getElementById('format-btn')?.addEventListener('click', formatCode);
     
     // Share button
     document.getElementById('share-btn')?.addEventListener('click', shareCode);
@@ -1021,6 +1067,7 @@ window.turmericApp = {
     runCode,
     clearEditor,
     clearConsole,
+    formatCode,
     loadExample,
     shareCode,
     resetWasm,

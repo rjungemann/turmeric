@@ -78,6 +78,23 @@ int turi_wasm_eval_ex(const char *input, char **out_result, char **out_error);
 int turi_wasm_eval_batch(const char **inputs, int count, char **outputs);
 
 /* ---------------------------------------------------------------------------
+ * Formatting
+ * ---------------------------------------------------------------------------
+ */
+
+/* Format a Turmeric source string.
+ *
+ * Arguments:
+ *   input - The Turmeric source code to format (NUL-terminated)
+ *
+ * Returns:
+ *   A malloc'd string with the formatted output, or NULL on parse error.
+ *   The error message (if any) is written to the printErr callback.
+ *   Caller must free the result with turi_wasm_free_string().
+ */
+char *turi_wasm_format(const char *input);
+
+/* ---------------------------------------------------------------------------
  * Memory management
  * ---------------------------------------------------------------------------
  */

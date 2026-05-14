@@ -42,6 +42,7 @@ set(TUR_CORE_SOURCES
     emit.c
     expr.c
     fiber.c
+    fmt.c
     forms.c
     gc.c
     globals.c
@@ -267,7 +268,7 @@ if(TUR_WASM)
                 -sWASM=1
                 -sASYNCIFY=1
                 -sASYNCIFY_STACK_SIZE=65536
-                -sEXPORTED_FUNCTIONS=_turi_wasm_init,_turi_wasm_reset,_turi_wasm_shutdown,_turi_wasm_eval,_turi_wasm_eval_ex,_turi_wasm_version,_malloc,_free
+                -sEXPORTED_FUNCTIONS=_turi_wasm_init,_turi_wasm_reset,_turi_wasm_shutdown,_turi_wasm_eval,_turi_wasm_eval_ex,_turi_wasm_version,_turi_wasm_format,_malloc,_free
                 -sEXPORTED_RUNTIME_METHODS=stringToUTF8,UTF8ToString,lengthBytesUTF8
                 -sEXPORT_NAME=TurmericModule
                 -sMODULARIZE=1

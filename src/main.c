@@ -38,6 +38,7 @@
 #include "emit.h"
 #include "effect_lower.h" /* Phase 19: Effect lowering */
 #include "expr.h"
+#include "fmt.h"
 #include "forms.h"
 #include "pass.h"         /* Phase P19-1: pass scheduling */
 #include "reader.h"
@@ -924,6 +925,84 @@ static int is_directory(const char *path) {
     return S_ISDIR(st.st_mode);
 }
 
+/* tur format [--check] [file]
+ * Read source from file (or stdin if no file given), format it, and write to
+ * stdout.  With --check, exit 1 if the file is not already formatted. */
+static int cmd_format(const char *path, bool check_only) {
+    char  *src = NULL;
+    size_t len = 0;
+
+    if (path) {
+        if (read_entire_file(path, &src, &len) != 0) return 2;
+    } else {
+        /* Read from stdin */
+        size_t cap = 4096;
+        src = (char *)malloc(cap);
+        if (!src) { fprintf(stderr, "tur: oom\n"); return 2; }
+        len = 0;
+        int c;
+        while ((c = fgetc(stdin)) != EOF) {
+            if (len + 1 >= cap) {
+                cap *= 2;
+                char *tmp = (char *)realloc(src, cap);
+                if (!tmp) { free(src); fprintf(stderr, "tur: oom\n"); return 2; }
+                src = tmp;
+            }
+            src[len++] = (char)c;
+        }
+        src[len] = '\0';
+    }
+
+    SourceFile file = {0};
+    file.path        = path ? path : "<stdin>";
+    file.src         = src;
+    file.len         = len;
+    file.file_id     = 0;
+    file.reader_type = READER_TURMERIC;
+    diag_register_file(&file);
+
+    Arena arena;
+    arena_init(&arena, 0);
+    SymbolTable st;
+    symtab_init(&st, &arena);
+
+    uint32_t nforms = 0;
+    Form **forms = read_all(&arena, &st, &file, &nforms);
+
+    int rc = 0;
+    if (!forms || diag_had_error()) {
+        rc = 1;
+    } else {
+        FmtOptions opts = {0};
+        opts.indent_width = 2;
+        opts.line_width   = 80;
+        opts.src          = src;
+        opts.src_len      = len;
+
+        Buf out;
+        buf_init(&out);
+        if (fmt_print(&out, forms, nforms, opts) != 0) {
+            fprintf(stderr, "tur: fmt_print failed\n");
+            rc = 1;
+        } else if (check_only) {
+            /* Exit 1 if already-formatted output differs from input */
+            bool same = (out.len == len) && (memcmp(out.data, src, len) == 0);
+            if (!same) {
+                if (path) fprintf(stderr, "tur: %s is not formatted\n", path);
+                rc = 1;
+            }
+        } else {
+            buf_to_file(&out, stdout);
+        }
+        buf_free(&out);
+    }
+
+    symtab_free(&st);
+    arena_free(&arena);
+    free(src);
+    return rc;
+}
+
 /* Phase S0: tur repl — interactive read-eval-print loop. */
 static int cmd_repl(void) {
     return turi_repl_run();
@@ -942,6 +1021,7 @@ static int usage(void) {
         "  tur repl                          interactive REPL (Phase S1)\n"
         "  tur test <dir>                    run all .tur files in a directory\n"
         "  tur check <input.tur>             type-check only, no codegen (phase 8)\n"
+        "  tur format [--check] [file.tur]   format source (stdin if no file given)\n"
         "\n"
         "global flags:\n"
         "  --no-color                       disable colored diagnostics\n"
@@ -1272,6 +1352,21 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "repl") == 0) {
         /* Phase S0: interactive REPL */
         return cmd_repl();
+    }
+    if (strcmp(cmd, "format") == 0) {
+        bool check_only = false;
+        const char *fmt_input = NULL;
+        for (int i = 2; i < argc; i++) {
+            if (strcmp(argv[i], "--check") == 0) {
+                check_only = true;
+            } else if (argv[i][0] != '-') {
+                if (fmt_input) return usage();
+                fmt_input = argv[i];
+            } else {
+                return usage();
+            }
+        }
+        return cmd_format(fmt_input, check_only);
     }
     if (strcmp(cmd, "test") == 0) {
         if (argc != 3) return usage();
