@@ -63,6 +63,8 @@ typedef enum TypeKind {
     TY_CLONEABLE_CONT, /* cloneable_cont<T> - multi-shot continuation that returns T */
     /* Phase 11: User-defined struct types */
     TY_STRUCT,       /* user-defined struct type - see as.struct_ for StructDef */
+    /* Phase G0: User-defined sum types (ADTs) */
+    TY_ADT,          /* user-defined sum type (ADT) — see as.adt_ for AdtDef */
     /* Phase R2: Panic - diverging/never type */
     TY_NEVER,        /* ! - diverging type (never returns; bottom type) */
     /* Phase HKT-P1: Type application (partially-applied type constructor) */
@@ -86,6 +88,30 @@ typedef enum TypeKind {
     TY_FORALL,       /* (forall [a ...] T) — universally quantified type (rank-2+) */
     TY_EXISTS,       /* (exists [a ...] T) — existentially quantified type */
 } TypeKind;
+
+/* Phase G0: Constructor field descriptor for ADTs */
+typedef struct CtorField {
+    TypeKind kind;       /* field type kind */
+    TypeKind inner_kind; /* for ref/rc: inner type; TY_UNKNOWN otherwise */
+} CtorField;
+
+/* Phase G0: Constructor descriptor for ADTs */
+typedef struct CtorDef {
+    const char   *name;        /* constructor name (interned) */
+    uint32_t      n_fields;
+    CtorField    *fields;      /* arena-allocated array */
+    struct AdtDef *adt;        /* back-pointer to parent ADT */
+    uint32_t      tag;         /* integer discriminant tag (0-based) */
+} CtorDef;
+
+/* Phase G0: ADT (sum type) descriptor */
+typedef struct AdtDef {
+    const char *name;            /* ADT name (interned) */
+    uint32_t    n_ctors;
+    CtorDef   **ctors;           /* arena-allocated pointer array */
+    bool        is_copy;         /* :copy annotation */
+    bool        needs_drop_glue; /* any ctor has rc/ref/weak fields */
+} AdtDef;
 
 /* Phase 11: Struct field descriptor.
  * Stored inline in StructDef.fields[]. */
@@ -132,6 +158,7 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
         case TY_EXCEPTION:
         case TY_CONT:
         case TY_STRUCT:   /* default move; actual copy_kind set via type_struct() */
+        case TY_ADT:      /* default move; actual copy_kind set via type_adt() */
         case TY_NEVER:     /* never type is move-only (no values exist) */
         case TY_REC:       /* recursive type is move-only in v1 */
             return CK_MOVE;
@@ -236,6 +263,10 @@ typedef struct Type {
             const char *name;  /* Interned binder name (e.g. "Fix"); compare by pointer */
             struct Type *body; /* Body type (NULL in v1 when body is not yet evaluated) */
         } rec;
+        /* Phase G0: ADT types */
+        struct {
+            AdtDef *def;
+        } adt_;
         /* Phase HRT0: Universally/existentially quantified types */
         struct {
             const char **var_names; /* bound variable names (interned, arena-allocated) */
@@ -494,6 +525,18 @@ static inline Type type_struct(StructDef *def) {
     t.copy_kind = def->is_copy ? CK_COPY : CK_MOVE;
     t.hkt_kind = KIND_STAR;
     t.as.struct_.def = def;
+    return t;
+}
+
+/* Phase G0: ADT type constructor */
+/* Create a TY_ADT type referencing the given AdtDef.
+ * copy_kind is taken from def->is_copy. */
+static inline Type type_adt(AdtDef *def) {
+    Type t = {0};
+    t.kind = TY_ADT;
+    t.copy_kind = def->is_copy ? CK_COPY : CK_MOVE;
+    t.hkt_kind = KIND_STAR;
+    t.as.adt_.def = def;
     return t;
 }
 

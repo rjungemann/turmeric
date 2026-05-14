@@ -761,6 +761,13 @@ typedef struct Elab {
     StructDef **struct_defs;
     uint32_t n_struct_defs;
     uint32_t cap_struct_defs;
+    /* Phase G0: ADT registry - maps ADT names to AdtDef */
+    AdtDef **adt_defs;
+    uint32_t n_adt_defs;
+    uint32_t cap_adt_defs;
+    /* Phase G0: ADT special symbols */
+    const Symbol *sym_defdata;
+    const Symbol *sym_match;
     /* Phase M0: Module system */
     const Symbol *sym_defmodule;  /* defmodule */
     const Symbol *sym_export;     /* export */
@@ -1212,6 +1219,12 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->struct_defs = NULL;
     e->n_struct_defs = 0;
     e->cap_struct_defs = 0;
+    /* Phase G0: ADT registry */
+    e->adt_defs = NULL;
+    e->n_adt_defs = 0;
+    e->cap_adt_defs = 0;
+    e->sym_defdata = intern_cstr(st, "defdata");
+    e->sym_match = intern_cstr(st, "match");
     /* Phase 12: Borrow traits */
     e->sym_borrow = intern_cstr(st, "&");
     e->sym_borrow_mut = intern_cstr(st, "&mut");
@@ -7011,6 +7024,10 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding);
 /* Phase 11: defstruct */
 static Expr *elab_defstruct(Elab *e, const Form *call);
 static Expr *elab_make_struct(Elab *e, const Form *call);
+/* Phase G0: ADTs */
+static Expr *elab_defdata(Elab *e, const Form *call);
+static Expr *elab_match(Elab *e, const Form *call);
+static CtorDef *elab_lookup_ctor(Elab *e, const Symbol *name);
 /* Phase 12: Borrow traits */
 static Expr *elab_borrow_immut(Elab *e, const Form *call);
 static Expr *elab_borrow_mut(Elab *e, const Form *call);
@@ -7136,6 +7153,9 @@ static Expr *elab_call(Elab *e, Form *call) {
     /* Phase 11: defstruct */
     if (name == e->sym_defstruct) return elab_defstruct(e, call);
     if (name == e->sym_make_struct) return elab_make_struct(e, call);
+    /* Phase G0: ADTs */
+    if (name == e->sym_defdata) return elab_defdata(e, call);
+    if (name == e->sym_match) return elab_match(e, call);
     /* Phase 12: Borrow traits */
     if (name == e->sym_borrow) return elab_borrow_immut(e, call);
     if (name == e->sym_borrow_mut) return elab_borrow_mut(e, call);
@@ -7320,6 +7340,52 @@ static Expr *elab_call(Elab *e, Form *call) {
     bool fn_qual_err = false;
     Binding *fn_binding = elab_lookup_sym(e, name, head->span, &fn_qual_err);
     if (!fn_binding && fn_qual_err) return NULL;
+
+    /* Phase G0: constructor call — (Ctor) or (Ctor :T1 ...) */
+    if (fn_binding && fn_binding->type.kind == TY_ADT) {
+        /* 0-arg constructor */
+        AdtDef *adt = fn_binding->type.as.adt_.def;
+        CtorDef *ctor = NULL;
+        for (uint32_t ci = 0; ci < adt->n_ctors; ci++) {
+            if (strcmp(adt->ctors[ci]->name, name->name) == 0) {
+                ctor = adt->ctors[ci];
+                break;
+            }
+        }
+        if (ctor && ctor->n_fields == 0) {
+            uint32_t n_args_given = call->as.list.len - 1;
+            if (n_args_given != 0) {
+                diag_emit(DIAG_ERROR, call->span,
+                          "constructor '%s' takes 0 arguments, got %u",
+                          name->name, n_args_given);
+                return NULL;
+            }
+            Expr *out = expr_new(e->arena, EX_CALL, fn_binding->type, call->span);
+            out->as.call_.fn_binding = fn_binding;
+            out->as.call_.args = NULL;
+            out->as.call_.n_args = 0;
+            out->as.call_.fn_expr = NULL;
+            out->as.call_.dict_arg = NULL;
+            return out;
+        }
+    }
+
+    /* Phase G0: N-arg constructor call — result type needs ADT def pointer */
+    if (fn_binding && fn_binding->type.kind == TY_FN &&
+        fn_binding->type.as.fn.result_kind == TY_ADT) {
+        /* Look up the constructor to find its AdtDef */
+        CtorDef *ctor = elab_lookup_ctor(e, name);
+        if (ctor) {
+            /* Use elab_call_fn but fix up the result type after */
+            Expr *call_expr = elab_call_fn(e, call, fn_binding);
+            if (call_expr) {
+                /* Patch result type with proper AdtDef pointer */
+                call_expr->type = type_adt(ctor->adt);
+            }
+            return call_expr;
+        }
+    }
+
     if (fn_binding && (fn_binding->type.kind == TY_FN ||
                        (fn_binding->type.kind == TY_PTR_VOID && fn_binding->closure_fn_binding) ||
                        fn_binding->closure_fn_binding)) {
@@ -7539,6 +7605,11 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         if (!arg_ok && expected_arg_kind == TY_INT && args[i]->type.kind == TY_STRUCT) {
             /* Phase HKT H3: Allow passing an HKT container (TY_STRUCT) where int64_t
              * is expected.  HKT type constructor values are opaque int64_t at runtime. */
+            arg_ok = true;
+        }
+        if (!arg_ok && expected_arg_kind == TY_INT && args[i]->type.kind == TY_ADT) {
+            /* Phase G0: ADT values are heap-allocated and passed as int64_t pointers.
+             * Allow passing a TY_ADT where int64_t is expected. */
             arg_ok = true;
         }
         if (!arg_ok && expected_arg_kind == TY_INT && args[i]->type.kind == TY_APP) {
@@ -8803,6 +8874,378 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
     out->as.def_.binding = b;
     out->as.def_.init = NULL;
     out->as.def_.struct_def = def;
+    return out;
+}
+
+/* Phase G0: Helper - register AdtDef in elab registry */
+static void elab_register_adt_def(Elab *e, AdtDef *def) {
+    if (e->n_adt_defs >= e->cap_adt_defs) {
+        e->cap_adt_defs = e->cap_adt_defs ? e->cap_adt_defs * 2 : 8;
+        e->adt_defs = (AdtDef **)realloc(e->adt_defs,
+            e->cap_adt_defs * sizeof(AdtDef *));
+    }
+    e->adt_defs[e->n_adt_defs++] = def;
+}
+
+/* Phase G0: defdata — define a sum type (ADT)
+ * Syntax: (defdata Name [:copy]
+ *           (Ctor1)
+ *           (Ctor2 :T1 :T2)
+ *           ...)
+ */
+static Expr *elab_defdata(Elab *e, const Form *call) {
+    if (call->as.list.len < 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "defdata requires a name and at least one constructor: "
+                  "(defdata Name (Ctor1) (Ctor2 :T1) ...)");
+        return NULL;
+    }
+
+    Form *name_form = call->as.list.items[1];
+    if (name_form->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, name_form->span,
+                  "defdata name must be a symbol");
+        return NULL;
+    }
+    const Symbol *name = name_form->as.sym;
+
+    /* Check for optional :copy annotation */
+    bool is_copy = false;
+    uint32_t ctors_start_idx = 2;
+    if (call->as.list.len >= 3) {
+        Form *kw_form = call->as.list.items[2];
+        if (kw_form->tag == F_KEYWORD && kw_form->as.sym == e->kw_copy) {
+            is_copy = true;
+            ctors_start_idx = 3;
+        } else if (kw_form->tag == F_KEYWORD && kw_form->as.sym == e->kw_move) {
+            is_copy = false;
+            ctors_start_idx = 3;
+        }
+    }
+
+    if (scope_lookup(e->scope, name)) {
+        diag_emit(DIAG_ERROR, name_form->span,
+                  "defdata: '%s' is already defined", name->name);
+        return NULL;
+    }
+
+    uint32_t n_ctors = call->as.list.len - ctors_start_idx;
+    if (n_ctors == 0) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "defdata: '%s' must have at least one constructor", name->name);
+        return NULL;
+    }
+
+    /* Allocate AdtDef */
+    AdtDef *def = (AdtDef *)arena_alloc(e->arena, sizeof(AdtDef));
+    def->name = name->name;
+    def->n_ctors = n_ctors;
+    def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
+    def->is_copy = is_copy;
+    def->needs_drop_glue = false;
+
+    /* Pre-register ADT type so constructors can reference it */
+    Type adt_type = type_adt(def);
+    Binding *adt_binding = binding_new(e, name, adt_type, false, true, name_form->span);
+    scope_add(&e->global, adt_binding);
+
+    /* Parse each constructor */
+    for (uint32_t ci = 0; ci < n_ctors; ci++) {
+        Form *ctor_form = call->as.list.items[ctors_start_idx + ci];
+        if (ctor_form->tag != F_LIST) {
+            diag_emit(DIAG_ERROR, ctor_form->span,
+                      "defdata: constructor must be a list form (Ctor :T1 :T2 ...)");
+            return NULL;
+        }
+        if (ctor_form->as.list.len < 1) {
+            diag_emit(DIAG_ERROR, ctor_form->span,
+                      "defdata: constructor form cannot be empty");
+            return NULL;
+        }
+        Form *ctor_name_form = ctor_form->as.list.items[0];
+        if (ctor_name_form->tag != F_SYM) {
+            diag_emit(DIAG_ERROR, ctor_name_form->span,
+                      "defdata: constructor name must be a symbol");
+            return NULL;
+        }
+        const Symbol *ctor_name = ctor_name_form->as.sym;
+
+        uint32_t n_fields = ctor_form->as.list.len - 1;
+        CtorDef *ctor = (CtorDef *)arena_alloc(e->arena, sizeof(CtorDef));
+        ctor->name = ctor_name->name;
+        ctor->n_fields = n_fields;
+        ctor->fields = n_fields > 0
+            ? (CtorField *)arena_alloc(e->arena, n_fields * sizeof(CtorField))
+            : NULL;
+        ctor->adt = def;
+        ctor->tag = ci;
+
+        /* Parse field types */
+        for (uint32_t fi = 0; fi < n_fields; fi++) {
+            Form *ft_form = ctor_form->as.list.items[1 + fi];
+            if (ft_form->tag != F_KEYWORD) {
+                diag_emit(DIAG_ERROR, ft_form->span,
+                          "defdata: constructor field type must be a keyword like :int, :bool, :cstr");
+                return NULL;
+            }
+            const char *tname = ft_form->as.sym->name;
+            uint32_t tlen = ft_form->as.sym->len;
+            TypeKind fkind, finner;
+            parse_struct_field_type(tname, tlen, &fkind, &finner);
+            if (fkind == TY_UNKNOWN) {
+                diag_emit(DIAG_ERROR, ft_form->span,
+                          "defdata: field has unrecognized type :%s", tname);
+                return NULL;
+            }
+            ctor->fields[fi].kind = fkind;
+            ctor->fields[fi].inner_kind = finner;
+            if (fkind == TY_RC || fkind == TY_REF || fkind == TY_WEAK) {
+                def->needs_drop_glue = true;
+            }
+        }
+
+        def->ctors[ci] = ctor;
+
+        /* Register constructor as a global binding.
+         * 0-arg constructor: TY_ADT binding (it IS a value).
+         * N-arg constructor: TY_FN binding (call it like a function). */
+        if (n_fields == 0) {
+            /* 0-arg: register as TY_ADT so calls to (Red) work */
+            Binding *cb = binding_new(e, ctor_name, adt_type, false, true,
+                                      ctor_name_form->span);
+            scope_add(&e->global, cb);
+        } else {
+            /* N-arg: register as TY_FN */
+            TypeKind arg_kinds[MAX_FN_ARITY];
+            uint8_t arity = (uint8_t)(n_fields > MAX_FN_ARITY ? MAX_FN_ARITY : n_fields);
+            for (uint8_t fi = 0; fi < arity; fi++) {
+                arg_kinds[fi] = ctor->fields[fi].kind;
+            }
+            Type fn_type = type_fn(arg_kinds, arity, TY_ADT);
+            Binding *cb = binding_new(e, ctor_name, fn_type, false, true,
+                                      ctor_name_form->span);
+            scope_add(&e->global, cb);
+        }
+    }
+
+    /* Register ADT in elab registry */
+    elab_register_adt_def(e, def);
+
+    /* Return EX_DEFDATA node */
+    Expr *out = expr_new(e->arena, EX_DEFDATA, TYPE_NIL, call->span);
+    out->as.defdata_.def = def;
+    out->as.defdata_.binding = adt_binding;
+    return out;
+}
+
+/* Phase G0: Helper - look up CtorDef by name across all known ADTs */
+static CtorDef *elab_lookup_ctor(Elab *e, const Symbol *name) {
+    for (uint32_t ai = 0; ai < e->n_adt_defs; ai++) {
+        AdtDef *adt = e->adt_defs[ai];
+        for (uint32_t ci = 0; ci < adt->n_ctors; ci++) {
+            if (strcmp(adt->ctors[ci]->name, name->name) == 0) {
+                return adt->ctors[ci];
+            }
+        }
+    }
+    return NULL;
+}
+
+/* Phase G0: match expression
+ * Syntax: (match scrutinee
+ *   (Ctor1 x y) body1
+ *   (Ctor2 z)   body2
+ *   _           default-body)
+ * Arms are interleaved: pattern body pattern body ...
+ */
+static Expr *elab_match(Elab *e, const Form *call) {
+    /* call->as.list.items[0] = "match"
+     * call->as.list.items[1] = scrutinee
+     * call->as.list.items[2..] = pattern body pattern body ... */
+    if (call->as.list.len < 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "match requires a scrutinee: (match scrutinee pattern body ...)");
+        return NULL;
+    }
+    if (call->as.list.len < 4) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "match requires at least one arm: (match scrutinee pattern body)");
+        return NULL;
+    }
+
+    uint32_t n_remaining = call->as.list.len - 2;
+    if (n_remaining % 2 != 0) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "match: arms must come in (pattern body) pairs");
+        return NULL;
+    }
+    uint32_t n_arms = n_remaining / 2;
+
+    /* Elaborate scrutinee */
+    Expr *scrutinee = elab_form(e, call->as.list.items[1]);
+    if (!scrutinee) return NULL;
+
+    /* If the scrutinee type is not already TY_ADT (e.g. an untyped param
+     * that defaulted to TY_INT), try to infer the ADT from the first
+     * constructor pattern in the arm list. */
+    if (scrutinee->type.kind != TY_ADT) {
+        AdtDef *inferred_adt = NULL;
+        for (uint32_t ai = 0; ai < n_arms && !inferred_adt; ai++) {
+            Form *pat_f = call->as.list.items[2 + ai * 2];
+            if (pat_f->tag == F_LIST && pat_f->as.list.len >= 1 &&
+                pat_f->as.list.items[0]->tag == F_SYM) {
+                CtorDef *cd = elab_lookup_ctor(e, pat_f->as.list.items[0]->as.sym);
+                if (cd) inferred_adt = cd->adt;
+            }
+        }
+        if (inferred_adt) {
+            /* Patch the scrutinee type to the inferred ADT */
+            scrutinee->type = type_adt(inferred_adt);
+        } else {
+            diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
+                      "match: scrutinee must be an ADT type, got %s",
+                      typekind_to_string(scrutinee->type.kind));
+            return NULL;
+        }
+    }
+
+    AdtDef *adt = scrutinee->type.as.adt_.def;
+
+    /* Allocate arms array */
+    MatchArm *arms = (MatchArm *)arena_alloc(e->arena, n_arms * sizeof(MatchArm));
+
+    /* Track covered constructors for exhaustiveness */
+    bool *covered = (bool *)calloc(adt->n_ctors, sizeof(bool));
+    bool has_wildcard = false;
+
+    Type result_type = TYPE_UNKNOWN;
+
+    for (uint32_t ai = 0; ai < n_arms; ai++) {
+        Form *pat_form = call->as.list.items[2 + ai * 2];
+        Form *body_form = call->as.list.items[3 + ai * 2];
+
+        MatchPattern *pat = &arms[ai].pattern;
+        memset(pat, 0, sizeof(MatchPattern));
+
+        if (pat_form->tag == F_SYM) {
+            /* Bare symbol: either _ wildcard or variable capture */
+            const Symbol *sym = pat_form->as.sym;
+            /* intern "_" */
+            const Symbol *sym_wildcard = intern_cstr(e->st, "_");
+            if (sym == sym_wildcard) {
+                pat->is_wildcard = true;
+                has_wildcard = true;
+            } else {
+                /* Variable binding — captures entire scrutinee */
+                pat->is_var = true;
+                pat->var_sym = sym;
+                has_wildcard = true; /* covers all remaining */
+            }
+            /* No new scope needed; elaborate body directly */
+            Expr *body = elab_form(e, body_form);
+            if (!body) { free(covered); return NULL; }
+            arms[ai].body = body;
+            if (result_type.kind == TY_UNKNOWN) result_type = body->type;
+        } else if (pat_form->tag == F_LIST) {
+            /* Constructor pattern: (CtorName var1 var2 ...) */
+            if (pat_form->as.list.len < 1) {
+                diag_emit(DIAG_ERROR, pat_form->span,
+                          "match: empty constructor pattern");
+                free(covered); return NULL;
+            }
+            Form *ctor_name_form = pat_form->as.list.items[0];
+            if (ctor_name_form->tag != F_SYM) {
+                diag_emit(DIAG_ERROR, ctor_name_form->span,
+                          "match: constructor pattern must start with a constructor name");
+                free(covered); return NULL;
+            }
+            const Symbol *ctor_sym = ctor_name_form->as.sym;
+            /* Look up constructor in this ADT */
+            CtorDef *ctor = NULL;
+            for (uint32_t ci = 0; ci < adt->n_ctors; ci++) {
+                if (strcmp(adt->ctors[ci]->name, ctor_sym->name) == 0) {
+                    ctor = adt->ctors[ci];
+                    break;
+                }
+            }
+            if (!ctor) {
+                diag_emit(DIAG_ERROR, ctor_name_form->span,
+                          "match: '%s' is not a constructor of '%s'",
+                          ctor_sym->name, adt->name);
+                free(covered); return NULL;
+            }
+
+            uint32_t n_bindings = pat_form->as.list.len - 1;
+            if (n_bindings != ctor->n_fields) {
+                diag_emit(DIAG_ERROR, pat_form->span,
+                          "match: constructor '%s' expects %u fields, got %u",
+                          ctor->name, ctor->n_fields, n_bindings);
+                free(covered); return NULL;
+            }
+
+            pat->ctor = ctor;
+            pat->n_bindings = n_bindings;
+            pat->bindings = n_bindings > 0
+                ? (Binding **)arena_alloc(e->arena, n_bindings * sizeof(Binding *))
+                : NULL;
+
+            covered[ctor->tag] = true;
+
+            /* Introduce a new scope with the field bindings */
+            Scope arm_scope;
+            scope_init(&arm_scope, e->scope);
+            Scope *saved_scope = e->scope;
+            e->scope = &arm_scope;
+
+            for (uint32_t bi = 0; bi < n_bindings; bi++) {
+                Form *var_form = pat_form->as.list.items[1 + bi];
+                if (var_form->tag != F_SYM) {
+                    diag_emit(DIAG_ERROR, var_form->span,
+                              "match: field binding must be a symbol");
+                    e->scope = saved_scope;
+                    scope_free(&arm_scope);
+                    free(covered); return NULL;
+                }
+                TypeKind fkind = ctor->fields[bi].kind;
+                Type ftype = type_from_kind(fkind);
+                Binding *fb = binding_new(e, var_form->as.sym, ftype, false, false,
+                                          var_form->span);
+                scope_add(&arm_scope, fb);
+                pat->bindings[bi] = fb;
+            }
+
+            Expr *body = elab_form(e, body_form);
+            e->scope = saved_scope;
+            scope_free(&arm_scope);
+            if (!body) { free(covered); return NULL; }
+            arms[ai].body = body;
+            if (result_type.kind == TY_UNKNOWN) result_type = body->type;
+        } else {
+            diag_emit(DIAG_ERROR, pat_form->span,
+                      "match: pattern must be a constructor list or _ wildcard");
+            free(covered); return NULL;
+        }
+    }
+
+    /* Exhaustiveness check */
+    if (!has_wildcard) {
+        for (uint32_t ci = 0; ci < adt->n_ctors; ci++) {
+            if (!covered[ci]) {
+                diag_emit(DIAG_ERROR, call->span,
+                          "match: non-exhaustive patterns — constructor '%s' of '%s' not covered",
+                          adt->ctors[ci]->name, adt->name);
+                free(covered); return NULL;
+            }
+        }
+    }
+    free(covered);
+
+    if (result_type.kind == TY_UNKNOWN) result_type = TYPE_NIL;
+
+    Expr *out = expr_new(e->arena, EX_MATCH, result_type, call->span);
+    out->as.match_.scrutinee = scrutinee;
+    out->as.match_.arms = arms;
+    out->as.match_.n_arms = n_arms;
     return out;
 }
 
@@ -12350,6 +12793,7 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
     if (rc != 0) {
         scope_free(&e.global);
         free(e.struct_defs);
+        free(e.adt_defs);
         free(e.handled_effect_names);
         free(e.macros);
         return NULL;
@@ -12460,6 +12904,7 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
 
     scope_free(&e.global);
     free(e.struct_defs);
+    free(e.adt_defs);
     free(e.handled_effect_names);
     free(e.macros);
     free(e.loaded_modules); /* Phase M2 */

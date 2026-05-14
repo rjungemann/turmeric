@@ -1,0 +1,10 @@
+(defdata Option
+  (None)
+  (Some :int))
+
+(defn main [] :int
+  (let [v (Some 7)]
+    (match v
+      (None)   (println "none")
+      (Some n) (println n))
+    0))

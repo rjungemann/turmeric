@@ -460,5 +460,14 @@ void expr_print(Buf *b, const Expr *e) {
             expr_print(b, e->as.exists_open_.body);
             buf_putc(b, ')');
             break;
+        /* Phase G0: ADTs */
+        case EX_DEFDATA:
+            buf_printf(b, "(defdata %s)", e->as.defdata_.def->name);
+            break;
+        case EX_MATCH:
+            buf_puts(b, "(match ");
+            expr_print(b, e->as.match_.scrutinee);
+            buf_putc(b, ')');
+            break;
     }
 }

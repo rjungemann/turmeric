@@ -68,6 +68,10 @@ int type_eq(Type a, Type b) {
     if (a.kind == TY_STRUCT) {
         return a.as.struct_.def == b.as.struct_.def;
     }
+    /* Phase G0: ADT types - identity by AdtDef pointer */
+    if (a.kind == TY_ADT) {
+        return a.as.adt_.def == b.as.adt_.def;
+    }
     /* Phase HKT-P1: Type application - compare fn and arg */
     if (a.kind == TY_APP) {
         if (!a.as.app.fn || !b.as.app.fn) return a.as.app.fn == b.as.app.fn;
@@ -247,6 +251,9 @@ const char *type_name(Type t) {
         /* Phase 11: Struct types */
         case TY_STRUCT:
             return t.as.struct_.def ? t.as.struct_.def->name : "<struct>";
+        /* Phase G0: ADT types */
+        case TY_ADT:
+            return t.as.adt_.def ? t.as.adt_.def->name : "<adt>";
         /* Phase HKT-P1: Type application */
         case TY_APP: {
             Buf tmp;
@@ -413,6 +420,15 @@ static void type_name_buf(Buf *b, Type t) {
             }
             break;
         }
+        /* Phase G0: ADT types */
+        case TY_ADT: {
+            if (t.as.adt_.def) {
+                buf_puts(b, t.as.adt_.def->name);
+            } else {
+                buf_puts(b, "<adt>");
+            }
+            break;
+        }
         /* Phase HKT-P1: Type application */
         case TY_APP: {
             buf_puts(b, "(type-app ");
@@ -513,6 +529,9 @@ const char *type_c_name(Type t) {
              * opaque HKT type-constructor argument; it is stored as int64_t at
              * runtime (container values are int64_t-sized opaque handles). */
             return t.as.struct_.def ? t.as.struct_.def->name : "int64_t";
+        /* Phase G0: ADT types are passed as int64_t (opaque heap pointer) */
+        case TY_ADT:
+            return "int64_t";
         /* Phase HKT-P1: Type application — opaque int64_t handle in v1 */
         case TY_APP:
             return "int64_t";
@@ -674,6 +693,8 @@ static bool type_is_guarded_recursive_helper(const Type *t, const char *rec_name
         case TY_TYPECLASS_INST:
         case TY_NEVER:
         case TY_SET:
+        /* Phase G0: ADT types guard recursion like structs */
+        case TY_ADT:
             return true;
     }
 
@@ -740,6 +761,7 @@ const char *typekind_to_string(TypeKind k) {
         case TY_CONT:     return "cont";
         case TY_CLONEABLE_CONT: return "cloneable_cont";
         case TY_STRUCT:   return "struct";
+        case TY_ADT:      return "adt";
         case TY_NEVER:    return "!";
         case TY_SET:      return "set";
         /* Phase HRT0 */
