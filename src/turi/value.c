@@ -54,5 +54,8 @@ void turi_print_value(FILE *out, TuriValue v) {
     case TURI_THROW:
         fprintf(out, "#<exception>");
         break;
+    case TURI_FUTURE:
+        fprintf(out, "#<future>");
+        break;
     }
 }

@@ -18,6 +18,7 @@ endif()
 set(TURI_EVAL_SOURCES
     turi/value.c
     turi/env.c
+    turi/fiber.c
     turi/eval.c
     turi/repl.c
 )

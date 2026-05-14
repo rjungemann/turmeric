@@ -84,10 +84,50 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 
+# Phase S7: async/await, fiber scheduler
+add_test(
+  NAME tur_eval_async_basic
+  COMMAND bash tests/turi/eval-async-basic.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+add_test(
+  NAME tur_eval_async_composition
+  COMMAND bash tests/turi/eval-async-composition.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+add_test(
+  NAME tur_eval_async_effects
+  COMMAND bash tests/turi/eval-async-effects.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+add_test(
+  NAME tur_eval_async_timeout
+  COMMAND bash tests/turi/eval-async-timeout.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+add_test(
+  NAME tur_eval_async_cancel
+  COMMAND bash tests/turi/eval-async-cancel.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+add_test(
+  NAME tur_eval_async_error
+  COMMAND bash tests/turi/eval-async-error.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+add_test(
+  NAME tur_eval_async_io
+  COMMAND bash tests/turi/eval-async-io.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+
 # Make sure tur is built before any test is run
 set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
                      tur_repl_tests tur_repl_smoke tur_eval_import tur_eval_basic
                      tur_eval_effects tur_eval_s4
+                     tur_eval_async_basic tur_eval_async_composition
+                     tur_eval_async_effects tur_eval_async_timeout
+                     tur_eval_async_cancel tur_eval_async_error tur_eval_async_io
   PROPERTIES DEPENDS tur
 )
 

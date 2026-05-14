@@ -29,6 +29,7 @@
 #endif
 
 #include "eval.h"
+#include "fiber.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -74,9 +75,75 @@
 typedef struct EvalFrame EvalFrame;
 
 struct TuriClosure {
-    FnDef      *fn;        /* FnDef* in some per-call arena (kept alive) */
-    EvalFrame  *captured;  /* captured lexical frame (NULL for top-level defn) */
+    FnDef          *fn;        /* FnDef* in some per-call arena (kept alive) */
+    EvalFrame      *captured;  /* captured lexical frame (NULL for top-level defn) */
+    /* Phase S7: native function support (fn == NULL when native is set) */
+    TuriNativeFn    native;    /* non-NULL for native C builtins */
+    void           *native_ud; /* user data passed to native */
+    /* EX_CLOSURE closures have a synthetic __env_p first param for codegen;
+     * the interpreter skips it and uses the captured frame instead. */
+    bool            skip_env_param;
 };
+
+/* Register a native C function as a global binding in env.
+ * Declared in eval.h; implemented here because TuriClosure is internal. */
+void turi_env_register_native(TuriEnv *env, const char *name,
+                               TuriNativeFn fn, void *ud) {
+    TuriClosure *cl = (TuriClosure *)calloc(1, sizeof(TuriClosure));
+    cl->fn        = NULL;
+    cl->captured  = NULL;
+    cl->native    = fn;
+    cl->native_ud = ud;
+    turi_env_set(env, name, turi_closure(cl));
+}
+
+/* -------------------------------------------------------------------------
+ * Phase S7: Async fiber thunk
+ * ---------------------------------------------------------------------- */
+
+_Thread_local TuriFiber *g_pending_async_fiber;
+
+/* Forward declarations needed by the thunk. */
+static TuriValue eval_expr(TuriEnv *env, EvalFrame *frame, const Expr *e);
+static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
+                             TuriValue *args, uint32_t n_args);
+
+#if defined(__APPLE__)
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+static void async_fiber_thunk(void) {
+    TuriFiber *fiber = g_pending_async_fiber;
+    TuriEnv   *env   = fiber->env;
+
+    /* Call the pre-evaluated closure with no arguments. */
+    TuriValue result = eval_apply(env, fiber->fn_closure_val.as_closure, NULL, 0);
+
+    /* Settle the fiber's own future. */
+    if (fiber->cancelled) {
+        turi_future_reject(env, fiber->own_future,
+                           turi_error("task cancelled"));
+    } else if (env->throwing) {
+        TuriValue err = env->throw_value;
+        env->throwing = false;
+        turi_future_reject(env, fiber->own_future, err);
+    } else if (turi_is_error(result)) {
+        turi_future_reject(env, fiber->own_future, result);
+    } else {
+        if (env->returning) {
+            result = env->return_value;
+            env->returning = false;
+        }
+        turi_future_resolve(env, fiber->own_future, result);
+    }
+
+    fiber->state = TURI_FIBER_DONE;
+    swapcontext(&fiber->ctx, &env->sched_ctx);
+    abort(); /* unreachable */
+}
+#if defined(__APPLE__)
+#  pragma clang diagnostic pop
+#endif
 
 /* -------------------------------------------------------------------------
  * Local variable frame (stack-allocated linked list)
@@ -175,6 +242,14 @@ static TuriValue make_throw_val(TuriValue v, TypeKind tk) {
     t->value     = v;
     t->type_kind = tk;
     return turi_throw_val(t);
+}
+
+/* Throw a catchable exception from a native (TuriNativeFn) function.
+ * The native should return turi_nil() immediately after calling this. */
+void turi_native_throw(TuriEnv *env, const char *msg) {
+    TuriValue tv  = make_throw_val(turi_cstr(msg), TY_UNKNOWN);
+    env->throwing    = true;
+    env->throw_value = tv;
 }
 
 /* Defer item: body expression + snapshot frame of captured values. */
@@ -574,28 +649,29 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
     }
 
     case BS_PRINTLN_INT:
-        printf("%lld\n", (long long)args[0].as_int);
-        return turi_nil();
-
     case BS_PRINTLN_FLOAT:
-        printf("%g\n", args[0].as_float);
-        return turi_nil();
-
     case BS_PRINTLN_BOOL:
-        puts(args[0].as_bool ? "true" : "false");
-        return turi_nil();
-
     case BS_PRINTLN_CSTR:
-        puts(args[0].as_cstr ? args[0].as_cstr : "");
-        return turi_nil();
-
     case BS_PRINTLN_UINT:
-        printf("%llu\n", (unsigned long long)(uint64_t)args[0].as_int);
+    case BS_PRINTLN_FLOAT32: {
+        /* Dispatch on runtime tag so eval mode works despite type-inference gaps. */
+        TuriValue a = args[0];
+        switch (a.tag) {
+        case TURI_CSTR:  puts(a.as_cstr ? a.as_cstr : ""); break;
+        case TURI_BOOL:  puts(a.as_bool ? "true" : "false"); break;
+        case TURI_FLOAT: printf("%g\n", a.as_float); break;
+        case TURI_INT:
+        default:
+            if (spec->shape == BS_PRINTLN_UINT)
+                printf("%llu\n", (unsigned long long)(uint64_t)a.as_int);
+            else if (spec->shape == BS_PRINTLN_FLOAT32)
+                printf("%.7g\n", a.as_float);
+            else
+                printf("%lld\n", (long long)a.as_int);
+            break;
+        }
         return turi_nil();
-
-    case BS_PRINTLN_FLOAT32:
-        printf("%.7g\n", args[0].as_float);
-        return turi_nil();
+    }
 
     default:
         /* Silently return nil for unsupported builtins (unsafe ops, STM, etc.) */
@@ -609,17 +685,25 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
 
 static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
                              TuriValue *args, uint32_t n_args) {
+    /* Phase S7: native function dispatch */
+    if (cl->native) {
+        return cl->native(env, args, n_args, cl->native_ud);
+    }
+
     FnDef *fn = (FnDef *)cl->fn;
-    if ((uint32_t)fn->n_params != n_args) {
+    /* EX_CLOSURE adds a synthetic __env_p first param for codegen; skip it. */
+    uint32_t param_offset = cl->skip_env_param ? 1u : 0u;
+    uint32_t effective_params = (uint32_t)fn->n_params - param_offset;
+    if (effective_params != n_args) {
         return turi_errorf("eval: arity mismatch: %s expects %u args, got %u",
                            fn->binding ? fn->binding->name->name : "<fn>",
-                           (unsigned)fn->n_params, (unsigned)n_args);
+                           (unsigned)effective_params, (unsigned)n_args);
     }
 
     /* Build call frame on top of the captured environment */
     EvalFrame *call_frame = eval_frame_new((EvalFrame *)cl->captured);
     for (uint32_t i = 0; i < n_args; i++) {
-        frame_bind(call_frame, fn->params[i]->name->name, args[i]);
+        frame_bind(call_frame, fn->params[param_offset + i]->name->name, args[i]);
     }
 
     /* Mark the defer stack; defers registered during this call fire on exit. */
@@ -797,8 +881,19 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     /* --- Anonymous function (fn) ---------------------------------------- */
     case EX_FN: {
         TuriClosure *cl = (TuriClosure *)malloc(sizeof(TuriClosure));
+        memset(cl, 0, sizeof(*cl));
         cl->fn       = e->as.fn_.fn;
         cl->captured = frame; /* capture lexical scope */
+        return turi_closure(cl);
+    }
+
+    /* --- Closure with captured variables (fn with captures) --------------- */
+    case EX_CLOSURE: {
+        TuriClosure *cl = (TuriClosure *)malloc(sizeof(TuriClosure));
+        memset(cl, 0, sizeof(*cl));
+        cl->fn             = e->as.closure_.closure->fn;
+        cl->captured       = frame; /* interpreter uses lexical frame */
+        cl->skip_env_param = true;  /* codegen added __env_p as first param */
         return turi_closure(cl);
     }
 
@@ -1082,6 +1177,130 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             return turi_error("eval: inline-C not allowed in sandboxed environment");
         return turi_error("eval: inline-C blocks cannot be executed by the interpreter");
 
+    /* --- Phase S7: async / await ----------------------------------------- */
+
+    /* (async fn-expr) — spawn a fiber that evaluates fn-expr; return Future. */
+    case EX_ASYNC: {
+        if (env->sandboxed)
+            return turi_error("eval: async not allowed in sandboxed environment");
+
+        /* Allocate the fiber's own future. */
+        TuriFuture *f = turi_future_new(env);
+
+        /* Pre-evaluate fn_expr in the current (main) context to get a closure.
+         * This avoids binding-name lookup issues inside the fiber. */
+        TuriValue cl_val = eval_expr(env, frame, e->as.async_.fn_expr);
+        if (turi_is_error(cl_val) || env->returning || env->throwing) {
+            return cl_val;
+        }
+        if (cl_val.tag != TURI_CLOSURE)
+            return turi_errorf("eval: async: expected a function, got tag %d", cl_val.tag);
+
+        /* Allocate and initialise the fiber struct. */
+        TuriFiber *fiber = (TuriFiber *)calloc(1, sizeof(TuriFiber));
+        if (!fiber) { return turi_error("eval: out of memory (async fiber)"); }
+
+        fiber->own_future    = f;
+        f->owner             = fiber;
+        fiber->env           = env;
+        fiber->fn_closure_val = cl_val;
+        fiber->state         = TURI_FIBER_READY;
+        fiber->cancelled     = false;
+
+        /* Allocate fiber stack. */
+        fiber->stack = (char *)mmap(NULL, TURI_ASYNC_STACK_SIZE,
+                                    PROT_READ | PROT_WRITE,
+                                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (fiber->stack == MAP_FAILED) {
+            free(fiber);
+            return turi_error("eval: mmap failed for async fiber stack");
+        }
+
+#if defined(__APPLE__)
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+        getcontext(&fiber->ctx);
+        fiber->ctx.uc_stack.ss_sp   = fiber->stack;
+        fiber->ctx.uc_stack.ss_size = TURI_ASYNC_STACK_SIZE;
+        fiber->ctx.uc_link          = NULL;
+        /* NOTE: g_pending_async_fiber is set right before swapcontext in the
+         * scheduler, not here, so that creating multiple fibers before running
+         * any of them doesn't overwrite the pointer prematurely. */
+        makecontext(&fiber->ctx, async_fiber_thunk, 0);
+#if defined(__APPLE__)
+#  pragma clang diagnostic pop
+#endif
+
+        /* Enqueue in the scheduler ready queue. */
+        turi_sched_enqueue(env, fiber);
+
+        return turi_future_val(f);
+    }
+
+    /* (await fut-expr) — wait for a Future to resolve; return its value. */
+    case EX_AWAIT: {
+        TuriValue fv = eval_expr(env, frame, e->as.await_.fut_expr);
+        if (turi_is_error(fv) || env->returning || env->throwing) return fv;
+
+        if (fv.tag != TURI_FUTURE)
+            return turi_errorf("eval: await: expected a future, got tag %d", fv.tag);
+
+        TuriFuture *f = fv.as_future;
+
+        /* Already settled? */
+        if (f->state == TURI_FUTURE_RESOLVED) return f->result;
+        if (f->state == TURI_FUTURE_REJECTED) {
+            if (f->result.tag == TURI_THROW) {
+                env->throwing    = true;
+                env->throw_value = f->result;
+                return f->result;
+            }
+            if (turi_is_error(f->result)) {
+                env->throwing    = true;
+                env->throw_value = make_throw_val(f->result, TY_UNKNOWN);
+                return env->throw_value;
+            }
+            return turi_error("eval: await: future rejected");
+        }
+
+        /* Pending: check if we are inside an async fiber. */
+        TuriFiber *cur = env->current_fiber;
+        if (cur) {
+            /* Suspend current fiber until future resolves. */
+            turi_future_add_waker(f, cur);
+            cur->awaiting_future = f;
+            cur->state = TURI_FIBER_SUSPENDED;
+#if defined(__APPLE__)
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+            swapcontext(&cur->ctx, &env->sched_ctx);
+#if defined(__APPLE__)
+#  pragma clang diagnostic pop
+#endif
+            /* Resumed: future has settled. */
+            if (f->state == TURI_FUTURE_RESOLVED) return f->result;
+            if (f->state == TURI_FUTURE_REJECTED) {
+                if (f->result.tag == TURI_THROW) {
+                    env->throwing    = true;
+                    env->throw_value = f->result;
+                    return f->result;
+                }
+                if (turi_is_error(f->result)) {
+                    env->throwing    = true;
+                    env->throw_value = make_throw_val(f->result, TY_UNKNOWN);
+                    return env->throw_value;
+                }
+                return turi_error("eval: await: future rejected");
+            }
+            return turi_error("eval: await: unexpected future state");
+        } else {
+            /* Main (non-fiber) context: run event loop until future resolves. */
+            return turi_await_future(env, f);
+        }
+    }
+
     /* --- Everything else — silently return nil --------------------------- */
     default:
         return turi_nil();
@@ -1261,5 +1480,14 @@ void turi_value_repr(char *buf, size_t cap, TuriValue v) {
     case TURI_THROW:
         snprintf(buf, cap, "#<exception>");
         break;
+    case TURI_FUTURE: {
+        const char *state = "pending";
+        if (v.as_future) {
+            if (v.as_future->state == TURI_FUTURE_RESOLVED)  state = "resolved";
+            if (v.as_future->state == TURI_FUTURE_REJECTED)  state = "rejected";
+        }
+        snprintf(buf, cap, "#<future:%s>", state);
+        break;
+    }
     }
 }

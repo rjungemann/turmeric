@@ -6370,11 +6370,11 @@ static Expr *elab_fn(Elab *e, const Form *call) {
     fn_def_expr->as.fn_def_.fn = fd;
 
     if (n_captures == 0) {
-        /* No captures - can use static function */
-        if (!at_top_level) {
-            /* Nested without captures: register FN_DEF for file-scope emission */
-            elab_register_file_def(e, fn_def_expr);
-        }
+        /* Register FN_DEF for file-scope emission regardless of scope level.
+         * Without this, an anonymous fn used as an argument at top level would
+         * return EX_VAR("__fn_N") but never emit the EX_FN_DEF that creates
+         * the runtime closure. */
+        elab_register_file_def(e, fn_def_expr);
         /* Return VAR reference to the function */
         Expr *var_expr = expr_new(e->arena, EX_VAR, fn_type, call->span);
         var_expr->as.var.binding = b;
@@ -7260,9 +7260,24 @@ static Expr *elab_call(Elab *e, Form *call) {
                               ov->name, ov->min_arity, ov->max_arity, arg_name, res_name);
                 }
             }
-        } else {
+        } else if (e->separate_compilation) {
             diag_emit(DIAG_ERROR, head->span,
                       "unknown function or operator '%s'", name->name);
+        } else {
+            /* eval mode: create a runtime-dispatch call so native builtins
+             * registered in TuriEnv (e.g. async scheduler functions) are
+             * callable without a compile-time declaration.
+             * The binding is NOT added to any scope so future lookups don't
+             * find a TYPE_INT entry and route through elab_call_fn. */
+            Binding *dyn_b = binding_new(e, name, TYPE_INT, false, false, head->span);
+            Expr *var_expr = expr_new(e->arena, EX_VAR, TYPE_INT, head->span);
+            var_expr->as.var.binding = dyn_b;
+            Expr *out = expr_new(e->arena, EX_CALL, TYPE_INT, call->span);
+            out->as.call_.fn_binding = NULL;
+            out->as.call_.fn_expr    = var_expr;
+            out->as.call_.args       = args;
+            out->as.call_.n_args     = n_args;
+            return out;
         }
         return NULL;
     }

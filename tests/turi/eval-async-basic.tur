@@ -1,0 +1,15 @@
+;; Phase S7: basic async/await round-trip through the eval core.
+;; Expected stdout:
+;;   3
+;;   42
+;;   7
+
+;; --- Test 1: simple (await (async fn)) = 3 -----------------------------------
+(println (await (async (fn [] :int (+ 1 2)))))
+
+;; --- Test 2: async calling a named function ---------------------------------
+(defn compute [] :int (* 6 7))
+(println (await (async (fn [] :int (compute)))))
+
+;; --- Test 3: async with a local computation --------------------------------
+(println (await (async (fn [] :int (+ 5 2)))))
