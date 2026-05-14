@@ -1,0 +1,5 @@
+;; Phase C1: assert-msg! -- failing assertion triggers panic
+
+(defn main [] :int
+  (assert-msg! (= 1 2) "one does not equal two")
+  0)

@@ -1,0 +1,20 @@
+;; Phase C1: assert! and assert-msg! macros -- passing assertions
+
+(defn main [] :int
+  ;; assert! with no message -- condition is true, no panic
+  (assert! (> 5 0))
+  (println "assert-pass")
+
+  ;; assert-msg! with custom message -- condition is true, no panic
+  (assert-msg! (>= 10 0) "ten must be non-negative")
+  (println "assert-msg-pass")
+
+  ;; assert! with composed condition
+  (assert! (not false))
+  (println "assert-not-false-pass")
+
+  ;; assert-msg! with equality check
+  (assert-msg! (= 1 1) "one equals one")
+  (println "assert-eq-pass")
+
+  0)

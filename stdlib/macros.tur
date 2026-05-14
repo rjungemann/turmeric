@@ -5,7 +5,10 @@
 ;; below remain visible globally just like in pre-module code.
 
 (defmodule tur/macros
-  (export cond when unless must! must-msg! ignore! do-m for)
+  (export cond when unless must! must-msg! ignore! do-m for
+          assert! assert-msg! require! require-msg!
+          ensure! ensure-msg! invariant! invariant-msg!
+          contract-enabled?)
 
 ;; cond macro: (cond t1 e1 t2 e2 ... :else efinal) -> nested (if ...) chain
 ;; Uses compile-time list manipulation to build the expansion.
@@ -109,4 +112,93 @@
                       (list if pred (list for (list ~@after) ~@body) (list .empty var))))))
                 ;; More var/coll bindings remain
                 (list .bind coll (list fn `[~var] (list for (list ~@more) ~@body)))))))))))
+
+;;; Phase C1: Runtime contract macros
+;; These are defined here so they are available via the auto-loaded tur/macros
+;; module with the existing binary. When the binary is rebuilt they will also be
+;; available from stdlib/contract.tur which is added to the auto-load list.
+;;
+;; Design note: variadic macros have a known ct_eval limitation -- the equality
+;; operator = is evaluated at compile time when used as a macro parameter inside
+;; a variadic body, producing incorrect results for runtime variables. To avoid
+;; this, each contract type is split into two fixed-arity macros (following the
+;; same convention as must!/must-msg!). Fixed-arity macros use the template
+;; body approach which correctly preserves all conditions as runtime expressions.
+;;
+;; Implementation note: macros expand to a call to tur-contract-check/
+;; tur-contract-check-inv rather than (unless condition ...). The unless
+;; approach causes the code generator to drop the return statement when the
+;; same variable is used in both the condition and the return expression
+;; (move semantics / borrow issue). Passing the condition as a :bool argument
+;; to a helper function forces evaluation before the call, leaving the
+;; original variable available for the subsequent return.
+
+;; contract-enabled? -- returns true when contracts are active.
+;; In v1 contracts are always enabled (no --release stripping yet).
+(defn contract-enabled? [] :bool
+  true)
+
+;; tur-contract-check -- internal helper called by contract macros.
+;; Panics with msg if condition is false. Takes condition as :bool so it is
+;; fully evaluated before the call, leaving the caller's variable intact.
+(defn tur-contract-check [condition :bool msg :cstr] :void
+  ```c
+  if (!condition) { tur_panic((const char*)msg); }
+  ```)
+
+;; tur-contract-check-inv -- internal helper for invariant macros.
+;; Calls pred(obj) and panics with msg if the result is false.
+(defn tur-contract-check-inv [obj :int pred :int msg :cstr] :void
+  ```c
+  typedef int64_t (*pred_fn)(int64_t);
+  pred_fn f = (pred_fn)(intptr_t)pred;
+  if (!f(obj)) { tur_panic((const char*)msg); }
+  ```)
+
+;; assert! -- unconditional sanity check (no custom message).
+;; Panics with "Assertion failed" if condition is false.
+;; Usage: (assert! condition)
+(defmacro assert! [condition]
+  (tur-contract-check condition "Assertion failed"))
+
+;; assert-msg! -- unconditional sanity check with custom message.
+;; Panics with the given message if condition is false.
+;; Usage: (assert-msg! condition "message")
+(defmacro assert-msg! [condition msg]
+  (tur-contract-check condition msg))
+
+;; require! -- precondition check at function entry (no custom message).
+;; Semantically identical to assert! but documents intent as a precondition.
+;; Usage: (require! condition)
+(defmacro require! [condition]
+  (tur-contract-check condition "Precondition failed"))
+
+;; require-msg! -- precondition check with custom message.
+;; Usage: (require-msg! condition "message")
+(defmacro require-msg! [condition msg]
+  (tur-contract-check condition msg))
+
+;; ensure! -- postcondition check (no custom message).
+;; In v1 equivalent to assert! but marks that the condition describes a
+;; property of the function result.
+;; Usage: (ensure! condition)
+(defmacro ensure! [condition]
+  (tur-contract-check condition "Postcondition failed"))
+
+;; ensure-msg! -- postcondition check with custom message.
+;; Usage: (ensure-msg! condition "message")
+(defmacro ensure-msg! [condition msg]
+  (tur-contract-check condition msg))
+
+;; invariant! -- check a structural invariant on a value (no custom message).
+;; Calls (predicate obj) and panics with "Invariant failed" if it returns false.
+;; Usage: (invariant! obj predicate)
+(defmacro invariant! [obj predicate]
+  (tur-contract-check-inv obj predicate "Invariant failed"))
+
+;; invariant-msg! -- check a structural invariant with custom message.
+;; Calls (predicate obj) and panics with msg if it returns false.
+;; Usage: (invariant-msg! obj predicate "message")
+(defmacro invariant-msg! [obj predicate msg]
+  (tur-contract-check-inv obj predicate msg))
 )

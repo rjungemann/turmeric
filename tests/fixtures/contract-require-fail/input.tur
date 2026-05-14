@@ -1,0 +1,9 @@
+;; Phase C1: require-msg! -- failing precondition triggers panic
+
+(defn check-positive [x :int] :int
+  (require-msg! (> x 0) "x must be positive")
+  x)
+
+(defn main [] :int
+  (println (check-positive -1))
+  0)
