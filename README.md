@@ -49,6 +49,7 @@ just test
 ./build/tur build path/to/file.tur     # compile to an executable
 ./build/tur emit-c path/to/file.tur    # print generated C to stdout
 ./build/tur run path/to/file.tur       # compile and immediately execute
+./build/tur repl                       # interactive REPL
 ```
 
 ## Examples
@@ -94,21 +95,6 @@ just test
 ; => 42
 ```
 
-**Effect handler with multiple clauses:**
-
-```lisp
-(defeffect Add [x :int] :int)
-(defeffect Mul [x :int] :int)
-
-(defn compute [] :int
-  (* (perform (Add 3)) (perform (Mul 4))))
-
-(println (handle (compute)
-  (Add [x] k) (resume k (+ x 10))
-  (Mul [x] k) (resume k (* x 2))))
-; => 104
-```
-
 **Typeclasses:**
 
 ```lisp
@@ -122,14 +108,35 @@ just test
   (if (.eq? 1 1) 0 1))
 ```
 
-**Exceptions:**
+**Contracts:**
 
 ```lisp
-(defn safe-div [a b]
-  (try
-    (if (= b 0) (throw "division by zero") (/ a b))
-    (catch [e]
-      -1)))
+(defn safe-div [a :int b :int] :int
+  (require! (not= b 0))
+  (/ a b))
+```
+
+**Set literals:**
+
+```lisp
+(def primes #s(2 3 5 7 11 13))
+```
+
+**Structural equality:**
+
+```lisp
+(println (=struct= [1 2 3] [1 2 3]))   ; => true
+(println (=struct= {:a 1} {:a 2}))     ; => false
+```
+
+**Defer:**
+
+```lisp
+(defn main [] :int
+  (let [f (open-file "log.txt")]
+    (defer (close-file f))   ; runs on scope exit
+    (write-file f "hello")
+    0))
 ```
 
 **Reference counting:**
@@ -144,19 +151,6 @@ just test
     0))
 ```
 
-**Borrows:**
-
-```lisp
-(defn main [] :int
-  (let [x 42]
-    (let [r1 (& x)]
-      (let [r2 (& x)]   ; multiple immutable borrows OK
-        (println 1)))
-    (let [r3 &mut x]    ; mutable borrow after immutable borrows end
-      (println 2)))
-  0)
-```
-
 **FFI / inline C:**
 
 ```lisp
@@ -165,11 +159,20 @@ just test
 (println (inline-c "(__builtin_popcount(255))"))
 ```
 
+**Persistent maps (HAMT):**
+
+```lisp
+(let [m (hamt-new)]
+  (let [m2 (hamt-set m 1 "one")]
+    (println (hamt-get m2 1))))
+```
+
 ## Features
 
 | Feature | Status |
 |---|---|
 | Reader: vectors, keywords, hex/binary ints, curly-infix, neoteric | ✅ |
+| Set literals (`#s(...)`) | ✅ |
 | Typed IR, elaborator, operator dispatch | ✅ |
 | `def` / `let` / `if` / `do` / `when` / `unless` / `cond` / `set!` / `while` | ✅ |
 | `defn`, mutual recursion, multi-file builds | ✅ |
@@ -187,15 +190,20 @@ just test
 | Exceptions (`try` / `catch` / `finally` / `throw`) | ✅ |
 | Delimited continuations (`shift` / `reset`) | ✅ |
 | Algebraic effects (`defeffect` / `perform` / `handle` / `resume`) | ✅ |
+| Serializable continuations | ✅ |
+| Backtracking / cloneable continuations | ✅ |
 | `extern-c`, inline-C blocks, FFI | ✅ |
+| Structural equality (`=struct=`) | ✅ |
+| Runtime contracts (`require!` / `ensure!` / `assert!` / `invariant!`) | ✅ |
 | Standard library: `option`, `result`, `vec`, `str`, `slice`, `io`, `log`, `test` | ✅ |
-| Higher-kinded types (Functor, Applicative, Monad, Foldable, Traversable, Bifunctor; `^f`/`^^f` syntax; `defkind`) | ✅ |
-| STM (`TVar`, `atomically`, `retry`) | 📋 Planned |
-| Persistent collections (HAMT) | 📋 Planned |
-| Backtracking / cloneable continuations | 📋 Planned |
+| Persistent collections (HAMT) | ✅ |
+| STM (`TVar`, `atomically`, `retry`) | ✅ |
+| Higher-kinded types (Functor, Applicative, Monad, Foldable, Traversable; `^f`/`^^f` syntax) | ✅ |
+| Interactive REPL with `:type`, `:doc`, history | ✅ |
+| WebAssembly playground | ✅ |
 
 ## Status
 
-Phases 0–19 are complete. The compiler passes its full fixture test suite with ASan/UBSan clean.
+The compiler passes its full fixture test suite with ASan/UBSan clean. All planned phases through Phase 21 (serializable continuations) are complete.
 
 See [docs/turmeric-plan.md](docs/turmeric-plan.md) for the detailed design and roadmap.
