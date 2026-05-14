@@ -35,3 +35,7 @@
   free(s);
   return 0;
   ```)
+
+;; Phase E1: Eq instance for str -- wires eq? to str-eq?
+(definstance Eq [str]
+  (eq? [x y] (str-eq? x y)))

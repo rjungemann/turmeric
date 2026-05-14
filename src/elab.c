@@ -223,6 +223,78 @@ static Binding *scope_lookup(Scope *s, const Symbol *name) {
  * param bindings. Returns a malloc'd list of captured Binding pointers. */
 static Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                                   uint32_t *n_out) {
+    /* Pre-pass: collect all bindings introduced by `let` forms anywhere within
+     * this expression.  These are locally defined — they must never be treated
+     * as free variables even when referenced inside a nested `let` body.
+     * Binding comparison is by pointer identity, so two `let` forms that bind
+     * the same name but produce distinct Binding* objects don't interfere. */
+    Binding **local_defs = NULL;
+    uint32_t  n_local = 0, cap_local = 0;
+    {
+        const Expr **ls = (const Expr **)malloc(256 * sizeof(const Expr *));
+        int lsp = 0;
+        ls[lsp++] = e;
+        while (lsp > 0) {
+            const Expr *cur = ls[--lsp];
+            if (!cur) continue;
+            switch (cur->kind) {
+                case EX_LET:
+                    for (uint32_t i = 0; i < cur->as.let_.n; i++) {
+                        Binding *b = cur->as.let_.bindings[i].binding;
+                        if (b) {
+                            if (n_local >= cap_local) {
+                                cap_local = cap_local ? cap_local * 2 : 8;
+                                local_defs = (Binding **)realloc(local_defs,
+                                    cap_local * sizeof(Binding *));
+                            }
+                            local_defs[n_local++] = b;
+                        }
+                        ls[lsp++] = cur->as.let_.bindings[i].init;
+                    }
+                    ls[lsp++] = cur->as.let_.body;
+                    break;
+                case EX_IF:
+                    if (cur->as.if_.else_or_null) ls[lsp++] = cur->as.if_.else_or_null;
+                    ls[lsp++] = cur->as.if_.then_;
+                    ls[lsp++] = cur->as.if_.cond;
+                    break;
+                case EX_DO:
+                    for (uint32_t i = cur->as.do_.n; i > 0; i--)
+                        ls[lsp++] = cur->as.do_.items[i-1];
+                    break;
+                case EX_WHILE:
+                    ls[lsp++] = cur->as.while_.body;
+                    ls[lsp++] = cur->as.while_.cond;
+                    break;
+                case EX_SET:   ls[lsp++] = cur->as.set_.value;      break;
+                case EX_DEF:   ls[lsp++] = cur->as.def_.init;       break;
+                case EX_BUILTIN:
+                    for (uint32_t i = cur->as.builtin.n; i > 0; i--)
+                        ls[lsp++] = cur->as.builtin.args[i-1];
+                    break;
+                case EX_CALL:
+                    for (uint32_t i = cur->as.call_.n_args; i > 0; i--)
+                        ls[lsp++] = cur->as.call_.args[i-1];
+                    break;
+                case EX_FN_DEF:  ls[lsp++] = cur->as.fn_def_.fn->body; break;
+                case EX_RETURN:
+                    if (cur->as.return_.value) ls[lsp++] = cur->as.return_.value;
+                    break;
+                case EX_PANIC:   ls[lsp++] = cur->as.panic_.payload;   break;
+                case EX_RC_DROP: ls[lsp++] = cur->as.rc_drop_.expr;    break;
+                case EX_DEFER:   ls[lsp++] = cur->as.defer_.body;      break;
+                case EX_RC_OF:   ls[lsp++] = cur->as.rc_of_.expr;      break;
+                case EX_GET_FIELD: ls[lsp++] = cur->as.get_field_.struct_expr; break;
+                case EX_MAKE_STRUCT:
+                    for (uint32_t i = cur->as.make_struct_.n_fields; i > 0; i--)
+                        ls[lsp++] = cur->as.make_struct_.field_values[i-1];
+                    break;
+                default: break;
+            }
+        }
+        free(ls);
+    }
+
     Binding **result = NULL;
     uint32_t cap = 0;
     uint32_t n = 0;
@@ -245,20 +317,31 @@ static Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_pa
                 }
             }
             if (!is_param && !cur->as.var.binding->is_global) {
-                /* This is a free variable - check if it's already in result */
-                bool found = false;
-                for (uint32_t i = 0; i < n; i++) {
-                    if (result[i] == cur->as.var.binding) {
-                        found = true;
+                /* Exclude bindings introduced by `let` within this expression —
+                 * they are locally defined, not free variables. */
+                bool is_local = false;
+                for (uint32_t i = 0; i < n_local; i++) {
+                    if (local_defs[i] == cur->as.var.binding) {
+                        is_local = true;
                         break;
                     }
                 }
-                if (!found) {
-                    if (n >= cap) {
-                        cap = cap ? cap * 2 : 8;
-                        result = (Binding **)realloc(result, cap * sizeof(Binding *));
+                if (!is_local) {
+                    /* This is a free variable - check if it's already in result */
+                    bool found = false;
+                    for (uint32_t i = 0; i < n; i++) {
+                        if (result[i] == cur->as.var.binding) {
+                            found = true;
+                            break;
+                        }
                     }
-                    result[n++] = cur->as.var.binding;
+                    if (!found) {
+                        if (n >= cap) {
+                            cap = cap ? cap * 2 : 8;
+                            result = (Binding **)realloc(result, cap * sizeof(Binding *));
+                        }
+                        result[n++] = cur->as.var.binding;
+                    }
                 }
             }
             continue;
@@ -407,6 +490,7 @@ static Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_pa
         }
     }
     free(stack);
+    free(local_defs);
     *n_out = n;
     return result;
 }
