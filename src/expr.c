@@ -413,6 +413,19 @@ void expr_print(Buf *b, const Expr *e) {
         case EX_DEFMODULE:
             buf_printf(b, "<defmodule %s>", e->as.defmodule_.mod->name->name);
             break;
+        /* Phase 21: Serializable continuations */
+        case EX_SERIAL_RESET:
+            buf_puts(b, "(serial-reset ");
+            expr_print(b, e->as.serial_reset_.body);
+            buf_putc(b, ')');
+            break;
+        case EX_SERIAL_SHIFT:
+            buf_puts(b, "(serial-shift ");
+            expr_print(b, e->as.serial_shift_.k_fn);
+            buf_putc(b, ' ');
+            expr_print(b, e->as.serial_shift_.body);
+            buf_putc(b, ')');
+            break;
         /* EX_CAST handled above with full type info */
     }
 }

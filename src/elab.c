@@ -503,6 +503,9 @@ typedef struct Elab {
     const Symbol *sym_cloneable_reset;   /* cloneable-reset */
     const Symbol *sym_cloneable_shift;   /* cloneable-shift */
     const Symbol *sym_call_cc_star;       /* call/cc* (sugar for cloneable call/cc) */
+    /* Phase 21: Serializable continuations */
+    const Symbol *sym_serial_reset;      /* serial-reset */
+    const Symbol *sym_serial_shift;      /* serial-shift */
     /* Phase 19: Algebraic effects */
     const Symbol *sym_defeffect;  /* defeffect */
     const Symbol *sym_perform;    /* perform */
@@ -682,6 +685,9 @@ typedef struct Elab {
     /* Phase B2 CPS-CL7: tracks nesting depth of cloneable-reset for
      * detecting cloneable-shift outside any reset boundary. */
     int              cloneable_reset_depth;
+    /* Phase 21: tracks nesting depth of serial-reset for detecting
+     * serial-shift outside any serial-reset boundary. */
+    int              serial_reset_depth;
     /* Phase P3: HAMT lowering - track if HAMT functions are used */
     bool             needs_hamt;
 } Elab;
@@ -1022,6 +1028,9 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_cloneable_reset = intern_cstr(st, "cloneable-reset");
     e->sym_cloneable_shift = intern_cstr(st, "cloneable-shift");
     e->sym_call_cc_star = intern_cstr(st, "call/cc*");
+    /* Phase 21: Serializable continuations */
+    e->sym_serial_reset = intern_cstr(st, "serial-reset");
+    e->sym_serial_shift = intern_cstr(st, "serial-shift");
     /* Phase 19: Algebraic effects */
     e->sym_defeffect = intern_cstr(st, "defeffect");
     e->sym_perform = intern_cstr(st, "perform");
@@ -1185,6 +1194,7 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->separate_compilation = false;
     e->macro_expansion_module = NULL;
     e->cloneable_reset_depth = 0;
+    e->serial_reset_depth = 0;
     /* Phase P3: HAMT lowering */
     e->needs_hamt = false;
 }
@@ -4687,6 +4697,102 @@ static Expr *elab_call_cc_star(Elab *e, const Form *call) {
     return reset;
 }
 
+/* Phase 21: Serializable continuations */
+
+/* Check that all local bindings visible at a serial-shift site implement
+ * the Serializable typeclass.  Mirrors check_cloneable_capture() for Clone. */
+static void check_serializable_capture(Elab *e, Span span) {
+    const Symbol *ser_sym = intern_cstr(e->st, "Serializable");
+    TypeClass *ser_tc = typeclass_env_lookup_typeclass(&e->typeclass_env, ser_sym);
+    if (!ser_tc) return; /* Serializable not yet in scope; defer to a later pass */
+
+    for (Scope *s = e->scope; s != NULL && s != &e->global; s = s->parent) {
+        for (uint32_t i = 0; i < s->n; i++) {
+            Binding *b = s->bindings[i];
+            if (!b || !b->name) continue;
+            Type t = b->type;
+            /* Primitive types that are always serializable */
+            if (t.kind == TY_NIL || t.kind == TY_FN ||
+                t.kind == TY_CLONEABLE_CONT || t.kind == TY_CONT) continue;
+            TypeClassInstance *inst =
+                typeclass_env_lookup_instance(&e->typeclass_env, ser_tc, &t, 1);
+            if (!inst) {
+                diag_emit_with_code(DIAG_ERROR, span,
+                                    TUR_E0018_NOT_SERIALIZABLE,
+                                    "captured binding '%s' does not implement Serializable "
+                                    "(required by serial-shift)\n"
+                                    "  = help: use serial-reset outside non-serializable "
+                                    "resources, or implement Serializable for the type",
+                                    b->name->name);
+            }
+        }
+    }
+}
+
+/* (serial-reset body) - Establish a serializable continuation boundary.
+ * Like reset, but marks the region so serial-shift can capture it. */
+static Expr *elab_serial_reset(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(serial-reset body) requires exactly one argument");
+        return NULL;
+    }
+    e->serial_reset_depth++;
+    Expr *body = elab_form(e, call->as.list.items[1]);
+    e->serial_reset_depth--;
+    if (!body) return NULL;
+    Expr *out = expr_new(e->arena, EX_SERIAL_RESET, body->type, call->span);
+    out->as.serial_reset_.body = body;
+    return out;
+}
+
+/* (serial-shift k body) - Capture the current continuation as a serializable one.
+ * k is a function that receives the serial-continuation as its argument.
+ * All captured environment values must implement Serializable. */
+static Expr *elab_serial_shift(Elab *e, const Form *call) {
+    if (call->as.list.len != 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(serial-shift k body) requires exactly two arguments");
+        return NULL;
+    }
+
+    if (e->serial_reset_depth == 0) {
+        diag_emit_with_code(DIAG_ERROR, call->span,
+                            TUR_E0019_SERIAL_SHIFT_OUTSIDE_RESET,
+                            "serial-shift used outside of any serial-reset boundary");
+        return NULL;
+    }
+
+    Expr *k_expr = elab_form(e, call->as.list.items[1]);
+    if (!k_expr) return NULL;
+
+    bool is_function = false;
+    if (k_expr->kind == EX_FN || k_expr->kind == EX_CLOSURE) {
+        is_function = true;
+    } else if (k_expr->kind == EX_VAR) {
+        Binding *b = k_expr->as.var.binding;
+        if (b && (b->type.kind == TY_FN || b->closure_fn_binding)) {
+            is_function = true;
+        }
+    }
+    if (!is_function) {
+        diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
+                  "serial-shift requires a function as first argument");
+        return NULL;
+    }
+
+    Expr *body = elab_form(e, call->as.list.items[2]);
+    if (!body) return NULL;
+
+    Expr *out = expr_new(e->arena, EX_SERIAL_SHIFT, body->type, call->span);
+    out->as.serial_shift_.k_fn = k_expr;
+    out->as.serial_shift_.body = body;
+
+    /* Check that all captured bindings implement Serializable. */
+    check_serializable_capture(e, call->span);
+    return out;
+}
+
 /* Phase 19: Algebraic effects */
 
 /* Forward declaration (defined after elab_defeffect) */
@@ -6721,6 +6827,9 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_cloneable_reset)  return elab_cloneable_reset(e, call);
     if (name == e->sym_cloneable_shift)  return elab_cloneable_shift(e, call);
     if (name == e->sym_call_cc_star)      return elab_call_cc_star(e, call);
+    /* Phase 21: Serializable continuations */
+    if (name == e->sym_serial_reset) return elab_serial_reset(e, call);
+    if (name == e->sym_serial_shift) return elab_serial_shift(e, call);
     /* Phase 19: Algebraic effects */
     if (name == e->sym_defeffect) return elab_defeffect(e, call);
     if (name == e->sym_perform)   return elab_perform(e, call);

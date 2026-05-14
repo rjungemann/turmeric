@@ -56,6 +56,7 @@ set(TUR_CORE_SOURCES
     io.c
     reader.c
     runtime.c
+    serial.c
     scheduler.c
     scheduler_common.c
     stm.c
