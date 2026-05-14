@@ -2400,37 +2400,47 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
 
             /* Callback call through ptr<void> parameter. */
             if (fn_binding->type.kind == TY_PTR_VOID) {
-                char *fn_name = raw_name_for_binding(fn_binding);
-                char **arg_strs = (char **)malloc(e->as.call_.n_args * sizeof(char *));
-                if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
-                for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
-                    arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
-                }
-
-                Buf out; buf_init(&out);
-                buf_printf(&out, "((%s (*) (", type_c_name(e->type));
-                if (e->as.call_.n_args == 0) {
-                    buf_puts(&out, "void");
+                char *fn_ptr = name_for_binding(ctx, fn_binding);
+                uint32_t n = e->as.call_.n_args;
+                if (n == 0) {
+                    /* Original 0-arg path: treat fn_ptr as a function pointer directly */
+                    Buf out; buf_init(&out);
+                    buf_printf(&out, "((%s (*)(void))%s)()",
+                               type_c_name(e->type), fn_ptr);
+                    buf_putc(&out, '\0');
+                    char *result = strdup(out.data);
+                    buf_free(&out);
+                    free(fn_ptr);
+                    return result;
                 } else {
-                    for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
-                        if (i > 0) buf_puts(&out, ", ");
-                        buf_puts(&out, type_c_name(e->as.call_.args[i]->type));
+                    /* CY2: Fat-closure dynamic dispatch with n_args > 0.
+                     * The fat closure has layout: struct { int64_t __fn; ... }
+                     * Extract __fn as a function pointer and call it with fat_ptr + args. */
+                    const char *ret_c = type_c_name(e->type);
+                    char **arg_strs = (char **)malloc(n * sizeof(char *));
+                    if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
+                    for (uint32_t i = 0; i < n; i++) {
+                        arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
                     }
+                    Buf out; buf_init(&out);
+                    /* Cast the __fn field to the thunk signature and call it. */
+                    buf_printf(&out, "((%s (*)(void*", ret_c);
+                    for (uint32_t i = 0; i < n; i++) {
+                        buf_printf(&out, ", %s", type_c_name(e->as.call_.args[i]->type));
+                    }
+                    buf_printf(&out, "))(intptr_t)((int64_t *)(%s))[0])(%s", fn_ptr, fn_ptr);
+                    for (uint32_t i = 0; i < n; i++) {
+                        buf_printf(&out, ", %s", arg_strs[i]);
+                    }
+                    buf_puts(&out, ")");
+                    buf_putc(&out, '\0');
+                    char *result = strdup(out.data);
+                    buf_free(&out);
+                    for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
+                    free(arg_strs);
+                    free(fn_ptr);
+                    return result;
                 }
-                buf_printf(&out, "))%s) (", fn_name);
-                for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
-                    if (i > 0) buf_puts(&out, ", ");
-                    buf_printf(&out, "%s", arg_strs[i]);
-                }
-                buf_puts(&out, ")");
-                buf_putc(&out, '\0');
-
-                char *result = strdup(out.data);
-                buf_free(&out);
-                for (uint32_t i = 0; i < e->as.call_.n_args; i++) free(arg_strs[i]);
-                free(arg_strs);
-                free(fn_name);
-                return result;
             }
             
             /* Phase G0: 0-arg constructor call — emit ctor_Name() */

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>tur/tur/arrow_laws | Turmeric API</title>
+<title>tur/tur/equal | Turmeric API</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -18,27 +18,28 @@
 <div class="sidebar">
   <h3>Exported</h3>
   <ul>
-    <li><a href="#verify-arrow-laws">verify-arrow-laws</a></li>
+    <li><a href="#equal-sym">equal-sym</a></li>
+    <li><a href="#equal-trans">equal-trans</a></li>
   </ul>
 </div>
 <div class="content">
   <div class="module-heading">
-    <h1>tur/arrow_laws</h1>
-    <div class="module-path">stdlib/arrow_laws.tur</div>
+    <h1>tur/equal</h1>
+    <div class="module-path">stdlib/equal.tur</div>
   </div>
-<div class="def-card" id="verify-arrow-laws">
+<div class="def-card" id="equal-sym">
   <div class="def-card-header">
     <span class="kind-badge kind-defn">defn</span>
-    <h2>verify-arrow-laws</h2>
+    <h2>equal-sym</h2>
   </div>
-  <pre class="def-signature">(verify-arrow-laws :bool)</pre>
-  <p class="def-summary">run all Arrow law tests and return overall pass/fail.</p>
-  <div class="def-section">
-    <div class="def-section-label">Example</div>
-    <pre class="def-example">true if every individual law test passes, false if any fail.
-
-  (verify-arrow-laws)  ; =&gt; true</pre>
+  <pre class="def-signature">(equal-sym [eq :Equal] :Equal)</pre>
+</div>
+<div class="def-card" id="equal-trans">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>equal-trans</h2>
   </div>
+  <pre class="def-signature">(equal-trans [eq1 :Equal eq2 :Equal] :Equal)</pre>
 </div>
 </div>
 </div>

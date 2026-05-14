@@ -7193,10 +7193,52 @@ static Expr *elab_as_cast(Elab *e, const Form *call);
 static Expr *elab_call(Elab *e, Form *call) {
     /* Already established: call->tag == F_LIST and len >= 1. */
     Form *head = call->as.list.items[0];
+
+    /* CY1: Support ((expr) args...) where expr evaluates to a fat closure (ptr<void>).
+     * Elaborate the head expression and treat it as a fat-closure dynamic call. */
     if (head->tag != F_SYM) {
-        diag_emit(DIAG_ERROR, head->span,
-                  "call head must be a symbol (functions arrive in phase 2)");
-        return NULL;
+        Expr *head_expr = elab_form(e, head);
+        if (!head_expr) return NULL;
+        if (head_expr->type.kind != TY_PTR_VOID) {
+            diag_emit(DIAG_ERROR, head->span,
+                      "call head must be a symbol or closure expression");
+            return NULL;
+        }
+        /* Treat as a fat-closure dynamic call: create a synthetic binding for the head */
+        uint32_t n_args = call->as.list.len - 1;
+        /* Elaborate arguments */
+        Expr **args = NULL;
+        if (n_args > 0) {
+            args = (Expr **)arena_alloc(e->arena, n_args * sizeof(Expr *));
+            for (uint32_t i = 0; i < n_args; i++) {
+                args[i] = elab_form(e, call->as.list.items[1 + i]);
+                if (!args[i]) return NULL;
+            }
+        }
+        /* We need a temporary binding for the head value so emit.c can name it.
+         * Wrap in EX_LET: let [__tmp = head_expr] (call __tmp args...) */
+        char tmp_name[32];
+        snprintf(tmp_name, sizeof(tmp_name), "__ccall%u", e->next_id++);
+        const Symbol *tmp_sym = symtab_intern(e->st, strslice(tmp_name, (uint32_t)strlen(tmp_name)));
+        Binding *tmp_b = binding_new(e, tmp_sym, TYPE_PTR_VOID, false, false, head->span);
+        /* Build call expression using tmp_b as fn_binding */
+        Expr *call_expr = expr_new(e->arena, EX_CALL, TYPE_INT, call->span);
+        call_expr->as.call_.fn_binding = tmp_b;
+        call_expr->as.call_.args = args;
+        call_expr->as.call_.n_args = n_args;
+        call_expr->as.call_.fn_expr = NULL;
+        call_expr->as.call_.dict_arg = NULL;
+        call_expr->as.call_.is_poly_call = false;
+        call_expr->as.call_.poly_arg_mask = 0;
+        /* Wrap in EX_LET */
+        LetBinding *let_bs = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
+        let_bs->binding = tmp_b;
+        let_bs->init = head_expr;
+        Expr *let_expr = expr_new(e->arena, EX_LET, TYPE_INT, call->span);
+        let_expr->as.let_.bindings = let_bs;
+        let_expr->as.let_.n = 1;
+        let_expr->as.let_.body = call_expr;
+        return let_expr;
     }
     const Symbol *name = head->as.sym;
 
@@ -7619,6 +7661,176 @@ static Expr *elab_call(Elab *e, Form *call) {
     return out;
 }
 
+/* CY1: Partially apply a function, returning a closure over the provided args.
+ *
+ * fn_type   -- the EFFECTIVE function type (thunk type if closure, including env param)
+ * fn_binding -- the binding being called (closure_fn_binding != NULL iff it's a closure)
+ * elab_args -- already-elaborated argument expressions [0..n_provided-1]
+ * n_provided -- number of arguments already provided (< full_arity)
+ */
+static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
+                                 Type fn_type, Expr **elab_args, uint32_t n_provided) {
+    bool fn_is_closure = (fn_binding->closure_fn_binding != NULL);
+
+    /* full_arity = user-visible arg count (strips env from thunk arity) */
+    uint32_t full_arity = fn_type.as.fn.arity;
+    if (fn_is_closure) full_arity--; /* strip hidden env param */
+
+    uint32_t n_remaining = full_arity - n_provided;
+    TypeKind result_kind = fn_type.as.fn.result_kind;
+
+    /* Build capture bindings for provided args */
+    Binding **cap_bindings = (Binding **)arena_alloc(e->arena, n_provided * sizeof(Binding *));
+    for (uint32_t i = 0; i < n_provided; i++) {
+        char cap_name[32];
+        snprintf(cap_name, sizeof(cap_name), "__papc%u", e->next_id++);
+        const Symbol *cap_sym = symtab_intern(e->st, strslice(cap_name, (uint32_t)strlen(cap_name)));
+        /* arg type from fn_type: skip index 0 if closure (env), so index = i+1 if closure, else i */
+        TypeKind cap_kind = fn_type.as.fn.arg_kinds[fn_is_closure ? (i + 1) : i];
+        Type cap_type = type_from_kind(cap_kind);
+        Binding *cap_b = binding_new(e, cap_sym, cap_type, false, false, call->span);
+        cap_bindings[i] = cap_b;
+    }
+
+    /* Build remaining param bindings for the new thunk */
+    Binding **rem_params = (Binding **)arena_alloc(e->arena, n_remaining * sizeof(Binding *));
+    TypeKind rem_kinds[MAX_FN_ARITY];
+    for (uint32_t i = 0; i < n_remaining; i++) {
+        char rem_name[32];
+        snprintf(rem_name, sizeof(rem_name), "__papr%u", e->next_id++);
+        const Symbol *rem_sym = symtab_intern(e->st, strslice(rem_name, (uint32_t)strlen(rem_name)));
+        TypeKind rem_kind = fn_type.as.fn.arg_kinds[fn_is_closure ? (n_provided + 1 + i) : (n_provided + i)];
+        Type rem_type = type_from_kind(rem_kind);
+        Binding *rem_b = binding_new(e, rem_sym, rem_type, false, false, call->span);
+        rem_params[i] = rem_b;
+        rem_kinds[i] = rem_kind;
+    }
+
+    /* Build the inner call expression: (fn_binding cap0 cap1 ... rem0 rem1 ...) */
+    /* n_call_args = full_arity (all user-visible args) */
+    uint32_t n_call_args = full_arity;
+    Expr **call_args = (Expr **)arena_alloc(e->arena, n_call_args * sizeof(Expr *));
+    for (uint32_t i = 0; i < n_provided; i++) {
+        Expr *var = expr_new(e->arena, EX_VAR, cap_bindings[i]->type, call->span);
+        var->as.var.binding = cap_bindings[i];
+        call_args[i] = var;
+    }
+    for (uint32_t i = 0; i < n_remaining; i++) {
+        Expr *var = expr_new(e->arena, EX_VAR, rem_params[i]->type, call->span);
+        var->as.var.binding = rem_params[i];
+        call_args[n_provided + i] = var;
+    }
+
+    Type body_result_type = type_from_kind(result_kind);
+    Expr *inner_call = expr_new(e->arena, EX_CALL, body_result_type, call->span);
+    inner_call->as.call_.fn_binding = fn_binding;
+    inner_call->as.call_.args = call_args;
+    inner_call->as.call_.n_args = n_call_args;
+    inner_call->as.call_.fn_expr = NULL;
+    inner_call->as.call_.dict_arg = NULL;
+    inner_call->as.call_.is_poly_call = false;
+    inner_call->as.call_.poly_arg_mask = 0;
+
+    /* Build the thunk FnDef */
+    /* Thunk params: [env_param (TY_PTR_VOID), rem_param_0, ..., rem_param_{n_remaining-1}] */
+    uint8_t thunk_n_params = (uint8_t)(1 + n_remaining);
+    Binding **thunk_params = (Binding **)arena_alloc(e->arena, thunk_n_params * sizeof(Binding *));
+    Type *thunk_param_types = (Type *)arena_alloc(e->arena, thunk_n_params * sizeof(Type));
+
+    /* env param */
+    char env_param_name[32];
+    snprintf(env_param_name, sizeof(env_param_name), "__pap_env_%u", e->next_id++);
+    const Symbol *env_param_sym = symtab_intern(e->st, strslice(env_param_name, (uint32_t)strlen(env_param_name)));
+    Binding *env_param_b = binding_new(e, env_param_sym, TYPE_PTR_VOID, false, false, call->span);
+    thunk_params[0] = env_param_b;
+    thunk_param_types[0] = TYPE_PTR_VOID;
+
+    for (uint32_t i = 0; i < n_remaining; i++) {
+        thunk_params[1 + i] = rem_params[i];
+        thunk_param_types[1 + i] = type_from_kind(rem_kinds[i]);
+    }
+
+    /* Thunk type: (TY_PTR_VOID, rem_kinds...) -> result_kind */
+    TypeKind thunk_arg_kinds[MAX_FN_ARITY];
+    thunk_arg_kinds[0] = TY_PTR_VOID;
+    for (uint32_t i = 0; i < n_remaining; i++) {
+        thunk_arg_kinds[1 + i] = rem_kinds[i];
+    }
+    Type thunk_type = type_fn(thunk_arg_kinds, thunk_n_params, result_kind);
+
+    /* Thunk binding (global) */
+    char pap_name[32];
+    snprintf(pap_name, sizeof(pap_name), "__pap%u", e->next_id++);
+    const Symbol *pap_sym = symtab_intern(e->st, strslice(pap_name, (uint32_t)strlen(pap_name)));
+    Binding *thunk_binding = binding_new(e, pap_sym, thunk_type, false, true, call->span);
+    scope_add(&e->global, thunk_binding);
+
+    /* Build FnDef */
+    FnDef *pap_fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));
+    memset(pap_fd, 0, sizeof(FnDef));
+    pap_fd->binding = thunk_binding;
+    pap_fd->params = thunk_params;
+    pap_fd->n_params = thunk_n_params;
+    pap_fd->param_types = thunk_param_types;
+    pap_fd->body = inner_call;
+    pap_fd->is_variadic = false;
+    pap_fd->inferred_effect_row = NULL;
+    constraint_set_init(&pap_fd->constraints);
+
+    /* Build the env struct name */
+    char pap_env_name[32];
+    snprintf(pap_env_name, sizeof(pap_env_name), "__pap_env_s_%u", e->next_id++);
+    const Symbol *pap_env_sym = symtab_intern(e->st, strslice(pap_env_name, (uint32_t)strlen(pap_env_name)));
+
+    /* Build captures list: [cap_binding[0], ..., cap_binding[n_provided-1]] + fn_binding if closure */
+    uint32_t n_pap_captures = n_provided + (fn_is_closure ? 1 : 0);
+    Binding **pap_captures = (Binding **)arena_alloc(e->arena, (n_pap_captures ? n_pap_captures : 1) * sizeof(Binding *));
+    for (uint32_t i = 0; i < n_provided; i++) {
+        pap_captures[i] = cap_bindings[i];
+    }
+    if (fn_is_closure) {
+        pap_captures[n_provided] = fn_binding;
+    }
+
+    /* Build Closure struct */
+    struct Closure *pap_closure = (struct Closure *)arena_alloc(e->arena, sizeof(struct Closure));
+    pap_closure->fn = pap_fd;
+    pap_closure->captures = pap_captures;
+    pap_closure->n_captures = (uint8_t)n_pap_captures;
+    pap_closure->env_name = pap_env_sym;
+
+    /* Wire closure into FnDef (required for emit_fn_def to emit the env struct) */
+    pap_fd->closure = pap_closure;
+
+    /* Register thunk at file scope */
+    Expr *fn_def_expr = expr_new(e->arena, EX_FN_DEF, thunk_type, call->span);
+    fn_def_expr->as.fn_def_.fn = pap_fd;
+    elab_register_file_def(e, fn_def_expr);
+
+    /* Build EX_CLOSURE */
+    Expr *closure_expr = expr_new(e->arena, EX_CLOSURE, TYPE_PTR_VOID, call->span);
+    closure_expr->as.closure_.closure = pap_closure;
+
+    if (n_provided == 0) {
+        /* Edge case: no args provided, just return the closure directly */
+        return closure_expr;
+    }
+
+    /* Wrap in EX_LET: let [cap0 = arg0, cap1 = arg1, ...] closure_expr */
+    LetBinding *let_bs = (LetBinding *)arena_alloc(e->arena, n_provided * sizeof(LetBinding));
+    for (uint32_t i = 0; i < n_provided; i++) {
+        let_bs[i].binding = cap_bindings[i];
+        let_bs[i].init = elab_args[i];
+    }
+
+    Expr *let_expr = expr_new(e->arena, EX_LET, TYPE_PTR_VOID, call->span);
+    let_expr->as.let_.bindings = let_bs;
+    let_expr->as.let_.n = n_provided;
+    let_expr->as.let_.body = closure_expr;
+
+    return let_expr;
+}
+
 /* Phase 2: Elaborate a function call (f a b c) */
 static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
     uint32_t n_args = call->as.list.len - 1;
@@ -7636,18 +7848,24 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         /* This is a closure - get the thunk function type */
         fn_type = fn_binding->closure_fn_binding->type;
     } else if (fn_binding->type.kind == TY_PTR_VOID) {
-        /* Phase 19: callback values passed as ptr<void> are callable (v1: no-arg). */
-        if (n_args != 0) {
-            diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0002_ARITY_MISMATCH,
-                                "callback '%s' expects %u argument(s), got %u",
-                                fn_binding->name->name, 0u, n_args);
-            return NULL;
+        /* CY2: fat-closure dynamic dispatch through ptr<void> binding.
+         * Supports 0-arg (original behavior) and n-arg (new fat-closure call). */
+        Expr **cb_args = NULL;
+        if (n_args > 0) {
+            cb_args = (Expr **)arena_alloc(e->arena, n_args * sizeof(Expr *));
+            for (uint32_t i = 0; i < n_args; i++) {
+                cb_args[i] = elab_form(e, call->as.list.items[1 + i]);
+                if (!cb_args[i]) return NULL;
+            }
         }
         Expr *out = expr_new(e->arena, EX_CALL, TYPE_INT, call->span);
         out->as.call_.fn_binding = fn_binding;
-        out->as.call_.args = NULL;
-        out->as.call_.n_args = 0;
+        out->as.call_.args = cb_args;
+        out->as.call_.n_args = n_args;
         out->as.call_.fn_expr = NULL;
+        out->as.call_.dict_arg = NULL;
+        out->as.call_.is_poly_call = false;
+        out->as.call_.poly_arg_mask = 0;
         return out;
     }
     
@@ -7679,6 +7897,83 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         expected_arity = 1;
     }
     
+    if (n_args < expected_arity && fn_type.kind == TY_FN) {
+        /* CY1: Partial application */
+        Expr **pap_elab_args = (n_args > 0)
+            ? (Expr **)arena_alloc(e->arena, n_args * sizeof(Expr *))
+            : NULL;
+        for (uint32_t i = 0; i < n_args; i++) {
+            pap_elab_args[i] = elab_form(e, call->as.list.items[1 + i]);
+            if (!pap_elab_args[i]) return NULL;
+        }
+        return elab_partial_apply(e, call, fn_binding, fn_type, pap_elab_args, n_args);
+    }
+    if (n_args > expected_arity && fn_type.kind == TY_FN) {
+        /* CY2: Over-application */
+        TypeKind result_kind = fn_type.as.fn.result_kind;
+        if (result_kind != TY_PTR_VOID) {
+            diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0002_ARITY_MISMATCH,
+                                "function '%s' returns %s, which is not callable -- "
+                                "did you mean to pass all %u argument(s)?",
+                                fn_binding->name->name,
+                                type_name(type_from_kind(result_kind)),
+                                expected_arity);
+            return NULL;
+        }
+        /* Elaborate the first expected_arity args (used in inner call) */
+        Expr **inner_args = (Expr **)arena_alloc(e->arena, expected_arity * sizeof(Expr *));
+        for (uint32_t i = 0; i < expected_arity; i++) {
+            inner_args[i] = elab_form(e, call->as.list.items[1 + i]);
+            if (!inner_args[i]) return NULL;
+        }
+        /* Build inner call expression */
+        Type inner_result_type = type_from_kind(result_kind);
+        Expr *inner_call = expr_new(e->arena, EX_CALL, inner_result_type, call->span);
+        inner_call->as.call_.fn_binding = fn_binding;
+        inner_call->as.call_.args = inner_args;
+        inner_call->as.call_.n_args = expected_arity;
+        inner_call->as.call_.fn_expr = NULL;
+        inner_call->as.call_.dict_arg = NULL;
+        inner_call->as.call_.is_poly_call = false;
+        inner_call->as.call_.poly_arg_mask = 0;
+        /* Create a let-binding for the intermediate closure result */
+        char oar_name[32];
+        snprintf(oar_name, sizeof(oar_name), "__oar%u", e->next_id++);
+        const Symbol *oar_sym = symtab_intern(e->st, strslice(oar_name, (uint32_t)strlen(oar_name)));
+        Binding *oar_binding = binding_new(e, oar_sym, inner_result_type, false, false, call->span);
+        /* Set closure_fn_binding if the inner result is a closure */
+        /* (We don't know at this point, but EX_CLOSURE wrapping in emit handles it dynamically) */
+        /* Elaborate remaining args */
+        uint32_t n_outer = n_args - expected_arity;
+        Expr **outer_args = (Expr **)arena_alloc(e->arena, n_outer * sizeof(Expr *));
+        for (uint32_t i = 0; i < n_outer; i++) {
+            outer_args[i] = elab_form(e, call->as.list.items[1 + expected_arity + i]);
+            if (!outer_args[i]) return NULL;
+        }
+        /* Result type of outer call: TY_INT as default for opaque fat closures */
+        Type outer_result_type = TYPE_INT;
+        if (fn_type.as.fn.result_full_type &&
+            fn_type.as.fn.result_full_type->kind == TY_FN) {
+            outer_result_type = type_from_kind(fn_type.as.fn.result_full_type->as.fn.result_kind);
+        }
+        Expr *outer_call = expr_new(e->arena, EX_CALL, outer_result_type, call->span);
+        outer_call->as.call_.fn_binding = oar_binding;
+        outer_call->as.call_.args = outer_args;
+        outer_call->as.call_.n_args = n_outer;
+        outer_call->as.call_.fn_expr = NULL;
+        outer_call->as.call_.dict_arg = NULL;
+        outer_call->as.call_.is_poly_call = false;
+        outer_call->as.call_.poly_arg_mask = 0;
+        /* Wrap in EX_LET */
+        LetBinding *oar_let_bs = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
+        oar_let_bs->binding = oar_binding;
+        oar_let_bs->init = inner_call;
+        Expr *oar_let = expr_new(e->arena, EX_LET, outer_result_type, call->span);
+        oar_let->as.let_.bindings = oar_let_bs;
+        oar_let->as.let_.n = 1;
+        oar_let->as.let_.body = outer_call;
+        return oar_let;
+    }
     if (n_args != expected_arity) {
         /* Phase 8: Enhanced arity mismatch diagnostic with error code */
         diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0002_ARITY_MISMATCH,
