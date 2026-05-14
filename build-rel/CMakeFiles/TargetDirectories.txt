@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 /Users/rjungemann/Projects/turmeric2/build-rel/CMakeFiles/package.dir
 /Users/rjungemann/Projects/turmeric2/build-rel/CMakeFiles/package_source.dir
 /Users/rjungemann/Projects/turmeric2/build-rel/CMakeFiles/test.dir
@@ -12,3 +13,31 @@
 /Users/rjungemann/Projects/turmeric2/build-rel/src/CMakeFiles/test.dir
 /Users/rjungemann/Projects/turmeric2/build-rel/src/CMakeFiles/edit_cache.dir
 /Users/rjungemann/Projects/turmeric2/build-rel/src/CMakeFiles/rebuild_cache.dir
+||||||| parent of 6e96c3bb (WIP: Fix failing tests)
+/Users/rjungemann/Projects/turmeric/build-rel/CMakeFiles/package.dir
+/Users/rjungemann/Projects/turmeric/build-rel/CMakeFiles/package_source.dir
+/Users/rjungemann/Projects/turmeric/build-rel/CMakeFiles/test.dir
+/Users/rjungemann/Projects/turmeric/build-rel/CMakeFiles/edit_cache.dir
+/Users/rjungemann/Projects/turmeric/build-rel/CMakeFiles/rebuild_cache.dir
+/Users/rjungemann/Projects/turmeric/build-rel/src/CMakeFiles/tur.dir
+/Users/rjungemann/Projects/turmeric/build-rel/src/CMakeFiles/package.dir
+/Users/rjungemann/Projects/turmeric/build-rel/src/CMakeFiles/package_source.dir
+/Users/rjungemann/Projects/turmeric/build-rel/src/CMakeFiles/test.dir
+/Users/rjungemann/Projects/turmeric/build-rel/src/CMakeFiles/edit_cache.dir
+/Users/rjungemann/Projects/turmeric/build-rel/src/CMakeFiles/rebuild_cache.dir
+=======
+/Users/rjungemann/Projects/turmeric/build-rel/CMakeFiles/package.dir
+/Users/rjungemann/Projects/turmeric/build-rel/CMakeFiles/package_source.dir
+/Users/rjungemann/Projects/turmeric/build-rel/CMakeFiles/test.dir
+/Users/rjungemann/Projects/turmeric/build-rel/CMakeFiles/edit_cache.dir
+/Users/rjungemann/Projects/turmeric/build-rel/CMakeFiles/rebuild_cache.dir
+/Users/rjungemann/Projects/turmeric/build-rel/src/CMakeFiles/tur_core.dir
+/Users/rjungemann/Projects/turmeric/build-rel/src/CMakeFiles/tur.dir
+/Users/rjungemann/Projects/turmeric/build-rel/src/CMakeFiles/libturi.dir
+/Users/rjungemann/Projects/turmeric/build-rel/src/CMakeFiles/tur_eval_basic.dir
+/Users/rjungemann/Projects/turmeric/build-rel/src/CMakeFiles/package.dir
+/Users/rjungemann/Projects/turmeric/build-rel/src/CMakeFiles/package_source.dir
+/Users/rjungemann/Projects/turmeric/build-rel/src/CMakeFiles/test.dir
+/Users/rjungemann/Projects/turmeric/build-rel/src/CMakeFiles/edit_cache.dir
+/Users/rjungemann/Projects/turmeric/build-rel/src/CMakeFiles/rebuild_cache.dir
+>>>>>>> 6e96c3bb (WIP: Fix failing tests)

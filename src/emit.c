@@ -4521,6 +4521,8 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.pending_handler_fns = &pending_hfns;
     /* Phase R5: no-unwind context (false at top level; set per-function) */
     ctx.no_unwind = false;
+    /* Phase M3: emit_program always uses single-file (non-separate) mode */
+    ctx.separate_compilation = false;
     /* Phase 19D: handle captures (NULL at top level) */
     ctx.handle_captures = NULL;
     ctx.n_handle_captures = 0;
