@@ -18,42 +18,19 @@
 <div class="sidebar">
   <h3>Exported</h3>
   <ul>
-    <li><a href="#sine-osc">sine-osc</a></li>
-    <li><a href="#time-sine-osc">time-sine-osc</a></li>
     <li><a href="#sine">sine</a></li>
     <li><a href="#square">square</a></li>
     <li><a href="#sawtooth">sawtooth</a></li>
-    <li><a href="#triangle">triangle</a></li>
-    <li><a href="#white-noise">white-noise</a></li>
-    <li><a href="#impulse">impulse</a></li>
-    <li><a href="#gain">gain</a></li>
-    <li><a href="#offset">offset</a></li>
-    <li><a href="#invert">invert</a></li>
-    <li><a href="#abs-sf">abs-sf</a></li>
-    <li><a href="#clip">clip</a></li>
-    <li><a href="#add">add</a></li>
-    <li><a href="#subtract">subtract</a></li>
-    <li><a href="#multiply">multiply</a></li>
-    <li><a href="#mix">mix</a></li>
-    <li><a href="#average">average</a></li>
     <li><a href="#low-pass">low-pass</a></li>
     <li><a href="#high-pass">high-pass</a></li>
-    <li><a href="#svf">svf</a></li>
-    <li><a href="#svf-low-pass">svf-low-pass</a></li>
-    <li><a href="#svf-band-pass">svf-band-pass</a></li>
-    <li><a href="#svf-high-pass">svf-high-pass</a></li>
-    <li><a href="#all-pass">all-pass</a></li>
-    <li><a href="#delay">delay</a></li>
-    <li><a href="#echo">echo</a></li>
-    <li><a href="#hard-clip">hard-clip</a></li>
-    <li><a href="#soft-clip">soft-clip</a></li>
-    <li><a href="#bit-crush">bit-crush</a></li>
-    <li><a href="#envelope-follower">envelope-follower</a></li>
-    <li><a href="#compressor">compressor</a></li>
-    <li><a href="#dc-blocker">dc-blocker</a></li>
-    <li><a href="#sample-and-hold">sample-and-hold</a></li>
-    <li><a href="#eq-3band">eq-3band</a></li>
-    <li><a href="#band-pass-simple">band-pass-simple</a></li>
+    <li><a href="#gain">gain</a></li>
+    <li><a href="#mix">mix</a></li>
+    <li><a href="#add">add</a></li>
+  </ul>
+  <h3>Internal</h3>
+  <ul>
+    <li><a href="#__dsp_sin" style="color:var(--faint)">__dsp_sin</a></li>
+    <li><a href="#__dsp_fmod" style="color:var(--faint)">__dsp_fmod</a></li>
   </ul>
 </div>
 <div class="content">
@@ -61,65 +38,25 @@
     <h1>tur/dsp</h1>
     <div class="module-path">stdlib/dsp.tur</div>
   </div>
-<div class="def-card" id="sine-osc">
-  <div class="def-card-header">
-    <span class="kind-badge kind-defn">defn</span>
-    <h2>sine-osc</h2>
-  </div>
-  <pre class="def-signature">(sine-osc [freq : Sample])</pre>
-  <p class="def-summary">stateless sine-wave SF placeholder (requires time input).</p>
-  <div class="def-section">
-    <div class="def-section-label">Parameters</div>
-    <table class="param-table">
-    <tr><td>freq</td><td></td><td>frequency in Hz</td></tr>
-    <tr><td>phase</td><td></td><td>phase offset in radians</td></tr>
-    </table>
-  </div>
-  <div class="def-section">
-    <div class="def-section-label">Returns</div>
-    <p class="def-returns">SF&lt;(),Sample&gt; (use time-sine-osc for a working version).</p>
-  </div>
-</div>
-<div class="def-card" id="time-sine-osc">
-  <div class="def-card-header">
-    <span class="kind-badge kind-defn">defn</span>
-    <h2>time-sine-osc</h2>
-  </div>
-  <pre class="def-signature">(time-sine-osc [freq : Sample])</pre>
-  <p class="def-summary">sine oscillator that takes an explicit time signal as input.</p>
-  <div class="def-section">
-    <div class="def-section-label">Parameters</div>
-    <table class="param-table">
-    <tr><td>freq</td><td></td><td>frequency in Hz</td></tr>
-    <tr><td>phase</td><td></td><td>phase offset in radians</td></tr>
-    </table>
-  </div>
-  <div class="def-section">
-    <div class="def-section-label">Example</div>
-    <pre class="def-example">SF&lt;Time,Sample&gt; mapping time values to sine samples in [-1, 1].
-
-  (time-sine-osc 440.0 0.0)</pre>
-  </div>
-</div>
 <div class="def-card" id="sine">
   <div class="def-card-header">
     <span class="kind-badge kind-defn">defn</span>
     <h2>sine</h2>
   </div>
-  <pre class="def-signature">(sine [freq : Sample])</pre>
-  <p class="def-summary">sine oscillator that ignores its input and reads global time.</p>
+  <pre class="def-signature">(sine [freq phase])</pre>
+  <p class="def-summary">sine-wave oscillator Signal Function.</p>
   <div class="def-section">
     <div class="def-section-label">Parameters</div>
     <table class="param-table">
-    <tr><td>freq</td><td></td><td>frequency in Hz</td></tr>
-    <tr><td>phase</td><td></td><td>phase offset in radians</td></tr>
+    <tr><td>freq</td><td></td><td>frequency in Hz (float64)</td></tr>
+    <tr><td>phase</td><td></td><td>initial phase offset in radians (float64)</td></tr>
     </table>
   </div>
   <div class="def-section">
     <div class="def-section-label">Example</div>
-    <pre class="def-example">SF&lt;(),Sample&gt; producing sine samples in [-1, 1].
+    <pre class="def-example">A Signal Function: sig -&gt; (fn [t] sin(2*pi*freq*t + phase)).
 
-  ((sine 440.0 0.0) (constant ()))</pre>
+  (sine 440.0 0.0)  ; =&gt; 440 Hz sine wave SF</pre>
   </div>
 </div>
 <div class="def-card" id="square">
@@ -127,20 +64,20 @@
     <span class="kind-badge kind-defn">defn</span>
     <h2>square</h2>
   </div>
-  <pre class="def-signature">(square [freq : Sample])</pre>
-  <p class="def-summary">square wave oscillator.</p>
+  <pre class="def-signature">(square [freq dutycycle])</pre>
+  <p class="def-summary">square-wave oscillator Signal Function.</p>
   <div class="def-section">
     <div class="def-section-label">Parameters</div>
     <table class="param-table">
-    <tr><td>freq</td><td></td><td>frequency in Hz</td></tr>
-    <tr><td>duty</td><td></td><td>duty cycle (0.0 to 1.0), fraction of period that is high</td></tr>
+    <tr><td>freq</td><td></td><td>frequency in Hz (float64)</td></tr>
+    <tr><td>dutycycle</td><td></td><td>duty cycle in [0,1] (float64)</td></tr>
     </table>
   </div>
   <div class="def-section">
     <div class="def-section-label">Example</div>
-    <pre class="def-example">SF&lt;(),Sample&gt; producing values in [-1, 1].
+    <pre class="def-example">A Signal Function: sig -&gt; (fn [t] 1.0 if phase &lt; duty else -1.0).
 
-  ((square 220.0 0.5) (constant ()))</pre>
+  (square 440.0 0.5)  ; =&gt; 440 Hz square wave SF</pre>
   </div>
 </div>
 <div class="def-card" id="sawtooth">
@@ -148,74 +85,59 @@
     <span class="kind-badge kind-defn">defn</span>
     <h2>sawtooth</h2>
   </div>
-  <pre class="def-signature">(sawtooth [freq : Sample])</pre>
-  <p class="def-summary">sawtooth wave oscillator.</p>
+  <pre class="def-signature">(sawtooth [freq])</pre>
+  <p class="def-summary">sawtooth-wave oscillator Signal Function.</p>
   <div class="def-section">
     <div class="def-section-label">Parameters</div>
     <table class="param-table">
-    <tr><td>freq</td><td></td><td>frequency in Hz</td></tr>
+    <tr><td>freq</td><td></td><td>frequency in Hz (float64)</td></tr>
     </table>
   </div>
   <div class="def-section">
     <div class="def-section-label">Example</div>
-    <pre class="def-example">SF&lt;(),Sample&gt; producing values in [0, 1).
+    <pre class="def-example">A Signal Function: sig -&gt; (fn [t] frac(freq*t) in [0,1)).
 
-  ((sawtooth 110.0) (constant ()))</pre>
+  (sawtooth 440.0)  ; =&gt; 440 Hz sawtooth wave SF</pre>
   </div>
 </div>
-<div class="def-card" id="triangle">
+<div class="def-card" id="low-pass">
   <div class="def-card-header">
     <span class="kind-badge kind-defn">defn</span>
-    <h2>triangle</h2>
+    <h2>low-pass</h2>
   </div>
-  <pre class="def-signature">(triangle [freq : Sample])</pre>
-  <p class="def-summary">triangle wave oscillator.</p>
+  <pre class="def-signature">(low-pass [alpha])</pre>
+  <p class="def-summary">first-order IIR low-pass filter Signal Function.</p>
   <div class="def-section">
     <div class="def-section-label">Parameters</div>
     <table class="param-table">
-    <tr><td>freq</td><td></td><td>frequency in Hz</td></tr>
+    <tr><td>alpha</td><td></td><td>smoothing coefficient in (0,1); lower = more smoothing.</td></tr>
     </table>
   </div>
   <div class="def-section">
     <div class="def-section-label">Example</div>
-    <pre class="def-example">SF&lt;(),Sample&gt; producing values in [-1, 1].
+    <pre class="def-example">A Signal Function that smooths the input signal.
 
-  ((triangle 880.0) (constant ()))</pre>
+  (low-pass 0.5)  ; =&gt; SF applying EMA with alpha=0.5</pre>
   </div>
 </div>
-<div class="def-card" id="white-noise">
+<div class="def-card" id="high-pass">
   <div class="def-card-header">
     <span class="kind-badge kind-defn">defn</span>
-    <h2>white-noise</h2>
+    <h2>high-pass</h2>
   </div>
-  <pre class="def-signature">(white-noise)</pre>
-  <p class="def-summary">pseudo-random white noise generator.</p>
-  <div class="def-section">
-    <div class="def-section-label">Example</div>
-    <pre class="def-example">SF&lt;(),Sample&gt; producing uncorrelated samples in [-1, 1].
-
-  ((white-noise) (constant ()))</pre>
-  </div>
-</div>
-<div class="def-card" id="impulse">
-  <div class="def-card-header">
-    <span class="kind-badge kind-defn">defn</span>
-    <h2>impulse</h2>
-  </div>
-  <pre class="def-signature">(impulse [freq : Sample])</pre>
-  <p class="def-summary">periodic impulse train.</p>
+  <pre class="def-signature">(high-pass [alpha])</pre>
+  <p class="def-summary">first-order IIR high-pass filter Signal Function.</p>
   <div class="def-section">
     <div class="def-section-label">Parameters</div>
     <table class="param-table">
-    <tr><td>freq</td><td></td><td>frequency in Hz</td></tr>
-    <tr><td>width</td><td></td><td>width of each impulse in seconds</td></tr>
+    <tr><td>alpha</td><td></td><td>filter coefficient in (0,1).</td></tr>
     </table>
   </div>
   <div class="def-section">
     <div class="def-section-label">Example</div>
-    <pre class="def-example">SF&lt;(),Sample&gt; outputting 1.0 during impulse windows, 0.0 otherwise.
+    <pre class="def-example">A Signal Function applying high-pass filtering.
 
-  ((impulse 2.0 0.001) (constant ()))</pre>
+  (high-pass 0.5)  ; =&gt; high-pass SF with alpha=0.5</pre>
   </div>
 </div>
 <div class="def-card" id="gain">
@@ -223,84 +145,39 @@
     <span class="kind-badge kind-defn">defn</span>
     <h2>gain</h2>
   </div>
-  <pre class="def-signature">(gain [g : Sample])</pre>
-  <p class="def-summary">multiply signal amplitude by a constant factor.</p>
+  <pre class="def-signature">(gain [g])</pre>
+  <p class="def-summary">scale a signal by a constant factor.</p>
   <div class="def-section">
     <div class="def-section-label">Parameters</div>
     <table class="param-table">
-    <tr><td>g</td><td></td><td>gain factor</td></tr>
+    <tr><td>g</td><td></td><td>gain factor (float64)</td></tr>
     </table>
   </div>
   <div class="def-section">
     <div class="def-section-label">Example</div>
-    <pre class="def-example">SF&lt;Sample,Sample&gt; that scales each sample by g.
+    <pre class="def-example">A Signal Function that multiplies each sample by g.
 
-  (gain 0.5)  ; =&gt; -6 dB attenuation</pre>
+  ((gain 2.0) my-sig)  ; =&gt; signal scaled by 2.0</pre>
   </div>
 </div>
-<div class="def-card" id="offset">
+<div class="def-card" id="mix">
   <div class="def-card-header">
     <span class="kind-badge kind-defn">defn</span>
-    <h2>offset</h2>
+    <h2>mix</h2>
   </div>
-  <pre class="def-signature">(offset [o : Sample])</pre>
-  <p class="def-summary">add a DC bias to the signal.</p>
+  <pre class="def-signature">(mix [alpha])</pre>
+  <p class="def-summary">weighted mix of a pair signal.</p>
   <div class="def-section">
     <div class="def-section-label">Parameters</div>
     <table class="param-table">
-    <tr><td>o</td><td></td><td>offset amount</td></tr>
+    <tr><td>alpha</td><td></td><td>mix coefficient in [0,1]: 0 = all first, 1 = all second.</td></tr>
     </table>
   </div>
   <div class="def-section">
     <div class="def-section-label">Example</div>
-    <pre class="def-example">SF&lt;Sample,Sample&gt; that adds o to each sample.
+    <pre class="def-example">A Signal Function on Pair signals: out = alpha*a + (1-alpha)*b.
 
-  (offset 0.5)  ; shifts signal upward by 0.5</pre>
-  </div>
-</div>
-<div class="def-card" id="invert">
-  <div class="def-card-header">
-    <span class="kind-badge kind-defn">defn</span>
-    <h2>invert</h2>
-  </div>
-  <pre class="def-signature">(invert)</pre>
-  <p class="def-summary">negate a signal (multiply by -1).</p>
-  <div class="def-section">
-    <div class="def-section-label">Returns</div>
-    <p class="def-returns">SF&lt;Sample,Sample&gt; inverting polarity.</p>
-  </div>
-</div>
-<div class="def-card" id="abs-sf">
-  <div class="def-card-header">
-    <span class="kind-badge kind-defn">defn</span>
-    <h2>abs-sf</h2>
-  </div>
-  <pre class="def-signature">(abs-sf)</pre>
-  <p class="def-summary">absolute value of each sample.</p>
-  <div class="def-section">
-    <div class="def-section-label">Returns</div>
-    <p class="def-returns">SF&lt;Sample,Sample&gt; returning |x| for each sample x.</p>
-  </div>
-</div>
-<div class="def-card" id="clip">
-  <div class="def-card-header">
-    <span class="kind-badge kind-defn">defn</span>
-    <h2>clip</h2>
-  </div>
-  <pre class="def-signature">(clip [min-val : Sample])</pre>
-  <p class="def-summary">hard clip signal to a symmetric range.</p>
-  <div class="def-section">
-    <div class="def-section-label">Parameters</div>
-    <table class="param-table">
-    <tr><td>min-val</td><td></td><td>minimum allowed sample value</td></tr>
-    <tr><td>max-val</td><td></td><td>maximum allowed sample value</td></tr>
-    </table>
-  </div>
-  <div class="def-section">
-    <div class="def-section-label">Example</div>
-    <pre class="def-example">SF&lt;Sample,Sample&gt; clamping output to [min-val, max-val].
-
-  (clip -0.8 0.8)</pre>
+  ((mix 0.5) (pair-signals sig-a sig-b))  ; =&gt; equal mix</pre>
   </div>
 </div>
 <div class="def-card" id="add">
@@ -309,448 +186,21 @@
     <h2>add</h2>
   </div>
   <pre class="def-signature">(add)</pre>
-  <p class="def-summary">add the two samples of a product signal.</p>
+  <p class="def-summary">sum a pair signal sample-wise.</p>
   <div class="def-section">
     <div class="def-section-label">Example</div>
-    <pre class="def-example">SF&lt;Tuple Sample Sample, Sample&gt; returning x + y.
+    <pre class="def-example">A Signal Function on Pair signals: out = a + b.
 
-  (add)</pre>
+  ((add) (pair-signals sig-a sig-b))  ; =&gt; sum signal</pre>
   </div>
 </div>
-<div class="def-card" id="subtract">
-  <div class="def-card-header">
-    <span class="kind-badge kind-defn">defn</span>
-    <h2>subtract</h2>
-  </div>
-  <pre class="def-signature">(subtract)</pre>
-  <p class="def-summary">subtract second sample from first.</p>
-  <div class="def-section">
-    <div class="def-section-label">Returns</div>
-    <p class="def-returns">SF&lt;Tuple Sample Sample, Sample&gt; returning x - y.</p>
-  </div>
-</div>
-<div class="def-card" id="multiply">
-  <div class="def-card-header">
-    <span class="kind-badge kind-defn">defn</span>
-    <h2>multiply</h2>
-  </div>
-  <pre class="def-signature">(multiply)</pre>
-  <p class="def-summary">multiply the two samples of a product signal.</p>
-  <div class="def-section">
-    <div class="def-section-label">Example</div>
-    <pre class="def-example">SF&lt;Tuple Sample Sample, Sample&gt; returning x * y.
-
-  (multiply)  ; useful for AM or ring modulation</pre>
-  </div>
-</div>
-<div class="def-card" id="mix">
-  <div class="def-card-header">
-    <span class="kind-badge kind-defn">defn</span>
-    <h2>mix</h2>
-  </div>
-  <pre class="def-signature">(mix [ratio : Sample])</pre>
-  <p class="def-summary">linear blend of two samples with a ratio.</p>
-  <div class="def-section">
-    <div class="def-section-label">Parameters</div>
-    <table class="param-table">
-    <tr><td>ratio</td><td></td><td>blend amount: 0.0 = all second, 1.0 = all first, 0.5 = equal</td></tr>
-    </table>
-  </div>
-  <div class="def-section">
-    <div class="def-section-label">Example</div>
-    <pre class="def-example">SF&lt;Tuple Sample Sample, Sample&gt; returning ratio*x + (1-ratio)*y.
-
-  (mix 0.5)  ; equal blend</pre>
-  </div>
-</div>
-<div class="def-card" id="average">
-  <div class="def-card-header">
-    <span class="kind-badge kind-defn">defn</span>
-    <h2>average</h2>
-  </div>
-  <pre class="def-signature">(average [n : int])</pre>
-  <p class="def-summary">average a vector of samples.</p>
-  <div class="def-section">
-    <div class="def-section-label">Parameters</div>
-    <table class="param-table">
-    <tr><td>n</td><td></td><td>number of signals (length of the input vector)</td></tr>
-    </table>
-  </div>
-  <div class="def-section">
-    <div class="def-section-label">Returns</div>
-    <p class="def-returns">SF&lt;vec Sample, Sample&gt; returning the arithmetic mean.</p>
-  </div>
-</div>
-<div class="def-card" id="low-pass">
-  <div class="def-card-header">
-    <span class="kind-badge kind-defn">defn</span>
-    <h2>low-pass</h2>
-  </div>
-  <pre class="def-signature">(low-pass [alpha : Sample])</pre>
-  <p class="def-summary">one-pole IIR low-pass filter.</p>
-  <div class="def-section">
-    <div class="def-section-label">Parameters</div>
-    <table class="param-table">
-    <tr><td>alpha</td><td></td><td>smoothing coefficient (0.0 = no smoothing, 1.0 = full smoothing)</td></tr>
-    </table>
-  </div>
-  <div class="def-section">
-    <div class="def-section-label">Example</div>
-    <pre class="def-example">SF&lt;Sample,Sample&gt; implementing y[n] = alpha*x[n] + (1-alpha)*y[n-1].
-
-  (low-pass 0.1)  ; heavy smoothing</pre>
-  </div>
-</div>
-<div class="def-card" id="high-pass">
-  <div class="def-card-header">
-    <span class="kind-badge kind-defn">defn</span>
-    <h2>high-pass</h2>
-  </div>
-  <pre class="def-signature">(high-pass [alpha : Sample])</pre>
-  <p class="def-summary">one-pole IIR high-pass filter.</p>
-  <div class="def-section">
-    <div class="def-section-label">Parameters</div>
-    <table class="param-table">
-    <tr><td>alpha</td><td></td><td>smoothing coefficient</td></tr>
-    </table>
-  </div>
-  <div class="def-section">
-    <div class="def-section-label">Example</div>
-    <pre class="def-example">SF&lt;Sample,Sample&gt; implementing y[n] = alpha*(y[n-1] + x[n] - x[n-1]).
-
-  (high-pass 0.9)</pre>
-  </div>
-</div>
-<div class="def-card" id="svf">
-  <div class="def-card-header">
-    <span class="kind-badge kind-defn">defn</span>
-    <h2>svf</h2>
-  </div>
-  <pre class="def-signature">(svf [freq : Sample])</pre>
-  <p class="def-summary">state variable filter with simultaneous LP/BP/HP outputs.</p>
-  <div class="def-section">
-    <div class="def-section-label">Parameters</div>
-    <table class="param-table">
-    <tr><td>freq</td><td></td><td>normalised cutoff frequency (0.0 to 1.0, where 1.0 = Nyquist)</td></tr>
-    <tr><td>q</td><td></td><td>resonance / quality factor</td></tr>
-    </table>
-  </div>
-  <div class="def-section">
-    <div class="def-section-label">Example</div>
-    <pre class="def-example">SF&lt;Sample, Tuple Sample Sample Sample&gt; yielding (low-pass, band-pass, high-pass).
-
-  (svf 0.2 1.0)</pre>
-  </div>
-</div>
-<div class="def-card" id="svf-low-pass">
-  <div class="def-card-header">
-    <span class="kind-badge kind-defn">defn</span>
-    <h2>svf-low-pass</h2>
-  </div>
-  <pre class="def-signature">(svf-low-pass [freq : Sample])</pre>
-  <p class="def-summary">low-pass output from the state variable filter.</p>
-  <div class="def-section">
-    <div class="def-section-label">Parameters</div>
-    <table class="param-table">
-    <tr><td>freq</td><td></td><td>normalised cutoff frequency</td></tr>
-    <tr><td>q</td><td></td><td>resonance</td></tr>
-    </table>
-  </div>
-  <div class="def-section">
-    <div class="def-section-label">Returns</div>
-    <p class="def-returns">SF&lt;Sample,Sample&gt; (low-pass band only).</p>
-  </div>
-</div>
-<div class="def-card" id="svf-band-pass">
-  <div class="def-card-header">
-    <span class="kind-badge kind-defn">defn</span>
-    <h2>svf-band-pass</h2>
-  </div>
-  <pre class="def-signature">(svf-band-pass [freq : Sample])</pre>
-  <p class="def-summary">band-pass output from the state variable filter.</p>
-  <div class="def-section">
-    <div class="def-section-label">Parameters</div>
-    <table class="param-table">
-    <tr><td>freq</td><td></td><td>normalised center frequency</td></tr>
-    <tr><td>q</td><td></td><td>resonance</td></tr>
-    </table>
-  </div>
-  <div class="def-section">
-    <div class="def-section-label">Returns</div>
-    <p class="def-returns">SF&lt;Sample,Sample&gt; (band-pass band only).</p>
-  </div>
-</div>
-<div class="def-card" id="svf-high-pass">
-  <div class="def-card-header">
-    <span class="kind-badge kind-defn">defn</span>
-    <h2>svf-high-pass</h2>
-  </div>
-  <pre class="def-signature">(svf-high-pass [freq : Sample])</pre>
-  <p class="def-summary">high-pass output from the state variable filter.</p>
-  <div class="def-section">
-    <div class="def-section-label">Parameters</div>
-    <table class="param-table">
-    <tr><td>freq</td><td></td><td>normalised cutoff frequency</td></tr>
-    <tr><td>q</td><td></td><td>resonance</td></tr>
-    </table>
-  </div>
-  <div class="def-section">
-    <div class="def-section-label">Returns</div>
-    <p class="def-returns">SF&lt;Sample,Sample&gt; (high-pass band only).</p>
-  </div>
-</div>
-<div class="def-card" id="all-pass">
-  <div class="def-card-header">
-    <span class="kind-badge kind-defn">defn</span>
-    <h2>all-pass</h2>
-  </div>
-  <pre class="def-signature">(all-pass [freq : Sample])</pre>
-  <p class="def-summary">all-pass filter for phase shifting without amplitude change.</p>
-  <div class="def-section">
-    <div class="def-section-label">Parameters</div>
-    <table class="param-table">
-    <tr><td>freq</td><td></td><td>normalised frequency parameter</td></tr>
-    <tr><td>q</td><td></td><td>resonance parameter</td></tr>
-    </table>
-  </div>
-  <div class="def-section">
-    <div class="def-section-label">Returns</div>
-    <p class="def-returns">SF&lt;Sample,Sample&gt; shifting phase while preserving amplitude.</p>
-  </div>
-</div>
-<div class="def-card" id="delay">
-  <div class="def-card-header">
-    <span class="kind-badge kind-defn">defn</span>
-    <h2>delay</h2>
-  </div>
-  <pre class="def-signature">(delay [delay-time : Sample])</pre>
-  <p class="def-summary">feedback delay line using a circular buffer.</p>
-  <div class="def-section">
-    <div class="def-section-label">Parameters</div>
-    <table class="param-table">
-    <tr><td>delay-time</td><td></td><td>delay length in seconds</td></tr>
-    <tr><td>feedback</td><td></td><td>feedback gain (0.0 to 1.0)</td></tr>
-    <tr><td>max-delay</td><td></td><td>buffer size in samples</td></tr>
-    </table>
-  </div>
-  <div class="def-section">
-    <div class="def-section-label">Example</div>
-    <pre class="def-example">SF&lt;Sample,Sample&gt; with delay effect applied.
-
-  (delay 0.25 0.5 22050)</pre>
-  </div>
-</div>
-<div class="def-card" id="echo">
-  <div class="def-card-header">
-    <span class="kind-badge kind-defn">defn</span>
-    <h2>echo</h2>
-  </div>
-  <pre class="def-signature">(echo [delay-time : Sample])</pre>
-  <p class="def-summary">multi-tap echo using direct signal access.</p>
-  <div class="def-section">
-    <div class="def-section-label">Parameters</div>
-    <table class="param-table">
-    <tr><td>delay-time</td><td></td><td>time between echoes in seconds</td></tr>
-    <tr><td>decay</td><td></td><td>amplitude decay factor per echo</td></tr>
-    <tr><td>num-echos</td><td></td><td>number of echo repetitions</td></tr>
-    </table>
-  </div>
-  <div class="def-section">
-    <div class="def-section-label">Example</div>
-    <pre class="def-example">SF&lt;Sample,Sample&gt; summing the original with decayed, delayed copies.
-
-  (echo 0.3 0.6 4)</pre>
-  </div>
-</div>
-<div class="def-card" id="hard-clip">
-  <div class="def-card-header">
-    <span class="kind-badge kind-defn">defn</span>
-    <h2>hard-clip</h2>
-  </div>
-  <pre class="def-signature">(hard-clip [threshold : Sample])</pre>
-  <p class="def-summary">symmetric hard clipping distortion.</p>
-  <div class="def-section">
-    <div class="def-section-label">Parameters</div>
-    <table class="param-table">
-    <tr><td>threshold</td><td></td><td>clipping level (output clamped to [-threshold, threshold])</td></tr>
-    </table>
-  </div>
-  <div class="def-section">
-    <div class="def-section-label">Example</div>
-    <pre class="def-example">SF&lt;Sample,Sample&gt; with hard-clipped output.
-
-  (hard-clip 0.7)</pre>
-  </div>
-</div>
-<div class="def-card" id="soft-clip">
-  <div class="def-card-header">
-    <span class="kind-badge kind-defn">defn</span>
-    <h2>soft-clip</h2>
-  </div>
-  <pre class="def-signature">(soft-clip [drive : Sample])</pre>
-  <p class="def-summary">smooth tanh-based saturation.</p>
-  <div class="def-section">
-    <div class="def-section-label">Parameters</div>
-    <table class="param-table">
-    <tr><td>drive</td><td></td><td>drive amount (0.0 = linear, higher = more saturation)</td></tr>
-    </table>
-  </div>
-  <div class="def-section">
-    <div class="def-section-label">Example</div>
-    <pre class="def-example">SF&lt;Sample,Sample&gt; with soft-clipped output normalised to [-1, 1].
-
-  (soft-clip 2.0)</pre>
-  </div>
-</div>
-<div class="def-card" id="bit-crush">
-  <div class="def-card-header">
-    <span class="kind-badge kind-defn">defn</span>
-    <h2>bit-crush</h2>
-  </div>
-  <pre class="def-signature">(bit-crush [bits : int])</pre>
-  <p class="def-summary">reduce bit depth to create lo-fi quantisation noise.</p>
-  <div class="def-section">
-    <div class="def-section-label">Parameters</div>
-    <table class="param-table">
-    <tr><td>bits</td><td></td><td>target bit depth (1 to 16)</td></tr>
-    </table>
-  </div>
-  <div class="def-section">
-    <div class="def-section-label">Example</div>
-    <pre class="def-example">SF&lt;Sample,Sample&gt; with quantised output.
-
-  (bit-crush 8)  ; 8-bit sound</pre>
-  </div>
-</div>
-<div class="def-card" id="envelope-follower">
-  <div class="def-card-header">
-    <span class="kind-badge kind-defn">defn</span>
-    <h2>envelope-follower</h2>
-  </div>
-  <pre class="def-signature">(envelope-follower [attack : Sample])</pre>
-  <p class="def-summary">track signal amplitude with asymmetric attack/release.</p>
-  <div class="def-section">
-    <div class="def-section-label">Parameters</div>
-    <table class="param-table">
-    <tr><td>attack</td><td></td><td>attack smoothing coefficient (0.0 to 1.0)</td></tr>
-    <tr><td>release</td><td></td><td>release smoothing coefficient (0.0 to 1.0)</td></tr>
-    </table>
-  </div>
-  <div class="def-section">
-    <div class="def-section-label">Example</div>
-    <pre class="def-example">SF&lt;Sample,Sample&gt; producing a smooth envelope signal &gt;= 0.
-
-  (envelope-follower 0.01 0.001)</pre>
-  </div>
-</div>
-<div class="def-card" id="compressor">
-  <div class="def-card-header">
-    <span class="kind-badge kind-defn">defn</span>
-    <h2>compressor</h2>
-  </div>
-  <pre class="def-signature">(compressor [threshold : Sample])</pre>
-  <p class="def-summary">dynamic range compressor.</p>
-  <div class="def-section">
-    <div class="def-section-label">Parameters</div>
-    <table class="param-table">
-    <tr><td>threshold</td><td></td><td>RMS level above which compression kicks in</td></tr>
-    <tr><td>ratio</td><td></td><td>compression ratio (e.g., 4.0 for 4:1)</td></tr>
-    <tr><td>attack</td><td></td><td>attack time constant</td></tr>
-    <tr><td>release</td><td></td><td>release time constant</td></tr>
-    </table>
-  </div>
-  <div class="def-section">
-    <div class="def-section-label">Example</div>
-    <pre class="def-example">SF&lt;Sample,Sample&gt; with gain reduction applied above threshold.
-
-  (compressor 0.5 4.0 0.01 0.001)</pre>
-  </div>
-</div>
-<div class="def-card" id="dc-blocker">
-  <div class="def-card-header">
-    <span class="kind-badge kind-defn">defn</span>
-    <h2>dc-blocker</h2>
-  </div>
-  <pre class="def-signature">(dc-blocker [alpha : Sample])</pre>
-  <p class="def-summary">remove DC offset using a simple high-pass approach.</p>
-  <div class="def-section">
-    <div class="def-section-label">Parameters</div>
-    <table class="param-table">
-    <tr><td>alpha</td><td></td><td>leakiness of the DC estimate (close to 1.0 = slow adaptation)</td></tr>
-    </table>
-  </div>
-  <div class="def-section">
-    <div class="def-section-label">Example</div>
-    <pre class="def-example">SF&lt;Sample,Sample&gt; with DC component removed.
-
-  (dc-blocker 0.995)</pre>
-  </div>
-</div>
-<div class="def-card" id="sample-and-hold">
-  <div class="def-card-header">
-    <span class="kind-badge kind-defn">defn</span>
-    <h2>sample-and-hold</h2>
-  </div>
-  <pre class="def-signature">(sample-and-hold [freq : Sample])</pre>
-  <p class="def-summary">sample input at a regular rate and hold the value.</p>
-  <div class="def-section">
-    <div class="def-section-label">Parameters</div>
-    <table class="param-table">
-    <tr><td>freq</td><td></td><td>sampling frequency in Hz</td></tr>
-    </table>
-  </div>
-  <div class="def-section">
-    <div class="def-section-label">Example</div>
-    <pre class="def-example">SF&lt;Sample,Sample&gt; that holds the last sampled value between updates.
-
-  (sample-and-hold 8000.0)</pre>
-  </div>
-</div>
-<div class="def-card" id="eq-3band">
-  <div class="def-card-header">
-    <span class="kind-badge kind-defn">defn</span>
-    <h2>eq-3band</h2>
-  </div>
-  <pre class="def-signature">(eq-3band [low-gain : Sample])</pre>
-  <p class="def-summary">three-band parametric equaliser.</p>
-  <div class="def-section">
-    <div class="def-section-label">Parameters</div>
-    <table class="param-table">
-    <tr><td>low-gain</td><td></td><td>gain multiplier for low band</td></tr>
-    <tr><td>mid-gain</td><td></td><td>gain multiplier for mid band</td></tr>
-    <tr><td>high-gain</td><td></td><td>gain multiplier for high band</td></tr>
-    <tr><td>low-freq</td><td></td><td>crossover between low and mid bands</td></tr>
-    <tr><td>high-freq</td><td></td><td>crossover between mid and high bands</td></tr>
-    </table>
-  </div>
-  <div class="def-section">
-    <div class="def-section-label">Example</div>
-    <pre class="def-example">SF&lt;Sample,Sample&gt; with EQ applied.
-
-  (eq-3band 1.5 1.0 0.8 0.1 0.6)</pre>
-  </div>
-</div>
-<div class="def-card" id="band-pass-simple">
-  <div class="def-card-header">
-    <span class="kind-badge kind-defn">defn</span>
-    <h2>band-pass-simple</h2>
-  </div>
-  <pre class="def-signature">(band-pass-simple [low-freq : Sample])</pre>
-  <p class="def-summary">band-pass filter constructed from low-pass and high-pass in series.</p>
-  <div class="def-section">
-    <div class="def-section-label">Parameters</div>
-    <table class="param-table">
-    <tr><td>low-freq</td><td></td><td>lower cutoff frequency (high-pass pole)</td></tr>
-    <tr><td>high-freq</td><td></td><td>upper cutoff frequency (low-pass pole)</td></tr>
-    </table>
-  </div>
-  <div class="def-section">
-    <div class="def-section-label">Example</div>
-    <pre class="def-example">SF&lt;Sample,Sample&gt; passing frequencies between low-freq and high-freq.
-
-  (band-pass-simple 0.05 0.4)</pre>
-  </div>
-</div>
+<details class="internal-section">
+  <summary>Internal definitions</summary>
+  <div class="internal-list">
+  <div class="internal-item" id="__dsp_sin"><code>__dsp_sin</code><span class="internal-item-summary">-- compute sine of angle in radians.</span></div>
+  <div class="internal-item" id="__dsp_fmod"><code>__dsp_fmod</code><span class="internal-item-summary">-- compute floating-point modulo.</span></div>
+  </div>
+</details>
 </div>
 </div>
 <footer class="site-footer">

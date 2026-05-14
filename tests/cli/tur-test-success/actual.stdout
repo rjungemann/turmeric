@@ -1,4 +1,2 @@
-FF
-2 tests, 0 passed, 2 failed
-FAIL tests/cli/tur-test-success/cases/pass_a.tur
-FAIL tests/cli/tur-test-success/cases/pass_b.tur
+..
+2 tests, 2 passed, 0 failed

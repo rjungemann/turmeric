@@ -1,0 +1,4 @@
+(defn make-adder [base] :ptr
+  (fn [x] :int (+ base x)))
+(defn main [] :int
+  (println (make-adder 10 32)))

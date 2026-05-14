@@ -7,7 +7,8 @@
 (defmodule tur/macros
   (export cond when unless must! must-msg! ignore! do-m for doc
           assert! assert-msg! require! require-msg!
-          ensure! ensure-msg! invariant! invariant-msg!)
+          ensure! ensure-msg! invariant! invariant-msg!
+          curry)
 
 ;;; cond -- variadic conditional branching via nested if chains.
 ;;;
@@ -314,6 +315,24 @@
 ;;; Since: Phase C1
 (defmacro invariant-msg! [obj predicate msg]
   (tur-contract-check-inv obj predicate msg))
+
+;;; curry -- convert a 2-argument function to its curried form.
+;;;
+;;; Parameters:
+;;;   f -- a 2-argument function
+;;;
+;;; Returns:
+;;;   A 1-argument function that, given its first argument, returns a
+;;;   1-argument function that applies f to both.
+;;;
+;;; Example:
+;;;   (defn add [a b] :int (+ a b))
+;;;   (let [add1 ((curry add) 1)]
+;;;     (add1 41))  ; => 42
+;;;
+;;; Since: CY3
+(defmacro curry [f]
+  `(fn [a] (fn [b] (~f a b))))
 
 ;;; doc -- print documentation for a function, macro, or struct at the REPL.
 ;;;
