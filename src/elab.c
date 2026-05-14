@@ -776,6 +776,8 @@ typedef struct Elab {
     const Symbol *sym_colon; /* bare ":" used as annotation separator in defgadt */
     /* Phase G2: current per-arm skolem environment (NULL outside GADT match arms) */
     SkolemEnv *g2_skolem_env;
+    /* Phase G3: coerce special form */
+    const Symbol *sym_coerce;
     /* Phase M0: Module system */
     const Symbol *sym_defmodule;  /* defmodule */
     const Symbol *sym_export;     /* export */
@@ -1238,6 +1240,8 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_colon = intern_cstr(st, ":");
     /* Phase G2: per-arm skolem environment (NULL until inside a GADT match arm) */
     e->g2_skolem_env = NULL;
+    /* Phase G3: coerce */
+    e->sym_coerce = intern_cstr(st, "coerce");
     /* Phase 12: Borrow traits */
     e->sym_borrow = intern_cstr(st, "&");
     e->sym_borrow_mut = intern_cstr(st, "&mut");
@@ -5743,6 +5747,9 @@ static Expr *elab_question(Elab *e, const Form *call) {
     return elab_form(e, let_form);
 }
 
+/* Phase G2: forward declaration (used in elab_defn for param constraint resolution) */
+static TypeKind gadt_skolem_lookup(const SkolemEnv *env, const char *name);
+
 /* Phase 2: defn — (defn name [param1 param2 ...] : return-type body...)
  * For now, we only support : int return type annotation. Param types are
  * inferred from usage. */
@@ -5839,10 +5846,34 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     /* Constraint set for this function - allocated on arena */
     TypeConstraint *constraint_list = NULL;
     uint8_t n_constraints = 0;
-    
+
+    /* Phase G3: Equality constraint env built from (: a T) param items */
+    SkolemEnv param_constraint_env;
+    param_constraint_env.n = 0;
+
     for (uint32_t i = 0; i < params_f->as.list.len; i++) {
         Form *p = params_f->as.list.items[i];
-        
+
+        /* Phase G3: Handle equality constraint (: a T) in params.
+         * Syntax: (: a int) means "type variable a equals int".
+         * This is a type-level constraint; no runtime parameter is created. */
+        if (p->tag == F_LIST && p->as.list.len == 3 &&
+            p->as.list.items[0]->tag == F_SYM &&
+            p->as.list.items[0]->as.sym == e->sym_colon) {
+            Form *var_form  = p->as.list.items[1];
+            Form *type_form = p->as.list.items[2];
+            if (var_form->tag == F_SYM && type_form->tag == F_SYM) {
+                TypeKind ck = typekind_from_symbol(type_form->as.sym->name);
+                if (ck != TY_UNKNOWN && param_constraint_env.n < MAX_SKOLEM_BINDINGS) {
+                    param_constraint_env.bindings[param_constraint_env.n].name =
+                        var_form->as.sym->name;
+                    param_constraint_env.bindings[param_constraint_env.n].kind = ck;
+                    param_constraint_env.n++;
+                }
+            }
+            continue;
+        }
+
         /* Phase 15: Handle constraint annotations (^Eq, ^Show, etc.) */
         if (p->tag == F_SYM && p->as.sym->len > 0 && p->as.sym->name[0] == '^') {
             /* This is a constraint annotation like ^Eq */
@@ -5987,10 +6018,31 @@ static Expr *elab_defn(Elab *e, const Form *call) {
                 param_kinds[n_params - 1] = TY_SET;
                 params[n_params - 1]->type = set_type;
             } else {
-                /* Try to look up as a type variable or typeclass */
-                /* For now, default to int */
-                param_kinds[n_params - 1] = TY_INT;
-                params[n_params - 1]->type = TYPE_INT;
+                /* Phase G3: Try constraint env first (type variable resolution) */
+                TypeKind ck = gadt_skolem_lookup(&param_constraint_env, kw->name);
+                if (ck != TY_UNKNOWN) {
+                    /* Resolved via equality constraint */
+                    param_kinds[n_params - 1] = ck;
+                    params[n_params - 1]->type = type_from_kind(ck);
+                    params[n_params - 1]->type.copy_kind = typekind_default_copy_kind(ck);
+                } else {
+                    /* Try to look up as ADT name */
+                    AdtDef *param_adt = NULL;
+                    for (uint32_t ai = 0; ai < e->n_adt_defs; ai++) {
+                        if (strcmp(e->adt_defs[ai]->name, kw->name) == 0) {
+                            param_adt = e->adt_defs[ai];
+                            break;
+                        }
+                    }
+                    if (param_adt) {
+                        param_kinds[n_params - 1] = TY_ADT;
+                        params[n_params - 1]->type = type_adt(param_adt);
+                    } else {
+                        /* Default: unknown type variable → int */
+                        param_kinds[n_params - 1] = TY_INT;
+                        params[n_params - 1]->type = TYPE_INT;
+                    }
+                }
             }
             continue;
         }
@@ -6015,6 +6067,7 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     /* Parse return type annotation and body */
     /* body_start is the index of the first element after params (could be return type or body) */
     TypeKind return_kind = TY_NIL;
+    AdtDef *return_adt_def = NULL; /* Phase G3: set when return type is an ADT name */
     uint32_t body_start = name_idx + 2;  /* name_idx + 1 = params, +1 = after params */
 
     /* Phase 19: Parse optional effect-row annotation #{Read Write} or #{e} before return type.
@@ -6073,10 +6126,26 @@ static Expr *elab_defn(Elab *e, const Form *call) {
                 /* Phase X3: set return type */
                 return_kind = TY_SET;
             } else {
-                diag_emit(DIAG_ERROR, ret_f->span,
-                          "defn: unsupported return type keyword :%s",
-                          kw->name);
-                return NULL;
+                /* Phase G3: Try constraint env (type variable resolution) */
+                TypeKind ck = gadt_skolem_lookup(&param_constraint_env, kw->name);
+                if (ck != TY_UNKNOWN) {
+                    return_kind = ck;
+                } else {
+                    /* Try to look up as ADT name */
+                    for (uint32_t ai = 0; ai < e->n_adt_defs; ai++) {
+                        if (strcmp(e->adt_defs[ai]->name, kw->name) == 0) {
+                            return_adt_def = e->adt_defs[ai];
+                            return_kind = TY_ADT;
+                            break;
+                        }
+                    }
+                    if (!return_adt_def) {
+                        diag_emit(DIAG_ERROR, ret_f->span,
+                                  "defn: unsupported return type keyword :%s",
+                                  kw->name);
+                        return NULL;
+                    }
+                }
             }
             body_start++;
         } else if (ret_f->tag == F_TYPE_ANN) {
@@ -6189,6 +6258,13 @@ static Expr *elab_defn(Elab *e, const Form *call) {
         arg_kinds[i] = param_kinds[i];
     }
     Type fn_type = type_fn(arg_kinds, n_params, return_kind);
+
+    /* Phase G3: attach full ADT return type if declared (for proper def propagation) */
+    if (return_adt_def) {
+        Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
+        *rft = type_adt(return_adt_def);
+        fn_type.as.fn.result_full_type = rft;
+    }
 
     /* Phase HRT1: attach full poly types for rank-2 params */
     {
@@ -7043,6 +7119,8 @@ static Expr *elab_match(Elab *e, const Form *call);
 static CtorDef *elab_lookup_ctor(Elab *e, const Symbol *name);
 /* Phase G1: GADTs */
 static Expr *elab_defgadt(Elab *e, const Form *call);
+/* Phase G3: coerce */
+static Expr *elab_coerce(Elab *e, const Form *call);
 /* Phase 12: Borrow traits */
 static Expr *elab_borrow_immut(Elab *e, const Form *call);
 static Expr *elab_borrow_mut(Elab *e, const Form *call);
@@ -7172,6 +7250,7 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_defdata) return elab_defdata(e, call);
     if (name == e->sym_match) return elab_match(e, call);
     if (name == e->sym_defgadt) return elab_defgadt(e, call);
+    if (name == e->sym_coerce)  return elab_coerce(e, call);
     /* Phase 12: Borrow traits */
     if (name == e->sym_borrow) return elab_borrow_immut(e, call);
     if (name == e->sym_borrow_mut) return elab_borrow_mut(e, call);
@@ -7400,6 +7479,12 @@ static Expr *elab_call(Elab *e, Form *call) {
             }
             return call_expr;
         }
+        /* Phase G3: Non-constructor function returning ADT — patch result from result_full_type */
+        Expr *call_expr = elab_call_fn(e, call, fn_binding);
+        if (call_expr && fn_binding->type.as.fn.result_full_type) {
+            call_expr->type = *fn_binding->type.as.fn.result_full_type;
+        }
+        return call_expr;
     }
 
     if (fn_binding && (fn_binding->type.kind == TY_FN ||
@@ -9400,6 +9485,32 @@ static Expr *elab_defgadt(Elab *e, const Form *call) {
     return out;
 }
 
+/* Phase G3: coerce — (coerce eq x) where eq : (Equal a b), x : a → x : b
+ * Zero-cost cast: the runtime representation of a and b are identical (both int64_t).
+ * The equality proof eq is evaluated for side-effects but its value is discarded.
+ * Error if eq is not a value of the built-in Equal GADT. */
+static Expr *elab_coerce(Elab *e, const Form *call) {
+    if (call->as.list.len != 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "coerce requires exactly 2 arguments: (coerce eq x)");
+        return NULL;
+    }
+    Expr *eq = elab_form(e, call->as.list.items[1]);
+    if (!eq) return NULL;
+    /* Verify eq has type Equal */
+    if (eq->type.kind != TY_ADT ||
+        !eq->type.as.adt_.def ||
+        strcmp(eq->type.as.adt_.def->name, "Equal") != 0) {
+        diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
+                  "coerce requires an (Equal a b) proof as first argument");
+        return NULL;
+    }
+    Expr *x = elab_form(e, call->as.list.items[2]);
+    if (!x) return NULL;
+    /* Zero-cost cast: return x unchanged (same runtime representation) */
+    return x;
+}
+
 /* Phase G0: Helper - look up CtorDef by name across all known ADTs */
 static CtorDef *elab_lookup_ctor(Elab *e, const Symbol *name) {
     for (uint32_t ai = 0; ai < e->n_adt_defs; ai++) {
@@ -9448,9 +9559,10 @@ static Expr *elab_match(Elab *e, const Form *call) {
     if (!scrutinee) return NULL;
 
     /* If the scrutinee type is not already TY_ADT (e.g. an untyped param
-     * that defaulted to TY_INT), try to infer the ADT from the first
-     * constructor pattern in the arm list. */
-    if (scrutinee->type.kind != TY_ADT) {
+     * that defaulted to TY_INT), or is TY_ADT with no def (e.g. return of
+     * ADT-returning fn without result_full_type), infer the ADT from the
+     * first constructor pattern in the arm list. */
+    if (scrutinee->type.kind != TY_ADT || !scrutinee->type.as.adt_.def) {
         AdtDef *inferred_adt = NULL;
         for (uint32_t ai = 0; ai < n_arms && !inferred_adt; ai++) {
             Form *pat_f = call->as.list.items[2 + ai * 2];

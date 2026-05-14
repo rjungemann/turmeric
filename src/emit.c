@@ -2444,9 +2444,12 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
 
             /* Phase G0: N-arg constructor call — fn has TY_FN w/ result TY_ADT,
-             * but the fn name is the constructor name so we emit ctor_Name(args). */
+             * but the fn name is the constructor name so we emit ctor_Name(args).
+             * Phase G3: result_full_type is set for non-constructor ADT-returning
+             * functions (e.g. equal-sym) — those must fall through to regular calls. */
             if (fn_binding->type.kind == TY_FN &&
-                fn_binding->type.as.fn.result_kind == TY_ADT) {
+                fn_binding->type.as.fn.result_kind == TY_ADT &&
+                !fn_binding->type.as.fn.result_full_type) {
                 char **arg_strs = (char **)malloc(e->as.call_.n_args * sizeof(char *));
                 if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
                 for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
