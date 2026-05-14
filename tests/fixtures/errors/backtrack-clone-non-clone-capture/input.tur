@@ -1,0 +1,25 @@
+;; Phase B1/CPS-CL10: Negative fixture — non-Clone type captured at
+;; cloneable-shift in a backtracking context.
+;;
+;; A binding captured inside cloneable-shift must implement Clone so the
+;; runtime can deep-copy the closure environment on each resume.
+;; NoClone has no Clone instance, so capturing it must produce TUR-E0014.
+
+(defclass Clone [a]
+  (clone [x] :int))
+
+(definstance Clone [int]
+  (clone [x] x))
+
+;; NoClone: a struct with no Clone instance — captures here are illegal.
+(defstruct NoClone :copy [x :int])
+
+(defn k-discard [k] :int 0)
+
+(defn test [] :int
+  (let [nc (make-struct NoClone 42)]
+    (cloneable-reset
+      (cloneable-shift k-discard nc))))
+
+(defn main [] :int
+  (test))

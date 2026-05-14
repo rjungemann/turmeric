@@ -31,6 +31,24 @@
   free((void*)(intptr_t)r);
   ```)
 
+;; Phase B1: Clone instance for the built-in ref type (TY_REF).
+;;
+;; (definstance Clone [ref] ...) registers against TY_REF so that captured
+;; ref bindings at cloneable-shift sites satisfy the Clone constraint.
+;; A ref<T> is a heap-allocated void* containing an int64_t; cloning it
+;; allocates a new cell and copies the value (deep clone with independent
+;; ownership).
+(definstance Clone [ref]
+  (clone [x] :int
+    ```c
+    /* x is void *; allocate a new int64_t cell and copy the stored value. */
+    int64_t *src = (int64_t *)x;
+    int64_t *dst = (int64_t *)malloc(sizeof(int64_t));
+    if (!dst) abort();
+    *dst = src ? *src : 0;
+    return (int64_t)(intptr_t)dst;
+    ```))
+
 ;; Phase B1: Clone instance for Ref
 ;; Requires the Clone typeclass to already be in scope (from stdlib/typeclass.tur).
 ;; Deep clone: allocates a new Ref struct on the heap with a copy of the contained

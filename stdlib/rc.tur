@@ -75,7 +75,22 @@
   (foldr [ta init fn] (__foldable_rc_foldr ta init fn)))
 
 ;;; SINCE: Phase B1
-;; Clone instance for rc<T> — shallow clone (refcount increment).
+;; Clone instance for the built-in rc type (TY_RC) — shallow clone.
+;;
+;; (definstance Clone [rc] ...) registers against TY_RC so that captured
+;; rc bindings at cloneable-shift sites satisfy the Clone constraint.
+;; The clone method calls rc_strong_increment and returns the same pointer
+;; cast to int64_t; the result has int64_t type at the Turmeric level.
+(definstance Clone [rc]
+  (clone [x] :int
+    ```c
+    /* x is RcControlBlock *; increment refcount, return same pointer. */
+    rc_strong_increment(x);
+    return (int64_t)(intptr_t)x;
+    ```))
+
+;;; SINCE: Phase B1 (HKT workaround)
+;; Clone instance for rc<T> — shallow clone (refcount increment) via ptr<void>.
 ;;
 ;; Cloning an rc<T> does NOT copy the contained value.  It increments the
 ;; reference count and returns a second owning handle to the SAME allocation.

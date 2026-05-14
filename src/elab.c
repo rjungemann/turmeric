@@ -9810,12 +9810,27 @@ static Expr *elab_type_app(Elab *e, const Form *call) {
     if (!fn_binding) {
         fn_binding = scope_lookup(&e->global, fn_form->as.sym);
     }
+    Type fn_type;
     if (!fn_binding) {
-        diag_emit(DIAG_ERROR, fn_form->span,
-                  "type-app: unknown type constructor '%s'", fn_form->as.sym->name);
-        return NULL;
+        /* Fall back to typeclass environment: (type-app Functor option) */
+        TypeClass *tc = typeclass_env_lookup_typeclass(&e->typeclass_env, fn_form->as.sym);
+        if (!tc) {
+            diag_emit(DIAG_ERROR, fn_form->span,
+                      "type-app: unknown type constructor '%s'", fn_form->as.sym->name);
+            return NULL;
+        }
+        fn_type = type_typeclass(tc);
+        /* Set hkt_kind from number of type parameters so kind_of_type_app succeeds */
+        if (tc->n_type_params == 1) {
+            fn_type.hkt_kind = KIND_ARROW;
+        } else if (tc->n_type_params >= 2) {
+            fn_type.hkt_kind = KIND_ARROW2;
+        } else {
+            fn_type.hkt_kind = KIND_STAR;
+        }
+    } else {
+        fn_type = fn_binding->type;
     }
-    Type fn_type = fn_binding->type;
 
     /* Parse type argument A (arg 2) - can be a symbol, keyword, or nested type-app */
     Form *arg_form = call->as.list.items[2];
@@ -9842,11 +9857,16 @@ static Expr *elab_type_app(Elab *e, const Form *call) {
                 arg_binding = scope_lookup(&e->global, arg_sym);
             }
             if (!arg_binding) {
-                diag_emit(DIAG_ERROR, arg_form->span,
-                          "type-app: unknown type '%s'", arg_sym->name);
-                return NULL;
+                /* Unknown name — treat as an opaque type constructor (like definstance does).
+                 * TY_STRUCT with no def emits void* in codegen, correct for heap-allocated
+                 * containers like option, vec, etc. */
+                memset(&arg_type, 0, sizeof(arg_type));
+                arg_type.kind = TY_STRUCT;
+                arg_type.copy_kind = CK_MOVE;
+                arg_type.as.struct_.def = NULL;
+            } else {
+                arg_type = arg_binding->type;
             }
-            arg_type = arg_binding->type;
         }
     } else if (arg_form->tag == F_LIST) {
         /* Nested type application: (type-app result (type-app option int))

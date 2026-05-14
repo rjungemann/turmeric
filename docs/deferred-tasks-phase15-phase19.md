@@ -531,7 +531,7 @@ See [hkt-implementation-plan.md](hkt-implementation-plan.md) for the complete ro
 - [x] Fix emit.c: apply `(int64_t)(intptr_t)` cast for TY_STRUCT (HKT opaque) function arguments in typeclass method calls.
 - [x] Migrate stdlib to use HKT typeclasses where applicable. _(§6 complete: option/vec/list/result/slice/rc/pair all have HKT instances; hkt-stdlib-suite fixture passes)_
 - [x] Benchmark dictionary passing overhead for HKT code — infrastructure in place via HKT-P7 (tests/run-bench.sh, tests/benchmarks/hkt-dict-pass/).
-- [ ] Add `-O` performance option documentation. _(deferred)_
+- [x] Add `-O` performance option documentation. _(added Performance section to `docs/guides/hkt-guide.md`: dictionary-passing model, `TUR_CC_FLAGS`/`CC` knobs, benchmark runner, planned `-O` monomorphization flag)_
 - [x] Implement `tur explain` support for kind errors. _(HKT-P5 complete)_
 - [x] Add `--dump-kinds` debugging flag. _(HKT-P6 complete)_
 - [x] Add integration tests: HKTs + closures + defers + refs. `tests/fixtures/hkt-closures-defers-refs/` — PASS.
@@ -1444,12 +1444,13 @@ These prerequisites must be completed before the parameterized Clone instances c
   - Done: fixture at `tests/fixtures/clone-list/` passes (outputs 42).
 - [ ] Add `tests/fixtures/clone-vec/` fixture.
   - **Blocked**: requires multi-file compilation to use existing non-parameterized Clone instance for vec. PTC1–PTC3 are complete.
-- [ ] Add `tests/fixtures/backtrack/clone-rc.tur`.
-  - Deferred: `rc` type not yet implemented as stdlib type.
+- [x] Add `tests/fixtures/backtrack/clone-rc.tur`.
+  - Done: `tests/fixtures/backtrack-clone-rc/` passes. Added `(definstance Clone [rc] ...)` inline (TY_RC → `rc_strong_increment` shallow clone). Also added `Clone [rc]` to `stdlib/rc.tur`.
 - [ ] Add `tests/fixtures/backtrack/clone-ref.tur`.
   - Deferred: `ref` type not yet implemented as stdlib type.
-- [ ] Add negative fixture `tests/fixtures/backtrack/clone-non-clone-capture.tur`.
-  - Deferred: requires B2 cloneable continuation runtime and `check_cloneable_capture` implementation.
+  - `Clone [ref]` instance (deep copy via malloc) added to `stdlib/ref.tur`; fixture itself deferred.
+- [x] Add negative fixture `tests/fixtures/backtrack/clone-non-clone-capture.tur`.
+  - Done: `tests/fixtures/errors/backtrack-clone-non-clone-capture/` passes. Non-Clone struct captured at `cloneable-shift` correctly emits TUR-E0014.
 
 ### Phase B2 prerequisites
 

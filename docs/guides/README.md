@@ -6,7 +6,8 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 
 - **[threading-guide.md](threading-guide.md)** — OS threads, `Arc<T>`, `Mutex<T>`, `Atomic<T>`, channels
 - **[async-await-guide.md](async-await-guide.md)** — Async/await with fibers and delimited continuations
-- **[stm-tutorial.md](stm-tutorial.md)** — Software transactional memory (composable, deadlock-free concurrency)
+- **[stm-guide.md](stm-guide.md)** — Software transactional memory — API reference and mechanics
+- **[stm-tutorial.md](stm-tutorial.md)** — STM tutorial: concepts, patterns, and worked examples
 
 ## Advanced Control Flow
 
@@ -14,9 +15,13 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 - **[logic-programming-guide.md](logic-programming-guide.md)** — Backtracking, logic programming, constraint solving with cloneable continuations
 - **[checkpointing-guide.md](checkpointing-guide.md)** — Serializable continuations for persistent workflows and checkpointing
 
+## Data Structures
+
+- **[hamt-guide.md](hamt-guide.md)** — Persistent hash maps with structural sharing (HAMT)
+
 ## Language Features
 
-- **[hkt-guide.md](hkt-guide.md)** — Higher-kinded types (functor, monad, applicative abstractions)
+- **[hkt-guide.md](hkt-guide.md)** — Higher-kinded types (functor, monad, applicative abstractions, performance/dispatch model)
 - **[module-system-guide.md](module-system-guide.md)** — Module system, namespacing, exports
 - **[c-integration-guide.md](c-integration-guide.md)** — Foreign function interface (FFI) and C interop
 
@@ -41,7 +46,8 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 ## Finding Guides
 
 **By topic:**
-- Concurrency → [threading-guide.md](threading-guide.md), [async-await-guide.md](async-await-guide.md), [stm-tutorial.md](stm-tutorial.md)
+- Concurrency → [threading-guide.md](threading-guide.md), [async-await-guide.md](async-await-guide.md), [stm-guide.md](stm-guide.md), [stm-tutorial.md](stm-tutorial.md)
+- Data structures → [hamt-guide.md](hamt-guide.md)
 - Control flow → [effects-system-guide.md](effects-system-guide.md), [logic-programming-guide.md](logic-programming-guide.md)
 - Type system → [hkt-guide.md](hkt-guide.md), [module-system-guide.md](module-system-guide.md)
 - Error handling → [error-handling-guide.md](error-handling-guide.md)
