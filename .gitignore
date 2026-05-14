@@ -15,3 +15,6 @@ hello
 web/node_modules/
 web/dist/
 web/test-results/
+
+# Playwright MCP browser session artifacts
+.playwright-mcp/
