@@ -165,6 +165,35 @@ if(HAVE_EDITLINE)
 endif()
 
 # ---------------------------------------------------------------------------
+# Phase S8: install targets — libturi, public headers, tur binary, man page
+# ---------------------------------------------------------------------------
+include(GNUInstallDirs)
+
+install(TARGETS libturi
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    COMPONENT libturi
+)
+
+install(FILES
+    turi/eval.h
+    turi/env.h
+    turi/value.h
+    turi/fiber.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/turi
+    COMPONENT libturi
+)
+
+install(TARGETS tur
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    COMPONENT tur
+)
+
+install(FILES ${CMAKE_SOURCE_DIR}/man/man1/tur-repl.1
+    DESTINATION ${CMAKE_INSTALL_MANDIR}/man1
+    COMPONENT tur
+)
+
+# ---------------------------------------------------------------------------
 # Phase S0: tur_eval_basic — C embedding smoke test
 # ---------------------------------------------------------------------------
 add_executable(tur_eval_basic ${CMAKE_SOURCE_DIR}/tests/turi/eval-basic.c)

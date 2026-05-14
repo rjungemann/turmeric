@@ -1,0 +1,93 @@
+.TH TUR\-REPL 1 "2026-05-13" "Turmeric 0.x.0" "Turmeric Language Tools"
+.SH NAME
+tur\-repl \- Turmeric interactive read\-eval\-print loop
+.SH SYNOPSIS
+.B tur repl
+.SH DESCRIPTION
+.B tur repl
+starts an interactive Turmeric session.
+Expressions typed at the prompt are parsed, elaborated, and evaluated;
+the result is printed on the following line.
+Top-level definitions (\fBdefn\fR, \fBdef\fR) persist across expressions
+for the lifetime of the session.
+.SH META\-COMMANDS
+Meta-commands begin with
+.B :
+and are handled before evaluation.
+.TP
+.B :help
+Print a summary of all meta\-commands.
+.TP
+.BR :quit ", " :q
+Exit the REPL.
+Equivalent to
+.BR Ctrl\-D .
+.TP
+.BI :type " expr"
+Elaborate
+.I expr
+and print its inferred type without evaluating.
+.TP
+.BI :doc " sym"
+Print brief documentation for the builtin or user-defined symbol
+.IR sym .
+.TP
+.BI :reload " file"
+Read and evaluate the Turmeric source file
+.I file
+into the current session.
+.SH INPUT
+.SS Multi-line expressions
+If the input contains unbalanced parentheses the REPL reads additional
+lines until the expression is complete.
+An empty line cancels an incomplete expression.
+.SS Editing and history
+When built with
+.B editline
+support (the default on macOS and most Linux distributions) the REPL
+offers line editing (arrow keys, \fBCtrl\-A\fR/\fBCtrl\-E\fR/\fBCtrl\-K\fR) and
+history (Up/Down arrows).
+Without editline, raw
+.B fgets
+input is used.
+.SH OUTPUT
+Results are printed using a human-readable representation:
+integers as decimal, strings with surrounding double quotes, booleans as
+\fBtrue\fR/\fBfalse\fR, nil silently.
+Errors are written to
+.BR stderr .
+ANSI colour is enabled automatically when both
+.B stdout
+and
+.B stderr
+are connected to a terminal.
+.SH EXAMPLES
+Start the REPL and evaluate an expression:
+.PP
+.RS
+.nf
+$ tur repl
+Turmeric v0.x.0  (type :help for help, :quit to exit)
+> (+ 1 2)
+3
+> :quit
+.fi
+.RE
+.PP
+Run a script non\-interactively and exit:
+.PP
+.RS
+.nf
+printf ':reload myscript.tur\\n:quit\\n' | tur repl 2>/dev/null
+.fi
+.RE
+.SH ENVIRONMENT
+.TP
+.B TERM
+Used to detect colour-capable terminals.
+.SH SEE ALSO
+.BR tur (1),
+.BR docs/repl.md ,
+.BR docs/eval-api.md
+.SH AUTHORS
+The Turmeric language and compiler.
