@@ -4735,6 +4735,23 @@ int emit_program(Buf *out, const Expr *program) {
     if (g_needs_hamt) {
         buf_puts(out, "#include \"hamt.h\"\n");
     }
+    /* Phase T24: BSD networking headers (sys/socket.h, netinet/in.h, arpa/inet.h)
+     * MUST come before ucontext.h.  On macOS, #define _XOPEN_SOURCE 700 suppresses
+     * BSD extensions; once any header is processed with _XOPEN_SOURCE active, its
+     * include guard prevents re-inclusion with BSD extensions enabled.  Including
+     * networking headers first (without _XOPEN_SOURCE) lets them define INADDR_*,
+     * sockaddr_in, etc., before ucontext.h locks in the POSIX-strict feature set. */
+    buf_puts(out, "#include <sys/select.h>\n");
+    buf_puts(out, "#include <sys/socket.h>\n");
+    buf_puts(out, "#include <netinet/in.h>\n");
+    buf_puts(out, "#include <arpa/inet.h>\n");
+    /* Phase T21: ucontext.h must come before setjmp.h and pthread.h.
+     * On macOS, setjmp.h indirectly includes a minimal ucontext.h without
+     * _XOPEN_SOURCE, locking in the small 56-byte ucontext_t via include guards.
+     * FiberBlock embeds two ucontext_t fields and needs the full 880-byte layout. */
+    buf_puts(out, "#define _XOPEN_SOURCE 700\n");
+    buf_puts(out, "#include <ucontext.h>\n");
+    buf_puts(out, "#undef _XOPEN_SOURCE\n");
     buf_puts(out, "#include <stdio.h>\n");
     buf_puts(out, "#include <stdint.h>\n");
     buf_puts(out, "#include <stdbool.h>\n");
@@ -4894,11 +4911,9 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "        tur_stm_set_current_tx(prev);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n");
-    /* Phase T21: Fiber context switching via ucontext_t (POSIX; deprecated on
-     * macOS but present; suppress warning). */
-    buf_puts(out, "#define _XOPEN_SOURCE 700\n");
-    buf_puts(out, "#include <ucontext.h>\n");
-    buf_puts(out, "#undef _XOPEN_SOURCE\n");
+    /* Phase T21: ucontext.h was moved to the very top (before setjmp.h/pthread.h)
+     * to prevent macOS include-guard aliasing of the small 56-byte ucontext_t.
+     * Nothing to emit here any more. */
     /* Phase 5: Declare malloc and free for ref<T> without including stdlib.h
      * to avoid conflicts with user-declared functions like exit. */
     buf_puts(out, "extern void *malloc(size_t);\n");
@@ -4913,15 +4928,13 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "extern void *memcpy(void *, const void *, size_t);\n");
     /* Phase 19: strcmp for effect handler name matching */
     buf_puts(out, "extern int strcmp(const char *, const char *);\n");
-    /* Phase T24: Headers for timer wheel, async I/O, and networking */
+    /* Phase T24: Headers for timer wheel, async I/O, and networking.
+     * sys/select.h, sys/socket.h, netinet/in.h, arpa/inet.h were moved to the
+     * very top (before ucontext.h) to prevent BSD-extension suppression. */
     buf_puts(out, "#include <time.h>\n");
     buf_puts(out, "#include <unistd.h>\n");
     buf_puts(out, "#include <fcntl.h>\n");
     buf_puts(out, "#include <errno.h>\n");
-    buf_puts(out, "#include <sys/select.h>\n");
-    buf_puts(out, "#include <sys/socket.h>\n");
-    buf_puts(out, "#include <netinet/in.h>\n");
-    buf_puts(out, "#include <arpa/inet.h>\n");
     buf_puts(out, "\n");
     /* Phase 7 follow-up: minimal in-process test registry for stdlib/test.tur. */
     buf_puts(out, "#define TUR_TEST_REGISTRY_MAX 1024\n");

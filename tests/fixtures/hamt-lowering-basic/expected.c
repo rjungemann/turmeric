@@ -2,6 +2,13 @@
 #pragma GCC diagnostic ignored "-Wunused-function"
 #pragma GCC diagnostic ignored "-Wunused-variable"
 #include "hamt.h"
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#define _XOPEN_SOURCE 700
+#include <ucontext.h>
+#undef _XOPEN_SOURCE
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -156,9 +163,6 @@ void *tur_atomically(void *(*fn)(void *), void *env) {
         tur_stm_set_current_tx(prev);
     }
 }
-#define _XOPEN_SOURCE 700
-#include <ucontext.h>
-#undef _XOPEN_SOURCE
 extern void *malloc(size_t);
 extern void *calloc(size_t, size_t);
 extern void free(void *);
@@ -172,10 +176,6 @@ extern int strcmp(const char *, const char *);
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
-#include <sys/select.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
 
 #define TUR_TEST_REGISTRY_MAX 1024
 #define BACKTRACK_DEPTH_DEFAULT 0
