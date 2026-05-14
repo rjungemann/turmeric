@@ -419,13 +419,13 @@ TuriValue turi_sleep_async(TuriEnv *, uint64_t ms);
 
 ---
 
-### Phase S8: Polish and Documentation
+### Phase S8: Polish and Documentation ✅ DONE
 
-- [ ] `docs/eval-api.md` — user guide for `(import turi/eval)` and C embedding
-- [ ] `docs/repl.md` — REPL reference (meta-commands, customisation)
-- [ ] Man page for `tur repl`
-- [ ] Performance profiling; optimise hot eval paths
-- [ ] Package `libturi` as an installable library
+- [x] `docs/eval-api.md` — user guide for C embedding API and all public functions
+- [x] `docs/repl.md` — REPL reference (meta-commands, multi-line input, output format)
+- [x] `man/man1/tur-repl.1` — man page for `tur repl`
+- [x] Performance: `env->globals` converted from O(n) linked-list scan to O(1) open-addressing hash table (`EnvHashTable` in `env.h`/`env.c`)
+- [x] `libturi` packaged as installable library via CMake `install()` targets (library, headers into `include/turi/`, binary, man page)
 
 ---
 

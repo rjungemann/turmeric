@@ -47,6 +47,15 @@ typedef struct EnvBinding {
     struct EnvBinding *next;
 } EnvBinding;
 
+/* Open-addressing hash table for O(1) global lookup.
+ * Each slot holds a pointer to an EnvBinding in the linked list,
+ * or NULL for an empty slot. Sized as a power-of-two capacity. */
+typedef struct EnvHashTable {
+    EnvBinding **slots;
+    uint32_t     cap;    /* always a power of 2 */
+    uint32_t     count;
+} EnvHashTable;
+
 /* Persistent evaluation environment.
  * All per-eval arenas are kept alive here; callers must not free TuriEnv
  * while any closures from it are still referenced. */
@@ -84,6 +93,8 @@ typedef struct TuriEnv {
     /* Pipe fds for the built-in test I/O pipe (S7.7 tests) */
     int         test_pipe_rfd;
     int         test_pipe_wfd;
+    /* Performance S8: hash table for O(1) global lookup */
+    EnvHashTable globals_ht;
 } TuriEnv;
 
 /* Create a new unrestricted environment. */
