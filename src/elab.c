@@ -6013,6 +6013,26 @@ static Expr *elab_defn(Elab *e, const Form *call) {
         return NULL;
     }
 
+    /* Phase HRT5: Early-update a forward-declared binding's arity and poly param
+     * types before elaborating the body.  Without this, recursive calls inside
+     * the body see the stale arity-1 / no-arg_full_types from pass-1, which
+     * causes spurious arity-mismatch errors for functions with poly fn params. */
+    if (existing && existing->type.kind == TY_FN && existing->is_global) {
+        existing->type.as.fn.arity = n_params;
+        for (uint8_t _ei = 0; _ei < n_params; _ei++) {
+            existing->type.as.fn.arg_kinds[_ei] = param_kinds[_ei];
+        }
+        bool _any_poly = false;
+        for (uint8_t _ei = 0; _ei < n_params; _ei++) {
+            if (param_poly_types[_ei]) { _any_poly = true; break; }
+        }
+        if (_any_poly) {
+            Type **_aFT = (Type **)arena_alloc(e->arena, n_params * sizeof(Type *));
+            for (uint8_t _ei = 0; _ei < n_params; _ei++) _aFT[_ei] = param_poly_types[_ei];
+            existing->type.as.fn.arg_full_types = _aFT;
+        }
+    }
+
     /* Push a new scope for the function body with params bound */
     Scope inner;
     scope_init(&inner, e->scope);
