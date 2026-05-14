@@ -1,10 +1,10 @@
 # Runtime Contracts Plan for Turmeric
 
-**Status:** Proposed. Not yet scheduled.
+**Status:** C0 and C1 complete. C2+ planned.
 
 **Author:** [TBD]
 
-**Last Updated:** [Date]
+**Last Updated:** 2026-05-14
 
 ---
 
@@ -165,31 +165,35 @@ Cons: Requires significant type system extensions (refinement types).
 
 ### Phase C0 — Design & Prerequisites Verification
 
+**Status: COMPLETE**
+
 **Goal:** Finalize design decisions and verify all prerequisites are met.
 
 **Prerequisites Check**
-- [ ] Phase 17 (Exceptions) is stable — contracts use `panic` infrastructure
-- [ ] Phase 15 (Typeclasses) is stable — for predicate typeclasses like `Show` on error messages
-- [ ] `stdlib/exn.tur` has `panic` with message support
-- [ ] Compiler flag infrastructure exists (`--debug`, `--release`)
+- [x] Phase 17 (Exceptions) is stable -- contracts use `panic` infrastructure
+- [x] Phase 15 (Typeclasses) is stable -- for predicate typeclasses like `Show` on error messages
+- [x] `stdlib/exn.tur` has `panic` with message support
+- [ ] Compiler flag infrastructure exists (`--debug`, `--release`) -- not yet; `contract-enabled?` always returns true in v1
 
-**Design Decisions to Lock**
-- [ ] Confirm syntax: `(assert! ...)`, `(require! ...)`, `(ensure! ...)`
-- [ ] Decide on contract failure behavior: always `panic`, or configurable to return `result`?
-- [ ] Decide on message format: string literals only, or expression evaluation?
-- [ ] Decide on compile-time stripping: controlled by `--release` flag or separate `--no-contracts`?
-- [ ] Decide on contracts in `extern-c`: allowed? checked?
-- [ ] Decide on contract inheritance: do contracts apply to overriding methods?
+**Design Decisions (Locked)**
+- [x] Syntax: two fixed-arity macros per type (`assert!`/`assert-msg!`, etc.) following `must!`/`must-msg!` convention
+- [x] Contract failure behavior: always `panic` in v1; configurable failure left for C2
+- [x] Message format: any runtime expression (string literals or computed strings)
+- [x] Compile-time stripping: `contract-enabled?` returns `true` always in v1; `--no-contracts` flag deferred to C2
+- [x] Contracts in `extern-c`: allowed on Turmeric side (wrap the call with require-msg!/ensure-msg!)
+- [x] Contract inheritance: not applicable in v1 (no class hierarchy support)
 
-**Exit Criterion:** All design questions answered; no open ambiguities remain.
+**Exit Criterion:** All design questions answered; no open ambiguities remain. ✓
 
 ---
 
 ### Phase C1 — Core Contract Macros (v1)
 
+**Status: COMPLETE**
+
 **Goal:** Ship a stdlib module with contract-checking macros that work today with no compiler changes.
 
-**Location:** `stdlib/contract.tur`
+**Location:** `stdlib/contract.tur` (and mirrored in `stdlib/macros.tur` for auto-loading)
 
 **Macros**
 
@@ -258,28 +262,41 @@ Postconditions need to be checked at *all* exit points (normal return, early ret
 
 This still doesn't catch all exit paths (exceptions bypass `finally` in some cases). Full postcondition support requires compiler integration (Phase C2).
 
-**Stdlib Module** — `stdlib/contract.tur`
-- [ ] `(assert! condition)` — panic if condition is false
-- [ ] `(assert! condition msg)` — panic with custom message
-- [ ] `(require! condition)` — same as assert, semantic marker for preconditions
-- [ ] `(require! condition msg)` — precondition with message
-- [ ] `(ensure! condition)` — postcondition check (returns value if true)
-- [ ] `(ensure! condition msg)` — postcondition with message
-- [ ] `(invariant! obj predicate)` — check struct invariant
-- [ ] `(invariant! obj predicate msg)` — invariant with message
-- [ ] `(contract-enabled?)` — check if contracts are currently enabled
+**Implementation Notes**
 
-**Fixtures** — `tests/fixtures/contract/`
-- [ ] `contract-assert.tur` — basic assertion passing and failing
-- [ ] `contract-require.tur` — precondition checks at function entry
-- [ ] `contract-ensure.tur` — postcondition checks (limited in v1)
-- [ ] `contract-invariant.tur` — struct invariant validation
-- [ ] `contract-ffi.tur` — contracts at FFI boundaries
-- [ ] `contract-nested.tur` — nested function calls with contracts
-- [ ] `contract-release.tur` — contracts compile to no-ops in release mode
-- [ ] Codegen snapshots: contract macros expand to simple if/panic
+Macros call `tur-contract-check [condition :bool msg :cstr] :void` (a C-inline helper) rather than
+expanding to `(unless condition ...)`. The `unless` approach drops the return statement when the same
+variable appears in both the condition and the function return expression (linear/move semantics).
+Passing condition as `:bool` evaluates it first, leaving the original variable intact.
 
-**Exit Criterion:** `stdlib/contract.tur` works; all fixtures pass; contracts can be stripped in release builds.
+Variadic macros have a ct_eval limitation where `=` is evaluated at compile time, so each contract type
+is split into two fixed-arity macros: `assert!`/`assert-msg!`, `require!`/`require-msg!`, etc.
+
+**Stdlib Module** -- `stdlib/contract.tur`
+- [x] `(assert! condition)` -- panic if condition is false
+- [x] `(assert-msg! condition msg)` -- panic with custom message
+- [x] `(require! condition)` -- same as assert, semantic marker for preconditions
+- [x] `(require-msg! condition msg)` -- precondition with message
+- [x] `(ensure! condition)` -- postcondition check
+- [x] `(ensure-msg! condition msg)` -- postcondition with message
+- [x] `(invariant! obj predicate)` -- check struct invariant
+- [x] `(invariant-msg! obj predicate msg)` -- invariant with message
+- [x] `(contract-enabled?)` -- returns true (always enabled in v1)
+
+**Fixtures** -- `tests/fixtures/`
+- [x] `contract-assert/` -- basic assertion passing
+- [x] `contract-assert-fail/` -- assertion failure panics with correct message
+- [x] `contract-require/` -- precondition checks at function entry
+- [x] `contract-require-fail/` -- precondition failure panics
+- [x] `contract-ensure/` -- postcondition checks
+- [x] `contract-ensure-fail/` -- postcondition failure panics
+- [x] `contract-invariant/` -- struct invariant validation
+- [x] `contract-invariant-fail/` -- invariant failure panics
+- [x] `contract-ffi/` -- contracts at FFI boundaries (using llabs)
+- [x] `contract-nested/` -- nested function calls with contracts
+- [x] `contract-release/` -- `contract-enabled?` returns true
+
+**Exit Criterion:** `stdlib/contract.tur` works; all 11 fixtures pass. ✓
 
 ---
 

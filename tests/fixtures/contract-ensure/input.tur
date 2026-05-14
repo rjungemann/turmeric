@@ -1,0 +1,20 @@
+;; Phase C1: ensure! and ensure-msg! -- passing postconditions
+;; In v1, ensure! is placed manually at the end of a function.
+;; Note: function parameters can be reused in contract conditions.
+
+(defn add [a :int b :int] :int
+  (require! (>= a 0))
+  (require! (>= b 0))
+  (ensure! (>= (+ a b) 0))
+  (+ a b))
+
+(defn twice [x :int] :int
+  (require-msg! (>= x 0) "x must be non-negative")
+  (ensure! (>= (* x 2) x))
+  (* x 2))
+
+(defn main [] :int
+  (println (add 3 4))
+  (println (twice 5))
+  (println "ensure-pass")
+  0)

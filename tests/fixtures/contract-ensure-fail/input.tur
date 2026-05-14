@@ -1,0 +1,11 @@
+;; Phase C1: ensure-msg! -- failing postcondition triggers panic
+
+(defn negate-bad [x :int] :int
+  (require-msg! (> x 0) "x must be positive")
+  ;; Wrong postcondition: claims negation is positive, but it is negative
+  (ensure-msg! (> (- 0 x) 0) "negation should be positive")
+  (- 0 x))
+
+(defn main [] :int
+  (println (negate-bad 5))
+  0)

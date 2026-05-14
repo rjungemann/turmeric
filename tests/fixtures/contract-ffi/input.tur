@@ -1,0 +1,21 @@
+;; Phase C1: contracts at FFI boundaries
+;; Wraps a C function with require-msg!/ensure-msg! guards.
+
+(extern-c llabs [n :int] :int)
+
+(defn safe-llabs [x :int] :int
+  (ensure-msg! (>= (llabs x) 0) "llabs must return non-negative value")
+  (llabs x))
+
+(defn safe-add [a :int b :int] :int
+  (require-msg! (>= a 0) "a must be non-negative")
+  (require-msg! (>= b 0) "b must be non-negative")
+  (ensure! (>= (+ a b) 0))
+  (+ a b))
+
+(defn main [] :int
+  (println (safe-llabs -5))
+  (println (safe-llabs 3))
+  (println (safe-add 4 6))
+  (println "ffi-pass")
+  0)
