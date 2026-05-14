@@ -71,8 +71,6 @@ static bool expr_contains_effects(const Expr *e) {
             return expr_contains_effects(e->as.defer_.body);
         case EX_RETURN:
             return e->as.return_.value && expr_contains_effects(e->as.return_.value);
-        case EX_THROW:
-            return expr_contains_effects(e->as.throw_.payload);
         case EX_PANIC:
             return expr_contains_effects(e->as.panic_.payload);
         case EX_PANIC_WITH:
@@ -88,12 +86,6 @@ static bool expr_contains_effects(const Expr *e) {
             return expr_contains_effects(e->as.panic_payload_type_.payload);
         case EX_PANIC_PAYLOAD_DOWNS:
             return expr_contains_effects(e->as.panic_payload_downs_.payload);
-        case EX_TRY:
-            if (expr_contains_effects(e->as.try_.body)) return true;
-            for (uint8_t i = 0; i < e->as.try_.n_clauses; i++) {
-                if (expr_contains_effects(e->as.try_.clauses[i].handler)) return true;
-            }
-            return e->as.try_.finally_body && expr_contains_effects(e->as.try_.finally_body);
         case EX_RESET:
         case EX_SHIFT:
         case EX_SHIFT0:
@@ -393,35 +385,10 @@ static Expr *lower_expr(Arena *a, SymbolTable *st, Expr *e, EffectEnv *effect_en
             return out;
         }
         
-        case EX_THROW: {
-            Expr *new_payload = lower_expr(a, st, e->as.throw_.payload, effect_env);
-            Expr *out = expr_new(a, EX_THROW, e->type, e->span);
-            out->as.throw_.payload = new_payload;
-            return out;
-        }
-
         case EX_PANIC: {
             Expr *new_payload = lower_expr(a, st, e->as.panic_.payload, effect_env);
             Expr *out = expr_new(a, EX_PANIC, e->type, e->span);
             out->as.panic_.payload = new_payload;
-            return out;
-        }
-        
-        case EX_TRY: {
-            Expr *new_body = lower_expr(a, st, e->as.try_.body, effect_env);
-            TryCatchClause *new_clauses = arena_alloc(a, e->as.try_.n_clauses * sizeof(TryCatchClause));
-            for (uint8_t i = 0; i < e->as.try_.n_clauses; i++) {
-                new_clauses[i] = e->as.try_.clauses[i];
-                new_clauses[i].handler = lower_expr(a, st, e->as.try_.clauses[i].handler, effect_env);
-            }
-            Expr *new_finally = e->as.try_.finally_body ? 
-                lower_expr(a, st, e->as.try_.finally_body, effect_env) : NULL;
-            
-            Expr *out = expr_new(a, EX_TRY, e->type, e->span);
-            out->as.try_.body = new_body;
-            out->as.try_.clauses = new_clauses;
-            out->as.try_.n_clauses = e->as.try_.n_clauses;
-            out->as.try_.finally_body = new_finally;
             return out;
         }
         

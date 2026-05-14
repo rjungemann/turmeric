@@ -40,7 +40,6 @@ set(TUR_CORE_SOURCES
     effect.c
     elab.c
     emit.c
-    exn.c
     expr.c
     fiber.c
     forms.c

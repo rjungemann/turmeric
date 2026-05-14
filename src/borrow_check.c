@@ -431,10 +431,6 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
                 }
             }
             return true;
-        /* Phase 17: Exceptions */
-        case EX_THROW:
-            /* Check the payload expression */
-            return borrow_check_expr_recursive(ctx, e->as.throw_.payload);
         /* Phase R2: Panic */
         case EX_PANIC:
             return borrow_check_expr_recursive(ctx, e->as.panic_.payload);
@@ -451,22 +447,6 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
             return borrow_check_expr_recursive(ctx, e->as.panic_payload_type_.payload);
         case EX_PANIC_PAYLOAD_DOWNS:
             return borrow_check_expr_recursive(ctx, e->as.panic_payload_downs_.payload);
-        case EX_TRY:
-            /* Check try body and all handlers */
-            if (!borrow_check_expr_recursive(ctx, e->as.try_.body)) {
-                return false;
-            }
-            for (uint8_t i = 0; i < e->as.try_.n_clauses; i++) {
-                if (!borrow_check_expr_recursive(ctx, e->as.try_.clauses[i].handler)) {
-                    return false;
-                }
-            }
-            if (e->as.try_.finally_body) {
-                if (!borrow_check_expr_recursive(ctx, e->as.try_.finally_body)) {
-                    return false;
-                }
-            }
-            return true;
         /* Phase 18: Delimited continuations */
         case EX_RESET:
             /* Check the reset body */

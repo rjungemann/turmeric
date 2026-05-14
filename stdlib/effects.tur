@@ -25,7 +25,7 @@
 ;; ── Handlers ───────────────────────────────────────────────────────────────
 ;;
 ;; with-write  — handle Write by printing to stdout via println.
-;; with-fail-throw — handle Fail by throwing an exception.
+;; with-fail-panic — handle Fail by panicking.
 ;; with-getenv — handle GetEnv by delegating to the C getenv(3) function.
 ;; with-read-console — handle Read by reading an integer from stdin.
 
@@ -33,9 +33,9 @@
   (handle body
     (Write [s] k) (do (println s) (resume k nil))))
 
-(defmacro with-fail-throw [body]
+(defmacro with-fail-panic [body]
   (handle body
-    (Fail [msg] k) (throw! msg)))
+    (Fail [msg] k) (panic msg)))
 
 (extern-c getenv [key :cstr] :cstr)
 

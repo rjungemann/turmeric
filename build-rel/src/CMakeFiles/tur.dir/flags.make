@@ -3,17 +3,17 @@
 
 # compile ASM with /usr/bin/cc
 # compile C with /usr/bin/cc
-ASM_DEFINES = 
+ASM_DEFINES = -DTURI_HAVE_EDITLINE=1
 
-ASM_INCLUDES = 
+ASM_INCLUDES = -I/Users/rjungemann/Projects/turmeric2/src
 
 ASM_FLAGSarm64 = -O3 -DNDEBUG -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -Wall -Wextra -Werror -Wno-unused-parameter -std=c11 -pedantic -O2 -DNDEBUG -pthread
 
 ASM_FLAGS = -O3 -DNDEBUG -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -Wall -Wextra -Werror -Wno-unused-parameter -std=c11 -pedantic -O2 -DNDEBUG -pthread
 
-C_DEFINES = 
+C_DEFINES = -DTURI_HAVE_EDITLINE=1
 
-C_INCLUDES = 
+C_INCLUDES = -I/Users/rjungemann/Projects/turmeric2/src
 
 C_FLAGSarm64 = -O3 -DNDEBUG -arch arm64 -Wall -Wextra -Werror -Wno-unused-parameter -std=c11 -pedantic -O2 -DNDEBUG -pthread
 

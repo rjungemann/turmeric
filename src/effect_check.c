@@ -196,9 +196,6 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
     case EX_RETURN:
         return collect_effects_in_expr(a, e->as.return_.value, row, idx, env, subst);
 
-    case EX_THROW:
-        return collect_effects_in_expr(a, e->as.throw_.payload, row, idx, env, subst);
-
     case EX_PANIC:
         return collect_effects_in_expr(a, e->as.panic_.payload, row, idx, env, subst);
     case EX_PANIC_WITH:
@@ -215,12 +212,7 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
     case EX_PANIC_PAYLOAD_DOWNS:
         return collect_effects_in_expr(a, e->as.panic_payload_downs_.payload, row, idx, env, subst);
 
-    case EX_TRY:
-        row = collect_effects_in_expr(a, e->as.try_.body, row, idx, env, subst);
-        for (uint8_t i = 0; i < e->as.try_.n_clauses; i++) {
-            row = collect_effects_in_expr(a, e->as.try_.clauses[i].handler, row, idx, env, subst);
-        }
-        return collect_effects_in_expr(a, e->as.try_.finally_body, row, idx, env, subst);
+
 
     case EX_DEFER:
         return collect_effects_in_expr(a, e->as.defer_.body, row, idx, env, subst);

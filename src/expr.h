@@ -95,9 +95,6 @@ typedef enum ExprKind {
     /* Phase 15: Typeclasses */
     EX_TYPECLASS_DEF,   /* (defclass ...) - typeclass definition */
     EX_INSTANCE_DEF,   /* (definstance ...) - typeclass instance definition */
-    /* Phase 17: Exceptions */
-    EX_THROW,          /* (throw expr) - raise an exception */
-    EX_TRY,            /* (try body (catch ...) (finally ...)) - try-catch-finally */
     /* Phase R2: Panic */
     EX_PANIC,          /* (panic msg) - print msg to stderr and abort */
     EX_PANIC_WITH,     /* (panic-with payload) - panic with typed payload */
@@ -203,14 +200,6 @@ typedef struct LetBinding {
     Binding *binding;
     Expr    *init;
 } LetBinding;
-
-/* Phase 17: Exception handling - Try-catch clause structure */
-typedef struct TryCatchClause {
-    const Symbol *var_name;    /* Name of the exception variable (e.g., 'e' in (catch [e] ...)) */
-    Binding *binding;          /* Resolved binding for codegen/name resolution */
-    TypeKind catch_type;        /* Type to match (TY_INT, TY_BOOL, etc.), TY_UNKNOWN = catch-all */
-    Expr *handler;             /* Handler body expression */
-} TryCatchClause;
 
 /* Phase 19: Algebraic effects */
 
@@ -355,8 +344,6 @@ struct Expr {
         /* Phase 15: Typeclasses */
         struct { TypeClass *typeclass; }                                  typeclass_def_;
         struct { TypeClassInstance *instance; }                          instance_def_;
-        /* Phase 17: Exceptions */
-        struct { Expr *payload; }        throw_;    /* (throw expr) - expression to throw */
         /* Phase R2: Panic */
         struct { Expr *payload; }        panic_;    /* (panic msg) - message to print before abort */
         struct { Expr *payload; }        panic_with_;    /* (panic-with payload) - typed payload */
@@ -367,12 +354,6 @@ struct Expr {
         struct { Expr *payload; }        panic_payload_file_;   /* (panic-payload-file p) */
         struct { Expr *payload; }        panic_payload_line_;   /* (panic-payload-line p) */
         struct { Expr *payload; TypeKind target_type; } panic_payload_downs_; /* (panic-payload-downcast p Type) */
-        struct {
-            Expr *body;              /* try body expression */
-            TryCatchClause *clauses; /* catch clauses */
-            uint8_t n_clauses;      /* number of catch clauses */
-            Expr *finally_body;     /* finally body (NULL if none) */
-        } try_;
         /* Phase 18: Delimited continuations */
         struct { Expr *body; }         reset_;      /* (reset body) - body to run with fresh continuation */
         struct { 

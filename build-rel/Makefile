@@ -57,10 +57,10 @@ RM = /opt/homebrew/bin/cmake -E rm -f
 EQUALS = =
 
 # The top-level source directory on which CMake was run.
-CMAKE_SOURCE_DIR = /Users/rjungemann/Projects/turmeric
+CMAKE_SOURCE_DIR = /Users/rjungemann/Projects/turmeric2
 
 # The top-level build directory on which CMake was run.
-CMAKE_BINARY_DIR = /Users/rjungemann/Projects/turmeric/build-rel
+CMAKE_BINARY_DIR = /Users/rjungemann/Projects/turmeric2/build-rel
 
 #=============================================================================
 # Targets provided globally by CMake.
@@ -117,9 +117,9 @@ rebuild_cache/fast: rebuild_cache
 
 # The main all target
 all: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/rjungemann/Projects/turmeric/build-rel/CMakeFiles /Users/rjungemann/Projects/turmeric/build-rel//CMakeFiles/progress.marks
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/rjungemann/Projects/turmeric2/build-rel/CMakeFiles /Users/rjungemann/Projects/turmeric2/build-rel//CMakeFiles/progress.marks
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 all
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/rjungemann/Projects/turmeric/build-rel/CMakeFiles 0
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/rjungemann/Projects/turmeric2/build-rel/CMakeFiles 0
 .PHONY : all
 
 # The main clean target
@@ -147,6 +147,19 @@ depend:
 .PHONY : depend
 
 #=============================================================================
+# Target rules for targets named tur_core
+
+# Build rule for target.
+tur_core: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 tur_core
+.PHONY : tur_core
+
+# fast build rule for target.
+tur_core/fast:
+	$(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/build
+.PHONY : tur_core/fast
+
+#=============================================================================
 # Target rules for targets named tur
 
 # Build rule for target.
@@ -159,6 +172,32 @@ tur/fast:
 	$(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/build
 .PHONY : tur/fast
 
+#=============================================================================
+# Target rules for targets named libturi
+
+# Build rule for target.
+libturi: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 libturi
+.PHONY : libturi
+
+# fast build rule for target.
+libturi/fast:
+	$(MAKE) $(MAKESILENT) -f src/CMakeFiles/libturi.dir/build.make src/CMakeFiles/libturi.dir/build
+.PHONY : libturi/fast
+
+#=============================================================================
+# Target rules for targets named tur_eval_basic
+
+# Build rule for target.
+tur_eval_basic: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 tur_eval_basic
+.PHONY : tur_eval_basic
+
+# fast build rule for target.
+tur_eval_basic/fast:
+	$(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_eval_basic.dir/build.make src/CMakeFiles/tur_eval_basic.dir/build
+.PHONY : tur_eval_basic/fast
+
 # Help Target
 help:
 	@echo "The following are some of the valid targets for this Makefile:"
@@ -170,7 +209,10 @@ help:
 	@echo "... package_source"
 	@echo "... rebuild_cache"
 	@echo "... test"
+	@echo "... libturi"
 	@echo "... tur"
+	@echo "... tur_core"
+	@echo "... tur_eval_basic"
 .PHONY : help
 
 

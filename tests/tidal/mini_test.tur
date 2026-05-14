@@ -175,13 +175,10 @@
   ]]
     (doseq [[name test-fn] tests]
       (print (str "Testing: " name " ... "))
-      (try
-        (let [result (test-fn)]
-          (if result
-            (println " PASS")
-            (println " FAIL")))
-        (catch e
-          (println (str " ERROR: " (error->string e))))))
+      (let [result (test-fn)]
+        (if result
+          (println " PASS")
+          (println " FAIL"))))
     (println "\nMini-notation tests complete.")))
 
 ;; Run tests if executed directly

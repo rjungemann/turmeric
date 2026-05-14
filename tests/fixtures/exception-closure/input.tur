@@ -1,5 +1,0 @@
-;; Phase 17: Closures with exceptions test
-
-(defn main []
-  (println "exception-closure test")
-  0)

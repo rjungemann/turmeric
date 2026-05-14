@@ -1,8 +1,8 @@
 {
 	"InstallScripts" : 
 	[
-		"/Users/rjungemann/Projects/turmeric/build-rel/cmake_install.cmake",
-		"/Users/rjungemann/Projects/turmeric/build-rel/src/cmake_install.cmake"
+		"/Users/rjungemann/Projects/turmeric2/build-rel/cmake_install.cmake",
+		"/Users/rjungemann/Projects/turmeric2/build-rel/src/cmake_install.cmake"
 	],
 	"Parallel" : false
 }

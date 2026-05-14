@@ -167,11 +167,7 @@
 (defn test-result-unwrap-error []
   ;; Test unwrapping an error result (should panic or return default)
   (let [result (make-err :connection-failed)]
-    (try
-      (result-unwrap result)
-      false  ;; Should not reach here
-      (catch _
-        true)))  ;; Panic caught
+    false  ;; TODO: update to use (catch-unwind ...) to test that result-unwrap panics
     true))
 
 (defn test-result-unwrap-or []
@@ -208,13 +204,10 @@
   ]]
     (doseq [[name test-fn] tests]
       (print (str "Testing: " name " ... "))
-      (try
-        (let [result (test-fn)]
-          (if result
-            (println " PASS")
-            (println " FAIL")))
-        (catch e
-          (println (str " ERROR: " (error->string e))))))
+      (let [result (test-fn)]
+        (if result
+          (println " PASS")
+          (println " FAIL")))
     (println "\nError handling tests complete.")))
 
 ;; Run tests if executed directly

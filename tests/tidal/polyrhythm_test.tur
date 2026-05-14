@@ -142,10 +142,8 @@
 
 (defn test-polymeter-zero []
   ;; Polymeter with zero ratio
-  (try
-    (let [p (polymeter 0.0 (cycle 1 2))]
-      false)
-    (catch _ true)))
+  ;; TODO: update to use (catch-unwind ...) to test that polymeter 0.0 panics
+  false)
 
 (defn test-polymeter-negative []
   ;; Polymeter with negative ratio
@@ -187,13 +185,10 @@
   ]]
     (doseq [[name test-fn] tests]
       (print (str "Testing: " name " ... "))
-      (try
-        (let [result (test-fn)]
-          (if result
-            (println " PASS")
-            (println " FAIL")))
-        (catch e
-          (println (str " ERROR: " (error->string e))))))
+      (let [result (test-fn)]
+        (if result
+          (println " PASS")
+          (println " FAIL"))))
     (println "\nPolyrhythm tests complete.")))
 
 ;; Run tests if executed directly
