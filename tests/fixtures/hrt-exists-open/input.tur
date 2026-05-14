@@ -1,0 +1,7 @@
+; Phase HRT2: existential elimination (open).
+; Pack 99 as an existential, open it to get v, and print v.
+(defn main [] :int
+  (let [e (pack 99 (exists [a] a))]
+    (open e [a v]
+      (println v)))
+  0)

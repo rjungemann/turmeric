@@ -436,5 +436,21 @@ void expr_print(Buf *b, const Expr *e) {
             expr_print(b, e->as.ascribe_.inner);
             buf_putc(b, ')');
             break;
+        /* Phase HRT2 */
+        case EX_EXISTS_PACK:
+            buf_puts(b, "(pack ");
+            expr_print(b, e->as.exists_pack_.value);
+            buf_putc(b, ')');
+            break;
+        case EX_EXISTS_OPEN:
+            buf_puts(b, "(open ");
+            expr_print(b, e->as.exists_open_.packed);
+            buf_puts(b, " [_ ");
+            buf_write(b, e->as.exists_open_.var_binding->name->name,
+                         e->as.exists_open_.var_binding->name->len);
+            buf_puts(b, "] ");
+            expr_print(b, e->as.exists_open_.body);
+            buf_putc(b, ')');
+            break;
     }
 }

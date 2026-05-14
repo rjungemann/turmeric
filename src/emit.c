@@ -3815,6 +3815,71 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_ASCRIBE: {
             return emit_value(ctx, body, e->as.ascribe_.inner);
         }
+        /* Phase HRT2: existential pack — box value as void* */
+        case EX_EXISTS_PACK: {
+            char *val = emit_value(ctx, body, e->as.exists_pack_.value);
+            Buf out; buf_init(&out);
+            TypeKind vk = e->as.exists_pack_.value->type.kind;
+            if (vk == TY_PTR_VOID || vk == TY_EXISTS || vk == TY_FORALL) {
+                /* Already a pointer — cast directly */
+                buf_printf(&out, "(tur_exists_t)(%s)", val);
+            } else {
+                /* Scalar (int64_t, bool, etc.) — reinterpret via intptr_t (64-bit safe) */
+                buf_printf(&out, "(tur_exists_t)(intptr_t)((int64_t)(%s))", val);
+            }
+            buf_putc(&out, '\0');
+            free(val);
+            char *result = strdup(out.data);
+            buf_free(&out);
+            return result;
+        }
+        /* Phase HRT2: existential open — unbox void*, bind v, emit body */
+        case EX_EXISTS_OPEN: {
+            bool nil_result = (e->type.kind == TY_NIL);
+            char *tmp = NULL;
+            if (!nil_result) {
+                tmp = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s %s;\n", type_c_name(e->type), tmp);
+            }
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "{\n");
+            ctx->indent += 4;
+
+            /* Emit and unbox the packed value */
+            char *packed_val = emit_value(ctx, body, e->as.exists_open_.packed);
+            char *var_name = name_for_binding(ctx, e->as.exists_open_.var_binding);
+            indent_buf(body, ctx->indent);
+            TypeKind vk = e->as.exists_open_.var_binding->type.kind;
+            if (vk == TY_PTR_VOID || vk == TY_EXISTS || vk == TY_FORALL || vk == TY_FN) {
+                buf_printf(body, "void *%s = (void *)(%s);\n", var_name, packed_val);
+            } else {
+                /* Unbox scalar via intptr_t */
+                buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n",
+                           var_name, packed_val);
+            }
+            free(packed_val);
+
+            /* Suppress unused-variable warning */
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "(void)%s;\n", var_name);
+            free(var_name);
+
+            /* Emit body */
+            if (nil_result) {
+                emit_stmt(ctx, body, e->as.exists_open_.body);
+            } else {
+                char *bv = emit_value(ctx, body, e->as.exists_open_.body);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s = %s;\n", tmp, bv);
+                free(bv);
+            }
+
+            ctx->indent -= 4;
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "}\n");
+            return nil_result ? atom_nil() : tmp;
+        }
     }
     return atom_nil();
 }
@@ -3832,10 +3897,16 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_PANIC_PAYLOAD_FILE:
         case EX_PANIC_PAYLOAD_LINE:
         case EX_PANIC_PAYLOAD_DOWNS:
-        case EX_POLY_WRAP:  /* Phase HRT1: pure struct literal, no stmt-level side effects */
-        case EX_ASCRIBE:    /* Phase HRT1: type erased, delegate to inner */
+        case EX_POLY_WRAP:   /* Phase HRT1: pure struct literal, no stmt-level side effects */
+        case EX_ASCRIBE:     /* Phase HRT1: type erased, delegate to inner */
+        case EX_EXISTS_PACK: /* Phase HRT2: pure boxing, no stmt-level side effects */
             /* No side effects — emit nothing. */
             return;
+        case EX_EXISTS_OPEN: { /* Phase HRT2: run open body for side effects */
+            char *v = emit_value(ctx, body, e);
+            free(v);
+            return;
+        }
         case EX_PANIC_WITH: {
             /* Diverging - emit the panic */
             char *v = emit_value(ctx, body, e);
@@ -4857,6 +4928,9 @@ int emit_program(Buf *out, const Expr *program) {
      * Used for (forall [a] (-> a a))-style rank-2 parameters. */
     buf_puts(out, "/* Phase HRT1: rank-2 polymorphic function type */\n");
     buf_puts(out, "typedef struct { void *env; int64_t (*fn)(void *, int64_t); } tur_poly_fn_t;\n");
+    /* Phase HRT2: existential type — opaque void* wrapping any boxed value */
+    buf_puts(out, "/* Phase HRT2: existential type (opaque void* box) */\n");
+    buf_puts(out, "typedef void * tur_exists_t;\n");
     /* Inline STM runtime - Phase 21 with per-TVar locking */
     buf_puts(out, "/* STM types (Phase 21) */\n");
     buf_puts(out, "typedef void *(*stm_fn_t)(void *env);\n");

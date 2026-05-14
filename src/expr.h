@@ -153,6 +153,9 @@ typedef enum ExprKind {
     /* Phase HRT1: Rank-2 higher-ranked types */
     EX_POLY_WRAP,      /* wraps a fn/closure as tur_poly_fn_t for rank-2 param passing */
     EX_ASCRIBE,        /* (:: expr type) — inline type ascription; erased at codegen */
+    /* Phase HRT2: Existential types */
+    EX_EXISTS_PACK,    /* (pack expr (exists [a] T)) — boxes value as existential */
+    EX_EXISTS_OPEN,    /* (open packed [a v] body) — unboxes existential, binds v */
 } ExprKind;
 
 /* Phase 2: FnDef represents a function definition from defn or lifted fn. */
@@ -444,6 +447,15 @@ struct Expr {
             struct Binding *wrapper_binding; /* the __poly_N wrapper thunk binding */
         } poly_wrap_;
         struct { struct Expr *inner; } ascribe_; /* (:: expr type) — type erased at codegen */
+        /* Phase HRT2: Existential types */
+        struct {
+            struct Expr *value;   /* the value being packed as an existential */
+        } exists_pack_;
+        struct {
+            struct Expr    *packed;      /* the packed existential expression */
+            struct Binding *var_binding; /* binding for v (the unboxed inner value) */
+            struct Expr    *body;        /* the open body expression */
+        } exists_open_;
     } as;
 };
 

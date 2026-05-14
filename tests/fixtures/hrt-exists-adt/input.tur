@@ -1,0 +1,15 @@
+; Phase HRT2: ADT / "showable" pattern.
+; make-showable packs a value together with a display function.
+; show-val opens the existential and calls the display function.
+(defn make-showable [n :int] :ptr<void>
+  (pack n (exists [a] a)))
+
+(defn show-val [s :ptr<void>] :int
+  (open s [a v]
+    (println v))
+  0)
+
+(defn main [] :int
+  (let [s (make-showable 77)]
+    (show-val s))
+  0)

@@ -662,6 +662,9 @@ typedef struct Elab {
     /* Phase HRT1: Rank-2 type expression forms */
     const Symbol *sym_arrow;       /* -> (function type constructor in type expressions) */
     const Symbol *sym_ascribe;     /* :: (type ascription operator) */
+    /* Phase HRT2: Existential type intro/elim */
+    const Symbol *sym_pack;        /* pack (existential introduction) */
+    const Symbol *sym_open;        /* open (existential elimination) */
     /* Phase HKT (v2): reserved typeclass names — user definitions rejected with diagnostic */
     const Symbol *sym_hkt_Functor;
     const Symbol *sym_hkt_Applicative;
@@ -1214,6 +1217,9 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* Phase HRT1: -> and :: */
     e->sym_arrow   = intern_cstr(st, "->");
     e->sym_ascribe = intern_cstr(st, "::");
+    /* Phase HRT2: pack and open */
+    e->sym_pack = intern_cstr(st, "pack");
+    e->sym_open = intern_cstr(st, "open");
     /* Phase HKT (v2): reserved typeclass names */
     e->sym_hkt_Functor      = intern_cstr(st, "Functor");
     e->sym_hkt_Applicative  = intern_cstr(st, "Applicative");
@@ -2194,6 +2200,9 @@ static Expr *elab_ascribe(Elab *e, const Form *call);
 static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding);
 static Binding *make_poly_wrapper(Elab *e, Binding *inner_b, uint8_t inner_arity, Span span);
 static Binding *poly_arg_fn_binding(Expr *arg);
+/* Phase HRT2 */
+static Expr *elab_pack(Elab *e, const Form *call);
+static Expr *elab_open(Elab *e, const Form *call);
 /* Phase 5 */
 static Expr *elab_ref(Elab *e, const Form *call);
 static Expr *elab_deref(Elab *e, const Form *call);
@@ -7039,6 +7048,9 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_type_app) return elab_type_app(e, call);
     /* Phase HRT1: (:: expr type) — type ascription */
     if (name == e->sym_ascribe) return elab_ascribe(e, call);
+    /* Phase HRT2: existential types */
+    if (name == e->sym_pack) return elab_pack(e, call);
+    if (name == e->sym_open) return elab_open(e, call);
     /* Phase R2: Panic */
     if (name == e->sym_panic) return elab_panic(e, call);
     if (name == e->sym_panic_with) return elab_panic_with(e, call);
@@ -10144,6 +10156,134 @@ static Expr *elab_ascribe(Elab *e, const Form *call) {
      * for downstream type-checking purposes. Type is erased at codegen. */
     Expr *out = expr_new(e->arena, EX_ASCRIBE, *ascribed, call->span);
     out->as.ascribe_.inner = inner;
+    return out;
+}
+
+/* Phase HRT2: (pack value (exists [a] T)) — existential introduction.
+ * Boxes the value as an opaque existential; result type is the TY_EXISTS type node.
+ * Syntax: (pack expr (exists [a] T)) */
+static Expr *elab_pack(Elab *e, const Form *call) {
+    if (call->as.list.len != 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "'pack' requires exactly 2 arguments: (pack value (exists [a] T))");
+        return NULL;
+    }
+    Form *val_form  = call->as.list.items[1];
+    Form *type_form = call->as.list.items[2];
+
+    /* Parse the existential type annotation */
+    Type *ex_type = type_expr_from_form(e, type_form, NULL, NULL, NULL, 0);
+    if (!ex_type) return NULL;
+    if (ex_type->kind != TY_EXISTS) {
+        diag_emit(DIAG_ERROR, type_form->span,
+                  "pack: second argument must be an existential type (exists [a] T), got %s",
+                  typekind_to_string(ex_type->kind));
+        return NULL;
+    }
+
+    /* Elaborate the value to pack */
+    Expr *val = elab_form(e, val_form);
+    if (!val) return NULL;
+
+    /* Result type is the full TY_EXISTS type node (void* at codegen) */
+    Expr *out = expr_new(e->arena, EX_EXISTS_PACK, *ex_type, call->span);
+    out->as.exists_pack_.value = val;
+    return out;
+}
+
+/* Phase HRT2: (open packed [a v] body) — existential elimination.
+ * Unboxes the existential value, binding v to the inner value.
+ * Syntax: (open packed-expr [abstract-type-var value-name] body...) */
+static Expr *elab_open(Elab *e, const Form *call) {
+    if (call->as.list.len < 4) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "'open' requires at least 3 arguments: (open packed [a v] body)");
+        return NULL;
+    }
+    Form *packed_form  = call->as.list.items[1];
+    Form *binders_form = call->as.list.items[2];
+
+    /* Elaborate the packed expression */
+    Expr *packed = elab_form(e, packed_form);
+    if (!packed) return NULL;
+
+    /* Accept TY_EXISTS (full info) or TY_PTR_VOID (opaque) */
+    if (packed->type.kind != TY_EXISTS && packed->type.kind != TY_PTR_VOID) {
+        diag_emit(DIAG_ERROR, packed_form->span,
+                  "open: expected existential value (exists [a] T) or ptr<void>, got %s",
+                  typekind_to_string(packed->type.kind));
+        return NULL;
+    }
+
+    /* Parse [a v] binders */
+    if ((binders_form->tag != F_VEC && binders_form->tag != F_LIST) ||
+        binders_form->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, binders_form->span,
+                  "open: binders must be a 2-element vector [abstract-type-var value-name]");
+        return NULL;
+    }
+    Form *abstract_form = binders_form->as.list.items[0];
+    Form *val_name_form = binders_form->as.list.items[1];
+    if (abstract_form->tag != F_SYM || val_name_form->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, binders_form->span,
+                  "open: binders must be symbols");
+        return NULL;
+    }
+    const Symbol *val_sym = val_name_form->as.sym;
+
+    /* Determine type of v from the existential body type.
+     * Type variables (TY_STRUCT with def=NULL) resolve to TY_INT (int64_t at runtime). */
+    Type v_type = TYPE_INT;  /* default: int64_t */
+    if (packed->type.kind == TY_EXISTS) {
+        const Type *T = packed->type.as.forall_.body;
+        if (T) {
+            if (T->kind == TY_STRUCT && T->as.struct_.def == NULL) {
+                v_type = TYPE_INT;  /* type variable → int64_t */
+            } else {
+                v_type = *T;  /* use body type directly (by value) */
+            }
+        }
+    }
+
+    /* Create binding for v in the open body */
+    Binding *v_binding = binding_new(e, val_sym, v_type, false, false, val_name_form->span);
+
+    /* Push a scope with v */
+    Scope inner;
+    scope_init(&inner, e->scope);
+    scope_add(&inner, v_binding);
+    e->scope = &inner;
+
+    /* Elaborate body (one or more forms) */
+    uint32_t n_body = call->as.list.len - 3;
+    Expr *body = NULL;
+    bool body_ok = true;
+    if (n_body == 1) {
+        body = elab_form(e, call->as.list.items[3]);
+        if (!body) body_ok = false;
+    } else {
+        Expr **items = (Expr **)arena_alloc(e->arena, n_body * sizeof(Expr *));
+        for (uint32_t i = 0; i < n_body && body_ok; i++) {
+            items[i] = elab_form(e, call->as.list.items[3 + i]);
+            if (!items[i]) { body_ok = false; break; }
+        }
+        if (body_ok) {
+            body = expr_new(e->arena, EX_DO, items[n_body - 1]->type, call->span);
+            body->as.do_.items = items;
+            body->as.do_.n = n_body;
+        }
+    }
+
+    /* Restore scope */
+    e->scope = inner.parent;
+    scope_free(&inner);
+
+    if (!body_ok || !body) return NULL;
+
+    Expr *out = expr_new(e->arena, EX_EXISTS_OPEN, body->type, call->span);
+    out->as.exists_open_.packed      = packed;
+    out->as.exists_open_.var_binding = v_binding;
+    out->as.exists_open_.body        = body;
     return out;
 }
 
