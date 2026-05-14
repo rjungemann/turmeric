@@ -1,0 +1,353 @@
+;; Arrow Tests
+;;
+;; Test suite for Arrow typeclass implementations and signal processing.
+;;
+;; Note: Function values returned from other functions are stored as int64 and
+;; must be invoked via __arrow_call1 / __arrow_call2.  Float literals are also
+;; represented as IEEE-754 bit patterns in int64; all float arithmetic is done
+;; in C blocks.
+
+(defmodule tests/arrow
+  (import arrow)
+  (import arrow_laws)
+  (import signal/core)
+  (import signal/dsp)
+  (import signal/envelope)
+
+;; =============================================================================
+;; Float helpers -- all floats are int64 IEEE-754 bit patterns
+;; =============================================================================
+
+;;; __f -- encode a C double literal as int64.
+(defn __f_0_0   [] :int ```c union {double d;int64_t i;} u; u.d=0.0;    return u.i; ```)
+(defn __f_0_001 [] :int ```c union {double d;int64_t i;} u; u.d=0.001;  return u.i; ```)
+(defn __f_0_05  [] :int ```c union {double d;int64_t i;} u; u.d=0.05;   return u.i; ```)
+(defn __f_0_1   [] :int ```c union {double d;int64_t i;} u; u.d=0.1;    return u.i; ```)
+(defn __f_0_2   [] :int ```c union {double d;int64_t i;} u; u.d=0.2;    return u.i; ```)
+(defn __f_0_4   [] :int ```c union {double d;int64_t i;} u; u.d=0.4;    return u.i; ```)
+(defn __f_0_5   [] :int ```c union {double d;int64_t i;} u; u.d=0.5;    return u.i; ```)
+(defn __f_0_7   [] :int ```c union {double d;int64_t i;} u; u.d=0.7;    return u.i; ```)
+(defn __f_0_9   [] :int ```c union {double d;int64_t i;} u; u.d=0.9;    return u.i; ```)
+(defn __f_1_0   [] :int ```c union {double d;int64_t i;} u; u.d=1.0;    return u.i; ```)
+(defn __f_1_1   [] :int ```c union {double d;int64_t i;} u; u.d=1.1;    return u.i; ```)
+(defn __f_440_0 [] :int ```c union {double d;int64_t i;} u; u.d=440.0;  return u.i; ```)
+(defn __f_inv440 [] :int ```c union {double d;int64_t i;} u; u.d=1.0/440.0; return u.i; ```)
+(defn __f_int [n] :int
+  ```c union {double d;int64_t i;} u; u.d=(double)n; return u.i; ```)
+
+;; Float comparison / arithmetic helpers
+
+;;; __f_near -- true if |a - b| < thresh (all float64 as int64).
+(defn __f_near [a b thresh] :bool
+  ```c
+  union {int64_t i; double d;} va, vb, vt;
+  va.i=a; vb.i=b; vt.i=thresh;
+  double diff = va.d - vb.d;
+  if (diff < 0.0) diff = -diff;
+  return diff < vt.d;
+  ```)
+
+;;; __f_lt -- true if a < b (float64 as int64).
+(defn __f_lt [a b] :bool
+  ```c
+  union {int64_t i; double d;} va, vb;
+  va.i=a; vb.i=b;
+  return va.d < vb.d;
+  ```)
+
+;;; __f_gt -- true if a > b (float64 as int64).
+(defn __f_gt [a b] :bool
+  ```c
+  union {int64_t i; double d;} va, vb;
+  va.i=a; vb.i=b;
+  return va.d > vb.d;
+  ```)
+
+;;; __f_geq -- true if a >= b (float64 as int64).
+(defn __f_geq [a b] :bool
+  ```c
+  union {int64_t i; double d;} va, vb;
+  va.i=a; vb.i=b;
+  return va.d >= vb.d;
+  ```)
+
+;;; __f_abs -- absolute value (float64 as int64).
+(defn __f_abs [x] :int
+  ```c
+  union {int64_t i; double d;} u;
+  u.i=x; if (u.d < 0.0) u.d = -u.d; return u.i;
+  ```)
+
+;;; __f_add1 -- add 1.0 to a float64 encoded as int64.
+(defn __f_add1 [x] :int
+  ```c
+  union {int64_t i; double d;} u; u.i=x; u.d+=1.0; return u.i;
+  ```)
+
+;;; __f_mul2 -- multiply a float64 by 2.0.
+(defn __f_mul2 [x] :int
+  ```c
+  union {int64_t i; double d;} u; u.i=x; u.d*=2.0; return u.i;
+  ```)
+
+;; =============================================================================
+;; Basic Arrow Tests
+;; =============================================================================
+
+;;; test-arrow-basics -- verify arr and >>> compose correctly.
+;;;
+;;; Returns:
+;;;   true if (>>> add1 mul2) applied to 5.0 gives 12.0.
+(defn test-arrow-basics [] :bool
+  (let [f     (arr (fn [x] (__f_add1 x)))
+        g     (arr (fn [x] (__f_mul2 x)))
+        comp  (>>> f g)
+        input (__f_int 5)
+        result (__arrow_call1 comp input)]
+    ;; g(f(5.0)) = g(6.0) = 12.0
+    (__f_near result (__f_int 12) (__f_0_001))))
+
+;;; test-arr-identity -- verify arr id passes values through unchanged.
+;;;
+;;; Returns:
+;;;   true if arr identity is transparent.
+(defn test-arr-identity [] :bool
+  (let [id-arr (arr (fn [x] x))]
+    (= (__arrow_call1 id-arr 42) 42)))
+
+;;; test-arrow-assoc -- verify arrow composition is associative.
+;;;
+;;; Returns:
+;;;   true if (f >>> g) >>> h = f >>> (g >>> h).
+(defn test-arrow-assoc [] :bool
+  (let [f    (fn [x] (__f_add1 x))
+        g    (fn [x] (__f_mul2 x))
+        h    (fn [x] (__f_add1 x))
+        fg   (>>> f g)
+        fgh1 (>>> fg h)
+        gh   (>>> g h)
+        fgh2 (>>> f gh)
+        in   (__f_int 3)]
+    ;; h(g(f(3.0))) = h(g(4.0)) = h(8.0) = 9.0
+    (__f_near (__arrow_call1 fgh1 in) (__arrow_call1 fgh2 in) (__f_0_001))))
+
+;; =============================================================================
+;; Signal Function Tests
+;; =============================================================================
+
+;;; test-constant-signal -- verify constant signal is time-invariant.
+;;;
+;;; Returns:
+;;;   true if constant signal returns same value at multiple times.
+(defn test-constant-signal [] :bool
+  (let [sig (constant 42)]
+    (and (= (__arrow_call1 sig 0) 42)
+         (= (__arrow_call1 sig 100) 42)
+         (= (__arrow_call1 sig 999) 42))))
+
+;;; test-time-signal -- verify time-signal acts as identity on time.
+;;;
+;;; Returns:
+;;;   true if time-signal(t) = t.
+(defn test-time-signal [] :bool
+  (and (= (time-signal 0) 0)
+       (= (time-signal 100) 100)))
+
+;;; test-sf-composition -- verify signal function composition.
+;;;
+;;; Returns:
+;;;   true if composed SF applies functions in order.
+(defn test-sf-composition [] :bool
+  (let [double-sf (arr (fn [sig] (fn [t] (__f_mul2 (__arrow_call1 sig t)))))
+        add1-sf   (arr (fn [sig] (fn [t] (__f_add1 (__arrow_call1 sig t)))))
+        composed  (>>> double-sf add1-sf)
+        input-sig (constant (__f_int 3))
+        out-sig   (__arrow_call1 composed input-sig)
+        result    (__arrow_call1 out-sig 0)]
+    ;; add1(double(3.0)) = add1(6.0) = 7.0
+    (__f_near result (__f_int 7) (__f_0_001))))
+
+;;; test-pair-signals -- verify pair-signals produces a Pair at each time step.
+;;;
+;;; Returns:
+;;;   true if pair-signals correctly pairs two signal values.
+(defn test-pair-signals [] :bool
+  (let [sig-a (constant (__f_int 5))
+        sig-b (constant (__f_int 10))
+        prod  (pair-signals sig-a sig-b)
+        p     (__arrow_call1 prod 0)
+        a     (first p)
+        b     (second p)]
+    (and (__f_near a (__f_int 5) (__f_0_001))
+         (__f_near b (__f_int 10) (__f_0_001)))))
+
+;; =============================================================================
+;; DSP Primitive Tests
+;; =============================================================================
+
+;;; test-sine-at-zero -- verify sine wave is 0 at t=0.
+;;;
+;;; Returns:
+;;;   true if sin(2*pi*440*0 + 0) ~= 0.
+(defn test-sine-at-zero [] :bool
+  (let [sine-sf  (sine (__f_440_0) (__f_0_0))
+        sig      (constant 0)
+        out-sig  (__arrow_call1 sine-sf sig)
+        val      (__arrow_call1 out-sig (__f_0_0))]
+    (__f_near val (__f_0_0) (__f_0_001))))
+
+;;; test-sine-one-period -- verify sine returns to 0 after one full period.
+;;;
+;;; Returns:
+;;;   true if sin(2*pi*440*(1/440)) ~= 0.
+(defn test-sine-one-period [] :bool
+  (let [sine-sf  (sine (__f_440_0) (__f_0_0))
+        sig      (constant 0)
+        out-sig  (__arrow_call1 sine-sf sig)
+        val      (__arrow_call1 out-sig (__f_inv440))]
+    (__f_near val (__f_0_0) (__f_0_001))))
+
+;;; test-sawtooth-range -- verify sawtooth output is in [0, 1).
+;;;
+;;; Returns:
+;;;   true if sawtooth(440, t=0) is in [0, 1).
+(defn test-sawtooth-range [] :bool
+  (let [saw-sf   (sawtooth (__f_440_0))
+        sig      (constant 0)
+        out-sig  (__arrow_call1 saw-sf sig)
+        val      (__arrow_call1 out-sig (__f_0_0))]
+    (and (__f_geq val (__f_0_0))
+         (__f_lt val (__f_1_0)))))
+
+;;; test-gain -- verify gain doubles the signal.
+;;;
+;;; Returns:
+;;;   true if gain(2.0) applied to 0.5 gives 1.0.
+(defn test-gain [] :bool
+  (let [sig     (constant (__f_0_5))
+        gain-sf (gain (__f_int 2))
+        out-sig (__arrow_call1 gain-sf sig)
+        result  (__arrow_call1 out-sig 0)]
+    (__f_near result (__f_1_0) (__f_0_001))))
+
+;;; test-add -- verify add sums a pair signal.
+;;;
+;;; Returns:
+;;;   true if add(0.5, 0.5) = 1.0.
+(defn test-add [] :bool
+  (let [sig-a  (constant (__f_0_5))
+        sig-b  (constant (__f_0_5))
+        prod   (pair-signals sig-a sig-b)
+        adder  (add)
+        out-fn (__arrow_call1 adder prod)
+        result (__arrow_call1 out-fn 0)]
+    (__f_near result (__f_1_0) (__f_0_001))))
+
+;; =============================================================================
+;; Envelope Tests
+;; =============================================================================
+
+;;; test-adsr-at-zero -- verify ADSR starts at 0 at t=0.
+;;;
+;;; Returns:
+;;;   true if ADSR(attack=0.1, ...) is 0 at t=0.
+(defn test-adsr-at-zero [] :bool
+  (let [params  (make-struct ADSRParams (__f_0_1) (__f_0_1) (__f_0_5) (__f_0_1))
+        env     (adsr-fixed params (__f_1_0))
+        sig     (constant 0)
+        out-sig (__arrow_call1 env sig)
+        result  (__arrow_call1 out-sig (__f_0_0))]
+    (__f_near result (__f_0_0) (__f_0_001))))
+
+;;; test-adsr-mid-attack -- verify ADSR is ~0.5 at half-attack time.
+;;;
+;;; Returns:
+;;;   true if ADSR is between 0.4 and 0.7 at t=0.05.
+(defn test-adsr-mid-attack [] :bool
+  (let [params  (make-struct ADSRParams (__f_0_1) (__f_0_1) (__f_0_5) (__f_0_1))
+        env     (adsr-fixed params (__f_1_0))
+        sig     (constant 0)
+        out-sig (__arrow_call1 env sig)
+        result  (__arrow_call1 out-sig (__f_0_05))]
+    (and (__f_gt result (__f_0_4))
+         (__f_lt result (__f_0_7)))))
+
+;;; test-adsr-sustain -- verify ADSR holds sustain level.
+;;;
+;;; Returns:
+;;;   true if ADSR is near sustain=0.5 at t=0.2.
+(defn test-adsr-sustain [] :bool
+  (let [params  (make-struct ADSRParams (__f_0_1) (__f_0_1) (__f_0_5) (__f_0_1))
+        env     (adsr-fixed params (__f_1_0))
+        sig     (constant 0)
+        out-sig (__arrow_call1 env sig)
+        result  (__arrow_call1 out-sig (__f_0_2))]
+    (__f_near result (__f_0_5) (__f_0_05))))
+
+;;; test-adsr-after-release -- verify ADSR returns to 0 after gate + release.
+;;;
+;;; Returns:
+;;;   true if ADSR is near 0 at t=1.1 (past gate+release).
+(defn test-adsr-after-release [] :bool
+  (let [params  (make-struct ADSRParams (__f_0_1) (__f_0_1) (__f_0_5) (__f_0_1))
+        env     (adsr-fixed params (__f_1_0))
+        sig     (constant 0)
+        out-sig (__arrow_call1 env sig)
+        result  (__arrow_call1 out-sig (__f_1_1))]
+    (__f_lt (__f_abs result) (__f_0_1))))
+
+;; =============================================================================
+;; Arrow Law Tests
+;; =============================================================================
+
+;;; test-arrow-laws -- run Arrow law verification.
+;;;
+;;; Returns:
+;;;   true if all Arrow laws pass.
+(defn test-arrow-laws [] :bool
+  (verify-arrow-laws))
+
+;; =============================================================================
+;; Main Entry Point
+;; =============================================================================
+
+;;; run-tests -- run all Arrow and signal processing tests.
+;;;
+;;; Returns:
+;;;   Number of failed tests (0 means all passed).
+(defn run-tests [] :int
+  (let [t1  (test-arrow-basics)
+        t2  (test-arr-identity)
+        t3  (test-arrow-assoc)
+        t4  (test-constant-signal)
+        t5  (test-time-signal)
+        t6  (test-sf-composition)
+        t7  (test-pair-signals)
+        t8  (test-sine-at-zero)
+        t9  (test-sine-one-period)
+        t10 (test-sawtooth-range)
+        t11 (test-gain)
+        t12 (test-add)
+        t13 (test-adsr-at-zero)
+        t14 (test-adsr-mid-attack)
+        t15 (test-adsr-sustain)
+        t16 (test-adsr-after-release)
+        t17 (test-arrow-laws)]
+    (+ (if t1  0 1) (+ (if t2  0 1) (+ (if t3  0 1)
+    (+ (if t4  0 1) (+ (if t5  0 1) (+ (if t6  0 1)
+    (+ (if t7  0 1) (+ (if t8  0 1) (+ (if t9  0 1)
+    (+ (if t10 0 1) (+ (if t11 0 1) (+ (if t12 0 1)
+    (+ (if t13 0 1) (+ (if t14 0 1) (+ (if t15 0 1)
+    (+ (if t16 0 1) (if t17 0 1)))))))))))))))))))
+
+;;; main -- entry point; prints pass/fail summary.
+;;;
+;;; Returns:
+;;;   0 on success, 1 if any tests failed.
+(defn main [] :int
+  (let [failed (run-tests)]
+    (if (= failed 0)
+      (do (println "ALL TESTS PASSED") 0)
+      (do (println "SOME TESTS FAILED") 1))))
+
+)

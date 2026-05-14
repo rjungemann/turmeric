@@ -149,6 +149,9 @@ static bool is_sym_start(int c) {
         case '^':            /* enables ^mut, ^int as sym-shaped metadata */
         case '|':            /* enables |>, |||, and similar pipe-shaped operators */
         case 39:             /* single quote ' - enables lifetime annotations like 'a */
+        /* UTF-8 leading bytes for λ (U+03BB: 0xCE 0xBB),
+           ∀ (U+2200: 0xE2 0x88 0x80), ∃ (U+2203: 0xE2 0x88 0x83) */
+        case 0xCE: case 0xE2:
             return true;
     }
     return false;
@@ -165,6 +168,10 @@ static bool is_sym_cont(int c) {
         case '.': case '#': case '^':
         case '|':            /* enables |>, |||, and similar pipe-shaped operators */
         case 39:             /* single quote ' - allows ' in lifetime symbols like 'a */
+        /* UTF-8 leading bytes */
+        case 0xCE: case 0xE2:
+        /* UTF-8 continuation bytes for λ (0xBB), ∀ (0x88, 0x80), ∃ (0x88, 0x83) */
+        case 0x80: case 0x83: case 0x88: case 0xBB:
             return true;
     }
     return false;
