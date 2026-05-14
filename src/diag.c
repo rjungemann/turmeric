@@ -110,6 +110,8 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0014_NOT_CLONE:                        return "TUR-E0014";
         case TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET:    return "TUR-E0016";
         case TUR_E0017_CONT_ESCAPE_ASYNC:                return "TUR-E0017";
+        case TUR_E0018_NOT_SERIALIZABLE:                 return "TUR-E0018";
+        case TUR_E0019_SERIAL_SHIFT_OUTSIDE_RESET:       return "TUR-E0019";
         default:                          return "";
     }
 }
@@ -133,6 +135,8 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0014") == 0) return TUR_E0014_NOT_CLONE;
     if (strcmp(s, "TUR-E0016") == 0) return TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET;
     if (strcmp(s, "TUR-E0017") == 0) return TUR_E0017_CONT_ESCAPE_ASYNC;
+    if (strcmp(s, "TUR-E0018") == 0) return TUR_E0018_NOT_SERIALIZABLE;
+    if (strcmp(s, "TUR-E0019") == 0) return TUR_E0019_SERIAL_SHIFT_OUTSIDE_RESET;
     return DIAG_CODE_NONE;
 }
 
@@ -368,6 +372,36 @@ static const DiagExplanation diag_explanations_[] = {
       "    (GetK [] k)\n"
       "      (let [v (await (async (fn [] :int 42)))]\n"
       "        (resume k v)))\n"
+    },
+    /* Phase 21: Serializable continuations */
+    { TUR_E0018_NOT_SERIALIZABLE,
+      "TUR-E0018: captured binding does not implement Serializable\n"
+      "\n"
+      "A serial-shift form captured a binding whose type does not implement the\n"
+      "Serializable typeclass.  serial-shift requires every captured value to be\n"
+      "round-trippable through bytes so the continuation can be marshalled to disk\n"
+      "or sent over a network and resumed in a fresh process.\n"
+      "\n"
+      "Example:\n"
+      "  (let [handle (open-file \"data.txt\")]\n"
+      "    (serial-reset\n"
+      "      (serial-shift (fn [k] k) 0)))  ; error: handle : file-handle is not Serializable\n"
+      "\n"
+      "Solutions:\n"
+      "  1. Move non-serializable resources outside the serial-reset boundary.\n"
+      "  2. Implement Serializable for the type with custom marshal/unmarshal hooks\n"
+      "     (e.g., serialise a file path and re-open on resume).\n"
+    },
+    { TUR_E0019_SERIAL_SHIFT_OUTSIDE_RESET,
+      "TUR-E0019: serial-shift used outside serial-reset boundary\n"
+      "\n"
+      "A serial-shift form appeared outside of any enclosing serial-reset.\n"
+      "serial-shift captures the current continuation up to the nearest enclosing\n"
+      "serial-reset; without one there is no delimited continuation to capture.\n"
+      "\n"
+      "Wrap the serial-shift in a serial-reset:\n"
+      "  (serial-reset\n"
+      "    (serial-shift (fn [k] (save-cont! k) 0) 42))\n"
     },
 };
 

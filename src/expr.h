@@ -144,6 +144,9 @@ typedef enum ExprKind {
     EX_PROGRAM,
     /* Phase M0: Module system */
     EX_DEFMODULE,      /* (defmodule name [docstring] (export ...) (import ...) body...) */
+    /* Phase 21: Serializable continuations */
+    EX_SERIAL_RESET,   /* (serial-reset body) - establish serializable continuation boundary */
+    EX_SERIAL_SHIFT,   /* (serial-shift k body) - capture serializable continuation */
 } ExprKind;
 
 /* Phase 2: FnDef represents a function definition from defn or lifted fn. */
@@ -422,6 +425,12 @@ struct Expr {
 
         /* Phase M0: Module system */
         struct { struct DefModule *mod; }                                   defmodule_;
+        /* Phase 21: Serializable continuations */
+        struct { Expr *body; }         serial_reset_; /* (serial-reset body) */
+        struct {
+            Expr *k_fn;   /* function receiving the serial continuation */
+            Expr *body;   /* body expression */
+        } serial_shift_;
     } as;
 };
 

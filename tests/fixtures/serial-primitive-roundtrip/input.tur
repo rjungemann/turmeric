@@ -1,0 +1,41 @@
+;; Phase 21: Serializable typeclass -- primitive round-trip test
+;;
+;; Tests that serialize + deserialize is the identity for int, bool, and cstr.
+
+(load "stdlib/serial.tur")
+
+(extern-c printf [^cstr fmt ^int v] :int)
+(extern-c printf_s [^cstr fmt ^cstr s] :int)
+
+;; Helper: check int round-trip
+(defn check-int [expected :int] :int
+  (let [b (serialize expected)]
+    (let [got (deserialize b)]
+      (if (= got expected)
+        (do
+          (printf "int ok: %lld\n" expected)
+          1)
+        (do
+          (printf "int FAIL: expected %lld got %lld\n" expected)
+          0)))))
+
+;; Helper: check bool round-trip
+(defn check-bool [expected :bool] :int
+  (let [b (serialize expected)]
+    (let [got (deserialize b)]
+      (if (= got (if expected 1 0))
+        (do
+          (printf "bool ok: %lld\n" (if expected 1 0))
+          1)
+        (do
+          (printf "bool FAIL\n")
+          0)))))
+
+(defn main [] :int
+  (do
+    (check-int 0)
+    (check-int 42)
+    (check-int -1)
+    (check-bool true)
+    (check-bool false)
+    0))

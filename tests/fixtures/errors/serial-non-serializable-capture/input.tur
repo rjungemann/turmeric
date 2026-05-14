@@ -1,0 +1,18 @@
+;; Phase 21: Negative fixture for TUR-E0018.
+;; A captured binding at a serial-shift site must implement Serializable.
+;; Foo has no Serializable instance, so capturing it must be an error.
+
+(load "stdlib/serial.tur")
+
+;; Foo: a struct with no Serializable instance
+(defstruct Foo :copy [x :int])
+
+(defn k-discard [k] :int 0)
+
+(defn test [] :int
+  (let [foo (make-struct Foo 42)]
+    (serial-reset
+      (serial-shift k-discard foo))))
+
+(defn main [] :int
+  (test))
