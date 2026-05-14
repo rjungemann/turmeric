@@ -445,6 +445,26 @@ static Form *read_keyword(Reader *r) {
         return form_sym(r->arena, span, sym);
     }
 
+    /* `: type-expr` — space-separated or fused-paren compound type annotation */
+    {
+        int c2 = peek(r);
+        if (c2 == ' ' || c2 == '\t' || c2 == '\n' || c2 == '\r'
+            || c2 == '(' || c2 == '[' || c2 == -1) {
+            skip_ws_and_comments(r);
+            if (peek(r) == -1) {
+                Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
+                diag_emit(DIAG_ERROR, s, "expected type expression after ':'");
+                r->error = true;
+                return NULL;
+            }
+            Form *inner = read_form(r);
+            if (!inner) return NULL;
+            size_t end = r->pos;
+            Span sp = span_from_to(r, start_line, start_col, start_off, end);
+            return form_type_ann(r->arena, sp, inner);
+        }
+    }
+
     if (!is_sym_cont(peek(r)) && !isalpha(peek(r))) {
         Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
         diag_emit(DIAG_ERROR, s, "expected keyword name after ':'");

@@ -172,6 +172,10 @@ static void fmt_form_flat(Buf *b, const Form *f) {
             buf_puts(b, "~@");
             if (f->as.list.len > 0) fmt_form_flat(b, f->as.list.items[0]);
             break;
+        case F_TYPE_ANN:
+            buf_puts(b, ": ");
+            if (f->as.list.len > 0) fmt_form_flat(b, f->as.list.items[0]);
+            break;
     }
 }
 
@@ -267,9 +271,10 @@ static void fmt_defn(FmtState *s, const Form *f) {
 
     fs_putc(s, '(');
 
-    /* Header items: defn/defmacro, name, params, optional :ret keyword */
+    /* Header items: defn/defmacro, name, params, optional :ret keyword or type annotation */
     uint32_t header_end = 3;
-    if (n > 3 && f->as.list.items[3]->tag == F_KEYWORD) header_end = 4;
+    if (n > 3 && (f->as.list.items[3]->tag == F_KEYWORD
+               || f->as.list.items[3]->tag == F_TYPE_ANN)) header_end = 4;
 
     for (uint32_t i = 0; i < header_end && i < n; i++) {
         if (i) fs_putc(s, ' ');
@@ -292,9 +297,10 @@ static void fmt_fn(FmtState *s, const Form *f) {
 
     fs_putc(s, '(');
 
-    /* Header: fn, params, optional :ret */
+    /* Header: fn, params, optional :ret keyword or type annotation */
     uint32_t header_end = 2;
-    if (n > 2 && f->as.list.items[2]->tag == F_KEYWORD) header_end = 3;
+    if (n > 2 && (f->as.list.items[2]->tag == F_KEYWORD
+               || f->as.list.items[2]->tag == F_TYPE_ANN)) header_end = 3;
 
     for (uint32_t i = 0; i < header_end && i < n; i++) {
         if (i) fs_putc(s, ' ');
@@ -630,6 +636,10 @@ static void fmt_form(FmtState *s, const Form *f) {
             break;
         case F_UNQUOTE_SPLICING:
             fs_puts(s, "~@");
+            if (f->as.list.len > 0) fmt_form(s, f->as.list.items[0]);
+            break;
+        case F_TYPE_ANN:
+            fs_puts(s, ": ");
             if (f->as.list.len > 0) fmt_form(s, f->as.list.items[0]);
             break;
         case F_VEC: {

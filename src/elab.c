@@ -1404,6 +1404,7 @@ static bool ct_form_equal(const Form *a, const Form *b) {
         case F_QUASIQUOTE:
         case F_UNQUOTE:
         case F_UNQUOTE_SPLICING:
+        case F_TYPE_ANN:
         case F_LIST:
         case F_VEC:
         case F_MAP:
@@ -1538,6 +1539,7 @@ static bool form_contains_ct_builtins(Form *f) {
         case F_STR:
         case F_KEYWORD:
         case F_CBLOCK:
+        case F_TYPE_ANN:
             return false;
     }
     return false;
@@ -1862,6 +1864,9 @@ static CtValue ct_eval_form(CtEnv *env, Form *f) {
         case F_UNQUOTE:
         case F_UNQUOTE_SPLICING:
             return ct_value_form(f->as.list.items[0]);
+        case F_TYPE_ANN:
+            /* Type annotations are compile-time literals */
+            return ct_value_form(f);
         case F_SYM: {
             CtValue v;
             if (ct_env_lookup(env, f->as.sym, &v)) return v;
@@ -1991,6 +1996,7 @@ static Form *quasiquote_expand_form(Elab *e, Form *f) {
                 return form_vec(e->arena, f->span, new_items, f->as.list.len);
             }
         case F_CBLOCK:
+        case F_TYPE_ANN:
             return f;
         case F_QUASIQUOTE:
             /* Expand the quasiquoted form */
@@ -2010,7 +2016,8 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
         case F_KEYWORD:
         case F_CBLOCK:
         case F_QUOTE:
-            /* Literals and quote forms are returned as-is */
+        case F_TYPE_ANN:
+            /* Literals, quote forms, and type annotations are returned as-is */
             return f;
         case F_QUASIQUOTE:
         case F_UNQUOTE:
@@ -5023,7 +5030,7 @@ static Expr *elab_defeffect(Elab *e, const Form *call) {
         uint8_t p = 0;
         for (uint8_t i = 0; i < raw_n; i++) {
             Form *param_f = params_f->as.list.items[i];
-            if (param_f->tag == F_KEYWORD) {
+            if (param_f->tag == F_KEYWORD || param_f->tag == F_TYPE_ANN) {
                 /* Type annotation for preceding param — already handled below */
                 continue;
             }
@@ -5033,7 +5040,7 @@ static Expr *elab_defeffect(Elab *e, const Form *call) {
                 return NULL;
             }
             param_names[p] = param_f->as.sym;
-            /* Check if the next item is a type keyword */
+            /* Check if the next item is a type keyword or F_TYPE_ANN */
             TypeKind pk = TY_INT;
             if (i + 1 < raw_n) {
                 Form *next = params_f->as.list.items[i + 1];
@@ -5041,6 +5048,12 @@ static Expr *elab_defeffect(Elab *e, const Form *call) {
                     pk = typekind_from_symbol(next->as.sym->name);
                     if (pk == TY_UNKNOWN) pk = TY_INT;
                     i++; /* Consume the type keyword */
+                } else if (next->tag == F_TYPE_ANN) {
+                    if (next->as.list.len > 0) {
+                        Type *ann = type_expr_from_form(e, next->as.list.items[0], NULL, NULL, NULL, 0);
+                        if (ann) pk = ann->kind;
+                    }
+                    i++; /* Consume the type annotation */
                 }
             }
             param_types[p] = pk;
@@ -5054,13 +5067,21 @@ static Expr *elab_defeffect(Elab *e, const Form *call) {
      *   (defeffect E [] :int)
      */
     Form *ret_f = call->as.list.items[name_idx + 2];
-    if (ret_f->tag != F_SYM && ret_f->tag != F_KEYWORD) {
+    if (ret_f->tag != F_SYM && ret_f->tag != F_KEYWORD && ret_f->tag != F_TYPE_ANN) {
         diag_emit(DIAG_ERROR, ret_f->span,
                   "defeffect: return type annotation must be a symbol or keyword like :int");
         return NULL;
     }
-    
-    TypeKind result_type = typekind_from_symbol(ret_f->as.sym->name);
+
+    TypeKind result_type;
+    if (ret_f->tag == F_TYPE_ANN) {
+        Type *ann = (ret_f->as.list.len > 0)
+            ? type_expr_from_form(e, ret_f->as.list.items[0], NULL, NULL, NULL, 0)
+            : NULL;
+        result_type = ann ? ann->kind : TY_UNKNOWN;
+    } else {
+        result_type = typekind_from_symbol(ret_f->as.sym->name);
+    }
     if (result_type == TY_UNKNOWN) {
         diag_emit(DIAG_ERROR, ret_f->span,
                   "defeffect: unknown return type '%s'", ret_f->as.sym->name);
@@ -5862,16 +5883,19 @@ static Expr *elab_defn(Elab *e, const Form *call) {
             continue;
         }
         
-        /* Phase HRT1: Handle complex type annotation (list form) for previous param.
-         * Syntax: [param-name (forall [a] (-> a a))] — list form follows a symbol. */
-        if (p->tag == F_LIST || p->tag == F_VEC) {
+        /* Phase HRT1: Handle complex type annotation (list form or F_TYPE_ANN) for previous param.
+         * Syntax: [param-name (forall [a] (-> a a))] — list form follows a symbol.
+         * Also: [param-name : (-> a b)] — F_TYPE_ANN wrapping any type form. */
+        if (p->tag == F_LIST || p->tag == F_VEC || p->tag == F_TYPE_ANN) {
             if (n_params == 0) {
                 diag_emit(DIAG_ERROR, p->span,
                           "defn: type annotation without preceding parameter");
                 return NULL;
             }
+            /* For F_TYPE_ANN, unwrap to the inner type form first */
+            const Form *type_form = (p->tag == F_TYPE_ANN) ? p->as.list.items[0] : p;
             /* Parse as a type expression — supports (forall [a] (-> a a)), (-> a b), etc. */
-            Type *ann = type_expr_from_form(e, p, NULL, NULL, NULL, 0);
+            Type *ann = type_expr_from_form(e, type_form, NULL, NULL, NULL, 0);
             if (!ann) return NULL;
             if (ann->kind == TY_FORALL || ann->kind == TY_EXISTS) {
                 /* Rank-2 polymorphic parameter: represented as tur_poly_fn_t at C level */
@@ -6027,6 +6051,13 @@ static Expr *elab_defn(Elab *e, const Form *call) {
                           "defn: unsupported return type keyword :%s",
                           kw->name);
                 return NULL;
+            }
+            body_start++;
+        } else if (ret_f->tag == F_TYPE_ANN) {
+            /* Compound return type via `: type-expr` syntax: `: (-> a b)`, `: (vec int)`, etc. */
+            if (ret_f->as.list.len > 0) {
+                Type *ann = type_expr_from_form(e, ret_f->as.list.items[0], NULL, NULL, NULL, 0);
+                if (ann) return_kind = ann->kind;
             }
             body_start++;
         }
@@ -6301,6 +6332,13 @@ static Expr *elab_fn(Elab *e, const Form *call) {
                 return NULL;
             }
             body_start++;
+        } else if (ret_f->tag == F_TYPE_ANN) {
+            /* Compound return type via `: type-expr` syntax: `: (-> a b)`, `: (vec int)`, etc. */
+            if (ret_f->as.list.len > 0) {
+                Type *ann = type_expr_from_form(e, ret_f->as.list.items[0], NULL, NULL, NULL, 0);
+                if (ann) return_kind = ann->kind;
+            }
+            body_start++;
         }
     }
 
@@ -6545,23 +6583,32 @@ static Expr *elab_extern_c(Elab *e, const Form *call) {
 
     for (uint32_t i = 0; i < params_f->as.list.len; i++) {
         Form *p = params_f->as.list.items[i];
-        /* Handle type annotation keyword after the previous param */
-        if (p->tag == F_KEYWORD) {
+        /* Handle type annotation keyword or F_TYPE_ANN after the previous param */
+        if (p->tag == F_KEYWORD || p->tag == F_TYPE_ANN) {
             if (n_params == 0) {
                 diag_emit(DIAG_ERROR, p->span,
                           "extern-c: type annotation without preceding parameter");
                 return NULL;
             }
-            const Symbol *kw = p->as.sym;
-            TypeKind pk = typekind_from_symbol(kw->name);
-            if (pk == TY_UNKNOWN) {
-                /* Legacy fallback names */
-                if (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0) pk = TY_PTR_VOID;
-                else if (kw->len == 4 && memcmp(kw->name, "void", 4) == 0) pk = TY_NIL;
-                else {
-                    diag_emit(DIAG_ERROR, p->span,
-                              "extern-c: unsupported parameter type :%s", kw->name);
-                    return NULL;
+            TypeKind pk;
+            if (p->tag == F_TYPE_ANN) {
+                Type *ann = (p->as.list.len > 0)
+                    ? type_expr_from_form(e, p->as.list.items[0], NULL, NULL, NULL, 0)
+                    : NULL;
+                if (!ann) return NULL;
+                pk = ann->kind;
+            } else {
+                const Symbol *kw = p->as.sym;
+                pk = typekind_from_symbol(kw->name);
+                if (pk == TY_UNKNOWN) {
+                    /* Legacy fallback names */
+                    if (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0) pk = TY_PTR_VOID;
+                    else if (kw->len == 4 && memcmp(kw->name, "void", 4) == 0) pk = TY_NIL;
+                    else {
+                        diag_emit(DIAG_ERROR, p->span,
+                                  "extern-c: unsupported parameter type :%s", kw->name);
+                        return NULL;
+                    }
                 }
             }
             param_kinds[n_params - 1] = pk;
@@ -6599,22 +6646,31 @@ static Expr *elab_extern_c(Elab *e, const Form *call) {
         return NULL;
     }
     Form *ret_f = call->as.list.items[ret_idx];
-    if (ret_f->tag != F_KEYWORD) {
+    if (ret_f->tag != F_KEYWORD && ret_f->tag != F_TYPE_ANN) {
         diag_emit(DIAG_ERROR, ret_f->span,
                   "extern-c: return type must be a keyword (:int, :bool, :void, :cstr, :ptr)");
         return NULL;
     }
 
-    TypeKind return_kind = typekind_from_symbol(ret_f->as.sym->name);
-    if (return_kind == TY_UNKNOWN) {
-        /* Legacy fallback names */
-        const Symbol *kw = ret_f->as.sym;
-        if (kw->len == 4 && memcmp(kw->name, "void", 4) == 0) return_kind = TY_NIL;
-        else if (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0) return_kind = TY_PTR_VOID;
-        else {
-            diag_emit(DIAG_ERROR, ret_f->span,
-                      "extern-c: unsupported return type :%s", kw->name);
-            return NULL;
+    TypeKind return_kind;
+    if (ret_f->tag == F_TYPE_ANN) {
+        Type *ann = (ret_f->as.list.len > 0)
+            ? type_expr_from_form(e, ret_f->as.list.items[0], NULL, NULL, NULL, 0)
+            : NULL;
+        if (!ann) return NULL;
+        return_kind = ann->kind;
+    } else {
+        return_kind = typekind_from_symbol(ret_f->as.sym->name);
+        if (return_kind == TY_UNKNOWN) {
+            /* Legacy fallback names */
+            const Symbol *kw = ret_f->as.sym;
+            if (kw->len == 4 && memcmp(kw->name, "void", 4) == 0) return_kind = TY_NIL;
+            else if (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0) return_kind = TY_PTR_VOID;
+            else {
+                diag_emit(DIAG_ERROR, ret_f->span,
+                          "extern-c: unsupported return type :%s", kw->name);
+                return NULL;
+            }
         }
     }
 
@@ -8484,6 +8540,10 @@ static Expr *elab_form(Elab *e, Form *f) {
                 return NULL;
             }
             return elab_call(e, f);
+        case F_TYPE_ANN:
+            diag_emit(DIAG_ERROR, f->span,
+                      "type annotation ': type' is only valid after a parameter name or as a return type");
+            return NULL;
     }
     return NULL;
 }
@@ -9042,6 +9102,17 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                                   "unsupported type in typeclass method parameter");
                         return NULL;
                     }
+                } else if (type_f->tag == F_TYPE_ANN) {
+                    /* `: type-expr` compound annotation */
+                    Type *ft = (type_f->as.list.len > 0)
+                        ? type_expr_from_form(e, type_f->as.list.items[0], NULL, NULL, NULL, 0)
+                        : NULL;
+                    if (!ft) {
+                        diag_emit(DIAG_ERROR, type_f->span,
+                                  "unsupported type form in typeclass method parameter");
+                        return NULL;
+                    }
+                    param_types[i] = *ft;
                 } else if (type_f->tag == F_LIST || type_f->tag == F_VEC) {
                     /* Phase HRT3: allow forall/exists type forms as parameter types */
                     Type *ft = type_expr_from_form(e, type_f, NULL, NULL, NULL, 0);
@@ -9102,6 +9173,17 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                           "unsupported return type in typeclass method");
                 return NULL;
             }
+        } else if (ret_form->tag == F_TYPE_ANN) {
+            /* `: type-expr` compound return type annotation */
+            Type *ft = (ret_form->as.list.len > 0)
+                ? type_expr_from_form(e, ret_form->as.list.items[0], NULL, NULL, NULL, 0)
+                : NULL;
+            if (!ft) {
+                diag_emit(DIAG_ERROR, ret_form->span,
+                          "unsupported return type form in typeclass method");
+                return NULL;
+            }
+            return_type = *ft;
         } else if (ret_form->tag == F_LIST || ret_form->tag == F_VEC) {
             /* Phase HRT3: allow forall/exists type forms as return types */
             Type *ft = type_expr_from_form(e, ret_form, NULL, NULL, NULL, 0);
@@ -9900,6 +9982,13 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
             return fn_t;
         }
 
+        /* Empty list () = unit / nil type */
+        if (form->as.list.len == 0) {
+            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *t = TYPE_NIL;
+            return t;
+        }
+
         /* Type application: (ctor arg1 arg2 ...) is right-associative
          * (ctor arg1 arg2) == (ctor (arg1 arg2)) for binary constructors
          * But for simplicity in v1, we only support (ctor arg) with exactly 2 elements.
@@ -9938,9 +10027,30 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
         t->as.app.arg = arg_type;
         return t;
     } else if (form->tag == F_KEYWORD) {
-        /* Keywords are also valid type names */
-        return type_expr_from_form(e, (const Form *)form, rec_name,
-                                     type_params, type_param_kinds, n_type_params);
+        /* `:int`, `:bool`, etc. — treat the keyword name as a primitive type lookup */
+        const Symbol *sym = form->as.sym;
+        TypeKind k = typekind_from_symbol(sym->name);
+        if (k != TY_UNKNOWN) {
+            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *t = type_from_kind(k);
+            return t;
+        }
+        /* Unknown keyword type — return opaque struct placeholder */
+        Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+        memset(t, 0, sizeof(Type));
+        t->kind = TY_STRUCT;
+        t->copy_kind = CK_MOVE;
+        t->hkt_kind = KIND_STAR;
+        t->as.struct_.def = NULL;
+        return t;
+    } else if (form->tag == F_TYPE_ANN) {
+        /* Unwrap the `: type-expr` annotation wrapper and process the inner form */
+        if (form->as.list.len == 0) {
+            diag_emit(DIAG_ERROR, form->span, "empty type annotation");
+            return NULL;
+        }
+        return type_expr_from_form(e, form->as.list.items[0], rec_name,
+                                   type_params, type_param_kinds, n_type_params);
     } else {
         diag_emit(DIAG_ERROR, form->span,
                   "unsupported type expression form (expected symbol, keyword, or list)");
@@ -10172,7 +10282,11 @@ static Expr *elab_type_app(Elab *e, const Form *call) {
     Form *arg_form = call->as.list.items[2];
     Type arg_type;
     
-    if (arg_form->tag == F_SYM || arg_form->tag == F_KEYWORD) {
+    if (arg_form->tag == F_SYM || arg_form->tag == F_KEYWORD || arg_form->tag == F_TYPE_ANN) {
+        /* Unwrap F_TYPE_ANN if present */
+        if (arg_form->tag == F_TYPE_ANN) {
+            arg_form = (arg_form->as.list.len > 0) ? arg_form->as.list.items[0] : arg_form;
+        }
         const Symbol *arg_sym = arg_form->as.sym;
         /* Try primitive types first */
         if (arg_sym->len == 3 && memcmp(arg_sym->name, "int", 3) == 0) {
