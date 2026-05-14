@@ -1752,6 +1752,7 @@ extern void tur_hamt_transient_set(void *, int64_t, void *, void *);
 extern void tur_hamt_transient_del(void *, int64_t, void *);
 extern void * tur_hamt_persistent(void *);
 
+static int64_t __inst_Clone_clone_T(RcControlBlock *);
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
 static void * array_slice(void *, int64_t, int64_t);
@@ -1791,6 +1792,22 @@ static void * get(void *, void *);
 static bool has_(void *, void *);
 static int64_t count(void *);
 static void * merge(void *, void *);
+static void rc_drop_raw(int64_t);
+
+static int64_t __inst_Clone_clone_T(RcControlBlock * x) {
+        /* x is RcControlBlock *; increment refcount, return same pointer. */
+    rc_strong_increment(x);
+    return (int64_t)(intptr_t)x;
+    
+}
+
+typedef struct dict_Clone_T {
+    int64_t (*clone)(RcControlBlock *);
+} dict_Clone_T;
+
+static dict_Clone_T dict_Clone_T_singleton = {
+    .clone = __inst_Clone_clone_T,
+};
 
 static void * array_get(void * arr, int64_t idx) {
         struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
@@ -1979,8 +1996,38 @@ static void * merge(void * a, void * b) {
         return hamt_merge((void *)(intptr_t)(a), (void *)(intptr_t)(b));
 }
 
+static void rc_drop_raw(int64_t p) {
+        rc_strong_decrement((RcControlBlock *)(intptr_t)p);
+  
+}
+
 int main() {
-        return (int)INT64_C(0);
+        int64_t __t0;
+        {
+            int64_t *__t1 = (int64_t *)malloc(sizeof(int64_t));
+            *__t1 = INT64_C(42);
+            RcControlBlock *__t2 = rc_cb_alloc(0, 3, NULL);
+            __t2->value = __t1;
+            RcControlBlock * r_200 = __t2;
+            (void)r_200;
+            int64_t __t3 = rc_strong_count(r_200);
+            printf("%lld\n", (long long)(__t3));
+            {
+                int64_t r2_201 = ((int64_t (*)(RcControlBlock *))(intptr_t)(dict_Clone_T_singleton.clone))(r_200);
+                (void)r2_201;
+                int64_t __t4 = rc_strong_count(r_200);
+                printf("%lld\n", (long long)(__t4));
+                rc_drop_raw(r2_201);
+                int64_t __t5 = rc_strong_count(r_200);
+                printf("%lld\n", (long long)(__t5));
+            }
+            rc_strong_decrement(r_200);
+            rc_free_queue_drain();
+            int64_t __t6;
+            __t6 = INT64_C(0);
+            __t0 = __t6;
+        }
+        return (int)__t0;
 }
 
 

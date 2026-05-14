@@ -257,6 +257,84 @@ Non-capturing closures work directly with `fmap`:
     (__bimap_pair container fn-left fn-right)))
 ```
 
+## Performance
+
+### Dispatch model: dictionary passing
+
+By default Turmeric implements typeclass method calls via **dictionary passing**.
+For each typeclass instance, the compiler generates a struct ("dictionary") that
+holds one function pointer per method:
+
+```c
+/* generated for (definstance Functor [option] ...) */
+typedef struct { int64_t (*fmap)(int64_t container, int64_t fn); } dict_Functor_option;
+static dict_Functor_option __dict_Functor_option = { .__fmap_option };
+```
+
+At a call site such as `.fmap opt f`, the compiler locates the relevant dictionary
+at compile time and emits a direct function-pointer call through it.  The overhead
+is one pointer dereference, comparable to a C virtual dispatch.
+
+### Controlling the C back-end optimisation level
+
+`tur build` and `tur run` shell out to a C compiler.  Two environment variables
+let you control that step:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `CC` | `cc` | C compiler executable |
+| `TUR_CC_FLAGS` | `-O2 -std=c99 -Wall` | Flags passed to every `cc` invocation |
+
+Examples:
+
+```sh
+# Ship a fast binary (aggressive optimisation, link-time optimisation)
+CC=clang TUR_CC_FLAGS="-O3 -flto -std=c99" tur build app.tur -o app
+
+# Quick iteration build (fast compile, no optimisation)
+TUR_CC_FLAGS="-O0 -std=c99" tur build app.tur -o app
+
+# Debug symbols + sanitizer
+CC=clang TUR_CC_FLAGS="-O1 -g -fsanitize=address -std=c99" tur build app.tur -o app
+```
+
+Both variables are inherited by `tur run` and by the test runner (`TUR_CC_FLAGS`
+is explicitly documented in `tests/run.sh`).
+
+### Benchmarking HKT dispatch overhead
+
+The benchmark suite in `tests/benchmarks/` measures typeclass dispatch overhead.
+The primary benchmark is `hkt-dict-pass.tur`, which exercises `Functor.fmap` over
+`option` in a tight loop:
+
+```sh
+./tests/run-bench.sh                  # run all benchmarks
+./tests/run-bench.sh hkt-dict-pass    # run only the HKT dispatch benchmark
+BENCHMINIT=10000 ./tests/run-bench.sh # increase minimum iterations
+```
+
+Results are written to `tests/benchmarks/output/`.
+
+### Planned: `-O` monomorphization flag
+
+> **Status: planned, not yet implemented.**
+
+In a future release, passing `-O` to `tur build` will trigger
+**monomorphization**: the compiler will specialise each typeclass method call
+for the concrete type known at the call site, eliminating the dictionary
+indirection entirely:
+
+```sh
+# planned syntax — not yet available
+tur build -O app.tur -o app
+```
+
+Under `-O`, a call like `.fmap opt f` where `opt` is a known `option` container
+is lowered directly to `__fmap_option(opt, f)` with no dictionary lookup.
+Dictionary passing remains the default and is safe for all cases;
+`-O` is intended as a manual hot-path annotation for tight loops where the
+profiler shows typeclass dispatch is a bottleneck.
+
 ## Known Limitations
 
 1. **Closure capture**: Closures that capture variables (`void*` type) cannot be passed to typeclass methods expecting `int64_t fn`. Use non-capturing closures or named helper functions.
