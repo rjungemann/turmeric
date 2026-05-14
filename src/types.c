@@ -68,6 +68,10 @@ int type_eq(Type a, Type b) {
     if (a.kind == TY_STRUCT) {
         return a.as.struct_.def == b.as.struct_.def;
     }
+    /* Phase G0: ADT types - identity by AdtDef pointer */
+    if (a.kind == TY_ADT) {
+        return a.as.adt_.def == b.as.adt_.def;
+    }
     /* Phase HKT-P1: Type application - compare fn and arg */
     if (a.kind == TY_APP) {
         if (!a.as.app.fn || !b.as.app.fn) return a.as.app.fn == b.as.app.fn;
@@ -140,6 +144,7 @@ const char *type_name(Type t) {
         case TY_CSTR:    return "cstr";
         case TY_PTR_VOID: return "ptr<void>";
         case TY_NEVER:   return "!";
+        case TY_TYVAR:   return "tyvar";
         case TY_FN: {
             /* Build into a buf, then strdup. */
             Buf tmp;
@@ -247,6 +252,9 @@ const char *type_name(Type t) {
         /* Phase 11: Struct types */
         case TY_STRUCT:
             return t.as.struct_.def ? t.as.struct_.def->name : "<struct>";
+        /* Phase G0: ADT types */
+        case TY_ADT:
+            return t.as.adt_.def ? t.as.adt_.def->name : "<adt>";
         /* Phase HKT-P1: Type application */
         case TY_APP: {
             Buf tmp;
@@ -310,6 +318,7 @@ static void type_name_buf(Buf *b, Type t) {
         case TY_CSTR:    buf_puts(b, "cstr"); break;
         case TY_PTR_VOID: buf_puts(b, "ptr<void>"); break;
         case TY_NEVER:   buf_puts(b, "!"); break;
+        case TY_TYVAR:   buf_puts(b, "tyvar"); break;
         case TY_FN: {
             buf_puts(b, "(fn [");
             for (uint8_t i = 0; i < t.as.fn.arity; i++) {
@@ -413,6 +422,15 @@ static void type_name_buf(Buf *b, Type t) {
             }
             break;
         }
+        /* Phase G0: ADT types */
+        case TY_ADT: {
+            if (t.as.adt_.def) {
+                buf_puts(b, t.as.adt_.def->name);
+            } else {
+                buf_puts(b, "<adt>");
+            }
+            break;
+        }
         /* Phase HKT-P1: Type application */
         case TY_APP: {
             buf_puts(b, "(type-app ");
@@ -513,6 +531,12 @@ const char *type_c_name(Type t) {
              * opaque HKT type-constructor argument; it is stored as int64_t at
              * runtime (container values are int64_t-sized opaque handles). */
             return t.as.struct_.def ? t.as.struct_.def->name : "int64_t";
+        /* Phase G0: ADT types are passed as int64_t (opaque heap pointer) */
+        case TY_ADT:
+            return "int64_t";
+        /* Phase G2: unresolved type variable — treated as int64_t at codegen level */
+        case TY_TYVAR:
+            return "int64_t";
         /* Phase HKT-P1: Type application — opaque int64_t handle in v1 */
         case TY_APP:
             return "int64_t";
@@ -674,6 +698,10 @@ static bool type_is_guarded_recursive_helper(const Type *t, const char *rec_name
         case TY_TYPECLASS_INST:
         case TY_NEVER:
         case TY_SET:
+        /* Phase G0: ADT types guard recursion like structs */
+        case TY_ADT:
+        /* Phase G2: unresolved type variable — treated as opaque/guarded */
+        case TY_TYVAR:
             return true;
     }
 
@@ -740,11 +768,14 @@ const char *typekind_to_string(TypeKind k) {
         case TY_CONT:     return "cont";
         case TY_CLONEABLE_CONT: return "cloneable_cont";
         case TY_STRUCT:   return "struct";
+        case TY_ADT:      return "adt";
         case TY_NEVER:    return "!";
         case TY_SET:      return "set";
         /* Phase HRT0 */
         case TY_FORALL:   return "forall";
         case TY_EXISTS:   return "exists";
+        /* Phase G2 */
+        case TY_TYVAR:    return "tyvar";
         default:          return "<?>";
     }
 }

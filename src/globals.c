@@ -31,3 +31,6 @@ uint32_t g_unsafe_total_lines = 0;
 
 /* Phase P3: HAMT lowering - track if HAMT is needed for this compilation */
 bool g_needs_hamt = false;
+
+/* Phase G1: -Xgadt flag — enable defgadt syntax */
+bool g_gadt_enabled = false;

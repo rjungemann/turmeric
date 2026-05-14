@@ -1,0 +1,9 @@
+(defgadt Equal [a b]
+  (Refl : (Equal a a)))
+
+(defn main [] :int
+  (match (Refl)
+    (Refl)
+      (do
+        (println (coerce (Refl) 42))
+        0)))
