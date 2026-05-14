@@ -3966,6 +3966,8 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         /* Phase G0: EX_DEFDATA — nothing to emit in value position (handled in Pass 0) */
         case EX_DEFDATA:
+        /* Phase G1: EX_DEFGADT — same as EX_DEFDATA, handled in Pass 0 */
+        case EX_DEFGADT:
             return atom_nil();
 
         /* Phase G0: EX_MATCH — emit as statement-expression ({ ... result; }) */
@@ -4079,6 +4081,7 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_POLY_WRAP:   /* Phase HRT1: pure struct literal, no stmt-level side effects */
         case EX_ASCRIBE:     /* Phase HRT1: type erased, delegate to inner */
         case EX_EXISTS_PACK: /* Phase HRT2: pure boxing, no stmt-level side effects */
+        case EX_DEFGADT:     /* Phase G1: ADT definition — handled in Pass 0 */
             /* No side effects — emit nothing. */
             return;
         case EX_EXISTS_OPEN: { /* Phase HRT2: run open body for side effects */
@@ -4237,7 +4240,7 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* shouldn't reach here at expr level */
             return;
         case EX_DEFDATA:
-            /* Phase G0: ADT definition — emitted in Pass 0, nothing to do here */
+            /* Phase G0/G1: ADT definition — emitted in Pass 0, nothing to do here */
             return;
         case EX_MATCH: {
             /* Phase G0: emit match in stmt position — discard result */
@@ -4961,9 +4964,9 @@ int emit_program(Buf *out, const Expr *program) {
                 buf_printf(&early_file, "}\n\n");
             }
         }
-        /* Phase G0: ADT typedef + constructor functions */
-        else if (e->kind == EX_DEFDATA) {
-            AdtDef *def = e->as.defdata_.def;
+        /* Phase G0/G1: ADT typedef + constructor functions */
+        else if (e->kind == EX_DEFDATA || e->kind == EX_DEFGADT) {
+            AdtDef *def = (e->kind == EX_DEFGADT) ? e->as.defgadt_.def : e->as.defdata_.def;
             char adt_c_name[256];
             snprintf(adt_c_name, sizeof(adt_c_name), "tur_adt_%s", def->name);
             buf_printf(&early_file, "typedef struct %s {\n", adt_c_name);

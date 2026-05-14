@@ -102,6 +102,10 @@ typedef struct CtorDef {
     CtorField    *fields;      /* arena-allocated array */
     struct AdtDef *adt;        /* back-pointer to parent ADT */
     uint32_t      tag;         /* integer discriminant tag (0-based) */
+    /* Phase G1: explicit return-type annotation for defgadt constructors.
+     * NULL for plain defdata constructors.  The Form type is forward-declared
+     * in forms.h which is already included above. */
+    const struct Form *result_type_form; /* raw parsed annotation, e.g. (Tag int) */
 } CtorDef;
 
 /* Phase G0: ADT (sum type) descriptor */
@@ -111,6 +115,10 @@ typedef struct AdtDef {
     CtorDef   **ctors;           /* arena-allocated pointer array */
     bool        is_copy;         /* :copy annotation */
     bool        needs_drop_glue; /* any ctor has rc/ref/weak fields */
+    /* Phase G1: GADT flag and type parameters */
+    bool        is_gadt;         /* true for defgadt, false for defdata */
+    const char **type_params;    /* arena-allocated array of type param names (interned) */
+    uint8_t     n_type_params;
 } AdtDef;
 
 /* Phase 11: Struct field descriptor.

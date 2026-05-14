@@ -29,3 +29,6 @@ extern uint32_t g_unsafe_total_lines;
 
 /* Phase P3: HAMT lowering */
 extern bool g_needs_hamt;
+
+/* Phase G1: -Xgadt flag — enable defgadt syntax */
+extern bool g_gadt_enabled;

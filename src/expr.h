@@ -164,6 +164,8 @@ typedef enum ExprKind {
     /* Phase G0: Plain ADTs */
     EX_DEFDATA,        /* (defdata Name [:copy] (Ctor1) (Ctor2 T1 T2) ...) */
     EX_MATCH,          /* (match scrutinee (Ctor1 x y) body1 _ default-body) */
+    /* Phase G1: GADTs */
+    EX_DEFGADT,        /* (defgadt Name [params] (Ctor : return-type) ...) */
 } ExprKind;
 
 /* Phase 2: FnDef represents a function definition from defn or lifted fn. */
@@ -492,6 +494,11 @@ struct Expr {
             AdtDef  *def;      /* the ADT being defined */
             Binding *binding;  /* global binding for the ADT type */
         } defdata_;
+        /* Phase G1: GADT definition — same layout as defdata_ */
+        struct {
+            AdtDef  *def;      /* the GADT being defined (is_gadt=true) */
+            Binding *binding;  /* global binding for the GADT type */
+        } defgadt_;
         /* Phase G0: match expression */
         struct {
             struct Expr *scrutinee;

@@ -1288,6 +1288,14 @@ int main(int argc, char **argv) {
             }
             argc--;
             i--;
+        } else if (strcmp(argv[i], "-Xgadt") == 0) {
+            /* Phase G1: enable defgadt syntax */
+            g_gadt_enabled = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
         }
     }
     

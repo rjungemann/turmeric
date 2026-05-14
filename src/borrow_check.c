@@ -574,8 +574,9 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
         case EX_EXISTS_OPEN:
             if (!borrow_check_expr_recursive(ctx, e->as.exists_open_.packed)) return false;
             return borrow_check_expr_recursive(ctx, e->as.exists_open_.body);
-        /* Phase G0: ADTs */
+        /* Phase G0/G1: ADTs */
         case EX_DEFDATA:
+        case EX_DEFGADT:
             return true;
         case EX_MATCH: {
             if (!borrow_check_expr_recursive(ctx, e->as.match_.scrutinee)) return false;

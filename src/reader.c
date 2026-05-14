@@ -466,10 +466,14 @@ static Form *read_keyword(Reader *r) {
     }
 
     if (!is_sym_cont(peek(r)) && !isalpha(peek(r))) {
-        Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
-        diag_emit(DIAG_ERROR, s, "expected keyword name after ':'");
-        r->error = true;
-        return NULL;
+        /* Phase G1: bare ':' (not followed by an identifier) is a type-annotation
+         * separator symbol used in defgadt constructor forms.  Emit it as F_SYM(":")
+         * instead of an error so that `(CtorName field : return-type)` parses. */
+        size_t end = r->pos;
+        Span span = span_from_to(r, start_line, start_col, start_off, end);
+        StrSlice name = strslice(r->src + start_off, (uint32_t)(end - start_off)); /* ":" */
+        const Symbol *sym = symtab_intern(r->st, name);
+        return form_sym(r->arena, span, sym);
     }
     while (is_sym_cont(peek(r))) advance(r);
     size_t end = r->pos;

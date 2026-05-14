@@ -25,6 +25,9 @@ extern uint32_t g_unsafe_total_lines;
 extern bool g_warn_unused_result;
 extern bool g_lint_panic;
 
+/* Phase G1: GADT feature flag */
+extern bool g_gadt_enabled;
+
 #define ELAB_MAX_MACRO_EXPANSION_DEPTH 256
 
 /* Helper to create a Type from TypeKind. */
@@ -768,6 +771,9 @@ typedef struct Elab {
     /* Phase G0: ADT special symbols */
     const Symbol *sym_defdata;
     const Symbol *sym_match;
+    /* Phase G1: GADT special symbols */
+    const Symbol *sym_defgadt;
+    const Symbol *sym_colon; /* bare ":" used as annotation separator in defgadt */
     /* Phase M0: Module system */
     const Symbol *sym_defmodule;  /* defmodule */
     const Symbol *sym_export;     /* export */
@@ -1225,6 +1231,9 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->cap_adt_defs = 0;
     e->sym_defdata = intern_cstr(st, "defdata");
     e->sym_match = intern_cstr(st, "match");
+    /* Phase G1: GADT */
+    e->sym_defgadt = intern_cstr(st, "defgadt");
+    e->sym_colon = intern_cstr(st, ":");
     /* Phase 12: Borrow traits */
     e->sym_borrow = intern_cstr(st, "&");
     e->sym_borrow_mut = intern_cstr(st, "&mut");
@@ -7028,6 +7037,8 @@ static Expr *elab_make_struct(Elab *e, const Form *call);
 static Expr *elab_defdata(Elab *e, const Form *call);
 static Expr *elab_match(Elab *e, const Form *call);
 static CtorDef *elab_lookup_ctor(Elab *e, const Symbol *name);
+/* Phase G1: GADTs */
+static Expr *elab_defgadt(Elab *e, const Form *call);
 /* Phase 12: Borrow traits */
 static Expr *elab_borrow_immut(Elab *e, const Form *call);
 static Expr *elab_borrow_mut(Elab *e, const Form *call);
@@ -7156,6 +7167,7 @@ static Expr *elab_call(Elab *e, Form *call) {
     /* Phase G0: ADTs */
     if (name == e->sym_defdata) return elab_defdata(e, call);
     if (name == e->sym_match) return elab_match(e, call);
+    if (name == e->sym_defgadt) return elab_defgadt(e, call);
     /* Phase 12: Borrow traits */
     if (name == e->sym_borrow) return elab_borrow_immut(e, call);
     if (name == e->sym_borrow_mut) return elab_borrow_mut(e, call);
@@ -9035,6 +9047,228 @@ static Expr *elab_defdata(Elab *e, const Form *call) {
     Expr *out = expr_new(e->arena, EX_DEFDATA, TYPE_NIL, call->span);
     out->as.defdata_.def = def;
     out->as.defdata_.binding = adt_binding;
+    return out;
+}
+
+/* Phase G1: Map a simple type form to a TypeKind for codegen.
+ * Handles primitive names (int, bool, cstr, etc.) and falls back to
+ * TY_INT (opaque int64_t) for ADT references and type variables. */
+static TypeKind gadt_field_typekind_from_form(const Form *f) {
+    if (!f) return TY_INT;
+    if (f->tag == F_SYM) {
+        const char *n = f->as.sym->name;
+        if (strcmp(n, "int")   == 0) return TY_INT;
+        if (strcmp(n, "bool")  == 0) return TY_BOOL;
+        if (strcmp(n, "float") == 0) return TY_FLOAT;
+        if (strcmp(n, "cstr")  == 0) return TY_CSTR;
+        if (strcmp(n, "ptr")   == 0) return TY_PTR_VOID;
+        if (strcmp(n, "int8")  == 0) return TY_INT8;
+        if (strcmp(n, "int16") == 0) return TY_INT16;
+        if (strcmp(n, "int32") == 0) return TY_INT32;
+        if (strcmp(n, "int64") == 0) return TY_INT64;
+        if (strcmp(n, "uint8") == 0) return TY_UINT8;
+        if (strcmp(n, "uint16")== 0) return TY_UINT16;
+        if (strcmp(n, "uint32")== 0) return TY_UINT32;
+        if (strcmp(n, "uint64")== 0) return TY_UINT64;
+        if (strcmp(n, "float32")== 0) return TY_FLOAT32;
+        if (strcmp(n, "float64")== 0) return TY_FLOAT64;
+        /* Type variable or unknown type — opaque int64_t */
+        return TY_INT;
+    }
+    /* List form like (Expr int) — ADT reference, opaque int64_t */
+    return TY_INT;
+}
+
+/* Phase G1: defgadt — define a GADT (Generalized Algebraic Data Type).
+ * Syntax: (defgadt Name [type-params...]
+ *           (Ctor1 : return-type)
+ *           (Ctor2 FieldType1 FieldType2 : return-type)
+ *           ...)
+ *
+ * The ':' separator is a bare F_SYM(":") token.
+ * Field types are forms appearing between the constructor name and ':'.
+ * The return-type annotation is stored on the CtorDef for future G2 use.
+ * Codegen is identical to defdata (tagged union).
+ */
+static Expr *elab_defgadt(Elab *e, const Form *call) {
+    if (!g_gadt_enabled) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "defgadt requires the -Xgadt flag to enable GADT support\n"
+                  "  hint: recompile with -Xgadt");
+        return NULL;
+    }
+    if (call->as.list.len < 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "defgadt requires a name, type-params, and constructors: "
+                  "(defgadt Name [params] (Ctor : return-type) ...)");
+        return NULL;
+    }
+
+    /* Parse name */
+    Form *name_form = call->as.list.items[1];
+    if (name_form->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, name_form->span, "defgadt name must be a symbol");
+        return NULL;
+    }
+    const Symbol *name = name_form->as.sym;
+
+    /* Parse type parameters — must be a vector [a b c] */
+    uint32_t ctors_start_idx = 2;
+    uint8_t n_type_params = 0;
+    const char **type_params = NULL;
+    if (call->as.list.len >= 3 && call->as.list.items[2]->tag == F_VEC) {
+        Form *params_form = call->as.list.items[2];
+        n_type_params = (uint8_t)params_form->as.list.len;
+        if (n_type_params > 0) {
+            type_params = (const char **)arena_alloc(e->arena,
+                                                      n_type_params * sizeof(const char *));
+            for (uint8_t i = 0; i < n_type_params; i++) {
+                Form *pf = params_form->as.list.items[i];
+                if (pf->tag != F_SYM) {
+                    diag_emit(DIAG_ERROR, pf->span,
+                              "defgadt: type parameter must be a symbol");
+                    return NULL;
+                }
+                type_params[i] = pf->as.sym->name;
+            }
+        }
+        ctors_start_idx = 3;
+    }
+
+    if (call->as.list.len <= ctors_start_idx) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "defgadt: '%s' must have at least one constructor", name->name);
+        return NULL;
+    }
+
+    if (scope_lookup(e->scope, name)) {
+        diag_emit(DIAG_ERROR, name_form->span,
+                  "defgadt: '%s' is already defined", name->name);
+        return NULL;
+    }
+
+    uint32_t n_ctors = call->as.list.len - ctors_start_idx;
+    AdtDef *def = (AdtDef *)arena_alloc(e->arena, sizeof(AdtDef));
+    def->name = name->name;
+    def->n_ctors = n_ctors;
+    def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
+    def->is_copy = false;
+    def->needs_drop_glue = false;
+    def->is_gadt = true;
+    def->type_params = type_params;
+    def->n_type_params = n_type_params;
+
+    /* Pre-register ADT type so constructors can reference it */
+    Type adt_type = type_adt(def);
+    Binding *adt_binding = binding_new(e, name, adt_type, false, true, name_form->span);
+    scope_add(&e->global, adt_binding);
+
+    /* Parse each constructor */
+    for (uint32_t ci = 0; ci < n_ctors; ci++) {
+        Form *ctor_form = call->as.list.items[ctors_start_idx + ci];
+        if (ctor_form->tag != F_LIST || ctor_form->as.list.len < 1) {
+            diag_emit(DIAG_ERROR, ctor_form->span,
+                      "defgadt: constructor must be a list form");
+            return NULL;
+        }
+        Form *ctor_name_form = ctor_form->as.list.items[0];
+        if (ctor_name_form->tag != F_SYM) {
+            diag_emit(DIAG_ERROR, ctor_name_form->span,
+                      "defgadt: constructor name must be a symbol");
+            return NULL;
+        }
+        const Symbol *ctor_name = ctor_name_form->as.sym;
+
+        /* Find the ':' separator in the constructor form.
+         * Format: (CtorName FieldType1 ... FieldTypeN : return-type-form)
+         * The ':' is a bare F_SYM(":") token. */
+        int colon_idx = -1;
+        for (uint32_t fi = 1; fi < ctor_form->as.list.len; fi++) {
+            Form *item = ctor_form->as.list.items[fi];
+            if (item->tag == F_SYM && item->as.sym == e->sym_colon) {
+                colon_idx = (int)fi;
+                break;
+            }
+        }
+        if (colon_idx < 0) {
+            diag_emit(DIAG_ERROR, ctor_form->span,
+                      "defgadt: constructor '%s' requires an explicit return-type annotation\n"
+                      "  hint: add ': (return-type)' after the constructor name",
+                      ctor_name->name);
+            return NULL;
+        }
+        /* Return-type form must immediately follow ':' */
+        if ((uint32_t)colon_idx + 1 >= ctor_form->as.list.len) {
+            diag_emit(DIAG_ERROR, ctor_form->span,
+                      "defgadt: constructor '%s': missing return type after ':'",
+                      ctor_name->name);
+            return NULL;
+        }
+        Form *return_type_form = ctor_form->as.list.items[colon_idx + 1];
+        /* Validate: return type must mention the GADT name */
+        bool mentions_gadt = false;
+        if (return_type_form->tag == F_LIST && return_type_form->as.list.len >= 1) {
+            Form *head = return_type_form->as.list.items[0];
+            if (head->tag == F_SYM && strcmp(head->as.sym->name, name->name) == 0) {
+                mentions_gadt = true;
+            }
+        } else if (return_type_form->tag == F_SYM &&
+                   strcmp(return_type_form->as.sym->name, name->name) == 0) {
+            mentions_gadt = true;
+        }
+        if (!mentions_gadt) {
+            diag_emit(DIAG_ERROR, return_type_form->span,
+                      "defgadt: constructor '%s' return type must be an application of '%s'",
+                      ctor_name->name, name->name);
+            return NULL;
+        }
+
+        /* Field types: items[1 .. colon_idx-1] */
+        uint32_t n_fields = (uint32_t)(colon_idx - 1);
+        CtorDef *ctor = (CtorDef *)arena_alloc(e->arena, sizeof(CtorDef));
+        ctor->name = ctor_name->name;
+        ctor->n_fields = n_fields;
+        ctor->fields = n_fields > 0
+            ? (CtorField *)arena_alloc(e->arena, n_fields * sizeof(CtorField))
+            : NULL;
+        ctor->adt = def;
+        ctor->tag = ci;
+        ctor->result_type_form = return_type_form;
+
+        for (uint32_t fi = 0; fi < n_fields; fi++) {
+            Form *ft_form = ctor_form->as.list.items[1 + fi];
+            TypeKind fkind = gadt_field_typekind_from_form(ft_form);
+            ctor->fields[fi].kind = fkind;
+            ctor->fields[fi].inner_kind = TY_UNKNOWN;
+            if (fkind == TY_RC || fkind == TY_REF || fkind == TY_WEAK) {
+                def->needs_drop_glue = true;
+            }
+        }
+        def->ctors[ci] = ctor;
+
+        /* Register constructor binding */
+        if (n_fields == 0) {
+            Binding *cb = binding_new(e, ctor_name, adt_type, false, true,
+                                      ctor_name_form->span);
+            scope_add(&e->global, cb);
+        } else {
+            TypeKind arg_kinds[MAX_FN_ARITY];
+            uint8_t arity = (uint8_t)(n_fields > MAX_FN_ARITY ? MAX_FN_ARITY : n_fields);
+            for (uint8_t fi = 0; fi < arity; fi++) {
+                arg_kinds[fi] = ctor->fields[fi].kind;
+            }
+            Type fn_type = type_fn(arg_kinds, arity, TY_ADT);
+            Binding *cb = binding_new(e, ctor_name, fn_type, false, true,
+                                      ctor_name_form->span);
+            scope_add(&e->global, cb);
+        }
+    }
+
+    elab_register_adt_def(e, def);
+
+    Expr *out = expr_new(e->arena, EX_DEFGADT, TYPE_NIL, call->span);
+    out->as.defgadt_.def = def;
+    out->as.defgadt_.binding = adt_binding;
     return out;
 }
 

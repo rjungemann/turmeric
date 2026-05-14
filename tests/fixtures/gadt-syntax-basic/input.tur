@@ -1,0 +1,7 @@
+(defgadt Expr [a]
+  (Lit : (Expr int))
+  (Add : (Expr int)))
+
+(defn main [] :int
+  (println "ok")
+  0)
