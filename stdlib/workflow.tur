@@ -1,0 +1,64 @@
+;; stdlib/workflow.tur -- Phase 21: Serializable continuations -- workflow helpers
+;;
+;; Higher-level API for persistent workflows built on top of serial-reset /
+;; serial-shift.  Inspired by Racket's web-server continuation style.
+;;
+;; NOTE: Full end-to-end serialisation requires serial-shift codegen
+;; (Phase 21 compiler work) to be complete.  These helpers provide the
+;; surface-level API that programs should target.
+
+;; ---------------------------------------------------------------------------
+;; Low-level: bytes <-> file helpers (see also stdlib/serial.tur)
+;; ---------------------------------------------------------------------------
+
+;; save-cont! -- serialise a serial-continuation to a bytes value and save it.
+;; The continuation value is opaque; programs pass it here after capturing it
+;; with serial-shift.
+;;
+;; (save-cont! k)  -->  bytes
+;;   k : ptr<void>   (opaque serial-continuation handle)
+;;   returns the serialised bytes (or nil on failure)
+(defn save-cont! [k :ptr<void>] :ptr<void>
+  ```c
+  /* Phase 21: placeholder -- serial-shift codegen not yet implemented.
+   * A real implementation would call serial_cont_to_bytes() here. */
+  (void)k;
+  return NULL;
+  ```)
+
+;; resume-cont! -- deserialise a bytes value back to a continuation and resume it.
+;;
+;; (resume-cont! b v)  -->  int
+;;   b : ptr<void>  (serialised bytes from save-cont!)
+;;   v : int        (value to resume the continuation with)
+(defn resume-cont! [b :ptr<void> v :int] :int
+  ```c
+  /* Phase 21: placeholder -- serial-shift codegen not yet implemented. */
+  (void)b;
+  (void)v;
+  return 0;
+  ```)
+
+;; ---------------------------------------------------------------------------
+;; Workflow step helpers
+;;
+;; A "workflow step" is a point in a computation that may be suspended,
+;; persisted, and resumed later -- e.g. waiting for human approval.
+;; ---------------------------------------------------------------------------
+
+;; workflow-suspend -- suspend the current workflow step, persisting k to bytes.
+;; Returns the serialised bytes.  The caller is responsible for storing them
+;; (e.g. writing to a database or file).
+;;
+;; Usage inside a serial-reset:
+;;   (serial-reset
+;;     (let [approved? (serial-shift (fn [k] (workflow-suspend k)) false)]
+;;       ...))
+(defn workflow-suspend [k :ptr<void>] :ptr<void>
+  (save-cont! k))
+
+;; workflow-resume -- resume a previously suspended workflow step.
+;; b    : bytes value from workflow-suspend
+;; v    : value to pass to the resumed continuation
+(defn workflow-resume [b :ptr<void> v :int] :int
+  (resume-cont! b v))

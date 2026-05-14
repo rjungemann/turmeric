@@ -37,6 +37,9 @@ typedef enum DiagCode {
     TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET,      /* cloneable-shift used outside cloneable-reset */
     /* Phase T25: Continuation escape into async scope */
     TUR_E0017_CONT_ESCAPE_ASYNC,                  /* effect handler continuation captured by async block */
+    /* Phase 21: Serializable continuations */
+    TUR_E0018_NOT_SERIALIZABLE,                   /* captured binding does not implement Serializable */
+    TUR_E0019_SERIAL_SHIFT_OUTSIDE_RESET,         /* serial-shift used outside serial-reset boundary */
 } DiagCode;
 
 typedef enum DiagLevel {

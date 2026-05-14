@@ -556,8 +556,14 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
             if (!borrow_check_expr_recursive(ctx, e->as.tvar_cas_.old_val)) return false;
             if (!borrow_check_expr_recursive(ctx, e->as.tvar_cas_.new_val)) return false;
             return true;
+        /* Phase 21: Serializable continuations — borrow rules same as reset/shift */
+        case EX_SERIAL_RESET:
+            return borrow_check_expr_recursive(ctx, e->as.serial_reset_.body);
+        case EX_SERIAL_SHIFT:
+            if (!borrow_check_expr_recursive(ctx, e->as.serial_shift_.k_fn)) return false;
+            return borrow_check_expr_recursive(ctx, e->as.serial_shift_.body);
     }
-    
+
     return true;
 }
 

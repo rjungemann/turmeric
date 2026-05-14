@@ -2217,6 +2217,26 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             if (drop_fn_str)  free(drop_fn_str);
             return k_result;
         }
+        /* Phase 21: Serializable continuations
+         * For now, serial-reset / serial-shift lower to their plain counterparts.
+         * Full codegen (frame registration, wire-format codec calls) is a later
+         * compiler pass.  These stubs keep the switch exhaustive and emit an
+         * obvious runtime failure when the node is actually reached. */
+        case EX_SERIAL_RESET: {
+            /* serial-reset lowers to reset semantics: just evaluate body. */
+            return emit_value(ctx, body, e->as.serial_reset_.body);
+        }
+        case EX_SERIAL_SHIFT: {
+            /* serial-shift: emit k_fn call with a NULL continuation placeholder.
+             * This will be replaced by proper frame-serialization codegen once
+             * the CPS pass handles EX_SERIAL_SHIFT nodes. */
+            char *tmp = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "/* serial-shift: full codegen not yet implemented */\n");
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "int64_t %s = 0; /* serial-shift placeholder */\n", tmp);
+            return tmp;
+        }
         /* Phase 2 */
         case EX_FN_DEF:
             /* fn should only appear at top level for phase 2 */
@@ -3952,6 +3972,12 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_CLONEABLE_RESET:
         case EX_CLONEABLE_SHIFT:
             /* For now, emit a placeholder - full impl deferred */
+            buf_puts(body, "__builtin_trap();");
+            return;
+        /* Phase 21: Serializable continuations — lower to plain reset/shift for now;
+         * frame registration stubs are emitted separately by the CPS pass. */
+        case EX_SERIAL_RESET:
+        case EX_SERIAL_SHIFT:
             buf_puts(body, "__builtin_trap();");
             return;
         case EX_INSTANCE_DEF: {
