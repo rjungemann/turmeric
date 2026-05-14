@@ -5856,22 +5856,42 @@ static Expr *elab_defn(Elab *e, const Form *call) {
 
         /* Phase G3: Handle equality constraint (: a T) in params.
          * Syntax: (: a int) means "type variable a equals int".
-         * This is a type-level constraint; no runtime parameter is created. */
-        if (p->tag == F_LIST && p->as.list.len == 3 &&
-            p->as.list.items[0]->tag == F_SYM &&
-            p->as.list.items[0]->as.sym == e->sym_colon) {
-            Form *var_form  = p->as.list.items[1];
-            Form *type_form = p->as.list.items[2];
-            if (var_form->tag == F_SYM && type_form->tag == F_SYM) {
-                TypeKind ck = typekind_from_symbol(type_form->as.sym->name);
+         * This is a type-level constraint; no runtime parameter is created.
+         *
+         * Two reader representations:
+         *  Legacy:  F_LIST([sym(":"), sym("a"), sym("int")])  — 3-item list
+         *  New:     F_LIST([F_TYPE_ANN(sym("a")), sym("int")])  — 2-item list
+         *           (reader folds `: a` into a single F_TYPE_ANN node)
+         */
+        {
+            Form *var_form = NULL;
+            Form *type_form = NULL;
+            if (p->tag == F_LIST && p->as.list.len == 3 &&
+                p->as.list.items[0]->tag == F_SYM &&
+                p->as.list.items[0]->as.sym == e->sym_colon) {
+                var_form  = p->as.list.items[1];
+                type_form = p->as.list.items[2];
+            } else if (p->tag == F_LIST && p->as.list.len == 2 &&
+                       p->as.list.items[0]->tag == F_TYPE_ANN &&
+                       p->as.list.items[0]->as.list.len == 1) {
+                var_form  = p->as.list.items[0]->as.list.items[0];
+                type_form = p->as.list.items[1];
+            }
+            if (var_form && type_form &&
+                var_form->tag == F_SYM &&
+                (type_form->tag == F_SYM || type_form->tag == F_KEYWORD)) {
+                const char *tn = (type_form->tag == F_KEYWORD)
+                    ? type_form->as.sym->name
+                    : type_form->as.sym->name;
+                TypeKind ck = typekind_from_symbol(tn);
                 if (ck != TY_UNKNOWN && param_constraint_env.n < MAX_SKOLEM_BINDINGS) {
                     param_constraint_env.bindings[param_constraint_env.n].name =
                         var_form->as.sym->name;
                     param_constraint_env.bindings[param_constraint_env.n].kind = ck;
                     param_constraint_env.n++;
                 }
+                continue;
             }
-            continue;
         }
 
         /* Phase 15: Handle constraint annotations (^Eq, ^Show, etc.) */
@@ -9388,12 +9408,21 @@ static Expr *elab_defgadt(Elab *e, const Form *call) {
 
         /* Find the ':' separator in the constructor form.
          * Format: (CtorName FieldType1 ... FieldTypeN : return-type-form)
-         * The ':' is a bare F_SYM(":") token. */
+         * The ':' may be a bare F_SYM(":") token (legacy) or an F_TYPE_ANN node
+         * produced by the new `: type-expr` reader (Phase G3 compat). */
         int colon_idx = -1;
+        bool type_ann_colon = false; /* true when the ':' was absorbed into F_TYPE_ANN */
         for (uint32_t fi = 1; fi < ctor_form->as.list.len; fi++) {
             Form *item = ctor_form->as.list.items[fi];
             if (item->tag == F_SYM && item->as.sym == e->sym_colon) {
                 colon_idx = (int)fi;
+                break;
+            }
+            if (item->tag == F_TYPE_ANN) {
+                /* `: return-type` was folded into a single F_TYPE_ANN node.
+                 * Treat this index as the separator; the return type is inside. */
+                colon_idx = (int)fi;
+                type_ann_colon = true;
                 break;
             }
         }
@@ -9404,14 +9433,27 @@ static Expr *elab_defgadt(Elab *e, const Form *call) {
                       ctor_name->name);
             return NULL;
         }
-        /* Return-type form must immediately follow ':' */
-        if ((uint32_t)colon_idx + 1 >= ctor_form->as.list.len) {
-            diag_emit(DIAG_ERROR, ctor_form->span,
-                      "defgadt: constructor '%s': missing return type after ':'",
-                      ctor_name->name);
-            return NULL;
+        /* For the F_TYPE_ANN case the return-type form is the inner form;
+         * for the bare-':' case it is the item immediately after. */
+        Form *return_type_form;
+        if (type_ann_colon) {
+            Form *ann = ctor_form->as.list.items[colon_idx];
+            if (ann->as.list.len < 1) {
+                diag_emit(DIAG_ERROR, ann->span,
+                          "defgadt: constructor '%s': missing return type after ':'",
+                          ctor_name->name);
+                return NULL;
+            }
+            return_type_form = ann->as.list.items[0];
+        } else {
+            if ((uint32_t)colon_idx + 1 >= ctor_form->as.list.len) {
+                diag_emit(DIAG_ERROR, ctor_form->span,
+                          "defgadt: constructor '%s': missing return type after ':'",
+                          ctor_name->name);
+                return NULL;
+            }
+            return_type_form = ctor_form->as.list.items[colon_idx + 1];
         }
-        Form *return_type_form = ctor_form->as.list.items[colon_idx + 1];
         /* Validate: return type must mention the GADT name */
         bool mentions_gadt = false;
         if (return_type_form->tag == F_LIST && return_type_form->as.list.len >= 1) {
