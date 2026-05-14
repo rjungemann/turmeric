@@ -427,10 +427,10 @@
 
 ;; ---- Automatic cancellation propagation (Phase TG-004-1) ----
 ;; 
-;; When a child task panics or throws an exception, the parent task group
-;; is automatically cancelled with reason=1 (panic). This is implemented in
-;; the runtime's tur_fiber_shim function which wraps fiber execution with
-;; a setjmp/longjmp handler that catches panics and cancels the group.
+;; When a child task panics, the parent task group is automatically cancelled
+;; with reason=1 (panic). This is implemented in the runtime's tur_fiber_shim
+;; function which wraps fiber execution with a setjmp/longjmp handler that
+;; catches panics and cancels the group.
 ;;
 ;; No additional API needed - automatic cancellation propagation is built
 ;; into fibers that have a task_group set.

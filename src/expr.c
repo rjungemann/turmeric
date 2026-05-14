@@ -242,12 +242,6 @@ void expr_print(Buf *b, const Expr *e) {
             buf_puts(b, e->as.instance_def_.instance->typeclass->name->name);
             buf_putc(b, ')');
             break;
-        /* Phase 17: Exceptions */
-        case EX_THROW:
-            buf_puts(b, "(throw ");
-            expr_print(b, e->as.throw_.payload);
-            buf_putc(b, ')');
-            break;
         /* Phase R2: Panic */
         case EX_PANIC:
             buf_puts(b, "(panic ");
@@ -294,23 +288,6 @@ void expr_print(Buf *b, const Expr *e) {
             buf_puts(b, "(panic-payload-downcast ");
             expr_print(b, e->as.panic_payload_downs_.payload);
             buf_printf(b, " %s)", typekind_to_string(e->as.panic_payload_downs_.target_type));
-            break;
-        case EX_TRY:
-            buf_puts(b, "(try ");
-            expr_print(b, e->as.try_.body);
-            for (uint8_t i = 0; i < e->as.try_.n_clauses; i++) {
-                buf_puts(b, " (catch [");
-                buf_puts(b, e->as.try_.clauses[i].var_name->name);
-                buf_puts(b, "] ");
-                expr_print(b, e->as.try_.clauses[i].handler);
-                buf_putc(b, ')');
-            }
-            if (e->as.try_.finally_body) {
-                buf_puts(b, " (finally ");
-                expr_print(b, e->as.try_.finally_body);
-                buf_putc(b, ')');
-            }
-            buf_putc(b, ')');
             break;
         /* Phase 18: Delimited continuations */
         case EX_RESET:

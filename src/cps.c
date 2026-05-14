@@ -73,8 +73,6 @@ bool cps_expr_contains_shift(const Expr *e) {
             return cps_expr_contains_shift(e->as.defer_.body);
         case EX_RETURN:
             return e->as.return_.value && cps_expr_contains_shift(e->as.return_.value);
-        case EX_THROW:
-            return cps_expr_contains_shift(e->as.throw_.payload);
         case EX_PANIC:
             return cps_expr_contains_shift(e->as.panic_.payload);
         case EX_PANIC_WITH:
@@ -90,12 +88,6 @@ bool cps_expr_contains_shift(const Expr *e) {
             return cps_expr_contains_shift(e->as.panic_payload_type_.payload);
         case EX_PANIC_PAYLOAD_DOWNS:
             return cps_expr_contains_shift(e->as.panic_payload_downs_.payload);
-        case EX_TRY:
-            if (cps_expr_contains_shift(e->as.try_.body)) return true;
-            for (uint8_t i = 0; i < e->as.try_.n_clauses; i++) {
-                if (cps_expr_contains_shift(e->as.try_.clauses[i].handler)) return true;
-            }
-            return e->as.try_.finally_body && cps_expr_contains_shift(e->as.try_.finally_body);
         /* Phase 19: Algebraic effects - these lower to shift/reset */
         case EX_DEFECT:
             return false; /* Effect definitions don't contain shift */
@@ -256,17 +248,8 @@ static void collect_local_vars_expr(const Expr *e,
         case EX_RETURN:
             collect_local_vars_expr(e->as.return_.value, out, n, cap);
             return;
-        case EX_THROW:
-            collect_local_vars_expr(e->as.throw_.payload, out, n, cap);
-            return;
         case EX_PANIC:
             collect_local_vars_expr(e->as.panic_.payload, out, n, cap);
-            return;
-        case EX_TRY:
-            collect_local_vars_expr(e->as.try_.body, out, n, cap);
-            for (uint8_t i = 0; i < e->as.try_.n_clauses; i++)
-                collect_local_vars_expr(e->as.try_.clauses[i].handler, out, n, cap);
-            collect_local_vars_expr(e->as.try_.finally_body, out, n, cap);
             return;
         case EX_DEFER:
             collect_local_vars_expr(e->as.defer_.body, out, n, cap);
@@ -362,17 +345,8 @@ static void patch_cloneable_shifts(Arena *a, Expr *e,
         case EX_RETURN:
             patch_cloneable_shifts(a, e->as.return_.value, locals, n_locals);
             return;
-        case EX_THROW:
-            patch_cloneable_shifts(a, e->as.throw_.payload, locals, n_locals);
-            return;
         case EX_DEFER:
             patch_cloneable_shifts(a, e->as.defer_.body, locals, n_locals);
-            return;
-        case EX_TRY:
-            patch_cloneable_shifts(a, e->as.try_.body, locals, n_locals);
-            for (uint8_t i = 0; i < e->as.try_.n_clauses; i++)
-                patch_cloneable_shifts(a, e->as.try_.clauses[i].handler, locals, n_locals);
-            patch_cloneable_shifts(a, e->as.try_.finally_body, locals, n_locals);
             return;
         case EX_CALL:
             patch_cloneable_shifts(a, e->as.call_.fn_expr, locals, n_locals);
@@ -571,35 +545,10 @@ static Expr *cps_mark_expr(Arena *a, Expr *e) {
             return out;
         }
         
-        case EX_THROW: {
-            Expr *new_payload = cps_mark_expr(a, e->as.throw_.payload);
-            Expr *out = expr_new(a, EX_THROW, e->type, e->span);
-            out->as.throw_.payload = new_payload;
-            return out;
-        }
-
         case EX_PANIC: {
             Expr *new_payload = cps_mark_expr(a, e->as.panic_.payload);
             Expr *out = expr_new(a, EX_PANIC, e->type, e->span);
             out->as.panic_.payload = new_payload;
-            return out;
-        }
-        
-        case EX_TRY: {
-            Expr *new_body = cps_mark_expr(a, e->as.try_.body);
-            TryCatchClause *new_clauses = arena_alloc(a, e->as.try_.n_clauses * sizeof(TryCatchClause));
-            for (uint8_t i = 0; i < e->as.try_.n_clauses; i++) {
-                new_clauses[i] = e->as.try_.clauses[i];
-                new_clauses[i].handler = cps_mark_expr(a, e->as.try_.clauses[i].handler);
-            }
-            Expr *new_finally = e->as.try_.finally_body ? 
-                cps_mark_expr(a, e->as.try_.finally_body) : NULL;
-            
-            Expr *out = expr_new(a, EX_TRY, e->type, e->span);
-            out->as.try_.body = new_body;
-            out->as.try_.clauses = new_clauses;
-            out->as.try_.n_clauses = e->as.try_.n_clauses;
-            out->as.try_.finally_body = new_finally;
             return out;
         }
         

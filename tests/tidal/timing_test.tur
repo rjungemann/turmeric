@@ -106,10 +106,8 @@
 
 (defn test-clock-zero-bpm []
   ;; Zero BPM should be handled gracefully
-  (try
-    (let [clock (make-beat-clock 0.0 44100.0)]
-      false)
-    (catch _ true)))
+  ;; TODO: update to use (catch-unwind ...) to test that make-beat-clock 0.0 panics
+  false)
 
 (defn test-audio-pattern-negative-sample []
   (let [p (audio-pattern (const 0.5) (make-beat-clock 120.0 44100.0))]
@@ -142,13 +140,10 @@
   ]]
     (doseq [[name test-fn] tests]
       (print (str "Testing: " name " ... "))
-      (try
-        (let [result (test-fn)]
-          (if result
-            (println " PASS")
-            (println " FAIL")))
-        (catch e
-          (println (str " ERROR: " (error->string e))))))
+      (let [result (test-fn)]
+        (if result
+          (println " PASS")
+          (println " FAIL"))))
     (println "\nTiming tests complete.")))
 
 ;; Run tests if executed directly

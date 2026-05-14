@@ -158,10 +158,8 @@
 
 (defn test-slow-zero []
   ;; Slow by 0 might cause division by zero
-  (try
-    (let [p (slow 0 (cycle 1 2))]
-      false)
-    (catch _ true)))
+  ;; TODO: update to use (catch-unwind ...) to test that slow 0 panics
+  false)
 
 (defn test-slow-negative []
   ;; Slow by negative factor
@@ -205,13 +203,10 @@
   ]]
     (doseq [[name test-fn] tests]
       (print (str "Testing: " name " ... "))
-      (try
-        (let [result (test-fn)]
-          (if result
-            (println " PASS")
-            (println " FAIL")))
-        (catch e
-          (println (str " ERROR: " (error->string e))))))
+      (let [result (test-fn)]
+        (if result
+          (println " PASS")
+          (println " FAIL"))))
     (println "\nTemporal combinators tests complete.")))
 
 ;; Run tests if executed directly

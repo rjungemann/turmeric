@@ -493,12 +493,6 @@ typedef struct Elab {
     const Symbol *sym_upgrade;     /* upgrade */
     const Symbol *sym_weak_pred;   /* weak? */
     const Symbol *sym_ref_pred;    /* ref? */
-    /* Phase 17: Exceptions */
-    const Symbol *sym_throw;      /* throw */
-    const Symbol *sym_throw_bang; /* throw! (sugar for throw) */
-    const Symbol *sym_try;        /* try */
-    const Symbol *sym_catch;      /* catch */
-    const Symbol *sym_finally;    /* finally */
     /* Phase 18: Delimited continuations */
     const Symbol *sym_reset;      /* reset */
     const Symbol *sym_shift;      /* shift */
@@ -922,22 +916,8 @@ static bool is_rc_binding_consumed(const Expr *body, Binding *binding) {
                 stack[sp++] = cur->as.while_.body;
                 stack[sp++] = cur->as.while_.cond;
                 break;
-            case EX_THROW:
-                stack[sp++] = cur->as.throw_.payload;
-                break;
             case EX_PANIC:
                 stack[sp++] = cur->as.panic_.payload;
-                break;
-            case EX_TRY:
-                stack[sp++] = cur->as.try_.body;
-                for (uint8_t i = 0; i < cur->as.try_.n_clauses; i++) {
-                    if (cur->as.try_.clauses[i].handler) {
-                        stack[sp++] = cur->as.try_.clauses[i].handler;
-                    }
-                }
-                if (cur->as.try_.finally_body) {
-                    stack[sp++] = cur->as.try_.finally_body;
-                }
                 break;
             case EX_SET:
                 stack[sp++] = cur->as.set_.value;
@@ -1032,12 +1012,6 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_upgrade = intern_cstr(st, "upgrade");
     e->sym_weak_pred = intern_cstr(st, "weak?");
     e->sym_ref_pred  = intern_cstr(st, "ref?");
-    /* Phase 17: Exceptions */
-    e->sym_throw = intern_cstr(st, "throw");
-    e->sym_throw_bang = intern_cstr(st, "throw!");
-    e->sym_try = intern_cstr(st, "try");
-    e->sym_catch = intern_cstr(st, "catch");
-    e->sym_finally = intern_cstr(st, "finally");
     /* Phase 18: Delimited continuations */
     e->sym_reset = intern_cstr(st, "reset");
     e->sym_shift = intern_cstr(st, "shift");
@@ -3600,12 +3574,10 @@ static Expr *elab_if(Elab *e, const Form *call) {
          * differ. */
         bool then_div = (then_->type.kind == TY_NEVER) ||
                         (then_->kind == EX_RETURN) ||
-                        (then_->kind == EX_THROW)  ||
                         (then_->kind == EX_PANIC)  ||
                         (then_->kind == EX_PANIC_WITH);
         bool else_div = (else_->type.kind == TY_NEVER) ||
                         (else_->kind == EX_RETURN) ||
-                        (else_->kind == EX_THROW)  ||
                         (else_->kind == EX_PANIC)  ||
                         (else_->kind == EX_PANIC_WITH);
         if (then_div && else_div) {
@@ -4468,261 +4440,6 @@ static Expr *elab_gc_disable(Elab *e, const Form *call) {
     Expr *out = expr_new(e->arena, EX_INLINE_C, TYPE_NIL, call->span);
     out->as.inline_c_.inline_c = ic;
     return out;
-}
-
-/* Phase 17: Exceptions */
-
-/* (throw expr) - Raise an exception with expr as the payload.
- * Returns: never (always throws)
- * 
- * Elaborates to an EX_THROW expression that contains the expression to evaluate.
- * At codegen time, this lowers to a call to tur_throw().
- */
-static Expr *elab_throw(Elab *e, const Form *call) {
-    if (call->as.list.len != 2) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "(throw expr) requires exactly one argument");
-        return NULL;
-    }
-    
-    /* Elaborate the expression to throw */
-    Expr *payload = elab_form(e, call->as.list.items[1]);
-    if (!payload) return NULL;
-    
-    /* Create EX_THROW expression */
-    Expr *out = expr_new(e->arena, EX_THROW, TYPE_NIL, call->span);
-    out->as.throw_.payload = payload;
-    return out;
-}
-
-/* (try body (catch [e] handler) ...) - Try-catch expression.
- * Supports multiple catch clauses and optional finally.
- * 
- * Syntax:
- *   (try body)
- *   (try body (catch [e] handler))
- *   (try body (finally cleanup))
- *   (try body (catch [e] handler) (finally cleanup))
- * 
- * Returns: the result of body, or the result of the matching catch handler.
- * 
- * Elaborates to EX_TRY expression that contains:
- *   - body: the try body
- *   - catch_clauses: array of catch patterns and handlers
- *   - finally_body: optional cleanup body
- */
-static Expr *elab_try(Elab *e, const Form *call) {
-    if (call->as.list.len < 2) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "(try body ...) requires at least a body");
-        return NULL;
-    }
-    
-    /* Parse body (can be single expression or do-form) */
-    Expr *body = elab_form(e, call->as.list.items[1]);
-    if (!body) return NULL;
-    Type result_type = body->type;
-    
-    /* Parse remaining clauses (catch and finally) */
-    /* Phase 17: Use fixed-size array for catch clauses (max 8) for simplicity */
-    #define MAX_CATCH_CLAUSES 8
-    TryCatchClause clauses[MAX_CATCH_CLAUSES];
-    uint8_t n_clauses = 0;
-    Expr *finally_body = NULL;
-    
-    for (uint32_t i = 2; i < call->as.list.len; i++) {
-        Form *clause_form = call->as.list.items[i];
-        
-        if (clause_form->tag != F_LIST) {
-            diag_emit(DIAG_ERROR, clause_form->span,
-                      "try clause must be a list like (catch ...) or (finally ...)");
-            return NULL;
-        }
-        
-        if (clause_form->as.list.len == 0) {
-            diag_emit(DIAG_ERROR, clause_form->span,
-                      "try clause cannot be empty");
-            return NULL;
-        }
-        
-        Form *clause_name = clause_form->as.list.items[0];
-        if (clause_name->tag != F_SYM) {
-            diag_emit(DIAG_ERROR, clause_name->span,
-                      "try clause must start with a symbol (catch or finally)");
-            return NULL;
-        }
-        
-        if (clause_name->as.sym == e->sym_catch) {
-            /* Parse catch clause: (catch [e] handler) or (catch [e : type] handler) */
-            if (clause_form->as.list.len < 2) {
-                diag_emit(DIAG_ERROR, clause_form->span,
-                          "(catch ...) requires a binding and handler");
-                return NULL;
-            }
-            
-            /* Parse binding - can be [e] or [e : type] */
-            Form *binding_form = clause_form->as.list.items[1];
-            if (binding_form->tag != F_VEC) {
-                diag_emit(DIAG_ERROR, binding_form->span,
-                          "catch binding must be a vector like [e] or [e : type]");
-                return NULL;
-            }
-            
-            if (binding_form->as.list.len != 1 && binding_form->as.list.len != 2) {
-                diag_emit(DIAG_ERROR, binding_form->span,
-                          "catch binding must have 1 or 2 elements (name and optional type)");
-                return NULL;
-            }
-            
-            Form *var_name = binding_form->as.list.items[0];
-            if (var_name->tag != F_SYM) {
-                diag_emit(DIAG_ERROR, var_name->span,
-                          "catch variable must be a symbol");
-                return NULL;
-            }
-            
-            /* Parse optional type annotation */
-            TypeKind catch_type = TY_NIL;  /* No annotation = catch-all (TY_NIL) */
-            if (binding_form->as.list.len == 2) {
-                Form *type_form = binding_form->as.list.items[1];
-                if (type_form->tag != F_KEYWORD) {
-                    diag_emit(DIAG_ERROR, type_form->span,
-                              "catch type annotation must be a keyword like :int");
-                    return NULL;
-                }
-                const Symbol *kw = type_form->as.sym;
-                if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
-                    catch_type = TY_INT;
-                } else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0) {
-                    catch_type = TY_BOOL;
-                } else if (kw->len == 4 && memcmp(kw->name, "cstr", 4) == 0) {
-                    catch_type = TY_CSTR;
-                } else if (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0) {
-                    catch_type = TY_PTR_VOID;
-                } else if ((kw->len == 4 && memcmp(kw->name, "void", 4) == 0) ||
-                           (kw->len == 3 && memcmp(kw->name, "nil", 3) == 0)) {
-                    catch_type = TY_NIL;  /* Catch-all */
-                } else if (kw->len == 1 && memcmp(kw->name, "!", 1) == 0) {
-                    catch_type = TY_NEVER;
-                } else {
-                    diag_emit(DIAG_ERROR, type_form->span,
-                              "unsupported type in catch clause");
-                    return NULL;
-                }
-            }
-            
-            /* Parse handler body */
-            if (clause_form->as.list.len < 3) {
-                diag_emit(DIAG_ERROR, clause_form->span,
-                          "(catch ...) requires a handler body");
-                return NULL;
-            }
-            
-            /* Create a binding for the catch variable in a new scope */
-            TypeKind catch_var_kind = (catch_type == TY_NIL) ? TY_PTR_VOID : catch_type;
-            Type catch_var_type = {.kind = catch_var_kind, .copy_kind = CK_MOVE, .n_lifetimes = 0};
-            Binding *catch_binding = binding_new(e, var_name->as.sym, catch_var_type, false, false, var_name->span);
-            
-            /* Push a new scope for the handler with the catch variable bound */
-            Scope handler_scope;
-            scope_init(&handler_scope, e->scope);
-            e->scope = &handler_scope;
-            scope_add(&handler_scope, catch_binding);
-            
-            Expr *handler = elab_form(e, clause_form->as.list.items[2]);
-            if (!handler) { 
-                e->scope = handler_scope.parent; 
-                scope_free(&handler_scope); 
-                return NULL; 
-            }
-
-            /* try/catch is an expression: body and each catch handler must agree on type.
-             * Treat nil-typed branches as throw-only/bottom-like so they can unify with
-             * a concrete type from other branches. */
-            if (!type_eq(handler->type, result_type)) {
-                if (result_type.kind == TY_NIL && handler->type.kind != TY_NIL) {
-                    result_type = handler->type;
-                } else if (handler->type.kind == TY_NIL && result_type.kind != TY_NIL) {
-                    /* Keep current result_type; nil handler is compatible. */
-                } else {
-                    diag_emit(DIAG_ERROR, clause_form->span,
-                              "try/catch type mismatch: body is %s but catch handler is %s",
-                              type_name(result_type), type_name(handler->type));
-                    e->scope = handler_scope.parent;
-                    scope_free(&handler_scope);
-                    return NULL;
-                }
-            }
-            
-            /* Pop the handler scope */
-            e->scope = handler_scope.parent;
-            
-            /* Store catch clause */
-            if (n_clauses >= MAX_CATCH_CLAUSES) {
-                diag_emit(DIAG_ERROR, clause_form->span,
-                          "too many catch clauses (max %d)", MAX_CATCH_CLAUSES);
-                scope_free(&handler_scope);
-                return NULL;
-            }
-            clauses[n_clauses].var_name = var_name->as.sym;
-            clauses[n_clauses].binding = catch_binding;
-            clauses[n_clauses].catch_type = catch_type;
-            clauses[n_clauses].handler = handler;
-            n_clauses++;
-            
-            scope_free(&handler_scope);
-            
-        } else if (clause_name->as.sym == e->sym_finally) {
-            /* Parse finally clause: (finally cleanup) */
-            if (clause_form->as.list.len < 2) {
-                diag_emit(DIAG_ERROR, clause_form->span,
-                          "(finally ...) requires a cleanup body");
-                return NULL;
-            }
-            
-            if (finally_body) {
-                diag_emit(DIAG_ERROR, clause_form->span,
-                          "try can have at most one finally clause");
-                return NULL;
-            }
-            
-            finally_body = elab_form(e, clause_form->as.list.items[1]);
-            if (!finally_body) return NULL;
-            
-        } else {
-            diag_emit(DIAG_ERROR, clause_name->span,
-                      "unknown try clause: expected catch or finally");
-            return NULL;
-        }
-    }
-    
-    /* Create EX_TRY expression */
-    /* Copy clauses to arena memory */
-    TryCatchClause *arena_clauses = NULL;
-    if (n_clauses > 0) {
-        arena_clauses = (TryCatchClause *)arena_alloc(e->arena, n_clauses * sizeof(TryCatchClause));
-        memcpy(arena_clauses, clauses, n_clauses * sizeof(TryCatchClause));
-    }
-    
-    Expr *out = expr_new(e->arena, EX_TRY, result_type, call->span);
-    out->as.try_.body = body;
-    out->as.try_.clauses = arena_clauses;
-    out->as.try_.n_clauses = n_clauses;
-    out->as.try_.finally_body = finally_body;
-    return out;
-}
-
-/* catch and finally are not standalone - they're handled as part of try */
-static Expr *elab_catch(Elab *e, const Form *call) {
-    diag_emit(DIAG_ERROR, call->span,
-              "(catch ...) must be inside a (try ...) expression");
-    return NULL;
-}
-
-static Expr *elab_finally(Elab *e, const Form *call) {
-    diag_emit(DIAG_ERROR, call->span,
-              "(finally ...) must be inside a (try ...) expression");
-    return NULL;
 }
 
 
@@ -6926,8 +6643,6 @@ static Expr *elab_defkind(Elab *e, const Form *call);
 static Expr *elab_defrec(Elab *e, const Form *call);  /* Phase HKT-P2 */
 static Expr *elab_deftype(Elab *e, const Form *call);  /* Phase HKT-P2 */
 static Expr *elab_type_app(Elab *e, const Form *call);  /* Phase HKT-P1 */
-/* Phase 17: throw! sugar */
-static Expr *elab_throw_bang(Elab *e, const Form *call);
 /* Phase 18: call/cc and escape sugar */
 static Expr *elab_call_cc(Elab *e, const Form *call);
 static Expr *elab_escape(Elab *e, const Form *call);
@@ -6996,12 +6711,6 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_upgrade)     return elab_weak_upgrade(e, call);
     if (name == e->sym_weak_pred)   return elab_weak_pred(e, call);
     if (name == e->sym_ref_pred)    return elab_ref_pred(e, call);
-    /* Phase 17: Exceptions */
-    if (name == e->sym_throw)       return elab_throw(e, call);
-    if (name == e->sym_throw_bang)  return elab_throw_bang(e, call);
-    if (name == e->sym_try)         return elab_try(e, call);
-    if (name == e->sym_catch)       return elab_catch(e, call);
-    if (name == e->sym_finally)     return elab_finally(e, call);
     /* Phase 18: Delimited continuations */
     if (name == e->sym_reset)      return elab_reset(e, call);
     if (name == e->sym_shift)      return elab_shift(e, call);
@@ -8983,22 +8692,6 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
     method->n_params = n_params;
     method->return_type = return_type;
     return method;
-}
-
-/* Phase 17: (throw! msg) - sugar for (throw msg).
- * Provides a bang-style helper so callers can write (throw! "oops") without
- * needing to construct an Error struct explicitly. */
-static Expr *elab_throw_bang(Elab *e, const Form *call) {
-    if (call->as.list.len != 2) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "(throw! msg) requires exactly one argument");
-        return NULL;
-    }
-    Expr *payload = elab_form(e, call->as.list.items[1]);
-    if (!payload) return NULL;
-    Expr *out = expr_new(e->arena, EX_THROW, TYPE_NIL, call->span);
-    out->as.throw_.payload = payload;
-    return out;
 }
 
 /* Phase T19-B: (thread-spawn closure)

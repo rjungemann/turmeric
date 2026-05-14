@@ -8,8 +8,8 @@
  *
  * Analysis model (safety model from deferred-prerequisite-decisions.md §9.6):
  *   - Elide retain/release only when single-use proof is available.
- *   - Do NOT elide across barriers: EX_CALL, EX_BUILTIN, EX_WHILE, EX_THROW,
- *     EX_TRY, EX_CLOSURE, or EX_DEFER nodes in prior statements.
+ *   - Do NOT elide across barriers: EX_CALL, EX_BUILTIN, EX_WHILE,
+ *     EX_CLOSURE, or EX_DEFER nodes in prior statements.
  *   - Prefer conservative false negatives over unsound elision.
  *
  * An EX_RC_CLONE binding is eligible when:

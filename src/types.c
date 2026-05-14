@@ -448,9 +448,9 @@ const char *type_c_name(Type t) {
         case TY_TYPECLASS:
         case TY_TYPECLASS_INST:
             return "void";  /* Typeclasses don't exist at runtime */
-        /* Phase 17: Exception types lower to a struct in C */
+        /* Phase 17: Exceptions removed. TY_EXCEPTION is orphaned; lower to void* */
         case TY_EXCEPTION:
-            return "tur_exception *";
+            return "void *";
         /* Phase 18: Continuation types lower to a struct in C */
         case TY_CONT:
             return "tur_cont *";

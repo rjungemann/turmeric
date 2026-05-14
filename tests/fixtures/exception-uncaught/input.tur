@@ -1,8 +1,0 @@
-;; Phase 17: Uncaught exception test
-;; An exception thrown with no surrounding try/catch propagates to the top
-;; level, which calls exit(1).  The test runner checks expected.exit = nonzero
-;; and that the expected stderr substring appears.
-
-(defn main [] :int
-  (throw "fatal error")
-  0)

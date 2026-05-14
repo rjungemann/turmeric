@@ -43,11 +43,16 @@ Use this section first. These items unblock the deferred work below.
 - [x] Decide whether capability effect polymorphism depends on full Phase 19 effect-row checking or can ship in a minimal subset.
   - Decision: depends on Phase 19. Capability effect polymorphism ships as part of Phase 19 Section A (surface syntax and declaration model), not as a standalone Phase 16 feature. Phase 16 ships plain (non-row-polymorphic) capability passing; Phase 19 adds row-variable polymorphism.
 
-### Phase 17 prerequisites (Exceptions)
+### Phase 17 prerequisites (Exceptions) — MOOT
+
+> **Note:** Phase 17 (exceptions) was removed on the `no-exceptions` branch (2026-05-13). All tasks below are moot; the exception system has been superseded by PR0–PR6 (panic + Result).
+
 - [x] Finalize sugar design for `throw!`, `throw-error`, and `throw-io-error` to avoid conflict with existing typeclass/stdlib naming.
   - Decision: `throw!` is a special form handled in the elaborator (`elab_throw_bang` in `src/elab.c`); `throw-error` and `throw-io-error` are stdlib helper functions in `stdlib/exn.tur`. These names do not conflict with typeclass/stdlib naming. Design is final as-implemented; no renaming or refactoring is needed.
+  - **MOOT:** All `throw!`/`throw-error`/`throw-io-error` surface syntax, `elab_throw_bang`, and `stdlib/exn.tur` have been deleted.
 - [x] Define test-runner contract for expected uncaught runtime failures so `exception-uncaught` can be automated.
   - Decision: the contract is already defined and implemented in `tests/run.sh`. `expected.exit: nonzero` triggers a nonzero-exit check; `expected.stderr` (one substring per line) triggers stderr substring matching. The `exception-uncaught` fixture already uses this contract. The contract is also documented in `docs/test-runner-contract.md`.
+  - **MOOT:** The `exception-uncaught` fixture has been deleted along with all other exception fixtures.
 
 ### Phase 18 prerequisites (Delimited continuations)
 - [x] Decide whether `call/cc` remains strict sugar or gets dedicated lowering/runtime paths.

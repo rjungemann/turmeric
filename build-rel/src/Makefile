@@ -57,10 +57,10 @@ RM = /opt/homebrew/bin/cmake -E rm -f
 EQUALS = =
 
 # The top-level source directory on which CMake was run.
-CMAKE_SOURCE_DIR = /Users/rjungemann/Projects/turmeric
+CMAKE_SOURCE_DIR = /Users/rjungemann/Projects/turmeric2
 
 # The top-level build directory on which CMake was run.
-CMAKE_BINARY_DIR = /Users/rjungemann/Projects/turmeric/build-rel
+CMAKE_BINARY_DIR = /Users/rjungemann/Projects/turmeric2/build-rel
 
 #=============================================================================
 # Targets provided globally by CMake.
@@ -68,7 +68,7 @@ CMAKE_BINARY_DIR = /Users/rjungemann/Projects/turmeric/build-rel
 # Special rule for the target package
 package: preinstall
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --cyan "Run CPack packaging tool..."
-	cd /Users/rjungemann/Projects/turmeric/build-rel && /opt/homebrew/bin/cpack --config ./CPackConfig.cmake
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && /opt/homebrew/bin/cpack --config ./CPackConfig.cmake
 .PHONY : package
 
 # Special rule for the target package
@@ -78,7 +78,7 @@ package/fast: package
 # Special rule for the target package_source
 package_source:
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --cyan "Run CPack packaging tool for source..."
-	cd /Users/rjungemann/Projects/turmeric/build-rel && /opt/homebrew/bin/cpack --config ./CPackSourceConfig.cmake
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && /opt/homebrew/bin/cpack --config ./CPackSourceConfig.cmake
 .PHONY : package_source
 
 # Special rule for the target package_source
@@ -117,14 +117,14 @@ rebuild_cache/fast: rebuild_cache
 
 # The main all target
 all: cmake_check_build_system
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(CMAKE_COMMAND) -E cmake_progress_start /Users/rjungemann/Projects/turmeric/build-rel/CMakeFiles /Users/rjungemann/Projects/turmeric/build-rel/src//CMakeFiles/progress.marks
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/all
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/rjungemann/Projects/turmeric/build-rel/CMakeFiles 0
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(CMAKE_COMMAND) -E cmake_progress_start /Users/rjungemann/Projects/turmeric2/build-rel/CMakeFiles /Users/rjungemann/Projects/turmeric2/build-rel/src//CMakeFiles/progress.marks
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/all
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/rjungemann/Projects/turmeric2/build-rel/CMakeFiles 0
 .PHONY : all
 
 # The main clean target
 clean:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/clean
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/clean
 .PHONY : clean
 
 # The main clean target
@@ -133,22 +133,36 @@ clean/fast: clean
 
 # Prepare targets for installation.
 preinstall: all
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/preinstall
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/preinstall
 .PHONY : preinstall
 
 # Prepare targets for installation.
 preinstall/fast:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/preinstall
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/preinstall
 .PHONY : preinstall/fast
 
 # clear depends
 depend:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(CMAKE_COMMAND) -S$(CMAKE_SOURCE_DIR) -B$(CMAKE_BINARY_DIR) --check-build-system CMakeFiles/Makefile.cmake 1
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(CMAKE_COMMAND) -S$(CMAKE_SOURCE_DIR) -B$(CMAKE_BINARY_DIR) --check-build-system CMakeFiles/Makefile.cmake 1
 .PHONY : depend
 
 # Convenience name for target.
+src/CMakeFiles/tur_core.dir/rule:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/CMakeFiles/tur_core.dir/rule
+.PHONY : src/CMakeFiles/tur_core.dir/rule
+
+# Convenience name for target.
+tur_core: src/CMakeFiles/tur_core.dir/rule
+.PHONY : tur_core
+
+# fast build rule for target.
+tur_core/fast:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/build
+.PHONY : tur_core/fast
+
+# Convenience name for target.
 src/CMakeFiles/tur.dir/rule:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/CMakeFiles/tur.dir/rule
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/CMakeFiles/tur.dir/rule
 .PHONY : src/CMakeFiles/tur.dir/rule
 
 # Convenience name for target.
@@ -157,15 +171,67 @@ tur: src/CMakeFiles/tur.dir/rule
 
 # fast build rule for target.
 tur/fast:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/build
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/build
 .PHONY : tur/fast
+
+# Convenience name for target.
+src/CMakeFiles/libturi.dir/rule:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/CMakeFiles/libturi.dir/rule
+.PHONY : src/CMakeFiles/libturi.dir/rule
+
+# Convenience name for target.
+libturi: src/CMakeFiles/libturi.dir/rule
+.PHONY : libturi
+
+# fast build rule for target.
+libturi/fast:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/libturi.dir/build.make src/CMakeFiles/libturi.dir/build
+.PHONY : libturi/fast
+
+# Convenience name for target.
+src/CMakeFiles/tur_eval_basic.dir/rule:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/CMakeFiles/tur_eval_basic.dir/rule
+.PHONY : src/CMakeFiles/tur_eval_basic.dir/rule
+
+# Convenience name for target.
+tur_eval_basic: src/CMakeFiles/tur_eval_basic.dir/rule
+.PHONY : tur_eval_basic
+
+# fast build rule for target.
+tur_eval_basic/fast:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_eval_basic.dir/build.make src/CMakeFiles/tur_eval_basic.dir/build
+.PHONY : tur_eval_basic/fast
+
+__/tests/turi/eval-basic.o: __/tests/turi/eval-basic.c.o
+.PHONY : __/tests/turi/eval-basic.o
+
+# target to build an object file
+__/tests/turi/eval-basic.c.o:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_eval_basic.dir/build.make src/CMakeFiles/tur_eval_basic.dir/__/tests/turi/eval-basic.c.o
+.PHONY : __/tests/turi/eval-basic.c.o
+
+__/tests/turi/eval-basic.i: __/tests/turi/eval-basic.c.i
+.PHONY : __/tests/turi/eval-basic.i
+
+# target to preprocess a source file
+__/tests/turi/eval-basic.c.i:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_eval_basic.dir/build.make src/CMakeFiles/tur_eval_basic.dir/__/tests/turi/eval-basic.c.i
+.PHONY : __/tests/turi/eval-basic.c.i
+
+__/tests/turi/eval-basic.s: __/tests/turi/eval-basic.c.s
+.PHONY : __/tests/turi/eval-basic.s
+
+# target to generate assembly for a file
+__/tests/turi/eval-basic.c.s:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_eval_basic.dir/build.make src/CMakeFiles/tur_eval_basic.dir/__/tests/turi/eval-basic.c.s
+.PHONY : __/tests/turi/eval-basic.c.s
 
 arc.o: arc.c.o
 .PHONY : arc.o
 
 # target to build an object file
 arc.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/arc.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/arc.c.o
 .PHONY : arc.c.o
 
 arc.i: arc.c.i
@@ -173,7 +239,7 @@ arc.i: arc.c.i
 
 # target to preprocess a source file
 arc.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/arc.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/arc.c.i
 .PHONY : arc.c.i
 
 arc.s: arc.c.s
@@ -181,7 +247,7 @@ arc.s: arc.c.s
 
 # target to generate assembly for a file
 arc.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/arc.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/arc.c.s
 .PHONY : arc.c.s
 
 arena.o: arena.c.o
@@ -189,7 +255,7 @@ arena.o: arena.c.o
 
 # target to build an object file
 arena.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/arena.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/arena.c.o
 .PHONY : arena.c.o
 
 arena.i: arena.c.i
@@ -197,7 +263,7 @@ arena.i: arena.c.i
 
 # target to preprocess a source file
 arena.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/arena.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/arena.c.i
 .PHONY : arena.c.i
 
 arena.s: arena.c.s
@@ -205,7 +271,7 @@ arena.s: arena.c.s
 
 # target to generate assembly for a file
 arena.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/arena.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/arena.c.s
 .PHONY : arena.c.s
 
 atomic_queue.o: atomic_queue.c.o
@@ -213,7 +279,7 @@ atomic_queue.o: atomic_queue.c.o
 
 # target to build an object file
 atomic_queue.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/atomic_queue.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/atomic_queue.c.o
 .PHONY : atomic_queue.c.o
 
 atomic_queue.i: atomic_queue.c.i
@@ -221,7 +287,7 @@ atomic_queue.i: atomic_queue.c.i
 
 # target to preprocess a source file
 atomic_queue.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/atomic_queue.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/atomic_queue.c.i
 .PHONY : atomic_queue.c.i
 
 atomic_queue.s: atomic_queue.c.s
@@ -229,7 +295,7 @@ atomic_queue.s: atomic_queue.c.s
 
 # target to generate assembly for a file
 atomic_queue.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/atomic_queue.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/atomic_queue.c.s
 .PHONY : atomic_queue.c.s
 
 borrow_check.o: borrow_check.c.o
@@ -237,7 +303,7 @@ borrow_check.o: borrow_check.c.o
 
 # target to build an object file
 borrow_check.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/borrow_check.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/borrow_check.c.o
 .PHONY : borrow_check.c.o
 
 borrow_check.i: borrow_check.c.i
@@ -245,7 +311,7 @@ borrow_check.i: borrow_check.c.i
 
 # target to preprocess a source file
 borrow_check.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/borrow_check.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/borrow_check.c.i
 .PHONY : borrow_check.c.i
 
 borrow_check.s: borrow_check.c.s
@@ -253,7 +319,7 @@ borrow_check.s: borrow_check.c.s
 
 # target to generate assembly for a file
 borrow_check.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/borrow_check.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/borrow_check.c.s
 .PHONY : borrow_check.c.s
 
 buf.o: buf.c.o
@@ -261,7 +327,7 @@ buf.o: buf.c.o
 
 # target to build an object file
 buf.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/buf.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/buf.c.o
 .PHONY : buf.c.o
 
 buf.i: buf.c.i
@@ -269,7 +335,7 @@ buf.i: buf.c.i
 
 # target to preprocess a source file
 buf.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/buf.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/buf.c.i
 .PHONY : buf.c.i
 
 buf.s: buf.c.s
@@ -277,7 +343,7 @@ buf.s: buf.c.s
 
 # target to generate assembly for a file
 buf.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/buf.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/buf.c.s
 .PHONY : buf.c.s
 
 builtins.o: builtins.c.o
@@ -285,7 +351,7 @@ builtins.o: builtins.c.o
 
 # target to build an object file
 builtins.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/builtins.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/builtins.c.o
 .PHONY : builtins.c.o
 
 builtins.i: builtins.c.i
@@ -293,7 +359,7 @@ builtins.i: builtins.c.i
 
 # target to preprocess a source file
 builtins.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/builtins.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/builtins.c.i
 .PHONY : builtins.c.i
 
 builtins.s: builtins.c.s
@@ -301,7 +367,7 @@ builtins.s: builtins.c.s
 
 # target to generate assembly for a file
 builtins.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/builtins.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/builtins.c.s
 .PHONY : builtins.c.s
 
 cps.o: cps.c.o
@@ -309,7 +375,7 @@ cps.o: cps.c.o
 
 # target to build an object file
 cps.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/cps.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/cps.c.o
 .PHONY : cps.c.o
 
 cps.i: cps.c.i
@@ -317,7 +383,7 @@ cps.i: cps.c.i
 
 # target to preprocess a source file
 cps.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/cps.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/cps.c.i
 .PHONY : cps.c.i
 
 cps.s: cps.c.s
@@ -325,7 +391,7 @@ cps.s: cps.c.s
 
 # target to generate assembly for a file
 cps.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/cps.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/cps.c.s
 .PHONY : cps.c.s
 
 diag.o: diag.c.o
@@ -333,7 +399,7 @@ diag.o: diag.c.o
 
 # target to build an object file
 diag.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/diag.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/diag.c.o
 .PHONY : diag.c.o
 
 diag.i: diag.c.i
@@ -341,7 +407,7 @@ diag.i: diag.c.i
 
 # target to preprocess a source file
 diag.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/diag.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/diag.c.i
 .PHONY : diag.c.i
 
 diag.s: diag.c.s
@@ -349,7 +415,7 @@ diag.s: diag.c.s
 
 # target to generate assembly for a file
 diag.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/diag.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/diag.c.s
 .PHONY : diag.c.s
 
 effect.o: effect.c.o
@@ -357,7 +423,7 @@ effect.o: effect.c.o
 
 # target to build an object file
 effect.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/effect.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/effect.c.o
 .PHONY : effect.c.o
 
 effect.i: effect.c.i
@@ -365,7 +431,7 @@ effect.i: effect.c.i
 
 # target to preprocess a source file
 effect.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/effect.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/effect.c.i
 .PHONY : effect.c.i
 
 effect.s: effect.c.s
@@ -373,7 +439,7 @@ effect.s: effect.c.s
 
 # target to generate assembly for a file
 effect.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/effect.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/effect.c.s
 .PHONY : effect.c.s
 
 effect_check.o: effect_check.c.o
@@ -381,7 +447,7 @@ effect_check.o: effect_check.c.o
 
 # target to build an object file
 effect_check.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/effect_check.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/effect_check.c.o
 .PHONY : effect_check.c.o
 
 effect_check.i: effect_check.c.i
@@ -389,7 +455,7 @@ effect_check.i: effect_check.c.i
 
 # target to preprocess a source file
 effect_check.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/effect_check.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/effect_check.c.i
 .PHONY : effect_check.c.i
 
 effect_check.s: effect_check.c.s
@@ -397,7 +463,7 @@ effect_check.s: effect_check.c.s
 
 # target to generate assembly for a file
 effect_check.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/effect_check.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/effect_check.c.s
 .PHONY : effect_check.c.s
 
 effect_lower.o: effect_lower.c.o
@@ -405,7 +471,7 @@ effect_lower.o: effect_lower.c.o
 
 # target to build an object file
 effect_lower.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/effect_lower.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/effect_lower.c.o
 .PHONY : effect_lower.c.o
 
 effect_lower.i: effect_lower.c.i
@@ -413,7 +479,7 @@ effect_lower.i: effect_lower.c.i
 
 # target to preprocess a source file
 effect_lower.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/effect_lower.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/effect_lower.c.i
 .PHONY : effect_lower.c.i
 
 effect_lower.s: effect_lower.c.s
@@ -421,7 +487,7 @@ effect_lower.s: effect_lower.c.s
 
 # target to generate assembly for a file
 effect_lower.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/effect_lower.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/effect_lower.c.s
 .PHONY : effect_lower.c.s
 
 elab.o: elab.c.o
@@ -429,7 +495,7 @@ elab.o: elab.c.o
 
 # target to build an object file
 elab.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/elab.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/elab.c.o
 .PHONY : elab.c.o
 
 elab.i: elab.c.i
@@ -437,7 +503,7 @@ elab.i: elab.c.i
 
 # target to preprocess a source file
 elab.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/elab.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/elab.c.i
 .PHONY : elab.c.i
 
 elab.s: elab.c.s
@@ -445,7 +511,7 @@ elab.s: elab.c.s
 
 # target to generate assembly for a file
 elab.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/elab.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/elab.c.s
 .PHONY : elab.c.s
 
 emit.o: emit.c.o
@@ -453,7 +519,7 @@ emit.o: emit.c.o
 
 # target to build an object file
 emit.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/emit.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/emit.c.o
 .PHONY : emit.c.o
 
 emit.i: emit.c.i
@@ -461,7 +527,7 @@ emit.i: emit.c.i
 
 # target to preprocess a source file
 emit.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/emit.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/emit.c.i
 .PHONY : emit.c.i
 
 emit.s: emit.c.s
@@ -469,39 +535,15 @@ emit.s: emit.c.s
 
 # target to generate assembly for a file
 emit.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/emit.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/emit.c.s
 .PHONY : emit.c.s
-
-exn.o: exn.c.o
-.PHONY : exn.o
-
-# target to build an object file
-exn.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/exn.c.o
-.PHONY : exn.c.o
-
-exn.i: exn.c.i
-.PHONY : exn.i
-
-# target to preprocess a source file
-exn.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/exn.c.i
-.PHONY : exn.c.i
-
-exn.s: exn.c.s
-.PHONY : exn.s
-
-# target to generate assembly for a file
-exn.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/exn.c.s
-.PHONY : exn.c.s
 
 expr.o: expr.c.o
 .PHONY : expr.o
 
 # target to build an object file
 expr.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/expr.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/expr.c.o
 .PHONY : expr.c.o
 
 expr.i: expr.c.i
@@ -509,7 +551,7 @@ expr.i: expr.c.i
 
 # target to preprocess a source file
 expr.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/expr.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/expr.c.i
 .PHONY : expr.c.i
 
 expr.s: expr.c.s
@@ -517,7 +559,7 @@ expr.s: expr.c.s
 
 # target to generate assembly for a file
 expr.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/expr.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/expr.c.s
 .PHONY : expr.c.s
 
 fiber.o: fiber.c.o
@@ -525,7 +567,7 @@ fiber.o: fiber.c.o
 
 # target to build an object file
 fiber.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/fiber.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/fiber.c.o
 .PHONY : fiber.c.o
 
 fiber.i: fiber.c.i
@@ -533,7 +575,7 @@ fiber.i: fiber.c.i
 
 # target to preprocess a source file
 fiber.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/fiber.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/fiber.c.i
 .PHONY : fiber.c.i
 
 fiber.s: fiber.c.s
@@ -541,7 +583,7 @@ fiber.s: fiber.c.s
 
 # target to generate assembly for a file
 fiber.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/fiber.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/fiber.c.s
 .PHONY : fiber.c.s
 
 fiber_ctx_arm64.o: fiber_ctx_arm64.S.o
@@ -549,7 +591,7 @@ fiber_ctx_arm64.o: fiber_ctx_arm64.S.o
 
 # target to build an object file
 fiber_ctx_arm64.S.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/fiber_ctx_arm64.S.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/fiber_ctx_arm64.S.o
 .PHONY : fiber_ctx_arm64.S.o
 
 forms.o: forms.c.o
@@ -557,7 +599,7 @@ forms.o: forms.c.o
 
 # target to build an object file
 forms.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/forms.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/forms.c.o
 .PHONY : forms.c.o
 
 forms.i: forms.c.i
@@ -565,7 +607,7 @@ forms.i: forms.c.i
 
 # target to preprocess a source file
 forms.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/forms.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/forms.c.i
 .PHONY : forms.c.i
 
 forms.s: forms.c.s
@@ -573,7 +615,7 @@ forms.s: forms.c.s
 
 # target to generate assembly for a file
 forms.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/forms.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/forms.c.s
 .PHONY : forms.c.s
 
 gc.o: gc.c.o
@@ -581,7 +623,7 @@ gc.o: gc.c.o
 
 # target to build an object file
 gc.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/gc.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/gc.c.o
 .PHONY : gc.c.o
 
 gc.i: gc.c.i
@@ -589,7 +631,7 @@ gc.i: gc.c.i
 
 # target to preprocess a source file
 gc.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/gc.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/gc.c.i
 .PHONY : gc.c.i
 
 gc.s: gc.c.s
@@ -597,15 +639,63 @@ gc.s: gc.c.s
 
 # target to generate assembly for a file
 gc.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/gc.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/gc.c.s
 .PHONY : gc.c.s
+
+globals.o: globals.c.o
+.PHONY : globals.o
+
+# target to build an object file
+globals.c.o:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/globals.c.o
+.PHONY : globals.c.o
+
+globals.i: globals.c.i
+.PHONY : globals.i
+
+# target to preprocess a source file
+globals.c.i:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/globals.c.i
+.PHONY : globals.c.i
+
+globals.s: globals.c.s
+.PHONY : globals.s
+
+# target to generate assembly for a file
+globals.c.s:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/globals.c.s
+.PHONY : globals.c.s
+
+hamt.o: hamt.c.o
+.PHONY : hamt.o
+
+# target to build an object file
+hamt.c.o:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/hamt.c.o
+.PHONY : hamt.c.o
+
+hamt.i: hamt.c.i
+.PHONY : hamt.i
+
+# target to preprocess a source file
+hamt.c.i:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/hamt.c.i
+.PHONY : hamt.c.i
+
+hamt.s: hamt.c.s
+.PHONY : hamt.s
+
+# target to generate assembly for a file
+hamt.c.s:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/hamt.c.s
+.PHONY : hamt.c.s
 
 interp.o: interp.c.o
 .PHONY : interp.o
 
 # target to build an object file
 interp.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/interp.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/interp.c.o
 .PHONY : interp.c.o
 
 interp.i: interp.c.i
@@ -613,7 +703,7 @@ interp.i: interp.c.i
 
 # target to preprocess a source file
 interp.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/interp.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/interp.c.i
 .PHONY : interp.c.i
 
 interp.s: interp.c.s
@@ -621,7 +711,7 @@ interp.s: interp.c.s
 
 # target to generate assembly for a file
 interp.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/interp.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/interp.c.s
 .PHONY : interp.c.s
 
 io.o: io.c.o
@@ -629,7 +719,7 @@ io.o: io.c.o
 
 # target to build an object file
 io.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/io.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/io.c.o
 .PHONY : io.c.o
 
 io.i: io.c.i
@@ -637,7 +727,7 @@ io.i: io.c.i
 
 # target to preprocess a source file
 io.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/io.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/io.c.i
 .PHONY : io.c.i
 
 io.s: io.c.s
@@ -645,7 +735,7 @@ io.s: io.c.s
 
 # target to generate assembly for a file
 io.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/io.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/io.c.s
 .PHONY : io.c.s
 
 io_kqueue.o: io_kqueue.c.o
@@ -653,7 +743,7 @@ io_kqueue.o: io_kqueue.c.o
 
 # target to build an object file
 io_kqueue.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/io_kqueue.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/io_kqueue.c.o
 .PHONY : io_kqueue.c.o
 
 io_kqueue.i: io_kqueue.c.i
@@ -661,7 +751,7 @@ io_kqueue.i: io_kqueue.c.i
 
 # target to preprocess a source file
 io_kqueue.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/io_kqueue.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/io_kqueue.c.i
 .PHONY : io_kqueue.c.i
 
 io_kqueue.s: io_kqueue.c.s
@@ -669,7 +759,7 @@ io_kqueue.s: io_kqueue.c.s
 
 # target to generate assembly for a file
 io_kqueue.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/io_kqueue.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/io_kqueue.c.s
 .PHONY : io_kqueue.c.s
 
 kind_check.o: kind_check.c.o
@@ -677,7 +767,7 @@ kind_check.o: kind_check.c.o
 
 # target to build an object file
 kind_check.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/kind_check.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/kind_check.c.o
 .PHONY : kind_check.c.o
 
 kind_check.i: kind_check.c.i
@@ -685,7 +775,7 @@ kind_check.i: kind_check.c.i
 
 # target to preprocess a source file
 kind_check.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/kind_check.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/kind_check.c.i
 .PHONY : kind_check.c.i
 
 kind_check.s: kind_check.c.s
@@ -693,7 +783,7 @@ kind_check.s: kind_check.c.s
 
 # target to generate assembly for a file
 kind_check.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/kind_check.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/kind_check.c.s
 .PHONY : kind_check.c.s
 
 lifetime_elision.o: lifetime_elision.c.o
@@ -701,7 +791,7 @@ lifetime_elision.o: lifetime_elision.c.o
 
 # target to build an object file
 lifetime_elision.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/lifetime_elision.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/lifetime_elision.c.o
 .PHONY : lifetime_elision.c.o
 
 lifetime_elision.i: lifetime_elision.c.i
@@ -709,7 +799,7 @@ lifetime_elision.i: lifetime_elision.c.i
 
 # target to preprocess a source file
 lifetime_elision.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/lifetime_elision.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/lifetime_elision.c.i
 .PHONY : lifetime_elision.c.i
 
 lifetime_elision.s: lifetime_elision.c.s
@@ -717,7 +807,7 @@ lifetime_elision.s: lifetime_elision.c.s
 
 # target to generate assembly for a file
 lifetime_elision.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/lifetime_elision.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/lifetime_elision.c.s
 .PHONY : lifetime_elision.c.s
 
 lifetimes.o: lifetimes.c.o
@@ -725,7 +815,7 @@ lifetimes.o: lifetimes.c.o
 
 # target to build an object file
 lifetimes.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/lifetimes.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/lifetimes.c.o
 .PHONY : lifetimes.c.o
 
 lifetimes.i: lifetimes.c.i
@@ -733,7 +823,7 @@ lifetimes.i: lifetimes.c.i
 
 # target to preprocess a source file
 lifetimes.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/lifetimes.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/lifetimes.c.i
 .PHONY : lifetimes.c.i
 
 lifetimes.s: lifetimes.c.s
@@ -741,7 +831,7 @@ lifetimes.s: lifetimes.c.s
 
 # target to generate assembly for a file
 lifetimes.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/lifetimes.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/lifetimes.c.s
 .PHONY : lifetimes.c.s
 
 main.o: main.c.o
@@ -749,7 +839,7 @@ main.o: main.c.o
 
 # target to build an object file
 main.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/main.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/main.c.o
 .PHONY : main.c.o
 
 main.i: main.c.i
@@ -757,7 +847,7 @@ main.i: main.c.i
 
 # target to preprocess a source file
 main.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/main.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/main.c.i
 .PHONY : main.c.i
 
 main.s: main.c.s
@@ -765,7 +855,7 @@ main.s: main.c.s
 
 # target to generate assembly for a file
 main.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/main.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/main.c.s
 .PHONY : main.c.s
 
 rc.o: rc.c.o
@@ -773,7 +863,7 @@ rc.o: rc.c.o
 
 # target to build an object file
 rc.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/rc.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/rc.c.o
 .PHONY : rc.c.o
 
 rc.i: rc.c.i
@@ -781,7 +871,7 @@ rc.i: rc.c.i
 
 # target to preprocess a source file
 rc.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/rc.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/rc.c.i
 .PHONY : rc.c.i
 
 rc.s: rc.c.s
@@ -789,7 +879,7 @@ rc.s: rc.c.s
 
 # target to generate assembly for a file
 rc.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/rc.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/rc.c.s
 .PHONY : rc.c.s
 
 rc_elision.o: rc_elision.c.o
@@ -797,7 +887,7 @@ rc_elision.o: rc_elision.c.o
 
 # target to build an object file
 rc_elision.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/rc_elision.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/rc_elision.c.o
 .PHONY : rc_elision.c.o
 
 rc_elision.i: rc_elision.c.i
@@ -805,7 +895,7 @@ rc_elision.i: rc_elision.c.i
 
 # target to preprocess a source file
 rc_elision.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/rc_elision.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/rc_elision.c.i
 .PHONY : rc_elision.c.i
 
 rc_elision.s: rc_elision.c.s
@@ -813,7 +903,7 @@ rc_elision.s: rc_elision.c.s
 
 # target to generate assembly for a file
 rc_elision.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/rc_elision.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/rc_elision.c.s
 .PHONY : rc_elision.c.s
 
 rc_free_queue.o: rc_free_queue.c.o
@@ -821,7 +911,7 @@ rc_free_queue.o: rc_free_queue.c.o
 
 # target to build an object file
 rc_free_queue.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/rc_free_queue.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/rc_free_queue.c.o
 .PHONY : rc_free_queue.c.o
 
 rc_free_queue.i: rc_free_queue.c.i
@@ -829,7 +919,7 @@ rc_free_queue.i: rc_free_queue.c.i
 
 # target to preprocess a source file
 rc_free_queue.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/rc_free_queue.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/rc_free_queue.c.i
 .PHONY : rc_free_queue.c.i
 
 rc_free_queue.s: rc_free_queue.c.s
@@ -837,7 +927,7 @@ rc_free_queue.s: rc_free_queue.c.s
 
 # target to generate assembly for a file
 rc_free_queue.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/rc_free_queue.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/rc_free_queue.c.s
 .PHONY : rc_free_queue.c.s
 
 reader.o: reader.c.o
@@ -845,7 +935,7 @@ reader.o: reader.c.o
 
 # target to build an object file
 reader.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/reader.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/reader.c.o
 .PHONY : reader.c.o
 
 reader.i: reader.c.i
@@ -853,7 +943,7 @@ reader.i: reader.c.i
 
 # target to preprocess a source file
 reader.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/reader.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/reader.c.i
 .PHONY : reader.c.i
 
 reader.s: reader.c.s
@@ -861,7 +951,7 @@ reader.s: reader.c.s
 
 # target to generate assembly for a file
 reader.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/reader.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/reader.c.s
 .PHONY : reader.c.s
 
 runtime.o: runtime.c.o
@@ -869,7 +959,7 @@ runtime.o: runtime.c.o
 
 # target to build an object file
 runtime.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/runtime.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/runtime.c.o
 .PHONY : runtime.c.o
 
 runtime.i: runtime.c.i
@@ -877,7 +967,7 @@ runtime.i: runtime.c.i
 
 # target to preprocess a source file
 runtime.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/runtime.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/runtime.c.i
 .PHONY : runtime.c.i
 
 runtime.s: runtime.c.s
@@ -885,7 +975,7 @@ runtime.s: runtime.c.s
 
 # target to generate assembly for a file
 runtime.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/runtime.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/runtime.c.s
 .PHONY : runtime.c.s
 
 scheduler.o: scheduler.c.o
@@ -893,7 +983,7 @@ scheduler.o: scheduler.c.o
 
 # target to build an object file
 scheduler.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/scheduler.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/scheduler.c.o
 .PHONY : scheduler.c.o
 
 scheduler.i: scheduler.c.i
@@ -901,7 +991,7 @@ scheduler.i: scheduler.c.i
 
 # target to preprocess a source file
 scheduler.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/scheduler.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/scheduler.c.i
 .PHONY : scheduler.c.i
 
 scheduler.s: scheduler.c.s
@@ -909,7 +999,7 @@ scheduler.s: scheduler.c.s
 
 # target to generate assembly for a file
 scheduler.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/scheduler.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/scheduler.c.s
 .PHONY : scheduler.c.s
 
 scheduler_common.o: scheduler_common.c.o
@@ -917,7 +1007,7 @@ scheduler_common.o: scheduler_common.c.o
 
 # target to build an object file
 scheduler_common.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/scheduler_common.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/scheduler_common.c.o
 .PHONY : scheduler_common.c.o
 
 scheduler_common.i: scheduler_common.c.i
@@ -925,7 +1015,7 @@ scheduler_common.i: scheduler_common.c.i
 
 # target to preprocess a source file
 scheduler_common.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/scheduler_common.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/scheduler_common.c.i
 .PHONY : scheduler_common.c.i
 
 scheduler_common.s: scheduler_common.c.s
@@ -933,15 +1023,39 @@ scheduler_common.s: scheduler_common.c.s
 
 # target to generate assembly for a file
 scheduler_common.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/scheduler_common.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/scheduler_common.c.s
 .PHONY : scheduler_common.c.s
+
+stm.o: stm.c.o
+.PHONY : stm.o
+
+# target to build an object file
+stm.c.o:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/stm.c.o
+.PHONY : stm.c.o
+
+stm.i: stm.c.i
+.PHONY : stm.i
+
+# target to preprocess a source file
+stm.c.i:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/stm.c.i
+.PHONY : stm.c.i
+
+stm.s: stm.c.s
+.PHONY : stm.s
+
+# target to generate assembly for a file
+stm.c.s:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/stm.c.s
+.PHONY : stm.c.s
 
 symbols.o: symbols.c.o
 .PHONY : symbols.o
 
 # target to build an object file
 symbols.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/symbols.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/symbols.c.o
 .PHONY : symbols.c.o
 
 symbols.i: symbols.c.i
@@ -949,7 +1063,7 @@ symbols.i: symbols.c.i
 
 # target to preprocess a source file
 symbols.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/symbols.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/symbols.c.i
 .PHONY : symbols.c.i
 
 symbols.s: symbols.c.s
@@ -957,7 +1071,7 @@ symbols.s: symbols.c.s
 
 # target to generate assembly for a file
 symbols.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/symbols.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/symbols.c.s
 .PHONY : symbols.c.s
 
 timer_wheel.o: timer_wheel.c.o
@@ -965,7 +1079,7 @@ timer_wheel.o: timer_wheel.c.o
 
 # target to build an object file
 timer_wheel.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/timer_wheel.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/timer_wheel.c.o
 .PHONY : timer_wheel.c.o
 
 timer_wheel.i: timer_wheel.c.i
@@ -973,7 +1087,7 @@ timer_wheel.i: timer_wheel.c.i
 
 # target to preprocess a source file
 timer_wheel.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/timer_wheel.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/timer_wheel.c.i
 .PHONY : timer_wheel.c.i
 
 timer_wheel.s: timer_wheel.c.s
@@ -981,15 +1095,111 @@ timer_wheel.s: timer_wheel.c.s
 
 # target to generate assembly for a file
 timer_wheel.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/timer_wheel.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/timer_wheel.c.s
 .PHONY : timer_wheel.c.s
+
+turi/env.o: turi/env.c.o
+.PHONY : turi/env.o
+
+# target to build an object file
+turi/env.c.o:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/turi/env.c.o
+.PHONY : turi/env.c.o
+
+turi/env.i: turi/env.c.i
+.PHONY : turi/env.i
+
+# target to preprocess a source file
+turi/env.c.i:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/turi/env.c.i
+.PHONY : turi/env.c.i
+
+turi/env.s: turi/env.c.s
+.PHONY : turi/env.s
+
+# target to generate assembly for a file
+turi/env.c.s:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/turi/env.c.s
+.PHONY : turi/env.c.s
+
+turi/eval.o: turi/eval.c.o
+.PHONY : turi/eval.o
+
+# target to build an object file
+turi/eval.c.o:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/turi/eval.c.o
+.PHONY : turi/eval.c.o
+
+turi/eval.i: turi/eval.c.i
+.PHONY : turi/eval.i
+
+# target to preprocess a source file
+turi/eval.c.i:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/turi/eval.c.i
+.PHONY : turi/eval.c.i
+
+turi/eval.s: turi/eval.c.s
+.PHONY : turi/eval.s
+
+# target to generate assembly for a file
+turi/eval.c.s:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/turi/eval.c.s
+.PHONY : turi/eval.c.s
+
+turi/repl.o: turi/repl.c.o
+.PHONY : turi/repl.o
+
+# target to build an object file
+turi/repl.c.o:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/turi/repl.c.o
+.PHONY : turi/repl.c.o
+
+turi/repl.i: turi/repl.c.i
+.PHONY : turi/repl.i
+
+# target to preprocess a source file
+turi/repl.c.i:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/turi/repl.c.i
+.PHONY : turi/repl.c.i
+
+turi/repl.s: turi/repl.c.s
+.PHONY : turi/repl.s
+
+# target to generate assembly for a file
+turi/repl.c.s:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/turi/repl.c.s
+.PHONY : turi/repl.c.s
+
+turi/value.o: turi/value.c.o
+.PHONY : turi/value.o
+
+# target to build an object file
+turi/value.c.o:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/turi/value.c.o
+.PHONY : turi/value.c.o
+
+turi/value.i: turi/value.c.i
+.PHONY : turi/value.i
+
+# target to preprocess a source file
+turi/value.c.i:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/turi/value.c.i
+.PHONY : turi/value.c.i
+
+turi/value.s: turi/value.c.s
+.PHONY : turi/value.s
+
+# target to generate assembly for a file
+turi/value.c.s:
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/turi/value.c.s
+.PHONY : turi/value.c.s
 
 typeclass.o: typeclass.c.o
 .PHONY : typeclass.o
 
 # target to build an object file
 typeclass.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/typeclass.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/typeclass.c.o
 .PHONY : typeclass.c.o
 
 typeclass.i: typeclass.c.i
@@ -997,7 +1207,7 @@ typeclass.i: typeclass.c.i
 
 # target to preprocess a source file
 typeclass.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/typeclass.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/typeclass.c.i
 .PHONY : typeclass.c.i
 
 typeclass.s: typeclass.c.s
@@ -1005,7 +1215,7 @@ typeclass.s: typeclass.c.s
 
 # target to generate assembly for a file
 typeclass.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/typeclass.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/typeclass.c.s
 .PHONY : typeclass.c.s
 
 types.o: types.c.o
@@ -1013,7 +1223,7 @@ types.o: types.c.o
 
 # target to build an object file
 types.c.o:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/types.c.o
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/types.c.o
 .PHONY : types.c.o
 
 types.i: types.c.i
@@ -1021,7 +1231,7 @@ types.i: types.c.i
 
 # target to preprocess a source file
 types.c.i:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/types.c.i
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/types.c.i
 .PHONY : types.c.i
 
 types.s: types.c.s
@@ -1029,7 +1239,7 @@ types.s: types.c.s
 
 # target to generate assembly for a file
 types.c.s:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur.dir/build.make src/CMakeFiles/tur.dir/types.c.s
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(MAKE) $(MAKESILENT) -f src/CMakeFiles/tur_core.dir/build.make src/CMakeFiles/tur_core.dir/types.c.s
 .PHONY : types.c.s
 
 # Help Target
@@ -1043,7 +1253,13 @@ help:
 	@echo "... package_source"
 	@echo "... rebuild_cache"
 	@echo "... test"
+	@echo "... libturi"
 	@echo "... tur"
+	@echo "... tur_core"
+	@echo "... tur_eval_basic"
+	@echo "... __/tests/turi/eval-basic.o"
+	@echo "... __/tests/turi/eval-basic.i"
+	@echo "... __/tests/turi/eval-basic.s"
 	@echo "... arc.o"
 	@echo "... arc.i"
 	@echo "... arc.s"
@@ -1083,9 +1299,6 @@ help:
 	@echo "... emit.o"
 	@echo "... emit.i"
 	@echo "... emit.s"
-	@echo "... exn.o"
-	@echo "... exn.i"
-	@echo "... exn.s"
 	@echo "... expr.o"
 	@echo "... expr.i"
 	@echo "... expr.s"
@@ -1099,6 +1312,12 @@ help:
 	@echo "... gc.o"
 	@echo "... gc.i"
 	@echo "... gc.s"
+	@echo "... globals.o"
+	@echo "... globals.i"
+	@echo "... globals.s"
+	@echo "... hamt.o"
+	@echo "... hamt.i"
+	@echo "... hamt.s"
 	@echo "... interp.o"
 	@echo "... interp.i"
 	@echo "... interp.s"
@@ -1141,12 +1360,27 @@ help:
 	@echo "... scheduler_common.o"
 	@echo "... scheduler_common.i"
 	@echo "... scheduler_common.s"
+	@echo "... stm.o"
+	@echo "... stm.i"
+	@echo "... stm.s"
 	@echo "... symbols.o"
 	@echo "... symbols.i"
 	@echo "... symbols.s"
 	@echo "... timer_wheel.o"
 	@echo "... timer_wheel.i"
 	@echo "... timer_wheel.s"
+	@echo "... turi/env.o"
+	@echo "... turi/env.i"
+	@echo "... turi/env.s"
+	@echo "... turi/eval.o"
+	@echo "... turi/eval.i"
+	@echo "... turi/eval.s"
+	@echo "... turi/repl.o"
+	@echo "... turi/repl.i"
+	@echo "... turi/repl.s"
+	@echo "... turi/value.o"
+	@echo "... turi/value.i"
+	@echo "... turi/value.s"
 	@echo "... typeclass.o"
 	@echo "... typeclass.i"
 	@echo "... typeclass.s"
@@ -1164,6 +1398,6 @@ help:
 # No rule that depends on this can have commands that come from listfiles
 # because they might be regenerated.
 cmake_check_build_system:
-	cd /Users/rjungemann/Projects/turmeric/build-rel && $(CMAKE_COMMAND) -S$(CMAKE_SOURCE_DIR) -B$(CMAKE_BINARY_DIR) --check-build-system CMakeFiles/Makefile.cmake 0
+	cd /Users/rjungemann/Projects/turmeric2/build-rel && $(CMAKE_COMMAND) -S$(CMAKE_SOURCE_DIR) -B$(CMAKE_BINARY_DIR) --check-build-system CMakeFiles/Makefile.cmake 0
 .PHONY : cmake_check_build_system
 

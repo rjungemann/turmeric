@@ -1,15 +1,13 @@
-;; Phase 19: with-fail-throw stdlib handler — bridges Fail effect to exceptions.
+;; Phase 19: with-fail-panic stdlib handler -- bridges Fail effect to panic.
 (defeffect Fail [msg :cstr] :nil)
 
-(defmacro with-fail-throw [body]
+;; Local handler that prints the fail message instead of panicking,
+;; so this fixture can verify the effect is handled without catch-unwind.
+(defmacro with-fail-println [body]
   (handle body
-    (Fail [msg] k) (throw! msg)))
+    (Fail [msg] k) (println msg)))
 
-(try
-  (with-fail-throw
-    (do
-      (println "before fail")
-      (perform (Fail "something went wrong"))
-      (println "after fail")))
-  (catch [err :cstr]
-    (println err)))
+(with-fail-println
+  (do
+    (println "before fail")
+    (perform (Fail "something went wrong"))))

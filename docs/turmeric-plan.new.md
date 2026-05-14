@@ -33,7 +33,7 @@
 | AW0–AW13 | ✅ **Complete** | Arrows & Arrow Categories | `Arrow`, `ArrowChoice`, `ArrowLoop`, `ArrowApply` typeclasses; `Future<T>` with `Send`/`Sync` enforcement; `Future::cancel`, multi-combinators, timeout; signal processing stdlib; `arrow.tur`, `arrow_laws.tur`. |
 | CO0–CO5 | ✅ **Complete** | Comonads | `Comonad` typeclass with `extract`/`extend`; `Store`/`Grid` comonad for cellular automata; `Zipper` comonad; `game-of-life-blinker`/`game-of-life-block` examples; `comonad.tur`, `zipper.tur`, `grid.tur`. |
 
-**Last updated:** 2026-05-13 (Comprehensive status update: H0–H6 HKT complete with full Functor/Monad/Traversable/do-notation/for-comprehensions/Fix/Free stdlib; B1–B5 backtracking complete with logic.tur + parsec.tur + N-queens/Sudoku benchmarks; T19 thread primitives complete; T20 thread pool + Future/Promise complete; T21 fibers + async I/O + work-stealing scheduler + TaskGroup complete; U1–U5 unsafe operations complete; PR0–PR6 panic + Result hybrid error system complete; R0–R8 / M0–M7 module system complete; STM phases 20–21 complete; NX numeric types complete; GC cycle-detecting garbage collector added and complete; AW0–AW13 arrows complete; CO0–CO5 comonads complete. Still planned: P1–P4 HAMT, HRT0–HRT5 higher-ranked types, G0–G4 GADTs, SC-A–SC-F serializable continuations.)
+**Last updated:** 2026-05-13 (Comprehensive status update: H0–H6 HKT complete with full Functor/Monad/Traversable/do-notation/for-comprehensions/Fix/Free stdlib; B1–B5 backtracking complete with logic.tur + parsec.tur + N-queens/Sudoku benchmarks; T19 thread primitives complete; T20 thread pool + Future/Promise complete; T21 fibers + async I/O + work-stealing scheduler + TaskGroup complete; U1–U5 unsafe operations complete; PR0–PR6 panic + Result hybrid error system complete; R0–R8 / M0–M7 module system complete; STM phases 20–21 complete; NX numeric types complete; GC cycle-detecting garbage collector added and complete; AW0–AW13 arrows complete; CO0–CO5 comonads complete. Phase 17 (exceptions) removed: superseded by PR0-PR6. Still planned: P1–P4 HAMT, HRT0–HRT5 higher-ranked types, G0–G4 GADTs, SC-A–SC-F serializable continuations.)
 
 ---
 
@@ -168,63 +168,9 @@
 
 ---
 
-### 10.18 Phase 17 — Exceptions
+### 10.18 Phase 17 — Exceptions (Removed)
 
-**Goal:** Add exception handling as a lightweight control flow mechanism. Independent of the effects system but useful regardless. Exceptions are non-resumable (one-shot) and do not require CPS transformation.
-
-**Type system extensions** — `src/types.{c,h}`
-- [x] Add `TY_EXCEPTION` type for exception values (wraps any type).
-- [x] Exception types are uninhabited at the value level — they exist only to be raised/caught.
-
-**Surface syntax**
-- [x] `(throw expr)` — raise an exception with `expr` as the payload.
-- [x] `(try body (catch [e] handler-body)...)` — catch exceptions. Multiple catch clauses tried in order.
-- [x] `(try body (catch [e : SomeType] handler)...)` — typed catch with type annotation.
-- [x] `(try body (finally cleanup))` — cleanup block that always runs.
-- [x] `(try body (catch ...) (finally ...))` — both catch and finally.
-- [ ] Shorthand: `(throw! "message")` for string exceptions (sugar for `(throw (Error. "message"))`) — *Deferred; throw with Error. works via (throw (Error. "msg" none))*.
-
-**Exception representation** — `src/exn.{c,h}`
-- [x] `struct tur_exception { TypeKind type; void* payload; int line; const char* file; }` — exception value. Simplified from original design: payload_type is TypeKind enum instead of Type* for v1.
-- [x] Exception types are ordinary user-defined types; `Error` struct in stdlib for string errors.
-- [x] `tur_throw` function: wraps payload and either longjmps to handler or calls abort() if uncaught.
-- [x] `tur_exception_matches` function: checks if exception matches catch clause type.
-- [x] Exception free function for cleanup.
-
-**Control flow lowering** — `src/elab.{c,h}` + `src/emit.{c,h}`
-- [x] `throw` lowers to: box primitive payload on heap, call `tur_throw()` with payload type, value, line, file.
-- [x] `try` with `catch` lowers to: setjmp at try entry, if exception thrown (longjmp), check catch clauses in order.
-- [x] `try` with `finally` lowers to: goto-based cleanup that runs after try body (normal or exception path).
-- [x] Stack unwinding respects defers: defers fire during normal scope exit; exception unwinding uses global handler chain.
-- [x] Exception propagation: unhandled exceptions call abort() after cleanup.
-
-**Stdlib exception types** — `stdlib/exn.tur`
-- [x] `(defstruct Error [message : cstr, cause : (option Exception)])` — base error type. Uses inline C for v1.
-- [x] `(defstruct IoError [message : cstr, errno : int])` — I/O error with errno.
-- [x] `(defstruct ParseError [message : cstr, line : int, col : int, file : cstr])` — parsing error with source location.
-- [ ] `(defn throw-error [msg])` — sugar for `(throw (Error. msg none))`. *Deferred - needs typeclass-based throw syntax*.
-- [ ] `(defn throw-io-error [msg])` — sugar for `(throw (IoError. msg (errno)))`. *Deferred*.
-
-**Interaction with other features**
-- [x] Exceptions propagate through closures: if a closure body throws, the exception propagates to the caller via longjmp.
-- [x] `defer` and exceptions: defers fire during scope exit; exceptions unwind through handler chain.
-- [x] `ref<T>` and exceptions: if an exception unwinds through a scope with a `ref<T>`, the ref drop (which is a defer) fires normally.
-- [x] `rc<T>` and exceptions: same as ref — RC releases fire during unwinding.
-- [x] `handle` (future effects): exceptions are a subset of effects; an unhandled exception in a handler should propagate. v1: `handle` lowers to `reset`, exceptions propagate normally.
-
-**Fixtures**
-- [x] `exception-basic.tur` — throw and catch simple exceptions.
-- [x] `exception-typed.tur` — typed catch clauses.
-- [x] `exception-finally.tur` — finally blocks run even when no exception.
-- [x] `exception-propagate.tur` — exception propagates through multiple scopes.
-- [x] `exception-defer.tur` — defers fire during exception unwinding.
-- [x] `exception-ref.tur` — ref drops during exception unwinding.
-- [x] `exception-closure.tur` — exceptions propagate through closures.
-- [x] `exception-nested.tur` — nested try/catch with proper scoping.
-- [ ] Negative: `exception-uncaught.tur` — unhandled exception exits with error. *Deferred - test runner doesn't support expected runtime failures*.
-- [x] Codegen snapshots: exceptions use setjmp/longjmp with global handler chain.
-
-**Exit criterion:** ✅ exceptions work for error handling; defers fire correctly during unwinding; stdlib includes basic exception types; exceptions compose with closures, defers, ref, and rc. 8/8 happy-path fixtures pass.
+> **Status: 🗑 Removed.** Superseded by PR0–PR6 (panic + Result). The `throw`/`try`/`catch` surface syntax, `src/exn.{c,h}`, `stdlib/exn.tur`, and all exception fixtures were deleted on the `no-exceptions` branch. Use `panic`/`catch-unwind`/`catch-panic-of` and `Result<T,E>` instead.
 
 ---
 
