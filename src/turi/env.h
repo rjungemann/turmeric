@@ -13,13 +13,30 @@
 
 #include <stdbool.h>
 
-#if defined(__APPLE__)
-#  pragma clang diagnostic push
-#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#endif
-#include <ucontext.h>
-#if defined(__APPLE__)
-#  pragma clang diagnostic pop
+#ifndef __EMSCRIPTEN__
+#  if defined(__APPLE__)
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#  endif
+#  include <ucontext.h>
+#  if defined(__APPLE__)
+#    pragma clang diagnostic pop
+#  endif
+#else
+/* WASM: ucontext.h not available; use Emscripten Fibers as the coroutine
+ * primitive.  Requires -sASYNCIFY=1 at link time.
+ * Full shims (getcontext/swapcontext/makecontext) live in turi/fiber.h. */
+#  include <emscripten/fiber.h>
+#  ifndef TURI_ASYNCIFY_STACK_SIZE
+#    define TURI_ASYNCIFY_STACK_SIZE 65536
+#  endif
+#  ifndef TURI_UCONTEXT_STUB_DEFINED
+#    define TURI_UCONTEXT_STUB_DEFINED
+typedef struct {
+    emscripten_fiber_t fiber;
+    char asyncify_stack[TURI_ASYNCIFY_STACK_SIZE];
+} ucontext_t;
+#  endif
 #endif
 
 #include "arena.h"

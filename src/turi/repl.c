@@ -47,6 +47,8 @@
 #include "reader.h"
 #include "symbols.h"
 #include "types.h"
+/* Tutorial system */
+#include "tutorial.h"
 
 /* -------------------------------------------------------------------------
  * Paren-balance counter — drives multi-line continuation
@@ -287,6 +289,17 @@ static void print_help(void) {
         "  :doc  <sym>         print documentation for a symbol or builtin\n"
         "  :reload <file>      evaluate a .tur file into the current session\n"
         "\n"
+        "Tutorial commands:\n"
+        "  :tutorial              list available tutorials\n"
+        "  :tutorial <name>       start a tutorial\n"
+        "  :tutorial <name> <n>   start a tutorial at step n\n"
+        "  :next                  go to next step\n"
+        "  :prev                  go to previous step\n"
+        "  :hint                  show hint for current step\n"
+        "  :skip                  skip current step\n"
+        "  :quit-tutorial         exit tutorial mode\n"
+        "  :tutorial-progress     show progress in current tutorial\n"
+        "\n"
         "Expressions are evaluated and the result printed.\n"
         "Definitions (defn, def) persist across expressions.\n"
         "Multi-line input: keep typing when parentheses are open; use\n"
@@ -298,10 +311,229 @@ static void print_help(void) {
  * Main REPL entry point
  * ---------------------------------------------------------------------- */
 
+/* Tutorial state for the REPL session */
+static TutorialState *g_tutorial_state = NULL;
+
+/* -------------------------------------------------------------------------
+ * Tutorial meta-commands
+ * ---------------------------------------------------------------------- */
+
+static void print_tutorial_help(void) {
+    printf(
+        "Tutorial meta-commands:\n"
+        "  :tutorial              list available tutorials\n"
+        "  :tutorial <name>       start a tutorial\n"
+        "  :tutorial <name> <n>   start a tutorial at step n\n"
+        "  :next                  go to next step\n"
+        "  :prev                  go to previous step\n"
+        "  :hint                  show hint for current step\n"
+        "  :skip                  skip current step\n"
+        "  :quit-tutorial         exit tutorial mode\n"
+        "  :tutorial-progress     show progress in current tutorial\n"
+    );
+}
+
+static void cmd_tutorial_list(void) {
+    int count = 0;
+    Tutorial **tutorials = tutorial_load_all(&count);
+    
+    if (count == 0) {
+        printf("No tutorials available.\n");
+        return;
+    }
+    
+    printf("Available tutorials:\n");
+    for (int i = 0; i < count; i++) {
+        Tutorial *t = tutorials[i];
+        char completed_marker = tutorial_is_completed(g_tutorial_state, t->id) ? 'v' : ' ';
+        printf("  %c %s - %s (%d steps, difficulty %d/5)\n",
+               completed_marker, t->id, t->description, t->step_count, t->difficulty);
+    }
+}
+
+static void cmd_tutorial_start(const char *name, int start_step) {
+    if (!name || name[0] == '\0') {
+        printf(":tutorial requires a tutorial name\n");
+        return;
+    }
+    
+    if (!tutorial_start(g_tutorial_state, name)) {
+        printf("unknown tutorial '%s' — use :tutorial to list available tutorials\n", name);
+        return;
+    }
+    
+    if (start_step > 0) {
+        tutorial_jump(g_tutorial_state, start_step - 1);
+    }
+    
+    Tutorial *t = tutorial_get_current_tutorial(g_tutorial_state);
+    TutorialStep *step = tutorial_get_current_step(g_tutorial_state);
+    
+    printf("Starting tutorial: %s\n", t->title);
+    printf("Step %d/%d: %s\n", tutorial_get_current_step_index(g_tutorial_state) + 1,
+           tutorial_get_step_count(g_tutorial_state), step->title);
+    printf("Instruction: %s\n", step->instruction);
+}
+
+static void cmd_tutorial_next(void) {
+    if (!g_tutorial_state->in_tutorial) {
+        printf("Not in tutorial mode. Use :tutorial <name> to start a tutorial.\n");
+        return;
+    }
+    
+    if (tutorial_next(g_tutorial_state)) {
+        TutorialStep *step = tutorial_get_current_step(g_tutorial_state);
+        printf("Step %d/%d: %s\n", tutorial_get_current_step_index(g_tutorial_state) + 1,
+               tutorial_get_step_count(g_tutorial_state), step->title);
+        printf("Instruction: %s\n", step->instruction);
+    } else {
+        printf("You have completed all steps in this tutorial!\n");
+        printf("Use :tutorial-progress to see your progress.\n");
+    }
+}
+
+static void cmd_tutorial_prev(void) {
+    if (!g_tutorial_state->in_tutorial) {
+        printf("Not in tutorial mode. Use :tutorial <name> to start a tutorial.\n");
+        return;
+    }
+    
+    if (tutorial_prev(g_tutorial_state)) {
+        TutorialStep *step = tutorial_get_current_step(g_tutorial_state);
+        printf("Step %d/%d: %s\n", tutorial_get_current_step_index(g_tutorial_state) + 1,
+               tutorial_get_step_count(g_tutorial_state), step->title);
+        printf("Instruction: %s\n", step->instruction);
+    } else {
+        printf("Already at the first step.\n");
+    }
+}
+
+static void cmd_tutorial_hint(void) {
+    if (!g_tutorial_state->in_tutorial) {
+        printf("Not in tutorial mode. Use :tutorial <name> to start a tutorial.\n");
+        return;
+    }
+    
+    TutorialStep *step = tutorial_get_current_step(g_tutorial_state);
+    int hint_count = tutorial_get_hint_count(step);
+    
+    if (hint_count == 0) {
+        printf("No hints available for this step.\n");
+        return;
+    }
+    
+    /* Show all hints */
+    printf("Hints:\n");
+    for (int i = 0; i < hint_count; i++) {
+        const char *hint = tutorial_get_hint(step, i);
+        printf("  %d. %s\n", i + 1, hint);
+    }
+}
+
+static void cmd_tutorial_skip(void) {
+    if (!g_tutorial_state->in_tutorial) {
+        printf("Not in tutorial mode. Use :tutorial <name> to start a tutorial.\n");
+        return;
+    }
+    
+    TutorialStep *step = tutorial_get_current_step(g_tutorial_state);
+
+    printf("Skipping step: %s\n", step->title);
+    cmd_tutorial_next();
+}
+
+static void cmd_tutorial_quit(void) {
+    if (!g_tutorial_state->in_tutorial) {
+        printf("Not in tutorial mode.\n");
+        return;
+    }
+    
+    Tutorial *t = tutorial_get_current_tutorial(g_tutorial_state);
+    printf("Exiting tutorial: %s\n", t->title);
+    g_tutorial_state->in_tutorial = false;
+    g_tutorial_state->tutorial = NULL;
+    g_tutorial_state->current_step = 0;
+}
+
+static void cmd_tutorial_progress(void) {
+    if (!g_tutorial_state->in_tutorial) {
+        printf("Not in tutorial mode.\n");
+        return;
+    }
+    
+    Tutorial *t = tutorial_get_current_tutorial(g_tutorial_state);
+    int progress = tutorial_get_progress(g_tutorial_state);
+    int current = tutorial_get_current_step_index(g_tutorial_state) + 1;
+    int total = tutorial_get_step_count(g_tutorial_state);
+    
+    printf("Tutorial: %s\n", t->title);
+    printf("Progress: %d%% (%d/%d steps)\n", progress, current, total);
+    
+    TutorialStep *step = tutorial_get_current_step(g_tutorial_state);
+    printf("Current step: %s\n", step->title);
+    printf("Instruction: %s\n", step->instruction);
+}
+
+/* -------------------------------------------------------------------------
+ * Tutorial integration with evaluation
+ * ---------------------------------------------------------------------- */
+
+/* Check if the input matches the current tutorial step */
+static bool check_tutorial_step(TuriEnv *env, const char *input) {
+    if (!g_tutorial_state->in_tutorial) return false;
+    
+    TutorialStep *step = tutorial_get_current_step(g_tutorial_state);
+    
+    if (tutorial_is_step_complete(g_tutorial_state, input)) {
+        printf("✓ %s\n", step->success_message);
+        
+        /* If there's a verify expression, evaluate it */
+        if (step->verify_expr) {
+            TuriValue result = turi_eval(env, step->verify_expr);
+            if (turi_is_error(result)) {
+                printf("Verification failed: %s\n", turi_error_message(result));
+            } else {
+                char repr[256];
+                turi_value_repr(repr, sizeof(repr), result);
+                printf("Verification: %s\n", repr);
+            }
+        }
+        
+        /* Mark step as completed */
+        g_tutorial_state->step_completed = true;
+        
+        /* Auto-advance to next step */
+        if (tutorial_next(g_tutorial_state)) {
+            TutorialStep *next_step = tutorial_get_current_step(g_tutorial_state);
+            printf("\nStep %d/%d: %s\n", tutorial_get_current_step_index(g_tutorial_state) + 1,
+                   tutorial_get_step_count(g_tutorial_state), next_step->title);
+            printf("Instruction: %s\n", next_step->instruction);
+        } else {
+            /* Completed all steps */
+            Tutorial *t = tutorial_get_current_tutorial(g_tutorial_state);
+            printf("\n✓ Tutorial '%s' completed!\n", t->title);
+            tutorial_mark_completed(g_tutorial_state);
+            g_tutorial_state->in_tutorial = false;
+            g_tutorial_state->tutorial = NULL;
+        }
+        
+        return true;
+    }
+    
+    return false;
+}
+
 int turi_repl_run(void) {
     bool use_color = isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
 
     turi_init(use_color);
+    
+    /* Initialize tutorial system */
+    tutorial_init();
+    g_tutorial_state = tutorial_state_new();
+    if (!g_tutorial_state) {
+        fprintf(stderr, "tur repl: failed to initialize tutorial state\n");
+    }
 
     printf("Turmeric v0.x.0  (type :help for help, :quit to exit)\n");
     fflush(stdout);
@@ -382,6 +614,64 @@ int turi_repl_run(void) {
                 free(line);
                 continue;
             }
+            if (strcmp(line, ":tutorial") == 0) {
+                cmd_tutorial_list();
+                free(line);
+                continue;
+            }
+            if (strncmp(line, ":tutorial", 8) == 0 && (line[8] == ' ' || line[8] == '\0')) {
+                const char *rest = (line[8] == ' ') ? line + 9 : "";
+                if (*rest == '\0') {
+                    cmd_tutorial_list();
+                } else {
+                    /* Parse tutorial name and optional step number */
+                    char name[256] = {0};
+                    int step = 0;
+                    int parsed = sscanf(rest, "%255s %d", name, &step);
+                    if (parsed >= 1) {
+                        cmd_tutorial_start(name, step);
+                    } else {
+                        printf(":tutorial requires a tutorial name\n");
+                    }
+                }
+                free(line);
+                continue;
+            }
+            if (strcmp(line, ":tutorial-help") == 0) {
+                print_tutorial_help();
+                free(line);
+                continue;
+            }
+            if (strcmp(line, ":next") == 0) {
+                cmd_tutorial_next();
+                free(line);
+                continue;
+            }
+            if (strcmp(line, ":prev") == 0) {
+                cmd_tutorial_prev();
+                free(line);
+                continue;
+            }
+            if (strcmp(line, ":hint") == 0) {
+                cmd_tutorial_hint();
+                free(line);
+                continue;
+            }
+            if (strcmp(line, ":skip") == 0) {
+                cmd_tutorial_skip();
+                free(line);
+                continue;
+            }
+            if (strcmp(line, ":quit-tutorial") == 0) {
+                cmd_tutorial_quit();
+                free(line);
+                continue;
+            }
+            if (strcmp(line, ":tutorial-progress") == 0) {
+                cmd_tutorial_progress();
+                free(line);
+                continue;
+            }
             if (line[0] == ':') {
                 printf("unknown meta-command '%s' — try :help\n", line);
                 free(line);
@@ -398,7 +688,17 @@ int turi_repl_run(void) {
         /* If balanced (or over-closed), evaluate */
         if (balance <= 0) {
             balance = 0;
+
             buf_putc(&multi, '\0');
+
+            /* Check if we're in tutorial mode and this input matches the current step */
+            if (g_tutorial_state && g_tutorial_state->in_tutorial) {
+                if (check_tutorial_step(env, multi.data)) {
+                    /* Tutorial step was completed, result was already printed */
+                    multi.len = 0;
+                    continue;
+                }
+            }
 
             TuriValue result = turi_eval(env, multi.data);
 

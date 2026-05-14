@@ -86,3 +86,36 @@ run-snake: games
 # ---------------------------------------------------------------------------
 
 rebuild: clean configure build
+
+# ---------------------------------------------------------------------------
+# WebAssembly & Web REPL targets
+# ---------------------------------------------------------------------------
+
+# Configure with WASM support
+configure-wasm:
+    cmake -S . -B build-wasm -DTUR_WASM=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+# Build WASM module (requires Emscripten)
+wasm: configure-wasm
+    cmake --build build-wasm -j --target tur_wasm
+
+# Set up web dependencies (Monaco Editor, etc.)
+web-deps:
+    cd web && npm install
+
+# Build web bundle (requires Vite)
+web: wasm web-deps
+    cd web && npm run build
+
+# Deploy to GitHub Pages
+deploy-web: web
+    cd web/dist && git init && git add . && git commit -m "Deploy to GitHub Pages"
+    git push -f git@github.com:turmeric-lang/turmeric.git main:gh-pages
+
+# Run web dev server
+web-dev: web-deps
+    cd web && npm run dev
+
+# Clean WASM build
+clean-wasm:
+    rm -rf build-wasm

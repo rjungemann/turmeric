@@ -1,0 +1,143 @@
+id: basics
+title: Turmeric Basics
+description: Learn the fundamentals of Turmeric syntax
+category: basics
+difficulty: 1
+steps:
+  - id: hello_world
+    title: Hello World
+    instruction: Type a hello world program
+    expected: '(println "Hello, Turmeric!")'
+    alternate_accept:
+      - '(println "Hello!")'
+      - '(println "Hi!")'
+      - '(println "Hello, World!")'
+    hints:
+      - Try using the println function
+      - Strings must be in double quotes
+      - Example: (println "text")
+    success_message: Great! You printed your first Turmeric expression.
+    match_strategy: normalized
+
+  - id: addition
+    title: Basic Arithmetic
+    instruction: Add two numbers together
+    expected: '(+ 1 2)'
+    alternate_accept:
+      - '(+ 2 1)'
+      - '(+ 1 2 3)'
+      - '(+ 3 4)'
+    hints:
+      - Use the + function
+      - Numbers are literals in Turmeric
+      - Example: (+ 1 2)
+    success_message: Addition works!
+    match_strategy: normalized
+
+  - id: subtraction
+    title: Subtraction
+    instruction: Subtract 5 from 10
+    expected: '(- 10 5)'
+    alternate_accept:
+      - '(- 20 10)'
+      - '(- 100 50)'
+    hints:
+      - Use the - function
+      - The format is (- minuend subtrahend)
+    success_message: Subtraction works!
+    match_strategy: normalized
+
+  - id: multiplication
+    title: Multiplication
+    instruction: Multiply 3 by 4
+    expected: '(* 3 4)'
+    alternate_accept:
+      - '(* 2 3)'
+      - '(* 5 6)'
+    hints:
+      - Use the * function
+      - Example: (* 2 3)
+    success_message: Multiplication works!
+    match_strategy: normalized
+
+  - id: division
+    title: Division
+    instruction: Divide 100 by 4
+    expected: '(/ 100 4)'
+    alternate_accept:
+      - '(/ 10 2)'
+      - '(/ 20 4)'
+    hints:
+      - Use the / function
+      - Division returns a float in Turmeric
+    success_message: Division works!
+    match_strategy: normalized
+
+  - id: definitions
+    title: Defining Variables
+    instruction: Define a variable named 'x' with value 42
+    expected: '(def x 42)'
+    alternate_accept:
+      - '(def x 100)'
+      - '(def y 42)'
+    hints:
+      - Use def to define a variable
+      - Format: (def name value)
+    success_message: Variable definition complete!
+    verify_expr: 'x'
+    match_strategy: normalized
+
+  - id: functions
+    title: Defining Functions
+    instruction: Define a function that squares a number
+    expected: '(defn square [x] (* x x))'
+    alternate_accept:
+      - '(defn square [n] (* n n))'
+      - '(defn sq [x] (* x x))'
+    hints:
+      - Use defn to define a function
+      - Parameters go in brackets after the function name
+      - Example: (defn square [x] (* x x))
+    success_message: Function definition complete!
+    verify_expr: '(square 5)'
+    match_strategy: normalized
+
+  - id: calling_functions
+    title: Calling Functions
+    instruction: Call the square function you defined with argument 5
+    expected: '(square 5)'
+    alternate_accept:
+      - '(square 10)'
+      - '(square 2)'
+    hints:
+      - Call the function with (square number)
+      - Make sure you defined square first
+    success_message: Function call successful!
+    match_strategy: normalized
+
+  - id: let_binding
+    title: Local Bindings
+    instruction: Use let to bind y to 10, then add 5 to y
+    expected: '(let [y 10] (+ y 5))'
+    alternate_accept:
+      - '(let [y 10] (+ 5 y))'
+      - '(let [x 10] (+ x 5))'
+    hints:
+      - Use let for local bindings
+      - Format: (let [name value] body)
+      - The binding is only visible in the body
+    success_message: Local binding works!
+    match_strategy: normalized
+
+  - id: if_expression
+    title: Conditional
+    instruction: Write an if expression that returns "positive" if 5 > 0, otherwise "negative"
+    expected: '(if (> 5 0) "positive" "negative")'
+    alternate_accept:
+      - '(if (> 1 0) "positive" "negative")'
+      - '(if (< 0 5) "positive" "negative")'
+    hints:
+      - Use the if form: (if condition then else)
+      - Use > for greater-than comparison
+    success_message: Conditional works!
+    match_strategy: normalized

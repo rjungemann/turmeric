@@ -35,21 +35,25 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
 
+#ifndef __EMSCRIPTEN__
+#  include <sys/mman.h>
 /* ucontext is POSIX and deprecated on macOS but still functional.
  * Suppress the deprecation warning so -Werror doesn't fail the build. */
-#if defined(__APPLE__)
-#  pragma clang diagnostic push
-#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#endif
-#include <ucontext.h>
-#if defined(__APPLE__)
-#  pragma clang diagnostic pop
-#endif
-
-#ifndef MAP_ANONYMOUS
-#  define MAP_ANONYMOUS MAP_ANON
+#  if defined(__APPLE__)
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#  endif
+#  include <ucontext.h>
+#  if defined(__APPLE__)
+#    pragma clang diagnostic pop
+#  endif
+#  ifndef MAP_ANONYMOUS
+#    define MAP_ANONYMOUS MAP_ANON
+#  endif
+/* WASM: Emscripten Fiber shims provided by fiber.h/env.h (included above). */
+#else
+#  include <emscripten.h>
 #endif
 
 /* Pull in all the compiler internal headers from the parent src/ directory.
@@ -347,34 +351,42 @@ typedef struct TuriHandlerFrame {
 } TuriHandlerFrame;
 
 /* Thread-local used to pass TuriEffectCont* into the body thunk.
- * makecontext only supports int arguments, so we use this side channel. */
+ * makecontext only supports int arguments, so we use this side channel.
+ * Not needed in WASM: emscripten_fiber_init accepts a void* arg directly. */
+#ifndef __EMSCRIPTEN__
 static _Thread_local TuriEffectCont *g_pending_cont;
+#endif
 
 /* Forward-declare eval_handle_inner (eval_expr is declared above). */
 static TuriValue eval_handle_inner(TuriEnv *env, EvalFrame *frame,
                                    const HandleExpr *h,
                                    TuriEffectCont *cont);
 
-/* Body thunk: runs inside the body fiber, switches back on perform or done. */
-#if defined(__APPLE__)
-#  pragma clang diagnostic push
-#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#endif
-static void eval_body_thunk(void) {
-    TuriEffectCont *cont = g_pending_cont;
-
-    /* Evaluate the body expression. */
+/* Body thunk: runs inside the body fiber; yields back when perform fires or done. */
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+static void eval_body_thunk(void *arg) {
+    TuriEffectCont *cont = (TuriEffectCont *)arg;
     cont->body_result = eval_expr(cont->env, cont->body_frame, cont->body_expr);
     cont->done        = true;
-
-    /* Return to the most-recent handler context. */
     swapcontext(&cont->body_ctx, &cont->handler_ctx);
-
-    /* Should never be reached. */
     abort();
 }
-#if defined(__APPLE__)
-#  pragma clang diagnostic pop
+#else
+#  if defined(__APPLE__)
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#  endif
+static void eval_body_thunk(void) {
+    TuriEffectCont *cont = g_pending_cont;
+    cont->body_result = eval_expr(cont->env, cont->body_frame, cont->body_expr);
+    cont->done        = true;
+    swapcontext(&cont->body_ctx, &cont->handler_ctx);
+    abort();
+}
+#  if defined(__APPLE__)
+#    pragma clang diagnostic pop
+#  endif
 #endif
 
 /* Resume body fiber with value val; return body's next result (or final). */
@@ -454,6 +466,7 @@ static TuriValue eval_handle(TuriEnv *env, EvalFrame *frame,
     cont->done         = false;
 
     /* Allocate body fiber stack. */
+#ifndef __EMSCRIPTEN__
     cont->body_stack = (char *)mmap(NULL, EFFECT_CONT_STACK_SIZE,
                                     PROT_READ | PROT_WRITE,
                                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -461,18 +474,34 @@ static TuriValue eval_handle(TuriEnv *env, EvalFrame *frame,
         free(cont);
         return turi_error("eval: mmap failed for continuation stack");
     }
-
-#if defined(__APPLE__)
-#  pragma clang diagnostic push
-#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#else
+    cont->body_stack = (char *)malloc(EFFECT_CONT_STACK_SIZE);
+    if (!cont->body_stack) {
+        free(cont);
+        return turi_error("eval: malloc failed for continuation stack");
+    }
 #endif
-    /* Set up the body fiber context. */
+
+    /* Set up execution contexts. */
+#ifndef __EMSCRIPTEN__
+    /* Native: template body_ctx from current context, configure stack, set entry. */
+#  if defined(__APPLE__)
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#  endif
     getcontext(&cont->body_ctx);
     cont->body_ctx.uc_stack.ss_sp   = cont->body_stack;
     cont->body_ctx.uc_stack.ss_size = EFFECT_CONT_STACK_SIZE;
     cont->body_ctx.uc_link          = NULL;
     g_pending_cont = cont;
     makecontext(&cont->body_ctx, eval_body_thunk, 0);
+#else
+    /* WASM: init handler from current execution context; init body as new fiber. */
+    getcontext(&cont->handler_ctx);
+    emscripten_fiber_init(&cont->body_ctx.fiber, eval_body_thunk, cont,
+                          cont->body_stack, EFFECT_CONT_STACK_SIZE,
+                          cont->body_ctx.asyncify_stack, TURI_ASYNCIFY_STACK_SIZE);
+#endif
 
     /* Push handler frame so body can find our cases during perform. */
     TuriHandlerFrame hf;
@@ -484,7 +513,7 @@ static TuriValue eval_handle(TuriEnv *env, EvalFrame *frame,
 
     /* Switch to body; saves current context into handler_ctx. */
     swapcontext(&cont->handler_ctx, &cont->body_ctx);
-#if defined(__APPLE__)
+#if !defined(__EMSCRIPTEN__) && defined(__APPLE__)
 #  pragma clang diagnostic pop
 #endif
 
@@ -500,7 +529,11 @@ static TuriValue eval_handle(TuriEnv *env, EvalFrame *frame,
         result = eval_handle_inner(env, frame, h, cont);
     }
 
+#ifndef __EMSCRIPTEN__
     munmap(cont->body_stack, EFFECT_CONT_STACK_SIZE);
+#else
+    free(cont->body_stack);
+#endif
     free(cont);
     return result;
 }
@@ -871,6 +904,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     /* --- Named function definition (defn) -------------------------------- */
     case EX_FN_DEF: {
         TuriClosure *cl = (TuriClosure *)malloc(sizeof(TuriClosure));
+        memset(cl, 0, sizeof(*cl)); /* zero native/skip_env_param/native_ud */
         cl->fn       = e->as.fn_def_.fn;
         cl->captured = NULL; /* top-level defn has no captured environment */
         TuriValue v  = turi_closure(cl);
@@ -980,76 +1014,6 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             return turi_errorf("eval: field index %u out of bounds (%u fields)",
                                idx, sv.as_struct->n_fields);
         return sv.as_struct->fields[idx];
-    }
-
-    /* --- Phase S4: Exceptions ------------------------------------------- */
-
-    /* (throw expr) — raise an exception. */
-    case EX_THROW: {
-        TuriValue v = eval_expr(env, frame, e->as.throw_.payload);
-        if (turi_is_error(v) || env->returning || env->throwing) return v;
-        TypeKind tk = TY_UNKNOWN;
-        switch (v.tag) {
-            case TURI_INT:   tk = TY_INT;   break;
-            case TURI_BOOL:  tk = TY_BOOL;  break;
-            case TURI_FLOAT: tk = TY_FLOAT; break;
-            case TURI_CSTR:  tk = TY_CSTR;  break;
-            default:         tk = TY_UNKNOWN; break;
-        }
-        env->throwing    = true;
-        env->throw_value = make_throw_val(v, tk);
-        return env->throw_value;
-    }
-
-    /* (try BODY (catch [e] HANDLER) ... (finally FBLOCK)) */
-    case EX_TRY: {
-        TuriValue result = eval_expr(env, frame, e->as.try_.body);
-
-        if (env->throwing) {
-            TuriThrow *t = env->throw_value.as_throw;
-            /* Try each catch clause. */
-            for (uint8_t i = 0; i < e->as.try_.n_clauses; i++) {
-                TryCatchClause *cl = &e->as.try_.clauses[i];
-                /* TY_NIL = no type annotation = catch-all (elaborator convention) */
-                bool match = (cl->catch_type == TY_NIL)
-                          || (t && t->type_kind == cl->catch_type);
-                if (match) {
-                    /* Clear throw signal and bind the exception variable. */
-                    TuriValue exc_val = t ? t->value : turi_nil();
-                    free(t);
-                    env->throwing = false;
-
-                    EvalFrame *cframe = eval_frame_new(frame);
-                    if (cl->binding) {
-                        frame_bind(cframe, cl->binding->name->name, exc_val);
-                    }
-                    result = eval_expr(env, cframe, cl->handler);
-                    eval_frame_free(cframe);
-                    break;
-                }
-            }
-            /* If no clause matched, throw continues to propagate. */
-        }
-
-        /* Evaluate finally block regardless of throw/return state. */
-        if (e->as.try_.finally_body) {
-            bool save_throwing  = env->throwing;
-            TuriValue save_tv   = env->throw_value;
-            bool save_returning = env->returning;
-            TuriValue save_rv   = env->return_value;
-
-            env->throwing  = false;
-            env->returning = false;
-            eval_expr(env, frame, e->as.try_.finally_body);
-
-            /* Restore saved signals (throw/return take priority over finally). */
-            env->throwing     = save_throwing;
-            env->throw_value  = save_tv;
-            env->returning    = save_returning;
-            env->return_value = save_rv;
-        }
-
-        return result;
     }
 
     /* --- Phase S4: Defer ------------------------------------------------ */
@@ -1208,6 +1172,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         fiber->cancelled     = false;
 
         /* Allocate fiber stack. */
+#ifndef __EMSCRIPTEN__
         fiber->stack = (char *)mmap(NULL, TURI_ASYNC_STACK_SIZE,
                                     PROT_READ | PROT_WRITE,
                                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -1215,20 +1180,29 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             free(fiber);
             return turi_error("eval: mmap failed for async fiber stack");
         }
+#else
+        fiber->stack = (char *)malloc(TURI_ASYNC_STACK_SIZE);
+        if (!fiber->stack) {
+            free(fiber);
+            return turi_error("eval: malloc failed for async fiber stack");
+        }
+#endif
 
-#if defined(__APPLE__)
+#if !defined(__EMSCRIPTEN__) && defined(__APPLE__)
 #  pragma clang diagnostic push
 #  pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #endif
         getcontext(&fiber->ctx);
+#ifndef __EMSCRIPTEN__
         fiber->ctx.uc_stack.ss_sp   = fiber->stack;
         fiber->ctx.uc_stack.ss_size = TURI_ASYNC_STACK_SIZE;
         fiber->ctx.uc_link          = NULL;
+#endif
         /* NOTE: g_pending_async_fiber is set right before swapcontext in the
          * scheduler, not here, so that creating multiple fibers before running
          * any of them doesn't overwrite the pointer prematurely. */
         makecontext(&fiber->ctx, async_fiber_thunk, 0);
-#if defined(__APPLE__)
+#if !defined(__EMSCRIPTEN__) && defined(__APPLE__)
 #  pragma clang diagnostic pop
 #endif
 

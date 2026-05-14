@@ -37,13 +37,43 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#if defined(__APPLE__)
-#  pragma clang diagnostic push
-#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#endif
-#include <ucontext.h>
-#if defined(__APPLE__)
-#  pragma clang diagnostic pop
+#ifndef __EMSCRIPTEN__
+#  if defined(__APPLE__)
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#  endif
+#  include <ucontext.h>
+#  if defined(__APPLE__)
+#    pragma clang diagnostic pop
+#  endif
+#else
+/* WASM: ucontext.h is not in Emscripten's sysroot.
+ * Use Emscripten Fibers for cooperative coroutines.  Requires -sASYNCIFY=1. */
+#  include <emscripten/fiber.h>
+#  ifndef TURI_ASYNCIFY_STACK_SIZE
+#    define TURI_ASYNCIFY_STACK_SIZE 65536
+#  endif
+#  ifndef TURI_UCONTEXT_STUB_DEFINED
+#    define TURI_UCONTEXT_STUB_DEFINED
+typedef struct {
+    emscripten_fiber_t fiber;
+    char asyncify_stack[TURI_ASYNCIFY_STACK_SIZE];
+} ucontext_t;
+#  endif
+/* Capture the current execution context so it can be resumed by swapcontext. */
+static inline int getcontext(ucontext_t *u) {
+    emscripten_fiber_init_from_current_context(&u->fiber, u->asyncify_stack,
+                                               TURI_ASYNCIFY_STACK_SIZE);
+    return 0;
+}
+/* Save current state into 'from' and switch execution to 'to'. */
+static inline int swapcontext(ucontext_t *from, ucontext_t *to) {
+    emscripten_fiber_swap(&from->fiber, &to->fiber);
+    return 0;
+}
+/* makecontext is replaced by a direct emscripten_fiber_init call in eval.c
+ * for the body fiber; keep the no-op for the async-fiber path (unused in WASM). */
+#define makecontext(u, fn, argc, ...) ((void)(u), (void)(fn), (void)(argc))
 #endif
 
 #include "value.h"

@@ -4,7 +4,16 @@
 #include <stdint.h>
 #include "platform.h"
 
-#if defined(TUR_ARCH_X64)
+#if defined(TUR_ARCH_WASM)
+
+/* WASM: no native context switching. Provide a placeholder type so that
+ * TurFiber compiles; the compiler-level fiber (src/fiber.c) is never called
+ * from the WASM interpreter path. */
+typedef struct { char _placeholder[1]; } tur_ctx_t;
+static inline void tur_ctx_swap(tur_ctx_t *from, tur_ctx_t *to) { (void)from; (void)to; }
+static inline void fiber_entry_shim(void) {}
+
+#elif defined(TUR_ARCH_X64)
 
 typedef struct {
     uintptr_t rip;

@@ -13,7 +13,8 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 
 - **[effects-system-guide.md](effects-system-guide.md)** — Algebraic effects, dependency injection, custom control flow
 - **[logic-programming-guide.md](logic-programming-guide.md)** — Backtracking, logic programming, constraint solving with cloneable continuations
-- **[checkpointing-guide.md](checkpointing-guide.md)** — Serializable continuations for persistent workflows and checkpointing
+- **[checkpointing-guide.md](checkpointing-guide.md)** — Cloneable continuations for persistent workflows and checkpointing
+- **[serializable-continuations-guide.md](serializable-continuations-guide.md)** — Serializable continuations for persistent workflows and cross-process computation
 
 ## Data Structures
 
@@ -48,14 +49,14 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 **By topic:**
 - Concurrency → [threading-guide.md](threading-guide.md), [async-await-guide.md](async-await-guide.md), [stm-guide.md](stm-guide.md), [stm-tutorial.md](stm-tutorial.md)
 - Data structures → [hamt-guide.md](hamt-guide.md)
-- Control flow → [effects-system-guide.md](effects-system-guide.md), [logic-programming-guide.md](logic-programming-guide.md)
+- Control flow → [effects-system-guide.md](effects-system-guide.md), [logic-programming-guide.md](logic-programming-guide.md), [serializable-continuations-guide.md](serializable-continuations-guide.md)
 - Type system → [hkt-guide.md](hkt-guide.md), [module-system-guide.md](module-system-guide.md)
 - Error handling → [error-handling-guide.md](error-handling-guide.md)
 
 **By level:**
 - Beginner → Tutorials, guides on core features
 - Intermediate → Advanced control flow, type system
-- Advanced → Effects, logic programming, serializable continuations
+- Advanced → Effects, logic programming, serializable continuations, checkpointing
 
 ---
 

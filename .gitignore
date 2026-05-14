@@ -1,5 +1,6 @@
 build/
 build2/
+build-wasm/
 *.dSYM/
 *.o
 *.d
@@ -9,3 +10,8 @@ tests/.stamp-cache/
 /tmp/tur-build/
 tur
 hello
+
+# Web
+web/node_modules/
+web/dist/
+web/test-results/
