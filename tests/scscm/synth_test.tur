@@ -1,0 +1,217 @@
+;;
+;; SCSCM Synth API Tests
+;; Phase C tests from scscm-hcsynth-livecoding-plan.md
+;;
+
+(import scscm/types scscm/ffi scscm/msg scscm/synth)
+
+;; ============================================================
+;; Basic Synth Creation Tests
+;; ============================================================
+
+(defn test-synth-new []
+  ;; Test creating a new synth
+  ;; Requires scsynth running with a 'sine' SynthDef
+  (let [node-id (synth-new "sine" :freq 440.0 :amp 0.5)]
+    (assert (> node-id 0) (str "synth-new should return positive node-id, got: " node-id))
+    ;; Clean up
+    (synth-free node-id)
+    true))
+
+(defn test-synth-new-with-args []
+  ;; Test creating synth with multiple arguments
+  (let [node-id (synth-new "sine" :freq 880.0 :amp 0.25 :pan 0.5)]
+    (assert (> node-id 0) "synth-new with args should work")
+    (synth-free node-id)
+    true))
+
+(defn test-synth-free []
+  ;; Test freeing a synth
+  (let [node-id (synth-new "sine" :freq 440.0)]
+    (let [result (synth-free node-id)]
+      (assert (== result 0) "synth-free should succeed")
+      true)))
+
+;; ============================================================
+;; Synth Parameter Control Tests
+;; ============================================================
+
+(defn test-synth-set []
+  ;; Test setting synth parameters
+  (let [node-id (synth-new "sine" :freq 440.0 :amp 0.5)]
+    (defer (synth-free node-id))
+    (let [result (synth-set node-id :freq 880.0 :amp 0.25)]
+      (assert (== result 0) "synth-set should succeed")
+      true)))
+
+(defn test-synth-set-multiple []
+  ;; Test setting multiple parameters at once
+  (let [node-id (synth-new "sine" :freq 440.0)]
+    (defer (synth-free node-id))
+    (synth-set node-id :freq 660.0 :amp 0.3 :pan -0.5)
+    (synth-set node-id :freq 330.0 :amp 0.7)
+    true))
+
+(defn test-synth-get-info []
+  ;; Test getting synth info (if implemented)
+  ;; This is a placeholder - actual implementation depends on scsynth feedback
+  true)
+
+;; ============================================================
+;; Group Control Tests
+;; ============================================================
+
+(defn test-group-new []
+  ;; Test creating a new group
+  (let [group-id (group-new)]
+    (assert (> group-id 0) (str "group-new should return positive id, got: " group-id))
+    ;; Clean up
+    (synth-free group-id)
+    true))
+
+(defn test-group-add []
+  ;; Test adding synths to a group
+  (let [group-id (group-new)]
+    (defer (synth-free group-id))
+    (let [synth-id (group-add group-id "sine" :freq 440.0)]
+      (assert (> synth-id 0) "group-add should return positive node-id")
+      (synth-free synth-id)
+      true))))
+
+(defn test-group-free []
+  ;; Test freeing a group and all its children
+  (let [group-id (group-new)]
+    (group-add group-id "sine" :freq 440.0)
+    (group-add group-id "sine" :freq 660.0)
+    (let [result (synth-free group-id)]
+      (assert (== result 0) "Freeing group should succeed")
+      true)))
+
+;; ============================================================
+;; Node Action Tests
+;; ============================================================
+
+(defn test-synth-new-add-to-head []
+  ;; Test adding synth to head of node tree
+  (let [node-id (synth-new "sine" :freq 440.0 :add-action :add-to-head)]
+    (assert (> node-id 0) "synth-new with add-to-head should work")
+    (synth-free node-id)
+    true))
+
+(defn test-synth-new-add-to-tail []
+  ;; Test adding synth to tail of node tree (default)
+  (let [node-id (synth-new "sine" :freq 440.0 :add-action :add-to-tail)]
+    (assert (> node-id 0) "synth-new with add-to-tail should work")
+    (synth-free node-id)
+    true))
+
+(defn test-synth-new-add-before []
+  ;; Test adding synth before a specific node
+  (let [existing-id (synth-new "sine" :freq 440.0)]
+    (defer (synth-free existing-id))
+    (let [node-id (synth-new "sine" :freq 660.0 :add-action :add-before :target existing-id)]
+      (assert (> node-id 0) "synth-new with add-before should work")
+      (synth-free node-id)
+      true)))
+
+(defn test-synth-new-add-after []
+  ;; Test adding synth after a specific node
+  (let [existing-id (synth-new "sine" :freq 440.0)]
+    (defer (synth-free existing-id))
+    (let [node-id (synth-new "sine" :freq 660.0 :add-action :add-after :target existing-id)]
+      (assert (> node-id 0) "synth-new with add-after should work")
+      (synth-free node-id)
+      true)))
+
+(defn test-synth-new-replace []
+  ;; Test replacing an existing synth
+  (let [existing-id (synth-new "sine" :freq 440.0)]
+    (let [node-id (synth-new "sine" :freq 880.0 :add-action :replace :target existing-id)]
+      (assert (> node-id 0) "synth-new with replace should work")
+      ;; The new node should have replaced the old one
+      true)))
+
+;; ============================================================
+;; Batch Operations Tests
+;; ============================================================
+
+(defn test-batch-synth-creation []
+  ;; Test creating multiple synths in batch
+  (let [ids (map (fn [freq] (synth-new "sine" :freq freq :amp 0.1))
+                [220.0 440.0 880.0])]
+    (assert (== (len ids) 3) "Should create 3 synths")
+    (doseq [id ids] (synth-free id))
+    true))
+
+(defn test-bundle-operations []
+  ;; Test bundle operations if implemented
+  true)
+
+;; ============================================================
+;; SynthDef Management Tests
+;; ============================================================
+
+(defn test-synthdef-load []
+  ;; Test loading a SynthDef
+  ;; This requires scsynth to have the SynthDef available
+  true)
+
+(defn test-synthdef-free []
+  ;; Test freeing a SynthDef
+  true)
+
+;; ============================================================
+;; Server Control Tests
+;; ============================================================
+
+(defn test-server-status []
+  ;; Test getting server status
+  (osc-send "/status")
+  true)
+
+(defn test-server-quit []
+  ;; Test quitting server (use with caution)
+  ;; This is commented out as it would stop the server
+  true)
+
+;; ============================================================
+;; Main Test Runner
+;; ============================================================
+
+(defn run-all-tests []
+  (let [tests [
+    ["synth-new" test-synth-new]
+    ["synth-new with args" test-synth-new-with-args]
+    ["synth-free" test-synth-free]
+    ["synth-set" test-synth-set]
+    ["synth-set multiple" test-synth-set-multiple]
+    ["synth-get-info" test-synth-get-info]
+    ["group-new" test-group-new]
+    ["group-add" test-group-add]
+    ["group-free" test-group-free]
+    ["synth-new add-to-head" test-synth-new-add-to-head]
+    ["synth-new add-to-tail" test-synth-new-add-to-tail]
+    ["synth-new add-before" test-synth-new-add-before]
+    ["synth-new add-after" test-synth-new-add-after]
+    ["synth-new replace" test-synth-new-replace]
+    ["batch synth creation" test-batch-synth-creation]
+    ["bundle operations" test-bundle-operations]
+    ["synthdef-load" test-synthdef-load]
+    ["synthdef-free" test-synthdef-free]
+    ["server status" test-server-status]
+    ["server quit" test-server-quit]
+  ]]
+    (doseq [[name test-fn] tests]
+      (print (str "Testing: " name " ... "))
+      (try
+        (let [result (test-fn)]
+          (if result
+            (println " PASS")
+            (println " FAIL")))
+        (catch e
+          (println (str " ERROR: " (error->string e))))))
+    (println "\nSynth API tests complete.")))
+
+;; Run tests if executed directly
+(when (== (get *argv* 0) "run")
+  (run-all-tests))

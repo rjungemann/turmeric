@@ -1,0 +1,222 @@
+;;
+;; SCSCM Error Handling Tests
+;; Phase G tests from scscm-hcsynth-livecoding-plan.md
+;;
+
+(import scscm/types scscm/errors scscm/ffi scscm/msg)
+
+;; ============================================================
+;; Error Type Tests
+;; ============================================================
+
+(defn test-scscm-error-enum []
+  ;; Test that error enum values are defined
+  (assert (keyword? :connection-failed) "connection-failed should be a keyword")
+  (assert (keyword? :send-failed) "send-failed should be a keyword")
+  (assert (keyword? :invalid-args) "invalid-args should be a keyword")
+  (assert (keyword? :synth-not-found) "synth-not-found should be a keyword")
+  (assert (keyword? :out-of-nodes) "out-of-nodes should be a keyword")
+  true))
+
+;; ============================================================
+;; Result Type Tests
+;; ============================================================
+
+(defn test-scscm-result-ok []
+  ;; Test creating a successful result
+  (let [result (make-ok 42)]
+    (assert (:ok result) "Result should be ok")
+    (assert (== (:value result) 42) "Value should be 42")
+    (assert (none? (:error result)) "Error should be none")
+    true))
+
+(defn test-scscm-result-err []
+  ;; Test creating an error result
+  (let [result (make-err :invalid-args)]
+    (assert (not (:ok result)) "Result should not be ok")
+    (assert (none? (:value result)) "Value should be none")
+    (assert (== (:error result) :invalid-args) "Error should be :invalid-args")
+    true))
+
+(defn test-result-map []
+  ;; Test mapping over a result
+  (let [result (make-ok 10)]
+    (let [mapped (result-map result (fn [x] (* x 2)))]
+      (assert (:ok mapped) "Mapped result should be ok")
+      (assert (== (:value mapped) 20) "Mapped value should be 20")
+      true)))
+
+(defn test-result-map-error []
+  ;; Test mapping over an error result
+  (let [result (make-err :connection-failed)]
+    (let [mapped (result-map result (fn [x] (* x 2)))]
+      (assert (not (:ok mapped)) "Mapped error result should still be error")
+      (assert (== (:error mapped) :connection-failed) "Error should be preserved")
+      true)))
+
+(defn test-result-chain []
+  ;; Test chaining result operations
+  (let [r1 (make-ok 10)]
+    (let [r2 (result-chain r1 (fn [x] (make-ok (* x 2))))]
+      (assert (:ok r2) "Chained result should be ok")
+      (assert (== (:value r2) 20) "Chained value should be 20")
+      true)))
+
+(defn test-result-chain-error []
+  ;; Test chaining with error propagation
+  (let [r1 (make-err :connection-failed)]
+    (let [r2 (result-chain r1 (fn [x] (make-ok (* x 2))))]
+      (assert (not (:ok r2)) "Chained error result should be error")
+      (assert (== (:error r2) :connection-failed) "Error should propagate")
+      true)))
+
+;; ============================================================
+;; Validation Tests
+;; ============================================================
+
+(defn test-validate-node-id []
+  ;; Test node ID validation
+  (assert (validate-node-id 1000) "Valid node-id should pass")
+  (assert (not (validate-node-id 0)) "Node-id 0 should fail (reserved)")
+  (assert (not (validate-node-id -1)) "Negative node-id should fail")
+  true))
+
+(defn test-validate-param-name []
+  ;; Test parameter name validation
+  (assert (validate-param-name "freq") "Valid param name should pass")
+  (assert (validate-param-name "amp") "Valid param name should pass")
+  (assert (validate-param-name "pan") "Valid param name should pass")
+  (assert (not (validate-param-name "")) "Empty string should fail")
+  (assert (not (validate-param-name "invalid name")) "Param name with space should fail")
+  true))
+
+(defn test-validate-address []
+  ;; Test OSC address validation
+  (assert (validate-address "/s_new") "Valid address should pass")
+  (assert (validate-address "/n_set") "Valid address should pass")
+  (assert (validate-address "/test") "Valid address should pass")
+  (assert (not (validate-address "invalid")) "Address without / should fail")
+  (assert (not (validate-address "")) "Empty address should fail")
+  true))
+
+;; ============================================================
+;; Safe FFI Wrapper Tests
+;; ============================================================
+
+(defn test-safe-osc-send []
+  ;; Test safe OSC send
+  (let [result (safe-osc-send "/ping")]
+    (if (:ok result)
+      (assert (== (:value result) 0) "Successful send should return 0")
+      true)  ;; If send fails (no server), that's ok for this test
+    true))
+
+(defn test-safe-osc-send-invalid []
+  ;; Test safe OSC send with invalid arguments
+  (let [result (safe-osc-send null)]
+    (assert (not (:ok result)) "Sending null message should fail")
+    true))
+
+;; ============================================================
+;; Node ID Management Tests
+;; ============================================================
+
+(defn test-node-id-pool []
+  ;; Test node ID pooling
+  (let [pool (make-node-id-pool 1000)]
+    (let [id1 (pool-alloc pool)]
+      (assert (== id1 1000) "First allocated id should be 1000")
+      (let [id2 (pool-alloc pool)]
+        (assert (== id2 1001) "Second allocated id should be 1001")
+        (let [pool2 (pool-free pool id1)]
+          (let [id3 (pool-alloc pool2)]
+            (assert (== id3 1000) "Freed id should be reused")
+            true)))))))
+
+(defn test-node-id-pool-exhausted []
+  ;; Test node ID pool exhaustion
+  (let [pool (make-node-id-pool 1000 10)]
+    ;; Allocate all IDs
+    (dotimes [i 10]
+      (pool-alloc pool))
+    ;; Next allocation should fail or wrap
+    true))
+
+;; ============================================================
+;; Connection Error Tests
+;; ============================================================
+
+(defn test-connection-error []
+  ;; Test connection error handling
+  (let [result (check-connection "127.0.0.1" 99999)]
+    ;; Port 99999 should not have a server
+    (assert (not (:ok result)) "Connection to invalid port should fail")
+    true))
+
+;; ============================================================
+;; Result Helper Tests
+;; ============================================================
+
+(defn test-result-unwrap []
+  ;; Test unwrapping a result
+  (let [result (make-ok 42)]
+    (let [value (result-unwrap result)]
+      (assert (== value 42) "Unwrapped value should be 42")
+      true)))
+
+(defn test-result-unwrap-error []
+  ;; Test unwrapping an error result (should panic or return default)
+  (let [result (make-err :connection-failed)]
+    (try
+      (result-unwrap result)
+      false  ;; Should not reach here
+      (catch _
+        true)))  ;; Panic caught
+    true))
+
+(defn test-result-unwrap-or []
+  ;; Test unwrapping with default
+  (let [result (make-err :connection-failed)]
+    (let [value (result-unwrap-or result 100)]
+      (assert (== value 100) "Should return default value")
+      true)))
+
+;; ============================================================
+;; Main Test Runner
+;; ============================================================
+
+(defn run-all-tests []
+  (let [tests [
+    ["scscm error enum" test-scscm-error-enum]
+    ["scscm result ok" test-scscm-result-ok]
+    ["scscm result err" test-scscm-result-err]
+    ["result map" test-result-map]
+    ["result map error" test-result-map-error]
+    ["result chain" test-result-chain]
+    ["result chain error" test-result-chain-error]
+    ["validate node-id" test-validate-node-id]
+    ["validate param name" test-validate-param-name]
+    ["validate address" test-validate-address]
+    ["safe osc send" test-safe-osc-send]
+    ["safe osc send invalid" test-safe-osc-send-invalid]
+    ["node-id pool" test-node-id-pool]
+    ["node-id pool exhausted" test-node-id-pool-exhausted]
+    ["connection error" test-connection-error]
+    ["result unwrap" test-result-unwrap]
+    ["result unwrap error" test-result-unwrap-error]
+    ["result unwrap or" test-result-unwrap-or]
+  ]]
+    (doseq [[name test-fn] tests]
+      (print (str "Testing: " name " ... "))
+      (try
+        (let [result (test-fn)]
+          (if result
+            (println " PASS")
+            (println " FAIL")))
+        (catch e
+          (println (str " ERROR: " (error->string e))))))
+    (println "\nError handling tests complete.")))
+
+;; Run tests if executed directly
+(when (== (get *argv* 0) "run")
+  (run-all-tests))

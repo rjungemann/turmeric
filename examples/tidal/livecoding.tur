@@ -1,0 +1,286 @@
+;;
+;; Tidal Examples: Live Coding
+;; Demonstrates live coding workflow with pattern manipulation
+;;
+
+(import tidal/pattern tidal/temporal tidal/structural tidal/transform tidal/live tidal/synth tidal/mini)
+
+;; ============================================================
+;; 1. Setting up a Live Session
+;; ============================================================
+
+;; Create a live session at 120 BPM
+(def session (make-live-session 120.0))
+
+;; Set up default synth for testing (requires scscm)
+;; (def synth (synth-new "sine"))
+
+;; ============================================================
+;; 2. Basic Live Pattern Manipulation
+;; ============================================================
+
+;; Start with a simple pattern
+(def initial-pattern (const 440.0))
+
+;; Create a player
+(def player (make-player "test" initial-pattern 120.0))
+
+;; Update the player with a new pattern
+(defn update-to-cycle []
+  (player-update player (cycle 220.0 440.0 880.0)))
+
+;; Update to a transformed pattern
+(defn update-to-transformed []
+  (player-update player (slow 2 (cycle 220.0 440.0 880.0))))
+
+;; Stop the player
+(defn stop-player []
+  (player-stop player))
+
+;; ============================================================
+;; 3. Pattern Swapping with d1 and hush
+;; ============================================================
+
+;; Set the default pattern (d1 in TidalCycles)
+(def d1-pattern (const (make-map)))
+(map-set! d1-pattern :freq (cycle 220.0 440.0))
+(map-set! d1-pattern :amp (const 0.5))
+
+;; In TidalCycles, d1 would play this pattern
+;; (def d1 (swap-patterns player d1-pattern))
+
+;; Hush (silence all)
+(def hush-pattern (const (make-map)))
+(map-set! hush-pattern :amp (const 0.0))
+
+;; In TidalCycles, hush would silence everything
+;; (def hush (swap-patterns player hush-pattern))
+
+;; ============================================================
+;; 4. Stateful Patterns for Live Coding
+;; ============================================================
+
+;; Counter pattern that increments on each evaluation
+(def counter (make-stateful-pattern 0 
+  (fn [count time] 
+    [(inc count) (const (+ 60 count))])))
+
+;; LFO pattern with phase that accumulates
+(def lfo-pattern (make-stateful-pattern 0.0 
+  (fn [phase time]
+    [(+ phase 0.01) (const (* 10.0 (math/sin phase)))])))
+
+;; ============================================================
+;; 5. Live Pattern Evaluation
+;; ============================================================
+
+;; Evaluate a pattern expression from a string
+(defn eval-and-play [code]
+  (let [p (eval-pattern code)]
+    (player-update player p)
+    p))
+
+;; Example: evaluate and play "(cycle 1 2 3)"
+;; (eval-and-play "(cycle 1 2 3)")
+
+;; ============================================================
+;; 6. Pattern Hot-Reloading
+;; ============================================================
+
+;; Watch a file for changes and reload patterns
+;; This would require file system access
+(defn setup-hot-reload [file-path]
+  (watch-pattern file-path session "sine" 120.0))
+
+;; ============================================================
+;; 7. Live Coding with Mini-Notation
+;; ============================================================
+
+;; Use mini-notation for quick pattern entry
+(def mini-pattern-1 (s "1 2 3 4"))
+(def mini-pattern-2 (s "1*2 3*0.5"))
+(def mini-pattern-3 (s "[1 2] [3 4]"))
+
+;; Update player with mini-notation
+(defn play-mini [notation]
+  (player-update player (parse-mini notation)))
+
+;; Example usage:
+;; (play-mini "1 2 3 4")
+;; (play-mini "1*2 3*0.5")
+
+;; ============================================================
+;; 8. Drum Pattern Live Coding
+;; ============================================================
+
+;; Live drum pattern manipulation
+(def drum-player (make-player "drums" (const (make-map)) 120.0))
+
+(defn play-drum-pattern [pattern]
+  (swap-patterns drum-player pattern))
+
+;; Example drum patterns for live coding
+(def bd-pattern (kick [0.0]))
+(def sd-pattern (snare [1.0 3.0]))
+(def hh-pattern (hat [0.0 0.5 1.0 1.5 2.0 2.5 3.0 3.5]))
+
+;; Combine them
+(def full-drums (stack bd-pattern sd-pattern hh-pattern))
+
+;; Update drum player
+;; (play-drum-pattern full-drums)
+
+;; ============================================================
+;; 9. Parameter Automation
+;; ============================================================
+
+;; Animate filter cutoff with LFO
+(def filtered-synth (make-map))
+(map-set! filtered-synth :freq (const 440.0))
+(map-set! filtered-synth :amp (const 0.5))
+(map-set! filtered-synth :cutoff (add (const 1000.0) (sine 1.0 500.0)))
+
+;; Animate multiple parameters
+(def animated-synth (make-map))
+(map-set! animated-synth :freq (add (const 440.0) (sine 0.5 20.0)))
+(map-set! animated-synth :amp (mul (const 0.5) (square 2.0 0.5)))
+(map-set! animated-synth :pan (saw 0.25 -1.0 1.0)))
+
+;; ============================================================
+;; 10. Live Coding Session Example
+;; ============================================================
+
+;; This function demonstrates a complete live coding session
+(defn live-coding-session []
+  (println "\n" (repeat 50 "="))
+  (println "LIVE CODING SESSION START")
+  (println (repeat 50 "="))
+  
+  ;; Step 1: Start with a simple synth
+  (println "\n1. Starting with a simple 440 Hz sine wave...")
+  (player-update player (const 440.0))
+  
+  ;; Step 2: Make it a melody
+  (println "\n2. Changing to a melody pattern...")
+  (player-update player (cycle 220.0 440.0 880.0 440.0))
+  
+  ;; Step 3: Slow it down
+  (println "\n3. Slowing it down...")
+  (player-update player (slow 2 (cycle 220.0 440.0 880.0 440.0)))
+  
+  ;; Step 4: Add some variation
+  (println "\n4. Adding jitter for variation...")
+  (player-update player (jitter (slow 2 (cycle 220.0 440.0 880.0 440.0)) 20.0 440.0))
+  
+  ;; Step 5: Make it polyrhythmic
+  (println "\n5. Adding polyrhythm...")
+  (player-update player (stack 
+    (slow 2 (cycle 220.0 440.0))
+    (fast 3 (cycle 880.0 660.0 550.0))))
+  
+  ;; Step 6: Add harmony
+  (println "\n6. Adding harmony...")
+  (player-update player (stack 
+    (slow 2 (cycle 220.0 440.0))
+    (fast 3 (cycle 880.0 660.0 550.0))
+    (slow 4 (cycle 110.0 220.0))))
+  
+  ;; Step 7: Use mini-notation
+  (println "\n7. Using mini-notation...")
+  (player-update player (parse-mini "1 2 3 4 5"))
+  
+  ;; Step 8: Add transformations
+  (println "\n8. Adding transformations...")
+  (player-update player (add (parse-mini "1 2 3 4") (const 100)))
+  
+  ;; Step 9: Complex pattern
+  (println "\n9. Complex generative pattern...")
+  (player-update player (stack 
+    (slow 2 (cycle 220.0 440.0 880.0))
+    (fast 3 (jitter (cycle 660.0 770.0) 50.0 660.0))
+    (sine 1.0 100.0)))
+  
+  ;; Step 10: Silence
+  (println "\n10. Hush - silencing all...")
+  (player-update player (const 0.0))
+  
+  (println "\n" (repeat 50 "="))
+  (println "LIVE CODING SESSION END")
+  (println (repeat 50 "="))
+  
+  nil)
+
+;; ============================================================
+;; 11. Interactive Live Coding Helpers
+;; ============================================================
+
+;; Helper to quickly change BPM
+(defn set-bpm [new-bpm]
+  (println (str "Setting BPM to " new-bpm))
+  ;; In actual implementation, this would update the session
+  ))
+
+;; Helper to quickly change synth
+(defn set-synth [synth-name]
+  (println (str "Setting synth to " synth-name))
+  ;; In actual implementation, this would update the player
+  ))
+
+;; Helper to solo a pattern
+(defn solo [pattern-name]
+  (println (str "Soloing " pattern-name))
+  ;; In actual implementation, this would mute all but the specified pattern
+  ))
+
+;; Helper to mute a pattern
+(defn mute [pattern-name]
+  (println (str "Muting " pattern-name))
+  ;; In actual implementation, this would mute the specified pattern
+  ))
+
+;; ============================================================
+;; Main Demo Function
+;; ============================================================
+
+(defn run-demos []
+  (println "\n" (repeat 50 "="))
+  (println "TIDAL LIVE CODING DEMO")
+  (println (repeat 50 "="))
+  
+  (println "\nNote: This demo shows code structures for live coding.")
+  (println "Actual audio output requires scsynth to be running.")
+  
+  (println "\n--- Basic Live Pattern Manipulation ---")
+  (println "Try: (update-to-cycle)")
+  (println "Try: (update-to-transformed)")
+  (println "Try: (stop-player)")
+  
+  (println "\n--- Stateful Patterns ---")
+  (println "Counter pattern returns:")
+  (let [[new-state new-pat] (step-stateful counter 0.0)]
+    (println (str "  New state: " new-state ", Pattern value at 0: " (new-pat 0.0))))
+  
+  (println "\n--- Mini-Notation ---")
+  (println "Mini pattern 1:")
+  (print-pattern mini-pattern-1 [0.0 1.0 2.0 3.0])
+  
+  (println "\nMini pattern 2 (with multiplication):")
+  (print-pattern mini-pattern-2 [0.0 1.0 2.0 3.0])
+  
+  (println "\n--- Complete Live Coding Session ---")
+  (println "Running simulated live coding session...")
+  (live-coding-session)
+  
+  (println "\n" (repeat 50 "="))
+  (println "Live coding demo complete!")
+  (println (repeat 50 "="))
+  
+  nil)
+
+(defn print-pattern [p times]
+  (doseq [t times]
+    (println (str "  time " t ": " (p t)))))
+
+;; Run demos if executed directly
+(when (== (get *argv* 0) "run")
+  (run-demos))

@@ -1,0 +1,56 @@
+;; examples/scscm/basic.tur — Basic SCSCM Example
+;;
+;; This example demonstrates basic usage of the SCSCM library:
+;; - Creating a world (audio engine)
+;; - Creating synths
+;; - Setting parameters
+;; - Rendering audio
+
+(import scscm/scscm :scscm)
+
+;; Create a world with default settings (48kHz, 512 samples block size)
+(def world (scscm/world-create))
+
+;; Create a simple sine wave synth
+;; Note: This assumes a SynthDef named "sin" is already loaded
+;; In a real application, you would load SynthDefs from .scsyndef files
+(def synth-node (scscm/synth-new world "sin" 1000))
+
+;; Set parameters on the synth
+;; Assuming the "sin" synth has controls: 0=freq, 1=amp, 2=pan
+(scscm/synth-set world synth-node 0 440.0)  ;; Frequency: 440 Hz (A4)
+(scscm/synth-set world synth-node 1 0.5)    ;; Amplitude: 0.5
+(scscm/synth-set world synth-node 2 0.0)    ;; Pan: center
+
+;; Set multiple parameters at once
+(scscm/synth-set-multi world synth-node {0 880.0  ;; Higher frequency
+                                            1 0.3})  ;; Lower amplitude
+
+;; Free the synth
+(scscm/synth-free world synth-node)
+
+;; Get world information
+(def sample-rate (scscm/world-sample-rate world))
+(def block-size (scscm/world-block-size world))
+
+(println "World created with sample rate:" sample-rate "Hz, block size:" block-size "samples")
+
+;; Render a block of audio
+;; In a real application, this would be called from an audio callback
+(def output-buffer (malloc (* block-size 2 (size-of float))))
+(defer (free output-buffer))
+
+(def result (scscm/world-render world output-buffer))
+(println "Render result:" result)
+
+;; Get engine status
+(def status (scscm/world-get-status world))
+(println "Engine status:" status)
+
+;; Get list of UGens
+(def ugens (scscm/list-ugens))
+(println "Available UGens (first 200 chars):" (str/left ugens 200))
+
+;; Clean up
+(scscm/world-destroy world)
+(println "World destroyed")

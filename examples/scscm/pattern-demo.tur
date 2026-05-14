@@ -1,0 +1,161 @@
+;; examples/scscm/pattern-demo.tur — Pattern Library Demo
+;;
+;; This example demonstrates the pattern library for creating
+;; complex rhythmic and melodic patterns.
+
+(import scscm/scscm :scscm)
+
+;; Create a live session
+(def session (scscm/live-session-new 48000 512))
+
+(println "Pattern demo started")
+
+;; ============================================================================
+;; Basic Patterns
+;; ============================================================================
+
+;; Constant pattern
+(def const-pat (scscm/const 440.0))
+(println "Constant pattern value:" (const-pat 0))
+(println "Constant pattern value:" (const-pat 100))
+
+;; Cycle pattern
+(def cycle-pat (scscm/cycle 440.0 550.0 660.0 880.0))
+(println "Cycle pattern at beat 0:" (cycle-pat 0))
+(println "Cycle pattern at beat 1:" (cycle-pat 1))
+(println "Cycle pattern at beat 2:" (cycle-pat 2))
+(println "Cycle pattern at beat 3:" (cycle-pat 3))
+(println "Cycle pattern at beat 4:" (cycle-pat 4))  ;; Wraps around
+
+;; Every N beats
+(def every-2 (scscm/every 2 (scscm/const 1)))
+(println "Every 2 pattern at beat 0:" (every-2 0))
+(println "Every 2 pattern at beat 1:" (every-2 1))
+(println "Every 2 pattern at beat 2:" (every-2 2))
+(println "Every 2 pattern at beat 3:" (every-2 3))
+
+;; ============================================================================
+;; Pattern Combinators
+;; ============================================================================
+
+;; Stack patterns
+(def stack-pat (scscm/stack (scscm/const 440.0) (scscm/const 0.5)))
+(println "Stack pattern at beat 0:" (stack-pat 0))
+
+;; Sequence patterns
+(def seq-pat (scscm/seq (scscm/const 440.0) (scscm/const 550.0) (scscm/const 660.0)))
+(println "Sequence pattern at beat 0:" (seq-pat 0))
+(println "Sequence pattern at beat 1:" (seq-pat 1))
+(println "Sequence pattern at beat 2:" (seq-pat 2))
+(println "Sequence pattern at beat 3:" (seq-pat 3))
+
+;; Slow and fast
+(def slow-pat (scscm/slow 2 (scscm/cycle 100 200 300)))
+(println "Slow pattern at beat 0:" (slow-pat 0))
+(println "Slow pattern at beat 1:" (slow-pat 1))
+(println "Slow pattern at beat 2:" (slow-pat 2))  ;; Changes at beat 2 (slow by 2x)
+
+(def fast-pat (scscm/fast 2 (scscm/cycle 100 200 300)))
+(println "Fast pattern at beat 0:" (fast-pat 0))
+(println "Fast pattern at beat 0.5:" (fast-pat 0.5))  ;; Changes at beat 0.5 (fast by 2x)
+
+;; ============================================================================
+;; Euclidean Patterns
+;; ============================================================================
+
+;; 3 notes in 8 steps (common house rhythm)
+(def euclid-3-8 (scscm/euclidean 3 8))
+(println "Euclidean 3 in 8 pattern:")
+(for [i (range 8)]
+  (println "  Beat" i ":" (euclid-3-8 i)))
+
+;; 5 notes in 8 steps
+(def euclid-5-8 (scscm/euclidean 5 8))
+(println "Euclidean 5 in 8 pattern:")
+(for [i (range 8)]
+  (println "  Beat" i ":" (euclid-5-8 i)))
+
+;; ============================================================================
+;; Note Patterns
+;; ============================================================================
+
+;; Scale patterns
+(def major-scale (scscm/scale-pattern scscm/MAJOR_SCALE 60))  ;; C major starting at middle C
+(println "C Major scale pattern:")
+(for [i (range 8)]
+  (println "  Beat" i ": MIDI note" (major-scale i)))
+
+;; Arpeggio
+(def arp-up (scscm/arpeggio [60 64 67 72] :up))  ;; C major chord
+(println "Arpeggio up pattern:")
+(for [i (range 8)]
+  (println "  Beat" i ": MIDI note" (arp-up i)))
+
+;; ============================================================================
+;; Play Patterns with Synths
+;; ============================================================================
+
+;; Simple bass drum pattern (kick on every beat)
+(def kick-pattern
+  (scscm/play-pattern session "kick"
+    (fn [beats]
+      (some {0 40.0   ;; Low frequency for kick
+              1 0.8   ;; Amplitude
+              2 0.5})) ;; Decay
+    120 1.0))  ;; 120 BPM, trigger every beat
+
+(thread/sleep 500)
+(scscm/pattern-player-stop kick-pattern)
+
+;; Hi-hat pattern (16th notes)
+(def hat-pattern
+  (scscm/play-pattern session "hat"
+    (fn [beats]
+      (some {0 5000.0  ;; High cutoff for hat
+              1 0.4   ;; Amplitude
+              2 0.1})) ;; Short decay
+    120 0.25))  ;; 120 BPM, trigger every 16th note
+
+(thread/sleep 500)
+(scscm/pattern-player-stop hat-pattern)
+
+;; Melodic pattern using a scale
+def melody-pattern
+  (scscm/play-pattern session "sin"
+    (fn [beats]
+      (let [note-opt (scscm/scale-pattern scscm/MAJOR_SCALE 60 beats)
+            note (if (some? note-opt) (unwrap note-opt) 60)]
+        (some {0 (scscm/midi->hz note)  ;; Frequency from MIDI note
+                1 0.5                  ;; Amplitude
+                2 0.0}))))             ;; Pan center
+    120 0.5))  ;; 120 BPM, trigger every 8th note
+
+(thread/sleep 1000)
+(scscm/pattern-player-stop melody-pattern)
+
+;; ============================================================================
+;; Complex Pattern Composition
+;; ============================================================================
+
+;; Combine multiple patterns into a drum machine
+(def drum-pattern
+  (scscm/play-pattern session "kick"
+    (fn [beats]
+      (let [kick-opt (scscm/euclidean 4 8 beats)
+            snare-opt (scscm/every 2 (scscm/const 1) beats)
+            hat-opt (scscm/every 0.5 (scscm/const 1) beats)
+            kick (if (some? kick-opt) (unwrap kick-opt) 0)
+            snare (if (some? snare-opt) (unwrap snare-opt) 0)
+            hat (if (some? hat-opt) (unwrap hat-opt) 0)]
+        (cond
+          kick (some {0 40.0 1 0.8 2 0.5})  ;; Kick
+          snare (some {0 200.0 1 0.6 2 0.3})  ;; Snare
+          hat (some {0 5000.0 1 0.3 2 0.1}))))  ;; Hi-hat
+    120 0.25))  ;; 120 BPM
+
+(thread/sleep 1000)
+(scscm/pattern-player-stop drum-pattern)
+
+;; Clean up
+(scscm/live-session-destroy session)
+(println "Pattern demo completed")

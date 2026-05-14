@@ -1,0 +1,160 @@
+;;
+;; Tidal Examples: Basic Patterns
+;; Demonstrates core pattern types and basic combinators
+;;
+
+(import tidal/time tidal/pattern tidal/temporal tidal/structural)
+
+;; ============================================================
+;; 1. Basic Pattern Types
+;; ============================================================
+
+;; Constant pattern - always returns the same value
+(def const-pattern (const 440.0))
+
+;; Cycle pattern - cycles through values
+(def cycle-pattern (cycle 220.0 440.0 880.0))
+
+;; Phase pattern - returns position within cycle (0 to 1)
+(def phase-pattern (phase 1.0))
+
+;; ============================================================
+;; 2. Pattern Evaluation
+;; ============================================================
+
+;; Evaluate patterns at different times
+(defn demo-pattern-evaluation []
+  (println "\n--- Pattern Evaluation ---")
+  
+  (println "Const pattern (440.0):")
+  (println (str "  at time 0.0: " (const-pattern 0.0)))
+  (println (str "  at time 1.0: " (const-pattern 1.0)))
+  
+  (println "\nCycle pattern (220, 440, 880):")
+  (println (str "  at time 0.0: " (cycle-pattern 0.0)))
+  (println (str "  at time 0.5: " (cycle-pattern 0.5)))
+  (println (str "  at time 1.0: " (cycle-pattern 1.0)))
+  (println (str "  at time 1.5: " (cycle-pattern 1.5)))
+  
+  (println "\nPhase pattern:")
+  (println (str "  at time 0.0: " (phase-pattern 0.0)))
+  (println (str "  at time 0.25: " (phase-pattern 0.25)))
+  (println (str "  at time 0.5: " (phase-pattern 0.5)))
+  (println (str "  at time 0.75: " (phase-pattern 0.75)))
+  
+  nil)
+
+;; ============================================================
+;; 3. Using the P Macro (Shorthand)
+;; ============================================================
+
+;; P macro creates const or cycle patterns based on arguments
+(def p-const (P 440.0))           ;; Same as (const 440.0)
+(def p-cycle (P 1 2 3 4))         ;; Same as (cycle 1 2 3 4)
+
+;; ============================================================
+;; 4. Temporal Combinators
+;; ============================================================
+
+;; Slow down a pattern
+(def slow-pattern (slow 2 (cycle 1 2 3)))
+
+;; Speed up a pattern
+(def fast-pattern (fast 2 (cycle 1 2 3)))
+
+;; Shift pattern in time
+(def shifted-pattern (shift 0.5 (cycle 1 2 3)))
+
+;; Repeat pattern within its cycle
+(def repeated-pattern (repeat 3 (cycle 1 2)))
+
+;; Play pattern once, then silence
+(def once-pattern (once (const 1) 0))
+
+;; ============================================================
+;; 5. Structural Combinators
+;; ============================================================
+
+;; Sequence patterns: play first, then second, etc.
+(def seq-pattern (seq (cycle 1 2) (cycle 3 4)))
+
+;; Stack patterns: play all simultaneously
+(def stack-pattern (stack (cycle 1 2) (cycle 10 20)))
+
+;; Sum numeric patterns
+(def sum-pattern (sum (cycle 1 2) (cycle 3 4)))
+
+;; Multiply numeric patterns
+(def mul-pattern (multiply (cycle 1 2) (cycle 3 4)))
+
+;; ============================================================
+;; 6. Conditional Patterns
+;; ============================================================
+
+;; Only play when condition is true
+(def when-pattern (when (cycle true false true false) (const 1) 0))
+
+;; Play first pattern when true, second when false
+(def if-pattern (if-pat (cycle true false) (const 1) (const 2)))
+
+;; Play on every nth beat
+(def every-pattern (every 2 (const 1) 0))
+
+;; ============================================================
+;; 7. Combined Examples
+;; ============================================================
+
+;; Slow down a cycle and stack it with another
+(def combined-1 (stack 
+  (slow 2 (cycle 1 2 3))
+  (cycle 10 20 30)))
+
+;; Create a bassline pattern
+(def bassline (slow 4 (cycle 0 5 7 12)))
+
+;; Create a melody with varying values
+(def melody (seq 
+  (cycle 60 62 64)   ;; C major
+  (cycle 67 69 71)   ;; G major
+  (cycle 72 74 76)))  ;; C major octave up
+
+;; ============================================================
+;; 8. Helper Function to Play Patterns
+;; ============================================================
+
+(defn print-pattern [name p times]
+  (println (str "\n" name ":"))
+  (doseq [t times]
+    (println (str "  time " t ": " (p t)))))
+
+;; ============================================================
+;; Main Demo Function
+;; ============================================================
+
+(defn run-demos []
+  (println "\n" (repeat 50 "="))
+  (println "TIDAL BASIC PATTERNS DEMO")
+  (println (repeat 50 "="))
+  
+  (demo-pattern-evaluation)
+  
+  (print-pattern "Slow pattern (factor 2)" slow-pattern [0.0 1.0 2.0 3.0])
+  (print-pattern "Fast pattern (factor 2)" fast-pattern [0.0 0.5 1.0 1.5])
+  
+  (print-pattern "Sequenced patterns" seq-pattern [0.0 0.5 1.0 1.5 2.0])
+  (print-pattern "Stacked patterns" stack-pattern [0.0 1.0 2.0])
+  
+  (print-pattern "Sum pattern" sum-pattern [0.0 1.0 2.0])
+  (print-pattern "Every 2nd beat" every-pattern [0.0 1.0 2.0 3.0])
+  
+  (print-pattern "Bassline (slow 4)" bassline [0.0 1.0 2.0 3.0])
+  
+  (println "\n" (repeat 50 "="))
+  (println "Demo complete!")
+  (println (repeat 50 "="))
+  
+  nil)
+
+;; Run demos if executed directly
+(when (== (get *argv* 0) "run")
+  (run-demos))

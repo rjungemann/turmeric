@@ -1,0 +1,427 @@
+;; stdlib/tidal/synth.tur — Synth Integration for Tidal Patterns
+;;
+;; This module provides integration between TidalCycles patterns and the
+;; scscm library for driving synths with pattern values.
+
+(import tidal/pattern :pattern)
+(import tidal/time :time)
+(import tidal/structural :structural)
+(import tidal/transform :transform)
+
+;; ============================================================================
+;; Pattern to Synth Parameter Mapping
+;; ============================================================================
+
+;; Map pattern values to synth parameters
+;;
+;; This function would be called in the audio thread or scheduler
+;; to update synth parameters based on pattern values.
+;;
+;; @param p Numeric pattern
+;; @param session scscm session
+;; @param node-id Synth node ID
+;; @param param-index Control index
+(defn pat->param [p session node-id param-index]
+  (let [value (p (current-beat-time session))]
+    (scscm/synth-set (:world-id session) node-id param-index value)))
+
+;; Map multiple patterns to synth parameters
+;;
+;; @param session scscm session
+;; @param node-id Synth node ID
+;; @param param-patterns List of [param-index pattern] tuples
+(defn pats->params [session node-id param-patterns]
+  (doseq [[idx p] param-patterns]
+    (pat->param p session node-id idx)))
+
+;; Map named patterns to synth parameters
+;;
+;; @param session scscm session
+;; @param node-id Synth node ID
+;; @param param-map Map of param-name -> [control-index pattern]
+;; @param param-name->index Function to map param names to indices
+(defn pats->named-params [session node-id param-map param-name->index]
+  (doseq [[param-name [idx p]] param-map]
+    (let [control-index (param-name->index param-name)]
+      (pat->param p session node-id control-index))))
+
+;; ============================================================================
+;; Pattern Players
+;; ============================================================================
+
+;; A pattern player that triggers and controls synths
+(defstruct PatternPlayer
+  [session :scscm/ScscmSession
+   def-name :cstr
+   pattern :(pattern/Pattern<(map<cstr float>)>)
+   bpm :float
+   node-ids :(vec<int>)
+   running :bool
+   start-time :float])
+
+;; Create a new pattern player
+;;
+;; @param session scscm session
+;; @param def-name SynthDef name
+;; @param pattern Pattern that produces parameter maps
+;; @param bpm Tempo in beats per minute
+;; @return PatternPlayer
+(defn player-new [session def-name pattern bpm]
+  {:session session
+   :def-name def-name
+   :pattern pattern
+   :bpm bpm
+   :node-ids []
+   :running false
+   :start-time 0.0})
+
+;; Start a pattern player
+;;
+;; @param player PatternPlayer to start
+(defn player-start [player]
+  (when (not (:running player))
+    (let [session (:session player)
+          bpm (:bpm player)
+          beats-per-sec (/ bpm 60.0)
+          start-time (scscm/world-sample-rate (:world-id session))
+          player (assoc player :running true :start-time start-time)]
+      
+      ;; In a real implementation, we'd spawn a task to update parameters
+      ;; For now, we just mark it as running
+      player)))
+
+;; Stop a pattern player and free all synths
+;;
+;; @param player PatternPlayer to stop
+(defn player-stop [player]
+  (when (:running player)
+    (doseq [node-id (:node-ids player)]
+      (scscm/synth-free (:world-id (:session player)) node-id))
+    (assoc player :running false :node-ids [])))
+
+;; Update a pattern player (change the pattern while running)
+;;
+;; @param player PatternPlayer to update
+;; @param new-pattern New pattern to use
+(defn player-update [player new-pattern]
+  (assoc player :pattern new-pattern))
+
+;; Swap patterns atomically
+;;
+;; @param player PatternPlayer to update
+;; @param new-param-map New parameter map pattern
+(defn player-swap [player new-param-map]
+  (player-update player new-param-map))
+
+;; ============================================================================
+;; Pattern Synth
+;; ============================================================================
+
+;; Create a synth with pattern-driven parameters
+;;
+;; @param session scscm session
+;; @param def-name SynthDef name
+;; @param param-patterns List of [control-index pattern] tuples
+;; @param bpm Tempo (default: 120)
+;; @return Node ID of created synth
+(defn pattern-synth [session def-name param-patterns & [bpm time/DEFAULT_BPM]]
+  (let [world-id (:world-id session)
+        node-id (scscm/node-id-alloc (:node-allocator session))]
+    
+    (let [result (scscm/synth-new world-id def-name node-id)]
+      (when (== result 0)
+        ;; Set initial parameters
+        (doseq [[idx p] param-patterns]
+          (let [value (p 0.0)]
+            (scscm/synth-set world-id node-id idx value)))
+        
+        ;; Track the synth in the session
+        (set! session (update session :active-synths assoc node-id def-name))
+        
+        node-id))))
+
+;; Create a synth that follows a parameter pattern over time
+;;
+;; @param session scscm session
+;; @param def-name SynthDef name
+;; @param param-patterns List of [control-index pattern] tuples
+;; @param bpm Tempo
+;; @param duration Duration in beats
+;; @return PatternPlayer
+(defn pattern-synth-player [session def-name param-patterns bpm duration]
+  (let [player (player-new session def-name 
+                        (fn [time] 
+                          (let [params (make-map)]
+                            (doseq [[idx p] param-patterns]
+                              (map-set! params idx (p time)))
+                            params))
+                        bpm)]
+    
+    (player-start player)
+    
+    ;; Schedule the synth to be freed after duration
+    ;; In a real implementation, this would use proper scheduling
+    
+    player))
+
+;; ============================================================================
+;; Note Patterns
+;; ============================================================================
+
+;; MIDI note to frequency conversion
+;;
+;; @param note MIDI note number
+;; @return Frequency in Hz
+(defn note->freq [note]
+  (* 440.0 (math/pow 2.0 (/ (- note 69.0) 12.0))))
+
+;; Velocity to amplitude conversion
+;;
+;; @param vel MIDI velocity (0-127)
+;; @return Amplitude (0-1)
+(defn vel->amp [vel]
+  (/ vel 127.0))
+
+;; Note pattern that produces synth parameters
+;;
+;; @param pitch NotePattern for MIDI note
+;; @param vel NumPattern for velocity (default: const 100)
+;; @param gate BoolPattern for gate (default: const true)
+;; @return Pattern<map> that produces synth parameters
+(defn note-pattern [pitch & [vel (pattern/const 100) gate (pattern/const true)]]
+  (fn [time]
+    (let [p (pitch time)
+          v (vel time)
+          g (gate time)]
+      {:freq (note->freq p)
+       :amp (vel->amp v)
+       :gate (if g 1.0 0.0)})))
+
+;; Note pattern with duration
+;;
+;; @param pitch NotePattern for MIDI note
+;; @param vel NumPattern for velocity
+;; @param dur NumPattern for duration in beats
+;; @param gate BoolPattern for gate
+;; @return Pattern<map> that produces synth parameters
+(defn note-pattern-dur [pitch vel dur & [gate (pattern/const true)]]
+  (fn [time]
+    (let [p (pitch time)
+          v (vel time)
+          d (dur time)
+          g (gate time)]
+      {:freq (note->freq p)
+       :amp (vel->amp v)
+       :gate (if g 1.0 0.0)
+       :dur d})))
+
+;; ============================================================================
+;; Chord Patterns
+;; ============================================================================
+
+;; Chord pattern - plays multiple notes simultaneously
+;;
+;; @param note-patterns List of NotePattern to play together
+;; @return Pattern<vec<map>> that produces parameters for each note
+(defn chord-pattern [& note-patterns]
+  (fn [time]
+    (vec (map #(% time) note-patterns))))
+
+;; Arpeggio pattern - plays notes of a chord sequentially
+;;
+;; @param chord Pattern<vec<int>> that produces chord (list of MIDI notes)
+;; @param speed Speed in notes per beat (default: 4 = 16th notes)
+;; @param direction :up, :down, :up-down, :random (default: :up)
+;; @return NotePattern
+(defn arp-pattern [chord & [speed 4 direction :up]]
+  (fn [time]
+    (let [notes (chord (/ time speed))]
+      (if (empty? notes)
+        0
+        (case direction
+          :up (let [idx (mod (floor (* time speed)) (len notes))]
+                (get notes idx))
+          :down (let [idx (mod (floor (* time speed)) (len notes))]
+                  (get notes (- (len notes) 1 idx)))
+          :up-down (let [pos (mod (floor (* time speed)) (* 2 (dec (len notes))))
+                         idx (if (< pos (len notes)) pos (- (* 2 (len notes)) pos 2))]
+                     (get notes idx))
+          :random (get notes (rand-int (len notes)))
+          0)))))
+
+;; ============================================================================
+;; Drum Patterns
+;; ============================================================================
+
+;; Drum pattern with velocity
+;;
+;; @param hits List of [time-in-cycle drum-name velocity] tuples
+;; @return Pattern<map> that produces drum parameters
+(defn drum-pattern [& hits]
+  (let [vec-hits (vec hits)
+        cycle-length (if (empty? vec-hits) 1.0 (reduce max 0.0 (map first vec-hits)))]
+    (fn [time]
+      (let [mod-time (mod time cycle-length)
+            hit (first (filter (fn [[t _ _]] (== (mod t cycle-length) (mod mod-time cycle-length))) vec-hits))]
+        (if hit
+          (let [[_ name vel] hit]
+            {:note (drum-name->note name)
+             :vel vel})
+          {})))))
+
+;; Drum name to MIDI note mapping
+(defn drum-name->note [name]
+  (case name
+    "bd" 36    ;; Bass drum
+    "sd" 38    ;; Snare drum
+    "hh" 42    ;; Closed hi-hat
+    "oh" 41    ;; Open hi-hat
+    "cp" 39    ;; Claps
+    "ch" 40    ;; Crash cymbal
+    "rd" 43    ;; Ride cymbal
+    "tm" 45    ;; Tom (low)
+    "th" 47    ;; Tom (high)
+    "cb" 37    ;; Conga (high)
+    36))  ;; Default to bass drum
+
+;; Kick drum pattern helper
+;;
+;; @param times List of beat positions to trigger kick
+;; @return Pattern<map> for kick drum
+(defn kick [& times]
+  (let [vec-times (vec times)
+        cycle-length (if (empty? vec-times) 1.0 (reduce max 0.0 vec-times))]
+    (fn [time]
+      (let [mod-time (mod time cycle-length)]
+        (if (some (fn [t] (== (mod t cycle-length) mod-time)) vec-times)
+          {:note 36 :vel 127}
+          {})))))
+
+;; Snare drum pattern helper
+;;
+;; @param times List of beat positions to trigger snare
+;; @return Pattern<map> for snare drum
+(defn snare [& times]
+  (let [vec-times (vec times)
+        cycle-length (if (empty? vec-times) 1.0 (reduce max 0.0 vec-times))]
+    (fn [time]
+      (let [mod-time (mod time cycle-length)]
+        (if (some (fn [t] (== (mod t cycle-length) mod-time)) vec-times)
+          {:note 38 :vel 100}
+          {})))))
+
+;; Hi-hat pattern helper
+;;
+;; @param times List of beat positions to trigger hi-hat
+;; @return Pattern<map> for hi-hat
+(defn hat [& times]
+  (let [vec-times (vec times)
+        cycle-length (if (empty? vec-times) 1.0 (reduce max 0.0 vec-times))]
+    (fn [time]
+      (let [mod-time (mod time cycle-length)]
+        (if (some (fn [t] (== (mod t cycle-length) mod-time)) vec-times)
+          {:note 42 :vel 80}
+          {})))))
+
+;; ============================================================================
+;; Pattern to OSC Message Conversion
+;; ============================================================================
+
+;; Convert a parameter map pattern to OSC messages
+;;
+;; @param pattern Pattern<map<cstr float>>
+;; @param session scscm session
+;; @param node-id Synth node ID
+;; @param time Current time in beats
+(defn pattern->osc [pattern session node-id time]
+  (let [params (pattern time)]
+    (doseq [[param value] params]
+      ;; In a real implementation, we'd look up the control index for param
+      ;; For now, we assume the synth has controls in a known order
+      (scscm/synth-set (:world-id session) node-id (hash param) value))))
+
+;; ============================================================================
+;; Trigger Patterns
+;; ============================================================================
+
+;; Trigger a new synth on each pattern evaluation
+;;
+;; @param session scscm session
+;; @param def-name SynthDef name
+;; @param pattern Pattern<map> that produces parameters
+;; @param bpm Tempo
+;; @return PatternPlayer
+(defn trigger-pattern [session def-name pattern bpm]
+  (let [player (player-new session def-name pattern bpm)
+        world-id (:world-id session)
+        beats-per-sec (/ bpm 60.0)]
+    
+    (player-start player)
+    
+    ;; In a real implementation, we'd spawn a task that:
+    ;; 1. Keeps track of current beat time
+    ;; 2. Evaluates the pattern at each beat
+    ;; 3. Creates a new synth with the pattern's parameters
+    ;; 4. Frees old synths as needed
+    
+    player))
+
+;; ============================================================================
+;; Synth Parameter Patterns
+;; ============================================================================
+
+;; Pattern for synth frequency
+;;
+;; @param base-freq Base frequency in Hz
+;; @param modulation Modulation pattern (additive)
+;; @return NumPattern for frequency
+(defn freq-pattern [base-freq & [modulation (pattern/const 0)]]
+  (add (pattern/const base-freq) modulation))
+
+;; Pattern for synth amplitude
+;;
+;; @param base-amp Base amplitude (0-1)
+;; @param envelope Envelope pattern (multiplicative)
+;; @return NumPattern for amplitude
+(defn amp-pattern [base-amp & [envelope (pattern/const 1)]]
+  (mul (pattern/const base-amp) envelope))
+
+;; Pattern for synth pan position
+;;
+;; @param base-pan Base pan (-1 to 1)
+;; @param modulation Modulation pattern (additive, clamped)
+;; @return NumPattern for pan
+(defn pan-pattern [base-pan & [modulation (pattern/const 0)]]
+  (clamp (add (pattern/const base-pan) modulation) -1.0 1.0))
+
+;; ============================================================================
+;; Parameter Mapping Utilities
+;; ============================================================================
+
+;; Create a parameter map pattern from individual parameter patterns
+;;
+;; @param freq-pattern NumPattern for frequency
+;; @param amp-pattern NumPattern for amplitude
+;; @param pan-pattern NumPattern for pan
+;; @return Pattern<map> with all parameters
+(defn synth-params [freq-pattern amp-pattern pan-pattern]
+  (fn [time]
+    {:freq (freq-pattern time)
+     :amp (amp-pattern time)
+     :pan (pan-pattern time)}))
+
+;; Create a complete synth pattern
+;;
+;; @param def-name SynthDef name
+;; @param param-patterns Map of param-name -> pattern
+;; @param bpm Tempo
+;; @return PatternPlayer
+(defn synth-pattern-player [session def-name param-patterns bpm]
+  (let [pattern (fn [time]
+                  (let [params (make-map)]
+                    (doseq [[param-name p] param-patterns]
+                      (map-set! params param-name (p time)))
+                    params))
+        player (player-new session def-name pattern bpm)]
+    (player-start player)
+    player))

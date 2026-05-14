@@ -1,0 +1,216 @@
+;; stdlib/tidal/time.tur — Time Types and Utilities
+;;
+;; This module provides time representation and conversion utilities
+;; for the TidalCycles-inspired pattern library.
+
+;; ============================================================================
+;; Time Type Definitions
+;; ============================================================================
+
+;; Time in beats (1.0 = one beat at current tempo)
+(def-type Beats float)
+
+;; Time in seconds
+(def-type Seconds float)
+
+;; Time in samples (at current sample rate)
+(def-type Samples int64)
+
+;; ============================================================================
+;; BPM (Beats Per Minute) Utilities
+;; ============================================================================
+
+;; Convert BPM to beats per second
+;;
+;; @param bpm Beats per minute
+;; @return Beats per second
+(defn bpm->bps [bpm]
+  (/ bpm 60.0))
+
+;; Convert BPM to seconds per beat
+;;
+;; @param bpm Beats per minute
+;; @return Seconds per beat
+(defn bpm->spb [bpm]
+  (/ 60.0 bpm))
+
+;; ============================================================================
+;; Beat <-> Second Conversion
+;; ============================================================================
+
+;; Convert beats to seconds at a given BPM
+;;
+;; @param beats Time in beats
+;; @param bpm Beats per minute
+;; @return Time in seconds
+(defn beats->sec [beats bpm]
+  (* beats (bpm->spb bpm)))
+
+;; Convert seconds to beats at a given BPM
+;;
+;; @param sec Time in seconds
+;; @param bpm Beats per minute
+;; @return Time in beats
+(defn sec->beats [sec bpm]
+  (* sec (bpm->bps bpm)))
+
+;; ============================================================================
+;; Beat <-> Sample Conversion
+;; ============================================================================
+
+;; Convert beats to samples at a given BPM and sample rate
+;;
+;; @param beats Time in beats
+;; @param bpm Beats per minute
+;; @param sample_rate Samples per second
+;; @return Time in samples
+(defn beats->samples [beats bpm sample_rate]
+  (let [sec (beats->sec beats bpm)]
+    (floor (* sec sample_rate))))
+
+;; Convert samples to beats at a given BPM and sample rate
+;;
+;; @param samples Time in samples
+;; @param bpm Beats per minute
+;; @param sample_rate Samples per second
+;; @return Time in beats
+(defn samples->beats [samples bpm sample_rate]
+  (let [sec (/ samples sample_rate)]
+    (sec->beats sec bpm)))
+
+;; ============================================================================
+;; Sample <-> Second Conversion
+;; ============================================================================
+
+;; Convert samples to seconds at a given sample rate
+;;
+;; @param samples Time in samples
+;; @param sample_rate Samples per second
+;; @return Time in seconds
+(defn samples->sec [samples sample_rate]
+  (/ samples sample_rate))
+
+;; Convert seconds to samples at a given sample rate
+;;
+;; @param sec Time in seconds
+;; @param sample_rate Samples per second
+;; @return Time in samples
+(defn sec->samples [sec sample_rate]
+  (floor (* sec sample_rate)))
+
+;; ============================================================================
+;; Time Interval Utilities
+;; ============================================================================
+
+;; Get the current beat within a cycle
+;;
+;; @param time Current time in beats
+;; @param cycle_length Length of cycle in beats (default: 1)
+;; @return Phase within cycle (0 to cycle_length)
+(defn phase [time & [cycle_length 1.0]]
+  (mod time cycle_length))
+
+;; Get the beat position within the current bar
+;;
+;; @param time Current time in beats
+;; @param beats_per_bar Beats per bar (default: 4)
+;; @return Position within bar (0 to beats_per_bar)
+(defn bar-phase [time & [beats_per_bar 4.0]]
+  (mod time beats_per_bar))
+
+;; Get the current bar number
+;;
+;; @param time Current time in beats
+;; @param beats_per_bar Beats per bar (default: 4)
+;; @return Bar number (integer)
+(defn bar-number [time & [beats_per_bar 4.0]]
+  (floor (/ time beats_per_bar)))
+
+;; ============================================================================
+;; Tempo Change Utilities
+;; ============================================================================
+
+;; Create a tempo map: time -> BPM
+;; This allows for tempo changes over time
+(def-type TempoMap (fn [Beats] :float))
+
+;; Constant tempo map
+;;
+;; @param bpm Constant BPM
+;; @return TempoMap that always returns the same BPM
+(defn const-tempo [bpm]
+  (fn [_] bpm))
+
+;; Tempo map with a single change
+;;
+;; @param start-bpm Initial BPM
+;; @param change-time Time in beats when tempo changes
+;; @param end-bpm New BPM after change
+;; @return TempoMap
+(defn tempo-change [start-bpm change-time end-bpm]
+  (fn [time]
+    (if (>= time change-time)
+      end-bpm
+      start-bpm)))
+
+;; Tempo map with multiple changes
+;;
+;; @param & changes List of [time bpm] pairs
+;; @return TempoMap
+(defn tempo-map [& changes]
+  (let [sorted (sort-by first changes)]
+    (fn [time]
+      (loop [i 0]
+        (if (>= i (len sorted))
+          (second (last sorted))
+          (let [[change-time bpm] (get sorted i)]
+            (if (>= time change-time)
+              (recur (inc i))
+              (if (== i 0)
+                bpm
+                (second (get sorted (dec i)))))))))))
+
+;; ============================================================================
+;; Time Warping Utilities
+;; ============================================================================
+
+;; Linearly interpolate between two values based on time
+;;
+;; @param start Start value
+;; @param end End value
+;; @param time Current time (0 to 1)
+;; @return Interpolated value
+(defn lerp [start end time]
+  (+ start (* (- end start) (math/clamp time 0.0 1.0))))
+
+;; Exponential interpolation
+;;
+;; @param start Start value
+;; @param end End value
+;; @param time Current time (0 to 1)
+;; @return Expolated value
+(defn exp-lerp [start end time]
+  (let [clamped (math/clamp time 0.0 1.0)]
+    (if (== start end)
+      start
+      (* start (math/pow (/ end start) clamped)))))
+
+;; ============================================================================
+;; Default Constants
+;; ============================================================================
+
+;; Default BPM (120 beats per minute)
+(def DEFAULT_BPM 120.0)
+
+;; Default sample rate (48 kHz)
+(def DEFAULT_SAMPLE_RATE 48000)
+
+;; Default block size (512 samples)
+(def DEFAULT_BLOCK_SIZE 512)
+
+;; Common time signatures (beats per bar)
+(def TS_4_4 4.0)
+(def TS_3_4 3.0)
+(def TS_6_8 6.0)
+(def TS_5_4 5.0)
+(def TS_7_8 7.0)

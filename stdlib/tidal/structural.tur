@@ -1,0 +1,383 @@
+;; stdlib/tidal/structural.tur — Structural Pattern Combinators
+;;
+;; This module provides combinators that combine multiple patterns structurally
+;; (sequencing, stacking, conditional triggering, etc.).
+
+(import tidal/pattern :pattern)
+(import tidal/temporal :temporal)
+
+;; ============================================================================
+;; Sequential Combination
+;; ============================================================================
+
+;; Sequence patterns: play first, then second, then third, etc.
+;; Each pattern gets equal time within the cycle.
+;;
+;; @param patterns List of patterns to sequence
+;; @return Pattern<T> that sequences through patterns
+(defn seq [& patterns]
+  (let [vec-patterns (vec patterns)
+        len (len vec-patterns)]
+    (if (== len 0)
+      (pattern/const nil)
+      (fn [time]
+        (let [index (mod (floor time) len)
+              sub-time (- time (floor time))]
+          ((get vec-patterns index) sub-time))))))
+
+;; Sequence with custom lengths for each pattern
+;;
+;; @param pattern-lengths List of [pattern length] tuples
+;; @return Pattern<T> that sequences through patterns with custom lengths
+(defn seq-n [& pattern-lengths]
+  (let [pairs (vec pattern-lengths)
+        total-length (reduce + 0.0 (map second pairs))
+        len (len pairs)]
+    (if (== len 0)
+      (pattern/const nil)
+      (fn [time]
+        (let [mod-time (mod time total-length)
+              ;; Find which segment we're in
+              [index segment-start segment-length] (loop [i 0 acc 0.0]
+                                                     (if (>= i len)
+                                                       [0 0 total-length]
+                                                       (let [[_ length] (get pairs i)]
+                                                         (if (>= mod-time (+ acc length))
+                                                           (recur (inc i) (+ acc length))
+                                                           [i acc length])))))
+              sub-time (- mod-time segment-start)
+              scale (/ segment-length total-length)]
+          ((first (get pairs index)) (/ sub-time scale)))))))
+
+;; ============================================================================
+;; Parallel Combination (Stacking)
+;; ============================================================================
+
+;; Stack patterns: play all simultaneously
+;; Returns a vector of all pattern values
+;;
+;; @param patterns List of patterns to stack
+;; @return Pattern<vec<T>> that returns a vector of all pattern values
+(defn stack [& patterns]
+  (let [vec-patterns (vec patterns)]
+    (fn [time]
+      (vec (map #(% time) vec-patterns)))))
+
+;; Stack with a combiner function
+;;
+;; @param f Function to combine pattern values: vec<T> -> U
+;; @param patterns List of patterns to stack
+;; @return Pattern<U> that combines pattern values using f
+(defn stack-with [f & patterns]
+  (fn [time]
+    (f (vec (map #(% time) patterns)))))
+
+;; Sum numeric patterns
+;;
+;; @param patterns List of NumPattern to sum
+;; @return NumPattern that returns the sum of all patterns
+(defn sum [& patterns]
+  (stack-with (fn [v] (reduce + 0.0 v)) patterns))
+
+;; Multiply numeric patterns
+;;
+;; @param patterns List of NumPattern to multiply
+;; @return NumPattern that returns the product of all patterns
+(defn multiply [& patterns]
+  (stack-with (fn [v] (reduce * 1.0 v)) patterns))
+
+;; Average numeric patterns
+;;
+;; @param patterns List of NumPattern to average
+;; @return NumPattern that returns the average of all patterns
+(defn average [& patterns]
+  (let [vec-patterns (vec patterns)
+        len (len vec-patterns)]
+    (if (== len 0)
+      (pattern/const 0.0)
+      (stack-with (fn [v] (/ (reduce + 0.0 v) len)) vec-patterns))))
+
+;; ============================================================================
+;; Conditional Patterns
+;; ============================================================================
+
+;; Only play when condition is true (silence otherwise)
+;;
+;; @param cond Boolean pattern for condition
+;; @param p Pattern to play when condition is true
+;; @param zero Value to return when condition is false (default: 0)
+;; @return Pattern<T>
+(defn when [cond p & [zero 0]]
+  (fn [time]
+    (if (cond time)
+      (p time)
+      zero)))
+
+;; Play first pattern when condition is true, second when false
+;;
+;; @param cond Boolean pattern for condition
+;; @param then-p Pattern to play when condition is true
+;; @param else-p Pattern to play when condition is false
+;; @return Pattern<T>
+(defn if-pat [cond then-p else-p]
+  (fn [time]
+    (if (cond time)
+      (then-p time)
+      (else-p time))))
+
+;; Only play every n beats
+;;
+;; @param n Interval in beats
+;; @param p Pattern to trigger
+;; @param zero Value to return between triggers (default: 0)
+;; @return Pattern<T>
+(defn every [n p & [zero 0]]
+  (when (temporal/every-n n) p zero))
+
+;; Play on beats that are multiples of n with offset
+;;
+;; @param n Modulo base
+;; @param offset Offset (default: 0)
+;; @param p Pattern to trigger
+;; @param zero Value to return when not triggered (default: 0)
+;; @return Pattern<T>
+(defn nth [n p & [offset 0 zero 0]]
+  (when (temporal/when-mod n offset) p zero))
+
+;; ============================================================================
+;; Euclidean Rhythm Patterns
+;; ============================================================================
+
+;; Generate a Euclidean rhythm pattern
+;;
+;; Based on Bjorklund's algorithm for distributing notes evenly.
+;; This creates a pattern of hits (1) and rests (0) distributed as evenly as possible.
+;;
+;; @param steps Total number of steps in the pattern
+;; @param hits Number of hits (active steps) to distribute
+;; @param rotation Rotation offset (default: 0)
+;; @return NumPattern that returns 1 for hits, 0 for rests
+(defn euclid [steps hits & [rotation 0]]
+  (let [result (vec (repeat steps 0))]
+    (when (and (> steps 0) (> hits 0))
+      (let [;; Generate positions using Bjorklund's algorithm
+            positions (loop [remaining hits
+                        current 0
+                        result []]
+                      (if (== remaining 0)
+                        result
+                        (let [step-size (ceil (/ (- steps current) remaining))
+                              next-pos (+ current step-size)]
+                          (recur (dec remaining) next-pos (conj result next-pos)))))]
+        (doseq [pos positions]
+          (let [idx (mod (+ pos rotation) steps)]
+            (when (< idx steps)
+              (set! result (assoc result idx 1)))))))
+    (fn [time]
+      (get result (mod (floor time) steps)))))
+
+;; Euclidean pattern that returns custom on/off values
+;;
+;; @param steps Total number of steps
+;; @param hits Number of hits
+;; @param on-value Value to return for hits (default: 1)
+;; @param off-value Value to return for rests (default: 0)
+;; @param rotation Rotation offset (default: 0)
+;; @return Pattern<T> with custom on/off values
+(defn euclid-vals [steps hits & [on-value 1 off-value 0 rotation 0]]
+  (let [base (euclid steps hits rotation)]
+    (fn [time]
+      (if (== 1 (base time))
+        on-value
+        off-value))))
+
+;; ============================================================================
+;; Pattern Selection
+;; ============================================================================
+
+;; Select from patterns based on index pattern
+;;
+;; @param index Pattern that produces indices
+;; @param patterns List of patterns to select from
+;; @return Pattern<T> that selects from patterns based on index
+(defn select [index & patterns]
+  (let [vec-patterns (vec patterns)
+        len (len vec-patterns)]
+    (if (== len 0)
+      (pattern/const nil)
+      (fn [time]
+        (let [idx (mod (int (index time)) len)]
+          ((get vec-patterns idx) time))))))
+
+;; First pattern that produces a non-zero value
+;;
+;; @param zero Zero value for comparison (default: 0)
+;; @param patterns List of patterns to check
+;; @return Pattern<T> that returns first non-zero value
+(defn first-nonzero [& [zero 0 patterns]]
+  (let [vec-patterns (vec patterns)
+        len (len vec-patterns)]
+    (if (== len 0)
+      (pattern/const zero)
+      (fn [time]
+        (loop [i 0]
+          (if (== i len)
+            zero
+            (let [v ((get vec-patterns i) time)]
+              (if (!= v zero)
+                v
+                (recur (inc i))))))))))
+
+;; ============================================================================
+;; Index-Based Patterns
+;; ============================================================================
+
+;; Get the index of the current position in a cycle
+;;
+;; @param cycle-length Length of cycle (default: 1)
+;; @return IntPattern that returns current index
+(defn index [& [cycle-length 1]]
+  (fn [time]
+    (mod (floor (* time cycle-length)) cycle-length)))
+
+;; Pattern that returns true on the first beat of each cycle
+;;
+;; @param cycle-length Length of cycle (default: 1)
+;; @return BoolPattern
+(defn first-beat [& [cycle-length 1]]
+  (fn [time]
+    (== 0 (mod (floor (* time cycle-length)) cycle-length))))
+
+;; Pattern that returns true on the last beat of each cycle
+;;
+;; @param cycle-length Length of cycle (default: 1)
+;; @return BoolPattern
+(defn last-beat [& [cycle-length 1]]
+  (fn [time]
+    (== (dec cycle-length) (mod (floor (* time cycle-length)) cycle-length))))
+
+;; ============================================================================
+;; Pattern Chaining
+;; ============================================================================
+
+;; Chain patterns: play first until it returns a sentinel, then second, etc.
+;;
+;; @param sentinel Sentinel value that triggers next pattern (default: nil)
+;; @param patterns List of patterns to chain
+;; @return Pattern<T> that chains through patterns
+(defn chain [& [sentinel nil patterns]]
+  (let [vec-patterns (vec patterns)
+        len (len vec-patterns)]
+    (if (== len 0)
+      (pattern/const nil)
+      (fn [time]
+        (loop [i 0 acc-time 0.0]
+          (if (>= i len)
+            sentinel
+            (let [p (get vec-patterns i)
+                  sub-time (- time acc-time)
+                  v (p sub-time)]
+              (if (== v sentinel)
+                (recur (inc i) (+ acc-time 1.0))
+                v)))))))
+
+;; ============================================================================
+;; Pattern Interleaving
+;; ============================================================================
+
+;; Interleave patterns: alternate between patterns
+;;
+;; @param patterns List of patterns to interleave
+;; @return Pattern<T> that interleaves pattern values
+(defn interleave [& patterns]
+  (let [vec-patterns (vec patterns)
+        len (len vec-patterns)]
+    (if (== len 0)
+      (pattern/const nil)
+      (fn [time]
+        (let [index (mod (floor time) len)
+              sub-time (- time (floor time))]
+          ((get vec-patterns index) (* len sub-time)))))))
+
+;; Interleave with custom pattern lengths
+;;
+;; @param pattern-lengths List of [pattern length] tuples
+;; @return Pattern<T> that interleaves with custom lengths
+(defn interleave-n [& pattern-lengths]
+  (seq-n pattern-lengths))
+
+;; ============================================================================
+;; Pattern Masking
+;; ============================================================================
+
+;; Mask one pattern with another
+;; The mask pattern determines whether values from the source pattern pass through
+;;
+;; @param source Pattern to mask
+;; @param mask BoolPattern used as mask (true = pass, false = block)
+;; @param zero Value to return when masked (default: 0)
+;; @return Pattern<T>
+(defn mask [source mask & [zero 0]]
+  (fn [time]
+    (if (mask time)
+      (source time)
+      zero)))
+
+;; Invert a boolean pattern
+;;
+;; @param p BoolPattern to invert
+;; @return BoolPattern that returns inverted values
+(defn invert [p]
+  (fn [time]
+    (not (p time))))
+
+;; AND two boolean patterns
+;;
+;; @param a First BoolPattern
+;; @param b Second BoolPattern
+;; @return BoolPattern that returns a AND b
+(defn and-pat [a b]
+  (fn [time]
+    (and (a time) (b time))))
+
+;; OR two boolean patterns
+;;
+;; @param a First BoolPattern
+;; @param b Second BoolPattern
+;; @return BoolPattern that returns a OR b
+(defn or-pat [a b]
+  (fn [time]
+    (or (a time) (b time))))
+
+;; XOR two boolean patterns
+;;
+;; @param a First BoolPattern
+;; @param b Second BoolPattern
+;; @return BoolPattern that returns a XOR b
+(defn xor-pat [a b]
+  (fn [time]
+    (not= (a time) (b time))))
+
+;; ============================================================================
+;; Pattern Grouping
+;; ============================================================================
+
+;; Group patterns into sub-patterns
+;; This is useful for creating hierarchical patterns
+;;
+;; @param group-size Number of patterns per group
+;; @param group-pattern Pattern to apply to each group
+;; @param patterns List of patterns
+;; @return Pattern<T> with grouped patterns
+(defn group [group-size group-pattern & patterns]
+  (let [vec-patterns (vec patterns)
+        len (len vec-patterns)
+        num-groups (ceil (/ len group-size))]
+    (if (== len 0)
+      (pattern/const nil)
+      (fn [time]
+        (let [group-index (mod (floor (/ time group-size)) num-groups)
+              start (* group-index group-size)
+              end (min (+ start group-size) len)
+              group-patterns (slice vec-patterns start end)]
+          (group-pattern time group-patterns))))))

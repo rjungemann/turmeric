@@ -1,0 +1,155 @@
+;; stdlib/tidal/tidal.tur — Main TidalCycles DSL Module
+;;
+;; This is the main module for the TidalCycles-inspired pattern library.
+;; Import this module to get access to all Tidal DSL functionality:
+;;   (import tidal/tidal :tidal)
+
+;; Re-export all submodules
+(import tidal/time :time)
+(import tidal/pattern :pattern)
+(import tidal/temporal :temporal)
+(import tidal/structural :structural)
+(import tidal/transform :transform)
+(import tidal/polyrhythm :polyrhythm)
+(import tidal/synth :synth)
+(import tidal/timing :timing)
+(import tidal/live :live)
+(import tidal/mini :mini)
+(import tidal/perf :perf)
+
+;; Library version
+(def TIDAL_VERSION "0.1.0")
+
+;; Library metadata
+(def TIDAL_INFO
+  {:version TIDAL_VERSION
+   :name "tidal"
+   :description "TidalCycles-inspired pattern DSL for Turmeric"
+   :author "Turmeric Team"
+   :dependencies ["scscm"]})
+
+;; ============================================================================
+;; Common Patterns and Presets
+;; ============================================================================
+
+;; Common scales (semitone offsets from tonic)
+(def MAJOR_SCALE [0 2 4 5 7 9 11 12])
+(def MINOR_SCALE [0 2 3 5 7 8 10 12])
+(def PENTATONIC_MAJOR [0 2 4 7 9 12])
+(def PENTATONIC_MINOR [0 3 5 7 10 12])
+(def CHROMATIC [0 1 2 3 4 5 6 7 8 9 10 11 12])
+(def WHOLE_TONE [0 2 4 6 8 10 12])
+(def BLUES [0 3 5 6 7 10 12])
+
+;; Scale pattern helper
+;;
+;; @param scale Scale as list of semitone offsets
+;; @param tonic Base MIDI note (default: 60 = middle C)
+;; @return NumPattern of MIDI notes
+(defn scale-pat [scale & [tonic 60]]
+  (pattern/cycle (map #(+ tonic %) scale)))
+
+;; Common drum patterns
+(def DRUM_KICK (mini/d "bd"))
+(def DRUM_SNARE (mini/d "sd"))
+(def DRUM_HAT (mini/d "hh"))
+(def DRUM_PATTERN_1 (mini/d "bd sd bd sd"))
+(def DRUM_PATTERN_2 (mini/d "bd    sd    "))
+(def DRUM_PATTERN_3 (mini/d "bd sd    sd"))
+
+;; Common polyrhythms
+(def POLY_3_2 (polyrhythm/three-against-two (pattern/const 1) (pattern/const 1)))
+(def POLY_4_3 (polyrhythm/four-against-three (pattern/const 1) (pattern/const 1)))
+(def POLY_5_4 (polyrhythm/five-against-four (pattern/const 1) (pattern/const 1)))
+
+;; ============================================================================
+;; Quick Start Functions
+;; ============================================================================
+
+;; Create a simple pattern and play it
+;;
+;; @param session scscm session
+;; @param def-name SynthDef name
+;; @param pattern-string Mini-notation string
+;; @param bpm Tempo
+;; @return PatternPlayer
+(defn play [session def-name pattern-string bpm]
+  (let [pattern (mini/parse-mini pattern-string)
+        param-pattern (fn [time] {:freq (transform/range pattern 0 1 440.0 880.0) :amp 0.5})
+        player (synth/synth-pattern-player session def-name param-pattern bpm)]
+    (synth/player-start player)
+    player))
+
+;; Stop all patterns in a session
+;;
+;; @param session LiveSession or scscm session
+(defn hush [session]
+  (if (get session :players)
+    (live/hush session)
+    (synth/session-free-all session)))
+
+;; ============================================================================
+;; Example Patterns
+;; ============================================================================
+
+;; Simple bass drum pattern
+(def EXAMPLE_BASS (mini/d "bd4"))
+
+;; Kick on every beat
+(def EXAMPLE_KICK (mini/kick 0 1 2 3))
+
+;; Snare on 2 and 4
+(def EXAMPLE_SNARE (mini/snare 2 4))
+
+;; Hi-hat on every 8th note
+(def EXAMPLE_HAT (mini/hat 0 0.5 1 1.5 2 2.5 3 3.5))
+
+;; Simple melody
+(def EXAMPLE_MELODY (mini/n "c4 e4 g4 c5"))
+
+;; Arpeggio
+(def EXAMPLE_ARP (synth/arp-pattern (mini/chord "[c4 e4 g4 c5]") 4 :up))
+
+;; ============================================================================
+;; Pattern Composition Helpers
+;; ============================================================================
+
+;; Create a drum machine pattern
+;;
+;; @param kick-pattern Pattern for kick drum
+;; @param snare-pattern Pattern for snare drum
+;; @param hat-pattern Pattern for hi-hat
+;; @return Pattern<vec<map>> for all drums
+(defn drum-machine [kick-pattern snare-pattern hat-pattern]
+  (structural/stack 
+    (synth/note-pattern kick-pattern (pattern/const 100) (pattern/const true))
+    (synth/note-pattern snare-pattern (pattern/const 80) (pattern/const true))
+    (synth/note-pattern hat-pattern (pattern/const 60) (pattern/const true))))
+
+;; Create a bass line
+;;
+;; @param notes Pattern for note pitches (MIDI notes)
+;; @param duration Pattern for note durations (beats)
+;; @param velocity Pattern for velocities
+;; @return Pattern<map> for bass
+(defn bass-line [notes & [duration (pattern/const 0.25) velocity (pattern/const 100)]]
+  (synth/note-pattern notes velocity duration))
+
+;; Create a lead melody
+;;
+;; @param notes Pattern for note pitches
+;; @param duration Pattern for durations
+;; @param velocity Pattern for velocities
+;; @return Pattern<map> for lead
+(defn lead [notes & [duration (pattern/const 0.5) velocity (pattern/const 90)]]
+  (synth/note-pattern notes velocity duration))
+
+;; Create a pad chord progression
+;;
+;; @param chords Pattern for chords (vec of MIDI notes)
+;; @param duration Pattern for chord durations
+;; @param velocity Pattern for velocities
+;; @return Pattern<vec<map>> for pad
+(defn pad [chords & [duration (pattern/const 1.0) velocity (pattern/const 70)]]
+  (synth/chord-pattern 
+    (synth/note-pattern (synth/arp-pattern chords 1 :up) velocity duration)))
