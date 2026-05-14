@@ -1,5 +1,8 @@
 build/
 build2/
+build-norel/
+build-rel/
+build-tsan/
 build-wasm/
 *.dSYM/
 *.o
@@ -10,6 +13,13 @@ tests/.stamp-cache/
 /tmp/tur-build/
 tur
 hello
+debug_iter
+hamt-bench-insert
+input
+
+# Test/build output files
+actual_test.stderr
+build_stderr.txt
 
 # Web
 web/node_modules/
