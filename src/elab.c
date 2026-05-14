@@ -774,6 +774,8 @@ typedef struct Elab {
     /* Phase G1: GADT special symbols */
     const Symbol *sym_defgadt;
     const Symbol *sym_colon; /* bare ":" used as annotation separator in defgadt */
+    /* Phase G2: current per-arm skolem environment (NULL outside GADT match arms) */
+    SkolemEnv *g2_skolem_env;
     /* Phase M0: Module system */
     const Symbol *sym_defmodule;  /* defmodule */
     const Symbol *sym_export;     /* export */
@@ -1234,6 +1236,8 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* Phase G1: GADT */
     e->sym_defgadt = intern_cstr(st, "defgadt");
     e->sym_colon = intern_cstr(st, ":");
+    /* Phase G2: per-arm skolem environment (NULL until inside a GADT match arm) */
+    e->g2_skolem_env = NULL;
     /* Phase 12: Borrow traits */
     e->sym_borrow = intern_cstr(st, "&");
     e->sym_borrow_mut = intern_cstr(st, "&mut");
@@ -8991,6 +8995,8 @@ static Expr *elab_defdata(Elab *e, const Form *call) {
             : NULL;
         ctor->adt = def;
         ctor->tag = ci;
+        ctor->result_type_form = NULL; /* Phase G1: NULL for defdata */
+        ctor->field_forms = NULL;      /* Phase G2: NULL for defdata */
 
         /* Parse field types */
         for (uint32_t fi = 0; fi < n_fields; fi++) {
@@ -9048,6 +9054,122 @@ static Expr *elab_defdata(Elab *e, const Form *call) {
     out->as.defdata_.def = def;
     out->as.defdata_.binding = adt_binding;
     return out;
+}
+
+/* Phase G2: Look up a type parameter name in the current skolem environment.
+ * Returns TY_UNKNOWN if not found. */
+static TypeKind gadt_skolem_lookup(const SkolemEnv *env, const char *name) {
+    if (!env) return TY_UNKNOWN;
+    for (uint8_t i = 0; i < env->n; i++) {
+        if (strcmp(env->bindings[i].name, name) == 0)
+            return env->bindings[i].kind;
+    }
+    return TY_UNKNOWN;
+}
+
+/* Phase G2: Resolve a type form to a full Type using the current skolem env.
+ * For primitive symbols → concrete Type.
+ * For type variable names → look up in senv; TY_TYVAR if unresolved.
+ * For ADT reference forms `(AdtName ...)` → look up ADT in global scope.
+ * Falls back to TY_INT (opaque int64_t) for unknown forms.
+ */
+static Type gadt_resolve_type_from_form(Elab *e, const AdtDef *gadt, const Form *f,
+                                         const SkolemEnv *senv) {
+    if (!f) return type_from_kind(TY_INT);
+
+    if (f->tag == F_SYM) {
+        const char *n = f->as.sym->name;
+        /* Primitive types */
+        if (strcmp(n, "int")    == 0) return type_from_kind(TY_INT);
+        if (strcmp(n, "bool")   == 0) return type_from_kind(TY_BOOL);
+        if (strcmp(n, "float")  == 0) return type_from_kind(TY_FLOAT);
+        if (strcmp(n, "cstr")   == 0) return type_from_kind(TY_CSTR);
+        if (strcmp(n, "ptr")    == 0) return type_from_kind(TY_PTR_VOID);
+        if (strcmp(n, "int8")   == 0) return type_from_kind(TY_INT8);
+        if (strcmp(n, "int16")  == 0) return type_from_kind(TY_INT16);
+        if (strcmp(n, "int32")  == 0) return type_from_kind(TY_INT32);
+        if (strcmp(n, "int64")  == 0) return type_from_kind(TY_INT64);
+        if (strcmp(n, "uint8")  == 0) return type_from_kind(TY_UINT8);
+        if (strcmp(n, "uint16") == 0) return type_from_kind(TY_UINT16);
+        if (strcmp(n, "uint32") == 0) return type_from_kind(TY_UINT32);
+        if (strcmp(n, "uint64") == 0) return type_from_kind(TY_UINT64);
+        if (strcmp(n, "float32")== 0) return type_from_kind(TY_FLOAT32);
+        if (strcmp(n, "float64")== 0) return type_from_kind(TY_FLOAT64);
+        /* Type variable: look up in skolem env */
+        TypeKind resolved = gadt_skolem_lookup(senv, n);
+        if (resolved != TY_UNKNOWN) return type_from_kind(resolved);
+        /* Unresolved type variable → TY_TYVAR */
+        (void)gadt; /* suppress unused warning */
+        return type_from_kind(TY_TYVAR);
+    }
+
+    if (f->tag == F_LIST && f->as.list.len >= 1) {
+        /* Possibly an ADT reference: (AdtName type-args...) */
+        Form *head = f->as.list.items[0];
+        if (head->tag == F_SYM) {
+            Binding *b = scope_lookup(e->scope, head->as.sym);
+            if (!b) b = scope_lookup(&e->global, head->as.sym);
+            if (b && b->type.kind == TY_ADT && b->type.as.adt_.def) {
+                return b->type; /* TY_ADT with the def pointer */
+            }
+        }
+    }
+
+    return type_from_kind(TY_INT); /* fallback: opaque int64_t */
+}
+
+/* Phase G2: Build a SkolemEnv for a GADT constructor arm.
+ * Parses the constructor's result_type_form (e.g. "(Expr int)") against
+ * the ADT's type_params (e.g. ["a"]) to produce concrete bindings
+ * such as {a → TY_INT}.  Only primitive-type args are mapped; type-variable
+ * args are skipped (leaving those params unresolved → TY_TYVAR in fields). */
+static void gadt_build_skolem_env(SkolemEnv *out, const AdtDef *def,
+                                   const CtorDef *ctor) {
+    out->n = 0;
+    if (!ctor->result_type_form || def->n_type_params == 0) return;
+
+    const Form *rt = ctor->result_type_form;
+    /* rt should be (AdtName arg0 arg1 ...) */
+    if (rt->tag != F_LIST || rt->as.list.len < 2) return;
+
+    /* arg i is at items[1+i] */
+    uint32_t n_args = rt->as.list.len - 1;
+    uint32_t n_bind = (n_args < def->n_type_params) ? n_args : def->n_type_params;
+
+    for (uint32_t i = 0; i < n_bind && out->n < MAX_SKOLEM_BINDINGS; i++) {
+        Form *arg = rt->as.list.items[1 + i];
+        const char *param_name = def->type_params[i];
+        TypeKind k = TY_UNKNOWN;
+
+        if (arg->tag == F_SYM) {
+            const char *an = arg->as.sym->name;
+            if (strcmp(an, "int")    == 0) k = TY_INT;
+            else if (strcmp(an, "bool")   == 0) k = TY_BOOL;
+            else if (strcmp(an, "float")  == 0) k = TY_FLOAT;
+            else if (strcmp(an, "cstr")   == 0) k = TY_CSTR;
+            else if (strcmp(an, "int8")   == 0) k = TY_INT8;
+            else if (strcmp(an, "int16")  == 0) k = TY_INT16;
+            else if (strcmp(an, "int32")  == 0) k = TY_INT32;
+            else if (strcmp(an, "int64")  == 0) k = TY_INT64;
+            else if (strcmp(an, "uint8")  == 0) k = TY_UINT8;
+            else if (strcmp(an, "uint16") == 0) k = TY_UINT16;
+            else if (strcmp(an, "uint32") == 0) k = TY_UINT32;
+            else if (strcmp(an, "uint64") == 0) k = TY_UINT64;
+            else if (strcmp(an, "float32")== 0) k = TY_FLOAT32;
+            else if (strcmp(an, "float64")== 0) k = TY_FLOAT64;
+            /* else: type variable or unknown — skip (param stays unresolved) */
+        }
+        /* List form like (Expr int) — ADT ref; treat as int64_t / TY_INT */
+        else if (arg->tag == F_LIST) {
+            k = TY_INT; /* opaque ADT reference */
+        }
+
+        if (k != TY_UNKNOWN) {
+            out->bindings[out->n].name = param_name;
+            out->bindings[out->n].kind = k;
+            out->n++;
+        }
+    }
 }
 
 /* Phase G1: Map a simple type form to a TypeKind for codegen.
@@ -9234,6 +9356,10 @@ static Expr *elab_defgadt(Elab *e, const Form *call) {
         ctor->adt = def;
         ctor->tag = ci;
         ctor->result_type_form = return_type_form;
+        /* Phase G2: store raw field-type annotation forms for per-arm resolution */
+        ctor->field_forms = n_fields > 0
+            ? (const struct Form **)arena_alloc(e->arena, n_fields * sizeof(const Form *))
+            : NULL;
 
         for (uint32_t fi = 0; fi < n_fields; fi++) {
             Form *ft_form = ctor_form->as.list.items[1 + fi];
@@ -9243,6 +9369,8 @@ static Expr *elab_defgadt(Elab *e, const Form *call) {
             if (fkind == TY_RC || fkind == TY_REF || fkind == TY_WEAK) {
                 def->needs_drop_glue = true;
             }
+            /* Phase G2: also stash the raw form for per-arm type resolution */
+            if (ctor->field_forms) ctor->field_forms[fi] = ft_form;
         }
         def->ctors[ci] = ctor;
 
@@ -9425,6 +9553,16 @@ static Expr *elab_match(Elab *e, const Form *call) {
 
             covered[ctor->tag] = true;
 
+            /* Phase G2: For GADT arms, build a per-arm SkolemEnv to resolve
+             * type-variable field types to concrete kinds. */
+            SkolemEnv arm_senv;
+            arm_senv.n = 0;
+            if (adt->is_gadt && ctor->result_type_form) {
+                gadt_build_skolem_env(&arm_senv, adt, ctor);
+            }
+            SkolemEnv *saved_senv = e->g2_skolem_env;
+            if (adt->is_gadt) e->g2_skolem_env = &arm_senv;
+
             /* Introduce a new scope with the field bindings */
             Scope arm_scope;
             scope_init(&arm_scope, e->scope);
@@ -9438,10 +9576,17 @@ static Expr *elab_match(Elab *e, const Form *call) {
                               "match: field binding must be a symbol");
                     e->scope = saved_scope;
                     scope_free(&arm_scope);
+                    e->g2_skolem_env = saved_senv;
                     free(covered); return NULL;
                 }
-                TypeKind fkind = ctor->fields[bi].kind;
-                Type ftype = type_from_kind(fkind);
+                Type ftype;
+                if (adt->is_gadt && ctor->field_forms && ctor->field_forms[bi]) {
+                    /* Phase G2: resolve field type using the skolem env */
+                    ftype = gadt_resolve_type_from_form(e, adt,
+                                                        ctor->field_forms[bi], &arm_senv);
+                } else {
+                    ftype = type_from_kind(ctor->fields[bi].kind);
+                }
                 Binding *fb = binding_new(e, var_form->as.sym, ftype, false, false,
                                           var_form->span);
                 scope_add(&arm_scope, fb);
@@ -9451,7 +9596,19 @@ static Expr *elab_match(Elab *e, const Form *call) {
             Expr *body = elab_form(e, body_form);
             e->scope = saved_scope;
             scope_free(&arm_scope);
+            e->g2_skolem_env = saved_senv;
             if (!body) { free(covered); return NULL; }
+
+            /* Phase G2: detect skolem escape — arm body result is TY_TYVAR */
+            if (adt->is_gadt && body->type.kind == TY_TYVAR) {
+                diag_emit(DIAG_ERROR, body_form->span,
+                          "match: skolem type variable escapes match arm "
+                          "(constructor '%s' of '%s'): the arm body has an "
+                          "unresolved GADT type variable as its result type",
+                          ctor->name, adt->name);
+                free(covered); return NULL;
+            }
+
             arms[ai].body = body;
             if (result_type.kind == TY_UNKNOWN) result_type = body->type;
         } else {
@@ -9463,12 +9620,64 @@ static Expr *elab_match(Elab *e, const Form *call) {
 
     /* Exhaustiveness check */
     if (!has_wildcard) {
-        for (uint32_t ci = 0; ci < adt->n_ctors; ci++) {
-            if (!covered[ci]) {
-                diag_emit(DIAG_ERROR, call->span,
-                          "match: non-exhaustive patterns — constructor '%s' of '%s' not covered",
-                          adt->ctors[ci]->name, adt->name);
-                free(covered); return NULL;
+        /* Phase G2: For GADT ADTs, warn about unreachable constructors rather
+         * than erroring — a constructor whose concrete type-argument instantiation
+         * differs from every covered arm's instantiation is unreachable.
+         * An uncovered constructor that IS reachable (or whose reachability is
+         * unknown) is still an error. */
+        if (adt->is_gadt) {
+            /* Collect the first type-arg string from each covered arm's result type. */
+            const char *covered_arg0[64]; /* max constructors we check */
+            uint32_t n_covered = 0;
+            for (uint32_t ci = 0; ci < adt->n_ctors && n_covered < 64; ci++) {
+                if (!covered[ci]) continue;
+                CtorDef *c = adt->ctors[ci];
+                const char *a0 = NULL;
+                if (c->result_type_form && c->result_type_form->tag == F_LIST
+                    && c->result_type_form->as.list.len >= 2) {
+                    Form *arg = c->result_type_form->as.list.items[1];
+                    if (arg->tag == F_SYM) a0 = arg->as.sym->name;
+                }
+                covered_arg0[n_covered++] = a0;
+            }
+            for (uint32_t ci = 0; ci < adt->n_ctors; ci++) {
+                if (covered[ci]) continue;
+                CtorDef *c = adt->ctors[ci];
+                /* Extract first type arg from this constructor's return type */
+                const char *my_a0 = NULL;
+                if (c->result_type_form && c->result_type_form->tag == F_LIST
+                    && c->result_type_form->as.list.len >= 2) {
+                    Form *arg = c->result_type_form->as.list.items[1];
+                    if (arg->tag == F_SYM) my_a0 = arg->as.sym->name;
+                }
+                /* Check if my_a0 conflicts with all covered arms */
+                bool all_covered_differ = (n_covered > 0) && (my_a0 != NULL);
+                for (uint32_t k = 0; k < n_covered && all_covered_differ; k++) {
+                    if (covered_arg0[k] == NULL ||
+                        strcmp(covered_arg0[k], my_a0) == 0) {
+                        all_covered_differ = false;
+                    }
+                }
+                if (all_covered_differ) {
+                    diag_emit(DIAG_WARNING, call->span,
+                              "match: constructor '%s' of '%s' is unreachable for "
+                              "this GADT instantiation",
+                              c->name, adt->name);
+                } else {
+                    diag_emit(DIAG_ERROR, call->span,
+                              "match: non-exhaustive patterns — constructor '%s' of '%s' not covered",
+                              c->name, adt->name);
+                    free(covered); return NULL;
+                }
+            }
+        } else {
+            for (uint32_t ci = 0; ci < adt->n_ctors; ci++) {
+                if (!covered[ci]) {
+                    diag_emit(DIAG_ERROR, call->span,
+                              "match: non-exhaustive patterns — constructor '%s' of '%s' not covered",
+                              adt->ctors[ci]->name, adt->name);
+                    free(covered); return NULL;
+                }
             }
         }
     }

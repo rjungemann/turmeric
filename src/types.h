@@ -87,6 +87,8 @@ typedef enum TypeKind {
     /* Phase HRT0: Higher-ranked types */
     TY_FORALL,       /* (forall [a ...] T) — universally quantified type (rank-2+) */
     TY_EXISTS,       /* (exists [a ...] T) — existentially quantified type */
+    /* Phase G2: unresolved GADT type variable (skolem that escaped its arm scope) */
+    TY_TYVAR,        /* free type variable — field whose type is a GADT type param not yet known */
 } TypeKind;
 
 /* Phase G0: Constructor field descriptor for ADTs */
@@ -94,6 +96,19 @@ typedef struct CtorField {
     TypeKind kind;       /* field type kind */
     TypeKind inner_kind; /* for ref/rc: inner type; TY_UNKNOWN otherwise */
 } CtorField;
+
+/* Phase G2: Skolem equality binding — one entry per GADT type parameter per arm */
+#define MAX_SKOLEM_BINDINGS 8
+typedef struct SkolemBinding {
+    const char *name;      /* type parameter name (e.g. "a") */
+    TypeKind    kind;      /* concrete resolved TypeKind (e.g. TY_INT) */
+} SkolemBinding;
+
+/* Phase G2: Per-arm skolem environment (stack-allocated in elab_match) */
+typedef struct SkolemEnv {
+    SkolemBinding bindings[MAX_SKOLEM_BINDINGS];
+    uint8_t       n;
+} SkolemEnv;
 
 /* Phase G0: Constructor descriptor for ADTs */
 typedef struct CtorDef {
@@ -106,6 +121,10 @@ typedef struct CtorDef {
      * NULL for plain defdata constructors.  The Form type is forward-declared
      * in forms.h which is already included above. */
     const struct Form *result_type_form; /* raw parsed annotation, e.g. (Tag int) */
+    /* Phase G2: raw field-type annotation forms for skolem-aware resolution.
+     * field_forms[i] is the type-annotation form for field i.
+     * NULL for plain defdata constructors. */
+    const struct Form **field_forms;
 } CtorDef;
 
 /* Phase G0: ADT (sum type) descriptor */

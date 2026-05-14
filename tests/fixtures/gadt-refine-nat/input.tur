@@ -1,0 +1,18 @@
+(defgadt Vec [n]
+  (VNil : (Vec int))
+  (VCons int (Vec int) : (Vec int)))
+
+(defn vec-head [v] :int
+  (match v
+    (VNil)      -1
+    (VCons x _) x))
+
+(defn vec-sum [v] :int
+  (match v
+    (VNil)      0
+    (VCons x t) (+ x (vec-sum t))))
+
+(defn main [] :int
+  (println (vec-head (VCons 1 (VCons 2 (VCons 3 (VNil))))))
+  (println (vec-sum  (VCons 1 (VCons 2 (VCons 3 (VNil))))))
+  0)
