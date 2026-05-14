@@ -144,7 +144,8 @@ Form *interp_eval(Env *e, Form *f) {
         case F_MAP:
         case F_SET:
         case F_CBLOCK:
-            /* Vectors, maps, sets, and C blocks evaluate to themselves */
+        case F_TYPE_ANN:
+            /* Vectors, maps, sets, C blocks, and type annotations evaluate to themselves */
             return f;
     }
     return f;
@@ -203,7 +204,8 @@ static Form *quasiquote_expand(Env *macro_env, Form *f) {
                 return form_vec(macro_env->arena, f->span, new_items, f->as.list.len);
             }
         case F_CBLOCK:
-            return f; /* C blocks are passed through */
+        case F_TYPE_ANN:
+            return f; /* C blocks and type annotations are passed through */
         case F_QUASIQUOTE:
             /* This is the main case: expand the quasiquoted form */
             return quasiquote_expand(macro_env, f->as.list.items[0]);
@@ -229,7 +231,8 @@ Form *macro_expand(Env *macro_env, Form *f, int *depth) {
         case F_KEYWORD:
         case F_CBLOCK:
         case F_QUOTE:
-            /* Atoms and quote forms don't expand */
+        case F_TYPE_ANN:
+            /* Atoms, quote forms, and type annotations don't expand */
             return f;
         case F_QUASIQUOTE:
         case F_UNQUOTE:

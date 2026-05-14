@@ -126,6 +126,15 @@ Form *form_unquote_splicing(Arena *a, Span span, Form *quoted) {
     return f;
 }
 
+Form *form_type_ann(Arena *a, Span span, Form *inner) {
+    Form *f = form_new(a, F_TYPE_ANN, span);
+    Form **items = (Form **)arena_alloc(a, sizeof(Form *));
+    items[0] = inner;
+    f->as.list.items = items;
+    f->as.list.len = 1;
+    return f;
+}
+
 /* Return the name of a FormTag as a string */
 const char *form_tag_name(FormTag tag) {
     switch (tag) {
@@ -145,6 +154,7 @@ const char *form_tag_name(FormTag tag) {
         case F_QUASIQUOTE: return "quasiquote";
         case F_UNQUOTE: return "unquote";
         case F_UNQUOTE_SPLICING: return "unquote-splicing";
+        case F_TYPE_ANN: return "type-ann";
         default: return "unknown";
     }
 }
@@ -249,6 +259,12 @@ void form_print(Buf *b, const Form *f) {
                 form_print(b, f->as.list.items[0]);
             }
             buf_puts(b, ")");
+            break;
+        case F_TYPE_ANN:
+            buf_puts(b, ": ");
+            if (f->as.list.len > 0) {
+                form_print(b, f->as.list.items[0]);
+            }
             break;
     }
 }
