@@ -1342,7 +1342,7 @@ bool reader_type_is_implemented(ReaderType type) {
         case READER_NEOTERIC:
             return true; /* Phase S2: neoteric is now implemented */
         case READER_SWEET:
-            return false; /* Not yet implemented */
+            return true; /* curly-infix + neoteric are implemented; full indent-sensitive sweet-exp is not */
         default:
             return false;
     }

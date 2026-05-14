@@ -181,7 +181,7 @@ static void cmd_type(TuriEnv *env, const char *expr_src) {
     sfile.src         = combined.data;
     sfile.len         = combined.len - 1;
     sfile.file_id     = 0;
-    sfile.reader_type = READER_TURMERIC;
+    sfile.reader_type = env->reader_type;
     diag_register_file(&sfile);
 
     uint32_t nforms = 0;
@@ -669,6 +669,23 @@ int turi_repl_run(void) {
             }
             if (strcmp(line, ":tutorial-progress") == 0) {
                 cmd_tutorial_progress();
+                free(line);
+                continue;
+            }
+            if (strncmp(line, "#lang ", 6) == 0) {
+                const char *rest = NULL;
+                size_t rest_len  = 0;
+                ReaderType rt = detect_lang(line, strlen(line), &rest, &rest_len);
+                if (rt == READER_UNKNOWN || rt == (ReaderType)-1) {
+                    fprintf(stderr, "unknown #lang: '%s'\n", line + 6);
+                } else if (rt != env->reader_type) {
+                    env->reader_type    = rt;
+                    env->src_acc.len    = 0;   /* accumulated source may be incompatible */
+                    env->prior_toplevel = 0;
+                    printf("; reader set to %s (session reset)\n", reader_type_name(rt));
+                } else {
+                    printf("; reader already set to %s\n", reader_type_name(rt));
+                }
                 free(line);
                 continue;
             }
