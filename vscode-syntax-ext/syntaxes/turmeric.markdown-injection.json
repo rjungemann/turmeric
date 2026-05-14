@@ -1,0 +1,21 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "scopeName": "markdown.embedding.turmeric",
+  "injectionSelector": "L:text.html.markdown",
+  "patterns": [
+    { "include": "#turmeric-block" }
+  ],
+  "repository": {
+    "turmeric-block": {
+      "begin": "(^|\\G)(\\s*)(```+|~~~+)\\s*(turmeric|tur)\\s*$",
+      "end": "(^|\\G)(\\2)(\\3)\\s*$",
+      "beginCaptures": {
+        "4": { "name": "fenced_code.block.language.turmeric" }
+      },
+      "contentName": "meta.embedded.block.turmeric",
+      "patterns": [
+        { "include": "source.turmeric" }
+      ]
+    }
+  }
+}

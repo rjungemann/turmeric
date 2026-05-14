@@ -37,6 +37,14 @@
         "language": "turmeric",
         "scopeName": "source.turmeric",
         "path": "./syntaxes/turmeric.tmLanguage.json"
+      },
+      {
+        "scopeName": "markdown.embedding.turmeric",
+        "path": "./syntaxes/turmeric.markdown-injection.json",
+        "injectTo": ["text.html.markdown"],
+        "embeddedLanguages": {
+          "meta.embedded.block.turmeric": "turmeric"
+        }
       }
     ]
   },
