@@ -250,6 +250,8 @@ static int compile_to_c(const char *path, Buf *out_c) {
     const char *stdlib_files[] = {
         "stdlib/macros.tur",
         "stdlib/safe.tur",
+        /* Phase C1: runtime contracts - auto-load contract.tur for assert!/require!/ensure!/invariant! */
+        "stdlib/contract.tur",
         /* Phase P3: HAMT lowering - auto-load hamt.tur and map.tur */
         "stdlib/hamt.tur",
         "stdlib/map.tur",

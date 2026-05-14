@@ -1,0 +1,18 @@
+;; Phase C1: invariant! and invariant-msg! -- struct invariant validation (passing)
+
+(defn positive? [x :int] :bool
+  (> x 0))
+
+(defn non-negative? [x :int] :bool
+  (>= x 0))
+
+(defn main [] :int
+  (let [x 42]
+    (invariant-msg! x positive? "x must be positive")
+    (println "invariant-positive-pass"))
+
+  (let [y 0]
+    (invariant! y non-negative?)
+    (println "invariant-nonneg-pass"))
+
+  0)
