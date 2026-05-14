@@ -255,6 +255,9 @@ const char *type_name(Type t) {
         /* Phase HKT-P2: Recursive types */
         case TY_REC:
             return t.as.rec.name ? t.as.rec.name : "<rec>";
+        /* Phase X3: Set literal */
+        case TY_SET:
+            return "set";
     }
     return "?";
 }
@@ -396,6 +399,11 @@ static void type_name_buf(Buf *b, Type t) {
             buf_puts(b, t.as.rec.name ? t.as.rec.name : "<rec>");
             break;
         }
+        /* Phase X3: Set literal */
+        case TY_SET: {
+            buf_puts(b, "set");
+            break;
+        }
     }
 }
 
@@ -468,6 +476,9 @@ const char *type_c_name(Type t) {
         /* Phase HKT-P2: Recursive types — opaque int64_t handle in v1 */
         case TY_REC:
             return "int64_t";
+        /* Phase X3: Set literal — sorted int64_t array */
+        case TY_SET:
+            return "tur_set_t *";
     }
     return "void";
 }
@@ -608,6 +619,7 @@ static bool type_is_guarded_recursive_helper(const Type *t, const char *rec_name
         case TY_TYPECLASS:
         case TY_TYPECLASS_INST:
         case TY_NEVER:
+        case TY_SET:
             return true;
     }
 
@@ -675,6 +687,7 @@ const char *typekind_to_string(TypeKind k) {
         case TY_CLONEABLE_CONT: return "cloneable_cont";
         case TY_STRUCT:   return "struct";
         case TY_NEVER:    return "!";
+        case TY_SET:      return "set";
         default:          return "<?>";
     }
 }
@@ -721,5 +734,6 @@ TypeKind typekind_from_name(const char *name) {
     if (strcmp(name, "uint64") == 0) return TY_UINT64;
     if (strcmp(name, "float32") == 0) return TY_FLOAT32;
     if (strcmp(name, "float64") == 0) return TY_FLOAT64;
+    if (strcmp(name, "set") == 0) return TY_SET;
     return TY_UNKNOWN;
 }

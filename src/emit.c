@@ -3746,6 +3746,28 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_free(&lit);
             return result;
         }
+        case EX_SET_LIT: {
+            /* Phase X3: #s(e1 e2 ...) -> tur_set_from_items(n, (int64_t[]){v1, v2, ...}) */
+            uint32_t n = e->as.set_lit_.n;
+            /* Evaluate each item into a temp so side effects happen before the call */
+            char **item_vals = malloc(n * sizeof(char *));
+            for (uint32_t i = 0; i < n; i++) {
+                item_vals[i] = emit_value(ctx, body, e->as.set_lit_.items[i]);
+            }
+            Buf lit; buf_init(&lit);
+            buf_printf(&lit, "tur_set_from_items(%u, (int64_t[]){", n);
+            for (uint32_t i = 0; i < n; i++) {
+                if (i > 0) buf_puts(&lit, ", ");
+                buf_puts(&lit, item_vals[i]);
+                free(item_vals[i]);
+            }
+            free(item_vals);
+            buf_puts(&lit, "})");
+            buf_putc(&lit, '\0');
+            char *result = strdup(lit.data);
+            buf_free(&lit);
+            return result;
+        }
         case EX_GET_FIELD: {
             /* (.field s) - emit s.field_name */
             char *sv = emit_value(ctx, body, e->as.get_field_.struct_expr);
@@ -4259,7 +4281,8 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_RESUME:
         case EX_DISCONTINUE:
         case EX_MAKE_STRUCT:
-        case EX_GET_FIELD: {
+        case EX_GET_FIELD:
+        case EX_SET_LIT: {
             /* These should be lowered by effect_lower/CPS passes.
              * Fallback: emit via emit_value and discard result.
              * Do not recurse into emit_stmt with the same node. */
@@ -4778,6 +4801,7 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "#define _XOPEN_SOURCE 700\n");
     buf_puts(out, "#include <ucontext.h>\n");
     buf_puts(out, "#undef _XOPEN_SOURCE\n");
+    buf_puts(out, "#include <setjmp.h>\n");
     buf_puts(out, "#include <stdio.h>\n");
     buf_puts(out, "#include <stdint.h>\n");
     buf_puts(out, "#include <stdbool.h>\n");
@@ -4786,6 +4810,87 @@ int emit_program(Buf *out, const Expr *program) {
     /* Phase 20-21: Software Transactional Memory */
     buf_puts(out, "#include <stdlib.h>\n");
     buf_puts(out, "#include <stdbool.h>\n");
+    /* Phase X3: Set literal runtime — sorted-array representation (Option A, v1) */
+    buf_puts(out, "/* Phase X3: tur_set_t — sorted int64_t array */\n");
+    buf_puts(out, "extern void *memcpy(void *, const void *, size_t);\n");
+    buf_puts(out, "typedef struct { int64_t *items; uint32_t n; } tur_set_t;\n");
+    buf_puts(out, "static int __tur_set_cmp(const void *a, const void *b) {\n");
+    buf_puts(out, "    int64_t x = *(const int64_t *)a, y = *(const int64_t *)b;\n");
+    buf_puts(out, "    return (x > y) - (x < y);\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static tur_set_t *tur_set_from_items(uint32_t n, int64_t *src) {\n");
+    buf_puts(out, "    tur_set_t *s = (tur_set_t *)malloc(sizeof(tur_set_t));\n");
+    buf_puts(out, "    s->items = n ? (int64_t *)malloc(n * sizeof(int64_t)) : NULL;\n");
+    buf_puts(out, "    if (n) memcpy(s->items, src, n * sizeof(int64_t));\n");
+    buf_puts(out, "    if (n > 1) qsort(s->items, n, sizeof(int64_t), __tur_set_cmp);\n");
+    buf_puts(out, "    uint32_t k = 0;\n");
+    buf_puts(out, "    for (uint32_t i = 0; i < n; i++)\n");
+    buf_puts(out, "        if (k == 0 || s->items[k-1] != s->items[i]) s->items[k++] = s->items[i];\n");
+    buf_puts(out, "    s->n = k;\n");
+    buf_puts(out, "    return s;\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static bool tur_set_member(tur_set_t *s, int64_t x) {\n");
+    buf_puts(out, "    if (!s || !s->n) return false;\n");
+    buf_puts(out, "    int lo = 0, hi = (int)s->n - 1;\n");
+    buf_puts(out, "    while (lo <= hi) { int mid = (lo+hi)/2;\n");
+    buf_puts(out, "        if (s->items[mid] == x) return true;\n");
+    buf_puts(out, "        if (s->items[mid] < x) lo = mid+1; else hi = mid-1; }\n");
+    buf_puts(out, "    return false;\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static int64_t tur_set_count(tur_set_t *s) { return s ? (int64_t)s->n : 0; }\n");
+    buf_puts(out, "static tur_set_t *tur_set_add(tur_set_t *s, int64_t x) {\n");
+    buf_puts(out, "    if (tur_set_member(s, x)) {\n");
+    buf_puts(out, "        tur_set_t *r = (tur_set_t *)malloc(sizeof(tur_set_t));\n");
+    buf_puts(out, "        r->n = s->n; r->items = s->n ? (int64_t *)malloc(s->n*sizeof(int64_t)) : NULL;\n");
+    buf_puts(out, "        if (s->n) memcpy(r->items, s->items, s->n*sizeof(int64_t));\n");
+    buf_puts(out, "        return r;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    tur_set_t *r = (tur_set_t *)malloc(sizeof(tur_set_t));\n");
+    buf_puts(out, "    r->n = (s ? s->n : 0) + 1;\n");
+    buf_puts(out, "    r->items = (int64_t *)malloc(r->n * sizeof(int64_t));\n");
+    buf_puts(out, "    uint32_t pos = 0, base = s ? s->n : 0;\n");
+    buf_puts(out, "    while (pos < base && s->items[pos] < x) pos++;\n");
+    buf_puts(out, "    if (s && pos > 0) memcpy(r->items, s->items, pos*sizeof(int64_t));\n");
+    buf_puts(out, "    r->items[pos] = x;\n");
+    buf_puts(out, "    if (s && pos < base) memcpy(r->items+pos+1, s->items+pos, (base-pos)*sizeof(int64_t));\n");
+    buf_puts(out, "    return r;\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static tur_set_t *tur_set_remove(tur_set_t *s, int64_t x) {\n");
+    buf_puts(out, "    if (!s || !s->n || !tur_set_member(s, x)) {\n");
+    buf_puts(out, "        tur_set_t *r = (tur_set_t *)malloc(sizeof(tur_set_t));\n");
+    buf_puts(out, "        r->n = s ? s->n : 0;\n");
+    buf_puts(out, "        r->items = r->n ? (int64_t *)malloc(r->n*sizeof(int64_t)) : NULL;\n");
+    buf_puts(out, "        if (r->n) memcpy(r->items, s->items, r->n*sizeof(int64_t));\n");
+    buf_puts(out, "        return r;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    tur_set_t *r = (tur_set_t *)malloc(sizeof(tur_set_t));\n");
+    buf_puts(out, "    r->items = s->n > 1 ? (int64_t *)malloc((s->n-1)*sizeof(int64_t)) : NULL;\n");
+    buf_puts(out, "    uint32_t k = 0;\n");
+    buf_puts(out, "    for (uint32_t i = 0; i < s->n; i++) if (s->items[i] != x) r->items[k++] = s->items[i];\n");
+    buf_puts(out, "    r->n = k; return r;\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static tur_set_t *tur_set_union(tur_set_t *a, tur_set_t *b) {\n");
+    buf_puts(out, "    uint32_t na = a?a->n:0, nb = b?b->n:0, cap = na+nb;\n");
+    buf_puts(out, "    int64_t *tmp = cap ? (int64_t *)malloc(cap*sizeof(int64_t)) : NULL;\n");
+    buf_puts(out, "    if (a) memcpy(tmp, a->items, na*sizeof(int64_t));\n");
+    buf_puts(out, "    if (b) memcpy(tmp+na, b->items, nb*sizeof(int64_t));\n");
+    buf_puts(out, "    return tur_set_from_items(cap, tmp);\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static tur_set_t *tur_set_intersection(tur_set_t *a, tur_set_t *b) {\n");
+    buf_puts(out, "    if (!a || !b || !a->n || !b->n) return tur_set_from_items(0, NULL);\n");
+    buf_puts(out, "    int64_t *tmp = (int64_t *)malloc(a->n*sizeof(int64_t));\n");
+    buf_puts(out, "    uint32_t k = 0;\n");
+    buf_puts(out, "    for (uint32_t i = 0; i < a->n; i++) if (tur_set_member(b, a->items[i])) tmp[k++] = a->items[i];\n");
+    buf_puts(out, "    tur_set_t *r = tur_set_from_items(k, tmp); free(tmp); return r;\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static tur_set_t *tur_set_difference(tur_set_t *a, tur_set_t *b) {\n");
+    buf_puts(out, "    if (!a || !a->n) return tur_set_from_items(0, NULL);\n");
+    buf_puts(out, "    int64_t *tmp = (int64_t *)malloc(a->n*sizeof(int64_t));\n");
+    buf_puts(out, "    uint32_t k = 0;\n");
+    buf_puts(out, "    for (uint32_t i = 0; i < a->n; i++) if (!tur_set_member(b, a->items[i])) tmp[k++] = a->items[i];\n");
+    buf_puts(out, "    tur_set_t *r = tur_set_from_items(k, tmp); free(tmp); return r;\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static void tur_set_free(tur_set_t *s) { if (s) { free(s->items); free(s); } }\n");
     /* Inline STM runtime - Phase 21 with per-TVar locking */
     buf_puts(out, "/* STM types (Phase 21) */\n");
     buf_puts(out, "typedef void *(*stm_fn_t)(void *env);\n");

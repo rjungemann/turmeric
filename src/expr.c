@@ -426,6 +426,14 @@ void expr_print(Buf *b, const Expr *e) {
             expr_print(b, e->as.serial_shift_.body);
             buf_putc(b, ')');
             break;
+        case EX_SET_LIT:
+            buf_puts(b, "#s(");
+            for (uint32_t i = 0; i < e->as.set_lit_.n; i++) {
+                if (i > 0) buf_putc(b, ' ');
+                expr_print(b, e->as.set_lit_.items[i]);
+            }
+            buf_putc(b, ')');
+            break;
         /* EX_CAST handled above with full type info */
     }
 }

@@ -289,6 +289,10 @@ static Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_pa
                     for (uint32_t i = cur->as.make_struct_.n_fields; i > 0; i--)
                         ls[lsp++] = cur->as.make_struct_.field_values[i-1];
                     break;
+                case EX_SET_LIT:
+                    for (uint32_t i = cur->as.set_lit_.n; i > 0; i--)
+                        ls[lsp++] = cur->as.set_lit_.items[i-1];
+                    break;
                 default: break;
             }
         }
@@ -445,6 +449,11 @@ static Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_pa
             case EX_MAKE_STRUCT:
                 for (uint32_t i = cur->as.make_struct_.n_fields; i > 0; i--) {
                     stack[sp++] = cur->as.make_struct_.field_values[i-1];
+                }
+                break;
+            case EX_SET_LIT:
+                for (uint32_t i = cur->as.set_lit_.n; i > 0; i--) {
+                    stack[sp++] = cur->as.set_lit_.items[i-1];
                 }
                 break;
             case EX_GET_FIELD:
@@ -1021,6 +1030,11 @@ static bool is_rc_binding_consumed(const Expr *body, Binding *binding) {
                     stack[sp++] = cur->as.make_struct_.field_values[i-1];
                 }
                 break;
+            case EX_SET_LIT:
+                for (uint32_t i = cur->as.set_lit_.n; i > 0; i--) {
+                    stack[sp++] = cur->as.set_lit_.items[i-1];
+                }
+                break;
             case EX_GET_FIELD:
                 stack[sp++] = cur->as.get_field_.struct_expr;
                 break;
@@ -1028,7 +1042,7 @@ static bool is_rc_binding_consumed(const Expr *body, Binding *binding) {
                 break;
         }
     }
-    
+
     free(stack);
     return false;
 }
@@ -1375,6 +1389,7 @@ static bool ct_form_equal(const Form *a, const Form *b) {
         case F_LIST:
         case F_VEC:
         case F_MAP:
+        case F_SET:
             if (a->as.list.len != b->as.list.len) return false;
             for (uint32_t i = 0; i < a->as.list.len; i++) {
                 if (!ct_form_equal(a->as.list.items[i], b->as.list.items[i])) return false;
@@ -1444,13 +1459,14 @@ static Form *ct_eval_quasiquote(CtEnv *env, Form *f) {
             return form_list(env->elab->arena, f->span, items, n_out);
         }
         case F_VEC:
-        case F_MAP: {
+        case F_MAP:
+        case F_SET: {
             uint32_t n_in = f->as.list.len;
             Form **items = (Form **)arena_alloc(env->elab->arena, n_in * sizeof(Form *));
             for (uint32_t i = 0; i < n_in; i++) items[i] = ct_eval_quasiquote(env, f->as.list.items[i]);
-            return (f->tag == F_MAP)
-                ? form_map(env->elab->arena, f->span, items, n_in)
-                : form_vec(env->elab->arena, f->span, items, n_in);
+            if (f->tag == F_MAP) return form_map(env->elab->arena, f->span, items, n_in);
+            if (f->tag == F_SET) return form_set(env->elab->arena, f->span, items, n_in);
+            return form_vec(env->elab->arena, f->span, items, n_in);
         }
         case F_QUASIQUOTE:
             return ct_eval_quasiquote(env, f->as.list.items[0]);
@@ -1486,6 +1502,7 @@ static bool form_contains_ct_builtins(Form *f) {
             return false;
         case F_VEC:
         case F_MAP:
+        case F_SET:
             for (uint32_t i = 0; i < f->as.list.len; i++) {
                 if (form_contains_ct_builtins(f->as.list.items[i])) return true;
             }
@@ -1538,7 +1555,7 @@ static CtValue ct_eval_builtin(CtEnv *env, const Symbol *name, Form **args, uint
     if (ct_symbol_name(name, "empty?")) {
         if (n_args != 1) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time empty? expects 1 argument"); return ct_value_form(form_bool(env->elab->arena, span, false)); }
         bool empty = args[0]->tag == F_NIL ||
-                     ((args[0]->tag == F_LIST || args[0]->tag == F_VEC || args[0]->tag == F_MAP) && args[0]->as.list.len == 0);
+                     ((args[0]->tag == F_LIST || args[0]->tag == F_VEC || args[0]->tag == F_MAP || args[0]->tag == F_SET) && args[0]->as.list.len == 0);
         return ct_value_form(form_bool(env->elab->arena, span, empty));
     }
     if (ct_symbol_name(name, "list?")) {
@@ -1835,16 +1852,17 @@ static CtValue ct_eval_form(CtEnv *env, Form *f) {
         case F_LIST:
             return ct_eval_call(env, f);
         case F_VEC:
-        case F_MAP: {
+        case F_MAP:
+        case F_SET: {
             Form **items = (f->as.list.len == 0) ? NULL : (Form **)arena_alloc(env->elab->arena, f->as.list.len * sizeof(Form *));
             for (uint32_t i = 0; i < f->as.list.len; i++) {
                 CtValue v = ct_eval_form(env, f->as.list.items[i]);
                 items[i] = ct_value_to_form(env, v, f->as.list.items[i]->span);
                 if (!*env->ok) return ct_value_form(form_nil(env->elab->arena, f->span));
             }
-            return ct_value_form((f->tag == F_MAP)
-                ? form_map(env->elab->arena, f->span, items, f->as.list.len)
-                : form_vec(env->elab->arena, f->span, items, f->as.list.len));
+            if (f->tag == F_MAP) return ct_value_form(form_map(env->elab->arena, f->span, items, f->as.list.len));
+            if (f->tag == F_SET) return ct_value_form(form_set(env->elab->arena, f->span, items, f->as.list.len));
+            return ct_value_form(form_vec(env->elab->arena, f->span, items, f->as.list.len));
         }
     }
     return ct_value_form(f);
@@ -1938,7 +1956,8 @@ static Form *quasiquote_expand_form(Elab *e, Form *f) {
         }
         case F_VEC:
         case F_MAP:
-            /* Vectors/maps inside quasiquote: process each element */
+        case F_SET:
+            /* Vectors/maps/sets inside quasiquote: process each element */
             {
                 Form **new_items = (Form **)arena_alloc(e->arena, f->as.list.len * sizeof(Form *));
                 for (uint32_t i = 0; i < f->as.list.len; i++) {
@@ -1949,9 +1968,8 @@ static Form *quasiquote_expand_form(Elab *e, Form *f) {
                         new_items[i] = quasiquote_expand_form(e, item);
                     }
                 }
-                if (f->tag == F_MAP) {
-                    return form_map(e->arena, f->span, new_items, f->as.list.len);
-                }
+                if (f->tag == F_MAP) return form_map(e->arena, f->span, new_items, f->as.list.len);
+                if (f->tag == F_SET) return form_set(e->arena, f->span, new_items, f->as.list.len);
                 return form_vec(e->arena, f->span, new_items, f->as.list.len);
             }
         case F_CBLOCK:
@@ -2081,15 +2099,15 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
             return f;
         }
         case F_VEC:
-        case F_MAP: {
-            /* Recursively substitute in vector/map items */
+        case F_MAP:
+        case F_SET: {
+            /* Recursively substitute in vector/map/set items */
             Form **items = (Form **)arena_alloc(e->arena, f->as.list.len * sizeof(Form *));
             for (uint32_t i = 0; i < f->as.list.len; i++) {
                 items[i] = substitute_params(e, f->as.list.items[i], macro, args);
             }
-            if (f->tag == F_MAP) {
-                return form_map(e->arena, f->span, items, f->as.list.len);
-            }
+            if (f->tag == F_MAP) return form_map(e->arena, f->span, items, f->as.list.len);
+            if (f->tag == F_SET) return form_set(e->arena, f->span, items, f->as.list.len);
             return form_vec(e->arena, f->span, items, f->as.list.len);
         }
     }
@@ -5837,6 +5855,11 @@ static Expr *elab_defn(Elab *e, const Form *call) {
             } else if (kw->len == 1 && memcmp(kw->name, "!", 1) == 0) {
                 param_kinds[n_params - 1] = TY_NEVER;
                 params[n_params - 1]->type = TYPE_NEVER;
+            } else if (kw->len == 3 && memcmp(kw->name, "set", 3) == 0) {
+                /* Phase X3: set type annotation */
+                Type set_type = { .kind = TY_SET, .copy_kind = CK_MOVE };
+                param_kinds[n_params - 1] = TY_SET;
+                params[n_params - 1]->type = set_type;
             } else {
                 /* Try to look up as a type variable or typeclass */
                 /* For now, default to int */
@@ -5920,6 +5943,9 @@ static Expr *elab_defn(Elab *e, const Form *call) {
                 return_kind = TY_WEAK;
             } else if (kw->len == 1 && memcmp(kw->name, "!", 1) == 0) {
                 return_kind = TY_NEVER;
+            } else if (kw->len == 3 && memcmp(kw->name, "set", 3) == 0) {
+                /* Phase X3: set return type */
+                return_kind = TY_SET;
             } else {
                 diag_emit(DIAG_ERROR, ret_f->span,
                           "defn: unsupported return type keyword :%s",
@@ -8221,6 +8247,20 @@ static Expr *elab_form(Elab *e, Form *f) {
             diag_emit(DIAG_ERROR, f->span,
                       "phase 1: map literals are parsed but not yet supported by elaboration");
             return NULL;
+        case F_SET: {
+            /* Phase X3: Elaborate set literal #s(e1 e2 ...) -> EX_SET_LIT */
+            uint32_t n = f->as.list.len;
+            Expr **items = arena_alloc(e->arena, n * sizeof(Expr *));
+            for (uint32_t i = 0; i < n; i++) {
+                items[i] = elab_form(e, f->as.list.items[i]);
+                if (!items[i]) return NULL;
+            }
+            Type set_type = { .kind = TY_SET, .copy_kind = CK_COPY };
+            Expr *ex = expr_new(e->arena, EX_SET_LIT, set_type, f->span);
+            ex->as.set_lit_.items = items;
+            ex->as.set_lit_.n = n;
+            return ex;
+        }
         /* Phase 6: quote form */
         case F_QUOTE: {
             /* (quote x) returns x as a literal without evaluating x */
