@@ -17,6 +17,7 @@
 /* We need to include the turi headers. src/ is in the include path. */
 #include "turi/env.h"
 #include "turi/eval.h"
+#include "turi/value.h"
 #include "arena.h"
 #include "buf.h"
 #include "diag.h"
@@ -266,4 +267,68 @@ void turi_wasm_shutdown(void) {
         turi_env_free(g_env);
         g_env = NULL;
     }
+}
+
+/* ---------------------------------------------------------------------------
+ * Doc lookup bridge (D6: autodoc integration)
+ * ---------------------------------------------------------------------------
+ */
+
+/* Look up documentation for a Turmeric stdlib name.
+ *
+ * Evaluates (doc-lookup name) in the current runtime environment to retrieve
+ * the pre-built docstring from stdlib/docstrings.tur.
+ *
+ * Returns a pointer to the static string stored in the docstrings table, or
+ * NULL if the name is not found.  The returned pointer is owned by the
+ * docstrings table (a C static array) and must NOT be freed by the caller.
+ *
+ * In WASM builds this function is kept alive by EMSCRIPTEN_KEEPALIVE so that
+ * JavaScript can call it via Module.ccall / Module._turi_doc_lookup.
+ */
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+EMSCRIPTEN_KEEPALIVE
+#endif
+const char *turi_doc_lookup(const char *name) {
+    if (!g_env || !name) return NULL;
+
+    /* Build a Turmeric expression: (doc-lookup "name") */
+    size_t name_len = strlen(name);
+    /* Allocate enough room for (doc-lookup "...") + escaping headroom */
+    size_t buf_size = name_len * 2 + 32;
+    char *expr = (char *)malloc(buf_size);
+    if (!expr) return NULL;
+
+    /* Build the expression, escaping backslashes and double-quotes */
+    size_t pos = 0;
+    const char prefix[] = "(doc-lookup \"";
+    memcpy(expr + pos, prefix, sizeof(prefix) - 1);
+    pos += sizeof(prefix) - 1;
+    for (size_t i = 0; i < name_len; i++) {
+        char c = name[i];
+        if (c == '\\' || c == '"') {
+            expr[pos++] = '\\';
+        }
+        expr[pos++] = c;
+    }
+    expr[pos++] = '"';
+    expr[pos++] = ')';
+    expr[pos]   = '\0';
+
+    TuriValue result = turi_eval(g_env, expr);
+    free(expr);
+
+    if (turi_is_error(result)) return NULL;
+
+    /* doc-lookup returns :cstr which is represented at runtime as TURI_INT
+     * holding a const char * cast to int64_t.  A 0 value means "not found". */
+    if (result.tag == TURI_CSTR) {
+        return result.as_cstr;
+    }
+    if (result.tag == TURI_INT) {
+        if (result.as_int == 0) return NULL;
+        return (const char *)(intptr_t)result.as_int;
+    }
+    return NULL;
 }

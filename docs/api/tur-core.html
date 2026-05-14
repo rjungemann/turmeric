@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tur/tur/core | Turmeric API</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand">turmeric</span>
+  <nav>
+    <a href="index.html">API Docs</a>
+    <a href="../autodoc-plan.md">Plan</a>
+  </nav>
+</header>
+<div class="page-layout">
+<div class="sidebar">
+  <h3>Exported</h3>
+  <ul>
+    <li><a href="#constant">constant</a></li>
+    <li><a href="#time-signal">time-signal</a></li>
+    <li><a href="#sample">sample</a></li>
+    <li><a href="#map-signal">map-signal</a></li>
+    <li><a href="#combine-signals">combine-signals</a></li>
+    <li><a href="#pair-signals">pair-signals</a></li>
+    <li><a href="#fst-signal">fst-signal</a></li>
+    <li><a href="#snd-signal">snd-signal</a></li>
+    <li><a href="#Arrow-SF__">Arrow-SF[]</a></li>
+    <li><a href="#ArrowChoice-SF__">ArrowChoice-SF[]</a></li>
+    <li><a href="#ArrowZero-SF__">ArrowZero-SF[]</a></li>
+    <li><a href="#ArrowPlus-SF__">ArrowPlus-SF[]</a></li>
+    <li><a href="#identity-sf">identity-sf</a></li>
+    <li><a href="#const-sf">const-sf</a></li>
+    <li><a href="#time-sf">time-sf</a></li>
+    <li><a href="#par-sf">par-sf</a></li>
+    <li><a href="#split-sf">split-sf</a></li>
+    <li><a href="#merge-sf">merge-sf</a></li>
+    <li><a href="#product-signal">product-signal</a></li>
+    <li><a href="#left-signal">left-signal</a></li>
+    <li><a href="#right-signal">right-signal</a></li>
+    <li><a href="#either-signal">either-signal</a></li>
+    <li><a href="#state-sf">state-sf</a></li>
+    <li><a href="#state-sf-simple">state-sf-simple</a></li>
+  </ul>
+</div>
+<div class="content">
+  <div class="module-heading">
+    <h1>tur/core</h1>
+    <div class="module-path">stdlib/core.tur</div>
+  </div>
+<div class="def-card" id="constant">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>constant</h2>
+  </div>
+  <pre class="def-signature">(constant [val : a] :)</pre>
+  <p class="def-summary">create a signal that always returns the same value.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>val</td><td></td><td>the constant value to emit at every time point</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">A Signal&lt;a&gt; that ignores time and returns val.
+
+  (constant 0.5)  ; =&gt; a signal always producing 0.5</pre>
+  </div>
+</div>
+<div class="def-card" id="time-signal">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>time-signal</h2>
+  </div>
+  <pre class="def-signature">(time-signal)</pre>
+  <p class="def-summary">a signal that returns the current time at each sample.</p>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Signal&lt;Time&gt; whose value equals the query time t.
+
+  (sample time-signal 2.0)  ; =&gt; 2.0</pre>
+  </div>
+</div>
+<div class="def-card" id="sample">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>sample</h2>
+  </div>
+  <pre class="def-signature">(sample [sig : (Signal a)])</pre>
+  <p class="def-summary">evaluate a signal at a specific time point.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>sig</td><td></td><td>the Signal to query</td></tr>
+    <tr><td>t</td><td></td><td>the time point at which to sample</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">The signal value of type a at time t.
+
+  (sample (constant 3.0) 0.0)  ; =&gt; 3.0</pre>
+  </div>
+</div>
+<div class="def-card" id="map-signal">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>map-signal</h2>
+  </div>
+  <pre class="def-signature">(map-signal [f : (-&gt; a b)])</pre>
+  <p class="def-summary">lift a pure function to operate on signals pointwise.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>f</td><td></td><td>function from a to b</td></tr>
+    <tr><td>sig</td><td></td><td>input signal of type Signal&lt;a&gt;</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Signal&lt;b&gt; where each sample is f applied to the corresponding input sample.
+
+  (map-signal (fn [x] (* x 2.0)) my-sig)</pre>
+  </div>
+</div>
+<div class="def-card" id="combine-signals">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>combine-signals</h2>
+  </div>
+  <pre class="def-signature">(combine-signals [f : (-&gt; a b c)])</pre>
+  <p class="def-summary">combine two signals pointwise using a binary function.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>f</td><td></td><td>binary function (a, b) -&gt; c</td></tr>
+    <tr><td>sig-a</td><td></td><td>first input signal</td></tr>
+    <tr><td>sig-b</td><td></td><td>second input signal</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Signal&lt;c&gt; whose samples are f(sig-a(t), sig-b(t)).
+
+  (combine-signals + sig-a sig-b)  ; pointwise sum</pre>
+  </div>
+</div>
+<div class="def-card" id="pair-signals">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>pair-signals</h2>
+  </div>
+  <pre class="def-signature">(pair-signals [sig-a : (Signal a)])</pre>
+  <p class="def-summary">zip two signals into a product signal.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>sig-a</td><td></td><td>first signal</td></tr>
+    <tr><td>sig-b</td><td></td><td>second signal</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Signal&lt;Tuple a b&gt; whose samples are (sig-a(t), sig-b(t)).
+
+  (pair-signals freq-sig amp-sig)</pre>
+  </div>
+</div>
+<div class="def-card" id="fst-signal">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>fst-signal</h2>
+  </div>
+  <pre class="def-signature">(fst-signal [sig-ab : (Signal (Tuple a b))] :)</pre>
+  <p class="def-summary">project the first component of a product signal.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>sig-ab</td><td></td><td>signal of type Signal&lt;Tuple a b&gt;</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Signal&lt;a&gt; containing only the first components.</p>
+  </div>
+</div>
+<div class="def-card" id="snd-signal">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>snd-signal</h2>
+  </div>
+  <pre class="def-signature">(snd-signal [sig-ab : (Signal (Tuple a b))] :)</pre>
+  <p class="def-summary">project the second component of a product signal.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>sig-ab</td><td></td><td>signal of type Signal&lt;Tuple a b&gt;</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Signal&lt;b&gt; containing only the second components.</p>
+  </div>
+</div>
+<div class="def-card" id="Arrow-SF__">
+  <div class="def-card-header">
+    <span class="kind-badge kind-definstance">definstance</span>
+    <h2>Arrow-SF[]</h2>
+  </div>
+  <pre class="def-signature">(definstance Arrow-SF [])</pre>
+  <p class="def-summary">Arrow instance for Signal Functions.</p>
+</div>
+<div class="def-card" id="ArrowChoice-SF__">
+  <div class="def-card-header">
+    <span class="kind-badge kind-definstance">definstance</span>
+    <h2>ArrowChoice-SF[]</h2>
+  </div>
+  <pre class="def-signature">(definstance ArrowChoice-SF [])</pre>
+  <p class="def-summary">ArrowChoice instance for Signal Functions.</p>
+</div>
+<div class="def-card" id="ArrowZero-SF__">
+  <div class="def-card-header">
+    <span class="kind-badge kind-definstance">definstance</span>
+    <h2>ArrowZero-SF[]</h2>
+  </div>
+  <pre class="def-signature">(definstance ArrowZero-SF [])</pre>
+  <p class="def-summary">ArrowZero instance producing a zero (error) signal.</p>
+</div>
+<div class="def-card" id="ArrowPlus-SF__">
+  <div class="def-card-header">
+    <span class="kind-badge kind-definstance">definstance</span>
+    <h2>ArrowPlus-SF[]</h2>
+  </div>
+  <pre class="def-signature">(definstance ArrowPlus-SF [])</pre>
+  <p class="def-summary">ArrowPlus instance combining two SFs by summing outputs.</p>
+</div>
+<div class="def-card" id="identity-sf">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>identity-sf</h2>
+  </div>
+  <pre class="def-signature">(identity-sf [a])</pre>
+  <p class="def-summary">SF that passes its input signal through unchanged.</p>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">SF&lt;a,a&gt; that is the identity morphism.
+
+  ((identity-sf) my-sig)  ; =&gt; my-sig</pre>
+  </div>
+</div>
+<div class="def-card" id="const-sf">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>const-sf</h2>
+  </div>
+  <pre class="def-signature">(const-sf [val : b])</pre>
+  <p class="def-summary">SF that ignores its input and produces a constant signal.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>val</td><td></td><td>value to emit</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">SF&lt;a,b&gt; that always produces a signal holding val.
+
+  ((const-sf 0.0) any-sig)  ; =&gt; constant 0.0 signal</pre>
+  </div>
+</div>
+<div class="def-card" id="time-sf">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>time-sf</h2>
+  </div>
+  <pre class="def-signature">(time-sf)</pre>
+  <p class="def-summary">SF that produces the current time signal, ignoring its input.</p>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">SF&lt;a,Time&gt; that outputs time-signal regardless of input.</p>
+  </div>
+</div>
+<div class="def-card" id="par-sf">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>par-sf</h2>
+  </div>
+  <pre class="def-signature">(par-sf [(Arrow arr) a b c d])</pre>
+  <p class="def-summary">parallel composition: apply f to first and g to second of a product.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>f</td><td></td><td>SF&lt;a,b&gt;</td></tr>
+    <tr><td>g</td><td></td><td>SF&lt;c,d&gt;</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">arr&lt;Tuple a c, Tuple b d&gt; running f and g in parallel.</p>
+  </div>
+</div>
+<div class="def-card" id="split-sf">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>split-sf</h2>
+  </div>
+  <pre class="def-signature">(split-sf [(Arrow arr) a b c])</pre>
+  <p class="def-summary">fanout: send input through both f and g, producing a product.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>f</td><td></td><td>SF&lt;a,b&gt;</td></tr>
+    <tr><td>g</td><td></td><td>SF&lt;a,c&gt;</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">arr&lt;a, Tuple b c&gt; that applies both arrows to the same input.</p>
+  </div>
+</div>
+<div class="def-card" id="merge-sf">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>merge-sf</h2>
+  </div>
+  <pre class="def-signature">(merge-sf [(ArrowChoice arr) a b c d])</pre>
+  <p class="def-summary">fanin: apply f or g depending on which branch of an Either.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>f</td><td></td><td>SF&lt;a,c&gt;</td></tr>
+    <tr><td>g</td><td></td><td>SF&lt;b,d&gt;</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">arr&lt;Either a b, Either c d&gt;.</p>
+  </div>
+</div>
+<div class="def-card" id="product-signal">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>product-signal</h2>
+  </div>
+  <pre class="def-signature">(product-signal [sig-a : (Signal a)])</pre>
+  <p class="def-summary">create a product signal from two signals (alias for pair-signals).</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>sig-a</td><td></td><td>first signal</td></tr>
+    <tr><td>sig-b</td><td></td><td>second signal</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Signal&lt;Tuple a b&gt;.</p>
+  </div>
+</div>
+<div class="def-card" id="left-signal">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>left-signal</h2>
+  </div>
+  <pre class="def-signature">(left-signal [sig-a : (Signal a)])</pre>
+  <p class="def-summary">inject a signal into the Left branch of an Either signal.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>sig-a</td><td></td><td>signal to inject</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Signal&lt;Either a b&gt; where every sample is Left(sig-a(t)).</p>
+  </div>
+</div>
+<div class="def-card" id="right-signal">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>right-signal</h2>
+  </div>
+  <pre class="def-signature">(right-signal [sig-b : (Signal b)])</pre>
+  <p class="def-summary">inject a signal into the Right branch of an Either signal.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>sig-b</td><td></td><td>signal to inject</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Signal&lt;Either a b&gt; where every sample is Right(sig-b(t)).</p>
+  </div>
+</div>
+<div class="def-card" id="either-signal">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>either-signal</h2>
+  </div>
+  <pre class="def-signature">(either-signal [f : (-&gt; a c)])</pre>
+  <p class="def-summary">case-analyze a sum signal using two functions.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>f</td><td></td><td>function for Left values</td></tr>
+    <tr><td>g</td><td></td><td>function for Right values</td></tr>
+    <tr><td>sig-eab</td><td></td><td>input sum signal</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Signal&lt;c&gt; applying f or g depending on which branch is present.</p>
+  </div>
+</div>
+<div class="def-card" id="state-sf">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>state-sf</h2>
+  </div>
+  <pre class="def-signature">(state-sf [init : s])</pre>
+  <p class="def-summary">build a stateful SF using an initial state and a step function.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>init</td><td></td><td>initial state of type s</td></tr>
+    <tr><td>step</td><td></td><td>function (s, a) -&gt; Tuple b s mapping old state and input to output and new state</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">SF&lt;a,b&gt; that threads mutable state through each sample.
+
+  (state-sf 0.0 (fn [s x] (Tuple (+ s x) (+ s x))))  ; running sum</pre>
+  </div>
+</div>
+<div class="def-card" id="state-sf-simple">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>state-sf-simple</h2>
+  </div>
+  <pre class="def-signature">(state-sf-simple [init : s])</pre>
+  <p class="def-summary">build a stateful SF that ignores its input signal.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>init</td><td></td><td>initial state of type s</td></tr>
+    <tr><td>step</td><td></td><td>function s -&gt; Tuple b s mapping old state to output and new state</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">SF&lt;a,b&gt; that advances state on each call regardless of input.</p>
+  </div>
+</div>
+</div>
+</div>
+<footer class="site-footer">
+  Auto-generated by <code>tools/gendocs.py</code>.
+  Do not edit by hand -- run <code>just docs</code> to regenerate.
+</footer>
+</body>
+</html>

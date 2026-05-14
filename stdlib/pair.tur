@@ -4,6 +4,19 @@
 
 (defstruct Pair [first :int second :int])
 
+;;; pair-new -- allocate a new Pair on the heap.
+;;;
+;;; Parameters:
+;;;   a -- first element (int64_t)
+;;;   b -- second element (int64_t)
+;;;
+;;; Returns:
+;;;   Pointer to a newly allocated Pair, as int64_t.
+;;;
+;;; Example:
+;;;   (pair-new 1 2)  ; => <Pair ptr>
+;;;
+;;; Since: Phase B1
 ;; Create a new Pair
 (defn pair-new [a b] :int
   ```c
@@ -13,6 +26,18 @@
   return (int64_t)(intptr_t)p;
   ```)
 
+;;; pair-first -- return the first element of a Pair.
+;;;
+;;; Parameters:
+;;;   p -- pointer to a Pair (as int64_t)
+;;;
+;;; Returns:
+;;;   The first element stored in the Pair.
+;;;
+;;; Example:
+;;;   (pair-first (pair-new 10 20))  ; => 10
+;;;
+;;; Since: Phase B1
 ;; Get first element
 (defn pair-first [p] :int
   ```c
@@ -20,6 +45,18 @@
   return pair->first;
   ```)
 
+;;; pair-second -- return the second element of a Pair.
+;;;
+;;; Parameters:
+;;;   p -- pointer to a Pair (as int64_t)
+;;;
+;;; Returns:
+;;;   The second element stored in the Pair.
+;;;
+;;; Example:
+;;;   (pair-second (pair-new 10 20))  ; => 20
+;;;
+;;; Since: Phase B1
 ;; Get second element
 (defn pair-second [p] :int
   ```c
@@ -27,12 +64,22 @@
   return pair->second;
   ```)
 
+;;; pair-free -- free a heap-allocated Pair (shallow free only).
+;;;
+;;; Parameters:
+;;;   p -- pointer to a Pair (as int64_t)
+;;;
+;;; Example:
+;;;   (pair-free my-pair)
+;;;
+;;; Since: Phase B1
 ;; Free a Pair (does NOT free the contained values - shallow free)
 (defn pair-free [p]
   ```c
   free((void*)(intptr_t)p);
   ```)
 
+;;; __bifunctor_pair_bimap -- apply fn-left to first and fn-right to second, returning a new Pair.
 ;;; SINCE: Phase HKT §6 — Stdlib HKT migration
 ;; Bifunctor instance for Pair.
 ;; bimap :: (a -> c) -> (b -> d) -> pair a b -> pair c d
@@ -47,9 +94,24 @@
   return (int64_t)(intptr_t)r;
   ```)
 
+;;; Bifunctor [Pair] -- bimap applies fn-left to first and fn-right to second.
 (definstance Bifunctor [Pair]
   (bimap [container fn-left fn-right] (__bifunctor_pair_bimap container fn-left fn-right)))
 
+;;; pair-eq? -- compare two Pairs element-wise using a comparator function.
+;;;
+;;; Parameters:
+;;;   p1     -- first Pair pointer (as int64_t)
+;;;   p2     -- second Pair pointer (as int64_t)
+;;;   cmp-fn -- comparator fn [a :int b :int] :bool applied to each field
+;;;
+;;; Returns:
+;;;   true if both elements compare equal under cmp-fn, false otherwise.
+;;;
+;;; Example:
+;;;   (pair-eq? (pair-new 1 2) (pair-new 1 2) (fn [a b] (= a b)))  ; => true
+;;;
+;;; Since: Phase E1
 ;; Phase E1: pair-eq? -- compare two Pairs element-wise using a comparator fn.
 ;; cmp-fn must be a fn [a :int b :int] :bool
 (defn pair-eq? [p1 p2 cmp-fn] :bool
@@ -63,9 +125,11 @@
   return first_eq && second_eq;
   ```)
 
+;;; Eq [Pair] -- eq? compares two Pairs using integer equality on each field.
 (definstance Eq [Pair]
   (eq? [x y] (pair-eq? x y (fn [a b] (= a b)))))
 
+;;; Clone [Pair] -- clone deep-copies the Pair struct into a new heap allocation.
 ;; Phase B1: Clone instance for Pair
 ;; Requires the Clone typeclass to already be in scope (from stdlib/typeclass.tur).
 ;; Deep-copies the struct value into a new heap allocation and returns it as int64_t.

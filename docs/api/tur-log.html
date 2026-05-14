@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tur/tur/log | Turmeric API</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand">turmeric</span>
+  <nav>
+    <a href="index.html">API Docs</a>
+    <a href="../autodoc-plan.md">Plan</a>
+  </nav>
+</header>
+<div class="page-layout">
+<div class="sidebar">
+  <h3>Exported</h3>
+  <ul>
+    <li><a href="#Real-Logger">Real-Logger</a></li>
+    <li><a href="#Real-Logger-free">Real-Logger-free</a></li>
+    <li><a href="#Simple-Logger">Simple-Logger</a></li>
+    <li><a href="#Simple-Logger-free">Simple-Logger-free</a></li>
+    <li><a href="#Null-Logger">Null-Logger</a></li>
+    <li><a href="#Null-Logger-free">Null-Logger-free</a></li>
+    <li><a href="#log-debug-direct">log-debug-direct</a></li>
+    <li><a href="#log-info-direct">log-info-direct</a></li>
+    <li><a href="#log-warn-direct">log-warn-direct</a></li>
+    <li><a href="#log-error-direct">log-error-direct</a></li>
+  </ul>
+</div>
+<div class="content">
+  <div class="module-heading">
+    <h1>tur/log</h1>
+    <div class="module-path">stdlib/log.tur</div>
+  </div>
+<div class="def-card" id="Real-Logger">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>Real-Logger</h2>
+  </div>
+  <pre class="def-signature">(Real-Logger)</pre>
+  <p class="def-summary">create a timestamped Logger capability writing to stdout/stderr.</p>
+  <p class="def-since">Since: Phase 16</p>
+</div>
+<div class="def-card" id="Real-Logger-free">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>Real-Logger-free</h2>
+  </div>
+  <pre class="def-signature">(Real-Logger-free [log])</pre>
+  <p class="def-summary">release a Logger capability created by Real-Logger.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>log</td><td></td><td>the Logger pointer returned by Real-Logger.</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase 16</p>
+</div>
+<div class="def-card" id="Simple-Logger">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>Simple-Logger</h2>
+  </div>
+  <pre class="def-signature">(Simple-Logger)</pre>
+  <p class="def-summary">create a lightweight Logger capability without timestamps.</p>
+  <p class="def-since">Since: Phase 16</p>
+</div>
+<div class="def-card" id="Simple-Logger-free">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>Simple-Logger-free</h2>
+  </div>
+  <pre class="def-signature">(Simple-Logger-free [log])</pre>
+  <p class="def-summary">release a Logger capability created by Simple-Logger.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>log</td><td></td><td>the Logger pointer returned by Simple-Logger.</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase 16</p>
+</div>
+<div class="def-card" id="Null-Logger">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>Null-Logger</h2>
+  </div>
+  <pre class="def-signature">(Null-Logger)</pre>
+  <p class="def-summary">create a silent Logger capability that discards all messages.</p>
+  <p class="def-since">Since: Phase 16</p>
+</div>
+<div class="def-card" id="Null-Logger-free">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>Null-Logger-free</h2>
+  </div>
+  <pre class="def-signature">(Null-Logger-free [log])</pre>
+  <p class="def-summary">release a Logger capability created by Null-Logger.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>log</td><td></td><td>the Logger pointer returned by Null-Logger.</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase 16</p>
+</div>
+<div class="def-card" id="log-debug-direct">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>log-debug-direct</h2>
+  </div>
+  <pre class="def-signature">(log-debug-direct [msg])</pre>
+  <p class="def-summary">write a DEBUG message directly to stdout.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>msg</td><td></td><td>the message string to log (:cstr).</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase 16</p>
+</div>
+<div class="def-card" id="log-info-direct">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>log-info-direct</h2>
+  </div>
+  <pre class="def-signature">(log-info-direct [msg])</pre>
+  <p class="def-summary">write an INFO message directly to stdout.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>msg</td><td></td><td>the message string to log (:cstr).</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase 16</p>
+</div>
+<div class="def-card" id="log-warn-direct">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>log-warn-direct</h2>
+  </div>
+  <pre class="def-signature">(log-warn-direct [msg])</pre>
+  <p class="def-summary">write a WARN message directly to stderr.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>msg</td><td></td><td>the message string to log (:cstr).</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase 16</p>
+</div>
+<div class="def-card" id="log-error-direct">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>log-error-direct</h2>
+  </div>
+  <pre class="def-signature">(log-error-direct [msg])</pre>
+  <p class="def-summary">write an ERROR message directly to stderr.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>msg</td><td></td><td>the message string to log (:cstr).</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase 16</p>
+</div>
+</div>
+</div>
+<footer class="site-footer">
+  Auto-generated by <code>tools/gendocs.py</code>.
+  Do not edit by hand -- run <code>just docs</code> to regenerate.
+</footer>
+</body>
+</html>

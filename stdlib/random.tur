@@ -1,5 +1,5 @@
 ;; Phase 16: Real Random implementation
-;; 
+;;
 ;; Implementation of Random capability using platform RNG
 
 (extern-c rand [^] :int)
@@ -8,6 +8,20 @@
 (extern-c malloc [^ptr size] :ptr)
 (extern-c free [^ptr p] :void)
 
+;;; Real-Random -- create a Random capability backed by libc rand().
+;;;
+;;; Returns:
+;;;   A heap-allocated Random struct with:
+;;;     next_int   -- returns a random integer in [min, max].
+;;;     next_float -- returns a random integer in [0, 9999] (divide by 10000.0
+;;;                   to obtain a float in [0, 1)).
+;;;   The RNG is seeded with time(NULL) on first use.
+;;;   Free with Real-Random-free when done.
+;;;
+;;; Example:
+;;;   (let [rng (Real-Random)] ...)
+;;;
+;;; Since: Phase 16
 ;; Real-Random implementation
 ;; Uses libc rand() function
 (defn Real-Random []
@@ -18,7 +32,7 @@
       int (*next_int)(int min, int max);
       int (*next_float)(void);
   };
-  
+
   /* next_int implementation using rand() */
   static int random_next_int(int min, int max) {
       /* Seed with time if not already seeded */
@@ -27,13 +41,13 @@
           srand((unsigned int)time(NULL));
           seeded = 1;
       }
-      
+
       /* rand() returns [0, RAND_MAX] */
       int range = max - min + 1;
       int value = rand() % range;
       return min + value;
   }
-  
+
   /* next_float implementation - returns [0, 10000) */
   static int random_next_float(void) {
       /* Seed with time if not already seeded */
@@ -42,11 +56,11 @@
           srand((unsigned int)time(NULL));
           seeded = 1;
       }
-      
+
       /* Return value in [0, 10000) */
       return rand() % 10000;
   }
-  
+
   /* Create and populate the capability struct */
   Random* rng = (Random*)malloc(sizeof(Random));
   rng->next_int = random_next_int;
@@ -54,6 +68,12 @@
   return (void*)rng;
   ```)
 
+;;; Real-Random-free -- release a Random capability created by Real-Random.
+;;;
+;;; Parameters:
+;;;   rng -- the Random pointer returned by Real-Random.
+;;;
+;;; Since: Phase 16
 ;; Free a Real-Random
 (defn Real-Random-free [rng]
   ```c
@@ -64,6 +84,20 @@
 ;; Seeded Random implementation
 ;; ============================================================================
 
+;;; Seeded-Random -- create a deterministic Random capability from a fixed seed.
+;;;
+;;; Parameters:
+;;;   seed -- unsigned integer seed for srand; same seed produces the same sequence.
+;;;
+;;; Returns:
+;;;   A heap-allocated Random struct identical in interface to Real-Random but
+;;;   seeded immediately with the supplied value.  Useful for reproducible tests.
+;;;   Free with Seeded-Random-free when done.
+;;;
+;;; Example:
+;;;   (let [rng (Seeded-Random 42)] ...)
+;;;
+;;; Since: Phase 16
 ;; Seeded-Random implementation - uses a fixed seed for reproducibility
 ;; Useful for testing
 (defn Seeded-Random [seed]
@@ -73,22 +107,22 @@
       int (*next_int)(int min, int max);
       int (*next_float)(void);
   };
-  
+
   /* Seed the RNG */
   srand((unsigned int)seed);
-  
+
   /* next_int implementation */
   static int seeded_next_int(int min, int max) {
       int range = max - min + 1;
       int value = rand() % range;
       return min + value;
   }
-  
+
   /* next_float implementation - returns [0, 10000) */
   static int seeded_next_float(void) {
       return rand() % 10000;
   }
-  
+
   /* Create and populate the capability struct */
   Random* rng = (Random*)malloc(sizeof(Random));
   rng->next_int = seeded_next_int;
@@ -96,6 +130,12 @@
   return (void*)rng;
   ```)
 
+;;; Seeded-Random-free -- release a Random capability created by Seeded-Random.
+;;;
+;;; Parameters:
+;;;   rng -- the Random pointer returned by Seeded-Random.
+;;;
+;;; Since: Phase 16
 ;; Free a Seeded-Random
 (defn Seeded-Random-free [rng]
   ```c
@@ -106,6 +146,20 @@
 ;; Helper functions for direct random number generation
 ;; ============================================================================
 
+;;; rand-int -- return a random integer in the inclusive range [min, max].
+;;;
+;;; Parameters:
+;;;   min -- the minimum value (inclusive).
+;;;   max -- the maximum value (inclusive).
+;;;
+;;; Returns:
+;;;   A random integer in [min, max].  The libc RNG is auto-seeded with
+;;;   time(NULL) on first call.
+;;;
+;;; Example:
+;;;   (rand-int 1 6)  ; => 4  (simulate a die roll)
+;;;
+;;; Since: Phase 16
 ;; Get a random integer in range [min, max]
 (defn rand-int [min max]
   ```c
@@ -119,6 +173,16 @@
   return min + value;
   ```)
 
+;;; rand-float -- return a random integer scaled to represent [0, 1).
+;;;
+;;; Returns:
+;;;   An integer in [0, 9999].  Divide by 10000.0 to obtain a float
+;;;   in [0, 1).  The libc RNG is auto-seeded with time(NULL) on first call.
+;;;
+;;; Example:
+;;;   (rand-float)  ; => 7312  ; represents ~0.7312
+;;;
+;;; Since: Phase 16
 ;; Get a random float in range [0, 1)
 ;; Returns value scaled by 10000 (divide by 10000.0 to get actual float)
 (defn rand-float []
@@ -131,6 +195,18 @@
   return rand() % 10000;
   ```)
 
+;;; rand-die -- roll an n-sided die, returning a value in [1, sides].
+;;;
+;;; Parameters:
+;;;   sides -- the number of faces on the die.
+;;;
+;;; Returns:
+;;;   A random integer in [1, sides].
+;;;
+;;; Example:
+;;;   (rand-die 20)  ; => 13  (D20 roll)
+;;;
+;;; Since: Phase 16
 ;; Roll a die with n sides (1 to n)
 (defn rand-die [sides]
   ```c
@@ -142,6 +218,15 @@
   return 1 + (rand() % sides);
   ```)
 
+;;; rand-bool -- return a random boolean value.
+;;;
+;;; Returns:
+;;;   1 (true) or 0 (false) with equal probability.
+;;;
+;;; Example:
+;;;   (rand-bool)  ; => 1
+;;;
+;;; Since: Phase 16
 ;; Random boolean (true or false)
 (defn rand-bool []
   ```c

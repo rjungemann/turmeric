@@ -14,6 +14,20 @@
 
 ;; array-get: bounds-checked array access, returns ptr to option struct
 ;; arr is a ptr<void> to an array of int64_t, idx is the index
+;;; array-get -- bounds-checked array read; returns a heap-allocated Option struct.
+;;;
+;;; Parameters:
+;;;   arr -- pointer to an int64_t array
+;;;   idx -- zero-based index to read
+;;;
+;;; Returns:
+;;;   A :ptr to an option struct { bool is_some; int64_t value; }.
+;;;   is_some is false when idx is out of the v1 safe range.
+;;;
+;;; Example:
+;;;   (def opt (array-get arr 3))
+;;;
+;;; Since: Phase U4
 (defn array-get [arr :ptr<void> idx :int] :ptr
   ```c
   struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
@@ -29,6 +43,17 @@
   ```)
 
 ;; array-set: bounds-checked array mutation, returns bool (true on success)
+;;; array-set -- bounds-checked array write; returns 1 on success, 0 on out-of-range index.
+;;;
+;;; Parameters:
+;;;   arr   -- pointer to an int64_t array
+;;;   idx   -- zero-based index to write
+;;;   value -- value to store
+;;;
+;;; Returns:
+;;;   1 if the write succeeded, 0 if idx was out of the v1 safe range.
+;;;
+;;; Since: Phase U4
 (defn array-set [arr :ptr<void> idx :int value :int] :int
   ```c
   int64_t *array = (int64_t *)arr;
@@ -41,6 +66,17 @@
 
 ;; array-slice: create a slice (ptr + length) from an array
 ;; For v1, we just return the pointer offset
+;;; array-slice -- create a { ptr, len } slice view starting at start for len elements.
+;;;
+;;; Parameters:
+;;;   arr   -- source int64_t array pointer
+;;;   start -- first element index (offset in int64_t units)
+;;;   len   -- number of elements in the view
+;;;
+;;; Returns:
+;;;   A :ptr to a { void *ptr; size_t len; } slice struct.
+;;;
+;;; Since: Phase U4
 (defn array-slice [arr :ptr<void> start :int len :int] :ptr
   ```c
   /* For v1, we return a new struct containing ptr and len */
@@ -56,6 +92,16 @@
 
 ;; with-c-string: create a C string from a Turmeric string, call thunk with it
 ;; The thunk should take one argument (the cstr)
+;;; with-c-string -- pass a Turmeric cstr to a callback function and return its result.
+;;;
+;;; Parameters:
+;;;   s -- cstr value to pass (already a C string in v1)
+;;;   f -- function pointer accepting a cstr; called with s
+;;;
+;;; Returns:
+;;;   Whatever f returns, as :ptr.
+;;;
+;;; Since: Phase U4
 (defn with-c-string [s :cstr f :ptr] :ptr
   ```c
   /* For v1, we just call f with s directly since cstr is already a C string */
@@ -65,6 +111,15 @@
 
 ;; from-c-string: create a Turmeric string from a C string
 ;; For v1, we just return the cstr as-is (no copying)
+;;; from-c-string -- return a Turmeric cstr from a C string (no-copy in v1).
+;;;
+;;; Parameters:
+;;;   s -- C string to wrap
+;;;
+;;; Returns:
+;;;   The same :cstr pointer (identity in v1).
+;;;
+;;; Since: Phase U4
 (defn from-c-string [s :cstr] :cstr
   s)
 
@@ -73,6 +128,18 @@
 ;; ============================================================================
 
 ;; box: allocate a value on the heap and return a pointer to it
+;;; box -- heap-allocate an int64 value and return a pointer to it.
+;;;
+;;; Parameters:
+;;;   v -- integer value to box
+;;;
+;;; Returns:
+;;;   A :ptr to a newly heap-allocated int64_t cell containing v.
+;;;
+;;; Example:
+;;;   (def p (box 42))
+;;;
+;;; Since: Phase U4
 (defn box [v :int] :ptr
   ```c
   int64_t *boxed = malloc(sizeof(int64_t));
@@ -81,6 +148,18 @@
   ```)
 
 ;; unbox: get the value from a boxed pointer
+;;; unbox -- read the int64 value from a heap pointer created by box.
+;;;
+;;; Parameters:
+;;;   p -- pointer from box
+;;;
+;;; Returns:
+;;;   The int64 value stored at p.
+;;;
+;;; Example:
+;;;   (unbox (box 42))  ; => 42
+;;;
+;;; Since: Phase U4
 (defn unbox [p :ptr] :int
   ```c
   int64_t *boxed = (int64_t *)p;

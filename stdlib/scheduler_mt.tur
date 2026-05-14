@@ -1,20 +1,32 @@
-;; stdlib/scheduler_mt.tur — Multi-threaded work-stealing scheduler (Phase T23)
+;; stdlib/scheduler_mt.tur -- Multi-threaded work-stealing scheduler (Phase T23)
 ;;
 ;; This provides a higher-level API for the multi-threaded scheduler.
 ;; The scheduler manages a pool of worker threads and distributes fibers
 ;; across them using work-stealing.
 ;;
 ;; API:
-;;   scheduler-mt-new       [n_threads :int]              → ptr<void>
-;;   scheduler-mt-free      [sched :ptr<void>]             → nil
-;;   scheduler-mt-spawn    [sched :ptr<void> fiber :ptr<void>] → nil
-;;   scheduler-mt-run       [sched :ptr<void>]             → nil
-;;   scheduler-mt-thread-id []                             → int
+;;   scheduler-mt-new       [n_threads :int]              -> ptr<void>
+;;   scheduler-mt-free      [sched :ptr<void>]             -> nil
+;;   scheduler-mt-spawn    [sched :ptr<void> fiber :ptr<void>] -> nil
+;;   scheduler-mt-run       [sched :ptr<void>]             -> nil
+;;   scheduler-mt-thread-id []                             -> int
 ;;
 ;; The scheduler uses work-stealing: each thread has its own deque of fibers.
 ;; When a thread runs out of work, it steals from other threads' deques.
 
 ;; Create a new multi-threaded scheduler with n_threads worker threads
+;;; scheduler-mt-new -- create a new multi-threaded work-stealing scheduler.
+;;;
+;;; Parameters:
+;;;   n_threads -- number of OS worker threads to spawn
+;;;
+;;; Returns:
+;;;   ptr<void> -- the newly allocated scheduler; aborts on allocation failure
+;;;
+;;; Example:
+;;;   (scheduler-mt-new 4)  ; => sched-ptr
+;;;
+;;; Since: Phase T23
 (defn scheduler-mt-new [n_threads :int] :ptr<void>
   ```c
   TurSchedulerMT *s = tur_scheduler_mt_new((size_t)n_threads);
@@ -23,54 +35,130 @@
   ```)
 
 ;; Free the scheduler (must be called after all threads have finished)
+;;; scheduler-mt-free -- free a multi-threaded scheduler after all threads have finished.
+;;;
+;;; Parameters:
+;;;   sched -- scheduler pointer returned by scheduler-mt-new
+;;;
+;;; Example:
+;;;   (scheduler-mt-free sched)
+;;;
+;;; Since: Phase T23
 (defn scheduler-mt-free [sched :ptr<void>] :nil
   ```c
   tur_scheduler_mt_free((TurSchedulerMT *)sched);
   ```)
 
 ;; Spawn a fiber on the scheduler
+;;; scheduler-mt-spawn -- add a fiber to the multi-threaded scheduler's work queue.
+;;;
+;;; Parameters:
+;;;   sched -- scheduler pointer returned by scheduler-mt-new
+;;;   fiber -- fiber pointer to enqueue for execution
+;;;
+;;; Example:
+;;;   (scheduler-mt-spawn sched my-fiber)
+;;;
+;;; Since: Phase T23
 (defn scheduler-mt-spawn [sched :ptr<void> fiber :ptr<void>] :nil
   ```c
   tur_scheduler_mt_spawn((TurSchedulerMT *)sched, (FiberBlock *)fiber);
   ```)
 
 ;; Run the scheduler on the current thread
+;;; scheduler-mt-run -- run the multi-threaded scheduler on the calling thread.
+;;;
+;;; Parameters:
+;;;   sched -- scheduler pointer returned by scheduler-mt-new
+;;;
+;;; Example:
+;;;   (scheduler-mt-run sched)
+;;;
+;;; Since: Phase T23
 (defn scheduler-mt-run [sched :ptr<void>] :nil
   ```c
   tur_scheduler_mt_run((TurSchedulerMT *)sched);
   ```)
 
 ;; Get the current thread's ID (unique per OS thread)
+;;; scheduler-mt-thread-id -- return the unique integer ID of the current OS thread.
+;;;
+;;; Returns:
+;;;   int -- a non-negative thread ID unique within the scheduler
+;;;
+;;; Example:
+;;;   (scheduler-mt-thread-id)  ; => 2
+;;;
+;;; Since: Phase T23
 (defn scheduler-mt-thread-id [] :int
   ```c
   return (int64_t)tur_scheduler_mt_thread_id();
   ```)
 
 ;; Set the current scheduler for this thread (for testing)
+;;; scheduler-mt-set-current -- set the active scheduler for the current thread.
+;;;
+;;; Parameters:
+;;;   sched -- scheduler pointer to install as the current thread's scheduler
+;;;
+;;; Example:
+;;;   (scheduler-mt-set-current sched)
+;;;
+;;; Since: Phase T23
 (defn scheduler-mt-set-current [sched :ptr<void>] :nil
   ```c
   tur_scheduler_mt_set_current((TurSchedulerMT *)sched);
   ```)
 
 ;; Get the current scheduler for this thread
+;;; scheduler-mt-current -- return the scheduler currently associated with this thread.
+;;;
+;;; Returns:
+;;;   ptr<void> -- the active scheduler for this thread, or nil if none set
+;;;
+;;; Example:
+;;;   (scheduler-mt-current)  ; => sched-ptr
+;;;
+;;; Since: Phase T23
 (defn scheduler-mt-current [] :ptr<void>
   ```c
   return (void *)tur_scheduler_mt_current();
   ```)
 
 ;; Yield the current fiber to allow other fibers to run
+;;; scheduler-mt-yield -- yield the current fiber so other fibers may be scheduled.
+;;;
+;;; Example:
+;;;   (scheduler-mt-yield)
+;;;
+;;; Since: Phase T23
 (defn scheduler-mt-yield [] :nil
   ```c
   tur_scheduler_mt_yield();
   ```)
 
 ;; Park the current fiber until explicitly unparked
+;;; scheduler-mt-park -- park the current fiber until another fiber calls scheduler-mt-unpark.
+;;;
+;;; Example:
+;;;   (scheduler-mt-park)
+;;;
+;;; Since: Phase T23
 (defn scheduler-mt-park [] :nil
   ```c
   tur_scheduler_mt_park();
   ```)
 
 ;; Unpark a specific fiber
+;;; scheduler-mt-unpark -- unpark a previously parked fiber, making it eligible to run.
+;;;
+;;; Parameters:
+;;;   fiber -- fiber pointer that was previously parked via scheduler-mt-park
+;;;
+;;; Example:
+;;;   (scheduler-mt-unpark other-fiber)
+;;;
+;;; Since: Phase T23
 (defn scheduler-mt-unpark [fiber :ptr<void>] :nil
   ```c
   tur_scheduler_mt_unpark((FiberBlock *)fiber);

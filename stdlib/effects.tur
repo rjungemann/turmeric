@@ -6,43 +6,133 @@
 ;; v1 limitation: handler bodies cannot capture outer-scope variables
 ;; (no closure analysis for effect handler functions yet).
 
-;; ── Write ──────────────────────────────────────────────────────────────────
+;; -- Write ------------------------------------------------------------------
 ;; Perform a string write operation.
+;;; Write -- declare an effect that writes a string to the environment.
+;;;
+;;; Parameters:
+;;;   s -- the string to write
+;;;
+;;; Returns:
+;;;   nil
+;;;
+;;; Example:
+;;;   (perform (Write "hello"))  ; => nil
+;;;
+;;; Since: Phase 19
 (defeffect Write [s :cstr] :nil)
 
-;; ── Fail ───────────────────────────────────────────────────────────────────
+;; -- Fail -------------------------------------------------------------------
 ;; Signal a failure with a message string.  A handler may recover or abort.
+;;; Fail -- declare an effect that signals a failure with a message string.
+;;;
+;;; Parameters:
+;;;   msg -- the failure message
+;;;
+;;; Returns:
+;;;   nil
+;;;
+;;; Example:
+;;;   (perform (Fail "something went wrong"))  ; => nil
+;;;
+;;; Since: Phase 19
 (defeffect Fail [msg :cstr] :nil)
 
-;; ── Read ───────────────────────────────────────────────────────────────────
+;; -- Read -------------------------------------------------------------------
 ;; Request an integer value from the environment.
+;;; Read -- declare an effect that requests an integer value from the environment.
+;;;
+;;; Returns:
+;;;   int -- the integer supplied by the enclosing handler
+;;;
+;;; Example:
+;;;   (perform (Read))  ; => 42
+;;;
+;;; Since: Phase 19
 (defeffect Read [] :int)
 
-;; ── GetEnv ─────────────────────────────────────────────────────────────────
+;; -- GetEnv -----------------------------------------------------------------
 ;; Look up a named environment variable; returns a cstr (or nil if absent).
+;;; GetEnv -- declare an effect that looks up a named environment variable.
+;;;
+;;; Parameters:
+;;;   key -- the environment variable name to look up
+;;;
+;;; Returns:
+;;;   cstr -- the value of the variable, or nil if absent
+;;;
+;;; Example:
+;;;   (perform (GetEnv "HOME"))  ; => "/home/user"
+;;;
+;;; Since: Phase 19
 (defeffect GetEnv [key :cstr] :cstr)
 
-;; ── Handlers ───────────────────────────────────────────────────────────────
+;; -- Handlers ---------------------------------------------------------------
 ;;
-;; with-write  — handle Write by printing to stdout via println.
-;; with-fail-panic — handle Fail by panicking.
-;; with-getenv — handle GetEnv by delegating to the C getenv(3) function.
-;; with-read-console — handle Read by reading an integer from stdin.
+;; with-write  -- handle Write by printing to stdout via println.
+;; with-fail-panic -- handle Fail by panicking.
+;; with-getenv -- handle GetEnv by delegating to the C getenv(3) function.
+;; with-read-console -- handle Read by reading an integer from stdin.
 
+;;; with-write -- handle the Write effect by printing to stdout via println.
+;;;
+;;; Parameters:
+;;;   body -- the expression whose Write effects are handled
+;;;
+;;; Returns:
+;;;   the return value of body
+;;;
+;;; Example:
+;;;   (with-write (perform (Write "hello")))  ; prints "hello"
+;;;
+;;; Since: Phase 19
 (defmacro with-write [body]
   (handle body
     (Write [s] k) (do (println s) (resume k nil))))
 
+;;; with-fail-panic -- handle the Fail effect by panicking with the message.
+;;;
+;;; Parameters:
+;;;   body -- the expression whose Fail effects are handled
+;;;
+;;; Returns:
+;;;   the return value of body, or panics on Fail
+;;;
+;;; Example:
+;;;   (with-fail-panic (perform (Fail "oops")))  ; panics with "oops"
+;;;
+;;; Since: Phase 19
 (defmacro with-fail-panic [body]
   (handle body
     (Fail [msg] k) (panic msg)))
 
 (extern-c getenv [key :cstr] :cstr)
 
+;;; with-getenv -- handle the GetEnv effect by delegating to C getenv(3).
+;;;
+;;; Parameters:
+;;;   body -- the expression whose GetEnv effects are handled
+;;;
+;;; Returns:
+;;;   the return value of body
+;;;
+;;; Example:
+;;;   (with-getenv (perform (GetEnv "PATH")))  ; => "/usr/bin:..."
+;;;
+;;; Since: Phase 19
 (defmacro with-getenv [body]
   (handle body
     (GetEnv [key] k) (resume k (getenv key))))
 
+;;; read-int-console -- read a single integer from stdin via scanf.
+;;;
+;;; Returns:
+;;;   int -- the integer read from stdin
+;;;
+;;; Example:
+;;;   (read-int-console)  ; => 7
+;;;
+;;; Since: Phase 19
 (defn read-int-console [] :int
   ```c
   int _v = 0;
@@ -50,29 +140,102 @@
   return (int64_t)_v;
   ```)
 
+;;; with-read-console -- handle the Read effect by reading an integer from stdin.
+;;;
+;;; Parameters:
+;;;   body -- the expression whose Read effects are handled
+;;;
+;;; Returns:
+;;;   the return value of body
+;;;
+;;; Example:
+;;;   (with-read-console (perform (Read)))  ; reads integer from stdin
+;;;
+;;; Since: Phase 19
 (defmacro with-read-console [body]
   (handle body
     (Read [] k) (resume k (read-int-console))))
 
-;; ── Log ────────────────────────────────────────────────────────────────────
+;; -- Log --------------------------------------------------------------------
 ;; Emit a leveled log message.  Handlers choose how to display or suppress.
+;;; Log -- declare an effect that emits a leveled log message.
+;;;
+;;; Parameters:
+;;;   level -- severity label (e.g. "info", "warn", "error")
+;;;   msg   -- the message text
+;;;
+;;; Returns:
+;;;   nil
+;;;
+;;; Example:
+;;;   (perform (Log "info" "server started"))  ; => nil
+;;;
+;;; Since: Phase 19
 (defeffect Log [level :cstr msg :cstr] :nil)
 
-;; with-stderr-log — print all log lines as "<level>: <msg>"
+;; with-stderr-log -- print all log lines as "<level>: <msg>"
+;;; with-stderr-log -- handle the Log effect by printing all messages to stdout.
+;;;
+;;; Parameters:
+;;;   body -- the expression whose Log effects are handled
+;;;
+;;; Returns:
+;;;   the return value of body
+;;;
+;;; Example:
+;;;   (with-stderr-log (perform (Log "warn" "low memory")))  ; prints "low memory"
+;;;
+;;; Since: Phase 19
 (defmacro with-stderr-log [body]
   (handle body
     (Log [level msg] k) (do (println msg) (resume k nil))))
 
-;; with-silent-log — suppress all log output
+;; with-silent-log -- suppress all log output
+;;; with-silent-log -- handle the Log effect by suppressing all log output.
+;;;
+;;; Parameters:
+;;;   body -- the expression whose Log effects are handled
+;;;
+;;; Returns:
+;;;   the return value of body
+;;;
+;;; Example:
+;;;   (with-silent-log (perform (Log "debug" "ignored")))  ; no output
+;;;
+;;; Since: Phase 19
 (defmacro with-silent-log [body]
   (handle body
     (Log [level msg] k) (resume k nil)))
 
-;; ── Abort ──────────────────────────────────────────────────────────────────
+;; -- Abort ------------------------------------------------------------------
 ;; Signal an unrecoverable abort (the handler must not resume k).
 ;; The default with-abort-panic handler panics with the message.
+;;; Abort -- declare an effect that signals an unrecoverable abort.
+;;;
+;;; Parameters:
+;;;   msg -- the abort message
+;;;
+;;; Returns:
+;;;   int (never actually returned; the handler must not resume k)
+;;;
+;;; Example:
+;;;   (perform (Abort "fatal error"))  ; handler should not resume
+;;;
+;;; Since: Phase 19
 (defeffect Abort [msg :cstr] :int)
 
+;;; with-abort-panic -- handle the Abort effect by panicking with the message.
+;;;
+;;; Parameters:
+;;;   body -- the expression whose Abort effects are handled
+;;;
+;;; Returns:
+;;;   the return value of body, or panics on Abort
+;;;
+;;; Example:
+;;;   (with-abort-panic (perform (Abort "fatal")))  ; panics with "fatal"
+;;;
+;;; Since: Phase 19
 (defmacro with-abort-panic [body]
   (handle body
     (Abort [msg] k) (panic msg)))
@@ -81,13 +244,49 @@
 
 ;; Async effect: perform an async computation and return a Future.
 ;; The handler should spawn the computation and return a Future that can be awaited.
+;;; Async -- declare an effect that spawns an async computation and returns a Future.
+;;;
+;;; Parameters:
+;;;   thunk -- a zero-argument function pointer to run asynchronously
+;;;
+;;; Returns:
+;;;   ptr<void> -- a Future that can be passed to Await
+;;;
+;;; Example:
+;;;   (perform (Async my-thunk))  ; => future-ptr
+;;;
+;;; Since: Phase T25
 (defeffect Async [thunk :ptr<void>] :ptr<void>)
 
 ;; Await effect: await a future and return its value.
 ;; The handler should block (or yield) until the future is ready, then resume with the value.
+;;; Await -- declare an effect that awaits a Future and returns its resolved value.
+;;;
+;;; Parameters:
+;;;   future -- a Future pointer previously returned by Async
+;;;
+;;; Returns:
+;;;   int -- the resolved integer value of the future
+;;;
+;;; Example:
+;;;   (perform (Await my-future))  ; => 42
+;;;
+;;; Since: Phase T25
 (defeffect Await [future :ptr<void>] :int)
 
-;; with-async — handle Async by spawning a fiber and returning a Future
+;; with-async -- handle Async by spawning a fiber and returning a Future
+;;; with-async -- handle the Async effect by running the thunk and resuming with its result.
+;;;
+;;; Parameters:
+;;;   body -- the expression whose Async effects are handled
+;;;
+;;; Returns:
+;;;   the return value of body
+;;;
+;;; Example:
+;;;   (with-async (perform (Async my-thunk)))  ; runs thunk inline
+;;;
+;;; Since: Phase T25
 (defmacro with-async [body]
   (handle body
     (Async [thunk k])
@@ -98,10 +297,21 @@
         (let [result (thunk)]
           (resume k result)))))
 
-;; with-await — handle Await by blocking until future is ready
+;; with-await -- handle Await by blocking until future is ready
+;;; with-await -- handle the Await effect by blocking until the future resolves.
+;;;
+;;; Parameters:
+;;;   body -- the expression whose Await effects are handled
+;;;
+;;; Returns:
+;;;   the return value of body
+;;;
+;;; Example:
+;;;   (with-await (perform (Await my-future)))  ; => resolved value
+;;;
+;;; Since: Phase T25
 (defmacro with-await [body]
   (handle body
     (Await [future k])
       (let [value (await future)]
         (resume k value))))
-

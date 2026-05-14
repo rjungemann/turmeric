@@ -13,10 +13,10 @@
 ;; ThreadPool: fixed-size pool of worker threads (Phase T20-D).
 ;;
 ;; API:
-;;   thread-pool-new        [n :int]                     → ptr<void>
-;;   thread-pool-submit     [tp :ptr<void> task_fn :ptr<void> task_arg :ptr<void>] → ptr<void>
-;;   thread-pool-shutdown   [tp :ptr<void>]              → nil
-;;   thread-pool-free       [tp :ptr<void>]              → nil
+;;   thread-pool-new        [n :int]                     -- ptr<void>
+;;   thread-pool-submit     [tp :ptr<void> task_fn :ptr<void> task_arg :ptr<void>] -- ptr<void>
+;;   thread-pool-shutdown   [tp :ptr<void>]              -- nil
+;;   thread-pool-free       [tp :ptr<void>]              -- nil
 
 
 ;; =============================================================================
@@ -43,6 +43,15 @@
 ;;     int              closed;   /* 1 after work-queue-close */
 ;; } WorkQueueBlock;
 
+;;; work-queue-new -- create a new unbounded work queue that grows dynamically.
+;;;
+;;; Returns:
+;;;   An opaque ptr<void> handle to the WorkQueueBlock.
+;;;
+;;; Example:
+;;;   (let [q (work-queue-new)] ...)  ; => ptr<void>
+;;;
+;;; Since: Phase T20-B
 (defn work-queue-new [] :ptr<void>
   ```c
   typedef struct {
@@ -62,6 +71,18 @@
   return (void *)q;
   ```)
 
+;;; work-queue-new-bounded -- create a new bounded work queue with a fixed capacity.
+;;;
+;;; Parameters:
+;;;   cap -- maximum number of items the queue can hold; push blocks when full
+;;;
+;;; Returns:
+;;;   An opaque ptr<void> handle to the WorkQueueBlock.
+;;;
+;;; Example:
+;;;   (let [q (work-queue-new-bounded 64)] ...)  ; => ptr<void>
+;;;
+;;; Since: Phase T20-B
 (defn work-queue-new-bounded [cap :int] :ptr<void>
   ```c
   typedef struct {
@@ -81,6 +102,16 @@
   return (void *)q;
   ```)
 
+;;; work-queue-push -- push a value onto the work queue, blocking if the queue is bounded and full.
+;;;
+;;; Parameters:
+;;;   q -- queue handle returned by work-queue-new or work-queue-new-bounded
+;;;   v -- int64_t value to enqueue
+;;;
+;;; Example:
+;;;   (work-queue-push q 42)
+;;;
+;;; Since: Phase T20-B
 (defn work-queue-push [q :ptr<void> v :int] :nil
   ```c
   typedef struct {
@@ -115,6 +146,18 @@
   pthread_mutex_unlock(&wq->lock);
   ```)
 
+;;; work-queue-pop -- pop a value from the work queue, blocking until one is available.
+;;;
+;;; Parameters:
+;;;   q -- queue handle returned by work-queue-new or work-queue-new-bounded
+;;;
+;;; Returns:
+;;;   The next int64_t value, or INT64_MIN if the queue is closed and empty.
+;;;
+;;; Example:
+;;;   (work-queue-pop q)  ; => int (INT64_MIN signals shutdown)
+;;;
+;;; Since: Phase T20-B
 (defn work-queue-pop [q :ptr<void>] :int
   ```c
   typedef struct {
@@ -140,6 +183,15 @@
   return val;
   ```)
 
+;;; work-queue-close -- close the work queue, waking all blocked producers and consumers.
+;;;
+;;; Parameters:
+;;;   q -- queue handle returned by work-queue-new or work-queue-new-bounded
+;;;
+;;; Example:
+;;;   (work-queue-close q)
+;;;
+;;; Since: Phase T20-B
 (defn work-queue-close [q :ptr<void>] :nil
   ```c
   typedef struct {
@@ -155,6 +207,15 @@
   pthread_mutex_unlock(&wq->lock);
   ```)
 
+;;; work-queue-free -- destroy a work queue and release all associated memory.
+;;;
+;;; Parameters:
+;;;   q -- queue handle returned by work-queue-new or work-queue-new-bounded
+;;;
+;;; Example:
+;;;   (work-queue-free q)
+;;;
+;;; Since: Phase T20-B
 (defn work-queue-free [q :ptr<void>] :nil
   ```c
   typedef struct {
@@ -188,6 +249,15 @@
 ;;   bool is_set
 ;;   bool is_ok
 
+;;; tp-worker -- internal worker thread function for a fixed ThreadPool.
+;;;
+;;; Parameters:
+;;;   arg -- ptr<void> pointing to the ThreadPoolBlock
+;;;
+;;; Returns:
+;;;   NULL on exit.
+;;;
+;;; Since: Phase T20-D
 ;; Worker thread function: pops tasks and executes them.
 (defn tp-worker [arg :ptr<void>] :ptr<void>
   ```c
@@ -198,20 +268,20 @@
       volatile int stop_flag;
   } ThreadPoolBlock;
   ThreadPoolBlock *tp = (ThreadPoolBlock *)arg;
-  
+
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count;
       int64_t cap; int64_t alloc; int closed;
   } TPQueueBlock;
   TPQueueBlock *q = (TPQueueBlock *)tp->queue;
-  
+
   typedef struct {
       void *(*fn)(void *);
       void *arg;
       void *promise_cell;
   } ThreadPoolTask;
-  
+
   typedef struct {
       pthread_mutex_t lock;
       pthread_cond_t ready;
@@ -220,9 +290,9 @@
       bool is_set;
       bool is_ok;
   } FutureCell;
-  
+
   #define TP_CLOSED_SENTINEL INT64_MIN
-  
+
   while (1) {
       int64_t task_ptr;
       pthread_mutex_lock(&q->lock);
@@ -238,14 +308,14 @@
       q->count--;
       pthread_cond_signal(&q->not_full);
       pthread_mutex_unlock(&q->lock);
-      
+
       if (task_ptr == TP_CLOSED_SENTINEL || task_ptr == 0) {
           break;
       }
-      
+
       ThreadPoolTask *task = (ThreadPoolTask *)(uintptr_t)task_ptr;
       void *result = task->fn(task->arg);
-      
+
       FutureCell *fc = (FutureCell *)task->promise_cell;
       pthread_mutex_lock(&fc->lock);
       if (!fc->is_set) {
@@ -255,17 +325,29 @@
           pthread_cond_broadcast(&fc->ready);
       }
       pthread_mutex_unlock(&fc->lock);
-      
+
       free(task);
   }
   return NULL;
   ```)
 
+;;; thread-pool-new -- create a fixed-size thread pool with n worker threads.
+;;;
+;;; Parameters:
+;;;   n -- number of worker threads to spawn (must be > 0)
+;;;
+;;; Returns:
+;;;   An opaque ptr<void> handle to the ThreadPoolBlock.
+;;;
+;;; Example:
+;;;   (let [tp (thread-pool-new 4)] ...)  ; => ptr<void>
+;;;
+;;; Since: Phase T20-D
 ;; Create a new ThreadPool with n worker threads.
 defn thread-pool-new [n :int] :ptr<void>
   ```c
   if (n <= 0) { fprintf(stderr, "thread-pool-new: n must be > 0\n"); abort(); }
-  
+
   typedef struct {
       void *queue;
       pthread_t *threads;
@@ -276,7 +358,7 @@ defn thread-pool-new [n :int] :ptr<void>
   if (!tp) { fprintf(stderr, "thread-pool-new: oom\n"); abort(); }
   tp->n_threads = (int64_t)n;
   tp->stop_flag = 0;
-  
+
   /* Create internal unbounded queue */
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -299,7 +381,7 @@ defn thread-pool-new [n :int] :ptr<void>
   }
   q->head = 0; q->tail = 0; q->count = 0; q->cap = 0; q->closed = 0;
   tp->queue = (void *)q;
-  
+
   tp->threads = (pthread_t *)malloc((size_t)n * sizeof(pthread_t));
   if (!tp->threads) {
       free(q->buf);
@@ -309,7 +391,7 @@ defn thread-pool-new [n :int] :ptr<void>
       free(q); free(tp);
       fprintf(stderr, "thread-pool-new: threads oom\n"); abort();
   }
-  
+
   for (int i = 0; i < n; i++) {
       int rc = pthread_create(&tp->threads[i], NULL, (void *(*)(void *))tp_worker, (void *)tp);
       if (rc != 0) {
@@ -317,10 +399,24 @@ defn thread-pool-new [n :int] :ptr<void>
           abort();
       }
   }
-  
+
   return (void *)tp;
   ```)
 
+;;; thread-pool-submit -- submit a task to the thread pool and return a Future.
+;;;
+;;; Parameters:
+;;;   tp       -- thread pool handle returned by thread-pool-new
+;;;   task_fn  -- C function pointer (void *(*)(void *)) to execute on a worker
+;;;   task_arg -- opaque argument forwarded to task_fn
+;;;
+;;; Returns:
+;;;   A ptr<void> to a FutureCell that is fulfilled with task_fn's return value.
+;;;
+;;; Example:
+;;;   (let [fut (thread-pool-submit tp my-fn arg)] ...)  ; => ptr<void>
+;;;
+;;; Since: Phase T20-D
 ;; Submit a task to the thread pool. Returns a Future cell (ptr<void>).
 ;; task_fn is a C function: void *(*)(void *)
 ;; The return value from task_fn is stored as the Future result.
@@ -333,14 +429,14 @@ defn thread-pool-submit [tp :ptr<void> task_fn :ptr<void> task_arg :ptr<void>] :
       volatile int stop_flag;
   } ThreadPoolBlock;
   ThreadPoolBlock *pool = (ThreadPoolBlock *)tp;
-  
+
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *fc = (FutureCell *)malloc(sizeof(FutureCell));
   if (!fc) { fprintf(stderr, "thread-pool-submit: fc oom\n"); abort(); }
   pthread_mutex_init(&fc->lock, NULL);
   pthread_cond_init(&fc->ready, NULL);
   fc->is_set = false; fc->is_ok = false; fc->value = 0; fc->exn = 0;
-  
+
   typedef struct { void *(*fn)(void *); void *arg; void *promise_cell; } ThreadPoolTask;
   ThreadPoolTask *task = (ThreadPoolTask *)malloc(sizeof(ThreadPoolTask));
   if (!task) {
@@ -352,7 +448,7 @@ defn thread-pool-submit [tp :ptr<void> task_fn :ptr<void> task_arg :ptr<void>] :
   task->fn = (void *(*)(void *))task_fn;
   task->arg = task_arg;
   task->promise_cell = (void *)fc;
-  
+
   /* Push to internal queue */
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -383,10 +479,19 @@ defn thread-pool-submit [tp :ptr<void> task_fn :ptr<void> task_arg :ptr<void>] :
   q->count++;
   pthread_cond_signal(&q->not_empty);
   pthread_mutex_unlock(&q->lock);
-  
+
   return (void *)fc;
   ```)
 
+;;; thread-pool-shutdown -- signal all workers to stop and join them.
+;;;
+;;; Parameters:
+;;;   tp -- thread pool handle returned by thread-pool-new
+;;;
+;;; Example:
+;;;   (thread-pool-shutdown tp)
+;;;
+;;; Since: Phase T20-D
 ;; Signal all workers to stop and join them.
 defn thread-pool-shutdown [tp :ptr<void>] :nil
   ```c
@@ -397,7 +502,7 @@ defn thread-pool-shutdown [tp :ptr<void>] :nil
       volatile int stop_flag;
   } ThreadPoolBlock;
   ThreadPoolBlock *pool = (ThreadPoolBlock *)tp;
-  
+
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count;
@@ -409,12 +514,21 @@ defn thread-pool-shutdown [tp :ptr<void>] :nil
   pthread_cond_broadcast(&q->not_empty);
   pthread_cond_broadcast(&q->not_full);
   pthread_mutex_unlock(&q->lock);
-  
+
   for (int64_t i = 0; i < pool->n_threads; i++) {
       pthread_join(pool->threads[i], NULL);
   }
   ```)
 
+;;; thread-pool-free -- free the thread pool (must be called after shutdown).
+;;;
+;;; Parameters:
+;;;   tp -- thread pool handle returned by thread-pool-new
+;;;
+;;; Example:
+;;;   (thread-pool-free tp)
+;;;
+;;; Since: Phase T20-D
 ;; Free the ThreadPool (must be called after shutdown).
 defn thread-pool-free [tp :ptr<void>] :nil
   ```c
@@ -425,9 +539,9 @@ defn thread-pool-free [tp :ptr<void>] :nil
       volatile int stop_flag;
   } ThreadPoolBlock;
   ThreadPoolBlock *pool = (ThreadPoolBlock *)tp;
-  
+
   free(pool->threads);
-  
+
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count;
@@ -447,6 +561,19 @@ defn thread-pool-free [tp :ptr<void>] :nil
 ;; Dynamic ThreadPool (Phase T20-D — auto-scaling)
 ;; =============================================================================
 
+;;; thread-pool-new-dynamic -- create an auto-scaling thread pool between min and max threads.
+;;;
+;;; Parameters:
+;;;   min_threads -- initial number of worker threads to spawn (must be > 0)
+;;;   max_threads -- upper bound on workers; new threads are added when all are busy
+;;;
+;;; Returns:
+;;;   An opaque ptr<void> handle to the DynThreadPoolBlock.
+;;;
+;;; Example:
+;;;   (let [tp (thread-pool-new-dynamic 2 8)] ...)  ; => ptr<void>
+;;;
+;;; Since: Phase T20-D
 ;; Create a dynamically-scaling ThreadPool with min_threads and max_threads.
 ;; Starts with min_threads workers, scales up to max_threads when all are busy.
 defn thread-pool-new-dynamic [min_threads :int max_threads :int] :ptr<void>
@@ -455,7 +582,7 @@ defn thread-pool-new-dynamic [min_threads :int max_threads :int] :ptr<void>
       fprintf(stderr, "thread-pool-new-dynamic: 0 < min_threads <= max_threads required\n");
       abort();
   }
-  
+
   typedef struct {
       void *queue;
       pthread_t *threads;
@@ -470,7 +597,7 @@ defn thread-pool-new-dynamic [min_threads :int max_threads :int] :ptr<void>
   tp->max_threads = (int64_t)max_threads;
   tp->idle_count = 0;
   tp->stop_flag = 0;
-  
+
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count;
@@ -492,7 +619,7 @@ defn thread-pool-new-dynamic [min_threads :int max_threads :int] :ptr<void>
   }
   q->head = 0; q->tail = 0; q->count = 0; q->cap = 0; q->closed = 0;
   tp->queue = (void *)q;
-  
+
   tp->threads = (pthread_t *)malloc((size_t)max_threads * sizeof(pthread_t));
   if (!tp->threads) {
       free(q->buf);
@@ -502,7 +629,7 @@ defn thread-pool-new-dynamic [min_threads :int max_threads :int] :ptr<void>
       free(q); free(tp);
       fprintf(stderr, "thread-pool-new-dynamic: threads oom\n"); abort();
   }
-  
+
   for (int i = 0; i < min_threads; i++) {
       int rc = pthread_create(&tp->threads[tp->n_threads++], NULL, (void *(*)(void *))tp_dyn_worker, (void *)tp);
       if (rc != 0) {
@@ -510,10 +637,19 @@ defn thread-pool-new-dynamic [min_threads :int max_threads :int] :ptr<void>
           abort();
       }
   }
-  
+
   return (void *)tp;
   ```)
 
+;;; tp-dyn-worker -- internal worker thread function for a dynamic ThreadPool.
+;;;
+;;; Parameters:
+;;;   arg -- ptr<void> pointing to the DynThreadPoolBlock
+;;;
+;;; Returns:
+;;;   NULL on exit.
+;;;
+;;; Since: Phase T20-D
 ;; Worker for dynamic thread pool.
 defn tp-dyn-worker [arg :ptr<void>] :ptr<void>
   ```c
@@ -526,20 +662,20 @@ defn tp-dyn-worker [arg :ptr<void>] :ptr<void>
       volatile int stop_flag;
   } DynThreadPoolBlock;
   DynThreadPoolBlock *tp = (DynThreadPoolBlock *)arg;
-  
+
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count;
       int64_t cap; int64_t alloc; int closed;
   } TPQueueBlock;
   TPQueueBlock *q = (TPQueueBlock *)tp->queue;
-  
+
   typedef struct {
       void *(*fn)(void *);
       void *arg;
       void *promise_cell;
   } ThreadPoolTask;
-  
+
   typedef struct {
       pthread_mutex_t lock;
       pthread_cond_t ready;
@@ -548,14 +684,14 @@ defn tp-dyn-worker [arg :ptr<void>] :ptr<void>
       bool is_set;
       bool is_ok;
   } FutureCell;
-  
+
   #define TP_CLOSED_SENTINEL INT64_MIN
-  
+
   pthread_mutex_lock(&q->lock);
   tp->idle_count++;
   pthread_cond_broadcast(&q->not_empty);
   pthread_mutex_unlock(&q->lock);
-  
+
   while (1) {
       int64_t task_ptr;
       pthread_mutex_lock(&q->lock);
@@ -572,12 +708,12 @@ defn tp-dyn-worker [arg :ptr<void>] :ptr<void>
       tp->idle_count--;
       pthread_cond_signal(&q->not_full);
       pthread_mutex_unlock(&q->lock);
-      
+
       if (task_ptr == TP_CLOSED_SENTINEL || task_ptr == 0) break;
-      
+
       ThreadPoolTask *task = (ThreadPoolTask *)(uintptr_t)task_ptr;
       void *result = task->fn(task->arg);
-      
+
       FutureCell *fc = (FutureCell *)task->promise_cell;
       pthread_mutex_lock(&fc->lock);
       if (!fc->is_set) {
@@ -587,19 +723,33 @@ defn tp-dyn-worker [arg :ptr<void>] :ptr<void>
           pthread_cond_broadcast(&fc->ready);
       }
       pthread_mutex_unlock(&fc->lock);
-      
+
       free(task);
-      
+
       pthread_mutex_lock(&q->lock);
       tp->idle_count++;
       pthread_cond_broadcast(&q->not_empty);
       pthread_mutex_unlock(&q->lock);
   }
-  
+
   tp->idle_count--;
   return NULL;
   ```)
 
+;;; thread-pool-dynamic-submit -- submit a task to the dynamic thread pool, scaling up if needed.
+;;;
+;;; Parameters:
+;;;   tp       -- dynamic thread pool handle returned by thread-pool-new-dynamic
+;;;   task_fn  -- C function pointer (void *(*)(void *)) to execute on a worker
+;;;   task_arg -- opaque argument forwarded to task_fn
+;;;
+;;; Returns:
+;;;   A ptr<void> to a FutureCell fulfilled with task_fn's return value.
+;;;
+;;; Example:
+;;;   (let [fut (thread-pool-dynamic-submit tp my-fn arg)] ...)  ; => ptr<void>
+;;;
+;;; Since: Phase T20-D
 ;; Submit a task to the dynamic thread pool. Returns a Future cell.
 defn thread-pool-dynamic-submit [tp :ptr<void> task_fn :ptr<void> task_arg :ptr<void>] :ptr<void>
   ```c
@@ -612,14 +762,14 @@ defn thread-pool-dynamic-submit [tp :ptr<void> task_fn :ptr<void> task_arg :ptr<
       volatile int stop_flag;
   } DynThreadPoolBlock;
   DynThreadPoolBlock *pool = (DynThreadPoolBlock *)tp;
-  
+
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
   FutureCell *fc = (FutureCell *)malloc(sizeof(FutureCell));
   if (!fc) { fprintf(stderr, "thread-pool-dynamic-submit: fc oom\n"); abort(); }
   pthread_mutex_init(&fc->lock, NULL);
   pthread_cond_init(&fc->ready, NULL);
   fc->is_set = false; fc->is_ok = false; fc->value = 0; fc->exn = 0;
-  
+
   typedef struct { void *(*fn)(void *); void *arg; void *promise_cell; } ThreadPoolTask;
   ThreadPoolTask *task = (ThreadPoolTask *)malloc(sizeof(ThreadPoolTask));
   if (!task) {
@@ -631,7 +781,7 @@ defn thread-pool-dynamic-submit [tp :ptr<void> task_fn :ptr<void> task_arg :ptr<
   task->fn = (void *(*)(void *))task_fn;
   task->arg = task_arg;
   task->promise_cell = (void *)fc;
-  
+
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count;
@@ -659,7 +809,7 @@ defn thread-pool-dynamic-submit [tp :ptr<void> task_fn :ptr<void> task_arg :ptr<
       q->tail = (q->tail + 1) % q->alloc;
   }
   q->count++;
-  
+
   if (pool->idle_count == 0 && pool->n_threads < pool->max_threads) {
       int rc = pthread_create(&pool->threads[pool->n_threads++], NULL, (void *(*)(void *))tp_dyn_worker, (void *)pool);
       if (rc != 0) {
@@ -667,13 +817,22 @@ defn thread-pool-dynamic-submit [tp :ptr<void> task_fn :ptr<void> task_arg :ptr<
           abort();
       }
   }
-  
+
   pthread_cond_signal(&q->not_empty);
   pthread_mutex_unlock(&q->lock);
-  
+
   return (void *)fc;
   ```)
 
+;;; thread-pool-dynamic-shutdown -- signal all dynamic pool workers to stop and join them.
+;;;
+;;; Parameters:
+;;;   tp -- dynamic thread pool handle returned by thread-pool-new-dynamic
+;;;
+;;; Example:
+;;;   (thread-pool-dynamic-shutdown tp)
+;;;
+;;; Since: Phase T20-D
 ;; Shutdown the dynamic thread pool.
 defn thread-pool-dynamic-shutdown [tp :ptr<void>] :nil
   ```c
@@ -686,7 +845,7 @@ defn thread-pool-dynamic-shutdown [tp :ptr<void>] :nil
       volatile int stop_flag;
   } DynThreadPoolBlock;
   DynThreadPoolBlock *pool = (DynThreadPoolBlock *)tp;
-  
+
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count;
@@ -698,12 +857,21 @@ defn thread-pool-dynamic-shutdown [tp :ptr<void>] :nil
   pthread_cond_broadcast(&q->not_empty);
   pthread_cond_broadcast(&q->not_full);
   pthread_mutex_unlock(&q->lock);
-  
+
   for (int64_t i = 0; i < pool->n_threads; i++) {
       pthread_join(pool->threads[i], NULL);
   }
   ```)
 
+;;; thread-pool-dynamic-free -- free a dynamic thread pool (must be called after shutdown).
+;;;
+;;; Parameters:
+;;;   tp -- dynamic thread pool handle returned by thread-pool-new-dynamic
+;;;
+;;; Example:
+;;;   (thread-pool-dynamic-free tp)
+;;;
+;;; Since: Phase T20-D
 ;; Free the dynamic thread pool (must be called after shutdown).
 defn thread-pool-dynamic-free [tp :ptr<void>] :nil
   ```c
@@ -716,9 +884,9 @@ defn thread-pool-dynamic-free [tp :ptr<void>] :nil
       volatile int stop_flag;
   } DynThreadPoolBlock;
   DynThreadPoolBlock *pool = (DynThreadPoolBlock *)tp;
-  
+
   free(pool->threads);
-  
+
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count;

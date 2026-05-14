@@ -1,4 +1,4 @@
-;; stdlib/tidal/structural.tur — Structural Pattern Combinators
+;; stdlib/tidal/structural.tur -- Structural Pattern Combinators
 ;;
 ;; This module provides combinators that combine multiple patterns structurally
 ;; (sequencing, stacking, conditional triggering, etc.).
@@ -10,11 +10,16 @@
 ;; Sequential Combination
 ;; ============================================================================
 
-;; Sequence patterns: play first, then second, then third, etc.
-;; Each pattern gets equal time within the cycle.
-;;
-;; @param patterns List of patterns to sequence
-;; @return Pattern<T> that sequences through patterns
+;;; seq -- sequence patterns end to end, each getting equal time per cycle.
+;;;
+;;; Parameters:
+;;;   patterns -- one or more patterns to sequence
+;;;
+;;; Returns:
+;;;   Pattern<T> cycling through patterns one beat at a time.
+;;;
+;;; Example:
+;;;   ((seq pat-a pat-b pat-c) 1.5)  ; evaluates pat-b at sub-time 0.5
 (defn seq [& patterns]
   (let [vec-patterns (vec patterns)
         len (len vec-patterns)]
@@ -25,10 +30,13 @@
               sub-time (- time (floor time))]
           ((get vec-patterns index) sub-time))))))
 
-;; Sequence with custom lengths for each pattern
-;;
-;; @param pattern-lengths List of [pattern length] tuples
-;; @return Pattern<T> that sequences through patterns with custom lengths
+;;; seq-n -- sequence patterns with custom durations per segment.
+;;;
+;;; Parameters:
+;;;   pattern-lengths -- list of [pattern length] tuples
+;;;
+;;; Returns:
+;;;   Pattern<T> proportionally allocating time to each segment.
 (defn seq-n [& pattern-lengths]
   (let [pairs (vec pattern-lengths)
         total-length (reduce + 0.0 (map second pairs))
@@ -44,7 +52,7 @@
                                                        (let [[_ length] (get pairs i)]
                                                          (if (>= mod-time (+ acc length))
                                                            (recur (inc i) (+ acc length))
-                                                           [i acc length])))))
+                                                           [i acc length]))))
               sub-time (- mod-time segment-start)
               scale (/ segment-length total-length)]
           ((first (get pairs index)) (/ sub-time scale)))))))
@@ -53,43 +61,63 @@
 ;; Parallel Combination (Stacking)
 ;; ============================================================================
 
-;; Stack patterns: play all simultaneously
-;; Returns a vector of all pattern values
-;;
-;; @param patterns List of patterns to stack
-;; @return Pattern<vec<T>> that returns a vector of all pattern values
+;;; stack -- evaluate all patterns simultaneously and return their values as a vector.
+;;;
+;;; Parameters:
+;;;   patterns -- one or more patterns to stack
+;;;
+;;; Returns:
+;;;   Pattern<vec<T>> where each element is one pattern's value at the current time.
+;;;
+;;; Example:
+;;;   ((stack kick-pat snare-pat hat-pat) 0.0)
 (defn stack [& patterns]
   (let [vec-patterns (vec patterns)]
     (fn [time]
       (vec (map #(% time) vec-patterns)))))
 
-;; Stack with a combiner function
-;;
-;; @param f Function to combine pattern values: vec<T> -> U
-;; @param patterns List of patterns to stack
-;; @return Pattern<U> that combines pattern values using f
+;;; stack-with -- stack patterns and fold results with a combiner function.
+;;;
+;;; Parameters:
+;;;   f        -- function vec<T> -> U combining all pattern values
+;;;   patterns -- patterns to stack
+;;;
+;;; Returns:
+;;;   Pattern<U>.
 (defn stack-with [f & patterns]
   (fn [time]
     (f (vec (map #(% time) patterns)))))
 
-;; Sum numeric patterns
-;;
-;; @param patterns List of NumPattern to sum
-;; @return NumPattern that returns the sum of all patterns
+;;; sum -- pointwise sum of numeric patterns.
+;;;
+;;; Parameters:
+;;;   patterns -- one or more NumPattern to sum
+;;;
+;;; Returns:
+;;;   NumPattern returning the sum of all pattern values.
+;;;
+;;; Example:
+;;;   ((sum bass-pat melody-pat) 0.5)
 (defn sum [& patterns]
   (stack-with (fn [v] (reduce + 0.0 v)) patterns))
 
-;; Multiply numeric patterns
-;;
-;; @param patterns List of NumPattern to multiply
-;; @return NumPattern that returns the product of all patterns
+;;; multiply -- pointwise product of numeric patterns.
+;;;
+;;; Parameters:
+;;;   patterns -- one or more NumPattern to multiply
+;;;
+;;; Returns:
+;;;   NumPattern returning the product of all pattern values.
 (defn multiply [& patterns]
   (stack-with (fn [v] (reduce * 1.0 v)) patterns))
 
-;; Average numeric patterns
-;;
-;; @param patterns List of NumPattern to average
-;; @return NumPattern that returns the average of all patterns
+;;; average -- pointwise average of numeric patterns.
+;;;
+;;; Parameters:
+;;;   patterns -- one or more NumPattern to average
+;;;
+;;; Returns:
+;;;   NumPattern returning the arithmetic mean of all pattern values.
 (defn average [& patterns]
   (let [vec-patterns (vec patterns)
         len (len vec-patterns)]
@@ -101,46 +129,64 @@
 ;; Conditional Patterns
 ;; ============================================================================
 
-;; Only play when condition is true (silence otherwise)
-;;
-;; @param cond Boolean pattern for condition
-;; @param p Pattern to play when condition is true
-;; @param zero Value to return when condition is false (default: 0)
-;; @return Pattern<T>
+;;; when -- gate a pattern through a boolean condition.
+;;;
+;;; Parameters:
+;;;   cond -- BoolPattern controlling when p fires
+;;;   p    -- pattern to gate
+;;;   zero -- value when condition is false (default: 0)
+;;;
+;;; Returns:
+;;;   Pattern<T>.
+;;;
+;;; Example:
+;;;   (when (pattern/every-n 2) kick-pat 0)
 (defn when [cond p & [zero 0]]
   (fn [time]
     (if (cond time)
       (p time)
       zero)))
 
-;; Play first pattern when condition is true, second when false
-;;
-;; @param cond Boolean pattern for condition
-;; @param then-p Pattern to play when condition is true
-;; @param else-p Pattern to play when condition is false
-;; @return Pattern<T>
+;;; if-pat -- select between two patterns based on a boolean pattern.
+;;;
+;;; Parameters:
+;;;   cond   -- BoolPattern
+;;;   then-p -- pattern when condition is true
+;;;   else-p -- pattern when condition is false
+;;;
+;;; Returns:
+;;;   Pattern<T>.
 (defn if-pat [cond then-p else-p]
   (fn [time]
     (if (cond time)
       (then-p time)
       (else-p time))))
 
-;; Only play every n beats
-;;
-;; @param n Interval in beats
-;; @param p Pattern to trigger
-;; @param zero Value to return between triggers (default: 0)
-;; @return Pattern<T>
+;;; every -- trigger a pattern every n beats.
+;;;
+;;; Parameters:
+;;;   n    -- beat interval
+;;;   p    -- pattern to trigger
+;;;   zero -- value between triggers (default: 0)
+;;;
+;;; Returns:
+;;;   Pattern<T>.
+;;;
+;;; Example:
+;;;   (every 4 fill-pat)
 (defn every [n p & [zero 0]]
   (when (temporal/every-n n) p zero))
 
-;; Play on beats that are multiples of n with offset
-;;
-;; @param n Modulo base
-;; @param offset Offset (default: 0)
-;; @param p Pattern to trigger
-;; @param zero Value to return when not triggered (default: 0)
-;; @return Pattern<T>
+;;; nth -- trigger a pattern when beat number mod n equals offset.
+;;;
+;;; Parameters:
+;;;   n      -- modulo base
+;;;   p      -- pattern to trigger
+;;;   offset -- target remainder (default: 0)
+;;;   zero   -- value when not triggered (default: 0)
+;;;
+;;; Returns:
+;;;   Pattern<T>.
 (defn nth [n p & [offset 0 zero 0]]
   (when (temporal/when-mod n offset) p zero))
 
@@ -148,15 +194,18 @@
 ;; Euclidean Rhythm Patterns
 ;; ============================================================================
 
-;; Generate a Euclidean rhythm pattern
-;;
-;; Based on Bjorklund's algorithm for distributing notes evenly.
-;; This creates a pattern of hits (1) and rests (0) distributed as evenly as possible.
-;;
-;; @param steps Total number of steps in the pattern
-;; @param hits Number of hits (active steps) to distribute
-;; @param rotation Rotation offset (default: 0)
-;; @return NumPattern that returns 1 for hits, 0 for rests
+;;; euclid -- Euclidean rhythm distributing hits as evenly as possible.
+;;;
+;;; Parameters:
+;;;   steps    -- total number of steps in the pattern
+;;;   hits     -- number of active (hit) steps
+;;;   rotation -- rotation offset (default: 0)
+;;;
+;;; Returns:
+;;;   NumPattern returning 1 for hits and 0 for rests.
+;;;
+;;; Example:
+;;;   ((euclid 8 5) 0.0)  ; classic 5-in-8 Euclidean rhythm
 (defn euclid [steps hits & [rotation 0]]
   (let [result (vec (repeat steps 0))]
     (when (and (> steps 0) (> hits 0))
@@ -176,14 +225,17 @@
     (fn [time]
       (get result (mod (floor time) steps)))))
 
-;; Euclidean pattern that returns custom on/off values
-;;
-;; @param steps Total number of steps
-;; @param hits Number of hits
-;; @param on-value Value to return for hits (default: 1)
-;; @param off-value Value to return for rests (default: 0)
-;; @param rotation Rotation offset (default: 0)
-;; @return Pattern<T> with custom on/off values
+;;; euclid-vals -- Euclidean rhythm with custom on/off values.
+;;;
+;;; Parameters:
+;;;   steps     -- total steps
+;;;   hits      -- number of hit steps
+;;;   on-value  -- value for hits (default: 1)
+;;;   off-value -- value for rests (default: 0)
+;;;   rotation  -- rotation offset (default: 0)
+;;;
+;;; Returns:
+;;;   Pattern<T> with custom on/off values.
 (defn euclid-vals [steps hits & [on-value 1 off-value 0 rotation 0]]
   (let [base (euclid steps hits rotation)]
     (fn [time]
@@ -195,11 +247,17 @@
 ;; Pattern Selection
 ;; ============================================================================
 
-;; Select from patterns based on index pattern
-;;
-;; @param index Pattern that produces indices
-;; @param patterns List of patterns to select from
-;; @return Pattern<T> that selects from patterns based on index
+;;; select -- choose among patterns using an index pattern.
+;;;
+;;; Parameters:
+;;;   index    -- NumPattern producing indices into the pattern list
+;;;   patterns -- patterns to select from
+;;;
+;;; Returns:
+;;;   Pattern<T> delegating to the selected sub-pattern.
+;;;
+;;; Example:
+;;;   ((select (cycle 0 1 2) pat-a pat-b pat-c) 0.5)
 (defn select [index & patterns]
   (let [vec-patterns (vec patterns)
         len (len vec-patterns)]
@@ -209,11 +267,14 @@
         (let [idx (mod (int (index time)) len)]
           ((get vec-patterns idx) time))))))
 
-;; First pattern that produces a non-zero value
-;;
-;; @param zero Zero value for comparison (default: 0)
-;; @param patterns List of patterns to check
-;; @return Pattern<T> that returns first non-zero value
+;;; first-nonzero -- return the first non-zero value from a set of patterns.
+;;;
+;;; Parameters:
+;;;   zero     -- zero sentinel value (default: 0)
+;;;   patterns -- patterns to check in order
+;;;
+;;; Returns:
+;;;   Pattern<T> returning the first non-zero pattern value.
 (defn first-nonzero [& [zero 0 patterns]]
   (let [vec-patterns (vec patterns)
         len (len vec-patterns)]
@@ -232,26 +293,35 @@
 ;; Index-Based Patterns
 ;; ============================================================================
 
-;; Get the index of the current position in a cycle
-;;
-;; @param cycle-length Length of cycle (default: 1)
-;; @return IntPattern that returns current index
+;;; index -- return the step index within a cycle.
+;;;
+;;; Parameters:
+;;;   cycle-length -- number of steps per cycle (default: 1)
+;;;
+;;; Returns:
+;;;   IntPattern returning the current step index.
 (defn index [& [cycle-length 1]]
   (fn [time]
     (mod (floor (* time cycle-length)) cycle-length)))
 
-;; Pattern that returns true on the first beat of each cycle
-;;
-;; @param cycle-length Length of cycle (default: 1)
-;; @return BoolPattern
+;;; first-beat -- true on the first step of each cycle.
+;;;
+;;; Parameters:
+;;;   cycle-length -- steps per cycle (default: 1)
+;;;
+;;; Returns:
+;;;   BoolPattern.
 (defn first-beat [& [cycle-length 1]]
   (fn [time]
     (== 0 (mod (floor (* time cycle-length)) cycle-length))))
 
-;; Pattern that returns true on the last beat of each cycle
-;;
-;; @param cycle-length Length of cycle (default: 1)
-;; @return BoolPattern
+;;; last-beat -- true on the last step of each cycle.
+;;;
+;;; Parameters:
+;;;   cycle-length -- steps per cycle (default: 1)
+;;;
+;;; Returns:
+;;;   BoolPattern.
 (defn last-beat [& [cycle-length 1]]
   (fn [time]
     (== (dec cycle-length) (mod (floor (* time cycle-length)) cycle-length))))
@@ -260,11 +330,14 @@
 ;; Pattern Chaining
 ;; ============================================================================
 
-;; Chain patterns: play first until it returns a sentinel, then second, etc.
-;;
-;; @param sentinel Sentinel value that triggers next pattern (default: nil)
-;; @param patterns List of patterns to chain
-;; @return Pattern<T> that chains through patterns
+;;; chain -- concatenate patterns, advancing when a sentinel value is returned.
+;;;
+;;; Parameters:
+;;;   sentinel -- value indicating end of a pattern segment (default: nil)
+;;;   patterns -- patterns to chain
+;;;
+;;; Returns:
+;;;   Pattern<T> advancing through patterns in order.
 (defn chain [& [sentinel nil patterns]]
   (let [vec-patterns (vec patterns)
         len (len vec-patterns)]
@@ -279,16 +352,23 @@
                   v (p sub-time)]
               (if (== v sentinel)
                 (recur (inc i) (+ acc-time 1.0))
-                v)))))))
+                v))))))))
 
 ;; ============================================================================
 ;; Pattern Interleaving
 ;; ============================================================================
 
-;; Interleave patterns: alternate between patterns
-;;
-;; @param patterns List of patterns to interleave
-;; @return Pattern<T> that interleaves pattern values
+;;; interleave -- alternate between patterns each beat.
+;;;
+;;; Parameters:
+;;;   patterns -- patterns to interleave
+;;;
+;;; Returns:
+;;;   Pattern<T> cycling through patterns one per beat, with each sub-pattern
+;;;   receiving compressed time equal to the number of patterns.
+;;;
+;;; Example:
+;;;   ((interleave pat-a pat-b) 0.5)  ; reads pat-a at time 1.0
 (defn interleave [& patterns]
   (let [vec-patterns (vec patterns)
         len (len vec-patterns)]
@@ -299,10 +379,13 @@
               sub-time (- time (floor time))]
           ((get vec-patterns index) (* len sub-time)))))))
 
-;; Interleave with custom pattern lengths
-;;
-;; @param pattern-lengths List of [pattern length] tuples
-;; @return Pattern<T> that interleaves with custom lengths
+;;; interleave-n -- interleave patterns with custom durations (alias for seq-n).
+;;;
+;;; Parameters:
+;;;   pattern-lengths -- list of [pattern length] tuples
+;;;
+;;; Returns:
+;;;   Pattern<T>.
 (defn interleave-n [& pattern-lengths]
   (seq-n pattern-lengths))
 
@@ -310,50 +393,67 @@
 ;; Pattern Masking
 ;; ============================================================================
 
-;; Mask one pattern with another
-;; The mask pattern determines whether values from the source pattern pass through
-;;
-;; @param source Pattern to mask
-;; @param mask BoolPattern used as mask (true = pass, false = block)
-;; @param zero Value to return when masked (default: 0)
-;; @return Pattern<T>
+;;; mask -- let signal pass only where a boolean mask is true.
+;;;
+;;; Parameters:
+;;;   source -- Pattern to read values from
+;;;   mask   -- BoolPattern: true = pass, false = block
+;;;   zero   -- value when masked (default: 0)
+;;;
+;;; Returns:
+;;;   Pattern<T>.
+;;;
+;;; Example:
+;;;   (mask melody-pat (euclid 8 5))
 (defn mask [source mask & [zero 0]]
   (fn [time]
     (if (mask time)
       (source time)
       zero)))
 
-;; Invert a boolean pattern
-;;
-;; @param p BoolPattern to invert
-;; @return BoolPattern that returns inverted values
+;;; invert -- invert a boolean pattern.
+;;;
+;;; Parameters:
+;;;   p -- BoolPattern to invert
+;;;
+;;; Returns:
+;;;   BoolPattern with negated values.
 (defn invert [p]
   (fn [time]
     (not (p time))))
 
-;; AND two boolean patterns
-;;
-;; @param a First BoolPattern
-;; @param b Second BoolPattern
-;; @return BoolPattern that returns a AND b
+;;; and-pat -- logical AND of two boolean patterns.
+;;;
+;;; Parameters:
+;;;   a -- first BoolPattern
+;;;   b -- second BoolPattern
+;;;
+;;; Returns:
+;;;   BoolPattern.
 (defn and-pat [a b]
   (fn [time]
     (and (a time) (b time))))
 
-;; OR two boolean patterns
-;;
-;; @param a First BoolPattern
-;; @param b Second BoolPattern
-;; @return BoolPattern that returns a OR b
+;;; or-pat -- logical OR of two boolean patterns.
+;;;
+;;; Parameters:
+;;;   a -- first BoolPattern
+;;;   b -- second BoolPattern
+;;;
+;;; Returns:
+;;;   BoolPattern.
 (defn or-pat [a b]
   (fn [time]
     (or (a time) (b time))))
 
-;; XOR two boolean patterns
-;;
-;; @param a First BoolPattern
-;; @param b Second BoolPattern
-;; @return BoolPattern that returns a XOR b
+;;; xor-pat -- logical XOR of two boolean patterns.
+;;;
+;;; Parameters:
+;;;   a -- first BoolPattern
+;;;   b -- second BoolPattern
+;;;
+;;; Returns:
+;;;   BoolPattern.
 (defn xor-pat [a b]
   (fn [time]
     (not= (a time) (b time))))
@@ -362,13 +462,15 @@
 ;; Pattern Grouping
 ;; ============================================================================
 
-;; Group patterns into sub-patterns
-;; This is useful for creating hierarchical patterns
-;;
-;; @param group-size Number of patterns per group
-;; @param group-pattern Pattern to apply to each group
-;; @param patterns List of patterns
-;; @return Pattern<T> with grouped patterns
+;;; group -- partition patterns into groups and apply a group combiner.
+;;;
+;;; Parameters:
+;;;   group-size    -- number of patterns per group
+;;;   group-pattern -- function (time, patterns) -> T applied to each group
+;;;   patterns      -- patterns to group
+;;;
+;;; Returns:
+;;;   Pattern<T> applying group-pattern to the current group.
 (defn group [group-size group-pattern & patterns]
   (let [vec-patterns (vec patterns)
         len (len vec-patterns)

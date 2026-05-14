@@ -1,4 +1,4 @@
-;; stdlib/tidal/tidal.tur — Main TidalCycles DSL Module
+;; stdlib/tidal/tidal.tur -- Main TidalCycles DSL Module
 ;;
 ;; This is the main module for the TidalCycles-inspired pattern library.
 ;; Import this module to get access to all Tidal DSL functionality:
@@ -41,11 +41,17 @@
 (def WHOLE_TONE [0 2 4 6 8 10 12])
 (def BLUES [0 3 5 6 7 10 12])
 
-;; Scale pattern helper
-;;
-;; @param scale Scale as list of semitone offsets
-;; @param tonic Base MIDI note (default: 60 = middle C)
-;; @return NumPattern of MIDI notes
+;;; scale-pat -- build a cycling MIDI note pattern from a scale and tonic.
+;;;
+;;; Parameters:
+;;;   scale -- list of semitone offsets from the tonic
+;;;   tonic -- base MIDI note number (default: 60 = middle C)
+;;;
+;;; Returns:
+;;;   NumPattern cycling through the MIDI notes of the scale.
+;;;
+;;; Example:
+;;;   (scale-pat MAJOR_SCALE 60)
 (defn scale-pat [scale & [tonic 60]]
   (pattern/cycle (map #(+ tonic %) scale)))
 
@@ -66,13 +72,19 @@
 ;; Quick Start Functions
 ;; ============================================================================
 
-;; Create a simple pattern and play it
-;;
-;; @param session scscm session
-;; @param def-name SynthDef name
-;; @param pattern-string Mini-notation string
-;; @param bpm Tempo
-;; @return PatternPlayer
+;;; play -- parse a mini-notation string and start a synth player.
+;;;
+;;; Parameters:
+;;;   session        -- scscm session
+;;;   def-name       -- SynthDef name
+;;;   pattern-string -- mini-notation pattern string
+;;;   bpm            -- tempo in beats per minute
+;;;
+;;; Returns:
+;;;   PatternPlayer (already started).
+;;;
+;;; Example:
+;;;   (play session "default" "bd sd bd sd" 120)
 (defn play [session def-name pattern-string bpm]
   (let [pattern (mini/parse-mini pattern-string)
         param-pattern (fn [time] {:freq (transform/range pattern 0 1 440.0 880.0) :amp 0.5})
@@ -80,9 +92,10 @@
     (synth/player-start player)
     player))
 
-;; Stop all patterns in a session
-;;
-;; @param session LiveSession or scscm session
+;;; hush -- stop all patterns in a session.
+;;;
+;;; Parameters:
+;;;   session -- LiveSession or scscm session
 (defn hush [session]
   (if (get session :players)
     (live/hush session)
@@ -114,42 +127,57 @@
 ;; Pattern Composition Helpers
 ;; ============================================================================
 
-;; Create a drum machine pattern
-;;
-;; @param kick-pattern Pattern for kick drum
-;; @param snare-pattern Pattern for snare drum
-;; @param hat-pattern Pattern for hi-hat
-;; @return Pattern<vec<map>> for all drums
+;;; drum-machine -- combine kick, snare, and hi-hat patterns into a stacked drum part.
+;;;
+;;; Parameters:
+;;;   kick-pattern  -- Pattern for kick drum
+;;;   snare-pattern -- Pattern for snare drum
+;;;   hat-pattern   -- Pattern for hi-hat
+;;;
+;;; Returns:
+;;;   Pattern<vec<map>> stacking all three drum voices.
+;;;
+;;; Example:
+;;;   (drum-machine DRUM_KICK DRUM_SNARE DRUM_HAT)
 (defn drum-machine [kick-pattern snare-pattern hat-pattern]
-  (structural/stack 
+  (structural/stack
     (synth/note-pattern kick-pattern (pattern/const 100) (pattern/const true))
     (synth/note-pattern snare-pattern (pattern/const 80) (pattern/const true))
     (synth/note-pattern hat-pattern (pattern/const 60) (pattern/const true))))
 
-;; Create a bass line
-;;
-;; @param notes Pattern for note pitches (MIDI notes)
-;; @param duration Pattern for note durations (beats)
-;; @param velocity Pattern for velocities
-;; @return Pattern<map> for bass
+;;; bass-line -- create a bass line note pattern.
+;;;
+;;; Parameters:
+;;;   notes    -- Pattern for MIDI note pitches
+;;;   duration -- Pattern for note durations in beats (default: 0.25)
+;;;   velocity -- Pattern for velocities (default: 100)
+;;;
+;;; Returns:
+;;;   Pattern<map> suitable for a bass synth.
 (defn bass-line [notes & [duration (pattern/const 0.25) velocity (pattern/const 100)]]
   (synth/note-pattern notes velocity duration))
 
-;; Create a lead melody
-;;
-;; @param notes Pattern for note pitches
-;; @param duration Pattern for durations
-;; @param velocity Pattern for velocities
-;; @return Pattern<map> for lead
+;;; lead -- create a lead melody note pattern.
+;;;
+;;; Parameters:
+;;;   notes    -- Pattern for MIDI note pitches
+;;;   duration -- Pattern for note durations in beats (default: 0.5)
+;;;   velocity -- Pattern for velocities (default: 90)
+;;;
+;;; Returns:
+;;;   Pattern<map> suitable for a lead synth.
 (defn lead [notes & [duration (pattern/const 0.5) velocity (pattern/const 90)]]
   (synth/note-pattern notes velocity duration))
 
-;; Create a pad chord progression
-;;
-;; @param chords Pattern for chords (vec of MIDI notes)
-;; @param duration Pattern for chord durations
-;; @param velocity Pattern for velocities
-;; @return Pattern<vec<map>> for pad
+;;; pad -- create a pad chord pattern.
+;;;
+;;; Parameters:
+;;;   chords   -- Pattern<vec<int>> for chord voicings (MIDI notes)
+;;;   duration -- Pattern for chord durations (default: 1.0)
+;;;   velocity -- Pattern for velocities (default: 70)
+;;;
+;;; Returns:
+;;;   Pattern<vec<map>> suitable for a pad synth.
 (defn pad [chords & [duration (pattern/const 1.0) velocity (pattern/const 70)]]
-  (synth/chord-pattern 
+  (synth/chord-pattern
     (synth/note-pattern (synth/arp-pattern chords 1 :up) velocity duration)))

@@ -1,4 +1,4 @@
-;; stdlib/tidal/time.tur — Time Types and Utilities
+;; stdlib/tidal/time.tur -- Time Types and Utilities
 ;;
 ;; This module provides time representation and conversion utilities
 ;; for the TidalCycles-inspired pattern library.
@@ -20,17 +20,29 @@
 ;; BPM (Beats Per Minute) Utilities
 ;; ============================================================================
 
-;; Convert BPM to beats per second
-;;
-;; @param bpm Beats per minute
-;; @return Beats per second
+;;; bpm->bps -- convert BPM to beats per second.
+;;;
+;;; Parameters:
+;;;   bpm -- beats per minute
+;;;
+;;; Returns:
+;;;   Beats per second.
+;;;
+;;; Example:
+;;;   (bpm->bps 120.0)  ; => 2.0
 (defn bpm->bps [bpm]
   (/ bpm 60.0))
 
-;; Convert BPM to seconds per beat
-;;
-;; @param bpm Beats per minute
-;; @return Seconds per beat
+;;; bpm->spb -- convert BPM to seconds per beat.
+;;;
+;;; Parameters:
+;;;   bpm -- beats per minute
+;;;
+;;; Returns:
+;;;   Seconds per beat.
+;;;
+;;; Example:
+;;;   (bpm->spb 120.0)  ; => 0.5
 (defn bpm->spb [bpm]
   (/ 60.0 bpm))
 
@@ -38,19 +50,31 @@
 ;; Beat <-> Second Conversion
 ;; ============================================================================
 
-;; Convert beats to seconds at a given BPM
-;;
-;; @param beats Time in beats
-;; @param bpm Beats per minute
-;; @return Time in seconds
+;;; beats->sec -- convert a beat count to seconds at a given BPM.
+;;;
+;;; Parameters:
+;;;   beats -- time in beats
+;;;   bpm   -- tempo in beats per minute
+;;;
+;;; Returns:
+;;;   Time in seconds.
+;;;
+;;; Example:
+;;;   (beats->sec 4.0 120.0)  ; => 2.0
 (defn beats->sec [beats bpm]
   (* beats (bpm->spb bpm)))
 
-;; Convert seconds to beats at a given BPM
-;;
-;; @param sec Time in seconds
-;; @param bpm Beats per minute
-;; @return Time in beats
+;;; sec->beats -- convert seconds to beats at a given BPM.
+;;;
+;;; Parameters:
+;;;   sec -- time in seconds
+;;;   bpm -- tempo in beats per minute
+;;;
+;;; Returns:
+;;;   Time in beats.
+;;;
+;;; Example:
+;;;   (sec->beats 2.0 120.0)  ; => 4.0
 (defn sec->beats [sec bpm]
   (* sec (bpm->bps bpm)))
 
@@ -58,22 +82,31 @@
 ;; Beat <-> Sample Conversion
 ;; ============================================================================
 
-;; Convert beats to samples at a given BPM and sample rate
-;;
-;; @param beats Time in beats
-;; @param bpm Beats per minute
-;; @param sample_rate Samples per second
-;; @return Time in samples
+;;; beats->samples -- convert a beat count to sample count.
+;;;
+;;; Parameters:
+;;;   beats       -- time in beats
+;;;   bpm         -- tempo in beats per minute
+;;;   sample_rate -- samples per second
+;;;
+;;; Returns:
+;;;   Time in samples (floored to integer).
+;;;
+;;; Example:
+;;;   (beats->samples 1.0 120.0 48000)  ; => 24000
 (defn beats->samples [beats bpm sample_rate]
   (let [sec (beats->sec beats bpm)]
     (floor (* sec sample_rate))))
 
-;; Convert samples to beats at a given BPM and sample rate
-;;
-;; @param samples Time in samples
-;; @param bpm Beats per minute
-;; @param sample_rate Samples per second
-;; @return Time in beats
+;;; samples->beats -- convert a sample count to beat count.
+;;;
+;;; Parameters:
+;;;   samples     -- time in samples
+;;;   bpm         -- tempo in beats per minute
+;;;   sample_rate -- samples per second
+;;;
+;;; Returns:
+;;;   Time in beats.
 (defn samples->beats [samples bpm sample_rate]
   (let [sec (/ samples sample_rate)]
     (sec->beats sec bpm)))
@@ -82,19 +115,25 @@
 ;; Sample <-> Second Conversion
 ;; ============================================================================
 
-;; Convert samples to seconds at a given sample rate
-;;
-;; @param samples Time in samples
-;; @param sample_rate Samples per second
-;; @return Time in seconds
+;;; samples->sec -- convert a sample count to seconds.
+;;;
+;;; Parameters:
+;;;   samples     -- time in samples
+;;;   sample_rate -- samples per second
+;;;
+;;; Returns:
+;;;   Time in seconds.
 (defn samples->sec [samples sample_rate]
   (/ samples sample_rate))
 
-;; Convert seconds to samples at a given sample rate
-;;
-;; @param sec Time in seconds
-;; @param sample_rate Samples per second
-;; @return Time in samples
+;;; sec->samples -- convert seconds to a sample count.
+;;;
+;;; Parameters:
+;;;   sec         -- time in seconds
+;;;   sample_rate -- samples per second
+;;;
+;;; Returns:
+;;;   Time in samples (floored).
 (defn sec->samples [sec sample_rate]
   (floor (* sec sample_rate)))
 
@@ -102,27 +141,42 @@
 ;; Time Interval Utilities
 ;; ============================================================================
 
-;; Get the current beat within a cycle
-;;
-;; @param time Current time in beats
-;; @param cycle_length Length of cycle in beats (default: 1)
-;; @return Phase within cycle (0 to cycle_length)
+;;; phase -- compute the phase within a cycle (time mod cycle_length).
+;;;
+;;; Parameters:
+;;;   time         -- current time in beats
+;;;   cycle_length -- cycle duration in beats (default: 1.0)
+;;;
+;;; Returns:
+;;;   Phase in [0, cycle_length).
+;;;
+;;; Example:
+;;;   (phase 2.7 1.0)  ; => 0.7
 (defn phase [time & [cycle_length 1.0]]
   (mod time cycle_length))
 
-;; Get the beat position within the current bar
-;;
-;; @param time Current time in beats
-;; @param beats_per_bar Beats per bar (default: 4)
-;; @return Position within bar (0 to beats_per_bar)
+;;; bar-phase -- beat position within the current bar.
+;;;
+;;; Parameters:
+;;;   time          -- current time in beats
+;;;   beats_per_bar -- beats per bar (default: 4.0)
+;;;
+;;; Returns:
+;;;   Position in [0, beats_per_bar).
 (defn bar-phase [time & [beats_per_bar 4.0]]
   (mod time beats_per_bar))
 
-;; Get the current bar number
-;;
-;; @param time Current time in beats
-;; @param beats_per_bar Beats per bar (default: 4)
-;; @return Bar number (integer)
+;;; bar-number -- integer bar number at the current beat time.
+;;;
+;;; Parameters:
+;;;   time          -- current time in beats
+;;;   beats_per_bar -- beats per bar (default: 4.0)
+;;;
+;;; Returns:
+;;;   Bar index (0-based).
+;;;
+;;; Example:
+;;;   (bar-number 8.5 4.0)  ; => 2.0
 (defn bar-number [time & [beats_per_bar 4.0]]
   (floor (/ time beats_per_bar)))
 
@@ -134,29 +188,41 @@
 ;; This allows for tempo changes over time
 (def-type TempoMap (fn [Beats] :float))
 
-;; Constant tempo map
-;;
-;; @param bpm Constant BPM
-;; @return TempoMap that always returns the same BPM
+;;; const-tempo -- constant tempo map always returning the same BPM.
+;;;
+;;; Parameters:
+;;;   bpm -- constant BPM
+;;;
+;;; Returns:
+;;;   TempoMap.
 (defn const-tempo [bpm]
   (fn [_] bpm))
 
-;; Tempo map with a single change
-;;
-;; @param start-bpm Initial BPM
-;; @param change-time Time in beats when tempo changes
-;; @param end-bpm New BPM after change
-;; @return TempoMap
+;;; tempo-change -- tempo map with a single step change.
+;;;
+;;; Parameters:
+;;;   start-bpm   -- initial BPM
+;;;   change-time -- beat at which tempo changes
+;;;   end-bpm     -- BPM after the change
+;;;
+;;; Returns:
+;;;   TempoMap.
+;;;
+;;; Example:
+;;;   ((tempo-change 120.0 8.0 140.0) 10.0)  ; => 140.0
 (defn tempo-change [start-bpm change-time end-bpm]
   (fn [time]
     (if (>= time change-time)
       end-bpm
       start-bpm)))
 
-;; Tempo map with multiple changes
-;;
-;; @param & changes List of [time bpm] pairs
-;; @return TempoMap
+;;; tempo-map -- tempo map with multiple step changes specified as time/bpm pairs.
+;;;
+;;; Parameters:
+;;;   changes -- list of [beat-time bpm] pairs in any order
+;;;
+;;; Returns:
+;;;   TempoMap applying the most recent change at any query time.
 (defn tempo-map [& changes]
   (let [sorted (sort-by first changes)]
     (fn [time]
@@ -174,21 +240,33 @@
 ;; Time Warping Utilities
 ;; ============================================================================
 
-;; Linearly interpolate between two values based on time
-;;
-;; @param start Start value
-;; @param end End value
-;; @param time Current time (0 to 1)
-;; @return Interpolated value
+;;; lerp -- linearly interpolate between two values.
+;;;
+;;; Parameters:
+;;;   start -- start value (at time 0)
+;;;   end   -- end value (at time 1)
+;;;   time  -- interpolation parameter (clamped to [0, 1])
+;;;
+;;; Returns:
+;;;   Interpolated value.
+;;;
+;;; Example:
+;;;   (lerp 0.0 1.0 0.5)  ; => 0.5
 (defn lerp [start end time]
   (+ start (* (- end start) (math/clamp time 0.0 1.0))))
 
-;; Exponential interpolation
-;;
-;; @param start Start value
-;; @param end End value
-;; @param time Current time (0 to 1)
-;; @return Expolated value
+;;; exp-lerp -- exponential interpolation between two values.
+;;;
+;;; Parameters:
+;;;   start -- start value (must be > 0 if end > start)
+;;;   end   -- end value
+;;;   time  -- interpolation parameter (clamped to [0, 1])
+;;;
+;;; Returns:
+;;;   Exponentially interpolated value.
+;;;
+;;; Example:
+;;;   (exp-lerp 100.0 200.0 0.5)  ; => ~141.4
 (defn exp-lerp [start end time]
   (let [clamped (math/clamp time 0.0 1.0)]
     (if (== start end)

@@ -2,6 +2,17 @@
 ;; Borrowed view into a contiguous sequence
 
 ;; Create a slice from pointer and length
+;;; slice-new -- create a slice view over an existing contiguous int64 array.
+;;;
+;;; Parameters:
+;;;   data   -- pointer to the first element of the underlying array
+;;;   length -- number of elements in the view
+;;;
+;;; Returns:
+;;;   An opaque slice handle; free with slice-free when done.
+;;;
+;;; Example:
+;;;   (def s (slice-new arr 4))  ; view of first 4 elements
 (defn slice-new [data length]
   ```c
   struct { int64_t *p; size_t len; } *s = malloc(sizeof(*s));
@@ -11,6 +22,16 @@
   ```)
 
 ;; Get slice length
+;;; slice-len -- return the number of elements in the slice.
+;;;
+;;; Parameters:
+;;;   s -- slice handle from slice-new
+;;;
+;;; Returns:
+;;;   Element count as :int.
+;;;
+;;; Example:
+;;;   (slice-len s)  ; => 4
 (defn slice-len [s] :int
   ```c
   struct { int64_t *p; size_t len; } *slice = (void*)s;
@@ -18,6 +39,17 @@
   ```)
 
 ;; Get element at index (bounds-checked)
+;;; slice-get -- bounds-checked element access; aborts on out-of-range index.
+;;;
+;;; Parameters:
+;;;   s -- slice handle from slice-new
+;;;   i -- zero-based index (must be 0 <= i < slice-len s)
+;;;
+;;; Returns:
+;;;   The int64 value at position i.
+;;;
+;;; Example:
+;;;   (slice-get s 0)  ; => first element
 (defn slice-get [s i] :int
   ```c
   struct { int64_t *p; size_t len; } *slice = (void*)s;
@@ -28,6 +60,10 @@
   ```)
 
 ;; Free the slice struct (does NOT free the underlying data)
+;;; slice-free -- free the slice header struct; does NOT free the underlying data.
+;;;
+;;; Parameters:
+;;;   s -- slice handle from slice-new
 (defn slice-free [s]
   ```c
   free(s);
@@ -39,6 +75,9 @@
 ;; Functor, Foldable, and Traversable instances for slice<T>
 
 ;; Functor for slice - map a function over each element
+;;; __functor_slice_fmap -- internal Functor fmap for slice: map fn over each element, returning a new slice.
+;;;
+;;; Since: Phase HKT H3
 (defn __functor_slice_fmap [container fn] :int
   ```c
   struct { int64_t *p; size_t len; } *s =
@@ -56,10 +95,16 @@
   return (int64_t)(intptr_t)r;
   ```)
 
+;;; Functor [ptr<void>] -- Functor instance for slice<T> via ptr<void> representation.
+;;;
+;;; Since: Phase HKT H3
 (definstance Functor [ptr<void>]
   (fmap [container fn] (__functor_slice_fmap container fn)))
 
 ;; Foldable for slice - left and right folds
+;;; __foldable_slice_foldl -- internal left-fold over a slice: accumulate from left using fn(acc, elem).
+;;;
+;;; Since: Phase HKT H3
 (defn __foldable_slice_foldl [ta init fn] :int
   ```c
   struct { int64_t *p; size_t len; } *s =
@@ -72,6 +117,9 @@
   return acc;
   ```)
 
+;;; __foldable_slice_foldr -- internal right-fold over a slice: accumulate from right using fn(elem, acc).
+;;;
+;;; Since: Phase HKT H3
 (defn __foldable_slice_foldr [ta init fn] :int
   ```c
   struct { int64_t *p; size_t len; } *s =
@@ -84,12 +132,18 @@
   return acc;
   ```)
 
+;;; Foldable [ptr<void>] -- Foldable instance for slice<T> via ptr<void> representation.
+;;;
+;;; Since: Phase HKT H3
 (definstance Foldable [ptr<void>]
   (foldl [ta init fn] (__foldable_slice_foldl ta init fn))
   (foldr [ta init fn] (__foldable_slice_foldr ta init fn)))
 
 ;; Traversable for slice - map with effects
 ;; In v1, simplifies to map since we use int64_t returns
+;;; __traversable_slice_traverse -- internal Traversable traverse for slice: apply fn to each element (v1: same as fmap).
+;;;
+;;; Since: Phase HKT H3
 (defn __traversable_slice_traverse [ta fn] :int
   ```c
   struct { int64_t *p; size_t len; } *s =
@@ -107,5 +161,8 @@
   return (int64_t)(intptr_t)r;
   ```)
 
+;;; Traversable [ptr<void>] -- Traversable instance for slice<T> via ptr<void> representation.
+;;;
+;;; Since: Phase HKT H3
 (definstance Traversable [ptr<void>]
   (traverse [ta fn] (__traversable_slice_traverse ta fn)))

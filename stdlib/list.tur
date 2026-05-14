@@ -5,18 +5,52 @@
 (defstruct Cons [value :int next :int])
 
 ;; nil-value - empty list (NULL pointer)
+;;; nil-value -- return the empty list sentinel (NULL / 0).
+;;;
+;;; Returns:
+;;;   The nil list value (0 / NULL pointer).
+;;;
+;;; Example:
+;;;   (nil-value)  ; => 0
+;;;
+;;; Since: Phase B1
 (defn nil-value []
   ```c
   return 0;
   ```)
 
 ;; Check if list is nil
+;;; list-nil? -- check whether a list is empty.
+;;;
+;;; Parameters:
+;;;   lst -- the list to test
+;;;
+;;; Returns:
+;;;   true if lst is nil (0 / NULL), false otherwise.
+;;;
+;;; Example:
+;;;   (list-nil? (nil-value))  ; => true
+;;;
+;;; Since: Phase B1
 (defn list-nil? [lst] :bool
   ```c
   return lst == 0;
   ```)
 
 ;; Create a new Cons cell (prepend to list)
+;;; cons -- prepend a value to a list, returning a new Cons cell.
+;;;
+;;; Parameters:
+;;;   value -- the element to prepend
+;;;   next  -- the existing list (or nil-value for a one-element list)
+;;;
+;;; Returns:
+;;;   Pointer (as :int) to the newly allocated Cons cell.
+;;;
+;;; Example:
+;;;   (cons 1 (cons 2 (nil-value)))  ; => list [1, 2]
+;;;
+;;; Since: Phase B1
 (defn cons [value next] :int
   ```c
   struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
@@ -26,6 +60,18 @@
   ```)
 
 ;; Get the value of the first Cons cell
+;;; head -- return the value of the first element of a list.
+;;;
+;;; Parameters:
+;;;   lst -- a non-nil list
+;;;
+;;; Returns:
+;;;   The :int value stored in the first Cons cell.
+;;;
+;;; Example:
+;;;   (head (cons 42 (nil-value)))  ; => 42
+;;;
+;;; Since: Phase B1
 (defn head [lst] :int
   ```c
   struct { int64_t value; int64_t next; } *cell = (void*)(intptr_t)lst;
@@ -37,6 +83,18 @@
   ```)
 
 ;; Get the tail of the list (next pointer)
+;;; tail -- return the rest of the list after the first element.
+;;;
+;;; Parameters:
+;;;   lst -- a non-nil list
+;;;
+;;; Returns:
+;;;   Pointer (as :int) to the next Cons cell, or nil-value if lst has one element.
+;;;
+;;; Example:
+;;;   (tail (cons 1 (cons 2 (nil-value))))  ; => list [2]
+;;;
+;;; Since: Phase B1
 (defn tail [lst] :int
   ```c
   struct { int64_t value; int64_t next; } *cell = (void*)(intptr_t)lst;
@@ -48,6 +106,15 @@
   ```)
 
 ;; Free the entire list (does NOT free contained values - shallow free)
+;;; list-free -- free all Cons cells in a list (shallow -- does not free contained values).
+;;;
+;;; Parameters:
+;;;   lst -- the list to free (may be nil-value)
+;;;
+;;; Example:
+;;;   (list-free my-list)
+;;;
+;;; Since: Phase B1
 (defn list-free [lst]
   ```c
   struct { int64_t value; int64_t next; } *cell = (void*)(intptr_t)lst;
@@ -59,6 +126,18 @@
   ```)
 
 ;; Get the length of the list
+;;; list-length -- return the number of elements in a list.
+;;;
+;;; Parameters:
+;;;   lst -- the list to measure
+;;;
+;;; Returns:
+;;;   The number of Cons cells in lst (0 for nil).
+;;;
+;;; Example:
+;;;   (list-length (cons 1 (cons 2 (nil-value))))  ; => 2
+;;;
+;;; Since: Phase B1
 (defn list-length [lst] :int
   ```c
   int len = 0;
@@ -73,8 +152,9 @@
 ;; Phase B1: Clone instance for Cons
 ;; Requires the Clone typeclass to already be in scope (from stdlib/typeclass.tur).
 ;; Shallow-copies a single Cons cell into a new heap allocation (does NOT recursively
-;; clone the tail — use clone-list for a deep list clone).
+;; clone the tail -- use clone-list for a deep list clone).
 ;; x has type Cons (struct value) inside the generated C method.
+;;; Typeclass instance for Cons -- shallow Clone for a single Cons cell.
 (definstance Clone [Cons]
   (clone [x] :int
     ```c
@@ -90,6 +170,7 @@
 ;; Functor instance for list.
 ;; fmap :: (a -> b) -> list a -> list b
 ;; Maps fn over every element, building a new list.
+;;; __functor_list_fmap -- fmap implementation for the list Functor instance.
 (defn __functor_list_fmap [container fn] :int
   ```c
   struct { int64_t value; int64_t next; } *cell =
@@ -116,12 +197,14 @@
   return (int64_t)(intptr_t)result;
   ```)
 
+;;; Typeclass instance for list -- Functor: fmap over every element.
 (definstance Functor [list]
   (fmap [container fn] (__functor_list_fmap container fn)))
 
 ;; Foldable instance for list.
 ;; foldl :: (b -> a -> b) -> b -> list a -> b
 ;; foldr :: (a -> b -> b) -> b -> list a -> b
+;;; __foldable_list_foldl -- foldl implementation for the list Foldable instance.
 (defn __foldable_list_foldl [ta init fn] :int
   ```c
   struct { int64_t value; int64_t next; } *cell =
@@ -134,6 +217,7 @@
   return acc;
   ```)
 
+;;; __foldable_list_foldr -- foldr implementation for the list Foldable instance.
 (defn __foldable_list_foldr [ta init fn] :int
   ```c
   /* Count elements first, then process in reverse order via stack */
@@ -160,6 +244,7 @@
   return acc;
   ```)
 
+;;; Typeclass instance for list -- Foldable: foldl and foldr over all elements.
 (definstance Foldable [list]
   (foldl [ta init fn] (__foldable_list_foldl ta init fn))
   (foldr [ta init fn] (__foldable_list_foldr ta init fn)))
@@ -167,9 +252,11 @@
 ;; Applicative instance for list.
 ;;   pure x = cons(x, nil)
 ;;   ap [f1, f2, ...] [x1, x2, ...] = [f1 x1, f1 x2, ..., f2 x1, ...]
+;;; __applicative_list_pure -- pure implementation for the list Applicative instance.
 (defn __applicative_list_pure [x] :int
   (cons x (nil-value)))
 
+;;; __applicative_list_ap -- ap implementation for the list Applicative instance.
 (defn __applicative_list_ap [ff fa] :int
   ```c
   struct { int64_t value; int64_t next; } *fs =
@@ -203,12 +290,14 @@
   return (int64_t)(intptr_t)result;
   ```)
 
+;;; Typeclass instance for list -- Applicative: pure and ap.
 (definstance Applicative [list]
   (pure [x] (__applicative_list_pure x))
   (ap [ff fa] (__applicative_list_ap ff fa)))
 
 ;; Monad instance for list.
 ;;   bind [a1, a2, ...] f = concat [f a1, f a2, ...]
+;;; __monad_list_bind -- bind implementation for the list Monad instance.
 (defn __monad_list_bind [ma fn] :int
   ```c
   struct { int64_t value; int64_t next; } *cell =
@@ -241,11 +330,26 @@
   return (int64_t)(intptr_t)result;
   ```)
 
+;;; Typeclass instance for list -- Monad: bind (concat-map).
 (definstance Monad [list]
   (bind [ma fn] (__monad_list_bind ma fn)))
 
 ;; Phase E1: list-eq? -- compare two singly-linked lists element-wise using a comparator fn.
 ;; cmp-fn must be a fn [a :int b :int] :bool
+;;; list-eq? -- compare two lists element-wise using a caller-supplied comparator.
+;;;
+;;; Parameters:
+;;;   l1     -- first list
+;;;   l2     -- second list
+;;;   cmp-fn -- comparator of type fn [a :int b :int] :bool
+;;;
+;;; Returns:
+;;;   true if both lists have the same length and cmp-fn returns true for every pair of elements.
+;;;
+;;; Example:
+;;;   (list-eq? xs ys (fn [a b] (= a b)))  ; => true/false
+;;;
+;;; Since: Phase E1
 (defn list-eq? [l1 l2 cmp-fn] :bool
   ```c
   struct { int64_t value; int64_t next; } *a =
@@ -262,5 +366,6 @@
   return a == b;
   ```)
 
+;;; Typeclass instance for list -- Eq: structural equality via list-eq?.
 (definstance Eq [list]
   (eq? [x y] (list-eq? x y (fn [a b] (= a b)))))

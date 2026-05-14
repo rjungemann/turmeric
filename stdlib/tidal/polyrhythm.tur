@@ -1,4 +1,4 @@
-;; stdlib/tidal/polyrhythm.tur — Polyrhythm and Polymeter Support
+;; stdlib/tidal/polyrhythm.tur -- Polyrhythm and Polymeter Support
 ;;
 ;; This module provides support for polyrhythms (multiple patterns with
 ;; different time signatures playing simultaneously) and polymeters.
@@ -11,31 +11,45 @@
 ;; Polymeter Patterns
 ;; ============================================================================
 
-;; Play a pattern with a different time signature
-;; The pattern's cycle length is scaled relative to the parent
-;;
-;; @param ratio Time scaling ratio (e.g., 2.0 = twice as slow, 0.5 = twice as fast)
-;; @param p Pattern to play with different meter
-;; @return Pattern<T> with time-scaled evaluation
+;;; polymeter -- play a pattern with a different effective meter.
+;;;
+;;; Parameters:
+;;;   ratio -- time scaling ratio (2.0 = twice as slow, 0.5 = twice as fast)
+;;;   p     -- pattern to play with the scaled meter
+;;;
+;;; Returns:
+;;;   Pattern<T> evaluated with time * ratio.
+;;;
+;;; Example:
+;;;   ((polymeter 1.5 my-pat) 1.0)  ; reads my-pat at time 1.5
 (defn polymeter [ratio p]
   (fn [time]
     (p (* time ratio))))
 
-;; Create a polyrhythm: two patterns with different cycle lengths
-;;
-;; @param p1 First pattern
-;; @param len1 Cycle length for first pattern
-;; @param p2 Second pattern
-;; @param len2 Cycle length for second pattern
-;; @return Pattern<tuple<T1 T2>> that plays both patterns with their own meters
+;;; polyrhythm -- play two patterns with independent cycle lengths.
+;;;
+;;; Parameters:
+;;;   p1   -- first pattern
+;;;   len1 -- cycle length for the first pattern in beats
+;;;   p2   -- second pattern
+;;;   len2 -- cycle length for the second pattern in beats
+;;;
+;;; Returns:
+;;;   Pattern<Tuple T1 T2> combining both patterns at their own tempos.
+;;;
+;;; Example:
+;;;   ((polyrhythm kick-pat 3 snare-pat 2) 0.0)
 (defn polyrhythm [p1 len1 p2 len2]
   (fn [time]
     (tuple (p1 (/ time len1)) (p2 (/ time len2)))))
 
-;; Create a polyrhythm with more than two patterns
-;;
-;; @param pattern-lengths List of [pattern length] tuples
-;; @return Pattern<vec<T>> that plays all patterns with their own meters
+;;; polyrhythm-n -- play any number of patterns with independent cycle lengths.
+;;;
+;;; Parameters:
+;;;   pattern-lengths -- list of [pattern length] tuples
+;;;
+;;; Returns:
+;;;   Pattern<vec<T>> with one element per sub-pattern.
 (defn polyrhythm-n [& pattern-lengths]
   (let [pairs (vec pattern-lengths)]
     (fn [time]
@@ -45,23 +59,28 @@
 ;; Nested Patterns
 ;; ============================================================================
 
-;; Nested pattern: pattern of patterns
-;; The outer pattern produces inner patterns, which are then evaluated
-;;
-;; @param outer Pattern that produces inner patterns
-;; @param inner-time-scale Time scaling for inner patterns (default: 1.0)
-;; @return Pattern<T> that evaluates nested patterns
+;;; nest -- evaluate a pattern of patterns: outer selects the inner, inner is evaluated.
+;;;
+;;; Parameters:
+;;;   outer            -- Pattern producing inner patterns
+;;;   inner-time-scale -- time scaling applied before evaluating outer (default: 1.0)
+;;;
+;;; Returns:
+;;;   Pattern<T> that delegates to the pattern returned by outer.
 (defn nest [outer & [inner-time-scale 1.0]]
   (fn [time]
     (let [inner-pat (outer (/ time inner-time-scale))]
       (inner-pat time))))
 
-;; Nested pattern with outer time scaling
-;;
-;; @param outer Pattern that produces inner patterns
-;; @param outer-time-scale Time scaling for outer pattern evaluation
-;; @param inner-time-scale Time scaling for inner pattern evaluation
-;; @return Pattern<T>
+;;; nest2 -- nested pattern with independent time scales for outer and inner.
+;;;
+;;; Parameters:
+;;;   outer            -- Pattern producing inner patterns
+;;;   outer-time-scale -- scaling applied to time when querying outer
+;;;   inner-time-scale -- scaling applied to time when querying the selected inner pattern
+;;;
+;;; Returns:
+;;;   Pattern<T>.
 (defn nest2 [outer outer-time-scale inner-time-scale]
   (fn [time]
     (let [inner-pat (outer (* time outer-time-scale))]
@@ -71,21 +90,30 @@
 ;; Canon (Delayed Copies)
 ;; ============================================================================
 
-;; Create a canon: delayed copies of the same pattern
-;;
-;; @param p Pattern to create canon from
-;; @param copies Number of copies
-;; @param delay Delay between copies in beats (default: 0.25)
-;; @return Pattern<vec<T>> that plays delayed copies
+;;; canon -- play delayed copies of a pattern stacked together.
+;;;
+;;; Parameters:
+;;;   p      -- pattern to copy
+;;;   copies -- number of copies to create
+;;;   delay  -- time offset between successive copies in beats (default: 0.25)
+;;;
+;;; Returns:
+;;;   Pattern<vec<T>> with copies offset by delay * i for i in [0, copies).
+;;;
+;;; Example:
+;;;   ((canon my-pat 3 0.25) 0.0)
 (defn canon [p copies delay]
   (fn [time]
     (vec (map (fn [i] (p (+ time (* i delay)))) (range 0 copies)))))
 
-;; Canon with different delays for each copy
-;;
-;; @param p Pattern to create canon from
-;; @param delays List of delays for each copy
-;; @return Pattern<vec<T>> that plays copies with different delays
+;;; canon-n -- play copies of a pattern with individually specified delays.
+;;;
+;;; Parameters:
+;;;   p      -- pattern to copy
+;;;   delays -- list of per-copy delay offsets
+;;;
+;;; Returns:
+;;;   Pattern<vec<T>>.
 (defn canon-n [p & delays]
   (let [vec-delays (vec delays)]
     (fn [time]
@@ -95,21 +123,30 @@
 ;; Phase-Shifted Copies
 ;; ============================================================================
 
-;; Create phase-shifted copies of a pattern
-;;
-;; @param p Pattern to spread
-;; @param copies Number of copies
-;; @param spread-amount Total spread amount in beats (default: 1.0)
-;; @return Pattern<vec<T>> that plays phase-shifted copies
+;;; spread -- phase-spread copies of a pattern across a time window.
+;;;
+;;; Parameters:
+;;;   p             -- pattern to spread
+;;;   copies        -- number of copies
+;;;   spread-amount -- total time window to spread across in beats (default: 1.0)
+;;;
+;;; Returns:
+;;;   Pattern<vec<T>> with copies evenly spaced in [0, spread-amount).
+;;;
+;;; Example:
+;;;   ((spread my-pat 4 1.0) 0.0)
 (defn spread [p copies spread-amount]
   (fn [time]
     (vec (map (fn [i] (p (+ time (* (/ i copies) spread-amount)))) (range 0 copies)))))
 
-;; Spread with custom spread for each copy
-;;
-;; @param p Pattern to spread
-;; @param spreads List of spread amounts for each copy
-;; @return Pattern<vec<T>> that plays copies with custom spreads
+;;; spread-n -- phase-spread copies with individually specified offsets.
+;;;
+;;; Parameters:
+;;;   p       -- pattern to spread
+;;;   spreads -- list of per-copy phase offsets
+;;;
+;;; Returns:
+;;;   Pattern<vec<T>>.
 (defn spread-n [p & spreads]
   (let [vec-spreads (vec spreads)]
     (fn [time]
@@ -119,19 +156,25 @@
 ;; Stack with Polymeter
 ;; ============================================================================
 
-;; Combine multiple patterns with different meters
-;;
-;; @param pattern-meters List of [pattern meter] tuples
-;; @return Pattern<vec<T>> that stacks patterns with different meters
+;;; stack-polymeter -- stack patterns each running at their own meter.
+;;;
+;;; Parameters:
+;;;   pattern-meters -- list of [pattern meter] tuples
+;;;
+;;; Returns:
+;;;   Pattern<vec<T>> with one element per voice.
 (defn stack-polymeter [& pattern-meters]
   (let [pairs (vec pattern-meters)]
     (fn [time]
       (vec (map (fn [[p meter]] (p (* time meter))) pairs)))))
 
-;; Stack patterns with their cycle lengths as meters
-;;
-;; @param pattern-lengths List of [pattern length] tuples
-;; @return Pattern<vec<T>>
+;;; stack-polyrhythm -- stack patterns each with their own cycle lengths.
+;;;
+;;; Parameters:
+;;;   pattern-lengths -- list of [pattern length] tuples
+;;;
+;;; Returns:
+;;;   Pattern<vec<T>>.
 (defn stack-polyrhythm [& pattern-lengths]
   (stack-polymeter pattern-lengths...))
 
@@ -139,12 +182,14 @@
 ;; Time Signature Support
 ;; ============================================================================
 
-;; Pattern that respects time signatures
-;; Takes a pattern and a sequence of time signature changes
-;;
-;; @param p Pattern to apply time signatures to
-;; @param sigs List of [beats-per-bar sub-beats-per-bar] tuples
-;; @return Pattern<T> that respects time signatures
+;;; timesig -- apply a sequence of time signatures to a pattern.
+;;;
+;;; Parameters:
+;;;   p    -- pattern to apply time signatures to
+;;;   sigs -- list of [beats-per-bar sub-beats-per-bar] tuples
+;;;
+;;; Returns:
+;;;   Pattern<T> with normalised time within each bar.
 (defn timesig [p & sigs]
   (let [signature-list (vec sigs)
         len (len signature-list)]
@@ -158,16 +203,19 @@
                                                       (let [[bpb sbpb] (get signature-list i)]
                                                         (if (>= time (+ acc bpb))
                                                           (recur (inc i) (+ acc bpb))
-                                                          [bpb acc])))))
+                                                          [bpb acc]))))
               bar-phase (mod (- time accumulated-beats) beats-per-bar)
               normalized-time (/ bar-phase beats-per-bar)]
           (p normalized-time))))))
 
-;; Time signature with sub-beat divisions
-;;
-;; @param beats-per-bar Beats per bar (e.g., 4 for 4/4, 3 for 3/4)
-;; @param sub-beats-per-bar Sub-divisions per beat (e.g., 4 for 16th notes)
-;; @return A time signature specification
+;;; make-timesig -- construct a time signature specification.
+;;;
+;;; Parameters:
+;;;   beats-per-bar    -- beats per bar (e.g., 4 for 4/4, 3 for 3/4)
+;;;   sub-beats-per-bar -- sub-divisions per beat (e.g., 4 for 16th notes)
+;;;
+;;; Returns:
+;;;   A [beats-per-bar sub-beats-per-bar] pair.
 (defn make-timesig [beats-per-bar sub-beats-per-bar]
   [beats-per-bar sub-beats-per-bar])
 
@@ -175,43 +223,58 @@
 ;; Polyrhythm Presets
 ;; ============================================================================
 
-;; Common polyrhythm: 3 against 2
-;;
-;; @param p1 Pattern for 3 group
-;; @param p2 Pattern for 2 group
-;; @return Pattern<tuple<T1 T2>>
+;;; three-against-two -- classic 3:2 polyrhythm.
+;;;
+;;; Parameters:
+;;;   p1 -- pattern for the 3-beat group
+;;;   p2 -- pattern for the 2-beat group
+;;;
+;;; Returns:
+;;;   Pattern<Tuple T1 T2>.
 (defn three-against-two [p1 p2]
   (polyrhythm p1 3 p2 2))
 
-;; Common polyrhythm: 4 against 3
-;;
-;; @param p1 Pattern for 4 group
-;; @param p2 Pattern for 3 group
-;; @return Pattern<tuple<T1 T2>>
+;;; four-against-three -- 4:3 polyrhythm.
+;;;
+;;; Parameters:
+;;;   p1 -- pattern for the 4-beat group
+;;;   p2 -- pattern for the 3-beat group
+;;;
+;;; Returns:
+;;;   Pattern<Tuple T1 T2>.
 (defn four-against-three [p1 p2]
   (polyrhythm p1 4 p2 3))
 
-;; Common polyrhythm: 5 against 4
-;;
-;; @param p1 Pattern for 5 group
-;; @param p2 Pattern for 4 group
-;; @return Pattern<tuple<T1 T2>>
+;;; five-against-four -- 5:4 polyrhythm.
+;;;
+;;; Parameters:
+;;;   p1 -- pattern for the 5-beat group
+;;;   p2 -- pattern for the 4-beat group
+;;;
+;;; Returns:
+;;;   Pattern<Tuple T1 T2>.
 (defn five-against-four [p1 p2]
   (polyrhythm p1 5 p2 4))
 
-;; Common polyrhythm: 5 against 3
-;;
-;; @param p1 Pattern for 5 group
-;; @param p2 Pattern for 3 group
-;; @return Pattern<tuple<T1 T2>>
+;;; five-against-three -- 5:3 polyrhythm.
+;;;
+;;; Parameters:
+;;;   p1 -- pattern for the 5-beat group
+;;;   p2 -- pattern for the 3-beat group
+;;;
+;;; Returns:
+;;;   Pattern<Tuple T1 T2>.
 (defn five-against-three [p1 p2]
   (polyrhythm p1 5 p2 3))
 
-;; Common polyrhythm: 7 against 4
-;;
-;; @param p1 Pattern for 7 group
-;; @param p2 Pattern for 4 group
-;; @return Pattern<tuple<T1 T2>>
+;;; seven-against-four -- 7:4 polyrhythm.
+;;;
+;;; Parameters:
+;;;   p1 -- pattern for the 7-beat group
+;;;   p2 -- pattern for the 4-beat group
+;;;
+;;; Returns:
+;;;   Pattern<Tuple T1 T2>.
 (defn seven-against-four [p1 p2]
   (polyrhythm p1 7 p2 4))
 
@@ -219,15 +282,18 @@
 ;; Polyrhythm with Different Starting Points
 ;; ============================================================================
 
-;; Polyrhythm with offset starting points
-;;
-;; @param p1 First pattern
-;; @param len1 Cycle length for first pattern
-;; @param offset1 Starting offset for first pattern
-;; @param p2 Second pattern
-;; @param len2 Cycle length for second pattern
-;; @param offset2 Starting offset for second pattern
-;; @return Pattern<tuple<T1 T2>>
+;;; polyrhythm-offset -- polyrhythm with independent phase offsets per pattern.
+;;;
+;;; Parameters:
+;;;   p1      -- first pattern
+;;;   len1    -- cycle length for first pattern
+;;;   offset1 -- phase offset for first pattern
+;;;   p2      -- second pattern
+;;;   len2    -- cycle length for second pattern
+;;;   offset2 -- phase offset for second pattern
+;;;
+;;; Returns:
+;;;   Pattern<Tuple T1 T2>.
 (defn polyrhythm-offset [p1 len1 offset1 p2 len2 offset2]
   (fn [time]
     (tuple (p1 (/ (+ time offset1) len1)) (p2 (/ (+ time offset2) len2)))))
@@ -236,10 +302,13 @@
 ;; Polyrhythm with Custom Phasing
 ;; ============================================================================
 
-;; Create a polyrhythm with custom phase relationships
-;;
-;; @param patterns-and-phases List of [pattern length phase] tuples
-;; @return Pattern<vec<T>> with custom phasing
+;;; polyrhythm-phased -- polyrhythm with per-pattern length and phase.
+;;;
+;;; Parameters:
+;;;   patterns-and-phases -- list of [pattern length phase] triples
+;;;
+;;; Returns:
+;;;   Pattern<vec<T>>.
 (defn polyrhythm-phased [& patterns-and-phases]
   (let [triples (vec patterns-and-phases)]
     (fn [time]
@@ -249,24 +318,30 @@
 ;; Metric Modulation
 ;; ============================================================================
 
-;; Apply metric modulation (tempo change within a pattern)
-;;
-;; @param p Pattern to modulate
-;; @param modulation-fn Function: Beats -> Beats that maps input time to output time
-;; @return Pattern<T> with metric modulation
+;;; metric-mod -- apply an arbitrary time mapping to a pattern.
+;;;
+;;; Parameters:
+;;;   p             -- pattern to modulate
+;;;   modulation-fn -- Beats -> Beats time remapping function
+;;;
+;;; Returns:
+;;;   Pattern<T> evaluated at modulation-fn(time).
 (defn metric-mod [p modulation-fn]
   (fn [time]
     (p (modulation-fn time))))
 
-;; Metric modulation with piecewise linear mapping
-;;
-;; @param p Pattern to modulate
-;; @param breakpoints List of [input-time output-time] pairs
-;; @return Pattern<T> with piecewise linear modulation
+;;; metric-mod-linear -- apply a piecewise linear time mapping.
+;;;
+;;; Parameters:
+;;;   p           -- pattern to modulate
+;;;   breakpoints -- list of [input-time output-time] pairs
+;;;
+;;; Returns:
+;;;   Pattern<T> with piecewise linear time mapping.
 (defn metric-mod-linear [p & breakpoints]
   (let [sorted (sort-by first breakpoints)]
     (fn [time]
-      (let [[_ _ in-start in-end out-start out-end] 
+      (let [[_ _ in-start in-end out-start out-end]
             (loop [i 0]
               (if (>= i (dec (len sorted)))
                 (let [[in-t out-t] (last sorted)]
@@ -280,34 +355,46 @@
           out-start
           (if (>= time in-end)
             out-end
-            (time/lerp out-start out-end (/ (- time in-start) (- in-end in-start))))))))))
+            (time/lerp out-start out-end (/ (- time in-start) (- in-end in-start)))))))))
 
 ;; ============================================================================
 ;; Polyrhythm Utilities
 ;; ============================================================================
 
-;; Get the least common multiple of two numbers for polyrhythm alignment
-;;
-;; @param a First number
-;; @param b Second number
-;; @return LCM of a and b
+;;; lcm -- least common multiple of two integers.
+;;;
+;;; Parameters:
+;;;   a -- first number
+;;;   b -- second number
+;;;
+;;; Returns:
+;;;   LCM of a and b.
 (defn lcm [a b]
   (/ (* a b) (gcd a b)))
 
-;; Get the greatest common divisor (Euclidean algorithm)
-;;
-;; @param a First number
-;; @param b Second number
-;; @return GCD of a and b
+;;; gcd -- greatest common divisor using the Euclidean algorithm.
+;;;
+;;; Parameters:
+;;;   a -- first number
+;;;   b -- second number
+;;;
+;;; Returns:
+;;;   GCD of a and b.
 (defn gcd [a b]
   (if (== b 0)
     a
     (recur b (mod a b))))
 
-;; Find the alignment point for polyrhythms
-;;
-;; @param lengths List of cycle lengths
-;; @return The time at which all patterns align
+;;; polyrhythm-alignment -- find the beat at which all polyrhythm patterns realign.
+;;;
+;;; Parameters:
+;;;   lengths -- list of cycle lengths
+;;;
+;;; Returns:
+;;;   The LCM of all lengths (time at which all patterns complete together).
+;;;
+;;; Example:
+;;;   (polyrhythm-alignment 3 4)  ; => 12
 (defn polyrhythm-alignment [& lengths]
   (reduce lcm 1 lengths))
 
@@ -315,16 +402,18 @@
 ;; Cross-Rhythm Patterns
 ;; ============================================================================
 
-;; Create a cross-rhythm pattern
-;; Similar to polyrhythm but with different phrasing
-;;
-;; @param p1 First pattern
-;; @param len1 Length of first pattern's cycle
-;; @param p2 Second pattern
-;; @param len2 Length of second pattern's cycle
-;; @param phase1 Phase offset for first pattern
-;; @param phase2 Phase offset for second pattern
-;; @return Pattern<tuple<T1 T2>>
+;;; cross-rhythm -- polyrhythm with per-pattern phase offsets.
+;;;
+;;; Parameters:
+;;;   p1     -- first pattern
+;;;   len1   -- cycle length for first pattern
+;;;   p2     -- second pattern
+;;;   len2   -- cycle length for second pattern
+;;;   phase1 -- phase offset for first pattern (default: 0)
+;;;   phase2 -- phase offset for second pattern (default: 0)
+;;;
+;;; Returns:
+;;;   Pattern<Tuple T1 T2>.
 (defn cross-rhythm [p1 len1 p2 len2 & [phase1 0 phase2 0]]
   (fn [time]
     (tuple (p1 (+ phase1 (/ time len1))) (p2 (+ phase2 (/ time len2))))))
@@ -333,12 +422,18 @@
 ;; Hocketing
 ;; ============================================================================
 
-;; Hocket: distribute notes from a pattern across multiple voices
-;;
-;; @param p Pattern to hocket
-;; @param voices Number of voices to distribute across
-;; @param pattern Pattern to use for voice selection (default: cycle through voices)
-;; @return Pattern<vec<T>> with hocketed values
+;;; hocket -- distribute a pattern's output across multiple voices.
+;;;
+;;; Parameters:
+;;;   p        -- source pattern
+;;;   voices   -- number of voices to distribute across
+;;;   selector -- IntPattern selecting the active voice (default: cycle 0..voices-1)
+;;;
+;;; Returns:
+;;;   Pattern<vec<T>> where only the selected voice receives the pattern value.
+;;;
+;;; Example:
+;;;   ((hocket my-pat 3) 0.0)
 (defn hocket [p voices & [selector (cycle (range 0 voices))]]
   (fn [time]
     (let [v (p time)

@@ -148,14 +148,59 @@
 (def A440_FREQ 440.0)
 
 ;; Time conversion utilities
+
+;;; sec->samples -- Convert seconds to sample count.
+;;;
+;;; Parameters:
+;;;   sec -- Duration in seconds.
+;;;   sample_rate -- Sample rate in Hz.
+;;;
+;;; Returns:
+;;;   Number of samples corresponding to the given duration.
+;;;
+;;; Example:
+;;;   (sec->samples 1.0 48000)  ; => 48000.0
 (defn sec->samples [sec sample_rate]
   (* sec sample_rate))
 
+;;; samples->sec -- Convert sample count to seconds.
+;;;
+;;; Parameters:
+;;;   samples -- Number of samples.
+;;;   sample_rate -- Sample rate in Hz.
+;;;
+;;; Returns:
+;;;   Duration in seconds.
+;;;
+;;; Example:
+;;;   (samples->sec 48000 48000)  ; => 1.0
 (defn samples->sec [samples sample_rate]
   (/ samples sample_rate))
 
+;;; ms->samples -- Convert milliseconds to sample count.
+;;;
+;;; Parameters:
+;;;   ms -- Duration in milliseconds.
+;;;   sample_rate -- Sample rate in Hz.
+;;;
+;;; Returns:
+;;;   Number of samples corresponding to the given duration.
+;;;
+;;; Example:
+;;;   (ms->samples 500.0 48000)  ; => 24000.0
 (defn ms->samples [ms sample_rate]
   (* ms 0.001 sample_rate))
 
+;;; samples->ms -- Convert sample count to milliseconds.
+;;;
+;;; Parameters:
+;;;   samples -- Number of samples.
+;;;   sample_rate -- Sample rate in Hz.
+;;;
+;;; Returns:
+;;;   Duration in milliseconds.
+;;;
+;;; Example:
+;;;   (samples->ms 24000 48000)  ; => 500.0
 (defn samples->ms [samples sample_rate]
   (* (/ samples sample_rate) 1000.0))

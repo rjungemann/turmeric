@@ -11,8 +11,19 @@
 ;; Arrow Typeclass Hierarchy
 ;; =============================================================================
 
+;;; Arrow -- base typeclass for arrow-like structures.
+;;;
+;;; An Arrow arr is a type constructor that takes two type parameters (input and
+;;; output) and supports lifting, sequential composition, and product-component
+;;; application.
+;;;
+;;; Parameters:
+;;;   ^arr -- the arrow type constructor (kind * -> * -> *)
+;;;
+;;; Example:
+;;;   (arr (fn [x] (* x 2)))  ; => a function arrow that doubles its input
 ;; Arrow - Base typeclass for arrow-like structures
-;; 
+;;
 ;; An Arrow arr is a type constructor that takes two type parameters (input and output)
 ;; and supports the following operations:
 ;;   - arr: lift a function to an arrow
@@ -22,13 +33,13 @@
 (defclass Arrow [^arr]
   ;; Lift a pure function to an arrow
   (arr [a b] :(-> a b) (arr a b))
-  
+
   ;; Sequential composition: f >>> g means "first f, then g"
   (>>> [a b c] :(arr a b) (arr b c) (arr a c))
-  
+
   ;; Apply arrow to first component of a product
   (first [a b c] :(arr a b) (arr (Tuple a c) (Tuple b c)))
-  
+
   ;; Apply arrow to second component of a product
   (second [a b c] :(arr a b) (arr (Tuple c a) (Tuple c b))))
 
@@ -36,18 +47,24 @@
 ;; Arrow Instances
 ;; =============================================================================
 
+;;; Arrow-Function -- Arrow instance for plain functions (->).
+;;;
+;;; The canonical Arrow instance: functions themselves form an Arrow.
+;;;
+;;; Example:
+;;;   (>>> (arr (fn [x] (+ x 1))) (arr (fn [x] (* x 2))))  ; => fn composing +1 then *2
 ;; Function Arrow Instance
 ;; The canonical Arrow instance: functions themselves form an Arrow
 (definstance Arrow-Function Arrow (->)
   (arr [a b] f :(-> a b))
     f
-  
+
   (>>> [a b c] f :(-> a b) g :(-> b c))
     (fn [x] (g (f x)))
-  
+
   (first [a b c] f :(-> a b))
     (fn [[x z]] [(f x) z])
-  
+
   (second [a b c] f :(-> a b))
     (fn [[z x]] [z (f x)]))
 
@@ -55,45 +72,75 @@
 ;; Extended Arrow Classes
 ;; =============================================================================
 
+;;; ArrowZero -- arrows with an empty/zero element.
+;;;
+;;; Parameters:
+;;;   ^arr -- the arrow type constructor; must satisfy Arrow
+;;;
+;;; Returns:
+;;;   zeroArrow produces an arrow that yields no output.
 ;; ArrowZero - Arrows with an empty/zero element
 (defclass ArrowZero [^arr] (Arrow arr)
   ;; The zero arrow: produces no output
   (zeroArrow [a b] :(arr a b)))
 
+;;; ArrowPlus -- arrows that can be combined with choice.
+;;;
+;;; Parameters:
+;;;   ^arr -- the arrow type constructor; must satisfy Arrow
+;;;
+;;; Returns:
+;;;   <+> combines two arrows in parallel, preferring the first.
 ;; ArrowPlus - Arrows that can be combined
 (defclass ArrowPlus [^arr] (Arrow arr)
   ;; Combine two arrows in parallel
   (<+> [a b] :(arr a b) (arr a b) (arr a b)))
 
+;;; ArrowChoice -- arrows with choice over sum types (Either).
+;;;
+;;; Parameters:
+;;;   ^arr -- the arrow type constructor; must satisfy Arrow
+;;;
+;;; Returns:
+;;;   Operations that apply arrows selectively to Left or Right branches.
 ;; ArrowChoice - Arrows with choice/alternation
 ;; Allows arrows to be applied to sum types (Either)
 (defclass ArrowChoice [^arr] (Arrow arr)
   ;; Apply arrow to left component of a sum
   (left [a b c] :(arr a b) (arr (Either a c) (Either b c)))
-  
+
   ;; Apply arrow to right component of a sum
   (right [a b c] :(arr a b) (arr (Either c a) (Either c b)))
-  
+
   ;; Parallel composition for sums (fanin)
   (+++ [a b c d] :(arr a b) (arr c d) (arr (Either a c) (Either b d)))
-  
+
   ;; Fanin: combine two arrows on a sum
   (||| [a b c d] :(arr a c) (arr b d) (arr (Either a b) (Either c d))))
 
+;;; ArrowChoice-Defaults -- default implementations of ArrowChoice derived from left/right.
 ;; Default implementations for ArrowChoice based on left/right
 (definstance ArrowChoice-Defaults ArrowChoice [^arr] (Arrow arr)
   (left [a b c] f :(arr a b))
     (+++ f (zeroArrow b c))
-  
+
   (right [a b c] f :(arr a b))
     (+++ (zeroArrow a c) f)
-  
+
   (+++ [a b c d] f :(arr a b) g :(arr c d))
     (||| f (zeroArrow a d) (zeroArrow c b) g)
-  
+
   (||| [a b c d] f :(arr a c) g :(arr b d))
     (+++ f g))
 
+;;; ArrowLoop -- arrows with feedback loops for recursive signal processing.
+;;;
+;;; Parameters:
+;;;   ^arr -- the arrow type constructor; must satisfy Arrow
+;;;
+;;; Returns:
+;;;   loop converts an arrow on (a,c) -> (b,c) into an arrow on a -> b,
+;;;   feeding the output c back as the input c.
 ;; ArrowLoop - Arrows with feedback loops
 ;; Allows implementation of recursive signal processors
 (defclass ArrowLoop [^arr] (Arrow arr)
@@ -101,6 +148,13 @@
   ;; and produces an arrow that processes a to b, feeding output c back as input c
   (loop [a b c] :(arr (Tuple a c) (Tuple b c)) (arr a b)))
 
+;;; ArrowApply -- arrows that support first-class application (arrow monads).
+;;;
+;;; Parameters:
+;;;   ^arr -- the arrow type constructor; must satisfy Arrow
+;;;
+;;; Returns:
+;;;   app applies an arrow-valued computation, making arrows as powerful as monads.
 ;; ArrowApply - Arrows that support application (for Arrow monads)
 ;; This makes arrows as powerful as monads
 (defclass ArrowApply [^arr] (Arrow arr)
@@ -111,28 +165,83 @@
 ;; Utility Functions
 ;; =============================================================================
 
+;;; arrow-id -- identity arrow for any Arrow instance.
+;;;
+;;; Parameters:
+;;;   ^arr -- the arrow type constructor
+;;;   a    -- the type parameter
+;;;
+;;; Returns:
+;;;   An arrow that passes its input unchanged.
+;;;
+;;; Example:
+;;;   (arrow-id)  ; => arr (fn [x] x)
 ;; Identity arrow
 (defn arrow-id [^arr : (Arrow arr) a]
   : (arr a a)
   (arr (fn [x] x)))
 
+;;; arrow-comp -- compose two arrows sequentially.
+;;;
+;;; Parameters:
+;;;   ^arr -- the arrow type constructor
+;;;   f    -- first arrow (a -> b)
+;;;   g    -- second arrow (b -> c)
+;;;
+;;; Returns:
+;;;   An arrow (a -> c) that applies f then g.
+;;;
+;;; Example:
+;;;   (arrow-comp f g)  ; => f >>> g
 ;; Arrow composition operator alias
 (defn arrow-comp [^arr : (Arrow arr) a b c] [f : (arr a b)] [g : (arr b c)]
   : (arr a c)
   (>>> f g))
 
+;;; arrow-lift-a2 -- lift a binary function to an arrow on products.
+;;;
+;;; Parameters:
+;;;   ^arr -- the arrow type constructor
+;;;   f    -- a binary function (a -> b -> c)
+;;;
+;;; Returns:
+;;;   An arrow on Tuple a a that applies f to both components.
 ;; Lift a binary function to an arrow on products
 (defn arrow-lift-a2 [^arr : (Arrow arr) a b c]
   : (-> (-> a b c) (arr (Tuple a a) b))
   (fn [f]
     (>>> (first (arr f)) (arr (fn [[b _]] b)))))
 
+;;; fanout -- send input to both arrows and combine results into a tuple.
+;;;
+;;; Parameters:
+;;;   ^arr -- the arrow type constructor
+;;;   f    -- first arrow (a -> b)
+;;;   g    -- second arrow (a -> c)
+;;;
+;;; Returns:
+;;;   An arrow (a -> Tuple b c).
+;;;
+;;; Example:
+;;;   (fanout f g)  ; => arr (\x -> (f x, g x))
 ;; Fanout: send input to both arrows and combine results
 ;; &&& f g = arr (\x -> (f x, g x))
 (defn fanout [^arr : (Arrow arr) a b c] [f : (arr a b)] [g : (arr a c)]
   : (arr a (Tuple b c))
   (>>> f (>>> (first g) (arr (fn [[b c]] (Tuple b c))))))
 
+;;; fanin -- combine two arrows on a sum type (Either).
+;;;
+;;; Parameters:
+;;;   ^arr -- the arrow type constructor; must satisfy ArrowChoice
+;;;   f    -- arrow for Left branch (a -> b)
+;;;   g    -- arrow for Right branch (c -> d)
+;;;
+;;; Returns:
+;;;   An arrow on Either a c -> Either b d.
+;;;
+;;; Example:
+;;;   (fanin f g)  ; => f +++ g
 ;; Fanin: combine two arrows on a sum
 ;; This is the (+++) operator from ArrowChoice
 (defn fanin [^arr : (ArrowChoice arr) a b c d] [f : (arr a b)] [g : (arr c d)]
@@ -145,11 +254,33 @@
 
 ;; For the function arrow (->), we can define additional utilities
 
+;;; par-comp -- parallel composition of two functions on product types.
+;;;
+;;; Parameters:
+;;;   f -- function a -> b
+;;;   g -- function c -> d
+;;;
+;;; Returns:
+;;;   A function on Tuple a c -> Tuple b d: (f *** g)(x,y) = (f x, g y).
+;;;
+;;; Example:
+;;;   ((par-comp inc double) [1 2])  ; => [2 4]
 ;; Parallel composition: (f *** g) (x, y) = (f x, g y)
 (defn par-comp [a b c d] [f :(-> a b)] [g :(-> c d)]
   :(-> (Tuple a c) (Tuple b d))
   (fn [[x y]] [(f x) (g y)]))
 
+;;; split -- duplicate input and apply two functions, returning a pair.
+;;;
+;;; Parameters:
+;;;   f -- function a -> b
+;;;   g -- function a -> c
+;;;
+;;; Returns:
+;;;   A function a -> Tuple b c: (split f g)(x) = (f x, g x).
+;;;
+;;; Example:
+;;;   ((split inc double) 3)  ; => [4 6]
 ;; Split: duplicate input to both functions
 ;; f &&& g = \x -> (f x, g x)
 (defn split [a b c] [f :(-> a b)] [g :(-> a c)]
@@ -160,25 +291,26 @@
 ;; ArrowChoice instance for Function Arrow
 ;; =============================================================================
 
+;;; ArrowChoice-Function -- ArrowChoice instance for plain functions (->).
 (definstance ArrowChoice-Function ArrowChoice (->)
   (left [a b c] f :(-> a b))
     (fn [eac]
       (case eac
         (Left a) (Left (f a))
         (Right c) (Right c)))
-  
+
   (right [a b c] f :(-> a b))
     (fn [eca]
       (case eca
         (Left c) (Left c)
         (Right a) (Right (f a))))
-  
+
   (+++ [a b c d] f :(-> a b) g :(-> c d))
     (fn [eac]
       (case eac
         (Left a) (Left (f a))
         (Right c) (Right (g c))))
-  
+
   (||| [a b c d] f :(-> a c) g :(-> b d))
     (fn [eab]
       (case eab
@@ -189,6 +321,10 @@
 ;; ArrowLoop instance for Function Arrow
 ;; =============================================================================
 
+;;; ArrowLoop-Function -- ArrowLoop instance for plain functions (->).
+;;;
+;;; Note: ArrowLoop for strict functions requires lazy evaluation or mutation.
+;;; This implementation uses a ref-based approach and is not purely functional.
 (definstance ArrowLoop-Function ArrowLoop (->)
   (loop [a b c] f :(-> (Tuple a c) (Tuple b c)))
     (fn [a]
@@ -218,10 +354,12 @@
 ;; ArrowZero and ArrowPlus instances for Function Arrow
 ;; =============================================================================
 
+;;; ArrowZero-Function -- ArrowZero instance for plain functions (->).
 (definstance ArrowZero-Function ArrowZero (->)
   (zeroArrow [a b])
     (fn [_] (error "zeroArrow for functions: no value")))
 
+;;; ArrowPlus-Function -- ArrowPlus instance for plain functions (->).
 (definstance ArrowPlus-Function ArrowPlus (->)
   (<+> [a b] f g)
     (fn [x] (error "ArrowPlus for functions: choice not defined")))
@@ -230,6 +368,12 @@
 ;; ArrowApply instance for Function Arrow (Reader monad)
 ;; =============================================================================
 
+;;; ArrowApply-Function -- ArrowApply instance for plain functions (->).
+;;;
+;;; For functions (-> r), ArrowApply makes it a monad (Reader monad).
+;;;
+;;; Example:
+;;;   (app (fn [a] (fn [a2] (* a a2))))  ; => fn that squares its input
 ;; For functions (-> r), ArrowApply makes it a monad (Reader monad)
 (definstance ArrowApply-Function ArrowApply (->)
   (app [a b] f :(-> a (-> a b)))

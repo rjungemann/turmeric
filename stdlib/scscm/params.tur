@@ -10,11 +10,17 @@
 ;; Parameter Warping Functions
 ;; ============================================================================
 
-;; Convert value to OSC range with warping
-;;
-;; @param spec Parameter specification
-;; @param value Input value in user space
-;; @return Warped value for OSC/scsynth
+;;; warp-value -- Map a user-space value to OSC range using the spec's warp type.
+;;;
+;;; Parameters:
+;;;   spec -- A ParamSpec map containing at least :warp.
+;;;   value -- Input value in user space.
+;;;
+;;; Returns:
+;;;   Warped value suitable for sending to scsynth.
+;;;
+;;; Example:
+;;;   (warp-value PARAM_FREQ 440.0)  ; => 440.0 (exp warp applies octave formula)
 (defn warp-value [spec value]
   (case (:warp spec)
     :linear value
@@ -24,11 +30,17 @@
     :db2 (* 20.0 (math/log10 value))    ;; amplitude to dB
     value))  ;; Default: no warping
 
-;; Unwarp value from OSC range
-;;
-;; @param spec Parameter specification
-;; @param value Value from OSC/scsynth
-;; @return Unwarped value in user space
+;;; unwarp-value -- Map an OSC value back to user space using the spec's warp type.
+;;;
+;;; Parameters:
+;;;   spec -- A ParamSpec map containing at least :warp.
+;;;   value -- Value received from scsynth in OSC space.
+;;;
+;;; Returns:
+;;;   Value in user space (inverse warp of warp-value).
+;;;
+;;; Example:
+;;;   (unwarp-value PARAM_FREQ (warp-value PARAM_FREQ 440.0))  ; => 440.0
 (defn unwarp-value [spec value]
   (case (:warp spec)
     :linear value
@@ -38,29 +50,47 @@
     :db2 (math/pow 10.0 (/ value 20.0))   ;; dB to amplitude
     value))  ;; Default: no warping
 
-;; Clamp value to parameter range
-;;
-;; @param spec Parameter specification
-;; @param value Value to clamp
-;; @return Clamped value
+;;; clamp-value -- Clamp a value to the min/max range specified in a ParamSpec.
+;;;
+;;; Parameters:
+;;;   spec -- A ParamSpec map with :min and :max fields.
+;;;   value -- Value to clamp.
+;;;
+;;; Returns:
+;;;   The value clamped to [spec.min, spec.max].
+;;;
+;;; Example:
+;;;   (clamp-value PARAM_AMP 1.5)  ; => 1.0
 (defn clamp-value [spec value]
   (math/clamp value (:min spec) (:max spec)))
 
-;; Clamp and warp a value for sending to scsynth
-;;
-;; @param spec Parameter specification
-;; @param value User-space value
-;; @return OSC-ready value (warped and clamped)
+;;; param->osc -- Clamp and warp a user-space value ready for scsynth.
+;;;
+;;; Parameters:
+;;;   spec -- A ParamSpec map.
+;;;   value -- User-space value.
+;;;
+;;; Returns:
+;;;   OSC-ready float (clamped first, then warped).
+;;;
+;;; Example:
+;;;   (param->osc PARAM_AMP 0.8)  ; => 0.8
 (defn param->osc [spec value]
   (let [clamped (clamp-value spec value)
         warped (warp-value spec clamped)]
     warped))
 
-;; Unwarp and clamp a value received from scsynth
-;;
-;; @param spec Parameter specification
-;; @param value OSC value from scsynth
-;; @return User-space value (unwarped and clamped to original range)
+;;; osc->param -- Unwarp and clamp an OSC value back to user space.
+;;;
+;;; Parameters:
+;;;   spec -- A ParamSpec map.
+;;;   value -- OSC value from scsynth.
+;;;
+;;; Returns:
+;;;   User-space float clamped to the spec's original range.
+;;;
+;;; Example:
+;;;   (osc->param PARAM_AMP 0.8)  ; => 0.8
 (defn osc->param [spec value]
   (let [unwarped (unwarp-value spec value)]
     (clamp-value spec unwarped)))
@@ -69,14 +99,21 @@
 ;; Common Parameter Specifications
 ;; ============================================================================
 
-;; Create a parameter spec with common defaults
-;;
-;; @param name Parameter name
-;; @param default Default value
-;; @param min Minimum value (default: 0)
-;; @param max Maximum value (default: 1)
-;; @param unit Unit string (default: "")
-;; @param warp Warp type (default: :linear)
+;;; param-spec -- Create a parameter specification with common defaults.
+;;;
+;;; Parameters:
+;;;   name -- Parameter name string (must match the SynthDef control name).
+;;;   default -- Default value.
+;;;   min -- Minimum value (default: 0.0).
+;;;   max -- Maximum value (default: 1.0).
+;;;   unit -- Unit label string, e.g. "Hz", "dB", "sec" (default: "").
+;;;   warp -- Warp type keyword: :linear, :exp, :log, :db, :db2 (default: :linear).
+;;;
+;;; Returns:
+;;;   A ParamSpec map.
+;;;
+;;; Example:
+;;;   (param-spec "freq" 440.0 20.0 20000.0 "Hz" :exp)
 (defn param-spec [name default & [min 0.0 max 1.0 unit "" warp :linear]]
   {:name name
    :default default
@@ -124,28 +161,46 @@
 ;; SynthDef Specifications
 ;; ============================================================================
 
-;; Create a SynthDef specification from parameter specs
-;;
-;; @param synthdef_name SynthDef name
-;; @param param-specs Vector of ParamSpec
-;; @return SynthDefSpec
+;;; synthdef-spec -- Assemble a SynthDef specification from a list of ParamSpecs.
+;;;
+;;; Parameters:
+;;;   synthdef_name -- SynthDef name (currently unused; reserved for future metadata).
+;;;   param-specs -- Vector of ParamSpec maps describing each control.
+;;;
+;;; Returns:
+;;;   SynthDefSpec (currently just the param-specs vector).
+;;;
+;;; Example:
+;;;   (synthdef-spec "mySynth" [PARAM_FREQ PARAM_AMP])
 (defn synthdef-spec [synthdef_name param-specs]
   param-specs)  ;; For now, just return the param-specs
                    ;; In future, this could be a struct with more metadata
 
-;; Find a parameter spec by name in a SynthDef spec
-;;
-;; @param spec SynthDefSpec (vector of ParamSpec)
-;; @param param_name Parameter name to find
-;; @return ParamSpec or nil if not found
+;;; find-param -- Find a ParamSpec by name within a SynthDefSpec.
+;;;
+;;; Parameters:
+;;;   spec -- SynthDefSpec (vector of ParamSpec maps).
+;;;   param_name -- Parameter name to search for.
+;;;
+;;; Returns:
+;;;   The matching ParamSpec map, or nil if not found.
+;;;
+;;; Example:
+;;;   (find-param SIN_SYNTH_SPEC "freq")
 (defn find-param [spec param_name]
   (first (filter #(== (:name %) param_name) spec)))
 
-;; Get parameter index by name in a SynthDef spec
-;;
-;; @param spec SynthDefSpec (vector of ParamSpec)
-;; @param param_name Parameter name to find
-;; @return Index (int) or nil if not found
+;;; find-param-index -- Get the zero-based index of a parameter by name.
+;;;
+;;; Parameters:
+;;;   spec -- SynthDefSpec (vector of ParamSpec maps).
+;;;   param_name -- Parameter name to search for.
+;;;
+;;; Returns:
+;;;   Integer index of the parameter, or nil if not found.
+;;;
+;;; Example:
+;;;   (find-param-index SIN_SYNTH_SPEC "amp")  ; => 1
 (defn find-param-index [spec param_name]
   (let [i 0]
     (for [param spec]
@@ -164,13 +219,19 @@
    synthdef-name :types/SynthDefName
    spec :types/SynthDefSpec])
 
-;; Create a new synth controller
-;;
-;; @param session Parent session
-;; @param synthdef-name Name of SynthDef to instantiate
-;; @param synthdef-spec SynthDef specification (parameter specs)
-;; @param params Optional initial parameter values (name -> value map)
-;; @return SynthController
+;;; synth-controller-new -- Create a synth and wrap it in a typed controller.
+;;;
+;;; Parameters:
+;;;   session -- Parent ScscmSession.
+;;;   synthdef-name -- Name of the SynthDef to instantiate.
+;;;   synthdef-spec -- SynthDefSpec listing this SynthDef's parameters.
+;;;   params -- Optional initial values as a name -> value map.
+;;;
+;;; Returns:
+;;;   A SynthController map. Panics if the synth cannot be created.
+;;;
+;;; Example:
+;;;   (synth-controller-new sess "mySynth" SIN_SYNTH_SPEC {"freq" 880.0})
 (defn synth-controller-new [session synthdef-name synthdef-spec & [params {}]]
   (let [node_id (synth/node-id-alloc (:node-allocator session))]
     (let [result (synth-new (:world-id session) synthdef-name node_id)]
@@ -190,18 +251,25 @@
           ctrl)
         (panic (str "Failed to create synth: " synthdef-name))))))
 
-;; Free a synth controller
-;;
-;; @param ctrl Controller to free
+;;; synth-controller-free -- Free the synth node owned by a controller.
+;;;
+;;; Parameters:
+;;;   ctrl -- A SynthController map.
 (defn synth-controller-free [ctrl]
   (synth-free (:world-id (:session ctrl)) (:node-id ctrl)))
 
-;; Set a parameter by name on a synth controller
-;;
-;; @param ctrl Target controller
-;; @param param_name Parameter name
-;; @param value User-space value (will be warped and clamped)
-;; @return true on success, false if parameter not found
+;;; ctrl-set -- Set a named parameter on a synth controller (with warping).
+;;;
+;;; Parameters:
+;;;   ctrl -- A SynthController map.
+;;;   param_name -- Name of the parameter to set.
+;;;   value -- User-space value (will be clamped and warped before sending).
+;;;
+;;; Returns:
+;;;   true if the parameter was found and set, false otherwise.
+;;;
+;;; Example:
+;;;   (ctrl-set ctrl "freq" 880.0)
 (defn ctrl-set [ctrl param_name value]
   (let [param (find-param (:spec ctrl) param_name)]
     (if param
@@ -213,11 +281,17 @@
           false))
       false)))
 
-;; Set multiple parameters by name on a synth controller
-;;
-;; @param ctrl Target controller
-;; @param param-map Map of parameter name -> value
-;; @return Number of successfully set parameters
+;;; ctrl-set-multi -- Set multiple named parameters on a controller.
+;;;
+;;; Parameters:
+;;;   ctrl -- A SynthController map.
+;;;   param-map -- Map of parameter name -> user-space value.
+;;;
+;;; Returns:
+;;;   Number of parameters successfully set.
+;;;
+;;; Example:
+;;;   (ctrl-set-multi ctrl {"freq" 880.0 "amp" 0.6})  ; => 2
 (defn ctrl-set-multi [ctrl param-map]
   (let [count 0]
     (for [[param_name value] param-map]
@@ -225,14 +299,20 @@
         (set! count (inc count))))
     count))
 
-;; Get a parameter value by name from a synth controller
-;;
-;; Note: This requires reading back from scsynth, which is not yet
-;; implemented in the hcsynth C API. For now, we track the last set value.
-;;
-;; @param ctrl Target controller
-;; @param param_name Parameter name
-;; @return Current value in user space, or nil if not found
+;;; ctrl-get -- Get the current value for a named parameter (returns spec default).
+;;;
+;;; Note: Live readback from scsynth is not yet supported; this returns the
+;;; default value from the ParamSpec. Future versions may query scsynth directly.
+;;;
+;;; Parameters:
+;;;   ctrl -- A SynthController map.
+;;;   param_name -- Parameter name to look up.
+;;;
+;;; Returns:
+;;;   Default value from the ParamSpec, or nil if the parameter is not found.
+;;;
+;;; Example:
+;;;   (ctrl-get ctrl "freq")  ; => 440.0 (spec default)
 (defn ctrl-get [ctrl param_name]
   ;; For now, return the default value from the spec
   ;; In future, this could query the actual value from scsynth
@@ -244,20 +324,55 @@
 ;; Parameter Conversion Utilities
 ;; ============================================================================
 
-;; Convert MIDI note to frequency
-;; Same as msg/midi->hz but included here for convenience
+;;; midi->hz -- Convert a MIDI note number to frequency in Hz.
+;;;
+;;; Parameters:
+;;;   note -- MIDI note number (69 = A4 = 440 Hz).
+;;;
+;;; Returns:
+;;;   Frequency in Hz as a float.
+;;;
+;;; Example:
+;;;   (midi->hz 69)  ; => 440.0
 (defn midi->hz [note]
   (* 440.0 (math/pow 2.0 (/ (- note 69.0) 12.0))))
 
-;; Convert velocity (0-127) to amplitude (0-1)
+;;; vel->amp -- Convert a MIDI velocity to linear amplitude.
+;;;
+;;; Parameters:
+;;;   vel -- MIDI velocity (0-127).
+;;;
+;;; Returns:
+;;;   Amplitude in [0.0, 1.0].
+;;;
+;;; Example:
+;;;   (vel->amp 64)  ; => ~0.504
 (defn vel->amp [vel]
   (/ vel 127.0))
 
-;; Convert dB to amplitude
+;;; db->amp -- Convert a decibel level to linear amplitude.
+;;;
+;;; Parameters:
+;;;   db -- Level in decibels.
+;;;
+;;; Returns:
+;;;   Linear amplitude as a float.
+;;;
+;;; Example:
+;;;   (db->amp -6.0)  ; => ~0.501
 (defn db->amp [db]
   (math/pow 10.0 (/ db 20.0)))
 
-;; Convert amplitude to dB
+;;; amp->db -- Convert linear amplitude to decibels.
+;;;
+;;; Parameters:
+;;;   amp -- Linear amplitude (0.0 or below returns -90.0).
+;;;
+;;; Returns:
+;;;   Level in decibels.
+;;;
+;;; Example:
+;;;   (amp->db 0.5)  ; => ~-6.02
 (defn amp->db [amp]
   (if (> amp 0)
     (* 20.0 (math/log10 amp))

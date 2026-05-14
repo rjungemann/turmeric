@@ -36,29 +36,84 @@
    value :T
    error :ScscmError])
 
-;; Create a success result
+;;; ok -- Create a successful result wrapping a value.
+;;;
+;;; Parameters:
+;;;   value -- The success value to wrap.
+;;;
+;;; Returns:
+;;;   ScscmResult with ok=true and the given value.
+;;;
+;;; Example:
+;;;   (ok 42)  ; => {:ok true :value 42 :error :ok}
 (defn ok <T> [value]
   {:ok true :value value :error :ok})
 
-;; Create an error result
+;;; err -- Create a failed result with an error tag.
+;;;
+;;; Parameters:
+;;;   error -- A ScscmError keyword describing the failure.
+;;;
+;;; Returns:
+;;;   ScscmResult with ok=false and no value.
+;;;
+;;; Example:
+;;;   (err :send-failed)  ; => {:ok false :value nil :error :send-failed}
 (defn err [error]
   {:ok false :value nil :error error})
 
-;; Check if a result is OK
+;;; result-ok? -- Check whether a result represents success.
+;;;
+;;; Parameters:
+;;;   result -- A ScscmResult map.
+;;;
+;;; Returns:
+;;;   true if the result is successful, false otherwise.
+;;;
+;;; Example:
+;;;   (result-ok? (ok 1))  ; => true
 (defn result-ok? [result]
   (:ok result))
 
-;; Check if a result is an error
+;;; result-err? -- Check whether a result represents an error.
+;;;
+;;; Parameters:
+;;;   result -- A ScscmResult map.
+;;;
+;;; Returns:
+;;;   true if the result is an error, false otherwise.
+;;;
+;;; Example:
+;;;   (result-err? (err :timeout))  ; => true
 (defn result-err? [result]
   (not (:ok result)))
 
-;; Get the value from a result or panic
+;;; result-unwrap -- Extract the value from a result, panicking on error.
+;;;
+;;; Parameters:
+;;;   result -- A ScscmResult map.
+;;;
+;;; Returns:
+;;;   The wrapped value if ok, otherwise panics with the error tag.
+;;;
+;;; Example:
+;;;   (result-unwrap (ok 7))  ; => 7
 (defn result-unwrap [result]
   (if (:ok result)
     (:value result)
     (panic (str "Unwrapped error result: " (:error result)))))
 
-;; Get the value from a result or return default
+;;; result-unwrap-or -- Extract the value from a result, returning a default on error.
+;;;
+;;; Parameters:
+;;;   result -- A ScscmResult map.
+;;;   default -- Value to return when the result is an error.
+;;;
+;;; Returns:
+;;;   The wrapped value if ok, otherwise default.
+;;;
+;;; Example:
+;;;   (result-unwrap-or (err :timeout) 0)  ; => 0
 (defn result-unwrap-or [result default]
   (if (:ok result)
     (:value result)
@@ -68,25 +123,37 @@
 ;; Safe FFI Wrappers
 ;; ============================================================================
 
-;; Wrap hcsynth world creation with error handling
-;;
-;; @param sample_rate Sample rate in Hz
-;; @param block_size Block size in samples
-;; @return Result<WorldHandle, ScscmError>
+;;; safe-world-create -- Create a hcsynth world with error handling.
+;;;
+;;; Parameters:
+;;;   sample_rate -- Sample rate in Hz.
+;;;   block_size -- Block size in samples.
+;;;
+;;; Returns:
+;;;   ScscmResult wrapping the WorldHandle on success, or :connection-failed.
+;;;
+;;; Example:
+;;;   (safe-world-create 48000 512)  ; => {:ok true :value <handle> ...}
 (defn safe-world-create [sample_rate block_size]
   (let [world_id (ffi/hc_wasm_world_create sample_rate block_size)]
     (if (== world_id 0)
       (err :connection-failed)
       (ok world_id))))
 
-;; Wrap synth creation with error handling
-;;
-;; @param world_id Target world
-;; @param synthdef_name SynthDef name
-;; @param node_id Node ID
-;; @param action Add action
-;; @param target_id Target node ID
-;; @return Result<NodeID, ScscmError>
+;;; safe-synth-new -- Create a synth node with error handling.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;   synthdef_name -- SynthDef name to instantiate.
+;;;   node_id -- Node ID to assign.
+;;;   action -- Add action (e.g. ADD_TO_TAIL).
+;;;   target_id -- Target node ID.
+;;;
+;;; Returns:
+;;;   ScscmResult wrapping the NodeID on success, or an error keyword.
+;;;
+;;; Example:
+;;;   (safe-synth-new w "mySynth" 1001 2 1)
 (defn safe-synth-new [world_id synthdef_name node_id action target_id]
   (if (== world_id 0)
     (err :invalid-world-id)
@@ -95,13 +162,19 @@
         (ok node_id)
         (err :send-failed)))))
 
-;; Wrap synth parameter setting with error handling
-;;
-;; @param world_id Target world
-;; @param node_id Target node
-;; @param control_index Control index
-;; @param value Value to set
-;; @return Result<(), ScscmError>
+;;; safe-synth-set -- Set a synth control parameter with error handling.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;   node_id -- Target node ID.
+;;;   control_index -- Zero-based control index.
+;;;   value -- Value to set.
+;;;
+;;; Returns:
+;;;   ScscmResult wrapping nil on success, or :control-index-out-of-range.
+;;;
+;;; Example:
+;;;   (safe-synth-set w 1001 0 440.0)
 (defn safe-synth-set [world_id node_id control_index value]
   (if (== world_id 0)
     (err :invalid-world-id)
@@ -110,11 +183,17 @@
         (ok nil)
         (err :control-index-out-of-range)))))
 
-;; Wrap synth freeing with error handling
-;;
-;; @param world_id Target world
-;; @param node_id Node ID to free
-;; @return Result<(), ScscmError>
+;;; safe-synth-free -- Free a synth node with error handling.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;   node_id -- Node ID to free.
+;;;
+;;; Returns:
+;;;   ScscmResult wrapping nil on success, or :synth-not-found.
+;;;
+;;; Example:
+;;;   (safe-synth-free w 1001)
 (defn safe-synth-free [world_id node_id]
   (if (== world_id 0)
     (err :invalid-world-id)
@@ -123,12 +202,18 @@
         (ok nil)
         (err :synth-not-found)))))
 
-;; Wrap SynthDef loading with error handling
-;;
-;; @param world_id Target world
-;; @param synthdef_data SynthDef bytecode
-;; @param synthdef_name Optional name
-;; @return Result<(), ScscmError>
+;;; safe-synthdef-load -- Load a SynthDef from binary data with error handling.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;   synthdef_data -- SynthDef bytecode as slice<uint8>.
+;;;   synthdef_name -- Optional name override; nil uses the embedded name.
+;;;
+;;; Returns:
+;;;   ScscmResult wrapping nil on success, or :invalid-synthdef.
+;;;
+;;; Example:
+;;;   (safe-synthdef-load w my-bytes "mySynth")
 (defn safe-synthdef-load [world_id synthdef_data & [synthdef_name nil]]
   (if (== world_id 0)
     (err :invalid-world-id)
@@ -139,10 +224,16 @@
         (ok nil)
         (err :invalid-synthdef)))))
 
-;; Wrap world destruction with error handling
-;;
-;; @param world_id World to destroy
-;; @return Result<(), ScscmError>
+;;; safe-world-destroy -- Destroy a hcsynth world with error handling.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle to destroy.
+;;;
+;;; Returns:
+;;;   ScscmResult wrapping nil on success, or :world-not-found.
+;;;
+;;; Example:
+;;;   (safe-world-destroy w)
 (defn safe-world-destroy [world_id]
   (if (== world_id 0)
     (err :invalid-world-id)
@@ -164,13 +255,19 @@
    max-failures :int
    on-reconnect :(fn [] :void)])
 
-;; Create a new connection monitor
-;;
-;; @param world_id World to monitor
-;; @param ping-interval-seconds How often to ping (default: 5)
-;; @param max-failures Max consecutive failures before reconnect (default: 3)
-;; @param on-reconnect Callback to run on reconnect attempt
-;; @return ConnectionMonitor
+;;; connection-monitor-new -- Create a connection health monitor for a world.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle to monitor.
+;;;   ping-interval-seconds -- How often to ping, in seconds (default: 5).
+;;;   max-failures -- Max consecutive failures before triggering reconnect (default: 3).
+;;;   on-reconnect -- Callback invoked when a reconnect is attempted.
+;;;
+;;; Returns:
+;;;   A ConnectionMonitor map.
+;;;
+;;; Example:
+;;;   (connection-monitor-new w 5 3 (fn [] (println "reconnecting")))
 (defn connection-monitor-new [world_id & [ping-interval-seconds 5
                                            max-failures 3
                                            on-reconnect (fn [])]]
@@ -183,18 +280,24 @@
      :max-failures max-failures
      :on-reconnect on-reconnect}))
 
-;; Check connection health
-;;
-;; @param monitor Connection monitor
-;; @param current-samples Current time in samples
-;; @return true if connection is healthy
+;;; check-connection -- Poll connection health and trigger reconnect when needed.
+;;;
+;;; Parameters:
+;;;   monitor -- A ConnectionMonitor map.
+;;;   current-samples -- Current time in samples.
+;;;
+;;; Returns:
+;;;   true if the connection appears healthy.
+;;;
+;;; Example:
+;;;   (check-connection mon (now-samples state))
 (defn check-connection [monitor current-samples]
   (let [elapsed (- current-samples (:last-ping-time monitor))]
     (when (>= elapsed (:ping-interval-samples monitor))
       (let [result (ffi/hc_wasm_get_status (:world-id monitor) nil 0)]
         (if (>= result 0)
           (do
-            (set! monitor (assoc monitor 
+            (set! monitor (assoc monitor
                            :last-ping-time current-samples
                            :consecutive-failures 0))
             true)
@@ -205,20 +308,22 @@
               false)
             true))))))
 
-;; Attempt to reconnect
-;;
-;; @param monitor Connection monitor
+;;; reconnect -- Attempt to reconnect by invoking the monitor's callback.
+;;;
+;;; Parameters:
+;;;   monitor -- A ConnectionMonitor map.
 (defn reconnect [monitor]
   (println "Attempting to reconnect...")
   ;; In a real implementation, this would attempt to recreate the world
   ;; and reload synths. For now, just call the callback.
   ((:on-reconnect monitor)))
 
-;; Reset connection monitor
-;;
-;; @param monitor Connection monitor
+;;; connection-monitor-reset -- Reset ping time and failure count on a monitor.
+;;;
+;;; Parameters:
+;;;   monitor -- A ConnectionMonitor map.
 (defn connection-monitor-reset [monitor]
-  (set! monitor (assoc monitor 
+  (set! monitor (assoc monitor
                  :last-ping-time 0
                  :consecutive-failures 0)))
 
@@ -231,18 +336,30 @@
   [next-id :int32
    freed-ids :(vec<int32>) ])
 
-;; Create a new node ID pool
-;;
-;; @param start Starting node ID (default: DEFAULT_NODE_ID_START)
-;; @return NodeIDPool
+;;; node-id-pool-new -- Create a node ID pool starting at a given ID.
+;;;
+;;; Parameters:
+;;;   start -- First node ID to allocate (default: DEFAULT_NODE_ID_START).
+;;;
+;;; Returns:
+;;;   A NodeIDPool map.
+;;;
+;;; Example:
+;;;   (node-id-pool-new 1000)
 (defn node-id-pool-new [& [start types/DEFAULT_NODE_ID_START]]
   {:next-id start
    :freed-ids []})
 
-;; Allocate a node ID, reusing freed ones if available
-;;
-;; @param pool Node ID pool
-;; @return Allocated node ID
+;;; node-id-pool-alloc -- Allocate a node ID, reusing freed IDs when available.
+;;;
+;;; Parameters:
+;;;   pool -- A NodeIDPool map.
+;;;
+;;; Returns:
+;;;   An integer node ID unique within this pool.
+;;;
+;;; Example:
+;;;   (node-id-pool-alloc pool)  ; => 1000
 (defn node-id-pool-alloc [pool]
   (if (not (empty? (:freed-ids pool)))
     (let [id (first (:freed-ids pool))]
@@ -252,10 +369,14 @@
       (set! pool (update pool :next-id inc))
       id)))
 
-;; Free a node ID back to the pool
-;;
-;; @param pool Node ID pool
-;; @param id Node ID to free
+;;; node-id-pool-free -- Return a node ID to the pool for later reuse.
+;;;
+;;; Parameters:
+;;;   pool -- A NodeIDPool map.
+;;;   id -- Node ID to release.
+;;;
+;;; Example:
+;;;   (node-id-pool-free pool 1003)
 (defn node-id-pool-free [pool id]
   (set! pool (update pool :freed-ids conj id)))
 
@@ -263,13 +384,19 @@
 ;; Retry Utilities
 ;; ============================================================================
 
-;; Retry a function with exponential backoff
-;;
-;; @param fn Function to retry
-;; @param max-attempts Maximum number of attempts (default: 3)
-;; @param initial-delay Initial delay in samples (default: 1 block = block_size)
-;; @param max-delay Maximum delay in samples (default: 10 blocks)
-;; @return Result<T, ScscmError> from the function
+;;; retry-with-backoff -- Retry a thunk with exponential backoff on failure.
+;;;
+;;; Parameters:
+;;;   fn -- Zero-argument function that returns a ScscmResult.
+;;;   max-attempts -- Maximum number of attempts (default: 3).
+;;;   initial-delay -- Initial delay in samples (default: 512).
+;;;   max-delay -- Maximum delay cap in samples (default: 5120).
+;;;
+;;; Returns:
+;;;   The first successful ScscmResult, or an error result after all attempts.
+;;;
+;;; Example:
+;;;   (retry-with-backoff (fn [] (safe-synth-new ...)) 3)
 (defn retry-with-backoff [fn & [max-attempts 3
                                 initial-delay 512
                                 max-delay 5120]]
@@ -291,19 +418,44 @@
 ;; Validation Utilities
 ;; ============================================================================
 
-;; Validate world ID
+;;; valid-world-id? -- Return true if world_id is a valid non-zero handle.
+;;;
+;;; Parameters:
+;;;   world_id -- Candidate world handle.
+;;;
+;;; Returns:
+;;;   true if valid, false otherwise.
 (defn valid-world-id? [world_id]
   (and (not (== world_id 0)) (not (nil? world_id))))
 
-;; Validate node ID
+;;; valid-node-id? -- Return true if node_id is a valid non-zero node ID.
+;;;
+;;; Parameters:
+;;;   node_id -- Candidate node ID.
+;;;
+;;; Returns:
+;;;   true if valid, false otherwise.
 (defn valid-node-id? [node_id]
   (and (not (== node_id 0)) (not (nil? node_id))))
 
-;; Validate control index
+;;; valid-control-index? -- Return true if a control index is within range.
+;;;
+;;; Parameters:
+;;;   index -- Zero-based control index to check.
+;;;   num-controls -- Total number of controls on the synth.
+;;;
+;;; Returns:
+;;;   true if 0 <= index < num-controls.
 (defn valid-control-index? [index num-controls]
   (and (>= index 0) (< index num-controls)))
 
-;; Validate SynthDef name
+;;; valid-synthdef-name? -- Return true if a SynthDef name is non-nil and non-empty.
+;;;
+;;; Parameters:
+;;;   name -- Candidate SynthDef name string.
+;;;
+;;; Returns:
+;;;   true if the name can be used for lookup, false otherwise.
 (defn valid-synthdef-name? [name]
   (and (not (nil? name)) (not (== name ""))))
 
@@ -311,11 +463,17 @@
 ;; Safe Session Operations
 ;; ============================================================================
 
-;; Create a session with error handling
-;;
-;; @param sample_rate Audio sample rate
-;; @param block_size Audio block size
-;; @return Result<ScscmSession, ScscmError>
+;;; safe-session-new -- Create a session with error handling.
+;;;
+;;; Parameters:
+;;;   sample_rate -- Audio sample rate in Hz.
+;;;   block_size -- Audio block size in samples.
+;;;
+;;; Returns:
+;;;   ScscmResult wrapping a new ScscmSession map on success.
+;;;
+;;; Example:
+;;;   (safe-session-new 48000 512)
 (defn safe-session-new [sample_rate block_size]
   (let [result (safe-world-create sample_rate block_size)]
     (if (result-ok? result)
@@ -325,12 +483,18 @@
            :synthdef-specs {}})
       result)))
 
-;; Safe synth creation in session
-;;
-;; @param session Session
-;; @param synthdef_name SynthDef name
-;; @param params Parameter map
-;; @return Result<NodeID, ScscmError>
+;;; safe-session-synth-new -- Create a synth inside a session with error handling.
+;;;
+;;; Parameters:
+;;;   session -- An active ScscmSession map.
+;;;   synthdef_name -- Name of the SynthDef to instantiate.
+;;;   params -- Optional initial parameter map (control_index -> value).
+;;;
+;;; Returns:
+;;;   ScscmResult wrapping the new NodeID on success.
+;;;
+;;; Example:
+;;;   (safe-session-synth-new sess "mySynth" {0 440.0})
 (defn safe-session-synth-new [session synthdef_name & [params {}]]
   (let [node-id (node-id-pool-alloc (:node-allocator session))]
     (let [result (safe-synth-new (:world-id session) synthdef_name node-id
@@ -347,11 +511,17 @@
           (ok node-id))
         (err (:error result))))))
 
-;; Safe synth freeing in session
-;;
-;; @param session Session
-;; @param node_id Node ID to free
-;; @return Result<(), ScscmError>
+;;; safe-session-synth-free -- Free a synth inside a session with error handling.
+;;;
+;;; Parameters:
+;;;   session -- An active ScscmSession map.
+;;;   node_id -- Node ID to free.
+;;;
+;;; Returns:
+;;;   ScscmResult wrapping nil on success, or an error keyword.
+;;;
+;;; Example:
+;;;   (safe-session-synth-free sess 1001)
 (defn safe-session-synth-free [session node_id]
   (when-let [synthdef_name (get (:active-synths session) node_id)]
     (let [result (safe-synth-free (:world-id session) node_id)]

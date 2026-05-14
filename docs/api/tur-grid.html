@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tur/tur/grid | Turmeric API</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand">turmeric</span>
+  <nav>
+    <a href="index.html">API Docs</a>
+    <a href="../autodoc-plan.md">Plan</a>
+  </nav>
+</header>
+<div class="page-layout">
+<div class="sidebar">
+  <h3>Exported</h3>
+  <ul>
+    <li><a href="#grid-new">grid-new</a></li>
+    <li><a href="#grid-get">grid-get</a></li>
+    <li><a href="#grid-set">grid-set</a></li>
+    <li><a href="#grid-focus">grid-focus</a></li>
+    <li><a href="#grid-width">grid-width</a></li>
+    <li><a href="#grid-height">grid-height</a></li>
+    <li><a href="#grid-cx">grid-cx</a></li>
+    <li><a href="#grid-cy">grid-cy</a></li>
+    <li><a href="#grid-clone">grid-clone</a></li>
+    <li><a href="#grid-count-neighbors">grid-count-neighbors</a></li>
+    <li><a href="#grid-print">grid-print</a></li>
+    <li><a href="#Comonad_gridctx_">Comonad[gridctx]</a></li>
+  </ul>
+  <h3>Internal</h3>
+  <ul>
+    <li><a href="#__gridctx_extend" style="color:var(--faint)">__gridctx_extend</a></li>
+  </ul>
+</div>
+<div class="content">
+  <div class="module-heading">
+    <h1>tur/grid</h1>
+    <div class="module-path">stdlib/grid.tur</div>
+  </div>
+<div class="def-card" id="grid-new">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>grid-new</h2>
+  </div>
+  <pre class="def-signature">(grid-new [width height] :int)</pre>
+  <p class="def-summary">allocate a zero-filled width x height GridCtx; focus starts at (0, 0).</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>width</td><td></td><td>number of columns</td></tr>
+    <tr><td>height</td><td></td><td>number of rows</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase CA2</p>
+</div>
+<div class="def-card" id="grid-get">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>grid-get</h2>
+  </div>
+  <pre class="def-signature">(grid-get [g x y] :int)</pre>
+  <p class="def-summary">read the cell value at (x, y); returns 0 for out-of-bounds coordinates.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>g</td><td></td><td>GridCtx handle from grid-new</td></tr>
+    <tr><td>x</td><td></td><td>column index (0-based)</td></tr>
+    <tr><td>y</td><td></td><td>row index (0-based)</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase CA2</p>
+</div>
+<div class="def-card" id="grid-set">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>grid-set</h2>
+  </div>
+  <pre class="def-signature">(grid-set [g x y val] :int)</pre>
+  <p class="def-summary">write val into cell (x, y) in-place; no-op if out of bounds.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>g</td><td></td><td>GridCtx handle from grid-new</td></tr>
+    <tr><td>x</td><td></td><td>column index (0-based)</td></tr>
+    <tr><td>y</td><td></td><td>row index (0-based)</td></tr>
+    <tr><td>val</td><td></td><td>value to store</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase CA2</p>
+</div>
+<div class="def-card" id="grid-focus">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>grid-focus</h2>
+  </div>
+  <pre class="def-signature">(grid-focus [g] :int)</pre>
+  <p class="def-summary">return the cell value at the current focus position (cx, cy).</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>g</td><td></td><td>GridCtx handle from grid-new</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase CA2</p>
+</div>
+<div class="def-card" id="grid-width">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>grid-width</h2>
+  </div>
+  <pre class="def-signature">(grid-width [g] :int)</pre>
+  <p class="def-summary">return the number of columns in the grid.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>g</td><td></td><td>GridCtx handle from grid-new</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase CA2</p>
+</div>
+<div class="def-card" id="grid-height">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>grid-height</h2>
+  </div>
+  <pre class="def-signature">(grid-height [g] :int)</pre>
+  <p class="def-summary">return the number of rows in the grid.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>g</td><td></td><td>GridCtx handle from grid-new</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase CA2</p>
+</div>
+<div class="def-card" id="grid-cx">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>grid-cx</h2>
+  </div>
+  <pre class="def-signature">(grid-cx [g] :int)</pre>
+  <p class="def-summary">return the current focus column index.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>g</td><td></td><td>GridCtx handle from grid-new</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase CA2</p>
+</div>
+<div class="def-card" id="grid-cy">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>grid-cy</h2>
+  </div>
+  <pre class="def-signature">(grid-cy [g] :int)</pre>
+  <p class="def-summary">return the current focus row index.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>g</td><td></td><td>GridCtx handle from grid-new</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase CA2</p>
+</div>
+<div class="def-card" id="grid-clone">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>grid-clone</h2>
+  </div>
+  <pre class="def-signature">(grid-clone [g] :int)</pre>
+  <p class="def-summary">deep-copy a grid, allocating a new GCtx and data array; cx/cy are preserved.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>g</td><td></td><td>GridCtx handle to clone</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase CA2</p>
+</div>
+<div class="def-card" id="grid-count-neighbors">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>grid-count-neighbors</h2>
+  </div>
+  <pre class="def-signature">(grid-count-neighbors [g] :int)</pre>
+  <p class="def-summary">count live (non-zero) Moore 8-neighbours at the current focus.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>g</td><td></td><td>GridCtx handle; uses cx/cy as the center cell</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase CA2</p>
+</div>
+<div class="def-card" id="grid-print">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>grid-print</h2>
+  </div>
+  <pre class="def-signature">(grid-print [g] :int)</pre>
+  <p class="def-summary">print the grid to stdout as ASCII art (&#x27;#&#x27; = live, &#x27;.&#x27; = dead).</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>g</td><td></td><td>GridCtx handle from grid-new</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase CA2</p>
+</div>
+<div class="def-card" id="Comonad_gridctx_">
+  <div class="def-card-header">
+    <span class="kind-badge kind-definstance">definstance</span>
+    <h2>Comonad[gridctx]</h2>
+  </div>
+  <pre class="def-signature">(definstance Comonad [gridctx])</pre>
+  <p class="def-summary">Comonad instance for GridCtx (extract/extend/duplicate).</p>
+  <p class="def-since">Since: Phase CA2</p>
+</div>
+<details class="internal-section">
+  <summary>Internal definitions</summary>
+  <div class="internal-list">
+  <div class="internal-item" id="__gridctx_extend"><code>__gridctx_extend</code><span class="internal-item-summary">-- comonad extend: produce a new grid by applying fn to each focused sub-grid.</span></div>
+  </div>
+</details>
+</div>
+</div>
+<footer class="site-footer">
+  Auto-generated by <code>tools/gendocs.py</code>.
+  Do not edit by hand -- run <code>just docs</code> to regenerate.
+</footer>
+</body>
+</html>

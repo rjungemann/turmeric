@@ -1,42 +1,64 @@
 ;; Phase 15: Typeclasses
 ;; Built-in typeclasses: Eq, Ord, Show, Num
 
+;;; Eq -- typeclass for equality comparison.
+;;;
+;;; Parameters:
+;;;   a -- the type to compare
+;;;
+;;; Since: Phase 15
 ;; Eq typeclass - equality comparison
 (defclass Eq [a]
   (eq? [x y] :bool))
 
 ;; Instances for primitive types
+;;; Eq [int] -- Eq instance for int.
 (definstance Eq [int]
   (eq? [x y] (= x y)))
 
+;;; Eq [bool] -- Eq instance for bool.
 (definstance Eq [bool]
   (eq? [x y] (= x y)))
 
 ;; Phase N4: Eq instances for new numeric types
+;;; Eq [int8] -- Eq instance for int8.
 (definstance Eq [int8]
   (eq? [x y] (= x y)))
 
+;;; Eq [int16] -- Eq instance for int16.
 (definstance Eq [int16]
   (eq? [x y] (= x y)))
 
+;;; Eq [int32] -- Eq instance for int32.
 (definstance Eq [int32]
   (eq? [x y] (= x y)))
 
+;;; Eq [uint8] -- Eq instance for uint8.
 (definstance Eq [uint8]
   (eq? [x y] (= x y)))
 
+;;; Eq [uint16] -- Eq instance for uint16.
 (definstance Eq [uint16]
   (eq? [x y] (= x y)))
 
+;;; Eq [uint32] -- Eq instance for uint32.
 (definstance Eq [uint32]
   (eq? [x y] (= x y)))
 
+;;; Eq [uint64] -- Eq instance for uint64.
 (definstance Eq [uint64]
   (eq? [x y] (= x y)))
 
+;;; Eq [float32] -- Eq instance for float32.
 (definstance Eq [float32]
   (eq? [x y] (= x y)))
 
+;;; Ord -- typeclass for total ordering.
+;;;
+;;; Parameters:
+;;;   a -- the type to order
+;;;
+;;; Since: Phase 15
 ;; Ord typeclass - ordering
 (defclass Ord [a]
   (lt? [x y] :bool)
@@ -45,6 +67,7 @@
   (gte? [x y] :bool))
 
 ;; Instances for primitive types
+;;; Ord [int] -- Ord instance for int.
 (definstance Ord [int]
   (lt? [x y] (< x y))
   (lte? [x y] (<= x y))
@@ -52,90 +75,127 @@
   (gte? [x y] (>= x y)))
 
 ;; Phase N4: Ord instances for new numeric types
+;;; Ord [int8] -- Ord instance for int8.
 (definstance Ord [int8]
   (lt? [x y] (< x y))
   (lte? [x y] (<= x y))
   (gt? [x y] (> x y))
   (gte? [x y] (>= x y)))
 
+;;; Ord [int16] -- Ord instance for int16.
 (definstance Ord [int16]
   (lt? [x y] (< x y))
   (lte? [x y] (<= x y))
   (gt? [x y] (> x y))
   (gte? [x y] (>= x y)))
 
+;;; Ord [int32] -- Ord instance for int32.
 (definstance Ord [int32]
   (lt? [x y] (< x y))
   (lte? [x y] (<= x y))
   (gt? [x y] (> x y))
   (gte? [x y] (>= x y)))
 
+;;; Ord [uint8] -- Ord instance for uint8.
 (definstance Ord [uint8]
   (lt? [x y] (< x y))
   (lte? [x y] (<= x y))
   (gt? [x y] (> x y))
   (gte? [x y] (>= x y)))
 
+;;; Ord [uint16] -- Ord instance for uint16.
 (definstance Ord [uint16]
   (lt? [x y] (< x y))
   (lte? [x y] (<= x y))
   (gt? [x y] (> x y))
   (gte? [x y] (>= x y)))
 
+;;; Ord [uint32] -- Ord instance for uint32.
 (definstance Ord [uint32]
   (lt? [x y] (< x y))
   (lte? [x y] (<= x y))
   (gt? [x y] (> x y))
   (gte? [x y] (>= x y)))
 
+;;; Ord [uint64] -- Ord instance for uint64.
 (definstance Ord [uint64]
   (lt? [x y] (< x y))
   (lte? [x y] (<= x y))
   (gt? [x y] (> x y))
   (gte? [x y] (>= x y)))
 
+;;; Ord [float32] -- Ord instance for float32.
 (definstance Ord [float32]
   (lt? [x y] (< x y))
   (lte? [x y] (<= x y))
   (gt? [x y] (> x y))
   (gte? [x y] (>= x y)))
 
+;;; Show -- typeclass for string representation.
+;;;
+;;; Parameters:
+;;;   a -- the type to render
+;;;
+;;; Returns:
+;;;   A :cstr human-readable string.
+;;;
+;;; Since: Phase 15
 ;; Show typeclass - string representation
 (defclass Show [a]
   (show [x] :cstr))
 
 ;; Instances for primitive types
+;;; Show [int] -- Show instance for int.
 (definstance Show [int]
   (show [x] :cstr "<int>"))
 
+;;; Show [cstr] -- Show instance for cstr (identity).
 (definstance Show [cstr]
   (show [x] x))
 
 ;; Phase N4: Show instances for new numeric types (placeholder, same as int)
+;;; Show [int8] -- Show instance for int8.
 (definstance Show [int8]
   (show [x] :cstr "<int8>"))
 
+;;; Show [int16] -- Show instance for int16.
 (definstance Show [int16]
   (show [x] :cstr "<int16>"))
 
+;;; Show [int32] -- Show instance for int32.
 (definstance Show [int32]
   (show [x] :cstr "<int32>"))
 
+;;; Show [uint8] -- Show instance for uint8.
 (definstance Show [uint8]
   (show [x] :cstr "<uint8>"))
 
+;;; Show [uint16] -- Show instance for uint16.
 (definstance Show [uint16]
   (show [x] :cstr "<uint16>"))
 
+;;; Show [uint32] -- Show instance for uint32.
 (definstance Show [uint32]
   (show [x] :cstr "<uint32>"))
 
+;;; Show [uint64] -- Show instance for uint64.
 (definstance Show [uint64]
   (show [x] :cstr "<uint64>"))
 
+;;; Show [float32] -- Show instance for float32.
 (definstance Show [float32]
   (show [x] :cstr "<float32>"))
 
+;;; Num -- typeclass for numeric arithmetic.
+;;;
+;;; Parameters:
+;;;   a -- the numeric type
+;;;
+;;; Returns:
+;;;   Results are typed as :int (int64_t) in v1; specific numeric types
+;;;   are handled by each instance.
+;;;
+;;; Since: Phase 15
 ;; Num typeclass - numeric operations
 (defclass Num [a]
   (add [x y] :int)
@@ -145,6 +205,7 @@
   (neg [x] :int))
 
 ;; Instance for int
+;;; Num [int] -- Num instance for int.
 (definstance Num [int]
   (add [x y] (+ x y))
   (sub [x y] (- x y))
@@ -153,6 +214,7 @@
   (neg [x] (- 0 x)))
 
 ;; Phase N4: Num instances for new numeric types
+;;; Num [int8] -- Num instance for int8.
 (definstance Num [int8]
   (add [x y] (+ x y))
   (sub [x y] (- x y))
@@ -160,6 +222,7 @@
   (div [x y] (/ x y))
   (neg [x] (- 0i8 x)))
 
+;;; Num [int16] -- Num instance for int16.
 (definstance Num [int16]
   (add [x y] (+ x y))
   (sub [x y] (- x y))
@@ -167,6 +230,7 @@
   (div [x y] (/ x y))
   (neg [x] (- 0i16 x)))
 
+;;; Num [int32] -- Num instance for int32.
 (definstance Num [int32]
   (add [x y] (+ x y))
   (sub [x y] (- x y))
@@ -174,6 +238,7 @@
   (div [x y] (/ x y))
   (neg [x] (- 0i32 x)))
 
+;;; Num [uint8] -- Num instance for uint8.
 (definstance Num [uint8]
   (add [x y] (+ x y))
   (sub [x y] (- x y))
@@ -181,6 +246,7 @@
   (div [x y] (/ x y))
   (neg [x] (- 0u8 x)))
 
+;;; Num [uint16] -- Num instance for uint16.
 (definstance Num [uint16]
   (add [x y] (+ x y))
   (sub [x y] (- x y))
@@ -188,6 +254,7 @@
   (div [x y] (/ x y))
   (neg [x] (- 0u16 x)))
 
+;;; Num [uint32] -- Num instance for uint32.
 (definstance Num [uint32]
   (add [x y] (+ x y))
   (sub [x y] (- x y))
@@ -195,6 +262,7 @@
   (div [x y] (/ x y))
   (neg [x] (- 0u32 x)))
 
+;;; Num [uint64] -- Num instance for uint64.
 (definstance Num [uint64]
   (add [x y] (+ x y))
   (sub [x y] (- x y))
@@ -202,6 +270,7 @@
   (div [x y] (/ x y))
   (neg [x] (- 0u64 x)))
 
+;;; Num [float32] -- Num instance for float32.
 (definstance Num [float32]
   (add [x y] (+ x y))
   (sub [x y] (- x y))
@@ -209,42 +278,65 @@
   (div [x y] (/ x y))
   (neg [x] (- 0.0f32 x)))
 
+;;; Clone -- typeclass for deep copying a value.
+;;;
+;;; Parameters:
+;;;   a -- the type to clone
+;;;
+;;; Returns:
+;;;   A copy of x; for primitive types this is the identity.
+;;;
+;;; Example:
+;;;   (clone 42)  ; => 42
+;;;
+;;; Since: Phase B1
 ;; Phase B1: Clone typeclass - deep copy of a value
 (defclass Clone [a]
   (clone [x] :int))
 
 ;; Clone instances for primitive types
+;;; Clone [int] -- Clone instance for int (trivial copy).
 (definstance Clone [int]
   (clone [x] x))
 
+;;; Clone [bool] -- Clone instance for bool (trivial copy).
 (definstance Clone [bool]
   (clone [x] x))
 
+;;; Clone [cstr] -- Clone instance for cstr (trivial copy).
 (definstance Clone [cstr]
   (clone [x] x))
 
 ;; Phase N4: Clone instances for new numeric types (all are trivially copyable)
+;;; Clone [int8] -- Clone instance for int8 (trivial copy).
 (definstance Clone [int8]
   (clone [x] x))
 
+;;; Clone [int16] -- Clone instance for int16 (trivial copy).
 (definstance Clone [int16]
   (clone [x] x))
 
+;;; Clone [int32] -- Clone instance for int32 (trivial copy).
 (definstance Clone [int32]
   (clone [x] x))
 
+;;; Clone [uint8] -- Clone instance for uint8 (trivial copy).
 (definstance Clone [uint8]
   (clone [x] x))
 
+;;; Clone [uint16] -- Clone instance for uint16 (trivial copy).
 (definstance Clone [uint16]
   (clone [x] x))
 
+;;; Clone [uint32] -- Clone instance for uint32 (trivial copy).
 (definstance Clone [uint32]
   (clone [x] x))
 
+;;; Clone [uint64] -- Clone instance for uint64 (trivial copy).
 (definstance Clone [uint64]
   (clone [x] x))
 
+;;; Clone [float32] -- Clone instance for float32 (trivial copy).
 (definstance Clone [float32]
   (clone [x] x))
 
@@ -257,12 +349,30 @@
 ;; parameterised type system.  Callers may cast the result to the concrete
 ;; container pointer type using inline C or ptr<void> helpers.
 
+;;; Functor -- map a function over a container without changing its shape.
+;;;
+;;; Parameters:
+;;;   ^f -- the type constructor (kind * -> *)
+;;;
+;;; Returns:
+;;;   A new container of the same shape with transformed elements (:int pointer).
+;;;
+;;; Since: Phase HKT H3
 ;; Functor — map a function over a container without changing its shape.
 ;;   fmap :: (a -> b) -> f a -> f b
 ;;   In v1: fmap [container fn] :int  (int64_t holds the result pointer)
 (defclass Functor [^f]
   (fmap [container fn] :int))
 
+;;; Applicative -- container with a pure constructor and ap combinator.
+;;;
+;;; Parameters:
+;;;   ^f -- the type constructor (kind * -> *)
+;;;
+;;; Returns:
+;;;   pure returns a wrapped value; ap applies wrapped functions (:int pointer).
+;;;
+;;; Since: Phase HKT H3
 ;; Applicative — container with a pure constructor and ap combinator.
 ;;   pure :: a -> f a
 ;;   ap   :: f (a -> b) -> f a -> f b
@@ -270,11 +380,29 @@
   (pure [x] :int)
   (ap [ff fa] :int))
 
+;;; Monad -- typeclass for sequencing computations with bind.
+;;;
+;;; Parameters:
+;;;   ^m -- the type constructor (kind * -> *)
+;;;
+;;; Returns:
+;;;   bind chains a monadic value with a continuation (:int pointer).
+;;;
+;;; Since: Phase HKT H3
 ;; Monad — sequencing with flatMap/bind.
 ;;   bind :: m a -> (a -> m b) -> m b
 (defclass Monad [^m]
   (bind [ma fn] :int))
 
+;;; Foldable -- reduce a container to a summary value.
+;;;
+;;; Parameters:
+;;;   ^t -- the type constructor (kind * -> *)
+;;;
+;;; Returns:
+;;;   foldl and foldr return an accumulated summary value (:int).
+;;;
+;;; Since: Phase HKT H3
 ;; Foldable — reduce a container to a summary value.
 ;;   foldl :: b -> (b -> a -> b) -> t a -> b
 ;;   foldr :: (a -> b -> b) -> b -> t a -> b
@@ -282,6 +410,15 @@
   (foldl [ta init fn] :int)
   (foldr [ta init fn] :int))
 
+;;; Traversable -- map with effects, collecting results.
+;;;
+;;; Parameters:
+;;;   ^t -- the type constructor (kind * -> *)
+;;;
+;;; Returns:
+;;;   traverse returns a container wrapped in an applicative effect (:int pointer).
+;;;
+;;; Since: Phase HKT H3
 ;; Traversable — map with effects, collecting results.
 ;;   traverse :: Applicative f => (a -> f b) -> t a -> f (t b)
 ;;   In v1: simplified to traverse [ta fn] :int
@@ -294,6 +431,16 @@
 ;;   empty :: f a           (the empty/zero value)
 ;;   alt-or :: f a -> f a -> f a   (combine two alternatives)
 ;; In v1: empty [a] :int (a is a type witness for dispatch, ignored by impl) and alt-or [a b] :int
+
+;;; Alternative -- typeclass for containers with an empty value and choice.
+;;;
+;;; Parameters:
+;;;   ^f -- the type constructor (kind * -> *)
+;;;
+;;; Returns:
+;;;   empty returns the zero/empty container; alt-or combines two alternatives (:int pointer).
+;;;
+;;; Since: Phase HKT H7
 (defclass Alternative [^f]
   (empty [a] :int)
   (alt-or [a b] :int))
@@ -303,19 +450,56 @@
 ;;   The canonical signature is:
 ;;     bimap :: (a -> c) -> (b -> d) -> f a b -> f c d
 ;;   In v1: simplified to bimap [container fn-left fn-right] :int
+
+;;; Bifunctor -- map over both sides of a binary type constructor.
+;;;
+;;; Parameters:
+;;;   ^^f -- the type constructor (kind * -> * -> *)
+;;;
+;;; Returns:
+;;;   bimap returns a new container with both sides transformed (:int pointer).
+;;;
+;;; Since: Phase HKT H5
 (defclass Bifunctor [^^f]
   (bimap [container fn-left fn-right] :int))
 
 
+;;; Display -- typeclass for human-readable string formatting.
+;;;
+;;; Parameters:
+;;;   a -- the type to display
+;;;
+;;; Returns:
+;;;   A :cstr suitable for end-user output.
+;;;
+;;; Since: Phase R0
 ;; Phase R0: Display and Debug typeclasses for formatting
 ;; Display - human-readable string representation (like Rust's Display)
 (defclass Display [a]
   (display [x] :cstr))
 
+;;; Debug -- typeclass for debug string formatting.
+;;;
+;;; Parameters:
+;;;   a -- the type to debug-print
+;;;
+;;; Returns:
+;;;   A :cstr suitable for diagnostic output.
+;;;
+;;; Since: Phase R0
 ;; Debug - debug string representation (like Rust's Debug)
 (defclass Debug [a]
   (debug [x] :cstr))
 
+;;; Error -- typeclass for types that represent errors.
+;;;
+;;; Parameters:
+;;;   a -- the error type
+;;;
+;;; Returns:
+;;;   error-message returns a :cstr description; error-cause returns a :ptr<void> cause or NULL.
+;;;
+;;; Since: Phase R0
 ;; Phase R0: Error typeclass (extends Show)
 ;; Error - for types that represent errors
 (defclass Error [a]
@@ -323,12 +507,15 @@
   (error-cause [x] :ptr<void>))
 
 ;; Instances for primitive types (Display/Debug)
+;;; Display [int] -- Display instance for int.
 (definstance Display [int]
   (display [x] :cstr "<int>"))
 
+;;; Debug [int] -- Debug instance for int.
 (definstance Debug [int]
   (debug [x] :cstr "<int>"))
 
+;;; Display [ptr<void>] -- Display instance for result<T,E> represented as ptr<void>.
 ;; Phase R1: Display, Debug, Error instances for result<T, E>
 ;; In v1, result is represented as ptr<void>
 (definstance Display [ptr<void>]
@@ -344,6 +531,7 @@
     }
     ```))
 
+;;; Debug [ptr<void>] -- Debug instance for result<T,E> represented as ptr<void>.
 (definstance Debug [ptr<void>]
   (debug [x] :cstr
     ```c
@@ -356,6 +544,7 @@
     }
     ```))
 
+;;; Error [ptr<void>] -- Error instance for result<T,E> represented as ptr<void>.
 (definstance Error [ptr<void>]
   (error-message [x] :cstr
     ```c
@@ -374,14 +563,33 @@
     return NULL;
     ```))
 
+;;; From -- typeclass for value conversion from type A to type B.
+;;;
+;;; Parameters:
+;;;   a -- the source type
+;;;   b -- the target type
+;;;
+;;; Returns:
+;;;   The converted value as :int (int64_t holds pointers in v1).
+;;;
+;;; Since: Phase R0
 ;; Phase R0: From/Into conversion typeclasses
 ;; From[A B] - conversion from A to B
 ;; Note: return type is :int (int64_t holds pointers in v1)
 (defclass From [a b]
   (from [x] :int))
 
+;;; Into -- typeclass for value conversion from type A to type B (derived from From).
+;;;
+;;; Parameters:
+;;;   a -- the source type
+;;;   b -- the target type
+;;;
+;;; Returns:
+;;;   The converted value as :int (int64_t holds pointers in v1).
+;;;
+;;; Since: Phase R0
 ;; Into[A B] - conversion from A to B (blanket derived from From[A B])
 (defclass Into [a b]
   (into [x] :int))
-
 

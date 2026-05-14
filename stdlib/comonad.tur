@@ -10,17 +10,29 @@
 ;; extend  :: (w a -> b) -> w a -> w b
 ;; duplicate :: w a -> w (w a)   (derived: extend id)
 
+;;; Comonad -- typeclass dual to Monad; supports extract and extend.
+;;;
+;;; Parameters:
+;;;   ^w -- the comonadic type constructor (kind * -> *)
+;;;
+;;; Returns:
+;;;   extract returns the focused value (:int); extend applies a function at
+;;;   every position and returns a new container (:int); duplicate wraps each
+;;;   position in its own context (:int).
+;;;
+;;; Since: Phase CA0
 (defclass Comonad [^w]
   (extract   [wa]     :int)
   (extend    [wa fn]  :int)
   (duplicate [wa]     :int))
 
-;; ── Identity comonad ────────────────────────────────────────────────────────
+;; -- Identity comonad ────────────────────────────────────────────────────────
 ;; Identity w a = Identity a
 ;; Represented as a heap-allocated { int64_t value; } struct.
 ;; extract (Identity a) = a
 ;; extend f (Identity a) = Identity (f (Identity a))
 
+;;; __identity_new -- allocate a new Identity comonad cell wrapping x.
 (defn __identity_new [x] :int
   ```c
   int64_t *p = malloc(sizeof(int64_t));
@@ -28,18 +40,21 @@
   return (int64_t)(intptr_t)p;
   ```)
 
+;;; __identity_get -- read the value stored in an Identity comonad cell.
 (defn __identity_get [wa] :int
   ```c
   int64_t *p = (int64_t *)(intptr_t)wa;
   return *p;
   ```)
 
+;;; __identity_extract -- extract the value from an Identity comonad cell.
 (defn __identity_extract [wa] :int
   ```c
   int64_t *p = (int64_t *)(intptr_t)wa;
   return *p;
   ```)
 
+;;; __identity_extend -- apply fn to the Identity cell and wrap the result.
 (defn __identity_extend [wa fn] :int
   ```c
   /* extend f w = Identity (f w) */
@@ -49,6 +64,7 @@
   return (int64_t)(intptr_t)p;
   ```)
 
+;;; __identity_duplicate -- wrap an Identity cell inside another Identity cell.
 (defn __identity_duplicate [wa] :int
   ```c
   /* duplicate w = Identity w   (the outer Identity wraps the original) */
@@ -57,17 +73,19 @@
   return (int64_t)(intptr_t)p;
   ```)
 
+;;; Comonad [identity] -- Comonad instance for the Identity comonad.
 (definstance Comonad [identity]
   (extract   [wa]    (__identity_extract wa))
   (extend    [wa fn] (__identity_extend wa fn))
   (duplicate [wa]    (__identity_duplicate wa)))
 
-;; ── Pair (Product) comonad ──────────────────────────────────────────────────
+;; -- Pair (Product) comonad ──────────────────────────────────────────────────
 ;; Pair e a = (e, a)   — carries a fixed environment e alongside a value a.
 ;; Represented as { int64_t env; int64_t val; }.
 ;; extract (e, a) = a
 ;; extend f (e, a) = (e, f (e, a))
 
+;;; __pair_new -- allocate a new Pair comonad cell with environment and value.
 (defn __pair_new [env val] :int
   ```c
   struct { int64_t env; int64_t val; } *p = malloc(sizeof(*p));
@@ -76,6 +94,7 @@
   return (int64_t)(intptr_t)p;
   ```)
 
+;;; __pair_env -- read the environment component of a Pair comonad cell.
 (defn __pair_env [wa] :int
   ```c
   struct { int64_t env; int64_t val; } *p =
@@ -83,6 +102,7 @@
   return p->env;
   ```)
 
+;;; __pair_val -- read the value component of a Pair comonad cell.
 (defn __pair_val [wa] :int
   ```c
   struct { int64_t env; int64_t val; } *p =
@@ -90,6 +110,7 @@
   return p->val;
   ```)
 
+;;; __pair_extract -- extract the value from a Pair comonad cell.
 (defn __pair_extract [wa] :int
   ```c
   struct { int64_t env; int64_t val; } *p =
@@ -97,6 +118,7 @@
   return p->val;
   ```)
 
+;;; __pair_extend -- extend over a Pair cell: (e, a) -> (e, f (e, a)).
 (defn __pair_extend [wa fn] :int
   ```c
   /* extend f (e, a) = (e, f (e, a)) */
@@ -109,6 +131,7 @@
   return (int64_t)(intptr_t)p;
   ```)
 
+;;; __pair_duplicate -- duplicate a Pair cell: (e, a) -> (e, (e, a)).
 (defn __pair_duplicate [wa] :int
   ```c
   /* duplicate (e, a) = (e, (e, a)) */
@@ -120,6 +143,7 @@
   return (int64_t)(intptr_t)p;
   ```)
 
+;;; Comonad [pair] -- Comonad instance for the Pair (product) comonad.
 (definstance Comonad [pair]
   (extract   [wa]    (__pair_extract wa))
   (extend    [wa fn] (__pair_extend wa fn))

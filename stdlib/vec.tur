@@ -1,6 +1,15 @@
 ;; Vec type for Turmeric
 ;; Growable owning array
 
+;;; vec-new -- allocate a new empty vec.
+;;;
+;;; Returns:
+;;;   Pointer to an empty vec with len=0 and cap=0.
+;;;
+;;; Example:
+;;;   (vec-new)  ; => <vec ptr>
+;;;
+;;; Since: Phase B1
 ;; Create a new empty vec
 (defn vec-new []
   ```c
@@ -11,6 +20,18 @@
   return v;
   ```)
 
+;;; vec-len -- return the number of elements in a vec.
+;;;
+;;; Parameters:
+;;;   v -- vec pointer returned by vec-new
+;;;
+;;; Returns:
+;;;   Number of elements currently in the vec.
+;;;
+;;; Example:
+;;;   (vec-len my-vec)  ; => 3
+;;;
+;;; Since: Phase B1
 ;; Get vec length - v is a pointer from vec-new
 (defn vec-len [v] :int
   ```c
@@ -18,6 +39,19 @@
   return (int)vec->len;
   ```)
 
+;;; vec-get -- return the element at index i (bounds-checked).
+;;;
+;;; Parameters:
+;;;   v -- vec pointer
+;;;   i -- zero-based index
+;;;
+;;; Returns:
+;;;   The int64_t element stored at index i.
+;;;
+;;; Example:
+;;;   (vec-get my-vec 0)  ; => <element>
+;;;
+;;; Since: Phase B1
 ;; Get element at index (bounds-checked)
 (defn vec-get [v i] :int
   ```c
@@ -28,6 +62,16 @@
   return 0;
   ```)
 
+;;; vec-push! -- append a value to the end of a vec, growing storage as needed.
+;;;
+;;; Parameters:
+;;;   v   -- vec pointer
+;;;   val -- value to append
+;;;
+;;; Example:
+;;;   (vec-push! my-vec 42)
+;;;
+;;; Since: Phase B1
 ;; Push an element to the vec
 (defn vec-push! [v val]
   ```c
@@ -43,6 +87,18 @@
   vec->data[vec->len++] = val;
   ```)
 
+;;; vec-pop! -- remove and return the last element of a vec.
+;;;
+;;; Parameters:
+;;;   v -- vec pointer (must be non-empty)
+;;;
+;;; Returns:
+;;;   The int64_t element that was at the last position.
+;;;
+;;; Example:
+;;;   (vec-pop! my-vec)  ; => <last element>
+;;;
+;;; Since: Phase B1
 ;; Pop an element from the vec
 (defn vec-pop! [v] :int
   ```c
@@ -54,6 +110,15 @@
   return (int)vec->data[--vec->len];
   ```)
 
+;;; vec-free -- free a vec and its backing data buffer.
+;;;
+;;; Parameters:
+;;;   v -- vec pointer to free
+;;;
+;;; Example:
+;;;   (vec-free my-vec)
+;;;
+;;; Since: Phase B1
 ;; Free the vec and its data
 (defn vec-free [v]
   ```c
@@ -62,6 +127,7 @@
   free(vec);
   ```)
 
+;;; __functor_vec_fmap -- apply fn to every element and return a new vec.
 ;;; SINCE: Phase HKT H3
 ;; Functor instance for vec — apply fn to every element, return a new vec.
 (defn __functor_vec_fmap [container fn] :int
@@ -80,9 +146,11 @@
   return (int64_t)(intptr_t)r;
   ```)
 
+;;; Functor [vec] -- fmap applies a function to every element, returning a new vec.
 (definstance Functor [vec]
   (fmap [container fn] (__functor_vec_fmap container fn)))
 
+;;; __foldable_vec_foldl -- strict left fold over a vec.
 ;; Foldable instance for vec.
 ;;   foldl :: (b -> a -> b) -> b -> t a -> b   (left fold, strict)
 ;;   foldr :: (a -> b -> b) -> b -> t a -> b   (right fold)
@@ -98,6 +166,7 @@
   return acc;
   ```)
 
+;;; __foldable_vec_foldr -- right fold over a vec.
 (defn __foldable_vec_foldr [ta init fn] :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v =
@@ -110,10 +179,12 @@
   return acc;
   ```)
 
+;;; Foldable [vec] -- foldl and foldr fold a vec with an accumulator function.
 (definstance Foldable [vec]
   (foldl [ta init fn] (__foldable_vec_foldl ta init fn))
   (foldr [ta init fn] (__foldable_vec_foldr ta init fn)))
 
+;;; __applicative_vec_pure -- wrap a single value in a one-element vec.
 ;; Applicative instance for vec.
 ;;   pure x = [x]
 ;;   ap [f1, f2, ...] [x1, x2, ...] = [f1 x1, f1 x2, ..., f2 x1, f2 x2, ...]
@@ -128,6 +199,7 @@
   return (int64_t)(intptr_t)v;
   ```)
 
+;;; __applicative_vec_ap -- apply a vec of functions to a vec of values (cartesian product).
 (defn __applicative_vec_ap [ff fa] :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *fv =
@@ -153,10 +225,12 @@
   return (int64_t)(intptr_t)r;
   ```)
 
+;;; Applicative [vec] -- pure wraps a value; ap applies each function to each value.
 (definstance Applicative [vec]
   (pure [x] (__applicative_vec_pure x))
   (ap [ff fa] (__applicative_vec_ap ff fa)))
 
+;;; __monad_vec_concat -- flatten a vec of vecs into a single vec.
 ;; Monad instance for vec.
 ;;   bind [a1, a2, ...] f = concat [f a1, f a2, ...]
 ;;   where concat flattens a vec of vecs
@@ -191,6 +265,7 @@
   return (int64_t)(intptr_t)r;
   ```)
 
+;;; __monad_vec_bind -- map fn over each element and flatten the resulting vec of vecs.
 (defn __monad_vec_bind [ma fn] :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v =
@@ -209,9 +284,11 @@
   return __monad_vec_concat((int64_t)(intptr_t)mapped);
   ```)
 
+;;; Monad [vec] -- bind maps fn over each element and flattens the results.
 (definstance Monad [vec]
   (bind [ma fn] (__monad_vec_bind ma fn)))
 
+;;; __traversable_vec_traverse -- map fn over each element, collecting results into a new vec.
 ;; Traversable instance for vec.
 ;; traverse :: Applicative f => (a -> f b) -> vec a -> f (vec b)
 ;; For vec as traversable:
@@ -245,9 +322,11 @@
   return (int64_t)(intptr_t)mapped;
   ```)
 
+;;; Traversable [vec] -- traverse maps an effectful function over a vec, collecting results.
 (definstance Traversable [vec]
   (traverse [ta fn] (__traversable_vec_traverse ta fn)))
 
+;;; __alternative_vec_empty -- return a new empty vec (the zero element for alt-or).
 ;; Alternative instance for vec.
 ;;   empty = []
 ;;   alt-or a b = concat [a b] (concatenate the two vecs)
@@ -261,13 +340,29 @@
   return (int64_t)(intptr_t)v;
   ```)
 
+;;; __alternative_vec_alt_or -- return the concat function for two vecs.
 (defn __alternative_vec_alt_or [a b] :int
   __monad_vec_concat)
 
+;;; Alternative [vec] -- empty returns []; alt-or concatenates two vecs.
 (definstance Alternative [vec]
   (empty [_] (__alternative_vec_empty))
   (alt-or [a b] (__alternative_vec_alt_or a b)))
 
+;;; vec-eq? -- compare two vecs element-wise using a comparator function.
+;;;
+;;; Parameters:
+;;;   v1     -- first vec pointer
+;;;   v2     -- second vec pointer
+;;;   cmp-fn -- comparator fn [a :int b :int] :bool applied to each element pair
+;;;
+;;; Returns:
+;;;   true if both vecs have the same length and all element pairs satisfy cmp-fn.
+;;;
+;;; Example:
+;;;   (vec-eq? va vb (fn [a b] (= a b)))  ; => true
+;;;
+;;; Since: Phase E1
 ;; Phase E1: vec-eq? -- compare two vecs element-wise using a comparator fn.
 ;; cmp-fn must be a fn [a :int b :int] :bool
 (defn vec-eq? [v1 v2 cmp-fn] :bool
@@ -287,9 +382,11 @@
   return true;
   ```)
 
+;;; Eq [vec] -- eq? compares two vecs using integer equality on each element.
 (definstance Eq [vec]
   (eq? [x y] (vec-eq? x y (fn [a b] (= a b)))))
 
+;;; __clone_vec_clone -- deep-copy a vec and all its int64_t elements.
 ;; Phase B1: Clone instance for vec
 ;; Deep copies the vec struct and all its elements (v1: int64_t only)
 (defn __clone_vec_clone [x] :int
@@ -308,5 +405,6 @@
   return (int64_t)(intptr_t)r;
   ```)
 
+;;; Clone [vec] -- clone deep-copies the vec struct and all its elements.
 (definstance Clone [vec]
   (clone [x] (__clone_vec_clone x)))

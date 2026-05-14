@@ -1,4 +1,4 @@
-;; stdlib/tidal/transform.tur — Value Transformation Combinators
+;; stdlib/tidal/transform.tur -- Value Transformation Combinators
 ;;
 ;; This module provides combinators that transform pattern values
 ;; (arithmetic, randomness, waveforms, envelopes, etc.).
@@ -10,41 +10,59 @@
 ;; Numeric Arithmetic Transformations
 ;; ============================================================================
 
-;; Add a constant or pattern to a numeric pattern
-;;
-;; @param p Numeric pattern
-;; @param amount Constant or NumPattern to add
-;; @return NumPattern that returns p + amount
+;;; add -- add a constant or pattern to a numeric pattern.
+;;;
+;;; Parameters:
+;;;   p      -- base NumPattern
+;;;   amount -- constant float or NumPattern to add
+;;;
+;;; Returns:
+;;;   NumPattern returning p(t) + amount.
+;;;
+;;; Example:
+;;;   ((add my-pat 1.0) 0.5)
 (defn add [p amount]
   (fn [time]
     (let [amt (if (float? amount) amount (amount time))]
       (+ (p time) amt))))
 
-;; Subtract a constant or pattern from a numeric pattern
-;;
-;; @param p Numeric pattern
-;; @param amount Constant or NumPattern to subtract
-;; @return NumPattern that returns p - amount
+;;; sub -- subtract a constant or pattern from a numeric pattern.
+;;;
+;;; Parameters:
+;;;   p      -- base NumPattern
+;;;   amount -- constant float or NumPattern to subtract
+;;;
+;;; Returns:
+;;;   NumPattern returning p(t) - amount.
 (defn sub [p amount]
   (fn [time]
     (let [amt (if (float? amount) amount (amount time))]
       (- (p time) amt))))
 
-;; Multiply a numeric pattern by a constant or pattern
-;;
-;; @param p Numeric pattern
-;; @param factor Constant or NumPattern to multiply by
-;; @return NumPattern that returns p * factor
+;;; mul -- multiply a numeric pattern by a constant or pattern.
+;;;
+;;; Parameters:
+;;;   p      -- base NumPattern
+;;;   factor -- constant float or NumPattern
+;;;
+;;; Returns:
+;;;   NumPattern returning p(t) * factor.
+;;;
+;;; Example:
+;;;   ((mul my-pat 0.5) 0.5)  ; halve the values
 (defn mul [p factor]
   (fn [time]
     (let [f (if (float? factor) factor (factor time))]
       (* (p time) f))))
 
-;; Divide a numeric pattern by a constant or pattern
-;;
-;; @param p Numeric pattern
-;; @param divisor Constant or NumPattern to divide by
-;; @return NumPattern that returns p / divisor
+;;; div -- divide a numeric pattern by a constant or pattern.
+;;;
+;;; Parameters:
+;;;   p       -- base NumPattern
+;;;   divisor -- constant float or NumPattern (returns 0 if divisor is zero)
+;;;
+;;; Returns:
+;;;   NumPattern returning p(t) / divisor.
 (defn div [p divisor]
   (fn [time]
     (let [d (if (float? divisor) divisor (divisor time))]
@@ -56,14 +74,20 @@
 ;; Range Mapping
 ;; ============================================================================
 
-;; Map a numeric pattern from one range to another
-;;
-;; @param p Numeric pattern
-;; @param from-low Lower bound of input range
-;; @param from-high Upper bound of input range
-;; @param to-low Lower bound of output range
-;; @param to-high Upper bound of output range
-;; @return NumPattern with values mapped to new range
+;;; range -- map pattern values from one range to another.
+;;;
+;;; Parameters:
+;;;   p         -- NumPattern with input values
+;;;   from-low  -- lower bound of input range
+;;;   from-high -- upper bound of input range
+;;;   to-low    -- lower bound of output range
+;;;   to-high   -- upper bound of output range
+;;;
+;;; Returns:
+;;;   NumPattern with values linearly mapped and clamped to [to-low, to-high].
+;;;
+;;; Example:
+;;;   ((range my-pat 0.0 1.0 440.0 880.0) 0.5)  ; => 660.0
 (defn range [p from-low from-high to-low to-high]
   (fn [time]
     (let [v (p time)
@@ -75,22 +99,28 @@
               clamped (math/clamp normalized 0.0 1.0)]
           (+ to-low (* clamped output-range)))))))
 
-;; Clamp a numeric pattern to a range
-;;
-;; @param p Numeric pattern
-;; @param low Minimum value (inclusive)
-;; @param high Maximum value (inclusive)
-;; @return NumPattern with values clamped to [low, high]
+;;; clamp -- clamp pattern values to [low, high].
+;;;
+;;; Parameters:
+;;;   p    -- NumPattern
+;;;   low  -- minimum output value
+;;;   high -- maximum output value
+;;;
+;;; Returns:
+;;;   NumPattern with values clamped.
 (defn clamp [p low high]
   (fn [time]
     (math/clamp (p time) low high)))
 
-;; Normalize a numeric pattern to [0, 1]
-;;
-;; @param p Numeric pattern
-;; @param min Expected minimum value
-;; @param max Expected maximum value
-;; @return NumPattern with values normalized to [0, 1]
+;;; normalize -- map pattern values to [0, 1].
+;;;
+;;; Parameters:
+;;;   p   -- NumPattern
+;;;   min -- expected minimum of p
+;;;   max -- expected maximum of p
+;;;
+;;; Returns:
+;;;   NumPattern with values normalised to [0, 1].
 (defn normalize [p min max]
   (range p min max 0.0 1.0))
 
@@ -98,21 +128,27 @@
 ;; Modulo and Wrapping
 ;; ============================================================================
 
-;; Apply modulo to a numeric pattern
-;;
-;; @param p Numeric pattern
-;; @param mod Modulo value
-;; @return NumPattern with values wrapped to [0, mod)
+;;; mod-pat -- apply modulo to pattern values.
+;;;
+;;; Parameters:
+;;;   p   -- NumPattern
+;;;   mod -- modulo divisor
+;;;
+;;; Returns:
+;;;   NumPattern with values wrapped to [0, mod).
 (defn mod-pat [p mod]
   (fn [time]
     (mod (p time) mod)))
 
-;; Wrap a numeric pattern to a range
-;;
-;; @param p Numeric pattern
-;; @param low Lower bound of range
-;; @param high Upper bound of range
-;; @return NumPattern with values wrapped to [low, high]
+;;; wrap -- wrap pattern values to stay within [low, high].
+;;;
+;;; Parameters:
+;;;   p    -- NumPattern
+;;;   low  -- lower bound
+;;;   high -- upper bound
+;;;
+;;; Returns:
+;;;   NumPattern with values wrapped into [low, high].
 (defn wrap [p low high]
   (let [range (- high low)]
     (fn [time]
@@ -127,36 +163,48 @@
 ;; Exponential and Logarithmic
 ;; ============================================================================
 
-;; Apply exponential to a numeric pattern
-;;
-;; @param p Numeric pattern
-;; @return NumPattern with exp(p)
+;;; exp-pat -- apply exp() to pattern values.
+;;;
+;;; Parameters:
+;;;   p -- NumPattern (values in radians or raw)
+;;;
+;;; Returns:
+;;;   NumPattern with e^p(t).
 (defn exp-pat [p]
   (fn [time]
     (math/exp (p time))))
 
-;; Apply logarithm to a numeric pattern
-;;
-;; @param p Numeric pattern
-;; @param base Base of logarithm (default: math/E)
-;; @return NumPattern with log_base(p)
+;;; log-pat -- apply logarithm to pattern values.
+;;;
+;;; Parameters:
+;;;   p    -- NumPattern (must be > 0)
+;;;   base -- logarithm base (default: math/E)
+;;;
+;;; Returns:
+;;;   NumPattern with log_base(p(t)).
 (defn log-pat [p & [base math/E]]
   (fn [time]
     (math/log (p time) base)))
 
-;; Power transformation
-;;
-;; @param p Numeric pattern
-;; @param exponent Exponent
-;; @return NumPattern with p^exponent
+;;; pow-pat -- raise pattern values to a constant exponent.
+;;;
+;;; Parameters:
+;;;   p        -- NumPattern (base)
+;;;   exponent -- power to raise to
+;;;
+;;; Returns:
+;;;   NumPattern with p(t)^exponent.
 (defn pow-pat [p exponent]
   (fn [time]
     (math/pow (p time) exponent)))
 
-;; Square root transformation
-;;
-;; @param p Numeric pattern
-;; @return NumPattern with sqrt(p)
+;;; sqrt-pat -- square root of pattern values.
+;;;
+;;; Parameters:
+;;;   p -- NumPattern (values must be >= 0)
+;;;
+;;; Returns:
+;;;   NumPattern with sqrt(p(t)).
 (defn sqrt-pat [p]
   (fn [time]
     (math/sqrt (p time))))
@@ -165,26 +213,35 @@
 ;; Trigonometric Transformations
 ;; ============================================================================
 
-;; Apply sine to a numeric pattern
-;;
-;; @param p Numeric pattern (in radians)
-;; @return NumPattern with sin(p)
+;;; sin-pat -- apply sin() to pattern values.
+;;;
+;;; Parameters:
+;;;   p -- NumPattern in radians
+;;;
+;;; Returns:
+;;;   NumPattern with sin(p(t)).
 (defn sin-pat [p]
   (fn [time]
     (math/sin (p time))))
 
-;; Apply cosine to a numeric pattern
-;;
-;; @param p Numeric pattern (in radians)
-;; @return NumPattern with cos(p)
+;;; cos-pat -- apply cos() to pattern values.
+;;;
+;;; Parameters:
+;;;   p -- NumPattern in radians
+;;;
+;;; Returns:
+;;;   NumPattern with cos(p(t)).
 (defn cos-pat [p]
   (fn [time]
     (math/cos (p time))))
 
-;; Apply tangent to a numeric pattern
-;;
-;; @param p Numeric pattern (in radians)
-;; @return NumPattern with tan(p)
+;;; tan-pat -- apply tan() to pattern values.
+;;;
+;;; Parameters:
+;;;   p -- NumPattern in radians
+;;;
+;;; Returns:
+;;;   NumPattern with tan(p(t)).
 (defn tan-pat [p]
   (fn [time]
     (math/tan (p time))))
@@ -193,22 +250,31 @@
 ;; Waveform Patterns
 ;; ============================================================================
 
-;; Sine wave pattern
-;;
-;; @param freq Frequency in cycles per beat (default: 1.0)
-;; @param amp Amplitude (default: 1.0)
-;; @param phase Phase offset in radians (default: 0.0)
-;; @return NumPattern that generates a sine wave
+;;; sine -- sine wave pattern oscillating at a given frequency.
+;;;
+;;; Parameters:
+;;;   freq  -- frequency in cycles per beat (default: 1.0)
+;;;   amp   -- amplitude (default: 1.0)
+;;;   phase -- phase offset in radians (default: 0.0)
+;;;
+;;; Returns:
+;;;   NumPattern generating values in [-amp, amp].
+;;;
+;;; Example:
+;;;   ((sine 0.5 1.0 0.0) 0.25)
 (defn sine [& [freq 1.0 amp 1.0 phase 0.0]]
   (fn [time]
     (* amp (math/sin (+ phase (* time freq math/PI 2.0))))))
 
-;; Square wave pattern
-;;
-;; @param freq Frequency in cycles per beat (default: 1.0)
-;; @param amp Amplitude (default: 1.0)
-;; @param duty Duty cycle (0-1, default: 0.5)
-;; @return NumPattern that generates a square wave
+;;; square -- square wave pattern.
+;;;
+;;; Parameters:
+;;;   freq -- frequency in cycles per beat (default: 1.0)
+;;;   amp  -- amplitude (default: 1.0)
+;;;   duty -- duty cycle (0-1, default: 0.5)
+;;;
+;;; Returns:
+;;;   NumPattern returning amp or -amp.
 (defn square [& [freq 1.0 amp 1.0 duty 0.5]]
   (fn [time]
     (let [phase (mod (* time freq) 1.0)]
@@ -216,20 +282,26 @@
         amp
         (- amp)))))
 
-;; Sawtooth wave pattern
-;;
-;; @param freq Frequency in cycles per beat (default: 1.0)
-;; @param amp Amplitude (default: 1.0)
-;; @return NumPattern that generates a sawtooth wave
+;;; saw -- sawtooth wave pattern.
+;;;
+;;; Parameters:
+;;;   freq -- frequency in cycles per beat (default: 1.0)
+;;;   amp  -- amplitude (default: 1.0)
+;;;
+;;; Returns:
+;;;   NumPattern descending from amp to 0 each cycle.
 (defn saw [& [freq 1.0 amp 1.0]]
   (fn [time]
     (* amp (- 1.0 (mod (* time freq) 1.0)))))
 
-;; Triangle wave pattern
-;;
-;; @param freq Frequency in cycles per beat (default: 1.0)
-;; @param amp Amplitude (default: 1.0)
-;; @return NumPattern that generates a triangle wave
+;;; tri -- triangle wave pattern.
+;;;
+;;; Parameters:
+;;;   freq -- frequency in cycles per beat (default: 1.0)
+;;;   amp  -- amplitude (default: 1.0)
+;;;
+;;; Returns:
+;;;   NumPattern rising and falling symmetrically within [-amp, amp].
 (defn tri [& [freq 1.0 amp 1.0]]
   (fn [time]
     (let [phase (mod (* time freq) 1.0)]
@@ -237,12 +309,15 @@
                (* 4.0 phase)
                (- 4.0 phase 2.0))))))
 
-;; Pulse wave pattern
-;;
-;; @param freq Frequency in cycles per beat (default: 1.0)
-;; @param amp Amplitude (default: 1.0)
-;; @param width Pulse width (0-1, default: 0.5)
-;; @return NumPattern that generates a pulse wave
+;;; pulse -- pulse wave pattern.
+;;;
+;;; Parameters:
+;;;   freq  -- frequency in cycles per beat (default: 1.0)
+;;;   amp   -- pulse height (default: 1.0)
+;;;   width -- pulse width 0-1 (default: 0.5)
+;;;
+;;; Returns:
+;;;   NumPattern returning amp during pulse, 0.0 otherwise.
 (defn pulse [& [freq 1.0 amp 1.0 width 0.5]]
   (fn [time]
     (let [phase (mod (* time freq) 1.0)]
@@ -254,11 +329,14 @@
 ;; Randomness and Noise
 ;; ============================================================================
 
-;; Add random jitter to a pattern
-;;
-;; @param p Pattern to add jitter to
-;; @param amount Maximum jitter amount
-;; @return Pattern<T> with random jitter added
+;;; jitter -- add random noise to pattern values.
+;;;
+;;; Parameters:
+;;;   p      -- base pattern
+;;;   amount -- maximum jitter magnitude added to each float value
+;;;
+;;; Returns:
+;;;   Pattern<T> with random perturbation added to numeric values.
 (defn jitter [p amount]
   (fn [time]
     (let [v (p time)]
@@ -266,10 +344,13 @@
         (+ v (* (rand-float) amount))
         v))))
 
-;; Randomly select from patterns at each evaluation
-;;
-;; @param patterns List of patterns to randomly select from
-;; @return Pattern<T> that randomly selects from patterns
+;;; rand-select -- randomly pick one of several patterns on each evaluation.
+;;;
+;;; Parameters:
+;;;   patterns -- patterns to choose from
+;;;
+;;; Returns:
+;;;   Pattern<T> delegating to a randomly selected sub-pattern each beat.
 (defn rand-select [& patterns]
   (let [vec-patterns (vec patterns)
         len (len vec-patterns)]
@@ -279,22 +360,27 @@
         (let [idx (rand-int len)]
           ((get vec-patterns idx) time))))))
 
-;; Randomly select from values at each evaluation
-;;
-;; @param values List of values to randomly select from
-;; @return Pattern<T> that randomly selects from values
+;;; rand-value -- randomly select a constant value on each evaluation.
+;;;
+;;; Parameters:
+;;;   values -- values to choose from
+;;;
+;;; Returns:
+;;;   Pattern<T>.
 (defn rand-value [& values]
   (pattern/rand-choice values...))
 
-;; White noise pattern
-;;
-;; @return NumPattern that returns random floats in [0, 1)
+;;; white-noise -- white noise pattern returning random floats in [0, 1).
+;;;
+;;; Returns:
+;;;   NumPattern with uniform random values.
 (defn white-noise []
   (pattern/rand-float))
 
-;; Pink noise pattern (approximation)
-;;
-;; @return NumPattern that returns pink noise values
+;;; pink-noise -- approximate pink noise pattern.
+;;;
+;;; Returns:
+;;;   NumPattern producing spectrally shaped noise.
 (defn pink-noise []
   (let [b0 0.0400760
         b1 0.0802569
@@ -311,7 +397,7 @@
             white4 (rand-float)
             white5 (rand-float)
             white6 (rand-float)
-            
+
             new-state (vec
                         (+ (* b0 white1) (* 0.9947114 (get state 0))
                         (+ (* b1 white2) (* 0.9696324 (get state 1)))
@@ -319,7 +405,7 @@
                         (+ (* b3 white4) (* 0.7788419 (get state 3)))
                         (+ (* b4 white5) (* 0.5695113 (get state 4)))
                         (+ (* b5 white6) (* 0.2959934 (get state 5)))
-                        (* b6 (get state 6)))]n      
+                        (* b6 (get state 6)))]n
         (set! state new-state)
         (+ (* 0.0158818 (get state 0))
            (* 0.0441182 (get state 1))
@@ -328,11 +414,14 @@
            (* 0.4859943 (get state 4))
            (* 0.9719887 (get state 5)))))))
 
-;; Perlin noise pattern (simplified approximation)
-;;
-;; @param scale Time scale (higher = more detail)
-;; @param offset Time offset
-;; @return NumPattern that generates Perlin noise
+;;; perlin-noise -- simplified Perlin-style noise pattern.
+;;;
+;;; Parameters:
+;;;   scale  -- time scale (higher = more detail, default: 1.0)
+;;;   offset -- time offset (default: 0.0)
+;;;
+;;; Returns:
+;;;   NumPattern with smooth random values.
 (defn perlin-noise [& [scale 1.0 offset 0.0]]
   (fn [time]
     (let [t (* scale (+ time offset))]
@@ -343,32 +432,41 @@
 ;; Envelope Patterns
 ;; ============================================================================
 
-;; ADSR envelope as a pattern
-;;
-;; @param attack Attack time in beats
-;; @param decay Decay time in beats
-;; @param sustain Sustain level (0-1)
-;; @param release Release time in beats
-;; @param gate BoolPattern for gate signal (default: const true)
-;; @return NumPattern that generates ADSR envelope values
+;;; adsr -- ADSR envelope pattern.
+;;;
+;;; Parameters:
+;;;   attack  -- attack time in beats
+;;;   decay   -- decay time in beats
+;;;   sustain -- sustain level (0-1)
+;;;   release -- release time in beats
+;;;   gate    -- BoolPattern for gate (default: const true)
+;;;
+;;; Returns:
+;;;   NumPattern producing ADSR envelope values.
+;;;
+;;; Example:
+;;;   ((adsr 0.1 0.2 0.7 0.3) 0.5)
 (defn adsr [attack decay sustain release & [gate (pattern/const true)]]
   (fn [time]
     (if (gate time)
       (let [t time]
         (cond
           (<= t attack) (/ t attack)
-          (<= t (+ attack decay)) 
+          (<= t (+ attack decay))
             (+ 1.0 (* -1.0 sustain (/ (- t attack) decay)))
           (<= t (+ attack decay release)) sustain
           :else (* sustain (/ (- (+ attack decay release) t) release))))
       0.0)))
 
-;; Simple attack-release envelope
-;;
-;; @param attack Attack time in beats
-;; @param release Release time in beats
-;; @param gate BoolPattern for gate signal (default: const true)
-;; @return NumPattern that generates AR envelope values
+;;; ar -- simple attack-release envelope pattern.
+;;;
+;;; Parameters:
+;;;   attack  -- attack time in beats
+;;;   release -- release time in beats
+;;;   gate    -- BoolPattern (default: const true)
+;;;
+;;; Returns:
+;;;   NumPattern.
 (defn ar [attack release & [gate (pattern/const true)]]
   (fn [time]
     (if (gate time)
@@ -378,22 +476,28 @@
           :else (- 1.0 (/ (- t attack) release))))
       0.0)))
 
-;; Exponential decay envelope
-;;
-;; @param decay Decay time constant in beats
-;; @param gate BoolPattern for gate signal (default: const true)
-;; @return NumPattern that generates exponential decay
+;;; decay-exp -- exponential decay envelope pattern.
+;;;
+;;; Parameters:
+;;;   decay -- time constant in beats
+;;;   gate  -- BoolPattern (default: const true)
+;;;
+;;; Returns:
+;;;   NumPattern returning e^(-t/decay).
 (defn decay-exp [decay & [gate (pattern/const true)]]
   (fn [time]
     (if (gate time)
       (math/exp (* -1.0 (/ time decay)))
       0.0)))
 
-;; Linear decay envelope
-;;
-;; @param decay Decay time in beats
-;; @param gate BoolPattern for gate signal (default: const true)
-;; @return NumPattern that generates linear decay
+;;; decay-lin -- linear decay envelope pattern.
+;;;
+;;; Parameters:
+;;;   decay -- decay duration in beats
+;;;   gate  -- BoolPattern (default: const true)
+;;;
+;;; Returns:
+;;;   NumPattern returning max(0, 1 - t/decay).
 (defn decay-lin [decay & [gate (pattern/const true)]]
   (fn [time]
     (if (gate time)
@@ -404,40 +508,52 @@
 ;; Bitwise Operations (for integer patterns)
 ;; ============================================================================
 
-;; Bitwise AND for integer patterns
-;;
-;; @param p1 First IntPattern
-;; @param p2 Second IntPattern or integer
-;; @return IntPattern with bitwise AND
+;;; and-bit -- bitwise AND of two integer patterns.
+;;;
+;;; Parameters:
+;;;   p1 -- first IntPattern
+;;;   p2 -- IntPattern or integer constant
+;;;
+;;; Returns:
+;;;   IntPattern with bitwise AND applied.
 (defn and-bit [p1 p2]
   (fn [time]
     (let [v2 (if (int? p2) p2 (p2 time))]
       (bit-and (p1 time) v2))))
 
-;; Bitwise OR for integer patterns
-;;
-;; @param p1 First IntPattern
-;; @param p2 Second IntPattern or integer
-;; @return IntPattern with bitwise OR
+;;; or-bit -- bitwise OR of two integer patterns.
+;;;
+;;; Parameters:
+;;;   p1 -- first IntPattern
+;;;   p2 -- IntPattern or integer constant
+;;;
+;;; Returns:
+;;;   IntPattern with bitwise OR applied.
 (defn or-bit [p1 p2]
   (fn [time]
     (let [v2 (if (int? p2) p2 (p2 time))]
       (bit-or (p1 time) v2))))
 
-;; Bitwise XOR for integer patterns
-;;
-;; @param p1 First IntPattern
-;; @param p2 Second IntPattern or integer
-;; @return IntPattern with bitwise XOR
+;;; xor-bit -- bitwise XOR of two integer patterns.
+;;;
+;;; Parameters:
+;;;   p1 -- first IntPattern
+;;;   p2 -- IntPattern or integer constant
+;;;
+;;; Returns:
+;;;   IntPattern with bitwise XOR applied.
 (defn xor-bit [p1 p2]
   (fn [time]
     (let [v2 (if (int? p2) p2 (p2 time))]
       (bit-xor (p1 time) v2))))
 
-;; Bitwise NOT for integer patterns
-;;
-;; @param p IntPattern
-;; @return IntPattern with bitwise NOT
+;;; not-bit -- bitwise NOT of an integer pattern.
+;;;
+;;; Parameters:
+;;;   p -- IntPattern
+;;;
+;;; Returns:
+;;;   IntPattern with bitwise NOT applied.
 (defn not-bit [p]
   (fn [time]
     (bit-not (p time))))
@@ -446,42 +562,60 @@
 ;; Rounding and Quantization
 ;; ============================================================================
 
-;; Floor a numeric pattern
-;;
-;; @param p NumPattern
-;; @return NumPattern with floor(p)
+;;; floor-pat -- floor each pattern value.
+;;;
+;;; Parameters:
+;;;   p -- NumPattern
+;;;
+;;; Returns:
+;;;   NumPattern with floor(p(t)).
 (defn floor-pat [p]
   (fn [time]
     (floor (p time))))
 
-;; Ceiling a numeric pattern
-;;
-;; @param p NumPattern
-;; @return NumPattern with ceil(p)
+;;; ceil-pat -- ceiling each pattern value.
+;;;
+;;; Parameters:
+;;;   p -- NumPattern
+;;;
+;;; Returns:
+;;;   NumPattern with ceil(p(t)).
 (defn ceil-pat [p]
   (fn [time]
     (ceil (p time))))
 
-;; Round a numeric pattern
-;;
-;; @param p NumPattern
-;; @return NumPattern with round(p)
+;;; round-pat -- round each pattern value to the nearest integer.
+;;;
+;;; Parameters:
+;;;   p -- NumPattern
+;;;
+;;; Returns:
+;;;   NumPattern with round(p(t)).
 (defn round-pat [p]
   (fn [time]
     (round (p time))))
 
-;; Quantize a numeric pattern to nearest integer
-;;
-;; @param p NumPattern
-;; @return NumPattern with quantized values
+;;; quantize-int -- quantize pattern values to nearest integer (alias for round-pat).
+;;;
+;;; Parameters:
+;;;   p -- NumPattern
+;;;
+;;; Returns:
+;;;   NumPattern.
 (defn quantize-int [p]
   (round-pat p))
 
-;; Quantize a numeric pattern to a specific step size
-;;
-;; @param p NumPattern
-;; @param step Step size
-;; @return NumPattern with values quantized to step multiples
+;;; quantize-step -- quantize pattern values to multiples of a step size.
+;;;
+;;; Parameters:
+;;;   p    -- NumPattern
+;;;   step -- quantization step size
+;;;
+;;; Returns:
+;;;   NumPattern with values snapped to step multiples.
+;;;
+;;; Example:
+;;;   ((quantize-step my-pat 0.25) 0.0)
 (defn quantize-step [p step]
   (fn [time]
     (* step (round (/ (p time) step)))))
@@ -490,28 +624,37 @@
 ;; String Transformations
 ;; ============================================================================
 
-;; Concatenate string patterns
-;;
-;; @param p1 First StrPattern
-;; @param p2 Second StrPattern or string
-;; @return StrPattern with concatenated strings
+;;; concat-str -- concatenate two string patterns.
+;;;
+;;; Parameters:
+;;;   p1 -- first StrPattern
+;;;   p2 -- StrPattern or string constant
+;;;
+;;; Returns:
+;;;   StrPattern with concatenated strings.
 (defn concat-str [p1 p2]
   (fn [time]
     (let [s2 (if (cstr? p2) p2 (p2 time))]
       (str/concat (p1 time) s2))))
 
-;; Uppercase string pattern
-;;
-;; @param p StrPattern
-;; @return StrPattern with uppercase strings
+;;; upper-pat -- convert string pattern values to uppercase.
+;;;
+;;; Parameters:
+;;;   p -- StrPattern
+;;;
+;;; Returns:
+;;;   StrPattern with uppercased values.
 (defn upper-pat [p]
   (fn [time]
     (str/upper (p time))))
 
-;; Lowercase string pattern
-;;
-;; @param p StrPattern
-;; @return StrPattern with lowercase strings
+;;; lower-pat -- convert string pattern values to lowercase.
+;;;
+;;; Parameters:
+;;;   p -- StrPattern
+;;;
+;;; Returns:
+;;;   StrPattern with lowercased values.
 (defn lower-pat [p]
   (fn [time]
     (str/lower (p time))))

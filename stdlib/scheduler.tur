@@ -1,16 +1,25 @@
-;; stdlib/scheduler.tur — Cooperative scheduler for fibers (Phase T21)
+;; stdlib/scheduler.tur -- Cooperative scheduler for fibers (Phase T21)
 ;;
 ;; The scheduler manages a queue of fibers and runs them cooperatively.
 ;; Fibers must yield control (via scheduler-yield) when they would block.
 ;;
 ;; API:
-;;   scheduler-new          []                           → ptr<void>
-;;   scheduler-current      []                           → ptr<void>
-;;   scheduler-spawn        [sched :ptr<void> f :ptr<void>] → nil
-;;   scheduler-run          [sched :ptr<void>]            → nil
-;;   scheduler-run-to-completion [sched :ptr<void>]    → nil
+;;   scheduler-new          []                           -> ptr<void>
+;;   scheduler-current      []                           -> ptr<void>
+;;   scheduler-spawn        [sched :ptr<void> f :ptr<void>] -> nil
+;;   scheduler-run          [sched :ptr<void>]            -> nil
+;;   scheduler-run-to-completion [sched :ptr<void>]    -> nil
 
 ;; Create a new scheduler. Only one scheduler is supported in v1.
+;;; scheduler-new -- create a new cooperative fiber scheduler.
+;;;
+;;; Returns:
+;;;   ptr<void> -- the newly allocated scheduler; panics if one already exists
+;;;
+;;; Example:
+;;;   (scheduler-new)  ; => sched-ptr
+;;;
+;;; Since: Phase T21
 (defn scheduler-new [] :ptr<void>
   ```c
   TurScheduler *s = tur_scheduler_new();
@@ -20,24 +29,61 @@
   ```)
 
 ;; Get the current global scheduler.
+;;; scheduler-current -- return the current global scheduler pointer.
+;;;
+;;; Returns:
+;;;   ptr<void> -- the active scheduler, or nil if none has been created
+;;;
+;;; Example:
+;;;   (scheduler-current)  ; => sched-ptr
+;;;
+;;; Since: Phase T21
 (defn scheduler-current [] :ptr<void>
   ```c
   return (void *)tur_scheduler_current();
   ```)
 
 ;; Spawn a fiber on the scheduler's run queue.
+;;; scheduler-spawn -- add a fiber to the scheduler's ready queue.
+;;;
+;;; Parameters:
+;;;   sched -- scheduler pointer returned by scheduler-new
+;;;   f     -- fiber pointer to enqueue
+;;;
+;;; Example:
+;;;   (scheduler-spawn sched my-fiber)
+;;;
+;;; Since: Phase T21
 (defn scheduler-spawn [sched :ptr<void> f :ptr<void>] :nil
   ```c
   tur_scheduler_spawn((TurScheduler *)sched, (FiberBlock *)f);
   ```)
 
 ;; Run the scheduler event loop until queue is empty.
+;;; scheduler-run -- run the scheduler event loop until the ready queue is empty.
+;;;
+;;; Parameters:
+;;;   sched -- scheduler pointer returned by scheduler-new
+;;;
+;;; Example:
+;;;   (scheduler-run sched)
+;;;
+;;; Since: Phase T21
 (defn scheduler-run [sched :ptr<void>] :nil
   ```c
   tur_scheduler_run((TurScheduler *)sched);
   ```)
 
 ;; Run the scheduler until all fibers in the queue complete.
+;;; scheduler-run-to-completion -- run the scheduler until all spawned fibers have finished.
+;;;
+;;; Parameters:
+;;;   sched -- scheduler pointer returned by scheduler-new
+;;;
+;;; Example:
+;;;   (scheduler-run-to-completion sched)
+;;;
+;;; Since: Phase T21
 (defn scheduler-run-to-completion [sched :ptr<void>] :nil
   ```c
   tur_scheduler_run_to_completion((TurScheduler *)sched);
@@ -46,6 +92,17 @@
 ;; Schedule a callback to be invoked after a delay (milliseconds).
 ;; The callback receives the arg pointer.
 ;; This is AW-010: Scheduler::timeout.
+;;; scheduler-timeout -- schedule a callback to be called after a delay in milliseconds.
+;;;
+;;; Parameters:
+;;;   ms  -- delay in milliseconds before invoking the callback
+;;;   cb  -- function pointer to invoke; receives arg as its sole argument
+;;;   arg -- opaque pointer passed through to the callback
+;;;
+;;; Example:
+;;;   (scheduler-timeout 500 my-cb my-data)
+;;;
+;;; Since: Phase T21
 (defn scheduler-timeout [ms :int cb :ptr<void> arg :ptr<void>] :nil
   ```c
   tur_scheduler_timeout((int64_t)ms, (void (*)(void *))cb, arg);

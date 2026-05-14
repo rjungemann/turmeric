@@ -1,4 +1,4 @@
-;; stdlib/map.tur — Map operations (mutable and persistent)
+;; stdlib/map.tur -- Map operations (mutable and persistent)
 ;;
 ;; This module provides the basic map operations that can be used with both
 ;; mutable and persistent maps. When a map is annotated with ^persistent,
@@ -7,36 +7,138 @@
 ;; For now, we delegate to hamt.tur functions (which is auto-loaded).
 ;; See docs/hamt-plan.md Phase P3 for the lowering pass design.
 
+;;; map-new -- create a new empty map.
+;;;
+;;; Returns:
+;;;   Pointer to a freshly allocated, empty map backed by a persistent HAMT.
+;;;
+;;; Example:
+;;;   (map-new)  ; => <map ptr>
+;;;
+;;; Since: Phase P3
 ;; Create an empty map
 (defn map-new [] :ptr<void>
   (hamt/new))
 
+;;; assoc -- insert or update a key/value pair; returns a new map.
+;;;
+;;; Parameters:
+;;;   m   -- source map pointer
+;;;   key -- key pointer (hashed by pointer identity)
+;;;   val -- value pointer
+;;;
+;;; Returns:
+;;;   A new map with the entry inserted or updated. The original is unchanged.
+;;;
+;;; Example:
+;;;   (assoc my-map k v)  ; => <new map ptr>
+;;;
+;;; Since: Phase P3
 ;; Insert or update a key/value pair. Returns a new map.
 ;; For persistent maps, this creates a new version with structural sharing.
 ;; For mutable maps, this modifies the map in place (future phase).
 (defn assoc [m :ptr<void> key :ptr<void> val :ptr<void>] :ptr<void>
   (hamt/set m (hamt/hash-ptr key) key val))
 
+;;; dissoc -- remove a key from the map; returns a new map.
+;;;
+;;; Parameters:
+;;;   m   -- source map pointer
+;;;   key -- key pointer to remove
+;;;
+;;; Returns:
+;;;   A new map with the key removed. The original is unchanged.
+;;;
+;;; Example:
+;;;   (dissoc my-map k)  ; => <new map ptr>
+;;;
+;;; Since: Phase P3
 ;; Delete a key. Returns a new map.
 (defn dissoc [m :ptr<void> key :ptr<void>] :ptr<void>
   (hamt/del m (hamt/hash-ptr key) key))
 
+;;; get -- look up a key and return its value, or NULL if absent.
+;;;
+;;; Parameters:
+;;;   m   -- map pointer
+;;;   key -- key pointer to look up
+;;;
+;;; Returns:
+;;;   The value pointer for key, or NULL if the key is not in the map.
+;;;
+;;; Example:
+;;;   (get my-map k)  ; => <value ptr or NULL>
+;;;
+;;; Since: Phase P3
 ;; Get the value for a key. Returns NULL if not found.
 (defn get [m :ptr<void> key :ptr<void>] :ptr<void>
   (hamt/get m (hamt/hash-ptr key) key))
 
+;;; has? -- check whether a key exists in the map.
+;;;
+;;; Parameters:
+;;;   m   -- map pointer
+;;;   key -- key pointer to test
+;;;
+;;; Returns:
+;;;   true if the key is present, false otherwise.
+;;;
+;;; Example:
+;;;   (has? my-map k)  ; => true
+;;;
+;;; Since: Phase P3
 ;; Check if a key exists in the map.
 (defn has? [m :ptr<void> key :ptr<void>] :bool
   (hamt/has? m (hamt/hash-ptr key) key))
 
+;;; count -- return the number of key/value pairs in the map.
+;;;
+;;; Parameters:
+;;;   m -- map pointer
+;;;
+;;; Returns:
+;;;   Integer count of entries in the map.
+;;;
+;;; Example:
+;;;   (count my-map)  ; => 3
+;;;
+;;; Since: Phase P3
 ;; Get the number of key/value pairs in the map.
 (defn count [m :ptr<void>] :int
   (hamt/count m))
 
+;;; merge -- merge two maps; values from b win on key collision.
+;;;
+;;; Parameters:
+;;;   a -- first map pointer
+;;;   b -- second map pointer (wins on collision)
+;;;
+;;; Returns:
+;;;   A new map containing all entries from a and b.
+;;;
+;;; Example:
+;;;   (merge map-a map-b)  ; => <merged map ptr>
+;;;
+;;; Since: Phase P3
 ;; Merge two maps. b wins on collision.
 (defn merge [a :ptr<void> b :ptr<void>] :ptr<void>
   (hamt/merge a b))
 
+;;; map-eq? -- compare two maps for structural equality using a value comparator.
+;;;
+;;; Parameters:
+;;;   m1      -- first map pointer
+;;;   m2      -- second map pointer
+;;;   val-cmp -- comparator fn [a :int b :int] :bool applied to each value pair
+;;;
+;;; Returns:
+;;;   true if both maps contain identical keys (by pointer identity) and
+;;;   all corresponding values satisfy val-cmp.
+;;;
+;;; Example:
+;;;   (map-eq? ma mb (fn [a b] (= a b)))  ; => true
+;;;
+;;; Since: Phase P3
 ;; Phase E1: map-eq? -- compare two maps for structural equality.
 ;; Keys are compared by pointer identity (same limitation as hamt/get).
 ;; val-cmp must be a fn [a :int b :int] :bool

@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tur/tur/async_socket | Turmeric API</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand">turmeric</span>
+  <nav>
+    <a href="index.html">API Docs</a>
+    <a href="../autodoc-plan.md">Plan</a>
+  </nav>
+</header>
+<div class="page-layout">
+<div class="sidebar">
+  <h3>Exported</h3>
+  <ul>
+    <li><a href="#async-socket-listen">async-socket-listen</a></li>
+    <li><a href="#async-socket-accept">async-socket-accept</a></li>
+    <li><a href="#async-socket-connect">async-socket-connect</a></li>
+    <li><a href="#async-socket-send">async-socket-send</a></li>
+    <li><a href="#async-socket-recv">async-socket-recv</a></li>
+    <li><a href="#async-socket-recv-buf">async-socket-recv-buf</a></li>
+    <li><a href="#async-socket-recv-len">async-socket-recv-len</a></li>
+    <li><a href="#async-socket-close">async-socket-close</a></li>
+  </ul>
+</div>
+<div class="content">
+  <div class="module-heading">
+    <h1>tur/async_socket</h1>
+    <div class="module-path">stdlib/async_socket.tur</div>
+  </div>
+<div class="def-card" id="async-socket-listen">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>async-socket-listen</h2>
+  </div>
+  <pre class="def-signature">(async-socket-listen [port :int backlog :int] :int)</pre>
+  <p class="def-summary">create a non-blocking TCP listening socket on the given port.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>port</td><td></td><td>TCP port number to bind and listen on</td></tr>
+    <tr><td>backlog</td><td></td><td>maximum length of the pending connection queue</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T24</p>
+</div>
+<div class="def-card" id="async-socket-accept">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>async-socket-accept</h2>
+  </div>
+  <pre class="def-signature">(async-socket-accept [listen-fd :int] :int)</pre>
+  <p class="def-summary">accept an incoming connection, parking the fiber until one arrives.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>listen-fd</td><td></td><td>listening file descriptor returned by async-socket-listen</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T24</p>
+</div>
+<div class="def-card" id="async-socket-connect">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>async-socket-connect</h2>
+  </div>
+  <pre class="def-signature">(async-socket-connect [host :cstr port :int] :int)</pre>
+  <p class="def-summary">connect to a TCP server at host:port, parking the fiber until complete.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>host</td><td></td><td>IPv4 address string (e.g. &quot;127.0.0.1&quot;)</td></tr>
+    <tr><td>port</td><td></td><td>TCP port number to connect to</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T24</p>
+</div>
+<div class="def-card" id="async-socket-send">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>async-socket-send</h2>
+  </div>
+  <pre class="def-signature">(async-socket-send [fd :int data :cstr len :int] :int)</pre>
+  <p class="def-summary">send data on a connected socket, parking the fiber on EAGAIN.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>fd</td><td></td><td>connected socket file descriptor</td></tr>
+    <tr><td>data</td><td></td><td>pointer to the bytes to send</td></tr>
+    <tr><td>len</td><td></td><td>number of bytes to send</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T24</p>
+</div>
+<div class="def-card" id="async-socket-recv">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>async-socket-recv</h2>
+  </div>
+  <pre class="def-signature">(async-socket-recv [fd :int buf-size :int] :int)</pre>
+  <p class="def-summary">receive up to buf-size bytes from a connected socket.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>fd</td><td></td><td>connected socket file descriptor</td></tr>
+    <tr><td>buf-size</td><td></td><td>maximum number of bytes to receive</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T24</p>
+</div>
+<div class="def-card" id="async-socket-recv-buf">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>async-socket-recv-buf</h2>
+  </div>
+  <pre class="def-signature">(async-socket-recv-buf :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">retrieve the buffer pointer from the last async-socket-recv call.</p>
+  <p class="def-since">Since: Phase T24</p>
+</div>
+<div class="def-card" id="async-socket-recv-len">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>async-socket-recv-len</h2>
+  </div>
+  <pre class="def-signature">(async-socket-recv-len :int)</pre>
+  <p class="def-summary">retrieve the byte count from the last async-socket-recv call.</p>
+  <p class="def-since">Since: Phase T24</p>
+</div>
+<div class="def-card" id="async-socket-close">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>async-socket-close</h2>
+  </div>
+  <pre class="def-signature">(async-socket-close [fd :int] :nil)</pre>
+  <p class="def-summary">close a socket and unregister it from IO polling.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>fd</td><td></td><td>socket file descriptor to close</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T24</p>
+</div>
+</div>
+</div>
+<footer class="site-footer">
+  Auto-generated by <code>tools/gendocs.py</code>.
+  Do not edit by hand -- run <code>just docs</code> to regenerate.
+</footer>
+</body>
+</html>

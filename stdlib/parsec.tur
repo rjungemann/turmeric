@@ -16,9 +16,26 @@
 
 ;;; ── Backtracking monad (inlined from backtrack.tur) ──────────────────────────
 
+;;; mzero -- return the empty backtracking result (failure).
+;;;
+;;; Returns:
+;;;   0, the null pointer representing no results.
+;;;
+;;; Example:
+;;;   (mzero)  ; => 0
 (defn mzero [] :int
   ```c return 0; ```)
 
+;;; mreturn -- lift a single value into the backtracking monad.
+;;;
+;;; Parameters:
+;;;   x -- the int64_t value to wrap.
+;;;
+;;; Returns:
+;;;   A newly allocated Cell containing x with a null next pointer.
+;;;
+;;; Example:
+;;;   (mreturn 42)  ; => Cell{value=42, next=NULL}
 (defn mreturn [x] :int
   ```c
   struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
@@ -26,6 +43,17 @@
   return (int64_t)(intptr_t)cell;
   ```)
 
+;;; mplus -- concatenate two backtracking result lists.
+;;;
+;;; Parameters:
+;;;   xs -- the first Cell list (copied into a fresh list).
+;;;   ys -- the second Cell list (appended by pointer, not copied).
+;;;
+;;; Returns:
+;;;   A new Cell list containing all results from xs followed by ys.
+;;;
+;;; Example:
+;;;   (mplus (mreturn 1) (mreturn 2))  ; => Cell{1} -> Cell{2}
 (defn mplus [xs ys] :int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
@@ -42,6 +70,18 @@
   return (int64_t)(intptr_t)head;
   ```)
 
+;;; mbind -- monadic bind for the backtracking monad.
+;;;
+;;; Parameters:
+;;;   ma -- a Cell list of values to thread through fn.
+;;;   fn -- a fat closure of type int64_t -> Cell list.
+;;;
+;;; Returns:
+;;;   The concatenated results of applying fn to every value in ma,
+;;;   preserving original order.
+;;;
+;;; Example:
+;;;   (mbind (mreturn 1) (fn [x] (mreturn (* x 2))))  ; => Cell{2}
 (defn mbind [ma fn] :int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
@@ -68,8 +108,23 @@
   return (int64_t)(intptr_t)result;
   ```)
 
+;;; bt-nil -- return the empty backtracking list.
+;;;
+;;; Returns:
+;;;   0 (null pointer).
 (defn bt-nil [] :int ```c return 0; ```)
 
+;;; bt-cons -- prepend a value onto a backtracking Cell list.
+;;;
+;;; Parameters:
+;;;   v   -- the int64_t value to prepend.
+;;;   nxt -- the existing Cell list to prepend onto.
+;;;
+;;; Returns:
+;;;   A new Cell with value v pointing to nxt.
+;;;
+;;; Example:
+;;;   (bt-cons 3 (bt-nil))  ; => Cell{3, NULL}
 (defn bt-cons [v nxt] :int
   ```c
   struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
@@ -77,6 +132,16 @@
   return (int64_t)(intptr_t)cell;
   ```)
 
+;;; bt-length -- count elements in a backtracking Cell list.
+;;;
+;;; Parameters:
+;;;   xs -- the Cell list to measure.
+;;;
+;;; Returns:
+;;;   The number of cells in the list as an int64_t.
+;;;
+;;; Example:
+;;;   (bt-length (bt-cons 1 (bt-cons 2 (bt-nil))))  ; => 2
 (defn bt-length [xs] :int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
@@ -88,6 +153,17 @@
 
 ;;; ── Pair helpers ─────────────────────────────────────────────────────────────
 
+;;; pair-new -- allocate a new Pair holding two int64_t values.
+;;;
+;;; Parameters:
+;;;   a -- the first field value.
+;;;   b -- the second field value.
+;;;
+;;; Returns:
+;;;   Pointer (as int64_t) to a heap-allocated Pair{first=a, second=b}.
+;;;
+;;; Example:
+;;;   (pair-new 1 2)  ; => Pair{first=1, second=2}
 (defn pair-new [a b] :int
   ```c
   struct { int64_t first; int64_t second; } *p = malloc(sizeof(*p));
@@ -95,9 +171,29 @@
   return (int64_t)(intptr_t)p;
   ```)
 
+;;; pair-first -- extract the first field from a Pair.
+;;;
+;;; Parameters:
+;;;   p -- pointer (as int64_t) to a Pair.
+;;;
+;;; Returns:
+;;;   The int64_t value stored in the first field.
+;;;
+;;; Example:
+;;;   (pair-first (pair-new 7 8))  ; => 7
 (defn pair-first [p] :int
   ```c return ((struct { int64_t first; int64_t second; } *)(intptr_t)p)->first; ```)
 
+;;; pair-second -- extract the second field from a Pair.
+;;;
+;;; Parameters:
+;;;   p -- pointer (as int64_t) to a Pair.
+;;;
+;;; Returns:
+;;;   The int64_t value stored in the second field.
+;;;
+;;; Example:
+;;;   (pair-second (pair-new 7 8))  ; => 8
 (defn pair-second [p] :int
   ```c return ((struct { int64_t first; int64_t second; } *)(intptr_t)p)->second; ```)
 
@@ -106,6 +202,17 @@
 ;; Input stores the source string as int64_t (raw pointer) to allow capture
 ;; in fat closures without cstr-to-int64_t coercion issues.
 
+;;; input-new -- create a new Input from a C string and a starting position.
+;;;
+;;; Parameters:
+;;;   s   -- the source string (:cstr).
+;;;   pos -- the initial character position (0-based).
+;;;
+;;; Returns:
+;;;   Pointer (as int64_t) to a heap-allocated Input{str, pos}.
+;;;
+;;; Example:
+;;;   (input-new "hello" 0)  ; => Input at position 0
 (defn input-new [s :cstr pos] :int
   ```c
   struct { int64_t str; int64_t pos; } *inp = malloc(sizeof(*inp));
@@ -113,6 +220,16 @@
   return (int64_t)(intptr_t)inp;
   ```)
 
+;;; input-at-end -- test whether an Input is at the end of its string.
+;;;
+;;; Parameters:
+;;;   inp -- pointer (as int64_t) to an Input.
+;;;
+;;; Returns:
+;;;   true if the current character is '\0', false otherwise.
+;;;
+;;; Example:
+;;;   (input-at-end (input-new "" 0))  ; => true
 (defn input-at-end [inp] :bool
   ```c
   struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
@@ -120,6 +237,16 @@
   return s[i->pos] == '\0';
   ```)
 
+;;; input-current-char -- return the character at the current position.
+;;;
+;;; Parameters:
+;;;   inp -- pointer (as int64_t) to an Input.
+;;;
+;;; Returns:
+;;;   The ASCII code of the current character as an int64_t (unsigned byte).
+;;;
+;;; Example:
+;;;   (input-current-char (input-new "abc" 0))  ; => 97  ; 'a'
 (defn input-current-char [inp] :int
   ```c
   struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
@@ -127,6 +254,16 @@
   return (int64_t)(unsigned char)s[i->pos];
   ```)
 
+;;; input-advance -- return a new Input advanced by one character.
+;;;
+;;; Parameters:
+;;;   inp -- pointer (as int64_t) to the current Input.
+;;;
+;;; Returns:
+;;;   A new heap-allocated Input with pos incremented by 1.
+;;;
+;;; Example:
+;;;   (input-pos (input-advance (input-new "ab" 0)))  ; => 1
 (defn input-advance [inp] :int
   ```c
   struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
@@ -135,9 +272,29 @@
   return (int64_t)(intptr_t)n;
   ```)
 
+;;; input-pos -- return the current position index of an Input.
+;;;
+;;; Parameters:
+;;;   inp -- pointer (as int64_t) to an Input.
+;;;
+;;; Returns:
+;;;   The int64_t character offset into the source string.
+;;;
+;;; Example:
+;;;   (input-pos (input-new "abc" 2))  ; => 2
 (defn input-pos [inp] :int
   ```c return ((struct { int64_t str; int64_t pos; } *)(intptr_t)inp)->pos; ```)
 
+;;; input-remaining -- count bytes remaining in an Input.
+;;;
+;;; Parameters:
+;;;   inp -- pointer (as int64_t) to an Input.
+;;;
+;;; Returns:
+;;;   The number of bytes from the current position to the terminating '\0'.
+;;;
+;;; Example:
+;;;   (input-remaining (input-new "abc" 1))  ; => 2
 (defn input-remaining [inp] :int
   ```c
   struct { int64_t str; int64_t pos; } *i = (void*)(intptr_t)inp;
@@ -149,6 +306,17 @@
 ;;; ── Fat-closure and parser application ───────────────────────────────────────
 
 ;; apply-fat: call any fat closure with a single int64_t argument
+;;; apply-fat -- invoke a fat closure with one argument.
+;;;
+;;; Parameters:
+;;;   f   -- pointer (as int64_t) to a fat closure.
+;;;   arg -- the single int64_t argument to pass.
+;;;
+;;; Returns:
+;;;   The int64_t return value of the closure.
+;;;
+;;; Example:
+;;;   (apply-fat my-fn 42)  ; => result of calling my-fn with 42
 (defn apply-fat [f arg] :int
   ```c
   int64_t *fat = (int64_t*)(intptr_t)f;
@@ -157,6 +325,17 @@
   ```)
 
 ;; apply-parser: call a parser fat closure with an Input
+;;; apply-parser -- run a parser fat closure against an Input.
+;;;
+;;; Parameters:
+;;;   p   -- pointer (as int64_t) to a parser fat closure.
+;;;   inp -- pointer (as int64_t) to the Input to parse.
+;;;
+;;; Returns:
+;;;   A Cell list of Pair(value, remaining-Input) results.
+;;;
+;;; Example:
+;;;   (apply-parser (item) (input-new "a" 0))  ; => Cell{Pair(97, Input@1)}
 (defn apply-parser [p inp] :int
   ```c
   int64_t *fat = (int64_t*)(intptr_t)p;
@@ -167,29 +346,65 @@
 ;;; ── Core parsers ─────────────────────────────────────────────────────────────
 
 ;; pfail: always fails
+;;; pfail -- parser that always fails, consuming no input.
+;;;
+;;; Returns:
+;;;   A parser that returns mzero for any input.
+;;;
+;;; Example:
+;;;   (run-parser (pfail) "abc")  ; => 0  (no results)
 (defn pfail [] :ptr<void>
   (let [sentinel 0]
     (fn [inp] (let [_ sentinel] (mzero)))))
 
 ;; pure v: succeed with v, consume no input
+;;; pure-impl -- internal implementation for pure.
+;;; Parameters:
+;;;   _v  -- the value to return.
+;;;   inp -- the current Input (passed through unchanged).
 (defn pure-impl [_v inp] :int
   (mreturn (pair-new _v inp)))
 
+;;; pure -- parser that always succeeds with a fixed value, consuming no input.
+;;;
+;;; Parameters:
+;;;   v -- the value to embed in the parse result.
+;;;
+;;; Returns:
+;;;   A parser that returns Pair(v, inp) without advancing the input.
+;;;
+;;; Example:
+;;;   (run-parser (pure 99) "")  ; => Cell{Pair(99, Input@0)}
 (defn pure [v] :ptr<void>
   (let [_v v]
     (fn [inp] (let [_ _v] (pure-impl _v inp)))))
 
 ;; item: consume one character; fail at end of input
+;;; item-impl -- internal implementation for item.
+;;; Parameters:
+;;;   inp -- the current Input.
 (defn item-impl [inp] :int
   (if (input-at-end inp)
     (mzero)
     (mreturn (pair-new (input-current-char inp) (input-advance inp)))))
 
+;;; item -- parser that consumes exactly one character.
+;;;
+;;; Returns:
+;;;   A parser yielding the ASCII code of the next character, or
+;;;   failure if at end of input.
+;;;
+;;; Example:
+;;;   (parse-value (run-parser (item) "A"))  ; => 65  ; 'A'
 (defn item [] :ptr<void>
   (let [sentinel 0]
     (fn [inp] (let [_ sentinel] (item-impl inp)))))
 
 ;; pchar c: consume if current char equals c (c is ASCII int)
+;;; pchar-impl -- internal implementation for pchar.
+;;; Parameters:
+;;;   _c  -- the expected ASCII character code.
+;;;   inp -- the current Input.
 (defn pchar-impl [_c inp] :int
   (if (input-at-end inp)
     (mzero)
@@ -197,11 +412,26 @@
       (mreturn (pair-new _c (input-advance inp)))
       (mzero))))
 
+;;; pchar -- parser that matches a single specific character.
+;;;
+;;; Parameters:
+;;;   c -- the ASCII integer code of the character to match.
+;;;
+;;; Returns:
+;;;   A parser that succeeds with c if the next character equals c,
+;;;   or fails otherwise.
+;;;
+;;; Example:
+;;;   (parse-value (run-parser (pchar 65) "ABC"))  ; => 65  ; 'A'
 (defn pchar [c] :ptr<void>
   (let [_c c]
     (fn [inp] (let [_ _c] (pchar-impl _c inp)))))
 
 ;; pstring s: consume if input starts with the C string s (passed as :cstr)
+;;; pstring-c-impl -- internal C implementation for pstring.
+;;; Parameters:
+;;;   s_raw -- the pattern string as a raw int64_t pointer.
+;;;   inp   -- the current Input.
 (defn pstring-c-impl [s_raw inp] :int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
@@ -222,9 +452,27 @@
   return (int64_t)(intptr_t)cell;
   ```)
 
+;;; cstr->int -- reinterpret a :cstr pointer as an int64_t without copying.
+;;;
+;;; Parameters:
+;;;   s -- the C string to reinterpret.
+;;;
+;;; Returns:
+;;;   The raw pointer value of s as an int64_t.
 (defn cstr->int [s :cstr] :int
   ```c return (int64_t)(intptr_t)s; ```)
 
+;;; pstring -- parser that matches a literal string prefix.
+;;;
+;;; Parameters:
+;;;   s -- the expected string literal (:cstr).
+;;;
+;;; Returns:
+;;;   A parser that succeeds with s (as int64_t pointer) and advances
+;;;   past it, or fails if the input does not start with s.
+;;;
+;;; Example:
+;;;   (run-parser (pstring "hi") "hi there")  ; => Cell{Pair("hi", Input@2)}
 (defn pstring [s :cstr] :ptr<void>
   (let [_s (cstr->int s)]
     (fn [inp] (let [_ _s] (pstring-c-impl _s inp)))))
@@ -232,39 +480,100 @@
 ;;; ── Combinators ──────────────────────────────────────────────────────────────
 
 ;; or-parser p q: try p, then q, return all successes (backtracking)
+;;; or-parser-impl -- internal implementation for or-parser.
+;;; Parameters:
+;;;   lp  -- the first parser (int64_t fat-closure pointer).
+;;;   lq  -- the second parser (int64_t fat-closure pointer).
+;;;   inp -- the current Input.
 (defn or-parser-impl [lp lq inp] :int
   (mplus (apply-parser lp inp) (apply-parser lq inp)))
 
+;;; or-parser -- try two parsers and return all successes from either.
+;;;
+;;; Parameters:
+;;;   p -- the first parser to try.
+;;;   q -- the second parser to try.
+;;;
+;;; Returns:
+;;;   A parser that returns the concatenation of results from p and q
+;;;   applied to the same input (full backtracking).
+;;;
+;;; Example:
+;;;   (run-parser (or-parser (pchar 65) (pchar 66)) "B")  ; => Cell{Pair(66, ...)}
 (defn or-parser [p q] :ptr<void>
   (let [lp p lq q]
     (fn [inp] (let [_ lp] (or-parser-impl lp lq inp)))))
 
 ;; bind-parser p f: apply p, then for each (v, inp'), apply (f v) as a parser
 ;; f must be a fat closure: value -> Parser
+;;; bind-parser-inner -- apply continuation f to a single parse Pair.
+;;; Parameters:
+;;;   lf   -- the continuation fat closure (value -> Parser).
+;;;   pair -- a Pair(value, remaining-Input) from the first parser.
 (defn bind-parser-inner [lf pair] :int
   (let [lf2 lf]
     (apply-parser (apply-fat lf2 (pair-first pair)) (pair-second pair))))
 
+;;; bind-parser-impl -- internal implementation for bind-parser.
+;;; Parameters:
+;;;   lp  -- the first parser.
+;;;   lf  -- the continuation fat closure.
+;;;   inp -- the current Input.
 (defn bind-parser-impl [lp lf inp] :int
   (let [lf2 lf]
     (mbind (apply-parser lp inp)
            (fn [pair] (let [_ lf2] (bind-parser-inner lf2 pair))))))
 
+;;; bind-parser -- sequence two parsers, threading the first result into the second.
+;;;
+;;; Parameters:
+;;;   p -- the first parser.
+;;;   f -- a fat closure of type int64_t -> Parser; receives the parsed value
+;;;        and returns the next parser to run.
+;;;
+;;; Returns:
+;;;   A parser that runs p, then for each result calls (f value) and runs
+;;;   the resulting parser on the remaining input.
+;;;
+;;; Example:
+;;;   (bind-parser (item) (fn [c] (pure c)))  ; identity parser
 (defn bind-parser [p f] :ptr<void>
   (let [lp p lf f]
     (fn [inp] (let [_ lp] (bind-parser-impl lp lf inp)))))
 
 ;; then-parser p q: apply p, discard result, apply q
+;;; then-parser-impl -- internal implementation for then-parser.
+;;; Parameters:
+;;;   lp  -- the first parser (result discarded).
+;;;   lq  -- the second parser (result kept).
+;;;   inp -- the current Input.
 (defn then-parser-impl [lp lq inp] :int
   (let [lq2 lq]
     (mbind (apply-parser lp inp)
            (fn [pair] (let [_ lq2] (apply-parser lq2 (pair-second pair)))))))
 
+;;; then-parser -- sequence two parsers, discarding the first result.
+;;;
+;;; Parameters:
+;;;   p -- parser whose result is discarded.
+;;;   q -- parser whose result is kept.
+;;;
+;;; Returns:
+;;;   A parser that runs p, then runs q on the remaining input,
+;;;   returning only q's results.
+;;;
+;;; Example:
+;;;   (run-parser (then-parser (pchar 40) (item)) "(x")
+;;;   ; => Cell{Pair(120, Input@2)}  ; 'x' only
 (defn then-parser [p q] :ptr<void>
   (let [lp p lq q]
     (fn [inp] (let [_ lp] (then-parser-impl lp lq inp)))))
 
 ;; many p: match p zero or more times (greedy); returns one result
+;;; many-c-impl -- internal C implementation of greedy zero-or-more repetition.
+;;; Parameters:
+;;;   p_raw -- parser fat closure as int64_t.
+;;;   inp   -- the current Input.
 (defn many-c-impl [p_raw inp] :int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
@@ -295,11 +604,28 @@
   return (int64_t)(intptr_t)result_cell;
   ```)
 
+;;; many -- greedily match a parser zero or more times.
+;;;
+;;; Parameters:
+;;;   p -- the parser to repeat.
+;;;
+;;; Returns:
+;;;   A parser that always succeeds, yielding a Cell list of all
+;;;   matched values and the remaining Input after the last match.
+;;;   Returns an empty list when p does not match at all.
+;;;
+;;; Example:
+;;;   (run-parser (many (pchar 97)) "aab")
+;;;   ; => Cell{Pair(Cell{97,97}, Input@2)}
 (defn many [p] :ptr<void>
   (let [_p p]
     (fn [inp] (let [_ _p] (many-c-impl _p inp)))))
 
 ;; many1 p: one or more; fails if p doesn't match at least once
+;;; many1-impl -- internal implementation for many1.
+;;; Parameters:
+;;;   _p  -- the parser to repeat.
+;;;   inp -- the current Input.
 (defn many1-impl [_p inp] :int
   (if (input-at-end inp)
     (mzero)
@@ -308,15 +634,45 @@
         (mzero)
         (many-c-impl _p inp)))))
 
+;;; many1 -- greedily match a parser one or more times.
+;;;
+;;; Parameters:
+;;;   p -- the parser to repeat.
+;;;
+;;; Returns:
+;;;   A parser that succeeds only when p matches at least once, then
+;;;   greedily repeats, returning results identical in structure to many.
+;;;
+;;; Example:
+;;;   (run-parser (many1 (pchar 97)) "aab")
+;;;   ; => Cell{Pair(Cell{97,97}, Input@2)}
+;;;   (run-parser (many1 (pchar 97)) "bbb")  ; => 0  (fails)
 (defn many1 [p] :ptr<void>
   (let [_p p]
     (fn [inp] (let [_ _p] (many1-impl _p inp)))))
 
 ;; optional p: match p zero or one times; 0 = none, pair-first = some-value
+;;; optional-impl -- internal implementation for optional.
+;;; Parameters:
+;;;   _p  -- the parser to attempt.
+;;;   inp -- the current Input.
 (defn optional-impl [_p inp] :int
   (mplus (apply-parser _p inp)
          (mreturn (pair-new 0 inp))))
 
+;;; optional -- match a parser zero or one times.
+;;;
+;;; Parameters:
+;;;   p -- the parser to attempt.
+;;;
+;;; Returns:
+;;;   A parser that returns two results when p succeeds (the match and
+;;;   a fallback with value 0), or one result with value 0 when p fails.
+;;;   Check pair-first: 0 means absent, non-zero means the parsed value.
+;;;
+;;; Example:
+;;;   (run-parser (optional (pchar 65)) "ABC")  ; => two results
+;;;   (run-parser (optional (pchar 65)) "XYZ")  ; => Cell{Pair(0, Input@0)}
 (defn optional [p] :ptr<void>
   (let [_p p]
     (fn [inp] (let [_ _p] (optional-impl _p inp)))))
@@ -324,11 +680,26 @@
 ;;; ── Runners ──────────────────────────────────────────────────────────────────
 
 ;; run-parser p s: run parser p on string s; return all partial+full parses
+;;; run-parser -- run a parser against a raw C string.
+;;;
+;;; Parameters:
+;;;   p -- the parser to run.
+;;;   s -- the input string (:cstr).
+;;;
+;;; Returns:
+;;;   A Cell list of Pair(value, remaining-Input) for all successful
+;;;   parses, including partial ones.
+;;;
+;;; Example:
+;;;   (run-parser (pchar 65) "ABC")  ; => Cell{Pair(65, Input@1)}
 (defn run-parser [p s :cstr] :int
   (let [inp (input-new s 0)]
     (apply-parser p inp)))
 
 ;; run-parser-full p s: return mreturn(value) for first full-input parse, mzero if none
+;;; run-parser-full-c -- internal C helper to extract the first full-input parse.
+;;; Parameters:
+;;;   results -- Cell list returned by run-parser.
 (defn run-parser-full-c [results] :int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
@@ -348,12 +719,36 @@
   return 0;
   ```)
 
+;;; run-parser-full -- run a parser and return only the first complete parse.
+;;;
+;;; Parameters:
+;;;   p -- the parser to run.
+;;;   s -- the input string (:cstr).
+;;;
+;;; Returns:
+;;;   A Cell wrapping the parsed value if the entire input was consumed,
+;;;   or 0 (mzero) if no full parse exists.
+;;;
+;;; Example:
+;;;   (run-parser-full (many (pchar 97)) "aaa")
+;;;   ; => Cell{value=Cell{97,97,97}}
+;;;   (run-parser-full (pchar 97) "ab")  ; => 0  (leftover input)
 (defn run-parser-full [p s :cstr] :int
   (run-parser-full-c (run-parser p s)))
 
 ;;; ── Result helpers ───────────────────────────────────────────────────────────
 
 ;; parse-value: extract value from first parse result (first = result value)
+;;; parse-value -- extract the parsed value from the first result in a Cell list.
+;;;
+;;; Parameters:
+;;;   results -- a Cell list returned by run-parser or run-parser-full.
+;;;
+;;; Returns:
+;;;   The int64_t value from pair-first of the first Cell, or 0 if empty.
+;;;
+;;; Example:
+;;;   (parse-value (run-parser (pchar 65) "A"))  ; => 65
 (defn parse-value [results] :int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
@@ -365,10 +760,29 @@
   ```)
 
 ;; parse-result-count: count number of parse results
+;;; parse-result-count -- count the number of parse results in a result list.
+;;;
+;;; Parameters:
+;;;   results -- a Cell list returned by run-parser.
+;;;
+;;; Returns:
+;;;   The number of successful parse results as an int64_t.
+;;;
+;;; Example:
+;;;   (parse-result-count (run-parser (or-parser (pchar 65) (pchar 65)) "A"))
+;;;   ; => 2  (both branches succeed)
 (defn parse-result-count [results] :int
   (bt-length results))
 
 ;; print-char-list: print a linked list of character values
+;;; print-char-list -- print each integer value in a Cell list, space-separated.
+;;;
+;;; Parameters:
+;;;   lst -- a bt-cons Cell list of int64_t character codes.
+;;;
+;;; Example:
+;;;   (print-char-list (bt-cons 65 (bt-cons 66 (bt-nil))))
+;;;   ; prints: 65 66
 (defn print-char-list [lst]
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
@@ -378,5 +792,15 @@
   ```)
 
 ;; char-list-length: count elements in a bt-cons list
+;;; char-list-length -- count elements in a bt-cons character list.
+;;;
+;;; Parameters:
+;;;   lst -- a bt-cons Cell list.
+;;;
+;;; Returns:
+;;;   The number of elements as an int64_t.
+;;;
+;;; Example:
+;;;   (char-list-length (bt-cons 1 (bt-cons 2 (bt-nil))))  ; => 2
 (defn char-list-length [lst] :int
   (bt-length lst))

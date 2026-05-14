@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tur/tur/list | Turmeric API</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand">turmeric</span>
+  <nav>
+    <a href="index.html">API Docs</a>
+    <a href="../autodoc-plan.md">Plan</a>
+  </nav>
+</header>
+<div class="page-layout">
+<div class="sidebar">
+  <h3>Exported</h3>
+  <ul>
+    <li><a href="#Cons">Cons</a></li>
+    <li><a href="#nil-value">nil-value</a></li>
+    <li><a href="#list-nil_">list-nil?</a></li>
+    <li><a href="#cons">cons</a></li>
+    <li><a href="#head">head</a></li>
+    <li><a href="#tail">tail</a></li>
+    <li><a href="#list-free">list-free</a></li>
+    <li><a href="#list-length">list-length</a></li>
+    <li><a href="#Clone_Cons_">Clone[Cons]</a></li>
+    <li><a href="#Functor_list_">Functor[list]</a></li>
+    <li><a href="#Foldable_list_">Foldable[list]</a></li>
+    <li><a href="#Applicative_list_">Applicative[list]</a></li>
+    <li><a href="#Monad_list_">Monad[list]</a></li>
+    <li><a href="#list-eq_">list-eq?</a></li>
+    <li><a href="#Eq_list_">Eq[list]</a></li>
+  </ul>
+  <h3>Internal</h3>
+  <ul>
+    <li><a href="#__functor_list_fmap" style="color:var(--faint)">__functor_list_fmap</a></li>
+    <li><a href="#__foldable_list_foldl" style="color:var(--faint)">__foldable_list_foldl</a></li>
+    <li><a href="#__foldable_list_foldr" style="color:var(--faint)">__foldable_list_foldr</a></li>
+    <li><a href="#__applicative_list_pure" style="color:var(--faint)">__applicative_list_pure</a></li>
+    <li><a href="#__applicative_list_ap" style="color:var(--faint)">__applicative_list_ap</a></li>
+    <li><a href="#__monad_list_bind" style="color:var(--faint)">__monad_list_bind</a></li>
+  </ul>
+</div>
+<div class="content">
+  <div class="module-heading">
+    <h1>tur/list</h1>
+    <div class="module-path">stdlib/list.tur</div>
+  </div>
+<div class="def-card" id="Cons">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defstruct">defstruct</span>
+    <h2>Cons</h2>
+  </div>
+  <pre class="def-signature">(defstruct Cons [value :int next :int])</pre>
+</div>
+<div class="def-card" id="nil-value">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>nil-value</h2>
+  </div>
+  <pre class="def-signature">(nil-value)</pre>
+  <p class="def-summary">return the empty list sentinel (NULL / 0).</p>
+  <p class="def-since">Since: Phase B1</p>
+</div>
+<div class="def-card" id="list-nil_">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>list-nil?</h2>
+  </div>
+  <pre class="def-signature">(list-nil? [lst] :bool)</pre>
+  <p class="def-summary">check whether a list is empty.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>lst</td><td></td><td>the list to test</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase B1</p>
+</div>
+<div class="def-card" id="cons">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>cons</h2>
+  </div>
+  <pre class="def-signature">(cons [value next] :int)</pre>
+  <p class="def-summary">prepend a value to a list, returning a new Cons cell.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>value</td><td></td><td>the element to prepend</td></tr>
+    <tr><td>next</td><td></td><td>the existing list (or nil-value for a one-element list)</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase B1</p>
+</div>
+<div class="def-card" id="head">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>head</h2>
+  </div>
+  <pre class="def-signature">(head [lst] :int)</pre>
+  <p class="def-summary">return the value of the first element of a list.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>lst</td><td></td><td>a non-nil list</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase B1</p>
+</div>
+<div class="def-card" id="tail">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>tail</h2>
+  </div>
+  <pre class="def-signature">(tail [lst] :int)</pre>
+  <p class="def-summary">return the rest of the list after the first element.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>lst</td><td></td><td>a non-nil list</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase B1</p>
+</div>
+<div class="def-card" id="list-free">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>list-free</h2>
+  </div>
+  <pre class="def-signature">(list-free [lst])</pre>
+  <p class="def-summary">free all Cons cells in a list (shallow -- does not free contained values).</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>lst</td><td></td><td>the list to free (may be nil-value)</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase B1</p>
+</div>
+<div class="def-card" id="list-length">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>list-length</h2>
+  </div>
+  <pre class="def-signature">(list-length [lst] :int)</pre>
+  <p class="def-summary">return the number of elements in a list.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>lst</td><td></td><td>the list to measure</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase B1</p>
+</div>
+<div class="def-card" id="Clone_Cons_">
+  <div class="def-card-header">
+    <span class="kind-badge kind-definstance">definstance</span>
+    <h2>Clone[Cons]</h2>
+  </div>
+  <pre class="def-signature">(definstance Clone [Cons])</pre>
+  <p class="def-summary">shallow Clone for a single Cons cell.</p>
+</div>
+<div class="def-card" id="Functor_list_">
+  <div class="def-card-header">
+    <span class="kind-badge kind-definstance">definstance</span>
+    <h2>Functor[list]</h2>
+  </div>
+  <pre class="def-signature">(definstance Functor [list])</pre>
+  <p class="def-summary">Functor: fmap over every element.</p>
+</div>
+<div class="def-card" id="Foldable_list_">
+  <div class="def-card-header">
+    <span class="kind-badge kind-definstance">definstance</span>
+    <h2>Foldable[list]</h2>
+  </div>
+  <pre class="def-signature">(definstance Foldable [list])</pre>
+  <p class="def-summary">Foldable: foldl and foldr over all elements.</p>
+</div>
+<div class="def-card" id="Applicative_list_">
+  <div class="def-card-header">
+    <span class="kind-badge kind-definstance">definstance</span>
+    <h2>Applicative[list]</h2>
+  </div>
+  <pre class="def-signature">(definstance Applicative [list])</pre>
+  <p class="def-summary">Applicative: pure and ap.</p>
+</div>
+<div class="def-card" id="Monad_list_">
+  <div class="def-card-header">
+    <span class="kind-badge kind-definstance">definstance</span>
+    <h2>Monad[list]</h2>
+  </div>
+  <pre class="def-signature">(definstance Monad [list])</pre>
+  <p class="def-summary">Monad: bind (concat-map).</p>
+</div>
+<div class="def-card" id="list-eq_">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>list-eq?</h2>
+  </div>
+  <pre class="def-signature">(list-eq? [l1 l2 cmp-fn] :bool)</pre>
+  <p class="def-summary">compare two lists element-wise using a caller-supplied comparator.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>l1</td><td></td><td>first list</td></tr>
+    <tr><td>l2</td><td></td><td>second list</td></tr>
+    <tr><td>cmp-fn</td><td></td><td>comparator of type fn [a :int b :int] :bool</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase E1</p>
+</div>
+<div class="def-card" id="Eq_list_">
+  <div class="def-card-header">
+    <span class="kind-badge kind-definstance">definstance</span>
+    <h2>Eq[list]</h2>
+  </div>
+  <pre class="def-signature">(definstance Eq [list])</pre>
+  <p class="def-summary">Eq: structural equality via list-eq?.</p>
+</div>
+<details class="internal-section">
+  <summary>Internal definitions</summary>
+  <div class="internal-list">
+  <div class="internal-item" id="__functor_list_fmap"><code>__functor_list_fmap</code><span class="internal-item-summary">-- SINCE: Phase HKT §6 — Stdlib HKT migration</span></div>
+  <div class="internal-item" id="__foldable_list_foldl"><code>__foldable_list_foldl</code><span class="internal-item-summary">-- foldl implementation for the list Foldable instance.</span></div>
+  <div class="internal-item" id="__foldable_list_foldr"><code>__foldable_list_foldr</code><span class="internal-item-summary">-- foldr implementation for the list Foldable instance.</span></div>
+  <div class="internal-item" id="__applicative_list_pure"><code>__applicative_list_pure</code><span class="internal-item-summary">-- pure implementation for the list Applicative instance.</span></div>
+  <div class="internal-item" id="__applicative_list_ap"><code>__applicative_list_ap</code><span class="internal-item-summary">-- ap implementation for the list Applicative instance.</span></div>
+  <div class="internal-item" id="__monad_list_bind"><code>__monad_list_bind</code><span class="internal-item-summary">-- bind implementation for the list Monad instance.</span></div>
+  </div>
+</details>
+</div>
+</div>
+<footer class="site-footer">
+  Auto-generated by <code>tools/gendocs.py</code>.
+  Do not edit by hand -- run <code>just docs</code> to regenerate.
+</footer>
+</body>
+</html>

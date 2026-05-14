@@ -1,5 +1,5 @@
 ;; Phase 16: Real FileSystem implementation
-;; 
+;;
 ;; Implementation of FileSystem capability using libc functions
 
 (extern-c fopen [^cstr ^cstr] :ptr)
@@ -14,6 +14,16 @@
 (extern-c free [^ptr p] :void)
 (extern-c memset [^ptr ^int ^int] :ptr)
 
+;;; file-size -- return the byte size of an already-open file.
+;;;
+;;; Parameters:
+;;;   f -- a FILE* cast to int64_t (as returned by fopen).
+;;;
+;;; Returns:
+;;;   The file size in bytes as an int.
+;;;
+;;; Example:
+;;;   (file-size my-file-ptr)  ; => 1024
 ;; Helper function to get file size
 (defn file-size [f]
   ```c
@@ -25,6 +35,17 @@
   return (int)size;
   ```)
 
+;;; Real-FileSystem -- create a FileSystem capability backed by libc.
+;;;
+;;; Returns:
+;;;   A heap-allocated FileSystem struct whose function pointers use
+;;;   fopen/fread/fwrite/remove/opendir/readdir for all operations.
+;;;   Free with Real-FileSystem-free when done.
+;;;
+;;; Example:
+;;;   (let [fs (Real-FileSystem)] ...)
+;;;
+;;; Since: Phase 16
 ;; Real-FileSystem implementation
 ;; Returns a FileSystem capability struct with libc-based implementations
 (defn Real-FileSystem []
@@ -37,7 +58,7 @@
       int (*delete)(const char* path);
       int (*list)(const char* path, char** entries, int max_entries, int* out_count);
   };
-  
+
   /* read_file implementation using fopen/fread */
   static int fs_read_file(const char* path, unsigned char* buf, int buf_len, int* out_len) {
       FILE* f = fopen(path, "rb");
@@ -47,7 +68,7 @@
       *out_len = (int)n;
       return 0;
   }
-  
+
   /* write_file implementation using fopen/fwrite */
   static int fs_write_file(const char* path, const unsigned char* data, int data_len) {
       FILE* f = fopen(path, "wb");
@@ -56,23 +77,23 @@
       fclose(f);
       return (n == (size_t)data_len) ? 0 : -1;
   }
-  
+
   /* delete implementation using remove */
   static int fs_delete(const char* path) {
       return remove(path);
   }
-  
+
   /* list implementation using opendir/readdir - simplified */
   static int fs_list(const char* path, char** entries, int max_entries, int* out_count) {
       DIR* d = opendir(path);
       if (!d) return -1;
-      
+
       struct dirent* entry;
       int count = 0;
       while ((entry = readdir(d)) && count < max_entries) {
           /* Skip . and .. */
           if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
-          
+
           /* Store pointer to entry name */
           if (entries) {
               entries[count] = strdup(entry->d_name);
@@ -83,7 +104,7 @@
       *out_count = count;
       return 0;
   }
-  
+
   /* Create and populate the capability struct */
   FileSystem* fs = (FileSystem*)malloc(sizeof(FileSystem));
   fs->read_file = fs_read_file;
@@ -93,6 +114,12 @@
   return (void*)fs;
   ```)
 
+;;; Real-FileSystem-free -- release a FileSystem capability created by Real-FileSystem.
+;;;
+;;; Parameters:
+;;;   fs -- the FileSystem pointer returned by Real-FileSystem.
+;;;
+;;; Since: Phase 16
 ;; Free a Real-FileSystem
 (defn Real-FileSystem-free [fs]
   ```c
@@ -103,6 +130,19 @@
 ;; Additional I/O helper functions
 ;; ============================================================================
 
+;;; read-file -- read an entire file into a newly allocated buffer.
+;;;
+;;; Parameters:
+;;;   path -- the filesystem path to open (:cstr).
+;;;
+;;; Returns:
+;;;   A malloc'd buffer containing the file contents with a '\0' terminator,
+;;;   or NULL on any error.  The caller is responsible for calling free.
+;;;
+;;; Example:
+;;;   (let [buf (read-file "/etc/hostname")] ...)
+;;;
+;;; Since: Phase 16
 ;; Read entire file into a buffer (allocated with malloc)
 ;; Returns buffer pointer (caller must free) or NULL on error
 ;; Sets out_len to the number of bytes read
@@ -121,6 +161,20 @@
   return (void*)buf;
   ```)
 
+;;; write-file -- write a byte buffer to a file, overwriting any existing content.
+;;;
+;;; Parameters:
+;;;   path -- the destination filesystem path (:cstr).
+;;;   data -- pointer to the data to write.
+;;;   len  -- number of bytes to write.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   (write-file "/tmp/out.bin" buf 256)  ; => 0
+;;;
+;;; Since: Phase 16
 ;; Write data to a file
 ;; Returns 0 on success, non-zero on error
 (defn write-file [path data len]
@@ -132,6 +186,18 @@
   return (n == (size_t)len) ? 0 : -1;
   ```)
 
+;;; file-exists? -- test whether a file is accessible for reading.
+;;;
+;;; Parameters:
+;;;   path -- the filesystem path to check (:cstr).
+;;;
+;;; Returns:
+;;;   1 if the file can be opened for reading, 0 otherwise.
+;;;
+;;; Example:
+;;;   (file-exists? "/etc/hosts")  ; => 1
+;;;
+;;; Since: Phase 16
 ;; Check if file exists
 (defn file-exists? [path]
   ```c
@@ -140,13 +206,27 @@
   return 0;
   ```)
 
+;;; list-dir -- list all non-hidden entries in a directory.
+;;;
+;;; Parameters:
+;;;   path -- the directory path to list (:cstr).
+;;;
+;;; Returns:
+;;;   A NULL-terminated array of strdup'd entry name strings, or NULL
+;;;   on error.  The caller must free each string and then the array itself
+;;;   (or use free-dir-listing).
+;;;
+;;; Example:
+;;;   (let [entries (list-dir "/tmp")] ...)
+;;;
+;;; Since: Phase 16
 ;; Get current directory listing
 ;; Returns array of strings (NULL-terminated), caller must free each string and the array
 (defn list-dir [path]
   ```c
   DIR* d = opendir(path);
   if (!d) return NULL;
-  
+
   /* Count entries first */
   struct dirent* entry;
   int count = 0;
@@ -155,11 +235,11 @@
       count++;
   }
   rewinddir(d);
-  
+
   /* Allocate array of pointers */
   char** entries = (char**)malloc((count + 1) * sizeof(char*));
   if (!entries) { closedir(d); return NULL; }
-  
+
   int i = 0;
   while ((entry = readdir(d))) {
       if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
@@ -170,6 +250,12 @@
   return (void*)entries;
   ```)
 
+;;; free-dir-listing -- free a directory listing returned by list-dir.
+;;;
+;;; Parameters:
+;;;   entries -- the NULL-terminated string array returned by list-dir.
+;;;
+;;; Since: Phase 16
 ;; Free directory listing returned by list-dir
 (defn free-dir-listing [entries]
   ```c

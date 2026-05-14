@@ -1,11 +1,30 @@
 ;; Phase HKT-P2: Higher-kinded data types - Fix and Free
 ;; ==========================================================
 
+;;; Fix -- fixed-point combinator for type constructors.
+;;;
+;;; Fix[f] is isomorphic to f(Fix[f]), enabling recursive types such as
+;;; Fix[option] (an infinitely-nested optional value).
+;;;
+;;; Parameters:
+;;;   ^f -- the type constructor to take the fixed point of
+;;;
+;;; Since: Phase HKT-P2
 ;; Fix f is the fixed-point combinator for type constructors.
 ;; Fix[f] ≅ f(Fix[f])
 ;; This allows recursive types like Fix[option] which is an infinite nested option.
 (deftype Fix [^f] (f (Fix f)))
 
+;;; Free -- the free monad over a functor.
+;;;
+;;; Free f a represents computations with effects described by the functor f.
+;;; Free f a is isomorphic to f (Free f a) (simplified for v1 -- no sum type).
+;;;
+;;; Parameters:
+;;;   ^f -- the functor describing the effect vocabulary
+;;;   ^a -- the result type
+;;;
+;;; Since: Phase HKT-P2
 ;; Free f a is the free monad over a functor f.
 ;; Free f a ≅ f (Free f a)  (simplified for v1 - no sum type)
 ;; This represents computations with effects described by f.
@@ -15,6 +34,21 @@
 ;; Fix catamorphism (fold)
 ;; ==========================================================
 
+;;; cata -- fold a recursive Fix structure using an algebra.
+;;;
+;;; The algebra is a function (f a -> a) that describes how to convert one
+;;; layer of the functor into the result type.  In v1 this is a stub because
+;;; ADTs and pattern matching are not yet available.
+;;;
+;;; Parameters:
+;;;   f  -- the functor type witness
+;;;   fn -- the algebra function (f a -> a)
+;;;   x  -- the Fix f value to fold
+;;;
+;;; Returns:
+;;;   The folded result (:int, placeholder in v1).
+;;;
+;;; Since: Phase HKT-P2
 ;; cata for Fix: folds a recursive Fix structure using an algebra.
 ;; For Fix f, the algebra is a function (f a -> a) that describes how to
 ;; convert one layer of the functor into the result.
@@ -28,16 +62,56 @@
 ;; Free monad operations
 ;; ==========================================================
 
+;;; pure-free -- lift a pure value into the Free monad.
+;;;
+;;; Parameters:
+;;;   x -- the value to lift
+;;;
+;;; Returns:
+;;;   A Free monad value wrapping x (:int, stub in v1).
+;;;
+;;; Example:
+;;;   (pure-free 42)  ; => Free Pure value (stub)
+;;;
+;;; Since: Phase HKT-P2
 ;; pure-free: lift a value into the Free monad
 ;; In v1, this is a stub. The actual implementation would construct
 ;; a Pure value, but we don't have sum types yet.
 (defn pure-free [x] :int 0)
 
+;;; liftF -- lift a single functor action into the Free monad.
+;;;
+;;; Parameters:
+;;;   fa -- a functor value to lift
+;;;
+;;; Returns:
+;;;   A Free monad value wrapping the functor action (:int, stub in v1).
+;;;
+;;; Example:
+;;;   (liftF my-action)  ; => Free (f a) value (stub)
+;;;
+;;; Since: Phase HKT-P2
 ;; liftF: lift a functor action into the Free monad
 ;; In v1, this is a stub. The actual implementation would construct
 ;; a Free (f a) value.
 (defn liftF [fa] :int 0)
 
+;;; interpret-free -- run a Free monad computation with an interpreter.
+;;;
+;;; The interpreter is a natural transformation from the effect functor f
+;;; into some target monad.  The function recursively processes each layer.
+;;;
+;;; Parameters:
+;;;   interp -- interpreter function (f a -> m a) as a fat closure
+;;;   free   -- the Free monad computation to interpret
+;;;
+;;; Returns:
+;;;   The interpreted result in the target monad (:int, stub in v1).
+;;;
+;;; Example:
+;;;   (interpret-free my-interp program)  ; => result (stub)
+;;;
+;;; Since: Phase HKT-P2
 ;; interpret-free: run a Free monad computation with an interpreter
 ;; In v1, this is a stub. The actual implementation would recursively
 ;; process the Free structure, applying the interpreter to each layer.

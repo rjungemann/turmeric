@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tur/tur/temporal | Turmeric API</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand">turmeric</span>
+  <nav>
+    <a href="index.html">API Docs</a>
+    <a href="../autodoc-plan.md">Plan</a>
+  </nav>
+</header>
+<div class="page-layout">
+<div class="sidebar">
+  <h3>Exported</h3>
+  <ul>
+    <li><a href="#slow">slow</a></li>
+    <li><a href="#fast">fast</a></li>
+    <li><a href="#stretch">stretch</a></li>
+    <li><a href="#compress">compress</a></li>
+    <li><a href="#shift">shift</a></li>
+    <li><a href="#rot">rot</a></li>
+    <li><a href="#mirror">mirror</a></li>
+    <li><a href="#rev">rev</a></li>
+    <li><a href="#repeat">repeat</a></li>
+    <li><a href="#once">once</a></li>
+    <li><a href="#for-beats">for-beats</a></li>
+    <li><a href="#loop-cycles">loop-cycles</a></li>
+    <li><a href="#loop-range">loop-range</a></li>
+    <li><a href="#warp">warp</a></li>
+    <li><a href="#warp-by">warp-by</a></li>
+    <li><a href="#quantize-beat">quantize-beat</a></li>
+    <li><a href="#quantize">quantize</a></li>
+    <li><a href="#quantize-subdiv">quantize-subdiv</a></li>
+    <li><a href="#time-mod">time-mod</a></li>
+    <li><a href="#time-switch">time-switch</a></li>
+    <li><a href="#transform-time">transform-time</a></li>
+    <li><a href="#backwards">backwards</a></li>
+    <li><a href="#palindrome">palindrome</a></li>
+    <li><a href="#stutter">stutter</a></li>
+    <li><a href="#time-window">time-window</a></li>
+    <li><a href="#fade-in">fade-in</a></li>
+    <li><a href="#fade-out">fade-out</a></li>
+  </ul>
+</div>
+<div class="content">
+  <div class="module-heading">
+    <h1>tur/temporal</h1>
+    <div class="module-path">stdlib/temporal.tur</div>
+  </div>
+<div class="def-card" id="slow">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>slow</h2>
+  </div>
+  <pre class="def-signature">(slow [factor p])</pre>
+  <p class="def-summary">play a pattern slower by a given factor.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>factor</td><td></td><td>slowdown factor (&gt; 1 = slower)</td></tr>
+    <tr><td>p</td><td></td><td>pattern to slow down</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;T&gt; that plays at 1/factor speed.
+
+  ((slow 2 my-pat) 1.0)  ; same as (my-pat 0.5)</pre>
+  </div>
+</div>
+<div class="def-card" id="fast">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>fast</h2>
+  </div>
+  <pre class="def-signature">(fast [factor p])</pre>
+  <p class="def-summary">play a pattern faster by a given factor.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>factor</td><td></td><td>speedup factor (&gt; 1 = faster)</td></tr>
+    <tr><td>p</td><td></td><td>pattern to speed up</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;T&gt; that plays factor times faster.
+
+  ((fast 2 my-pat) 1.0)  ; same as (my-pat 2.0)</pre>
+  </div>
+</div>
+<div class="def-card" id="stretch">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>stretch</h2>
+  </div>
+  <pre class="def-signature">(stretch [factor p])</pre>
+  <p class="def-summary">stretch time within a cycle (alias for slow).</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>factor</td><td></td><td>stretch factor</td></tr>
+    <tr><td>p</td><td></td><td>pattern to stretch</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt; with stretched time.</p>
+  </div>
+</div>
+<div class="def-card" id="compress">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>compress</h2>
+  </div>
+  <pre class="def-signature">(compress [factor p])</pre>
+  <p class="def-summary">compress time within a cycle (alias for fast).</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>factor</td><td></td><td>compression factor</td></tr>
+    <tr><td>p</td><td></td><td>pattern to compress</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt; with compressed time.</p>
+  </div>
+</div>
+<div class="def-card" id="shift">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>shift</h2>
+  </div>
+  <pre class="def-signature">(shift [offset p])</pre>
+  <p class="def-summary">shift a pattern forward or backward in time.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>offset</td><td></td><td>time offset in beats (positive = later, negative = earlier)</td></tr>
+    <tr><td>p</td><td></td><td>pattern to shift</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;T&gt; shifted in time.
+
+  ((shift 0.5 my-pat) 1.0)  ; same as (my-pat 1.5)</pre>
+  </div>
+</div>
+<div class="def-card" id="rot">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>rot</h2>
+  </div>
+  <pre class="def-signature">(rot [amount p])</pre>
+  <p class="def-summary">rotate a pattern&#x27;s phase (alias for shift).</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>amount</td><td></td><td>rotation amount in beats</td></tr>
+    <tr><td>p</td><td></td><td>pattern to rotate</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt; with shifted phase.</p>
+  </div>
+</div>
+<div class="def-card" id="mirror">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>mirror</h2>
+  </div>
+  <pre class="def-signature">(mirror [p])</pre>
+  <p class="def-summary">mirror a pattern within each 2-beat window.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to mirror</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;T&gt; that plays forward in [0,1) then backward in [1,2).
+
+  ((mirror my-pat) 1.5)  ; reads from time 0.5</pre>
+  </div>
+</div>
+<div class="def-card" id="rev">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>rev</h2>
+  </div>
+  <pre class="def-signature">(rev [p])</pre>
+  <p class="def-summary">reverse a pattern within each 1-beat cycle.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to reverse</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;T&gt; with reversed time within each cycle.
+
+  ((rev my-pat) 0.25)  ; same as (my-pat 0.75)</pre>
+  </div>
+</div>
+<div class="def-card" id="repeat">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>repeat</h2>
+  </div>
+  <pre class="def-signature">(repeat [n p])</pre>
+  <p class="def-summary">repeat a pattern n times within its cycle.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>n</td><td></td><td>repetition count</td></tr>
+    <tr><td>p</td><td></td><td>pattern to repeat</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;T&gt; playing n times faster.
+
+  ((repeat 4 my-pat) 0.0)</pre>
+  </div>
+</div>
+<div class="def-card" id="once">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>once</h2>
+  </div>
+  <pre class="def-signature">(once [p &amp; [zero 0])</pre>
+  <p class="def-summary">play a pattern only during the first beat, then return zero.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to play</td></tr>
+    <tr><td>zero</td><td></td><td>value after the first cycle (default: 0)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt; that silences after time &gt;= 1.0.</p>
+  </div>
+</div>
+<div class="def-card" id="for-beats">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>for-beats</h2>
+  </div>
+  <pre class="def-signature">(for-beats [duration p &amp; [zero 0])</pre>
+  <p class="def-summary">play a pattern for a fixed number of beats, then return zero.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>duration</td><td></td><td>duration in beats</td></tr>
+    <tr><td>p</td><td></td><td>pattern to play</td></tr>
+    <tr><td>zero</td><td></td><td>value after duration (default: 0)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt; active for duration beats.</p>
+  </div>
+</div>
+<div class="def-card" id="loop-cycles">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>loop-cycles</h2>
+  </div>
+  <pre class="def-signature">(loop-cycles [cycles p &amp; [zero 0])</pre>
+  <p class="def-summary">loop a pattern for a fixed number of cycles then stop.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>cycles</td><td></td><td>number of cycles to loop</td></tr>
+    <tr><td>p</td><td></td><td>pattern to loop</td></tr>
+    <tr><td>zero</td><td></td><td>value after looping ends (default: 0)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt;.</p>
+  </div>
+</div>
+<div class="def-card" id="loop-range">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>loop-range</h2>
+  </div>
+  <pre class="def-signature">(loop-range [start end p &amp; [zero 0])</pre>
+  <p class="def-summary">loop a pattern between two time points.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>start</td><td></td><td>start time in beats</td></tr>
+    <tr><td>end</td><td></td><td>end time in beats</td></tr>
+    <tr><td>p</td><td></td><td>pattern to loop</td></tr>
+    <tr><td>zero</td><td></td><td>value outside [start, end) (default: 0)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt; looping within the window.</p>
+  </div>
+</div>
+<div class="def-card" id="warp">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>warp</h2>
+  </div>
+  <pre class="def-signature">(warp [warp-fn p])</pre>
+  <p class="def-summary">remap time using an arbitrary function.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>warp-fn</td><td></td><td>Beats -&gt; Beats transformation applied to time before evaluation</td></tr>
+    <tr><td>p</td><td></td><td>pattern to warp</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt; evaluated at warped time.</p>
+  </div>
+</div>
+<div class="def-card" id="warp-by">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>warp-by</h2>
+  </div>
+  <pre class="def-signature">(warp-by [warp-pat p])</pre>
+  <p class="def-summary">remap time by multiplying with values from another pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>warp-pat</td><td></td><td>NumPattern producing a time-scaling factor</td></tr>
+    <tr><td>p</td><td></td><td>pattern to warp</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt; evaluated at time * warp-pat(time).</p>
+  </div>
+</div>
+<div class="def-card" id="quantize-beat">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>quantize-beat</h2>
+  </div>
+  <pre class="def-signature">(quantize-beat [p])</pre>
+  <p class="def-summary">snap pattern evaluation to the nearest beat boundary.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to quantize</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt; that only changes on whole-beat boundaries.</p>
+  </div>
+</div>
+<div class="def-card" id="quantize">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>quantize</h2>
+  </div>
+  <pre class="def-signature">(quantize [n p])</pre>
+  <p class="def-summary">snap pattern evaluation to multiples of n beats.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>n</td><td></td><td>quantization grid size in beats</td></tr>
+    <tr><td>p</td><td></td><td>pattern to quantize</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;T&gt; quantized to n-beat intervals.
+
+  (quantize 0.25 my-pat)  ; 16th-note grid</pre>
+  </div>
+</div>
+<div class="def-card" id="quantize-subdiv">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>quantize-subdiv</h2>
+  </div>
+  <pre class="def-signature">(quantize-subdiv [subdivisions p])</pre>
+  <p class="def-summary">snap pattern evaluation to a subdivision grid.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>subdivisions</td><td></td><td>number of subdivisions per beat (e.g., 4 = 16th notes)</td></tr>
+    <tr><td>p</td><td></td><td>pattern to quantize</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt; quantized to 1/subdivisions-beat steps.</p>
+  </div>
+</div>
+<div class="def-card" id="time-mod">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>time-mod</h2>
+  </div>
+  <pre class="def-signature">(time-mod [period p])</pre>
+  <p class="def-summary">wrap time into a [0, period) window before evaluation.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>period</td><td></td><td>period in beats</td></tr>
+    <tr><td>p</td><td></td><td>pattern to wrap</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt; evaluated with time mod period.</p>
+  </div>
+</div>
+<div class="def-card" id="time-switch">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>time-switch</h2>
+  </div>
+  <pre class="def-signature">(time-switch [period &amp; patterns])</pre>
+  <p class="def-summary">cycle through a list of patterns, each lasting period beats.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>period</td><td></td><td>duration per pattern in beats</td></tr>
+    <tr><td>patterns</td><td></td><td>patterns to cycle through</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;T&gt; switching to the next pattern every period beats.
+
+  ((time-switch 4 pat-a pat-b pat-c) 5.0)  ; uses pat-b</pre>
+  </div>
+</div>
+<div class="def-card" id="transform-time">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>transform-time</h2>
+  </div>
+  <pre class="def-signature">(transform-time [p &amp; transformations])</pre>
+  <p class="def-summary">apply a sequence of temporal transformations to a pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>base pattern</td></tr>
+    <tr><td>transformations</td><td></td><td>list of [transform-fn args...] pairs to apply in order</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;T&gt; with all transformations applied.
+
+  (transform-time (cycle 1 2 3) [slow 2] [shift 0.5] [repeat 2])</pre>
+  </div>
+</div>
+<div class="def-card" id="backwards">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>backwards</h2>
+  </div>
+  <pre class="def-signature">(backwards [p &amp; [duration 1.0])</pre>
+  <p class="def-summary">play a pattern in reverse within each cycle.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to reverse</td></tr>
+    <tr><td>duration</td><td></td><td>cycle duration in beats (default: 1.0)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt; playing backwards.</p>
+  </div>
+</div>
+<div class="def-card" id="palindrome">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>palindrome</h2>
+  </div>
+  <pre class="def-signature">(palindrome [p &amp; [duration 1.0])</pre>
+  <p class="def-summary">play a pattern forwards then backwards (ping-pong).</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to palindrome</td></tr>
+    <tr><td>duration</td><td></td><td>half-period in beats (default: 1.0)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;T&gt; playing forward then backward in a 2*duration window.
+
+  ((palindrome my-pat) 1.5)  ; reads from time 0.5 (backwards half)</pre>
+  </div>
+</div>
+<div class="def-card" id="stutter">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>stutter</h2>
+  </div>
+  <pre class="def-signature">(stutter [subdivisions p])</pre>
+  <p class="def-summary">repeat each value of a pattern subdivisions times.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>subdivisions</td><td></td><td>how many times to repeat each value</td></tr>
+    <tr><td>p</td><td></td><td>pattern to stutter</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;T&gt; with stuttered output.
+
+  ((stutter 4 my-pat) 0.5)  ; reads from floor(0.5/4) = 0</pre>
+  </div>
+</div>
+<div class="def-card" id="time-window">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>time-window</h2>
+  </div>
+  <pre class="def-signature">(time-window [start end p &amp; [zero 0])</pre>
+  <p class="def-summary">gate a pattern to a specific time window.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>start</td><td></td><td>window start in beats</td></tr>
+    <tr><td>end</td><td></td><td>window end in beats</td></tr>
+    <tr><td>p</td><td></td><td>pattern to window</td></tr>
+    <tr><td>zero</td><td></td><td>value outside the window (default: 0)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt; active only in [start, end).</p>
+  </div>
+</div>
+<div class="def-card" id="fade-in">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>fade-in</h2>
+  </div>
+  <pre class="def-signature">(fade-in [fade-duration p])</pre>
+  <p class="def-summary">produce a linear ramp from 0 to 1 over fade-duration beats.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>fade-duration</td><td></td><td>duration of the fade in beats</td></tr>
+    <tr><td>p</td><td></td><td>pattern (currently unused, ramp only)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern rising linearly to 1.0 then holding at 1.0.</p>
+  </div>
+</div>
+<div class="def-card" id="fade-out">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>fade-out</h2>
+  </div>
+  <pre class="def-signature">(fade-out [fade-duration start-time p])</pre>
+  <p class="def-summary">produce a linear ramp from 1 to 0 starting at start-time.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>fade-duration</td><td></td><td>duration of the fade in beats</td></tr>
+    <tr><td>start-time</td><td></td><td>beat at which the fade begins</td></tr>
+    <tr><td>p</td><td></td><td>pattern (currently unused, ramp only)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern holding 1.0 before start-time, then falling to 0.0.</p>
+  </div>
+</div>
+</div>
+</div>
+<footer class="site-footer">
+  Auto-generated by <code>tools/gendocs.py</code>.
+  Do not edit by hand -- run <code>just docs</code> to regenerate.
+</footer>
+</body>
+</html>

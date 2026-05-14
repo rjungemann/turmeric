@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tur/tur/scheduler_mt | Turmeric API</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand">turmeric</span>
+  <nav>
+    <a href="index.html">API Docs</a>
+    <a href="../autodoc-plan.md">Plan</a>
+  </nav>
+</header>
+<div class="page-layout">
+<div class="sidebar">
+  <h3>Exported</h3>
+  <ul>
+    <li><a href="#scheduler-mt-new">scheduler-mt-new</a></li>
+    <li><a href="#scheduler-mt-free">scheduler-mt-free</a></li>
+    <li><a href="#scheduler-mt-spawn">scheduler-mt-spawn</a></li>
+    <li><a href="#scheduler-mt-run">scheduler-mt-run</a></li>
+    <li><a href="#scheduler-mt-thread-id">scheduler-mt-thread-id</a></li>
+    <li><a href="#scheduler-mt-set-current">scheduler-mt-set-current</a></li>
+    <li><a href="#scheduler-mt-current">scheduler-mt-current</a></li>
+    <li><a href="#scheduler-mt-yield">scheduler-mt-yield</a></li>
+    <li><a href="#scheduler-mt-park">scheduler-mt-park</a></li>
+    <li><a href="#scheduler-mt-unpark">scheduler-mt-unpark</a></li>
+  </ul>
+</div>
+<div class="content">
+  <div class="module-heading">
+    <h1>tur/scheduler_mt</h1>
+    <div class="module-path">stdlib/scheduler_mt.tur</div>
+  </div>
+<div class="def-card" id="scheduler-mt-new">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>scheduler-mt-new</h2>
+  </div>
+  <pre class="def-signature">(scheduler-mt-new [n_threads :int] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">create a new multi-threaded work-stealing scheduler.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>n_threads</td><td></td><td>number of OS worker threads to spawn</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T23</p>
+</div>
+<div class="def-card" id="scheduler-mt-free">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>scheduler-mt-free</h2>
+  </div>
+  <pre class="def-signature">(scheduler-mt-free [sched :ptr&lt;void&gt;] :nil)</pre>
+  <p class="def-summary">free a multi-threaded scheduler after all threads have finished.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>sched</td><td></td><td>scheduler pointer returned by scheduler-mt-new</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T23</p>
+</div>
+<div class="def-card" id="scheduler-mt-spawn">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>scheduler-mt-spawn</h2>
+  </div>
+  <pre class="def-signature">(scheduler-mt-spawn [sched :ptr&lt;void&gt; fiber :ptr&lt;void&gt;] :nil)</pre>
+  <p class="def-summary">add a fiber to the multi-threaded scheduler&#x27;s work queue.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>sched</td><td></td><td>scheduler pointer returned by scheduler-mt-new</td></tr>
+    <tr><td>fiber</td><td></td><td>fiber pointer to enqueue for execution</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T23</p>
+</div>
+<div class="def-card" id="scheduler-mt-run">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>scheduler-mt-run</h2>
+  </div>
+  <pre class="def-signature">(scheduler-mt-run [sched :ptr&lt;void&gt;] :nil)</pre>
+  <p class="def-summary">run the multi-threaded scheduler on the calling thread.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>sched</td><td></td><td>scheduler pointer returned by scheduler-mt-new</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T23</p>
+</div>
+<div class="def-card" id="scheduler-mt-thread-id">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>scheduler-mt-thread-id</h2>
+  </div>
+  <pre class="def-signature">(scheduler-mt-thread-id :int)</pre>
+  <p class="def-summary">return the unique integer ID of the current OS thread.</p>
+  <p class="def-since">Since: Phase T23</p>
+</div>
+<div class="def-card" id="scheduler-mt-set-current">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>scheduler-mt-set-current</h2>
+  </div>
+  <pre class="def-signature">(scheduler-mt-set-current [sched :ptr&lt;void&gt;] :nil)</pre>
+  <p class="def-summary">set the active scheduler for the current thread.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>sched</td><td></td><td>scheduler pointer to install as the current thread&#x27;s scheduler</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T23</p>
+</div>
+<div class="def-card" id="scheduler-mt-current">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>scheduler-mt-current</h2>
+  </div>
+  <pre class="def-signature">(scheduler-mt-current :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">return the scheduler currently associated with this thread.</p>
+  <p class="def-since">Since: Phase T23</p>
+</div>
+<div class="def-card" id="scheduler-mt-yield">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>scheduler-mt-yield</h2>
+  </div>
+  <pre class="def-signature">(scheduler-mt-yield :nil)</pre>
+  <p class="def-summary">yield the current fiber so other fibers may be scheduled.</p>
+  <p class="def-since">Since: Phase T23</p>
+</div>
+<div class="def-card" id="scheduler-mt-park">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>scheduler-mt-park</h2>
+  </div>
+  <pre class="def-signature">(scheduler-mt-park :nil)</pre>
+  <p class="def-summary">park the current fiber until another fiber calls scheduler-mt-unpark.</p>
+  <p class="def-since">Since: Phase T23</p>
+</div>
+<div class="def-card" id="scheduler-mt-unpark">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>scheduler-mt-unpark</h2>
+  </div>
+  <pre class="def-signature">(scheduler-mt-unpark [fiber :ptr&lt;void&gt;] :nil)</pre>
+  <p class="def-summary">unpark a previously parked fiber, making it eligible to run.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>fiber</td><td></td><td>fiber pointer that was previously parked via scheduler-mt-park</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T23</p>
+</div>
+</div>
+</div>
+<footer class="site-footer">
+  Auto-generated by <code>tools/gendocs.py</code>.
+  Do not edit by hand -- run <code>just docs</code> to regenerate.
+</footer>
+</body>
+</html>

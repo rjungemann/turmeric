@@ -6,9 +6,19 @@
 ;; are a Phase R1 follow-on once generic structs land.
 
 
-;; ── Constructors ─────────────────────────────────────────────────────────────
+;; -- Constructors -------------------------------------------------------------
 
 ;; Create an ok value
+;;; ok -- wrap a value in an ok result.
+;;;
+;;; Parameters:
+;;;   x -- the success value (:int)
+;;;
+;;; Returns:
+;;;   A heap-allocated ok result as :ptr<void>.
+;;;
+;;; Example:
+;;;   (ok 42)  ; => ok(42)
 (defn ok [x :int] :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
@@ -19,6 +29,16 @@
   ```)
 
 ;; Create an err value
+;;; err -- wrap a value in an err result.
+;;;
+;;; Parameters:
+;;;   e -- the error value (:int)
+;;;
+;;; Returns:
+;;;   A heap-allocated err result as :ptr<void>.
+;;;
+;;; Example:
+;;;   (err 1)  ; => err(1)
 (defn err [e :int] :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
@@ -28,9 +48,20 @@
   return result;
   ```)
 
-;; ── Predicates ───────────────────────────────────────────────────────────────
+;; -- Predicates ---------------------------------------------------------------
 
 ;; Check if result is ok
+;;; ok? -- check whether a result is ok.
+;;;
+;;; Parameters:
+;;;   r -- the result to test (:ptr<void>)
+;;;
+;;; Returns:
+;;;   true if r is an ok result, false otherwise.
+;;;
+;;; Example:
+;;;   (ok? (ok 1))   ; => true
+;;;   (ok? (err 0))  ; => false
 (defn ok? [r :ptr<void>] :bool
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
@@ -38,15 +69,36 @@
   ```)
 
 ;; Check if result is err
+;;; err? -- check whether a result is err.
+;;;
+;;; Parameters:
+;;;   r -- the result to test (:ptr<void>)
+;;;
+;;; Returns:
+;;;   true if r is an err result (or NULL), false otherwise.
+;;;
+;;; Example:
+;;;   (err? (err 0))  ; => true
+;;;   (err? (ok 1))   ; => false
 (defn err? [r :ptr<void>] :bool
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
   return result == NULL || !result->is_ok;
   ```)
 
-;; ── Value accessors ───────────────────────────────────────────────────────────
+;; -- Value accessors -----------------------------------------------------------
 
 ;; Extract the ok value (undefined behaviour if r is err)
+;;; ok-val -- extract the ok value from a result.
+;;;
+;;; Parameters:
+;;;   r -- an ok result (:ptr<void>); behaviour is undefined if r is err
+;;;
+;;; Returns:
+;;;   The contained ok value as :int.
+;;;
+;;; Example:
+;;;   (ok-val (ok 5))  ; => 5
 (defn ok-val [r :ptr<void>] :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
@@ -54,15 +106,35 @@
   ```)
 
 ;; Extract the err value (undefined behaviour if r is ok)
+;;; err-val -- extract the err value from a result.
+;;;
+;;; Parameters:
+;;;   r -- an err result (:ptr<void>); behaviour is undefined if r is ok
+;;;
+;;; Returns:
+;;;   The contained err value as :int.
+;;;
+;;; Example:
+;;;   (err-val (err 99))  ; => 99
 (defn err-val [r :ptr<void>] :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
   return result->err_val;
   ```)
 
-;; ── Unwrapping ────────────────────────────────────────────────────────────────
+;; -- Unwrapping ----------------------------------------------------------------
 
 ;; Unwrap - returns ok value, aborts if err
+;;; result-unwrap -- extract the ok value, aborting the process if r is err.
+;;;
+;;; Parameters:
+;;;   r -- the result to unwrap (:ptr<void>)
+;;;
+;;; Returns:
+;;;   The contained ok value as :int.
+;;;
+;;; Example:
+;;;   (result-unwrap (ok 7))  ; => 7
 (defn result-unwrap [r :ptr<void>] :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
@@ -74,6 +146,17 @@
   ```)
 
 ;; Unwrap with default - returns ok value or default_val if err
+;;; result-unwrap-or -- extract the ok value, or return a default if r is err.
+;;;
+;;; Parameters:
+;;;   r           -- the result (:ptr<void>)
+;;;   default_val -- the fallback value (:int)
+;;;
+;;; Returns:
+;;;   The ok value if r is ok, otherwise default_val.
+;;;
+;;; Example:
+;;;   (result-unwrap-or (err 0) 99)  ; => 99
 (defn result-unwrap-or [r :ptr<void> default_val :int] :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
@@ -82,6 +165,17 @@
   ```)
 
 ;; Expect - returns ok value, aborts with custom message if err
+;;; result-expect -- extract the ok value, aborting with a custom message if r is err.
+;;;
+;;; Parameters:
+;;;   r   -- the result to unwrap (:ptr<void>)
+;;;   msg -- message printed to stderr before aborting (:cstr)
+;;;
+;;; Returns:
+;;;   The contained ok value as :int.
+;;;
+;;; Example:
+;;;   (result-expect r "parse failed")  ; => ok value or abort
 (defn result-expect [r :ptr<void> msg :cstr] :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
@@ -92,10 +186,21 @@
   return (int)result->ok_val;
   ```)
 
-;; ── Combinators ──────────────────────────────────────────────────────────────
+;; -- Combinators --------------------------------------------------------------
 
-;; result-map — apply f to the ok value; propagate err unchanged
+;; result-map -- apply f to the ok value; propagate err unchanged
 ;; f must be a fn [x :int] :int
+;;; result-map -- apply a function to the ok value, propagating err unchanged.
+;;;
+;;; Parameters:
+;;;   r -- the result (:ptr<void>)
+;;;   f -- function to apply to the ok value (:ptr<void>); signature fn [x :int] :int
+;;;
+;;; Returns:
+;;;   A new ok result with the mapped value, or r unchanged if r is err.
+;;;
+;;; Example:
+;;;   (result-map (ok 3) (fn [x] (* x 2)))  ; => ok(6)
 (defn result-map [r :ptr<void> f :ptr<void>] :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
@@ -108,8 +213,19 @@
   return out;
   ```)
 
-;; result-map-err — apply f to the err value; propagate ok unchanged
+;; result-map-err -- apply f to the err value; propagate ok unchanged
 ;; f must be a fn [e :int] :int
+;;; result-map-err -- apply a function to the err value, propagating ok unchanged.
+;;;
+;;; Parameters:
+;;;   r -- the result (:ptr<void>)
+;;;   f -- function to apply to the err value (:ptr<void>); signature fn [e :int] :int
+;;;
+;;; Returns:
+;;;   A new err result with the mapped error, or r unchanged if r is ok.
+;;;
+;;; Example:
+;;;   (result-map-err (err 1) (fn [e] (+ e 100)))  ; => err(101)
 (defn result-map-err [r :ptr<void> f :ptr<void>] :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
@@ -122,8 +238,19 @@
   return out;
   ```)
 
-;; result-flat-map (result-and-then) — chain computations that may fail
+;; result-flat-map (result-and-then) -- chain computations that may fail
 ;; f receives the ok value and must return a ptr<void> result
+;;; result-flat-map -- chain a fallible computation over an ok result.
+;;;
+;;; Parameters:
+;;;   r -- the result (:ptr<void>)
+;;;   f -- function receiving the ok value and returning a new result (:ptr<void>)
+;;;
+;;; Returns:
+;;;   The result of applying f to the ok value, or r unchanged if r is err.
+;;;
+;;; Example:
+;;;   (result-flat-map (ok 5) (fn [x] (if (> x 0) (ok x) (err -1))))  ; => ok(5)
 (defn result-flat-map [r :ptr<void> f :ptr<void>] :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
@@ -131,7 +258,18 @@
   return (void *)((int64_t (*)(int64_t))f)(res->ok_val);
   ```)
 
-;; result-or — return r if ok, otherwise return alt
+;; result-or -- return r if ok, otherwise return alt
+;;; result-or -- return r if ok, otherwise return the fallback result.
+;;;
+;;; Parameters:
+;;;   r   -- the primary result (:ptr<void>)
+;;;   alt -- the fallback result (:ptr<void>)
+;;;
+;;; Returns:
+;;;   r if r is ok, otherwise alt.
+;;;
+;;; Example:
+;;;   (result-or (err 0) (ok 99))  ; => ok(99)
 (defn result-or [r :ptr<void> alt :ptr<void>] :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
@@ -139,8 +277,19 @@
   return alt;
   ```)
 
-;; result-or-else — return r if ok, otherwise compute alt via thunk
+;; result-or-else -- return r if ok, otherwise compute alt via thunk
 ;; f must be a fn [e :int] :ptr<void>
+;;; result-or-else -- return r if ok, otherwise compute a fallback by calling f with the err value.
+;;;
+;;; Parameters:
+;;;   r -- the primary result (:ptr<void>)
+;;;   f -- recovery function of type fn [e :int] :ptr<void>
+;;;
+;;; Returns:
+;;;   r if r is ok, otherwise the result of f(err-value).
+;;;
+;;; Example:
+;;;   (result-or-else (err 1) (fn [e] (ok 0)))  ; => ok(0)
 (defn result-or-else [r :ptr<void> f :ptr<void>] :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
@@ -149,9 +298,21 @@
   return (void *)((int64_t (*)(int64_t))f)(ev);
   ```)
 
-;; ── Option interop ───────────────────────────────────────────────────────────
+;; -- Option interop -----------------------------------------------------------
 
-;; ok-or — convert option to result: some(v) → ok(v), none → err(e)
+;; ok-or -- convert option to result: some(v) -> ok(v), none -> err(e)
+;;; ok-or -- convert an option to a result, using e as the error value if the option is none.
+;;;
+;;; Parameters:
+;;;   opt -- the option to convert (:ptr<void>)
+;;;   e   -- the error value to use if opt is none (:int)
+;;;
+;;; Returns:
+;;;   ok(value) if opt is some(value), err(e) if opt is none.
+;;;
+;;; Example:
+;;;   (ok-or (some 7) -1)  ; => ok(7)
+;;;   (ok-or (none) -1)    ; => err(-1)
 (defn ok-or [opt :ptr<void> e :int] :ptr<void>
   ```c
   struct { bool is_some; int64_t value; } *o = (void*)opt;
@@ -168,11 +329,22 @@
   return result;
   ```)
 
-;; ── Error context ─────────────────────────────────────────────────────────────
+;; -- Error context -------------------------------------------------------------
 
-;; err-context — wrap an err value's message in additional context
+;; err-context -- wrap an err value's message in additional context
 ;; Returns a new err whose err_val is a freshly allocated cstr "context: original"
 ;; If r is ok, returns r unchanged.
+;;; err-context -- prepend context text to an err value's message string.
+;;;
+;;; Parameters:
+;;;   r   -- the result (:ptr<void>)
+;;;   ctx -- context prefix string (:cstr)
+;;;
+;;; Returns:
+;;;   A new err result whose message is "ctx: original", or r unchanged if r is ok.
+;;;
+;;; Example:
+;;;   (err-context (err my-msg) "loading config")
 (defn err-context [r :ptr<void> ctx :cstr] :ptr<void>
   ```c
   extern size_t strlen(const char*);
@@ -194,10 +366,25 @@
   return out;
   ```)
 
-;; ── Memory management ────────────────────────────────────────────────────────
+;; -- Memory management --------------------------------------------------------
 
 ;; Phase E1: result-eq? -- compare two results using separate comparators for ok and err values.
 ;; ok-cmp and err-cmp must each be fn [a :int b :int] :bool
+;;; result-eq? -- compare two results using separate comparators for ok and err values.
+;;;
+;;; Parameters:
+;;;   r1      -- first result
+;;;   r2      -- second result
+;;;   ok-cmp  -- comparator for ok values; fn [a :int b :int] :bool
+;;;   err-cmp -- comparator for err values; fn [a :int b :int] :bool
+;;;
+;;; Returns:
+;;;   true if both results have the same variant and the relevant comparator returns true.
+;;;
+;;; Example:
+;;;   (result-eq? (ok 1) (ok 1) (fn [a b] (= a b)) (fn [a b] (= a b)))  ; => true
+;;;
+;;; Since: Phase E1
 (defn result-eq? [r1 r2 ok-cmp err-cmp] :bool
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a =
@@ -214,21 +401,40 @@
   }
   ```)
 
+;;; Typeclass instance for result -- Eq: structural equality via result-eq?.
 (definstance Eq [result]
   (eq? [x y] (result-eq? x y (fn [a b] (= a b)) (fn [a b] (= a b)))))
 
 ;; Free a result (does not free the contained value)
+;;; result-free -- free the heap memory for a result value.
+;;;
+;;; Parameters:
+;;;   r -- the result to free (:ptr<void>)
+;;;
+;;; Example:
+;;;   (result-free my-result)
 (defn result-free [r :ptr<void>]
   ```c
   free(r);
   ```)
 
-;; ── Collection helpers ────────────────────────────────────────────────────────
+;; -- Collection helpers -------------------------------------------------------
 
-;; result-collect — collect a vec of results into a single result
+;; result-collect -- collect a vec of results into a single result
 ;; v must be a vec (ptr<void> from vec-new) containing result ptr<void> values.
 ;; Returns ok(vec-of-ok-values) if all items are ok,
 ;; or err(first-err-value) on the first err encountered.
+;;; result-collect -- collect a vec of results into a single result.
+;;;
+;;; Parameters:
+;;;   v -- a vec (:ptr<void>) whose elements are result ptr<void> values
+;;;
+;;; Returns:
+;;;   ok(vec-of-ok-values) if every element is ok,
+;;;   or err(first-err-value) on the first err encountered.
+;;;
+;;; Example:
+;;;   (result-collect my-results-vec)  ; => ok(vec) or err(e)
 (defn result-collect [v :ptr<void>] :ptr<void>
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec =
@@ -247,7 +453,7 @@
       return out;
     }
   }
-  /* All ok — build a new vec of ok values */
+  /* All ok -- build a new vec of ok values */
   struct { int64_t *data; size_t len; size_t cap; } *ok_vec =
       malloc(sizeof(*ok_vec));
   ok_vec->len  = vec->len;
@@ -265,9 +471,21 @@
   return out;
   ```)
 
-;; result-partition — split a vec of results into (ok-vec, err-vec)
+;; result-partition -- split a vec of results into (ok-vec, err-vec)
 ;; Returns a ptr<void> to a pair struct { void *ok_vec; void *err_vec; }.
 ;; Use result-partition-ok and result-partition-err to extract each vec.
+;;; result-partition -- split a vec of results into separate ok and err vecs.
+;;;
+;;; Parameters:
+;;;   v -- a vec (:ptr<void>) whose elements are result ptr<void> values
+;;;
+;;; Returns:
+;;;   A pair (:ptr<void>) with fields ok_vec and err_vec.
+;;;   Use result-partition-ok and result-partition-err to access each vec.
+;;;
+;;; Example:
+;;;   (let [pair (result-partition my-vec)]
+;;;     (result-partition-ok pair))
 (defn result-partition [v :ptr<void>] :ptr<void>
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec =
@@ -308,21 +526,53 @@
   return pair;
   ```)
 
-;; result-partition-ok — extract the ok-vec from a result-partition pair
+;; result-partition-ok -- extract the ok-vec from a result-partition pair
+;;; result-partition-ok -- extract the ok-vec from a result-partition pair.
+;;;
+;;; Parameters:
+;;;   pair -- the pair returned by result-partition (:ptr<void>)
+;;;
+;;; Returns:
+;;;   The vec (:ptr<void>) of ok values.
+;;;
+;;; Example:
+;;;   (result-partition-ok (result-partition my-vec))
 (defn result-partition-ok [pair :ptr<void>] :ptr<void>
   ```c
   struct { void *ok_vec; void *err_vec; } *p = (void*)pair;
   return p->ok_vec;
   ```)
 
-;; result-partition-err — extract the err-vec from a result-partition pair
+;; result-partition-err -- extract the err-vec from a result-partition pair
+;;; result-partition-err -- extract the err-vec from a result-partition pair.
+;;;
+;;; Parameters:
+;;;   pair -- the pair returned by result-partition (:ptr<void>)
+;;;
+;;; Returns:
+;;;   The vec (:ptr<void>) of err values.
+;;;
+;;; Example:
+;;;   (result-partition-err (result-partition my-vec))
 (defn result-partition-err [pair :ptr<void>] :ptr<void>
   ```c
   struct { void *ok_vec; void *err_vec; } *p = (void*)pair;
   return p->err_vec;
   ```)
 
-;; Phase R4: result-must — unwrap ok or panic with default message
+;; Phase R4: result-must -- unwrap ok or panic with default message
+;;; result-must -- unwrap the ok value or panic with a default message.
+;;;
+;;; Parameters:
+;;;   r -- the result to unwrap (:ptr<void>)
+;;;
+;;; Returns:
+;;;   The contained ok value as :int.
+;;;
+;;; Example:
+;;;   (result-must (ok 5))  ; => 5
+;;;
+;;; Since: Phase R4
 (defn result-must [r :ptr<void>] :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
@@ -332,7 +582,20 @@
   return (int)res->ok_val;
   ```)
 
-;; Phase R4: result-must-msg — unwrap ok or panic with custom message
+;; Phase R4: result-must-msg -- unwrap ok or panic with custom message
+;;; result-must-msg -- unwrap the ok value or panic with a caller-supplied message.
+;;;
+;;; Parameters:
+;;;   r   -- the result to unwrap (:ptr<void>)
+;;;   msg -- the panic message (:cstr)
+;;;
+;;; Returns:
+;;;   The contained ok value as :int.
+;;;
+;;; Example:
+;;;   (result-must-msg r "expected ok result")  ; => value or panic
+;;;
+;;; Since: Phase R4
 (defn result-must-msg [r :ptr<void> msg :cstr] :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
@@ -349,6 +612,7 @@
 
 ;; Foldable instance for result.
 ;; foldl/foldr operate on the ok value only; err is skipped.
+;;; __foldable_result_foldl -- foldl implementation for the result Foldable instance.
 (defn __foldable_result_foldl [ta init fn] :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
@@ -357,6 +621,7 @@
   return (void*)(intptr_t)((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(init, res->ok_val);
   ```)
 
+;;; __foldable_result_foldr -- foldr implementation for the result Foldable instance.
 (defn __foldable_result_foldr [ta init fn] :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
@@ -365,6 +630,7 @@
   return (void*)(intptr_t)((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(res->ok_val, init);
   ```)
 
+;;; Typeclass instance for ptr<void> -- Foldable: foldl and foldr over the ok value.
 (definstance Foldable [ptr<void>]
   (foldl [ta init fn] (__foldable_result_foldl ta init fn))
   (foldr [ta init fn] (__foldable_result_foldr ta init fn)))
@@ -372,6 +638,7 @@
 ;; Bifunctor instance for result.
 ;; bimap :: (e -> e') -> (a -> b) -> result e a -> result e' b
 ;; Maps fn-left over err, fn-right over ok.
+;;; __bifunctor_result_bimap -- bimap implementation for the result Bifunctor instance.
 (defn __bifunctor_result_bimap [container fn-left fn-right] :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
@@ -391,12 +658,14 @@
   return out;
   ```)
 
+;;; Typeclass instance for ptr<void> -- Bifunctor: bimap over ok and err values.
 (definstance Bifunctor [ptr<void>]
   (bimap [container fn-left fn-right] (__bifunctor_result_bimap container fn-left fn-right)))
 
 ;; Functor instance for result.
 ;; fmap :: (a -> b) -> result e a -> result e b
 ;; Maps a function over the ok value, leaving err unchanged.
+;;; __functor_result_fmap -- fmap implementation for the result Functor instance.
 (defn __functor_result_fmap [container fn] :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
@@ -421,6 +690,7 @@
   return out;
   ```)
 
+;;; Typeclass instance for ptr<void> -- Functor: fmap over the ok value.
 (definstance Functor [ptr<void>]
   (fmap [container fn] (__functor_result_fmap container fn)))
 
@@ -429,25 +699,28 @@
 ;;   ap (ok f) (ok x) = ok (f x)
 ;;   ap (err e) _      = err e
 ;;   ap _ (err e)       = err e
+;;; __applicative_result_pure -- pure implementation for the result Applicative instance.
 (defn __applicative_result_pure [x] :ptr<void>
   (ok x))
 
+;;; __applicative_result_ap -- ap implementation for the result Applicative instance.
 (defn __applicative_result_ap [ff fa] :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *f_res =
       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)ff;
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a_res =
       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)fa;
-  
+
   /* If either is err, return err */
   if (!f_res || !f_res->is_ok) return ff;
   if (!a_res || !a_res->is_ok) return fa;
-  
+
   /* Both are ok: apply function to value */
   int64_t result = ((int64_t(*)(int64_t))(intptr_t)(int64_t)f_res->ok_val)(a_res->ok_val);
   return ok(result);
   ```)
 
+;;; Typeclass instance for ptr<void> -- Applicative: pure and ap.
 (definstance Applicative [ptr<void>]
   (pure [x] (__applicative_result_pure x))
   (ap [ff fa] (__applicative_result_ap ff fa)))
@@ -455,16 +728,18 @@
 ;; Monad instance for result.
 ;;   bind (ok x) f = f x
 ;;   bind (err e) _ = err e
+;;; __monad_result_bind -- bind implementation for the result Monad instance.
 (defn __monad_result_bind [ma fn] :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)ma;
   if (!res || !res->is_ok) return ma; /* Propagate err */
-  
+
   /* Apply fn to ok value */
   int64_t mb = ((int64_t(*)(int64_t))(intptr_t)fn)(res->ok_val);
   return (void *)mb;
   ```)
 
+;;; Typeclass instance for ptr<void> -- Monad: bind (flat-map over the ok value).
 (definstance Monad [ptr<void>]
   (bind [ma fn] (__monad_result_bind ma fn)))

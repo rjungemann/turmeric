@@ -18,11 +18,24 @@
 ;;     int64_t *right;  size_t right_len;
 ;;   };
 
-;; ── Comonad typeclass (must be declared in the same file or loaded before use) ──
+;; -- Comonad typeclass (must be declared in the same file or loaded before use) --
 ;; NOTE: include typeclass.tur declarations if needed in user code.
 
-;; ── Constructor helpers ───────────────────────────────────────────────────────
+;; -- Constructor helpers ───────────────────────────────────────────────────────
 
+;;; zipper-new -- construct a Zipper from pre-built left/right arrays.
+;;;
+;;; Parameters:
+;;;   left-arr  -- pointer to left elements array (nearest-first) (:int)
+;;;   left-len  -- number of left elements (:int)
+;;;   focus     -- the focused element (:int)
+;;;   right-arr -- pointer to right elements array (nearest-first) (:int)
+;;;   right-len -- number of right elements (:int)
+;;;
+;;; Returns:
+;;;   Pointer to a heap-allocated tur_zipper struct (:int).
+;;;
+;;; Since: Phase CA0
 (defn zipper-new [left-arr left-len focus right-arr right-len] :int
   ```c
   struct tur_zipper {
@@ -39,6 +52,22 @@
   return (int64_t)(intptr_t)z;
   ```)
 
+;;; zipper-from-array -- build a Zipper from a flat C array with a given focus index.
+;;;
+;;; Elements outside [0, len) are treated as 0.
+;;;
+;;; Parameters:
+;;;   arr -- pointer to a flat int64_t array (:int)
+;;;   len -- number of elements in the array (:int)
+;;;   idx -- index of the initial focus position (:int)
+;;;
+;;; Returns:
+;;;   Pointer to a heap-allocated tur_zipper focused at index idx (:int).
+;;;
+;;; Example:
+;;;   (zipper-from-array my-arr 5 2)  ; => zipper focused at element [2]
+;;;
+;;; Since: Phase CA0
 ;; Build a Zipper from a flat C array at index idx.
 ;; All elements outside [0, len) are treated as 0.
 (defn zipper-from-array [arr len idx] :int
@@ -71,6 +100,18 @@
   return (int64_t)(intptr_t)z;
   ```)
 
+;;; zipper-focus -- return the element at the current focus position.
+;;;
+;;; Parameters:
+;;;   z -- zipper pointer (:int)
+;;;
+;;; Returns:
+;;;   The focused element value (:int).
+;;;
+;;; Example:
+;;;   (zipper-focus z)  ; => element at the cursor
+;;;
+;;; Since: Phase CA0
 ;; Get focused element
 (defn zipper-focus [z] :int
   ```c
@@ -79,6 +120,15 @@
   return p->focus;
   ```)
 
+;;; zipper-len -- return the total number of elements in a zipper.
+;;;
+;;; Parameters:
+;;;   z -- zipper pointer (:int)
+;;;
+;;; Returns:
+;;;   Total length (left_len + 1 + right_len) (:int).
+;;;
+;;; Since: Phase CA0
 ;; Total length of the zipper
 (defn zipper-len [z] :int
   ```c
@@ -87,6 +137,20 @@
   return (int64_t)(p->left_len + 1 + p->right_len);
   ```)
 
+;;; zipper-peek -- read an element at an offset relative to the current focus.
+;;;
+;;; Parameters:
+;;;   z       -- zipper pointer (:int)
+;;;   offset  -- offset from focus: 0=focus, -1=left neighbour, +1=right neighbour (:int)
+;;;   def-val -- default value to return when offset is out of bounds (:int)
+;;;
+;;; Returns:
+;;;   Element at the given offset, or def-val if out of bounds (:int).
+;;;
+;;; Example:
+;;;   (zipper-peek z -1 0)  ; => left neighbour or 0 if at left edge
+;;;
+;;; Since: Phase CA0
 ;; Get element at offset from focus (0 = focus, -1 = left neighbour, +1 = right neighbour)
 ;; Returns def_val if out of bounds.
 (defn zipper-peek [z offset def-val] :int
@@ -105,6 +169,18 @@
   }
   ```)
 
+;;; zipper-left -- move the focus one step to the left.
+;;;
+;;; Parameters:
+;;;   z -- zipper pointer (:int)
+;;;
+;;; Returns:
+;;;   A new zipper with focus shifted left, or the original zipper if at the left edge (:int).
+;;;
+;;; Example:
+;;;   (zipper-left z)  ; => zipper with focus moved left by one
+;;;
+;;; Since: Phase CA0
 ;; Move focus one step left; returns original if already at left edge.
 (defn zipper-left [z] :int
   ```c
@@ -129,6 +205,18 @@
   return (int64_t)(intptr_t)nz;
   ```)
 
+;;; zipper-right -- move the focus one step to the right.
+;;;
+;;; Parameters:
+;;;   z -- zipper pointer (:int)
+;;;
+;;; Returns:
+;;;   A new zipper with focus shifted right, or the original zipper if at the right edge (:int).
+;;;
+;;; Example:
+;;;   (zipper-right z)  ; => zipper with focus moved right by one
+;;;
+;;; Since: Phase CA0
 ;; Move focus one step right; returns original if already at right edge.
 (defn zipper-right [z] :int
   ```c
@@ -153,6 +241,19 @@
   return (int64_t)(intptr_t)nz;
   ```)
 
+;;; zipper-to-array -- flatten a Zipper back to a left-to-right int64_t array.
+;;;
+;;; Parameters:
+;;;   z -- zipper pointer (:int)
+;;;
+;;; Returns:
+;;;   Pointer to a heap-allocated int64_t array of length (zipper-len z) (:int).
+;;;   The caller is responsible for interpreting the pointer.
+;;;
+;;; Example:
+;;;   (zipper-to-array z)  ; => flat array pointer
+;;;
+;;; Since: Phase CA0
 ;; Flatten a Zipper back to a left-to-right flat array (returned as ptr<void>).
 ;; Caller is responsible for interpreting the int64_t* pointer.
 (defn zipper-to-array [z] :int
@@ -168,21 +269,27 @@
   return (int64_t)(intptr_t)out;
   ```)
 
-;; ── Comonad instance for zipper ───────────────────────────────────────────────
+;; -- Comonad instance for zipper ───────────────────────────────────────────────
 ;;
 ;; extract z = focus z
 ;; extend f z = zipper where each position holds (f (z focused at that position))
 ;; duplicate z = zipper of zippers
 
+;;; Comonad -- typeclass dual to Monad; supports extract and extend.
+;;;
+;;; Since: Phase CA0
 (defclass Comonad [^w]
   (extract   [wa]     :int)
   (extend    [wa fn]  :int)
   (duplicate [wa]     :int))
 
+;;; __zipper_extract -- extract the focused element from a zipper.
 (defn __zipper_extract [z] :int (zipper-focus z))
 
-;; extend f z: for each position i in z, compute f(z shifted to i).
-;; Returns a new Zipper of the same length.
+;;; __zipper_extend -- apply fn at every position and return a new zipper of results.
+;;;
+;;; For each position i in z, the result is fn(z shifted to i).
+;;; Returns a new Zipper of the same length.
 (defn __zipper_extend [z fn] :int
   ```c
   #define ZP struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; }
@@ -249,10 +356,17 @@
   return (int64_t)(intptr_t)out;
   ```)
 
+;;; __zipper_duplicate -- produce a zipper of zippers (each position focused).
 ;; duplicate z = extend id z  (each position becomes a zipper focussed there)
 (defn __zipper_duplicate [z] :int
   (__zipper_extend z (fn [zi] zi)))
 
+;;; Comonad [zipper] -- Comonad instance for the 1D list Zipper.
+;;;
+;;; extract returns the focused element; extend applies a function at every
+;;; position; duplicate produces a zipper of shifted zippers.
+;;;
+;;; Since: Phase CA0
 (definstance Comonad [zipper]
   (extract   [wa]    (__zipper_extract wa))
   (extend    [wa fn] (__zipper_extend wa fn))

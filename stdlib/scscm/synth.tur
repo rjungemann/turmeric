@@ -13,27 +13,51 @@
 ;; World Management
 ;; ============================================================================
 
-;; Create a new audio engine (world) instance
-;;
-;; @param sample_rate Sample rate in Hz (default: 48000)
-;; @param block_size Block size in samples (default: 512)
-;; @return WorldHandle (int), or 0 on error
+;;; world-create -- Create a new audio engine (world) instance.
+;;;
+;;; Parameters:
+;;;   sample_rate -- Sample rate in Hz (default: DEFAULT_SAMPLE_RATE = 48000).
+;;;   block_size -- Block size in samples (default: DEFAULT_BLOCK_SIZE = 512).
+;;;
+;;; Returns:
+;;;   WorldHandle (int), or 0 on error.
+;;;
+;;; Example:
+;;;   (world-create 48000 512)  ; => <handle>
 (defn world-create [& [sample_rate types/DEFAULT_SAMPLE_RATE
                          block_size types/DEFAULT_BLOCK_SIZE]]
   (ffi/hc_wasm_world_create sample_rate block_size))
 
-;; Destroy an audio engine instance
-;;
-;; @param world_id World handle to destroy
-;; @return 0 on success, -1 on error
+;;; world-destroy -- Destroy an audio engine instance and free its resources.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle returned by world-create.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   (world-destroy w)
 (defn world-destroy [world_id]
   (ffi/hc_wasm_world_destroy world_id))
 
-;; Get world sample rate
+;;; world-sample-rate -- Get the sample rate of an audio engine instance.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle.
+;;;
+;;; Returns:
+;;;   Sample rate in Hz, or 0 if the world is not found.
 (defn world-sample-rate [world_id]
   (ffi/hc_wasm_world_sample_rate world_id))
 
-;; Get world block size
+;;; world-block-size -- Get the block size of an audio engine instance.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle.
+;;;
+;;; Returns:
+;;;   Block size in samples, or 0 if the world is not found.
 (defn world-block-size [world_id]
   (ffi/hc_wasm_world_block_size world_id))
 
@@ -41,37 +65,62 @@
 ;; SynthDef Management
 ;; ============================================================================
 
-;; Load a compiled SynthDef from binary data
-;;
-;; @param world_id Target world handle
-;; @param synthdef_data SynthDef bytecode as slice<uint8>
-;; @param synthdef_name Optional name override (default: nil = use embedded name)
-;; @return 0 on success, -1 on error
+;;; synthdef-load -- Load a compiled SynthDef from binary data.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;   synthdef_data -- SynthDef bytecode as slice<uint8>.
+;;;   synthdef_name -- Optional name override; nil uses the name embedded in the data.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   (synthdef-load w my-bytes "mySynth")
 (defn synthdef-load [world_id synthdef_data & [synthdef_name nil]]
   (let [data_ptr (slice/ptr synthdef_data)
         data_size (slice/len synthdef_data)]
     (ffi/hc_wasm_load_synthdef world_id data_ptr data_size synthdef_name)))
 
-;; Unload a SynthDef by name
-;;
-;; @param world_id Target world handle
-;; @param synthdef_name Name of SynthDef to unload
-;; @return 0 on success, -1 on error
+;;; synthdef-unload -- Remove a SynthDef from the world by name.
+;;;
+;;; Running instances created from this definition are not affected.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;   synthdef_name -- Name of the SynthDef to remove.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   (synthdef-unload w "mySynth")
 (defn synthdef-unload [world_id synthdef_name]
   (ffi/hc_wasm_unload_synthdef world_id synthdef_name))
 
-;; Unload all SynthDefs
-;;
-;; @param world_id Target world handle
-;; @return 0 on success, -1 on error
+;;; synthdef-unload-all -- Remove all SynthDefs from the world.
+;;;
+;;; Running instances are not affected.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (defn synthdef-unload-all [world_id]
   (ffi/hc_wasm_unload_all_synthdefs world_id))
 
-;; Get list of loaded SynthDef names as a string
-;;
-;; @param world_id Target world handle
-;; @param buffer_size Size of buffer in bytes
-;; @return Comma-separated list of SynthDef names, or error
+;;; synthdef-list -- Get a comma-separated list of loaded SynthDef names.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;   buffer_size -- Size of internal buffer in bytes (determines max output length).
+;;;
+;;; Returns:
+;;;   String of comma-separated SynthDef names. Panics on error.
+;;;
+;;; Example:
+;;;   (synthdef-list w 1024)  ; => "mySynth,anotherSynth"
 (defn synthdef-list [world_id buffer_size]
   (let [buffer (malloc buffer_size)]
     (defer (free buffer))
@@ -91,49 +140,73 @@
 (def ADD_AFTER ffi/ADD_AFTER)
 (def REPLACE ffi/REPLACE)
 
-;; Create a new synth instance
-;;
-;; @param world_id Target world handle
-;; @param synthdef_name Name of SynthDef to instantiate
-;; @param node_id Node ID to assign (must be unique, 0 = invalid)
-;; @param target_id Target node/group ID (default: ROOT_GROUP_ID = 1)
-;; @param action Placement action (default: ADD_TO_TAIL)
-;; @return 0 on success, -1 on error
+;;; synth-new -- Create a new synth instance from a SynthDef.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;   synthdef_name -- Name of the SynthDef to instantiate.
+;;;   node_id -- Unique node ID to assign (must not be 0).
+;;;   target_id -- Target node/group ID (default: ROOT_GROUP_ID = 1).
+;;;   action -- Placement action (default: ADD_TO_TAIL).
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   (synth-new w "mySynth" 1001)
 (defn synth-new [world_id synthdef_name node_id & [target_id types/ROOT_GROUP_ID
                                                      action ADD_TO_TAIL]]
   (ffi/hc_wasm_synth_new world_id synthdef_name node_id action target_id))
 
-;; Free (remove and stop) a synth node
-;;
-;; @param world_id Target world handle
-;; @param node_id Node ID to free
-;; @return 0 on success, -1 on error
+;;; synth-free -- Remove and stop a synth node.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;   node_id -- Node ID to free.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   (synth-free w 1001)
 (defn synth-free [world_id node_id]
   (ffi/hc_wasm_synth_free world_id node_id))
 
-;; Set a single control parameter on a synth
-;;
-;; @param world_id Target world handle
-;; @param node_id Target synth node ID
-;; @param control_index Control index (0-based)
-;; @param value New control value
-;; @return 0 on success, -1 on error
+;;; synth-set -- Set a single control parameter on a synth node.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;   node_id -- Target synth node ID.
+;;;   control_index -- Zero-based control index.
+;;;   value -- New control value.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   (synth-set w 1001 0 440.0)
 (defn synth-set [world_id node_id control_index value]
   (ffi/hc_wasm_synth_set world_id node_id control_index value))
 
-;; Set multiple control parameters at once
-;;
-;; @param world_id Target world handle
-;; @param node_id Target synth node ID
-;; @param param-map Map of control_index -> value
-;; @return 0 on success, -1 on error
+;;; synth-set-multi -- Set multiple control parameters on a synth in one call.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;   node_id -- Target synth node ID.
+;;;   param-map -- Map of control_index (int) -> value (float).
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   (synth-set-multi w 1001 {0 440.0 1 0.8})
 (defn synth-set-multi [world_id node_id param-map]
   (let [count (len param-map)
         indices (malloc (* count (size-of int)))
         values (malloc (* count (size-of float)))]
     (defer (free indices))
     (defer (free values))
-    
+
     ;; Fill arrays from map
     (let [i 0]
       (for [[idx val] param-map]
@@ -141,19 +214,19 @@
           (ptr/write indices i idx)
           (ptr/write values i val)
           (set! i (inc i)))))
-    
+
     (ffi/hc_wasm_synth_set_multi world_id node_id count indices values)))
 
-;; Set control parameters by name (requires SynthDef metadata)
-;; 
-;; This is a convenience function that looks up control indices by name.
-;; Requires that synthdef-spec has been loaded for this SynthDef.
-;;
-;; @param world_id Target world handle
-;; @param node_id Target synth node ID
-;; @param synthdef_name Name of the SynthDef (for parameter lookup)
-;; @param param-name-value-pairs Alternating parameter name and value pairs
-;; @return 0 on success, -1 on error
+;;; synth-set-by-name -- Set control parameters by name (not yet implemented).
+;;;
+;;; Requires SynthDef introspection support from the hcsynth C API.
+;;; Calling this function will panic.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;   node_id -- Target synth node ID.
+;;;   synthdef_name -- SynthDef name used for parameter lookup.
+;;;   param-name-value-pairs -- Alternating parameter name and value arguments.
 (defn synth-set-by-name [world_id node_id synthdef_name & param-name-value-pairs]
   ;; For now, this is a placeholder - requires SynthDef introspection
   ;; which needs additional hcsynth API support
@@ -163,22 +236,34 @@
 ;; Group Management
 ;; ============================================================================
 
-;; Create a new group
-;;
-;; @param world_id Target world handle
-;; @param node_id Node ID to assign (must be unique)
-;; @param target_id Target node/group ID (default: ROOT_GROUP_ID)
-;; @param action Placement action (default: ADD_TO_TAIL)
-;; @return 0 on success, -1 on error
+;;; group-new -- Create a new node group.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;   node_id -- Unique node ID to assign.
+;;;   target_id -- Parent node/group ID (default: ROOT_GROUP_ID).
+;;;   action -- Placement action (default: ADD_TO_TAIL).
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   (group-new w 100)
 (defn group-new [world_id node_id & [target_id types/ROOT_GROUP_ID
                                      action ADD_TO_TAIL]]
   (ffi/hc_wasm_synth_new world_id "Group" node_id action target_id))
 
-;; Free a group and all its children
-;;
-;; @param world_id Target world handle
-;; @param node_id Group node ID to free
-;; @return 0 on success, -1 on error
+;;; group-free -- Free a group node and all its children.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;   node_id -- Group node ID to free.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   (group-free w 100)
 (defn group-free [world_id node_id]
   (synth-free world_id node_id))
 
@@ -186,32 +271,44 @@
 ;; Audio Rendering
 ;; ============================================================================
 
-;; Render one block of audio
-;;
-;; @param world_id Target world handle
-;; @param output_buffer Output buffer (must hold block_size * num_channels floats)
-;; @param num_samples Number of samples to render (default: world block size)
-;; @param num_channels Number of output channels (default: 2)
-;; @return 0 on success, -1 on error
+;;; world-render -- Render one block of audio to an output buffer.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;   output_buffer -- Output buffer pointer (must hold num_samples * num_channels floats).
+;;;   num_samples -- Number of samples to render (default: world block size).
+;;;   num_channels -- Number of output channels (default: 2).
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   (world-render w buf)
 (defn world-render [world_id output_buffer & [num_samples nil
                                                num_channels 2]]
   (let [block_size (world-block-size world_id)]
     (ffi/hc_wasm_render world_id output_buffer (or num_samples block_size) num_channels)))
 
-;; Process pending control messages
-;;
-;; Call this before rendering to handle queued control updates.
-;;
-;; @param world_id Target world handle
-;; @param max_messages Maximum messages to process (default: -1 = all)
-;; @return Number of messages processed, or -1 on error
+;;; world-process-controls -- Drain the command queue and apply pending control changes.
+;;;
+;;; Call this before rendering each block to ensure control updates are applied.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;   max_messages -- Maximum messages to process per call (default: -1 = all).
+;;;
+;;; Returns:
+;;;   Number of messages processed, or -1 on error.
 (defn world-process-controls [world_id & [max_messages -1]]
   (ffi/hc_wasm_process_controls world_id max_messages))
 
-;; Reset engine state (clear all nodes)
-;;
-;; @param world_id Target world handle
-;; @return 0 on success, -1 on error
+;;; world-reset -- Clear all nodes and reset engine state.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (defn world-reset [world_id]
   (ffi/hc_wasm_reset world_id))
 
@@ -219,10 +316,16 @@
 ;; Diagnostic & Status
 ;; ============================================================================
 
-;; Get engine statistics as JSON string
-;;
-;; @param world_id Target world handle
-;; @return JSON string with engine stats
+;;; world-get-status -- Get engine statistics as a JSON string.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;
+;;; Returns:
+;;;   JSON string with engine stats. Returns "{}" on error.
+;;;
+;;; Example:
+;;;   (world-get-status w)  ; => "{\"cpu\":0.02,...}"
 (defn world-get-status [world_id]
   (let [buffer (malloc 1024)]
     (defer (free buffer))
@@ -231,10 +334,16 @@
         (slice/cstr->str buffer)
         "{}"))))
 
-;; Get performance metrics
-;;
-;; @param world_id Target world handle
-;; @return Map with :cpu_percent, :xruns, :buffer_used
+;;; world-get-metrics -- Get performance metrics for a world.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;
+;;; Returns:
+;;;   Map with :cpu_percent, :xruns, and :buffer_used. Returns zeros on error.
+;;;
+;;; Example:
+;;;   (:cpu_percent (world-get-metrics w))
 (defn world-get-metrics [world_id]
   (let [cpu (malloc (size-of float))
         xruns (malloc (size-of int))
@@ -242,7 +351,7 @@
     (defer (free cpu))
     (defer (free xruns))
     (defer (free buffer_used))
-    
+
     (let [result (ffi/hc_wasm_get_metrics world_id cpu xruns buffer_used)]
       (if (== result 0)
         {:cpu_percent (ptr/read cpu)
@@ -250,10 +359,13 @@
          :buffer_used (ptr/read buffer_used)}
         {:cpu_percent 0 :xruns 0 :buffer_used 0}))))
 
-;; Reset performance counters
-;;
-;; @param world_id Target world handle
-;; @return 0 on success, -1 on error
+;;; world-reset-metrics -- Reset accumulated performance counters.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (defn world-reset-metrics [world_id]
   (ffi/hc_wasm_reset_metrics world_id))
 
@@ -261,9 +373,13 @@
 ;; UGen Discovery
 ;; ============================================================================
 
-;; Get list of all registered UGen names
-;;
-;; @return Newline-separated string of UGen names
+;;; list-ugens -- Get a newline-separated list of all registered UGen names.
+;;;
+;;; Returns:
+;;;   String of newline-separated UGen names, or "" on error.
+;;;
+;;; Example:
+;;;   (println (list-ugens))
 (defn list-ugens []
   (let [buffer (malloc 8192)]
     (defer (free buffer))
@@ -280,18 +396,39 @@
 (defstruct NodeIDAllocator
   [next-id :int32])
 
+;;; node-id-allocator-new -- Create a simple monotonically-incrementing node ID allocator.
+;;;
+;;; Parameters:
+;;;   start -- First ID to issue (default: DEFAULT_NODE_ID_START).
+;;;
+;;; Returns:
+;;;   A NodeIDAllocator map.
 (defn node-id-allocator-new [& [start types/DEFAULT_NODE_ID_START]]
   {:next-id start})
 
+;;; node-id-alloc -- Allocate the next node ID from an allocator.
+;;;
+;;; Parameters:
+;;;   allocator -- A NodeIDAllocator map.
+;;;
+;;; Returns:
+;;;   A unique integer node ID.
 (defn node-id-alloc [allocator]
   (let [id (:next-id allocator)]
     (set! allocator (update allocator :next-id inc))
     id))
 
+;;; node-id-free -- Mark a node ID as released (no-op in the simple allocator).
+;;;
+;;; IDs are not reused by NodeIDAllocator. Use errors/NodeIDPool for reuse.
+;;;
+;;; Parameters:
+;;;   allocator -- A NodeIDAllocator map.
+;;;   id -- Node ID to release.
 (defn node-id-free [allocator id]
   ;; For now, we don't reuse IDs (simplifies implementation)
   ;; In a more sophisticated implementation, we could track freed IDs
-  ) 
+  )
 
 ;; ============================================================================
 ;; Session Management
@@ -304,11 +441,17 @@
    active-synths :(map<NodeID SynthDefName>)
    synthdef-specs :(map<SynthDefName types/SynthDefSpec>)])
 
-;; Create a new session
-;;
-;; @param sample_rate Audio sample rate (default: 48000)
-;; @param block_size Audio block size (default: 512)
-;; @return ScscmSession or panic on error
+;;; session-new -- Create a new SCSCM session backed by a fresh audio world.
+;;;
+;;; Parameters:
+;;;   sample_rate -- Audio sample rate in Hz (default: DEFAULT_SAMPLE_RATE).
+;;;   block_size -- Audio block size in samples (default: DEFAULT_BLOCK_SIZE).
+;;;
+;;; Returns:
+;;;   A ScscmSession map. Panics if the world cannot be created.
+;;;
+;;; Example:
+;;;   (session-new 48000 512)
 (defn session-new [& [sample_rate types/DEFAULT_SAMPLE_RATE
                       block_size types/DEFAULT_BLOCK_SIZE]]
   (let [world_id (world-create sample_rate block_size)]
@@ -319,20 +462,30 @@
        :active-synths {}
        :synthdef-specs {}})))
 
-;; Destroy a session
-;;
-;; @param session Session to destroy
+;;; session-destroy -- Destroy a session and its underlying audio world.
+;;;
+;;; Parameters:
+;;;   session -- A ScscmSession map.
+;;;
+;;; Returns:
+;;;   The (now-invalid) session map.
 (defn session-destroy [session]
   (when (:world-id session)
     (world-destroy (:world-id session)))
   session)
 
-;; Create a synth in a session
-;;
-;; @param session Target session
-;; @param synthdef_name Name of SynthDef to instantiate
-;; @param params Optional parameter map (control_index -> value)
-;; @return NodeID of created synth, or panic on error
+;;; session-synth-new -- Instantiate a SynthDef and register it in the session.
+;;;
+;;; Parameters:
+;;;   session -- A ScscmSession map.
+;;;   synthdef_name -- Name of the SynthDef to instantiate.
+;;;   params -- Optional initial parameter map (control_index -> value).
+;;;
+;;; Returns:
+;;;   NodeID of the created synth. Panics if creation fails.
+;;;
+;;; Example:
+;;;   (session-synth-new sess "mySynth" {0 440.0 1 0.8})
 (defn session-synth-new [session synthdef_name & [params {}]]
   (let [node_id (node-id-alloc (:node-allocator session))]
     (let [result (synth-new (:world-id session) synthdef_name node_id)]
@@ -345,38 +498,54 @@
           node_id)
         (panic (str "Failed to create synth: " synthdef_name))))))
 
-;; Free a synth in a session
-;;
-;; @param session Target session
-;; @param node_id Node ID to free
+;;; session-synth-free -- Free a synth node and remove it from the session.
+;;;
+;;; Parameters:
+;;;   session -- A ScscmSession map.
+;;;   node_id -- Node ID to free.
 (defn session-synth-free [session node_id]
   (when-let [synthdef_name (get (:active-synths session) node_id)]
     (synth-free (:world-id session) node_id)
     (set! session (update session :active-synths dissoc node_id))))
 
-;; Set synth parameters in a session
-;;
-;; @param session Target session
-;; @param node_id Target synth node ID
-;; @param params Parameter map (control_index -> value)
+;;; session-synth-set -- Set multiple control parameters on a session synth.
+;;;
+;;; Parameters:
+;;;   session -- A ScscmSession map.
+;;;   node_id -- Target synth node ID.
+;;;   params -- Parameter map (control_index -> value).
 (defn session-synth-set [session node_id params]
   (synth-set-multi (:world-id session) node_id params))
 
-;; Free all synths in a session
+;;; session-free-all -- Free every active synth in the session.
+;;;
+;;; Parameters:
+;;;   session -- A ScscmSession map.
 (defn session-free-all [session]
   (for [node_id (keys (:active-synths session))]
     (session-synth-free session node_id)))
 
-;; Render audio for a session
-;;
-;; @param session Target session
-;; @param output_buffer Output buffer
-;; @param num_samples Number of samples (optional)
-;; @param num_channels Number of channels (optional, default: 2)
+;;; session-render -- Render audio for a session.
+;;;
+;;; Parameters:
+;;;   session -- A ScscmSession map.
+;;;   output_buffer -- Output buffer pointer.
+;;;   num_samples -- Number of samples to render (optional, defaults to block size).
+;;;   num_channels -- Number of output channels (default: 2).
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (defn session-render [session output_buffer & [num_samples nil
                                                   num_channels 2]]
   (world-render (:world-id session) output_buffer num_samples num_channels))
 
-;; Process controls for a session
+;;; session-process-controls -- Drain the control queue for a session.
+;;;
+;;; Parameters:
+;;;   session -- A ScscmSession map.
+;;;   max_messages -- Maximum messages to process (default: -1 = all).
+;;;
+;;; Returns:
+;;;   Number of messages processed, or -1 on error.
 (defn session-process-controls [session & [max_messages -1]]
   (world-process-controls (:world-id session) max_messages))

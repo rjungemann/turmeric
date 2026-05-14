@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tur/tur/arrow_laws | Turmeric API</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand">turmeric</span>
+  <nav>
+    <a href="index.html">API Docs</a>
+    <a href="../autodoc-plan.md">Plan</a>
+  </nav>
+</header>
+<div class="page-layout">
+<div class="sidebar">
+  <h3>Exported</h3>
+  <ul>
+    <li><a href="#arrows-equal">arrows-equal</a></li>
+    <li><a href="#funcs-equal">funcs-equal</a></li>
+    <li><a href="#test-identity-right">test-identity-right</a></li>
+    <li><a href="#test-identity-left">test-identity-left</a></li>
+    <li><a href="#test-identity">test-identity</a></li>
+    <li><a href="#test-composition">test-composition</a></li>
+    <li><a href="#test-associativity">test-associativity</a></li>
+    <li><a href="#test-first-functor">test-first-functor</a></li>
+    <li><a href="#test-first-identity">test-first-identity</a></li>
+    <li><a href="#test-exchange">test-exchange</a></li>
+    <li><a href="#test-left-distributes">test-left-distributes</a></li>
+    <li><a href="#test-loop-first">test-loop-first</a></li>
+    <li><a href="#test-function-arrow-identity">test-function-arrow-identity</a></li>
+    <li><a href="#test-function-arrow-composition">test-function-arrow-composition</a></li>
+    <li><a href="#test-function-arrow-associativity">test-function-arrow-associativity</a></li>
+    <li><a href="#test-sf-arrow-identity">test-sf-arrow-identity</a></li>
+    <li><a href="#test-sf-arrow-composition">test-sf-arrow-composition</a></li>
+    <li><a href="#verify-arrow-laws">verify-arrow-laws</a></li>
+    <li><a href="#print-arrow-laws-results">print-arrow-laws-results</a></li>
+    <li><a href="#quick-arrow-test">quick-arrow-test</a></li>
+  </ul>
+</div>
+<div class="content">
+  <div class="module-heading">
+    <h1>tur/arrow_laws</h1>
+    <div class="module-path">stdlib/arrow_laws.tur</div>
+  </div>
+<div class="def-card" id="arrows-equal">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>arrows-equal</h2>
+  </div>
+  <pre class="def-signature">(arrows-equal [(Arrow arr) a b])</pre>
+  <p class="def-summary">check whether two arrows produce equal outputs on test points.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>^arr</td><td></td><td>the arrow type constructor</td></tr>
+    <tr><td>f</td><td></td><td>first arrow to compare</td></tr>
+    <tr><td>g</td><td></td><td>second arrow to compare</td></tr>
+    <tr><td>test-points</td><td></td><td>vector of sample inputs</td></tr>
+    <tr><td>tolerance</td><td></td><td>maximum allowed difference (float64)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">true if all sampled outputs agree within tolerance, false otherwise.
+
+  (arrows-equal f g (vec-of 1.0 2.0) 1e-9)  ; =&gt; true or false</pre>
+  </div>
+</div>
+<div class="def-card" id="funcs-equal">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>funcs-equal</h2>
+  </div>
+  <pre class="def-signature">(funcs-equal [f : (-&gt; a b)])</pre>
+  <p class="def-summary">check whether two plain functions produce equal outputs on test points.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>f</td><td></td><td>first function to compare</td></tr>
+    <tr><td>g</td><td></td><td>second function to compare</td></tr>
+    <tr><td>test-points</td><td></td><td>vector of sample inputs</td></tr>
+    <tr><td>tolerance</td><td></td><td>maximum allowed difference (float64)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">true if all sampled outputs agree within tolerance, false otherwise.
+
+  (funcs-equal inc inc (vec-of 1.0 2.0) 1e-9)  ; =&gt; true</pre>
+  </div>
+</div>
+<div class="def-card" id="test-identity-right">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>test-identity-right</h2>
+  </div>
+  <pre class="def-signature">(test-identity-right [(Arrow arr) a b])</pre>
+  <p class="def-summary">verify the law: arr id &gt;&gt;&gt; f = f.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>^arr</td><td></td><td>the arrow type constructor</td></tr>
+    <tr><td>f</td><td></td><td>arrow under test</td></tr>
+    <tr><td>test-points</td><td></td><td>vector of sample inputs</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">true if the law holds within tolerance on all test points.</p>
+  </div>
+</div>
+<div class="def-card" id="test-identity-left">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>test-identity-left</h2>
+  </div>
+  <pre class="def-signature">(test-identity-left [(Arrow arr) a b])</pre>
+  <p class="def-summary">verify the law: f &gt;&gt;&gt; arr id = f.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>^arr</td><td></td><td>the arrow type constructor</td></tr>
+    <tr><td>f</td><td></td><td>arrow under test</td></tr>
+    <tr><td>test-points</td><td></td><td>vector of sample inputs</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">true if the law holds within tolerance on all test points.</p>
+  </div>
+</div>
+<div class="def-card" id="test-identity">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>test-identity</h2>
+  </div>
+  <pre class="def-signature">(test-identity [(Arrow arr) a])</pre>
+  <p class="def-summary">verify both identity laws for a sample arrow.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>^arr</td><td></td><td>the arrow type constructor</td></tr>
+    <tr><td>test-points</td><td></td><td>vector of sample inputs</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">true if both identity laws hold on all test points.</p>
+  </div>
+</div>
+<div class="def-card" id="test-composition">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>test-composition</h2>
+  </div>
+  <pre class="def-signature">(test-composition [(Arrow arr) a b c])</pre>
+  <p class="def-summary">verify the law: arr (f . g) = arr f &gt;&gt;&gt; arr g.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>^arr</td><td></td><td>the arrow type constructor</td></tr>
+    <tr><td>f</td><td></td><td>function b -&gt; c</td></tr>
+    <tr><td>g</td><td></td><td>function a -&gt; b</td></tr>
+    <tr><td>test-points</td><td></td><td>vector of sample inputs of type a</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">true if the law holds within tolerance on all test points.</p>
+  </div>
+</div>
+<div class="def-card" id="test-associativity">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>test-associativity</h2>
+  </div>
+  <pre class="def-signature">(test-associativity [(Arrow arr) a b c d])</pre>
+  <p class="def-summary">verify the law: (f &gt;&gt;&gt; g) &gt;&gt;&gt; h = f &gt;&gt;&gt; (g &gt;&gt;&gt; h).</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>^arr</td><td></td><td>the arrow type constructor</td></tr>
+    <tr><td>f</td><td></td><td>arrow a -&gt; b</td></tr>
+    <tr><td>g</td><td></td><td>arrow b -&gt; c</td></tr>
+    <tr><td>h</td><td></td><td>arrow c -&gt; d</td></tr>
+    <tr><td>test-points</td><td></td><td>vector of sample inputs of type a</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">true if the law holds within tolerance on all test points.</p>
+  </div>
+</div>
+<div class="def-card" id="test-first-functor">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>test-first-functor</h2>
+  </div>
+  <pre class="def-signature">(test-first-functor [(Arrow arr) a b c d])</pre>
+  <p class="def-summary">verify: first (arr f &gt;&gt;&gt; arr g) = first (arr f) &gt;&gt;&gt; first (arr g).</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>^arr</td><td></td><td>the arrow type constructor</td></tr>
+    <tr><td>f</td><td></td><td>function a -&gt; b</td></tr>
+    <tr><td>g</td><td></td><td>function b -&gt; c</td></tr>
+    <tr><td>test-points</td><td></td><td>vector of sample Tuple inputs</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">true if the law holds within tolerance on all test points.</p>
+  </div>
+</div>
+<div class="def-card" id="test-first-identity">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>test-first-identity</h2>
+  </div>
+  <pre class="def-signature">(test-first-identity [(Arrow arr) a b])</pre>
+  <p class="def-summary">verify: first (arr id) = identity on first component.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>^arr</td><td></td><td>the arrow type constructor</td></tr>
+    <tr><td>test-points</td><td></td><td>vector of sample Tuple inputs</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">true if the law holds within tolerance on all test points.</p>
+  </div>
+</div>
+<div class="def-card" id="test-exchange">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>test-exchange</h2>
+  </div>
+  <pre class="def-signature">(test-exchange [(Arrow arr) a b c d])</pre>
+  <p class="def-summary">verify the exchange law for Arrow.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>^arr</td><td></td><td>the arrow type constructor</td></tr>
+    <tr><td>f</td><td></td><td>function a -&gt; b</td></tr>
+    <tr><td>g</td><td></td><td>function c -&gt; d</td></tr>
+    <tr><td>test-points</td><td></td><td>vector of sample Tuple a c inputs</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">true if the law holds within tolerance on all test points.</p>
+  </div>
+</div>
+<div class="def-card" id="test-left-distributes">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>test-left-distributes</h2>
+  </div>
+  <pre class="def-signature">(test-left-distributes [(ArrowChoice arr) a b c d e])</pre>
+  <p class="def-summary">placeholder for ArrowChoice distribution property.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>^arr</td><td></td><td>the arrow type constructor; must satisfy ArrowChoice</td></tr>
+    <tr><td>f</td><td></td><td>arrow a -&gt; b</td></tr>
+    <tr><td>g</td><td></td><td>arrow c -&gt; d</td></tr>
+    <tr><td>h</td><td></td><td>arrow c -&gt; e</td></tr>
+    <tr><td>test-points</td><td></td><td>vector of Either a c inputs</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">true (placeholder -- full law verification not yet implemented).</p>
+  </div>
+</div>
+<div class="def-card" id="test-loop-first">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>test-loop-first</h2>
+  </div>
+  <pre class="def-signature">(test-loop-first [(ArrowLoop arr) a b c])</pre>
+  <p class="def-summary">verify: loop (first (arr f)) is equivalent to arr f.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>^arr</td><td></td><td>the arrow type constructor; must satisfy ArrowLoop</td></tr>
+    <tr><td>f</td><td></td><td>function a -&gt; b</td></tr>
+    <tr><td>test-points</td><td></td><td>vector of sample inputs of type a</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">true if the law holds within tolerance on all test points.</p>
+  </div>
+</div>
+<div class="def-card" id="test-function-arrow-identity">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>test-function-arrow-identity</h2>
+  </div>
+  <pre class="def-signature">(test-function-arrow-identity)</pre>
+  <p class="def-summary">run identity law tests on the function Arrow.</p>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">true if both identity laws pass for the function arrow.</p>
+  </div>
+</div>
+<div class="def-card" id="test-function-arrow-composition">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>test-function-arrow-composition</h2>
+  </div>
+  <pre class="def-signature">(test-function-arrow-composition)</pre>
+  <p class="def-summary">run composition law test on the function Arrow.</p>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">true if the composition law passes for the function arrow.</p>
+  </div>
+</div>
+<div class="def-card" id="test-function-arrow-associativity">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>test-function-arrow-associativity</h2>
+  </div>
+  <pre class="def-signature">(test-function-arrow-associativity)</pre>
+  <p class="def-summary">run associativity law test on the function Arrow.</p>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">true if the associativity law passes for the function arrow.</p>
+  </div>
+</div>
+<div class="def-card" id="test-sf-arrow-identity">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>test-sf-arrow-identity</h2>
+  </div>
+  <pre class="def-signature">(test-sf-arrow-identity)</pre>
+  <p class="def-summary">run identity law tests on the SF Arrow.</p>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">true if both identity laws pass for the SF arrow.</p>
+  </div>
+</div>
+<div class="def-card" id="test-sf-arrow-composition">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>test-sf-arrow-composition</h2>
+  </div>
+  <pre class="def-signature">(test-sf-arrow-composition)</pre>
+  <p class="def-summary">run composition law test on the SF Arrow.</p>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">true if the composition law passes for the SF arrow.</p>
+  </div>
+</div>
+<div class="def-card" id="verify-arrow-laws">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>verify-arrow-laws</h2>
+  </div>
+  <pre class="def-signature">(verify-arrow-laws)</pre>
+  <p class="def-summary">run all Arrow law tests and return overall pass/fail.</p>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">true if every individual law test passes, false if any fail.
+
+  (verify-arrow-laws)  ; =&gt; true</pre>
+  </div>
+</div>
+<div class="def-card" id="print-arrow-laws-results">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>print-arrow-laws-results</h2>
+  </div>
+  <pre class="def-signature">(print-arrow-laws-results)</pre>
+  <p class="def-summary">run all Arrow law tests and print results to stdout.</p>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">() (side-effectful -- prints pass/fail lines and an overall summary).
+
+  (print-arrow-laws-results)</pre>
+  </div>
+</div>
+<div class="def-card" id="quick-arrow-test">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>quick-arrow-test</h2>
+  </div>
+  <pre class="def-signature">(quick-arrow-test)</pre>
+  <p class="def-summary">sanity check: compose two function arrows and verify output.</p>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">true if (f &gt;&gt;&gt; g) applied to 5.0 equals 12.0 (within 1e-9).
+
+  (quick-arrow-test)  ; =&gt; true</pre>
+  </div>
+</div>
+</div>
+</div>
+<footer class="site-footer">
+  Auto-generated by <code>tools/gendocs.py</code>.
+  Do not edit by hand -- run <code>just docs</code> to regenerate.
+</footer>
+</body>
+</html>

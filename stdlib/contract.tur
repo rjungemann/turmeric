@@ -29,21 +29,35 @@
           ensure! ensure-msg! invariant! invariant-msg!
           contract-enabled?)
 
-;; contract-enabled? -- returns true when contracts are enabled at runtime.
-;; In v1, contracts are always enabled. Phase C2 will introduce
-;; compile-time stripping controlled by --no-contracts / --release.
+;;; contract-enabled? -- returns true when contracts are enabled at runtime.
+;;;
+;;; Returns:
+;;;   :bool -- always true in v1. Phase C2 will add compile-time stripping
+;;;   controlled by --no-contracts / --release flags.
+;;;
+;;; Example:
+;;;   (contract-enabled?)  ; => true
+;;;
+;;; Since: Phase C1
 (defn contract-enabled? [] :bool
   true)
 
-;; tur-contract-check -- internal helper called by contract macros.
-;; Panics with msg if condition is false.
+;;; tur-contract-check -- internal helper called by contract macros.
+;;;
+;;; Parameters:
+;;;   condition :bool -- the boolean result to check
+;;;   msg :cstr       -- the panic message to emit if condition is false
 (defn tur-contract-check [condition :bool msg :cstr] :void
   ```c
   if (!condition) { tur_panic((const char*)msg); }
   ```)
 
-;; tur-contract-check-inv -- internal helper for invariant macros.
-;; Calls pred(obj) and panics with msg if the result is false.
+;;; tur-contract-check-inv -- internal helper for invariant macros.
+;;;
+;;; Parameters:
+;;;   obj :int  -- the value to pass to the predicate (encoded as :int)
+;;;   pred :int -- the predicate function pointer (encoded as :int)
+;;;   msg :cstr -- the panic message to emit if the predicate returns false
 (defn tur-contract-check-inv [obj :int pred :int msg :cstr] :void
   ```c
   typedef int64_t (*pred_fn)(int64_t);
@@ -51,37 +65,129 @@
   if (!f(obj)) { tur_panic((const char*)msg); }
   ```)
 
-;; assert! -- unconditional sanity check (no custom message).
-;; Panics with "Assertion failed" if condition is false.
+;;; assert! -- unconditional sanity check, panics with "Assertion failed" if false.
+;;;
+;;; Parameters:
+;;;   condition -- the boolean expression to check
+;;;
+;;; Returns:
+;;;   nil on success; panics on failure.
+;;;
+;;; Example:
+;;;   (assert! (= x 1))  ; => panics if x != 1
+;;;
+;;; Since: Phase C1
 (defmacro assert! [condition]
   (tur-contract-check condition "Assertion failed"))
 
-;; assert-msg! -- unconditional sanity check with custom message.
+;;; assert-msg! -- unconditional sanity check with custom panic message.
+;;;
+;;; Parameters:
+;;;   condition -- the boolean expression to check
+;;;   msg       -- the message string to use when panicking
+;;;
+;;; Returns:
+;;;   nil on success; panics with msg on failure.
+;;;
+;;; Example:
+;;;   (assert-msg! (= x 1) "x must be 1")  ; => panics with message if x != 1
+;;;
+;;; Since: Phase C1
 (defmacro assert-msg! [condition msg]
   (tur-contract-check condition msg))
 
-;; require! -- precondition check at function entry (no custom message).
+;;; require! -- precondition check at function entry, panics with "Precondition failed" if false.
+;;;
+;;; Parameters:
+;;;   condition -- the boolean precondition to enforce
+;;;
+;;; Returns:
+;;;   nil on success; panics on failure.
+;;;
+;;; Example:
+;;;   (require! (> n 0))  ; => panics if n <= 0
+;;;
+;;; Since: Phase C1
 (defmacro require! [condition]
   (tur-contract-check condition "Precondition failed"))
 
-;; require-msg! -- precondition check with custom message.
+;;; require-msg! -- precondition check with custom panic message.
+;;;
+;;; Parameters:
+;;;   condition -- the boolean precondition to enforce
+;;;   msg       -- the message string to use when panicking
+;;;
+;;; Returns:
+;;;   nil on success; panics with msg on failure.
+;;;
+;;; Example:
+;;;   (require-msg! (> n 0) "n must be positive")  ; => panics with message if n <= 0
+;;;
+;;; Since: Phase C1
 (defmacro require-msg! [condition msg]
   (tur-contract-check condition msg))
 
-;; ensure! -- postcondition check (no custom message).
+;;; ensure! -- postcondition check, panics with "Postcondition failed" if false.
+;;;
+;;; Parameters:
+;;;   condition -- the boolean postcondition to enforce
+;;;
+;;; Returns:
+;;;   nil on success; panics on failure.
+;;;
+;;; Example:
+;;;   (ensure! (>= result 0))  ; => panics if result is negative
+;;;
+;;; Since: Phase C1
 (defmacro ensure! [condition]
   (tur-contract-check condition "Postcondition failed"))
 
-;; ensure-msg! -- postcondition check with custom message.
+;;; ensure-msg! -- postcondition check with custom panic message.
+;;;
+;;; Parameters:
+;;;   condition -- the boolean postcondition to enforce
+;;;   msg       -- the message string to use when panicking
+;;;
+;;; Returns:
+;;;   nil on success; panics with msg on failure.
+;;;
+;;; Example:
+;;;   (ensure-msg! (>= result 0) "result must be non-negative")
+;;;
+;;; Since: Phase C1
 (defmacro ensure-msg! [condition msg]
   (tur-contract-check condition msg))
 
-;; invariant! -- check a structural invariant (no custom message).
-;; Calls (predicate obj) and panics if it returns false.
+;;; invariant! -- check a structural invariant on a value, panics with "Invariant failed" if false.
+;;;
+;;; Parameters:
+;;;   obj       -- the value to check
+;;;   predicate -- a single-argument function that returns true if the invariant holds
+;;;
+;;; Returns:
+;;;   nil on success; panics on failure.
+;;;
+;;; Example:
+;;;   (invariant! my-list non-empty?)  ; => panics if my-list fails non-empty?
+;;;
+;;; Since: Phase C1
 (defmacro invariant! [obj predicate]
   (tur-contract-check-inv obj predicate "Invariant failed"))
 
-;; invariant-msg! -- check a structural invariant with custom message.
+;;; invariant-msg! -- check a structural invariant with custom panic message.
+;;;
+;;; Parameters:
+;;;   obj       -- the value to check
+;;;   predicate -- a single-argument function that returns true if the invariant holds
+;;;   msg       -- the message string to use when panicking
+;;;
+;;; Returns:
+;;;   nil on success; panics with msg on failure.
+;;;
+;;; Example:
+;;;   (invariant-msg! my-list non-empty? "list must not be empty")
+;;;
+;;; Since: Phase C1
 (defmacro invariant-msg! [obj predicate msg]
   (tur-contract-check-inv obj predicate msg))
 )

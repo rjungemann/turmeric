@@ -20,10 +20,21 @@
 ;;   • Functions accepting goals take :int  (int64_t of pointer)
 ;;   • Parameters used in inner lambdas MUST be bound to locals first
 
-;;; ── Backtracking monad (inlined) ─────────────────────────────────────────────
+;;; -- Backtracking monad (inlined) ─────────────────────────────────────────────
 
+;;; mzero -- the empty result list (no solutions).
+;;;
+;;; Returns:
+;;;   0 (null pointer, empty solution list).
 (defn mzero [] :int ```c return 0; ```)
 
+;;; mreturn -- wrap a single substitution as a successful result.
+;;;
+;;; Parameters:
+;;;   x -- substitution pointer (:int)
+;;;
+;;; Returns:
+;;;   A singleton solution list (:int).
 (defn mreturn [x] :int
   ```c
   struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
@@ -31,6 +42,14 @@
   return (int64_t)(intptr_t)cell;
   ```)
 
+;;; mplus -- concatenate two solution lists.
+;;;
+;;; Parameters:
+;;;   xs -- first solution list (:int)
+;;;   ys -- second solution list (:int)
+;;;
+;;; Returns:
+;;;   A new list with all solutions from xs followed by those from ys (:int).
 (defn mplus [xs ys] :int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
@@ -47,6 +66,14 @@
   return (int64_t)(intptr_t)head;
   ```)
 
+;;; mbind -- apply a fat-closure continuation to each solution and concatenate.
+;;;
+;;; Parameters:
+;;;   ma -- solution list (:int)
+;;;   fn -- fat closure of type (UState -> list UState)
+;;;
+;;; Returns:
+;;;   Concatenated solutions (:int).
 (defn mbind [ma fn] :int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
@@ -73,6 +100,13 @@
   return (int64_t)(intptr_t)result;
   ```)
 
+;;; bt-length -- count the number of solutions in a result list.
+;;;
+;;; Parameters:
+;;;   xs -- solution list (:int)
+;;;
+;;; Returns:
+;;;   Number of solutions (:int).
 (defn bt-length [xs] :int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
@@ -81,8 +115,18 @@
   return n;
   ```)
 
-;;; ── Term constructors ────────────────────────────────────────────────────────
+;;; -- Term constructors ────────────────────────────────────────────────────────
 
+;;; term-int -- construct a logic term representing an integer value.
+;;;
+;;; Parameters:
+;;;   n -- integer value
+;;;
+;;; Returns:
+;;;   Pointer to a term with tag=0, data1=n (:int).
+;;;
+;;; Example:
+;;;   (term-int 42)  ; => tagged term pointer for integer 42
 (defn term-int [n] :int
   ```c
   struct { int64_t tag; int64_t data1; int64_t data2; } *t = malloc(sizeof(*t));
@@ -90,6 +134,16 @@
   return (int64_t)(intptr_t)t;
   ```)
 
+;;; term-var -- construct a logic variable term with the given id.
+;;;
+;;; Parameters:
+;;;   id -- unique variable identifier (:int)
+;;;
+;;; Returns:
+;;;   Pointer to a term with tag=1, data1=id (:int).
+;;;
+;;; Example:
+;;;   (term-var (lvar-next))  ; => fresh logic variable
 (defn term-var [id] :int
   ```c
   struct { int64_t tag; int64_t data1; int64_t data2; } *t = malloc(sizeof(*t));
@@ -97,6 +151,17 @@
   return (int64_t)(intptr_t)t;
   ```)
 
+;;; term-pair -- construct a logic pair term from two sub-terms.
+;;;
+;;; Parameters:
+;;;   a -- first sub-term pointer (:int)
+;;;   b -- second sub-term pointer (:int)
+;;;
+;;; Returns:
+;;;   Pointer to a term with tag=2, data1=a, data2=b (:int).
+;;;
+;;; Example:
+;;;   (term-pair (term-int 1) (term-int 2))  ; => pair term (1 . 2)
 (defn term-pair [a b] :int
   ```c
   struct { int64_t tag; int64_t data1; int64_t data2; } *t = malloc(sizeof(*t));
@@ -104,6 +169,13 @@
   return (int64_t)(intptr_t)t;
   ```)
 
+;;; term-nil -- construct the nil/empty logic term.
+;;;
+;;; Returns:
+;;;   Pointer to a term with tag=3 (:int).
+;;;
+;;; Example:
+;;;   (term-nil)  ; => nil term
 (defn term-nil [] :int
   ```c
   struct { int64_t tag; int64_t data1; int64_t data2; } *t = malloc(sizeof(*t));
@@ -111,32 +183,89 @@
   return (int64_t)(intptr_t)t;
   ```)
 
-;;; ── Term accessors ───────────────────────────────────────────────────────────
+;;; -- Term accessors ───────────────────────────────────────────────────────────
 
+;;; term-tag -- read the tag field of a logic term.
+;;;
+;;; Parameters:
+;;;   t -- term pointer (:int)
+;;;
+;;; Returns:
+;;;   0=INT, 1=VAR, 2=PAIR, 3=NIL (:int).
 (defn term-tag [t] :int
   ```c return ((struct { int64_t tag; int64_t data1; int64_t data2; } *)(intptr_t)t)->tag; ```)
 
+;;; term-int-val -- read the integer value from an INT term.
+;;;
+;;; Parameters:
+;;;   t -- term pointer with tag=0 (:int)
+;;;
+;;; Returns:
+;;;   The integer value stored in data1 (:int).
 (defn term-int-val [t] :int
   ```c return ((struct { int64_t tag; int64_t data1; int64_t data2; } *)(intptr_t)t)->data1; ```)
 
+;;; term-var-id -- read the variable id from a VAR term.
+;;;
+;;; Parameters:
+;;;   t -- term pointer with tag=1 (:int)
+;;;
+;;; Returns:
+;;;   The variable id stored in data1 (:int).
 (defn term-var-id [t] :int
   ```c return ((struct { int64_t tag; int64_t data1; int64_t data2; } *)(intptr_t)t)->data1; ```)
 
+;;; term-pair-fst -- read the first sub-term pointer from a PAIR term.
+;;;
+;;; Parameters:
+;;;   t -- term pointer with tag=2 (:int)
+;;;
+;;; Returns:
+;;;   data1 (first sub-term pointer) (:int).
 (defn term-pair-fst [t] :int
   ```c return ((struct { int64_t tag; int64_t data1; int64_t data2; } *)(intptr_t)t)->data1; ```)
 
+;;; term-pair-snd -- read the second sub-term pointer from a PAIR term.
+;;;
+;;; Parameters:
+;;;   t -- term pointer with tag=2 (:int)
+;;;
+;;; Returns:
+;;;   data2 (second sub-term pointer) (:int).
 (defn term-pair-snd [t] :int
   ```c return ((struct { int64_t tag; int64_t data1; int64_t data2; } *)(intptr_t)t)->data2; ```)
 
-;;; ── Fresh variable counter ───────────────────────────────────────────────────
+;;; -- Fresh variable counter ───────────────────────────────────────────────────
 
+;;; lvar-next -- allocate the next unique logic variable identifier.
+;;;
+;;; Returns:
+;;;   A fresh monotonically increasing integer id (:int).
+;;;
+;;; Example:
+;;;   (term-var (lvar-next))  ; => a unique logic variable
 (defn lvar-next [] :int
   ```c static int64_t n = 0; return n++; ```)
 
-;;; ── Substitution operations ──────────────────────────────────────────────────
+;;; -- Substitution operations ──────────────────────────────────────────────────
 
+;;; subs-empty -- return the empty substitution (no variable bindings).
+;;;
+;;; Returns:
+;;;   0 (null pointer representing an empty alist) (:int).
 (defn subs-empty [] :int ```c return 0; ```)
 
+;;; logic-walk -- follow variable bindings in a substitution until ground.
+;;;
+;;; Parameters:
+;;;   t    -- term pointer to walk (:int)
+;;;   subs -- substitution alist pointer (:int)
+;;;
+;;; Returns:
+;;;   The fully walked term pointer (ground or unbound variable) (:int).
+;;;
+;;; Example:
+;;;   (logic-walk (term-var 0) subs)  ; => bound term or the variable itself
 ;; Walk: follow variable bindings in substitution (iterative)
 (defn logic-walk [t subs] :int
   ```c
@@ -155,6 +284,20 @@
   }
   ```)
 
+;;; logic-unify -- structurally unify two terms, extending the substitution.
+;;;
+;;; No occurs check is performed.  Returns -1 on failure.
+;;;
+;;; Parameters:
+;;;   t1   -- first term pointer (:int)
+;;;   t2   -- second term pointer (:int)
+;;;   subs -- current substitution alist (:int)
+;;;
+;;; Returns:
+;;;   Extended substitution on success, or -1 on unification failure (:int).
+;;;
+;;; Example:
+;;;   (logic-unify (term-var 0) (term-int 5) (subs-empty))  ; => subs with x0=5
 ;; Unify: structural unification (no occurs check); returns new subs or -1
 ;; Calls logic_walk (forward-declared by Turmeric codegen) and itself recursively.
 (defn logic-unify [t1 t2 subs] :int
@@ -184,8 +327,16 @@
   return -1;
   ```)
 
-;;; ── Fat-closure application ──────────────────────────────────────────────────
+;;; -- Fat-closure application ──────────────────────────────────────────────────
 
+;;; apply-fat -- call any fat closure with a single int64_t argument.
+;;;
+;;; Parameters:
+;;;   f   -- fat closure pointer (:int)
+;;;   arg -- argument to pass (:int)
+;;;
+;;; Returns:
+;;;   Return value of the closure (:int).
 ;; apply-fat: call any fat closure with one int64_t arg; returns int64_t
 (defn apply-fat [f arg] :int
   ```c
@@ -193,6 +344,14 @@
   return ((int64_t(*)(void*, int64_t))(intptr_t)fat[0])((void*)fat, arg);
   ```)
 
+;;; apply-goal -- call a goal fat closure with a substitution (UState).
+;;;
+;;; Parameters:
+;;;   g     -- goal fat closure pointer (:int)
+;;;   state -- current substitution (:int)
+;;;
+;;; Returns:
+;;;   Solution list (list of substitutions) (:int).
 ;; apply-goal: call a goal fat closure with a UState
 (defn apply-goal [g state] :int
   ```c
@@ -200,69 +359,142 @@
   return ((int64_t(*)(void*, int64_t))(intptr_t)fat[0])((void*)fat, state);
   ```)
 
-;;; ── Goal constructors ────────────────────────────────────────────────────────
+;;; -- Goal constructors ────────────────────────────────────────────────────────
 
-;; lequal (miniKanren ==): goal that unifies two terms
+;;; unify-goal-impl -- implementation helper: unify two terms against a state.
 (defn unify-goal-impl [lt1 lt2 state] :int
   (let [ns (logic-unify lt1 lt2 state)]
     (if (= ns -1)
       (mzero)
       (mreturn ns))))
 
+;;; lequal -- goal that unifies two terms (miniKanren ==).
+;;;
+;;; Parameters:
+;;;   t1 -- first term pointer (:int)
+;;;   t2 -- second term pointer (:int)
+;;;
+;;; Returns:
+;;;   A goal (:ptr<void>) that succeeds iff t1 and t2 unify.
+;;;
+;;; Example:
+;;;   (run-logic 1 (lequal (term-int 5) (term-int 5)))  ; => one solution
+;; lequal (miniKanren ==): goal that unifies two terms
 (defn lequal [t1 t2] :ptr<void>
   (let [lt1 t1 lt2 t2]
     (fn [state] (let [_ lt1] (unify-goal-impl lt1 lt2 state)))))
 
-;; succeed: always succeeds without changing state
+;;; succeed-impl -- implementation helper for the succeed goal.
 (defn succeed-impl [dummy state] :int
   (mreturn state))
 
+;;; succeed -- goal that always succeeds without changing the substitution.
+;;;
+;;; Returns:
+;;;   A goal (:ptr<void>) that adds the current state unchanged to the solutions.
+;;;
+;;; Example:
+;;;   (run-logic 1 (succeed))  ; => one solution (empty substitution)
+;; succeed: always succeeds without changing state
 (defn succeed [] :ptr<void>
   (let [dummy 0]
     (fn [state] (let [_ dummy] (succeed-impl dummy state)))))
 
-;; fail: always fails
+;;; fail-impl -- implementation helper for the fail goal.
 (defn fail-impl [dummy state] :int
   (mzero))
 
+;;; fail -- goal that always fails, producing no solutions.
+;;;
+;;; Returns:
+;;;   A goal (:ptr<void>) that produces an empty solution list.
+;;;
+;;; Example:
+;;;   (run-logic 1 (fail))  ; => empty list
+;; fail: always fails
 (defn fail [] :ptr<void>
   (let [dummy 0]
     (fn [state] (let [_ dummy] (fail-impl dummy state)))))
 
-;; conjoined (conjunction): apply g1, then apply g2 to each result
+;;; conjoined-inner -- helper to apply the second goal in a conjunction.
 (defn conjoined-inner [lg22 s] :int
   (let [lg2 lg22]
     (apply-goal lg2 s)))
 
+;;; conjoined-impl -- implementation helper for conjunction.
 (defn conjoined-impl [lg1 lg2 state] :int
   (let [lg22 lg2]
     (mbind (apply-goal lg1 state)
            (fn [s] (let [_ lg22] (conjoined-inner lg22 s))))))
 
+;;; conjoined -- goal that applies g1 then g2 to each result (conjunction).
+;;;
+;;; Parameters:
+;;;   g1 -- first goal (:ptr<void>)
+;;;   g2 -- second goal (:ptr<void>)
+;;;
+;;; Returns:
+;;;   A goal that succeeds only when both g1 and g2 succeed (:ptr<void>).
+;;;
+;;; Example:
+;;;   (run-logic 1 (conjoined (lequal x (term-int 1)) (succeed)))  ; => [x=1]
+;; conjoined (conjunction): apply g1, then apply g2 to each result
 (defn conjoined [g1 g2] :ptr<void>
   (let [lg1 g1 lg2 g2]
     (fn [state] (let [_ lg1] (conjoined-impl lg1 lg2 state)))))
 
-;; disjoined (disjunction): results from g1 interleaved with results from g2
+;;; disjoined-impl -- implementation helper for disjunction.
 (defn disjoined-impl [lg1 lg2 state] :int
   (mplus (apply-goal lg1 state) (apply-goal lg2 state)))
 
+;;; disjoined -- goal that combines results from g1 and g2 (disjunction).
+;;;
+;;; Parameters:
+;;;   g1 -- first goal (:ptr<void>)
+;;;   g2 -- second goal (:ptr<void>)
+;;;
+;;; Returns:
+;;;   A goal whose solutions are the interleaved results of g1 and g2 (:ptr<void>).
+;;;
+;;; Example:
+;;;   (run-logic 2 (disjoined (lequal x (term-int 1)) (lequal x (term-int 2))))
+;;;   ; => [x=1, x=2]
+;; disjoined (disjunction): results from g1 interleaved with results from g2
 (defn disjoined [g1 g2] :ptr<void>
   (let [lg1 g1 lg2 g2]
     (fn [state] (let [_ lg1] (disjoined-impl lg1 lg2 state)))))
 
-;; fresh: create a new logic variable, pass it to f (term -> goal)
+;;; fresh-impl -- implementation helper for fresh variable introduction.
 (defn fresh-impl [lf state] :int
   (let [nv (term-var (lvar-next))
         lf2 lf]
     (apply-goal (apply-fat lf2 nv) state)))
 
+;;; fresh -- create a new logic variable and pass it to a goal-building function.
+;;;
+;;; Parameters:
+;;;   f -- fat closure of type (term -> goal)
+;;;
+;;; Returns:
+;;;   A goal (:ptr<void>) that introduces a fresh variable and runs (f var).
+;;;
+;;; Example:
+;;;   (run-logic 1 (fresh (fn [x] (lequal x (term-int 7)))))  ; => [x=7]
+;; fresh: create a new logic variable, pass it to f (term -> goal)
 (defn fresh [f] :ptr<void>
   (let [lf f]
     (fn [state] (let [_ lf] (fresh-impl lf state)))))
 
-;;; ── Runner ───────────────────────────────────────────────────────────────────
+;;; -- Runner ───────────────────────────────────────────────────────────────────
 
+;;; take-n -- return the first n elements of a solution list.
+;;;
+;;; Parameters:
+;;;   n   -- maximum number of solutions (:int)
+;;;   lst -- solution list (:int)
+;;;
+;;; Returns:
+;;;   A truncated solution list of length at most n (:int).
 ;; take-n: return the first n elements of a Cell list
 (defn take-n [n lst] :int
   ```c
@@ -281,13 +513,31 @@
   return (int64_t)(intptr_t)result;
   ```)
 
+;;; run-logic -- run a goal with an empty substitution and return up to n results.
+;;;
+;;; Parameters:
+;;;   n -- maximum number of solutions (:int)
+;;;   g -- goal to run (:ptr<void>)
+;;;
+;;; Returns:
+;;;   A list of at most n substitutions (solution list) (:int).
+;;;
+;;; Example:
+;;;   (run-logic 1 (fresh (fn [x] (lequal x (term-int 3)))))  ; => one solution
 ;; run-logic: run goal with empty substitution, return up to n results
 (defn run-logic [n g] :int
   (let [init (subs-empty)]
     (take-n n (apply-goal g init))))
 
-;;; ── Result helpers ───────────────────────────────────────────────────────────
+;;; -- Result helpers ───────────────────────────────────────────────────────────
 
+;;; first-state -- extract the first substitution from a run-logic result list.
+;;;
+;;; Parameters:
+;;;   results -- solution list from run-logic (:int)
+;;;
+;;; Returns:
+;;;   The first substitution pointer, or 0 if the list is empty (:int).
 ;; first-state: extract the first substitution from a run-logic result list
 (defn first-state [results] :int
   ```c
@@ -296,6 +546,17 @@
   return c ? c->value : 0;
   ```)
 
+;;; reify-walk -- walk a term through the first result's substitution.
+;;;
+;;; Parameters:
+;;;   t       -- term pointer to reify (:int)
+;;;   results -- solution list from run-logic (:int)
+;;;
+;;; Returns:
+;;;   The walked term pointer (ground or unbound variable) (:int).
+;;;
+;;; Example:
+;;;   (reify-walk my-var (run-logic 1 my-goal))  ; => ground term or variable
 ;; reify-walk: walk a term through the first result's substitution
 ;; Returns the walked term (still as int64_t term pointer)
 (defn reify-walk [t results] :int

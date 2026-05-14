@@ -1,5 +1,5 @@
 ;; Signal Processing DSP Primitives
-;; 
+;;
 ;; This module provides digital signal processing primitives as Signal Functions (SF).
 ;; All primitives are implemented using the Arrow typeclass hierarchy.
 
@@ -9,35 +9,64 @@
 ;; Basic Signal Sources
 ;; =============================================================================
 
-;; Sine wave oscillator
-;; freq: frequency in Hz
-;; phase: phase offset in radians
-;; Output: sine wave with amplitude [-1, 1]
+;;; sine-osc -- stateless sine-wave SF placeholder (requires time input).
+;;;
+;;; Parameters:
+;;;   freq  -- frequency in Hz
+;;;   phase -- phase offset in radians
+;;;
+;;; Returns:
+;;;   SF<(),Sample> (use time-sine-osc for a working version).
 (defn sine-osc [freq : Sample] [phase : Sample]
   : (SF () Sample)
   (arr (fn [_]
     (let [t (error "sine-osc needs time - use time-sine-osc")]
       (math/sin (+ (* 2.0 math/PI freq t) phase))))))
 
-;; Time-aware sine oscillator
-;; Takes a time signal as input
+;;; time-sine-osc -- sine oscillator that takes an explicit time signal as input.
+;;;
+;;; Parameters:
+;;;   freq  -- frequency in Hz
+;;;   phase -- phase offset in radians
+;;;
+;;; Returns:
+;;;   SF<Time,Sample> mapping time values to sine samples in [-1, 1].
+;;;
+;;; Example:
+;;;   (time-sine-osc 440.0 0.0)
 (defn time-sine-osc [freq : Sample] [phase : Sample]
   : (SF Time Sample)
   (arr (fn [t]
     (math/sin (+ (* 2.0 math/PI freq t) phase)))))
 
-;; Sine oscillator that ignores input and uses global time
-;; This is the most useful form: just provide frequency and phase
+;;; sine -- sine oscillator that ignores its input and reads global time.
+;;;
+;;; Parameters:
+;;;   freq  -- frequency in Hz
+;;;   phase -- phase offset in radians
+;;;
+;;; Returns:
+;;;   SF<(),Sample> producing sine samples in [-1, 1].
+;;;
+;;; Example:
+;;;   ((sine 440.0 0.0) (constant ()))
 (defn sine [freq : Sample] [phase : Sample]
   : (SF () Sample)
   (fn [_sig]
     (fn [t]
       (math/sin (+ (* 2.0 math/PI freq t) phase)))))
 
-;; Square wave oscillator
-;; freq: frequency in Hz
-;; duty: duty cycle (0.0 to 1.0), fraction of period that is high
-;; Output: square wave with amplitude [-1, 1]
+;;; square -- square wave oscillator.
+;;;
+;;; Parameters:
+;;;   freq -- frequency in Hz
+;;;   duty -- duty cycle (0.0 to 1.0), fraction of period that is high
+;;;
+;;; Returns:
+;;;   SF<(),Sample> producing values in [-1, 1].
+;;;
+;;; Example:
+;;;   ((square 220.0 0.5) (constant ()))
 (defn square [freq : Sample] [duty : Sample]
   : (SF () Sample)
   (fn [_sig]
@@ -45,18 +74,32 @@
       (let [saw (mod (* freq t) 1.0)]
         (if (< saw duty) 1.0 -1.0)))))
 
-;; Sawtooth wave oscillator
-;; freq: frequency in Hz
-;; Output: sawtooth wave with amplitude [0, 1)
+;;; sawtooth -- sawtooth wave oscillator.
+;;;
+;;; Parameters:
+;;;   freq -- frequency in Hz
+;;;
+;;; Returns:
+;;;   SF<(),Sample> producing values in [0, 1).
+;;;
+;;; Example:
+;;;   ((sawtooth 110.0) (constant ()))
 (defn sawtooth [freq : Sample]
   : (SF () Sample)
   (fn [_sig]
     (fn [t]
       (mod (* freq t) 1.0))))
 
-;; Triangle wave oscillator
-;; freq: frequency in Hz
-;; Output: triangle wave with amplitude [-1, 1]
+;;; triangle -- triangle wave oscillator.
+;;;
+;;; Parameters:
+;;;   freq -- frequency in Hz
+;;;
+;;; Returns:
+;;;   SF<(),Sample> producing values in [-1, 1].
+;;;
+;;; Example:
+;;;   ((triangle 880.0) (constant ()))
 (defn triangle [freq : Sample]
   : (SF () Sample)
   (fn [_sig]
@@ -66,9 +109,13 @@
           (* 2.0 x)
           (* -2.0 (- x 1.0)))))))
 
-;; White noise generator
-;; Uses a simple pseudo-random number generator
-;; Note: This is not cryptographically secure, just for audio
+;;; white-noise -- pseudo-random white noise generator.
+;;;
+;;; Returns:
+;;;   SF<(),Sample> producing uncorrelated samples in [-1, 1].
+;;;
+;;; Example:
+;;;   ((white-noise) (constant ()))
 (defn white-noise []
   : (SF () Sample)
   (fn [_sig]
@@ -79,46 +126,85 @@
               new-seed (mod seed 4294967296)]
           (set! seed-ref new-seed)
           ;; Convert to [-1, 1]
-          (/ (* 2.0 new-seed) 4294967296.0 - 1.0)))))))
+          (/ (* 2.0 new-seed) 4294967296.0 - 1.0))))))
 
-;; Impulse train (periodic impulses)
-;; freq: frequency in Hz
-;; width: width of each impulse in seconds
-;; Output: 1.0 during impulse, 0.0 otherwise
+;;; impulse -- periodic impulse train.
+;;;
+;;; Parameters:
+;;;   freq  -- frequency in Hz
+;;;   width -- width of each impulse in seconds
+;;;
+;;; Returns:
+;;;   SF<(),Sample> outputting 1.0 during impulse windows, 0.0 otherwise.
+;;;
+;;; Example:
+;;;   ((impulse 2.0 0.001) (constant ()))
 (defn impulse [freq : Sample] [width : Sample]
   : (SF () Sample)
   (fn [_sig]
     (fn [t]
       (let [phase (mod (* freq t) 1.0)]
-        (if (< phase (* freq width)) 1.0 0.0))))))
+        (if (< phase (* freq width)) 1.0 0.0)))))
 
 ;; =============================================================================
 ;; Basic Signal Processors
 ;; =============================================================================
 
-;; Gain (amplitude scaling)
-;; gain g x = g * x
+;;; gain -- multiply signal amplitude by a constant factor.
+;;;
+;;; Parameters:
+;;;   g -- gain factor
+;;;
+;;; Returns:
+;;;   SF<Sample,Sample> that scales each sample by g.
+;;;
+;;; Example:
+;;;   (gain 0.5)  ; => -6 dB attenuation
 (defn gain [g : Sample]
   : (SF Sample Sample)
   (arr (fn [x] (* g x))))
 
-;; Offset (DC bias)
-;; offset o x = x + o
+;;; offset -- add a DC bias to the signal.
+;;;
+;;; Parameters:
+;;;   o -- offset amount
+;;;
+;;; Returns:
+;;;   SF<Sample,Sample> that adds o to each sample.
+;;;
+;;; Example:
+;;;   (offset 0.5)  ; shifts signal upward by 0.5
 (defn offset [o : Sample]
   : (SF Sample Sample)
   (arr (fn [x] (+ x o))))
 
-;; Invert signal (multiply by -1)
+;;; invert -- negate a signal (multiply by -1).
+;;;
+;;; Returns:
+;;;   SF<Sample,Sample> inverting polarity.
 (defn invert []
   : (SF Sample Sample)
   (gain -1.0))
 
-;; Absolute value
+;;; abs-sf -- absolute value of each sample.
+;;;
+;;; Returns:
+;;;   SF<Sample,Sample> returning |x| for each sample x.
 (defn abs-sf []
   : (SF Sample Sample)
   (arr (fn [x] (math/abs x))))
 
-;; Clip signal to range [min, max]
+;;; clip -- hard clip signal to a symmetric range.
+;;;
+;;; Parameters:
+;;;   min-val -- minimum allowed sample value
+;;;   max-val -- maximum allowed sample value
+;;;
+;;; Returns:
+;;;   SF<Sample,Sample> clamping output to [min-val, max-val].
+;;;
+;;; Example:
+;;;   (clip -0.8 0.8)
 (defn clip [min-val : Sample] [max-val : Sample]
   : (SF Sample Sample)
   (arr (fn [x]
@@ -128,31 +214,57 @@
 ;; Mixing and Combining
 ;; =============================================================================
 
-;; Add two signals
-;; Input: Tuple of two signals, Output: their sum
+;;; add -- add the two samples of a product signal.
+;;;
+;;; Returns:
+;;;   SF<Tuple Sample Sample, Sample> returning x + y.
+;;;
+;;; Example:
+;;;   (add)
 (defn add []
   : (SF (Tuple Sample Sample) Sample)
   (arr (fn [[x y]] (+ x y))))
 
-;; Subtract two signals (first - second)
+;;; subtract -- subtract second sample from first.
+;;;
+;;; Returns:
+;;;   SF<Tuple Sample Sample, Sample> returning x - y.
 (defn subtract []
   : (SF (Tuple Sample Sample) Sample)
   (arr (fn [[x y]] (- x y))))
 
-;; Multiply two signals
+;;; multiply -- multiply the two samples of a product signal.
+;;;
+;;; Returns:
+;;;   SF<Tuple Sample Sample, Sample> returning x * y.
+;;;
+;;; Example:
+;;;   (multiply)  ; useful for AM or ring modulation
 (defn multiply []
   : (SF (Tuple Sample Sample) Sample)
   (arr (fn [[x y]] (* x y))))
 
-;; Mix two signals with a ratio
-;; ratio = 0.0 -> all second signal
-;; ratio = 1.0 -> all first signal
-;; ratio = 0.5 -> equal mix
+;;; mix -- linear blend of two samples with a ratio.
+;;;
+;;; Parameters:
+;;;   ratio -- blend amount: 0.0 = all second, 1.0 = all first, 0.5 = equal
+;;;
+;;; Returns:
+;;;   SF<Tuple Sample Sample, Sample> returning ratio*x + (1-ratio)*y.
+;;;
+;;; Example:
+;;;   (mix 0.5)  ; equal blend
 (defn mix [ratio : Sample]
   : (SF (Tuple Sample Sample) Sample)
   (arr (fn [[x y]] (+ (* ratio x) (* (- 1.0 ratio) y)))))
 
-;; Average multiple signals
+;;; average -- average a vector of samples.
+;;;
+;;; Parameters:
+;;;   n -- number of signals (length of the input vector)
+;;;
+;;; Returns:
+;;;   SF<vec Sample, Sample> returning the arithmetic mean.
 (defn average [n : int]
   : (SF (vec Sample) Sample)
   (arr (fn [samples]
@@ -163,13 +275,16 @@
 ;; Filters
 ;; =============================================================================
 
-;; One-pole low-pass filter
-;; alpha: smoothing factor (0.0 to 1.0)
-;;   - 0.0: no smoothing (output = input)
-;;   - 1.0: maximum smoothing (output approaches input very slowly)
-;; y[n] = alpha * x[n] + (1 - alpha) * y[n-1]
-;;
-;; Using the state-sf helper from core.tur
+;;; low-pass -- one-pole IIR low-pass filter.
+;;;
+;;; Parameters:
+;;;   alpha -- smoothing coefficient (0.0 = no smoothing, 1.0 = full smoothing)
+;;;
+;;; Returns:
+;;;   SF<Sample,Sample> implementing y[n] = alpha*x[n] + (1-alpha)*y[n-1].
+;;;
+;;; Example:
+;;;   (low-pass 0.1)  ; heavy smoothing
 (defn low-pass [alpha : Sample]
   : (SF Sample Sample)
   (state-sf 0.0
@@ -177,11 +292,16 @@
       (let [y (+ (* alpha x) (* (- 1.0 alpha) y-prev))]
         (Tuple y y)))))
 
-;; One-pole high-pass filter
-;; alpha: smoothing factor
-;; y[n] = alpha * (y[n-1] + x[n] - x[n-1])
-;;
-;; Implementation uses two state variables: x-prev and y-prev
+;;; high-pass -- one-pole IIR high-pass filter.
+;;;
+;;; Parameters:
+;;;   alpha -- smoothing coefficient
+;;;
+;;; Returns:
+;;;   SF<Sample,Sample> implementing y[n] = alpha*(y[n-1] + x[n] - x[n-1]).
+;;;
+;;; Example:
+;;;   (high-pass 0.9)
 (defn high-pass [alpha : Sample]
   : (SF Sample Sample)
   (fn [sig-in]
@@ -194,13 +314,17 @@
           (set! y-prev y)
           y)))))
 
-;; Simple state variable filter (SVF)
-;; Implements a resonant filter with low-pass, band-pass, and high-pass outputs
-;; freq: cutoff frequency (normalized: 0.0 to 1.0, where 1.0 = Nyquist)
-;; q: resonance/quality factor
-;; mode: 0 = low-pass, 1 = band-pass, 2 = high-pass
-;;
-;; Returns a tuple of (low-pass, band-pass, high-pass) outputs
+;;; svf -- state variable filter with simultaneous LP/BP/HP outputs.
+;;;
+;;; Parameters:
+;;;   freq -- normalised cutoff frequency (0.0 to 1.0, where 1.0 = Nyquist)
+;;;   q    -- resonance / quality factor
+;;;
+;;; Returns:
+;;;   SF<Sample, Tuple Sample Sample Sample> yielding (low-pass, band-pass, high-pass).
+;;;
+;;; Example:
+;;;   (svf 0.2 1.0)
 (defn svf [freq : Sample] [q : Sample]
   : (SF Sample (Tuple Sample Sample Sample))
   (fn [sig-in]
@@ -213,7 +337,7 @@
               v2 (- @z1 @z2)
               v3 (- @z2 (* q v2))
               v4 (- v3 @z2)
-              
+
               ;; Update state
               z1-new (+ @z1 (* freq v1))
               z2-new (+ @z2 (* freq v3))]
@@ -221,23 +345,50 @@
           (set! z2 z2-new)
           (Tuple @z1 v4 (- v1 (* q v3))))))))
 
-;; Low-pass filter using SVF
+;;; svf-low-pass -- low-pass output from the state variable filter.
+;;;
+;;; Parameters:
+;;;   freq -- normalised cutoff frequency
+;;;   q    -- resonance
+;;;
+;;; Returns:
+;;;   SF<Sample,Sample> (low-pass band only).
 (defn svf-low-pass [freq : Sample] [q : Sample]
   : (SF Sample Sample)
   (>>> (svf freq q) (arr (fn [[lp _ _]] lp))))
 
-;; Band-pass filter using SVF
+;;; svf-band-pass -- band-pass output from the state variable filter.
+;;;
+;;; Parameters:
+;;;   freq -- normalised center frequency
+;;;   q    -- resonance
+;;;
+;;; Returns:
+;;;   SF<Sample,Sample> (band-pass band only).
 (defn svf-band-pass [freq : Sample] [q : Sample]
   : (SF Sample Sample)
   (>>> (svf freq q) (arr (fn [[_ bp _]] bp))))
 
-;; High-pass filter using SVF
+;;; svf-high-pass -- high-pass output from the state variable filter.
+;;;
+;;; Parameters:
+;;;   freq -- normalised cutoff frequency
+;;;   q    -- resonance
+;;;
+;;; Returns:
+;;;   SF<Sample,Sample> (high-pass band only).
 (defn svf-high-pass [freq : Sample] [q : Sample]
   : (SF Sample Sample)
   (>>> (svf freq q) (arr (fn [[_ _ hp]] hp))))
 
-;; All-pass filter
-;; Adds phase shift without affecting amplitude
+;;; all-pass -- all-pass filter for phase shifting without amplitude change.
+;;;
+;;; Parameters:
+;;;   freq -- normalised frequency parameter
+;;;   q    -- resonance parameter
+;;;
+;;; Returns:
+;;;   SF<Sample,Sample> shifting phase while preserving amplitude.
 (defn all-pass [freq : Sample] [q : Sample]
   : (SF Sample Sample)
   (fn [sig-in]
@@ -248,10 +399,10 @@
               v1 (- x @z1)
               v2 (- @z1 @z2)
               v3 (- @z2 (* q v2))
-              
+
               z1-new (+ @z1 (* freq v1))
               z2-new (+ @z2 (* freq v3))
-              
+
               ;; All-pass output: v1 - 2*v3
               y (- v1 (* 2.0 v3))]
           (set! z1 z1-new)
@@ -262,11 +413,18 @@
 ;; Delay and Echo Effects
 ;; =============================================================================
 
-;; Simple delay with feedback
-;; delay-time: delay in seconds
-;; feedback: feedback gain (0.0 to 1.0)
-;; Note: This is a simplified implementation using a circular buffer
-;; For production use, a proper circular buffer with interpolation would be needed
+;;; delay -- feedback delay line using a circular buffer.
+;;;
+;;; Parameters:
+;;;   delay-time -- delay length in seconds
+;;;   feedback   -- feedback gain (0.0 to 1.0)
+;;;   max-delay  -- buffer size in samples
+;;;
+;;; Returns:
+;;;   SF<Sample,Sample> with delay effect applied.
+;;;
+;;; Example:
+;;;   (delay 0.25 0.5 22050)
 (defn delay [delay-time : Sample] [feedback : Sample] [max-delay : int]
   : (SF Sample Sample)
   (fn [sig-in]
@@ -277,7 +435,7 @@
           sample-rate 44100.0
           delay-samples (int (math/round (* delay-time sample-rate)))
           read-pos-calc (fn [wp] (mod (- wp delay-samples) max-delay))]
-      
+
       (fn [t]
         (let [x (sig-in t)
               wp @write-pos
@@ -288,10 +446,18 @@
           (set! write-pos (mod (+ wp 1) max-delay))
           new-val)))))
 
-;; Simple echo effect
-;; delay-time: delay in seconds
-;; decay: decay factor per echo
-;; num-echos: number of echoes
+;;; echo -- multi-tap echo using direct signal access.
+;;;
+;;; Parameters:
+;;;   delay-time -- time between echoes in seconds
+;;;   decay      -- amplitude decay factor per echo
+;;;   num-echos  -- number of echo repetitions
+;;;
+;;; Returns:
+;;;   SF<Sample,Sample> summing the original with decayed, delayed copies.
+;;;
+;;; Example:
+;;;   (echo 0.3 0.6 4)
 (defn echo [delay-time : Sample] [decay : Sample] [num-echos : int]
   : (SF Sample Sample)
   (fn [sig-in]
@@ -312,22 +478,46 @@
 ;; Non-linear Processors
 ;; =============================================================================
 
-;; Hard clipping distortion
-;; threshold: clipping threshold
+;;; hard-clip -- symmetric hard clipping distortion.
+;;;
+;;; Parameters:
+;;;   threshold -- clipping level (output clamped to [-threshold, threshold])
+;;;
+;;; Returns:
+;;;   SF<Sample,Sample> with hard-clipped output.
+;;;
+;;; Example:
+;;;   (hard-clip 0.7)
 (defn hard-clip [threshold : Sample]
   : (SF Sample Sample)
   (arr (fn [x]
     (math/clamp x (- threshold) threshold))))
 
-;; Soft clipping (tanh)
-;; drive: amount of distortion (0.0 = no distortion, higher = more distortion)
+;;; soft-clip -- smooth tanh-based saturation.
+;;;
+;;; Parameters:
+;;;   drive -- drive amount (0.0 = linear, higher = more saturation)
+;;;
+;;; Returns:
+;;;   SF<Sample,Sample> with soft-clipped output normalised to [-1, 1].
+;;;
+;;; Example:
+;;;   (soft-clip 2.0)
 (defn soft-clip [drive : Sample]
   : (SF Sample Sample)
   (arr (fn [x]
     (/ (math/tanh (* drive x)) (math/tanh drive)))))
 
-;; Bit crushing
-;; bits: number of bits to quantize to (1 to 16)
+;;; bit-crush -- reduce bit depth to create lo-fi quantisation noise.
+;;;
+;;; Parameters:
+;;;   bits -- target bit depth (1 to 16)
+;;;
+;;; Returns:
+;;;   SF<Sample,Sample> with quantised output.
+;;;
+;;; Example:
+;;;   (bit-crush 8)  ; 8-bit sound
 (defn bit-crush [bits : int]
   : (SF Sample Sample)
   (let [scale (math/pow 2.0 bits)
@@ -342,9 +532,17 @@
 ;; Envelope Followers and Dynamics
 ;; =============================================================================
 
-;; Simple envelope follower (absolute value + low-pass)
-;; attack: attack time constant (0.0 to 1.0)
-;; release: release time constant (0.0 to 1.0)
+;;; envelope-follower -- track signal amplitude with asymmetric attack/release.
+;;;
+;;; Parameters:
+;;;   attack  -- attack smoothing coefficient (0.0 to 1.0)
+;;;   release -- release smoothing coefficient (0.0 to 1.0)
+;;;
+;;; Returns:
+;;;   SF<Sample,Sample> producing a smooth envelope signal >= 0.
+;;;
+;;; Example:
+;;;   (envelope-follower 0.01 0.001)
 (defn envelope-follower [attack : Sample] [release : Sample]
   : (SF Sample Sample)
   (fn [sig-in]
@@ -358,11 +556,19 @@
             (do (set! env (+ @env coeff-attack)) @env)
             (do (set! env (+ @env coeff-release)) @env)))))))
 
-;; Simple compressor
-;; threshold: compression threshold
-;; ratio: compression ratio (e.g., 4.0 = 4:1 compression)
-;; attack: attack time constant
-;; release: release time constant
+;;; compressor -- dynamic range compressor.
+;;;
+;;; Parameters:
+;;;   threshold -- RMS level above which compression kicks in
+;;;   ratio     -- compression ratio (e.g., 4.0 for 4:1)
+;;;   attack    -- attack time constant
+;;;   release   -- release time constant
+;;;
+;;; Returns:
+;;;   SF<Sample,Sample> with gain reduction applied above threshold.
+;;;
+;;; Example:
+;;;   (compressor 0.5 4.0 0.01 0.001)
 (defn compressor [threshold : Sample] [ratio : Sample] [attack : Sample] [release : Sample]
   : (SF Sample Sample)
   (let [env-follower (envelope-follower attack release)]
@@ -375,8 +581,16 @@
 ;; Utility Functions
 ;; =============================================================================
 
-;; DC blocker (removes DC offset)
-;; Useful for ensuring signals are centered around zero
+;;; dc-blocker -- remove DC offset using a simple high-pass approach.
+;;;
+;;; Parameters:
+;;;   alpha -- leakiness of the DC estimate (close to 1.0 = slow adaptation)
+;;;
+;;; Returns:
+;;;   SF<Sample,Sample> with DC component removed.
+;;;
+;;; Example:
+;;;   (dc-blocker 0.995)
 (defn dc-blocker [alpha : Sample]
   : (SF Sample Sample)
   (fn [sig-in]
@@ -391,8 +605,16 @@
           (set! prev new-prev)
           y)))))
 
-;; Sample and hold
-;; freq: sampling frequency in Hz
+;;; sample-and-hold -- sample input at a regular rate and hold the value.
+;;;
+;;; Parameters:
+;;;   freq -- sampling frequency in Hz
+;;;
+;;; Returns:
+;;;   SF<Sample,Sample> that holds the last sampled value between updates.
+;;;
+;;; Example:
+;;;   (sample-and-hold 8000.0)
 (defn sample-and-hold [freq : Sample]
   : (SF Sample Sample)
   (fn [sig-in]
@@ -410,12 +632,20 @@
 ;; Filter Banks
 ;; =============================================================================
 
-;; Simple 3-band EQ
-;; low-gain: gain for low frequencies
-;; mid-gain: gain for mid frequencies  
-;; high-gain: gain for high frequencies
-;; low-freq: crossover between low and mid
-;; high-freq: crossover between mid and high
+;;; eq-3band -- three-band parametric equaliser.
+;;;
+;;; Parameters:
+;;;   low-gain  -- gain multiplier for low band
+;;;   mid-gain  -- gain multiplier for mid band
+;;;   high-gain -- gain multiplier for high band
+;;;   low-freq  -- crossover between low and mid bands
+;;;   high-freq -- crossover between mid and high bands
+;;;
+;;; Returns:
+;;;   SF<Sample,Sample> with EQ applied.
+;;;
+;;; Example:
+;;;   (eq-3band 1.5 1.0 0.8 0.1 0.6)
 (defn eq-3band [low-gain : Sample] [mid-gain : Sample] [high-gain : Sample]
                [low-freq : Sample] [high-freq : Sample]
   : (SF Sample Sample)
@@ -428,7 +658,17 @@
             mid (bp sig-in)]
         (fn [t] (+ (* low-gain (low t)) (* mid-gain (mid t)) (* high-gain (high t))))))))
 
-;; Band-pass filter using low-pass and high-pass in series
+;;; band-pass-simple -- band-pass filter constructed from low-pass and high-pass in series.
+;;;
+;;; Parameters:
+;;;   low-freq  -- lower cutoff frequency (high-pass pole)
+;;;   high-freq -- upper cutoff frequency (low-pass pole)
+;;;
+;;; Returns:
+;;;   SF<Sample,Sample> passing frequencies between low-freq and high-freq.
+;;;
+;;; Example:
+;;;   (band-pass-simple 0.05 0.4)
 (defn band-pass-simple [low-freq : Sample] [high-freq : Sample]
   : (SF Sample Sample)
   (let [lp (low-pass high-freq)

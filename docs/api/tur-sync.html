@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tur/tur/sync | Turmeric API</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand">turmeric</span>
+  <nav>
+    <a href="index.html">API Docs</a>
+    <a href="../autodoc-plan.md">Plan</a>
+  </nav>
+</header>
+<div class="page-layout">
+<div class="sidebar">
+  <h3>Exported</h3>
+  <ul>
+    <li><a href="#once-flag-new">once-flag-new</a></li>
+    <li><a href="#once-call">once-call</a></li>
+    <li><a href="#once-flag-free">once-flag-free</a></li>
+    <li><a href="#sem-new">sem-new</a></li>
+    <li><a href="#sem-acquire">sem-acquire</a></li>
+    <li><a href="#sem-release">sem-release</a></li>
+    <li><a href="#sem-free">sem-free</a></li>
+  </ul>
+</div>
+<div class="content">
+  <div class="module-heading">
+    <h1>tur/sync</h1>
+    <div class="module-path">stdlib/sync.tur</div>
+  </div>
+<div class="def-card" id="once-flag-new">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>once-flag-new</h2>
+  </div>
+  <pre class="def-signature">(once-flag-new :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">allocate and initialise a pthread_once_t flag on the heap.</p>
+  <p class="def-since">Since: Phase T19-C</p>
+</div>
+<div class="def-card" id="once-call">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>once-call</h2>
+  </div>
+  <pre class="def-signature">(once-call [flag :ptr&lt;void&gt; init-fn :ptr&lt;void&gt;] :nil)</pre>
+  <p class="def-summary">call init-fn exactly once for the lifetime of flag, regardless of concurrency.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>flag</td><td></td><td>once-flag pointer from once-flag-new</td></tr>
+    <tr><td>init-fn</td><td></td><td>zero-argument C function pointer to invoke at most once</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T19-C</p>
+</div>
+<div class="def-card" id="once-flag-free">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>once-flag-free</h2>
+  </div>
+  <pre class="def-signature">(once-flag-free [flag :ptr&lt;void&gt;] :nil)</pre>
+  <p class="def-summary">free a once-flag allocated by once-flag-new.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>flag</td><td></td><td>once-flag pointer from once-flag-new</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T19-C</p>
+</div>
+<div class="def-card" id="sem-new">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>sem-new</h2>
+  </div>
+  <pre class="def-signature">(sem-new [initial :int] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">allocate a counting semaphore initialised to initial.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>initial</td><td></td><td>starting count (0 = locked, &gt;0 = permits available)</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T19-C</p>
+</div>
+<div class="def-card" id="sem-acquire">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>sem-acquire</h2>
+  </div>
+  <pre class="def-signature">(sem-acquire [s :ptr&lt;void&gt;] :nil)</pre>
+  <p class="def-summary">decrement the semaphore; blocks until count &gt; 0.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>s</td><td></td><td>semaphore pointer from sem-new</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T19-C</p>
+</div>
+<div class="def-card" id="sem-release">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>sem-release</h2>
+  </div>
+  <pre class="def-signature">(sem-release [s :ptr&lt;void&gt;] :nil)</pre>
+  <p class="def-summary">increment the semaphore and wake one blocked acquirer.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>s</td><td></td><td>semaphore pointer from sem-new</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T19-C</p>
+</div>
+<div class="def-card" id="sem-free">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>sem-free</h2>
+  </div>
+  <pre class="def-signature">(sem-free [s :ptr&lt;void&gt;] :nil)</pre>
+  <p class="def-summary">destroy and free a semaphore allocated by sem-new.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>s</td><td></td><td>semaphore pointer from sem-new</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T19-C</p>
+</div>
+</div>
+</div>
+<footer class="site-footer">
+  Auto-generated by <code>tools/gendocs.py</code>.
+  Do not edit by hand -- run <code>just docs</code> to regenerate.
+</footer>
+</body>
+</html>

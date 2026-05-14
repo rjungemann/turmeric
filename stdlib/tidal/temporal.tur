@@ -1,4 +1,4 @@
-;; stdlib/tidal/temporal.tur — Temporal Pattern Combinators
+;; stdlib/tidal/temporal.tur -- Temporal Pattern Combinators
 ;;
 ;; This module provides combinators that transform patterns temporally
 ;; (time scaling, time shifting, repetition, etc.).
@@ -10,37 +10,55 @@
 ;; Time Scaling Combinators
 ;; ============================================================================
 
-;; Slow down a pattern by a factor
-;;
-;; @param factor Slow factor (> 1 means slower)
-;; @param p Pattern to slow down
-;; @return Pattern<T> that plays slower
+;;; slow -- play a pattern slower by a given factor.
+;;;
+;;; Parameters:
+;;;   factor -- slowdown factor (> 1 = slower)
+;;;   p      -- pattern to slow down
+;;;
+;;; Returns:
+;;;   Pattern<T> that plays at 1/factor speed.
+;;;
+;;; Example:
+;;;   ((slow 2 my-pat) 1.0)  ; same as (my-pat 0.5)
 (defn slow [factor p]
   (fn [time]
     (p (/ time factor))))
 
-;; Speed up a pattern by a factor
-;;
-;; @param factor Speed factor (> 1 means faster)
-;; @param p Pattern to speed up
-;; @return Pattern<T> that plays faster
+;;; fast -- play a pattern faster by a given factor.
+;;;
+;;; Parameters:
+;;;   factor -- speedup factor (> 1 = faster)
+;;;   p      -- pattern to speed up
+;;;
+;;; Returns:
+;;;   Pattern<T> that plays factor times faster.
+;;;
+;;; Example:
+;;;   ((fast 2 my-pat) 1.0)  ; same as (my-pat 2.0)
 (defn fast [factor p]
   (fn [time]
     (p (* time factor))))
 
-;; Stretch time within a cycle (same as slow)
-;;
-;; @param factor Stretch factor
-;; @param p Pattern to stretch
-;; @return Pattern<T> with stretched time
+;;; stretch -- stretch time within a cycle (alias for slow).
+;;;
+;;; Parameters:
+;;;   factor -- stretch factor
+;;;   p      -- pattern to stretch
+;;;
+;;; Returns:
+;;;   Pattern<T> with stretched time.
 (defn stretch [factor p]
   (slow factor p))
 
-;; Compress time within a cycle (same as fast)
-;;
-;; @param factor Compression factor
-;; @param p Pattern to compress
-;; @return Pattern<T> with compressed time
+;;; compress -- compress time within a cycle (alias for fast).
+;;;
+;;; Parameters:
+;;;   factor -- compression factor
+;;;   p      -- pattern to compress
+;;;
+;;; Returns:
+;;;   Pattern<T> with compressed time.
 (defn compress [factor p]
   (fast factor p))
 
@@ -48,28 +66,42 @@
 ;; Time Shifting Combinators
 ;; ============================================================================
 
-;; Shift pattern in time
-;;
-;; @param offset Time offset in beats (positive = delay, negative = advance)
-;; @param p Pattern to shift
-;; @return Pattern<T> shifted in time
+;;; shift -- shift a pattern forward or backward in time.
+;;;
+;;; Parameters:
+;;;   offset -- time offset in beats (positive = later, negative = earlier)
+;;;   p      -- pattern to shift
+;;;
+;;; Returns:
+;;;   Pattern<T> shifted in time.
+;;;
+;;; Example:
+;;;   ((shift 0.5 my-pat) 1.0)  ; same as (my-pat 1.5)
 (defn shift [offset p]
   (fn [time]
     (p (+ time offset))))
 
-;; Rotate the values in a cycle
-;; This shifts the pattern's phase
-;;
-;; @param amount Rotation amount in beats
-;; @param p Pattern to rotate (typically a cycle pattern)
-;; @return Pattern<T> with rotated phase
+;;; rot -- rotate a pattern's phase (alias for shift).
+;;;
+;;; Parameters:
+;;;   amount -- rotation amount in beats
+;;;   p      -- pattern to rotate
+;;;
+;;; Returns:
+;;;   Pattern<T> with shifted phase.
 (defn rot [amount p]
   (shift amount p))
 
-;; Mirror the pattern within its cycle
-;;
-;; @param p Pattern to mirror
-;; @return Pattern<T> that is mirrored within each 2-beat cycle
+;;; mirror -- mirror a pattern within each 2-beat window.
+;;;
+;;; Parameters:
+;;;   p -- pattern to mirror
+;;;
+;;; Returns:
+;;;   Pattern<T> that plays forward in [0,1) then backward in [1,2).
+;;;
+;;; Example:
+;;;   ((mirror my-pat) 1.5)  ; reads from time 0.5
 (defn mirror [p]
   (fn [time]
     (let [phase (mod time 2.0)]
@@ -77,10 +109,16 @@
         (p phase)
         (p (- 2.0 phase))))))
 
-;; Reverse time within each cycle
-;;
-;; @param p Pattern to reverse
-;; @return Pattern<T> with time reversed within each 1-beat cycle
+;;; rev -- reverse a pattern within each 1-beat cycle.
+;;;
+;;; Parameters:
+;;;   p -- pattern to reverse
+;;;
+;;; Returns:
+;;;   Pattern<T> with reversed time within each cycle.
+;;;
+;;; Example:
+;;;   ((rev my-pat) 0.25)  ; same as (my-pat 0.75)
 (defn rev [p]
   (fn [time]
     (let [phase (mod time 1.0)]
@@ -90,31 +128,43 @@
 ;; Repetition Combinators
 ;; ============================================================================
 
-;; Repeat a pattern n times within its cycle
-;;
-;; @param n Number of repetitions
-;; @param p Pattern to repeat
-;; @return Pattern<T> that plays n times faster
+;;; repeat -- repeat a pattern n times within its cycle.
+;;;
+;;; Parameters:
+;;;   n -- repetition count
+;;;   p -- pattern to repeat
+;;;
+;;; Returns:
+;;;   Pattern<T> playing n times faster.
+;;;
+;;; Example:
+;;;   ((repeat 4 my-pat) 0.0)
 (defn repeat [n p]
   (fast n p))
 
-;; Play the pattern once, then return zero value
-;;
-;; @param p Pattern to play once
-;; @param zero Value to return after first cycle (default: 0)
-;; @return Pattern<T> that plays once then returns zero
+;;; once -- play a pattern only during the first beat, then return zero.
+;;;
+;;; Parameters:
+;;;   p    -- pattern to play
+;;;   zero -- value after the first cycle (default: 0)
+;;;
+;;; Returns:
+;;;   Pattern<T> that silences after time >= 1.0.
 (defn once [p & [zero 0]]
   (fn [time]
     (if (< time 1.0)
       (p time)
       zero)))
 
-;; Play the pattern for a specific duration
-;;
-;; @param duration Duration in beats
-;; @param p Pattern to play
-;; @param zero Value to return after duration (default: 0)
-;; @return Pattern<T> that plays for duration beats
+;;; for-beats -- play a pattern for a fixed number of beats, then return zero.
+;;;
+;;; Parameters:
+;;;   duration -- duration in beats
+;;;   p        -- pattern to play
+;;;   zero     -- value after duration (default: 0)
+;;;
+;;; Returns:
+;;;   Pattern<T> active for duration beats.
 (defn for-beats [duration p & [zero 0]]
   (fn [time]
     (if (< time duration)
@@ -125,25 +175,31 @@
 ;; Looping Combinators
 ;; ============================================================================
 
-;; Loop a pattern for a specific number of cycles
-;;
-;; @param cycles Number of cycles to loop
-;; @param p Pattern to loop
-;; @param zero Value to return after looping (default: 0)
-;; @return Pattern<T> that loops for cycles then returns zero
+;;; loop-cycles -- loop a pattern for a fixed number of cycles then stop.
+;;;
+;;; Parameters:
+;;;   cycles -- number of cycles to loop
+;;;   p      -- pattern to loop
+;;;   zero   -- value after looping ends (default: 0)
+;;;
+;;; Returns:
+;;;   Pattern<T>.
 (defn loop-cycles [cycles p & [zero 0]]
   (fn [time]
     (if (< time cycles)
       (p (mod time 1.0))
       zero)))
 
-;; Loop a pattern between start and end times
-;;
-;; @param start Start time in beats
-;; @param end End time in beats
-;; @param p Pattern to loop
-;; @param zero Value to return outside [start, end) (default: 0)
-;; @return Pattern<T> that loops between start and end
+;;; loop-range -- loop a pattern between two time points.
+;;;
+;;; Parameters:
+;;;   start -- start time in beats
+;;;   end   -- end time in beats
+;;;   p     -- pattern to loop
+;;;   zero  -- value outside [start, end) (default: 0)
+;;;
+;;; Returns:
+;;;   Pattern<T> looping within the window.
 (defn loop-range [start end p & [zero 0]]
   (fn [time]
     (if (and (>= time start) (< time end))
@@ -154,20 +210,26 @@
 ;; Time Warping Combinators
 ;; ============================================================================
 
-;; Warp time using a function
-;;
-;; @param warp-fn Function to warp time: Beats -> Beats
-;; @param p Pattern to warp
-;; @return Pattern<T> with warped time
+;;; warp -- remap time using an arbitrary function.
+;;;
+;;; Parameters:
+;;;   warp-fn -- Beats -> Beats transformation applied to time before evaluation
+;;;   p       -- pattern to warp
+;;;
+;;; Returns:
+;;;   Pattern<T> evaluated at warped time.
 (defn warp [warp-fn p]
   (fn [time]
     (p (warp-fn time))))
 
-;; Warp time using a pattern
-;;
-;; @param warp-pat Pattern that produces warp values
-;; @param p Pattern to warp
-;; @return Pattern<T> with time warped by warp-pat
+;;; warp-by -- remap time by multiplying with values from another pattern.
+;;;
+;;; Parameters:
+;;;   warp-pat -- NumPattern producing a time-scaling factor
+;;;   p        -- pattern to warp
+;;;
+;;; Returns:
+;;;   Pattern<T> evaluated at time * warp-pat(time).
 (defn warp-by [warp-pat p]
   (fn [time]
     (let [warp-value (warp-pat time)]
@@ -177,28 +239,40 @@
 ;; Time Quantization Combinators
 ;; ============================================================================
 
-;; Quantize pattern evaluation to nearest beat
-;;
-;; @param p Pattern to quantize
-;; @return Pattern<T> that only changes on beat boundaries
+;;; quantize-beat -- snap pattern evaluation to the nearest beat boundary.
+;;;
+;;; Parameters:
+;;;   p -- pattern to quantize
+;;;
+;;; Returns:
+;;;   Pattern<T> that only changes on whole-beat boundaries.
 (defn quantize-beat [p]
   (fn [time]
     (p (floor time))))
 
-;; Quantize pattern evaluation to nearest nth beat
-;;
-;; @param n Quantization resolution in beats
-;; @param p Pattern to quantize
-;; @return Pattern<T> quantized to n-beat intervals
+;;; quantize -- snap pattern evaluation to multiples of n beats.
+;;;
+;;; Parameters:
+;;;   n -- quantization grid size in beats
+;;;   p -- pattern to quantize
+;;;
+;;; Returns:
+;;;   Pattern<T> quantized to n-beat intervals.
+;;;
+;;; Example:
+;;;   (quantize 0.25 my-pat)  ; 16th-note grid
 (defn quantize [n p]
   (fn [time]
     (p (* n (floor (/ time n))))))
 
-;; Quantize pattern evaluation to nearest subdivision
-;;
-;; @param subdivisions Number of subdivisions per beat (e.g., 2 = 8th notes, 4 = 16th notes)
-;; @param p Pattern to quantize
-;; @return Pattern<T> quantized to subdivisions
+;;; quantize-subdiv -- snap pattern evaluation to a subdivision grid.
+;;;
+;;; Parameters:
+;;;   subdivisions -- number of subdivisions per beat (e.g., 4 = 16th notes)
+;;;   p            -- pattern to quantize
+;;;
+;;; Returns:
+;;;   Pattern<T> quantized to 1/subdivisions-beat steps.
 (defn quantize-subdiv [subdivisions p]
   (quantize (/ 1.0 subdivisions) p))
 
@@ -206,20 +280,29 @@
 ;; Time Modulo Combinators
 ;; ============================================================================
 
-;; Modulo time by a period
-;;
-;; @param period Period in beats
-;; @param p Pattern to apply modulo to
-;; @return Pattern<T> with time wrapped to [0, period)
+;;; time-mod -- wrap time into a [0, period) window before evaluation.
+;;;
+;;; Parameters:
+;;;   period -- period in beats
+;;;   p      -- pattern to wrap
+;;;
+;;; Returns:
+;;;   Pattern<T> evaluated with time mod period.
 (defn time-mod [period p]
   (fn [time]
     (p (mod time period))))
 
-;; Apply different patterns to different time ranges
-;;
-;; @param period Period in beats for each pattern
-;; @param patterns List of patterns to cycle through
-;; @return Pattern<T> that cycles through patterns
+;;; time-switch -- cycle through a list of patterns, each lasting period beats.
+;;;
+;;; Parameters:
+;;;   period   -- duration per pattern in beats
+;;;   patterns -- patterns to cycle through
+;;;
+;;; Returns:
+;;;   Pattern<T> switching to the next pattern every period beats.
+;;;
+;;; Example:
+;;;   ((time-switch 4 pat-a pat-b pat-c) 5.0)  ; uses pat-b
 (defn time-switch [period & patterns]
   (let [vec-patterns (vec patterns)
         len (len vec-patterns)]
@@ -227,17 +310,23 @@
       (pattern/const nil)
       (fn [time]
         (let [index (mod (floor (/ time period)) len)]
-          ((get vec-patterns index) (mod time period))))))))
+          ((get vec-patterns index) (mod time period)))))))
 
 ;; ============================================================================
 ;; Composite Temporal Transformations
 ;; ============================================================================
 
-;; Apply multiple temporal transformations
-;;
-;; @param p Pattern to transform
-;; @param transformations List of [transform-fn args...] to apply
-;; @return Pattern<T> with all transformations applied
+;;; transform-time -- apply a sequence of temporal transformations to a pattern.
+;;;
+;;; Parameters:
+;;;   p               -- base pattern
+;;;   transformations -- list of [transform-fn args...] pairs to apply in order
+;;;
+;;; Returns:
+;;;   Pattern<T> with all transformations applied.
+;;;
+;;; Example:
+;;;   (transform-time (cycle 1 2 3) [slow 2] [shift 0.5] [repeat 2])
 (defn transform-time [p & transformations]
   (reduce (fn [acc [transform & args]]
             (apply transform acc args))
@@ -251,20 +340,29 @@
 ;; Utility Combinators
 ;; ============================================================================
 
-;; Swap the time direction (play pattern backwards)
-;;
-;; @param p Pattern to play backwards
-;; @param duration Duration in beats (default: 1)
-;; @return Pattern<T> that plays backwards
+;;; backwards -- play a pattern in reverse within each cycle.
+;;;
+;;; Parameters:
+;;;   p        -- pattern to reverse
+;;;   duration -- cycle duration in beats (default: 1.0)
+;;;
+;;; Returns:
+;;;   Pattern<T> playing backwards.
 (defn backwards [p & [duration 1.0]]
   (fn [time]
     (p (- duration (mod time duration)))))
 
-;; Play pattern forwards then backwards (palindrome)
-;;
-;; @param p Pattern to palindrome
-;; @param duration Duration in beats (default: 1)
-;; @return Pattern<T> that plays forwards then backwards
+;;; palindrome -- play a pattern forwards then backwards (ping-pong).
+;;;
+;;; Parameters:
+;;;   p        -- pattern to palindrome
+;;;   duration -- half-period in beats (default: 1.0)
+;;;
+;;; Returns:
+;;;   Pattern<T> playing forward then backward in a 2*duration window.
+;;;
+;;; Example:
+;;;   ((palindrome my-pat) 1.5)  ; reads from time 0.5 (backwards half)
 (defn palindrome [p & [duration 1.0]]
   (fn [time]
     (let [phase (mod time (* 2 duration))]
@@ -272,11 +370,17 @@
         (p phase)
         (p (- (* 2 duration) phase))))))
 
-;; Stutter: repeat the current value for a sub-cycle
-;;
-;; @param subdivisions Number of times to stutter each value
-;; @param p Pattern to stutter
-;; @return Pattern<T> with stuttered values
+;;; stutter -- repeat each value of a pattern subdivisions times.
+;;;
+;;; Parameters:
+;;;   subdivisions -- how many times to repeat each value
+;;;   p            -- pattern to stutter
+;;;
+;;; Returns:
+;;;   Pattern<T> with stuttered output.
+;;;
+;;; Example:
+;;;   ((stutter 4 my-pat) 0.5)  ; reads from floor(0.5/4) = 0
 (defn stutter [subdivisions p]
   (fn [time]
     (let [base-time (/ time subdivisions)]
@@ -286,24 +390,30 @@
 ;; Time Window Combinators
 ;; ============================================================================
 
-;; Only evaluate pattern within a time window
-;;
-;; @param start Start of window in beats
-;; @param end End of window in beats
-;; @param p Pattern to window
-;; @param zero Value to return outside window (default: 0)
-;; @return Pattern<T> that only evaluates within [start, end)
+;;; time-window -- gate a pattern to a specific time window.
+;;;
+;;; Parameters:
+;;;   start -- window start in beats
+;;;   end   -- window end in beats
+;;;   p     -- pattern to window
+;;;   zero  -- value outside the window (default: 0)
+;;;
+;;; Returns:
+;;;   Pattern<T> active only in [start, end).
 (defn time-window [start end p & [zero 0]]
   (fn [time]
     (if (and (>= time start) (< time end))
       (p time)
       zero)))
 
-;; Fade in a pattern over time
-;;
-;; @param fade-duration Duration of fade in beats
-;; @param p Pattern to fade in
-;; @return Pattern<T> with fade-in (for numeric patterns)
+;;; fade-in -- produce a linear ramp from 0 to 1 over fade-duration beats.
+;;;
+;;; Parameters:
+;;;   fade-duration -- duration of the fade in beats
+;;;   p             -- pattern (currently unused, ramp only)
+;;;
+;;; Returns:
+;;;   NumPattern rising linearly to 1.0 then holding at 1.0.
 (defn fade-in [fade-duration p]
   (fn [time]
     (if (< time fade-duration)
@@ -311,12 +421,15 @@
         (time/lerp 0.0 1.0 t))
       1.0)))
 
-;; Fade out a pattern over time
-;;
-;; @param fade-duration Duration of fade out in beats
-;; @param start-time Start of fade out in beats
-;; @param p Pattern to fade out
-;; @return Pattern<T> with fade-out (for numeric patterns)
+;;; fade-out -- produce a linear ramp from 1 to 0 starting at start-time.
+;;;
+;;; Parameters:
+;;;   fade-duration -- duration of the fade in beats
+;;;   start-time    -- beat at which the fade begins
+;;;   p             -- pattern (currently unused, ramp only)
+;;;
+;;; Returns:
+;;;   NumPattern holding 1.0 before start-time, then falling to 0.0.
 (defn fade-out [fade-duration start-time p]
   (fn [time]
     (if (>= time start-time)
