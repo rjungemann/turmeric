@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tur/tur/perf | Turmeric API</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand">turmeric</span>
+  <nav>
+    <a href="index.html">API Docs</a>
+    <a href="../autodoc-plan.md">Plan</a>
+  </nav>
+</header>
+<div class="page-layout">
+<div class="sidebar">
+  <h3>Exported</h3>
+  <ul>
+    <li><a href="#cached">cached</a></li>
+    <li><a href="#cached-ttl">cached-ttl</a></li>
+    <li><a href="#inline-pattern">inline-pattern</a></li>
+    <li><a href="#fuse-pattern">fuse-pattern</a></li>
+    <li><a href="#CompiledPattern">CompiledPattern</a></li>
+    <li><a href="#compile-pattern">compile-pattern</a></li>
+    <li><a href="#eval-compiled">eval-compiled</a></li>
+    <li><a href="#LazyPattern_T_">LazyPattern&lt;T&gt;</a></li>
+    <li><a href="#make-lazy-pattern">make-lazy-pattern</a></li>
+    <li><a href="#eval-lazy">eval-lazy</a></li>
+    <li><a href="#batch-eval">batch-eval</a></li>
+    <li><a href="#batch-eval-process">batch-eval-process</a></li>
+    <li><a href="#optimize-pattern">optimize-pattern</a></li>
+    <li><a href="#optimize">optimize</a></li>
+    <li><a href="#optimize-aggressive">optimize-aggressive</a></li>
+    <li><a href="#bench-pattern">bench-pattern</a></li>
+    <li><a href="#patterns-equal_">patterns-equal?</a></li>
+    <li><a href="#profile-pattern">profile-pattern</a></li>
+    <li><a href="#profile-stats">profile-stats</a></li>
+    <li><a href="#zero-alloc-pattern">zero-alloc-pattern</a></li>
+    <li><a href="#zero-alloc-cycle">zero-alloc-cycle</a></li>
+    <li><a href="#zero-alloc-sine">zero-alloc-sine</a></li>
+    <li><a href="#PatternPool">PatternPool</a></li>
+    <li><a href="#pool-new">pool-new</a></li>
+    <li><a href="#pool-get">pool-get</a></li>
+    <li><a href="#pool-return">pool-return</a></li>
+    <li><a href="#simd-pattern-4">simd-pattern-4</a></li>
+    <li><a href="#specialize-pattern">specialize-pattern</a></li>
+    <li><a href="#specialize-constant">specialize-constant</a></li>
+    <li><a href="#track-allocations">track-allocations</a></li>
+  </ul>
+</div>
+<div class="content">
+  <div class="module-heading">
+    <h1>tur/perf</h1>
+    <div class="module-path">stdlib/perf.tur</div>
+  </div>
+<div class="def-card" id="cached">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>cached</h2>
+  </div>
+  <pre class="def-signature">(cached [p &amp; [cache-size 1024])</pre>
+  <p class="def-summary">cache pattern results within a cycle to avoid redundant evaluation.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to cache</td></tr>
+    <tr><td>cache-size</td><td></td><td>number of cache buckets (default: 1024)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;T&gt; with memoised results for repeated time queries.
+
+  (cached expensive-pat 512)</pre>
+  </div>
+</div>
+<div class="def-card" id="cached-ttl">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>cached-ttl</h2>
+  </div>
+  <pre class="def-signature">(cached-ttl [p cache-size ttl])</pre>
+  <p class="def-summary">cache pattern results with a time-to-live expiry.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to cache</td></tr>
+    <tr><td>cache-size</td><td></td><td>number of cache buckets</td></tr>
+    <tr><td>ttl</td><td></td><td>time-to-live in beats before an entry is re-evaluated</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt; with TTL-based cache invalidation.</p>
+  </div>
+</div>
+<div class="def-card" id="inline-pattern">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>inline-pattern</h2>
+  </div>
+  <pre class="def-signature">(inline-pattern [p])</pre>
+  <p class="def-summary">specialise simple patterns for reduced call overhead.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to inline</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">An equivalent Pattern&lt;T&gt; with simpler internal structure where possible.</p>
+  </div>
+</div>
+<div class="def-card" id="fuse-pattern">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>fuse-pattern</h2>
+  </div>
+  <pre class="def-signature">(fuse-pattern [p])</pre>
+  <p class="def-summary">fuse consecutive pattern operations to reduce overhead.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to fuse</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt; with fused operations where recognised.</p>
+  </div>
+</div>
+<div class="def-card" id="CompiledPattern">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defstruct">defstruct</span>
+    <h2>CompiledPattern</h2>
+  </div>
+  <pre class="def-signature">(defstruct CompiledPattern [])</pre>
+  <p class="def-summary">a pattern compiled to native code (conceptual).</p>
+</div>
+<div class="def-card" id="compile-pattern">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>compile-pattern</h2>
+  </div>
+  <pre class="def-signature">(compile-pattern [p])</pre>
+  <p class="def-summary">attempt to compile a pattern to native code.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to compile</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">CompiledPattern or nil if compilation is not supported.</p>
+  </div>
+</div>
+<div class="def-card" id="eval-compiled">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>eval-compiled</h2>
+  </div>
+  <pre class="def-signature">(eval-compiled [cp time])</pre>
+  <p class="def-summary">evaluate a compiled pattern at a specific time.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>cp</td><td></td><td>CompiledPattern</td></tr>
+    <tr><td>time</td><td></td><td>time in beats</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern value (always 0.0 in this placeholder implementation).</p>
+  </div>
+</div>
+<div class="def-card" id="LazyPattern_T_">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defstruct">defstruct</span>
+    <h2>LazyPattern&lt;T&gt;</h2>
+  </div>
+  <pre class="def-signature">(defstruct LazyPattern&lt;T&gt; [])</pre>
+  <p class="def-summary">pattern whose construction is deferred until first use.</p>
+</div>
+<div class="def-card" id="make-lazy-pattern">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>make-lazy-pattern</h2>
+  </div>
+  <pre class="def-signature">(make-lazy-pattern [thunk])</pre>
+  <p class="def-summary">create a lazy pattern from a thunk.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>thunk</td><td></td><td>function that produces the pattern when first evaluated</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">LazyPattern&lt;T&gt;.</p>
+  </div>
+</div>
+<div class="def-card" id="eval-lazy">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>eval-lazy</h2>
+  </div>
+  <pre class="def-signature">(eval-lazy [lp time])</pre>
+  <p class="def-summary">evaluate a lazy pattern, constructing it on first use.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>lp</td><td></td><td>LazyPattern&lt;T&gt;</td></tr>
+    <tr><td>time</td><td></td><td>time in beats</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern value.</p>
+  </div>
+</div>
+<div class="def-card" id="batch-eval">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>batch-eval</h2>
+  </div>
+  <pre class="def-signature">(batch-eval [p times])</pre>
+  <p class="def-summary">evaluate a pattern at multiple times.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to evaluate</td></tr>
+    <tr><td>times</td><td></td><td>vector of beat times</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Vector of pattern values corresponding to each time.
+
+  (batch-eval my-pat [0.0 0.25 0.5 0.75])</pre>
+  </div>
+</div>
+<div class="def-card" id="batch-eval-process">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>batch-eval-process</h2>
+  </div>
+  <pre class="def-signature">(batch-eval-process [p times f])</pre>
+  <p class="def-summary">evaluate a pattern at multiple times and transform results.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to evaluate</td></tr>
+    <tr><td>times</td><td></td><td>vector of beat times</td></tr>
+    <tr><td>f</td><td></td><td>function to apply to each result</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Vector of processed values.</p>
+  </div>
+</div>
+<div class="def-card" id="optimize-pattern">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>optimize-pattern</h2>
+  </div>
+  <pre class="def-signature">(optimize-pattern [p &amp; [passes [fuse-pattern inline-pattern cached])</pre>
+  <p class="def-summary">apply a list of optimization passes to a pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to optimize</td></tr>
+    <tr><td>passes</td><td></td><td>list of optimization functions (default: fuse, inline, cache)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Optimized Pattern&lt;T&gt;.</p>
+  </div>
+</div>
+<div class="def-card" id="optimize">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>optimize</h2>
+  </div>
+  <pre class="def-signature">(optimize [p])</pre>
+  <p class="def-summary">apply the standard optimization pipeline.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to optimize</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Optimized Pattern&lt;T&gt;.</p>
+  </div>
+</div>
+<div class="def-card" id="optimize-aggressive">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>optimize-aggressive</h2>
+  </div>
+  <pre class="def-signature">(optimize-aggressive [p])</pre>
+  <p class="def-summary">apply an aggressive optimization pipeline including large cache.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to optimize</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Aggressively optimized Pattern&lt;T&gt;.</p>
+  </div>
+</div>
+<div class="def-card" id="bench-pattern">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>bench-pattern</h2>
+  </div>
+  <pre class="def-signature">(bench-pattern [p iterations &amp; [warmup 10])</pre>
+  <p class="def-summary">measure evaluation throughput for a pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to benchmark</td></tr>
+    <tr><td>iterations</td><td></td><td>number of timed iterations</td></tr>
+    <tr><td>warmup</td><td></td><td>warmup iterations before timing (default: 10)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Map with :total-ns, :avg-ns, and :iterations.
+
+  (bench-pattern my-pat 10000)</pre>
+  </div>
+</div>
+<div class="def-card" id="patterns-equal_">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>patterns-equal?</h2>
+  </div>
+  <pre class="def-signature">(patterns-equal? [p1 p2 times &amp; [tolerance 0.001])</pre>
+  <p class="def-summary">compare two patterns for equality over a set of test times.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p1</td><td></td><td>first pattern</td></tr>
+    <tr><td>p2</td><td></td><td>second pattern</td></tr>
+    <tr><td>times</td><td></td><td>vector of times to test</td></tr>
+    <tr><td>tolerance</td><td></td><td>float tolerance for comparison (default: 0.001)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">true if all sample points agree within tolerance.</p>
+  </div>
+</div>
+<div class="def-card" id="profile-pattern">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>profile-pattern</h2>
+  </div>
+  <pre class="def-signature">(profile-pattern [p])</pre>
+  <p class="def-summary">wrap a pattern to collect timing data on each call.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to profile</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt; that accumulates call counts and total nanoseconds.</p>
+  </div>
+</div>
+<div class="def-card" id="profile-stats">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>profile-stats</h2>
+  </div>
+  <pre class="def-signature">(profile-stats [profiled-fn])</pre>
+  <p class="def-summary">retrieve profiling statistics from a profiled pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>profiled-fn</td><td></td><td>profiled pattern function from profile-pattern</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Map with :calls, :total-time, and :avg-time.</p>
+  </div>
+</div>
+<div class="def-card" id="zero-alloc-pattern">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>zero-alloc-pattern</h2>
+  </div>
+  <pre class="def-signature">(zero-alloc-pattern [computation])</pre>
+  <p class="def-summary">create a pattern guaranteed not to allocate in the hot path.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>computation</td><td></td><td>Beats -&gt; T function with no allocations</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt;.</p>
+  </div>
+</div>
+<div class="def-card" id="zero-alloc-cycle">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>zero-alloc-cycle</h2>
+  </div>
+  <pre class="def-signature">(zero-alloc-cycle [values])</pre>
+  <p class="def-summary">zero-allocation cycling pattern over a pre-allocated vector.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>values</td><td></td><td>pre-allocated vector of values</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern with zero allocation.</p>
+  </div>
+</div>
+<div class="def-card" id="zero-alloc-sine">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>zero-alloc-sine</h2>
+  </div>
+  <pre class="def-signature">(zero-alloc-sine [freq amp])</pre>
+  <p class="def-summary">zero-allocation sine wave pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>freq</td><td></td><td>frequency in cycles per beat</td></tr>
+    <tr><td>amp</td><td></td><td>amplitude</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern with zero allocation.</p>
+  </div>
+</div>
+<div class="def-card" id="PatternPool">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defstruct">defstruct</span>
+    <h2>PatternPool</h2>
+  </div>
+  <pre class="def-signature">(defstruct PatternPool [])</pre>
+  <p class="def-summary">reusable pool of pattern instances.</p>
+</div>
+<div class="def-card" id="pool-new">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>pool-new</h2>
+  </div>
+  <pre class="def-signature">(pool-new [size factory])</pre>
+  <p class="def-summary">create a pattern pool with pre-allocated instances.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>size</td><td></td><td>number of instances to pre-allocate</td></tr>
+    <tr><td>factory</td><td></td><td>function producing a fresh pattern instance</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">PatternPool.</p>
+  </div>
+</div>
+<div class="def-card" id="pool-get">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>pool-get</h2>
+  </div>
+  <pre class="def-signature">(pool-get [pool])</pre>
+  <p class="def-summary">borrow a pattern from the pool (creates one if pool is empty).</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>pool</td><td></td><td>PatternPool</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt;.</p>
+  </div>
+</div>
+<div class="def-card" id="pool-return">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>pool-return</h2>
+  </div>
+  <pre class="def-signature">(pool-return [pool idx])</pre>
+  <p class="def-summary">return a pattern to the pool by index.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>pool</td><td></td><td>PatternPool</td></tr>
+    <tr><td>idx</td><td></td><td>index of the pattern to return</td></tr>
+    </table>
+  </div>
+</div>
+<div class="def-card" id="simd-pattern-4">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>simd-pattern-4</h2>
+  </div>
+  <pre class="def-signature">(simd-pattern-4 [p])</pre>
+  <p class="def-summary">evaluate a pattern at 4 times simultaneously (conceptual).</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to evaluate</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Function: vec&lt;Beats&gt; -&gt; vec&lt;T&gt; evaluating all 4 times.</p>
+  </div>
+</div>
+<div class="def-card" id="specialize-pattern">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>specialize-pattern</h2>
+  </div>
+  <pre class="def-signature">(specialize-pattern [p time-range])</pre>
+  <p class="def-summary">constant-fold a pattern over a specific time range.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to specialise</td></tr>
+    <tr><td>time-range</td><td></td><td>[start end] pair; if start == end, folds to a constant</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Specialised Pattern&lt;T&gt;.</p>
+  </div>
+</div>
+<div class="def-card" id="specialize-constant">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>specialize-constant</h2>
+  </div>
+  <pre class="def-signature">(specialize-constant [p])</pre>
+  <p class="def-summary">evaluate a pattern once at time 0 and return a constant.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to specialise</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt; always returning the value of p at time 0.</p>
+  </div>
+</div>
+<div class="def-card" id="track-allocations">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>track-allocations</h2>
+  </div>
+  <pre class="def-signature">(track-allocations [p])</pre>
+  <p class="def-summary">wrap a pattern to track GC allocations per evaluation.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to track</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt; that measures allocation delta on each call.</p>
+  </div>
+</div>
+</div>
+</div>
+<footer class="site-footer">
+  Auto-generated by <code>tools/gendocs.py</code>.
+  Do not edit by hand -- run <code>just docs</code> to regenerate.
+</footer>
+</body>
+</html>

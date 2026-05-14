@@ -1,6 +1,17 @@
 ;; Test runner for Turmeric
 
 ;; Assert equality (both args must be int for now)
+;;; assert -- assert that expected equals actual; print a failure message and return false if not.
+;;;
+;;; Parameters:
+;;;   expected -- the expected integer value
+;;;   actual   -- the actual integer value to compare against expected
+;;;
+;;; Returns:
+;;;   true if equal, false otherwise (with a failure message printed to stdout).
+;;;
+;;; Example:
+;;;   (assert 42 (my-fn))  ; => true when my-fn returns 42
 (defn assert [expected actual] :bool
   (if (= expected actual)
     true
@@ -14,6 +25,16 @@
 ;; Assert a condition is true.
 ;; Current compiler limits function argument kinds to int in signatures,
 ;; so test helpers use 1=true / 0=false convention for now.
+;;; assert-true -- assert that x is truthy (1); print a failure message and return false if not.
+;;;
+;;; Parameters:
+;;;   x -- value to test; 1 = true, 0 = false (current int convention)
+;;;
+;;; Returns:
+;;;   true if x == 1, false otherwise.
+;;;
+;;; Example:
+;;;   (assert-true (= 1 1))  ; => true
 (defn assert-true [x] :bool
   (if (= x 1)
     true
@@ -22,6 +43,16 @@
       false)))
 
 ;; Assert a condition is false (0=false convention)
+;;; assert-false -- assert that x is falsy (0); print a failure message and return false if not.
+;;;
+;;; Parameters:
+;;;   x -- value to test; 0 = false, non-zero = true
+;;;
+;;; Returns:
+;;;   true if x == 0, false otherwise.
+;;;
+;;; Example:
+;;;   (assert-false (= 1 2))  ; => true
 (defn assert-false [x] :bool
   (if (= x 1)
     (do
@@ -32,6 +63,16 @@
 ;; Assert a value is nil.
 ;; Current function-signature limits treat args as int in this path,
 ;; so nil convention is represented as 0 for now.
+;;; assert-nil -- assert that x represents nil (0); print a failure message and return false if not.
+;;;
+;;; Parameters:
+;;;   x -- value to test; 0 represents nil
+;;;
+;;; Returns:
+;;;   true if x == 0, false otherwise.
+;;;
+;;; Example:
+;;;   (assert-nil (no-op))  ; => true when no-op returns 0
 (defn assert-nil [x] :bool
   (if (= x 0)
     true
@@ -41,6 +82,16 @@
 
 ;; Assert that invoking the callback throws an error.
 ;; `thunk` must be a no-arg callback bridged through ptr<void>.
+;;; assert-error -- assert that calling thunk raises an error; return false if it does not.
+;;;
+;;; Parameters:
+;;;   thunk -- no-argument callback pointer; expected to throw when called
+;;;
+;;; Returns:
+;;;   true if thunk raised an error, false if it returned normally.
+;;;
+;;; Example:
+;;;   (assert-error (fn [] (error "boom")))  ; => true
 (defn assert-error [thunk :ptr<void>] :bool
   (if (= (try
            (do
@@ -57,6 +108,17 @@
 ;; Run a single test result and print marker output.
 ;; Returns 1 on pass, 0 on fail.
 ;; `test-fn` is passed as an opaque callback pointer and invoked in-body.
+;;; run-test -- invoke test-fn, print "." on pass or "F <name>" on fail, and return 1 or 0.
+;;;
+;;; Parameters:
+;;;   name    -- human-readable test name printed on failure
+;;;   test-fn -- no-argument callback that returns 1 on pass, 0 on fail
+;;;
+;;; Returns:
+;;;   1 if the test passed, 0 if it failed.
+;;;
+;;; Example:
+;;;   (run-test "my test" (fn [] (assert 1 1)))  ; => 1
 (defn run-test [name :cstr test-fn :ptr<void>] :int
   (if (= (test-fn) 1)
     (do
@@ -69,6 +131,14 @@
 
 ;; Register a named test callback for later execution via run-tests!.
 ;; Returns nonzero on success.
+;;; register-test -- register a named test callback with the runtime for later batch execution.
+;;;
+;;; Parameters:
+;;;   name    -- test name string
+;;;   test-fn -- no-argument callback returning 1 on pass, 0 on fail
+;;;
+;;; Returns:
+;;;   Non-zero on successful registration.
 (defn register-test [name :cstr test-fn :ptr<void>] :int
   ```c
   extern int64_t tur_test_register(const char *name, void *test_fn);
@@ -76,6 +146,10 @@
   ```)
 
 ;; Run all registered tests and return exit code
+;;; run-tests! -- run all tests registered with register-test and return a process exit code.
+;;;
+;;; Returns:
+;;;   0 if all tests passed, non-zero if any failed.
 (defn run-tests! [] :int
   ```c
   extern int64_t tur_test_run_all(void);
@@ -86,5 +160,13 @@
 ;; Usage: (deftest "my-test" (assert-true ...) (assert-false ...) ...)
 ;; Expands to: (register-test "my-test" (fn [] body... 1))
 ;; The fn returns 1 (pass); assertions print failure messages on failure.
+;;; deftest -- register a named test whose body is one or more assertion expressions.
+;;;
+;;; Parameters:
+;;;   test-name -- string name for the test
+;;;   body      -- one or more expressions; the test passes if none abort
+;;;
+;;; Example:
+;;;   (deftest "addition" (assert 4 (+ 2 2)))
 (defmacro deftest [test-name & body]
   (register-test test-name (fn [] ~@body 1)))

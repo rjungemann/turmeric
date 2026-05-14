@@ -1,4 +1,4 @@
-;; stdlib/tidal/perf.tur — Performance Optimization for Patterns
+;; stdlib/tidal/perf.tur -- Performance Optimization for Patterns
 ;;
 ;; This module provides performance-optimized pattern implementations
 ;; and utilities for high-performance pattern evaluation.
@@ -10,12 +10,17 @@
 ;; Pattern Caching
 ;; ============================================================================
 
-;; Cache pattern results within a cycle
-;; This avoids re-evaluating the same pattern at the same phase
-;;
-;; @param p Pattern to cache
-;; @param cache-size Number of cache entries (default: 1024)
-;; @return Pattern<T> with caching
+;;; cached -- cache pattern results within a cycle to avoid redundant evaluation.
+;;;
+;;; Parameters:
+;;;   p          -- pattern to cache
+;;;   cache-size -- number of cache buckets (default: 1024)
+;;;
+;;; Returns:
+;;;   Pattern<T> with memoised results for repeated time queries.
+;;;
+;;; Example:
+;;;   (cached expensive-pat 512)
 (defn cached [p & [cache-size 1024]]
   (let [cache (vec (repeat cache-size none))]
     (fn [time]
@@ -26,12 +31,15 @@
             (vec-set! cache index (some v))
             v))))))
 
-;; Cache with time-based invalidation
-;;
-;; @param p Pattern to cache
-;; @param cache-size Cache size in entries
-;; @param ttl Time-to-live in beats (entries older than this are re-evaluated)
-;; @return Pattern<T> with TTL caching
+;;; cached-ttl -- cache pattern results with a time-to-live expiry.
+;;;
+;;; Parameters:
+;;;   p          -- pattern to cache
+;;;   cache-size -- number of cache buckets
+;;;   ttl        -- time-to-live in beats before an entry is re-evaluated
+;;;
+;;; Returns:
+;;;   Pattern<T> with TTL-based cache invalidation.
 (defn cached-ttl [p cache-size ttl]
   (let [cache (vec (repeat cache-size none))
         timestamps (vec (repeat cache-size 0.0))]
@@ -49,11 +57,13 @@
 ;; Pattern Inlining
 ;; ============================================================================
 
-;; Inline simple patterns for better performance
-;; This is a conceptual optimization - Turmeric's compiler would handle actual inlining
-;;
-;; @param p Pattern to inline
-;; @return Pattern<T> that may be inlined
+;;; inline-pattern -- specialise simple patterns for reduced call overhead.
+;;;
+;;; Parameters:
+;;;   p -- pattern to inline
+;;;
+;;; Returns:
+;;;   An equivalent Pattern<T> with simpler internal structure where possible.
 (defn inline-pattern [p]
   (match p
     (pattern/const v) (pattern/const v)  ;; Already optimal
@@ -66,56 +76,62 @@
 ;; Pattern Fusion
 ;; ============================================================================
 
-;; Fuse consecutive pattern operations into a single function
-;; This reduces function call overhead
-;;
-;; @param p Pattern to fuse
-;; @return Pattern<T> with fused operations
+;;; fuse-pattern -- fuse consecutive pattern operations to reduce overhead.
+;;;
+;;; Parameters:
+;;;   p -- pattern to fuse
+;;;
+;;; Returns:
+;;;   Pattern<T> with fused operations where recognised.
 (defn fuse-pattern [p]
   (match p
     ;; Fuse slow after fast: (slow a (fast b p)) -> (fn [t] (p (* t (* b a))))
     (temporal/slow a (temporal/fast b inner)) (fn [time] (inner (* time (* b a))))
-    
+
     ;; Fuse add with constant: (add p c) -> (fn [t] (+ (p t) c))
     (transform/add (pattern/const a) (pattern/const b)) (pattern/const (+ a b))
     (transform/add p (pattern/const c)) (fn [time] (+ (p time) c))
     (transform/add (pattern/const c) p) (fn [time] (+ c (p time)))
-    
+
     ;; Fuse mul with constant: (mul p c) -> (fn [t] (* (p t) c))
     (transform/mul (pattern/const a) (pattern/const b)) (pattern/const (* a b))
     (transform/mul p (pattern/const c)) (fn [time] (* (p time) c))
     (transform/mul (pattern/const c) p) (fn [time] (* c (p time)))
-    
+
     ;; Fuse clamp: (clamp p low high) -> (fn [t] (math/clamp (p t) low high))
     (transform/clamp p low high) (fn [time] (math/clamp (p time) low high))
-    
+
     _ p))  ;; Can't fuse
 
 ;; ============================================================================
 ;; Compiled Patterns
 ;; ============================================================================
 
-;; A compiled pattern that uses inline-C for evaluation
-;; This is a conceptual implementation
+;;; CompiledPattern -- a pattern compiled to native code (conceptual).
 (defstruct CompiledPattern
   [eval-fn :ptr<void>  ;; Pointer to compiled evaluation function
    context :ptr<void>  ;; Context for evaluation
    free-fn :ptr<void>]  ;; Pointer to cleanup function
 
-;; Compile a pattern to native code
-;; This would use Turmeric's FFI to compile patterns to machine code
-;;
-;; @param p Pattern to compile
-;; @return CompiledPattern or nil if compilation fails
+;;; compile-pattern -- attempt to compile a pattern to native code.
+;;;
+;;; Parameters:
+;;;   p -- pattern to compile
+;;;
+;;; Returns:
+;;;   CompiledPattern or nil if compilation is not supported.
 (defn compile-pattern [p]
   ;; Conceptual - would require code generation
   nil)
 
-;; Evaluate a compiled pattern
-;;
-;; @param cp CompiledPattern
-;; @param time Time in beats
-;; @return Pattern value
+;;; eval-compiled -- evaluate a compiled pattern at a specific time.
+;;;
+;;; Parameters:
+;;;   cp   -- CompiledPattern
+;;;   time -- time in beats
+;;;
+;;; Returns:
+;;;   Pattern value (always 0.0 in this placeholder implementation).
 (defn eval-compiled [cp time]
   ;; Conceptual
   0.0)
@@ -124,24 +140,30 @@
 ;; Lazy Pattern Evaluation
 ;; ============================================================================
 
-;; Lazy pattern that memoizes its first evaluation
+;;; LazyPattern -- pattern whose construction is deferred until first use.
 (defstruct LazyPattern<T>
   [thunk :(fn [] :(Pattern<T>))
    cached :(option<(Pattern<T>)) ])
 
-;; Create a lazy pattern
-;;
-;; @param thunk Function that produces the pattern when first evaluated
-;; @return LazyPattern<T>
+;;; make-lazy-pattern -- create a lazy pattern from a thunk.
+;;;
+;;; Parameters:
+;;;   thunk -- function that produces the pattern when first evaluated
+;;;
+;;; Returns:
+;;;   LazyPattern<T>.
 (defn make-lazy-pattern [thunk]
   {:thunk thunk
    :cached none})
 
-;; Evaluate a lazy pattern
-;;
-;; @param lp LazyPattern<T>
-;; @param time Time in beats
-;; @return Pattern value
+;;; eval-lazy -- evaluate a lazy pattern, constructing it on first use.
+;;;
+;;; Parameters:
+;;;   lp   -- LazyPattern<T>
+;;;   time -- time in beats
+;;;
+;;; Returns:
+;;;   Pattern value.
 (defn eval-lazy [lp time]
   (let [cached (:cached lp)]
     (if (some? cached)
@@ -154,20 +176,29 @@
 ;; Batch Pattern Evaluation
 ;; ============================================================================
 
-;; Evaluate a pattern for multiple times in a batch
-;;
-;; @param p Pattern to evaluate
-;; @param times Vector of times to evaluate at
-;; @return Vector of pattern values
+;;; batch-eval -- evaluate a pattern at multiple times.
+;;;
+;;; Parameters:
+;;;   p     -- pattern to evaluate
+;;;   times -- vector of beat times
+;;;
+;;; Returns:
+;;;   Vector of pattern values corresponding to each time.
+;;;
+;;; Example:
+;;;   (batch-eval my-pat [0.0 0.25 0.5 0.75])
 (defn batch-eval [p times]
   (vec (map p times)))
 
-;; Batch evaluate and process results
-;;
-;; @param p Pattern to evaluate
-;; @param times Vector of times
-;; @param f Function to process each result
-;; @return Vector of processed results
+;;; batch-eval-process -- evaluate a pattern at multiple times and transform results.
+;;;
+;;; Parameters:
+;;;   p     -- pattern to evaluate
+;;;   times -- vector of beat times
+;;;   f     -- function to apply to each result
+;;;
+;;; Returns:
+;;;   Vector of processed values.
 (defn batch-eval-process [p times f]
   (vec (map f (batch-eval p times))))
 
@@ -175,19 +206,34 @@
 ;; Pattern Optimization Passes
 ;; ============================================================================
 
-;; Apply optimization passes to a pattern
-;;
-;; @param p Pattern to optimize
-;; @param passes List of optimization functions to apply
-;; @return Optimized pattern
-(defn optimize-pattern [p & [passes [fuse-pattern inline-pattern cached]]]]
+;;; optimize-pattern -- apply a list of optimization passes to a pattern.
+;;;
+;;; Parameters:
+;;;   p      -- pattern to optimize
+;;;   passes -- list of optimization functions (default: fuse, inline, cache)
+;;;
+;;; Returns:
+;;;   Optimized Pattern<T>.
+(defn optimize-pattern [p & [passes [fuse-pattern inline-pattern cached]]]
   (reduce (fn [acc pass] (pass acc)) p passes))
 
-;; Standard optimization pipeline
+;;; optimize -- apply the standard optimization pipeline.
+;;;
+;;; Parameters:
+;;;   p -- pattern to optimize
+;;;
+;;; Returns:
+;;;   Optimized Pattern<T>.
 (defn optimize [p]
   (optimize-pattern p [fuse-pattern inline-pattern]))
 
-;; Aggressive optimization pipeline
+;;; optimize-aggressive -- apply an aggressive optimization pipeline including large cache.
+;;;
+;;; Parameters:
+;;;   p -- pattern to optimize
+;;;
+;;; Returns:
+;;;   Aggressively optimized Pattern<T>.
 (defn optimize-aggressive [p]
   (optimize-pattern p [fuse-pattern inline-pattern (fn [x] (cached x 4096))]))
 
@@ -195,19 +241,25 @@
 ;; Pattern Benchmarking
 ;; ============================================================================
 
-;; Benchmark a pattern evaluation
-;;
-;; @param p Pattern to benchmark
-;; @param iterations Number of iterations
-;; @param warmup Warmup iterations (default: 10)
-;; @return Map with benchmark results
+;;; bench-pattern -- measure evaluation throughput for a pattern.
+;;;
+;;; Parameters:
+;;;   p          -- pattern to benchmark
+;;;   iterations -- number of timed iterations
+;;;   warmup     -- warmup iterations before timing (default: 10)
+;;;
+;;; Returns:
+;;;   Map with :total-ns, :avg-ns, and :iterations.
+;;;
+;;; Example:
+;;;   (bench-pattern my-pat 10000)
 (defn bench-pattern [p iterations & [warmup 10]]
   (let [times (vec (for [i (range iterations)] (rand-float)))]
-    
+
     ;; Warmup
     (dotimes [i warmup]
       (p (get times (mod i iterations))))
-    
+
     (let [start (time/mono-ns)]
       (dotimes [i iterations]
         (p (get times i)))
@@ -217,13 +269,16 @@
          :avg-ns (/ total-ns iterations)
          :iterations iterations}))))
 
-;; Compare two patterns for equality over a range of times
-;;
-;; @param p1 First pattern
-;; @param p2 Second pattern
-;; @param times Vector of times to test
-;; @param tolerance Tolerance for float comparison (default: 0.001)
-;; @return true if patterns produce equal results at all times
+;;; patterns-equal? -- compare two patterns for equality over a set of test times.
+;;;
+;;; Parameters:
+;;;   p1        -- first pattern
+;;;   p2        -- second pattern
+;;;   times     -- vector of times to test
+;;;   tolerance -- float tolerance for comparison (default: 0.001)
+;;;
+;;; Returns:
+;;;   true if all sample points agree within tolerance.
 (defn patterns-equal? [p1 p2 times & [tolerance 0.001]]
   (every? (fn [t]
             (let [v1 (p1 t)
@@ -237,11 +292,13 @@
 ;; Performance Profiling
 ;; ============================================================================
 
-;; Profile a pattern's evaluation
-;; Returns a function that can be used to collect profiling data
-;;
-;; @param p Pattern to profile
-;; @return Function that collects profiling data
+;;; profile-pattern -- wrap a pattern to collect timing data on each call.
+;;;
+;;; Parameters:
+;;;   p -- pattern to profile
+;;;
+;;; Returns:
+;;;   Pattern<T> that accumulates call counts and total nanoseconds.
 (defn profile-pattern [p]
   (let [call-count 0
         total-time 0]
@@ -253,10 +310,13 @@
         (set! total-time (+ total-time elapsed))
         result))))
 
-;; Get profiling statistics
-;;
-;; @param profiled-fn Profiled function from profile-pattern
-;; @return Map with profiling statistics
+;;; profile-stats -- retrieve profiling statistics from a profiled pattern.
+;;;
+;;; Parameters:
+;;;   profiled-fn -- profiled pattern function from profile-pattern
+;;;
+;;; Returns:
+;;;   Map with :calls, :total-time, and :avg-time.
 (defn profile-stats [profiled-fn]
   ;; In a real implementation, we'd access the profiled function's state
   {:calls 0 :total-time 0 :avg-time 0})
@@ -265,27 +325,35 @@
 ;; Zero-Allocation Patterns
 ;; ============================================================================
 
-;; Pattern that avoids allocations in the hot path
-;; Uses pre-allocated state and direct computation
-;;
-;; @param computation Function: Beats -> T (must not allocate)
-;; @return Pattern<T> with zero allocation
+;;; zero-alloc-pattern -- create a pattern guaranteed not to allocate in the hot path.
+;;;
+;;; Parameters:
+;;;   computation -- Beats -> T function with no allocations
+;;;
+;;; Returns:
+;;;   Pattern<T>.
 (defn zero-alloc-pattern [computation]
   (fn [time]
     (computation time)))
 
-;; Zero-alloc cycle pattern for numbers
-;;
-;; @param values Pre-allocated vector of values
-;; @return NumPattern with zero allocation
+;;; zero-alloc-cycle -- zero-allocation cycling pattern over a pre-allocated vector.
+;;;
+;;; Parameters:
+;;;   values -- pre-allocated vector of values
+;;;
+;;; Returns:
+;;;   NumPattern with zero allocation.
 (defn zero-alloc-cycle [values]
   (zero-alloc-pattern (fn [time] (get values (mod (floor (* time 1.0)) (len values))))))
 
-;; Zero-alloc sine pattern
-;;
-;; @param freq Frequency
-;; @param amp Amplitude
-;; @return NumPattern with zero allocation
+;;; zero-alloc-sine -- zero-allocation sine wave pattern.
+;;;
+;;; Parameters:
+;;;   freq -- frequency in cycles per beat
+;;;   amp  -- amplitude
+;;;
+;;; Returns:
+;;;   NumPattern with zero allocation.
 (defn zero-alloc-sine [freq amp]
   (zero-alloc-pattern (fn [time] (* amp (math/sin (* time freq math/PI 2.0))))))
 
@@ -293,28 +361,33 @@
 ;; Pattern Pooling
 ;; ============================================================================
 
-;; Pool of reusable pattern instances
-;; Useful for patterns that are frequently created and destroyed
+;;; PatternPool -- reusable pool of pattern instances.
 (defstruct PatternPool
   [pool :(vec<(Pattern<T>)>)
    free-list :(vec<int>)
    factory :(fn [] :(Pattern<T>)) ])
 
-;; Create a pattern pool
-;;
-;; @param size Initial pool size
-;; @param factory Function to create new pattern instances
-;; @return PatternPool
+;;; pool-new -- create a pattern pool with pre-allocated instances.
+;;;
+;;; Parameters:
+;;;   size    -- number of instances to pre-allocate
+;;;   factory -- function producing a fresh pattern instance
+;;;
+;;; Returns:
+;;;   PatternPool.
 (defn pool-new [size factory]
   (let [pool (vec (for [i (range size)] (factory)))]
     {:pool pool
      :free-list (vec (range (dec size) -1 -1))
      :factory factory}))
 
-;; Get a pattern from the pool
-;;
-;; @param pool PatternPool
-;; @return Pattern<T> from the pool
+;;; pool-get -- borrow a pattern from the pool (creates one if pool is empty).
+;;;
+;;; Parameters:
+;;;   pool -- PatternPool
+;;;
+;;; Returns:
+;;;   Pattern<T>.
 (defn pool-get [pool]
   (if (not (empty? (:free-list pool)))
     (let [idx (first (:free-list pool))]
@@ -325,10 +398,11 @@
       (set! pool (update pool :free-list conj (dec (len (:pool pool)))))
       new-pattern)))
 
-;; Return a pattern to the pool
-;;
-;; @param pool PatternPool
-;; @param idx Index of pattern to return
+;;; pool-return -- return a pattern to the pool by index.
+;;;
+;;; Parameters:
+;;;   pool -- PatternPool
+;;;   idx  -- index of the pattern to return
 (defn pool-return [pool idx]
   (set! pool (update pool :free-list conj idx)))
 
@@ -336,11 +410,13 @@
 ;; SIMD Pattern Evaluation (Conceptual)
 ;; ============================================================================
 
-;; Pattern that can be evaluated using SIMD instructions
-;; This is a conceptual implementation for future optimization
-;;
-;; @param p Pattern to evaluate with SIMD
-;; @return Function that evaluates pattern for 4 times simultaneously
+;;; simd-pattern-4 -- evaluate a pattern at 4 times simultaneously (conceptual).
+;;;
+;;; Parameters:
+;;;   p -- pattern to evaluate
+;;;
+;;; Returns:
+;;;   Function: vec<Beats> -> vec<T> evaluating all 4 times.
 (defn simd-pattern-4 [p]
   (fn [times]
     ;; In a real implementation, this would use inline-C with SIMD intrinsics
@@ -350,12 +426,14 @@
 ;; Pattern Specialization
 ;; ============================================================================
 
-;; Specialize a pattern for a specific range of times
-;; This can enable optimizations like constant folding
-;;
-;; @param p Pattern to specialize
-;; @param time-range [start end] time range
-;; @return Specialized pattern
+;;; specialize-pattern -- constant-fold a pattern over a specific time range.
+;;;
+;;; Parameters:
+;;;   p          -- pattern to specialise
+;;;   time-range -- [start end] pair; if start == end, folds to a constant
+;;;
+;;; Returns:
+;;;   Specialised Pattern<T>.
 (defn specialize-pattern [p time-range]
   (let [[start end] time-range]
     (if (== start end)
@@ -363,10 +441,13 @@
       (pattern/const (p start))
       p)))
 
-;; Specialize for constant patterns
-;;
-;; @param p Pattern to specialize
-;; @return Specialized pattern
+;;; specialize-constant -- evaluate a pattern once at time 0 and return a constant.
+;;;
+;;; Parameters:
+;;;   p -- pattern to specialise
+;;;
+;;; Returns:
+;;;   Pattern<T> always returning the value of p at time 0.
 (defn specialize-constant [p]
   (let [v (p 0.0)]
     (fn [time] v)))
@@ -375,11 +456,13 @@
 ;; Memory Usage Tracking
 ;; ============================================================================
 
-;; Track memory allocations during pattern evaluation
-;; This is useful for identifying patterns that allocate heavily
-;;
-;; @param p Pattern to track
-;; @return Pattern<T> with memory tracking
+;;; track-allocations -- wrap a pattern to track GC allocations per evaluation.
+;;;
+;;; Parameters:
+;;;   p -- pattern to track
+;;;
+;;; Returns:
+;;;   Pattern<T> that measures allocation delta on each call.
 (defn track-allocations [p]
   (fn [time]
     (let [start-alloc (gc/alloc-count)

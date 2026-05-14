@@ -1,4 +1,4 @@
-;; stdlib/select.tur — Multi-channel select (Phase T19-D)
+;; stdlib/select.tur -- Multi-channel select (Phase T19-D)
 ;;
 ;; Select allows waiting on multiple channel operations simultaneously.
 ;;
@@ -18,13 +18,23 @@
 ;; non-blocking try first, then blocking wait.
 
 ;; Select clause operation constants
+;;; __select_op_recv -- internal constant: recv operation code (0).
+;;;
+;;; Since: Phase T19-D
 (defn __select_op_recv [] :int 0)
+
+;;; __select_op_send -- internal constant: send operation code (1).
+;;;
+;;; Since: Phase T19-D
 (defn __select_op_send [] :int 1)
 
 ;; Select clause struct for the runtime
 ;; typedef struct { void *chan; int op; int64_t val; } SelectClause;
 
 ;; Allocate select clauses array
+;;; __select_clauses_alloc -- allocate a zeroed SelectClause array of length n.
+;;;
+;;; Since: Phase T19-D
 (defn __select_clauses_alloc [n :int] :ptr<void>
   ```c
   typedef struct { void *chan; int op; int64_t val; } SelectClause;
@@ -35,6 +45,9 @@
   ```)
 
 ;; Free select clauses array
+;;; __select_clauses_free -- free a SelectClause array allocated by __select_clauses_alloc.
+;;;
+;;; Since: Phase T19-D
 (defn __select_clauses_free [arr :ptr<void>] :nil
   ```c
   free(arr);
@@ -44,6 +57,17 @@
 ;; Returns: index of fired clause (0..n-1), or -1 for default
 ;; For recv clauses, the received value is stored in clauses[i].val
 ;; For send clauses, the sent value's success is indicated by the return
+;;; __select_exec -- execute a select over n channel clauses; return the index of the clause that fired.
+;;;
+;;; Parameters:
+;;;   clauses     -- SelectClause array from __select_clauses_alloc
+;;;   n           -- number of clauses in the array
+;;;   has_default -- 1 if a :default arm is present, 0 otherwise
+;;;
+;;; Returns:
+;;;   0..(n-1) index of the clause that fired, or -1 if the default arm fired.
+;;;
+;;; Since: Phase T19-D
 (defn __select_exec [clauses :ptr<void> n :int has_default :int] :int
   ```c
   typedef struct {

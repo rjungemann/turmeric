@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tur/tur/backtrack | Turmeric API</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand">turmeric</span>
+  <nav>
+    <a href="index.html">API Docs</a>
+    <a href="../autodoc-plan.md">Plan</a>
+  </nav>
+</header>
+<div class="page-layout">
+<div class="sidebar">
+  <h3>Exported</h3>
+  <ul>
+    <li><a href="#bt-nil">bt-nil</a></li>
+    <li><a href="#bt-cons">bt-cons</a></li>
+    <li><a href="#mzero">mzero</a></li>
+    <li><a href="#mreturn">mreturn</a></li>
+    <li><a href="#mplus">mplus</a></li>
+    <li><a href="#mbind">mbind</a></li>
+    <li><a href="#run-backtrack">run-backtrack</a></li>
+    <li><a href="#run-backtrack-depth">run-backtrack-depth</a></li>
+    <li><a href="#choice">choice</a></li>
+    <li><a href="#guard">guard</a></li>
+    <li><a href="#fresh">fresh</a></li>
+    <li><a href="#once">once</a></li>
+    <li><a href="#interleave">interleave</a></li>
+    <li><a href="#bt-length">bt-length</a></li>
+    <li><a href="#bt-print">bt-print</a></li>
+    <li><a href="#backtrack-do">backtrack-do</a></li>
+  </ul>
+  <h3>Internal</h3>
+  <ul>
+    <li><a href="#__bt-do" style="color:var(--faint)">__bt-do</a></li>
+  </ul>
+</div>
+<div class="content">
+  <div class="module-heading">
+    <h1>tur/backtrack</h1>
+    <div class="module-path">stdlib/backtrack.tur</div>
+  </div>
+<div class="def-card" id="bt-nil">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>bt-nil</h2>
+  </div>
+  <pre class="def-signature">(bt-nil :int)</pre>
+  <p class="def-summary">-- Helpers ────────────────────────────────────────────────────────────────</p>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">0 (null pointer representing the empty list).</p>
+  </div>
+</div>
+<div class="def-card" id="bt-cons">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>bt-cons</h2>
+  </div>
+  <pre class="def-signature">(bt-cons [v next] :int)</pre>
+  <p class="def-summary">prepend a value to a backtrack result list.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>v</td><td></td><td>the value to prepend</td></tr>
+    <tr><td>next</td><td></td><td>pointer to the existing result list (:int)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pointer to the new cell (:int).</p>
+  </div>
+</div>
+<div class="def-card" id="mzero">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>mzero</h2>
+  </div>
+  <pre class="def-signature">(mzero :int)</pre>
+  <p class="def-summary">-- Core monad operations ──────────────────────────────────────────────────</p>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">An empty result list (:int null pointer).
+
+  (mzero)  ; =&gt; 0</pre>
+  </div>
+</div>
+<div class="def-card" id="mreturn">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>mreturn</h2>
+  </div>
+  <pre class="def-signature">(mreturn [x] :int)</pre>
+  <p class="def-summary">lift a single value into the backtrack monad.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>x</td><td></td><td>the value to return</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">A singleton result list containing x (:int).
+
+  (mreturn 42)  ; =&gt; list containing 42</pre>
+  </div>
+</div>
+<div class="def-card" id="mplus">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>mplus</h2>
+  </div>
+  <pre class="def-signature">(mplus [xs ys] :int)</pre>
+  <p class="def-summary">concatenate (union) two backtrack result lists.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>xs</td><td></td><td>first result list (:int)</td></tr>
+    <tr><td>ys</td><td></td><td>second result list (:int)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">A new result list with all elements from xs followed by all from ys (:int).
+
+  (mplus (mreturn 1) (mreturn 2))  ; =&gt; list [1, 2]</pre>
+  </div>
+</div>
+<div class="def-card" id="mbind">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>mbind</h2>
+  </div>
+  <pre class="def-signature">(mbind [ma fn] :int)</pre>
+  <p class="def-summary">concatMap: apply fn to each result and concatenate all outputs.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>ma</td><td></td><td>a backtrack result list (:int)</td></tr>
+    <tr><td>fn</td><td></td><td>fat closure of type (a -&gt; Backtrack b)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">The concatenated results of applying fn to each element of ma (:int).
+
+  (mbind (mreturn 3) (fn [x] (mreturn (* x 2))))  ; =&gt; list [6]</pre>
+  </div>
+</div>
+<div class="def-card" id="run-backtrack">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>run-backtrack</h2>
+  </div>
+  <pre class="def-signature">(run-backtrack [xs] :int)</pre>
+  <p class="def-summary">-- Run operations ─────────────────────────────────────────────────────────</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>xs</td><td></td><td>a backtrack result list (:int)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">The same result list (the list monad is already eager) (:int).
+
+  (run-backtrack (mreturn 1))  ; =&gt; list [1]</pre>
+  </div>
+</div>
+<div class="def-card" id="run-backtrack-depth">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>run-backtrack-depth</h2>
+  </div>
+  <pre class="def-signature">(run-backtrack-depth [xs n] :int)</pre>
+  <p class="def-summary">return at most n results from a backtrack computation.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>xs</td><td></td><td>a backtrack result list (:int)</td></tr>
+    <tr><td>n</td><td></td><td>maximum number of results to return (:int)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">A truncated result list of length at most n (:int).
+
+  (run-backtrack-depth my-results 5)  ; =&gt; first 5 results</pre>
+  </div>
+</div>
+<div class="def-card" id="choice">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>choice</h2>
+  </div>
+  <pre class="def-signature">(choice [xs] :int)</pre>
+  <p class="def-summary">-- Combinators ────────────────────────────────────────────────────────────</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>xs</td><td></td><td>a backtrack result list (:int)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">xs unchanged (:int).</p>
+  </div>
+</div>
+<div class="def-card" id="guard">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>guard</h2>
+  </div>
+  <pre class="def-signature">(guard [pred :bool] :int)</pre>
+  <p class="def-summary">succeed with a dummy value when pred is true, fail otherwise.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>pred</td><td></td><td>boolean condition</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">(mreturn 0) if pred is true, (mzero) otherwise (:int).
+
+  (guard (&gt; x 0))  ; =&gt; mreturn 0 or mzero</pre>
+  </div>
+</div>
+<div class="def-card" id="fresh">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>fresh</h2>
+  </div>
+  <pre class="def-signature">(fresh [f] :int)</pre>
+  <p class="def-summary">apply a fat closure to a fresh variable placeholder (0).</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>f</td><td></td><td>fat closure of type (a -&gt; Backtrack b)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">The result of applying f to the placeholder 0 (:int).</p>
+  </div>
+</div>
+<div class="def-card" id="once">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>once</h2>
+  </div>
+  <pre class="def-signature">(once [xs] :int)</pre>
+  <p class="def-summary">keep only the first result from a backtrack computation.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>xs</td><td></td><td>a backtrack result list (:int)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">A singleton list containing the first element, or empty if xs is empty (:int).
+
+  (once (mplus (mreturn 1) (mreturn 2)))  ; =&gt; list [1]</pre>
+  </div>
+</div>
+<div class="def-card" id="interleave">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>interleave</h2>
+  </div>
+  <pre class="def-signature">(interleave [xs ys] :int)</pre>
+  <p class="def-summary">fair interleaving of two backtrack result lists.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>xs</td><td></td><td>first result list (:int)</td></tr>
+    <tr><td>ys</td><td></td><td>second result list (:int)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">A new list that alternates elements from xs and ys (:int).
+
+  (interleave (mreturn 1) (mreturn 2))  ; =&gt; list [1, 2] (interleaved)</pre>
+  </div>
+</div>
+<div class="def-card" id="bt-length">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>bt-length</h2>
+  </div>
+  <pre class="def-signature">(bt-length [xs] :int)</pre>
+  <p class="def-summary">-- List utilities ─────────────────────────────────────────────────────────</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>xs</td><td></td><td>a backtrack result list (:int)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">The number of elements (:int).
+
+  (bt-length (mplus (mreturn 1) (mreturn 2)))  ; =&gt; 2</pre>
+  </div>
+</div>
+<div class="def-card" id="bt-print">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>bt-print</h2>
+  </div>
+  <pre class="def-signature">(bt-print [xs])</pre>
+  <p class="def-summary">print each value in a backtrack result list to stdout.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>xs</td><td></td><td>a backtrack result list (:int)</td></tr>
+    </table>
+  </div>
+</div>
+<div class="def-card" id="backtrack-do">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defmacro">defmacro</span>
+    <h2>backtrack-do</h2>
+  </div>
+  <pre class="def-signature">(backtrack-do [&amp; forms])</pre>
+  <p class="def-summary">monadic do-notation for the backtracking monad.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>forms</td><td></td><td>alternating variable names and monadic expressions, then a body</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">A backtrack computation (result list) (:int).
+
+  (backtrack-do x (mplus (mreturn 1) (mreturn 2))
+                y (mplus (mreturn 10) (mreturn 20))
+                (mreturn (+ x y)))  ; =&gt; list [11, 21, 12, 22]</pre>
+  </div>
+</div>
+<details class="internal-section">
+  <summary>Internal definitions</summary>
+  <div class="internal-list">
+  <div class="internal-item" id="__bt-do"><code>__bt-do</code><span class="internal-item-summary">-- -- backtrack-do macro ─────────────────────────────────────────────────────</span></div>
+  </div>
+</details>
+</div>
+</div>
+<footer class="site-footer">
+  Auto-generated by <code>tools/gendocs.py</code>.
+  Do not edit by hand -- run <code>just docs</code> to regenerate.
+</footer>
+</body>
+</html>

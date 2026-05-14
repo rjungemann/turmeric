@@ -1,23 +1,32 @@
-;; stdlib/sync.tur — Once and Semaphore primitives (Phase T19-C)
+;; stdlib/sync.tur -- Once and Semaphore primitives (Phase T19-C)
 ;;
 ;; Once: wraps pthread_once_t for one-time initialisation.
 ;; Semaphore: counting semaphore implemented with mutex + condvar + counter
 ;;            (pthread_sem_t is unavailable in unnamed form on macOS).
 ;;
 ;; Once API:
-;;   once-flag-new   []                              → ptr<void>
+;;   once-flag-new   []                              -> ptr<void>
 ;;   once-call       [flag :ptr<void>
-;;                    init-fn :ptr<void>]            → nil
-;;   once-flag-free  [flag :ptr<void>]               → nil
+;;                    init-fn :ptr<void>]            -> nil
+;;   once-flag-free  [flag :ptr<void>]               -> nil
 ;;
 ;; Semaphore API:
-;;   sem-new         [initial :int]                  → ptr<void>
-;;   sem-acquire     [s :ptr<void>]                  → nil  (blocks when 0)
-;;   sem-release     [s :ptr<void>]                  → nil
-;;   sem-free        [s :ptr<void>]                  → nil
+;;   sem-new         [initial :int]                  -> ptr<void>
+;;   sem-acquire     [s :ptr<void>]                  -> nil  (blocks when 0)
+;;   sem-release     [s :ptr<void>]                  -> nil
+;;   sem-free        [s :ptr<void>]                  -> nil
 
 ;; ---- Once ----
 
+;;; once-flag-new -- allocate and initialise a pthread_once_t flag on the heap.
+;;;
+;;; Returns:
+;;;   A :ptr<void> to the new once-flag; pass to once-call and once-flag-free.
+;;;
+;;; Example:
+;;;   (def flag (once-flag-new))
+;;;
+;;; Since: Phase T19-C
 (defn once-flag-new [] :ptr<void>
   ```c
   pthread_once_t *o = (pthread_once_t *)malloc(sizeof(pthread_once_t));
@@ -27,11 +36,24 @@
   return (void *)o;
   ```)
 
+;;; once-call -- call init-fn exactly once for the lifetime of flag, regardless of concurrency.
+;;;
+;;; Parameters:
+;;;   flag    -- once-flag pointer from once-flag-new
+;;;   init-fn -- zero-argument C function pointer to invoke at most once
+;;;
+;;; Since: Phase T19-C
 (defn once-call [flag :ptr<void> init-fn :ptr<void>] :nil
   ```c
   pthread_once((pthread_once_t *)flag, (void (*)(void))init_fn);
   ```)
 
+;;; once-flag-free -- free a once-flag allocated by once-flag-new.
+;;;
+;;; Parameters:
+;;;   flag -- once-flag pointer from once-flag-new
+;;;
+;;; Since: Phase T19-C
 (defn once-flag-free [flag :ptr<void>] :nil
   ```c
   free(flag);
@@ -39,6 +61,18 @@
 
 ;; ---- Semaphore ----
 
+;;; sem-new -- allocate a counting semaphore initialised to initial.
+;;;
+;;; Parameters:
+;;;   initial -- starting count (0 = locked, >0 = permits available)
+;;;
+;;; Returns:
+;;;   A :ptr<void> handle to the semaphore; pass to sem-acquire, sem-release, sem-free.
+;;;
+;;; Example:
+;;;   (def s (sem-new 1))  ; binary semaphore (mutex-like)
+;;;
+;;; Since: Phase T19-C
 (defn sem-new [initial :int] :ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
@@ -50,6 +84,12 @@
   return (void *)s;
   ```)
 
+;;; sem-acquire -- decrement the semaphore; blocks until count > 0.
+;;;
+;;; Parameters:
+;;;   s -- semaphore pointer from sem-new
+;;;
+;;; Since: Phase T19-C
 (defn sem-acquire [s :ptr<void>] :nil
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
@@ -61,6 +101,12 @@
   pthread_mutex_unlock(&sb->lock);
   ```)
 
+;;; sem-release -- increment the semaphore and wake one blocked acquirer.
+;;;
+;;; Parameters:
+;;;   s -- semaphore pointer from sem-new
+;;;
+;;; Since: Phase T19-C
 (defn sem-release [s :ptr<void>] :nil
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;
@@ -71,6 +117,12 @@
   pthread_mutex_unlock(&sb->lock);
   ```)
 
+;;; sem-free -- destroy and free a semaphore allocated by sem-new.
+;;;
+;;; Parameters:
+;;;   s -- semaphore pointer from sem-new
+;;;
+;;; Since: Phase T19-C
 (defn sem-free [s :ptr<void>] :nil
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t avail; int64_t count; } SemBlock;

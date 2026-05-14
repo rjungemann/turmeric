@@ -1,4 +1,4 @@
-;; stdlib/async_socket.tur — Async TCP socket I/O for Turmeric (Phase T24)
+;; stdlib/async_socket.tur -- Async TCP socket I/O for Turmeric (Phase T24)
 ;;
 ;; Non-blocking TCP socket operations that integrate with the cooperative
 ;; scheduler via IO waiters and select()-based polling.
@@ -13,6 +13,19 @@
 
 ;; Create a listening TCP socket on the given port.
 ;; Returns the listen fd, or -1 on error.
+;;; async-socket-listen -- create a non-blocking TCP listening socket on the given port.
+;;;
+;;; Parameters:
+;;;   port    -- TCP port number to bind and listen on
+;;;   backlog -- maximum length of the pending connection queue
+;;;
+;;; Returns:
+;;;   int -- the listen file descriptor, or -1 on error
+;;;
+;;; Example:
+;;;   (async-socket-listen 8080 128)  ; => 4
+;;;
+;;; Since: Phase T24
 (defn async-socket-listen [port :int backlog :int] :int
   ```c
   int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -41,6 +54,18 @@
 ;; Accept a connection on the listen fd.
 ;; Parks the current fiber until a connection arrives.
 ;; Returns the client fd, or -1 on error.
+;;; async-socket-accept -- accept an incoming connection, parking the fiber until one arrives.
+;;;
+;;; Parameters:
+;;;   listen-fd -- listening file descriptor returned by async-socket-listen
+;;;
+;;; Returns:
+;;;   int -- the accepted client file descriptor, or -1 on error
+;;;
+;;; Example:
+;;;   (async-socket-accept listen-fd)  ; => 7
+;;;
+;;; Since: Phase T24
 (defn async-socket-accept [listen-fd :int] :int
   ```c
   while (1) {
@@ -68,6 +93,19 @@
 ;; host should be an IPv4 address string (e.g. "127.0.0.1").
 ;; Parks the fiber until the connection completes.
 ;; Returns the fd, or -1 on error.
+;;; async-socket-connect -- connect to a TCP server at host:port, parking the fiber until complete.
+;;;
+;;; Parameters:
+;;;   host -- IPv4 address string (e.g. "127.0.0.1")
+;;;   port -- TCP port number to connect to
+;;;
+;;; Returns:
+;;;   int -- the connected file descriptor, or -1 on error
+;;;
+;;; Example:
+;;;   (async-socket-connect "127.0.0.1" 8080)  ; => 5
+;;;
+;;; Since: Phase T24
 (defn async-socket-connect [host :cstr port :int] :int
   ```c
   int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -101,6 +139,20 @@
 ;; Send data on a connected socket.
 ;; Parks the fiber on EAGAIN.
 ;; Returns bytes sent, or -1 on error.
+;;; async-socket-send -- send data on a connected socket, parking the fiber on EAGAIN.
+;;;
+;;; Parameters:
+;;;   fd   -- connected socket file descriptor
+;;;   data -- pointer to the bytes to send
+;;;   len  -- number of bytes to send
+;;;
+;;; Returns:
+;;;   int -- total bytes sent, or -1 on error
+;;;
+;;; Example:
+;;;   (async-socket-send fd "GET / HTTP/1.0\r\n" 16)  ; => 16
+;;;
+;;; Since: Phase T24
 (defn async-socket-send [fd :int data :cstr len :int] :int
   ```c
   int64_t total = 0;
@@ -129,6 +181,19 @@
 ;; Returns bytes received, 0 on close, -1 on error.
 ;; The received data is stored in fiber-local storage (key 0xA51C50C0)
 ;; and can be retrieved with async-socket-recv-buf.
+;;; async-socket-recv -- receive up to buf-size bytes from a connected socket.
+;;;
+;;; Parameters:
+;;;   fd       -- connected socket file descriptor
+;;;   buf-size -- maximum number of bytes to receive
+;;;
+;;; Returns:
+;;;   int -- bytes received (> 0), 0 on connection close, -1 on error
+;;;
+;;; Example:
+;;;   (async-socket-recv fd 4096)  ; => 256
+;;;
+;;; Since: Phase T24
 (defn async-socket-recv [fd :int buf-size :int] :int
   ```c
   char *buf = (char *)malloc((size_t)buf_size);
@@ -157,6 +222,15 @@
   ```)
 
 ;; Retrieve the receive buffer pointer after async-socket-recv.
+;;; async-socket-recv-buf -- retrieve the buffer pointer from the last async-socket-recv call.
+;;;
+;;; Returns:
+;;;   ptr<void> -- pointer to the receive buffer in fiber-local storage (caller must free)
+;;;
+;;; Example:
+;;;   (async-socket-recv-buf)  ; => buf-ptr
+;;;
+;;; Since: Phase T24
 (defn async-socket-recv-buf [] :ptr<void>
   ```c
   if (!tur_current_fiber) return NULL;
@@ -164,6 +238,15 @@
   ```)
 
 ;; Retrieve the number of bytes from the last async-socket-recv.
+;;; async-socket-recv-len -- retrieve the byte count from the last async-socket-recv call.
+;;;
+;;; Returns:
+;;;   int -- number of bytes received in the most recent async-socket-recv
+;;;
+;;; Example:
+;;;   (async-socket-recv-len)  ; => 256
+;;;
+;;; Since: Phase T24
 (defn async-socket-recv-len [] :int
   ```c
   if (!tur_current_fiber) return 0;
@@ -171,6 +254,15 @@
   ```)
 
 ;; Close a socket and unregister it from IO polling.
+;;; async-socket-close -- close a socket and unregister it from IO polling.
+;;;
+;;; Parameters:
+;;;   fd -- socket file descriptor to close
+;;;
+;;; Example:
+;;;   (async-socket-close fd)
+;;;
+;;; Since: Phase T24
 (defn async-socket-close [fd :int] :nil
   ```c
   tur_io_unregister((int)fd);

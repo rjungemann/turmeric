@@ -1,4 +1,4 @@
-;; stdlib/async_file.tur — Async file I/O for Turmeric (Phase T24)
+;; stdlib/async_file.tur -- Async file I/O for Turmeric (Phase T24)
 ;;
 ;; Non-blocking file operations that integrate with the cooperative scheduler.
 ;; When an operation would block (EAGAIN/EWOULDBLOCK), the current fiber is
@@ -13,6 +13,19 @@
 
 ;; Open a file with O_NONBLOCK set.
 ;; flags: 0 = O_RDONLY, 1 = O_WRONLY|O_CREAT|O_TRUNC, 2 = O_RDWR
+;;; async-file-open -- open a file with O_NONBLOCK and return its file descriptor.
+;;;
+;;; Parameters:
+;;;   path  -- filesystem path to the file
+;;;   flags -- 0 = O_RDONLY, 1 = O_WRONLY|O_CREAT|O_TRUNC, 2 = O_RDWR
+;;;
+;;; Returns:
+;;;   int -- the file descriptor, or -1 on error
+;;;
+;;; Example:
+;;;   (async-file-open "/tmp/out.txt" 1)  ; => 5
+;;;
+;;; Since: Phase T24
 (defn async-file-open [path :cstr flags :int] :int
   ```c
   int oflags;
@@ -28,6 +41,19 @@
 ;; Read up to buf-size bytes from fd.
 ;; Returns number of bytes read, 0 on EOF, -1 on error.
 ;; If running under a scheduler, parks the fiber on EAGAIN.
+;;; async-file-read -- read up to buf-size bytes from a non-blocking file descriptor.
+;;;
+;;; Parameters:
+;;;   fd       -- file descriptor returned by async-file-open
+;;;   buf-size -- maximum number of bytes to read
+;;;
+;;; Returns:
+;;;   int -- bytes read (>= 0), 0 on EOF, -1 on error
+;;;
+;;; Example:
+;;;   (async-file-read fd 4096)  ; => 128
+;;;
+;;; Since: Phase T24
 (defn async-file-read [fd :int buf-size :int] :int
   ```c
   char *buf = (char *)malloc((size_t)buf_size);
@@ -58,6 +84,20 @@
 
 ;; Write len bytes from data to fd.
 ;; If running under a scheduler, parks the fiber on EAGAIN.
+;;; async-file-write -- write len bytes from data to a non-blocking file descriptor.
+;;;
+;;; Parameters:
+;;;   fd   -- file descriptor returned by async-file-open
+;;;   data -- pointer to the bytes to write
+;;;   len  -- number of bytes to write
+;;;
+;;; Returns:
+;;;   int -- total bytes written, or -1 on error
+;;;
+;;; Example:
+;;;   (async-file-write fd "hello" 5)  ; => 5
+;;;
+;;; Since: Phase T24
 (defn async-file-write [fd :int data :cstr len :int] :int
   ```c
   int64_t total = 0;
@@ -82,6 +122,18 @@
   ```)
 
 ;; Close a file descriptor.
+;;; async-file-close -- close a file descriptor and unregister it from IO polling.
+;;;
+;;; Parameters:
+;;;   fd -- file descriptor to close
+;;;
+;;; Returns:
+;;;   int -- 0 on success, -1 on error
+;;;
+;;; Example:
+;;;   (async-file-close fd)  ; => 0
+;;;
+;;; Since: Phase T24
 (defn async-file-close [fd :int] :int
   ```c
   tur_io_unregister((int)fd);
@@ -90,6 +142,15 @@
 
 ;; Retrieve the internal read buffer pointer after async-file-read.
 ;; Returns a pointer to the buffer (caller must free).
+;;; async-file-read-buf -- retrieve the buffer pointer from the last async-file-read call.
+;;;
+;;; Returns:
+;;;   ptr<void> -- pointer to the read buffer stored in fiber-local storage (caller must free)
+;;;
+;;; Example:
+;;;   (async-file-read-buf)  ; => buf-ptr
+;;;
+;;; Since: Phase T24
 (defn async-file-read-buf [] :ptr<void>
   ```c
   if (!tur_current_fiber) return NULL;
@@ -97,6 +158,15 @@
   ```)
 
 ;; Retrieve the number of bytes from the last async-file-read.
+;;; async-file-read-len -- retrieve the byte count from the last async-file-read call.
+;;;
+;;; Returns:
+;;;   int -- number of bytes read in the most recent async-file-read
+;;;
+;;; Example:
+;;;   (async-file-read-len)  ; => 128
+;;;
+;;; Since: Phase T24
 (defn async-file-read-len [] :int
   ```c
   if (!tur_current_fiber) return 0;

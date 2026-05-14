@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tur/tur/threadpool | Turmeric API</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand">turmeric</span>
+  <nav>
+    <a href="index.html">API Docs</a>
+    <a href="../autodoc-plan.md">Plan</a>
+  </nav>
+</header>
+<div class="page-layout">
+<div class="sidebar">
+  <h3>Exported</h3>
+  <ul>
+    <li><a href="#work-queue-new">work-queue-new</a></li>
+    <li><a href="#work-queue-new-bounded">work-queue-new-bounded</a></li>
+    <li><a href="#work-queue-push">work-queue-push</a></li>
+    <li><a href="#work-queue-pop">work-queue-pop</a></li>
+    <li><a href="#work-queue-close">work-queue-close</a></li>
+    <li><a href="#work-queue-free">work-queue-free</a></li>
+    <li><a href="#tp-worker">tp-worker</a></li>
+  </ul>
+</div>
+<div class="content">
+  <div class="module-heading">
+    <h1>tur/threadpool</h1>
+    <div class="module-path">stdlib/threadpool.tur</div>
+  </div>
+<div class="def-card" id="work-queue-new">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>work-queue-new</h2>
+  </div>
+  <pre class="def-signature">(work-queue-new :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">create a new unbounded work queue that grows dynamically.</p>
+  <p class="def-since">Since: Phase T20-B</p>
+</div>
+<div class="def-card" id="work-queue-new-bounded">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>work-queue-new-bounded</h2>
+  </div>
+  <pre class="def-signature">(work-queue-new-bounded [cap :int] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">create a new bounded work queue with a fixed capacity.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>cap</td><td></td><td>maximum number of items the queue can hold; push blocks when full</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-B</p>
+</div>
+<div class="def-card" id="work-queue-push">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>work-queue-push</h2>
+  </div>
+  <pre class="def-signature">(work-queue-push [q :ptr&lt;void&gt; v :int] :nil)</pre>
+  <p class="def-summary">push a value onto the work queue, blocking if the queue is bounded and full.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>q</td><td></td><td>queue handle returned by work-queue-new or work-queue-new-bounded</td></tr>
+    <tr><td>v</td><td></td><td>int64_t value to enqueue</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-B</p>
+</div>
+<div class="def-card" id="work-queue-pop">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>work-queue-pop</h2>
+  </div>
+  <pre class="def-signature">(work-queue-pop [q :ptr&lt;void&gt;] :int)</pre>
+  <p class="def-summary">pop a value from the work queue, blocking until one is available.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>q</td><td></td><td>queue handle returned by work-queue-new or work-queue-new-bounded</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-B</p>
+</div>
+<div class="def-card" id="work-queue-close">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>work-queue-close</h2>
+  </div>
+  <pre class="def-signature">(work-queue-close [q :ptr&lt;void&gt;] :nil)</pre>
+  <p class="def-summary">close the work queue, waking all blocked producers and consumers.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>q</td><td></td><td>queue handle returned by work-queue-new or work-queue-new-bounded</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-B</p>
+</div>
+<div class="def-card" id="work-queue-free">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>work-queue-free</h2>
+  </div>
+  <pre class="def-signature">(work-queue-free [q :ptr&lt;void&gt;] :nil)</pre>
+  <p class="def-summary">destroy a work queue and release all associated memory.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>q</td><td></td><td>queue handle returned by work-queue-new or work-queue-new-bounded</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-B</p>
+</div>
+<div class="def-card" id="tp-worker">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>tp-worker</h2>
+  </div>
+  <pre class="def-signature">(tp-worker [arg :ptr&lt;void&gt;] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">internal worker thread function for a fixed ThreadPool.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>arg</td><td></td><td>ptr&lt;void&gt; pointing to the ThreadPoolBlock</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-D</p>
+</div>
+</div>
+</div>
+<footer class="site-footer">
+  Auto-generated by <code>tools/gendocs.py</code>.
+  Do not edit by hand -- run <code>just docs</code> to regenerate.
+</footer>
+</body>
+</html>

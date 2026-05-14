@@ -26,63 +26,84 @@
 ;; World (Engine) Management
 ;; ============================================================================
 
-;; Create a new audio engine instance
-;; 
-;; @param sample_rate Sample rate in Hz (typically 48000)
-;; @param block_size Block size in samples (typically 512 or 128)
-;; @return WorldHandle, or 0 on error
+;;; hc_wasm_world_create -- Create a new hcsynth audio engine instance.
+;;;
+;;; Parameters:
+;;;   sample_rate -- Sample rate in Hz (typically 48000).
+;;;   block_size -- Block size in samples (typically 128 or 512).
+;;;
+;;; Returns:
+;;;   WorldHandle (non-zero int) on success, or 0 on error.
 (extern-c hc_wasm_world_create [sample_rate :int block_size :int] :int)
 
-;; Destroy an audio engine instance and free resources
-;;
-;; @param world_id World handle from hc_wasm_world_create
-;; @return 0 on success, -1 on error
+;;; hc_wasm_world_destroy -- Destroy an audio engine instance and free all resources.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle from hc_wasm_world_create.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (extern-c hc_wasm_world_destroy [world_id :int] :int)
 
-;; Get the sample rate of a world
-;;
-;; @param world_id World handle
-;; @return Sample rate in Hz, or 0 if world not found
+;;; hc_wasm_world_sample_rate -- Get the sample rate of an audio engine instance.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle.
+;;;
+;;; Returns:
+;;;   Sample rate in Hz, or 0 if the world is not found.
 (extern-c hc_wasm_world_sample_rate [world_id :int] :int)
 
-;; Get the block size of a world
-;;
-;; @param world_id World handle
-;; @return Block size in samples, or 0 if world not found
+;;; hc_wasm_world_block_size -- Get the block size of an audio engine instance.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle.
+;;;
+;;; Returns:
+;;;   Block size in samples, or 0 if the world is not found.
 (extern-c hc_wasm_world_block_size [world_id :int] :int)
 
 ;; ============================================================================
 ;; SynthDef Management
 ;; ============================================================================
 
-;; Load a compiled SynthDef from binary data
-;;
-;; SynthDefs must be pre-compiled (externally or via sclang).
-;; Format: SuperCollider SynthDef bytecode
-;;
-;; @param world_id World handle
-;; @param synthdef_data Pointer to SynthDef bytecode
-;; @param data_size Size of synthdef_data in bytes
-;; @param synthdef_name Optional name to register under; if NULL, use embedded name
-;; @return 0 on success, -1 on error
+;;; hc_wasm_load_synthdef -- Load a compiled SynthDef from binary data into a world.
+;;;
+;;; SynthDefs must be pre-compiled (externally or via sclang).
+;;; Format: SuperCollider SynthDef bytecode.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle.
+;;;   synthdef_data -- Pointer to SynthDef bytecode.
+;;;   data_size -- Size of synthdef_data in bytes.
+;;;   synthdef_name -- Optional name to register under; if NULL, use embedded name.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (extern-c hc_wasm_load_synthdef [world_id :int synthdef_data :ptr<void> data_size :int synthdef_name :cstr] :int)
 
-;; Unload a compiled SynthDef from memory
-;;
-;; Removes the SynthDef definition but does not affect running synth instances
-;; that were created from this definition (they continue with cached state).
-;;
-;; @param world_id World handle
-;; @param synthdef_name Name of the SynthDef to unload
-;; @return 0 on success, -1 if SynthDef not found or other error
+;;; hc_wasm_unload_synthdef -- Remove a SynthDef from a world by name.
+;;;
+;;; Running synth instances created from this definition are not affected;
+;;; they continue to run with their cached internal state.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle.
+;;;   synthdef_name -- Name of the SynthDef to unload.
+;;;
+;;; Returns:
+;;;   0 on success, -1 if SynthDef not found or other error.
 (extern-c hc_wasm_unload_synthdef [world_id :int synthdef_name :cstr] :int)
 
-;; Unload all compiled SynthDefs from memory
-;;
-;; Clears the entire SynthDef table. Running synth instances are not affected.
-;;
-;; @param world_id World handle
-;; @return 0 on success, -1 on error
+;;; hc_wasm_unload_all_synthdefs -- Remove all SynthDefs from a world.
+;;;
+;;; Running synth instances are not affected.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (extern-c hc_wasm_unload_all_synthdefs [world_id :int] :int)
 
 ;; ============================================================================
@@ -96,171 +117,241 @@
 (def ADD_AFTER 4)
 (def REPLACE 0)
 
-;; Create a new synth node and add it to the tree
-;;
-;; @param world_id World handle
-;; @param synthdef_name Name of the SynthDef to instantiate
-;; @param node_id Unique node ID (you assign)
-;; @param add_action Where to add: REPLACE, ADD_TO_HEAD, ADD_TO_TAIL, ADD_BEFORE, ADD_AFTER
-;; @param target_id Target node ID (typically 1 for root group)
-;; @return 0 on success, -1 on error
+;;; hc_wasm_synth_new -- Create a new synth node and add it to the node tree.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle.
+;;;   synthdef_name -- Name of the SynthDef to instantiate.
+;;;   node_id -- Unique node ID (assigned by the caller; must not be 0).
+;;;   add_action -- Placement constant: REPLACE, ADD_TO_HEAD, ADD_TO_TAIL, ADD_BEFORE, ADD_AFTER.
+;;;   target_id -- Target node ID (typically 1 for root group).
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (extern-c hc_wasm_synth_new [world_id :int synthdef_name :cstr node_id :int add_action :int target_id :int] :int)
 
-;; Free (remove and stop) a synth node
-;;
-;; @param world_id World handle
-;; @param node_id Node ID to free
-;; @return 0 on success, -1 on error
+;;; hc_wasm_synth_free -- Remove and stop a synth node.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle.
+;;;   node_id -- Node ID to free.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (extern-c hc_wasm_synth_free [world_id :int node_id :int] :int)
 
-;; Set a control parameter on a synth
-;;
-;; @param world_id World handle
-;; @param node_id Node ID
-;; @param control_index Control index (0-based)
-;; @param value New control value
-;; @return 0 on success, -1 on error
+;;; hc_wasm_synth_set -- Set a single control parameter on a synth.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle.
+;;;   node_id -- Target node ID.
+;;;   control_index -- Zero-based control index.
+;;;   value -- New control value (float).
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (extern-c hc_wasm_synth_set [world_id :int node_id :int control_index :int value :float] :int)
 
-;; Set multiple control parameters at once
-;;
-;; @param world_id World handle
-;; @param node_id Node ID
-;; @param control_count Number of control pairs
-;; @param indices Array of control indices
-;; @param values Array of control values
-;; @return 0 on success, -1 on error
+;;; hc_wasm_synth_set_multi -- Set multiple control parameters on a synth in one call.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle.
+;;;   node_id -- Target node ID.
+;;;   control_count -- Number of index/value pairs.
+;;;   indices -- Pointer to array of int control indices (length >= control_count).
+;;;   values -- Pointer to array of float control values (length >= control_count).
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (extern-c hc_wasm_synth_set_multi [world_id :int node_id :int control_count :int indices :ptr<int> values :ptr<float>] :int)
 
 ;; ============================================================================
 ;; Audio Rendering
 ;; ============================================================================
 
-;; Render one block of audio
-;;
-;; Advances the synth graph one block and writes audio to output buffer.
-;; Must be called repeatedly (e.g., from AudioWorklet callback).
-;;
-;; @param world_id World handle
-;; @param output_buffer Pointer to output buffer (must hold block_size * num_channels floats)
-;; @param num_samples Number of samples to render (typically block_size)
-;; @param num_channels Number of output channels (typically 2 for stereo)
-;; @return 0 on success, -1 on error
+;;; hc_wasm_render -- Advance the synth graph one block and write audio to a buffer.
+;;;
+;;; Must be called repeatedly (e.g., from an AudioWorklet callback).
+;;;
+;;; Parameters:
+;;;   world_id -- World handle.
+;;;   output_buffer -- Pointer to output buffer (must hold num_samples * num_channels floats).
+;;;   num_samples -- Number of samples to render (typically block_size).
+;;;   num_channels -- Number of output channels (typically 2 for stereo).
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (extern-c hc_wasm_render [world_id :int output_buffer :ptr<float> num_samples :int num_channels :int] :int)
 
 ;; ============================================================================
 ;; OSC Message Dispatch
 ;; ============================================================================
 
-;; Send an OSC message to a scsynth world via in-process dispatch.
-;;
-;; This is the low-level OSC dispatch function. For most use cases,
-;; the higher-level synth_* functions are preferred.
-;;
-;; @param world_id The ID of the target scsynth world
-;; @param msg_data Pointer to the OSC message data
-;; @param msg_size Size of the message in bytes
-;; @return 0 on success, -1 on error
+;;; hc_wasm_osc_dispatch -- Send an OSC message to a world via in-process dispatch.
+;;;
+;;; Low-level OSC dispatch. For most use cases, the higher-level synth_* functions
+;;; are preferred.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world ID.
+;;;   msg_data -- Pointer to the raw OSC message bytes.
+;;;   msg_size -- Size of msg_data in bytes.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (extern-c hc_wasm_osc_dispatch [world_id :int msg_data :ptr<void> msg_size :int] :int)
 
-;; Set the default world ID used when dispatch callers pass world_id <= 0.
-;;
-;; @param world_id The world ID to use as default target
-;; @return 0 on success, -1 on error
+;;; hc_wasm_osc_set_default_world -- Set the fallback world used when world_id <= 0.
+;;;
+;;; Parameters:
+;;;   world_id -- World ID to use as default target.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (extern-c hc_wasm_osc_set_default_world [world_id :int] :int)
 
-;; Register a scsynth world for in-process OSC dispatch.
-;;
-;; @param world_id The ID to register for this world
-;; @param world Pointer to the World object
-;; @return 0 on success, -1 on error
+;;; hc_wasm_osc_register_world -- Register a World object for in-process OSC dispatch.
+;;;
+;;; Parameters:
+;;;   world_id -- Integer ID to associate with this world.
+;;;   world -- Pointer to the World object.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (extern-c hc_wasm_osc_register_world [world_id :int world :ptr<void>] :int)
 
-;; Unregister a scsynth world.
-;;
-;; @param world_id The ID of the world to unregister
-;; @return 0 on success
+;;; hc_wasm_osc_unregister_world -- Unregister a world from in-process OSC dispatch.
+;;;
+;;; Parameters:
+;;;   world_id -- ID of the world to unregister.
+;;;
+;;; Returns:
+;;;   0 on success.
 (extern-c hc_wasm_osc_unregister_world [world_id :int] :int)
 
 ;; ============================================================================
 ;; Diagnostic & Status
 ;; ============================================================================
 
-;; Get engine statistics
-;;
-;; Returns CPU usage, glitch count, and other diagnostic info as JSON.
-;;
-;; @param world_id World handle
-;; @param status_buffer Buffer to store JSON status string
-;; @param buffer_size Size of status_buffer
-;; @return Number of bytes written, or -1 on error
+;;; hc_wasm_get_status -- Retrieve engine diagnostics as a JSON string.
+;;;
+;;; Returns CPU usage, glitch count, and other diagnostic info.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle.
+;;;   status_buffer -- Caller-allocated buffer to receive the JSON string.
+;;;   buffer_size -- Size of status_buffer in bytes.
+;;;
+;;; Returns:
+;;;   Number of bytes written, or -1 on error.
 (extern-c hc_wasm_get_status [world_id :int status_buffer :ptr<char> buffer_size :int] :int)
 
-;; Clear all nodes and reset engine state (for restarting)
-;;
-;; @param world_id World handle
-;; @return 0 on success, -1 on error
+;;; hc_wasm_reset -- Clear all nodes and reset engine state for a fresh start.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (extern-c hc_wasm_reset [world_id :int] :int)
 
-;; Process control messages before rendering
-;;
-;; Drains the command queue and applies control updates.
-;; Call this before rendering to handle pending commands.
-;;
-;; @param world_id World handle
-;; @param max_messages Maximum messages to process per call
-;; @return Number of messages processed, or -1 on error
+;;; hc_wasm_process_controls -- Drain the command queue and apply pending control updates.
+;;;
+;;; Call this before each render block to handle queued commands.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle.
+;;;   max_messages -- Maximum number of messages to process per call.
+;;;
+;;; Returns:
+;;;   Number of messages processed, or -1 on error.
 (extern-c hc_wasm_process_controls [world_id :int max_messages :int] :int)
 
-;; Get performance metrics
-;;
-;; @param world_id World handle
-;; @param cpu_percent Output: CPU usage percentage (0-100+)
-;; @param xruns Output: Number of render deadline misses
-;; @param buffer_used Output: Peak buffer usage in samples
-;; @return 0 on success, -1 on error
+;;; hc_wasm_get_metrics -- Read out performance counters for a world.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle.
+;;;   cpu_percent -- Output pointer: CPU usage percentage (0-100+).
+;;;   xruns -- Output pointer: cumulative count of render deadline misses.
+;;;   buffer_used -- Output pointer: peak buffer usage in samples.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (extern-c hc_wasm_get_metrics [world_id :int cpu_percent :ptr<float> xruns :ptr<int> buffer_used :ptr<int>] :int)
 
-;; Reset performance counters
-;;
-;; @param world_id World handle
-;; @return 0 on success, -1 on error
+;;; hc_wasm_reset_metrics -- Zero all performance counters for a world.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (extern-c hc_wasm_reset_metrics [world_id :int] :int)
 
 ;; ============================================================================
 ;; UGen Discovery
 ;; ============================================================================
 
-;; Get sorted list of all registered UGen names
-;;
-;; Populates buffer with newline-separated UGen names, null-terminated.
-;; Must be called after at least one world has been created.
-;;
-;; @param buffer Caller-allocated buffer for the newline-separated name list
-;; @param buffer_size Size of buffer in bytes
-;; @return Number of bytes written (excluding the terminating NUL), or -1 if buffer is too small
+;;; hc_wasm_list_ugens -- List all registered UGen names as a newline-separated string.
+;;;
+;;; Must be called after at least one world has been created.
+;;;
+;;; Parameters:
+;;;   buffer -- Caller-allocated buffer for the newline-separated name list.
+;;;   buffer_size -- Size of buffer in bytes.
+;;;
+;;; Returns:
+;;;   Number of bytes written (excluding the terminating NUL), or -1 if buffer is too small.
 (extern-c hc_wasm_list_ugens [buffer :ptr<char> buffer_size :int] :int)
 
-;; Get list of loaded SynthDef names
-;;
-;; @param world_id World handle
-;; @param name_buffer Buffer to store null-terminated names (comma-separated)
-;; @param buffer_size Size of name_buffer
-;; @return Number of bytes written, or -1 on error
+;;; hc_wasm_list_synthdefs -- List loaded SynthDef names as a comma-separated string.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle.
+;;;   name_buffer -- Caller-allocated buffer for the comma-separated name list.
+;;;   buffer_size -- Size of name_buffer in bytes.
+;;;
+;;; Returns:
+;;;   Number of bytes written, or -1 on error.
 (extern-c hc_wasm_list_synthdefs [world_id :int name_buffer :ptr<char> buffer_size :int] :int)
 
 ;; ============================================================================
 ;; Memory Management Helpers
 ;; ============================================================================
 
-;; Allocate memory (thin wrapper around malloc)
+;;; malloc -- Allocate a block of memory (thin wrapper around C malloc).
+;;;
+;;; Parameters:
+;;;   size -- Number of bytes to allocate.
+;;;
+;;; Returns:
+;;;   Pointer to allocated memory, or NULL on failure.
 (extern-c malloc [^ptr<void> size] :ptr<void>)
 
-;; Free memory (thin wrapper around free)
+;;; free -- Release a block of memory (thin wrapper around C free).
+;;;
+;;; Parameters:
+;;;   p -- Pointer previously returned by malloc. Passing NULL is safe.
 (extern-c free [^ptr<void> p] :void)
 
-;; Copy memory
+;;; memcpy -- Copy bytes from one memory region to another.
+;;;
+;;; Parameters:
+;;;   dest -- Destination pointer.
+;;;   src -- Source pointer.
+;;;   n -- Number of bytes to copy.
+;;;
+;;; Returns:
+;;;   dest pointer.
 (extern-c memcpy [^ptr<void> ^ptr<void> ^int] :ptr<void>)
 
-;; Set memory
+;;; memset -- Fill a memory region with a repeated byte value.
+;;;
+;;; Parameters:
+;;;   ptr -- Pointer to the memory region.
+;;;   value -- Byte value to fill with.
+;;;   n -- Number of bytes to fill.
+;;;
+;;; Returns:
+;;;   ptr pointer.
 (extern-c memset [^ptr<void> ^int ^int] :ptr<void>)

@@ -18,6 +18,15 @@
 ;; (save-cont! k)  -->  bytes
 ;;   k : ptr<void>   (opaque serial-continuation handle)
 ;;   returns the serialised bytes (or nil on failure)
+;;; save-cont! -- serialise an opaque serial-continuation handle to a bytes value.
+;;;
+;;; Parameters:
+;;;   k -- opaque continuation pointer from serial-shift
+;;;
+;;; Returns:
+;;;   A bytes :ptr<void> on success, or nil when codegen is not yet implemented.
+;;;
+;;; Since: Phase 21
 (defn save-cont! [k :ptr<void>] :ptr<void>
   ```c
   /* Phase 21: placeholder -- serial-shift codegen not yet implemented.
@@ -31,6 +40,16 @@
 ;; (resume-cont! b v)  -->  int
 ;;   b : ptr<void>  (serialised bytes from save-cont!)
 ;;   v : int        (value to resume the continuation with)
+;;; resume-cont! -- deserialise a bytes value and resume the encoded continuation with v.
+;;;
+;;; Parameters:
+;;;   b -- serialised bytes from save-cont!
+;;;   v -- value to pass to the resumed continuation
+;;;
+;;; Returns:
+;;;   The continuation's return value; 0 when codegen is not yet implemented.
+;;;
+;;; Since: Phase 21
 (defn resume-cont! [b :ptr<void> v :int] :int
   ```c
   /* Phase 21: placeholder -- serial-shift codegen not yet implemented. */
@@ -54,11 +73,35 @@
 ;;   (serial-reset
 ;;     (let [approved? (serial-shift (fn [k] (workflow-suspend k)) false)]
 ;;       ...))
+;;; workflow-suspend -- suspend the current workflow step by serialising continuation k.
+;;;
+;;; Parameters:
+;;;   k -- opaque continuation pointer from serial-shift
+;;;
+;;; Returns:
+;;;   Serialised bytes :ptr<void> from save-cont! (nil if not yet implemented).
+;;;
+;;; Example:
+;;;   (serial-reset
+;;;     (let [ok? (serial-shift (fn [k] (workflow-suspend k)) false)]
+;;;       ...))
+;;;
+;;; Since: Phase 21
 (defn workflow-suspend [k :ptr<void>] :ptr<void>
   (save-cont! k))
 
 ;; workflow-resume -- resume a previously suspended workflow step.
 ;; b    : bytes value from workflow-suspend
 ;; v    : value to pass to the resumed continuation
+;;; workflow-resume -- resume a previously suspended workflow step with value v.
+;;;
+;;; Parameters:
+;;;   b -- bytes value produced by workflow-suspend
+;;;   v -- value to inject into the resumed continuation
+;;;
+;;; Returns:
+;;;   The continuation's return value (0 when not yet implemented).
+;;;
+;;; Since: Phase 21
 (defn workflow-resume [b :ptr<void> v :int] :int
   (resume-cont! b v))

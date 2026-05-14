@@ -18,10 +18,12 @@
 (import scscm/errors :errors)
 (import scscm/perf :perf)
 
-;; Library version
+;;; SCSCM_VERSION -- Semantic version string for the SCSCM library.
 (def SCSCM_VERSION "0.1.0")
 
-;; Library metadata
+;;; SCSCM_INFO -- Metadata map describing the SCSCM library.
+;;;
+;;; Fields: :version, :name, :description, :author, :dependencies.
 (def SCSCM_INFO
   {:version SCSCM_VERSION
    :name "scscm"

@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tur/tur/envelope | Turmeric API</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand">turmeric</span>
+  <nav>
+    <a href="index.html">API Docs</a>
+    <a href="../autodoc-plan.md">Plan</a>
+  </nav>
+</header>
+<div class="page-layout">
+<div class="sidebar">
+  <h3>Exported</h3>
+  <ul>
+    <li><a href="#ADSRParams">ADSRParams</a></li>
+    <li><a href="#ADSRState">ADSRState</a></li>
+    <li><a href="#adsr">adsr</a></li>
+    <li><a href="#adsr-fixed">adsr-fixed</a></li>
+    <li><a href="#adsr-sf">adsr-sf</a></li>
+    <li><a href="#adsr-gen">adsr-gen</a></li>
+    <li><a href="#linear-envelope">linear-envelope</a></li>
+    <li><a href="#exp-envelope">exp-envelope</a></li>
+    <li><a href="#percussive-envelope">percussive-envelope</a></li>
+    <li><a href="#pad-envelope">pad-envelope</a></li>
+    <li><a href="#pluck-envelope">pluck-envelope</a></li>
+    <li><a href="#lfo-sine">lfo-sine</a></li>
+    <li><a href="#apply-envelope">apply-envelope</a></li>
+    <li><a href="#trigger-envelope">trigger-envelope</a></li>
+    <li><a href="#piano-envelope">piano-envelope</a></li>
+    <li><a href="#string-envelope">string-envelope</a></li>
+    <li><a href="#brass-envelope">brass-envelope</a></li>
+    <li><a href="#organ-envelope">organ-envelope</a></li>
+    <li><a href="#pad-synth-envelope">pad-synth-envelope</a></li>
+  </ul>
+</div>
+<div class="content">
+  <div class="module-heading">
+    <h1>tur/envelope</h1>
+    <div class="module-path">stdlib/envelope.tur</div>
+  </div>
+<div class="def-card" id="ADSRParams">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defstruct">defstruct</span>
+    <h2>ADSRParams</h2>
+  </div>
+  <pre class="def-signature">(defstruct ADSRParams [])</pre>
+  <p class="def-summary">parameters for an ADSR envelope.</p>
+</div>
+<div class="def-card" id="ADSRState">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defstruct">defstruct</span>
+    <h2>ADSRState</h2>
+  </div>
+  <pre class="def-signature">(defstruct ADSRState [])</pre>
+  <p class="def-summary">runtime state for a running ADSR envelope.</p>
+</div>
+<div class="def-card" id="adsr">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>adsr</h2>
+  </div>
+  <pre class="def-signature">(adsr [params : ADSRParams])</pre>
+  <p class="def-summary">stateless ADSR placeholder (use adsr-sf for stateful evaluation).</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>params</td><td></td><td>ADSRParams controlling shape</td></tr>
+    <tr><td>gate-sig</td><td></td><td>Signal&lt;bool&gt; controlling note on/off</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Signal&lt;Sample&gt; (always errors -- use adsr-sf instead).</p>
+  </div>
+</div>
+<div class="def-card" id="adsr-fixed">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>adsr-fixed</h2>
+  </div>
+  <pre class="def-signature">(adsr-fixed [params : ADSRParams])</pre>
+  <p class="def-summary">piecewise-linear ADSR computed analytically for a single note.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>params</td><td></td><td>ADSRParams controlling shape</td></tr>
+    <tr><td>gate-duration</td><td></td><td>how long the gate stays on in seconds</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">SF&lt;(),Sample&gt; producing the ADSR envelope starting at t=0.
+
+  ((adsr-fixed (ADSRParams 0.01 0.1 0.7 0.3) 0.5) (constant ()))</pre>
+  </div>
+</div>
+<div class="def-card" id="adsr-sf">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>adsr-sf</h2>
+  </div>
+  <pre class="def-signature">(adsr-sf [params : ADSRParams])</pre>
+  <p class="def-summary">stateful ADSR envelope driven by a gate-and-unit product signal.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>params</td><td></td><td>ADSRParams controlling shape</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">SF&lt;Tuple () bool, Sample&gt; that responds to gate transitions.
+
+  ((adsr-sf (ADSRParams 0.01 0.1 0.7 0.3)) gate-unit-sig)</pre>
+  </div>
+</div>
+<div class="def-card" id="adsr-gen">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>adsr-gen</h2>
+  </div>
+  <pre class="def-signature">(adsr-gen [params : ADSRParams])</pre>
+  <p class="def-summary">simplified stateful ADSR driven directly by a bool gate signal.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>params</td><td></td><td>ADSRParams controlling shape</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">SF&lt;bool,Sample&gt; that runs through ADSR phases in response to the gate.
+
+  ((adsr-gen (ADSRParams 0.01 0.1 0.7 0.3)) gate-bool-sig)</pre>
+  </div>
+</div>
+<div class="def-card" id="linear-envelope">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>linear-envelope</h2>
+  </div>
+  <pre class="def-signature">(linear-envelope [attack : Sample])</pre>
+  <p class="def-summary">simple attack-release envelope driven by a bool gate.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>attack</td><td></td><td>attack time in seconds</td></tr>
+    <tr><td>release</td><td></td><td>release time in seconds</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">SF&lt;bool,Sample&gt; ramping up during gate-on, down after gate-off.
+
+  ((linear-envelope 0.05 0.2) gate-sig)</pre>
+  </div>
+</div>
+<div class="def-card" id="exp-envelope">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>exp-envelope</h2>
+  </div>
+  <pre class="def-signature">(exp-envelope [attack-rate : Sample])</pre>
+  <p class="def-summary">exponential approach envelope for smooth attack and release.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>attack-rate</td><td></td><td>approach rate towards 1.0 during gate-on (0.0 to 1.0)</td></tr>
+    <tr><td>release-rate</td><td></td><td>approach rate towards 0.0 during gate-off (0.0 to 1.0)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">SF&lt;bool,Sample&gt; with exponential attack and release curves.
+
+  ((exp-envelope 0.05 0.02) gate-sig)</pre>
+  </div>
+</div>
+<div class="def-card" id="percussive-envelope">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>percussive-envelope</h2>
+  </div>
+  <pre class="def-signature">(percussive-envelope [attack : Sample])</pre>
+  <p class="def-summary">fast attack / fast release envelope for percussion.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>attack</td><td></td><td>attack time in seconds</td></tr>
+    <tr><td>release</td><td></td><td>release time in seconds</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">SF&lt;bool,Sample&gt;.</p>
+  </div>
+</div>
+<div class="def-card" id="pad-envelope">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>pad-envelope</h2>
+  </div>
+  <pre class="def-signature">(pad-envelope [attack : Sample])</pre>
+  <p class="def-summary">slow attack / high sustain / slow release envelope.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>attack</td><td></td><td>attack time in seconds</td></tr>
+    <tr><td>decay</td><td></td><td>decay time in seconds</td></tr>
+    <tr><td>sustain</td><td></td><td>sustain level (0.0 to 1.0)</td></tr>
+    <tr><td>release</td><td></td><td>release time in seconds</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">SF&lt;bool,Sample&gt;.</p>
+  </div>
+</div>
+<div class="def-card" id="pluck-envelope">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>pluck-envelope</h2>
+  </div>
+  <pre class="def-signature">(pluck-envelope [attack : Sample])</pre>
+  <p class="def-summary">fast attack / slow decay envelope for plucked sounds.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>attack</td><td></td><td>attack time in seconds</td></tr>
+    <tr><td>release</td><td></td><td>release time in seconds</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">SF&lt;bool,Sample&gt;.</p>
+  </div>
+</div>
+<div class="def-card" id="lfo-sine">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>lfo-sine</h2>
+  </div>
+  <pre class="def-signature">(lfo-sine [freq : Sample])</pre>
+  <p class="def-summary">sine LFO with depth shaped by an envelope.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>freq</td><td></td><td>LFO frequency in Hz</td></tr>
+    <tr><td>depth</td><td></td><td>maximum LFO depth (0.0 to 1.0)</td></tr>
+    <tr><td>env-sf</td><td></td><td>envelope to shape LFO depth over time</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">SF&lt;Tuple bool (), Sample&gt; producing the modulated LFO signal.
+
+  ((lfo-sine 5.0 0.3 (adsr-gen params)) gate-unit-sig)</pre>
+  </div>
+</div>
+<div class="def-card" id="apply-envelope">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>apply-envelope</h2>
+  </div>
+  <pre class="def-signature">(apply-envelope [env-sf : (SF bool Sample)])</pre>
+  <p class="def-summary">multiply a signal by an envelope derived from a gate.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>env-sf</td><td></td><td>envelope generator SF&lt;bool,Sample&gt;</td></tr>
+    <tr><td>sig</td><td></td><td>source signal SF&lt;(),Sample&gt;</td></tr>
+    <tr><td>gate</td><td></td><td>gate signal SF&lt;(),bool&gt;</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">SF&lt;(),Sample&gt; with envelope applied multiplicatively.</p>
+  </div>
+</div>
+<div class="def-card" id="trigger-envelope">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>trigger-envelope</h2>
+  </div>
+  <pre class="def-signature">(trigger-envelope [env-sf : (SF bool Sample)])</pre>
+  <p class="def-summary">fire an envelope once at a specified time.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>env-sf</td><td></td><td>envelope generator SF&lt;bool,Sample&gt;</td></tr>
+    <tr><td>trigger-time</td><td></td><td>beat/time at which gate turns on</td></tr>
+    <tr><td>duration</td><td></td><td>how long the gate stays on</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">SF&lt;(),Sample&gt; that triggers the envelope once.
+
+  ((trigger-envelope (adsr-gen params) 0.0 0.5) (constant ()))</pre>
+  </div>
+</div>
+<div class="def-card" id="piano-envelope">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>piano-envelope</h2>
+  </div>
+  <pre class="def-signature">(piano-envelope)</pre>
+  <p class="def-summary">ADSR preset for a piano-like sound.</p>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">SF&lt;bool,Sample&gt; with fast attack, moderate decay, 50% sustain, short release.</p>
+  </div>
+</div>
+<div class="def-card" id="string-envelope">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>string-envelope</h2>
+  </div>
+  <pre class="def-signature">(string-envelope)</pre>
+  <p class="def-summary">ADSR preset for bowed strings.</p>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">SF&lt;bool,Sample&gt; with medium attack and release, high sustain.</p>
+  </div>
+</div>
+<div class="def-card" id="brass-envelope">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>brass-envelope</h2>
+  </div>
+  <pre class="def-signature">(brass-envelope)</pre>
+  <p class="def-summary">ADSR preset for brass-like timbres.</p>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">SF&lt;bool,Sample&gt; with fast attack, 70% sustain.</p>
+  </div>
+</div>
+<div class="def-card" id="organ-envelope">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>organ-envelope</h2>
+  </div>
+  <pre class="def-signature">(organ-envelope)</pre>
+  <p class="def-summary">ADSR preset for organ-style sounds (no decay, fast edges).</p>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">SF&lt;bool,Sample&gt; with near-instant attack and release, no decay.</p>
+  </div>
+</div>
+<div class="def-card" id="pad-synth-envelope">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>pad-synth-envelope</h2>
+  </div>
+  <pre class="def-signature">(pad-synth-envelope)</pre>
+  <p class="def-summary">ADSR preset for evolving synth pads.</p>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">SF&lt;bool,Sample&gt; with slow attack and release.</p>
+  </div>
+</div>
+</div>
+</div>
+<footer class="site-footer">
+  Auto-generated by <code>tools/gendocs.py</code>.
+  Do not edit by hand -- run <code>just docs</code> to regenerate.
+</footer>
+</body>
+</html>

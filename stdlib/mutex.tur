@@ -4,12 +4,21 @@
 ;; multi-threaded use (default PTHREAD_MUTEX_DEFAULT attributes).
 ;;
 ;; API:
-;;   mutex-new          []                    → ptr<void>
-;;   mutex-lock         [m :ptr<void>]        → nil
-;;   mutex-unlock       [m :ptr<void>]        → nil
-;;   mutex-try-lock     [m :ptr<void>]        → bool   (true = acquired)
-;;   mutex-free         [m :ptr<void>]        → nil
+;;   mutex-new          []                    -- ptr<void>
+;;   mutex-lock         [m :ptr<void>]        -- nil
+;;   mutex-unlock       [m :ptr<void>]        -- nil
+;;   mutex-try-lock     [m :ptr<void>]        -- bool   (true = acquired)
+;;   mutex-free         [m :ptr<void>]        -- nil
 
+;;; mutex-new -- allocate and initialise a new POSIX mutex.
+;;;
+;;; Returns:
+;;;   An opaque ptr<void> handle to a heap-allocated pthread_mutex_t.
+;;;
+;;; Example:
+;;;   (let [m (mutex-new)] ...)  ; => ptr<void>
+;;;
+;;; Since: Phase T19-C
 (defn mutex-new [] :ptr<void>
   ```c
   pthread_mutex_t *m = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
@@ -18,21 +27,60 @@
   return (void *)m;
   ```)
 
+;;; mutex-lock -- acquire the mutex, blocking until it is available.
+;;;
+;;; Parameters:
+;;;   m -- mutex handle returned by mutex-new
+;;;
+;;; Example:
+;;;   (mutex-lock m)
+;;;
+;;; Since: Phase T19-C
 (defn mutex-lock [m :ptr<void>] :nil
   ```c
   pthread_mutex_lock((pthread_mutex_t *)m);
   ```)
 
+;;; mutex-unlock -- release the mutex.
+;;;
+;;; Parameters:
+;;;   m -- mutex handle returned by mutex-new
+;;;
+;;; Example:
+;;;   (mutex-unlock m)
+;;;
+;;; Since: Phase T19-C
 (defn mutex-unlock [m :ptr<void>] :nil
   ```c
   pthread_mutex_unlock((pthread_mutex_t *)m);
   ```)
 
+;;; mutex-try-lock -- attempt to acquire the mutex without blocking.
+;;;
+;;; Parameters:
+;;;   m -- mutex handle returned by mutex-new
+;;;
+;;; Returns:
+;;;   true if the mutex was successfully acquired; false if it was already held.
+;;;
+;;; Example:
+;;;   (if (mutex-try-lock m) ...)  ; => bool
+;;;
+;;; Since: Phase T19-C
 (defn mutex-try-lock [m :ptr<void>] :bool
   ```c
   return pthread_mutex_trylock((pthread_mutex_t *)m) == 0;
   ```)
 
+;;; mutex-free -- destroy the mutex and release its memory.
+;;;
+;;; Parameters:
+;;;   m -- mutex handle returned by mutex-new
+;;;
+;;; Example:
+;;;   (mutex-free m)
+;;;
+;;; Since: Phase T19-C
 (defn mutex-free [m :ptr<void>] :nil
   ```c
   pthread_mutex_destroy((pthread_mutex_t *)m);

@@ -28,6 +28,7 @@
                 <nav class="nav">
                     <a href="/" class="nav-link active">Try REPL</a>
                     <a href="/tutorials" class="nav-link">Tutorials</a>
+                    <a href="/docs/api/index.html" class="nav-link" target="_blank" rel="noopener">Docs</a>
                     <a href="https://github.com/turmeric-lang/turmeric" class="nav-link external" target="_blank" rel="noopener">GitHub</a>
                 </nav>
             </div>
@@ -135,6 +136,27 @@
                     </div>
                     <div class="console-footer">
                         <span class="execution-time" id="exec-time">Ready</span>
+                    </div>
+                </div>
+
+                <!-- Doc Panel -->
+                <div class="doc-pane" id="doc-pane" style="display: none;">
+                    <div class="doc-header">
+                        <span class="doc-title" id="doc-title">Documentation</span>
+                        <div class="doc-actions">
+                            <button class="btn btn-icon btn-sm" id="close-doc-btn" title="Close Doc Panel">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="doc-body" id="doc-body">
+                        <p class="doc-placeholder">Evaluate <code>(doc name)</code> to see documentation here.</p>
+                    </div>
+                    <div class="doc-footer">
+                        <a id="doc-full-link" href="/docs/api/index.html" target="_blank" rel="noopener"
+                           class="doc-open-link">Open full docs &#x2197;</a>
                     </div>
                 </div>
             </div>

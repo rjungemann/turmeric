@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tur/tur/polyrhythm | Turmeric API</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand">turmeric</span>
+  <nav>
+    <a href="index.html">API Docs</a>
+    <a href="../autodoc-plan.md">Plan</a>
+  </nav>
+</header>
+<div class="page-layout">
+<div class="sidebar">
+  <h3>Exported</h3>
+  <ul>
+    <li><a href="#polymeter">polymeter</a></li>
+    <li><a href="#polyrhythm">polyrhythm</a></li>
+    <li><a href="#polyrhythm-n">polyrhythm-n</a></li>
+    <li><a href="#nest">nest</a></li>
+    <li><a href="#nest2">nest2</a></li>
+    <li><a href="#canon">canon</a></li>
+    <li><a href="#canon-n">canon-n</a></li>
+    <li><a href="#spread">spread</a></li>
+    <li><a href="#spread-n">spread-n</a></li>
+    <li><a href="#stack-polymeter">stack-polymeter</a></li>
+    <li><a href="#stack-polyrhythm">stack-polyrhythm</a></li>
+    <li><a href="#timesig">timesig</a></li>
+    <li><a href="#make-timesig">make-timesig</a></li>
+    <li><a href="#three-against-two">three-against-two</a></li>
+    <li><a href="#four-against-three">four-against-three</a></li>
+    <li><a href="#five-against-four">five-against-four</a></li>
+    <li><a href="#five-against-three">five-against-three</a></li>
+    <li><a href="#seven-against-four">seven-against-four</a></li>
+    <li><a href="#polyrhythm-offset">polyrhythm-offset</a></li>
+    <li><a href="#polyrhythm-phased">polyrhythm-phased</a></li>
+    <li><a href="#metric-mod">metric-mod</a></li>
+    <li><a href="#metric-mod-linear">metric-mod-linear</a></li>
+    <li><a href="#lcm">lcm</a></li>
+    <li><a href="#gcd">gcd</a></li>
+    <li><a href="#polyrhythm-alignment">polyrhythm-alignment</a></li>
+    <li><a href="#cross-rhythm">cross-rhythm</a></li>
+    <li><a href="#hocket">hocket</a></li>
+  </ul>
+</div>
+<div class="content">
+  <div class="module-heading">
+    <h1>tur/polyrhythm</h1>
+    <div class="module-path">stdlib/polyrhythm.tur</div>
+  </div>
+<div class="def-card" id="polymeter">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>polymeter</h2>
+  </div>
+  <pre class="def-signature">(polymeter [ratio p])</pre>
+  <p class="def-summary">play a pattern with a different effective meter.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>ratio</td><td></td><td>time scaling ratio (2.0 = twice as slow, 0.5 = twice as fast)</td></tr>
+    <tr><td>p</td><td></td><td>pattern to play with the scaled meter</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;T&gt; evaluated with time * ratio.
+
+  ((polymeter 1.5 my-pat) 1.0)  ; reads my-pat at time 1.5</pre>
+  </div>
+</div>
+<div class="def-card" id="polyrhythm">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>polyrhythm</h2>
+  </div>
+  <pre class="def-signature">(polyrhythm [p1 len1 p2 len2])</pre>
+  <p class="def-summary">play two patterns with independent cycle lengths.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p1</td><td></td><td>first pattern</td></tr>
+    <tr><td>len1</td><td></td><td>cycle length for the first pattern in beats</td></tr>
+    <tr><td>p2</td><td></td><td>second pattern</td></tr>
+    <tr><td>len2</td><td></td><td>cycle length for the second pattern in beats</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;Tuple T1 T2&gt; combining both patterns at their own tempos.
+
+  ((polyrhythm kick-pat 3 snare-pat 2) 0.0)</pre>
+  </div>
+</div>
+<div class="def-card" id="polyrhythm-n">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>polyrhythm-n</h2>
+  </div>
+  <pre class="def-signature">(polyrhythm-n [&amp; pattern-lengths])</pre>
+  <p class="def-summary">play any number of patterns with independent cycle lengths.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>pattern-lengths</td><td></td><td>list of [pattern length] tuples</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;vec&lt;T&gt;&gt; with one element per sub-pattern.</p>
+  </div>
+</div>
+<div class="def-card" id="nest">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>nest</h2>
+  </div>
+  <pre class="def-signature">(nest [outer &amp; [inner-time-scale 1.0])</pre>
+  <p class="def-summary">evaluate a pattern of patterns: outer selects the inner, inner is evaluated.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>outer</td><td></td><td>Pattern producing inner patterns</td></tr>
+    <tr><td>inner-time-scale</td><td></td><td>time scaling applied before evaluating outer (default: 1.0)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt; that delegates to the pattern returned by outer.</p>
+  </div>
+</div>
+<div class="def-card" id="nest2">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>nest2</h2>
+  </div>
+  <pre class="def-signature">(nest2 [outer outer-time-scale inner-time-scale])</pre>
+  <p class="def-summary">nested pattern with independent time scales for outer and inner.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>outer</td><td></td><td>Pattern producing inner patterns</td></tr>
+    <tr><td>outer-time-scale</td><td></td><td>scaling applied to time when querying outer</td></tr>
+    <tr><td>inner-time-scale</td><td></td><td>scaling applied to time when querying the selected inner pattern</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt;.</p>
+  </div>
+</div>
+<div class="def-card" id="canon">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>canon</h2>
+  </div>
+  <pre class="def-signature">(canon [p copies delay])</pre>
+  <p class="def-summary">play delayed copies of a pattern stacked together.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to copy</td></tr>
+    <tr><td>copies</td><td></td><td>number of copies to create</td></tr>
+    <tr><td>delay</td><td></td><td>time offset between successive copies in beats (default: 0.25)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;vec&lt;T&gt;&gt; with copies offset by delay * i for i in [0, copies).
+
+  ((canon my-pat 3 0.25) 0.0)</pre>
+  </div>
+</div>
+<div class="def-card" id="canon-n">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>canon-n</h2>
+  </div>
+  <pre class="def-signature">(canon-n [p &amp; delays])</pre>
+  <p class="def-summary">play copies of a pattern with individually specified delays.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to copy</td></tr>
+    <tr><td>delays</td><td></td><td>list of per-copy delay offsets</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;vec&lt;T&gt;&gt;.</p>
+  </div>
+</div>
+<div class="def-card" id="spread">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>spread</h2>
+  </div>
+  <pre class="def-signature">(spread [p copies spread-amount])</pre>
+  <p class="def-summary">phase-spread copies of a pattern across a time window.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to spread</td></tr>
+    <tr><td>copies</td><td></td><td>number of copies</td></tr>
+    <tr><td>spread-amount</td><td></td><td>total time window to spread across in beats (default: 1.0)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;vec&lt;T&gt;&gt; with copies evenly spaced in [0, spread-amount).
+
+  ((spread my-pat 4 1.0) 0.0)</pre>
+  </div>
+</div>
+<div class="def-card" id="spread-n">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>spread-n</h2>
+  </div>
+  <pre class="def-signature">(spread-n [p &amp; spreads])</pre>
+  <p class="def-summary">phase-spread copies with individually specified offsets.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to spread</td></tr>
+    <tr><td>spreads</td><td></td><td>list of per-copy phase offsets</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;vec&lt;T&gt;&gt;.</p>
+  </div>
+</div>
+<div class="def-card" id="stack-polymeter">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>stack-polymeter</h2>
+  </div>
+  <pre class="def-signature">(stack-polymeter [&amp; pattern-meters])</pre>
+  <p class="def-summary">stack patterns each running at their own meter.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>pattern-meters</td><td></td><td>list of [pattern meter] tuples</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;vec&lt;T&gt;&gt; with one element per voice.</p>
+  </div>
+</div>
+<div class="def-card" id="stack-polyrhythm">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>stack-polyrhythm</h2>
+  </div>
+  <pre class="def-signature">(stack-polyrhythm [&amp; pattern-lengths])</pre>
+  <p class="def-summary">stack patterns each with their own cycle lengths.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>pattern-lengths</td><td></td><td>list of [pattern length] tuples</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;vec&lt;T&gt;&gt;.</p>
+  </div>
+</div>
+<div class="def-card" id="timesig">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>timesig</h2>
+  </div>
+  <pre class="def-signature">(timesig [p &amp; sigs])</pre>
+  <p class="def-summary">apply a sequence of time signatures to a pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to apply time signatures to</td></tr>
+    <tr><td>sigs</td><td></td><td>list of [beats-per-bar sub-beats-per-bar] tuples</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt; with normalised time within each bar.</p>
+  </div>
+</div>
+<div class="def-card" id="make-timesig">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>make-timesig</h2>
+  </div>
+  <pre class="def-signature">(make-timesig [beats-per-bar sub-beats-per-bar])</pre>
+  <p class="def-summary">construct a time signature specification.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>beats-per-bar</td><td></td><td>beats per bar (e.g., 4 for 4/4, 3 for 3/4)</td></tr>
+    <tr><td>sub-beats-per-bar</td><td></td><td>sub-divisions per beat (e.g., 4 for 16th notes)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">A [beats-per-bar sub-beats-per-bar] pair.</p>
+  </div>
+</div>
+<div class="def-card" id="three-against-two">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>three-against-two</h2>
+  </div>
+  <pre class="def-signature">(three-against-two [p1 p2])</pre>
+  <p class="def-summary">classic 3:2 polyrhythm.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p1</td><td></td><td>pattern for the 3-beat group</td></tr>
+    <tr><td>p2</td><td></td><td>pattern for the 2-beat group</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;Tuple T1 T2&gt;.</p>
+  </div>
+</div>
+<div class="def-card" id="four-against-three">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>four-against-three</h2>
+  </div>
+  <pre class="def-signature">(four-against-three [p1 p2])</pre>
+  <p class="def-summary">4:3 polyrhythm.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p1</td><td></td><td>pattern for the 4-beat group</td></tr>
+    <tr><td>p2</td><td></td><td>pattern for the 3-beat group</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;Tuple T1 T2&gt;.</p>
+  </div>
+</div>
+<div class="def-card" id="five-against-four">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>five-against-four</h2>
+  </div>
+  <pre class="def-signature">(five-against-four [p1 p2])</pre>
+  <p class="def-summary">5:4 polyrhythm.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p1</td><td></td><td>pattern for the 5-beat group</td></tr>
+    <tr><td>p2</td><td></td><td>pattern for the 4-beat group</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;Tuple T1 T2&gt;.</p>
+  </div>
+</div>
+<div class="def-card" id="five-against-three">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>five-against-three</h2>
+  </div>
+  <pre class="def-signature">(five-against-three [p1 p2])</pre>
+  <p class="def-summary">5:3 polyrhythm.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p1</td><td></td><td>pattern for the 5-beat group</td></tr>
+    <tr><td>p2</td><td></td><td>pattern for the 3-beat group</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;Tuple T1 T2&gt;.</p>
+  </div>
+</div>
+<div class="def-card" id="seven-against-four">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>seven-against-four</h2>
+  </div>
+  <pre class="def-signature">(seven-against-four [p1 p2])</pre>
+  <p class="def-summary">7:4 polyrhythm.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p1</td><td></td><td>pattern for the 7-beat group</td></tr>
+    <tr><td>p2</td><td></td><td>pattern for the 4-beat group</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;Tuple T1 T2&gt;.</p>
+  </div>
+</div>
+<div class="def-card" id="polyrhythm-offset">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>polyrhythm-offset</h2>
+  </div>
+  <pre class="def-signature">(polyrhythm-offset [p1 len1 offset1 p2 len2 offset2])</pre>
+  <p class="def-summary">polyrhythm with independent phase offsets per pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p1</td><td></td><td>first pattern</td></tr>
+    <tr><td>len1</td><td></td><td>cycle length for first pattern</td></tr>
+    <tr><td>offset1</td><td></td><td>phase offset for first pattern</td></tr>
+    <tr><td>p2</td><td></td><td>second pattern</td></tr>
+    <tr><td>len2</td><td></td><td>cycle length for second pattern</td></tr>
+    <tr><td>offset2</td><td></td><td>phase offset for second pattern</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;Tuple T1 T2&gt;.</p>
+  </div>
+</div>
+<div class="def-card" id="polyrhythm-phased">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>polyrhythm-phased</h2>
+  </div>
+  <pre class="def-signature">(polyrhythm-phased [&amp; patterns-and-phases])</pre>
+  <p class="def-summary">polyrhythm with per-pattern length and phase.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>patterns-and-phases</td><td></td><td>list of [pattern length phase] triples</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;vec&lt;T&gt;&gt;.</p>
+  </div>
+</div>
+<div class="def-card" id="metric-mod">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>metric-mod</h2>
+  </div>
+  <pre class="def-signature">(metric-mod [p modulation-fn])</pre>
+  <p class="def-summary">apply an arbitrary time mapping to a pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to modulate</td></tr>
+    <tr><td>modulation-fn</td><td></td><td>Beats -&gt; Beats time remapping function</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt; evaluated at modulation-fn(time).</p>
+  </div>
+</div>
+<div class="def-card" id="metric-mod-linear">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>metric-mod-linear</h2>
+  </div>
+  <pre class="def-signature">(metric-mod-linear [p &amp; breakpoints])</pre>
+  <p class="def-summary">apply a piecewise linear time mapping.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to modulate</td></tr>
+    <tr><td>breakpoints</td><td></td><td>list of [input-time output-time] pairs</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt; with piecewise linear time mapping.</p>
+  </div>
+</div>
+<div class="def-card" id="lcm">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>lcm</h2>
+  </div>
+  <pre class="def-signature">(lcm [a b])</pre>
+  <p class="def-summary">least common multiple of two integers.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>a</td><td></td><td>first number</td></tr>
+    <tr><td>b</td><td></td><td>second number</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">LCM of a and b.</p>
+  </div>
+</div>
+<div class="def-card" id="gcd">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>gcd</h2>
+  </div>
+  <pre class="def-signature">(gcd [a b])</pre>
+  <p class="def-summary">greatest common divisor using the Euclidean algorithm.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>a</td><td></td><td>first number</td></tr>
+    <tr><td>b</td><td></td><td>second number</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">GCD of a and b.</p>
+  </div>
+</div>
+<div class="def-card" id="polyrhythm-alignment">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>polyrhythm-alignment</h2>
+  </div>
+  <pre class="def-signature">(polyrhythm-alignment [&amp; lengths])</pre>
+  <p class="def-summary">find the beat at which all polyrhythm patterns realign.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>lengths</td><td></td><td>list of cycle lengths</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">The LCM of all lengths (time at which all patterns complete together).
+
+  (polyrhythm-alignment 3 4)  ; =&gt; 12</pre>
+  </div>
+</div>
+<div class="def-card" id="cross-rhythm">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>cross-rhythm</h2>
+  </div>
+  <pre class="def-signature">(cross-rhythm [p1 len1 p2 len2 &amp; [phase1 0 phase2 0])</pre>
+  <p class="def-summary">polyrhythm with per-pattern phase offsets.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p1</td><td></td><td>first pattern</td></tr>
+    <tr><td>len1</td><td></td><td>cycle length for first pattern</td></tr>
+    <tr><td>p2</td><td></td><td>second pattern</td></tr>
+    <tr><td>len2</td><td></td><td>cycle length for second pattern</td></tr>
+    <tr><td>phase1</td><td></td><td>phase offset for first pattern (default: 0)</td></tr>
+    <tr><td>phase2</td><td></td><td>phase offset for second pattern (default: 0)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;Tuple T1 T2&gt;.</p>
+  </div>
+</div>
+<div class="def-card" id="hocket">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>hocket</h2>
+  </div>
+  <pre class="def-signature">(hocket [p voices &amp; [selector (cycle (range 0 voices))])</pre>
+  <p class="def-summary">distribute a pattern&#x27;s output across multiple voices.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>source pattern</td></tr>
+    <tr><td>voices</td><td></td><td>number of voices to distribute across</td></tr>
+    <tr><td>selector</td><td></td><td>IntPattern selecting the active voice (default: cycle 0..voices-1)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;vec&lt;T&gt;&gt; where only the selected voice receives the pattern value.
+
+  ((hocket my-pat 3) 0.0)</pre>
+  </div>
+</div>
+</div>
+</div>
+<footer class="site-footer">
+  Auto-generated by <code>tools/gendocs.py</code>.
+  Do not edit by hand -- run <code>just docs</code> to regenerate.
+</footer>
+</body>
+</html>

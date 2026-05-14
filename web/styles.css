@@ -1042,3 +1042,88 @@ pre {
     opacity: 1;
     visibility: visible;
 }
+
+/* ==========================================================================
+ * Doc Panel (D5: autodoc integration)
+ * ========================================================================== */
+
+.doc-pane {
+    display: flex;
+    flex-direction: column;
+    background: var(--console-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    min-width: 220px;
+    max-width: 340px;
+}
+
+.doc-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--spacing-sm) var(--spacing-md);
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.doc-title {
+    font-size: var(--font-size-sm);
+    font-weight: 600;
+    color: var(--accent-color);
+    font-family: var(--font-mono);
+}
+
+.doc-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--spacing-md);
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--console-text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.5;
+}
+
+.doc-placeholder {
+    color: var(--text-muted);
+    font-family: var(--font-sans, system-ui);
+    font-size: var(--font-size-sm);
+    white-space: normal;
+}
+
+.doc-placeholder code {
+    font-family: var(--font-mono);
+    color: var(--accent-color);
+}
+
+.doc-footer {
+    padding: var(--spacing-xs) var(--spacing-md);
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border-color);
+    text-align: right;
+}
+
+.doc-open-link {
+    font-size: 0.75rem;
+    color: var(--accent-color);
+    text-decoration: none;
+}
+.doc-open-link:hover { text-decoration: underline; }
+
+/* When doc pane is visible, switch to 3-column layout */
+.repl-container.doc-open {
+    grid-template-columns: 1fr 1fr auto;
+}
+
+@media (max-width: 1024px) {
+    .repl-container.doc-open {
+        grid-template-columns: 1fr;
+    }
+    .doc-pane {
+        max-width: 100%;
+        min-height: 200px;
+        max-height: 300px;
+    }
+}

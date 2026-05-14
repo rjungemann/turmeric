@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tur/tur/synth | Turmeric API</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand">turmeric</span>
+  <nav>
+    <a href="index.html">API Docs</a>
+    <a href="../autodoc-plan.md">Plan</a>
+  </nav>
+</header>
+<div class="page-layout">
+<div class="sidebar">
+  <h3>Exported</h3>
+  <ul>
+    <li><a href="#pat-_param">pat-&gt;param</a></li>
+    <li><a href="#pats-_params">pats-&gt;params</a></li>
+    <li><a href="#pats-_named-params">pats-&gt;named-params</a></li>
+    <li><a href="#PatternPlayer">PatternPlayer</a></li>
+    <li><a href="#player-new">player-new</a></li>
+    <li><a href="#player-start">player-start</a></li>
+    <li><a href="#player-stop">player-stop</a></li>
+    <li><a href="#player-update">player-update</a></li>
+    <li><a href="#player-swap">player-swap</a></li>
+    <li><a href="#pattern-synth">pattern-synth</a></li>
+    <li><a href="#pattern-synth-player">pattern-synth-player</a></li>
+    <li><a href="#note-_freq">note-&gt;freq</a></li>
+    <li><a href="#vel-_amp">vel-&gt;amp</a></li>
+    <li><a href="#note-pattern">note-pattern</a></li>
+    <li><a href="#note-pattern-dur">note-pattern-dur</a></li>
+    <li><a href="#chord-pattern">chord-pattern</a></li>
+    <li><a href="#arp-pattern">arp-pattern</a></li>
+    <li><a href="#drum-pattern">drum-pattern</a></li>
+    <li><a href="#drum-name-_note">drum-name-&gt;note</a></li>
+    <li><a href="#kick">kick</a></li>
+    <li><a href="#snare">snare</a></li>
+    <li><a href="#hat">hat</a></li>
+    <li><a href="#pattern-_osc">pattern-&gt;osc</a></li>
+    <li><a href="#trigger-pattern">trigger-pattern</a></li>
+    <li><a href="#freq-pattern">freq-pattern</a></li>
+    <li><a href="#amp-pattern">amp-pattern</a></li>
+    <li><a href="#pan-pattern">pan-pattern</a></li>
+    <li><a href="#synth-params">synth-params</a></li>
+    <li><a href="#synth-pattern-player">synth-pattern-player</a></li>
+  </ul>
+</div>
+<div class="content">
+  <div class="module-heading">
+    <h1>tur/synth</h1>
+    <div class="module-path">stdlib/synth.tur</div>
+  </div>
+<div class="def-card" id="pat-_param">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>pat-&gt;param</h2>
+  </div>
+  <pre class="def-signature">(pat-&gt;param [p session node-id param-index])</pre>
+  <p class="def-summary">send a pattern value to a synth control at the current beat time.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>NumPattern to evaluate</td></tr>
+    <tr><td>session</td><td></td><td>scscm session</td></tr>
+    <tr><td>node-id</td><td></td><td>synth node ID</td></tr>
+    <tr><td>param-index</td><td></td><td>control parameter index</td></tr>
+    </table>
+  </div>
+</div>
+<div class="def-card" id="pats-_params">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>pats-&gt;params</h2>
+  </div>
+  <pre class="def-signature">(pats-&gt;params [session node-id param-patterns])</pre>
+  <p class="def-summary">send multiple pattern values to synth controls.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>session</td><td></td><td>scscm session</td></tr>
+    <tr><td>node-id</td><td></td><td>synth node ID</td></tr>
+    <tr><td>param-patterns</td><td></td><td>list of [param-index pattern] tuples</td></tr>
+    </table>
+  </div>
+</div>
+<div class="def-card" id="pats-_named-params">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>pats-&gt;named-params</h2>
+  </div>
+  <pre class="def-signature">(pats-&gt;named-params [session node-id param-map param-name-&gt;index])</pre>
+  <p class="def-summary">send pattern values to named synth controls.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>session</td><td></td><td>scscm session</td></tr>
+    <tr><td>node-id</td><td></td><td>synth node ID</td></tr>
+    <tr><td>param-map</td><td></td><td>map of param-name -&gt; [control-index pattern]</td></tr>
+    <tr><td>param-name-&gt;index</td><td></td><td>function mapping param names to control indices</td></tr>
+    </table>
+  </div>
+</div>
+<div class="def-card" id="PatternPlayer">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defstruct">defstruct</span>
+    <h2>PatternPlayer</h2>
+  </div>
+  <pre class="def-signature">(defstruct PatternPlayer [])</pre>
+  <p class="def-summary">a player that triggers and controls synths from a pattern.</p>
+</div>
+<div class="def-card" id="player-new">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>player-new</h2>
+  </div>
+  <pre class="def-signature">(player-new [session def-name pattern bpm])</pre>
+  <p class="def-summary">create a new (stopped) pattern player.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>session</td><td></td><td>scscm session</td></tr>
+    <tr><td>def-name</td><td></td><td>SynthDef name</td></tr>
+    <tr><td>pattern</td><td></td><td>Pattern&lt;map&lt;cstr,float&gt;&gt; producing parameter maps</td></tr>
+    <tr><td>bpm</td><td></td><td>tempo in beats per minute</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">PatternPlayer (not yet started).</p>
+  </div>
+</div>
+<div class="def-card" id="player-start">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>player-start</h2>
+  </div>
+  <pre class="def-signature">(player-start [player])</pre>
+  <p class="def-summary">start a pattern player.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>player</td><td></td><td>PatternPlayer to start</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Updated PatternPlayer with running=true.</p>
+  </div>
+</div>
+<div class="def-card" id="player-stop">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>player-stop</h2>
+  </div>
+  <pre class="def-signature">(player-stop [player])</pre>
+  <p class="def-summary">stop a pattern player and free all its synth nodes.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>player</td><td></td><td>PatternPlayer to stop</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Updated PatternPlayer with running=false.</p>
+  </div>
+</div>
+<div class="def-card" id="player-update">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>player-update</h2>
+  </div>
+  <pre class="def-signature">(player-update [player new-pattern])</pre>
+  <p class="def-summary">swap the pattern in a running player.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>player</td><td></td><td>PatternPlayer to update</td></tr>
+    <tr><td>new-pattern</td><td></td><td>replacement pattern</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Updated PatternPlayer.</p>
+  </div>
+</div>
+<div class="def-card" id="player-swap">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>player-swap</h2>
+  </div>
+  <pre class="def-signature">(player-swap [player new-param-map])</pre>
+  <p class="def-summary">atomically swap parameter-map pattern in a player.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>player</td><td></td><td>PatternPlayer to update</td></tr>
+    <tr><td>new-param-map</td><td></td><td>new parameter map pattern</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Updated PatternPlayer.</p>
+  </div>
+</div>
+<div class="def-card" id="pattern-synth">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>pattern-synth</h2>
+  </div>
+  <pre class="def-signature">(pattern-synth [session def-name param-patterns &amp; [bpm time/DEFAULT_BPM])</pre>
+  <p class="def-summary">create a synth driven by pattern parameters at time 0.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>session</td><td></td><td>scscm session</td></tr>
+    <tr><td>def-name</td><td></td><td>SynthDef name</td></tr>
+    <tr><td>param-patterns</td><td></td><td>list of [control-index pattern] tuples</td></tr>
+    <tr><td>bpm</td><td></td><td>tempo (default: time/DEFAULT_BPM)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Node ID of created synth, or nil on failure.</p>
+  </div>
+</div>
+<div class="def-card" id="pattern-synth-player">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>pattern-synth-player</h2>
+  </div>
+  <pre class="def-signature">(pattern-synth-player [session def-name param-patterns bpm duration])</pre>
+  <p class="def-summary">create a player that continuously updates synth parameters.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>session</td><td></td><td>scscm session</td></tr>
+    <tr><td>def-name</td><td></td><td>SynthDef name</td></tr>
+    <tr><td>param-patterns</td><td></td><td>list of [control-index pattern] tuples</td></tr>
+    <tr><td>bpm</td><td></td><td>tempo</td></tr>
+    <tr><td>duration</td><td></td><td>duration in beats</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">PatternPlayer (already started).</p>
+  </div>
+</div>
+<div class="def-card" id="note-_freq">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>note-&gt;freq</h2>
+  </div>
+  <pre class="def-signature">(note-&gt;freq [note])</pre>
+  <p class="def-summary">convert a MIDI note number to frequency in Hz.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>note</td><td></td><td>MIDI note number (0-127; 69 = A4 = 440 Hz)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Frequency in Hz.
+
+  (note-&gt;freq 69)  ; =&gt; 440.0</pre>
+  </div>
+</div>
+<div class="def-card" id="vel-_amp">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>vel-&gt;amp</h2>
+  </div>
+  <pre class="def-signature">(vel-&gt;amp [vel])</pre>
+  <p class="def-summary">convert a MIDI velocity to a linear amplitude value.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>vel</td><td></td><td>MIDI velocity (0-127)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Amplitude in [0, 1].
+
+  (vel-&gt;amp 127)  ; =&gt; 1.0</pre>
+  </div>
+</div>
+<div class="def-card" id="note-pattern">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>note-pattern</h2>
+  </div>
+  <pre class="def-signature">(note-pattern [pitch &amp; [vel (pattern/const 100) gate (pattern/const true)])</pre>
+  <p class="def-summary">produce a synth parameter map from pitch, velocity, and gate patterns.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>pitch</td><td></td><td>IntPattern of MIDI note numbers</td></tr>
+    <tr><td>vel</td><td></td><td>NumPattern for velocity (default: const 100)</td></tr>
+    <tr><td>gate</td><td></td><td>BoolPattern for gate (default: const true)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;map&gt; with :freq, :amp, and :gate keys.
+
+  ((note-pattern (cycle 60 62 64)) 0.0)</pre>
+  </div>
+</div>
+<div class="def-card" id="note-pattern-dur">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>note-pattern-dur</h2>
+  </div>
+  <pre class="def-signature">(note-pattern-dur [pitch vel dur &amp; [gate (pattern/const true)])</pre>
+  <p class="def-summary">note pattern including note duration.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>pitch</td><td></td><td>IntPattern</td></tr>
+    <tr><td>vel</td><td></td><td>NumPattern</td></tr>
+    <tr><td>dur</td><td></td><td>NumPattern for duration in beats</td></tr>
+    <tr><td>gate</td><td></td><td>BoolPattern (default: const true)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;map&gt; with :freq, :amp, :gate, and :dur keys.</p>
+  </div>
+</div>
+<div class="def-card" id="chord-pattern">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>chord-pattern</h2>
+  </div>
+  <pre class="def-signature">(chord-pattern [&amp; note-patterns])</pre>
+  <p class="def-summary">stack multiple note patterns to play chords.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>note-patterns</td><td></td><td>one or more Pattern&lt;map&gt; to play simultaneously</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;vec&lt;map&gt;&gt; with one map per note.</p>
+  </div>
+</div>
+<div class="def-card" id="arp-pattern">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>arp-pattern</h2>
+  </div>
+  <pre class="def-signature">(arp-pattern [chord &amp; [speed 4 direction :up])</pre>
+  <p class="def-summary">arpeggiate a chord pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>chord</td><td></td><td>Pattern&lt;vec&lt;int&gt;&gt; producing MIDI note lists</td></tr>
+    <tr><td>speed</td><td></td><td>notes per beat (default: 4 = 16th notes)</td></tr>
+    <tr><td>direction</td><td></td><td>:up, :down, :up-down, or :random (default: :up)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">IntPattern cycling through chord tones.
+
+  ((arp-pattern my-chord 4 :up) 0.0)</pre>
+  </div>
+</div>
+<div class="def-card" id="drum-pattern">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>drum-pattern</h2>
+  </div>
+  <pre class="def-signature">(drum-pattern [&amp; hits])</pre>
+  <p class="def-summary">build a drum pattern from a list of (time, name, velocity) hits.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>hits</td><td></td><td>list of [time-in-cycle drum-name velocity] tuples</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;map&gt; with :note and :vel keys for the active hit, or {} for silence.</p>
+  </div>
+</div>
+<div class="def-card" id="drum-name-_note">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>drum-name-&gt;note</h2>
+  </div>
+  <pre class="def-signature">(drum-name-&gt;note [name])</pre>
+  <p class="def-summary">map a drum abbreviation to a GM MIDI note number.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>name</td><td></td><td>drum name string (e.g., &quot;bd&quot;, &quot;sd&quot;, &quot;hh&quot;)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">MIDI note number.</p>
+  </div>
+</div>
+<div class="def-card" id="kick">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>kick</h2>
+  </div>
+  <pre class="def-signature">(kick [&amp; times])</pre>
+  <p class="def-summary">kick drum pattern triggered at specific beat positions.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>times</td><td></td><td>beat positions within the cycle to trigger the kick</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;map&gt; with {:note 36 :vel 127} on hits, {} otherwise.
+
+  ((kick 0 1 2 3) 0.0)</pre>
+  </div>
+</div>
+<div class="def-card" id="snare">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>snare</h2>
+  </div>
+  <pre class="def-signature">(snare [&amp; times])</pre>
+  <p class="def-summary">snare drum pattern triggered at specific beat positions.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>times</td><td></td><td>beat positions to trigger the snare</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;map&gt; with {:note 38 :vel 100} on hits, {} otherwise.
+
+  ((snare 1 3) 1.0)</pre>
+  </div>
+</div>
+<div class="def-card" id="hat">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>hat</h2>
+  </div>
+  <pre class="def-signature">(hat [&amp; times])</pre>
+  <p class="def-summary">hi-hat pattern triggered at specific beat positions.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>times</td><td></td><td>beat positions to trigger the hi-hat</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;map&gt; with {:note 42 :vel 80} on hits, {} otherwise.
+
+  ((hat 0 0.5 1 1.5 2 2.5 3 3.5) 0.0)</pre>
+  </div>
+</div>
+<div class="def-card" id="pattern-_osc">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>pattern-&gt;osc</h2>
+  </div>
+  <pre class="def-signature">(pattern-&gt;osc [pattern session node-id time])</pre>
+  <p class="def-summary">send a parameter map pattern to a synth node via OSC.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>pattern</td><td></td><td>Pattern&lt;map&lt;cstr,float&gt;&gt;</td></tr>
+    <tr><td>session</td><td></td><td>scscm session</td></tr>
+    <tr><td>node-id</td><td></td><td>synth node ID</td></tr>
+    <tr><td>time</td><td></td><td>current time in beats</td></tr>
+    </table>
+  </div>
+</div>
+<div class="def-card" id="trigger-pattern">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>trigger-pattern</h2>
+  </div>
+  <pre class="def-signature">(trigger-pattern [session def-name pattern bpm])</pre>
+  <p class="def-summary">create a player that spawns a new synth on each pattern event.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>session</td><td></td><td>scscm session</td></tr>
+    <tr><td>def-name</td><td></td><td>SynthDef name</td></tr>
+    <tr><td>pattern</td><td></td><td>Pattern&lt;map&gt; producing parameters for each new note</td></tr>
+    <tr><td>bpm</td><td></td><td>tempo</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">PatternPlayer (already started).</p>
+  </div>
+</div>
+<div class="def-card" id="freq-pattern">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>freq-pattern</h2>
+  </div>
+  <pre class="def-signature">(freq-pattern [base-freq &amp; [modulation (pattern/const 0)])</pre>
+  <p class="def-summary">frequency pattern with optional additive modulation.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>base-freq</td><td></td><td>base frequency in Hz</td></tr>
+    <tr><td>modulation</td><td></td><td>additive NumPattern (default: const 0)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern for synth frequency.</p>
+  </div>
+</div>
+<div class="def-card" id="amp-pattern">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>amp-pattern</h2>
+  </div>
+  <pre class="def-signature">(amp-pattern [base-amp &amp; [envelope (pattern/const 1)])</pre>
+  <p class="def-summary">amplitude pattern with optional envelope modulation.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>base-amp</td><td></td><td>base amplitude (0-1)</td></tr>
+    <tr><td>envelope</td><td></td><td>multiplicative NumPattern (default: const 1)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern for synth amplitude.</p>
+  </div>
+</div>
+<div class="def-card" id="pan-pattern">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>pan-pattern</h2>
+  </div>
+  <pre class="def-signature">(pan-pattern [base-pan &amp; [modulation (pattern/const 0)])</pre>
+  <p class="def-summary">stereo pan pattern with optional modulation, clamped to [-1, 1].</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>base-pan</td><td></td><td>base pan position (-1 = left, 0 = center, 1 = right)</td></tr>
+    <tr><td>modulation</td><td></td><td>additive NumPattern (default: const 0)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern clamped to [-1, 1].</p>
+  </div>
+</div>
+<div class="def-card" id="synth-params">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>synth-params</h2>
+  </div>
+  <pre class="def-signature">(synth-params [freq-pattern amp-pattern pan-pattern])</pre>
+  <p class="def-summary">combine freq, amp, and pan patterns into a parameter map pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>freq-pattern</td><td></td><td>NumPattern for frequency</td></tr>
+    <tr><td>amp-pattern</td><td></td><td>NumPattern for amplitude</td></tr>
+    <tr><td>pan-pattern</td><td></td><td>NumPattern for pan</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;map&gt; with :freq, :amp, and :pan keys.</p>
+  </div>
+</div>
+<div class="def-card" id="synth-pattern-player">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>synth-pattern-player</h2>
+  </div>
+  <pre class="def-signature">(synth-pattern-player [session def-name param-patterns bpm])</pre>
+  <p class="def-summary">create a player driven by a named parameter map.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>session</td><td></td><td>scscm session</td></tr>
+    <tr><td>def-name</td><td></td><td>SynthDef name</td></tr>
+    <tr><td>param-patterns</td><td></td><td>map of param-name -&gt; pattern</td></tr>
+    <tr><td>bpm</td><td></td><td>tempo</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">PatternPlayer (already started).</p>
+  </div>
+</div>
+</div>
+</div>
+<footer class="site-footer">
+  Auto-generated by <code>tools/gendocs.py</code>.
+  Do not edit by hand -- run <code>just docs</code> to regenerate.
+</footer>
+</body>
+</html>

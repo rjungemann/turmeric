@@ -2,11 +2,26 @@
 ;; Heap-allocated container with independent ownership
 ;; Phase B1: Clone trait infrastructure
 
+;;; Ref -- heap-allocated single-value container with independent ownership.
+;;;
+;;; Since: Phase B1
 (defstruct Ref [value :int])
 
 ;; Create a new Ref from a value (takes ownership of the pointer)
 ;; The caller is responsible for ensuring the value is heap-allocated
 ;; if it needs to outlive the Ref.
+;;; ref-new -- allocate a new Ref cell on the heap containing value.
+;;;
+;;; Parameters:
+;;;   value -- the int64 value to store inside the Ref
+;;;
+;;; Returns:
+;;;   An opaque :int handle (pointer cast) to the new Ref cell.
+;;;
+;;; Example:
+;;;   (def r (ref-new 42))  ; => handle to Ref{42}
+;;;
+;;; Since: Phase B1
 (defn ref-new [value] :int
   ```c
   struct { int64_t value; } *ref = malloc(sizeof(struct { int64_t value; }));
@@ -15,6 +30,18 @@
   ```)
 
 ;; Get the contained value from a Ref
+;;; ref-get -- read the value stored in a Ref cell.
+;;;
+;;; Parameters:
+;;;   r -- opaque Ref handle returned by ref-new
+;;;
+;;; Returns:
+;;;   The int64 value stored inside the Ref.
+;;;
+;;; Example:
+;;;   (ref-get (ref-new 99))  ; => 99
+;;;
+;;; Since: Phase B1
 (defn ref-get [r] :int
   ```c
   struct { int64_t value; } *ref = (struct { int64_t value; } *)(intptr_t)r;
@@ -26,6 +53,12 @@
   ```)
 
 ;; Free a Ref (does NOT free the contained value - shallow free)
+;;; ref-free -- free the Ref cell (shallow; does not free the contained value).
+;;;
+;;; Parameters:
+;;;   r -- opaque Ref handle returned by ref-new
+;;;
+;;; Since: Phase B1
 (defn ref-free [r]
   ```c
   free((void*)(intptr_t)r);
@@ -38,6 +71,9 @@
 ;; A ref<T> is a heap-allocated void* containing an int64_t; cloning it
 ;; allocates a new cell and copies the value (deep clone with independent
 ;; ownership).
+;;; Clone [ref] -- deep-clone a raw ref<T> (TY_REF): allocates a new int64_t cell and copies the value.
+;;;
+;;; Since: Phase B1
 (definstance Clone [ref]
   (clone [x] :int
     ```c
@@ -54,6 +90,9 @@
 ;; Deep clone: allocates a new Ref struct on the heap with a copy of the contained
 ;; int64_t value (independent ownership).
 ;; x has type Ref (struct value) inside the generated C method.
+;;; Clone [Ref] -- deep-clone a Ref struct: allocates a new Ref with an independent copy of the value.
+;;;
+;;; Since: Phase B1
 (definstance Clone [Ref]
   (clone [x] :int
     ```c

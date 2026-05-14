@@ -14,13 +14,13 @@
 ;; ============================================================================
 
 ;; Allocate an OSC message
-;; 
+;;
 ;; @param address_pattern OSC address pattern (e.g., "/s_new")
 ;; @return Pointer to allocated message, or NULL on error
 (extern-c hc_osc_alloc_message [^cstr address_pattern] :ptr<void>)
 
 ;; Free an OSC message
-;; 
+;;
 ;; @param msg Pointer to message to free
 (extern-c hc_osc_free_message [^ptr<void> msg] :void)
 
@@ -44,18 +44,42 @@
 ;; OSC Message Construction
 ;; ============================================================================
 
-;; Create a new OSC message with address
-;; Returns a message that must be sent or freed with osc-free!
+;;; osc-message -- Allocate a new OSC message for the given address.
+;;;
+;;; Parameters:
+;;;   address -- OSC address pattern string (e.g., "/s_new").
+;;;
+;;; Returns:
+;;;   Opaque pointer to the allocated message. Must be freed with osc-free!
+;;;   if not consumed by osc-send!.
+;;;
+;;; Example:
+;;;   (let [m (osc-message "/s_new")] (osc-free! m))
 (defn osc-message [address]
   (ffi/hc_osc_alloc_message address))
 
-;; Free an OSC message
+;;; osc-free! -- Free an OSC message, ignoring nil/null pointers.
+;;;
+;;; Parameters:
+;;;   msg -- Opaque message pointer returned by osc-message.
+;;;
+;;; Example:
+;;;   (osc-free! msg)
 (defn osc-free! [msg]
   (when (not (null? msg))
     (ffi/hc_osc_free_message msg)))
 
-;; Add typed argument to OSC message
-;; Supports int32, float, cstr, and slice<uint8> (blob)
+;;; osc-add! -- Append a typed argument to an OSC message.
+;;;
+;;; Supports int32, float, cstr, and slice<uint8> (blob) argument types.
+;;; Panics if the argument type is unsupported.
+;;;
+;;; Parameters:
+;;;   msg -- OSC message pointer.
+;;;   arg -- Value to append (int32, float, cstr, or slice<uint8>).
+;;;
+;;; Example:
+;;;   (osc-add! msg 440.0)
 (defn osc-add! [msg arg]
   (cond
     (int32? arg) (ffi/hc_osc_message_add_int32 msg arg)
@@ -72,17 +96,23 @@
 ;; ============================================================================
 
 ;; Send an OSC message to scsynth
-;; 
+;;
 ;; @param world_id Target world handle
 ;; @param msg OSC message pointer
 ;; @return 0 on success, -1 on error
 (extern-c hc_osc_send [world_id :int ^ptr<void> msg] :int)
 
-;; Send an OSC message and free it
-;; 
-;; @param world_id Target world handle
-;; @param msg OSC message pointer (will be freed)
-;; @return 0 on success, -1 on error
+;;; osc-send! -- Send an OSC message to a world and free it afterward.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;   msg -- OSC message pointer (will be freed after sending).
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   (osc-send! w msg)
 (defn osc-send! [world_id msg]
   (let [result (hc_osc_send world_id msg)]
     (osc-free! msg)
@@ -92,8 +122,20 @@
 ;; Convenience: Build and Send in One
 ;; ============================================================================
 
-;; Create, populate, and send an OSC message in one call
-;; Uses defer for automatic cleanup on error
+;;; osc-send -- Build and send an OSC message in a single call.
+;;;
+;;; Allocates a message, appends all args, sends it, and frees it via defer.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;   address -- OSC address pattern string.
+;;;   args -- Zero or more arguments to append to the message.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   (osc-send w "/s_new" "mySynth" 1001 2 1)
 (defn osc-send [world_id address & args]
   (let [msg (osc-message address)]
     (defer (osc-free! msg))
@@ -105,8 +147,22 @@
 ;; Scoped Message Building Macro
 ;; ============================================================================
 
-;; Macro for exception-safe message building
-;; Automatically frees message on exit (normal or exceptional)
+;;; with-osc-message -- Build and send an OSC message with automatic cleanup.
+;;;
+;;; Allocates a message bound to msg-var, executes body forms, then sends the
+;;; message to world_id. The message is freed automatically on exit.
+;;;
+;;; Parameters:
+;;;   msg-var -- Symbol to bind the new message pointer to.
+;;;   address -- OSC address pattern string.
+;;;   world_id -- Target world handle.
+;;;   body -- Forms that add arguments or otherwise manipulate the message.
+;;;
+;;; Example:
+;;;   (with-osc-message [m "/n_set"] w
+;;;     (osc-add! m 1001)
+;;;     (osc-add! m 0)
+;;;     (osc-add! m 440.0))
 (defmacro with-osc-message [[msg-var address] world_id & body]
   `(let [~msg-var (osc-message ~address)]
      (defer (osc-free! ~msg-var))
@@ -117,15 +173,33 @@
 ;; Common SCSCM OSC Messages
 ;; ============================================================================
 
-;; Send /ping message to check server responsiveness
+;;; osc-ping -- Send a /ping message to check server responsiveness.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (defn osc-ping [world_id]
   (osc-send world_id "/ping"))
 
-;; Send /status message to get server status
+;;; osc-status -- Send a /status message to query server state.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (defn osc-status [world_id]
   (osc-send world_id "/status"))
 
-;; Send /sync message to synchronize
+;;; osc-sync -- Send a /sync message to synchronize with the server.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (defn osc-sync [world_id]
   (osc-send world_id "/sync"))
 
@@ -133,22 +207,36 @@
 ;; Synth Control Messages
 ;; ============================================================================
 
-;; Send /s_new message to create a new synth instance
-;; 
-;; Parameters:
-;; - synthdef_name: Name of the SynthDef to instantiate
-;; - node_id: Node ID to use (0 for auto-allocate)
-;; - add_action: :add-to-head, :add-to-tail, :add-before, :add-after, :replace
-;; - target: Target node ID (typically ROOT_GROUP_ID = 1)
-;; - args: Control parameter values
+;;; osc-s_new -- Send a /s_new message to instantiate a SynthDef.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;   synthdef_name -- Name of the SynthDef to instantiate.
+;;;   node_id -- Node ID to assign (0 for auto-allocate).
+;;;   add_action -- Placement action keyword or integer.
+;;;   target -- Target node ID (typically ROOT_GROUP_ID = 1).
+;;;   args -- Additional control parameter values.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   (osc-s_new w "mySynth" 1001 2 1)
 (defn osc-s_new [world_id synthdef_name node_id add_action target & args]
   (osc-send world_id "/s_new" synthdef_name node_id add_action target args...))
 
-;; Send /n_set message to set control parameters on a synth
-;; 
-;; Parameters:
-;; - node_id: Target synth node ID
-;; - param-value-pairs: Alternating parameter name and value pairs
+;;; osc-n_set -- Send a /n_set message to update control parameters on a node.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;   node_id -- Target synth node ID.
+;;;   param-value-pairs -- Alternating parameter name and value pairs.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   (osc-n_set w 1001 "freq" 880.0 "amp" 0.5)
 (defn osc-n_set [world_id node_id & param-value-pairs]
   (let [msg (osc-message "/n_set")]
     (defer (osc-free! msg))
@@ -159,15 +247,36 @@
         (osc-add! msg value)))
     (hc_osc_send world_id msg)))
 
-;; Send /n_free message to free a synth node
+;;; osc-n_free -- Send a /n_free message to stop and remove a node.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;   node_id -- Node ID to free.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (defn osc-n_free [world_id node_id]
   (osc-send world_id "/n_free" node_id))
 
-;; Send /n_run message to start a synth running
+;;; osc-n_run -- Send a /n_run message to start or pause a node.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;   node_id -- Target node ID.
+;;;   run? -- true to run, false to pause.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (defn osc-n_run [world_id node_id run?]
   (osc-send world_id "/n_run" node_id (if run? 1 0)))
 
-;; Send /n_free_all message to free all nodes
+;;; osc-n_free_all -- Send a /n_free_all message to clear every node.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (defn osc-n_free_all [world_id]
   (osc-send world_id "/n_free_all"))
 
@@ -175,16 +284,30 @@
 ;; Group Control Messages
 ;; ============================================================================
 
-;; Send /g_new message to create a new group
-;; 
-;; Parameters:
-;; - node_id: Node ID to use (0 for auto-allocate)
-;; - add_action: Where to add the group
-;; - target: Target node ID
+;;; osc-g_new -- Send a /g_new message to create a new group node.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;   node_id -- Node ID to assign (0 for auto-allocate).
+;;;   add_action -- Placement action.
+;;;   target -- Target node ID.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   (osc-g_new w 100 2 1)
 (defn osc-g_new [world_id node_id add_action target]
   (osc-send world_id "/g_new" node_id add_action target))
 
-;; Send /g_free message to free a group
+;;; osc-g_free -- Send a /g_free message to free a group node.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;   node_id -- Group node ID to free.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (defn osc-g_free [world_id node_id]
   (osc-send world_id "/g_free" node_id))
 
@@ -192,15 +315,36 @@
 ;; SynthDef Management Messages
 ;; ============================================================================
 
-;; Send /d_load message to load a SynthDef
+;;; osc-d_load -- Send a /d_load message to load a SynthDef by name.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;   synthdef_name -- SynthDef name or file path.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (defn osc-d_load [world_id synthdef_name]
   (osc-send world_id "/d_load" synthdef_name))
 
-;; Send /d_free message to unload a SynthDef
+;;; osc-d_free -- Send a /d_free message to unload a SynthDef.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;   synthdef_name -- Name of the SynthDef to remove.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (defn osc-d_free [world_id synthdef_name]
   (osc-send world_id "/d_free" synthdef_name))
 
-;; Send /d_recv message to receive SynthDef notifications
+;;; osc-d_recv -- Send a /d_recv message to toggle SynthDef-receive notifications.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;   on? -- true to enable, false to disable.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (defn osc-d_recv [world_id on?]
   (osc-send world_id "/d_recv" (if on? 1 0)))
 
@@ -208,11 +352,24 @@
 ;; Audio Control Messages
 ;; ============================================================================
 
-;; Send /notify message
+;;; osc-notify -- Send a /notify message to toggle server notifications.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;   on? -- true to enable, false to disable.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (defn osc-notify [world_id on?]
   (osc-send world_id "/notify" (if on? 1 0)))
 
-;; Send /clearSched message to clear the scheduler
+;;; osc-clear-sched -- Send a /clearSched message to flush the scheduler queue.
+;;;
+;;; Parameters:
+;;;   world_id -- Target world handle.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (defn osc-clear-sched [world_id]
   (osc-send world_id "/clearSched"))
 
@@ -220,19 +377,55 @@
 ;; Utility Functions
 ;; ============================================================================
 
-;; Convert MIDI note to frequency (Hz)
+;;; midi->hz -- Convert a MIDI note number to frequency in Hz.
+;;;
+;;; Parameters:
+;;;   note -- MIDI note number (0-127; 69 = A4 = 440 Hz).
+;;;
+;;; Returns:
+;;;   Frequency in Hz as a float.
+;;;
+;;; Example:
+;;;   (midi->hz 69)  ; => 440.0
 (defn midi->hz [note]
   (* 440.0 (math/pow 2.0 (/ (- note 69.0) 12.0))))
 
-;; Convert velocity (0-127) to amplitude (0-1)
+;;; vel->amp -- Convert a MIDI velocity to a linear amplitude value.
+;;;
+;;; Parameters:
+;;;   vel -- MIDI velocity (0-127).
+;;;
+;;; Returns:
+;;;   Amplitude in the range [0.0, 1.0].
+;;;
+;;; Example:
+;;;   (vel->amp 127)  ; => 1.0
 (defn vel->amp [vel]
   (/ vel 127.0))
 
-;; Convert dB to amplitude
+;;; db->amp -- Convert a decibel level to linear amplitude.
+;;;
+;;; Parameters:
+;;;   db -- Level in decibels (0 dB = amplitude 1.0).
+;;;
+;;; Returns:
+;;;   Linear amplitude as a float.
+;;;
+;;; Example:
+;;;   (db->amp 0.0)  ; => 1.0
 (defn db->amp [db]
   (math/pow 10.0 (/ db 20.0)))
 
-;; Convert amplitude to dB
+;;; amp->db -- Convert a linear amplitude to decibels.
+;;;
+;;; Parameters:
+;;;   amp -- Linear amplitude (must be > 0; returns -90.0 for zero).
+;;;
+;;; Returns:
+;;;   Level in decibels.
+;;;
+;;; Example:
+;;;   (amp->db 1.0)  ; => 0.0
 (defn amp->db [amp]
   (if (> amp 0)
     (* 20.0 (math/log10 amp))

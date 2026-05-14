@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tur/tur/params | Turmeric API</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand">turmeric</span>
+  <nav>
+    <a href="index.html">API Docs</a>
+    <a href="../autodoc-plan.md">Plan</a>
+  </nav>
+</header>
+<div class="page-layout">
+<div class="sidebar">
+  <h3>Exported</h3>
+  <ul>
+    <li><a href="#warp-value">warp-value</a></li>
+    <li><a href="#unwarp-value">unwarp-value</a></li>
+    <li><a href="#clamp-value">clamp-value</a></li>
+    <li><a href="#param-_osc">param-&gt;osc</a></li>
+    <li><a href="#osc-_param">osc-&gt;param</a></li>
+    <li><a href="#param-spec">param-spec</a></li>
+    <li><a href="#synthdef-spec">synthdef-spec</a></li>
+    <li><a href="#find-param">find-param</a></li>
+    <li><a href="#find-param-index">find-param-index</a></li>
+    <li><a href="#SynthController">SynthController</a></li>
+    <li><a href="#synth-controller-new">synth-controller-new</a></li>
+    <li><a href="#synth-controller-free">synth-controller-free</a></li>
+    <li><a href="#ctrl-set">ctrl-set</a></li>
+    <li><a href="#ctrl-set-multi">ctrl-set-multi</a></li>
+    <li><a href="#ctrl-get">ctrl-get</a></li>
+    <li><a href="#midi-_hz">midi-&gt;hz</a></li>
+    <li><a href="#vel-_amp">vel-&gt;amp</a></li>
+    <li><a href="#db-_amp">db-&gt;amp</a></li>
+    <li><a href="#amp-_db">amp-&gt;db</a></li>
+  </ul>
+</div>
+<div class="content">
+  <div class="module-heading">
+    <h1>tur/params</h1>
+    <div class="module-path">stdlib/params.tur</div>
+  </div>
+<div class="def-card" id="warp-value">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>warp-value</h2>
+  </div>
+  <pre class="def-signature">(warp-value [spec value])</pre>
+  <p class="def-summary">Map a user-space value to OSC range using the spec&#x27;s warp type.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>spec</td><td></td><td>A ParamSpec map containing at least :warp.</td></tr>
+    <tr><td>value</td><td></td><td>Input value in user space.</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Warped value suitable for sending to scsynth.
+
+  (warp-value PARAM_FREQ 440.0)  ; =&gt; 440.0 (exp warp applies octave formula)</pre>
+  </div>
+</div>
+<div class="def-card" id="unwarp-value">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>unwarp-value</h2>
+  </div>
+  <pre class="def-signature">(unwarp-value [spec value])</pre>
+  <p class="def-summary">Map an OSC value back to user space using the spec&#x27;s warp type.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>spec</td><td></td><td>A ParamSpec map containing at least :warp.</td></tr>
+    <tr><td>value</td><td></td><td>Value received from scsynth in OSC space.</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Value in user space (inverse warp of warp-value).
+
+  (unwarp-value PARAM_FREQ (warp-value PARAM_FREQ 440.0))  ; =&gt; 440.0</pre>
+  </div>
+</div>
+<div class="def-card" id="clamp-value">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>clamp-value</h2>
+  </div>
+  <pre class="def-signature">(clamp-value [spec value])</pre>
+  <p class="def-summary">Clamp a value to the min/max range specified in a ParamSpec.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>spec</td><td></td><td>A ParamSpec map with :min and :max fields.</td></tr>
+    <tr><td>value</td><td></td><td>Value to clamp.</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">The value clamped to [spec.min, spec.max].
+
+  (clamp-value PARAM_AMP 1.5)  ; =&gt; 1.0</pre>
+  </div>
+</div>
+<div class="def-card" id="param-_osc">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>param-&gt;osc</h2>
+  </div>
+  <pre class="def-signature">(param-&gt;osc [spec value])</pre>
+  <p class="def-summary">Clamp and warp a user-space value ready for scsynth.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>spec</td><td></td><td>A ParamSpec map.</td></tr>
+    <tr><td>value</td><td></td><td>User-space value.</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">OSC-ready float (clamped first, then warped).
+
+  (param-&gt;osc PARAM_AMP 0.8)  ; =&gt; 0.8</pre>
+  </div>
+</div>
+<div class="def-card" id="osc-_param">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>osc-&gt;param</h2>
+  </div>
+  <pre class="def-signature">(osc-&gt;param [spec value])</pre>
+  <p class="def-summary">Unwarp and clamp an OSC value back to user space.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>spec</td><td></td><td>A ParamSpec map.</td></tr>
+    <tr><td>value</td><td></td><td>OSC value from scsynth.</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">User-space float clamped to the spec&#x27;s original range.
+
+  (osc-&gt;param PARAM_AMP 0.8)  ; =&gt; 0.8</pre>
+  </div>
+</div>
+<div class="def-card" id="param-spec">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>param-spec</h2>
+  </div>
+  <pre class="def-signature">(param-spec [name default &amp; [min 0.0 max 1.0 unit &quot;&quot; warp :linear])</pre>
+  <p class="def-summary">Create a parameter specification with common defaults.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>name</td><td></td><td>Parameter name string (must match the SynthDef control name).</td></tr>
+    <tr><td>default</td><td></td><td>Default value.</td></tr>
+    <tr><td>min</td><td></td><td>Minimum value (default: 0.0).</td></tr>
+    <tr><td>max</td><td></td><td>Maximum value (default: 1.0).</td></tr>
+    <tr><td>unit</td><td></td><td>Unit label string, e.g. &quot;Hz&quot;, &quot;dB&quot;, &quot;sec&quot; (default: &quot;&quot;).</td></tr>
+    <tr><td>warp</td><td></td><td>Warp type keyword: :linear, :exp, :log, :db, :db2 (default: :linear).</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">A ParamSpec map.
+
+  (param-spec &quot;freq&quot; 440.0 20.0 20000.0 &quot;Hz&quot; :exp)</pre>
+  </div>
+</div>
+<div class="def-card" id="synthdef-spec">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>synthdef-spec</h2>
+  </div>
+  <pre class="def-signature">(synthdef-spec [synthdef_name param-specs])</pre>
+  <p class="def-summary">Assemble a SynthDef specification from a list of ParamSpecs.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>synthdef_name</td><td></td><td>SynthDef name (currently unused; reserved for future metadata).</td></tr>
+    <tr><td>param-specs</td><td></td><td>Vector of ParamSpec maps describing each control.</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">SynthDefSpec (currently just the param-specs vector).
+
+  (synthdef-spec &quot;mySynth&quot; [PARAM_FREQ PARAM_AMP])</pre>
+  </div>
+</div>
+<div class="def-card" id="find-param">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>find-param</h2>
+  </div>
+  <pre class="def-signature">(find-param [spec param_name])</pre>
+  <p class="def-summary">Find a ParamSpec by name within a SynthDefSpec.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>spec</td><td></td><td>SynthDefSpec (vector of ParamSpec maps).</td></tr>
+    <tr><td>param_name</td><td></td><td>Parameter name to search for.</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">The matching ParamSpec map, or nil if not found.
+
+  (find-param SIN_SYNTH_SPEC &quot;freq&quot;)</pre>
+  </div>
+</div>
+<div class="def-card" id="find-param-index">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>find-param-index</h2>
+  </div>
+  <pre class="def-signature">(find-param-index [spec param_name])</pre>
+  <p class="def-summary">Get the zero-based index of a parameter by name.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>spec</td><td></td><td>SynthDefSpec (vector of ParamSpec maps).</td></tr>
+    <tr><td>param_name</td><td></td><td>Parameter name to search for.</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Integer index of the parameter, or nil if not found.
+
+  (find-param-index SIN_SYNTH_SPEC &quot;amp&quot;)  ; =&gt; 1</pre>
+  </div>
+</div>
+<div class="def-card" id="SynthController">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defstruct">defstruct</span>
+    <h2>SynthController</h2>
+  </div>
+  <pre class="def-signature">(defstruct SynthController [])</pre>
+</div>
+<div class="def-card" id="synth-controller-new">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>synth-controller-new</h2>
+  </div>
+  <pre class="def-signature">(synth-controller-new [session synthdef-name synthdef-spec &amp; [params {}])</pre>
+  <p class="def-summary">Create a synth and wrap it in a typed controller.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>session</td><td></td><td>Parent ScscmSession.</td></tr>
+    <tr><td>synthdef-name</td><td></td><td>Name of the SynthDef to instantiate.</td></tr>
+    <tr><td>synthdef-spec</td><td></td><td>SynthDefSpec listing this SynthDef&#x27;s parameters.</td></tr>
+    <tr><td>params</td><td></td><td>Optional initial values as a name -&gt; value map.</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">A SynthController map. Panics if the synth cannot be created.
+
+  (synth-controller-new sess &quot;mySynth&quot; SIN_SYNTH_SPEC {&quot;freq&quot; 880.0})</pre>
+  </div>
+</div>
+<div class="def-card" id="synth-controller-free">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>synth-controller-free</h2>
+  </div>
+  <pre class="def-signature">(synth-controller-free [ctrl])</pre>
+  <p class="def-summary">Free the synth node owned by a controller.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>ctrl</td><td></td><td>A SynthController map.</td></tr>
+    </table>
+  </div>
+</div>
+<div class="def-card" id="ctrl-set">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>ctrl-set</h2>
+  </div>
+  <pre class="def-signature">(ctrl-set [ctrl param_name value])</pre>
+  <p class="def-summary">Set a named parameter on a synth controller (with warping).</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>ctrl</td><td></td><td>A SynthController map.</td></tr>
+    <tr><td>param_name</td><td></td><td>Name of the parameter to set.</td></tr>
+    <tr><td>value</td><td></td><td>User-space value (will be clamped and warped before sending).</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">true if the parameter was found and set, false otherwise.
+
+  (ctrl-set ctrl &quot;freq&quot; 880.0)</pre>
+  </div>
+</div>
+<div class="def-card" id="ctrl-set-multi">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>ctrl-set-multi</h2>
+  </div>
+  <pre class="def-signature">(ctrl-set-multi [ctrl param-map])</pre>
+  <p class="def-summary">Set multiple named parameters on a controller.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>ctrl</td><td></td><td>A SynthController map.</td></tr>
+    <tr><td>param-map</td><td></td><td>Map of parameter name -&gt; user-space value.</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Number of parameters successfully set.
+
+  (ctrl-set-multi ctrl {&quot;freq&quot; 880.0 &quot;amp&quot; 0.6})  ; =&gt; 2</pre>
+  </div>
+</div>
+<div class="def-card" id="ctrl-get">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>ctrl-get</h2>
+  </div>
+  <pre class="def-signature">(ctrl-get [ctrl param_name])</pre>
+  <p class="def-summary">Get the current value for a named parameter (returns spec default).</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>ctrl</td><td></td><td>A SynthController map.</td></tr>
+    <tr><td>param_name</td><td></td><td>Parameter name to look up.</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Default value from the ParamSpec, or nil if the parameter is not found.
+
+  (ctrl-get ctrl &quot;freq&quot;)  ; =&gt; 440.0 (spec default)</pre>
+  </div>
+</div>
+<div class="def-card" id="midi-_hz">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>midi-&gt;hz</h2>
+  </div>
+  <pre class="def-signature">(midi-&gt;hz [note])</pre>
+  <p class="def-summary">Convert a MIDI note number to frequency in Hz.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>note</td><td></td><td>MIDI note number (69 = A4 = 440 Hz).</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Frequency in Hz as a float.
+
+  (midi-&gt;hz 69)  ; =&gt; 440.0</pre>
+  </div>
+</div>
+<div class="def-card" id="vel-_amp">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>vel-&gt;amp</h2>
+  </div>
+  <pre class="def-signature">(vel-&gt;amp [vel])</pre>
+  <p class="def-summary">Convert a MIDI velocity to linear amplitude.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>vel</td><td></td><td>MIDI velocity (0-127).</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Amplitude in [0.0, 1.0].
+
+  (vel-&gt;amp 64)  ; =&gt; ~0.504</pre>
+  </div>
+</div>
+<div class="def-card" id="db-_amp">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>db-&gt;amp</h2>
+  </div>
+  <pre class="def-signature">(db-&gt;amp [db])</pre>
+  <p class="def-summary">Convert a decibel level to linear amplitude.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>db</td><td></td><td>Level in decibels.</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Linear amplitude as a float.
+
+  (db-&gt;amp -6.0)  ; =&gt; ~0.501</pre>
+  </div>
+</div>
+<div class="def-card" id="amp-_db">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>amp-&gt;db</h2>
+  </div>
+  <pre class="def-signature">(amp-&gt;db [amp])</pre>
+  <p class="def-summary">Convert linear amplitude to decibels.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>amp</td><td></td><td>Linear amplitude (0.0 or below returns -90.0).</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Level in decibels.
+
+  (amp-&gt;db 0.5)  ; =&gt; ~-6.02</pre>
+  </div>
+</div>
+</div>
+</div>
+<footer class="site-footer">
+  Auto-generated by <code>tools/gendocs.py</code>.
+  Do not edit by hand -- run <code>just docs</code> to regenerate.
+</footer>
+</body>
+</html>

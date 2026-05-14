@@ -1,5 +1,5 @@
 ;; Signal Processing Envelopes
-;; 
+;;
 ;; This module provides envelope generators for signal processing.
 ;; Envelopes control the amplitude or other parameters of a signal over time.
 
@@ -9,77 +9,58 @@
 ;; ADSR Envelope
 ;; =============================================================================
 
-;; ADSR (Attack, Decay, Sustain, Release) envelope parameters
+;;; ADSRParams -- parameters for an ADSR envelope.
 (defstruct ADSRParams
   [attack  : Sample  ;; Attack time in seconds
    decay   : Sample  ;; Decay time in seconds
    sustain : Sample  ;; Sustain level (0.0 to 1.0)
    release : Sample]) ;; Release time in seconds
 
-;; ADSR Envelope State
-;; Tracks the current state of the envelope
+;;; ADSRState -- runtime state for a running ADSR envelope.
 (defstruct ADSRState
   [level : Sample   ;; Current output level (0.0 to 1.0)
    phase : int      ;; Current phase: 0=off, 1=attack, 2=decay, 3=sustain, 4=release
    time  : Sample]) ;; Time elapsed in current phase
 
-;; ADSR Envelope
-;; 
-;; Takes a gate signal (boolean) and produces an envelope signal (0.0 to 1.0)
-;; 
-;; The gate signal controls when the note is on (true) or off (false)
-;; When gate transitions from false to true: start attack phase
-;; When gate transitions from true to false: start release phase
-;; 
-;; Note: The gate signal should be a step function that changes at specific times
-;; For use with SF, we pass a Signal of bool as the gate
+;;; adsr -- stateless ADSR placeholder (use adsr-sf for stateful evaluation).
+;;;
+;;; Parameters:
+;;;   params   -- ADSRParams controlling shape
+;;;   gate-sig -- Signal<bool> controlling note on/off
+;;;
+;;; Returns:
+;;;   Signal<Sample> (always errors -- use adsr-sf instead).
 (defn adsr [params : ADSRParams] [gate-sig : (Signal bool)]
   : (Signal Sample)
   (fn [t]
     (let [;; In a real implementation, we'd need to track state over time
           ;; For now, we'll use a simplified approach that works for
           ;; a single note event
-          
+
           ;; Check gate at current time
           gate-on (gate-sig t)
-          
+
           ;; Simplified: assume note starts at t=0 and gate goes off at some time
           ;; For a proper implementation, we need mutable state
-          
+
           ;; For now, implement a basic version without state that
           ;; works for a single note event starting at t=0
-          
+
           ;; This is a placeholder - see adsr-sf below for stateful version
           0.0]
       (error "adsr: use adsr-sf for stateful version"))))
 
-;; Stateful ADSR Envelope as an SF
-;; 
-;; This version properly tracks state over time using mutable references
-;; The input is ignored (unit type), and the gate is passed as a separate parameter
-;; For use in signal processing, create the envelope with fixed parameters
-;; and then apply it to signals
-;;
-;; Actually, we want: gate -> Sample
-;; So the SF type is: SF (Signal bool) (Signal Sample)
-;; But that's not quite right for composition...
-;;
-;; Better approach: the envelope is an SF that takes () as input and produces Sample
-;; but internally listens to a gate signal. However, this doesn't compose well.
-;;
-;; Standard approach in arrow-based DSP: the gate is part of the input signal
-;; So: ADSR :: SF (bool, ()) Sample
-;; But we want to separate the gate from other inputs.
-;;
-;; Solution: Use a closure that captures the gate signal
-;; Or better: make the gate a parameter at construction time
-;;
-;; For simplicity, we'll make the gate a constant for now, and provide
-;; a version that can change over time.
-
-;; ADSR Envelope SF with fixed gate
-;; This creates an envelope that starts at t=0 and runs through its phases
-;; gate-duration: how long the gate is on (in seconds)
+;;; adsr-fixed -- piecewise-linear ADSR computed analytically for a single note.
+;;;
+;;; Parameters:
+;;;   params        -- ADSRParams controlling shape
+;;;   gate-duration -- how long the gate stays on in seconds
+;;;
+;;; Returns:
+;;;   SF<(),Sample> producing the ADSR envelope starting at t=0.
+;;;
+;;; Example:
+;;;   ((adsr-fixed (ADSRParams 0.01 0.1 0.7 0.3) 0.5) (constant ()))
 (defn adsr-fixed [params : ADSRParams] [gate-duration : Sample]
   : (SF () Sample)
   (fn [_sig]
@@ -88,66 +69,73 @@
         ;; Attack phase
         (<= t (. params attack))
         (/ t (. params attack))
-        
+
         ;; Decay phase
         (<= t (+ (. params attack) (. params decay)))
         (let [decay-time (- t (. params attack))]
           (+ 1.0 (* (- (. params sustain) 1.0) (/ decay-time (. params decay)))))
-        
+
         ;; Sustain phase (while gate is on)
         (<= t gate-duration)
         (. params sustain)
-        
+
         ;; Release phase
         (<= t (+ gate-duration (. params release)))
         (let [release-time (- t gate-duration)]
           (* (. params sustain) (- 1.0 (/ release-time (. params release)))))
-        
+
         ;; Off
         :else 0.0))))
 
-;; Stateful ADSR Envelope SF
-;; This version tracks the gate signal and properly handles state transitions
-;; The input signal is a Tuple of () and bool (the gate)
+;;; adsr-sf -- stateful ADSR envelope driven by a gate-and-unit product signal.
+;;;
+;;; Parameters:
+;;;   params -- ADSRParams controlling shape
+;;;
+;;; Returns:
+;;;   SF<Tuple () bool, Sample> that responds to gate transitions.
+;;;
+;;; Example:
+;;;   ((adsr-sf (ADSRParams 0.01 0.1 0.7 0.3)) gate-unit-sig)
 (defn adsr-sf [params : ADSRParams]
   : (SF (Tuple () bool) Sample)
   (fn [sig-gate]
     (let [state-ref (ref (ADSRState 0.0 0 0.0))  ;; Start in off state
           prev-gate-ref (ref false)]
-      
+
       (fn [t]
         (let [gate (second (sig-gate t))
               prev-gate @prev-gate-ref
               state @state-ref]
-          
+
           (when (not= gate prev-gate)
             ;; Gate changed - transition between states
             (cond
               ;; Gate turned on: start attack
               (and gate (not prev-gate))
               (set! state-ref (ADSRState 0.0 1 0.0))
-              
+
               ;; Gate turned off: start release
               (and (not gate) prev-gate)
               (set! state-ref (ADSRState (. state level) 4 0.0))
-              
+
               :else nil)
             (set! prev-gate-ref gate))
-          
+
           (let [new-state @state-ref
                 dt 0.001]  ;; Sample period (1ms)
-            
+
             (case (. new-state phase)
               ;; Off state
               0 0.0
-              
+
               ;; Attack phase
               1
               (let [new-level (/ (+ (. new-state time) dt) (. params attack))]
                 (if (>= new-level 1.0)
                   (do (set! state-ref (ADSRState 1.0 2 0.0)) 1.0)
                   (do (set! state-ref (ADSRState new-level 1 (+ (. new-state time) dt))) new-level)))
-              
+
               ;; Decay phase
               2
               (let [sustain-diff (- 1.0 (. params sustain))
@@ -156,10 +144,10 @@
                 (if (>= decay-progress 1.0)
                   (do (set! state-ref (ADSRState (. params sustain) 3 0.0)) (. params sustain))
                   (do (set! state-ref (ADSRState new-level 2 (+ (. new-state time) dt))) new-level)))
-              
+
               ;; Sustain phase
               3 (. new-state level)
-              
+
               ;; Release phase
               4
               (let [release-progress (/ (+ (. new-state time) dt) (. params release))
@@ -167,11 +155,19 @@
                 (if (>= release-progress 1.0)
                   (do (set! state-ref (ADSRState 0.0 0 0.0)) 0.0)
                   (do (set! state-ref (ADSRState new-level 4 (+ (. new-state time) dt))) new-level)))
-              
+
               :else 0.0)))))))
 
-;; Simplified ADSR that takes gate as a separate signal
-;; This is more composable: we create an envelope generator, then multiply by it
+;;; adsr-gen -- simplified stateful ADSR driven directly by a bool gate signal.
+;;;
+;;; Parameters:
+;;;   params -- ADSRParams controlling shape
+;;;
+;;; Returns:
+;;;   SF<bool,Sample> that runs through ADSR phases in response to the gate.
+;;;
+;;; Example:
+;;;   ((adsr-gen (ADSRParams 0.01 0.1 0.7 0.3)) gate-bool-sig)
 (defn adsr-gen [params : ADSRParams]
   : (SF bool Sample)
   (fn [sig-gate]
@@ -180,18 +176,18 @@
       (fn [t]
         (let [gate (sig-gate t)
               prev-gate @prev-gate-ref]
-          
+
           (when (not= gate prev-gate)
             (cond
               (and gate (not prev-gate))
               (set! state-ref (ADSRState 0.0 1 0.0))
-              
+
               (and (not gate) prev-gate)
               (set! state-ref (ADSRState (. @state-ref level) 4 0.0))
-              
+
               :else nil)
             (set! prev-gate-ref gate))
-          
+
           (let [state @state-ref
                 dt 0.001]
             (case (. state phase)
@@ -221,35 +217,43 @@
 ;; Other Envelope Types
 ;; =============================================================================
 
-;; Linear envelope (simple attack-release)
-;; attack: attack time in seconds
-;; release: release time in seconds
+;;; linear-envelope -- simple attack-release envelope driven by a bool gate.
+;;;
+;;; Parameters:
+;;;   attack  -- attack time in seconds
+;;;   release -- release time in seconds
+;;;
+;;; Returns:
+;;;   SF<bool,Sample> ramping up during gate-on, down after gate-off.
+;;;
+;;; Example:
+;;;   ((linear-envelope 0.05 0.2) gate-sig)
 (defn linear-envelope [attack : Sample] [release : Sample]
   : (SF bool Sample)
   (fn [sig-gate]
     (let [state-ref (ref 0.0)  ;; Current level
           phase-ref (ref 0)     ;; 0 = off/attack, 1 = release
           time-ref (ref 0.0)]    ;; Time in current phase
-      
+
       (fn [t]
         (let [gate (sig-gate t)
               prev-phase @phase-ref]
-          
+
           ;; Check for gate transitions
           (when (and gate (= prev-phase 0) (< @state-ref 1.0))
             ;; Stay in attack
             nil)
-          
+
           (when (and gate (= prev-phase 1))
             ;; Was in release, gate back on - go to attack
             (set! phase-ref 0)
             (set! time-ref 0.0))
-          
+
           (when (and (not gate) (= prev-phase 0) (> @state-ref 0.0))
             ;; Was in attack/sustain, gate off - go to release
             (set! phase-ref 1)
             (set! time-ref 0.0))
-          
+
           (let [dt 0.001
                 new-time (+ @time-ref dt)]
             (case @phase-ref
@@ -259,19 +263,27 @@
                 (if (>= new-level 1.0)
                   (do (set! state-ref 1.0) 1.0)
                   (do (set! state-ref new-level) new-level)))
-              
+
               1 ;; Release
               (let [new-level (* @state-ref (- 1.0 (/ new-time release)))]
                 (set! time-ref new-time)
                 (if (<= new-level 0.0)
                   (do (set! state-ref 0.0) (set! phase-ref 0) 0.0)
                   (do (set! state-ref new-level) new-level)))
-              
+
               :else 0.0)))))))
 
-;; Exponential envelope
-;; attack-rate: rate at which envelope approaches 1.0 (0.0 to 1.0)
-;; release-rate: rate at which envelope approaches 0.0 (0.0 to 1.0)
+;;; exp-envelope -- exponential approach envelope for smooth attack and release.
+;;;
+;;; Parameters:
+;;;   attack-rate  -- approach rate towards 1.0 during gate-on (0.0 to 1.0)
+;;;   release-rate -- approach rate towards 0.0 during gate-off (0.0 to 1.0)
+;;;
+;;; Returns:
+;;;   SF<bool,Sample> with exponential attack and release curves.
+;;;
+;;; Example:
+;;;   ((exp-envelope 0.05 0.02) gate-sig)
 (defn exp-envelope [attack-rate : Sample] [release-rate : Sample]
   : (SF bool Sample)
   (fn [sig-gate]
@@ -293,17 +305,40 @@
 ;; Per-note Envelopes
 ;; =============================================================================
 
-;; Simple percussion envelope (fast attack, fast release)
+;;; percussive-envelope -- fast attack / fast release envelope for percussion.
+;;;
+;;; Parameters:
+;;;   attack  -- attack time in seconds
+;;;   release -- release time in seconds
+;;;
+;;; Returns:
+;;;   SF<bool,Sample>.
 (defn percussive-envelope [attack : Sample] [release : Sample]
   : (SF bool Sample)
   (linear-envelope attack release))
 
-;; Pad envelope (slow attack, slow release, high sustain)
+;;; pad-envelope -- slow attack / high sustain / slow release envelope.
+;;;
+;;; Parameters:
+;;;   attack  -- attack time in seconds
+;;;   decay   -- decay time in seconds
+;;;   sustain -- sustain level (0.0 to 1.0)
+;;;   release -- release time in seconds
+;;;
+;;; Returns:
+;;;   SF<bool,Sample>.
 (defn pad-envelope [attack : Sample] [decay : Sample] [sustain : Sample] [release : Sample]
   : (SF bool Sample)
   (adsr-gen (ADSRParams attack decay sustain release)))
 
-;; Pluck envelope (fast attack, slow release, no sustain)
+;;; pluck-envelope -- fast attack / slow decay envelope for plucked sounds.
+;;;
+;;; Parameters:
+;;;   attack  -- attack time in seconds
+;;;   release -- release time in seconds
+;;;
+;;; Returns:
+;;;   SF<bool,Sample>.
 (defn pluck-envelope [attack : Sample] [release : Sample]
   : (SF bool Sample)
   (linear-envelope attack release))
@@ -312,11 +347,18 @@
 ;; LFO (Low Frequency Oscillator) Envelopes
 ;; =============================================================================
 
-;; LFO with envelope
-;; Can be used for vibrato, tremolo, filter modulation, etc.
-;; freq: LFO frequency in Hz
-;; depth: LFO depth (0.0 to 1.0)
-;; env: envelope to apply to LFO depth
+;;; lfo-sine -- sine LFO with depth shaped by an envelope.
+;;;
+;;; Parameters:
+;;;   freq   -- LFO frequency in Hz
+;;;   depth  -- maximum LFO depth (0.0 to 1.0)
+;;;   env-sf -- envelope to shape LFO depth over time
+;;;
+;;; Returns:
+;;;   SF<Tuple bool (), Sample> producing the modulated LFO signal.
+;;;
+;;; Example:
+;;;   ((lfo-sine 5.0 0.3 (adsr-gen params)) gate-unit-sig)
 (defn lfo-sine [freq : Sample] [depth : Sample] [env-sf : (SF bool Sample)]
   : (SF (Tuple bool ()) Sample)
   (fn [sig-input]
@@ -330,25 +372,36 @@
 ;; Envelope Utility Functions
 ;; =============================================================================
 
-;; Apply envelope to a signal
-;; env-sf: envelope generator (SF bool Sample)
-;; sig: input signal (SF () Sample)
-;; gate: gate signal (SF () bool)
-;; Returns: envelopes signal
+;;; apply-envelope -- multiply a signal by an envelope derived from a gate.
+;;;
+;;; Parameters:
+;;;   env-sf -- envelope generator SF<bool,Sample>
+;;;   sig    -- source signal SF<(),Sample>
+;;;   gate   -- gate signal SF<(),bool>
+;;;
+;;; Returns:
+;;;   SF<(),Sample> with envelope applied multiplicatively.
 (defn apply-envelope [env-sf : (SF bool Sample)] [sig : (SF () Sample)] [gate : (SF () bool)]
   : (SF () Sample)
   (let [;; Combine gate and signal input
-        combined (split-sf (arr (fn [_] ()) gate))
+        combined (split-sf (arr (fn [_] ())) gate)
         env (>>> combined env-sf)
         ;; Multiply signal by envelope
         result (>>> (split-sf sig env) (arr (fn [[s e]] (* s e))))]
     result))
 
-;; Trigger envelope with a single impulse
-;; env-sf: envelope generator
-;; trigger-time: time at which to trigger the envelope
-;; duration: how long the gate stays on
-;; Returns: envelope signal
+;;; trigger-envelope -- fire an envelope once at a specified time.
+;;;
+;;; Parameters:
+;;;   env-sf       -- envelope generator SF<bool,Sample>
+;;;   trigger-time -- beat/time at which gate turns on
+;;;   duration     -- how long the gate stays on
+;;;
+;;; Returns:
+;;;   SF<(),Sample> that triggers the envelope once.
+;;;
+;;; Example:
+;;;   ((trigger-envelope (adsr-gen params) 0.0 0.5) (constant ()))
 (defn trigger-envelope [env-sf : (SF bool Sample)] [trigger-time : Sample] [duration : Sample]
   : (SF () Sample)
   (fn [_sig]
@@ -359,27 +412,42 @@
 ;; Pre-defined Envelope Presets
 ;; =============================================================================
 
-;; Piano envelope preset
+;;; piano-envelope -- ADSR preset for a piano-like sound.
+;;;
+;;; Returns:
+;;;   SF<bool,Sample> with fast attack, moderate decay, 50% sustain, short release.
 (defn piano-envelope []
   : (SF bool Sample)
   (adsr-gen (ADSRParams 0.01 0.1 0.5 0.3)))
 
-;; String envelope preset
+;;; string-envelope -- ADSR preset for bowed strings.
+;;;
+;;; Returns:
+;;;   SF<bool,Sample> with medium attack and release, high sustain.
 (defn string-envelope []
   : (SF bool Sample)
   (adsr-gen (ADSRParams 0.05 0.3 0.8 0.5)))
 
-;; Brass envelope preset
+;;; brass-envelope -- ADSR preset for brass-like timbres.
+;;;
+;;; Returns:
+;;;   SF<bool,Sample> with fast attack, 70% sustain.
 (defn brass-envelope []
   : (SF bool Sample)
   (adsr-gen (ADSRParams 0.02 0.2 0.7 0.4)))
 
-;; Organ envelope preset (fast attack, no decay, fast release)
+;;; organ-envelope -- ADSR preset for organ-style sounds (no decay, fast edges).
+;;;
+;;; Returns:
+;;;   SF<bool,Sample> with near-instant attack and release, no decay.
 (defn organ-envelope []
   : (SF bool Sample)
   (adsr-gen (ADSRParams 0.005 0.01 0.9 0.1)))
 
-;; Synth pad envelope preset (slow attack and release)
+;;; pad-synth-envelope -- ADSR preset for evolving synth pads.
+;;;
+;;; Returns:
+;;;   SF<bool,Sample> with slow attack and release.
 (defn pad-synth-envelope []
   : (SF bool Sample)
   (adsr-gen (ADSRParams 0.5 0.5 0.6 1.0)))

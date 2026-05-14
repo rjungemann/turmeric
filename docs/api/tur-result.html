@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tur/tur/result | Turmeric API</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand">turmeric</span>
+  <nav>
+    <a href="index.html">API Docs</a>
+    <a href="../autodoc-plan.md">Plan</a>
+  </nav>
+</header>
+<div class="page-layout">
+<div class="sidebar">
+  <h3>Exported</h3>
+  <ul>
+    <li><a href="#ok">ok</a></li>
+    <li><a href="#err">err</a></li>
+    <li><a href="#ok_">ok?</a></li>
+    <li><a href="#err_">err?</a></li>
+    <li><a href="#ok-val">ok-val</a></li>
+    <li><a href="#err-val">err-val</a></li>
+    <li><a href="#result-unwrap">result-unwrap</a></li>
+    <li><a href="#result-unwrap-or">result-unwrap-or</a></li>
+    <li><a href="#result-expect">result-expect</a></li>
+    <li><a href="#result-map">result-map</a></li>
+    <li><a href="#result-map-err">result-map-err</a></li>
+    <li><a href="#result-flat-map">result-flat-map</a></li>
+    <li><a href="#result-or">result-or</a></li>
+    <li><a href="#result-or-else">result-or-else</a></li>
+    <li><a href="#ok-or">ok-or</a></li>
+    <li><a href="#err-context">err-context</a></li>
+    <li><a href="#result-eq_">result-eq?</a></li>
+    <li><a href="#Eq_result_">Eq[result]</a></li>
+    <li><a href="#result-free">result-free</a></li>
+    <li><a href="#result-collect">result-collect</a></li>
+    <li><a href="#result-partition">result-partition</a></li>
+    <li><a href="#result-partition-ok">result-partition-ok</a></li>
+    <li><a href="#result-partition-err">result-partition-err</a></li>
+    <li><a href="#result-must">result-must</a></li>
+    <li><a href="#result-must-msg">result-must-msg</a></li>
+    <li><a href="#Foldable_ptr_void__">Foldable[ptr&lt;void&gt;]</a></li>
+    <li><a href="#Bifunctor_ptr_void__">Bifunctor[ptr&lt;void&gt;]</a></li>
+    <li><a href="#Functor_ptr_void__">Functor[ptr&lt;void&gt;]</a></li>
+    <li><a href="#Applicative_ptr_void__">Applicative[ptr&lt;void&gt;]</a></li>
+    <li><a href="#Monad_ptr_void__">Monad[ptr&lt;void&gt;]</a></li>
+  </ul>
+  <h3>Internal</h3>
+  <ul>
+    <li><a href="#__foldable_result_foldl" style="color:var(--faint)">__foldable_result_foldl</a></li>
+    <li><a href="#__foldable_result_foldr" style="color:var(--faint)">__foldable_result_foldr</a></li>
+    <li><a href="#__bifunctor_result_bimap" style="color:var(--faint)">__bifunctor_result_bimap</a></li>
+    <li><a href="#__functor_result_fmap" style="color:var(--faint)">__functor_result_fmap</a></li>
+    <li><a href="#__applicative_result_pure" style="color:var(--faint)">__applicative_result_pure</a></li>
+    <li><a href="#__applicative_result_ap" style="color:var(--faint)">__applicative_result_ap</a></li>
+    <li><a href="#__monad_result_bind" style="color:var(--faint)">__monad_result_bind</a></li>
+  </ul>
+</div>
+<div class="content">
+  <div class="module-heading">
+    <h1>tur/result</h1>
+    <div class="module-path">stdlib/result.tur</div>
+  </div>
+<div class="def-card" id="ok">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>ok</h2>
+  </div>
+  <pre class="def-signature">(ok [x :int] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">wrap a value in an ok result.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>x</td><td></td><td>the success value (:int)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">A heap-allocated ok result as :ptr&lt;void&gt;.
+
+  (ok 42)  ; =&gt; ok(42)</pre>
+  </div>
+</div>
+<div class="def-card" id="err">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>err</h2>
+  </div>
+  <pre class="def-signature">(err [e :int] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">wrap a value in an err result.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>e</td><td></td><td>the error value (:int)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">A heap-allocated err result as :ptr&lt;void&gt;.
+
+  (err 1)  ; =&gt; err(1)</pre>
+  </div>
+</div>
+<div class="def-card" id="ok_">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>ok?</h2>
+  </div>
+  <pre class="def-signature">(ok? [r :ptr&lt;void&gt;] :bool)</pre>
+  <p class="def-summary">check whether a result is ok.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>r</td><td></td><td>the result to test (:ptr&lt;void&gt;)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">true if r is an ok result, false otherwise.
+
+  (ok? (ok 1))   ; =&gt; true
+  (ok? (err 0))  ; =&gt; false</pre>
+  </div>
+</div>
+<div class="def-card" id="err_">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>err?</h2>
+  </div>
+  <pre class="def-signature">(err? [r :ptr&lt;void&gt;] :bool)</pre>
+  <p class="def-summary">check whether a result is err.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>r</td><td></td><td>the result to test (:ptr&lt;void&gt;)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">true if r is an err result (or NULL), false otherwise.
+
+  (err? (err 0))  ; =&gt; true
+  (err? (ok 1))   ; =&gt; false</pre>
+  </div>
+</div>
+<div class="def-card" id="ok-val">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>ok-val</h2>
+  </div>
+  <pre class="def-signature">(ok-val [r :ptr&lt;void&gt;] :int)</pre>
+  <p class="def-summary">extract the ok value from a result.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>r</td><td></td><td>an ok result (:ptr&lt;void&gt;); behaviour is undefined if r is err</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">The contained ok value as :int.
+
+  (ok-val (ok 5))  ; =&gt; 5</pre>
+  </div>
+</div>
+<div class="def-card" id="err-val">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>err-val</h2>
+  </div>
+  <pre class="def-signature">(err-val [r :ptr&lt;void&gt;] :int)</pre>
+  <p class="def-summary">extract the err value from a result.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>r</td><td></td><td>an err result (:ptr&lt;void&gt;); behaviour is undefined if r is ok</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">The contained err value as :int.
+
+  (err-val (err 99))  ; =&gt; 99</pre>
+  </div>
+</div>
+<div class="def-card" id="result-unwrap">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>result-unwrap</h2>
+  </div>
+  <pre class="def-signature">(result-unwrap [r :ptr&lt;void&gt;] :int)</pre>
+  <p class="def-summary">extract the ok value, aborting the process if r is err.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>r</td><td></td><td>the result to unwrap (:ptr&lt;void&gt;)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">The contained ok value as :int.
+
+  (result-unwrap (ok 7))  ; =&gt; 7</pre>
+  </div>
+</div>
+<div class="def-card" id="result-unwrap-or">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>result-unwrap-or</h2>
+  </div>
+  <pre class="def-signature">(result-unwrap-or [r :ptr&lt;void&gt; default_val :int] :int)</pre>
+  <p class="def-summary">extract the ok value, or return a default if r is err.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>r</td><td></td><td>the result (:ptr&lt;void&gt;)</td></tr>
+    <tr><td>default_val</td><td></td><td>the fallback value (:int)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">The ok value if r is ok, otherwise default_val.
+
+  (result-unwrap-or (err 0) 99)  ; =&gt; 99</pre>
+  </div>
+</div>
+<div class="def-card" id="result-expect">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>result-expect</h2>
+  </div>
+  <pre class="def-signature">(result-expect [r :ptr&lt;void&gt; msg :cstr] :int)</pre>
+  <p class="def-summary">extract the ok value, aborting with a custom message if r is err.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>r</td><td></td><td>the result to unwrap (:ptr&lt;void&gt;)</td></tr>
+    <tr><td>msg</td><td></td><td>message printed to stderr before aborting (:cstr)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">The contained ok value as :int.
+
+  (result-expect r &quot;parse failed&quot;)  ; =&gt; ok value or abort</pre>
+  </div>
+</div>
+<div class="def-card" id="result-map">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>result-map</h2>
+  </div>
+  <pre class="def-signature">(result-map [r :ptr&lt;void&gt; f :ptr&lt;void&gt;] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">apply a function to the ok value, propagating err unchanged.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>r</td><td></td><td>the result (:ptr&lt;void&gt;)</td></tr>
+    <tr><td>f</td><td></td><td>function to apply to the ok value (:ptr&lt;void&gt;); signature fn [x :int] :int</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">A new ok result with the mapped value, or r unchanged if r is err.
+
+  (result-map (ok 3) (fn [x] (* x 2)))  ; =&gt; ok(6)</pre>
+  </div>
+</div>
+<div class="def-card" id="result-map-err">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>result-map-err</h2>
+  </div>
+  <pre class="def-signature">(result-map-err [r :ptr&lt;void&gt; f :ptr&lt;void&gt;] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">apply a function to the err value, propagating ok unchanged.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>r</td><td></td><td>the result (:ptr&lt;void&gt;)</td></tr>
+    <tr><td>f</td><td></td><td>function to apply to the err value (:ptr&lt;void&gt;); signature fn [e :int] :int</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">A new err result with the mapped error, or r unchanged if r is ok.
+
+  (result-map-err (err 1) (fn [e] (+ e 100)))  ; =&gt; err(101)</pre>
+  </div>
+</div>
+<div class="def-card" id="result-flat-map">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>result-flat-map</h2>
+  </div>
+  <pre class="def-signature">(result-flat-map [r :ptr&lt;void&gt; f :ptr&lt;void&gt;] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">chain a fallible computation over an ok result.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>r</td><td></td><td>the result (:ptr&lt;void&gt;)</td></tr>
+    <tr><td>f</td><td></td><td>function receiving the ok value and returning a new result (:ptr&lt;void&gt;)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">The result of applying f to the ok value, or r unchanged if r is err.
+
+  (result-flat-map (ok 5) (fn [x] (if (&gt; x 0) (ok x) (err -1))))  ; =&gt; ok(5)</pre>
+  </div>
+</div>
+<div class="def-card" id="result-or">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>result-or</h2>
+  </div>
+  <pre class="def-signature">(result-or [r :ptr&lt;void&gt; alt :ptr&lt;void&gt;] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">return r if ok, otherwise return the fallback result.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>r</td><td></td><td>the primary result (:ptr&lt;void&gt;)</td></tr>
+    <tr><td>alt</td><td></td><td>the fallback result (:ptr&lt;void&gt;)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">r if r is ok, otherwise alt.
+
+  (result-or (err 0) (ok 99))  ; =&gt; ok(99)</pre>
+  </div>
+</div>
+<div class="def-card" id="result-or-else">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>result-or-else</h2>
+  </div>
+  <pre class="def-signature">(result-or-else [r :ptr&lt;void&gt; f :ptr&lt;void&gt;] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">return r if ok, otherwise compute a fallback by calling f with the err value.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>r</td><td></td><td>the primary result (:ptr&lt;void&gt;)</td></tr>
+    <tr><td>f</td><td></td><td>recovery function of type fn [e :int] :ptr&lt;void&gt;</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">r if r is ok, otherwise the result of f(err-value).
+
+  (result-or-else (err 1) (fn [e] (ok 0)))  ; =&gt; ok(0)</pre>
+  </div>
+</div>
+<div class="def-card" id="ok-or">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>ok-or</h2>
+  </div>
+  <pre class="def-signature">(ok-or [opt :ptr&lt;void&gt; e :int] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">convert an option to a result, using e as the error value if the option is none.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>opt</td><td></td><td>the option to convert (:ptr&lt;void&gt;)</td></tr>
+    <tr><td>e</td><td></td><td>the error value to use if opt is none (:int)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">ok(value) if opt is some(value), err(e) if opt is none.
+
+  (ok-or (some 7) -1)  ; =&gt; ok(7)
+  (ok-or (none) -1)    ; =&gt; err(-1)</pre>
+  </div>
+</div>
+<div class="def-card" id="err-context">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>err-context</h2>
+  </div>
+  <pre class="def-signature">(err-context [r :ptr&lt;void&gt; ctx :cstr] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">prepend context text to an err value&#x27;s message string.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>r</td><td></td><td>the result (:ptr&lt;void&gt;)</td></tr>
+    <tr><td>ctx</td><td></td><td>context prefix string (:cstr)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">A new err result whose message is &quot;ctx: original&quot;, or r unchanged if r is ok.
+
+  (err-context (err my-msg) &quot;loading config&quot;)</pre>
+  </div>
+</div>
+<div class="def-card" id="result-eq_">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>result-eq?</h2>
+  </div>
+  <pre class="def-signature">(result-eq? [r1 r2 ok-cmp err-cmp] :bool)</pre>
+  <p class="def-summary">compare two results using separate comparators for ok and err values.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>r1</td><td></td><td>first result</td></tr>
+    <tr><td>r2</td><td></td><td>second result</td></tr>
+    <tr><td>ok-cmp</td><td></td><td>comparator for ok values; fn [a :int b :int] :bool</td></tr>
+    <tr><td>err-cmp</td><td></td><td>comparator for err values; fn [a :int b :int] :bool</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase E1</p>
+</div>
+<div class="def-card" id="Eq_result_">
+  <div class="def-card-header">
+    <span class="kind-badge kind-definstance">definstance</span>
+    <h2>Eq[result]</h2>
+  </div>
+  <pre class="def-signature">(definstance Eq [result])</pre>
+  <p class="def-summary">Eq: structural equality via result-eq?.</p>
+</div>
+<div class="def-card" id="result-free">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>result-free</h2>
+  </div>
+  <pre class="def-signature">(result-free [r :ptr&lt;void&gt;])</pre>
+  <p class="def-summary">free the heap memory for a result value.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>r</td><td></td><td>the result to free (:ptr&lt;void&gt;)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">(result-free my-result)</pre>
+  </div>
+</div>
+<div class="def-card" id="result-collect">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>result-collect</h2>
+  </div>
+  <pre class="def-signature">(result-collect [v :ptr&lt;void&gt;] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">collect a vec of results into a single result.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>v</td><td></td><td>a vec (:ptr&lt;void&gt;) whose elements are result ptr&lt;void&gt; values</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">ok(vec-of-ok-values) if every element is ok,
+  or err(first-err-value) on the first err encountered.
+
+  (result-collect my-results-vec)  ; =&gt; ok(vec) or err(e)</pre>
+  </div>
+</div>
+<div class="def-card" id="result-partition">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>result-partition</h2>
+  </div>
+  <pre class="def-signature">(result-partition [v :ptr&lt;void&gt;] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">split a vec of results into separate ok and err vecs.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>v</td><td></td><td>a vec (:ptr&lt;void&gt;) whose elements are result ptr&lt;void&gt; values</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">A pair (:ptr&lt;void&gt;) with fields ok_vec and err_vec.
+  Use result-partition-ok and result-partition-err to access each vec.
+
+  (let [pair (result-partition my-vec)]
+    (result-partition-ok pair))</pre>
+  </div>
+</div>
+<div class="def-card" id="result-partition-ok">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>result-partition-ok</h2>
+  </div>
+  <pre class="def-signature">(result-partition-ok [pair :ptr&lt;void&gt;] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">extract the ok-vec from a result-partition pair.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>pair</td><td></td><td>the pair returned by result-partition (:ptr&lt;void&gt;)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">The vec (:ptr&lt;void&gt;) of ok values.
+
+  (result-partition-ok (result-partition my-vec))</pre>
+  </div>
+</div>
+<div class="def-card" id="result-partition-err">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>result-partition-err</h2>
+  </div>
+  <pre class="def-signature">(result-partition-err [pair :ptr&lt;void&gt;] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">extract the err-vec from a result-partition pair.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>pair</td><td></td><td>the pair returned by result-partition (:ptr&lt;void&gt;)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">The vec (:ptr&lt;void&gt;) of err values.
+
+  (result-partition-err (result-partition my-vec))</pre>
+  </div>
+</div>
+<div class="def-card" id="result-must">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>result-must</h2>
+  </div>
+  <pre class="def-signature">(result-must [r :ptr&lt;void&gt;] :int)</pre>
+  <p class="def-summary">unwrap the ok value or panic with a default message.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>r</td><td></td><td>the result to unwrap (:ptr&lt;void&gt;)</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase R4</p>
+</div>
+<div class="def-card" id="result-must-msg">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>result-must-msg</h2>
+  </div>
+  <pre class="def-signature">(result-must-msg [r :ptr&lt;void&gt; msg :cstr] :int)</pre>
+  <p class="def-summary">unwrap the ok value or panic with a caller-supplied message.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>r</td><td></td><td>the result to unwrap (:ptr&lt;void&gt;)</td></tr>
+    <tr><td>msg</td><td></td><td>the panic message (:cstr)</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase R4</p>
+</div>
+<div class="def-card" id="Foldable_ptr_void__">
+  <div class="def-card-header">
+    <span class="kind-badge kind-definstance">definstance</span>
+    <h2>Foldable[ptr&lt;void&gt;]</h2>
+  </div>
+  <pre class="def-signature">(definstance Foldable [ptr&lt;void&gt;])</pre>
+  <p class="def-summary">Foldable: foldl and foldr over the ok value.</p>
+</div>
+<div class="def-card" id="Bifunctor_ptr_void__">
+  <div class="def-card-header">
+    <span class="kind-badge kind-definstance">definstance</span>
+    <h2>Bifunctor[ptr&lt;void&gt;]</h2>
+  </div>
+  <pre class="def-signature">(definstance Bifunctor [ptr&lt;void&gt;])</pre>
+  <p class="def-summary">Bifunctor: bimap over ok and err values.</p>
+</div>
+<div class="def-card" id="Functor_ptr_void__">
+  <div class="def-card-header">
+    <span class="kind-badge kind-definstance">definstance</span>
+    <h2>Functor[ptr&lt;void&gt;]</h2>
+  </div>
+  <pre class="def-signature">(definstance Functor [ptr&lt;void&gt;])</pre>
+  <p class="def-summary">Functor: fmap over the ok value.</p>
+</div>
+<div class="def-card" id="Applicative_ptr_void__">
+  <div class="def-card-header">
+    <span class="kind-badge kind-definstance">definstance</span>
+    <h2>Applicative[ptr&lt;void&gt;]</h2>
+  </div>
+  <pre class="def-signature">(definstance Applicative [ptr&lt;void&gt;])</pre>
+  <p class="def-summary">Applicative: pure and ap.</p>
+</div>
+<div class="def-card" id="Monad_ptr_void__">
+  <div class="def-card-header">
+    <span class="kind-badge kind-definstance">definstance</span>
+    <h2>Monad[ptr&lt;void&gt;]</h2>
+  </div>
+  <pre class="def-signature">(definstance Monad [ptr&lt;void&gt;])</pre>
+  <p class="def-summary">Monad: bind (flat-map over the ok value).</p>
+</div>
+<details class="internal-section">
+  <summary>Internal definitions</summary>
+  <div class="internal-list">
+  <div class="internal-item" id="__foldable_result_foldl"><code>__foldable_result_foldl</code><span class="internal-item-summary">-- SINCE: Phase HKT H3</span></div>
+  <div class="internal-item" id="__foldable_result_foldr"><code>__foldable_result_foldr</code><span class="internal-item-summary">-- foldr implementation for the result Foldable instance.</span></div>
+  <div class="internal-item" id="__bifunctor_result_bimap"><code>__bifunctor_result_bimap</code><span class="internal-item-summary">-- bimap implementation for the result Bifunctor instance.</span></div>
+  <div class="internal-item" id="__functor_result_fmap"><code>__functor_result_fmap</code><span class="internal-item-summary">-- fmap implementation for the result Functor instance.</span></div>
+  <div class="internal-item" id="__applicative_result_pure"><code>__applicative_result_pure</code><span class="internal-item-summary">-- pure implementation for the result Applicative instance.</span></div>
+  <div class="internal-item" id="__applicative_result_ap"><code>__applicative_result_ap</code><span class="internal-item-summary">-- ap implementation for the result Applicative instance.</span></div>
+  <div class="internal-item" id="__monad_result_bind"><code>__monad_result_bind</code><span class="internal-item-summary">-- bind implementation for the result Monad instance.</span></div>
+  </div>
+</details>
+</div>
+</div>
+<footer class="site-footer">
+  Auto-generated by <code>tools/gendocs.py</code>.
+  Do not edit by hand -- run <code>just docs</code> to regenerate.
+</footer>
+</body>
+</html>

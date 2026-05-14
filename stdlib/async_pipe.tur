@@ -1,4 +1,4 @@
-;; stdlib/async_pipe.tur — Async pipe/stdio I/O for Turmeric (Phase T24)
+;; stdlib/async_pipe.tur -- Async pipe/stdio I/O for Turmeric (Phase T24)
 ;;
 ;; Non-blocking stdin/stdout operations that integrate with the cooperative
 ;; scheduler. Sets stdin/stdout to non-blocking mode and parks fibers when
@@ -10,8 +10,20 @@
 
 ;; Read up to buf-size bytes from stdin (non-blocking).
 ;; Parks the fiber on EAGAIN if running under a scheduler.
-;; The read data is stored in fiber-local (key 0xA51C5D10) — retrieve
+;; The read data is stored in fiber-local (key 0xA51C5D10) -- retrieve
 ;; with async-stdin-buf.
+;;; async-read-stdin -- read up to buf-size bytes from stdin in non-blocking mode.
+;;;
+;;; Parameters:
+;;;   buf-size -- maximum number of bytes to read
+;;;
+;;; Returns:
+;;;   int -- bytes read (>= 0), 0 on EOF, -1 on error
+;;;
+;;; Example:
+;;;   (async-read-stdin 1024)  ; => 42
+;;;
+;;; Since: Phase T24
 (defn async-read-stdin [buf-size :int] :int
   ```c
   /* Set stdin non-blocking */
@@ -43,6 +55,15 @@
   ```)
 
 ;; Retrieve the stdin read buffer after async-read-stdin.
+;;; async-stdin-buf -- retrieve the buffer pointer from the last async-read-stdin call.
+;;;
+;;; Returns:
+;;;   ptr<void> -- pointer to the read buffer in fiber-local storage (caller must free)
+;;;
+;;; Example:
+;;;   (async-stdin-buf)  ; => buf-ptr
+;;;
+;;; Since: Phase T24
 (defn async-stdin-buf [] :ptr<void>
   ```c
   if (!tur_current_fiber) return NULL;
@@ -50,6 +71,15 @@
   ```)
 
 ;; Retrieve the number of bytes from the last async-read-stdin.
+;;; async-stdin-len -- retrieve the byte count from the last async-read-stdin call.
+;;;
+;;; Returns:
+;;;   int -- number of bytes read in the most recent async-read-stdin
+;;;
+;;; Example:
+;;;   (async-stdin-len)  ; => 42
+;;;
+;;; Since: Phase T24
 (defn async-stdin-len [] :int
   ```c
   if (!tur_current_fiber) return 0;
@@ -59,6 +89,19 @@
 ;; Write len bytes from data to stdout (non-blocking).
 ;; Parks the fiber on EAGAIN if running under a scheduler.
 ;; Returns total bytes written, or -1 on error.
+;;; async-write-stdout -- write len bytes from data to stdout in non-blocking mode.
+;;;
+;;; Parameters:
+;;;   data -- pointer to the bytes to write
+;;;   len  -- number of bytes to write
+;;;
+;;; Returns:
+;;;   int -- total bytes written, or -1 on error
+;;;
+;;; Example:
+;;;   (async-write-stdout "hello\n" 6)  ; => 6
+;;;
+;;; Since: Phase T24
 (defn async-write-stdout [data :cstr len :int] :int
   ```c
   /* Set stdout non-blocking */

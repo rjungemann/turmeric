@@ -1,5 +1,5 @@
 ;; Phase 16: Real Logger implementation
-;; 
+;;
 ;; Implementation of Logger capability using stderr/stdout
 
 (extern-c fprintf [^ptr ^cstr] :int)
@@ -10,6 +10,18 @@
 (extern-c malloc [^ptr size] :ptr)
 (extern-c free [^ptr p] :void)
 
+;;; Real-Logger -- create a timestamped Logger capability writing to stdout/stderr.
+;;;
+;;; Returns:
+;;;   A heap-allocated Logger struct whose debug/info methods write to
+;;;   stdout and warn/error methods write to stderr, each line prefixed
+;;;   with a ctime timestamp and the level name.
+;;;   Free with Real-Logger-free when done.
+;;;
+;;; Example:
+;;;   (let [log (Real-Logger)] ...)
+;;;
+;;; Since: Phase 16
 ;; Real-Logger implementation
 ;; Writes to stderr with timestamps
 (defn Real-Logger []
@@ -22,13 +34,13 @@
       void (*warn)(const char* msg);
       void (*error)(const char* msg);
   };
-  
+
   /* Helper to get current timestamp */
   static const char* get_timestamp(void) {
       time_t now = time(NULL);
       return ctime(&now);
   }
-  
+
   /* Log with timestamp */
   static void log_with_level(FILE* stream, const char* level, const char* msg) {
       const char* ts = get_timestamp();
@@ -44,27 +56,27 @@
       fprintf(stream, "[%s] [%s] %s\n", ts_buf, level, msg);
       fflush(stream);
   }
-  
+
   /* debug implementation */
   static void logger_debug(const char* msg) {
       log_with_level(stdout, "DEBUG", msg);
   }
-  
+
   /* info implementation */
   static void logger_info(const char* msg) {
       log_with_level(stdout, "INFO", msg);
   }
-  
+
   /* warn implementation */
   static void logger_warn(const char* msg) {
       log_with_level(stderr, "WARN", msg);
   }
-  
+
   /* error implementation */
   static void logger_error(const char* msg) {
       log_with_level(stderr, "ERROR", msg);
   }
-  
+
   /* Create and populate the capability struct */
   Logger* logger = (Logger*)malloc(sizeof(Logger));
   logger->debug = logger_debug;
@@ -74,6 +86,12 @@
   return (void*)logger;
   ```)
 
+;;; Real-Logger-free -- release a Logger capability created by Real-Logger.
+;;;
+;;; Parameters:
+;;;   log -- the Logger pointer returned by Real-Logger.
+;;;
+;;; Since: Phase 16
 ;; Free a Real-Logger
 (defn Real-Logger-free [log]
   ```c
@@ -84,6 +102,18 @@
 ;; Simple logger without timestamps (faster)
 ;; ============================================================================
 
+;;; Simple-Logger -- create a lightweight Logger capability without timestamps.
+;;;
+;;; Returns:
+;;;   A heap-allocated Logger struct whose debug/info methods write to
+;;;   stdout and warn/error methods write to stderr, each line prefixed
+;;;   with only the level tag (e.g. "[DEBUG] ...").
+;;;   Free with Simple-Logger-free when done.
+;;;
+;;; Example:
+;;;   (let [log (Simple-Logger)] ...)
+;;;
+;;; Since: Phase 16
 ;; Simple-Logger implementation - no timestamps, just writes to stderr/stdout
 (defn Simple-Logger []
   ```c
@@ -94,31 +124,31 @@
       void (*warn)(const char* msg);
       void (*error)(const char* msg);
   };
-  
+
   /* debug implementation */
   static void simple_debug(const char* msg) {
       fprintf(stdout, "[DEBUG] %s\n", msg);
       fflush(stdout);
   }
-  
+
   /* info implementation */
   static void simple_info(const char* msg) {
       fprintf(stdout, "[INFO] %s\n", msg);
       fflush(stdout);
   }
-  
+
   /* warn implementation */
   static void simple_warn(const char* msg) {
       fprintf(stderr, "[WARN] %s\n", msg);
       fflush(stderr);
   }
-  
+
   /* error implementation */
   static void simple_error(const char* msg) {
       fprintf(stderr, "[ERROR] %s\n", msg);
       fflush(stderr);
   }
-  
+
   /* Create and populate the capability struct */
   Logger* logger = (Logger*)malloc(sizeof(Logger));
   logger->debug = simple_debug;
@@ -128,6 +158,12 @@
   return (void*)logger;
   ```)
 
+;;; Simple-Logger-free -- release a Logger capability created by Simple-Logger.
+;;;
+;;; Parameters:
+;;;   log -- the Logger pointer returned by Simple-Logger.
+;;;
+;;; Since: Phase 16
 ;; Free a Simple-Logger
 (defn Simple-Logger-free [log]
   ```c
@@ -138,6 +174,17 @@
 ;; Null logger (silent)
 ;; ============================================================================
 
+;;; Null-Logger -- create a silent Logger capability that discards all messages.
+;;;
+;;; Returns:
+;;;   A heap-allocated Logger struct where all four methods (debug, info,
+;;;   warn, error) are no-ops.  Useful as a default/test double.
+;;;   Free with Null-Logger-free when done.
+;;;
+;;; Example:
+;;;   (let [log (Null-Logger)] ...)
+;;;
+;;; Since: Phase 16
 ;; Null-Logger implementation - discards all messages
 (defn Null-Logger []
   ```c
@@ -148,10 +195,10 @@
       void (*warn)(const char* msg);
       void (*error)(const char* msg);
   };
-  
+
   /* All implementations are no-ops */
   static void null_log(const char* msg) {}
-  
+
   /* Create and populate the capability struct */
   Logger* logger = (Logger*)malloc(sizeof(Logger));
   logger->debug = null_log;
@@ -161,6 +208,12 @@
   return (void*)logger;
   ```)
 
+;;; Null-Logger-free -- release a Logger capability created by Null-Logger.
+;;;
+;;; Parameters:
+;;;   log -- the Logger pointer returned by Null-Logger.
+;;;
+;;; Since: Phase 16
 ;; Free a Null-Logger
 (defn Null-Logger-free [log]
   ```c
@@ -171,6 +224,16 @@
 ;; Helper functions for direct logging (without capabilities)
 ;; ============================================================================
 
+;;; log-debug-direct -- write a DEBUG message directly to stdout.
+;;;
+;;; Parameters:
+;;;   msg -- the message string to log (:cstr).
+;;;
+;;; Example:
+;;;   (log-debug-direct "starting up")
+;;;   ; prints: [DEBUG] starting up
+;;;
+;;; Since: Phase 16
 ;; Log a debug message
 (defn log-debug-direct [msg]
   ```c
@@ -178,6 +241,16 @@
   fflush(stdout);
   ```)
 
+;;; log-info-direct -- write an INFO message directly to stdout.
+;;;
+;;; Parameters:
+;;;   msg -- the message string to log (:cstr).
+;;;
+;;; Example:
+;;;   (log-info-direct "server ready")
+;;;   ; prints: [INFO] server ready
+;;;
+;;; Since: Phase 16
 ;; Log an info message
 (defn log-info-direct [msg]
   ```c
@@ -185,6 +258,16 @@
   fflush(stdout);
   ```)
 
+;;; log-warn-direct -- write a WARN message directly to stderr.
+;;;
+;;; Parameters:
+;;;   msg -- the message string to log (:cstr).
+;;;
+;;; Example:
+;;;   (log-warn-direct "config missing, using defaults")
+;;;   ; prints to stderr: [WARN] config missing, using defaults
+;;;
+;;; Since: Phase 16
 ;; Log a warning message
 (defn log-warn-direct [msg]
   ```c
@@ -192,6 +275,16 @@
   fflush(stderr);
   ```)
 
+;;; log-error-direct -- write an ERROR message directly to stderr.
+;;;
+;;; Parameters:
+;;;   msg -- the message string to log (:cstr).
+;;;
+;;; Example:
+;;;   (log-error-direct "fatal: out of memory")
+;;;   ; prints to stderr: [ERROR] fatal: out of memory
+;;;
+;;; Since: Phase 16
 ;; Log an error message
 (defn log-error-direct [msg]
   ```c

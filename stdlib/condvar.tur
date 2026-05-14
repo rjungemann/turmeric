@@ -4,12 +4,21 @@
 ;; from stdlib/mutex.tur.
 ;;
 ;; API:
-;;   condvar-new        []                              → ptr<void>
-;;   condvar-wait       [c :ptr<void> m :ptr<void>]    → nil
-;;   condvar-signal     [c :ptr<void>]                 → nil
-;;   condvar-broadcast  [c :ptr<void>]                 → nil
-;;   condvar-free       [c :ptr<void>]                 → nil
+;;   condvar-new        []                              -- ptr<void>
+;;   condvar-wait       [c :ptr<void> m :ptr<void>]    -- nil
+;;   condvar-signal     [c :ptr<void>]                 -- nil
+;;   condvar-broadcast  [c :ptr<void>]                 -- nil
+;;   condvar-free       [c :ptr<void>]                 -- nil
 
+;;; condvar-new -- allocate and initialise a new POSIX condition variable.
+;;;
+;;; Returns:
+;;;   An opaque ptr<void> handle to a heap-allocated pthread_cond_t.
+;;;
+;;; Example:
+;;;   (let [c (condvar-new)] ...)  ; => ptr<void>
+;;;
+;;; Since: Phase T19-C
 (defn condvar-new [] :ptr<void>
   ```c
   pthread_cond_t *c = (pthread_cond_t *)malloc(sizeof(pthread_cond_t));
@@ -18,21 +27,58 @@
   return (void *)c;
   ```)
 
+;;; condvar-wait -- atomically release the mutex and wait for a signal on the condition variable.
+;;;
+;;; Parameters:
+;;;   c -- condvar handle returned by condvar-new
+;;;   m -- mutex handle (from mutex-new) that the caller already holds
+;;;
+;;; Example:
+;;;   (condvar-wait c m)
+;;;
+;;; Since: Phase T19-C
 (defn condvar-wait [c :ptr<void> m :ptr<void>] :nil
   ```c
   pthread_cond_wait((pthread_cond_t *)c, (pthread_mutex_t *)m);
   ```)
 
+;;; condvar-signal -- wake one thread waiting on the condition variable.
+;;;
+;;; Parameters:
+;;;   c -- condvar handle returned by condvar-new
+;;;
+;;; Example:
+;;;   (condvar-signal c)
+;;;
+;;; Since: Phase T19-C
 (defn condvar-signal [c :ptr<void>] :nil
   ```c
   pthread_cond_signal((pthread_cond_t *)c);
   ```)
 
+;;; condvar-broadcast -- wake all threads waiting on the condition variable.
+;;;
+;;; Parameters:
+;;;   c -- condvar handle returned by condvar-new
+;;;
+;;; Example:
+;;;   (condvar-broadcast c)
+;;;
+;;; Since: Phase T19-C
 (defn condvar-broadcast [c :ptr<void>] :nil
   ```c
   pthread_cond_broadcast((pthread_cond_t *)c);
   ```)
 
+;;; condvar-free -- destroy the condition variable and release its memory.
+;;;
+;;; Parameters:
+;;;   c -- condvar handle returned by condvar-new
+;;;
+;;; Example:
+;;;   (condvar-free c)
+;;;
+;;; Since: Phase T19-C
 (defn condvar-free [c :ptr<void>] :nil
   ```c
   pthread_cond_destroy((pthread_cond_t *)c);

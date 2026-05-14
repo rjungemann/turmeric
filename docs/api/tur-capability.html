@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tur/tur/capability | Turmeric API</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand">turmeric</span>
+  <nav>
+    <a href="index.html">API Docs</a>
+    <a href="../autodoc-plan.md">Plan</a>
+  </nav>
+</header>
+<div class="page-layout">
+<div class="sidebar">
+  <h3>Exported</h3>
+  <ul>
+    <li><a href="#InMemoryFile-type">InMemoryFile-type</a></li>
+    <li><a href="#InMemoryFS-type">InMemoryFS-type</a></li>
+    <li><a href="#Test-FileSystem">Test-FileSystem</a></li>
+    <li><a href="#Test-FileSystem-free">Test-FileSystem-free</a></li>
+    <li><a href="#testfs-clear">testfs-clear</a></li>
+    <li><a href="#testfs-exists_">testfs-exists?</a></li>
+    <li><a href="#testfs-get-contents">testfs-get-contents</a></li>
+    <li><a href="#CapturedLogs-type">CapturedLogs-type</a></li>
+    <li><a href="#TestLoggerState-type">TestLoggerState-type</a></li>
+    <li><a href="#Test-Logger">Test-Logger</a></li>
+    <li><a href="#Test-Logger-free">Test-Logger-free</a></li>
+    <li><a href="#testlog-clear">testlog-clear</a></li>
+    <li><a href="#testlog-count">testlog-count</a></li>
+    <li><a href="#testlog-has_">testlog-has?</a></li>
+    <li><a href="#Test-Random">Test-Random</a></li>
+    <li><a href="#Test-Random-free">Test-Random-free</a></li>
+    <li><a href="#testrng-reset">testrng-reset</a></li>
+    <li><a href="#Test-Time">Test-Time</a></li>
+    <li><a href="#Test-Time-free">Test-Time-free</a></li>
+    <li><a href="#testtime-set">testtime-set</a></li>
+    <li><a href="#testtime-get">testtime-get</a></li>
+    <li><a href="#testtime-reset">testtime-reset</a></li>
+  </ul>
+</div>
+<div class="content">
+  <div class="module-heading">
+    <h1>tur/capability</h1>
+    <div class="module-path">stdlib/capability.tur</div>
+  </div>
+<div class="def-card" id="InMemoryFile-type">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>InMemoryFile-type</h2>
+  </div>
+  <pre class="def-signature">(InMemoryFile-type)</pre>
+</div>
+<div class="def-card" id="InMemoryFS-type">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>InMemoryFS-type</h2>
+  </div>
+  <pre class="def-signature">(InMemoryFS-type)</pre>
+</div>
+<div class="def-card" id="Test-FileSystem">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>Test-FileSystem</h2>
+  </div>
+  <pre class="def-signature">(Test-FileSystem)</pre>
+</div>
+<div class="def-card" id="Test-FileSystem-free">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>Test-FileSystem-free</h2>
+  </div>
+  <pre class="def-signature">(Test-FileSystem-free [fs])</pre>
+</div>
+<div class="def-card" id="testfs-clear">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>testfs-clear</h2>
+  </div>
+  <pre class="def-signature">(testfs-clear)</pre>
+</div>
+<div class="def-card" id="testfs-exists_">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>testfs-exists?</h2>
+  </div>
+  <pre class="def-signature">(testfs-exists? [path])</pre>
+</div>
+<div class="def-card" id="testfs-get-contents">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>testfs-get-contents</h2>
+  </div>
+  <pre class="def-signature">(testfs-get-contents [path])</pre>
+</div>
+<div class="def-card" id="CapturedLogs-type">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>CapturedLogs-type</h2>
+  </div>
+  <pre class="def-signature">(CapturedLogs-type)</pre>
+</div>
+<div class="def-card" id="TestLoggerState-type">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>TestLoggerState-type</h2>
+  </div>
+  <pre class="def-signature">(TestLoggerState-type)</pre>
+</div>
+<div class="def-card" id="Test-Logger">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>Test-Logger</h2>
+  </div>
+  <pre class="def-signature">(Test-Logger)</pre>
+</div>
+<div class="def-card" id="Test-Logger-free">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>Test-Logger-free</h2>
+  </div>
+  <pre class="def-signature">(Test-Logger-free [log])</pre>
+</div>
+<div class="def-card" id="testlog-clear">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>testlog-clear</h2>
+  </div>
+  <pre class="def-signature">(testlog-clear)</pre>
+</div>
+<div class="def-card" id="testlog-count">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>testlog-count</h2>
+  </div>
+  <pre class="def-signature">(testlog-count)</pre>
+</div>
+<div class="def-card" id="testlog-has_">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>testlog-has?</h2>
+  </div>
+  <pre class="def-signature">(testlog-has? [level msg])</pre>
+</div>
+<div class="def-card" id="Test-Random">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>Test-Random</h2>
+  </div>
+  <pre class="def-signature">(Test-Random)</pre>
+</div>
+<div class="def-card" id="Test-Random-free">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>Test-Random-free</h2>
+  </div>
+  <pre class="def-signature">(Test-Random-free [rng])</pre>
+</div>
+<div class="def-card" id="testrng-reset">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>testrng-reset</h2>
+  </div>
+  <pre class="def-signature">(testrng-reset)</pre>
+</div>
+<div class="def-card" id="Test-Time">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>Test-Time</h2>
+  </div>
+  <pre class="def-signature">(Test-Time)</pre>
+</div>
+<div class="def-card" id="Test-Time-free">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>Test-Time-free</h2>
+  </div>
+  <pre class="def-signature">(Test-Time-free [t])</pre>
+</div>
+<div class="def-card" id="testtime-set">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>testtime-set</h2>
+  </div>
+  <pre class="def-signature">(testtime-set [t new_time])</pre>
+</div>
+<div class="def-card" id="testtime-get">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>testtime-get</h2>
+  </div>
+  <pre class="def-signature">(testtime-get [t])</pre>
+</div>
+<div class="def-card" id="testtime-reset">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>testtime-reset</h2>
+  </div>
+  <pre class="def-signature">(testtime-reset)</pre>
+</div>
+</div>
+</div>
+<footer class="site-footer">
+  Auto-generated by <code>tools/gendocs.py</code>.
+  Do not edit by hand -- run <code>just docs</code> to regenerate.
+</footer>
+</body>
+</html>

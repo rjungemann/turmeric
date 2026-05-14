@@ -746,7 +746,10 @@ async function runCode() {
         }
         
         updateExecTime(execTime);
-        
+
+        // If the code was a (doc name) call, populate the doc panel
+        maybeShowDoc(code.trim());
+
     } catch (error) {
         if (consoleLoading) consoleLoading.style.display = 'none';
         appendToConsole(`<span class="console-error">Error: ${escapeHtml(error.message)}</span>`);
@@ -856,6 +859,8 @@ function initReplInput() {
                 } else if (result && result !== 'nil') {
                     appendToConsole(`<span class="console-result">${escapeHtml(result)}</span>`);
                 }
+                // Populate doc panel for (doc name) expressions
+                maybeShowDoc(code);
             } catch (err) {
                 appendToConsole(`<span class="console-error">Error: ${escapeHtml(err.message)}</span>`);
             }
@@ -1062,6 +1067,87 @@ if (document.readyState === 'loading') {
     init();
 }
 
+// ============================================================================
+// Doc Panel (D5: autodoc integration)
+// ============================================================================
+
+/**
+ * Look up documentation for `name` via the WASM turi_doc_lookup export.
+ * Returns the doc string, or null if not found or WASM not ready.
+ */
+function wasmDocLookup(name) {
+    if (!turiModule || wasmState !== WASM_STATE.READY) return null;
+    try {
+        const fn = turiModule._turi_doc_lookup;
+        if (!fn) return null;
+        const inputPtr = turiModule.allocate(
+            turiModule.intArrayFromString(name), turiModule.ALLOC_NORMAL);
+        const resultPtr = fn(inputPtr);
+        turiModule._free(inputPtr);
+        if (!resultPtr) return null;
+        return turiModule.UTF8ToString(resultPtr);
+    } catch (_) {
+        return null;
+    }
+}
+
+/**
+ * Show the doc panel with content for `name`.
+ */
+function showDocPanel(name, docText) {
+    const pane = document.getElementById('doc-pane');
+    const body = document.getElementById('doc-body');
+    const title = document.getElementById('doc-title');
+    const link = document.getElementById('doc-full-link');
+    const container = document.querySelector('.repl-container');
+
+    if (!pane || !body) return;
+
+    title.textContent = name || 'Documentation';
+
+    if (docText) {
+        body.textContent = docText;
+    } else {
+        body.innerHTML = `<p class="doc-placeholder">No documentation found for <code>${escapeHtml(name)}</code>.</p>`;
+    }
+
+    // Build a link to the module page: guess the module from the function name
+    // The function table is in docs/api/index.html; link there as fallback
+    link.href = '/docs/api/index.html';
+    link.textContent = 'Open full docs \u2197';
+
+    pane.style.display = 'flex';
+    container?.classList.add('doc-open');
+}
+
+/**
+ * Hide the doc panel.
+ */
+function hideDocPanel() {
+    const pane = document.getElementById('doc-pane');
+    const container = document.querySelector('.repl-container');
+    if (pane) pane.style.display = 'none';
+    container?.classList.remove('doc-open');
+}
+
+/**
+ * If the evaluated code looks like `(doc name)`, trigger the doc panel.
+ * Called after each REPL eval / Run.
+ */
+function maybeShowDoc(code) {
+    const m = code.trim().match(/^\(\s*doc\s+([\w/\-!?*+]+)\s*\)$/);
+    if (!m) return false;
+    const name = m[1];
+    const docText = wasmDocLookup(name);
+    showDocPanel(name, docText);
+    return true;
+}
+
+// Wire doc panel close button
+document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('close-doc-btn')?.addEventListener('click', hideDocPanel);
+});
+
 // Export for debugging
 window.turmericApp = {
     runCode,
@@ -1071,6 +1157,9 @@ window.turmericApp = {
     loadExample,
     shareCode,
     resetWasm,
+    showDocPanel,
+    hideDocPanel,
+    wasmDocLookup,
     getState: () => ({
         wasmState,
         hasEditor: !!editor,

@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tur/tur/tidal | Turmeric API</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand">turmeric</span>
+  <nav>
+    <a href="index.html">API Docs</a>
+    <a href="../autodoc-plan.md">Plan</a>
+  </nav>
+</header>
+<div class="page-layout">
+<div class="sidebar">
+  <h3>Exported</h3>
+  <ul>
+    <li><a href="#scale-pat">scale-pat</a></li>
+    <li><a href="#play">play</a></li>
+    <li><a href="#hush">hush</a></li>
+    <li><a href="#drum-machine">drum-machine</a></li>
+    <li><a href="#bass-line">bass-line</a></li>
+    <li><a href="#lead">lead</a></li>
+    <li><a href="#pad">pad</a></li>
+  </ul>
+</div>
+<div class="content">
+  <div class="module-heading">
+    <h1>tur/tidal</h1>
+    <div class="module-path">stdlib/tidal.tur</div>
+  </div>
+<div class="def-card" id="scale-pat">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>scale-pat</h2>
+  </div>
+  <pre class="def-signature">(scale-pat [scale &amp; [tonic 60])</pre>
+  <p class="def-summary">build a cycling MIDI note pattern from a scale and tonic.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>scale</td><td></td><td>list of semitone offsets from the tonic</td></tr>
+    <tr><td>tonic</td><td></td><td>base MIDI note number (default: 60 = middle C)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">NumPattern cycling through the MIDI notes of the scale.
+
+  (scale-pat MAJOR_SCALE 60)</pre>
+  </div>
+</div>
+<div class="def-card" id="play">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>play</h2>
+  </div>
+  <pre class="def-signature">(play [session def-name pattern-string bpm])</pre>
+  <p class="def-summary">parse a mini-notation string and start a synth player.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>session</td><td></td><td>scscm session</td></tr>
+    <tr><td>def-name</td><td></td><td>SynthDef name</td></tr>
+    <tr><td>pattern-string</td><td></td><td>mini-notation pattern string</td></tr>
+    <tr><td>bpm</td><td></td><td>tempo in beats per minute</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">PatternPlayer (already started).
+
+  (play session &quot;default&quot; &quot;bd sd bd sd&quot; 120)</pre>
+  </div>
+</div>
+<div class="def-card" id="hush">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>hush</h2>
+  </div>
+  <pre class="def-signature">(hush [session])</pre>
+  <p class="def-summary">stop all patterns in a session.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>session</td><td></td><td>LiveSession or scscm session</td></tr>
+    </table>
+  </div>
+</div>
+<div class="def-card" id="drum-machine">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>drum-machine</h2>
+  </div>
+  <pre class="def-signature">(drum-machine [kick-pattern snare-pattern hat-pattern])</pre>
+  <p class="def-summary">combine kick, snare, and hi-hat patterns into a stacked drum part.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>kick-pattern</td><td></td><td>Pattern for kick drum</td></tr>
+    <tr><td>snare-pattern</td><td></td><td>Pattern for snare drum</td></tr>
+    <tr><td>hat-pattern</td><td></td><td>Pattern for hi-hat</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;vec&lt;map&gt;&gt; stacking all three drum voices.
+
+  (drum-machine DRUM_KICK DRUM_SNARE DRUM_HAT)</pre>
+  </div>
+</div>
+<div class="def-card" id="bass-line">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>bass-line</h2>
+  </div>
+  <pre class="def-signature">(bass-line [notes &amp; [duration (pattern/const 0.25) velocity (pattern/const 100)])</pre>
+  <p class="def-summary">create a bass line note pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>notes</td><td></td><td>Pattern for MIDI note pitches</td></tr>
+    <tr><td>duration</td><td></td><td>Pattern for note durations in beats (default: 0.25)</td></tr>
+    <tr><td>velocity</td><td></td><td>Pattern for velocities (default: 100)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;map&gt; suitable for a bass synth.</p>
+  </div>
+</div>
+<div class="def-card" id="lead">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>lead</h2>
+  </div>
+  <pre class="def-signature">(lead [notes &amp; [duration (pattern/const 0.5) velocity (pattern/const 90)])</pre>
+  <p class="def-summary">create a lead melody note pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>notes</td><td></td><td>Pattern for MIDI note pitches</td></tr>
+    <tr><td>duration</td><td></td><td>Pattern for note durations in beats (default: 0.5)</td></tr>
+    <tr><td>velocity</td><td></td><td>Pattern for velocities (default: 90)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;map&gt; suitable for a lead synth.</p>
+  </div>
+</div>
+<div class="def-card" id="pad">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>pad</h2>
+  </div>
+  <pre class="def-signature">(pad [chords &amp; [duration (pattern/const 1.0) velocity (pattern/const 70)])</pre>
+  <p class="def-summary">create a pad chord pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>chords</td><td></td><td>Pattern&lt;vec&lt;int&gt;&gt; for chord voicings (MIDI notes)</td></tr>
+    <tr><td>duration</td><td></td><td>Pattern for chord durations (default: 1.0)</td></tr>
+    <tr><td>velocity</td><td></td><td>Pattern for velocities (default: 70)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;vec&lt;map&gt;&gt; suitable for a pad synth.</p>
+  </div>
+</div>
+</div>
+</div>
+<footer class="site-footer">
+  Auto-generated by <code>tools/gendocs.py</code>.
+  Do not edit by hand -- run <code>just docs</code> to regenerate.
+</footer>
+</body>
+</html>

@@ -5,15 +5,28 @@
 ;; The handle is consumed (freed) by thread-join or thread-detach.
 ;;
 ;; API:
-;;   thread-spawn-fn  [fn-ptr :ptr<void> arg :ptr<void>]  → ptr<void>
-;;   thread-join      [t :ptr<void>]                       → nil
-;;   thread-detach    [t :ptr<void>]                       → nil
-;;   thread-id        []                                   → int
+;;   thread-spawn-fn  [fn-ptr :ptr<void> arg :ptr<void>]  -- ptr<void>
+;;   thread-join      [t :ptr<void>]                       -- nil
+;;   thread-detach    [t :ptr<void>]                       -- nil
+;;   thread-id        []                                   -- int
 ;;
 ;; Note: (thread-spawn (fn [] ...)) is the elaborator-level Send-safety gate
 ;; (Phase T19-B).  thread-spawn-fn is the runtime entry point for calling
 ;; pthread_create with an explicit function pointer.
 
+;;; thread-spawn-fn -- spawn a new OS thread calling fn-ptr with arg.
+;;;
+;;; Parameters:
+;;;   fn-ptr -- C function pointer of type void *(*)(void *)
+;;;   arg    -- opaque argument forwarded to fn-ptr
+;;;
+;;; Returns:
+;;;   A ptr<void> thread handle that must be passed to thread-join or thread-detach.
+;;;
+;;; Example:
+;;;   (let [t (thread-spawn-fn my-fn arg)] (thread-join t))  ; => ptr<void>
+;;;
+;;; Since: Phase T19-C
 (defn thread-spawn-fn [fn-ptr :ptr<void> arg :ptr<void>] :ptr<void>
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
@@ -26,18 +39,45 @@
   return (void *)t;
   ```)
 
+;;; thread-join -- wait for a thread to finish and free its handle.
+;;;
+;;; Parameters:
+;;;   t -- thread handle returned by thread-spawn-fn
+;;;
+;;; Example:
+;;;   (thread-join t)
+;;;
+;;; Since: Phase T19-C
 (defn thread-join [t :ptr<void>] :nil
   ```c
   pthread_join(*(pthread_t *)t, NULL);
   free(t);
   ```)
 
+;;; thread-detach -- detach a thread (it cleans up itself on exit) and free the handle.
+;;;
+;;; Parameters:
+;;;   t -- thread handle returned by thread-spawn-fn
+;;;
+;;; Example:
+;;;   (thread-detach t)
+;;;
+;;; Since: Phase T19-C
 (defn thread-detach [t :ptr<void>] :nil
   ```c
   pthread_detach(*(pthread_t *)t);
   free(t);
   ```)
 
+;;; thread-id -- return an integer identifier for the calling OS thread.
+;;;
+;;; Returns:
+;;;   The current thread's pthread_t value cast to int64_t.
+;;;
+;;; Example:
+;;;   (thread-id)  ; => int
+;;;
+;;; Since: Phase T19-C
 (defn thread-id [] :int
   ```c
   return (int64_t)(uintptr_t)pthread_self();

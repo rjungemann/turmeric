@@ -1,8 +1,8 @@
-;; Phase CA2: GridCtx comonad — 2D grid with a focused position.
+;; Phase CA2: GridCtx comonad -- 2D grid with a focused position.
 ;;
 ;; GridCtx is a flat row-major array with a current focus (cx, cy).
 ;; Comonad extend walks every cell, passing each focused sub-grid to
-;; a rule function — the backbone of cellular automata.
+;; a rule function -- the backbone of cellular automata.
 ;;
 ;; C struct layout (every inline C block redefines this typedef):
 ;;   typedef struct {
@@ -13,15 +13,31 @@
 ;;
 ;; Index formula: data[y * width + x]
 
-;; ── Comonad typeclass ────────────────────────────────────────────────────────
+;; -- Comonad typeclass --------------------------------------------------------
+;;; Comonad -- typeclass for context-carrying types (extract/extend/duplicate).
+;;;
+;;; Since: Phase CA2
 (defclass Comonad [^w]
   (extract   [wa]     :int)
   (extend    [wa fn]  :int)
   (duplicate [wa]     :int))
 
-;; ── Constructor ───────────────────────────────────────────────────────────────
+;; -- Constructor --------------------------------------------------------------
 
-;; Allocate a zero-filled width×height grid; focus starts at (0, 0).
+;; Allocate a zero-filled width x height grid; focus starts at (0, 0).
+;;; grid-new -- allocate a zero-filled width x height GridCtx; focus starts at (0, 0).
+;;;
+;;; Parameters:
+;;;   width  -- number of columns
+;;;   height -- number of rows
+;;;
+;;; Returns:
+;;;   An opaque :int handle to the new GridCtx.
+;;;
+;;; Example:
+;;;   (def g (grid-new 10 10))
+;;;
+;;; Since: Phase CA2
 (defn grid-new [width height] :int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
@@ -34,9 +50,23 @@
   return (int64_t)(intptr_t)g;
   ```)
 
-;; ── Accessors ─────────────────────────────────────────────────────────────────
+;; -- Accessors ----------------------------------------------------------------
 
 ;; Get value at (x, y); returns 0 if out of bounds.
+;;; grid-get -- read the cell value at (x, y); returns 0 for out-of-bounds coordinates.
+;;;
+;;; Parameters:
+;;;   g -- GridCtx handle from grid-new
+;;;   x -- column index (0-based)
+;;;   y -- row index (0-based)
+;;;
+;;; Returns:
+;;;   The int64 value stored at that cell, or 0 if out of bounds.
+;;;
+;;; Example:
+;;;   (grid-get g 3 4)  ; => value at column 3, row 4
+;;;
+;;; Since: Phase CA2
 (defn grid-get [g x y] :int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
@@ -46,6 +76,18 @@
   ```)
 
 ;; Set value at (x, y) in-place; no-op if out of bounds.  Returns 0.
+;;; grid-set -- write val into cell (x, y) in-place; no-op if out of bounds.
+;;;
+;;; Parameters:
+;;;   g   -- GridCtx handle from grid-new
+;;;   x   -- column index (0-based)
+;;;   y   -- row index (0-based)
+;;;   val -- value to store
+;;;
+;;; Returns:
+;;;   0 always.
+;;;
+;;; Since: Phase CA2
 (defn grid-set [g x y val] :int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
@@ -56,6 +98,15 @@
   ```)
 
 ;; Return the value at the current focus (cx, cy).
+;;; grid-focus -- return the cell value at the current focus position (cx, cy).
+;;;
+;;; Parameters:
+;;;   g -- GridCtx handle from grid-new
+;;;
+;;; Returns:
+;;;   The int64 value at (cx, cy).
+;;;
+;;; Since: Phase CA2
 (defn grid-focus [g] :int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
@@ -63,33 +114,66 @@
   return p->data[p->cy * p->width + p->cx];
   ```)
 
+;;; grid-width -- return the number of columns in the grid.
+;;;
+;;; Parameters:
+;;;   g -- GridCtx handle from grid-new
+;;;
+;;; Since: Phase CA2
 (defn grid-width [g] :int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   return ((GCtx *)(intptr_t)g)->width;
   ```)
 
+;;; grid-height -- return the number of rows in the grid.
+;;;
+;;; Parameters:
+;;;   g -- GridCtx handle from grid-new
+;;;
+;;; Since: Phase CA2
 (defn grid-height [g] :int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   return ((GCtx *)(intptr_t)g)->height;
   ```)
 
+;;; grid-cx -- return the current focus column index.
+;;;
+;;; Parameters:
+;;;   g -- GridCtx handle from grid-new
+;;;
+;;; Since: Phase CA2
 (defn grid-cx [g] :int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   return ((GCtx *)(intptr_t)g)->cx;
   ```)
 
+;;; grid-cy -- return the current focus row index.
+;;;
+;;; Parameters:
+;;;   g -- GridCtx handle from grid-new
+;;;
+;;; Since: Phase CA2
 (defn grid-cy [g] :int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   return ((GCtx *)(intptr_t)g)->cy;
   ```)
 
-;; ── Mutation / copy ───────────────────────────────────────────────────────────
+;; -- Mutation / copy ----------------------------------------------------------
 
 ;; Deep-copy a grid (new GCtx and new data array; cx/cy preserved).
+;;; grid-clone -- deep-copy a grid, allocating a new GCtx and data array; cx/cy are preserved.
+;;;
+;;; Parameters:
+;;;   g -- GridCtx handle to clone
+;;;
+;;; Returns:
+;;;   A new independent GridCtx handle.
+;;;
+;;; Since: Phase CA2
 (defn grid-clone [g] :int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
@@ -105,9 +189,21 @@
   return (int64_t)(intptr_t)dst;
   ```)
 
-;; ── Neighbourhood ─────────────────────────────────────────────────────────────
+;; -- Neighbourhood ------------------------------------------------------------
 
 ;; Count live (non-zero) Moore 8-neighbours at the current focus (cx, cy).
+;;; grid-count-neighbors -- count live (non-zero) Moore 8-neighbours at the current focus.
+;;;
+;;; Parameters:
+;;;   g -- GridCtx handle; uses cx/cy as the center cell
+;;;
+;;; Returns:
+;;;   Integer count of non-zero neighbours in the 8-cell Moore neighbourhood.
+;;;
+;;; Example:
+;;;   (grid-count-neighbors g)  ; => 3  (for a typical Game of Life cell)
+;;;
+;;; Since: Phase CA2
 (defn grid-count-neighbors [g] :int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
@@ -126,9 +222,21 @@
   return (int64_t)count;
   ```)
 
-;; ── Visualisation ─────────────────────────────────────────────────────────────
+;; -- Visualisation ------------------------------------------------------------
 
 ;; Print grid as ASCII: '#' for live, '.' for dead, newline after each row.
+;;; grid-print -- print the grid to stdout as ASCII art ('#' = live, '.' = dead).
+;;;
+;;; Parameters:
+;;;   g -- GridCtx handle from grid-new
+;;;
+;;; Returns:
+;;;   0 always.
+;;;
+;;; Example:
+;;;   (grid-print g)  ; prints each row followed by a newline
+;;;
+;;; Since: Phase CA2
 (defn grid-print [g] :int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
@@ -142,7 +250,7 @@
   return 0;
   ```)
 
-;; ── Comonad instance for gridctx ─────────────────────────────────────────────
+;; -- Comonad instance for gridctx ---------------------------------------------
 ;;
 ;; extract g     = data[cy * width + cx]
 ;; extend f g    = new grid where cell(x,y) = f(g focused at (x,y))
@@ -150,13 +258,23 @@
 
 ;; extend: walk every (x, y), use a temporary on-stack GCtx sharing the same
 ;; data pointer, call fn, collect results into a fresh output grid.
+;;; __gridctx_extend -- comonad extend: produce a new grid by applying fn to each focused sub-grid.
+;;;
+;;; Parameters:
+;;;   g  -- source GridCtx handle
+;;;   fn -- rule function: receives a focused GCtx pointer, returns the new cell value
+;;;
+;;; Returns:
+;;;   A new GridCtx handle with each cell filled by fn(g focused at that cell).
+;;;
+;;; Since: Phase CA2
 (defn __gridctx_extend [g fn] :int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *src = (GCtx *)(intptr_t)g;
   int64_t w = src->width, h = src->height;
   int64_t *out_data = malloc((size_t)(w * h) * sizeof(int64_t));
-  /* Temporary GCtx reused for every cell — shares src->data (read-only during step). */
+  /* Temporary GCtx reused for every cell -- shares src->data (read-only during step). */
   GCtx tmp;
   tmp.data   = src->data;
   tmp.width  = w;
@@ -177,6 +295,9 @@
   return (int64_t)(intptr_t)out;
   ```)
 
+;;; Comonad [gridctx] -- Comonad instance for GridCtx (extract/extend/duplicate).
+;;;
+;;; Since: Phase CA2
 (definstance Comonad [gridctx]
   (extract   [wa]    (grid-focus wa))
   (extend    [wa fn] (__gridctx_extend wa fn))

@@ -104,6 +104,28 @@ char *turi_wasm_format(const char *input);
 void turi_wasm_free_string(char *s);
 
 /* ---------------------------------------------------------------------------
+ * Doc lookup (D6: autodoc bridge)
+ * ---------------------------------------------------------------------------
+ */
+
+/* Look up the documentation string for a Turmeric stdlib name.
+ *
+ * Arguments:
+ *   name - NUL-terminated function/macro/struct name to look up
+ *
+ * Returns:
+ *   A static (not malloc'd) C string with the documentation, or NULL if the
+ *   name is not found in the doc table.  Do NOT free the returned pointer.
+ *
+ * This function calls (doc-lookup name) in the Turmeric runtime, which is
+ * backed by the auto-generated stdlib/docstrings.tur lookup table.
+ *
+ * Exported with EMSCRIPTEN_KEEPALIVE so it is callable from JavaScript:
+ *   const docStr = Module.ccall('turi_doc_lookup', 'string', ['string'], [name]);
+ */
+const char *turi_doc_lookup(const char *name);
+
+/* ---------------------------------------------------------------------------
  * Helper functions (internal to the glue layer)
  * ---------------------------------------------------------------------------
  */

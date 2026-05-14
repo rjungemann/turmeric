@@ -1,4 +1,4 @@
-;; stdlib/rc.tur — Reference-counted pointer (Phase 9)
+;; stdlib/rc.tur -- Reference-counted pointer (Phase 9)
 ;; rc<T> is a reference-counted owning pointer.
 ;;
 ;; In v1, rc operations are built-in primitives:
@@ -16,6 +16,9 @@
 ;; Functor for rc - map a function over the contained value, returning a new rc
 ;; fmap :: (a -> b) -> rc a -> rc b
 ;; Implementation: clone the rc, unwrap to get the value, apply fn, wrap in new rc
+;;; __functor_rc_fmap -- internal Functor fmap implementation for rc<T>.
+;;;
+;;; Since: Phase HKT H3
 (defn __functor_rc_fmap [container fn] :int
   ```c
   /* In v1, rc<T> is represented as RcControlBlock* (see src/rc.c)
@@ -44,6 +47,9 @@
 
 ;; Functor instance for rc
 ;; Note: Uses ptr<void> as the type constructor representation in v1
+;;; Functor [ptr<void>] -- Functor instance for rc<T> via ptr<void> representation.
+;;;
+;;; Since: Phase HKT H3
 (definstance Functor [ptr<void>]
   (fmap [container fn] (__functor_rc_fmap container fn)))
 
@@ -52,6 +58,9 @@
 ;; An rc contains exactly one value, so:
 ;;   foldl init fn (rc v) = fn(init, v)
 ;;   foldr fn init (rc v) = fn(v, init)
+;;; __foldable_rc_foldl -- internal left-fold over a single-element rc<T>.
+;;;
+;;; Since: Phase HKT S6
 (defn __foldable_rc_foldl [ta init fn] :int
   ```c
   /* In v1, rc<T> is an RcControlBlock*.  tur_rc_ptr returns the
@@ -62,6 +71,9 @@
   return ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(init, value);
   ```)
 
+;;; __foldable_rc_foldr -- internal right-fold over a single-element rc<T>.
+;;;
+;;; Since: Phase HKT S6
 (defn __foldable_rc_foldr [ta init fn] :int
   ```c
   void *rc_ptr = (void *)(intptr_t)ta;
@@ -70,17 +82,23 @@
   return ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(value, init);
   ```)
 
+;;; Foldable [ptr<void>] -- Foldable instance for rc<T> via ptr<void> representation.
+;;;
+;;; Since: Phase HKT S6
 (definstance Foldable [ptr<void>]
   (foldl [ta init fn] (__foldable_rc_foldl ta init fn))
   (foldr [ta init fn] (__foldable_rc_foldr ta init fn)))
 
 ;;; SINCE: Phase B1
-;; Clone instance for the built-in rc type (TY_RC) — shallow clone.
+;; Clone instance for the built-in rc type (TY_RC) -- shallow clone.
 ;;
 ;; (definstance Clone [rc] ...) registers against TY_RC so that captured
 ;; rc bindings at cloneable-shift sites satisfy the Clone constraint.
 ;; The clone method calls rc_strong_increment and returns the same pointer
 ;; cast to int64_t; the result has int64_t type at the Turmeric level.
+;;; Clone [rc] -- shallow-clone a TY_RC value by incrementing the strong refcount.
+;;;
+;;; Since: Phase B1
 (definstance Clone [rc]
   (clone [x] :int
     ```c
@@ -90,7 +108,7 @@
     ```))
 
 ;;; SINCE: Phase B1 (HKT workaround)
-;; Clone instance for rc<T> — shallow clone (refcount increment) via ptr<void>.
+;; Clone instance for rc<T> -- shallow clone (refcount increment) via ptr<void>.
 ;;
 ;; Cloning an rc<T> does NOT copy the contained value.  It increments the
 ;; reference count and returns a second owning handle to the SAME allocation.
@@ -98,17 +116,22 @@
 ;;
 ;; In v1, rc is a built-in type (TY_RC) represented as a void* pointer to an
 ;; RcControlBlock.  The inline C body calls tur_rc_clone() directly to avoid
-;; the TY_RC→int64_t type mismatch that arises when using the (rc/clone x)
+;; the TY_RC->int64_t type mismatch that arises when using the (rc/clone x)
 ;; special form in a typeclass method body.
+;;; __clone_rc_shallow -- shallow-clone an rc pointer via tur_rc_clone (refcount increment).
+;;;
+;;; Since: Phase B1
 (defn __clone_rc_shallow [x] :int
   ```c
-  /* x is passed as int64_t (void* cast) — the rc pointer. */
+  /* x is passed as int64_t (void* cast) -- the rc pointer. */
   void *rc_ptr = (void *)(intptr_t)x;
   if (!rc_ptr) return 0;
   void *cloned = tur_rc_clone(rc_ptr);
   return (int64_t)(intptr_t)cloned;
   ```)
 
+;;; Clone [ptr<void>] -- Clone instance for rc<T> via ptr<void>; increments refcount, no value copy.
+;;;
+;;; Since: Phase B1
 (definstance Clone [ptr<void>]
   (clone [x] (__clone_rc_shallow x)))
-

@@ -1,4 +1,4 @@
-;; stdlib/future.tur — Future<T> and Promise<T> (Phase T20-C)
+;; stdlib/future.tur -- Future<T> and Promise<T> (Phase T20-C)
 ;;
 ;; Promise/Future pair for asynchronous computation results.
 ;;
@@ -20,19 +20,25 @@
 ;;   bool              is_ok     (true = ok/fulfilled, false = err/failed)
 ;;
 ;; API:
-;;   promise-new            []                         → ptr<void>  (returns FutureCell*; call promise-pair to get (Promise, Future))
-;;   promise-pair           [cell :ptr<void>]         → (ptr<void> ptr<void>)  (Promise Future)
-;;   promise-fulfill        [p :ptr<void> v :int]     → nil       (sets value, wakes waiters)
-;;   promise-fail           [p :ptr<void> e :int]     → nil       (sets exn, wakes waiters)
-;;   promise-free           [p :ptr<void>]            → nil
+;;   promise-new            []                         -> ptr<void>  (returns FutureCell*; call promise-pair to get (Promise, Future))
+;;   promise-pair           [cell :ptr<void>]         -> (ptr<void> ptr<void>)  (Promise Future)
+;;   promise-fulfill        [p :ptr<void> v :int]     -> nil       (sets value, wakes waiters)
+;;   promise-fail           [p :ptr<void> e :int]     -> nil       (sets exn, wakes waiters)
+;;   promise-free           [p :ptr<void>]            -> nil
 ;;
-;;   future-get             [f :ptr<void>]            → ptr<void>  (blocks; returns Result<T>)
-;;   future-done?           [f :ptr<void>]            → bool      (non-blocking check)
-;;   future-free            [f :ptr<void>]            → nil
+;;   future-get             [f :ptr<void>]            -> ptr<void>  (blocks; returns Result<T>)
+;;   future-done?           [f :ptr<void>]            -> bool      (non-blocking check)
+;;   future-free            [f :ptr<void>]            -> nil
 
 ;; ---- Shared FutureCell type and helpers ----
 
 ;; Allocate a new FutureCell (shared by Promise and Future)
+;;; future-cell-new -- allocate and initialise a shared FutureCell (mutex, condvar, unset).
+;;;
+;;; Returns:
+;;;   A :ptr<void> to the new FutureCell; free with future-cell-free.
+;;;
+;;; Since: Phase T20-C
 (defn future-cell-new [] :ptr<void>
   ```c
   typedef struct {
@@ -55,6 +61,12 @@
   ```)
 
 ;; Free a FutureCell
+;;; future-cell-free -- destroy the mutex/condvar and free a FutureCell.
+;;;
+;;; Parameters:
+;;;   cell -- FutureCell pointer from future-cell-new
+;;;
+;;; Since: Phase T20-C
 (defn future-cell-free [cell :ptr<void>] :nil
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
@@ -70,25 +82,60 @@
 ;; Returns a FutureCell* that can be used as both Promise and Future.
 ;; Use promise-pair to get separate Promise and Future handles,
 ;; or just use the same cell pointer for both (they're the same underlying object).
+;;; promise-new -- allocate a new unsettled Promise/Future shared cell.
+;;;
+;;; Returns:
+;;;   A :ptr<void> FutureCell* usable as both a Promise and Future handle.
+;;;
+;;; Example:
+;;;   (def p (promise-new))
+;;;   (promise-fulfill p 42)
+;;;
+;;; Since: Phase T20-C
 (defn promise-new [] :ptr<void>
   (future-cell-new))
 
 ;; Given a cell, return the Promise handle (same pointer as cell).
 ;; This is a convenience for API symmetry.
+;;; promise-of-cell -- return the Promise handle for a FutureCell (identity; for API symmetry).
+;;;
+;;; Parameters:
+;;;   cell -- FutureCell pointer from promise-new
+;;;
+;;; Since: Phase T20-C
 (defn promise-of-cell [cell :ptr<void>] :ptr<void>
   cell)
 
 ;; Given a cell, return the Future handle (same pointer as cell).
+;;; future-of-cell -- return the Future handle for a FutureCell (identity; for API symmetry).
+;;;
+;;; Parameters:
+;;;   cell -- FutureCell pointer from promise-new
+;;;
+;;; Since: Phase T20-C
 (defn future-of-cell [cell :ptr<void>] :ptr<void>
   cell)
 
 ;; Return a (Promise Future) pair from a cell.
 ;; Both elements are the same pointer but conceptually distinct types.
+;;; promise-pair -- expand to a (Promise Future) pair list from a single shared cell.
+;;;
+;;; Parameters:
+;;;   cell -- FutureCell pointer from promise-new
+;;;
+;;; Since: Phase T20-C
 (defmacro promise-pair [cell :ptr<void>]
   (list (promise-of-cell cell) (future-of-cell cell)))
 
 ;; Fulfill a promise with a value.
 ;; Wakes all threads waiting on the associated future.
+;;; promise-fulfill -- settle a promise with a successful value; wakes all future waiters.
+;;;
+;;; Parameters:
+;;;   p -- Promise (FutureCell) pointer
+;;;   v -- fulfillment value
+;;;
+;;; Since: Phase T20-C
 (defn promise-fulfill [p :ptr<void> v :int] :nil
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
@@ -108,6 +155,13 @@
 
 ;; Fail a promise with an exception/error code.
 ;; Wakes all threads waiting on the associated future.
+;;; promise-fail -- settle a promise with an error code; wakes all future waiters.
+;;;
+;;; Parameters:
+;;;   p -- Promise (FutureCell) pointer
+;;;   e -- error/exception code
+;;;
+;;; Since: Phase T20-C
 (defn promise-fail [p :ptr<void> e :int] :nil
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
@@ -126,12 +180,27 @@
   ```)
 
 ;; Free a promise (and its associated future - they share the same cell).
+;;; promise-free -- free a promise and its shared FutureCell.
+;;;
+;;; Parameters:
+;;;   p -- Promise pointer from promise-new
+;;;
+;;; Since: Phase T20-C
 (defn promise-free [p :ptr<void>] :nil
   (future-cell-free p))
 
 ;; ---- Future API ----
 
 ;; Check if a future is done (non-blocking).
+;;; future-done? -- non-blocking check: return true if the future has been settled.
+;;;
+;;; Parameters:
+;;;   f -- Future (FutureCell) pointer
+;;;
+;;; Returns:
+;;;   true if settled (fulfilled or failed), false otherwise.
+;;;
+;;; Since: Phase T20-C
 (defn future-done? [f :ptr<void>] :bool
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
@@ -144,6 +213,18 @@
 
 ;; Block until the future is ready, then return a Result<T>.
 ;; Returns a ptr<void> that is a Result* (use ok?/err?/ok-val/err-val to inspect).
+;;; future-get -- block until the future is settled; return a heap-allocated Result struct.
+;;;
+;;; Parameters:
+;;;   f -- Future (FutureCell) pointer
+;;;
+;;; Returns:
+;;;   A :ptr<void> to a Result { bool is_ok; int64_t ok_val; int64_t err_val; }.
+;;;
+;;; Example:
+;;;   (def result (future-get f))
+;;;
+;;; Since: Phase T20-C
 (defn future-get [f :ptr<void>] :ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
@@ -151,7 +232,7 @@
   pthread_mutex_lock(&fc->lock);
   while (!fc->is_set)
       pthread_cond_wait(&fc->ready, &fc->lock);
-  
+
   ;; Build a Result to return
   typedef struct { bool is_ok; int64_t ok_val; int64_t err_val; } Result;
   Result *result = (Result *)malloc(sizeof(Result));
@@ -169,12 +250,30 @@
   ```)
 
 ;; Free a future (and its associated promise - they share the same cell).
+;;; future-free -- free a future and its shared FutureCell.
+;;;
+;;; Parameters:
+;;;   f -- Future pointer from promise-new / future-of-cell
+;;;
+;;; Since: Phase T20-C
 (defn future-free [f :ptr<void>] :nil
   (future-cell-free f))
 
 ;; ---- AW-002: Pre-settled futures ----
 
 ;; Create a pre-fulfilled future with the given value.
+;;; future-of -- create a pre-fulfilled future holding value v.
+;;;
+;;; Parameters:
+;;;   v -- value the future should carry
+;;;
+;;; Returns:
+;;;   A :ptr<void> FutureCell already settled as ok with value v.
+;;;
+;;; Example:
+;;;   (def f (future-of 42))  ; immediately done
+;;;
+;;; Since: Phase T20-C
 (defn future-of [v :int] :ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
@@ -190,6 +289,15 @@
   ```)
 
 ;; Create a pre-rejected future with the given error code.
+;;; future-error-of -- create a pre-rejected future with error code e.
+;;;
+;;; Parameters:
+;;;   e -- error/exception code
+;;;
+;;; Returns:
+;;;   A :ptr<void> FutureCell already settled as failed with exn = e.
+;;;
+;;; Since: Phase T20-C
 (defn future-error-of [e :int] :ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
@@ -206,6 +314,12 @@
 
 ;; Cancel a future: if not yet settled, settle it with error code -2 (cancelled sentinel).
 ;; If already settled, this is a no-op.
+;;; future-cancel -- cancel a future if not yet settled; sets error code -2 (TUR_FUTURE_CANCELLED).
+;;;
+;;; Parameters:
+;;;   f -- Future (FutureCell) pointer
+;;;
+;;; Since: Phase T20-C
 (defn future-cancel [f :ptr<void>] :nil
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
@@ -221,6 +335,15 @@
   ```)
 
 ;; Check if a future was cancelled (error code == -2).
+;;; future-cancelled? -- return true if the future was cancelled (exn == -2).
+;;;
+;;; Parameters:
+;;;   f -- Future (FutureCell) pointer
+;;;
+;;; Returns:
+;;;   true if the future was settled via future-cancel, false otherwise.
+;;;
+;;; Since: Phase T20-C
 (defn future-cancelled? [f :ptr<void>] :bool
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
@@ -237,6 +360,16 @@
 ;; fn is a ptr<void> treated as int64_t(*)(int64_t).
 ;; If the future is rejected, propagates the error.
 ;; Returns a new pre-settled future.
+;;; future-map -- map fn over a fulfilled future value; propagate rejection unchanged.
+;;;
+;;; Parameters:
+;;;   f  -- source Future pointer
+;;;   fn -- function pointer (int64_t -> int64_t) applied to the fulfilled value
+;;;
+;;; Returns:
+;;;   A new pre-settled Future with fn(value) on success, or the original error on failure.
+;;;
+;;; Since: Phase T20-C
 (defn future-map [f :ptr<void> fn :ptr<void>] :ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
@@ -266,6 +399,16 @@
 
 ;; Flat-map: fn receives the fulfilled value and must return a new future (ptr<void>).
 ;; If the source future is rejected, propagates the error without calling fn.
+;;; future-then -- flat-map fn over a future; fn must return a new Future ptr<void>.
+;;;
+;;; Parameters:
+;;;   f  -- source Future pointer
+;;;   fn -- function pointer (int64_t -> ptr<void>) producing the next Future
+;;;
+;;; Returns:
+;;;   The Future returned by fn, or a pre-rejected Future if f was rejected.
+;;;
+;;; Since: Phase T20-C
 (defn future-then [f :ptr<void> fn :ptr<void>] :ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
@@ -292,6 +435,16 @@
 
 ;; Race two futures: return a new future that resolves to whichever settles first.
 ;; The result is a pre-settled future with the winner's value or error.
+;;; future-race -- race two futures; return a new future settled by whichever finishes first.
+;;;
+;;; Parameters:
+;;;   fa -- first Future pointer
+;;;   fb -- second Future pointer
+;;;
+;;; Returns:
+;;;   A new pre-settled Future carrying the winner's value or error.
+;;;
+;;; Since: Phase T20-C
 (defn future-race [fa :ptr<void> fb :ptr<void>] :ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
@@ -330,6 +483,16 @@
 ;;   - is fulfilled with the value of fa if both are ok (value from fa)
 ;;   - is rejected with the first encountered error
 ;; Returns a pre-settled future.
+;;; future-all2 -- await both futures; settle ok with fa's value only if both succeed.
+;;;
+;;; Parameters:
+;;;   fa -- first Future pointer
+;;;   fb -- second Future pointer
+;;;
+;;; Returns:
+;;;   A new pre-settled Future: ok with fa's value if both ok, else the first error.
+;;;
+;;; Since: Phase T20-C
 (defn future-all2 [fa :ptr<void> fb :ptr<void>] :ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
@@ -357,6 +520,16 @@
 ;; With exactly two futures: if fa fulfills, return fa's value.
 ;; If fa rejects but fb fulfills, return fb's value.
 ;; If both reject, return fb's rejection.
+;;; future-any2 -- return a future settled by the first fulfilled future; both rejecting yields fb's error.
+;;;
+;;; Parameters:
+;;;   fa -- first Future pointer
+;;;   fb -- second Future pointer
+;;;
+;;; Returns:
+;;;   A new pre-settled Future with fa's value if fa ok, else fb's outcome.
+;;;
+;;; Since: Phase T20-C
 (defn future-any2 [fa :ptr<void> fb :ptr<void>] :ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
@@ -391,6 +564,17 @@
 ;; Join two futures: await both and return a tuple (pair) of their values.
 ;; Returns a FutureCell* with a struct { int64_t first; int64_t second; } * as the value.
 ;; If either future rejects, the result is rejected with that error.
+;;; future-join -- await both futures and produce a new future holding a TurTuple2 of their values.
+;;;
+;;; Parameters:
+;;;   fa -- first Future pointer
+;;;   fb -- second Future pointer
+;;;
+;;; Returns:
+;;;   A new pre-settled Future whose ok value is a pointer to TurTuple2 { first, second };
+;;;   rejected with the first error if either future fails.
+;;;
+;;; Since: Phase T20-C
 (defn future-join [fa :ptr<void> fb :ptr<void>] :ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
@@ -421,12 +605,30 @@
   ```)
 
 ;; Accessors for the tuple returned by future-join
+;;; tuple-first -- read the first element of a TurTuple2 returned by future-join.
+;;;
+;;; Parameters:
+;;;   tup -- TurTuple2 pointer from the ok value of a future-join result
+;;;
+;;; Returns:
+;;;   The int64 first element.
+;;;
+;;; Since: Phase T20-C
 (defn tuple-first [tup :ptr<void>] :int
   ```c
   typedef struct { int64_t first; int64_t second; } TurTuple2;
   return ((TurTuple2 *)tup)->first;
   ```)
 
+;;; tuple-second -- read the second element of a TurTuple2 returned by future-join.
+;;;
+;;; Parameters:
+;;;   tup -- TurTuple2 pointer from the ok value of a future-join result
+;;;
+;;; Returns:
+;;;   The int64 second element.
+;;;
+;;; Since: Phase T20-C
 (defn tuple-second [tup :ptr<void>] :int
   ```c
   typedef struct { int64_t first; int64_t second; } TurTuple2;
@@ -434,6 +636,12 @@
   ```)
 
 ;; Free a tuple allocated by future-join
+;;; tuple-free -- free a TurTuple2 allocated by future-join.
+;;;
+;;; Parameters:
+;;;   tup -- TurTuple2 pointer to free
+;;;
+;;; Since: Phase T20-C
 (defn tuple-free [tup :ptr<void>] :nil
   ```c
   free(tup);
@@ -441,6 +649,9 @@
 
 ;; ---- Convenience: Create and return a (Promise, Future) pair in one step ----
 
+;;; promise-new-pair -- allocate a new unsettled Promise/Future shared cell (alias for promise-new).
+;;;
+;;; Since: Phase T20-C
 (defn promise-new-pair [] :ptr<void>
   (promise-new))
 
@@ -448,6 +659,16 @@
 
 ;; Race an array of futures. Returns a new future that resolves to the first settled future.
 ;; Takes a ptr<void> to an array of FutureCell* and a count.
+;;; future-race-n -- race an array of n futures; return a new future settled by the first to finish.
+;;;
+;;; Parameters:
+;;;   futures -- pointer to an array of FutureCell* (ptr<void>[n])
+;;;   n       -- number of futures in the array
+;;;
+;;; Returns:
+;;;   A new pre-settled Future with the first settled future's outcome.
+;;;
+;;; Since: Phase T20-C
 (defn future-race-n [futures :ptr<void> n :int] :ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
@@ -488,6 +709,16 @@
   ```)
 
 ;; All of an array of futures.
+;;; future-all-n -- await all n futures; settle ok (value 0) only if every future succeeds.
+;;;
+;;; Parameters:
+;;;   futures -- pointer to an array of FutureCell* (ptr<void>[n])
+;;;   n       -- number of futures in the array
+;;;
+;;; Returns:
+;;;   A new pre-settled Future: ok with value 0 if all ok, else the first encountered error.
+;;;
+;;; Since: Phase T20-C
 (defn future-all-n [futures :ptr<void> n :int] :ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
@@ -512,6 +743,16 @@
   ```)
 
 ;; Any of an array of futures.
+;;; future-any-n -- return a future settled by the first successfully fulfilled future in the array.
+;;;
+;;; Parameters:
+;;;   futures -- pointer to an array of FutureCell* (ptr<void>[n])
+;;;   n       -- number of futures in the array
+;;;
+;;; Returns:
+;;;   A new pre-settled Future: ok with the first fulfilled value, or failed if all reject.
+;;;
+;;; Since: Phase T20-C
 (defn future-any-n [futures :ptr<void> n :int] :ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
@@ -541,6 +782,18 @@
 ;; ---- AW-008: Future timeout ---
 
 ;; Create a future that times out after ms milliseconds with error -1.
+;;; future-timeout -- create a future that settles with error -1 after ms milliseconds.
+;;;
+;;; Parameters:
+;;;   ms -- timeout duration in milliseconds
+;;;
+;;; Returns:
+;;;   A :ptr<void> FutureCell that will be settled (is_ok = false, exn = -1) after ms ms.
+;;;
+;;; Example:
+;;;   (def t (future-timeout 5000))  ; rejects after 5 seconds
+;;;
+;;; Since: Phase T20-C
 (defn future-timeout [ms :int] :ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;
@@ -576,6 +829,16 @@
   ```)
 
 ;; Race a future against a timeout.
+;;; future-with-timeout -- race a future against a timeout of ms milliseconds.
+;;;
+;;; Parameters:
+;;;   f  -- source Future pointer
+;;;   ms -- timeout in milliseconds; on expiry the result is rejected with exn = -1
+;;;
+;;; Returns:
+;;;   A new Future settled with f's outcome if f finishes first, otherwise rejected with -1.
+;;;
+;;; Since: Phase T20-C
 (defn future-with-timeout [f :ptr<void> ms :int] :ptr<void>
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; } FutureCell;

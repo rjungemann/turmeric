@@ -1,0 +1,892 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tur/tur/transform | Turmeric API</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand">turmeric</span>
+  <nav>
+    <a href="index.html">API Docs</a>
+    <a href="../autodoc-plan.md">Plan</a>
+  </nav>
+</header>
+<div class="page-layout">
+<div class="sidebar">
+  <h3>Exported</h3>
+  <ul>
+    <li><a href="#add">add</a></li>
+    <li><a href="#sub">sub</a></li>
+    <li><a href="#mul">mul</a></li>
+    <li><a href="#div">div</a></li>
+    <li><a href="#range">range</a></li>
+    <li><a href="#clamp">clamp</a></li>
+    <li><a href="#normalize">normalize</a></li>
+    <li><a href="#mod-pat">mod-pat</a></li>
+    <li><a href="#wrap">wrap</a></li>
+    <li><a href="#exp-pat">exp-pat</a></li>
+    <li><a href="#log-pat">log-pat</a></li>
+    <li><a href="#pow-pat">pow-pat</a></li>
+    <li><a href="#sqrt-pat">sqrt-pat</a></li>
+    <li><a href="#sin-pat">sin-pat</a></li>
+    <li><a href="#cos-pat">cos-pat</a></li>
+    <li><a href="#tan-pat">tan-pat</a></li>
+    <li><a href="#sine">sine</a></li>
+    <li><a href="#square">square</a></li>
+    <li><a href="#saw">saw</a></li>
+    <li><a href="#tri">tri</a></li>
+    <li><a href="#pulse">pulse</a></li>
+    <li><a href="#jitter">jitter</a></li>
+    <li><a href="#rand-select">rand-select</a></li>
+    <li><a href="#rand-value">rand-value</a></li>
+    <li><a href="#white-noise">white-noise</a></li>
+    <li><a href="#pink-noise">pink-noise</a></li>
+    <li><a href="#perlin-noise">perlin-noise</a></li>
+    <li><a href="#adsr">adsr</a></li>
+    <li><a href="#ar">ar</a></li>
+    <li><a href="#decay-exp">decay-exp</a></li>
+    <li><a href="#decay-lin">decay-lin</a></li>
+    <li><a href="#and-bit">and-bit</a></li>
+    <li><a href="#or-bit">or-bit</a></li>
+    <li><a href="#xor-bit">xor-bit</a></li>
+    <li><a href="#not-bit">not-bit</a></li>
+    <li><a href="#floor-pat">floor-pat</a></li>
+    <li><a href="#ceil-pat">ceil-pat</a></li>
+    <li><a href="#round-pat">round-pat</a></li>
+    <li><a href="#quantize-int">quantize-int</a></li>
+    <li><a href="#quantize-step">quantize-step</a></li>
+    <li><a href="#concat-str">concat-str</a></li>
+    <li><a href="#upper-pat">upper-pat</a></li>
+    <li><a href="#lower-pat">lower-pat</a></li>
+  </ul>
+</div>
+<div class="content">
+  <div class="module-heading">
+    <h1>tur/transform</h1>
+    <div class="module-path">stdlib/transform.tur</div>
+  </div>
+<div class="def-card" id="add">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>add</h2>
+  </div>
+  <pre class="def-signature">(add [p amount])</pre>
+  <p class="def-summary">add a constant or pattern to a numeric pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>base NumPattern</td></tr>
+    <tr><td>amount</td><td></td><td>constant float or NumPattern to add</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">NumPattern returning p(t) + amount.
+
+  ((add my-pat 1.0) 0.5)</pre>
+  </div>
+</div>
+<div class="def-card" id="sub">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>sub</h2>
+  </div>
+  <pre class="def-signature">(sub [p amount])</pre>
+  <p class="def-summary">subtract a constant or pattern from a numeric pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>base NumPattern</td></tr>
+    <tr><td>amount</td><td></td><td>constant float or NumPattern to subtract</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern returning p(t) - amount.</p>
+  </div>
+</div>
+<div class="def-card" id="mul">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>mul</h2>
+  </div>
+  <pre class="def-signature">(mul [p factor])</pre>
+  <p class="def-summary">multiply a numeric pattern by a constant or pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>base NumPattern</td></tr>
+    <tr><td>factor</td><td></td><td>constant float or NumPattern</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">NumPattern returning p(t) * factor.
+
+  ((mul my-pat 0.5) 0.5)  ; halve the values</pre>
+  </div>
+</div>
+<div class="def-card" id="div">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>div</h2>
+  </div>
+  <pre class="def-signature">(div [p divisor])</pre>
+  <p class="def-summary">divide a numeric pattern by a constant or pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>base NumPattern</td></tr>
+    <tr><td>divisor</td><td></td><td>constant float or NumPattern (returns 0 if divisor is zero)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern returning p(t) / divisor.</p>
+  </div>
+</div>
+<div class="def-card" id="range">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>range</h2>
+  </div>
+  <pre class="def-signature">(range [p from-low from-high to-low to-high])</pre>
+  <p class="def-summary">map pattern values from one range to another.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>NumPattern with input values</td></tr>
+    <tr><td>from-low</td><td></td><td>lower bound of input range</td></tr>
+    <tr><td>from-high</td><td></td><td>upper bound of input range</td></tr>
+    <tr><td>to-low</td><td></td><td>lower bound of output range</td></tr>
+    <tr><td>to-high</td><td></td><td>upper bound of output range</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">NumPattern with values linearly mapped and clamped to [to-low, to-high].
+
+  ((range my-pat 0.0 1.0 440.0 880.0) 0.5)  ; =&gt; 660.0</pre>
+  </div>
+</div>
+<div class="def-card" id="clamp">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>clamp</h2>
+  </div>
+  <pre class="def-signature">(clamp [p low high])</pre>
+  <p class="def-summary">clamp pattern values to [low, high].</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>NumPattern</td></tr>
+    <tr><td>low</td><td></td><td>minimum output value</td></tr>
+    <tr><td>high</td><td></td><td>maximum output value</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern with values clamped.</p>
+  </div>
+</div>
+<div class="def-card" id="normalize">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>normalize</h2>
+  </div>
+  <pre class="def-signature">(normalize [p min max])</pre>
+  <p class="def-summary">map pattern values to [0, 1].</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>NumPattern</td></tr>
+    <tr><td>min</td><td></td><td>expected minimum of p</td></tr>
+    <tr><td>max</td><td></td><td>expected maximum of p</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern with values normalised to [0, 1].</p>
+  </div>
+</div>
+<div class="def-card" id="mod-pat">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>mod-pat</h2>
+  </div>
+  <pre class="def-signature">(mod-pat [p mod])</pre>
+  <p class="def-summary">apply modulo to pattern values.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>NumPattern</td></tr>
+    <tr><td>mod</td><td></td><td>modulo divisor</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern with values wrapped to [0, mod).</p>
+  </div>
+</div>
+<div class="def-card" id="wrap">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>wrap</h2>
+  </div>
+  <pre class="def-signature">(wrap [p low high])</pre>
+  <p class="def-summary">wrap pattern values to stay within [low, high].</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>NumPattern</td></tr>
+    <tr><td>low</td><td></td><td>lower bound</td></tr>
+    <tr><td>high</td><td></td><td>upper bound</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern with values wrapped into [low, high].</p>
+  </div>
+</div>
+<div class="def-card" id="exp-pat">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>exp-pat</h2>
+  </div>
+  <pre class="def-signature">(exp-pat [p])</pre>
+  <p class="def-summary">apply exp() to pattern values.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>NumPattern (values in radians or raw)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern with e^p(t).</p>
+  </div>
+</div>
+<div class="def-card" id="log-pat">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>log-pat</h2>
+  </div>
+  <pre class="def-signature">(log-pat [p &amp; [base math/E])</pre>
+  <p class="def-summary">apply logarithm to pattern values.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>NumPattern (must be &gt; 0)</td></tr>
+    <tr><td>base</td><td></td><td>logarithm base (default: math/E)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern with log_base(p(t)).</p>
+  </div>
+</div>
+<div class="def-card" id="pow-pat">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>pow-pat</h2>
+  </div>
+  <pre class="def-signature">(pow-pat [p exponent])</pre>
+  <p class="def-summary">raise pattern values to a constant exponent.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>NumPattern (base)</td></tr>
+    <tr><td>exponent</td><td></td><td>power to raise to</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern with p(t)^exponent.</p>
+  </div>
+</div>
+<div class="def-card" id="sqrt-pat">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>sqrt-pat</h2>
+  </div>
+  <pre class="def-signature">(sqrt-pat [p])</pre>
+  <p class="def-summary">square root of pattern values.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>NumPattern (values must be &gt;= 0)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern with sqrt(p(t)).</p>
+  </div>
+</div>
+<div class="def-card" id="sin-pat">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>sin-pat</h2>
+  </div>
+  <pre class="def-signature">(sin-pat [p])</pre>
+  <p class="def-summary">apply sin() to pattern values.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>NumPattern in radians</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern with sin(p(t)).</p>
+  </div>
+</div>
+<div class="def-card" id="cos-pat">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>cos-pat</h2>
+  </div>
+  <pre class="def-signature">(cos-pat [p])</pre>
+  <p class="def-summary">apply cos() to pattern values.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>NumPattern in radians</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern with cos(p(t)).</p>
+  </div>
+</div>
+<div class="def-card" id="tan-pat">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>tan-pat</h2>
+  </div>
+  <pre class="def-signature">(tan-pat [p])</pre>
+  <p class="def-summary">apply tan() to pattern values.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>NumPattern in radians</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern with tan(p(t)).</p>
+  </div>
+</div>
+<div class="def-card" id="sine">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>sine</h2>
+  </div>
+  <pre class="def-signature">(sine [&amp; [freq 1.0 amp 1.0 phase 0.0])</pre>
+  <p class="def-summary">sine wave pattern oscillating at a given frequency.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>freq</td><td></td><td>frequency in cycles per beat (default: 1.0)</td></tr>
+    <tr><td>amp</td><td></td><td>amplitude (default: 1.0)</td></tr>
+    <tr><td>phase</td><td></td><td>phase offset in radians (default: 0.0)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">NumPattern generating values in [-amp, amp].
+
+  ((sine 0.5 1.0 0.0) 0.25)</pre>
+  </div>
+</div>
+<div class="def-card" id="square">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>square</h2>
+  </div>
+  <pre class="def-signature">(square [&amp; [freq 1.0 amp 1.0 duty 0.5])</pre>
+  <p class="def-summary">square wave pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>freq</td><td></td><td>frequency in cycles per beat (default: 1.0)</td></tr>
+    <tr><td>amp</td><td></td><td>amplitude (default: 1.0)</td></tr>
+    <tr><td>duty</td><td></td><td>duty cycle (0-1, default: 0.5)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern returning amp or -amp.</p>
+  </div>
+</div>
+<div class="def-card" id="saw">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>saw</h2>
+  </div>
+  <pre class="def-signature">(saw [&amp; [freq 1.0 amp 1.0])</pre>
+  <p class="def-summary">sawtooth wave pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>freq</td><td></td><td>frequency in cycles per beat (default: 1.0)</td></tr>
+    <tr><td>amp</td><td></td><td>amplitude (default: 1.0)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern descending from amp to 0 each cycle.</p>
+  </div>
+</div>
+<div class="def-card" id="tri">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>tri</h2>
+  </div>
+  <pre class="def-signature">(tri [&amp; [freq 1.0 amp 1.0])</pre>
+  <p class="def-summary">triangle wave pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>freq</td><td></td><td>frequency in cycles per beat (default: 1.0)</td></tr>
+    <tr><td>amp</td><td></td><td>amplitude (default: 1.0)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern rising and falling symmetrically within [-amp, amp].</p>
+  </div>
+</div>
+<div class="def-card" id="pulse">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>pulse</h2>
+  </div>
+  <pre class="def-signature">(pulse [&amp; [freq 1.0 amp 1.0 width 0.5])</pre>
+  <p class="def-summary">pulse wave pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>freq</td><td></td><td>frequency in cycles per beat (default: 1.0)</td></tr>
+    <tr><td>amp</td><td></td><td>pulse height (default: 1.0)</td></tr>
+    <tr><td>width</td><td></td><td>pulse width 0-1 (default: 0.5)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern returning amp during pulse, 0.0 otherwise.</p>
+  </div>
+</div>
+<div class="def-card" id="jitter">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>jitter</h2>
+  </div>
+  <pre class="def-signature">(jitter [p amount])</pre>
+  <p class="def-summary">add random noise to pattern values.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>base pattern</td></tr>
+    <tr><td>amount</td><td></td><td>maximum jitter magnitude added to each float value</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt; with random perturbation added to numeric values.</p>
+  </div>
+</div>
+<div class="def-card" id="rand-select">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>rand-select</h2>
+  </div>
+  <pre class="def-signature">(rand-select [&amp; patterns])</pre>
+  <p class="def-summary">randomly pick one of several patterns on each evaluation.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>patterns</td><td></td><td>patterns to choose from</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt; delegating to a randomly selected sub-pattern each beat.</p>
+  </div>
+</div>
+<div class="def-card" id="rand-value">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>rand-value</h2>
+  </div>
+  <pre class="def-signature">(rand-value [&amp; values])</pre>
+  <p class="def-summary">randomly select a constant value on each evaluation.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>values</td><td></td><td>values to choose from</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt;.</p>
+  </div>
+</div>
+<div class="def-card" id="white-noise">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>white-noise</h2>
+  </div>
+  <pre class="def-signature">(white-noise)</pre>
+  <p class="def-summary">white noise pattern returning random floats in [0, 1).</p>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern with uniform random values.</p>
+  </div>
+</div>
+<div class="def-card" id="pink-noise">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>pink-noise</h2>
+  </div>
+  <pre class="def-signature">(pink-noise)</pre>
+  <p class="def-summary">approximate pink noise pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern producing spectrally shaped noise.</p>
+  </div>
+</div>
+<div class="def-card" id="perlin-noise">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>perlin-noise</h2>
+  </div>
+  <pre class="def-signature">(perlin-noise [&amp; [scale 1.0 offset 0.0])</pre>
+  <p class="def-summary">simplified Perlin-style noise pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>scale</td><td></td><td>time scale (higher = more detail, default: 1.0)</td></tr>
+    <tr><td>offset</td><td></td><td>time offset (default: 0.0)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern with smooth random values.</p>
+  </div>
+</div>
+<div class="def-card" id="adsr">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>adsr</h2>
+  </div>
+  <pre class="def-signature">(adsr [attack decay sustain release &amp; [gate (pattern/const true)])</pre>
+  <p class="def-summary">ADSR envelope pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>attack</td><td></td><td>attack time in beats</td></tr>
+    <tr><td>decay</td><td></td><td>decay time in beats</td></tr>
+    <tr><td>sustain</td><td></td><td>sustain level (0-1)</td></tr>
+    <tr><td>release</td><td></td><td>release time in beats</td></tr>
+    <tr><td>gate</td><td></td><td>BoolPattern for gate (default: const true)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">NumPattern producing ADSR envelope values.
+
+  ((adsr 0.1 0.2 0.7 0.3) 0.5)</pre>
+  </div>
+</div>
+<div class="def-card" id="ar">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>ar</h2>
+  </div>
+  <pre class="def-signature">(ar [attack release &amp; [gate (pattern/const true)])</pre>
+  <p class="def-summary">simple attack-release envelope pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>attack</td><td></td><td>attack time in beats</td></tr>
+    <tr><td>release</td><td></td><td>release time in beats</td></tr>
+    <tr><td>gate</td><td></td><td>BoolPattern (default: const true)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern.</p>
+  </div>
+</div>
+<div class="def-card" id="decay-exp">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>decay-exp</h2>
+  </div>
+  <pre class="def-signature">(decay-exp [decay &amp; [gate (pattern/const true)])</pre>
+  <p class="def-summary">exponential decay envelope pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>decay</td><td></td><td>time constant in beats</td></tr>
+    <tr><td>gate</td><td></td><td>BoolPattern (default: const true)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern returning e^(-t/decay).</p>
+  </div>
+</div>
+<div class="def-card" id="decay-lin">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>decay-lin</h2>
+  </div>
+  <pre class="def-signature">(decay-lin [decay &amp; [gate (pattern/const true)])</pre>
+  <p class="def-summary">linear decay envelope pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>decay</td><td></td><td>decay duration in beats</td></tr>
+    <tr><td>gate</td><td></td><td>BoolPattern (default: const true)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern returning max(0, 1 - t/decay).</p>
+  </div>
+</div>
+<div class="def-card" id="and-bit">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>and-bit</h2>
+  </div>
+  <pre class="def-signature">(and-bit [p1 p2])</pre>
+  <p class="def-summary">bitwise AND of two integer patterns.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p1</td><td></td><td>first IntPattern</td></tr>
+    <tr><td>p2</td><td></td><td>IntPattern or integer constant</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">IntPattern with bitwise AND applied.</p>
+  </div>
+</div>
+<div class="def-card" id="or-bit">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>or-bit</h2>
+  </div>
+  <pre class="def-signature">(or-bit [p1 p2])</pre>
+  <p class="def-summary">bitwise OR of two integer patterns.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p1</td><td></td><td>first IntPattern</td></tr>
+    <tr><td>p2</td><td></td><td>IntPattern or integer constant</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">IntPattern with bitwise OR applied.</p>
+  </div>
+</div>
+<div class="def-card" id="xor-bit">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>xor-bit</h2>
+  </div>
+  <pre class="def-signature">(xor-bit [p1 p2])</pre>
+  <p class="def-summary">bitwise XOR of two integer patterns.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p1</td><td></td><td>first IntPattern</td></tr>
+    <tr><td>p2</td><td></td><td>IntPattern or integer constant</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">IntPattern with bitwise XOR applied.</p>
+  </div>
+</div>
+<div class="def-card" id="not-bit">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>not-bit</h2>
+  </div>
+  <pre class="def-signature">(not-bit [p])</pre>
+  <p class="def-summary">bitwise NOT of an integer pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>IntPattern</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">IntPattern with bitwise NOT applied.</p>
+  </div>
+</div>
+<div class="def-card" id="floor-pat">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>floor-pat</h2>
+  </div>
+  <pre class="def-signature">(floor-pat [p])</pre>
+  <p class="def-summary">floor each pattern value.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>NumPattern</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern with floor(p(t)).</p>
+  </div>
+</div>
+<div class="def-card" id="ceil-pat">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>ceil-pat</h2>
+  </div>
+  <pre class="def-signature">(ceil-pat [p])</pre>
+  <p class="def-summary">ceiling each pattern value.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>NumPattern</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern with ceil(p(t)).</p>
+  </div>
+</div>
+<div class="def-card" id="round-pat">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>round-pat</h2>
+  </div>
+  <pre class="def-signature">(round-pat [p])</pre>
+  <p class="def-summary">round each pattern value to the nearest integer.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>NumPattern</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern with round(p(t)).</p>
+  </div>
+</div>
+<div class="def-card" id="quantize-int">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>quantize-int</h2>
+  </div>
+  <pre class="def-signature">(quantize-int [p])</pre>
+  <p class="def-summary">quantize pattern values to nearest integer (alias for round-pat).</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>NumPattern</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern.</p>
+  </div>
+</div>
+<div class="def-card" id="quantize-step">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>quantize-step</h2>
+  </div>
+  <pre class="def-signature">(quantize-step [p step])</pre>
+  <p class="def-summary">quantize pattern values to multiples of a step size.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>NumPattern</td></tr>
+    <tr><td>step</td><td></td><td>quantization step size</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">NumPattern with values snapped to step multiples.
+
+  ((quantize-step my-pat 0.25) 0.0)</pre>
+  </div>
+</div>
+<div class="def-card" id="concat-str">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>concat-str</h2>
+  </div>
+  <pre class="def-signature">(concat-str [p1 p2])</pre>
+  <p class="def-summary">concatenate two string patterns.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p1</td><td></td><td>first StrPattern</td></tr>
+    <tr><td>p2</td><td></td><td>StrPattern or string constant</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">StrPattern with concatenated strings.</p>
+  </div>
+</div>
+<div class="def-card" id="upper-pat">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>upper-pat</h2>
+  </div>
+  <pre class="def-signature">(upper-pat [p])</pre>
+  <p class="def-summary">convert string pattern values to uppercase.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>StrPattern</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">StrPattern with uppercased values.</p>
+  </div>
+</div>
+<div class="def-card" id="lower-pat">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>lower-pat</h2>
+  </div>
+  <pre class="def-signature">(lower-pat [p])</pre>
+  <p class="def-summary">convert string pattern values to lowercase.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>StrPattern</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">StrPattern with lowercased values.</p>
+  </div>
+</div>
+</div>
+</div>
+<footer class="site-footer">
+  Auto-generated by <code>tools/gendocs.py</code>.
+  Do not edit by hand -- run <code>just docs</code> to regenerate.
+</footer>
+</body>
+</html>

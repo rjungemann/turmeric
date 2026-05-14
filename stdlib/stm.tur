@@ -5,33 +5,103 @@
 (extern-c malloc [^int size] :ptr)
 (extern-c free [^ptr p] :void)
 
+;;; ptr/null -- return a null pointer constant.
+;;;
+;;; Returns:
+;;;   A :ptr value equal to NULL.
+;;;
+;;; Example:
+;;;   (ptr/null)  ; => ptr (NULL)
+;;;
+;;; Since: Phase 20
 (defn ptr/null [] :ptr
   ```c
   return NULL;
   ```)
 
+;;; tvar/new -- create a new transactional variable with an initial value.
+;;;
+;;; Parameters:
+;;;   init -- initial integer value stored in the TVar
+;;;
+;;; Returns:
+;;;   An opaque ptr handle to the newly allocated TVar.
+;;;
+;;; Example:
+;;;   (let [tv (tvar/new 0)] ...)  ; => ptr
+;;;
+;;; Since: Phase 20
 (defn tvar/new [init] :ptr
   ```c
   TVar *tv = tur_tvar_new(NULL, (void*)(intptr_t)init);
   return (void*)tv;
   ```)
 
+;;; tvar/read -- read the current value of a TVar within the active transaction.
+;;;
+;;; Parameters:
+;;;   tv -- TVar handle returned by tvar/new
+;;;
+;;; Returns:
+;;;   The current transactional value as a ptr.
+;;;
+;;; Example:
+;;;   (tvar/read tv)  ; => ptr
+;;;
+;;; Since: Phase 20
 (defn tvar/read [tv :ptr] :ptr
   ```c
   return (void*)tur_tvar_read(tur_stm_current_tx(), (TVar*)tv);
   ```)
 
+;;; tvar/write -- write a new value to a TVar within the active transaction.
+;;;
+;;; Parameters:
+;;;   tv  -- TVar handle returned by tvar/new
+;;;   val -- new value to record in the transaction log
+;;;
+;;; Example:
+;;;   (tvar/write tv new-val)
+;;;
+;;; Since: Phase 20
 (defn tvar/write [tv :ptr val :ptr] :nil
   ```c
   tur_tvar_write(tur_stm_current_tx(), (TVar*)tv, (void*)val);
   return 0;
   ```)
 
+;;; tvar/swap -- atomically replace a TVar's value and return the old value.
+;;;
+;;; Parameters:
+;;;   tv  -- TVar handle returned by tvar/new
+;;;   new -- replacement value
+;;;
+;;; Returns:
+;;;   The previous value of the TVar within the current transaction.
+;;;
+;;; Example:
+;;;   (tvar/swap tv new-val)  ; => ptr (old value)
+;;;
+;;; Since: Phase 20
 (defn tvar/swap [tv :ptr new :ptr] :ptr
   ```c
   return (void*)tur_tvar_swap(tur_stm_current_tx(), (TVar*)tv, (void*)new);
   ```)
 
+;;; tvar/cas -- compare-and-swap a TVar within the active transaction.
+;;;
+;;; Parameters:
+;;;   tv  -- TVar handle returned by tvar/new
+;;;   old -- expected current value
+;;;   new -- desired replacement value
+;;;
+;;; Returns:
+;;;   true if the swap was recorded (old matched); false otherwise.
+;;;
+;;; Example:
+;;;   (tvar/cas tv expected new-val)  ; => bool
+;;;
+;;; Since: Phase 21
 (defn tvar/cas [tv :ptr old :ptr new :ptr] :bool
   ```c
   return tur_tvar_cas(tur_stm_current_tx(), (TVar*)tv, (void*)old, (void*)new);

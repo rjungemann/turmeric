@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tur/tur/io | Turmeric API</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand">turmeric</span>
+  <nav>
+    <a href="index.html">API Docs</a>
+    <a href="../autodoc-plan.md">Plan</a>
+  </nav>
+</header>
+<div class="page-layout">
+<div class="sidebar">
+  <h3>Exported</h3>
+  <ul>
+    <li><a href="#file-size">file-size</a></li>
+    <li><a href="#Real-FileSystem">Real-FileSystem</a></li>
+    <li><a href="#Real-FileSystem-free">Real-FileSystem-free</a></li>
+    <li><a href="#read-file">read-file</a></li>
+    <li><a href="#write-file">write-file</a></li>
+    <li><a href="#file-exists_">file-exists?</a></li>
+    <li><a href="#list-dir">list-dir</a></li>
+    <li><a href="#free-dir-listing">free-dir-listing</a></li>
+  </ul>
+</div>
+<div class="content">
+  <div class="module-heading">
+    <h1>tur/io</h1>
+    <div class="module-path">stdlib/io.tur</div>
+  </div>
+<div class="def-card" id="file-size">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>file-size</h2>
+  </div>
+  <pre class="def-signature">(file-size [f])</pre>
+  <p class="def-summary">return the byte size of an already-open file.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>f</td><td></td><td>a FILE* cast to int64_t (as returned by fopen).</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">The file size in bytes as an int.
+
+  (file-size my-file-ptr)  ; =&gt; 1024</pre>
+  </div>
+</div>
+<div class="def-card" id="Real-FileSystem">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>Real-FileSystem</h2>
+  </div>
+  <pre class="def-signature">(Real-FileSystem)</pre>
+  <p class="def-summary">create a FileSystem capability backed by libc.</p>
+  <p class="def-since">Since: Phase 16</p>
+</div>
+<div class="def-card" id="Real-FileSystem-free">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>Real-FileSystem-free</h2>
+  </div>
+  <pre class="def-signature">(Real-FileSystem-free [fs])</pre>
+  <p class="def-summary">release a FileSystem capability created by Real-FileSystem.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>fs</td><td></td><td>the FileSystem pointer returned by Real-FileSystem.</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase 16</p>
+</div>
+<div class="def-card" id="read-file">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>read-file</h2>
+  </div>
+  <pre class="def-signature">(read-file [path])</pre>
+  <p class="def-summary">read an entire file into a newly allocated buffer.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>path</td><td></td><td>the filesystem path to open (:cstr).</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase 16</p>
+</div>
+<div class="def-card" id="write-file">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>write-file</h2>
+  </div>
+  <pre class="def-signature">(write-file [path data len])</pre>
+  <p class="def-summary">write a byte buffer to a file, overwriting any existing content.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>path</td><td></td><td>the destination filesystem path (:cstr).</td></tr>
+    <tr><td>data</td><td></td><td>pointer to the data to write.</td></tr>
+    <tr><td>len</td><td></td><td>number of bytes to write.</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase 16</p>
+</div>
+<div class="def-card" id="file-exists_">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>file-exists?</h2>
+  </div>
+  <pre class="def-signature">(file-exists? [path])</pre>
+  <p class="def-summary">test whether a file is accessible for reading.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>path</td><td></td><td>the filesystem path to check (:cstr).</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase 16</p>
+</div>
+<div class="def-card" id="list-dir">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>list-dir</h2>
+  </div>
+  <pre class="def-signature">(list-dir [path])</pre>
+  <p class="def-summary">list all non-hidden entries in a directory.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>path</td><td></td><td>the directory path to list (:cstr).</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase 16</p>
+</div>
+<div class="def-card" id="free-dir-listing">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>free-dir-listing</h2>
+  </div>
+  <pre class="def-signature">(free-dir-listing [entries])</pre>
+  <p class="def-summary">free a directory listing returned by list-dir.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>entries</td><td></td><td>the NULL-terminated string array returned by list-dir.</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase 16</p>
+</div>
+</div>
+</div>
+<footer class="site-footer">
+  Auto-generated by <code>tools/gendocs.py</code>.
+  Do not edit by hand -- run <code>just docs</code> to regenerate.
+</footer>
+</body>
+</html>

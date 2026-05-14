@@ -28,6 +28,13 @@
   ;; Autolink + include hints consumed by cmd_build in src/main.c.
   ;; __tur_autolink__: appends -lturi to cc invocation.
   ;; __tur_include__: injects file-level #include before the generated C.
+
+  ;;; turi-eval-autolink-hint -- emit build hints for the libturi linker and headers.
+  ;;;
+  ;;; Returns:
+  ;;;   0 (side-effect: injects -lturi and turi/eval.h into the build).
+  ;;;
+  ;;; Since: Phase S2
   (defn turi-eval-autolink-hint [] :int
     ```c
     /* __tur_autolink__: -lturi */
@@ -36,25 +43,55 @@
     return 0;
     ```)
 
-  ;; Create a new unrestricted evaluation environment.
+  ;;; Env/new -- create a new unrestricted evaluation environment.
+  ;;;
+  ;;; Returns:
+  ;;;   Opaque TuriEnv handle as ptr<void>.
+  ;;;
+  ;;; Example:
+  ;;;   (let [env (Env/new)] ... (Env/free env))
+  ;;;
+  ;;; Since: Phase S2
   (defn Env/new [] :ptr<void>
     ```c
     return (void *)turi_env_new();
     ```)
 
-  ;; Create a sandboxed environment (I/O and FFI builtins disabled).
+  ;;; Env/new-sandboxed -- create a sandboxed environment with I/O and FFI disabled.
+  ;;;
+  ;;; Returns:
+  ;;;   Opaque TuriEnv handle as ptr<void>.
+  ;;;
+  ;;; Since: Phase S2
   (defn Env/new-sandboxed [] :ptr<void>
     ```c
     return (void *)turi_env_new_sandboxed();
     ```)
 
-  ;; Free all resources owned by env.
+  ;;; Env/free -- free all resources owned by an environment.
+  ;;;
+  ;;; Parameters:
+  ;;;   env -- TuriEnv handle returned by Env/new or Env/new-sandboxed
+  ;;;
+  ;;; Since: Phase S2
   (defn Env/free [env :ptr<void>] :void
     ```c
     turi_env_free((TuriEnv *)env);
     ```)
 
-  ;; Evaluate a Turmeric source string. Returns a boxed TuriValue. Free with eval-free.
+  ;;; eval -- evaluate a Turmeric source string and return a boxed result.
+  ;;;
+  ;;; Parameters:
+  ;;;   env -- TuriEnv evaluation environment
+  ;;;   src -- Turmeric source code string
+  ;;;
+  ;;; Returns:
+  ;;;   Boxed TuriValue as ptr<void>; free with eval-free when done.
+  ;;;
+  ;;; Example:
+  ;;;   (eval env "(+ 40 2)")
+  ;;;
+  ;;; Since: Phase S2
   (defn eval [env :ptr<void> src :cstr] :ptr<void>
     ```c
     TuriValue v = turi_eval((TuriEnv *)env, src);
@@ -63,7 +100,16 @@
     return (void *)p;
     ```)
 
-  ;; Evaluate file contents in the given environment.
+  ;;; eval-file -- evaluate a file's contents in the given environment.
+  ;;;
+  ;;; Parameters:
+  ;;;   env  -- TuriEnv evaluation environment
+  ;;;   path -- path to the .tur file to evaluate
+  ;;;
+  ;;; Returns:
+  ;;;   Boxed TuriValue as ptr<void>; free with eval-free when done.
+  ;;;
+  ;;; Since: Phase S2
   (defn eval-file [env :ptr<void> path :cstr] :ptr<void>
     ```c
     TuriValue v = turi_eval_file((TuriEnv *)env, path);
@@ -72,7 +118,16 @@
     return (void *)p;
     ```)
 
-  ;; eval! is like eval but panics on error.
+  ;;; eval! -- evaluate a source string and panic on error.
+  ;;;
+  ;;; Parameters:
+  ;;;   env -- TuriEnv evaluation environment
+  ;;;   src -- Turmeric source code string
+  ;;;
+  ;;; Returns:
+  ;;;   Boxed TuriValue as ptr<void>; free with eval-free when done.
+  ;;;
+  ;;; Since: Phase S2
   (defn eval! [env :ptr<void> src :cstr] :ptr<void>
     ```c
     TuriValue v = turi_eval((TuriEnv *)env, src);
@@ -82,27 +137,59 @@
     return (void *)p;
     ```)
 
-  ;; Free a boxed TuriValue returned by eval or eval-file.
+  ;;; eval-free -- free a boxed TuriValue returned by eval or eval-file.
+  ;;;
+  ;;; Parameters:
+  ;;;   result -- ptr<void> previously returned by eval, eval-file, or eval!
+  ;;;
+  ;;; Since: Phase S2
   (defn eval-free [result :ptr<void>] :void
     ```c
     free(result);
     ```)
 
-  ;; True if the eval result is NOT an error.
+  ;;; eval-ok? -- return true if the eval result is not an error.
+  ;;;
+  ;;; Parameters:
+  ;;;   result -- boxed TuriValue
+  ;;;
+  ;;; Returns:
+  ;;;   true if the result has a non-error tag.
+  ;;;
+  ;;; Example:
+  ;;;   (when (eval-ok? r) (eval-as-int r))
+  ;;;
+  ;;; Since: Phase S2
   (defn eval-ok? [result :ptr<void>] :bool
     ```c
     TuriValue *p = (TuriValue *)result;
     return p != NULL && p->tag != TURI_ERROR;
     ```)
 
-  ;; True if the eval result is an error.
+  ;;; eval-err? -- return true if the eval result is an error.
+  ;;;
+  ;;; Parameters:
+  ;;;   result -- boxed TuriValue
+  ;;;
+  ;;; Returns:
+  ;;;   true if the result has the TURI_ERROR tag or is NULL.
+  ;;;
+  ;;; Since: Phase S2
   (defn eval-err? [result :ptr<void>] :bool
     ```c
     TuriValue *p = (TuriValue *)result;
     return p == NULL || p->tag == TURI_ERROR;
     ```)
 
-  ;; Get the error message (only valid when eval-err? is true).
+  ;;; eval-err-msg -- extract the error message from an error result.
+  ;;;
+  ;;; Parameters:
+  ;;;   result -- boxed TuriValue (should satisfy eval-err?)
+  ;;;
+  ;;; Returns:
+  ;;;   Error message string, or "<not-an-error>" if result is not an error.
+  ;;;
+  ;;; Since: Phase S2
   (defn eval-err-msg [result :ptr<void>] :cstr
     ```c
     TuriValue *p = (TuriValue *)result;
@@ -110,7 +197,18 @@
     return p->as_error ? p->as_error : "<unknown error>";
     ```)
 
-  ;; Extract int value (valid for TURI_INT results).
+  ;;; eval-as-int -- extract the integer value from a TURI_INT result.
+  ;;;
+  ;;; Parameters:
+  ;;;   result -- boxed TuriValue with TURI_INT tag
+  ;;;
+  ;;; Returns:
+  ;;;   Integer value, or 0 if result is not TURI_INT.
+  ;;;
+  ;;; Example:
+  ;;;   (eval-as-int (eval env "(+ 40 2)"))  ; => 42
+  ;;;
+  ;;; Since: Phase S2
   (defn eval-as-int [result :ptr<void>] :int
     ```c
     TuriValue *p = (TuriValue *)result;
@@ -118,7 +216,15 @@
     return p->as_int;
     ```)
 
-  ;; Extract bool value (valid for TURI_BOOL results).
+  ;;; eval-as-bool -- extract the boolean value from a TURI_BOOL result.
+  ;;;
+  ;;; Parameters:
+  ;;;   result -- boxed TuriValue with TURI_BOOL tag
+  ;;;
+  ;;; Returns:
+  ;;;   Boolean value, or false if result is not TURI_BOOL.
+  ;;;
+  ;;; Since: Phase S2
   (defn eval-as-bool [result :ptr<void>] :bool
     ```c
     TuriValue *p = (TuriValue *)result;
@@ -126,7 +232,15 @@
     return p->as_bool;
     ```)
 
-  ;; Extract cstr value (valid for TURI_CSTR results).
+  ;;; eval-as-cstr -- extract the string value from a TURI_CSTR result.
+  ;;;
+  ;;; Parameters:
+  ;;;   result -- boxed TuriValue with TURI_CSTR tag
+  ;;;
+  ;;; Returns:
+  ;;;   C string value, or "" if result is not TURI_CSTR.
+  ;;;
+  ;;; Since: Phase S2
   (defn eval-as-cstr [result :ptr<void>] :cstr
     ```c
     TuriValue *p = (TuriValue *)result;
@@ -134,7 +248,15 @@
     return p->as_cstr ? p->as_cstr : "";
     ```)
 
-  ;; Get the tag as integer: 0=nil 1=bool 2=int 3=float 4=cstr 5=closure 6=error
+  ;;; eval-tag -- return the numeric tag of a TuriValue result.
+  ;;;
+  ;;; Parameters:
+  ;;;   result -- boxed TuriValue
+  ;;;
+  ;;; Returns:
+  ;;;   Integer tag: 0=nil 1=bool 2=int 3=float 4=cstr 5=closure 6=error.
+  ;;;
+  ;;; Since: Phase S2
   (defn eval-tag [result :ptr<void>] :int
     ```c
     TuriValue *p = (TuriValue *)result;

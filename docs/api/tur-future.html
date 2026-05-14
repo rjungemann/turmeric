@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tur/tur/future | Turmeric API</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand">turmeric</span>
+  <nav>
+    <a href="index.html">API Docs</a>
+    <a href="../autodoc-plan.md">Plan</a>
+  </nav>
+</header>
+<div class="page-layout">
+<div class="sidebar">
+  <h3>Exported</h3>
+  <ul>
+    <li><a href="#future-cell-new">future-cell-new</a></li>
+    <li><a href="#future-cell-free">future-cell-free</a></li>
+    <li><a href="#promise-new">promise-new</a></li>
+    <li><a href="#promise-of-cell">promise-of-cell</a></li>
+    <li><a href="#future-of-cell">future-of-cell</a></li>
+    <li><a href="#promise-pair">promise-pair</a></li>
+    <li><a href="#promise-fulfill">promise-fulfill</a></li>
+    <li><a href="#promise-fail">promise-fail</a></li>
+    <li><a href="#promise-free">promise-free</a></li>
+    <li><a href="#future-done_">future-done?</a></li>
+    <li><a href="#future-get">future-get</a></li>
+    <li><a href="#future-free">future-free</a></li>
+    <li><a href="#future-of">future-of</a></li>
+    <li><a href="#future-error-of">future-error-of</a></li>
+    <li><a href="#future-cancel">future-cancel</a></li>
+    <li><a href="#future-cancelled_">future-cancelled?</a></li>
+    <li><a href="#future-map">future-map</a></li>
+    <li><a href="#future-then">future-then</a></li>
+    <li><a href="#future-race">future-race</a></li>
+    <li><a href="#future-all2">future-all2</a></li>
+    <li><a href="#future-any2">future-any2</a></li>
+    <li><a href="#future-join">future-join</a></li>
+    <li><a href="#tuple-first">tuple-first</a></li>
+    <li><a href="#tuple-second">tuple-second</a></li>
+    <li><a href="#tuple-free">tuple-free</a></li>
+    <li><a href="#promise-new-pair">promise-new-pair</a></li>
+    <li><a href="#future-race-n">future-race-n</a></li>
+    <li><a href="#future-all-n">future-all-n</a></li>
+    <li><a href="#future-any-n">future-any-n</a></li>
+    <li><a href="#future-timeout">future-timeout</a></li>
+    <li><a href="#future-with-timeout">future-with-timeout</a></li>
+  </ul>
+</div>
+<div class="content">
+  <div class="module-heading">
+    <h1>tur/future</h1>
+    <div class="module-path">stdlib/future.tur</div>
+  </div>
+<div class="def-card" id="future-cell-new">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>future-cell-new</h2>
+  </div>
+  <pre class="def-signature">(future-cell-new :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">allocate and initialise a shared FutureCell (mutex, condvar, unset).</p>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="future-cell-free">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>future-cell-free</h2>
+  </div>
+  <pre class="def-signature">(future-cell-free [cell :ptr&lt;void&gt;] :nil)</pre>
+  <p class="def-summary">destroy the mutex/condvar and free a FutureCell.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>cell</td><td></td><td>FutureCell pointer from future-cell-new</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="promise-new">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>promise-new</h2>
+  </div>
+  <pre class="def-signature">(promise-new :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">allocate a new unsettled Promise/Future shared cell.</p>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="promise-of-cell">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>promise-of-cell</h2>
+  </div>
+  <pre class="def-signature">(promise-of-cell [cell :ptr&lt;void&gt;] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">return the Promise handle for a FutureCell (identity; for API symmetry).</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>cell</td><td></td><td>FutureCell pointer from promise-new</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="future-of-cell">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>future-of-cell</h2>
+  </div>
+  <pre class="def-signature">(future-of-cell [cell :ptr&lt;void&gt;] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">return the Future handle for a FutureCell (identity; for API symmetry).</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>cell</td><td></td><td>FutureCell pointer from promise-new</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="promise-pair">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defmacro">defmacro</span>
+    <h2>promise-pair</h2>
+  </div>
+  <pre class="def-signature">(promise-pair [cell :ptr&lt;void&gt;])</pre>
+  <p class="def-summary">expand to a (Promise Future) pair list from a single shared cell.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>cell</td><td></td><td>FutureCell pointer from promise-new</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="promise-fulfill">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>promise-fulfill</h2>
+  </div>
+  <pre class="def-signature">(promise-fulfill [p :ptr&lt;void&gt; v :int] :nil)</pre>
+  <p class="def-summary">settle a promise with a successful value; wakes all future waiters.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>Promise (FutureCell) pointer</td></tr>
+    <tr><td>v</td><td></td><td>fulfillment value</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="promise-fail">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>promise-fail</h2>
+  </div>
+  <pre class="def-signature">(promise-fail [p :ptr&lt;void&gt; e :int] :nil)</pre>
+  <p class="def-summary">settle a promise with an error code; wakes all future waiters.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>Promise (FutureCell) pointer</td></tr>
+    <tr><td>e</td><td></td><td>error/exception code</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="promise-free">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>promise-free</h2>
+  </div>
+  <pre class="def-signature">(promise-free [p :ptr&lt;void&gt;] :nil)</pre>
+  <p class="def-summary">free a promise and its shared FutureCell.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>Promise pointer from promise-new</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="future-done_">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>future-done?</h2>
+  </div>
+  <pre class="def-signature">(future-done? [f :ptr&lt;void&gt;] :bool)</pre>
+  <p class="def-summary">non-blocking check: return true if the future has been settled.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>f</td><td></td><td>Future (FutureCell) pointer</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="future-get">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>future-get</h2>
+  </div>
+  <pre class="def-signature">(future-get [f :ptr&lt;void&gt;] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">block until the future is settled; return a heap-allocated Result struct.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>f</td><td></td><td>Future (FutureCell) pointer</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="future-free">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>future-free</h2>
+  </div>
+  <pre class="def-signature">(future-free [f :ptr&lt;void&gt;] :nil)</pre>
+  <p class="def-summary">free a future and its shared FutureCell.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>f</td><td></td><td>Future pointer from promise-new / future-of-cell</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="future-of">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>future-of</h2>
+  </div>
+  <pre class="def-signature">(future-of [v :int] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">create a pre-fulfilled future holding value v.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>v</td><td></td><td>value the future should carry</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="future-error-of">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>future-error-of</h2>
+  </div>
+  <pre class="def-signature">(future-error-of [e :int] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">create a pre-rejected future with error code e.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>e</td><td></td><td>error/exception code</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="future-cancel">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>future-cancel</h2>
+  </div>
+  <pre class="def-signature">(future-cancel [f :ptr&lt;void&gt;] :nil)</pre>
+  <p class="def-summary">cancel a future if not yet settled; sets error code -2 (TUR_FUTURE_CANCELLED).</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>f</td><td></td><td>Future (FutureCell) pointer</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="future-cancelled_">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>future-cancelled?</h2>
+  </div>
+  <pre class="def-signature">(future-cancelled? [f :ptr&lt;void&gt;] :bool)</pre>
+  <p class="def-summary">return true if the future was cancelled (exn == -2).</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>f</td><td></td><td>Future (FutureCell) pointer</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="future-map">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>future-map</h2>
+  </div>
+  <pre class="def-signature">(future-map [f :ptr&lt;void&gt; fn :ptr&lt;void&gt;] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">map fn over a fulfilled future value; propagate rejection unchanged.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>f</td><td></td><td>source Future pointer</td></tr>
+    <tr><td>fn</td><td></td><td>function pointer (int64_t -&gt; int64_t) applied to the fulfilled value</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="future-then">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>future-then</h2>
+  </div>
+  <pre class="def-signature">(future-then [f :ptr&lt;void&gt; fn :ptr&lt;void&gt;] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">flat-map fn over a future; fn must return a new Future ptr&lt;void&gt;.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>f</td><td></td><td>source Future pointer</td></tr>
+    <tr><td>fn</td><td></td><td>function pointer (int64_t -&gt; ptr&lt;void&gt;) producing the next Future</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="future-race">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>future-race</h2>
+  </div>
+  <pre class="def-signature">(future-race [fa :ptr&lt;void&gt; fb :ptr&lt;void&gt;] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">race two futures; return a new future settled by whichever finishes first.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>fa</td><td></td><td>first Future pointer</td></tr>
+    <tr><td>fb</td><td></td><td>second Future pointer</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="future-all2">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>future-all2</h2>
+  </div>
+  <pre class="def-signature">(future-all2 [fa :ptr&lt;void&gt; fb :ptr&lt;void&gt;] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">await both futures; settle ok with fa&#x27;s value only if both succeed.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>fa</td><td></td><td>first Future pointer</td></tr>
+    <tr><td>fb</td><td></td><td>second Future pointer</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="future-any2">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>future-any2</h2>
+  </div>
+  <pre class="def-signature">(future-any2 [fa :ptr&lt;void&gt; fb :ptr&lt;void&gt;] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">return a future settled by the first fulfilled future; both rejecting yields fb&#x27;s error.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>fa</td><td></td><td>first Future pointer</td></tr>
+    <tr><td>fb</td><td></td><td>second Future pointer</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="future-join">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>future-join</h2>
+  </div>
+  <pre class="def-signature">(future-join [fa :ptr&lt;void&gt; fb :ptr&lt;void&gt;] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">await both futures and produce a new future holding a TurTuple2 of their values.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>fa</td><td></td><td>first Future pointer</td></tr>
+    <tr><td>fb</td><td></td><td>second Future pointer</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="tuple-first">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>tuple-first</h2>
+  </div>
+  <pre class="def-signature">(tuple-first [tup :ptr&lt;void&gt;] :int)</pre>
+  <p class="def-summary">read the first element of a TurTuple2 returned by future-join.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>tup</td><td></td><td>TurTuple2 pointer from the ok value of a future-join result</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="tuple-second">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>tuple-second</h2>
+  </div>
+  <pre class="def-signature">(tuple-second [tup :ptr&lt;void&gt;] :int)</pre>
+  <p class="def-summary">read the second element of a TurTuple2 returned by future-join.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>tup</td><td></td><td>TurTuple2 pointer from the ok value of a future-join result</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="tuple-free">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>tuple-free</h2>
+  </div>
+  <pre class="def-signature">(tuple-free [tup :ptr&lt;void&gt;] :nil)</pre>
+  <p class="def-summary">free a TurTuple2 allocated by future-join.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>tup</td><td></td><td>TurTuple2 pointer to free</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="promise-new-pair">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>promise-new-pair</h2>
+  </div>
+  <pre class="def-signature">(promise-new-pair :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">allocate a new unsettled Promise/Future shared cell (alias for promise-new).</p>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="future-race-n">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>future-race-n</h2>
+  </div>
+  <pre class="def-signature">(future-race-n [futures :ptr&lt;void&gt; n :int] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">race an array of n futures; return a new future settled by the first to finish.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>futures</td><td></td><td>pointer to an array of FutureCell* (ptr&lt;void&gt;[n])</td></tr>
+    <tr><td>n</td><td></td><td>number of futures in the array</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="future-all-n">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>future-all-n</h2>
+  </div>
+  <pre class="def-signature">(future-all-n [futures :ptr&lt;void&gt; n :int] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">await all n futures; settle ok (value 0) only if every future succeeds.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>futures</td><td></td><td>pointer to an array of FutureCell* (ptr&lt;void&gt;[n])</td></tr>
+    <tr><td>n</td><td></td><td>number of futures in the array</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="future-any-n">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>future-any-n</h2>
+  </div>
+  <pre class="def-signature">(future-any-n [futures :ptr&lt;void&gt; n :int] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">return a future settled by the first successfully fulfilled future in the array.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>futures</td><td></td><td>pointer to an array of FutureCell* (ptr&lt;void&gt;[n])</td></tr>
+    <tr><td>n</td><td></td><td>number of futures in the array</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="future-timeout">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>future-timeout</h2>
+  </div>
+  <pre class="def-signature">(future-timeout [ms :int] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">create a future that settles with error -1 after ms milliseconds.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>ms</td><td></td><td>timeout duration in milliseconds</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+<div class="def-card" id="future-with-timeout">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>future-with-timeout</h2>
+  </div>
+  <pre class="def-signature">(future-with-timeout [f :ptr&lt;void&gt; ms :int] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">race a future against a timeout of ms milliseconds.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>f</td><td></td><td>source Future pointer</td></tr>
+    <tr><td>ms</td><td></td><td>timeout in milliseconds; on expiry the result is rejected with exn = -1</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T20-C</p>
+</div>
+</div>
+</div>
+<footer class="site-footer">
+  Auto-generated by <code>tools/gendocs.py</code>.
+  Do not edit by hand -- run <code>just docs</code> to regenerate.
+</footer>
+</body>
+</html>

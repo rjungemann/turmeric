@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tur/tur/pattern | Turmeric API</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand">turmeric</span>
+  <nav>
+    <a href="index.html">API Docs</a>
+    <a href="../autodoc-plan.md">Plan</a>
+  </nav>
+</header>
+<div class="page-layout">
+<div class="sidebar">
+  <h3>Exported</h3>
+  <ul>
+    <li><a href="#pat-at">pat-at</a></li>
+    <li><a href="#pat-start">pat-start</a></li>
+    <li><a href="#const">const</a></li>
+    <li><a href="#silence">silence</a></li>
+    <li><a href="#cycle">cycle</a></li>
+    <li><a href="#fast-cycle">fast-cycle</a></li>
+    <li><a href="#phase">phase</a></li>
+    <li><a href="#P">P</a></li>
+    <li><a href="#rand-choice">rand-choice</a></li>
+    <li><a href="#rand-int">rand-int</a></li>
+    <li><a href="#rand-float">rand-float</a></li>
+    <li><a href="#rand-range">rand-range</a></li>
+    <li><a href="#identity">identity</a></li>
+    <li><a href="#time-pat">time-pat</a></li>
+    <li><a href="#beat-number">beat-number</a></li>
+    <li><a href="#beat-fraction">beat-fraction</a></li>
+    <li><a href="#alt">alt</a></li>
+    <li><a href="#if-pat">if-pat</a></li>
+    <li><a href="#every-n">every-n</a></li>
+    <li><a href="#when-mod">when-mod</a></li>
+    <li><a href="#when">when</a></li>
+    <li><a href="#every">every</a></li>
+    <li><a href="#pattern-length">pattern-length</a></li>
+    <li><a href="#pattern-constant_">pattern-constant?</a></li>
+    <li><a href="#PatternWithMeta_T_">PatternWithMeta&lt;T&gt;</a></li>
+    <li><a href="#with-meta">with-meta</a></li>
+    <li><a href="#pattern-of">pattern-of</a></li>
+  </ul>
+</div>
+<div class="content">
+  <div class="module-heading">
+    <h1>tur/pattern</h1>
+    <div class="module-path">stdlib/pattern.tur</div>
+  </div>
+<div class="def-card" id="pat-at">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>pat-at</h2>
+  </div>
+  <pre class="def-signature">(pat-at [p time])</pre>
+  <p class="def-summary">evaluate a pattern at a specific time.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to evaluate</td></tr>
+    <tr><td>time</td><td></td><td>time in beats</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern value at the given time.
+
+  (pat-at (const 5) 2.3)  ; =&gt; 5</pre>
+  </div>
+</div>
+<div class="def-card" id="pat-start">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>pat-start</h2>
+  </div>
+  <pre class="def-signature">(pat-start [p])</pre>
+  <p class="def-summary">evaluate a pattern at time 0.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>pattern to evaluate</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern value at time 0.
+
+  (pat-start (cycle 10 20 30))  ; =&gt; 10</pre>
+  </div>
+</div>
+<div class="def-card" id="const">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>const</h2>
+  </div>
+  <pre class="def-signature">(const [value])</pre>
+  <p class="def-summary">constant pattern that always returns the same value.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>value</td><td></td><td>the value to return regardless of time</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;T&gt; that always returns value.
+
+  (const 0.5)</pre>
+  </div>
+</div>
+<div class="def-card" id="silence">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>silence</h2>
+  </div>
+  <pre class="def-signature">(silence)</pre>
+  <p class="def-summary">pattern that always returns none (for option types).</p>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;option&lt;T&gt;&gt; that always returns none.</p>
+  </div>
+</div>
+<div class="def-card" id="cycle">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>cycle</h2>
+  </div>
+  <pre class="def-signature">(cycle [&amp; values])</pre>
+  <p class="def-summary">cycle through values one per beat.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>values</td><td></td><td>one or more values to cycle through</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;T&gt; advancing to the next value each beat.
+
+  ((cycle 1 2 3) 0.0)  ; =&gt; 1
+  ((cycle 1 2 3) 1.0)  ; =&gt; 2</pre>
+  </div>
+</div>
+<div class="def-card" id="fast-cycle">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>fast-cycle</h2>
+  </div>
+  <pre class="def-signature">(fast-cycle [rate &amp; values])</pre>
+  <p class="def-summary">cycle through values at a faster rate.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>rate</td><td></td><td>cycles per whole (default: 1 = same as cycle)</td></tr>
+    <tr><td>values</td><td></td><td>values to cycle through</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;T&gt; cycling rate times faster than cycle.
+
+  ((fast-cycle 2 1 2 3) 0.5)  ; evaluates as if time=1.0</pre>
+  </div>
+</div>
+<div class="def-card" id="phase">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>phase</h2>
+  </div>
+  <pre class="def-signature">(phase [&amp; [cycle_length 1.0])</pre>
+  <p class="def-summary">return the fractional phase within a cycle.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>cycle_length</td><td></td><td>length of the cycle in beats (default: 1.0)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">NumPattern returning phase in [0, cycle_length).
+
+  ((phase 2.0) 1.5)  ; =&gt; 1.5</pre>
+  </div>
+</div>
+<div class="def-card" id="P">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defmacro">defmacro</span>
+    <h2>P</h2>
+  </div>
+  <pre class="def-signature">(P [&amp; exprs])</pre>
+  <p class="def-summary">macro shorthand: (P x) =&gt; (const x), (P x y ...) =&gt; (cycle x y ...).</p>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">(P 1 2 3)  ; same as (cycle 1 2 3)
+  (P 5)      ; same as (const 5)</pre>
+  </div>
+</div>
+<div class="def-card" id="rand-choice">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>rand-choice</h2>
+  </div>
+  <pre class="def-signature">(rand-choice [&amp; values])</pre>
+  <p class="def-summary">randomly pick a value from the supplied list on each evaluation.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>values</td><td></td><td>one or more values to choose from</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;T&gt; returning a random element each time it is evaluated.
+
+  ((rand-choice 1 2 3) 0.0)  ; =&gt; 1, 2, or 3 at random</pre>
+  </div>
+</div>
+<div class="def-card" id="rand-int">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>rand-int</h2>
+  </div>
+  <pre class="def-signature">(rand-int [min max])</pre>
+  <p class="def-summary">pattern returning a random integer in [min, max) each evaluation.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>min</td><td></td><td>minimum value (inclusive)</td></tr>
+    <tr><td>max</td><td></td><td>maximum value (exclusive)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern of random integers.</p>
+  </div>
+</div>
+<div class="def-card" id="rand-float">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>rand-float</h2>
+  </div>
+  <pre class="def-signature">(rand-float)</pre>
+  <p class="def-summary">pattern returning a random float in [0, 1) each evaluation.</p>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern of random floats.</p>
+  </div>
+</div>
+<div class="def-card" id="rand-range">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>rand-range</h2>
+  </div>
+  <pre class="def-signature">(rand-range [min max])</pre>
+  <p class="def-summary">pattern returning a random float in [min, max) each evaluation.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>min</td><td></td><td>minimum value (inclusive)</td></tr>
+    <tr><td>max</td><td></td><td>maximum value (exclusive)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern.</p>
+  </div>
+</div>
+<div class="def-card" id="identity">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>identity</h2>
+  </div>
+  <pre class="def-signature">(identity)</pre>
+  <p class="def-summary">pattern that returns its time argument unchanged.</p>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern returning the raw time value.</p>
+  </div>
+</div>
+<div class="def-card" id="time-pat">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>time-pat</h2>
+  </div>
+  <pre class="def-signature">(time-pat)</pre>
+  <p class="def-summary">pattern returning the current time value.</p>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern that is the identity function over time.</p>
+  </div>
+</div>
+<div class="def-card" id="beat-number">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>beat-number</h2>
+  </div>
+  <pre class="def-signature">(beat-number)</pre>
+  <p class="def-summary">pattern returning the integer beat number.</p>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">NumPattern returning floor(time).
+
+  ((beat-number) 2.7)  ; =&gt; 2.0</pre>
+  </div>
+</div>
+<div class="def-card" id="beat-fraction">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>beat-fraction</h2>
+  </div>
+  <pre class="def-signature">(beat-fraction)</pre>
+  <p class="def-summary">pattern returning the fractional part of the current beat.</p>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">NumPattern returning time - floor(time).
+
+  ((beat-fraction) 2.7)  ; =&gt; 0.7</pre>
+  </div>
+</div>
+<div class="def-card" id="alt">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>alt</h2>
+  </div>
+  <pre class="def-signature">(alt [a b])</pre>
+  <p class="def-summary">alternate between two values on even/odd beats.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>a</td><td></td><td>value on even beats</td></tr>
+    <tr><td>b</td><td></td><td>value on odd beats</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;T&gt; alternating between a and b.
+
+  ((alt 1 2) 0.0)  ; =&gt; 1
+  ((alt 1 2) 1.0)  ; =&gt; 2</pre>
+  </div>
+</div>
+<div class="def-card" id="if-pat">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>if-pat</h2>
+  </div>
+  <pre class="def-signature">(if-pat [condition a b])</pre>
+  <p class="def-summary">choose between two values based on a boolean pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>condition</td><td></td><td>Boolean pattern or time -&gt; bool function</td></tr>
+    <tr><td>a</td><td></td><td>value when condition is true</td></tr>
+    <tr><td>b</td><td></td><td>value when condition is false</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt;.</p>
+  </div>
+</div>
+<div class="def-card" id="every-n">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>every-n</h2>
+  </div>
+  <pre class="def-signature">(every-n [n])</pre>
+  <p class="def-summary">true when the beat number is a multiple of n.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>n</td><td></td><td>modulo base</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">BoolPattern that is true when floor(time) mod n == 0.
+
+  ((every-n 4) 4.0)  ; =&gt; true</pre>
+  </div>
+</div>
+<div class="def-card" id="when-mod">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>when-mod</h2>
+  </div>
+  <pre class="def-signature">(when-mod [n &amp; [offset 0])</pre>
+  <p class="def-summary">true when beat number mod n equals a given offset.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>n</td><td></td><td>modulo base</td></tr>
+    <tr><td>offset</td><td></td><td>target remainder (default: 0)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">BoolPattern.</p>
+  </div>
+</div>
+<div class="def-card" id="when">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>when</h2>
+  </div>
+  <pre class="def-signature">(when [cond p &amp; [zero 0])</pre>
+  <p class="def-summary">gate a pattern through a boolean condition.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>cond</td><td></td><td>Boolean pattern controlling when p fires</td></tr>
+    <tr><td>p</td><td></td><td>pattern to gate</td></tr>
+    <tr><td>zero</td><td></td><td>value returned when cond is false (default: 0)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;T&gt;.
+
+  (when (every-n 2) (const 1) 0)</pre>
+  </div>
+</div>
+<div class="def-card" id="every">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>every</h2>
+  </div>
+  <pre class="def-signature">(every [n p &amp; [zero 0])</pre>
+  <p class="def-summary">play a pattern only every n beats.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>n</td><td></td><td>beat interval</td></tr>
+    <tr><td>p</td><td></td><td>pattern to play</td></tr>
+    <tr><td>zero</td><td></td><td>value between triggers (default: 0)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;T&gt;.
+
+  (every 4 my-pat)</pre>
+  </div>
+</div>
+<div class="def-card" id="pattern-length">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>pattern-length</h2>
+  </div>
+  <pre class="def-signature">(pattern-length [p])</pre>
+  <p class="def-summary">attempt to determine the cycle length of a pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">nil (cannot be determined statically in general).</p>
+  </div>
+</div>
+<div class="def-card" id="pattern-constant_">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>pattern-constant?</h2>
+  </div>
+  <pre class="def-signature">(pattern-constant? [p])</pre>
+  <p class="def-summary">check whether a pattern is constant.</p>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">false (cannot be determined statically in general).</p>
+  </div>
+</div>
+<div class="def-card" id="PatternWithMeta_T_">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defstruct">defstruct</span>
+    <h2>PatternWithMeta&lt;T&gt;</h2>
+  </div>
+  <pre class="def-signature">(defstruct PatternWithMeta&lt;T&gt; [])</pre>
+  <p class="def-summary">pattern bundled with introspection metadata.</p>
+</div>
+<div class="def-card" id="with-meta">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>with-meta</h2>
+  </div>
+  <pre class="def-signature">(with-meta [pattern &amp; [name &quot;&quot; description &quot;&quot; tags [])</pre>
+  <p class="def-summary">attach metadata to a pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>pattern</td><td></td><td>the underlying pattern</td></tr>
+    <tr><td>name</td><td></td><td>human-readable name (default: &quot;&quot;)</td></tr>
+    <tr><td>description</td><td></td><td>description of the pattern (default: &quot;&quot;)</td></tr>
+    <tr><td>tags</td><td></td><td>categorisation tags (default: [])</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">PatternWithMeta&lt;T&gt;.</p>
+  </div>
+</div>
+<div class="def-card" id="pattern-of">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>pattern-of</h2>
+  </div>
+  <pre class="def-signature">(pattern-of [p])</pre>
+  <p class="def-summary">extract the underlying pattern from a PatternWithMeta value.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>PatternWithMeta&lt;T&gt;</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Pattern&lt;T&gt;.</p>
+  </div>
+</div>
+</div>
+</div>
+<footer class="site-footer">
+  Auto-generated by <code>tools/gendocs.py</code>.
+  Do not edit by hand -- run <code>just docs</code> to regenerate.
+</footer>
+</body>
+</html>

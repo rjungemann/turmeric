@@ -1,4 +1,4 @@
-;; stdlib/tidal/pattern.tur — Core Pattern Type and Constructors
+;; stdlib/tidal/pattern.tur -- Core Pattern Type and Constructors
 ;;
 ;; This module provides the fundamental Pattern type and basic pattern
 ;; constructors for the TidalCycles-inspired DSL.
@@ -31,18 +31,30 @@
 ;; Pattern Evaluation
 ;; ============================================================================
 
-;; Apply a pattern at a specific time
-;;
-;; @param p Pattern to evaluate
-;; @param time Time in beats
-;; @return Pattern value at that time
+;;; pat-at -- evaluate a pattern at a specific time.
+;;;
+;;; Parameters:
+;;;   p    -- pattern to evaluate
+;;;   time -- time in beats
+;;;
+;;; Returns:
+;;;   Pattern value at the given time.
+;;;
+;;; Example:
+;;;   (pat-at (const 5) 2.3)  ; => 5
 (defn pat-at [p time]
   (p time))
 
-;; Evaluate a pattern at time 0
-;;
-;; @param p Pattern to evaluate
-;; @return Pattern value at time 0
+;;; pat-start -- evaluate a pattern at time 0.
+;;;
+;;; Parameters:
+;;;   p -- pattern to evaluate
+;;;
+;;; Returns:
+;;;   Pattern value at time 0.
+;;;
+;;; Example:
+;;;   (pat-start (cycle 10 20 30))  ; => 10
 (defn pat-start [p]
   (p 0.0))
 
@@ -50,17 +62,23 @@
 ;; Basic Pattern Constructors
 ;; ============================================================================
 
-;; Constant pattern - always returns the same value
-;;
-;; @param value The constant value to return
-;; @return Pattern<T> that always returns value
+;;; const -- constant pattern that always returns the same value.
+;;;
+;;; Parameters:
+;;;   value -- the value to return regardless of time
+;;;
+;;; Returns:
+;;;   Pattern<T> that always returns value.
+;;;
+;;; Example:
+;;;   (const 0.5)
 (defn const [value]
   (fn [_time] value))
 
-;; Silence pattern - always returns nothing (for option types)
-;; In Turmeric, we use 'none' for silence
-;;
-;; @return Pattern<option<T>> that always returns none
+;;; silence -- pattern that always returns none (for option types).
+;;;
+;;; Returns:
+;;;   Pattern<option<T>> that always returns none.
 (defn silence []
   (fn [_time] none))
 
@@ -68,10 +86,17 @@
 ;; Cycle Patterns
 ;; ============================================================================
 
-;; Cycle through a list of values, one per beat
-;;
-;; @param values List of values to cycle through
-;; @return Pattern<T> that cycles through values
+;;; cycle -- cycle through values one per beat.
+;;;
+;;; Parameters:
+;;;   values -- one or more values to cycle through
+;;;
+;;; Returns:
+;;;   Pattern<T> advancing to the next value each beat.
+;;;
+;;; Example:
+;;;   ((cycle 1 2 3) 0.0)  ; => 1
+;;;   ((cycle 1 2 3) 1.0)  ; => 2
 (defn cycle [& values]
   (let [vec-values (vec values)
         len (len vec-values)]
@@ -81,11 +106,17 @@
         (let [index (mod (floor time) len)]
           (get vec-values index))))))
 
-;; Cycle through values but at a different rate
-;;
-;; @param rate How many cycles per whole (default: 1)
-;; @param values List of values to cycle through
-;; @return Pattern<T>
+;;; fast-cycle -- cycle through values at a faster rate.
+;;;
+;;; Parameters:
+;;;   rate   -- cycles per whole (default: 1 = same as cycle)
+;;;   values -- values to cycle through
+;;;
+;;; Returns:
+;;;   Pattern<T> cycling rate times faster than cycle.
+;;;
+;;; Example:
+;;;   ((fast-cycle 2 1 2 3) 0.5)  ; evaluates as if time=1.0
 (defn fast-cycle [rate & values]
   (let [vec-values (vec values)
         len (len vec-values)]
@@ -99,10 +130,16 @@
 ;; Phase Pattern
 ;; ============================================================================
 
-;; Get the current beat position within the cycle (0 to 1)
-;;
-;; @param cycle_length Length of the cycle in beats (default: 1)
-;; @return NumPattern that returns phase within cycle
+;;; phase -- return the fractional phase within a cycle.
+;;;
+;;; Parameters:
+;;;   cycle_length -- length of the cycle in beats (default: 1.0)
+;;;
+;;; Returns:
+;;;   NumPattern returning phase in [0, cycle_length).
+;;;
+;;; Example:
+;;;   ((phase 2.0) 1.5)  ; => 1.5
 (defn phase [& [cycle_length 1.0]]
   (fn [time]
     (time/phase time cycle_length)))
@@ -111,9 +148,11 @@
 ;; P Macro for Concise Pattern Syntax
 ;; ============================================================================
 
-;; Macro for cleaner pattern syntax
-;; (P 1 2 3) expands to (cycle 1 2 3)
-;; (P 5) expands to (const 5)
+;;; P -- macro shorthand: (P x) => (const x), (P x y ...) => (cycle x y ...).
+;;;
+;;; Example:
+;;;   (P 1 2 3)  ; same as (cycle 1 2 3)
+;;;   (P 5)      ; same as (const 5)
 (defmacro P [& exprs]
   (if (== (len exprs) 1)
     `(const ~(first exprs))
@@ -123,10 +162,16 @@
 ;; Random Patterns
 ;; ============================================================================
 
-;; Random choice from a list of values
-;;
-;; @param values List of values to choose from
-;; @return Pattern<T> that returns random values
+;;; rand-choice -- randomly pick a value from the supplied list on each evaluation.
+;;;
+;;; Parameters:
+;;;   values -- one or more values to choose from
+;;;
+;;; Returns:
+;;;   Pattern<T> returning a random element each time it is evaluated.
+;;;
+;;; Example:
+;;;   ((rand-choice 1 2 3) 0.0)  ; => 1, 2, or 3 at random
 (defn rand-choice [& values]
   (let [vec-values (vec values)
         len (len vec-values)]
@@ -135,25 +180,32 @@
       (fn [_time]
         (get vec-values (rand-int len))))))
 
-;; Random integer in range
-;;
-;; @param min Minimum value (inclusive)
-;; @param max Maximum value (exclusive)
-;; @return NumPattern that returns random integers
+;;; rand-int -- pattern returning a random integer in [min, max) each evaluation.
+;;;
+;;; Parameters:
+;;;   min -- minimum value (inclusive)
+;;;   max -- maximum value (exclusive)
+;;;
+;;; Returns:
+;;;   NumPattern of random integers.
 (defn rand-int [min max]
   (fn [_time] (rand-int (- max min) min)))
 
-;; Random float in range [0, 1)
-;;
-;; @return NumPattern that returns random floats
+;;; rand-float -- pattern returning a random float in [0, 1) each evaluation.
+;;;
+;;; Returns:
+;;;   NumPattern of random floats.
 (defn rand-float []
   (fn [_time] (rand-float)))
 
-;; Random float in range [min, max)
-;;
-;; @param min Minimum value (inclusive)
-;; @param max Maximum value (exclusive)
-;; @return NumPattern
+;;; rand-range -- pattern returning a random float in [min, max) each evaluation.
+;;;
+;;; Parameters:
+;;;   min -- minimum value (inclusive)
+;;;   max -- maximum value (exclusive)
+;;;
+;;; Returns:
+;;;   NumPattern.
 (defn rand-range [min max]
   (fn [_time] (+ min (* (rand-float) (- max min)))))
 
@@ -161,27 +213,37 @@
 ;; Value Patterns
 ;; ============================================================================
 
-;; Pattern that returns its input value (identity)
-;;
-;; @return Pattern<T> that returns the input value
+;;; identity -- pattern that returns its time argument unchanged.
+;;;
+;;; Returns:
+;;;   NumPattern returning the raw time value.
 (defn identity []
   (fn [time] time))
 
-;; Pattern that returns the time value
-;;
-;; @return NumPattern that returns the current time
+;;; time-pat -- pattern returning the current time value.
+;;;
+;;; Returns:
+;;;   NumPattern that is the identity function over time.
 (defn time-pat []
   (fn [time] time))
 
-;; Pattern that returns the beat number (integer part of time)
-;;
-;; @return NumPattern that returns floor(time)
+;;; beat-number -- pattern returning the integer beat number.
+;;;
+;;; Returns:
+;;;   NumPattern returning floor(time).
+;;;
+;;; Example:
+;;;   ((beat-number) 2.7)  ; => 2.0
 (defn beat-number []
   (fn [time] (floor time)))
 
-;; Pattern that returns the fractional part of time
-;;
-;; @return NumPattern that returns time - floor(time)
+;;; beat-fraction -- pattern returning the fractional part of the current beat.
+;;;
+;;; Returns:
+;;;   NumPattern returning time - floor(time).
+;;;
+;;; Example:
+;;;   ((beat-fraction) 2.7)  ; => 0.7
 (defn beat-fraction []
   (fn [time] (- time (floor time))))
 
@@ -189,23 +251,33 @@
 ;; Binary Choice Pattern
 ;; ============================================================================
 
-;; Pattern that alternates between two values
-;;
-;; @param a First value
-;; @param b Second value
-;; @return Pattern<T> that alternates between a and b
+;;; alt -- alternate between two values on even/odd beats.
+;;;
+;;; Parameters:
+;;;   a -- value on even beats
+;;;   b -- value on odd beats
+;;;
+;;; Returns:
+;;;   Pattern<T> alternating between a and b.
+;;;
+;;; Example:
+;;;   ((alt 1 2) 0.0)  ; => 1
+;;;   ((alt 1 2) 1.0)  ; => 2
 (defn alt [a b]
   (fn [time]
     (if (even? (floor time))
       a
       b)))
 
-;; Pattern that returns a when condition is true, b when false
-;;
-;; @param condition Boolean pattern or function
-;; @param a Value when condition is true
-;; @param b Value when condition is false
-;; @return Pattern<T>
+;;; if-pat -- choose between two values based on a boolean pattern.
+;;;
+;;; Parameters:
+;;;   condition -- Boolean pattern or time -> bool function
+;;;   a         -- value when condition is true
+;;;   b         -- value when condition is false
+;;;
+;;; Returns:
+;;;   Pattern<T>.
 (defn if-pat [condition a b]
   (fn [time]
     (if (condition time)
@@ -216,19 +288,28 @@
 ;; Comparison Patterns
 ;; ============================================================================
 
-;; Pattern that returns true when time modulo n equals 0
-;;
-;; @param n Modulo base
-;; @return BoolPattern
+;;; every-n -- true when the beat number is a multiple of n.
+;;;
+;;; Parameters:
+;;;   n -- modulo base
+;;;
+;;; Returns:
+;;;   BoolPattern that is true when floor(time) mod n == 0.
+;;;
+;;; Example:
+;;;   ((every-n 4) 4.0)  ; => true
 (defn every-n [n]
   (fn [time]
     (== 0 (mod (floor time) n))))
 
-;; Pattern that returns true when time modulo n equals offset
-;;
-;; @param n Modulo base
-;; @param offset Offset (default: 0)
-;; @return BoolPattern
+;;; when-mod -- true when beat number mod n equals a given offset.
+;;;
+;;; Parameters:
+;;;   n      -- modulo base
+;;;   offset -- target remainder (default: 0)
+;;;
+;;; Returns:
+;;;   BoolPattern.
 (defn when-mod [n & [offset 0]]
   (fn [time]
     (== (mod (floor time) n) offset)))
@@ -237,24 +318,36 @@
 ;; Conditional Pattern
 ;; ============================================================================
 
-;; Only play pattern when condition is true, otherwise return zero value
-;;
-;; @param cond Boolean pattern for condition
-;; @param p Pattern to play when condition is true
-;; @param zero Value to return when condition is false (default: 0)
-;; @return Pattern<T>
+;;; when -- gate a pattern through a boolean condition.
+;;;
+;;; Parameters:
+;;;   cond -- Boolean pattern controlling when p fires
+;;;   p    -- pattern to gate
+;;;   zero -- value returned when cond is false (default: 0)
+;;;
+;;; Returns:
+;;;   Pattern<T>.
+;;;
+;;; Example:
+;;;   (when (every-n 2) (const 1) 0)
 (defn when [cond p & [zero 0]]
   (fn [time]
     (if (cond time)
       (p time)
       zero)))
 
-;; Only play pattern every n beats
-;;
-;; @param n Interval in beats
-;; @param p Pattern to play
-;; @param zero Value to return between triggers (default: 0)
-;; @return Pattern<T>
+;;; every -- play a pattern only every n beats.
+;;;
+;;; Parameters:
+;;;   n    -- beat interval
+;;;   p    -- pattern to play
+;;;   zero -- value between triggers (default: 0)
+;;;
+;;; Returns:
+;;;   Pattern<T>.
+;;;
+;;; Example:
+;;;   (every 4 my-pat)
 (defn every [n p & [zero 0]]
   (when (every-n n) p zero))
 
@@ -262,19 +355,19 @@
 ;; Utility Functions
 ;; ============================================================================
 
-;; Get the length of a cycle pattern
-;;
-;; @param p Cycle pattern
-;; @return Number of elements in the cycle, or nil if not a cycle pattern
+;;; pattern-length -- attempt to determine the cycle length of a pattern.
+;;;
+;;; Returns:
+;;;   nil (cannot be determined statically in general).
 (defn pattern-length [p]
   ;; This is a best-effort detection for cycle patterns
   ;; In a real implementation, we might need pattern metadata
   nil)
 
-;; Check if a pattern is constant
-;;
-;; @param p Pattern to check
-;; @return true if pattern always returns the same value
+;;; pattern-constant? -- check whether a pattern is constant.
+;;;
+;;; Returns:
+;;;   false (cannot be determined statically in general).
 (defn pattern-constant? [p]
   ;; Can't determine statically in general
   ;; This would require runtime analysis
@@ -284,29 +377,35 @@
 ;; Pattern Metadata (Optional)
 ;; ============================================================================
 
-;; Pattern with metadata for introspection
+;;; PatternWithMeta -- pattern bundled with introspection metadata.
 (defstruct PatternWithMeta<T>
   [pattern :(Pattern<T>)
    name :cstr
    description :cstr
    tags :(vec<cstr>) ])
 
-;; Create a pattern with metadata
-;;
-;; @param pattern The pattern
-;; @param name Pattern name
-;; @param description Description of what the pattern does
-;; @param tags Tags for categorization
-;; @return PatternWithMeta<T>
+;;; with-meta -- attach metadata to a pattern.
+;;;
+;;; Parameters:
+;;;   pattern     -- the underlying pattern
+;;;   name        -- human-readable name (default: "")
+;;;   description -- description of the pattern (default: "")
+;;;   tags        -- categorisation tags (default: [])
+;;;
+;;; Returns:
+;;;   PatternWithMeta<T>.
 (defn with-meta [pattern & [name "" description "" tags []]]
   {:pattern pattern
    :name name
    :description description
    :tags tags})
 
-;; Get the underlying pattern from a PatternWithMeta
-;;
-;; @param p PatternWithMeta
-;; @return Pattern<T>
+;;; pattern-of -- extract the underlying pattern from a PatternWithMeta value.
+;;;
+;;; Parameters:
+;;;   p -- PatternWithMeta<T>
+;;;
+;;; Returns:
+;;;   Pattern<T>.
 (defn pattern-of [p]
   (:pattern p))

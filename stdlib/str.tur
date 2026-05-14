@@ -1,6 +1,17 @@
 ;; Str type for Turmeric
 ;; UTF-8 string as a borrowed view (pointer + length)
 
+;;; str-from-cstr -- create a str view from a NUL-terminated C string.
+;;;
+;;; Parameters:
+;;;   cstr -- NUL-terminated C string pointer
+;;;
+;;; Returns:
+;;;   Pointer to a newly allocated str struct (p + len). Does not copy the
+;;;   underlying string data; the caller retains ownership of the original buffer.
+;;;
+;;; Example:
+;;;   (str-from-cstr "hello")  ; => <str ptr>
 ;; Create a str from a C string (NUL-terminated)
 (defn str-from-cstr [cstr]
   ```c
@@ -12,6 +23,16 @@
   return str;
   ```)
 
+;;; str-len -- return the length of a str in bytes.
+;;;
+;;; Parameters:
+;;;   s -- str pointer returned by str-from-cstr
+;;;
+;;; Returns:
+;;;   Length of the string in bytes (not characters).
+;;;
+;;; Example:
+;;;   (str-len (str-from-cstr "hello"))  ; => 5
 ;; Get string length in bytes
 (defn str-len [s] :int
   ```c
@@ -19,6 +40,19 @@
   return (int)str->len;
   ```)
 
+;;; str-eq? -- check whether two str values have identical byte contents.
+;;;
+;;; Parameters:
+;;;   s1 -- first str pointer
+;;;   s2 -- second str pointer
+;;;
+;;; Returns:
+;;;   true if both strings have the same length and identical bytes.
+;;;
+;;; Example:
+;;;   (str-eq? (str-from-cstr "hi") (str-from-cstr "hi"))  ; => true
+;;;
+;;; Since: Phase E1
 ;; Check if two strings are equal
 (defn str-eq? [s1 s2] :bool
   ```c
@@ -29,6 +63,13 @@
   return memcmp(a->p, b->p, a->len) == 0;
   ```)
 
+;;; str-free -- free the str struct (does not free the underlying string data).
+;;;
+;;; Parameters:
+;;;   s -- str pointer to free
+;;;
+;;; Example:
+;;;   (str-free my-str)
 ;; Free the str struct (does NOT free the underlying string data)
 (defn str-free [s]
   ```c
@@ -36,6 +77,7 @@
   return 0;
   ```)
 
+;;; Eq [str] -- eq? delegates to str-eq? for byte-level string equality.
 ;; Phase E1: Eq instance for str -- wires eq? to str-eq?
 (definstance Eq [str]
   (eq? [x y] (str-eq? x y)))

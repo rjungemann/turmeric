@@ -145,6 +145,15 @@ run-tidal-melody: build
 rebuild: clean configure build
 
 # ---------------------------------------------------------------------------
+# Documentation
+# ---------------------------------------------------------------------------
+
+# Generate HTML API docs from stdlib ;;; docstrings.
+# Also emits stdlib/docstrings.tur for the runtime (doc name) lookup.
+docs:
+    python3 tools/gendocs.py stdlib/ --out docs/api/ --emit-tur stdlib/docstrings.tur
+
+# ---------------------------------------------------------------------------
 # WebAssembly & Web REPL targets
 # ---------------------------------------------------------------------------
 
@@ -152,8 +161,9 @@ rebuild: clean configure build
 configure-wasm:
     cmake -S . -B build-wasm -DTUR_WASM=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 
-# Build WASM module (requires Emscripten)
-wasm: configure-wasm
+# Build WASM module (requires Emscripten).
+# Runs `just docs` first so stdlib/docstrings.tur is up-to-date.
+wasm: docs configure-wasm
     cmake --build build-wasm -j --target tur_wasm
 
 # Set up web dependencies (Monaco Editor, etc.)

@@ -11,37 +11,47 @@
 ;; Inline-C Optimized Functions
 ;; ============================================================================
 
-;; Inline-C version of synth-set for maximum performance
-;; This bypasses Turmeric function call overhead for the hot path
-;;
-;; @param world_id World handle
-;; @param node_id Node ID
-;; @param control_index Control index
-;; @param value Value to set
-;; @return 0 on success, -1 on error
+;;; synth-set-inline -- Set a synth control parameter via inline C for minimum overhead.
+;;;
+;;; Bypasses Turmeric function call overhead for the hot path.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle.
+;;;   node_id -- Target node ID.
+;;;   control_index -- Zero-based control index.
+;;;   value -- Value to set.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (defn synth-set-inline [world_id node_id control_index value]
   ```c
   return hc_wasm_synth_set(world_id, node_id, control_index, value);
   ```)
 
-;; Inline-C version of synth-new
-;;
-;; @param world_id World handle
-;; @param synthdef_name SynthDef name
-;; @param node_id Node ID
-;; @param action Add action
-;; @param target_id Target node ID
-;; @return 0 on success, -1 on error
+;;; synth-new-inline -- Create a synth node via inline C for minimum overhead.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle.
+;;;   synthdef_name -- SynthDef name to instantiate.
+;;;   node_id -- Node ID to assign.
+;;;   action -- Add action constant (e.g. ADD_TO_TAIL).
+;;;   target_id -- Target node ID.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (defn synth-new-inline [world_id synthdef_name node_id action target_id]
   ```c
   return hc_wasm_synth_new(world_id, synthdef_name, node_id, action, target_id);
   ```)
 
-;; Inline-C version of synth-free
-;;
-;; @param world_id World handle
-;; @param node_id Node ID
-;; @return 0 on success, -1 on error
+;;; synth-free-inline -- Free a synth node via inline C for minimum overhead.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle.
+;;;   node_id -- Node ID to free.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (defn synth-free-inline [world_id node_id]
   ```c
   return hc_wasm_synth_free(world_id, node_id);
@@ -51,16 +61,25 @@
 ;; Message Batching
 ;; ============================================================================
 
-;; Batch multiple synth control operations into a single call
-;;
-;; This reduces FFI call overhead by batching multiple parameter changes.
-;;
-;; @param world_id World handle
-;; @param operations Vector of operation maps:
-;;                  [{:type :set, :node_id id, :index idx, :value val}
-;;                   {:type :free, :node_id id}
-;;                   ...]
-;; @return 0 on success, -1 on error
+;;; batch-operations -- Execute a vector of synth operations in a single pass.
+;;;
+;;; Reduces FFI call overhead by batching multiple :set, :free, and :new
+;;; operations. Processing stops at the first error.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle.
+;;;   operations -- Vector of operation maps. Supported types:
+;;;                 {:type :set  :node_id id :index idx :value val}
+;;;                 {:type :free :node_id id}
+;;;                 {:type :new  :synthdef_name name :node_id id
+;;;                              :action act :target_id tid}
+;;;
+;;; Returns:
+;;;   0 on success, -1 on first error.
+;;;
+;;; Example:
+;;;   (batch-operations w [{:type :set :node_id 1001 :index 0 :value 440.0}
+;;;                        {:type :free :node_id 1000}])
 (defn batch-operations [world_id operations]
   (let [result 0]
     (for [op operations]
@@ -90,21 +109,33 @@
    free-list :(vec<ptr<void>>)
    buffer-size :int])
 
-;; Create a buffer pool
-;;
-;; @param num-buffers Number of buffers to pre-allocate
-;; @param buffer-size Size of each buffer in bytes
-;; @return BufferPool
+;;; buffer-pool-new -- Pre-allocate a pool of fixed-size byte buffers.
+;;;
+;;; Parameters:
+;;;   num-buffers -- Number of buffers to allocate up front.
+;;;   buffer-size -- Size of each buffer in bytes.
+;;;
+;;; Returns:
+;;;   A BufferPool map.
+;;;
+;;; Example:
+;;;   (buffer-pool-new 32 4096)
 (defn buffer-pool-new [num-buffers buffer-size]
   (let [buffers (vec (for [i (range num-buffers)] (malloc buffer-size)))]
     {:buffers buffers
      :free-list buffers
      :buffer-size buffer-size}))
 
-;; Get a buffer from the pool
-;;
-;; @param pool Buffer pool
-;; @return Pointer to buffer, or NULL if pool exhausted
+;;; buffer-pool-get -- Obtain a buffer from the pool without allocating.
+;;;
+;;; Parameters:
+;;;   pool -- A BufferPool map.
+;;;
+;;; Returns:
+;;;   Pointer to an available buffer, or nil if the pool is exhausted.
+;;;
+;;; Example:
+;;;   (let [buf (buffer-pool-get pool)] ...)
 (defn buffer-pool-get [pool]
   (if (not (empty? (:free-list pool)))
     (let [buffer (first (:free-list pool))]
@@ -112,16 +143,18 @@
       buffer)
     nil))
 
-;; Return a buffer to the pool
-;;
-;; @param pool Buffer pool
-;; @param buffer Buffer to return
+;;; buffer-pool-return -- Return a buffer to the pool for reuse.
+;;;
+;;; Parameters:
+;;;   pool -- A BufferPool map.
+;;;   buffer -- Pointer previously obtained from buffer-pool-get.
 (defn buffer-pool-return [pool buffer]
   (set! pool (update pool :free-list conj buffer)))
 
-;; Destroy a buffer pool
-;;
-;; @param pool Buffer pool to destroy
+;;; buffer-pool-destroy -- Free all memory held by a buffer pool.
+;;;
+;;; Parameters:
+;;;   pool -- A BufferPool map. Do not use pool after calling this.
 (defn buffer-pool-destroy [pool]
   (doseq [buffer (:buffers pool)]
     (free buffer)))
@@ -130,20 +163,26 @@
 ;; Inline OSC Message Building
 ;; ============================================================================
 
-;; Build and send an OSC message in a single inline-C call
-;; This avoids multiple FFI calls for message building
-;;
-;; @param world_id World handle
-;; @param address OSC address string
-;; @param num-args Number of arguments
-;; @param args Array of argument values (interleaved type tags and values)
-;; @return 0 on success, -1 on error
+;;; osc-send-inline -- Build and dispatch an OSC message in a single inline-C call.
+;;;
+;;; Avoids multiple FFI round-trips for message construction.
+;;; Note: The current implementation is a conceptual stub that calls
+;;; hc_wasm_osc_dispatch with the address only.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle.
+;;;   address -- OSC address string.
+;;;   num-args -- Number of arguments in args.
+;;;   args -- Array of interleaved type-tag and value pairs.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (defn osc-send-inline [world_id address num-args args]
   ```c
   // This is a conceptual implementation
   // In practice, we'd need to build the OSC message in C
   // For now, this just calls the existing dispatch function
-  
+
   // Simplified: just dispatch a pre-built message
   // Real implementation would build OSC packet here
   const char* msg = address;
@@ -155,14 +194,17 @@
 ;; Fast Synth Parameter Setting
 ;; ============================================================================
 
-;; Set multiple parameters with inline-C for speed
-;;
-;; @param world_id World handle
-;; @param node_id Node ID
-;; @param count Number of parameters
-;; @param indices Array of control indices
-;; @param values Array of control values
-;; @return 0 on success, -1 on error
+;;; synth-set-multi-inline -- Set multiple control parameters via inline C.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle.
+;;;   node_id -- Target node ID.
+;;;   count -- Number of index/value pairs.
+;;;   indices -- Pointer to array of int control indices.
+;;;   values -- Pointer to array of float control values.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (defn synth-set-multi-inline [world_id node_id count indices values]
   ```c
   return hc_wasm_synth_set_multi(world_id, node_id, count, indices, values);
@@ -178,28 +220,41 @@
    size :int  ;; Size in samples
    channels :int])
 
-;; Create a render buffer
-;;
-;; @param size Size in samples
-;; @param channels Number of channels
-;; @return RenderBuffer
+;;; render-buffer-new -- Allocate a reusable audio render buffer.
+;;;
+;;; Parameters:
+;;;   size -- Buffer size in samples per channel.
+;;;   channels -- Number of audio channels.
+;;;
+;;; Returns:
+;;;   A RenderBuffer map backed by a malloc'd float array.
+;;;
+;;; Example:
+;;;   (render-buffer-new 512 2)
 (defn render-buffer-new [size channels]
   {:data (malloc (* size channels (size-of float)))
    :size size
    :channels channels})
 
-;; Destroy a render buffer
-;;
-;; @param buffer Render buffer
+;;; render-buffer-destroy -- Free the memory held by a render buffer.
+;;;
+;;; Parameters:
+;;;   buffer -- A RenderBuffer map. Do not use after calling this.
 (defn render-buffer-destroy [buffer]
   (free (:data buffer)))
 
-;; Render audio using pre-allocated buffer
-;;
-;; @param world_id World handle
-;; @param buffer Pre-allocated render buffer
-;; @param num_samples Number of samples to render
-;; @return 0 on success, -1 on error
+;;; world-render-fast -- Render audio into a pre-allocated RenderBuffer.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle.
+;;;   buffer -- Pre-allocated RenderBuffer to write into.
+;;;   num_samples -- Number of samples to render.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   (world-render-fast w rb 512)
 (defn world-render-fast [world_id buffer num_samples]
   (ffi/hc_wasm_render world_id (:data buffer) num_samples (:channels buffer)))
 
@@ -207,19 +262,27 @@
 ;; Benchmarking Utilities
 ;; ============================================================================
 
-;; Benchmark a function
-;;
-;; @param fn Function to benchmark
-;; @param iterations Number of iterations
-;; @param warmup Iterations for warmup (default: 10)
-;; @return Map with :total-time, :avg-time, :iterations
+;;; benchmark -- Measure the execution time of a zero-argument function.
+;;;
+;;; Runs warmup iterations first, then times the main iterations.
+;;;
+;;; Parameters:
+;;;   fn -- Zero-argument function to benchmark.
+;;;   iterations -- Number of timed iterations.
+;;;   warmup -- Number of warmup iterations (default: 10).
+;;;
+;;; Returns:
+;;;   Map with :total-ns, :avg-ns, and :iterations.
+;;;
+;;; Example:
+;;;   (benchmark (fn [] (ffi/hc_wasm_synth_set w n 0 0.5)) 1000)
 (defn benchmark [fn iterations & [warmup 10]]
   (let [start-time (time/mono-ns)]
-    
+
     ;; Warmup
     (for [i (range warmup)]
       (fn))
-    
+
     (let [bench-start (time/mono-ns)]
       (for [i (range iterations)]
         (fn))
@@ -229,21 +292,29 @@
          :avg-ns (/ total-ns iterations)
          :iterations iterations}))))
 
-;; Benchmark synth parameter setting
-;;
-;; @param world_id World
-;; @param node_id Node
-;; @param iterations Number of iterations
-;; @return Benchmark results
+;;; bench-synth-set -- Benchmark single-parameter synth-set throughput.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle.
+;;;   node_id -- Node to use for the benchmark.
+;;;   iterations -- Number of timed iterations.
+;;;
+;;; Returns:
+;;;   Benchmark result map from benchmark.
 (defn bench-synth-set [world_id node_id iterations]
   (benchmark (fn [] (ffi/hc_wasm_synth_set world_id node_id 0 0.5)) iterations))
 
-;; Benchmark synth creation
-;;
-;; @param world_id World
-;; @param synthdef_name SynthDef name
-;; @param iterations Number of iterations
-;; @return Benchmark results
+;;; bench-synth-new -- Benchmark synth creation/destruction throughput.
+;;;
+;;; Creates and immediately frees a synth on each iteration using a node pool.
+;;;
+;;; Parameters:
+;;;   world_id -- World handle.
+;;;   synthdef_name -- SynthDef name to instantiate.
+;;;   iterations -- Number of timed iterations.
+;;;
+;;; Returns:
+;;;   Benchmark result map from benchmark.
 (defn bench-synth-new [world_id synthdef_name iterations]
   (let [node-pool (node-id-pool-new 10000)]
     (benchmark (fn []
@@ -260,16 +331,25 @@
 (defstruct SynthDefCache
   [cache :(map<cstr map>)])
 
-;; Create a new SynthDef cache
+;;; synthdef-cache-new -- Create an empty SynthDef metadata cache.
+;;;
+;;; Returns:
+;;;   An empty SynthDefCache map.
 (defn synthdef-cache-new []
   {:cache {}})
 
-;; Get SynthDef info from cache or load it
-;;
-;; @param cache Cache
-;; @param world_id World
-;; @param synthdef_name SynthDef name
-;; @return Cached info or nil
+;;; synthdef-cache-get -- Retrieve SynthDef info from cache, loading it if absent.
+;;;
+;;; Parameters:
+;;;   cache -- A SynthDefCache map.
+;;;   world_id -- World handle.
+;;;   synthdef_name -- Name of the SynthDef to look up.
+;;;
+;;; Returns:
+;;;   Cached info map, or nil if the SynthDef is not available.
+;;;
+;;; Example:
+;;;   (synthdef-cache-get cache w "mySynth")
 (defn synthdef-cache-get [cache world_id synthdef_name]
   (or (get (:cache cache) synthdef_name)
       (let [info (load-synthdef-info world_id synthdef_name)]
@@ -290,61 +370,81 @@
    active-synths :(map<int cstr>)
    render-buffer :RenderBuffer])
 
-;; Create a performance-optimized session
-;;
-;; @param sample_rate Audio sample rate
-;; @param block_size Audio block size
-;; @param num-channels Number of output channels
-;; @return PerfSession
+;;; perf-session-new -- Create a performance-optimized session.
+;;;
+;;; Combines world creation, node pool, and a pre-allocated render buffer.
+;;;
+;;; Parameters:
+;;;   sample_rate -- Audio sample rate in Hz.
+;;;   block_size -- Audio block size in samples.
+;;;   num-channels -- Number of output audio channels.
+;;;
+;;; Returns:
+;;;   A PerfSession map.
+;;;
+;;; Example:
+;;;   (perf-session-new 48000 512 2)
 (defn perf-session-new [sample_rate block_size num-channels]
   {:world-id (ffi/hc_wasm_world_create sample_rate block_size)
    :node-pool (node-id-pool-new)
    :active-synths {}
    :render-buffer (render-buffer-new block_size num-channels)})
 
-;; Destroy a performance session
-;;
-;; @param session PerfSession
+;;; perf-session-destroy -- Destroy a performance session and free its resources.
+;;;
+;;; Parameters:
+;;;   session -- A PerfSession map.
 (defn perf-session-destroy [session]
   (ffi/hc_wasm_world_destroy (:world-id session))
   (render-buffer-destroy (:render-buffer session)))
 
-;; Create a synth in performance session (inline version)
-;;
-;; @param session PerfSession
-;; @param synthdef_name SynthDef name
-;; @return Node ID
+;;; perf-session-synth-new -- Create a synth in a perf session using inline C.
+;;;
+;;; Parameters:
+;;;   session -- A PerfSession map.
+;;;   synthdef_name -- SynthDef name to instantiate.
+;;;
+;;; Returns:
+;;;   NodeID of the created synth.
+;;;
+;;; Example:
+;;;   (perf-session-synth-new sess "mySynth")
 (defn perf-session-synth-new [session synthdef_name]
   (let [node_id (node-id-pool-alloc (:node-pool session))]
     (synth-new-inline (:world-id session) synthdef_name node_id types/ADD_TO_TAIL types/ROOT_GROUP_ID)
     (set! session (update session :active-synths assoc node_id synthdef_name))
     node_id))
 
-;; Set synth parameter in performance session (inline version)
-;;
-;; @param session PerfSession
-;; @param node_id Node ID
-;; @param index Control index
-;; @param value Value
+;;; perf-session-synth-set -- Set a control parameter in a perf session using inline C.
+;;;
+;;; Parameters:
+;;;   session -- A PerfSession map.
+;;;   node_id -- Target node ID.
+;;;   index -- Zero-based control index.
+;;;   value -- New control value.
 (defn perf-session-synth-set [session node_id index value]
   (synth-set-inline (:world-id session) node_id index value))
 
-;; Free synth in performance session (inline version)
-;;
-;; @param session PerfSession
-;; @param node_id Node ID
+;;; perf-session-synth-free -- Free a synth in a perf session using inline C.
+;;;
+;;; Parameters:
+;;;   session -- A PerfSession map.
+;;;   node_id -- Node ID to free.
 (defn perf-session-synth-free [session node_id]
   (synth-free-inline (:world-id session) node_id)
   (set! session (update session :active-synths dissoc node_id))
   (node-id-pool-free (:node-pool session) node_id))
 
-;; Render audio in performance session
-;;
-;; @param session PerfSession
-;; @param num_samples Number of samples
-;; @return 0 on success, -1 on error
+;;; perf-session-render -- Render audio for a perf session.
+;;;
+;;; Parameters:
+;;;   session -- A PerfSession map.
+;;;   num_samples -- Number of samples to render.
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
 (defn perf-session-render [session num_samples]
-  (ffi/hc_wasm_render (:world-id session) 
-                    (:data (:render-buffer session)) 
-                    num_samples 
+  (ffi/hc_wasm_render (:world-id session)
+                    (:data (:render-buffer session))
+                    num_samples
                     (:channels (:render-buffer session))))

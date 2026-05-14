@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tur/tur/arrow | Turmeric API</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand">turmeric</span>
+  <nav>
+    <a href="index.html">API Docs</a>
+    <a href="../autodoc-plan.md">Plan</a>
+  </nav>
+</header>
+<div class="page-layout">
+<div class="sidebar">
+  <h3>Exported</h3>
+  <ul>
+    <li><a href="#Arrow-Function__">Arrow-Function[]</a></li>
+    <li><a href="#ArrowChoice-Defaults__">ArrowChoice-Defaults[]</a></li>
+    <li><a href="#arrow-id">arrow-id</a></li>
+    <li><a href="#arrow-comp">arrow-comp</a></li>
+    <li><a href="#arrow-lift-a2">arrow-lift-a2</a></li>
+    <li><a href="#fanout">fanout</a></li>
+    <li><a href="#fanin">fanin</a></li>
+    <li><a href="#par-comp">par-comp</a></li>
+    <li><a href="#split">split</a></li>
+    <li><a href="#ArrowChoice-Function__">ArrowChoice-Function[]</a></li>
+    <li><a href="#ArrowLoop-Function__">ArrowLoop-Function[]</a></li>
+    <li><a href="#ArrowZero-Function__">ArrowZero-Function[]</a></li>
+    <li><a href="#ArrowPlus-Function__">ArrowPlus-Function[]</a></li>
+    <li><a href="#ArrowApply-Function__">ArrowApply-Function[]</a></li>
+  </ul>
+</div>
+<div class="content">
+  <div class="module-heading">
+    <h1>tur/arrow</h1>
+    <div class="module-path">stdlib/arrow.tur</div>
+  </div>
+<div class="def-card" id="Arrow-Function__">
+  <div class="def-card-header">
+    <span class="kind-badge kind-definstance">definstance</span>
+    <h2>Arrow-Function[]</h2>
+  </div>
+  <pre class="def-signature">(definstance Arrow-Function [])</pre>
+  <p class="def-summary">Arrow instance for plain functions (-&gt;).</p>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">(&gt;&gt;&gt; (arr (fn [x] (+ x 1))) (arr (fn [x] (* x 2))))  ; =&gt; fn composing +1 then *2</pre>
+  </div>
+</div>
+<div class="def-card" id="ArrowChoice-Defaults__">
+  <div class="def-card-header">
+    <span class="kind-badge kind-definstance">definstance</span>
+    <h2>ArrowChoice-Defaults[]</h2>
+  </div>
+  <pre class="def-signature">(definstance ArrowChoice-Defaults [])</pre>
+  <p class="def-summary">default implementations of ArrowChoice derived from left/right.</p>
+</div>
+<div class="def-card" id="arrow-id">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>arrow-id</h2>
+  </div>
+  <pre class="def-signature">(arrow-id [(Arrow arr) a])</pre>
+  <p class="def-summary">identity arrow for any Arrow instance.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>^arr</td><td></td><td>the arrow type constructor</td></tr>
+    <tr><td>a</td><td></td><td>the type parameter</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">An arrow that passes its input unchanged.
+
+  (arrow-id)  ; =&gt; arr (fn [x] x)</pre>
+  </div>
+</div>
+<div class="def-card" id="arrow-comp">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>arrow-comp</h2>
+  </div>
+  <pre class="def-signature">(arrow-comp [(Arrow arr) a b c])</pre>
+  <p class="def-summary">compose two arrows sequentially.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>^arr</td><td></td><td>the arrow type constructor</td></tr>
+    <tr><td>f</td><td></td><td>first arrow (a -&gt; b)</td></tr>
+    <tr><td>g</td><td></td><td>second arrow (b -&gt; c)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">An arrow (a -&gt; c) that applies f then g.
+
+  (arrow-comp f g)  ; =&gt; f &gt;&gt;&gt; g</pre>
+  </div>
+</div>
+<div class="def-card" id="arrow-lift-a2">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>arrow-lift-a2</h2>
+  </div>
+  <pre class="def-signature">(arrow-lift-a2 [(Arrow arr) a b c])</pre>
+  <p class="def-summary">lift a binary function to an arrow on products.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>^arr</td><td></td><td>the arrow type constructor</td></tr>
+    <tr><td>f</td><td></td><td>a binary function (a -&gt; b -&gt; c)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">An arrow on Tuple a a that applies f to both components.</p>
+  </div>
+</div>
+<div class="def-card" id="fanout">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>fanout</h2>
+  </div>
+  <pre class="def-signature">(fanout [(Arrow arr) a b c])</pre>
+  <p class="def-summary">send input to both arrows and combine results into a tuple.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>^arr</td><td></td><td>the arrow type constructor</td></tr>
+    <tr><td>f</td><td></td><td>first arrow (a -&gt; b)</td></tr>
+    <tr><td>g</td><td></td><td>second arrow (a -&gt; c)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">An arrow (a -&gt; Tuple b c).
+
+  (fanout f g)  ; =&gt; arr (\x -&gt; (f x, g x))</pre>
+  </div>
+</div>
+<div class="def-card" id="fanin">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>fanin</h2>
+  </div>
+  <pre class="def-signature">(fanin [(ArrowChoice arr) a b c d])</pre>
+  <p class="def-summary">combine two arrows on a sum type (Either).</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>^arr</td><td></td><td>the arrow type constructor; must satisfy ArrowChoice</td></tr>
+    <tr><td>f</td><td></td><td>arrow for Left branch (a -&gt; b)</td></tr>
+    <tr><td>g</td><td></td><td>arrow for Right branch (c -&gt; d)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">An arrow on Either a c -&gt; Either b d.
+
+  (fanin f g)  ; =&gt; f +++ g</pre>
+  </div>
+</div>
+<div class="def-card" id="par-comp">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>par-comp</h2>
+  </div>
+  <pre class="def-signature">(par-comp [a b c d])</pre>
+  <p class="def-summary">parallel composition of two functions on product types.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>f</td><td></td><td>function a -&gt; b</td></tr>
+    <tr><td>g</td><td></td><td>function c -&gt; d</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">A function on Tuple a c -&gt; Tuple b d: (f *** g)(x,y) = (f x, g y).
+
+  ((par-comp inc double) [1 2])  ; =&gt; [2 4]</pre>
+  </div>
+</div>
+<div class="def-card" id="split">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>split</h2>
+  </div>
+  <pre class="def-signature">(split [a b c])</pre>
+  <p class="def-summary">duplicate input and apply two functions, returning a pair.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>f</td><td></td><td>function a -&gt; b</td></tr>
+    <tr><td>g</td><td></td><td>function a -&gt; c</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">A function a -&gt; Tuple b c: (split f g)(x) = (f x, g x).
+
+  ((split inc double) 3)  ; =&gt; [4 6]</pre>
+  </div>
+</div>
+<div class="def-card" id="ArrowChoice-Function__">
+  <div class="def-card-header">
+    <span class="kind-badge kind-definstance">definstance</span>
+    <h2>ArrowChoice-Function[]</h2>
+  </div>
+  <pre class="def-signature">(definstance ArrowChoice-Function [])</pre>
+  <p class="def-summary">ArrowChoice instance for plain functions (-&gt;).</p>
+</div>
+<div class="def-card" id="ArrowLoop-Function__">
+  <div class="def-card-header">
+    <span class="kind-badge kind-definstance">definstance</span>
+    <h2>ArrowLoop-Function[]</h2>
+  </div>
+  <pre class="def-signature">(definstance ArrowLoop-Function [])</pre>
+  <p class="def-summary">ArrowLoop instance for plain functions (-&gt;).</p>
+</div>
+<div class="def-card" id="ArrowZero-Function__">
+  <div class="def-card-header">
+    <span class="kind-badge kind-definstance">definstance</span>
+    <h2>ArrowZero-Function[]</h2>
+  </div>
+  <pre class="def-signature">(definstance ArrowZero-Function [])</pre>
+  <p class="def-summary">ArrowZero instance for plain functions (-&gt;).</p>
+</div>
+<div class="def-card" id="ArrowPlus-Function__">
+  <div class="def-card-header">
+    <span class="kind-badge kind-definstance">definstance</span>
+    <h2>ArrowPlus-Function[]</h2>
+  </div>
+  <pre class="def-signature">(definstance ArrowPlus-Function [])</pre>
+  <p class="def-summary">ArrowPlus instance for plain functions (-&gt;).</p>
+</div>
+<div class="def-card" id="ArrowApply-Function__">
+  <div class="def-card-header">
+    <span class="kind-badge kind-definstance">definstance</span>
+    <h2>ArrowApply-Function[]</h2>
+  </div>
+  <pre class="def-signature">(definstance ArrowApply-Function [])</pre>
+  <p class="def-summary">ArrowApply instance for plain functions (-&gt;).</p>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">(app (fn [a] (fn [a2] (* a a2))))  ; =&gt; fn that squares its input</pre>
+  </div>
+</div>
+</div>
+</div>
+<footer class="site-footer">
+  Auto-generated by <code>tools/gendocs.py</code>.
+  Do not edit by hand -- run <code>just docs</code> to regenerate.
+</footer>
+</body>
+</html>

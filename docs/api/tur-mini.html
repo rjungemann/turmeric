@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tur/tur/mini | Turmeric API</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand">turmeric</span>
+  <nav>
+    <a href="index.html">API Docs</a>
+    <a href="../autodoc-plan.md">Plan</a>
+  </nav>
+</header>
+<div class="page-layout">
+<div class="sidebar">
+  <h3>Exported</h3>
+  <ul>
+    <li><a href="#MiniToken">MiniToken</a></li>
+    <li><a href="#mini-tokenize">mini-tokenize</a></li>
+    <li><a href="#parse-expr">parse-expr</a></li>
+    <li><a href="#apply-op">apply-op</a></li>
+    <li><a href="#parse-mini">parse-mini</a></li>
+    <li><a href="#s">s</a></li>
+    <li><a href="#parse-drums">parse-drums</a></li>
+    <li><a href="#d">d</a></li>
+    <li><a href="#parse-note">parse-note</a></li>
+    <li><a href="#parse-notes">parse-notes</a></li>
+    <li><a href="#n">n</a></li>
+    <li><a href="#parse-chord">parse-chord</a></li>
+    <li><a href="#chord">chord</a></li>
+    <li><a href="#parse-rhythm">parse-rhythm</a></li>
+    <li><a href="#r">r</a></li>
+    <li><a href="#parse-with-repeat">parse-with-repeat</a></li>
+    <li><a href="#mini">mini</a></li>
+  </ul>
+</div>
+<div class="content">
+  <div class="module-heading">
+    <h1>tur/mini</h1>
+    <div class="module-path">stdlib/mini.tur</div>
+  </div>
+<div class="def-card" id="MiniToken">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defstruct">defstruct</span>
+    <h2>MiniToken</h2>
+  </div>
+  <pre class="def-signature">(defstruct MiniToken [])</pre>
+  <p class="def-summary">a single lexed token from a mini-notation string.</p>
+</div>
+<div class="def-card" id="mini-tokenize">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>mini-tokenize</h2>
+  </div>
+  <pre class="def-signature">(mini-tokenize [s])</pre>
+  <p class="def-summary">lex a mini-notation string into a vector of tokens.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>s</td><td></td><td>mini-notation string to lex</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">vec&lt;MiniToken&gt; in source order.
+
+  (mini-tokenize &quot;1 2 3&quot;)</pre>
+  </div>
+</div>
+<div class="def-card" id="parse-expr">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>parse-expr</h2>
+  </div>
+  <pre class="def-signature">(parse-expr [tokens index])</pre>
+  <p class="def-summary">recursive descent parser for mini-notation tokens.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>tokens</td><td></td><td>vec&lt;MiniToken&gt; produced by mini-tokenize</td></tr>
+    <tr><td>index</td><td></td><td>current position in the token vector</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">Tuple of (NumPattern, remaining-index).</p>
+  </div>
+</div>
+<div class="def-card" id="apply-op">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>apply-op</h2>
+  </div>
+  <pre class="def-signature">(apply-op [op left right])</pre>
+  <p class="def-summary">apply an infix operator to two patterns.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>op</td><td></td><td>operator character string</td></tr>
+    <tr><td>left</td><td></td><td>left operand pattern</td></tr>
+    <tr><td>right</td><td></td><td>right operand pattern</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern with the operator applied.</p>
+  </div>
+</div>
+<div class="def-card" id="parse-mini">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>parse-mini</h2>
+  </div>
+  <pre class="def-signature">(parse-mini [s])</pre>
+  <p class="def-summary">parse a mini-notation expression string into a pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>s</td><td></td><td>mini-notation string (numbers, operators, brackets)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">NumPattern.
+
+  (parse-mini &quot;1 2 3&quot;)
+  (parse-mini &quot;[1 2 3]&quot;)  ; =&gt; fast 2x</pre>
+  </div>
+</div>
+<div class="def-card" id="s">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defmacro">defmacro</span>
+    <h2>s</h2>
+  </div>
+  <pre class="def-signature">(s [expr])</pre>
+  <p class="def-summary">inline mini-notation macro.</p>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">(s &quot;1 2 3&quot;)  ; same as (parse-mini &quot;1 2 3&quot;)</pre>
+  </div>
+</div>
+<div class="def-card" id="parse-drums">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>parse-drums</h2>
+  </div>
+  <pre class="def-signature">(parse-drums [s])</pre>
+  <p class="def-summary">parse drum mini-notation into a sequenced drum pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>s</td><td></td><td>space-separated drum name string (e.g., &quot;bd sd bd sd&quot;)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;map&gt; producing drum parameters for each step.
+
+  (parse-drums &quot;bd sd bd sd&quot;)</pre>
+  </div>
+</div>
+<div class="def-card" id="d">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defmacro">defmacro</span>
+    <h2>d</h2>
+  </div>
+  <pre class="def-signature">(d [expr])</pre>
+  <p class="def-summary">drum pattern macro.</p>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">(d &quot;bd sd&quot;)  ; same as (parse-drums &quot;bd sd&quot;)</pre>
+  </div>
+</div>
+<div class="def-card" id="parse-note">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>parse-note</h2>
+  </div>
+  <pre class="def-signature">(parse-note [note-str &amp; [default-octave 4])</pre>
+  <p class="def-summary">parse a note name string into a MIDI note number.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>note-str</td><td></td><td>note string (e.g., &quot;c4&quot;, &quot;g#5&quot;, &quot;eb3&quot;)</td></tr>
+    <tr><td>default-octave</td><td></td><td>octave to use when omitted (default: 4)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">MIDI note number as int.
+
+  (parse-note &quot;c4&quot;)   ; =&gt; 60
+  (parse-note &quot;a4&quot;)   ; =&gt; 69</pre>
+  </div>
+</div>
+<div class="def-card" id="parse-notes">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>parse-notes</h2>
+  </div>
+  <pre class="def-signature">(parse-notes [s])</pre>
+  <p class="def-summary">parse a space-separated note string into a cycling MIDI pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>s</td><td></td><td>space-separated note string (e.g., &quot;c4 e4 g4&quot;)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">NumPattern cycling through MIDI note numbers.
+
+  (parse-notes &quot;c4 e4 g4&quot;)</pre>
+  </div>
+</div>
+<div class="def-card" id="n">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defmacro">defmacro</span>
+    <h2>n</h2>
+  </div>
+  <pre class="def-signature">(n [expr])</pre>
+  <p class="def-summary">note pattern macro.</p>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">(n &quot;c4 e4 g4&quot;)  ; same as (parse-notes &quot;c4 e4 g4&quot;)</pre>
+  </div>
+</div>
+<div class="def-card" id="parse-chord">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>parse-chord</h2>
+  </div>
+  <pre class="def-signature">(parse-chord [s])</pre>
+  <p class="def-summary">parse bracket-delimited chord notation into a constant chord pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>s</td><td></td><td>chord string (e.g., &quot;[c4 e4 g4]&quot;)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">Pattern&lt;vec&lt;int&gt;&gt; that always returns the same MIDI note vector.
+
+  (parse-chord &quot;[c4 e4 g4]&quot;)</pre>
+  </div>
+</div>
+<div class="def-card" id="chord">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defmacro">defmacro</span>
+    <h2>chord</h2>
+  </div>
+  <pre class="def-signature">(chord [expr])</pre>
+  <p class="def-summary">chord pattern macro.</p>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">(chord &quot;[c4 e4 g4]&quot;)  ; same as (parse-chord &quot;[c4 e4 g4]&quot;)</pre>
+  </div>
+</div>
+<div class="def-card" id="parse-rhythm">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>parse-rhythm</h2>
+  </div>
+  <pre class="def-signature">(parse-rhythm [s &amp; [hit-value 1 rest-value 0])</pre>
+  <p class="def-summary">parse an x/o shorthand rhythm string into a numeric pattern.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>s</td><td></td><td>string of &#x27;x&#x27; (hit) and &#x27;o&#x27; (rest) characters</td></tr>
+    <tr><td>hit-value</td><td></td><td>value for hits (default: 1)</td></tr>
+    <tr><td>rest-value</td><td></td><td>value for rests (default: 0)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">NumPattern cycling through hit/rest values.
+
+  (parse-rhythm &quot;x o x o&quot;)  ; =&gt; alternating 1 and 0</pre>
+  </div>
+</div>
+<div class="def-card" id="r">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defmacro">defmacro</span>
+    <h2>r</h2>
+  </div>
+  <pre class="def-signature">(r [expr])</pre>
+  <p class="def-summary">rhythm pattern macro.</p>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">(r &quot;x o x o&quot;)  ; same as (parse-rhythm &quot;x o x o&quot;)</pre>
+  </div>
+</div>
+<div class="def-card" id="parse-with-repeat">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>parse-with-repeat</h2>
+  </div>
+  <pre class="def-signature">(parse-with-repeat [s])</pre>
+  <p class="def-summary">expand *n repetition notation before cycling.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>s</td><td></td><td>pattern string where tokens may include *n suffix (e.g., &quot;bd*2 sd&quot;)</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Example</div>
+    <pre class="def-example">NumPattern with expanded sequence.
+
+  (parse-with-repeat &quot;bd*2 sd&quot;)  ; =&gt; cycle of bd bd sd</pre>
+  </div>
+</div>
+<div class="def-card" id="mini">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>mini</h2>
+  </div>
+  <pre class="def-signature">(mini [s])</pre>
+  <p class="def-summary">parse a complete mini-notation expression (alias for parse-mini).</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>s</td><td></td><td>mini-notation string</td></tr>
+    </table>
+  </div>
+  <div class="def-section">
+    <div class="def-section-label">Returns</div>
+    <p class="def-returns">NumPattern.</p>
+  </div>
+</div>
+</div>
+</div>
+<footer class="site-footer">
+  Auto-generated by <code>tools/gendocs.py</code>.
+  Do not edit by hand -- run <code>just docs</code> to regenerate.
+</footer>
+</body>
+</html>

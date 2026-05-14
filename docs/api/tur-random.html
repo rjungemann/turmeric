@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tur/tur/random | Turmeric API</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand">turmeric</span>
+  <nav>
+    <a href="index.html">API Docs</a>
+    <a href="../autodoc-plan.md">Plan</a>
+  </nav>
+</header>
+<div class="page-layout">
+<div class="sidebar">
+  <h3>Exported</h3>
+  <ul>
+    <li><a href="#Real-Random">Real-Random</a></li>
+    <li><a href="#Real-Random-free">Real-Random-free</a></li>
+    <li><a href="#Seeded-Random">Seeded-Random</a></li>
+    <li><a href="#Seeded-Random-free">Seeded-Random-free</a></li>
+    <li><a href="#rand-int">rand-int</a></li>
+    <li><a href="#rand-float">rand-float</a></li>
+    <li><a href="#rand-die">rand-die</a></li>
+    <li><a href="#rand-bool">rand-bool</a></li>
+  </ul>
+</div>
+<div class="content">
+  <div class="module-heading">
+    <h1>tur/random</h1>
+    <div class="module-path">stdlib/random.tur</div>
+  </div>
+<div class="def-card" id="Real-Random">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>Real-Random</h2>
+  </div>
+  <pre class="def-signature">(Real-Random)</pre>
+  <p class="def-summary">create a Random capability backed by libc rand().</p>
+  <p class="def-since">Since: Phase 16</p>
+</div>
+<div class="def-card" id="Real-Random-free">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>Real-Random-free</h2>
+  </div>
+  <pre class="def-signature">(Real-Random-free [rng])</pre>
+  <p class="def-summary">release a Random capability created by Real-Random.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>rng</td><td></td><td>the Random pointer returned by Real-Random.</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase 16</p>
+</div>
+<div class="def-card" id="Seeded-Random">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>Seeded-Random</h2>
+  </div>
+  <pre class="def-signature">(Seeded-Random [seed])</pre>
+  <p class="def-summary">create a deterministic Random capability from a fixed seed.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>seed</td><td></td><td>unsigned integer seed for srand; same seed produces the same sequence.</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase 16</p>
+</div>
+<div class="def-card" id="Seeded-Random-free">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>Seeded-Random-free</h2>
+  </div>
+  <pre class="def-signature">(Seeded-Random-free [rng])</pre>
+  <p class="def-summary">release a Random capability created by Seeded-Random.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>rng</td><td></td><td>the Random pointer returned by Seeded-Random.</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase 16</p>
+</div>
+<div class="def-card" id="rand-int">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>rand-int</h2>
+  </div>
+  <pre class="def-signature">(rand-int [min max])</pre>
+  <p class="def-summary">return a random integer in the inclusive range [min, max].</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>min</td><td></td><td>the minimum value (inclusive).</td></tr>
+    <tr><td>max</td><td></td><td>the maximum value (inclusive).</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase 16</p>
+</div>
+<div class="def-card" id="rand-float">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>rand-float</h2>
+  </div>
+  <pre class="def-signature">(rand-float)</pre>
+  <p class="def-summary">return a random integer scaled to represent [0, 1).</p>
+  <p class="def-since">Since: Phase 16</p>
+</div>
+<div class="def-card" id="rand-die">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>rand-die</h2>
+  </div>
+  <pre class="def-signature">(rand-die [sides])</pre>
+  <p class="def-summary">roll an n-sided die, returning a value in [1, sides].</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>sides</td><td></td><td>the number of faces on the die.</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase 16</p>
+</div>
+<div class="def-card" id="rand-bool">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>rand-bool</h2>
+  </div>
+  <pre class="def-signature">(rand-bool)</pre>
+  <p class="def-summary">return a random boolean value.</p>
+  <p class="def-since">Since: Phase 16</p>
+</div>
+</div>
+</div>
+<footer class="site-footer">
+  Auto-generated by <code>tools/gendocs.py</code>.
+  Do not edit by hand -- run <code>just docs</code> to regenerate.
+</footer>
+</body>
+</html>

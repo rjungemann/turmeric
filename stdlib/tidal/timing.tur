@@ -1,4 +1,4 @@
-;; stdlib/tidal/timing.tur — Sample-Accurate Timing
+;; stdlib/tidal/timing.tur -- Sample-Accurate Timing
 ;;
 ;; This module provides sample-accurate timing utilities for pattern evaluation.
 
@@ -9,7 +9,7 @@
 ;; Beat Clock
 ;; ============================================================================
 
-;; Global beat clock state
+;;; BeatClock -- tracks beat time from a running sample counter.
 (defstruct BeatClock
   [bpm :float
    start-time :Seconds
@@ -17,11 +17,17 @@
    sample-rate :float
    current-sample :Samples])
 
-;; Create a new beat clock
-;;
-;; @param bpm Beats per minute
-;; @param sample-rate Samples per second
-;; @return BeatClock
+;;; make-beat-clock -- create a new beat clock at the given BPM and sample rate.
+;;;
+;;; Parameters:
+;;;   bpm         -- beats per minute
+;;;   sample-rate -- audio sample rate in Hz
+;;;
+;;; Returns:
+;;;   BeatClock starting at sample 0.
+;;;
+;;; Example:
+;;;   (make-beat-clock 120.0 48000.0)
 (defn make-beat-clock [bpm sample-rate]
   {:bpm bpm
    :start-time 0.0
@@ -29,34 +35,46 @@
    :sample-rate sample-rate
    :current-sample 0})
 
-;; Convert sample offset to beats
-;;
-;; @param clock BeatClock
-;; @param sample-offset Samples from start
-;; @return Beats
+;;; clock->beats -- convert a sample offset to beats.
+;;;
+;;; Parameters:
+;;;   clock         -- BeatClock
+;;;   sample-offset -- sample count from clock start
+;;;
+;;; Returns:
+;;;   Beats value.
 (defn clock->beats [clock sample-offset]
   (/ sample-offset (:samples-per-beat clock)))
 
-;; Convert beats to sample offset
-;;
-;; @param clock BeatClock
-;; @param beats Beats from start
-;; @return Samples
+;;; clock->samples -- convert a beat offset to samples.
+;;;
+;;; Parameters:
+;;;   clock  -- BeatClock
+;;;   beats  -- beat count from clock start
+;;;
+;;; Returns:
+;;;   Sample count.
 (defn clock->samples [clock beats]
   (* beats (:samples-per-beat clock)))
 
-;; Advance the clock by a number of samples
-;;
-;; @param clock BeatClock
-;; @param samples Number of samples to advance
-;; @return Updated BeatClock
+;;; clock-advance -- advance the clock by a number of samples.
+;;;
+;;; Parameters:
+;;;   clock   -- BeatClock to advance
+;;;   samples -- number of samples to advance
+;;;
+;;; Returns:
+;;;   Updated BeatClock.
 (defn clock-advance [clock samples]
   (update clock :current-sample + samples))
 
-;; Get current beat time from clock
-;;
-;; @param clock BeatClock
-;; @return Current beats
+;;; clock-now -- get the current beat time from a clock.
+;;;
+;;; Parameters:
+;;;   clock -- BeatClock
+;;;
+;;; Returns:
+;;;   Current beat time as a float.
 (defn clock-now [clock]
   (clock->beats clock (:current-sample clock)))
 
@@ -64,48 +82,59 @@
 ;; Sample-Accurate Scheduler
 ;; ============================================================================
 
-;; Scheduled event
+;;; ScheduledEvent -- an event queued for future execution at a specific beat.
 (defstruct ScheduledEvent
   [time :time/Beats        ;; When to trigger (in beats)
    callback :(fn [] :void)  ;; Function to call
    node-id :int           ;; Optional node ID for tracking
    pattern :option<pattern/Pattern<map>>])
 
-;; Priority queue for scheduled events
-;; In a real implementation, this would be a proper priority queue
-;; For now, we use a simple vector
+;;; EventQueue -- ordered queue of scheduled events.
 (defstruct EventQueue
   [events :(vec<ScheduledEvent>)])
 
-;; Create a new event queue
+;;; queue-new -- create an empty event queue.
+;;;
+;;; Returns:
+;;;   Empty EventQueue.
 (defn queue-new []
   {:events []})
 
-;; Add an event to the queue
-;;
-;; @param queue EventQueue
-;; @param event ScheduledEvent to add
+;;; queue-push -- add an event to an event queue.
+;;;
+;;; Parameters:
+;;;   queue -- EventQueue to add to
+;;;   event -- ScheduledEvent to enqueue
+;;;
+;;; Returns:
+;;;   Updated EventQueue.
 (defn queue-push [queue event]
   (update queue :events conj event))
 
-;; Get and remove the next event from the queue
-;;
-;; @param queue EventQueue
-;; @return ScheduledEvent or nil if queue is empty
+;;; queue-pop -- remove and return the earliest event from the queue.
+;;;
+;;; Parameters:
+;;;   queue -- EventQueue
+;;;
+;;; Returns:
+;;;   ScheduledEvent or nil if the queue is empty.
 (defn queue-pop [queue]
   (when (not (empty? (:events queue)))
     (let [sorted (sort-by :time (:events queue))]
-      (update queue :events rest)))))
+      (update queue :events rest))))
 
-;; Peek at the next event without removing it
-;;
-;; @param queue EventQueue
-;; @return ScheduledEvent or nil if queue is empty
+;;; queue-peek -- look at the earliest event without removing it.
+;;;
+;;; Parameters:
+;;;   queue -- EventQueue
+;;;
+;;; Returns:
+;;;   ScheduledEvent or nil if the queue is empty.
 (defn queue-peek [queue]
   (when (not (empty? (:events queue)))
     (first (sort-by :time (:events queue)))))
 
-;; Pattern scheduler that evaluates patterns at specific times
+;;; PatternScheduler -- scheduler combining a beat clock with an event queue.
 (defstruct PatternScheduler
   [clock :BeatClock
    queue :EventQueue
@@ -113,10 +142,13 @@
    synths :(map<int int>)  ;; node-id -> pattern-id
    next-id :int])
 
-;; Create a new pattern scheduler
-;;
-;; @param clock BeatClock
-;; @return PatternScheduler
+;;; scheduler-new -- create a new pattern scheduler.
+;;;
+;;; Parameters:
+;;;   clock -- BeatClock to drive the scheduler
+;;;
+;;; Returns:
+;;;   PatternScheduler with empty queues.
 (defn scheduler-new [clock]
   {:clock clock
    :queue (queue-new)
@@ -124,13 +156,16 @@
    :synths {}
    :next-id 0})
 
-;; Schedule a pattern to be evaluated at a specific beat time
-;;
-;; @param sched PatternScheduler
-;; @param pattern Pattern to evaluate
-;; @param at-beat Beat time to trigger
-;; @param callback Function to call with pattern result
-;; @return Event ID
+;;; schedule-pattern -- schedule a pattern to be evaluated at a specific beat.
+;;;
+;;; Parameters:
+;;;   sched    -- PatternScheduler
+;;;   pattern  -- pattern to evaluate when triggered
+;;;   at-beat  -- beat time to trigger
+;;;   callback -- function called with the pattern result
+;;;
+;;; Returns:
+;;;   Event ID.
 (defn schedule-pattern [sched pattern at-beat callback]
   (let [event {:time at-beat
                :callback (fn [] (callback (pattern at-beat)))
@@ -140,16 +175,19 @@
     (let [id (:next-id sched)]
       (update sched :next-id inc))))
 
-;; Schedule a synth parameter update
-;;
-;; @param sched PatternScheduler
-;; @param node-id Synth node ID
-;; @param pattern Pattern to evaluate
-;; @param at-beat Beat time to update
-;; @return Event ID
+;;; schedule-param -- schedule a synth parameter update at a specific beat.
+;;;
+;;; Parameters:
+;;;   sched   -- PatternScheduler
+;;;   node-id -- synth node ID to update
+;;;   pattern -- pattern to evaluate
+;;;   at-beat -- beat time to update
+;;;
+;;; Returns:
+;;;   Event ID.
 (defn schedule-param [sched node-id pattern at-beat]
   (let [id (:next-id sched)]
-    (queue-push (:queue sched) 
+    (queue-push (:queue sched)
                 {:time at-beat
                  :callback (fn []
                              ;; In a real implementation, this would update synth parameters
@@ -159,11 +197,14 @@
                  :pattern (some pattern)})
     (update sched :next-id inc)))
 
-;; Process all events that are due at or before current time
-;;
-;; @param sched PatternScheduler
-;; @param current-beat Current beat time
-;; @return Number of events processed
+;;; process-events -- fire all events due at or before current-beat.
+;;;
+;;; Parameters:
+;;;   sched        -- PatternScheduler
+;;;   current-beat -- current beat time
+;;;
+;;; Returns:
+;;;   Number of events processed.
 (defn process-events [sched current-beat]
   (let [count 0]
     (while (and (not (empty? (:events (:queue sched))))
@@ -174,11 +215,14 @@
         (set! count (inc count))))
     count))
 
-;; Process events and advance clock
-;;
-;; @param sched PatternScheduler
-;; @param samples Number of samples to advance
-;; @return Number of events processed
+;;; process-samples -- advance the clock by samples and fire due events.
+;;;
+;;; Parameters:
+;;;   sched   -- PatternScheduler
+;;;   samples -- number of samples to advance
+;;;
+;;; Returns:
+;;;   Number of events processed.
 (defn process-samples [sched samples]
   (let [old-sample (:current-sample (:clock sched))
         new-sample (+ old-sample samples)]
@@ -190,12 +234,14 @@
 ;; Audio-Rate Pattern Evaluation
 ;; ============================================================================
 
-;; Pattern that can be evaluated at audio rate
-;; Returns a function that can be called from an audio-rate callback
-;;
-;; @param p Pattern<float> to evaluate at audio rate
-;; @param clock BeatClock for timing
-;; @return Function: Samples -> float
+;;; audio-pattern -- wrap a pattern for audio-rate evaluation using sample offsets.
+;;;
+;;; Parameters:
+;;;   p     -- NumPattern to evaluate
+;;;   clock -- BeatClock for timing
+;;;
+;;; Returns:
+;;;   Function: Samples -> float that evaluates p at the corresponding beat.
 (defn audio-pattern [p clock]
   (let [start-beat 0.0]
     (fn [sample-offset]
@@ -203,20 +249,26 @@
             current-beat (+ start-beat beat-offset)]
         (p current-beat)))))
 
-;; Mix multiple audio-rate patterns
-;;
-;; @param patterns List of audio-rate pattern functions
-;; @return Function: Samples -> float (sum of all patterns)
+;;; mix-audio-patterns -- mix multiple audio-rate patterns by summation.
+;;;
+;;; Parameters:
+;;;   patterns -- list of audio-rate functions (Samples -> float)
+;;;
+;;; Returns:
+;;;   Function: Samples -> float returning the sum of all patterns.
 (defn mix-audio-patterns [& patterns]
   (fn [sample-offset]
     (reduce + 0.0 (map #(% sample-offset) patterns))))
 
-;; Audio-rate pattern with sample-accurate scheduling
-;;
-;; @param p Pattern<float>
-;; @param clock BeatClock
-;; @param block-size Block size in samples
-;; @return Function that renders a block
+;;; audio-pattern-block -- render a block of audio from a pattern.
+;;;
+;;; Parameters:
+;;;   p          -- NumPattern
+;;;   clock      -- BeatClock
+;;;   block-size -- number of samples per block
+;;;
+;;; Returns:
+;;;   Function: (output-buffer, sample-offset) -> void writing block-size samples.
 (defn audio-pattern-block [p clock block-size]
   (let [audio-fn (audio-pattern p clock)]
     (fn [output-buffer sample-offset]
@@ -228,38 +280,47 @@
 ;; Sample-Accurate Pattern
 ;; ============================================================================
 
-;; A pattern that maintains sample-accurate timing
+;;; SampleAccuratePattern -- pattern with sample-accurate timing state.
 (defstruct SampleAccuratePattern
   [pattern :pattern/Pattern<float>
    clock :BeatClock
    last-sample :Samples
    last-value :float])
 
-;; Create a sample-accurate pattern
-;;
-;; @param p Pattern to make sample-accurate
-;; @param clock BeatClock
-;; @return SampleAccuratePattern
+;;; make-sample-accurate -- wrap a pattern for sample-accurate evaluation.
+;;;
+;;; Parameters:
+;;;   p     -- pattern to wrap
+;;;   clock -- BeatClock
+;;;
+;;; Returns:
+;;;   SampleAccuratePattern.
 (defn make-sample-accurate [p clock]
   {:pattern p
    :clock clock
    :last-sample 0
    :last-value 0.0})
 
-;; Evaluate a sample-accurate pattern at a sample offset
-;;
-;; @param sap SampleAccuratePattern
-;; @param sample-offset Sample offset to evaluate at
-;; @return Value at that sample
+;;; sap-eval -- evaluate a sample-accurate pattern at a sample offset.
+;;;
+;;; Parameters:
+;;;   sap           -- SampleAccuratePattern
+;;;   sample-offset -- sample position to evaluate at
+;;;
+;;; Returns:
+;;;   Pattern value at the corresponding beat.
 (defn sap-eval [sap sample-offset]
   (let [beats (clock->beats (:clock sap) sample-offset)]
     ((:pattern sap) beats)))
 
-;; Update a sample-accurate pattern with new samples
-;;
-;; @param sap SampleAccuratePattern
-;; @param new-sample New sample position
-;; @return Updated SampleAccuratePattern
+;;; sap-update -- advance a sample-accurate pattern to a new sample position.
+;;;
+;;; Parameters:
+;;;   sap        -- SampleAccuratePattern
+;;;   new-sample -- new sample position
+;;;
+;;; Returns:
+;;;   Updated SampleAccuratePattern with cached last value.
 (defn sap-update [sap new-sample]
   (assoc sap :last-sample new-sample :last-value (sap-eval sap new-sample)))
 
@@ -267,21 +328,27 @@
 ;; Timing Utilities
 ;; ============================================================================
 
-;; Get current beat time from sample count
-;;
-;; @param samples Sample count
-;; @param bpm Beats per minute
-;; @param sample-rate Samples per second
-;; @return Beats
+;;; samples->beats -- convert sample count to beats.
+;;;
+;;; Parameters:
+;;;   samples     -- sample count
+;;;   bpm         -- tempo in BPM
+;;;   sample-rate -- audio sample rate
+;;;
+;;; Returns:
+;;;   Beat time.
 (defn samples->beats [samples bpm sample-rate]
   (time/samples->beats samples bpm sample-rate))
 
-;; Get sample count from beat time
-;;
-;; @param beats Beat time
-;; @param bpm Beats per minute
-;; @param sample-rate Samples per second
-;; @return Samples
+;;; beats->samples -- convert beat time to sample count.
+;;;
+;;; Parameters:
+;;;   beats       -- beat time
+;;;   bpm         -- tempo in BPM
+;;;   sample-rate -- audio sample rate
+;;;
+;;; Returns:
+;;;   Sample count.
 (defn beats->samples [beats bpm sample-rate]
   (time/beats->samples beats bpm sample-rate))
 
@@ -289,38 +356,47 @@
 ;; Tempo Tracking
 ;; ============================================================================
 
-;; Tempo tracker that can handle tempo changes
+;;; TempoTracker -- tracks beat time across multiple tempo changes.
 (defstruct TempoTracker
   [bpm :float
    start-sample :Samples
    sample-rate :float
    tempo-changes :(vec<tuple<Samples float>>)])  ;; [sample bpm] pairs
 
-;; Create a new tempo tracker
-;;
-;; @param bpm Initial BPM
-;; @param sample-rate Samples per second
-;; @return TempoTracker
+;;; tempo-tracker-new -- create a new tempo tracker at a constant initial BPM.
+;;;
+;;; Parameters:
+;;;   bpm         -- initial BPM
+;;;   sample-rate -- audio sample rate
+;;;
+;;; Returns:
+;;;   TempoTracker with no tempo changes.
 (defn tempo-tracker-new [bpm sample-rate]
   {:bpm bpm
    :start-sample 0
    :sample-rate sample-rate
    :tempo-changes []})
 
-;; Add a tempo change at a specific sample
-;;
-;; @param tracker TempoTracker
-;; @param at-sample Sample position of tempo change
-;; @param new-bpm New BPM after change
-;; @return Updated TempoTracker
+;;; tempo-change -- record a tempo change at a specific sample position.
+;;;
+;;; Parameters:
+;;;   tracker   -- TempoTracker
+;;;   at-sample -- sample position of the tempo change
+;;;   new-bpm   -- new BPM after the change
+;;;
+;;; Returns:
+;;;   Updated TempoTracker.
 (defn tempo-change [tracker at-sample new-bpm]
   (update tracker :tempo-changes conj [at-sample new-bpm]))
 
-;; Get BPM at a specific sample
-;;
-;; @param tracker TempoTracker
-;; @param sample Sample position to query
-;; @return BPM at that sample
+;;; tempo-at -- query the BPM at a specific sample position.
+;;;
+;;; Parameters:
+;;;   tracker -- TempoTracker
+;;;   sample  -- sample position to query
+;;;
+;;; Returns:
+;;;   BPM at that sample.
 (defn tempo-at [tracker sample]
   (let [changes (:tempo-changes tracker)]
     (loop [i 0 current-bpm (:bpm tracker)]
@@ -331,11 +407,14 @@
             (recur (inc i) change-bpm)
             current-bpm))))))
 
-;; Get beat time at a specific sample with tempo changes
-;;
-;; @param tracker TempoTracker
-;; @param sample Sample position to query
-;; @return Beats at that sample
+;;; beats-at -- compute beat time at a sample accounting for tempo changes.
+;;;
+;;; Parameters:
+;;;   tracker -- TempoTracker
+;;;   sample  -- sample position to query
+;;;
+;;; Returns:
+;;;   Beat time at that sample.
 (defn beats-at [tracker sample]
   (let [changes (:tempo-changes tracker)
         sample-rate (:sample-rate tracker)]
@@ -353,23 +432,29 @@
 ;; Sample-Accurate Scheduling
 ;; ============================================================================
 
-;; Schedule an event at a specific sample
-;;
-;; @param sched PatternScheduler
-;; @param at-sample Sample position to trigger
-;; @param callback Function to call
-;; @return Event ID
+;;; schedule-at-sample -- schedule a callback to fire at a specific sample position.
+;;;
+;;; Parameters:
+;;;   sched     -- PatternScheduler
+;;;   at-sample -- sample position to trigger
+;;;   callback  -- function to call
+;;;
+;;; Returns:
+;;;   Event ID.
 (defn schedule-at-sample [sched at-sample callback]
   (let [at-beat (samples->beats at-sample (:bpm (:clock sched)) (:sample-rate (:clock sched)))]
     (schedule-pattern sched (pattern/const 0) at-beat callback)))
 
-;; Schedule a pattern update at a specific sample
-;;
-;; @param sched PatternScheduler
-;; @param at-sample Sample position to update
-;; @param pattern Pattern to evaluate
-;; @param callback Function to call with result
-;; @return Event ID
+;;; schedule-pattern-at-sample -- schedule a pattern evaluation at a sample position.
+;;;
+;;; Parameters:
+;;;   sched     -- PatternScheduler
+;;;   at-sample -- sample position to trigger
+;;;   pattern   -- pattern to evaluate
+;;;   callback  -- function called with the result
+;;;
+;;; Returns:
+;;;   Event ID.
 (defn schedule-pattern-at-sample [sched at-sample pattern callback]
   (let [at-beat (samples->beats at-sample (:bpm (:clock sched)) (:sample-rate (:clock sched)))]
     (schedule-pattern sched pattern at-beat callback)))

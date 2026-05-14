@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tur/tur/atomic | Turmeric API</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand">turmeric</span>
+  <nav>
+    <a href="index.html">API Docs</a>
+    <a href="../autodoc-plan.md">Plan</a>
+  </nav>
+</header>
+<div class="page-layout">
+<div class="sidebar">
+  <h3>Exported</h3>
+  <ul>
+    <li><a href="#atomic-new">atomic-new</a></li>
+    <li><a href="#atomic-load">atomic-load</a></li>
+    <li><a href="#atomic-store_">atomic-store!</a></li>
+    <li><a href="#atomic-add_">atomic-add!</a></li>
+    <li><a href="#atomic-sub_">atomic-sub!</a></li>
+    <li><a href="#atomic-swap_">atomic-swap!</a></li>
+    <li><a href="#atomic-cas_">atomic-cas!</a></li>
+    <li><a href="#atomic-free">atomic-free</a></li>
+  </ul>
+</div>
+<div class="content">
+  <div class="module-heading">
+    <h1>tur/atomic</h1>
+    <div class="module-path">stdlib/atomic.tur</div>
+  </div>
+<div class="def-card" id="atomic-new">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>atomic-new</h2>
+  </div>
+  <pre class="def-signature">(atomic-new [init :int] :ptr&lt;void&gt;)</pre>
+  <p class="def-summary">allocate a heap-based atomic int64 cell initialised to init.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>init</td><td></td><td>initial integer value stored in the cell</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T19</p>
+</div>
+<div class="def-card" id="atomic-load">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>atomic-load</h2>
+  </div>
+  <pre class="def-signature">(atomic-load [p :ptr&lt;void&gt;] :int)</pre>
+  <p class="def-summary">atomically read the current value of the cell.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>atomic cell pointer from atomic-new</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T19</p>
+</div>
+<div class="def-card" id="atomic-store_">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>atomic-store!</h2>
+  </div>
+  <pre class="def-signature">(atomic-store! [p :ptr&lt;void&gt; v :int] :nil)</pre>
+  <p class="def-summary">atomically write v into the cell.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>atomic cell pointer from atomic-new</td></tr>
+    <tr><td>v</td><td></td><td>new value to store</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T19</p>
+</div>
+<div class="def-card" id="atomic-add_">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>atomic-add!</h2>
+  </div>
+  <pre class="def-signature">(atomic-add! [p :ptr&lt;void&gt; delta :int] :int)</pre>
+  <p class="def-summary">atomically add delta and return the old value.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>atomic cell pointer from atomic-new</td></tr>
+    <tr><td>delta</td><td></td><td>amount to add (may be negative)</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T19</p>
+</div>
+<div class="def-card" id="atomic-sub_">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>atomic-sub!</h2>
+  </div>
+  <pre class="def-signature">(atomic-sub! [p :ptr&lt;void&gt; delta :int] :int)</pre>
+  <p class="def-summary">atomically subtract delta and return the old value.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>atomic cell pointer from atomic-new</td></tr>
+    <tr><td>delta</td><td></td><td>amount to subtract</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T19</p>
+</div>
+<div class="def-card" id="atomic-swap_">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>atomic-swap!</h2>
+  </div>
+  <pre class="def-signature">(atomic-swap! [p :ptr&lt;void&gt; new-val :int] :int)</pre>
+  <p class="def-summary">atomically replace the cell value with new-val and return the old value.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>atomic cell pointer from atomic-new</td></tr>
+    <tr><td>new-val</td><td></td><td>value to store</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T19</p>
+</div>
+<div class="def-card" id="atomic-cas_">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>atomic-cas!</h2>
+  </div>
+  <pre class="def-signature">(atomic-cas! [p :ptr&lt;void&gt; expected :int desired :int] :bool)</pre>
+  <p class="def-summary">compare-and-swap: if cell == expected, set to desired and return true.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>atomic cell pointer from atomic-new</td></tr>
+    <tr><td>expected</td><td></td><td>value to compare against</td></tr>
+    <tr><td>desired</td><td></td><td>value to store if comparison succeeds</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T19</p>
+</div>
+<div class="def-card" id="atomic-free">
+  <div class="def-card-header">
+    <span class="kind-badge kind-defn">defn</span>
+    <h2>atomic-free</h2>
+  </div>
+  <pre class="def-signature">(atomic-free [p :ptr&lt;void&gt;] :nil)</pre>
+  <p class="def-summary">free an atomic cell allocated by atomic-new.</p>
+  <div class="def-section">
+    <div class="def-section-label">Parameters</div>
+    <table class="param-table">
+    <tr><td>p</td><td></td><td>atomic cell pointer from atomic-new</td></tr>
+    </table>
+  </div>
+  <p class="def-since">Since: Phase T19</p>
+</div>
+</div>
+</div>
+<footer class="site-footer">
+  Auto-generated by <code>tools/gendocs.py</code>.
+  Do not edit by hand -- run <code>just docs</code> to regenerate.
+</footer>
+</body>
+</html>

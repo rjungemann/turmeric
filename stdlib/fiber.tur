@@ -12,33 +12,101 @@
 ; Inside a fiber body (fn-ref is a zero-arg function taking no args):
 ;   (fiber-yield 42)            ; suspend and hand 42 back to caller
 
+;;; fiber-new -- create a new fiber from a function pointer and an optional stack size.
+;;;
+;;; Parameters:
+;;;   fn         -- zero-argument function pointer to run as the fiber body
+;;;   stack-size -- requested stack size in bytes; 0 uses the default size
+;;;
+;;; Returns:
+;;;   An opaque ptr<void> handle to the FiberBlock.
+;;;
+;;; Example:
+;;;   (let [f (fiber-new my-fn 0)] ...)  ; => ptr<void>
+;;;
+;;; Since: Phase T21-C
 (defn fiber-new [fn :ptr<void> stack-size :int] :ptr<void>
   ```c
   return (void *)tur_fiber_block_new((void(*)(void))fn, (size_t)stack_size);
   ```)
 
+;;; fiber-resume -- resume a suspended fiber, passing it a value, and return the yielded or final value.
+;;;
+;;; Parameters:
+;;;   f   -- fiber handle returned by fiber-new
+;;;   arg -- value passed to the fiber as the resume argument
+;;;
+;;; Returns:
+;;;   The int64_t value yielded by the fiber, or its final return value.
+;;;
+;;; Example:
+;;;   (fiber-resume f 0)  ; => int
+;;;
+;;; Since: Phase T21-C
 (defn fiber-resume [f :ptr<void> arg :int] :int
   ```c
   return tur_fiber_block_resume((FiberBlock *)f, (int64_t)arg);
   ```)
 
+;;; fiber-yield -- suspend the current fiber and return a value to its caller.
+;;;
+;;; Parameters:
+;;;   value -- int64_t value to hand back to the fiber-resume caller
+;;;
+;;; Example:
+;;;   (fiber-yield 42)
+;;;
+;;; Since: Phase T21-C
 (defn fiber-yield [value :int] :nil
   ```c
   tur_fiber_block_yield(value);
   ```)
 
+;;; fiber-done? -- check whether a fiber has run to completion.
+;;;
+;;; Parameters:
+;;;   f -- fiber handle returned by fiber-new
+;;;
+;;; Returns:
+;;;   Non-zero (truthy) if the fiber has returned; 0 if it is still runnable or suspended.
+;;;
+;;; Example:
+;;;   (if (fiber-done? f) ...)  ; => int
+;;;
+;;; Since: Phase T21-C
 (defn fiber-done? [f :ptr<void>] :int
   ```c
   FiberBlock *fb = (FiberBlock *)f;
   return fb ? (int64_t)fb->done : 1;
   ```)
 
+;;; fiber-arg -- retrieve the most recent argument value passed to a fiber via fiber-resume.
+;;;
+;;; Parameters:
+;;;   f -- fiber handle returned by fiber-new
+;;;
+;;; Returns:
+;;;   The int64_t argument last supplied to fiber-resume, or 0 if the handle is NULL.
+;;;
+;;; Example:
+;;;   (fiber-arg f)  ; => int
+;;;
+;;; Since: Phase T21-C
 (defn fiber-arg [f :ptr<void>] :int
   ```c
   FiberBlock *fb = (FiberBlock *)f;
   return fb ? fb->arg : 0;
   ```)
 
+;;; fiber-free -- release all memory associated with a fiber.
+;;;
+;;; Parameters:
+;;;   f -- fiber handle returned by fiber-new
+;;;
+;;; Example:
+;;;   (fiber-free f)
+;;;
+;;; Since: Phase T21-C
 (defn fiber-free [f :ptr<void>] :nil
   ```c
   tur_fiber_block_free((FiberBlock *)f);
@@ -48,22 +116,69 @@
 ;; Each fiber can store key-value pairs that persist for the lifetime of the fiber.
 ;; Keys and values are int64_t.
 
+;;; fiber-local-get -- retrieve a fiber-local value by key from a specific fiber.
+;;;
+;;; Parameters:
+;;;   f   -- fiber handle returned by fiber-new
+;;;   key -- int64_t key identifying the slot
+;;;
+;;; Returns:
+;;;   The int64_t value stored at key, or 0 if not set.
+;;;
+;;; Example:
+;;;   (fiber-local-get f 1)  ; => int
+;;;
+;;; Since: Phase T21
 (defn fiber-local-get [f :ptr<void> key :int] :int
   ```c
   return tur_fiber_local_get((FiberBlock *)f, (int64_t)key);
   ```)
 
+;;; fiber-local-set! -- store a fiber-local value by key in a specific fiber.
+;;;
+;;; Parameters:
+;;;   f     -- fiber handle returned by fiber-new
+;;;   key   -- int64_t key identifying the slot
+;;;   value -- int64_t value to store
+;;;
+;;; Example:
+;;;   (fiber-local-set! f 1 99)
+;;;
+;;; Since: Phase T21
 (defn fiber-local-set! [f :ptr<void> key :int value :int] :nil
   ```c
   tur_fiber_local_set((FiberBlock *)f, (int64_t)key, (int64_t)value);
   ```)
 
 ;; Current fiber versions - use tur_current_fiber implicitly
+
+;;; fiber-local-current-get -- retrieve a fiber-local value by key from the currently running fiber.
+;;;
+;;; Parameters:
+;;;   key -- int64_t key identifying the slot
+;;;
+;;; Returns:
+;;;   The int64_t value stored at key in the current fiber, or 0 if not set.
+;;;
+;;; Example:
+;;;   (fiber-local-current-get 1)  ; => int
+;;;
+;;; Since: Phase T21
 (defn fiber-local-current-get [key :int] :int
   ```c
   return tur_fiber_local_get(tur_current_fiber, (int64_t)key);
   ```)
 
+;;; fiber-local-current-set! -- store a fiber-local value by key in the currently running fiber.
+;;;
+;;; Parameters:
+;;;   key   -- int64_t key identifying the slot
+;;;   value -- int64_t value to store
+;;;
+;;; Example:
+;;;   (fiber-local-current-set! 1 99)
+;;;
+;;; Since: Phase T21
 (defn fiber-local-current-set! [key :int value :int] :nil
   ```c
   tur_fiber_local_set(tur_current_fiber, (int64_t)key, (int64_t)value);
@@ -74,12 +189,24 @@
 ;; These call the cooperative scheduler's yield/park/unpark primitives.
 ;; Must be called from within a fiber running under a TurScheduler.
 
+;;; scheduler-yield! -- yield the current fiber back to the scheduler, re-enqueueing it for the next turn.
+;;;
+;;; Example:
+;;;   (scheduler-yield!)
+;;;
+;;; Since: Phase T21
 ;; Yield the current fiber back to the scheduler (re-enqueues it for next turn).
 (defn scheduler-yield! [] :nil
   ```c
   tur_scheduler_yield();
   ```)
 
+;;; scheduler-park! -- park the current fiber, suspending it without re-enqueueing.
+;;;
+;;; Example:
+;;;   (scheduler-park!)
+;;;
+;;; Since: Phase T21
 ;; Park the current fiber: suspend without re-enqueueing.
 ;; The fiber stays parked until scheduler-unpark! is called on it.
 (defn scheduler-park! [] :nil
@@ -87,12 +214,30 @@
   tur_scheduler_park();
   ```)
 
+;;; scheduler-unpark! -- unpark a specific fiber and add it back to the scheduler run queue.
+;;;
+;;; Parameters:
+;;;   f -- fiber handle to unpark
+;;;
+;;; Example:
+;;;   (scheduler-unpark! f)
+;;;
+;;; Since: Phase T21
 ;; Unpark a fiber: clear its parked flag and add it back to the scheduler queue.
 (defn scheduler-unpark! [f :ptr<void>] :nil
   ```c
   tur_scheduler_unpark((FiberBlock *)f);
   ```)
 
+;;; async-sleep -- sleep for approximately ms milliseconds without blocking the OS thread.
+;;;
+;;; Parameters:
+;;;   ms -- duration in milliseconds; values <= 0 return immediately
+;;;
+;;; Example:
+;;;   (async-sleep 100)
+;;;
+;;; Since: Phase T24
 ;; Convenience: async-sleep [ms] — sleep for approximately ms milliseconds.
 ;; Phase T24: When running under a scheduler, parks the current fiber and
 ;; uses the timer wheel to resume it after the delay (cooperative, non-blocking).
@@ -118,6 +263,15 @@
   nanosleep(&ts, NULL);
   ```)
 
+;;; fiber-thread-id -- return an integer identifier for the OS thread running the current fiber.
+;;;
+;;; Returns:
+;;;   The current pthread_t cast to int64_t.
+;;;
+;;; Example:
+;;;   (fiber-thread-id)  ; => int
+;;;
+;;; Since: Phase T23
 ;; Phase T23: Get the current OS thread ID
 (defn fiber-thread-id [] :int
   ```c
