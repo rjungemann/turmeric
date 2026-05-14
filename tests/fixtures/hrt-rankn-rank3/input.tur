@@ -1,0 +1,15 @@
+; Phase HRT3: rank-3 polymorphic function.
+; `with-poly-id` takes a rank-3 argument: a function that accepts any rank-2 poly fn.
+; `use-poly-id` accepts a rank-2 poly fn and applies it to 42.
+; Together: with-poly-id passes `id` (as a wrapped poly fn) to use-poly-id.
+(defn with-poly-id [h (forall [a] (-> (forall [b] (-> b b)) a))] :int
+  (h id))
+
+(defn use-poly-id [poly-id (forall [b] (-> b b))] :int
+  (poly-id 42))
+
+(defn id [x :int] :int x)
+
+(defn main [] :int
+  (println (with-poly-id use-poly-id))
+  0)

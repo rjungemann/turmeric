@@ -315,7 +315,10 @@ struct Expr {
         struct { Binding *fn_binding; Expr **args; uint32_t n_args;
                  struct Expr *fn_expr;
                  struct Expr *dict_arg;
-                 bool is_poly_call; /* Phase HRT1: call through rank-2 poly fn param */ } call_;
+                 bool is_poly_call;   /* Phase HRT1: call through rank-2 poly fn param */
+                 uint32_t poly_arg_mask; /* Phase HRT3: bitmask of args that are nested poly fns.
+                                          * In poly_call: bit i → pass arg by pointer (stack-alloc).
+                                          * In direct call: bit i → deref int64_t arg as tur_poly_fn_t*. */ } call_;
         struct { FnDef *fn; }                                               fn_;
         struct { ExternC *ext; }                                            extern_c_;
         struct { InlineC *inline_c; }                                       inline_c_;

@@ -2321,16 +2321,27 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
                 for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                     char *raw = emit_value(ctx, body, e->as.call_.args[i]);
-                    /* Poly fn expects int64_t args — cast fn ptrs and void* through intptr_t */
-                    bool needs_cast = (e->as.call_.args[i]->type.kind == TY_FN ||
-                                       e->as.call_.args[i]->type.kind == TY_PTR_VOID);
-                    if (needs_cast) {
+                    /* Phase HRT3: nested poly fn arg — take address of compound literal so it
+                     * can be passed as int64_t through the poly fn dispatch layer. */
+                    if (e->as.call_.poly_arg_mask & (1u << i)) {
                         Buf cast; buf_init(&cast);
-                        buf_printf(&cast, "(int64_t)(intptr_t)(%s)", raw);
+                        buf_printf(&cast, "(int64_t)(intptr_t)(&(%s))", raw);
                         buf_putc(&cast, '\0');
                         free(raw);
                         raw = strdup(cast.data);
                         buf_free(&cast);
+                    } else {
+                        /* Poly fn expects int64_t args — cast fn ptrs and void* through intptr_t */
+                        bool needs_cast = (e->as.call_.args[i]->type.kind == TY_FN ||
+                                           e->as.call_.args[i]->type.kind == TY_PTR_VOID);
+                        if (needs_cast) {
+                            Buf cast; buf_init(&cast);
+                            buf_printf(&cast, "(int64_t)(intptr_t)(%s)", raw);
+                            buf_putc(&cast, '\0');
+                            free(raw);
+                            raw = strdup(cast.data);
+                            buf_free(&cast);
+                        }
                     }
                     arg_strs[i] = raw;
                 }
@@ -2467,6 +2478,16 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     } else {
                         buf_printf(&cast, "(int64_t)(intptr_t)(%s)", raw);
                     }
+                    buf_putc(&cast, '\0');
+                    free(raw);
+                    raw = strdup(cast.data);
+                    buf_free(&cast);
+                }
+                /* Phase HRT3: arg is a nested poly fn passed via int64_t pointer —
+                 * dereference it back to tur_poly_fn_t for the direct call. */
+                if (e->as.call_.poly_arg_mask & (1u << i)) {
+                    Buf cast; buf_init(&cast);
+                    buf_printf(&cast, "*(tur_poly_fn_t*)(intptr_t)(%s)", raw);
                     buf_putc(&cast, '\0');
                     free(raw);
                     raw = strdup(cast.data);
@@ -4208,10 +4229,14 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(ctx->file, "%s", sanitized_method_name);
                 buf_puts(ctx->file, ")(");
                 
-                /* Parameter types */
+                /* Parameter types — Phase HRT3: use tur_poly_fn_t for poly fn params */
                 for (uint8_t j = 0; j < method_impl->n_params; j++) {
                     if (j > 0) buf_puts(ctx->file, ", ");
-                    buf_printf(ctx->file, "%s", type_c_name(method_impl->param_types[j]));
+                    if (method_impl->params && method_impl->params[j]->is_poly_fn) {
+                        buf_puts(ctx->file, "tur_poly_fn_t");
+                    } else {
+                        buf_printf(ctx->file, "%s", type_c_name(method_impl->param_types[j]));
+                    }
                 }
                 buf_puts(ctx->file, ");\n");
             }
