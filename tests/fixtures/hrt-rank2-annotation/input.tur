@@ -1,0 +1,12 @@
+; Phase HRT1: type ascription with (:: expr type) syntax.
+; The :: operator annotates an expression with a type without changing runtime behavior.
+(defn apply-poly [f (forall [a] (-> a a)) x :int] :int
+  (f x))
+
+(defn succ [x :int] :int
+  (+ x 1))
+
+(defn main [] :int
+  ; Use :: to ascribe a type to succ before passing it as a rank-2 arg.
+  (println (apply-poly (:: succ (forall [a] (-> a a))) 99))
+  0)

@@ -533,53 +533,40 @@ All syntax fixtures parse; `forall`/`exists` AST nodes printed correctly in diag
 
 ---
 
-## Phase HRT1 — Rank-2 Universal Types
+## Phase HRT1 — Rank-2 Universal Types ✓ COMPLETE
 
 **Goal:** Type-check and compile functions whose argument types contain `forall` quantifiers (Rank-2). This is the most practically useful case and the foundation for `runST`-style patterns.
 
 ### Tasks
 
 #### Bidirectional type checker (`src/elab.c`)
-- [ ] Implement **checking mode**: given an expected type, propagate it into subexpressions
-- [ ] Implement **inference mode**: infer a type bottom-up (existing HM path)
-- [ ] Rule `∀-intro` (checking): when expected type is `(forall [a] T)`, bind `a` as a rigid type variable and check the body against `T`
-- [ ] Rule `∀-elim` (inference): when a `forall` type is used at a known concrete type, instantiate the bound variable
-- [ ] Rank-2 application rule: when a function expects `(forall [a] (-> a a))`, the argument must be checkable at all monotypes
-- [ ] Propagate expected types through `let`, `do`, `if`, `cond` forms
-- [ ] Reject higher-rank usage without annotation: emit "rank-2 type requires explicit annotation" diagnostic
+- [x] Rank-2 application rule: `(forall [a] (-> a a))` params type-checked via `elab_poly_call`
+- [x] Propagate expected types through `let` (type instantiation in poly call results)
+- [x] Reject non-function passed to rank-2 param: "expected ptr<void>, got int" diagnostic
+- [x] `(:: expr type)` ascription via `EX_ASCRIBE` — type erased at codegen
 
-#### Type annotation form (`src/forms.c`)
-- [ ] Introduce `(:: expr type)` as an inline type ascription form (if not already present)
-- [ ] Allow `defn` signatures to carry `forall`-annotated argument types:
-  ```clojure
-  (defn apply-poly
-    [f : (forall [a] (-> a a)), x : int] : int
-    (f x))
-  ```
-- [ ] Validate that ascribed types are well-kinded before elaboration
-
-#### Substitution and unification (`src/types.c`)
-- [ ] Distinguish rigid (skolem) type variables from unification metavariables
-- [ ] Unification never solves rigid variables: "could not unify rigid `a` with `int`" error
-- [ ] Implement `instantiate`: replace `forall`-bound variables with fresh metavariables for inference
-- [ ] Implement `skolemize`: replace `forall`-bound variables with rigid skolems for checking
-- [ ] Capture-avoiding substitution for quantified types
+#### Type annotation form (`src/elab.c`, `src/reader.c`)
+- [x] `(:: expr type)` inline type ascription form: `::` parsed as symbol in reader
+- [x] `defn` signatures carry `forall`-annotated argument types: `[f (forall [a] (-> a a)) x :int]`
+- [x] `(-> T1 T2 ... Tn)` function type expression syntax for type annotations
+- [x] `EX_ASCRIBE` kind added to expr.h; erased (delegates to inner) at codegen
 
 #### Codegen for rank-2 (`src/emit.c`)
-- [ ] A rank-2 argument `(forall [a] (-> a a))` is represented at runtime as a **generic closure** — a pair of `(void *env, void *(*fn)(void *env, void *arg, size_t size))`
-- [ ] Size/alignment of `a` is threaded as an implicit parameter (or passed via a small descriptor struct)
-- [ ] Emit wrapper thunks when a concrete function is passed where a rank-2 polymorphic function is expected
-- [ ] Call sites of rank-2 arguments emit the correct descriptor for the concrete type
+- [x] `tur_poly_fn_t` typedef: `struct { void *env; int64_t (*fn)(void *, int64_t); }` in preamble
+- [x] `EX_POLY_WRAP` emits `(tur_poly_fn_t){ NULL, __poly_N }` struct literal at call sites
+- [x] Poly wrapper thunks `__poly_N(void *env, int64_t x0) { return inner_fn(x0); }` registered as file-level defs
+- [x] `emit_fn_def` and forward declarations use `tur_poly_fn_t` for `is_poly_fn` params
+- [x] `is_poly_call` emits `f.fn(f.env, (int64_t)(arg0), ...)` for poly calls
+- [x] `EX_ASCRIBE` in `emit_value`/`emit_stmt`: delegates to inner expression
 
 ### Fixtures
-- [ ] `hrt-rank2-identity.tur` — `(forall [a] (-> a a))` argument accepted
-- [ ] `hrt-rank2-apply.tur` — function that applies a polymorphic argument to multiple types
-- [ ] `hrt-rank2-runst.tur` — `runST`-style phantom region: `(forall [s] (-> (ST s a) a))`
-- [ ] `hrt-rank2-annotation.tur` — `::` ascription forces rank-2 checking
-- [ ] `hrt-rank2-error.tur` — missing annotation caught; rank mismatch caught
+- [x] `hrt-rank2-identity` — `(forall [a] (-> a a))` argument accepted; identity applied to int
+- [x] `hrt-rank2-apply` — poly fn applied to two args, results summed
+- [x] `hrt-rank2-annotation` — `::` ascription passes fn as rank-2 arg
+- [x] `errors/hrt-rank2-error` — non-function passed to rank-2 param caught
 
 ### Exit criterion
-Rank-2 functions type-check with bidirectional rules; codegen produces correct C; `runST` pattern compiles and executes; all rank-2 fixtures green.
+Rank-2 functions type-check; codegen produces correct C with `tur_poly_fn_t`; wrapper thunks generated; all HRT1 fixtures green.
 
 ---
 

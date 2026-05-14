@@ -659,6 +659,9 @@ typedef struct Elab {
     /* Phase HRT0: Higher-ranked type quantifiers (type-level only; reject in expression position) */
     const Symbol *sym_forall;      /* forall */
     const Symbol *sym_exists;      /* exists */
+    /* Phase HRT1: Rank-2 type expression forms */
+    const Symbol *sym_arrow;       /* -> (function type constructor in type expressions) */
+    const Symbol *sym_ascribe;     /* :: (type ascription operator) */
     /* Phase HKT (v2): reserved typeclass names — user definitions rejected with diagnostic */
     const Symbol *sym_hkt_Functor;
     const Symbol *sym_hkt_Applicative;
@@ -1208,6 +1211,9 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* Phase HRT0: forall/exists */
     e->sym_forall = intern_cstr(st, "forall");
     e->sym_exists = intern_cstr(st, "exists");
+    /* Phase HRT1: -> and :: */
+    e->sym_arrow   = intern_cstr(st, "->");
+    e->sym_ascribe = intern_cstr(st, "::");
     /* Phase HKT (v2): reserved typeclass names */
     e->sym_hkt_Functor      = intern_cstr(st, "Functor");
     e->sym_hkt_Applicative  = intern_cstr(st, "Applicative");
@@ -2180,6 +2186,14 @@ static Expr *elab_form(Elab *e, Form *f);
 static bool typekind_is_numeric(TypeKind k);             /* Phase N */
 static Expr *elab_as_cast(Elab *e, const Form *call);   /* Phase N */
 static Expr *elab_unsafe(Elab *e, const Form *call);
+/* Phase HRT1 */
+static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
+                                  const Symbol **type_params, Kind *type_param_kinds,
+                                  uint8_t n_type_params);
+static Expr *elab_ascribe(Elab *e, const Form *call);
+static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding);
+static Binding *make_poly_wrapper(Elab *e, Binding *inner_b, uint8_t inner_arity, Span span);
+static Binding *poly_arg_fn_binding(Expr *arg);
 /* Phase 5 */
 static Expr *elab_ref(Elab *e, const Form *call);
 static Expr *elab_deref(Elab *e, const Form *call);
@@ -5721,7 +5735,10 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     Binding **params = NULL;
     uint8_t n_params = 0;
     TypeKind param_kinds[MAX_FN_ARITY];
-    
+    /* Phase HRT1: full type annotations for rank-2 poly params (NULL if not poly) */
+    Type *param_poly_types[MAX_FN_ARITY];
+    for (uint8_t _i = 0; _i < MAX_FN_ARITY; _i++) param_poly_types[_i] = NULL;
+
     /* Phase 15: Constraint parsing */
     /* Track pending constraints that apply to the next type variable */
     TypeClass *pending_constraints[8];  /* Max 8 constraints per function */
@@ -5804,13 +5821,43 @@ static Expr *elab_defn(Elab *e, const Form *call) {
             continue;
         }
         
+        /* Phase HRT1: Handle complex type annotation (list form) for previous param.
+         * Syntax: [param-name (forall [a] (-> a a))] — list form follows a symbol. */
+        if (p->tag == F_LIST || p->tag == F_VEC) {
+            if (n_params == 0) {
+                diag_emit(DIAG_ERROR, p->span,
+                          "defn: type annotation without preceding parameter");
+                return NULL;
+            }
+            /* Parse as a type expression — supports (forall [a] (-> a a)), (-> a b), etc. */
+            Type *ann = type_expr_from_form(e, p, NULL, NULL, NULL, 0);
+            if (!ann) return NULL;
+            if (ann->kind == TY_FORALL || ann->kind == TY_EXISTS) {
+                /* Rank-2 polymorphic parameter: represented as tur_poly_fn_t at C level */
+                param_kinds[n_params - 1] = TY_PTR_VOID;
+                params[n_params - 1]->type = TYPE_PTR_VOID;
+                params[n_params - 1]->is_poly_fn = true;
+                params[n_params - 1]->poly_type = ann;
+                param_poly_types[n_params - 1] = ann;
+            } else if (ann->kind == TY_FN) {
+                /* Plain function type annotation */
+                param_kinds[n_params - 1] = TY_FN;
+                params[n_params - 1]->type = *ann;
+            } else {
+                /* Other type annotation — use the kind */
+                param_kinds[n_params - 1] = ann->kind;
+                params[n_params - 1]->type = *ann;
+            }
+            continue;
+        }
+
         if (p->tag != F_SYM && p->tag != F_KEYWORD) {
             diag_emit(DIAG_ERROR, p->span,
                       "defn: parameter must be a symbol or type annotation");
             /* params is arena-allocated, no need to free */
             return NULL;
         }
-        
+
         /* Handle type annotations: if this is a keyword like :int, it's a type for the previous param */
         if (p->tag == F_KEYWORD) {
             /* This is a type annotation for the previous parameter */
@@ -6016,6 +6063,19 @@ static Expr *elab_defn(Elab *e, const Form *call) {
         arg_kinds[i] = param_kinds[i];
     }
     Type fn_type = type_fn(arg_kinds, n_params, return_kind);
+
+    /* Phase HRT1: attach full poly types for rank-2 params */
+    {
+        bool any_poly = false;
+        for (uint8_t i = 0; i < n_params; i++) {
+            if (param_poly_types[i]) { any_poly = true; break; }
+        }
+        if (any_poly) {
+            Type **aFT = (Type **)arena_alloc(e->arena, n_params * sizeof(Type *));
+            for (uint8_t i = 0; i < n_params; i++) aFT[i] = param_poly_types[i];
+            fn_type.as.fn.arg_full_types = aFT;
+        }
+    }
 
     /* Create/update binding for the function.
      * Reuse pass-1 forward bindings in place so subsequent lookups observe
@@ -6977,6 +7037,8 @@ static Expr *elab_call(Elab *e, Form *call) {
     }
     /* Phase HKT-P1: type-level application */
     if (name == e->sym_type_app) return elab_type_app(e, call);
+    /* Phase HRT1: (:: expr type) — type ascription */
+    if (name == e->sym_ascribe) return elab_ascribe(e, call);
     /* Phase R2: Panic */
     if (name == e->sym_panic) return elab_panic(e, call);
     if (name == e->sym_panic_with) return elab_panic_with(e, call);
@@ -7241,6 +7303,11 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
     /* Get the function type */
     Type fn_type = fn_binding->type;
     
+    /* Phase HRT1: rank-2 polymorphic function parameter call — intercept before closure/PTR_VOID. */
+    if (fn_binding->is_poly_fn) {
+        return elab_poly_call(e, call, fn_binding);
+    }
+
     /* For closure bindings, use the closure's thunk function type */
     if (fn_binding->closure_fn_binding) {
         /* This is a closure - get the thunk function type */
@@ -7312,9 +7379,29 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             expected_arg_kind = fn_type.as.fn.arg_kinds[fn_arg_idx];
         }
 
+        /* Phase HRT1: Detect rank-2 poly param and wrap arg in EX_POLY_WRAP.
+         * arg_full_types[fn_arg_idx] is TY_FORALL → this is a rank-2 param. */
+        bool is_rank2_param = false;
+        if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
+            uint32_t fn_arg_idx2 = i;
+            if (fn_binding->closure_fn_binding) fn_arg_idx2 = i + 1;
+            if (fn_arg_idx2 < fn_type.as.fn.arity) {
+                Type *aft = fn_type.as.fn.arg_full_types[fn_arg_idx2];
+                if (aft && (aft->kind == TY_FORALL || aft->kind == TY_EXISTS)) {
+                    is_rank2_param = true;
+                }
+            }
+        }
+
         bool arg_ok = (args[i]->type.kind == expected_arg_kind);
         if (!arg_ok && expected_arg_kind == TY_PTR_VOID && args[i]->type.kind == TY_FN) {
-            /* Allow passing a function value where callback pointer is expected. */
+            /* Allow passing a function value where callback pointer is expected.
+             * If this is a rank-2 param, we'll wrap it in a poly wrapper below. */
+            arg_ok = true;
+        }
+        if (!arg_ok && expected_arg_kind == TY_PTR_VOID &&
+                (args[i]->type.kind == TY_FORALL || args[i]->type.kind == TY_EXISTS)) {
+            /* Allow passing an ascribed poly type (from ::) where rank-2 is expected. */
             arg_ok = true;
         }
         if (!arg_ok && expected_arg_kind == TY_PTR_VOID && args[i]->type.kind == TY_NIL) {
@@ -7352,6 +7439,29 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                                 type_name(args[i]->type));
             return NULL;
         }
+
+        /* Phase HRT1: wrap rank-2 args with EX_POLY_WRAP + create wrapper thunk */
+        if (is_rank2_param && (args[i]->type.kind == TY_FN ||
+                                args[i]->type.kind == TY_FORALL ||
+                                args[i]->type.kind == TY_EXISTS)) {
+            Binding *inner_fn_b = poly_arg_fn_binding(args[i]);
+            if (!inner_fn_b) {
+                diag_emit(DIAG_ERROR, args[i]->span,
+                          "rank-2 argument must be a named function (capturing closures not yet supported)");
+                return NULL;
+            }
+            uint8_t inner_arity = (inner_fn_b->type.kind == TY_FN)
+                ? inner_fn_b->type.as.fn.arity : 1;
+            /* Closures have an env param counted in arity — subtract it */
+            if (inner_fn_b->closure_fn_binding) inner_arity--;
+            Binding *wrapper_b = make_poly_wrapper(e, inner_fn_b, inner_arity, args[i]->span);
+            if (!wrapper_b) return NULL;
+            Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, args[i]->span);
+            wrap->as.poly_wrap_.inner = args[i];
+            wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
+            args[i] = wrap;
+        }
+
         /* Phase 11: Move tracking - if arg is a CK_MOVE binding reference, poison it */
         if (args[i]->kind == EX_VAR && type_is_move(args[i]->as.var.binding->type)) {
             binding_mark_moved(args[i]->as.var.binding, args[i]->span);
@@ -9610,6 +9720,75 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
             }
         }
 
+        /* Phase HRT1: (-> T1 T2 ... Tn) — function type expression.
+         * All but the last element are argument types; the last is the result type.
+         * Requires at least (-> result) i.e. 2 elements. */
+        if (form->as.list.len >= 1 && form->as.list.items[0]->tag == F_SYM
+                && form->as.list.items[0]->as.sym == e->sym_arrow) {
+            uint32_t len = form->as.list.len;
+            if (len < 2) {
+                diag_emit(DIAG_ERROR, form->span,
+                          "'->': function type requires at least a result type: (-> result) or (-> arg result)");
+                return NULL;
+            }
+            /* items[1 .. len-2] are arg types; items[len-1] is result type */
+            uint8_t n_args = (uint8_t)(len - 2); /* may be 0 for zero-arg fn */
+            if (n_args > MAX_FN_ARITY) {
+                diag_emit(DIAG_ERROR, form->span,
+                          "'->': too many function arguments (max %d)", MAX_FN_ARITY);
+                return NULL;
+            }
+
+            TypeKind arg_kinds[MAX_FN_ARITY];
+            Type *arg_full_types_local[MAX_FN_ARITY];
+            bool any_poly_arg = false;
+
+            for (uint8_t i = 0; i < n_args; i++) {
+                Type *at = type_expr_from_form(e, form->as.list.items[1 + i],
+                                               rec_name, type_params, type_param_kinds, n_type_params);
+                if (!at) return NULL;
+                arg_full_types_local[i] = at;
+                /* Type variables (TY_STRUCT with def=NULL) and quantified types
+                 * are represented as TY_INT (int64_t) at the C level. */
+                if (at->kind == TY_STRUCT && at->as.struct_.def == NULL) {
+                    arg_kinds[i] = TY_INT; /* type variable → universal int64_t */
+                    any_poly_arg = true;
+                } else if (at->kind == TY_FORALL || at->kind == TY_EXISTS) {
+                    arg_kinds[i] = TY_PTR_VOID; /* rank-2 fn → tur_poly_fn_t */
+                    any_poly_arg = true;
+                } else {
+                    arg_kinds[i] = at->kind;
+                }
+            }
+
+            /* Result type */
+            Type *result_type = type_expr_from_form(e, form->as.list.items[len - 1],
+                                                     rec_name, type_params, type_param_kinds, n_type_params);
+            if (!result_type) return NULL;
+
+            TypeKind result_kind;
+            bool poly_result = false;
+            if (result_type->kind == TY_STRUCT && result_type->as.struct_.def == NULL) {
+                result_kind = TY_INT;
+                poly_result = true;
+            } else {
+                result_kind = result_type->kind;
+            }
+
+            Type *fn_t = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *fn_t = type_fn(arg_kinds, n_args, result_kind);
+
+            /* Store full type info if any polymorphic args or result */
+            if (any_poly_arg || poly_result) {
+                Type **aFT = (Type **)arena_alloc(e->arena, n_args * sizeof(Type *));
+                for (uint8_t i = 0; i < n_args; i++) aFT[i] = arg_full_types_local[i];
+                fn_t->as.fn.arg_full_types = aFT;
+                if (poly_result) fn_t->as.fn.result_full_type = result_type;
+            }
+
+            return fn_t;
+        }
+
         /* Type application: (ctor arg1 arg2 ...) is right-associative
          * (ctor arg1 arg2) == (ctor (arg1 arg2)) for binary constructors
          * But for simplicity in v1, we only support (ctor arg) with exactly 2 elements.
@@ -9939,6 +10118,167 @@ static Expr *elab_type_app(Elab *e, const Form *call) {
 
     /* type-app has no runtime effect; return nil */
     return e_nil(e, call->span);
+}
+
+/* Phase HRT1: (:: expr type) — type ascription.
+ * The ascribed type is checked for well-formedness but erased at codegen.
+ * Syntax: (:: expr type-form) */
+static Expr *elab_ascribe(Elab *e, const Form *call) {
+    if (call->as.list.len != 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "'::' requires exactly two arguments: (:: expr type)");
+        return NULL;
+    }
+    Form *expr_form = call->as.list.items[1];
+    Form *type_form = call->as.list.items[2];
+
+    /* Parse the ascribed type */
+    Type *ascribed = type_expr_from_form(e, type_form, NULL, NULL, NULL, 0);
+    if (!ascribed) return NULL;
+
+    /* Elaborate the expression */
+    Expr *inner = elab_form(e, expr_form);
+    if (!inner) return NULL;
+
+    /* Build ascription node — the expression's type is overridden by the ascribed type
+     * for downstream type-checking purposes. Type is erased at codegen. */
+    Expr *out = expr_new(e->arena, EX_ASCRIBE, *ascribed, call->span);
+    out->as.ascribe_.inner = inner;
+    return out;
+}
+
+/* Phase HRT1: create a poly wrapper thunk for passing a function to a rank-2 param.
+ * The wrapper has signature: int64_t __poly_N(void *env, int64_t x0, ..., int64_t x_{arity-1})
+ * Its body calls inner_b(x0, ..., x_{arity-1}), ignoring env.
+ * Registers the wrapper as a file-level EX_FN_DEF and returns the wrapper Binding. */
+static Binding *make_poly_wrapper(Elab *e, Binding *inner_b, uint8_t inner_arity, Span span) {
+    /* Wrapper name */
+    char wname[32];
+    snprintf(wname, sizeof(wname), "__poly_%u", e->next_id++);
+    const Symbol *wsym = symtab_intern(e->st, strslice(wname, (uint32_t)strlen(wname)));
+
+    /* Wrapper params: env (ptr<void>) + inner_arity int64_t args */
+    uint8_t w_arity = inner_arity + 1;
+    if (w_arity > MAX_FN_ARITY) {
+        diag_emit(DIAG_ERROR, span, "rank-2 wrapper: too many arguments");
+        return NULL;
+    }
+    Binding **wparams = (Binding **)arena_alloc(e->arena, w_arity * sizeof(Binding *));
+    Type *wparam_types = (Type *)arena_alloc(e->arena, w_arity * sizeof(Type));
+
+    /* env param */
+    char env_pname[40];
+    snprintf(env_pname, sizeof(env_pname), "__poly_env_%u", e->next_id++);
+    const Symbol *env_psym = symtab_intern(e->st, strslice(env_pname, (uint32_t)strlen(env_pname)));
+    Binding *env_pb = binding_new(e, env_psym, TYPE_PTR_VOID, false, false, span);
+    wparams[0] = env_pb;
+    wparam_types[0] = TYPE_PTR_VOID;
+
+    /* Arg params x0, x1, ... */
+    Binding *arg_bs[MAX_FN_ARITY];
+    for (uint8_t i = 0; i < inner_arity; i++) {
+        char apname[40];
+        snprintf(apname, sizeof(apname), "__poly_x%u_%u", i, e->next_id++);
+        const Symbol *apsym = symtab_intern(e->st, strslice(apname, (uint32_t)strlen(apname)));
+        Binding *apb = binding_new(e, apsym, TYPE_INT, false, false, span);
+        wparams[i + 1] = apb;
+        wparam_types[i + 1] = TYPE_INT;
+        arg_bs[i] = apb;
+    }
+
+    /* Build call body: (inner_b x0 x1 ...) */
+    TypeKind inner_result_kind = (inner_b->type.kind == TY_FN)
+        ? inner_b->type.as.fn.result_kind : TY_INT;
+    Expr **call_args = (Expr **)arena_alloc(e->arena, (inner_arity ? inner_arity : 1) * sizeof(Expr *));
+    for (uint8_t i = 0; i < inner_arity; i++) {
+        Expr *av = expr_new(e->arena, EX_VAR, TYPE_INT, span);
+        av->as.var.binding = arg_bs[i];
+        call_args[i] = av;
+    }
+    Expr *call_body = expr_new(e->arena, EX_CALL, type_from_kind(inner_result_kind), span);
+    call_body->as.call_.fn_binding = inner_b;
+    call_body->as.call_.args = inner_arity > 0 ? call_args : NULL;
+    call_body->as.call_.n_args = inner_arity;
+    call_body->as.call_.fn_expr = NULL;
+    call_body->as.call_.dict_arg = NULL;
+    call_body->as.call_.is_poly_call = false;
+
+    /* Build wrapper fn type */
+    TypeKind warg_kinds[MAX_FN_ARITY];
+    warg_kinds[0] = TY_PTR_VOID;
+    for (uint8_t i = 0; i < inner_arity; i++) warg_kinds[i + 1] = TY_INT;
+    Type wfn_type = type_fn(warg_kinds, w_arity, inner_result_kind);
+
+    Binding *wb = binding_new(e, wsym, wfn_type, false, true, span);
+    scope_add(&e->global, wb);
+
+    FnDef *wfd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));
+    memset(wfd, 0, sizeof(FnDef));
+    wfd->binding = wb;
+    wfd->params = wparams;
+    wfd->n_params = w_arity;
+    wfd->body = call_body;
+    wfd->is_variadic = false;
+    wfd->closure = NULL;
+    wfd->inferred_effect_row = NULL;
+    wfd->param_types = wparam_types;
+    constraint_set_init(&wfd->constraints);
+
+    Expr *wdef = expr_new(e->arena, EX_FN_DEF, wfn_type, span);
+    wdef->as.fn_def_.fn = wfd;
+    elab_register_file_def(e, wdef);
+
+    return wb;
+}
+
+/* Phase HRT1: Helper to extract the underlying fn binding from a poly arg expression.
+ * Handles EX_VAR and EX_ASCRIBE(EX_VAR). Returns NULL if not a simple fn ref. */
+static Binding *poly_arg_fn_binding(Expr *arg) {
+    if (arg->kind == EX_VAR) return arg->as.var.binding;
+    if (arg->kind == EX_ASCRIBE) return poly_arg_fn_binding(arg->as.ascribe_.inner);
+    return NULL;
+}
+
+/* Phase HRT1: Elaborate a call through a rank-2 polymorphic function parameter.
+ * fn_binding->is_poly_fn is true; the call emits fn_name.fn(fn_name.env, args...) */
+static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
+    uint32_t n_args = call->as.list.len - 1;
+
+    /* Elaborate all arguments normally */
+    Expr **args = (Expr **)arena_alloc(e->arena, (n_args ? n_args : 1) * sizeof(Expr *));
+    for (uint32_t i = 0; i < n_args; i++) {
+        args[i] = elab_form(e, call->as.list.items[1 + i]);
+        if (!args[i]) return NULL;
+    }
+
+    /* Determine return type by instantiation.
+     * For (forall [a] (-> a a)): result matches first arg's type.
+     * For (forall [s] (-> s int)): result is int (concrete). */
+    TypeKind result_kind = TY_INT;
+    const Type *poly = fn_binding->poly_type;
+    if (poly && poly->kind == TY_FORALL) {
+        const Type *body = poly->as.forall_.body;
+        if (body && body->kind == TY_FN) {
+            const Type *rfull = body->as.fn.result_full_type;
+            if (rfull && rfull->kind == TY_STRUCT && rfull->as.struct_.def == NULL) {
+                /* Result is a type variable — instantiate from first arg's type */
+                result_kind = (n_args > 0 && args[0]) ? args[0]->type.kind : TY_INT;
+            } else if (rfull) {
+                result_kind = rfull->kind;
+            } else {
+                result_kind = body->as.fn.result_kind;
+            }
+        }
+    }
+
+    Expr *out = expr_new(e->arena, EX_CALL, type_from_kind(result_kind), call->span);
+    out->as.call_.fn_binding = fn_binding;
+    out->as.call_.args = n_args > 0 ? args : NULL;
+    out->as.call_.n_args = n_args;
+    out->as.call_.fn_expr = NULL;
+    out->as.call_.dict_arg = NULL;
+    out->as.call_.is_poly_call = true;
+    return out;
 }
 
 /* Elaborate (defclass Name [type-params...] (method1 ...) (method2 ...) ...)

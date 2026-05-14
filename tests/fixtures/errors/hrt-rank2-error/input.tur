@@ -1,0 +1,6 @@
+; Phase HRT1: error — passing an integer (not a function) to a rank-2 poly fn param.
+(defn apply-poly [f (forall [a] (-> a a)) x :int] :int
+  (f x))
+
+(defn main [] :int
+  (apply-poly 42 99))

@@ -184,6 +184,12 @@ typedef struct Type {
             /* Future-proofing for v3 effects: effect row slot.
              * NULL in v0/v1; treated as empty effect set. */
             struct EffectRow *effect_row;
+            /* Phase HRT1: full type info for polymorphic (rank-2+) parameters.
+             * NULL for ordinary functions; set when any arg is a forall type.
+             * Points to an arena-allocated array of n=arity Type pointers.
+             * arg_full_types[i] is NULL for monomorphic args, non-NULL for poly. */
+            struct Type **arg_full_types;
+            struct Type  *result_full_type; /* NULL or full result type for poly results */
         } fn;
         /* Phase 5: ref<T> stores the inner type T */
         struct {
@@ -364,6 +370,8 @@ static inline Type type_fn(TypeKind arg_kinds[], uint8_t arity, TypeKind result_
     }
     t.as.fn.result_kind = result_kind;
     t.as.fn.effect_row = NULL;
+    t.as.fn.arg_full_types = NULL;
+    t.as.fn.result_full_type = NULL;
     return t;
 }
 

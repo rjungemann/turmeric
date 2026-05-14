@@ -431,7 +431,18 @@ static Form *read_keyword(Reader *r) {
     uint32_t start_line = r->line;
     uint32_t start_col = r->col;
     size_t start_off = r->pos;
-    advance(r); /* consume ':' */
+    advance(r); /* consume first ':' */
+
+    /* Phase HRT1: '::' is the type ascription operator — emit as a symbol named "::" */
+    if (peek(r) == ':') {
+        advance(r); /* consume second ':' */
+        size_t end = r->pos;
+        Span span = span_from_to(r, start_line, start_col, start_off, end);
+        StrSlice name = strslice(r->src + start_off, (uint32_t)(end - start_off)); /* "::" */
+        const Symbol *sym = symtab_intern(r->st, name);
+        return form_sym(r->arena, span, sym);
+    }
+
     if (!is_sym_cont(peek(r)) && !isalpha(peek(r))) {
         Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
         diag_emit(DIAG_ERROR, s, "expected keyword name after ':'");

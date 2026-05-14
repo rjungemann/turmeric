@@ -2314,6 +2314,41 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 return result;
             }
             
+            /* Phase HRT1: poly call through rank-2 fn param: emit fn_name.fn(fn_name.env, arg0, ...) */
+            if (e->as.call_.is_poly_call) {
+                char *fn_name = raw_name_for_binding(fn_binding);
+                char **arg_strs = (char **)malloc(e->as.call_.n_args * sizeof(char *));
+                if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
+                for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                    char *raw = emit_value(ctx, body, e->as.call_.args[i]);
+                    /* Poly fn expects int64_t args — cast fn ptrs and void* through intptr_t */
+                    bool needs_cast = (e->as.call_.args[i]->type.kind == TY_FN ||
+                                       e->as.call_.args[i]->type.kind == TY_PTR_VOID);
+                    if (needs_cast) {
+                        Buf cast; buf_init(&cast);
+                        buf_printf(&cast, "(int64_t)(intptr_t)(%s)", raw);
+                        buf_putc(&cast, '\0');
+                        free(raw);
+                        raw = strdup(cast.data);
+                        buf_free(&cast);
+                    }
+                    arg_strs[i] = raw;
+                }
+                Buf out; buf_init(&out);
+                buf_printf(&out, "%s.fn(%s.env", fn_name, fn_name);
+                for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                    buf_printf(&out, ", (int64_t)(%s)", arg_strs[i]);
+                }
+                buf_puts(&out, ")");
+                buf_putc(&out, '\0');
+                char *result = strdup(out.data);
+                buf_free(&out);
+                for (uint32_t i = 0; i < e->as.call_.n_args; i++) free(arg_strs[i]);
+                free(arg_strs);
+                free(fn_name);
+                return result;
+            }
+
             if (fn_binding->closure_fn_binding) {
                 /* This is a closure - emit call to thunk function with closure value as first arg */
                 Binding *thunk_binding = fn_binding->closure_fn_binding;
@@ -2398,7 +2433,10 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * converted to integers in C99; a reinterpret via intptr_t is needed. */
                 /* Phase HKT §5: also cast TY_PTR_VOID (capturing-closure env ptr) to
                  * int64_t when passing to an int64_t parameter. */
-                bool needs_fn_cast = (e->as.call_.args[i]->type.kind == TY_FN ||
+                /* Phase HRT1: EX_POLY_WRAP emits a tur_poly_fn_t struct literal;
+                 * it must NOT be cast — pass directly as tur_poly_fn_t to poly params. */
+                bool needs_fn_cast = (e->as.call_.args[i]->kind != EX_POLY_WRAP) &&
+                                     (e->as.call_.args[i]->type.kind == TY_FN ||
                                       e->as.call_.args[i]->type.kind == TY_PTR_VOID);
                 /* When param expects void * (TY_PTR_VOID), cast to void * not int64_t.
                  * Passing int64_t to void * is invalid in C99 (-Wint-conversion error). */
@@ -3761,6 +3799,22 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_free(&lit);
             return result;
         }
+        /* Phase HRT1: rank-2 polymorphic function wrapper */
+        case EX_POLY_WRAP: {
+            /* Emit (tur_poly_fn_t){ NULL, wrapper_fn_name } */
+            char *wn = raw_name_for_binding(e->as.poly_wrap_.wrapper_binding);
+            Buf out; buf_init(&out);
+            buf_printf(&out, "(tur_poly_fn_t){ NULL, %s }", wn);
+            buf_putc(&out, '\0');
+            free(wn);
+            char *result = strdup(out.data);
+            buf_free(&out);
+            return result;
+        }
+        /* Phase HRT1: type ascription — erase type, emit inner expression */
+        case EX_ASCRIBE: {
+            return emit_value(ctx, body, e->as.ascribe_.inner);
+        }
     }
     return atom_nil();
 }
@@ -3778,6 +3832,8 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_PANIC_PAYLOAD_FILE:
         case EX_PANIC_PAYLOAD_LINE:
         case EX_PANIC_PAYLOAD_DOWNS:
+        case EX_POLY_WRAP:  /* Phase HRT1: pure struct literal, no stmt-level side effects */
+        case EX_ASCRIBE:    /* Phase HRT1: type erased, delegate to inner */
             /* No side effects — emit nothing. */
             return;
         case EX_PANIC_WITH: {
@@ -4367,8 +4423,12 @@ static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* Emit parameters - use raw names (without ID suffix) */
     for (uint8_t i = 0; i < fd->n_params; i++) {
         if (i > 0) buf_puts(file, ", ");
-        /* Use the param's type for emission */
-        buf_puts(file, type_c_name(fd->param_types[i]));
+        /* Phase HRT1: poly fn params use tur_poly_fn_t in signature */
+        if (fd->params[i]->is_poly_fn) {
+            buf_puts(file, "tur_poly_fn_t");
+        } else {
+            buf_puts(file, type_c_name(fd->param_types[i]));
+        }
         const char *pn = raw_name_for_binding(fd->params[i]);
         buf_printf(file, " %s", pn);
         free((void*)pn);
@@ -4660,7 +4720,12 @@ int emit_program(Buf *out, const Expr *program) {
             buf_printf(&fwd_decls, " %s(", fn_name);
             for (uint8_t j = 0; j < fd->n_params; j++) {
                 if (j > 0) buf_puts(&fwd_decls, ", ");
-                buf_puts(&fwd_decls, type_c_name(fd->param_types[j]));
+                /* Phase HRT1: poly fn params use tur_poly_fn_t in signature */
+                if (fd->params[j]->is_poly_fn) {
+                    buf_puts(&fwd_decls, "tur_poly_fn_t");
+                } else {
+                    buf_puts(&fwd_decls, type_c_name(fd->param_types[j]));
+                }
             }
             buf_puts(&fwd_decls, ");\n");
             free((void*)fn_name);
@@ -4787,6 +4852,11 @@ int emit_program(Buf *out, const Expr *program) {
     /* Phase 20-21: Software Transactional Memory */
     buf_puts(out, "#include <stdlib.h>\n");
     buf_puts(out, "#include <stdbool.h>\n");
+    /* Phase HRT1: rank-2 polymorphic function type.
+     * tur_poly_fn_t is a generic closure: a function pointer paired with an env pointer.
+     * Used for (forall [a] (-> a a))-style rank-2 parameters. */
+    buf_puts(out, "/* Phase HRT1: rank-2 polymorphic function type */\n");
+    buf_puts(out, "typedef struct { void *env; int64_t (*fn)(void *, int64_t); } tur_poly_fn_t;\n");
     /* Inline STM runtime - Phase 21 with per-TVar locking */
     buf_puts(out, "/* STM types (Phase 21) */\n");
     buf_puts(out, "typedef void *(*stm_fn_t)(void *env);\n");

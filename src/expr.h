@@ -48,6 +48,9 @@ struct Binding {
     const char   *c_export_name;
     /* Phase P3: HAMT lowering - whether this binding is ^persistent (immutable map) */
     bool          is_persistent;
+    /* Phase HRT1: rank-2 polymorphic function parameter */
+    bool          is_poly_fn;     /* true if this binding is a rank-2 poly fn param */
+    const struct Type *poly_type; /* full TY_FORALL type, NULL if not rank-2 */
 };
 
 typedef enum ExprKind {
@@ -147,6 +150,9 @@ typedef enum ExprKind {
     /* Phase 21: Serializable continuations */
     EX_SERIAL_RESET,   /* (serial-reset body) - establish serializable continuation boundary */
     EX_SERIAL_SHIFT,   /* (serial-shift k body) - capture serializable continuation */
+    /* Phase HRT1: Rank-2 higher-ranked types */
+    EX_POLY_WRAP,      /* wraps a fn/closure as tur_poly_fn_t for rank-2 param passing */
+    EX_ASCRIBE,        /* (:: expr type) — inline type ascription; erased at codegen */
 } ExprKind;
 
 /* Phase 2: FnDef represents a function definition from defn or lifted fn. */
@@ -305,7 +311,8 @@ struct Expr {
          * so the information is available for future passes. */
         struct { Binding *fn_binding; Expr **args; uint32_t n_args;
                  struct Expr *fn_expr;
-                 struct Expr *dict_arg; }                                   call_;
+                 struct Expr *dict_arg;
+                 bool is_poly_call; /* Phase HRT1: call through rank-2 poly fn param */ } call_;
         struct { FnDef *fn; }                                               fn_;
         struct { ExternC *ext; }                                            extern_c_;
         struct { InlineC *inline_c; }                                       inline_c_;
@@ -431,6 +438,12 @@ struct Expr {
             Expr *k_fn;   /* function receiving the serial continuation */
             Expr *body;   /* body expression */
         } serial_shift_;
+        /* Phase HRT1: Higher-ranked types */
+        struct {
+            struct Expr    *inner;           /* the fn/closure being wrapped */
+            struct Binding *wrapper_binding; /* the __poly_N wrapper thunk binding */
+        } poly_wrap_;
+        struct { struct Expr *inner; } ascribe_; /* (:: expr type) — type erased at codegen */
     } as;
 };
 
