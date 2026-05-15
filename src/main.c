@@ -523,6 +523,7 @@ static void default_output_name(const char *input, char *out, size_t cap) {
 }
 
 static int cmd_build(const char *input, const char *out_path);
+static char *find_project_root(const char *start);
 
 /* Build a deterministic path for the intermediate generated-C file so that
  * ccache can cache repeated compilations of the same .tur source.
@@ -646,12 +647,40 @@ static int cmd_build(const char *input, const char *out_path) {
     const char *cc_flags = getenv("TUR_CC_FLAGS");
     if (!cc_flags || !*cc_flags) cc_flags = "-O2 -std=c99 -Wall";
 
+    /* Collect cmake dep flags from cmake/spice-deps-manifest.json if present */
+    Buf cmake_flags;
+    buf_init(&cmake_flags);
+    {
+        /* Walk up from the input file's directory to find project root */
+        char input_dir[4096];
+        strncpy(input_dir, input, sizeof(input_dir) - 1);
+        input_dir[sizeof(input_dir) - 1] = '\0';
+        char *slash = strrchr(input_dir, '/');
+        if (slash) *slash = '\0';
+        else strncpy(input_dir, ".", sizeof(input_dir));
+        char *proj_root = find_project_root(input_dir);
+        if (proj_root) {
+            char manifest_path[4096];
+            snprintf(manifest_path, sizeof(manifest_path),
+                     "%s/cmake/spice-deps-manifest.json", proj_root);
+            PkgCmakeManifest cmake_manifest;
+            if (pkg_cmake_manifest_read(manifest_path, &cmake_manifest)) {
+                pkg_cmake_manifest_append_cc_flags(&cmake_manifest, &cmake_flags);
+                pkg_cmake_manifest_free(&cmake_manifest);
+            }
+            free(proj_root);
+        }
+    }
+
     Buf cmd;
     buf_init(&cmd);
     buf_printf(&cmd, "%s %s -o %s %s", cc, cc_flags, out_path, tmpl);
     /* Append any __tur_autolink__ flags discovered in the generated C. */
     if (autolink.len > 0) buf_printf(&cmd, " %s", autolink.data);
     buf_free(&autolink);
+    /* Append cmake dep flags (-I/-L/-l). */
+    if (cmake_flags.len > 0) buf_puts(&cmd, cmake_flags.data);
+    buf_free(&cmake_flags);
     int sys_rc = system(cmd.data);
     buf_free(&cmd);
     /* Leave the stable temp file for ccache; only unlink random fallbacks. */
@@ -1010,6 +1039,24 @@ static int cmd_build_multi(const char *dir, const char *out_path) {
     const char *cc_flags = getenv("TUR_CC_FLAGS");
     if (!cc_flags || !*cc_flags) cc_flags = "-O2 -std=c99 -Wall";
 
+    /* Collect cmake dep flags from cmake/spice-deps-manifest.json if present */
+    Buf cmake_flags;
+    buf_init(&cmake_flags);
+    {
+        char *proj_root = find_project_root(dir);
+        if (proj_root) {
+            char manifest_path[4096];
+            snprintf(manifest_path, sizeof(manifest_path),
+                     "%s/cmake/spice-deps-manifest.json", proj_root);
+            PkgCmakeManifest cmake_manifest;
+            if (pkg_cmake_manifest_read(manifest_path, &cmake_manifest)) {
+                pkg_cmake_manifest_append_cc_flags(&cmake_manifest, &cmake_flags);
+                pkg_cmake_manifest_free(&cmake_manifest);
+            }
+            free(proj_root);
+        }
+    }
+
     Buf cmd;
     buf_init(&cmd);
     buf_printf(&cmd, "%s %s -o %s", cc, cc_flags, out_path);
@@ -1019,6 +1066,9 @@ static int cmd_build_multi(const char *dir, const char *out_path) {
     for (int i = 0; i < n_files; i++) {
         buf_printf(&cmd, " %s", c_files[i]);
     }
+    /* Append cmake dep flags (-I/-L/-l). */
+    if (cmake_flags.len > 0) buf_puts(&cmd, cmake_flags.data);
+    buf_free(&cmake_flags);
     int sys_rc = system(cmd.data);
     buf_free(&cmd);
 
