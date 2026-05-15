@@ -23,6 +23,8 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                         uint32_t stdlib_prefix,
                         const char *module_base_dir,
                         bool separate_compilation,
-                        TypeClassEnv *out_tc_env);
+                        TypeClassEnv *out_tc_env,
+                        const char **include_dirs,
+                        int n_include_dirs);
 
 #endif

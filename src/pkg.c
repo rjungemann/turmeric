@@ -796,6 +796,31 @@ bool pkg_sha256_file(const char *path, char out[65]) {
     return ok;
 }
 
+bool pkg_sha256_dir(const char *dir, char out[65]) {
+    Buf cmd;
+    buf_init(&cmd);
+#if defined(__APPLE__)
+    buf_printf(&cmd, "tar -c '%s' 2>/dev/null | shasum -a 256", dir);
+#else
+    buf_printf(&cmd, "tar -c '%s' 2>/dev/null | sha256sum", dir);
+#endif
+    buf_putc(&cmd, '\0');
+    FILE *f = popen(cmd.data, "r");
+    buf_free(&cmd);
+    if (!f) return false;
+    char line[256];
+    bool ok = false;
+    if (fgets(line, sizeof(line), f)) {
+        if (strlen(line) >= 64) {
+            memcpy(out, line, 64);
+            out[64] = '\0';
+            ok = true;
+        }
+    }
+    pclose(f);
+    return ok;
+}
+
 /* ================================================================== */
 /* Semver                                                               */
 /* ================================================================== */
@@ -1066,8 +1091,13 @@ bool pkg_fetch_all(const char *project_dir,
             free(le->ref);       le->ref       = it->ref ? tur_strdup(it->ref) : NULL;
             free(le->resolved);  le->resolved  = resolved;
             free(le->fetched_at);le->fetched_at= tur_strdup(iso_now());
-            /* Use resolved SHA as sha256 placeholder */
-            free(le->sha256);    le->sha256    = tur_strdup(resolved);
+            /* Compute SHA-256 of the fetched directory archive */
+            char dir_sha[65];
+            free(le->sha256);
+            if (pkg_sha256_dir(dest, dir_sha))
+                le->sha256 = tur_strdup(dir_sha);
+            else
+                le->sha256 = tur_strdup(resolved); /* fallback: git SHA */
         } else {
             free(resolved);
         }
