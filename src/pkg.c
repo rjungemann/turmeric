@@ -1,0 +1,1547 @@
+/*
+ * pkg.c -- Spice: the Turmeric package manager (Phase PKG-1)
+ *
+ * See pkg.h for the public API.
+ */
+
+#ifndef _DEFAULT_SOURCE
+#define _DEFAULT_SOURCE
+#endif
+#if defined(__APPLE__)
+#  ifndef _DARWIN_C_SOURCE
+#    define _DARWIN_C_SOURCE
+#  endif
+#else
+#  ifndef _POSIX_C_SOURCE
+#    define _POSIX_C_SOURCE 200809L
+#  endif
+#endif
+
+#include <ctype.h>
+#include <dirent.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
+
+#include "arena.h"
+#include "buf.h"
+#include "diag.h"
+#include "forms.h"
+#include "pkg.h"
+#include "reader.h"
+#include "symbols.h"
+
+/* ================================================================== */
+/* Internal helpers                                                     */
+/* ================================================================== */
+
+/* Copy a StrSlice into a heap-allocated NUL-terminated string. */
+static char *ss_dup(StrSlice s) {
+    char *out = (char *)malloc(s.len + 1);
+    if (!out) return NULL;
+    memcpy(out, s.p, s.len);
+    out[s.len] = '\0';
+    return out;
+}
+
+/* Run a command and capture stdout into a heap-allocated string.
+ * Returns NULL on failure.  Caller must free(). */
+static char *run_capture(const char *cmd) {
+    FILE *f = popen(cmd, "r");
+    if (!f) return NULL;
+    Buf b;
+    buf_init(&b);
+    char line[256];
+    while (fgets(line, sizeof(line), f))
+        buf_puts(&b, line);
+    int rc = pclose(f);
+    if (rc != 0) {
+        buf_free(&b);
+        return NULL;
+    }
+    /* NUL-terminate and strip trailing newline */
+    if (b.len == 0) { buf_free(&b); return NULL; }
+    buf_putc(&b, '\0');
+    /* trim trailing whitespace */
+    char *p = b.data + b.len - 2; /* last char before NUL */
+    while (p >= b.data && (*p == '\n' || *p == '\r' || *p == ' '))
+        *p-- = '\0';
+    char *result = tur_strdup(b.data);
+    buf_free(&b);
+    return result;
+}
+
+/* Return ISO-8601 UTC timestamp in a static buffer (thread-unsafe but fine
+ * here since package operations are single-threaded). */
+static const char *iso_now(void) {
+    static char buf[32];
+    time_t t = time(NULL);
+    struct tm *tm = gmtime(&t);
+    strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", tm);
+    return buf;
+}
+
+/* Ensure a directory exists (creates intermediate parents). */
+static bool mkdirp(const char *path) {
+    struct stat st;
+    if (stat(path, &st) == 0) return true;
+    /* Try to create it */
+    if (mkdir(path, 0755) == 0) return true;
+    if (errno == EEXIST) return true;
+    /* Walk up and recurse */
+    char tmp[4096];
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    size_t len = strlen(tmp);
+    if (len && tmp[len - 1] == '/') tmp[--len] = '\0';
+    for (size_t i = 1; i < len; i++) {
+        if (tmp[i] == '/') {
+            tmp[i] = '\0';
+            if (mkdir(tmp, 0755) != 0 && errno != EEXIST) return false;
+            tmp[i] = '/';
+        }
+    }
+    return mkdir(path, 0755) == 0 || errno == EEXIST;
+}
+
+/* ================================================================== */
+/* Form-walking helpers for defpackage parsing                         */
+/* ================================================================== */
+
+/* Get a value from an F_MAP by keyword name (without colon).
+ * Returns NULL if not found. */
+static const Form *map_get_kw(const Form *map, const char *kw) {
+    if (!map || map->tag != F_MAP) return NULL;
+    const FormList *fl = &map->as.list;
+    for (uint32_t i = 0; i + 1 < fl->len; i += 2) {
+        const Form *key = fl->items[i];
+        if (key->tag == F_KEYWORD && strcmp(key->as.sym->name, kw) == 0)
+            return fl->items[i + 1];
+    }
+    return NULL;
+}
+
+/* Extract a string from an F_STR form, or NULL. */
+static char *form_str_dup(const Form *f) {
+    if (!f || f->tag != F_STR) return NULL;
+    return ss_dup(f->as.s);
+}
+
+/* Extract a bool from an F_BOOL form. */
+static bool form_bool_val(const Form *f) {
+    if (!f || f->tag != F_BOOL) return false;
+    return f->as.b;
+}
+
+/* Parse the :spices map: {"name" {:url "..." :ref "..."} ...} */
+static bool parse_spices(const Form *map, PkgManifest *m) {
+    if (!map || map->tag != F_MAP) return true; /* empty is OK */
+    const FormList *fl = &map->as.list;
+    int cap = 4;
+    m->spices = (PkgSpice *)malloc(cap * sizeof(PkgSpice));
+    if (!m->spices) return false;
+    m->n_spices = 0;
+
+    for (uint32_t i = 0; i + 1 < fl->len; i += 2) {
+        const Form *key = fl->items[i];
+        const Form *val = fl->items[i + 1];
+        if (key->tag != F_STR) continue;
+        if (!val || val->tag != F_MAP) continue;
+
+        if (m->n_spices >= cap) {
+            cap *= 2;
+            m->spices = (PkgSpice *)realloc(m->spices,
+                                             cap * sizeof(PkgSpice));
+            if (!m->spices) return false;
+        }
+        PkgSpice *s = &m->spices[m->n_spices++];
+        memset(s, 0, sizeof(*s));
+        s->name     = ss_dup(key->as.s);
+        s->url      = form_str_dup(map_get_kw(val, "url"));
+        s->ref      = form_str_dup(map_get_kw(val, "ref"));
+        s->path     = form_str_dup(map_get_kw(val, "path"));
+        const Form *opt_f = map_get_kw(val, "optional");
+        s->optional = form_bool_val(opt_f);
+    }
+    return true;
+}
+
+/* Parse a single cmake dep options map: {:KEY "VAL" ...} */
+static bool parse_cmake_opts(const Form *map,
+                              PkgCmakeOpt **out_opts, int *out_n) {
+    *out_opts = NULL;
+    *out_n    = 0;
+    if (!map || map->tag != F_MAP) return true;
+    const FormList *fl = &map->as.list;
+    int cap = 4;
+    *out_opts = (PkgCmakeOpt *)malloc(cap * sizeof(PkgCmakeOpt));
+    if (!*out_opts) return false;
+    for (uint32_t i = 0; i + 1 < fl->len; i += 2) {
+        const Form *k = fl->items[i];
+        const Form *v = fl->items[i + 1];
+        if (k->tag != F_KEYWORD) continue;
+        if (!v || v->tag != F_STR) continue;
+        if (*out_n >= cap) {
+            cap *= 2;
+            *out_opts = (PkgCmakeOpt *)realloc(*out_opts,
+                                                cap * sizeof(PkgCmakeOpt));
+            if (!*out_opts) return false;
+        }
+        PkgCmakeOpt *o = &(*out_opts)[(*out_n)++];
+        o->key = tur_strdup(k->as.sym->name);
+        o->val = ss_dup(v->as.s);
+    }
+    return true;
+}
+
+/* Parse the :cmake-deps map */
+static bool parse_cmake_deps(const Form *map, PkgManifest *m) {
+    if (!map || map->tag != F_MAP) return true;
+    const FormList *fl = &map->as.list;
+    int cap = 4;
+    m->cmake_deps = (PkgCmakeDep *)malloc(cap * sizeof(PkgCmakeDep));
+    if (!m->cmake_deps) return false;
+    m->n_cmake_deps = 0;
+
+    for (uint32_t i = 0; i + 1 < fl->len; i += 2) {
+        const Form *key = fl->items[i];
+        const Form *val = fl->items[i + 1];
+        if (key->tag != F_STR) continue;
+        if (!val || val->tag != F_MAP) continue;
+
+        if (m->n_cmake_deps >= cap) {
+            cap *= 2;
+            m->cmake_deps = (PkgCmakeDep *)realloc(m->cmake_deps,
+                                                     cap * sizeof(PkgCmakeDep));
+            if (!m->cmake_deps) return false;
+        }
+        PkgCmakeDep *d = &m->cmake_deps[m->n_cmake_deps++];
+        memset(d, 0, sizeof(*d));
+        d->name = ss_dup(key->as.s);
+        d->url  = form_str_dup(map_get_kw(val, "url"));
+        d->ref  = form_str_dup(map_get_kw(val, "ref"));
+        const Form *opts_f = map_get_kw(val, "options");
+        parse_cmake_opts(opts_f, &d->opts, &d->n_opts);
+    }
+    return true;
+}
+
+/* Parse a string-vector form [a b c] or just a plain F_STR */
+static bool parse_str_vec(const Form *f, char ***out, int *n_out) {
+    *out   = NULL;
+    *n_out = 0;
+    if (!f) return true;
+    if (f->tag == F_STR) {
+        *out    = (char **)malloc(sizeof(char *));
+        (*out)[0] = ss_dup(f->as.s);
+        *n_out  = 1;
+        return true;
+    }
+    if (f->tag != F_VEC && f->tag != F_LIST) return true;
+    const FormList *fl = &f->as.list;
+    *out = (char **)malloc(fl->len * sizeof(char *));
+    if (!*out) return false;
+    *n_out = 0;
+    for (uint32_t i = 0; i < fl->len; i++) {
+        if (fl->items[i]->tag == F_STR)
+            (*out)[(*n_out)++] = ss_dup(fl->items[i]->as.s);
+    }
+    return true;
+}
+
+/* ================================================================== */
+/* pkg_manifest_read                                                    */
+/* ================================================================== */
+
+bool pkg_manifest_read(const char *path, PkgManifest *out) {
+    memset(out, 0, sizeof(*out));
+
+    /* Read the file into memory */
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        fprintf(stderr, "spice: cannot open '%s': %s\n", path, strerror(errno));
+        return false;
+    }
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    rewind(f);
+    char *src = (char *)malloc(sz + 1);
+    if (!src) { fclose(f); return false; }
+    if (fread(src, 1, sz, f) != (size_t)sz) {
+        fclose(f); free(src); return false;
+    }
+    fclose(f);
+    src[sz] = '\0';
+
+    /* Parse with the Turmeric reader */
+    Arena arena;
+    arena_init(&arena, 0);
+    SymbolTable st;
+    symtab_init(&st, &arena);
+
+    SourceFile file = {0};
+    file.path    = path;
+    file.src     = src;
+    file.len     = (uint32_t)sz;
+    file.file_id = 0;
+    /* Use READER_TURMERIC (value 0) */
+    diag_register_file(&file);
+
+    uint32_t nforms = 0;
+    Form **forms = read_all(&arena, &st, &file, &nforms);
+    free(src);
+
+    if (!forms || diag_had_error() || nforms == 0) {
+        symtab_free(&st);
+        arena_free(&arena);
+        return false;
+    }
+
+    /* Find the (defpackage ...) form */
+    Form *dp = NULL;
+    for (uint32_t i = 0; i < nforms; i++) {
+        Form *frm = forms[i];
+        if (frm->tag != F_LIST || frm->as.list.len < 2) continue;
+        Form *head = frm->as.list.items[0];
+        if (head->tag == F_SYM &&
+            strcmp(head->as.sym->name, "defpackage") == 0) {
+            dp = frm;
+            break;
+        }
+    }
+    if (!dp) {
+        fprintf(stderr, "spice: no (defpackage ...) form found in '%s'\n", path);
+        symtab_free(&st);
+        arena_free(&arena);
+        return false;
+    }
+
+    /* items[1] is the package name symbol or string */
+    Form *name_form = dp->as.list.items[1];
+    if (name_form->tag == F_SYM)
+        out->name = tur_strdup(name_form->as.sym->name);
+    else if (name_form->tag == F_STR)
+        out->name = ss_dup(name_form->as.s);
+
+    /* Walk keyword-value pairs starting at index 2 */
+    const FormList *fl = &dp->as.list;
+    for (uint32_t i = 2; i + 1 < fl->len; i += 2) {
+        const Form *kf = fl->items[i];
+        const Form *vf = fl->items[i + 1];
+        if (kf->tag != F_KEYWORD) { i -= 1; continue; }
+        const char *kw = kf->as.sym->name;
+
+        if (strcmp(kw, "name") == 0) {
+            free(out->name);
+            out->name = form_str_dup(vf);
+        } else if (strcmp(kw, "version") == 0) {
+            out->version = form_str_dup(vf);
+        } else if (strcmp(kw, "description") == 0) {
+            out->description = form_str_dup(vf);
+        } else if (strcmp(kw, "license") == 0) {
+            out->license = form_str_dup(vf);
+        } else if (strcmp(kw, "repository") == 0) {
+            out->repository = form_str_dup(vf);
+        } else if (strcmp(kw, "homepage") == 0) {
+            out->homepage = form_str_dup(vf);
+        } else if (strcmp(kw, "authors") == 0) {
+            parse_str_vec(vf, &out->authors, &out->n_authors);
+        } else if (strcmp(kw, "spices") == 0) {
+            parse_spices(vf, out);
+        } else if (strcmp(kw, "cmake-deps") == 0) {
+            parse_cmake_deps(vf, out);
+        } else if (strcmp(kw, "build-opts") == 0) {
+            if (vf && vf->tag == F_MAP) {
+                const Form *cf = map_get_kw(vf, "c-flags");
+                const Form *lf = map_get_kw(vf, "link-libs");
+                const Form *nf = map_get_kw(vf, "no-stdlib");
+                parse_str_vec(cf, &out->c_flags,   &out->n_c_flags);
+                parse_str_vec(lf, &out->link_libs,  &out->n_link_libs);
+                out->no_stdlib = form_bool_val(nf);
+            }
+        }
+    }
+
+    symtab_free(&st);
+    arena_free(&arena);
+    return true;
+}
+
+/* ================================================================== */
+/* pkg_manifest_write                                                   */
+/* ================================================================== */
+
+bool pkg_manifest_write(const char *path, const PkgManifest *m) {
+    FILE *f = fopen(path, "w");
+    if (!f) {
+        fprintf(stderr, "spice: cannot write '%s': %s\n", path, strerror(errno));
+        return false;
+    }
+
+    fprintf(f, ";;; build.tur -- project manifest for \"%s\"\n",
+            m->name ? m->name : "unnamed");
+    fprintf(f, "(defpackage %s\n", m->name ? m->name : "unnamed");
+    if (m->name)        fprintf(f, "  :name        \"%s\"\n", m->name);
+    if (m->version)     fprintf(f, "  :version     \"%s\"\n", m->version);
+    if (m->description) fprintf(f, "  :description \"%s\"\n", m->description);
+    if (m->license)     fprintf(f, "  :license     \"%s\"\n", m->license);
+    if (m->repository)  fprintf(f, "  :repository  \"%s\"\n", m->repository);
+    if (m->homepage)    fprintf(f, "  :homepage    \"%s\"\n", m->homepage);
+
+    if (m->n_authors > 0) {
+        fprintf(f, "  :authors     [");
+        for (int i = 0; i < m->n_authors; i++) {
+            if (i) fprintf(f, " ");
+            fprintf(f, "\"%s\"", m->authors[i]);
+        }
+        fprintf(f, "]\n");
+    }
+
+    if (m->n_spices > 0) {
+        fprintf(f, "\n  :spices #{\n");
+        for (int i = 0; i < m->n_spices; i++) {
+            const PkgSpice *s = &m->spices[i];
+            if (s->path) {
+                fprintf(f, "    \"%s\" #{:path \"%s\"", s->name, s->path);
+            } else {
+                fprintf(f, "    \"%s\" #{:url \"%s\"", s->name,
+                        s->url ? s->url : "");
+                if (s->ref) fprintf(f, " :ref \"%s\"", s->ref);
+            }
+            if (s->optional) fprintf(f, " :optional true");
+            fprintf(f, "}\n");
+        }
+        fprintf(f, "  }\n");
+    }
+
+    if (m->n_cmake_deps > 0) {
+        fprintf(f, "\n  :cmake-deps #{\n");
+        for (int i = 0; i < m->n_cmake_deps; i++) {
+            const PkgCmakeDep *d = &m->cmake_deps[i];
+            fprintf(f, "    \"%s\" #{:url \"%s\"",
+                    d->name, d->url ? d->url : "");
+            if (d->ref) fprintf(f, " :ref \"%s\"", d->ref);
+            if (d->n_opts > 0) {
+                fprintf(f, " :options #{");
+                for (int j = 0; j < d->n_opts; j++) {
+                    if (j) fprintf(f, " ");
+                    fprintf(f, ":%s \"%s\"",
+                            d->opts[j].key, d->opts[j].val);
+                }
+                fprintf(f, "}");
+            }
+            fprintf(f, "}\n");
+        }
+        fprintf(f, "  }\n");
+    }
+
+    if (m->n_c_flags > 0 || m->n_link_libs > 0 || m->no_stdlib) {
+        fprintf(f, "\n  :build-opts {\n");
+        if (m->n_c_flags > 0) {
+            fprintf(f, "    :c-flags [");
+            for (int i = 0; i < m->n_c_flags; i++) {
+                if (i) fprintf(f, " ");
+                fprintf(f, "\"%s\"", m->c_flags[i]);
+            }
+            fprintf(f, "]\n");
+        }
+        if (m->n_link_libs > 0) {
+            fprintf(f, "    :link-libs [");
+            for (int i = 0; i < m->n_link_libs; i++) {
+                if (i) fprintf(f, " ");
+                fprintf(f, "\"%s\"", m->link_libs[i]);
+            }
+            fprintf(f, "]\n");
+        }
+        if (m->no_stdlib) fprintf(f, "    :no-stdlib true\n");
+        fprintf(f, "  }\n");
+    }
+
+    fprintf(f, ")\n");
+    fclose(f);
+    return true;
+}
+
+/* ================================================================== */
+/* pkg_manifest_free                                                    */
+/* ================================================================== */
+
+void pkg_manifest_free(PkgManifest *m) {
+    free(m->name);
+    free(m->version);
+    free(m->description);
+    free(m->license);
+    free(m->repository);
+    free(m->homepage);
+    for (int i = 0; i < m->n_authors; i++) free(m->authors[i]);
+    free(m->authors);
+    for (int i = 0; i < m->n_spices; i++) {
+        free(m->spices[i].name);
+        free(m->spices[i].url);
+        free(m->spices[i].ref);
+        free(m->spices[i].path);
+    }
+    free(m->spices);
+    for (int i = 0; i < m->n_cmake_deps; i++) {
+        free(m->cmake_deps[i].name);
+        free(m->cmake_deps[i].url);
+        free(m->cmake_deps[i].ref);
+        for (int j = 0; j < m->cmake_deps[i].n_opts; j++) {
+            free(m->cmake_deps[i].opts[j].key);
+            free(m->cmake_deps[i].opts[j].val);
+        }
+        free(m->cmake_deps[i].opts);
+    }
+    free(m->cmake_deps);
+    for (int i = 0; i < m->n_c_flags;   i++) free(m->c_flags[i]);
+    free(m->c_flags);
+    for (int i = 0; i < m->n_link_libs; i++) free(m->link_libs[i]);
+    free(m->link_libs);
+    memset(m, 0, sizeof(*m));
+}
+
+/* ================================================================== */
+/* Lock file                                                            */
+/* ================================================================== */
+
+/* Strip surrounding double-quotes from a YAML value token. */
+static char *yaml_unquote(const char *s) {
+    if (!s) return NULL;
+    /* skip leading spaces */
+    while (*s == ' ') s++;
+    if (*s == '"') {
+        s++;
+        size_t len = strlen(s);
+        if (len && s[len - 1] == '"') len--;
+        char *out = (char *)malloc(len + 1);
+        memcpy(out, s, len);
+        out[len] = '\0';
+        return out;
+    }
+    return tur_strdup(s);
+}
+
+/* ---- lock file reader state machine ------------------------------ */
+
+typedef enum {
+    LS_TOP,
+    LS_IN_SPICES,
+    LS_IN_SPICE_ENTRY,
+    LS_IN_TRANSITIVE,
+    LS_IN_CMAKE,
+    LS_IN_CMAKE_ENTRY,
+} LockState;
+
+/* Count leading spaces. */
+static int leading_spaces(const char *line) {
+    int n = 0;
+    while (line[n] == ' ') n++;
+    return n;
+}
+
+/* Split "key: value" into key and value (in-place).  Returns false if no
+ * colon found. */
+static bool split_kv(char *line, char **key_out, char **val_out) {
+    char *colon = strchr(line, ':');
+    if (!colon) return false;
+    *colon = '\0';
+    *key_out = line;
+    *val_out = colon + 1;
+    /* strip leading space from value */
+    while (**val_out == ' ') (*val_out)++;
+    /* strip trailing newline from value */
+    char *end = *val_out + strlen(*val_out) - 1;
+    while (end >= *val_out && (*end == '\n' || *end == '\r'))
+        *end-- = '\0';
+    return true;
+}
+
+/* Append a string to a dynamic string array. */
+static bool arr_push(char ***arr, int *n, int *cap, const char *s) {
+    if (*n >= *cap) {
+        *cap = *cap ? *cap * 2 : 4;
+        *arr = (char **)realloc(*arr, *cap * sizeof(char *));
+        if (!*arr) return false;
+    }
+    (*arr)[(*n)++] = tur_strdup(s);
+    return true;
+}
+
+bool pkg_lock_read(const char *path, PkgLockFile *out) {
+    memset(out, 0, sizeof(*out));
+    out->format_version = 1;
+
+    FILE *f = fopen(path, "r");
+    if (!f) return false; /* not an error — just no lock file yet */
+
+    int entry_cap = 8;
+    out->entries  = (PkgLockEntry *)malloc(entry_cap * sizeof(PkgLockEntry));
+    if (!out->entries) { fclose(f); return false; }
+
+    LockState    state    = LS_TOP;
+    PkgLockEntry *cur     = NULL;
+    int           tr_cap  = 0;
+
+    char line[2048];
+    while (fgets(line, sizeof(line), f)) {
+        /* Skip comment lines */
+        if (line[0] == '#') continue;
+        /* Strip trailing newline */
+        char *nl = line + strlen(line) - 1;
+        while (nl >= line && (*nl == '\n' || *nl == '\r')) *nl-- = '\0';
+        /* Skip blank lines */
+        if (line[0] == '\0') continue;
+
+        int sp = leading_spaces(line);
+        char *trimmed = line + sp;
+
+        /* Top-level keys (0 indent) */
+        if (sp == 0) {
+            if (strncmp(trimmed, "format-version:", 15) == 0) {
+                out->format_version = atoi(trimmed + 15);
+            } else if (strcmp(trimmed, "spices:") == 0) {
+                state = LS_IN_SPICES;
+            } else if (strcmp(trimmed, "cmake-deps:") == 0) {
+                state = LS_IN_CMAKE;
+            }
+            continue;
+        }
+
+        /* Section entry names (2-space indent, ending with ':') */
+        if (sp == 2 &&
+            (state == LS_IN_SPICES || state == LS_IN_CMAKE)) {
+            size_t tl = strlen(trimmed);
+            if (tl > 0 && trimmed[tl - 1] == ':') {
+                /* new entry */
+                if (out->n_entries >= entry_cap) {
+                    entry_cap *= 2;
+                    out->entries = (PkgLockEntry *)realloc(out->entries,
+                        entry_cap * sizeof(PkgLockEntry));
+                    if (!out->entries) { fclose(f); return false; }
+                }
+                cur = &out->entries[out->n_entries++];
+                memset(cur, 0, sizeof(*cur));
+                cur->is_cmake = (state == LS_IN_CMAKE);
+                trimmed[tl - 1] = '\0';
+                cur->name = tur_strdup(trimmed);
+                tr_cap    = 0;
+                state = cur->is_cmake ? LS_IN_CMAKE_ENTRY : LS_IN_SPICE_ENTRY;
+            }
+            continue;
+        }
+
+        /* Entry fields (4-space indent) */
+        if (sp == 4 &&
+            (state == LS_IN_SPICE_ENTRY || state == LS_IN_CMAKE_ENTRY)) {
+            if (strcmp(trimmed, "transitive:") == 0) {
+                state = LS_IN_TRANSITIVE;
+                continue;
+            }
+            char *key = NULL, *val = NULL;
+            char tmp[2048];
+            strncpy(tmp, trimmed, sizeof(tmp) - 1);
+            if (!split_kv(tmp, &key, &val)) continue;
+            if (!cur) continue;
+            if (strcmp(key, "url") == 0)
+                cur->url        = yaml_unquote(val);
+            else if (strcmp(key, "ref") == 0)
+                cur->ref        = yaml_unquote(val);
+            else if (strcmp(key, "resolved") == 0)
+                cur->resolved   = yaml_unquote(val);
+            else if (strcmp(key, "sha256") == 0)
+                cur->sha256     = yaml_unquote(val);
+            else if (strcmp(key, "fetched-at") == 0)
+                cur->fetched_at = yaml_unquote(val);
+            continue;
+        }
+
+        /* Transitive list items (6-space indent: "- item") */
+        if (sp == 6 && state == LS_IN_TRANSITIVE) {
+            if (trimmed[0] == '-' && trimmed[1] == ' ') {
+                arr_push(&cur->transitive, &cur->n_transitive, &tr_cap,
+                         trimmed + 2);
+            }
+            continue;
+        }
+
+        /* If we see a 4-space line while in TRANSITIVE, back to entry */
+        if (sp == 4 && state == LS_IN_TRANSITIVE) {
+            state = cur->is_cmake ? LS_IN_CMAKE_ENTRY : LS_IN_SPICE_ENTRY;
+            /* re-process this line */
+            char *key = NULL, *val = NULL;
+            char tmp[2048];
+            strncpy(tmp, trimmed, sizeof(tmp) - 1);
+            if (split_kv(tmp, &key, &val) && cur) {
+                if (strcmp(key, "url") == 0)
+                    cur->url = yaml_unquote(val);
+                else if (strcmp(key, "ref") == 0)
+                    cur->ref = yaml_unquote(val);
+                else if (strcmp(key, "resolved") == 0)
+                    cur->resolved = yaml_unquote(val);
+                else if (strcmp(key, "sha256") == 0)
+                    cur->sha256 = yaml_unquote(val);
+                else if (strcmp(key, "fetched-at") == 0)
+                    cur->fetched_at = yaml_unquote(val);
+            }
+        }
+    }
+    fclose(f);
+    return true;
+}
+
+bool pkg_lock_write(const char *path, const PkgLockFile *lock) {
+    /* Write to a temp file then rename for atomicity */
+    char tmp_path[4096];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp.%d", path, (int)getpid());
+    FILE *f = fopen(tmp_path, "w");
+    if (!f) {
+        fprintf(stderr, "spice: cannot write lock file '%s': %s\n",
+                path, strerror(errno));
+        return false;
+    }
+
+    fprintf(f, "# tur.lock -- generated by `tur fetch`. Do not edit by hand.\n");
+    fprintf(f, "# Commit this file to version control for reproducible builds.\n");
+    fprintf(f, "format-version: %d\n", lock->format_version);
+
+    /* Collect spices and cmake-deps into separate sections */
+    bool wrote_spices = false;
+    bool wrote_cmake  = false;
+    for (int pass = 0; pass < 2; pass++) {
+        bool want_cmake = (pass == 1);
+        for (int i = 0; i < lock->n_entries; i++) {
+            const PkgLockEntry *e = &lock->entries[i];
+            if (e->is_cmake != want_cmake) continue;
+            if (!wrote_spices && !want_cmake) {
+                fprintf(f, "\nspices:\n");
+                wrote_spices = true;
+            }
+            if (!wrote_cmake && want_cmake) {
+                fprintf(f, "\ncmake-deps:\n");
+                wrote_cmake = true;
+            }
+            fprintf(f, "  %s:\n", e->name);
+            if (e->url)        fprintf(f, "    url:        \"%s\"\n", e->url);
+            if (e->ref)        fprintf(f, "    ref:        \"%s\"\n", e->ref);
+            if (e->resolved)   fprintf(f, "    resolved:   \"%s\"\n", e->resolved);
+            if (e->sha256)     fprintf(f, "    sha256:     \"%s\"\n", e->sha256);
+            if (e->fetched_at) fprintf(f, "    fetched-at: \"%s\"\n", e->fetched_at);
+            if (e->n_transitive > 0) {
+                fprintf(f, "    transitive:\n");
+                for (int j = 0; j < e->n_transitive; j++)
+                    fprintf(f, "      - %s\n", e->transitive[j]);
+            }
+        }
+    }
+
+    fclose(f);
+    if (rename(tmp_path, path) != 0) {
+        fprintf(stderr, "spice: rename failed: %s\n", strerror(errno));
+        unlink(tmp_path);
+        return false;
+    }
+    return true;
+}
+
+void pkg_lock_free(PkgLockFile *lock) {
+    for (int i = 0; i < lock->n_entries; i++) {
+        PkgLockEntry *e = &lock->entries[i];
+        free(e->name);
+        free(e->url);
+        free(e->ref);
+        free(e->resolved);
+        free(e->sha256);
+        free(e->fetched_at);
+        for (int j = 0; j < e->n_transitive; j++) free(e->transitive[j]);
+        free(e->transitive);
+    }
+    free(lock->entries);
+    memset(lock, 0, sizeof(*lock));
+}
+
+PkgLockEntry *pkg_lock_find(PkgLockFile *lock,
+                             const char *name, bool is_cmake) {
+    for (int i = 0; i < lock->n_entries; i++) {
+        PkgLockEntry *e = &lock->entries[i];
+        if (e->is_cmake == is_cmake && strcmp(e->name, name) == 0)
+            return e;
+    }
+    return NULL;
+}
+
+/* Add (or update) an entry in the lock file. */
+static PkgLockEntry *lock_upsert(PkgLockFile *lock,
+                                  const char *name, bool is_cmake) {
+    PkgLockEntry *e = pkg_lock_find(lock, name, is_cmake);
+    if (e) return e;
+    /* append */
+    lock->entries = (PkgLockEntry *)realloc(lock->entries,
+        (lock->n_entries + 1) * sizeof(PkgLockEntry));
+    if (!lock->entries) return NULL;
+    e = &lock->entries[lock->n_entries++];
+    memset(e, 0, sizeof(*e));
+    e->name     = tur_strdup(name);
+    e->is_cmake = is_cmake;
+    return e;
+}
+
+/* ================================================================== */
+/* SHA-256                                                              */
+/* ================================================================== */
+
+bool pkg_sha256_file(const char *path, char out[65]) {
+    Buf cmd;
+    buf_init(&cmd);
+#if defined(__APPLE__)
+    buf_printf(&cmd, "shasum -a 256 '%s'", path);
+#else
+    buf_printf(&cmd, "sha256sum '%s'", path);
+#endif
+    buf_putc(&cmd, '\0');
+    FILE *f = popen(cmd.data, "r");
+    buf_free(&cmd);
+    if (!f) return false;
+    char line[256];
+    bool ok = false;
+    if (fgets(line, sizeof(line), f)) {
+        /* output: "<64 hex chars>  <filename>" */
+        if (strlen(line) >= 64) {
+            memcpy(out, line, 64);
+            out[64] = '\0';
+            ok = true;
+        }
+    }
+    pclose(f);
+    return ok;
+}
+
+/* ================================================================== */
+/* Semver                                                               */
+/* ================================================================== */
+
+bool pkg_semver_parse(const char *v,
+                      int *major, int *minor, int *patch,
+                      char **pre) {
+    if (!v) return false;
+    if (*v == 'v') v++;
+    /* parse major.minor.patch */
+    char *end;
+    long ma = strtol(v, &end, 10);
+    if (*end != '.') return false;
+    v = end + 1;
+    long mi = strtol(v, &end, 10);
+    if (*end != '.' && *end != '\0' && *end != '-') return false;
+    v = (*end == '.') ? end + 1 : end;
+    long pa = 0;
+    if (*end == '.') {
+        pa = strtol(v, &end, 10);
+    }
+    *major = (int)ma;
+    *minor = (int)mi;
+    *patch = (int)pa;
+    if (pre) {
+        if (*end == '-')
+            *pre = tur_strdup(end + 1);
+        else
+            *pre = NULL;
+    }
+    return true;
+}
+
+int pkg_semver_compare(const char *a, const char *b) {
+    int ma, mi, pa, mb, mib, pb;
+    char *prea = NULL, *preb = NULL;
+    bool oka = pkg_semver_parse(a, &ma, &mi, &pa, &prea);
+    bool okb = pkg_semver_parse(b, &mb, &mib, &pb, &preb);
+    if (!oka && !okb) { free(prea); free(preb); return strcmp(a, b); }
+    if (!oka) { free(prea); free(preb); return -1; }
+    if (!okb) { free(prea); free(preb); return  1; }
+    int d = (ma != mb) ? ma - mb : (mi != mib) ? mi - mib : pa - pb;
+    free(prea);
+    free(preb);
+    return d;
+}
+
+/* ================================================================== */
+/* Git operations                                                       */
+/* ================================================================== */
+
+char *pkg_git_resolve(const char *repo_dir) {
+    Buf cmd;
+    buf_init(&cmd);
+    buf_printf(&cmd, "git -C '%s' rev-parse HEAD 2>/dev/null", repo_dir);
+    buf_putc(&cmd, '\0');
+    char *sha = run_capture(cmd.data);
+    buf_free(&cmd);
+    return sha;
+}
+
+char *pkg_git_fetch(const char *url, const char *ref, const char *dest_dir) {
+    struct stat st;
+    bool already_cloned = (stat(dest_dir, &st) == 0 && S_ISDIR(st.st_mode));
+
+    Buf cmd;
+    buf_init(&cmd);
+
+    if (!already_cloned) {
+        /* Fresh clone */
+        if (ref) {
+            buf_printf(&cmd,
+                "git clone --depth 1 --branch '%s' -- '%s' '%s' 2>&1",
+                ref, url, dest_dir);
+        } else {
+            buf_printf(&cmd,
+                "git clone --depth 1 -- '%s' '%s' 2>&1",
+                url, dest_dir);
+        }
+    } else {
+        /* Fetch and checkout the desired ref */
+        buf_printf(&cmd,
+            "git -C '%s' fetch --depth 1 origin '%s' 2>&1 && "
+            "git -C '%s' checkout FETCH_HEAD 2>&1",
+            dest_dir, ref ? ref : "HEAD",
+            dest_dir);
+    }
+    buf_putc(&cmd, '\0');
+    int rc = system(cmd.data);
+    buf_free(&cmd);
+
+    if (rc != 0) {
+        fprintf(stderr, "spice: git failed for '%s' ref '%s'\n",
+                url, ref ? ref : "(default)");
+        return NULL;
+    }
+    return pkg_git_resolve(dest_dir);
+}
+
+/* ================================================================== */
+/* pkg_fetch_all -- BFS transitive resolution                          */
+/* ================================================================== */
+
+/* A pending fetch item */
+typedef struct FetchItem {
+    char *name;
+    char *url;
+    char *ref;
+    char *path;  /* NULL = git dep */
+    bool  is_cmake;
+    /* origin for error reporting */
+    char *from;
+} FetchItem;
+
+/* Conflict table entry */
+typedef struct ConflictEntry {
+    char *name;
+    char *url;
+    char *ref;
+} ConflictEntry;
+
+bool pkg_fetch_all(const char *project_dir,
+                   const PkgManifest *manifest,
+                   PkgLockFile *lock,
+                   bool update) {
+    /* Create spices/ directory */
+    char spices_dir[4096];
+    snprintf(spices_dir, sizeof(spices_dir), "%s/spices", project_dir);
+    if (!mkdirp(spices_dir)) {
+        fprintf(stderr, "spice: cannot create '%s': %s\n",
+                spices_dir, strerror(errno));
+        return false;
+    }
+
+    /* BFS queue */
+    int q_cap = 32;
+    int q_len = 0;
+    int q_head = 0;
+    FetchItem *queue = (FetchItem *)malloc(q_cap * sizeof(FetchItem));
+    if (!queue) return false;
+
+    /* Conflict table (name → url@ref) */
+    int cf_cap = 16;
+    int n_cf   = 0;
+    ConflictEntry *conflicts = (ConflictEntry *)malloc(cf_cap * sizeof(ConflictEntry));
+    if (!conflicts) { free(queue); return false; }
+
+    /* Seed the queue from the manifest's direct spices */
+    for (int i = 0; i < manifest->n_spices; i++) {
+        const PkgSpice *s = &manifest->spices[i];
+        if (q_len >= q_cap) {
+            q_cap *= 2;
+            queue = (FetchItem *)realloc(queue, q_cap * sizeof(FetchItem));
+            if (!queue) return false;
+        }
+        FetchItem *it = &queue[q_len++];
+        it->name     = tur_strdup(s->name);
+        it->url      = s->url  ? tur_strdup(s->url)  : NULL;
+        it->ref      = s->ref  ? tur_strdup(s->ref)  : NULL;
+        it->path     = s->path ? tur_strdup(s->path) : NULL;
+        it->is_cmake = false;
+        it->from     = tur_strdup("(root)");
+    }
+
+    bool ok = true;
+
+    while (q_head < q_len) {
+        FetchItem *it = &queue[q_head++];
+
+        if (it->is_cmake) {
+            /* cmake deps are handled in pkg_gen_cmake_deps, not fetched here */
+            free(it->name); free(it->url); free(it->ref);
+            free(it->path); free(it->from);
+            continue;
+        }
+
+        /* Local path dep — no fetch needed, just record */
+        if (it->path) {
+            PkgLockEntry *le = lock_upsert(lock, it->name, false);
+            if (le) {
+                free(le->url); le->url = NULL;
+                free(le->ref); le->ref = NULL;
+            }
+            free(it->name); free(it->url); free(it->ref);
+            free(it->path); free(it->from);
+            continue;
+        }
+
+        /* Check for conflicts with previously seen deps */
+        bool conflict = false;
+        for (int c = 0; c < n_cf; c++) {
+            if (strcmp(conflicts[c].name, it->name) == 0) {
+                /* Same name — check if same url+ref */
+                bool same_url = (!conflicts[c].url && !it->url) ||
+                                (conflicts[c].url && it->url &&
+                                 strcmp(conflicts[c].url, it->url) == 0);
+                bool same_ref = (!conflicts[c].ref && !it->ref) ||
+                                (conflicts[c].ref && it->ref &&
+                                 strcmp(conflicts[c].ref, it->ref) == 0);
+                if (!same_url || !same_ref) {
+                    fprintf(stderr,
+                        "spice: conflict! '%s' required as '%s@%s' "
+                        "(from %s) but already resolved as '%s@%s'\n",
+                        it->name,
+                        it->url ? it->url : "(local)",
+                        it->ref ? it->ref : "(default)",
+                        it->from,
+                        conflicts[c].url ? conflicts[c].url : "(local)",
+                        conflicts[c].ref ? conflicts[c].ref : "(default)");
+                    ok = false;
+                }
+                conflict = true;
+                break;
+            }
+        }
+        if (conflict) {
+            free(it->name); free(it->url); free(it->ref);
+            free(it->path); free(it->from);
+            continue;
+        }
+
+        /* Register in conflict table */
+        if (n_cf >= cf_cap) {
+            cf_cap *= 2;
+            conflicts = (ConflictEntry *)realloc(conflicts,
+                cf_cap * sizeof(ConflictEntry));
+            if (!conflicts) { ok = false; break; }
+        }
+        ConflictEntry *ce = &conflicts[n_cf++];
+        ce->name = tur_strdup(it->name);
+        ce->url  = it->url ? tur_strdup(it->url) : NULL;
+        ce->ref  = it->ref ? tur_strdup(it->ref) : NULL;
+
+        /* Check if already in lock (skip if not --update) */
+        PkgLockEntry *le = pkg_lock_find(lock, it->name, false);
+        if (le && !update) {
+            fprintf(stderr, "spice: using cached '%s' @ %s\n",
+                    it->name, le->resolved ? le->resolved : le->ref);
+            free(it->name); free(it->url); free(it->ref);
+            free(it->path); free(it->from);
+            continue;
+        }
+
+        /* Build dest path: spices/<name>-<ref> or spices/<name> */
+        char dest[4096];
+        if (it->ref)
+            snprintf(dest, sizeof(dest), "%s/%s-%s",
+                     spices_dir, it->name, it->ref);
+        else
+            snprintf(dest, sizeof(dest), "%s/%s", spices_dir, it->name);
+
+        fprintf(stderr, "spice: fetching '%s' from %s (ref: %s) ...\n",
+                it->name, it->url, it->ref ? it->ref : "(default)");
+
+        char *resolved = pkg_git_fetch(it->url, it->ref, dest);
+        if (!resolved) {
+            fprintf(stderr, "spice: failed to fetch '%s'\n", it->name);
+            ok = false;
+            free(it->name); free(it->url); free(it->ref);
+            free(it->path); free(it->from);
+            continue;
+        }
+
+        /* Update lock entry */
+        le = lock_upsert(lock, it->name, false);
+        if (le) {
+            free(le->url);       le->url       = it->url ? tur_strdup(it->url) : NULL;
+            free(le->ref);       le->ref       = it->ref ? tur_strdup(it->ref) : NULL;
+            free(le->resolved);  le->resolved  = resolved;
+            free(le->fetched_at);le->fetched_at= tur_strdup(iso_now());
+            /* Use resolved SHA as sha256 placeholder */
+            free(le->sha256);    le->sha256    = tur_strdup(resolved);
+        } else {
+            free(resolved);
+        }
+
+        /* Read transitive deps from this spice's build.tur */
+        char sub_build[4096];
+        snprintf(sub_build, sizeof(sub_build), "%s/build.tur", dest);
+        struct stat sub_st;
+        if (stat(sub_build, &sub_st) == 0) {
+            PkgManifest sub;
+            if (pkg_manifest_read(sub_build, &sub)) {
+                /* Record transitive deps in lock entry */
+                if (le) {
+                    for (int j = 0; j < le->n_transitive; j++)
+                        free(le->transitive[j]);
+                    free(le->transitive);
+                    le->transitive   = NULL;
+                    le->n_transitive = 0;
+                    int tr_cap = sub.n_spices;
+                    if (tr_cap > 0)
+                        le->transitive = (char **)malloc(tr_cap * sizeof(char *));
+                }
+                /* Enqueue sub-spices */
+                for (int j = 0; j < sub.n_spices; j++) {
+                    const PkgSpice *ss = &sub.spices[j];
+                    if (q_len >= q_cap) {
+                        q_cap *= 2;
+                        queue = (FetchItem *)realloc(queue,
+                            q_cap * sizeof(FetchItem));
+                        if (!queue) { ok = false; break; }
+                    }
+                    FetchItem *nit = &queue[q_len++];
+                    nit->name     = tur_strdup(ss->name);
+                    nit->url      = ss->url  ? tur_strdup(ss->url)  : NULL;
+                    nit->ref      = ss->ref  ? tur_strdup(ss->ref)  : NULL;
+                    nit->path     = ss->path ? tur_strdup(ss->path) : NULL;
+                    nit->is_cmake = false;
+                    char from_buf[256];
+                    snprintf(from_buf, sizeof(from_buf), "%s@%s",
+                             it->name, it->ref ? it->ref : "HEAD");
+                    nit->from = tur_strdup(from_buf);
+
+                    /* record in transitive list */
+                    if (le && le->transitive) {
+                        char tr_str[512];
+                        snprintf(tr_str, sizeof(tr_str), "%s@%s",
+                                 ss->name, ss->ref ? ss->ref : "HEAD");
+                        le->transitive[le->n_transitive++] = tur_strdup(tr_str);
+                    }
+                }
+                pkg_manifest_free(&sub);
+            }
+        }
+
+        free(it->name); free(it->url); free(it->ref);
+        free(it->path); free(it->from);
+    }
+
+    /* Free remaining unprocessed items */
+    while (q_head < q_len) {
+        FetchItem *it = &queue[q_head++];
+        free(it->name); free(it->url); free(it->ref);
+        free(it->path); free(it->from);
+    }
+    free(queue);
+
+    /* Free conflict table */
+    for (int i = 0; i < n_cf; i++) {
+        free(conflicts[i].name);
+        free(conflicts[i].url);
+        free(conflicts[i].ref);
+    }
+    free(conflicts);
+
+    return ok;
+}
+
+/* ================================================================== */
+/* CMake dependency file generation                                    */
+/* ================================================================== */
+
+bool pkg_gen_cmake_deps(const char *project_dir,
+                        const PkgManifest *manifest) {
+    if (manifest->n_cmake_deps == 0) return true;
+
+    char cmake_dir[4096];
+    snprintf(cmake_dir, sizeof(cmake_dir), "%s/cmake", project_dir);
+    if (!mkdirp(cmake_dir)) {
+        fprintf(stderr, "spice: cannot create '%s'\n", cmake_dir);
+        return false;
+    }
+
+    char out_path[4096];
+    snprintf(out_path, sizeof(out_path), "%s/SpiceDeps.cmake", cmake_dir);
+    FILE *f = fopen(out_path, "w");
+    if (!f) {
+        fprintf(stderr, "spice: cannot write '%s': %s\n",
+                out_path, strerror(errno));
+        return false;
+    }
+
+    fprintf(f, "# SpiceDeps.cmake -- generated by `tur fetch`. Do not edit.\n");
+    fprintf(f, "# Declares cmake-deps from build.tur via CMake FetchContent.\n\n");
+    fprintf(f, "include(FetchContent)\n\n");
+
+    for (int i = 0; i < manifest->n_cmake_deps; i++) {
+        const PkgCmakeDep *d = &manifest->cmake_deps[i];
+        fprintf(f, "FetchContent_Declare(\n");
+        fprintf(f, "  %s\n", d->name);
+        if (d->url) fprintf(f, "  GIT_REPOSITORY %s\n", d->url);
+        if (d->ref) fprintf(f, "  GIT_TAG        %s\n", d->ref);
+        fprintf(f, ")\n");
+        if (d->n_opts > 0) {
+            for (int j = 0; j < d->n_opts; j++) {
+                fprintf(f, "set(%s %s CACHE INTERNAL \"\")\n",
+                        d->opts[j].key, d->opts[j].val);
+            }
+        }
+        fprintf(f, "FetchContent_MakeAvailable(%s)\n\n", d->name);
+    }
+
+    fclose(f);
+    fprintf(stderr, "spice: generated %s\n", out_path);
+    return true;
+}
+
+/* ================================================================== */
+/* CLI: tur init                                                        */
+/* ================================================================== */
+
+int cmd_pkg_init(int argc, char **argv) {
+    /* Usage: tur init [--bin|--lib] <name> */
+    bool is_bin  = true;
+    const char *name = NULL;
+
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--bin") == 0)      is_bin = true;
+        else if (strcmp(argv[i], "--lib") == 0) is_bin = false;
+        else if (argv[i][0] != '-') {
+            if (name) {
+                fprintf(stderr, "tur init: unexpected argument '%s'\n", argv[i]);
+                return 1;
+            }
+            name = argv[i];
+        }
+    }
+    if (!name) {
+        fprintf(stderr, "usage: tur init [--bin|--lib] <name>\n");
+        return 1;
+    }
+
+    /* Check the directory doesn't already have a build.tur */
+    struct stat st;
+    if (stat("build.tur", &st) == 0) {
+        fprintf(stderr, "tur init: build.tur already exists\n");
+        return 1;
+    }
+
+    /* Create src/ directory */
+    if (!mkdirp("src")) {
+        fprintf(stderr, "tur init: cannot create src/\n");
+        return 1;
+    }
+
+    /* Write build.tur */
+    PkgManifest m;
+    memset(&m, 0, sizeof(m));
+    m.name    = (char *)name;
+    m.version = "0.1.0";
+
+    if (!pkg_manifest_write("build.tur", &m)) return 1;
+
+    /* Write stub main.tur or lib.tur */
+    if (is_bin) {
+        FILE *f = fopen("src/main.tur", "w");
+        if (f) {
+            fprintf(f, "(defn main [] :void\n  (println \"Hello from %s!\"))\n",
+                    name);
+            fclose(f);
+        }
+    } else {
+        FILE *f = fopen("src/lib.tur", "w");
+        if (f) {
+            fprintf(f, ";;; %s -- library stub\n", name);
+            fclose(f);
+        }
+    }
+
+    /* Write .gitignore */
+    FILE *gi = fopen(".gitignore", "w");
+    if (gi) {
+        fprintf(gi, "spices/\ncmake/SpiceDeps.cmake\nbuild/\n");
+        fclose(gi);
+    }
+
+    printf("Created %s project '%s'\n", is_bin ? "binary" : "library", name);
+    printf("  build.tur\n");
+    printf("  src/%s\n", is_bin ? "main.tur" : "lib.tur");
+    printf("  .gitignore\n");
+    printf("\nNext steps:\n");
+    printf("  tur add <url> --ref <tag>   # add a dependency\n");
+    printf("  tur fetch                   # download dependencies\n");
+    printf("  tur build src/              # compile\n");
+    return 0;
+}
+
+/* ================================================================== */
+/* CLI: tur add                                                         */
+/* ================================================================== */
+
+int cmd_pkg_add(int argc, char **argv) {
+    /* Usage: tur add <url-or-path> [--ref <ref>] [--path] [--optional] */
+    const char *url_or_path = NULL;
+    const char *ref         = NULL;
+    bool        is_path     = false;
+    bool        optional    = false;
+
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--ref") == 0 && i + 1 < argc) {
+            ref = argv[++i];
+        } else if (strcmp(argv[i], "--path") == 0) {
+            is_path = true;
+        } else if (strcmp(argv[i], "--optional") == 0) {
+            optional = true;
+        } else if (argv[i][0] != '-') {
+            if (url_or_path) {
+                fprintf(stderr, "tur add: unexpected argument '%s'\n", argv[i]);
+                return 1;
+            }
+            url_or_path = argv[i];
+        }
+    }
+    if (!url_or_path) {
+        fprintf(stderr, "usage: tur add <url> [--ref <ref>]\n"
+                        "       tur add <path> --path\n");
+        return 1;
+    }
+
+    /* Load existing build.tur */
+    struct stat st;
+    PkgManifest m;
+    memset(&m, 0, sizeof(m));
+    bool has_existing = (stat("build.tur", &st) == 0);
+    if (has_existing) {
+        if (!pkg_manifest_read("build.tur", &m)) return 1;
+    } else {
+        fprintf(stderr, "tur add: no build.tur found; run `tur init` first\n");
+        return 1;
+    }
+
+    /* Derive package name:
+     *   git URL: last path segment, strip .git
+     *   local path: basename */
+    char name_buf[256];
+    {
+        const char *last = strrchr(url_or_path, '/');
+        const char *base = last ? last + 1 : url_or_path;
+        strncpy(name_buf, base, sizeof(name_buf) - 1);
+        name_buf[sizeof(name_buf) - 1] = '\0';
+        /* strip .git suffix */
+        size_t nl = strlen(name_buf);
+        if (nl > 4 && strcmp(name_buf + nl - 4, ".git") == 0)
+            name_buf[nl - 4] = '\0';
+        /* strip tur- prefix for nicer names (optional) */
+        if (strncmp(name_buf, "tur-", 4) == 0)
+            memmove(name_buf, name_buf + 4, strlen(name_buf) - 3);
+    }
+
+    /* Check for duplicate */
+    for (int i = 0; i < m.n_spices; i++) {
+        if (strcmp(m.spices[i].name, name_buf) == 0) {
+            fprintf(stderr, "tur add: spice '%s' already in build.tur\n",
+                    name_buf);
+            pkg_manifest_free(&m);
+            return 1;
+        }
+    }
+
+    /* Append new spice */
+    m.spices = (PkgSpice *)realloc(m.spices,
+                                    (m.n_spices + 1) * sizeof(PkgSpice));
+    if (!m.spices) { pkg_manifest_free(&m); return 1; }
+    PkgSpice *ns = &m.spices[m.n_spices++];
+    memset(ns, 0, sizeof(*ns));
+    ns->name     = tur_strdup(name_buf);
+    ns->optional = optional;
+    if (is_path) {
+        ns->path = tur_strdup(url_or_path);
+    } else {
+        ns->url = tur_strdup(url_or_path);
+        if (ref) ns->ref = tur_strdup(ref);
+    }
+
+    if (!pkg_manifest_write("build.tur", &m)) {
+        pkg_manifest_free(&m);
+        return 1;
+    }
+
+    printf("Added spice '%s'", name_buf);
+    if (ns->url) printf(" -> %s", ns->url);
+    if (ns->ref) printf(" @ %s", ns->ref);
+    if (ns->path) printf(" (local: %s)", ns->path);
+    printf("\n");
+    printf("Run `tur fetch` to download it.\n");
+
+    pkg_manifest_free(&m);
+    return 0;
+}
+
+/* ================================================================== */
+/* CLI: tur add-cmake                                                   */
+/* ================================================================== */
+
+int cmd_pkg_add_cmake(int argc, char **argv) {
+    /* Usage: tur add-cmake <url> [--ref <ref>] [--opt KEY=VAL ...] */
+    const char *url = NULL;
+    const char *ref = NULL;
+    /* Options as "KEY=VALUE" strings (max 16) */
+    char *opts[16];
+    int n_opts = 0;
+
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--ref") == 0 && i + 1 < argc) {
+            ref = argv[++i];
+        } else if (strcmp(argv[i], "--opt") == 0 && i + 1 < argc) {
+            if (n_opts < 16) opts[n_opts++] = argv[++i];
+        } else if (argv[i][0] != '-') {
+            if (url) {
+                fprintf(stderr, "tur add-cmake: unexpected '%s'\n", argv[i]);
+                return 1;
+            }
+            url = argv[i];
+        }
+    }
+    if (!url) {
+        fprintf(stderr, "usage: tur add-cmake <url> [--ref <ref>] "
+                        "[--opt KEY=VAL]\n");
+        return 1;
+    }
+
+    struct stat st;
+    if (stat("build.tur", &st) != 0) {
+        fprintf(stderr, "tur add-cmake: no build.tur; run `tur init` first\n");
+        return 1;
+    }
+
+    PkgManifest m;
+    memset(&m, 0, sizeof(m));
+    if (!pkg_manifest_read("build.tur", &m)) return 1;
+
+    /* Derive name from URL */
+    char name_buf[256];
+    {
+        const char *last = strrchr(url, '/');
+        const char *base = last ? last + 1 : url;
+        strncpy(name_buf, base, sizeof(name_buf) - 1);
+        name_buf[sizeof(name_buf) - 1] = '\0';
+        size_t nl = strlen(name_buf);
+        if (nl > 4 && strcmp(name_buf + nl - 4, ".git") == 0)
+            name_buf[nl - 4] = '\0';
+    }
+
+    /* Check for duplicate */
+    for (int i = 0; i < m.n_cmake_deps; i++) {
+        if (strcmp(m.cmake_deps[i].name, name_buf) == 0) {
+            fprintf(stderr, "tur add-cmake: '%s' already in build.tur\n",
+                    name_buf);
+            pkg_manifest_free(&m);
+            return 1;
+        }
+    }
+
+    m.cmake_deps = (PkgCmakeDep *)realloc(m.cmake_deps,
+        (m.n_cmake_deps + 1) * sizeof(PkgCmakeDep));
+    if (!m.cmake_deps) { pkg_manifest_free(&m); return 1; }
+    PkgCmakeDep *nd = &m.cmake_deps[m.n_cmake_deps++];
+    memset(nd, 0, sizeof(*nd));
+    nd->name = tur_strdup(name_buf);
+    nd->url  = tur_strdup(url);
+    if (ref) nd->ref = tur_strdup(ref);
+
+    if (n_opts > 0) {
+        nd->opts   = (PkgCmakeOpt *)malloc(n_opts * sizeof(PkgCmakeOpt));
+        nd->n_opts = 0;
+        for (int i = 0; i < n_opts; i++) {
+            char *eq = strchr(opts[i], '=');
+            if (!eq) continue;
+            *eq = '\0';
+            nd->opts[nd->n_opts].key = tur_strdup(opts[i]);
+            nd->opts[nd->n_opts].val = tur_strdup(eq + 1);
+            nd->n_opts++;
+            *eq = '=';
+        }
+    }
+
+    if (!pkg_manifest_write("build.tur", &m)) {
+        pkg_manifest_free(&m);
+        return 1;
+    }
+
+    printf("Added cmake dep '%s' -> %s", name_buf, url);
+    if (ref) printf(" @ %s", ref);
+    printf("\n");
+    printf("Run `tur fetch` to generate cmake/SpiceDeps.cmake.\n");
+
+    pkg_manifest_free(&m);
+    return 0;
+}
+
+/* ================================================================== */
+/* CLI: tur fetch                                                       */
+/* ================================================================== */
+
+int cmd_pkg_fetch(int argc, char **argv) {
+    bool update = false;
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--update") == 0) update = true;
+    }
+
+    struct stat st;
+    if (stat("build.tur", &st) != 0) {
+        fprintf(stderr, "tur fetch: no build.tur found in current directory\n");
+        return 1;
+    }
+
+    PkgManifest m;
+    memset(&m, 0, sizeof(m));
+    if (!pkg_manifest_read("build.tur", &m)) return 1;
+
+    PkgLockFile lock;
+    memset(&lock, 0, sizeof(lock));
+    lock.format_version = 1;
+    /* Load existing lock (if any) */
+    pkg_lock_read("tur.lock", &lock);
+
+    bool ok = pkg_fetch_all(".", &m, &lock, update);
+
+    /* Generate cmake/SpiceDeps.cmake if needed */
+    if (m.n_cmake_deps > 0)
+        pkg_gen_cmake_deps(".", &m);
+
+    /* Write updated lock file */
+    if (!pkg_lock_write("tur.lock", &lock)) ok = false;
+
+    pkg_lock_free(&lock);
+    pkg_manifest_free(&m);
+
+    if (ok) {
+        printf("spice: lock file written to tur.lock\n");
+    } else {
+        fprintf(stderr, "spice: fetch completed with errors\n");
+        return 1;
+    }
+    return 0;
+}

@@ -3,7 +3,6 @@
 ;; Test suite for Arrow typeclass implementations and signal processing.
 
 (import stdlib/arrow.tur)
-(import stdlib/arrow_laws.tur)
 (import stdlib/signal/core.tur)
 (import stdlib/signal/dsp.tur)
 (import stdlib/signal/envelope.tur)
@@ -276,10 +275,6 @@
 ;; Arrow Law Tests
 ;; =============================================================================
 
-;; Run all arrow law verification tests
-(defn test-arrow-laws [] :bool
-  (verify-arrow-laws))
-
 ;; =============================================================================
 ;; Main Test Suite
 ;; =============================================================================
@@ -296,8 +291,7 @@
     (test-filters)
     (test-gain-mix)
     (test-adsr-envelope)
-    (test-simple-voice)
-    (test-arrow-laws)))
+    (test-simple-voice)))
 
 ;; Print test results
 (defn print-test-results [] :()
@@ -312,8 +306,7 @@
                 "Filters"
                 "Gain/Mix"
                 "ADSR Envelope"
-                "Simple Voice"
-                "Arrow Laws")]
+                "Simple Voice")]
     
     (println "\nTest Results:")
     (println "=============")

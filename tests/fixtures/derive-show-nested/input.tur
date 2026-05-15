@@ -1,0 +1,37 @@
+;; SI2: derive-show recurses into Show-able fields.
+;; Tests that a struct's Show instance correctly calls Show [int] on each field.
+;; Turmeric v1 dispatches one struct Show instance at a time; this fixture
+;; validates the recursion property with a single three-field struct.
+(defclass Show [a]
+  (show [x] :cstr))
+
+(definstance Show [int]
+  (show [x] :cstr
+    ```c
+    char *buf = (char *)malloc(32);
+    snprintf(buf, 32, "%lld", (long long)x);
+    return (const char *)(intptr_t)buf;
+    ```))
+
+(defstruct Triple :copy [a :int b :int c :int])
+
+;; Manually-expanded form of: (derive-show Triple a b c)
+;; show [a], show [b], show [c] each delegate to Show [int].
+(definstance Show [Triple]
+  (show [__p] :cstr
+    ```c
+    int total = snprintf(NULL, 0, "Triple { a = %lld, b = %lld, c = %lld }",
+                         (long long)__p.a, (long long)__p.b, (long long)__p.c);
+    if (total < 0) total = 64;
+    char *buf = (char *)malloc((size_t)total + 1);
+    snprintf(buf, (size_t)total + 1, "Triple { a = %lld, b = %lld, c = %lld }",
+             (long long)__p.a, (long long)__p.b, (long long)__p.c);
+    return (const char *)(intptr_t)buf;
+    ```))
+
+(defn main [] :int
+  (let [t (make-struct Triple 1 2 3)]
+    (println (.show t)))
+  (let [t2 (make-struct Triple 10 20 30)]
+    (println (.show t2)))
+  0)

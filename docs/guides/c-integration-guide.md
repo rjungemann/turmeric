@@ -45,7 +45,7 @@ exactly what the C side of the equation looks like.
 
 ### 2.1 `extern-c` — Importing a C symbol
 
-```lisp
+```turmeric
 (extern-c function-name [arg-types...] return-type)
 ```
 
@@ -55,7 +55,7 @@ is no validation against an actual header file.
 
 **Examples from the stdlib:**
 
-```lisp
+```turmeric
 ;; libc file I/O (stdlib/io.tur)
 (extern-c fopen  [^cstr ^cstr] :ptr)
 (extern-c fclose [^ptr]        :int)
@@ -95,7 +95,7 @@ is no validation against an actual header file.
 When a C function is variadic (e.g. `printf`), declare it with just the fixed
 arguments. The elaborator does not validate the variadic portion:
 
-```lisp
+```turmeric
 (extern-c printf [^cstr] :int)
 (printf "count=%lld\n" count)   ;; extra args pass through unchecked
 ```
@@ -105,7 +105,7 @@ arguments. The elaborator does not validate the variadic portion:
 Use an empty arg list `[^]` for globals that are accessed as function calls
 or zero-argument functions:
 
-```lisp
+```turmeric
 (extern-c stderr [^] :ptr)   ;; FILE* stderr — accessed as (stderr)
 (extern-c rand   [^] :int)   ;; int rand(void)
 ```
@@ -114,7 +114,7 @@ or zero-argument functions:
 
 Surround C source with triple backticks and an optional `c` tag:
 
-```lisp
+```turmeric
 (defn file-size [f]
   ```c
   FILE* file = (FILE*)f;
@@ -152,7 +152,7 @@ a function scope, etc.
 The stdlib uses **capability structs** to wrap C APIs behind a Turmeric-visible
 interface. This pattern keeps the unsafe pointer juggling isolated:
 
-```lisp
+```turmeric
 ;; stdlib/random.tur — capability struct wrapping libc rand()
 (defn Real-Random []
   ```c
@@ -301,7 +301,7 @@ corresponding `*-free` function (see `Real-Random-free` above).
 
 **`defer` is the right tool here:**
 
-```lisp
+```turmeric
 (let [buf (malloc 1024)]
   (defer (free buf))
   ;; ... use buf ...
@@ -316,7 +316,7 @@ corresponding `*-free` function (see `Real-Random-free` above).
 including on exception unwind. This maps directly to `tur_frame_fire_lifo` in
 the runtime.
 
-```lisp
+```turmeric
 (let [f (fopen "data.bin" "rb")]
   (defer (fclose f))
   ;; ... read from f ...
@@ -342,7 +342,7 @@ defers.
 
 Exceptions are non-resumable and use `setjmp`/`longjmp`:
 
-```lisp
+```turmeric
 (try
   (throw 42)
   (catch [e :int] (println e))
@@ -491,7 +491,7 @@ void  vec2_free(Vec2 *v);
 
 **math_wrap.tur** (Turmeric wrapper):
 
-```lisp
+```turmeric
 ;; Declare the functions we need
 (extern-c vec2_alloc [^float ^float] :ptr)
 (extern-c vec2_free  [^ptr]          :void)

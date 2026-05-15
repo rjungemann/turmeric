@@ -19,7 +19,7 @@ Typeclasses can be parameterised over type constructors using the `^f` or `^^f` 
 
 ### Unary type constructor (`^f` — kind `* -> *`)
 
-```lisp
+```turmeric
 (defclass Functor [^f]
   (fmap [container fn] :int))
 
@@ -34,7 +34,7 @@ Typeclasses can be parameterised over type constructors using the `^f` or `^^f` 
 The `^f` parameter means "f has kind `* -> *`".
 Using a primitive type (like `int`) in the type argument position is a type error:
 
-```lisp
+```turmeric
 ;; ERROR: int has kind *, not * -> *
 (definstance Functor [int]
   (fmap [c f] c))
@@ -42,7 +42,7 @@ Using a primitive type (like `int`) in the type argument position is a type erro
 
 ### Binary type constructor (`^^f` — kind `* -> * -> *`)
 
-```lisp
+```turmeric
 (defclass Bifunctor [^^f]
   (bimap [container fn-left fn-right] :int))
 ```
@@ -54,7 +54,7 @@ The `^^f` parameter means "f has kind `* -> * -> *`".
 `defkind` lets you give a name to a kind for documentation purposes.
 It is currently informational only (parsed and ignored):
 
-```lisp
+```turmeric
 (defkind Unary  (* -> *))
 (defkind Binary (* -> * -> *))
 ```
@@ -63,7 +63,7 @@ It is currently informational only (parsed and ignored):
 
 Provide a concrete type constructor when implementing an HKT typeclass:
 
-```lisp
+```turmeric
 ;; Functor for Option
 (definstance Functor [option]
   (fmap [container fn] (__fmap_option container fn)))
@@ -83,7 +83,7 @@ Provide a concrete type constructor when implementing an HKT typeclass:
 
 Call typeclass methods using the dot-dispatch syntax:
 
-```lisp
+```turmeric
 ;; fmap over an Option
 (let [opt (__opt_some 5)]
   (.fmap opt (fn [x] (* x 2))))    ;; dispatches Functor.fmap
@@ -97,7 +97,7 @@ Call typeclass methods using the dot-dispatch syntax:
 
 For reliability with multiple instances, call the implementation function directly:
 
-```lisp
+```turmeric
 (__fmap_option opt (fn [x] (* x 2)))
 (__bind_option opt (fn [x] (__opt_some (* x 2))))
 ```
@@ -107,7 +107,7 @@ For reliability with multiple instances, call the implementation function direct
 HKT container values (like `Option<int>`) are stored as opaque `int64_t` handles.
 Use inline C blocks to allocate and dereference them:
 
-```lisp
+```turmeric
 (defn __opt_some [x] :int
   ```c
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
@@ -122,7 +122,7 @@ Use inline C blocks to allocate and dereference them:
 
 Implement `fmap` and `bind` using inline C to call the closure function pointer:
 
-```lisp
+```turmeric
 (defn __fmap_option [container fn] :int
   ```c
   struct { bool is_some; int64_t value; } *c =
@@ -158,7 +158,7 @@ The standard library (`stdlib/typeclass.tur`) provides:
 
 ## Functor Laws Example
 
-```lisp
+```turmeric
 (defclass Functor [^f]
   (fmap [container fn] :int))
 
@@ -188,7 +188,7 @@ The standard library (`stdlib/typeclass.tur`) provides:
 
 Use `bind` directly to chain monadic operations:
 
-```lisp
+```turmeric
 ;; Sequence two Option computations
 (let [step1 (__bind_option (__opt_some 3) (fn [x] (__opt_some (* x 2))))]
   ;; step1 = some 6
@@ -201,14 +201,14 @@ Use `bind` directly to chain monadic operations:
 
 The `do-m` macro provides monadic do-notation. It desugars to nested `.bind` calls:
 
-```lisp
+```turmeric
 ;; (do-m x ma1 y ma2 body) desugars to:
 ;; (.bind ma1 (fn [x] (.bind ma2 (fn [y] body))))
 ```
 
 Simple usage (single binding, no variable capture in body):
 
-```lisp
+```turmeric
 (definstance Monad [option]
   (bind [ma fn] (__bind_option ma fn)))
 
@@ -234,7 +234,7 @@ Simple usage (single binding, no variable capture in body):
 
 Non-capturing closures work directly with `fmap`:
 
-```lisp
+```turmeric
 ;; Anonymous function with no captured variables
 (let [opt (__opt_some 10)]
   (let [result (__fmap_option opt (fn [x] (+ x 5)))]
@@ -248,7 +248,7 @@ Non-capturing closures work directly with `fmap`:
 
 ## Binary Type Constructors (Bifunctor)
 
-```lisp
+```turmeric
 (defclass Bifunctor [^^f]
   (bimap [container fn-left fn-right] :int))
 

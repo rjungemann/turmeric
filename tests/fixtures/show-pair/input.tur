@@ -1,0 +1,28 @@
+;; SI3: Show [Pair] formats as "(first, second)".
+(defclass Show [a]
+  (show [x] :cstr))
+
+(defstruct Pair :copy [first :int second :int])
+
+(definstance Show [Pair]
+  (show [x] :cstr
+    ```c
+    int64_t fst = x.first;
+    int64_t snd = x.second;
+    int n1 = snprintf(NULL, 0, "%lld", (long long)fst);
+    int n2 = snprintf(NULL, 0, "%lld", (long long)snd);
+    if (n1 < 0) n1 = 0;
+    if (n2 < 0) n2 = 0;
+    /* "(" + n1 + ", " + n2 + ")" + NUL */
+    char *buf = (char *)malloc((size_t)(1 + n1 + 2 + n2 + 1 + 1));
+    int off = snprintf(buf, (size_t)(n1 + 2), "(%lld", (long long)fst);
+    snprintf(buf + off, (size_t)(2 + n2 + 2), ", %lld)", (long long)snd);
+    return (const char *)(intptr_t)buf;
+    ```))
+
+(defn main [] :int
+  (let [p (make-struct Pair 1 2)]
+    (println (.show p)))
+  (let [p2 (make-struct Pair 10 20)]
+    (println (.show p2)))
+  0)

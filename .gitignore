@@ -21,6 +21,9 @@ input
 actual_test.stderr
 build_stderr.txt
 
+# Generated docs HTML (source markdown stays in docs/guides/ and stdlib/)
+docs/html/
+
 # Web
 web/node_modules/
 web/dist/

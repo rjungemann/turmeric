@@ -234,31 +234,31 @@ replSuite('turmeric-lang.com/try', SUBROUTE);
 // ---------------------------------------------------------------------------
 
 const GUIDES = [
-    '/docs/guides/',
-    '/docs/guides/async-await-guide.html',
-    '/docs/guides/backtracking-guide.html',
-    '/docs/guides/c-integration-guide.html',
-    '/docs/guides/cellular-automata-comonad-tutorial.html',
-    '/docs/guides/checkpointing-guide.html',
-    '/docs/guides/custom-effects-tutorial.html',
-    '/docs/guides/effects-system-guide.html',
-    '/docs/guides/error-handling-guide.html',
-    '/docs/guides/eval-api.html',
-    '/docs/guides/hamt-guide.html',
-    '/docs/guides/hkt-guide.html',
-    '/docs/guides/logic-programming-guide.html',
-    '/docs/guides/minikanren-tutorial.html',
-    '/docs/guides/module-system-guide.html',
-    '/docs/guides/repl.html',
-    '/docs/guides/serializable-continuations-guide.html',
-    '/docs/guides/snake-game-tutorial.html',
-    '/docs/guides/stm-guide.html',
-    '/docs/guides/stm-tutorial.html',
-    '/docs/guides/test-runner-contract.html',
-    '/docs/guides/threading-guide.html',
-    '/docs/guides/tidal-api.html',
-    '/docs/guides/tidal-cookbook.html',
-    '/docs/guides/tidal-guide.html',
+    '/docs/html/guides/',
+    '/docs/html/guides/async-await-guide.html',
+    '/docs/html/guides/backtracking-guide.html',
+    '/docs/html/guides/c-integration-guide.html',
+    '/docs/html/guides/cellular-automata-comonad-tutorial.html',
+    '/docs/html/guides/checkpointing-guide.html',
+    '/docs/html/guides/custom-effects-tutorial.html',
+    '/docs/html/guides/effects-system-guide.html',
+    '/docs/html/guides/error-handling-guide.html',
+    '/docs/html/guides/eval-api.html',
+    '/docs/html/guides/hamt-guide.html',
+    '/docs/html/guides/hkt-guide.html',
+    '/docs/html/guides/logic-programming-guide.html',
+    '/docs/html/guides/minikanren-tutorial.html',
+    '/docs/html/guides/module-system-guide.html',
+    '/docs/html/guides/repl.html',
+    '/docs/html/guides/serializable-continuations-guide.html',
+    '/docs/html/guides/snake-game-tutorial.html',
+    '/docs/html/guides/stm-guide.html',
+    '/docs/html/guides/stm-tutorial.html',
+    '/docs/html/guides/test-runner-contract.html',
+    '/docs/html/guides/threading-guide.html',
+    '/docs/html/guides/tidal-api.html',
+    '/docs/html/guides/tidal-cookbook.html',
+    '/docs/html/guides/tidal-guide.html',
 ];
 
 test.describe('Guides — HTTP 200', () => {
@@ -275,12 +275,12 @@ test.describe('Guides — HTTP 200', () => {
 
 test.describe('API Docs — HTTP 200', () => {
 
-    test('GET /docs/api/', async ({ page }) => {
-        await get200(page, `${MAIN}/docs/api/`);
+    test('GET /docs/html/api/', async ({ page }) => {
+        await get200(page, `${MAIN}/docs/html/api/`);
     });
 
-    test('GET /docs/api/index.html', async ({ page }) => {
-        await get200(page, `${MAIN}/docs/api/index.html`);
+    test('GET /docs/html/api/index.html', async ({ page }) => {
+        await get200(page, `${MAIN}/docs/html/api/index.html`);
     });
 
 });

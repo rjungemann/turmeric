@@ -126,7 +126,7 @@ If this compiles, your project setup is correct. The next steps add Turmeric cod
 
 Create your first Turmeric file that opens a window.
 
-```clojure
+```turmeric
 ;; fith/examples/snake/src/main.tur
 (module main)
 
@@ -157,7 +157,7 @@ Create your first Turmeric file that opens a window.
 
 Add screen clearing to prevent flickering.
 
-```clojure
+```turmeric
 ;; Add to main.tur
 (extern-c begin-drawing [] : void)
 (extern-c end-drawing [] : void)
@@ -181,7 +181,7 @@ Add screen clearing to prevent flickering.
 
 Draw a white rectangle in the middle of the screen.
 
-```clojure
+```turmeric
 ;; Add to main.tur
 (extern-c draw-rect [^int x ^int y ^int w ^int h ^int r ^int g ^int b] : void)
 
@@ -204,7 +204,7 @@ Draw a white rectangle in the middle of the screen.
 
 Introduce a struct to hold game state. This will eventually contain the snake, food, score, etc.
 
-```clojure
+```turmeric
 ;; fith/examples/snake/src/state.tur
 (module state)
 
@@ -218,7 +218,7 @@ Introduce a struct to hold game state. This will eventually contain the snake, f
   (GameState 400 300 20 20))
 ```
 
-```clojure
+```turmeric
 ;; fith/examples/snake/src/main.tur
 (module main)
 (import state)
@@ -258,7 +258,7 @@ Introduce a struct to hold game state. This will eventually contain the snake, f
 
 Make the rectangle move with arrow keys.
 
-```clojure
+```turmeric
 ;; Add to main.tur
 (extern-c is-key-down [^int key] : int)
 
@@ -302,7 +302,7 @@ Make the rectangle move with arrow keys.
 
 Replace the single rectangle with a snake made of segments stored in a vector.
 
-```clojure
+```turmeric
 ;; fith/examples/snake/src/state.tur
 (module state)
 
@@ -319,7 +319,7 @@ Replace the single rectangle with a snake made of segments stored in a vector.
   (GameState (Snake (vec (Segment 400 300) (Segment 380 300) (Segment 360 300)) 1)))
 ```
 
-```clojure
+```turmeric
 ;; fith/examples/snake/src/main.tur
 (module main)
 (import state)
@@ -380,7 +380,7 @@ Replace the single rectangle with a snake made of segments stored in a vector.
 
 Use typeclasses to make drawing polymorphic — any type that implements `Drawable` can be drawn.
 
-```clojure
+```turmeric
 ;; fith/examples/snake/src/state.tur
 (module state)
 
@@ -413,7 +413,7 @@ Use typeclasses to make drawing polymorphic — any type that implements `Drawab
   (GameState (Snake (vec (Segment 400 300) (Segment 380 300) (Segment 360 300)) 1)))
 ```
 
-```clojure
+```turmeric
 ;; fith/examples/snake/src/main.tur
 (module main)
 (import state)
@@ -438,7 +438,7 @@ defn draw-state [^state/GameState s]
 
 This is where it gets interesting. Introduce algebraic effects to separate rendering logic from game logic.
 
-```clojure
+```turmeric
 ;; fith/examples/snake/src/effects.tur
 (module effects)
 
@@ -447,7 +447,7 @@ This is where it gets interesting. Introduce algebraic effects to separate rende
 (defeffect Get-Time [] : float)
 ```
 
-```clojure
+```turmeric
 ;; fith/examples/snake/src/state.tur
 (module state)
 (import effects)
@@ -481,7 +481,7 @@ This is where it gets interesting. Introduce algebraic effects to separate rende
   (GameState (Snake (vec (Segment 400 300) (Segment 380 300) (Segment 360 300)) 1)))
 ```
 
-```clojure
+```turmeric
 ;; fith/examples/snake/src/main.tur
 (module main)
 (import state)
@@ -536,7 +536,7 @@ defn -main []
 
 Add wall and self-collision detection using pattern matching.
 
-```clojure
+```turmeric
 ;; fith/examples/snake/src/state.tur
 (module state)
 (import effects)
@@ -585,7 +585,7 @@ defn check-collisions [^GameState state] : bool
       (snake-self-collision? state.snake)))
 ```
 
-```clojure
+```turmeric
 ;; fith/examples/snake/src/main.tur
 (module main)
 (import state)
@@ -644,7 +644,7 @@ defn -main []
 
 Add food that the snake can eat, with score tracking.
 
-```clojure
+```turmeric
 ;; fith/examples/snake/src/state.tur
 (module state)
 (import effects)
@@ -708,7 +708,7 @@ defn check-collisions [^GameState state] : (or bool GameState)
     :else (check-food-collision state)))
 ```
 
-```clojure
+```turmeric
 ;; fith/examples/snake/src/main.tur
 (module main)
 (import state)
@@ -772,7 +772,7 @@ defn -main []
 
 Properly handle game over with a clean exit and final score display.
 
-```clojure
+```turmeric
 ;; fith/examples/snake/src/main.tur
 (module main)
 (import state)
@@ -829,7 +829,7 @@ defn -main []
 
 Use `defer` to ensure the window is always closed, even if an error occurs.
 
-```clojure
+```turmeric
 ;; fith/examples/snake/src/main.tur
 (module main)
 (import state)
@@ -864,7 +864,7 @@ Final touches to make the game feel polished.
 
 Use actual time instead of fixed speed.
 
-```clojure
+```turmeric
 ;; Add to extern-c in main.tur
 (extern-c get-frame-time [] : float)
 
@@ -921,7 +921,7 @@ defn game-loop [^state/GameState state]
 
 Show the score during gameplay.
 
-```clojure
+```turmeric
 ;; Add to state.tur
 defstruct GameState
   [snake : Snake
@@ -973,7 +973,7 @@ defn game-loop [^state/GameState state]
 
 Make the snake move in a grid (20x20 pixels per cell).
 
-```clojure
+```turmeric
 ;; In state.tur
 defn grid-move [^Segment seg ^int dir] : Segment
   (match dir
@@ -997,7 +997,7 @@ defn update-snake [^state/Snake snake ^float dt] : state/Snake
 
 Here's the final, polished game loop:
 
-```clojure
+```turmeric
 ;; fith/examples/snake/src/main.tur
 (module main)
 (import state)

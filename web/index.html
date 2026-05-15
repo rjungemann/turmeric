@@ -976,9 +976,10 @@ footer {
     <span class="nav-name">Turmeric</span>
   </a>
   <div class="nav-links">
+    <a href="/tour">Tour</a>
     <a href="/try">Try It</a>
-    <a href="/docs/guides/">Guides</a>
-    <a href="/docs/api/">API Docs</a>
+    <a href="/docs/html/guides/">Guides</a>
+    <a href="/docs/html/api/">API Docs</a>
     <a href="/docs/spice/">Packages</a>
   </div>
   <div class="nav-right">
@@ -1004,7 +1005,7 @@ footer {
     </p>
     <div class="hero-actions">
       <a href="/try" class="btn-hero btn-hero-primary">Try in browser <span class="arrow">→</span></a>
-      <a href="/docs/api/" class="btn-hero btn-hero-secondary">Read the docs</a>
+      <a href="/docs/html/api/" class="btn-hero btn-hero-secondary">Read the docs</a>
     </div>
     <div class="install-hint">
       <span>Install via</span>
@@ -1024,28 +1025,24 @@ footer {
             <button class="seg-btn" data-syntax="sweet-exp">sweet-exp</button>
           </div>
         </div>
-        <div class="code-card-body">
-          <div class="code-version turmeric-version"><span class="cmt">;; Algebraic effects in Turmeric</span>
-
+        <div class="code-card-body"><div class="code-version turmeric-version"><span class="cmt">;; Algebraic effects in Turmeric</span>
 <span class="pnc">(</span><span class="kw">defeffect</span> <span class="tp">Ask</span> <span class="pnc">[]</span> <span class="tp">:int</span><span class="pnc">)</span>
 
 <span class="pnc">(</span><span class="kw">defn</span> <span class="fn">use-ask</span> <span class="pnc">[]</span> <span class="tp">:int</span>
   <span class="pnc">(</span><span class="op">+</span> <span class="num">1</span> <span class="pnc">(</span>perform <span class="pnc">(</span><span class="tp">Ask</span><span class="pnc">))))</span>
 
-<span class="pnc">(</span>println <span class="pnc">(</span>handle <span class="pnc">(</span><span class="fn">use-ask</span><span class="pnc">)</span>
-  <span class="pnc">(</span><span class="tp">Ask</span> <span class="pnc">[]</span> k<span class="pnc">)</span> <span class="pnc">(</span>resume k <span class="num">41</span><span class="pnc">)))</span>
-          </div>
-          <div class="code-version sweet-exp-version" style="display: none;"><span class="cmt">;; Neoteric syntax -- f(args) for function calls</span>
-<span class="cmt">#lang turmeric/neoteric</span>
+<span class="pnc">(</span>println
+  <span class="pnc">(</span>handle <span class="pnc">(</span><span class="fn">use-ask</span><span class="pnc">)</span>
+    <span class="pnc">(</span><span class="tp">Ask</span> <span class="pnc">[]</span> k<span class="pnc">)</span> <span class="pnc">(</span>resume k <span class="num">41</span><span class="pnc">)))</span></div><div class="code-version sweet-exp-version" style="display: none;"><span class="cmt">#lang turmeric/sweet-exp</span>
+<span class="kw">defeffect</span> <span class="tp">Ask</span> <span class="pnc">[]</span> <span class="tp">:int</span>
 
-<span class="pnc">(</span><span class="kw">defeffect</span> <span class="tp">Ask</span> <span class="pnc">[]</span> <span class="tp">:int</span><span class="pnc">)</span>
+<span class="kw">defn</span> <span class="fn">use-ask</span> <span class="pnc">[]</span> <span class="tp">:int</span>
+  <span class="pnc">{</span><span class="num">1</span> <span class="op">+</span> perform<span class="pnc">(</span><span class="tp">Ask</span><span class="pnc">())}</span>
 
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">use-ask</span> <span class="pnc">[]</span> <span class="tp">:int</span>
-  <span class="op">+</span><span class="pnc">(</span><span class="num">1</span> perform<span class="pnc">(</span><span class="tp">Ask</span><span class="pnc">())))</span>
-
-<span class="pnc">(</span>println handle<span class="pnc">(</span><span class="fn">use-ask</span><span class="pnc">())</span>
-  <span class="pnc">(</span><span class="tp">Ask</span> <span class="pnc">[]</span> k<span class="pnc">)</span> resume<span class="pnc">(</span>k <span class="num">41</span><span class="pnc">))</span>
-          </div>
+<span class="pnc"></span>println
+  handle <span class="fn">use-ask</span><span class="pnc">()</span>
+    <span class="pnc">(</span><span class="tp">Ask</span> <span class="pnc">[]</span> k<span class="pnc">)</span> resume<span class="pnc">(</span>k <span class="num">41</span><span class="pnc">)</span>
+</div>
         </div>
       </div>
     </div>
@@ -1167,27 +1164,28 @@ footer {
     <span class="pnc">(</span><span class="tp">Blue</span><span class="pnc">)</span>  <span class="str">"blue"</span><span class="pnc">))</span></div>
 <div class="code-version sweet-exp-version" style="display:none;"><span class="cmt">#lang turmeric/neoteric</span>
 
-<span class="pnc">(</span><span class="kw">defclass</span> <span class="fn">Show</span> <span class="pnc">[</span>a<span class="pnc">]</span>
-  <span class="pnc">(</span><span class="fn">show</span> <span class="pnc">[</span>x<span class="pnc">]</span> <span class="tp">:cstr</span><span class="pnc">))</span>
+<span class="kw">defclass</span> <span class="fn">Show</span> <span class="pnc">[</span>a<span class="pnc">]</span>
+  <span class="fn">show</span> <span class="pnc">[</span>x<span class="pnc">]</span> <span class="tp">:cstr</span>
 
-<span class="pnc">(</span><span class="kw">defclass</span> <span class="fn">Eq</span> <span class="pnc">[</span>a<span class="pnc">]</span>
-  <span class="pnc">(</span><span class="fn">eq?</span> <span class="pnc">[</span>x y<span class="pnc">]</span> <span class="tp">:bool</span><span class="pnc">))</span>
+<span class="kw">defclass</span> <span class="fn">Eq</span> <span class="pnc">[</span>a<span class="pnc">]</span>
+  <span class="fn">eq?</span> <span class="pnc">[</span>x y<span class="pnc">]</span> <span class="tp">:bool</span>
 
-<span class="pnc">(</span><span class="kw">defdata</span> <span class="tp">Color</span> <span class="pnc">(</span><span class="tp">Red</span><span class="pnc">)</span> <span class="pnc">(</span><span class="tp">Green</span><span class="pnc">)</span> <span class="pnc">(</span><span class="tp">Blue</span><span class="pnc">))</span>
+<span class="kw">defdata</span> <span class="tp">Color</span> <span class="pnc">(</span><span class="tp">Red</span><span class="pnc">)</span> <span class="pnc">(</span><span class="tp">Green</span><span class="pnc">)</span> <span class="pnc">(</span><span class="tp">Blue</span><span class="pnc">)</span>
 
-<span class="pnc">(</span><span class="kw">definstance</span> <span class="fn">Eq</span> <span class="pnc">[</span><span class="tp">int</span><span class="pnc">]</span>
-  <span class="pnc">(</span><span class="fn">eq?</span> <span class="pnc">[</span>x y<span class="pnc">]</span> <span class="op">=</span><span class="pnc">(</span>x y<span class="pnc">)))</span>
+<span class="kw">definstance</span> <span class="fn">Eq</span> <span class="pnc">[</span><span class="tp">int</span><span class="pnc">]</span>
+  <span class="fn">eq?</span> <span class="pnc">[</span>x y<span class="pnc">]</span>
+    <span class="pnc">{</span>x <span class="op">=</span> y<span class="pnc">}</span>
 
 <span class="cmt">;; Typeclass constraint -- requires Show instance</span>
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">display</span> <span class="pnc">[</span><span class="tp">^Show</span> a x<span class="pnc">]</span> <span class="tp">:void</span>
-  println<span class="pnc">(</span><span class="fn">show</span><span class="pnc">(</span>x<span class="pnc">)))</span>
+<span class="kw">defn</span> <span class="fn">display</span> <span class="pnc">[</span><span class="tp">^Show</span> a x<span class="pnc">]</span> <span class="tp">:void</span>
+  println<span class="pnc">(</span><span class="fn">show</span><span class="pnc">(</span>x<span class="pnc">))</span>
 
 <span class="cmt">;; Pattern match on ADTs</span>
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">color-name</span> <span class="pnc">[</span>c<span class="pnc">]</span> <span class="tp">:cstr</span>
-  <span class="pnc">(</span><span class="kw">match</span> c
+<span class="kw">defn</span> <span class="fn">color-name</span> <span class="pnc">[</span>c<span class="pnc">]</span> <span class="tp">:cstr</span>
+  <span class="kw">match</span> c
     <span class="pnc">(</span><span class="tp">Red</span><span class="pnc">)</span>   <span class="str">"red"</span>
     <span class="pnc">(</span><span class="tp">Green</span><span class="pnc">)</span> <span class="str">"green"</span>
-    <span class="pnc">(</span><span class="tp">Blue</span><span class="pnc">)</span>  <span class="str">"blue"</span><span class="pnc">))</span></div></div>
+    <span class="pnc">(</span><span class="tp">Blue</span><span class="pnc">)</span>  <span class="str">"blue"</span></div></div>
   </div>
 </div>
 
@@ -1232,21 +1230,21 @@ footer {
 <span class="pnc">(</span>println <span class="pnc">(</span><span class="fn">run-test</span> <span class="pnc">(</span><span class="fn">compute</span> <span class="num">1</span><span class="pnc">)))</span>  <span class="cmt">;; => 1</span></div>
 <div class="code-version sweet-exp-version" style="display:none;"><span class="cmt">#lang turmeric/neoteric</span>
 
-<span class="pnc">(</span><span class="kw">defeffect</span> <span class="fn">Ask</span> <span class="pnc">[]</span> <span class="tp">:int</span><span class="pnc">)</span>
+<span class="kw">defeffect</span> <span class="fn">Ask</span> <span class="pnc">[]</span> <span class="tp">:int</span>
 
 <span class="cmt">;; Business logic -- no mention of *how* Ask works</span>
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">compute</span> <span class="pnc">[</span>x<span class="pnc">]</span> <span class="tp">:int</span>
-  <span class="op">+</span><span class="pnc">(</span>x perform<span class="pnc">(</span><span class="fn">Ask</span><span class="pnc">())))</span>
+<span class="kw">defn</span> <span class="fn">compute</span> <span class="pnc">[</span>x<span class="pnc">]</span> <span class="tp">:int</span>
+  <span class="pnc">{</span>x <span class="op">+</span> perform<span class="pnc">(</span><span class="fn">Ask</span><span class="pnc">())}</span>
 
 <span class="cmt">;; Production: supply real value</span>
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">run-prod</span> <span class="pnc">[</span>program<span class="pnc">]</span> <span class="tp">:int</span>
-  <span class="pnc">(</span>handle program
-    <span class="pnc">(</span><span class="fn">Ask</span> <span class="pnc">[]</span> k<span class="pnc">)</span> resume<span class="pnc">(</span>k <span class="num">41</span><span class="pnc">)))</span>
+<span class="kw">defn</span> <span class="fn">run-prod</span> <span class="pnc">[</span>program<span class="pnc">]</span> <span class="tp">:int</span>
+  handle program
+    <span class="pnc">(</span><span class="fn">Ask</span> <span class="pnc">[]</span> k<span class="pnc">)</span> resume<span class="pnc">(</span>k <span class="num">41</span><span class="pnc">)</span>
 
 <span class="cmt">;; Test: supply fixed value -- no mocking frameworks</span>
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">run-test</span> <span class="pnc">[</span>program<span class="pnc">]</span> <span class="tp">:int</span>
-  <span class="pnc">(</span>handle program
-    <span class="pnc">(</span><span class="fn">Ask</span> <span class="pnc">[]</span> k<span class="pnc">)</span> resume<span class="pnc">(</span>k <span class="num">0</span><span class="pnc">)))</span>
+<span class="kw">defn</span> <span class="fn">run-test</span> <span class="pnc">[</span>program<span class="pnc">]</span> <span class="tp">:int</span>
+  handle program
+    <span class="pnc">(</span><span class="fn">Ask</span> <span class="pnc">[]</span> k<span class="pnc">)</span> resume<span class="pnc">(</span>k <span class="num">0</span><span class="pnc">)</span>
 
 println<span class="pnc">(</span><span class="fn">run-prod</span><span class="pnc">(</span><span class="fn">compute</span><span class="pnc">(</span><span class="num">1</span><span class="pnc">)))</span>  <span class="cmt">;; => 42</span>
 println<span class="pnc">(</span><span class="fn">run-test</span><span class="pnc">(</span><span class="fn">compute</span><span class="pnc">(</span><span class="num">1</span><span class="pnc">)))</span>  <span class="cmt">;; => 1</span></div></div>
@@ -1338,9 +1336,9 @@ println<span class="pnc">(</span><span class="fn">run-test</span><span class="pn
     <div class="step-card">
       <div class="step-num">02 — New Project</div>
       <div class="step-title">Scaffold a project</div>
-      <div class="step-code">turmeric new my-project
+      <div class="step-code">tur new my-project
 cd my-project
-turmeric run</div>
+tur run</div>
       <p class="step-desc">Creates a project with sensible defaults, a package manifest, and a hello world entry point.</p>
     </div>
 
@@ -1358,9 +1356,9 @@ turmeric run</div>
     <div class="step-card">
       <div class="step-num">04 — Add Packages</div>
       <div class="step-title">Rich package ecosystem</div>
-      <div class="step-code">turmeric add spice/http
-turmeric add spice/json
-turmeric add spice/postgres</div>
+      <div class="step-code">tur add spice/http
+tur add spice/json
+tur add spice/postgres</div>
       <p class="step-desc">The Spice registry hosts packages for HTTP, JSON, databases, parsing, and more — all with effect-typed APIs.</p>
     </div>
   </div>
@@ -1373,7 +1371,7 @@ turmeric add spice/postgres</div>
     <p class="cta-desc">Try Turmeric in your browser — no install required.</p>
     <div class="cta-actions">
       <a href="/try" class="btn-hero btn-hero-primary">Open Playground →</a>
-      <a href="/docs/api/" class="btn-hero btn-hero-secondary">Read the Docs</a>
+      <a href="/docs/html/api/" class="btn-hero btn-hero-secondary">Read the Docs</a>
     </div>
   </div>
 </div>
@@ -1390,7 +1388,7 @@ turmeric add spice/postgres</div>
     </div>
     <div class="footer-col">
       <div class="footer-col-title">Language</div>
-      <!-- <a href="#">Tour</a> -->
+      <a href="/tour">Tour</a>
       <!-- <a href="#">Specification</a> -->
       <!-- <a href="#">Changelog</a> -->
       <!-- <a href="#">Roadmap</a> -->
@@ -1398,8 +1396,8 @@ turmeric add spice/postgres</div>
     <div class="footer-col">
       <div class="footer-col-title">Ecosystem</div>
       <!-- <a href="#">Packages (Spice)</a> -->
-      <a href="/docs/guides/">Guides</a>
-      <a href="/docs/api/">Standard Library</a>
+      <a href="/docs/html/guides/">Guides</a>
+      <a href="/docs/html/api/">Standard Library</a>
       <!-- <a href="#">Editor Support</a> -->
       <!-- <a href="#">Language Server</a> -->
     </div>

@@ -1,0 +1,11 @@
+;; SI1: Show [cstr] is identity -- returns the string itself.
+(defclass Show [a]
+  (show [x] :cstr))
+
+(definstance Show [cstr]
+  (show [x] x))
+
+(defn main [] :int
+  (println (.show "hello"))
+  (println (.show "world"))
+  0)

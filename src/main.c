@@ -47,6 +47,8 @@
 #include "turi/eval.h"
 /* Phase S1: REPL with libedit, multi-line input, :type/:doc/:reload */
 #include "turi/repl.h"
+/* Phase PKG-1: Spice package manager */
+#include "pkg.h"
 /* Global configuration variables — defined in globals.c */
 #include "globals.h"
 
@@ -1023,6 +1025,13 @@ static int usage(void) {
         "  tur check <input.tur>             type-check only, no codegen (phase 8)\n"
         "  tur format [--check] [file.tur]   format source (stdin if no file given)\n"
         "\n"
+        "package management (Spice, Phase PKG-1):\n"
+        "  tur init [--bin|--lib] <name>     create a new project\n"
+        "  tur add <url> [--ref <tag>]       add a Turmeric spice\n"
+        "  tur add <path> --path             add a local spice\n"
+        "  tur add-cmake <url> [--ref <tag>] add a C/CMake dependency\n"
+        "  tur fetch [--update]              download / update all spices\n"
+        "\n"
         "global flags:\n"
         "  --no-color                       disable colored diagnostics\n"
         "  --json-diagnostics               output diagnostics as JSON (phase 8)\n"
@@ -1380,5 +1389,14 @@ int main(int argc, char **argv) {
         if (argc != 3) return usage();
         return cmd_test(argv[2]);
     }
+    /* Phase PKG-1: Spice package manager commands */
+    if (strcmp(cmd, "init") == 0)
+        return cmd_pkg_init(argc, argv);
+    if (strcmp(cmd, "add") == 0)
+        return cmd_pkg_add(argc, argv);
+    if (strcmp(cmd, "add-cmake") == 0)
+        return cmd_pkg_add_cmake(argc, argv);
+    if (strcmp(cmd, "fetch") == 0)
+        return cmd_pkg_fetch(argc, argv);
     return usage();
 }

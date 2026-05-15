@@ -49,6 +49,7 @@ set(TUR_CORE_SOURCES
     hamt.c
     interp.c
     kind_check.c
+    pkg.c
     tutorial.c
     lifetime_elision.c
     lifetimes.c
