@@ -691,8 +691,20 @@
   ```)
 
 ;;; Typeclass instance for ptr<void> -- Functor: fmap over the ok value.
+;;; Phase CCL: fn is tur_poly_fn_t; call via fn.fn(fn.env, arg).
 (definstance Functor [ptr<void>]
-  (fmap [container fn] (__functor_result_fmap container fn)))
+  (fmap [container fn]
+    ```c
+    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
+        (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)container;
+    if (!res || !res->is_ok) return container;
+    int64_t new_val = fn.fn(fn.env, res->ok_val);
+    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *out = malloc(sizeof(*out));
+    out->is_ok   = true;
+    out->ok_val  = new_val;
+    out->err_val = 0;
+    return (int64_t)(intptr_t)out;
+    ```))
 
 ;; Applicative instance for result.
 ;;   pure x = ok(x)
@@ -741,5 +753,13 @@
   ```)
 
 ;;; Typeclass instance for ptr<void> -- Monad: bind (flat-map over the ok value).
+;;; Phase CCL: fn is tur_poly_fn_t; call via fn.fn(fn.env, arg).
 (definstance Monad [ptr<void>]
-  (bind [ma fn] (__monad_result_bind ma fn)))
+  (bind [ma fn]
+    ```c
+    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
+        (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)ma;
+    if (!res || !res->is_ok) return ma;
+    int64_t mb = fn.fn(fn.env, res->ok_val);
+    return mb;
+    ```))

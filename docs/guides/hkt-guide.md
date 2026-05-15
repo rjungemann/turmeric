@@ -225,25 +225,52 @@ Simple usage (single binding, no variable capture in body):
   (println (__opt_some? r)))  ;; false
 ```
 
-> **Limitation**: Closures in Turmeric that capture variables from an enclosing
-> scope are represented as `void*` (opaque handles) and cannot be passed directly
-> to typeclass methods expecting `int64_t fn`. For chained `do-m` with multiple
-> bindings that reference each other's values, use `__bind_option` directly.
-
 ## Closures with fmap
 
-Non-capturing closures work directly with `fmap`:
+Both non-capturing and capturing closures work with `.fmap` and `.bind`
+typeclass dispatch.
 
 ```turmeric
-;; Anonymous function with no captured variables
+;; Non-capturing closure
 (let [opt (__opt_some 10)]
-  (let [result (__fmap_option opt (fn [x] (+ x 5)))]
-    (println (__opt_unwrap result))))  ;; 15
+  (let [result (.fmap opt (fn [x] (* x x)))]
+    (println (__opt_unwrap result))))  ;; 100
 
-;; Squaring
+;; Capturing closure -- delta is captured from the enclosing scope
+(let [delta 5]
+  (let [opt (__opt_some 10)]
+    (let [result (.fmap opt (fn [x] (+ x delta)))]
+      (println (__opt_unwrap result)))))  ;; 15
+
+;; Multi-capture
+(let [a 2]
+  (let [b 3]
+    (let [opt (__opt_some 10)]
+      (let [result (.fmap opt (fn [x] (+ (* x a) b)))]
+        (println (__opt_unwrap result))))))  ;; 23
+
+;; Capturing closure through .bind
+(let [scale 3]
+  (let [r (.bind (__opt_some 4) (fn [x] (__opt_some (* x scale))))]
+    (println (__opt_unwrap r))))  ;; 12
+```
+
+Named functions (non-closures) also work unchanged:
+
+```turmeric
+(defn double [x] :int (* x 2))
+
 (let [opt (__opt_some 7)]
-  (let [result (__fmap_option opt (fn [x] (* x x)))]
-    (println (__opt_unwrap result))))  ;; 49
+  (let [result (.fmap opt double)]
+    (println (__opt_unwrap result))))  ;; 14
+```
+
+`do-m` with captured variables works too:
+
+```turmeric
+(let [factor 3]
+  (let [r (do-m x (__opt_some 5) (__opt_some (* x factor)))]
+    (println (__opt_unwrap r))))  ;; 15
 ```
 
 ## Binary Type Constructors (Bifunctor)
@@ -267,7 +294,8 @@ holds one function pointer per method:
 
 ```c
 /* generated for (definstance Functor [option] ...) */
-typedef struct { int64_t (*fmap)(int64_t container, int64_t fn); } dict_Functor_option;
+/* fn params annotated with :fn receive tur_poly_fn_t so fat closures work */
+typedef struct { int64_t (*fmap)(int64_t container, tur_poly_fn_t fn); } dict_Functor_option;
 static dict_Functor_option __dict_Functor_option = { .__fmap_option };
 ```
 
@@ -337,10 +365,8 @@ profiler shows typeclass dispatch is a bottleneck.
 
 ## Known Limitations
 
-1. **Closure capture**: Closures that capture variables (`void*` type) cannot be passed to typeclass methods expecting `int64_t fn`. Use non-capturing closures or named helper functions.
+1. **Method dispatch on containers**: Since HKT container values are stored as `int64_t`, type-based dispatch may fall back to the first matching instance. Works reliably when only one typeclass instance is in scope for the given method.
 
-2. **Method dispatch on containers**: Since HKT container values are stored as `int64_t`, type-based dispatch may fall back to the first matching instance. Works reliably when only one typeclass instance is in scope for the given method.
+2. **`defkind`**: Currently parsed and ignored. Future versions may use it for documentation generation and kind inference.
 
-3. **`defkind`**: Currently parsed and ignored. Future versions may use it for documentation generation and kind inference.
-
-4. **Recursive types / Free monad**: Not yet supported. Deferred to future phases.
+3. **Recursive types / Free monad**: Not yet supported. Implementation is planned in [recursive-types-free-monad-plan.md](../recursive-types-free-monad-plan.md) (phases RF0--RF4).

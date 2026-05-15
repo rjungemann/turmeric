@@ -50,8 +50,19 @@
 ;;; Functor [ptr<void>] -- Functor instance for rc<T> via ptr<void> representation.
 ;;;
 ;;; Since: Phase HKT H3
+;;; Phase CCL: fn is tur_poly_fn_t; call via fn.fn(fn.env, arg).
 (definstance Functor [ptr<void>]
-  (fmap [container fn] (__functor_rc_fmap container fn)))
+  (fmap [container fn]
+    ```c
+    void *rc_ptr = (void *)(intptr_t)container;
+    void *cloned = tur_rc_clone(rc_ptr);
+    if (!cloned) return 0;
+    int64_t value = *(int64_t*)tur_rc_ptr(cloned);
+    int64_t new_value = fn.fn(fn.env, value);
+    void *new_rc = tur_rc_of((void*)(intptr_t)new_value);
+    tur_rc_drop(cloned);
+    return (int64_t)(intptr_t)new_rc;
+    ```))
 
 ;;; SINCE: Phase HKT §6
 ;; Foldable instance for rc<T>.

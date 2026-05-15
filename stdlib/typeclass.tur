@@ -360,9 +360,9 @@
 ;;; Since: Phase HKT H3
 ;; Functor — map a function over a container without changing its shape.
 ;;   fmap :: (a -> b) -> f a -> f b
-;;   In v1: fmap [container fn] :int  (int64_t holds the result pointer)
+;;   Phase CCL: fn is declared :fn so capturing closures can be passed.
 (defclass Functor [^f]
-  (fmap [container fn] :int))
+  (fmap [container [fn :fn]] :int))
 
 ;;; Applicative -- container with a pure constructor and ap combinator.
 ;;;
@@ -391,8 +391,9 @@
 ;;; Since: Phase HKT H3
 ;; Monad — sequencing with flatMap/bind.
 ;;   bind :: m a -> (a -> m b) -> m b
+;;   Phase CCL: fn is declared :fn so capturing closures can be passed.
 (defclass Monad [^m]
-  (bind [ma fn] :int))
+  (bind [ma [fn :fn]] :int))
 
 ;;; Foldable -- reduce a container to a summary value.
 ;;;

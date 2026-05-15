@@ -10410,11 +10410,17 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
     uint8_t n_params = params_form->as.list.len;
     const Symbol **param_names = NULL;
     Type *param_types = NULL;
-    
+    /* Phase CCL: callable-param flag array — parallel to param_names/param_types.
+     * param_is_fn[i] = true when the i-th param is declared with [name :fn] syntax,
+     * marking it as a single-argument callable that should receive tur_poly_fn_t. */
+    bool *param_is_fn = NULL;
+
     if (n_params > 0) {
         param_names = (const Symbol **)arena_alloc(e->arena, n_params * sizeof(const Symbol *));
         param_types = (Type *)arena_alloc(e->arena, n_params * sizeof(Type));
-        
+        param_is_fn = (bool *)arena_alloc(e->arena, n_params * sizeof(bool));
+        for (uint8_t i = 0; i < n_params; i++) param_is_fn[i] = false;
+
         for (uint8_t i = 0; i < n_params; i++) {
             Form *p = params_form->as.list.items[i];
             if (p->tag == F_SYM) {
@@ -10422,7 +10428,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                 /* Default to int for now - type inference for method params deferred */
                 param_types[i] = TYPE_INT;
             } else if (p->tag == F_VEC && p->as.list.len >= 2) {
-                /* [name : type] syntax */
+                /* [name : type] or [name :fn] syntax */
                 Form *name_f = p->as.list.items[0];
                 Form *type_f = p->as.list.items[1];
                 if (name_f->tag != F_SYM) {
@@ -10440,6 +10446,12 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                         param_types[i] = TYPE_BOOL;
                     } else if (kw->len == 4 && memcmp(kw->name, "cstr", 4) == 0) {
                         param_types[i] = TYPE_CSTR;
+                    } else if (kw->len == 2 && memcmp(kw->name, "fn", 2) == 0) {
+                        /* Phase CCL: :fn marks this param as a single-argument
+                         * callable; it will be passed as tur_poly_fn_t at call
+                         * sites so that capturing closures work transparently. */
+                        param_types[i] = TYPE_PTR_VOID;
+                        param_is_fn[i] = true;
                     } else {
                         diag_emit(DIAG_ERROR, type_f->span,
                                   "unsupported type in typeclass method parameter");
@@ -10547,6 +10559,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
     method->name = name;
     method->param_names = param_names;
     method->param_types = param_types;
+    method->param_is_fn = param_is_fn;
     method->n_params = n_params;
     method->return_type = return_type;
     return method;
@@ -12856,8 +12869,16 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
                         param_type = type_args[0];
                     }
                     
-                    /* Phase HRT3: if the param type is TY_FORALL, treat it as a poly fn param */
+                    /* Phase HRT3: if the param type is TY_FORALL, treat it as a poly fn param.
+                     * Phase CCL: also treat :fn-annotated params (param_is_fn) as poly fn. */
                     bool param_is_poly = (param_type.kind == TY_FORALL || param_type.kind == TY_EXISTS);
+                    if (!param_is_poly
+                        && tc->methods[i].param_is_fn
+                        && j < tc->methods[i].n_params
+                        && tc->methods[i].param_is_fn[j]) {
+                        param_is_poly = true;
+                        param_type = TYPE_PTR_VOID;
+                    }
                     Type c_param_type = param_is_poly ? TYPE_PTR_VOID : param_type;
                     if (p->tag == F_SYM) {
                         /* Simple parameter name */
@@ -12887,7 +12908,16 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
                                     param_type = TYPE_NIL;
                                 }
                             }
-                            param_is_poly = (param_type.kind == TY_FORALL || param_type.kind == TY_EXISTS);
+                            /* Phase CCL: :fn-annotated params also become poly fn */
+                            if (!param_is_poly
+                                && tc->methods[i].param_is_fn
+                                && j < tc->methods[i].n_params
+                                && tc->methods[i].param_is_fn[j]) {
+                                param_is_poly = true;
+                                param_type = TYPE_PTR_VOID;
+                            }
+                            param_is_poly = param_is_poly
+                                || (param_type.kind == TY_FORALL || param_type.kind == TY_EXISTS);
                             c_param_type = param_is_poly ? TYPE_PTR_VOID : param_type;
                             method_params[j] = binding_new(e, name_f->as.sym, c_param_type, false, false, p->span);
                             if (param_is_poly) {
@@ -13358,8 +13388,20 @@ found_method:;
             has_poly_params = true;
             Binding *inner_b = poly_arg_fn_binding(args[i]);
             if (!inner_b) {
+                /* Phase CCL: no named-function binding found.  If the argument
+                 * is a fat closure (TY_PTR_VOID — capturing or non-capturing
+                 * lambda), wrap it for tur_poly_fn_t packing in the emitter. */
+                if (args[i]->type.kind == TY_PTR_VOID) {
+                    Expr *orig2 = args[i];
+                    Expr *cwrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, orig2->span);
+                    cwrap->as.poly_wrap_.inner = orig2;
+                    cwrap->as.poly_wrap_.wrapper_binding = NULL;
+                    cwrap->as.poly_wrap_.is_closure = true;
+                    args[i] = cwrap;
+                    continue;
+                }
                 diag_emit(DIAG_ERROR, call->as.list.items[2 + i]->span,
-                          "rank-N typeclass method argument must be a named function");
+                          "rank-N typeclass method argument must be a named function or closure");
                 return NULL;
             }
             Expr *orig = args[i];
