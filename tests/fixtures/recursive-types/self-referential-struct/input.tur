@@ -1,0 +1,14 @@
+;; RF0: self-referential ADT -- a singly-linked list whose tail is itself.
+(defdata IntList
+  (Empty)
+  (Cons :int :IntList))
+
+(defn list-sum [lst :int] :int
+  (match lst
+    (Empty)    0
+    (Cons h t) (+ h (list-sum t))))
+
+(defn main [] :int
+  (let [xs (Cons 1 (Cons 2 (Cons 3 (Empty))))]
+    (println (list-sum xs))
+    0))

@@ -1,0 +1,14 @@
+;; RF0: binary tree with left/right children of the same Tree type.
+(defdata Tree
+  (Leaf :int)
+  (Branch :Tree :Tree))
+
+(defn tree-sum [t :int] :int
+  (match t
+    (Leaf n)     n
+    (Branch l r) (+ (tree-sum l) (tree-sum r))))
+
+(defn main [] :int
+  (let [t (Branch (Branch (Leaf 1) (Leaf 2)) (Leaf 3))]
+    (println (tree-sum t))
+    0))

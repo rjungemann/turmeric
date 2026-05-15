@@ -1,118 +1,130 @@
-;; Phase HKT-P2: Higher-kinded data types - Fix and Free
-;; ==========================================================
-
-;;; Fix -- fixed-point combinator for type constructors.
-;;;
-;;; Fix[f] is isomorphic to f(Fix[f]), enabling recursive types such as
-;;; Fix[option] (an infinitely-nested optional value).
-;;;
-;;; Parameters:
-;;;   ^f -- the type constructor to take the fixed point of
-;;;
-;;; Since: Phase HKT-P2
-;; Fix f is the fixed-point combinator for type constructors.
-;; Fix[f] ≅ f(Fix[f])
-;; This allows recursive types like Fix[option] which is an infinite nested option.
-(deftype Fix [^f] (f (Fix f)))
-
-;;; Free -- the free monad over a functor.
-;;;
-;;; Free f a represents computations with effects described by the functor f.
-;;; Free f a is isomorphic to f (Free f a) (simplified for v1 -- no sum type).
-;;;
-;;; Parameters:
-;;;   ^f -- the functor describing the effect vocabulary
-;;;   ^a -- the result type
-;;;
-;;; Since: Phase HKT-P2
-;; Free f a is the free monad over a functor f.
-;; Free f a ≅ f (Free f a)  (simplified for v1 - no sum type)
-;; This represents computations with effects described by f.
-(deftype Free [^f ^a] (f (Free f a)))
-
-;; ==========================================================
-;; Fix catamorphism (fold)
-;; ==========================================================
-
-;;; cata -- fold a recursive Fix structure using an algebra.
-;;;
-;;; The algebra is a function (f a -> a) that describes how to convert one
-;;; layer of the functor into the result type.  In v1 this is a stub because
-;;; ADTs and pattern matching are not yet available.
-;;;
-;;; Parameters:
-;;;   f  -- the functor type witness
-;;;   fn -- the algebra function (f a -> a)
-;;;   x  -- the Fix f value to fold
-;;;
-;;; Returns:
-;;;   The folded result (:int, placeholder in v1).
-;;;
-;;; Since: Phase HKT-P2
-;; cata for Fix: folds a recursive Fix structure using an algebra.
-;; For Fix f, the algebra is a function (f a -> a) that describes how to
-;; convert one layer of the functor into the result.
+;; Free -- the Free monad over a functor f.
 ;;
-;; In v1, this is a stub since we don't have ADTs or pattern matching.
-;; The type signature would be: (defn cata [^f ^a fn (Fix f)] :a ...)
-;; but we use int as placeholder.
-(defn cata [f fn x] :int 0)
+;; Free f a = PureFree a | Suspend (f (Free f a))
+;;
+;; Any Functor f yields a Monad over Free f for free, without requiring f
+;; itself to be a monad.  This enables pure effect interpreters, trampolined
+;; computation, and extensible effects.
+;;
+;; Phase RF3
 
-;; ==========================================================
-;; Free monad operations
-;; ==========================================================
+;;; Free -- the Free monad over a functor f.
+;;;
+;;; Free f a = PureFree a | Suspend (f (Free f a))
+;;;
+;;; Any Functor ^f yields a Monad over Free ^f for free.
+(defdata Free [^f a]
+  (PureFree :int)
+  (Suspend  :int))
 
-;;; pure-free -- lift a pure value into the Free monad.
+;;; free-pure -- lift a pure value into the Free monad.
 ;;;
 ;;; Parameters:
 ;;;   x -- the value to lift
 ;;;
 ;;; Returns:
-;;;   A Free monad value wrapping x (:int, stub in v1).
+;;;   A Free value in the pure leaf case.
 ;;;
 ;;; Example:
-;;;   (pure-free 42)  ; => Free Pure value (stub)
+;;;   (free-pure 42)  ; => (PureFree 42)
 ;;;
-;;; Since: Phase HKT-P2
-;; pure-free: lift a value into the Free monad
-;; In v1, this is a stub. The actual implementation would construct
-;; a Pure value, but we don't have sum types yet.
-(defn pure-free [x] :int 0)
+;;; Since: Phase RF3
+(defn free-pure [x :int] :int
+  (PureFree x))
 
-;;; liftF -- lift a single functor action into the Free monad.
+;;; free-lift -- lift one layer of f into Free.
 ;;;
 ;;; Parameters:
-;;;   fa -- a functor value to lift
+;;;   fx -- a value of type (f a), where a is the "next step" value
 ;;;
 ;;; Returns:
-;;;   A Free monad value wrapping the functor action (:int, stub in v1).
+;;;   A Free value that suspends on fx.
 ;;;
 ;;; Example:
-;;;   (liftF my-action)  ; => Free (f a) value (stub)
+;;;   (free-lift (some 5))
 ;;;
-;;; Since: Phase HKT-P2
-;; liftF: lift a functor action into the Free monad
-;; In v1, this is a stub. The actual implementation would construct
-;; a Free (f a) value.
-(defn liftF [fa] :int 0)
+;;; Since: Phase RF3
+(defn free-lift [fx :int] :int
+  (Suspend fx))
 
-;;; interpret-free -- run a Free monad computation with an interpreter.
+;;; free-bind -- monadic bind for Free.
 ;;;
-;;; The interpreter is a natural transformation from the effect functor f
-;;; into some target monad.  The function recursively processes each layer.
+;;; Sequentially composes two Free computations.
+;;;   (PureFree a)  >>= f  = f a
+;;;   (Suspend m)   >>= f  = Suspend m  (single-layer pass-through)
 ;;;
 ;;; Parameters:
-;;;   interp -- interpreter function (f a -> m a) as a fat closure
-;;;   free   -- the Free monad computation to interpret
+;;;   ma -- a Free value
+;;;   kont -- a fat-closure from a to (Free f b), stored as :int
 ;;;
 ;;; Returns:
-;;;   The interpreted result in the target monad (:int, stub in v1).
+;;;   A new Free value representing the sequenced computation.
 ;;;
 ;;; Example:
-;;;   (interpret-free my-interp program)  ; => result (stub)
+;;;   (free-bind (free-pure 3) (fn [x] (free-pure (* x 2))))  ; => (PureFree 6)
 ;;;
-;;; Since: Phase HKT-P2
-;; interpret-free: run a Free monad computation with an interpreter
-;; In v1, this is a stub. The actual implementation would recursively
-;; process the Free structure, applying the interpreter to each layer.
-(defn interpret-free [interp free] :int 0)
+;;; Since: Phase RF3
+(defn free-bind [ma :int kont :int] :int
+  ```c
+  typedef struct { int tag; union { struct { int64_t _0; } PureFree; struct { int64_t _0; } Suspend; } as; } tur_adt_Free_fb;
+  tur_adt_Free_fb *fr = (tur_adt_Free_fb*)(intptr_t)ma;
+  if (fr->tag == 0) { /* PureFree */
+    int64_t *fat = (int64_t*)(intptr_t)kont;
+    int64_t thunk = fat[0];
+    return ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, fr->as.PureFree._0);
+  } else { /* Suspend -- pass through */
+    return ma;
+  }
+  ```)
+
+;;; free-fmap -- functor map for Free: apply a function to all pure leaves.
+;;;
+;;; Parameters:
+;;;   free -- a Free value
+;;;   f    -- a fat-closure from a to b, stored as :int
+;;;
+;;; Returns:
+;;;   A new Free value with f applied to all pure leaves.
+;;;
+;;; Since: Phase RF3
+(defn free-fmap [free :int f :int] :int
+  ```c
+  /* Apply f to the pure value inside a PureFree, or pass Suspend through. */
+  /* Assume free is a tur_adt_Free pointer */
+  typedef struct { int tag; union { struct { int64_t _0; } PureFree; struct { int64_t _0; } Suspend; } as; } tur_adt_Free;
+  tur_adt_Free *fr = (tur_adt_Free*)(intptr_t)free;
+  if (fr->tag == 0) { /* PureFree */
+    int64_t *fat = (int64_t*)(intptr_t)f;
+    int64_t thunk = fat[0];
+    int64_t mapped = ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, fr->as.PureFree._0);
+    return free_pure(mapped);
+  } else { /* Suspend */
+    return free;
+  }
+  ```)
+
+;;; free-run -- interpret a Free computation with a natural transformation.
+;;;
+;;; Parameters:
+;;;   interp -- a fat-closure from (f a) to a, stored as :int
+;;;   free   -- a Free computation to run
+;;;
+;;; Returns:
+;;;   The result of running free under interp.
+;;;
+;;; Example:
+;;;   (free-run my-interp my-program)
+;;;
+;;; Since: Phase RF3
+(defn free-run [interp :int free :int] :int
+  ```c
+  typedef struct { int tag; union { struct { int64_t _0; } PureFree; struct { int64_t _0; } Suspend; } as; } tur_adt_Free_fr;
+  tur_adt_Free_fr *fr = (tur_adt_Free_fr*)(intptr_t)free;
+  if (fr->tag == 0) { /* PureFree */
+    return fr->as.PureFree._0;
+  } else { /* Suspend */
+    int64_t *fat = (int64_t*)(intptr_t)interp;
+    int64_t thunk = fat[0];
+    return ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, fr->as.Suspend._0);
+  }
+  ```)

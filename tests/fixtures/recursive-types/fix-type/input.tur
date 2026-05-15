@@ -1,0 +1,24 @@
+;; RF1: type parameter in defdata -- define Fix (the fixed-point type) with ^f param.
+;; Fix f = Roll (f (Fix f)) -- stored as opaque :int fields.
+(defdata Fix [^f]
+  (Roll :int))
+
+;; Unroll a Fix value to get the inner layer.
+(defn unroll [fix :int] :int
+  (match fix
+    (Roll inner) inner))
+
+;; Using Fix to encode a simple chain via a Step functor.
+(defdata Step
+  (NoStep)
+  (OneStep :int))
+
+(defn main [] :int
+  ;; Build a Fix-encoded chain: Roll(OneStep(Roll(NoStep)))
+  (let [inner  (Roll (NoStep))
+        outer  (Roll (OneStep inner))]
+    ;; Verify unroll works
+    (match (unroll outer)
+      (OneStep _) (println "step")
+      (NoStep)    (println "empty"))
+    0))
