@@ -360,6 +360,8 @@ bool pkg_manifest_read(const char *path, PkgManifest *out) {
             parse_spices(vf, out);
         } else if (strcmp(kw, "cmake-deps") == 0) {
             parse_cmake_deps(vf, out);
+        } else if (strcmp(kw, "exports") == 0) {
+            parse_str_vec(vf, &out->exports, &out->n_exports);
         } else if (strcmp(kw, "build-opts") == 0) {
             if (vf && vf->tag == F_MAP) {
                 const Form *cf = map_get_kw(vf, "c-flags");
@@ -480,6 +482,15 @@ bool pkg_manifest_write(const char *path, const PkgManifest *m) {
         fprintf(f, "  }\n");
     }
 
+    if (m->n_exports > 0) {
+        fprintf(f, "\n  :exports [");
+        for (int i = 0; i < m->n_exports; i++) {
+            if (i) fprintf(f, " ");
+            fprintf(f, "\"%s\"", m->exports[i]);
+        }
+        fprintf(f, "]\n");
+    }
+
     fprintf(f, ")\n");
     fclose(f);
     return true;
@@ -521,6 +532,8 @@ void pkg_manifest_free(PkgManifest *m) {
         free(m->cmake_deps[i].opts);
     }
     free(m->cmake_deps);
+    for (int i = 0; i < m->n_exports;   i++) free(m->exports[i]);
+    free(m->exports);
     for (int i = 0; i < m->n_c_flags;   i++) free(m->c_flags[i]);
     free(m->c_flags);
     for (int i = 0; i < m->n_link_libs; i++) free(m->link_libs[i]);
@@ -2325,5 +2338,471 @@ int cmd_pkg_fetch(int argc, char **argv) {
         fprintf(stderr, "spice: fetch completed with errors\n");
         return 1;
     }
+    return 0;
+}
+
+/* ================================================================== */
+/* CLI: tur emit-cmake (Phase B)                                       */
+/* ================================================================== */
+
+/* FindTurmeric.cmake -- distributed with tur, placed in cmake/ by emit-cmake */
+static const char FIND_TURMERIC_CMAKE[] =
+"# FindTurmeric.cmake -- distributed with the Turmeric toolchain.\n"
+"#\n"
+"# Imported targets:\n"
+"#   Turmeric::Compiler -- the tur binary as an imported executable\n"
+"#\n"
+"# Variables set:\n"
+"#   Turmeric_FOUND, Turmeric_VERSION, Turmeric_COMPILER\n"
+"\n"
+"find_program(Turmeric_COMPILER NAMES tur\n"
+"  PATHS ENV PATH /usr/local/bin /opt/homebrew/bin\n"
+"  DOC \"Path to the Turmeric compiler\"\n"
+")\n"
+"\n"
+"if(Turmeric_COMPILER)\n"
+"  execute_process(\n"
+"    COMMAND \"${Turmeric_COMPILER}\" --version\n"
+"    OUTPUT_VARIABLE Turmeric_VERSION_STRING\n"
+"    OUTPUT_STRIP_TRAILING_WHITESPACE\n"
+"    ERROR_QUIET\n"
+"  )\n"
+"  string(REGEX MATCH \"[0-9]+\\\\.[0-9]+\\\\.[0-9]+\" Turmeric_VERSION\n"
+"         \"${Turmeric_VERSION_STRING}\")\n"
+"endif()\n"
+"\n"
+"include(FindPackageHandleStandardArgs)\n"
+"find_package_handle_standard_args(Turmeric\n"
+"  REQUIRED_VARS Turmeric_COMPILER\n"
+"  VERSION_VAR   Turmeric_VERSION\n"
+")\n"
+"\n"
+"if(Turmeric_FOUND AND NOT TARGET Turmeric::Compiler)\n"
+"  add_executable(Turmeric::Compiler IMPORTED)\n"
+"  set_target_properties(Turmeric::Compiler PROPERTIES\n"
+"    IMPORTED_LOCATION \"${Turmeric_COMPILER}\"\n"
+"  )\n"
+"endif()\n";
+
+/* AddTurmericTarget.cmake -- distributed with tur, placed in cmake/ by emit-cmake */
+static const char ADD_TURMERIC_TARGET_CMAKE[] =
+"# AddTurmericTarget.cmake -- helper functions for CMake projects using Turmeric.\n"
+"#\n"
+"# Functions:\n"
+"#   add_turmeric_library(<name> SOURCES <...> [DEPENDS <targets...>])\n"
+"#   add_turmeric_executable(<name> SOURCES <...> [LIBRARIES <targets...>])\n"
+"\n"
+"include_guard(GLOBAL)\n"
+"find_package(Turmeric REQUIRED)\n"
+"\n"
+"# add_turmeric_library(<name> SOURCES <files...> [DEPENDS <targets...>])\n"
+"function(add_turmeric_library name)\n"
+"  cmake_parse_arguments(ATL \"\" \"\" \"SOURCES;DEPENDS\" ${ARGN})\n"
+"  if(NOT ATL_SOURCES)\n"
+"    message(FATAL_ERROR \"add_turmeric_library: SOURCES is required\")\n"
+"  endif()\n"
+"\n"
+"  # Derive the list of expected .h and .c outputs\n"
+"  set(_out_h_files)\n"
+"  set(_out_c_files)\n"
+"  foreach(_src IN LISTS ATL_SOURCES)\n"
+"    get_filename_component(_mod \"${_src}\" NAME_WE)\n"
+"    list(APPEND _out_h_files \"${CMAKE_CURRENT_BINARY_DIR}/${_mod}.h\")\n"
+"    list(APPEND _out_c_files \"${CMAKE_CURRENT_BINARY_DIR}/${_mod}.c\")\n"
+"  endforeach()\n"
+"\n"
+"  add_custom_command(\n"
+"    OUTPUT  ${_out_h_files} ${_out_c_files}\n"
+"    COMMAND Turmeric::Compiler emit-c\n"
+"            --output-dir \"${CMAKE_CURRENT_BINARY_DIR}\"\n"
+"            ${ATL_SOURCES}\n"
+"    DEPENDS ${ATL_SOURCES}\n"
+"    COMMENT \"Compiling Turmeric library ${name}\"\n"
+"  )\n"
+"\n"
+"  add_library(${name} STATIC ${_out_c_files})\n"
+"  target_include_directories(${name} PUBLIC \"${CMAKE_CURRENT_BINARY_DIR}\")\n"
+"\n"
+"  if(ATL_DEPENDS)\n"
+"    target_link_libraries(${name} PUBLIC ${ATL_DEPENDS})\n"
+"  endif()\n"
+"\n"
+"  add_library(${name}::${name} ALIAS ${name})\n"
+"endfunction()\n"
+"\n"
+"# add_turmeric_executable(<name> SOURCES <files...> [LIBRARIES <targets...>])\n"
+"function(add_turmeric_executable name)\n"
+"  cmake_parse_arguments(ATE \"\" \"\" \"SOURCES;LIBRARIES\" ${ARGN})\n"
+"  if(NOT ATE_SOURCES)\n"
+"    message(FATAL_ERROR \"add_turmeric_executable: SOURCES is required\")\n"
+"  endif()\n"
+"\n"
+"  set(_out_h_files)\n"
+"  set(_out_c_files)\n"
+"  foreach(_src IN LISTS ATE_SOURCES)\n"
+"    get_filename_component(_mod \"${_src}\" NAME_WE)\n"
+"    list(APPEND _out_h_files \"${CMAKE_CURRENT_BINARY_DIR}/${_mod}.h\")\n"
+"    list(APPEND _out_c_files \"${CMAKE_CURRENT_BINARY_DIR}/${_mod}.c\")\n"
+"  endforeach()\n"
+"\n"
+"  add_custom_command(\n"
+"    OUTPUT  ${_out_h_files} ${_out_c_files}\n"
+"    COMMAND Turmeric::Compiler emit-c\n"
+"            --output-dir \"${CMAKE_CURRENT_BINARY_DIR}\"\n"
+"            ${ATE_SOURCES}\n"
+"    DEPENDS ${ATE_SOURCES}\n"
+"    COMMENT \"Compiling Turmeric executable ${name}\"\n"
+"  )\n"
+"\n"
+"  add_executable(${name} ${_out_c_files})\n"
+"\n"
+"  if(ATE_LIBRARIES)\n"
+"    target_link_libraries(${name} PRIVATE ${ATE_LIBRARIES})\n"
+"  endif()\n"
+"endfunction()\n";
+
+/* Collect .tur files from src/ when :exports is absent.
+ * Returns a malloc'd array of heap-alloc'd paths; *n_out = count.
+ * Caller must free each string and the array. */
+static char **collect_exports_from_src(const char *project_dir, int *n_out) {
+    *n_out = 0;
+    char src_dir[4096];
+    snprintf(src_dir, sizeof(src_dir), "%s/src", project_dir);
+
+    DIR *d = opendir(src_dir);
+    if (!d) return NULL;
+
+    int cap = 8;
+    char **files = (char **)malloc(cap * sizeof(char *));
+    if (!files) { closedir(d); return NULL; }
+
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL) {
+#if defined(_DIRENT_HAVE_D_TYPE) || defined(__APPLE__) || defined(__FreeBSD__)
+        if (ent->d_type != DT_REG && ent->d_type != DT_UNKNOWN) continue;
+#endif
+        size_t len = strlen(ent->d_name);
+        if (len < 4 || strcmp(ent->d_name + len - 4, ".tur") != 0) continue;
+
+        if (*n_out >= cap) {
+            cap *= 2;
+            files = (char **)realloc(files, cap * sizeof(char *));
+            if (!files) { closedir(d); return NULL; }
+        }
+        char full[4096];
+        snprintf(full, sizeof(full), "src/%s", ent->d_name);
+        files[(*n_out)++] = tur_strdup(full);
+    }
+    closedir(d);
+    return files;
+}
+
+/* Write a text file atomically.  Returns true on success. */
+static bool write_file_atomic(const char *path, const char *content) {
+    char tmp[4096];
+    snprintf(tmp, sizeof(tmp), "%s.tmp.%d", path, (int)getpid());
+    FILE *f = fopen(tmp, "w");
+    if (!f) {
+        fprintf(stderr, "tur emit-cmake: cannot write '%s': %s\n",
+                path, strerror(errno));
+        return false;
+    }
+    fputs(content, f);
+    fclose(f);
+    if (rename(tmp, path) != 0) {
+        fprintf(stderr, "tur emit-cmake: rename failed: %s\n", strerror(errno));
+        unlink(tmp);
+        return false;
+    }
+    return true;
+}
+
+int cmd_pkg_emit_cmake(int argc, char **argv) {
+    /* Usage: tur emit-cmake [--output-dir <dir>]
+     * Reads build.tur in the current directory and generates:
+     *   CMakeLists.txt
+     *   TurmericConfig.cmake
+     *   cmake/FindTurmeric.cmake
+     *   cmake/AddTurmericTarget.cmake */
+    const char *output_dir = ".";
+
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--output-dir") == 0 && i + 1 < argc) {
+            output_dir = argv[++i];
+        } else if (argv[i][0] == '-') {
+            fprintf(stderr, "tur emit-cmake: unknown flag '%s'\n", argv[i]);
+            return 1;
+        }
+    }
+
+    struct stat st;
+    if (stat("build.tur", &st) != 0) {
+        fprintf(stderr,
+            "tur emit-cmake: no build.tur found in current directory\n"
+            "  Run `tur init --lib <name>` to create a library project.\n");
+        return 1;
+    }
+
+    PkgManifest m;
+    memset(&m, 0, sizeof(m));
+    if (!pkg_manifest_read("build.tur", &m)) return 1;
+
+    if (!m.name) {
+        fprintf(stderr, "tur emit-cmake: build.tur has no :name field\n");
+        pkg_manifest_free(&m);
+        return 1;
+    }
+
+    const char *version = m.version ? m.version : "0.0.0";
+
+    /* Collect source files from :exports or scan src/ */
+    char **sources = NULL;
+    int    n_sources = 0;
+    bool   sources_heap = false;
+
+    if (m.n_exports > 0) {
+        sources   = m.exports;
+        n_sources = m.n_exports;
+    } else {
+        sources       = collect_exports_from_src(".", &n_sources);
+        sources_heap  = true;
+        if (!sources || n_sources == 0) {
+            fprintf(stderr,
+                "tur emit-cmake: no source files found.\n"
+                "  Add a :exports [\"src/lib.tur\"] block to build.tur or\n"
+                "  create .tur files in src/.\n");
+            pkg_manifest_free(&m);
+            return 1;
+        }
+    }
+
+    /* Ensure cmake/ subdirectory exists */
+    char cmake_subdir[4096];
+    snprintf(cmake_subdir, sizeof(cmake_subdir), "%s/cmake", output_dir);
+    if (!mkdirp(cmake_subdir)) {
+        fprintf(stderr, "tur emit-cmake: cannot create '%s'\n", cmake_subdir);
+        if (sources_heap) {
+            for (int i = 0; i < n_sources; i++) free(sources[i]);
+            free(sources);
+        }
+        pkg_manifest_free(&m);
+        return 1;
+    }
+
+    /* Build the CMakeLists.txt content */
+    Buf cml;
+    buf_init(&cml);
+    buf_printf(&cml,
+        "# CMakeLists.txt -- AUTO-GENERATED by `tur emit-cmake`. Do not edit.\n"
+        "# Re-generate with: tur emit-cmake\n"
+        "cmake_minimum_required(VERSION 3.20)\n"
+        "project(%s VERSION %s LANGUAGES C)\n"
+        "\n"
+        "list(APPEND CMAKE_MODULE_PATH \"${CMAKE_CURRENT_SOURCE_DIR}/cmake\")\n"
+        "find_package(Turmeric REQUIRED)\n"
+        "\n",
+        m.name, version);
+
+    /* Collect output file lists for the custom command */
+    Buf out_files, dep_files, src_args;
+    buf_init(&out_files);
+    buf_init(&dep_files);
+    buf_init(&src_args);
+
+    for (int i = 0; i < n_sources; i++) {
+        /* Extract module name (basename without .tur) */
+        const char *src = sources[i];
+        const char *base = strrchr(src, '/');
+        base = base ? base + 1 : src;
+        size_t blen = strlen(base);
+        char mod[256];
+        size_t mlen = (blen >= 4 && strcmp(base + blen - 4, ".tur") == 0)
+                      ? blen - 4 : blen;
+        if (mlen >= sizeof(mod)) mlen = sizeof(mod) - 1;
+        memcpy(mod, base, mlen);
+        mod[mlen] = '\0';
+
+        buf_printf(&out_files,
+            "          \"${CMAKE_CURRENT_BINARY_DIR}/%s.h\"\n"
+            "          \"${CMAKE_CURRENT_BINARY_DIR}/%s.c\"\n",
+            mod, mod);
+
+        buf_printf(&dep_files,
+            "          \"${CMAKE_CURRENT_SOURCE_DIR}/%s\"\n", src);
+
+        buf_printf(&src_args,
+            "              \"${CMAKE_CURRENT_SOURCE_DIR}/%s\"\n", src);
+    }
+
+    /* add_custom_command block */
+    buf_printf(&cml,
+        "add_custom_command(\n"
+        "  OUTPUT\n"
+        "%s"
+        "  COMMAND Turmeric::Compiler emit-c\n"
+        "              --output-dir \"${CMAKE_CURRENT_BINARY_DIR}\"\n"
+        "%s"
+        "  DEPENDS\n"
+        "%s"
+        "  COMMENT \"Compiling Turmeric library %s\"\n"
+        ")\n\n",
+        out_files.data, src_args.data, dep_files.data, m.name);
+
+    buf_free(&out_files);
+    buf_free(&dep_files);
+
+    /* add_library: list all .c files */
+    buf_printf(&cml, "add_library(%s STATIC\n", m.name);
+    for (int i = 0; i < n_sources; i++) {
+        const char *src = sources[i];
+        const char *base = strrchr(src, '/');
+        base = base ? base + 1 : src;
+        size_t blen = strlen(base);
+        char mod[256];
+        size_t mlen = (blen >= 4 && strcmp(base + blen - 4, ".tur") == 0)
+                      ? blen - 4 : blen;
+        if (mlen >= sizeof(mod)) mlen = sizeof(mod) - 1;
+        memcpy(mod, base, mlen);
+        mod[mlen] = '\0';
+        buf_printf(&cml,
+            "  \"${CMAKE_CURRENT_BINARY_DIR}/%s.c\"\n", mod);
+    }
+    buf_free(&src_args);
+
+    buf_printf(&cml,
+        ")\n"
+        "target_include_directories(%s\n"
+        "  PUBLIC\n"
+        "    \"$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>\"\n"
+        "    \"$<INSTALL_INTERFACE:include>\"\n"
+        ")\n"
+        "add_library(%s::all ALIAS %s)\n"
+        "\n"
+        "# Install rules\n"
+        "install(TARGETS %s\n"
+        "  EXPORT %s-targets\n"
+        "  ARCHIVE DESTINATION lib\n"
+        ")\n",
+        m.name, m.name, m.name, m.name, m.name);
+
+    /* install headers */
+    for (int i = 0; i < n_sources; i++) {
+        const char *src = sources[i];
+        const char *base = strrchr(src, '/');
+        base = base ? base + 1 : src;
+        size_t blen = strlen(base);
+        char mod[256];
+        size_t mlen = (blen >= 4 && strcmp(base + blen - 4, ".tur") == 0)
+                      ? blen - 4 : blen;
+        if (mlen >= sizeof(mod)) mlen = sizeof(mod) - 1;
+        memcpy(mod, base, mlen);
+        mod[mlen] = '\0';
+        buf_printf(&cml,
+            "install(FILES \"${CMAKE_CURRENT_BINARY_DIR}/%s.h\"\n"
+            "  DESTINATION include\n"
+            ")\n", mod);
+    }
+
+    buf_printf(&cml,
+        "install(EXPORT %s-targets\n"
+        "  FILE %s-targets.cmake\n"
+        "  NAMESPACE %s::\n"
+        "  DESTINATION lib/cmake/%s\n"
+        ")\n"
+        "install(FILES cmake/FindTurmeric.cmake cmake/AddTurmericTarget.cmake\n"
+        "  DESTINATION lib/cmake/%s\n"
+        ")\n",
+        m.name, m.name, m.name, m.name, m.name);
+
+    /* Write CMakeLists.txt */
+    char cml_path[4096];
+    snprintf(cml_path, sizeof(cml_path), "%s/CMakeLists.txt", output_dir);
+    buf_putc(&cml, '\0');
+    if (!write_file_atomic(cml_path, cml.data)) {
+        buf_free(&cml);
+        if (sources_heap) {
+            for (int i = 0; i < n_sources; i++) free(sources[i]);
+            free(sources);
+        }
+        pkg_manifest_free(&m);
+        return 1;
+    }
+    buf_free(&cml);
+    printf("  %s\n", cml_path);
+
+    /* Build TurmericConfig.cmake content */
+    Buf cfg;
+    buf_init(&cfg);
+    buf_printf(&cfg,
+        "# %sConfig.cmake -- AUTO-GENERATED by `tur emit-cmake`. Do not edit.\n"
+        "set(%s_VERSION %s)\n"
+        "set(%s_FOUND   TRUE)\n"
+        "include(\"${CMAKE_CURRENT_LIST_DIR}/%s-targets.cmake\")\n",
+        m.name, m.name, version, m.name, m.name);
+    buf_putc(&cfg, '\0');
+
+    char cfg_path[4096];
+    snprintf(cfg_path, sizeof(cfg_path), "%s/%sConfig.cmake", output_dir, m.name);
+    if (!write_file_atomic(cfg_path, cfg.data)) {
+        buf_free(&cfg);
+        if (sources_heap) {
+            for (int i = 0; i < n_sources; i++) free(sources[i]);
+            free(sources);
+        }
+        pkg_manifest_free(&m);
+        return 1;
+    }
+    buf_free(&cfg);
+    printf("  %s\n", cfg_path);
+
+    /* Write cmake/FindTurmeric.cmake */
+    char find_path[4096];
+    snprintf(find_path, sizeof(find_path), "%s/FindTurmeric.cmake", cmake_subdir);
+    if (!write_file_atomic(find_path, FIND_TURMERIC_CMAKE)) {
+        if (sources_heap) {
+            for (int i = 0; i < n_sources; i++) free(sources[i]);
+            free(sources);
+        }
+        pkg_manifest_free(&m);
+        return 1;
+    }
+    printf("  %s\n", find_path);
+
+    /* Write cmake/AddTurmericTarget.cmake */
+    char add_path[4096];
+    snprintf(add_path, sizeof(add_path),
+             "%s/AddTurmericTarget.cmake", cmake_subdir);
+    if (!write_file_atomic(add_path, ADD_TURMERIC_TARGET_CMAKE)) {
+        if (sources_heap) {
+            for (int i = 0; i < n_sources; i++) free(sources[i]);
+            free(sources);
+        }
+        pkg_manifest_free(&m);
+        return 1;
+    }
+    printf("  %s\n", add_path);
+
+    /* Save copies before freeing manifest */
+    char *pkg_name    = tur_strdup(m.name);
+    char *pkg_version = tur_strdup(version);
+
+    if (sources_heap) {
+        for (int i = 0; i < n_sources; i++) free(sources[i]);
+        free(sources);
+    }
+    pkg_manifest_free(&m);
+
+    printf("\nGenerated cmake files for '%s' v%s.\n", pkg_name, pkg_version);
+    printf("\nTo use from a CMake project via CPM:\n");
+    printf("  CPMAddPackage(\n");
+    printf("    NAME    %s\n", pkg_name);
+    printf("    URL     https://github.com/<user>/%s/archive/refs/tags/v%s.tar.gz\n",
+           pkg_name, pkg_version);
+    printf("    VERSION %s\n", pkg_version);
+    printf("  )\n");
+    printf("  target_link_libraries(my_target PRIVATE %s::all)\n", pkg_name);
+
+    free(pkg_name);
+    free(pkg_version);
     return 0;
 }

@@ -489,6 +489,62 @@ static int cmd_emit_c(const char *path) {
     return rc;
 }
 
+/* Phase B: emit per-module .h and .c files to a directory.
+ * Usage: tur emit-c --output-dir <dir> <file1.tur> [<file2.tur> ...]
+ * Each input produces <dir>/<module>.h and <dir>/<module>.c. */
+static int cmd_emit_c_to_dir(const char *out_dir, char **inputs, int n_inputs) {
+    if (n_inputs < 1) {
+        fprintf(stderr, "tur emit-c --output-dir: at least one input required\n");
+        return 1;
+    }
+
+    /* Create output directory if it doesn't exist */
+    struct stat st;
+    if (stat(out_dir, &st) != 0) {
+        if (mkdir(out_dir, 0755) != 0 && errno != EEXIST) {
+            fprintf(stderr, "tur emit-c: cannot create '%s': %s\n",
+                    out_dir, strerror(errno));
+            return 2;
+        }
+    }
+
+    int rc = 0;
+    for (int i = 0; i < n_inputs && rc == 0; i++) {
+        const char *input = inputs[i];
+        const char *base = basename_of(input);
+        size_t base_len = strlen(base);
+        char mod_name[256];
+        size_t n = (base_len >= 4 && strcmp(base + base_len - 4, ".tur") == 0)
+                   ? base_len - 4 : base_len;
+        if (n >= sizeof(mod_name)) n = sizeof(mod_name) - 1;
+        memcpy(mod_name, base, n);
+        mod_name[n] = '\0';
+
+        char h_path[1024], c_path[1024];
+        snprintf(h_path, sizeof(h_path), "%s/%s.h", out_dir, mod_name);
+        snprintf(c_path, sizeof(c_path), "%s/%s.c", out_dir, mod_name);
+
+        Buf h_buf, c_buf;
+        buf_init(&h_buf);
+        buf_init(&c_buf);
+
+        int h_rc = compile_to_h(input, &h_buf, mod_name);
+        int c_rc = compile_to_implementation(input, &c_buf, mod_name);
+
+        if (h_rc != 0 || c_rc != 0) {
+            rc = (h_rc != 0) ? h_rc : c_rc;
+        } else if (buf_to_path(&h_buf, h_path) != 0 ||
+                   buf_to_path(&c_buf, c_path) != 0) {
+            fprintf(stderr, "tur emit-c: failed to write output for '%s'\n",
+                    input);
+            rc = 2;
+        }
+        buf_free(&h_buf);
+        buf_free(&c_buf);
+    }
+    return rc;
+}
+
 /* Phase M3: emit the .h for a single module file to stdout. */
 static int cmd_emit_h(const char *path) {
     const char *base = basename_of(path);
@@ -1195,6 +1251,11 @@ static int usage(void) {
         "  tur add <path> --path             add a local spice\n"
         "  tur add-cmake <url> [--ref <tag>] add a C/CMake dependency\n"
         "  tur fetch [--update]              download / update all spices\n"
+        "  tur emit-cmake [--output-dir <d>] generate CMakeLists.txt + config for CMake consumers\n"
+        "\n"
+        "emit-c flags:\n"
+        "  tur emit-c <file>                 compile a .tur file to C (stdout)\n"
+        "  tur emit-c --output-dir <dir> <files...>  compile each .tur to <dir>/<mod>.h + .c\n"
         "\n"
         "global flags:\n"
         "  --no-color                       disable colored diagnostics\n"
@@ -1489,6 +1550,12 @@ int main(int argc, char **argv) {
     const char *cmd = argv[1];
 
     if (strcmp(cmd, "emit-c") == 0) {
+        /* tur emit-c --output-dir <dir> <file1> [<file2> ...] */
+        if (argc >= 4 && strcmp(argv[2], "--output-dir") == 0) {
+            const char *out_dir = argv[3];
+            return cmd_emit_c_to_dir(out_dir, argv + 4, argc - 4);
+        }
+        /* tur emit-c <file> -- single file to stdout (legacy) */
         if (argc != 3) return usage();
         return cmd_emit_c(argv[2]);
     }
@@ -1563,5 +1630,7 @@ int main(int argc, char **argv) {
         return cmd_pkg_add_cmake(argc, argv);
     if (strcmp(cmd, "fetch") == 0)
         return cmd_pkg_fetch(argc, argv);
+    if (strcmp(cmd, "emit-cmake") == 0)
+        return cmd_pkg_emit_cmake(argc, argv);
     return usage();
 }

@@ -94,6 +94,9 @@ typedef struct PkgManifest {
     int          n_spices;
     PkgCmakeDep *cmake_deps;
     int          n_cmake_deps;
+    /* source files exported as a C library (used by tur emit-cmake) */
+    char       **exports;
+    int          n_exports;
     /* build options */
     char       **c_flags;
     int          n_c_flags;
@@ -236,5 +239,6 @@ int cmd_pkg_init(int argc, char **argv);      /* tur init */
 int cmd_pkg_add(int argc, char **argv);       /* tur add  */
 int cmd_pkg_add_cmake(int argc, char **argv); /* tur add-cmake */
 int cmd_pkg_fetch(int argc, char **argv);     /* tur fetch */
+int cmd_pkg_emit_cmake(int argc, char **argv); /* tur emit-cmake */
 
 #endif /* TUR_PKG_H */
