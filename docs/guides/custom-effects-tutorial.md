@@ -50,7 +50,7 @@ The three primitives are:
 
 The simplest effect takes no parameters and returns nothing useful. It is a signal.
 
-```lisp
+```turmeric
 ;; Declare an effect that signals "I want to emit a line of output."
 (defeffect Emit [] :nil)
 
@@ -83,7 +83,7 @@ Key points:
 
 When an effect has a non-`nil` return type, `resume` passes a value back to the call site of `perform`. This is how you inject values into otherwise pure code.
 
-```lisp
+```turmeric
 ;; An effect that "asks" for an integer from the environment.
 (defeffect Ask [] :int)
 
@@ -104,7 +104,7 @@ The return type of `perform (Ask)` is `:int` (the declared return type of the `A
 
 Effects can carry data to the handler. Declare typed parameters just like function arguments.
 
-```lisp
+```turmeric
 ;; An effect that asks the handler to double a value.
 (defeffect Double [x :int] :int)
 
@@ -124,7 +124,7 @@ The handler pattern `(Double [x] k)` binds `x` to the argument supplied by the p
 
 A single `handle` block can match several different effects.
 
-```lisp
+```turmeric
 (defeffect Ask  []       :int)
 (defeffect Tell [x :int] :nil)
 
@@ -146,7 +146,7 @@ Handlers are tried in order. Each clause is independent; unhandled effects bubbl
 
 Multiple effects can also carry different result transforms:
 
-```lisp
+```turmeric
 (defeffect Add [x :int] :int)
 (defeffect Mul [x :int] :int)
 
@@ -165,7 +165,7 @@ Multiple effects can also carry different result transforms:
 
 Handlers nest lexically. The innermost matching handler wins.
 
-```lisp
+```turmeric
 (defeffect Val [] :int)
 
 (defn get-val [] :int
@@ -188,7 +188,7 @@ Use this to test functions under different conditions without changing the funct
 
 Each `perform` is an independent suspension. The handler is re-entered for every perform, and each invocation gets its own fresh `k`.
 
-```lisp
+```turmeric
 (defeffect Choose [n :int] :int)
 
 ;; Calls Choose twice sequentially.
@@ -210,7 +210,7 @@ Continuations are **one-shot**: you must call `resume k` exactly once per handle
 
 `defer` cleanup runs correctly even when `perform` is inside the same `do` block. The continuation is resumed before deferred forms unwind.
 
-```lisp
+```turmeric
 (defeffect Ask [] :int)
 
 (defn deferred-ask [] :int
@@ -232,7 +232,7 @@ The `defer` fires when `deferred-ask` returns, which happens after the handler r
 
 Borrows and reference-counted values that are live at the point of `perform` remain valid across the perform/resume boundary.
 
-```lisp
+```turmeric
 ;; Refs are live during perform.
 (defeffect GetBase [] :int)
 
@@ -245,7 +245,7 @@ Borrows and reference-counted values that are live at the point of `perform` rem
 ; => 142
 ```
 
-```lisp
+```turmeric
 ;; RC values are live during perform; no leaks.
 (defeffect GetCount [] :int)
 
@@ -266,7 +266,7 @@ The borrow checker enforces that no borrow escapes its declared scope, even thro
 
 Handlers that are used in many places can be packaged as macros for a cleaner call site.
 
-```lisp
+```turmeric
 (defeffect Write [s :cstr] :nil)
 
 ;; Package the handler as a macro so callers don't repeat boilerplate.
@@ -291,7 +291,7 @@ This is the standard pattern used in `stdlib/effects.tur` for `with-write`, `wit
 
 An effect handler can abort the computation (not resume) and throw an exception instead.
 
-```lisp
+```turmeric
 (defeffect Fail [msg :cstr] :nil)
 
 (defmacro with-fail-throw [body]
@@ -318,7 +318,7 @@ Not calling `resume` at all is valid — the computation past the `perform` is s
 
 `(cont? k)` returns `true` if the continuation has not been consumed. For algebraic effects the static one-shot check guarantees `k` is always unconsumed in the handler body, so this is mostly useful for defensive assertions.
 
-```lisp
+```turmeric
 (defeffect Ask [] :int)
 
 (defn ask-with-check [] :int
@@ -339,7 +339,7 @@ Not calling `resume` at all is valid — the computation past the `perform` is s
 
 Replace real I/O with a test double by swapping the handler. The business logic never changes.
 
-```lisp
+```turmeric
 (defeffect Read  []        :int)
 (defeffect Write [s :cstr] :nil)
 
@@ -379,7 +379,7 @@ The function `echo-doubled` is completely isolated from I/O. Swapping the handle
 
 Define a `Log` effect with levels. Wire it to a real logger in production, suppress it in benchmarks, and capture it in tests.
 
-```lisp
+```turmeric
 (defeffect Log [level :cstr msg :cstr] :nil)
 
 ;; Business logic

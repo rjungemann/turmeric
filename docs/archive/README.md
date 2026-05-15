@@ -1,69 +1,60 @@
 # Archive
 
-This folder contains planning and design documents for Turmeric features under active development or consideration.
+This folder contains planning and design documents for Turmeric features under
+active development or consideration. For user-facing guides and tutorials, see
+[../guides/](../guides/).
 
 ## Active Planning Documents
 
-These are current roadmaps for features in development or planned phases. For user-facing guides and tutorials, see [../guides/](../guides/).
-
 ### Phase 19+ (Active Development)
 
-- **[deferred-tasks-T19-T21.md](deferred-tasks-T19-T21.md)** — Current phase tracking for T19 (threads), T20 (schedulers), T21 (async/await)
-- **[thread-safety-and-primitives-plan.md](thread-safety-and-primitives-plan.md)** — Thread API design; see [../guides/threading-guide.md](../guides/threading-guide.md)
-- **[fiber-asm-ctx-plan.md](fiber-asm-ctx-plan.md)** — Fiber context-switching fallback strategy for macOS
+- **[thread-safety-and-primitives-plan.md](thread-safety-and-primitives-plan.md)** -- Thread API design; see [../guides/threading-guide.md](../guides/threading-guide.md)
+- **[fiber-asm-ctx-plan.md](fiber-asm-ctx-plan.md)** -- Fiber context-switching fallback strategy for macOS
 
-### Phase 20+ (Planned)
+### Try Turmeric / Web REPL
 
-- **[async-await-plan.md](async-await-plan.md)** — Async/await design; see [../guides/async-await-guide.md](../guides/async-await-guide.md)
-- **[effects-plan.md](effects-plan.md)** — Algebraic effects design; see [../guides/effects-system-guide.md](../guides/effects-system-guide.md)
-- **[stm-plan-2.md](stm-plan-2.md)** — STM v1+v2 roadmap; see [../guides/stm-tutorial.md](../guides/stm-tutorial.md)
-
-### Phase 21+ (Stretch Goals)
-
-- **[hamt-plan.md](hamt-plan.md)** — Persistent hash array mapped trie for v2
-- **[backtracking-cloneable-continuations-plan.md](backtracking-cloneable-continuations-plan.md)** — Cloneable continuations for logic programming; see [../guides/logic-programming-guide.md](../guides/logic-programming-guide.md)
-- **[serializable-continuations-plan.md](serializable-continuations-plan.md)** — Checkpointing and persistent workflows; see [../guides/checkpointing-guide.md](../guides/checkpointing-guide.md)
+- **[try-turmeric-and-tutorial-plan.md](try-turmeric-and-tutorial-plan.md)** -- Web REPL and tutorial site planning
+- **[try-turmeric-smoke-tests-plan.md](try-turmeric-smoke-tests-plan.md)** -- Smoke test strategy for the web REPL
+- **[try-turmeric-wasm-effects-plan.md](try-turmeric-wasm-effects-plan.md)** -- WASM effects integration for Try Turmeric
 
 ### Design Explorations (Not Yet Scoped)
 
-- **[gadts-plan.md](gadts-plan.md)** — Generalized algebraic data types
-- **[numeric-types-plan.md](numeric-types-plan.md)** — Numeric type system (fixed-point, rationals, etc.)
-- **[module-system-plan.md](module-system-plan.md)** — Module system design
-- **[module-system-racket-alt-plan.md](module-system-racket-alt-plan.md)** — Alternative module system (Racket-style)
-- **[signal-processing-arrows-plan.md](signal-processing-arrows-plan.md)** — Signal processing with arrows and HKTs
-- **[unsafe-operations-plan.md](unsafe-operations-plan.md)** — Unsafe code features (`unsafe` blocks, FFI)
-- **[copy-borrow-move-lifetimes.md](copy-borrow-move-lifetimes.md)** — Ownership and lifetime semantics
-- **[effects-vs-monads.md](effects-vs-monads.md)** — Comparison of effects and monad-based approaches
-- **[hkt-deferred-tasks.md](hkt-deferred-tasks.md)** — Higher-kinded types implementation tracking
-- **[performance-improvement-plan.md](performance-improvement-plan.md)** — Compiler optimization roadmap
-- **[test-perf-plan.md](test-perf-plan.md)** — Test suite and performance testing strategy
+- **[gadts-plan.md](gadts-plan.md)** -- Generalized algebraic data types
+- **[signal-processing-arrows-plan.md](signal-processing-arrows-plan.md)** -- Signal processing with arrows and HKTs
+- **[hkt-deferred-tasks.md](hkt-deferred-tasks.md)** -- Higher-kinded types implementation tracking
+- **[performance-improvement-plan.md](performance-improvement-plan.md)** -- Compiler optimization roadmap
+- **[test-perf-plan.md](test-perf-plan.md)** -- Test suite and performance testing strategy
+- **[panic-system-vs-exception-system-plan.md](panic-system-vs-exception-system-plan.md)** -- Error handling design decision
+- **[remove-exceptions-plan.md](remove-exceptions-plan.md)** -- Plan to remove exception machinery
+- **[set-literal-plan.md](set-literal-plan.md)** -- `#s(...)` set literal syntax
+- **[autodoc-plan.md](autodoc-plan.md)** -- Docstring standard and doc generator (see also CLAUDE.md)
+- **[auto-formatter-plan.md](auto-formatter-plan.md)** -- Formatter implementation details; see [../guides/formatter-guide.md](../guides/formatter-guide.md)
+- **[vscode-syntax-highlighting-plan.md](vscode-syntax-highlighting-plan.md)** -- VS Code extension implementation; see [../guides/vscode-guide.md](../guides/vscode-guide.md)
+- **[effects-vs-monads.md](effects-vs-monads.md)** -- Effects vs. monads analysis; see [../guides/effects-vs-monads.md](../guides/effects-vs-monads.md)
+- **[scscm-hcsynth-livecoding-plan.md](scscm-hcsynth-livecoding-plan.md)** -- SuperCollider/Haskell live coding integration
 
 ## Extracted Guides
 
-The following documents have been extracted into user-facing guides in [../guides/](../guides/):
+The following planning documents have guide counterparts in [../guides/](../guides/):
 
-| Archive File | Guide File | Purpose |
-|---|---|---|
-| async-await-plan.md | [../guides/async-await-guide.md](../guides/async-await-guide.md) | Async/await user guide |
-| thread-safety-and-primitives-plan.md | [../guides/threading-guide.md](../guides/threading-guide.md) | Threading and concurrency |
-| effects-plan.md | [../guides/effects-system-guide.md](../guides/effects-system-guide.md) | Effects system reference |
-| backtracking-cloneable-continuations-plan.md | [../guides/logic-programming-guide.md](../guides/logic-programming-guide.md) | Backtracking and logic programming |
-| serializable-continuations-plan.md | [../guides/checkpointing-guide.md](../guides/checkpointing-guide.md) | Checkpointing workflows |
-| panic-system-vs-exception-system-plan.md | [../design/error-handling-rationale.md](../design/error-handling-rationale.md) | Error handling design rationale |
-| stm-plan-2.md | [../guides/stm-tutorial.md](../guides/stm-tutorial.md) | STM (software transactional memory) |
+| Guide | Plan (in docs/history/) |
+|---|---|
+| [async-await-guide.md](../guides/async-await-guide.md) | `async-await-plan.md` |
+| [backtracking-guide.md](../guides/backtracking-guide.md) | `backtracking-cloneable-continuations-plan.md` |
+| [effects-system-guide.md](../guides/effects-system-guide.md) | `effects-plan.md` |
+| [effects-vs-monads.md](../guides/effects-vs-monads.md) | `effects-vs-monads.md` |
+| [formatter-guide.md](../guides/formatter-guide.md) | `auto-formatter-plan.md` |
+| [hamt-guide.md](../guides/hamt-guide.md) | `hamt-plan.md` |
+| [hrt-guide.md](../guides/hrt-guide.md) | `higher-ranked-types-plan.md` |
+| [minikanren-tutorial.md](../guides/minikanren-tutorial.md) | `minikanren-plan.md` |
+| [module-system-guide.md](../guides/module-system-guide.md) | `module-system-plan.md` |
+| [serializable-continuations-guide.md](../guides/serializable-continuations-guide.md) | `serializable-continuations-plan.md` |
+| [stm-guide.md](../guides/stm-guide.md) | `stm-plan-2.md` |
+| [tidal-guide.md](../guides/tidal-guide.md) | `tidalcycles-dsl-plan.md` |
+| [vscode-guide.md](../guides/vscode-guide.md) | `vscode-syntax-highlighting-plan.md` |
 
 ## Historical Documents
 
-Completed work and superseded planning are archived in [history/](history/). See that folder for:
-
-- Phase 7–11 deferred tasks (completed phases)
-- CMake migration plan (completed)
-- Prerequisite decisions (resolved)
-- HKT feasibility analysis (shipped in Phase H3)
-
-## Status Legend
-
-- **Active**: Currently being worked on or next in queue
-- **Planned**: Scheduled for a future phase
-- **Stretch**: Desirable but not yet scheduled
-- **Historical**: Completed or superseded (see [history/](history/))
+Completed implementation plans and superseded design explorations are in
+[../history/](../history/). The original `docs/archive/history/` folder
+contains earlier historical documents from phases 7-11.

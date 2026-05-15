@@ -1,0 +1,124 @@
+;; Test fixture for arrow combinators.
+;; All definitions are inlined -- no stdlib imports needed.
+;;
+;; Tested: arr, >>>, <<<, arrow-first, arrow-second, par-comp,
+;;         arrow-split, arrow-const, arrow-dup
+
+;; Call a plain Turmeric function pointer (e.g. named defn) stored as int64.
+(defn __arrow_call1 [f x] :int
+  ```c
+  return ((int64_t(*)(int64_t))(intptr_t)f)(x);
+  ```)
+
+;; Call a Turmeric closure (heap struct: { int64_t __fn; ...env... }) with
+;; one argument. Reads the __fn field and invokes it with (env, arg).
+(defn tur-call-closure1 [f x] :int
+  ```c
+  int64_t fn_ptr = *((int64_t *)(intptr_t)f);
+  return ((int64_t(*)(void *, int64_t))(intptr_t)fn_ptr)((void *)(intptr_t)f, x);
+  ```)
+
+(defn pair-new [a b] :int
+  ```c
+  struct { int64_t first; int64_t second; } *p = malloc(sizeof(*p));
+  p->first = a;
+  p->second = b;
+  return (int64_t)(intptr_t)p;
+  ```)
+
+(defn pair-first [p] :int
+  ```c
+  struct { int64_t first; int64_t second; } *pair = (void*)(intptr_t)p;
+  return pair->first;
+  ```)
+
+(defn pair-second [p] :int
+  ```c
+  struct { int64_t first; int64_t second; } *pair = (void*)(intptr_t)p;
+  return pair->second;
+  ```)
+
+(defn arr [f] f)
+
+(defn arrow-seq [f g]
+  (let [fv f gv g]
+    (fn [x] (__arrow_call1 gv (__arrow_call1 fv x)))))
+
+(defn arrow-rev-seq [g f]
+  (let [fv f gv g]
+    (fn [x] (__arrow_call1 gv (__arrow_call1 fv x)))))
+
+(defn arrow-first [f]
+  (let [fv f]
+    (fn [p]
+      (pair-new (__arrow_call1 fv (pair-first p)) (pair-second p)))))
+
+(defn arrow-second [f]
+  (let [fv f]
+    (fn [p]
+      (pair-new (pair-first p) (__arrow_call1 fv (pair-second p))))))
+
+(defn par-comp [f g]
+  (let [fv f gv g]
+    (fn [p]
+      (pair-new (__arrow_call1 fv (pair-first p))
+                (__arrow_call1 gv (pair-second p))))))
+
+(defn arrow-split [f g]
+  (let [fv f gv g]
+    (fn [x]
+      (pair-new (__arrow_call1 fv x) (__arrow_call1 gv x)))))
+
+(defn arrow-const [v]
+  (let [cv v]
+    (fn [_] cv)))
+
+(defn arrow-dup [x] :int
+  (pair-new x x))
+
+(defn add1 [x] :int (+ x 1))
+(defn mul2 [x] :int (* x 2))
+
+(defn main [] :int
+  ;; arr is identity -- call add1 directly: add1(5) = 6
+  (println (__arrow_call1 add1 5))
+
+  ;; arrow-seq: (add1 >>> mul2)(3) = mul2(add1(3)) = 2*(3+1) = 8
+  (println (tur-call-closure1 (arrow-seq add1 mul2) 3))
+
+  ;; arrow-rev-seq: (mul2 <<< add1)(3) = mul2(add1(3)) = 2*(3+1) = 8
+  (println (tur-call-closure1 (arrow-rev-seq mul2 add1) 3))
+
+  ;; arrow-first: add1 on first of Pair(5, 10) -> Pair(6, 10)
+  (let [p (pair-new 5 10)
+        r (tur-call-closure1 (arrow-first add1) p)]
+    (println (pair-first r))
+    (println (pair-second r)))
+
+  ;; arrow-second: mul2 on second of Pair(5, 10) -> Pair(5, 20)
+  (let [p (pair-new 5 10)
+        r (tur-call-closure1 (arrow-second mul2) p)]
+    (println (pair-first r))
+    (println (pair-second r)))
+
+  ;; par-comp: add1 on first, mul2 on second of Pair(5, 10) -> Pair(6, 20)
+  (let [p (pair-new 5 10)
+        r (tur-call-closure1 (par-comp add1 mul2) p)]
+    (println (pair-first r))
+    (println (pair-second r)))
+
+  ;; arrow-split: (add1 &&& mul2)(3) -> Pair(4, 6)
+  (let [r (tur-call-closure1 (arrow-split add1 mul2) 3)]
+    (println (pair-first r))
+    (println (pair-second r)))
+
+  ;; arrow-const: ignores input, always returns 99
+  (println (tur-call-closure1 (arrow-const 99) 42))
+  (println (tur-call-closure1 (arrow-const 99) 0))
+
+  ;; arrow-dup: plain defn, call directly: Pair(7, 7)
+  (let [r (arrow-dup 7)]
+    (println (pair-first r))
+    (println (pair-second r)))
+
+  0)

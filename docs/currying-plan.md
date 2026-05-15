@@ -1,6 +1,6 @@
 # Haskell-Style Currying — Implementation Plan (CY0–CY4)
 
-> **Status:** Not started. CY0–CY4 planned.
+> **Status:** CY0–CY3 complete. CY4 not started.
 >
 > **Prerequisites:** Phase 2 (closures, `fn`, `defn`), Phase HRT1 (`->` type
 > constructor), Phase HKT (kind system). No effect-row interaction is required
@@ -107,15 +107,15 @@ complete.
 
 ### Fixtures
 
-- [ ] `tests/fixtures/currying/partial-basic.tur` — `(f a)` on a 2-arg function
+- [x] `tests/fixtures/currying/partial-basic.tur` — `(f a)` on a 2-arg function
   produces the correct closure; calling the closure gives the right answer.
-- [ ] `tests/fixtures/currying/partial-chain.tur` — `(((+ ) 3) 4)` gives `7`
+- [x] `tests/fixtures/currying/partial-chain.tur` — `(((+ ) 3) 4)` gives `7`
   (operator section style).
-- [ ] `tests/fixtures/currying/over-apply.tur` — `(f a b c)` where `f` returns
+- [x] `tests/fixtures/currying/over-apply.tur` — `(f a b c)` where `f` returns
   a function; result is the composed call.
-- [ ] `tests/fixtures/currying/point-free.tur` — `(map (+ 1) xs)` without an
+- [x] `tests/fixtures/currying/point-free.tur` — `(map (+ 1) xs)` without an
   explicit `fn` wrapper.
-- [ ] `tests/fixtures/errors/currying-over-apply-bad.tur` — over-applying past
+- [x] `tests/fixtures/errors/currying-over-apply-bad.tur` — over-applying past
   a non-function return type produces `TUR-E0002` with improved message.
 
 **Exit criterion:** Fixtures exist and are documented; all currently produce
@@ -191,11 +191,11 @@ must carry the remaining full-type slots. Copy
 
 ### Tasks
 
-- [ ] Implement `elab_partial_apply` in `src/elab.c`.
-- [ ] Remove the `n_provided < expected_arity` error branch; replace with
+- [x] Implement `elab_partial_apply` in `src/elab.c`.
+- [x] Remove the `n_provided < expected_arity` error branch; replace with
   `elab_partial_apply` call.
-- [ ] Unit test: `partial-basic.tur` and `partial-chain.tur` fixtures pass.
-- [ ] Verify that fully-saturated calls are unaffected (no regression in existing
+- [x] Unit test: `partial-basic.tur` and `partial-chain.tur` fixtures pass.
+- [x] Verify that fully-saturated calls are unaffected (no regression in existing
   fixtures).
 
 **Exit criterion:** `partial-basic.tur` and `partial-chain.tur` pass; all
@@ -231,9 +231,9 @@ call path in `emit.c` (lines ~2402–2434). No change needed there.
 
 ### Tasks
 
-- [ ] Add over-application tail-recursion in `elab_call_fn`.
-- [ ] `over-apply.tur` fixture passes.
-- [ ] `currying-over-apply-bad.tur` error fixture emits correct `TUR-E0002`.
+- [x] Add over-application tail-recursion in `elab_call_fn`.
+- [x] `over-apply.tur` fixture passes.
+- [x] `currying-over-apply-bad.tur` error fixture emits correct `TUR-E0002`.
 
 **Exit criterion:** `over-apply.tur` passes; error fixture produces the
 improved diagnostic.
@@ -291,8 +291,8 @@ declared type once type inference is in place.)
 
 ### Tasks
 
-- [ ] Write `point-free.tur` fixture using `(map (+ 1) xs)`.
-- [ ] Add `curry` macro to `stdlib/macros.tur`.
+- [x] Write `point-free.tur` fixture using `(map (+ 1) xs)`.
+- [x] Add `curry` macro to `stdlib/macros.tur`.
 - [ ] Add `curry` fixture: `currying-curry-macro.tur`.
 - [ ] Audit `list.tur` / `vec.tur` higher-order functions; note which need
   generalisation and file follow-up tasks.

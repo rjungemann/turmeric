@@ -1,0 +1,1256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Language Tour — Turmeric</title>
+<meta name="description" content="A hands-on tour of Turmeric's ten most interesting features -- from algebraic effects to the Spice package manager.">
+
+<!-- Open Graph -->
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://turmeric-lang.com/tour">
+<meta property="og:title" content="Language Tour — Turmeric">
+<meta property="og:description" content="A hands-on tour of Turmeric's ten most interesting features.">
+<meta property="og:image" content="https://turmeric-lang.com/og-image.png">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400;1,500&family=DM+Sans:wght@300;400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg-base:       #0C0A08;
+  --bg-surface:    #111009;
+  --bg-panel:      #161411;
+  --bg-hover:      #1C1915;
+  --bg-card:       #131108;
+  --border:        #222018;
+  --border-mid:    #2E2B22;
+  --border-str:    #3D3A2F;
+  --gold:          #D48B1C;
+  --gold-bright:   #EFA030;
+  --gold-dim:      #7A5010;
+  --gold-subtle:   rgba(212,139,28,0.08);
+  --gold-line:     rgba(212,139,28,0.25);
+  --text-primary:  #EAE0D2;
+  --text-sec:      #8A7D6E;
+  --text-dim:      #4A4438;
+  --syn-kw:        #EFA030;
+  --syn-str:       #D9735A;
+  --syn-cmt:       #3E3B35;
+  --syn-type:      #7AC4B8;
+  --syn-num:       #A8C98A;
+  --syn-fn:        #C4A0E8;
+  --syn-punc:      #5A5448;
+}
+
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+  overflow-x: hidden;
+}
+
+a { text-decoration: none; color: inherit; }
+
+/* ── SCROLLBAR ─────────────────────────── */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-str); border-radius: 3px; }
+
+/* ── NAV ───────────────────────────────── */
+nav {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 100;
+  height: 60px;
+  background: rgba(12,10,8,0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 48px;
+}
+
+.nav-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.nav-mark {
+  width: 30px;
+  height: 30px;
+  background: var(--gold);
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 18px;
+  font-weight: 600;
+  color: #0A0800;
+  flex-shrink: 0;
+}
+
+.nav-name {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 21px;
+  font-weight: 500;
+  color: var(--gold-bright);
+  letter-spacing: 0.01em;
+}
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 40px;
+}
+
+.nav-links a {
+  font-size: 13.5px;
+  color: var(--text-sec);
+  padding: 6px 12px;
+  border-radius: 6px;
+  transition: color 0.12s, background 0.12s;
+}
+.nav-links a:hover { color: var(--text-primary); background: var(--bg-hover); }
+.nav-links a.active { color: var(--gold-bright); }
+
+.nav-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-ghost {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13.5px;
+  color: var(--text-sec);
+  padding: 7px 14px;
+  border-radius: 7px;
+  border: 1px solid var(--border-str);
+  background: transparent;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.btn-ghost:hover { color: var(--text-primary); background: var(--bg-hover); }
+
+.btn-gold {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: #0A0800;
+  padding: 7px 18px;
+  border-radius: 7px;
+  border: 1px solid var(--gold);
+  background: var(--gold);
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.btn-gold:hover { background: var(--gold-bright); border-color: var(--gold-bright); }
+
+/* ── HERO ──────────────────────────────── */
+.hero {
+  padding: 140px 48px 96px;
+  position: relative;
+  overflow: hidden;
+  text-align: center;
+}
+
+.hero-glow {
+  position: absolute;
+  top: 20%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 600px;
+  height: 400px;
+  background: radial-gradient(ellipse at center, rgba(212,139,28,0.07) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.hero-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(var(--border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 60px 60px;
+  opacity: 0.4;
+  mask-image: radial-gradient(ellipse 80% 80% at 50% 30%, black 0%, transparent 80%);
+  pointer-events: none;
+}
+
+.hero-inner {
+  max-width: 760px;
+  margin: 0 auto;
+  position: relative;
+  z-index: 1;
+}
+
+.hero-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--gold);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 500;
+  margin-bottom: 28px;
+  padding: 5px 14px;
+  border: 1px solid var(--gold-line);
+  border-radius: 100px;
+  background: var(--gold-subtle);
+}
+
+.eyebrow-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--gold);
+  animation: eyeblink 2.5s ease-in-out infinite;
+}
+@keyframes eyeblink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+h1 {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: clamp(44px, 6vw, 80px);
+  font-weight: 400;
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  margin-bottom: 20px;
+}
+
+h1 em {
+  font-style: italic;
+  color: var(--gold-bright);
+}
+
+.hero-subtitle {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: clamp(18px, 2.2vw, 24px);
+  font-weight: 300;
+  font-style: italic;
+  color: var(--text-sec);
+  margin-bottom: 20px;
+  letter-spacing: 0.01em;
+}
+
+.hero-desc {
+  font-size: 16px;
+  color: var(--text-sec);
+  max-width: 500px;
+  margin: 0 auto 40px;
+  line-height: 1.7;
+  font-weight: 300;
+}
+
+.hero-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.btn-hero {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 15px;
+  font-weight: 500;
+  padding: 12px 28px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.14s;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-hero-primary {
+  background: var(--gold);
+  border: 1px solid var(--gold);
+  color: #0A0800;
+}
+.btn-hero-primary:hover { background: var(--gold-bright); border-color: var(--gold-bright); }
+.btn-hero-primary:active { transform: scale(0.98); }
+
+.btn-hero-secondary {
+  background: transparent;
+  border: 1px solid var(--border-str);
+  color: var(--text-sec);
+}
+.btn-hero-secondary:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+/* ── TOUR INDEX ────────────────────────── */
+.tour-index {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 48px 80px;
+}
+
+.tour-index-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.tour-index-card {
+  background: var(--bg-card);
+  padding: 24px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: background 0.14s;
+  color: inherit;
+}
+.tour-index-card:hover { background: var(--bg-hover); }
+
+.tour-stop-num {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--gold-dim);
+  letter-spacing: 0.1em;
+  font-weight: 500;
+}
+
+.tour-card-label {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 17px;
+  font-weight: 500;
+  color: var(--text-primary);
+  line-height: 1.2;
+  letter-spacing: 0.01em;
+}
+
+.tour-card-icon {
+  font-size: 18px;
+  opacity: 0.7;
+  margin-top: auto;
+  line-height: 1;
+}
+
+/* ── CODE CARD ─────────────────────────── */
+.code-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-mid);
+  border-radius: 12px;
+  overflow: hidden;
+  text-align: left;
+  box-shadow: 0 0 0 1px rgba(212,139,28,0.06), 0 32px 64px rgba(0,0,0,0.4);
+}
+
+.code-card-bar {
+  height: 40px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  gap: 6px;
+}
+
+.win-dot { width: 10px; height: 10px; border-radius: 50%; }
+.wd-r { background: #3A2520; }
+.wd-y { background: #3A3020; }
+.wd-g { background: #1E3020; }
+
+.code-card-filename {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-left: 8px;
+}
+
+.code-card-body {
+  padding: 24px 28px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  line-height: 1.75;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.kw   { color: var(--syn-kw); }
+.str  { color: var(--syn-str); }
+.cmt  { color: var(--syn-cmt); font-style: italic; }
+.tp   { color: var(--syn-type); }
+.num  { color: var(--syn-num); }
+.fn   { color: var(--syn-fn); }
+.pnc  { color: var(--syn-punc); }
+.op   { color: var(--text-sec); }
+
+/* ── SECTION COMMON ────────────────────── */
+.section-label {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--gold);
+  font-weight: 500;
+  margin-bottom: 16px;
+}
+
+.section-title {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: clamp(32px, 3.5vw, 48px);
+  font-weight: 400;
+  line-height: 1.1;
+  color: var(--text-primary);
+  margin-bottom: 20px;
+  letter-spacing: -0.01em;
+}
+
+.section-title em { font-style: italic; color: var(--gold-bright); }
+
+.section-desc {
+  font-size: 15px;
+  color: var(--text-sec);
+  max-width: 440px;
+  line-height: 1.7;
+  font-weight: 300;
+}
+
+.section-desc + .section-desc { margin-top: 16px; }
+
+/* ── DIVIDER ───────────────────────────── */
+.divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+/* ── SPLIT SECTION ─────────────────────── */
+.split-section {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 96px 48px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 80px;
+  align-items: center;
+}
+
+.split-section.reverse { direction: rtl; }
+.split-section.reverse > * { direction: ltr; }
+
+/* ── CODE SYNTAX TOGGLE ───────────────── */
+.code-syntax-toggle {
+  margin-left: auto;
+  display: flex;
+  border: 1px solid var(--border-mid);
+  border-radius: 6px;
+  overflow: hidden;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+}
+.seg-btn {
+  padding: 4px 10px;
+  background: transparent;
+  color: var(--text-dim);
+  border: none;
+  cursor: pointer;
+  transition: all 0.14s;
+}
+.seg-btn:hover { color: var(--text-sec); background: var(--bg-hover); }
+.seg-btn.active {
+  color: var(--gold-bright);
+  background: var(--gold-subtle);
+  border: 1px solid var(--gold-line);
+}
+.code-version {
+  white-space: pre;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  line-height: 1.75;
+  overflow-x: auto;
+}
+
+/* ── FEAT BADGE ────────────────────────── */
+.feat-badge {
+  display: inline-block;
+  margin-top: 20px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--gold-dim);
+  background: var(--gold-subtle);
+  border: 1px solid var(--gold-line);
+  border-radius: 4px;
+  padding: 3px 10px;
+  letter-spacing: 0.04em;
+}
+
+/* ── CTA ───────────────────────────────── */
+.cta-section {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 80px 48px 120px;
+  text-align: center;
+}
+
+.cta-box {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-mid);
+  border-radius: 16px;
+  padding: 72px 48px;
+  position: relative;
+  overflow: hidden;
+}
+
+.cta-box::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 20%; right: 20%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--gold-line), transparent);
+}
+
+.cta-box::after {
+  content: '';
+  position: absolute;
+  top: -80px; left: 50%;
+  transform: translateX(-50%);
+  width: 400px;
+  height: 300px;
+  background: radial-gradient(ellipse at center, rgba(212,139,28,0.06) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.cta-title {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: clamp(32px, 4vw, 52px);
+  font-weight: 400;
+  line-height: 1.1;
+  color: var(--text-primary);
+  margin-bottom: 18px;
+  position: relative;
+  z-index: 1;
+}
+.cta-title em { font-style: italic; color: var(--gold-bright); }
+
+.cta-desc {
+  font-size: 16px;
+  color: var(--text-sec);
+  font-weight: 300;
+  margin-bottom: 36px;
+  position: relative;
+  z-index: 1;
+}
+
+.cta-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  position: relative;
+  z-index: 1;
+}
+
+/* ── FOOTER ────────────────────────────── */
+footer {
+  border-top: 1px solid var(--border);
+  background: var(--bg-surface);
+  padding: 56px 48px 40px;
+}
+
+.footer-inner {
+  max-width: 1100px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr;
+  gap: 48px;
+  padding-bottom: 48px;
+  border-bottom: 1px solid var(--border);
+}
+
+.footer-brand p {
+  font-size: 13.5px;
+  color: var(--text-dim);
+  margin-top: 14px;
+  line-height: 1.65;
+  font-weight: 300;
+  max-width: 260px;
+}
+
+.footer-col-title {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 16px;
+  font-weight: 500;
+}
+
+.footer-col a {
+  display: block;
+  font-size: 13.5px;
+  color: var(--text-sec);
+  margin-bottom: 10px;
+  transition: color 0.12s;
+  font-weight: 300;
+}
+.footer-col a:hover { color: var(--text-primary); }
+
+.footer-bottom {
+  max-width: 1100px;
+  margin: 28px auto 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.footer-copy {
+  font-size: 12.5px;
+  color: var(--text-dim);
+  font-weight: 300;
+}
+
+.footer-links { display: flex; gap: 20px; }
+.footer-links a {
+  font-size: 12.5px;
+  color: var(--text-dim);
+  transition: color 0.12s;
+}
+.footer-links a:hover { color: var(--text-sec); }
+
+/* ── REVEAL ANIMATIONS ─────────────────── */
+.reveal {
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity 0.55s ease, transform 0.55s ease;
+}
+.reveal.visible {
+  opacity: 1;
+  transform: none;
+}
+
+/* ── RESPONSIVE ────────────────────────── */
+@media (max-width: 768px) {
+  nav { padding: 0 20px; }
+  .nav-links { display: none; }
+
+  .hero { padding: 100px 24px 60px; }
+
+  .tour-index { padding: 0 24px 60px; }
+  .tour-index-grid { grid-template-columns: repeat(2, 1fr); }
+
+  .split-section {
+    padding: 60px 24px;
+    grid-template-columns: 1fr;
+    gap: 40px;
+  }
+  .split-section.reverse { direction: ltr; }
+  .split-section.reverse > * { direction: ltr; }
+
+  .cta-section { padding: 48px 24px 80px; }
+  .cta-box { padding: 48px 28px; }
+
+  footer { padding: 40px 24px 32px; }
+  .footer-inner { grid-template-columns: 1fr 1fr; gap: 32px; }
+  .footer-brand { grid-column: 1 / -1; }
+  .footer-brand p { max-width: none; }
+}
+
+@media (max-width: 480px) {
+  nav { padding: 0 16px; }
+  .nav-right .btn-ghost { display: none; }
+
+  .hero { padding: 90px 16px 48px; }
+  .hero-actions { flex-direction: column; align-items: stretch; }
+  .btn-hero { justify-content: center; }
+
+  .tour-index-grid { grid-template-columns: 1fr 1fr; }
+  .tour-index { padding: 0 16px 48px; }
+
+  .cta-box { padding: 40px 20px; }
+  footer { padding: 36px 16px 28px; }
+  .footer-inner { grid-template-columns: 1fr; }
+  .footer-bottom { flex-direction: column; gap: 12px; align-items: flex-start; }
+}
+</style>
+</head>
+<body>
+
+<!-- ── NAV ────────────────────────────── -->
+<nav>
+  <a class="nav-logo" href="/">
+    <div class="nav-mark">T</div>
+    <span class="nav-name">Turmeric</span>
+  </a>
+  <div class="nav-links">
+    <a href="/tour" class="active">Tour</a>
+    <a href="/try">Try It</a>
+    <a href="/docs/html/guides/">Guides</a>
+    <a href="/docs/html/api/">API Docs</a>
+    <a href="/docs/spice/">Packages</a>
+  </div>
+  <div class="nav-right">
+    <a href="https://github.com/rjungemann/turmeric" class="btn-ghost">GitHub</a>
+    <a href="/try" class="btn-gold">Try it →</a>
+  </div>
+</nav>
+
+<!-- ── HERO ───────────────────────────── -->
+<div class="hero">
+  <div class="hero-grid"></div>
+  <div class="hero-glow"></div>
+  <div class="hero-inner">
+    <div class="hero-eyebrow">
+      <span class="eyebrow-dot"></span>
+      Language Tour
+    </div>
+    <h1>Ten things about <em>turmeric</em>.</h1>
+    <p class="hero-subtitle">A walkthrough of what makes Turmeric tick.</p>
+    <p class="hero-desc">
+      From algebraic effects to the Spice package manager, each stop in this
+      tour shows you real language features with real code.
+    </p>
+    <div class="hero-actions">
+      <a href="/try" class="btn-hero btn-hero-primary">Try in browser <span style="font-size:16px;">→</span></a>
+      <a href="/" class="btn-hero btn-hero-secondary">← Back to home</a>
+    </div>
+  </div>
+</div>
+
+<!-- ── TOUR INDEX ─────────────────────── -->
+<div class="tour-index reveal">
+  <div class="tour-index-grid">
+    <a href="#effects" class="tour-index-card">
+      <span class="tour-stop-num">01</span>
+      <span class="tour-card-label">Algebraic Effects</span>
+      <span class="tour-card-icon">✦</span>
+    </a>
+    <a href="#typeclasses" class="tour-index-card">
+      <span class="tour-stop-num">02</span>
+      <span class="tour-card-label">Typeclasses</span>
+      <span class="tour-card-icon">🎯</span>
+    </a>
+    <a href="#adts" class="tour-index-card">
+      <span class="tour-stop-num">03</span>
+      <span class="tour-card-label">ADTs &amp; Pattern Matching</span>
+      <span class="tour-card-icon">◇</span>
+    </a>
+    <a href="#continuations" class="tour-index-card">
+      <span class="tour-stop-num">04</span>
+      <span class="tour-card-label">Delimited Continuations</span>
+      <span class="tour-card-icon">∿</span>
+    </a>
+    <a href="#macros" class="tour-index-card">
+      <span class="tour-stop-num">05</span>
+      <span class="tour-card-label">Macro System</span>
+      <span class="tour-card-icon">⊕</span>
+    </a>
+    <a href="#rc" class="tour-index-card">
+      <span class="tour-stop-num">06</span>
+      <span class="tour-card-label">Reference Counting</span>
+      <span class="tour-card-icon">◈</span>
+    </a>
+    <a href="#hof" class="tour-index-card">
+      <span class="tour-stop-num">07</span>
+      <span class="tour-card-label">Higher-Order Functions</span>
+      <span class="tour-card-icon">λ</span>
+    </a>
+    <a href="#neoteric" class="tour-index-card">
+      <span class="tour-stop-num">08</span>
+      <span class="tour-card-label">Neoteric Syntax</span>
+      <span class="tour-card-icon">≋</span>
+    </a>
+    <a href="#contracts" class="tour-index-card">
+      <span class="tour-stop-num">09</span>
+      <span class="tour-card-label">Runtime Contracts</span>
+      <span class="tour-card-icon">⊛</span>
+    </a>
+    <a href="#spice" class="tour-index-card">
+      <span class="tour-stop-num">10</span>
+      <span class="tour-card-label">Spice Package Manager</span>
+      <span class="tour-card-icon">✶</span>
+    </a>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ── 01 ALGEBRAIC EFFECTS ──────────── -->
+<div class="split-section reveal" id="effects">
+  <div>
+    <p class="section-label">01 — Algebraic Effects</p>
+    <h2 class="section-title">Side effects,<br><em>tamed.</em></h2>
+    <p class="section-desc">Declare what your functions can do, not how they do it. Effects are first-class operations that any caller can intercept and handle, without touching your core logic.</p>
+    <p class="section-desc" style="margin-top:16px;">Swap between production, test, and mock handlers at the call site. The type system ensures you never forget to handle an effect.</p>
+    <span class="feat-badge">defeffect · perform · handle · resume</span>
+  </div>
+  <div class="code-card">
+    <div class="code-card-bar">
+      <div class="win-dot wd-r"></div>
+      <div class="win-dot wd-y"></div>
+      <div class="win-dot wd-g"></div>
+      <span class="code-card-filename">effects.tur</span>
+    </div>
+    <div class="code-card-body"><span class="cmt">;; Declare effects as first-class operations</span>
+<span class="pnc">(</span><span class="kw">defeffect</span> <span class="tp">Ask</span> <span class="pnc">[]</span> <span class="tp">:int</span><span class="pnc">)</span>
+<span class="pnc">(</span><span class="kw">defeffect</span> <span class="tp">Log</span> <span class="pnc">[</span>msg <span class="tp">:str</span><span class="pnc">]</span> <span class="tp">:void</span><span class="pnc">)</span>
+
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">compute</span> <span class="pnc">[]</span> <span class="tp">:int</span>
+  <span class="pnc">(</span>perform <span class="pnc">(</span><span class="tp">Log</span> <span class="str">"computing..."</span><span class="pnc">))</span>
+  <span class="pnc">(</span><span class="op">*</span> <span class="pnc">(</span>perform <span class="pnc">(</span><span class="tp">Ask</span><span class="pnc">))</span> <span class="num">2</span><span class="pnc">))</span>
+
+<span class="cmt">;; Production: logs to stdout, asks for real value</span>
+<span class="pnc">(</span>handle <span class="pnc">(</span><span class="fn">compute</span><span class="pnc">)</span>
+  <span class="pnc">(</span><span class="tp">Ask</span> <span class="pnc">[]</span> k<span class="pnc">)</span>       <span class="pnc">(</span>resume k <span class="num">21</span><span class="pnc">)</span>
+  <span class="pnc">(</span><span class="tp">Log</span> <span class="pnc">[</span>msg<span class="pnc">]</span> k<span class="pnc">)</span>   <span class="pnc">(</span><span class="kw">do</span> <span class="pnc">(</span>println msg<span class="pnc">)</span> <span class="pnc">(</span>resume k<span class="pnc">)))</span>
+<span class="cmt">;; prints: computing...   returns: 42</span>
+
+<span class="cmt">;; Test: suppress logs, supply fixed value</span>
+<span class="pnc">(</span>handle <span class="pnc">(</span><span class="fn">compute</span><span class="pnc">)</span>
+  <span class="pnc">(</span><span class="tp">Ask</span> <span class="pnc">[]</span> k<span class="pnc">)</span>       <span class="pnc">(</span>resume k <span class="num">0</span><span class="pnc">)</span>
+  <span class="pnc">(</span><span class="tp">Log</span> <span class="pnc">[</span>_<span class="pnc">]</span> k<span class="pnc">)</span>     <span class="pnc">(</span>resume k<span class="pnc">))</span>
+<span class="cmt">;; (silent)              returns: 0</span></div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ── 02 TYPECLASSES ─────────────────── -->
+<div class="split-section reverse reveal" id="typeclasses">
+  <div>
+    <p class="section-label">02 — Typeclasses</p>
+    <h2 class="section-title">Polymorphism<br>that <em>scales.</em></h2>
+    <p class="section-desc">Define a typeclass once, implement it for any type, and let the compiler verify that every call site has a valid instance. Zero virtual tables, zero runtime cost.</p>
+    <p class="section-desc" style="margin-top:16px;">Typeclass constraints keep your functions general without sacrificing precision. The <code>^Show</code> syntax reads "must implement Show."</p>
+    <span class="feat-badge">defclass · definstance · ^Constraint</span>
+  </div>
+  <div class="code-card" style="font-size:12.5px;">
+    <div class="code-card-bar">
+      <div class="win-dot wd-r"></div>
+      <div class="win-dot wd-y"></div>
+      <div class="win-dot wd-g"></div>
+      <span class="code-card-filename">typeclasses.tur</span>
+    </div>
+    <div class="code-card-body" style="font-size:12px;padding:20px 22px;"><span class="pnc">(</span><span class="kw">defclass</span> <span class="fn">Show</span> <span class="pnc">[</span>a<span class="pnc">]</span>
+  <span class="pnc">(</span><span class="fn">show</span> <span class="pnc">[</span>x<span class="pnc">]</span> <span class="tp">:str</span><span class="pnc">))</span>
+
+<span class="pnc">(</span><span class="kw">defdata</span> <span class="tp">Color</span> <span class="pnc">(</span><span class="tp">Red</span><span class="pnc">)</span> <span class="pnc">(</span><span class="tp">Green</span><span class="pnc">)</span> <span class="pnc">(</span><span class="tp">Blue</span><span class="pnc">))</span>
+
+<span class="pnc">(</span><span class="kw">definstance</span> <span class="fn">Show</span> <span class="pnc">[</span><span class="tp">Color</span><span class="pnc">]</span>
+  <span class="pnc">(</span><span class="fn">show</span> <span class="pnc">[</span>c<span class="pnc">]</span>
+    <span class="pnc">(</span><span class="kw">match</span> c
+      <span class="pnc">(</span><span class="tp">Red</span><span class="pnc">)</span>   <span class="str">"red"</span>
+      <span class="pnc">(</span><span class="tp">Green</span><span class="pnc">)</span> <span class="str">"green"</span>
+      <span class="pnc">(</span><span class="tp">Blue</span><span class="pnc">)</span>  <span class="str">"blue"</span><span class="pnc">)))</span>
+
+<span class="cmt">;; ^Show means: x must have a Show instance</span>
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">display</span> <span class="pnc">[</span><span class="tp">^Show</span> a x<span class="pnc">]</span> <span class="tp">:void</span>
+  <span class="pnc">(</span>println <span class="pnc">(</span><span class="fn">show</span> x<span class="pnc">)))</span>
+
+<span class="pnc">(</span><span class="fn">display</span> <span class="pnc">(</span><span class="tp">Red</span><span class="pnc">))</span>    <span class="cmt">;; => "red"</span>
+<span class="pnc">(</span><span class="fn">display</span> <span class="pnc">(</span><span class="tp">Blue</span><span class="pnc">))</span>   <span class="cmt">;; => "blue"</span></div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ── 03 ADTs & PATTERN MATCHING ─────── -->
+<div class="split-section reveal" id="adts">
+  <div>
+    <p class="section-label">03 — ADTs &amp; Pattern Matching</p>
+    <h2 class="section-title">Data that<br><em>speaks.</em></h2>
+    <p class="section-desc">Algebraic data types let you model your domain precisely. <code>defdata</code> defines a sum type; <code>match</code> deconstructs it, exhaustively, with compiler-checked completeness.</p>
+    <p class="section-desc" style="margin-top:16px;">No null pointers, no missing branches. Every case is forced to the surface where you can handle it.</p>
+    <span class="feat-badge">defdata · defgadt · match</span>
+  </div>
+  <div class="code-card">
+    <div class="code-card-bar">
+      <div class="win-dot wd-r"></div>
+      <div class="win-dot wd-y"></div>
+      <div class="win-dot wd-g"></div>
+      <span class="code-card-filename">expr.tur</span>
+    </div>
+    <div class="code-card-body"><span class="cmt">;; A small expression language</span>
+<span class="pnc">(</span><span class="kw">defdata</span> <span class="tp">Expr</span>
+  <span class="pnc">(</span><span class="tp">Lit</span>  <span class="tp">:int</span><span class="pnc">)</span>
+  <span class="pnc">(</span><span class="tp">Add</span>  <span class="tp">Expr</span> <span class="tp">Expr</span><span class="pnc">)</span>
+  <span class="pnc">(</span><span class="tp">Mul</span>  <span class="tp">Expr</span> <span class="tp">Expr</span><span class="pnc">)</span>
+  <span class="pnc">(</span><span class="tp">Neg</span>  <span class="tp">Expr</span><span class="pnc">))</span>
+
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">eval</span> <span class="pnc">[</span>e<span class="pnc">]</span> <span class="tp">:int</span>
+  <span class="pnc">(</span><span class="kw">match</span> e
+    <span class="pnc">(</span><span class="tp">Lit</span> n<span class="pnc">)</span>    n
+    <span class="pnc">(</span><span class="tp">Add</span> l r<span class="pnc">)</span>  <span class="pnc">(</span><span class="op">+</span> <span class="pnc">(</span><span class="fn">eval</span> l<span class="pnc">)</span> <span class="pnc">(</span><span class="fn">eval</span> r<span class="pnc">))</span>
+    <span class="pnc">(</span><span class="tp">Mul</span> l r<span class="pnc">)</span>  <span class="pnc">(</span><span class="op">*</span> <span class="pnc">(</span><span class="fn">eval</span> l<span class="pnc">)</span> <span class="pnc">(</span><span class="fn">eval</span> r<span class="pnc">))</span>
+    <span class="pnc">(</span><span class="tp">Neg</span> x<span class="pnc">)</span>    <span class="pnc">(</span><span class="op">-</span> <span class="num">0</span> <span class="pnc">(</span><span class="fn">eval</span> x<span class="pnc">))))</span>
+
+<span class="cmt">;; (2 + 3) * -4  =>  -20</span>
+<span class="pnc">(</span>println
+  <span class="pnc">(</span><span class="fn">eval</span> <span class="pnc">(</span><span class="tp">Mul</span> <span class="pnc">(</span><span class="tp">Add</span> <span class="pnc">(</span><span class="tp">Lit</span> <span class="num">2</span><span class="pnc">)</span> <span class="pnc">(</span><span class="tp">Lit</span> <span class="num">3</span><span class="pnc">))</span>
+             <span class="pnc">(</span><span class="tp">Neg</span> <span class="pnc">(</span><span class="tp">Lit</span> <span class="num">4</span><span class="pnc">)))))</span>
+<span class="cmt">;; => -20</span></div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ── 04 DELIMITED CONTINUATIONS ─────── -->
+<div class="split-section reverse reveal" id="continuations">
+  <div>
+    <p class="section-label">04 — Delimited Continuations</p>
+    <h2 class="section-title">Control that<br><em>bends.</em></h2>
+    <p class="section-desc">Delimited continuations let you capture, store, and resume a slice of the call stack as an ordinary value. Coroutines, generators, and backtracking are just library code.</p>
+    <p class="section-desc" style="margin-top:16px;"><code>reset</code> delimits a region; <code>shift</code> captures the continuation up to that boundary and lets you reify it as a function you call at will.</p>
+    <span class="feat-badge">reset · shift · delimited</span>
+  </div>
+  <div class="code-card">
+    <div class="code-card-bar">
+      <div class="win-dot wd-r"></div>
+      <div class="win-dot wd-y"></div>
+      <div class="win-dot wd-g"></div>
+      <span class="code-card-filename">gen.tur</span>
+    </div>
+    <div class="code-card-body"><span class="cmt">;; Build a list lazily with shift/reset</span>
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">yield</span> <span class="pnc">[</span>v<span class="pnc">]</span> <span class="tp">:any</span>
+  <span class="pnc">(</span>shift k <span class="pnc">(</span>cons v <span class="pnc">(</span>k<span class="pnc">))))</span>
+
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">collect</span> <span class="pnc">[</span>thunk<span class="pnc">]</span> <span class="tp">:list</span>
+  <span class="pnc">(</span>reset <span class="pnc">(</span><span class="kw">do</span> <span class="pnc">(</span>thunk<span class="pnc">)</span> nil<span class="pnc">)))</span>
+
+<span class="cmt">;; Generator that yields three values</span>
+<span class="pnc">(</span>println
+  <span class="pnc">(</span><span class="fn">collect</span>
+    <span class="pnc">(</span><span class="kw">fn</span> <span class="pnc">[]</span>
+      <span class="pnc">(</span><span class="fn">yield</span> <span class="num">10</span><span class="pnc">)</span>
+      <span class="pnc">(</span><span class="fn">yield</span> <span class="num">20</span><span class="pnc">)</span>
+      <span class="pnc">(</span><span class="fn">yield</span> <span class="num">30</span><span class="pnc">))))</span>
+<span class="cmt">;; => (10 20 30)</span>
+
+<span class="cmt">;; Same primitives power backtracking,</span>
+<span class="cmt">;; async/await, and cooperative scheduling.</span></div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ── 05 MACRO SYSTEM ────────────────── -->
+<div class="split-section reveal" id="macros">
+  <div>
+    <p class="section-label">05 — Macro System</p>
+    <h2 class="section-title">Syntax that<br><em>grows.</em></h2>
+    <p class="section-desc">Turmeric's macro system runs at compile time and operates directly on the syntax tree. Define new control flow, DSLs, or syntactic sugar without any runtime overhead.</p>
+    <p class="section-desc" style="margin-top:16px;">Quasiquote (<code>`</code>) and unquote (<code>~</code>) make template-style code construction natural and readable. The result is indistinguishable from hand-written code.</p>
+    <span class="feat-badge">defmacro · quasiquote · unquote · splice</span>
+  </div>
+  <div class="code-card">
+    <div class="code-card-bar">
+      <div class="win-dot wd-r"></div>
+      <div class="win-dot wd-y"></div>
+      <div class="win-dot wd-g"></div>
+      <span class="code-card-filename">macros.tur</span>
+    </div>
+    <div class="code-card-body"><span class="cmt">;; `unless` -- inverse of when</span>
+<span class="pnc">(</span><span class="kw">defmacro</span> <span class="fn">unless</span> <span class="pnc">[</span>test <span class="op">&amp;</span> body<span class="pnc">]</span>
+  <span class="str">`</span><span class="pnc">(</span><span class="kw">when</span> <span class="pnc">(</span>not <span class="str">~</span>test<span class="pnc">)</span> <span class="str">~@</span>body<span class="pnc">))</span>
+
+<span class="cmt">;; multi-branch conditional -- `cond`</span>
+<span class="pnc">(</span><span class="kw">defmacro</span> <span class="fn">cond</span> <span class="pnc">[</span><span class="op">&amp;</span> clauses<span class="pnc">]</span>
+  <span class="pnc">(</span><span class="kw">if</span> <span class="pnc">(</span>nil? clauses<span class="pnc">)</span> nil
+    <span class="str">`</span><span class="pnc">(</span><span class="kw">if</span> <span class="str">~</span><span class="pnc">(</span>first clauses<span class="pnc">)</span>
+         <span class="str">~</span><span class="pnc">(</span>second clauses<span class="pnc">)</span>
+         <span class="pnc">(</span><span class="fn">cond</span> <span class="str">~@</span><span class="pnc">(</span>rest <span class="pnc">(</span>rest clauses<span class="pnc">)))))</span>
+
+<span class="cmt">;; Usage: clean multi-branch dispatch</span>
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">sign</span> <span class="pnc">[</span>n <span class="tp">:int</span><span class="pnc">]</span> <span class="tp">:str</span>
+  <span class="pnc">(</span><span class="fn">cond</span>
+    <span class="pnc">(</span><span class="op">&lt;</span> n <span class="num">0</span><span class="pnc">)</span>  <span class="str">"negative"</span>
+    <span class="pnc">(</span><span class="op">=</span> n <span class="num">0</span><span class="pnc">)</span>  <span class="str">"zero"</span>
+    <span class="pnc">(</span><span class="op">&gt;</span> n <span class="num">0</span><span class="pnc">)</span>  <span class="str">"positive"</span><span class="pnc">))</span></div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ── 06 REFERENCE COUNTING ──────────── -->
+<div class="split-section reverse reveal" id="rc">
+  <div>
+    <p class="section-label">06 — Reference Counting</p>
+    <h2 class="section-title">Memory without<br><em>compromise.</em></h2>
+    <p class="section-desc">Turmeric manages heap values through explicit reference counting with compiler-assisted elision. You get deterministic cleanup -- no GC pauses, no dangling pointers, no runtime surprises.</p>
+    <p class="section-desc" style="margin-top:16px;"><code>rc/clone</code> increments the count; <code>rc/drop</code> decrements it. When the count hits zero, the value is freed immediately -- right there, at that line.</p>
+    <span class="feat-badge">rc/of · rc/clone · rc/drop · rc/strong-count</span>
+  </div>
+  <div class="code-card">
+    <div class="code-card-bar">
+      <div class="win-dot wd-r"></div>
+      <div class="win-dot wd-y"></div>
+      <div class="win-dot wd-g"></div>
+      <span class="code-card-filename">memory.tur</span>
+    </div>
+    <div class="code-card-body"><span class="cmt">;; Heap-allocate a value with rc/of</span>
+<span class="pnc">(</span><span class="kw">let</span> <span class="pnc">[</span>data <span class="pnc">(</span>rc/of <span class="num">42</span><span class="pnc">)]</span>
+  <span class="pnc">(</span>println <span class="pnc">(</span>rc/strong-count data<span class="pnc">))</span>  <span class="cmt">;; => 1</span>
+
+  <span class="cmt">;; Clone increments the reference count</span>
+  <span class="pnc">(</span><span class="kw">let</span> <span class="pnc">[</span>alias <span class="pnc">(</span>rc/clone data<span class="pnc">)]</span>
+    <span class="pnc">(</span>println <span class="pnc">(</span>rc/strong-count data<span class="pnc">))</span>  <span class="cmt">;; => 2</span>
+    <span class="pnc">(</span>println <span class="pnc">(</span><span class="op">=</span> <span class="op">@</span>data <span class="op">@</span>alias<span class="pnc">))</span>         <span class="cmt">;; => true</span>
+    <span class="pnc">(</span>rc/drop alias<span class="pnc">))</span>                   <span class="cmt">;; count -> 1</span>
+
+  <span class="pnc">(</span>println <span class="pnc">(</span>rc/strong-count data<span class="pnc">))</span>  <span class="cmt">;; => 1</span>
+  <span class="pnc">(</span>rc/drop data<span class="pnc">))</span>                    <span class="cmt">;; freed here, no GC</span></div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ── 07 HIGHER-ORDER FUNCTIONS ─────── -->
+<div class="split-section reveal" id="hof">
+  <div>
+    <p class="section-label">07 — Higher-Order Functions</p>
+    <h2 class="section-title">Functions as<br><em>values.</em></h2>
+    <p class="section-desc">Functions are first-class in Turmeric -- pass them, return them, store them, compose them. Closures capture their environment lexically, with full type inference.</p>
+    <p class="section-desc" style="margin-top:16px;">The standard library's <code>map</code>, <code>filter</code>, and <code>reduce</code> work uniformly over any foldable structure -- not just lists.</p>
+    <span class="feat-badge">fn · closure · map · filter · reduce</span>
+  </div>
+  <div class="code-card">
+    <div class="code-card-bar">
+      <div class="win-dot wd-r"></div>
+      <div class="win-dot wd-y"></div>
+      <div class="win-dot wd-g"></div>
+      <span class="code-card-filename">closures.tur</span>
+    </div>
+    <div class="code-card-body"><span class="cmt">;; Closures capture their lexical environment</span>
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">make-adder</span> <span class="pnc">[</span>n <span class="tp">:int</span><span class="pnc">]</span> <span class="tp">:(fn [:int] :int)</span>
+  <span class="pnc">(</span><span class="kw">fn</span> <span class="pnc">[</span>x <span class="tp">:int</span><span class="pnc">]</span> <span class="pnc">(</span><span class="op">+</span> n x<span class="pnc">)))</span>
+
+<span class="pnc">(</span><span class="kw">let</span> <span class="pnc">[</span>add5  <span class="pnc">(</span><span class="fn">make-adder</span> <span class="num">5</span><span class="pnc">)</span>
+      add10 <span class="pnc">(</span><span class="fn">make-adder</span> <span class="num">10</span><span class="pnc">)]</span>
+  <span class="pnc">(</span>println <span class="pnc">(</span>add5  <span class="num">3</span><span class="pnc">))</span>   <span class="cmt">;; => 8</span>
+  <span class="pnc">(</span>println <span class="pnc">(</span>add10 <span class="num">7</span><span class="pnc">)))</span>  <span class="cmt">;; => 17</span>
+
+<span class="cmt">;; Pipeline transformations with map + filter</span>
+<span class="pnc">(</span><span class="kw">let</span> <span class="pnc">[</span>nums <span class="pnc">[</span><span class="num">1</span> <span class="num">2</span> <span class="num">3</span> <span class="num">4</span> <span class="num">5</span><span class="pnc">]]</span>
+  <span class="pnc">(</span>println
+    <span class="pnc">(</span>map <span class="pnc">(</span><span class="kw">fn</span> <span class="pnc">[</span>x<span class="pnc">]</span> <span class="pnc">(</span><span class="op">*</span> x x<span class="pnc">))</span>
+         <span class="pnc">(</span>filter <span class="pnc">(</span><span class="kw">fn</span> <span class="pnc">[</span>x<span class="pnc">]</span> <span class="pnc">(</span><span class="op">=</span> <span class="pnc">(</span><span class="op">%</span> x <span class="num">2</span><span class="pnc">)</span> <span class="num">0</span><span class="pnc">))</span>
+                 nums<span class="pnc">))))</span>
+<span class="cmt">;; => (4 16)</span></div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ── 08 NEOTERIC SYNTAX ─────────────── -->
+<div class="split-section reverse reveal" id="neoteric">
+  <div>
+    <p class="section-label">08 — Neoteric Syntax</p>
+    <h2 class="section-title">Two syntaxes,<br>one <em>language.</em></h2>
+    <p class="section-desc">Not a fan of nested parentheses? Switch to Neoteric mode with a single <code>#lang</code> declaration. Function calls use <code>f(args)</code> notation while keeping all of Turmeric's semantics intact.</p>
+    <p class="section-desc" style="margin-top:16px;">Both syntaxes compile to the same AST. Mix and match across files in the same project -- or share libraries between Turmeric and Neoteric code freely.</p>
+    <span class="feat-badge">#lang turmeric/neoteric · f(args)</span>
+  </div>
+  <div class="code-card">
+    <div class="code-card-bar">
+      <div class="win-dot wd-r"></div>
+      <div class="win-dot wd-y"></div>
+      <div class="win-dot wd-g"></div>
+      <span class="code-card-filename" id="neoteric-filename" data-turmeric="classic.tur" data-sweet-exp="neoteric.tur">classic.tur</span>
+      <div class="code-syntax-toggle">
+        <button class="seg-btn active" data-syntax="turmeric">turmeric</button>
+        <button class="seg-btn" data-syntax="sweet-exp">neoteric</button>
+      </div>
+    </div>
+    <div class="code-card-body" style="padding:20px 22px;font-size:12px;"><div class="code-version turmeric-version"><span class="cmt">;; Standard Lisp-style syntax</span>
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">factorial</span> <span class="pnc">[</span>n <span class="tp">:int</span><span class="pnc">]</span> <span class="tp">:int</span>
+  <span class="pnc">(</span><span class="kw">if</span> <span class="pnc">(</span><span class="op">&lt;=</span> n <span class="num">1</span><span class="pnc">)</span>
+    <span class="num">1</span>
+    <span class="pnc">(</span><span class="op">*</span> n <span class="pnc">(</span><span class="fn">factorial</span> <span class="pnc">(</span><span class="op">-</span> n <span class="num">1</span><span class="pnc">)))))</span>
+
+<span class="pnc">(</span>println <span class="pnc">(</span><span class="fn">factorial</span> <span class="num">10</span><span class="pnc">))</span>  <span class="cmt">;; => 3628800</span>
+
+<span class="pnc">(</span><span class="kw">let</span> <span class="pnc">[</span>xs <span class="pnc">[</span><span class="num">1</span> <span class="num">2</span> <span class="num">3</span> <span class="num">4</span> <span class="num">5</span><span class="pnc">]]</span>
+  <span class="pnc">(</span>println
+    <span class="pnc">(</span>filter <span class="pnc">(</span><span class="kw">fn</span> <span class="pnc">[</span>x<span class="pnc">]</span> <span class="pnc">(</span><span class="op">&gt;</span> x <span class="num">2</span><span class="pnc">))</span> xs<span class="pnc">)))</span>
+<span class="cmt">;; => (3 4 5)</span></div><div class="code-version sweet-exp-version" style="display:none;"><span class="cmt">#lang turmeric/neoteric</span>
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">factorial</span> <span class="pnc">[</span>n <span class="tp">:int</span><span class="pnc">]</span> <span class="tp">:int</span>
+  <span class="pnc">(</span><span class="kw">if</span> <span class="op">&lt;=</span><span class="pnc">(</span>n <span class="num">1</span><span class="pnc">)</span>
+    <span class="num">1</span>
+    <span class="op">*</span><span class="pnc">(</span>n <span class="fn">factorial</span><span class="pnc">(</span><span class="op">-</span><span class="pnc">(</span>n <span class="num">1</span><span class="pnc">)))))</span>
+
+println<span class="pnc">(</span><span class="fn">factorial</span><span class="pnc">(</span><span class="num">10</span><span class="pnc">))</span>  <span class="cmt">;; => 3628800</span>
+
+<span class="pnc">(</span><span class="kw">let</span> <span class="pnc">[</span>xs <span class="pnc">[</span><span class="num">1</span> <span class="num">2</span> <span class="num">3</span> <span class="num">4</span> <span class="num">5</span><span class="pnc">]]</span>
+  println<span class="pnc">(</span>filter<span class="pnc">(</span><span class="pnc">(</span><span class="kw">fn</span> <span class="pnc">[</span>x<span class="pnc">]</span> <span class="op">&gt;</span><span class="pnc">(</span>x <span class="num">2</span><span class="pnc">))</span> xs<span class="pnc">)))</span>
+<span class="cmt">;; => (3 4 5)</span></div></div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ── 09 RUNTIME CONTRACTS ──────────── -->
+<div class="split-section reveal" id="contracts">
+  <div>
+    <p class="section-label">09 — Runtime Contracts</p>
+    <h2 class="section-title">Correctness<br>by <em>contract.</em></h2>
+    <p class="section-desc">When the type system can't catch every invariant, contracts step in. <code>require!</code> asserts preconditions at the call site; <code>ensure!</code> checks postconditions on return. Both produce clear, structured errors in development and can be stripped in release builds.</p>
+    <p class="section-desc" style="margin-top:16px;">Contracts are opt-in and composable -- layer them wherever correctness matters most without changing function signatures.</p>
+    <span class="feat-badge">require! · ensure! · assert!</span>
+  </div>
+  <div class="code-card">
+    <div class="code-card-bar">
+      <div class="win-dot wd-r"></div>
+      <div class="win-dot wd-y"></div>
+      <div class="win-dot wd-g"></div>
+      <span class="code-card-filename">contracts.tur</span>
+    </div>
+    <div class="code-card-body"><span class="cmt">;; require! asserts preconditions</span>
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">safe-sqrt</span> <span class="pnc">[</span>x <span class="tp">:float</span><span class="pnc">]</span> <span class="tp">:float</span>
+  <span class="pnc">(</span>require! <span class="pnc">(</span><span class="op">&gt;=</span> x <span class="num">0.0</span><span class="pnc">)</span>
+    <span class="str">"safe-sqrt: x must be non-negative"</span><span class="pnc">)</span>
+  <span class="pnc">(</span>sqrt x<span class="pnc">))</span>
+
+<span class="cmt">;; ensure! checks postconditions on return</span>
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">sorted-insert</span> <span class="pnc">[</span>vec v<span class="pnc">]</span> <span class="tp">:vec</span>
+  <span class="pnc">(</span>require! <span class="pnc">(</span>sorted? vec<span class="pnc">)</span>
+    <span class="str">"vec must be sorted before insert"</span><span class="pnc">)</span>
+  <span class="pnc">(</span><span class="kw">let</span> <span class="pnc">[</span>result <span class="pnc">(</span>insert-sorted vec v<span class="pnc">)]</span>
+    <span class="pnc">(</span>ensure! <span class="pnc">(</span>sorted? result<span class="pnc">)</span>
+      <span class="str">"postcondition: result must be sorted"</span><span class="pnc">)</span>
+    result<span class="pnc">))</span>
+
+<span class="cmt">;; assert! for general invariant checks</span>
+<span class="pnc">(</span>assert! <span class="pnc">(</span><span class="op">=</span> <span class="pnc">(</span><span class="fn">safe-sqrt</span> <span class="num">4.0</span><span class="pnc">)</span> <span class="num">2.0</span><span class="pnc">)</span>
+  <span class="str">"sqrt(4) should be 2"</span><span class="pnc">)</span></div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ── 10 SPICE PACKAGE MANAGER ───────── -->
+<div class="split-section reverse reveal" id="spice">
+  <div>
+    <p class="section-label">10 — Spice Package Manager</p>
+    <h2 class="section-title">Dependencies,<br><em>simplified.</em></h2>
+    <p class="section-desc">One <code>build.tur</code> file describes your package and every dependency -- called <em>spices</em>. Git URLs and version refs are all you need. No separate binary, no lock file ceremony.</p>
+    <p class="section-desc" style="margin-top:16px;">Need a C library? Add it under <code>:cmake-deps</code>. Turmeric fetches, builds, and links it automatically via CPM -- no manual CMake required.</p>
+    <span class="feat-badge">defpackage · :spices · :cmake-deps</span>
+  </div>
+  <div class="code-card" style="font-size:12.5px;">
+    <div class="code-card-bar">
+      <div class="win-dot wd-r"></div>
+      <div class="win-dot wd-y"></div>
+      <div class="win-dot wd-g"></div>
+      <span class="code-card-filename">build.tur</span>
+    </div>
+    <div class="code-card-body" style="font-size:12px;padding:20px 22px;"><span class="pnc">(</span><span class="kw">defpackage</span> <span class="fn">my-app</span>
+  <span class="tp">:name</span>    <span class="str">"my-app"</span>
+  <span class="tp">:version</span> <span class="str">"0.1.0"</span>
+  <span class="tp">:entry</span>   <span class="str">"src/main.tur"</span>
+
+  <span class="cmt">;; Turmeric dependencies -- called spices</span>
+  <span class="tp">:spices</span> <span class="pnc">{</span>
+    <span class="str">"json"</span>  <span class="pnc">{</span><span class="tp">:url</span> <span class="str">"https://github.com/alice/tur-json"</span>
+             <span class="tp">:ref</span> <span class="str">"v1.2.0"</span><span class="pnc">}</span>
+    <span class="str">"http"</span>  <span class="pnc">{</span><span class="tp">:url</span> <span class="str">"https://github.com/bob/tur-http"</span>
+             <span class="tp">:ref</span> <span class="str">"v3.0.0"</span><span class="pnc">}</span>
+  <span class="pnc">}</span>
+
+  <span class="cmt">;; C/CMake dependencies (CPM-compatible)</span>
+  <span class="tp">:cmake-deps</span> <span class="pnc">{</span>
+    <span class="str">"sqlite3"</span> <span class="pnc">{</span><span class="tp">:url</span> <span class="str">"https://github.com/sqlite/sqlite"</span>
+               <span class="tp">:ref</span> <span class="str">"version-3.45.0"</span><span class="pnc">}</span>
+    <span class="str">"raylib"</span>  <span class="pnc">{</span><span class="tp">:url</span> <span class="str">"https://github.com/raysan5/raylib"</span>
+               <span class="tp">:ref</span> <span class="str">"5.0"</span><span class="pnc">}</span>
+  <span class="pnc">}</span><span class="pnc">)</span></div>
+  </div>
+</div>
+
+<!-- ── CTA ───────────────────────────── -->
+<div class="cta-section reveal">
+  <div class="cta-box">
+    <h2 class="cta-title">Ready to try<br><em>Turmeric?</em></h2>
+    <p class="cta-desc">Open the playground and try any of these features right in your browser.</p>
+    <div class="cta-actions">
+      <a href="/try" class="btn-hero btn-hero-primary">Open Playground →</a>
+      <a href="/docs/html/api/" class="btn-hero btn-hero-secondary">Read the Docs</a>
+    </div>
+  </div>
+</div>
+
+<!-- ── FOOTER ─────────────────────────── -->
+<footer>
+  <div class="footer-inner">
+    <div class="footer-brand footer-col">
+      <a href="/" class="nav-logo" style="display:inline-flex;gap:9px;align-items:center;">
+        <div class="nav-mark">T</div>
+        <span class="nav-name">Turmeric</span>
+      </a>
+      <p>A lightning-fast functional language with typeclasses, effects, and a Lisp-flavored syntax. Open source under the MIT license.</p>
+    </div>
+    <div class="footer-col">
+      <div class="footer-col-title">Language</div>
+      <a href="/tour">Tour</a>
+    </div>
+    <div class="footer-col">
+      <div class="footer-col-title">Ecosystem</div>
+      <a href="/docs/html/guides/">Guides</a>
+      <a href="/docs/html/api/">Standard Library</a>
+    </div>
+    <div class="footer-col">
+      <div class="footer-col-title">Community</div>
+      <a href="https://github.com/rjungemann/turmeric">GitHub</a>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    <span class="footer-copy">© 2025 The Turmeric Project and <a href="https://phasor.space" style="color:inherit;">Roger Jungemann</a>. MIT License.</span>
+    <div class="footer-links"></div>
+  </div>
+</footer>
+
+<script>
+// Reveal on scroll
+const obs = new IntersectionObserver(entries => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      e.target.classList.add('visible');
+      obs.unobserve(e.target);
+    }
+  });
+}, { threshold: 0.08, rootMargin: '0px 0px -40px 0px' });
+
+document.querySelectorAll('.reveal').forEach((el, i) => {
+  el.style.transitionDelay = (i === 0 ? 0.1 : 0) + 's';
+  obs.observe(el);
+});
+
+// Syntax toggle (neoteric section)
+document.querySelectorAll('.code-syntax-toggle').forEach(toggle => {
+  toggle.addEventListener('click', (e) => {
+    if (!e.target.classList.contains('seg-btn')) return;
+    const syntax = e.target.dataset.syntax;
+    const card = toggle.closest('.code-card');
+    toggle.querySelectorAll('.seg-btn').forEach(btn => {
+      btn.classList.toggle('active', btn === e.target);
+    });
+    const filenameEl = card.querySelector('.code-card-filename');
+    if (filenameEl) {
+      const key = syntax.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+      if (filenameEl.dataset[key]) filenameEl.textContent = filenameEl.dataset[key];
+    }
+    card.querySelectorAll('.code-version').forEach(v => {
+      v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+    });
+  });
+});
+</script>
+</body>
+</html>

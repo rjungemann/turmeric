@@ -369,3 +369,42 @@
 ;;; Typeclass instance for list -- Eq: structural equality via list-eq?.
 (definstance Eq [list]
   (eq? [x y] (list-eq? x y (fn [a b] (= a b)))))
+
+;;; Show [Cons] -- show a non-empty list as "[v1, v2, ...]".
+;;;
+;;; Parameters:
+;;;   x -- a Cons struct value (first cell of the list)
+;;;
+;;; Returns:
+;;;   A heap-allocated :cstr formatted as "[v1, v2, ...]".
+;;;
+;;; Example:
+;;;   (show (make-struct Cons 1 0))  ; => "[1]"
+;;;
+;;; Since: SI3
+(definstance Show [Cons]
+  (show [x] :cstr
+    ```c
+    // TODO: use scratch arena once arena infrastructure lands.
+    typedef struct { int64_t value; int64_t next; } Cons_t;
+    // First pass: compute total buffer size needed.
+    char tmp[32];
+    int n = snprintf(tmp, sizeof(tmp), "%lld", (long long)x.value);
+    size_t total = 1 + (n > 0 ? (size_t)n : 0) + 1; // "[" + v1 + "]"
+    Cons_t *cur = (Cons_t *)(intptr_t)x.next;
+    while (cur) {
+        n = snprintf(tmp, sizeof(tmp), "%lld", (long long)cur->value);
+        total += 2 + (n > 0 ? (size_t)n : 0); // ", " + v
+        cur = (Cons_t *)(intptr_t)cur->next;
+    }
+    // Second pass: write the string.
+    char *buf = (char *)malloc(total + 1);
+    int off = snprintf(buf, total + 1, "[%lld", (long long)x.value);
+    cur = (Cons_t *)(intptr_t)x.next;
+    while (cur) {
+        off += snprintf(buf + off, (int)(total + 1) - off, ", %lld", (long long)cur->value);
+        cur = (Cons_t *)(intptr_t)cur->next;
+    }
+    snprintf(buf + off, (int)(total + 1) - off, "]");
+    return (const char *)(intptr_t)buf;
+    ```))

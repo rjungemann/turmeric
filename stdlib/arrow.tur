@@ -117,17 +117,23 @@
       (fn [x] (__arrow_call1 gv (__arrow_call1 fv x)))))
   (first [f]
     (let [fv f]
-      (fn [pair]
+      (fn [p]
         ```c
-        /* pair is a fat closure / struct pointer; we use nth convention */
-        /* For now return a placeholder — proper Pair support TBD */
-        return 0;
+        struct { int64_t first; int64_t second; } *pair = (void*)(intptr_t)p;
+        struct { int64_t first; int64_t second; } *result = malloc(sizeof(*result));
+        result->first  = ((int64_t(*)(int64_t))(intptr_t)fv)(pair->first);
+        result->second = pair->second;
+        return (int64_t)(intptr_t)result;
         ```)))
   (second [f]
     (let [fv f]
-      (fn [pair]
+      (fn [p]
         ```c
-        return 0;
+        struct { int64_t first; int64_t second; } *pair = (void*)(intptr_t)p;
+        struct { int64_t first; int64_t second; } *result = malloc(sizeof(*result));
+        result->first  = pair->first;
+        result->second = ((int64_t(*)(int64_t))(intptr_t)fv)(pair->second);
+        return (int64_t)(intptr_t)result;
         ```))))
 
 ;; =============================================================================
@@ -312,3 +318,52 @@
   (let [fv f gv g]
     (fn [x]
       (Pair (__arrow_call1 fv x) (__arrow_call1 gv x)))))
+
+;;; <<< -- compose two function arrows in reverse order.
+;;;
+;;; Parameters:
+;;;   g -- second arrow (b -> c), applied second
+;;;   f -- first arrow (a -> b), applied first
+;;;
+;;; Returns:
+;;;   A function (a -> c) equivalent to (>>> f g). Useful when reading
+;;;   composition right-to-left: (<<< mul2 add1) = "mul2 after add1".
+;;;
+;;; Example:
+;;;   ((<<< (fn [x] (* x 2)) (fn [x] (+ x 1))) 3)  ; => 8
+;;;
+;;; Since: Phase B2
+(defn <<< [g f]
+  (let [fv f gv g]
+    (fn [x] (__arrow_call1 gv (__arrow_call1 fv x)))))
+
+;;; arrow-const -- arrow that ignores its input and always returns v.
+;;;
+;;; Parameters:
+;;;   v -- the constant value to return
+;;;
+;;; Returns:
+;;;   An arrow (any -> v).
+;;;
+;;; Example:
+;;;   ((arrow-const 42) 999)  ; => 42
+;;;
+;;; Since: Phase B2
+(defn arrow-const [v]
+  (let [cv v]
+    (fn [_] cv)))
+
+;;; arrow-dup -- arrow that duplicates its input into a Pair.
+;;;
+;;; Parameters:
+;;;   x -- the value to duplicate
+;;;
+;;; Returns:
+;;;   A Pair of x with itself: Pair(x, x).
+;;;
+;;; Example:
+;;;   (first (arrow-dup 7))  ; => 7
+;;;
+;;; Since: Phase B2
+(defn arrow-dup [x] :int
+  (Pair x x))

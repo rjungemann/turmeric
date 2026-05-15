@@ -156,11 +156,11 @@ rebuild: clean configure build
 # Generate HTML API docs from stdlib ;;; docstrings.
 # Also emits stdlib/docstrings.tur for the runtime (doc name) lookup.
 docs: guides
-    python3 tools/gendocs.py stdlib/ --out docs/api/ --emit-tur stdlib/docstrings.tur
+    python3 tools/gendocs.py stdlib/ --out docs/html/api/ --emit-tur stdlib/docstrings.tur
 
-# Render markdown guides to HTML pages (served at /docs/guides/).
+# Render markdown guides to HTML pages (served at /docs/html/guides/).
 guides:
-    python3 tools/genguides.py docs/guides/
+    python3 tools/genguides.py docs/guides/ --out docs/html/guides/
 
 # ---------------------------------------------------------------------------
 # WebAssembly & Web REPL targets
@@ -185,8 +185,9 @@ web: wasm web-deps
 
 # Deploy to GitHub Pages
 deploy-web: web
-    cd web/dist && git init && git add . && git commit -m "Deploy to GitHub Pages"
-    git push -f git@github.com:turmeric-lang/turmeric.git main:gh-pages
+    # cd web/dist && git init && git add . && git commit -m "Deploy to GitHub Pages"
+    # git push -f git@github.com:turmeric-lang/turmeric.git main:gh-pages
+    cd web && npm run deploy
 
 # Run web dev server
 web-dev: web-deps

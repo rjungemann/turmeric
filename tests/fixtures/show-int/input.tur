@@ -1,0 +1,17 @@
+;; SI1: Show [int] returns the decimal representation.
+(defclass Show [a]
+  (show [x] :cstr))
+
+(definstance Show [int]
+  (show [x] :cstr
+    ```c
+    char *buf = (char *)malloc(32);
+    snprintf(buf, 32, "%lld", (long long)x);
+    return (const char *)(intptr_t)buf;
+    ```))
+
+(defn main [] :int
+  (println (.show 42))
+  (println (.show -7))
+  (println (.show 0))
+  0)
