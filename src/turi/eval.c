@@ -1292,14 +1292,39 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 TuriValue turi_eval(TuriEnv *env, const char *src) {
     if (!env || !src) return turi_error("turi_eval: null argument");
 
-    /* 1. Build combined source: all prior definitions + new source. */
+    /* Phase S2: Detect #lang directive at the top of the new source.
+     * This lets the web REPL and turi_eval_file pick up the reader mode from an
+     * inline #lang line without requiring the caller to pre-process it.
+     * detect_lang advances the pointer only when a #lang line is actually found;
+     * when the pointer is unchanged no directive was present. */
+    const char *src_body  = src;
+    size_t      body_len  = strlen(src);
+    {
+        const char *rest     = src;
+        size_t      rest_len = body_len;
+        ReaderType  detected = detect_lang(src, body_len, &rest, &rest_len);
+        if (rest != src) {
+            /* A #lang directive was found — strip it from the source body. */
+            if (detected != env->reader_type) {
+                /* Reader type is changing: discard accumulated source so that
+                 * prior input isn't re-parsed under an incompatible reader. */
+                env->src_acc.len    = 0;
+                env->prior_toplevel = 0;
+                env->reader_type    = detected;
+            }
+            src_body = rest;
+            body_len = rest_len;
+        }
+    }
+
+    /* 1. Build combined source: all prior definitions + new source (sans #lang). */
     Buf combined;
     buf_init(&combined);
     if (env->src_acc.len > 0) {
         buf_write(&combined, env->src_acc.data, env->src_acc.len);
         buf_putc(&combined, '\n');
     }
-    buf_puts(&combined, src);
+    buf_write(&combined, src_body, body_len);
 
     /* 2. Create a new per-call arena and link it into env. */
     ArenaNode *node = (ArenaNode *)malloc(sizeof(ArenaNode));
@@ -1374,9 +1399,9 @@ TuriValue turi_eval(TuriEnv *env, const char *src) {
 
     /* 8. Update accumulated state only on success. */
     if (!turi_is_error(last)) {
-        /* Append new source to accumulator */
+        /* Append new source (without any leading #lang line) to accumulator */
         if (env->src_acc.len > 0) buf_putc(&env->src_acc, '\n');
-        buf_puts(&env->src_acc, src);
+        buf_write(&env->src_acc, src_body, body_len);
         env->prior_toplevel = total;
     }
 
@@ -1403,6 +1428,16 @@ TuriValue turi_eval_file(TuriEnv *env, const char *path) {
     fclose(f);
     if (n != (size_t)size) { free(buf); return turi_error("read error"); }
     buf[size] = '\0';
+
+    /* Phase S2: Apply reader type from file extension before evaluating.
+     * An inline #lang directive inside the file takes precedence (turi_eval
+     * will detect and apply it, overriding the extension-derived type). */
+    ReaderType ext_type = reader_type_from_extension(path);
+    if (ext_type != READER_TURMERIC && ext_type != env->reader_type) {
+        env->reader_type    = ext_type;
+        env->src_acc.len    = 0;
+        env->prior_toplevel = 0;
+    }
 
     TuriValue v = turi_eval(env, buf);
     free(buf);

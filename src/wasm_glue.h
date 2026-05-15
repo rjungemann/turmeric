@@ -104,6 +104,32 @@ char *turi_wasm_format(const char *input);
 void turi_wasm_free_string(char *s);
 
 /* ---------------------------------------------------------------------------
+ * Reader language mode
+ * ---------------------------------------------------------------------------
+ */
+
+/* Set the reader language mode for subsequent evaluations.
+ *
+ * Arguments:
+ *   name - one of: "turmeric", "turmeric/curly-infix",
+ *                  "turmeric/neoteric", "sweet-exp"
+ *
+ * Returns:
+ *   0 on success, 1 if name is not a recognised language.
+ *
+ * When the mode changes the accumulated session source is cleared (same
+ * behaviour as typing '#lang ...' in the interactive REPL).
+ * This function is equivalent to including a '#lang <name>' line at the top
+ * of a submitted code block and is useful for programmatic mode-switching
+ * (e.g. a language selector in the web REPL UI).
+ */
+int turi_wasm_set_lang(const char *name);
+
+/* Return the current reader language name as a static string.
+ * The returned pointer must NOT be freed. */
+const char *turi_wasm_get_lang(void);
+
+/* ---------------------------------------------------------------------------
  * Doc lookup (D6: autodoc bridge)
  * ---------------------------------------------------------------------------
  */
