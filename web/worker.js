@@ -35,14 +35,6 @@ export default {
 
     // Rewrite try.turmeric-lang.com/* -> turmeric-lang.com/try/*
     // so both URLs serve the same page without a redirect round-trip.
-    if (hostname === 'try.turmeric-lang.com') {
-      const rewritten = new Request(
-        `${url.protocol}//turmeric-lang.com/try${pathname === '/' ? '' : pathname}${url.search}`,
-        request,
-      );
-      return env.ASSETS.fetch(rewritten);
-    }
-
     return env.ASSETS.fetch(request);
   },
 };
