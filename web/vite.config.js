@@ -16,6 +16,7 @@ export default defineConfig({
           input: {
             main: resolve(__dirname, 'index.html'),
             try: resolve(__dirname, 'try/index.html'),
+            tour: resolve(__dirname, 'tour/index.html'),
           },
         },
       },

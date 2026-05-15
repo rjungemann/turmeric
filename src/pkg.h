@@ -124,7 +124,7 @@ void pkg_manifest_free(PkgManifest *m);
 /* Parse a tur.lock file.  Returns true on success. */
 bool pkg_lock_read(const char *path, PkgLockFile *out);
 
-/* Serialise a PkgLockFile to tur.lock (YAML).  Returns true on success. */
+/* Serialise a PkgLockFile to tur.lock (Turmeric S-expression).  Returns true on success. */
 bool pkg_lock_write(const char *path, const PkgLockFile *lock);
 
 void pkg_lock_free(PkgLockFile *lock);
@@ -183,6 +183,7 @@ bool pkg_gen_cmake_deps(const char *project_dir,
 /* CLI entry points (called from main.c)                               */
 /* ------------------------------------------------------------------ */
 
+int cmd_pkg_new(int argc, char **argv);       /* tur new  */
 int cmd_pkg_init(int argc, char **argv);      /* tur init */
 int cmd_pkg_add(int argc, char **argv);       /* tur add  */
 int cmd_pkg_add_cmake(int argc, char **argv); /* tur add-cmake */
