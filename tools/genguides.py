@@ -123,7 +123,12 @@ GUIDE_CSS = '''\
     .guide-content th { background:var(--bg-card); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold); }
     .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
     .guide-content a { color:var(--gold); }
-    .guide-content strong { color:var(--cream); }'''
+    .guide-content strong { color:var(--cream); }
+    .hl-comment { color:#48433D; font-style:italic; }
+    .hl-string  { color:#D9735A; }
+    .hl-number  { color:#A8C98A; }
+    .hl-keyword { color:#EFA030; font-weight:bold; }
+    .hl-type    { color:#7AC4B8; }'''
 
 
 def parse_readme(readme_path: Path) -> list[dict]:
