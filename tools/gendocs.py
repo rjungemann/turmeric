@@ -398,6 +398,27 @@ a:hover { text-decoration: underline; }
 .site-header nav a { color: var(--faint); }
 .site-header nav a:hover { color: var(--cream); }
 
+/* Search */
+.search-wrap { margin-left: auto; }
+.search-input {
+  background: var(--bg-dark);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--cream);
+  padding: 0.3rem 0.65rem;
+  font-size: 0.875rem;
+  width: 220px;
+  transition: border-color 0.15s, width 0.2s;
+}
+.search-input:focus { outline: none; border-color: var(--gold); width: 280px; }
+.search-input::placeholder { color: var(--faint); }
+.search-no-results {
+  display: none;
+  padding: 2rem;
+  color: var(--faint);
+  font-style: italic;
+}
+
 /* Layout */
 .page-layout {
   display: grid;
@@ -637,6 +658,8 @@ details.internal-section summary {
   .hamburger { display: block; }
   .site-header { padding: 0.75rem 1rem; }
   .site-header nav { display: none; }
+  .search-input { width: 140px; }
+  .search-input:focus { width: 180px; }
   .page-layout { grid-template-columns: 1fr; }
   .sidebar {
     display: none;
@@ -671,6 +694,67 @@ _SIDEBAR_TOGGLE_JS = """\
     btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
     overlay && overlay.addEventListener('click', close);
   });
+
+  // Search filtering
+  document.addEventListener('DOMContentLoaded', function(){
+    var input = document.querySelector('.search-input');
+    if (!input) return;
+
+    function filter() {
+      var q = input.value.trim().toLowerCase();
+
+      // Module pages: filter .def-card elements
+      var defCards = document.querySelectorAll('.def-card');
+      var visibleDefs = 0;
+      defCards.forEach(function(card) {
+        var match = !q || card.textContent.toLowerCase().includes(q);
+        card.style.display = match ? '' : 'none';
+        if (match) visibleDefs++;
+      });
+
+      // Sync sidebar links with card visibility
+      document.querySelectorAll('.sidebar a[href^="#"]').forEach(function(link) {
+        var anchor = link.getAttribute('href').slice(1);
+        var target = document.getElementById(anchor);
+        link.parentElement.style.display =
+          (!target || target.style.display !== 'none') ? '' : 'none';
+      });
+
+      // Index pages: filter .index-card elements
+      var indexCards = document.querySelectorAll('.index-card');
+      var visibleIndex = 0;
+      indexCards.forEach(function(card) {
+        var match = !q || card.textContent.toLowerCase().includes(q);
+        card.style.display = match ? '' : 'none';
+        if (match) visibleIndex++;
+      });
+
+      // Show/hide "no results" message
+      var noResults = document.querySelector('.search-no-results');
+      if (noResults) {
+        var total = defCards.length + indexCards.length;
+        var visible = visibleDefs + visibleIndex;
+        noResults.style.display = (q && total > 0 && visible === 0) ? 'block' : 'none';
+      }
+    }
+
+    input.addEventListener('input', filter);
+
+    // Clear on Escape
+    input.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') { input.value = ''; filter(); input.blur(); }
+    });
+
+    // Focus search with '/' shortcut (when not typing elsewhere)
+    document.addEventListener('keydown', function(e) {
+      if (e.key === '/' && document.activeElement !== input &&
+          document.activeElement.tagName !== 'INPUT' &&
+          document.activeElement.tagName !== 'TEXTAREA') {
+        e.preventDefault();
+        input.focus();
+      }
+    });
+  });
 </script>"""
 
 
@@ -693,7 +777,11 @@ def _html_header(title, css_path='style.css'):
     <a href="index.html">API Docs</a>
     <a href="../autodoc-plan.md">Plan</a>
   </nav>
+  <div class="search-wrap">
+    <input class="search-input" type="search" placeholder="Filter... (/)" aria-label="Filter definitions">
+  </div>
 </header>
+<p class="search-no-results">No matching definitions.</p>
 {_SIDEBAR_TOGGLE_JS}
 """
 

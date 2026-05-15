@@ -1,0 +1,91 @@
+;; Fix -- the type-level fixed-point combinator.
+;;
+;; Fix f is the least fixed point of the functor f:
+;;   Fix f ~= f (Fix f)
+;;
+;; Values are heap-allocated and represented as int64_t pointers.
+;;
+;; Phase RF2
+
+;;; Fix -- the fixed-point type of a functor.
+;;;
+;;; Fix f is the least fixed point of the functor f, i.e. Fix f ~= f (Fix f).
+;;; The single constructor Roll wraps one layer of f.
+(defdata Fix [^f]
+  (Roll :int))
+
+;;; roll -- wrap one layer of f into a Fix value.
+;;;
+;;; Parameters:
+;;;   layer -- a value of type (f (Fix f))
+;;;
+;;; Returns:
+;;;   A Fix value wrapping layer.
+;;;
+;;; Example:
+;;;   (roll my-layer)  ; => (Roll my-layer)
+;;;
+;;; Since: Phase RF2
+(defn roll [layer :int] :int
+  (Roll layer))
+
+;;; unroll -- unwrap one layer of Fix to expose the inner functor value.
+;;;
+;;; Parameters:
+;;;   fix -- a Fix value
+;;;
+;;; Returns:
+;;;   The inner f (Fix f) value.
+;;;
+;;; Example:
+;;;   (unroll (roll x))  ; => x
+;;;
+;;; Since: Phase RF2
+(defn unroll [fix :int] :int
+  (match fix
+    (Roll inner) inner))
+
+;;; cata -- catamorphism: fold a Fix value using an F-algebra.
+;;;
+;;; A catamorphism (or "fold") collapses a Fix-encoded recursive structure by
+;;; applying an algebra function alg at each layer.
+;;;
+;;; Parameters:
+;;;   alg -- a fat-closure (function from (f a) to a) stored as :int
+;;;   fix -- a Fix value to fold
+;;;
+;;; Returns:
+;;;   The result of applying alg to the unwrapped layer.
+;;;
+;;; Example:
+;;;   (cata my-alg leaf-fix)
+;;;
+;;; Since: Phase RF2
+(defn cata [alg :int fix :int] :int
+  ```c
+  int64_t *fat = (int64_t*)(intptr_t)alg;
+  int64_t thunk = fat[0];
+  int64_t layer = unroll(fix);
+  return ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, layer);
+  ```)
+
+;;; ana -- anamorphism: unfold a seed value into a Fix value using a co-algebra.
+;;;
+;;; Parameters:
+;;;   coalg -- a fat-closure (function from a to (f a)) stored as :int
+;;;   seed  -- the initial seed value
+;;;
+;;; Returns:
+;;;   A Fix value built by applying coalg to seed.
+;;;
+;;; Example:
+;;;   (ana my-coalg seed-value)
+;;;
+;;; Since: Phase RF2
+(defn ana [coalg :int seed :int] :int
+  ```c
+  int64_t *fat = (int64_t*)(intptr_t)coalg;
+  int64_t thunk = fat[0];
+  int64_t layer = ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, seed);
+  return roll(layer);
+  ```)

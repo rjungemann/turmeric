@@ -24,7 +24,7 @@ export default {
     const url = new URL(request.url);
     const { hostname, pathname } = url;
 
-    if (hostname === 'install.turmeric-lang.com') {
+    if (pathname === '/install') {
       return new Response(INSTALL_SCRIPT, {
         headers: {
           'Content-Type': 'text/plain; charset=utf-8',

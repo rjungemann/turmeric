@@ -15,7 +15,6 @@
   ],
   "routes": [
     { "pattern": "turmeric-lang.com", "custom_domain": true },
-    { "pattern": "www.turmeric-lang.com", "custom_domain": true },
-    { "pattern": "install.turmeric-lang.com", "custom_domain": true }
+    { "pattern": "www.turmeric-lang.com", "custom_domain": true }
   ]
 }

@@ -363,10 +363,91 @@ Dictionary passing remains the default and is safe for all cases;
 `-O` is intended as a manual hot-path annotation for tight loops where the
 profiler shows typeclass dispatch is a bottleneck.
 
+## Recursive Types
+
+Turmeric supports self-referential and mutually-recursive `defdata`/`defstruct`
+definitions. Because all user-defined type values are stored as opaque `int64_t`
+pointers, recursive field types require no special C-level treatment -- the
+elaborator simply recognises the type name and records it as `TY_INT`.
+
+### Self-referential ADTs
+
+```turmeric
+(defdata IntList
+  (Cons :int :IntList)
+  (Nil))
+
+(defn sum [lst :int] :int
+  (match lst
+    (Cons h t) (+ h (sum t))
+    (Nil)      0))
+```
+
+### Mutually-recursive ADTs
+
+```turmeric
+(defdata Expr
+  (Lit :int)
+  (Add :Expr :Expr))
+
+(defn eval-expr [e :int] :int
+  (match e
+    (Lit n)   n
+    (Add l r) (+ (eval-expr l) (eval-expr r))))
+```
+
+### Fix -- fixed-point of a functor
+
+`stdlib/fix.tur` provides the `Fix` type and the catamorphism/anamorphism pair:
+
+```turmeric
+(load "stdlib/fix.tur")
+
+(defdata NatF [^f]
+  (ZeroF)
+  (SuccF :int))
+
+(defn to-nat [n :int] :int
+  (if (= n 0)
+    (roll (ZeroF))
+    (roll (SuccF (to-nat (- n 1))))))
+```
+
+See `stdlib/fix.tur` for the full API.
+
+### Free monad
+
+`stdlib/free.tur` implements the Free monad, enabling pure DSL interpreters
+without committing to a concrete effect type:
+
+```turmeric
+(load "stdlib/free.tur")
+
+;; Define a small effect algebra
+(defdata CalcOp
+  (CalcAdd :int :int)
+  (CalcMul :int :int))
+
+;; Lift operations into Free
+(defn calc-add [a :int b :int] :int (free-lift (CalcAdd a b)))
+
+;; Interpret with free-run
+(defn run-op [op :int] :int
+  (match op
+    (CalcAdd a b) (+ a b)
+    (CalcMul a b) (* a b)))
+
+(defn main [] :int
+  (let [prog (calc-add 3 4)]
+    (println (free-run (fn [op] (let [_ prog] (run-op op))) prog))
+    0))
+```
+
+See `stdlib/free.tur` for `free-pure`, `free-lift`, `free-bind`, `free-fmap`,
+and `free-run`.
+
 ## Known Limitations
 
 1. **Method dispatch on containers**: Since HKT container values are stored as `int64_t`, type-based dispatch may fall back to the first matching instance. Works reliably when only one typeclass instance is in scope for the given method.
 
 2. **`defkind`**: Currently parsed and ignored. Future versions may use it for documentation generation and kind inference.
-
-3. **Recursive types / Free monad**: Not yet supported. Implementation is planned in [recursive-types-free-monad-plan.md](../recursive-types-free-monad-plan.md) (phases RF0--RF4).

@@ -15,7 +15,7 @@ Turmeric exists to explore the intersection of Lisp expressiveness and systems-l
 **macOS (via Homebrew):**
 
 ```sh
-curl -sSf https://install.turmeric-lang.com | sh
+curl -sSf https://turmeric-lang.com/install | sh
 ```
 
 This installs the `tur` compiler via the Homebrew formula in this repo.

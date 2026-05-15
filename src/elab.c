@@ -814,6 +814,12 @@ typedef struct Elab {
     int              serial_reset_depth;
     /* Phase P3: HAMT lowering - track if HAMT functions are used */
     bool             needs_hamt;
+    /* Phase RF0: forward-declared type symbols for mutual recursion support.
+     * Names added here during the type pre-pass are allowed to be re-elaborated
+     * by defstruct/defdata without triggering "already defined" errors. */
+    const Symbol   **forward_type_syms;
+    uint32_t         n_forward_type_syms;
+    uint32_t         cap_forward_type_syms;
 } Elab;
 
 /* Phase 6: Macro definition */
@@ -1354,6 +1360,10 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* Phase PKG-1: extra module search dirs (-I) */
     e->module_include_dirs = NULL;
     e->n_module_include_dirs = 0;
+    /* Phase RF0: forward type declaration tracking */
+    e->forward_type_syms = NULL;
+    e->n_forward_type_syms = 0;
+    e->cap_forward_type_syms = 0;
 }
 
 /* Phase 13: Lifetime annotation helpers (deferred - infrastructure in place) */
@@ -9141,6 +9151,42 @@ static bool typekind_is_copy_for_struct(TypeKind k) {
     }
 }
 
+/* Phase RF0: Look up a binding for a user-defined struct or ADT type by name.
+ * Unlike scope_lookup (which returns the most recent binding), this searches all
+ * bindings for one with kind TY_STRUCT or TY_ADT.  Needed because a constructor
+ * with the same name as its type (e.g. (defdata Expr (Expr :ExprNode))) shadows
+ * the type binding with a TY_FN constructor binding. */
+static Binding *scope_lookup_type_def(Scope *s, const Symbol *name) {
+    for (Scope *cur = s; cur; cur = cur->parent) {
+        for (uint32_t i = cur->n; i > 0; i--) {
+            Binding *b = cur->bindings[i - 1];
+            if (b->name == name &&
+                (b->type.kind == TY_STRUCT || b->type.kind == TY_ADT)) {
+                return b;
+            }
+        }
+    }
+    return NULL;
+}
+
+/* Phase RF0: Check if a symbol was registered as a forward-declared type stub */
+static bool elab_is_forward_type(Elab *e, const Symbol *sym) {
+    for (uint32_t i = 0; i < e->n_forward_type_syms; i++) {
+        if (e->forward_type_syms[i] == sym) return true;
+    }
+    return false;
+}
+
+/* Phase RF0: Add a symbol to the forward-declared types list */
+static void elab_add_forward_type(Elab *e, const Symbol *sym) {
+    if (e->n_forward_type_syms >= e->cap_forward_type_syms) {
+        e->cap_forward_type_syms = e->cap_forward_type_syms ? e->cap_forward_type_syms * 2 : 8;
+        e->forward_type_syms = (const Symbol **)realloc(e->forward_type_syms,
+            e->cap_forward_type_syms * sizeof(Symbol *));
+    }
+    e->forward_type_syms[e->n_forward_type_syms++] = sym;
+}
+
 /* Helper: add StructDef to the elab registry */
 static void elab_register_struct_def(Elab *e, StructDef *def) {
     if (e->n_struct_defs >= e->cap_struct_defs) {
@@ -9194,12 +9240,19 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
         return NULL;
     }
     
-    if (scope_lookup(e->scope, name)) {
-        diag_emit(DIAG_ERROR, name_form->span,
-                  "defstruct: '%s' is already defined", name->name);
-        return NULL;
+    /* Phase RF0: allow re-elaboration of forward-declared stub types */
+    bool is_forward_stub = false;
+    Binding *existing_b = scope_lookup(e->scope, name);
+    if (existing_b) {
+        if (elab_is_forward_type(e, name)) {
+            is_forward_stub = true;
+        } else {
+            diag_emit(DIAG_ERROR, name_form->span,
+                      "defstruct: '%s' is already defined", name->name);
+            return NULL;
+        }
     }
-    
+
     /* Validate field list */
     uint32_t n_fields = fields_form->as.list.len;
     if (n_fields == 0) {
@@ -9240,15 +9293,36 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
         }
     }
 
-    /* Allocate StructDef and field array */
-    StructDef *def = (StructDef *)arena_alloc(e->arena, sizeof(StructDef));
-    def->name = name->name;
-    def->n_fields = actual_n_fields;
-    def->fields = (StructField *)arena_alloc(e->arena, actual_n_fields * sizeof(StructField));
-    def->is_copy = is_copy;
-    def->needs_drop_glue = false;
-    /* Phase HKT-P4: record the file that defined this struct. */
-    def->origin_file_id = call->span.file_id;
+    /* Phase RF0: Allocate (or reuse the forward stub) StructDef and register
+     * in global scope BEFORE parsing fields, so that self-referential and
+     * mutually-recursive field type annotations resolve correctly. */
+    StructDef *def;
+    Binding *b;
+    if (is_forward_stub) {
+        /* Reuse the pre-registered stub and fill it in */
+        b = existing_b;
+        def = b->type.as.struct_.def;
+        def->n_fields = actual_n_fields;
+        def->fields = (StructField *)arena_alloc(e->arena, actual_n_fields * sizeof(StructField));
+        def->is_copy = is_copy;
+        def->needs_drop_glue = false;
+        def->origin_file_id = call->span.file_id;
+        /* Already in global scope and elab registry from the pre-pass */
+    } else {
+        def = (StructDef *)arena_alloc(e->arena, sizeof(StructDef));
+        def->name = name->name;
+        def->n_fields = actual_n_fields;
+        def->fields = (StructField *)arena_alloc(e->arena, actual_n_fields * sizeof(StructField));
+        def->is_copy = is_copy;
+        def->needs_drop_glue = false;
+        /* Phase HKT-P4: record the file that defined this struct. */
+        def->origin_file_id = call->span.file_id;
+
+        Type struct_type = type_struct(def);
+        b = binding_new(e, name, struct_type, false, true, name_form->span);
+        scope_add(&e->global, b);
+        elab_register_struct_def(e, def);
+    }
 
     /* Parse fields */
     {
@@ -9263,10 +9337,20 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
             parse_struct_field_type(tname, tlen, &fkind, &finner);
 
             if (fkind == TY_UNKNOWN) {
-                diag_emit(DIAG_ERROR, field_type_form->span,
-                          "defstruct field '%s' has unrecognized type :%s",
-                          field_name_form->as.sym->name, tname);
-                return NULL;
+                /* Phase RF0: fall back to user-defined type lookup.  Any struct or
+                 * ADT is heap-allocated and stored as an opaque int64_t pointer, so
+                 * it is safe to use as a recursive field type without any layout change. */
+                const Symbol *type_sym = symtab_intern(e->st, strslice(tname, tlen));
+                Binding *tb = scope_lookup_type_def(e->scope, type_sym);
+                if (tb && (tb->type.kind == TY_STRUCT || tb->type.kind == TY_ADT)) {
+                    fkind = TY_INT;
+                    finner = TY_UNKNOWN;
+                } else {
+                    diag_emit(DIAG_ERROR, field_type_form->span,
+                              "defstruct field '%s' has unrecognized type :%s",
+                              field_name_form->as.sym->name, tname);
+                    return NULL;
+                }
             }
 
             /* :copy struct validation: all fields must be copy */
@@ -9306,15 +9390,8 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
         }
     }
 
-    /* Register struct in elab registry */
-    elab_register_struct_def(e, def);
-
-    /* Create a global binding for the struct type with proper TY_STRUCT type */
-    Type struct_type = type_struct(def);
-    Binding *b = binding_new(e, name, struct_type, false, true, name_form->span);
-    scope_add(&e->global, b);
-
-    /* Return EX_DEF with struct_def populated */
+    /* Return EX_DEF with struct_def populated.
+     * Registration in global scope and elab registry was done above (RF0). */
     Expr *out = expr_new(e->arena, EX_DEF, TYPE_NIL, call->span);
     out->as.def_.binding = b;
     out->as.def_.init = NULL;
@@ -9368,10 +9445,43 @@ static Expr *elab_defdata(Elab *e, const Form *call) {
         }
     }
 
-    if (scope_lookup(e->scope, name)) {
-        diag_emit(DIAG_ERROR, name_form->span,
-                  "defdata: '%s' is already defined", name->name);
-        return NULL;
+    /* Phase RF1: Check for an optional type-parameter vector [^f a b ...] between
+     * the name (or :copy annotation) and the first constructor.  Type parameters
+     * are stored on the AdtDef and used for documentation / future type-checking;
+     * they do not affect C codegen (all values are int64_t pointers). */
+    const char **type_params = NULL;
+    uint8_t n_type_params = 0;
+    if (ctors_start_idx < call->as.list.len &&
+        call->as.list.items[ctors_start_idx]->tag == F_VEC) {
+        Form *tp_form = call->as.list.items[ctors_start_idx];
+        n_type_params = (uint8_t)tp_form->as.list.len;
+        if (n_type_params > 0) {
+            type_params = (const char **)arena_alloc(e->arena,
+                              n_type_params * sizeof(char *));
+            for (uint8_t pi = 0; pi < n_type_params; pi++) {
+                Form *pf = tp_form->as.list.items[pi];
+                if (pf->tag != F_SYM) {
+                    diag_emit(DIAG_ERROR, pf->span,
+                              "defdata: type parameter must be a symbol, e.g. a, ^f");
+                    return NULL;
+                }
+                type_params[pi] = pf->as.sym->name;
+            }
+        }
+        ctors_start_idx++;
+    }
+
+    /* Phase RF0: allow re-elaboration of forward-declared stub types */
+    bool is_forward_stub_adt = false;
+    Binding *existing_adt_b = scope_lookup(e->scope, name);
+    if (existing_adt_b) {
+        if (elab_is_forward_type(e, name)) {
+            is_forward_stub_adt = true;
+        } else {
+            diag_emit(DIAG_ERROR, name_form->span,
+                      "defdata: '%s' is already defined", name->name);
+            return NULL;
+        }
     }
 
     uint32_t n_ctors = call->as.list.len - ctors_start_idx;
@@ -9381,18 +9491,42 @@ static Expr *elab_defdata(Elab *e, const Form *call) {
         return NULL;
     }
 
-    /* Allocate AdtDef */
-    AdtDef *def = (AdtDef *)arena_alloc(e->arena, sizeof(AdtDef));
-    def->name = name->name;
-    def->n_ctors = n_ctors;
-    def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
-    def->is_copy = is_copy;
-    def->needs_drop_glue = false;
+    /* Phase RF0: Allocate (or reuse forward stub) AdtDef and register BEFORE
+     * parsing constructors so that self-referential and mutually-recursive
+     * constructor field types resolve correctly. */
+    AdtDef *def;
+    Binding *adt_binding;
+    Type adt_type;
+    if (is_forward_stub_adt) {
+        /* Reuse the pre-registered stub and fill it in */
+        adt_binding = existing_adt_b;
+        def = adt_binding->type.as.adt_.def;
+        def->n_ctors = n_ctors;
+        def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
+        def->is_copy = is_copy;
+        def->needs_drop_glue = false;
+        def->is_gadt = false;
+        def->type_params = type_params;
+        def->n_type_params = n_type_params;
+        adt_type = adt_binding->type;
+        /* Already in global scope and elab registry from the pre-pass */
+    } else {
+        def = (AdtDef *)arena_alloc(e->arena, sizeof(AdtDef));
+        def->name = name->name;
+        def->n_ctors = n_ctors;
+        def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
+        def->is_copy = is_copy;
+        def->needs_drop_glue = false;
+        /* Phase RF1: store type parameters */
+        def->is_gadt = false;
+        def->type_params = type_params;
+        def->n_type_params = n_type_params;
 
-    /* Pre-register ADT type so constructors can reference it */
-    Type adt_type = type_adt(def);
-    Binding *adt_binding = binding_new(e, name, adt_type, false, true, name_form->span);
-    scope_add(&e->global, adt_binding);
+        /* Pre-register ADT type so constructors can reference it */
+        adt_type = type_adt(def);
+        adt_binding = binding_new(e, name, adt_type, false, true, name_form->span);
+        scope_add(&e->global, adt_binding);
+    }
 
     /* Parse each constructor */
     for (uint32_t ci = 0; ci < n_ctors; ci++) {
@@ -9440,9 +9574,18 @@ static Expr *elab_defdata(Elab *e, const Form *call) {
             TypeKind fkind, finner;
             parse_struct_field_type(tname, tlen, &fkind, &finner);
             if (fkind == TY_UNKNOWN) {
-                diag_emit(DIAG_ERROR, ft_form->span,
-                          "defdata: field has unrecognized type :%s", tname);
-                return NULL;
+                /* Phase RF0: fall back to user-defined type lookup.
+                 * All struct/ADT values are heap-allocated int64_t pointers. */
+                const Symbol *type_sym = symtab_intern(e->st, strslice(tname, tlen));
+                Binding *tb = scope_lookup_type_def(e->scope, type_sym);
+                if (tb && (tb->type.kind == TY_STRUCT || tb->type.kind == TY_ADT)) {
+                    fkind = TY_INT;
+                    finner = TY_UNKNOWN;
+                } else {
+                    diag_emit(DIAG_ERROR, ft_form->span,
+                              "defdata: field has unrecognized type :%s", tname);
+                    return NULL;
+                }
             }
             ctor->fields[fi].kind = fkind;
             ctor->fields[fi].inner_kind = finner;
@@ -9475,8 +9618,10 @@ static Expr *elab_defdata(Elab *e, const Form *call) {
         }
     }
 
-    /* Register ADT in elab registry */
-    elab_register_adt_def(e, def);
+    /* Register ADT in elab registry (skip if it was a forward stub -- already registered) */
+    if (!is_forward_stub_adt) {
+        elab_register_adt_def(e, def);
+    }
 
     /* Return EX_DEFDATA node */
     Expr *out = expr_new(e->arena, EX_DEFDATA, TYPE_NIL, call->span);
@@ -13680,6 +13825,53 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
 
     Expr **items = (nforms == 0) ? NULL :
         (Expr **)arena_alloc(arena, nforms * sizeof(Expr *));
+
+    /* Phase RF0: Type pre-pass -- pre-register all top-level defstruct and defdata
+     * names as forward stubs BEFORE any elaboration, so that mutually recursive type
+     * definitions can reference each other regardless of declaration order. */
+    for (uint32_t i = 0; i < nforms; i++) {
+        Form *f = forms[i];
+        if (f->tag != F_LIST || f->as.list.len < 2) continue;
+        Form *head = f->as.list.items[0];
+        if (!head || head->tag != F_SYM) continue;
+        bool is_defstruct = (head->as.sym == e.sym_defstruct);
+        bool is_defdata   = (head->as.sym == e.sym_defdata);
+        if (!is_defstruct && !is_defdata) continue;
+        Form *name_f = f->as.list.items[1];
+        if (!name_f || name_f->tag != F_SYM) continue;
+        const Symbol *type_name = name_f->as.sym;
+        /* Skip if already in scope (e.g. stdlib defines a type with this name) */
+        if (scope_lookup(&e.global, type_name)) continue;
+        /* Pre-allocate a stub def and register a forward binding */
+        elab_add_forward_type(&e, type_name);
+        if (is_defstruct) {
+            StructDef *stub = (StructDef *)arena_alloc(arena, sizeof(StructDef));
+            stub->name = type_name->name;
+            stub->n_fields = 0;
+            stub->fields = NULL;
+            stub->is_copy = false;
+            stub->needs_drop_glue = false;
+            stub->origin_file_id = name_f->span.file_id;
+            elab_register_struct_def(&e, stub);
+            Type t = type_struct(stub);
+            Binding *b = binding_new(&e, type_name, t, false, true, name_f->span);
+            scope_add(&e.global, b);
+        } else {
+            AdtDef *stub = (AdtDef *)arena_alloc(arena, sizeof(AdtDef));
+            stub->name = type_name->name;
+            stub->n_ctors = 0;
+            stub->ctors = NULL;
+            stub->is_copy = false;
+            stub->needs_drop_glue = false;
+            stub->is_gadt = false;
+            stub->type_params = NULL;
+            stub->n_type_params = 0;
+            elab_register_adt_def(&e, stub);
+            Type t = type_adt(stub);
+            Binding *b = binding_new(&e, type_name, t, false, true, name_f->span);
+            scope_add(&e.global, b);
+        }
+    }
 
     /* Phase 2: Two-pass elaboration for mutual recursion support.
      * Pass 1: Collect all top-level defn declarations and add them to scope.

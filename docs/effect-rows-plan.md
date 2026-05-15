@@ -7,6 +7,9 @@
 > row-variable substitution). All prerequisite infrastructure is in `src/effect.h`,
 > `src/effect_check.c`, and `src/effect_lower.c`.
 >
+> **Related:** [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md)
+> (§8 Effect Types / Row Polymorphism, §1 Linear Types)
+>
 > **Last updated:** 2026-05-13
 
 ---
@@ -434,6 +437,55 @@ diagnostics, IDE support, stdlib annotation, and the remaining deferred items.
 **Exit criterion:** `try-with` works; `--dump-effects` / `--lint-effects` produce
 useful output; static one-shot check catches double-resume at compile time;
 priority stdlib functions are fully annotated.
+
+---
+
+## Relationship to Advanced Type System Plan
+
+The ER0–ER6 phases are the **near-term enforcement layer** for effect rows. The
+[advanced type system feasibility plan](advanced-type-system-feasibility-plan.md)
+describes a longer-horizon effort (§8 — Effect Types / Row Polymorphism, phases
+ET0–ET4) that extends this work to full effect polymorphism. Key alignment:
+
+| ER Phase | Corresponding ET Phase | Notes |
+|---|---|---|
+| ER1 (`--strict-effects`, `#{}`) | ET0 (effect row syntax in fn types) | ER1 lays the foundation |
+| ER2 (row-variable unification) | ET1 (row checking) + ET2 (effect polymorphism) | ER2 covers simple `#{e}` vars; full `forall [e]` quantification requires HRT1 |
+| ER3 (typeclass method rows) | ET3 (handler typing) | ER3 checks instances; ET3 covers handler composition |
+| ER4 (row subtyping) | ET1 (effect row subtyping) | ET1 will formalise the full subtype lattice |
+| ER6 (static one-shot `resume`) | LT0–LT4 (Linear Types) | Static `k` enforcement is a stepping stone toward first-class linear continuations |
+
+### Prerequisites for Full Effect Polymorphism
+
+ER2 introduces row variables (`#{e}`) with per-call-site unification, but does **not**
+support `forall [e]`-quantified effect polymorphism (e.g., a function that is
+polymorphic over its effect row in the full Koka/Eff sense). That requires:
+
+- **HRT Phase HRT1** (Rank-2 types) from the v2 roadmap — enables quantifying over
+  effect rows in function signatures.
+
+ER2 is intentionally conservative: it covers the common higher-order cases without
+requiring rank-N types, and is forward-compatible with ET2 once HRT lands.
+
+### Feature Flag
+
+The advanced plan reserves **`-Xeffect-types`** as the umbrella flag for the full
+ET0–ET4 feature set (targeting v3). Once stable, this flag subsumes `--strict-effects`
+(ER1) and the row-variable work (ER2). Until then, `--strict-effects` is the operative
+opt-in flag.
+
+### Error Code Allocation
+
+The advanced type system plan reserves **`TUR_E0250`–`TUR_E0299`** for Effect Types
+errors introduced by ET0–ET4. This range is distinct from the codes used by the ER
+phases:
+
+| Error / Range | Assigned in |
+|---|---|
+| `TUR-E0009` (inferred ⊄ declared) | ER0 / Phase 19 |
+| `TUR-W0030`–`TUR-W0032` | ER1–ER2 |
+| `TUR-E0021` (private effect) | ER5 |
+| `TUR_E0250`–`TUR_E0299` | ET0–ET4 (advanced plan, reserved) |
 
 ---
 
