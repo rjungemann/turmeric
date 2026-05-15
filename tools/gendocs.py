@@ -434,6 +434,7 @@ a:hover { text-decoration: underline; }
 /* Content */
 .content {
   padding: 2rem 2.5rem;
+  min-width: 0;
 }
 
 /* Module heading */
@@ -634,6 +635,8 @@ details.internal-section summary {
 /* Responsive */
 @media (max-width: 768px) {
   .hamburger { display: block; }
+  .site-header { padding: 0.75rem 1rem; }
+  .site-header nav { display: none; }
   .page-layout { grid-template-columns: 1fr; }
   .sidebar {
     display: none;
