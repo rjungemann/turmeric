@@ -3895,6 +3895,27 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         /* Phase HRT1: rank-2 polymorphic function wrapper */
         case EX_POLY_WRAP: {
             if (!e->as.poly_wrap_.wrapper_binding) {
+                if (e->as.poly_wrap_.is_closure) {
+                    /* Phase CCL: fat closure — pack into tur_poly_fn_t.
+                     * Fat closure layout: struct { int64_t __fn; <captures...> }
+                     * __fn (the first field, at offset 0) is the thunk pointer.
+                     * Protocol: thunk(void *env, int64_t arg) where env = fat_ptr. */
+                    char *fat = emit_value(ctx, body, e->as.poly_wrap_.inner);
+                    char *tmp = fresh_tmp(ctx);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "void *%s = %s;\n", tmp, fat);
+                    free(fat);
+                    Buf out; buf_init(&out);
+                    buf_printf(&out,
+                        "(tur_poly_fn_t){ %s, "
+                        "(int64_t(*)(void*,int64_t))(intptr_t)((int64_t*)%s)[0] }",
+                        tmp, tmp);
+                    buf_putc(&out, '\0');
+                    char *result = strdup(out.data);
+                    buf_free(&out);
+                    free(tmp);
+                    return result;
+                }
                 /* Phase HRT4: pass-through — inner is already a tur_poly_fn_t, emit directly. */
                 return emit_value(ctx, body, e->as.poly_wrap_.inner);
             }

@@ -194,8 +194,20 @@
   ```)
 
 ;;; Typeclass instance for option -- Functor: fmap over the contained value.
+;;; Phase CCL: fn is tur_poly_fn_t; call via fn.fn(fn.env, arg) so capturing
+;;; closures work transparently.
 (definstance Functor [option]
-  (fmap [container fn] (__functor_option_fmap container fn)))
+  (fmap [container fn]
+    ```c
+    struct { bool is_some; int64_t value; } *c =
+        (struct { bool is_some; int64_t value; } *)(intptr_t)container;
+    if (!c || !c->is_some) return 0;
+    struct { bool is_some; int64_t value; } *r =
+        malloc(sizeof(struct { bool is_some; int64_t value; }));
+    r->is_some = true;
+    r->value = fn.fn(fn.env, c->value);
+    return (int64_t)(intptr_t)r;
+    ```))
 
 ;; Applicative instance for option.
 ;;   pure x = some(x)
@@ -244,8 +256,15 @@
   ```)
 
 ;;; Typeclass instance for option -- Monad: bind (flat-map over the contained value).
+;;; Phase CCL: fn is tur_poly_fn_t; call via fn.fn(fn.env, arg).
 (definstance Monad [option]
-  (bind [ma fn] (__monad_option_bind ma fn)))
+  (bind [ma fn]
+    ```c
+    struct { bool is_some; int64_t value; } *opt =
+        (struct { bool is_some; int64_t value; } *)(intptr_t)ma;
+    if (!opt || !opt->is_some) return 0;
+    return fn.fn(fn.env, opt->value);
+    ```))
 
 ;; Foldable instance for option.
 ;; foldl :: (b -> a -> b) -> b -> option a -> b

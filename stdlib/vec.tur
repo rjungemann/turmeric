@@ -147,8 +147,23 @@
   ```)
 
 ;;; Functor [vec] -- fmap applies a function to every element, returning a new vec.
+;;; Phase CCL: fn is tur_poly_fn_t; call via fn.fn(fn.env, arg).
 (definstance Functor [vec]
-  (fmap [container fn] (__functor_vec_fmap container fn)))
+  (fmap [container fn]
+    ```c
+    struct { int64_t *data; size_t len; size_t cap; } *v =
+        (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)container;
+    if (!v) return 0;
+    struct { int64_t *data; size_t len; size_t cap; } *r =
+        malloc(sizeof(struct { int64_t *data; size_t len; size_t cap; }));
+    r->len  = v->len;
+    r->cap  = v->len;
+    r->data = r->len > 0 ? malloc(sizeof(int64_t) * r->len) : NULL;
+    for (size_t i = 0; i < v->len; i++) {
+        r->data[i] = fn.fn(fn.env, v->data[i]);
+    }
+    return (int64_t)(intptr_t)r;
+    ```))
 
 ;;; __foldable_vec_foldl -- strict left fold over a vec.
 ;; Foldable instance for vec.
@@ -285,8 +300,23 @@
   ```)
 
 ;;; Monad [vec] -- bind maps fn over each element and flattens the results.
+;;; Phase CCL: fn is tur_poly_fn_t; call via fn.fn(fn.env, arg).
 (definstance Monad [vec]
-  (bind [ma fn] (__monad_vec_bind ma fn)))
+  (bind [ma fn]
+    ```c
+    struct { int64_t *data; size_t len; size_t cap; } *v =
+        (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)ma;
+    if (!v) return 0;
+    struct { int64_t *data; size_t len; size_t cap; } *mapped =
+        malloc(sizeof(struct { int64_t *data; size_t len; size_t cap; }));
+    mapped->len = v->len;
+    mapped->cap = v->len;
+    mapped->data = v->len > 0 ? malloc(sizeof(int64_t) * v->len) : NULL;
+    for (size_t i = 0; i < v->len; i++) {
+        mapped->data[i] = fn.fn(fn.env, v->data[i]);
+    }
+    return __monad_vec_concat((int64_t)(intptr_t)mapped);
+    ```))
 
 ;;; __traversable_vec_traverse -- map fn over each element, collecting results into a new vec.
 ;; Traversable instance for vec.

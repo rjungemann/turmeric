@@ -478,6 +478,10 @@ struct Expr {
         struct {
             struct Expr    *inner;           /* the fn/closure being wrapped */
             struct Binding *wrapper_binding; /* the __poly_N wrapper thunk binding */
+            /* Phase CCL: true when inner is a fat closure (void*) rather than a
+             * named function.  The emitter packs it into tur_poly_fn_t at the
+             * call site instead of emitting a (tur_poly_fn_t){ NULL, wrapper }. */
+            bool            is_closure;
         } poly_wrap_;
         struct { struct Expr *inner; } ascribe_; /* (:: expr type) — type erased at codegen */
         /* Phase HRT2: Existential types */

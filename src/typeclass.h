@@ -16,6 +16,12 @@ struct TypeClassMethod {
     const Symbol *name;           /* Method name */
     const Symbol **param_names;   /* Parameter names */
     Type *param_types;           /* Parameter types */
+    /* Phase CCL: per-parameter callable flag.  param_is_fn[j] = true means the
+     * j-th parameter is a single-argument callable and should be represented as
+     * tur_poly_fn_t at call sites so that capturing closures can be passed.
+     * Set by parse_typeclass_method when the defclass uses [param :fn] syntax.
+     * NULL means no parameters are callable (backwards-compatible default). */
+    bool *param_is_fn;
     uint8_t n_params;
     Type return_type;             /* Return type */
 };

@@ -198,8 +198,31 @@
   ```)
 
 ;;; Typeclass instance for list -- Functor: fmap over every element.
+;;; Phase CCL: fn is tur_poly_fn_t; call via fn.fn(fn.env, arg).
 (definstance Functor [list]
-  (fmap [container fn] (__functor_list_fmap container fn)))
+  (fmap [container fn]
+    ```c
+    struct { int64_t value; int64_t next; } *cell =
+        (struct { int64_t value; int64_t next; } *)(intptr_t)container;
+    if (!cell) return 0;
+    struct { int64_t value; int64_t next; } *rev = NULL;
+    while (cell) {
+        struct { int64_t value; int64_t next; } *n = malloc(sizeof(*n));
+        n->value = fn.fn(fn.env, cell->value);
+        n->next = (int64_t)(intptr_t)rev;
+        rev = n;
+        cell = (struct { int64_t value; int64_t next; } *)(intptr_t)cell->next;
+    }
+    struct { int64_t value; int64_t next; } *result = NULL;
+    while (rev) {
+        struct { int64_t value; int64_t next; } *tmp =
+            (struct { int64_t value; int64_t next; } *)(intptr_t)rev->next;
+        rev->next = (int64_t)(intptr_t)result;
+        result = rev;
+        rev = tmp;
+    }
+    return (int64_t)(intptr_t)result;
+    ```))
 
 ;; Foldable instance for list.
 ;; foldl :: (b -> a -> b) -> b -> list a -> b
@@ -331,8 +354,37 @@
   ```)
 
 ;;; Typeclass instance for list -- Monad: bind (concat-map).
+;;; Phase CCL: fn is tur_poly_fn_t; call via fn.fn(fn.env, arg).
 (definstance Monad [list]
-  (bind [ma fn] (__monad_list_bind ma fn)))
+  (bind [ma fn]
+    ```c
+    struct { int64_t value; int64_t next; } *cell =
+        (struct { int64_t value; int64_t next; } *)(intptr_t)ma;
+    if (!cell) return 0;
+    struct { int64_t value; int64_t next; } *rev = NULL;
+    while (cell) {
+        int64_t sub_list = fn.fn(fn.env, cell->value);
+        struct { int64_t value; int64_t next; } *sub =
+            (struct { int64_t value; int64_t next; } *)(intptr_t)sub_list;
+        while (sub) {
+            struct { int64_t value; int64_t next; } *n = malloc(sizeof(*n));
+            n->value = sub->value;
+            n->next = (int64_t)(intptr_t)rev;
+            rev = n;
+            sub = (struct { int64_t value; int64_t next; } *)(intptr_t)sub->next;
+        }
+        cell = (struct { int64_t value; int64_t next; } *)(intptr_t)cell->next;
+    }
+    struct { int64_t value; int64_t next; } *result = NULL;
+    while (rev) {
+        struct { int64_t value; int64_t next; } *tmp =
+            (struct { int64_t value; int64_t next; } *)(intptr_t)rev->next;
+        rev->next = (int64_t)(intptr_t)result;
+        result = rev;
+        rev = tmp;
+    }
+    return (int64_t)(intptr_t)result;
+    ```))
 
 ;; Phase E1: list-eq? -- compare two singly-linked lists element-wise using a comparator fn.
 ;; cmp-fn must be a fn [a :int b :int] :bool

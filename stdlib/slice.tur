@@ -98,8 +98,24 @@
 ;;; Functor [ptr<void>] -- Functor instance for slice<T> via ptr<void> representation.
 ;;;
 ;;; Since: Phase HKT H3
+;;; Phase CCL: fn is tur_poly_fn_t; call via fn.fn(fn.env, arg).
 (definstance Functor [ptr<void>]
-  (fmap [container fn] (__functor_slice_fmap container fn)))
+  (fmap [container fn]
+    ```c
+    struct { int64_t *p; size_t len; } *s =
+        (struct { int64_t *p; size_t len; } *)(intptr_t)container;
+    if (!s) return 0;
+    struct { int64_t *p; size_t len; } *r =
+        malloc(sizeof(struct { int64_t *p; size_t len; }));
+    if (!r) return 0;
+    r->len = s->len;
+    r->p = malloc(sizeof(int64_t) * s->len);
+    if (!r->p) { free(r); return 0; }
+    for (size_t i = 0; i < s->len; i++) {
+        r->p[i] = fn.fn(fn.env, s->p[i]);
+    }
+    return (int64_t)(intptr_t)r;
+    ```))
 
 ;; Foldable for slice - left and right folds
 ;;; __foldable_slice_foldl -- internal left-fold over a slice: accumulate from left using fn(acc, elem).
