@@ -147,7 +147,9 @@ static int run_core_passes(PassContext *ctx) {
                                           ctx->stdlib_prefix,
                                           ctx->module_base_dir,
                                           ctx->separate_compilation,
-                                          &ctx->tc_env);
+                                          &ctx->tc_env,
+                                          ctx->include_dirs,
+                                          ctx->n_include_dirs);
             if (!ctx->prog || diag_had_error()) return 1;
 #ifndef NDEBUG
             /* Phase HKT-P6: verify kind info is preserved after elaboration */
@@ -217,8 +219,10 @@ static int run_core_passes(PassContext *ctx) {
 }
 
 /* Reads a .tur file and emits its C source into `out_c`. Returns 0 on success,
- * nonzero on error (diagnostics already emitted). */
-static int compile_to_c(const char *path, Buf *out_c) {
+ * nonzero on error (diagnostics already emitted).
+ * include_dirs/n_include_dirs: additional module search paths for (import ...). */
+static int compile_to_c(const char *path, Buf *out_c,
+                         const char **include_dirs, int n_include_dirs) {
     char  *src = NULL;
     size_t len = 0;
     if (read_entire_file(path, &src, &len) != 0) return 2;
@@ -339,6 +343,8 @@ static int compile_to_c(const char *path, Buf *out_c) {
         ctx.nforms = nforms;
         ctx.stdlib_prefix = total_stdlib_forms;
         ctx.module_base_dir = base_dir;
+        ctx.include_dirs    = include_dirs;
+        ctx.n_include_dirs  = n_include_dirs;
         rc = run_core_passes(&ctx);
         if (rc == 0 && emit_program(out_c, ctx.prog) != 0) {
             rc = 1;
@@ -483,7 +489,7 @@ static int generate_main_c(Buf *out, const char **h_files, int n_files, const ch
 static int cmd_emit_c(const char *path) {
     Buf out;
     buf_init(&out);
-    int rc = compile_to_c(path, &out);
+    int rc = compile_to_c(path, &out, NULL, 0);
     if (rc == 0) buf_to_file(&out, stdout);
     buf_free(&out);
     return rc;
@@ -578,7 +584,8 @@ static void default_output_name(const char *input, char *out, size_t cap) {
     }
 }
 
-static int cmd_build(const char *input, const char *out_path);
+static int cmd_build(const char *input, const char *out_path,
+                     const char **include_dirs, int n_include_dirs);
 static char *find_project_root(const char *start);
 
 /* Build a deterministic path for the intermediate generated-C file so that
@@ -608,10 +615,11 @@ static void stable_c_path(const char *input, char *out, size_t cap) {
     out[i] = '\0';
 }
 
-static int cmd_build(const char *input, const char *out_path) {
+static int cmd_build(const char *input, const char *out_path,
+                     const char **include_dirs, int n_include_dirs) {
     Buf csrc;
     buf_init(&csrc);
-    int rc = compile_to_c(input, &csrc);
+    int rc = compile_to_c(input, &csrc, include_dirs, n_include_dirs);
     if (rc != 0) { buf_free(&csrc); return rc; }
 
     /* Write generated C to a deterministic path so ccache can cache the result
@@ -737,6 +745,11 @@ static int cmd_build(const char *input, const char *out_path) {
     /* Append cmake dep flags (-I/-L/-l). */
     if (cmake_flags.len > 0) buf_puts(&cmd, cmake_flags.data);
     buf_free(&cmake_flags);
+    /* Append spice include dirs (-I). */
+    for (int _i = 0; _i < n_include_dirs; _i++) {
+        if (include_dirs[_i] && include_dirs[_i][0])
+            buf_printf(&cmd, " -I%s", include_dirs[_i]);
+    }
     int sys_rc = system(cmd.data);
     buf_free(&cmd);
     /* Leave the stable temp file for ccache; only unlink random fallbacks. */
@@ -840,7 +853,11 @@ static int cmd_run(int argc, char **argv) {
         }
     }
     (void)release; /* passed to compiler when --release build is supported */
-    (void)offline; /* passed to fetch when --offline is supported */
+
+    /* spice_inc_dirs: populated below during project-mode setup.
+     * RUN_ENTRY captures these via the enclosing scope. */
+    const char **spice_inc_dirs = NULL;
+    int          n_spice_inc_dirs = 0;
 
     /* Helper: build 'entry', exec with optional passthrough args. */
 #define RUN_ENTRY(entry_path) do {                                       \
@@ -848,8 +865,9 @@ static int cmd_run(int argc, char **argv) {
         int _fd = mkstemp(out_path);                                     \
         if (_fd < 0) { fprintf(stderr, "tur: mkstemp failed\n"); return 2; } \
         close(_fd);                                                      \
-        int _rc = cmd_build((entry_path), out_path);                     \
-        if (_rc != 0) { unlink(out_path); return _rc; }                  \
+        int _rc = cmd_build((entry_path), out_path,                      \
+                            spice_inc_dirs, n_spice_inc_dirs);           \
+        if (_rc != 0) { unlink(out_path); free(spice_inc_dirs); return _rc; } \
         Buf _cmd; buf_init(&_cmd);                                       \
         buf_printf(&_cmd, "'%s'", out_path);                             \
         if (passthrough_start >= 0) {                                    \
@@ -860,6 +878,7 @@ static int cmd_run(int argc, char **argv) {
         int _sys = system(_cmd.data);                                    \
         buf_free(&_cmd);                                                  \
         unlink(out_path);                                                \
+        free(spice_inc_dirs);                                            \
         return decode_exit_status(_sys);                                 \
     } while (0)
 
@@ -891,6 +910,148 @@ static int cmd_run(int argc, char **argv) {
     PkgManifest m;
     memset(&m, 0, sizeof(m));
     if (!pkg_manifest_read(manifest_path, &m)) { free(root); return 1; }
+
+    /* Read lock file. */
+    char lock_path[4096];
+    snprintf(lock_path, sizeof(lock_path), "%s/tur.lock", root);
+    PkgLockFile lock;
+    memset(&lock, 0, sizeof(lock));
+    lock.format_version = 1;
+    pkg_lock_read(lock_path, &lock);
+
+    /* Spice dependency handling. */
+    if (m.n_spices > 0) {
+        char spices_dir[4096];
+        snprintf(spices_dir, sizeof(spices_dir), "%s/spices", root);
+
+        if (offline) {
+            /* Verify all required spices exist on disk. */
+            bool missing = false;
+            for (int i = 0; i < m.n_spices; i++) {
+                const PkgSpice *s = &m.spices[i];
+                if (s->path) continue; /* local path -- always present */
+                char dep_dir[4096];
+                if (s->ref)
+                    snprintf(dep_dir, sizeof(dep_dir), "%s/%s-%s",
+                             spices_dir, s->name, s->ref);
+                else
+                    snprintf(dep_dir, sizeof(dep_dir), "%s/%s",
+                             spices_dir, s->name);
+                struct stat _dstat;
+                if (stat(dep_dir, &_dstat) != 0 || !S_ISDIR(_dstat.st_mode)) {
+                    fprintf(stderr,
+                        "tur run: --offline: spice '%s' not found at '%s'\n",
+                        s->name, dep_dir);
+                    missing = true;
+                }
+            }
+            if (missing) {
+                pkg_lock_free(&lock);
+                pkg_manifest_free(&m);
+                free(root);
+                return 1;
+            }
+        } else {
+            /* Fetch any missing spices; verify SHA-256 of already-fetched ones. */
+            bool need_fetch = false;
+            for (int i = 0; i < m.n_spices; i++) {
+                const PkgSpice *s = &m.spices[i];
+                if (s->path) continue;
+                char dep_dir[4096];
+                if (s->ref)
+                    snprintf(dep_dir, sizeof(dep_dir), "%s/%s-%s",
+                             spices_dir, s->name, s->ref);
+                else
+                    snprintf(dep_dir, sizeof(dep_dir), "%s/%s",
+                             spices_dir, s->name);
+                struct stat _dstat;
+                if (stat(dep_dir, &_dstat) != 0 || !S_ISDIR(_dstat.st_mode)) {
+                    need_fetch = true;
+                } else {
+                    /* Verify SHA-256 matches lock (if lock has entry). */
+                    PkgLockEntry *le = pkg_lock_find(&lock, s->name, false);
+                    if (le && le->sha256) {
+                        char actual_sha[65];
+                        if (pkg_sha256_dir(dep_dir, actual_sha) &&
+                            strcmp(actual_sha, le->sha256) != 0) {
+                            fprintf(stderr,
+                                "tur run: integrity check failed for '%s'.\n"
+                                "  Run `tur fetch --update` to re-download.\n",
+                                s->name);
+                            pkg_lock_free(&lock);
+                            pkg_manifest_free(&m);
+                            free(root);
+                            return 1;
+                        }
+                    }
+                }
+            }
+            if (need_fetch) {
+                if (!pkg_fetch_all(root, &m, &lock, false)) {
+                    fprintf(stderr, "tur run: dependency fetch failed\n");
+                    pkg_lock_free(&lock);
+                    pkg_manifest_free(&m);
+                    free(root);
+                    return 1;
+                }
+                pkg_lock_write(lock_path, &lock);
+            }
+        }
+
+        /* Build spice include-path array.
+         * Convention: spices/<name>-<ref>/src/ if it exists, else spices/<name>-<ref>/ */
+        int inc_cap = m.n_spices;
+        spice_inc_dirs = (const char **)malloc((size_t)inc_cap * sizeof(char *));
+        n_spice_inc_dirs = 0;
+        if (spice_inc_dirs) {
+            for (int i = 0; i < m.n_spices; i++) {
+                const PkgSpice *s = &m.spices[i];
+                char dep_dir[4096];
+                if (s->path) {
+                    /* Local path dep: resolve relative to root */
+                    snprintf(dep_dir, sizeof(dep_dir), "%s/%s", root, s->path);
+                } else if (s->ref) {
+                    snprintf(dep_dir, sizeof(dep_dir), "%s/%s-%s",
+                             spices_dir, s->name, s->ref);
+                } else {
+                    snprintf(dep_dir, sizeof(dep_dir), "%s/%s",
+                             spices_dir, s->name);
+                }
+                /* Prefer dep_dir/src if it exists */
+                char src_sub[4096];
+                snprintf(src_sub, sizeof(src_sub), "%s/src", dep_dir);
+                struct stat _ss;
+                const char *chosen = (stat(src_sub, &_ss) == 0 && S_ISDIR(_ss.st_mode))
+                                     ? src_sub : dep_dir;
+                spice_inc_dirs[n_spice_inc_dirs++] = strdup(chosen);
+            }
+        }
+    }
+
+    /* CMake dependency handling: generate and build if cmake-deps present. */
+    if (m.n_cmake_deps > 0) {
+        /* Only (re)build if cmake/CMakeLists.txt doesn't already exist,
+         * or if --update was requested.  For tur run we do a best-effort
+         * build without --update so repeated runs stay fast. */
+        char cmake_lists[4096];
+        snprintf(cmake_lists, sizeof(cmake_lists), "%s/cmake/CMakeLists.txt", root);
+        struct stat _cmst;
+        bool cmake_built = (stat(cmake_lists, &_cmst) == 0);
+        if (!cmake_built) {
+            if (!pkg_gen_cmake_deps(root, &m) ||
+                !pkg_cmake_build(root, &m, &lock)) {
+                fprintf(stderr, "tur run: cmake dependency build failed\n");
+                pkg_lock_free(&lock);
+                pkg_manifest_free(&m);
+                free(spice_inc_dirs);
+                free(root);
+                return 1;
+            }
+            pkg_lock_write(lock_path, &lock);
+        }
+    }
+
+    pkg_lock_free(&lock);
 
     /* Entry point resolution (from the plan):
      *   1. :entry key in build.tur  (not yet in PkgManifest -- future)
@@ -959,7 +1120,7 @@ static int cmd_test(const char *dir) {
         }
         close(fd);
 
-        int build_rc = cmd_build(tur_files[i], out_path);
+        int build_rc = cmd_build(tur_files[i], out_path, NULL, 0);
         int run_rc = 1;
         if (build_rc == 0) {
             int status = system(out_path);
@@ -1378,7 +1539,8 @@ static int cmd_explain(const char *code) {
         return 1;
     }
 
-    Expr *prog = elaborate_program(&arena, &st, forms, nforms, 0, ".", false, NULL);
+    Expr *prog = elaborate_program(&arena, &st, forms, nforms, 0, ".", false, NULL,
+                                    NULL, 0);
     if (!prog || diag_had_error()) {
         /* Error already emitted */
         symtab_free(&st);
@@ -1568,30 +1730,51 @@ int main(int argc, char **argv) {
         if (argc != 3) return usage();
         Buf out;
         buf_init(&out);
-        int rc = compile_to_c(argv[2], &out);
+        int rc = compile_to_c(argv[2], &out, NULL, 0);
         buf_free(&out);
         return rc;
     }
     if (strcmp(cmd, "build") == 0) {
         const char *input = NULL;
         const char *out = NULL;
+        /* Collect -I flags from the command line */
+        int     n_build_inc = 0;
+        int     build_inc_cap = 4;
+        char  **build_inc = (char **)malloc((size_t)build_inc_cap * sizeof(char *));
         for (int i = 2; i < argc; i++) {
             if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
                 out = argv[++i];
+            } else if (strcmp(argv[i], "-I") == 0 && i + 1 < argc) {
+                if (n_build_inc >= build_inc_cap) {
+                    build_inc_cap *= 2;
+                    build_inc = (char **)realloc(build_inc,
+                        (size_t)build_inc_cap * sizeof(char *));
+                }
+                build_inc[n_build_inc++] = argv[++i];
+            } else if (strncmp(argv[i], "-I", 2) == 0 && argv[i][2] != '\0') {
+                if (n_build_inc >= build_inc_cap) {
+                    build_inc_cap *= 2;
+                    build_inc = (char **)realloc(build_inc,
+                        (size_t)build_inc_cap * sizeof(char *));
+                }
+                build_inc[n_build_inc++] = argv[i] + 2;
             } else if (argv[i][0] != '-') {
-                if (input) return usage();
+                if (input) { free(build_inc); return usage(); }
                 input = argv[i];
             } else {
-                return usage();
+                free(build_inc); return usage();
             }
         }
-        if (!input) return usage();
+        if (!input) { free(build_inc); return usage(); }
         /* Check if input is a directory - use multi-file build */
+        int rc;
         if (is_directory(input)) {
-            return cmd_build_multi(input, out);
+            rc = cmd_build_multi(input, out);
         } else {
-            return cmd_build(input, out);
+            rc = cmd_build(input, out, (const char **)build_inc, n_build_inc);
         }
+        free(build_inc);
+        return rc;
     }
     if (strcmp(cmd, "run") == 0) {
         return cmd_run(argc, argv);

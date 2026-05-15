@@ -64,6 +64,9 @@ typedef struct PassContext {
     uint32_t     stdlib_prefix; /* number of leading forms from stdlib   */
     const char  *module_base_dir;    /* directory for module file lookup (Phase M2) */
     bool         separate_compilation; /* Phase M3: compile each module to its own .h/.c */
+    /* Phase PKG-1: extra module search directories from -I flags / spice paths */
+    const char **include_dirs;
+    int          n_include_dirs;
     /* Phase P3: HAMT lowering - track if HAMT functions are used */
     bool         needs_hamt;
 } PassContext;

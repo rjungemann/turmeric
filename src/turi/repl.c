@@ -192,7 +192,9 @@ static void cmd_type(TuriEnv *env, const char *expr_src) {
         Expr *prog = elaborate_program(&arena, &st, forms, nforms,
                                        /*stdlib_prefix=*/0, ".",
                                        /*separate_compilation=*/false,
-                                       /*tc_env=*/NULL);
+                                       /*tc_env=*/NULL,
+                                       /*include_dirs=*/NULL,
+                                       /*n_include_dirs=*/0);
         if (!prog || diag_had_error()) goto cleanup;
 
         /* The last top-level item is the expression we care about */

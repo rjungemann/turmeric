@@ -1362,7 +1362,9 @@ TuriValue turi_eval(TuriEnv *env, const char *src) {
                                    /*stdlib_prefix=*/0,
                                    /*module_base_dir=*/".",
                                    /*separate_compilation=*/false,
-                                   /*out_tc_env=*/NULL);
+                                   /*out_tc_env=*/NULL,
+                                   /*include_dirs=*/NULL,
+                                   /*n_include_dirs=*/0);
     if (!prog || diag_had_error()) {
         return turi_error("elaboration error");
     }

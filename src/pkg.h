@@ -166,6 +166,10 @@ PkgLockEntry *pkg_lock_find(PkgLockFile *lock, const char *name, bool is_cmake);
 /* Compute SHA-256 of a file (64 hex chars + NUL). Returns true on success. */
 bool pkg_sha256_file(const char *path, char out[65]);
 
+/* Compute SHA-256 of a directory by piping `tar -c <dir>` into sha256.
+ * Returns true on success; out receives 64 hex chars + NUL. */
+bool pkg_sha256_dir(const char *dir, char out[65]);
+
 /* Parse semver "vMAJOR.MINOR.PATCH[-pre]" or "MAJOR.MINOR.PATCH[-pre]".
  * Returns false if the string is not valid semver. */
 bool pkg_semver_parse(const char *v,

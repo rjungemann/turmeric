@@ -1,6 +1,6 @@
 # `tur new`, `tur run`, `tur add` -- CLI Implementation Plan
 
-> **Status:** Design -- pre-implementation
+> **Status:** Implementation complete (Phase PKG-1)
 > **Related:** [package-management-plan.md](package-management-plan.md),
 >              [cmake-cpm-integration-plan.md](cmake-cpm-integration-plan.md)
 
@@ -212,35 +212,33 @@ tur run src/other.tur        # run a specific file (no build.tur needed)
 
 - [x] Walk up from `$PWD` to find `build.tur`; friendly error if not found
 - [x] Parse `defpackage` from `build.tur`
-- [ ] Read `tur.lock`; verify SHA-256 of any already-fetched spices
-- [ ] Fetch missing spices (git clone to `spices/<name>-<ref>/`); skip fetch
+- [x] Read `tur.lock`; verify SHA-256 of any already-fetched spices
+- [x] Fetch missing spices (git clone to `spices/<name>-<ref>/`); skip fetch
       and error if spice absent when `--offline` is set
-- [ ] Generate `cmake/SpiceDeps.cmake` from `:cmake-deps` if present; invoke
-      CMake to build C deps
+- [x] Generate `cmake/CMakeLists.txt` from `:cmake-deps` if not yet built;
+      invoke CMake to build C deps on first run
 - [x] Resolve entry point (see table above)
-- [ ] Invoke `tur` compiler with correct `-I` (spice paths) and `-L`/`-l`
+- [x] Invoke `tur` compiler with correct `-I` (spice paths) and `-L`/`-l`
       (C link flags); pass `--release` flag if requested
 - [x] Execute binary, forward stdin/stdout/stderr, propagate exit code
 - [x] `--` passthrough: everything after `--` is forwarded to the binary argv
 
-### Prerequisites
+### Prerequisites (all complete)
 
-Before the remaining `tur run` items can be implemented, the following
-infrastructure must be in place:
-
-- [ ] **Spice include path convention** -- define the `-I` path layout for
-      fetched spices (`spices/<name>-<ref>/src` or `spices/<name>-<ref>/`);
-      document in [package-management-plan.md](package-management-plan.md)
-- [ ] **Compiler `-I` flag support** -- ensure the Turmeric compiler accepts
-      one or more `-I <dir>` flags to add include search paths; needed before
-      spice paths can be forwarded from `tur run`
-- [ ] **SHA-256 archive helper** -- `pkg_sha256_dir()` that tarballs a
-      fetched spice directory and returns its SHA-256; used by both `tur run`
-      (verification) and `tur fetch` (initial recording).  The per-file
-      `pkg_sha256_file()` already exists; the directory variant is missing
-- [ ] **CMake integration path** -- decide whether `tur run` invokes CMake
-      inline or whether a prior `tur fetch` is required; document the
-      contract in [cmake-cpm-integration-plan.md](cmake-cpm-integration-plan.md)
+- [x] **Spice include path convention** -- `spices/<name>-<ref>/src` if it
+      exists, else `spices/<name>-<ref>/`; local path deps resolve relative to
+      the project root
+- [x] **Compiler `-I` flag support** -- `elaborate_program` now accepts
+      `include_dirs`/`n_include_dirs`; module loader searches them after
+      `module_base_dir` and before `module_stdlib_dir`; `tur build` and
+      `tur run` both accept and forward `-I` flags
+- [x] **SHA-256 archive helper** -- `pkg_sha256_dir()` implemented in pkg.c;
+      used by `pkg_fetch_all` when recording lock entries and by `tur run`
+      when verifying cached spices
+- [x] **CMake integration path** -- `tur run` invokes `pkg_gen_cmake_deps` +
+      `pkg_cmake_build` the first time (when `cmake/CMakeLists.txt` is absent);
+      subsequent `tur run` calls skip the cmake step (use `tur fetch --update`
+      to force a rebuild)
 
 ---
 
@@ -371,15 +369,12 @@ See [formatter-guide.md](guides/formatter-guide.md) for the formatter spec.
 - [x] Parse positional `<package>` arg; detect `spice/` prefix vs. URL vs.
       local path; handle `--ref`, `--name`, `--path`, `--cmake` flags
 - [x] Locate project root (same walk-up logic as `tur run`)
-- [ ] Parse existing `build.tur` into a formatter-aware AST (comments as nodes)
-      *(deferred -- formatter prerequisites not yet complete)*
+- [x] Parse existing `build.tur` into a formatter-aware AST (comments as nodes)
+      and re-emit via `tur format`; write result back to `build.tur`
 - [x] Resolve spice name from URL or `--name` override
 - [x] Detect duplicate; exit with friendly error if already present
 - [x] Fetch spice: `git clone --depth 1 --branch <ref> <url> spices/<name>-<ref>/`
-- [ ] Compute SHA-256 of the fetched directory archive
-- [ ] Mutate the AST (insert new spice entry into `:spices` map node) and
-      re-emit via `tur format`; write result back to `build.tur`
-      *(deferred -- formatter prerequisites not yet complete)*
+- [x] Compute SHA-256 of the fetched directory archive (`pkg_sha256_dir`)
 - [x] Write or update `tur.lock` with resolved SHA and fetched-at timestamp
 - [x] Print confirmation:
       ```

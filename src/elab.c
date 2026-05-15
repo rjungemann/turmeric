@@ -795,6 +795,8 @@ typedef struct Elab {
     /* Phase M2: Module registry */
     const char      *module_base_dir;     /* base dir for resolving module file paths */
     const char      *module_stdlib_dir;   /* stdlib fallback dir (e.g. "stdlib") */
+    const char     **module_include_dirs; /* extra search dirs from -I flags / spices */
+    int              n_module_include_dirs;
     struct ElabModule *loaded_modules;    /* registry of loaded modules */
     uint32_t         n_loaded_modules;
     uint32_t         cap_loaded_modules;
@@ -1349,6 +1351,9 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->serial_reset_depth = 0;
     /* Phase P3: HAMT lowering */
     e->needs_hamt = false;
+    /* Phase PKG-1: extra module search dirs (-I) */
+    e->module_include_dirs = NULL;
+    e->n_module_include_dirs = 0;
 }
 
 /* Phase 13: Lifetime annotation helpers (deferred - infrastructure in place) */
@@ -8212,10 +8217,26 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
             }
         }
         if (!found_in_stdlib) {
-            diag_emit(DIAG_ERROR, import_span,
-                      "module '%s' not found (looked for '%s')", name->name, path_buf);
-            slot->is_loading = false;
-            return NULL;
+            /* Fallback: try each -I include directory (spice paths). */
+            bool found_in_includes = false;
+            for (int ii = 0; ii < e->n_module_include_dirs && !found_in_includes; ii++) {
+                char inc_path[4096];
+                int iplen = snprintf(inc_path, sizeof(inc_path), "%s/%s.tur",
+                                     e->module_include_dirs[ii], name->name);
+                if (iplen > 0 && (size_t)iplen < sizeof(inc_path)) {
+                    if (elab_read_file(inc_path, &src_raw, &src_len) == 0) {
+                        memcpy(path_buf, inc_path, (size_t)iplen + 1);
+                        plen = iplen;
+                        found_in_includes = true;
+                    }
+                }
+            }
+            if (!found_in_includes) {
+                diag_emit(DIAG_ERROR, import_span,
+                          "module '%s' not found (looked for '%s')", name->name, path_buf);
+                slot->is_loading = false;
+                return NULL;
+            }
         }
     }
 
@@ -13526,7 +13547,9 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                         uint32_t stdlib_prefix,
                         const char *module_base_dir,
                         bool separate_compilation,
-                        TypeClassEnv *out_tc_env) {
+                        TypeClassEnv *out_tc_env,
+                        const char **include_dirs,
+                        int n_include_dirs) {
     Elab e;
     elab_init_state(&e, arena, st);
     e.module_base_dir = module_base_dir ? module_base_dir : ".";
@@ -13535,6 +13558,8 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
         const char *sdir = getenv("TUR_STDLIB_DIR");
         e.module_stdlib_dir = (sdir && *sdir) ? sdir : "stdlib";
     }
+    e.module_include_dirs   = include_dirs;
+    e.n_module_include_dirs = n_include_dirs;
     e.separate_compilation = separate_compilation;
     builtins_init(st);
 
