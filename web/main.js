@@ -544,32 +544,78 @@ function configureMonaco() {
         base: 'vs-dark',
         inherit: true,
         rules: [
-            // Dark Spice Market syntax colors from design-notes.md
-            { token: 'comment', foreground: '48433D', fontStyle: 'italic' },
-            { token: 'string', foreground: 'D9735A' },
-            { token: 'number', foreground: 'A8C98A' },
-            { token: 'number.float', foreground: 'A8C98A' },
-            { token: 'keyword', foreground: 'EFA030', fontStyle: 'bold' },
+            // Dark Spice Market syntax colors — keywords (amber), types (teal),
+            // builtins (violet), strings (coral), comments (dark italic),
+            // numbers (sage green) per design-notes.md
+            { token: 'comment',          foreground: '48433D', fontStyle: 'italic' },
+            { token: 'string',           foreground: 'D9735A' },
+            { token: 'number',           foreground: 'A8C98A' },
+            { token: 'number.float',     foreground: 'A8C98A' },
+            { token: 'keyword',          foreground: 'EFA030', fontStyle: 'bold' },
             { token: 'keyword.operator', foreground: 'C4A0E8' },
-            { token: 'type', foreground: '7AC4B8' },
-            { token: 'operator', foreground: '6A5F58' },
-            { token: 'delimiter', foreground: '5A5448' },
-            { token: 'identifier', foreground: 'EAE0D2' }
+            { token: 'type',             foreground: '7AC4B8' },
+            { token: 'operator',         foreground: '6A5F58' },
+            { token: 'delimiter',        foreground: '5A5448' },
+            { token: 'identifier',       foreground: 'EAE0D2' },
         ],
         colors: {
-            // Dark Spice Market background colors
-            'editor.background': '#0C0A08',
-            'editor.foreground': '#EAE0D2',
-            'editorCursor.foreground': '#D48B1C',
-            'editor.lineHighlightBackground': '#131109',
-            'editorLineNumber.foreground': '#453F39',
-            'editor.selectionBackground': 'rgba(212, 139, 28, 0.15)',
-            'editor.inactiveSelectionBackground': 'rgba(212, 139, 28, 0.08)',
-            'editorIndentGuide.background': '#252119',
-            'editorIndentGuide.activeBackground': '#3E3830'
+            // Editor canvas
+            'editor.background':                    '#0C0A08',
+            'editor.foreground':                    '#EAE0D2',
+            'editorGutter.background':              '#0C0A08',
+            'editorLineNumber.foreground':          '#453F39',
+            'editorLineNumber.activeForeground':    '#88796C',
+
+            // Cursor & selection
+            'editorCursor.foreground':              '#D48B1C',
+            'editor.selectionBackground':           'rgba(212,139,28,0.18)',
+            'editor.inactiveSelectionBackground':   'rgba(212,139,28,0.08)',
+            'editor.selectionHighlightBackground':  'rgba(212,139,28,0.08)',
+            'editor.wordHighlightBackground':       'rgba(212,139,28,0.10)',
+            'editor.wordHighlightStrongBackground': 'rgba(212,139,28,0.20)',
+
+            // Line highlight
+            'editor.lineHighlightBackground':       '#111009',
+            'editor.lineHighlightBorder':           '#00000000',
+
+            // Indent guides
+            'editorIndentGuide.background1':        '#252119',
+            'editorIndentGuide.activeBackground1':  '#3E3830',
+
+            // Bracket matching — gold tint
+            'editorBracketMatch.background':        'rgba(212,139,28,0.12)',
+            'editorBracketMatch.border':            'rgba(212,139,28,0.50)',
+
+            // Find matches
+            'editorFindMatch.background':           'rgba(212,139,28,0.28)',
+            'editorFindMatch.border':               'rgba(212,139,28,0.65)',
+            'editorFindMatchHighlight.background':  'rgba(212,139,28,0.12)',
+
+            // Autocomplete / hover / suggest widgets
+            'editorWidget.background':                       '#181512',
+            'editorWidget.border':                           '#302B24',
+            'editorWidget.foreground':                       '#EAE0D2',
+            'editorSuggestWidget.background':                '#181512',
+            'editorSuggestWidget.border':                    '#302B24',
+            'editorSuggestWidget.foreground':                '#EAE0D2',
+            'editorSuggestWidget.selectedBackground':        'rgba(212,139,28,0.15)',
+            'editorSuggestWidget.selectedForeground':        '#EAE0D2',
+            'editorSuggestWidget.highlightForeground':       '#EFA030',
+            'editorHoverWidget.background':                  '#181512',
+            'editorHoverWidget.border':                      '#302B24',
+            'editorHoverWidget.foreground':                  '#EAE0D2',
+
+            // Scrollbars — warm dark, gold on active
+            'scrollbar.shadow':                     '#00000000',
+            'scrollbarSlider.background':           'rgba(62,56,48,0.55)',
+            'scrollbarSlider.hoverBackground':      'rgba(88,79,68,0.75)',
+            'scrollbarSlider.activeBackground':     'rgba(212,139,28,0.40)',
+
+            // Focus ring — gold instead of VS Code blue
+            'focusBorder':                          'rgba(212,139,28,0.40)',
         }
     });
-    
+
     // Always use dark theme to match Dark Spice Market design
     monaco.editor.setTheme('turmeric-dark');
 }
@@ -586,7 +632,7 @@ async function initEditor() {
     editor = monaco.editor.create(document.getElementById('editor'), {
         value: CONFIG.DEFAULT_CODE,
         language: 'turmeric',
-        theme: 'turmeric-light',
+        theme: 'turmeric-dark',
         automaticLayout: true,
         minimap: {
             enabled: false
@@ -646,9 +692,10 @@ async function initEditor() {
         },
         suggestOnTriggerCharacters: true,
         wordBasedSuggestions: true,
-        fontFamily: 'SF Mono, Fira Code, Monaco, Consolas, monospace',
-        fontSize: 14,
-        fontLigatures: false
+        fontFamily: "'JetBrains Mono', 'SF Mono', 'Fira Code', 'Fira Mono', Consolas, monospace",
+        fontSize: 13,
+        fontLigatures: true,
+        fontWeight: '400'
     });
     
     // Expose editor for smoke tests

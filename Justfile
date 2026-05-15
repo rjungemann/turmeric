@@ -37,6 +37,11 @@ test: build
 test-tsan: tsan
     TUR_TSAN=1 ctest --output-on-failure --test-dir build
 
+# Run production smoke tests against live turmeric-lang.com + try.turmeric-lang.com.
+# Requires: npm install run from the web/ directory (just web-deps).
+smoke:
+    cd web && npm run test:prod
+
 # ---------------------------------------------------------------------------
 # Cleanup
 # ---------------------------------------------------------------------------
