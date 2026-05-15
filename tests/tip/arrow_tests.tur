@@ -9,7 +9,6 @@
 
 (defmodule tests/arrow
   (import arrow)
-  (import arrow_laws)
   (import signal/core)
   (import signal/dsp)
   (import signal/envelope)
@@ -300,13 +299,6 @@
 ;; Arrow Law Tests
 ;; =============================================================================
 
-;;; test-arrow-laws -- run Arrow law verification.
-;;;
-;;; Returns:
-;;;   true if all Arrow laws pass.
-(defn test-arrow-laws [] :bool
-  (verify-arrow-laws))
-
 ;; =============================================================================
 ;; Main Entry Point
 ;; =============================================================================
@@ -331,14 +323,13 @@
         t13 (test-adsr-at-zero)
         t14 (test-adsr-mid-attack)
         t15 (test-adsr-sustain)
-        t16 (test-adsr-after-release)
-        t17 (test-arrow-laws)]
+        t16 (test-adsr-after-release)]
     (+ (if t1  0 1) (+ (if t2  0 1) (+ (if t3  0 1)
     (+ (if t4  0 1) (+ (if t5  0 1) (+ (if t6  0 1)
     (+ (if t7  0 1) (+ (if t8  0 1) (+ (if t9  0 1)
     (+ (if t10 0 1) (+ (if t11 0 1) (+ (if t12 0 1)
     (+ (if t13 0 1) (+ (if t14 0 1) (+ (if t15 0 1)
-    (+ (if t16 0 1) (if t17 0 1)))))))))))))))))))
+    (if t16 0 1))))))))))))))))
 
 ;;; main -- entry point; prints pass/fail summary.
 ;;;

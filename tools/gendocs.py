@@ -4,13 +4,13 @@ tools/gendocs.py -- Generate HTML API documentation from Turmeric stdlib files.
 
 Usage:
     # Generate all docs
-    python3 tools/gendocs.py stdlib/ --out docs/api/
+    python3 tools/gendocs.py stdlib/ --out docs/html/api/
 
     # Generate single module
-    python3 tools/gendocs.py stdlib/list.tur --out docs/api/
+    python3 tools/gendocs.py stdlib/list.tur --out docs/html/api/
 
     # Also emit docstrings.tur (for runtime (doc name) lookup)
-    python3 tools/gendocs.py stdlib/ --out docs/api/ --emit-tur stdlib/docstrings.tur
+    python3 tools/gendocs.py stdlib/ --out docs/html/api/ --emit-tur stdlib/docstrings.tur
 """
 
 import argparse
@@ -601,13 +601,74 @@ details.internal-section summary {
   margin-top: 4rem;
 }
 
+/* Hamburger button */
+.hamburger {
+  display: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0.25rem;
+  color: var(--cream);
+  flex-shrink: 0;
+}
+.hamburger span {
+  display: block;
+  width: 20px;
+  height: 2px;
+  background: var(--cream);
+  margin: 4px 0;
+  transition: background 0.15s;
+}
+.hamburger:hover span { background: var(--gold); }
+
+/* Sidebar overlay (mobile) */
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  z-index: 99;
+}
+.sidebar-overlay.is-open { display: block; }
+
 /* Responsive */
 @media (max-width: 768px) {
+  .hamburger { display: block; }
   .page-layout { grid-template-columns: 1fr; }
-  .sidebar { position: static; height: auto; border-right: none; border-bottom: 1px solid var(--border); }
+  .sidebar {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 280px;
+    height: 100vh;
+    z-index: 100;
+    background: var(--bg-card);
+    border-right: 1px solid var(--border);
+    border-bottom: none;
+    overflow-y: auto;
+    padding: 1.5rem 1rem;
+  }
+  .sidebar.is-open { display: block; }
   .content { padding: 1.25rem 1rem; }
 }
 """
+
+
+_SIDEBAR_TOGGLE_JS = """\
+<div class="sidebar-overlay"></div>
+<script>
+  document.addEventListener('DOMContentLoaded', function(){
+    var btn = document.querySelector('.hamburger');
+    var sidebar = document.querySelector('.sidebar');
+    var overlay = document.querySelector('.sidebar-overlay');
+    if (!btn || !sidebar) return;
+    function open() { sidebar.classList.add('is-open'); overlay && overlay.classList.add('is-open'); }
+    function close() { sidebar.classList.remove('is-open'); overlay && overlay.classList.remove('is-open'); }
+    btn.addEventListener('click', function(){ sidebar.classList.contains('is-open') ? close() : open(); });
+    overlay && overlay.addEventListener('click', close);
+  });
+</script>"""
 
 
 def _html_header(title, css_path='style.css'):
@@ -621,12 +682,16 @@ def _html_header(title, css_path='style.css'):
 </head>
 <body>
 <header class="site-header">
+  <button class="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
   <span class="brand">turmeric</span>
   <nav>
     <a href="index.html">API Docs</a>
     <a href="../autodoc-plan.md">Plan</a>
   </nav>
 </header>
+{_SIDEBAR_TOGGLE_JS}
 """
 
 
@@ -791,38 +856,59 @@ def render_module_page(module, out_dir):
     return page_name
 
 
+def _index_card_html(module):
+    """Render a single index card for a module."""
+    mod_name = module['name']
+    page_name = mod_name.replace('/', '-') + '.html'
+    exported = [d for d in module['definitions'] if d['exported']]
+    mod_summary = ''
+    with open(module['file_path'], encoding='utf-8', errors='replace') as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith(';; ') and not line.startswith(';;; '):
+                mod_summary = line[3:]
+                break
+            if line and not line.startswith(';'):
+                break
+
+    export_count = len(exported)
+    h = f'  <a href="{html_module.escape(page_name)}" class="index-card" style="display:block">\n'
+    h += f'    <h3>{html_module.escape(mod_name)}</h3>\n'
+    if mod_summary:
+        h += f'    <p>{html_module.escape(mod_summary)}</p>\n'
+    h += f'    <div class="export-count">{export_count} exported definition{"s" if export_count != 1 else ""}</div>\n'
+    h += '  </a>\n'
+    return h
+
+
 def render_index_page(modules, out_dir):
-    """Render the module index page."""
+    """Render the module index page, grouped by subdirectory."""
     content = '<div class="content" style="max-width:960px;margin:0 auto;padding:2rem">\n'
     content += '  <h1 style="color:var(--gold);font-size:2rem;margin-bottom:0.5rem">Turmeric Standard Library</h1>\n'
     content += '  <p style="color:var(--faint);margin-bottom:1.5rem">Auto-generated API reference. Run <code>just docs</code> to regenerate.</p>\n'
-    content += '  <div class="index-grid">\n'
 
+    # Group by subdir; None -> 'Core'
+    groups = {}
     for module in sorted(modules, key=lambda m: m['name'] or ''):
-        mod_name = module['name']
-        page_name = mod_name.replace('/', '-') + '.html'
-        exported = [d for d in module['definitions'] if d['exported']]
-        # Find module summary: first exported defn's summary, or empty
-        mod_summary = ''
-        # Look for a file-level comment
-        with open(module['file_path'], encoding='utf-8', errors='replace') as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith(';; ') and not line.startswith(';;; '):
-                    mod_summary = line[3:]
-                    break
-                if line and not line.startswith(';'):
-                    break
+        key = module.get('subdir') or 'core'
+        groups.setdefault(key, []).append(module)
 
-        export_count = len(exported)
-        content += f'  <a href="{html_module.escape(page_name)}" class="index-card" style="display:block">\n'
-        content += f'    <h3>{html_module.escape(mod_name)}</h3>\n'
-        if mod_summary:
-            content += f'    <p>{html_module.escape(mod_summary)}</p>\n'
-        content += f'    <div class="export-count">{export_count} exported definition{"s" if export_count != 1 else ""}</div>\n'
-        content += '  </a>\n'
+    # Render core first, then remaining groups alphabetically
+    group_order = ['core'] + sorted(k for k in groups if k != 'core')
 
-    content += '  </div>\n</div>\n'
+    for group_key in group_order:
+        if group_key not in groups:
+            continue
+        group_modules = groups[group_key]
+        group_label = 'Core' if group_key == 'core' else group_key
+        content += f'  <h2 style="color:var(--gold);font-size:1.25rem;margin:2rem 0 0.75rem;padding-bottom:0.4rem;border-bottom:1px solid var(--border)">'
+        content += f'{html_module.escape(group_label)}</h2>\n'
+        content += '  <div class="index-grid">\n'
+        for module in group_modules:
+            content += _index_card_html(module)
+        content += '  </div>\n'
+
+    content += '</div>\n'
 
     page = _html_header('Turmeric Standard Library | API Docs', css_path='style.css')
     page += content
@@ -962,8 +1048,8 @@ def main():
     )
     parser.add_argument(
         '--out', '-o',
-        default='docs/api',
-        help='Output directory for HTML files (default: docs/api)',
+        default='docs/html/api',
+        help='Output directory for HTML files (default: docs/html/api)',
     )
     parser.add_argument(
         '--emit-tur',
@@ -986,10 +1072,22 @@ def main():
         print(f'No .tur files found in {args.source}', file=sys.stderr)
         sys.exit(1)
 
+    # Resolve the source root for subdir computation (only meaningful for dirs)
+    source_root = Path(args.source).resolve() if Path(args.source).is_dir() else None
+
     modules = []
     for f in tur_files:
         try:
             module = parse_tur_file(f)
+            # Attach subdirectory relative to the source root (e.g. 'scscm', 'tidal', None)
+            if source_root:
+                try:
+                    rel_parts = Path(f).resolve().relative_to(source_root).parts
+                    module['subdir'] = rel_parts[0] if len(rel_parts) > 1 else None
+                except ValueError:
+                    module['subdir'] = None
+            else:
+                module['subdir'] = None
             modules.append(module)
             exported_count = sum(1 for d in module['definitions'] if d['exported'])
             print(f'  Parsed {f} -> {module["name"]} ({exported_count} exported defs)')

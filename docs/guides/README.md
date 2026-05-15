@@ -23,8 +23,10 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 ## Language Features
 
 - **[hkt-guide.md](hkt-guide.md)** — Higher-kinded types (functor, monad, applicative abstractions, performance/dispatch model)
+- **[hrt-guide.md](hrt-guide.md)** — Higher-ranked types: rank-2/3 polymorphic function parameters
 - **[module-system-guide.md](module-system-guide.md)** — Module system, namespacing, exports
 - **[c-integration-guide.md](c-integration-guide.md)** — Foreign function interface (FFI) and C interop
+- **[effects-vs-monads.md](effects-vs-monads.md)** — Design rationale: why effects instead of Haskell-style monads
 
 ## Error Handling
 
@@ -38,6 +40,11 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 - **[custom-effects-tutorial.md](custom-effects-tutorial.md)** — Writing custom effects
 - **[snake-game-tutorial.md](snake-game-tutorial.md)** — Building the snake game example
 
+## Tools and IDE
+
+- **[formatter-guide.md](formatter-guide.md)** — `tur format` CLI and web REPL Format button
+- **[vscode-guide.md](vscode-guide.md)** — VS Code extension installation and configuration
+
 ## Reference
 
 - **[test-runner-contract.md](test-runner-contract.md)** — Test framework API and contract
@@ -50,7 +57,9 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 - Concurrency → [threading-guide.md](threading-guide.md), [async-await-guide.md](async-await-guide.md), [stm-guide.md](stm-guide.md), [stm-tutorial.md](stm-tutorial.md)
 - Data structures → [hamt-guide.md](hamt-guide.md)
 - Control flow → [effects-system-guide.md](effects-system-guide.md), [logic-programming-guide.md](logic-programming-guide.md), [serializable-continuations-guide.md](serializable-continuations-guide.md)
-- Type system → [hkt-guide.md](hkt-guide.md), [module-system-guide.md](module-system-guide.md)
+- Type system → [hkt-guide.md](hkt-guide.md), [hrt-guide.md](hrt-guide.md), [module-system-guide.md](module-system-guide.md)
+- Effects design → [effects-vs-monads.md](effects-vs-monads.md)
+- Tools → [formatter-guide.md](formatter-guide.md), [vscode-guide.md](vscode-guide.md)
 - Error handling → [error-handling-guide.md](error-handling-guide.md)
 
 **By level:**

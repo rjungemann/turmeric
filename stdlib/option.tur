@@ -370,3 +370,28 @@
 ;;; Typeclass instance for option -- Clone: deep copy of the option struct.
 (definstance Clone [option]
   (clone [x] (__clone_option_clone x)))
+
+;;; Show [option] -- show an option value as "some(v)" or "none".
+;;;
+;;; Parameters:
+;;;   x -- option pointer (as :int / int64_t)
+;;;
+;;; Returns:
+;;;   "none" for a none option; "some(v)" where v is the integer value for some.
+;;;
+;;; Example:
+;;;   (show (some 99))  ; => "some(99)"
+;;;   (show (none))     ; => "none"
+;;;
+;;; Since: SI3
+(definstance Show [option]
+  (show [x] :cstr
+    ```c
+    // TODO: use scratch arena once arena infrastructure lands.
+    struct { bool is_some; int64_t value; } *opt =
+        (struct { bool is_some; int64_t value; } *)(intptr_t)x;
+    if (!opt || !opt->is_some) return "none";
+    char *buf = (char *)malloc(48);
+    snprintf(buf, 48, "some(%lld)", (long long)opt->value);
+    return (const char *)(intptr_t)buf;
+    ```))

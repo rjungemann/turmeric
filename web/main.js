@@ -1157,7 +1157,7 @@ function showDocPanel(name, docText) {
 
     // Build a link to the module page: guess the module from the function name
     // The function table is in docs/api/index.html; link there as fallback
-    link.href = '/docs/api/index.html';
+    link.href = '/docs/html/api/index.html';
     link.textContent = 'Open full docs \u2197';
 
     pane.style.display = 'flex';

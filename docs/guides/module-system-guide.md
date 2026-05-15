@@ -20,7 +20,7 @@ This guide covers everything a working programmer needs to know:
 
 A module is a single `.tur` file with a `defmodule` form at the top:
 
-```lisp
+```turmeric
 ;; src/geom/vector.tur
 (defmodule geom/vector
   (export Point make-vector vector-x vector-y magnitude)
@@ -66,7 +66,7 @@ will produce confusing "module not found" errors.
 
 Use `(import ...)` inside `defmodule` to bring in another module:
 
-```lisp
+```turmeric
 (defmodule app
   (import geom/vector :as v)
   (import math :refer [sqrt abs])
@@ -108,7 +108,7 @@ helper module.
 Everything declared inside a `defmodule` is **private by default**. Only names
 listed in `(export ...)` are visible to other modules.
 
-```lisp
+```turmeric
 (defmodule list-utils
   (export map filter)
 
@@ -127,7 +127,7 @@ listed in `(export ...)` are visible to other modules.
 
 ### Macros are exported the same way
 
-```lisp
+```turmeric
 (defmodule control-flow
   (export when2)
 
@@ -146,7 +146,7 @@ defining module (the elaborator tracks the "expansion module" for this).
 Top-level `(defer ...)` forms inside a module run at process exit via
 `atexit`:
 
-```lisp
+```turmeric
 (defmodule logger
   (export log)
 
@@ -194,7 +194,7 @@ For FFI scenarios where you need a specific C symbol name (matching a C
 header, registering with a runtime, etc.), use `(export-as "...")` before
 the function name:
 
-```lisp
+```turmeric
 (defmodule plugin
   (export init)
 
@@ -308,7 +308,7 @@ or use `(export-as "...")` to override the C name explicitly.
 
 ## 9. A Complete Example
 
-```lisp
+```turmeric
 ;; src/math.tur
 (defmodule math
   (export sqrt square)

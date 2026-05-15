@@ -408,3 +408,41 @@
 ;;; Clone [vec] -- clone deep-copies the vec struct and all its elements.
 (definstance Clone [vec]
   (clone [x] (__clone_vec_clone x)))
+
+;;; Show [vec] -- show a vec as "[v1, v2, ...]" (or "[]" for empty).
+;;;
+;;; Parameters:
+;;;   x -- vec pointer (as :int / int64_t)
+;;;
+;;; Returns:
+;;;   A heap-allocated :cstr formatted as "[v1, v2, ...]" or "[]".
+;;;
+;;; Example:
+;;;   (show (vec-new))  ; => "[]"
+;;;
+;;; Since: SI3
+(definstance Show [vec]
+  (show [x] :cstr
+    ```c
+    // TODO: use scratch arena once arena infrastructure lands.
+    struct { int64_t *data; size_t len; size_t cap; } *v =
+        (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)x;
+    if (!v || v->len == 0) return "[]";
+    // First pass: compute total buffer size needed.
+    char tmp[32];
+    size_t total = 1 + 1; // "[" + "]"
+    for (size_t i = 0; i < v->len; i++) {
+        int n = snprintf(tmp, sizeof(tmp), "%lld", (long long)v->data[i]);
+        total += (n > 0 ? (size_t)n : 0);
+        if (i > 0) total += 2; // ", "
+    }
+    // Second pass: write the string.
+    char *buf = (char *)malloc(total + 1);
+    int off = snprintf(buf, total + 1, "[");
+    for (size_t i = 0; i < v->len; i++) {
+        if (i > 0) off += snprintf(buf + off, (int)(total + 1) - off, ", ");
+        off += snprintf(buf + off, (int)(total + 1) - off, "%lld", (long long)v->data[i]);
+    }
+    snprintf(buf + off, (int)(total + 1) - off, "]");
+    return (const char *)(intptr_t)buf;
+    ```))
