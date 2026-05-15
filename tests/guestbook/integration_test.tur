@@ -1,0 +1,272 @@
+;;; integration_test.tur -- drive the full guestbook flow without HTTP.
+;;;
+;;; Tests the complete multi-page flow by calling serial-resume directly,
+;;; bypassing the HTTP listener. Verifies that:
+;;;   1. The flow produces the correct HTML at each step.
+;;;   2. Back navigation correctly re-enters the message form.
+;;;   3. Confirming writes a GuestEntry with the correct fields.
+;;;   4. The store reflects the new entry after posting.
+;;;
+;;; Run with:
+;;;   tur test tests/guestbook/integration_test.tur
+;;;
+;;; Since: Guestbook example
+
+; ---------------------------------------------------------------------------
+; Test infrastructure: in-memory continuation store
+; ---------------------------------------------------------------------------
+
+; For integration tests we use an in-memory map instead of the file store
+; so tests are hermetic and fast.
+(def test-cont-store : (ref (Map cstr bytes)) (ref (Map.empty)))
+
+;;; test-store-cont -- store k in the in-memory map and return a token.
+(defn test-store-cont [k : (serial-continuation cstr)] : cstr
+  (def token (random-hex-64))
+  (set! test-cont-store
+    (ref (Map.insert (deref test-cont-store) token (serial-cont->bytes k))))
+  token)
+
+;;; test-load-cont -- load k from the in-memory map.
+(defn test-load-cont [token : cstr] : (Option (serial-continuation cstr))
+  (match (Map.get (deref test-cont-store) token)
+    (None)     -> (None)
+    (Some raw) ->
+      (match (bytes->serial-cont raw : (Result (serial-continuation cstr) cstr))
+        (Err _)  -> (None)
+        (Ok k)   -> (Some k))))
+
+; ---------------------------------------------------------------------------
+; Test infrastructure: captured HTML responses
+; ---------------------------------------------------------------------------
+
+(def captured-html : (ref (Vec cstr)) (ref (Vec.new)))
+(def posted-entries : (ref (Vec GuestEntry)) (ref (Vec.new)))
+
+;;; reset-test-state -- clear all captured state between tests.
+(defn reset-test-state [] : unit
+  (set! test-cont-store (ref (Map.empty)))
+  (set! captured-html   (ref (Vec.new)))
+  (set! posted-entries  (ref (Vec.new))))
+
+;;; run-flow-step -- run one step of the flow, capturing HTML.
+;;; Returns the token embedded in the form action (if any).
+(defn run-flow-step [thunk : (-> unit)] : (Option cstr)
+  (handle
+    (thunk)
+    (HttpEffect.send-html [html] ->
+      (set! captured-html (ref (Vec.append (deref captured-html) html)))
+      ; Extract the first ?k=TOKEN from the HTML to find the next token.
+      (def token-opt (extract-form-token html))
+      (resume unit)))
+  (extract-form-token (Vec.last-or (deref captured-html) "")))
+
+;;; extract-form-token -- pull the value of k= from an HTML string.
+(defn extract-form-token [html : cstr] : (Option cstr)
+  (match (cstr-find html "?k=")
+    (None)     -> (None)
+    (Some idx) ->
+      (def start (+ idx 3))
+      (def rest  (cstr-drop html start))
+      ; Token ends at the first ' or " or end of string.
+      (def end   (or (cstr-find rest "'")
+                     (cstr-find rest "\"")
+                     (cstr-len rest)))
+      (Some (cstr-take rest end))))
+
+; ---------------------------------------------------------------------------
+; Happy-path integration test: name -> message -> confirm -> entry saved
+; ---------------------------------------------------------------------------
+
+(test "integration: full happy path"
+  (reset-test-state)
+
+  ;; Step 1: Start the flow (GET /).
+  (def tok1 (ref ""))
+  (handle
+    (run-guestbook-flow (HttpRequest
+                          :method "GET" :path "/" :query "" :body ""))
+    (HttpEffect.send-html [html] ->
+      (set! tok1 (ref (or (extract-form-token html) "")))
+      (resume unit)))
+
+  ;; The first page should be the name form.
+  (def page1 (Vec.get (deref captured-html) 0))
+  (assert (cstr-contains page1 "name"))
+  (assert (cstr-contains page1 "/submit?k="))
+  (assert (not (cstr-eq? (deref tok1) "")))
+
+  ;; Step 2: Submit the name (POST /submit?k=tok1).
+  (def tok2 (ref ""))
+  (match (test-load-cont (deref tok1))
+    (None) -> (fail "tok1 not found in store")
+    (Some k1) ->
+      (handle
+        (serial-resume k1 "name=Alice")
+        (HttpEffect.send-html [html] ->
+          (set! tok2 (ref (or (extract-form-token html) "")))
+          (resume unit))))
+
+  ;; The second page should be the message form addressed to Alice.
+  (def page2 (Vec.last-or (deref captured-html) ""))
+  (assert (cstr-contains page2 "Alice"))
+  (assert (cstr-contains page2 "message"))
+  (assert (not (cstr-eq? (deref tok2) "")))
+
+  ;; Step 3: Submit the message (POST /submit?k=tok2).
+  (def tok-confirm (ref ""))
+  (def tok-back    (ref ""))
+  (match (test-load-cont (deref tok2))
+    (None) -> (fail "tok2 not found in store")
+    (Some k2) ->
+      (handle
+        (serial-resume k2 "message=Hello+World")
+        (HttpEffect.send-html [html] ->
+          ; Preview page embeds two tokens. We need both.
+          (set! tok-confirm
+            (ref (or (extract-form-token html) "")))
+          ; The back token appears in the second form.
+          ; For simplicity, find the second occurrence of ?k=.
+          (def after-first (cstr-drop html
+                             (+ (or (cstr-find html "?k=") 0) 3)))
+          (def second-k (extract-form-token after-first))
+          (set! tok-back (ref (or second-k "")))
+          (resume unit))))
+
+  ;; The preview page should show name and message.
+  (def page3 (Vec.last-or (deref captured-html) ""))
+  (assert (cstr-contains page3 "Alice"))
+  (assert (cstr-contains page3 "Hello World"))
+  (assert (cstr-contains page3 "Confirm"))
+
+  ;; Step 4: Confirm (POST /submit?k=tok-confirm).
+  (match (test-load-cont (deref tok-confirm))
+    (None) -> (fail "tok-confirm not found in store")
+    (Some k-confirm) ->
+      (handle
+        (serial-resume k-confirm "")
+        (HttpEffect.send-html [html] ->
+          (resume unit))))
+
+  ;; The thank-you page should appear.
+  (def page4 (Vec.last-or (deref captured-html) ""))
+  (assert (cstr-contains page4 "Thank you"))
+
+  ;; The entry should have been written to the store.
+  (def entries (store-all))
+  (assert-eq (Vec.len entries) 1)
+  (assert-eq (Vec.get entries 0).name "Alice")
+  (assert-eq (Vec.get entries 0).message "Hello World"))
+
+; ---------------------------------------------------------------------------
+; Back-navigation integration test
+; ---------------------------------------------------------------------------
+
+(test "integration: back navigation re-enters message form"
+  (reset-test-state)
+
+  ;; Run through to the preview page (steps 1-3 as above, abbreviated).
+  (def tok1 (ref ""))
+  (handle
+    (run-guestbook-flow (HttpRequest
+                          :method "GET" :path "/" :query "" :body ""))
+    (HttpEffect.send-html [html] ->
+      (set! tok1 (ref (or (extract-form-token html) "")))
+      (resume unit)))
+
+  (def tok2 (ref ""))
+  (match (test-load-cont (deref tok1))
+    (None) -> (fail "tok1 missing")
+    (Some k1) ->
+      (handle
+        (serial-resume k1 "name=Bob")
+        (HttpEffect.send-html [html] ->
+          (set! tok2 (ref (or (extract-form-token html) "")))
+          (resume unit))))
+
+  (def tok-back (ref ""))
+  (match (test-load-cont (deref tok2))
+    (None) -> (fail "tok2 missing")
+    (Some k2) ->
+      (handle
+        (serial-resume k2 "message=Original")
+        (HttpEffect.send-html [html] ->
+          ; Extract the back token (second ?k= in the HTML).
+          (def after-first (cstr-drop html
+                             (+ (or (cstr-find html "?k=") 0) 3)))
+          (def second-k (extract-form-token after-first))
+          (set! tok-back (ref (or second-k "")))
+          (resume unit))))
+
+  ;; Click "Edit Message" -- resume k-back.
+  (def tok3 (ref ""))
+  (match (test-load-cont (deref tok-back))
+    (None) -> (fail "tok-back missing")
+    (Some k-back) ->
+      (handle
+        (serial-resume k-back "")
+        (HttpEffect.send-html [html] ->
+          ; We should be back at the message form.
+          (set! tok3 (ref (or (extract-form-token html) "")))
+          (resume unit))))
+
+  (def page-after-back (Vec.last-or (deref captured-html) ""))
+  (assert (cstr-contains page-after-back "message"))
+  (assert (not (cstr-eq? (deref tok3) "")))
+
+  ;; Now submit a revised message and confirm.
+  (def tok-confirm2 (ref ""))
+  (match (test-load-cont (deref tok3))
+    (None) -> (fail "tok3 missing")
+    (Some k3) ->
+      (handle
+        (serial-resume k3 "message=Revised+Message")
+        (HttpEffect.send-html [html] ->
+          (set! tok-confirm2 (ref (or (extract-form-token html) "")))
+          (resume unit))))
+
+  (match (test-load-cont (deref tok-confirm2))
+    (None) -> (fail "tok-confirm2 missing")
+    (Some k-confirm) ->
+      (handle
+        (serial-resume k-confirm "")
+        (HttpEffect.send-html [html] -> (resume unit))))
+
+  ;; The saved entry should have the revised message.
+  (def entries (store-all))
+  (def last-entry (Vec.last-or entries
+    (GuestEntry :name "" :message "" :posted-at 0)))
+  (assert-eq last-entry.name "Bob")
+  (assert-eq last-entry.message "Revised Message"))
+
+; ---------------------------------------------------------------------------
+; Token security tests
+; ---------------------------------------------------------------------------
+
+(test "integration: unknown token returns error page"
+  (reset-test-state)
+  (def captured (ref ""))
+  (handle
+    (resume-handler (HttpRequest
+                      :method "POST"
+                      :path   "/submit"
+                      :query  "k=deadbeef"
+                      :body   ""))
+    (HttpEffect.send-html [html] ->
+      (set! captured (ref html))
+      (resume unit)))
+  (assert (cstr-contains (deref captured) "expired")))
+
+(test "integration: missing token returns error page"
+  (reset-test-state)
+  (def captured (ref ""))
+  (handle
+    (resume-handler (HttpRequest
+                      :method "POST"
+                      :path   "/submit"
+                      :query  ""
+                      :body   ""))
+    (HttpEffect.send-html [html] ->
+      (set! captured (ref html))
+      (resume unit)))
+  (assert (cstr-contains (deref captured) "Missing")))

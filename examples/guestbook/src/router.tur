@@ -1,0 +1,76 @@
+;;; router.tur -- dispatch HTTP requests to the appropriate handler.
+;;;
+;;; Routes:
+;;;   GET  /         -> run-guestbook-flow (starts a new flow)
+;;;   GET  /entries  -> show-entries-handler (no continuation)
+;;;   POST /submit   -> resume-handler (loads and resumes a continuation)
+;;;   anything else  -> 404
+;;;
+;;; Since: Guestbook example
+
+; ---------------------------------------------------------------------------
+; resume-handler -- POST /submit?k=TOKEN
+; ---------------------------------------------------------------------------
+
+;;; resume-handler -- look up the continuation token and resume it.
+;;;
+;;; Extracts the token from the query string, verifies the HMAC signature,
+;;; loads the serialized continuation from disk, and calls serial-resume
+;;; with the POST body as the resume value.
+;;;
+;;; Parameters:
+;;;   req -- the POST request containing the token in req.query
+;;;
+;;; Returns:
+;;;   unit (side effect: resumes the continuation, which eventually sends HTML)
+;;;
+;;; Since: Guestbook example
+(defn resume-handler [req : HttpRequest] : unit
+  (def token (parse-form-field req.query "k"))
+  (match token
+    (None) ->
+      (perform HttpEffect
+        (send-html (render-error "Missing continuation token.")))
+    (Some t) ->
+      (match (load-continuation t)
+        (None) ->
+          (perform HttpEffect
+            (send-html (render-error
+              "Unknown or expired token. Please start over.")))
+        (Some k) ->
+          (serial-resume k req.body))))
+
+; ---------------------------------------------------------------------------
+; dispatch -- route an HTTP request to the appropriate handler
+; ---------------------------------------------------------------------------
+
+;;; dispatch -- route a request to the correct handler.
+;;;
+;;; Parameters:
+;;;   req -- the parsed HTTP request
+;;;
+;;; Returns:
+;;;   unit (side effect: sends an HTTP response via HttpEffect)
+;;;
+;;; Since: Guestbook example
+(defn dispatch [req : HttpRequest] : unit
+  (cond
+    ;; GET / -> start a new guestbook flow
+    (and (cstr-eq? req.method "GET")
+         (cstr-eq? req.path "/"))
+    (run-guestbook-flow req)
+
+    ;; GET /entries -> list all entries
+    (and (cstr-eq? req.method "GET")
+         (cstr-eq? req.path "/entries"))
+    (show-entries-handler req)
+
+    ;; POST /submit?k=TOKEN -> resume a stored continuation
+    (and (cstr-eq? req.method "POST")
+         (cstr-eq? req.path "/submit"))
+    (resume-handler req)
+
+    ;; 404 for everything else
+    :else
+    (perform HttpEffect
+      (send-html (render-error "Page not found.")))))

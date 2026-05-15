@@ -1,0 +1,125 @@
+;;; flow_test.tur -- unit tests for guestbook helper functions.
+;;;
+;;; Tests: parse-form-field, percent-decode, html-escape,
+;;;        sign-token, verify-token.
+;;;
+;;; Run with:
+;;;   tur test tests/guestbook/flow_test.tur
+;;;
+;;; Since: Guestbook example
+
+; ---------------------------------------------------------------------------
+; parse-form-field
+; ---------------------------------------------------------------------------
+
+(test "parse-form-field: single field"
+  (def result (parse-form-field "name=Alice" "name"))
+  (assert-eq result (Some "Alice")))
+
+(test "parse-form-field: first field of multiple"
+  (def result (parse-form-field "name=Alice&message=Hello" "name"))
+  (assert-eq result (Some "Alice")))
+
+(test "parse-form-field: second field of multiple"
+  (def result (parse-form-field "name=Alice&message=Hello" "message"))
+  (assert-eq result (Some "Hello")))
+
+(test "parse-form-field: missing field"
+  (def result (parse-form-field "name=Alice" "message"))
+  (assert-eq result (None)))
+
+(test "parse-form-field: empty body"
+  (def result (parse-form-field "" "name"))
+  (assert-eq result (None)))
+
+(test "parse-form-field: empty value"
+  (def result (parse-form-field "name=&message=Hi" "name"))
+  (assert-eq result (Some "")))
+
+; ---------------------------------------------------------------------------
+; percent-decode
+; ---------------------------------------------------------------------------
+
+(test "percent-decode: plain string unchanged"
+  (assert-eq (percent-decode "hello") "hello"))
+
+(test "percent-decode: space from plus"
+  (assert-eq (percent-decode "hello+world") "hello world"))
+
+(test "percent-decode: percent-encoded space"
+  (assert-eq (percent-decode "hello%20world") "hello world"))
+
+(test "percent-decode: mixed"
+  (assert-eq (percent-decode "name=Alice+Liddell&age=10%25") "name=Alice Liddell&age=10%"))
+
+(test "percent-decode: uppercase hex"
+  (assert-eq (percent-decode "%41%42%43") "ABC"))
+
+(test "percent-decode: lowercase hex"
+  (assert-eq (percent-decode "%61%62%63") "abc"))
+
+(test "percent-decode: invalid sequence passed through"
+  ; '%GG' is not valid hex -- should be passed through unchanged.
+  (assert-eq (percent-decode "%GG") "%GG"))
+
+; ---------------------------------------------------------------------------
+; html-escape
+; ---------------------------------------------------------------------------
+
+(test "html-escape: plain string unchanged"
+  (assert-eq (html-escape "hello") "hello"))
+
+(test "html-escape: ampersand"
+  (assert-eq (html-escape "a&b") "a&amp;b"))
+
+(test "html-escape: less-than"
+  (assert-eq (html-escape "a<b") "a&lt;b"))
+
+(test "html-escape: greater-than"
+  (assert-eq (html-escape "a>b") "a&gt;b"))
+
+(test "html-escape: double-quote"
+  (assert-eq (html-escape "say \"hi\"") "say &quot;hi&quot;"))
+
+(test "html-escape: script tag"
+  (assert-eq
+    (html-escape "<script>alert(1)</script>")
+    "&lt;script&gt;alert(1)&lt;/script&gt;"))
+
+(test "html-escape: all special characters"
+  (assert-eq
+    (html-escape "&<>\"")
+    "&amp;&lt;&gt;&quot;"))
+
+; ---------------------------------------------------------------------------
+; sign-token / verify-token
+; ---------------------------------------------------------------------------
+
+(def TEST-SECRET (cstr->bytes "test-secret-key"))
+
+(test "verify-token: round-trip succeeds"
+  (def token  "abc123def456")
+  (def signed (sign-token token TEST-SECRET))
+  (assert-eq (verify-token signed TEST-SECRET) (Some token)))
+
+(test "verify-token: wrong secret fails"
+  (def token  "abc123def456")
+  (def signed (sign-token token TEST-SECRET))
+  (def other  (cstr->bytes "wrong-secret"))
+  (assert-eq (verify-token signed other) (None)))
+
+(test "verify-token: tampered token fails"
+  (def signed (sign-token "abc123" TEST-SECRET))
+  ; Alter the first character of the token portion.
+  (def tampered (str "xyz" (cstr-drop signed 3)))
+  (assert-eq (verify-token tampered TEST-SECRET) (None)))
+
+(test "verify-token: no dot separator fails"
+  (assert-eq (verify-token "nodothere" TEST-SECRET) (None)))
+
+(test "verify-token: empty string fails"
+  (assert-eq (verify-token "" TEST-SECRET) (None)))
+
+(test "sign-token: produces dot-separated format"
+  (def signed (sign-token "mytoken" TEST-SECRET))
+  (assert (cstr-contains signed ".")))

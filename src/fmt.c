@@ -210,6 +210,7 @@ static void fmt_emit_inline(FmtState *s, const Form *f) {
 
 typedef enum SpecialForm {
     SF_NONE,
+    SF_DEFPACKAGE,          /* (defpackage ...) and (deflockfile ...) */
     SF_DEFN, SF_DEFMACRO,
     SF_FN,
     SF_LET, SF_LOOP,
@@ -233,6 +234,8 @@ static const Symbol *list_head_sym(const Form *f) {
 static SpecialForm classify_list(const Form *f) {
     const Symbol *h = list_head_sym(f);
     if (!h) return SF_NONE;
+    if (sym_eq(h, "defpackage"))  return SF_DEFPACKAGE;
+    if (sym_eq(h, "deflockfile")) return SF_DEFPACKAGE;
     if (sym_eq(h, "defn"))        return SF_DEFN;
     if (sym_eq(h, "defmacro"))    return SF_DEFMACRO;
     if (sym_eq(h, "fn"))          return SF_FN;
@@ -565,6 +568,76 @@ static void fmt_set_broken(FmtState *s, const Form *f) {
     fs_putc(s, ')');
 }
 
+/* Emit a non-empty F_MAP in block style:
+ *   #{
+ *     k v           ← at entry_col
+ *     k v
+ *   }               ← closing at close_col
+ * Used by fmt_defpackage for :spices / :cmake-deps values. */
+static void fmt_map_block(FmtState *s, const Form *f,
+                           uint32_t entry_col, uint32_t close_col) {
+    uint32_t n = f->as.list.len;
+    fs_puts(s, "#{");
+    uint32_t i = 0;
+    while (i < n) {
+        fs_newline_indent(s, entry_col);
+        fmt_form(s, f->as.list.items[i]); i++;
+        if (i < n) {
+            fs_putc(s, ' ');
+            fmt_form(s, f->as.list.items[i]); i++;
+        }
+    }
+    fs_newline_indent(s, close_col);
+    fs_putc(s, '}');
+}
+
+/* (defpackage name        also handles (deflockfile ...)
+ *   :key1 val1
+ *   :spices #{
+ *     "name" #{...}
+ *   }) */
+static void fmt_defpackage(FmtState *s, const Form *f) {
+    uint32_t n = f->as.list.len;
+    uint32_t paren_col = s->col;
+    uint32_t body_col  = paren_col + s->opts.indent_width;
+
+    fs_putc(s, '(');
+
+    /* head (defpackage/deflockfile) + package name */
+    for (uint32_t i = 0; i < 2 && i < n; i++) {
+        if (i) fs_putc(s, ' ');
+        fmt_form(s, f->as.list.items[i]);
+    }
+
+    /* keyword-value pairs starting at index 2 */
+    uint32_t i = 2;
+    while (i < n) {
+        fs_newline_indent(s, body_col);
+        fmt_form(s, f->as.list.items[i]); /* keyword */
+        i++;
+        if (i < n) {
+            const Form *val = f->as.list.items[i];
+            fs_putc(s, ' ');
+            /* Non-empty map value: try inline, fall back to block */
+            if (val->tag == F_MAP && val->as.list.len > 0) {
+                uint32_t w = fmt_measure(val);
+                if (s->col + w <= s->opts.line_width) {
+                    fmt_emit_inline(s, val);
+                } else {
+                    fmt_map_block(s, val,
+                                  body_col + s->opts.indent_width,
+                                  body_col);
+                }
+            } else {
+                fmt_form(s, val);
+            }
+            i++;
+        }
+    }
+
+    fs_putc(s, ')');
+}
+
 /* ---------------------------------------------------------------------------
  * Main list dispatcher
  * ---------------------------------------------------------------------------
@@ -590,6 +663,7 @@ static void fmt_list(FmtState *s, const Form *f) {
         case SF_DO:          fmt_do(s, f);         break;
         case SF_CASE:        fmt_case(s, f);       break;
         case SF_HANDLE:      fmt_handle(s, f);     break;
+        case SF_DEFPACKAGE:  fmt_defpackage(s, f);  break;
         case SF_DEFCLASS:    fmt_defclass(s, f);   break;
         case SF_DEFINSTANCE: fmt_definstance(s, f);break;
         /* defeffect is usually short; if it doesn't fit, use generic layout */

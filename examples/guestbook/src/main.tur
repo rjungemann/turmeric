@@ -1,0 +1,140 @@
+;;; main.tur -- entry point for the guestbook server.
+;;;
+;;; Starts the HTTP listener, loads the entry store, then runs the main
+;;; request loop. Each request is dispatched to the router. The HttpEffect
+;;; algebraic effect is handled here by calling httpd-send-response.
+;;;
+;;; Usage:
+;;;   GUESTBOOK_SECRET="my-real-secret" ./guestbook
+;;;
+;;; The server listens on http://127.0.0.1:8080 by default.
+;;; Set PORT to override. Set GUESTBOOK_SECRET to a strong random string
+;;; in production -- the default "dev-insecure-secret" is for local testing only.
+;;;
+;;; Since: Guestbook example
+
+; ---------------------------------------------------------------------------
+; C FFI -- minimal HTTP listener (httpd.c)
+; ---------------------------------------------------------------------------
+
+;;; httpd-start -- bind an HTTP listener on the given port.
+;;;
+;;; Parameters:
+;;;   port -- TCP port number (1-65535)
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Since: Guestbook example
+(extern-c httpd-start [(port : int64)] : int64
+  "httpd_start")
+
+;;; httpd-next-request -- block until the next HTTP request arrives.
+;;;
+;;; Parameters:
+;;;   out-method -- pointer to receive the HTTP method string
+;;;   out-path   -- pointer to receive the URL path
+;;;   out-query  -- pointer to receive the raw query string
+;;;   out-body   -- pointer to receive the POST body
+;;;
+;;; Returns:
+;;;   unit
+;;;
+;;; Since: Guestbook example
+(extern-c httpd-next-request
+  [(out-method : ptr<cstr>)
+   (out-path   : ptr<cstr>)
+   (out-query  : ptr<cstr>)
+   (out-body   : ptr<cstr>)] : unit
+  "httpd_next_request")
+
+;;; httpd-send-response-raw -- write an HTTP response to the open connection.
+;;;
+;;; Parameters:
+;;;   status       -- HTTP status code
+;;;   content-type -- MIME type string
+;;;   body         -- response body
+;;;
+;;; Returns:
+;;;   unit
+;;;
+;;; Since: Guestbook example
+(extern-c httpd-send-response-raw
+  [(status       : int64)
+   (content-type : cstr)
+   (body         : cstr)] : unit
+  "httpd_send_response")
+
+; ---------------------------------------------------------------------------
+; Server configuration
+; ---------------------------------------------------------------------------
+
+;;; SERVER-SECRET -- HMAC key for signing continuation tokens.
+;;; Override via the GUESTBOOK_SECRET environment variable in production.
+(def SERVER-SECRET : bytes
+  (cstr->bytes (or (getenv "GUESTBOOK_SECRET") "dev-insecure-secret")))
+
+;;; DEFAULT-PORT -- TCP port to listen on. Override via PORT env var.
+(def DEFAULT-PORT : int64 8080)
+
+; ---------------------------------------------------------------------------
+; Main request loop
+; ---------------------------------------------------------------------------
+
+;;; run-loop -- accept and dispatch HTTP requests indefinitely.
+;;;
+;;; Handles the HttpEffect algebraic effect by calling httpd-send-response-raw.
+;;;
+;;; Returns:
+;;;   unit (does not return -- runs forever)
+;;;
+;;; Since: Guestbook example
+(defn run-loop [] : unit
+  (loop
+    ; Allocate out-params for the next request.
+    (def out-method (ptr-alloc cstr))
+    (def out-path   (ptr-alloc cstr))
+    (def out-query  (ptr-alloc cstr))
+    (def out-body   (ptr-alloc cstr))
+
+    ; Block until a request arrives.
+    (httpd-next-request out-method out-path out-query out-body)
+
+    ; Construct the Turmeric request value.
+    (def req (HttpRequest
+               :method (ptr-deref out-method)
+               :path   (ptr-deref out-path)
+               :query  (ptr-deref out-query)
+               :body   (ptr-deref out-body)))
+
+    ; Dispatch the request, handling HttpEffect by sending the real response.
+    (handle
+      (dispatch req)
+      (HttpEffect.send-html [html] ->
+        (httpd-send-response-raw 200 "text/html" html)
+        (resume unit)))))
+
+;;; main -- server entry point.
+;;;
+;;; Returns:
+;;;   unit
+;;;
+;;; Since: Guestbook example
+(defn main [] : unit
+  (def port (or (cstr->int64-maybe (getenv "PORT")) DEFAULT-PORT))
+
+  ; Ensure the data directories exist.
+  (dir-create-all "data/conts")
+
+  ; Load the entry store from disk.
+  (store-load)
+
+  ; Bind the listener socket.
+  (def result (httpd-start port))
+  (when (< result 0)
+    (eprintln "guestbook: failed to start HTTP listener on port "
+              (int64->cstr port))
+    (exit 1))
+
+  ; Enter the request loop.
+  (run-loop))

@@ -1,0 +1,134 @@
+;;; security.tur -- HMAC token signing, token verification, HTML escaping,
+;;; and URL percent-decoding for the guestbook example.
+;;;
+;;; Since: Guestbook example
+
+; ---------------------------------------------------------------------------
+; HTML escaping
+; ---------------------------------------------------------------------------
+
+;;; html-escape -- escape HTML special characters in a string.
+;;;
+;;; Parameters:
+;;;   s -- raw user input
+;;;
+;;; Returns:
+;;;   HTML-safe cstr with &, <, >, and " replaced by named entities.
+;;;
+;;; Example:
+;;;   (html-escape "<script>alert(1)</script>")
+;;;   ; => "&lt;script&gt;alert(1)&lt;/script&gt;"
+;;;
+;;; Since: Guestbook example
+(defn html-escape [s : cstr] : cstr
+  (def s1 (cstr-replace-all s "&"  "&amp;"))
+  (def s2 (cstr-replace-all s1 "<"  "&lt;"))
+  (def s3 (cstr-replace-all s2 ">"  "&gt;"))
+  (cstr-replace-all s3 "\"" "&quot;"))
+
+; ---------------------------------------------------------------------------
+; URL percent-decoding
+; ---------------------------------------------------------------------------
+
+;;; hex-digit-val -- return the numeric value of a hex character (0-15),
+;;; or -1 if the character is not a valid hex digit.
+(defn hex-digit-val [c : int64] : int64
+  (cond
+    (and (>= c 48) (<= c 57))  (- c 48)       ; '0'-'9'
+    (and (>= c 65) (<= c 70))  (- c 55)       ; 'A'-'F'
+    (and (>= c 97) (<= c 102)) (- c 87)       ; 'a'-'f'
+    :else -1))
+
+;;; percent-decode -- decode a URL percent-encoded string.
+;;;
+;;; Parameters:
+;;;   s -- percent-encoded input (e.g. "Hello%20World" or "Hello+World")
+;;;
+;;; Returns:
+;;;   Decoded cstr. '+' is converted to space. Invalid %XX sequences are
+;;;   passed through unchanged.
+;;;
+;;; Example:
+;;;   (percent-decode "Hello%20World")  ; => "Hello World"
+;;;   (percent-decode "a+b")            ; => "a b"
+;;;
+;;; Since: Guestbook example
+(defn percent-decode [s : cstr] : cstr
+  (def len (cstr-len s))
+  (def out (vec-byte-alloc len))
+  (def i (ref 0))
+  (loop
+    (when (>= (deref i) len)
+      (break))
+    (def c (cstr-byte-at s (deref i)))
+    (cond
+      ; '+' -> space
+      (= c 43)
+      (do
+        (vec-byte-push out 32)
+        (set! i (+ (deref i) 1)))
+      ; '%XX' -> decoded byte
+      (and (= c 37) (<= (+ (deref i) 2) (- len 1)))
+      (do
+        (def hi (hex-digit-val (cstr-byte-at s (+ (deref i) 1))))
+        (def lo (hex-digit-val (cstr-byte-at s (+ (deref i) 2))))
+        (if (and (>= hi 0) (>= lo 0))
+          (do
+            (vec-byte-push out (+ (* hi 16) lo))
+            (set! i (+ (deref i) 3)))
+          (do
+            (vec-byte-push out c)
+            (set! i (+ (deref i) 1)))))
+      ; Ordinary character
+      :else
+      (do
+        (vec-byte-push out c)
+        (set! i (+ (deref i) 1)))))
+  (vec-byte->cstr out))
+
+; ---------------------------------------------------------------------------
+; HMAC token signing
+; ---------------------------------------------------------------------------
+
+;;; sign-token -- append an HMAC-SHA256 signature to a raw token.
+;;;
+;;; Parameters:
+;;;   token  -- raw hex token string (64 hex chars)
+;;;   secret -- server secret bytes
+;;;
+;;; Returns:
+;;;   "token.signature" where signature is the hex-encoded HMAC-SHA256.
+;;;
+;;; Example:
+;;;   (sign-token "abc123" my-secret)  ; => "abc123.<hex-hmac>"
+;;;
+;;; Since: Guestbook example
+(defn sign-token [token : cstr, secret : bytes] : cstr
+  (def sig (hex-encode (hmac-sha256 secret (cstr->bytes token))))
+  (str token "." sig))
+
+;;; verify-token -- verify the HMAC signature and return the raw token.
+;;;
+;;; Parameters:
+;;;   signed -- "token.signature" cstr produced by sign-token
+;;;   secret -- server secret bytes
+;;;
+;;; Returns:
+;;;   (Option cstr) -- Some(raw-token) if valid, None if tampered or malformed.
+;;;
+;;; Example:
+;;;   (verify-token "abc123.<hex-hmac>" my-secret)  ; => (Some "abc123")
+;;;   (verify-token "abc123.bad-sig"   my-secret)   ; => (None)
+;;;
+;;; Since: Guestbook example
+(defn verify-token [signed : cstr, secret : bytes] : (Option cstr)
+  (def dot-idx (cstr-find signed "."))
+  (match dot-idx
+    (None) -> (None)
+    (Some idx) ->
+      (def token    (cstr-take signed idx))
+      (def sig      (cstr-drop signed (+ idx 1)))
+      (def expected (hex-encode (hmac-sha256 secret (cstr->bytes token))))
+      (if (cstr-eq? sig expected)
+        (Some token)
+        (None))))

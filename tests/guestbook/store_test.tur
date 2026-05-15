@@ -1,0 +1,103 @@
+;;; store_test.tur -- unit tests for GuestEntry serialization and the store.
+;;;
+;;; Tests: GuestEntry Serializable round-trip, store-append / store-load.
+;;;
+;;; Run with:
+;;;   tur test tests/guestbook/store_test.tur
+;;;
+;;; Since: Guestbook example
+
+; ---------------------------------------------------------------------------
+; GuestEntry Serializable round-trip
+; ---------------------------------------------------------------------------
+
+(test "GuestEntry: serialize and deserialize round-trip"
+  (def entry (GuestEntry
+               :name      "Alice"
+               :message   "Hello, world!"
+               :posted-at 1747267200))
+  (def bytes   (serialize entry))
+  (def result  (deserialize bytes : (Result GuestEntry cstr)))
+  (match result
+    (Err msg) -> (fail (str "deserialize failed: " msg))
+    (Ok e) ->
+      (assert-eq e.name      "Alice")
+      (assert-eq e.message   "Hello, world!")
+      (assert-eq e.posted-at 1747267200)))
+
+(test "GuestEntry: Vec round-trip"
+  (def entries (Vec.of
+    [(GuestEntry :name "Alice" :message "First!"  :posted-at 1000)
+     (GuestEntry :name "Bob"   :message "Second." :posted-at 2000)]))
+  (def bytes  (serialize entries))
+  (def result (deserialize bytes : (Result (Vec GuestEntry) cstr)))
+  (match result
+    (Err msg) -> (fail (str "Vec deserialize failed: " msg))
+    (Ok got) ->
+      (assert-eq (Vec.len got) 2)
+      (assert-eq (Vec.get got 0).name "Alice")
+      (assert-eq (Vec.get got 1).name "Bob")))
+
+(test "GuestEntry: empty message is preserved"
+  (def entry  (GuestEntry :name "Carol" :message "" :posted-at 0))
+  (def bytes  (serialize entry))
+  (def result (deserialize bytes : (Result GuestEntry cstr)))
+  (match result
+    (Err msg) -> (fail msg)
+    (Ok e)    -> (assert-eq e.message "")))
+
+(test "GuestEntry: special characters round-trip"
+  (def entry  (GuestEntry
+                :name    "&lt;script&gt;"
+                :message "&amp;hello&amp;"
+                :posted-at 42))
+  (def bytes  (serialize entry))
+  (def result (deserialize bytes : (Result GuestEntry cstr)))
+  (match result
+    (Err msg) -> (fail msg)
+    (Ok e) ->
+      (assert-eq e.name    "&lt;script&gt;")
+      (assert-eq e.message "&amp;hello&amp;")))
+
+; ---------------------------------------------------------------------------
+; store-append and store-load (uses a temp directory to avoid polluting data/)
+; ---------------------------------------------------------------------------
+
+; Override ENTRIES-PATH to a temp file for these tests.
+; (In a real test harness, this would be injected via an effect or parameter.)
+
+(test "store-load: returns empty Vec when file missing"
+  (def entries (store-load-from "tests/guestbook/tmp/missing.bin"))
+  (assert-eq (Vec.len entries) 0))
+
+(test "store-append and store-load: round-trip"
+  (def tmp-path "tests/guestbook/tmp/entries_test.bin")
+  (file-delete tmp-path)  ; start clean
+
+  (store-append-to tmp-path
+    (GuestEntry :name "Alice" :message "First"  :posted-at 1000))
+  (store-append-to tmp-path
+    (GuestEntry :name "Bob"   :message "Second" :posted-at 2000))
+
+  (def loaded (store-load-from tmp-path))
+  (assert-eq (Vec.len loaded) 2)
+  (assert-eq (Vec.get loaded 0).name "Alice")
+  (assert-eq (Vec.get loaded 1).name "Bob")
+
+  ; Clean up.
+  (file-delete tmp-path))
+
+(test "store-append-to: new entry appears after reload"
+  (def tmp-path "tests/guestbook/tmp/entries_append.bin")
+  (file-delete tmp-path)
+
+  (store-append-to tmp-path (GuestEntry :name "Dave" :message "Hi" :posted-at 100))
+  (def first-load (store-load-from tmp-path))
+  (assert-eq (Vec.len first-load) 1)
+
+  (store-append-to tmp-path (GuestEntry :name "Eve" :message "Hey" :posted-at 200))
+  (def second-load (store-load-from tmp-path))
+  (assert-eq (Vec.len second-load) 2)
+  (assert-eq (Vec.get second-load 1).name "Eve")
+
+  (file-delete tmp-path))

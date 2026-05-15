@@ -103,6 +103,12 @@ run-minikanren: minikanren
 run-roguelike: roguelike
     ./build/examples/roguelike-raylib/roguelike
 
+guestbook: configure-examples
+    cmake --build build --target guestbook
+
+run-guestbook: guestbook
+    ./build/examples/guestbook/guestbook
+
 # ---------------------------------------------------------------------------
 # Script examples (interpreted via `tur run`)
 # ---------------------------------------------------------------------------

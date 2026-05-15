@@ -145,6 +145,74 @@ rm -f "$_m3_hbuf"
 rm -rf "$_m3_dir2"
 
 # ---------------------------------------------------------------------------
+# Formatter round-trip tests (defpackage / deflockfile / comment preservation)
+# ---------------------------------------------------------------------------
+
+# fmt-defpackage-basic: a defpackage wide enough to exceed line width should
+# format with each :key val pair on its own line.
+_fmt_input='(defpackage my-project-with-longer-name :name "my-project-with-longer-name" :version "0.1.0" :description "A test package")'
+_fmt_out=$(echo "$_fmt_input" | "$TUR" format 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "fmt-defpackage-basic" "tur format exited $rc: $_fmt_out"
+elif ! echo "$_fmt_out" | grep -q ':name'; then
+    fail "fmt-defpackage-basic" ":name not present in output: $_fmt_out"
+elif ! echo "$_fmt_out" | grep -q '^  :version'; then
+    fail "fmt-defpackage-basic" ":version not on its own indented line: $_fmt_out"
+else
+    pass "fmt-defpackage-basic"
+fi
+
+# fmt-defpackage-round-trip: formatting a defpackage twice should be idempotent.
+_fmt1=$(printf '(defpackage my-project-with-longer-name\n  :name    "my-project-with-longer-name"\n  :version "0.1.0")' | "$TUR" format 2>&1)
+_fmt2=$(echo "$_fmt1" | "$TUR" format 2>&1)
+if [ "$_fmt1" != "$_fmt2" ]; then
+    fail "fmt-defpackage-round-trip" "formatter not idempotent; first pass != second pass"
+else
+    pass "fmt-defpackage-round-trip"
+fi
+
+# fmt-defpackage-spices-block: a defpackage with multiple spices should expand
+# the :spices map to block layout when it doesn't fit on one line.
+_fmt_spices_in='(defpackage my-application :name "my-application" :version "0.1.0" :spices #{"geom" #{ :url "https://github.com/alice/tur-geom" :ref "v0.2.1"} "http" #{ :url "https://github.com/alice/tur-http" :ref "v1.0.0"}})'
+_fmt_spices_out=$(echo "$_fmt_spices_in" | "$TUR" format 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "fmt-defpackage-spices-block" "tur format exited $rc"
+elif ! echo "$_fmt_spices_out" | grep -q '#{$'; then
+    fail "fmt-defpackage-spices-block" ":spices map was not expanded to block: $_fmt_spices_out"
+else
+    pass "fmt-defpackage-spices-block"
+fi
+
+# fmt-defpackage-spices-idempotent: the spices block output is itself idempotent.
+_fmt_spices1=$(echo "$_fmt_spices_in" | "$TUR" format 2>&1)
+_fmt_spices2=$(echo "$_fmt_spices1" | "$TUR" format 2>&1)
+if [ "$_fmt_spices1" != "$_fmt_spices2" ]; then
+    fail "fmt-defpackage-spices-idempotent" "formatter not idempotent for spices block"
+else
+    pass "fmt-defpackage-spices-idempotent"
+fi
+
+# fmt-defpackage-comments: a defpackage with a leading comment should preserve
+# the comment through a format round-trip.
+_fmt_cmt_out=$(printf '; This is a comment\n(defpackage my-app\n  :name    "my-app"\n  :version "0.1.0")' | "$TUR" format 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "fmt-defpackage-comments" "tur format exited $rc: $_fmt_cmt_out"
+elif ! echo "$_fmt_cmt_out" | grep -q 'This is a comment'; then
+    fail "fmt-defpackage-comments" "comment lost after formatting: $_fmt_cmt_out"
+else
+    pass "fmt-defpackage-comments"
+fi
+
+# fmt-deflockfile-round-trip: deflockfile form should be idempotent.
+_fmt_lock1=$(printf '(deflockfile\n  :format-version 1\n  :spices         #{}\n  :cmake-deps     #{})' | "$TUR" format 2>&1)
+_fmt_lock2=$(echo "$_fmt_lock1" | "$TUR" format 2>&1)
+if [ "$_fmt_lock1" != "$_fmt_lock2" ]; then
+    fail "fmt-deflockfile-round-trip" "formatter not idempotent for deflockfile"
+else
+    pass "fmt-deflockfile-round-trip"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo

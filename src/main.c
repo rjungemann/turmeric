@@ -666,20 +666,26 @@ static int cmd_build(const char *input, const char *out_path) {
     return 0;
 }
 
-static int cmd_run(const char *input) {
-    char out_path[] = "/tmp/tur-run-XXXXXX";
-    int fd = mkstemp(out_path);
-    if (fd < 0) { fprintf(stderr, "tur: mkstemp failed\n"); return 2; }
-    close(fd);
-    /* We need a path mkstemp picked, but cc will overwrite it; that's fine. */
-
-    int rc = cmd_build(input, out_path);
-    if (rc != 0) { unlink(out_path); return rc; }
-
-    int sys_rc = system(out_path);
-    unlink(out_path);
-    if (sys_rc != 0) return sys_rc;
-    return 0;
+/* Walk up from 'start' to find a directory containing build.tur.
+ * Returns malloc'd path string or NULL if not found. Caller must free(). */
+static char *find_project_root(const char *start) {
+    char dir[4096];
+    strncpy(dir, start, sizeof(dir) - 1);
+    dir[sizeof(dir) - 1] = '\0';
+    for (;;) {
+        char candidate[4096];
+        snprintf(candidate, sizeof(candidate), "%s/build.tur", dir);
+        struct stat st;
+        if (stat(candidate, &st) == 0) {
+            char *res = (char *)malloc(strlen(dir) + 1);
+            if (res) strcpy(res, dir);
+            return res;
+        }
+        char *slash = strrchr(dir, '/');
+        if (!slash || slash == dir) break;
+        *slash = '\0';
+    }
+    return NULL;
 }
 
 /* Collect all .tur files in a directory. Returns malloc'd array, sets *n_out. */
@@ -727,6 +733,114 @@ static int decode_exit_status(int status) {
     if (WIFEXITED(status)) return WEXITSTATUS(status);
     if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
     return 1;
+}
+
+static int cmd_run(int argc, char **argv) {
+    /* tur run [--release] [--offline] [<file>] [-- <args>...] */
+    bool        release           = false;
+    bool        offline           = false;
+    const char *explicit_file     = NULL;
+    int         passthrough_start = -1;
+
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--release") == 0) {
+            release = true;
+        } else if (strcmp(argv[i], "--offline") == 0) {
+            offline = true;
+        } else if (strcmp(argv[i], "--") == 0) {
+            passthrough_start = i + 1;
+            break;
+        } else if (argv[i][0] != '-') {
+            if (!explicit_file) explicit_file = argv[i];
+        }
+    }
+    (void)release; /* passed to compiler when --release build is supported */
+    (void)offline; /* passed to fetch when --offline is supported */
+
+    /* Helper: build 'entry', exec with optional passthrough args. */
+#define RUN_ENTRY(entry_path) do {                                       \
+        char out_path[] = "/tmp/tur-run-XXXXXX";                         \
+        int _fd = mkstemp(out_path);                                     \
+        if (_fd < 0) { fprintf(stderr, "tur: mkstemp failed\n"); return 2; } \
+        close(_fd);                                                      \
+        int _rc = cmd_build((entry_path), out_path);                     \
+        if (_rc != 0) { unlink(out_path); return _rc; }                  \
+        Buf _cmd; buf_init(&_cmd);                                       \
+        buf_printf(&_cmd, "'%s'", out_path);                             \
+        if (passthrough_start >= 0) {                                    \
+            for (int _i = passthrough_start; _i < argc; _i++)           \
+                buf_printf(&_cmd, " '%s'", argv[_i]);                   \
+        }                                                                \
+        buf_putc(&_cmd, '\0');                                           \
+        int _sys = system(_cmd.data);                                    \
+        buf_free(&_cmd);                                                  \
+        unlink(out_path);                                                \
+        return decode_exit_status(_sys);                                 \
+    } while (0)
+
+    /* Single-file mode: explicit file provided, skip project lookup. */
+    if (explicit_file) {
+        RUN_ENTRY(explicit_file);
+    }
+
+    /* Project mode: walk up to find build.tur. */
+    char cwd[4096];
+    if (!getcwd(cwd, sizeof(cwd))) {
+        fprintf(stderr, "tur run: cannot get current directory\n");
+        return 2;
+    }
+
+    char *root = find_project_root(cwd);
+    if (!root) {
+        fprintf(stderr,
+            "tur run: no build.tur found (searched up from '%s')\n"
+            "  Create a project with `tur new <name>`, "
+            "or pass a file directly: tur run src/main.tur\n",
+            cwd);
+        return 1;
+    }
+
+    /* Parse manifest for entry point configuration. */
+    char manifest_path[4096];
+    snprintf(manifest_path, sizeof(manifest_path), "%s/build.tur", root);
+    PkgManifest m;
+    memset(&m, 0, sizeof(m));
+    if (!pkg_manifest_read(manifest_path, &m)) { free(root); return 1; }
+
+    /* Entry point resolution (from the plan):
+     *   1. :entry key in build.tur  (not yet in PkgManifest -- future)
+     *   2. src/main.tur
+     *   3. single .tur file in src/ */
+    char entry[4096];
+    struct stat _st;
+    snprintf(entry, sizeof(entry), "%s/src/main.tur", root);
+    if (stat(entry, &_st) != 0) {
+        char src_dir[4096];
+        snprintf(src_dir, sizeof(src_dir), "%s/src", root);
+        int n_files = 0;
+        char **files = collect_tur_files(src_dir, &n_files);
+        if (n_files == 1) {
+            strncpy(entry, files[0], sizeof(entry) - 1);
+            entry[sizeof(entry) - 1] = '\0';
+        } else {
+            fprintf(stderr,
+                "tur run: cannot determine entry point\n"
+                "  Expected %s/src/main.tur, "
+                "or exactly one .tur file in %s/src/\n",
+                root, root);
+            free_tur_files(files, n_files);
+            pkg_manifest_free(&m);
+            free(root);
+            return 1;
+        }
+        free_tur_files(files, n_files);
+    }
+
+    pkg_manifest_free(&m);
+    free(root);
+
+    RUN_ENTRY(entry);
+#undef RUN_ENTRY
 }
 
 static int cmd_test(const char *dir) {
@@ -1363,8 +1477,7 @@ int main(int argc, char **argv) {
         }
     }
     if (strcmp(cmd, "run") == 0) {
-        if (argc != 3) return usage();
-        return cmd_run(argv[2]);
+        return cmd_run(argc, argv);
     }
     if (strcmp(cmd, "repl") == 0) {
         /* Phase S0: interactive REPL */
@@ -1390,6 +1503,8 @@ int main(int argc, char **argv) {
         return cmd_test(argv[2]);
     }
     /* Phase PKG-1: Spice package manager commands */
+    if (strcmp(cmd, "new") == 0)
+        return cmd_pkg_new(argc, argv);
     if (strcmp(cmd, "init") == 0)
         return cmd_pkg_init(argc, argv);
     if (strcmp(cmd, "add") == 0)

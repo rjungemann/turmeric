@@ -39,6 +39,12 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 - **[cellular-automata-comonad-tutorial.md](cellular-automata-comonad-tutorial.md)** — Cellular automata with comonads
 - **[custom-effects-tutorial.md](custom-effects-tutorial.md)** — Writing custom effects
 - **[snake-game-tutorial.md](snake-game-tutorial.md)** — Building the snake game example
+- **[web-continuations-tutorial.md](web-continuations-tutorial.md)** — Multi-page web forms using serializable continuations (guestbook example)
+- **[web-continuations-guide.md](web-continuations-guide.md)** — Compact reference: `send-form-and-wait`, continuation store, routing model
+
+## Package Management
+
+- **[package-management-guide.md](package-management-guide.md)** — Creating projects, adding spices, `build.tur`, `tur.lock`, CLI reference
 
 ## Tools and IDE
 
@@ -56,9 +62,10 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 **By topic:**
 - Concurrency → [threading-guide.md](threading-guide.md), [async-await-guide.md](async-await-guide.md), [stm-guide.md](stm-guide.md), [stm-tutorial.md](stm-tutorial.md)
 - Data structures → [hamt-guide.md](hamt-guide.md)
-- Control flow → [effects-system-guide.md](effects-system-guide.md), [logic-programming-guide.md](logic-programming-guide.md), [serializable-continuations-guide.md](serializable-continuations-guide.md)
+- Control flow → [effects-system-guide.md](effects-system-guide.md), [logic-programming-guide.md](logic-programming-guide.md), [serializable-continuations-guide.md](serializable-continuations-guide.md), [web-continuations-guide.md](web-continuations-guide.md)
 - Type system → [hkt-guide.md](hkt-guide.md), [hrt-guide.md](hrt-guide.md), [module-system-guide.md](module-system-guide.md)
 - Effects design → [effects-vs-monads.md](effects-vs-monads.md)
+- Package management → [package-management-guide.md](package-management-guide.md)
 - Tools → [formatter-guide.md](formatter-guide.md), [vscode-guide.md](vscode-guide.md)
 - Error handling → [error-handling-guide.md](error-handling-guide.md)
 

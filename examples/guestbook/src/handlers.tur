@@ -1,0 +1,122 @@
+;;; handlers.tur -- page handler functions for the guestbook.
+;;;
+;;; The central export is run-guestbook-flow, which is a single straight-line
+;;; function spanning all four pages. Each call to send-form-and-wait
+;;; serializes the continuation and hands control back to the HTTP loop.
+;;;
+;;; Since: Guestbook example
+
+; ---------------------------------------------------------------------------
+; HttpEffect -- algebraic effect for sending HTML responses
+; ---------------------------------------------------------------------------
+
+;;; HttpEffect -- algebraic effect for sending HTTP responses.
+;;; Since: Guestbook example
+(defeffect HttpEffect
+  (send-html [body : cstr] : unit))
+
+; ---------------------------------------------------------------------------
+; send-form-and-wait -- the core continuation idiom
+; ---------------------------------------------------------------------------
+
+;;; send-form-and-wait -- render a form page and suspend until it is submitted.
+;;;
+;;; Captures the current continuation, stores it under a signed token, builds
+;;; the form action URL, and sends the rendered HTML. Control returns to the
+;;; HTTP loop. When the browser POSTs to /submit?k=TOKEN, the router calls
+;;; serial-resume, and this function returns with the raw POST body.
+;;;
+;;; Parameters:
+;;;   render-fn -- a function from action URL to HTML string
+;;;
+;;; Returns:
+;;;   The raw POST body submitted by the browser.
+;;;
+;;; Example:
+;;;   (def body (send-form-and-wait (fn [action] (render-name-form action))))
+;;;   (def name (or (parse-form-field body "name") "Anonymous"))
+;;;
+;;; Since: Guestbook example
+(defn send-form-and-wait [render-fn : (-> cstr cstr)] : cstr
+  (serial-shift [k]
+    (def token  (store-continuation k))
+    (def action (str "/submit?k=" token))
+    (def html   (render-fn action))
+    (perform HttpEffect (send-html html))))
+
+; ---------------------------------------------------------------------------
+; show-entries-handler -- GET /entries (no continuation needed)
+; ---------------------------------------------------------------------------
+
+;;; show-entries-handler -- list all guestbook entries.
+;;;
+;;; Parameters:
+;;;   req -- the incoming HTTP request
+;;;
+;;; Returns:
+;;;   unit (side effect: sends an HTML response via HttpEffect)
+;;;
+;;; Since: Guestbook example
+(defn show-entries-handler [req : HttpRequest] : unit
+  (perform HttpEffect (send-html (render-entries (store-all)))))
+
+; ---------------------------------------------------------------------------
+; run-guestbook-flow -- the main multi-page continuation flow
+; ---------------------------------------------------------------------------
+
+;;; run-guestbook-flow -- run the four-page guestbook sign-in flow.
+;;;
+;;; This single function covers pages 1-4:
+;;;   1. Name form
+;;;   2. Message form
+;;;   3. Preview (with confirm + back)
+;;;   4. Thank-you / confirmation
+;;;
+;;; Each page is driven by a call to send-form-and-wait, which serializes
+;;; the continuation and returns the submitted POST body when the browser
+;;; fills in the form.
+;;;
+;;; Parameters:
+;;;   req -- the initial GET / request (path/query unused; only starts flow)
+;;;
+;;; Returns:
+;;;   unit (side effect: sends HTML pages, eventually writes a GuestEntry)
+;;;
+;;; Since: Guestbook example
+(defn run-guestbook-flow [req : HttpRequest] : unit
+  (serial-reset
+
+    ;; Page 1: collect the visitor's name.
+    (def name-body
+      (send-form-and-wait (fn [action]
+        (render-name-form action))))
+    (def name
+      (html-escape (or (parse-form-field name-body "name") "Anonymous")))
+
+    ;; Page 2: collect the visitor's message.
+    (def msg-body
+      (send-form-and-wait (fn [action]
+        (render-message-form action name))))
+    (def message
+      (html-escape (or (parse-form-field msg-body "message") "")))
+
+    ;; Page 3: show a preview.
+    ;; Two continuations are stored here:
+    ;;   k-back    -- resumes at this serial-shift (re-enters message form)
+    ;;   k-confirm -- resumes at the outer serial-shift (proceeds to thank-you)
+    ;; The preview page links to both tokens. The router decides which to
+    ;; resume based on which token appears in the POST's query string.
+    (serial-shift [k-back]
+      (serial-shift [k-confirm]
+        (def t-back    (store-continuation k-back))
+        (def t-confirm (store-continuation k-confirm))
+        (perform HttpEffect
+          (send-html (render-preview name message t-back t-confirm)))))
+
+    ;; Page 4: confirmed -- write the entry and show thank-you.
+    (store-append (GuestEntry
+                    :name      name
+                    :message   message
+                    :posted-at (unix-now)))
+    (perform HttpEffect
+      (send-html (render-thankyou (store-all))))))

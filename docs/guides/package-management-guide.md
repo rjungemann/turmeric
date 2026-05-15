@@ -1,0 +1,478 @@
+# Turmeric Package Management Guide (Spice)
+
+Turmeric's package manager is called **Spice**. Every project has a single
+`build.tur` manifest at its root. The `tur` CLI handles creating projects,
+adding dependencies, fetching sources, and building -- no separate package
+manager binary is needed.
+
+This guide covers:
+
+1. Creating a new project
+2. The `build.tur` manifest
+3. Adding dependencies (spices)
+4. The lock file (`tur.lock`)
+5. Building and running
+6. Project directory layout
+7. C/CMake dependencies
+8. Common CLI reference
+9. Module integration
+10. Versioning and security
+
+---
+
+## 1. Creating a New Project
+
+```sh
+tur new my-app          # executable project (new directory)
+tur new my-lib --lib    # library project (new directory)
+tur init                # scaffold inside the current directory
+tur init --lib          # library, inside the current directory
+tur new my-app --no-git # skip automatic git init
+```
+
+`tur new <name>` creates the directory and scaffolds it. `tur init` does the
+same thing inside an existing empty directory (following the same convention
+as `git init`).
+
+**Name rules:** must match `[a-z][a-z0-9-]*`. Names starting with a digit or
+containing uppercase letters are rejected with a suggestion.
+
+### Files created
+
+```
+my-app/
+  build.tur     -- package manifest
+  tur.lock      -- empty lock file (commit to VCS)
+  src/
+    main.tur    -- hello-world entry point (executable)
+  .gitignore    -- ignores build/, spices/, cmake/
+  README.md
+```
+
+For `--lib`, `src/main.tur` is replaced by `src/lib.tur` with a stub exported
+function.
+
+### Generated `build.tur`
+
+```turmeric
+(defpackage my-app
+  :name    "my-app"
+  :version "0.1.0")
+```
+
+### Generated `src/main.tur`
+
+```turmeric
+#lang turmeric
+
+(defn main [] :int
+  (println "Hello from my-app!")
+  0)
+```
+
+After scaffolding, run the project immediately:
+
+```sh
+cd my-app
+tur run
+```
+
+---
+
+## 2. The `build.tur` Manifest
+
+Every Turmeric project has one `build.tur` at its root. It is a valid
+Turmeric source file evaluated at build time. The top-level form is
+`defpackage`.
+
+### Full example
+
+```turmeric
+;;; build.tur -- project manifest for "geom"
+(defpackage geom
+  :name        "geom"
+  :version     "0.2.1"
+  :description "2D/3D geometry library for Turmeric"
+  :license     "MIT"
+  :authors     ["Alice Smith <alice@example.com>"]
+  :repository  "https://github.com/alice/tur-geom"
+
+  ;; Turmeric package dependencies
+  :spices {
+    "math"  {:url "https://github.com/bob/tur-math"    :ref "v1.5.2"}
+    "test"  {:url "https://github.com/bob/tur-test"    :ref "v0.3.0"
+             :optional true}
+    "utils" {:path "../tur-utils"}   ; local dev path
+  }
+
+  ;; C/C++ packages (CPM-compatible)
+  :cmake-deps {
+    "raylib" {:url     "https://github.com/raysan5/raylib"
+              :ref     "5.0"
+              :options {:BUILD_SHARED_LIBS "OFF"
+                        :BUILD_EXAMPLES   "OFF"}}
+    "cjson"  {:url "https://github.com/DaveGamble/cJSON"
+              :ref "v1.7.16"}
+  }
+
+  ;; Compiler and C toolchain options
+  :build-opts {
+    :c-flags   ["-O3" "-DGEOM_PRECISION=f64"]
+    :link-libs ["m"]
+    :no-stdlib false
+  }
+
+  ;; What this package exports to consumers
+  :exports {
+    "geom/vector" ["vector-2d" "vector-3d" "cross-product"]
+    "geom/matrix" ["matrix-2x2" "matrix-3x3" "multiply"]
+  })
+```
+
+### Minimal manifests
+
+A library with one Turmeric dependency:
+
+```turmeric
+(defpackage my-lib
+  :name    "my-lib"
+  :version "0.1.0"
+  :spices  {"core" {:url "https://github.com/turm/tur-core" :ref "v1.0.0"}})
+```
+
+A standalone binary with no dependencies:
+
+```turmeric
+(defpackage hello
+  :name    "hello"
+  :version "0.1.0")
+```
+
+---
+
+## 3. Adding Dependencies (Spices)
+
+Dependencies in Turmeric are called *spices*. Use `tur add` to add one; it
+updates both `build.tur` and `tur.lock` for you.
+
+### Adding from a Git URL
+
+```sh
+tur add https://github.com/alice/tur-geom
+tur add https://github.com/alice/tur-geom --ref v0.2.1
+```
+
+The spice name defaults to the last path component of the URL with any `tur-`
+prefix stripped (`tur-geom` becomes `geom`). Override with `--name`:
+
+```sh
+tur add https://github.com/alice/tur-geom --ref v0.2.1 --name geometry
+```
+
+If `--ref` is omitted, the tool resolves to the default branch HEAD and warns:
+
+```
+Warning: no --ref specified; resolved to HEAD (a1b2c3d4).
+Pin with: tur add https://github.com/alice/tur-geom --ref a1b2c3d4
+```
+
+### Adding a local path dependency
+
+```sh
+tur add ../tur-utils --path
+```
+
+Use this for monorepo workspaces or while actively developing a dependency.
+Local path spices are never written to `tur.lock`.
+
+### Adding from the Spice registry (future)
+
+```sh
+tur add spice/http
+tur add spice/json
+```
+
+The official registry at `pkg.turmeric-lang.org` is not yet live. Until it
+is, `tur add spice/<pkg>` prints:
+
+```
+The Spice registry is not yet available.
+Add the package directly with a Git URL:
+  tur add https://github.com/turmeric-spice/tur-http --ref v0.1.0
+```
+
+### What `tur add` changes
+
+Before:
+
+```turmeric
+(defpackage my-app
+  :name    "my-app"
+  :version "0.1.0")
+```
+
+After `tur add https://github.com/alice/tur-geom --ref v0.2.1`:
+
+```turmeric
+(defpackage my-app
+  :name    "my-app"
+  :version "0.1.0"
+  :spices {
+    "geom" {:url "https://github.com/alice/tur-geom"
+            :ref "v0.2.1"}
+  })
+```
+
+### Error messages
+
+| Condition | Message |
+|---|---|
+| Not in a project directory | `No build.tur found. Run tur new <name> to create a project.` |
+| Spice already present | `'geom' is already a dependency. Use tur update geom to change the ref.` |
+| Network failure | `Failed to reach https://github.com/...: <reason>` |
+| Ref not found | `Ref 'v99.0.0' not found in https://github.com/alice/tur-geom` |
+| SHA mismatch on re-fetch | `Integrity check failed for 'geom'. Run tur fetch --force to re-download.` |
+
+---
+
+## 4. The Lock File (`tur.lock`)
+
+`tur.lock` records the exact resolved commit SHA and SHA-256 hash for every
+fetched spice. It uses the same Turmeric S-expression syntax as `build.tur`
+so it can be parsed by the same reader and diffed cleanly in version control.
+
+```turmeric
+;;; tur.lock -- generated by tur. Do not edit by hand.
+;;; Commit this file to version control for reproducible builds.
+
+(deflockfile
+  :format-version 1
+  :spices {
+    "geom" {:url        "https://github.com/alice/tur-geom"
+            :ref        "v0.2.1"
+            :resolved   "a1b2c3d4e5f6..."   ;;; full commit SHA
+            :sha256     "abc123..."
+            :fetched-at "2026-05-14T09:00:00Z"}
+    "math" {:url        "https://github.com/bob/tur-math"
+            :ref        "v1.5.2"
+            :resolved   "d6e7f8a9b0c1..."
+            :sha256     "def456..."
+            :fetched-at "2026-05-14T09:00:03Z"}
+  }
+  :cmake-deps {
+    "raylib" {:url      "https://github.com/raysan5/raylib"
+              :ref      "5.0"
+              :resolved "5.0"
+              :sha256   "ghi789..."}
+  })
+```
+
+**Rules:**
+
+- Always commit `tur.lock` to version control.
+- `tur fetch` creates or updates the lock file.
+- `tur build` uses the lock file and will not silently upgrade versions.
+- Local `:path` spices are not recorded in the lock file.
+- Builds fail if a fetched spice's hash does not match the lock file entry.
+
+---
+
+## 5. Building and Running
+
+### Run the project
+
+```sh
+tur run                   # debug build + run
+tur run --release         # release build + run
+tur run --offline         # skip network; fail if any spice is missing
+tur run -- --flag arg     # pass arguments to the binary
+tur run src/other.tur     # run a specific file (no build.tur required)
+```
+
+`tur run` walks up from the current directory to find `build.tur`, resolves
+dependencies, compiles, and executes the binary. The exit code matches the
+binary's exit code.
+
+### Entry point resolution
+
+| Condition | Entry file |
+|---|---|
+| `build.tur` has `:entry "src/foo.tur"` | `src/foo.tur` |
+| `src/main.tur` exists | `src/main.tur` |
+| Single `*.tur` file in `src/` | that file |
+| None of the above | error with suggestion |
+
+### Compile without running
+
+```sh
+tur build
+tur build --release
+```
+
+### Fetch dependencies without building
+
+```sh
+tur fetch              # fetch all spices listed in tur.lock
+tur fetch --update     # update spices to the latest allowed versions
+```
+
+### Run the test suite
+
+```sh
+tur test
+```
+
+See [test-runner-contract.md](test-runner-contract.md) for the test framework
+API.
+
+---
+
+## 6. Project Directory Layout
+
+```
+my-project/
+  build.tur              -- package manifest (written by the author)
+  tur.lock               -- reproducibility lock (committed to VCS)
+  src/
+    main.tur
+    util.tur
+  spices/                -- fetched spice sources (gitignored)
+    math-v1.5.2/
+      build.tur
+      src/
+    test-v0.3.0/
+      build.tur
+      src/
+  cmake/                 -- generated CMake helpers (gitignored)
+    SpiceDeps.cmake      -- generated from :cmake-deps
+  build/                 -- build artifacts (gitignored)
+```
+
+Recommended `.gitignore`:
+
+```
+build/
+spices/
+cmake/SpiceDeps.cmake
+```
+
+---
+
+## 7. C/CMake Dependencies
+
+The `:cmake-deps` block declares C and C++ packages to link against. The
+`tur build` command generates `cmake/SpiceDeps.cmake` from this block and
+invokes CMake automatically -- no CMake files need to be written by hand.
+
+```turmeric
+:cmake-deps {
+  "raylib"  {:url     "https://github.com/raysan5/raylib"
+             :ref     "5.0"
+             :options {:BUILD_SHARED_LIBS "OFF"
+                       :BUILD_EXAMPLES   "OFF"}}
+
+  "sqlite3" {:url "https://github.com/sqlite/sqlite"
+             :ref "version-3.45.0"}
+}
+```
+
+Add a CMake dependency from the command line:
+
+```sh
+tur add --cmake https://github.com/raysan5/raylib --ref 5.0
+```
+
+The entry goes into `:cmake-deps` instead of `:spices`.
+
+For projects that need direct control of the CMake build, see
+[cmake-cpm-integration-plan.md](../cmake-cpm-integration-plan.md).
+
+---
+
+## 8. Common CLI Reference
+
+```sh
+# Project creation
+tur new <name>             # create a new executable project
+tur new <name> --lib       # create a new library project
+tur init                   # scaffold inside the current directory
+
+# Dependencies
+tur add <url>              # add a spice from a Git URL
+tur add <url> --ref <ref>  # pin to a specific tag, branch, or SHA
+tur add <path> --path      # add a local path dependency
+tur add --cmake <url>      # add a C/CMake dependency
+tur fetch                  # download all spices from tur.lock
+tur fetch --update         # update to latest allowed versions
+
+# Build and run
+tur build                  # compile (debug)
+tur build --release        # compile (release)
+tur run                    # compile and execute
+tur run --release          # compile (release) and execute
+tur run --offline          # run without network access
+tur test                   # run the test suite
+
+# Diagnostics
+tur emit-c src/main.tur    # print generated C to stdout
+```
+
+---
+
+## 9. Module Integration
+
+Spice names map directly to module import paths. Given a spice named `geom`
+that exports `geom/vector` and `geom/matrix`:
+
+```turmeric
+;; In my-app/src/main.tur
+(import geom/vector :refer [vector-2d cross-product])
+(import geom/matrix :as mat)
+```
+
+The compiler resolves:
+
+- `geom/vector` -> `spices/geom-v0.2.1/src/vector.tur`
+- `geom/matrix` -> `spices/geom-v0.2.1/src/matrix.tur`
+
+The module system handles namespacing within a single package; Spice handles
+dependencies between packages. See [module-system-guide.md](module-system-guide.md)
+for the full module system reference.
+
+---
+
+## 10. Versioning and Security
+
+### Semantic versioning
+
+- Versions follow semver: `MAJOR.MINOR.PATCH`
+- Git tags must be named `vMAJOR.MINOR.PATCH` (e.g., `v1.2.3`)
+- Pre-releases: `v0.2.0-alpha.1`
+- Future registry constraints: `^0.2.0`, `~1.5`, `1.2.3` (exact)
+- Git-URL spices always pin to the exact `:ref`; no range resolution
+
+### Security guarantees
+
+- All fetched spices are verified against the SHA-256 hash in `tur.lock`.
+- Builds fail if the hash does not match; no silent re-downloads.
+- GPG-signed Git tags are supported (verification is opt-in in v1).
+- Source-only distribution -- no precompiled binaries in the lock file.
+
+### Conflict resolution
+
+- Two spices requiring incompatible versions of a third spice cause a build
+  error with a clear diagnostic.
+- The user must either upgrade one spice or pin versions to a compatible
+  range.
+- There is no silent multiple-version shadowing.
+
+### Private repositories
+
+SSH URLs work with standard Git credential helpers:
+
+```sh
+tur add git@github.com:myorg/private-lib.git --ref v1.0.0
+```
+
+Set `GIT_SSH_COMMAND` in your environment to control the SSH client used
+during fetch.
