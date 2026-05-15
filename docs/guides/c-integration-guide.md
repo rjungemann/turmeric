@@ -135,6 +135,11 @@ Inline C is the escape hatch for anything the type system cannot yet express:
 struct definitions, platform intrinsics, `#include`s for system headers inside
 a function scope, etc.
 
+**Style rule**: always place the closing ` ``` ` and the enclosing `)` on the
+same line (` ```) `). Putting ` ``` ` on its own line causes Markdown renderers
+to interpret it as the end of any surrounding code fence, breaking rendered
+documentation.
+
 **Important constraints:**
 
 - The generated code is `c99 -pedantic`. Avoid GCC/Clang extensions unless

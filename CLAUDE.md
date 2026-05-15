@@ -79,6 +79,21 @@ Test fixture files (`tests/fixtures/**/*.tur`) must be ASCII-only. The Turmeric
 parser hangs on non-ASCII bytes (e.g. UTF-8 em dashes). Always use `--` instead
 of `--`.
 
+## Inline C Block Style Rule
+
+Always place the closing ` ``` ` and its enclosing `)` on the same line
+(` ```) `). Placing ` ``` ` on its own line causes Markdown renderers to
+interpret it as the end of any surrounding code fence, breaking rendered
+documentation. Example:
+
+```turmeric
+(defn file-size [f] :int
+  ```c
+  FILE* file = (FILE*)f;
+  return (int)ftell(file);
+  ```)
+```
+
 ## Stdlib Layout
 
 ```
