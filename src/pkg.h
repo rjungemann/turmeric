@@ -19,6 +19,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "buf.h"
 
 /* ------------------------------------------------------------------ */
 /* CMake option key/value pair                                          */
@@ -35,11 +36,34 @@ typedef struct PkgCmakeOpt {
 
 typedef struct PkgCmakeDep {
     char         *name;
-    char         *url;
-    char         *ref;
+    char         *url;         /* git URL; NULL for local-path deps */
+    char         *ref;         /* git tag/branch/SHA; NULL for path deps */
+    char         *path;        /* local path; NULL for git deps */
+    char         *cmake_name;  /* find_package name if different from key */
+    char        **targets;     /* CMake targets to link against */
+    int           n_targets;
     PkgCmakeOpt  *opts;
     int           n_opts;
 } PkgCmakeDep;
+
+/* ------------------------------------------------------------------ */
+/* Parsed spice-deps-manifest.json entry                               */
+/* ------------------------------------------------------------------ */
+
+typedef struct PkgCmakeManifestEntry {
+    char  *name;
+    char **include_dirs;
+    int    n_include_dirs;
+    char **link_dirs;
+    int    n_link_dirs;
+    char **link_libs;
+    int    n_link_libs;
+} PkgCmakeManifestEntry;
+
+typedef struct PkgCmakeManifest {
+    PkgCmakeManifestEntry *entries;
+    int                    n_entries;
+} PkgCmakeManifest;
 
 /* ------------------------------------------------------------------ */
 /* A single Turmeric spice (package) dependency                        */
@@ -174,10 +198,34 @@ bool pkg_fetch_all(const char *project_dir,
                    PkgLockFile *lock,
                    bool update);
 
-/* Generate cmake/SpiceDeps.cmake from the :cmake-deps block.
+/* Generate cmake/CMakeLists.txt from the :cmake-deps block.
  * Returns true on success. */
 bool pkg_gen_cmake_deps(const char *project_dir,
                         const PkgManifest *manifest);
+
+/* Invoke cmake to configure and build the cmake/ subproject.
+ * Updates lock entries with resolved git SHAs.
+ * Returns true on success. */
+bool pkg_cmake_build(const char *project_dir,
+                     const PkgManifest *manifest,
+                     PkgLockFile *lock);
+
+/* Verify that each cmake dep's resolved SHA still matches tur.lock.
+ * Returns true if all match (or lock has no entry yet).
+ * Prints a diagnostic and returns false if a mismatch is found. */
+bool pkg_cmake_verify_lock(const char *project_dir,
+                            const PkgLockFile *lock);
+
+/* Parse cmake/spice-deps-manifest.json.
+ * Returns true on success (file not present is not an error -- returns true
+ * with n_entries == 0). */
+bool pkg_cmake_manifest_read(const char *path, PkgCmakeManifest *out);
+
+void pkg_cmake_manifest_free(PkgCmakeManifest *m);
+
+/* Append -I/-L/-l flags from a cmake manifest to buf (space-separated,
+ * no trailing NUL -- caller must add NUL before using as a C string). */
+void pkg_cmake_manifest_append_cc_flags(const PkgCmakeManifest *m, Buf *buf);
 
 /* ------------------------------------------------------------------ */
 /* CLI entry points (called from main.c)                               */
