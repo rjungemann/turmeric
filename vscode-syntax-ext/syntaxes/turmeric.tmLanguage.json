@@ -5,6 +5,7 @@
   "fileTypes": ["tur"],
   "uuid": "D8D5E82E-3D5B-46B8-8981-C61B89F00D57",
   "patterns": [
+    {"include": "#c-inline"},
     {"include": "#comment"},
     {"include": "#string"},
     {"include": "#number"},
@@ -17,6 +18,20 @@
     {"include": "#illegal"}
   ],
   "repository": {
+    "c-inline": {
+      "name": "meta.embedded.c.turmeric",
+      "begin": "```c?",
+      "end": "```",
+      "beginCaptures": {
+        "0": { "name": "punctuation.section.c-inline.begin.turmeric" }
+      },
+      "endCaptures": {
+        "0": { "name": "punctuation.section.c-inline.end.turmeric" }
+      },
+      "patterns": [
+        { "include": "source.c" }
+      ]
+    },
     "comment": {
       "patterns": [
         {
@@ -178,6 +193,7 @@
             }
           },
           "patterns": [
+            {"include": "#c-inline"},
             {"include": "#comment"},
             {"include": "#string"},
             {"include": "#number"},

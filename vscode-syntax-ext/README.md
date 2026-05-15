@@ -200,6 +200,22 @@ The extension automatically configures:
 - **Auto-indentation**: Increases after opening brackets/control forms
 - **Auto-closing pairs**: Brackets and quotes
 
+## Changelog
+
+### 0.2.0
+- Added syntax highlighting for inline-C blocks (` ```c ... ``` `) using the
+  embedded `source.c` grammar. C keywords, types, preprocessor directives, and
+  comments are now highlighted inside inline-C blocks in both `.tur` files and
+  Turmeric fenced code blocks in Markdown.
+- Added `punctuation.section.c-inline.begin.turmeric` and
+  `punctuation.section.c-inline.end.turmeric` scope names for fence delimiters
+  so themes can style them independently from C content.
+
+### 0.1.0
+- Initial release with keyword, string, number, boolean, comment, operator,
+  and s-expression highlighting.
+- Markdown injection grammar for fenced `turmeric` / `tur` code blocks.
+
 ## Known Limitations
 
 - Sweet-exp syntax detection is limited to indentation patterns; perfect parsing would require a full parser

@@ -76,7 +76,7 @@ FIXTURE="tests/fixtures/dump-kinds-basic/input.tur"
 out=$("$TUR" --dump-kinds emit-c "$FIXTURE" 2>/dev/null); rc=$?
 if [ $rc -ne 0 ]; then
     fail "dump-kinds-basic" "non-zero exit ($rc)"
-elif ! echo "$out" | grep -q "defclass Functor param\[0\] : \* -> \*"; then
+elif [[ "$out" != *"defclass Functor param[0] : * -> *"* ]]; then
     fail "dump-kinds-basic" "expected 'defclass Functor param[0] : * -> *' in output"
 else
     pass "dump-kinds-basic"

@@ -1,8 +1,8 @@
 # Compound-Type Annotations Plan
 
-**Status:** Planned
+**Status:** Implemented
 
-**Last Updated:** 2026-05-14
+**Last Updated:** 2026-05-15
 
 ---
 
