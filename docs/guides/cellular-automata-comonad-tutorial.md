@@ -31,7 +31,7 @@ For Game of Life, `f` is just "count Moore neighbours and apply the four rules".
 
 Turmeric declares typeclasses with `defclass`. Higher-kinded type constructor parameters use the `[^w]` syntax:
 
-```scheme
+```turmeric
 (defclass Comonad [^w]
   (extract   [wa]     :int)
   (extend    [wa fn]  :int)
@@ -62,7 +62,7 @@ The Comonad instance for Zipper:
 
 ### 1D XOR automaton
 
-```scheme
+```turmeric
 (defn ca-rule [z] :int
   ```c
   typedef struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } Zip;
@@ -110,7 +110,7 @@ Index formula: `data[y * width + x]`.
 
 ### Key primitives
 
-```scheme
+```turmeric
 ;; Allocate a zero-filled grid; focus starts at (0, 0).
 (defn grid-new [width height] :int ...)
 
@@ -133,7 +133,7 @@ Index formula: `data[y * width + x]`.
 
 ### The Comonad instance
 
-```scheme
+```turmeric
 (defn __gridctx_extend [g fn] :int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
@@ -170,7 +170,7 @@ The full implementation lives in [`stdlib/grid.tur`](../../stdlib/grid.tur).
 
 The Game of Life rule is a pure function from a focused grid to the next cell state:
 
-```scheme
+```turmeric
 (defn conway-rule [g] :int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
@@ -195,7 +195,7 @@ The Game of Life rule is a pure function from a focused grid to the next cell st
 
 A full generation step is then just:
 
-```scheme
+```turmeric
 (let [next (.extend current conway-rule)]
   ...)
 ```
@@ -204,7 +204,7 @@ That's it — the Comonad abstracts away all index management.
 
 ### Blinker demo
 
-```scheme
+```turmeric
 (let [g0 (grid-new 5 5)]
   (do
     (grid-set g0 1 2 1)

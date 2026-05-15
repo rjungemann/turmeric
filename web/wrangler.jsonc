@@ -1,14 +1,22 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "try-turmeric",
+  "main": "./worker.js",
   "compatibility_date": "2026-05-14",
   "observability": {
     "enabled": true
   },
   "assets": {
-    "directory": "./dist"
+    "directory": "./dist",
+    "binding": "ASSETS"
   },
   "compatibility_flags": [
     "nodejs_compat"
+  ],
+  "routes": [
+    { "pattern": "turmeric-lang.com", "custom_domain": true },
+    { "pattern": "www.turmeric-lang.com", "custom_domain": true },
+    { "pattern": "try.turmeric-lang.com", "custom_domain": true },
+    { "pattern": "install.turmeric-lang.com", "custom_domain": true }
   ]
 }

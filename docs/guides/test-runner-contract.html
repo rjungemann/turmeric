@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Test Runner Contract (Deferred Follow-up) | Turmeric Guides</title>
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--cream); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"JetBrains Mono","Fira Code",monospace; font-size:0.85em; background:var(--bg-code); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-code); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--faint); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-card); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold); }
+    .guide-content strong { color:var(--cream); }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/">turmeric</a>
+    <nav>
+      <a href="/docs/guides/">Guides</a>
+      <a href="/docs/api/">API Docs</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="page-layout">
+    <div class="sidebar">
+            <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--faint)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#test-runner-contract-deferred-follow-up" style="">Test Runner Contract (Deferred Follow-up)</a></li>
+<li style=""><a href="#scope" style="">Scope</a></li>
+<li style=""><a href="#discovery-model" style="">Discovery Model</a></li>
+<li style=""><a href="#registration-model" style="">Registration Model</a></li>
+<li style=""><a href="#assertion-semantics" style="">Assertion Semantics</a></li>
+<li style=""><a href="#callback-callability-contract-v1" style="">Callback Callability Contract (v1)</a></li>
+<li style=""><a href="#process-exit-semantics" style="">Process Exit Semantics</a></li>
+<li style=""><a href="#output-contract" style="">Output Contract</a></li>
+<li style=""><a href="#stdoutstderr-split" style="">Stdout/Stderr Split</a></li>
+<li style=""><a href="#determinism-requirements" style="">Determinism Requirements</a></li>
+<li style=""><a href="#multi-threaded-fixture-support-t19" style="">Multi-Threaded Fixture Support (T19)</a></li>
+<li style="padding-left:0.75rem;"><a href="#timeout-expectedtimeout" style="color:var(--faint);">Timeout (expected.timeout)</a></li>
+<li style="padding-left:0.75rem;"><a href="#threadsanitizer-requirestsan-tur_tsan1" style="color:var(--faint);">ThreadSanitizer (requires.tsan / TUR_TSAN=1)</a></li>
+<li style=""><a href="#follow-up-work-hooks" style="">Follow-up Work Hooks</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="test-runner-contract-deferred-follow-up">Test Runner Contract (Deferred Follow-up)</h1>
+<p>This document defines the expected behavior for stdlib test running follow-up work.</p>
+<h2 id="scope">Scope</h2>
+<p>Applies to:
+- stdlib test helpers in <code>stdlib/test.tur</code>
+- CLI test entry behavior (future <code>tur test</code> command path)
+- fixture and output conventions for pass/fail reporting</p>
+<h2 id="discovery-model">Discovery Model</h2>
+<ol>
+<li>Directory mode scans <code>tests/fixtures/**</code> for test-bearing fixture directories.</li>
+<li>A fixture is considered runnable if it has <code>input.tur</code>.</li>
+<li>Error fixtures are identified by <code>tests/fixtures/errors/**</code> and validated against <code>expected.diag</code>.</li>
+<li>Non-error fixtures are validated against <code>expected.stdout</code> where provided.</li>
+</ol>
+<h2 id="registration-model">Registration Model</h2>
+<ol>
+<li><code>deftest</code> registers test definitions in a global registry in declaration order.</li>
+<li><code>run-tests!</code> executes registered tests in deterministic order (declaration order).</li>
+<li>Duplicate test names are rejected with a diagnostic.</li>
+</ol>
+<h2 id="assertion-semantics">Assertion Semantics</h2>
+<ul>
+<li><code>assert expected actual</code>: pass iff values are equal.</li>
+<li><code>assert-true x</code>: pass iff <code>x</code> is boolean true.</li>
+<li><code>assert-false x</code>: pass iff <code>x</code> is boolean false.</li>
+<li><code>assert-nil x</code>: pass iff <code>x</code> is nil.</li>
+<li><code>assert-error body</code>: pass iff evaluating <code>body</code> emits an error per test harness policy.</li>
+</ul>
+<h2 id="callback-callability-contract-v1">Callback Callability Contract (v1)</h2>
+<ul>
+<li>Test callbacks are passed through function parameters typed as <code>:ptr&lt;void&gt;</code>.</li>
+<li>Passing a function value where <code>:ptr&lt;void&gt;</code> is expected is supported.</li>
+<li>Passing <code>nil</code> where <code>:ptr&lt;void&gt;</code> is expected is supported as a null-callback convention.</li>
+<li>In v1, callback invocation through this bridge is arity-0 only.</li>
+<li>Non-zero-arity invocation through <code>:ptr&lt;void&gt;</code> is a compile-time arity mismatch.</li>
+<li>Callback calls lower to typed function-pointer casts in emitted C.</li>
+</ul>
+<h2 id="process-exit-semantics">Process Exit Semantics</h2>
+<ul>
+<li>Exit code <code>0</code>: all tests pass.</li>
+<li>Exit code <code>1</code>: at least one test fails.</li>
+<li>Exit code <code>2</code>: harness/runtime/configuration error prevented reliable execution.</li>
+</ul>
+<h2 id="output-contract">Output Contract</h2>
+<p>Streaming output:
+- <code>.</code> per passing test
+- <code>F</code> per failing test</p>
+<p>Summary output at end:
+- total tests
+- passed
+- failed
+- elapsed (optional)</p>
+<p>Failure detail block includes:
+- test name
+- assertion message / diagnostic snippet
+- source location if available</p>
+<h2 id="stdoutstderr-split">Stdout/Stderr Split</h2>
+<ul>
+<li>Progress markers and summary go to stdout.</li>
+<li>Diagnostics, harness errors, and failure details may go to stderr.</li>
+<li>Contract tests should match whichever stream is explicitly specified for a fixture.</li>
+</ul>
+<h2 id="determinism-requirements">Determinism Requirements</h2>
+<ul>
+<li>Test order is stable.</li>
+<li>Output order is stable.</li>
+<li>Summary counts are reproducible.</li>
+</ul>
+<h2 id="multi-threaded-fixture-support-t19">Multi-Threaded Fixture Support (T19)</h2>
+<h3 id="timeout-expectedtimeout">Timeout (<code>expected.timeout</code>)</h3>
+<p>A fixture directory may contain an <code>expected.timeout</code> file whose content is an
+integer number of seconds.  The test runner kills the compiled binary and marks
+the fixture as failed if it runs longer than this timeout.  The default when the
+file is absent is <strong>10 seconds</strong>.  Set the value to <code>0</code> to disable the timeout
+for a fixture.</p>
+<p>The runner uses <code>timeout(1)</code> (GNU coreutils), <code>gtimeout</code> (Homebrew coreutils on
+macOS), or a <code>perl -e 'alarm N'</code> fallback.</p>
+<h3 id="threadsanitizer-requirestsan-tur_tsan1">ThreadSanitizer (<code>requires.tsan</code> / <code>TUR_TSAN=1</code>)</h3>
+<p>A fixture directory may contain an empty <code>requires.tsan</code> marker file.</p>
+<ul>
+<li>When <code>TUR_TSAN</code> is <strong>not</strong> set (default): fixtures with <code>requires.tsan</code> are
+  <strong>skipped</strong> (counted as PASS with a <code>(tsan-skipped)</code> detail).</li>
+<li>When <code>TUR_TSAN=1</code>: all fixtures run normally, including those with
+  <code>requires.tsan</code>.  The compiler flags gain <code>-fsanitize=thread -g</code>.</li>
+</ul>
+<p>Enable TSan for a full test run:</p>
+<pre><code class="language-sh">TUR_TSAN=1 make test
+# or using the dedicated target:
+make test-tsan
+</code></pre>
+<p>The <code>make test-tsan</code> target rebuilds <code>tur</code> itself with <code>-fsanitize=thread</code> and
+then sets <code>TUR_TSAN=1</code> for the test runner.</p>
+<h2 id="follow-up-work-hooks">Follow-up Work Hooks</h2>
+<ul>
+<li>Integrate this contract with <code>stdlib/test.tur</code> implementation work.</li>
+<li>Integrate with future <code>tur test</code> CLI command behavior and fixture validations.</li>
+</ul>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/test-runner-contract.md</code>
+  </footer>
+</body>
+</html>

@@ -1,616 +1,422 @@
-# Package Management System Plan for Turmeric
+# Package Management System Plan for Turmeric (Spice)
 
-> **Status:** Speculative — Future consideration  
-> **Prerequisite:** Module system (Phase M0-M7 complete)  
-> **Target:** v2 or later  
-> **Related:** [module-system-plan.md](module-system-plan.md), [turmeric-plan.md](turmeric-plan.md)
-
----
-
-## Executive Summary
-
-Once the module system is in place, the natural next step is **package management**: enabling users to declare, version, publish, and consume reusable libraries. This document outlines two distinct approaches:
-
-1. **Turmeric Package Manager (TurPM)** — A Zig-like, centralized package system with a registry
-2. **CMake Integration** — Leverage CPM as the package manager, using CMake as the build/packaging layer
-
-**Decision criterion:** TurPM is better for user experience and discoverability; CMake integration is better for interop and reduced tool complexity. We lean toward **Option 1 (TurPM) for v2+**, with Option 2 as a future interop layer.
+> **Status:** Active design -- v2 target
+> **Prerequisite:** Module system (Phase M0-M7 complete)
+> **Related:** [cmake-cpm-integration-plan.md](cmake-cpm-integration-plan.md), [module-system-plan.md](module-system-plan.md)
 
 ---
 
-## Option 1: Turmeric Package Manager (TurPM) — Zig-like Approach
+## Overview
 
-### Design Philosophy
+Turmeric's package manager is called **Spice**. A single `build.tur` file in the
+project root declares the package identity, its Turmeric dependencies (also
+called *spices*), and its optional C/CMake dependencies. The `tur` CLI handles
+fetching, building, and linking -- no separate package manager binary needed.
 
-Inspired by Zig's package manager, TurPM prioritizes:
-- **Simplicity**: Minimal, declarative configuration
-- **Decentralization**: No mandatory central registry; self-hosted or GitHub-based by default
-- **Reproducibility**: Lock files and content hashing for exact reproduction
-- **Ergonomics**: `tur add`, `tur fetch`, `tur build` commands
+The name fits the theme: you season your project with spices.
 
-### Package Metadata
+---
 
-Each package defines a `build.tur` file in the root:
+## The `build.tur` File
+
+Every Turmeric project has one `build.tur` at its root. It is a valid Turmeric
+source file evaluated at build time by the `tur` tool.
 
 ```scheme
-; build.tur — package metadata and build script
-(defmodule build
-  :name "geom"
-  :version "0.2.1"
+;;; build.tur -- project manifest for "geom"
+(defpackage geom
+  :name        "geom"
+  :version     "0.2.1"
   :description "2D/3D geometry library for Turmeric"
-  :license "MIT"
-  :authors ["Alice Smith <alice@example.com>"]
-  :repository "https://github.com/alice/tur-geom"
-  :documentation "https://tur-geom.docs.example.com"
-  :homepage "https://example.com/geom"
+  :license     "MIT"
+  :authors     ["Alice Smith <alice@example.com>"]
+  :repository  "https://github.com/alice/tur-geom"
+  :homepage    "https://tur-geom.docs.example.com"
 
-  ; Dependencies with semantic versioning
-  :deps {
-    "math" {:url "https://github.com/bob/tur-math" :ref "^1.5.0"}
-    "test" {:path "../../tur-test" :optional true}  ; Local/optional deps
+  ;; ----------------------------------------------------------------
+  ;; Spices: Turmeric package dependencies
+  ;; Each entry is a name mapped to a source descriptor.
+  ;; Supported sources: :url (git), :path (local), :registry (future)
+  ;; ----------------------------------------------------------------
+  :spices {
+    "math"  {:url "https://github.com/bob/tur-math"    :ref "v1.5.2"}
+    "test"  {:url "https://github.com/bob/tur-test"    :ref "v0.3.0"
+             :optional true}
+    "utils" {:path "../tur-utils"}                  ; local dev path
   }
 
-  ; Build flags
+  ;; ----------------------------------------------------------------
+  ;; CMake dependencies (CPM-compatible C/C++ packages)
+  ;; Resolved via CMake's FetchContent / CPM.cmake under the hood.
+  ;; See docs/cmake-cpm-integration-plan.md for the full spec.
+  ;; ----------------------------------------------------------------
+  :cmake-deps {
+    "raylib" {:url     "https://github.com/raysan5/raylib"
+              :ref     "5.0"
+              :options {:BUILD_SHARED_LIBS "OFF"
+                        :BUILD_EXAMPLES   "OFF"}}
+
+    "cjson"  {:url "https://github.com/DaveGamble/cJSON"
+              :ref "v1.7.16"}
+  }
+
+  ;; ----------------------------------------------------------------
+  ;; Build options passed to the Turmeric compiler and C toolchain
+  ;; ----------------------------------------------------------------
   :build-opts {
-    :c-flags ["-O3" "-DGEO_PRECISION=f64"]
-    :link-libs ["m"]  ; Link against libm
+    :c-flags   ["-O3" "-DGEOM_PRECISION=f64"]
+    :link-libs ["m"]              ; link libm for math functions
     :no-stdlib false
   }
 
-  ; Export spec (what this package provides to consumers)
+  ;; ----------------------------------------------------------------
+  ;; What this package exports to consumers
+  ;; ----------------------------------------------------------------
   :exports {
     "geom/vector" ["vector-2d" "vector-3d" "cross-product"]
     "geom/matrix" ["matrix-2x2" "matrix-3x3" "multiply"]
   })
 ```
 
-### Registry Model
+### Minimal example
 
-**No mandatory central registry.** Three distribution mechanisms:
+A library with a single Turmeric dependency:
 
-#### 1. Git-based (Default)
 ```scheme
-:deps {
+(defpackage my-lib
+  :name    "my-lib"
+  :version "0.1.0"
+  :spices  {"core" {:url "https://github.com/turm/tur-core" :ref "v1.0.0"}})
+```
+
+A standalone binary with no spices:
+
+```scheme
+(defpackage hello
+  :name    "hello"
+  :version "0.1.0")
+```
+
+---
+
+## Spice Sources
+
+### Git URL (primary)
+
+```scheme
+:spices {
   "geom" {:url "https://github.com/alice/tur-geom" :ref "v0.2.1"}
   "geom" {:url "git@github.com:alice/tur-geom.git" :ref "main"}
 }
 ```
 
-- Pin by Git tag, branch, or commit hash
-- Semantic versioning convention: tags named `v1.2.3`
-- Works with GitHub, GitLab, Gitea, self-hosted repos
+- `:ref` accepts a Git tag, branch name, or full commit SHA.
+- Recommended: pin to a tag (`v0.2.1`) for reproducible builds.
+- Works with GitHub, GitLab, Gitea, and any self-hosted Git server.
 
-#### 2. Path-based (Local Development)
+### Local path
+
 ```scheme
-:deps {
-  "geom" {:path "../tur-geom"}
+:spices {
+  "utils" {:path "../tur-utils"}
 }
 ```
 
-- For local workspaces with multiple packages
-- Useful during development before publishing
+- For monorepo workspaces or active development of a dependency.
+- Path is relative to the `build.tur` file.
+- Local spices are never written to `tur.lock`.
 
-#### 3. Central Registry (Future/Optional)
+### Registry (future)
+
 ```scheme
-:deps {
-  "geom" {:registry "turmeric" :version "^0.2.0"}
+:spices {
+  "geom" {:registry "spice" :version "^0.2.0"}
 }
 ```
 
-- Planned registry at `pkg.turmeric-lang.org` (future)
-- Simple HTTP API mimicking npm/Rust crates
-- Community-maintained; decentralized mirrors supported
-
-### Dependency Resolution
-
-#### Semantic Versioning
-- Standard semver: `MAJOR.MINOR.PATCH`
-- Version constraints: `^0.2.0` (>=0.2.0, <0.3.0), `~1.5` (>=1.5.0, <2.0.0), `1.2.3` (exact)
-- Pre-release versions: `0.2.0-alpha.1`
-
-#### Lock File (`tur.lock`)
-```yaml
-# tur.lock — reproducible builds
-format-version: 1
-
-dependencies:
-  geom:
-    url: "https://github.com/alice/tur-geom"
-    ref: "v0.2.1"
-    hash: "sha256:abc123..."
-    resolved-at: "2026-05-10T14:30:00Z"
-
-  math:
-    url: "https://github.com/bob/tur-math"
-    ref: "v1.5.2"
-    hash: "sha256:def456..."
-    resolved-at: "2026-05-10T14:30:05Z"
-    transitive-deps:
-      - "test:0.1.0"
-
-checksums:
-  geom: "sha256:abc123..."
-  math: "sha256:def456..."
-```
-
-- Lock file is **always** checked in to version control
-- `tur fetch` updates lock file only after explicit upgrade
-- Hash verification ensures no tampering
-
-#### Conflict Resolution
-- **Flat namespace per semantic version**: `geom@0.2.1` and `geom@0.1.0` treated as incompatible
-- Build error if two transitive deps require incompatible versions
-- User must pin to compatible versions or file issue with library maintainers
-- No "vendoring" or multiple versions of same package in one build
-
-### Directory Layout
-
-```
-my-project/
-├── tur.toml (or build.tur)              # Workspace/package config
-├── tur.lock                             # Reproducibility lock file
-├── src/
-│   ├── main.tur
-│   └── util.tur
-├── deps/
-│   ├── geom-v0.2.1/
-│   │   ├── build.tur
-│   │   ├── src/
-│   │   │   ├── vector.tur
-│   │   │   └── matrix.tur
-│   │   └── ...
-│   └── math-v1.5.2/
-│       ├── build.tur
-│       └── ...
-├── tests/
-└── build/
-    ├── main.c
-    ├── main.h
-    ├── geom_vector.c
-    ├── geom_matrix.c
-    └── ...
-```
-
-### CLI Commands
-
-```bash
-# Initialize new package
-$ tur init --lib my-geom
-$ tur init --bin my-app
-
-# Add dependency (updates tur.lock)
-$ tur add github.com/alice/tur-geom      # Latest version
-$ tur add github.com/alice/tur-geom@^0.2  # Semver constraint
-$ tur add ../local-geom --path           # Local dependency
-
-# Fetch all dependencies
-$ tur fetch                               # With tur.lock
-$ tur fetch --update                      # Update to latest allowed versions
-
-# Build package and dependencies
-$ tur build
-$ tur build --release                     # Optimized build
-
-# Run executable
-$ tur run [ARGS...]
-$ tur run --release [ARGS...]
-
-# Test package
-$ tur test
-$ tur test --package geom                 # Test specific dep
-
-# Publish to registry (future)
-$ tur publish
-$ tur publish --registry turmeric
-
-# Search registry (future)
-$ tur search geom
-
-# Generate C outputs
-$ tur emit-c                              # Generate all .c/.h files
-$ tur emit-h --package geom               # Generate headers for dep
-```
-
-### Integration with Module System
-
-Package imports map to module imports:
-
-```scheme
-; In my-app/src/main.tur
-(import geom/vector :refer [vector-2d cross-product])
-(import geom/matrix :as mat)
-
-; Compiler resolves:
-; - geom/vector -> deps/geom-v0.2.1/src/vector.tur
-; - geom/matrix -> deps/geom-v0.2.1/src/matrix.tur
-```
-
-Module system M0-M7 operates **within** the package; package manager handles **between** packages.
-
-### Publishing Workflow
-
-1. **Tag release**: `git tag v0.2.1`
-2. **Verify**: `tur build && tur test`
-3. **Publish**: `tur publish` (future: submits to pkg.turmeric-lang.org)
-4. **Update registry**: Registry fetches from Git, caches, serves
-5. **User discovers**: `tur search geom` or browsing pkg.turmeric-lang.org
-6. **User adds**: `tur add geom` pins to latest compatible version in tur.lock
-
-### Security & Trust
-
-- **Hash verification**: All downloaded code checked against tur.lock
-- **Signed Git tags** (future): GPG-signed releases for authenticity
-- **Registry mirror support** (future): Users can mirror registry locally
-- **Audit trail**: Build command shows all dependencies and versions
-- **Source transparency**: Always buildable from published source (no precompiled binaries)
-
-### Limitations of Option 1
-
-- Must implement from scratch: CLI, registry, dependency resolution logic
-- Ecosystem slower to grow initially (smaller user base)
-- More maintenance burden on core team
-- Requires bootstrapping with "killer libraries" to drive adoption
+- Planned at `pkg.turmeric-lang.org`.
+- Resolver maps version constraints to Git refs on the registry index.
 
 ---
 
-## Option 2: CMake Integration — CPM-like Approach
+## CMake Dependencies (C/C++ Packages)
 
-### Design Philosophy
+The `:cmake-deps` block declares C and C++ packages that the Turmeric compiler
+will link against. These packages are fetched and built using CMake's
+FetchContent mechanism (CPM-compatible).
 
-Leverage **CMake as the package manager** using CPM-ish (C++ Package Manager) patterns:
-- **Reduce tool count**: Users who know CMake can use existing knowledge
-- **Instant interop**: Access to C libraries through CMakeLists.txt
-- **Proven ecosystem**: CMake has 20+ years of battle-tested packaging
-- **No registry needed initially**: Plain Git URLs sufficient
+```scheme
+:cmake-deps {
+  "raylib" {:url     "https://github.com/raysan5/raylib"
+            :ref     "5.0"
+            :options {:BUILD_SHARED_LIBS "OFF"}}
 
-### Build System Architecture
+  "sqlite3" {:url "https://github.com/sqlite/sqlite"
+             :ref "version-3.45.0"}
+}
+```
 
-#### User builds with CMake (not `tur` command)
+The Turmeric build tool (`tur build`) generates a `cmake/SpiceDeps.cmake` file
+from `:cmake-deps` and invokes CMake automatically. End users do not write any
+CMake by hand unless they want fine-grained control.
+
+For projects that need to control the CMake build themselves, the full CMake
+integration spec is documented in
+[cmake-cpm-integration-plan.md](cmake-cpm-integration-plan.md).
+
+---
+
+## Lock File (`tur.lock`)
+
+```yaml
+# tur.lock -- generated by `tur fetch`. Do not edit by hand.
+# Commit this file to version control for reproducible builds.
+format-version: 1
+
+spices:
+  geom:
+    url:         "https://github.com/alice/tur-geom"
+    ref:         "v0.2.1"
+    resolved:    "a1b2c3d4e5f6..."   # full commit SHA
+    sha256:      "abc123..."
+    fetched-at:  "2026-05-14T09:00:00Z"
+    transitive:
+      - math@v1.5.2
+
+  math:
+    url:         "https://github.com/bob/tur-math"
+    ref:         "v1.5.2"
+    resolved:    "d6e7f8a9b0c1..."
+    sha256:      "def456..."
+    fetched-at:  "2026-05-14T09:00:03Z"
+
+cmake-deps:
+  raylib:
+    url:     "https://github.com/raysan5/raylib"
+    ref:     "5.0"
+    resolved: "5.0"
+    sha256:  "ghi789..."
+```
+
+- Always commit `tur.lock` to version control.
+- `tur fetch` creates or updates the lock file.
+- `tur build` uses the lock file; it will not silently upgrade versions.
+- Local `:path` spices are not recorded in the lock file.
+
+---
+
+## Directory Layout
+
+```
+my-project/
+  build.tur              -- package manifest (written by the author)
+  tur.lock               -- reproducibility lock (committed to VCS)
+  src/
+    main.tur
+    util.tur
+  spices/                -- fetched spice sources (gitignored)
+    math-v1.5.2/
+      build.tur
+      src/
+    test-v0.3.0/
+      build.tur
+      src/
+  cmake/                 -- generated CMake helpers (gitignored)
+    SpiceDeps.cmake      -- generated from :cmake-deps
+  build/                 -- build artifacts (gitignored)
+```
+
+Add to `.gitignore`:
+
+```
+spices/
+cmake/SpiceDeps.cmake
+build/
+```
+
+---
+
+## CLI Commands
+
+```sh
+# Initialize a new project
+tur init --bin my-app      # executable project
+tur init --lib my-lib      # library project
+
+# Add a spice (updates build.tur and tur.lock)
+tur add https://github.com/alice/tur-geom
+tur add https://github.com/alice/tur-geom --ref v0.2.1
+tur add ../local-utils --path
+
+# Add a CMake dependency
+tur add-cmake https://github.com/raysan5/raylib --ref 5.0
+
+# Fetch all spices from tur.lock
+tur fetch
+
+# Update spices to latest allowed versions
+tur fetch --update
+
+# Build the project
+tur build
+tur build --release
+
+# Run the project binary
+tur run
+tur run --release
+
+# Test
+tur test
+
+# Print generated C to stdout (for debugging)
+tur emit-c src/main.tur
+
+# (Future) Publish to the Spice registry
+tur publish
+```
+
+---
+
+## Integration with the Module System
+
+Spice names map directly to module import paths:
+
+```scheme
+;; In my-app/src/main.tur
+(import geom/vector :refer [vector-2d cross-product])
+(import geom/matrix :as mat)
+
+;; The compiler resolves:
+;;   geom/vector  ->  spices/geom-v0.2.1/src/vector.tur
+;;   geom/matrix  ->  spices/geom-v0.2.1/src/matrix.tur
+```
+
+The module system (M0-M7) operates within a single package; Spice handles the
+space between packages.
+
+---
+
+## Semantic Versioning
+
+- Versions follow standard semver: `MAJOR.MINOR.PATCH`
+- Tags must be named `vMAJOR.MINOR.PATCH` (e.g., `v1.2.3`)
+- Pre-releases: `v0.2.0-alpha.1`
+- Future registry constraints: `^0.2.0`, `~1.5`, `1.2.3` (exact)
+- Git-URL spices always pin to the exact `:ref`; no range resolution
+
+---
+
+## Security
+
+- All fetched spices are verified against the SHA-256 hash in `tur.lock`.
+- Builds fail if the hash does not match; no silent downloads.
+- GPG-signed Git tags are supported (verification is opt-in in v1).
+- Source-only distribution -- no precompiled binaries in the lock file.
+
+---
+
+## Conflict Resolution
+
+- Two spices requiring incompatible versions of a third spice cause a build
+  error with a clear diagnostic.
+- The user must either upgrade one spice or pin versions to a compatible range.
+- No silent multiple-version shadowing.
+
+---
+
+## Stretch Goal: CMake Plugin for Importing Turmeric Projects
+
+To allow CMake projects to consume Turmeric libraries, `tur publish` (or
+`tur emit-cmake`) will generate:
+
+```
+tur-geom/
+  CMakeLists.txt        -- standard CMake entry point
+  TurmericConfig.cmake  -- find_package() support
+```
+
+Users of the library can then do:
 
 ```cmake
-# CMakeLists.txt in project root
-cmake_minimum_required(VERSION 3.20)
-project(my_geom_app)
-
-# Include CPM for dependency fetching
-include(cmake/CPM.cmake)
-
-# Declare Turmeric compiler
-set(TUR_COMPILER /usr/local/bin/tur)
-
-# Fetch dependencies
+find_package(Turmeric REQUIRED)
 CPMAddPackage(
   NAME geom
   GITHUB_REPOSITORY alice/tur-geom
   GIT_TAG v0.2.1
 )
-
-CPMAddPackage(
-  NAME mymath
-  URL https://example.com/tur-math-1.5.2.tar.gz
-  URL_HASH SHA256=def456...
-)
-
-# Add our Turmeric target
-add_tur_library(mygeom
-  SOURCES src/main.tur
-  DEPENDS geom mymath
-  TUR_VERSION 0.1.0
-)
-
-add_tur_executable(my_app
-  SOURCES src/app.tur
-  LIBRARIES mygeom
-)
+target_link_libraries(my_app PRIVATE geom::all)
 ```
 
-### Package Metadata
-
-Each package publishes a `TurmericConfig.cmake` file (CMake package config):
-
-```cmake
-# TurmericConfig.cmake in tur-geom package root
-set(geom_VERSION 0.2.1)
-set(geom_FOUND TRUE)
-
-# Export library targets
-add_tur_library(geom::vector
-  IMPORTED GLOBAL
-  SOURCES "${geom_SOURCE_DIR}/src/vector.tur"
-)
-
-add_tur_library(geom::matrix
-  IMPORTED GLOBAL
-  SOURCES "${geom_SOURCE_DIR}/src/matrix.tur"
-  DEPENDS geom::vector
-)
-
-# Expose includes for C interop
-set(geom_INCLUDE_DIRS "${geom_SOURCE_DIR}/src")
-set(geom_LIBRARIES geom::vector geom::matrix)
-```
-
-### Directory Layout
-
-```
-my-project/
-├── CMakeLists.txt                       # Top-level build config
-├── cmake/
-│   ├── CPM.cmake                        # CPM helper (vendored)
-│   ├── FindTurmeric.cmake               # Find tur compiler
-│   └── AddTurTarget.cmake               # Custom CMake functions
-├── src/
-│   ├── main.tur
-│   ├── CMakeLists.txt
-│   └── ...
-├── _deps/
-│   ├── geom-src/                        # Fetched by CPM
-│   ├── geom-build/                      # Built by CPM
-│   ├── math-src/
-│   └── math-build/
-└── build/
-    ├── CMakeCache.txt
-    ├── Makefile (or Xcode, Visual Studio)
-    └── ...
-```
-
-### Package as CMake Module
-
-A Turmeric package is "just" a CMake project:
-
-```
-tur-geom/
-├── CMakeLists.txt                       # Standard CMake
-├── TurmericConfig.cmake                 # Export for find_package()
-├── src/
-│   ├── vector.tur
-│   ├── matrix.tur
-│   └── CMakeLists.txt
-├── include/
-│   └── tur/geom.h                      # Optional: manual C API
-├── tests/
-│   ├── test_vector.tur
-│   └── CMakeLists.txt
-├── docs/
-└── README.md
-```
-
-### Dependency Declaration
-
-Within CMakeLists.txt, declare transitive Turmeric dependencies:
-
-```cmake
-# In tur-geom/CMakeLists.txt
-CPMAddPackage(
-  NAME mymath
-  GITHUB_REPOSITORY bob/tur-math
-  GIT_TAG v1.5.2
-)
-
-add_tur_library(geom::all
-  SOURCES src/vector.tur src/matrix.tur
-  DEPENDS mymath::lib
-  VERSION 0.2.1
-)
-
-# Export for downstream consumers
-include(CMakePackageConfigHelpers)
-write_basic_package_version_file(
-  TurmericConfigVersion.cmake
-  VERSION 0.2.1
-  COMPATIBILITY SemVerCompatible
-)
-
-install(FILES TurmericConfig.cmake
-  DESTINATION lib/cmake/geom)
-```
-
-### Build Integration
-
-#### CMake custom commands invoke Turmeric compiler
-
-```cmake
-# In AddTurTarget.cmake
-function(add_tur_executable name)
-  set(options)
-  set(oneValueArgs)
-  set(multiValueArgs SOURCES LIBRARIES)
-  cmake_parse_arguments(TUR "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
-
-  # Get full list of dependencies
-  get_target_property(deps ${TUR_LIBRARIES} INTERFACE_LINK_LIBRARIES)
-  
-  # Invoke tur compiler
-  add_custom_command(
-    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${name}.c"
-            "${CMAKE_CURRENT_BINARY_DIR}/${name}.h"
-    COMMAND ${TUR_COMPILER} compile
-      --output "${CMAKE_CURRENT_BINARY_DIR}/${name}"
-      --deps "${deps}"
-      ${TUR_SOURCES}
-    DEPENDS ${TUR_SOURCES} ${deps}
-    COMMENT "Compiling Turmeric ${name}"
-  )
-
-  # Create C executable
-  add_executable(${name}
-    "${CMAKE_CURRENT_BINARY_DIR}/${name}.c"
-  )
-  
-  target_link_libraries(${name} PRIVATE ${TUR_LIBRARIES})
-endfunction()
-```
-
-### CLI Minimal — Just `tur compile`
-
-With CMake as build system, the `tur` CLI is **much simpler**:
-
-```bash
-# Core command: compile Turmeric to C
-$ tur compile --output main src/main.tur
-$ tur compile --output geom/vector src/geom/vector.tur
-
-# Optional convenience for development
-$ tur fmt src/          # Format source files
-$ tur check src/        # Type check only (no compile)
-$ tur repl              # Interactive REPL
-
-# That's mostly it! CMake handles fetching, linking, etc.
-```
-
-### Advantages of Option 2
-
-1. **Minimal new tooling**: Reuse mature CMake ecosystem
-2. **Instant C interop**: Link Turmeric code with C libraries trivially
-3. **Familiar to C developers**: CMake is lingua franca in C community
-4. **Scalable**: Leverages CPM's proven dependency resolution
-5. **No "package manager" to maintain**: CMake community does it
-6. **Works on all platforms**: CMake's portability is battle-tested
-
-### Disadvantages of Option 2
-
-1. **CMake is complex**: Steep learning curve for average user
-2. **Cognitive overhead**: Users must learn CMake + Turmeric
-3. **Verbose**: CMakeLists.txt requires more boilerplate than `tur.toml`
-4. **Less discoverable**: Packages aren't listed in registry; must know GitHub URL
-5. **Less language-integrated**: CMake doesn't understand Turmeric semantics
+Full specification for this plugin lives in
+[cmake-cpm-integration-plan.md](cmake-cpm-integration-plan.md).
 
 ---
 
-## Hybrid Approach: TurPM + CMake Interop (Recommended)
+## Comparison: Before vs. After
 
-**Best of both worlds:**
-
-### Phase 1: Ship TurPM (v2)
-- Implement Turmeric-native package manager
-- Simple CLI, Git-based distribution
-- No mandatory registry initially
-- Focus on getting packages published and consumed
-
-### Phase 2: CMake Interop (v2.x or v3)
-- Allow TurPM packages to be consumed by CMake projects
-- Generate CMake package config files from Turmeric packages
-- Allow CMake projects to link Turmeric libraries
-- Bi-directional: TurPM projects can optionally be built via CMake
-
-### Phase 3: Central Registry (v3)
-- Launch optional pkg.turmeric-lang.org
-- Index packages from GitHub + custom sources
-- Mirror support for institutional deployments
-- Signed releases with GPG keys
-
-### Implementation Sketch
-
-```
-tur-geom/ (with TurPM)
-├── build.tur                            # Package metadata
-├── src/
-│   └── vector.tur
-├── CMakeLists.txt (generated)           # Auto-generated for CMake interop
-└── TurmericConfig.cmake (generated)     # Auto-generated for CMake interop
-
-Command: tur publish --generate-cmake
-  → Generates CMakeLists.txt + TurmericConfig.cmake
-  → User can now reference this package from CMake projects
-```
+| Concern | Old plan | This plan |
+|---|---|---|
+| Manifest file | `build.tur` or `tur.toml` | `build.tur` only |
+| Dependency name | deps | spices |
+| Primary source | git URL or registry | git URL (registry future) |
+| C dependencies | Phase 2 (later) | `:cmake-deps` block in `build.tur` |
+| CMake required? | Optional (Phase 2) | Never required by the author |
+| CMake plugin | Optional (Phase 3) | Stretch goal, spec in separate doc |
 
 ---
 
-## Comparison Matrix
+## Implementation Checklist (Phase 1)
 
-| Feature | TurPM | CMake+CPM | Hybrid |
-|---|---|---|---|
-| User learning curve | Low | Medium-High | Low-Medium |
-| Discoverability | High (registry) | Low (must know URL) | Medium (both) |
-| CLI ergonomics | High | Medium (verbose) | High |
-| C interop | Moderate | High (native) | High |
-| Maintenance burden | High (on Tur team) | Low (use CMake) | Medium |
-| Ecosystem maturity | Building | Mature | Building |
-| v1 viability | No | Yes | Partial |
-| Community adoption | Medium | High (C devs know CMake) | Medium-High |
+### Core
 
----
+- [ ] Parse `build.tur` `defpackage` form
+- [ ] Implement `tur.lock` read/write with SHA-256 verification
+- [ ] Implement Git clone and ref resolution (`url` + `ref`)
+- [ ] Implement local path linking (`path`)
+- [ ] Implement semantic version parsing for tags
+- [ ] Implement transitive spice resolution (BFS over dependency graph)
+- [ ] Detect and report version conflicts with helpful messages
+- [ ] CLI: `tur init`, `tur add`, `tur fetch`, `tur build`, `tur run`, `tur test`
 
-## Recommendation for Turmeric
+### CMake Dependencies
 
-**Option 1 (TurPM) for v2+, with Phase 2 CMake interop in v2.x.**
+- [ ] Parse `:cmake-deps` block from `build.tur`
+- [ ] Generate `cmake/SpiceDeps.cmake` (FetchContent / CPM calls)
+- [ ] Invoke CMake to build C deps before compiling Turmeric source
+- [ ] Pass `-I` and `-L` flags from cmake-dep build outputs to `tur` compiler
 
-Rationale:
-1. **User-friendly**: Turmeric users shouldn't need to learn CMake
-2. **Language-integrated**: Package semantics aligned with module system
-3. **Future-proof**: Can add CMake support later without breaking changes
-4. **Proven model**: Rust (cargo), Go (go get), Zig all use language-native package managers
-5. **Discoverability**: Registry enables ecosystem growth
+### Documentation
 
-CMake integration can come **after** core TurPM ships, as an optional interop layer for enterprise/large projects.
+- [ ] Package authoring guide
+- [ ] Spice registry submission guide (when registry launches)
+- [ ] C interop guide (`:cmake-deps` deep dive)
+- [ ] Troubleshooting dependency conflicts
+
+### Testing
+
+- [ ] Unit tests: version constraint parsing and SHA verification
+- [ ] Integration test: multi-spice build with transitive deps
+- [ ] End-to-end: `tur init` + `tur add` + `tur build` + `tur test` workflow
+- [ ] End-to-end: project with a `:cmake-dep` (e.g., linking raylib)
 
 ---
 
 ## Open Questions
 
-1. **Version scheme**: Semver or simpler (major.minor)?
-   - Lean: Semver; aligns with existing ecosystem
+1. **Lock file format**: YAML shown above vs. a Turmeric s-expression format?
+   - Lean: YAML for now (human-readable, easy to diff); can revisit
 
-2. **Private/enterprise packages**: How to support private registries?
-   - Lean: Support Git SSH URLs + future: GitHub-style GitHub Packages integration
+2. **Workspace support**: Multiple `build.tur` files in one repo?
+   - Lean: Yes -- a root `build.tur` with `:members ["pkgs/a" "pkgs/b"]`
 
-3. **Native dependencies**: How to declare C library dependencies (libssl, etc.)?
-   - Lean: Via CMake integration (Phase 2); TurPM Phase 1 focused on Tur code only
+3. **Private spices**: SSH URLs, tokens for private repos?
+   - Lean: SSH URLs work today; credential helpers via `GIT_SSH_COMMAND`
 
-4. **Workspace support**: Multiple packages in one repo?
-   - Lean: Yes; like Rust workspaces with `tur.toml` at workspace root
+4. **Yank support**: Can authors retract a published version?
+   - Lean: Yes (registry only); yanked versions still buildable if in `tur.lock`
 
-5. **Precompilation**: Ship pre-built `.c` / `.h` files for faster CI?
-   - Lean: No in v1; always compile from source; can add in v2
-
-6. **License enforcement**: Check SPDX licenses for compatibility?
-   - Lean: Informational only; no enforcement in v1
-
-7. **Reproducible builds**: Exactly how to handle build script differences?
-   - Lean: Minimal `build.tur` metadata; all actual build in CMakeLists.txt (Phase 2)
-
-8. **Yank (retract) support**: Can authors remove published versions?
-   - Lean: Yes, with notification to dependents; affects tur.lock resolution
-
----
-
-## Migration Path
-
-1. **Phase 1 (v2)**: TurPM core — basic Tur-to-Tur packaging
-2. **Phase 2 (v2.x)**: CMake export — allow consuming TurPM packages from CMake
-3. **Phase 3 (v3)**: Central registry — pkg.turmeric-lang.org launch
-4. **Phase 4+ (v3+)**: Ecosystem — marketplace, documentation, success stories
-
----
-
-## Implementation Checklist for Phase 1 (TurPM)
-
-High-level tasks to implement TurPM:
-
-### Core Infrastructure
-- [ ] Define `build.tur` metadata format and parser
-- [ ] Implement `tur.lock` file format and generator
-- [ ] Implement semantic version parsing and constraint resolution
-- [ ] Implement Git URL parser and clone logic
-- [ ] Implement SHA256 hash verification for packages
-- [ ] CLI: `tur init`, `tur add`, `tur fetch`, `tur build`, `tur test`, `tur publish`
-
-### Integration
-- [ ] Module system: resolve `import` → fetch from deps/
-- [ ] Compiler: pass deps/ to header generation
-- [ ] Emitter: generate cross-package headers with proper C naming
-- [ ] Error messages: helpful guidance for dependency issues
-
-### Documentation
-- [ ] Package authoring guide
-- [ ] Package publishing guide
-- [ ] Registry setup (GitHub or self-hosted)
-- [ ] Troubleshooting dependency conflicts
-
-### Testing
-- [ ] Unit tests for version constraint resolution
-- [ ] Integration tests: multi-package builds
-- [ ] End-to-end: publish + consume workflow
+5. **`defpackage` vs. a data literal**: Should `build.tur` use a macro or pure data?
+   - Lean: Macro (`defpackage`) so tooling can analyze it without evaluating
 
 ---
 
@@ -618,7 +424,5 @@ High-level tasks to implement TurPM:
 
 - Zig package manager: https://ziglang.org/documentation/master/#Package-Management
 - Rust Cargo: https://doc.rust-lang.org/cargo/
-- Go modules: https://golang.org/ref/mod
-- C++ Package Manager (CPM): https://github.com/cpm-cmake/CPM.cmake
-- Node npm/yarn package formats
-- Python pip/poetry
+- CPM.cmake: https://github.com/cpm-cmake/CPM.cmake
+- CMake FetchContent: https://cmake.org/cmake/help/latest/module/FetchContent.html

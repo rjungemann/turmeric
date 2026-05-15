@@ -150,8 +150,12 @@ rebuild: clean configure build
 
 # Generate HTML API docs from stdlib ;;; docstrings.
 # Also emits stdlib/docstrings.tur for the runtime (doc name) lookup.
-docs:
+docs: guides
     python3 tools/gendocs.py stdlib/ --out docs/api/ --emit-tur stdlib/docstrings.tur
+
+# Render markdown guides to HTML pages (served at /docs/guides/).
+guides:
+    python3 tools/genguides.py docs/guides/
 
 # ---------------------------------------------------------------------------
 # WebAssembly & Web REPL targets

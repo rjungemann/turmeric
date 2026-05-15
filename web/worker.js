@@ -1,0 +1,48 @@
+const INSTALL_SCRIPT = `#!/bin/sh
+set -e
+
+# Turmeric installer
+# https://turmeric-lang.com
+
+FORMULA_URL="https://raw.githubusercontent.com/rjungemann/turmeric/main/Formula/turmeric.rb"
+
+if ! command -v brew >/dev/null 2>&1; then
+  echo "Turmeric requires Homebrew. Install it first:"
+  echo "  https://brew.sh"
+  exit 1
+fi
+
+echo "Installing Turmeric..."
+brew install --HEAD "$FORMULA_URL"
+echo ""
+echo "Done! Run 'tur --help' to get started."
+echo "Try the online playground at https://turmeric-lang.com/try"
+`;
+
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    const { hostname, pathname } = url;
+
+    if (hostname === 'install.turmeric-lang.com') {
+      return new Response(INSTALL_SCRIPT, {
+        headers: {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Cache-Control': 'no-cache',
+        },
+      });
+    }
+
+    // Rewrite try.turmeric-lang.com/* -> turmeric-lang.com/try/*
+    // so both URLs serve the same page without a redirect round-trip.
+    if (hostname === 'try.turmeric-lang.com') {
+      const rewritten = new Request(
+        `${url.protocol}//turmeric-lang.com/try${pathname === '/' ? '' : pathname}${url.search}`,
+        request,
+      );
+      return env.ASSETS.fetch(rewritten);
+    }
+
+    return env.ASSETS.fetch(request);
+  },
+};

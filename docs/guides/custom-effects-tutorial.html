@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Custom Effects Tutorial | Turmeric Guides</title>
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--cream); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"JetBrains Mono","Fira Code",monospace; font-size:0.85em; background:var(--bg-code); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-code); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--faint); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-card); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold); }
+    .guide-content strong { color:var(--cream); }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/">turmeric</a>
+    <nav>
+      <a href="/docs/guides/">Guides</a>
+      <a href="/docs/api/">API Docs</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="page-layout">
+    <div class="sidebar">
+            <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--faint)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#custom-effects-tutorial" style="">Custom Effects Tutorial</a></li>
+<li style=""><a href="#table-of-contents" style="">Table of Contents</a></li>
+<li style=""><a href="#1-what-are-algebraic-effects" style="">1. What are algebraic effects?</a></li>
+<li style=""><a href="#2-defining-and-performing-an-effect" style="">2. Defining and performing an effect</a></li>
+<li style=""><a href="#3-resuming-with-a-value" style="">3. Resuming with a value</a></li>
+<li style=""><a href="#4-effects-with-parameters" style="">4. Effects with parameters</a></li>
+<li style=""><a href="#5-multiple-effects-in-one-handler" style="">5. Multiple effects in one handler</a></li>
+<li style=""><a href="#6-nested-handlers" style="">6. Nested handlers</a></li>
+<li style=""><a href="#7-multiple-sequential-performs" style="">7. Multiple sequential performs</a></li>
+<li style=""><a href="#8-effects-with-defer" style="">8. Effects with defer</a></li>
+<li style=""><a href="#9-effects-with-refs-and-rc" style="">9. Effects with refs and rc</a></li>
+<li style=""><a href="#10-wrapping-a-handler-in-a-macro" style="">10. Wrapping a handler in a macro</a></li>
+<li style=""><a href="#11-bridging-effects-to-exceptions" style="">11. Bridging effects to exceptions</a></li>
+<li style=""><a href="#12-checking-the-continuation-with-cont" style="">12. Checking the continuation with cont?</a></li>
+<li style=""><a href="#13-real-world-pattern-mock-io" style="">13. Real-world pattern: mock I/O</a></li>
+<li style=""><a href="#14-real-world-pattern-injectable-logging" style="">14. Real-world pattern: injectable logging</a></li>
+<li style=""><a href="#15-summary-and-next-steps" style="">15. Summary and next steps</a></li>
+<li style="padding-left:0.75rem;"><a href="#what-youve-learned" style="color:var(--faint);">What you've learned</a></li>
+<li style="padding-left:0.75rem;"><a href="#stdlib-effects" style="color:var(--faint);">stdlib effects</a></li>
+<li style="padding-left:0.75rem;"><a href="#further-reading" style="color:var(--faint);">Further reading</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="custom-effects-tutorial">Custom Effects Tutorial</h1>
+<p>A step-by-step guide to algebraic effects in Turmeric. Each section builds on the previous one, starting from the simplest possible effect and working up to real-world patterns like mock I/O and dependency injection.</p>
+<blockquote>
+<p><strong>Prerequisites</strong>: Working <code>build/tur</code> binary (run <code>make</code>). No prior knowledge of algebraic effects is required.</p>
+</blockquote>
+<hr />
+<h2 id="table-of-contents">Table of Contents</h2>
+<ol>
+<li><a href="#1-what-are-algebraic-effects">What are algebraic effects?</a></li>
+<li><a href="#2-defining-and-performing-an-effect">Defining and performing an effect</a></li>
+<li><a href="#3-resuming-with-a-value">Resuming with a value</a></li>
+<li><a href="#4-effects-with-parameters">Effects with parameters</a></li>
+<li><a href="#5-multiple-effects-in-one-handler">Multiple effects in one handler</a></li>
+<li><a href="#6-nested-handlers">Nested handlers</a></li>
+<li><a href="#7-multiple-sequential-performs">Multiple sequential performs</a></li>
+<li><a href="#8-effects-with-defer">Effects with <code>defer</code></a></li>
+<li><a href="#9-effects-with-refs-and-rc">Effects with refs and rc</a></li>
+<li><a href="#10-wrapping-a-handler-in-a-macro">Wrapping a handler in a macro</a></li>
+<li><a href="#11-bridging-effects-to-exceptions">Bridging effects to exceptions</a></li>
+<li><a href="#12-checking-the-continuation-with-cont">Checking the continuation with <code>cont?</code></a></li>
+<li><a href="#13-real-world-pattern-mock-io">Real-world pattern: mock I/O</a></li>
+<li><a href="#14-real-world-pattern-injectable-logging">Real-world pattern: injectable logging</a></li>
+<li><a href="#15-summary-and-next-steps">Summary and next steps</a></li>
+</ol>
+<hr />
+<h2 id="1-what-are-algebraic-effects">1. What are algebraic effects?</h2>
+<p>An algebraic effect is a typed, named operation that a function can <strong>perform</strong> without knowing who will handle it. The caller supplies a <strong>handler</strong> that intercepts the operation and decides what to do, including whether to resume the suspended computation with a return value.</p>
+<p>Think of it as a structured, type-safe alternative to:
+- Global mutable state (replace with an injectable value via <code>Ask</code>)
+- Printf-style I/O scattered through business logic (replace with a <code>Write</code> effect)
+- Callbacks (replace with a <code>perform</code> that yields control and resumes)</p>
+<p>The three primitives are:</p>
+<table>
+<thead>
+<tr>
+<th>Form</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>(defeffect Name [param :type ...] :return-type)</code></td>
+<td>Declare an effect</td>
+</tr>
+<tr>
+<td><code>(perform (Name arg ...))</code></td>
+<td>Perform (suspend) the effect</td>
+</tr>
+<tr>
+<td><code>(handle expr (Name [p ...] k) body ...)</code></td>
+<td>Handle the effect; <code>k</code> is the continuation</td>
+</tr>
+<tr>
+<td><code>(resume k value)</code></td>
+<td>Resume the suspended computation with <code>value</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="2-defining-and-performing-an-effect">2. Defining and performing an effect</h2>
+<p>The simplest effect takes no parameters and returns nothing useful. It is a signal.</p>
+<pre><code class="language-lisp">;; Declare an effect that signals &quot;I want to emit a line of output.&quot;
+(defeffect Emit [] :nil)
+
+;; A function that emits twice.
+(defn greet [] :nil
+  (do
+    (perform (Emit))
+    (perform (Emit))))
+
+;; Handle by printing a fixed message each time.
+(handle (greet)
+  (Emit [] k) (do (println &quot;hello!&quot;) (resume k nil)))
+</code></pre>
+<p><strong>Output:</strong></p>
+<pre><code>hello!
+hello!
+</code></pre>
+<p>Key points:
+- <code>defeffect</code> declares the name, parameter list, and return type.
+- <code>perform</code> suspends the current function and passes control to the nearest enclosing <code>handle</code>.
+- The handler receives the continuation <code>k</code> and calls <code>resume k nil</code> to let the function continue.
+- Forgetting to call <code>resume</code> terminates the computation at that point.</p>
+<hr />
+<h2 id="3-resuming-with-a-value">3. Resuming with a value</h2>
+<p>When an effect has a non-<code>nil</code> return type, <code>resume</code> passes a value back to the call site of <code>perform</code>. This is how you inject values into otherwise pure code.</p>
+<pre><code class="language-lisp">;; An effect that &quot;asks&quot; for an integer from the environment.
+(defeffect Ask [] :int)
+
+(defn use-ask [] :int
+  (+ 1 (perform (Ask))))
+
+;; Handler supplies 41; the computation receives 41, adds 1, and returns 42.
+(println (handle (use-ask)
+  (Ask [] k) (resume k 41)))
+; =&gt; 42
+</code></pre>
+<p>The return type of <code>perform (Ask)</code> is <code>:int</code> (the declared return type of the <code>Ask</code> effect), so the result flows directly into <code>(+ 1 ...)</code>.</p>
+<hr />
+<h2 id="4-effects-with-parameters">4. Effects with parameters</h2>
+<p>Effects can carry data to the handler. Declare typed parameters just like function arguments.</p>
+<pre><code class="language-lisp">;; An effect that asks the handler to double a value.
+(defeffect Double [x :int] :int)
+
+(defn use-double [n :int] :int
+  (perform (Double n)))
+
+(println (handle (use-double 21)
+  (Double [x] k) (resume k (* x 2))))
+; =&gt; 42
+</code></pre>
+<p>The handler pattern <code>(Double [x] k)</code> binds <code>x</code> to the argument supplied by the performer and <code>k</code> to the continuation. You can compute any value to pass back via <code>resume</code>.</p>
+<hr />
+<h2 id="5-multiple-effects-in-one-handler">5. Multiple effects in one handler</h2>
+<p>A single <code>handle</code> block can match several different effects.</p>
+<pre><code class="language-lisp">(defeffect Ask  []       :int)
+(defeffect Tell [x :int] :nil)
+
+;; Performs both effects: asks for a number, then tells the result.
+(defn use-both [] :int
+  (let [result (+ 1 (perform (Ask)))]
+    (do
+      (perform (Tell result))
+      result)))
+
+(println (handle (use-both)
+  (Ask  []    k) (resume k 41)
+  (Tell [x]   k) (do (println x) (resume k nil))))
+; prints: 42
+; returns: 42
+</code></pre>
+<p>Handlers are tried in order. Each clause is independent; unhandled effects bubble up to the next enclosing <code>handle</code>.</p>
+<p>Multiple effects can also carry different result transforms:</p>
+<pre><code class="language-lisp">(defeffect Add [x :int] :int)
+(defeffect Mul [x :int] :int)
+
+(defn compute [] :int
+  (* (perform (Add 3)) (perform (Mul 4))))
+
+(println (handle (compute)
+  (Add [x] k) (resume k (+ x 10))   ; 3+10 = 13
+  (Mul [x] k) (resume k (* x 2))))  ; 4*2  =  8
+; =&gt; 104
+</code></pre>
+<hr />
+<h2 id="6-nested-handlers">6. Nested handlers</h2>
+<p>Handlers nest lexically. The innermost matching handler wins.</p>
+<pre><code class="language-lisp">(defeffect Val [] :int)
+
+(defn get-val [] :int
+  (perform (Val)))
+
+;; Outer handler supplies 10; inner overrides with 42 for its scope.
+(println (handle
+  (+ (get-val)
+     (handle (get-val)
+       (Val [] k) (resume k 42)))
+  (Val [] k) (resume k 10)))
+; =&gt; 52  (10 + 42)
+</code></pre>
+<p>Use this to test functions under different conditions without changing the function itself.</p>
+<hr />
+<h2 id="7-multiple-sequential-performs">7. Multiple sequential performs</h2>
+<p>Each <code>perform</code> is an independent suspension. The handler is re-entered for every perform, and each invocation gets its own fresh <code>k</code>.</p>
+<pre><code class="language-lisp">(defeffect Choose [n :int] :int)
+
+;; Calls Choose twice sequentially.
+(defn pick-two [] :int
+  (+ (perform (Choose 1)) (perform (Choose 2))))
+
+(println (handle (pick-two)
+  (Choose [n] k) (resume k (* n 10))))
+; First:  1 * 10 = 10
+; Second: 2 * 10 = 20
+; =&gt; 30
+</code></pre>
+<p>Continuations are <strong>one-shot</strong>: you must call <code>resume k</code> exactly once per handler activation.</p>
+<hr />
+<h2 id="8-effects-with-defer">8. Effects with <code>defer</code></h2>
+<p><code>defer</code> cleanup runs correctly even when <code>perform</code> is inside the same <code>do</code> block. The continuation is resumed before deferred forms unwind.</p>
+<pre><code class="language-lisp">(defeffect Ask [] :int)
+
+(defn deferred-ask [] :int
+  (do
+    (defer (println &quot;cleanup&quot;))
+    (perform (Ask))))
+
+(println (handle (deferred-ask)
+  (Ask [] k) (resume k 42)))
+; prints: cleanup
+; prints: 42
+</code></pre>
+<p>The <code>defer</code> fires when <code>deferred-ask</code> returns, which happens after the handler resumes <code>k</code> with 42.</p>
+<hr />
+<h2 id="9-effects-with-refs-and-rc">9. Effects with refs and rc</h2>
+<p>Borrows and reference-counted values that are live at the point of <code>perform</code> remain valid across the perform/resume boundary.</p>
+<pre><code class="language-lisp">;; Refs are live during perform.
+(defeffect GetBase [] :int)
+
+(defn sum-with-base [] :int
+  (let [base (ref 100)]
+    (+ (deref base) (perform (GetBase)))))
+
+(println (handle (sum-with-base)
+  (GetBase [] k) (resume k 42)))
+; =&gt; 142
+</code></pre>
+<pre><code class="language-lisp">;; RC values are live during perform; no leaks.
+(defeffect GetCount [] :int)
+
+(defn use-rc [] :int
+  (let [r (rc/of 42)]
+    (+ 0 (perform (GetCount)))))
+
+(println (handle (use-rc)
+  (GetCount [] k) (resume k 42)))
+; =&gt; 42
+</code></pre>
+<p>The borrow checker enforces that no borrow escapes its declared scope, even through effect boundaries.</p>
+<hr />
+<h2 id="10-wrapping-a-handler-in-a-macro">10. Wrapping a handler in a macro</h2>
+<p>Handlers that are used in many places can be packaged as macros for a cleaner call site.</p>
+<pre><code class="language-lisp">(defeffect Write [s :cstr] :nil)
+
+;; Package the handler as a macro so callers don't repeat boilerplate.
+(defmacro with-write [body]
+  (handle body
+    (Write [s] k) (do (println s) (resume k nil))))
+
+;; Usage:
+(with-write
+  (do
+    (perform (Write &quot;hello&quot;))
+    (perform (Write &quot;world&quot;))))
+; hello
+; world
+</code></pre>
+<p>This is the standard pattern used in <code>stdlib/effects.tur</code> for <code>with-write</code>, <code>with-getenv</code>, and <code>with-read-console</code>.</p>
+<hr />
+<h2 id="11-bridging-effects-to-exceptions">11. Bridging effects to exceptions</h2>
+<p>An effect handler can abort the computation (not resume) and throw an exception instead.</p>
+<pre><code class="language-lisp">(defeffect Fail [msg :cstr] :nil)
+
+(defmacro with-fail-throw [body]
+  (handle body
+    (Fail [msg] k) (throw! msg)))   ; no resume — aborts the computation
+
+(try
+  (with-fail-throw
+    (do
+      (println &quot;before fail&quot;)
+      (perform (Fail &quot;something went wrong&quot;))
+      (println &quot;after fail&quot;)))          ; never reached
+  (catch [err :cstr]
+    (println err)))
+; before fail
+; something went wrong
+</code></pre>
+<p>Not calling <code>resume</code> at all is valid — the computation past the <code>perform</code> is simply abandoned. This lets you implement abort-style error signalling over the exception mechanism.</p>
+<hr />
+<h2 id="12-checking-the-continuation-with-cont">12. Checking the continuation with <code>cont?</code></h2>
+<p><code>(cont? k)</code> returns <code>true</code> if the continuation has not been consumed. For algebraic effects the static one-shot check guarantees <code>k</code> is always unconsumed in the handler body, so this is mostly useful for defensive assertions.</p>
+<pre><code class="language-lisp">(defeffect Ask [] :int)
+
+(defn ask-with-check [] :int
+  (perform (Ask)))
+
+(println (handle (ask-with-check)
+  (Ask [] k)
+  (do
+    (println (cont? k))   ; =&gt; true
+    (resume k 42))))
+; true
+; 42
+</code></pre>
+<hr />
+<h2 id="13-real-world-pattern-mock-io">13. Real-world pattern: mock I/O</h2>
+<p>Replace real I/O with a test double by swapping the handler. The business logic never changes.</p>
+<pre><code class="language-lisp">(defeffect Read  []        :int)
+(defeffect Write [s :cstr] :nil)
+
+;; Pure business logic — no I/O primitives.
+(defn echo-doubled [] :int
+  (let [n (perform (Read))]
+    (do
+      (perform (Write (int-&gt;cstr (* n 2))))
+      0)))
+
+;; Production handler: real stdin/stdout.
+(defmacro with-real-io [body]
+  (handle body
+    (Read  []    k) (resume k (read-int-console))
+    (Write [s]   k) (do (println s) (resume k nil))))
+
+;; Test handler: fixed input, captured output.
+(defmacro with-test-io [input body]
+  (handle body
+    (Read  []    k) (resume k input)
+    (Write [s]   k) (do (println s) (resume k nil))))
+
+;; In production:
+;;   (with-real-io (echo-doubled))
+;;
+;; In tests:
+(with-test-io 21
+  (echo-doubled))
+; =&gt; 42
+</code></pre>
+<p>The function <code>echo-doubled</code> is completely isolated from I/O. Swapping the handler is the only change needed to go from production to test mode.</p>
+<hr />
+<h2 id="14-real-world-pattern-injectable-logging">14. Real-world pattern: injectable logging</h2>
+<p>Define a <code>Log</code> effect with levels. Wire it to a real logger in production, suppress it in benchmarks, and capture it in tests.</p>
+<pre><code class="language-lisp">(defeffect Log [level :cstr msg :cstr] :nil)
+
+;; Business logic
+(defn process [x :int] :int
+  (do
+    (perform (Log &quot;info&quot; &quot;starting&quot;))
+    (let [result (* x 2)]
+      (do
+        (perform (Log &quot;info&quot; &quot;done&quot;))
+        result))))
+
+;; Handler: print everything
+(defmacro with-stderr-log [body]
+  (handle body
+    (Log [level msg] k)
+      (do (println msg) (resume k nil))))
+
+;; Handler: suppress all logs
+(defmacro with-silent-log [body]
+  (handle body
+    (Log [level msg] k) (resume k nil)))
+
+;; Handler: only print warnings and errors
+(defmacro with-warn-log [body]
+  (handle body
+    (Log [level msg] k)
+      (if (or (= level &quot;warn&quot;) (= level &quot;error&quot;))
+        (do (println msg) (resume k nil))
+        (resume k nil))))
+
+(with-stderr-log (println (process 21)))
+; starting
+; done
+; 42
+</code></pre>
+<hr />
+<h2 id="15-summary-and-next-steps">15. Summary and next steps</h2>
+<h3 id="what-youve-learned">What you've learned</h3>
+<table>
+<thead>
+<tr>
+<th>Topic</th>
+<th>Form</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Declare an effect</td>
+<td><code>(defeffect Name [p :T ...] :R)</code></td>
+</tr>
+<tr>
+<td>Perform an effect</td>
+<td><code>(perform (Name arg ...))</code></td>
+</tr>
+<tr>
+<td>Handle effects</td>
+<td><code>(handle expr (Name [p ...] k) body ...)</code></td>
+</tr>
+<tr>
+<td>Resume computation</td>
+<td><code>(resume k value)</code></td>
+</tr>
+<tr>
+<td>Abort computation</td>
+<td>Omit <code>resume</code> (e.g. throw instead)</td>
+</tr>
+<tr>
+<td>Multiple effects</td>
+<td>Multiple clauses in one <code>handle</code></td>
+</tr>
+<tr>
+<td>Nested scoping</td>
+<td>Inner <code>handle</code> shadows outer for same effect</td>
+</tr>
+<tr>
+<td>Macro wrappers</td>
+<td><code>(defmacro with-x [body] (handle body ...))</code></td>
+</tr>
+<tr>
+<td>Interop with defer/ref/rc</td>
+<td>Works transparently across perform/resume</td>
+</tr>
+<tr>
+<td>Bridge to exceptions</td>
+<td>Handler calls <code>throw!</code> instead of <code>resume</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="stdlib-effects">stdlib effects</h3>
+<p><code>stdlib/effects.tur</code> provides ready-made effects and handlers:</p>
+<table>
+<thead>
+<tr>
+<th>Effect</th>
+<th>Handler macro</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Write [s :cstr]</code></td>
+<td><code>with-write</code></td>
+<td>Routes writes to <code>println</code></td>
+</tr>
+<tr>
+<td><code>Fail [msg :cstr]</code></td>
+<td><code>with-fail-throw</code></td>
+<td>Converts failures to exceptions</td>
+</tr>
+<tr>
+<td><code>Read []</code></td>
+<td><code>with-read-console</code></td>
+<td>Reads an int from stdin</td>
+</tr>
+<tr>
+<td><code>GetEnv [key :cstr]</code></td>
+<td><code>with-getenv</code></td>
+<td>Delegates to C <code>getenv(3)</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="further-reading">Further reading</h3>
+<ul>
+<li><code>docs/turmeric-plan.md</code> §10.18–10.19 — Phase 18 (shift/reset) and Phase 19 (algebraic effects) design details</li>
+<li><code>tests/fixtures/effect-*</code> — full fixture test suite for every effect feature</li>
+<li><code>docs/archive/async-await-plan.md</code> — planned async/await built on the effect substrate</li>
+<li><code>docs/archive/stm-plan.md</code> — planned STM built on the effect substrate</li>
+</ul>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/custom-effects-tutorial.md</code>
+  </footer>
+</body>
+</html>

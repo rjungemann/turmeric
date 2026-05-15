@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Software Transactional Memory (STM) Tutorial | Turmeric Guides</title>
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--cream); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"JetBrains Mono","Fira Code",monospace; font-size:0.85em; background:var(--bg-code); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-code); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--faint); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-card); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold); }
+    .guide-content strong { color:var(--cream); }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/">turmeric</a>
+    <nav>
+      <a href="/docs/guides/">Guides</a>
+      <a href="/docs/api/">API Docs</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="page-layout">
+    <div class="sidebar">
+            <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--faint)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#software-transactional-memory-stm-tutorial" style="">Software Transactional Memory (STM) Tutorial</a></li>
+<li style=""><a href="#overview" style="">Overview</a></li>
+<li style=""><a href="#core-concepts" style="">Core Concepts</a></li>
+<li style="padding-left:0.75rem;"><a href="#transactions-as-atomic-units" style="color:var(--faint);">Transactions as Atomic Units</a></li>
+<li style="padding-left:0.75rem;"><a href="#transactional-variables-tvar" style="color:var(--faint);">Transactional Variables: TVar</a></li>
+<li style="padding-left:0.75rem;"><a href="#properties" style="color:var(--faint);">Properties</a></li>
+<li style=""><a href="#advantages-over-locks" style="">Advantages Over Locks</a></li>
+<li style=""><a href="#quick-start" style="">Quick Start</a></li>
+<li style="padding-left:0.75rem;"><a href="#simple-counter" style="color:var(--faint);">Simple Counter</a></li>
+<li style="padding-left:0.75rem;"><a href="#bank-transfer-no-deadlock" style="color:var(--faint);">Bank Transfer (No Deadlock!)</a></li>
+<li style=""><a href="#core-api" style="">Core API</a></li>
+<li style="padding-left:0.75rem;"><a href="#creating-and-readingwriting" style="color:var(--faint);">Creating and Reading/Writing</a></li>
+<li style="padding-left:0.75rem;"><a href="#running-a-transaction" style="color:var(--faint);">Running a Transaction</a></li>
+<li style="padding-left:0.75rem;"><a href="#retry-on-conflict" style="color:var(--faint);">Retry on Conflict</a></li>
+<li style="padding-left:0.75rem;"><a href="#choice-try-one-branch-then-another" style="color:var(--faint);">Choice: Try One Branch Then Another</a></li>
+<li style=""><a href="#transactional-synchronization-primitives" style="">Transactional Synchronization Primitives</a></li>
+<li style="padding-left:0.75rem;"><a href="#tmvar-single-slot-mailbox" style="color:var(--faint);">TMVar: Single-Slot Mailbox</a></li>
+<li style="padding-left:0.75rem;"><a href="#tchan-fifo-channel" style="color:var(--faint);">TChan: FIFO Channel</a></li>
+<li style=""><a href="#common-patterns" style="">Common Patterns</a></li>
+<li style="padding-left:0.75rem;"><a href="#producer-consumer" style="color:var(--faint);">Producer-Consumer</a></li>
+<li style="padding-left:0.75rem;"><a href="#reader-writer-lock" style="color:var(--faint);">Reader-Writer Lock</a></li>
+<li style="padding-left:0.75rem;"><a href="#barrier" style="color:var(--faint);">Barrier</a></li>
+<li style=""><a href="#limitations-v1" style="">Limitations (v1)</a></li>
+<li style=""><a href="#example-concurrent-merge-sort" style="">Example: Concurrent Merge Sort</a></li>
+<li style=""><a href="#performance-tips" style="">Performance Tips</a></li>
+<li style=""><a href="#see-also" style="">See Also</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="software-transactional-memory-stm-tutorial">Software Transactional Memory (STM) Tutorial</h1>
+<p>Composable, deadlock-free concurrent programming using transactional memory.</p>
+<h2 id="overview">Overview</h2>
+<p><strong>Software Transactional Memory (STM)</strong> provides an alternative to locks. Transactions execute atomically with automatic conflict detection and retry, eliminating deadlocks and priority inversion while enabling composability.</p>
+<p>Turmeric's STM is modeled on <strong>Haskell's <code>Control.Concurrent.STM</code></strong>, offering a proven API and semantics.</p>
+<h2 id="core-concepts">Core Concepts</h2>
+<h3 id="transactions-as-atomic-units">Transactions as Atomic Units</h3>
+<p>Like database transactions, an STM transaction either completes entirely or rolls back:</p>
+<pre><code class="language-turmeric">;; Transfer funds between accounts atomically
+(atomically
+  (fn []
+    (let [from-balance (read-tvar from-account)]
+      (let [to-balance (read-tvar to-account)]
+        (when (&gt;= from-balance amount)
+          (write-tvar from-account (- from-balance amount))
+          (write-tvar to-account (+ to-balance amount)))))))
+</code></pre>
+<h3 id="transactional-variables-tvar">Transactional Variables: TVar</h3>
+<p><strong><code>TVar&lt;T&gt;</code></strong> is a mutable reference that can only be accessed within a transaction:</p>
+<pre><code class="language-turmeric">;; Create a transactional variable
+(def counter (new-tvar 0))
+
+;; Read within a transaction
+(atomically
+  (fn []
+    (let [value (read-tvar counter)]
+      (write-tvar counter (+ value 1)))))
+</code></pre>
+<h3 id="properties">Properties</h3>
+<ul>
+<li><strong>Atomicity:</strong> A transaction completes entirely or rolls back.</li>
+<li><strong>Isolation:</strong> Concurrent transactions appear to execute serially.</li>
+<li><strong>Composability:</strong> Transactions can call other transactions freely without deadlock risk.</li>
+<li><strong>Automatic retry:</strong> On conflict, transactions restart from the beginning.</li>
+</ul>
+<h2 id="advantages-over-locks">Advantages Over Locks</h2>
+<table>
+<thead>
+<tr>
+<th>Aspect</th>
+<th>Locks</th>
+<th>STM</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Deadlock</strong></td>
+<td>Possible; require careful ordering</td>
+<td>Impossible; automatic retry</td>
+</tr>
+<tr>
+<td><strong>Priority inversion</strong></td>
+<td>Possible</td>
+<td>Impossible</td>
+</tr>
+<tr>
+<td><strong>Composability</strong></td>
+<td>Difficult; lock ordering required</td>
+<td>Easy; transactions compose freely</td>
+</tr>
+<tr>
+<td><strong>Error handling</strong></td>
+<td>Lock held during exception; manual cleanup</td>
+<td>Automatic cleanup on transaction abort</td>
+</tr>
+<tr>
+<td><strong>Debugging</strong></td>
+<td>Hard; deadlock traces are complex</td>
+<td>Easier; transactional semantics</td>
+</tr>
+</tbody>
+</table>
+<h2 id="quick-start">Quick Start</h2>
+<h3 id="simple-counter">Simple Counter</h3>
+<pre><code class="language-turmeric">(def counter (new-tvar 0))
+
+;; Increment atomically
+(atomically
+  (fn []
+    (let [v (read-tvar counter)]
+      (write-tvar counter (+ v 1)))))
+
+(println (atomically (fn [] (read-tvar counter))))  ; =&gt; 1
+</code></pre>
+<h3 id="bank-transfer-no-deadlock">Bank Transfer (No Deadlock!)</h3>
+<pre><code class="language-turmeric">;; Accounts as transactional variables
+(def account-a (new-tvar 100))
+(def account-b (new-tvar 50))
+
+;; Transfer with automatic conflict resolution
+(defn transfer [from to amount]
+  (atomically
+    (fn []
+      (let [from-balance (read-tvar from)]
+        (when (&gt;= from-balance amount)
+          (write-tvar from (- from-balance amount))
+          (write-tvar to (+ (read-tvar to) amount)))))))
+
+(transfer account-a account-b 30)
+
+;; Concurrent transfers never deadlock!
+(thread (fn [] (transfer account-a account-b 10)))
+(thread (fn [] (transfer account-b account-a 5)))
+</code></pre>
+<h2 id="core-api">Core API</h2>
+<h3 id="creating-and-readingwriting">Creating and Reading/Writing</h3>
+<pre><code class="language-turmeric">;; Create a transactional variable
+(def tvar (new-tvar 42))
+
+;; Read (only inside atomically)
+(atomically
+  (fn []
+    (read-tvar tvar)))  ; =&gt; 42
+
+;; Write (only inside atomically)
+(atomically
+  (fn []
+    (write-tvar tvar 100)))
+
+;; Value is now 100
+(atomically
+  (fn []
+    (read-tvar tvar)))  ; =&gt; 100
+</code></pre>
+<h3 id="running-a-transaction">Running a Transaction</h3>
+<pre><code class="language-turmeric">;; Atomically: run transaction, retry on conflict
+(atomically tx)  ; =&gt; result
+
+;; Returns the result of the transaction
+(def result
+  (atomically
+    (fn []
+      (let [x (read-tvar counter)]
+        (write-tvar counter (+ x 1))
+        (+ x 1)))))
+</code></pre>
+<h3 id="retry-on-conflict">Retry on Conflict</h3>
+<pre><code class="language-turmeric">;; Wait until balance &gt; 10
+(atomically
+  (fn []
+    (let [balance (read-tvar account)]
+      (when (&lt;= balance 10)
+        (retry)))))  ; Block and re-run when any watched TVar changes
+</code></pre>
+<p>When <code>retry</code> is called:
+1. The transaction aborts (without side effects).
+2. Turmeric records which <code>TVar</code>s were read.
+3. The transaction sleeps until one of those <code>TVar</code>s changes.
+4. Execution resumes from the beginning.</p>
+<h3 id="choice-try-one-branch-then-another">Choice: Try One Branch Then Another</h3>
+<pre><code class="language-turmeric">;; Try to withdraw from account-a, else account-b
+(atomically
+  (fn []
+    (or-else
+      (fn [] (withdraw account-a 50))
+      (fn [] (withdraw account-b 50)))))
+</code></pre>
+<p>If the first branch calls <code>retry</code>, the second branch is tried. Both branches see the same transactional state at the moment of choice.</p>
+<h2 id="transactional-synchronization-primitives">Transactional Synchronization Primitives</h2>
+<h3 id="tmvar-single-slot-mailbox">TMVar: Single-Slot Mailbox</h3>
+<pre><code class="language-turmeric">;; Create an empty mailbox
+(def mvar (new-tmvar))
+
+;; Try to read (blocks if empty, retries)
+(atomically
+  (fn []
+    (read-tmvar mvar)))  ; Will retry until a value is available
+
+;; Write (blocks if full, retries)
+(atomically
+  (fn []
+    (write-tmvar mvar 42)))
+</code></pre>
+<h3 id="tchan-fifo-channel">TChan: FIFO Channel</h3>
+<pre><code class="language-turmeric">;; Create a channel
+(def chan (new-tchan))
+
+;; Write to channel
+(atomically
+  (fn []
+    (write-tchan chan &quot;hello&quot;)))
+
+;; Read from channel (blocks if empty, retries)
+(atomically
+  (fn []
+    (read-tchan chan)))  ; =&gt; &quot;hello&quot;
+</code></pre>
+<h2 id="common-patterns">Common Patterns</h2>
+<h3 id="producer-consumer">Producer-Consumer</h3>
+<pre><code class="language-turmeric">;; Shared queue
+(def queue (new-tmvar '()))
+
+(thread
+  (fn []
+    ;; Producer: generate items
+    (for-each (range 10)
+      (fn [i]
+        (atomically
+          (fn []
+            (def q (read-tmvar queue))
+            (write-tmvar queue (conj q i))))
+        (sleep 100)))))
+
+(thread
+  (fn []
+    ;; Consumer: process items
+    (loop
+      (atomically
+        (fn []
+          (def q (read-tmvar queue))
+          (when (empty? q)
+            (retry))
+          (def item (car q))
+          (write-tmvar queue (cdr q))
+          (println item))))))
+</code></pre>
+<h3 id="reader-writer-lock">Reader-Writer Lock</h3>
+<pre><code class="language-turmeric">;; Using TMVar as a simple semaphore
+(def write-lock (new-tmvar true))
+
+(defn with-write-lock [f]
+  (atomically
+    (fn []
+      (read-tmvar write-lock)  ; Acquire
+      (let [result (f)]
+        (write-tmvar write-lock true)  ; Release
+        result))))
+
+(with-write-lock
+  (fn []
+    ;; Write-protected section
+    ))
+</code></pre>
+<h3 id="barrier">Barrier</h3>
+<pre><code class="language-turmeric">;; Synchronize N threads
+(defn barrier-new [n]
+  (new-tmvar (list :count n :waiting 0)))
+
+(defn barrier-wait [barrier]
+  (atomically
+    (fn []
+      (def state (read-tmvar barrier))
+      (def waiting (+ (get state :waiting) 1))
+      (if (= waiting (get state :count))
+        ;; All threads arrived
+        (write-tmvar barrier (assoc state :waiting 0))
+        ;; Wait for others
+        (do
+          (write-tmvar barrier (assoc state :waiting waiting))
+          (retry))))))
+</code></pre>
+<h2 id="limitations-v1">Limitations (v1)</h2>
+<ul>
+<li><strong>No nested transactions:</strong> Calling <code>atomically</code> inside <code>atomically</code> raises an error. (Haskell allows this; Turmeric v2+ may support it.)</li>
+<li><strong>No interactive transactions:</strong> Transactions must be pure (no I/O); side effects inside <code>atomically</code> may occur multiple times on retry.</li>
+<li><strong>Performance:</strong> Lock-based implementation (v1); wait-free or lock-free variants planned for v2+.</li>
+</ul>
+<h2 id="example-concurrent-merge-sort">Example: Concurrent Merge Sort</h2>
+<pre><code class="language-turmeric">(defn merge-sort-stm [vec]
+  (if (&lt;= (len vec) 1)
+    vec
+    (let [mid (/ (len vec) 2)
+          left-result (new-tmvar #f)
+          right-result (new-tmvar #f)]
+
+      ;; Sort left half in parallel
+      (thread
+        (fn []
+          (atomically
+            (fn []
+              (write-tmvar left-result
+                          (merge-sort-stm (slice vec 0 mid)))))))
+
+      ;; Sort right half in parallel
+      (thread
+        (fn []
+          (atomically
+            (fn []
+              (write-tmvar right-result
+                          (merge-sort-stm (slice vec mid (len vec))))))))
+
+      ;; Merge results
+      (atomically
+        (fn []
+          (let [left (read-tmvar left-result)
+                right (read-tmvar right-result)]
+            (when (or (nil? left) (nil? right))
+              (retry))
+            (merge left right)))))))
+</code></pre>
+<h2 id="performance-tips">Performance Tips</h2>
+<ol>
+<li><strong>Keep transactions short:</strong> Minimize the time window to reduce conflict probability.</li>
+<li><strong>Read-only transactions:</strong> Batch reads into an <code>atomically</code> block.</li>
+<li><strong>Predicate isolation:</strong> Use <code>retry</code> and watches efficiently; don't poll.</li>
+<li><strong>Watch out for <code>orElse</code>:</strong> Can cause cascading retries; use judiciously.</li>
+</ol>
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="threading-guide.md">Threading Guide</a> — Locks, mutexes, atomic types</li>
+<li><a href="async-await-guide.md">Async/Await Guide</a> — Lightweight concurrency with fibers</li>
+<li><a href="effects-system-guide.md">Effects System Guide</a> — Exception handling in transactions</li>
+<li><a href="../turmeric-plan.md">turmeric-plan.md</a> §19 — Thread primitives (prerequisite)</li>
+</ul>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/stm-tutorial.md</code>
+  </footer>
+</body>
+</html>
