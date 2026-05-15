@@ -270,6 +270,46 @@ void turi_wasm_shutdown(void) {
 }
 
 /* ---------------------------------------------------------------------------
+ * Reader language mode (Phase S2)
+ * ---------------------------------------------------------------------------
+ */
+
+/* Set the reader language mode for subsequent evaluations.
+ *
+ * Builds a "#lang <name>" string and runs it through detect_lang so the same
+ * validation logic used by the REPL applies here too.
+ *
+ * Returns 0 on success, 1 if name is unknown. */
+int turi_wasm_set_lang(const char *name) {
+    if (!g_env || !name) return 1;
+
+    /* Build a synthetic "#lang <name>" to reuse detect_lang's validation. */
+    char buf[128];
+    int written = snprintf(buf, sizeof(buf), "#lang %s", name);
+    if (written < 0 || (size_t)written >= sizeof(buf)) return 1;
+
+    const char *rest;
+    size_t      rest_len;
+    ReaderType rt = detect_lang(buf, (size_t)written, &rest, &rest_len);
+
+    /* rest == buf means no #lang was recognised (pointer unchanged). */
+    if (rest == buf || rt == READER_UNKNOWN || rt == (ReaderType)-1) return 1;
+
+    if (rt != g_env->reader_type) {
+        g_env->reader_type    = rt;
+        g_env->src_acc.len    = 0;
+        g_env->prior_toplevel = 0;
+    }
+    return 0;
+}
+
+/* Return the current reader language name as a static string. */
+const char *turi_wasm_get_lang(void) {
+    if (!g_env) return reader_type_name(READER_TURMERIC);
+    return reader_type_name(g_env->reader_type);
+}
+
+/* ---------------------------------------------------------------------------
  * Doc lookup bridge (D6: autodoc integration)
  * ---------------------------------------------------------------------------
  */
