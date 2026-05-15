@@ -10,17 +10,22 @@ Turmeric is a statically-typed Lisp compiler that targets C99. Write expressive 
 
 Turmeric exists to explore the intersection of Lisp expressiveness and systems-level control — closures, algebraic effects, borrow checking, reference counting, and typeclasses — without a runtime VM or garbage collector as the default execution model. The generated C is readable and can be embedded in any C project.
 
-## Setup
+## Install
 
-**Prerequisites:**
-- A C99-compatible compiler (`cc`, `clang`, or `gcc`)
-- CMake 3.20+
-- [`just`](https://github.com/casey/just) (optional, but recommended)
-
-**Build the compiler:**
+**macOS (via Homebrew):**
 
 ```sh
-git clone <repo-url>
+curl -sSf https://install.turmeric-lang.com | sh
+```
+
+This installs the `tur` compiler via the Homebrew formula in this repo.
+
+**Build from source:**
+
+Prerequisites: a C99 compiler, CMake 3.20+, and optionally [`just`](https://github.com/casey/just).
+
+```sh
+git clone https://github.com/rjungemann/turmeric.git
 cd turmeric
 just configure   # cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug ...
 just             # debug build with AddressSanitizer + UBSan
@@ -51,6 +56,43 @@ just test
 ./build/tur run path/to/file.tur       # compile and immediately execute
 ./build/tur repl                       # interactive REPL
 ```
+
+## Package Management (Spice)
+
+Turmeric has a built-in package manager called **Spice**. A single `build.tur`
+file at the project root declares the package identity and its dependencies
+(called *spices*):
+
+```lisp
+(defpackage my-app
+  :name    "my-app"
+  :version "0.1.0"
+
+  ;; Turmeric dependencies -- declared as git URLs
+  :spices {
+    "geom" {:url "https://github.com/alice/tur-geom" :ref "v0.2.1"}
+    "math" {:url "https://github.com/bob/tur-math"   :ref "v1.5.0"}
+  }
+
+  ;; C/CMake libraries (CPM-compatible) -- fetched and linked automatically
+  :cmake-deps {
+    "raylib" {:url "https://github.com/raysan5/raylib" :ref "5.0"}
+  })
+```
+
+Common commands:
+
+```sh
+tur init --bin my-app        # scaffold a new project
+tur add https://github.com/alice/tur-geom --ref v0.2.1
+tur fetch                    # fetch all spices, write tur.lock
+tur build                    # build the project
+tur test                     # run tests
+```
+
+See [docs/package-management-plan.md](docs/package-management-plan.md) for the
+full design, and [docs/cmake-cpm-integration-plan.md](docs/cmake-cpm-integration-plan.md)
+for C/CMake dependency details.
 
 ## Examples
 

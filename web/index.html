@@ -4,6 +4,24 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Turmeric — A Taste of Functional Programming</title>
+<meta name="description" content="Turmeric is a lightning-fast functional language with typeclasses, algebraic effects, and pattern matching in a Lisp-inspired syntax.">
+
+<!-- Open Graph -->
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://turmeric-lang.com/">
+<meta property="og:title" content="Turmeric — A Taste of Functional Programming">
+<meta property="og:description" content="Turmeric is a lightning-fast functional language with typeclasses, algebraic effects, and pattern matching in a Lisp-inspired syntax.">
+<meta property="og:image" content="https://turmeric-lang.com/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:site_name" content="Turmeric">
+
+<!-- Twitter / X -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:url" content="https://turmeric-lang.com/">
+<meta name="twitter:title" content="Turmeric — A Taste of Functional Programming">
+<meta name="twitter:description" content="Turmeric is a lightning-fast functional language with typeclasses, algebraic effects, and pattern matching in a Lisp-inspired syntax.">
+<meta name="twitter:image" content="https://turmeric-lang.com/og-image.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400;1,500&family=DM+Sans:wght@300;400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -861,6 +879,91 @@ footer {
   font-family: 'JetBrains Mono', monospace;
   font-size: 13px;
   line-height: 1.75;
+  overflow-x: auto;
+}
+
+/* ── RESPONSIVE ────────────────────────── */
+@media (max-width: 768px) {
+  nav {
+    padding: 0 20px;
+  }
+  .nav-links { display: none; }
+
+  .hero {
+    padding: 100px 24px 60px;
+  }
+  .install-hint {
+    flex-direction: column;
+    gap: 6px;
+    text-align: center;
+  }
+
+  .features-header { padding: 60px 24px 0; }
+
+  .feature-grid {
+    padding: 32px 24px 60px;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .split-section {
+    padding: 60px 24px;
+    grid-template-columns: 1fr;
+    gap: 40px;
+  }
+  .split-section.reverse { direction: ltr; }
+  .split-section.reverse > * { direction: ltr; }
+
+  .bench-section { padding: 60px 24px; }
+  .bench-grid { grid-template-columns: 1fr; gap: 16px; }
+
+  .started-section { padding: 60px 24px; }
+  .started-grid { grid-template-columns: 1fr; }
+
+  section { padding: 60px 24px; }
+
+  .influences {
+    padding: 40px 24px;
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+  .infl-sep { display: none; }
+
+  .cta-section { padding: 48px 24px 80px; }
+  .cta-box { padding: 48px 28px; }
+
+  footer { padding: 40px 24px 32px; }
+  .footer-inner {
+    grid-template-columns: 1fr 1fr;
+    gap: 32px;
+  }
+  .footer-brand { grid-column: 1 / -1; }
+  .footer-brand p { max-width: none; }
+}
+
+@media (max-width: 480px) {
+  nav { padding: 0 16px; }
+  .nav-right .btn-ghost { display: none; }
+
+  .hero { padding: 90px 16px 48px; }
+  .hero-actions { flex-direction: column; align-items: stretch; }
+  .btn-hero { justify-content: center; }
+
+  .feature-grid {
+    padding: 24px 16px 48px;
+    grid-template-columns: 1fr;
+  }
+
+  .bench-section { padding: 48px 16px; }
+  .started-section { padding: 48px 16px; }
+  .cta-box { padding: 40px 20px; }
+
+  footer { padding: 36px 16px 28px; }
+  .footer-inner { grid-template-columns: 1fr; }
+  .footer-bottom {
+    flex-direction: column;
+    gap: 12px;
+    align-items: flex-start;
+  }
 }
 </style>
 </head>
@@ -873,11 +976,10 @@ footer {
     <span class="nav-name">Turmeric</span>
   </a>
   <div class="nav-links">
-    <a href="#">Language</a>
-    <a href="#">Docs</a>
-    <a href="#">Packages</a>
-    <a href="#">Blog</a>
-    <a href="#">Community</a>
+    <a href="/try">Try It</a>
+    <a href="/docs/guides/">Guides</a>
+    <a href="/docs/api/">API Docs</a>
+    <a href="/docs/spice/">Packages</a>
   </div>
   <div class="nav-right">
     <a href="#" class="btn-ghost">GitHub</a>
@@ -902,11 +1004,11 @@ footer {
     </p>
     <div class="hero-actions">
       <a href="/try" class="btn-hero btn-hero-primary">Try in browser <span class="arrow">→</span></a>
-      <a href="#" class="btn-hero btn-hero-secondary">Read the docs</a>
+      <a href="/docs/api/" class="btn-hero btn-hero-secondary">Read the docs</a>
     </div>
     <div class="install-hint">
       <span>Install via</span>
-      <span class="install-cmd">curl -sSf https://install.turmeric-lang.org | sh</span>
+      <span class="install-cmd">curl -sSf https://install.turmeric-lang.com | sh</span>
     </div>
 
     <!-- Code block -->
@@ -916,33 +1018,33 @@ footer {
           <div class="win-dot wd-r"></div>
           <div class="win-dot wd-y"></div>
           <div class="win-dot wd-g"></div>
-          <span class="code-card-filename" id="code-filename">effects.tur</span>
+          <span class="code-card-filename" id="code-filename" data-turmeric="effects.tur" data-sweet-exp="effects.neoteric">effects.tur</span>
           <div class="code-syntax-toggle">
             <button class="seg-btn active" data-syntax="turmeric">turmeric</button>
             <button class="seg-btn" data-syntax="sweet-exp">sweet-exp</button>
           </div>
         </div>
         <div class="code-card-body">
-          <div class="code-version turmeric-version">
-<span class="cmt">;; Algebraic effects in Turmeric</span>
+          <div class="code-version turmeric-version"><span class="cmt">;; Algebraic effects in Turmeric</span>
 
-<span class="kw">defeffect</span> <span class="tp">Ask</span> <span class="pnc">[</span><span class="pnc">]</span> :<span class="tp">int</span>
+<span class="pnc">(</span><span class="kw">defeffect</span> <span class="tp">Ask</span> <span class="pnc">[]</span> <span class="tp">:int</span><span class="pnc">)</span>
 
-<span class="kw">defn</span> <span class="fn">use-ask</span> <span class="pnc">[</span><span class="pnc">]</span> :<span class="tp">int</span>
-  <span class="pnc">(</span><span class="kw">+</span> <span class="num">1</span> <span class="pnc">(</span><span class="fn">perform</span> <span class="pnc">(</span><span class="tp">Ask</span><span class="pnc">)))</span>
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">use-ask</span> <span class="pnc">[]</span> <span class="tp">:int</span>
+  <span class="pnc">(</span><span class="op">+</span> <span class="num">1</span> <span class="pnc">(</span>perform <span class="pnc">(</span><span class="tp">Ask</span><span class="pnc">))))</span>
 
-<span class="pnc">(</span><span class="fn">println</span> <span class="pnc">(</span><span class="fn">handle</span> <span class="pnc">(</span><span class="fn">use-ask</span><span class="pnc">)</span>
-  <span class="pnc">(</span><span class="tp">Ask</span> <span class="pnc">[</span><span class="pnc">]</span> k<span class="pnc">)</span> <span class="pnc">(</span><span class="fn">resume</span> k <span class="num">41</span><span class="pnc">)))</span>
+<span class="pnc">(</span>println <span class="pnc">(</span>handle <span class="pnc">(</span><span class="fn">use-ask</span><span class="pnc">)</span>
+  <span class="pnc">(</span><span class="tp">Ask</span> <span class="pnc">[]</span> k<span class="pnc">)</span> <span class="pnc">(</span>resume k <span class="num">41</span><span class="pnc">)))</span>
           </div>
-          <div class="code-version sweet-exp-version" style="display: none;">
-<span class="cmt">;; Algebraic effects in sweet-exp syntax</span>
+          <div class="code-version sweet-exp-version" style="display: none;"><span class="cmt">;; Neoteric syntax -- f(args) for function calls</span>
+<span class="cmt">#lang turmeric/neoteric</span>
 
-<span class="kw">defeffect</span> <span class="tp">Ask</span> <span class="pnc">[</span><span class="pnc">]</span> :<span class="tp">int</span>
+<span class="pnc">(</span><span class="kw">defeffect</span> <span class="tp">Ask</span> <span class="pnc">[]</span> <span class="tp">:int</span><span class="pnc">)</span>
 
-<span class="kw">defn</span> <span class="fn">use-ask</span> <span class="pnc">[</span><span class="pnc">]</span> :<span class="tp">int</span>
-  <span class="pnc">{</span><span class="kw">+</span> <span class="num">1</span> <span class="pnc">{</span><span class="fn">perform</span> <span class="pnc">{</span><span class="tp">Ask</span><span class="pnc">}</span><span class="pnc">}</span>
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">use-ask</span> <span class="pnc">[]</span> <span class="tp">:int</span>
+  <span class="op">+</span><span class="pnc">(</span><span class="num">1</span> perform<span class="pnc">(</span><span class="tp">Ask</span><span class="pnc">())))</span>
 
-<span class="fn">println</span> <span class="pnc">{</span><span class="fn">handle</span> <span class="pnc">{</span><span class="fn">use-ask</span><span class="pnc">}</span> <span class="pnc">{</span><span class="tp">Ask</span> <span class="pnc">[</span><span class="pnc">]</span> k<span class="pnc">}</span> <span class="pnc">{</span><span class="fn">resume</span> k <span class="num">41</span><span class="pnc">}</span>
+<span class="pnc">(</span>println handle<span class="pnc">(</span><span class="fn">use-ask</span><span class="pnc">())</span>
+  <span class="pnc">(</span><span class="tp">Ask</span> <span class="pnc">[]</span> k<span class="pnc">)</span> resume<span class="pnc">(</span>k <span class="num">41</span><span class="pnc">))</span>
           </div>
         </div>
       </div>
@@ -980,7 +1082,7 @@ footer {
   <div class="feature-card">
     <div class="feat-icon">⚡</div>
     <div class="feat-title">Lightning Compilation</div>
-    <p class="feat-desc">Turmeric compiles to native code via LLVM with whole-program optimization. Incremental builds finish in milliseconds.</p>
+    <p class="feat-desc">Turmeric compiles to native code with whole-program optimization. Incremental builds are fast by design — spend more time writing, less time waiting.</p>
     <span class="feat-badge">sub-second builds</span>
   </div>
 
@@ -995,28 +1097,28 @@ footer {
     <div class="feat-icon">✦</div>
     <div class="feat-title">Algebraic Effects</div>
     <p class="feat-desc">Model side effects as first-class values. Compose, intercept, and resume them with handlers — no monad transformers required.</p>
-    <span class="feat-badge">effect · perform · handle</span>
+    <span class="feat-badge">defeffect · perform · handle</span>
   </div>
 
   <div class="feature-card">
     <div class="feat-icon">◇</div>
     <div class="feat-title">Pattern Matching</div>
-    <p class="feat-desc">Exhaustive, nested, and deep pattern matching on algebraic data types. The compiler guarantees you handle every case.</p>
-    <span class="feat-badge">match · | · =></span>
+    <p class="feat-desc">Exhaustive pattern matching on algebraic data types defined with <code>defdata</code> and generalized with <code>defgadt</code>. Every case is handled.</p>
+    <span class="feat-badge">match · defdata · defgadt</span>
   </div>
 
   <div class="feature-card">
     <div class="feat-icon">∿</div>
-    <div class="feat-title">Lazy Sequences</div>
-    <p class="feat-desc">Infinite streams and lazy evaluation built into the core. Build pipelines that produce only what you consume.</p>
-    <span class="feat-badge">lazy · stream · take</span>
+    <div class="feat-title">Continuations</div>
+    <p class="feat-desc">Delimited continuations with <code>reset</code> and <code>shift</code> let you encode coroutines, generators, and advanced control flow as ordinary library code.</p>
+    <span class="feat-badge">reset · shift · delimited</span>
   </div>
 
   <div class="feature-card">
     <div class="feat-icon">⊕</div>
     <div class="feat-title">Macro System</div>
-    <p class="feat-desc">A hygienic, compile-time macro system inspired by Racket's syntax-rules. Extend the language without sacrificing safety.</p>
-    <span class="feat-badge">defmacro · syntax-rules</span>
+    <p class="feat-desc">A compile-time macro system with quasiquote and unquote. Extend the language with new syntax without sacrificing readability.</p>
+    <span class="feat-badge">defmacro · quasiquote</span>
   </div>
 
 </div>
@@ -1029,35 +1131,63 @@ footer {
     <p class="section-label">Typeclasses</p>
     <h2 class="section-title">Polymorphism<br>that <em>scales.</em></h2>
     <p class="section-desc" style="margin-bottom: 24px;">Define behavior once, use it everywhere. Turmeric's typeclass system handles dispatch at compile time — no virtual tables, no runtime cost.</p>
-    <p class="section-desc">Derive common typeclasses automatically, or write your own implementations with complete type inference.</p>
+    <p class="section-desc">Write instances for any type with complete type inference. Typeclass constraints keep your functions general without losing precision.</p>
   </div>
   <div class="code-card" style="font-size:12.5px;">
     <div class="code-card-bar">
       <div class="win-dot wd-r"></div>
       <div class="win-dot wd-y"></div>
       <div class="win-dot wd-g"></div>
-      <span class="code-card-filename">typeclasses.tmrc</span>
+      <span class="code-card-filename" data-turmeric="typeclasses.tur" data-sweet-exp="typeclasses.neoteric">typeclasses.tur</span>
+      <div class="code-syntax-toggle">
+        <button class="seg-btn active" data-syntax="turmeric">turmeric</button>
+        <button class="seg-btn" data-syntax="sweet-exp">sweet-exp</button>
+      </div>
     </div>
-    <div class="code-card-body" style="font-size:12px;padding:20px 22px;"><span class="kw">defclass</span> <span class="pnc">(</span><span class="tp">Show</span> a<span class="pnc">)</span>
-  <span class="pnc">(</span>show : <span class="pnc">(</span>-> a <span class="tp">Str</span><span class="pnc">))</span>
+    <div class="code-card-body" style="font-size:12px;padding:20px 22px;"><div class="code-version turmeric-version"><span class="pnc">(</span><span class="kw">defclass</span> <span class="fn">Show</span> <span class="pnc">[</span>a<span class="pnc">]</span>
+  <span class="pnc">(</span><span class="fn">show</span> <span class="pnc">[</span>x<span class="pnc">]</span> <span class="tp">:cstr</span><span class="pnc">))</span>
 
-<span class="kw">deftype</span> <span class="tp">Color</span>
-  <span class="op">|</span> Red <span class="op">|</span> Green <span class="op">|</span> Blue
+<span class="pnc">(</span><span class="kw">defclass</span> <span class="fn">Eq</span> <span class="pnc">[</span>a<span class="pnc">]</span>
+  <span class="pnc">(</span><span class="fn">eq?</span> <span class="pnc">[</span>x y<span class="pnc">]</span> <span class="tp">:bool</span><span class="pnc">))</span>
 
-<span class="kw">impl</span> <span class="tp">Show</span> <span class="tp">Color</span>
-  <span class="pnc">(</span><span class="kw">defn</span> <span class="fn">show</span> <span class="pnc">(</span>c<span class="pnc">)</span>
-    <span class="pnc">(</span><span class="kw">match</span> c
-      <span class="op">|</span> Red   <span class="op">=></span> <span class="str">"red"</span>
-      <span class="op">|</span> Green <span class="op">=></span> <span class="str">"green"</span>
-      <span class="op">|</span> Blue  <span class="op">=></span> <span class="str">"blue"</span><span class="pnc">))</span>
+<span class="pnc">(</span><span class="kw">defdata</span> <span class="tp">Color</span> <span class="pnc">(</span><span class="tp">Red</span><span class="pnc">)</span> <span class="pnc">(</span><span class="tp">Green</span><span class="pnc">)</span> <span class="pnc">(</span><span class="tp">Blue</span><span class="pnc">))</span>
 
-<span class="cmt">;; Works for any type with Show</span>
-<span class="kw">defn</span> <span class="fn">print-all</span> <span class="pnc">[</span><span class="tp">Show</span> a<span class="pnc">]</span> <span class="pnc">(</span>xs : <span class="tp">List</span> a<span class="pnc">)</span>
-  <span class="pnc">(</span><span class="fn">for-each</span> <span class="pnc">(</span><span class="fn">fn</span> <span class="pnc">(</span>x<span class="pnc">)</span> <span class="pnc">(</span><span class="fn">println</span> <span class="pnc">(</span><span class="fn">show</span> x<span class="pnc">)))</span> xs<span class="pnc">)</span>
+<span class="pnc">(</span><span class="kw">definstance</span> <span class="fn">Eq</span> <span class="pnc">[</span><span class="tp">int</span><span class="pnc">]</span>
+  <span class="pnc">(</span><span class="fn">eq?</span> <span class="pnc">[</span>x y<span class="pnc">]</span> <span class="pnc">(</span>= x y<span class="pnc">)))</span>
 
-<span class="cmt">;; Derive multiple classes at once</span>
-<span class="pnc">(</span><span class="kw">deftype</span> <span class="tp">Point</span> <span class="pnc">(</span>x : <span class="tp">Float</span><span class="pnc">)</span> <span class="pnc">(</span>y : <span class="tp">Float</span><span class="pnc">)</span>
-  <span class="pnc">[</span><span class="kw">derive</span> <span class="tp">Show</span> <span class="tp">Eq</span> <span class="tp">Ord</span><span class="pnc">])</span></div>
+<span class="cmt">;; Typeclass constraint -- requires Show instance</span>
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">display</span> <span class="pnc">[</span><span class="tp">^Show</span> a x<span class="pnc">]</span> <span class="tp">:void</span>
+  <span class="pnc">(</span>println <span class="pnc">(</span><span class="fn">show</span> x<span class="pnc">)))</span>
+
+<span class="cmt">;; Pattern match on ADTs</span>
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">color-name</span> <span class="pnc">[</span>c<span class="pnc">]</span> <span class="tp">:cstr</span>
+  <span class="pnc">(</span><span class="kw">match</span> c
+    <span class="pnc">(</span><span class="tp">Red</span><span class="pnc">)</span>   <span class="str">"red"</span>
+    <span class="pnc">(</span><span class="tp">Green</span><span class="pnc">)</span> <span class="str">"green"</span>
+    <span class="pnc">(</span><span class="tp">Blue</span><span class="pnc">)</span>  <span class="str">"blue"</span><span class="pnc">))</span></div>
+<div class="code-version sweet-exp-version" style="display:none;"><span class="cmt">#lang turmeric/neoteric</span>
+
+<span class="pnc">(</span><span class="kw">defclass</span> <span class="fn">Show</span> <span class="pnc">[</span>a<span class="pnc">]</span>
+  <span class="pnc">(</span><span class="fn">show</span> <span class="pnc">[</span>x<span class="pnc">]</span> <span class="tp">:cstr</span><span class="pnc">))</span>
+
+<span class="pnc">(</span><span class="kw">defclass</span> <span class="fn">Eq</span> <span class="pnc">[</span>a<span class="pnc">]</span>
+  <span class="pnc">(</span><span class="fn">eq?</span> <span class="pnc">[</span>x y<span class="pnc">]</span> <span class="tp">:bool</span><span class="pnc">))</span>
+
+<span class="pnc">(</span><span class="kw">defdata</span> <span class="tp">Color</span> <span class="pnc">(</span><span class="tp">Red</span><span class="pnc">)</span> <span class="pnc">(</span><span class="tp">Green</span><span class="pnc">)</span> <span class="pnc">(</span><span class="tp">Blue</span><span class="pnc">))</span>
+
+<span class="pnc">(</span><span class="kw">definstance</span> <span class="fn">Eq</span> <span class="pnc">[</span><span class="tp">int</span><span class="pnc">]</span>
+  <span class="pnc">(</span><span class="fn">eq?</span> <span class="pnc">[</span>x y<span class="pnc">]</span> <span class="op">=</span><span class="pnc">(</span>x y<span class="pnc">)))</span>
+
+<span class="cmt">;; Typeclass constraint -- requires Show instance</span>
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">display</span> <span class="pnc">[</span><span class="tp">^Show</span> a x<span class="pnc">]</span> <span class="tp">:void</span>
+  println<span class="pnc">(</span><span class="fn">show</span><span class="pnc">(</span>x<span class="pnc">)))</span>
+
+<span class="cmt">;; Pattern match on ADTs</span>
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">color-name</span> <span class="pnc">[</span>c<span class="pnc">]</span> <span class="tp">:cstr</span>
+  <span class="pnc">(</span><span class="kw">match</span> c
+    <span class="pnc">(</span><span class="tp">Red</span><span class="pnc">)</span>   <span class="str">"red"</span>
+    <span class="pnc">(</span><span class="tp">Green</span><span class="pnc">)</span> <span class="str">"green"</span>
+    <span class="pnc">(</span><span class="tp">Blue</span><span class="pnc">)</span>  <span class="str">"blue"</span><span class="pnc">))</span></div></div>
   </div>
 </div>
 
@@ -1076,24 +1206,87 @@ footer {
       <div class="win-dot wd-r"></div>
       <div class="win-dot wd-y"></div>
       <div class="win-dot wd-g"></div>
-      <span class="code-card-filename">effects.tmrc</span>
+      <span class="code-card-filename" data-turmeric="effects.tur" data-sweet-exp="effects.neoteric">effects.tur</span>
+      <div class="code-syntax-toggle">
+        <button class="seg-btn active" data-syntax="turmeric">turmeric</button>
+        <button class="seg-btn" data-syntax="sweet-exp">sweet-exp</button>
+      </div>
     </div>
-    <div class="code-card-body" style="font-size:12px;padding:20px 22px;"><span class="kw">effect</span> <span class="tp">Db</span>
-  <span class="pnc">(</span>query  : <span class="pnc">(</span>-> <span class="tp">Str</span> <span class="pnc">(</span><span class="tp">List</span> <span class="tp">Row</span><span class="pnc">)))</span>
-  <span class="pnc">(</span>insert : <span class="pnc">(</span>-> <span class="tp">Row</span> <span class="tp">Unit</span><span class="pnc">))</span>
+    <div class="code-card-body" style="font-size:12px;padding:20px 22px;"><div class="code-version turmeric-version"><span class="pnc">(</span><span class="kw">defeffect</span> <span class="fn">Ask</span> <span class="pnc">[]</span> <span class="tp">:int</span><span class="pnc">)</span>
 
-<span class="cmt">;; Business logic — no mention of *how* Db works</span>
-<span class="kw">defn</span> <span class="fn">create-user</span> <span class="pnc">(</span>name email<span class="pnc">)</span>
-  <span class="pnc">(</span><span class="kw">let</span> existing <span class="pnc">(</span>query <span class="pnc">(</span>str <span class="str">"SELECT * FROM users WHERE email='"</span> email <span class="str">"'"</span><span class="pnc">))</span>
-    <span class="pnc">(</span><span class="kw">if</span> <span class="pnc">(</span>empty? existing<span class="pnc">)</span>
-      <span class="pnc">(</span>insert <span class="pnc">{</span>:name name :email email<span class="pnc">})</span>
-      <span class="pnc">(</span>error <span class="str">"user already exists"</span><span class="pnc">)))</span>
+<span class="cmt">;; Business logic -- no mention of *how* Ask works</span>
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">compute</span> <span class="pnc">[</span>x<span class="pnc">]</span> <span class="tp">:int</span>
+  <span class="pnc">(</span><span class="op">+</span> x <span class="pnc">(</span>perform <span class="pnc">(</span><span class="fn">Ask</span><span class="pnc">))))</span>
 
-<span class="cmt">;; Swap handler in tests — no mocking frameworks</span>
-<span class="kw">defn</span> <span class="fn">with-test-db</span> <span class="pnc">(</span>program<span class="pnc">)</span>
+<span class="cmt">;; Production: supply real value</span>
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">run-prod</span> <span class="pnc">[</span>program<span class="pnc">]</span> <span class="tp">:int</span>
   <span class="pnc">(</span>handle program
-    <span class="pnc">(</span>query  _ <span class="pnc">(</span>resume <span class="pnc">[]))</span>
-    <span class="pnc">(</span>insert _ <span class="pnc">(</span>resume <span class="pnc">())))</span></div>
+    <span class="pnc">(</span><span class="fn">Ask</span> <span class="pnc">[]</span> k<span class="pnc">)</span> <span class="pnc">(</span>resume k <span class="num">41</span><span class="pnc">)))</span>
+
+<span class="cmt">;; Test: supply fixed value -- no mocking frameworks</span>
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">run-test</span> <span class="pnc">[</span>program<span class="pnc">]</span> <span class="tp">:int</span>
+  <span class="pnc">(</span>handle program
+    <span class="pnc">(</span><span class="fn">Ask</span> <span class="pnc">[]</span> k<span class="pnc">)</span> <span class="pnc">(</span>resume k <span class="num">0</span><span class="pnc">)))</span>
+
+<span class="pnc">(</span>println <span class="pnc">(</span><span class="fn">run-prod</span> <span class="pnc">(</span><span class="fn">compute</span> <span class="num">1</span><span class="pnc">)))</span>  <span class="cmt">;; => 42</span>
+<span class="pnc">(</span>println <span class="pnc">(</span><span class="fn">run-test</span> <span class="pnc">(</span><span class="fn">compute</span> <span class="num">1</span><span class="pnc">)))</span>  <span class="cmt">;; => 1</span></div>
+<div class="code-version sweet-exp-version" style="display:none;"><span class="cmt">#lang turmeric/neoteric</span>
+
+<span class="pnc">(</span><span class="kw">defeffect</span> <span class="fn">Ask</span> <span class="pnc">[]</span> <span class="tp">:int</span><span class="pnc">)</span>
+
+<span class="cmt">;; Business logic -- no mention of *how* Ask works</span>
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">compute</span> <span class="pnc">[</span>x<span class="pnc">]</span> <span class="tp">:int</span>
+  <span class="op">+</span><span class="pnc">(</span>x perform<span class="pnc">(</span><span class="fn">Ask</span><span class="pnc">())))</span>
+
+<span class="cmt">;; Production: supply real value</span>
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">run-prod</span> <span class="pnc">[</span>program<span class="pnc">]</span> <span class="tp">:int</span>
+  <span class="pnc">(</span>handle program
+    <span class="pnc">(</span><span class="fn">Ask</span> <span class="pnc">[]</span> k<span class="pnc">)</span> resume<span class="pnc">(</span>k <span class="num">41</span><span class="pnc">)))</span>
+
+<span class="cmt">;; Test: supply fixed value -- no mocking frameworks</span>
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">run-test</span> <span class="pnc">[</span>program<span class="pnc">]</span> <span class="tp">:int</span>
+  <span class="pnc">(</span>handle program
+    <span class="pnc">(</span><span class="fn">Ask</span> <span class="pnc">[]</span> k<span class="pnc">)</span> resume<span class="pnc">(</span>k <span class="num">0</span><span class="pnc">)))</span>
+
+println<span class="pnc">(</span><span class="fn">run-prod</span><span class="pnc">(</span><span class="fn">compute</span><span class="pnc">(</span><span class="num">1</span><span class="pnc">)))</span>  <span class="cmt">;; => 42</span>
+println<span class="pnc">(</span><span class="fn">run-test</span><span class="pnc">(</span><span class="fn">compute</span><span class="pnc">(</span><span class="num">1</span><span class="pnc">)))</span>  <span class="cmt">;; => 1</span></div></div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ── SPICE PACKAGE MANAGER ─────────── -->
+<div class="split-section reveal">
+  <div>
+    <p class="section-label">Spice Package Manager</p>
+    <h2 class="section-title">Packages, meet<br><em>simplicity.</em></h2>
+    <p class="section-desc" style="margin-bottom: 24px;">One <code>build.tur</code> file declares your package and all its dependencies -- called <em>spices</em>. Git URLs are all you need. No separate package manager binary, no CMake required.</p>
+    <p class="section-desc">Need a C library? Add it to <code>:cmake-deps</code> and Turmeric handles the rest -- fetching, building, and linking automatically.</p>
+  </div>
+  <div class="code-card" style="font-size:12.5px;">
+    <div class="code-card-bar">
+      <div class="win-dot wd-r"></div>
+      <div class="win-dot wd-y"></div>
+      <div class="win-dot wd-g"></div>
+      <span class="code-card-filename">build.tur</span>
+    </div>
+    <div class="code-card-body" style="font-size:12px;padding:20px 22px;"><span class="pnc">(</span><span class="kw">defpackage</span> <span class="fn">my-app</span>
+  <span class="tp">:name</span>    <span class="str">"my-app"</span>
+  <span class="tp">:version</span> <span class="str">"0.1.0"</span>
+
+  <span class="cmt">;; Turmeric dependencies -- called spices</span>
+  <span class="tp">:spices</span> <span class="pnc">{</span>
+    <span class="str">"geom"</span>  <span class="pnc">{</span><span class="tp">:url</span> <span class="str">"https://github.com/alice/tur-geom"</span>
+             <span class="tp">:ref</span> <span class="str">"v0.2.1"</span><span class="pnc">}</span>
+    <span class="str">"math"</span>  <span class="pnc">{</span><span class="tp">:url</span> <span class="str">"https://github.com/bob/tur-math"</span>
+             <span class="tp">:ref</span> <span class="str">"v1.5.0"</span><span class="pnc">}</span>
+  <span class="pnc">}</span>
+
+  <span class="cmt">;; C/CMake dependencies (CPM-compatible)</span>
+  <span class="tp">:cmake-deps</span> <span class="pnc">{</span>
+    <span class="str">"raylib"</span> <span class="pnc">{</span><span class="tp">:url</span> <span class="str">"https://github.com/raysan5/raylib"</span>
+              <span class="tp">:ref</span> <span class="str">"5.0"</span><span class="pnc">}</span>
+  <span class="pnc">}</span><span class="pnc">)</span></div>
   </div>
 </div>
 
@@ -1138,11 +1331,8 @@ footer {
     <div class="step-card">
       <div class="step-num">01 — Install</div>
       <div class="step-title">One command install</div>
-      <div class="step-code">curl -sSf https://install.turmeric-lang.org | sh
-
-# or via Homebrew
-brew install turmeric</div>
-      <p class="step-desc">Installs the compiler, REPL, package manager, and language server. Supports macOS, Linux, and Windows.</p>
+      <div class="step-code">curl -sSf https://install.turmeric-lang.com | sh</div>
+      <p class="step-desc">Installs <code>tur</code> via the Homebrew formula. Requires <a href="https://brew.sh" style="color:var(--gold);">Homebrew</a>. Or build from source — see the <a href="https://github.com/rjungemann/turmeric" style="color:var(--gold);">GitHub repo</a>.</p>
     </div>
 
     <div class="step-card">
@@ -1157,11 +1347,12 @@ turmeric run</div>
     <div class="step-card">
       <div class="step-num">03 — Write Code</div>
       <div class="step-title">Your first function</div>
-      <div class="step-code"><span class="kw">defn</span> <span class="fn">greet</span> <span class="pnc">(</span>name : <span class="tp">Str</span><span class="pnc">)</span> : <span class="tp">Str</span>
-  <span class="pnc">(</span>str <span class="str">"Hello, "</span> name <span class="str">"!"</span><span class="pnc">)</span>
+      <div class="step-code"><span class="pnc">(</span><span class="kw">defn</span> <span class="fn">factorial</span> <span class="pnc">[</span>n<span class="pnc">]</span> <span class="tp">:int</span>
+  <span class="pnc">(</span><span class="kw">if</span> <span class="pnc">(</span><span class="op">&lt;=</span> n <span class="num">1</span><span class="pnc">)</span> <span class="num">1</span>
+    <span class="pnc">(</span><span class="op">*</span> n <span class="pnc">(</span><span class="fn">factorial</span> <span class="pnc">(</span><span class="op">-</span> n <span class="num">1</span><span class="pnc">)))))</span>
 
-<span class="pnc">(</span><span class="fn">println</span> <span class="pnc">(</span><span class="fn">greet</span> <span class="str">"Turmeric"</span><span class="pnc">))</span></div>
-      <p class="step-desc">Types are inferred but can be annotated. The compiler catches errors before you run.</p>
+<span class="pnc">(</span>println <span class="pnc">(</span><span class="fn">factorial</span> <span class="num">10</span><span class="pnc">))</span>  <span class="cmt">;; => 3628800</span></div>
+      <p class="step-desc">Return types are annotated with <code>:int</code>, <code>:bool</code>, or <code>:cstr</code>. The compiler catches type errors before you run.</p>
     </div>
 
     <div class="step-card">
@@ -1182,7 +1373,7 @@ turmeric add spice/postgres</div>
     <p class="cta-desc">Try Turmeric in your browser — no install required.</p>
     <div class="cta-actions">
       <a href="/try" class="btn-hero btn-hero-primary">Open Playground →</a>
-      <a href="#" class="btn-hero btn-hero-secondary">Read the Docs</a>
+      <a href="/docs/api/" class="btn-hero btn-hero-secondary">Read the Docs</a>
     </div>
   </div>
 </div>
@@ -1207,7 +1398,8 @@ turmeric add spice/postgres</div>
     <div class="footer-col">
       <div class="footer-col-title">Ecosystem</div>
       <a href="#">Packages (Spice)</a>
-      <a href="#">Standard Library</a>
+      <a href="/docs/guides/">Guides</a>
+      <a href="/docs/api/">Standard Library</a>
       <a href="#">Editor Support</a>
       <a href="#">Language Server</a>
     </div>
@@ -1244,28 +1436,28 @@ document.querySelectorAll('.reveal').forEach((el, i) => {
   obs.observe(el);
 });
 
-// Syntax toggle for code examples
-const syntaxToggle = document.querySelector('.code-syntax-toggle');
-if (syntaxToggle) {
-  syntaxToggle.addEventListener('click', (e) => {
-    if (e.target.classList.contains('seg-btn')) {
-      const syntax = e.target.dataset.syntax;
-      // Update active button
-      syntaxToggle.querySelectorAll('.seg-btn').forEach(btn => {
-        btn.classList.toggle('active', btn === e.target);
-      });
-      // Update filename
-      const filenameEl = document.getElementById('code-filename');
-      if (filenameEl) {
-        filenameEl.textContent = syntax === 'turmeric' ? 'effects.tur' : 'effects.tursweet';
-      }
-      // Show/hide code versions
-      document.querySelectorAll('.code-version').forEach(version => {
-        version.style.display = version.classList.contains(syntax + '-version') ? '' : 'none';
-      });
+// Syntax toggle for code examples — supports multiple independent toggles
+document.querySelectorAll('.code-syntax-toggle').forEach(toggle => {
+  toggle.addEventListener('click', (e) => {
+    if (!e.target.classList.contains('seg-btn')) return;
+    const syntax = e.target.dataset.syntax;
+    const card = toggle.closest('.code-card');
+    // Update active button within this toggle
+    toggle.querySelectorAll('.seg-btn').forEach(btn => {
+      btn.classList.toggle('active', btn === e.target);
+    });
+    // Update filename using data attributes
+    const filenameEl = card.querySelector('.code-card-filename');
+    if (filenameEl) {
+      const key = syntax.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+      if (filenameEl.dataset[key]) filenameEl.textContent = filenameEl.dataset[key];
     }
+    // Show/hide code versions scoped to this card
+    card.querySelectorAll('.code-version').forEach(v => {
+      v.style.display = v.classList.contains(syntax + '-version') ? '' : 'none';
+    });
   });
-}
+});
 </script>
 </body>
 </html>

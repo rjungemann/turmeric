@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Threading and Concurrency Primitives Guide | Turmeric Guides</title>
+  <link rel="stylesheet" href="../api/style.css">
+  <style>
+    .guide-content h1 { font-size:1.75rem; color:var(--gold); margin-bottom:1.5rem; padding-bottom:0.75rem; border-bottom:1px solid var(--border); }
+    .guide-content h2 { font-size:1.2rem; color:var(--cream); margin:2rem 0 0.75rem; }
+    .guide-content h3 { font-size:1rem; color:var(--gold); margin:1.5rem 0 0.5rem; }
+    .guide-content p  { margin-bottom:1rem; }
+    .guide-content ul, .guide-content ol { margin:0 0 1rem 1.5rem; }
+    .guide-content li { margin:0.25rem 0; }
+    .guide-content code { font-family:"JetBrains Mono","Fira Code",monospace; font-size:0.85em; background:var(--bg-code); border:1px solid var(--border); border-radius:3px; padding:0.1em 0.35em; }
+    .guide-content pre { background:var(--bg-code); border:1px solid var(--border); border-radius:4px; padding:1rem; overflow-x:auto; margin-bottom:1rem; }
+    .guide-content pre code { background:none; border:none; padding:0; font-size:0.85rem; }
+    .guide-content blockquote { border-left:3px solid var(--gold); padding-left:1rem; color:var(--faint); margin:1rem 0; }
+    .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
+    .guide-content th { background:var(--bg-card); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold); }
+    .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
+    .guide-content a { color:var(--gold); }
+    .guide-content strong { color:var(--cream); }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/">turmeric</a>
+    <nav>
+      <a href="/docs/guides/">Guides</a>
+      <a href="/docs/api/">API Docs</a>
+      <a href="/try">Try It</a>
+    </nav>
+  </header>
+  <div class="page-layout">
+    <div class="sidebar">
+            <div style="margin-bottom:1.25rem">
+        <a href="index.html" style="font-size:0.8rem;color:var(--faint)">← All Guides</a>
+      </div>
+      <h3>On this page</h3>
+      <ul><li style=""><a href="#threading-and-concurrency-primitives-guide" style="">Threading and Concurrency Primitives Guide</a></li>
+<li style=""><a href="#overview" style="">Overview</a></li>
+<li style=""><a href="#thread-model" style="">Thread Model</a></li>
+<li style="padding-left:0.75rem;"><a href="#creating-threads" style="color:var(--faint);">Creating Threads</a></li>
+<li style="padding-left:0.75rem;"><a href="#properties" style="color:var(--faint);">Properties</a></li>
+<li style="padding-left:0.75rem;"><a href="#thread-local-storage" style="color:var(--faint);">Thread-Local Storage</a></li>
+<li style=""><a href="#shared-ownership-arc" style="">Shared Ownership: Arc</a></li>
+<li style="padding-left:0.75rem;"><a href="#properties_1" style="color:var(--faint);">Properties</a></li>
+<li style="padding-left:0.75rem;"><a href="#when-to-use-arc" style="color:var(--faint);">When to Use Arc</a></li>
+<li style=""><a href="#mutual-exclusion-mutex" style="">Mutual Exclusion: Mutex</a></li>
+<li style="padding-left:0.75rem;"><a href="#properties_2" style="color:var(--faint);">Properties</a></li>
+<li style="padding-left:0.75rem;"><a href="#read-write-locks-rwlock" style="color:var(--faint);">Read-Write Locks: RwLock</a></li>
+<li style=""><a href="#atomic-types-atomic" style="">Atomic Types: Atomic</a></li>
+<li style="padding-left:0.75rem;"><a href="#types-supported" style="color:var(--faint);">Types Supported</a></li>
+<li style="padding-left:0.75rem;"><a href="#when-to-use-atomic" style="color:var(--faint);">When to Use Atomic</a></li>
+<li style=""><a href="#synchronization-primitives" style="">Synchronization Primitives</a></li>
+<li style="padding-left:0.75rem;"><a href="#channels-sendreceive" style="color:var(--faint);">Channels: Send/Receive</a></li>
+<li style="padding-left:0.75rem;"><a href="#condition-variables" style="color:var(--faint);">Condition Variables</a></li>
+<li style=""><a href="#thread-pools" style="">Thread Pools</a></li>
+<li style=""><a href="#safety-guarantees" style="">Safety Guarantees</a></li>
+<li style="padding-left:0.75rem;"><a href="#send-and-sync-traits" style="color:var(--faint);">Send and Sync Traits</a></li>
+<li style="padding-left:0.75rem;"><a href="#borrow-checking-across-threads" style="color:var(--faint);">Borrow Checking Across Threads</a></li>
+<li style=""><a href="#common-patterns" style="">Common Patterns</a></li>
+<li style="padding-left:0.75rem;"><a href="#producer-consumer-via-channels" style="color:var(--faint);">Producer-Consumer (via Channels)</a></li>
+<li style="padding-left:0.75rem;"><a href="#thread-safe-counter" style="color:var(--faint);">Thread-Safe Counter</a></li>
+<li style="padding-left:0.75rem;"><a href="#barrier" style="color:var(--faint);">Barrier</a></li>
+<li style=""><a href="#see-also" style="">See Also</a></li></ul>
+    </div>
+    <div class="content guide-content">
+      <h1 id="threading-and-concurrency-primitives-guide">Threading and Concurrency Primitives Guide</h1>
+<p>Safe concurrent programming with OS threads, atomic types, and synchronization primitives.</p>
+<h2 id="overview">Overview</h2>
+<p>Turmeric provides <strong>1:1 OS threads</strong> via C11 <code>&lt;threads.h&gt;</code> plus thread-safe abstractions (<code>Arc&lt;T&gt;</code>, <code>Mutex&lt;T&gt;</code>, <code>Atomic&lt;T&gt;</code>) for safe concurrent programming. Integration with Turmeric's ownership model (<code>ref&lt;T&gt;</code>, borrow checking) ensures memory safety.</p>
+<h2 id="thread-model">Thread Model</h2>
+<h3 id="creating-threads">Creating Threads</h3>
+<pre><code class="language-turmeric">;; Spawn a new thread
+(def result
+  (thread
+    (fn []
+      (println &quot;Hello from thread!&quot;)
+      42)))
+
+;; Block until thread completes and get result
+(println (thread-join result))  ; prints 42
+</code></pre>
+<h3 id="properties">Properties</h3>
+<ul>
+<li><strong>1:1 model:</strong> Each Turmeric thread maps to one OS thread.</li>
+<li><strong>OS scheduling:</strong> OS scheduler handles preemption and load balancing.</li>
+<li><strong>Overhead:</strong> ~10-100μs per thread creation; suitable for 100s-1000s of threads.</li>
+<li><strong>Full FFI access:</strong> Threads are real OS threads; FFI calls work naturally.</li>
+</ul>
+<h3 id="thread-local-storage">Thread-Local Storage</h3>
+<p>Each thread has its own stack and thread-local variables:</p>
+<pre><code class="language-turmeric">;; Declare a thread-local
+(thread-local my-tls 42)
+
+;; Get current value (only accessible within this thread)
+(thread-local-get my-tls)  ; =&gt; 42
+
+;; Set current value
+(thread-local-set my-tls 100)
+</code></pre>
+<h2 id="shared-ownership-arc">Shared Ownership: Arc<T></h2>
+<p><strong><code>Arc&lt;T&gt;</code></strong> (atomic reference counting) enables shared ownership across threads:</p>
+<pre><code class="language-turmeric">;; Create a shared value
+(def shared (arc (make-counter 0)))
+
+;; Clone the arc (increments reference count)
+(thread
+  (fn []
+    (let [my-copy (arc-clone shared)]
+      (modify-counter my-copy))))
+
+;; Original and clones all point to same value
+(println (counter-value shared))
+</code></pre>
+<h3 id="properties_1">Properties</h3>
+<ul>
+<li><strong>Atomic:</strong> Reference count increments/decrements are atomic (thread-safe).</li>
+<li><strong>Move semantics:</strong> <code>arc-clone</code> increments the count; <code>arc</code> drop decrements atomically.</li>
+<li><strong>Shared but not mutable:</strong> <code>Arc&lt;T&gt;</code> gives shared read-only access. For mutable shared state, wrap in <code>Mutex&lt;T&gt;</code>.</li>
+</ul>
+<h3 id="when-to-use-arc">When to Use Arc</h3>
+<ul>
+<li>Sharing read-only data across threads.</li>
+<li>Ownership is genuinely shared (multiple threads live simultaneously).</li>
+<li>Passing objects to spawned threads.</li>
+</ul>
+<h2 id="mutual-exclusion-mutex">Mutual Exclusion: Mutex<T></h2>
+<p><strong><code>Mutex&lt;T&gt;</code></strong> (mutual exclusion) protects mutable shared state:</p>
+<pre><code class="language-turmeric">;; Create a mutex
+(def counter (mutex 0))
+
+;; Acquire lock, modify, and release (automatically via defer)
+(with-lock counter
+  (fn [value]
+    (let [new-val (+ value 1)]
+      new-val)))
+
+;; Check current value (requires lock)
+(let [val (with-lock counter (fn [v] v))]
+  (println val))
+</code></pre>
+<h3 id="properties_2">Properties</h3>
+<ul>
+<li><strong>Scoped locking:</strong> Locks release automatically on scope exit (via <code>defer</code>).</li>
+<li><strong>Prevents races:</strong> Only one thread can hold the lock at a time.</li>
+<li><strong>Composable:</strong> Multiple mutexes can be held (but beware deadlocks with out-of-order release).</li>
+<li><strong>Blocking:</strong> If another thread holds the lock, <code>with-lock</code> blocks until available.</li>
+</ul>
+<h3 id="read-write-locks-rwlock">Read-Write Locks: RwLock<T></h3>
+<p>For read-heavy workloads, use <code>RwLock&lt;T&gt;</code>:</p>
+<pre><code class="language-turmeric">;; Multiple readers or one writer
+(def data (rw-lock (vec 1 2 3)))
+
+;; Read lock (multiple threads can hold simultaneously)
+(read-lock data
+  (fn [vec] (println vec)))
+
+;; Write lock (exclusive)
+(write-lock data
+  (fn [vec] (set-vec vec 0 42)))
+</code></pre>
+<h2 id="atomic-types-atomic">Atomic Types: Atomic<T></h2>
+<p>For simple types, <strong><code>Atomic&lt;T&gt;</code></strong> provides lock-free atomic operations:</p>
+<pre><code class="language-turmeric">;; Atomic integer
+(def counter (atomic 0))
+
+;; Atomic load
+(println (atomic-load counter))  ; =&gt; 0
+
+;; Atomic store
+(atomic-store counter 42)
+
+;; Atomic compare-and-swap
+(atomic-cas counter 42 100)  ; success if value was 42, set to 100
+
+;; Atomic add/sub
+(atomic-add counter 5)  ; atomically add 5
+</code></pre>
+<h3 id="types-supported">Types Supported</h3>
+<ul>
+<li><code>int</code>, <code>bool</code>, <code>usize</code>, pointer types</li>
+<li>Basic arithmetic operations on integers</li>
+<li>Compare-and-swap, load, store on all types</li>
+</ul>
+<h3 id="when-to-use-atomic">When to Use Atomic</h3>
+<ul>
+<li>High-frequency operations where lock contention is too expensive.</li>
+<li>Fine-grained counters, flags, pointers.</li>
+<li>Building higher-level synchronization primitives.</li>
+</ul>
+<h2 id="synchronization-primitives">Synchronization Primitives</h2>
+<h3 id="channels-sendreceive">Channels: Send/Receive</h3>
+<p>(Planned for Phase 20+; currently available via FFI.)</p>
+<h3 id="condition-variables">Condition Variables</h3>
+<p>Block until a condition is signaled:</p>
+<pre><code class="language-turmeric">(def cond (condition-variable))
+
+;; Thread A: wait for signal
+(with-lock mutex
+  (fn [_]
+    (condition-wait cond mutex)
+    (println &quot;woken!&quot;)))
+
+;; Thread B: signal the condition
+(condition-signal cond)
+</code></pre>
+<h2 id="thread-pools">Thread Pools</h2>
+<p>(Planned for Phase 20; currently available via FFI to libdispatch, thread pool libraries, etc.)</p>
+<h2 id="safety-guarantees">Safety Guarantees</h2>
+<h3 id="send-and-sync-traits">Send and Sync Traits</h3>
+<p>Marker traits control what types can be safely shared:</p>
+<ul>
+<li><strong><code>Send</code></strong> — Type can be moved across thread boundaries. If <code>T : Send</code>, <code>Arc&lt;T&gt;</code> can be cloned and sent to another thread.</li>
+<li><strong><code>Sync</code></strong> — Type can be safely shared via <code>&amp;T</code> in multiple threads. If <code>T : Sync</code>, multiple threads can hold <code>&amp;T</code> simultaneously without a <code>Mutex</code>.</li>
+</ul>
+<pre><code class="language-turmeric">;; These are Send (safe to move to threads)
+int, bool, string, (Pair a b) [Send a, Send b]
+
+;; These are Sync (safe to share via &amp;)
+int, bool, Mutex&lt;T&gt; [T : Sync]
+
+;; NOT Sync (require Mutex for shared access)
+Rc&lt;T&gt; (thread-local ref counting)
+ref&lt;T&gt; (single-thread ownership)
+</code></pre>
+<p>Most library types implement these traits automatically based on their fields.</p>
+<h3 id="borrow-checking-across-threads">Borrow Checking Across Threads</h3>
+<p>Turmeric's borrow checker enforces:</p>
+<pre><code class="language-turmeric">;; ERROR: cannot move borrowed reference to thread
+(let [x 42]
+  (thread
+    (fn []
+      (println x))))  ; x is borrowed; can't move across boundary
+
+;; OK: clone or use Arc
+(let [x (arc 42)]
+  (thread
+    (fn []
+      (println (arc-deref x)))))
+</code></pre>
+<h2 id="common-patterns">Common Patterns</h2>
+<h3 id="producer-consumer-via-channels">Producer-Consumer (via Channels)</h3>
+<p>(See stdlib once available; currently use FFI channels.)</p>
+<h3 id="thread-safe-counter">Thread-Safe Counter</h3>
+<pre><code class="language-turmeric">(def counter (mutex 0))
+
+(for-each (range 10)
+  (fn [i]
+    (thread
+      (fn []
+        (with-lock counter
+          (fn [n]
+            (+ n 1)))))))
+
+(println (with-lock counter (fn [n] n)))  ; =&gt; 10
+</code></pre>
+<h3 id="barrier">Barrier</h3>
+<pre><code class="language-turmeric">(def barrier (barrier-new 3))
+
+(for-each (range 3)
+  (fn [i]
+    (thread
+      (fn []
+        (println (str &quot;Thread &quot; i &quot; starting&quot;))
+        (barrier-wait barrier)
+        (println (str &quot;Thread &quot; i &quot; done&quot;))))))
+</code></pre>
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="async-await-guide.md">Async/Await Guide</a> — Lightweight fibers for I/O concurrency</li>
+<li><a href="stm-tutorial.md">STM Tutorial</a> — Composable transactions (alternative to locks)</li>
+<li><a href="effects-system-guide.md">Effects System Guide</a> — Dependency injection and exception handling</li>
+<li><a href="../turmeric-plan.md">turmeric-plan.md</a> §19 — Thread primitives architecture</li>
+</ul>
+    </div>
+  </div>
+  <footer class="site-footer">
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <code>docs/guides/threading-guide.md</code>
+  </footer>
+</body>
+</html>
