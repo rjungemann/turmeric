@@ -171,6 +171,16 @@ const char *type_name(Type t) {
             buf_putc(&tmp, '\0');
             return tur_strdup(tmp.data);
         }
+        /* LT3: lref<T> — linear ref */
+        case TY_LREF: {
+            Buf tmp;
+            buf_init(&tmp);
+            buf_puts(&tmp, "lref<");
+            buf_puts(&tmp, type_name(type_from_kind(t.as.ref.inner)));
+            buf_puts(&tmp, ">");
+            buf_putc(&tmp, '\0');
+            return tur_strdup(tmp.data);
+        }
         /* Phase 9: rc<T> and weak<T> */
         case TY_RC: {
             /* Build "rc<T>" name */
@@ -332,6 +342,13 @@ static void type_name_buf(Buf *b, Type t) {
         }
         case TY_REF: {
             buf_puts(b, "ref<");
+            type_name_buf(b, type_from_kind(t.as.ref.inner));
+            buf_puts(b, ">");
+            break;
+        }
+        /* LT3: lref<T> — linear ref */
+        case TY_LREF: {
+            buf_puts(b, "lref<");
             type_name_buf(b, type_from_kind(t.as.ref.inner));
             buf_puts(b, ">");
             break;
@@ -498,6 +515,9 @@ const char *type_c_name(Type t) {
             /* TODO: could use T* directly but void* is simpler for v1 */
             return "void *";
         }
+        /* LT3: lref<T> lowers identically to ref<T> in C */
+        case TY_LREF:
+            return "void *";
         /* Phase 9: rc<T> and weak<T> both lower to RcControlBlock* in C */
         case TY_RC:
         case TY_WEAK:
@@ -651,6 +671,7 @@ static bool type_is_guarded_recursive_helper(const Type *t, const char *rec_name
         }
 
         case TY_REF:
+        case TY_LREF:
         case TY_RC:
         case TY_WEAK:
         case TY_REF_IMMUT:

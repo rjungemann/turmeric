@@ -1436,7 +1436,8 @@ static int usage(void) {
         "  --panic-trace                   print scope chain on panic (Phase R6)\n"
         "  --warn-unused-result             warn on discarded result values (Phase R6)\n"
         "  --no-warn-unused-result          disable --warn-unused-result (Phase R6)\n"
-        "  --lint-panic                     lint panic/must! usage (Phase R6)\n");
+        "  --lint-panic                     lint panic/must! usage (Phase R6)\n"
+        "  -Xlinear                         enable linear type checking (LT0-LT4)\n");
     return 64;
 }
 
@@ -1717,6 +1718,14 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "-Xgadt") == 0) {
             /* Phase G1: enable defgadt syntax */
             g_gadt_enabled = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "-Xlinear") == 0) {
+            /* LT0: enable linear type checking */
+            g_linear_enabled = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

@@ -48,6 +48,10 @@ struct Binding {
     const char   *c_export_name;
     /* Phase P3: HAMT lowering - whether this binding is ^persistent (immutable map) */
     bool          is_persistent;
+    /* LT1: Linear type checking — whether this binding holds a linear value */
+    bool          is_linear;
+    /* LT1: whether the linear value has been consumed (moved/used) */
+    bool          is_linear_consumed;
     /* Phase HRT1: rank-2 polymorphic function parameter */
     bool          is_poly_fn;     /* true if this binding is a rank-2 poly fn param */
     const struct Type *poly_type; /* full TY_FORALL type, NULL if not rank-2 */

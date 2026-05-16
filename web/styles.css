@@ -324,6 +324,30 @@ pre {
     overflow: hidden;
 }
 
+.tutorial-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 12px;
+    background: color-mix(in srgb, var(--gold) 10%, var(--bg-panel));
+    border-bottom: 1px solid color-mix(in srgb, var(--gold) 30%, var(--border));
+    font-size: 12px;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+}
+
+.tutorial-bar-step {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    color: var(--gold);
+    white-space: nowrap;
+}
+
+.tutorial-bar-desc {
+    color: var(--text-sec);
+    flex: 1;
+}
+
 .editor-tabs {
     display: flex;
     height: 100%;

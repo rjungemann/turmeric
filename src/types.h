@@ -19,6 +19,7 @@ typedef enum CopyKind {
     CK_MOVE,      /* Move-only: ownership transfer, cannot be copied */
     CK_COPY,      /* Copy: bitwise duplication allowed */
     CK_UNSIZED,   /* Unsized: size unknown at compile time (e.g., slices) */
+    CK_LINEAR,    /* Linear: must be used exactly once (LT0) */
 } CopyKind;
 /* Phase HKT (v2, stub): Kind annotations for higher-kinded type support.
  * In v1 all types have kind KIND_STAR; KIND_ARROW is reserved for future use.
@@ -89,6 +90,8 @@ typedef enum TypeKind {
     TY_EXISTS,       /* (exists [a ...] T) — existentially quantified type */
     /* Phase G2: unresolved GADT type variable (skolem that escaped its arm scope) */
     TY_TYVAR,        /* free type variable — field whose type is a GADT type param not yet known */
+    /* LT3: lref<T> — linear owning pointer; must be consumed exactly once */
+    TY_LREF,         /* lref<T> — CK_LINEAR; silent drop is an error */
 } TypeKind;
 
 /* Phase G0: Constructor field descriptor for ADTs */
@@ -189,6 +192,9 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
         case TY_NEVER:     /* never type is move-only (no values exist) */
         case TY_REC:       /* recursive type is move-only in v1 */
             return CK_MOVE;
+        /* LT3: lref<T> is always linear — exactly-once ownership */
+        case TY_LREF:
+            return CK_LINEAR;
         case TY_SET:       /* heap-allocated sorted array — pointer-copied in v1 */
             return CK_COPY;
         case TY_APP:       /* type application — opaque int64_t handle, copy by value */

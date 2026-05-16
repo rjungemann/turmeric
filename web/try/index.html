@@ -51,6 +51,12 @@
                                 </svg>
                                 Run
                             </button>
+                            <button class="btn btn-icon" id="solve-btn" title="Fill in the answer for this step" style="display: none;">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+                                </svg>
+                                Solve this
+                            </button>
                             <button class="btn btn-icon" id="clear-btn" title="Clear">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                                     <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
@@ -80,6 +86,10 @@
                                 <option value="rc">Reference Counting</option>
                             </select>
                         </div>
+                    </div>
+                    <div class="tutorial-bar" id="tutorial-bar" style="display: none;">
+                        <span class="tutorial-bar-step" id="tutorial-bar-step"></span>
+                        <span class="tutorial-bar-desc" id="tutorial-bar-desc"></span>
                     </div>
                     <div class="editor-wrapper">
                         <div id="editor" class="monaco-editor"></div>

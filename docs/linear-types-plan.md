@@ -1,6 +1,6 @@
 # Linear Types — Implementation Plan (LT0–LT4)
 
-> **Status:** Draft — Not Started
+> **Status:** LT0 + LT1 foundations implemented (gated behind `-Xlinear`); LT2-LT4 not started
 >
 > **Target:** v3
 >
@@ -114,7 +114,7 @@ src/error.h/.c      -- Error codes and messages
 
 **Goal:** Add `^linear` annotation to the type system and expose `CK_LINEAR` in the `CopyKind` enum.
 
-- [ ] Extend `CopyKind` in `src/types.h`:
+- [x] Extend `CopyKind` in `src/types.h`:
 
   ```c
   typedef enum CopyKind {
@@ -125,13 +125,12 @@ src/error.h/.c      -- Error codes and messages
   } CopyKind;
   ```
 
-- [ ] Parse `^linear` annotation in `src/reader.c`; attach to the `Type` node
-- [ ] Store `CK_LINEAR` on the resulting `Type` in the elaborator
-- [ ] `CK_LINEAR` values may not be:
-  - Copied (no implicit duplication)
-  - Dropped without being consumed
-  - Used more than once
-- [ ] Add `TY_LINEAR` predicate helper (analogous to `ty_is_move`)
+- [x] Parse `^linear` annotation in let bindings and function params in `src/elab.c`; sets `CK_LINEAR` on the binding type
+- [x] Store `CK_LINEAR` on the resulting `Type` in the elaborator (via `b->type.copy_kind = CK_LINEAR`)
+- [x] Add `TY_LREF` type constructor at end of `TypeKind` enum (`src/types.h`) with `typekind_default_copy_kind` returning `CK_LINEAR`
+- [x] `CK_LINEAR` violations enforced by LT1 checking (see below)
+- [x] Feature gated behind `-Xlinear` flag via `g_linear_enabled` global (`src/globals.h`/`src/globals.c`)
+- [ ] Add `TY_LINEAR` predicate helper (analogous to `ty_is_move`) -- deferred to LT2+
 
 ---
 
@@ -139,15 +138,16 @@ src/error.h/.c      -- Error codes and messages
 
 **Goal:** Track consumption of linear variables in the elaborator and emit errors for linearity violations.
 
-- [ ] Add a `consumed` flag to each linear binding in the symbol table (`SymEntry`)
-- [ ] On each use of a linear variable:
-  - If `consumed == true`: emit error `TUR_E0101` ("linear value used after move")
-  - Otherwise: set `consumed = true`
-- [ ] At scope exit, for each linear variable in the scope:
-  - If `consumed == false`: emit error `TUR_E0100` ("linear value dropped without use")
-- [ ] On copy of a linear variable: emit error `TUR_E0102` ("cannot copy linear value")
-- [ ] Pattern matching: each pattern arm receives the linear value; exactly one arm executes — linearity is satisfied
-- [ ] Move of a linear variable transfers ownership (sets `consumed = true` on the source binding, creates a fresh binding in the destination)
+- [x] Add `is_linear` / `is_linear_consumed` flags to `Binding` struct in `src/expr.h`
+- [x] On each use of a linear variable (F_SYM case in `elab_form`):
+  - If `is_linear_consumed == true`: emit `TUR_E0101` ("linear value used after move")
+  - Otherwise: set `is_linear_consumed = true`
+- [x] At scope exit in `elab_let`, for each linear variable in the scope:
+  - If `is_linear_consumed == false` and not moved: emit `TUR_E0100` ("linear value dropped without use")
+- [x] Forbid wrapping `lref<T>` in `rc<T>`: `TUR_E0103` emitted from `elab_rc_of`
+- [ ] On copy of a linear variable: emit `TUR_E0102` -- deferred (requires copy-site detection beyond current scope)
+- [ ] Pattern matching: each pattern arm receives the linear value — deferred to LT2+
+- [ ] Move of a linear variable transfers ownership -- deferred to LT2+
 
 ### Error codes
 

@@ -43,3 +43,6 @@ bool g_dump_effects = false;
 
 /* ER6: --lint-effects flag */
 bool g_lint_effects = false;
+
+/* LT0: -Xlinear flag — enable linear type checking */
+bool g_linear_enabled = false;
