@@ -1,0 +1,12 @@
+;; ER1: a closure annotated #{} must have a pure body.
+;; Performing an effect inside a (fn [] #{} ...) closure should produce TUR-E0009.
+
+(defeffect Write [msg :cstr] :nil)
+
+(defn main [] :int
+  (let [bad-fn (fn [] #{} :nil
+                 (perform (Write "oops")))]
+    (handle
+      (bad-fn)
+      (Write [msg] k) (do (println msg) (resume k 0)))
+    0))

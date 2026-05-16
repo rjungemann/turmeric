@@ -32,3 +32,12 @@ extern bool g_needs_hamt;
 
 /* Phase G1: -Xgadt flag — enable defgadt syntax */
 extern bool g_gadt_enabled;
+
+/* ER1: --strict-effects flag — warn/check unannotated effectful functions */
+extern bool g_strict_effects;
+
+/* ER6: --dump-effects flag — print inferred effect row for each top-level defn */
+extern bool g_dump_effects;
+
+/* ER6: --lint-effects flag — advisory warnings for unannotated effectful functions */
+extern bool g_lint_effects;

@@ -2,11 +2,15 @@
 
 #include "effect_check.h"
 
+#include <ctype.h>
+#include <stdio.h>
 #include <string.h>
 #include "buf.h"
 #include "diag.h"
 #include "effect.h"
 #include "expr.h"
+#include "globals.h"
+#include "typeclass.h"
 
 /* ---------------------------------------------------------------------------
  * Binding → FnDef index
@@ -110,11 +114,35 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
             return row;
         }
 
-        /* Phase H §1: dict-dispatch call — fn_expr is EX_DICT (static singleton
-         * load).  No effect implications from the dictionary itself; just recurse
-         * into arguments. */
+        /* Phase H §1: dict-dispatch call -- fn_expr is EX_DICT (static singleton
+         * load).  ER3: Propagate the typeclass method's declared effect row to the
+         * caller's inferred row so that effectful typeclass methods are tracked. */
         if (e->as.call_.fn_expr &&
             e->as.call_.fn_expr->kind == EX_DICT) {
+            /* ER3: Propagate the typeclass method's declared effect row. */
+            Expr *d = e->as.call_.fn_expr;
+            TypeClassInstance *inst = d->as.dict_.instance;
+            if (inst && inst->typeclass) {
+                const char *dict_mname = d->as.dict_.method_name;
+                for (uint8_t mi = 0; mi < inst->typeclass->n_methods; mi++) {
+                    TypeClassMethod *meth = &inst->typeclass->methods[mi];
+                    if (!meth->name || !meth->effect_row) continue;
+                    /* Compare sanitized method name with dict_mname. */
+                    const char *orig = meth->name->name;
+                    bool match = true;
+                    uint32_t k = 0;
+                    for (; orig[k] || dict_mname[k]; k++) {
+                        char a_ch = orig[k], b_ch = dict_mname[k];
+                        if (!isalnum((unsigned char)a_ch) && a_ch != '_') a_ch = '_';
+                        if (a_ch != b_ch) { match = false; break; }
+                    }
+                    if (match) {
+                        EffectRow *mrow = effect_row_apply_subst(meth->effect_row, subst, a);
+                        row = effect_row_merge(a, row, mrow);
+                        break;
+                    }
+                }
+            }
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                 row = collect_effects_in_expr(a, e->as.call_.args[i], row, idx, env, subst);
             }
@@ -122,6 +150,46 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
         }
 
         FnDef *callee = fn_index_lookup(idx, e->as.call_.fn_binding);
+
+        /* ER2: Row-variable unification at call sites.
+         * For each function-typed parameter that carries a row variable,
+         * unify that variable with the actual argument's inferred effect row,
+         * then apply the updated substitution when merging the callee's row. */
+        if (callee && callee->params && callee->n_params > 0 &&
+            e->as.call_.n_args > 0) {
+            uint8_t n_check = callee->n_params < (uint8_t)e->as.call_.n_args
+                                ? callee->n_params : (uint8_t)e->as.call_.n_args;
+            for (uint8_t pi = 0; pi < n_check; pi++) {
+                Binding *param = callee->params[pi];
+                if (!param || param->type.kind != TY_FN) continue;
+                EffectRow *param_row = param->type.as.fn.effect_row;
+                if (!param_row || param_row->kind != ERK_VAR) continue;
+
+                /* Determine the actual argument's effect row. */
+                Expr *actual = e->as.call_.args[pi];
+                EffectRow *actual_row = NULL;
+                if (actual && actual->kind == EX_CLOSURE) {
+                    /* Closure literal: collect its body effects with a fresh subst. */
+                    EffectRowSubst *arg_subst = effect_row_subst_new(a);
+                    actual_row = collect_effects_in_expr(
+                        a, actual->as.closure_.closure->fn->body,
+                        effect_row_empty(a), idx, env, arg_subst);
+                } else if (actual && actual->kind == EX_VAR &&
+                           actual->as.var.binding) {
+                    /* Named function: use its inferred row if known. */
+                    FnDef *arg_fn = fn_index_lookup(idx, actual->as.var.binding);
+                    if (arg_fn && arg_fn->inferred_effect_row) {
+                        actual_row = arg_fn->inferred_effect_row;
+                    } else if (actual->as.var.binding->type.kind == TY_FN) {
+                        actual_row = actual->as.var.binding->type.as.fn.effect_row;
+                    }
+                }
+                if (actual_row) {
+                    effect_row_unify(param_row, actual_row, subst, a);
+                }
+            }
+        }
+
         if (callee && callee->inferred_effect_row) {
             /* Apply substitution to resolve any row variables in the callee's
              * inferred row (e.g., from a polymorphic higher-order parameter). */
@@ -149,6 +217,22 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
                 }
             }
         }
+
+        /* ER2: Apply substitution to the callee's declared row.
+         * When the callee declares #{e} and we just bound e -> {Ask}, this
+         * merges {Ask} into the caller's row even if the callee's inferred
+         * row is empty (e.g., because calling a row-variable param was not
+         * tracked by the fixed-point). */
+        if (callee && callee->binding) {
+            EffectRow *callee_decl = callee->binding->type.as.fn.effect_row;
+            if (callee_decl && callee_decl->kind == ERK_VAR) {
+                EffectRow *resolved = effect_row_apply_subst(callee_decl, subst, a);
+                if (resolved && resolved->kind != ERK_VAR) {
+                    row = effect_row_merge(a, row, resolved);
+                }
+            }
+        }
+
         /* Recurse into arguments. */
         for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
             row = collect_effects_in_expr(a, e->as.call_.args[i], row, idx, env, subst);
@@ -420,6 +504,275 @@ int effect_row_check_declared(FnDef *fd, Arena *a) {
     return rc;
 }
 
+/* ER1: Emit TUR-W0031 for each effect declared but never inferred (over-annotation).
+ * Returns 0 always -- this is a warning, not an error. */
+static int effect_row_check_over_annotated(FnDef *fd, Arena *a) {
+    if (!fd) return 0;
+    EffectRow *declared = fd->binding
+                            ? fd->binding->type.as.fn.effect_row
+                            : NULL;
+    /* Only annotated functions with concrete declared rows */
+    if (!declared || declared->kind != ERK_CONCRETE) return 0;
+    EffectRow *inferred = fd->inferred_effect_row;
+    if (!inferred) inferred = effect_row_empty(a);
+
+    Span fn_span = fd->binding ? fd->binding->span : (Span){0, 0, 0, 0, 0, 0};
+    for (uint8_t i = 0; i < declared->as.concrete.n_effects; i++) {
+        Effect *eff = declared->as.concrete.effects[i];
+        if (!effect_row_contains(inferred, eff)) {
+            diag_emit_with_code(DIAG_WARNING, fn_span,
+                TUR_W0031_EFFECT_OVER_ANNOTATED,
+                "function '%s' declares effect '%s' but never performs it",
+                fd->binding ? fd->binding->name->name : "<anonymous>",
+                eff->name->name);
+        }
+    }
+    return 0;
+}
+
+/* ER1: Recursively find EX_CLOSURE nodes with declared effect rows and check them.
+ * Collect each closure body's effects and validate against its declared row. */
+static int check_closures_in_expr(Arena *a, Expr *e,
+                                   const FnIndex *idx,
+                                   EffectEnv *env) {
+    if (!e) return 0;
+    int rc = 0;
+
+    switch (e->kind) {
+    case EX_CLOSURE: {
+        FnDef *fd = e->as.closure_.closure->fn;
+        EffectRow *declared = fd->binding
+                                ? fd->binding->type.as.fn.effect_row
+                                : NULL;
+        /* Only check closures with an explicit annotation that has been resolved. */
+        if (declared && declared->kind != ERK_UNRESOLVED) {
+            EffectRowSubst *subst = effect_row_subst_new(a);
+            EffectRow *body_row = collect_effects_in_expr(
+                a, fd->body, effect_row_empty(a), idx, env, subst);
+            fd->inferred_effect_row = body_row;
+            rc |= effect_row_check_declared(fd, a);
+        }
+        /* Recurse into the closure body to catch nested closures. */
+        rc |= check_closures_in_expr(a, fd->body, idx, env);
+        return rc;
+    }
+
+    case EX_LET:
+        for (uint32_t i = 0; i < e->as.let_.n; i++)
+            rc |= check_closures_in_expr(a, e->as.let_.bindings[i].init, idx, env);
+        return rc | check_closures_in_expr(a, e->as.let_.body, idx, env);
+
+    case EX_DO:
+        for (uint32_t i = 0; i < e->as.do_.n; i++)
+            rc |= check_closures_in_expr(a, e->as.do_.items[i], idx, env);
+        return rc;
+
+    case EX_IF:
+        return check_closures_in_expr(a, e->as.if_.cond, idx, env)
+             | check_closures_in_expr(a, e->as.if_.then_, idx, env)
+             | check_closures_in_expr(a, e->as.if_.else_or_null, idx, env);
+
+    case EX_WHILE:
+        return check_closures_in_expr(a, e->as.while_.cond, idx, env)
+             | check_closures_in_expr(a, e->as.while_.body, idx, env);
+
+    case EX_CALL: {
+        Expr *fn_expr = e->as.call_.fn_expr;
+        rc |= check_closures_in_expr(a, fn_expr, idx, env);
+        for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+            rc |= check_closures_in_expr(a, e->as.call_.args[i], idx, env);
+        return rc;
+    }
+
+    case EX_SET:
+        return check_closures_in_expr(a, e->as.set_.value, idx, env);
+
+    case EX_DEF:
+        return check_closures_in_expr(a, e->as.def_.init, idx, env);
+
+    case EX_RETURN:
+        return check_closures_in_expr(a, e->as.return_.value, idx, env);
+
+    case EX_HANDLE: {
+        HandleExpr *h = e->as.handle_.handle;
+        rc |= check_closures_in_expr(a, h->body, idx, env);
+        for (uint8_t i = 0; i < h->n_cases; i++)
+            rc |= check_closures_in_expr(a, h->cases[i].body, idx, env);
+        return rc;
+    }
+
+    case EX_BUILTIN:
+        for (uint32_t i = 0; i < e->as.builtin.n; i++)
+            rc |= check_closures_in_expr(a, e->as.builtin.args[i], idx, env);
+        return rc;
+
+    case EX_MAKE_STRUCT:
+        for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+            rc |= check_closures_in_expr(a, e->as.make_struct_.field_values[i], idx, env);
+        return rc;
+
+    case EX_DEFER:
+        return check_closures_in_expr(a, e->as.defer_.body, idx, env);
+
+    case EX_RESET:
+        return check_closures_in_expr(a, e->as.reset_.body, idx, env);
+
+    case EX_SHIFT:
+        return check_closures_in_expr(a, e->as.shift_.k_fn, idx, env)
+             | check_closures_in_expr(a, e->as.shift_.body, idx, env);
+
+    case EX_SHIFT0:
+        return check_closures_in_expr(a, e->as.shift0_.k_fn, idx, env)
+             | check_closures_in_expr(a, e->as.shift0_.body, idx, env);
+
+    case EX_FN_DEF:
+        /* Inner defn: processed separately at the top-level. */
+        return 0;
+
+    default:
+        return 0;
+    }
+}
+
+/* ER4: Walk an expression tree and check function-argument effect-row subtyping.
+ * At each EX_CALL, for each function-typed parameter with a concrete declared
+ * row, verify that the actual argument's inferred row is a subset.  Emits
+ * TUR-E0009 on violation. */
+static int check_call_site_rows_in_expr(Arena *a, Expr *e,
+                                         const FnIndex *idx,
+                                         EffectEnv *env) {
+    if (!e) return 0;
+    int rc = 0;
+
+    switch (e->kind) {
+    case EX_CALL: {
+        /* First, check the call site itself. */
+        FnDef *callee = fn_index_lookup(idx, e->as.call_.fn_binding);
+        if (callee && callee->params && callee->n_params > 0 &&
+            e->as.call_.n_args > 0) {
+            uint8_t n_check = (callee->n_params < (uint8_t)e->as.call_.n_args)
+                                ? callee->n_params : (uint8_t)e->as.call_.n_args;
+            for (uint8_t pi = 0; pi < n_check; pi++) {
+                Binding *param = callee->params[pi];
+                if (!param || param->type.kind != TY_FN) continue;
+                EffectRow *param_row = param->type.as.fn.effect_row;
+                /* Only check concrete declared rows (not row variables). */
+                if (!param_row ||
+                    (param_row->kind != ERK_CONCRETE &&
+                     param_row->kind != ERK_EMPTY)) continue;
+
+                /* Determine actual argument's inferred effect row. */
+                Expr *actual = e->as.call_.args[pi];
+                EffectRow *actual_row = NULL;
+                if (actual && actual->kind == EX_CLOSURE) {
+                    EffectRowSubst *arg_subst = effect_row_subst_new(a);
+                    actual_row = collect_effects_in_expr(
+                        a, actual->as.closure_.closure->fn->body,
+                        effect_row_empty(a), idx, env, arg_subst);
+                } else if (actual && actual->kind == EX_VAR &&
+                           actual->as.var.binding) {
+                    FnDef *arg_fn = fn_index_lookup(idx, actual->as.var.binding);
+                    if (arg_fn) {
+                        actual_row = arg_fn->inferred_effect_row;
+                    } else if (actual->as.var.binding->type.kind == TY_FN) {
+                        actual_row = actual->as.var.binding->type.as.fn.effect_row;
+                    }
+                }
+
+                if (actual_row && !effect_row_is_empty(actual_row) &&
+                    !effect_row_is_subset(actual_row, param_row)) {
+                    Buf actual_str, param_str;
+                    buf_init(&actual_str);
+                    buf_init(&param_str);
+                    effect_row_print(&actual_str, actual_row);
+                    effect_row_print(&param_str, param_row);
+                    diag_emit_with_code(DIAG_ERROR, e->span,
+                        TUR_E0009_EFFECT_ROW_MISMATCH,
+                        "effect-row subtype violation: argument's row %.*s is not a "
+                        "subset of parameter's declared row %.*s",
+                        (int)actual_str.len, actual_str.data,
+                        (int)param_str.len, param_str.data);
+                    buf_free(&actual_str);
+                    buf_free(&param_str);
+                    rc = 1;
+                }
+            }
+        }
+        /* Recurse into all sub-expressions. */
+        if (e->as.call_.fn_expr)
+            rc |= check_call_site_rows_in_expr(a, e->as.call_.fn_expr, idx, env);
+        for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+            rc |= check_call_site_rows_in_expr(a, e->as.call_.args[i], idx, env);
+        return rc;
+    }
+
+    case EX_LET:
+        for (uint32_t i = 0; i < e->as.let_.n; i++)
+            rc |= check_call_site_rows_in_expr(a, e->as.let_.bindings[i].init, idx, env);
+        return rc | check_call_site_rows_in_expr(a, e->as.let_.body, idx, env);
+
+    case EX_DO:
+        for (uint32_t i = 0; i < e->as.do_.n; i++)
+            rc |= check_call_site_rows_in_expr(a, e->as.do_.items[i], idx, env);
+        return rc;
+
+    case EX_IF:
+        return check_call_site_rows_in_expr(a, e->as.if_.cond, idx, env)
+             | check_call_site_rows_in_expr(a, e->as.if_.then_, idx, env)
+             | check_call_site_rows_in_expr(a, e->as.if_.else_or_null, idx, env);
+
+    case EX_WHILE:
+        return check_call_site_rows_in_expr(a, e->as.while_.cond, idx, env)
+             | check_call_site_rows_in_expr(a, e->as.while_.body, idx, env);
+
+    case EX_SET:
+        return check_call_site_rows_in_expr(a, e->as.set_.value, idx, env);
+
+    case EX_DEF:
+        return check_call_site_rows_in_expr(a, e->as.def_.init, idx, env);
+
+    case EX_RETURN:
+        return check_call_site_rows_in_expr(a, e->as.return_.value, idx, env);
+
+    case EX_HANDLE: {
+        HandleExpr *h = e->as.handle_.handle;
+        rc |= check_call_site_rows_in_expr(a, h->body, idx, env);
+        for (uint8_t i = 0; i < h->n_cases; i++)
+            rc |= check_call_site_rows_in_expr(a, h->cases[i].body, idx, env);
+        return rc;
+    }
+
+    case EX_BUILTIN:
+        for (uint32_t i = 0; i < e->as.builtin.n; i++)
+            rc |= check_call_site_rows_in_expr(a, e->as.builtin.args[i], idx, env);
+        return rc;
+
+    case EX_MAKE_STRUCT:
+        for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+            rc |= check_call_site_rows_in_expr(a, e->as.make_struct_.field_values[i], idx, env);
+        return rc;
+
+    case EX_CLOSURE:
+        return check_call_site_rows_in_expr(a, e->as.closure_.closure->fn->body, idx, env);
+
+    case EX_DEFER:
+        return check_call_site_rows_in_expr(a, e->as.defer_.body, idx, env);
+
+    case EX_RESET:
+        return check_call_site_rows_in_expr(a, e->as.reset_.body, idx, env);
+
+    case EX_SHIFT:
+        return check_call_site_rows_in_expr(a, e->as.shift_.k_fn, idx, env)
+             | check_call_site_rows_in_expr(a, e->as.shift_.body, idx, env);
+
+    case EX_FN_DEF:
+        return 0;
+
+    default:
+        return 0;
+    }
+}
+
 /* ---------------------------------------------------------------------------
  * effect_check_pass
  * --------------------------------------------------------------------------- */
@@ -458,6 +811,50 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
             if (decl->kind == ERK_UNRESOLVED) {
                 fn->binding->type.as.fn.effect_row =
                     effect_row_resolve(decl, env, a);
+            }
+        }
+        /* ER2: Also resolve effect rows on TY_FN parameter types.
+         * When a parameter is annotated with :(fn [] #{e} :T), its type carries
+         * an ERK_UNRESOLVED effect row that must be resolved here so that the
+         * row-variable unification in collect_effects_in_expr can see ERK_VAR. */
+        for (uint8_t pi = 0; pi < fn->n_params; pi++) {
+            Binding *param = fn->params[pi];
+            if (!param || param->type.kind != TY_FN) continue;
+            EffectRow *pr = param->type.as.fn.effect_row;
+            if (pr && pr->kind == ERK_UNRESOLVED) {
+                param->type.as.fn.effect_row = effect_row_resolve(pr, env, a);
+            }
+        }
+    }
+
+    /* --- Step 0b: Resolve typeclass method effect rows + update instance method bindings. ---
+     * Pass 1: Resolve all ERK_UNRESOLVED effect rows on typeclass method signatures. */
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        Expr *item = program->as.program.items[i];
+        if (!item || item->kind != EX_TYPECLASS_DEF) continue;
+        TypeClass *tc = item->as.typeclass_def_.typeclass;
+        if (!tc) continue;
+        for (uint8_t mi = 0; mi < tc->n_methods; mi++) {
+            TypeClassMethod *meth = &tc->methods[mi];
+            if (meth->effect_row && meth->effect_row->kind == ERK_UNRESOLVED) {
+                meth->effect_row = effect_row_resolve(meth->effect_row, env, a);
+            }
+        }
+    }
+    /* Pass 2: Update instance method impl bindings with the resolved method effect rows. */
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        Expr *item = program->as.program.items[i];
+        if (!item || item->kind != EX_INSTANCE_DEF) continue;
+        TypeClassInstance *inst = item->as.instance_def_.instance;
+        if (!inst || !inst->typeclass) continue;
+        uint8_t n_min = inst->typeclass->n_methods < inst->n_method_impls
+                        ? inst->typeclass->n_methods : inst->n_method_impls;
+        for (uint8_t mi = 0; mi < n_min; mi++) {
+            TypeClassMethod *meth = &inst->typeclass->methods[mi];
+            FnDef *impl = inst->method_impls[mi];
+            if (!impl || !impl->binding) continue;
+            if (meth->effect_row) {
+                impl->binding->type.as.fn.effect_row = meth->effect_row;
             }
         }
     }
@@ -507,12 +904,107 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
         }
     }
 
-    /* --- Step 3: Validate each annotated function against its declared row. --- */
+    /* --- Step 3: Validate each function against its declared row. --- */
     int rc = 0;
     for (uint32_t i = 0; i < program->as.program.n; i++) {
         Expr *item = program->as.program.items[i];
         if (!item || item->kind != EX_FN_DEF || !item->as.fn_def_.fn) continue;
-        if (effect_row_check_declared(item->as.fn_def_.fn, a) != 0) rc = 1;
+        FnDef *fn = item->as.fn_def_.fn;
+        EffectRow *declared = fn->binding ? fn->binding->type.as.fn.effect_row : NULL;
+        EffectRow *inferred = fn->inferred_effect_row;
+
+        /* ER1: check declared vs inferred (TUR-E0009). */
+        if (effect_row_check_declared(fn, a) != 0) rc = 1;
+
+        /* ER1: over-annotation warning (TUR-W0031). */
+        effect_row_check_over_annotated(fn, a);
+
+        /* ER1: --strict-effects: warn on unannotated effectful functions (TUR-W0030). */
+        if (g_strict_effects && !declared &&
+            inferred && !effect_row_is_empty(inferred)) {
+            Span fn_span = fn->binding ? fn->binding->span : (Span){0, 0, 0, 0, 0, 0};
+            /* Build inferred row string for the message. */
+            Buf inferred_str;
+            buf_init(&inferred_str);
+            effect_row_print(&inferred_str, inferred);
+            diag_emit_with_code(DIAG_WARNING, fn_span,
+                TUR_W0030_STRICT_EFFECTS_UNANNOTATED,
+                "function '%s' performs effects %.*s but has no effect-row annotation "
+                "(add #{...} or handle all effects inside the function)",
+                fn->binding ? fn->binding->name->name : "<anonymous>",
+                (int)inferred_str.len, inferred_str.data);
+            buf_free(&inferred_str);
+        }
     }
+
+    /* ER1: Check closures with declared effect rows. */
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        Expr *item = program->as.program.items[i];
+        if (!item || item->kind != EX_FN_DEF || !item->as.fn_def_.fn) continue;
+        if (check_closures_in_expr(a, item->as.fn_def_.fn->body, &idx, env) != 0)
+            rc = 1;
+    }
+
+    /* --- Step 3b: ER4 -- Call-site effect-row subtype checking.
+     * For each top-level function, walk its body and verify that any function
+     * value passed to a concrete-row parameter has a compatible (subset) row. */
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        Expr *item = program->as.program.items[i];
+        if (!item || item->kind != EX_FN_DEF || !item->as.fn_def_.fn) continue;
+        if (check_call_site_rows_in_expr(a, item->as.fn_def_.fn->body,
+                                          &idx, env) != 0)
+            rc = 1;
+    }
+
+    /* --- ER6: --lint-effects: advisory warnings for unannotated effectful functions.
+     * Behaves like --strict-effects (TUR-W0030) but is never promoted to an error. */
+    if (g_lint_effects) {
+        for (uint32_t i = 0; i < program->as.program.n; i++) {
+            Expr *item = program->as.program.items[i];
+            if (!item || item->kind != EX_FN_DEF || !item->as.fn_def_.fn) continue;
+            FnDef *fn = item->as.fn_def_.fn;
+            EffectRow *declared = fn->binding ? fn->binding->type.as.fn.effect_row : NULL;
+            EffectRow *inferred = fn->inferred_effect_row;
+            if (!declared && inferred && !effect_row_is_empty(inferred)) {
+                Span fn_span = fn->binding ? fn->binding->span : (Span){0, 0, 0, 0, 0, 0};
+                Buf inferred_str;
+                buf_init(&inferred_str);
+                effect_row_print(&inferred_str, inferred);
+                diag_emit_with_code(DIAG_WARNING, fn_span,
+                    TUR_W0030_STRICT_EFFECTS_UNANNOTATED,
+                    "function '%s' performs effects %.*s but has no effect-row annotation "
+                    "(add #{...} or handle all effects inside the function)",
+                    fn->binding ? fn->binding->name->name : "<anonymous>",
+                    (int)inferred_str.len, inferred_str.data);
+                buf_free(&inferred_str);
+            }
+        }
+    }
+
     return rc;
+}
+
+/* ER6: --dump-effects — print each top-level defn's inferred effect row. */
+void effect_check_dump_effects(Expr *program, FILE *out) {
+    if (!program || program->kind != EX_PROGRAM) return;
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        Expr *item = program->as.program.items[i];
+        if (!item || item->kind != EX_FN_DEF || !item->as.fn_def_.fn) continue;
+        FnDef *fn = item->as.fn_def_.fn;
+        if (!fn->binding || !fn->binding->name) continue;
+
+        Buf row_str;
+        buf_init(&row_str);
+        EffectRow *row = fn->inferred_effect_row;
+        if (!row) {
+            buf_puts(&row_str, "#{}");
+        } else {
+            buf_putc(&row_str, '#');
+            effect_row_print(&row_str, row);
+        }
+        fprintf(out, "defn %s : %.*s\n",
+                fn->binding->name->name,
+                (int)row_str.len, row_str.data);
+        buf_free(&row_str);
+    }
 }

@@ -1,0 +1,17 @@
+;; ER6: nested try-with handlers.
+
+(defeffect Write [s :cstr] :nil)
+(defeffect Fail [msg :cstr] :nil)
+
+(defn risky [] #{Write Fail} :int
+  (do (perform (Write "start"))
+      (perform (Fail "oops"))
+      99))
+
+(defn main [] :int
+  (try-with
+    (try-with
+      (risky)
+      (Fail [msg] k) (do (println msg) (resume k 0)))
+    (Write [s] k) (do (println s) (resume k nil)))
+  0)

@@ -2443,6 +2443,52 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
             }
             
+            /* ER2: Callback call through a local TY_FN parameter.
+             * When a function parameter is annotated with :(fn [...] #{} :T), it is
+             * stored as int64_t in C (a function address or closure pointer cast to
+             * int).  Calling it requires the same cast-and-invoke pattern as TY_PTR_VOID
+             * callbacks.  Only applies to non-global bindings (local params). */
+            if (fn_binding->type.kind == TY_FN && !fn_binding->is_global) {
+                char *fn_ptr = name_for_binding(ctx, fn_binding);
+                uint32_t n = e->as.call_.n_args;
+                const char *ret_c = type_c_name(e->type);
+                if (n == 0) {
+                    Buf out; buf_init(&out);
+                    buf_printf(&out, "((%s (*)(void))(intptr_t)%s)()",
+                               ret_c, fn_ptr);
+                    buf_putc(&out, '\0');
+                    char *result = strdup(out.data);
+                    buf_free(&out);
+                    free(fn_ptr);
+                    return result;
+                } else {
+                    char **arg_strs = (char **)malloc(n * sizeof(char *));
+                    if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
+                    for (uint32_t i = 0; i < n; i++) {
+                        arg_strs[i] = emit_value(ctx, body, e->as.call_.args[i]);
+                    }
+                    Buf out; buf_init(&out);
+                    buf_printf(&out, "((%s (*)(", ret_c);
+                    for (uint32_t i = 0; i < n; i++) {
+                        if (i > 0) buf_puts(&out, ", ");
+                        buf_puts(&out, type_c_name(e->as.call_.args[i]->type));
+                    }
+                    buf_printf(&out, "))(intptr_t)%s)(", fn_ptr);
+                    for (uint32_t i = 0; i < n; i++) {
+                        if (i > 0) buf_puts(&out, ", ");
+                        buf_puts(&out, arg_strs[i]);
+                    }
+                    buf_puts(&out, ")");
+                    buf_putc(&out, '\0');
+                    char *result = strdup(out.data);
+                    buf_free(&out);
+                    for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
+                    free(arg_strs);
+                    free(fn_ptr);
+                    return result;
+                }
+            }
+
             /* Phase G0: 0-arg constructor call — emit ctor_Name() */
             if (fn_binding->type.kind == TY_ADT) {
                 Buf out; buf_init(&out);
@@ -2517,6 +2563,12 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * harmless no-op when a TY_PTR_VOID (already void *) is passed. */
                         needs_fn_cast = true;
                         cast_to_void_ptr = true;
+                    } else if (pk == TY_FN) {
+                        /* ER2: TY_FN parameter — stored as int64_t in C.  A function
+                         * reference (TY_FN) or closure pointer (TY_PTR_VOID) passed to it
+                         * must be cast to int64_t via intptr_t. */
+                        needs_fn_cast = true;
+                        cast_to_void_ptr = false;
                     } else {
                         needs_fn_cast = false;
                     }
@@ -4731,6 +4783,10 @@ static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         /* Phase HRT1: poly fn params use tur_poly_fn_t in signature */
         if (fd->params[i]->is_poly_fn) {
             buf_puts(file, "tur_poly_fn_t");
+        } else if (fd->param_types[i].kind == TY_FN) {
+            /* ER4: function-typed parameters are passed as int64_t (opaque
+             * function pointer) in Turmeric's calling convention. */
+            buf_puts(file, "int64_t");
         } else {
             buf_puts(file, type_c_name(fd->param_types[i]));
         }
@@ -5112,6 +5168,9 @@ int emit_program(Buf *out, const Expr *program) {
                 /* Phase HRT1: poly fn params use tur_poly_fn_t in signature */
                 if (fd->params[j]->is_poly_fn) {
                     buf_puts(&fwd_decls, "tur_poly_fn_t");
+                } else if (fd->param_types[j].kind == TY_FN) {
+                    /* ER4: function-typed parameters are passed as int64_t. */
+                    buf_puts(&fwd_decls, "int64_t");
                 } else {
                     buf_puts(&fwd_decls, type_c_name(fd->param_types[j]));
                 }

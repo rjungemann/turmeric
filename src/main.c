@@ -186,6 +186,9 @@ static int run_core_passes(PassContext *ctx) {
             /* P19-2: effect-row inference and validation pass. */
             if (effect_check_pass(ctx->arena, ctx->prog, ctx->effect_env) != 0)
                 return 1;
+            /* ER6: --dump-effects: print inferred effect row for each defn. */
+            if (g_dump_effects)
+                effect_check_dump_effects(ctx->prog, stdout);
 #ifndef NDEBUG
             /* Phase HKT-P6: verify kind info preserved after effect-row-infer */
             assert(kind_verify_program(ctx->prog) && "Kind info cleared after PASS_EFFECT_ROW_INFER");
@@ -1424,6 +1427,9 @@ static int usage(void) {
         "  --explain <TUR-E####>            print explanation for a diagnostic code (HKT-P5)\n"
         "  --explain <snippet>              compile code snippet and explain errors (phase 8)\n"
         "  --dump-kinds                     dump kind annotations after kind-check (HKT-P6)\n"
+        "  --strict-effects                 warn on unannotated effectful functions (ER1)\n"
+        "  --dump-effects                   print inferred effect row for each defn (ER6)\n"
+        "  --lint-effects                   advisory warnings for unannotated effectful functions (ER6)\n"
         "  --backtrack-depth <N>            cap run-backtrack at N results (0=unlimited) (Phase B5)\n"
         "  --dump-clone-plan                dump cloneable capture plan after CPS (Phase B5)\n"
         "  --panic-abort                   all panics call abort() directly (Phase R5)\n"
@@ -1656,6 +1662,30 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "--dump-kinds") == 0) {
             /* Phase HKT-P6: enable kind-annotation dump after kind-check */
             g_dump_kinds = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--strict-effects") == 0) {
+            /* ER1: enforce unannotated effectful functions as warnings */
+            g_strict_effects = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--dump-effects") == 0) {
+            /* ER6: print inferred effect row for each defn after inference */
+            g_dump_effects = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--lint-effects") == 0) {
+            /* ER6: advisory warnings for unannotated effectful functions */
+            g_lint_effects = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

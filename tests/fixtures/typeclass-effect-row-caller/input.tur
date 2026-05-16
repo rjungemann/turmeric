@@ -1,0 +1,15 @@
+;; ER3: calling an effectful typeclass method propagates its declared row to the caller.
+
+(defeffect Write [msg :cstr] :nil)
+
+(defclass IOShow [a]
+  (io-show [x] #{Write} :nil))
+
+(definstance IOShow [int]
+  (io-show [x] :nil
+    (perform (Write "42"))))
+
+(defn main [] :int
+  (handle
+    (do (.io-show 42) 0)
+    (Write [msg] k) (do (println msg) (resume k 0))))

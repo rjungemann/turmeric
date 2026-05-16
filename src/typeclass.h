@@ -7,6 +7,9 @@
 #include "symbols.h"
 #include "types.h"
 
+/* Forward declaration for EffectRow (defined in effect.h) */
+struct EffectRow;
+
 /* Forward declarations */
 typedef struct TypeClassMethod TypeClassMethod;
 typedef struct TypeConstraint TypeConstraint;
@@ -24,6 +27,9 @@ struct TypeClassMethod {
     bool *param_is_fn;
     uint8_t n_params;
     Type return_type;             /* Return type */
+    /* ER3: Effect-row annotation from the defclass method signature.
+     * NULL if not annotated; ERK_UNRESOLVED until PASS_EFFECT_ROW_INFER resolves it. */
+    struct EffectRow *effect_row;
 };
 
 /* A typeclass definition (e.g., Eq, Ord, Show) */

@@ -40,6 +40,10 @@ typedef enum DiagCode {
     /* Phase 21: Serializable continuations */
     TUR_E0018_NOT_SERIALIZABLE,                   /* captured binding does not implement Serializable */
     TUR_E0019_SERIAL_SHIFT_OUTSIDE_RESET,         /* serial-shift used outside serial-reset boundary */
+    /* ER1: strict-effects warnings */
+    TUR_W0030_STRICT_EFFECTS_UNANNOTATED,  /* unannotated fn has non-empty inferred row (--strict-effects) */
+    TUR_W0031_EFFECT_OVER_ANNOTATED,       /* declared effect never performed */
+    TUR_W0032_ROW_VAR_ALWAYS_CONCRETE,    /* row variable is always concrete; suggest replacing with concrete row */
 } DiagCode;
 
 typedef enum DiagLevel {

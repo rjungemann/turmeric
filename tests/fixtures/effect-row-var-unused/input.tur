@@ -1,0 +1,14 @@
+;; ER2: a row variable that is never bound stays open (no violation).
+
+(defeffect Write [msg :cstr] :nil)
+
+(defn identity-fn [f :(fn [] #{e} :int)] #{e} :int
+  (f))
+
+(defn main [] :int
+  (let [result
+    (handle
+      (identity-fn (fn [] 42))
+      (Write [msg] k) (do (println msg) (resume k 0)))]
+    (println result)
+    0))

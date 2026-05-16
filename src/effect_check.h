@@ -37,4 +37,10 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env);
  */
 int effect_row_check_declared(FnDef *fd, Arena *a);
 
+/* ER6: --dump-effects — print each top-level defn's inferred effect row to `out`.
+ * Format: "fn-name : #{Effect1 Effect2}" (or "#{}" for pure).
+ * Called after effect_check_pass completes so inferred rows are available.
+ */
+void effect_check_dump_effects(Expr *program, FILE *out);
+
 #endif /* TUR_EFFECT_CHECK_H */
