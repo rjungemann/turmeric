@@ -323,10 +323,15 @@ Start with simple send/receive protocols (SS0–SS2), ship them, then add choice
 
 ## Open Questions
 
-1. **Isorecursive vs. equirecursive protocols:** Isorecursive types require explicit `fold`/`unfold`; equirecursive types are transparent but harder to type-check. Equirecursive is more ergonomic for end users.
-2. **Multi-party sessions:** Binary sessions (two endpoints) are covered here. Multi-party session types (N participants) are significantly more complex and should be deferred.
-3. **Timeout support:** `recv-timeout` is useful for production systems but complicates the protocol type (the protocol may or may not advance). Should timeouts be typed or untyped?
-4. **STM interaction:** Can a session `send` be rolled back if the enclosing STM transaction retries? This requires careful design to preserve the linear discipline.
+1. **Isorecursive vs. equirecursive protocols:** ~~Isorecursive types require explicit `fold`/`unfold`; equirecursive types are transparent but harder to type-check. Equirecursive is more ergonomic for end users.~~
+   **Decision:** Equirecursive. Protocol types are transparently equal to their unrolled forms; no `fold`/`unfold` at recursive call sites. Type equality is checked co-inductively (with a "seen" set to prevent looping). Builds on the existing `Fix`/`Free` recursive type infrastructure.
+2. **Multi-party sessions:** ~~Binary sessions (two endpoints) are covered here. Multi-party session types (N participants) are significantly more complex and should be deferred.~~
+   **Decision:** Reserve the design space. Binary sessions ship in v3--v4. Multi-party support is not scoped for any current release. The `Session[P]` type is designed to be extensible. See [multiparty-sessions-tradeoffs.md](multiparty-sessions-tradeoffs.md) for the full tradeoff analysis between a native implementation and a minimal binary-composition subset.
+3. **Timeout support:** ~~`recv-timeout` is useful for production systems but complicates the protocol type (the protocol may or may not advance). Should timeouts be typed or untyped?~~
+   **Decision:** Typed (protocol-aware). A new `Timeout` protocol constructor encodes both branches in the type:
+   `(Recv T (Timeout Q P))` -- on message receipt the protocol continues as `Q`; on timeout it continues as `P`. The channel is returned in both branches so the session can continue. `Timeout` is self-dual (both endpoints see the same branching outcome). A new `TY_TIMEOUT` variant is added to `TypeKind` alongside `TY_SEND`/`TY_RECV`. Added in SS3.
+4. **STM interaction:** ~~Can a session `send` be rolled back if the enclosing STM transaction retries? This requires careful design to preserve the linear discipline.~~
+   **Decision:** Allow `choose`/`offer` inside `atomic` blocks; forbid `send`/`recv`. The atomically-committed decision is which protocol branch to take; actual message passing happens outside the transaction. This preserves linearity (no partially-advanced channel is left stranded on retry) and avoids a per-transaction message buffer. The elaborator emits a type error if `send` or `recv` appears directly inside an `atomic` expression.
 
 ---
 

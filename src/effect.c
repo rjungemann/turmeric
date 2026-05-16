@@ -316,6 +316,7 @@ Effect *effect_env_register(EffectEnv *env, Arena *a, const Symbol *name,
     effect->is_polymorphic = false; /* For now, all effects are monomorphic */
     effect->defining_module_name = defining_module_name;
     effect->is_private = is_private;
+    effect->is_exported = !is_private;
 
     /* Create the constructor (1:1 for now) */
     EffectConstructor *ctor = arena_alloc(a, sizeof(EffectConstructor));

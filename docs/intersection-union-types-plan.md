@@ -257,8 +257,10 @@ Union types are the more immediately useful half (gradual typing, heterogeneous 
 
 1. **Should ADTs become syntactic sugar for union types?** This would unify `defdata` and `(A | B)` syntax, but is a larger refactor. Consider as a v4 stretch goal after union types are stable.
 2. **`any` type scope:** Should `any` require an explicit flag or be always available? Gradual typing without `any` has limited value; making it always available may encourage untyped patterns.
-3. **Union subtyping and typeclasses:** If `x : (int | cstr)`, which typeclass instances are in scope? Only the intersection of instances common to both, or must the programmer pattern-match first?
-4. **Intersection unsatisfiability:** Should the compiler reject `(int & cstr)` statically (provably empty) or allow it and emit a runtime error?
+3. **Union subtyping and typeclasses:** ~~If `x : (int | cstr)`, which typeclass instances are in scope? Only the intersection of instances common to both, or must the programmer pattern-match first?~~
+   **Decision:** Instance intersection (Option C). Typeclass methods available on *all* union members may be called directly on the union-typed value without a match. If a method is not in the intersection, the elaborator emits a helpful error naming which union member(s) lack the instance and suggesting a pattern match to narrow the type. The elaborator computes the instance intersection at the union type site.
+4. **Intersection unsatisfiability:** ~~Should the compiler reject `(int & cstr)` statically (provably empty) or allow it and emit a runtime error?~~
+   **Decision:** Static rejection for provably empty intersections (Option A). The elaborator rejects intersections of known-disjoint types (distinct primitives, distinct concrete structs) at construction time with `TUR_E0350`. Intersections involving typeclasses or type variables whose compatibility cannot be determined statically are permitted and may fail later during instance resolution. The check is bounded -- catch the obvious cases early, don't attempt full satisfiability solving.
 
 ---
 

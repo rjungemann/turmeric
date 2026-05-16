@@ -266,8 +266,10 @@ Contract types have no dependencies on other advanced type-system features and c
 
 ## Open Questions
 
-1. **Contract effects:** Should contract predicates be allowed to perform effects (e.g. logging)? If so, the contract's effect row must be accounted for in the enclosing function's type. Start by restricting contracts to pure predicates.
-2. **Release-mode stripping:** Some teams want contracts in release builds for safety-critical code. Should `-Xcontracts` imply keep-in-release, or should that be a separate flag?
+1. **Contract effects:** ~~Should contract predicates be allowed to perform effects (e.g. logging)? If so, the contract's effect row must be accounted for in the enclosing function's type. Start by restricting contracts to pure predicates.~~
+   **Decision:** Pure predicates only for now (Option D). The elaborator enforces `#{}` on all contract predicate expressions. If real usage reveals a need for effectful predicates, add row tracking in a later phase. Revisit once CT0--CT4 are stable and usage patterns are established.
+2. **Release-mode stripping:** ~~Some teams want contracts in release builds for safety-critical code. Should `-Xcontracts` imply keep-in-release, or should that be a separate flag?~~
+   **Decision:** Separate flags always (Option B). `-Xcontracts` enables contract syntax and debug-mode checking only. `--keep-contracts` is an explicit opt-in to retain checks in release builds (`just release`). The default is strip-in-release -- the safe choice for performance-sensitive systems code. Per-contract `^always` granularity may be layered on top in a later phase without breaking this design.
 3. **Composability of contracts on higher-order functions:** If `f : (-> { x : int | p } int)` is passed to a higher-order combinator, does the contract on `f`'s argument type propagate into the combinator's call sites? Likely yes, at the call site.
 4. **Overlap with `stdlib/contract.tur`:** The existing `assert!`, `require!`, `ensure!` macros already cover many use cases. Contract types should complement rather than replace them. Document the distinction: macros are imperative guards; contract types are declarative type annotations.
 

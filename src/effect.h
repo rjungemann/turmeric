@@ -35,6 +35,7 @@ struct Effect {
     bool is_polymorphic;          /* Whether this effect is generic over type parameters */
     /* Phase P19-6: Module visibility */
     bool          is_private;           /* declared with ^private — only visible within defining module */
+    bool          is_exported;          /* false only for ^private effects; true for all public ones */
     const Symbol *defining_module_name; /* module that declared this effect, or NULL for top-level */
 };
 

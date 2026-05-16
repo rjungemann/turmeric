@@ -517,6 +517,9 @@ typedef struct ElabModule {
     /* Phase M4: exported macros from this module */
     struct MacroDef **exported_macros;
     uint32_t         n_exported_macros;
+    /* PR5-3-D: Effects exported by this module */
+    Effect      **exported_effects;
+    uint32_t      n_exported_effects;
     bool          is_loading;    /* circular import detection */
 } ElabModule;
 
@@ -784,6 +787,7 @@ typedef struct Elab {
     /* Phase M0: Module system */
     const Symbol *sym_defmodule;  /* defmodule */
     const Symbol *sym_export;     /* export */
+    const Symbol *sym_effect;     /* effect — used to parse (effect Name) in export/refer lists */
     const Symbol *sym_import;     /* import */
     const Symbol *sym_load;       /* load */
     const Symbol *kw_as;          /* :as */
@@ -814,6 +818,10 @@ typedef struct Elab {
     int              serial_reset_depth;
     /* Phase P3: HAMT lowering - track if HAMT functions are used */
     bool             needs_hamt;
+    /* PR5-3-D: Effects brought into scope via :refer [(effect Name)] imports */
+    Effect      **referred_effects;
+    uint32_t      n_referred_effects;
+    uint32_t      cap_referred_effects;
     /* Phase RF0: forward-declared type symbols for mutual recursion support.
      * Names added here during the type pre-pass are allowed to be re-elaborated
      * by defstruct/defdata without triggering "already defined" errors. */
@@ -1337,6 +1345,7 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* Phase M0: Module system */
     e->sym_defmodule = intern_cstr(st, "defmodule");
     e->sym_export = intern_cstr(st, "export");
+    e->sym_effect = intern_cstr(st, "effect");
     e->sym_import = intern_cstr(st, "import");
     e->sym_load = intern_cstr(st, "load");
     e->sym_as = intern_cstr(st, "as");   /* Phase N: (as Type expr) cast */
@@ -1357,6 +1366,10 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->serial_reset_depth = 0;
     /* Phase P3: HAMT lowering */
     e->needs_hamt = false;
+    /* PR5-3-D: referred effects */
+    e->referred_effects     = NULL;
+    e->n_referred_effects   = 0;
+    e->cap_referred_effects = 0;
     /* Phase PKG-1: extra module search dirs (-I) */
     e->module_include_dirs = NULL;
     e->n_module_include_dirs = 0;
@@ -5178,6 +5191,14 @@ static void push_handled_effect(Elab *e, const Symbol *name) {
     e->handled_effect_names[e->n_handled_effects++] = name;
 }
 
+/* PR5-3-D: Check if an effect was explicitly imported via :refer [(effect Name)]. */
+static bool elab_effect_is_referred(const Elab *e, const Effect *eff) {
+    for (uint32_t i = 0; i < e->n_referred_effects; i++) {
+        if (e->referred_effects[i] == eff) return true;
+    }
+    return false;
+}
+
 /* (perform (EffectName arg1 arg2 ...))
  * Perform an algebraic effect with arguments.
  */
@@ -5220,14 +5241,16 @@ static Expr *elab_perform(Elab *e, const Form *call) {
         return NULL;
     }
 
-    /* Phase P19-6: Enforce effect visibility — private effects cannot be
-     * performed from outside their defining module. */
-    if (effect->is_private
+    /* Phase P19-6 / ER5: Enforce effect visibility — private effects cannot be
+     * performed from outside their defining module (TUR-E0021). */
+    if (!effect->is_exported
         && effect->defining_module_name != NULL
-        && effect->defining_module_name != e->current_module_name) {
-        diag_emit(DIAG_ERROR, name_f->span,
-                  "effect '%s' is private to module '%s'",
-                  effect_name->name, effect->defining_module_name->name);
+        && effect->defining_module_name != e->current_module_name
+        && !elab_effect_is_referred(e, effect)) {
+        diag_emit_with_code(DIAG_ERROR, name_f->span,
+                            TUR_E0021_PRIVATE_EFFECT,
+                            "effect '%s' is private to module '%s'",
+                            effect_name->name, effect->defining_module_name->name);
         diag_emit(DIAG_NOTE, name_f->span,
                   "remove ^private from the defeffect declaration to make it public");
         return NULL;
@@ -5377,13 +5400,16 @@ static Expr *elab_handle(Elab *e, const Form *call) {
         /* Look up effect definition to get param types */
         Effect *eff = effect_env_lookup(e->effect_env, cases[i].effect_name);
 
-        /* Phase P19-6: Enforce effect visibility in handler declarations */
-        if (eff && eff->is_private
+        /* Phase P19-6 / ER5: Enforce effect visibility in handler declarations
+         * (TUR-E0021). */
+        if (eff && !eff->is_exported
             && eff->defining_module_name != NULL
-            && eff->defining_module_name != e->current_module_name) {
-            diag_emit(DIAG_ERROR, name_f->span,
-                      "effect '%s' is private to module '%s'",
-                      cases[i].effect_name->name, eff->defining_module_name->name);
+            && eff->defining_module_name != e->current_module_name
+            && !elab_effect_is_referred(e, eff)) {
+            diag_emit_with_code(DIAG_ERROR, name_f->span,
+                                TUR_E0021_PRIVATE_EFFECT,
+                                "effect '%s' is private to module '%s'",
+                                cases[i].effect_name->name, eff->defining_module_name->name);
             diag_emit(DIAG_NOTE, name_f->span,
                       "remove ^private from the defeffect declaration to make it public");
             return NULL;
@@ -8371,6 +8397,25 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
         }
     }
 
+    /* PR5-3-D: Collect exported effects for this module. */
+    {
+        uint32_t n_eeff = 0;
+        for (uint32_t i = 0; i < e->effect_env->n_effects; i++) {
+            Effect *eff = e->effect_env->effects[i];
+            if (eff->defining_module_name == name && eff->is_exported) n_eeff++;
+        }
+        Effect **eeff_arr = (n_eeff == 0) ? NULL :
+            (Effect **)arena_alloc(e->arena, n_eeff * sizeof(Effect *));
+        uint32_t eidx = 0;
+        for (uint32_t i = 0; i < e->effect_env->n_effects; i++) {
+            Effect *eff = e->effect_env->effects[i];
+            if (eff->defining_module_name == name && eff->is_exported)
+                eeff_arr[eidx++] = eff;
+        }
+        slot->exported_effects   = eeff_arr;
+        slot->n_exported_effects = n_eeff;
+    }
+
     slot->is_loading = false;
     return slot;
 }
@@ -8402,6 +8447,8 @@ static bool parse_import_spec(Elab *e, const Form *f, ImportSpec *out) {
     out->alias = NULL;
     out->refer_syms = NULL;
     out->n_refer = 0;
+    out->refer_effect_syms = NULL;
+    out->n_refer_effects   = 0;
     out->span = f->span;
 
     uint32_t i = 2;
@@ -8432,18 +8479,45 @@ static bool parse_import_spec(Elab *e, const Form *f, ImportSpec *out) {
                 return false;
             }
             uint32_t n = refer_f->as.list.len;
-            const Symbol **syms = (n == 0) ? NULL :
-                (const Symbol **)arena_alloc(e->arena, n * sizeof(Symbol *));
+            /* Count plain symbols vs (effect Name) entries. */
+            uint32_t n_syms = 0, n_effs = 0;
             for (uint32_t j = 0; j < n; j++) {
                 Form *sf = refer_f->as.list.items[j];
-                if (sf->tag != F_SYM) {
-                    diag_emit(DIAG_ERROR, sf->span, ":refer list must contain only symbols");
+                if (sf->tag == F_SYM) {
+                    n_syms++;
+                } else if (sf->tag == F_LIST && sf->as.list.len == 2
+                           && sf->as.list.items[0]->tag == F_SYM
+                           && sf->as.list.items[0]->as.sym == e->sym_effect) {
+                    n_effs++;
+                } else {
+                    diag_emit(DIAG_ERROR, sf->span,
+                              ":refer list must contain symbols or (effect Name) forms");
                     return false;
                 }
-                syms[j] = sf->as.sym;
             }
-            out->refer_syms = syms;
-            out->n_refer = n;
+            const Symbol **syms = (n_syms == 0) ? NULL :
+                (const Symbol **)arena_alloc(e->arena, n_syms * sizeof(Symbol *));
+            const Symbol **esyms = (n_effs == 0) ? NULL :
+                (const Symbol **)arena_alloc(e->arena, n_effs * sizeof(Symbol *));
+            uint32_t si = 0, ei = 0;
+            for (uint32_t j = 0; j < n; j++) {
+                Form *sf = refer_f->as.list.items[j];
+                if (sf->tag == F_SYM) {
+                    syms[si++] = sf->as.sym;
+                } else {
+                    /* (effect Name) -- already validated above */
+                    Form *en = sf->as.list.items[1];
+                    if (en->tag != F_SYM) {
+                        diag_emit(DIAG_ERROR, en->span, "effect name in :refer must be a symbol");
+                        return false;
+                    }
+                    esyms[ei++] = en->as.sym;
+                }
+            }
+            out->refer_syms        = syms;
+            out->n_refer           = n_syms;
+            out->refer_effect_syms = esyms;
+            out->n_refer_effects   = n_effs;
             i++;
         } else {
             diag_emit(DIAG_ERROR, kw->span,
@@ -8496,6 +8570,9 @@ static Expr *elab_defmodule(Elab *e, const Form *call) {
     const Symbol **exports = NULL;
     uint32_t n_exports = 0;
     uint32_t cap_exports = 0;
+    const Symbol **exp_effects = NULL;
+    uint32_t n_exp_effects = 0;
+    uint32_t cap_exp_effects = 0;
 
     /* Collect import specs */
     ImportSpec *imports = NULL;
@@ -8510,19 +8587,38 @@ static Expr *elab_defmodule(Elab *e, const Form *call) {
         if (head->tag != F_SYM) break;
 
         if (head->as.sym == e->sym_export) {
-            /* Parse (export sym1 sym2 ...) */
+            /* Parse (export sym1 sym2 ... (effect Name) ...) */
             for (uint32_t j = 1; j < item->as.list.len; j++) {
                 Form *sf = item->as.list.items[j];
-                if (sf->tag != F_SYM) {
-                    diag_emit(DIAG_ERROR, sf->span, "export list must contain only symbols");
-                    free(exports); free(imports);
+                if (sf->tag == F_SYM) {
+                    /* Regular symbol export */
+                    if (n_exports >= cap_exports) {
+                        cap_exports = cap_exports ? cap_exports * 2 : 4;
+                        exports = (const Symbol **)realloc(exports, cap_exports * sizeof(Symbol *));
+                    }
+                    exports[n_exports++] = sf->as.sym;
+                } else if (sf->tag == F_LIST && sf->as.list.len == 2
+                           && sf->as.list.items[0]->tag == F_SYM
+                           && sf->as.list.items[0]->as.sym == e->sym_effect) {
+                    /* (effect Name) export */
+                    Form *ename_f = sf->as.list.items[1];
+                    if (ename_f->tag != F_SYM) {
+                        diag_emit(DIAG_ERROR, ename_f->span,
+                                  "effect name in export list must be a symbol");
+                        free(exports); free(exp_effects); free(imports);
+                        return NULL;
+                    }
+                    if (n_exp_effects >= cap_exp_effects) {
+                        cap_exp_effects = cap_exp_effects ? cap_exp_effects * 2 : 4;
+                        exp_effects = (const Symbol **)realloc(exp_effects, cap_exp_effects * sizeof(Symbol *));
+                    }
+                    exp_effects[n_exp_effects++] = ename_f->as.sym;
+                } else {
+                    diag_emit(DIAG_ERROR, sf->span,
+                              "export list entries must be symbols or (effect Name) forms");
+                    free(exports); free(exp_effects); free(imports);
                     return NULL;
                 }
-                if (n_exports >= cap_exports) {
-                    cap_exports = cap_exports ? cap_exports * 2 : 4;
-                    exports = (const Symbol **)realloc(exports, cap_exports * sizeof(Symbol *));
-                }
-                exports[n_exports++] = sf->as.sym;
             }
             i++;
         } else if (head->as.sym == e->sym_import) {
@@ -8532,7 +8628,7 @@ static Expr *elab_defmodule(Elab *e, const Form *call) {
                 imports = (ImportSpec *)realloc(imports, cap_imports * sizeof(ImportSpec));
             }
             if (!parse_import_spec(e, item, &imports[n_imports])) {
-                free(exports); free(imports);
+                free(exports); free(exp_effects); free(imports);
                 return NULL;
             }
             n_imports++;
@@ -8558,6 +8654,14 @@ static Expr *elab_defmodule(Elab *e, const Form *call) {
         mod->n_exports = n_exports;
     }
     free(exports); exports = NULL;
+
+    /* PR5-3-B: Copy exported_effects to arena */
+    if (n_exp_effects > 0) {
+        mod->exported_effects = (const Symbol **)arena_alloc(e->arena, n_exp_effects * sizeof(Symbol *));
+        for (uint32_t j = 0; j < n_exp_effects; j++) mod->exported_effects[j] = exp_effects[j];
+        mod->n_exported_effects = n_exp_effects;
+    }
+    free(exp_effects); exp_effects = NULL;
 
     /* Copy imports to arena (needed for alias resolution during elaboration) */
     if (n_imports > 0) {
@@ -8631,6 +8735,33 @@ static Expr *elab_defmodule(Elab *e, const Form *call) {
             e->current_module_name = NULL;
             e->current_module = NULL;
             return NULL;
+        }
+
+        /* PR5-3-D: Process :refer [(effect Name)] imports. */
+        for (uint32_t k = 0; k < imp->n_refer_effects; k++) {
+            const Symbol *ref_eff_sym = imp->refer_effect_syms[k];
+            Effect *ref_eff = NULL;
+            for (uint32_t m = 0; m < loaded->n_exported_effects; m++) {
+                if (loaded->exported_effects[m]->name == ref_eff_sym) {
+                    ref_eff = loaded->exported_effects[m];
+                    break;
+                }
+            }
+            if (!ref_eff) {
+                diag_emit(DIAG_ERROR, imp->span,
+                          "effect '%s' is not exported from module '%s'",
+                          ref_eff_sym->name, imp->module_name->name);
+                e->current_module_name = NULL;
+                e->current_module = NULL;
+                return NULL;
+            }
+            /* Add to referred_effects so the visibility guard allows access. */
+            if (e->n_referred_effects >= e->cap_referred_effects) {
+                e->cap_referred_effects = e->cap_referred_effects ? e->cap_referred_effects * 2 : 4;
+                e->referred_effects = (Effect **)realloc(e->referred_effects,
+                                      e->cap_referred_effects * sizeof(Effect *));
+            }
+            e->referred_effects[e->n_referred_effects++] = ref_eff;
         }
     }
 
@@ -8711,6 +8842,29 @@ static Expr *elab_defmodule(Elab *e, const Form *call) {
         } else {
             exp_b->is_exported = true;
         }
+    }
+
+    /* PR5-3-B: Validate and mark exported effects. */
+    for (uint32_t j = 0; j < mod->n_exported_effects; j++) {
+        const Symbol *eff_name = mod->exported_effects[j];
+        Effect *eff = effect_env_lookup(e->effect_env, eff_name);
+        if (!eff || eff->defining_module_name != mod->name) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "exported effect '%s' is not defined in this module",
+                      eff_name->name);
+            e->current_module_name = NULL;
+            e->current_module = NULL;
+            return NULL;
+        }
+        if (eff->is_private) {
+            diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0021_PRIVATE_EFFECT,
+                                "private effect '%s' cannot be exported",
+                                eff_name->name);
+            e->current_module_name = NULL;
+            e->current_module = NULL;
+            return NULL;
+        }
+        eff->is_exported = true; /* explicit export — already true, but record intent */
     }
 
     /* Reset module context */
