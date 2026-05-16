@@ -699,6 +699,8 @@ typedef struct Elab {
     const Symbol *sym_panic_with;
     const Symbol *sym_catch_unwind;
     const Symbol *sym_catch_panic_of;
+    const Symbol *sym_throw;         /* (throw expr) */
+    const Symbol *sym_try;           /* (try body (catch ...) ...) */
     /* Phase R5: no-unwind attribute */
     const Symbol *sym_no_unwind_attr;
     /* Phase M6: (export-as "c_name") attribute for explicit C symbol naming */
@@ -1304,6 +1306,8 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_panic_with = intern_cstr(st, "panic-with");
     e->sym_catch_unwind = intern_cstr(st, "catch-unwind");
     e->sym_catch_panic_of = intern_cstr(st, "catch-panic-of");
+    e->sym_throw = intern_cstr(st, "throw");
+    e->sym_try   = intern_cstr(st, "try");
     e->sym_panic_payload_type = intern_cstr(st, "panic-payload-type");
     /* Phase R5: no-unwind attribute */
     e->sym_no_unwind_attr = intern_cstr(st, "#no-unwind");
@@ -2351,6 +2355,9 @@ static Expr *elab_panic(Elab *e, const Form *call);
 static Expr *elab_panic_with(Elab *e, const Form *call);
 static Expr *elab_catch_unwind(Elab *e, const Form *call);
 static Expr *elab_catch_panic_of(Elab *e, const Form *call);
+/* Phase S4: throw / try-catch */
+static Expr *elab_throw(Elab *e, const Form *call);
+static Expr *elab_try_catch(Elab *e, const Form *call);
 static Expr *elab_panic_payload_type(Elab *e, const Form *call);
 static Expr *elab_panic_payload_value(Elab *e, const Form *call);
 static Expr *elab_panic_payload_file(Elab *e, const Form *call);
@@ -6846,6 +6853,7 @@ static Expr *elab_extern_c(Elab *e, const Form *call) {
                     /* Legacy fallback names */
                     if (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0) pk = TY_PTR_VOID;
                     else if (kw->len == 4 && memcmp(kw->name, "void", 4) == 0) pk = TY_NIL;
+                    else if (kw->len == 9 && memcmp(kw->name, "ptr<void>", 9) == 0) pk = TY_PTR_VOID;
                     else {
                         diag_emit(DIAG_ERROR, p->span,
                                   "extern-c: unsupported parameter type :%s", kw->name);
@@ -6867,7 +6875,49 @@ static Expr *elab_extern_c(Elab *e, const Form *call) {
                       "extern-c: too many parameters (max %d)", MAX_FN_ARITY);
             return NULL;
         }
-        
+
+        /* Handle ^type prefix: ^int, ^ptr<void>, etc.
+         * When a symbol starts with '^', the rest is a C type annotation and the
+         * NEXT symbol in the vector is the parameter name. */
+        if (p->as.sym->len > 1 && p->as.sym->name[0] == '^') {
+            const char *tname = p->as.sym->name + 1;
+            size_t tlen = p->as.sym->len - 1;
+            TypeKind ck;
+            if (tlen == 3 && memcmp(tname, "int", 3) == 0) ck = TY_INT;
+            else if (tlen == 4 && memcmp(tname, "bool", 4) == 0) ck = TY_BOOL;
+            else if (tlen == 4 && memcmp(tname, "cstr", 4) == 0) ck = TY_CSTR;
+            else if (tlen == 3 && memcmp(tname, "ptr", 3) == 0) ck = TY_PTR_VOID;
+            else if (tlen == 9 && memcmp(tname, "ptr<void>", 9) == 0) ck = TY_PTR_VOID;
+            else if (tlen == 4 && memcmp(tname, "void", 4) == 0) ck = TY_NIL;
+            else ck = TY_INT; /* unknown ^type: default to int */
+            /* Peek at next element to get the param name */
+            i++;
+            if (i >= params_f->as.list.len) {
+                /* ^type at end with no following name — create anonymous param */
+                if (n_params == 0) {
+                    params = (Binding **)arena_alloc(e->arena, MAX_FN_ARITY * sizeof(Binding *));
+                }
+                param_kinds[n_params] = ck;
+                /* Use the ^type symbol itself as a placeholder name */
+                Binding *b = binding_new(e, p->as.sym, type_from_kind(ck), false, false, p->span);
+                params[n_params++] = b;
+                break;
+            }
+            Form *name_f = params_f->as.list.items[i];
+            if (name_f->tag != F_SYM) {
+                diag_emit(DIAG_ERROR, name_f->span,
+                          "extern-c: expected parameter name after ^type");
+                return NULL;
+            }
+            if (n_params == 0) {
+                params = (Binding **)arena_alloc(e->arena, MAX_FN_ARITY * sizeof(Binding *));
+            }
+            param_kinds[n_params] = ck;
+            Binding *b = binding_new(e, name_f->as.sym, type_from_kind(ck), false, false, name_f->span);
+            params[n_params++] = b;
+            continue;
+        }
+
         param_kinds[n_params] = TY_INT;
         Binding *b = binding_new(e, p->as.sym, TYPE_INT, false, false, p->span);
         if (n_params == 0) {
@@ -6908,6 +6958,7 @@ static Expr *elab_extern_c(Elab *e, const Form *call) {
             const Symbol *kw = ret_f->as.sym;
             if (kw->len == 4 && memcmp(kw->name, "void", 4) == 0) return_kind = TY_NIL;
             else if (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0) return_kind = TY_PTR_VOID;
+            else if (kw->len == 9 && memcmp(kw->name, "ptr<void>", 9) == 0) return_kind = TY_PTR_VOID;
             else {
                 diag_emit(DIAG_ERROR, ret_f->span,
                           "extern-c: unsupported return type :%s", kw->name);
@@ -7469,6 +7520,8 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_panic_with) return elab_panic_with(e, call);
     if (name == e->sym_catch_unwind) return elab_catch_unwind(e, call);
     if (name == e->sym_catch_panic_of) return elab_catch_panic_of(e, call);
+    if (name == e->sym_throw) return elab_throw(e, call);
+    if (name == e->sym_try)   return elab_try_catch(e, call);
     if (name == e->sym_panic_payload_type) return elab_panic_payload_type(e, call);
     if (name == e->sym_panic_payload_value) return elab_panic_payload_value(e, call);
     if (name == e->sym_panic_payload_file) return elab_panic_payload_file(e, call);
@@ -10826,14 +10879,45 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
         param_is_fn = (bool *)arena_alloc(e->arena, n_params * sizeof(bool));
         for (uint8_t i = 0; i < n_params; i++) param_is_fn[i] = false;
 
+        /* actual_p: number of real parameters encountered (keywords don't count). */
+        uint8_t actual_p = 0;
         for (uint8_t i = 0; i < n_params; i++) {
             Form *p = params_form->as.list.items[i];
             if (p->tag == F_SYM) {
-                param_names[i] = p->as.sym;
+                param_names[actual_p] = p->as.sym;
                 /* Default to int for now - type inference for method params deferred */
-                param_types[i] = TYPE_INT;
+                param_types[actual_p] = TYPE_INT;
+                param_is_fn[actual_p] = false;
+                actual_p++;
+            } else if (p->tag == F_KEYWORD) {
+                /* Inline type annotation for the previous parameter:
+                 * e.g. [b :ptr<void>] where :ptr<void> annotates b */
+                if (actual_p == 0) {
+                    diag_emit(DIAG_ERROR, p->span,
+                              "type annotation without preceding parameter");
+                    return NULL;
+                }
+                uint8_t prev = actual_p - 1;
+                const Symbol *kw = p->as.sym;
+                if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
+                    param_types[prev] = TYPE_INT;
+                } else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0) {
+                    param_types[prev] = TYPE_BOOL;
+                } else if (kw->len == 4 && memcmp(kw->name, "cstr", 4) == 0) {
+                    param_types[prev] = TYPE_CSTR;
+                } else if ((kw->len == 9 && memcmp(kw->name, "ptr<void>", 9) == 0) ||
+                           (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0)) {
+                    param_types[prev] = TYPE_PTR_VOID;
+                } else if (kw->len == 2 && memcmp(kw->name, "fn", 2) == 0) {
+                    param_types[prev] = TYPE_PTR_VOID;
+                    param_is_fn[prev] = true;
+                } else {
+                    diag_emit(DIAG_ERROR, p->span,
+                              "unsupported type in typeclass method parameter");
+                    return NULL;
+                }
             } else if (p->tag == F_VEC && p->as.list.len >= 2) {
-                /* [name : type] or [name :fn] syntax */
+                /* [name : type] or [name :fn] nested vector syntax */
                 Form *name_f = p->as.list.items[0];
                 Form *type_f = p->as.list.items[1];
                 if (name_f->tag != F_SYM) {
@@ -10841,22 +10925,26 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                               "parameter name must be a symbol");
                     return NULL;
                 }
-                param_names[i] = name_f->as.sym;
+                param_names[actual_p] = name_f->as.sym;
+                param_is_fn[actual_p] = false;
                 /* Parse type annotation */
                 if (type_f->tag == F_KEYWORD) {
                     const Symbol *kw = type_f->as.sym;
                     if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
-                        param_types[i] = TYPE_INT;
+                        param_types[actual_p] = TYPE_INT;
                     } else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0) {
-                        param_types[i] = TYPE_BOOL;
+                        param_types[actual_p] = TYPE_BOOL;
                     } else if (kw->len == 4 && memcmp(kw->name, "cstr", 4) == 0) {
-                        param_types[i] = TYPE_CSTR;
+                        param_types[actual_p] = TYPE_CSTR;
+                    } else if ((kw->len == 9 && memcmp(kw->name, "ptr<void>", 9) == 0) ||
+                               (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0)) {
+                        param_types[actual_p] = TYPE_PTR_VOID;
                     } else if (kw->len == 2 && memcmp(kw->name, "fn", 2) == 0) {
                         /* Phase CCL: :fn marks this param as a single-argument
                          * callable; it will be passed as tur_poly_fn_t at call
                          * sites so that capturing closures work transparently. */
-                        param_types[i] = TYPE_PTR_VOID;
-                        param_is_fn[i] = true;
+                        param_types[actual_p] = TYPE_PTR_VOID;
+                        param_is_fn[actual_p] = true;
                     } else {
                         diag_emit(DIAG_ERROR, type_f->span,
                                   "unsupported type in typeclass method parameter");
@@ -10872,7 +10960,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                                   "unsupported type form in typeclass method parameter");
                         return NULL;
                     }
-                    param_types[i] = *ft;
+                    param_types[actual_p] = *ft;
                 } else if (type_f->tag == F_LIST || type_f->tag == F_VEC) {
                     /* Phase HRT3: allow forall/exists type forms as parameter types */
                     Type *ft = type_expr_from_form(e, type_f, NULL, NULL, NULL, 0);
@@ -10881,16 +10969,18 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                                   "unsupported type form in typeclass method parameter");
                         return NULL;
                     }
-                    param_types[i] = *ft;
+                    param_types[actual_p] = *ft;
                 } else {
-                    param_types[i] = TYPE_INT; /* default */
+                    param_types[actual_p] = TYPE_INT; /* default */
                 }
+                actual_p++;
             } else {
                 diag_emit(DIAG_ERROR, p->span,
                           "parameter must be a symbol or [name : type] vector");
                 return NULL;
             }
         }
+        n_params = actual_p;
     }
     
     /* Parse return type - must be after params */
@@ -11196,6 +11286,78 @@ static Expr *elab_catch_panic_of(Elab *e, const Form *call) {
     Expr *out = expr_new(e->arena, EX_CATCH_PANIC_OF, TYPE_PTR_VOID, call->span);
     out->as.catch_panic_of_.type_kind = type_kind;
     out->as.catch_panic_of_.thunk = thunk;
+    return out;
+}
+
+/* Phase S4: (throw expr) -- raise a catchable exception; always TY_NEVER */
+static Expr *elab_throw(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span, "throw: expected exactly one argument");
+        return NULL;
+    }
+    Expr *val = elab_form(e, call->as.list.items[1]);
+    if (!val) return NULL;
+    Expr *out = expr_new(e->arena, EX_THROW, TYPE_NEVER, call->span);
+    out->as.throw_.value = val;
+    return out;
+}
+
+/* Phase S4: (try body (catch [bind] handler) ...)
+ * Each catch clause is (catch [name] body) or (catch [name :Type] body).
+ * The [name] vector is parsed directly as a binding pattern (not a value). */
+static Expr *elab_try_catch(Elab *e, const Form *call) {
+    uint32_t len = call->as.list.len;
+    if (len < 2) {
+        diag_emit(DIAG_ERROR, call->span, "try: expected body");
+        return NULL;
+    }
+    /* Elaborate the body */
+    Expr *body = elab_form(e, call->as.list.items[1]);
+    if (!body) return NULL;
+
+    /* Parse catch clauses: (catch [binding] handler) */
+    uint32_t n_catches = len - 2;
+    Binding  **bindings = n_catches ? (Binding **)arena_alloc(e->arena, n_catches * sizeof(Binding *)) : NULL;
+    Expr     **handlers = n_catches ? (Expr **)arena_alloc(e->arena, n_catches * sizeof(Expr *))    : NULL;
+
+    for (uint32_t i = 0; i < n_catches; i++) {
+        Form *clause = call->as.list.items[i + 2];
+        /* clause should be (catch [bind] handler) */
+        if (!clause || clause->tag != F_LIST || clause->as.list.len < 3) {
+            diag_emit(DIAG_ERROR, clause ? clause->span : call->span,
+                      "try: catch clause must be (catch [binding] handler)");
+            return NULL;
+        }
+        /* Second element: binding vector [name] or [name :Type] */
+        Form *bind_vec = clause->as.list.items[1];
+        Binding *catch_bind = NULL;
+        if (bind_vec && bind_vec->tag == F_VEC && bind_vec->as.list.len >= 1) {
+            Form *name_form = bind_vec->as.list.items[0];
+            if (name_form && name_form->tag == F_SYM) {
+                /* Create a fresh binding for the caught value */
+                catch_bind = binding_new(e, name_form->as.sym, TYPE_INT, false, false, name_form->span);
+            }
+        }
+        bindings[i] = catch_bind;
+
+        /* Push scope with the binding, elaborate handler */
+        Scope catch_scope;
+        Scope *saved_scope = e->scope;
+        scope_init(&catch_scope, e->scope);
+        e->scope = &catch_scope;
+        if (catch_bind) scope_add(&catch_scope, catch_bind);
+        Expr *handler = elab_form(e, clause->as.list.items[2]);
+        e->scope = saved_scope;
+        if (!handler) return NULL;
+        handlers[i] = handler;
+    }
+
+    /* Result type: use body type (simplification; could be union with handler types) */
+    Expr *out = expr_new(e->arena, EX_TRY_CATCH, body->type, call->span);
+    out->as.try_catch_.body           = body;
+    out->as.try_catch_.catch_bindings = bindings;
+    out->as.try_catch_.catch_handlers = handlers;
+    out->as.try_catch_.n_catches      = n_catches;
     return out;
 }
 

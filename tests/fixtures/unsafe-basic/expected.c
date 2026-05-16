@@ -8,13 +8,97 @@
 #define _XOPEN_SOURCE 700
 #include <ucontext.h>
 #undef _XOPEN_SOURCE
+#include <setjmp.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <setjmp.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <string.h>
+/* Phase X3: tur_set_t — sorted int64_t array */
+typedef struct { int64_t *items; uint32_t n; } tur_set_t;
+static int __tur_set_cmp(const void *a, const void *b) {
+    int64_t x = *(const int64_t *)a, y = *(const int64_t *)b;
+    return (x > y) - (x < y);
+}
+static tur_set_t *tur_set_from_items(uint32_t n, int64_t *src) {
+    tur_set_t *s = (tur_set_t *)malloc(sizeof(tur_set_t));
+    s->items = n ? (int64_t *)malloc(n * sizeof(int64_t)) : NULL;
+    if (n) memcpy(s->items, src, n * sizeof(int64_t));
+    if (n > 1) qsort(s->items, n, sizeof(int64_t), __tur_set_cmp);
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < n; i++)
+        if (k == 0 || s->items[k-1] != s->items[i]) s->items[k++] = s->items[i];
+    s->n = k;
+    return s;
+}
+static bool tur_set_member(tur_set_t *s, int64_t x) {
+    if (!s || !s->n) return false;
+    int lo = 0, hi = (int)s->n - 1;
+    while (lo <= hi) { int mid = (lo+hi)/2;
+        if (s->items[mid] == x) return true;
+        if (s->items[mid] < x) lo = mid+1; else hi = mid-1; }
+    return false;
+}
+static int64_t tur_set_count(tur_set_t *s) { return s ? (int64_t)s->n : 0; }
+static tur_set_t *tur_set_add(tur_set_t *s, int64_t x) {
+    if (tur_set_member(s, x)) {
+        tur_set_t *r = (tur_set_t *)malloc(sizeof(tur_set_t));
+        r->n = s->n; r->items = s->n ? (int64_t *)malloc(s->n*sizeof(int64_t)) : NULL;
+        if (s->n) memcpy(r->items, s->items, s->n*sizeof(int64_t));
+        return r;
+    }
+    tur_set_t *r = (tur_set_t *)malloc(sizeof(tur_set_t));
+    r->n = (s ? s->n : 0) + 1;
+    r->items = (int64_t *)malloc(r->n * sizeof(int64_t));
+    uint32_t pos = 0, base = s ? s->n : 0;
+    while (pos < base && s->items[pos] < x) pos++;
+    if (s && pos > 0) memcpy(r->items, s->items, pos*sizeof(int64_t));
+    r->items[pos] = x;
+    if (s && pos < base) memcpy(r->items+pos+1, s->items+pos, (base-pos)*sizeof(int64_t));
+    return r;
+}
+static tur_set_t *tur_set_remove(tur_set_t *s, int64_t x) {
+    if (!s || !s->n || !tur_set_member(s, x)) {
+        tur_set_t *r = (tur_set_t *)malloc(sizeof(tur_set_t));
+        r->n = s ? s->n : 0;
+        r->items = r->n ? (int64_t *)malloc(r->n*sizeof(int64_t)) : NULL;
+        if (r->n) memcpy(r->items, s->items, r->n*sizeof(int64_t));
+        return r;
+    }
+    tur_set_t *r = (tur_set_t *)malloc(sizeof(tur_set_t));
+    r->items = s->n > 1 ? (int64_t *)malloc((s->n-1)*sizeof(int64_t)) : NULL;
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < s->n; i++) if (s->items[i] != x) r->items[k++] = s->items[i];
+    r->n = k; return r;
+}
+static tur_set_t *tur_set_union(tur_set_t *a, tur_set_t *b) {
+    uint32_t na = a?a->n:0, nb = b?b->n:0, cap = na+nb;
+    int64_t *tmp = cap ? (int64_t *)malloc(cap*sizeof(int64_t)) : NULL;
+    if (a) memcpy(tmp, a->items, na*sizeof(int64_t));
+    if (b) memcpy(tmp+na, b->items, nb*sizeof(int64_t));
+    return tur_set_from_items(cap, tmp);
+}
+static tur_set_t *tur_set_intersection(tur_set_t *a, tur_set_t *b) {
+    if (!a || !b || !a->n || !b->n) return tur_set_from_items(0, NULL);
+    int64_t *tmp = (int64_t *)malloc(a->n*sizeof(int64_t));
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < a->n; i++) if (tur_set_member(b, a->items[i])) tmp[k++] = a->items[i];
+    tur_set_t *r = tur_set_from_items(k, tmp); free(tmp); return r;
+}
+static tur_set_t *tur_set_difference(tur_set_t *a, tur_set_t *b) {
+    if (!a || !a->n) return tur_set_from_items(0, NULL);
+    int64_t *tmp = (int64_t *)malloc(a->n*sizeof(int64_t));
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < a->n; i++) if (!tur_set_member(b, a->items[i])) tmp[k++] = a->items[i];
+    tur_set_t *r = tur_set_from_items(k, tmp); free(tmp); return r;
+}
+static void tur_set_free(tur_set_t *s) { if (s) { free(s->items); free(s); } }
+/* Phase HRT1: rank-2 polymorphic function type */
+typedef struct { void *env; int64_t (*fn)(void *, int64_t); } tur_poly_fn_t;
+/* Phase HRT2: existential type (opaque void* box) */
+typedef void * tur_exists_t;
 /* STM types (Phase 21) */
 typedef void *(*stm_fn_t)(void *env);
 typedef struct TVar { void *value; uint64_t version; pthread_mutex_t lock; pthread_cond_t cond; } TVar;
@@ -162,15 +246,6 @@ void *tur_atomically(void *(*fn)(void *), void *env) {
         tur_stm_set_current_tx(prev);
     }
 }
-extern void *malloc(size_t);
-extern void *calloc(size_t, size_t);
-extern void free(void *);
-extern void abort(void);
-extern int atexit(void (*)(void));
-extern void *memset(void *, int, size_t);
-extern void *memmove(void *, const void *, size_t);
-extern void *memcpy(void *, const void *, size_t);
-extern int strcmp(const char *, const char *);
 #include <time.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -248,82 +323,6 @@ static void tur_frame_fire_chain(tur_frame *f) {
     }
     for (int i = n_frames - 1; i >= 0; i--) {
         tur_frame_fire_lifo(frames[i]);
-    }
-}
-
-/* Exception handling - Phase 17 */
-typedef struct tur_exception tur_exception;
-
-struct tur_exception {
-    int payload_type;      /* TypeKind enum value */
-    void *payload;         /* The exception payload */
-    int line;              /* Line where thrown */
-    const char *file;      /* File where thrown */
-    tur_exception *cause;  /* Chained exception */
-};
-
-typedef struct ExceptionHandler ExceptionHandler;
-struct ExceptionHandler {
-    jmp_buf jmp_buf;
-    int active;
-    tur_exception *caught;
-    ExceptionHandler *parent;
-};
-
-static ExceptionHandler *global_handler_chain = NULL;
-
-ExceptionHandler *exn_push_handler(void) {
-    ExceptionHandler *h = (ExceptionHandler *)malloc(sizeof(ExceptionHandler));
-    if (!h) { fprintf(stderr, "exn: out of memory\n"); abort(); }
-    h->active = 1;
-    h->caught = NULL;
-    h->parent = global_handler_chain;
-    global_handler_chain = h;
-    return h;
-}
-
-ExceptionHandler *exn_pop_handler(void) {
-    ExceptionHandler *old = global_handler_chain;
-    if (old) global_handler_chain = old->parent;
-    return old;
-}
-
-void tur_exception_free(tur_exception *exn) {
-    if (!exn) return;
-    if (exn->cause) { tur_exception_free(exn->cause); }
-    /* Only free heap-allocated payloads (int=3, bool=2). */
-    /* cstr/ptr payloads point to literals or external memory, not owned. */
-    if (exn->payload_type == 3 || exn->payload_type == 2) {
-        free(exn->payload);
-    }
-    free(exn);
-}
-
-bool tur_exception_matches(tur_exception *exn, int expected_type) {
-    if (!exn) return false;
-    if (exn->payload_type == expected_type) return true;
-    if (expected_type == 1) return true;  /* TY_NIL = 1 = catch-all */
-    return false;
-}
-
-void tur_throw(int payload_type, void *payload, int line, const char *file) {
-    tur_exception *exn = (tur_exception *)malloc(sizeof(tur_exception));
-    if (!exn) { abort(); }
-    exn->payload_type = payload_type;
-    exn->payload = payload;
-    exn->line = line;
-    exn->file = file;
-    exn->cause = NULL;
-    ExceptionHandler *h = global_handler_chain;
-    if (h) {
-        if (h->caught) tur_exception_free(h->caught);
-        h->caught = exn;
-        h->active = 0;
-        longjmp(h->jmp_buf, 1);
-    } else {
-        fprintf(stderr, "Uncaught exception thrown at %s:%d\n", file ? file : "<unknown>", line);
-        tur_exception_free(exn);
-        abort();
     }
 }
 
@@ -1726,14 +1725,6 @@ static bool gc_is_alive(RcControlBlock *cb) {
     return (cb->color == GC_BLACK || cb->color == GC_GREY);
 }
 
-struct __defer_env_8 {RcControlBlock * r; };
-
-static void __defer_9(void *__env) {
-    struct __defer_env_8 *__e = (struct __defer_env_8 *)__env;
-    rc_strong_decrement(__e->r);
-    rc_free_queue_drain();
-}
-
 extern void * tur_hamt_new();
 extern void tur_hamt_free(void *);
 extern void * tur_hamt_retain(void *);
@@ -1767,6 +1758,9 @@ static void * with_c_string(const char *, int64_t);
 static const char * from_c_string(const char *);
 static void * box(int64_t);
 static int64_t unbox(int64_t);
+static bool contract_enabled_();
+static void tur_contract_check(bool, const char *);
+static void tur_contract_check_inv(int64_t, int64_t, const char *);
 static void * hamt_new();
 static void hamt_free(void *);
 static void * hamt_retain(void *);
@@ -1799,6 +1793,16 @@ static void * get(void *, void *);
 static bool has_(void *, void *);
 static int64_t count(void *);
 static void * merge(void *, void *);
+static bool map_eq_(int64_t, int64_t, int64_t);
+
+struct __defer_env_8 {RcControlBlock * r; };
+
+static void __defer_9(void *__env) {
+    struct __defer_env_8 *__e = (struct __defer_env_8 *)__env;
+    rc_strong_decrement(__e->r);
+    rc_free_queue_drain();
+}
+
 
 static void * array_get(void * arr, int64_t idx) {
         struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
@@ -1854,6 +1858,22 @@ static void * box(int64_t v) {
 static int64_t unbox(int64_t p) {
         int64_t *boxed = (int64_t *)p;
   return *boxed;
+  
+}
+
+static bool contract_enabled_() {
+        return true;
+}
+
+static void tur_contract_check(bool condition, const char * msg) {
+        if (!condition) { tur_panic((const char*)msg); }
+  
+}
+
+static void tur_contract_check_inv(int64_t obj, int64_t pred, const char * msg) {
+        typedef int64_t (*pred_fn)(int64_t);
+  pred_fn f = (pred_fn)(intptr_t)pred;
+  if (!f(obj)) { tur_panic((const char*)msg); }
   
 }
 
@@ -1987,17 +2007,46 @@ static void * merge(void * a, void * b) {
         return hamt_merge((void *)(intptr_t)(a), (void *)(intptr_t)(b));
 }
 
+static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
+        if (tur_hamt_count((void*)(intptr_t)m1) !=
+      tur_hamt_count((void*)(intptr_t)m2)) return false;
+  uint64_t iter_buf[32];
+  for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
+  tur_hamt_iter_init(iter_buf, (void*)(intptr_t)m1);
+  uint64_t hash_out;
+  void *key_out = NULL, *val_out = NULL;
+  while (tur_hamt_iter_next(iter_buf, &hash_out, &key_out, &val_out)) {
+      void *val_in_b = tur_hamt_get(
+          (void*)(intptr_t)m2, (int64_t)hash_out, key_out);
+      if (!val_in_b) { tur_hamt_iter_free(iter_buf); return false; }
+      bool vals_eq = ((bool(*)(int64_t, int64_t))(intptr_t)val_cmp)(
+          (int64_t)(intptr_t)val_out, (int64_t)(intptr_t)val_in_b);
+      if (!vals_eq) { tur_hamt_iter_free(iter_buf); return false; }
+  }
+  tur_hamt_iter_free(iter_buf);
+  return true;
+  
+}
+
+typedef struct __HEnv_5 __HEnv_5;
+struct __HEnv_5 {
+    void * p;
+};
+
 static int64_t __effect_handler_6(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_6(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t k_199 = __k;
+    __HEnv_5 *__henv_5 = (__HEnv_5 *)__env;
+    int64_t k_211 = __k;
     return 0;
 }
 
 static void __handle_body_5(void);
 static void __handle_body_5(void) {
+    TurEffectCaptureCtx *__cap = (TurEffectCaptureCtx *)tur_current_fiber->eff_ctx;
+    __HEnv_5 *__henv_5 = (__HEnv_5 *)__cap->body_env;
     {
-        const void * b_198 = &p_197;
-        (void)b_198;
+        const void * b_210 = &__henv_5->p;
+        (void)b_210;
         printf("%lld\n", (long long)(INT64_C(1)));
     }
     tur_current_fiber->result = 0;
@@ -2011,7 +2060,7 @@ static int64_t __dispatch_5(void *__ctx_void, int64_t __k_int, int64_t __resume_
     if (__fiber->done) { return __fiber->result; }
     if (!__dcap->has_pending_effect) return __r;
     if (strcmp(__dcap->eff_name, "Unsafe") == 0) {
-        return __effect_handler_6(__dcap->eff_args, __dcap->eff_n_args, __k_int, NULL);
+        return __effect_handler_6(__dcap->eff_args, __dcap->eff_n_args, __k_int, __dcap->body_env);
     } else {
         /* Phase 19D: bubble up unhandled effect to outer fiber */
         FiberBlock *__outer_f = tur_current_fiber;
@@ -2039,20 +2088,22 @@ int main() {
             *__t1 = INT64_C(42);
             RcControlBlock *__t2 = rc_cb_alloc(0, 3, NULL);
             __t2->value = __t1;
-            RcControlBlock * r_196 = __t2;
-            (void)r_196;
+            RcControlBlock * r_208 = __t2;
+            (void)r_208;
             tur_frame __frame_3;
             tur_frame_init(&__frame_3, NULL);
             {
-                void *__t4 = rc_get_value(r_196);
-                void * p_197 = __t4;
-                (void)p_197;
+                void *__t4 = rc_get_value(r_208);
+                void * p_209 = __t4;
+                (void)p_209;
+                __HEnv_5 *__henv_5 = (__HEnv_5 *)malloc(sizeof(__HEnv_5));
+                __henv_5->p = p_209;
                 TurEffectCaptureCtx __cap_5;
                 __cap_5.has_pending_effect = false;
                 __cap_5.eff_name = NULL;
                 __cap_5.eff_n_args = 0;
                 __cap_5.dispatch = __dispatch_5;
-                __cap_5.body_env = NULL;
+                __cap_5.body_env = __henv_5;
                 FiberBlock *__fiber_5 = tur_fiber_block_new(__handle_body_5, 0);
                 __fiber_5->eff_ctx = &__cap_5;
                 EffectHandlerFrame *__parent_chain_5 = (tur_current_fiber ? (EffectHandlerFrame *)tur_current_fiber->effect_handler_chain : global_effect_handler_chain);
@@ -2064,9 +2115,12 @@ int main() {
                 __eff_frame_5.cases[0].env = NULL;
                 __fiber_5->effect_handler_chain = &__eff_frame_5;
                 __dispatch_5(&__cap_5, (int64_t)(intptr_t)__fiber_5, 0);
+                /* Phase 19D: write-back env captures to outer locals */
+                p_209 = __henv_5->p;
                 if (__fiber_5->done) { free(__fiber_5->stack); free(__fiber_5); }
+                if (__fiber_5->done) { free(__henv_5); }
             }
-            struct __defer_env_8 __t10 = {.r = r_196};
+            struct __defer_env_8 __t10 = {.r = r_208};
             tur_frame_push_defer(&__frame_3, __defer_9, &__t10);
             int64_t __t11;
             __t11 = INT64_C(0);

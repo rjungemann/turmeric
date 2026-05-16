@@ -15,8 +15,8 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <string.h>
 /* Phase X3: tur_set_t — sorted int64_t array */
-extern void *memcpy(void *, const void *, size_t);
 typedef struct { int64_t *items; uint32_t n; } tur_set_t;
 static int __tur_set_cmp(const void *a, const void *b) {
     int64_t x = *(const int64_t *)a, y = *(const int64_t *)b;
@@ -246,15 +246,6 @@ void *tur_atomically(void *(*fn)(void *), void *env) {
         tur_stm_set_current_tx(prev);
     }
 }
-extern void *malloc(size_t);
-extern void *calloc(size_t, size_t);
-extern void free(void *);
-extern void abort(void);
-extern int atexit(void (*)(void));
-extern void *memset(void *, int, size_t);
-extern void *memmove(void *, const void *, size_t);
-extern void *memcpy(void *, const void *, size_t);
-extern int strcmp(const char *, const char *);
 #include <time.h>
 #include <unistd.h>
 #include <fcntl.h>

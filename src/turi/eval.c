@@ -1279,6 +1279,49 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         }
     }
 
+    /* Phase S4: throw / try-catch */
+    case EX_THROW: {
+        TuriValue val = eval_expr(env, frame, e->as.throw_.value);
+        if (turi_is_error(val) || env->returning || env->throwing) return val;
+        /* Box the value as a TURI_THROW */
+        TuriValue tv = make_throw_val(val, TY_UNKNOWN);
+        env->throwing    = true;
+        env->throw_value = tv;
+        return tv;
+    }
+    case EX_TRY_CATCH: {
+        /* Evaluate the body; if it throws, match the first catch clause */
+        bool      saved_throwing  = env->throwing;
+        TuriValue saved_throw_val = env->throw_value;
+        env->throwing = false;
+
+        TuriValue result = eval_expr(env, frame, e->as.try_catch_.body);
+
+        if (env->throwing && e->as.try_catch_.n_catches > 0) {
+            TuriValue thrown = env->throw_value;
+            env->throwing    = false;
+
+            /* Use the first matching catch clause (simple: always the first) */
+            EvalFrame *cf = eval_frame_new(frame);
+            if (e->as.try_catch_.catch_bindings[0]) {
+                TuriValue caught_val = thrown;
+                /* Unwrap TURI_THROW to get the inner value */
+                if (thrown.tag == TURI_THROW && thrown.as_throw) {
+                    caught_val = thrown.as_throw->value;
+                }
+                frame_bind(cf, e->as.try_catch_.catch_bindings[0]->name->name, caught_val);
+            }
+            result = eval_expr(env, cf, e->as.try_catch_.catch_handlers[0]);
+            eval_frame_free(cf);
+        } else if (!env->throwing) {
+            /* No exception: restore saved state */
+            env->throwing    = saved_throwing;
+            env->throw_value = saved_throw_val;
+        }
+        /* If still throwing (unmatched or re-thrown), leave env->throwing set */
+        return result;
+    }
+
     /* --- Everything else — silently return nil --------------------------- */
     default:
         return turi_nil();

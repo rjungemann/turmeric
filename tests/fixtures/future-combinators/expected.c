@@ -8,13 +8,97 @@
 #define _XOPEN_SOURCE 700
 #include <ucontext.h>
 #undef _XOPEN_SOURCE
+#include <setjmp.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <setjmp.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <string.h>
+/* Phase X3: tur_set_t — sorted int64_t array */
+typedef struct { int64_t *items; uint32_t n; } tur_set_t;
+static int __tur_set_cmp(const void *a, const void *b) {
+    int64_t x = *(const int64_t *)a, y = *(const int64_t *)b;
+    return (x > y) - (x < y);
+}
+static tur_set_t *tur_set_from_items(uint32_t n, int64_t *src) {
+    tur_set_t *s = (tur_set_t *)malloc(sizeof(tur_set_t));
+    s->items = n ? (int64_t *)malloc(n * sizeof(int64_t)) : NULL;
+    if (n) memcpy(s->items, src, n * sizeof(int64_t));
+    if (n > 1) qsort(s->items, n, sizeof(int64_t), __tur_set_cmp);
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < n; i++)
+        if (k == 0 || s->items[k-1] != s->items[i]) s->items[k++] = s->items[i];
+    s->n = k;
+    return s;
+}
+static bool tur_set_member(tur_set_t *s, int64_t x) {
+    if (!s || !s->n) return false;
+    int lo = 0, hi = (int)s->n - 1;
+    while (lo <= hi) { int mid = (lo+hi)/2;
+        if (s->items[mid] == x) return true;
+        if (s->items[mid] < x) lo = mid+1; else hi = mid-1; }
+    return false;
+}
+static int64_t tur_set_count(tur_set_t *s) { return s ? (int64_t)s->n : 0; }
+static tur_set_t *tur_set_add(tur_set_t *s, int64_t x) {
+    if (tur_set_member(s, x)) {
+        tur_set_t *r = (tur_set_t *)malloc(sizeof(tur_set_t));
+        r->n = s->n; r->items = s->n ? (int64_t *)malloc(s->n*sizeof(int64_t)) : NULL;
+        if (s->n) memcpy(r->items, s->items, s->n*sizeof(int64_t));
+        return r;
+    }
+    tur_set_t *r = (tur_set_t *)malloc(sizeof(tur_set_t));
+    r->n = (s ? s->n : 0) + 1;
+    r->items = (int64_t *)malloc(r->n * sizeof(int64_t));
+    uint32_t pos = 0, base = s ? s->n : 0;
+    while (pos < base && s->items[pos] < x) pos++;
+    if (s && pos > 0) memcpy(r->items, s->items, pos*sizeof(int64_t));
+    r->items[pos] = x;
+    if (s && pos < base) memcpy(r->items+pos+1, s->items+pos, (base-pos)*sizeof(int64_t));
+    return r;
+}
+static tur_set_t *tur_set_remove(tur_set_t *s, int64_t x) {
+    if (!s || !s->n || !tur_set_member(s, x)) {
+        tur_set_t *r = (tur_set_t *)malloc(sizeof(tur_set_t));
+        r->n = s ? s->n : 0;
+        r->items = r->n ? (int64_t *)malloc(r->n*sizeof(int64_t)) : NULL;
+        if (r->n) memcpy(r->items, s->items, r->n*sizeof(int64_t));
+        return r;
+    }
+    tur_set_t *r = (tur_set_t *)malloc(sizeof(tur_set_t));
+    r->items = s->n > 1 ? (int64_t *)malloc((s->n-1)*sizeof(int64_t)) : NULL;
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < s->n; i++) if (s->items[i] != x) r->items[k++] = s->items[i];
+    r->n = k; return r;
+}
+static tur_set_t *tur_set_union(tur_set_t *a, tur_set_t *b) {
+    uint32_t na = a?a->n:0, nb = b?b->n:0, cap = na+nb;
+    int64_t *tmp = cap ? (int64_t *)malloc(cap*sizeof(int64_t)) : NULL;
+    if (a) memcpy(tmp, a->items, na*sizeof(int64_t));
+    if (b) memcpy(tmp+na, b->items, nb*sizeof(int64_t));
+    return tur_set_from_items(cap, tmp);
+}
+static tur_set_t *tur_set_intersection(tur_set_t *a, tur_set_t *b) {
+    if (!a || !b || !a->n || !b->n) return tur_set_from_items(0, NULL);
+    int64_t *tmp = (int64_t *)malloc(a->n*sizeof(int64_t));
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < a->n; i++) if (tur_set_member(b, a->items[i])) tmp[k++] = a->items[i];
+    tur_set_t *r = tur_set_from_items(k, tmp); free(tmp); return r;
+}
+static tur_set_t *tur_set_difference(tur_set_t *a, tur_set_t *b) {
+    if (!a || !a->n) return tur_set_from_items(0, NULL);
+    int64_t *tmp = (int64_t *)malloc(a->n*sizeof(int64_t));
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < a->n; i++) if (!tur_set_member(b, a->items[i])) tmp[k++] = a->items[i];
+    tur_set_t *r = tur_set_from_items(k, tmp); free(tmp); return r;
+}
+static void tur_set_free(tur_set_t *s) { if (s) { free(s->items); free(s); } }
+/* Phase HRT1: rank-2 polymorphic function type */
+typedef struct { void *env; int64_t (*fn)(void *, int64_t); } tur_poly_fn_t;
+/* Phase HRT2: existential type (opaque void* box) */
+typedef void * tur_exists_t;
 /* STM types (Phase 21) */
 typedef void *(*stm_fn_t)(void *env);
 typedef struct TVar { void *value; uint64_t version; pthread_mutex_t lock; pthread_cond_t cond; } TVar;
@@ -162,15 +246,6 @@ void *tur_atomically(void *(*fn)(void *), void *env) {
         tur_stm_set_current_tx(prev);
     }
 }
-extern void *malloc(size_t);
-extern void *calloc(size_t, size_t);
-extern void free(void *);
-extern void abort(void);
-extern int atexit(void (*)(void));
-extern void *memset(void *, int, size_t);
-extern void *memmove(void *, const void *, size_t);
-extern void *memcpy(void *, const void *, size_t);
-extern int strcmp(const char *, const char *);
 #include <time.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -248,82 +323,6 @@ static void tur_frame_fire_chain(tur_frame *f) {
     }
     for (int i = n_frames - 1; i >= 0; i--) {
         tur_frame_fire_lifo(frames[i]);
-    }
-}
-
-/* Exception handling - Phase 17 */
-typedef struct tur_exception tur_exception;
-
-struct tur_exception {
-    int payload_type;      /* TypeKind enum value */
-    void *payload;         /* The exception payload */
-    int line;              /* Line where thrown */
-    const char *file;      /* File where thrown */
-    tur_exception *cause;  /* Chained exception */
-};
-
-typedef struct ExceptionHandler ExceptionHandler;
-struct ExceptionHandler {
-    jmp_buf jmp_buf;
-    int active;
-    tur_exception *caught;
-    ExceptionHandler *parent;
-};
-
-static ExceptionHandler *global_handler_chain = NULL;
-
-ExceptionHandler *exn_push_handler(void) {
-    ExceptionHandler *h = (ExceptionHandler *)malloc(sizeof(ExceptionHandler));
-    if (!h) { fprintf(stderr, "exn: out of memory\n"); abort(); }
-    h->active = 1;
-    h->caught = NULL;
-    h->parent = global_handler_chain;
-    global_handler_chain = h;
-    return h;
-}
-
-ExceptionHandler *exn_pop_handler(void) {
-    ExceptionHandler *old = global_handler_chain;
-    if (old) global_handler_chain = old->parent;
-    return old;
-}
-
-void tur_exception_free(tur_exception *exn) {
-    if (!exn) return;
-    if (exn->cause) { tur_exception_free(exn->cause); }
-    /* Only free heap-allocated payloads (int=3, bool=2). */
-    /* cstr/ptr payloads point to literals or external memory, not owned. */
-    if (exn->payload_type == 3 || exn->payload_type == 2) {
-        free(exn->payload);
-    }
-    free(exn);
-}
-
-bool tur_exception_matches(tur_exception *exn, int expected_type) {
-    if (!exn) return false;
-    if (exn->payload_type == expected_type) return true;
-    if (expected_type == 1) return true;  /* TY_NIL = 1 = catch-all */
-    return false;
-}
-
-void tur_throw(int payload_type, void *payload, int line, const char *file) {
-    tur_exception *exn = (tur_exception *)malloc(sizeof(tur_exception));
-    if (!exn) { abort(); }
-    exn->payload_type = payload_type;
-    exn->payload = payload;
-    exn->line = line;
-    exn->file = file;
-    exn->cause = NULL;
-    ExceptionHandler *h = global_handler_chain;
-    if (h) {
-        if (h->caught) tur_exception_free(h->caught);
-        h->caught = exn;
-        h->active = 0;
-        longjmp(h->jmp_buf, 1);
-    } else {
-        fprintf(stderr, "Uncaught exception thrown at %s:%d\n", file ? file : "<unknown>", line);
-        tur_exception_free(exn);
-        abort();
     }
 }
 
@@ -1759,6 +1758,9 @@ static void * with_c_string(const char *, int64_t);
 static const char * from_c_string(const char *);
 static void * box(int64_t);
 static int64_t unbox(int64_t);
+static bool contract_enabled_();
+static void tur_contract_check(bool, const char *);
+static void tur_contract_check_inv(int64_t, int64_t, const char *);
 static void * hamt_new();
 static void hamt_free(void *);
 static void * hamt_retain(void *);
@@ -1791,6 +1793,7 @@ static void * get(void *, void *);
 static bool has_(void *, void *);
 static int64_t count(void *);
 static void * merge(void *, void *);
+static bool map_eq_(int64_t, int64_t, int64_t);
 static void * future_of(int64_t);
 static void * future_error_of(int64_t);
 static void future_free(void *);
@@ -1860,6 +1863,22 @@ static void * box(int64_t v) {
 static int64_t unbox(int64_t p) {
         int64_t *boxed = (int64_t *)p;
   return *boxed;
+  
+}
+
+static bool contract_enabled_() {
+        return true;
+}
+
+static void tur_contract_check(bool condition, const char * msg) {
+        if (!condition) { tur_panic((const char*)msg); }
+  
+}
+
+static void tur_contract_check_inv(int64_t obj, int64_t pred, const char * msg) {
+        typedef int64_t (*pred_fn)(int64_t);
+  pred_fn f = (pred_fn)(intptr_t)pred;
+  if (!f(obj)) { tur_panic((const char*)msg); }
   
 }
 
@@ -1991,6 +2010,27 @@ static int64_t count(void * m) {
 
 static void * merge(void * a, void * b) {
         return hamt_merge((void *)(intptr_t)(a), (void *)(intptr_t)(b));
+}
+
+static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
+        if (tur_hamt_count((void*)(intptr_t)m1) !=
+      tur_hamt_count((void*)(intptr_t)m2)) return false;
+  uint64_t iter_buf[32];
+  for (int __i = 0; __i < 32; __i++) iter_buf[__i] = 0;
+  tur_hamt_iter_init(iter_buf, (void*)(intptr_t)m1);
+  uint64_t hash_out;
+  void *key_out = NULL, *val_out = NULL;
+  while (tur_hamt_iter_next(iter_buf, &hash_out, &key_out, &val_out)) {
+      void *val_in_b = tur_hamt_get(
+          (void*)(intptr_t)m2, (int64_t)hash_out, key_out);
+      if (!val_in_b) { tur_hamt_iter_free(iter_buf); return false; }
+      bool vals_eq = ((bool(*)(int64_t, int64_t))(intptr_t)val_cmp)(
+          (int64_t)(intptr_t)val_out, (int64_t)(intptr_t)val_in_b);
+      if (!vals_eq) { tur_hamt_iter_free(iter_buf); return false; }
+  }
+  tur_hamt_iter_free(iter_buf);
+  return true;
+  
 }
 
 static void * future_of(int64_t v) {
@@ -2162,119 +2202,119 @@ static void * make_unsettled() {
 
 int main() {
         {
-            void * f1_227 = future_of(INT64_C(42));
-            (void)f1_227;
-            printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f1_227))));
-            future_free((void *)(intptr_t)(f1_227));
+            void * f1_239 = future_of(INT64_C(42));
+            (void)f1_239;
+            printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f1_239))));
+            future_free((void *)(intptr_t)(f1_239));
         }
         {
-            void * f2_228 = future_error_of(INT64_C(-1));
-            (void)f2_228;
-            printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f2_228))));
-            future_free((void *)(intptr_t)(f2_228));
+            void * f2_240 = future_error_of(INT64_C(-1));
+            (void)f2_240;
+            printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f2_240))));
+            future_free((void *)(intptr_t)(f2_240));
         }
         {
-            void * f3_229 = future_of(INT64_C(10));
-            (void)f3_229;
+            void * f3_241 = future_of(INT64_C(10));
+            (void)f3_241;
             {
-                void * f3m_230 = future_map((void *)(intptr_t)(f3_229), (void *)(intptr_t)(double_fn));
-                (void)f3m_230;
-                printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f3m_230))));
-                future_free((void *)(intptr_t)(f3_229));
-                future_free((void *)(intptr_t)(f3m_230));
+                void * f3m_242 = future_map((void *)(intptr_t)(f3_241), (void *)(intptr_t)(double_fn));
+                (void)f3m_242;
+                printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f3m_242))));
+                future_free((void *)(intptr_t)(f3_241));
+                future_free((void *)(intptr_t)(f3m_242));
             }
         }
         {
-            void * f4_231 = future_error_of(INT64_C(-5));
-            (void)f4_231;
+            void * f4_243 = future_error_of(INT64_C(-5));
+            (void)f4_243;
             {
-                void * f4m_232 = future_map((void *)(intptr_t)(f4_231), (void *)(intptr_t)(double_fn));
-                (void)f4m_232;
-                printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f4m_232))));
-                future_free((void *)(intptr_t)(f4_231));
-                future_free((void *)(intptr_t)(f4m_232));
+                void * f4m_244 = future_map((void *)(intptr_t)(f4_243), (void *)(intptr_t)(double_fn));
+                (void)f4m_244;
+                printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f4m_244))));
+                future_free((void *)(intptr_t)(f4_243));
+                future_free((void *)(intptr_t)(f4m_244));
             }
         }
         {
-            void * f5_233 = future_of(INT64_C(7));
-            (void)f5_233;
+            void * f5_245 = future_of(INT64_C(7));
+            (void)f5_245;
             {
-                void * f5t_234 = future_then((void *)(intptr_t)(f5_233), (void *)(intptr_t)(times10_fn));
-                (void)f5t_234;
-                printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f5t_234))));
-                future_free((void *)(intptr_t)(f5_233));
-                future_free((void *)(intptr_t)(f5t_234));
+                void * f5t_246 = future_then((void *)(intptr_t)(f5_245), (void *)(intptr_t)(times10_fn));
+                (void)f5t_246;
+                printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f5t_246))));
+                future_free((void *)(intptr_t)(f5_245));
+                future_free((void *)(intptr_t)(f5t_246));
             }
         }
         {
-            void * f6_235 = future_error_of(INT64_C(-3));
-            (void)f6_235;
+            void * f6_247 = future_error_of(INT64_C(-3));
+            (void)f6_247;
             {
-                void * f6t_236 = future_then((void *)(intptr_t)(f6_235), (void *)(intptr_t)(times10_fn));
-                (void)f6t_236;
-                printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f6t_236))));
-                future_free((void *)(intptr_t)(f6_235));
-                future_free((void *)(intptr_t)(f6t_236));
+                void * f6t_248 = future_then((void *)(intptr_t)(f6_247), (void *)(intptr_t)(times10_fn));
+                (void)f6t_248;
+                printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(f6t_248))));
+                future_free((void *)(intptr_t)(f6_247));
+                future_free((void *)(intptr_t)(f6t_248));
             }
         }
         {
-            void * fa_237 = future_of(INT64_C(100));
-            (void)fa_237;
+            void * fa_249 = future_of(INT64_C(100));
+            (void)fa_249;
             {
-                void * fb_238 = future_of(INT64_C(200));
-                (void)fb_238;
+                void * fb_250 = future_of(INT64_C(200));
+                (void)fb_250;
                 {
-                    void * fall_239 = future_all2((void *)(intptr_t)(fa_237), (void *)(intptr_t)(fb_238));
-                    (void)fall_239;
-                    printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(fall_239))));
-                    future_free((void *)(intptr_t)(fa_237));
-                    future_free((void *)(intptr_t)(fb_238));
-                    future_free((void *)(intptr_t)(fall_239));
+                    void * fall_251 = future_all2((void *)(intptr_t)(fa_249), (void *)(intptr_t)(fb_250));
+                    (void)fall_251;
+                    printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(fall_251))));
+                    future_free((void *)(intptr_t)(fa_249));
+                    future_free((void *)(intptr_t)(fb_250));
+                    future_free((void *)(intptr_t)(fall_251));
                 }
             }
         }
         {
-            void * fa2_240 = future_of(INT64_C(100));
-            (void)fa2_240;
+            void * fa2_252 = future_of(INT64_C(100));
+            (void)fa2_252;
             {
-                void * fb2_241 = future_error_of(INT64_C(-7));
-                (void)fb2_241;
+                void * fb2_253 = future_error_of(INT64_C(-7));
+                (void)fb2_253;
                 {
-                    void * fall2_242 = future_all2((void *)(intptr_t)(fa2_240), (void *)(intptr_t)(fb2_241));
-                    (void)fall2_242;
-                    printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(fall2_242))));
-                    future_free((void *)(intptr_t)(fa2_240));
-                    future_free((void *)(intptr_t)(fb2_241));
-                    future_free((void *)(intptr_t)(fall2_242));
+                    void * fall2_254 = future_all2((void *)(intptr_t)(fa2_252), (void *)(intptr_t)(fb2_253));
+                    (void)fall2_254;
+                    printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(fall2_254))));
+                    future_free((void *)(intptr_t)(fa2_252));
+                    future_free((void *)(intptr_t)(fb2_253));
+                    future_free((void *)(intptr_t)(fall2_254));
                 }
             }
         }
         {
-            void * fa3_243 = future_of(INT64_C(55));
-            (void)fa3_243;
+            void * fa3_255 = future_of(INT64_C(55));
+            (void)fa3_255;
             {
-                void * fb3_244 = future_error_of(INT64_C(-8));
-                (void)fb3_244;
+                void * fb3_256 = future_error_of(INT64_C(-8));
+                (void)fb3_256;
                 {
-                    void * fany_245 = future_any2((void *)(intptr_t)(fa3_243), (void *)(intptr_t)(fb3_244));
-                    (void)fany_245;
-                    printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(fany_245))));
-                    future_free((void *)(intptr_t)(fa3_243));
-                    future_free((void *)(intptr_t)(fb3_244));
-                    future_free((void *)(intptr_t)(fany_245));
+                    void * fany_257 = future_any2((void *)(intptr_t)(fa3_255), (void *)(intptr_t)(fb3_256));
+                    (void)fany_257;
+                    printf("%lld\n", (long long)(future_get_ok((void *)(intptr_t)(fany_257))));
+                    future_free((void *)(intptr_t)(fa3_255));
+                    future_free((void *)(intptr_t)(fb3_256));
+                    future_free((void *)(intptr_t)(fany_257));
                 }
             }
         }
         {
-            void * fc_246 = make_unsettled();
-            (void)fc_246;
-            future_cancel((void *)(intptr_t)(fc_246));
-            if (future_cancelled_((void *)(intptr_t)(fc_246))) {
+            void * fc_258 = make_unsettled();
+            (void)fc_258;
+            future_cancel((void *)(intptr_t)(fc_258));
+            if (future_cancelled_((void *)(intptr_t)(fc_258))) {
                 puts("cancelled");
             } else {
                 puts("FAIL");
             }
-            future_free((void *)(intptr_t)(fc_246));
+            future_free((void *)(intptr_t)(fc_258));
         }
         int64_t __t0;
         __t0 = INT64_C(0);

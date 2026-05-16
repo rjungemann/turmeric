@@ -1563,6 +1563,44 @@ static Binding **collect_handle_captures(const Expr *body, uint32_t *n_out) {
             }
             case EX_REF: { PUSH_EXPR(cur->as.ref_.expr); break; }
             case EX_DEREF: { PUSH_EXPR(cur->as.deref_.expr); break; }
+            case EX_GET_FIELD: {
+                PUSH_EXPR(cur->as.get_field_.struct_expr);
+                break;
+            }
+            case EX_BORROW_IMMUT: {
+                PUSH_EXPR(cur->as.borrow_immut_.expr);
+                break;
+            }
+            case EX_BORROW_MUT: {
+                PUSH_EXPR(cur->as.borrow_mut_.expr);
+                break;
+            }
+            case EX_DEFER: {
+                /* Defer body's captures are pre-computed; add them directly.
+                 * Walking the defer body would require separate collect_defined
+                 * tracking for bindings defined inside the defer. */
+                for (uint8_t j = 0; j < cur->as.defer_.n_captures; j++) {
+                    Binding *db = cur->as.defer_.captures[j];
+                    if (!db || db->is_global || db->type.kind == TY_FN) continue;
+                    bool in_defs = false;
+                    for (uint32_t k = 0; k < ndefs; k++) {
+                        if (defs[k] == db) { in_defs = true; break; }
+                    }
+                    if (in_defs) continue;
+                    bool already = false;
+                    for (uint32_t k = 0; k < ncaps; k++) {
+                        if (caps[k] == db) { already = true; break; }
+                    }
+                    if (!already) {
+                        if (ncaps >= ccaps) {
+                            ccaps = (ccaps == 0) ? 8 : ccaps * 2;
+                            caps = (Binding **)realloc(caps, ccaps * sizeof(Binding *));
+                        }
+                        caps[ncaps++] = db;
+                    }
+                }
+                break;
+            }
             default:
                 break;
         }
@@ -1752,6 +1790,21 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* Return the result variable as a pointer */
             return strdup(result_var);
         }
+        /* Phase S4: throw / try-catch */
+        case EX_THROW: {
+            /* In compiled code, throw maps to panic (uncatchable at C level).
+             * Full compiled try/catch machinery is not yet implemented. */
+            char *val = emit_value(ctx, body, e->as.throw_.value);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "/* throw */ (void)(%s); abort();\n", val);
+            free(val);
+            return fresh_tmp(ctx);  /* unreachable, but type-check needs a value */
+        }
+        case EX_TRY_CATCH: {
+            /* In compiled code, emit only the body (no catch machinery yet).
+             * Uncaught panics will still abort at the C level. */
+            return emit_value(ctx, body, e->as.try_catch_.body);
+        }
         case EX_PANIC_PAYLOAD_TYPE: {
             const Expr *payload = e->as.panic_payload_type_.payload;
             char *payload_var = emit_value(ctx, body, payload);
@@ -1833,8 +1886,12 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 char *clone_fn_str = NULL;
                 char *drop_fn_str  = NULL;
                 char *env_var = NULL;
-                bool has_env = (shift->as.cloneable_shift_.n_live_captures > 0
-                                && ctx->pending_handler_fns != NULL);
+                /* Case 1: the continuation body is trivially `return __value` and ignores
+                 * __env.  Never allocate an env struct here: the live_captures list may
+                 * contain the very binding that is being introduced by the enclosing let
+                 * (i.e., the shift result), which is not yet declared in C at this point.
+                 * Passing NULL for the env is correct — __cont_fn_N ignores it. */
+                bool has_env = false;
                 if (has_env) {
                     /* Emit a struct with one field per live capture */
                     Buf *hb = ctx->pending_handler_fns;
@@ -3616,6 +3673,24 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
 
                 ctx->tmp_n = bctx.tmp_n;
 
+                /* Emit defer thunks registered during handle body emission.
+                 * They were queued on bctx but not yet flushed. Emit them to
+                 * inner_pending so they appear before the body function in hbuf. */
+                if (bctx.pending_defer_thunks != ctx->pending_defer_thunks) {
+                    /* Extract only the NEW thunks (those prepended during body emit) */
+                    DeferThunk *new_thunks = bctx.pending_defer_thunks;
+                    if (new_thunks) {
+                        DeferThunk *p = new_thunks;
+                        while (p->next != ctx->pending_defer_thunks) p = p->next;
+                        p->next = NULL;  /* terminate new-thunks list */
+                        /* Use bctx so name_for_binding resolves handle captures correctly */
+                        EmitCtx thunk_ctx = bctx;
+                        thunk_ctx.pending_defer_thunks = new_thunks;
+                        emit_pending_defer_thunks(&thunk_ctx, &inner_pending);
+                        /* emit_pending_defer_thunks freed the new thunks; ctx unchanged */
+                    }
+                }
+
                 /* Flush nested pending handler fns before the body function */
                 if (inner_pending.len > 0) {
                     buf_write(hbuf, inner_pending.data, inner_pending.len);
@@ -4184,6 +4259,13 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_CATCH_UNWIND:
         case EX_CATCH_PANIC_OF: {
             /* These produce values but also have side effects (setting up handlers) */
+            char *v = emit_value(ctx, body, e);
+            free(v);
+            return;
+        }
+        /* Phase S4: throw / try-catch */
+        case EX_THROW:
+        case EX_TRY_CATCH: {
             char *v = emit_value(ctx, body, e);
             free(v);
             return;
@@ -5225,9 +5307,36 @@ int emit_program(Buf *out, const Expr *program) {
             ExternC *ec = e->as.extern_c_.ext;
             /* When HAMT lowering is active, hamt.h is already included and
              * declares all tur_hamt_* functions; skip conflicting extern decls. */
+            /* Also suppress redeclarations of C stdlib functions already in the preamble. */
+            /* Functions declared in the runtime preamble (emit_runtime_preamble) or
+             * via headers always included (<stdio.h>, <stdlib.h>).
+             * Suppress redeclarations to avoid conflicting-types errors. */
+            static const char *preamble_decls[] = {
+                /* explicit extern decls in preamble */
+                "malloc","calloc","free","abort","atexit",
+                "memset","memmove","memcpy","memcmp","strcmp","strlen","strcpy","strncpy","strcat","strncat","strstr","strchr","strrchr","strdup",
+                /* <stdio.h> */
+                "printf","fprintf","sprintf","snprintf","scanf","sscanf","fscanf",
+                "fopen","fclose","fread","fwrite","fseek","ftell","fflush","rewind",
+                "puts","putchar","getchar","putc","getc","fputc","fgetc","fputs","fgets",
+                "perror","clearerr","feof","ferror","remove","rename","tmpfile",
+                /* <stdlib.h> */
+                "exit","getenv","putenv","system","rand","srand","bsearch","qsort",
+                "atoi","atol","atof","strtol","strtoul","strtod",
+                NULL
+            };
+            bool suppress_ec = false;
             if (g_needs_hamt && strncmp(ec->c_name->name, "tur_hamt_", 9) == 0) {
-                /* Suppress: declared by #include "hamt.h" */
+                suppress_ec = true; /* Suppress: declared by #include "hamt.h" */
             } else {
+                for (int si = 0; preamble_decls[si]; si++) {
+                    if (strcmp(ec->c_name->name, preamble_decls[si]) == 0) {
+                        suppress_ec = true; /* Suppress: already in preamble */
+                        break;
+                    }
+                }
+            }
+            if (!suppress_ec) {
             char *ec_mangled = mangle_field_name(ec->c_name->name);
             buf_printf(&extern_decls, "extern %s %s(",
                        type_c_name(ec->return_type),
@@ -5305,9 +5414,9 @@ int emit_program(Buf *out, const Expr *program) {
     /* Phase 20-21: Software Transactional Memory */
     buf_puts(out, "#include <stdlib.h>\n");
     buf_puts(out, "#include <stdbool.h>\n");
+    buf_puts(out, "#include <string.h>\n");
     /* Phase X3: Set literal runtime — sorted-array representation (Option A, v1) */
     buf_puts(out, "/* Phase X3: tur_set_t — sorted int64_t array */\n");
-    buf_puts(out, "extern void *memcpy(void *, const void *, size_t);\n");
     buf_puts(out, "typedef struct { int64_t *items; uint32_t n; } tur_set_t;\n");
     buf_puts(out, "static int __tur_set_cmp(const void *a, const void *b) {\n");
     buf_puts(out, "    int64_t x = *(const int64_t *)a, y = *(const int64_t *)b;\n");
@@ -5548,20 +5657,9 @@ int emit_program(Buf *out, const Expr *program) {
     /* Phase T21: ucontext.h was moved to the very top (before setjmp.h/pthread.h)
      * to prevent macOS include-guard aliasing of the small 56-byte ucontext_t.
      * Nothing to emit here any more. */
-    /* Phase 5: Declare malloc and free for ref<T> without including stdlib.h
-     * to avoid conflicts with user-declared functions like exit. */
-    buf_puts(out, "extern void *malloc(size_t);\n");
-    buf_puts(out, "extern void *calloc(size_t, size_t);\n");
-    buf_puts(out, "extern void free(void *);\n");
-    /* Phase 9: Declare abort and memset for rc<T> support */
-    buf_puts(out, "extern void abort(void);\n");
-    /* Phase M5: atexit for module-level defer */
-    buf_puts(out, "extern int atexit(void (*)(void));\n");
-    buf_puts(out, "extern void *memset(void *, int, size_t);\n");
-    buf_puts(out, "extern void *memmove(void *, const void *, size_t);\n");
-    buf_puts(out, "extern void *memcpy(void *, const void *, size_t);\n");
-    /* Phase 19: strcmp for effect handler name matching */
-    buf_puts(out, "extern int strcmp(const char *, const char *);\n");
+    /* Phase 5/9/M5/19: stdlib.h and string.h are included above; no need for
+     * explicit extern declarations of malloc/calloc/free/abort/atexit/memset/
+     * memmove/memcpy/strcmp — they are provided by the standard headers. */
     /* Phase T24: Headers for timer wheel, async I/O, and networking.
      * sys/select.h, sys/socket.h, netinet/in.h, arpa/inet.h were moved to the
      * very top (before ucontext.h) to prevent BSD-extension suppression. */

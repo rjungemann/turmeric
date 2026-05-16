@@ -557,6 +557,16 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
             if (!borrow_check_expr_recursive(ctx, e->as.tvar_cas_.old_val)) return false;
             if (!borrow_check_expr_recursive(ctx, e->as.tvar_cas_.new_val)) return false;
             return true;
+        /* Phase S4: throw / try-catch */
+        case EX_THROW:
+            return borrow_check_expr_recursive(ctx, e->as.throw_.value);
+        case EX_TRY_CATCH: {
+            if (!borrow_check_expr_recursive(ctx, e->as.try_catch_.body)) return false;
+            for (uint32_t i = 0; i < e->as.try_catch_.n_catches; i++) {
+                if (!borrow_check_expr_recursive(ctx, e->as.try_catch_.catch_handlers[i])) return false;
+            }
+            return true;
+        }
         /* Phase 21: Serializable continuations — borrow rules same as reset/shift */
         case EX_SERIAL_RESET:
             return borrow_check_expr_recursive(ctx, e->as.serial_reset_.body);

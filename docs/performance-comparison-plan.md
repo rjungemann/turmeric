@@ -19,13 +19,13 @@ This document outlines a plan for conducting performance comparisons between fiv
 
 ## Languages and Versions
 
-| Language | Version | Implementation | Notes |
-|----------|---------|----------------|-------|
-| C | C17/C23 | clang/gcc | Baseline for compiled performance |
-| Turmeric | latest | Custom | Primary subject of comparison |
-| Clojure | 1.11+ | JVM | Functional, dynamic, hosted |
-| Racket | 8.11+ | Chez Scheme | Functional, dynamic, with JIT |
-| Python | 3.11+ | CPython | Dynamic, interpreted |
+| Language | Version | Implementation | Binary / Invocation | Notes |
+|----------|---------|----------------|---------------------|-------|
+| C | C17/C23 | Apple clang 17.0.0 | `clang` | Baseline for compiled performance |
+| Turmeric | latest | Custom | `build-rel/tur` (local release build) | Primary subject of comparison |
+| Clojure | 1.12.5 | JVM (Clojure CLI) | `clojure` | Functional, dynamic, hosted |
+| Racket | 9.1 | Chez Scheme | `racket` | Functional, dynamic, with JIT |
+| Python | 3.13.1 | CPython (pyenv) | `python3` | Dynamic, interpreted |
 
 ---
 
@@ -274,6 +274,36 @@ performance-comparison/
 
 ---
 
+## Compiled Binary Size Comparison
+
+For languages that can compile to a standalone binary (C, Turmeric, and Racket via `raco exe`), measure the output binary size as an additional dimension of comparison.
+
+| Language | Compilation Method | Notes |
+|----------|--------------------|-------|
+| C | `clang -O3 -o binary source.c` | Baseline; typically very small |
+| Turmeric | `tur build` | Primary subject |
+| Racket | `raco exe` + `raco distribute` | Bundles runtime; larger output |
+
+Clojure and Python are excluded as they do not produce self-contained native binaries (Clojure produces JARs requiring JVM; Python requires the interpreter).
+
+### Metrics
+
+- **Strip size**: Size of binary after `strip` (removes debug symbols)
+- **Debug size**: Size of unstripped binary
+- **Static vs. dynamic linking**: Note whether the binary links libc and other libs statically or dynamically
+- **Compression ratio**: `gzip -9` size as a proxy for code density
+
+### Tasks to Measure
+
+Use a representative subset of benchmarks (e.g., Fibonacci, prime sieve, matrix multiplication) so binary size reflects realistic program complexity, not just a "hello world" baseline.
+
+### Output
+
+- `results/binary_size.json` - Raw size measurements per language and task
+- Include binary size as a column in `analysis/comparison.md`
+
+---
+
 ## Questions to Answer
 
 1. How does Turmeric compare to C for systems programming tasks?
@@ -283,6 +313,7 @@ performance-comparison/
 5. Which language has the most predictable performance characteristics?
 6. Are there tasks where dynamic typing provides performance benefits?
 7. How does immutability impact performance in functional languages?
+8. How do compiled binary sizes compare across C, Turmeric, and Racket?
 
 ---
 
