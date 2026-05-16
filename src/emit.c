@@ -2724,8 +2724,9 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* (@ expr) - dereference ref<T>, rc<T>, ptr<T>, &T, or &mut T */
             char *inner = emit_value(ctx, body, e->as.deref_.expr);
             
-            /* For ref<T>, we need to cast and dereference */
-            if (e->as.deref_.expr->type.kind == TY_REF) {
+            /* For ref<T> / lref<T>, we need to cast and dereference */
+            if (e->as.deref_.expr->type.kind == TY_REF
+                || e->as.deref_.expr->type.kind == TY_LREF) {
                 char *inner_type_c = strdup(type_c_name(e->type));
                 char *tmp = fresh_tmp(ctx);
                 indent_buf(body, ctx->indent);
@@ -5094,7 +5095,8 @@ int emit_program(Buf *out, const Expr *program) {
                     case TY_PTR_VOID: ctype = "void *"; break;
                     case TY_RC:
                     case TY_WEAK:     ctype = "RcControlBlock *"; break;
-                    case TY_REF:      ctype = "void *"; break;
+                    case TY_REF:
+                    case TY_LREF:     ctype = "void *"; break;
                     /* Phase N6: new numeric field types */
                     case TY_INT8:     ctype = "int8_t"; break;
                     case TY_INT16:    ctype = "int16_t"; break;
@@ -5126,7 +5128,7 @@ int emit_program(Buf *out, const Expr *program) {
                     } else if (f->kind == TY_WEAK) {
                         buf_printf(&early_file, "    if (s->%s) rc_weak_decrement(s->%s);\n",
                                    mfn, mfn);
-                    } else if (f->kind == TY_REF) {
+                    } else if (f->kind == TY_REF || f->kind == TY_LREF) {
                         buf_printf(&early_file, "    if (s->%s) free(s->%s);\n",
                                    mfn, mfn);
                     }
@@ -5157,7 +5159,8 @@ int emit_program(Buf *out, const Expr *program) {
                         case TY_PTR_VOID: ctype = "void *"; break;
                         case TY_RC:
                         case TY_WEAK:     ctype = "RcControlBlock *"; break;
-                        case TY_REF:      ctype = "void *"; break;
+                        case TY_REF:
+                        case TY_LREF:     ctype = "void *"; break;
                         case TY_INT8:     ctype = "int8_t"; break;
                         case TY_INT16:    ctype = "int16_t"; break;
                         case TY_INT32:    ctype = "int32_t"; break;
@@ -5192,7 +5195,8 @@ int emit_program(Buf *out, const Expr *program) {
                         case TY_PTR_VOID: ctype = "void *"; break;
                         case TY_RC:
                         case TY_WEAK:     ctype = "RcControlBlock *"; break;
-                        case TY_REF:      ctype = "void *"; break;
+                        case TY_REF:
+                        case TY_LREF:     ctype = "void *"; break;
                         case TY_INT8:     ctype = "int8_t"; break;
                         case TY_INT16:    ctype = "int16_t"; break;
                         case TY_INT32:    ctype = "int32_t"; break;

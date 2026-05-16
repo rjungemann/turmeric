@@ -1,0 +1,9 @@
+;; LT2: (-> ^linear int int) function type annotation.
+;; apply-linear receives a function that consumes its int argument once.
+(defn apply-linear [f : (-> ^linear int int)  n] :int
+  (f n))
+
+(defn twice [^linear x] :int
+  (* x 2))
+
+(println (apply-linear twice 7))

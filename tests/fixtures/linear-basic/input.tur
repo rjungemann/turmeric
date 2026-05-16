@@ -1,0 +1,4 @@
+;; LT1: basic ^linear annotation on a let binding.
+;; The binding must be used exactly once; using it via println satisfies that.
+(let [^linear x 42]
+  (println x))

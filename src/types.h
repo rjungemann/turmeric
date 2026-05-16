@@ -254,6 +254,7 @@ typedef struct Type {
              * arg_full_types[i] is NULL for monomorphic args, non-NULL for poly. */
             struct Type **arg_full_types;
             struct Type  *result_full_type; /* NULL or full result type for poly results */
+            bool arg_linear[MAX_FN_ARITY]; /* LT2: true if the i-th param is ^linear */
         } fn;
         /* Phase 5: ref<T> stores the inner type T */
         struct {
@@ -360,6 +361,17 @@ static inline bool type_is_sync(Type t) {
     return type_is_send(t);
 }
 
+/* LT0: Predicate helpers for ownership/linearity classification */
+static inline bool ty_is_linear(Type t) {
+    return t.copy_kind == CK_LINEAR;
+}
+static inline bool ty_is_move(Type t) {
+    return t.copy_kind == CK_MOVE;
+}
+static inline bool ty_is_copy(Type t) {
+    return t.copy_kind == CK_COPY;
+}
+
 /* Convert TypeKind to string representation for debugging */
 const char *typekind_to_string(TypeKind k);
 
@@ -404,6 +416,16 @@ static inline Type type_ref(TypeKind inner) {
     return t;
 }
 
+/* LT3: lref<T> type constructor — linear owning pointer */
+static inline Type type_lref(TypeKind inner) {
+    Type t;
+    t.kind = TY_LREF;
+    t.copy_kind = CK_LINEAR;  /* lref<T> is exactly-once */
+    t.as.ref.inner = inner;
+    t.n_lifetimes = 0;
+    return t;
+}
+
 /* Phase 9: rc<T> type constructor */
 static inline Type type_rc(TypeKind inner) {
     Type t;
@@ -440,6 +462,7 @@ static inline Type type_fn(TypeKind arg_kinds[], uint8_t arity, TypeKind result_
     t.as.fn.effect_row = NULL;
     t.as.fn.arg_full_types = NULL;
     t.as.fn.result_full_type = NULL;
+    for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_linear[i] = false;
     return t;
 }
 
