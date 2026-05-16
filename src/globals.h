@@ -47,3 +47,6 @@ extern bool g_linear_enabled;
 
 /* UT0: -Xunique-types flag -- enable uniqueness type checking */
 extern bool g_unique_enabled;
+
+/* ST0: -Xsubstructural flag — enable substructural type checking (implies -Xlinear) */
+extern bool g_substructural_enabled;

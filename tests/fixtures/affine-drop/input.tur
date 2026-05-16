@@ -1,0 +1,5 @@
+;; ST1: an ^affine value may be silently dropped (weakening is allowed).
+;; Unlike relevant types, there is no error when an affine value goes unused.
+(defn main [] :int
+  (let [^affine x 42]
+    0))

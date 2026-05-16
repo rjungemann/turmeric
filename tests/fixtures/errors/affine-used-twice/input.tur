@@ -1,0 +1,4 @@
+;; ST1 E0150: affine value used more than once.
+;; k is annotated ^affine but referenced twice, violating the no-contraction rule.
+(let [^affine k 99]
+  (+ k k))

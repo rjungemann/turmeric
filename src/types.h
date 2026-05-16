@@ -23,6 +23,20 @@ typedef enum CopyKind {
 } CopyKind;
 /* UT0: backward-compat alias — all former CK_MOVE sites now mean CK_UNIQUE */
 #define CK_MOVE CK_UNIQUE
+
+/* ST0: Substructural type discipline.
+ * Controls which structural rules (weakening, contraction) apply to a value.
+ *   SK_STRUCTURAL -- default: weakening + contraction both allowed
+ *   SK_AFFINE     -- no contraction: can be discarded, cannot be duplicated
+ *   SK_RELEVANT   -- no weakening: must be used, can be duplicated
+ *   SK_LINEAR     -- no weakening, no contraction: use exactly once
+ * SK_STRUCTURAL == 0 so zero-initialised Types are structural by default. */
+typedef enum SubstructKind {
+    SK_STRUCTURAL = 0,  /* Default: weakening + contraction both allowed */
+    SK_AFFINE,          /* No contraction: can discard, cannot duplicate */
+    SK_RELEVANT,        /* No weakening: must use, can duplicate */
+    SK_LINEAR,          /* No weakening, no contraction: use exactly once */
+} SubstructKind;
 /* Phase HKT (v2, stub): Kind annotations for higher-kinded type support.
  * In v1 all types have kind KIND_STAR; KIND_ARROW is reserved for future use.
  * The hkt_kind field on Type is always KIND_STAR in v1 and ignored by all
@@ -232,6 +246,8 @@ typedef struct Type {
     TypeKind kind;
     /* Phase 11: Copy/Move trait */
     CopyKind copy_kind;
+    /* ST0: Substructural discipline (SK_STRUCTURAL by default) */
+    SubstructKind substruct;
     /* Phase 13: Lifetime annotations */
     /* Lifetimes attached to this type (for &T, &mut T, function types with lifetime params) */
     LifetimeId lifetimes[MAX_TYPE_LIFETIMES];
@@ -259,6 +275,8 @@ typedef struct Type {
             bool arg_linear[MAX_FN_ARITY];     /* LT2: true if the i-th param is ^linear */
             bool arg_unique[MAX_FN_ARITY];     /* UT0: true if the i-th param is ^unique */
             bool arg_unique_mut[MAX_FN_ARITY]; /* UT2: true if the i-th param is ^unique ^mut */
+            bool arg_affine[MAX_FN_ARITY];     /* ST0: true if the i-th param is ^affine */
+            bool arg_relevant[MAX_FN_ARITY];   /* ST0: true if the i-th param is ^relevant */
         } fn;
         /* Phase 5: ref<T> stores the inner type T */
         struct {
@@ -380,6 +398,16 @@ static inline bool ty_is_move(Type t) {
 static inline bool ty_is_copy(Type t) {
     return t.copy_kind == CK_COPY;
 }
+/* ST0: Substructural discipline predicates */
+static inline bool ty_is_affine(Type t) {
+    return t.substruct == SK_AFFINE;
+}
+static inline bool ty_is_relevant(Type t) {
+    return t.substruct == SK_RELEVANT;
+}
+static inline bool ty_is_sublinear(Type t) {
+    return t.substruct == SK_LINEAR;
+}
 
 /* Convert TypeKind to string representation for debugging */
 const char *typekind_to_string(TypeKind k);
@@ -429,7 +457,8 @@ static inline Type type_ref(TypeKind inner) {
 static inline Type type_lref(TypeKind inner) {
     Type t;
     t.kind = TY_LREF;
-    t.copy_kind = CK_LINEAR;  /* lref<T> is exactly-once */
+    t.copy_kind = CK_LINEAR;    /* lref<T> is exactly-once */
+    t.substruct  = SK_LINEAR;   /* ST0: lref<T> has the linear substructural discipline */
     t.as.ref.inner = inner;
     t.n_lifetimes = 0;
     return t;
@@ -475,6 +504,8 @@ static inline Type type_fn(TypeKind arg_kinds[], uint8_t arity, TypeKind result_
     for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_linear[i] = false;
     for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_unique[i] = false;
     for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_unique_mut[i] = false;
+    for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_affine[i] = false;
+    for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_relevant[i] = false;
     return t;
 }
 

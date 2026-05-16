@@ -34,6 +34,9 @@ extern bool g_linear_enabled;
 /* UT0: Uniqueness types feature flag */
 extern bool g_unique_enabled;
 
+/* ST0: Substructural types feature flag */
+extern bool g_substructural_enabled;
+
 #define ELAB_MAX_MACRO_EXPANSION_DEPTH 256
 
 /* Helper to create a Type from TypeKind. */
@@ -569,6 +572,9 @@ typedef struct Elab {
     const Symbol *sym_caret_linear;     /* ^linear — linear value annotation */
     /* UT0: Uniqueness types */
     const Symbol *sym_caret_unique;     /* ^unique -- unique value annotation */
+    /* ST0: Substructural types */
+    const Symbol *sym_caret_affine;     /* ^affine -- affine value annotation */
+    const Symbol *sym_caret_relevant;   /* ^relevant -- relevant value annotation */
     const Symbol *sym_map_new;    /* map-new - create new map */
     const Symbol *sym_assoc;      /* assoc - insert/update key-value */
     const Symbol *sym_dissoc;     /* dissoc - delete key */
@@ -1147,6 +1153,9 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_caret_linear = intern_cstr(st, "^linear");
     /* UT0: Uniqueness types */
     e->sym_caret_unique = intern_cstr(st, "^unique");
+    /* ST0: Substructural types */
+    e->sym_caret_affine    = intern_cstr(st, "^affine");
+    e->sym_caret_relevant  = intern_cstr(st, "^relevant");
     e->sym_map_new = intern_cstr(st, "map-new");
     e->sym_assoc = intern_cstr(st, "assoc");
     e->sym_dissoc = intern_cstr(st, "dissoc");
@@ -1601,7 +1610,8 @@ static bool form_contains_ct_builtins(Form *f) {
                     ct_symbol_name(head, "empty?") ||
                     ct_symbol_name(head, "list?") ||
                     ct_symbol_name(head, "cons") ||
-                    ct_symbol_name(head, "list")) {
+                    ct_symbol_name(head, "list") ||
+                    ct_symbol_name(head, "vec")) {
                     return true;
                 }
             }
@@ -1694,6 +1704,11 @@ static CtValue ct_eval_builtin(CtEnv *env, const Symbol *name, Form **args, uint
         Form **items = (n_args == 0) ? NULL : (Form **)arena_alloc(env->elab->arena, n_args * sizeof(Form *));
         for (uint32_t i = 0; i < n_args; i++) items[i] = args[i];
         return ct_value_form(form_list(env->elab->arena, span, items, n_args));
+    }
+    if (ct_symbol_name(name, "vec")) {
+        Form **items = (n_args == 0) ? NULL : (Form **)arena_alloc(env->elab->arena, n_args * sizeof(Form *));
+        for (uint32_t i = 0; i < n_args; i++) items[i] = args[i];
+        return ct_value_form(form_vec(env->elab->arena, span, items, n_args));
     }
     if (ct_symbol_name(name, "=")) {
         if (n_args != 2) { *env->ok = false; diag_emit(DIAG_ERROR, span, "compile-time = expects 2 arguments"); return ct_value_form(form_bool(env->elab->arena, span, false)); }
@@ -3278,9 +3293,11 @@ static Expr *elab_let(Elab *e, const Form *call) {
         bool is_persistent = false;
         bool is_linear_ann = false;
         bool is_unique_ann = false;
-        /* Phase P3 / LT0 / UT0 / UT2: Consume binding annotations in any order.
-         * Accepted: ^mut, ^persistent, ^linear, ^unique -- may appear in any
-         * combination before the binding name, e.g. [^unique ^mut v ...]. */
+        bool is_affine_ann = false;   /* ST0 */
+        bool is_relevant_ann = false; /* ST0 */
+        /* Phase P3 / LT0 / UT0 / UT2 / ST0: Consume binding annotations in any order.
+         * Accepted: ^mut, ^persistent, ^linear, ^unique, ^affine, ^relevant -- may
+         * appear in any combination before the binding name, e.g. [^affine v ...]. */
         {
             bool keep_going = true;
             while (keep_going && cur->tag == F_SYM) {
@@ -3292,6 +3309,10 @@ static Expr *elab_let(Elab *e, const Form *call) {
                     is_linear_ann = true;
                 } else if (cur->as.sym == e->sym_caret_unique) {
                     is_unique_ann = true;
+                } else if (cur->as.sym == e->sym_caret_affine) {
+                    is_affine_ann = true;
+                } else if (cur->as.sym == e->sym_caret_relevant) {
+                    is_relevant_ann = true;
                 } else {
                     break; /* Not an annotation -- this is the binding name */
                 }
@@ -3383,11 +3404,54 @@ static Expr *elab_let(Elab *e, const Form *call) {
             b->is_unique = true;
             b->type.copy_kind = CK_UNIQUE;
         }
+        /* ST0: Mark binding as affine if annotated with ^affine */
+        if (is_affine_ann) {
+            b->is_affine = true;
+            b->type.substruct = SK_AFFINE;
+        }
+        /* ST0: Mark binding as relevant if annotated with ^relevant */
+        if (is_relevant_ann) {
+            b->is_relevant = true;
+            b->type.substruct = SK_RELEVANT;
+        }
         /* UT1: Propagate is_unique through ownership transfer (let [y x] where x is ^unique) */
         if (g_unique_enabled && !is_unique_ann &&
             init->kind == EX_VAR && init->as.var.binding->is_unique) {
             b->is_unique = true;
             /* copy_kind is already CK_UNIQUE, inherited from init->type */
+        }
+        /* ST1: Propagate affine/relevant through ownership transfer (let [y x] where x is ^affine/^relevant) */
+        if (g_substructural_enabled && !is_affine_ann && !is_relevant_ann &&
+                init->kind == EX_VAR) {
+            Binding *src = init->as.var.binding;
+            if (src->is_affine) {
+                b->is_affine = true;
+                b->type.substruct = SK_AFFINE;
+            }
+            if (src->is_relevant) {
+                b->is_relevant = true;
+                b->type.substruct = SK_RELEVANT;
+            }
+        }
+        /* ST3: Propagate affine/relevant through expression type (e.g. from must-use macro
+         * returning an EX_LET whose type carries SK_RELEVANT). Only fires when not already
+         * set by the EX_VAR propagation above. */
+        if (g_substructural_enabled && !is_affine_ann && !is_relevant_ann &&
+                !b->is_affine && !b->is_relevant && init->kind != EX_VAR) {
+            if (init->type.substruct == SK_RELEVANT) {
+                b->is_relevant = true;
+                b->type.substruct = SK_RELEVANT;
+            } else if (init->type.substruct == SK_AFFINE) {
+                b->is_affine = true;
+                b->type.substruct = SK_AFFINE;
+            }
+        }
+        /* ST2: Under -Xsubstructural, ref<T> bindings are inferred as SK_LINEAR
+         * unless an explicit substructural annotation is already present. */
+        if (g_substructural_enabled && !is_linear_ann && !is_affine_ann && !is_relevant_ann
+                && !b->is_linear && init && init->type.kind == TY_REF) {
+            b->is_linear = true;
+            b->type.substruct = SK_LINEAR;
         }
         scope_add(&inner, b);
 
@@ -3429,8 +3493,10 @@ static Expr *elab_let(Elab *e, const Form *call) {
     bool has_ref_bindings = false;
     for (uint32_t k = 0; k < n_binds; k++) {
         /* Skip refs that come from ref/from-rc - they don't own the data */
+        /* ST2: Skip refs that are marked linear — LT1 scope-exit check handles those */
         if (binds[k].binding->type.kind == TY_REF &&
-            binds[k].init->kind != EX_REF_FROM_RC) {
+            binds[k].init->kind != EX_REF_FROM_RC &&
+            !binds[k].binding->is_linear) {
             has_ref_bindings = true;
             break;
         }
@@ -3480,10 +3546,12 @@ static Expr *elab_let(Elab *e, const Form *call) {
             for (uint32_t k = 0; k < n_binds; k++) {
                 /* Skip refs that come from ref/from-rc - they don't own the data */
                 /* Skip refs that were moved during init or body elaboration - avoid use-after-move defer */
+                /* ST2: Skip linear refs — LT1 scope-exit check enforces they are consumed explicitly */
                 if (binds[k].binding->type.kind == TY_REF &&
                     binds[k].init->kind != EX_REF_FROM_RC &&
                     !binding_moved_during_init[k] &&
-                    !binds[k].binding->is_moved) {
+                    !binds[k].binding->is_moved &&
+                    !binds[k].binding->is_linear) {
                     n_refs++;
                 }
             }
@@ -3505,10 +3573,12 @@ static Expr *elab_let(Elab *e, const Form *call) {
                 for (uint32_t k = 0; k < n_binds; k++) {
                     /* Skip refs that come from ref/from-rc - they don't own the data */
                     /* Skip refs moved during init or body elaboration - avoid use-after-move defer */
+                    /* ST2: Skip linear refs — they must be consumed explicitly; LT1 enforces this */
                     if (binds[k].binding->type.kind == TY_REF &&
                         binds[k].init->kind != EX_REF_FROM_RC &&
                         !binding_moved_during_init[k] &&
-                        !binds[k].binding->is_moved) {
+                        !binds[k].binding->is_moved &&
+                        !binds[k].binding->is_linear) {
                         /* Create (defer (drop! binding_name)) expression */
                         /* Create a variable reference to the binding */
                         Expr *var_expr = expr_new(e->arena, EX_VAR, binds[k].binding->type, call->span);
@@ -3658,6 +3728,20 @@ static Expr *elab_let(Elab *e, const Form *call) {
                 diag_emit_with_code(DIAG_ERROR, lb->span,
                                     TUR_E0100_LINEAR_DROPPED,
                                     "linear value '%s' dropped without being consumed",
+                                    lb->name->name);
+                rc = -1;
+            }
+        }
+    }
+
+    /* ST1: At scope exit, verify all relevant bindings were used at least once */
+    if (g_substructural_enabled && rc == 0) {
+        for (uint32_t k = 0; k < n_binds; k++) {
+            Binding *lb = binds[k].binding;
+            if (lb->is_relevant && lb->usage_state == USAGE_UNUSED && !lb->is_moved) {
+                diag_emit_with_code(DIAG_ERROR, lb->span,
+                                    TUR_E0151_RELEVANT_DROPPED,
+                                    "relevant value '%s' dropped without being used",
                                     lb->name->name);
                 rc = -1;
             }
@@ -6042,6 +6126,9 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     bool next_param_unique = false;
     /* UT2: ^mut annotation applies to the next parameter */
     bool next_param_mut = false;
+    /* ST0: ^affine / ^relevant annotations apply to the next parameter */
+    bool next_param_affine    = false;
+    bool next_param_relevant  = false;
 
     for (uint32_t i = 0; i < params_f->as.list.len; i++) {
         Form *p = params_f->as.list.items[i];
@@ -6101,6 +6188,18 @@ static Expr *elab_defn(Elab *e, const Form *call) {
         /* UT2: ^mut annotation marks the next parameter as mutable (used with ^unique ^mut) */
         if (p->tag == F_SYM && p->as.sym == e->sym_caret_mut) {
             next_param_mut = true;
+            continue;
+        }
+
+        /* ST0: ^affine annotation marks the next parameter as affine (no duplication) */
+        if (p->tag == F_SYM && p->as.sym == e->sym_caret_affine) {
+            next_param_affine = true;
+            continue;
+        }
+
+        /* ST0: ^relevant annotation marks the next parameter as relevant (must be used) */
+        if (p->tag == F_SYM && p->as.sym == e->sym_caret_relevant) {
+            next_param_relevant = true;
             continue;
         }
 
@@ -6204,6 +6303,16 @@ static Expr *elab_defn(Elab *e, const Form *call) {
             if (g_linear_enabled && params[n_params - 1]->type.copy_kind == CK_LINEAR) {
                 params[n_params - 1]->is_linear = true;
             }
+            /* ST2: Under -Xsubstructural, ref<T> params without an explicit discipline
+             * annotation are inferred as SK_LINEAR. */
+            if (g_substructural_enabled
+                    && !params[n_params - 1]->is_linear
+                    && !params[n_params - 1]->is_affine
+                    && !params[n_params - 1]->is_relevant
+                    && params[n_params - 1]->type.kind == TY_REF) {
+                params[n_params - 1]->is_linear = true;
+                params[n_params - 1]->type.substruct = SK_LINEAR;
+            }
             /* UT0: Propagate uniqueness from the type annotation */
             if (g_unique_enabled && next_param_unique) {
                 params[n_params - 1]->is_unique = true;
@@ -6257,6 +6366,18 @@ static Expr *elab_defn(Elab *e, const Form *call) {
             } else if (kw->len == 1 && memcmp(kw->name, "!", 1) == 0) {
                 param_kinds[n_params - 1] = TY_NEVER;
                 params[n_params - 1]->type = TYPE_NEVER;
+            } else if (kw->len == 3 && memcmp(kw->name, "ref", 3) == 0) {
+                /* Phase 5: :ref keyword — owning heap pointer (inner type unknown, use int) */
+                param_kinds[n_params - 1] = TY_REF;
+                params[n_params - 1]->type = type_ref(TY_INT);
+                /* ST2: Under -Xsubstructural, :ref params without an explicit discipline
+                 * annotation are inferred as SK_LINEAR. */
+                if (g_substructural_enabled && !params[n_params - 1]->is_linear
+                        && !params[n_params - 1]->is_affine
+                        && !params[n_params - 1]->is_relevant) {
+                    params[n_params - 1]->is_linear = true;
+                    params[n_params - 1]->type.substruct = SK_LINEAR;
+                }
             } else if (kw->len == 4 && memcmp(kw->name, "lref", 4) == 0) {
                 /* LT3: :lref keyword — linear owning pointer (inner type unknown, use int) */
                 param_kinds[n_params - 1] = TY_LREF;
@@ -6323,6 +6444,18 @@ static Expr *elab_defn(Elab *e, const Form *call) {
         if (next_param_mut) {
             b->is_mut = true;
             next_param_mut = false;
+        }
+        /* ST0: If the previous ^affine annotation applied to this parameter, mark it affine */
+        if (next_param_affine) {
+            b->is_affine = true;
+            b->type.substruct = SK_AFFINE;
+            next_param_affine = false;
+        }
+        /* ST0: If the previous ^relevant annotation applied to this parameter, mark it relevant */
+        if (next_param_relevant) {
+            b->is_relevant = true;
+            b->type.substruct = SK_RELEVANT;
+            next_param_relevant = false;
         }
         if (n_params == 0) {
             params = (Binding **)arena_alloc(e->arena, MAX_FN_ARITY * sizeof(Binding *));
@@ -6528,10 +6661,25 @@ static Expr *elab_defn(Elab *e, const Form *call) {
         }
     }
 
+    /* ST1: At function scope exit, verify all relevant params were used at least once */
+    bool st1_param_fail = false;
+    if (g_substructural_enabled && body) {
+        for (uint8_t _li = 0; _li < n_params; _li++) {
+            if (params[_li]->is_relevant && params[_li]->usage_state == USAGE_UNUSED
+                    && !params[_li]->is_moved) {
+                diag_emit_with_code(DIAG_ERROR, params[_li]->span,
+                                    TUR_E0151_RELEVANT_DROPPED,
+                                    "relevant parameter '%s' dropped without being used",
+                                    params[_li]->name->name);
+                st1_param_fail = true;
+            }
+        }
+    }
+
     /* Pop scope */
     e->scope = inner.parent;
     scope_free(&inner);
-    if (lt1_param_fail) return NULL;
+    if (lt1_param_fail || st1_param_fail) return NULL;
 
     /* Infer return type from body if not specified */
     if (return_kind == TY_NIL && body->type.kind != TY_NIL) {
@@ -6599,6 +6747,30 @@ static Expr *elab_defn(Elab *e, const Form *call) {
         if (any_unique_mut) {
             for (uint8_t i = 0; i < n_params; i++) {
                 fn_type.as.fn.arg_unique_mut[i] = params[i]->is_unique && params[i]->is_mut;
+            }
+        }
+    }
+    /* ST0: Store arg_affine flags from param bindings into fn_type */
+    {
+        bool any_affine = false;
+        for (uint8_t i = 0; i < n_params; i++) {
+            if (params[i]->is_affine) { any_affine = true; break; }
+        }
+        if (any_affine) {
+            for (uint8_t i = 0; i < n_params; i++) {
+                fn_type.as.fn.arg_affine[i] = params[i]->is_affine;
+            }
+        }
+    }
+    /* ST0: Store arg_relevant flags from param bindings into fn_type */
+    {
+        bool any_relevant = false;
+        for (uint8_t i = 0; i < n_params; i++) {
+            if (params[i]->is_relevant) { any_relevant = true; break; }
+        }
+        if (any_relevant) {
+            for (uint8_t i = 0; i < n_params; i++) {
+                fn_type.as.fn.arg_relevant[i] = params[i]->is_relevant;
             }
         }
     }
@@ -9542,6 +9714,25 @@ static Expr *elab_form(Elab *e, Form *f) {
                 /* Mark linear binding as consumed on use */
                 b->is_linear_consumed = true;
             }
+            /* ST1: Substructural usage tracking.
+             * ^affine: may not be used more than once (TUR_E0150).
+             * ^relevant: must be used at least once; duplicates are fine. */
+            if (g_substructural_enabled) {
+                if (b->is_affine) {
+                    if (b->usage_state >= USAGE_USED_ONCE) {
+                        diag_emit_with_code(DIAG_ERROR, f->span,
+                                            TUR_E0150_AFFINE_USED_TWICE,
+                                            "affine value '%s' used more than once",
+                                            b->name->name);
+                        return NULL;
+                    }
+                    b->usage_state = USAGE_USED_ONCE;
+                } else if (b->is_relevant) {
+                    /* Increment usage; any count >= 1 satisfies the must-use requirement */
+                    b->usage_state = (b->usage_state == USAGE_UNUSED) ? USAGE_USED_ONCE
+                                                                       : USAGE_USED_MANY;
+                }
+            }
             Expr *out = expr_new(e->arena, EX_VAR, b->type, f->span);
             out->as.var.binding = b;
             return out;
@@ -10794,7 +10985,21 @@ static Expr *elab_match(Elab *e, const Form *call) {
                     }
                 }
             }
-            if (!body || lt1_arm_fail) { free(covered); return NULL; }
+            /* ST1: Verify all relevant field bindings in this arm were used */
+            bool st1_arm_fail = false;
+            if (g_substructural_enabled && body) {
+                for (uint32_t bi2 = 0; bi2 < n_bindings; bi2++) {
+                    Binding *fb2 = pat->bindings[bi2];
+                    if (fb2->is_relevant && fb2->usage_state == USAGE_UNUSED && !fb2->is_moved) {
+                        diag_emit_with_code(DIAG_ERROR, fb2->span,
+                                            TUR_E0151_RELEVANT_DROPPED,
+                                            "relevant field '%s' dropped without being used in match arm",
+                                            fb2->name->name);
+                        st1_arm_fail = true;
+                    }
+                }
+            }
+            if (!body || lt1_arm_fail || st1_arm_fail) { free(covered); return NULL; }
 
             /* Phase G2: detect skolem escape — arm body result is TY_TYVAR */
             if (adt->is_gadt && body->type.kind == TY_TYVAR) {
@@ -12207,9 +12412,11 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
             uint8_t n_args = 0;
             for (uint32_t _pi = 1; _pi < len - 1; _pi++) {
                 Form *_it = form->as.list.items[_pi];
-                if (_it->tag == F_SYM && _it->as.sym == e->sym_caret_linear) continue;
-                if (_it->tag == F_SYM && _it->as.sym == e->sym_caret_unique) continue;
-                if (_it->tag == F_SYM && _it->as.sym == e->sym_caret_mut)    continue;
+                if (_it->tag == F_SYM && _it->as.sym == e->sym_caret_linear)   continue;
+                if (_it->tag == F_SYM && _it->as.sym == e->sym_caret_unique)   continue;
+                if (_it->tag == F_SYM && _it->as.sym == e->sym_caret_mut)      continue;
+                if (_it->tag == F_SYM && _it->as.sym == e->sym_caret_affine)   continue;
+                if (_it->tag == F_SYM && _it->as.sym == e->sym_caret_relevant) continue;
                 n_args++;
             }
             if (n_args > MAX_FN_ARITY) {
@@ -12223,16 +12430,22 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
             bool arg_linear_local[MAX_FN_ARITY];
             bool arg_unique_local[MAX_FN_ARITY];
             bool arg_unique_mut_local[MAX_FN_ARITY];
+            bool arg_affine_local[MAX_FN_ARITY];    /* ST0 */
+            bool arg_relevant_local[MAX_FN_ARITY];  /* ST0 */
             bool any_poly_arg = false;
             for (uint8_t _ai = 0; _ai < MAX_FN_ARITY; _ai++) arg_linear_local[_ai] = false;
             for (uint8_t _ai = 0; _ai < MAX_FN_ARITY; _ai++) arg_unique_local[_ai] = false;
             for (uint8_t _ai = 0; _ai < MAX_FN_ARITY; _ai++) arg_unique_mut_local[_ai] = false;
+            for (uint8_t _ai = 0; _ai < MAX_FN_ARITY; _ai++) arg_affine_local[_ai] = false;
+            for (uint8_t _ai = 0; _ai < MAX_FN_ARITY; _ai++) arg_relevant_local[_ai] = false;
 
-            /* Pass 2: parse types, tracking ^linear / ^unique / ^mut prefix per arg */
+            /* Pass 2: parse types, tracking ^linear / ^unique / ^mut / ^affine / ^relevant prefix per arg */
             uint8_t arg_idx = 0;
-            bool next_linear = false;
-            bool next_unique = false;
-            bool next_mut    = false;
+            bool next_linear   = false;
+            bool next_unique   = false;
+            bool next_mut      = false;
+            bool next_affine   = false;  /* ST0 */
+            bool next_relevant = false;  /* ST0 */
             for (uint32_t _pi2 = 1; _pi2 < len - 1; _pi2++) {
                 Form *_it2 = form->as.list.items[_pi2];
                 if (_it2->tag == F_SYM && _it2->as.sym == e->sym_caret_linear) {
@@ -12247,6 +12460,15 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
                     next_mut = true;
                     continue;
                 }
+                /* ST0: ^affine and ^relevant prefix annotations */
+                if (_it2->tag == F_SYM && _it2->as.sym == e->sym_caret_affine) {
+                    next_affine = true;
+                    continue;
+                }
+                if (_it2->tag == F_SYM && _it2->as.sym == e->sym_caret_relevant) {
+                    next_relevant = true;
+                    continue;
+                }
                 Type *at = type_expr_from_form(e, _it2,
                                                rec_name, type_params, type_param_kinds, n_type_params);
                 if (!at) return NULL;
@@ -12255,9 +12477,13 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
                 arg_unique_local[arg_idx] = next_unique;
                 /* UT2: ^unique ^mut combination — track as unique_mut */
                 arg_unique_mut_local[arg_idx] = next_unique && next_mut;
-                next_linear = false;
-                next_unique = false;
-                next_mut    = false;
+                arg_affine_local[arg_idx]   = next_affine;    /* ST0 */
+                arg_relevant_local[arg_idx] = next_relevant;  /* ST0 */
+                next_linear   = false;
+                next_unique   = false;
+                next_mut      = false;
+                next_affine   = false;   /* ST0 */
+                next_relevant = false;   /* ST0 */
                 /* Type variables (TY_STRUCT with def=NULL) and quantified types
                  * are represented as TY_INT (int64_t) at the C level. */
                 if (at->kind == TY_STRUCT && at->as.struct_.def == NULL) {
@@ -12332,6 +12558,32 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
                 if (any_uniq_mut) {
                     for (uint8_t i = 0; i < n_args; i++) {
                         fn_t->as.fn.arg_unique_mut[i] = arg_unique_mut_local[i];
+                    }
+                }
+            }
+
+            /* ST0: Store arg_affine flags if any were annotated */
+            {
+                bool any_aff = false;
+                for (uint8_t i = 0; i < n_args; i++) {
+                    if (arg_affine_local[i]) { any_aff = true; break; }
+                }
+                if (any_aff) {
+                    for (uint8_t i = 0; i < n_args; i++) {
+                        fn_t->as.fn.arg_affine[i] = arg_affine_local[i];
+                    }
+                }
+            }
+
+            /* ST0: Store arg_relevant flags if any were annotated */
+            {
+                bool any_rel = false;
+                for (uint8_t i = 0; i < n_args; i++) {
+                    if (arg_relevant_local[i]) { any_rel = true; break; }
+                }
+                if (any_rel) {
+                    for (uint8_t i = 0; i < n_args; i++) {
+                        fn_t->as.fn.arg_relevant[i] = arg_relevant_local[i];
                     }
                 }
             }

@@ -1,0 +1,5 @@
+;; ST2 E0100: ref<T> defn param inferred as linear under -Xsubstructural.
+;; The param is never consumed -- must be explicitly dropped.
+(defn ignore-ref [r :ref] :int
+  0)
+(println (ignore-ref (ref 42)))

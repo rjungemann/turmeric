@@ -1,0 +1,6 @@
+;; ST3: must-use macro -- ^relevant allows duplication (used more than once).
+(defn main [] :int
+  (let [r (must-use 7)]
+    (println r)
+    (println r)
+    0))

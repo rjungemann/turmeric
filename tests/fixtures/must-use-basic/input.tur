@@ -1,0 +1,6 @@
+;; ST3: must-use macro wraps a value as ^relevant.
+;; Using the value exactly once satisfies the must-use requirement.
+(defn main [] :int
+  (let [r (must-use 42)]
+    (println r)
+    0))

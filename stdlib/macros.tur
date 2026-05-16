@@ -8,7 +8,7 @@
   (export cond when unless must! must-msg! ignore! do-m for doc
           assert! assert-msg! require! require-msg!
           ensure! ensure-msg! invariant! invariant-msg!
-          curry)
+          curry with-resource must-use)
 
 ;;; cond -- variadic conditional branching via nested if chains.
 ;;;
@@ -352,4 +352,51 @@
     (if (not (= entry 0))
       (println entry)
       (println "No documentation found."))))
+
+;;; with-resource -- bind and safely consume a resource within a scope.
+;;;
+;;; Parameters:
+;;;   binding -- a two-element vector [name init] where init produces the resource
+;;;   & body  -- expressions forming the scope in which the resource is available
+;;;
+;;; Returns:
+;;;   The value of the last body expression.
+;;;
+;;; Example:
+;;;   ;; Under -Xsubstructural, r is inferred as linear (must be consumed):
+;;;   (with-resource [r (ref 42)]
+;;;     (println @r)
+;;;     (drop! r))
+;;;
+;;;   ;; With explicit ^linear annotation:
+;;;   (with-resource [^linear fh (open-file "data.txt")]
+;;;     (close-file fh))
+;;;
+;;; Since: ST3
+(defmacro with-resource [binding & body]
+  (let [bname (first binding)
+        binit (second binding)]
+    (list let `[~bname ~binit] (list do ~@body))))
+
+;;; must-use -- wrap a value to enforce that it is used at least once.
+;;;
+;;; Parameters:
+;;;   expr -- the expression whose value must be used
+;;;
+;;; Returns:
+;;;   The value of expr, annotated as ^relevant (must-use under -Xsubstructural).
+;;;
+;;; Example:
+;;;   ;; Under -Xsubstructural, the result must be observed before scope exit:
+;;;   (let [r (must-use (acquire-resource))]
+;;;     (process r)
+;;;     (process r))  ; OK -- ^relevant allows duplication
+;;;
+;;;   ;; Dropping without use is an error:
+;;;   (let [r (must-use (acquire-resource))]
+;;;     0)            ; ERROR TUR-E0151: relevant value dropped without use
+;;;
+;;; Since: ST3
+(defmacro must-use [expr]
+  (list let (vec (quote ^relevant) (quote __must_use_val) expr) __must_use_val))
 )

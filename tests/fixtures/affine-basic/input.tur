@@ -1,0 +1,5 @@
+;; ST1: basic ^affine annotation on a let binding.
+;; An affine value can be discarded or used at most once.
+;; Using it exactly once is valid.
+(let [^affine x 42]
+  (println x))

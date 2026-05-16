@@ -1,0 +1,19 @@
+;; ST3 integration: all three disciplines in one program.
+;; ^linear (ref<T>): must be consumed exactly once
+;; ^affine: may be dropped; cannot be duplicated
+;; ^relevant: must be used; may be duplicated
+
+(defn consume-affine [^affine x] :int x)
+(defn use-relevant  [^relevant x] :int x)
+
+(defn main [] :int
+  ;; ^linear: ref<T> inferred as linear under -Xsubstructural
+  (let [r (ref 10)]
+    ;; ^affine: may use exactly once
+    (let [^affine a 20]
+      ;; ^relevant: must be used at least once
+      (let [^relevant b 30]
+        ;; @r consumes the linear ref<T>
+        (let [rv @r]
+          (println (+ rv (+ (consume-affine a) (use-relevant b))))
+          0)))))
