@@ -246,16 +246,29 @@ docs/guides/threading-guide.md -- remove v1 limitation note once done
 
 ### Phase SEL1 -- Blocking Select Implementation
 
-**Goal:** Replace the first-channel fallback with true multi-channel blocking.
+**Goal:** Replace the first-channel fallback with true multi-channel blocking,
+covering both `:recv` and `:send` clauses symmetrically.
+
+**Prerequisite tasks (send-side parity):**
+- [ ] Confirm that `tur_chan_recv` signals `send_waiters` after consuming a slot
+      (so a blocked `:send` clause can be woken when space becomes available)
+- [ ] Confirm that `tur_chan_send` signals `recv_waiters` after filling a slot
+      (already planned; verify symmetry is complete)
+- [ ] Ensure `TurSelectClause` carries the clause direction (`:recv` / `:send`)
+      and payload so `tur_select_blocking` can attempt sends as well as recvs
+      during the non-blocking scan
 
 **Tasks:**
 - [ ] Implement `tur_select_blocking(TurSelectClause* clauses, int n)` in
       `chan.c`:
   - Sort clause channel pointers for lock ordering
   - Acquire all locks
-  - Final non-blocking scan; if a clause wins, release locks and return index
+  - Final non-blocking scan across all clauses (both `:recv` and `:send`); if a
+    clause wins, release locks and return index
   - If multiple clauses ready, pick one uniformly at random (xorshift32)
-  - Register one `TurSelectWaiter` per clause; sleep on shared condvar
+  - Register one `TurSelectWaiter` per clause in the appropriate waiter list
+    (`recv_waiters` for `:recv`, `send_waiters` for `:send`); sleep on shared
+    condvar
   - On wakeup, deregister all waiters; return winning index
 - [ ] Update `emit_select` in `emit.c` to emit `tur_select_blocking` call
       when no `:default` arm is present
@@ -263,8 +276,13 @@ docs/guides/threading-guide.md -- remove v1 limitation note once done
   - Two goroutine-style threads each sending to separate channels
   - `select` with no `:default` must receive from whichever thread sends first
   - Assert both channels are eventually selected across many iterations
+- [ ] Add fixture `tests/fixtures/select-send-block/`:
+  - `select` with two `:send` clauses and no `:default`; receivers drain each
+    channel independently
+  - Assert both send channels are eventually selected across many iterations
 
-**Exit Criterion:** `select-fair-block` fixture passes; no regressions.
+**Exit Criterion:** `select-fair-block` and `select-send-block` fixtures pass;
+no regressions.
 
 
 ### Phase SEL2 -- Fairness Verification and Cleanup
@@ -288,20 +306,23 @@ docs/guides/threading-guide.md -- remove v1 limitation note once done
 
 ## Open Questions
 
-1. **Waiter cap:** Should `select` cap the number of clauses (e.g., 64) to
-   bound lock-acquisition cost? Current plan: no cap, document O(N log N)
-   locking behavior.
+1. **Waiter cap:** ~~Should `select` cap the number of clauses (e.g., 64) to
+   bound lock-acquisition cost?~~ **Resolved:** No cap. Document O(N log N)
+   locking behavior in the API reference.
 
-2. **Send-side fairness:** The plan covers `:recv` clauses. `:send` clauses
-   need symmetric `send_waiters` lists. Confirm this is included in SEL1 scope.
+2. **Send-side fairness:** ~~The plan covers `:recv` clauses. `:send` clauses
+   need symmetric `send_waiters` lists. Confirm this is included in SEL1 scope.~~
+   **Resolved:** Included in SEL1. Prerequisite tasks added above.
 
 3. **Cancellation:** If the thread is cancelled (future feature) while sleeping
-   in `tur_select_blocking`, waiters must be deregistered. Pin this to the
-   cancellation design when that feature is planned.
+   in `tur_select_blocking`, waiters must be deregistered. **Deferred:** See
+   `docs/thread-cancellation-plan.md` for the full design. The `select` cleanup
+   path will be addressed there.
 
 4. **WASM:** `pthread_cond_timedwait` is available under Emscripten with
-   `-pthread`. Verify `tur_select_blocking` compiles cleanly for the WASM
-   target before closing SEL2.
+   `-pthread`. **Deferred:** WASM verification is not a hard exit criterion for
+   SEL2. Track as a follow-up once the WASM build is validated with pthreads
+   enabled.
 
 ---
 
