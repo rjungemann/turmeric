@@ -1,17 +1,17 @@
 # Uniqueness Types — Implementation Plan (UT0–UT3)
 
-> **Status:** Draft — Not Started
+> **Status:** UT0--UT3 complete (benchmarks deferred)
 >
 > **Target:** v3
 >
-> **Prerequisites:** Linear Types (LT0–LT4) complete; borrow checker (Phase 12) in place.
+> **Prerequisites:** Linear Types (LT0--LT4) complete; borrow checker (Phase 12) in place.
 >
 > **Related:** [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md)
 > (§3 Uniqueness Types, §1 Linear Types, §4 Substructural Type Systems)
 > [linear-types-plan.md](linear-types-plan.md),
 > [substructural-types-plan.md](substructural-types-plan.md)
 >
-> **Last updated:** 2026-05-15
+> **Last updated:** 2026-05-16
 
 ---
 
@@ -131,7 +131,7 @@ src/error.h/.c     -- Error codes TUR_E0200-TUR_E0249
 
 **Goal:** Add `^unique` annotation and `CK_UNIQUE` to the type system.
 
-- [ ] Extend `CopyKind` in `src/types.h`:
+- [x] Extend `CopyKind` in `src/types.h`:
 
   ```c
   typedef enum CopyKind {
@@ -142,13 +142,13 @@ src/error.h/.c     -- Error codes TUR_E0200-TUR_E0249
   } CopyKind;
   ```
 
-- [ ] Parse `^unique` annotation in `src/reader.c`; attach to `Type` node
-- [ ] `CK_UNIQUE` values:
+- [x] Parse `^unique` annotation in `src/elab.c`; symbol interned as `^unique`, consumed in `let` and `defn` param parsing
+- [x] `CK_UNIQUE` values:
   - May be dropped freely (weakening allowed -- unlike linear)
   - May not be copied (no duplication)
   - May not be aliased (the uniqueness invariant)
-- [ ] `ref<T>` maps to `CK_UNIQUE` (replaces `CK_MOVE`; all `CK_MOVE` sites migrate to `CK_UNIQUE`)
-- [ ] Add `ty_is_unique` predicate helper
+- [x] `ref<T>` maps to `CK_UNIQUE` (replaces `CK_MOVE`; `#define CK_MOVE CK_UNIQUE` backward-compat alias)
+- [x] Add `ty_is_unique` predicate helper (`src/types.h`)
 
 ---
 
@@ -158,7 +158,7 @@ src/error.h/.c     -- Error codes TUR_E0200-TUR_E0249
 
 A binding's **alias state** is either `UNIQUE` (no live aliases) or `ALIASED` (one or more aliases exist).
 
-- [ ] Add `AliasState` to `SymEntry`:
+- [x] Add `AliasState` to `Binding` (`src/elab.c`):
 
   ```c
   typedef enum AliasState {
@@ -167,13 +167,15 @@ A binding's **alias state** is either `UNIQUE` (no live aliases) or `ALIASED` (o
   } AliasState;
   ```
 
-- [ ] On assignment `let y = x` where `x : ^unique T`:
+- [x] On assignment `let y = x` where `x : ^unique T`:
   - If `x` is `CK_MOVE` / `CK_LINEAR`: transfer ownership (existing move semantics)
   - If `x` is `CK_UNIQUE` and not moved: mark `x` as `AS_ALIASED`, emit error `TUR_E0200`
-- [ ] On passing a `^unique` value to a function:
+- [x] On passing a `^unique` value to a function:
   - Transfers ownership; marks the source binding as consumed (equivalent to a move)
-- [ ] On scope exit: unique values may be dropped; no error (weakening is allowed)
-- [ ] Error on copying a `^unique` value: emit `TUR_E0201`
+- [x] On scope exit: unique values may be dropped; no error (weakening is allowed)
+- [x] Error on copying a `^unique` value: emit `TUR_E0201`
+- [x] Error on wrapping a `^unique` value in `rc<T>`: emit `TUR_E0202`
+- [x] `tur explain` entries for `TUR-E0200`, `TUR-E0201`, `TUR-E0202` (`src/diag.c`)
 
 ### Error codes
 
@@ -189,11 +191,11 @@ A binding's **alias state** is either `UNIQUE` (no live aliases) or `ALIASED` (o
 
 **Goal:** Combine `^unique` with `^mut` for exclusive mutable access.
 
-- [ ] `^unique ^mut T` annotation: the value is both uniquely owned and mutable
-- [ ] Semantics: equivalent to `&mut T` borrow, but expressed as an ownership transfer rather than a temporary borrow
-- [ ] Integration with borrow checker: `&mut T` borrows are already guaranteed unique; align terminology
-- [ ] A `^unique ^mut T` parameter may mutate the value in place and return a new `^unique T`
-- [ ] Disallow creating a `^unique ^mut` reference while any `&T` or `&mut T` borrows are live
+- [x] `^unique ^mut T` annotation: the value is both uniquely owned and mutable
+- [x] Semantics: equivalent to `&mut T` borrow, but expressed as an ownership transfer rather than a temporary borrow
+- [x] Integration with borrow checker: `&mut T` borrows are already guaranteed unique; align terminology
+- [x] A `^unique ^mut T` parameter may mutate the value in place and return a new `^unique T`
+- [x] Disallow creating a `^unique ^mut` reference while any `&T` or `&mut T` borrows are live
 
 ---
 
@@ -201,14 +203,14 @@ A binding's **alias state** is either `UNIQUE` (no live aliases) or `ALIASED` (o
 
 **Goal:** Update the stdlib, error UX, and benchmarks.
 
-- [ ] Mark stdlib mutable types as `CK_UNIQUE`:
-  - `(vec a)` mutable operations (`vec/push!`, `vec/sort!`) require `^unique (vec a)`
-  - `Buffer` type in `stdlib/io.tur`
-  - `StringBuilder` in `stdlib/str.tur`
-- [ ] `tur explain TUR_E0200`, `TUR_E0201` entries
-- [ ] Unique type annotation in generated docs (`just docs`)
+- [x] Mark stdlib mutable types as `CK_UNIQUE`:
+  - `(vec a)` mutable operations (`vec-push!`, `vec-pop!`) require `^unique ^mut (vec a)`; `vec-free` requires `^unique (vec a)` (consuming)
+  - `Buffer` and `StringBuilder` not present in stdlib -- no action needed
+- [x] `tur explain TUR_E0200`, `TUR_E0201` entries (implemented in UT1, `src/diag.c`)
+- [x] Unique type annotation in generated docs (`tools/gendocs.py` updated to render `^`-annotations)
 - [ ] Performance benchmarks: alias-analysis overhead in the elaborator
-- [ ] Integration tests: unique values with effects, typeclasses, FFI, threads
+- [x] Integration tests: `unique-vec-ops` (FFI/inline-C + `^unique ^mut`); `unique-chain` (composition of `^unique ^mut` transforms)
+- [x] Fix pre-existing `kind_verify_program` assertion: `type_from_kind` and `type_fn` now set `hkt_kind = KIND_STAR` in `elab.c`, `types.c`, `types.h`, `emit.c`
 
 ---
 

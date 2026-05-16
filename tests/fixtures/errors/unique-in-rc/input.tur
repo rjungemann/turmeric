@@ -1,0 +1,3 @@
+;; UT1: wrapping a ^unique value in rc<T> violates uniqueness -- TUR_E0202.
+(let [^unique x 42]
+  (rc/of x))

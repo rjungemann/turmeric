@@ -46,3 +46,6 @@ bool g_lint_effects = false;
 
 /* LT0: -Xlinear flag — enable linear type checking */
 bool g_linear_enabled = false;
+
+/* UT0: -Xunique-types flag -- enable uniqueness type checking */
+bool g_unique_enabled = false;

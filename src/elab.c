@@ -31,6 +31,9 @@ extern bool g_gadt_enabled;
 /* LT0: Linear types feature flag */
 extern bool g_linear_enabled;
 
+/* UT0: Uniqueness types feature flag */
+extern bool g_unique_enabled;
+
 #define ELAB_MAX_MACRO_EXPANSION_DEPTH 256
 
 /* Helper to create a Type from TypeKind. */
@@ -42,6 +45,7 @@ static Type type_from_kind(TypeKind k) {
     t.n_lifetimes = 0;  /* Phase 13: no lifetimes by default */
     t.typeclass_instances = NULL;
     t.n_typeclass_instances = 0;
+    t.hkt_kind = KIND_STAR;  /* Phase HKT-P6: all types are kind * in v1 */
     return t;
 }
 
@@ -563,6 +567,8 @@ typedef struct Elab {
     const Symbol *sym_caret_persistent; /* ^persistent — immutable map annotation */
     /* LT0: Linear types */
     const Symbol *sym_caret_linear;     /* ^linear — linear value annotation */
+    /* UT0: Uniqueness types */
+    const Symbol *sym_caret_unique;     /* ^unique -- unique value annotation */
     const Symbol *sym_map_new;    /* map-new - create new map */
     const Symbol *sym_assoc;      /* assoc - insert/update key-value */
     const Symbol *sym_dissoc;     /* dissoc - delete key */
@@ -1139,6 +1145,8 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_caret_persistent = intern_cstr(st, "^persistent");
     /* LT0: Linear types */
     e->sym_caret_linear = intern_cstr(st, "^linear");
+    /* UT0: Uniqueness types */
+    e->sym_caret_unique = intern_cstr(st, "^unique");
     e->sym_map_new = intern_cstr(st, "map-new");
     e->sym_assoc = intern_cstr(st, "assoc");
     e->sym_dissoc = intern_cstr(st, "dissoc");
@@ -3269,34 +3277,33 @@ static Expr *elab_let(Elab *e, const Form *call) {
         bool is_mut = false;
         bool is_persistent = false;
         bool is_linear_ann = false;
-        /* Phase P3: Check for ^mut or ^persistent annotation */
-        while (cur->tag == F_SYM && cur->as.sym == e->sym_caret_mut) {
-            is_mut = true;
-            i++;
-            if (i >= bindings_form->as.list.len) {
-                diag_emit(DIAG_ERROR, cur->span, "trailing ^mut with no binding name");
-                rc = -1; break;
+        bool is_unique_ann = false;
+        /* Phase P3 / LT0 / UT0 / UT2: Consume binding annotations in any order.
+         * Accepted: ^mut, ^persistent, ^linear, ^unique -- may appear in any
+         * combination before the binding name, e.g. [^unique ^mut v ...]. */
+        {
+            bool keep_going = true;
+            while (keep_going && cur->tag == F_SYM) {
+                if (cur->as.sym == e->sym_caret_mut) {
+                    is_mut = true;
+                } else if (cur->as.sym == e->sym_caret_persistent) {
+                    is_persistent = true;
+                } else if (cur->as.sym == e->sym_caret_linear) {
+                    is_linear_ann = true;
+                } else if (cur->as.sym == e->sym_caret_unique) {
+                    is_unique_ann = true;
+                } else {
+                    break; /* Not an annotation -- this is the binding name */
+                }
+                i++;
+                if (i >= bindings_form->as.list.len) {
+                    diag_emit(DIAG_ERROR, cur->span,
+                              "trailing annotation '%s' with no binding name",
+                              cur->as.sym->name);
+                    rc = -1; keep_going = false; break;
+                }
+                cur = bindings_form->as.list.items[i];
             }
-            cur = bindings_form->as.list.items[i];
-        }
-        while (cur->tag == F_SYM && cur->as.sym == e->sym_caret_persistent) {
-            is_persistent = true;
-            i++;
-            if (i >= bindings_form->as.list.len) {
-                diag_emit(DIAG_ERROR, cur->span, "trailing ^persistent with no binding name");
-                rc = -1; break;
-            }
-            cur = bindings_form->as.list.items[i];
-        }
-        /* LT0: Check for ^linear annotation */
-        while (cur->tag == F_SYM && cur->as.sym == e->sym_caret_linear) {
-            is_linear_ann = true;
-            i++;
-            if (i >= bindings_form->as.list.len) {
-                diag_emit(DIAG_ERROR, cur->span, "trailing ^linear with no binding name");
-                rc = -1; break;
-            }
-            cur = bindings_form->as.list.items[i];
         }
         if (cur->tag != F_SYM) {
             diag_emit(DIAG_ERROR, cur->span,
@@ -3347,6 +3354,21 @@ static Expr *elab_let(Elab *e, const Form *call) {
             binding_mark_moved(init->as.var.binding, init_form->span);
         }
 
+        /* UT1: Alias tracking.
+         * (a) When a CK_COPY (non-unique) binding is copied into a new binding,
+         *     mark the source as AS_ALIASED so that passing it as ^unique later
+         *     is caught (TUR_E0200).
+         * (b) When a ^unique binding is transferred (moved), propagate is_unique
+         *     to the destination so uniqueness is preserved through rebinding. */
+        if (g_unique_enabled && init->kind == EX_VAR) {
+            Binding *src = init->as.var.binding;
+            if (!src->is_unique && type_is_copy(src->type)) {
+                /* CK_COPY binding copied into new name — record alias */
+                src->alias_state = AS_ALIASED;
+                src->alias_name  = name;
+            }
+        }
+
         Binding *b = binding_new(e, name, init->type, is_mut, false, name_span);
         b->is_persistent = is_persistent;
         /* LT0: Mark binding as linear if annotated with ^linear or if initializer
@@ -3355,6 +3377,17 @@ static Expr *elab_let(Elab *e, const Form *call) {
             b->is_linear = true;
             /* Upgrade copy_kind to CK_LINEAR on the binding's type */
             b->type.copy_kind = CK_LINEAR;
+        }
+        /* UT0: Mark binding as unique if annotated with ^unique */
+        if (is_unique_ann) {
+            b->is_unique = true;
+            b->type.copy_kind = CK_UNIQUE;
+        }
+        /* UT1: Propagate is_unique through ownership transfer (let [y x] where x is ^unique) */
+        if (g_unique_enabled && !is_unique_ann &&
+            init->kind == EX_VAR && init->as.var.binding->is_unique) {
+            b->is_unique = true;
+            /* copy_kind is already CK_UNIQUE, inherited from init->type */
         }
         scope_add(&inner, b);
 
@@ -4420,6 +4453,17 @@ static Expr *elab_rc_of(Elab *e, const Form *call) {
                             "cannot wrap linear value '%s' in rc<T> -- "
                             "shared ownership violates linearity",
                             val_name);
+        return NULL;
+    }
+
+    /* UT1: Reject wrapping a unique value in rc<T> */
+    if (g_unique_enabled && inner->kind == EX_VAR &&
+        inner->as.var.binding->is_unique) {
+        diag_emit_with_code(DIAG_ERROR, call->span,
+                            TUR_E0202_UNIQUE_IN_RC,
+                            "cannot wrap unique value '%s' in rc<T> -- "
+                            "shared ownership violates uniqueness",
+                            inner->as.var.binding->name->name);
         return NULL;
     }
 
@@ -5994,6 +6038,10 @@ static Expr *elab_defn(Elab *e, const Form *call) {
 
     /* LT0: ^linear annotation applies to the next parameter */
     bool next_param_linear = false;
+    /* UT0: ^unique annotation applies to the next parameter */
+    bool next_param_unique = false;
+    /* UT2: ^mut annotation applies to the next parameter */
+    bool next_param_mut = false;
 
     for (uint32_t i = 0; i < params_f->as.list.len; i++) {
         Form *p = params_f->as.list.items[i];
@@ -6041,6 +6089,18 @@ static Expr *elab_defn(Elab *e, const Form *call) {
         /* LT0: ^linear annotation marks the next parameter as linear */
         if (p->tag == F_SYM && p->as.sym == e->sym_caret_linear) {
             next_param_linear = true;
+            continue;
+        }
+
+        /* UT0: ^unique annotation marks the next parameter as unique */
+        if (p->tag == F_SYM && p->as.sym == e->sym_caret_unique) {
+            next_param_unique = true;
+            continue;
+        }
+
+        /* UT2: ^mut annotation marks the next parameter as mutable (used with ^unique ^mut) */
+        if (p->tag == F_SYM && p->as.sym == e->sym_caret_mut) {
+            next_param_mut = true;
             continue;
         }
 
@@ -6144,6 +6204,17 @@ static Expr *elab_defn(Elab *e, const Form *call) {
             if (g_linear_enabled && params[n_params - 1]->type.copy_kind == CK_LINEAR) {
                 params[n_params - 1]->is_linear = true;
             }
+            /* UT0: Propagate uniqueness from the type annotation */
+            if (g_unique_enabled && next_param_unique) {
+                params[n_params - 1]->is_unique = true;
+                params[n_params - 1]->type.copy_kind = CK_UNIQUE;
+                next_param_unique = false;
+            }
+            /* UT2: Propagate mutability from the ^mut annotation */
+            if (next_param_mut) {
+                params[n_params - 1]->is_mut = true;
+                next_param_mut = false;
+            }
             continue;
         }
 
@@ -6241,6 +6312,17 @@ static Expr *elab_defn(Elab *e, const Form *call) {
             b->is_linear = true;
             b->type.copy_kind = CK_LINEAR;
             next_param_linear = false;
+        }
+        /* UT0: If the previous ^unique annotation applied to this parameter, mark it unique */
+        if (next_param_unique) {
+            b->is_unique = true;
+            b->type.copy_kind = CK_UNIQUE;
+            next_param_unique = false;
+        }
+        /* UT2: If the previous ^mut annotation applied to this parameter, mark it mutable */
+        if (next_param_mut) {
+            b->is_mut = true;
+            next_param_mut = false;
         }
         if (n_params == 0) {
             params = (Binding **)arena_alloc(e->arena, MAX_FN_ARITY * sizeof(Binding *));
@@ -6492,6 +6574,31 @@ static Expr *elab_defn(Elab *e, const Form *call) {
         if (any_linear) {
             for (uint8_t i = 0; i < n_params; i++) {
                 fn_type.as.fn.arg_linear[i] = params[i]->is_linear;
+            }
+        }
+    }
+
+    /* UT0: Store arg_unique flags from param bindings into fn_type */
+    {
+        bool any_unique = false;
+        for (uint8_t i = 0; i < n_params; i++) {
+            if (params[i]->is_unique) { any_unique = true; break; }
+        }
+        if (any_unique) {
+            for (uint8_t i = 0; i < n_params; i++) {
+                fn_type.as.fn.arg_unique[i] = params[i]->is_unique;
+            }
+        }
+    }
+    /* UT2: Store arg_unique_mut flags (^unique ^mut) from param bindings into fn_type */
+    {
+        bool any_unique_mut = false;
+        for (uint8_t i = 0; i < n_params; i++) {
+            if (params[i]->is_unique && params[i]->is_mut) { any_unique_mut = true; break; }
+        }
+        if (any_unique_mut) {
+            for (uint8_t i = 0; i < n_params; i++) {
+                fn_type.as.fn.arg_unique_mut[i] = params[i]->is_unique && params[i]->is_mut;
             }
         }
     }
@@ -7821,9 +7928,15 @@ static Expr *elab_call(Elab *e, Form *call) {
     for (uint32_t i = 0; i < n_args; i++) {
         args[i] = elab_form(e, call->as.list.items[1 + i]);
         if (!args[i]) return NULL;
-        /* Phase 11: Move tracking - if arg is a CK_MOVE binding reference, poison it */
+        /* Phase 11: Move tracking - if arg is a CK_MOVE binding reference, poison it.
+         * UT2 exception: ^unique ^mut bindings represent exclusive mutable access;
+         * builtins never take unique ownership, so don't consume them. */
         if (args[i]->kind == EX_VAR && type_is_move(args[i]->as.var.binding->type)) {
-            binding_mark_moved(args[i]->as.var.binding, args[i]->span);
+            Binding *arg_b2 = args[i]->as.var.binding;
+            bool arg_is_unique_mut = g_unique_enabled && arg_b2->is_unique && arg_b2->is_mut;
+            if (!arg_is_unique_mut) {
+                binding_mark_moved(arg_b2, args[i]->span);
+            }
         }
     }
     Type first_t = (n_args > 0) ? args[0]->type : TYPE_NIL;
@@ -8338,9 +8451,59 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             args[i] = wrap;
         }
 
-        /* Phase 11: Move tracking - if arg is a CK_MOVE binding reference, poison it */
+        /* UT1: TUR_E0200 -- reject aliased value passed to ^unique parameter */
+        if (g_unique_enabled && fn_type.kind == TY_FN &&
+            i < fn_type.as.fn.arity && fn_type.as.fn.arg_unique[i] &&
+            args[i]->kind == EX_VAR) {
+            Binding *arg_b = args[i]->as.var.binding;
+            if (arg_b->alias_state == AS_ALIASED) {
+                if (arg_b->alias_name) {
+                    diag_emit_with_code(DIAG_ERROR, args[i]->span,
+                                        TUR_E0200_UNIQUE_ALIASED,
+                                        "value '%s' is not unique -- aliased by '%s'",
+                                        arg_b->name->name, arg_b->alias_name->name);
+                } else {
+                    diag_emit_with_code(DIAG_ERROR, args[i]->span,
+                                        TUR_E0200_UNIQUE_ALIASED,
+                                        "value '%s' is not unique -- it has been aliased",
+                                        arg_b->name->name);
+                }
+                return NULL;
+            }
+        }
+
+        /* UT2: Reject argument passed to ^unique ^mut param when active borrows exist.
+         * A ^unique ^mut parameter requires exclusive mutable access; any live borrow
+         * (&T or &mut T) on the same binding would violate that guarantee. */
+        if (g_unique_enabled && fn_type.kind == TY_FN &&
+            i < fn_type.as.fn.arity && fn_type.as.fn.arg_unique_mut[i] &&
+            args[i]->kind == EX_VAR) {
+            Binding *arg_b = args[i]->as.var.binding;
+            if (scope_borrow_conflicts(e->scope, arg_b, BK_MUT)) {
+                diag_emit_with_code(DIAG_ERROR, args[i]->span,
+                                    TUR_E0200_UNIQUE_ALIASED,
+                                    "cannot pass '%s' as ^unique ^mut -- active borrow exists",
+                                    arg_b->name->name);
+                return NULL;
+            }
+        }
+
+        /* Phase 11: Move tracking - if arg is a CK_MOVE binding reference, poison it.
+         * UT2 semantics:
+         *  - ^unique ^mut param: exclusive mutable ACCESS (borrow-like); caller keeps
+         *    ownership -- do NOT mark arg as moved, regardless of arg's own flags.
+         *  - ^unique param (no ^mut): OWNERSHIP TRANSFER; mark arg as moved so it
+         *    can't be used again.
+         *  - ordinary param with a ^unique ^mut arg binding: also do not consume,
+         *    since the binding is a mutable unique cell that may be freely read. */
         if (args[i]->kind == EX_VAR && type_is_move(args[i]->as.var.binding->type)) {
-            binding_mark_moved(args[i]->as.var.binding, args[i]->span);
+            Binding *arg_b2 = args[i]->as.var.binding;
+            bool param_is_unique_mut = g_unique_enabled && fn_type.kind == TY_FN &&
+                i < fn_type.as.fn.arity && fn_type.as.fn.arg_unique_mut[i];
+            bool arg_is_unique_mut = g_unique_enabled && arg_b2->is_unique && arg_b2->is_mut;
+            if (!param_is_unique_mut && !arg_is_unique_mut) {
+                binding_mark_moved(arg_b2, args[i]->span);
+            }
         }
     }
 
@@ -9352,6 +9515,15 @@ static Expr *elab_form(Elab *e, Form *f) {
                     diag_emit_with_code(DIAG_ERROR, f->span, TUR_E0003_UNBOUND_SYMBOL,
                                         "unbound symbol '%s'", f->as.sym->name);
                 }
+                return NULL;
+            }
+            /* UT1: Check for use-after-consume of a unique binding (more specific than generic move) */
+            if (g_unique_enabled && b->is_unique && b->is_moved) {
+                diag_emit_with_code(DIAG_ERROR, f->span,
+                                    TUR_E0201_UNIQUE_COPY,
+                                    "cannot copy unique value '%s' -- "
+                                    "unique values may be used at most once",
+                                    b->name->name);
                 return NULL;
             }
             /* Phase 11: Check for use-after-move */
@@ -12031,11 +12203,13 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
             }
             /* LT2: Two-pass parse to handle optional ^linear annotations.
              * items[1..len-2] may contain ^linear prefixes before each arg type.
-             * Pass 1: count actual type items (skip ^linear symbols) */
+             * Pass 1: count actual type items (skip ^linear / ^unique / ^mut symbols) */
             uint8_t n_args = 0;
             for (uint32_t _pi = 1; _pi < len - 1; _pi++) {
                 Form *_it = form->as.list.items[_pi];
                 if (_it->tag == F_SYM && _it->as.sym == e->sym_caret_linear) continue;
+                if (_it->tag == F_SYM && _it->as.sym == e->sym_caret_unique) continue;
+                if (_it->tag == F_SYM && _it->as.sym == e->sym_caret_mut)    continue;
                 n_args++;
             }
             if (n_args > MAX_FN_ARITY) {
@@ -12047,16 +12221,30 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
             TypeKind arg_kinds[MAX_FN_ARITY];
             Type *arg_full_types_local[MAX_FN_ARITY];
             bool arg_linear_local[MAX_FN_ARITY];
+            bool arg_unique_local[MAX_FN_ARITY];
+            bool arg_unique_mut_local[MAX_FN_ARITY];
             bool any_poly_arg = false;
             for (uint8_t _ai = 0; _ai < MAX_FN_ARITY; _ai++) arg_linear_local[_ai] = false;
+            for (uint8_t _ai = 0; _ai < MAX_FN_ARITY; _ai++) arg_unique_local[_ai] = false;
+            for (uint8_t _ai = 0; _ai < MAX_FN_ARITY; _ai++) arg_unique_mut_local[_ai] = false;
 
-            /* Pass 2: parse types, tracking ^linear prefix per arg */
+            /* Pass 2: parse types, tracking ^linear / ^unique / ^mut prefix per arg */
             uint8_t arg_idx = 0;
             bool next_linear = false;
+            bool next_unique = false;
+            bool next_mut    = false;
             for (uint32_t _pi2 = 1; _pi2 < len - 1; _pi2++) {
                 Form *_it2 = form->as.list.items[_pi2];
                 if (_it2->tag == F_SYM && _it2->as.sym == e->sym_caret_linear) {
                     next_linear = true;
+                    continue;
+                }
+                if (_it2->tag == F_SYM && _it2->as.sym == e->sym_caret_unique) {
+                    next_unique = true;
+                    continue;
+                }
+                if (_it2->tag == F_SYM && _it2->as.sym == e->sym_caret_mut) {
+                    next_mut = true;
                     continue;
                 }
                 Type *at = type_expr_from_form(e, _it2,
@@ -12064,7 +12252,12 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
                 if (!at) return NULL;
                 arg_full_types_local[arg_idx] = at;
                 arg_linear_local[arg_idx] = next_linear;
+                arg_unique_local[arg_idx] = next_unique;
+                /* UT2: ^unique ^mut combination — track as unique_mut */
+                arg_unique_mut_local[arg_idx] = next_unique && next_mut;
                 next_linear = false;
+                next_unique = false;
+                next_mut    = false;
                 /* Type variables (TY_STRUCT with def=NULL) and quantified types
                  * are represented as TY_INT (int64_t) at the C level. */
                 if (at->kind == TY_STRUCT && at->as.struct_.def == NULL) {
@@ -12113,6 +12306,32 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
                 if (any_lin) {
                     for (uint8_t i = 0; i < n_args; i++) {
                         fn_t->as.fn.arg_linear[i] = arg_linear_local[i];
+                    }
+                }
+            }
+
+            /* UT0: Store arg_unique flags if any were annotated */
+            {
+                bool any_uniq = false;
+                for (uint8_t i = 0; i < n_args; i++) {
+                    if (arg_unique_local[i]) { any_uniq = true; break; }
+                }
+                if (any_uniq) {
+                    for (uint8_t i = 0; i < n_args; i++) {
+                        fn_t->as.fn.arg_unique[i] = arg_unique_local[i];
+                    }
+                }
+            }
+
+            /* UT2: Store arg_unique_mut flags if any were annotated */
+            {
+                bool any_uniq_mut = false;
+                for (uint8_t i = 0; i < n_args; i++) {
+                    if (arg_unique_mut_local[i]) { any_uniq_mut = true; break; }
+                }
+                if (any_uniq_mut) {
+                    for (uint8_t i = 0; i < n_args; i++) {
+                        fn_t->as.fn.arg_unique_mut[i] = arg_unique_mut_local[i];
                     }
                 }
             }

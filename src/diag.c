@@ -121,6 +121,10 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0101_LINEAR_USE_AFTER_CONSUME:   return "TUR-E0101";
         case TUR_E0102_LINEAR_COPY:                return "TUR-E0102";
         case TUR_E0103_LINEAR_IN_RC:               return "TUR-E0103";
+        /* UT1: Uniqueness type errors */
+        case TUR_E0200_UNIQUE_ALIASED:             return "TUR-E0200";
+        case TUR_E0201_UNIQUE_COPY:                return "TUR-E0201";
+        case TUR_E0202_UNIQUE_IN_RC:               return "TUR-E0202";
         default:                          return "";
     }
 }
@@ -155,6 +159,10 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0101") == 0) return TUR_E0101_LINEAR_USE_AFTER_CONSUME;
     if (strcmp(s, "TUR-E0102") == 0) return TUR_E0102_LINEAR_COPY;
     if (strcmp(s, "TUR-E0103") == 0) return TUR_E0103_LINEAR_IN_RC;
+    /* UT1: Uniqueness type errors */
+    if (strcmp(s, "TUR-E0200") == 0) return TUR_E0200_UNIQUE_ALIASED;
+    if (strcmp(s, "TUR-E0201") == 0) return TUR_E0201_UNIQUE_COPY;
+    if (strcmp(s, "TUR-E0202") == 0) return TUR_E0202_UNIQUE_IN_RC;
     return DIAG_CODE_NONE;
 }
 
@@ -532,6 +540,59 @@ static const DiagExplanation diag_explanations_[] = {
       "consuming it and producing a shared representation).\n"
       "\n"
       "Enable with: turc -Xlinear myfile.tur\n",
+    },
+    /* UT1: Uniqueness type explanations */
+    { TUR_E0200_UNIQUE_ALIASED,
+      "TUR-E0200: Value is not unique -- it has been aliased\n"
+      "\n"
+      "A value was expected to have at most one live reference (^unique), but\n"
+      "another binding that refers to the same value is still in scope. A unique\n"
+      "value cannot be passed to a ^unique parameter when aliases exist.\n"
+      "\n"
+      "Example of the error:\n"
+      "  (defn consume-unique [^unique v] :int v)\n"
+      "  (let [x 42]\n"
+      "    (let [y x]             ; y is an alias of x\n"
+      "      (consume-unique x))) ; ERROR: x is aliased by y\n"
+      "\n"
+      "Fix: ensure no other binding refers to x before passing it as ^unique:\n"
+      "  (let [x 42]\n"
+      "    (consume-unique x))    ; OK: x has no aliases\n"
+      "\n"
+      "Enable with: turc -Xunique-types myfile.tur\n",
+    },
+    { TUR_E0201_UNIQUE_COPY,
+      "TUR-E0201: Cannot copy unique value\n"
+      "\n"
+      "A value annotated with ^unique has already been consumed (moved or passed\n"
+      "to a function). Unique values have at-most-one-use semantics for consumption\n"
+      "-- once transferred, the original binding cannot be used again.\n"
+      "\n"
+      "Example of the error:\n"
+      "  (let [^unique x 42]\n"
+      "    (println x)   ; x consumed here\n"
+      "    (println x))  ; ERROR: x already consumed\n"
+      "\n"
+      "Fix: ensure each ^unique value is used at most once:\n"
+      "  (let [^unique x 42]\n"
+      "    (println x))  ; OK: single use\n"
+      "\n"
+      "Enable with: turc -Xunique-types myfile.tur\n",
+    },
+    { TUR_E0202_UNIQUE_IN_RC,
+      "TUR-E0202: Cannot wrap a unique value in rc<T>\n"
+      "\n"
+      "Placing a ^unique value inside rc<T> is forbidden. Shared reference-counting\n"
+      "creates multiple owners of the same value, which violates the at-most-one-\n"
+      "reference guarantee of uniqueness types.\n"
+      "\n"
+      "Example of the error:\n"
+      "  (let [^unique x 42]\n"
+      "    (rc/of x))   ; ERROR: cannot wrap unique value in rc\n"
+      "\n"
+      "Fix: if shared ownership is needed, remove the ^unique annotation.\n"
+      "\n"
+      "Enable with: turc -Xunique-types myfile.tur\n",
     },
 };
 

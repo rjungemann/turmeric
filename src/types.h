@@ -14,13 +14,15 @@ typedef struct TypeClassInstance TypeClassInstance;
 /* Forward declaration for effect rows (Phase 19) */
 struct EffectRow;
 
-/* Phase 11: Copy/Move traits */
+/* Phase 11 / UT0: Ownership/copy traits */
 typedef enum CopyKind {
-    CK_MOVE,      /* Move-only: ownership transfer, cannot be copied */
+    CK_UNIQUE,    /* Unique: at most one live reference (affine; replaces CK_MOVE) */
     CK_COPY,      /* Copy: bitwise duplication allowed */
     CK_UNSIZED,   /* Unsized: size unknown at compile time (e.g., slices) */
     CK_LINEAR,    /* Linear: must be used exactly once (LT0) */
 } CopyKind;
+/* UT0: backward-compat alias — all former CK_MOVE sites now mean CK_UNIQUE */
+#define CK_MOVE CK_UNIQUE
 /* Phase HKT (v2, stub): Kind annotations for higher-kinded type support.
  * In v1 all types have kind KIND_STAR; KIND_ARROW is reserved for future use.
  * The hkt_kind field on Type is always KIND_STAR in v1 and ignored by all
@@ -254,7 +256,9 @@ typedef struct Type {
              * arg_full_types[i] is NULL for monomorphic args, non-NULL for poly. */
             struct Type **arg_full_types;
             struct Type  *result_full_type; /* NULL or full result type for poly results */
-            bool arg_linear[MAX_FN_ARITY]; /* LT2: true if the i-th param is ^linear */
+            bool arg_linear[MAX_FN_ARITY];     /* LT2: true if the i-th param is ^linear */
+            bool arg_unique[MAX_FN_ARITY];     /* UT0: true if the i-th param is ^unique */
+            bool arg_unique_mut[MAX_FN_ARITY]; /* UT2: true if the i-th param is ^unique ^mut */
         } fn;
         /* Phase 5: ref<T> stores the inner type T */
         struct {
@@ -361,12 +365,17 @@ static inline bool type_is_sync(Type t) {
     return type_is_send(t);
 }
 
-/* LT0: Predicate helpers for ownership/linearity classification */
+/* LT0 / UT0: Predicate helpers for ownership/linearity classification */
 static inline bool ty_is_linear(Type t) {
     return t.copy_kind == CK_LINEAR;
 }
+/* UT0: ty_is_unique -- true iff the type is uniquely owned (at-most-one alias) */
+static inline bool ty_is_unique(Type t) {
+    return t.copy_kind == CK_UNIQUE;
+}
 static inline bool ty_is_move(Type t) {
-    return t.copy_kind == CK_MOVE;
+    /* CK_UNIQUE == CK_MOVE (alias); kept for backward compat */
+    return t.copy_kind == CK_UNIQUE;
 }
 static inline bool ty_is_copy(Type t) {
     return t.copy_kind == CK_COPY;
@@ -410,7 +419,7 @@ static inline Type type_simple(TypeKind kind, CopyKind copy_kind) {
 static inline Type type_ref(TypeKind inner) {
     Type t;
     t.kind = TY_REF;
-    t.copy_kind = CK_MOVE;  /* ref<T> is move-only */
+    t.copy_kind = CK_UNIQUE;  /* ref<T> is uniquely owned (UT0) */
     t.as.ref.inner = inner;
     t.n_lifetimes = 0;
     return t;
@@ -454,6 +463,7 @@ static inline Type type_fn(TypeKind arg_kinds[], uint8_t arity, TypeKind result_
     t.n_lifetimes = 0;
     t.typeclass_instances = NULL;
     t.n_typeclass_instances = 0;
+    t.hkt_kind = KIND_STAR;  /* Phase HKT-P6: all types are kind * in v1 */
     t.as.fn.arity = arity;
     for (uint8_t i = 0; i < arity; i++) {
         t.as.fn.arg_kinds[i] = arg_kinds[i];
@@ -463,6 +473,8 @@ static inline Type type_fn(TypeKind arg_kinds[], uint8_t arity, TypeKind result_
     t.as.fn.arg_full_types = NULL;
     t.as.fn.result_full_type = NULL;
     for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_linear[i] = false;
+    for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_unique[i] = false;
+    for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_unique_mut[i] = false;
     return t;
 }
 

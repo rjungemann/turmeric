@@ -121,6 +121,7 @@ static Type type_from_kind(TypeKind k) {
     Type t;
     t.kind = k;
     t.as.fn.arity = 0;
+    t.hkt_kind = KIND_STAR;  /* Phase HKT-P6: all types are kind * in v1 */
     return t;
 }
 

@@ -21,6 +21,14 @@ typedef struct FnDef       FnDef;      /* Phase 2: function definition */
 typedef struct ExternC     ExternC;    /* Phase 2: extern C declaration */
 typedef struct InlineC     InlineC;    /* Phase 2: inline C block */
 
+/* UT1: Alias state for uniqueness checking.
+ * AS_UNIQUE: no live aliases for this binding.
+ * AS_ALIASED: at least one other live binding refers to the same value. */
+typedef enum AliasState {
+    AS_UNIQUE  = 0,  /* Default: no aliases */
+    AS_ALIASED = 1,  /* One or more aliases exist */
+} AliasState;
+
 /* A Binding is the resolved target of a `let`/`def`/`defn` name introduction.
  * Bindings are owned by the elaborator and live in the arena. */
 struct Binding {
@@ -52,6 +60,14 @@ struct Binding {
     bool          is_linear;
     /* LT1: whether the linear value has been consumed (moved/used) */
     bool          is_linear_consumed;
+    /* UT0: Uniqueness type -- whether this binding holds a unique value */
+    bool          is_unique;
+    /* UT0: whether the unique value has been consumed (moved/aliased) */
+    bool          is_unique_consumed;
+    /* UT1: alias tracking -- current alias state for this binding */
+    AliasState    alias_state;
+    /* UT1: name of the binding that aliased this one (for TUR_E0200 message), or NULL */
+    const Symbol *alias_name;
     /* Phase HRT1: rank-2 polymorphic function parameter */
     bool          is_poly_fn;     /* true if this binding is a rank-2 poly fn param */
     const struct Type *poly_type; /* full TY_FORALL type, NULL if not rank-2 */

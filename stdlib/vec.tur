@@ -65,7 +65,7 @@
 ;;; vec-push! -- append a value to the end of a vec, growing storage as needed.
 ;;;
 ;;; Parameters:
-;;;   v   -- vec pointer
+;;;   v   -- ^unique ^mut vec pointer (exclusive mutable access required)
 ;;;   val -- value to append
 ;;;
 ;;; Example:
@@ -73,7 +73,7 @@
 ;;;
 ;;; Since: Phase B1
 ;; Push an element to the vec
-(defn vec-push! [v val]
+(defn vec-push! [^unique ^mut v val]
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
   if (vec->len >= vec->cap) {
@@ -90,7 +90,7 @@
 ;;; vec-pop! -- remove and return the last element of a vec.
 ;;;
 ;;; Parameters:
-;;;   v -- vec pointer (must be non-empty)
+;;;   v -- ^unique ^mut vec pointer (exclusive mutable access required)
 ;;;
 ;;; Returns:
 ;;;   The int64_t element that was at the last position.
@@ -100,7 +100,7 @@
 ;;;
 ;;; Since: Phase B1
 ;; Pop an element from the vec
-(defn vec-pop! [v] :int
+(defn vec-pop! [^unique ^mut v] :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
   if (vec->len == 0) {
@@ -113,14 +113,14 @@
 ;;; vec-free -- free a vec and its backing data buffer.
 ;;;
 ;;; Parameters:
-;;;   v -- vec pointer to free
+;;;   v -- ^unique vec pointer (exclusive ownership required; vec is destroyed)
 ;;;
 ;;; Example:
 ;;;   (vec-free my-vec)
 ;;;
 ;;; Since: Phase B1
 ;; Free the vec and its data
-(defn vec-free [v]
+(defn vec-free [^unique v]
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
   free(vec->data);

@@ -1,0 +1,46 @@
+;; UT3: vec mutable operations with ^unique ^mut exclusive ownership.
+;; Inline vec implementation (self-contained fixture).
+
+(defn my-vec-new [] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v->data = NULL; v->len = 0; v->cap = 0;
+  return (int64_t)(intptr_t)v;
+  ```)
+
+(defn my-vec-len [^unique ^mut v] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
+  return (int)vec->len;
+  ```)
+
+(defn my-vec-push! [^unique ^mut v val]
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
+  if (vec->len >= vec->cap) {
+    size_t new_cap = vec->cap > 0 ? vec->cap * 2 : 4;
+    int64_t *nd = malloc(sizeof(int64_t) * new_cap);
+    for (size_t i = 0; i < vec->len; i++) nd[i] = vec->data[i];
+    free(vec->data); vec->data = nd; vec->cap = new_cap;
+  }
+  vec->data[vec->len++] = val;
+  ```)
+
+(defn my-vec-free [^unique v]
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
+  free(vec->data); free(vec);
+  ```)
+
+;; Bind as ^unique ^mut to allow repeated exclusive-access calls to mutation functions.
+;; my-vec-push! takes ^unique ^mut (exclusive mutable access) without consuming v.
+;; my-vec-free takes ^unique (ownership transfer -- v cannot be used after this).
+(let [^unique ^mut v (my-vec-new)]
+  (my-vec-push! v 10)
+  (my-vec-push! v 20)
+  (my-vec-push! v 30)
+  (println (my-vec-len v))
+  (my-vec-free v))

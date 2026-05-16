@@ -1,0 +1,12 @@
+;; UT3: Chain of unique operations -- each step hands off exclusive ownership.
+(defn add1 [^unique ^mut x] :int
+  (set! x (+ x 1))
+  x)
+
+(defn dbl [^unique ^mut x] :int
+  (set! x (* x 2))
+  x)
+
+;; 5 -> add1 -> 6 -> dbl -> 12
+(let [^unique ^mut v 5]
+  (println (dbl (add1 v))))
