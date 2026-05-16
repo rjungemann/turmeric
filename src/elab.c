@@ -6353,10 +6353,17 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     if (declared_effect_row_defn) {
         b->type.as.fn.effect_row = declared_effect_row_defn;
     }
-    /* Store param types for codegen */
+    /* Store param types for codegen.
+     * For TY_FN params (annotated with :(fn [...] #{...} :type)), use the full
+     * binding type which preserves the result kind and effect row.  For all
+     * other kinds, fall back to type_from_kind which is sufficient. */
     fd->param_types = (Type *)arena_alloc(e->arena, n_params * sizeof(Type));
     for (uint8_t i = 0; i < n_params; i++) {
-        fd->param_types[i] = type_from_kind(param_kinds[i]);
+        if (param_kinds[i] == TY_FN && params[i]->type.kind == TY_FN) {
+            fd->param_types[i] = params[i]->type;
+        } else {
+            fd->param_types[i] = type_from_kind(param_kinds[i]);
+        }
     }
     /* Phase 15: Store collected constraints */
     fd->constraints.constraints = constraint_list;
@@ -10656,17 +10663,29 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
     
     /* Parse return type - must be after params */
     /* Syntax: (method [params] : return-type)
-     *      or (method [params] : #{Effect...} return-type)  — effect row annotation
-     *      or (method [params] #{Effect...} : return-type)  — effect row annotation alt
+     *      or (method [params] : #{Effect...} return-type)  -- effect row annotation
+     *      or (method [params] #{Effect...} : return-type)  -- effect row annotation alt
      *
-     * Phase 15: #{...} (F_MAP) in return-type position is an advisory effect-row
-     * annotation.  We skip over it silently; enforcement deferred to Phase 19. */
+     * ER3: #{...} (F_MAP) in return-type position is now parsed and stored on
+     * the method so effect_check_pass can enforce it against instance method bodies. */
+    EffectRow *method_effect_row = NULL;
     Type return_type = TYPE_NIL;
     uint32_t ret_idx = 2;   /* first element after params vector */
     if (method_form->as.list.len > ret_idx) {
         Form *maybe_row = method_form->as.list.items[ret_idx];
         if (maybe_row->tag == F_MAP) {
-            /* #{Effect...} effect-row annotation — skip silently (v1 advisory) */
+            /* #{Effect...} effect-row annotation -- parse and store it. */
+            uint8_t n_sym = (uint8_t)maybe_row->as.list.len;
+            const Symbol **syms = (const Symbol **)arena_alloc(e->arena,
+                                    (n_sym ? n_sym : 1) * sizeof(Symbol *));
+            uint8_t n_valid = 0;
+            for (uint32_t j = 0; j < maybe_row->as.list.len; j++) {
+                Form *item = maybe_row->as.list.items[j];
+                if (item->tag == F_SYM) {
+                    syms[n_valid++] = item->as.sym;
+                }
+            }
+            method_effect_row = effect_row_unresolved(e->arena, syms, n_valid);
             ret_idx++;
         }
     }
@@ -10728,6 +10747,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
     method->param_is_fn = param_is_fn;
     method->n_params = n_params;
     method->return_type = return_type;
+    method->effect_row = method_effect_row;  /* ER3: NULL if not annotated */
     return method;
 }
 
@@ -11433,6 +11453,64 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
                 t->as.forall_.body = body_type;
                 return t;
             }
+        }
+
+        /* ER2: (fn [param-types...] #{effect-row} :return-type) — function type
+         * annotation form used in parameter position.
+         * Syntax: (fn [] :int)            — zero-arg fn returning int, no effects
+         *         (fn [] #{e} :int)       — zero-arg fn with effect-row variable e
+         *         (fn [:int] #{Write} :nil) — one-arg fn with concrete effect row
+         *
+         * The param list is a vector of type annotations (or empty).
+         * The optional #{...} map is an effect-row annotation.
+         * The last element is the return type. */
+        if (form->as.list.len >= 2 && form->as.list.items[0]->tag == F_SYM
+                && form->as.list.items[0]->as.sym == e->sym_fn) {
+            uint32_t idx = 1; /* skip 'fn' head */
+            /* Expect a vector of param type annotations */
+            if (idx >= form->as.list.len || form->as.list.items[idx]->tag != F_VEC) {
+                diag_emit(DIAG_ERROR, form->span,
+                          "'fn' type expression requires a parameter vector: (fn [params...] :return)");
+                return NULL;
+            }
+            Form *params_vec = form->as.list.items[idx++];
+            /* Parse param types from the vector */
+            uint8_t n_fn_args = (uint8_t)params_vec->as.list.len;
+            TypeKind fn_arg_kinds[MAX_FN_ARITY];
+            memset(fn_arg_kinds, 0, sizeof(fn_arg_kinds));
+            for (uint8_t pi2 = 0; pi2 < n_fn_args && pi2 < MAX_FN_ARITY; pi2++) {
+                Type *at = type_expr_from_form(e, params_vec->as.list.items[pi2],
+                                               rec_name, type_params, type_param_kinds, n_type_params);
+                fn_arg_kinds[pi2] = at ? at->kind : TY_INT;
+            }
+            /* Optional #{...} effect-row annotation */
+            EffectRow *fn_effect_row = NULL;
+            if (idx < form->as.list.len && form->as.list.items[idx]->tag == F_MAP) {
+                Form *row_form = form->as.list.items[idx++];
+                uint8_t n_row_sym = (uint8_t)row_form->as.list.len;
+                const Symbol **row_syms = (const Symbol **)arena_alloc(e->arena,
+                    (n_row_sym ? n_row_sym : 1) * sizeof(Symbol *));
+                uint8_t n_row_valid = 0;
+                for (uint32_t rj = 0; rj < row_form->as.list.len; rj++) {
+                    Form *item = row_form->as.list.items[rj];
+                    if (item->tag == F_SYM) row_syms[n_row_valid++] = item->as.sym;
+                }
+                fn_effect_row = effect_row_unresolved(e->arena, row_syms, n_row_valid);
+            }
+            /* Return type — must be the last element */
+            if (idx >= form->as.list.len) {
+                diag_emit(DIAG_ERROR, form->span,
+                          "'fn' type expression requires a return type: (fn [params...] :return)");
+                return NULL;
+            }
+            Type *ret_t = type_expr_from_form(e, form->as.list.items[idx],
+                                               rec_name, type_params, type_param_kinds, n_type_params);
+            TypeKind ret_kind = ret_t ? ret_t->kind : TY_INT;
+
+            Type *fn_t = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *fn_t = type_fn(fn_arg_kinds, n_fn_args, ret_kind);
+            if (fn_effect_row) fn_t->as.fn.effect_row = fn_effect_row;
+            return fn_t;
         }
 
         /* Phase HRT1: (-> T1 T2 ... Tn) — function type expression.
@@ -13111,12 +13189,17 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
         Scope method_scope;
         scope_init(&method_scope, e->scope);
         e->scope = &method_scope;
-        
+
         /* Add method parameters to scope */
         for (uint8_t j = 0; j < n_method_params; j++) {
             scope_add(&method_scope, method_params[j]);
         }
-        
+
+        /* ER3: Increment fn_body_depth so that (perform ...) inside an instance
+         * method body does not trigger TUR-E0008 (unhandled effect at top level).
+         * The handler is expected to be provided at the call site. */
+        e->fn_body_depth++;
+
         Expr *method_body = e_nil(e, impl_form->span);
         uint32_t n_body = impl_form->as.list.len - impl_body_start;
         if (n_body > 0) {
@@ -13126,14 +13209,16 @@ static Expr *elab_definstance(Elab *e, const Form *call) {
                 Expr **items = (Expr **)arena_alloc(e->arena, n_body * sizeof(Expr *));
                 for (uint32_t k = 0; k < n_body; k++) {
                     items[k] = elab_form(e, impl_form->as.list.items[impl_body_start + k]);
-                    if (!items[k]) { e->scope = method_scope.parent; scope_free(&method_scope); return NULL; }
+                    if (!items[k]) { e->fn_body_depth--; e->scope = method_scope.parent; scope_free(&method_scope); return NULL; }
                 }
                 method_body = expr_new(e->arena, EX_DO, items[n_body - 1]->type, impl_form->span);
                 method_body->as.do_.items = items;
                 method_body->as.do_.n = n_body;
             }
         }
-        
+
+        e->fn_body_depth--;
+
         /* Pop method scope */
         e->scope = method_scope.parent;
         scope_free(&method_scope);

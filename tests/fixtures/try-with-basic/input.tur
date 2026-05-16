@@ -1,0 +1,16 @@
+;; ER6: try-with sugar -- same surface syntax as handle.
+
+(defeffect Write [s :cstr] :nil)
+(defeffect Read [] :int)
+
+(defn effectful [] #{Write Read} :int
+  (do (perform (Write "asking"))
+      (perform (Read))))
+
+(defn main [] :int
+  (let [result
+    (try-with
+      (effectful)
+      (Write [s] k) (do (println s) (resume k nil))
+      (Read [] k) (resume k 42))]
+    (do (println result) 0)))

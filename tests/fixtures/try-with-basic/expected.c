@@ -1760,7 +1760,6 @@ extern void tur_hamt_transient_set(void *, int64_t, void *, void *);
 extern void tur_hamt_transient_del(void *, int64_t, void *);
 extern void * tur_hamt_persistent(void *);
 
-static const char * __inst_IOShow_io_show_int(int64_t);
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
 static void * array_slice(void *, int64_t, int64_t);
@@ -1804,18 +1803,7 @@ static bool has_(void *, void *);
 static int64_t count(void *);
 static void * merge(void *, void *);
 static bool map_eq_(int64_t, int64_t, int64_t);
-
-static const char * __inst_IOShow_io_show_int(int64_t x) {
-        return "int";
-}
-
-typedef struct dict_IOShow_int {
-    const char * (*io_show)(int64_t);
-} dict_IOShow_int;
-
-static dict_IOShow_int dict_IOShow_int_singleton = {
-    .io_show = __inst_IOShow_io_show_int,
-};
+static int64_t effectful();
 
 static void * array_get(void * arr, int64_t idx) {
         struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
@@ -2041,11 +2029,102 @@ static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
   
 }
 
+static int64_t effectful() {
+        int64_t __t0[1];
+        __t0[0] = (int64_t)"asking";
+        tur_effect_perform("Write", __t0, 1);
+        int64_t __t1;
+        int64_t __t2 = tur_effect_perform("Read", NULL, 0);
+        __t1 = __t2;
+        return __t1;
+}
+
+static int64_t __effect_handler_5(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
+static int64_t __effect_handler_5(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
+    const char * s_209 = (const char *)__effect_args[0];
+    int64_t k_210 = __k;
+    puts(s_209);
+    int64_t __t7;
+    int64_t __t8 = tur_effect_cont_resume((int64_t)(intptr_t)k_210, (int64_t)0);
+    __t7 = __t8;
+    return (int64_t)__t7;
+}
+
+static int64_t __effect_handler_6(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
+static int64_t __effect_handler_6(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
+    int64_t k_211 = __k;
+    int64_t __t9 = tur_effect_cont_resume((int64_t)(intptr_t)k_211, (int64_t)INT64_C(42));
+    return (int64_t)__t9;
+}
+
+static void __handle_body_4(void);
+static void __handle_body_4(void) {
+    tur_current_fiber->result = (int64_t)effectful();
+}
+
+static int64_t __dispatch_4(void *__ctx_void, int64_t __k_int, int64_t __resume_val);
+static int64_t __dispatch_4(void *__ctx_void, int64_t __k_int, int64_t __resume_val) {
+    TurEffectCaptureCtx *__dcap = (TurEffectCaptureCtx *)__ctx_void;
+    FiberBlock *__fiber = (FiberBlock *)(intptr_t)__k_int;
+    int64_t __r = tur_fiber_block_resume(__fiber, __resume_val);
+    if (__fiber->done) { return __fiber->result; }
+    if (!__dcap->has_pending_effect) return __r;
+    if (strcmp(__dcap->eff_name, "Write") == 0) {
+        return __effect_handler_5(__dcap->eff_args, __dcap->eff_n_args, __k_int, NULL);
+    } else if (strcmp(__dcap->eff_name, "Read") == 0) {
+        return __effect_handler_6(__dcap->eff_args, __dcap->eff_n_args, __k_int, NULL);
+    } else {
+        /* Phase 19D: bubble up unhandled effect to outer fiber */
+        FiberBlock *__outer_f = tur_current_fiber;
+        if (__outer_f && __outer_f->eff_ctx) {
+            TurEffectCaptureCtx *__outer_cap = (TurEffectCaptureCtx *)__outer_f->eff_ctx;
+            __outer_cap->eff_name = __dcap->eff_name;
+            int __bun = __dcap->eff_n_args < 8 ? __dcap->eff_n_args : 8;
+            for (int __bi = 0; __bi < __bun; __bi++) __outer_cap->eff_args[__bi] = __dcap->eff_args[__bi];
+            __outer_cap->eff_n_args = __dcap->eff_n_args;
+            __outer_cap->has_pending_effect = true;
+            tur_fiber_block_yield(0);
+            __outer_cap->has_pending_effect = false;
+            return __dispatch_4(__ctx_void, __k_int, __outer_f->arg);
+        }
+        fprintf(stderr, "dispatch: unhandled effect: %s\n", __dcap->eff_name);
+        abort();
+    }
+    return 0;
+}
+
 int main() {
-        puts(((const char * (*)(int64_t))(intptr_t)(dict_IOShow_int_singleton.io_show))(INT64_C(42)));
-        int64_t __t0;
-        __t0 = INT64_C(0);
-        return (int)__t0;
+        int64_t __t3;
+        {
+            TurEffectCaptureCtx __cap_4;
+            __cap_4.has_pending_effect = false;
+            __cap_4.eff_name = NULL;
+            __cap_4.eff_n_args = 0;
+            __cap_4.dispatch = __dispatch_4;
+            __cap_4.body_env = NULL;
+            FiberBlock *__fiber_4 = tur_fiber_block_new(__handle_body_4, 0);
+            __fiber_4->eff_ctx = &__cap_4;
+            EffectHandlerFrame *__parent_chain_4 = (tur_current_fiber ? (EffectHandlerFrame *)tur_current_fiber->effect_handler_chain : global_effect_handler_chain);
+            EffectHandlerFrame __eff_frame_4;
+            __eff_frame_4.parent = __parent_chain_4;
+            __eff_frame_4.n_cases = 2;
+            __eff_frame_4.cases[0].effect_name = "Write";
+            __eff_frame_4.cases[0].handler_fn = NULL;
+            __eff_frame_4.cases[0].env = NULL;
+            __eff_frame_4.cases[1].effect_name = "Read";
+            __eff_frame_4.cases[1].handler_fn = NULL;
+            __eff_frame_4.cases[1].env = NULL;
+            __fiber_4->effect_handler_chain = &__eff_frame_4;
+            int64_t __t10 = (int64_t)__dispatch_4(&__cap_4, (int64_t)(intptr_t)__fiber_4, 0);
+            if (__fiber_4->done) { free(__fiber_4->stack); free(__fiber_4); }
+            int64_t result_212 = __t10;
+            (void)result_212;
+            printf("%lld\n", (long long)(result_212));
+            int64_t __t11;
+            __t11 = INT64_C(0);
+            __t3 = __t11;
+        }
+        return (int)__t3;
 }
 
 

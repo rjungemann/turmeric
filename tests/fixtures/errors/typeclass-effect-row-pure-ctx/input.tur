@@ -1,0 +1,19 @@
+;; ER3: calling an effectful typeclass method from a #{} function is rejected.
+
+(defeffect Write [msg :cstr] :nil)
+
+(defclass IOShow [a]
+  (io-show [x] #{Write} :nil))
+
+(definstance IOShow [int]
+  (io-show [x] :nil
+    (perform (Write "42"))))
+
+;; This function is pure (#{}), but calls io-show which has #{Write}
+(defn pure-fn [] #{} :nil
+  (.io-show 42))
+
+(defn main [] :int
+  (handle
+    (do (pure-fn) 0)
+    (Write [msg] k) (do (println msg) (resume k 0))))

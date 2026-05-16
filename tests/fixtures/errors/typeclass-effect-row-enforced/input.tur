@@ -1,0 +1,22 @@
+;; ER3: instance method body that performs an effect not in the declared row.
+
+(defeffect Write [msg :cstr] :nil)
+(defeffect Read [] :int)
+
+(defclass IOShow [a]
+  (io-show [x] #{Write} :nil))
+
+;; This instance performs Read which is NOT in #{Write}
+(definstance IOShow [int]
+  (io-show [x] :nil
+    (do
+      (perform (Write "showing"))
+      (perform (Read))
+      0)))
+
+(defn main [] :int
+  (handle
+    (handle
+      (do (.io-show 42) 0)
+      (Write [msg] k) (do (println msg) (resume k 0)))
+    (Read [] k) (resume k 0)))

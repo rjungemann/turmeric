@@ -213,6 +213,145 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# ER1 tests: --strict-effects and TUR-W0030/W0031
+# ---------------------------------------------------------------------------
+
+# strict-effects-warn: an unannotated function that performs Write should trigger TUR-W0030
+STRICT_INPUT=$(mktemp /tmp/tur-strict-XXXXXX.tur)
+cat > "$STRICT_INPUT" << 'EOF'
+(defeffect Write [msg :cstr] :nil)
+(defn effectful [] :nil
+  (perform (Write "hello")))
+(defn main [] :int 0)
+EOF
+out=$("$TUR" --strict-effects emit-c "$STRICT_INPUT" 2>&1) || true
+rm -f "$STRICT_INPUT"
+if echo "$out" | grep -F "TUR-W0030" > /dev/null 2>&1; then
+    pass "strict-effects-warn"
+else
+    fail "strict-effects-warn" "expected TUR-W0030 in stderr output"
+fi
+
+# over-annotated-warn: a function that declares #{Write} but never performs it should trigger TUR-W0031
+OVER_INPUT=$(mktemp /tmp/tur-over-XXXXXX.tur)
+cat > "$OVER_INPUT" << 'EOF'
+(defeffect Write [msg :cstr] :nil)
+(defn pure-fn [] #{Write} :int
+  42)
+(defn main [] :int 0)
+EOF
+out=$("$TUR" emit-c "$OVER_INPUT" 2>&1) || true
+rm -f "$OVER_INPUT"
+if echo "$out" | grep -F "TUR-W0031" > /dev/null 2>&1; then
+    pass "over-annotated-warn"
+else
+    fail "over-annotated-warn" "expected TUR-W0031 in stderr output"
+fi
+
+# strict-effects-clean: a fully annotated function should not warn under --strict-effects
+CLEAN_INPUT=$(mktemp /tmp/tur-clean-XXXXXX.tur)
+cat > "$CLEAN_INPUT" << 'EOF'
+(defeffect Write [msg :cstr] :nil)
+(defn effectful [] #{Write} :nil
+  (perform (Write "hello")))
+(defn main [] :int
+  (handle
+    (do (effectful) 0)
+    (Write [msg] k) (do (println msg) (resume k 0))))
+EOF
+out=$("$TUR" --strict-effects emit-c "$CLEAN_INPUT" 2>&1); rc=$?
+rm -f "$CLEAN_INPUT"
+if [ $rc -ne 0 ]; then
+    fail "strict-effects-clean" "should succeed under --strict-effects when fully annotated (exit=$rc)"
+elif echo "$out" | grep -F "TUR-W0030" > /dev/null 2>&1; then
+    fail "strict-effects-clean" "should not warn TUR-W0030 when function has annotation"
+else
+    pass "strict-effects-clean"
+fi
+
+# ---------------------------------------------------------------------------
+# ER6 tests: --dump-effects and --lint-effects
+# ---------------------------------------------------------------------------
+
+# dump-effects-basic: --dump-effects should print "defn effectful : #{Write}"
+# Note: use a temp file to avoid grep -q SIGPIPE issue with large output + pipefail.
+DUMP_FIXTURE="tests/fixtures/effect-dump/input.tur"
+_dump_tmp=$(mktemp /tmp/tur-dump-XXXXXX)
+"$TUR" --dump-effects emit-c "$DUMP_FIXTURE" 2>/dev/null > "$_dump_tmp"; rc=$?
+if [ $rc -ne 0 ]; then
+    fail "dump-effects-basic" "non-zero exit ($rc)"
+elif ! grep -q "defn effectful : #" "$_dump_tmp"; then
+    fail "dump-effects-basic" "expected 'defn effectful : #...' in output; got: $(grep '^defn' "$_dump_tmp" | head -3)"
+elif ! grep -q "defn pure-fn : #{}" "$_dump_tmp"; then
+    fail "dump-effects-basic" "expected 'defn pure-fn : #{}' in output"
+else
+    pass "dump-effects-basic"
+fi
+rm -f "$_dump_tmp"
+
+# dump-effects-no-output: without --dump-effects, the same file should not emit "defn" effect lines
+_nodump_tmp=$(mktemp /tmp/tur-nodump-XXXXXX)
+"$TUR" emit-c "$DUMP_FIXTURE" 2>/dev/null > "$_nodump_tmp"
+if grep -q "^defn effectful : #" "$_nodump_tmp"; then
+    fail "dump-effects-no-output" "effect dump appeared without --dump-effects flag"
+else
+    pass "dump-effects-no-output"
+fi
+rm -f "$_nodump_tmp"
+
+# lint-effects-warn: --lint-effects on an unannotated effectful function should emit TUR-W0030
+LINT_INPUT=$(mktemp /tmp/tur-lint-XXXXXX.tur)
+cat > "$LINT_INPUT" << 'EOF'
+(defeffect Write [msg :cstr] :nil)
+(defn effectful [] :nil
+  (perform (Write "hello")))
+(defn main [] :int 0)
+EOF
+out=$("$TUR" --lint-effects emit-c "$LINT_INPUT" 2>&1) || true
+rm -f "$LINT_INPUT"
+if echo "$out" | grep -F "TUR-W0030" > /dev/null 2>&1; then
+    pass "lint-effects-warn"
+else
+    fail "lint-effects-warn" "expected TUR-W0030 in output under --lint-effects"
+fi
+
+# lint-effects-annotated: --lint-effects should not warn on an annotated effectful function
+LINT_ANN_INPUT=$(mktemp /tmp/tur-lint-ann-XXXXXX.tur)
+cat > "$LINT_ANN_INPUT" << 'EOF'
+(defeffect Write [msg :cstr] :nil)
+(defn effectful [] #{Write} :nil
+  (perform (Write "hello")))
+(defn main [] :int 0)
+EOF
+out=$("$TUR" --lint-effects emit-c "$LINT_ANN_INPUT" 2>&1) || true
+rm -f "$LINT_ANN_INPUT"
+if echo "$out" | grep -F "TUR-W0030" > /dev/null 2>&1; then
+    fail "lint-effects-annotated" "should not warn TUR-W0030 for annotated function under --lint-effects"
+else
+    pass "lint-effects-annotated"
+fi
+
+# try-with-basic: try-with behaves identically to handle
+out=$("$TUR" run tests/fixtures/try-with-basic/input.tur 2>/dev/null); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "try-with-basic" "non-zero exit ($rc)"
+elif [ "$out" != "$(printf 'asking\n42')" ]; then
+    fail "try-with-basic" "unexpected output: '$out'"
+else
+    pass "try-with-basic"
+fi
+
+# try-with-nested: nested try-with handlers work correctly
+out=$("$TUR" run tests/fixtures/try-with-nested/input.tur 2>/dev/null); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "try-with-nested" "non-zero exit ($rc)"
+elif [ "$out" != "$(printf 'start\noops')" ]; then
+    fail "try-with-nested" "unexpected output: '$out'"
+else
+    pass "try-with-nested"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo

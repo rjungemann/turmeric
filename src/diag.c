@@ -112,6 +112,9 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0017_CONT_ESCAPE_ASYNC:                return "TUR-E0017";
         case TUR_E0018_NOT_SERIALIZABLE:                 return "TUR-E0018";
         case TUR_E0019_SERIAL_SHIFT_OUTSIDE_RESET:       return "TUR-E0019";
+        case TUR_W0030_STRICT_EFFECTS_UNANNOTATED: return "TUR-W0030";
+        case TUR_W0031_EFFECT_OVER_ANNOTATED:      return "TUR-W0031";
+        case TUR_W0032_ROW_VAR_ALWAYS_CONCRETE:    return "TUR-W0032";
         default:                          return "";
     }
 }
@@ -137,6 +140,9 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0017") == 0) return TUR_E0017_CONT_ESCAPE_ASYNC;
     if (strcmp(s, "TUR-E0018") == 0) return TUR_E0018_NOT_SERIALIZABLE;
     if (strcmp(s, "TUR-E0019") == 0) return TUR_E0019_SERIAL_SHIFT_OUTSIDE_RESET;
+    if (strcmp(s, "TUR-W0030") == 0) return TUR_W0030_STRICT_EFFECTS_UNANNOTATED;
+    if (strcmp(s, "TUR-W0031") == 0) return TUR_W0031_EFFECT_OVER_ANNOTATED;
+    if (strcmp(s, "TUR-W0032") == 0) return TUR_W0032_ROW_VAR_ALWAYS_CONCRETE;
     return DIAG_CODE_NONE;
 }
 
@@ -402,6 +408,37 @@ static const DiagExplanation diag_explanations_[] = {
       "Wrap the serial-shift in a serial-reset:\n"
       "  (serial-reset\n"
       "    (serial-shift (fn [k] (save-cont! k) 0) 42))\n"
+    },
+    { TUR_W0030_STRICT_EFFECTS_UNANNOTATED,
+      "TUR-W0030: Unannotated effectful function (--strict-effects)\n"
+      "\n"
+      "Under --strict-effects, every function whose inferred effect row is non-empty\n"
+      "should carry an explicit #{...} annotation. This warning fires when an unannotated\n"
+      "function performs one or more effects.\n"
+      "\n"
+      "Fix: add an effect-row annotation to the function, e.g.:\n"
+      "  (defn my-fn [] #{Write} :nil ...)\n"
+      "Or handle the effect inside the function so its row is empty.\n",
+    },
+    { TUR_W0031_EFFECT_OVER_ANNOTATED,
+      "TUR-W0031: Over-annotated effect row\n"
+      "\n"
+      "The declared effect row contains an effect that the function never actually\n"
+      "performs. This may indicate a stale annotation after refactoring.\n"
+      "\n"
+      "Fix: remove the unused effect from the #{...} annotation, e.g.:\n"
+      "  (defn my-fn [] #{Write} :nil ...)  ; remove Log if it is never performed\n",
+    },
+    { TUR_W0032_ROW_VAR_ALWAYS_CONCRETE,
+      "TUR-W0032: Row variable is always instantiated to a concrete row\n"
+      "\n"
+      "A function declares a row variable (e.g., #{e}) but at every call site the\n"
+      "variable is always bound to the same concrete effect set. Replacing the row\n"
+      "variable with the concrete row makes the annotation more informative and\n"
+      "allows the compiler to enforce it strictly.\n"
+      "\n"
+      "Fix: replace the row variable with the concrete effect set, e.g.:\n"
+      "  (defn run-twice [f :(fn [] #{Ask} :int)] #{Ask} :int ...)\n",
     },
 };
 

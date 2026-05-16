@@ -34,3 +34,12 @@ bool g_needs_hamt = false;
 
 /* Phase G1: -Xgadt flag — enable defgadt syntax */
 bool g_gadt_enabled = false;
+
+/* ER1: --strict-effects flag */
+bool g_strict_effects = false;
+
+/* ER6: --dump-effects flag */
+bool g_dump_effects = false;
+
+/* ER6: --lint-effects flag */
+bool g_lint_effects = false;

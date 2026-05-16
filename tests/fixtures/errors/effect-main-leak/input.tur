@@ -1,0 +1,8 @@
+;; ER1: main annotated #{} is rejected when an effect escapes (not all effects handled).
+
+(defeffect Write [msg :cstr] :nil)
+
+(defn main [] #{} :int
+  ;; Write is not handled -- it leaks out of main
+  (perform (Write "oops"))
+  0)

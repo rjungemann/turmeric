@@ -1,0 +1,15 @@
+;; ER4: passing a wide-row function to a narrow-row parameter is rejected.
+;; apply-pure expects f to be pure (#{}) but write-fn has #{Write}.
+
+(defeffect Write [msg :cstr] :nil)
+
+(defn apply-pure [f :(fn [] #{} :nil)] #{} :nil
+  (f))
+
+(defn write-fn [] #{Write} :nil
+  (perform (Write "hi")))
+
+(defn main [] :int
+  (handle
+    (do (apply-pure write-fn) 0)
+    (Write [msg] k) (do (println msg) (resume k 0))))

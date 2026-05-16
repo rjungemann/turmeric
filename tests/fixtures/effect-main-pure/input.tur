@@ -1,0 +1,9 @@
+;; ER1: main annotated #{} is accepted when all effects are handled before return.
+
+(defeffect Write [msg :cstr] :nil)
+
+(defn main [] #{} :int
+  (handle
+    (perform (Write "hello"))
+    (Write [msg] k) (do (println msg) (resume k 0)))
+  0)

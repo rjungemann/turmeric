@@ -1,0 +1,13 @@
+;; ER6: --dump-effects output matches expected rows.
+
+(defeffect Write [s :cstr] :nil)
+
+(defn pure-fn [] :int 42)
+
+(defn effectful [] #{Write} :nil
+  (perform (Write "hello")))
+
+(defn main [] :int
+  (handle
+    (do (effectful) 0)
+    (Write [s] k) (do (println s) (resume k 0))))
