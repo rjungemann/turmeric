@@ -56,6 +56,7 @@ static TypeKind typekind_from_symbol(const char *name) {
     if (strcmp(name, "nil") == 0) return TY_NIL;
     if (strcmp(name, "ptr-void") == 0) return TY_PTR_VOID;
     if (strcmp(name, "ref") == 0) return TY_REF;
+    if (strcmp(name, "lref") == 0) return TY_LREF;
     if (strcmp(name, "rc") == 0) return TY_RC;
     if (strcmp(name, "weak") == 0) return TY_WEAK;
     if (strcmp(name, "exception") == 0) return TY_EXCEPTION;
@@ -586,6 +587,9 @@ typedef struct Elab {
     const Symbol *sym_drop;       /* drop! - explicit drop for ref<T> */
     const Symbol *kw_else;         /* :else (the symbol named "else") */
     const Symbol *kw_derive;       /* :as (the symbol named "as") - for inline-C */
+    /* LT3: lref<T> — linear owning pointer */
+    const Symbol *sym_lref;        /* lref (type name in type expressions) */
+    const Symbol *sym_lref_new;    /* lref/new */
     /* Phase 9: rc<T> + weak<T> */
     const Symbol *sym_rc_of;       /* rc/of */
     const Symbol *sym_rc_clone;    /* rc/clone */
@@ -1159,6 +1163,9 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_drop      = intern_cstr(st, "drop!");
     e->kw_else       = intern_cstr(st, "else");
     e->kw_derive     = intern_cstr(st, "as");
+    /* LT3: lref<T> — linear owning pointer */
+    e->sym_lref     = intern_cstr(st, "lref");
+    e->sym_lref_new = intern_cstr(st, "lref/new");
     /* Phase 9: rc<T> + weak<T> */
     e->sym_rc_of = intern_cstr(st, "rc/of");
     e->sym_rc_clone = intern_cstr(st, "rc/clone");
@@ -2307,6 +2314,8 @@ static Expr *elab_open(Elab *e, const Form *call);
 static Expr *elab_ref(Elab *e, const Form *call);
 static Expr *elab_deref(Elab *e, const Form *call);
 static Expr *elab_drop(Elab *e, const Form *call);
+/* LT3 */
+static Expr *elab_lref_new(Elab *e, const Form *call);
 /* Phase 9: rc<T> + weak<T> */
 static Expr *elab_rc_of(Elab *e, const Form *call);
 static Expr *elab_rc_clone(Elab *e, const Form *call);
@@ -4255,9 +4264,35 @@ static Expr *elab_ref(Elab *e, const Form *call) {
     
     /* ref<T> where T is the inner expression's type */
     Type ref_type = type_ref(inner->type.kind);
-    
+
     /* Create EX_REF expression */
     Expr *out = expr_new(e->arena, EX_REF, ref_type, call->span);
+    out->as.ref_.expr = inner;
+    return out;
+}
+
+/* LT3: lref/new — (lref/new expr)
+ * Heap-allocates expr and returns an lref<T> (linear owning pointer).
+ * The caller must consume the returned lref<T> exactly once.
+ *
+ * Grammar: (lref/new expr)
+ * Returns: lref<T>
+ */
+static Expr *elab_lref_new(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "lref/new requires an expression: (lref/new expr)");
+        return NULL;
+    }
+
+    Expr *inner = elab_form(e, call->as.list.items[1]);
+    if (!inner) return NULL;
+
+    /* lref<T> where T is the inner expression's type */
+    Type lref_type = type_lref(inner->type.kind);
+
+    /* Create EX_REF expression — lref/new lowers identically to ref at C level */
+    Expr *out = expr_new(e->arena, EX_REF, lref_type, call->span);
     out->as.ref_.expr = inner;
     return out;
 }
@@ -4281,18 +4316,19 @@ static Expr *elab_deref(Elab *e, const Form *call) {
     Expr *inner = elab_form(e, call->as.list.items[1]);
     if (!inner) return NULL;
     
-    /* Check that inner is ref<T>, rc<T>, ptr<T>, &T, or &mut T */
-    if (inner->type.kind != TY_REF && inner->type.kind != TY_RC && inner->type.kind != TY_PTR_VOID
+    /* Check that inner is ref<T>, lref<T>, rc<T>, ptr<T>, &T, or &mut T */
+    if (inner->type.kind != TY_REF && inner->type.kind != TY_LREF
+        && inner->type.kind != TY_RC && inner->type.kind != TY_PTR_VOID
         && inner->type.kind != TY_REF_IMMUT && inner->type.kind != TY_REF_MUT) {
         diag_emit(DIAG_ERROR, call->span,
-                  "@ requires ref<T>, rc<T>, ptr<T>, &T, or &mut T, got %s",
+                  "@ requires ref<T>, lref<T>, rc<T>, ptr<T>, &T, or &mut T, got %s",
                   type_name(inner->type));
         return NULL;
     }
-    
+
     /* Return type is the inner type */
     Type result_type;
-    if (inner->type.kind == TY_REF) {
+    if (inner->type.kind == TY_REF || inner->type.kind == TY_LREF) {
         result_type = type_from_kind(inner->type.as.ref.inner);
     } else if (inner->type.kind == TY_RC) {
         result_type = type_from_kind(inner->type.as.rc.inner);
@@ -6104,6 +6140,10 @@ static Expr *elab_defn(Elab *e, const Form *call) {
                 param_kinds[n_params - 1] = ann->kind;
                 params[n_params - 1]->type = *ann;
             }
+            /* LT3: Propagate linearity from the type annotation (e.g., [p : (lref int)]) */
+            if (g_linear_enabled && params[n_params - 1]->type.copy_kind == CK_LINEAR) {
+                params[n_params - 1]->is_linear = true;
+            }
             continue;
         }
 
@@ -6146,6 +6186,12 @@ static Expr *elab_defn(Elab *e, const Form *call) {
             } else if (kw->len == 1 && memcmp(kw->name, "!", 1) == 0) {
                 param_kinds[n_params - 1] = TY_NEVER;
                 params[n_params - 1]->type = TYPE_NEVER;
+            } else if (kw->len == 4 && memcmp(kw->name, "lref", 4) == 0) {
+                /* LT3: :lref keyword — linear owning pointer (inner type unknown, use int) */
+                param_kinds[n_params - 1] = TY_LREF;
+                params[n_params - 1]->type = type_lref(TY_INT);
+                /* Mark as linear: lref<T> is always exactly-once */
+                if (g_linear_enabled) params[n_params - 1]->is_linear = true;
             } else if (kw->len == 3 && memcmp(kw->name, "set", 3) == 0) {
                 /* Phase X3: set type annotation */
                 Type set_type = { .kind = TY_SET, .copy_kind = CK_MOVE };
@@ -6260,6 +6306,9 @@ static Expr *elab_defn(Elab *e, const Form *call) {
                 return_kind = TY_RC;
             } else if (kw->len == 4 && memcmp(kw->name, "weak", 4) == 0) {
                 return_kind = TY_WEAK;
+            } else if (kw->len == 4 && memcmp(kw->name, "lref", 4) == 0) {
+                /* LT3: :lref return type keyword — lref<T> (linear owning pointer) */
+                return_kind = TY_LREF;
             } else if (kw->len == 1 && memcmp(kw->name, "!", 1) == 0) {
                 return_kind = TY_NEVER;
             } else if (kw->len == 3 && memcmp(kw->name, "set", 3) == 0) {
@@ -6383,9 +6432,24 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     /* Phase R6: Reset current function name */
     e->current_fn_name = NULL;
 
+    /* LT1: At function scope exit, verify all linear params were consumed */
+    bool lt1_param_fail = false;
+    if (g_linear_enabled && body) {
+        for (uint8_t _li = 0; _li < n_params; _li++) {
+            if (params[_li]->is_linear && !params[_li]->is_linear_consumed && !params[_li]->is_moved) {
+                diag_emit_with_code(DIAG_ERROR, params[_li]->span,
+                                    TUR_E0100_LINEAR_DROPPED,
+                                    "linear parameter '%s' dropped without being consumed",
+                                    params[_li]->name->name);
+                lt1_param_fail = true;
+            }
+        }
+    }
+
     /* Pop scope */
     e->scope = inner.parent;
     scope_free(&inner);
+    if (lt1_param_fail) return NULL;
 
     /* Infer return type from body if not specified */
     if (return_kind == TY_NIL && body->type.kind != TY_NIL) {
@@ -6416,6 +6480,19 @@ static Expr *elab_defn(Elab *e, const Form *call) {
             Type **aFT = (Type **)arena_alloc(e->arena, n_params * sizeof(Type *));
             for (uint8_t i = 0; i < n_params; i++) aFT[i] = param_poly_types[i];
             fn_type.as.fn.arg_full_types = aFT;
+        }
+    }
+
+    /* LT2: Store arg_linear flags from param bindings into fn_type */
+    {
+        bool any_linear = false;
+        for (uint8_t i = 0; i < n_params; i++) {
+            if (params[i]->is_linear) { any_linear = true; break; }
+        }
+        if (any_linear) {
+            for (uint8_t i = 0; i < n_params; i++) {
+                fn_type.as.fn.arg_linear[i] = params[i]->is_linear;
+            }
         }
     }
 
@@ -7423,6 +7500,8 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_ref)    return elab_ref   (e, call);
     if (name == e->sym_deref)  return elab_deref (e, call);
     if (name == e->sym_drop)   return elab_drop  (e, call);
+    /* LT3: lref<T> */
+    if (name == e->sym_lref_new) return elab_lref_new(e, call);
     /* Phase 9: rc<T> + weak<T> */
     if (name == e->sym_rc_of)       return elab_rc_of(e, call);
     if (name == e->sym_rc_clone)    return elab_rc_clone(e, call);
@@ -9401,16 +9480,18 @@ static void parse_struct_field_type(const char *tname, uint32_t tlen,
     /* Phase 16 v2: :fn field type — function pointer (may carry #{...} effect-row annotation) */
     if (tlen == 2  && memcmp(tname, "fn",    2) == 0) { *out_kind = TY_FN;       return; }
 
-    /* Compound types: rc<T>, ref<T>, weak<T> */
+    /* Compound types: rc<T>, ref<T>, lref<T>, weak<T> */
     /* Parse the prefix and inner type */
     const char *prefix_rc   = "rc<";
     const char *prefix_ref  = "ref<";
+    const char *prefix_lref = "lref<";
     const char *prefix_weak = "weak<";
 
     TypeKind prefix_kind = TY_UNKNOWN;
     uint32_t prefix_len = 0;
     if (tlen > 3 && memcmp(tname, prefix_rc, 3) == 0)   { prefix_kind = TY_RC;   prefix_len = 3; }
     if (tlen > 4 && memcmp(tname, prefix_ref, 4) == 0)  { prefix_kind = TY_REF;  prefix_len = 4; }
+    if (tlen > 5 && memcmp(tname, prefix_lref, 5) == 0) { prefix_kind = TY_LREF; prefix_len = 5; }
     if (tlen > 5 && memcmp(tname, prefix_weak, 5) == 0) { prefix_kind = TY_WEAK; prefix_len = 5; }
 
     if (prefix_kind != TY_UNKNOWN && prefix_len > 0 && tname[tlen - 1] == '>') {
@@ -9645,6 +9726,17 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
                 }
             }
 
+            /* LT1: E0102 -- linear fields cannot appear in :copy structs.
+             * A field of type lref<T> (CK_LINEAR) makes the struct non-copyable,
+             * which is incompatible with :copy semantics. :move structs may hold lref<T>. */
+            if (g_linear_enabled && is_copy && typekind_default_copy_kind(fkind) == CK_LINEAR) {
+                diag_emit_with_code(DIAG_ERROR, field_type_form->span,
+                                    TUR_E0102_LINEAR_COPY,
+                                    "cannot copy linear field '%s' -- "
+                                    "linear values cannot appear in :copy structs",
+                                    field_name_form->as.sym->name);
+                return NULL;
+            }
             /* :copy struct validation: all fields must be copy */
             if (is_copy && !typekind_is_copy_for_struct(fkind)) {
                 diag_emit(DIAG_ERROR, field_type_form->span,
@@ -10504,6 +10596,10 @@ static Expr *elab_match(Elab *e, const Form *call) {
                 }
                 Binding *fb = binding_new(e, var_form->as.sym, ftype, false, false,
                                           var_form->span);
+                /* LT1: Propagate linearity from the field's type to its binding */
+                if (g_linear_enabled && ftype.copy_kind == CK_LINEAR) {
+                    fb->is_linear = true;
+                }
                 scope_add(&arm_scope, fb);
                 pat->bindings[bi] = fb;
             }
@@ -10512,7 +10608,21 @@ static Expr *elab_match(Elab *e, const Form *call) {
             e->scope = saved_scope;
             scope_free(&arm_scope);
             e->g2_skolem_env = saved_senv;
-            if (!body) { free(covered); return NULL; }
+            /* LT1: Verify all linear field bindings in this arm were consumed */
+            bool lt1_arm_fail = false;
+            if (g_linear_enabled && body) {
+                for (uint32_t bi2 = 0; bi2 < n_bindings; bi2++) {
+                    Binding *fb2 = pat->bindings[bi2];
+                    if (fb2->is_linear && !fb2->is_linear_consumed && !fb2->is_moved) {
+                        diag_emit_with_code(DIAG_ERROR, fb2->span,
+                                            TUR_E0100_LINEAR_DROPPED,
+                                            "linear field '%s' dropped without being consumed in match arm",
+                                            fb2->name->name);
+                        lt1_arm_fail = true;
+                    }
+                }
+            }
+            if (!body || lt1_arm_fail) { free(covered); return NULL; }
 
             /* Phase G2: detect skolem escape — arm body result is TY_TYVAR */
             if (adt->is_gadt && body->type.kind == TY_TYVAR) {
@@ -11907,8 +12017,9 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
             return fn_t;
         }
 
-        /* Phase HRT1: (-> T1 T2 ... Tn) — function type expression.
+        /* Phase HRT1/LT2: (-> T1 T2 ... Tn) — function type expression.
          * All but the last element are argument types; the last is the result type.
+         * LT2: ^linear may prefix any arg type: (-> ^linear T1 T2 R) marks T1 as linear.
          * Requires at least (-> result) i.e. 2 elements. */
         if (form->as.list.len >= 1 && form->as.list.items[0]->tag == F_SYM
                 && form->as.list.items[0]->as.sym == e->sym_arrow) {
@@ -11918,8 +12029,15 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
                           "'->': function type requires at least a result type: (-> result) or (-> arg result)");
                 return NULL;
             }
-            /* items[1 .. len-2] are arg types; items[len-1] is result type */
-            uint8_t n_args = (uint8_t)(len - 2); /* may be 0 for zero-arg fn */
+            /* LT2: Two-pass parse to handle optional ^linear annotations.
+             * items[1..len-2] may contain ^linear prefixes before each arg type.
+             * Pass 1: count actual type items (skip ^linear symbols) */
+            uint8_t n_args = 0;
+            for (uint32_t _pi = 1; _pi < len - 1; _pi++) {
+                Form *_it = form->as.list.items[_pi];
+                if (_it->tag == F_SYM && _it->as.sym == e->sym_caret_linear) continue;
+                n_args++;
+            }
             if (n_args > MAX_FN_ARITY) {
                 diag_emit(DIAG_ERROR, form->span,
                           "'->': too many function arguments (max %d)", MAX_FN_ARITY);
@@ -11928,27 +12046,40 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
 
             TypeKind arg_kinds[MAX_FN_ARITY];
             Type *arg_full_types_local[MAX_FN_ARITY];
+            bool arg_linear_local[MAX_FN_ARITY];
             bool any_poly_arg = false;
+            for (uint8_t _ai = 0; _ai < MAX_FN_ARITY; _ai++) arg_linear_local[_ai] = false;
 
-            for (uint8_t i = 0; i < n_args; i++) {
-                Type *at = type_expr_from_form(e, form->as.list.items[1 + i],
+            /* Pass 2: parse types, tracking ^linear prefix per arg */
+            uint8_t arg_idx = 0;
+            bool next_linear = false;
+            for (uint32_t _pi2 = 1; _pi2 < len - 1; _pi2++) {
+                Form *_it2 = form->as.list.items[_pi2];
+                if (_it2->tag == F_SYM && _it2->as.sym == e->sym_caret_linear) {
+                    next_linear = true;
+                    continue;
+                }
+                Type *at = type_expr_from_form(e, _it2,
                                                rec_name, type_params, type_param_kinds, n_type_params);
                 if (!at) return NULL;
-                arg_full_types_local[i] = at;
+                arg_full_types_local[arg_idx] = at;
+                arg_linear_local[arg_idx] = next_linear;
+                next_linear = false;
                 /* Type variables (TY_STRUCT with def=NULL) and quantified types
                  * are represented as TY_INT (int64_t) at the C level. */
                 if (at->kind == TY_STRUCT && at->as.struct_.def == NULL) {
-                    arg_kinds[i] = TY_INT; /* type variable → universal int64_t */
+                    arg_kinds[arg_idx] = TY_INT; /* type variable -> universal int64_t */
                     any_poly_arg = true;
                 } else if (at->kind == TY_FORALL || at->kind == TY_EXISTS) {
-                    arg_kinds[i] = TY_PTR_VOID; /* rank-2 fn → tur_poly_fn_t */
+                    arg_kinds[arg_idx] = TY_PTR_VOID; /* rank-2 fn -> tur_poly_fn_t */
                     any_poly_arg = true;
                 } else {
-                    arg_kinds[i] = at->kind;
+                    arg_kinds[arg_idx] = at->kind;
                 }
+                arg_idx++;
             }
 
-            /* Result type */
+            /* Result type — always items[len-1] */
             Type *result_type = type_expr_from_form(e, form->as.list.items[len - 1],
                                                      rec_name, type_params, type_param_kinds, n_type_params);
             if (!result_type) return NULL;
@@ -11973,7 +12104,34 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
                 if (poly_result) fn_t->as.fn.result_full_type = result_type;
             }
 
+            /* LT2: Store arg_linear flags if any were annotated */
+            {
+                bool any_lin = false;
+                for (uint8_t i = 0; i < n_args; i++) {
+                    if (arg_linear_local[i]) { any_lin = true; break; }
+                }
+                if (any_lin) {
+                    for (uint8_t i = 0; i < n_args; i++) {
+                        fn_t->as.fn.arg_linear[i] = arg_linear_local[i];
+                    }
+                }
+            }
+
             return fn_t;
+        }
+
+        /* LT3: (lref T) — linear owning pointer type expression.
+         * Syntax: (lref inner-type)  e.g. (lref int), (lref MyStruct)
+         * Produces a TY_LREF type with CK_LINEAR copy kind. */
+        if (form->as.list.len == 2
+                && form->as.list.items[0]->tag == F_SYM
+                && form->as.list.items[0]->as.sym == e->sym_lref) {
+            Type *inner_t = type_expr_from_form(e, form->as.list.items[1],
+                                                rec_name, type_params, type_param_kinds, n_type_params);
+            if (!inner_t) return NULL;
+            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *t = type_lref(inner_t->kind);
+            return t;
         }
 
         /* Empty list () = unit / nil type */
@@ -13807,8 +13965,9 @@ static Expr *elab_method_call(Elab *e, const Form *call) {
                     TypeKind fkind = def->fields[i].kind;
                     TypeKind finner = def->fields[i].inner_kind;
                     Type field_type;
-                    if (fkind == TY_REF || fkind == TY_RC || fkind == TY_WEAK) {
+                    if (fkind == TY_REF || fkind == TY_LREF || fkind == TY_RC || fkind == TY_WEAK) {
                         field_type.kind = fkind;
+                        field_type.copy_kind = typekind_default_copy_kind(fkind);
                         field_type.as.ref.inner = finner;
                     } else {
                         field_type = type_from_kind(fkind);

@@ -841,6 +841,7 @@ TypeKind typekind_from_name(const char *name) {
     if (strcmp(name, "ptr-void") == 0 || strcmp(name, "ptr<void>") == 0) return TY_PTR_VOID;
     if (strcmp(name, "fn") == 0) return TY_FN;
     if (strcmp(name, "ref") == 0) return TY_REF;
+    if (strcmp(name, "lref") == 0) return TY_LREF;
     if (strcmp(name, "rc") == 0) return TY_RC;
     if (strcmp(name, "weak") == 0) return TY_WEAK;
     if (strcmp(name, "&immut") == 0 || strcmp(name, "&") == 0) return TY_REF_IMMUT;

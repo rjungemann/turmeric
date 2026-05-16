@@ -1,0 +1,4 @@
+;; LT1 E0100: linear value dropped without being consumed.
+;; x is annotated ^linear but never used in the let body.
+(let [^linear x 42]
+  0)
