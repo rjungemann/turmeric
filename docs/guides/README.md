@@ -27,10 +27,16 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 - **[module-system-guide.md](module-system-guide.md)** — Module system, namespacing, exports
 - **[c-integration-guide.md](c-integration-guide.md)** — Foreign function interface (FFI) and C interop
 - **[effects-vs-monads.md](effects-vs-monads.md)** — Design rationale: why effects instead of Haskell-style monads
+- **[type-annotations-guide.md](type-annotations-guide.md)** — Compound type annotation syntax: `(-> a b)`, `(vec T)`, `forall`, and more
+
+## Type Safety
+
+- **[substructural-types-guide.md](substructural-types-guide.md)** — `^linear`, `^affine`, `^relevant` type disciplines
+- **[uniqueness-types-guide.md](uniqueness-types-guide.md)** — `^unique`: at-most-one-reference ownership
 
 ## Error Handling
 
-- **[error-handling-guide.md](error-handling-guide.md)** — Try/catch, exception types
+- **[error-handling-guide.md](error-handling-guide.md)** — `Result`, `Option`, `panic`, contract macros (`assert!`, `require!`, `ensure!`)
 - **[../design/error-handling-rationale.md](../design/error-handling-rationale.md)** — Design rationale: exceptions vs. panic
 
 ## Tutorials and Examples
@@ -63,7 +69,8 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 - Concurrency → [threading-guide.md](threading-guide.md), [async-await-guide.md](async-await-guide.md), [stm-guide.md](stm-guide.md), [stm-tutorial.md](stm-tutorial.md)
 - Data structures → [hamt-guide.md](hamt-guide.md)
 - Control flow → [effects-system-guide.md](effects-system-guide.md), [logic-programming-guide.md](logic-programming-guide.md), [serializable-continuations-guide.md](serializable-continuations-guide.md), [web-continuations-guide.md](web-continuations-guide.md)
-- Type system → [hkt-guide.md](hkt-guide.md), [hrt-guide.md](hrt-guide.md), [module-system-guide.md](module-system-guide.md)
+- Type system → [hkt-guide.md](hkt-guide.md), [hrt-guide.md](hrt-guide.md), [module-system-guide.md](module-system-guide.md), [type-annotations-guide.md](type-annotations-guide.md)
+- Type safety → [substructural-types-guide.md](substructural-types-guide.md), [uniqueness-types-guide.md](uniqueness-types-guide.md)
 - Effects design → [effects-vs-monads.md](effects-vs-monads.md)
 - Package management → [package-management-guide.md](package-management-guide.md)
 - Tools → [formatter-guide.md](formatter-guide.md), [vscode-guide.md](vscode-guide.md)

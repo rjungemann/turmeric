@@ -1,0 +1,147 @@
+# Type Annotation Syntax
+
+Turmeric supports both simple keyword-style type annotations and compound type
+expressions. This guide covers the full annotation syntax available today.
+
+---
+
+## Basic annotations
+
+The simplest form is a colon followed by a type name. A space between `:` and the
+name is required when the type is a symbol (not fused to a keyword):
+
+```turmeric
+;; Primitive types
+(defn add [a : int  b : int] : int ...)
+(defn ok? [r : ptr<void>]   : bool ...)
+(defn greet [s : cstr]      : unit ...)
+
+;; The old fused-keyword style is still accepted for primitives
+(defn add [a :int b :int] :int ...)
+```
+
+New code should prefer the spaced form (`: int`) because it composes cleanly
+with compound types.
+
+---
+
+## Compound type expressions
+
+When the type is not a single name, write it as a parenthesised list after `: `:
+
+```turmeric
+;; Function type (arrow)
+(defn apply [f : (-> int int)  x : int] : int ...)
+
+;; Parameterised container
+(defn sum [v : (vec int)] : int ...)
+
+;; Nested
+(defn transform [v : (vec (option int))] : (vec int) ...)
+```
+
+### Function types: `(-> arg... ret)`
+
+`->` takes one or more arguments; the last position is the return type:
+
+```turmeric
+(-> int)             ;; nullary function returning int
+(-> int int)         ;; int -> int
+(-> int int int)     ;; (int, int) -> int
+(-> cstr (vec int))  ;; cstr -> (vec int)
+```
+
+### Container types
+
+| Form | Meaning |
+|---|---|
+| `(vec T)` | Growable array of `T` |
+| `(option T)` | Optional value (`some` / `none`) |
+| `(result T E)` | Success or error (`ok` / `err`) |
+| `(pair A B)` | Two-element pair |
+| `(rc T)` | Reference-counted shared pointer |
+| `(ref T)` | Unique, move-only reference |
+
+```turmeric
+(defn first  [p : (pair int bool)] : int ...)
+(defn clone  [p : (rc Buffer)]     : (rc Buffer) ...)
+(defn consume [r : (ref Socket)]   : unit ...)
+```
+
+### Polymorphic types
+
+Use type variables (bare symbols) in generic function signatures:
+
+```turmeric
+(defn identity [x : a] : a ...)
+(defn map-vec  [v : (vec a)  f : (-> a b)] : (vec b) ...)
+```
+
+### Universal and existential quantifiers
+
+```turmeric
+;; Universally quantified (explicit forall)
+(defn id [a b] : (forall [a] (-> a a)) ...)
+
+;; Existentially quantified
+(defn pack [] : (exists [a] (pair a (-> a int))) ...)
+```
+
+### Higher-kinded type arguments
+
+For functions parameterised over a type constructor, use the `^f` / `^^f` kind
+annotations (see [hkt-guide.md](hkt-guide.md)):
+
+```turmeric
+(defn fmap [^f x : (^f a)  fn : (-> a b)] : (^f b) ...)
+```
+
+---
+
+## The `|` operator in symbols
+
+`|` is a valid symbol character, enabling Haskell- and Arrows-style operators:
+
+```turmeric
+(defn ||| [a : arr  b : arr] : arr ...)  ;; parallel composition
+(defn |>  [x : a   f : (-> a b)] : b ...) ;; pipe
+```
+
+---
+
+## Annotations on let bindings
+
+Type annotations work on `let` bindings too:
+
+```turmeric
+(let [x : int 42]
+  (println x))
+
+(let [f : (-> int int) (fn [n] (* n 2))]
+  (println (f 21)))
+```
+
+---
+
+## Substructural annotations
+
+Ownership annotations (`^unique`, `^linear`, `^affine`, `^relevant`) precede the
+type expression:
+
+```turmeric
+(defn consume [^linear  fh : FileHandle] : unit ...)
+(defn sort!   [^unique  v  : (vec int)]  : unit ...)
+(defn log     [^relevant msg : str]      : unit ...)
+```
+
+See [substructural-types-guide.md](substructural-types-guide.md) and
+[uniqueness-types-guide.md](uniqueness-types-guide.md).
+
+---
+
+## See also
+
+- [hkt-guide.md](hkt-guide.md) -- higher-kinded types and kind annotations
+- [hrt-guide.md](hrt-guide.md) -- rank-2 / rank-3 polymorphism
+- [substructural-types-guide.md](substructural-types-guide.md) -- `^linear`, `^affine`, `^relevant`
+- [uniqueness-types-guide.md](uniqueness-types-guide.md) -- `^unique`

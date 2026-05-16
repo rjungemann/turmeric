@@ -167,9 +167,7 @@ A `^linear` value bound inside a match arm must be consumed within that arm.
 
 ## See also
 
-- `docs/linear-types-plan.md` -- linear types (LT0--LT4)
-- `docs/uniqueness-types-plan.md` -- uniqueness types (UT0--UT3)
-- `docs/substructural-types-plan.md` -- implementation plan (ST0--ST3)
+- [Uniqueness Types Guide](uniqueness-types-guide.md) -- `^unique` (at-most-one-reference discipline)
 - `tur --explain TUR-E0100` -- linear drop without consume
 - `tur --explain TUR-E0150` -- affine used twice
 - `tur --explain TUR-E0151` -- relevant dropped without use
