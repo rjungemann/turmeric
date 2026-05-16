@@ -101,6 +101,7 @@ static Type type_from_kind(TypeKind k) {
     t.n_lifetimes = 0;  /* Phase 13: no lifetimes by default */
     t.typeclass_instances = NULL;
     t.n_typeclass_instances = 0;
+    t.hkt_kind = KIND_STAR;  /* Phase HKT-P6: all types are kind * in v1 */
     return t;
 }
 

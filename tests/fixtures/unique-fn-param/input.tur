@@ -1,0 +1,6 @@
+;; UT0: ^unique annotation on a function parameter.
+;; consume-once receives exclusive ownership of x and returns it.
+(defn consume-once [^unique x] :int
+  x)
+
+(println (consume-once 99))

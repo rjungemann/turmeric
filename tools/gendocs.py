@@ -29,20 +29,30 @@ def _parse_params(bracket_content):
     """
     Parse a parameter list like '[value :int next :int]' or '[& clauses]'.
     Returns a list of (name, type_ann) tuples.  Type annotations are optional.
+
+    UT3: ^-annotations (^unique, ^linear, ^mut) that precede a parameter
+    are captured and prepended to the parameter name so they appear in the
+    rendered signature, e.g. '^unique v' instead of 'v'.
     """
     tokens = bracket_content.strip().lstrip('[').split(']')[0].split()
     params = []
     i = 0
+    pending_anns = []  # UT3: accumulated ^-annotations for the next param
     while i < len(tokens):
         tok = tokens[i]
         if tok == '&':
             i += 1
             if i < len(tokens):
-                params.append((tokens[i], '...'))
+                name = tokens[i]
+                if pending_anns:
+                    name = ' '.join(pending_anns) + ' ' + name
+                    pending_anns = []
+                params.append((name, '...'))
             i += 1
             continue
         if tok.startswith('^'):
-            # ^type annotation on the parameter that precedes it -- skip
+            # UT3: ^-annotation precedes the parameter it qualifies
+            pending_anns.append(tok)
             i += 1
             continue
         if tok.startswith(':') or tok.startswith('ptr<') or tok.startswith('ptr'):
@@ -52,7 +62,12 @@ def _parse_params(bracket_content):
                 params[-1] = (name, tok)
             i += 1
             continue
-        params.append((tok, None))
+        # Regular parameter name -- apply any pending annotations
+        name = tok
+        if pending_anns:
+            name = ' '.join(pending_anns) + ' ' + name
+            pending_anns = []
+        params.append((name, None))
         i += 1
     return params
 

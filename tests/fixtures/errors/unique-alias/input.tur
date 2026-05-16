@@ -1,0 +1,7 @@
+;; UT1: passing an aliased value to a ^unique parameter -- TUR_E0200.
+;; consume-unique expects exclusive ownership; x is aliased by y.
+(defn consume-unique [^unique v] :int v)
+
+(let [x 42]
+  (let [y x]
+    (consume-unique x)))
