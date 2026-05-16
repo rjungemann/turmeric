@@ -253,7 +253,8 @@ The substructural framework unifies the linear, affine, and relevant disciplines
 
 1. **Separate annotations or unified framework?** `^linear`, `^affine`, `^relevant` as distinct keywords vs. a single `^substructural(linear)` form. Distinct keywords are more readable.
 2. **Interaction with typeclass constraints:** A typeclass method declared with `^linear` parameters -- must all instances also be `^linear`? Likely yes; the instance discipline must be at least as restrictive as the class declaration.
-3. **`^affine` vs. current move semantics:** `CK_MOVE` already disallows duplication (affine behaviour). Should `CK_MOVE` be renamed `CK_AFFINE` for clarity, or kept separate?
+3. **`^affine` vs. current move semantics:** ~~`CK_MOVE` already disallows duplication (affine behaviour). Should `CK_MOVE` be renamed `CK_AFFINE` for clarity, or kept separate?~~
+   **Decision:** Retire `CK_MOVE`; migrate all existing sites to `CK_UNIQUE`. No `CK_AFFINE` variant in `CopyKind`. The distinction between affine (`^affine`) and unique (`^unique`) is tracked in `SubstructKind` (`SK_AFFINE` vs. the aliasing discipline), not in `CopyKind`. The user-facing `^affine` annotation sets `SK_AFFINE` in `SubstructKind`; the compiler's ownership representation uses only `CK_UNIQUE` and `CK_LINEAR`.
 
 ---
 

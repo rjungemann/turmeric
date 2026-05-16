@@ -61,6 +61,34 @@ static FnDef *fn_index_lookup(const FnIndex *idx, const Binding *b) {
  * Single-function effect-row inference
  * --------------------------------------------------------------------------- */
 
+/* ER5 / PR5-2: Module currently being analysed during effect-row inference.
+ * Set by effect_check_pass before each function's fixed-point iteration so
+ * that private effects of other modules can be filtered at call sites.
+ * NULL during analysis of top-level (non-module) code. */
+static const Symbol *s_current_analysis_module = NULL;
+
+/* ER5 / PR5-2: Strip private effects of other modules from a concrete row.
+ * When A calls B and B's row contains private effects of B, those must not
+ * leak into A's inferred row (A cannot name, perform, or handle them). */
+static EffectRow *filter_cross_module_private(Arena *a, EffectRow *row) {
+    if (!row || row->kind != ERK_CONCRETE || !s_current_analysis_module)
+        return row;
+    uint8_t n = row->as.concrete.n_effects;
+    Effect **filtered = arena_alloc(a, n * sizeof(Effect *));
+    uint8_t k = 0;
+    for (uint8_t i = 0; i < n; i++) {
+        Effect *eff = row->as.concrete.effects[i];
+        if (eff && eff->is_private
+            && eff->defining_module_name
+            && eff->defining_module_name != s_current_analysis_module)
+            continue; /* strip: private to a different module */
+        filtered[k++] = eff;
+    }
+    if (k == n) return row;
+    if (k == 0) return effect_row_empty(a);
+    return effect_row_concrete(a, filtered, k);
+}
+
 /* Walk an expression tree and collect into *row all effects that are directly
  * performed (EX_PERFORM) or transitively performed (EX_CALL to a known defn
  * whose inferred row is already populated).
@@ -195,6 +223,8 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
              * inferred row (e.g., from a polymorphic higher-order parameter). */
             EffectRow *callee_row =
                 effect_row_apply_subst(callee->inferred_effect_row, subst, a);
+            /* ER5 / PR5-2: strip private effects of other modules. */
+            callee_row = filter_cross_module_private(a, callee_row);
             row = effect_row_merge(a, row, callee_row);
             /* Explicit unsafe annotation on the callee should also propagate. */
             Effect *unsafe_eff = find_unsafe_effect(env);
@@ -886,6 +916,11 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
 
             FnDef *fn = item->as.fn_def_.fn;
 
+            /* ER5 / PR5-2: set the module context so cross-module private
+             * effects are filtered when merging callee rows. */
+            s_current_analysis_module =
+                fn->binding ? fn->binding->defining_module_name : NULL;
+
             /* Phase P19-4: create a fresh substitution for each function analysis.
              * This allows row-variable bindings to be computed per-invocation. */
             EffectRowSubst *subst = effect_row_subst_new(a);
@@ -903,6 +938,9 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
             }
         }
     }
+
+    /* Reset module context after fixed-point so it doesn't affect validation. */
+    s_current_analysis_module = NULL;
 
     /* --- Step 3: Validate each function against its declared row. --- */
     int rc = 0;

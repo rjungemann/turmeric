@@ -576,11 +576,13 @@ HRT Phase HRT1 (Rank-2 types, prerequisite for ET2)
     |
     ET1 (expression-level row checking; handle reduction)
       |
-      ET2 (forall [e] polymorphism)  <-- requires HRT1
+      [GATE: effect_row_occurs check + TUR-E0254 fixture must pass]
         |
-        ET3 (handler typing; TY_HANDLER; composition)
+        ET2 (forall [e] polymorphism)  <-- requires HRT1 + occurs check gate
           |
-          ET4 (stdlib, hierarchy, tooling, -Xeffect-types flag)
+          ET3 (handler typing; TY_HANDLER; typed handler structs)
+            |
+            ET4 (stdlib, hierarchy, tooling, -Xeffect-types flag)
 ```
 
 ET0 and ET1 can proceed in parallel with HRT development (they do not require
@@ -602,37 +604,25 @@ rank-N types). ET2 must wait for HRT1. ET3 and ET4 follow ET2.
 
 ## Open Questions
 
-1. **Effect hierarchy syntax:** Should `^extends` be a `defeffect` attribute, or
-   should the hierarchy be declared in a separate form? Consider:
+1. **Effect hierarchy syntax:** ~~Should `^extends` be a `defeffect` attribute, or should the hierarchy be declared in a separate form?~~
+   **Decision:** `^extends` attribute on `defeffect`. The parent relationship lives adjacent to the effect definition:
    ```turmeric
-   (defeffect Write ^extends IO ...)
+   (defeffect Write ^extends IO
+     (write [msg : cstr] : unit))
    ```
-   vs.
-   ```turmeric
-   (effect-hierarchy
-     (IO (Write) (Read) (Network)))
-   ```
+   Consistent with other `^`-prefixed annotations; keeps the hierarchy discoverable at the definition site. No standalone `effect-hierarchy` form.
 
-2. **`forall [e]` vs. implicit generalisation:** Should row polymorphism always
-   require explicit `forall [e]` (more readable, less magic), or should the
-   elaborator generalise row variables implicitly (more ergonomic)? The current
-   plan supports both, with `--strict-effects` nudging toward explicit
-   annotations.
+2. **`forall [e]` vs. implicit generalisation:** ~~Should row polymorphism always require explicit `forall [e]`, or should the elaborator generalise row variables implicitly?~~
+   **Decision:** Implicit generalisation by default; explicit `forall [e]` always permitted. Under `--strict-effects` (implied by `-Xeffect-types`) the elaborator emits `TUR-W0034` on any inferred `forall [e]` that was not written, nudging library authors toward explicit annotations without forcing it on all users.
 
-3. **First-class handlers vs. `handle` special form:** Making handlers first-class
-   (`handler-clause` syntax) adds expressiveness but increases elaborator
-   complexity. An intermediate option is typed handler records (structs with
-   `TY_HANDLER`-typed fields) without a new syntactic form.
+3. **First-class handlers vs. `handle` special form:** ~~Making handlers first-class (`handler-clause` syntax) adds expressiveness but increases elaborator complexity. An intermediate option is typed handler records (structs with `TY_HANDLER`-typed fields) without a new syntactic form.~~
+   **Decision:** Typed handler structs (Option B). No new `handler-clause` syntax. A handler is a regular Turmeric struct with a `TY_HANDLER`-typed field holding a function pointer matching the handler signature. Handlers can be named, bound, and passed as struct values. Composition is manual (call the struct's field). Reuses existing struct and function pointer machinery; defers full first-class handler syntax to a later phase if demand warrants it.
 
-4. **Interaction with Linear Types (LT0--LT4):** The ER6 plan notes that static
-   one-shot enforcement of `k` (the continuation in a handler) is a stepping
-   stone toward linear continuations. ET3 should coordinate with the linear types
-   plan to ensure `TY_HANDLER` and `CK_LINEAR` continuations compose cleanly.
+4. **Interaction with Linear Types (LT0--LT4):** ~~The ER6 plan notes that static one-shot enforcement of `k` (the continuation in a handler) is a stepping stone toward linear continuations. ET3 should coordinate with the linear types plan to ensure `TY_HANDLER` and `CK_LINEAR` continuations compose cleanly.~~
+   **Decision:** Defer. Ship ET3 with untracked continuation kind; ER6's static one-shot warning provides safety in the interim. Continuation linearity is revisited once linear types (LT0--LT4) are stable and real handler usage patterns are established. See [linear-continuations-plan.md](linear-continuations-plan.md) for the full design of the deferred Option B implementation (`CK_UNIQUE` by default, `^linear k` opt-in).
 
-5. **Effect row occurs check:** Row unification can loop if a row variable is
-   unified with a row that contains it (the row equivalent of an infinite type).
-   An occurs check must be added to `effect_row_unify` in `src/effect.h` before
-   ET2 lands. Error code `TUR-E0254` is reserved for this.
+5. **Effect row occurs check:** ~~Row unification can loop if a row variable is unified with a row that contains it. An occurs check must be added to `effect_row_unify` in `src/effect.h` before ET2 lands. Error code `TUR-E0254` is reserved for this.~~
+   **Decision:** The occurs check is a **gating prerequisite for ET2** -- a separate, explicitly completed task before ET2 work begins. Add `effect_row_occurs(EffectRowVar*, EffectRow*)` to `src/effect.h`; call it inside `effect_row_unify` before committing any substitution; emit `TUR-E0254` on failure. ET2 is not started until this task has a passing fixture (`errors/effect-row-occurs.tur`).
 
 ---
 

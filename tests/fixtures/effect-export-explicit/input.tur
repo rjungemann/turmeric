@@ -1,0 +1,13 @@
+;; PR5-3-B: (export (effect Write)) is valid syntax.
+;; The effect and a handler function are both exported and usable.
+(defmodule mymod
+  (export run (effect Write))
+
+  (defeffect Write [s :cstr] :nil)
+
+  (defn run [] :int
+    (handle
+      (do (perform (Write "hello")) 0)
+      (Write [s] k) (do (println s) (resume k nil)))))
+
+(defn main [] :int (run))

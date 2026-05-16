@@ -1730,44 +1730,49 @@ If a feature proves problematic:
 
 ### Linear Types
 
-1. **Should `ref<T>` be redefined as linear?** Currently `ref<T>` is move-only. Making it linear would provide stronger guarantees but might break existing code.
-2. **How do linear types interact with `rc<T>`?** `rc/clone` would need to consume the linear value and produce a shared value.
-3. **Should there be a `^linear` annotation or should linearity be inferred?** Inference is more ergonomic but less explicit.
+1. **Should `ref<T>` be redefined as linear?** ~~Currently `ref<T>` is move-only. Making it linear would provide stronger guarantees but might break existing code.~~
+   **Decision:** Split into two types. `ref<T>` maps to `CK_UNIQUE` (at-most-one alias, drop freely -- the common case). A new `lref<T>` maps to `CK_LINEAR` (exactly-once, silent drop is an error -- for resource handles like `FileHandle`, `Socket`, `MutexGuard`). `CK_MOVE` is retired; see [uniqueness-types-plan.md](uniqueness-types-plan.md).
+2. **How do linear types interact with `rc<T>`?** ~~`rc/clone` would need to consume the linear value and produce a shared value.~~
+   **Decision:** Wrapping an `lref<T>` in `rc<T>` is forbidden. Shared ownership would break the exactly-once guarantee. The type checker rejects `rc/new` (and any `rc` constructor) applied to an `lref<T>` argument. New error `TUR_E0103`.
+3. **Should there be a `^linear` annotation or should linearity be inferred?** ~~Inference is more ergonomic but less explicit.~~
+   **Decision:** Explicit only. Linearity is opt-in via `lref<T>` or `^linear` annotation. No `--infer-linearity` flag. Keeps the contract clear at definition sites and avoids surprise errors from silent inference.
 
 ### Substructural Types
 
-1. **Should affine, relevant, and linear types be separate or unified?** Separate types are clearer; unified framework is more elegant.
-2. **How do substructural types interact with typeclasses?** Typeclass methods can have substructural parameters.
+1. **Should affine, relevant, and linear types be separate or unified?** Separate distinct keywords (`^linear`, `^affine`, `^relevant`) are more readable than a single `^substructural(linear)` form. The unified elaborator infrastructure (a single `UsageState` machine) is still used internally; only the surface syntax is separate.
+2. **How do substructural types interact with typeclasses?** A typeclass method declared with `^linear` parameters requires all instances to match that discipline -- the instance discipline must be at least as restrictive as the class declaration.
 
 ### Session Types
 
-1. **Should sessions be linear by default?** Yes, channels should not be duplicable.
-2. **How do sessions interact with STM?** Atomic message passing within transactions.
-3. **Should sessions support timeouts?** Useful for distributed systems.
+1. **Should sessions be linear by default?** Yes -- channels are `CK_LINEAR` by construction. Enabling `-Xsessions` implicitly enables `-Xlinear`.
+2. **How do sessions interact with STM?** `choose`/`offer` are permitted inside `atomic` blocks (atomically committing a protocol branch decision); `send`/`recv` are forbidden. The elaborator rejects `send`/`recv` inside `atomic` to prevent a partially-advanced linear channel being stranded on transaction retry.
+3. **Should sessions support timeouts?** Yes -- typed and protocol-aware. A `Timeout` constructor encodes both outcomes in the protocol type: `(Recv T (Timeout Q P))` continues as `Q` on message or `P` on timeout, returning the channel in both cases. Added in SS3.
 
 ### Effect Types
 
-1. **Should effect rows be explicit or inferred?** Explicit rows are clearer; inference is more ergonomic.
-2. **How do effect types interact with HRT?** Effect polymorphism requires rank-N types.
-3. **Should there be effect subtyping?** Yes, for flexibility.
+1. **Should effect rows be explicit or inferred?** Both -- explicit `forall [e]` quantification (ET2) and implicit generalisation of row variables are supported. Under `--strict-effects` (ER1, implied by `-Xeffect-types`) the elaborator emits a warning nudging authors toward explicit annotations.
+2. **How do effect types interact with HRT?** Effect polymorphism (`forall [e]`) requires HRT Phase HRT1 (Rank-2 types). ET0--ET1 can proceed in parallel with HRT development; ET2 must wait for HRT1.
+3. **Should there be effect subtyping?** Yes -- `effect_row_is_subset` is extended in ET4 to respect the stdlib effect hierarchy (e.g. a function performing `Write` satisfies a context requiring `IO`).
 
 ### Union/Intersection Types
 
-1. **Should ADTs be syntactic sugar for unions?** Yes, for consistency.
-2. **How do unions interact with pattern matching?** Direct support in `match`.
-3. **Should there be a `any` type?** Yes, for gradual typing.
+1. **Should ADTs be syntactic sugar for unions?** Deferred to a v4 stretch goal. This would unify `defdata` and `(A | B)` syntax but is a larger refactor; implement union types first, then consider the sugar once they are stable.
+2. **How do unions interact with pattern matching?** Direct support in `match` -- each arm narrows the union type; the elaborator checks exhaustiveness across all union members (error `TUR_E0301` for non-exhaustive matches).
+3. **Should there be a `any` type?** Yes -- `any` is the top type, available when either `-Xunion-types` or `-Xintersection-types` is on. Making it always available without a flag may encourage untyped patterns and is deferred.
+4. **Union subtyping and typeclasses?** Instance intersection -- typeclass methods available on all union members may be called directly; methods not in the intersection produce an error naming which member lacks the instance and suggesting a pattern match to narrow.
 
 ### Contract Types
 
-1. **Should contracts be checked or trusted?** Checked by default, with opt-out for performance.
-2. **What is the contract failure handler?** Panic by default, with custom handler support.
-3. **Should contracts be composable?** Yes, with conjunction and disjunction.
+1. **Should contracts be checked or trusted?** Checked in debug builds (`just build`) always; stripped in release builds (`just release`) by default. Pass `--keep-contracts` to retain them in release builds for safety-critical code.
+2. **What is the contract failure handler?** Panic by default. A custom handler can be registered with `(set-contract-handler! f)` or scoped with `(with-contract-handler h body)`. See [contract-types-plan.md](contract-types-plan.md) §CT4.
+3. **Should contracts be composable?** Yes -- contract conjunction (`{ x : T | (and p q) }`) is supported; contracts on higher-order function arguments propagate to the combinator's call sites. Contract predicates are restricted to pure expressions initially (no effects).
+4. **Should contracts replace `stdlib/contract.tur` macros?** No -- they complement each other. `assert!`/`require!`/`ensure!` remain the imperative guard primitives; contract types are declarative type annotations layered on top.
 
 ### Sized Types
 
-1. **Should sizes be static or dynamic?** Static sizes are more useful; dynamic sizes are more flexible.
-2. **How do sized types interact with FFI?** Size information for C struct layout.
-3. **Should sized types affect memory allocation?** Yes, stack allocation when possible.
+1. **Should sizes be static or dynamic?** Static sizes first (`StaticInt` type-level literals); dynamic sizes deferred. Static sizes cover the primary use cases (matrix dimensions, stack-allocated arrays, bit vectors) without runtime overhead.
+2. **How do sized types interact with FFI?** Size information is used for C struct layout in `extern-c` declarations, allowing Turmeric to verify that a struct matches its declared C layout at compile time.
+3. **Should sized types affect memory allocation?** Yes -- when the size is statically known, the elaborator may emit stack allocation (`alloca`) instead of heap allocation. This is a best-effort optimisation; heap allocation is the fallback.
 
 ---
 
@@ -1780,6 +1785,11 @@ If a feature proves problematic:
 | Error message strategy | Clear codes + actionable messages | Improves developer experience |
 | Documentation strategy | User guide + reference + cookbook | Comprehensive coverage for different learning styles |
 | Testing strategy | Unit + integration + performance | Ensures correctness, compatibility, and performance |
+| `ref<T>` vs. linear redefinition | Split: `ref<T>` → `CK_UNIQUE`, new `lref<T>` → `CK_LINEAR`; retire `CK_MOVE` | Avoids breaking existing code; `ref<T>` covers the common affine case; `lref<T>` is opt-in for resource handles |
+| `lref<T>` + `rc<T>` interaction | Wrapping `lref<T>` in `rc<T>` is forbidden (type error `TUR_E0103`) | Shared ownership would break the exactly-once guarantee |
+| Linear annotation vs. inference | Explicit only -- `lref<T>` or `^linear` annotation; no `--infer-linearity` | Keeps linearity contracts visible at definition sites |
+| `CK_UNIQUE` aliasing | `^unique` values may not be aliased; `rc<T>` wrapping is forbidden (`TUR_E0202`) | Mirrors existing `ref<T>` guarantees; no per-field alias tracking |
+| `CK_MOVE` retirement | Replaced by `CK_UNIQUE` (affine, at-most-one alias) | Cleaner two-primitive ownership model: unique + linear |
 
 ---
 

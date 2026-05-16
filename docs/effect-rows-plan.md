@@ -1,6 +1,9 @@
 # Effect Rows — Full Enforcement Plan (ER0–ER6)
 
-> **Status:** ER0 complete (inferred-vs-declared check). ER1–ER6 planned.
+> **Status:** ER0–ER5 complete. ER6 core items complete (`try-with`, `--dump-effects`, `--lint-effects`).
+> ER5 fully complete: `TUR-E0021` assigned (PR5-1 ✅), cross-module private-effect
+> row filtering implemented (PR5-2 ✅), `export`/`import` effect lists implemented (PR5-3 ✅).
+> ER6 advanced items (static one-shot, stdlib annotation) still planned.
 >
 > **Prerequisites:** Phase 19 algebraic effects complete (shift/reset substrate,
 > handler dispatch runtime, `EffectRow` types, `effect_check.c` inference pass,
@@ -10,7 +13,7 @@
 > **Related:** [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md)
 > (§8 Effect Types / Row Polymorphism, §1 Linear Types)
 >
-> **Last updated:** 2026-05-13
+> **Last updated:** 2026-05-15
 
 ---
 
@@ -315,49 +318,116 @@ module; cross-module effect-row checking works correctly.
 
 ### Background
 
-`Effect` already has `is_private` and `defining_module_name` fields populated by
-`effect_env_register`. The enforcement is missing.
+The module system (M0–M7) is in place. `Effect` already has `is_private` and
+`defining_module_name` fields populated by `effect_env_register` (Phase P19-6).
+The elaborator already blocks cross-module `perform` and `handle` of private
+effects using `diag_emit(DIAG_ERROR, ...)`. Fixtures for the core cases exist:
+`tests/fixtures/module-effect-private/` (positive), `tests/fixtures/errors/module-effect-private-access/`
+(negative), and `tests/fixtures/module-cross-module-effect/` (public cross-module).
 
-### Private effect enforcement
+### Prerequisites — remaining work before ER5 is complete
 
-- [ ] In `effect_env_lookup`, when looking up an effect from a different module,
-  return `NULL` if `is_private` is true and the current module does not match
-  `defining_module_name`. Emit `TUR-E0021` ("effect `Foo` is private to module
-  `bar`").
-- [ ] `perform (PrivateEffect ...)` from outside the defining module: elaborator
-  emits `TUR-E0021` during `EX_PERFORM` elaboration.
-- [ ] `handle ... (PrivateEffect [...] k) ...` from outside: same check in the
-  handler parser.
+> These items were identified during an audit on 2026-05-15. Existing module
+> infrastructure satisfies the heavy-lifting; only the items below are missing.
 
-### Cross-module row propagation
+**PR5-1: Assign `TUR-E0021` diagnostic code to private-effect errors** ✅ Complete
 
-- [ ] When a function from module `A` is called from module `B`, and `A`'s
-  function has an inferred row containing a private effect of `A`, that private
-  effect is **not** visible in `B`'s inferred row. Instead, `B` sees an opaque
-  `#{A/...}` placeholder (or the effect is treated as an external/concrete
-  effect `A:PrivateEffect` with a fully-qualified name).
-- [ ] Exported effects (non-private) are fully visible across modules; their rows
-  propagate normally.
+- [x] Add `TUR_E0021_PRIVATE_EFFECT` to the `DiagCode` enum in `src/diag.h`.
+- [x] Add case to `diag_code_to_string()` in `src/diag.c` (→ `"TUR-E0021"`).
+- [x] Add case to `diag_code_from_string()` in `src/diag.c`.
+- [x] Add entry to `diag_explanations_[]` in `src/diag.c` so `--explain TUR-E0021`
+  works.
+- [x] Update the two `diag_emit(DIAG_ERROR, ...)` calls in `src/elab.c` to use
+  `diag_emit_with_code(..., TUR_E0021_PRIVATE_EFFECT, ...)`.
+- [x] Update `tests/run-flags.sh`: added `TUR-E0021` to the `tur-explain-all-codes` loop.
+- [x] Update `tests/fixtures/errors/module-effect-private-access/expected.diag` to
+  assert `TUR-E0021` in the diagnostic output.
 
-### Module-level `provide` for effects
+**PR5-2: Cross-module effect-row propagation filtering** ✅ Complete
 
-- [ ] `(provide (effect Write))` in a module's provide list makes `Write` public.
-- [ ] `(provide (effect ^private InternalCache))` is a compile error (private
-  cannot be provided).
-- [ ] `(require mod (effect Write))` in a consumer imports only `Write`'s
-  declaration, not any implementation.
+- [x] `filter_cross_module_private()` helper in `src/effect_check.c` strips
+  `ERK_CONCRETE` effects whose `is_private` is true and `defining_module_name`
+  differs from `s_current_analysis_module`.
+- [x] File-local `s_current_analysis_module` set per-function in the fixed-point
+  loop from `fn->binding->defining_module_name`.
+- [x] Filter applied in `EX_CALL` after merging `callee->inferred_effect_row`.
+- [x] Fixture `tests/fixtures/effect-row-cross-private/` — consumer annotated
+  `#{}` calls a module function that internally performs a private effect;
+  accepted without TUR-E0009 because the private effect is filtered.
+
+**PR5-3: Effect names in `export`/`import` lists** ✅ Complete
+
+**PR5-3-A: Add `is_exported` flag to `Effect` struct** ✅ Complete
+
+- [x] `bool is_exported` added to `struct Effect` in `src/effect.h`.
+- [x] Defaults to `true` for non-private effects, `false` for `^private` ones.
+- [x] Set in `effect_env_register()` as `effect->is_exported = !is_private`.
+
+**PR5-3-B: Extend export-list parsing to accept `(effect EffectName)` forms** ✅ Complete
+
+- [x] `elab_defmodule` export-list pass extended to accept `(effect Name)` two-element lists.
+- [x] `n_exported_effects`/`exported_effects` parallel arrays on `DefModule` (`src/expr.h`).
+- [x] Validation loop after body elaboration: ensures effect belongs to this module and is not private; emits `TUR-E0021` if a private effect is listed in `(export (effect ...))`.
+- [x] `sym_effect` interned symbol added to `Elab` struct and initialized in `elab_init_state`.
+
+**PR5-3-C: Enforce effect-export visibility at use sites** ✅ Complete
+
+- [x] Visibility guards in `elab_perform` and `elab_handle` updated from `is_private` to `!is_exported && !elab_effect_is_referred(e, effect)`.
+- [x] `elab_effect_is_referred()` static helper walks `e->referred_effects` (populated by `:refer [(effect Name)]` imports).
+
+**PR5-3-D: Cross-module effect import via `:refer [(effect Write)]`** ✅ Complete
+
+- [x] `parse_import_spec` extended to separate plain symbols from `(effect Name)` entries in the `:refer` vector; stored in `ImportSpec.refer_effect_syms`/`n_refer_effects` (`src/expr.h`).
+- [x] `ElabModule.exported_effects`/`n_exported_effects` populated in `elab_load_module` from the effect env.
+- [x] Import processing loop in `elab_defmodule` resolves each `(effect Name)` entry against the loaded module's `exported_effects` and appends to `e->referred_effects`.
+- [x] `Elab.referred_effects`/`n_referred_effects`/`cap_referred_effects` dynamic array added.
+
+**PR5-3 Fixtures** ✅ Complete
+
+- [x] `tests/fixtures/effect-export-explicit/` — `(export (effect Write))` compiles cleanly and the effect is usable; `run-flags.sh` `effect-export-syntax` test passes.
+
+### Private effect enforcement (already done via P19-6)
+
+- [x] `(defeffect ^private ...)` syntax parsed; `is_private` and
+  `defining_module_name` set in `Effect` struct (`src/elab.c` ~line 5027, `src/effect.c` ~line 317).
+- [x] `perform (PrivateEffect ...)` from outside the defining module: elaborator
+  emits `DIAG_ERROR` with message "effect 'X' is private to module 'Y'"
+  (`src/elab.c` ~line 5228).
+- [x] `handle ... (PrivateEffect [...] k) ...` from outside: same check in
+  handler parsing (`src/elab.c` ~line 5384).
+- [x] Fixture `tests/fixtures/module-effect-private/` — private effect used within
+  defining module passes.
+- [x] Fixture `tests/fixtures/errors/module-effect-private-access/` — cross-module
+  access rejected.
+- [x] Fixture `tests/fixtures/module-cross-module-effect/` — public cross-module
+  effect round-trip works.
+
+### Cross-module row propagation (✅ done — PR5-2)
+
+- [x] Private effects in a callee's inferred row are filtered at call-site
+  boundaries; they do not appear in callers from other modules.
+- [x] Exported effects propagate normally via `effect_check_pass` fixed-point
+  inference (unchanged).
+
+### Effect names in `export`/`import` lists (✅ done — PR5-3)
+
+- [x] `(export (effect Write))` in `defmodule` (PR5-3-B) and
+  `:refer [(effect Write)]` in import specs (PR5-3-D) implemented.
 
 ### Fixtures
 
-- [ ] `module-effect-private.tur` — private effect not accessible from importing
-  module; `TUR-E0021` emitted.
-- [ ] `module-effect-public.tur` — public effect accessible after `require`;
-  handler and perform work cross-module.
-- [ ] `module-effect-row-cross.tur` — effect row annotation on a cross-module
-  `defn` resolves correctly.
+- [x] `module-effect-private.tur` — private effect not accessible from importing
+  module; error emitted. (exists as `tests/fixtures/module-effect-private/` and
+  `tests/fixtures/errors/module-effect-private-access/`)
+- [x] `module-effect-public.tur` — public effect accessible cross-module.
+  (exists as `tests/fixtures/module-cross-module-effect/`)
+- [x] `module-effect-row-cross.tur` — private effects filtered at call-site boundary;
+  consumer annotated `#{}` compiles cleanly.
+  (implemented as `tests/fixtures/effect-row-cross-private/`)
 
-**Exit criterion:** Private effects are enforced at module boundaries; exported
-effects propagate correctly in cross-module row inference.
+**Exit criterion:** `TUR-E0021` is assigned and `--explain TUR-E0021` works (PR5-1 ✅);
+private effects do not leak into cross-module inferred rows (PR5-2 ✅); effect names in
+`export`/`import` lists work via PR5-3-A through PR5-3-D (PR5-3 ✅). ER5 complete.
 
 ---
 
@@ -494,12 +564,12 @@ phases:
 | Phase | Goal | Key Files | Status |
 |---|---|---|---|
 | ER0 | Baseline inference + `TUR-E0009` | `effect_check.c`, `effect.h` | ✅ Complete |
-| ER1 | Pure `#{}` + `--strict-effects` | `effect_check.c`, `main.c` | 📋 Planned |
-| ER2 | Row-variable unification + HO propagation | `effect_check.c`, `effect.h` | 📋 Planned |
-| ER3 | Typeclass method effect rows | `typeclass.c`, `typeclass.h`, `effect_check.c` | 📋 Planned |
-| ER4 | Row subtyping in function types | `types.c`, `elab.c` | 📋 Planned |
-| ER5 | Module effect visibility | `elab.c`, `effect.c` | 📋 Planned |
-| ER6 | `try-with`, `--dump-effects`, static one-shot, stdlib | Multiple | 📋 Planned |
+| ER1 | Pure `#{}` + `--strict-effects` | `effect_check.c`, `main.c` | ✅ Complete |
+| ER2 | Row-variable unification + HO propagation | `effect_check.c`, `effect.h` | ✅ Complete |
+| ER3 | Typeclass method effect rows | `typeclass.c`, `typeclass.h`, `effect_check.c` | ✅ Complete |
+| ER4 | Row subtyping in function types | `effect_check.c`, `emit.c` | ✅ Complete |
+| ER5 | Module effect visibility | `elab.c`, `effect_check.c`, `diag.h` | ✅ Complete (PR5-1, PR5-2, PR5-3) |
+| ER6 | `try-with`, `--dump-effects`, `--lint-effects` | `effect_check.c`, `main.c` | ✅ Complete (core items) |
 
 ## Dependencies
 

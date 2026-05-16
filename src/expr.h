@@ -279,16 +279,20 @@ typedef struct DiscontinueExpr {
 typedef struct {
     const Symbol *module_name;   /* module to import, e.g. "geom/vector" */
     const Symbol *alias;         /* :as alias (or NULL) */
-    const Symbol **refer_syms;  /* :refer list (or NULL = none) */
+    const Symbol **refer_syms;        /* :refer list (or NULL = none) */
     uint32_t n_refer;
+    const Symbol **refer_effect_syms; /* PR5-3-D: (effect Name) entries from :refer list */
+    uint32_t       n_refer_effects;
     Span span;
 } ImportSpec;
 
 typedef struct DefModule {
     const Symbol *name;          /* module name, e.g. "geom/vector" */
     const char *docstring;       /* optional docstring (or NULL) */
-    const Symbol **exports;      /* exported symbols */
+    const Symbol **exports;           /* exported symbols */
     uint32_t n_exports;
+    const Symbol **exported_effects;  /* PR5-3-B: effect names in (export (effect Name)) */
+    uint32_t       n_exported_effects;
     ImportSpec *imports;         /* import specs */
     uint32_t n_imports;
     Expr **body;                 /* elaborated body expressions */

@@ -49,7 +49,7 @@ fi
 
 # tur-explain-all-codes: every known TUR-E code should have an explanation
 for code in TUR-E0001 TUR-E0002 TUR-E0003 TUR-E0004 TUR-E0005 \
-            TUR-E0007 TUR-E0009 TUR-E0010 TUR-E0011 TUR-E0012 TUR-E0013; do
+            TUR-E0007 TUR-E0009 TUR-E0010 TUR-E0011 TUR-E0012 TUR-E0013 TUR-E0021; do
     out=$("$TUR" --explain "$code" 2>&1); rc=$?
     if [ $rc -ne 0 ] || [ -z "$out" ]; then
         fail "tur-explain-${code}" "no explanation registered (exit=$rc)"
@@ -349,6 +349,20 @@ elif [ "$out" != "$(printf 'start\noops')" ]; then
     fail "try-with-nested" "unexpected output: '$out'"
 else
     pass "try-with-nested"
+fi
+
+# ---------------------------------------------------------------------------
+# PR5-3-B: effect-export-syntax
+# ---------------------------------------------------------------------------
+
+# effect-export-syntax: (export (effect Write)) is accepted by the parser/elab
+out=$("$TUR" run tests/fixtures/effect-export-explicit/input.tur 2>&1); rc=$?
+if [ $rc -ne 0 ]; then
+    fail "effect-export-syntax" "should compile (exit=$rc): $out"
+elif [ "$out" != "hello" ]; then
+    fail "effect-export-syntax" "unexpected output: '$out'"
+else
+    pass "effect-export-syntax"
 fi
 
 # ---------------------------------------------------------------------------

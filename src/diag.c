@@ -112,6 +112,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0017_CONT_ESCAPE_ASYNC:                return "TUR-E0017";
         case TUR_E0018_NOT_SERIALIZABLE:                 return "TUR-E0018";
         case TUR_E0019_SERIAL_SHIFT_OUTSIDE_RESET:       return "TUR-E0019";
+        case TUR_E0021_PRIVATE_EFFECT:                   return "TUR-E0021";
         case TUR_W0030_STRICT_EFFECTS_UNANNOTATED: return "TUR-W0030";
         case TUR_W0031_EFFECT_OVER_ANNOTATED:      return "TUR-W0031";
         case TUR_W0032_ROW_VAR_ALWAYS_CONCRETE:    return "TUR-W0032";
@@ -140,6 +141,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0017") == 0) return TUR_E0017_CONT_ESCAPE_ASYNC;
     if (strcmp(s, "TUR-E0018") == 0) return TUR_E0018_NOT_SERIALIZABLE;
     if (strcmp(s, "TUR-E0019") == 0) return TUR_E0019_SERIAL_SHIFT_OUTSIDE_RESET;
+    if (strcmp(s, "TUR-E0021") == 0) return TUR_E0021_PRIVATE_EFFECT;
     if (strcmp(s, "TUR-W0030") == 0) return TUR_W0030_STRICT_EFFECTS_UNANNOTATED;
     if (strcmp(s, "TUR-W0031") == 0) return TUR_W0031_EFFECT_OVER_ANNOTATED;
     if (strcmp(s, "TUR-W0032") == 0) return TUR_W0032_ROW_VAR_ALWAYS_CONCRETE;
@@ -408,6 +410,29 @@ static const DiagExplanation diag_explanations_[] = {
       "Wrap the serial-shift in a serial-reset:\n"
       "  (serial-reset\n"
       "    (serial-shift (fn [k] (save-cont! k) 0) 42))\n"
+    },
+    { TUR_E0021_PRIVATE_EFFECT,
+      "TUR-E0021: Private effect accessed outside its defining module\n"
+      "\n"
+      "An effect declared with ^private is only visible within the module that\n"
+      "defined it.  Attempting to perform or handle a private effect from another\n"
+      "module is a compile-time error.\n"
+      "\n"
+      "Example of the problem:\n"
+      "  ; module mymod\n"
+      "  (defmodule mymod\n"
+      "    (defeffect ^private Ask [] :int)\n"
+      "    (defn run [] :int (perform (Ask))))\n"
+      "\n"
+      "  ; module consumer -- ERROR\n"
+      "  (handle (perform (Ask))       ; TUR-E0021: Ask is private to mymod\n"
+      "    (Ask [] k) (resume k 42))\n"
+      "\n"
+      "Solutions:\n"
+      "  1. Remove ^private from the defeffect declaration to make the effect\n"
+      "     public and importable by other modules.\n"
+      "  2. Expose a public function in mymod that encapsulates the effect and\n"
+      "     provides the handler, so consumers never touch Ask directly.\n"
     },
     { TUR_W0030_STRICT_EFFECTS_UNANNOTATED,
       "TUR-W0030: Unannotated effectful function (--strict-effects)\n"
