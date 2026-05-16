@@ -41,3 +41,6 @@ extern bool g_dump_effects;
 
 /* ER6: --lint-effects flag — advisory warnings for unannotated effectful functions */
 extern bool g_lint_effects;
+
+/* LT0: -Xlinear flag — enable linear type checking */
+extern bool g_linear_enabled;

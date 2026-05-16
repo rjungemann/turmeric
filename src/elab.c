@@ -28,6 +28,9 @@ extern bool g_lint_panic;
 /* Phase G1: GADT feature flag */
 extern bool g_gadt_enabled;
 
+/* LT0: Linear types feature flag */
+extern bool g_linear_enabled;
+
 #define ELAB_MAX_MACRO_EXPANSION_DEPTH 256
 
 /* Helper to create a Type from TypeKind. */
@@ -557,6 +560,8 @@ typedef struct Elab {
     const Symbol *sym_caret_private; /* ^private — module-private visibility annotation */
     /* Phase P3: HAMT lowering */
     const Symbol *sym_caret_persistent; /* ^persistent — immutable map annotation */
+    /* LT0: Linear types */
+    const Symbol *sym_caret_linear;     /* ^linear — linear value annotation */
     const Symbol *sym_map_new;    /* map-new - create new map */
     const Symbol *sym_assoc;      /* assoc - insert/update key-value */
     const Symbol *sym_dissoc;     /* dissoc - delete key */
@@ -1126,6 +1131,8 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_caret_private = intern_cstr(st, "^private");
     /* Phase P3: HAMT lowering */
     e->sym_caret_persistent = intern_cstr(st, "^persistent");
+    /* LT0: Linear types */
+    e->sym_caret_linear = intern_cstr(st, "^linear");
     e->sym_map_new = intern_cstr(st, "map-new");
     e->sym_assoc = intern_cstr(st, "assoc");
     e->sym_dissoc = intern_cstr(st, "dissoc");
@@ -3245,6 +3252,7 @@ static Expr *elab_let(Elab *e, const Form *call) {
         Form *cur = bindings_form->as.list.items[i];
         bool is_mut = false;
         bool is_persistent = false;
+        bool is_linear_ann = false;
         /* Phase P3: Check for ^mut or ^persistent annotation */
         while (cur->tag == F_SYM && cur->as.sym == e->sym_caret_mut) {
             is_mut = true;
@@ -3260,6 +3268,16 @@ static Expr *elab_let(Elab *e, const Form *call) {
             i++;
             if (i >= bindings_form->as.list.len) {
                 diag_emit(DIAG_ERROR, cur->span, "trailing ^persistent with no binding name");
+                rc = -1; break;
+            }
+            cur = bindings_form->as.list.items[i];
+        }
+        /* LT0: Check for ^linear annotation */
+        while (cur->tag == F_SYM && cur->as.sym == e->sym_caret_linear) {
+            is_linear_ann = true;
+            i++;
+            if (i >= bindings_form->as.list.len) {
+                diag_emit(DIAG_ERROR, cur->span, "trailing ^linear with no binding name");
                 rc = -1; break;
             }
             cur = bindings_form->as.list.items[i];
@@ -3315,6 +3333,13 @@ static Expr *elab_let(Elab *e, const Form *call) {
 
         Binding *b = binding_new(e, name, init->type, is_mut, false, name_span);
         b->is_persistent = is_persistent;
+        /* LT0: Mark binding as linear if annotated with ^linear or if initializer
+         * type has CK_LINEAR (e.g., returned from a function returning lref<T>). */
+        if (is_linear_ann || init->type.copy_kind == CK_LINEAR) {
+            b->is_linear = true;
+            /* Upgrade copy_kind to CK_LINEAR on the binding's type */
+            b->type.copy_kind = CK_LINEAR;
+        }
         scope_add(&inner, b);
 
         if (n_binds == cap) {
@@ -3573,6 +3598,20 @@ static Expr *elab_let(Elab *e, const Form *call) {
             /* Update the body with new items */
             body->as.do_.items = new_items;
             body->as.do_.n = new_n;
+        }
+    }
+
+    /* LT1: At scope exit, verify all linear bindings were consumed */
+    if (g_linear_enabled && rc == 0) {
+        for (uint32_t k = 0; k < n_binds; k++) {
+            Binding *lb = binds[k].binding;
+            if (lb->is_linear && !lb->is_linear_consumed && !lb->is_moved) {
+                diag_emit_with_code(DIAG_ERROR, lb->span,
+                                    TUR_E0100_LINEAR_DROPPED,
+                                    "linear value '%s' dropped without being consumed",
+                                    lb->name->name);
+                rc = -1;
+            }
         }
     }
 
@@ -4328,6 +4367,18 @@ static Expr *elab_rc_of(Elab *e, const Form *call) {
 
     Expr *inner = elab_form(e, call->as.list.items[1]);
     if (!inner) return NULL;
+
+    /* LT1: Reject wrapping a linear value in rc<T> */
+    if (g_linear_enabled && inner->type.copy_kind == CK_LINEAR) {
+        const char *val_name = (inner->kind == EX_VAR)
+            ? inner->as.var.binding->name->name : "linear value";
+        diag_emit_with_code(DIAG_ERROR, call->span,
+                            TUR_E0103_LINEAR_IN_RC,
+                            "cannot wrap linear value '%s' in rc<T> -- "
+                            "shared ownership violates linearity",
+                            val_name);
+        return NULL;
+    }
 
     /* rc<T> where T is the inner expression's type */
     Type rc_type = type_rc(inner->type.kind);
@@ -5885,11 +5936,11 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     /* Track pending constraints that apply to the next type variable */
     TypeClass *pending_constraints[8];  /* Max 8 constraints per function */
     uint8_t n_pending = 0;
-    
+
     /* Map from type variable name to its index for constraint association */
     /* For v1, we use a simple approach: each constraint applies to the next type var */
     /* const Symbol *current_type_var = NULL; */  /* Deferred to v2 */
-    
+
     /* Constraint set for this function - allocated on arena */
     TypeConstraint *constraint_list = NULL;
     uint8_t n_constraints = 0;
@@ -5897,6 +5948,9 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     /* Phase G3: Equality constraint env built from (: a T) param items */
     SkolemEnv param_constraint_env;
     param_constraint_env.n = 0;
+
+    /* LT0: ^linear annotation applies to the next parameter */
+    bool next_param_linear = false;
 
     for (uint32_t i = 0; i < params_f->as.list.len; i++) {
         Form *p = params_f->as.list.items[i];
@@ -5939,6 +5993,12 @@ static Expr *elab_defn(Elab *e, const Form *call) {
                 }
                 continue;
             }
+        }
+
+        /* LT0: ^linear annotation marks the next parameter as linear */
+        if (p->tag == F_SYM && p->as.sym == e->sym_caret_linear) {
+            next_param_linear = true;
+            continue;
         }
 
         /* Phase 15: Handle constraint annotations (^Eq, ^Show, etc.) */
@@ -6123,6 +6183,12 @@ static Expr *elab_defn(Elab *e, const Form *call) {
         /* For phase 2, default to int */
         param_kinds[n_params] = TY_INT;
         Binding *b = binding_new(e, p->as.sym, TYPE_INT, false, false, p->span);
+        /* LT0: If the previous ^linear annotation applied to this parameter, mark it linear */
+        if (next_param_linear) {
+            b->is_linear = true;
+            b->type.copy_kind = CK_LINEAR;
+            next_param_linear = false;
+        }
         if (n_params == 0) {
             params = (Binding **)arena_alloc(e->arena, MAX_FN_ARITY * sizeof(Binding *));
         }
@@ -9159,6 +9225,18 @@ static Expr *elab_form(Elab *e, Form *f) {
             /* Phase 11: Check for use-after-move */
             if (!binding_check_not_moved(b, f->span, "binding")) {
                 return NULL;
+            }
+            /* LT1: Check for use-after-consume of a linear binding */
+            if (g_linear_enabled && b->is_linear) {
+                if (b->is_linear_consumed) {
+                    diag_emit_with_code(DIAG_ERROR, f->span,
+                                        TUR_E0101_LINEAR_USE_AFTER_CONSUME,
+                                        "linear value '%s' used after being consumed",
+                                        b->name->name);
+                    return NULL;
+                }
+                /* Mark linear binding as consumed on use */
+                b->is_linear_consumed = true;
             }
             Expr *out = expr_new(e->arena, EX_VAR, b->type, f->span);
             out->as.var.binding = b;

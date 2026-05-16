@@ -116,6 +116,11 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0030_STRICT_EFFECTS_UNANNOTATED: return "TUR-W0030";
         case TUR_W0031_EFFECT_OVER_ANNOTATED:      return "TUR-W0031";
         case TUR_W0032_ROW_VAR_ALWAYS_CONCRETE:    return "TUR-W0032";
+        /* LT1: Linear type errors */
+        case TUR_E0100_LINEAR_DROPPED:             return "TUR-E0100";
+        case TUR_E0101_LINEAR_USE_AFTER_CONSUME:   return "TUR-E0101";
+        case TUR_E0102_LINEAR_COPY:                return "TUR-E0102";
+        case TUR_E0103_LINEAR_IN_RC:               return "TUR-E0103";
         default:                          return "";
     }
 }
@@ -145,6 +150,11 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0030") == 0) return TUR_W0030_STRICT_EFFECTS_UNANNOTATED;
     if (strcmp(s, "TUR-W0031") == 0) return TUR_W0031_EFFECT_OVER_ANNOTATED;
     if (strcmp(s, "TUR-W0032") == 0) return TUR_W0032_ROW_VAR_ALWAYS_CONCRETE;
+    /* LT1: Linear type errors */
+    if (strcmp(s, "TUR-E0100") == 0) return TUR_E0100_LINEAR_DROPPED;
+    if (strcmp(s, "TUR-E0101") == 0) return TUR_E0101_LINEAR_USE_AFTER_CONSUME;
+    if (strcmp(s, "TUR-E0102") == 0) return TUR_E0102_LINEAR_COPY;
+    if (strcmp(s, "TUR-E0103") == 0) return TUR_E0103_LINEAR_IN_RC;
     return DIAG_CODE_NONE;
 }
 
@@ -464,6 +474,64 @@ static const DiagExplanation diag_explanations_[] = {
       "\n"
       "Fix: replace the row variable with the concrete effect set, e.g.:\n"
       "  (defn run-twice [f :(fn [] #{Ask} :int)] #{Ask} :int ...)\n",
+    },
+    /* LT1: Linear type errors */
+    { TUR_E0100_LINEAR_DROPPED,
+      "TUR-E0100: Linear value dropped without being consumed\n"
+      "\n"
+      "A value of linear type (lref<T> or annotated with ^linear) went out of scope\n"
+      "without being used exactly once. Linear values must be explicitly consumed --\n"
+      "passing them to a function, returning them, or binding them to another name.\n"
+      "\n"
+      "Example of the error:\n"
+      "  (let [fh (open-file \"data.txt\")]\n"
+      "    42)           ; ERROR: fh is dropped without being consumed\n"
+      "\n"
+      "Fix: consume the value before the scope ends:\n"
+      "  (let [fh (open-file \"data.txt\")]\n"
+      "    (close-file fh))\n"
+      "\n"
+      "Enable with: turc -Xlinear myfile.tur\n",
+    },
+    { TUR_E0101_LINEAR_USE_AFTER_CONSUME,
+      "TUR-E0101: Linear value used after being moved or consumed\n"
+      "\n"
+      "A value of linear type was used a second time after it had already been\n"
+      "consumed. Each linear value may be used exactly once.\n"
+      "\n"
+      "Example of the error:\n"
+      "  (let [fh (open-file \"data.txt\")]\n"
+      "    (read-file fh)   ; fh consumed here\n"
+      "    (close-file fh)) ; ERROR: fh already consumed\n"
+      "\n"
+      "Fix: restructure so each linear value flows through exactly one code path.\n"
+      "\n"
+      "Enable with: turc -Xlinear myfile.tur\n",
+    },
+    { TUR_E0102_LINEAR_COPY,
+      "TUR-E0102: Cannot copy a linear value\n"
+      "\n"
+      "Linear values (lref<T> or ^linear) cannot be implicitly duplicated. Copying\n"
+      "would allow the value to be consumed twice, violating the exactly-once\n"
+      "guarantee.\n"
+      "\n"
+      "If you need to share the underlying resource, consider wrapping it in an\n"
+      "abstraction that explicitly transfers ownership (such as passing it through\n"
+      "a channel or splitting it into sub-resources).\n"
+      "\n"
+      "Enable with: turc -Xlinear myfile.tur\n",
+    },
+    { TUR_E0103_LINEAR_IN_RC,
+      "TUR-E0103: Cannot wrap a linear value in rc<T>\n"
+      "\n"
+      "Placing a linear value (lref<T> or ^linear) inside rc<T> is forbidden.\n"
+      "Shared reference-counting allows multiple owners, which would break the\n"
+      "exactly-once consumption guarantee of linear types.\n"
+      "\n"
+      "If the resource must be shared, it must first be made non-linear (e.g., by\n"
+      "consuming it and producing a shared representation).\n"
+      "\n"
+      "Enable with: turc -Xlinear myfile.tur\n",
     },
 };
 
