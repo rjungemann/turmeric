@@ -29,6 +29,15 @@ typedef enum AliasState {
     AS_ALIASED = 1,  /* One or more aliases exist */
 } AliasState;
 
+/* ST1: Usage state for substructural discipline checking.
+ * Tracks how many times a binding has been referenced.
+ * USAGE_UNUSED == 0 so zero-initialised Bindings start unused. */
+typedef enum UsageState {
+    USAGE_UNUSED    = 0,  /* Not yet used */
+    USAGE_USED_ONCE,      /* Used exactly once */
+    USAGE_USED_MANY,      /* Used two or more times */
+} UsageState;
+
 /* A Binding is the resolved target of a `let`/`def`/`defn` name introduction.
  * Bindings are owned by the elaborator and live in the arena. */
 struct Binding {
@@ -64,6 +73,11 @@ struct Binding {
     bool          is_unique;
     /* UT0: whether the unique value has been consumed (moved/aliased) */
     bool          is_unique_consumed;
+    /* ST0: Substructural annotations — ^affine and ^relevant */
+    bool          is_affine;       /* true if annotated with ^affine (no duplication) */
+    bool          is_relevant;     /* true if annotated with ^relevant (must be used) */
+    /* ST1: Usage tracking for substructural discipline checking */
+    UsageState    usage_state;     /* how many times this binding has been referenced */
     /* UT1: alias tracking -- current alias state for this binding */
     AliasState    alias_state;
     /* UT1: name of the binding that aliased this one (for TUR_E0200 message), or NULL */

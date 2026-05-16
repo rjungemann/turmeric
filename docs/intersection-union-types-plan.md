@@ -275,6 +275,145 @@ Union types are the more immediately useful half (gradual typing, heterogeneous 
 
 ---
 
+## Language Comparison
+
+Turmeric's design follows the **TypeScript model**: structural, anonymous, closed unions and intersections with implicit widening and pattern-based narrowing. Here is how each prior-art language differs.
+
+### TypeScript / Flow
+
+- Union types are zero-cost -- TypeScript erases types to JavaScript at compile time; there is no discriminant tag and no memory overhead.
+- Narrowing happens anywhere in control flow (`typeof`, `instanceof`, user-defined type guards), not only in `match`.
+- Impossible intersections (`string & number`) simplify to `never` rather than being statically rejected.
+- Intersection on record types *merges* their fields: `{ x: int } & { y: bool }` gives `{ x: int; y: bool }`.
+
+**Turmeric diverges:** union types require a runtime discriminant tag (C has no type erasure); impossible intersections are statically rejected (`TUR_E0350`); narrowing is `match`-only; intersection on two concrete struct types is rejected, not merged.
+
+### Scala 3
+
+- Union and intersection are grounded in the DOT calculus -- a formal subtype lattice with full algebraic laws (commutativity, associativity, distributivity across `|` and `&`).
+- `A & B` is the lattice *meet* and `A | B` is the lattice *join*; the compiler can always compute them for any two types.
+- Explicit variance annotations (`+A`, `-A`) on type parameters make the system sound when union/intersection types appear inside generics.
+- Intersection types merge trait members, not just constraints.
+
+**Turmeric diverges:** no formal lattice laws are specified; variance is unaddressed; intersection is constraint-only, not trait-merge.
+
+### OCaml Polymorphic Variants
+
+- Unions are **open** (row-typed): a function can be typed to accept a *subset* of tags, and callers may pass a strict superset. This enables composable, extensible union APIs without changing existing code.
+- The runtime tag is a hash of the constructor name -- no sequential discriminant int, no alignment padding to the largest member.
+- Union member types are inferred from usage rather than declared up front.
+
+**Turmeric diverges:** unions are **closed** -- the member set of `(int | cstr)` is fixed. You cannot write a function parameterized over "a union that includes at least `int`." This makes exhaustiveness checking straightforward but sacrifices the extensibility that polymorphic variants provide.
+
+### Ceylon
+
+- Flow-sensitive typing everywhere: `if (x is Foo)` narrows `x` to `Foo` in the true branch -- no explicit `match` required.
+- Used union types to express nullability: `T?` is sugar for `T | Null`, eliminating a separate `Option` type.
+- Types were reified at runtime (JVM), enabling `is T` checks without a separate tag.
+
+**Turmeric diverges:** narrowing is `match`-only; `T?` is not sugar for `T | Null`; types are not reified (no general `is T` outside `match`).
+
+### Rust
+
+- No union or intersection types at the type-system level; enums are the union substitute (nominal, closed -- equivalent to Turmeric `defdata`).
+- Trait bounds are the intersection substitute but only at function signatures (`impl Trait + Trait2`), not as first-class types.
+- `dyn Trait` is a fat pointer (vtable), not a tagged union.
+
+**Turmeric is more expressive here:** `(int & Serializable)` is a first-class type, not merely a parameter-level constraint.
+
+### Summary table
+
+| Design axis | Turmeric | TypeScript | OCaml variants | Scala 3 |
+|---|---|---|---|---|
+| Union openness | Closed | Closed | Open (row-typed) | Closed |
+| Narrowing | `match` only | Anywhere in control flow | `match` only | `match` + flow |
+| Intersection semantics | Constraint-only | Field merge | N/A | Full lattice meet |
+| Runtime cost | Tagged union struct | Zero (type erasure) | Hashed tag word | JVM erased |
+| Impossible intersections | Statically rejected | Reduced to `never` | N/A | Reduced to `Nothing` |
+| Variance with generics | Not addressed | Unsound by design | Inferred | Explicit (`+/-`) |
+| Algebraic laws | Not specified | Not specified | Structural | Full DOT lattice |
+
+---
+
+## Known Limitations and Tradeoffs
+
+### 1. Tagged union overhead -- widening has a runtime cost
+
+TypeScript's union types are zero-cost (erased). Turmeric emits
+`struct { int tag; union { A a; B b; } data; }`. Every union-typed value pays
+one extra `int` for the tag plus alignment padding to the largest member. A
+value of type `(int | cstr | bool)` is larger than `int64_t` on the stack and
+in struct fields, with a `switch` at every `match` site. This matters for
+arrays, struct fields, and cache pressure.
+
+Implicit widening (IT1) -- passing a bare `42 : int` where `(int | cstr)` is
+expected -- requires constructing the tagged union at the call site (writing the
+tag and copying the value). The elaborator must insert explicit coercion nodes;
+it is not a free annotation.
+
+### 2. Narrowing is `match`-only -- no flow-sensitive typing
+
+Without flow-sensitive narrowing, `type-of` checks outside `match` do not
+change the elaborated type of the scrutinee:
+
+```clojure
+;; x is still (int | cstr) in both branches; no narrowing occurs
+(if (= (type-of x) "int")
+  (+ x 1)   ; elaboration error: (int | cstr) is not int
+  ...)
+
+;; The correct form requires match
+(match x
+  (n : int)  (+ n 1)
+  (s : cstr) ...)
+```
+
+`(cast x : T)` returns `(option T)`, which is safe but forces a nested `match`
+to unwrap.
+
+### 3. Intersection on concrete struct types is rejected, not merged
+
+TypeScript and Scala 3 merge the fields of `{ x: int } & { y: bool }` into
+`{ x: int; y: bool }`. Turmeric statically rejects intersections of two known-
+disjoint concrete types (`TUR_E0350`). Intersection is useful only when at
+least one side is a typeclass constraint. Programmers coming from TypeScript
+will expect record merging and find this surprising.
+
+### 4. Closed unions limit library extensibility
+
+Because union types are closed, a library returning `(int | ParseError)` cannot
+be transparently composed with a library returning `(bool | ParseError)` to
+produce `(int | bool | ParseError)` -- an explicit adapter or a new union type
+is required. OCaml's polymorphic variants solve this at the cost of significant
+inference complexity.
+
+### 5. `any` is sound but less ergonomic than TypeScript's `any`
+
+TypeScript's `any` allows unsound casts to any type without handling failure.
+Turmeric's `(cast x : T)` returns `(option T)`, which is the correct choice for
+a systems language but is closer to TypeScript's `unknown` in ergonomics.
+Gradual-typing boundary code will be more verbose.
+
+### 6. Instance intersection on unions defers failures to instance resolution
+
+When `x : (int | cstr)`, only typeclass methods implemented by *both* `int` and
+`cstr` may be called without a `match`. For unions involving unresolved type
+variables or typeclasses, the plan permits the intersection to succeed at the
+type-checking site and fail later during instance resolution. This deferred
+failure is a type-checks-but-fails-to-link scenario that can be difficult to
+diagnose. Future work should consider bounding this or making the failure
+site more predictable.
+
+### 7. Variance with generics is unaddressed
+
+The plan does not specify variance for type constructors containing union or
+intersection types. Passing `vec<(int | cstr)>` where `vec<int>` is expected,
+or vice versa, could introduce unsoundness. TypeScript has known unsoundness in
+this area (arrays are covariant by design choice). This should be addressed
+before union/intersection types are enabled by default.
+
+---
+
 ## References
 
 - [Barbanera & Franzese -- Intersection and Union Types: Syntax and Semantics](https://dl.acm.org/doi/10.1145/357052.357055)

@@ -1,0 +1,4 @@
+;; ST1: basic ^relevant annotation on a let binding.
+;; A relevant value must be used at least once; using it once satisfies that.
+(let [^relevant x 42]
+  (println x))

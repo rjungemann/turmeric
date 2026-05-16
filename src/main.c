@@ -1438,7 +1438,8 @@ static int usage(void) {
         "  --no-warn-unused-result          disable --warn-unused-result (Phase R6)\n"
         "  --lint-panic                     lint panic/must! usage (Phase R6)\n"
         "  -Xlinear                         enable linear type checking (LT0-LT4)\n"
-        "  -Xunique-types                   enable uniqueness type checking (UT0-UT3)\n");
+        "  -Xunique-types                   enable uniqueness type checking (UT0-UT3)\n"
+        "  -Xsubstructural                  enable substructural type checking (ST0-ST3; implies -Xlinear)\n");
     return 64;
 }
 
@@ -1735,6 +1736,15 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "-Xunique-types") == 0) {
             /* UT0: enable uniqueness type checking */
             g_unique_enabled = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "-Xsubstructural") == 0) {
+            /* ST0: enable substructural type checking (implies -Xlinear) */
+            g_substructural_enabled = true;
+            g_linear_enabled = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

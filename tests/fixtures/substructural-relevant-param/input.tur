@@ -1,0 +1,9 @@
+;; ST3: ^relevant on a function parameter -- must be used, may be duplicated.
+(defn log-twice [^relevant x] :int
+  (println x)
+  (println x)
+  x)
+
+(defn main [] :int
+  (log-twice 42)
+  0)

@@ -55,6 +55,9 @@ typedef enum DiagCode {
     TUR_E0200_UNIQUE_ALIASED,      /* value is not unique -- aliased by another binding */
     TUR_E0201_UNIQUE_COPY,         /* cannot copy a unique value (use after consume) */
     TUR_E0202_UNIQUE_IN_RC,        /* cannot wrap a unique value in rc<T> */
+    /* ST0: Substructural type errors (-Xsubstructural) */
+    TUR_E0150_AFFINE_USED_TWICE,   /* affine value used more than once */
+    TUR_E0151_RELEVANT_DROPPED,    /* relevant value dropped without being used */
 } DiagCode;
 
 typedef enum DiagLevel {

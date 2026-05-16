@@ -1,6 +1,6 @@
 # Substructural Types — Implementation Plan (ST0–ST3)
 
-> **Status:** Draft — Not Started
+> **Status:** ST0, ST1, ST2, ST3 complete
 >
 > **Target:** v3
 >
@@ -11,7 +11,7 @@
 > [linear-types-plan.md](linear-types-plan.md),
 > [uniqueness-types-plan.md](uniqueness-types-plan.md)
 >
-> **Last updated:** 2026-05-15
+> **Last updated:** 2026-05-16
 
 ---
 
@@ -137,7 +137,7 @@ src/error.h/.c     -- Error codes TUR_E0150-TUR_E0199
 
 **Goal:** Represent all three disciplines as explicit type flags.
 
-- [ ] Add `SubstructKind` to `src/types.h`:
+- [x] Add `SubstructKind` to `src/types.h`:
 
   ```c
   typedef enum SubstructKind {
@@ -148,13 +148,17 @@ src/error.h/.c     -- Error codes TUR_E0150-TUR_E0199
   } SubstructKind;
   ```
 
-- [ ] Add `substruct` field to `Type` (or integrate with existing `CopyKind`):
-  - `CK_LINEAR` maps to `SK_LINEAR`
-  - `CK_MOVE` maps to `SK_AFFINE` (move semantics already disallow duplication)
+- [x] Add `substruct` field to `Type` (or integrate with existing `CopyKind`):
+  - `CK_LINEAR` maps to `SK_LINEAR` (set explicitly in `type_lref`)
+  - `CK_MOVE`/`CK_UNIQUE` remains `SK_STRUCTURAL` by default; `SK_AFFINE` set via annotation
   - `CK_COPY` maps to `SK_STRUCTURAL`
-- [ ] Parse `^affine` and `^relevant` annotations in `src/reader.c`
-- [ ] Flags are **mutually exclusive**: a type has at most one substructural discipline
-- [ ] Default: `SK_STRUCTURAL` (existing types are unaffected)
+- [x] Parse `^affine` and `^relevant` annotations in `src/elab.c` (let bindings + defn params + function type forms)
+- [x] Flags are **mutually exclusive**: a type has at most one substructural discipline
+- [x] Default: `SK_STRUCTURAL` (existing types are unaffected; `SK_STRUCTURAL == 0`)
+- [x] Add `arg_affine[]` and `arg_relevant[]` to `fn` type in `src/types.h`
+- [x] Add `is_affine` and `is_relevant` fields to `Binding` in `src/expr.h`
+- [x] Add `TUR_E0150_AFFINE_USED_TWICE` and `TUR_E0151_RELEVANT_DROPPED` to `src/diag.h`
+- [x] Add `g_substructural_enabled` flag and `-Xsubstructural` CLI option (implies `-Xlinear`)
 
 ---
 
@@ -177,11 +181,15 @@ Rules per discipline:
 | `SK_RELEVANT` | Error `TUR_E0151` | OK |
 | `SK_LINEAR` | Error `TUR_E0100` | Error `TUR_E0101` |
 
-- [ ] Extend symbol table entry with `UsageState` and `SubstructKind`
-- [ ] On each use of a variable: transition `UsageState`; check against discipline
-- [ ] At scope exit: check `UNUSED` bindings against discipline
-- [ ] Pattern matching: each arm transitions independently; joins are checked for consistency
-- [ ] Move of a substructural variable: transfers ownership to the new binding
+- [x] Extend `Binding` with `UsageState` (`USAGE_UNUSED`, `USAGE_USED_ONCE`, `USAGE_USED_MANY`) in `src/expr.h`
+- [x] On each use of a variable (EX_VAR): transition `UsageState`; check `^affine` (TUR_E0150) and track `^relevant`
+- [x] At scope exit (let, defn params, match arms): check `UNUSED` relevant bindings (TUR_E0151)
+- [x] Pattern matching: relevant arm bindings checked at each arm scope exit
+- [x] Move of a substructural variable: propagates `is_affine`/`is_relevant` to the new binding in let
+- [x] `diag_code_to_string` / `diag_code_from_string` entries for TUR-E0150 and TUR-E0151
+- [x] `-Xsubstructural` extern declared in `elab.c` (`g_substructural_enabled`)
+- [x] Test fixtures: `affine-basic`, `affine-drop`, `affine-fn-param`, `relevant-basic` (happy)
+- [x] Error fixtures: `errors/affine-used-twice`, `errors/relevant-dropped`, `errors/relevant-param-dropped`
 
 ### Error codes
 
@@ -197,11 +205,18 @@ Rules per discipline:
 
 **Goal:** Infer substructural disciplines where possible so explicit annotations are optional.
 
-- [ ] `ref<T>` is inferred as `SK_LINEAR`
-- [ ] Functions that consume a `ref<T>` without returning it are inferred as requiring `SK_LINEAR` or `SK_AFFINE` in that parameter
-- [ ] A value that is always used at least once (provably) is inferred as `SK_RELEVANT` only if explicitly annotated (inference for relevant is conservative)
-- [ ] Inference is **local**: no interprocedural analysis required
-- [ ] Explicit annotation always overrides inference; inferred discipline can be widened by the programmer
+- [x] `ref<T>` is inferred as `SK_LINEAR`
+  - Let bindings: `init->type.kind == TY_REF` → `is_linear = true`, `substruct = SK_LINEAR`
+  - Defn params: `:ref` keyword annotation → `is_linear = true`, `substruct = SK_LINEAR`
+  - Auto-drop is suppressed for linear `ref<T>` bindings; user must explicitly `(drop! r)` or move
+- [x] Functions that consume a `ref<T>` without returning it are inferred as requiring `SK_LINEAR` or `SK_AFFINE` in that parameter
+  - `:ref` keyword param annotation infers `SK_LINEAR` under `-Xsubstructural`
+  - `(ref T)` type-expression in `F_TYPE_ANN` position infers `SK_LINEAR` under `-Xsubstructural`
+- [x] A value that is always used at least once (provably) is inferred as `SK_RELEVANT` only if explicitly annotated (inference for relevant is conservative)
+- [x] Inference is **local**: no interprocedural analysis required
+- [x] Explicit annotation always overrides inference; inferred discipline can be widened by the programmer
+- [x] Test fixtures: `substructural-ref-infer-let`, `substructural-ref-infer-param` (happy)
+- [x] Error fixtures: `errors/substructural-ref-infer-let-dropped`, `errors/substructural-ref-infer-param-dropped`
 
 ---
 
@@ -209,13 +224,23 @@ Rules per discipline:
 
 **Goal:** Stdlib patterns, documentation, and error UX.
 
-- [ ] Stdlib conventions document: when to use `^linear` vs. `^affine` vs. `^relevant`
-- [ ] Helper macros in `stdlib/macros.tur`:
+- [x] Stdlib conventions document: when to use `^linear` vs. `^affine` vs. `^relevant`
+      (`docs/guides/substructural-types-guide.md`)
+- [x] Helper macros in `stdlib/macros.tur`:
   - `(with-resource [x (acquire)] body)` -- ensures `x` is consumed in `body`
-  - `(must-use expr)` -- wraps `expr` in a relevant-typed wrapper
-- [ ] `tur explain TUR_E0150`, `TUR_E0151` entries
-- [ ] Update `tur explain TUR_E0100`, `TUR_E0101`, `TUR_E0102` to reference the unified substructural framework
-- [ ] Integration tests: all three disciplines with typeclasses, effects, borrow checker, FFI
+  - `(must-use expr)` -- wraps `expr` in a relevant-typed wrapper; propagates `SK_RELEVANT`
+    to the outer binding via type-based substruct propagation in `elab_let`
+- [x] `tur --explain TUR-E0150`, `TUR-E0151` entries (added to `src/diag.c`)
+- [x] Updated `tur --explain TUR-E0100`, `TUR-E0101`, `TUR-E0102` to reference the unified
+      substructural framework
+- [x] Integration tests: `substructural-all-three`, `substructural-relevant-param`,
+      `must-use-basic`, `must-use-dup`, `with-resource-basic`;
+      error fixtures: `must-use-dropped`, `substructural-relevant-param-dropped`
+- [x] CT builtin `vec` added (`src/elab.c`) to support macro-generated binding vectors
+      containing annotation symbols like `^relevant`
+- [x] ST3 type-based substruct propagation in `elab_let`: when `init->type.substruct`
+      is `SK_RELEVANT` or `SK_AFFINE` and `init` is not an `EX_VAR`, propagate the
+      discipline to the new binding (enables `must-use` to annotate outer bindings)
 
 ---
 

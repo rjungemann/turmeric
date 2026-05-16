@@ -1,0 +1,4 @@
+;; ST1 E0151: relevant value dropped without being used.
+;; r is annotated ^relevant but never referenced, violating the no-weakening rule.
+(let [^relevant r 42]
+  0)

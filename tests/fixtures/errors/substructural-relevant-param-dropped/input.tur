@@ -1,0 +1,3 @@
+;; ST3 E0151: ^relevant parameter dropped without being used.
+(defn bad [^relevant x] :int
+  0)

@@ -121,6 +121,9 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0101_LINEAR_USE_AFTER_CONSUME:   return "TUR-E0101";
         case TUR_E0102_LINEAR_COPY:                return "TUR-E0102";
         case TUR_E0103_LINEAR_IN_RC:               return "TUR-E0103";
+        /* ST0: Substructural type errors */
+        case TUR_E0150_AFFINE_USED_TWICE:          return "TUR-E0150";
+        case TUR_E0151_RELEVANT_DROPPED:           return "TUR-E0151";
         /* UT1: Uniqueness type errors */
         case TUR_E0200_UNIQUE_ALIASED:             return "TUR-E0200";
         case TUR_E0201_UNIQUE_COPY:                return "TUR-E0201";
@@ -159,6 +162,9 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0101") == 0) return TUR_E0101_LINEAR_USE_AFTER_CONSUME;
     if (strcmp(s, "TUR-E0102") == 0) return TUR_E0102_LINEAR_COPY;
     if (strcmp(s, "TUR-E0103") == 0) return TUR_E0103_LINEAR_IN_RC;
+    /* ST0: Substructural type errors */
+    if (strcmp(s, "TUR-E0150") == 0) return TUR_E0150_AFFINE_USED_TWICE;
+    if (strcmp(s, "TUR-E0151") == 0) return TUR_E0151_RELEVANT_DROPPED;
     /* UT1: Uniqueness type errors */
     if (strcmp(s, "TUR-E0200") == 0) return TUR_E0200_UNIQUE_ALIASED;
     if (strcmp(s, "TUR-E0201") == 0) return TUR_E0201_UNIQUE_COPY;
@@ -487,9 +493,16 @@ static const DiagExplanation diag_explanations_[] = {
     { TUR_E0100_LINEAR_DROPPED,
       "TUR-E0100: Linear value dropped without being consumed\n"
       "\n"
-      "A value of linear type (lref<T> or annotated with ^linear) went out of scope\n"
-      "without being used exactly once. Linear values must be explicitly consumed --\n"
-      "passing them to a function, returning them, or binding them to another name.\n"
+      "A value of linear type (lref<T>, annotated with ^linear, or a ref<T> under\n"
+      "-Xsubstructural) went out of scope without being consumed exactly once.\n"
+      "Linear values must be explicitly consumed -- passing them to a function,\n"
+      "returning them, or binding them to another name.\n"
+      "\n"
+      "This error is part of the unified substructural type system (-Xsubstructural),\n"
+      "which enforces three disciplines:\n"
+      "  ^linear   -- must be used exactly once (no weakening, no contraction)\n"
+      "  ^affine   -- may be discarded; may not be duplicated (no contraction)\n"
+      "  ^relevant -- must be used at least once; may be duplicated (no weakening)\n"
       "\n"
       "Example of the error:\n"
       "  (let [fh (open-file \"data.txt\")]\n"
@@ -499,13 +512,18 @@ static const DiagExplanation diag_explanations_[] = {
       "  (let [fh (open-file \"data.txt\")]\n"
       "    (close-file fh))\n"
       "\n"
-      "Enable with: turc -Xlinear myfile.tur\n",
+      "Enable with: tur -Xlinear myfile.tur\n"
+      "         or: tur -Xsubstructural myfile.tur\n",
     },
     { TUR_E0101_LINEAR_USE_AFTER_CONSUME,
       "TUR-E0101: Linear value used after being moved or consumed\n"
       "\n"
       "A value of linear type was used a second time after it had already been\n"
       "consumed. Each linear value may be used exactly once.\n"
+      "\n"
+      "This is enforced by the substructural type system (-Xsubstructural).\n"
+      "^linear is the strictest discipline: no weakening (must use) and no\n"
+      "contraction (cannot duplicate). See also TUR-E0150 for ^affine violations.\n"
       "\n"
       "Example of the error:\n"
       "  (let [fh (open-file \"data.txt\")]\n"
@@ -514,20 +532,28 @@ static const DiagExplanation diag_explanations_[] = {
       "\n"
       "Fix: restructure so each linear value flows through exactly one code path.\n"
       "\n"
-      "Enable with: turc -Xlinear myfile.tur\n",
+      "Enable with: tur -Xlinear myfile.tur\n"
+      "         or: tur -Xsubstructural myfile.tur\n",
     },
     { TUR_E0102_LINEAR_COPY,
       "TUR-E0102: Cannot copy a linear value\n"
       "\n"
-      "Linear values (lref<T> or ^linear) cannot be implicitly duplicated. Copying\n"
-      "would allow the value to be consumed twice, violating the exactly-once\n"
-      "guarantee.\n"
+      "Linear values (lref<T>, ^linear, or ref<T> under -Xsubstructural) cannot\n"
+      "be implicitly duplicated. Copying would allow the value to be consumed\n"
+      "twice, violating the exactly-once guarantee.\n"
+      "\n"
+      "This is enforced by the substructural type system (-Xsubstructural).\n"
+      "The three disciplines and their duplication rules:\n"
+      "  ^linear   -- no contraction: cannot duplicate\n"
+      "  ^affine   -- no contraction: cannot duplicate (see TUR-E0150)\n"
+      "  ^relevant -- contraction allowed: may duplicate freely\n"
       "\n"
       "If you need to share the underlying resource, consider wrapping it in an\n"
       "abstraction that explicitly transfers ownership (such as passing it through\n"
       "a channel or splitting it into sub-resources).\n"
       "\n"
-      "Enable with: turc -Xlinear myfile.tur\n",
+      "Enable with: tur -Xlinear myfile.tur\n"
+      "         or: tur -Xsubstructural myfile.tur\n",
     },
     { TUR_E0103_LINEAR_IN_RC,
       "TUR-E0103: Cannot wrap a linear value in rc<T>\n"
@@ -592,7 +618,62 @@ static const DiagExplanation diag_explanations_[] = {
       "\n"
       "Fix: if shared ownership is needed, remove the ^unique annotation.\n"
       "\n"
-      "Enable with: turc -Xunique-types myfile.tur\n",
+      "Enable with: tur -Xunique-types myfile.tur\n",
+    },
+    /* ST1: Substructural type explanations */
+    { TUR_E0150_AFFINE_USED_TWICE,
+      "TUR-E0150: Affine value used more than once\n"
+      "\n"
+      "A value annotated with ^affine was used more than once. Affine values\n"
+      "implement no-contraction: they may be discarded (weakening is allowed),\n"
+      "but they may not be duplicated or used a second time.\n"
+      "\n"
+      "This is part of the unified substructural type system (-Xsubstructural).\n"
+      "The three disciplines and their usage rules:\n"
+      "  ^linear   -- must use exactly once (no weakening, no contraction)\n"
+      "  ^affine   -- may discard; may not duplicate (no contraction)\n"
+      "  ^relevant -- must use at least once; may duplicate (no weakening)\n"
+      "\n"
+      "Example of the error:\n"
+      "  (let [^affine k (generate-key)]\n"
+      "    (initialize k)\n"
+      "    (initialize k))  ; ERROR: k used twice\n"
+      "\n"
+      "Fix: use the affine value at most once:\n"
+      "  (let [^affine k (generate-key)]\n"
+      "    (initialize k))  ; OK\n"
+      "\n"
+      "If you need to use the value multiple times, consider ^relevant instead\n"
+      "(must-use, but duplication is allowed).\n"
+      "\n"
+      "Enable with: tur -Xsubstructural myfile.tur\n",
+    },
+    { TUR_E0151_RELEVANT_DROPPED,
+      "TUR-E0151: Relevant value dropped without being used\n"
+      "\n"
+      "A value annotated with ^relevant went out of scope without being used at\n"
+      "least once. Relevant values implement no-weakening: they must be observed\n"
+      "or consumed before going out of scope, but may be duplicated freely.\n"
+      "\n"
+      "This is part of the unified substructural type system (-Xsubstructural).\n"
+      "The three disciplines and their drop rules:\n"
+      "  ^linear   -- must use exactly once; cannot drop unused\n"
+      "  ^affine   -- may drop unused; cannot duplicate\n"
+      "  ^relevant -- must use at least once; may duplicate (cannot drop unused)\n"
+      "\n"
+      "Example of the error:\n"
+      "  (let [^relevant r (acquire-resource)]\n"
+      "    0)            ; ERROR: r dropped without being used\n"
+      "\n"
+      "Fix: use the value at least once before the scope ends:\n"
+      "  (let [^relevant r (acquire-resource)]\n"
+      "    (log r)       ; first use\n"
+      "    (store r))    ; second use -- OK, duplication allowed\n"
+      "\n"
+      "If you only need to ensure the value is dropped (not necessarily used),\n"
+      "consider ^affine or ^linear instead.\n"
+      "\n"
+      "Enable with: tur -Xsubstructural myfile.tur\n",
     },
 };
 
