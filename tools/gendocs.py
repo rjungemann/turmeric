@@ -1112,6 +1112,48 @@ def emit_docstrings_tur(modules, out_path):
 
 
 # ---------------------------------------------------------------------------
+# JSON name list emitter  (--emit-json)
+# ---------------------------------------------------------------------------
+
+def emit_doc_names_json(modules, out_path):
+    """
+    Emit a JSON array of {name, summary, kind} objects for the web search bar.
+    Summary is the first line of the doc entry text.
+    """
+    import json
+
+    entries = []
+    seen = set()
+    for module in modules:
+        for defn in module['definitions']:
+            name = defn['name']
+            key = re.sub(r'\[.*\]$', '', name)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            doc = defn['docstring']
+            if doc and doc.get('summary'):
+                summary = doc['summary']
+            else:
+                summary = key
+
+            entries.append({
+                'name': key,
+                'summary': summary,
+                'kind': defn['kind'],
+            })
+
+    # Sort alphabetically for deterministic output
+    entries.sort(key=lambda e: e['name'].lower())
+
+    out = Path(out_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(entries, ensure_ascii=True, indent=None, separators=(',', ':')), encoding='utf-8')
+    print(f'  Wrote {out_path} ({len(entries)} entries)')
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -1146,6 +1188,11 @@ def main():
         '--emit-tur',
         metavar='PATH',
         help='Also emit a stdlib/docstrings.tur lookup table at PATH',
+    )
+    parser.add_argument(
+        '--emit-json',
+        metavar='PATH',
+        help='Also emit a JSON name list at PATH (for web search bar)',
     )
     args = parser.parse_args()
 
@@ -1197,6 +1244,10 @@ def main():
     # Optionally emit docstrings.tur
     if args.emit_tur:
         emit_docstrings_tur(modules, args.emit_tur)
+
+    # Optionally emit doc-names.json for the web search bar
+    if args.emit_json:
+        emit_doc_names_json(modules, args.emit_json)
 
     print(f'\nDone. {len(modules)} modules -> {out_dir}/')
 

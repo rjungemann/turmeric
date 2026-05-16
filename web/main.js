@@ -364,7 +364,10 @@ async function initWasm() {
         
         // Load code from URL hash
         loadFromUrlHash();
-        
+
+        // Load doc name list for the search bar (non-blocking)
+        fetchDocNames();
+
         // Hide loading overlay
         if (loadingOverlay) loadingOverlay.style.display = 'none';
         
@@ -1253,6 +1256,131 @@ if (document.readyState === 'loading') {
 // ============================================================================
 // Doc Panel (D5: autodoc integration)
 // ============================================================================
+
+// All documented names loaded from /doc-names.json on startup.
+let docNames = [];
+
+/**
+ * Fetch the doc name list and set up the search bar.
+ */
+async function fetchDocNames() {
+    try {
+        const res = await fetch('/doc-names.json');
+        if (!res.ok) return;
+        docNames = await res.json();
+        initDocSearch();
+    } catch (_) {
+        // Non-fatal — search bar stays empty
+    }
+}
+
+/**
+ * Wire up the doc search input to filter docNames and show results.
+ */
+function initDocSearch() {
+    const input = document.getElementById('doc-search');
+    const results = document.getElementById('doc-search-results');
+    if (!input || !results) return;
+
+    let activeIndex = -1;
+
+    function renderResults(items) {
+        activeIndex = -1;
+        if (!items.length) {
+            results.innerHTML = '<div class="doc-no-results">No matches</div>';
+            results.style.display = 'block';
+            return;
+        }
+        results.innerHTML = items.slice(0, 40).map((item, i) => {
+            const shortSummary = item.summary.replace(/^[\w/\-!?*+<>]+\s+--\s+/, '');
+            return `<div class="doc-result-item" data-name="${escapeHtml(item.name)}" data-index="${i}">
+                <span class="doc-result-name">${escapeHtml(item.name)}</span>
+                <span class="doc-result-kind">${escapeHtml(item.kind)}</span>
+                <span class="doc-result-summary">${escapeHtml(shortSummary)}</span>
+            </div>`;
+        }).join('');
+        results.style.display = 'block';
+
+        results.querySelectorAll('.doc-result-item').forEach(el => {
+            el.addEventListener('mousedown', (e) => {
+                e.preventDefault(); // keep focus on input
+                selectResult(el.dataset.name);
+            });
+        });
+    }
+
+    function hideResults() {
+        results.style.display = 'none';
+        results.innerHTML = '';
+        activeIndex = -1;
+    }
+
+    function selectResult(name) {
+        const docText = wasmDocLookup(name);
+        showDocPanel(name, docText);
+        input.value = '';
+        hideResults();
+    }
+
+    function highlightActive() {
+        const items = results.querySelectorAll('.doc-result-item');
+        items.forEach((el, i) => el.classList.toggle('active', i === activeIndex));
+        if (activeIndex >= 0 && items[activeIndex]) {
+            items[activeIndex].scrollIntoView({ block: 'nearest' });
+        }
+    }
+
+    input.addEventListener('input', () => {
+        const q = input.value.trim().toLowerCase();
+        if (!q) { hideResults(); return; }
+        const matches = docNames.filter(d =>
+            d.name.toLowerCase().includes(q) ||
+            d.summary.toLowerCase().includes(q)
+        );
+        renderResults(matches);
+    });
+
+    input.addEventListener('keydown', (e) => {
+        const items = results.querySelectorAll('.doc-result-item');
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            activeIndex = Math.min(activeIndex + 1, items.length - 1);
+            highlightActive();
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            activeIndex = Math.max(activeIndex - 1, -1);
+            highlightActive();
+        } else if (e.key === 'Enter') {
+            if (activeIndex >= 0 && items[activeIndex]) {
+                selectResult(items[activeIndex].dataset.name);
+            } else if (input.value.trim()) {
+                // Exact lookup
+                selectResult(input.value.trim());
+            }
+        } else if (e.key === 'Escape') {
+            hideResults();
+            input.blur();
+        }
+    });
+
+    input.addEventListener('blur', () => {
+        // Small delay so mousedown on a result fires first
+        setTimeout(hideResults, 150);
+    });
+
+    // Open the doc panel when the user starts typing in the search bar
+    input.addEventListener('focus', () => {
+        const pane = document.getElementById('doc-pane');
+        if (pane && pane.style.display === 'none') {
+            const container = document.querySelector('.repl-container');
+            pane.style.display = 'flex';
+            container?.classList.add('doc-open');
+        }
+        if (input.value.trim()) {
+            input.dispatchEvent(new Event('input'));
+        }
+    });
+}
 
 /**
  * Look up documentation for `name` via the WASM turi_doc_lookup export.

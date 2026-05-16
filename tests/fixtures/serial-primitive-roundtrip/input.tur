@@ -9,8 +9,8 @@
 
 ;; Helper: check int round-trip
 (defn check-int [expected :int] :int
-  (let [b (serialize expected)]
-    (let [got (deserialize b)]
+  (let [b (.serialize expected)]
+    (let [got (__inst_Serializable_deserialize_int b)]
       (if (= got expected)
         (do
           (printf "int ok: %lld\n" expected)
@@ -21,8 +21,8 @@
 
 ;; Helper: check bool round-trip
 (defn check-bool [expected :bool] :int
-  (let [b (serialize expected)]
-    (let [got (deserialize b)]
+  (let [b (.serialize expected)]
+    (let [got (__inst_Serializable_deserialize_bool b)]
       (if (= got (if expected 1 0))
         (do
           (printf "bool ok: %lld\n" (if expected 1 0))

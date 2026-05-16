@@ -78,7 +78,6 @@
 (defn bytes-free [b :ptr<void>] :void
   ```c
   free(b);
-  return 0;
   ```)
 
 ;; Concatenate two bytes values into a new one.
