@@ -43,7 +43,7 @@ This cookbook provides practical examples and recipes for creating music with th
 
 ;; Stop playing
 (player-stop player)
-```turmeric
+```
 
 ### Creating a Complete Track
 
@@ -77,7 +77,7 @@ This cookbook provides practical examples and recipes for creating music with th
   (kick [0.0 2.0])
   (snare [1.0 3.0])
   (hat [0.0 0.5 1.0 1.5 2.0 2.5 3.0 3.5])))
-```turmeric
+```
 
 ### Rock Beat
 
@@ -97,7 +97,7 @@ This cookbook provides practical examples and recipes for creating music with th
   (snare [1.0 3.0] :vel 100)
   (hat [0.0 0.5 1.0 1.5 2.0 2.5 3.0 3.5] :vel 80)
   (cymbal [4.0 8.0 12.0 16.0] :vel 90)))
-```turmeric
+```
 
 ### Techno Beat
 
@@ -118,7 +118,7 @@ This cookbook provides practical examples and recipes for creating music with th
   (snare [1.0 3.0] :vel 110)
   (hat [0.0 0.25 0.5 0.75 1.0 1.25 1.5 1.75] :vel 70)
   (hat [0.375 0.625 0.875 1.125 1.375 1.625 1.875] :vel 60)))
-```turmeric
+```
 
 ### Using Euclidean Rhythms
 
@@ -143,7 +143,7 @@ def euclid-to-beats [euclid-pat]
   (every 4 (stack 
     (snare [0.25 0.75 1.25 1.75 2.25 2.75 3.25 3.75] :vel 90)
     (kick [0.5 1.5 2.5 3.5] :vel 100)) 0)))
-```text
+```
 
 ---
 
@@ -159,7 +159,7 @@ def euclid-to-beats [euclid-pat]
 
 ```turmeric
 (def arpeggio (arp-pattern (const [48 52 55 60]) 4.0))
-```turmeric
+```
 
 ### Scale Patterns
 
@@ -189,7 +189,7 @@ def euclid-to-beats [euclid-pat]
   (chord-pattern (const 53) (const 57) (const 60))   ;; F major
   (chord-pattern (const 55) (const 59) (const 62))   ;; G major
   (chord-pattern (const 48) (const 52) (const 55))))  ;; C major
-```turmeric
+```
 
 ### Bass Lines
 
@@ -214,7 +214,7 @@ def euclid-to-beats [euclid-pat]
 
 ;; Wave-like contour
 (def wave-melody (add (const 64) (sine 0.25 8.0)))
-```text
+```
 
 ---
 
@@ -260,7 +260,7 @@ def euclid-to-beats [euclid-pat]
   (add (cycle 48 50 52) (const 4))   ;; Major third
   (add (cycle 48 50 52) (const 7))   ;; Fifth
   (add (cycle 48 50 52) (const 10)))) ;; Minor seventh
-```turmeric
+```
 
 ### Broken Chords (Arpeggiated)
 
@@ -289,7 +289,7 @@ def euclid-to-beats [euclid-pat]
   (add (cycle 48 50 52) (const -12))  ;; Root down octave
   (add (cycle 48 50 52) (const -7))   ;; Fifth down octave
   (add (cycle 48 50 52) (const 4))))  ;; Third
-```text
+```
 
 ---
 
@@ -324,7 +324,7 @@ def euclid-to-beats [euclid-pat]
 (def swing (stack 
   (slow 1.1 (cycle 60 62 64))  ;; Even notes slightly delayed
   (fast 0.9 (cycle 61 63 65))))  ;; Odd notes slightly anticipated
-```turmeric
+```
 
 ### Repetition
 
@@ -347,7 +347,7 @@ def euclid-to-beats [euclid-pat]
 
 ;; Group of 5
 (def quintuplet-group (slow 0.4 (cycle 60 62 64 65 67)))
-```text
+```
 
 ---
 
@@ -372,7 +372,7 @@ def euclid-to-beats [euclid-pat]
 (def random-walk-melody 
   (let [start 60]
     (add (const start) (range (cycle 0 1 2 3 4) -10 10))))
-```turmeric
+```
 
 ### Stochastic Patterns
 
@@ -397,7 +397,7 @@ def euclid-to-beats [euclid-pat]
 (def markov-melody 
   (let [base (cycle 60 62 64 67)]
     (add base (jitter (const 0) 1.0 -1.0))))
-```turmeric
+```
 
 ### Euclidean Patterns
 
@@ -419,7 +419,7 @@ def euclid-to-beats [euclid-pat]
 (def l-system-melody 
   (let [rules {"a" ["a" "b"] "b" ["a"]}]
     (cycle 60 62 64 65 67 69)))
-```turmeric
+```
 
 ### Mathematical Sequences
 
@@ -446,7 +446,7 @@ def euclid-to-beats [euclid-pat]
 (def two-vs-three (stack 
   (polymeter 1.0 (cycle 60 62 64))
   (polymeter 1.5 (cycle 67 69 71))))
-```turmeric
+```
 
 ### Multiple Polyrhythms
 
@@ -466,7 +466,7 @@ def euclid-to-beats [euclid-pat]
 
 ;; 3 voice canon with different intervals
 (def three-voice-canon (canon (cycle 60 64 67) 3 1.0))
-```turmeric
+```
 
 ### Spread
 
@@ -488,7 +488,7 @@ def euclid-to-beats [euclid-pat]
   (5.0 4)   ;; 5 beats in 5/4
   (7.0 8)   ;; 7 beats in 7/8
 ])))
-```turmeric
+```
 
 ### Nested Patterns
 
@@ -513,7 +513,7 @@ def euclid-to-beats [euclid-pat]
 
 ;; Sawtooth wave filter modulation
 (def filter-mod (saw 0.5 1000.0 20000.0))
-```turmeric
+```
 
 ### Combined Effects
 
@@ -532,7 +532,7 @@ def euclid-to-beats [euclid-pat]
 
 ;; ADSR for plucks
 (def pluck-envelope (adsr 0.001 0.1 0.3 0.5 (const true)))
-```turmeric
+```
 
 ### Dynamic Range
 
@@ -562,7 +562,7 @@ def euclid-to-beats [euclid-pat]
 
 ;; Update to transformed pattern
 (player-update player (slow 2 (cycle 220.0 440.0 880.0)))
-```turmeric
+```
 
 ### d1 and hush
 
@@ -592,7 +592,7 @@ def euclid-to-beats [euclid-pat]
 
 ;; Swap to melody
 (swap-patterns player (get patterns :melody))
-```turmeric
+```
 
 ### Mini-Notation Live
 
@@ -621,7 +621,7 @@ def euclid-to-beats [euclid-pat]
 ;; Use in live coding
 (let [[new-state new-pat] (step-stateful counter 0.0)]
   (player-update player (add (const 60) new-pat)))
-```text
+```
 
 ---
 
@@ -639,7 +639,7 @@ def euclid-to-beats [euclid-pat]
 ```turmeric
 ;; Inline simple patterns
 (def inlined (inline-pattern (slow 2 (cycle 1 2))))
-```turmeric
+```
 
 ### Pattern Fusion
 
@@ -656,7 +656,7 @@ def euclid-to-beats [euclid-pat]
 
 ;; Use simple patterns when possible
 (def simple (const 440.0))  ;; Faster than (cycle 440.0)
-```text
+```
 
 ---
 

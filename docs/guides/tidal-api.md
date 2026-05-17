@@ -479,7 +479,7 @@ The main module re-exports all functions from submodules:
 
 ```turmeric
 (import tidal)  ;; Imports all tidal/* modules
-```turmeric
+```
 
 ### Convenience Functions
 

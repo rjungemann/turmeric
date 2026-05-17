@@ -12,7 +12,7 @@ A **rank-2 type** introduces a `forall` *inside* a function argument. The classi
 ; apply-poly works for any type — the callee instantiates `a`
 (defn apply-poly [f (forall [a] (-> a a)) x :int] :int
   (f x))
-```sh
+```
 
 Without rank-2 types, you'd need to pick a concrete type for `f` at the call site, losing the generality.
 
@@ -34,7 +34,7 @@ Annotate a parameter with a `forall` type by placing the type form immediately a
 ```turmeric
 (defn my-fn [f (forall [a] (-> a a)) x :int] :int
   (f x))
-```turmeric
+```
 
 The `forall` type must appear as a parenthesized form `(forall [...] ...)` directly following the parameter symbol.
 
@@ -55,7 +55,7 @@ Use `exists` to hide a type implementation:
 
 (defn use-counter [c (exists [s] s)] :int
   (open c as [s v] v))
-```turmeric
+```
 
 See `docs/higher-ranked-types-plan.md` for the full existential type spec.
 
@@ -87,7 +87,7 @@ Apply a polymorphic function n times — the essence of Church numerals:
 
 (church-apply inc 5 0)       ; => 5
 (church-apply double-it 3 1) ; => 8
-```turmeric
+```
 
 This works because HRT5 correctly propagates the poly fn type through recursive calls.
 
@@ -113,7 +113,7 @@ You can bind a poly fn to a local name and use it multiple times:
 (defn use-poly-id [] :int
   (let [f id]  ; f is a poly fn alias for id
     (+ (apply-poly f 10) (apply-poly f 20))))
-```turmeric
+```
 
 The `source_binding` mechanism tracks `f` back to `id` so the correct wrapper is generated.
 
@@ -144,7 +144,7 @@ Define typeclass methods that accept polymorphic function arguments:
 
 ; Call with any function
 (.transform inc 5)  ; => 6
-```turmeric
+```
 
 ### Pattern 7: Rank-3 types
 
@@ -171,7 +171,7 @@ wrapper. Use direct function calls or closure capture instead.
 ```turmeric
 ; ERROR: 5 is not a function
 (apply-poly 5 42)  ; => error: arg 1: expected ptr<void>, got int
-```turmeric
+```
 
 ### No rank-2 inference at call sites
 
@@ -196,7 +196,7 @@ A rank-2 polymorphic function value is represented as `tur_poly_fn_t`:
 
 ```c
 typedef struct { void *env; int64_t (*fn)(void *, int64_t); } tur_poly_fn_t;
-```text
+```
 
 The compiler automatically:
 1. Wraps a global function into a `tur_poly_fn_t` at the call site

@@ -34,7 +34,7 @@ Phase 18's delimited continuations reify the call stack as a heap-allocated clos
 ;; Later, in another process:
 (def k (deserialize (read-file "continuation.dat")))
 (resume k 42)  ; => 43
-```turmeric
+```
 
 ## Serialization Design
 
@@ -73,7 +73,7 @@ Not all types can be serialized. Opt-in via the `Serializable` trait:
   ;; Custom handler: store file path, re-open on deserialize
   (serialize [fh] (file-handle-path fh))
   (deserialize [path] (open-file path)))
-```turmeric
+```
 
 ### Resource Types
 
@@ -101,7 +101,7 @@ Serialized continuations produce a **deep copy**. Ownership is transferred; orig
   (serialize k))  ; Serialization deep-copies r
                   ; Original r is now inaccessible
 (deserialize bytes)  ; Deserialize: new r created with value 42
-```turmeric
+```
 
 This is safe because:
 - The original continuation is no longer reachable (it was consumed by `shift`).
@@ -167,7 +167,7 @@ Send a half-finished computation to another node:
 ;; Node B: resume
 (def job (deserialize (receive-bytes))
 (def result (resume job))
-```turmeric
+```
 
 ## Example: Web Continuations (Racket-style)
 
@@ -209,7 +209,7 @@ Periodic snapshots for crash recovery:
               (continue k)))))))
   
   (checkpoint-every-n 1000 data))
-```turmeric
+```
 
 ## Reconstruction and Error Handling
 
@@ -235,7 +235,7 @@ Error handling:
       (schema-mismatch _ old-version) ->
         (throw (error (str "Cannot resume: checkpoint uses version " old-version
                            " but current code is version " (current-version)))))))
-```turmeric
+```
 
 ### Partial Reconstruction
 
@@ -282,7 +282,7 @@ If deserialization of a captured value fails, the whole continuation fails. To t
 ;; Resource marshalling
 (marshal resource : a) : resource-token
 (unmarshal token : resource-token) : a
-```turmeric
+```
 
 ## See Also
 

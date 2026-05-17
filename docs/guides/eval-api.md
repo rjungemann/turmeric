@@ -22,7 +22,7 @@ int main(void) {
     turi_env_free(env);
     return 0;
 }
-```text
+```
 
 Compile and link:
 
@@ -107,7 +107,7 @@ The returned value is valid until `turi_env_free(env)`.
 turi_eval(env, "(defn double [x :int] :int (* x 2))");
 TuriValue r = turi_eval(env, "(double 21)");
 /* r.as_int == 42 */
-```turmeric
+```
 
 ### `TuriValue turi_eval_file(TuriEnv *env, const char *path)`
 
@@ -164,7 +164,7 @@ TuriValue turi_float(double f);
 TuriValue turi_cstr(const char *s);   /* borrows s — caller keeps it alive */
 TuriValue turi_error(const char *msg);
 TuriValue turi_errorf(const char *fmt, ...);
-```turmeric
+```
 
 ### Predicates and accessors
 
@@ -183,7 +183,7 @@ const char *turi_error_message(TuriValue v);
 
 ```c
 void turi_value_repr(char *buf, size_t cap, TuriValue v);
-```text
+```
 
 Writes a human-readable representation into `buf` (at most `cap` bytes,
 NUL-terminated).  Examples: `"42"`, `"\"hello\""`, `"#<fn double>"`,
@@ -206,7 +206,7 @@ Registers a C function so that Turmeric code can call it by `name`.
 ```c
 typedef TuriValue (*TuriNativeFn)(TuriEnv *env, TuriValue *args,
                                    uint32_t n, void *ud);
-```text
+```
 
 - `args` — array of evaluated arguments (length `n`).
 - `ud` — the `void *ud` passed to `turi_env_register_native`.
@@ -240,7 +240,7 @@ static TuriValue native_fail(TuriEnv *env, TuriValue *args,
     turi_native_throw(env, "something went wrong");
     return turi_nil();
 }
-```turmeric
+```
 
 ---
 
@@ -298,7 +298,7 @@ TuriValue v = turi_eval(env, user_input);
 if (turi_is_error(v)) {
     fprintf(stderr, "error: %s\n", turi_error_message(v));
 }
-```turmeric
+```
 
 Note: `TURI_ERROR` is a value-level error (parse failure, unbound variable).
 `TURI_THROW` is a Turmeric exception thrown by `(throw ...)` or

@@ -29,7 +29,7 @@ Typeclasses can be parameterised over type constructors using the `^f` or `^^f` 
 (defclass Foldable [^t]
   (fold-left  [container acc fn] :int)
   (fold-right [container acc fn] :int))
-```turmeric
+```
 
 The `^f` parameter means "f has kind `* -> *`".
 Using a primitive type (like `int`) in the type argument position is a type error:
@@ -45,7 +45,7 @@ Using a primitive type (like `int`) in the type argument position is a type erro
 ```turmeric
 (defclass Bifunctor [^^f]
   (bimap [container fn-left fn-right] :int))
-```text
+```
 
 The `^^f` parameter means "f has kind `* -> * -> *`".
 
@@ -75,7 +75,7 @@ Provide a concrete type constructor when implementing an HKT typeclass:
 ;; Bifunctor for Pair
 (definstance Bifunctor [pair]
   (bimap [container fn-left fn-right] (__bimap_pair container fn-left fn-right)))
-```turmeric
+```
 
 ## Using HKT Typeclasses
 
@@ -100,7 +100,7 @@ For reliability with multiple instances, call the implementation function direct
 ```turmeric
 (__fmap_option opt (fn [x] (* x 2)))
 (__bind_option opt (fn [x] (__opt_some (* x 2))))
-```turmeric
+```
 
 ## Container Values at Runtime
 
@@ -109,7 +109,7 @@ Use inline C blocks to allocate and dereference them:
 
 ```turmeric
 (defn __opt_some [x] :int
-  ```c
+  ```
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
   r->is_some = true;
   r->value = x;
@@ -124,7 +124,7 @@ Implement `fmap` and `bind` using inline C to call the closure function pointer:
 
 ```turmeric
 (defn __fmap_option [container fn] :int
-  ```c
+  ```
   struct { bool is_some; int64_t value; } *c =
       (struct { bool is_some; int64_t value; } *)(intptr_t)container;
   if (!c || !c->is_some) return 0;
@@ -141,7 +141,7 @@ Implement `fmap` and `bind` using inline C to call the closure function pointer:
   if (!opt || !opt->is_some) return 0;
   return ((int64_t(*)(int64_t))(intptr_t)fn)(opt->value);
   ```)
-```turmeric
+```
 
 ## Standard HKT Typeclasses
 
@@ -195,7 +195,7 @@ Use `bind` directly to chain monadic operations:
   (let [result (__bind_option step1 (fn [y] (__opt_some (+ y 1))))]
     ;; result = some 7
     (println (__opt_unwrap result))))  ;; 7
-```turmeric
+```
 
 ## do-m Notation
 
@@ -223,7 +223,7 @@ Simple usage (single binding, no variable capture in body):
 ;; None propagates automatically
 (let [r (do-m x (__opt_none) (__opt_some (* x 3)))]
   (println (__opt_some? r)))  ;; false
-```turmeric
+```
 
 ## Closures with fmap
 
@@ -263,7 +263,7 @@ Named functions (non-closures) also work unchanged:
 (let [opt (__opt_some 7)]
   (let [result (.fmap opt double)]
     (println (__opt_unwrap result))))  ;; 14
-```turmeric
+```
 
 `do-m` with captured variables works too:
 
@@ -282,7 +282,7 @@ Named functions (non-closures) also work unchanged:
 (definstance Bifunctor [pair]
   (bimap [container fn-left fn-right]
     (__bimap_pair container fn-left fn-right)))
-```turmeric
+```
 
 ## Performance
 
@@ -324,7 +324,7 @@ TUR_CC_FLAGS="-O0 -std=c99" tur build app.tur -o app
 
 # Debug symbols + sanitizer
 CC=clang TUR_CC_FLAGS="-O1 -g -fsanitize=address -std=c99" tur build app.tur -o app
-```sh
+```
 
 Both variables are inherited by `tur run` and by the test runner (`TUR_CC_FLAGS`
 is explicitly documented in `tests/run.sh`).
@@ -355,7 +355,7 @@ indirection entirely:
 ```sh
 # planned syntax — not yet available
 tur build -O app.tur -o app
-```turmeric
+```
 
 Under `-O`, a call like `.fmap opt f` where `opt` is a known `option` container
 is lowered directly to `__fmap_option(opt, f)` with no dictionary lookup.
@@ -394,7 +394,7 @@ elaborator simply recognises the type name and records it as `TY_INT`.
   (match e
     (Lit n)   n
     (Add l r) (+ (eval-expr l) (eval-expr r))))
-```turmeric
+```
 
 ### Fix -- fixed-point of a functor
 
@@ -441,7 +441,7 @@ without committing to a concrete effect type:
   (let [prog (calc-add 3 4)]
     (println (free-run (fn [op] (let [_ prog] (run-op op))) prog))
     0))
-```turmeric
+```
 
 See `stdlib/free.tur` for `free-pure`, `free-lift`, `free-bind`, `free-fmap`,
 and `free-run`.
