@@ -243,38 +243,38 @@ loop (the same loop in `kind_check_pass` that currently handles
 
 ---
 
-## Intersection/Union Type Codegen (IT4, deferred)
+## Intersection/Union Type Codegen (IT4)
 
-All four items below are blocked on a calling-convention change. Currently
-`type_c_name(TY_UNION)` returns `"int64_t"`, so union-typed values have no
-runtime tag and cannot be discriminated at runtime. Fixing this requires
-introducing a `tur_tagged_t` struct (`{int64_t tag; int64_t val;}`) and
-updating every coercion-insertion point (function parameters, return values, let
-bindings, field reads) simultaneously. A partial implementation would break
-existing tests. All IT4 items remain deferred until this calling-convention
-change is made in one atomic pass.
+- [x] **Tagged union codegen** (`src/emit.c`, IT4): `tur_tagged_t` struct
+  (`{int64_t tag; int64_t val;}`) defined in the C preamble. `type_c_name(TY_UNION)`
+  now returns `"tur_tagged_t"`. `EX_UNION_INJECT` AST node wraps member values
+  with `TUR_TAG(member_idx, val)` at call sites. `EX_MATCH` on union-typed
+  scrutinees emits an `if/else if` chain checking `TUR_GETTAG()` against the
+  member index stored in `MatchPattern.union_member_idx`. All 365 `expected.c`
+  snapshots regenerated. New fixtures: `union-types-match` (2-way dispatch),
+  `union-types-threeway` (3-way dispatch).
 
-- [ ] **Tagged union codegen** (`src/emit.c`, IT4): emit a proper C tagged union
-  (`struct { int tag; union { A a; B b; } data; }`) for `(A | B)` values.
-  Currently union types are type-checked but the codegen path for heterogeneous
-  union-typed values is incomplete. Requires `tur_tagged_t` calling-convention
-  change throughout `src/emit.c` and `src/elab.c`.
-
-- [ ] **Boxing codegen for `any`** (`src/emit.c`, IT4): `any`-typed values carrying
-  pointer-sized payloads (cstr, struct, ADT) need a boxing wrapper struct so
-  that assignment and passing always fits in a pointer-sized slot. Depends on
-  the same `tur_tagged_t` infrastructure as tagged union codegen.
+- [x] **Boxing codegen for `any`** (`src/emit.c`, IT4): `type_c_name(TY_ANY)` now
+  returns `"tur_tagged_t"`. When a value of type `T` flows into `any` at a call
+  site, `EX_UNION_INJECT` wraps it with `TUR_TAG(TypeKind_of_T, val)`, where
+  `TypeKind_of_T` is the numeric `TypeKind` enum value. New fixture:
+  `union-types-any`. Unboxing via `(cast)` and `(type-of)` are deferred (see
+  below).
 
 - [ ] **Gradual typing stdlib** (`src/elab.c`/`stdlib/`, IT4):
-  - `(cast x : T)` -- runtime downcast from `any`; returns `(option T)`
-  - `(type-of x)` -- returns a runtime type tag as a cstr
-  Both require the boxing codegen above to be in place first.
+  - `(cast x : T)` -- runtime downcast from `any`; check `TUR_GETTAG(x) == TypeKind_T`
+    and return `(option T)` (some with unboxed value, or none on tag mismatch)
+  - `(type-of x)` -- returns a runtime type tag as a cstr (maps `TUR_GETTAG(x)` to
+    a string via a lookup table)
+  Infrastructure (`tur_tagged_t`, boxing injection) is now in place; requires
+  new builtin elaboration + new stdlib functions.
 
 - [ ] **Typeclass instance intersection on unions** (`src/elab.c`, IT4): when
   `x : (A | B)`, allow calling typeclass methods that are available on *all*
   union members directly, without requiring a `match`. The elaborator computes
-  the instance intersection at the union type site. Requires tagged union codegen
-  and the `tur_tagged_t` calling convention.
+  the instance intersection at the union type site and generates a tag-dispatched
+  call. Requires `tur_tagged_t` codegen (now done) plus elaborator changes to
+  compute method-intersection sets for union types.
 
 ---
 
