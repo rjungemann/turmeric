@@ -1,0 +1,21 @@
+; Phase G0: Nested ADT matching -- an ADT whose field holds another ADT.
+; Demonstrates extracting an ADT-typed field and sub-matching on it.
+
+(defdata Option
+  (None)
+  (Some :int))
+
+; An ADT whose Wrap constructor carries an Option value as a field.
+(defdata Outer
+  (Empty)
+  (Wrap :Option))
+
+(defn main [] :int
+  ; Wrap a Some inside an Outer, then sub-match.
+  (let [v (Wrap (Some 42))]
+    (match v
+      (Empty)      (println "empty")
+      (Wrap inner) (match inner
+                     (None)   (println "none")
+                     (Some n) (println n)))
+    0))

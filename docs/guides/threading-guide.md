@@ -332,9 +332,11 @@ Returns `(index value)` where `index` is the 0-based clause position (or `-1`
 for `:default`) and `value` is the received value, `true` for `:send`, or the
 `:default` expression result.
 
-**v1 limitation:** When no clause is immediately ready and no `:default` is
-present, select blocks on the first channel only. True fair multi-channel
-blocking is planned for a future phase.
+When multiple clauses are simultaneously ready, `select` picks one uniformly at
+random using an xorshift32 PRNG so that no single channel is systematically
+favoured. When no clause is ready and no `:default` is present, `select` blocks
+on all channels concurrently and wakes as soon as one becomes ready (Phase SEL1
+fair multi-channel blocking).
 
 ### Condition Variables
 

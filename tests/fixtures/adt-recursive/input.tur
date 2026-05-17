@@ -1,0 +1,16 @@
+; Phase G0: Recursive ADT -- a singly-linked list where the tail field
+; holds another List value, demonstrating self-referential sum types.
+
+(defdata List
+  (Nil)
+  (Cons :int :List))
+
+(defn list-sum [lst] :int
+  (match lst
+    (Nil)       0
+    (Cons n tl) (+ n (list-sum tl))))
+
+(defn main [] :int
+  (let [lst (Cons 1 (Cons 2 (Cons 3 (Nil))))]
+    (println (list-sum lst))
+    0))

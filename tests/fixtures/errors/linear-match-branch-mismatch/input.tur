@@ -1,0 +1,7 @@
+;; LT1 E0104: linear value consumed in one match arm but not another.
+;; All arms of a match must consume the same set of outer linear values.
+(defdata Coin (Heads) (Tails))
+(let [^linear x 42]
+  (match (Heads)
+    (Heads) (println x)
+    (Tails) (println 0)))

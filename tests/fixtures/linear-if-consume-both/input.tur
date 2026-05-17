@@ -1,0 +1,7 @@
+;; LT1 happy path: linear value consumed in both branches -- OK.
+(defn main [] :int
+  (let [^linear x 42]
+    (if true
+      (println x)
+      (println x)))
+  0)

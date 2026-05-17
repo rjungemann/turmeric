@@ -1,0 +1,125 @@
+;; Phase S4: Free monad -- extended operations (fmap, chained bind, interpreters).
+;;
+;; Exercises free-fmap, chained free-bind, and a constant interpreter.
+;;
+;; Tests:
+;;   1. free-pure? is true for PureFree values.
+;;   2. free-run on PureFree extracts the value.
+;;   3. free-bind (3 + 4 = 7).
+;;   4. free-run on Suspend with identity interp -> 99.
+;;   5. free-fmap (* 5) on PureFree 11 -> 55.
+;;   6. Chained free-bind: (1 + 3) * 2 = 8.
+;;   7. Constant interpreter overrides Suspend value -> -1.
+
+;; ---- Free monad (inline C, tag-based struct) --------------------------------
+
+(defn free-pure [x] :int
+  ```c
+  struct { int tag; int64_t val; } *r = malloc(sizeof(*r));
+  r->tag = 0; r->val = x;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(defn free-lift [x] :int
+  ```c
+  struct { int tag; int64_t val; } *r = malloc(sizeof(*r));
+  r->tag = 1; r->val = x;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(defn free-pure? [m] :bool
+  ```c
+  struct { int tag; int64_t val; } *r =
+      (struct { int tag; int64_t val; } *)(intptr_t)m;
+  return r->tag == 0;
+  ```)
+
+(defn free-run [interp m] :int
+  ```c
+  struct { int tag; int64_t val; } *fr =
+      (struct { int tag; int64_t val; } *)(intptr_t)m;
+  if (fr->tag == 0) {
+      return fr->val;
+  }
+  int64_t *fat = (int64_t *)(intptr_t)interp;
+  int64_t thunk = fat[0];
+  return ((int64_t(*)(void *, int64_t))(intptr_t)thunk)((void *)fat, fr->val);
+  ```)
+
+(defn free-bind [m kont] :int
+  ```c
+  struct { int tag; int64_t val; } *fr =
+      (struct { int tag; int64_t val; } *)(intptr_t)m;
+  if (fr->tag == 0) {
+      int64_t *fat = (int64_t *)(intptr_t)kont;
+      int64_t thunk = fat[0];
+      return ((int64_t(*)(void *, int64_t))(intptr_t)thunk)((void *)fat, fr->val);
+  }
+  return m;
+  ```)
+
+;; free-fmap: functor map for Free.
+;;   free-fmap (PureFree a) f = PureFree (f a)   (f is a fat closure)
+;;   free-fmap (Suspend  x) f = Suspend x         (pass through)
+(defn free-fmap [m f] :int
+  ```c
+  struct { int tag; int64_t val; } *fr =
+      (struct { int tag; int64_t val; } *)(intptr_t)m;
+  if (fr->tag == 0) {
+      int64_t *fat = (int64_t *)(intptr_t)f;
+      int64_t thunk = fat[0];
+      int64_t mapped =
+          ((int64_t(*)(void *, int64_t))(intptr_t)thunk)((void *)fat, fr->val);
+      struct { int tag; int64_t val; } *out = malloc(sizeof(*out));
+      out->tag = 0; out->val = mapped;
+      return (int64_t)(intptr_t)out;
+  }
+  return m;
+  ```)
+
+;; ---- Tests ------------------------------------------------------------------
+
+(defn main [] :int
+  (do
+    ;; Test 1: free-pure? is true for PureFree
+    (println (free-pure? (free-pure 42)))   ;; true
+
+    ;; Test 2: free-run on PureFree returns the value
+    (let [z 0]
+      (let [id (fn [x] (+ x z))]
+        (println (free-run id (free-pure 42)))))   ;; 42
+
+    ;; Test 3: free-bind adds 4 to 3 -> 7
+    (let [add4 4]
+      (let [r (free-bind (free-pure 3) (fn [x] (free-pure (+ x add4))))]
+        (let [z 0]
+          (let [id (fn [x] (+ x z))]
+            (println (free-run id r))))))   ;; 7
+
+    ;; Test 4: free-run on Suspend with identity interpreter -> 99
+    (let [z 0]
+      (let [id (fn [x] (+ x z))]
+        (println (free-run id (free-lift 99)))))   ;; 99
+
+    ;; Test 5: free-fmap multiplies by 5: fmap (*5) (pure 11) = pure 55
+    (let [m5 5]
+      (let [mapped (free-fmap (free-pure 11) (fn [x] (* x m5)))]
+        (let [z 0]
+          (let [id (fn [x] (+ x z))]
+            (println (free-run id mapped))))))   ;; 55
+
+    ;; Test 6: chained free-bind: (1 + 3) * 2 = 8
+    (let [step 3]
+      (let [r1 (free-bind (free-pure 1) (fn [x] (free-pure (+ x step))))]
+        (let [mul2 2]
+          (let [r2 (free-bind r1 (fn [y] (free-pure (* y mul2))))]
+            (let [z 0]
+              (let [id (fn [x] (+ x z))]
+                (println (free-run id r2))))))))   ;; 8
+
+    ;; Test 7: constant interpreter overrides Suspend payload -> -1
+    (let [neg -1]
+      (let [const-interp (fn [x] neg)]
+        (println (free-run const-interp (free-lift 42)))))   ;; -1
+
+    0))

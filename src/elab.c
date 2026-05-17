@@ -37,6 +37,10 @@ extern bool g_unique_enabled;
 /* ST0: Substructural types feature flag */
 extern bool g_substructural_enabled;
 
+/* IT0: Union types feature flag */
+extern bool g_union_types_enabled;
+extern bool g_intersection_types_enabled;
+
 #define ELAB_MAX_MACRO_EXPANSION_DEPTH 256
 
 /* Helper to create a Type from TypeKind. */
@@ -79,6 +83,8 @@ static TypeKind typekind_from_symbol(const char *name) {
     if (strcmp(name, "uint64") == 0) return TY_UINT64;
     if (strcmp(name, "float32") == 0) return TY_FLOAT32;
     if (strcmp(name, "float64") == 0) return TY_FLOAT64;
+    /* IT4: Top type — available with -Xunion-types or -Xintersection-types */
+    if (strcmp(name, "any") == 0) return TY_ANY;
     return TY_UNKNOWN;
 }
 
@@ -120,6 +126,75 @@ static int type_size_bytes(TypeKind kind) {
         case TY_FLOAT64: return 8;
         default:          return 0;   /* unknown / composite */
     }
+}
+
+/* IT3: Return true if t is a concrete (closed) type that can participate in
+ * provable-disjointness checks.  TY_STRUCT/TY_ADT with a NULL def are type
+ * variables and are therefore open -- not concrete. */
+static bool type_is_concrete_for_disjoint(Type *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case TY_INT: case TY_FLOAT: case TY_BOOL: case TY_CSTR:
+        case TY_NIL: case TY_PTR_VOID:
+        case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT32: case TY_FLOAT64:
+            return true;
+        case TY_STRUCT:
+            /* NULL def means it's a type variable -- not a concrete named struct */
+            return t->as.struct_.def != NULL;
+        case TY_ADT:
+            return t->as.adt_.def != NULL;
+        default:
+            return false;
+    }
+}
+
+/* IT3: Return true if TypeKind k (for a primitive) is a concrete base kind.
+ * Used from the intersection-member-mismatch check where we only have a kind. */
+static bool typekind_is_concrete_for_disjoint(TypeKind k) {
+    switch (k) {
+        case TY_INT: case TY_FLOAT: case TY_BOOL: case TY_CSTR:
+        case TY_NIL: case TY_PTR_VOID:
+        case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT32: case TY_FLOAT64:
+        /* For struct/ADT we cannot check concreteness without the full Type* here;
+         * the caller should use type_is_concrete_for_disjoint() instead when possible. */
+        case TY_STRUCT: case TY_ADT:
+            return true;
+        default:
+            return false;
+    }
+}
+
+/* IT3: Check whether two concrete types are provably disjoint.
+ * Returns true if it is impossible for a single value to satisfy both types.
+ * Only catches the obvious cases (distinct primitives, distinct named structs,
+ * distinct named ADTs). Returns false for any pair involving a typeclass, forall,
+ * type variable, or other open type. */
+static bool types_provably_disjoint(Type *a, Type *b) {
+    if (!a || !b) return false;
+    /* A type is never disjoint from itself */
+    if (type_eq(*a, *b)) return false;
+    /* Only check pairs where both sides are fully concrete */
+    if (!type_is_concrete_for_disjoint(a) ||
+        !type_is_concrete_for_disjoint(b)) return false;
+    TypeKind ka = a->kind, kb = b->kind;
+    /* Two different primitive kinds are disjoint */
+    if (ka != kb) return true;
+    /* Same kind -- check identity for nominal types */
+    if (ka == TY_STRUCT) {
+        StructDef *da = a->as.struct_.def;
+        StructDef *db = b->as.struct_.def;
+        if (da && db && da->name && db->name && da->name != db->name) return true;
+    }
+    if (ka == TY_ADT) {
+        AdtDef *da = a->as.adt_.def;
+        AdtDef *db = b->as.adt_.def;
+        if (da && db && da->name && db->name && da->name != db->name) return true;
+    }
+    return false;
 }
 
 /* ---- scope ---- */
@@ -680,6 +755,7 @@ typedef struct Elab {
     const Symbol *sym_make_struct; /* make-struct */
     const Symbol *kw_copy;        /* :copy keyword for defstruct */
     const Symbol *kw_move;        /* :move keyword for defstruct */
+    const Symbol *kw_linear;      /* LT4: :linear keyword for defstruct (exactly-once) */
     /* Phase 12: Borrow traits */
     const Symbol *sym_borrow;      /* & symbol for immutable borrow */
     const Symbol *sym_borrow_mut;  /* &mut for mutable borrow */
@@ -733,6 +809,10 @@ typedef struct Elab {
     /* Phase T21-F: async/await forms */
     const Symbol *sym_async;
     const Symbol *sym_await;
+    /* Phase SEL1: fair multi-channel select */
+    const Symbol *sym_select;
+    const Symbol *sym_recv;   /* :recv keyword */
+    const Symbol *sym_send;   /* :send keyword */
     /* Phase 20: Software Transactional Memory */
     const Symbol *sym_stm;           /* stm */
     const Symbol *sym_atomically;    /* atomically */
@@ -760,6 +840,9 @@ typedef struct Elab {
     const Symbol *sym_tvar_cas;      /* tvar/cas */
     /* Phase N: (as TargetType expr) numeric cast */
     const Symbol *sym_as;
+    /* IT4 gradual typing */
+    const Symbol *sym_type_of;  /* (type-of x) — cstr name of an any-typed value's type */
+    const Symbol *sym_cast;     /* (cast x T) — unsafe downcast from any to T */
     /* Phase 13: Lifetime annotations */
     /* We recognize lifetime annotations as symbols starting with '\'' */
     /* No specific symbol needed - we check the symbol name at runtime */
@@ -803,10 +886,20 @@ typedef struct Elab {
     /* Phase G1: GADT special symbols */
     const Symbol *sym_defgadt;
     const Symbol *sym_colon; /* bare ":" used as annotation separator in defgadt */
+    /* IT0: Union type pipe separator "|" */
+    const Symbol *sym_pipe;        /* "|" -- used in (A | B | C) union type expressions */
+    /* IT2: Intersection type ampersand separator "&" */
+    const Symbol *sym_ampersand;   /* "&" -- used in (A & B & C) intersection type expressions */
     /* Phase G2: current per-arm skolem environment (NULL outside GADT match arms) */
     SkolemEnv *g2_skolem_env;
+    /* Phase G2: GADT constructor whose arm is currently being elaborated.
+     * NULL outside GADT match arms.  Used by diagnostics to name which
+     * constructor's return-type annotation caused a type refinement. */
+    const CtorDef *g2_current_ctor;
     /* Phase G3: coerce special form */
     const Symbol *sym_coerce;
+    /* Phase G3: (~ a b) equality constraint notation */
+    const Symbol *sym_tilde;
     /* Phase M0: Module system */
     const Symbol *sym_defmodule;  /* defmodule */
     const Symbol *sym_export;     /* export */
@@ -1003,6 +1096,63 @@ static bool *move_state_capture_current(Binding **bindings, uint32_t n) {
 static void move_state_restore(Binding **bindings, const bool *states, uint32_t n) {
     for (uint32_t i = 0; i < n; i++) {
         bindings[i]->is_moved = states[i];
+    }
+}
+
+/* LT1: Parallel helpers for is_linear_consumed state across branches.
+ * Only linear bindings (is_linear == true) are included in the snapshot. */
+
+static uint32_t linear_state_snapshot_bindings(const Scope *scope,
+                                                Binding ***out_bindings,
+                                                bool **out_states) {
+    uint32_t n = 0;
+    uint32_t cap = 16;
+    Binding **bindings = (Binding **)malloc(cap * sizeof(Binding *));
+    bool *states = (bool *)malloc(cap * sizeof(bool));
+    if (!bindings || !states) {
+        fprintf(stderr, "tur: oom\n");
+        abort();
+    }
+
+    for (const Scope *cur = scope; cur; cur = cur->parent) {
+        for (uint32_t i = 0; i < cur->n; i++) {
+            Binding *b = cur->bindings[i];
+            if (!b->is_linear) continue;
+            if (n == cap) {
+                cap *= 2;
+                bindings = (Binding **)realloc(bindings, cap * sizeof(Binding *));
+                states = (bool *)realloc(states, cap * sizeof(bool));
+                if (!bindings || !states) {
+                    fprintf(stderr, "tur: oom\n");
+                    abort();
+                }
+            }
+            bindings[n] = b;
+            states[n] = b->is_linear_consumed;
+            n++;
+        }
+    }
+
+    *out_bindings = bindings;
+    *out_states = states;
+    return n;
+}
+
+static bool *linear_state_capture_current(Binding **bindings, uint32_t n) {
+    bool *states = (bool *)malloc((n == 0 ? 1 : n) * sizeof(bool));
+    if (!states) {
+        fprintf(stderr, "tur: oom\n");
+        abort();
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        states[i] = bindings[i]->is_linear_consumed;
+    }
+    return states;
+}
+
+static void linear_state_restore(Binding **bindings, const bool *states, uint32_t n) {
+    for (uint32_t i = 0; i < n; i++) {
+        bindings[i]->is_linear_consumed = states[i];
     }
 }
 
@@ -1278,6 +1428,7 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_make_struct = intern_cstr(st, "make-struct");
     e->kw_copy = intern_cstr(st, "copy");
     e->kw_move = intern_cstr(st, "move");
+    e->kw_linear = intern_cstr(st, "linear"); /* LT4 */
     /* Phase 11: struct registry */
     e->struct_defs = NULL;
     e->n_struct_defs = 0;
@@ -1291,10 +1442,16 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* Phase G1: GADT */
     e->sym_defgadt = intern_cstr(st, "defgadt");
     e->sym_colon = intern_cstr(st, ":");
+    /* IT0: Union type pipe separator */
+    e->sym_pipe = intern_cstr(st, "|");
+    /* IT2: Intersection type ampersand separator */
+    e->sym_ampersand = intern_cstr(st, "&");
     /* Phase G2: per-arm skolem environment (NULL until inside a GADT match arm) */
     e->g2_skolem_env = NULL;
     /* Phase G3: coerce */
     e->sym_coerce = intern_cstr(st, "coerce");
+    /* Phase G3: (~ a b) equality constraint */
+    e->sym_tilde = intern_cstr(st, "~");
     /* Phase 12: Borrow traits */
     e->sym_borrow = intern_cstr(st, "&");
     e->sym_borrow_mut = intern_cstr(st, "&mut");
@@ -1348,6 +1505,10 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* Phase T21-F: async/await */
     e->sym_async = intern_cstr(st, "async");
     e->sym_await = intern_cstr(st, "await");
+    /* Phase SEL1: fair multi-channel select */
+    e->sym_select = intern_cstr(st, "select");
+    e->sym_recv   = intern_cstr(st, "recv");
+    e->sym_send   = intern_cstr(st, "send");
     /* Phase 20: Software Transactional Memory */
     e->sym_stm = intern_cstr(st, "stm");
     e->sym_atomically = intern_cstr(st, "atomically");
@@ -1384,6 +1545,8 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_import = intern_cstr(st, "import");
     e->sym_load = intern_cstr(st, "load");
     e->sym_as = intern_cstr(st, "as");   /* Phase N: (as Type expr) cast */
+    e->sym_type_of = intern_cstr(st, "type-of");  /* IT4: (type-of x) */
+    e->sym_cast    = intern_cstr(st, "cast");      /* IT4: (cast x T) */
     e->kw_as = intern_cstr(st, "as");   /* same interned symbol, used as :as keyword */
     e->kw_refer = intern_cstr(st, "refer");
     e->has_defmodule = false;
@@ -2321,6 +2484,8 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span span);    
 static Expr *elab_form(Elab *e, Form *f);
 static bool typekind_is_numeric(TypeKind k);             /* Phase N */
 static Expr *elab_as_cast(Elab *e, const Form *call);   /* Phase N */
+static Expr *elab_any_type_of(Elab *e, const Form *call); /* IT4 */
+static Expr *elab_any_cast(Elab *e, const Form *call);    /* IT4 */
 static Expr *elab_unsafe(Elab *e, const Form *call);
 /* Phase HRT1 */
 static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
@@ -3933,16 +4098,37 @@ static Expr *elab_if(Elab *e, const Form *call) {
     bool *before_states = NULL;
     uint32_t n_move_bindings = move_state_snapshot_bindings(e->scope, &move_bindings, &before_states);
 
+    /* LT1: Snapshot linear consumption state before branches. */
+    Binding **lin_bindings = NULL;
+    bool *lin_before = NULL;
+    uint32_t n_lin = 0;
+    if (g_linear_enabled) {
+        n_lin = linear_state_snapshot_bindings(e->scope, &lin_bindings, &lin_before);
+    }
+
     Expr *then_ = elab_form(e, call->as.list.items[2]);
     if (!then_) {
         free(move_bindings);
         free(before_states);
+        free(lin_bindings);
+        free(lin_before);
         return NULL;
     }
     bool *then_states = move_state_capture_current(move_bindings, n_move_bindings);
 
+    /* LT1: Capture linear consumption state after then-branch. */
+    bool *lin_then = NULL;
+    if (g_linear_enabled && n_lin > 0) {
+        lin_then = linear_state_capture_current(lin_bindings, n_lin);
+    }
+
     /* Rewind to pre-branch move-state before elaborating else branch. */
     move_state_restore(move_bindings, before_states, n_move_bindings);
+
+    /* LT1: Rewind linear consumption state before elaborating else branch. */
+    if (g_linear_enabled && n_lin > 0) {
+        linear_state_restore(lin_bindings, lin_before, n_lin);
+    }
 
     Expr *else_ = NULL;
     Type result_t = TYPE_NIL;
@@ -3953,6 +4139,9 @@ static Expr *elab_if(Elab *e, const Form *call) {
             free(then_states);
             free(move_bindings);
             free(before_states);
+            free(lin_then);
+            free(lin_bindings);
+            free(lin_before);
             return NULL;
         }
         bool *else_states = move_state_capture_current(move_bindings, n_move_bindings);
@@ -3978,6 +4167,47 @@ static Expr *elab_if(Elab *e, const Form *call) {
                         (else_->kind == EX_RETURN) ||
                         (else_->kind == EX_PANIC)  ||
                         (else_->kind == EX_PANIC_WITH);
+
+        /* LT1: Capture linear state after else, check for branch mismatch, merge. */
+        if (g_linear_enabled && n_lin > 0) {
+            bool *lin_else = linear_state_capture_current(lin_bindings, n_lin);
+            bool lin_ok = true;
+            for (uint32_t i = 0; i < n_lin; i++) {
+                if (lin_before[i]) continue; /* already consumed before if; fine */
+                /* Skip mismatch check for diverging branches. */
+                if (!then_div && !else_div && lin_then[i] != lin_else[i]) {
+                    diag_emit_with_code(DIAG_ERROR, call->span,
+                                        TUR_E0104_LINEAR_BRANCH_MISMATCH,
+                                        "linear value '%s' consumed in one branch but not the other"
+                                        " -- consume it in both branches or neither",
+                                        lin_bindings[i]->name->name);
+                    lin_ok = false;
+                }
+                /* Merge: use surviving branch's consumed state. */
+                bool merged;
+                if (then_div && else_div) {
+                    merged = false; /* both diverge; treat as unconsumed */
+                } else if (then_div) {
+                    merged = lin_else[i];
+                } else if (else_div) {
+                    merged = lin_then[i];
+                } else {
+                    merged = lin_then[i] && lin_else[i];
+                }
+                lin_bindings[i]->is_linear_consumed = merged;
+            }
+            free(lin_else);
+            if (!lin_ok) {
+                free(then_states);
+                free(move_bindings);
+                free(before_states);
+                free(lin_then);
+                free(lin_bindings);
+                free(lin_before);
+                return NULL;
+            }
+        }
+
         if (then_div && else_div) {
             result_t = then_->type;  /* both diverge; pick either */
         } else if (then_div) {
@@ -3988,6 +4218,9 @@ static Expr *elab_if(Elab *e, const Form *call) {
             free(then_states);
             free(move_bindings);
             free(before_states);
+            free(lin_then);
+            free(lin_bindings);
+            free(lin_before);
             diag_emit(DIAG_ERROR, call->span,
                       "if branches have mismatched types: then=%s else=%s",
                       type_name(then_->type), type_name(else_->type));
@@ -3998,11 +4231,19 @@ static Expr *elab_if(Elab *e, const Form *call) {
     } else {
         /* Without else, then-branch moves are not guaranteed after the if. */
         move_state_restore(move_bindings, before_states, n_move_bindings);
+        /* LT1: Without else, then-branch linear consumption is not guaranteed;
+         * restore to the pre-if state so scope-exit checking fires if needed. */
+        if (g_linear_enabled && n_lin > 0) {
+            linear_state_restore(lin_bindings, lin_before, n_lin);
+        }
     }
 
     free(then_states);
     free(move_bindings);
     free(before_states);
+    free(lin_then);
+    free(lin_bindings);
+    free(lin_before);
 
     /* If no else, the if is a statement-style branch with type nil
      * (matches Clojure's behavior of returning nil for a missing else). */
@@ -6120,6 +6361,13 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     SkolemEnv param_constraint_env;
     param_constraint_env.n = 0;
 
+    /* Phase HKT: kind-variable names collected from ^f annotations.
+     * These are type-level variables with kind * -> *; no runtime param is
+     * created.  They are pushed into a temporary scope so that return-type
+     * annotations such as (Equal (f a) (f b)) can resolve (f a) as TY_APP. */
+    const Symbol *kind_var_names[8];
+    uint8_t n_kind_vars = 0;
+
     /* LT0: ^linear annotation applies to the next parameter */
     bool next_param_linear = false;
     /* UT0: ^unique annotation applies to the next parameter */
@@ -6154,6 +6402,14 @@ static Expr *elab_defn(Elab *e, const Form *call) {
                        p->as.list.items[0]->tag == F_TYPE_ANN &&
                        p->as.list.items[0]->as.list.len == 1) {
                 var_form  = p->as.list.items[0]->as.list.items[0];
+                type_form = p->as.list.items[1];
+            } else if (p->tag == F_LIST && p->as.list.len == 2 &&
+                       p->as.list.items[0]->tag == F_UNQUOTE &&
+                       p->as.list.items[0]->as.list.len == 1 &&
+                       p->as.list.items[0]->as.list.items[0]->tag == F_SYM) {
+                /* Phase G3: (~ a T) equality constraint — reader turns (~ a T) into
+                 * F_LIST[F_UNQUOTE(a), T] because ~ is the unquote reader macro */
+                var_form  = p->as.list.items[0]->as.list.items[0]; /* symbol inside ~a */
                 type_form = p->as.list.items[1];
             }
             if (var_form && type_form &&
@@ -6217,7 +6473,13 @@ static Expr *elab_defn(Elab *e, const Form *call) {
              * kind annotation on the function and may be followed by a ^Typeclass f
              * constraint (which adds a regular typeclass constraint handled below). */
             if (tc_name_len > 0 && tc_name_str[0] >= 'a' && tc_name_str[0] <= 'z') {
-                /* Kind variable — silently skip; no runtime parameter is created. */
+                /* Phase HKT: Kind variable (e.g. ^f).  Record the bare name so
+                 * the return-type parser can resolve (f a) as TY_APP.  No
+                 * runtime parameter is created. */
+                if (n_kind_vars < 8) {
+                    kind_var_names[n_kind_vars++] = symtab_intern(e->st,
+                        strslice(tc_name_str, tc_name_len));
+                }
                 continue;
             }
 
@@ -6294,10 +6556,25 @@ static Expr *elab_defn(Elab *e, const Form *call) {
                 /* Plain function type annotation */
                 param_kinds[n_params - 1] = TY_FN;
                 params[n_params - 1]->type = *ann;
+                /* LT2: For function-typed parameters, store full type in param_poly_types
+                 * so it propagates into arg_full_types for linearity subtyping checks
+                 * at call sites (-Xlinear). */
+                if (g_linear_enabled) {
+                    param_poly_types[n_params - 1] = ann;
+                }
             } else {
                 /* Other type annotation — use the kind */
                 param_kinds[n_params - 1] = ann->kind;
                 params[n_params - 1]->type = *ann;
+                /* IT1: For union-typed parameters, store full type in param_poly_types
+                 * so it propagates into arg_full_types for subtyping checks at call sites. */
+                if (g_union_types_enabled && ann->kind == TY_UNION) {
+                    param_poly_types[n_params - 1] = ann;
+                }
+                /* IT2: For intersection-typed parameters, same propagation. */
+                if (g_intersection_types_enabled && ann->kind == TY_INTERSECTION) {
+                    param_poly_types[n_params - 1] = ann;
+                }
             }
             /* LT3: Propagate linearity from the type annotation (e.g., [p : (lref int)]) */
             if (g_linear_enabled && params[n_params - 1]->type.copy_kind == CK_LINEAR) {
@@ -6410,15 +6687,18 @@ static Expr *elab_defn(Elab *e, const Form *call) {
                         param_kinds[n_params - 1] = TY_ADT;
                         params[n_params - 1]->type = type_adt(param_adt);
                     } else {
-                        /* Default: unknown type variable → int */
-                        param_kinds[n_params - 1] = TY_INT;
-                        params[n_params - 1]->type = TYPE_INT;
+                        /* Phase HRT/G2: Unknown keyword -- treat as an implicit type variable.
+                         * A parameter annotation like :a where 'a' is not a known type or ADT
+                         * is an implicit type variable. Mark the binding TY_TYVAR so that inside
+                         * a GADT match arm, the per-arm skolem env can resolve it to a concrete type. */
+                        param_kinds[n_params - 1] = TY_TYVAR;
+                        params[n_params - 1]->type = type_tyvar_named(kw->name);
                     }
                 }
             }
             continue;
         }
-        
+
         if (n_params >= MAX_FN_ARITY) {
             diag_emit(DIAG_ERROR, p->span,
                       "defn: too many parameters (max %d)", MAX_FN_ARITY);
@@ -6469,6 +6749,7 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     /* body_start is the index of the first element after params (could be return type or body) */
     TypeKind return_kind = TY_NIL;
     AdtDef *return_adt_def = NULL; /* Phase G3: set when return type is an ADT name */
+    StructDef *return_struct_def = NULL; /* LT4: set when return type is a struct name */
     uint32_t body_start = name_idx + 2;  /* name_idx + 1 = params, +1 = after params */
 
     /* Phase 19: Parse optional effect-row annotation #{Read Write} or #{e} before return type.
@@ -6494,6 +6775,21 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     }
     bool fn_declared_unsafe =
         effect_row_contains_symbol(declared_effect_row_defn, e->sym_effect_unsafe);
+
+    /* Phase HKT: Create the inner scope early so that kind-variable bindings
+     * (^f → TY_TYVAR/KIND_ARROW) are visible when the return-type annotation
+     * is parsed below.  Regular parameter bindings are added to this same
+     * scope after the annotation is parsed (see "Push params" below). */
+    Scope inner;
+    scope_init(&inner, e->scope);
+    e->scope = &inner;
+    for (uint8_t kvi = 0; kvi < n_kind_vars; kvi++) {
+        Type kv_type = type_tyvar_named(kind_var_names[kvi]->name);
+        kv_type.hkt_kind = KIND_ARROW;
+        Binding *kvb = binding_new(e, kind_var_names[kvi], kv_type,
+                                   false, true, call->span);
+        scope_add(&inner, kvb);
+    }
 
     /* Check for : return-type annotation */
     if (call->as.list.len >= (body_start + 1)) {
@@ -6543,11 +6839,29 @@ static Expr *elab_defn(Elab *e, const Form *call) {
                             break;
                         }
                     }
+                    /* LT4: Try to look up as struct name */
                     if (!return_adt_def) {
-                        diag_emit(DIAG_ERROR, ret_f->span,
-                                  "defn: unsupported return type keyword :%s",
-                                  kw->name);
-                        return NULL;
+                        for (uint32_t si = 0; si < e->n_struct_defs; si++) {
+                            if (strcmp(e->struct_defs[si]->name, kw->name) == 0) {
+                                return_struct_def = e->struct_defs[si];
+                                return_kind = TY_STRUCT;
+                                break;
+                            }
+                        }
+                    }
+                    if (!return_adt_def && !return_struct_def) {
+                        if (g_gadt_enabled) {
+                            /* Phase HRT/G2: Unknown return type keyword -- named type variable.
+                             * e.g., :a means the function returns the type variable a.
+                             * For codegen, we fall through and let the body type determine the
+                             * concrete return kind (see the TY_TYVAR inference below). */
+                            return_kind = TY_TYVAR;
+                        } else {
+                            diag_emit(DIAG_ERROR, ret_f->span,
+                                      "defn: unsupported return type keyword :%s",
+                                      kw->name);
+                            return NULL;
+                        }
                     }
                 }
             }
@@ -6566,6 +6880,8 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     if (call->as.list.len < body_start + 1) {
         diag_emit(DIAG_ERROR, call->span,
                   "defn: missing body");
+        e->scope = inner.parent;
+        scope_free(&inner);
         return NULL;
     }
 
@@ -6589,10 +6905,7 @@ static Expr *elab_defn(Elab *e, const Form *call) {
         }
     }
 
-    /* Push a new scope for the function body with params bound */
-    Scope inner;
-    scope_init(&inner, e->scope);
-    e->scope = &inner;
+    /* Push params into the inner scope (created earlier for kind-var bindings). */
     for (uint8_t i = 0; i < n_params; i++) {
         scope_add(&inner, params[i]);
     }
@@ -6681,11 +6994,15 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     scope_free(&inner);
     if (lt1_param_fail || st1_param_fail) return NULL;
 
-    /* Infer return type from body if not specified */
-    if (return_kind == TY_NIL && body->type.kind != TY_NIL) {
+    /* Infer return type from body if not specified or polymorphic (TY_TYVAR).
+     * For TY_TYVAR (named type variable like :a), use the body's concrete type
+     * for codegen -- the polymorphic annotation is preserved in the declaration
+     * but the C function signature uses the concrete type. */
+    if ((return_kind == TY_NIL || return_kind == TY_TYVAR) && body->type.kind != TY_NIL
+            && body->type.kind != TY_TYVAR) {
         return_kind = body->type.kind;
     }
-    
+
     /* Create function type */
     TypeKind arg_kinds[MAX_FN_ARITY];
     for (uint8_t i = 0; i < n_params; i++) {
@@ -6697,6 +7014,19 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     if (return_adt_def) {
         Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
         *rft = type_adt(return_adt_def);
+        fn_type.as.fn.result_full_type = rft;
+    }
+    /* LT4: attach full struct return type if declared.
+     * Stored so that emit.c can retrieve the StructDef (and hence the struct name)
+     * without going through type_from_kind, which doesn't carry the def pointer. */
+    if (return_struct_def) {
+        Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
+        memset(rft, 0, sizeof(Type));   /* fully zero before writing fields */
+        rft->kind = TY_STRUCT;
+        rft->copy_kind = return_struct_def->is_linear ? CK_LINEAR
+                       : (return_struct_def->is_copy ? CK_COPY : CK_MOVE);
+        rft->hkt_kind = KIND_STAR;
+        rft->as.struct_.def = return_struct_def;
         fn_type.as.fn.result_full_type = rft;
     }
 
@@ -6810,11 +7140,16 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     }
     /* Store param types for codegen.
      * For TY_FN params (annotated with :(fn [...] #{...} :type)), use the full
-     * binding type which preserves the result kind and effect row.  For all
-     * other kinds, fall back to type_from_kind which is sufficient. */
+     * binding type which preserves the result kind and effect row.
+     * For TY_STRUCT params, use the binding type which preserves the StructDef
+     * pointer (needed so emit.c can emit the struct name in the C signature).
+     * For all other kinds, fall back to type_from_kind which is sufficient. */
     fd->param_types = (Type *)arena_alloc(e->arena, n_params * sizeof(Type));
     for (uint8_t i = 0; i < n_params; i++) {
         if (param_kinds[i] == TY_FN && params[i]->type.kind == TY_FN) {
+            fd->param_types[i] = params[i]->type;
+        } else if (param_kinds[i] == TY_STRUCT && params[i]->type.kind == TY_STRUCT) {
+            /* LT4: preserve StructDef so emit.c emits the struct name, not int64_t. */
             fd->param_types[i] = params[i]->type;
         } else {
             fd->param_types[i] = type_from_kind(param_kinds[i]);
@@ -7693,6 +8028,8 @@ static Expr *elab_thread_spawn(Elab *e, const Form *call);
 /* Phase T21-F: async/await sugar */
 static Expr *elab_async(Elab *e, const Form *call);
 static Expr *elab_await(Elab *e, const Form *call);
+/* Phase SEL1: fair multi-channel select */
+static Expr *elab_select(Elab *e, const Form *call);
 /* Phase 20: Software Transactional Memory */
 static Expr *elab_stm(Elab *e, const Form *call);
 static Expr *elab_atomically(Elab *e, const Form *call);
@@ -7834,6 +8171,9 @@ static Expr *elab_call(Elab *e, Form *call) {
     }
     /* Phase N: numeric cast */
     if (name == e->sym_as) return elab_as_cast(e, call);
+    /* IT4: gradual typing */
+    if (name == e->sym_type_of) return elab_any_type_of(e, call);
+    if (name == e->sym_cast)    return elab_any_cast(e, call);
     /* Phase 11: defstruct */
     if (name == e->sym_defstruct) return elab_defstruct(e, call);
     if (name == e->sym_make_struct) return elab_make_struct(e, call);
@@ -7925,6 +8265,9 @@ static Expr *elab_call(Elab *e, Form *call) {
         return elab_async(e, call);
     if (name == e->sym_await && call->as.list.len == 2)
         return elab_await(e, call);
+    /* Phase SEL1: fair multi-channel select */
+    if (name == e->sym_select && call->as.list.len >= 2)
+        return elab_select(e, call);
     /* Phase 20: Software Transactional Memory */
     if (name == e->sym_stm) return elab_stm(e, call);
     if (name == e->sym_atomically && call->as.list.len == 2)
@@ -8543,6 +8886,11 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         }
 
         bool arg_ok = (args[i]->type.kind == expected_arg_kind);
+        /* Phase HRT/G2: A TY_TYVAR parameter (named type variable like :a) accepts any argument.
+         * The concrete type is resolved per-arm inside a GADT match. */
+        if (!arg_ok && expected_arg_kind == TY_TYVAR) {
+            arg_ok = true;
+        }
         if (!arg_ok && expected_arg_kind == TY_PTR_VOID && args[i]->type.kind == TY_FN) {
             /* Allow passing a function value where callback pointer is expected.
              * If this is a rank-2 param, we'll wrap it in a poly wrapper below. */
@@ -8572,6 +8920,19 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
              * is expected.  Partial type application values are opaque int64_t at runtime. */
             arg_ok = true;
         }
+        if (!arg_ok && expected_arg_kind == TY_APP && args[i]->type.kind == TY_ADT) {
+            /* Phase HKT/G4: Allow passing a TY_ADT where TY_APP is expected.
+             * Both lower to int64_t at runtime.  This arises when a function
+             * parameter is annotated with a parameterised type like (Equal a b)
+             * (which parses as TY_APP) and the caller passes a GADT constructor
+             * value such as Refl (which has type TY_ADT). */
+            arg_ok = true;
+        }
+        if (!arg_ok && expected_arg_kind == TY_APP && args[i]->type.kind == TY_TYVAR) {
+            /* Phase HKT/G4: Allow passing a TY_TYVAR where TY_APP is expected.
+             * Type variables and applied types share int64_t representation. */
+            arg_ok = true;
+        }
         if (!arg_ok && expected_arg_kind == TY_INT && args[i]->type.kind == TY_FN) {
             /* Phase HKT H3/H4: Allow passing a function value where int64_t is expected.
              * Function references are represented as int64_t in HKT helper calls. */
@@ -8583,13 +8944,156 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
              * (int64_t)(intptr_t) cast so the generated C99 code is valid. */
             arg_ok = true;
         }
+        /* IT4: Union type subtyping — accept a value of type A where (A | B) is expected.
+         * Wrap the argument with EX_UNION_INJECT so emit.c produces TUR_TAG(idx, val). */
+        if (!arg_ok && g_union_types_enabled && expected_arg_kind == TY_UNION) {
+            uint32_t fn_arg_idx3 = i;
+            if (fn_binding->closure_fn_binding) fn_arg_idx3 = i + 1;
+            if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types &&
+                fn_arg_idx3 < fn_type.as.fn.arity) {
+                Type *union_t = fn_type.as.fn.arg_full_types[fn_arg_idx3];
+                if (union_t && union_t->kind == TY_UNION) {
+                    for (uint8_t um = 0; um < union_t->as.union_.n_members; um++) {
+                        Type *mem = union_t->as.union_.members[um];
+                        if (mem && type_eq(args[i]->type, *mem)) {
+                            arg_ok = true;
+                            /* IT4: wrap in EX_UNION_INJECT to tag the value at runtime */
+                            Expr *inject = expr_new(e->arena, EX_UNION_INJECT,
+                                                    *union_t, args[i]->span);
+                            inject->as.union_inject_.tag_idx = (int64_t)um;
+                            inject->as.union_inject_.value = args[i];
+                            args[i] = inject;
+                            break;
+                        }
+                    }
+                    /* Also accept if the argument is already the same union type (no injection needed) */
+                    if (!arg_ok && args[i]->type.kind == TY_UNION) {
+                        arg_ok = type_eq(args[i]->type, *union_t);
+                    }
+                }
+            }
+        }
+        /* IT1: Widening — accept a member type where the expected union matches. */
+        if (!arg_ok && g_union_types_enabled && args[i]->type.kind == TY_UNION &&
+            expected_arg_kind == TY_UNION) {
+            arg_ok = (args[i]->type.kind == expected_arg_kind);
+        }
+        /* IT3: Intersection elimination — accept a value of intersection type (A & B)
+         * where any single member type is expected.  (A & B) <: A and (A & B) <: B. */
+        if (!arg_ok && g_intersection_types_enabled &&
+            args[i]->type.kind == TY_INTERSECTION) {
+            Type *isect_t = &args[i]->type;
+            for (uint8_t im = 0; im < isect_t->as.intersection_.n_members; im++) {
+                Type *mem = isect_t->as.intersection_.members[im];
+                if (mem && mem->kind == expected_arg_kind) {
+                    arg_ok = true;
+                    break;
+                }
+            }
+        }
+        /* IT3: Intersection introduction check — function expects (A & B), arg must
+         * satisfy all members.  Emit TUR_E0351 for the first unsatisfied member. */
+        if (!arg_ok && g_intersection_types_enabled && expected_arg_kind == TY_INTERSECTION) {
+            uint32_t fn_arg_idx5 = fn_binding->closure_fn_binding ? i + 1 : i;
+            if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types &&
+                fn_arg_idx5 < fn_type.as.fn.arity) {
+                Type *isect_t = fn_type.as.fn.arg_full_types[fn_arg_idx5];
+                if (isect_t && isect_t->kind == TY_INTERSECTION) {
+                    /* Check each member -- the arg must match all of them */
+                    bool all_ok = true;
+                    const char *first_mismatch = NULL;
+                    for (uint8_t im = 0; im < isect_t->as.intersection_.n_members; im++) {
+                        Type *mem = isect_t->as.intersection_.members[im];
+                        if (!mem) continue;
+                        /* For concrete member types, the arg must have an equal or
+                         * compatible type.  For typeclass members we cannot yet do
+                         * instance resolution here, so skip them. */
+                        if (!typekind_is_concrete_for_disjoint(mem->kind)) continue;
+                        if (!type_eq(args[i]->type, *mem)) {
+                            all_ok = false;
+                            first_mismatch = type_name(*mem);
+                            break;
+                        }
+                    }
+                    if (all_ok) {
+                        arg_ok = true;
+                    } else {
+                        diag_emit_with_code(DIAG_ERROR, args[i]->span,
+                            TUR_E0351_INTERSECTION_MEMBER_MISMATCH,
+                            "function '%s' arg %u: value of type %s does not satisfy "
+                            "intersection member %s",
+                            fn_binding->name->name, i + 1,
+                            type_name(args[i]->type),
+                            first_mismatch ? first_mismatch : "?");
+                        return NULL;
+                    }
+                }
+            }
+        }
+
+        /* IT4: A <: any — any value satisfies the top type.
+         * Wrap with EX_UNION_INJECT using the TypeKind of the value as the tag,
+         * so (type-of) and (cast) can retrieve it at runtime. */
+        if (!arg_ok && (g_union_types_enabled || g_intersection_types_enabled) &&
+            expected_arg_kind == TY_ANY) {
+            arg_ok = true;
+            Type any_type; memset(&any_type, 0, sizeof(any_type)); any_type.kind = TY_ANY;
+            Expr *inject = expr_new(e->arena, EX_UNION_INJECT, any_type, args[i]->span);
+            inject->as.union_inject_.tag_idx = (int64_t)args[i]->type.kind;
+            inject->as.union_inject_.value = args[i];
+            args[i] = inject;
+        }
+
+        /* LT2: When both expected and actual argument types are function types,
+         * verify that their arg_linear flags match.  This catches attempts to
+         * pass a (-> T R) function where (-> ^linear T R) is required (or vice
+         * versa) in higher-order call positions. */
+        if (arg_ok && g_linear_enabled &&
+            expected_arg_kind == TY_FN && args[i]->type.kind == TY_FN) {
+            uint32_t fn_arg_idx_lt2 = fn_binding->closure_fn_binding ? i + 1 : i;
+            if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types &&
+                fn_arg_idx_lt2 < fn_type.as.fn.arity) {
+                const Type *expected_fn = fn_type.as.fn.arg_full_types[fn_arg_idx_lt2];
+                if (expected_fn && expected_fn->kind == TY_FN &&
+                    !fn_type_subtype(args[i]->type, *expected_fn)) {
+                    diag_emit_with_code(DIAG_ERROR, args[i]->span,
+                                        TUR_E0001_TYPE_MISMATCH,
+                                        "function '%s' arg %u: linear function type mismatch"
+                                        " -- expected %s but got a function with different"
+                                        " linearity annotations; ^linear parameters must match exactly",
+                                        fn_binding->name->name, i + 1,
+                                        type_name(*expected_fn));
+                    return NULL;
+                }
+            }
+        }
 
         if (!arg_ok) {
             /* Phase 8: Enhanced type mismatch with error code */
-            diag_emit_with_code(DIAG_ERROR, args[i]->span, TUR_E0001_TYPE_MISMATCH,
+            /* IT1: Use union-specific error code when union type is involved */
+            DiagCode err_code = TUR_E0001_TYPE_MISMATCH;
+            if (g_union_types_enabled && (expected_arg_kind == TY_UNION ||
+                                           args[i]->type.kind == TY_UNION)) {
+                err_code = TUR_E0300_UNION_TYPE_MISMATCH;
+            }
+            /* Compute expected type name for diagnostic.
+             * For compound types (union, intersection) that store their full type in
+             * arg_full_types, look it up there so the name includes member types. */
+            const char *expected_str;
+            if ((expected_arg_kind == TY_UNION || expected_arg_kind == TY_INTERSECTION) &&
+                fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
+                uint32_t fn_arg_idx4 = fn_binding->closure_fn_binding ? i + 1 : i;
+                Type *ct = (fn_arg_idx4 < fn_type.as.fn.arity)
+                    ? fn_type.as.fn.arg_full_types[fn_arg_idx4] : NULL;
+                expected_str = ct ? type_name(*ct)
+                                  : type_name(type_from_kind(expected_arg_kind));
+            } else {
+                expected_str = type_name(type_from_kind(expected_arg_kind));
+            }
+            diag_emit_with_code(DIAG_ERROR, args[i]->span, err_code,
                                 "function '%s' arg %u: expected %s, got %s",
                                 fn_binding->name->name, i + 1,
-                                type_name(type_from_kind(expected_arg_kind)),
+                                expected_str,
                                 type_name(args[i]->type));
             return NULL;
         }
@@ -9601,6 +10105,62 @@ static Expr *elab_as_cast(Elab *e, const Form *call) {
     return out;
 }
 
+/* IT4: (type-of x) — return the cstr type name of an any-typed value. */
+static Expr *elab_any_type_of(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "'type-of' requires exactly one argument: (type-of x)");
+        return NULL;
+    }
+    Expr *val = elab_form(e, call->as.list.items[1]);
+    if (!val) return NULL;
+    if (val->type.kind != TY_ANY) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "'type-of' expects an 'any'-typed argument, got '%s'",
+                  type_name(val->type));
+        return NULL;
+    }
+    Type cstr_t = type_simple(TY_CSTR, CK_COPY);
+    Expr *out = expr_new(e->arena, EX_ANY_TYPE_OF, cstr_t, call->span);
+    out->as.any_type_of_.value = val;
+    return out;
+}
+
+/* IT4: (cast x T) — unsafe downcast from any; returns the inner value unboxed as T.
+ * T must be a primitive type name. No runtime tag check is emitted (unsafe). */
+static Expr *elab_any_cast(Elab *e, const Form *call) {
+    if (call->as.list.len != 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "'cast' requires exactly two arguments: (cast x T)");
+        return NULL;
+    }
+    Expr *val = elab_form(e, call->as.list.items[1]);
+    if (!val) return NULL;
+    if (val->type.kind != TY_ANY) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "'cast' expects an 'any'-typed first argument, got '%s'",
+                  type_name(val->type));
+        return NULL;
+    }
+    Form *type_form = call->as.list.items[2];
+    if (type_form->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, type_form->span,
+                  "'cast' expects a type name as second argument");
+        return NULL;
+    }
+    TypeKind target_kind = typekind_from_symbol(type_form->as.sym->name);
+    if (target_kind == TY_UNKNOWN) {
+        diag_emit(DIAG_ERROR, type_form->span,
+                  "unknown type '%s' in 'cast'", type_form->as.sym->name);
+        return NULL;
+    }
+    Type result_type = type_simple(target_kind, CK_COPY);
+    Expr *out = expr_new(e->arena, EX_ANY_CAST, result_type, call->span);
+    out->as.any_cast_.value = val;
+    out->as.any_cast_.target_kind = target_kind;
+    return out;
+}
+
 static Expr *elab_form(Elab *e, Form *f) {
     switch (f->tag) {
         case F_NIL:  return e_nil(e, f->span);
@@ -9735,6 +10295,16 @@ static Expr *elab_form(Elab *e, Form *f) {
             }
             Expr *out = expr_new(e->arena, EX_VAR, b->type, f->span);
             out->as.var.binding = b;
+            /* Phase HRT/G2: Resolve named type variable through current GADT match arm skolem env.
+             * If a binding was declared as :a (TY_TYVAR with name "a"), and we are currently
+             * inside a GADT match arm that has a skolem binding for "a", use the concrete type. */
+            if (b->type.kind == TY_TYVAR && b->type.as.tyvar_.name != NULL && e->g2_skolem_env) {
+                TypeKind resolved = gadt_skolem_lookup(e->g2_skolem_env, b->type.as.tyvar_.name);
+                if (resolved != TY_UNKNOWN) {
+                    out->type = type_from_kind(resolved);
+                    out->type.copy_kind = typekind_default_copy_kind(resolved);
+                }
+            }
             return out;
         }
         case F_VEC:
@@ -9948,10 +10518,11 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
     }
     const Symbol *name = name_form->as.sym;
     
-    /* Check for optional :copy / :move annotation */
+    /* Check for optional :copy / :move / :linear annotation */
     bool is_copy = false;
+    bool is_linear = false;
     uint32_t fields_start_idx = 2;
-    
+
     if (call->as.list.len >= 3) {
         Form *kw_form = call->as.list.items[2];
         if (kw_form->tag == F_KEYWORD && kw_form->as.sym == e->kw_copy) {
@@ -9959,6 +10530,10 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
             fields_start_idx = 3;
         } else if (kw_form->tag == F_KEYWORD && kw_form->as.sym == e->kw_move) {
             is_copy = false;
+            fields_start_idx = 3;
+        } else if (kw_form->tag == F_KEYWORD && kw_form->as.sym == e->kw_linear) {
+            /* LT4: :linear structs are exactly-once (CK_LINEAR). */
+            is_linear = true;
             fields_start_idx = 3;
         }
     }
@@ -10041,6 +10616,7 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
         def->n_fields = actual_n_fields;
         def->fields = (StructField *)arena_alloc(e->arena, actual_n_fields * sizeof(StructField));
         def->is_copy = is_copy;
+        def->is_linear = is_linear; /* LT4 */
         def->needs_drop_glue = false;
         def->origin_file_id = call->span.file_id;
         /* Already in global scope and elab registry from the pre-pass */
@@ -10050,6 +10626,7 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
         def->n_fields = actual_n_fields;
         def->fields = (StructField *)arena_alloc(e->arena, actual_n_fields * sizeof(StructField));
         def->is_copy = is_copy;
+        def->is_linear = is_linear; /* LT4 */
         def->needs_drop_glue = false;
         /* Phase HKT-P4: record the file that defined this struct. */
         def->origin_file_id = call->span.file_id;
@@ -10255,7 +10832,15 @@ static Expr *elab_defdata(Elab *e, const Form *call) {
         def->is_gadt = false;
         def->type_params = type_params;
         def->n_type_params = n_type_params;
-        adt_type = adt_binding->type;
+        /* Refresh adt_type from the def so copy_kind reflects is_copy correctly.
+         * The pre-pass stub was created with is_copy=false; now that we know the
+         * real is_copy flag, regenerate the type and update the binding. */
+        adt_type = type_adt(def);
+        /* Phase G1/HKT: Apply KIND_ARROW fix so that the kind check can detect
+         * when a parameterized defdata type is used in a kind-* slot. */
+        if (n_type_params >= 2)     adt_type.hkt_kind = KIND_ARROW2;
+        else if (n_type_params == 1) adt_type.hkt_kind = KIND_ARROW;
+        adt_binding->type = adt_type;
         /* Already in global scope and elab registry from the pre-pass */
     } else {
         def = (AdtDef *)arena_alloc(e->arena, sizeof(AdtDef));
@@ -10269,8 +10854,13 @@ static Expr *elab_defdata(Elab *e, const Form *call) {
         def->type_params = type_params;
         def->n_type_params = n_type_params;
 
-        /* Pre-register ADT type so constructors can reference it */
+        /* Pre-register ADT type so constructors can reference it.
+         * Phase G1/HKT: Set hkt_kind based on type-parameter count so that
+         * elab_defgadt's belt-and-suspenders kind check can detect when a
+         * parameterized type constructor is used in a kind-* argument slot. */
         adt_type = type_adt(def);
+        if (n_type_params >= 2)     adt_type.hkt_kind = KIND_ARROW2;
+        else if (n_type_params == 1) adt_type.hkt_kind = KIND_ARROW;
         adt_binding = binding_new(e, name, adt_type, false, true, name_form->span);
         scope_add(&e->global, adt_binding);
     }
@@ -10419,9 +11009,9 @@ static Type gadt_resolve_type_from_form(Elab *e, const AdtDef *gadt, const Form 
         /* Type variable: look up in skolem env */
         TypeKind resolved = gadt_skolem_lookup(senv, n);
         if (resolved != TY_UNKNOWN) return type_from_kind(resolved);
-        /* Unresolved type variable → TY_TYVAR */
+        /* Unresolved type variable → anonymous TY_TYVAR (name=NULL signals skolem escape) */
         (void)gadt; /* suppress unused warning */
-        return type_from_kind(TY_TYVAR);
+        return type_tyvar_named(NULL);
     }
 
     if (f->tag == F_LIST && f->as.list.len >= 1) {
@@ -10432,6 +11022,12 @@ static Type gadt_resolve_type_from_form(Elab *e, const AdtDef *gadt, const Form 
             if (!b) b = scope_lookup(&e->global, head->as.sym);
             if (b && b->type.kind == TY_ADT && b->type.as.adt_.def) {
                 return b->type; /* TY_ADT with the def pointer */
+            }
+            /* Phase HKT: kind-variable application (f a) where f : * -> *.
+             * Return an anonymous TY_TYVAR so the arm body is accepted as
+             * int64_t-sized (same runtime repr as TY_ADT/TY_APP). */
+            if (b && b->type.kind == TY_TYVAR && b->type.hkt_kind == KIND_ARROW) {
+                return type_tyvar_named(NULL);
             }
         }
     }
@@ -10584,27 +11180,66 @@ static Expr *elab_defgadt(Elab *e, const Form *call) {
         return NULL;
     }
 
-    if (scope_lookup(e->scope, name)) {
-        diag_emit(DIAG_ERROR, name_form->span,
-                  "defgadt: '%s' is already defined", name->name);
-        return NULL;
+    /* Phase RF0: allow re-elaboration of forward-declared stub types */
+    bool is_forward_stub_gadt = false;
+    Binding *existing_gadt_b = scope_lookup(e->scope, name);
+    if (existing_gadt_b) {
+        if (elab_is_forward_type(e, name)) {
+            is_forward_stub_gadt = true;
+        } else {
+            diag_emit(DIAG_ERROR, name_form->span,
+                      "defgadt: '%s' is already defined", name->name);
+            return NULL;
+        }
     }
 
     uint32_t n_ctors = call->as.list.len - ctors_start_idx;
-    AdtDef *def = (AdtDef *)arena_alloc(e->arena, sizeof(AdtDef));
-    def->name = name->name;
-    def->n_ctors = n_ctors;
-    def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
-    def->is_copy = false;
-    def->needs_drop_glue = false;
-    def->is_gadt = true;
-    def->type_params = type_params;
-    def->n_type_params = n_type_params;
 
-    /* Pre-register ADT type so constructors can reference it */
-    Type adt_type = type_adt(def);
-    Binding *adt_binding = binding_new(e, name, adt_type, false, true, name_form->span);
-    scope_add(&e->global, adt_binding);
+    /* Phase RF0: Allocate (or reuse forward stub) AdtDef and register BEFORE
+     * parsing constructors so that self-referential and mutually-recursive
+     * constructor field types resolve correctly. */
+    AdtDef *def;
+    Binding *adt_binding;
+    Type adt_type;
+    if (is_forward_stub_gadt) {
+        /* Reuse the pre-registered stub and fill it in */
+        adt_binding = existing_gadt_b;
+        def = adt_binding->type.as.adt_.def;
+        def->n_ctors = n_ctors;
+        def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
+        def->is_copy = false;
+        def->needs_drop_glue = false;
+        def->is_gadt = true;
+        def->type_params = type_params;
+        def->n_type_params = n_type_params;
+        adt_type = type_adt(def);
+        /* Phase G1/HKT: Apply the same KIND_ARROW fix as the non-stub branch so
+         * that kind checks see the correct kind for parameterized GADTs. */
+        if (n_type_params >= 2)     adt_type.hkt_kind = KIND_ARROW2;
+        else if (n_type_params == 1) adt_type.hkt_kind = KIND_ARROW;
+        adt_binding->type = adt_type;
+        /* Already in global scope and elab registry from the pre-pass */
+    } else {
+        def = (AdtDef *)arena_alloc(e->arena, sizeof(AdtDef));
+        def->name = name->name;
+        def->n_ctors = n_ctors;
+        def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
+        def->is_copy = false;
+        def->needs_drop_glue = false;
+        def->is_gadt = true;
+        def->type_params = type_params;
+        def->n_type_params = n_type_params;
+
+        /* Pre-register ADT type so constructors can reference it.
+         * Phase G1/HKT: Set hkt_kind based on type-parameter count so that
+         * the belt-and-suspenders kind check can detect when a parameterized
+         * GADT is used in a kind-* argument slot of another GADT. */
+        adt_type = type_adt(def);
+        if (n_type_params >= 2)     adt_type.hkt_kind = KIND_ARROW2;
+        else if (n_type_params == 1) adt_type.hkt_kind = KIND_ARROW;
+        adt_binding = binding_new(e, name, adt_type, false, true, name_form->span);
+        scope_add(&e->global, adt_binding);
+    }
 
     /* Parse each constructor */
     for (uint32_t ci = 0; ci < n_ctors; ci++) {
@@ -10688,6 +11323,73 @@ static Expr *elab_defgadt(Elab *e, const Form *call) {
             return NULL;
         }
 
+        /* Change 3: Validate that the number of type args in the return type
+         * matches the GADT's declared type-parameter count. */
+        if (return_type_form->tag == F_LIST) {
+            uint32_t n_rt_args = return_type_form->as.list.len - 1; /* subtract head */
+            if (n_type_params > 0 && n_rt_args != n_type_params) {
+                diag_emit(DIAG_ERROR, return_type_form->span,
+                          "defgadt: constructor '%s' return type has %u type argument(s) "
+                          "but '%s' has %u type parameter(s)",
+                          ctor_name->name, n_rt_args, name->name, n_type_params);
+                return NULL;
+            }
+        }
+
+        /* Change 4: Validate each type arg in the return type is a known type. */
+        if (return_type_form->tag == F_LIST) {
+            for (uint32_t ai = 1; ai < return_type_form->as.list.len; ai++) {
+                Form *arg = return_type_form->as.list.items[ai];
+                if (arg->tag == F_LIST) continue; /* type application -- ok */
+                if (arg->tag != F_SYM) continue;  /* other forms -- ok */
+                const char *an = arg->as.sym->name;
+                /* Check if it's a bound type param */
+                bool is_param = false;
+                for (uint8_t pi = 0; pi < n_type_params; pi++) {
+                    if (strcmp(type_params[pi], an) == 0) { is_param = true; break; }
+                }
+                if (is_param) continue;
+                /* Check if it's a concrete primitive */
+                static const char *primitives[] = {
+                    "int", "bool", "float", "cstr", "nil", "void", "ptr",
+                    "int8", "int16", "int32", "int64",
+                    "uint8", "uint16", "uint32", "uint64",
+                    "float32", "float64", NULL
+                };
+                bool is_prim = false;
+                for (int pi = 0; primitives[pi]; pi++) {
+                    if (strcmp(primitives[pi], an) == 0) { is_prim = true; break; }
+                }
+                if (is_prim) continue;
+                /* Check if it's a known type in scope */
+                const Symbol *type_sym = symtab_intern(e->st,
+                    strslice(an, (uint32_t)strlen(an)));
+                Binding *tb = scope_lookup_type_def(e->scope, type_sym);
+                if (tb && (tb->type.kind == TY_STRUCT || tb->type.kind == TY_ADT)) {
+                    /* Phase G1/HKT: Belt-and-suspenders kind check.
+                     * All GADT type parameters have kind * in Phase G1.  A
+                     * type constructor of kind * -> * (hkt_kind == KIND_ARROW)
+                     * in a plain type-argument slot is a kind mismatch. */
+                    if (tb->type.hkt_kind == KIND_ARROW ||
+                            tb->type.hkt_kind == KIND_ARROW2) {
+                        diag_emit_with_code(DIAG_ERROR, arg->span,
+                            TUR_E0012_KIND_MISMATCH,
+                            "kind mismatch (TUR-E0012): type argument '%s' in constructor "
+                            "'%s' return type has kind '* -> *' but kind '*' is expected",
+                            an, ctor_name->name);
+                        return NULL;
+                    }
+                    continue;
+                }
+                /* Unknown -- error */
+                diag_emit(DIAG_ERROR, arg->span,
+                          "defgadt: unknown type argument '%s' in return type of constructor '%s' "
+                          "(must be a type parameter, primitive type, or defined type)",
+                          an, ctor_name->name);
+                return NULL;
+            }
+        }
+
         /* Field types: items[1 .. colon_idx-1] */
         uint32_t n_fields = (uint32_t)(colon_idx - 1);
         CtorDef *ctor = (CtorDef *)arena_alloc(e->arena, sizeof(CtorDef));
@@ -10735,7 +11437,10 @@ static Expr *elab_defgadt(Elab *e, const Form *call) {
         }
     }
 
-    elab_register_adt_def(e, def);
+    /* Register ADT in elab registry (skip if it was a forward stub -- already registered) */
+    if (!is_forward_stub_gadt) {
+        elab_register_adt_def(e, def);
+    }
 
     Expr *out = expr_new(e->arena, EX_DEFGADT, TYPE_NIL, call->span);
     out->as.defgadt_.def = def;
@@ -10798,23 +11503,185 @@ static Expr *elab_match(Elab *e, const Form *call) {
                   "match requires a scrutinee: (match scrutinee pattern body ...)");
         return NULL;
     }
-    if (call->as.list.len < 4) {
+    /* Phase G4: Pre-scan arms to count and find per-arm start indices.
+     * Arms can be (pat body) or (pat when guard body). */
+    uint32_t arm_start[256];    /* start index of each arm's pattern */
+    bool arm_has_guard[256];    /* whether the arm has a when-guard */
+    uint32_t n_arms = 0;
+    {
+        uint32_t idx = 2; /* skip 'match' and scrutinee */
+        while (idx < call->as.list.len) {
+            if (n_arms >= 256) {
+                diag_emit(DIAG_ERROR, call->span, "match: too many arms (max 256)");
+                return NULL;
+            }
+            arm_start[n_arms] = idx;
+            arm_has_guard[n_arms] = false;
+            idx++; /* skip pattern */
+            /* Check for optional 'when guard' */
+            if (idx + 1 < call->as.list.len &&
+                call->as.list.items[idx]->tag == F_SYM &&
+                call->as.list.items[idx]->as.sym == e->sym_when) {
+                arm_has_guard[n_arms] = true;
+                idx += 2; /* skip 'when' and guard expr */
+            }
+            idx++; /* skip body */
+            n_arms++;
+        }
+        /* Verify last arm ends exactly at list end */
+        if (idx != call->as.list.len) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "match: malformed arm list (missing body for last arm?)");
+            return NULL;
+        }
+    }
+    if (n_arms == 0) {
         diag_emit(DIAG_ERROR, call->span,
                   "match requires at least one arm: (match scrutinee pattern body)");
         return NULL;
     }
 
-    uint32_t n_remaining = call->as.list.len - 2;
-    if (n_remaining % 2 != 0) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "match: arms must come in (pattern body) pairs");
-        return NULL;
-    }
-    uint32_t n_arms = n_remaining / 2;
-
     /* Elaborate scrutinee */
     Expr *scrutinee = elab_form(e, call->as.list.items[1]);
     if (!scrutinee) return NULL;
+
+    /* IT1: Union type match — when scrutinee is TY_UNION, handle type-narrowing patterns.
+     * Pattern syntax: (varname : TypeName) or bare _ / variable for wildcard.
+     * Returns early via the union match path. */
+    if (g_union_types_enabled && scrutinee->type.kind == TY_UNION) {
+        Type *union_t = &scrutinee->type;
+        uint8_t n_members = union_t->as.union_.n_members;
+
+        /* Track which union members are covered */
+        bool *member_covered = (bool *)calloc(n_members, sizeof(bool));
+        bool has_wildcard = false;
+        Type result_type = TYPE_UNKNOWN;
+
+        MatchArm *arms = (MatchArm *)arena_alloc(e->arena, n_arms * sizeof(MatchArm));
+
+        for (uint32_t ai = 0; ai < n_arms; ai++) {
+            Form *pat_form = call->as.list.items[2 + ai * 2];
+            Form *body_form = call->as.list.items[3 + ai * 2];
+            MatchPattern *pat = &arms[ai].pattern;
+            memset(pat, 0, sizeof(MatchPattern));
+
+            /* Wildcard: bare _ or bare variable symbol */
+            if (pat_form->tag == F_SYM) {
+                const Symbol *sym_wildcard = intern_cstr(e->st, "_");
+                if (pat_form->as.sym == sym_wildcard) {
+                    pat->is_wildcard = true;
+                } else {
+                    pat->is_var = true;
+                    pat->var_sym = pat_form->as.sym;
+                }
+                pat->union_member_idx = -1; /* IT4: wildcard arm — no specific member */
+                has_wildcard = true;
+                Expr *body = elab_form(e, body_form);
+                if (!body) { free(member_covered); return NULL; }
+                arms[ai].body = body;
+                if (result_type.kind == TY_UNKNOWN) result_type = body->type;
+                continue;
+            }
+
+            /* Type-narrowing pattern: (varname : TypeName)
+             * The reader collapses ': TypeName' into a single F_TYPE_ANN node, so the
+             * list has 2 items: [F_SYM varname, F_TYPE_ANN{inner}].
+             * The 3-item form [F_SYM varname, F_SYM ":", F_SYM TypeName] is also
+             * supported for defgadt-style bare colon separators. */
+            bool is_type_narrowing_2 = (pat_form->tag == F_LIST &&
+                pat_form->as.list.len == 2 &&
+                pat_form->as.list.items[0]->tag == F_SYM &&
+                pat_form->as.list.items[1]->tag == F_TYPE_ANN);
+            bool is_type_narrowing_3 = (pat_form->tag == F_LIST &&
+                pat_form->as.list.len == 3 &&
+                pat_form->as.list.items[0]->tag == F_SYM &&
+                pat_form->as.list.items[1]->tag == F_SYM &&
+                pat_form->as.list.items[1]->as.sym == e->sym_colon);
+            if (is_type_narrowing_2 || is_type_narrowing_3) {
+                Form *var_form  = pat_form->as.list.items[0];
+                Form *type_form = is_type_narrowing_2
+                    ? pat_form->as.list.items[1]->as.list.items[0]  /* inner of F_TYPE_ANN */
+                    : pat_form->as.list.items[2];
+                /* Parse narrowed type */
+                Type *narrowed = type_expr_from_form(e, type_form, NULL, NULL, NULL, 0);
+                if (!narrowed) { free(member_covered); return NULL; }
+
+                /* Find which union member this pattern covers */
+                int covered_member = -1;
+                for (uint8_t um = 0; um < n_members; um++) {
+                    if (union_t->as.union_.members[um] &&
+                        type_eq(*narrowed, *union_t->as.union_.members[um])) {
+                        covered_member = (int)um;
+                        break;
+                    }
+                }
+                if (covered_member < 0) {
+                    diag_emit_with_code(DIAG_ERROR, pat_form->span,
+                                        TUR_E0300_UNION_TYPE_MISMATCH,
+                                        "match: type '%s' is not a member of union '%s'",
+                                        type_name(*narrowed), type_name(*union_t));
+                    free(member_covered);
+                    return NULL;
+                }
+                member_covered[covered_member] = true;
+                pat->union_member_idx = covered_member; /* IT4: record for tag-dispatch in emit.c */
+
+                /* Introduce arm scope with the narrowed binding */
+                Scope arm_scope;
+                scope_init(&arm_scope, e->scope);
+                Scope *saved_scope = e->scope;
+                e->scope = &arm_scope;
+
+                Binding *var_b = binding_new(e, var_form->as.sym, *narrowed,
+                                             false, false, var_form->span);
+                scope_add(&arm_scope, var_b);
+
+                Expr *body = elab_form(e, body_form);
+                e->scope = saved_scope;
+                if (!body) { free(member_covered); return NULL; }
+
+                /* Record the binding in the pattern */
+                pat->is_var = true;
+                pat->var_sym = var_form->as.sym;
+                pat->n_bindings = 1;
+                pat->bindings = (Binding **)arena_alloc(e->arena, sizeof(Binding *));
+                pat->bindings[0] = var_b;
+
+                arms[ai].body = body;
+                if (result_type.kind == TY_UNKNOWN) result_type = body->type;
+                continue;
+            }
+
+            /* Unrecognized pattern for union match */
+            diag_emit(DIAG_ERROR, pat_form->span,
+                      "match on union type: expected '(varname : Type)' or wildcard '_', got unexpected pattern");
+            free(member_covered);
+            return NULL;
+        }
+
+        /* Exhaustiveness check: every union member must be covered */
+        if (!has_wildcard) {
+            for (uint8_t um = 0; um < n_members; um++) {
+                if (!member_covered[um] && union_t->as.union_.members[um]) {
+                    diag_emit_with_code(DIAG_ERROR, call->span,
+                                        TUR_E0301_NON_EXHAUSTIVE_UNION_MATCH,
+                                        "match on union type '%s': missing arm for member '%s'",
+                                        type_name(*union_t),
+                                        type_name(*union_t->as.union_.members[um]));
+                    free(member_covered);
+                    return NULL;
+                }
+            }
+        }
+        free(member_covered);
+
+        if (result_type.kind == TY_UNKNOWN) result_type = TYPE_NIL;
+        Expr *out = expr_new(e->arena, EX_MATCH, result_type, call->span);
+        out->as.match_.scrutinee = scrutinee;
+        out->as.match_.arms = arms;
+        out->as.match_.n_arms = n_arms;
+        return out;
+    }
 
     /* If the scrutinee type is not already TY_ADT (e.g. an untyped param
      * that defaulted to TY_INT), or is TY_ADT with no def (e.g. return of
@@ -10823,7 +11690,7 @@ static Expr *elab_match(Elab *e, const Form *call) {
     if (scrutinee->type.kind != TY_ADT || !scrutinee->type.as.adt_.def) {
         AdtDef *inferred_adt = NULL;
         for (uint32_t ai = 0; ai < n_arms && !inferred_adt; ai++) {
-            Form *pat_f = call->as.list.items[2 + ai * 2];
+            Form *pat_f = call->as.list.items[arm_start[ai]];
             if (pat_f->tag == F_LIST && pat_f->as.list.len >= 1 &&
                 pat_f->as.list.items[0]->tag == F_SYM) {
                 CtorDef *cd = elab_lookup_ctor(e, pat_f->as.list.items[0]->as.sym);
@@ -10852,12 +11719,33 @@ static Expr *elab_match(Elab *e, const Form *call) {
 
     Type result_type = TYPE_UNKNOWN;
 
+    /* LT1: Snapshot outer-scope linear consumed state before match arms.
+     * We restore before each arm's body and verify consistency across arms at the end. */
+    Binding **match_lin_bindings = NULL;
+    bool *match_lin_before = NULL;
+    uint32_t n_match_lin = 0;
+    bool **arm_lin_states = NULL;
+    bool *arm_diverges = NULL;
+    if (g_linear_enabled) {
+        n_match_lin = linear_state_snapshot_bindings(e->scope, &match_lin_bindings,
+                                                     &match_lin_before);
+        if (n_match_lin > 0) {
+            arm_lin_states = (bool **)calloc(n_arms, sizeof(bool *));
+            arm_diverges   = (bool  *)calloc(n_arms, sizeof(bool));
+        }
+    }
+
     for (uint32_t ai = 0; ai < n_arms; ai++) {
-        Form *pat_form = call->as.list.items[2 + ai * 2];
-        Form *body_form = call->as.list.items[3 + ai * 2];
+        uint32_t base = arm_start[ai];
+        Form *pat_form = call->as.list.items[base];
+        Form *guard_form_raw = arm_has_guard[ai]
+            ? call->as.list.items[base + 2]
+            : NULL;
+        Form *body_form = call->as.list.items[arm_has_guard[ai] ? base + 3 : base + 1];
 
         MatchPattern *pat = &arms[ai].pattern;
         memset(pat, 0, sizeof(MatchPattern));
+        arms[ai].guard = NULL;
 
         if (pat_form->tag == F_SYM) {
             /* Bare symbol: either _ wildcard or variable capture */
@@ -10874,8 +11762,33 @@ static Expr *elab_match(Elab *e, const Form *call) {
                 has_wildcard = true; /* covers all remaining */
             }
             /* No new scope needed; elaborate body directly */
+            /* LT1: Restore outer linear state before this arm's body. */
+            if (g_linear_enabled && n_match_lin > 0) {
+                linear_state_restore(match_lin_bindings, match_lin_before, n_match_lin);
+            }
             Expr *body = elab_form(e, body_form);
             if (!body) { free(covered); return NULL; }
+            /* LT1: Capture outer linear state after this arm's body. */
+            if (g_linear_enabled && n_match_lin > 0) {
+                arm_lin_states[ai] = linear_state_capture_current(match_lin_bindings, n_match_lin);
+                arm_diverges[ai] = (body->type.kind == TY_NEVER) ||
+                                   (body->kind == EX_RETURN) ||
+                                   (body->kind == EX_PANIC)  ||
+                                   (body->kind == EX_PANIC_WITH);
+                linear_state_restore(match_lin_bindings, match_lin_before, n_match_lin);
+            }
+            /* Phase G0: Arm body type consistency check for wildcard/variable arms. */
+            if (result_type.kind != TY_UNKNOWN
+                    && body->type.kind != TY_UNKNOWN
+                    && !type_eq(result_type, body->type)) {
+                diag_emit_with_code(DIAG_ERROR, body_form->span,
+                                    TUR_E0001_TYPE_MISMATCH,
+                                    "match: arm types are incompatible -- "
+                                    "expected %s (from earlier arm), got %s",
+                                    typekind_to_string(result_type.kind),
+                                    typekind_to_string(body->type.kind));
+                free(covered); return NULL;
+            }
             arms[ai].body = body;
             if (result_type.kind == TY_UNKNOWN) result_type = body->type;
         } else if (pat_form->tag == F_LIST) {
@@ -10921,7 +11834,18 @@ static Expr *elab_match(Elab *e, const Form *call) {
                 ? (Binding **)arena_alloc(e->arena, n_bindings * sizeof(Binding *))
                 : NULL;
 
-            covered[ctor->tag] = true;
+            /* Phase G0: Redundant arm warning -- emit a warning if this constructor
+             * was already covered by an earlier non-guarded arm.  We still
+             * elaborate the body so any errors inside it are reported. */
+            if (covered[ctor->tag]) {
+                diag_emit(DIAG_WARNING, pat_form->span,
+                          "match: arm for constructor '%s' is unreachable -- "
+                          "already covered by an earlier arm",
+                          ctor->name);
+            }
+
+            /* Phase G4: guarded arm doesn't guarantee coverage */
+            covered[ctor->tag] = !arm_has_guard[ai];
 
             /* Phase G2: For GADT arms, build a per-arm SkolemEnv to resolve
              * type-variable field types to concrete kinds. */
@@ -10931,7 +11855,11 @@ static Expr *elab_match(Elab *e, const Form *call) {
                 gadt_build_skolem_env(&arm_senv, adt, ctor);
             }
             SkolemEnv *saved_senv = e->g2_skolem_env;
-            if (adt->is_gadt) e->g2_skolem_env = &arm_senv;
+            const CtorDef *saved_ctor = e->g2_current_ctor;
+            if (adt->is_gadt) {
+                e->g2_skolem_env = &arm_senv;
+                e->g2_current_ctor = ctor;
+            }
 
             /* Introduce a new scope with the field bindings */
             Scope arm_scope;
@@ -10947,6 +11875,7 @@ static Expr *elab_match(Elab *e, const Form *call) {
                     e->scope = saved_scope;
                     scope_free(&arm_scope);
                     e->g2_skolem_env = saved_senv;
+                    e->g2_current_ctor = saved_ctor;
                     free(covered); return NULL;
                 }
                 Type ftype;
@@ -10967,10 +11896,39 @@ static Expr *elab_match(Elab *e, const Form *call) {
                 pat->bindings[bi] = fb;
             }
 
+            /* LT1: Restore outer linear state before this arm's body. */
+            if (g_linear_enabled && n_match_lin > 0) {
+                linear_state_restore(match_lin_bindings, match_lin_before, n_match_lin);
+            }
             Expr *body = elab_form(e, body_form);
+
+            /* Phase G4: Elaborate optional when-guard while arm scope is still live */
+            Expr *guard_expr = NULL;
+            if (arm_has_guard[ai] && guard_form_raw) {
+                guard_expr = elab_form(e, guard_form_raw);
+                if (!guard_expr) {
+                    e->scope = saved_scope;
+                    scope_free(&arm_scope);
+                    e->g2_skolem_env = saved_senv;
+                    e->g2_current_ctor = saved_ctor;
+                    free(covered); return NULL;
+                }
+                if (guard_expr->type.kind != TY_BOOL) {
+                    diag_emit(DIAG_ERROR, guard_form_raw->span,
+                              "match: when-guard must have type bool, got %s",
+                              typekind_to_string(guard_expr->type.kind));
+                    e->scope = saved_scope;
+                    scope_free(&arm_scope);
+                    e->g2_skolem_env = saved_senv;
+                    e->g2_current_ctor = saved_ctor;
+                    free(covered); return NULL;
+                }
+            }
+
             e->scope = saved_scope;
             scope_free(&arm_scope);
             e->g2_skolem_env = saved_senv;
+            e->g2_current_ctor = saved_ctor;
             /* LT1: Verify all linear field bindings in this arm were consumed */
             bool lt1_arm_fail = false;
             if (g_linear_enabled && body) {
@@ -10999,10 +11957,37 @@ static Expr *elab_match(Elab *e, const Form *call) {
                     }
                 }
             }
+            /* Phase G2: GADT constructor context -- when body elaboration fails
+             * inside a GADT arm, emit a note naming the constructor whose
+             * return-type annotation caused the type refinement and listing the
+             * active skolem equalities (e.g. "in this arm: a ~ int").
+             * This surfaces the "why" behind type errors that occur because of
+             * GADT-induced substitutions. */
+            if (!body && adt->is_gadt && arm_senv.n > 0) {
+                char skolem_note[256];
+                int pos = 0;
+                for (uint8_t si = 0; si < arm_senv.n && pos < 230; si++) {
+                    if (si > 0) pos += snprintf(skolem_note + pos,
+                                                sizeof(skolem_note) - pos, ", ");
+                    pos += snprintf(skolem_note + pos, sizeof(skolem_note) - pos,
+                                   "%s ~ %s",
+                                   arm_senv.bindings[si].name,
+                                   typekind_to_string(arm_senv.bindings[si].kind));
+                }
+                skolem_note[pos] = '\0';
+                diag_emit(DIAG_NOTE, body_form->span,
+                          "inside arm for constructor '%s' of '%s'; "
+                          "active refinements: %s",
+                          ctor->name, adt->name, skolem_note);
+            }
             if (!body || lt1_arm_fail || st1_arm_fail) { free(covered); return NULL; }
 
-            /* Phase G2: detect skolem escape — arm body result is TY_TYVAR */
-            if (adt->is_gadt && body->type.kind == TY_TYVAR) {
+            /* Phase G2/HRT: detect skolem escape -- arm body result is anonymous TY_TYVAR.
+             * Named TY_TYVAR (type variable from a :a parameter annotation) is a properly
+             * polymorphic result and is allowed; only anonymous TY_TYVAR (unresolved field
+             * type with no name) indicates a skolem that escaped its scope. */
+            if (adt->is_gadt && body->type.kind == TY_TYVAR
+                    && body->type.as.tyvar_.name == NULL) {
                 diag_emit(DIAG_ERROR, body_form->span,
                           "match: skolem type variable escapes match arm "
                           "(constructor '%s' of '%s'): the arm body has an "
@@ -11011,13 +11996,97 @@ static Expr *elab_match(Elab *e, const Form *call) {
                 free(covered); return NULL;
             }
 
+            /* Phase G0/G2: Arm body type consistency check.
+             * All arms of a match expression must return the same type.
+             * If this arm's body type differs from the type established by the
+             * first arm, emit TUR_E0001_TYPE_MISMATCH.  For GADT arms, also
+             * emit a note listing the active skolem equalities so the user can
+             * see which type refinement is in effect. */
+            if (result_type.kind != TY_UNKNOWN
+                    && body->type.kind != TY_UNKNOWN
+                    && !type_eq(result_type, body->type)) {
+                if (adt->is_gadt && arm_senv.n > 0) {
+                    char skolem_note[256];
+                    int pos = 0;
+                    for (uint8_t si = 0; si < arm_senv.n && pos < 230; si++) {
+                        if (si > 0) pos += snprintf(skolem_note + pos,
+                                                    sizeof(skolem_note) - pos, ", ");
+                        pos += snprintf(skolem_note + pos, sizeof(skolem_note) - pos,
+                                       "%s ~ %s",
+                                       arm_senv.bindings[si].name,
+                                       typekind_to_string(arm_senv.bindings[si].kind));
+                    }
+                    skolem_note[pos] = '\0';
+                    diag_emit(DIAG_NOTE, body_form->span,
+                              "inside arm for constructor '%s' of '%s'; "
+                              "active refinements: %s",
+                              ctor->name, adt->name, skolem_note);
+                }
+                diag_emit_with_code(DIAG_ERROR, body_form->span,
+                                    TUR_E0001_TYPE_MISMATCH,
+                                    "match: arm types are incompatible -- "
+                                    "expected %s (from earlier arm), got %s",
+                                    typekind_to_string(result_type.kind),
+                                    typekind_to_string(body->type.kind));
+                free(covered); return NULL;
+            }
+
             arms[ai].body = body;
+            arms[ai].guard = guard_expr;
             if (result_type.kind == TY_UNKNOWN) result_type = body->type;
+            /* LT1: Capture outer linear state after this arm's body. */
+            if (g_linear_enabled && n_match_lin > 0) {
+                arm_lin_states[ai] = linear_state_capture_current(match_lin_bindings, n_match_lin);
+                arm_diverges[ai] = (body->type.kind == TY_NEVER) ||
+                                   (body->kind == EX_RETURN) ||
+                                   (body->kind == EX_PANIC)  ||
+                                   (body->kind == EX_PANIC_WITH);
+                linear_state_restore(match_lin_bindings, match_lin_before, n_match_lin);
+            }
         } else {
             diag_emit(DIAG_ERROR, pat_form->span,
                       "match: pattern must be a constructor list or _ wildcard");
             free(covered); return NULL;
         }
+    }
+
+    /* LT1: Verify consistent outer-scope linear consumption across match arms */
+    if (g_linear_enabled && n_match_lin > 0 && arm_lin_states) {
+        /* Find the first non-diverging arm as the reference. */
+        int ref_ai = -1;
+        for (uint32_t ai = 0; ai < n_arms; ai++) {
+            if (arm_lin_states[ai] && !arm_diverges[ai]) {
+                ref_ai = (int)ai; break;
+            }
+        }
+        bool lin_ok = true;
+        if (ref_ai >= 0) {
+            for (uint32_t ai = (uint32_t)(ref_ai + 1); ai < n_arms; ai++) {
+                if (!arm_lin_states[ai] || arm_diverges[ai]) continue;
+                for (uint32_t li = 0; li < n_match_lin; li++) {
+                    if (!match_lin_before[li] &&
+                        arm_lin_states[ai][li] != arm_lin_states[ref_ai][li]) {
+                        diag_emit_with_code(DIAG_ERROR, call->span,
+                                            TUR_E0104_LINEAR_BRANCH_MISMATCH,
+                                            "linear value '%s' consumed in some match arms but "
+                                            "not others -- consume it in all arms or none",
+                                            match_lin_bindings[li]->name->name);
+                        lin_ok = false;
+                    }
+                }
+            }
+        }
+        /* Merge: consumed after match only if all non-diverging arms consumed it. */
+        for (uint32_t li = 0; li < n_match_lin; li++) {
+            match_lin_bindings[li]->is_linear_consumed =
+                (ref_ai >= 0) ? arm_lin_states[ref_ai][li] : false;
+        }
+        for (uint32_t ai = 0; ai < n_arms; ai++) free(arm_lin_states[ai]);
+        free(arm_lin_states);
+        free(arm_diverges);
+        free(match_lin_before);
+        free(match_lin_bindings);
+        if (!lin_ok) { free(covered); return NULL; }
     }
 
     /* Exhaustiveness check */
@@ -11677,6 +12746,154 @@ static Expr *elab_await(Elab *e, const Form *call) {
     return out;
 }
 
+/* Phase SEL1: (select ((ch :recv v) body) ... (:default body))
+ * Waiter-based fair multi-channel select. Returns the value of the selected clause body.
+ * All channel expressions must be ptr<void>. Clause bodies must be type-compatible. */
+static Expr *elab_select(Elab *e, const Form *call) {
+    /* call->as.list.items[0] = "select"
+     * call->as.list.items[1..n] = clauses
+     * Each clause is a 2-element list:
+     *   ((chan :recv v) body)   -- recv clause
+     *   ((chan :send val) body) -- send clause
+     *   (:default body)        -- default arm (only keyword at head, rest is body)
+     */
+    if (call->as.list.len < 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(select ...) requires at least one clause");
+        return NULL;
+    }
+    uint32_t n_clauses_raw = call->as.list.len - 1;
+    SelectClauseEntry *clauses = (SelectClauseEntry *)arena_alloc(
+        e->arena, n_clauses_raw * sizeof(SelectClauseEntry));
+    uint32_t n_clauses = 0;
+    int has_default = 0;
+    Expr *default_body = NULL;
+    const Symbol *sym_default = intern_cstr(e->st, "default");
+
+    for (uint32_t ci = 0; ci < n_clauses_raw; ci++) {
+        Form *clause_form = call->as.list.items[1 + ci];
+        /* Must be a list with exactly 2 items: descriptor and body */
+        if (clause_form->tag != F_LIST || clause_form->as.list.len != 2) {
+            diag_emit(DIAG_ERROR, clause_form->span,
+                      "select clause must be ((chan :recv v) body) or ((chan :send val) body) or (:default body)");
+            return NULL;
+        }
+        Form *desc      = clause_form->as.list.items[0];
+        Form *body_form = clause_form->as.list.items[1];
+
+        /* Check for (:default body) */
+        if (desc->tag == F_KEYWORD && desc->as.sym == sym_default) {
+            if (has_default) {
+                diag_emit(DIAG_ERROR, clause_form->span,
+                          "select: at most one :default arm is allowed");
+                return NULL;
+            }
+            has_default = 1;
+            default_body = elab_form(e, body_form);
+            if (!default_body) return NULL;
+            continue;
+        }
+
+        /* Channel clause: desc must be (chan :recv v) or (chan :send val) */
+        if (desc->tag != F_LIST || desc->as.list.len < 2) {
+            diag_emit(DIAG_ERROR, desc->span,
+                      "select channel descriptor must be (chan :recv binding) or (chan :send val)");
+            return NULL;
+        }
+        Form *chan_form = desc->as.list.items[0];
+        Form *op_form   = desc->as.list.items[1];
+
+        if (op_form->tag != F_KEYWORD) {
+            diag_emit(DIAG_ERROR, op_form->span,
+                      "select clause operation must be :recv or :send");
+            return NULL;
+        }
+        int op;
+        if (op_form->as.sym == e->sym_recv) {
+            op = 0;
+        } else if (op_form->as.sym == e->sym_send) {
+            op = 1;
+        } else {
+            diag_emit(DIAG_ERROR, op_form->span,
+                      "select clause operation must be :recv or :send");
+            return NULL;
+        }
+
+        /* Elaborate channel expression */
+        Expr *chan_expr = elab_form(e, chan_form);
+        if (!chan_expr) return NULL;
+
+        Expr *send_val = NULL;
+        Binding *recv_bind = NULL;
+
+        if (op == 0) {
+            /* recv: (chan :recv binding) -- 3 elements */
+            if (desc->as.list.len != 3) {
+                diag_emit(DIAG_ERROR, desc->span,
+                          "select :recv clause descriptor: (chan :recv binding)");
+                return NULL;
+            }
+            Form *bind_form = desc->as.list.items[2];
+            if (bind_form->tag != F_SYM) {
+                diag_emit(DIAG_ERROR, bind_form->span,
+                          "select :recv binding must be a symbol");
+                return NULL;
+            }
+            recv_bind = binding_new(e, bind_form->as.sym, TYPE_INT, false, false, body_form->span);
+        } else {
+            /* send: (chan :send val) -- 3 elements */
+            if (desc->as.list.len != 3) {
+                diag_emit(DIAG_ERROR, desc->span,
+                          "select :send clause descriptor: (chan :send val)");
+                return NULL;
+            }
+            Form *val_form = desc->as.list.items[2];
+            send_val = elab_form(e, val_form);
+            if (!send_val) return NULL;
+        }
+
+        /* Elaborate body with recv binding in scope (if recv clause) */
+        Expr *body_expr;
+        if (op == 0 && recv_bind) {
+            /* Introduce a scope with the received value binding */
+            Scope recv_scope;
+            scope_init(&recv_scope, e->scope);
+            e->scope = &recv_scope;
+            scope_add(&recv_scope, recv_bind);
+            body_expr = elab_form(e, body_form);
+            e->scope = recv_scope.parent;
+        } else {
+            body_expr = elab_form(e, body_form);
+        }
+        if (!body_expr) return NULL;
+
+        SelectClauseEntry *sc = &clauses[n_clauses++];
+        sc->chan          = chan_expr;
+        sc->op            = op;
+        sc->send_val      = send_val;
+        sc->recv_binding  = recv_bind;
+        sc->body          = body_expr;
+    }
+
+    if (n_clauses == 0 && !has_default) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "select: requires at least one channel clause");
+        return NULL;
+    }
+
+    /* Determine return type from first clause body (or default body) */
+    Type result_type = TYPE_INT;
+    if (n_clauses > 0) result_type = clauses[0].body->type;
+    else if (default_body) result_type = default_body->type;
+
+    Expr *out = expr_new(e->arena, EX_SELECT, result_type, call->span);
+    out->as.select_.clauses      = clauses;
+    out->as.select_.n_clauses    = n_clauses;
+    out->as.select_.has_default  = has_default;
+    out->as.select_.default_body = default_body;
+    return out;
+}
+
 /* Phase R2: (panic msg) — print msg to stderr, then abort.
  * msg must be of type :cstr (or a string literal).
  * Return type is TYPE_NEVER (diverging; caller never observes a value). */
@@ -12233,6 +13450,21 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
             return t;
         }
         
+        /* IT4: any — top type.  Available when -Xunion-types or -Xintersection-types is on. */
+        if (sym->len == 3 && memcmp(sym->name, "any", 3) == 0) {
+            if (!g_union_types_enabled && !g_intersection_types_enabled) {
+                diag_emit(DIAG_ERROR, form->span,
+                          "'any' type requires -Xunion-types or -Xintersection-types");
+                return NULL;
+            }
+            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+            memset(t, 0, sizeof(Type));
+            t->kind     = TY_ANY;
+            t->copy_kind = CK_COPY;
+            t->hkt_kind  = KIND_STAR;
+            return t;
+        }
+
         /* Unknown - return as opaque struct */
         Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
         memset(t, 0, sizeof(Type));
@@ -12242,6 +13474,118 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
         t->as.struct_.def = NULL;
         return t;
     } else if (form->tag == F_LIST) {
+        /* IT0: (A | B | C) — union type expression.
+         * Detect by scanning for any element that is the "|" pipe symbol.
+         * Only active when -Xunion-types is enabled. */
+        {
+            bool has_pipe = false;
+            for (uint32_t uk = 0; uk < form->as.list.len; uk++) {
+                Form *uit = form->as.list.items[uk];
+                if (uit->tag == F_SYM && uit->as.sym == e->sym_pipe) {
+                    has_pipe = true;
+                    break;
+                }
+            }
+            if (has_pipe) {
+                if (!g_union_types_enabled) {
+                    diag_emit(DIAG_ERROR, form->span,
+                              "union type syntax requires -Xunion-types; found '|' in type expression");
+                    return NULL;
+                }
+                /* Count non-pipe member forms */
+                uint8_t n_members = 0;
+                for (uint32_t uk = 0; uk < form->as.list.len; uk++) {
+                    Form *uit = form->as.list.items[uk];
+                    if (uit->tag == F_SYM && uit->as.sym == e->sym_pipe) continue;
+                    n_members++;
+                }
+                if (n_members < 2) {
+                    diag_emit(DIAG_ERROR, form->span,
+                              "union type requires at least two member types separated by '|'");
+                    return NULL;
+                }
+                /* Collect member types */
+                Type **members = (Type **)arena_alloc(e->arena, n_members * sizeof(Type *));
+                uint8_t mi = 0;
+                for (uint32_t uk = 0; uk < form->as.list.len; uk++) {
+                    Form *uit = form->as.list.items[uk];
+                    if (uit->tag == F_SYM && uit->as.sym == e->sym_pipe) continue;
+                    Type *mt = type_expr_from_form(e, uit, rec_name,
+                                                   type_params, type_param_kinds, n_type_params);
+                    if (!mt) return NULL;
+                    members[mi++] = mt;
+                }
+                /* Build and return union type (type_union_build flattens nested unions) */
+                Type built = type_union_build(e->arena, members, n_members);
+                Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *t = built;
+                return t;
+            }
+        }
+
+        /* IT2: (A & B & C) — intersection type expression.
+         * Detect by scanning for any element that is the bare "&" ampersand symbol.
+         * Only active when -Xintersection-types is enabled. */
+        {
+            bool has_amp = false;
+            for (uint32_t uk = 0; uk < form->as.list.len; uk++) {
+                Form *uit = form->as.list.items[uk];
+                if (uit->tag == F_SYM && uit->as.sym == e->sym_ampersand) {
+                    has_amp = true;
+                    break;
+                }
+            }
+            if (has_amp) {
+                if (!g_intersection_types_enabled) {
+                    diag_emit(DIAG_ERROR, form->span,
+                              "intersection type syntax requires -Xintersection-types; found '&' in type expression");
+                    return NULL;
+                }
+                /* Count non-ampersand member forms */
+                uint8_t n_members = 0;
+                for (uint32_t uk = 0; uk < form->as.list.len; uk++) {
+                    Form *uit = form->as.list.items[uk];
+                    if (uit->tag == F_SYM && uit->as.sym == e->sym_ampersand) continue;
+                    n_members++;
+                }
+                if (n_members < 2) {
+                    diag_emit(DIAG_ERROR, form->span,
+                              "intersection type requires at least two member types separated by '&'");
+                    return NULL;
+                }
+                /* Collect member types */
+                Type **members = (Type **)arena_alloc(e->arena, n_members * sizeof(Type *));
+                uint8_t mi = 0;
+                for (uint32_t uk = 0; uk < form->as.list.len; uk++) {
+                    Form *uit = form->as.list.items[uk];
+                    if (uit->tag == F_SYM && uit->as.sym == e->sym_ampersand) continue;
+                    Type *mt = type_expr_from_form(e, uit, rec_name,
+                                                   type_params, type_param_kinds, n_type_params);
+                    if (!mt) return NULL;
+                    members[mi++] = mt;
+                }
+                /* IT3: TUR_E0350 -- reject provably-unsatisfiable intersections.
+                 * For each pair of members, check if they are known-disjoint concrete
+                 * types. Only emit one error (the first pair found). */
+                for (uint8_t ia = 0; ia < n_members; ia++) {
+                    for (uint8_t ib = ia + 1; ib < n_members; ib++) {
+                        if (types_provably_disjoint(members[ia], members[ib])) {
+                            diag_emit_with_code(DIAG_ERROR, form->span,
+                                TUR_E0350_INTERSECTION_UNSATISFIABLE,
+                                "intersection type is unsatisfiable: no value can be both %s and %s",
+                                type_name(*members[ia]), type_name(*members[ib]));
+                            return NULL;
+                        }
+                    }
+                }
+                /* Build and return intersection type (type_intersection_build flattens nested) */
+                Type built = type_intersection_build(e->arena, members, n_members);
+                Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *t = built;
+                return t;
+            }
+        }
+
         /* Phase HRT0: Handle (forall [vars...] body) and (exists [vars...] body) */
         if (form->as.list.len >= 1 && form->as.list.items[0]->tag == F_SYM) {
             const Symbol *head = form->as.list.items[0]->as.sym;
@@ -12655,6 +13999,12 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
         /* `:int`, `:bool`, etc. — treat the keyword name as a primitive type lookup */
         const Symbol *sym = form->as.sym;
         TypeKind k = typekind_from_symbol(sym->name);
+        /* IT4: gate `any` behind the feature flags */
+        if (k == TY_ANY && !g_union_types_enabled && !g_intersection_types_enabled) {
+            diag_emit(DIAG_ERROR, form->span,
+                      "'any' type requires -Xunion-types or -Xintersection-types");
+            return NULL;
+        }
         if (k != TY_UNKNOWN) {
             Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
             *t = type_from_kind(k);
@@ -14411,6 +15761,125 @@ static Expr *elab_method_call(Elab *e, const Form *call) {
     const char *method_name = method_sym->name + 1;  /* Skip '.' */
     uint32_t method_name_len = method_sym->len - 1;
 
+    /* Phase D1: Type witness @TypeName at call sites.
+     * The reader converts @TypeName into (deref TypeName), so we detect
+     * the pattern (deref sym) at items[1] where sym names a registered
+     * typeclass instance type argument for this method.  When found the
+     * witness pins the dispatch directly to that instance; the receiver
+     * is items[2] and extra arguments start at items[3]. */
+    if (call->as.list.len >= 3 &&
+        call->as.list.items[1]->tag == F_LIST &&
+        call->as.list.items[1]->as.list.len == 2 &&
+        call->as.list.items[1]->as.list.items[0]->tag == F_SYM &&
+        strcmp(call->as.list.items[1]->as.list.items[0]->as.sym->name, "deref") == 0 &&
+        call->as.list.items[1]->as.list.items[1]->tag == F_SYM) {
+
+        const Symbol *witness_sym = call->as.list.items[1]->as.list.items[1]->as.sym;
+        const char   *witness_name = witness_sym->name;
+        uint32_t      witness_len  = witness_sym->len;
+
+        /* Walk all registered instances looking for one whose type arg symbol
+         * (or primitive type name) matches the witness identifier. */
+        TypeClassInstance *witness_inst   = NULL;
+        FnDef             *witness_method_fn = NULL;
+        bool               any_inst_for_method = false;
+
+        for (TypeClassInstance *inst = e->typeclass_env.instances;
+             inst != NULL && !witness_inst; inst = inst->next) {
+            for (uint8_t mi = 0; mi < inst->typeclass->n_methods; mi++) {
+                const TypeClassMethod *m = &inst->typeclass->methods[mi];
+                if (m->name->len != method_name_len ||
+                    memcmp(m->name->name, method_name, method_name_len) != 0) continue;
+                any_inst_for_method = true;
+                /* Check if a type arg name matches the witness identifier. */
+                bool name_match = false;
+                for (uint8_t ti = 0; ti < inst->n_type_args && !name_match; ti++) {
+                    if (inst->type_arg_syms && inst->type_arg_syms[ti] &&
+                        inst->type_arg_syms[ti]->len == witness_len &&
+                        memcmp(inst->type_arg_syms[ti]->name, witness_name, witness_len) == 0) {
+                        name_match = true;
+                    }
+                    if (!name_match) {
+                        /* Primitive type names that have no symbol (e.g. int, bool). */
+                        const char *prim = NULL;
+                        switch (inst->type_args[ti].kind) {
+                            case TY_INT:   prim = "int";   break;
+                            case TY_BOOL:  prim = "bool";  break;
+                            case TY_CSTR:  prim = "cstr";  break;
+                            case TY_NIL:   prim = "nil";   break;
+                            case TY_FLOAT: prim = "float"; break;
+                            default: break;
+                        }
+                        if (prim && strcmp(prim, witness_name) == 0) name_match = true;
+                    }
+                }
+                if (name_match) {
+                    witness_inst      = inst;
+                    witness_method_fn = inst->method_impls[mi];
+                }
+                break; /* one method match per instance is enough */
+            }
+        }
+
+        if (witness_inst) {
+            /* Witness resolved: receiver is items[2], extra args are items[3..]. */
+            Expr *obj_w = elab_form(e, call->as.list.items[2]);
+            if (!obj_w) return NULL;
+
+            uint32_t n_args_w = call->as.list.len - 3;
+            Expr **args_w = (Expr **)arena_alloc(e->arena, n_args_w * sizeof(Expr *));
+            for (uint32_t i = 0; i < n_args_w; i++) {
+                args_w[i] = elab_form(e, call->as.list.items[3 + i]);
+                if (!args_w[i]) return NULL;
+            }
+
+            /* Determine result type from the method's binding. */
+            Type result_type_w;
+            if (witness_method_fn->binding->type.kind == TY_FN) {
+                result_type_w = type_from_kind(witness_method_fn->binding->type.as.fn.result_kind);
+            } else {
+                result_type_w = witness_method_fn->body ? witness_method_fn->body->type : TYPE_INT;
+                if (result_type_w.kind == TY_UNKNOWN || result_type_w.kind == TY_NIL)
+                    result_type_w = TYPE_INT;
+            }
+
+            /* Build the EX_DICT node for the pinned instance. */
+            Expr *dict_w = make_dict_expr(e, witness_inst, call->span);
+            strncpy(dict_w->as.dict_.method_name, method_name,
+                    sizeof(dict_w->as.dict_.method_name) - 1);
+            dict_w->as.dict_.method_name[sizeof(dict_w->as.dict_.method_name) - 1] = '\0';
+            for (char *p = dict_w->as.dict_.method_name; *p; p++) {
+                if (!isalnum((unsigned char)*p) && *p != '_') *p = '_';
+            }
+
+            /* Build EX_CALL: args array is [obj_w, args_w...]. */
+            Expr **call_args_w = (Expr **)arena_alloc(e->arena,
+                                                       (n_args_w + 1) * sizeof(Expr *));
+            call_args_w[0] = obj_w;
+            for (uint32_t i = 0; i < n_args_w; i++) call_args_w[i + 1] = args_w[i];
+
+            Expr *out_w = expr_new(e->arena, EX_CALL, result_type_w, call->span);
+            out_w->as.call_.fn_binding = NULL;
+            out_w->as.call_.fn_expr    = dict_w;
+            out_w->as.call_.args       = call_args_w;
+            out_w->as.call_.n_args     = n_args_w + 1;
+            out_w->as.call_.dict_arg   = dict_w;
+            return out_w;
+
+        } else if (any_inst_for_method) {
+            /* Instances exist for this method but none match the witness type name.
+             * The user clearly intended a witness (not a deref); emit a specific error. */
+            diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
+                      "no instance of typeclass method '.%.*s' for type '%s' -- "
+                      "check that (definstance ... [%s] ...) is in scope",
+                      (int)method_name_len, method_name, witness_name, witness_name);
+            return NULL;
+        }
+        /* No instances at all for this method: fall through to the normal path
+         * so that (deref sym) is elaborated as the receiver and the existing
+         * "no typeclass method found" error is emitted. */
+    }
+
     /* Phase HKT H2: Elaborate the receiver object first so we can use its
      * type to select the correct typeclass instance (type-based dispatch).
      * This replaces the old "name-only / first-match" approach with a lookup
@@ -14447,6 +15916,15 @@ static Expr *elab_method_call(Elab *e, const Form *call) {
                     out->as.get_field_.struct_expr = obj;
                     out->as.get_field_.field_idx = i;
                     out->as.get_field_.def = def;
+                    /* LT1/T3: Extracting an lref<T> field from a :move struct transfers
+                     * linear ownership of that field out of the struct.  Mark the struct
+                     * binding as moved so a second extraction of the same field triggers
+                     * TUR_E0005 (use-after-move).  :linear struct receivers are already
+                     * handled by the F_SYM is_linear_consumed path above. */
+                    if (g_linear_enabled && fkind == TY_LREF &&
+                            obj->kind == EX_VAR && type_is_move(obj->as.var.binding->type)) {
+                        binding_mark_moved(obj->as.var.binding, call->span);
+                    }
                     return out;
                 }
             }
@@ -14547,6 +16025,109 @@ static Expr *elab_method_call(Elab *e, const Form *call) {
         }
     }
 
+    /* IT4: Typeclass intersection dispatch on union types.
+     * When obj : (A | B), and every member type has an instance for .method,
+     * generate a tag-dispatched EX_MATCH that calls the right instance per arm.
+     * The synthetic scrutinee is `obj`; each arm unboxes the value and calls the
+     * per-member method implementation directly (bypassing dictionary dispatch
+     * to avoid nested tur_tagged_t complications). */
+    if (obj->type.kind == TY_UNION) {
+        uint8_t n_members = obj->type.as.union_.n_members;
+        /* Elaborate the extra arguments once (they are shared across arms). */
+        uint32_t n_extra = call->as.list.len - 2;
+        Expr **extra_args = (Expr **)arena_alloc(e->arena, n_extra * sizeof(Expr *));
+        for (uint32_t i = 0; i < n_extra; i++) {
+            extra_args[i] = elab_form(e, call->as.list.items[2 + i]);
+            if (!extra_args[i]) return NULL;
+        }
+
+        /* For each member, find a matching typeclass instance. */
+        FnDef **member_methods = (FnDef **)arena_alloc(e->arena, n_members * sizeof(FnDef *));
+        for (uint8_t um = 0; um < n_members; um++) {
+            Type *mem_t = obj->type.as.union_.members[um];
+            if (!mem_t) { member_methods[um] = NULL; continue; }
+            FnDef *found = NULL;
+            for (TypeClassInstance *inst = e->typeclass_env.instances;
+                 inst != NULL && !found; inst = inst->next) {
+                for (uint8_t mi = 0; mi < inst->typeclass->n_methods; mi++) {
+                    const TypeClassMethod *meth = &inst->typeclass->methods[mi];
+                    if (meth->name->len != method_name_len ||
+                        memcmp(meth->name->name, method_name, method_name_len) != 0) continue;
+                    if (inst->n_type_args > 0 &&
+                        inst->type_args[0].kind != mem_t->kind) continue;
+                    found = inst->method_impls[mi];
+                    break;
+                }
+            }
+            member_methods[um] = found;
+            if (!found) {
+                diag_emit(DIAG_ERROR, call->span,
+                          "typeclass method '%.*s' not available for union member '%s'",
+                          (int)method_name_len, method_name, type_name(*mem_t));
+                return NULL;
+            }
+        }
+
+        /* Determine result type from the first member's method. */
+        Type result_type = TYPE_NIL;
+        if (n_members > 0 && member_methods[0]) {
+            FnDef *m0 = member_methods[0];
+            if (m0->binding->type.kind == TY_FN)
+                result_type = type_from_kind(m0->binding->type.as.fn.result_kind);
+            else if (m0->body)
+                result_type = m0->body->type;
+        }
+        if (result_type.kind == TY_UNKNOWN) result_type = TYPE_INT;
+
+        /* Build a fresh binding name for the unboxed arm variable. */
+        static uint32_t union_dispatch_ctr = 0;
+        char arm_name_buf[32];
+        snprintf(arm_name_buf, sizeof(arm_name_buf), "__udisp_%u", union_dispatch_ctr++);
+        const Symbol *arm_sym = intern_cstr(e->st, arm_name_buf);
+
+        /* Build the arms array. */
+        MatchArm *arms = (MatchArm *)arena_alloc(e->arena, n_members * sizeof(MatchArm));
+        for (uint8_t um = 0; um < n_members; um++) {
+            Type *mem_t = obj->type.as.union_.members[um];
+            FnDef *meth = member_methods[um];
+
+            /* Pattern: type-narrowing, binds arm_sym to the unboxed value. */
+            MatchArm *arm = &arms[um];
+            memset(arm, 0, sizeof(*arm));
+            arm->pattern.is_var = true;
+            arm->pattern.var_sym = arm_sym;
+            arm->pattern.union_member_idx = (int)um;
+            arm->pattern.n_bindings = 1;
+            arm->pattern.bindings = (Binding **)arena_alloc(e->arena, sizeof(Binding *));
+            Binding *var_b = binding_new(e, arm_sym, *mem_t, false, false, call->span);
+            arm->pattern.bindings[0] = var_b;
+            arm->pattern.var_binding = var_b;
+            arm->guard = NULL;
+
+            /* Body: call meth with (var_b, extra_args...) */
+            Expr *var_expr = expr_new(e->arena, EX_VAR, *mem_t, call->span);
+            var_expr->as.var.binding = var_b;
+
+            uint32_t total_args = 1 + n_extra;
+            Expr **call_args = (Expr **)arena_alloc(e->arena, total_args * sizeof(Expr *));
+            call_args[0] = var_expr;
+            for (uint32_t ei = 0; ei < n_extra; ei++) call_args[1 + ei] = extra_args[ei];
+
+            Expr *body_call = expr_new(e->arena, EX_CALL, result_type, call->span);
+            body_call->as.call_.fn_binding = meth->binding;
+            body_call->as.call_.fn_expr = NULL;
+            body_call->as.call_.args = call_args;
+            body_call->as.call_.n_args = total_args;
+            arm->body = body_call;
+        }
+
+        Expr *out = expr_new(e->arena, EX_MATCH, result_type, call->span);
+        out->as.match_.scrutinee = obj;
+        out->as.match_.arms = arms;
+        out->as.match_.n_arms = n_members;
+        return out;
+    }
+
     /* Phase HKT H2: Type-based instance lookup.
      * Build a TypeClassDispatchKey from the obj type, then use
      * typeclass_env_lookup_instance_by_key for a two-level search.
@@ -14555,6 +16136,9 @@ static Expr *elab_method_call(Elab *e, const Form *call) {
     FnDef *best_method = NULL;
     /* Phase H §1: Track the selected instance so we can build an EX_DICT node. */
     TypeClassInstance *best_inst = NULL;
+    /* Phase D0: count fallback candidates and track whether an exact match was found. */
+    int fallback_count = 0;
+    bool exact_match_found = false;
 
     /* Determine the effective constructor kind from the obj type. */
     Kind obj_ck = KIND_STAR;
@@ -14591,6 +16175,7 @@ static Expr *elab_method_call(Elab *e, const Form *call) {
                 }
                 if (!type_ok) {
                     /* Record as fallback but keep searching. */
+                    fallback_count++;
                     if (!best_method) { best_method = inst->method_impls[i]; best_inst = inst; }
                     continue;
                 }
@@ -14609,6 +16194,7 @@ static Expr *elab_method_call(Elab *e, const Form *call) {
             /* Good match (or no type_args to check). */
             best_method = inst->method_impls[i];
             best_inst = inst;
+            exact_match_found = true;
             goto found_method;
         }
     }
@@ -14619,6 +16205,47 @@ found_method:;
         diag_emit(DIAG_ERROR, call->span,
                   "no typeclass method found for '%.*s'",
                   method_name_len, method_name);
+        return NULL;
+    }
+
+    /* Phase D0: Ambiguous dispatch diagnostic.
+     * If we reached here via the fallback path (no exact type match) and
+     * more than one instance matched by name, emit TUR_E0020 so the user
+     * gets a clear error instead of a silent wrong-instance selection. */
+    if (!exact_match_found && fallback_count > 1) {
+        /* Build a comma-separated list of matching instance names for the message. */
+        char inst_list[512];
+        int pos = 0;
+        int listed = 0;
+        for (TypeClassInstance *ci = e->typeclass_env.instances;
+             ci != NULL && pos < (int)sizeof(inst_list) - 2; ci = ci->next) {
+            for (uint8_t mi = 0; mi < ci->typeclass->n_methods; mi++) {
+                const TypeClassMethod *cm = &ci->typeclass->methods[mi];
+                if (cm->name->len != method_name_len ||
+                    memcmp(cm->name->name, method_name, method_name_len) != 0) continue;
+                if (listed > 0 && pos < (int)sizeof(inst_list) - 3) {
+                    inst_list[pos++] = ','; inst_list[pos++] = ' ';
+                }
+                int wrote = 0;
+                if (ci->n_type_args > 0 && ci->type_arg_syms && ci->type_arg_syms[0]) {
+                    wrote = snprintf(inst_list + pos, sizeof(inst_list) - (size_t)pos,
+                                     "%s[%s]", ci->typeclass->name->name,
+                                     ci->type_arg_syms[0]->name);
+                } else {
+                    wrote = snprintf(inst_list + pos, sizeof(inst_list) - (size_t)pos,
+                                     "%s[?]", ci->typeclass->name->name);
+                }
+                if (wrote > 0) pos += wrote;
+                listed++;
+                break; /* one method match per instance is enough */
+            }
+        }
+        inst_list[pos] = '\0';
+        diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0020_AMBIGUOUS_DISPATCH,
+                            "ambiguous method dispatch: '.%.*s' matches %d instances "
+                            "(%s) -- receiver type is erased (int64_t). "
+                            "Hint: annotate the receiver's type or use @TypeName syntax (see D1).",
+                            (int)method_name_len, method_name, fallback_count, inst_list);
         return NULL;
     }
 
@@ -14945,7 +16572,10 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
         if (!head || head->tag != F_SYM) continue;
         bool is_defstruct = (head->as.sym == e.sym_defstruct);
         bool is_defdata   = (head->as.sym == e.sym_defdata);
-        if (!is_defstruct && !is_defdata) continue;
+        bool is_defgadt   = (head->as.sym == e.sym_defgadt);
+        if (!is_defstruct && !is_defdata && !is_defgadt) continue;
+        /* GADTs are only registered if -Xgadt is enabled */
+        if (is_defgadt && !g_gadt_enabled) continue;
         Form *name_f = f->as.list.items[1];
         if (!name_f || name_f->tag != F_SYM) continue;
         const Symbol *type_name = name_f->as.sym;
@@ -14963,6 +16593,20 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
             stub->origin_file_id = name_f->span.file_id;
             elab_register_struct_def(&e, stub);
             Type t = type_struct(stub);
+            Binding *b = binding_new(&e, type_name, t, false, true, name_f->span);
+            scope_add(&e.global, b);
+        } else if (is_defgadt) {
+            AdtDef *stub = (AdtDef *)arena_alloc(arena, sizeof(AdtDef));
+            stub->name = type_name->name;
+            stub->n_ctors = 0;
+            stub->ctors = NULL;
+            stub->is_copy = false;
+            stub->needs_drop_glue = false;
+            stub->is_gadt = true;
+            stub->type_params = NULL;
+            stub->n_type_params = 0;
+            elab_register_adt_def(&e, stub);
+            Type t = type_adt(stub);
             Binding *b = binding_new(&e, type_name, t, false, true, name_f->span);
             scope_add(&e.global, b);
         } else {

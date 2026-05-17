@@ -40,6 +40,8 @@ typedef enum DiagCode {
     /* Phase 21: Serializable continuations */
     TUR_E0018_NOT_SERIALIZABLE,                   /* captured binding does not implement Serializable */
     TUR_E0019_SERIAL_SHIFT_OUTSIDE_RESET,         /* serial-shift used outside serial-reset boundary */
+    /* Phase D0: ambiguous typeclass method dispatch (erased receiver type) */
+    TUR_E0020_AMBIGUOUS_DISPATCH,                 /* .method on int64_t receiver matches multiple instances */
     /* ER5: module effect visibility (PR5-1) */
     TUR_E0021_PRIVATE_EFFECT,                     /* effect is private to its defining module */
     /* ER1: strict-effects warnings */
@@ -51,6 +53,7 @@ typedef enum DiagCode {
     TUR_E0101_LINEAR_USE_AFTER_CONSUME, /* linear value used after being moved/consumed */
     TUR_E0102_LINEAR_COPY,         /* cannot copy a linear value */
     TUR_E0103_LINEAR_IN_RC,        /* cannot wrap a linear value in rc<T> */
+    TUR_E0104_LINEAR_BRANCH_MISMATCH, /* linear value consumed in one branch but not another */
     /* UT1: Uniqueness type errors (-Xunique-types) */
     TUR_E0200_UNIQUE_ALIASED,      /* value is not unique -- aliased by another binding */
     TUR_E0201_UNIQUE_COPY,         /* cannot copy a unique value (use after consume) */
@@ -58,6 +61,12 @@ typedef enum DiagCode {
     /* ST0: Substructural type errors (-Xsubstructural) */
     TUR_E0150_AFFINE_USED_TWICE,   /* affine value used more than once */
     TUR_E0151_RELEVANT_DROPPED,    /* relevant value dropped without being used */
+    /* IT1: Union type errors (-Xunion-types) */
+    TUR_E0300_UNION_TYPE_MISMATCH,   /* value type not a member of union type */
+    TUR_E0301_NON_EXHAUSTIVE_UNION_MATCH, /* match on union type missing arm for one or more members */
+    /* IT3: Intersection type errors (-Xintersection-types) */
+    TUR_E0350_INTERSECTION_UNSATISFIABLE,   /* no value can satisfy all intersection members */
+    TUR_E0351_INTERSECTION_MEMBER_MISMATCH, /* value doesn't satisfy an intersection member */
 } DiagCode;
 
 typedef enum DiagLevel {

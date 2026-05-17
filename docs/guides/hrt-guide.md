@@ -212,4 +212,8 @@ The compiler automatically:
 
 - `docs/higher-ranked-types-plan.md` — Implementation plan and phase history
 - `tests/fixtures/hrt-*/` — Working examples of every HRT feature
+- `docs/gadts-guide.md` — GADTs and equality witnesses; skolem equalities produced
+  by GADT `match` arms interact with HRT bidirectional checking to enable type
+  refinement without casts (see `gadts-plan.md` §Non-Goals item 4 for the
+  boundary between HRT and GADT phases)
 - `tests/fixtures/errors/hrt-*/` — Error cases with expected diagnostics

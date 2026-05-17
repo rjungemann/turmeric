@@ -1439,7 +1439,9 @@ static int usage(void) {
         "  --lint-panic                     lint panic/must! usage (Phase R6)\n"
         "  -Xlinear                         enable linear type checking (LT0-LT4)\n"
         "  -Xunique-types                   enable uniqueness type checking (UT0-UT3)\n"
-        "  -Xsubstructural                  enable substructural type checking (ST0-ST3; implies -Xlinear)\n");
+        "  -Xsubstructural                  enable substructural type checking (ST0-ST3; implies -Xlinear)\n"
+        "  -Xunion-types                    enable union type syntax: (A | B | C) (IT0-IT1)\n"
+        "  -Xintersection-types             enable intersection type syntax: (A & B & C) (IT2)\n");
     return 64;
 }
 
@@ -1745,6 +1747,22 @@ int main(int argc, char **argv) {
             /* ST0: enable substructural type checking (implies -Xlinear) */
             g_substructural_enabled = true;
             g_linear_enabled = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "-Xunion-types") == 0) {
+            /* IT0: enable union type syntax and checking */
+            g_union_types_enabled = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "-Xintersection-types") == 0) {
+            /* IT2: enable intersection type syntax */
+            g_intersection_types_enabled = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

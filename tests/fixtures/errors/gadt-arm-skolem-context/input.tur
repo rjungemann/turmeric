@@ -1,0 +1,9 @@
+; GADT arm type mismatch: the wildcard arm returns a different type.
+; The error should show that the (Refl) arm established the result type.
+(defgadt Equal [a b]
+  (Refl : (Equal a a)))
+(defn bad-fn [eq :Equal] :int
+  (match eq
+    (Refl) "wrong-type"
+    _ 0))
+(defn main [] :int 0)

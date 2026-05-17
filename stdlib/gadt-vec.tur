@@ -1,0 +1,154 @@
+;; Phase G4: length-indexed Vec GADT (simplified int elements)
+;; Vec is a phantom-typed singly-linked list of ints.
+;; The type parameter a is unused in constructor field types (phantom).
+;; True compile-time length safety is deferred to a future dependent-types phase.
+
+(defgadt Vec [a]
+  (VNil : (Vec int))
+  (VCons int (Vec int) : (Vec int)))
+
+;;; vec-nil -- construct an empty Vec.
+;;;
+;;; Returns:
+;;;   A (Vec int) value representing the empty list.
+;;;
+;;; Example:
+;;;   (vec-nil)  ; => VNil
+;;;
+;;; Since: Phase G4
+(defn vec-nil [] :Vec
+  (VNil))
+
+;;; vec-cons -- prepend an integer element to a Vec.
+;;;
+;;; Parameters:
+;;;   x -- the integer element to prepend
+;;;   v -- the existing (Vec int) to prepend onto
+;;;
+;;; Returns:
+;;;   A new (Vec int) with x at the front.
+;;;
+;;; Example:
+;;;   (vec-cons 1 (vec-nil))  ; => VCons(1, VNil)
+;;;
+;;; Since: Phase G4
+(defn vec-cons [x :int v :Vec] :Vec
+  (VCons x v))
+
+;;; vec-len -- compute the length of a Vec.
+;;;
+;;; Parameters:
+;;;   v -- the (Vec int) to measure
+;;;
+;;; Returns:
+;;;   The number of elements in v as an int.
+;;;
+;;; Example:
+;;;   (vec-len (vec-cons 1 (vec-cons 2 (vec-nil))))  ; => 2
+;;;
+;;; Since: Phase G4
+(defn vec-len [v :Vec] :int
+  (match v
+    (VNil)      0
+    (VCons _ t) (+ 1 (vec-len t))))
+
+;;; vec-sum -- sum all elements of a Vec.
+;;;
+;;; Parameters:
+;;;   v -- the (Vec int) to sum
+;;;
+;;; Returns:
+;;;   The integer sum of all elements; 0 for an empty Vec.
+;;;
+;;; Example:
+;;;   (vec-sum (vec-cons 1 (vec-cons 2 (vec-cons 3 (vec-nil)))))  ; => 6
+;;;
+;;; Since: Phase G4
+(defn vec-sum [v :Vec] :int
+  (match v
+    (VNil)      0
+    (VCons x t) (+ x (vec-sum t))))
+
+;;; vec-head-or -- return the first element or a default if empty.
+;;;
+;;; Parameters:
+;;;   dflt -- the int value to return when v is empty
+;;;   v    -- the (Vec int) to inspect
+;;;
+;;; Returns:
+;;;   The head element of v if non-empty, otherwise dflt.
+;;;
+;;; Example:
+;;;   (vec-head-or 99 (vec-nil))                    ; => 99
+;;;   (vec-head-or 99 (vec-cons 5 (vec-nil)))       ; => 5
+;;;
+;;; Since: Phase G4
+(defn vec-head-or [dflt :int v :Vec] :int
+  (match v
+    (VNil)      dflt
+    (VCons x _) x))
+
+;;; vec-tail -- return all elements after the first.
+;;;
+;;; Parameters:
+;;;   v -- the (Vec int) to take the tail of
+;;;
+;;; Returns:
+;;;   The tail (Vec int) of v; VNil if v is empty.
+;;;
+;;; Example:
+;;;   (vec-tail (vec-cons 1 (vec-cons 2 (vec-nil))))  ; => VCons(2, VNil)
+;;;   (vec-tail (vec-nil))                             ; => VNil
+;;;
+;;; Since: Phase G4
+(defn vec-tail [v :Vec] :Vec
+  (match v
+    (VNil)      (VNil)
+    (VCons _ t) t))
+
+;;; __vec-call-fn1 -- apply a ptr<void> closure to one int argument.
+;; Internal helper for vmap; dispatches through the fat-closure ABI.
+(defn __vec-call-fn1 [f :ptr<void> x :int] :int (f x))
+
+;;; vmap -- apply an int->int function to every element of a Vec.
+;;;
+;;; Parameters:
+;;;   f -- a curried int->int function (e.g. a partial application)
+;;;   v -- the (Vec int) to transform
+;;;
+;;; Returns:
+;;;   A new (Vec int) with f applied to each element.
+;;;
+;;; Example:
+;;;   (defn mul [a :int b :int] :int (* a b))
+;;;   (vec-sum (vmap (mul 2) (vec-cons 1 (vec-cons 2 (vec-nil)))))  ; => 6
+;;;
+;;; Since: Phase G4
+(defn vmap [f :ptr<void> v] :Vec
+  (match v
+    (VNil)      (VNil)
+    (VCons x t) (VCons (__vec-call-fn1 f x) (vmap f t))))
+
+;;; vzip-with -- combine two Vecs element-wise using a binary int->int->int function.
+;;;
+;;; Parameters:
+;;;   f  -- a two-argument function (int, int) -> int
+;;;   v1 -- the first (Vec int)
+;;;   v2 -- the second (Vec int)
+;;;
+;;; Returns:
+;;;   A (Vec int) of combined values; stops at the shorter input.
+;;;
+;;; Example:
+;;;   (defn add [a :int b :int] :int (+ a b))
+;;;   (vec-sum (vzip-with add
+;;;              (vec-cons 1 (vec-cons 2 (vec-nil)))
+;;;              (vec-cons 10 (vec-cons 20 (vec-nil)))))  ; => 33
+;;;
+;;; Since: Phase G4
+(defn vzip-with [f :(fn [int int] #{} :int) v1 v2] :Vec
+  (match v1
+    (VNil)       (VNil)
+    (VCons x t1) (match v2
+                   (VNil)       (VNil)
+                   (VCons y t2) (VCons (f x y) (vzip-with f t1 t2)))))

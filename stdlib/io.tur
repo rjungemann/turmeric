@@ -266,3 +266,93 @@
   }
   free(e);
   ```)
+
+;; ============================================================================
+;; LT4: FileHandle -- resource-safe file handle (move-only)
+;; ============================================================================
+
+;;; FileHandle -- a linear (exactly-once) wrapper around a FILE* pointer.
+;;;
+;;; Wrapping FILE* in a named struct enforces that file handles are not
+;;; accidentally duplicated.  Marking the struct :linear (CK_LINEAR) means
+;;; every bound FileHandle must be explicitly consumed (e.g. via file-close);
+;;; the compiler emits TUR-E0100 if a linear value is silently dropped.
+;;;
+;;; Since: LT4
+(defstruct FileHandle :linear [ptr :ptr<void>])
+
+;;; file-open -- open a file and return a move-only FileHandle.
+;;;
+;;; Parameters:
+;;;   path -- filesystem path to open (:cstr).
+;;;   mode -- fopen mode string, e.g. "rb" or "wb" (:cstr).
+;;;
+;;; Returns:
+;;;   A FileHandle wrapping the opened FILE*, or a FileHandle with a
+;;;   NULL ptr on error.  Check with file-handle-ok? before using.
+;;;
+;;; Example:
+;;;   (let [fh (file-open "/etc/hostname" "rb")] ...)
+;;;
+;;; Since: LT4
+(defn file-open [path mode] :FileHandle
+  ```c
+  FileHandle fh;
+  fh.ptr = (void*)fopen(path, mode);
+  return fh;
+  ```)
+
+;;; file-handle-ok? -- return true if the FileHandle is valid (non-NULL).
+;;;
+;;; Parameters:
+;;;   fh -- a FileHandle (by value).
+;;;
+;;; Returns:
+;;;   true if the underlying FILE* is non-NULL, false on open failure.
+;;;
+;;; Example:
+;;;   (file-handle-ok? (file-open "/etc/hostname" "rb"))  ; => true
+;;;
+;;; Since: LT4
+(defn file-handle-ok? [fh : FileHandle] :bool
+  ```c
+  return fh.ptr != NULL;
+  ```)
+
+;;; file-read -- read up to len bytes from fh into buf.
+;;;
+;;; Parameters:
+;;;   fh  -- an open FileHandle (by value; does not consume the handle).
+;;;   buf -- destination buffer as ptr<void>.
+;;;   len -- maximum number of bytes to read.
+;;;
+;;; Returns:
+;;;   Number of bytes actually read (int).
+;;;
+;;; Example:
+;;;   (file-read fh buf 1024)  ; => 512
+;;;
+;;; Since: LT4
+(defn file-read [fh : FileHandle  buf  len] :int
+  ```c
+  if (!fh.ptr) return -1;
+  return (int)fread(buf, 1, len, (FILE*)fh.ptr);
+  ```)
+
+;;; file-close -- close a FileHandle and release the underlying FILE*.
+;;;
+;;; Parameters:
+;;;   fh -- a FileHandle to close (by value; handle is consumed).
+;;;
+;;; Returns:
+;;;   0 on success, non-zero on error (mirrors fclose return value).
+;;;
+;;; Example:
+;;;   (file-close fh)  ; => 0
+;;;
+;;; Since: LT4
+(defn file-close [fh : FileHandle] :int
+  ```c
+  if (!fh.ptr) return -1;
+  return fclose((FILE*)fh.ptr);
+  ```)

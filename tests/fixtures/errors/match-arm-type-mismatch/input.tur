@@ -1,0 +1,7 @@
+; Match arms returning incompatible types should produce a type mismatch error.
+(defdata Shape (Circle) (Square))
+(defn main [] :int
+  (let [x (match (Circle)
+    (Circle) 42
+    (Square) "hello")]
+    0))

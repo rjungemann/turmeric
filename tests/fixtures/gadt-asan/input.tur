@@ -1,0 +1,15 @@
+(defgadt Expr [a]
+  (Lit int : (Expr int))
+  (Add (Expr int) (Expr int) : (Expr int))
+  (Mul (Expr int) (Expr int) : (Expr int)))
+
+(defn eval-expr [e] :int
+  (match e
+    (Lit n)   n
+    (Add l r) (+ (eval-expr l) (eval-expr r))
+    (Mul l r) (* (eval-expr l) (eval-expr r))))
+
+(defn main [] :int
+  (let [e (Add (Lit 2) (Mul (Lit 3) (Lit 4)))]
+    (println (eval-expr e))
+    0))

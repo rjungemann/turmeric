@@ -108,6 +108,12 @@ typedef enum TypeKind {
     TY_TYVAR,        /* free type variable — field whose type is a GADT type param not yet known */
     /* LT3: lref<T> — linear owning pointer; must be consumed exactly once */
     TY_LREF,         /* lref<T> — CK_LINEAR; silent drop is an error */
+    /* IT0: Union types (-Xunion-types) */
+    TY_UNION,        /* (A | B | C) — anonymous closed union type */
+    /* IT2: Intersection types (-Xintersection-types) */
+    TY_INTERSECTION, /* (A & B & C) — anonymous closed intersection type */
+    /* IT4: Top type (gradual typing) — available with -Xunion-types or -Xintersection-types */
+    TY_ANY,          /* any — top type; every type is a subtype of any */
 } TypeKind;
 
 /* Phase G0: Constructor field descriptor for ADTs */
@@ -176,6 +182,7 @@ typedef struct StructDef {
     uint32_t n_fields;
     StructField *fields;    /* field array (malloc'd) */
     bool is_copy;           /* :copy annotation */
+    bool is_linear;         /* LT4: :linear annotation -- exactly-once (CK_LINEAR) */
     bool needs_drop_glue;   /* true if any field is rc/ref/weak */
     /* Phase HKT-P4: file that defined this struct (for orphan instance check).
      * file_id mirrors Span.file_id; 0 means unknown/builtin. */
@@ -231,6 +238,15 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
         case TY_FORALL:
         case TY_EXISTS:
             return CK_MOVE;
+        /* IT0: Union types — move-only by default; actual semantics depend on members */
+        case TY_UNION:
+            return CK_MOVE;
+        /* IT2: Intersection types — move-only by default; actual semantics depend on members */
+        case TY_INTERSECTION:
+            return CK_MOVE;
+        /* IT4: any — top type is copy (it's an opaque container) */
+        case TY_ANY:
+            return CK_COPY;
         case TY_UNKNOWN:
         default:
             return CK_MOVE;
@@ -330,6 +346,20 @@ typedef struct Type {
             uint8_t      n_vars;
             struct Type *body;      /* body type (arena-allocated) */
         } forall_;
+        /* IT0: Union types — (A | B | C) */
+        struct {
+            struct Type **members;  /* arena-allocated array of member type pointers */
+            uint8_t       n_members; /* number of union members (>= 2) */
+        } union_;
+        /* IT2: Intersection types — (A & B & C) */
+        struct {
+            struct Type **members;  /* arena-allocated array of member type pointers */
+            uint8_t       n_members; /* number of intersection members (>= 2) */
+        } intersection_;
+        /* Phase HRT/G2: Named type variable -- parameter typed with a GADT type var */
+        struct {
+            const char *name;  /* interned type var name (e.g. "a"), or NULL for anonymous escaped skolem */
+        } tyvar_;
     } as;
 } Type;
 
@@ -407,6 +437,16 @@ static inline bool ty_is_relevant(Type t) {
 }
 static inline bool ty_is_sublinear(Type t) {
     return t.substruct == SK_LINEAR;
+}
+
+/* Phase G1: type_requires_refinement -- true iff a value of this type may need
+ * GADT-arm type refinement before its fields can be safely accessed.
+ * A TY_ADT with is_gadt=true is rank-2 or higher in the GADT sense: matching
+ * on its constructor introduces skolem equalities that refine the type
+ * parameters.  Supports future tooling and the HRT rank-checking path. */
+static inline bool type_requires_refinement(Type t) {
+    if (t.kind != TY_ADT) return false;
+    return t.as.adt_.def && t.as.adt_.def->is_gadt;
 }
 
 /* Convert TypeKind to string representation for debugging */
@@ -582,6 +622,18 @@ static inline Type type_typeclass_inst(TypeClassInstance *inst) {
  * The result kind is computed from fn's kind using kind_of_type_app. */
 Type type_app(Arena *a, Type fn, Type arg, Span span);
 
+/* IT0: Union type constructor.
+ * Create a TY_UNION type with the given array of member types.
+ * members[] is copied from the provided arena-allocated pointers.
+ * Nested TY_UNION members are flattened automatically. */
+Type type_union_build(Arena *a, Type **members, uint8_t n_members);
+
+/* IT2: Intersection type constructor.
+ * Create a TY_INTERSECTION type with the given array of member types.
+ * members[] is copied from the provided arena-allocated pointers.
+ * Nested TY_INTERSECTION members are flattened automatically. */
+Type type_intersection_build(Arena *a, Type **members, uint8_t n_members);
+
 /* Phase 17: Exception type constructor */
 /* Create an exception type wrapping a payload of the given type */
 static inline Type type_exception(TypeKind payload_type) {
@@ -617,11 +669,11 @@ static inline Type type_cloneable_cont(TypeKind returns) {
 
 /* Phase 11: Struct type constructor */
 /* Create a TY_STRUCT type referencing the given StructDef.
- * copy_kind is taken from def->is_copy. */
+ * copy_kind is CK_LINEAR for :linear structs, CK_COPY for :copy, CK_MOVE otherwise. */
 static inline Type type_struct(StructDef *def) {
     Type t = {0};
     t.kind = TY_STRUCT;
-    t.copy_kind = def->is_copy ? CK_COPY : CK_MOVE;
+    t.copy_kind = def->is_linear ? CK_LINEAR : (def->is_copy ? CK_COPY : CK_MOVE);
     t.hkt_kind = KIND_STAR;
     t.as.struct_.def = def;
     return t;
@@ -639,7 +691,18 @@ static inline Type type_adt(AdtDef *def) {
     return t;
 }
 
+/* Phase HRT/G2: Create a named type variable type for parameters like :a */
+static inline Type type_tyvar_named(const char *name) {
+    Type t = { .kind = TY_TYVAR, .copy_kind = CK_COPY };
+    t.as.tyvar_.name = name;
+    return t;
+}
+
 int          type_eq(Type a, Type b);
+/* LT2: Check arg_linear compatibility between two function types.
+ * Returns 1 if compatible (all arg_linear flags match), 0 on mismatch.
+ * Non-function types always return 1. */
+int          fn_type_subtype(Type actual, Type expected);
 const char  *type_name(Type t);                   /* "int", "bool", … */
 const char  *type_c_name(Type t);                 /* "int64_t", "bool", … */
 /* Phase HRT0: compute the rank of a type (0 = monotype, 1 = rank-1, ≥2 = higher-ranked) */

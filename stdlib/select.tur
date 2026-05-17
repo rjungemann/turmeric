@@ -1,6 +1,7 @@
-;; stdlib/select.tur -- Multi-channel select (Phase T19-D)
+;; stdlib/select.tur -- Multi-channel select (Phase SEL1)
 ;;
-;; Select allows waiting on multiple channel operations simultaneously.
+;; Select allows waiting on multiple channel operations simultaneously
+;; with fair, waiter-based blocking across all channels.
 ;;
 ;; Macro API:
 ;;   (select
@@ -13,9 +14,9 @@
 ;;   - value is the received value for :recv, or true for :send
 ;;   - if :default fires, index is -1 and value is the default expression
 ;;
-;; Implementation: uses a centralized selector that waits on all channels
-;; using pthread_cond_t timers or a polling loop. v1 uses inline C with
-;; non-blocking try first, then blocking wait.
+;; Implementation: delegates to tur_select_blocking (emitted preamble),
+;; which does a fair xorshift32 non-blocking scan, then registers
+;; TurSelectWaiter nodes on all channels and sleeps until one fires.
 
 ;; Select clause operation constants
 ;;; __select_op_recv -- internal constant: recv operation code (0).
@@ -67,83 +68,12 @@
 ;;; Returns:
 ;;;   0..(n-1) index of the clause that fired, or -1 if the default arm fired.
 ;;;
-;;; Since: Phase T19-D
+;;; Since: Phase SEL1
 (defn __select_exec [clauses :ptr<void> n :int has_default :int] :int
   ```c
-  typedef struct {
-      pthread_mutex_t lock;
-      pthread_cond_t  not_full;
-      pthread_cond_t  not_empty;
-      int64_t        *buf;
-      int64_t         head;
-      int64_t         tail;
-      int64_t         count;
-      int64_t         cap;
-  } ChanBlock;
-
-  typedef struct { void *chan; int op; int64_t val; } SelectClause;
-  SelectClause *carr = (SelectClause *)clauses;
-  int nc = (int)n;
-
-  /* Phase 1: Try all clauses non-blocking */
-  for (int i = 0; i < nc; i++) {
-      ChanBlock *ch = (ChanBlock *)carr[i].chan;
-      int op = carr[i].op;
-      int64_t v = carr[i].val;
-
-      pthread_mutex_lock(&ch->lock);
-      if (op == 0) { /* recv */
-          if (ch->count > 0) {
-              carr[i].val = ch->buf[ch->head];
-              ch->head = (ch->head + 1) % ch->cap;
-              ch->count--;
-              pthread_cond_signal(&ch->not_full);
-              pthread_mutex_unlock(&ch->lock);
-              return (int64_t)i;
-          }
-      } else { /* send */
-          if (ch->count < ch->cap) {
-              ch->buf[ch->tail] = v;
-              ch->tail = (ch->tail + 1) % ch->cap;
-              ch->count++;
-              pthread_cond_signal(&ch->not_empty);
-              pthread_mutex_unlock(&ch->lock);
-              return (int64_t)i;
-          }
-      }
-      pthread_mutex_unlock(&ch->lock);
-  }
-
-  /* Phase 2: If default exists, return it */
-  if (has_default) {
-      return -1;
-  }
-
-  /* Phase 3: Block on first channel (simplified v1) */
-  if (nc > 0) {
-      ChanBlock *ch = (ChanBlock *)carr[0].chan;
-      int op = carr[0].op;
-      int64_t v = carr[0].val;
-
-      pthread_mutex_lock(&ch->lock);
-      if (op == 0) {
-          while (ch->count == 0)
-              pthread_cond_wait(&ch->not_empty, &ch->lock);
-          carr[0].val = ch->buf[ch->head];
-          ch->head = (ch->head + 1) % ch->cap;
-          ch->count--;
-          pthread_cond_signal(&ch->not_full);
-      } else {
-          while (ch->count == ch->cap)
-              pthread_cond_wait(&ch->not_full, &ch->lock);
-          ch->buf[ch->tail] = v;
-          ch->tail = (ch->tail + 1) % ch->cap;
-          ch->count++;
-          pthread_cond_signal(&ch->not_empty);
-      }
-      pthread_mutex_unlock(&ch->lock);
-      return 0;
-  }
-
-  return -2; /* unreachable */
+  /* Delegate to the waiter-based fair blocking select in the emitted preamble.
+   * TurSelectClause and SelectClause share the same layout:
+   *   { void *chan; int op; int64_t val; }
+   * so a direct cast is safe. */
+  return (int64_t)tur_select_blocking((TurSelectClause *)clauses, (int)n, (int)has_default);
   ```)

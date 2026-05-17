@@ -1,0 +1,21 @@
+; IT4: typeclass intersection dispatch on union types.
+; When x : (int | bool), calling (.show x) dispatches to the correct
+; instance based on the runtime tag.
+
+(defclass Show [a]
+  (show [x] :cstr))
+
+(definstance Show [int]
+  (show [x] "an-int"))
+
+(definstance Show [bool]
+  (show [x] "a-bool"))
+
+(defn describe [x : (int | bool)] :int
+  (println (.show x))
+  0)
+
+(defn main [] :int
+  (describe 42)
+  (describe true)
+  0)
