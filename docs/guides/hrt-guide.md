@@ -159,9 +159,12 @@ Rank-3 arguments are passed by pointer internally (compound literal protocol).
 
 ## Limitations
 
-### Container storage requires HRT5+
+### Container storage not supported
 
-Storing poly fn values in lists, options, or other containers is not yet supported. Use direct function calls instead.
+Storing `(forall [a] ...)` values in lists, options, or other containers is not
+supported. The poly fn representation (`tur_poly_fn_t`) is a struct, not an
+opaque `int64_t`, so it cannot be stored in a generic container without a
+wrapper. Use direct function calls or closure capture instead.
 
 ### Non-function values cannot be rank-2 arguments
 

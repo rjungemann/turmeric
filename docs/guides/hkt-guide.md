@@ -453,23 +453,19 @@ and `free-run`.
    When exactly one typeclass instance is in scope for the given method, the
    fallback is accepted silently and the program behaves correctly. When two or
    more instances are in scope and the receiver type has been erased to
-   `int64_t`, the compiler now emits `TUR_E0020_AMBIGUOUS_DISPATCH` instead of
-   silently picking the wrong instance. See
-   `docs/archive/hkt-opaque-dispatch-plan.md` §Phase D0 for details and §Phase D1 for
-   the `@TypeName` witness syntax that resolves the ambiguity at zero runtime
-   cost.
+   `int64_t`, the compiler emits `TUR_E0020_AMBIGUOUS_DISPATCH` (Phase D0).
+   Use the `@TypeName` witness syntax (Phase D1) to resolve the ambiguity at
+   zero runtime cost:
+
+   ```turmeric
+   (.fmap @option opt f)   ; disambiguate: use the option Functor instance
+   ```
+
+   See `docs/archive/hkt-opaque-dispatch-plan.md` for background.
 
 2. **`defkind`**: Currently parsed and ignored. Future versions may use it for documentation generation and kind inference.
 
-3. **GADT `equal-cong` requires HKT**: The `equal-cong` function in `stdlib/equal.tur`
-   (congruence: `a = b` implies `(f a) = (f b)`) requires a kind-`* -> *` type
-   variable `f` in a `defn` signature. This is the primary outstanding HKT
-   deliverable that feeds directly into the GADT phase. See `docs/gadts-plan.md`
-   §Non-Goals item 3 and `docs/hkt-deferred-tasks.md` for details.
-
 ## See also
 
-- `docs/gadts-guide.md` — GADTs, `defgadt`, and equality witnesses; HKT kind
-  variables (`^f`) are needed for `equal-cong` and higher-kinded GADT indices
-  such as `Vec n a` with polymorphic element type
-- `docs/hkt-deferred-tasks.md` — open items for the HKT implementation
+- `docs/gadts-guide.md` — GADTs, `defgadt`, and equality witnesses
+- `docs/archive/hkt-deferred-tasks.md` — completed and open items for the HKT implementation
