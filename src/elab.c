@@ -10454,7 +10454,11 @@ static Expr *elab_defdata(Elab *e, const Form *call) {
         def->is_gadt = false;
         def->type_params = type_params;
         def->n_type_params = n_type_params;
-        adt_type = adt_binding->type;
+        /* Refresh adt_type from the def so copy_kind reflects is_copy correctly.
+         * The pre-pass stub was created with is_copy=false; now that we know the
+         * real is_copy flag, regenerate the type and update the binding. */
+        adt_type = type_adt(def);
+        adt_binding->type = adt_type;
         /* Already in global scope and elab registry from the pre-pass */
     } else {
         def = (AdtDef *)arena_alloc(e->arena, sizeof(AdtDef));

@@ -1,0 +1,21 @@
+; Phase G0: Copy-able ADT -- :copy annotation allows the ADT to be
+; duplicated rather than moved when assigned or passed as an argument.
+
+(defdata Color :copy
+  (Red)
+  (Green)
+  (Blue))
+
+(defn color-name [c] : :cstr
+  (match c
+    (Red)   "red"
+    (Green) "green"
+    (Blue)  "blue"))
+
+(defn main [] :int
+  ; c is CK_COPY so assigning it to d does not consume c.
+  (let [c (Red)
+        d c]
+    (println (color-name c))
+    (println (color-name d))
+    0))
