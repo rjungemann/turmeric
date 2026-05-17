@@ -1,0 +1,18 @@
+; Phase HRT/G2: show-witness -- demonstrate that a parameter typed with a
+; GADT type variable :a is resolved to the concrete type in each match arm.
+; In the WInt arm, a ~ int so v is int and arithmetic works.
+; In the WBool arm, a ~ bool so v is bool and we just return 0.
+
+(defgadt Witness [a]
+  (WInt  : (Witness int))
+  (WBool : (Witness bool)))
+
+(defn wit-double [w :Witness v :a] :int
+  (match w
+    (WInt)  (* v 2)
+    (WBool) 0))
+
+(defn main [] :int
+  (println (wit-double (WInt) 21))
+  (println (wit-double (WBool) 1))
+  0)

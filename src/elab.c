@@ -6502,15 +6502,18 @@ static Expr *elab_defn(Elab *e, const Form *call) {
                         param_kinds[n_params - 1] = TY_ADT;
                         params[n_params - 1]->type = type_adt(param_adt);
                     } else {
-                        /* Default: unknown type variable → int */
-                        param_kinds[n_params - 1] = TY_INT;
-                        params[n_params - 1]->type = TYPE_INT;
+                        /* Phase HRT/G2: Unknown keyword -- treat as an implicit type variable.
+                         * A parameter annotation like :a where 'a' is not a known type or ADT
+                         * is an implicit type variable. Mark the binding TY_TYVAR so that inside
+                         * a GADT match arm, the per-arm skolem env can resolve it to a concrete type. */
+                        param_kinds[n_params - 1] = TY_TYVAR;
+                        params[n_params - 1]->type = type_tyvar_named(kw->name);
                     }
                 }
             }
             continue;
         }
-        
+
         if (n_params >= MAX_FN_ARITY) {
             diag_emit(DIAG_ERROR, p->span,
                       "defn: too many parameters (max %d)", MAX_FN_ARITY);
@@ -6636,10 +6639,11 @@ static Expr *elab_defn(Elab *e, const Form *call) {
                         }
                     }
                     if (!return_adt_def) {
-                        diag_emit(DIAG_ERROR, ret_f->span,
-                                  "defn: unsupported return type keyword :%s",
-                                  kw->name);
-                        return NULL;
+                        /* Phase HRT/G2: Unknown return type keyword -- named type variable.
+                         * e.g., :a means the function returns the type variable a.
+                         * For codegen, we fall through and let the body type determine the
+                         * concrete return kind (see the TY_TYVAR inference below). */
+                        return_kind = TY_TYVAR;
                     }
                 }
             }
@@ -6773,11 +6777,15 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     scope_free(&inner);
     if (lt1_param_fail || st1_param_fail) return NULL;
 
-    /* Infer return type from body if not specified */
-    if (return_kind == TY_NIL && body->type.kind != TY_NIL) {
+    /* Infer return type from body if not specified or polymorphic (TY_TYVAR).
+     * For TY_TYVAR (named type variable like :a), use the body's concrete type
+     * for codegen -- the polymorphic annotation is preserved in the declaration
+     * but the C function signature uses the concrete type. */
+    if ((return_kind == TY_NIL || return_kind == TY_TYVAR) && body->type.kind != TY_NIL
+            && body->type.kind != TY_TYVAR) {
         return_kind = body->type.kind;
     }
-    
+
     /* Create function type */
     TypeKind arg_kinds[MAX_FN_ARITY];
     for (uint8_t i = 0; i < n_params; i++) {
@@ -8635,6 +8643,11 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         }
 
         bool arg_ok = (args[i]->type.kind == expected_arg_kind);
+        /* Phase HRT/G2: A TY_TYVAR parameter (named type variable like :a) accepts any argument.
+         * The concrete type is resolved per-arm inside a GADT match. */
+        if (!arg_ok && expected_arg_kind == TY_TYVAR) {
+            arg_ok = true;
+        }
         if (!arg_ok && expected_arg_kind == TY_PTR_VOID && args[i]->type.kind == TY_FN) {
             /* Allow passing a function value where callback pointer is expected.
              * If this is a rank-2 param, we'll wrap it in a poly wrapper below. */
@@ -9934,6 +9947,16 @@ static Expr *elab_form(Elab *e, Form *f) {
             }
             Expr *out = expr_new(e->arena, EX_VAR, b->type, f->span);
             out->as.var.binding = b;
+            /* Phase HRT/G2: Resolve named type variable through current GADT match arm skolem env.
+             * If a binding was declared as :a (TY_TYVAR with name "a"), and we are currently
+             * inside a GADT match arm that has a skolem binding for "a", use the concrete type. */
+            if (b->type.kind == TY_TYVAR && b->type.as.tyvar_.name != NULL && e->g2_skolem_env) {
+                TypeKind resolved = gadt_skolem_lookup(e->g2_skolem_env, b->type.as.tyvar_.name);
+                if (resolved != TY_UNKNOWN) {
+                    out->type = type_from_kind(resolved);
+                    out->type.copy_kind = typekind_default_copy_kind(resolved);
+                }
+            }
             return out;
         }
         case F_VEC:
@@ -11425,8 +11448,12 @@ static Expr *elab_match(Elab *e, const Form *call) {
             }
             if (!body || lt1_arm_fail || st1_arm_fail) { free(covered); return NULL; }
 
-            /* Phase G2: detect skolem escape — arm body result is TY_TYVAR */
-            if (adt->is_gadt && body->type.kind == TY_TYVAR) {
+            /* Phase G2/HRT: detect skolem escape -- arm body result is anonymous TY_TYVAR.
+             * Named TY_TYVAR (type variable from a :a parameter annotation) is a properly
+             * polymorphic result and is allowed; only anonymous TY_TYVAR (unresolved field
+             * type with no name) indicates a skolem that escaped its scope. */
+            if (adt->is_gadt && body->type.kind == TY_TYVAR
+                    && body->type.as.tyvar_.name == NULL) {
                 diag_emit(DIAG_ERROR, body_form->span,
                           "match: skolem type variable escapes match arm "
                           "(constructor '%s' of '%s'): the arm body has an "

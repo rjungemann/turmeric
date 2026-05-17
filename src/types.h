@@ -355,6 +355,10 @@ typedef struct Type {
             struct Type **members;  /* arena-allocated array of member type pointers */
             uint8_t       n_members; /* number of intersection members (>= 2) */
         } intersection_;
+        /* Phase HRT/G2: Named type variable -- parameter typed with a GADT type var */
+        struct {
+            const char *name;  /* interned type var name (e.g. "a"), or NULL for anonymous escaped skolem */
+        } tyvar_;
     } as;
 } Type;
 
@@ -673,6 +677,13 @@ static inline Type type_adt(AdtDef *def) {
     t.copy_kind = def->is_copy ? CK_COPY : CK_MOVE;
     t.hkt_kind = KIND_STAR;
     t.as.adt_.def = def;
+    return t;
+}
+
+/* Phase HRT/G2: Create a named type variable type for parameters like :a */
+static inline Type type_tyvar_named(const char *name) {
+    Type t = { .kind = TY_TYVAR, .copy_kind = CK_COPY };
+    t.as.tyvar_.name = name;
     return t;
 }
 
