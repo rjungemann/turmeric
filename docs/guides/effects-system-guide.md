@@ -12,30 +12,27 @@ Turmeric implements **algebraic effect handlers** inspired by OCaml 5, enabling 
 
 Three core primitives:
 
-- **`type _ Effect.t += E : T`** — Declares a new effect `E` whose `perform` yields a value of type `T`.
-- **`perform E`** — Raises the effect, searching the dynamic handler stack for a matching handler.
-- **`try_with body { effc }`** — Installs a handler around `body`. When an effect surfaces, `effc` is called with the current continuation reified as `k`.
+- **`(defeffect Name [param :type ...] :return-type)`** — Declares a new effect `Name`.
+- **`(perform (Name arg ...))`** — Raises the effect, searching the dynamic handler stack for a matching handler.
+- **`(handle expr (Name [p ...] k) body ...)`** — Installs a handler. When the effect fires, `k` is the captured continuation; call `(resume k value)` to continue.
 
 ```turmeric
 ;; Declare an effect
-type _ Effect.t += Read : string Effect.t
+(defeffect Read [] :str)
 
 ;; Perform the effect
-(def name (perform Read))
+(def name (perform (Read)))
 
 ;; Handle the effect
-(try-with
-  (fn []
-    (let [name (perform Read)]
-      (println "Hello " name)))
-  (fn [e k]
-    (match e
-      Read -> (continue k "World"))))
+(handle
+  (let [name (perform (Read))]
+    (println (str "Hello " name)))
+  (Read [] k) (resume k "World"))
 ```
 
 ### One-Shot Continuations
 
-Continuations in Turmeric are **one-shot**: calling `continue k v` consumes `k`, preventing reuse. This matches Turmeric's ownership model but means **no backtracking in v1**. (See [Logic Programming Guide](logic-programming-guide.md) for cloneable continuations in v2.)
+Continuations in Turmeric are **one-shot**: calling `(resume k v)` consumes `k`, preventing reuse. This matches Turmeric's ownership model. (See [Logic Programming Guide](logic-programming-guide.md) for cloneable continuations.)
 
 ### Properties
 
@@ -61,15 +58,13 @@ Implement generators, early returns, or custom exception handling:
 
 ```turmeric
 ;; Generator: yield values one at a time
-type _ Effect.t += Yield : a Effect.t
+(defeffect Yield [v :int] :nil)
 
-(try-with
-  (fn []
+(handle
+  (do
     (perform (Yield 1))
     (perform (Yield 2)))
-  (fn [e k]
-    (match e
-      (Yield v) -> (println v) (continue k))))
+  (Yield [v] k) (do (println v) (resume k nil)))
 ```
 
 ### Dependency Injection
@@ -77,21 +72,15 @@ type _ Effect.t += Yield : a Effect.t
 Mock I/O operations in tests:
 
 ```turmeric
-type _ Effect.t += ReadFile : string -> bytes Effect.t
+(defeffect ReadFile [path :cstr] :str)
 
 ;; Production
-(try-with code
-  (fn [e k]
-    (match e
-      (ReadFile path) -> 
-        (continue k (read-file-real path)))))
+(handle code
+  (ReadFile [path] k) (resume k (read-file-real path)))
 
 ;; Tests
-(try-with code
-  (fn [e k]
-    (match e
-      (ReadFile path) -> 
-        (continue k "mock data"))))
+(handle code
+  (ReadFile [path] k) (resume k "mock data"))
 ```
 
 ### Transactional Retry
@@ -99,46 +88,88 @@ type _ Effect.t += ReadFile : string -> bytes Effect.t
 Automatic conflict resolution (see [STM Tutorial](stm-tutorial.md)):
 
 ```turmeric
-type _ Effect.t += Retry : never Effect.t
+(defeffect Retry [] :nil)
 
-(try-with
+(handle
   (fn []
     (when (< (read-tvar x) 10)
-      (perform Retry)))
-  (fn [e k]
-    ;; Re-run transaction on conflict
-    (match e
-      Retry -> (continue k))))
+      (perform (Retry))))
+  ;; Re-run transaction on conflict
+  (Retry [] k) (resume k nil))
 ```
 
 ## Effect Rows (Typed Effects)
 
-A v2 extension puts effects in the type system via **effect rows** — sets of effects a function may perform:
+Effect rows track which effects a function may perform as part of its type. The
+compiler infers rows automatically; you can also annotate them explicitly.
+
+### Syntax
+
+An effect row appears between the parameter list and the return type:
 
 ```turmeric
-val read_file : path -> string @ (ReadFile)
-val pure_fn : int -> int @ ()
-val map : ('a -> 'b @ 'e) -> 'a list -> 'b list @ 'e
+;; Annotated: may perform the Write effect
+(defn log-msg [msg :cstr] #{Write} :nil
+  (perform (Write msg)))
+
+;; Pure: performs no effects
+(defn add [a :int b :int] #{} :int
+  (+ a b))
+
+;; Row-polymorphic: propagates the row of the function argument
+(defn run-twice [f :(fn [] #{e} :int)] #{e} :int
+  (+ (f) (f)))
 ```
 
-Benefits:
-- **Polymorphism** — `map` propagates caller's effects through the mapped function.
-- **Compile-time checking** — Verify effect-free code stays pure; catch unhandled effects early.
-- **Optimization** — Pure code (`@ ()`) can be aggressively refactored.
+The row `#{e}` is a row variable: `run-twice` performs whatever effects `f` performs, no more.
 
-**Status:** Planned for v3 of effects design; requires elaborator support and type-system changes.
+### Compiler flags
+
+| Flag | Effect |
+|---|---|
+| `--dump-effects` | Print each top-level `defn`'s inferred effect row after checking |
+| `--lint-effects` | Warn on unannotated `defn`s whose inferred row is non-empty |
+| `--strict-effects` | Under `--strict-effects`, unannotated functions that perform effects get a warning; callers propagate the inferred row |
+
+### Module-level visibility
+
+Effects can be declared `^private` to prevent leakage outside their defining module:
+
+```turmeric
+(defeffect ^private InternalLog [msg :cstr] :nil)
+```
+
+A `^private` effect cannot be `perform`ed or `handle`d outside the module that declares it.
+Cross-module effect rows are automatically filtered: if a callee internally performs a private
+effect, the caller's inferred row does not include it.
+
+To export an effect explicitly:
+
+```turmeric
+(defmodule MyLib
+  (export (effect Write) (effect Read))
+  ...)
+```
+
+Other modules import it with `:refer [(effect Write)]`.
+
+### Benefits
+
+- **Polymorphism** — row variables let higher-order functions propagate caller effects.
+- **Compile-time checking** — the compiler verifies that annotated functions do not perform unlisted effects (`TUR-E0009`).
+- **Auditing** — `--dump-effects` shows the full effect signature of every function.
 
 ## Integration with Ownership and Defer
 
-Effects interact with Turmeric's `defer` mechanism (§5, §4 of [turmeric-plan.md](../turmeric-plan.md)):
+Effects interact with Turmeric's `defer` mechanism:
 
-- Capturing a continuation across a `defer` boundary is the hard case for effects.
-- The unified defer model (phase 4) pre-allocates effect-row slots, enabling zero-cost effects in code that doesn't use them.
-- On `perform`, the captured continuation's environment is cleaned up if it crosses a `defer` boundary.
+- `defer` cleanup runs correctly even when `perform` is inside the same `do` block (see [Custom Effects Tutorial](custom-effects-tutorial.md) §8).
+- Capturing a continuation across a `defer` boundary is handled: the continuation's environment is cleaned up if it crosses a `defer` boundary.
 
 ## See Also
 
 - [Async/Await Guide](async-await-guide.md) — Effects-based async/await syntax
 - [Logic Programming Guide](logic-programming-guide.md) — Backtracking via cloneable continuations
 - [STM Tutorial](stm-tutorial.md) — Composable transactions with effects
-- [turmeric-plan.md](../turmeric-plan.md) §12 — Delimited continuations (foundation)
+- [Custom Effects Tutorial](custom-effects-tutorial.md) — Step-by-step walkthrough of all effect patterns
+- [Effects vs. Monads](effects-vs-monads.md) — Why effects replace monadic chaining in Turmeric
