@@ -26,7 +26,7 @@
 ;;;   (async-socket-listen 8080 128)  ; => 4
 ;;;
 ;;; Since: Phase T24
-(defn async-socket-listen [port :int backlog :int] :int
+(defn async-socket-listen [port :int backlog :int] #{Unsafe} :int
   ```c
   int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return -1;
@@ -66,7 +66,7 @@
 ;;;   (async-socket-accept listen-fd)  ; => 7
 ;;;
 ;;; Since: Phase T24
-(defn async-socket-accept [listen-fd :int] :int
+(defn async-socket-accept [listen-fd :int] #{Unsafe} :int
   ```c
   while (1) {
     int cfd = accept((int)listen_fd, NULL, NULL);
@@ -106,7 +106,7 @@
 ;;;   (async-socket-connect "127.0.0.1" 8080)  ; => 5
 ;;;
 ;;; Since: Phase T24
-(defn async-socket-connect [host :cstr port :int] :int
+(defn async-socket-connect [host :cstr port :int] #{Unsafe} :int
   ```c
   int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return -1;
@@ -153,7 +153,7 @@
 ;;;   (async-socket-send fd "GET / HTTP/1.0\r\n" 16)  ; => 16
 ;;;
 ;;; Since: Phase T24
-(defn async-socket-send [fd :int data :cstr len :int] :int
+(defn async-socket-send [fd :int data :cstr len :int] #{Unsafe} :int
   ```c
   int64_t total = 0;
   while (total < len) {
@@ -194,7 +194,7 @@
 ;;;   (async-socket-recv fd 4096)  ; => 256
 ;;;
 ;;; Since: Phase T24
-(defn async-socket-recv [fd :int buf-size :int] :int
+(defn async-socket-recv [fd :int buf-size :int] #{Unsafe} :int
   ```c
   char *buf = (char *)malloc((size_t)buf_size);
   if (!buf) return -1;
@@ -231,7 +231,7 @@
 ;;;   (async-socket-recv-buf)  ; => buf-ptr
 ;;;
 ;;; Since: Phase T24
-(defn async-socket-recv-buf [] :ptr<void>
+(defn async-socket-recv-buf [] #{Unsafe} :ptr<void>
   ```c
   if (!tur_current_fiber) return NULL;
   return (void*)(intptr_t)tur_fiber_local_get(tur_current_fiber, 0xA51C50C0);
@@ -247,7 +247,7 @@
 ;;;   (async-socket-recv-len)  ; => 256
 ;;;
 ;;; Since: Phase T24
-(defn async-socket-recv-len [] :int
+(defn async-socket-recv-len [] #{Unsafe} :int
   ```c
   if (!tur_current_fiber) return 0;
   return tur_fiber_local_get(tur_current_fiber, 0xA51C50C1);
@@ -263,7 +263,7 @@
 ;;;   (async-socket-close fd)
 ;;;
 ;;; Since: Phase T24
-(defn async-socket-close [fd :int] :nil
+(defn async-socket-close [fd :int] #{Unsafe} :nil
   ```c
   tur_io_unregister((int)fd);
   close((int)fd);

@@ -27,7 +27,7 @@
 ;;;   (let [t (thread-spawn-fn my-fn arg)] (thread-join t))  ; => ptr<void>
 ;;;
 ;;; Since: Phase T19-C
-(defn thread-spawn-fn [fn-ptr :ptr<void> arg :ptr<void>] :ptr<void>
+(defn thread-spawn-fn [fn-ptr :ptr<void> arg :ptr<void>] #{Unsafe} :ptr<void>
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
   if (!t) { fprintf(stderr, "thread-spawn-fn: out of memory\n"); abort(); }
@@ -48,7 +48,7 @@
 ;;;   (thread-join t)
 ;;;
 ;;; Since: Phase T19-C
-(defn thread-join [t :ptr<void>] :nil
+(defn thread-join [t :ptr<void>] #{Unsafe} :nil
   ```c
   pthread_join(*(pthread_t *)t, NULL);
   free(t);
@@ -63,7 +63,7 @@
 ;;;   (thread-detach t)
 ;;;
 ;;; Since: Phase T19-C
-(defn thread-detach [t :ptr<void>] :nil
+(defn thread-detach [t :ptr<void>] #{Unsafe} :nil
   ```c
   pthread_detach(*(pthread_t *)t);
   free(t);
@@ -78,7 +78,7 @@
 ;;;   (thread-id)  ; => int
 ;;;
 ;;; Since: Phase T19-C
-(defn thread-id [] :int
+(defn thread-id [] #{Unsafe} :int
   ```c
   return (int64_t)(uintptr_t)pthread_self();
   ```)

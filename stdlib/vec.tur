@@ -11,7 +11,7 @@
 ;;;
 ;;; Since: Phase B1
 ;; Create a new empty vec
-(defn vec-new []
+(defn vec-new [] #{Unsafe} :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
   v->data = NULL;
@@ -33,7 +33,7 @@
 ;;;
 ;;; Since: Phase B1
 ;; Get vec length - v is a pointer from vec-new
-(defn vec-len [v] :int
+(defn vec-len [v] #{Unsafe} :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
   return (int)vec->len;
@@ -53,7 +53,7 @@
 ;;;
 ;;; Since: Phase B1
 ;; Get element at index (bounds-checked)
-(defn vec-get [v i] :int
+(defn vec-get [v i] #{Unsafe} :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
   if (i >= 0 && (size_t)i < vec->len) return (int)vec->data[i];
@@ -73,7 +73,7 @@
 ;;;
 ;;; Since: Phase B1
 ;; Push an element to the vec
-(defn vec-push! [^unique ^mut v val]
+(defn vec-push! [^unique ^mut v val] #{Unsafe} :nil
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
   if (vec->len >= vec->cap) {
@@ -100,7 +100,7 @@
 ;;;
 ;;; Since: Phase B1
 ;; Pop an element from the vec
-(defn vec-pop! [^unique ^mut v] :int
+(defn vec-pop! [^unique ^mut v] #{Unsafe} :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
   if (vec->len == 0) {
@@ -120,7 +120,7 @@
 ;;;
 ;;; Since: Phase B1
 ;; Free the vec and its data
-(defn vec-free [^unique v]
+(defn vec-free [^unique v] #{Unsafe} :nil
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
   free(vec->data);
@@ -129,8 +129,8 @@
 
 ;;; __functor_vec_fmap -- apply fn to every element and return a new vec.
 ;;; SINCE: Phase HKT H3
-;; Functor instance for vec — apply fn to every element, return a new vec.
-(defn __functor_vec_fmap [container fn] :int
+;; Functor instance for vec -- apply fn to every element, return a new vec.
+(defn __functor_vec_fmap [container fn] #{Unsafe} :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v =
       (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)container;
@@ -169,7 +169,7 @@
 ;; Foldable instance for vec.
 ;;   foldl :: (b -> a -> b) -> b -> t a -> b   (left fold, strict)
 ;;   foldr :: (a -> b -> b) -> b -> t a -> b   (right fold)
-(defn __foldable_vec_foldl [ta init fn] :int
+(defn __foldable_vec_foldl [ta init fn] #{Unsafe} :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v =
       (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)ta;
@@ -182,7 +182,7 @@
   ```)
 
 ;;; __foldable_vec_foldr -- right fold over a vec.
-(defn __foldable_vec_foldr [ta init fn] :int
+(defn __foldable_vec_foldr [ta init fn] #{Unsafe} :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v =
       (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)ta;
@@ -203,7 +203,7 @@
 ;; Applicative instance for vec.
 ;;   pure x = [x]
 ;;   ap [f1, f2, ...] [x1, x2, ...] = [f1 x1, f1 x2, ..., f2 x1, f2 x2, ...]
-(defn __applicative_vec_pure [x] :int
+(defn __applicative_vec_pure [x] #{Unsafe} :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v =
       malloc(sizeof(struct { int64_t *data; size_t len; size_t cap; }));
@@ -215,7 +215,7 @@
   ```)
 
 ;;; __applicative_vec_ap -- apply a vec of functions to a vec of values (cartesian product).
-(defn __applicative_vec_ap [ff fa] :int
+(defn __applicative_vec_ap [ff fa] #{Unsafe} :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *fv =
       (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)ff;
@@ -249,7 +249,7 @@
 ;; Monad instance for vec.
 ;;   bind [a1, a2, ...] f = concat [f a1, f a2, ...]
 ;;   where concat flattens a vec of vecs
-(defn __monad_vec_concat [outer] :int
+(defn __monad_vec_concat [outer] #{Unsafe} :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *ov =
       (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)outer;
@@ -281,7 +281,7 @@
   ```)
 
 ;;; __monad_vec_bind -- map fn over each element and flatten the resulting vec of vecs.
-(defn __monad_vec_bind [ma fn] :int
+(defn __monad_vec_bind [ma fn] #{Unsafe} :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v =
       (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)ma;
@@ -325,7 +325,7 @@
 ;;   traverse f [] = pure []
 ;;   traverse f [x1, x2, ...] = (<*> ...) ... (pure (:)) (f x1) (f x2) ...
 ;; In v1, we use the Applicative instance's pure and ap
-(defn __traversable_vec_traverse [ta fn] :int
+(defn __traversable_vec_traverse [ta fn] #{Unsafe} :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v =
       (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)ta;
@@ -360,7 +360,7 @@
 ;; Alternative instance for vec.
 ;;   empty = []
 ;;   alt-or a b = concat [a b] (concatenate the two vecs)
-(defn __alternative_vec_empty [] :int
+(defn __alternative_vec_empty [] #{Unsafe} :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v =
       malloc(sizeof(struct { int64_t *data; size_t len; size_t cap; }));
@@ -371,7 +371,7 @@
   ```)
 
 ;;; __alternative_vec_alt_or -- return the concat function for two vecs.
-(defn __alternative_vec_alt_or [a b] :int
+(defn __alternative_vec_alt_or [a b] #{} :int
   __monad_vec_concat)
 
 ;;; Alternative [vec] -- empty returns []; alt-or concatenates two vecs.
@@ -395,7 +395,7 @@
 ;;; Since: Phase E1
 ;; Phase E1: vec-eq? -- compare two vecs element-wise using a comparator fn.
 ;; cmp-fn must be a fn [a :int b :int] :bool
-(defn vec-eq? [v1 v2 cmp-fn] :bool
+(defn vec-eq? [v1 v2 cmp-fn] #{Unsafe} :bool
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *a =
       (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v1;
@@ -419,7 +419,7 @@
 ;;; __clone_vec_clone -- deep-copy a vec and all its int64_t elements.
 ;; Phase B1: Clone instance for vec
 ;; Deep copies the vec struct and all its elements (v1: int64_t only)
-(defn __clone_vec_clone [x] :int
+(defn __clone_vec_clone [x] #{Unsafe} :int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v =
       (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)x;

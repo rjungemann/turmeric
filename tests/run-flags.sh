@@ -352,6 +352,45 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# ER6: --check mode for effect-row errors
+# ---------------------------------------------------------------------------
+
+# check-mode-effect-error: `tur check` reports TUR-E0009 and exits 1 when a
+# function's declared row does not include an effect it performs.
+CHECK_INPUT=$(mktemp /tmp/tur-check-effect-XXXXXX.tur)
+cat > "$CHECK_INPUT" << 'EOF'
+(defeffect Write [s :cstr] :nil)
+(defn bad [] #{} :nil
+  (perform (Write "oops")))
+(defn main [] :int 0)
+EOF
+out=$("$TUR" check "$CHECK_INPUT" 2>&1); rc=$?
+rm -f "$CHECK_INPUT"
+if [ $rc -eq 0 ]; then
+    fail "check-mode-effect-error" "expected non-zero exit from tur check"
+elif ! echo "$out" | grep -F "TUR-E0009" > /dev/null 2>&1; then
+    fail "check-mode-effect-error" "expected TUR-E0009 in check output"
+else
+    pass "check-mode-effect-error"
+fi
+
+# check-mode-effect-ok: `tur check` exits 0 for a well-annotated program.
+CHECK_OK_INPUT=$(mktemp /tmp/tur-check-ok-XXXXXX.tur)
+cat > "$CHECK_OK_INPUT" << 'EOF'
+(defeffect Write [s :cstr] :nil)
+(defn do-write [] #{Write} :nil
+  (perform (Write "hello")))
+(defn main [] :int 0)
+EOF
+out=$("$TUR" check "$CHECK_OK_INPUT" 2>&1); rc=$?
+rm -f "$CHECK_OK_INPUT"
+if [ $rc -ne 0 ]; then
+    fail "check-mode-effect-ok" "expected zero exit from tur check (exit=$rc): $out"
+else
+    pass "check-mode-effect-ok"
+fi
+
+# ---------------------------------------------------------------------------
 # PR5-3-B: effect-export-syntax
 # ---------------------------------------------------------------------------
 

@@ -133,7 +133,7 @@
 ;;;   (read-int-console)  ; => 7
 ;;;
 ;;; Since: Phase 19
-(defn read-int-console [] :int
+(defn read-int-console [] #{Unsafe} :int
   ```c
   int _v = 0;
   scanf("%d", &_v);

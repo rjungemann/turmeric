@@ -1,0 +1,36 @@
+;; ER6: stdlib effects.tur defns annotated with effect rows.
+;; Verifies that stdlib Write/Read/Fail/Log/Abort effects have row annotations
+;; and that callers propagate correctly.
+
+(defeffect Write [s :cstr] :nil)
+(defeffect Fail [msg :cstr] :nil)
+(defeffect Read [] :int)
+(defeffect Log [level :cstr msg :cstr] :nil)
+(defeffect Abort [msg :cstr] :int)
+
+;;; run-write -- annotated function that performs Write.
+(defn run-write [] #{Write} :nil
+  (perform (Write "hello from write")))
+
+;;; run-fail-handled -- performs Fail but handles it locally.
+(defn run-fail-handled [] #{} :nil
+  (handle
+    (perform (Fail "oops"))
+    (Fail [msg] k) (println msg)))
+
+;;; run-log -- annotated function that performs Log.
+(defn run-log [] #{Log} :nil
+  (perform (Log "info" "log message")))
+
+(defn main [] :int
+  (handle
+    (handle
+      (handle
+        (do
+          (run-write)
+          (run-fail-handled)
+          (run-log)
+          0)
+        (Write [s] k) (do (println s) (resume k nil)))
+      (Fail [msg] k) (do (println msg) (resume k nil)))
+    (Log [level msg] k) (do (println msg) (resume k nil))))
