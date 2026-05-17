@@ -101,18 +101,30 @@ int type_eq(Type a, Type b) {
         }
         return 1;
     }
+    /* IT2: Intersection types — structural equality: same n_members, each member equal */
+    if (a.kind == TY_INTERSECTION) {
+        if (a.as.intersection_.n_members != b.as.intersection_.n_members) return 0;
+        for (uint8_t i = 0; i < a.as.intersection_.n_members; i++) {
+            if (!a.as.intersection_.members[i] || !b.as.intersection_.members[i]) {
+                if (a.as.intersection_.members[i] != b.as.intersection_.members[i]) return 0;
+                continue;
+            }
+            if (!type_eq(*a.as.intersection_.members[i], *b.as.intersection_.members[i])) return 0;
+        }
+        return 1;
+    }
     return 1;
 }
 
-/* Helper to create a Type from TypeKind. */
+/* Helper to create a Type from TypeKind.
+ * Zero-initialises the entire struct so that compound type fields (union_,
+ * intersection_, etc.) are safe to pass to type_name() even for kinds that
+ * store no additional data. */
 static Type type_from_kind(TypeKind k) {
     Type t;
+    memset(&t, 0, sizeof(t));
     t.kind = k;
     t.copy_kind = typekind_default_copy_kind(k);
-    t.as.fn.arity = 0;
-    t.n_lifetimes = 0;  /* Phase 13: no lifetimes by default */
-    t.typeclass_instances = NULL;
-    t.n_typeclass_instances = 0;
     t.hkt_kind = KIND_STAR;  /* Phase HKT-P6: all types are kind * in v1 */
     return t;
 }
@@ -334,6 +346,23 @@ const char *type_name(Type t) {
             buf_putc(&tmp, '\0');
             return tur_strdup(tmp.data);
         }
+        /* IT2: Intersection types — "(T1 & T2 & ...)" */
+        case TY_INTERSECTION: {
+            Buf tmp;
+            buf_init(&tmp);
+            buf_putc(&tmp, '(');
+            for (uint8_t i = 0; i < t.as.intersection_.n_members; i++) {
+                if (i > 0) buf_puts(&tmp, " & ");
+                if (t.as.intersection_.members && t.as.intersection_.members[i]) {
+                    buf_puts(&tmp, type_name(*t.as.intersection_.members[i]));
+                } else {
+                    buf_putc(&tmp, '?');
+                }
+            }
+            buf_putc(&tmp, ')');
+            buf_putc(&tmp, '\0');
+            return tur_strdup(tmp.data);
+        }
     }
     return "?";
 }
@@ -526,6 +555,20 @@ static void type_name_buf(Buf *b, Type t) {
             buf_putc(b, ')');
             break;
         }
+        /* IT2: Intersection types — "(T1 & T2 & ...)" */
+        case TY_INTERSECTION: {
+            buf_putc(b, '(');
+            for (uint8_t i = 0; i < t.as.intersection_.n_members; i++) {
+                if (i > 0) buf_puts(b, " & ");
+                if (t.as.intersection_.members && t.as.intersection_.members[i]) {
+                    type_name_buf(b, *t.as.intersection_.members[i]);
+                } else {
+                    buf_putc(b, '?');
+                }
+            }
+            buf_putc(b, ')');
+            break;
+        }
     }
 }
 
@@ -616,6 +659,9 @@ const char *type_c_name(Type t) {
             return "void *";
         /* IT0: Union types — tagged union struct (IT4 will emit full struct; for now opaque) */
         case TY_UNION:
+            return "int64_t";
+        /* IT2: Intersection types — opaque int64_t placeholder (full codegen in IT4) */
+        case TY_INTERSECTION:
             return "int64_t";
     }
     return "void";
@@ -780,6 +826,15 @@ static bool type_is_guarded_recursive_helper(const Type *t, const char *rec_name
             }
             return true;
         }
+        /* IT2: Intersection types — guard recursion like union types */
+        case TY_INTERSECTION: {
+            int new_depth = depth + 1;
+            for (uint8_t i = 0; i < t->as.intersection_.n_members; i++) {
+                if (!type_is_guarded_recursive_helper(t->as.intersection_.members[i], rec_name, new_depth))
+                    return false;
+            }
+            return true;
+        }
     }
 
     return true;  /* Unknown type kind - assume safe */
@@ -854,7 +909,9 @@ const char *typekind_to_string(TypeKind k) {
         /* Phase G2 */
         case TY_TYVAR:    return "tyvar";
         /* IT0: Union types */
-        case TY_UNION:    return "union";
+        case TY_UNION:        return "union";
+        /* IT2: Intersection types */
+        case TY_INTERSECTION: return "intersection";
         default:          return "<?>";
     }
 }
@@ -914,6 +971,45 @@ Type type_union_build(Arena *a, Type **members, uint8_t n_members) {
     t.hkt_kind = KIND_STAR;
     t.as.union_.members = flat;
     t.as.union_.n_members = flat_count;
+    return t;
+}
+
+/* IT2: Intersection type constructor.
+ * Builds a TY_INTERSECTION type from an array of member types.
+ * Nested TY_INTERSECTION members are flattened: (A & (B & C)) -> (A & B & C).
+ * The members array and its contents are allocated on the given arena. */
+Type type_intersection_build(Arena *a, Type **members, uint8_t n_members) {
+    /* First, compute flattened count */
+    uint8_t flat_count = 0;
+    for (uint8_t i = 0; i < n_members; i++) {
+        if (members[i] && members[i]->kind == TY_INTERSECTION) {
+            flat_count += members[i]->as.intersection_.n_members;
+        } else {
+            flat_count++;
+        }
+    }
+
+    /* Allocate flattened array */
+    Type **flat = (Type **)arena_alloc(a, flat_count * sizeof(Type *));
+    uint8_t fi = 0;
+    for (uint8_t i = 0; i < n_members; i++) {
+        if (members[i] && members[i]->kind == TY_INTERSECTION) {
+            /* Flatten nested intersection */
+            for (uint8_t j = 0; j < members[i]->as.intersection_.n_members; j++) {
+                flat[fi++] = members[i]->as.intersection_.members[j];
+            }
+        } else {
+            flat[fi++] = members[i];
+        }
+    }
+
+    Type t;
+    memset(&t, 0, sizeof(t));
+    t.kind = TY_INTERSECTION;
+    t.copy_kind = CK_MOVE;
+    t.hkt_kind = KIND_STAR;
+    t.as.intersection_.members = flat;
+    t.as.intersection_.n_members = flat_count;
     return t;
 }
 

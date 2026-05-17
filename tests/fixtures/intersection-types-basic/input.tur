@@ -1,0 +1,12 @@
+; IT2: Intersection type parsing -- (A & B & C) syntax is accepted.
+; We define a function with an intersection-typed parameter; IT3 will add
+; subtyping checks. Here we only verify the annotation parses without error.
+
+(defn describe [x : (int & bool)] :cstr
+  "intersection")
+
+; Also test a three-member intersection.
+(defn triple [x : (int & bool & cstr)] :int
+  0)
+
+(println "ok")

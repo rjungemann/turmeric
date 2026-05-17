@@ -55,3 +55,6 @@ bool g_substructural_enabled = false;
 
 /* IT0: -Xunion-types flag — enable union type syntax and checking */
 bool g_union_types_enabled = false;
+
+/* IT2: -Xintersection-types flag — enable intersection type syntax */
+bool g_intersection_types_enabled = false;

@@ -203,3 +203,52 @@ web-dev: web-deps
 # Clean WASM build
 clean-wasm:
     rm -rf build-wasm
+
+# ---------------------------------------------------------------------------
+# Release tagging
+# ---------------------------------------------------------------------------
+
+# Bump the patch version (0.2.1 -> 0.2.2) and push a release tag.
+bump-patch:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    OLD=$(cat VERSION)
+    IFS='.' read -r MAJOR MINOR PATCH <<< "$OLD"
+    NEW="$MAJOR.$MINOR.$((PATCH + 1))"
+    echo "$NEW" > VERSION
+    sed -i.bak "s/TURMERIC_VERSION \"$OLD\"/TURMERIC_VERSION \"$NEW\"/" src/wasm_glue.h
+    rm -f src/wasm_glue.h.bak
+    git add VERSION src/wasm_glue.h
+    git commit -m "chore: bump version to v$NEW"
+    git tag -a "v$NEW" -m "Release v$NEW"
+    git push origin HEAD "v$NEW"
+
+# Bump the minor version (0.2.1 -> 0.3.0) and push a release tag.
+bump-minor:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    OLD=$(cat VERSION)
+    IFS='.' read -r MAJOR MINOR PATCH <<< "$OLD"
+    NEW="$MAJOR.$((MINOR + 1)).0"
+    echo "$NEW" > VERSION
+    sed -i.bak "s/TURMERIC_VERSION \"$OLD\"/TURMERIC_VERSION \"$NEW\"/" src/wasm_glue.h
+    rm -f src/wasm_glue.h.bak
+    git add VERSION src/wasm_glue.h
+    git commit -m "chore: bump version to v$NEW"
+    git tag -a "v$NEW" -m "Release v$NEW"
+    git push origin HEAD "v$NEW"
+
+# Bump the major version (0.2.1 -> 1.0.0) and push a release tag.
+bump-major:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    OLD=$(cat VERSION)
+    IFS='.' read -r MAJOR MINOR PATCH <<< "$OLD"
+    NEW="$((MAJOR + 1)).0.0"
+    echo "$NEW" > VERSION
+    sed -i.bak "s/TURMERIC_VERSION \"$OLD\"/TURMERIC_VERSION \"$NEW\"/" src/wasm_glue.h
+    rm -f src/wasm_glue.h.bak
+    git add VERSION src/wasm_glue.h
+    git commit -m "chore: bump version to v$NEW"
+    git tag -a "v$NEW" -m "Release v$NEW"
+    git push origin HEAD "v$NEW"

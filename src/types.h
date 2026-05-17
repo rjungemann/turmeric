@@ -110,6 +110,8 @@ typedef enum TypeKind {
     TY_LREF,         /* lref<T> — CK_LINEAR; silent drop is an error */
     /* IT0: Union types (-Xunion-types) */
     TY_UNION,        /* (A | B | C) — anonymous closed union type */
+    /* IT2: Intersection types (-Xintersection-types) */
+    TY_INTERSECTION, /* (A & B & C) — anonymous closed intersection type */
 } TypeKind;
 
 /* Phase G0: Constructor field descriptor for ADTs */
@@ -236,6 +238,9 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
         /* IT0: Union types — move-only by default; actual semantics depend on members */
         case TY_UNION:
             return CK_MOVE;
+        /* IT2: Intersection types — move-only by default; actual semantics depend on members */
+        case TY_INTERSECTION:
+            return CK_MOVE;
         case TY_UNKNOWN:
         default:
             return CK_MOVE;
@@ -340,6 +345,11 @@ typedef struct Type {
             struct Type **members;  /* arena-allocated array of member type pointers */
             uint8_t       n_members; /* number of union members (>= 2) */
         } union_;
+        /* IT2: Intersection types — (A & B & C) */
+        struct {
+            struct Type **members;  /* arena-allocated array of member type pointers */
+            uint8_t       n_members; /* number of intersection members (>= 2) */
+        } intersection_;
     } as;
 } Type;
 
@@ -597,6 +607,12 @@ Type type_app(Arena *a, Type fn, Type arg, Span span);
  * members[] is copied from the provided arena-allocated pointers.
  * Nested TY_UNION members are flattened automatically. */
 Type type_union_build(Arena *a, Type **members, uint8_t n_members);
+
+/* IT2: Intersection type constructor.
+ * Create a TY_INTERSECTION type with the given array of member types.
+ * members[] is copied from the provided arena-allocated pointers.
+ * Nested TY_INTERSECTION members are flattened automatically. */
+Type type_intersection_build(Arena *a, Type **members, uint8_t n_members);
 
 /* Phase 17: Exception type constructor */
 /* Create an exception type wrapping a payload of the given type */

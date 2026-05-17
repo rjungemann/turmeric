@@ -39,6 +39,7 @@ extern bool g_substructural_enabled;
 
 /* IT0: Union types feature flag */
 extern bool g_union_types_enabled;
+extern bool g_intersection_types_enabled;
 
 #define ELAB_MAX_MACRO_EXPANSION_DEPTH 256
 
@@ -807,7 +808,9 @@ typedef struct Elab {
     const Symbol *sym_defgadt;
     const Symbol *sym_colon; /* bare ":" used as annotation separator in defgadt */
     /* IT0: Union type pipe separator "|" */
-    const Symbol *sym_pipe;  /* "|" -- used in (A | B | C) union type expressions */
+    const Symbol *sym_pipe;        /* "|" -- used in (A | B | C) union type expressions */
+    /* IT2: Intersection type ampersand separator "&" */
+    const Symbol *sym_ampersand;   /* "&" -- used in (A & B & C) intersection type expressions */
     /* Phase G2: current per-arm skolem environment (NULL outside GADT match arms) */
     SkolemEnv *g2_skolem_env;
     /* Phase G3: coerce special form */
@@ -1298,6 +1301,8 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_colon = intern_cstr(st, ":");
     /* IT0: Union type pipe separator */
     e->sym_pipe = intern_cstr(st, "|");
+    /* IT2: Intersection type ampersand separator */
+    e->sym_ampersand = intern_cstr(st, "&");
     /* Phase G2: per-arm skolem environment (NULL until inside a GADT match arm) */
     e->g2_skolem_env = NULL;
     /* Phase G3: coerce */
@@ -6310,6 +6315,10 @@ static Expr *elab_defn(Elab *e, const Form *call) {
                 if (g_union_types_enabled && ann->kind == TY_UNION) {
                     param_poly_types[n_params - 1] = ann;
                 }
+                /* IT2: For intersection-typed parameters, same propagation. */
+                if (g_intersection_types_enabled && ann->kind == TY_INTERSECTION) {
+                    param_poly_types[n_params - 1] = ann;
+                }
             }
             /* LT3: Propagate linearity from the type annotation (e.g., [p : (lref int)]) */
             if (g_linear_enabled && params[n_params - 1]->type.copy_kind == CK_LINEAR) {
@@ -8632,14 +8641,16 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                                            args[i]->type.kind == TY_UNION)) {
                 err_code = TUR_E0300_UNION_TYPE_MISMATCH;
             }
-            /* Compute expected type name for diagnostic */
+            /* Compute expected type name for diagnostic.
+             * For compound types (union, intersection) that store their full type in
+             * arg_full_types, look it up there so the name includes member types. */
             const char *expected_str;
-            if (expected_arg_kind == TY_UNION && fn_type.kind == TY_FN &&
-                fn_type.as.fn.arg_full_types) {
+            if ((expected_arg_kind == TY_UNION || expected_arg_kind == TY_INTERSECTION) &&
+                fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
                 uint32_t fn_arg_idx4 = fn_binding->closure_fn_binding ? i + 1 : i;
-                Type *ut = (fn_arg_idx4 < fn_type.as.fn.arity)
+                Type *ct = (fn_arg_idx4 < fn_type.as.fn.arity)
                     ? fn_type.as.fn.arg_full_types[fn_arg_idx4] : NULL;
-                expected_str = ut ? type_name(*ut)
+                expected_str = ct ? type_name(*ct)
                                   : type_name(type_from_kind(expected_arg_kind));
             } else {
                 expected_str = type_name(type_from_kind(expected_arg_kind));
@@ -12479,6 +12490,55 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
                 }
                 /* Build and return union type (type_union_build flattens nested unions) */
                 Type built = type_union_build(e->arena, members, n_members);
+                Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *t = built;
+                return t;
+            }
+        }
+
+        /* IT2: (A & B & C) — intersection type expression.
+         * Detect by scanning for any element that is the bare "&" ampersand symbol.
+         * Only active when -Xintersection-types is enabled. */
+        {
+            bool has_amp = false;
+            for (uint32_t uk = 0; uk < form->as.list.len; uk++) {
+                Form *uit = form->as.list.items[uk];
+                if (uit->tag == F_SYM && uit->as.sym == e->sym_ampersand) {
+                    has_amp = true;
+                    break;
+                }
+            }
+            if (has_amp) {
+                if (!g_intersection_types_enabled) {
+                    diag_emit(DIAG_ERROR, form->span,
+                              "intersection type syntax requires -Xintersection-types; found '&' in type expression");
+                    return NULL;
+                }
+                /* Count non-ampersand member forms */
+                uint8_t n_members = 0;
+                for (uint32_t uk = 0; uk < form->as.list.len; uk++) {
+                    Form *uit = form->as.list.items[uk];
+                    if (uit->tag == F_SYM && uit->as.sym == e->sym_ampersand) continue;
+                    n_members++;
+                }
+                if (n_members < 2) {
+                    diag_emit(DIAG_ERROR, form->span,
+                              "intersection type requires at least two member types separated by '&'");
+                    return NULL;
+                }
+                /* Collect member types */
+                Type **members = (Type **)arena_alloc(e->arena, n_members * sizeof(Type *));
+                uint8_t mi = 0;
+                for (uint32_t uk = 0; uk < form->as.list.len; uk++) {
+                    Form *uit = form->as.list.items[uk];
+                    if (uit->tag == F_SYM && uit->as.sym == e->sym_ampersand) continue;
+                    Type *mt = type_expr_from_form(e, uit, rec_name,
+                                                   type_params, type_param_kinds, n_type_params);
+                    if (!mt) return NULL;
+                    members[mi++] = mt;
+                }
+                /* Build and return intersection type (type_intersection_build flattens nested) */
+                Type built = type_intersection_build(e->arena, members, n_members);
                 Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
                 *t = built;
                 return t;

@@ -53,3 +53,6 @@ extern bool g_substructural_enabled;
 
 /* IT0: -Xunion-types flag — enable union type syntax and checking */
 extern bool g_union_types_enabled;
+
+/* IT2: -Xintersection-types flag — enable intersection type syntax */
+extern bool g_intersection_types_enabled;

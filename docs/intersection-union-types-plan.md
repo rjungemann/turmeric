@@ -1,6 +1,6 @@
 # Intersection & Union Types — Implementation Plan (IT0–IT4)
 
-> **Status:** IT0 and IT1 complete; IT2–IT4 not started
+> **Status:** IT0, IT1, and IT2 complete; IT3–IT4 not started
 >
 > **Target:** v4
 >
@@ -173,9 +173,9 @@ src/error.h/.c      -- Error codes and messages
 
 **Goal:** Parse and represent intersection types.
 
-- [ ] Activate `TY_INTERSECTION` parsing: `(A & B & C)` syntax; flatten nested intersections
-- [ ] `TY_INTERSECTION` node stores a list of member types
-- [ ] Pretty-print intersection types in error messages
+- [x] Activate `TY_INTERSECTION` parsing: `(A & B & C)` syntax; flatten nested intersections
+- [x] `TY_INTERSECTION` node stores a list of member types
+- [x] Pretty-print intersection types in error messages
 
 ---
 

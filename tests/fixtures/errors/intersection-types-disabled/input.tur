@@ -1,0 +1,3 @@
+; IT2: Using intersection type syntax without -Xintersection-types emits an error.
+(defn accept [x : (int & bool)] :int
+  42)
