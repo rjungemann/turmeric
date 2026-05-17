@@ -330,7 +330,7 @@ only when you know the type):
 
 ## 8. Current Limitations
 
-These features are not yet supported:
+**Unsupported:**
 
 - **No dependent types.** Type parameters must be types, not values. You cannot
   index a GADT by a runtime integer directly; use a type-level Nat GADT instead.
@@ -357,25 +357,25 @@ These features are not yet supported:
 - **No mutual recursion across files.** Mutually recursive GADTs must be
   defined in the same file.
 
-- **The `(~ a b)` constraint syntax is not yet supported.** The form
-  `(defn f [(~ a int) x :a] :int ...)` is parsed as a type annotation without
-  a preceding parameter and is rejected. Use the `Equal` witness pattern instead.
-
 - **Polymorphic recursion is not fully inferred.** If a GADT function is
   polymorphically recursive, add an explicit type annotation on the `defn`.
-
-- **`equal-cong` requires HKT.** The congruence lemma
-  `(defn equal-cong [^f eq : (Equal a b)] : (Equal (f a) (f b)) ...)` needs
-  kind-`* -> *` type variables in `defn` signatures. This is deferred until
-  the HKT kind system is available. See `docs/hkt-deferred-tasks.md`.
 
 - **`cast` is unchecked.** `(cast x T)` does not verify the runtime tag
   matches `T`. Use `(type-of x)` first if you need a safe downcast.
 
-- **Implicit union widening is not yet implemented.** A value of type `A`
-  cannot yet be passed where `(A | B)` is expected without an explicit
-  `EX_UNION_INJECT` coercion. This is tracked as IT1 in
-  `docs/gadts-followup-tasks.md`.
+**Implemented (previously deferred):**
+
+- **The `(~ a b)` constraint syntax** binds a type variable to a concrete type
+  in a `defn` parameter list: `(defn f [(~ a int) x :a] :int ...)`. Supported
+  since Phase G3.
+
+- **`equal-cong`** is implemented in `stdlib/equal.tur`. The congruence lemma
+  `(defn equal-cong [^f eq : (Equal a b)] : (Equal (f a) (f b)) ...)` uses
+  kind-`* -> *` type variables (HKT Phase G4).
+
+- **Implicit union widening** is supported with `-Xunion-types`. A value of
+  type `A` can be passed where `(A | B)` is expected; the compiler inserts
+  tag injection automatically (Phase IT4).
 
 ---
 
@@ -421,9 +421,8 @@ These features are not yet supported:
 
 - `docs/guides/hrt-guide.md` -- Higher-ranked types; bidirectional checking
   that enables GADT skolem propagation
-- `docs/guides/hkt-guide.md` -- Higher-kinded types; required for `equal-cong`
+- `docs/guides/hkt-guide.md` -- Higher-kinded types; used by `equal-cong`
   and polymorphic GADT indices
 - `docs/gadts-plan.md` -- Full implementation plan and phase history
-- `docs/gadts-followup-tasks.md` -- Open items and blocked tasks
 - `tests/fixtures/gadt-*/` -- Working GADT examples
 - `tests/fixtures/union-types-*/` -- Union type and gradual typing examples
