@@ -804,6 +804,82 @@ static int check_call_site_rows_in_expr(Arena *a, Expr *e,
 }
 
 /* ---------------------------------------------------------------------------
+ * ET1-C: check_unreachable_handlers_in_expr
+ * Walk an expression tree; for each EX_HANDLE, recompute the body's inferred
+ * effect row and emit TUR-W0033 for any handler clause whose effect is absent
+ * from that row (the clause can never be triggered).
+ * --------------------------------------------------------------------------- */
+
+static void check_unreachable_handlers_in_expr(
+        Arena *a, Expr *e, FnIndex *idx, EffectEnv *env) {
+    if (!e) return;
+    switch (e->kind) {
+    case EX_HANDLE: {
+        HandleExpr *h = e->as.handle_.handle;
+        EffectRowSubst *subst = effect_row_subst_new(a);
+        EffectRow *body_row = collect_effects_in_expr(
+            a, h->body, effect_row_empty(a), idx, env, subst);
+        for (uint8_t i = 0; i < h->n_cases; i++) {
+            const Symbol *eff_name = h->cases[i].effect_name;
+            if (!eff_name) continue;
+            Effect *eff = effect_env_lookup(env, eff_name);
+            if (!eff) continue;
+            if (!effect_row_contains(body_row, eff)) {
+                Span span = h->cases[i].body
+                            ? h->cases[i].body->span
+                            : (Span){0, 0, 0, 0, 0, 0};
+                diag_emit_with_code(DIAG_WARNING, span,
+                    TUR_W0033_UNREACHABLE_HANDLER,
+                    "handler clause for '%s' is unreachable: "
+                    "the body does not perform '%s'",
+                    eff_name->name, eff_name->name);
+            }
+        }
+        check_unreachable_handlers_in_expr(a, h->body, idx, env);
+        for (uint8_t i = 0; i < h->n_cases; i++)
+            check_unreachable_handlers_in_expr(a, h->cases[i].body, idx, env);
+        return;
+    }
+    case EX_LET:
+        for (uint32_t i = 0; i < e->as.let_.n; i++)
+            check_unreachable_handlers_in_expr(
+                a, e->as.let_.bindings[i].init, idx, env);
+        check_unreachable_handlers_in_expr(a, e->as.let_.body, idx, env);
+        return;
+    case EX_DO:
+        for (uint32_t i = 0; i < e->as.do_.n; i++)
+            check_unreachable_handlers_in_expr(a, e->as.do_.items[i], idx, env);
+        return;
+    case EX_IF:
+        check_unreachable_handlers_in_expr(a, e->as.if_.cond, idx, env);
+        check_unreachable_handlers_in_expr(a, e->as.if_.then_, idx, env);
+        check_unreachable_handlers_in_expr(a, e->as.if_.else_or_null, idx, env);
+        return;
+    case EX_WHILE:
+        check_unreachable_handlers_in_expr(a, e->as.while_.cond, idx, env);
+        check_unreachable_handlers_in_expr(a, e->as.while_.body, idx, env);
+        return;
+    case EX_CALL:
+        check_unreachable_handlers_in_expr(a, e->as.call_.fn_expr, idx, env);
+        for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+            check_unreachable_handlers_in_expr(a, e->as.call_.args[i], idx, env);
+        return;
+    case EX_CLOSURE:
+        check_unreachable_handlers_in_expr(
+            a, e->as.closure_.closure->fn->body, idx, env);
+        return;
+    case EX_SET:
+        check_unreachable_handlers_in_expr(a, e->as.set_.value, idx, env);
+        return;
+    case EX_RETURN:
+        check_unreachable_handlers_in_expr(a, e->as.return_.value, idx, env);
+        return;
+    default:
+        return;
+    }
+}
+
+/* ---------------------------------------------------------------------------
  * effect_check_pass
  * --------------------------------------------------------------------------- */
 
@@ -885,6 +961,22 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
             if (!impl || !impl->binding) continue;
             if (meth->effect_row) {
                 impl->binding->type.as.fn.effect_row = meth->effect_row;
+            }
+        }
+    }
+
+    /* --- Step 0c: Resolve effect rows on struct fields.
+     * Struct fields with :fn #{...} annotations store ERK_UNRESOLVED rows that
+     * must be resolved before the fixed-point inference can propagate them. */
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        Expr *item = program->as.program.items[i];
+        if (!item || item->kind != EX_DEF || !item->as.def_.struct_def) continue;
+        StructDef *sd = item->as.def_.struct_def;
+        for (uint32_t fi = 0; fi < sd->n_fields; fi++) {
+            if (sd->fields[fi].effect_row &&
+                sd->fields[fi].effect_row->kind == ERK_UNRESOLVED) {
+                sd->fields[fi].effect_row =
+                    effect_row_resolve(sd->fields[fi].effect_row, env, a);
             }
         }
     }
@@ -992,6 +1084,15 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
         if (check_call_site_rows_in_expr(a, item->as.fn_def_.fn->body,
                                           &idx, env) != 0)
             rc = 1;
+    }
+
+    /* --- Step 3c: ET1-C -- Unreachable handler clause warnings (TUR-W0033).
+     * For each top-level function, walk its body and warn when a handler clause
+     * names an effect that the handled body does not actually perform. */
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        Expr *item = program->as.program.items[i];
+        if (!item || item->kind != EX_FN_DEF || !item->as.fn_def_.fn) continue;
+        check_unreachable_handlers_in_expr(a, item->as.fn_def_.fn->body, &idx, env);
     }
 
     /* --- ER6: --lint-effects: advisory warnings for unannotated effectful functions.

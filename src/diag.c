@@ -116,6 +116,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0030_STRICT_EFFECTS_UNANNOTATED: return "TUR-W0030";
         case TUR_W0031_EFFECT_OVER_ANNOTATED:      return "TUR-W0031";
         case TUR_W0032_ROW_VAR_ALWAYS_CONCRETE:    return "TUR-W0032";
+        case TUR_W0033_UNREACHABLE_HANDLER:        return "TUR-W0033";
         /* LT1: Linear type errors */
         case TUR_E0100_LINEAR_DROPPED:             return "TUR-E0100";
         case TUR_E0101_LINEAR_USE_AFTER_CONSUME:   return "TUR-E0101";
@@ -164,6 +165,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0030") == 0) return TUR_W0030_STRICT_EFFECTS_UNANNOTATED;
     if (strcmp(s, "TUR-W0031") == 0) return TUR_W0031_EFFECT_OVER_ANNOTATED;
     if (strcmp(s, "TUR-W0032") == 0) return TUR_W0032_ROW_VAR_ALWAYS_CONCRETE;
+    if (strcmp(s, "TUR-W0033") == 0) return TUR_W0033_UNREACHABLE_HANDLER;
     /* LT1: Linear type errors */
     if (strcmp(s, "TUR-E0100") == 0) return TUR_E0100_LINEAR_DROPPED;
     if (strcmp(s, "TUR-E0101") == 0) return TUR_E0101_LINEAR_USE_AFTER_CONSUME;
@@ -502,6 +504,20 @@ static const DiagExplanation diag_explanations_[] = {
       "\n"
       "Fix: replace the row variable with the concrete effect set, e.g.:\n"
       "  (defn run-twice [f :(fn [] #{Ask} :int)] #{Ask} :int ...)\n",
+    },
+    { TUR_W0033_UNREACHABLE_HANDLER,
+      "TUR-W0033: Handler clause is unreachable\n"
+      "\n"
+      "A (handle ...) expression contains a handler clause for an effect that the\n"
+      "handled body never actually performs. The clause will never be triggered.\n"
+      "\n"
+      "This usually means the effect was already handled by an inner (handle ...) or\n"
+      "the body was refactored and the handler was not updated.\n"
+      "\n"
+      "Fix: remove the unreachable handler clause, or ensure the body performs the\n"
+      "effect, e.g.:\n"
+      "  (handle (perform (Write \"hi\"))         ; body actually performs Write\n"
+      "    (Write [s] k) (do (println s) (resume k nil)))\n",
     },
     /* LT1: Linear type errors */
     { TUR_E0100_LINEAR_DROPPED,

@@ -1,0 +1,17 @@
+;; ET1-F: handle correctly removes handled effects from the enclosing row.
+;; The inner handle absorbs Write; only Log escapes to the outer handle.
+
+(defeffect Write [s :cstr] :nil)
+(defeffect Log [msg :cstr] :nil)
+
+(defn inner [] #{Log} :nil
+  (handle
+    (do
+      (perform (Write "handled internally"))
+      (perform (Log "propagated out")))
+    (Write [s] k) (do (println s) (resume k nil))))
+
+(defn main [] :int
+  (handle
+    (do (inner) 0)
+    (Log [msg] k) (do (println msg) (resume k nil))))
