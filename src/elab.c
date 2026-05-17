@@ -8751,8 +8751,8 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
              * (int64_t)(intptr_t) cast so the generated C99 code is valid. */
             arg_ok = true;
         }
-        /* IT1: Union type subtyping — accept a value of type A where (A | B) is expected.
-         * Check arg_full_types for the union type descriptor. */
+        /* IT4: Union type subtyping — accept a value of type A where (A | B) is expected.
+         * Wrap the argument with EX_UNION_INJECT so emit.c produces TUR_TAG(idx, val). */
         if (!arg_ok && g_union_types_enabled && expected_arg_kind == TY_UNION) {
             uint32_t fn_arg_idx3 = i;
             if (fn_binding->closure_fn_binding) fn_arg_idx3 = i + 1;
@@ -8764,10 +8764,16 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                         Type *mem = union_t->as.union_.members[um];
                         if (mem && type_eq(args[i]->type, *mem)) {
                             arg_ok = true;
+                            /* IT4: wrap in EX_UNION_INJECT to tag the value at runtime */
+                            Expr *inject = expr_new(e->arena, EX_UNION_INJECT,
+                                                    *union_t, args[i]->span);
+                            inject->as.union_inject_.tag_idx = (int64_t)um;
+                            inject->as.union_inject_.value = args[i];
+                            args[i] = inject;
                             break;
                         }
                     }
-                    /* Also accept if the argument is itself the same union type */
+                    /* Also accept if the argument is already the same union type (no injection needed) */
                     if (!arg_ok && args[i]->type.kind == TY_UNION) {
                         arg_ok = type_eq(args[i]->type, *union_t);
                     }
@@ -8833,10 +8839,16 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         }
 
         /* IT4: A <: any — any value satisfies the top type.
-         * Available when -Xunion-types or -Xintersection-types. */
+         * Wrap with EX_UNION_INJECT using the TypeKind of the value as the tag,
+         * so (type-of) and (cast) can retrieve it at runtime. */
         if (!arg_ok && (g_union_types_enabled || g_intersection_types_enabled) &&
             expected_arg_kind == TY_ANY) {
             arg_ok = true;
+            Type any_type; memset(&any_type, 0, sizeof(any_type)); any_type.kind = TY_ANY;
+            Expr *inject = expr_new(e->arena, EX_UNION_INJECT, any_type, args[i]->span);
+            inject->as.union_inject_.tag_idx = (int64_t)args[i]->type.kind;
+            inject->as.union_inject_.value = args[i];
+            args[i] = inject;
         }
 
         if (!arg_ok) {
@@ -11282,6 +11294,7 @@ static Expr *elab_match(Elab *e, const Form *call) {
                     pat->is_var = true;
                     pat->var_sym = pat_form->as.sym;
                 }
+                pat->union_member_idx = -1; /* IT4: wildcard arm — no specific member */
                 has_wildcard = true;
                 Expr *body = elab_form(e, body_form);
                 if (!body) { free(member_covered); return NULL; }
@@ -11331,6 +11344,7 @@ static Expr *elab_match(Elab *e, const Form *call) {
                     return NULL;
                 }
                 member_covered[covered_member] = true;
+                pat->union_member_idx = covered_member; /* IT4: record for tag-dispatch in emit.c */
 
                 /* Introduce arm scope with the narrowed binding */
                 Scope arm_scope;

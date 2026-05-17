@@ -661,15 +661,15 @@ const char *type_c_name(Type t) {
         case TY_FORALL:
         case TY_EXISTS:
             return "void *";
-        /* IT0: Union types — tagged union struct (IT4 will emit full struct; for now opaque) */
+        /* IT4: Union types — tagged union struct {int64_t tag; int64_t val} */
         case TY_UNION:
-            return "int64_t";
+            return "tur_tagged_t";
         /* IT2: Intersection types — opaque int64_t placeholder (full codegen in IT4) */
         case TY_INTERSECTION:
             return "int64_t";
-        /* IT4: any — opaque int64_t at runtime (gradual typing boundary) */
+        /* IT4: any — tagged union struct (same as TY_UNION; tag is TypeKind of stored value) */
         case TY_ANY:
-            return "int64_t";
+            return "tur_tagged_t";
     }
     return "void";
 }

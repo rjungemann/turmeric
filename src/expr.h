@@ -202,6 +202,8 @@ typedef enum ExprKind {
     EX_MATCH,          /* (match scrutinee (Ctor1 x y) body1 _ default-body) */
     /* Phase G1: GADTs */
     EX_DEFGADT,        /* (defgadt Name [params] (Ctor : return-type) ...) */
+    /* IT4: Tagged union injection — wraps a value into tur_tagged_t */
+    EX_UNION_INJECT,   /* (union-inject tag_idx value) — tags a member value for TY_UNION/TY_ANY */
 } ExprKind;
 
 /* Phase 2: FnDef represents a function definition from defn or lifted fn. */
@@ -344,6 +346,8 @@ typedef struct MatchPattern {
     uint32_t n_bindings;
     const Symbol *var_sym;      /* for is_var: the variable being bound */
     Binding *var_binding;       /* resolved binding for is_var */
+    int union_member_idx;       /* IT4: index into union members array for type-narrowing arms;
+                                 * -1 for wildcard/var arms and non-union (ADT) arms */
 } MatchPattern;
 
 /* Phase G0: One arm of a match expression */
@@ -558,6 +562,11 @@ struct Expr {
             MatchArm    *arms;      /* arena-allocated array */
             uint32_t     n_arms;
         } match_;
+        /* IT4: Tagged union injection — wraps a member value into tur_tagged_t */
+        struct {
+            int64_t     tag_idx;  /* member index (for TY_UNION) or TypeKind (for TY_ANY) */
+            struct Expr *value;   /* the value being injected */
+        } union_inject_;
     } as;
 };
 

@@ -1639,6 +1639,19 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_free(&out);
             return result;
         }
+        case EX_UNION_INJECT: {
+            /* IT4: wrap a member value into tur_tagged_t via TUR_TAG(tag_idx, val).
+             * The inner value is cast to int64_t so pointer/struct payloads fit. */
+            char *inner = emit_value(ctx, body, e->as.union_inject_.value);
+            Buf out; buf_init(&out);
+            buf_printf(&out, "TUR_TAG(%lld, (int64_t)(intptr_t)(%s))",
+                       (long long)e->as.union_inject_.tag_idx, inner);
+            buf_putc(&out, '\0');
+            free(inner);
+            char *result = strdup(out.data);
+            buf_free(&out);
+            return result;
+        }
         case EX_LET:      return emit_let_value(ctx, body, e);
         case EX_IF:       return emit_if_value(ctx, body, e);
         case EX_DO:       return emit_do_value(ctx, body, e);
@@ -4135,6 +4148,91 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
 
         /* Phase G0: EX_MATCH — emit as statement-expression ({ ... result; }) */
         case EX_MATCH: {
+            /* IT4: Union match — tag-based dispatch via TUR_GETTAG / TUR_UNTAG.
+             * Emits an if/else-if/else chain; each type-narrowing arm checks
+             * the discriminant tag and binds the untagged value to the arm variable. */
+            if (e->as.match_.scrutinee->type.kind == TY_UNION ||
+                e->as.match_.scrutinee->type.kind == TY_ANY) {
+                bool nil_result = (e->type.kind == TY_NIL);
+                /* Use {0} for tur_tagged_t results, 0 for scalar results */
+                const char *zero_init = (e->type.kind == TY_UNION ||
+                                         e->type.kind == TY_ANY) ? "{0}" : "0";
+                char *tmp = NULL;
+                if (!nil_result) {
+                    tmp = fresh_tmp(ctx);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "%s %s = %s;\n",
+                               type_c_name(e->type), tmp, zero_init);
+                }
+
+                char *scrut_val = emit_value(ctx, body, e->as.match_.scrutinee);
+
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "{\n");
+                ctx->indent += 4;
+
+                /* Store scrutinee once to avoid double-evaluation */
+                char *scrut_tmp = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "tur_tagged_t %s = %s;\n", scrut_tmp, scrut_val);
+                free(scrut_val);
+
+                bool first_arm = true;
+                for (uint32_t ai = 0; ai < e->as.match_.n_arms; ai++) {
+                    MatchArm *arm = &e->as.match_.arms[ai];
+                    MatchPattern *pat = &arm->pattern;
+
+                    indent_buf(body, ctx->indent);
+                    if (pat->is_wildcard || pat->union_member_idx < 0) {
+                        /* Wildcard or bare-variable arm — catches all remaining cases */
+                        buf_puts(body, first_arm ? "{\n" : "else {\n");
+                    } else {
+                        /* Type-narrowing arm — check discriminant tag */
+                        if (first_arm) {
+                            buf_printf(body, "if (TUR_GETTAG(%s) == %d) {\n",
+                                       scrut_tmp, pat->union_member_idx);
+                        } else {
+                            buf_printf(body, "else if (TUR_GETTAG(%s) == %d) {\n",
+                                       scrut_tmp, pat->union_member_idx);
+                        }
+                    }
+                    first_arm = false;
+                    ctx->indent += 4;
+
+                    /* Bind the narrowed variable: untagged value cast to the arm type */
+                    if (pat->n_bindings > 0 && pat->bindings[0]) {
+                        Binding *fb = pat->bindings[0];
+                        const char *ctype = type_c_name(fb->type);
+                        char *bname = name_for_binding(ctx, fb);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "%s %s = (%s)(intptr_t)TUR_UNTAG(%s);\n",
+                                   ctype, bname, ctype, scrut_tmp);
+                        free(bname);
+                    }
+
+                    /* Emit arm body */
+                    if (!nil_result) {
+                        char *bv = emit_value(ctx, body, arm->body);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "%s = %s;\n", tmp, bv);
+                        free(bv);
+                    } else {
+                        emit_stmt(ctx, body, arm->body);
+                    }
+
+                    ctx->indent -= 4;
+                    indent_buf(body, ctx->indent);
+                    buf_puts(body, "}\n");
+                }
+
+                free(scrut_tmp);
+                ctx->indent -= 4;
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "}\n");
+
+                return nil_result ? atom_nil() : tmp;
+            }
+
             AdtDef *adt = e->as.match_.scrutinee->type.as.adt_.def;
             char adt_c_name[256];
             snprintf(adt_c_name, sizeof(adt_c_name), "tur_adt_%s", adt->name);
@@ -4329,7 +4427,8 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
     switch (e->kind) {
         case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:
         case EX_FLOAT_LIT: case EX_CSTR_LIT: case EX_VAR:
-        case EX_CAST:       /* pure expression, no stmt-level side effects */
+        case EX_CAST:         /* pure expression, no stmt-level side effects */
+        case EX_UNION_INJECT: /* IT4: pure struct literal, no stmt-level side effects */
         case EX_TYPECLASS_DEF:
         case EX_DEFMODULE: /* Phase M0: module metadata — nothing to emit */
         case EX_PANIC_PAYLOAD_TYPE:
@@ -5601,6 +5700,14 @@ int emit_program(Buf *out, const Expr *program) {
      * Used for (forall [a] (-> a a))-style rank-2 parameters. */
     buf_puts(out, "/* Phase HRT1: rank-2 polymorphic function type */\n");
     buf_puts(out, "typedef struct { void *env; int64_t (*fn)(void *, int64_t); } tur_poly_fn_t;\n");
+    /* IT4: Tagged union runtime representation.
+     * tur_tagged_t carries a discriminant tag and a 64-bit payload.
+     * Used for (A | B) union types and the 'any' top type. */
+    buf_puts(out, "/* IT4: tagged union runtime representation */\n");
+    buf_puts(out, "typedef struct { int64_t tag; int64_t val; } tur_tagged_t;\n");
+    buf_puts(out, "#define TUR_TAG(t, v)  ((tur_tagged_t){(int64_t)(t), (int64_t)(v)})\n");
+    buf_puts(out, "#define TUR_UNTAG(x)   ((x).val)\n");
+    buf_puts(out, "#define TUR_GETTAG(x)  ((x).tag)\n");
     /* Phase HRT2: existential type — opaque void* wrapping any boxed value */
     buf_puts(out, "/* Phase HRT2: existential type (opaque void* box) */\n");
     buf_puts(out, "typedef void * tur_exists_t;\n");

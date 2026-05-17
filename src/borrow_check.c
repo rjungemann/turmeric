@@ -595,6 +595,9 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
             }
             return true;
         }
+        /* IT4: Tagged union injection — delegate to inner value */
+        case EX_UNION_INJECT:
+            return borrow_check_expr_recursive(ctx, e->as.union_inject_.value);
     }
 
     return true;

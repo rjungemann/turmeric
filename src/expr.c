@@ -489,5 +489,11 @@ void expr_print(Buf *b, const Expr *e) {
             expr_print(b, e->as.match_.scrutinee);
             buf_putc(b, ')');
             break;
+        /* IT4: Tagged union injection */
+        case EX_UNION_INJECT:
+            buf_printf(b, "(union-inject %lld ", (long long)e->as.union_inject_.tag_idx);
+            expr_print(b, e->as.union_inject_.value);
+            buf_putc(b, ')');
+            break;
     }
 }
