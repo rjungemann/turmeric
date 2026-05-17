@@ -8,7 +8,7 @@ Enable uniqueness checking with:
 
 ```sh
 tur build -Xunique-types myfile.tur
-```turmeric
+```
 
 ---
 
@@ -55,7 +55,7 @@ explicit in the source language.
     (buf-write "header")
     (buf-write "body")
     (buf-write "footer")))
-```turmeric
+```
 
 ---
 
@@ -88,7 +88,7 @@ transfer equivalent of `&mut T` borrows.
 (defn increment! [^unique ^mut n : int] : ^unique int
   (set! n (+ n 1))
   n)
-```text
+```
 
 Rules:
 

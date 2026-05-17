@@ -28,7 +28,7 @@ tur new my-lib --lib    # library project (new directory)
 tur init                # scaffold inside the current directory
 tur init --lib          # library, inside the current directory
 tur new my-app --no-git # skip automatic git init
-```turmeric
+```
 
 `tur new <name>` creates the directory and scaffolds it. `tur init` does the
 same thing inside an existing empty directory (following the same convention
@@ -54,7 +54,7 @@ function.
 
 ### Generated `build.tur`
 
-```turmeric
+```
 (defpackage my-app
   :name    "my-app"
   :version "0.1.0")
@@ -68,7 +68,7 @@ function.
 (defn main [] :int
   (println "Hello from my-app!")
   0)
-```sh
+```
 
 After scaffolding, run the project immediately:
 
@@ -127,7 +127,7 @@ Turmeric source file evaluated at build time. The top-level form is
     "geom/vector" ["vector-2d" "vector-3d" "cross-product"]
     "geom/matrix" ["matrix-2x2" "matrix-3x3" "multiply"]
   })
-```turmeric
+```
 
 ### Minimal manifests
 
@@ -146,7 +146,7 @@ A standalone binary with no dependencies:
 (defpackage hello
   :name    "hello"
   :version "0.1.0")
-```sh
+```
 
 ---
 
@@ -167,7 +167,7 @@ prefix stripped (`tur-geom` becomes `geom`). Override with `--name`:
 
 ```sh
 tur add https://github.com/alice/tur-geom --ref v0.2.1 --name geometry
-```text
+```
 
 If `--ref` is omitted, the tool resolves to the default branch HEAD and warns:
 
@@ -178,7 +178,7 @@ Pin with: tur add https://github.com/alice/tur-geom --ref a1b2c3d4
 
 ### Adding a local path dependency
 
-```sh
+```
 tur add ../tur-utils --path
 ```
 
@@ -190,7 +190,7 @@ Local path spices are never written to `tur.lock`.
 ```sh
 tur add spice/http
 tur add spice/json
-```text
+```
 
 The official registry at `pkg.turmeric-lang.org` is not yet live. Until it
 is, `tur add spice/<pkg>` prints:
@@ -205,7 +205,7 @@ Add the package directly with a Git URL:
 
 Before:
 
-```turmeric
+```
 (defpackage my-app
   :name    "my-app"
   :version "0.1.0")
@@ -221,7 +221,7 @@ After `tur add https://github.com/alice/tur-geom --ref v0.2.1`:
     "geom" {:url "https://github.com/alice/tur-geom"
             :ref "v0.2.1"}
   })
-```turmeric
+```
 
 ### Error messages
 
@@ -287,7 +287,7 @@ tur run --release         # release build + run
 tur run --offline         # skip network; fail if any spice is missing
 tur run -- --flag arg     # pass arguments to the binary
 tur run src/other.tur     # run a specific file (no build.tur required)
-```sh
+```
 
 `tur run` walks up from the current directory to find `build.tur`, resolves
 dependencies, compiles, and executes the binary. The exit code matches the
@@ -314,7 +314,7 @@ tur build --release
 ```sh
 tur fetch              # fetch all spices listed in tur.lock
 tur fetch --update     # update spices to the latest allowed versions
-```sh
+```
 
 ### Run the test suite
 
@@ -374,7 +374,7 @@ invokes CMake automatically -- no CMake files need to be written by hand.
   "sqlite3" {:url "https://github.com/sqlite/sqlite"
              :ref "version-3.45.0"}
 }
-```sh
+```
 
 Add a CMake dependency from the command line:
 
@@ -415,7 +415,7 @@ tur test                   # run the test suite
 
 # Diagnostics
 tur emit-c src/main.tur    # print generated C to stdout
-```turmeric
+```
 
 ---
 
@@ -472,7 +472,7 @@ SSH URLs work with standard Git credential helpers:
 
 ```sh
 tur add git@github.com:myorg/private-lib.git --ref v1.0.0
-```text
+```
 
 Set `GIT_SSH_COMMAND` in your environment to control the SSH client used
 during fetch.

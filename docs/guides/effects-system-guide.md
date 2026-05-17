@@ -28,7 +28,7 @@ Three core primitives:
   (let [name (perform (Read))]
     (println (str "Hello " name)))
   (Read [] k) (resume k "World"))
-```turmeric
+```
 
 ### One-Shot Continuations
 
@@ -65,7 +65,7 @@ Implement generators, early returns, or custom exception handling:
     (perform (Yield 1))
     (perform (Yield 2)))
   (Yield [v] k) (do (println v) (resume k nil)))
-```turmeric
+```
 
 ### Dependency Injection
 
@@ -96,7 +96,7 @@ Automatic conflict resolution (see [STM Tutorial](stm-tutorial.md)):
       (perform (Retry))))
   ;; Re-run transaction on conflict
   (Retry [] k) (resume k nil))
-```turmeric
+```
 
 ## Effect Rows (Typed Effects)
 
@@ -137,7 +137,7 @@ Effects can be declared `^private` to prevent leakage outside their defining mod
 
 ```turmeric
 (defeffect ^private InternalLog [msg :cstr] :nil)
-```turmeric
+```
 
 A `^private` effect cannot be `perform`ed or `handle`d outside the module that declares it.
 Cross-module effect rows are automatically filtered: if a callee internally performs a private

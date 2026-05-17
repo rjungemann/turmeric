@@ -33,7 +33,7 @@ The tidal library is included in Turmeric's standard library. Import it to get s
 
 ```turmeric
 (import tidal)
-```turmeric
+```
 
 Or import individual modules:
 
@@ -51,7 +51,7 @@ Or import individual modules:
 (my-pattern 0.0)  ;; => 1
 (my-pattern 1.0)  ;; => 2
 (my-pattern 2.0)  ;; => 3
-```turmeric
+```
 
 ### Connecting to scsynth
 
@@ -85,7 +85,7 @@ Tidal uses **beats** as the primary time unit. One beat is one quarter note at t
 ;; Convert between beats and seconds
 (bpm->beats-per-sec 120.0)  ;; => 2.0 (120 BPM = 2 beats/sec)
 (beats->sec 1.0 120.0)       ;; => 0.5 (1 beat at 120 BPM = 0.5 seconds)
-```turmeric
+```
 
 ### Pattern Type
 
@@ -116,7 +116,7 @@ Patterns are **pull-based**: they evaluate on demand when you call them with a t
 
 ;; Shorthand: P macro
 (def p (P 440.0))  ;; Same as (const 440.0)
-```turmeric
+```
 
 ### Cycle Patterns
 
@@ -151,7 +151,7 @@ Patterns are **pull-based**: they evaluate on demand when you call them with a t
 (p 0.0)   ;; => 0.0
 (p 1.0)   ;; => 0.5
 (p 2.0)   ;; => 0.0
-```turmeric
+```
 
 ### Evaluating Patterns
 
@@ -181,7 +181,7 @@ Patterns are **pull-based**: they evaluate on demand when you call them with a t
 ;; Stretch and compress are aliases
 (stretch 2 p)  ;; Same as (slow 2 p)
 (compress 2 p) ;; Same as (fast 2 p)
-```turmeric
+```
 
 ### Time Shifting
 
@@ -206,7 +206,7 @@ Patterns are **pull-based**: they evaluate on demand when you call them with a t
 ;; Play once, then silence
 (def one-shot (once (const 1) 0))
 ;; At time 0-1: 1, time >1: 0
-```turmeric
+```
 
 ### Time Mirroring
 
@@ -233,7 +233,7 @@ Patterns are **pull-based**: they evaluate on demand when you call them with a t
 ;; Sequence with custom lengths
 (def seq-n-pattern (seq-n [(cycle 1 2) 2.0] [(cycle 3 4) 1.0]))
 ;; First pattern plays for 2 beats, second for 1 beat
-```turmeric
+```
 
 ### Stacking
 
@@ -268,7 +268,7 @@ Patterns are **pull-based**: they evaluate on demand when you call them with a t
 ;; Play on specific beats (nth)
 (def nth-pattern (nth 2 (const 1) 0))
 ;; Same as every but uses floor(time) mod n
-```turmeric
+```
 
 ### Euclidean Rhythm
 
@@ -291,7 +291,7 @@ def euclid-pattern (euclid 8 5 1))
 ;; First non-zero value
 (def first-pattern (first-nonzero 0 (const 0) (const 0) (const 5)))
 ;; At any time: 5
-```text
+```
 
 ---
 
@@ -319,7 +319,7 @@ def euclid-pattern (euclid 8 5 1))
 ;; Map value range [from-low, from-high] to [to-low, to-high]
 (def scaled (range (cycle 0.0 0.5 1.0) 0.0 1.0 440.0 880.0))
 ;; 0.0 -> 440, 0.5 -> 660, 1.0 -> 880
-```turmeric
+```
 
 ### Clamping
 
@@ -340,7 +340,7 @@ def euclid-pattern (euclid 8 5 1))
 ;; Noise patterns
 (def perlin (noise 1.0 0.0))    ;; Perlin noise
 (def white (white-noise))       ;; White noise
-```turmeric
+```
 
 ### Waveform Patterns
 
@@ -366,7 +366,7 @@ def euclid-pattern (euclid 8 5 1))
 
 ;; ADSR envelope (attack, decay, sustain, release, gate)
 (def adsr-env (adsr 0.01 0.1 0.5 0.1 (const true)))
-```text
+```
 
 ---
 
@@ -389,7 +389,7 @@ def euclid-pattern (euclid 8 5 1))
 ;; Two patterns with different cycle lengths
 (def polyrhythm-pattern (polyrhythm (cycle 1 2) 1.0 (cycle 10 20) 2.0))
 ;; Returns tuple: (pattern1-value, pattern2-value)
-```turmeric
+```
 
 ### Nested Patterns
 
@@ -410,7 +410,7 @@ def euclid-pattern (euclid 8 5 1))
   [(cycle 10 20) 2.0]
   [(cycle 100 200) 0.5]
 ]))
-```turmeric
+```
 
 ### Canon
 
@@ -426,7 +426,7 @@ def euclid-pattern (euclid 8 5 1))
 ;; Phase-shifted copies
 (def spread-pattern (spread (cycle 1 2 3) 4 1.0))
 ;; 4 copies, spread across 1 beat
-```turmeric
+```
 
 ### Time Signature
 
@@ -452,7 +452,7 @@ def euclid-pattern (euclid 8 5 1))
 
 ;; MIDI note to frequency
 (note->freq 69)  ;; => 440.0 (A4)
-```turmeric
+```
 
 ### Chord Patterns
 
@@ -470,7 +470,7 @@ def euclid-pattern (euclid 8 5 1))
 ;; Arpeggiate a chord
 (def arpeggio (arp-pattern (const [48 52 55]) 4.0))
 ;; Plays notes [48 52 55] at 4x speed (16th notes)
-```turmeric
+```
 
 ### Drum Patterns
 
@@ -504,7 +504,7 @@ def euclid-pattern (euclid 8 5 1))
 
 ;; Stop playing
 (player-stop player)
-```turmeric
+```
 
 ### Pattern Replacement
 
@@ -524,7 +524,7 @@ def euclid-pattern (euclid 8 5 1))
 
 ;; Silence all (hush in TidalCycles)
 (def hush (swap-patterns player (const 0)))
-```turmeric
+```
 
 ### Pattern Hot-Reloading
 
@@ -552,7 +552,7 @@ def euclid-pattern (euclid 8 5 1))
 
 ;; Counter with modulo
 (def counter-10 (counter-pattern 10))
-```text
+```
 
 ---
 
@@ -573,7 +573,7 @@ def p (parse-mini "[1 2] [3 4]")  ;; Stack patterns
 ```turmeric
 ;; Shorthand for parse-mini
 (def p (s "1 2 3"))
-```turmeric
+```
 
 ### Drum Notation
 
@@ -608,7 +608,7 @@ def p (s "bd(5,8) sd(3,8)")      ;; Euclidean drum patterns
 ;; Cache pattern results
 (def cached-pat (cached (cycle 1 2 3) 1024))
 ;; Caches 1024 values for fast lookup
-```turmeric
+```
 
 ### Pattern Inlining
 
@@ -623,7 +623,7 @@ def p (s "bd(5,8) sd(3,8)")      ;; Euclidean drum patterns
 ;; Fuse consecutive operations into one function
 (def fused (fuse-pattern (slow 2 (fast 2 (cycle 1 2)))))
 ;; slow 2 * fast 2 = identity, so fuses to (cycle 1 2)
-```turmeric
+```
 
 ---
 
@@ -663,7 +663,7 @@ def p (s "bd(5,8) sd(3,8)")      ;; Euclidean drum patterns
   (polymeter 1.0 (kick [0.0 1.0 2.0 3.0]))
   (polymeter 1.333 (snare [0.0 1.0 2.0]))
   (polymeter 0.667 (hat [0.0 0.5 1.0 1.5 2.0 2.5]))))
-```turmeric
+```
 
 ### Generative Example
 

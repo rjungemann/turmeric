@@ -17,7 +17,7 @@ class Comonad w where
   extract   :: w a -> a                    -- "read the focused cell"
   extend    :: (w a -> b) -> w a -> w b    -- "apply rule to every cell"
   duplicate :: w a -> w (w a)              -- derived: extend id
-```turmeric
+```
 
 The key insight is:
 
@@ -64,7 +64,7 @@ The Comonad instance for Zipper:
 
 ```turmeric
 (defn ca-rule [z] :int
-  ```c
+  ```
   typedef struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } Zip;
   Zip *p = (Zip *)(intptr_t)z;
   int64_t l = p->left_len  > 0 ? p->left[0]  : 0;
@@ -98,7 +98,7 @@ The full Zipper implementation lives in [`stdlib/zipper.tur`](../../stdlib/zippe
 
 For a 2D grid we use a flat row-major array with a focus position `(cx, cy)`:
 
-```c
+```
 typedef struct {
   int64_t *data;            /* flat array, width * height elements */
   int64_t  width, height;
@@ -129,13 +129,13 @@ Index formula: `data[y * width + x]`.
 
 ;; Print '#' / '.' ASCII, one row per line.
 (defn grid-print [g] :int ...)
-```turmeric
+```
 
 ### The Comonad instance
 
 ```turmeric
 (defn __gridctx_extend [g fn] :int
-  ```c
+  ```
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *src = (GCtx *)(intptr_t)g;
   int64_t w = src->width, h = src->height;
@@ -172,7 +172,7 @@ The Game of Life rule is a pure function from a focused grid to the next cell st
 
 ```turmeric
 (defn conway-rule [g] :int
-  ```c
+  ```
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
   GCtx *p = (GCtx *)(intptr_t)g;
   int64_t alive = p->data[p->cy * p->width + p->cx];
@@ -195,7 +195,7 @@ The Game of Life rule is a pure function from a focused grid to the next cell st
 
 A full generation step is then just:
 
-```turmeric
+```
 (let [next (.extend current conway-rule)]
   ...)
 ```
@@ -218,7 +218,7 @@ That's it — the Comonad abstracts away all index management.
           (do
             (grid-print g2)               ;; same as g0 — period 2
             0))))))
-```sh
+```
 
 ---
 
@@ -246,7 +246,7 @@ Run all CA-related tests:
 
 ```bash
 TUR_TEST_FILTER="grid\|game-of-life\|zipper-comonad\|comonad-identity\|flat-array" bash tests/run.sh
-```turmeric
+```
 
 ---
 

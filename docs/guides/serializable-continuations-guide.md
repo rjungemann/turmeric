@@ -32,7 +32,7 @@ A **continuation** represents "the rest of the computation" — a suspended stat
 ;; Later, in another process:
 (def k (load-from-disk "my-continuation.bin"))
 (serial-resume k 100)  ; Resumes computation with x=42, returns 142
-```turmeric
+```
 
 ### The `Serializable` Typeclass
 
@@ -52,7 +52,7 @@ Primitive types have automatic instances:
 (definstance Serializable bool)
 (definstance Serializable cstr)
 (definstance Serializable bytes)
-```turmeric
+```
 
 Container types derive their instances from element types:
 
@@ -78,7 +78,7 @@ defclass ResourceSerializable [a]
 definstance ResourceSerializable FileHandle
   (marshal [fh] (file-handle-path fh))
   (unmarshal [path] (open-file path ReadOnly))
-```turmeric
+```
 
 ## Surface API
 
@@ -109,7 +109,7 @@ defalias serial-continuation<T>
     [resume    : (-> T (serial-continuation<T>))
      to-bytes  : (-> bytes)
      schema-id : cstr])  ; Stable hash of frame chain shape
-```turmeric
+```
 
 ## Examples
 
@@ -168,7 +168,7 @@ Send a half-finished computation to another node:
   (let? [k (bytes->serial-cont bytes)]
     (def result (serial-resume k input))
     (serial-cont->bytes (serial-shift [k'] (continue k' result)))))
-```turmeric
+```
 
 ### Web Continuations (Racket-style)
 
@@ -220,7 +220,7 @@ defn recover-analysis [] : Report
   (def latest (find-latest-checkpoint))
   (let? [k (bytes->serial-cont latest.bytes)]
     (serial-resume k))
-```turmeric
+```
 
 ## Error Handling
 
@@ -268,7 +268,7 @@ def circular : (Option (Box circular))
 ;; This will fail with a circular reference error
 (serial-reset
   (serial-shift [k] (save-cont k) 0))
-```turmeric
+```
 
 ## Interaction with Ownership
 
@@ -306,7 +306,7 @@ defn cont-to-file [k : serial-continuation<T>, path : cstr] : (Result unit cstr)
 
 defn cont-from-file [path : cstr] : (Result (serial-continuation<T>) cstr)
   (bytes->serial-cont (read-file path))
-```turmeric
+```
 
 ### `stdlib/workflow.tur`
 
@@ -347,7 +347,7 @@ Only capture what you need. Use identifiers instead of entire objects:
   (serial-shift [k]
     (save-cont k)
     (continue k)))
-```turmeric
+```
 
 ### Limit Continuation Depth
 

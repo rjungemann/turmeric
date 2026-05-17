@@ -21,7 +21,7 @@ Turmeric's `async`/`await` syntax enables direct-style asynchronous programming 
 
 ;; Block until completion
 (println (await fut))  ; => 3
-```turmeric
+```
 
 ## Core Concepts
 
@@ -97,7 +97,7 @@ A **fiber** is a user-space thread (lightweight thread) that:
   (def a (await (fetch-a)))
   (def b (await (fetch-b)))
   (process a b))
-```turmeric
+```
 
 ### Concurrent Operations
 
@@ -123,7 +123,7 @@ Effects-based try/catch works within async blocks (see [Effects System Guide](ef
     (fn [e k]
       (match e
         (FileNotFound _) -> (continue k "default")))))
-```turmeric
+```
 
 ## I/O Bindings
 

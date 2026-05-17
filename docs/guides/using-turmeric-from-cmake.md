@@ -31,7 +31,7 @@ that form the public API of your library:
     "src/vector.tur"
     "src/matrix.tur"
   ])
-```sh
+```
 
 If you omit `:exports`, `tur emit-cmake` falls back to scanning every `*.tur`
 file in `src/`.
@@ -62,7 +62,7 @@ All four files are auto-generated -- do not edit them by hand. Re-run
 
 ```sh
 tur emit-cmake --output-dir dist/
-```sh
+```
 
 This writes `dist/CMakeLists.txt`, `dist/<name>Config.cmake`, and
 `dist/cmake/*.cmake`.
@@ -101,7 +101,7 @@ CPMAddPackage(
 
 add_executable(my_app src/main.c)
 target_link_libraries(my_app PRIVATE my-geom::all)
-```text
+```
 
 CPM fetches the archive, runs the generated `CMakeLists.txt`, which in turn
 invokes `tur emit-c --output-dir` to compile the `.tur` sources to C, then
@@ -137,7 +137,7 @@ If the library is installed to a standard prefix:
 cmake -B build -DCMAKE_INSTALL_PREFIX=/usr/local
 cmake --build build
 cmake --install build
-```text
+```
 
 Then in the consumer:
 

@@ -34,7 +34,7 @@ To inspect the emitted C without building, use:
 
 ```sh
 ./build/tur emit-c path/to/file.tur
-```text
+```
 
 This makes debugging integration problems much easier because you can see
 exactly what the C side of the equation looks like.
@@ -69,7 +69,7 @@ is no validation against an actual header file.
 (extern-c rand  [^]       :int)
 (extern-c srand [^int]    :void)
 (extern-c time  [^ptr]    :ptr)
-```turmeric
+```
 
 **Type annotation reference:**
 
@@ -108,7 +108,7 @@ or zero-argument functions:
 ```turmeric
 (extern-c stderr [^] :ptr)   ;; FILE* stderr — accessed as (stderr)
 (extern-c rand   [^] :int)   ;; int rand(void)
-```turmeric
+```
 
 ### 2.2 Inline C blocks — Arbitrary C inside a Turmeric expression
 
@@ -116,7 +116,7 @@ Surround C source with triple backticks and an optional `c` tag:
 
 ```turmeric
 (defn file-size [f]
-  ```c
+  ```
   FILE* file = (FILE*)f;
   long pos = ftell(file);
   fseek(file, 0, SEEK_END);
@@ -160,7 +160,7 @@ interface. This pattern keeps the unsafe pointer juggling isolated:
 ```turmeric
 ;; stdlib/random.tur — capability struct wrapping libc rand()
 (defn Real-Random []
-  ```c
+  ```
   typedef struct Random Random;
   struct Random {
       int (*next_int)(int min, int max);
@@ -202,7 +202,7 @@ practical ways to use compiled Turmeric code inside a larger C project:
 
 ### 3.1 Include the emitted `.c` directly
 
-```sh
+```
 ./build/tur emit-c mylib.tur > generated/mylib.c
 ```
 
@@ -245,7 +245,7 @@ void tur_frame_init(tur_frame *f, tur_frame *parent);
 int  tur_frame_push_defer(tur_frame *f, defer_fn_t thunk, void *env);
 void tur_frame_fire_lifo(tur_frame *f);
 void tur_frame_fire_chain(tur_frame *f);
-```text
+```
 
 ---
 
@@ -311,7 +311,7 @@ corresponding `*-free` function (see `Real-Random-free` above).
   (defer (free buf))
   ;; ... use buf ...
   )  ;; free fires here, even if an exception is thrown
-```turmeric
+```
 
 ---
 
@@ -352,7 +352,7 @@ Exceptions are non-resumable and use `setjmp`/`longjmp`:
   (throw 42)
   (catch [e :int] (println e))
   (finally (println "always")))
-```sh
+```
 
 Generated C for the `try` block calls `setjmp`. The `throw` form calls
 `tur_throw`, which fires defers then `longjmp`s to the nearest handler. If
@@ -444,7 +444,7 @@ the `LDFLAGS` environment variable:
 
 ```sh
 LDFLAGS="-lraylib -framework OpenGL" make release
-```sh
+```
 
 For system libraries (`-lm`, `-lpthread`, etc.) add them to `LDFLAGS` in your
 build script or `Makefile` wrapper.
@@ -492,7 +492,7 @@ Vec2  vec2_add(Vec2 a, Vec2 b);
 double vec2_len(Vec2 v);
 Vec2 *vec2_alloc(double x, double y);  /* heap-allocated, caller frees */
 void  vec2_free(Vec2 *v);
-```turmeric
+```
 
 **math_wrap.tur** (Turmeric wrapper):
 
@@ -504,7 +504,7 @@ void  vec2_free(Vec2 *v);
 ;; vec2_add and vec2_len operate on struct values, which we pass through
 ;; inline C since struct-by-value is not in the type system yet
 (defn vec2-add [a b]
-  ```c
+  ```
   #include "libmath.h"
   Vec2 *pa = (Vec2 *)a;
   Vec2 *pb = (Vec2 *)b;
@@ -531,7 +531,7 @@ Build with:
 
 ```sh
 LDFLAGS="-L. -lmath" ./build/tur build math_wrap.tur
-```text
+```
 
 ---
 

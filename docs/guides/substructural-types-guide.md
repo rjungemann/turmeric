@@ -98,7 +98,7 @@ The bound value must be used at least once before its scope exits.
 ;; ERROR TUR-E0151: relevant value 'r' dropped without use
 (let [r (must-use (acquire-resource))]
   0)
-```turmeric
+```
 
 ### `(with-resource [name init] body...)`
 

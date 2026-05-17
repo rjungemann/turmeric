@@ -4,7 +4,7 @@
 
 ```sh
 tur repl
-```text
+```
 
 ---
 
@@ -152,7 +152,7 @@ highlighted in colour when enabled.
 
 To force-disable colour, redirect output through a pipe:
 
-```sh
+```
 tur repl 2>/dev/null | cat
 ```
 
@@ -183,7 +183,7 @@ printf ':reload myfile.tur\n:quit\n' | tur repl
 # Capture output only (discard banner)
 printf ':reload myfile.tur\n:quit\n' | tur repl 2>/dev/null \
     | sed '1d'   # strip the banner line
-```text
+```
 
 ---
 
