@@ -438,6 +438,16 @@ static inline bool ty_is_sublinear(Type t) {
     return t.substruct == SK_LINEAR;
 }
 
+/* Phase G1: type_requires_refinement -- true iff a value of this type may need
+ * GADT-arm type refinement before its fields can be safely accessed.
+ * A TY_ADT with is_gadt=true is rank-2 or higher in the GADT sense: matching
+ * on its constructor introduces skolem equalities that refine the type
+ * parameters.  Supports future tooling and the HRT rank-checking path. */
+static inline bool type_requires_refinement(Type t) {
+    if (t.kind != TY_ADT) return false;
+    return t.as.adt_.def && t.as.adt_.def->is_gadt;
+}
+
 /* Convert TypeKind to string representation for debugging */
 const char *typekind_to_string(TypeKind k);
 

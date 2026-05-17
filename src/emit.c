@@ -4248,9 +4248,21 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_puts(body, "switch (__scrut->tag) {\n");
 
                 bool has_default = false;
+                /* Phase G0: Track emitted constructor tags to skip redundant
+                 * arms (arms whose constructor was already covered by an
+                 * earlier arm).  The elaborator emits a warning for these;
+                 * the emitter must not produce a duplicate case label. */
+                bool emitted_tags[256] = {false};
                 for (uint32_t ai = 0; ai < e->as.match_.n_arms; ai++) {
                     MatchArm *arm = &e->as.match_.arms[ai];
                     MatchPattern *pat = &arm->pattern;
+
+                    /* Skip redundant constructor arms (duplicate case label) */
+                    if (!pat->is_wildcard && !pat->is_var && pat->ctor) {
+                        uint32_t tag = pat->ctor->tag;
+                        if (tag < 256 && emitted_tags[tag]) continue;
+                        if (tag < 256) emitted_tags[tag] = true;
+                    }
 
                     indent_buf(body, ctx->indent);
                     if (pat->is_wildcard || pat->is_var) {

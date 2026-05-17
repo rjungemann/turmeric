@@ -1,0 +1,11 @@
+; Redundant arm warning test: the second (Red) arm is unreachable.
+; The match should still compile and execute correctly.
+(defdata Color (Red) (Green) (Blue))
+(defn main [] :int
+  (let [result (match (Green)
+    (Red) 1
+    (Red) 2
+    (Green) 3
+    (Blue) 4)]
+    (println result))
+  0)

@@ -884,6 +884,10 @@ typedef struct Elab {
     const Symbol *sym_ampersand;   /* "&" -- used in (A & B & C) intersection type expressions */
     /* Phase G2: current per-arm skolem environment (NULL outside GADT match arms) */
     SkolemEnv *g2_skolem_env;
+    /* Phase G2: GADT constructor whose arm is currently being elaborated.
+     * NULL outside GADT match arms.  Used by diagnostics to name which
+     * constructor's return-type annotation caused a type refinement. */
+    const CtorDef *g2_current_ctor;
     /* Phase G3: coerce special form */
     const Symbol *sym_coerce;
     /* Phase G3: (~ a b) equality constraint notation */
@@ -11450,6 +11454,18 @@ static Expr *elab_match(Elab *e, const Form *call) {
             /* No new scope needed; elaborate body directly */
             Expr *body = elab_form(e, body_form);
             if (!body) { free(covered); return NULL; }
+            /* Phase G0: Arm body type consistency check for wildcard/variable arms. */
+            if (result_type.kind != TY_UNKNOWN
+                    && body->type.kind != TY_UNKNOWN
+                    && !type_eq(result_type, body->type)) {
+                diag_emit_with_code(DIAG_ERROR, body_form->span,
+                                    TUR_E0001_TYPE_MISMATCH,
+                                    "match: arm types are incompatible -- "
+                                    "expected %s (from earlier arm), got %s",
+                                    typekind_to_string(result_type.kind),
+                                    typekind_to_string(body->type.kind));
+                free(covered); return NULL;
+            }
             arms[ai].body = body;
             if (result_type.kind == TY_UNKNOWN) result_type = body->type;
         } else if (pat_form->tag == F_LIST) {
@@ -11495,6 +11511,16 @@ static Expr *elab_match(Elab *e, const Form *call) {
                 ? (Binding **)arena_alloc(e->arena, n_bindings * sizeof(Binding *))
                 : NULL;
 
+            /* Phase G0: Redundant arm warning -- emit a warning if this constructor
+             * was already covered by an earlier non-guarded arm.  We still
+             * elaborate the body so any errors inside it are reported. */
+            if (covered[ctor->tag]) {
+                diag_emit(DIAG_WARNING, pat_form->span,
+                          "match: arm for constructor '%s' is unreachable -- "
+                          "already covered by an earlier arm",
+                          ctor->name);
+            }
+
             /* Phase G4: guarded arm doesn't guarantee coverage */
             covered[ctor->tag] = !arm_has_guard[ai];
 
@@ -11506,7 +11532,11 @@ static Expr *elab_match(Elab *e, const Form *call) {
                 gadt_build_skolem_env(&arm_senv, adt, ctor);
             }
             SkolemEnv *saved_senv = e->g2_skolem_env;
-            if (adt->is_gadt) e->g2_skolem_env = &arm_senv;
+            const CtorDef *saved_ctor = e->g2_current_ctor;
+            if (adt->is_gadt) {
+                e->g2_skolem_env = &arm_senv;
+                e->g2_current_ctor = ctor;
+            }
 
             /* Introduce a new scope with the field bindings */
             Scope arm_scope;
@@ -11522,6 +11552,7 @@ static Expr *elab_match(Elab *e, const Form *call) {
                     e->scope = saved_scope;
                     scope_free(&arm_scope);
                     e->g2_skolem_env = saved_senv;
+                    e->g2_current_ctor = saved_ctor;
                     free(covered); return NULL;
                 }
                 Type ftype;
@@ -11552,6 +11583,7 @@ static Expr *elab_match(Elab *e, const Form *call) {
                     e->scope = saved_scope;
                     scope_free(&arm_scope);
                     e->g2_skolem_env = saved_senv;
+                    e->g2_current_ctor = saved_ctor;
                     free(covered); return NULL;
                 }
                 if (guard_expr->type.kind != TY_BOOL) {
@@ -11561,6 +11593,7 @@ static Expr *elab_match(Elab *e, const Form *call) {
                     e->scope = saved_scope;
                     scope_free(&arm_scope);
                     e->g2_skolem_env = saved_senv;
+                    e->g2_current_ctor = saved_ctor;
                     free(covered); return NULL;
                 }
             }
@@ -11568,6 +11601,7 @@ static Expr *elab_match(Elab *e, const Form *call) {
             e->scope = saved_scope;
             scope_free(&arm_scope);
             e->g2_skolem_env = saved_senv;
+            e->g2_current_ctor = saved_ctor;
             /* LT1: Verify all linear field bindings in this arm were consumed */
             bool lt1_arm_fail = false;
             if (g_linear_enabled && body) {
@@ -11596,6 +11630,29 @@ static Expr *elab_match(Elab *e, const Form *call) {
                     }
                 }
             }
+            /* Phase G2: GADT constructor context -- when body elaboration fails
+             * inside a GADT arm, emit a note naming the constructor whose
+             * return-type annotation caused the type refinement and listing the
+             * active skolem equalities (e.g. "in this arm: a ~ int").
+             * This surfaces the "why" behind type errors that occur because of
+             * GADT-induced substitutions. */
+            if (!body && adt->is_gadt && arm_senv.n > 0) {
+                char skolem_note[256];
+                int pos = 0;
+                for (uint8_t si = 0; si < arm_senv.n && pos < 230; si++) {
+                    if (si > 0) pos += snprintf(skolem_note + pos,
+                                                sizeof(skolem_note) - pos, ", ");
+                    pos += snprintf(skolem_note + pos, sizeof(skolem_note) - pos,
+                                   "%s ~ %s",
+                                   arm_senv.bindings[si].name,
+                                   typekind_to_string(arm_senv.bindings[si].kind));
+                }
+                skolem_note[pos] = '\0';
+                diag_emit(DIAG_NOTE, body_form->span,
+                          "inside arm for constructor '%s' of '%s'; "
+                          "active refinements: %s",
+                          ctor->name, adt->name, skolem_note);
+            }
             if (!body || lt1_arm_fail || st1_arm_fail) { free(covered); return NULL; }
 
             /* Phase G2/HRT: detect skolem escape -- arm body result is anonymous TY_TYVAR.
@@ -11609,6 +11666,41 @@ static Expr *elab_match(Elab *e, const Form *call) {
                           "(constructor '%s' of '%s'): the arm body has an "
                           "unresolved GADT type variable as its result type",
                           ctor->name, adt->name);
+                free(covered); return NULL;
+            }
+
+            /* Phase G0/G2: Arm body type consistency check.
+             * All arms of a match expression must return the same type.
+             * If this arm's body type differs from the type established by the
+             * first arm, emit TUR_E0001_TYPE_MISMATCH.  For GADT arms, also
+             * emit a note listing the active skolem equalities so the user can
+             * see which type refinement is in effect. */
+            if (result_type.kind != TY_UNKNOWN
+                    && body->type.kind != TY_UNKNOWN
+                    && !type_eq(result_type, body->type)) {
+                if (adt->is_gadt && arm_senv.n > 0) {
+                    char skolem_note[256];
+                    int pos = 0;
+                    for (uint8_t si = 0; si < arm_senv.n && pos < 230; si++) {
+                        if (si > 0) pos += snprintf(skolem_note + pos,
+                                                    sizeof(skolem_note) - pos, ", ");
+                        pos += snprintf(skolem_note + pos, sizeof(skolem_note) - pos,
+                                       "%s ~ %s",
+                                       arm_senv.bindings[si].name,
+                                       typekind_to_string(arm_senv.bindings[si].kind));
+                    }
+                    skolem_note[pos] = '\0';
+                    diag_emit(DIAG_NOTE, body_form->span,
+                              "inside arm for constructor '%s' of '%s'; "
+                              "active refinements: %s",
+                              ctor->name, adt->name, skolem_note);
+                }
+                diag_emit_with_code(DIAG_ERROR, body_form->span,
+                                    TUR_E0001_TYPE_MISMATCH,
+                                    "match: arm types are incompatible -- "
+                                    "expected %s (from earlier arm), got %s",
+                                    typekind_to_string(result_type.kind),
+                                    typekind_to_string(body->type.kind));
                 free(covered); return NULL;
             }
 
