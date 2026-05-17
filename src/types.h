@@ -112,6 +112,8 @@ typedef enum TypeKind {
     TY_UNION,        /* (A | B | C) — anonymous closed union type */
     /* IT2: Intersection types (-Xintersection-types) */
     TY_INTERSECTION, /* (A & B & C) — anonymous closed intersection type */
+    /* IT4: Top type (gradual typing) — available with -Xunion-types or -Xintersection-types */
+    TY_ANY,          /* any — top type; every type is a subtype of any */
 } TypeKind;
 
 /* Phase G0: Constructor field descriptor for ADTs */
@@ -241,6 +243,9 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
         /* IT2: Intersection types — move-only by default; actual semantics depend on members */
         case TY_INTERSECTION:
             return CK_MOVE;
+        /* IT4: any — top type is copy (it's an opaque container) */
+        case TY_ANY:
+            return CK_COPY;
         case TY_UNKNOWN:
         default:
             return CK_MOVE;

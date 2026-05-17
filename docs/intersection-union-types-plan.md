@@ -1,6 +1,6 @@
 # Intersection & Union Types — Implementation Plan (IT0–IT4)
 
-> **Status:** IT0, IT1, IT2, and IT3 complete; IT4 not started
+> **Status:** IT0–IT4 complete (IT4 partial: `any` top type done; boxing codegen, `cast`/`type-of`, and ADT-as-union sugar deferred)
 >
 > **Target:** v4
 >
@@ -9,7 +9,7 @@
 > **Related:** [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md)
 > (§7 Intersection & Union Types)
 >
-> **Last updated:** 2026-05-16
+> **Last updated:** 2026-05-16 (IT4 partial)
 
 ---
 
@@ -203,20 +203,22 @@ src/error.h/.c      -- Error codes and messages
 
 **Goal:** Add the `any` type, stdlib utilities, and ADT-as-union sugar.
 
-- [ ] Add `any` as the **top type** (supertype of all types):
-  - `A <: any` for all `A`
-  - `(A | B | ... | any)` simplifies to `any`
-  - Used for gradual typing boundaries
-- [ ] Gradual typing utilities in stdlib:
+- [x] Add `any` as the **top type** (supertype of all types):
+  - `A <: any` for all `A` — any value accepted where `any` is expected
+  - `(A | B | ... | any)` simplifies to `any` in `type_union_build()`
+  - Available when `-Xunion-types` or `-Xintersection-types` is on
+  - Represented as `int64_t` at codegen level (pointer-sized types require boxing, deferred)
+- [x] `tur explain TUR_E0300` / `TUR_E0301` / `TUR_E0350` / `TUR_E0351` entries
+- [ ] **Deferred — boxing codegen:** Proper `any`-typed values carrying pointer-sized payloads (cstr, struct, ADT) require a boxing wrapper struct; left for a follow-up phase
+- [ ] **Deferred — gradual typing stdlib:**
   - `(cast x : T)` -- runtime downcast from `any`; returns `(option T)`
   - `(type-of x)` -- returns a runtime type tag
-- [ ] Integration with typeclasses: typeclass instances are resolved for union members individually
-- [ ] Codegen for union types:
+- [ ] **Deferred — tagged union codegen:**
   - Tagged union in C: `struct { int tag; union { A a; B b; } data; }`
   - Tags assigned at compile time; `match` compiles to a `switch` on the tag
-- [ ] (Stretch) ADT-as-union sugar: `(defdata Option [a] (none | (some a)))` desugars to a union type — **implementation tracked in [gadts-plan.md](archive/gadts-plan.md) Phase G4** (requires both `-Xgadt` and `-Xunion-types`)
-- [ ] `tur explain TUR_E0300` / `TUR_E0301` / `TUR_E0350` / `TUR_E0351` entries
-- [ ] Performance benchmarks: tagged union emission overhead vs. existing ADT codegen
+- [ ] **Deferred — typeclass instance intersection on unions** (see Open Questions §3)
+- [ ] **Deferred — ADT-as-union sugar:** `(defdata Option [a] (none | (some a)))` desugars to a union type — **tracked in [gadts-plan.md](archive/gadts-plan.md) Phase G4** (requires both `-Xgadt` and `-Xunion-types`)
+- [ ] **Deferred — performance benchmarks:** tagged union emission overhead vs. existing ADT codegen
 
 ---
 

@@ -83,6 +83,8 @@ static TypeKind typekind_from_symbol(const char *name) {
     if (strcmp(name, "uint64") == 0) return TY_UINT64;
     if (strcmp(name, "float32") == 0) return TY_FLOAT32;
     if (strcmp(name, "float64") == 0) return TY_FLOAT64;
+    /* IT4: Top type — available with -Xunion-types or -Xintersection-types */
+    if (strcmp(name, "any") == 0) return TY_ANY;
     return TY_UNKNOWN;
 }
 
@@ -8754,6 +8756,13 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             }
         }
 
+        /* IT4: A <: any — any value satisfies the top type.
+         * Available when -Xunion-types or -Xintersection-types. */
+        if (!arg_ok && (g_union_types_enabled || g_intersection_types_enabled) &&
+            expected_arg_kind == TY_ANY) {
+            arg_ok = true;
+        }
+
         if (!arg_ok) {
             /* Phase 8: Enhanced type mismatch with error code */
             /* IT1: Use union-specific error code when union type is involved */
@@ -12559,6 +12568,21 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
             return t;
         }
         
+        /* IT4: any — top type.  Available when -Xunion-types or -Xintersection-types is on. */
+        if (sym->len == 3 && memcmp(sym->name, "any", 3) == 0) {
+            if (!g_union_types_enabled && !g_intersection_types_enabled) {
+                diag_emit(DIAG_ERROR, form->span,
+                          "'any' type requires -Xunion-types or -Xintersection-types");
+                return NULL;
+            }
+            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+            memset(t, 0, sizeof(Type));
+            t->kind     = TY_ANY;
+            t->copy_kind = CK_COPY;
+            t->hkt_kind  = KIND_STAR;
+            return t;
+        }
+
         /* Unknown - return as opaque struct */
         Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
         memset(t, 0, sizeof(Type));
@@ -13093,6 +13117,12 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
         /* `:int`, `:bool`, etc. — treat the keyword name as a primitive type lookup */
         const Symbol *sym = form->as.sym;
         TypeKind k = typekind_from_symbol(sym->name);
+        /* IT4: gate `any` behind the feature flags */
+        if (k == TY_ANY && !g_union_types_enabled && !g_intersection_types_enabled) {
+            diag_emit(DIAG_ERROR, form->span,
+                      "'any' type requires -Xunion-types or -Xintersection-types");
+            return NULL;
+        }
         if (k != TY_UNKNOWN) {
             Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
             *t = type_from_kind(k);

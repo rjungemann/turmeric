@@ -1,0 +1,3 @@
+; IT4: 'any' type keyword requires -Xunion-types or -Xintersection-types.
+
+(defn f [x : any] :nil nil)

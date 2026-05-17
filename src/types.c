@@ -170,6 +170,8 @@ const char *type_name(Type t) {
         case TY_PTR_VOID: return "ptr<void>";
         case TY_NEVER:   return "!";
         case TY_TYVAR:   return "tyvar";
+        /* IT4: Top type */
+        case TY_ANY:     return "any";
         case TY_FN: {
             /* Build into a buf, then strdup. */
             Buf tmp;
@@ -388,6 +390,8 @@ static void type_name_buf(Buf *b, Type t) {
         case TY_PTR_VOID: buf_puts(b, "ptr<void>"); break;
         case TY_NEVER:   buf_puts(b, "!"); break;
         case TY_TYVAR:   buf_puts(b, "tyvar"); break;
+        /* IT4: Top type */
+        case TY_ANY:     buf_puts(b, "any"); break;
         case TY_FN: {
             buf_puts(b, "(fn [");
             for (uint8_t i = 0; i < t.as.fn.arity; i++) {
@@ -663,6 +667,9 @@ const char *type_c_name(Type t) {
         /* IT2: Intersection types — opaque int64_t placeholder (full codegen in IT4) */
         case TY_INTERSECTION:
             return "int64_t";
+        /* IT4: any — opaque int64_t at runtime (gradual typing boundary) */
+        case TY_ANY:
+            return "int64_t";
     }
     return "void";
 }
@@ -835,6 +842,9 @@ static bool type_is_guarded_recursive_helper(const Type *t, const char *rec_name
             }
             return true;
         }
+        /* IT4: any — top type; always safe (no recursive members) */
+        case TY_ANY:
+            return true;
     }
 
     return true;  /* Unknown type kind - assume safe */
@@ -912,6 +922,8 @@ const char *typekind_to_string(TypeKind k) {
         case TY_UNION:        return "union";
         /* IT2: Intersection types */
         case TY_INTERSECTION: return "intersection";
+        /* IT4: Top type */
+        case TY_ANY:          return "any";
         default:          return "<?>";
     }
 }
@@ -938,8 +950,21 @@ int type_rank(const Type *t) {
 /* IT0: Union type constructor.
  * Builds a TY_UNION type from an array of member types.
  * Nested TY_UNION members are flattened: (A | (B | C)) -> (A | B | C).
+ * IT4: If any member is TY_ANY, the union simplifies to any.
  * The members array and its contents are allocated on the given arena. */
 Type type_union_build(Arena *a, Type **members, uint8_t n_members) {
+    /* IT4: If any member is TY_ANY, the whole union is any */
+    for (uint8_t i = 0; i < n_members; i++) {
+        if (members[i] && members[i]->kind == TY_ANY) {
+            Type t;
+            memset(&t, 0, sizeof(t));
+            t.kind = TY_ANY;
+            t.copy_kind = CK_COPY;
+            t.hkt_kind = KIND_STAR;
+            return t;
+        }
+    }
+
     /* First, compute flattened count */
     uint8_t flat_count = 0;
     for (uint8_t i = 0; i < n_members; i++) {
