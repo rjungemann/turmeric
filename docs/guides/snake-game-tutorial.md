@@ -36,7 +36,7 @@ A **hands-on guide** to building the Snake game with CMake + CPM + Raylib + Turm
 ```bash
 # From fith/ root
 mkdir -p examples/snake/src examples/snake/assets cmake
-```
+```turmeric
 
 ### 0.2 Download CPM.cmake
 
@@ -59,7 +59,7 @@ add_subdirectory(src)
 
 # Examples
 add_subdirectory(examples)
-```
+```turmeric
 
 ### 0.4 Create Snake CMakeLists.txt
 
@@ -108,7 +108,7 @@ void tur_set_fps(int fps) { SetTargetFPS(fps); }
 
 // Input
 int tur_is_key_down(int key) { return IsKeyDown(key); }
-```
+```sh
 
 ### 0.6 Build and Test
 
@@ -142,7 +142,7 @@ Create your first Turmeric file that opens a window.
     ;; Empty loop - just keep window open
     )
   (close-window))
-```
+```turmeric
 
 **What's happening:**
 - `extern-c` declares C functions for FFI
@@ -194,7 +194,7 @@ Draw a white rectangle in the middle of the screen.
     (draw-rect 350 250 100 100 255 255 255)  ;; x,y,w,h,r,g,b
     (end-drawing))
   (close-window))
-```
+```turmeric
 
 **Turmeric feature:** Multiple arguments, all integers.
 
@@ -245,7 +245,7 @@ Introduce a struct to hold game state. This will eventually contain the snake, f
       (draw-state state)
       (end-drawing)))
   (close-window))
-```
+```turmeric
 
 **Turmeric features:**
 - `defstruct` — defines a record type
@@ -317,7 +317,7 @@ Replace the single rectangle with a snake made of segments stored in a vector.
 
 (defn init-state [] : GameState
   (GameState (Snake (vec (Segment 400 300) (Segment 380 300) (Segment 360 300)) 1)))
-```
+```turmeric
 
 ```turmeric
 ;; fith/examples/snake/src/main.tur
@@ -411,7 +411,7 @@ Use typeclasses to make drawing polymorphic — any type that implements `Drawab
 
 (defn init-state [] : GameState
   (GameState (Snake (vec (Segment 400 300) (Segment 380 300) (Segment 360 300)) 1)))
-```
+```turmeric
 
 ```turmeric
 ;; fith/examples/snake/src/main.tur
@@ -445,7 +445,7 @@ This is where it gets interesting. Introduce algebraic effects to separate rende
 ;; Define our effects
 (defeffect Render [obj : any] : void)
 (defeffect Get-Time [] : float)
-```
+```turmeric
 
 ```turmeric
 ;; fith/examples/snake/src/state.tur
@@ -520,7 +520,7 @@ defn -main []
       ;; Top-level handlers would go here
       ))
   (close-window))
-```
+```turmeric
 
 **Turmeric features:**
 - `defeffect` — define a new effect
@@ -631,7 +631,7 @@ defn -main []
       (Game-Over [score] k)
         (close-window)))
   (close-window))
-```
+```turmeric
 
 **Turmeric features:**
 - `and` / `or` — boolean logic
@@ -758,7 +758,7 @@ defn -main []
       (Game-Over [score] k)
         (close-window)))
   (close-window))
-```
+```turmeric
 
 **Turmeric features:**
 - `option` type — `some` / `none` for maybe values
@@ -849,7 +849,7 @@ Use `defer` to ensure the window is always closed, even if an error occurs.
         (end-drawing)
         ;; defer will call close-window when we exit this scope
         )))
-```
+```turmeric
 
 **Turmeric feature:**
 - `defer` — registers cleanup to run when scope exits
@@ -967,7 +967,7 @@ defn game-loop [^state/GameState state]
       (Draw-Text [text x y] k)
         (draw-text text x y 20 255 255 255)
         (resume k))))
-```
+```turmeric
 
 ### 13.3 Grid-Based Movement
 
@@ -1087,7 +1087,7 @@ defn -main []
       (game-loop initial-state)
       (Game-Over [score] k)
         )))
-```
+```text
 
 ---
 
@@ -1107,7 +1107,7 @@ fith/
 │           ├── effects.tur       # Effect definitions
 │           └── rayLibShim.c      # C shim for Raylib
 └── build/
-```
+```text
 
 ---
 

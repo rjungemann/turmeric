@@ -36,7 +36,7 @@ A cloneable continuation can be resumed multiple times:
 
 (cloneable-shift [k]
   body)
-```
+```turmeric
 
 ### The Clone Trait
 
@@ -82,7 +82,7 @@ Multi-shot continuations are modeled as the **backtracking monad**:
 
 (defn return [x : a] : (Backtrack a)
   (fn [] [(fn [] x)]))
-```
+```turmeric
 
 ## Example: Parsing with Backtracking
 
@@ -147,7 +147,7 @@ Relational queries that work in multiple directions:
 ;; Query: (appendo [1 2] [3 4] X) => X = [1 2 3 4]
 (run 1 [x]
   (appendo [1 2] [3 4] x))
-```
+```turmeric
 
 ## Example: Constraint Solving (Sudoku)
 
@@ -194,7 +194,7 @@ Turmeric's `ref<T>` assumes linear consumption (move semantics). Cloneable conti
   (fn []
     (let [r (ref 42)]
       (choice-point [1 2]))))  ; captures r; next backtrack tries to use r again
-```
+```turmeric
 
 **Solution:** Capture immutable data or use `rc<T>` for shared ownership:
 
@@ -225,7 +225,7 @@ When a cloneable continuation captures state across a `defer` boundary, each clo
       (fn [f]
         (let [data (read f)]
           (choice-point (parse data)))))))
-```
+```text
 
 This is safe but can be expensive. Prefer immutable snapshots where possible.
 
@@ -266,7 +266,7 @@ This is safe but can be expensive. Prefer immutable snapshots where possible.
   (def x (goal1))
   (def y (goal2 x))
   (return (list x y)))
-```
+```turmeric
 
 ## Performance Considerations
 

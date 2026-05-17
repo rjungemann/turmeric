@@ -115,11 +115,11 @@
         },
         {
           "name": "keyword.definition.turmeric",
-          "match": "(?<![\\w-])(def|defn|defmacro|defmodule|use|import|export)(?![\\w-])"
+          "match": "(?<![\\w-])(def|defn|defmacro|defmodule|defdata|defgadt|defclass|definstance|defstruct|deftuple|use|import|export)(?![\\w-])"
         },
         {
           "name": "keyword.type.turmeric",
-          "match": "(?<![\\w-])(type|typeclass|impl|where|forall|generic|trait)(?![\\w-])"
+          "match": "(?<![\\w-])(type|typeclass|impl|where|forall|generic|trait|any)(?![\\w-])"
         },
         {
           "name": "keyword.effect.turmeric",
@@ -131,7 +131,7 @@
         },
         {
           "name": "keyword.other.turmeric",
-          "match": "(?<![\\w-])(let|let\\*|lambda|fn|quote|unquote|quasiquote|begin|lambda|fn|defstruct|deftuple)(?![\\w-])"
+          "match": "(?<![\\w-])(let|let\\*|lambda|fn|quote|unquote|quasiquote|begin)(?![\\w-])"
         },
         {
           "name": "keyword.constant.null.turmeric",
@@ -139,7 +139,7 @@
         },
         {
           "name": "support.function.builtin.turmeric",
-          "match": "(?<![\\w-])(vec|push|pop|len|nth|set-nth!|append|first|rest|cons|reverse|list|type-of|is-a\\?|apply|map|filter|reduce|fold|print|println|read|str|concat|split|string\\?|vector\\?|list\\?|number\\?|symbol\\?|boolean\\?|null\\?|atom\\?|pair\\?|empty\\?)(?![\\w-])"
+          "match": "(?<![\\w-])(vec|push|pop|len|nth|set-nth!|append|first|rest|cons|reverse|list|type-of|is-a\\?|apply|map|filter|reduce|fold|print|println|read|str|concat|split|string\\?|vector\\?|list\\?|number\\?|symbol\\?|boolean\\?|null\\?|atom\\?|pair\\?|empty\\?|coerce|cast)(?![\\w-])"
         }
       ]
     },

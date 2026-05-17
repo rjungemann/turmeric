@@ -10,7 +10,7 @@ The classical Haskell signature:
 
 ```haskell
 Monad m => m a -> (a -> m b) -> m b
-```
+```turmeric
 
 requires **higher-kinded types** -- `m` is a type constructor of kind `* -> *`.
 Turmeric's typeclass system operates at kind `*` only. Extending to HKTs would
@@ -76,7 +76,7 @@ through an effect.
                    (eprintln (str-concat "config error: " (.what e)))
                    (default-config))
   (Io    [op] k) (resume k (do-io op)))
-```
+```turmeric
 
 Chains of `bind` threading `Result<T, Error>` become linear, direct-style
 code. The handler is the only place errors are visible.
@@ -118,7 +118,7 @@ interpretation; callers of `counter-step` don't see the threading.
       (none? c)     (perform (Parse-Fail))
       (is-digit? c) (perform (Parse-Take))
       :else         (perform (Parse-Fail)))))
-```
+```turmeric
 
 Classical Haskell parser-combinator code looks like `digit >>= \d -> ...`.
 The effect version is direct-style -- looks like reading a stream, fails
@@ -169,7 +169,7 @@ parameters, since there is no global "the Monad":
 
 (defmacro do-result [bindings body]
   `(do-monadic res-bind res-pure ~bindings ~body))
-```
+```turmeric
 
 Usage:
 

@@ -31,7 +31,7 @@ From the repository root:
 cmake -S . -B build
 cmake --build build -j --target minikanren
 ./build/examples/minikanren/minikanren
-```
+```text
 
 ---
 

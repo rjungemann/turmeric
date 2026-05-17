@@ -102,7 +102,7 @@ Enable TSan for a full test run:
 TUR_TSAN=1 make test
 # or using the dedicated target:
 make test-tsan
-```
+```text
 
 The `make test-tsan` target rebuilds `tur` itself with `-fsanitize=thread` and
 then sets `TUR_TSAN=1` for the test runner.

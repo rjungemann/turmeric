@@ -17,7 +17,7 @@ class Comonad w where
   extract   :: w a -> a                    -- "read the focused cell"
   extend    :: (w a -> b) -> w a -> w b    -- "apply rule to every cell"
   duplicate :: w a -> w (w a)              -- derived: extend id
-```
+```turmeric
 
 The key insight is:
 
@@ -48,7 +48,7 @@ The implementation lives in [`stdlib/comonad.tur`](../../stdlib/comonad.tur), wh
 
 Before tackling 2D grids, it helps to understand the simpler 1D case. A **Zipper** is a list with a cursor:
 
-```
+```turmeric
 left  = [prev, prev-prev, ...]   -- nearest first
 focus = current element
 right = [next, next-next, ...]   -- nearest first
@@ -86,7 +86,7 @@ The Comonad instance for Zipper:
                 (do
                   (print-row z2)           ;; ..#.#.#..
                   0)))))))))
-```
+```text
 
 One `(.extend z ca-rule)` call steps the entire automaton forward.
 
@@ -129,7 +129,7 @@ Index formula: `data[y * width + x]`.
 
 ;; Print '#' / '.' ASCII, one row per line.
 (defn grid-print [g] :int ...)
-```
+```turmeric
 
 ### The Comonad instance
 
@@ -191,7 +191,7 @@ The Game of Life rule is a pure function from a focused grid to the next cell st
   if (n == 3)         return 1;   /* reproduction    */
   return 0;
   ```)
-```
+```turmeric
 
 A full generation step is then just:
 
@@ -218,7 +218,7 @@ That's it — the Comonad abstracts away all index management.
           (do
             (grid-print g2)               ;; same as g0 — period 2
             0))))))
-```
+```sh
 
 ---
 
@@ -246,7 +246,7 @@ Run all CA-related tests:
 
 ```bash
 TUR_TEST_FILTER="grid\|game-of-life\|zipper-comonad\|comonad-identity\|flat-array" bash tests/run.sh
-```
+```turmeric
 
 ---
 

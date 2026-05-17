@@ -14,7 +14,7 @@ pre-built `.vsix` package.
 ```sh
 cd vscode-syntax-ext
 code --install-extension turmeric-syntax-0.1.0.vsix
-```
+```sh
 
 ### From source (development)
 
@@ -60,7 +60,7 @@ Once installed, any `.tur` file is automatically highlighted:
     "editor.formatOnSave": false
   }
 }
-```
+```sh
 
 ## Scope names (for theme customization)
 

@@ -17,7 +17,7 @@ The canonical idiom for a page in a multi-step flow:
     (def action (str "/submit?k=" token))
     (def html   (render-fn action))
     (perform HttpEffect (send-html html))))
-```
+```turmeric
 
 **Parameters:**
 - `render-fn` -- a function that takes the form `action` URL and returns an HTML string
@@ -69,7 +69,7 @@ The tutorial implementation does not evict tokens automatically. For a productio
   (Vec.for-each dir-entries (fn [entry]
     (when (> (- (unix-now) (file-mtime entry)) CONT-TTL-SECONDS)
       (file-delete entry)))))
-```
+```turmeric
 
 Alternatively use the `StoredCont` struct (tutorial Step 9) to embed the creation timestamp inside the file itself, making expiry checks independent of filesystem mtime.
 
@@ -109,7 +109,7 @@ Any value captured inside a `serial-reset` boundary must implement `Serializable
 
 The router maps `POST /submit?k=TOKEN` to `serial-resume`:
 
-```
+```turmeric
 POST /submit?k=TOKEN
   -> parse TOKEN from query string
   -> verify HMAC signature (if signing enabled)
@@ -152,7 +152,7 @@ A helper function that calls `send-form-and-wait` internally can be called from 
     (def address (collect-address))
     (def card    (collect-payment))
     (finalize-order name address card)))
-```
+```turmeric
 
 Each helper is just a function -- `serial-shift` works correctly across call boundaries because the entire continuation stack within the `serial-reset` region is serialized.
 

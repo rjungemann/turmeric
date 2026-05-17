@@ -28,7 +28,7 @@ future follow-on.
 ```turmeric
 (ok 42)        ;; ok result
 (err 99)       ;; err result
-```
+```turmeric
 
 ### Predicates
 
@@ -44,7 +44,7 @@ These are unsafe -- check `ok?` / `err?` first:
 ```turmeric
 (ok-val  r)    ;; => int  (undefined behaviour if r is err)
 (err-val r)    ;; => int  (undefined behaviour if r is ok)
-```
+```turmeric
 
 ### Unwrapping
 
@@ -68,7 +68,7 @@ These are unsafe -- check `ok?` / `err?` first:
 (result-flat-map r f)            ;; f receives ok value and returns a new result
 (result-or       r alt)          ;; r if ok, else alt
 (result-or-else  r f)            ;; r if ok, else (f err-value)
-```
+```turmeric
 
 ### Equality
 
@@ -84,7 +84,7 @@ The `Eq` typeclass instance uses `=` for both sides:
 ```turmeric
 (eq? (ok 1) (ok 1))   ;; => true
 (eq? (ok 1) (err 1))  ;; => false
-```
+```turmeric
 
 ### Option interop
 
@@ -100,7 +100,7 @@ The `Eq` typeclass instance uses `=` for both sides:
 (result-partition  vec)    ;; -> pair; separate ok and err elements
 (result-partition-ok  pair)  ;; -> vec of ok values from the pair
 (result-partition-err pair)  ;; -> vec of err values from the pair
-```
+```turmeric
 
 ### Memory
 
@@ -133,7 +133,7 @@ An option is either `(some value)` or `(none)`. `none` is represented as `NULL`.
 ```turmeric
 (some 42)    ;; some option
 (none)       ;; none option (NULL)
-```
+```turmeric
 
 ### Predicates
 
@@ -147,7 +147,7 @@ An option is either `(some value)` or `(none)`. `none` is represented as `NULL`.
 (option-unwrap o)            ;; value, or exit(1) with message to stderr
 (option-must   o)            ;; value, or panic "option-must: called on none"
 (option-expect o "message")  ;; value, or panic with "message"
-```
+```turmeric
 
 > **Note:** `option-unwrap` calls `exit(1)` directly. Prefer `option-must` /
 > `option-expect` for consistent panic semantics.
@@ -164,7 +164,7 @@ An option is either `(some value)` or `(none)`. `none` is represented as `NULL`.
 (option-eq? o1 o2 cmp-fn)
 ;; cmp-fn -- fn [a b :int] :bool
 ;; => true if both none, or both some with cmp-fn returning true
-```
+```text
 
 The `Eq` typeclass instance uses `=` for the contained value.
 
@@ -191,7 +191,7 @@ The `Eq` typeclass instance uses `=` for the contained value.
 
 ```turmeric
 (panic "something went wrong")
-```
+```text
 
 This prints `panic: something went wrong` to stderr and calls `abort()`.
 
@@ -234,7 +234,7 @@ These are the underlying functions used by `must!` and `must-msg!`:
 (option-must   (none))                  ;; panic: option-must: called on none
 (option-expect (some 42) "want value")  ;; => 42
 (option-expect (none)    "want value")  ;; panic: want value
-```
+```turmeric
 
 ---
 
@@ -272,7 +272,7 @@ condition holds:
 
 (assert-msg! (= x 1) "x must be 1")
 ;; panics with "x must be 1" if x != 1
-```
+```turmeric
 
 ### `require!` and `require-msg!`
 
@@ -299,7 +299,7 @@ Postcondition check before returning from a function:
     (ensure! (>= result 0))
     result))
 ;; panics with "Postcondition failed" if the result is somehow negative
-```
+```turmeric
 
 ### `invariant!` and `invariant-msg!`
 

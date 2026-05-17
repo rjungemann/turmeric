@@ -27,7 +27,7 @@ For a conceptual walkthrough and worked examples, see the [STM Tutorial](stm-tut
 
 ;; Free when no longer needed (only when no transactions reference it)
 ;; (tvar/free counter)  ; called via inline C if needed
-```
+```turmeric
 
 `tvar/new` accepts any value; TVars are untyped at the Turmeric level.
 
@@ -69,7 +69,7 @@ All TVar access must happen inside `atomically`:
   (atomically
     (fn []
       (tvar/cas counter 99 100))))
-```
+```turmeric
 
 ## Retry
 
@@ -98,7 +98,7 @@ All TVar access must happen inside `atomically`:
     (or-else
       (fn [] (dequeue queue-a))
       (fn [] (dequeue queue-b)))))
-```
+```turmeric
 
 Both branches see the same transactional snapshot. If both retry, the outer transaction also retries.
 
@@ -158,7 +158,7 @@ Up to 32 defers per transaction; exceeding this panics.
     (fn []
       (when (not (nil? (tvar/read mv))) (retry))
       (tvar/write mv val))))
-```
+```turmeric
 
 ### TChan (unbounded FIFO)
 
@@ -191,7 +191,7 @@ Because `retry` and `or-else` work purely through the transaction's read set, an
   (fn []
     (transfer account-a account-b 30)
     (log-transfer account-a account-b 30)))
-```
+```turmeric
 
 This is the key advantage over locks: you can call sub-transactions without worrying about lock ordering.
 

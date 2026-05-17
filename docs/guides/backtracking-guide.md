@@ -35,7 +35,7 @@ classic nondeterministic/backtracking semantics with a familiar monadic API.
                  (mreturn x)
                  (mzero))))]
   (bt-print (run-backtrack evens)))
-```
+```text
 
 Output:
 ```
@@ -44,7 +44,7 @@ Output:
 6
 8
 10
-```
+```text
 
 ---
 
@@ -76,7 +76,7 @@ Use `run-backtrack-depth` when you only need the first N results:
 ```turmeric
 ;; Take only the first 5 solutions
 (bt-print (run-backtrack-depth all-solutions 5))
-```
+```turmeric
 
 You can also pass `--backtrack-depth N` to the compiler as a flag, which emits
 `#define BACKTRACK_DEPTH_DEFAULT N` in the generated C preamble — useful for
@@ -122,7 +122,7 @@ outside the monad boundary and the results are wrapped with `mreturn`:
                  (Choose [a b] k)
                  (resume k a))]   ;; always pick 'a'
     (bt-print result)))
-```
+```text
 
 See `tests/fixtures/backtrack-integration-effects/input.tur` for a complete
 working example.
