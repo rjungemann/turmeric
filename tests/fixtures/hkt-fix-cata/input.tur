@@ -1,0 +1,78 @@
+;; Phase S4: (Fix option) as a type -- Church-encoded Peano naturals.
+;;
+;; Natural numbers encoded as Fix option (Peano numerals):
+;;   none      = Zero
+;;   some(n)   = Succ(n)
+;;
+;; This test verifies:
+;;   1. (Fix option) compiles as a type in a definstance.
+;;   2. make-nat / cata-nat round-trip: cata-nat (make-nat n) = n.
+
+;; Declare Fix as a higher-kinded type constructor of kind (* -> *) -> *
+(deftype Fix [^f] (f (Fix f)))
+
+;; ---- Option helpers (inline C) ---------------------------------------------
+
+(defn __opt_some [x] :int
+  ```c
+  struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
+  r->is_some = true;
+  r->value = x;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(defn __opt_none [] :int
+  ```c return 0; ```)
+
+;; ---- Peano naturals as Fix option ------------------------------------------
+
+;; make-nat: build n-deep option nesting (the anamorphism)
+;;   make-nat 0 = none
+;;   make-nat n = some(make-nat(n-1))
+(defn make-nat [n] :int
+  (if (= n 0)
+    (__opt_none)
+    (__opt_some (make-nat (- n 1)))))
+
+;; cata-nat: catamorphism -- count depth of some-nesting
+;;   cata-nat none      = 0
+;;   cata-nat (some n)  = 1 + cata-nat n
+(defn cata-nat [n] :int
+  ```c
+  typedef struct { bool is_some; int64_t value; } opt_node;
+  int64_t count = 0;
+  opt_node *curr = (opt_node *)(intptr_t)n;
+  while (curr && curr->is_some) {
+      count++;
+      curr = (opt_node *)(intptr_t)(curr->value);
+  }
+  return count;
+  ```)
+
+;; ---- Container typeclass with (Fix option) instance ------------------------
+;;
+;; Declaring definstance Container [(Fix option)] exercises TY_APP:
+;;   Fix has kind (* -> *) -> *
+;;   option has kind * -> *
+;;   (Fix option) has kind *
+(defclass Container [^c]
+  (extract [container] :int))
+
+(definstance Container [(Fix option)]
+  (extract [container] (cata-nat container)))
+
+;; ---- Tests -----------------------------------------------------------------
+
+(defn main [] :int
+  (let [zero  (make-nat 0)]
+    (let [one   (make-nat 1)]
+      (let [two   (make-nat 2)]
+        (let [three (make-nat 3)]
+          (let [five  (make-nat 5)]
+            (do
+              (println (cata-nat zero))   ;; 0
+              (println (cata-nat one))    ;; 1
+              (println (cata-nat two))    ;; 2
+              (println (cata-nat three))  ;; 3
+              (println (cata-nat five))   ;; 5
+              0)))))))

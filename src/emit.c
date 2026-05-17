@@ -5219,6 +5219,16 @@ static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         TypeKind result = e->type.as.fn.result_kind;
         if (is_main) {
             buf_puts(file, "int");  /* C main must always return int */
+        } else if (result == TY_STRUCT) {
+            /* LT4: TY_STRUCT return types lower to the actual struct name in C.
+             * Avoid type_from_kind(TY_STRUCT) — see same note in Pass 1. */
+            const struct Type *rft = e->type.as.fn.result_full_type;
+            if (rft && rft->kind == TY_STRUCT && rft->as.struct_.def &&
+                rft->as.struct_.def->name) {
+                buf_puts(file, rft->as.struct_.def->name);
+            } else {
+                buf_puts(file, "int64_t");
+            }
         } else {
             buf_puts(file, type_c_name(type_from_kind(result)));
         }
@@ -5237,6 +5247,15 @@ static void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             /* ER4: function-typed parameters are passed as int64_t (opaque
              * function pointer) in Turmeric's calling convention. */
             buf_puts(file, "int64_t");
+        } else if (fd->param_types[i].kind == TY_STRUCT) {
+            /* LT4: struct params lower to the actual struct name in C.
+             * Avoid type_from_kind(TY_STRUCT) — see same note for return types. */
+            const StructDef *sd = fd->param_types[i].as.struct_.def;
+            if (sd && sd->name) {
+                buf_puts(file, sd->name);
+            } else {
+                buf_puts(file, "int64_t");
+            }
         } else {
             buf_puts(file, type_c_name(fd->param_types[i]));
         }
@@ -5610,7 +5629,23 @@ int emit_program(Buf *out, const Expr *program) {
             }
             if (e->type.kind == TY_FN) {
                 TypeKind result = e->type.as.fn.result_kind;
-                buf_puts(&fwd_decls, type_c_name(type_from_kind(result)));
+                /* LT4: TY_STRUCT return types lower to the actual struct name in C.
+                 * Avoid type_from_kind(TY_STRUCT) here — it produces a Type with a
+                 * zeroed def pointer; passing that large struct by value can trigger
+                 * UBSan false positives in debug builds.  Instead emit the name
+                 * directly from the fn_type's result_full_type if present, or fall
+                 * back to "int64_t" for opaque/unresolved struct types. */
+                if (result == TY_STRUCT) {
+                    const struct Type *rft = e->type.as.fn.result_full_type;
+                    if (rft && rft->kind == TY_STRUCT && rft->as.struct_.def &&
+                        rft->as.struct_.def->name) {
+                        buf_puts(&fwd_decls, rft->as.struct_.def->name);
+                    } else {
+                        buf_puts(&fwd_decls, "int64_t");
+                    }
+                } else {
+                    buf_puts(&fwd_decls, type_c_name(type_from_kind(result)));
+                }
             } else {
                 buf_puts(&fwd_decls, "void");
             }
@@ -5624,6 +5659,14 @@ int emit_program(Buf *out, const Expr *program) {
                 } else if (fd->param_types[j].kind == TY_FN) {
                     /* ER4: function-typed parameters are passed as int64_t. */
                     buf_puts(&fwd_decls, "int64_t");
+                } else if (fd->param_types[j].kind == TY_STRUCT) {
+                    /* LT4: struct params lower to the actual struct name. */
+                    const StructDef *sd = fd->param_types[j].as.struct_.def;
+                    if (sd && sd->name) {
+                        buf_puts(&fwd_decls, sd->name);
+                    } else {
+                        buf_puts(&fwd_decls, "int64_t");
+                    }
                 } else {
                     buf_puts(&fwd_decls, type_c_name(fd->param_types[j]));
                 }

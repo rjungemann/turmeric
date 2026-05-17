@@ -9,7 +9,7 @@
 > **Related:** [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md)
 > (§1 Linear Types, §3 Uniqueness Types, §4 Substructural Type Systems)
 >
-> **Last updated:** 2026-05-15
+> **Last updated:** 2026-05-17
 
 ---
 
@@ -149,10 +149,26 @@ src/error.h/.c      -- Error codes and messages
 - [x] In `elab_match`, propagate linearity from constructor field types to field bindings
 - [x] At match arm scope exit, verify all linear field bindings were consumed (`TUR_E0100`)
 - [x] `TUR_E0102`: emitted when a linear field (`lref<T>`) appears in a `:copy` struct
-- [ ] Detect copy of a linear variable at call sites (non-`:copy` struct with linear fields) -- requires
-  tracking when a linear-field struct is passed by value; deferred (needs deeper struct copy integration)
-- [ ] Move of a linear variable transfers ownership across branches -- requires control-flow-aware
-  linear tracking (both branches of `if` must consume exactly once, or neither); deferred
+- [x] **[prereq]** Audit struct copy paths in `elab_let` / call-site elaboration to enumerate every
+  code path where a struct value is duplicated (passed by value); document which paths need a
+  `copy_kind` check inserted.
+  **Findings:** The primary gap was in `elab_method_call`: field access `(.field s)` on a `:move`
+  struct did not call `binding_mark_moved`, allowing the same `lref<T>` field to be extracted
+  multiple times (double-ownership violation). The `elab_let` / `elab_call_fn` move-mark paths
+  only fire for direct `EX_VAR` initializers/arguments, not for `EX_GET_FIELD` sub-expressions.
+  `:linear` struct receivers are already safe (F_SYM marks `is_linear_consumed` on first use).
+- [x] Detect copy of a linear variable at call sites (non-`:copy` struct with linear fields):
+  `elab_method_call` (`src/elab.c`) now calls `binding_mark_moved` on the receiver binding when
+  extracting an `lref<T>` field from a CK_MOVE struct, preventing double-extraction.
+  Fixture: `errors/linear-lref-field-double-extract` -- TUR-E0005 emitted on second `(.val b)` call.
+- [x] **[prereq]** Design and implement branch-aware consumption sets in the elaborator: before
+  elaborating each arm of an `if` or `match`, snapshot the set of consumed linear bindings; after
+  elaborating all arms, verify the sets agree (each linear variable is consumed in every arm or in
+  none). Store the merged set as the post-branch consumed state.
+- [x] Move of a linear variable transfers ownership across branches -- control-flow-aware linear
+  tracking implemented; both branches of `if`/`match` must consume the same set of linear bindings.
+  Fixtures: `linear-if-consume-both`, `linear-if-consume-after`, `errors/linear-if-branch-mismatch`,
+  `errors/linear-match-branch-mismatch` -- all passing.
 
 ### Error codes
 
@@ -174,10 +190,14 @@ src/error.h/.c      -- Error codes and messages
 - [x] `arg_linear` propagated from `defn` param bindings into the function's `Type` at definition
 - [x] `arg_linear` stored on function types created from `(-> ^linear ...)` annotations
 - [x] Linear arg consumption at call sites: already handled by LT1 `F_SYM` consumption tracking
-- [ ] Subtyping: `(-> ^linear T R)` is not interchangeable with `(-> T R)` -- `arg_linear` flags are
-  stored but not enforced for subtyping at call sites; deferred (needs unified function subtyping pass)
+- [x] **[prereq]** Implement a `fn_type_subtype(a, b)` relation in `src/typecheck.c` that compares two
+  function types structurally, including their `arg_linear` arrays; return false when a linear param
+  in `b` is missing from `a`. Wire this into `type_unify` / call-site type checking so mismatched
+  linearity in higher-order positions is caught.
+- [x] Subtyping: `(-> ^linear T R)` is not interchangeable with `(-> T R)` -- enforced via
+  `fn_type_subtype` at call sites. Fixture: `errors/linear-fn-type-mismatch` -- passing.
 - [ ] Function composition with mixed linearity -- higher-order composition with mixed linear/non-linear
-  params not checked; deferred alongside subtyping
+  params not checked; deferred alongside subtyping (also needs `fn_type_subtype`)
 
 ---
 
@@ -203,26 +223,44 @@ src/error.h/.c      -- Error codes and messages
 
 **Goal:** Update the stdlib, error UX, and performance.
 
-- [ ] Mark stdlib resource types as `lref<T>` / `CK_LINEAR`:
-  - `FileHandle`, `Socket`, `MutexGuard` -- deferred; these types do not yet exist in the
-    current stdlib (`io.tur` uses raw `ptr<void>`; `net.tur` and `concurrent.tur` are absent).
-    Will be addressed when those types are introduced.
-- [x] Fixture tests: 12 fixtures, all passing
+- [x] **[prereq]** Define `FileHandle` as a named `:linear` struct wrapping `ptr<void>` in `stdlib/io.tur`,
+  replacing the current raw-pointer usage; expose `file-open`, `file-read`, `file-close` in terms
+  of it. This must land before the `lref<T>` annotation can be added.
+- [x] **[prereq]** Create `stdlib/net.tur` with at least a stub `Socket` struct (wrapping a file
+  descriptor `int`) and `stdlib/concurrent.tur` with at least a stub `MutexGuard` struct; these
+  files must exist for the `lref<T>` annotation items to be actionable.
+- [x] Mark stdlib resource types as `:linear` / `CK_LINEAR`:
+  - `FileHandle`, `Socket`, `MutexGuard` -- implemented via new `:linear` defstruct annotation.
+  - Compiler change: `elab_defstruct` recognizes `:linear`; `StructDef.is_linear` field added;
+    `type_struct()` emits `CK_LINEAR`; `emit.c` emits struct names for struct-typed params/results.
+- [x] Fixture tests: 21 fixtures, all passing
   - Happy-path: `linear-basic`, `linear-fn-param`, `linear-fn-type`, `linear-lref-propagation`,
-    `linear-lref-param-kw`, `linear-lref-type-ann`, `linear-lref-struct-field`
+    `linear-lref-param-kw`, `linear-lref-type-ann`, `linear-lref-struct-field`,
+    `linear-if-consume-both`, `linear-if-consume-after`,
+    `linear-effect-handler`, `linear-stm`, `linear-ffi`
   - Error fixtures: `errors/linear-dropped`, `errors/linear-param-dropped`,
-    `errors/linear-use-after-consume`, `errors/linear-in-rc`, `errors/linear-lref-dropped`
+    `errors/linear-use-after-consume`, `errors/linear-in-rc`, `errors/linear-lref-dropped`,
+    `errors/linear-fn-type-mismatch`, `errors/linear-if-branch-mismatch`,
+    `errors/linear-match-branch-mismatch`, `errors/linear-lref-field-double-extract`
 - [x] `tur --explain TUR-E0100` / `TUR-E0101` / `TUR-E0102` / `TUR-E0103` -- all in `src/diag.c`
 - [x] Integration fixes:
   - `:lref` keyword accepted as param type and return type in `defn`
   - `: (lref T)` type-annotation form propagates `is_linear` to the binding
   - `lref<T>` fields permitted in `:move` structs (E0102 now only fires for `:copy`)
   - `TY_LREF` added to struct field accessor type reconstruction (`elab_method_call`)
-- [ ] Linear type annotation in generated docs (`just docs`) -- `gendocs.py` does not yet
-  recognise `^linear` or `lref<T>`; deferred until doc tooling work is prioritised
+- [x] **[prereq]** Extend `tools/gendocs.py` to recognise `^linear` in parameter annotations and
+  `lref<T>` in type expressions: emit a `<span class="linear">linear</span>` badge in the HTML
+  output and include the annotation text in the plain-text summary line. Also detects `:linear`
+  struct annotation and emits a `.linear-badge` CSS badge. Fixed `_parse_params` bug where
+  bare `ptr` field names were mistaken for type tokens.
+- [x] Linear type annotation in generated docs (`just docs`) -- needs gendocs.py prereq above
 - [ ] Performance benchmarks: measure elaborator overhead from consumption tracking -- deferred
-- [ ] Integration tests: linear values with effects, STM, FFI -- basic struct/param/annotation
-  scenarios covered; effect-handler and STM interactions not yet tested; deferred
+- [x] **[prereq]** Write fixture skeletons (`.tur` + expected output) for each integration scenario:
+  (a) `tests/fixtures/linear-effect-handler` -- `^linear x` binding survives an effect perform/resume
+  boundary (passes, output: 42); (b) `tests/fixtures/linear-stm` -- `^linear token` coexists with
+  `tvar/new` outside a transaction (passes, output: 99); (c) `tests/fixtures/linear-ffi` -- `^linear`
+  binding consumed by passing it as argument to an inline-C function (passes, output: 77).
+- [x] Integration tests: linear values with effects, STM, FFI -- all three fixture skeletons pass
 
 ---
 

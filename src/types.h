@@ -182,6 +182,7 @@ typedef struct StructDef {
     uint32_t n_fields;
     StructField *fields;    /* field array (malloc'd) */
     bool is_copy;           /* :copy annotation */
+    bool is_linear;         /* LT4: :linear annotation -- exactly-once (CK_LINEAR) */
     bool needs_drop_glue;   /* true if any field is rc/ref/weak */
     /* Phase HKT-P4: file that defined this struct (for orphan instance check).
      * file_id mirrors Span.file_id; 0 means unknown/builtin. */
@@ -668,11 +669,11 @@ static inline Type type_cloneable_cont(TypeKind returns) {
 
 /* Phase 11: Struct type constructor */
 /* Create a TY_STRUCT type referencing the given StructDef.
- * copy_kind is taken from def->is_copy. */
+ * copy_kind is CK_LINEAR for :linear structs, CK_COPY for :copy, CK_MOVE otherwise. */
 static inline Type type_struct(StructDef *def) {
     Type t = {0};
     t.kind = TY_STRUCT;
-    t.copy_kind = def->is_copy ? CK_COPY : CK_MOVE;
+    t.copy_kind = def->is_linear ? CK_LINEAR : (def->is_copy ? CK_COPY : CK_MOVE);
     t.hkt_kind = KIND_STAR;
     t.as.struct_.def = def;
     return t;
@@ -698,6 +699,10 @@ static inline Type type_tyvar_named(const char *name) {
 }
 
 int          type_eq(Type a, Type b);
+/* LT2: Check arg_linear compatibility between two function types.
+ * Returns 1 if compatible (all arg_linear flags match), 0 on mismatch.
+ * Non-function types always return 1. */
+int          fn_type_subtype(Type actual, Type expected);
 const char  *type_name(Type t);                   /* "int", "bool", … */
 const char  *type_c_name(Type t);                 /* "int64_t", "bool", … */
 /* Phase HRT0: compute the rank of a type (0 = monotype, 1 = rank-1, ≥2 = higher-ranked) */

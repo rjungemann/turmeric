@@ -755,6 +755,7 @@ typedef struct Elab {
     const Symbol *sym_make_struct; /* make-struct */
     const Symbol *kw_copy;        /* :copy keyword for defstruct */
     const Symbol *kw_move;        /* :move keyword for defstruct */
+    const Symbol *kw_linear;      /* LT4: :linear keyword for defstruct (exactly-once) */
     /* Phase 12: Borrow traits */
     const Symbol *sym_borrow;      /* & symbol for immutable borrow */
     const Symbol *sym_borrow_mut;  /* &mut for mutable borrow */
@@ -1098,6 +1099,63 @@ static void move_state_restore(Binding **bindings, const bool *states, uint32_t 
     }
 }
 
+/* LT1: Parallel helpers for is_linear_consumed state across branches.
+ * Only linear bindings (is_linear == true) are included in the snapshot. */
+
+static uint32_t linear_state_snapshot_bindings(const Scope *scope,
+                                                Binding ***out_bindings,
+                                                bool **out_states) {
+    uint32_t n = 0;
+    uint32_t cap = 16;
+    Binding **bindings = (Binding **)malloc(cap * sizeof(Binding *));
+    bool *states = (bool *)malloc(cap * sizeof(bool));
+    if (!bindings || !states) {
+        fprintf(stderr, "tur: oom\n");
+        abort();
+    }
+
+    for (const Scope *cur = scope; cur; cur = cur->parent) {
+        for (uint32_t i = 0; i < cur->n; i++) {
+            Binding *b = cur->bindings[i];
+            if (!b->is_linear) continue;
+            if (n == cap) {
+                cap *= 2;
+                bindings = (Binding **)realloc(bindings, cap * sizeof(Binding *));
+                states = (bool *)realloc(states, cap * sizeof(bool));
+                if (!bindings || !states) {
+                    fprintf(stderr, "tur: oom\n");
+                    abort();
+                }
+            }
+            bindings[n] = b;
+            states[n] = b->is_linear_consumed;
+            n++;
+        }
+    }
+
+    *out_bindings = bindings;
+    *out_states = states;
+    return n;
+}
+
+static bool *linear_state_capture_current(Binding **bindings, uint32_t n) {
+    bool *states = (bool *)malloc((n == 0 ? 1 : n) * sizeof(bool));
+    if (!states) {
+        fprintf(stderr, "tur: oom\n");
+        abort();
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        states[i] = bindings[i]->is_linear_consumed;
+    }
+    return states;
+}
+
+static void linear_state_restore(Binding **bindings, const bool *states, uint32_t n) {
+    for (uint32_t i = 0; i < n; i++) {
+        bindings[i]->is_linear_consumed = states[i];
+    }
+}
+
 /* Check if an RC binding is consumed by ref/from-rc or explicitly dropped via rc/drop.
  * Returns true if the binding is consumed (should skip auto-drop to avoid double-free). */
 static bool is_rc_binding_consumed(const Expr *body, Binding *binding) {
@@ -1370,6 +1428,7 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_make_struct = intern_cstr(st, "make-struct");
     e->kw_copy = intern_cstr(st, "copy");
     e->kw_move = intern_cstr(st, "move");
+    e->kw_linear = intern_cstr(st, "linear"); /* LT4 */
     /* Phase 11: struct registry */
     e->struct_defs = NULL;
     e->n_struct_defs = 0;
@@ -4039,16 +4098,37 @@ static Expr *elab_if(Elab *e, const Form *call) {
     bool *before_states = NULL;
     uint32_t n_move_bindings = move_state_snapshot_bindings(e->scope, &move_bindings, &before_states);
 
+    /* LT1: Snapshot linear consumption state before branches. */
+    Binding **lin_bindings = NULL;
+    bool *lin_before = NULL;
+    uint32_t n_lin = 0;
+    if (g_linear_enabled) {
+        n_lin = linear_state_snapshot_bindings(e->scope, &lin_bindings, &lin_before);
+    }
+
     Expr *then_ = elab_form(e, call->as.list.items[2]);
     if (!then_) {
         free(move_bindings);
         free(before_states);
+        free(lin_bindings);
+        free(lin_before);
         return NULL;
     }
     bool *then_states = move_state_capture_current(move_bindings, n_move_bindings);
 
+    /* LT1: Capture linear consumption state after then-branch. */
+    bool *lin_then = NULL;
+    if (g_linear_enabled && n_lin > 0) {
+        lin_then = linear_state_capture_current(lin_bindings, n_lin);
+    }
+
     /* Rewind to pre-branch move-state before elaborating else branch. */
     move_state_restore(move_bindings, before_states, n_move_bindings);
+
+    /* LT1: Rewind linear consumption state before elaborating else branch. */
+    if (g_linear_enabled && n_lin > 0) {
+        linear_state_restore(lin_bindings, lin_before, n_lin);
+    }
 
     Expr *else_ = NULL;
     Type result_t = TYPE_NIL;
@@ -4059,6 +4139,9 @@ static Expr *elab_if(Elab *e, const Form *call) {
             free(then_states);
             free(move_bindings);
             free(before_states);
+            free(lin_then);
+            free(lin_bindings);
+            free(lin_before);
             return NULL;
         }
         bool *else_states = move_state_capture_current(move_bindings, n_move_bindings);
@@ -4084,6 +4167,47 @@ static Expr *elab_if(Elab *e, const Form *call) {
                         (else_->kind == EX_RETURN) ||
                         (else_->kind == EX_PANIC)  ||
                         (else_->kind == EX_PANIC_WITH);
+
+        /* LT1: Capture linear state after else, check for branch mismatch, merge. */
+        if (g_linear_enabled && n_lin > 0) {
+            bool *lin_else = linear_state_capture_current(lin_bindings, n_lin);
+            bool lin_ok = true;
+            for (uint32_t i = 0; i < n_lin; i++) {
+                if (lin_before[i]) continue; /* already consumed before if; fine */
+                /* Skip mismatch check for diverging branches. */
+                if (!then_div && !else_div && lin_then[i] != lin_else[i]) {
+                    diag_emit_with_code(DIAG_ERROR, call->span,
+                                        TUR_E0104_LINEAR_BRANCH_MISMATCH,
+                                        "linear value '%s' consumed in one branch but not the other"
+                                        " -- consume it in both branches or neither",
+                                        lin_bindings[i]->name->name);
+                    lin_ok = false;
+                }
+                /* Merge: use surviving branch's consumed state. */
+                bool merged;
+                if (then_div && else_div) {
+                    merged = false; /* both diverge; treat as unconsumed */
+                } else if (then_div) {
+                    merged = lin_else[i];
+                } else if (else_div) {
+                    merged = lin_then[i];
+                } else {
+                    merged = lin_then[i] && lin_else[i];
+                }
+                lin_bindings[i]->is_linear_consumed = merged;
+            }
+            free(lin_else);
+            if (!lin_ok) {
+                free(then_states);
+                free(move_bindings);
+                free(before_states);
+                free(lin_then);
+                free(lin_bindings);
+                free(lin_before);
+                return NULL;
+            }
+        }
+
         if (then_div && else_div) {
             result_t = then_->type;  /* both diverge; pick either */
         } else if (then_div) {
@@ -4094,6 +4218,9 @@ static Expr *elab_if(Elab *e, const Form *call) {
             free(then_states);
             free(move_bindings);
             free(before_states);
+            free(lin_then);
+            free(lin_bindings);
+            free(lin_before);
             diag_emit(DIAG_ERROR, call->span,
                       "if branches have mismatched types: then=%s else=%s",
                       type_name(then_->type), type_name(else_->type));
@@ -4104,11 +4231,19 @@ static Expr *elab_if(Elab *e, const Form *call) {
     } else {
         /* Without else, then-branch moves are not guaranteed after the if. */
         move_state_restore(move_bindings, before_states, n_move_bindings);
+        /* LT1: Without else, then-branch linear consumption is not guaranteed;
+         * restore to the pre-if state so scope-exit checking fires if needed. */
+        if (g_linear_enabled && n_lin > 0) {
+            linear_state_restore(lin_bindings, lin_before, n_lin);
+        }
     }
 
     free(then_states);
     free(move_bindings);
     free(before_states);
+    free(lin_then);
+    free(lin_bindings);
+    free(lin_before);
 
     /* If no else, the if is a statement-style branch with type nil
      * (matches Clojure's behavior of returning nil for a missing else). */
@@ -6421,6 +6556,12 @@ static Expr *elab_defn(Elab *e, const Form *call) {
                 /* Plain function type annotation */
                 param_kinds[n_params - 1] = TY_FN;
                 params[n_params - 1]->type = *ann;
+                /* LT2: For function-typed parameters, store full type in param_poly_types
+                 * so it propagates into arg_full_types for linearity subtyping checks
+                 * at call sites (-Xlinear). */
+                if (g_linear_enabled) {
+                    param_poly_types[n_params - 1] = ann;
+                }
             } else {
                 /* Other type annotation — use the kind */
                 param_kinds[n_params - 1] = ann->kind;
@@ -6608,6 +6749,7 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     /* body_start is the index of the first element after params (could be return type or body) */
     TypeKind return_kind = TY_NIL;
     AdtDef *return_adt_def = NULL; /* Phase G3: set when return type is an ADT name */
+    StructDef *return_struct_def = NULL; /* LT4: set when return type is a struct name */
     uint32_t body_start = name_idx + 2;  /* name_idx + 1 = params, +1 = after params */
 
     /* Phase 19: Parse optional effect-row annotation #{Read Write} or #{e} before return type.
@@ -6697,7 +6839,17 @@ static Expr *elab_defn(Elab *e, const Form *call) {
                             break;
                         }
                     }
+                    /* LT4: Try to look up as struct name */
                     if (!return_adt_def) {
+                        for (uint32_t si = 0; si < e->n_struct_defs; si++) {
+                            if (strcmp(e->struct_defs[si]->name, kw->name) == 0) {
+                                return_struct_def = e->struct_defs[si];
+                                return_kind = TY_STRUCT;
+                                break;
+                            }
+                        }
+                    }
+                    if (!return_adt_def && !return_struct_def) {
                         if (g_gadt_enabled) {
                             /* Phase HRT/G2: Unknown return type keyword -- named type variable.
                              * e.g., :a means the function returns the type variable a.
@@ -6864,6 +7016,19 @@ static Expr *elab_defn(Elab *e, const Form *call) {
         *rft = type_adt(return_adt_def);
         fn_type.as.fn.result_full_type = rft;
     }
+    /* LT4: attach full struct return type if declared.
+     * Stored so that emit.c can retrieve the StructDef (and hence the struct name)
+     * without going through type_from_kind, which doesn't carry the def pointer. */
+    if (return_struct_def) {
+        Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
+        memset(rft, 0, sizeof(Type));   /* fully zero before writing fields */
+        rft->kind = TY_STRUCT;
+        rft->copy_kind = return_struct_def->is_linear ? CK_LINEAR
+                       : (return_struct_def->is_copy ? CK_COPY : CK_MOVE);
+        rft->hkt_kind = KIND_STAR;
+        rft->as.struct_.def = return_struct_def;
+        fn_type.as.fn.result_full_type = rft;
+    }
 
     /* Phase HRT1: attach full poly types for rank-2 params */
     {
@@ -6975,11 +7140,16 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     }
     /* Store param types for codegen.
      * For TY_FN params (annotated with :(fn [...] #{...} :type)), use the full
-     * binding type which preserves the result kind and effect row.  For all
-     * other kinds, fall back to type_from_kind which is sufficient. */
+     * binding type which preserves the result kind and effect row.
+     * For TY_STRUCT params, use the binding type which preserves the StructDef
+     * pointer (needed so emit.c can emit the struct name in the C signature).
+     * For all other kinds, fall back to type_from_kind which is sufficient. */
     fd->param_types = (Type *)arena_alloc(e->arena, n_params * sizeof(Type));
     for (uint8_t i = 0; i < n_params; i++) {
         if (param_kinds[i] == TY_FN && params[i]->type.kind == TY_FN) {
+            fd->param_types[i] = params[i]->type;
+        } else if (param_kinds[i] == TY_STRUCT && params[i]->type.kind == TY_STRUCT) {
+            /* LT4: preserve StructDef so emit.c emits the struct name, not int64_t. */
             fd->param_types[i] = params[i]->type;
         } else {
             fd->param_types[i] = type_from_kind(param_kinds[i]);
@@ -8874,6 +9044,30 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             args[i] = inject;
         }
 
+        /* LT2: When both expected and actual argument types are function types,
+         * verify that their arg_linear flags match.  This catches attempts to
+         * pass a (-> T R) function where (-> ^linear T R) is required (or vice
+         * versa) in higher-order call positions. */
+        if (arg_ok && g_linear_enabled &&
+            expected_arg_kind == TY_FN && args[i]->type.kind == TY_FN) {
+            uint32_t fn_arg_idx_lt2 = fn_binding->closure_fn_binding ? i + 1 : i;
+            if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types &&
+                fn_arg_idx_lt2 < fn_type.as.fn.arity) {
+                const Type *expected_fn = fn_type.as.fn.arg_full_types[fn_arg_idx_lt2];
+                if (expected_fn && expected_fn->kind == TY_FN &&
+                    !fn_type_subtype(args[i]->type, *expected_fn)) {
+                    diag_emit_with_code(DIAG_ERROR, args[i]->span,
+                                        TUR_E0001_TYPE_MISMATCH,
+                                        "function '%s' arg %u: linear function type mismatch"
+                                        " -- expected %s but got a function with different"
+                                        " linearity annotations; ^linear parameters must match exactly",
+                                        fn_binding->name->name, i + 1,
+                                        type_name(*expected_fn));
+                    return NULL;
+                }
+            }
+        }
+
         if (!arg_ok) {
             /* Phase 8: Enhanced type mismatch with error code */
             /* IT1: Use union-specific error code when union type is involved */
@@ -10324,10 +10518,11 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
     }
     const Symbol *name = name_form->as.sym;
     
-    /* Check for optional :copy / :move annotation */
+    /* Check for optional :copy / :move / :linear annotation */
     bool is_copy = false;
+    bool is_linear = false;
     uint32_t fields_start_idx = 2;
-    
+
     if (call->as.list.len >= 3) {
         Form *kw_form = call->as.list.items[2];
         if (kw_form->tag == F_KEYWORD && kw_form->as.sym == e->kw_copy) {
@@ -10335,6 +10530,10 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
             fields_start_idx = 3;
         } else if (kw_form->tag == F_KEYWORD && kw_form->as.sym == e->kw_move) {
             is_copy = false;
+            fields_start_idx = 3;
+        } else if (kw_form->tag == F_KEYWORD && kw_form->as.sym == e->kw_linear) {
+            /* LT4: :linear structs are exactly-once (CK_LINEAR). */
+            is_linear = true;
             fields_start_idx = 3;
         }
     }
@@ -10417,6 +10616,7 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
         def->n_fields = actual_n_fields;
         def->fields = (StructField *)arena_alloc(e->arena, actual_n_fields * sizeof(StructField));
         def->is_copy = is_copy;
+        def->is_linear = is_linear; /* LT4 */
         def->needs_drop_glue = false;
         def->origin_file_id = call->span.file_id;
         /* Already in global scope and elab registry from the pre-pass */
@@ -10426,6 +10626,7 @@ static Expr *elab_defstruct(Elab *e, const Form *call) {
         def->n_fields = actual_n_fields;
         def->fields = (StructField *)arena_alloc(e->arena, actual_n_fields * sizeof(StructField));
         def->is_copy = is_copy;
+        def->is_linear = is_linear; /* LT4 */
         def->needs_drop_glue = false;
         /* Phase HKT-P4: record the file that defined this struct. */
         def->origin_file_id = call->span.file_id;
@@ -11518,6 +11719,22 @@ static Expr *elab_match(Elab *e, const Form *call) {
 
     Type result_type = TYPE_UNKNOWN;
 
+    /* LT1: Snapshot outer-scope linear consumed state before match arms.
+     * We restore before each arm's body and verify consistency across arms at the end. */
+    Binding **match_lin_bindings = NULL;
+    bool *match_lin_before = NULL;
+    uint32_t n_match_lin = 0;
+    bool **arm_lin_states = NULL;
+    bool *arm_diverges = NULL;
+    if (g_linear_enabled) {
+        n_match_lin = linear_state_snapshot_bindings(e->scope, &match_lin_bindings,
+                                                     &match_lin_before);
+        if (n_match_lin > 0) {
+            arm_lin_states = (bool **)calloc(n_arms, sizeof(bool *));
+            arm_diverges   = (bool  *)calloc(n_arms, sizeof(bool));
+        }
+    }
+
     for (uint32_t ai = 0; ai < n_arms; ai++) {
         uint32_t base = arm_start[ai];
         Form *pat_form = call->as.list.items[base];
@@ -11545,8 +11762,21 @@ static Expr *elab_match(Elab *e, const Form *call) {
                 has_wildcard = true; /* covers all remaining */
             }
             /* No new scope needed; elaborate body directly */
+            /* LT1: Restore outer linear state before this arm's body. */
+            if (g_linear_enabled && n_match_lin > 0) {
+                linear_state_restore(match_lin_bindings, match_lin_before, n_match_lin);
+            }
             Expr *body = elab_form(e, body_form);
             if (!body) { free(covered); return NULL; }
+            /* LT1: Capture outer linear state after this arm's body. */
+            if (g_linear_enabled && n_match_lin > 0) {
+                arm_lin_states[ai] = linear_state_capture_current(match_lin_bindings, n_match_lin);
+                arm_diverges[ai] = (body->type.kind == TY_NEVER) ||
+                                   (body->kind == EX_RETURN) ||
+                                   (body->kind == EX_PANIC)  ||
+                                   (body->kind == EX_PANIC_WITH);
+                linear_state_restore(match_lin_bindings, match_lin_before, n_match_lin);
+            }
             /* Phase G0: Arm body type consistency check for wildcard/variable arms. */
             if (result_type.kind != TY_UNKNOWN
                     && body->type.kind != TY_UNKNOWN
@@ -11666,6 +11896,10 @@ static Expr *elab_match(Elab *e, const Form *call) {
                 pat->bindings[bi] = fb;
             }
 
+            /* LT1: Restore outer linear state before this arm's body. */
+            if (g_linear_enabled && n_match_lin > 0) {
+                linear_state_restore(match_lin_bindings, match_lin_before, n_match_lin);
+            }
             Expr *body = elab_form(e, body_form);
 
             /* Phase G4: Elaborate optional when-guard while arm scope is still live */
@@ -11800,11 +12034,59 @@ static Expr *elab_match(Elab *e, const Form *call) {
             arms[ai].body = body;
             arms[ai].guard = guard_expr;
             if (result_type.kind == TY_UNKNOWN) result_type = body->type;
+            /* LT1: Capture outer linear state after this arm's body. */
+            if (g_linear_enabled && n_match_lin > 0) {
+                arm_lin_states[ai] = linear_state_capture_current(match_lin_bindings, n_match_lin);
+                arm_diverges[ai] = (body->type.kind == TY_NEVER) ||
+                                   (body->kind == EX_RETURN) ||
+                                   (body->kind == EX_PANIC)  ||
+                                   (body->kind == EX_PANIC_WITH);
+                linear_state_restore(match_lin_bindings, match_lin_before, n_match_lin);
+            }
         } else {
             diag_emit(DIAG_ERROR, pat_form->span,
                       "match: pattern must be a constructor list or _ wildcard");
             free(covered); return NULL;
         }
+    }
+
+    /* LT1: Verify consistent outer-scope linear consumption across match arms */
+    if (g_linear_enabled && n_match_lin > 0 && arm_lin_states) {
+        /* Find the first non-diverging arm as the reference. */
+        int ref_ai = -1;
+        for (uint32_t ai = 0; ai < n_arms; ai++) {
+            if (arm_lin_states[ai] && !arm_diverges[ai]) {
+                ref_ai = (int)ai; break;
+            }
+        }
+        bool lin_ok = true;
+        if (ref_ai >= 0) {
+            for (uint32_t ai = (uint32_t)(ref_ai + 1); ai < n_arms; ai++) {
+                if (!arm_lin_states[ai] || arm_diverges[ai]) continue;
+                for (uint32_t li = 0; li < n_match_lin; li++) {
+                    if (!match_lin_before[li] &&
+                        arm_lin_states[ai][li] != arm_lin_states[ref_ai][li]) {
+                        diag_emit_with_code(DIAG_ERROR, call->span,
+                                            TUR_E0104_LINEAR_BRANCH_MISMATCH,
+                                            "linear value '%s' consumed in some match arms but "
+                                            "not others -- consume it in all arms or none",
+                                            match_lin_bindings[li]->name->name);
+                        lin_ok = false;
+                    }
+                }
+            }
+        }
+        /* Merge: consumed after match only if all non-diverging arms consumed it. */
+        for (uint32_t li = 0; li < n_match_lin; li++) {
+            match_lin_bindings[li]->is_linear_consumed =
+                (ref_ai >= 0) ? arm_lin_states[ref_ai][li] : false;
+        }
+        for (uint32_t ai = 0; ai < n_arms; ai++) free(arm_lin_states[ai]);
+        free(arm_lin_states);
+        free(arm_diverges);
+        free(match_lin_before);
+        free(match_lin_bindings);
+        if (!lin_ok) { free(covered); return NULL; }
     }
 
     /* Exhaustiveness check */
@@ -15515,6 +15797,15 @@ static Expr *elab_method_call(Elab *e, const Form *call) {
                     out->as.get_field_.struct_expr = obj;
                     out->as.get_field_.field_idx = i;
                     out->as.get_field_.def = def;
+                    /* LT1/T3: Extracting an lref<T> field from a :move struct transfers
+                     * linear ownership of that field out of the struct.  Mark the struct
+                     * binding as moved so a second extraction of the same field triggers
+                     * TUR_E0005 (use-after-move).  :linear struct receivers are already
+                     * handled by the F_SYM is_linear_consumed path above. */
+                    if (g_linear_enabled && fkind == TY_LREF &&
+                            obj->kind == EX_VAR && type_is_move(obj->as.var.binding->type)) {
+                        binding_mark_moved(obj->as.var.binding, call->span);
+                    }
                     return out;
                 }
             }

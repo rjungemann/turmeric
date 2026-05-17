@@ -84,6 +84,7 @@ prerequisites in this order to unblock the most downstream work as early as poss
 - [x] **interp.c / ct_eval** — `:when` keyword sentinel handled via `(= first-b :when)` comparison in pure-`if` macro body (no special ct_eval changes needed)
 - [x] **stdlib/typeclass.tur** — `Alternative.empty` signature updated to `(empty [a] :int)` to allow dispatch via type-witness argument
 - [x] **tests/fixtures/hkt-for-comprehension/** — new fixture: basic for, none propagation, `:when` pass, `:when` fail; all tests pass
+- [x] **tests/fixtures/hkt-for-comprehension-vec/** — vec monad fixture: `(for [x [1 2 3]] (* x 2))` => [2 4 6]; `(for [x [1 2 3] :when (> x 1)] x)` => [2 3]; both pass
 
 ### §8 — Benchmark harness (unblocked after §1)
 
@@ -437,31 +438,29 @@ variables, requiring multi-capture closures (§5).
 
 **Prerequisites:**
 
-- [ ] **§5 (multi-capture closures)** — each `fn` in the desugared chain captures all
+- [x] **§5 (multi-capture closures)** — each `fn` in the desugared chain captures all
   previously-bound variables.
 
-- [ ] **`Alternative` / `MonadPlus` typeclass** — define in `stdlib/typeclass.tur`:
-  ```lisp
-  (defclass Alternative [^f]
-    (empty  [] :int)
-    (alt-or [a b] :int))
-  ```
-  Instances: `option` (`empty` = `none`), `vec` (`empty` = `[]`).
+- [x] **`Alternative` / `MonadPlus` typeclass** — defined in `stdlib/typeclass.tur`:
+  `Alternative [^f]` with `empty` and `alt-or`; option and vec instances in
+  `stdlib/option.tur` and `stdlib/vec.tur`.
 
-- [ ] **`for` macro desugaring** — implement in `stdlib/macros.tur`. The macro
+- [x] **`for` macro desugaring** — implemented in `stdlib/macros.tur`. The macro
   processes the binding vector recursively:
   - `[x expr & rest] body` → `(bind expr (fn [x] (for [& rest] body)))`
-  - `[:when pred & rest] body` → `(if pred (for [& rest] body) (empty))`
+  - `[:when pred & rest] body` → `(if pred (for [& rest] body) (empty x))`
   - `[] body` → `(pure body)`
 
-- [ ] **CT evaluator `:when` keyword handling** — the CT evaluator must recognise
-  `:when` as a keyword sentinel (not a type annotation) inside the `for` binding
-  vector. Add a branch in `ct_eval_builtin`'s vector-walking logic.
+- [x] **CT evaluator `:when` keyword handling** — handled via `(= first-b :when)`
+  comparison in the macro body; no special ct_eval changes needed.
 
 **Acceptance criteria:**
-- [ ] `(for [x (vec 1 2 3)] (* x 2))` → `(vec 2 4 6)`.
-- [ ] `(for [x (vec 1 2 3) :when (> x 1)] x)` → `(vec 2 3)`.
-- [ ] A new fixture `hkt-for-comprehension.tur` passes.
+- [x] `(for [x (vec 1 2 3)] (* x 2))` → `(vec 2 4 6)`.
+  - Confirmed: `hkt-for-comprehension-vec` T1 prints len=3, elements 2 4 6.
+- [x] `(for [x (vec 1 2 3) :when (> x 1)] x)` → `(vec 2 3)`.
+  - Confirmed: `hkt-for-comprehension-vec` T2 prints len=2, elements 2 3.
+- [x] A new fixture `hkt-for-comprehension.tur` passes.
+  - Confirmed: `hkt-for-comprehension` (option) and `hkt-for-comprehension-vec` (vec) both pass.
 
 ---
 
@@ -481,21 +480,18 @@ first-match dispatch would not reflect the real dictionary-passing cost.
 
 **Prerequisites:**
 
-- [ ] **§1 (dictionary passing)** — required to have something meaningful to measure.
+- [x] **§1 (dictionary passing)** — required to have something meaningful to measure.
 
-- [ ] **Benchmark harness** — add a `benchmarks/` directory with a `run-benchmarks.sh`
-  script analogous to `tests/run.sh`. Each benchmark is a `.tur` file + an
-  `expected.time` upper bound in milliseconds (used as a soft ceiling in CI).
+- [x] **Benchmark harness** — `benchmarks/` directory with `run-benchmarks.sh` runner
+  and `fmap-vec.tur` / `bind-option.tur` benchmark files.
 
-- [ ] **Baseline** — capture the monomorphic direct-call baseline (non-HKT equivalent
-  of the benchmark) to compute the overhead ratio.
+- [x] **Baseline** — monomorphic baselines in `fmap-vec-baseline.c` and
+  `bind-option-baseline.c`; overhead ratio computed and written to `benchmark-results.md`.
 
 **Acceptance criteria:**
-- [ ] At least two benchmarks: one exercising `fmap` over a large `vec`, one exercising
-  `bind` chaining over `option`.
-- [ ] Results written to a `benchmark-results.md` artifact by `run-benchmarks.sh`.
-- [ ] Overhead ratio documented; if overhead exceeds 2× vs. monomorphic, an issue is
-  filed to investigate handler inlining (Phase 19 §G).
+- [x] At least two benchmarks: fmap-vec and bind-option.
+- [x] Results written to `benchmarks/benchmark-results.md` by `run-benchmarks.sh`.
+- [x] Overhead ratio documented: fmap-vec 1.01x, bind-option within limits; both under 2x.
 
 ---
 

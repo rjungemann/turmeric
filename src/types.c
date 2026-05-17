@@ -116,6 +116,28 @@ int type_eq(Type a, Type b) {
     return 1;
 }
 
+/* LT2: Check whether function type `actual' is compatible with function type
+ * `expected' with respect to arg_linear constraints.  Returns 1 if compatible,
+ * 0 if there is a linearity mismatch.
+ *
+ * Linearity is invariant for function types:
+ *   - if expected.arg_linear[i] is true, actual.arg_linear[i] must also be true
+ *     (you cannot pass a non-consuming function where a consuming one is required)
+ *   - if expected.arg_linear[i] is false, actual.arg_linear[i] must also be false
+ *     (you cannot pass a consuming function where a non-consuming one is required,
+ *     because the caller would not know to treat the argument as consumed)
+ *
+ * Called from elab_call_fn when -Xlinear is enabled and higher-order functions
+ * are passed as arguments. */
+int fn_type_subtype(Type actual, Type expected) {
+    if (actual.kind != TY_FN || expected.kind != TY_FN) return 1;
+    if (actual.as.fn.arity != expected.as.fn.arity) return 1; /* arity mismatch caught elsewhere */
+    for (uint8_t i = 0; i < actual.as.fn.arity; i++) {
+        if (actual.as.fn.arg_linear[i] != expected.as.fn.arg_linear[i]) return 0;
+    }
+    return 1;
+}
+
 /* Helper to create a Type from TypeKind.
  * Zero-initialises the entire struct so that compound type fields (union_,
  * intersection_, etc.) are safe to pass to type_name() even for kinds that

@@ -1,0 +1,6 @@
+;; LT1 E0104: linear value consumed in then-branch but not else-branch.
+;; Both branches of an if/else must consume the same set of linear values.
+(let [^linear x 42]
+  (if true
+    (println x)
+    0))

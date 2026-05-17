@@ -51,6 +51,7 @@ typedef enum DiagCode {
     TUR_E0101_LINEAR_USE_AFTER_CONSUME, /* linear value used after being moved/consumed */
     TUR_E0102_LINEAR_COPY,         /* cannot copy a linear value */
     TUR_E0103_LINEAR_IN_RC,        /* cannot wrap a linear value in rc<T> */
+    TUR_E0104_LINEAR_BRANCH_MISMATCH, /* linear value consumed in one branch but not another */
     /* UT1: Uniqueness type errors (-Xunique-types) */
     TUR_E0200_UNIQUE_ALIASED,      /* value is not unique -- aliased by another binding */
     TUR_E0201_UNIQUE_COPY,         /* cannot copy a unique value (use after consume) */

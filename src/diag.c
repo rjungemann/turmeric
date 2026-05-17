@@ -121,6 +121,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0101_LINEAR_USE_AFTER_CONSUME:   return "TUR-E0101";
         case TUR_E0102_LINEAR_COPY:                return "TUR-E0102";
         case TUR_E0103_LINEAR_IN_RC:               return "TUR-E0103";
+        case TUR_E0104_LINEAR_BRANCH_MISMATCH:     return "TUR-E0104";
         /* ST0: Substructural type errors */
         case TUR_E0150_AFFINE_USED_TWICE:          return "TUR-E0150";
         case TUR_E0151_RELEVANT_DROPPED:           return "TUR-E0151";
@@ -168,6 +169,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0101") == 0) return TUR_E0101_LINEAR_USE_AFTER_CONSUME;
     if (strcmp(s, "TUR-E0102") == 0) return TUR_E0102_LINEAR_COPY;
     if (strcmp(s, "TUR-E0103") == 0) return TUR_E0103_LINEAR_IN_RC;
+    if (strcmp(s, "TUR-E0104") == 0) return TUR_E0104_LINEAR_BRANCH_MISMATCH;
     /* ST0: Substructural type errors */
     if (strcmp(s, "TUR-E0150") == 0) return TUR_E0150_AFFINE_USED_TWICE;
     if (strcmp(s, "TUR-E0151") == 0) return TUR_E0151_RELEVANT_DROPPED;
@@ -576,6 +578,32 @@ static const DiagExplanation diag_explanations_[] = {
       "\n"
       "If the resource must be shared, it must first be made non-linear (e.g., by\n"
       "consuming it and producing a shared representation).\n"
+      "\n"
+      "Enable with: turc -Xlinear myfile.tur\n",
+    },
+    { TUR_E0104_LINEAR_BRANCH_MISMATCH,
+      "TUR-E0104: Linear value consumed in one branch but not another\n"
+      "\n"
+      "A linear value (lref<T> or ^linear) was consumed in some branches of an\n"
+      "if/match expression but not others. Linear types require exactly-once\n"
+      "consumption: every branch must consume the same set of linear values.\n"
+      "\n"
+      "Example of the error:\n"
+      "  (let [^linear x 42]\n"
+      "    (if cond\n"
+      "      (consume x)   ; x consumed here\n"
+      "      unit))        ; ERROR: x not consumed in else branch\n"
+      "\n"
+      "Fix: consume the linear value in all branches, or in none:\n"
+      "  (let [^linear x 42]\n"
+      "    (if cond\n"
+      "      (consume x)   ; consumed in then\n"
+      "      (consume x))) ; consumed in else -- OK\n"
+      "\n"
+      "Alternatively, consume the value after the if expression:\n"
+      "  (let [^linear x 42]\n"
+      "    (if cond do-something do-something-else)\n"
+      "    (consume x))    ; consumed after if -- OK\n"
       "\n"
       "Enable with: turc -Xlinear myfile.tur\n",
     },
