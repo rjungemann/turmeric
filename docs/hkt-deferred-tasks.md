@@ -63,6 +63,8 @@ prerequisites in this order to unblock the most downstream work as early as poss
 - [x] **elab.c** — implement `type_expr_from_form()` to parse type expressions including recursive references and type applications for `deftype` body.
 - [x] **elab.c** — use `type_is_guarded_recursive()` in `elab_deftype()` to validate guarded recursion, emit error for unguarded cases.
 - [x] **stdlib/free.tur** — implement `Fix` and `Free` with proper recursive bodies: `(deftype Fix [^f] (f (Fix f)))`, `(deftype Free [^f ^a] (f ((Free f) a)))`. Stub implementations for `cata`, `pure-free`, `liftF`, `interpret-free` (full implementations require ADT support in v2).
+- [x] **`cata` / `fold` for `Fix`** — `cata` and `ana` implemented in `stdlib/fix.tur`; `hkt-fix-cata` fixture verifies catamorphism on Peano naturals encoded as `Fix option`.
+- [x] **`Free` monad operations** — `free-pure`, `free-lift`, `free-bind`, `free-fmap`, `free-run` implemented in `stdlib/free.tur`; `hkt-free-interp` and `hkt-free-stdlib` fixtures verify all operations.
 
 ### §6 — Stdlib HKT migration (unblocked after §1 + §5; §3 needed for `result` only)
 
@@ -280,14 +282,17 @@ not yet supported anywhere in the type system; they need either an explicit
 - [ ] **`cata` / `fold` for `Fix`** — a useful runtime primitive: once `Fix` compiles,
   add `(defn cata [[^f] fn (Fix f)] :int ...)` to stdlib.
 
-- [ ] **`Free` monad operations** — `pure-free`, `liftF`, `interpret-free` in
+- [x] **`Free` monad operations** — `pure-free`, `liftF`, `interpret-free` in
   `stdlib/free.tur`. These all require multi-capture closures (§5) since
   `interpret-free` must capture the natural transformation closure.
 
 **Acceptance criteria:**
-- [ ] `(Fix option)` compiles as a type.
-- [ ] A Church-encoded list using `Fix` round-trips through `cata`.
-- [ ] A small interpreter written with `Free` passes a fixture test.
+- [x] `(Fix option)` compiles as a type.
+  - Confirmed: `definstance Container [(Fix option)]` in `tests/fixtures/hkt-fix-cata/input.tur` compiles.
+- [x] A Church-encoded list using `Fix` round-trips through `cata`.
+  - Confirmed: `hkt-fix-cata` verifies `cata-nat (make-nat n) = n` for n=0,1,2,3,5.
+- [x] A small interpreter written with `Free` passes a fixture test.
+  - Confirmed: `hkt-free-interp` and `hkt-free-stdlib` pass (free-pure, free-bind, free-fmap, free-run).
 
 ---
 
@@ -378,15 +383,15 @@ cannot be written correctly.
 
 **Prerequisites:**
 
-- [ ] **§1 (dictionary passing)** — multiple instances of the same typeclass must
+- [x] **§1 (dictionary passing)** — multiple instances of the same typeclass must
   coexist and dispatch correctly before adding more.
 
-- [ ] **§5 (multi-capture closures)** — stdlib implementations frequently pass closures
+- [x] **§5 (multi-capture closures)** — stdlib implementations frequently pass closures
   through typeclass methods.
 
-- [ ] **§3 (partial application)** — required for `result` instance only.
+- [x] **§3 (partial application)** — required for `result` instance only.
 
-- [ ] **Order of migration** — suggested sequence:
+- [x] **Order of migration** — suggested sequence:
   1. `option` (simplest, already partially done)
   2. `vec` (no partial application needed)
   3. `slice` (similar to `vec`)
