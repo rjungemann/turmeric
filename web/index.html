@@ -260,6 +260,10 @@ section {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  /* Allow the grid track to shrink below the min-content width of the
+     white-space:pre .step-code, so it scrolls internally instead of
+     widening the page. */
+  min-width: 0;
 }
 
 .step-num {
