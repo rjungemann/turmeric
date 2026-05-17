@@ -14,7 +14,7 @@ Enable the system with:
 
 ```sh
 tur build -Xsubstructural myfile.tur
-```turmeric
+```
 
 `-Xsubstructural` implies `-Xlinear`.
 
@@ -27,7 +27,7 @@ tur build -Xsubstructural myfile.tur
 Use `^linear` for values that represent exclusive ownership of a resource, where both
 dropping the resource unintentionally and aliasing it are errors.
 
-```clojure
+```turmeric
 (defn open-file  [path : cstr]             : ^linear FileHandle)
 (defn close-file [^linear fh : FileHandle] : unit)
 
@@ -46,7 +46,7 @@ the ref -- it will not be silently freed.
 Use `^affine` when a value may be discarded but must not be aliased. This is
 appropriate for one-shot tokens, single-use callbacks, or initialization keys.
 
-```clojure
+```turmeric
 (defn initialize [^affine key : EncryptionKey] : unit
   ...)
 
@@ -62,7 +62,7 @@ appropriate for one-shot tokens, single-use callbacks, or initialization keys.
 (let [^affine k (generate-key)]
   (initialize k)
   (initialize k))
-```turmeric
+```
 
 ### `^relevant` -- use at least once
 
@@ -70,7 +70,7 @@ Use `^relevant` for values that must be observed but may be inspected multiple t
 This is appropriate for audit logs, mandatory acknowledgements, or results that
 must not be silently discarded.
 
-```clojure
+```turmeric
 (defn log-and-store [^relevant msg : str] : unit
   (log msg)     ;; first use (duplication OK)
   (store msg))  ;; second use
@@ -89,7 +89,7 @@ must not be silently discarded.
 Wraps `expr` so that the binding holding its value is inferred as `^relevant`.
 The bound value must be used at least once before its scope exits.
 
-```clojure
+```turmeric
 ;; Under -Xsubstructural:
 (let [r (must-use (acquire-resource))]
   (process r)   ;; OK -- ^relevant allows duplication
@@ -107,7 +107,7 @@ Useful to signal intent that `name` is a resource to be consumed within `body`.
 When combined with `-Xsubstructural` and a `ref<T>` init, the binding is inferred
 as `^linear` and must be explicitly consumed (via `(drop! name)` or a consuming call).
 
-```clojure
+```turmeric
 ;; Under -Xsubstructural:
 (with-resource [r (ref 42)]
   (drop! r))    ;; must consume the linear ref
@@ -138,11 +138,11 @@ Under `-Xsubstructural`, all `ref<T>` let bindings and `:ref` parameters are
 automatically inferred as `^linear`. You do not need an explicit `^linear`
 annotation -- but you must explicitly consume the ref.
 
-```clojure
+```turmeric
 (defn consume [r :ref] :int
   (drop! r)
   0)
-```turmeric
+```
 
 ### Affine vs. move semantics
 
@@ -156,7 +156,7 @@ the elaborator to catch double-use at compile time.
 Substructural annotations are checked at each match arm independently.
 A `^linear` value bound inside a match arm must be consumed within that arm.
 
-```clojure
+```turmeric
 (match opt
   (some v) (let [^linear r (ref v)]
              (drop! r))   ;; must consume before arm exits
