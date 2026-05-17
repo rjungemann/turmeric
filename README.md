@@ -209,6 +209,48 @@ for C/CMake dependency details.
     (println (hamt-get m2 1))))
 ```
 
+**GADTs (generalized algebraic data types):**
+
+```lisp
+; Requires: -Xgadt
+(defgadt Expr [a]
+  (Lit int                         : (Expr int))
+  (Add (Expr int) (Expr int)       : (Expr int))
+  (Mul (Expr int) (Expr int)       : (Expr int)))
+
+(defn eval-expr [e] :int
+  (match e
+    (Lit n)   n
+    (Add l r) (+ (eval-expr l) (eval-expr r))
+    (Mul l r) (* (eval-expr l) (eval-expr r))))
+
+(println (eval-expr (Add (Lit 10) (Mul (Lit 4) (Lit 8)))))
+; => 42
+```
+
+**Structural union types and gradual typing:**
+
+```lisp
+; Requires: -Xunion-types
+
+; Union type -- exhaustiveness-checked dispatch
+(defn describe [x : (int | bool)] :int
+  (match x
+    (n : int)  (do (println n)   0)
+    (b : bool) (do (println b)   0)))
+
+(describe 42)    ; => 42
+(describe true)  ; => true
+
+; any top type -- every type is a subtype; tag recoverable at runtime
+(defn show-type [x : any] :int
+  (println (type-of x))
+  0)
+
+(show-type 42)       ; => "int"
+(show-type "hello")  ; => "cstr"
+```
+
 ## Features
 
 | Feature | Status |
@@ -222,6 +264,9 @@ for C/CMake dependency details.
 | `defer` with scope unwind | ✅ |
 | Macros (`defmacro`, quasiquote, threading macros) | ✅ |
 | `defstruct`, field access, copy/move annotations | ✅ |
+| ADTs (`defdata`, `match`, exhaustiveness checking) | ✅ |
+| GADTs (`defgadt`, per-constructor type refinement, equality witnesses, `coerce`, `-Xgadt`) | ✅ |
+| Structural union types (`A \| B`), `any` top type, gradual typing (`-Xunion-types`) | ✅ |
 | Borrow checker (`&`, `&mut`, reborrow, move semantics) | ✅ |
 | Reference counting (`rc/of`, `rc/clone`, `rc/drop`, weak refs) | ✅ |
 | RC elision (static analysis to remove redundant retain/release) | ✅ |

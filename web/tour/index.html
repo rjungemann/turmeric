@@ -157,10 +157,10 @@ h1 em { font-style: italic; color: var(--gold-bright); }
       <span class="eyebrow-dot"></span>
       Language Tour
     </div>
-    <h1>Ten things about <em>turmeric</em>.</h1>
+    <h1>Eleven things about <em>turmeric</em>.</h1>
     <p class="hero-subtitle">A walkthrough of what makes Turmeric tick.</p>
     <p class="hero-desc">
-      From algebraic effects to the Spice package manager, each stop in this
+      From algebraic effects to structural union types, each stop in this
       tour shows you real language features with real code.
     </p>
     <div class="hero-actions">
@@ -222,6 +222,11 @@ h1 em { font-style: italic; color: var(--gold-bright); }
       <span class="tour-stop-num">10</span>
       <span class="tour-card-label">Spice Package Manager</span>
       <span class="tour-card-icon">✶</span>
+    </a>
+    <a href="#structural" class="tour-index-card">
+      <span class="tour-stop-num">11</span>
+      <span class="tour-card-label">Structural Typing</span>
+      <span class="tour-card-icon">∪</span>
     </a>
   </div>
 </div>
@@ -310,11 +315,11 @@ h1 em { font-style: italic; color: var(--gold-bright); }
 <!-- ── 03 ADTs & PATTERN MATCHING ─────── -->
 <div class="split-section reveal" id="adts">
   <div>
-    <p class="section-label">03 — ADTs &amp; Pattern Matching</p>
+    <p class="section-label">03 — ADTs, GADTs &amp; Pattern Matching</p>
     <h2 class="section-title">Data that<br><em>speaks.</em></h2>
-    <p class="section-desc">Algebraic data types let you model your domain precisely. <code>defdata</code> defines a sum type; <code>match</code> deconstructs it, exhaustively, with compiler-checked completeness.</p>
-    <p class="section-desc">No null pointers, no missing branches. Every case is forced to the surface where you can handle it.</p>
-    <span class="feat-badge">defdata · defgadt · match</span>
+    <p class="section-desc">Algebraic data types let you model your domain precisely. <code>defdata</code> declares a plain sum type; <code>defgadt</code> goes further, letting each constructor specialize its own type parameters.</p>
+    <p class="section-desc">The type-checker learns those specializations inside each <code>match</code> arm. No casts, no runtime tags, no missing branches -- every case is statically verified.</p>
+    <span class="feat-badge">defdata · defgadt · match · -Xgadt</span>
   </div>
   <div class="code-card">
     <div class="code-card-bar">
@@ -323,25 +328,25 @@ h1 em { font-style: italic; color: var(--gold-bright); }
       <div class="win-dot wd-g"></div>
       <span class="code-card-filename">expr.tur</span>
     </div>
-    <div class="code-card-body"><span class="cmt">;; A small expression language</span>
-<span class="pnc">(</span><span class="kw">defdata</span> <span class="tp">Expr</span>
-  <span class="pnc">(</span><span class="tp">Lit</span>  <span class="tp">:int</span><span class="pnc">)</span>
-  <span class="pnc">(</span><span class="tp">Add</span>  <span class="tp">Expr</span> <span class="tp">Expr</span><span class="pnc">)</span>
-  <span class="pnc">(</span><span class="tp">Mul</span>  <span class="tp">Expr</span> <span class="tp">Expr</span><span class="pnc">)</span>
-  <span class="pnc">(</span><span class="tp">Neg</span>  <span class="tp">Expr</span><span class="pnc">))</span>
+    <div class="code-card-body" style="font-size:12px;padding:20px 22px;"><span class="cmt">;; GADT: each constructor carries its own return type.</span>
+<span class="cmt">;; The type-checker refines what it knows per match arm.</span>
+<span class="cmt">;; Requires: -Xgadt</span>
+<span class="pnc">(</span><span class="kw">defgadt</span> <span class="tp">Expr</span> <span class="pnc">[</span>a<span class="pnc">]</span>
+  <span class="pnc">(</span><span class="tp">Lit</span> <span class="tp">int</span>                         <span class="tp">: (Expr int)</span><span class="pnc">)</span>
+  <span class="pnc">(</span><span class="tp">Add</span> <span class="pnc">(</span><span class="tp">Expr int</span><span class="pnc">)</span> <span class="pnc">(</span><span class="tp">Expr int</span><span class="pnc">)</span>   <span class="tp">: (Expr int)</span><span class="pnc">)</span>
+  <span class="pnc">(</span><span class="tp">Mul</span> <span class="pnc">(</span><span class="tp">Expr int</span><span class="pnc">)</span> <span class="pnc">(</span><span class="tp">Expr int</span><span class="pnc">)</span>   <span class="tp">: (Expr int)</span><span class="pnc">))</span>
 
 <span class="pnc">(</span><span class="kw">defn</span> <span class="fn">eval</span> <span class="pnc">[</span>e<span class="pnc">]</span> <span class="tp">:int</span>
   <span class="pnc">(</span><span class="kw">match</span> e
     <span class="pnc">(</span><span class="tp">Lit</span> n<span class="pnc">)</span>    n
     <span class="pnc">(</span><span class="tp">Add</span> l r<span class="pnc">)</span>  <span class="pnc">(</span><span class="op">+</span> <span class="pnc">(</span><span class="fn">eval</span> l<span class="pnc">)</span> <span class="pnc">(</span><span class="fn">eval</span> r<span class="pnc">))</span>
-    <span class="pnc">(</span><span class="tp">Mul</span> l r<span class="pnc">)</span>  <span class="pnc">(</span><span class="op">*</span> <span class="pnc">(</span><span class="fn">eval</span> l<span class="pnc">)</span> <span class="pnc">(</span><span class="fn">eval</span> r<span class="pnc">))</span>
-    <span class="pnc">(</span><span class="tp">Neg</span> x<span class="pnc">)</span>    <span class="pnc">(</span><span class="op">-</span> <span class="num">0</span> <span class="pnc">(</span><span class="fn">eval</span> x<span class="pnc">))))</span>
+    <span class="pnc">(</span><span class="tp">Mul</span> l r<span class="pnc">)</span>  <span class="pnc">(</span><span class="op">*</span> <span class="pnc">(</span><span class="fn">eval</span> l<span class="pnc">)</span> <span class="pnc">(</span><span class="fn">eval</span> r<span class="pnc">))))</span>
 
-<span class="cmt">;; (2 + 3) * -4  =>  -20</span>
+<span class="cmt">;; (2 + 3) * 4  =>  20</span>
 <span class="pnc">(</span>println
   <span class="pnc">(</span><span class="fn">eval</span> <span class="pnc">(</span><span class="tp">Mul</span> <span class="pnc">(</span><span class="tp">Add</span> <span class="pnc">(</span><span class="tp">Lit</span> <span class="num">2</span><span class="pnc">)</span> <span class="pnc">(</span><span class="tp">Lit</span> <span class="num">3</span><span class="pnc">))</span>
-             <span class="pnc">(</span><span class="tp">Neg</span> <span class="pnc">(</span><span class="tp">Lit</span> <span class="num">4</span><span class="pnc">)))))</span>
-<span class="cmt">;; => -20</span></div>
+             <span class="pnc">(</span><span class="tp">Lit</span> <span class="num">4</span><span class="pnc">))))</span>
+<span class="cmt">;; => 20</span></div>
   </div>
 </div>
 
@@ -616,6 +621,48 @@ println<span class="pnc">(</span><span class="fn">factorial</span><span class="p
     <span class="str">"raylib"</span>  <span class="pnc">{</span><span class="tp">:url</span> <span class="str">"https://github.com/raysan5/raylib"</span>
                <span class="tp">:ref</span> <span class="str">"5.0"</span><span class="pnc">}</span>
   <span class="pnc">}</span><span class="pnc">)</span></div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ── 11 STRUCTURAL TYPING ──────────── -->
+<div class="split-section reveal" id="structural">
+  <div>
+    <p class="section-label">11 — Structural Typing</p>
+    <h2 class="section-title">Types that<br><em>flow.</em></h2>
+    <p class="section-desc">Union types let a function accept several concrete types without boxing. <code>(int | bool)</code> is a structural union -- the compiler generates exhaustiveness-checked tag dispatch for you, and every union member must be handled.</p>
+    <p class="section-desc">The <code>any</code> top type enables gradual typing: every concrete type is a subtype of <code>any</code>. Inspect the tag at runtime with <code>type-of</code>. Enable both features with <code>-Xunion-types</code>.</p>
+    <span class="feat-badge">(A | B) · any · type-of · -Xunion-types</span>
+  </div>
+  <div class="code-card">
+    <div class="code-card-bar">
+      <div class="win-dot wd-r"></div>
+      <div class="win-dot wd-y"></div>
+      <div class="win-dot wd-g"></div>
+      <span class="code-card-filename">structural.tur</span>
+    </div>
+    <div class="code-card-body" style="font-size:12px;padding:20px 22px;"><span class="cmt">;; Union types -- structural dispatch, not nominal</span>
+<span class="cmt">;; Requires: -Xunion-types</span>
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">describe</span> <span class="pnc">[</span>x <span class="tp">: (int | bool)</span><span class="pnc">]</span> <span class="tp">:int</span>
+  <span class="pnc">(</span><span class="kw">match</span> x
+    <span class="pnc">(</span>n <span class="tp">: int</span><span class="pnc">)</span>   <span class="pnc">(</span><span class="kw">do</span> <span class="pnc">(</span>println n<span class="pnc">)</span>  <span class="num">0</span><span class="pnc">)</span>
+    <span class="pnc">(</span>b <span class="tp">: bool</span><span class="pnc">)</span>  <span class="pnc">(</span><span class="kw">do</span> <span class="pnc">(</span>println b<span class="pnc">)</span>  <span class="num">0</span><span class="pnc">)))</span>
+
+<span class="pnc">(</span><span class="fn">describe</span> <span class="num">42</span><span class="pnc">)</span>    <span class="cmt">;; => 42</span>
+<span class="pnc">(</span><span class="fn">describe</span> <span class="kw">true</span><span class="pnc">)</span>  <span class="cmt">;; => true</span>
+
+<span class="cmt">;; Typeclass dispatch through a union --</span>
+<span class="cmt">;; compiler generates the tag-dispatch call</span>
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">print-any</span> <span class="pnc">[</span>x <span class="tp">: (int | bool)</span><span class="pnc">]</span> <span class="tp">:int</span>
+  <span class="pnc">(</span>println <span class="pnc">(</span>.show x<span class="pnc">))</span>  <span class="num">0</span><span class="pnc">)</span>
+
+<span class="cmt">;; `any` top type -- gradual typing</span>
+<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">show-type</span> <span class="pnc">[</span>x <span class="tp">: any</span><span class="pnc">]</span> <span class="tp">:int</span>
+  <span class="pnc">(</span>println <span class="pnc">(</span>type-of x<span class="pnc">))</span>  <span class="num">0</span><span class="pnc">)</span>
+
+<span class="pnc">(</span><span class="fn">show-type</span> <span class="num">42</span><span class="pnc">)</span>       <span class="cmt">;; => "int"</span>
+<span class="pnc">(</span><span class="fn">show-type</span> <span class="str">"hello"</span><span class="pnc">)</span>  <span class="cmt">;; => "cstr"</span></div>
   </div>
 </div>
 
