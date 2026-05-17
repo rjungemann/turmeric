@@ -1,0 +1,4 @@
+; IT3: TUR_E0350 -- intersection of disjoint concrete types is rejected.
+; No value can be both int and cstr simultaneously.
+
+(defn f [x : (int & cstr)] :int 0)

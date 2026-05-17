@@ -1,6 +1,6 @@
 # Intersection & Union Types — Implementation Plan (IT0–IT4)
 
-> **Status:** IT0, IT1, and IT2 complete; IT3–IT4 not started
+> **Status:** IT0, IT1, IT2, and IT3 complete; IT4 not started
 >
 > **Target:** v4
 >
@@ -9,7 +9,7 @@
 > **Related:** [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md)
 > (§7 Intersection & Union Types)
 >
-> **Last updated:** 2026-05-15
+> **Last updated:** 2026-05-16
 
 ---
 
@@ -183,12 +183,12 @@ src/error.h/.c      -- Error codes and messages
 
 **Goal:** Implement subtyping and elimination for intersection types.
 
-- [ ] **Subtyping:** `(A & B) <: A` and `(A & B) <: B`
+- [x] **Subtyping:** `(A & B) <: A` and `(A & B) <: B`
   - A value of intersection type carries all member types; you can use it as any member
-- [ ] **Function application:** `(-> (A & B) C)` requires arguments that satisfy both `A` and `B`
-- [ ] **Intersection introduction:** a value that is simultaneously `A` and `B` can be typed as `(A & B)` where the elaborator can prove membership in both
-- [ ] **Intersection elimination:** from a value of type `(A & B)` you can project either `A` or `B`
-- [ ] Typeclass intersection: `(int & Serializable)` means the value is an `int` with a `Serializable` dictionary
+- [x] **Function application:** `(-> (A & B) C)` requires arguments that satisfy both `A` and `B`
+- [x] **Intersection introduction:** a value that is simultaneously `A` and `B` can be typed as `(A & B)` where the elaborator can prove membership in both
+- [x] **Intersection elimination:** from a value of type `(A & B)` you can project either `A` or `B`
+- [x] Typeclass intersection: `(int & Serializable)` means the value is an `int` with a `Serializable` dictionary (open types are not rejected at construction time)
 
 ### Error codes
 

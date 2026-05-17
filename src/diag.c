@@ -131,6 +131,9 @@ const char *diag_code_to_string(DiagCode code) {
         /* IT1: Union type errors */
         case TUR_E0300_UNION_TYPE_MISMATCH:        return "TUR-E0300";
         case TUR_E0301_NON_EXHAUSTIVE_UNION_MATCH: return "TUR-E0301";
+        /* IT3: Intersection type errors */
+        case TUR_E0350_INTERSECTION_UNSATISFIABLE:   return "TUR-E0350";
+        case TUR_E0351_INTERSECTION_MEMBER_MISMATCH: return "TUR-E0351";
         default:                          return "";
     }
 }
@@ -175,6 +178,9 @@ DiagCode diag_code_from_string(const char *s) {
     /* IT1: Union type errors */
     if (strcmp(s, "TUR-E0300") == 0) return TUR_E0300_UNION_TYPE_MISMATCH;
     if (strcmp(s, "TUR-E0301") == 0) return TUR_E0301_NON_EXHAUSTIVE_UNION_MATCH;
+    /* IT3: Intersection type errors */
+    if (strcmp(s, "TUR-E0350") == 0) return TUR_E0350_INTERSECTION_UNSATISFIABLE;
+    if (strcmp(s, "TUR-E0351") == 0) return TUR_E0351_INTERSECTION_MEMBER_MISMATCH;
     return DIAG_CODE_NONE;
 }
 
@@ -690,6 +696,41 @@ static const DiagExplanation diag_explanations_[] = {
       "    (b : bool) (println b))\n"
       "\n"
       "Enable with: turc -Xunion-types myfile.tur\n",
+    },
+    /* IT3: Intersection type explanations */
+    { TUR_E0350_INTERSECTION_UNSATISFIABLE,
+      "TUR-E0350: Intersection type is unsatisfiable\n"
+      "\n"
+      "No value can simultaneously satisfy all members of this intersection type\n"
+      "because two or more members are known-disjoint concrete types.\n"
+      "\n"
+      "Example:\n"
+      "  (defn f [x : (int & cstr)] : int 0)\n"
+      "  ; error: no value can be both int and cstr\n"
+      "\n"
+      "Intersection types are useful when at least one member is a typeclass\n"
+      "constraint or type variable:\n"
+      "  (defn serialize-int [x : (int & Serializable)] : cstr\n"
+      "    (serialize x))\n"
+      "\n"
+      "Enable with: turc -Xintersection-types myfile.tur\n",
+    },
+    { TUR_E0351_INTERSECTION_MEMBER_MISMATCH,
+      "TUR-E0351: Value does not satisfy all intersection members\n"
+      "\n"
+      "A function parameter expects a value that satisfies all members of an\n"
+      "intersection type, but the argument's type does not match one or more\n"
+      "of those members.\n"
+      "\n"
+      "Example:\n"
+      "  (defclass Printable [a] (print-it [x : a] : unit))\n"
+      "  (defn show [x : (int & Printable)] : unit (print-it x))\n"
+      "  (show \"hello\")  ; error: cstr does not satisfy member int\n"
+      "\n"
+      "Pass a value whose type satisfies every member of the intersection, or\n"
+      "widen the intersection to include the actual type.\n"
+      "\n"
+      "Enable with: turc -Xintersection-types myfile.tur\n",
     },
     { TUR_E0151_RELEVANT_DROPPED,
       "TUR-E0151: Relevant value dropped without being used\n"

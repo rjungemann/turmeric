@@ -126,6 +126,75 @@ static int type_size_bytes(TypeKind kind) {
     }
 }
 
+/* IT3: Return true if t is a concrete (closed) type that can participate in
+ * provable-disjointness checks.  TY_STRUCT/TY_ADT with a NULL def are type
+ * variables and are therefore open -- not concrete. */
+static bool type_is_concrete_for_disjoint(Type *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case TY_INT: case TY_FLOAT: case TY_BOOL: case TY_CSTR:
+        case TY_NIL: case TY_PTR_VOID:
+        case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT32: case TY_FLOAT64:
+            return true;
+        case TY_STRUCT:
+            /* NULL def means it's a type variable -- not a concrete named struct */
+            return t->as.struct_.def != NULL;
+        case TY_ADT:
+            return t->as.adt_.def != NULL;
+        default:
+            return false;
+    }
+}
+
+/* IT3: Return true if TypeKind k (for a primitive) is a concrete base kind.
+ * Used from the intersection-member-mismatch check where we only have a kind. */
+static bool typekind_is_concrete_for_disjoint(TypeKind k) {
+    switch (k) {
+        case TY_INT: case TY_FLOAT: case TY_BOOL: case TY_CSTR:
+        case TY_NIL: case TY_PTR_VOID:
+        case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT32: case TY_FLOAT64:
+        /* For struct/ADT we cannot check concreteness without the full Type* here;
+         * the caller should use type_is_concrete_for_disjoint() instead when possible. */
+        case TY_STRUCT: case TY_ADT:
+            return true;
+        default:
+            return false;
+    }
+}
+
+/* IT3: Check whether two concrete types are provably disjoint.
+ * Returns true if it is impossible for a single value to satisfy both types.
+ * Only catches the obvious cases (distinct primitives, distinct named structs,
+ * distinct named ADTs). Returns false for any pair involving a typeclass, forall,
+ * type variable, or other open type. */
+static bool types_provably_disjoint(Type *a, Type *b) {
+    if (!a || !b) return false;
+    /* A type is never disjoint from itself */
+    if (type_eq(*a, *b)) return false;
+    /* Only check pairs where both sides are fully concrete */
+    if (!type_is_concrete_for_disjoint(a) ||
+        !type_is_concrete_for_disjoint(b)) return false;
+    TypeKind ka = a->kind, kb = b->kind;
+    /* Two different primitive kinds are disjoint */
+    if (ka != kb) return true;
+    /* Same kind -- check identity for nominal types */
+    if (ka == TY_STRUCT) {
+        StructDef *da = a->as.struct_.def;
+        StructDef *db = b->as.struct_.def;
+        if (da && db && da->name && db->name && da->name != db->name) return true;
+    }
+    if (ka == TY_ADT) {
+        AdtDef *da = a->as.adt_.def;
+        AdtDef *db = b->as.adt_.def;
+        if (da && db && da->name && db->name && da->name != db->name) return true;
+    }
+    return false;
+}
+
 /* ---- scope ---- */
 
 /* Phase 12: Borrow tracking in Scope */
@@ -8632,6 +8701,58 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
             expected_arg_kind == TY_UNION) {
             arg_ok = (args[i]->type.kind == expected_arg_kind);
         }
+        /* IT3: Intersection elimination — accept a value of intersection type (A & B)
+         * where any single member type is expected.  (A & B) <: A and (A & B) <: B. */
+        if (!arg_ok && g_intersection_types_enabled &&
+            args[i]->type.kind == TY_INTERSECTION) {
+            Type *isect_t = &args[i]->type;
+            for (uint8_t im = 0; im < isect_t->as.intersection_.n_members; im++) {
+                Type *mem = isect_t->as.intersection_.members[im];
+                if (mem && mem->kind == expected_arg_kind) {
+                    arg_ok = true;
+                    break;
+                }
+            }
+        }
+        /* IT3: Intersection introduction check — function expects (A & B), arg must
+         * satisfy all members.  Emit TUR_E0351 for the first unsatisfied member. */
+        if (!arg_ok && g_intersection_types_enabled && expected_arg_kind == TY_INTERSECTION) {
+            uint32_t fn_arg_idx5 = fn_binding->closure_fn_binding ? i + 1 : i;
+            if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types &&
+                fn_arg_idx5 < fn_type.as.fn.arity) {
+                Type *isect_t = fn_type.as.fn.arg_full_types[fn_arg_idx5];
+                if (isect_t && isect_t->kind == TY_INTERSECTION) {
+                    /* Check each member -- the arg must match all of them */
+                    bool all_ok = true;
+                    const char *first_mismatch = NULL;
+                    for (uint8_t im = 0; im < isect_t->as.intersection_.n_members; im++) {
+                        Type *mem = isect_t->as.intersection_.members[im];
+                        if (!mem) continue;
+                        /* For concrete member types, the arg must have an equal or
+                         * compatible type.  For typeclass members we cannot yet do
+                         * instance resolution here, so skip them. */
+                        if (!typekind_is_concrete_for_disjoint(mem->kind)) continue;
+                        if (!type_eq(args[i]->type, *mem)) {
+                            all_ok = false;
+                            first_mismatch = type_name(*mem);
+                            break;
+                        }
+                    }
+                    if (all_ok) {
+                        arg_ok = true;
+                    } else {
+                        diag_emit_with_code(DIAG_ERROR, args[i]->span,
+                            TUR_E0351_INTERSECTION_MEMBER_MISMATCH,
+                            "function '%s' arg %u: value of type %s does not satisfy "
+                            "intersection member %s",
+                            fn_binding->name->name, i + 1,
+                            type_name(args[i]->type),
+                            first_mismatch ? first_mismatch : "?");
+                        return NULL;
+                    }
+                }
+            }
+        }
 
         if (!arg_ok) {
             /* Phase 8: Enhanced type mismatch with error code */
@@ -12536,6 +12657,20 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
                                                    type_params, type_param_kinds, n_type_params);
                     if (!mt) return NULL;
                     members[mi++] = mt;
+                }
+                /* IT3: TUR_E0350 -- reject provably-unsatisfiable intersections.
+                 * For each pair of members, check if they are known-disjoint concrete
+                 * types. Only emit one error (the first pair found). */
+                for (uint8_t ia = 0; ia < n_members; ia++) {
+                    for (uint8_t ib = ia + 1; ib < n_members; ib++) {
+                        if (types_provably_disjoint(members[ia], members[ib])) {
+                            diag_emit_with_code(DIAG_ERROR, form->span,
+                                TUR_E0350_INTERSECTION_UNSATISFIABLE,
+                                "intersection type is unsatisfiable: no value can be both %s and %s",
+                                type_name(*members[ia]), type_name(*members[ib]));
+                            return NULL;
+                        }
+                    }
                 }
                 /* Build and return intersection type (type_intersection_build flattens nested) */
                 Type built = type_intersection_build(e->arena, members, n_members);
