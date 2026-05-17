@@ -693,7 +693,7 @@
     {"__select_op_send", "__select_op_send -- internal constant: send operation code (1).\n\nSince: Phase T19-D"},
     {"__select_clauses_alloc", "__select_clauses_alloc -- allocate a zeroed SelectClause array of length n.\n\nSince: Phase T19-D"},
     {"__select_clauses_free", "__select_clauses_free -- free a SelectClause array allocated by __select_clauses_alloc.\n\nSince: Phase T19-D"},
-    {"__select_exec", "__select_exec -- execute a select over n channel clauses; return the index of the clause that fired.\n\nParameters:\n  clauses -- SelectClause array from __select_clauses_alloc\n  n -- number of clauses in the array\n  has_default -- 1 if a :default arm is present, 0 otherwise\n\nSince: Phase T19-D"},
+    {"__select_exec", "__select_exec -- execute a select over n channel clauses; return the index of the clause that fired.\n\nParameters:\n  clauses -- SelectClause array from __select_clauses_alloc\n  n -- number of clauses in the array\n  has_default -- 1 if a :default arm is present, 0 otherwise\n\nSince: Phase SEL1"},
     {"bytes-alloc", "bytes-alloc -- allocate a zeroed length-prefixed byte buffer of n bytes.\n\nParameters:\n  n -- number of data bytes to allocate (not counting the 8-byte length prefix)\n\nSince: Phase 21"},
     {"bytes-len", "bytes-len -- return the number of data bytes stored in a bytes value.\n\nParameters:\n  b -- bytes pointer from bytes-alloc or a serialize call\n\nSince: Phase 21"},
     {"bytes-data", "bytes-data -- return a raw pointer to the data region of a bytes value (past the length prefix).\n\nParameters:\n  b -- bytes pointer from bytes-alloc or a serialize call\n\nSince: Phase 21"},
