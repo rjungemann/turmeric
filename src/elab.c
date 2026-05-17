@@ -10787,27 +10787,57 @@ static Expr *elab_defgadt(Elab *e, const Form *call) {
         return NULL;
     }
 
-    if (scope_lookup(e->scope, name)) {
-        diag_emit(DIAG_ERROR, name_form->span,
-                  "defgadt: '%s' is already defined", name->name);
-        return NULL;
+    /* Phase RF0: allow re-elaboration of forward-declared stub types */
+    bool is_forward_stub_gadt = false;
+    Binding *existing_gadt_b = scope_lookup(e->scope, name);
+    if (existing_gadt_b) {
+        if (elab_is_forward_type(e, name)) {
+            is_forward_stub_gadt = true;
+        } else {
+            diag_emit(DIAG_ERROR, name_form->span,
+                      "defgadt: '%s' is already defined", name->name);
+            return NULL;
+        }
     }
 
     uint32_t n_ctors = call->as.list.len - ctors_start_idx;
-    AdtDef *def = (AdtDef *)arena_alloc(e->arena, sizeof(AdtDef));
-    def->name = name->name;
-    def->n_ctors = n_ctors;
-    def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
-    def->is_copy = false;
-    def->needs_drop_glue = false;
-    def->is_gadt = true;
-    def->type_params = type_params;
-    def->n_type_params = n_type_params;
 
-    /* Pre-register ADT type so constructors can reference it */
-    Type adt_type = type_adt(def);
-    Binding *adt_binding = binding_new(e, name, adt_type, false, true, name_form->span);
-    scope_add(&e->global, adt_binding);
+    /* Phase RF0: Allocate (or reuse forward stub) AdtDef and register BEFORE
+     * parsing constructors so that self-referential and mutually-recursive
+     * constructor field types resolve correctly. */
+    AdtDef *def;
+    Binding *adt_binding;
+    Type adt_type;
+    if (is_forward_stub_gadt) {
+        /* Reuse the pre-registered stub and fill it in */
+        adt_binding = existing_gadt_b;
+        def = adt_binding->type.as.adt_.def;
+        def->n_ctors = n_ctors;
+        def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
+        def->is_copy = false;
+        def->needs_drop_glue = false;
+        def->is_gadt = true;
+        def->type_params = type_params;
+        def->n_type_params = n_type_params;
+        adt_type = type_adt(def);
+        adt_binding->type = adt_type;
+        /* Already in global scope and elab registry from the pre-pass */
+    } else {
+        def = (AdtDef *)arena_alloc(e->arena, sizeof(AdtDef));
+        def->name = name->name;
+        def->n_ctors = n_ctors;
+        def->ctors = (CtorDef **)arena_alloc(e->arena, n_ctors * sizeof(CtorDef *));
+        def->is_copy = false;
+        def->needs_drop_glue = false;
+        def->is_gadt = true;
+        def->type_params = type_params;
+        def->n_type_params = n_type_params;
+
+        /* Pre-register ADT type so constructors can reference it */
+        adt_type = type_adt(def);
+        adt_binding = binding_new(e, name, adt_type, false, true, name_form->span);
+        scope_add(&e->global, adt_binding);
+    }
 
     /* Parse each constructor */
     for (uint32_t ci = 0; ci < n_ctors; ci++) {
@@ -10891,6 +10921,58 @@ static Expr *elab_defgadt(Elab *e, const Form *call) {
             return NULL;
         }
 
+        /* Change 3: Validate that the number of type args in the return type
+         * matches the GADT's declared type-parameter count. */
+        if (return_type_form->tag == F_LIST) {
+            uint32_t n_rt_args = return_type_form->as.list.len - 1; /* subtract head */
+            if (n_type_params > 0 && n_rt_args != n_type_params) {
+                diag_emit(DIAG_ERROR, return_type_form->span,
+                          "defgadt: constructor '%s' return type has %u type argument(s) "
+                          "but '%s' has %u type parameter(s)",
+                          ctor_name->name, n_rt_args, name->name, n_type_params);
+                return NULL;
+            }
+        }
+
+        /* Change 4: Validate each type arg in the return type is a known type. */
+        if (return_type_form->tag == F_LIST) {
+            for (uint32_t ai = 1; ai < return_type_form->as.list.len; ai++) {
+                Form *arg = return_type_form->as.list.items[ai];
+                if (arg->tag == F_LIST) continue; /* type application -- ok */
+                if (arg->tag != F_SYM) continue;  /* other forms -- ok */
+                const char *an = arg->as.sym->name;
+                /* Check if it's a bound type param */
+                bool is_param = false;
+                for (uint8_t pi = 0; pi < n_type_params; pi++) {
+                    if (strcmp(type_params[pi], an) == 0) { is_param = true; break; }
+                }
+                if (is_param) continue;
+                /* Check if it's a concrete primitive */
+                static const char *primitives[] = {
+                    "int", "bool", "float", "cstr", "nil", "void", "ptr",
+                    "int8", "int16", "int32", "int64",
+                    "uint8", "uint16", "uint32", "uint64",
+                    "float32", "float64", NULL
+                };
+                bool is_prim = false;
+                for (int pi = 0; primitives[pi]; pi++) {
+                    if (strcmp(primitives[pi], an) == 0) { is_prim = true; break; }
+                }
+                if (is_prim) continue;
+                /* Check if it's a known type in scope */
+                const Symbol *type_sym = symtab_intern(e->st,
+                    strslice(an, (uint32_t)strlen(an)));
+                Binding *tb = scope_lookup_type_def(e->scope, type_sym);
+                if (tb && (tb->type.kind == TY_STRUCT || tb->type.kind == TY_ADT)) continue;
+                /* Unknown -- error */
+                diag_emit(DIAG_ERROR, arg->span,
+                          "defgadt: unknown type argument '%s' in return type of constructor '%s' "
+                          "(must be a type parameter, primitive type, or defined type)",
+                          an, ctor_name->name);
+                return NULL;
+            }
+        }
+
         /* Field types: items[1 .. colon_idx-1] */
         uint32_t n_fields = (uint32_t)(colon_idx - 1);
         CtorDef *ctor = (CtorDef *)arena_alloc(e->arena, sizeof(CtorDef));
@@ -10938,7 +11020,10 @@ static Expr *elab_defgadt(Elab *e, const Form *call) {
         }
     }
 
-    elab_register_adt_def(e, def);
+    /* Register ADT in elab registry (skip if it was a forward stub -- already registered) */
+    if (!is_forward_stub_gadt) {
+        elab_register_adt_def(e, def);
+    }
 
     Expr *out = expr_new(e->arena, EX_DEFGADT, TYPE_NIL, call->span);
     out->as.defgadt_.def = def;
@@ -15417,7 +15502,10 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
         if (!head || head->tag != F_SYM) continue;
         bool is_defstruct = (head->as.sym == e.sym_defstruct);
         bool is_defdata   = (head->as.sym == e.sym_defdata);
-        if (!is_defstruct && !is_defdata) continue;
+        bool is_defgadt   = (head->as.sym == e.sym_defgadt);
+        if (!is_defstruct && !is_defdata && !is_defgadt) continue;
+        /* GADTs are only registered if -Xgadt is enabled */
+        if (is_defgadt && !g_gadt_enabled) continue;
         Form *name_f = f->as.list.items[1];
         if (!name_f || name_f->tag != F_SYM) continue;
         const Symbol *type_name = name_f->as.sym;
@@ -15435,6 +15523,20 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
             stub->origin_file_id = name_f->span.file_id;
             elab_register_struct_def(&e, stub);
             Type t = type_struct(stub);
+            Binding *b = binding_new(&e, type_name, t, false, true, name_f->span);
+            scope_add(&e.global, b);
+        } else if (is_defgadt) {
+            AdtDef *stub = (AdtDef *)arena_alloc(arena, sizeof(AdtDef));
+            stub->name = type_name->name;
+            stub->n_ctors = 0;
+            stub->ctors = NULL;
+            stub->is_copy = false;
+            stub->needs_drop_glue = false;
+            stub->is_gadt = true;
+            stub->type_params = NULL;
+            stub->n_type_params = 0;
+            elab_register_adt_def(&e, stub);
+            Type t = type_adt(stub);
             Binding *b = binding_new(&e, type_name, t, false, true, name_f->span);
             scope_add(&e.global, b);
         } else {
