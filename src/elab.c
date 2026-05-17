@@ -15761,6 +15761,125 @@ static Expr *elab_method_call(Elab *e, const Form *call) {
     const char *method_name = method_sym->name + 1;  /* Skip '.' */
     uint32_t method_name_len = method_sym->len - 1;
 
+    /* Phase D1: Type witness @TypeName at call sites.
+     * The reader converts @TypeName into (deref TypeName), so we detect
+     * the pattern (deref sym) at items[1] where sym names a registered
+     * typeclass instance type argument for this method.  When found the
+     * witness pins the dispatch directly to that instance; the receiver
+     * is items[2] and extra arguments start at items[3]. */
+    if (call->as.list.len >= 3 &&
+        call->as.list.items[1]->tag == F_LIST &&
+        call->as.list.items[1]->as.list.len == 2 &&
+        call->as.list.items[1]->as.list.items[0]->tag == F_SYM &&
+        strcmp(call->as.list.items[1]->as.list.items[0]->as.sym->name, "deref") == 0 &&
+        call->as.list.items[1]->as.list.items[1]->tag == F_SYM) {
+
+        const Symbol *witness_sym = call->as.list.items[1]->as.list.items[1]->as.sym;
+        const char   *witness_name = witness_sym->name;
+        uint32_t      witness_len  = witness_sym->len;
+
+        /* Walk all registered instances looking for one whose type arg symbol
+         * (or primitive type name) matches the witness identifier. */
+        TypeClassInstance *witness_inst   = NULL;
+        FnDef             *witness_method_fn = NULL;
+        bool               any_inst_for_method = false;
+
+        for (TypeClassInstance *inst = e->typeclass_env.instances;
+             inst != NULL && !witness_inst; inst = inst->next) {
+            for (uint8_t mi = 0; mi < inst->typeclass->n_methods; mi++) {
+                const TypeClassMethod *m = &inst->typeclass->methods[mi];
+                if (m->name->len != method_name_len ||
+                    memcmp(m->name->name, method_name, method_name_len) != 0) continue;
+                any_inst_for_method = true;
+                /* Check if a type arg name matches the witness identifier. */
+                bool name_match = false;
+                for (uint8_t ti = 0; ti < inst->n_type_args && !name_match; ti++) {
+                    if (inst->type_arg_syms && inst->type_arg_syms[ti] &&
+                        inst->type_arg_syms[ti]->len == witness_len &&
+                        memcmp(inst->type_arg_syms[ti]->name, witness_name, witness_len) == 0) {
+                        name_match = true;
+                    }
+                    if (!name_match) {
+                        /* Primitive type names that have no symbol (e.g. int, bool). */
+                        const char *prim = NULL;
+                        switch (inst->type_args[ti].kind) {
+                            case TY_INT:   prim = "int";   break;
+                            case TY_BOOL:  prim = "bool";  break;
+                            case TY_CSTR:  prim = "cstr";  break;
+                            case TY_NIL:   prim = "nil";   break;
+                            case TY_FLOAT: prim = "float"; break;
+                            default: break;
+                        }
+                        if (prim && strcmp(prim, witness_name) == 0) name_match = true;
+                    }
+                }
+                if (name_match) {
+                    witness_inst      = inst;
+                    witness_method_fn = inst->method_impls[mi];
+                }
+                break; /* one method match per instance is enough */
+            }
+        }
+
+        if (witness_inst) {
+            /* Witness resolved: receiver is items[2], extra args are items[3..]. */
+            Expr *obj_w = elab_form(e, call->as.list.items[2]);
+            if (!obj_w) return NULL;
+
+            uint32_t n_args_w = call->as.list.len - 3;
+            Expr **args_w = (Expr **)arena_alloc(e->arena, n_args_w * sizeof(Expr *));
+            for (uint32_t i = 0; i < n_args_w; i++) {
+                args_w[i] = elab_form(e, call->as.list.items[3 + i]);
+                if (!args_w[i]) return NULL;
+            }
+
+            /* Determine result type from the method's binding. */
+            Type result_type_w;
+            if (witness_method_fn->binding->type.kind == TY_FN) {
+                result_type_w = type_from_kind(witness_method_fn->binding->type.as.fn.result_kind);
+            } else {
+                result_type_w = witness_method_fn->body ? witness_method_fn->body->type : TYPE_INT;
+                if (result_type_w.kind == TY_UNKNOWN || result_type_w.kind == TY_NIL)
+                    result_type_w = TYPE_INT;
+            }
+
+            /* Build the EX_DICT node for the pinned instance. */
+            Expr *dict_w = make_dict_expr(e, witness_inst, call->span);
+            strncpy(dict_w->as.dict_.method_name, method_name,
+                    sizeof(dict_w->as.dict_.method_name) - 1);
+            dict_w->as.dict_.method_name[sizeof(dict_w->as.dict_.method_name) - 1] = '\0';
+            for (char *p = dict_w->as.dict_.method_name; *p; p++) {
+                if (!isalnum((unsigned char)*p) && *p != '_') *p = '_';
+            }
+
+            /* Build EX_CALL: args array is [obj_w, args_w...]. */
+            Expr **call_args_w = (Expr **)arena_alloc(e->arena,
+                                                       (n_args_w + 1) * sizeof(Expr *));
+            call_args_w[0] = obj_w;
+            for (uint32_t i = 0; i < n_args_w; i++) call_args_w[i + 1] = args_w[i];
+
+            Expr *out_w = expr_new(e->arena, EX_CALL, result_type_w, call->span);
+            out_w->as.call_.fn_binding = NULL;
+            out_w->as.call_.fn_expr    = dict_w;
+            out_w->as.call_.args       = call_args_w;
+            out_w->as.call_.n_args     = n_args_w + 1;
+            out_w->as.call_.dict_arg   = dict_w;
+            return out_w;
+
+        } else if (any_inst_for_method) {
+            /* Instances exist for this method but none match the witness type name.
+             * The user clearly intended a witness (not a deref); emit a specific error. */
+            diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
+                      "no instance of typeclass method '.%.*s' for type '%s' -- "
+                      "check that (definstance ... [%s] ...) is in scope",
+                      (int)method_name_len, method_name, witness_name, witness_name);
+            return NULL;
+        }
+        /* No instances at all for this method: fall through to the normal path
+         * so that (deref sym) is elaborated as the receiver and the existing
+         * "no typeclass method found" error is emitted. */
+    }
+
     /* Phase HKT H2: Elaborate the receiver object first so we can use its
      * type to select the correct typeclass instance (type-based dispatch).
      * This replaces the old "name-only / first-match" approach with a lookup
