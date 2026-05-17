@@ -162,6 +162,8 @@ typedef enum ExprKind {
     /* Phase T21-F: async/await sugar */
     EX_ASYNC,          /* (async fn-expr) - run no-arg fn in thread; return Future (ptr<void>) */
     EX_AWAIT,          /* (await fut)     - block on Future; return int value */
+    /* Phase SEL1: fair multi-channel select */
+    EX_SELECT,         /* (select ((ch :recv v) body) ... (:default body)) */
     /* Phase 20: Software Transactional Memory */
     EX_STM,            /* (stm & body) - STM transaction block */
     EX_ATOMICALLY,     /* (atomically stm-block) - execute STM transaction atomically */
@@ -360,6 +362,15 @@ typedef struct MatchArm {
     struct Expr *guard;  /* Phase G4: optional when-guard; NULL if no guard */
 } MatchArm;
 
+/* Phase SEL1: one clause of a (select ...) expression */
+typedef struct SelectClauseEntry {
+    struct Expr     *chan;         /* channel expression (ptr<void>) */
+    int              op;          /* 0=recv, 1=send */
+    struct Expr     *send_val;    /* for send: value expression; NULL for recv */
+    Binding         *recv_binding; /* for recv: binding allocated by elab; NULL for send */
+    struct Expr     *body;        /* clause body expression */
+} SelectClauseEntry;
+
 struct Expr {
     ExprKind kind;
     Type     type;
@@ -484,6 +495,13 @@ struct Expr {
         /* Phase T21-F: async/await */
         struct { Expr *fn_expr; }                    async_;       /* (async fn-expr) */
         struct { Expr *fut_expr; }                   await_;       /* (await fut) */
+        /* Phase SEL1: fair multi-channel select */
+        struct {
+            SelectClauseEntry *clauses;   /* arena-allocated array */
+            uint32_t           n_clauses;
+            int                has_default;   /* 1 if :default arm present */
+            struct Expr       *default_body;  /* :default body; NULL if none */
+        } select_;                                                  /* (select ...) */
         /* Phase 20: Software Transactional Memory */
         struct { Expr **body; uint32_t n_body; }      stm_;         /* (stm expr1 expr2 ...) */
         struct { Expr *stm_expr; }                   atomically_;  /* (atomically stm-expr) */

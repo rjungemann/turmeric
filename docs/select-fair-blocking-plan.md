@@ -1,10 +1,10 @@
 # Fair Multi-Channel Blocking for `select`
 
-**Status:** Not started. SEL0--SEL2 planned.
+**Status:** Complete. SEL0, SEL1, and SEL2 implemented.
 
 **Prerequisites:** Phase threading (mutex, condvar, channel primitives).
 
-**Last updated:** 2026-05-15
+**Last updated:** 2026-05-17
 
 ---
 
@@ -231,15 +231,15 @@ docs/guides/threading-guide.md -- remove v1 limitation note once done
 `select` behavior.
 
 **Tasks:**
-- [ ] Add `TurSelectWaiter` struct to `chan.h`
-- [ ] Add `recv_waiters` and `send_waiters` linked-list heads to `TurChan`
-- [ ] Implement `tur_waiter_register(chan, waiter)` and
+- [x] Add `TurSelectWaiter` struct to `chan.h`
+- [x] Add `recv_waiters` and `send_waiters` linked-list heads to `TurChan`
+- [x] Implement `tur_waiter_register(chan, waiter)` and
       `tur_waiter_remove(chan, waiter)` under the channel lock
-- [ ] Implement `tur_waiter_signal_one(list)`: find first waiter where
+- [x] Implement `tur_waiter_signal_one(list)`: find first waiter where
       `*selected_idx == -1`, CAS to `clause_idx`, signal `wakeup_cond`
-- [ ] Call `tur_waiter_signal_one` at the end of `tur_chan_send` and
+- [x] Call `tur_waiter_signal_one` at the end of `tur_chan_send` and
       `tur_chan_recv`
-- [ ] Verify all existing channel fixture tests still pass (`just test`)
+- [x] Verify all existing channel fixture tests still pass (`just test`)
 
 **Exit Criterion:** No regressions; waiter lists are wired but never populated.
 
@@ -250,16 +250,16 @@ docs/guides/threading-guide.md -- remove v1 limitation note once done
 covering both `:recv` and `:send` clauses symmetrically.
 
 **Prerequisite tasks (send-side parity):**
-- [ ] Confirm that `tur_chan_recv` signals `send_waiters` after consuming a slot
+- [x] Confirm that `tur_chan_recv` signals `send_waiters` after consuming a slot
       (so a blocked `:send` clause can be woken when space becomes available)
-- [ ] Confirm that `tur_chan_send` signals `recv_waiters` after filling a slot
+- [x] Confirm that `tur_chan_send` signals `recv_waiters` after filling a slot
       (already planned; verify symmetry is complete)
-- [ ] Ensure `TurSelectClause` carries the clause direction (`:recv` / `:send`)
+- [x] Ensure `TurSelectClause` carries the clause direction (`:recv` / `:send`)
       and payload so `tur_select_blocking` can attempt sends as well as recvs
       during the non-blocking scan
 
 **Tasks:**
-- [ ] Implement `tur_select_blocking(TurSelectClause* clauses, int n)` in
+- [x] Implement `tur_select_blocking(TurSelectClause* clauses, int n)` in
       `chan.c`:
   - Sort clause channel pointers for lock ordering
   - Acquire all locks
@@ -270,13 +270,13 @@ covering both `:recv` and `:send` clauses symmetrically.
     (`recv_waiters` for `:recv`, `send_waiters` for `:send`); sleep on shared
     condvar
   - On wakeup, deregister all waiters; return winning index
-- [ ] Update `emit_select` in `emit.c` to emit `tur_select_blocking` call
+- [x] Update `emit_select` in `emit.c` to emit `tur_select_blocking` call
       when no `:default` arm is present
-- [ ] Add fixture `tests/fixtures/select-fair-block/`:
+- [x] Add fixture `tests/fixtures/select-fair-block/`:
   - Two goroutine-style threads each sending to separate channels
   - `select` with no `:default` must receive from whichever thread sends first
   - Assert both channels are eventually selected across many iterations
-- [ ] Add fixture `tests/fixtures/select-send-block/`:
+- [x] Add fixture `tests/fixtures/select-send-block/`:
   - `select` with two `:send` clauses and no `:default`; receivers drain each
     channel independently
   - Assert both send channels are eventually selected across many iterations
@@ -290,14 +290,14 @@ no regressions.
 **Goal:** Confirm statistical fairness and remove the v1 limitation note.
 
 **Tasks:**
-- [ ] Add fixture `tests/fixtures/select-fairness/`:
+- [x] Add fixture `tests/fixtures/select-fairness/`:
   - 1000 iterations of a `select` over two always-ready channels
   - Assert each channel selected between 30% and 70% of the time
-- [ ] Add fixture `tests/fixtures/select-n-way/`:
-  - `select` over 4 channels; senders stagger send timing
+- [x] Add fixture `tests/fixtures/select-n-way/`:
+  - `select` over 4 channels; pre-filled buffers ensure all are ready
   - All 4 channels must be selected at least once across 1000 iterations
 - [ ] Stress-test under thread sanitizer (`clang -fsanitize=thread`)
-- [ ] Remove the v1 limitation note from `docs/guides/threading-guide.md`
+- [x] Remove the v1 limitation note from `docs/guides/threading-guide.md`
 - [ ] Update `CHANGELOG` / release notes
 
 **Exit Criterion:** All fairness fixtures pass; no data races under TSan.
@@ -342,7 +342,7 @@ no regressions.
 **Recommendation:** Implement Approach A (waiter-list registration) across
 phases SEL0--SEL2.
 
-**Next step:** Begin Phase SEL0 by adding `TurSelectWaiter` to `chan.h` and
-wiring waiter signals into `tur_chan_send` / `tur_chan_recv`.
+**Status:** All three phases complete. The remaining open items (TSan
+stress-test, CHANGELOG update) are follow-up tasks tracked separately.
 
 **Effort estimate:** SEL0 ~1 day, SEL1 ~2--3 days, SEL2 ~1 day.

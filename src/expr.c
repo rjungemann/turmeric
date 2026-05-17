@@ -208,6 +208,10 @@ void expr_print(Buf *b, const Expr *e) {
             expr_print(b, e->as.await_.fut_expr);
             buf_putc(b, ')');
             break;
+        /* Phase SEL1: fair multi-channel select */
+        case EX_SELECT:
+            buf_puts(b, "(select ...)");
+            break;
         /* Phase N: numeric cast */
         case EX_CAST:
             buf_puts(b, "(as ");

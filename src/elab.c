@@ -808,6 +808,10 @@ typedef struct Elab {
     /* Phase T21-F: async/await forms */
     const Symbol *sym_async;
     const Symbol *sym_await;
+    /* Phase SEL1: fair multi-channel select */
+    const Symbol *sym_select;
+    const Symbol *sym_recv;   /* :recv keyword */
+    const Symbol *sym_send;   /* :send keyword */
     /* Phase 20: Software Transactional Memory */
     const Symbol *sym_stm;           /* stm */
     const Symbol *sym_atomically;    /* atomically */
@@ -1442,6 +1446,10 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* Phase T21-F: async/await */
     e->sym_async = intern_cstr(st, "async");
     e->sym_await = intern_cstr(st, "await");
+    /* Phase SEL1: fair multi-channel select */
+    e->sym_select = intern_cstr(st, "select");
+    e->sym_recv   = intern_cstr(st, "recv");
+    e->sym_send   = intern_cstr(st, "send");
     /* Phase 20: Software Transactional Memory */
     e->sym_stm = intern_cstr(st, "stm");
     e->sym_atomically = intern_cstr(st, "atomically");
@@ -7850,6 +7858,8 @@ static Expr *elab_thread_spawn(Elab *e, const Form *call);
 /* Phase T21-F: async/await sugar */
 static Expr *elab_async(Elab *e, const Form *call);
 static Expr *elab_await(Elab *e, const Form *call);
+/* Phase SEL1: fair multi-channel select */
+static Expr *elab_select(Elab *e, const Form *call);
 /* Phase 20: Software Transactional Memory */
 static Expr *elab_stm(Elab *e, const Form *call);
 static Expr *elab_atomically(Elab *e, const Form *call);
@@ -8085,6 +8095,9 @@ static Expr *elab_call(Elab *e, Form *call) {
         return elab_async(e, call);
     if (name == e->sym_await && call->as.list.len == 2)
         return elab_await(e, call);
+    /* Phase SEL1: fair multi-channel select */
+    if (name == e->sym_select && call->as.list.len >= 2)
+        return elab_select(e, call);
     /* Phase 20: Software Transactional Memory */
     if (name == e->sym_stm) return elab_stm(e, call);
     if (name == e->sym_atomically && call->as.list.len == 2)
@@ -12448,6 +12461,154 @@ static Expr *elab_await(Elab *e, const Form *call) {
     if (!fut_expr) return NULL;
     Expr *out = expr_new(e->arena, EX_AWAIT, TYPE_INT, call->span);
     out->as.await_.fut_expr = fut_expr;
+    return out;
+}
+
+/* Phase SEL1: (select ((ch :recv v) body) ... (:default body))
+ * Waiter-based fair multi-channel select. Returns the value of the selected clause body.
+ * All channel expressions must be ptr<void>. Clause bodies must be type-compatible. */
+static Expr *elab_select(Elab *e, const Form *call) {
+    /* call->as.list.items[0] = "select"
+     * call->as.list.items[1..n] = clauses
+     * Each clause is a 2-element list:
+     *   ((chan :recv v) body)   -- recv clause
+     *   ((chan :send val) body) -- send clause
+     *   (:default body)        -- default arm (only keyword at head, rest is body)
+     */
+    if (call->as.list.len < 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(select ...) requires at least one clause");
+        return NULL;
+    }
+    uint32_t n_clauses_raw = call->as.list.len - 1;
+    SelectClauseEntry *clauses = (SelectClauseEntry *)arena_alloc(
+        e->arena, n_clauses_raw * sizeof(SelectClauseEntry));
+    uint32_t n_clauses = 0;
+    int has_default = 0;
+    Expr *default_body = NULL;
+    const Symbol *sym_default = intern_cstr(e->st, "default");
+
+    for (uint32_t ci = 0; ci < n_clauses_raw; ci++) {
+        Form *clause_form = call->as.list.items[1 + ci];
+        /* Must be a list with exactly 2 items: descriptor and body */
+        if (clause_form->tag != F_LIST || clause_form->as.list.len != 2) {
+            diag_emit(DIAG_ERROR, clause_form->span,
+                      "select clause must be ((chan :recv v) body) or ((chan :send val) body) or (:default body)");
+            return NULL;
+        }
+        Form *desc      = clause_form->as.list.items[0];
+        Form *body_form = clause_form->as.list.items[1];
+
+        /* Check for (:default body) */
+        if (desc->tag == F_KEYWORD && desc->as.sym == sym_default) {
+            if (has_default) {
+                diag_emit(DIAG_ERROR, clause_form->span,
+                          "select: at most one :default arm is allowed");
+                return NULL;
+            }
+            has_default = 1;
+            default_body = elab_form(e, body_form);
+            if (!default_body) return NULL;
+            continue;
+        }
+
+        /* Channel clause: desc must be (chan :recv v) or (chan :send val) */
+        if (desc->tag != F_LIST || desc->as.list.len < 2) {
+            diag_emit(DIAG_ERROR, desc->span,
+                      "select channel descriptor must be (chan :recv binding) or (chan :send val)");
+            return NULL;
+        }
+        Form *chan_form = desc->as.list.items[0];
+        Form *op_form   = desc->as.list.items[1];
+
+        if (op_form->tag != F_KEYWORD) {
+            diag_emit(DIAG_ERROR, op_form->span,
+                      "select clause operation must be :recv or :send");
+            return NULL;
+        }
+        int op;
+        if (op_form->as.sym == e->sym_recv) {
+            op = 0;
+        } else if (op_form->as.sym == e->sym_send) {
+            op = 1;
+        } else {
+            diag_emit(DIAG_ERROR, op_form->span,
+                      "select clause operation must be :recv or :send");
+            return NULL;
+        }
+
+        /* Elaborate channel expression */
+        Expr *chan_expr = elab_form(e, chan_form);
+        if (!chan_expr) return NULL;
+
+        Expr *send_val = NULL;
+        Binding *recv_bind = NULL;
+
+        if (op == 0) {
+            /* recv: (chan :recv binding) -- 3 elements */
+            if (desc->as.list.len != 3) {
+                diag_emit(DIAG_ERROR, desc->span,
+                          "select :recv clause descriptor: (chan :recv binding)");
+                return NULL;
+            }
+            Form *bind_form = desc->as.list.items[2];
+            if (bind_form->tag != F_SYM) {
+                diag_emit(DIAG_ERROR, bind_form->span,
+                          "select :recv binding must be a symbol");
+                return NULL;
+            }
+            recv_bind = binding_new(e, bind_form->as.sym, TYPE_INT, false, false, body_form->span);
+        } else {
+            /* send: (chan :send val) -- 3 elements */
+            if (desc->as.list.len != 3) {
+                diag_emit(DIAG_ERROR, desc->span,
+                          "select :send clause descriptor: (chan :send val)");
+                return NULL;
+            }
+            Form *val_form = desc->as.list.items[2];
+            send_val = elab_form(e, val_form);
+            if (!send_val) return NULL;
+        }
+
+        /* Elaborate body with recv binding in scope (if recv clause) */
+        Expr *body_expr;
+        if (op == 0 && recv_bind) {
+            /* Introduce a scope with the received value binding */
+            Scope recv_scope;
+            scope_init(&recv_scope, e->scope);
+            e->scope = &recv_scope;
+            scope_add(&recv_scope, recv_bind);
+            body_expr = elab_form(e, body_form);
+            e->scope = recv_scope.parent;
+        } else {
+            body_expr = elab_form(e, body_form);
+        }
+        if (!body_expr) return NULL;
+
+        SelectClauseEntry *sc = &clauses[n_clauses++];
+        sc->chan          = chan_expr;
+        sc->op            = op;
+        sc->send_val      = send_val;
+        sc->recv_binding  = recv_bind;
+        sc->body          = body_expr;
+    }
+
+    if (n_clauses == 0 && !has_default) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "select: requires at least one channel clause");
+        return NULL;
+    }
+
+    /* Determine return type from first clause body (or default body) */
+    Type result_type = TYPE_INT;
+    if (n_clauses > 0) result_type = clauses[0].body->type;
+    else if (default_body) result_type = default_body->type;
+
+    Expr *out = expr_new(e->arena, EX_SELECT, result_type, call->span);
+    out->as.select_.clauses      = clauses;
+    out->as.select_.n_clauses    = n_clauses;
+    out->as.select_.has_default  = has_default;
+    out->as.select_.default_body = default_body;
     return out;
 }
 

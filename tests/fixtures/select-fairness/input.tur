@@ -1,0 +1,90 @@
+;; Phase SEL2: select-fairness -- PRNG fairness check.
+;;
+;; Both channels are pre-filled with 1000 items before any select runs.
+;; A select loop runs 1000 iterations counting how many times ch-a fires
+;; vs ch-b.
+;;
+;; Expected: ch-a selected between 300 and 700 times (30--70% window).
+;; Output: "fair" if within range, "unfair" otherwise.
+;;
+;; No threads are used: channels are ready throughout, so every select
+;; takes the non-blocking path in tur_select_blocking and picks a winner
+;; via the xorshift32 PRNG.
+
+(defn chan-new [cap :int] :ptr<void>
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+      void *recv_waiters; void *send_waiters;
+  } ChanBlock;
+  ChanBlock *ch = (ChanBlock *)malloc(sizeof(ChanBlock));
+  if (!ch) { fprintf(stderr, "chan-new: oom\n"); abort(); }
+  ch->buf = (int64_t *)malloc(sizeof(int64_t) * (size_t)cap);
+  if (!ch->buf) { free(ch); fprintf(stderr, "chan-new buf oom\n"); abort(); }
+  pthread_mutex_init(&ch->lock, NULL);
+  pthread_cond_init(&ch->not_full, NULL);
+  pthread_cond_init(&ch->not_empty, NULL);
+  ch->head = 0; ch->tail = 0; ch->count = 0; ch->cap = (int64_t)cap;
+  ch->recv_waiters = NULL; ch->send_waiters = NULL;
+  return (void *)ch;
+  ```)
+
+;; Fill channel with n items, each with value 0.
+(defn chan-fill [ch :ptr<void> n :int] :nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+      void *recv_waiters; void *send_waiters;
+  } ChanBlock;
+  ChanBlock *c = (ChanBlock *)ch;
+  int64_t i;
+  for (i = 0; i < (int64_t)n; i++) {
+      c->buf[c->tail] = 0;
+      c->tail = (c->tail + 1) % c->cap;
+      c->count++;
+  }
+  ```)
+
+(defn chan-free [ch :ptr<void>] :nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+      void *recv_waiters; void *send_waiters;
+  } ChanBlock;
+  ChanBlock *c = (ChanBlock *)ch;
+  pthread_mutex_destroy(&c->lock);
+  pthread_cond_destroy(&c->not_full);
+  pthread_cond_destroy(&c->not_empty);
+  free(c->buf);
+  free(c);
+  ```)
+
+;; Tail-recursive loop: run iter selects; return count of ch-a wins.
+;; Both channels are pre-filled with 0s, so (+ v 1) == 1 and (+ v 2) == 2,
+;; but we only use the result as a flag (1=a, 0=b) -- the (+ v N) form
+;; ensures the recv binding v is referenced, suppressing unused-variable
+;; warnings in the generated C.
+(defn count-loop [ch-a :ptr<void> ch-b :ptr<void> iter :int acc :int] :int
+  (if (= iter 0)
+    acc
+    (let [hit (select ((ch-a :recv va) (+ va 1))
+                      ((ch-b :recv vb) (* vb 0)))]
+      (count-loop ch-a ch-b (- iter 1) (+ acc hit)))))
+
+(defn main [] :int
+  (let [ch-a (chan-new 1000)
+        ch-b (chan-new 1000)]
+    (chan-fill ch-a 1000)
+    (chan-fill ch-b 1000)
+    (let [count-a (count-loop ch-a ch-b 1000 0)]
+      (if (>= count-a 300)
+        (if (<= count-a 700)
+          (println "fair")
+          (println "unfair"))
+        (println "unfair"))
+      (chan-free ch-a)
+      (chan-free ch-b)
+      0)))

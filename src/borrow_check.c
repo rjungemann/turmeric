@@ -390,6 +390,18 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
              */
             return borrow_check_expr_recursive(ctx, e->as.await_.fut_expr);
         }
+        case EX_SELECT: {
+            /* Phase SEL1: recurse into channel expressions and clause bodies */
+            for (uint32_t ci = 0; ci < e->as.select_.n_clauses; ci++) {
+                const SelectClauseEntry *cl = &e->as.select_.clauses[ci];
+                if (!borrow_check_expr_recursive(ctx, cl->chan)) return false;
+                if (cl->send_val && !borrow_check_expr_recursive(ctx, cl->send_val)) return false;
+                if (!borrow_check_expr_recursive(ctx, cl->body)) return false;
+            }
+            if (e->as.select_.default_body)
+                return borrow_check_expr_recursive(ctx, e->as.select_.default_body);
+            return true;
+        }
         /* Phase N: numeric cast — handled at line 169 in the literals group */
 
         case EX_BUILTIN:

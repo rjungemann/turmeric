@@ -1415,6 +1415,172 @@ static void tur_future_free(TurFuture *f) {
 /* Backward compatibility: TurAsyncTask = TurFuture */
 typedef TurFuture TurAsyncTask;
 
+/* Phase SEL0: TurSelectWaiter -- select waiter for fair multi-channel blocking */
+typedef struct TurSelectWaiter TurSelectWaiter;
+struct TurSelectWaiter {
+    pthread_mutex_t *wakeup_mutex;
+    pthread_cond_t  *wakeup_cond;
+    volatile int    *selected_idx;
+    int              clause_idx;
+    TurSelectWaiter *next;
+};
+
+/* Phase SEL0: signal the first unselected waiter in the list */
+static void tur_waiter_signal_one(void *waiter_list) {
+    TurSelectWaiter *w = (TurSelectWaiter *)waiter_list;
+    while (w) {
+        int exp = -1;
+        if (__atomic_compare_exchange_n(w->selected_idx, &exp, w->clause_idx, 0,
+                                        __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
+            pthread_mutex_lock(w->wakeup_mutex);
+            pthread_cond_signal(w->wakeup_cond);
+            pthread_mutex_unlock(w->wakeup_mutex);
+            return;
+        }
+        w = w->next;
+    }
+}
+
+/* Phase SEL1: TurSelectClause -- clause descriptor for tur_select_blocking */
+typedef struct { void *chan; int op; int64_t val; } TurSelectClause;
+
+/* Phase SEL1: persistent xorshift32 PRNG for fair select */
+static volatile uint32_t __tur_xr_state = 1u;
+
+/* Phase SEL1: tur_select_blocking -- block on all clauses; wake on first ready.
+ * clauses: array of TurSelectClause (op 0=recv, 1=send)
+ * n: number of clauses
+ * has_default: 1 if a :default arm is present
+ * Returns: index of the clause that fired, or -1 for default */
+static int tur_select_blocking(TurSelectClause *clauses, int n, int has_default) {
+    typedef struct {
+        pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+        int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+        void *recv_waiters; void *send_waiters;
+    } ChanBlock_;
+    if (n <= 0) return -2;
+    /* Phase 1: non-blocking scan -- try all clauses without blocking */
+    /* Collect unique channels for lock ordering */
+    ChanBlock_ *lock_order[64];
+    int n_unique = 0;
+    for (int i = 0; i < n && n_unique < 64; i++) {
+        ChanBlock_ *ch = (ChanBlock_ *)clauses[i].chan;
+        int found = 0;
+        for (int j = 0; j < n_unique; j++) if (lock_order[j] == ch) { found = 1; break; }
+        if (!found) lock_order[n_unique++] = ch;
+    }
+    /* Sort channels by address for deadlock-free locking order */
+    for (int i = 0; i < n_unique - 1; i++)
+        for (int j = i + 1; j < n_unique; j++)
+            if ((uintptr_t)lock_order[i] > (uintptr_t)lock_order[j]) {
+                ChanBlock_ *tmp = lock_order[i]; lock_order[i] = lock_order[j]; lock_order[j] = tmp;
+            }
+    /* Acquire all locks */
+    for (int i = 0; i < n_unique; i++) pthread_mutex_lock(&lock_order[i]->lock);
+    /* Final non-blocking scan under all locks */
+    int ready[64]; int n_ready = 0;
+    for (int i = 0; i < n; i++) {
+        ChanBlock_ *ch = (ChanBlock_ *)clauses[i].chan;
+        if (clauses[i].op == 0) { if (ch->count > 0) ready[n_ready++] = i; }
+        else                   { if (ch->count < ch->cap) ready[n_ready++] = i; }
+    }
+    if (n_ready > 0) {
+        /* Fair: pick uniformly at random among ready clauses.
+         * Use a persistent xorshift32 state so repeated calls from the
+         * same site (e.g. a TCO loop) don't always produce the same winner. */
+        uint32_t xr = __tur_xr_state;
+        xr ^= (uint32_t)(uintptr_t)clauses;
+        if (!xr) xr = 0x9e3779b9u;
+        xr ^= xr << 13; xr ^= xr >> 17; xr ^= xr << 5;
+        __tur_xr_state = xr;
+        int winner = ready[xr % (uint32_t)n_ready];
+        ChanBlock_ *wch = (ChanBlock_ *)clauses[winner].chan;
+        if (clauses[winner].op == 0) { /* recv */
+            clauses[winner].val = wch->buf[wch->head];
+            wch->head = (wch->head + 1) % wch->cap; wch->count--;
+            pthread_cond_signal(&wch->not_full);
+            tur_waiter_signal_one(wch->send_waiters);
+        } else { /* send */
+            wch->buf[wch->tail] = clauses[winner].val;
+            wch->tail = (wch->tail + 1) % wch->cap; wch->count++;
+            pthread_cond_signal(&wch->not_empty);
+            tur_waiter_signal_one(wch->recv_waiters);
+        }
+        for (int i = 0; i < n_unique; i++) pthread_mutex_unlock(&lock_order[i]->lock);
+        return winner;
+    }
+    /* Phase 2: default arm */
+    if (has_default) {
+        for (int i = 0; i < n_unique; i++) pthread_mutex_unlock(&lock_order[i]->lock);
+        return -1;
+    }
+    /* Phase 3: register waiters and sleep until one fires */
+    pthread_mutex_t wakeup_mutex;
+    pthread_cond_t  wakeup_cond;
+    pthread_mutex_init(&wakeup_mutex, NULL);
+    pthread_cond_init(&wakeup_cond, NULL);
+    volatile int selected_idx = -1;
+    TurSelectWaiter waiters[64];
+    int wn = n < 64 ? n : 64;
+    for (int i = 0; i < wn; i++) {
+        waiters[i].wakeup_mutex = &wakeup_mutex;
+        waiters[i].wakeup_cond  = &wakeup_cond;
+        waiters[i].selected_idx = &selected_idx;
+        waiters[i].clause_idx   = i;
+        ChanBlock_ *ch = (ChanBlock_ *)clauses[i].chan;
+        if (clauses[i].op == 0) { /* recv waiter */
+            waiters[i].next = (TurSelectWaiter *)ch->recv_waiters;
+            ch->recv_waiters = &waiters[i];
+        } else { /* send waiter */
+            waiters[i].next = (TurSelectWaiter *)ch->send_waiters;
+            ch->send_waiters = &waiters[i];
+        }
+    }
+    /* Release all channel locks */
+    for (int i = 0; i < n_unique; i++) pthread_mutex_unlock(&lock_order[i]->lock);
+    /* Sleep until woken by a channel operation */
+    pthread_mutex_lock(&wakeup_mutex);
+    while (selected_idx == -1)
+        pthread_cond_wait(&wakeup_cond, &wakeup_mutex);
+    int winner = selected_idx;
+    pthread_mutex_unlock(&wakeup_mutex);
+    /* Deregister all waiters */
+    for (int i = 0; i < wn; i++) {
+        ChanBlock_ *ch = (ChanBlock_ *)clauses[i].chan;
+        pthread_mutex_lock(&ch->lock);
+        if (clauses[i].op == 0) {
+            TurSelectWaiter **pp = (TurSelectWaiter **)&ch->recv_waiters;
+            while (*pp && *pp != &waiters[i]) pp = &(*pp)->next;
+            if (*pp) *pp = (*pp)->next;
+        } else {
+            TurSelectWaiter **pp = (TurSelectWaiter **)&ch->send_waiters;
+            while (*pp && *pp != &waiters[i]) pp = &(*pp)->next;
+            if (*pp) *pp = (*pp)->next;
+        }
+        pthread_mutex_unlock(&ch->lock);
+    }
+    /* Execute the winning clause */
+    ChanBlock_ *wch = (ChanBlock_ *)clauses[winner].chan;
+    pthread_mutex_lock(&wch->lock);
+    if (clauses[winner].op == 0) { /* recv */
+        while (wch->count == 0) pthread_cond_wait(&wch->not_empty, &wch->lock);
+        clauses[winner].val = wch->buf[wch->head];
+        wch->head = (wch->head + 1) % wch->cap; wch->count--;
+        pthread_cond_signal(&wch->not_full);
+        tur_waiter_signal_one(wch->send_waiters);
+    } else { /* send */
+        while (wch->count == wch->cap) pthread_cond_wait(&wch->not_full, &wch->lock);
+        wch->buf[wch->tail] = clauses[winner].val;
+        wch->tail = (wch->tail + 1) % wch->cap; wch->count++;
+        pthread_cond_signal(&wch->not_empty);
+        tur_waiter_signal_one(wch->recv_waiters);
+    }
+    pthread_mutex_unlock(&wch->lock);
+    pthread_mutex_destroy(&wakeup_mutex);
+    pthread_cond_destroy(&wakeup_cond);
+    return winner;
+}
+
 static int64_t tur_effect_perform(const char *name, int64_t *args, int n_args) {
     EffectHandlerFrame *frame =
         (tur_current_fiber && tur_current_fiber->effect_handler_chain)

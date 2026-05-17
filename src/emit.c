@@ -3103,6 +3103,149 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             free(fut_val);
             return tmp;
         }
+        /* Phase SEL1: fair multi-channel select */
+        case EX_SELECT: {
+            /*
+             * (select ((ch :recv v) body) ... (:default body))
+             *
+             * Generates:
+             *   TurSelectClause __sel_N[n];
+             *   __sel_N[0].chan = (void*)(intptr_t)<ch_val>;
+             *   __sel_N[0].op  = 0;  // recv
+             *   __sel_N[0].val = 0;
+             *   ...
+             *   int64_t __sel_idx_N = (int64_t)tur_select_blocking(__sel_N, n, has_default);
+             *   int64_t __sel_result_N;
+             *   if (__sel_idx_N == 0) { int64_t v = __sel_N[0].val; __sel_result_N = <body0>; }
+             *   else if (__sel_idx_N == 1) { ... }
+             *   else { __sel_result_N = <default_body>; }
+             */
+            uint32_t n    = e->as.select_.n_clauses;
+            int has_def   = e->as.select_.has_default;
+            const SelectClauseEntry *cls = e->as.select_.clauses;
+
+            /* Allocate unique suffix for this select to avoid name collisions */
+            int sel_id = ctx->tmp_n++;
+
+            char sel_arr[32], sel_idx[32], sel_res[32];
+            snprintf(sel_arr, sizeof(sel_arr), "__sel_%d",     sel_id);
+            snprintf(sel_idx, sizeof(sel_idx), "__sel_idx_%d", sel_id);
+            snprintf(sel_res, sizeof(sel_res), "__sel_res_%d", sel_id);
+
+            /* Declare clause array */
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "TurSelectClause %s[%u];\n", sel_arr, n > 0 ? n : 1);
+
+            /* Fill clause array */
+            for (uint32_t ci = 0; ci < n; ci++) {
+                const SelectClauseEntry *cl = &cls[ci];
+
+                /* Emit channel expression */
+                char *ch_val = emit_value(ctx, body, cl->chan);
+
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s[%u].chan = (void *)(intptr_t)%s;\n",
+                           sel_arr, ci, ch_val);
+                free(ch_val);
+
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s[%u].op = %d;\n", sel_arr, ci, cl->op);
+
+                if (cl->op == 1 && cl->send_val) {
+                    /* send: fill val field before call */
+                    char *sv = emit_value(ctx, body, cl->send_val);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "%s[%u].val = (int64_t)%s;\n", sel_arr, ci, sv);
+                    free(sv);
+                } else {
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "%s[%u].val = 0;\n", sel_arr, ci);
+                }
+            }
+
+            /* Call tur_select_blocking */
+            indent_buf(body, ctx->indent);
+            buf_printf(body,
+                "int64_t %s = (int64_t)tur_select_blocking(%s, %d, %d);\n",
+                sel_idx, sel_arr, (int)n, has_def);
+
+            /* Declare result variable (zero-initialized to silence -Wuninitialized) */
+            const char *res_ctype = type_c_name(e->type);
+            bool has_result = (e->type.kind != TY_NIL && e->type.kind != TY_NEVER);
+            if (has_result) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s %s = 0;\n", res_ctype, sel_res);
+            }
+
+            /* Dispatch: if-else chain over clause index */
+            for (uint32_t ci = 0; ci < n; ci++) {
+                const SelectClauseEntry *cl = &cls[ci];
+
+                indent_buf(body, ctx->indent);
+                if (ci == 0) {
+                    buf_printf(body, "if (%s == %d) {\n", sel_idx, (int)ci);
+                } else {
+                    buf_printf(body, "} else if (%s == %d) {\n", sel_idx, (int)ci);
+                }
+                ctx->indent += 4;
+
+                if (cl->op == 0 && cl->recv_binding) {
+                    /* recv: declare binding with the received value */
+                    char *bname = name_for_binding(ctx, cl->recv_binding);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "int64_t %s = %s[%u].val;\n",
+                               bname, sel_arr, ci);
+                    free(bname);
+                }
+
+                if (has_result) {
+                    char *bv = emit_value(ctx, body, cl->body);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "%s = (%s)%s;\n", sel_res, res_ctype, bv);
+                    free(bv);
+                } else {
+                    emit_stmt(ctx, body, cl->body);
+                }
+
+                ctx->indent -= 4;
+            }
+
+            /* Default branch */
+            if (has_def) {
+                indent_buf(body, ctx->indent);
+                if (n == 0) {
+                    buf_printf(body, "if (1) {\n");
+                } else {
+                    buf_puts(body, "} else {\n");
+                }
+                ctx->indent += 4;
+                if (has_result) {
+                    char *dv = emit_value(ctx, body, e->as.select_.default_body);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "%s = (%s)%s;\n", sel_res, res_ctype, dv);
+                    free(dv);
+                } else {
+                    emit_stmt(ctx, body, e->as.select_.default_body);
+                }
+                ctx->indent -= 4;
+            }
+
+            /* Close final brace */
+            if (n > 0 || has_def) {
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "}\n");
+            }
+
+            if (has_result) {
+                char *tmp = strdup(sel_res);
+                return tmp;
+            } else {
+                char *tmp = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "int64_t %s = 0;\n", tmp);
+                return tmp;
+            }
+        }
         /* Phase 20: Software Transactional Memory */
         case EX_STM: {
             /* (stm expr1 expr2 ...) - STM blocks are only valid inside atomically */
@@ -4925,8 +5068,10 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_REF_PRED:
         case EX_CONT_PRED:
         /* Phase T21-F: async/await as statement - emit and discard */
+        /* Phase SEL1: select as statement - emit and discard */
         case EX_ASYNC:
-        case EX_AWAIT: {
+        case EX_AWAIT:
+        case EX_SELECT: {
             /* Emit as value expression, discard result */
             char *v = emit_value(ctx, body, e);
             if (e->type.kind != TY_NIL) {
@@ -7067,6 +7212,179 @@ int emit_program(Buf *out, const Expr *program) {
     /* Keep old TurAsyncTask for backward compatibility */
     buf_puts(out, "/* Backward compatibility: TurAsyncTask = TurFuture */\n");
     buf_puts(out, "typedef TurFuture TurAsyncTask;\n\n");
+
+    /* Phase SEL0: select waiter infrastructure for fair multi-channel blocking */
+    buf_puts(out, "/* Phase SEL0: TurSelectWaiter -- select waiter for fair multi-channel blocking */\n");
+    buf_puts(out, "typedef struct TurSelectWaiter TurSelectWaiter;\n");
+    buf_puts(out, "struct TurSelectWaiter {\n");
+    buf_puts(out, "    pthread_mutex_t *wakeup_mutex;\n");
+    buf_puts(out, "    pthread_cond_t  *wakeup_cond;\n");
+    buf_puts(out, "    volatile int    *selected_idx;\n");
+    buf_puts(out, "    int              clause_idx;\n");
+    buf_puts(out, "    TurSelectWaiter *next;\n");
+    buf_puts(out, "};\n\n");
+
+    buf_puts(out, "/* Phase SEL0: signal the first unselected waiter in the list */\n");
+    buf_puts(out, "static void tur_waiter_signal_one(void *waiter_list) {\n");
+    buf_puts(out, "    TurSelectWaiter *w = (TurSelectWaiter *)waiter_list;\n");
+    buf_puts(out, "    while (w) {\n");
+    buf_puts(out, "        int exp = -1;\n");
+    buf_puts(out, "        if (__atomic_compare_exchange_n(w->selected_idx, &exp, w->clause_idx, 0,\n");
+    buf_puts(out, "                                        __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {\n");
+    buf_puts(out, "            pthread_mutex_lock(w->wakeup_mutex);\n");
+    buf_puts(out, "            pthread_cond_signal(w->wakeup_cond);\n");
+    buf_puts(out, "            pthread_mutex_unlock(w->wakeup_mutex);\n");
+    buf_puts(out, "            return;\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "        w = w->next;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "}\n\n");
+
+    /* Phase SEL1: tur_select_blocking -- fair multi-channel blocking select */
+    buf_puts(out, "/* Phase SEL1: TurSelectClause -- clause descriptor for tur_select_blocking */\n");
+    buf_puts(out, "typedef struct { void *chan; int op; int64_t val; } TurSelectClause;\n\n");
+    /* Persistent xorshift32 state: static so it survives across calls (including
+     * tail-call-optimised loops) and accumulates entropy across the program. */
+    buf_puts(out, "/* Phase SEL1: persistent xorshift32 PRNG for fair select */\n");
+    buf_puts(out, "static volatile uint32_t __tur_xr_state = 1u;\n\n");
+
+    buf_puts(out, "/* Phase SEL1: tur_select_blocking -- block on all clauses; wake on first ready.\n");
+    buf_puts(out, " * clauses: array of TurSelectClause (op 0=recv, 1=send)\n");
+    buf_puts(out, " * n: number of clauses\n");
+    buf_puts(out, " * has_default: 1 if a :default arm is present\n");
+    buf_puts(out, " * Returns: index of the clause that fired, or -1 for default */\n");
+    buf_puts(out, "static int tur_select_blocking(TurSelectClause *clauses, int n, int has_default) {\n");
+    buf_puts(out, "    typedef struct {\n");
+    buf_puts(out, "        pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;\n");
+    buf_puts(out, "        int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;\n");
+    buf_puts(out, "        void *recv_waiters; void *send_waiters;\n");
+    buf_puts(out, "    } ChanBlock_;\n");
+    buf_puts(out, "    if (n <= 0) return -2;\n");
+    /* Phase 1: non-blocking scan */
+    buf_puts(out, "    /* Phase 1: non-blocking scan -- try all clauses without blocking */\n");
+    buf_puts(out, "    /* Collect unique channels for lock ordering */\n");
+    buf_puts(out, "    ChanBlock_ *lock_order[64];\n");
+    buf_puts(out, "    int n_unique = 0;\n");
+    buf_puts(out, "    for (int i = 0; i < n && n_unique < 64; i++) {\n");
+    buf_puts(out, "        ChanBlock_ *ch = (ChanBlock_ *)clauses[i].chan;\n");
+    buf_puts(out, "        int found = 0;\n");
+    buf_puts(out, "        for (int j = 0; j < n_unique; j++) if (lock_order[j] == ch) { found = 1; break; }\n");
+    buf_puts(out, "        if (!found) lock_order[n_unique++] = ch;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    /* Sort channels by address for deadlock-free locking order */\n");
+    buf_puts(out, "    for (int i = 0; i < n_unique - 1; i++)\n");
+    buf_puts(out, "        for (int j = i + 1; j < n_unique; j++)\n");
+    buf_puts(out, "            if ((uintptr_t)lock_order[i] > (uintptr_t)lock_order[j]) {\n");
+    buf_puts(out, "                ChanBlock_ *tmp = lock_order[i]; lock_order[i] = lock_order[j]; lock_order[j] = tmp;\n");
+    buf_puts(out, "            }\n");
+    buf_puts(out, "    /* Acquire all locks */\n");
+    buf_puts(out, "    for (int i = 0; i < n_unique; i++) pthread_mutex_lock(&lock_order[i]->lock);\n");
+    buf_puts(out, "    /* Final non-blocking scan under all locks */\n");
+    buf_puts(out, "    int ready[64]; int n_ready = 0;\n");
+    buf_puts(out, "    for (int i = 0; i < n; i++) {\n");
+    buf_puts(out, "        ChanBlock_ *ch = (ChanBlock_ *)clauses[i].chan;\n");
+    buf_puts(out, "        if (clauses[i].op == 0) { if (ch->count > 0) ready[n_ready++] = i; }\n");
+    buf_puts(out, "        else                   { if (ch->count < ch->cap) ready[n_ready++] = i; }\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    if (n_ready > 0) {\n");
+    buf_puts(out, "        /* Fair: pick uniformly at random among ready clauses.\n");
+    buf_puts(out, "         * Use a persistent xorshift32 state so repeated calls from the\n");
+    buf_puts(out, "         * same site (e.g. a TCO loop) don't always produce the same winner. */\n");
+    buf_puts(out, "        uint32_t xr = __tur_xr_state;\n");
+    buf_puts(out, "        xr ^= (uint32_t)(uintptr_t)clauses;\n");
+    buf_puts(out, "        if (!xr) xr = 0x9e3779b9u;\n");
+    buf_puts(out, "        xr ^= xr << 13; xr ^= xr >> 17; xr ^= xr << 5;\n");
+    buf_puts(out, "        __tur_xr_state = xr;\n");
+    buf_puts(out, "        int winner = ready[xr % (uint32_t)n_ready];\n");
+    buf_puts(out, "        ChanBlock_ *wch = (ChanBlock_ *)clauses[winner].chan;\n");
+    buf_puts(out, "        if (clauses[winner].op == 0) { /* recv */\n");
+    buf_puts(out, "            clauses[winner].val = wch->buf[wch->head];\n");
+    buf_puts(out, "            wch->head = (wch->head + 1) % wch->cap; wch->count--;\n");
+    buf_puts(out, "            pthread_cond_signal(&wch->not_full);\n");
+    buf_puts(out, "            tur_waiter_signal_one(wch->send_waiters);\n");
+    buf_puts(out, "        } else { /* send */\n");
+    buf_puts(out, "            wch->buf[wch->tail] = clauses[winner].val;\n");
+    buf_puts(out, "            wch->tail = (wch->tail + 1) % wch->cap; wch->count++;\n");
+    buf_puts(out, "            pthread_cond_signal(&wch->not_empty);\n");
+    buf_puts(out, "            tur_waiter_signal_one(wch->recv_waiters);\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "        for (int i = 0; i < n_unique; i++) pthread_mutex_unlock(&lock_order[i]->lock);\n");
+    buf_puts(out, "        return winner;\n");
+    buf_puts(out, "    }\n");
+    /* Phase 2: default arm */
+    buf_puts(out, "    /* Phase 2: default arm */\n");
+    buf_puts(out, "    if (has_default) {\n");
+    buf_puts(out, "        for (int i = 0; i < n_unique; i++) pthread_mutex_unlock(&lock_order[i]->lock);\n");
+    buf_puts(out, "        return -1;\n");
+    buf_puts(out, "    }\n");
+    /* Phase 3: register waiters and sleep */
+    buf_puts(out, "    /* Phase 3: register waiters and sleep until one fires */\n");
+    buf_puts(out, "    pthread_mutex_t wakeup_mutex;\n");
+    buf_puts(out, "    pthread_cond_t  wakeup_cond;\n");
+    buf_puts(out, "    pthread_mutex_init(&wakeup_mutex, NULL);\n");
+    buf_puts(out, "    pthread_cond_init(&wakeup_cond, NULL);\n");
+    buf_puts(out, "    volatile int selected_idx = -1;\n");
+    buf_puts(out, "    TurSelectWaiter waiters[64];\n");
+    buf_puts(out, "    int wn = n < 64 ? n : 64;\n");
+    buf_puts(out, "    for (int i = 0; i < wn; i++) {\n");
+    buf_puts(out, "        waiters[i].wakeup_mutex = &wakeup_mutex;\n");
+    buf_puts(out, "        waiters[i].wakeup_cond  = &wakeup_cond;\n");
+    buf_puts(out, "        waiters[i].selected_idx = &selected_idx;\n");
+    buf_puts(out, "        waiters[i].clause_idx   = i;\n");
+    buf_puts(out, "        ChanBlock_ *ch = (ChanBlock_ *)clauses[i].chan;\n");
+    buf_puts(out, "        if (clauses[i].op == 0) { /* recv waiter */\n");
+    buf_puts(out, "            waiters[i].next = (TurSelectWaiter *)ch->recv_waiters;\n");
+    buf_puts(out, "            ch->recv_waiters = &waiters[i];\n");
+    buf_puts(out, "        } else { /* send waiter */\n");
+    buf_puts(out, "            waiters[i].next = (TurSelectWaiter *)ch->send_waiters;\n");
+    buf_puts(out, "            ch->send_waiters = &waiters[i];\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    /* Release all channel locks */\n");
+    buf_puts(out, "    for (int i = 0; i < n_unique; i++) pthread_mutex_unlock(&lock_order[i]->lock);\n");
+    buf_puts(out, "    /* Sleep until woken by a channel operation */\n");
+    buf_puts(out, "    pthread_mutex_lock(&wakeup_mutex);\n");
+    buf_puts(out, "    while (selected_idx == -1)\n");
+    buf_puts(out, "        pthread_cond_wait(&wakeup_cond, &wakeup_mutex);\n");
+    buf_puts(out, "    int winner = selected_idx;\n");
+    buf_puts(out, "    pthread_mutex_unlock(&wakeup_mutex);\n");
+    buf_puts(out, "    /* Deregister all waiters */\n");
+    buf_puts(out, "    for (int i = 0; i < wn; i++) {\n");
+    buf_puts(out, "        ChanBlock_ *ch = (ChanBlock_ *)clauses[i].chan;\n");
+    buf_puts(out, "        pthread_mutex_lock(&ch->lock);\n");
+    buf_puts(out, "        if (clauses[i].op == 0) {\n");
+    buf_puts(out, "            TurSelectWaiter **pp = (TurSelectWaiter **)&ch->recv_waiters;\n");
+    buf_puts(out, "            while (*pp && *pp != &waiters[i]) pp = &(*pp)->next;\n");
+    buf_puts(out, "            if (*pp) *pp = (*pp)->next;\n");
+    buf_puts(out, "        } else {\n");
+    buf_puts(out, "            TurSelectWaiter **pp = (TurSelectWaiter **)&ch->send_waiters;\n");
+    buf_puts(out, "            while (*pp && *pp != &waiters[i]) pp = &(*pp)->next;\n");
+    buf_puts(out, "            if (*pp) *pp = (*pp)->next;\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "        pthread_mutex_unlock(&ch->lock);\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    /* Execute the winning clause */\n");
+    buf_puts(out, "    ChanBlock_ *wch = (ChanBlock_ *)clauses[winner].chan;\n");
+    buf_puts(out, "    pthread_mutex_lock(&wch->lock);\n");
+    buf_puts(out, "    if (clauses[winner].op == 0) { /* recv */\n");
+    buf_puts(out, "        while (wch->count == 0) pthread_cond_wait(&wch->not_empty, &wch->lock);\n");
+    buf_puts(out, "        clauses[winner].val = wch->buf[wch->head];\n");
+    buf_puts(out, "        wch->head = (wch->head + 1) % wch->cap; wch->count--;\n");
+    buf_puts(out, "        pthread_cond_signal(&wch->not_full);\n");
+    buf_puts(out, "        tur_waiter_signal_one(wch->send_waiters);\n");
+    buf_puts(out, "    } else { /* send */\n");
+    buf_puts(out, "        while (wch->count == wch->cap) pthread_cond_wait(&wch->not_full, &wch->lock);\n");
+    buf_puts(out, "        wch->buf[wch->tail] = clauses[winner].val;\n");
+    buf_puts(out, "        wch->tail = (wch->tail + 1) % wch->cap; wch->count++;\n");
+    buf_puts(out, "        pthread_cond_signal(&wch->not_empty);\n");
+    buf_puts(out, "        tur_waiter_signal_one(wch->recv_waiters);\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    pthread_mutex_unlock(&wch->lock);\n");
+    buf_puts(out, "    pthread_mutex_destroy(&wakeup_mutex);\n");
+    buf_puts(out, "    pthread_cond_destroy(&wakeup_cond);\n");
+    buf_puts(out, "    return winner;\n");
+    buf_puts(out, "}\n\n");
+
     /* global_effect_handler_chain is declared earlier, before tur_fiber_block_new */
     buf_puts(out, "static int64_t tur_effect_perform(const char *name, int64_t *args, int n_args) {\n");
         /* T21-B: use fiber-local handler chain when inside a fiber */

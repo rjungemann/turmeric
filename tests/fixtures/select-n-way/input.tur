@@ -1,0 +1,102 @@
+;; Phase SEL2: select-n-way -- 4-channel select coverage check.
+;;
+;; Four channels are each pre-filled with 1000 items.
+;; A select loop runs 1000 iterations selecting across all 4 channels and
+;; accumulates a bitmask: bit 0 = ch-a fired, bit 1 = ch-b, bit 2 = ch-c,
+;; bit 3 = ch-d.
+;;
+;; After 1000 iterations over 4 always-ready channels, all 4 must have
+;; been selected at least once, so the bitmask must equal 15 (0b1111).
+;;
+;; Output: "all-selected" if bitmask==15, "missed" otherwise.
+;;
+;; No threads required: channels are pre-filled, every select uses the
+;; non-blocking path.
+
+(defn chan-new [cap :int] :ptr<void>
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+      void *recv_waiters; void *send_waiters;
+  } ChanBlock;
+  ChanBlock *ch = (ChanBlock *)malloc(sizeof(ChanBlock));
+  if (!ch) { fprintf(stderr, "chan-new: oom\n"); abort(); }
+  ch->buf = (int64_t *)malloc(sizeof(int64_t) * (size_t)cap);
+  if (!ch->buf) { free(ch); fprintf(stderr, "chan-new buf oom\n"); abort(); }
+  pthread_mutex_init(&ch->lock, NULL);
+  pthread_cond_init(&ch->not_full, NULL);
+  pthread_cond_init(&ch->not_empty, NULL);
+  ch->head = 0; ch->tail = 0; ch->count = 0; ch->cap = (int64_t)cap;
+  ch->recv_waiters = NULL; ch->send_waiters = NULL;
+  return (void *)ch;
+  ```)
+
+(defn chan-fill [ch :ptr<void> n :int] :nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+      void *recv_waiters; void *send_waiters;
+  } ChanBlock;
+  ChanBlock *c = (ChanBlock *)ch;
+  int64_t i;
+  for (i = 0; i < (int64_t)n; i++) {
+      c->buf[c->tail] = 0;
+      c->tail = (c->tail + 1) % c->cap;
+      c->count++;
+  }
+  ```)
+
+(defn chan-free [ch :ptr<void>] :nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+      void *recv_waiters; void *send_waiters;
+  } ChanBlock;
+  ChanBlock *c = (ChanBlock *)ch;
+  pthread_mutex_destroy(&c->lock);
+  pthread_cond_destroy(&c->not_full);
+  pthread_cond_destroy(&c->not_empty);
+  free(c->buf);
+  free(c);
+  ```)
+
+;; Bitwise OR via inline C.
+(defn bit-or [a :int b :int] :int
+  ```c
+  return (int64_t)((int64_t)a | (int64_t)b);
+  ```)
+
+;; Tail-recursive loop over 4 channels.
+;; Returns bitmask of which channels fired at least once.
+;; The (+ vN N) form ensures each recv binding is referenced in its body.
+(defn mark-loop [ch-a :ptr<void> ch-b :ptr<void> ch-c :ptr<void> ch-d :ptr<void>
+                 iter :int seen :int] :int
+  (if (= iter 0)
+    seen
+    (let [bit (select ((ch-a :recv va) (+ va 1))
+                      ((ch-b :recv vb) (+ vb 2))
+                      ((ch-c :recv vc) (+ vc 4))
+                      ((ch-d :recv vd) (+ vd 8)))]
+      (mark-loop ch-a ch-b ch-c ch-d (- iter 1) (bit-or seen bit)))))
+
+(defn main [] :int
+  (let [ch-a (chan-new 1000)
+        ch-b (chan-new 1000)
+        ch-c (chan-new 1000)
+        ch-d (chan-new 1000)]
+    (chan-fill ch-a 1000)
+    (chan-fill ch-b 1000)
+    (chan-fill ch-c 1000)
+    (chan-fill ch-d 1000)
+    (let [seen (mark-loop ch-a ch-b ch-c ch-d 1000 0)]
+      (if (= seen 15)
+        (println "all-selected")
+        (println "missed"))
+      (chan-free ch-a)
+      (chan-free ch-b)
+      (chan-free ch-c)
+      (chan-free ch-d)
+      0)))
