@@ -20,7 +20,7 @@ tur format myfile.tur > myfile.tur.tmp && mv myfile.tur.tmp myfile.tur
 
 # Check whether a file is already formatted (exits 1 if not)
 tur format --check myfile.tur
-```
+```text
 
 The `--check` flag is useful in CI:
 
@@ -107,7 +107,7 @@ Before formatting:
 ```turmeric
 (defn add [x :int y :int] :int (+ x y))
 (defn factorial [n :int] :int (if (<= n 1) 1 (* n (factorial (- n 1)))))
-```
+```turmeric
 
 After `tur format`:
 

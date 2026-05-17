@@ -10,7 +10,7 @@ Turmeric. All examples require `-Xgadt` unless noted.
 The classic GADT motivation: an expression tree whose type parameter tracks
 the result type, so the interpreter is total and type-safe.
 
-```
+```turmeric
 ; A two-type expression language: integers and booleans.
 (defgadt Expr [a]
   (IntLit  int                  : (Expr int))
@@ -50,7 +50,7 @@ value.
 Use a type-level natural number to track vector length at compile time. Safe
 `head` and `vzip-with` become expressible without `option`.
 
-```
+```turmeric
 ; Type-level naturals
 (defgadt Nat []
   (Zero : Nat)
@@ -102,7 +102,7 @@ module. Import it with `(load "stdlib/gadt-vec.tur")`.
 Encode the expected argument list in the type so the wrong number or type of
 arguments is a compile-time error.
 
-```
+```turmeric
 ; A format descriptor -- 'args' is a phantom type tracking argument types.
 ; This is a simplified version: real type-level lists need HKT.
 ; Here we show the two-argument case explicitly.
@@ -137,7 +137,7 @@ with fixed arity.
 The built-in `Equal` GADT lets you carry proofs of type equality across
 function boundaries. Use `coerce` to convert values across proven equalities.
 
-```
+```turmeric
 ; Equal is built-in; you can also declare it yourself:
 ; (defgadt Equal [a b]
 ;   (Refl : (Equal a a)))
@@ -175,7 +175,7 @@ function boundaries. Use `coerce` to convert values across proven equalities.
 
 ### Using `Equal` to implement a typed heterogeneous container
 
-```
+```turmeric
 ; A box that remembers the type of its contents via a witness.
 (defgadt TypeBox [a]
   (MkBox : int -> (TypeBox int))
@@ -203,7 +203,7 @@ function boundaries. Use `coerce` to convert values across proven equalities.
 GADTs and union types (`-Xgadt -Xunion-types`) can be combined. A function
 can accept either a GADT value or a plain value through a union type:
 
-```
+```turmeric
 ; A typed tag for int-or-bool dispatch
 (defgadt Tag [a]
   (IntTag  : (Tag int))

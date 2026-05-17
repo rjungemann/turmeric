@@ -47,7 +47,7 @@ TURMERIC_HIGHLIGHT_JS = '''\
   <script>
   (function(){
     var KW = new Set([
-      'defn','defmacro','defstruct','definstance','def','let','let*','letrec',
+      'defn','defmacro','defstruct','definstance','defdata','defgadt','defclass','def','let','let*','letrec',
       'if','cond','when','unless','do','begin','and','or','not',
       'fn','lambda','async','await','match','case',
       'quote','quasiquote','unquote','for','while','loop','do-m',
@@ -55,6 +55,7 @@ TURMERIC_HIGHLIGHT_JS = '''\
       'import','export','module','require','provide',
       'cons','car','cdr','nil-value','some','none','ok','err',
       'map','filter','reduce','apply','return','yield','raise','throw',
+      'coerce','cast','type-of','any',
     ]);
     function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
     function hl(code){
@@ -264,7 +265,7 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path) -> 
 
     uncategorized = sorted(all_stems - categorized_stems)
     if uncategorized:
-        items = [f'<li><a href="{s}.html">{s.replace("-"," ").title()}</a></li>'
+        items = [f'<li><a href="{s}.html">{s}</a></li>'
                  for s in uncategorized]
         cards.append(f'''\
     <div class="index-card" style="display:block">

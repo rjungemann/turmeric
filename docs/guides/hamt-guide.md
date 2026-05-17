@@ -21,7 +21,7 @@ Turmeric's HAMT uses xxHash64 for hashing, 5-bit hash chunks (32 slots per level
 
 ;; Share ownership (increments ref count; returns same pointer)
 (def m2 (hamt/retain m))
-```
+```turmeric
 
 ### Memory model
 
@@ -63,7 +63,7 @@ Two built-in hash functions cover the common cases:
 ;; Hash a pointer value directly (identity map)
 (def ptr (some-object))
 (def h  (hamt/hash-ptr ptr))
-```
+```text
 
 For custom key types, compute a 64-bit hash yourself (e.g. via inline C calling `tur_hamt_hash_xxh64`) and pass it directly to `hamt/set` / `hamt/get` etc.
 
@@ -96,7 +96,7 @@ For custom key types, compute a 64-bit hash yourself (e.g. via inline C calling 
     (recur)))
 
 (hamt/iter-free iter)
-```
+```turmeric
 
 Iteration order is unspecified (hash order, not insertion order).
 
@@ -126,7 +126,7 @@ The `fn` arguments are C function pointers. Use inline C to define them:
   }
   return (void*)double_val;
   ```)
-```
+```turmeric
 
 ## Transient Mode
 
@@ -157,7 +157,7 @@ Transients allow **batch construction** with in-place mutation, then seal back i
 
 ;; Dump the trie structure in DOT format to stderr (for Graphviz)
 (hamt/dump m)
-```
+```turmeric
 
 ## Quick Reference
 
@@ -211,7 +211,7 @@ Transients allow **batch construction** with in-place mutation, then seal back i
 (def v2 (hamt/set v1 (hamt/hash-str "y") "y" "2"))
 
 ;; v0, v1, and v2 all remain valid; share structure
-```
+```turmeric
 
 ### Config overlay
 

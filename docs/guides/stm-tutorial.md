@@ -23,7 +23,7 @@ Like database transactions, an STM transaction either completes entirely or roll
         (when (>= from-balance amount)
           (write-tvar from-account (- from-balance amount))
           (write-tvar to-account (+ to-balance amount)))))))
-```
+```turmeric
 
 ### Transactional Variables: TVar
 
@@ -71,7 +71,7 @@ Like database transactions, an STM transaction either completes entirely or roll
       (write-tvar counter (+ v 1)))))
 
 (println (atomically (fn [] (read-tvar counter))))  ; => 1
-```
+```turmeric
 
 ### Bank Transfer (No Deadlock!)
 
@@ -118,7 +118,7 @@ Like database transactions, an STM transaction either completes entirely or roll
 (atomically
   (fn []
     (read-tvar tvar)))  ; => 100
-```
+```turmeric
 
 ### Running a Transaction
 
@@ -144,7 +144,7 @@ Like database transactions, an STM transaction either completes entirely or roll
     (let [balance (read-tvar account)]
       (when (<= balance 10)
         (retry)))))  ; Block and re-run when any watched TVar changes
-```
+```turmeric
 
 When `retry` is called:
 1. The transaction aborts (without side effects).
@@ -182,7 +182,7 @@ If the first branch calls `retry`, the second branch is tried. Both branches see
 (atomically
   (fn []
     (write-tmvar mvar 42)))
-```
+```turmeric
 
 ### TChan: FIFO Channel
 
@@ -232,7 +232,7 @@ If the first branch calls `retry`, the second branch is tried. Both branches see
           (def item (car q))
           (write-tmvar queue (cdr q))
           (println item))))))
-```
+```turmeric
 
 ### Reader-Writer Lock
 
@@ -273,7 +273,7 @@ If the first branch calls `retry`, the second branch is tried. Both branches see
         (do
           (write-tmvar barrier (assoc state :waiting waiting))
           (retry))))))
-```
+```turmeric
 
 ## Limitations (v1)
 

@@ -14,7 +14,7 @@ Enable the system with:
 
 ```sh
 tur build -Xsubstructural myfile.tur
-```
+```turmeric
 
 `-Xsubstructural` implies `-Xlinear`.
 
@@ -62,7 +62,7 @@ appropriate for one-shot tokens, single-use callbacks, or initialization keys.
 (let [^affine k (generate-key)]
   (initialize k)
   (initialize k))
-```
+```turmeric
 
 ### `^relevant` -- use at least once
 
@@ -98,7 +98,7 @@ The bound value must be used at least once before its scope exits.
 ;; ERROR TUR-E0151: relevant value 'r' dropped without use
 (let [r (must-use (acquire-resource))]
   0)
-```
+```turmeric
 
 ### `(with-resource [name init] body...)`
 
@@ -142,7 +142,7 @@ annotation -- but you must explicitly consume the ref.
 (defn consume [r :ref] :int
   (drop! r)
   0)
-```
+```turmeric
 
 ### Affine vs. move semantics
 

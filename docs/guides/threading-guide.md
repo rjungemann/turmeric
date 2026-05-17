@@ -22,7 +22,7 @@ Higher-level primitives -- channels, futures, task groups, thread pools, semapho
 
 ;; Block until thread completes and get result
 (println (thread-join result))  ; prints 42
-```
+```turmeric
 
 ### Properties
 
@@ -62,7 +62,7 @@ Each thread has its own stack and thread-local variables:
 
 ;; Original and clones all point to same value
 (println (counter-value shared))
-```
+```turmeric
 
 ### Properties
 
@@ -117,7 +117,7 @@ For read-heavy workloads, use `RwLock<T>`:
 ;; Write lock (exclusive)
 (write-lock data
   (fn [vec] (set-vec vec 0 42)))
-```
+```turmeric
 
 ## Atomic Types: Atomic<T>
 
@@ -171,7 +171,7 @@ mutex, condvar, and value/error slot.
 (println (ok? result))     ; => true
 (println (ok-val result))  ; => 42
 (promise-free p)
-```
+```turmeric
 
 ### Core API
 
@@ -204,7 +204,7 @@ mutex, condvar, and value/error slot.
 
 ;; Flat-map: fn must return a new future
 (def f3 (future-then f (fn [v] (future-of (+ v 1)))))
-```
+```turmeric
 
 ### Multi-Combinators
 
@@ -240,7 +240,7 @@ mutex, condvar, and value/error slot.
 
 ;; Stand-alone timeout future (rejects with exn = -1 after ms)
 (def t (future-timeout 1000))
-```
+```turmeric
 
 ## Synchronization Primitives
 
@@ -292,7 +292,7 @@ Turmeric provides two channel types backed by the same ring-buffer layout:
 
 (println (async-chan-count ch))  ; current item count
 (async-chan-free ch)
-```
+```turmeric
 
 | Function | Signature | Notes |
 |---|---|---|
@@ -352,7 +352,7 @@ Block until a condition is signaled:
 
 ;; Thread B: signal the condition
 (condition-signal cond)
-```
+```turmeric
 
 ### Semaphore
 
@@ -392,7 +392,7 @@ threads call it concurrently.
 (once-call flag init-resource)
 
 (once-flag-free flag)
-```
+```turmeric
 
 | Function | Notes |
 |---|---|
@@ -447,7 +447,7 @@ delivered via `Future` (see the Futures section).
 
 (thread-pool-shutdown tp)  ; closes queue and joins all workers
 (thread-pool-free tp)      ; must be called after shutdown
-```
+```turmeric
 
 | Function | Notes |
 |---|---|
@@ -512,7 +512,7 @@ Cancellation is **cooperative** -- tasks must periodically check
   (task-group-spawn g my-fiber-a)
   (task-group-spawn g my-fiber-b))
 (task-group-free g)
-```
+```turmeric
 
 ### Cooperative Cancellation
 
@@ -539,7 +539,7 @@ Cancellation is **cooperative** -- tasks must periodically check
 (task-group-with-timeout g 5000
   (task-group-spawn g long-running-task))
 (task-group-free g)
-```
+```turmeric
 
 ### Lifecycle API
 
@@ -612,7 +612,7 @@ int, bool, Mutex<T> [T : Sync]
 ;; NOT Sync (require Mutex for shared access)
 Rc<T> (thread-local ref counting)
 ref<T> (single-thread ownership)
-```
+```turmeric
 
 Most library types implement these traits automatically based on their fields.
 
@@ -656,7 +656,7 @@ Turmeric's borrow checker enforces:
       (loop))))
 
 (chan-free ch)
-```
+```turmeric
 
 ### Thread-Safe Counter
 
@@ -686,7 +686,7 @@ Turmeric's borrow checker enforces:
         (println (str "Thread " i " starting"))
         (barrier-wait barrier)
         (println (str "Thread " i " done"))))))
-```
+```turmeric
 
 ### Structured Concurrency with TaskGroup
 
@@ -724,7 +724,7 @@ Turmeric's borrow checker enforces:
 
 (thread-pool-shutdown tp)
 (thread-pool-free tp)
-```
+```turmeric
 
 ## See Also
 

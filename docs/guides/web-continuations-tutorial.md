@@ -42,7 +42,7 @@ HTTP is stateless. A web form spanning multiple pages is inherently stateful. Th
 
 The continuation approach, popularized by PLT Scheme's `web-server/servlet` and Racket's `send/suspend`, threads the control-flow problem away entirely:
 
-```
+```turmeric
 handler-1 runs to a "send this form, then resume" point
   -> captures continuation k
   -> stashes k under token T
@@ -70,7 +70,7 @@ Racket's `send/suspend` API looks like this (for comparison):
           (form ([action ,k-url])
             (input ([name "name"]))
             (input ([type "submit"] [value "Next"])))))))))
-```
+```text
 
 Turmeric's `serial-shift` plays the same role as `send/suspend`, with the difference that the continuation is serialized to bytes and stored in a lookup table rather than living in a heap closure.
 
@@ -97,7 +97,7 @@ examples/guestbook/
   data/
     entries.bin        -- serialized guestbook entries (auto-created at runtime)
     conts/             -- one file per continuation blob (auto-created at runtime)
-```
+```text
 
 The `data/` directory is created at runtime by the server on first start. You do not need to create it manually.
 
@@ -121,7 +121,7 @@ After following this tutorial, the root `Justfile` gains:
 run-guestbook: configure-examples
     cmake --build build --target guestbook
     ./build/examples/guestbook/guestbook
-```
+```text
 
 ---
 
@@ -218,7 +218,7 @@ Declare the three C functions using `extern-c`:
    (content-type : cstr)
    (body         : cstr)] : unit
   "httpd_send_response")
-```
+```turmeric
 
 ### 1.3 Request and Response Structs
 
@@ -249,7 +249,7 @@ Algebraic effects decouple handler logic from transport. Define one effect opera
 ;;; Since: Guestbook example
 (defeffect HttpEffect
   (send-html [body : cstr] : unit))
-```
+```turmeric
 
 ### 2.2 A Trivial Handler
 
@@ -296,7 +296,7 @@ The top-level loop in `main.tur` interprets `HttpEffect` by calling the C shim:
 (defn main [] : unit
   (httpd-start 8080)
   (run-loop))
-```
+```turmeric
 
 The `dispatch` function (defined in `router.tur`) routes requests to the appropriate handler.
 
@@ -358,7 +358,7 @@ URL-encoded POST bodies have the form `name=Alice&message=Hello+World`. Extract 
       (def rest      (cstr-drop body val-start))
       (def end       (or (cstr-find rest "&") (cstr-len rest)))
       (Some (percent-decode (cstr-take rest end)))))
-```
+```turmeric
 
 The `percent-decode` helper converts `%XX` sequences and replaces `+` with space:
 
@@ -408,7 +408,7 @@ The `percent-decode` helper converts `%XX` sequences and replaces `+` with space
     ;; Done: show result
     (perform HttpEffect
       (send-html (str "<p>" a " + " b " = " (int64->cstr (+ a b)) "</p>")))))
-```
+```turmeric
 
 The two `send-form-and-wait` calls look like blocking reads but each one:
 1. Serializes the continuation ("everything left to do after this point")
@@ -482,7 +482,7 @@ After `perform HttpEffect (send-html html)`, the current fiber is done -- the HT
       (match (bytes->serial-cont bytes)
         (Err _)  -> (None)
         (Ok k)   -> (Some k))))
-```
+```turmeric
 
 ### 4.4 The Router
 
@@ -559,7 +559,7 @@ Now wire together two `send-form-and-wait` calls for the name and message pages.
     (def msg-body (send-form-and-wait
                     (fn [action] (render-message-form action name))))
     (def message (or (parse-form-field msg-body "message") ""))))
-```
+```turmeric
 
 ### 5.1 What Happens at Runtime
 
@@ -592,7 +592,7 @@ Browser                 Server
   |                       |  serial-resume k2 "message=Hello"
   |                       |  flow resumes: message = "Hello"
   |                       |  (more steps follow in Step 8)
-```
+```text
 
 Each `serial-resume` re-enters the flow at exactly the point after `send-form-and-wait` returned, with all local variables (`name`, etc.) intact in the deserialized continuation.
 
@@ -659,7 +659,7 @@ Back navigation is completely free -- the server already serialized both continu
        "  <button type='submit'>&#8592; Edit Message</button>"
        "</form>"
        "</body></html>"))
-```
+```turmeric
 
 ---
 
@@ -697,7 +697,7 @@ Entries are serialized as a `Vec cstr` (name, message, timestamp-string):
                 :name      (Vec.get parts 0)
                 :message   (Vec.get parts 1)
                 :posted-at (cstr->int64 (Vec.get parts 2))))))))
-```
+```turmeric
 
 ### 7.3 The Store API
 
@@ -773,7 +773,7 @@ Complete the flow. After the preview confirmation, write the entry and show the 
                     :posted-at (unix-now)))
     (perform HttpEffect
       (send-html (render-thankyou (store-all))))))
-```
+```turmeric
 
 > **How confirm vs. back is handled:** The preview page has two forms pointing to two different tokens. The router dispatches entirely based on which token was POSTed. No `action` field inspection is needed in the flow itself.
 
@@ -843,7 +843,7 @@ Random tokens prevent guessing, but they do not prevent token forgery if an atta
         (Some token)
         (None))
     _ -> (None)))
-```
+```text
 
 Load the secret from an environment variable at startup:
 
@@ -871,7 +871,7 @@ Store a creation timestamp alongside the continuation bytes. Reject tokens older
 ;;; Since: Guestbook example
 (defn continuation-expired? [sc : StoredCont] : bool
   (> (- (unix-now) sc.created-at) CONT-TTL-SECONDS))
-```
+```turmeric
 
 `load-continuation` checks `continuation-expired?` and returns `None` for stale tokens.
 
@@ -920,7 +920,7 @@ GUESTBOOK_SECRET="my-real-secret" ./build/examples/guestbook/guestbook
 
 # Or use the Justfile recipe
 just run-guestbook
-```
+```text
 
 Visit `http://localhost:8080` in a browser. Fill in your name, a message, preview the entry, and confirm. The entry appears in the thank-you page and persists in `data/entries.bin` across restarts.
 

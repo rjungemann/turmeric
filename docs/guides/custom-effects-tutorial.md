@@ -63,13 +63,13 @@ The simplest effect takes no parameters and returns nothing useful. It is a sign
 ;; Handle by printing a fixed message each time.
 (handle (greet)
   (Emit [] k) (do (println "hello!") (resume k nil)))
-```
+```turmeric
 
 **Output:**
 ```
 hello!
 hello!
-```
+```turmeric
 
 Key points:
 - `defeffect` declares the name, parameter list, and return type.
@@ -114,7 +114,7 @@ Effects can carry data to the handler. Declare typed parameters just like functi
 (println (handle (use-double 21)
   (Double [x] k) (resume k (* x 2))))
 ; => 42
-```
+```turmeric
 
 The handler pattern `(Double [x] k)` binds `x` to the argument supplied by the performer and `k` to the continuation. You can compute any value to pass back via `resume`.
 
@@ -157,7 +157,7 @@ Multiple effects can also carry different result transforms:
   (Add [x] k) (resume k (+ x 10))   ; 3+10 = 13
   (Mul [x] k) (resume k (* x 2))))  ; 4*2  =  8
 ; => 104
-```
+```turmeric
 
 ---
 
@@ -200,7 +200,7 @@ Each `perform` is an independent suspension. The handler is re-entered for every
 ; First:  1 * 10 = 10
 ; Second: 2 * 10 = 20
 ; => 30
-```
+```turmeric
 
 Continuations are **one-shot**: you must call `resume k` exactly once per handler activation.
 
@@ -243,7 +243,7 @@ Borrows and reference-counted values that are live at the point of `perform` rem
 (println (handle (sum-with-base)
   (GetBase [] k) (resume k 42)))
 ; => 142
-```
+```turmeric
 
 ```turmeric
 ;; RC values are live during perform; no leaks.
@@ -281,7 +281,7 @@ Handlers that are used in many places can be packaged as macros for a cleaner ca
     (perform (Write "world"))))
 ; hello
 ; world
-```
+```turmeric
 
 This is the standard pattern used in `stdlib/effects.tur` for `with-write`, `with-getenv`, and `with-read-console`.
 
@@ -331,7 +331,7 @@ Not calling `resume` at all is valid — the computation past the `perform` is s
     (resume k 42))))
 ; true
 ; 42
-```
+```turmeric
 
 ---
 
@@ -414,7 +414,7 @@ Define a `Log` effect with levels. Wire it to a real logger in production, suppr
 ; starting
 ; done
 ; 42
-```
+```turmeric
 
 ---
 

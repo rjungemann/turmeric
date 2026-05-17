@@ -15,6 +15,7 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 - **[logic-programming-guide.md](logic-programming-guide.md)** — Backtracking, logic programming, constraint solving with cloneable continuations
 - **[checkpointing-guide.md](checkpointing-guide.md)** — Cloneable continuations for persistent workflows and checkpointing
 - **[serializable-continuations-guide.md](serializable-continuations-guide.md)** — Serializable continuations for persistent workflows and cross-process computation
+- **[web-continuations-guide.md](web-continuations-guide.md)** — Compact reference: `send-form-and-wait`, continuation store, routing model
 
 ## Data Structures
 
@@ -28,6 +29,8 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 - **[c-integration-guide.md](c-integration-guide.md)** — Foreign function interface (FFI) and C interop
 - **[effects-vs-monads.md](effects-vs-monads.md)** — Design rationale: why effects instead of Haskell-style monads
 - **[type-annotations-guide.md](type-annotations-guide.md)** — Compound type annotation syntax: `(-> a b)`, `(vec T)`, `forall`, and more
+- **[gadts-guide.md](gadts-guide.md)** — GADTs: `defgadt`, type refinement, equality witnesses, union types, gradual typing
+- **[gadts-cookbook.md](gadts-cookbook.md)** — GADTs cookbook: practical patterns and recipes
 
 ## Type Safety
 
@@ -46,7 +49,6 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 - **[custom-effects-tutorial.md](custom-effects-tutorial.md)** — Writing custom effects
 - **[snake-game-tutorial.md](snake-game-tutorial.md)** — Building the snake game example
 - **[web-continuations-tutorial.md](web-continuations-tutorial.md)** — Multi-page web forms using serializable continuations (guestbook example)
-- **[web-continuations-guide.md](web-continuations-guide.md)** — Compact reference: `send-form-and-wait`, continuation store, routing model
 
 ## Package Management
 

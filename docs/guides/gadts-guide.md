@@ -16,7 +16,7 @@ to the compiler.
 Before reaching for GADTs, get comfortable with plain sum types. Turmeric's
 `defdata` form declares a sum type; `match` dispatches on its constructors.
 
-```
+```turmeric
 (defdata Color :copy (Red) (Green) (Blue))
 
 (defn color-to-int [c] :int
@@ -28,7 +28,7 @@ Before reaching for GADTs, get comfortable with plain sum types. Turmeric's
 
 Parameterized ADTs work the same way:
 
-```
+```turmeric
 (defdata Option [a]
   (None)
   (Some a))
@@ -44,7 +44,7 @@ it the value follows move semantics.
 
 Constructors can carry typed fields:
 
-```
+```turmeric
 (defdata Shape
   (Circle int)
   (Rect   int int))
@@ -65,7 +65,7 @@ compiler reports the missing arm.
 A GADT is declared with `defgadt`. The key difference from `defdata` is that
 each constructor carries an explicit `: return-type` annotation:
 
-```
+```turmeric
 ; Requires: -Xgadt
 (defgadt Expr [a]
   (Lit int         : (Expr int))
@@ -80,13 +80,13 @@ Each constructor line reads as: "field types ... `: return type`". Here:
 
 Without `-Xgadt` the compiler rejects `defgadt` entirely:
 
-```
+```text
 error: unknown form 'defgadt' (pass -Xgadt to enable)
 ```
 
 Evaluation is written the same as for a plain ADT:
 
-```
+```turmeric
 (defn eval-expr [e] :int
   (match e
     (Lit n)   n
@@ -100,7 +100,7 @@ Evaluation is written the same as for a plain ADT:
 The power of GADTs shows up when constructors specialize different type
 parameters. Consider a typed tag:
 
-```
+```turmeric
 (defgadt Tag [a]
   (IntTag  : (Tag int))
   (BoolTag : (Tag bool)))
@@ -108,7 +108,7 @@ parameters. Consider a typed tag:
 
 A function dispatching on the tag can return `a` without a cast:
 
-```
+```turmeric
 (defn default-value [t] :int
   (match t
     (IntTag)  0
@@ -121,7 +121,7 @@ are invisible to the programmer. No casts, no `option`, no runtime tags.
 
 A larger example combining plain ADTs and GADTs in one program:
 
-```
+```turmeric
 (defdata Color :copy (Red) (Green) (Blue))
 
 (defgadt Expr [a]
@@ -149,7 +149,7 @@ A larger example combining plain ADTs and GADTs in one program:
 You can also use multiple constructors that refine the same type variable in
 different ways:
 
-```
+```turmeric
 (defgadt Expr [a]
   (Lit int                         : (Expr int))
   (Add (Expr int) (Expr int)       : (Expr int))
@@ -174,7 +174,7 @@ different ways:
 
 The standard library provides a built-in equality witness GADT:
 
-```
+```turmeric
 ; Built into the runtime -- you do not need to declare this yourself.
 ; (defgadt Equal [a b]
 ;   (Refl : (Equal a a)))
@@ -185,7 +185,7 @@ constructing `(Refl)` proves that the two type parameters are the same type.
 
 Use `coerce` to convert a value across a proven equality:
 
-```
+```turmeric
 (defgadt Equal [a b]
   (Refl : (Equal a a)))
 
@@ -203,7 +203,7 @@ reinterpret the value without any runtime overhead.
 Symmetry -- turning `(Equal a b)` into `(Equal b a)` -- follows from matching
 on `Refl` and returning `Refl`:
 
-```
+```turmeric
 (defn sym [eq] :(Equal b a)
   (match eq
     (Refl) (Refl)))
@@ -216,7 +216,7 @@ on `Refl` and returning `Refl`:
 Guard clauses let you refine which arm fires based on a runtime predicate.
 They work in both plain ADT and GADT matches:
 
-```
+```turmeric
 (defdata Sign (Pos int) (Neg int) (Zero))
 
 (defn classify [s] :int
@@ -249,7 +249,7 @@ is tried.
 Every file that uses `defgadt` or matches on a GADT must be compiled with
 `-Xgadt`:
 
-```
+```sh
 just build          # plain ADTs only (no flag needed)
 ./build/tur run -Xgadt my-file.tur
 ./build/tur build -Xgadt my-file.tur
@@ -265,7 +265,7 @@ features that can be used together.
 
 ### Declaring a union parameter
 
-```
+```turmeric
 (defn describe [x : (int | bool)] :int
   (match x
     (n : int)  (do (println "int")  0)
@@ -281,7 +281,7 @@ When every member of a union has an instance for a typeclass method, you can
 call `.method` directly without an explicit `match`. The compiler generates
 the tag-dispatched call automatically:
 
-```
+```turmeric
 (defclass Show [a]
   (show [x] :cstr))
 
@@ -304,7 +304,7 @@ call site naming the missing member.
 `any` is a top type -- every concrete type is a subtype of `any`. Values
 boxed into `any` carry a runtime tag so their type can be recovered:
 
-```
+```turmeric
 (defn consume [x : any] :int
   (println (type-of x))   ; prints "int", "bool", "cstr", etc.
   0)
@@ -320,7 +320,7 @@ Use `(type-of x)` to retrieve the type name as a `cstr`. Use `(cast x T)`
 to unsafely unbox an `any` value as type `T` (no runtime tag check -- use
 only when you know the type):
 
-```
+```turmeric
 (defn print-as-int [x : any] :int
   (println (cast x int))
   0)
@@ -381,7 +381,7 @@ only when you know the type):
 
 ## Quick Reference
 
-```
+```turmeric
 ; Declare a plain ADT
 (defdata Color :copy (Red) (Green) (Blue))
 

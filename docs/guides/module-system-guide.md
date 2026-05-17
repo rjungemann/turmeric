@@ -33,7 +33,7 @@ A module is a single `.tur` file with a `defmodule` form at the top:
 
   (defn magnitude [^Point p] :int
     (...)))
-```
+```turmeric
 
 **Rules:**
 
@@ -94,7 +94,7 @@ to the local `magnitude`.
 If module A imports B and B imports A, you get a clear error at the second
 import attempt:
 
-```
+```text
 error: circular import: module 'a' is already being loaded
 ```
 
@@ -117,7 +117,7 @@ listed in `(export ...)` are visible to other modules.
 
   ;; private helper — only visible inside list-utils
   (defn -fold [f acc xs] :ptr (...)))
-```
+```turmeric
 
 ### Visibility rules
 
@@ -155,7 +155,7 @@ Top-level `(defer ...)` forms inside a module run at process exit via
   (defer (println "shutting down logger"))
 
   (defn log [msg] :int (...)))
-```
+```turmeric
 
 Ordering: module defers fire in LIFO order (last-defined fires first), matching
 function-level defer semantics. Across modules they fire in reverse load order.
@@ -243,7 +243,7 @@ For a single-file program, `./build/tur build app.tur -o app` works as before
 For a multi-file build, place modules under the same directory tree as
 the main file:
 
-```
+```turmeric
 src/
   app.tur              ;; (defmodule app (import geom/vector :as v) ...)
   geom/
@@ -262,7 +262,7 @@ each module as a separate header/implementation pair:
 ```sh
 ./build/tur emit-h   src/geom/vector.tur > geom__vector.h
 ./build/tur emit-c   src/geom/vector.tur > geom__vector.c
-```
+```turmeric
 
 In separate-compilation mode, exported functions get `extern` linkage in the
 header, private definitions stay `static`, and the header `#include`s its
