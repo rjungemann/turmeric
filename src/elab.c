@@ -382,6 +382,39 @@ static Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_pa
                     for (uint32_t i = cur->as.set_lit_.n; i > 0; i--)
                         ls[lsp++] = cur->as.set_lit_.items[i-1];
                     break;
+                case EX_HANDLE: {
+                    /* Handle case params (effect args + k) are locally defined.
+                     * Register them so collect_free_vars doesn't treat them as
+                     * free variables when the handler body is inside an outer
+                     * closure (e.g. an async block). */
+                    HandleExpr *handle = cur->as.handle_.handle;
+                    ls[lsp++] = handle->body;
+                    for (uint8_t ci = 0; ci < handle->n_cases; ci++) {
+                        HandleCase *hc = &handle->cases[ci];
+                        /* Register k binding as local */
+                        if (hc->k_binding) {
+                            if (n_local >= cap_local) {
+                                cap_local = cap_local ? cap_local * 2 : 8;
+                                local_defs = (Binding **)realloc(local_defs,
+                                    cap_local * sizeof(Binding *));
+                            }
+                            local_defs[n_local++] = hc->k_binding;
+                        }
+                        /* Register effect param bindings as local */
+                        for (uint8_t pi = 0; pi < hc->n_params; pi++) {
+                            if (hc->param_bindings && hc->param_bindings[pi]) {
+                                if (n_local >= cap_local) {
+                                    cap_local = cap_local ? cap_local * 2 : 8;
+                                    local_defs = (Binding **)realloc(local_defs,
+                                        cap_local * sizeof(Binding *));
+                                }
+                                local_defs[n_local++] = hc->param_bindings[pi];
+                            }
+                        }
+                        ls[lsp++] = hc->body;
+                    }
+                    break;
+                }
                 default: break;
             }
         }
@@ -6637,6 +6670,9 @@ static Expr *elab_defn(Elab *e, const Form *call) {
                        (kw->len == 3 && memcmp(kw->name, "nil", 3) == 0)) {
                 param_kinds[n_params - 1] = TY_NIL;
                 params[n_params - 1]->type = TYPE_NIL;
+            } else if (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0) {
+                param_kinds[n_params - 1] = TY_PTR_VOID;
+                params[n_params - 1]->type = TYPE_PTR_VOID;
             } else if (kw->len == 9 && memcmp(kw->name, "ptr<void>", 9) == 0) {
                 param_kinds[n_params - 1] = TY_PTR_VOID;
                 params[n_params - 1]->type = TYPE_PTR_VOID;

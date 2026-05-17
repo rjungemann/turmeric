@@ -739,12 +739,52 @@ static int cmd_build(const char *input, const char *out_path,
         }
     }
 
+    /* If the autolink flags include -lturi, check whether the installed
+     * libturi.a was compiled with AddressSanitizer (common in debug builds).
+     * When it was, propagate -fsanitize=address,undefined so the linker can
+     * resolve the ASAN runtime symbols.  We detect ASAN by looking for the
+     * __asan_init symbol via `nm`; if nm is unavailable we skip the check. */
+    bool autolink_needs_asan = false;
+    if (autolink.len > 0 && strstr(autolink.data, "-lturi")) {
+        /* Walk -L flags in cc_flags and autolink to find libturi.a */
+        /* Build a best-effort nm command: check build/src/libturi.a (dev layout)
+         * and any -L<dir> paths specified in cc_flags. */
+        char nm_cmd[512];
+        /* Collect -L paths from cc_flags */
+        const char *cf = cc_flags;
+        while (cf && *cf) {
+            const char *lf = strstr(cf, "-L");
+            if (!lf) break;
+            lf += 2;
+            /* Extract the path (no space between -L and path in our cc_flags) */
+            const char *lf_end = lf;
+            while (*lf_end && *lf_end != ' ') lf_end++;
+            if (lf_end > lf) {
+                char lib_path[512];
+                size_t plen = (size_t)(lf_end - lf);
+                if (plen < sizeof(lib_path) - 20) {
+                    memcpy(lib_path, lf, plen);
+                    snprintf(lib_path + plen, sizeof(lib_path) - plen, "/libturi.a");
+                    snprintf(nm_cmd, sizeof(nm_cmd),
+                             "nm %s 2>/dev/null | grep -q __asan_init", lib_path);
+                    if (system(nm_cmd) == 0) {
+                        autolink_needs_asan = true;
+                        break;
+                    }
+                }
+            }
+            cf = lf_end;
+        }
+    }
+
     Buf cmd;
     buf_init(&cmd);
     buf_printf(&cmd, "%s %s -o %s %s", cc, cc_flags, out_path, tmpl);
     /* Append any __tur_autolink__ flags discovered in the generated C. */
     if (autolink.len > 0) buf_printf(&cmd, " %s", autolink.data);
     buf_free(&autolink);
+    /* If libturi was ASAN-instrumented, add sanitizer flags to avoid linker errors. */
+    if (autolink_needs_asan) buf_puts(&cmd, " -fsanitize=address,undefined");
     /* Append cmake dep flags (-I/-L/-l). */
     if (cmake_flags.len > 0) buf_puts(&cmd, cmake_flags.data);
     buf_free(&cmake_flags);
@@ -753,6 +793,8 @@ static int cmd_build(const char *input, const char *out_path,
         if (include_dirs[_i] && include_dirs[_i][0])
             buf_printf(&cmd, " -I%s", include_dirs[_i]);
     }
+    /* Ensure the command string is null-terminated before passing to system(). */
+    buf_putc(&cmd, '\0');
     int sys_rc = system(cmd.data);
     buf_free(&cmd);
     /* Leave the stable temp file for ccache; only unlink random fallbacks. */
@@ -1289,6 +1331,8 @@ static int cmd_build_multi(const char *dir, const char *out_path) {
     /* Append cmake dep flags (-I/-L/-l). */
     if (cmake_flags.len > 0) buf_puts(&cmd, cmake_flags.data);
     buf_free(&cmake_flags);
+    /* Ensure null termination before passing to system(). */
+    buf_putc(&cmd, '\0');
     int sys_rc = system(cmd.data);
     buf_free(&cmd);
 

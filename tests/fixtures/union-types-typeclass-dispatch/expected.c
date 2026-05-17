@@ -1938,10 +1938,10 @@ static const char * __inst_Show_show_bool(bool);
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
 static void * array_slice(void *, int64_t, int64_t);
-static void * with_c_string(const char *, int64_t);
+static void * with_c_string(const char *, void *);
 static const char * from_c_string(const char *);
 static void * box(int64_t);
-static int64_t unbox(int64_t);
+static int64_t unbox(void *);
 static bool contract_enabled_();
 static void tur_contract_check(bool, const char *);
 static void tur_contract_check_inv(int64_t, int64_t, const char *);
@@ -2037,7 +2037,7 @@ static void * array_slice(void * arr, int64_t start, int64_t len) {
   
 }
 
-static void * with_c_string(const char * s, int64_t f) {
+static void * with_c_string(const char * s, void * f) {
         /* For v1, we just call f with s directly since cstr is already a C string */
   int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
   return (void *)(intptr_t)fn(s);
@@ -2055,7 +2055,7 @@ static void * box(int64_t v) {
   
 }
 
-static int64_t unbox(int64_t p) {
+static int64_t unbox(void * p) {
         int64_t *boxed = (int64_t *)p;
   return *boxed;
   
