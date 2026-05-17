@@ -495,5 +495,16 @@ void expr_print(Buf *b, const Expr *e) {
             expr_print(b, e->as.union_inject_.value);
             buf_putc(b, ')');
             break;
+        /* IT4 gradual typing */
+        case EX_ANY_TYPE_OF:
+            buf_puts(b, "(type-of ");
+            expr_print(b, e->as.any_type_of_.value);
+            buf_putc(b, ')');
+            break;
+        case EX_ANY_CAST:
+            buf_printf(b, "(cast %s ", type_name(e->type));
+            expr_print(b, e->as.any_cast_.value);
+            buf_putc(b, ')');
+            break;
     }
 }

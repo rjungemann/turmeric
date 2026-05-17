@@ -204,6 +204,9 @@ typedef enum ExprKind {
     EX_DEFGADT,        /* (defgadt Name [params] (Ctor : return-type) ...) */
     /* IT4: Tagged union injection — wraps a value into tur_tagged_t */
     EX_UNION_INJECT,   /* (union-inject tag_idx value) — tags a member value for TY_UNION/TY_ANY */
+    /* IT4 gradual typing */
+    EX_ANY_TYPE_OF,    /* (type-of x) — returns cstr type name of an any-typed value */
+    EX_ANY_CAST,       /* (cast x T) — unsafe downcast from any; returns the inner value as T */
 } ExprKind;
 
 /* Phase 2: FnDef represents a function definition from defn or lifted fn. */
@@ -567,6 +570,9 @@ struct Expr {
             int64_t     tag_idx;  /* member index (for TY_UNION) or TypeKind (for TY_ANY) */
             struct Expr *value;   /* the value being injected */
         } union_inject_;
+        /* IT4 gradual typing */
+        struct { struct Expr *value; } any_type_of_;   /* (type-of x) — x must be TY_ANY */
+        struct { struct Expr *value; TypeKind target_kind; } any_cast_;  /* (cast x T) — unbox any as T */
     } as;
 };
 

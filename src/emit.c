@@ -1652,6 +1652,30 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_free(&out);
             return result;
         }
+        case EX_ANY_TYPE_OF: {
+            /* IT4: (type-of x) — return cstr type name via __tur_any_type_name(tag) */
+            char *inner = emit_value(ctx, body, e->as.any_type_of_.value);
+            Buf out; buf_init(&out);
+            buf_printf(&out, "__tur_any_type_name(TUR_GETTAG(%s))", inner);
+            buf_putc(&out, '\0');
+            free(inner);
+            char *result = strdup(out.data);
+            buf_free(&out);
+            return result;
+        }
+        case EX_ANY_CAST: {
+            /* IT4: (cast x T) — unsafe unbox: interpret TUR_UNTAG(x) as target C type.
+             * No runtime tag check; caller is responsible for correctness. */
+            char *inner = emit_value(ctx, body, e->as.any_cast_.value);
+            Type target = type_simple(e->as.any_cast_.target_kind, CK_COPY);
+            Buf out; buf_init(&out);
+            buf_printf(&out, "((%s)(intptr_t)TUR_UNTAG(%s))", type_c_name(target), inner);
+            buf_putc(&out, '\0');
+            free(inner);
+            char *result = strdup(out.data);
+            buf_free(&out);
+            return result;
+        }
         case EX_LET:      return emit_let_value(ctx, body, e);
         case EX_IF:       return emit_if_value(ctx, body, e);
         case EX_DO:       return emit_do_value(ctx, body, e);
@@ -4429,6 +4453,8 @@ static void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_FLOAT_LIT: case EX_CSTR_LIT: case EX_VAR:
         case EX_CAST:         /* pure expression, no stmt-level side effects */
         case EX_UNION_INJECT: /* IT4: pure struct literal, no stmt-level side effects */
+        case EX_ANY_TYPE_OF:  /* IT4: pure read, no stmt-level side effects */
+        case EX_ANY_CAST:     /* IT4: pure unbox, no stmt-level side effects */
         case EX_TYPECLASS_DEF:
         case EX_DEFMODULE: /* Phase M0: module metadata — nothing to emit */
         case EX_PANIC_PAYLOAD_TYPE:
@@ -5708,6 +5734,18 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "#define TUR_TAG(t, v)  ((tur_tagged_t){(int64_t)(t), (int64_t)(v)})\n");
     buf_puts(out, "#define TUR_UNTAG(x)   ((x).val)\n");
     buf_puts(out, "#define TUR_GETTAG(x)  ((x).tag)\n");
+    /* IT4: (type-of x) helper — maps TypeKind tag to a cstr type name. */
+    buf_puts(out, "static const char *__tur_any_type_name(int64_t tag) {\n");
+    buf_puts(out, "    switch (tag) {\n");
+    buf_puts(out, "        case  1: return \"nil\";\n");
+    buf_puts(out, "        case  2: return \"bool\";\n");
+    buf_puts(out, "        case  3: return \"int\";\n");
+    buf_puts(out, "        case  4: return \"float\";\n");
+    buf_puts(out, "        case  5: return \"cstr\";\n");
+    buf_puts(out, "        case  6: return \"ptr\";\n");
+    buf_puts(out, "        default: return \"unknown\";\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "}\n");
     /* Phase HRT2: existential type — opaque void* wrapping any boxed value */
     buf_puts(out, "/* Phase HRT2: existential type (opaque void* box) */\n");
     buf_puts(out, "typedef void * tur_exists_t;\n");

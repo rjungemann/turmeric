@@ -103,6 +103,17 @@ typedef struct { int64_t tag; int64_t val; } tur_tagged_t;
 #define TUR_TAG(t, v)  ((tur_tagged_t){(int64_t)(t), (int64_t)(v)})
 #define TUR_UNTAG(x)   ((x).val)
 #define TUR_GETTAG(x)  ((x).tag)
+static const char *__tur_any_type_name(int64_t tag) {
+    switch (tag) {
+        case  1: return "nil";
+        case  2: return "bool";
+        case  3: return "int";
+        case  4: return "float";
+        case  5: return "cstr";
+        case  6: return "ptr";
+        default: return "unknown";
+    }
+}
 /* Phase HRT2: existential type (opaque void* box) */
 typedef void * tur_exists_t;
 /* STM types (Phase 21) */

@@ -451,3 +451,16 @@ and `free-run`.
 1. **Method dispatch on containers**: Since HKT container values are stored as `int64_t`, type-based dispatch may fall back to the first matching instance. Works reliably when only one typeclass instance is in scope for the given method.
 
 2. **`defkind`**: Currently parsed and ignored. Future versions may use it for documentation generation and kind inference.
+
+3. **GADT `equal-cong` requires HKT**: The `equal-cong` function in `stdlib/equal.tur`
+   (congruence: `a = b` implies `(f a) = (f b)`) requires a kind-`* -> *` type
+   variable `f` in a `defn` signature. This is the primary outstanding HKT
+   deliverable that feeds directly into the GADT phase. See `docs/gadts-plan.md`
+   §Non-Goals item 3 and `docs/hkt-deferred-tasks.md` for details.
+
+## See also
+
+- `docs/gadts-guide.md` — GADTs, `defgadt`, and equality witnesses; HKT kind
+  variables (`^f`) are needed for `equal-cong` and higher-kinded GADT indices
+  such as `Vec n a` with polymorphic element type
+- `docs/hkt-deferred-tasks.md` — open items for the HKT implementation

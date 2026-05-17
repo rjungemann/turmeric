@@ -257,7 +257,78 @@ just build          # plain ADTs only (no flag needed)
 
 ---
 
-## 7. Current Limitations
+## 7. Union Types and Gradual Typing (`-Xunion-types`)
+
+Turmeric also supports structural union types as a complement to GADTs.
+Enable them with `-Xunion-types`. Union types and GADTs are independent
+features that can be used together.
+
+### Declaring a union parameter
+
+```
+(defn describe [x : (int | bool)] :int
+  (match x
+    (n : int)  (do (println "int")  0)
+    (b : bool) (do (println "bool") 0)))
+```
+
+The `(match x (n : int) body1 (b : bool) body2)` form dispatches on the
+runtime tag. Pattern arms must be exhaustive across all union members.
+
+### Typeclass dispatch on union values
+
+When every member of a union has an instance for a typeclass method, you can
+call `.method` directly without an explicit `match`. The compiler generates
+the tag-dispatched call automatically:
+
+```
+(defclass Show [a]
+  (show [x] :cstr))
+
+(definstance Show [int]
+  (show [x] "an-int"))
+
+(definstance Show [bool]
+  (show [x] "a-bool"))
+
+(defn print-any [x : (int | bool)] :int
+  (println (.show x))
+  0)
+```
+
+If any union member lacks an instance the compiler emits an error at the
+call site naming the missing member.
+
+### The `any` top type and gradual typing
+
+`any` is a top type -- every concrete type is a subtype of `any`. Values
+boxed into `any` carry a runtime tag so their type can be recovered:
+
+```
+(defn consume [x : any] :int
+  (println (type-of x))   ; prints "int", "bool", "cstr", etc.
+  0)
+
+(defn main [] :int
+  (consume 42)      ; prints "int"
+  (consume true)    ; prints "bool"
+  (consume "hello") ; prints "cstr"
+  0)
+```
+
+Use `(type-of x)` to retrieve the type name as a `cstr`. Use `(cast x T)`
+to unsafely unbox an `any` value as type `T` (no runtime tag check -- use
+only when you know the type):
+
+```
+(defn print-as-int [x : any] :int
+  (println (cast x int))
+  0)
+```
+
+---
+
+## 8. Current Limitations
 
 These features are not yet supported:
 
@@ -293,6 +364,19 @@ These features are not yet supported:
 - **Polymorphic recursion is not fully inferred.** If a GADT function is
   polymorphically recursive, add an explicit type annotation on the `defn`.
 
+- **`equal-cong` requires HKT.** The congruence lemma
+  `(defn equal-cong [^f eq : (Equal a b)] : (Equal (f a) (f b)) ...)` needs
+  kind-`* -> *` type variables in `defn` signatures. This is deferred until
+  the HKT kind system is available. See `docs/hkt-deferred-tasks.md`.
+
+- **`cast` is unchecked.** `(cast x T)` does not verify the runtime tag
+  matches `T`. Use `(type-of x)` first if you need a safe downcast.
+
+- **Implicit union widening is not yet implemented.** A value of type `A`
+  cannot yet be passed where `(A | B)` is expected without an explicit
+  `EX_UNION_INJECT` coercion. This is tracked as IT1 in
+  `docs/gadts-followup-tasks.md`.
+
 ---
 
 ## Quick Reference
@@ -320,4 +404,26 @@ These features are not yet supported:
 
 ; coerce a value using an equality proof
 (coerce (Refl) some-value)
+
+; Union type dispatch  (requires -Xunion-types)
+(defn describe [x : (int | bool)] :int
+  (match x
+    (n : int)  0
+    (b : bool) 1))
+
+; Gradual typing  (requires -Xunion-types)
+(defn show-type [x : any] :int
+  (println (type-of x))
+  0)
 ```
+
+## See also
+
+- `docs/guides/hrt-guide.md` -- Higher-ranked types; bidirectional checking
+  that enables GADT skolem propagation
+- `docs/guides/hkt-guide.md` -- Higher-kinded types; required for `equal-cong`
+  and polymorphic GADT indices
+- `docs/gadts-plan.md` -- Full implementation plan and phase history
+- `docs/gadts-followup-tasks.md` -- Open items and blocked tasks
+- `tests/fixtures/gadt-*/` -- Working GADT examples
+- `tests/fixtures/union-types-*/` -- Union type and gradual typing examples

@@ -835,6 +835,9 @@ typedef struct Elab {
     const Symbol *sym_tvar_cas;      /* tvar/cas */
     /* Phase N: (as TargetType expr) numeric cast */
     const Symbol *sym_as;
+    /* IT4 gradual typing */
+    const Symbol *sym_type_of;  /* (type-of x) — cstr name of an any-typed value's type */
+    const Symbol *sym_cast;     /* (cast x T) — unsafe downcast from any to T */
     /* Phase 13: Lifetime annotations */
     /* We recognize lifetime annotations as symbols starting with '\'' */
     /* No specific symbol needed - we check the symbol name at runtime */
@@ -1475,6 +1478,8 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_import = intern_cstr(st, "import");
     e->sym_load = intern_cstr(st, "load");
     e->sym_as = intern_cstr(st, "as");   /* Phase N: (as Type expr) cast */
+    e->sym_type_of = intern_cstr(st, "type-of");  /* IT4: (type-of x) */
+    e->sym_cast    = intern_cstr(st, "cast");      /* IT4: (cast x T) */
     e->kw_as = intern_cstr(st, "as");   /* same interned symbol, used as :as keyword */
     e->kw_refer = intern_cstr(st, "refer");
     e->has_defmodule = false;
@@ -2412,6 +2417,8 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span span);    
 static Expr *elab_form(Elab *e, Form *f);
 static bool typekind_is_numeric(TypeKind k);             /* Phase N */
 static Expr *elab_as_cast(Elab *e, const Form *call);   /* Phase N */
+static Expr *elab_any_type_of(Elab *e, const Form *call); /* IT4 */
+static Expr *elab_any_cast(Elab *e, const Form *call);    /* IT4 */
 static Expr *elab_unsafe(Elab *e, const Form *call);
 /* Phase HRT1 */
 static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
@@ -7984,6 +7991,9 @@ static Expr *elab_call(Elab *e, Form *call) {
     }
     /* Phase N: numeric cast */
     if (name == e->sym_as) return elab_as_cast(e, call);
+    /* IT4: gradual typing */
+    if (name == e->sym_type_of) return elab_any_type_of(e, call);
+    if (name == e->sym_cast)    return elab_any_cast(e, call);
     /* Phase 11: defstruct */
     if (name == e->sym_defstruct) return elab_defstruct(e, call);
     if (name == e->sym_make_struct) return elab_make_struct(e, call);
@@ -9885,6 +9895,62 @@ static Expr *elab_as_cast(Elab *e, const Form *call) {
     Expr *out = expr_new(e->arena, EX_CAST, result_type, call->span);
     out->as.cast_.expr = inner;
     out->as.cast_.target_kind = target_kind;
+    return out;
+}
+
+/* IT4: (type-of x) — return the cstr type name of an any-typed value. */
+static Expr *elab_any_type_of(Elab *e, const Form *call) {
+    if (call->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "'type-of' requires exactly one argument: (type-of x)");
+        return NULL;
+    }
+    Expr *val = elab_form(e, call->as.list.items[1]);
+    if (!val) return NULL;
+    if (val->type.kind != TY_ANY) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "'type-of' expects an 'any'-typed argument, got '%s'",
+                  type_name(val->type));
+        return NULL;
+    }
+    Type cstr_t = type_simple(TY_CSTR, CK_COPY);
+    Expr *out = expr_new(e->arena, EX_ANY_TYPE_OF, cstr_t, call->span);
+    out->as.any_type_of_.value = val;
+    return out;
+}
+
+/* IT4: (cast x T) — unsafe downcast from any; returns the inner value unboxed as T.
+ * T must be a primitive type name. No runtime tag check is emitted (unsafe). */
+static Expr *elab_any_cast(Elab *e, const Form *call) {
+    if (call->as.list.len != 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "'cast' requires exactly two arguments: (cast x T)");
+        return NULL;
+    }
+    Expr *val = elab_form(e, call->as.list.items[1]);
+    if (!val) return NULL;
+    if (val->type.kind != TY_ANY) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "'cast' expects an 'any'-typed first argument, got '%s'",
+                  type_name(val->type));
+        return NULL;
+    }
+    Form *type_form = call->as.list.items[2];
+    if (type_form->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, type_form->span,
+                  "'cast' expects a type name as second argument");
+        return NULL;
+    }
+    TypeKind target_kind = typekind_from_symbol(type_form->as.sym->name);
+    if (target_kind == TY_UNKNOWN) {
+        diag_emit(DIAG_ERROR, type_form->span,
+                  "unknown type '%s' in 'cast'", type_form->as.sym->name);
+        return NULL;
+    }
+    Type result_type = type_simple(target_kind, CK_COPY);
+    Expr *out = expr_new(e->arena, EX_ANY_CAST, result_type, call->span);
+    out->as.any_cast_.value = val;
+    out->as.any_cast_.target_kind = target_kind;
     return out;
 }
 
@@ -15386,6 +15452,109 @@ static Expr *elab_method_call(Elab *e, const Form *call) {
             call_out->as.call_.n_args = n_args;
             return call_out;
         }
+    }
+
+    /* IT4: Typeclass intersection dispatch on union types.
+     * When obj : (A | B), and every member type has an instance for .method,
+     * generate a tag-dispatched EX_MATCH that calls the right instance per arm.
+     * The synthetic scrutinee is `obj`; each arm unboxes the value and calls the
+     * per-member method implementation directly (bypassing dictionary dispatch
+     * to avoid nested tur_tagged_t complications). */
+    if (obj->type.kind == TY_UNION) {
+        uint8_t n_members = obj->type.as.union_.n_members;
+        /* Elaborate the extra arguments once (they are shared across arms). */
+        uint32_t n_extra = call->as.list.len - 2;
+        Expr **extra_args = (Expr **)arena_alloc(e->arena, n_extra * sizeof(Expr *));
+        for (uint32_t i = 0; i < n_extra; i++) {
+            extra_args[i] = elab_form(e, call->as.list.items[2 + i]);
+            if (!extra_args[i]) return NULL;
+        }
+
+        /* For each member, find a matching typeclass instance. */
+        FnDef **member_methods = (FnDef **)arena_alloc(e->arena, n_members * sizeof(FnDef *));
+        for (uint8_t um = 0; um < n_members; um++) {
+            Type *mem_t = obj->type.as.union_.members[um];
+            if (!mem_t) { member_methods[um] = NULL; continue; }
+            FnDef *found = NULL;
+            for (TypeClassInstance *inst = e->typeclass_env.instances;
+                 inst != NULL && !found; inst = inst->next) {
+                for (uint8_t mi = 0; mi < inst->typeclass->n_methods; mi++) {
+                    const TypeClassMethod *meth = &inst->typeclass->methods[mi];
+                    if (meth->name->len != method_name_len ||
+                        memcmp(meth->name->name, method_name, method_name_len) != 0) continue;
+                    if (inst->n_type_args > 0 &&
+                        inst->type_args[0].kind != mem_t->kind) continue;
+                    found = inst->method_impls[mi];
+                    break;
+                }
+            }
+            member_methods[um] = found;
+            if (!found) {
+                diag_emit(DIAG_ERROR, call->span,
+                          "typeclass method '%.*s' not available for union member '%s'",
+                          (int)method_name_len, method_name, type_name(*mem_t));
+                return NULL;
+            }
+        }
+
+        /* Determine result type from the first member's method. */
+        Type result_type = TYPE_NIL;
+        if (n_members > 0 && member_methods[0]) {
+            FnDef *m0 = member_methods[0];
+            if (m0->binding->type.kind == TY_FN)
+                result_type = type_from_kind(m0->binding->type.as.fn.result_kind);
+            else if (m0->body)
+                result_type = m0->body->type;
+        }
+        if (result_type.kind == TY_UNKNOWN) result_type = TYPE_INT;
+
+        /* Build a fresh binding name for the unboxed arm variable. */
+        static uint32_t union_dispatch_ctr = 0;
+        char arm_name_buf[32];
+        snprintf(arm_name_buf, sizeof(arm_name_buf), "__udisp_%u", union_dispatch_ctr++);
+        const Symbol *arm_sym = intern_cstr(e->st, arm_name_buf);
+
+        /* Build the arms array. */
+        MatchArm *arms = (MatchArm *)arena_alloc(e->arena, n_members * sizeof(MatchArm));
+        for (uint8_t um = 0; um < n_members; um++) {
+            Type *mem_t = obj->type.as.union_.members[um];
+            FnDef *meth = member_methods[um];
+
+            /* Pattern: type-narrowing, binds arm_sym to the unboxed value. */
+            MatchArm *arm = &arms[um];
+            memset(arm, 0, sizeof(*arm));
+            arm->pattern.is_var = true;
+            arm->pattern.var_sym = arm_sym;
+            arm->pattern.union_member_idx = (int)um;
+            arm->pattern.n_bindings = 1;
+            arm->pattern.bindings = (Binding **)arena_alloc(e->arena, sizeof(Binding *));
+            Binding *var_b = binding_new(e, arm_sym, *mem_t, false, false, call->span);
+            arm->pattern.bindings[0] = var_b;
+            arm->pattern.var_binding = var_b;
+            arm->guard = NULL;
+
+            /* Body: call meth with (var_b, extra_args...) */
+            Expr *var_expr = expr_new(e->arena, EX_VAR, *mem_t, call->span);
+            var_expr->as.var.binding = var_b;
+
+            uint32_t total_args = 1 + n_extra;
+            Expr **call_args = (Expr **)arena_alloc(e->arena, total_args * sizeof(Expr *));
+            call_args[0] = var_expr;
+            for (uint32_t ei = 0; ei < n_extra; ei++) call_args[1 + ei] = extra_args[ei];
+
+            Expr *body_call = expr_new(e->arena, EX_CALL, result_type, call->span);
+            body_call->as.call_.fn_binding = meth->binding;
+            body_call->as.call_.fn_expr = NULL;
+            body_call->as.call_.args = call_args;
+            body_call->as.call_.n_args = total_args;
+            arm->body = body_call;
+        }
+
+        Expr *out = expr_new(e->arena, EX_MATCH, result_type, call->span);
+        out->as.match_.scrutinee = obj;
+        out->as.match_.arms = arms;
+        out->as.match_.n_arms = n_members;
+        return out;
     }
 
     /* Phase HKT H2: Type-based instance lookup.

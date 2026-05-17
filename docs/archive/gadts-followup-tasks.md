@@ -261,20 +261,22 @@ loop (the same loop in `kind_check_pass` that currently handles
   `union-types-any`. Unboxing via `(cast)` and `(type-of)` are deferred (see
   below).
 
-- [ ] **Gradual typing stdlib** (`src/elab.c`/`stdlib/`, IT4):
-  - `(cast x : T)` -- runtime downcast from `any`; check `TUR_GETTAG(x) == TypeKind_T`
-    and return `(option T)` (some with unboxed value, or none on tag mismatch)
-  - `(type-of x)` -- returns a runtime type tag as a cstr (maps `TUR_GETTAG(x)` to
-    a string via a lookup table)
-  Infrastructure (`tur_tagged_t`, boxing injection) is now in place; requires
-  new builtin elaboration + new stdlib functions.
+- [x] **Gradual typing stdlib** (`src/elab.c`/`src/emit.c`, IT4):
+  - `(cast x T)` -- unsafe downcast from `any`; unboxes via `TUR_UNTAG` and
+    reinterprets as target C type. New `EX_ANY_CAST` ExprKind; elaborated by
+    `elab_any_cast` special form handler. Emits
+    `((T_ctype)(intptr_t)TUR_UNTAG(x))`. Fixture: `tests/fixtures/union-types-cast/`.
+  - `(type-of x)` -- returns the cstr type name of an `any`-typed value. New
+    `EX_ANY_TYPE_OF` ExprKind; elaborated by `elab_any_type_of`. Emits call to
+    `__tur_any_type_name(TUR_GETTAG(x))` (static lookup table in preamble).
+    Fixture: `tests/fixtures/union-types-type-of/`.
 
-- [ ] **Typeclass instance intersection on unions** (`src/elab.c`, IT4): when
-  `x : (A | B)`, allow calling typeclass methods that are available on *all*
-  union members directly, without requiring a `match`. The elaborator computes
-  the instance intersection at the union type site and generates a tag-dispatched
-  call. Requires `tur_tagged_t` codegen (now done) plus elaborator changes to
-  compute method-intersection sets for union types.
+- [x] **Typeclass instance intersection on unions** (`src/elab.c`, IT4): when
+  `x : (A | B)`, calling typeclass methods available on all members generates
+  a tag-dispatched `EX_MATCH` node. The `elab_method_call` function now checks
+  `obj->type.kind == TY_UNION`, resolves each member's instance, and builds a
+  synthetic `EX_MATCH` with one arm per member. If any member lacks an instance,
+  a compile-time error is emitted. Fixture: `tests/fixtures/union-types-typeclass-dispatch/`.
 
 ---
 
@@ -293,17 +295,24 @@ See gadts-plan.md G4 and intersection-union-types-plan.md IT4 for background.
 
 ## Documentation
 
-- [ ] **Cross-plan references** (G4): update `docs/higher-ranked-types-plan.md`
-  §Non-Goals and `docs/higher-kinded-types-plan.md` §Non-Goals to reference
-  gadts-plan.md.
+- [x] **Cross-plan references** (G4): added GADT cross-references to the "See
+  also" / "Known Limitations" sections of `docs/guides/hrt-guide.md` (notes
+  that HRT bidirectional checking enables GADT skolem propagation) and
+  `docs/guides/hkt-guide.md` (notes that `equal-cong` is the primary
+  outstanding HKT deliverable for GADTs; adds "See also" pointing to
+  gadts-guide.md and hkt-deferred-tasks.md).
 
-- [ ] **Language reference** (G4): add a GADT section to the language reference
-  manual covering `defgadt`, `match` refinement, `Equal`, `coerce`, and `(~)`
-  constraint notation.
+- [x] **Language reference** (G4): `docs/gadts-guide.md` extended with a new
+  §7 "Union Types and Gradual Typing" covering `(A | B)` match dispatch,
+  typeclass intersection dispatch on union values, the `any` top type,
+  `(type-of x)`, and `(cast x T)`. §8 (Limitations) updated to cover
+  `equal-cong`/HKT dependency, unchecked `cast`, and implicit union widening.
+  Quick Reference and "See also" sections added. Numbering updated to match.
 
-- [ ] **Cookbook entries** (G4): write cookbook-style examples for: typed AST
-  interpreter, length-indexed vector, type-safe printf format strings, equality
-  witnesses.
+- [x] **Cookbook entries** (G4): `docs/guides/gadts-cookbook.md` created with
+  five worked examples: (1) typed AST interpreter, (2) length-indexed vectors,
+  (3) type-safe printf format strings, (4) equality witnesses (`sym`, `trans`,
+  `coerce`, heterogeneous containers), (5) GADT + union types combined.
 
 ---
 
