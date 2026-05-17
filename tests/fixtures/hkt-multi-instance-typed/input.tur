@@ -1,0 +1,19 @@
+;; Phase HKT §1 (updated for D0): Two Functor instances coexisting.
+;; Dispatch is unambiguous here because each call site has a typed receiver
+;; (the literal int 10 is TY_INT matching Functor[int], and true is TY_BOOL
+;; matching Functor[bool] -- both are exact matches, not erased-type fallbacks).
+
+(defclass MyShow [a]
+  (show [x] :cstr))
+
+(definstance MyShow [int]
+  (show [x] :cstr "int"))
+
+(definstance MyShow [bool]
+  (show [x] :cstr "bool"))
+
+(defn main [] :int
+  (do
+    (println (.show 42))    ;; exact match: TY_INT -> MyShow[int]
+    (println (.show true))  ;; exact match: TY_BOOL -> MyShow[bool]
+    0))

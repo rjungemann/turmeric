@@ -448,7 +448,16 @@ and `free-run`.
 
 ## Known Limitations
 
-1. **Method dispatch on containers**: Since HKT container values are stored as `int64_t`, type-based dispatch may fall back to the first matching instance. Works reliably when only one typeclass instance is in scope for the given method.
+1. **Method dispatch on containers**: Since HKT container values are stored as
+   `int64_t`, type-based dispatch may fall back to the first matching instance.
+   When exactly one typeclass instance is in scope for the given method, the
+   fallback is accepted silently and the program behaves correctly. When two or
+   more instances are in scope and the receiver type has been erased to
+   `int64_t`, the compiler now emits `TUR_E0020_AMBIGUOUS_DISPATCH` instead of
+   silently picking the wrong instance. See
+   `docs/hkt-opaque-dispatch-plan.md` §Phase D0 for details and §Phase D1 for
+   the `@TypeName` witness syntax that resolves the ambiguity at zero runtime
+   cost.
 
 2. **`defkind`**: Currently parsed and ignored. Future versions may use it for documentation generation and kind inference.
 

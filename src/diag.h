@@ -40,6 +40,8 @@ typedef enum DiagCode {
     /* Phase 21: Serializable continuations */
     TUR_E0018_NOT_SERIALIZABLE,                   /* captured binding does not implement Serializable */
     TUR_E0019_SERIAL_SHIFT_OUTSIDE_RESET,         /* serial-shift used outside serial-reset boundary */
+    /* Phase D0: ambiguous typeclass method dispatch (erased receiver type) */
+    TUR_E0020_AMBIGUOUS_DISPATCH,                 /* .method on int64_t receiver matches multiple instances */
     /* ER5: module effect visibility (PR5-1) */
     TUR_E0021_PRIVATE_EFFECT,                     /* effect is private to its defining module */
     /* ER1: strict-effects warnings */

@@ -16017,6 +16017,9 @@ static Expr *elab_method_call(Elab *e, const Form *call) {
     FnDef *best_method = NULL;
     /* Phase H §1: Track the selected instance so we can build an EX_DICT node. */
     TypeClassInstance *best_inst = NULL;
+    /* Phase D0: count fallback candidates and track whether an exact match was found. */
+    int fallback_count = 0;
+    bool exact_match_found = false;
 
     /* Determine the effective constructor kind from the obj type. */
     Kind obj_ck = KIND_STAR;
@@ -16053,6 +16056,7 @@ static Expr *elab_method_call(Elab *e, const Form *call) {
                 }
                 if (!type_ok) {
                     /* Record as fallback but keep searching. */
+                    fallback_count++;
                     if (!best_method) { best_method = inst->method_impls[i]; best_inst = inst; }
                     continue;
                 }
@@ -16071,6 +16075,7 @@ static Expr *elab_method_call(Elab *e, const Form *call) {
             /* Good match (or no type_args to check). */
             best_method = inst->method_impls[i];
             best_inst = inst;
+            exact_match_found = true;
             goto found_method;
         }
     }
@@ -16081,6 +16086,47 @@ found_method:;
         diag_emit(DIAG_ERROR, call->span,
                   "no typeclass method found for '%.*s'",
                   method_name_len, method_name);
+        return NULL;
+    }
+
+    /* Phase D0: Ambiguous dispatch diagnostic.
+     * If we reached here via the fallback path (no exact type match) and
+     * more than one instance matched by name, emit TUR_E0020 so the user
+     * gets a clear error instead of a silent wrong-instance selection. */
+    if (!exact_match_found && fallback_count > 1) {
+        /* Build a comma-separated list of matching instance names for the message. */
+        char inst_list[512];
+        int pos = 0;
+        int listed = 0;
+        for (TypeClassInstance *ci = e->typeclass_env.instances;
+             ci != NULL && pos < (int)sizeof(inst_list) - 2; ci = ci->next) {
+            for (uint8_t mi = 0; mi < ci->typeclass->n_methods; mi++) {
+                const TypeClassMethod *cm = &ci->typeclass->methods[mi];
+                if (cm->name->len != method_name_len ||
+                    memcmp(cm->name->name, method_name, method_name_len) != 0) continue;
+                if (listed > 0 && pos < (int)sizeof(inst_list) - 3) {
+                    inst_list[pos++] = ','; inst_list[pos++] = ' ';
+                }
+                int wrote = 0;
+                if (ci->n_type_args > 0 && ci->type_arg_syms && ci->type_arg_syms[0]) {
+                    wrote = snprintf(inst_list + pos, sizeof(inst_list) - (size_t)pos,
+                                     "%s[%s]", ci->typeclass->name->name,
+                                     ci->type_arg_syms[0]->name);
+                } else {
+                    wrote = snprintf(inst_list + pos, sizeof(inst_list) - (size_t)pos,
+                                     "%s[?]", ci->typeclass->name->name);
+                }
+                if (wrote > 0) pos += wrote;
+                listed++;
+                break; /* one method match per instance is enough */
+            }
+        }
+        inst_list[pos] = '\0';
+        diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0020_AMBIGUOUS_DISPATCH,
+                            "ambiguous method dispatch: '.%.*s' matches %d instances "
+                            "(%s) -- receiver type is erased (int64_t). "
+                            "Hint: annotate the receiver's type or use @TypeName syntax (see D1).",
+                            (int)method_name_len, method_name, fallback_count, inst_list);
         return NULL;
     }
 
