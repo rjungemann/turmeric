@@ -1,0 +1,23 @@
+;; LT4: linear value consumed by passing it across an FFI (inline-C) boundary.
+;;
+;; This skeleton tests that a ^linear binding can be handed off to an
+;; inline-C function, with the call site counting as the single consumption.
+;; The linear binding is consumed at the call to ffi-echo; the C body
+;; receives the raw integer and returns it unchanged.
+;;
+;; The linear type checker cannot inspect inline-C bodies, so the consumption
+;; is recorded at the Turmeric call site rather than inside the C block.
+;; This is the expected FFI pattern: wrap the C call in a Turmeric defn,
+;; and let the call site enforce exactly-once semantics.
+;;
+;; Expected output: 77
+(defn ffi-echo [tok] :int
+  ```c
+  return (int64_t)tok;
+  ```)
+
+(defn run [] :int
+  (let [^linear token 77]
+    (ffi-echo token)))
+
+(println (run))

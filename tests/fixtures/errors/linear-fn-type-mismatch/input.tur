@@ -1,0 +1,9 @@
+;; LT2: passing a non-linear function where a linear function type is expected.
+;; apply-linear requires a function that consumes its argument (-> ^linear int int),
+;; but double is a plain (-> int int) function with no linearity guarantee.
+(defn apply-linear [f : (-> ^linear int int)  n] :int
+  (f n))
+
+(defn double [x] :int (* x 2))
+
+(println (apply-linear double 7))

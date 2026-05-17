@@ -1,0 +1,22 @@
+;; Phase D1: Type witness with unknown type -- error case.
+;; @pair names a type for which no Functor instance exists.
+;; The compiler must emit an error rather than silently failing.
+
+(defclass Functor [^f]
+  (fmap [container fn] :int))
+
+(defn __fmap_option [container fn] :int
+  ```c
+  return container;
+  ```)
+
+(definstance Functor [option]
+  (fmap [c f] (__fmap_option c f)))
+
+(defn mk [] :int 0)
+
+(defn main [] :int
+  (let [obj (mk)]
+    ;; @pair -- no Functor[pair] instance exists; compiler must error.
+    (.fmap @pair obj (fn [x] (* x 2)))
+    0))

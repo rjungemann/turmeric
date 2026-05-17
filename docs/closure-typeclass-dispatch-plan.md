@@ -1,6 +1,6 @@
 # Closure–Typeclass Dispatch: `(fn, env)` Pairs in Dict Structs
 
-**Status:** Planned  
+**Status:** Complete (implemented as Phase CCL)  
 **Replaces:** "Use non-capturing closures or named helper functions" workaround  
 **Affects:** `src/emit.c`, `src/typeclass.h`, stdlib typeclass implementations, test fixtures, `docs/guides/hkt-guide.md`
 

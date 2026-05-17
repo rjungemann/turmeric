@@ -1,0 +1,140 @@
+;; Phase S7: for comprehension with the vec (list) monad.
+;;
+;; Demonstrates that (for [x coll] body) and (for [x coll :when pred] body)
+;; work when the collection is a vec, desugaring to:
+;;   (for [x coll] body)           = (.bind coll (fn [x] (.pure body)))
+;;   (for [x coll :when p] body)   = (.bind coll (fn [x] (if p (.pure body) (.empty x))))
+;;
+;; Tests:
+;;   T1: (for [x [1 2 3]] (* x 2))       => [2 4 6]
+;;   T2: (for [x [1 2 3] :when (> x 1)] x)  => [2 3]
+
+;; ---- Typeclass declarations -------------------------------------------------
+
+(defclass Applicative [^f]
+  (pure [a] :int))
+
+(defclass Monad [^m]
+  (bind [m f] :int))
+
+(defclass Alternative [^f]
+  (empty [a] :int)
+  (alt-or [a b] :int))
+
+;; ---- Vec helpers (inline C) ------------------------------------------------
+
+(defn __vec_new [] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v->data = NULL; v->len = 0; v->cap = 0;
+  return (int64_t)(intptr_t)v;
+  ```)
+
+(defn __vec_push [v val] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
+  if (vec->len >= vec->cap) {
+      size_t new_cap = vec->cap > 0 ? vec->cap * 2 : 4;
+      int64_t *nd = malloc(sizeof(int64_t) * new_cap);
+      for (size_t i = 0; i < vec->len; i++) nd[i] = vec->data[i];
+      free(vec->data); vec->data = nd; vec->cap = new_cap;
+  }
+  vec->data[vec->len++] = val;
+  return v;
+  ```)
+
+(defn __vec_len [v] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
+  return (int64_t)vec->len;
+  ```)
+
+(defn print-vec [v]
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
+  for (size_t i = 0; i < vec->len; i++) {
+      printf("%lld\n", (long long)vec->data[i]);
+  }
+  ```)
+
+;; ---- Vec typeclass instances ------------------------------------------------
+
+;; Monad.bind: flatMap -- apply f to each element, concatenate results.
+;; f is a non-capturing closure (raw function pointer) for single-binding for.
+(defn __vec_bind [ma f] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)ma;
+  if (!v) return 0;
+  /* Two-pass: count total length, then fill. Safe for pure f. */
+  size_t total = 0;
+  for (size_t i = 0; i < v->len; i++) {
+      int64_t sub = ((int64_t(*)(int64_t))(intptr_t)f)(v->data[i]);
+      struct { int64_t *data; size_t len; size_t cap; } *sv =
+          (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)sub;
+      if (sv) total += sv->len;
+  }
+  struct { int64_t *data; size_t len; size_t cap; } *r = malloc(sizeof(*r));
+  r->len = total; r->cap = total;
+  r->data = total > 0 ? malloc(sizeof(int64_t) * total) : NULL;
+  size_t idx = 0;
+  for (size_t i = 0; i < v->len; i++) {
+      int64_t sub = ((int64_t(*)(int64_t))(intptr_t)f)(v->data[i]);
+      struct { int64_t *data; size_t len; size_t cap; } *sv =
+          (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)sub;
+      if (sv) for (size_t j = 0; j < sv->len; j++) r->data[idx++] = sv->data[j];
+  }
+  return (int64_t)(intptr_t)r;
+  ```)
+
+;; Applicative.pure: wrap a single value in a vec.
+(defn __vec_pure [a] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v->len = 1; v->cap = 1;
+  v->data = malloc(sizeof(int64_t));
+  v->data[0] = a;
+  return (int64_t)(intptr_t)v;
+  ```)
+
+;; Alternative.empty: return an empty vec (zero element for alt-or).
+(defn __vec_empty [_] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v->data = NULL; v->len = 0; v->cap = 0;
+  return (int64_t)(intptr_t)v;
+  ```)
+
+(definstance Applicative [vec]
+  (pure [a] (__vec_pure a)))
+
+(definstance Monad [vec]
+  (bind [m f] (__vec_bind m f)))
+
+(definstance Alternative [vec]
+  (empty [a] (__vec_empty a))
+  (alt-or [a b] 0))
+
+;; ---- Tests -----------------------------------------------------------------
+
+(defn main [] :int
+  (do
+    ;; T1: map (* 2) over [1 2 3] => [2 4 6]
+    ;; (for [x [1 2 3]] (* x 2)) = bind [1 2 3] (fn [x] (pure (* x 2)))
+    (let [v (__vec_push (__vec_push (__vec_push (__vec_new) 1) 2) 3)]
+      (let [r (for [x v] (* x 2))]
+        (do
+          (println (__vec_len r))   ;; 3
+          (print-vec r))))          ;; 2 4 6
+
+    ;; T2: filter (> x 1) from [1 2 3] => [2 3]
+    ;; (for [x [1 2 3] :when (> x 1)] x) = bind [1 2 3] (fn [x] (if (> x 1) (pure x) (empty x)))
+    (let [v2 (__vec_push (__vec_push (__vec_push (__vec_new) 1) 2) 3)]
+      (let [r2 (for [x v2 :when (> x 1)] x)]
+        (do
+          (println (__vec_len r2))  ;; 2
+          (print-vec r2))))         ;; 2 3
+    0))

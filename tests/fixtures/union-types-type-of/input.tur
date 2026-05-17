@@ -1,0 +1,11 @@
+; IT4: (type-of x) -- returns cstr type name of an any-typed value.
+
+(defn show-type [x : any] :int
+  (println (type-of x))
+  0)
+
+(defn main [] :int
+  (show-type 42)
+  (show-type true)
+  (show-type "hello")
+  0)

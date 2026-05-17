@@ -1,0 +1,71 @@
+;; LT4: net.tur -- stub networking types for linear resource tracking.
+;;
+;; Defines Socket as a move-only struct wrapping an integer file descriptor.
+;; Future versions will upgrade Socket to lref<Socket> once FileHandle,
+;; Socket, and MutexGuard are all defined and the LT4 annotation pass is done.
+
+;; ============================================================================
+;; LT4: Socket -- resource-safe socket handle (move-only)
+;; ============================================================================
+
+;;; Socket -- a linear (exactly-once) wrapper around a POSIX socket fd.
+;;;
+;;; Wrapping the raw fd in a named struct prevents accidental duplication.
+;;; Marking the struct :linear (CK_LINEAR) means every bound Socket must be
+;;; explicitly consumed (e.g. via socket-close); the compiler emits TUR-E0100
+;;; if a linear value is silently dropped.
+;;;
+;;; Since: LT4
+(defstruct Socket :linear [fd :int])
+
+;;; socket-fd -- return the raw file descriptor from a Socket.
+;;;
+;;; Parameters:
+;;;   s -- a Socket value.
+;;;
+;;; Returns:
+;;;   The underlying file descriptor (int).
+;;;
+;;; Example:
+;;;   (socket-fd my-socket)  ; => 5
+;;;
+;;; Since: LT4
+(defn socket-fd [s : Socket] :int
+  ```c
+  return s.fd;
+  ```)
+
+;;; socket-valid? -- return true if the Socket wraps a non-negative fd.
+;;;
+;;; Parameters:
+;;;   s -- a Socket value.
+;;;
+;;; Returns:
+;;;   true if fd >= 0, false otherwise.
+;;;
+;;; Example:
+;;;   (socket-valid? my-socket)  ; => true
+;;;
+;;; Since: LT4
+(defn socket-valid? [s : Socket] :bool
+  ```c
+  return s.fd >= 0;
+  ```)
+
+;;; socket-close -- close a Socket and release the underlying fd.
+;;;
+;;; Parameters:
+;;;   s -- a Socket to close (by value; handle is consumed).
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   (socket-close my-socket)  ; => 0
+;;;
+;;; Since: LT4
+(defn socket-close [s : Socket] :int
+  ```c
+  if (s.fd < 0) return -1;
+  return close(s.fd);
+  ```)

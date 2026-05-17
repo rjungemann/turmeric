@@ -55,8 +55,10 @@ def _parse_params(bracket_content):
             pending_anns.append(tok)
             i += 1
             continue
-        if tok.startswith(':') or tok.startswith('ptr<') or tok.startswith('ptr'):
-            # This is a type annotation for the previous param
+        if tok.startswith(':') or tok.startswith('ptr<'):
+            # This is a type annotation for the previous param.
+            # Note: bare 'ptr' without '<' is a valid field/param NAME in Turmeric,
+            # so we only treat 'ptr<...' (with the angle bracket) as a type token.
             if params:
                 name, _ = params[-1]
                 params[-1] = (name, tok)
@@ -278,7 +280,7 @@ def parse_tur_file(path):
                 open_brackets += lines[j].count('[') - lines[j].count(']')
                 j += 1
 
-            name, params, return_type = _parse_def_line(kind, def_text)
+            name, params, return_type, extra = _parse_def_line(kind, def_text)
             if name:
                 exported = (name in module['exports']) or (not module['exports'])
                 # Don't mark internal helpers as exported even if no export list
@@ -288,7 +290,7 @@ def parse_tur_file(path):
                     exported = False
 
                 docstring = _parse_docstring(doc_buf) if doc_buf else None
-                module['definitions'].append({
+                defn_dict = {
                     'kind': kind,
                     'name': name,
                     'params': params,
@@ -296,7 +298,9 @@ def parse_tur_file(path):
                     'exported': exported,
                     'docstring': docstring,
                     'line': i + 1,
-                })
+                }
+                defn_dict.update(extra)  # LT4: merge kind-specific extras (e.g. struct_ann)
+                module['definitions'].append(defn_dict)
             doc_buf = []
             i += 1
             continue
@@ -328,13 +332,14 @@ def _extract_exports(text, module):
 def _parse_def_line(kind, text):
     """
     Parse a defn/defmacro/defstruct/definstance line (possibly multi-line collapsed).
-    Returns (name, params, return_type).
+    Returns (name, params, return_type, extra) where extra is a dict of kind-specific
+    data (e.g. {'struct_ann': 'linear'} for defstruct with :linear annotation).
     """
     # Match kind name
     pattern = r'\(\s*' + kind + r'\s+([\w/\-!?<>*+]+)'
     m = re.search(pattern, text)
     if not m:
-        return None, [], None
+        return None, [], None, {}
 
     name = m.group(1)
     rest = text[m.end():]
@@ -343,7 +348,15 @@ def _parse_def_line(kind, text):
         # (definstance TypeName [TypeParam] ...)
         type_m = re.search(r'\[\s*([\w/\-!?<>*+]+)', rest)
         type_param = type_m.group(1) if type_m else ''
-        return name + '[' + type_param + ']', [], None
+        return name + '[' + type_param + ']', [], None, {}
+
+    extra = {}
+
+    # LT4: For defstruct, detect :copy / :move / :linear annotation before the bracket.
+    if kind == 'defstruct':
+        ann_m = re.search(r':(copy|move|linear)\s', rest)
+        if ann_m:
+            extra['struct_ann'] = ann_m.group(1)
 
     # Extract params bracket
     bracket_m = re.search(r'\[([^\]]*)\]', rest)
@@ -357,7 +370,7 @@ def _parse_def_line(kind, text):
         if parts and (parts[0].startswith(':') or parts[0].startswith('ptr')):
             return_type = parts[0]
 
-    return name, params, return_type
+    return name, params, return_type, extra
 
 
 # ---------------------------------------------------------------------------
@@ -529,6 +542,19 @@ a:hover { text-decoration: underline; }
 .kind-defmacro  { background: #5A2800; color: #F57A30; }
 .kind-defstruct { background: #3A4A00; color: #B5C840; }
 .kind-definstance { background: #003A3A; color: #50C8B8; }
+
+/* LT4: badge for linear types and ^linear / lref<T> annotations */
+.linear-badge {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  border-radius: 99px;
+  font-size: 0.7rem;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-weight: 600;
+  text-transform: lowercase;
+  background: #1A3A4A;
+  color: #50C8E8;
+}
 
 .def-signature {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
@@ -823,7 +849,10 @@ def _render_signature(defn):
             f"{p} {t}" if t else p
             for p, t in params
         )
-        return f"(defstruct {name} [{param_str}])"
+        # LT4: include :linear / :copy / :move annotation if present
+        struct_ann = defn.get('struct_ann', '')
+        ann_str = f' :{struct_ann}' if struct_ann else ''
+        return f"(defstruct {name}{ann_str} [{param_str}])"
 
     if kind == 'definstance':
         # name is like 'Functor[list]'
@@ -852,9 +881,21 @@ def _render_def_card(defn, anchor_prefix=''):
     sig = _render_signature(defn)
     kind_cls = f"kind-{kind}"
 
+    # LT4: detect linear types -- :linear struct annotation, ^linear params, lref<T> types.
+    params = defn.get('params', [])
+    ret = defn.get('return_type', '') or ''
+    is_linear = (
+        defn.get('struct_ann') == 'linear'
+        or any('^linear' in (p or '') for p, _ in params)
+        or any('lref<' in (t or '') for _, t in params)
+        or 'lref<' in ret
+    )
+
     h = f'<div class="def-card" id="{html_module.escape(anchor)}">\n'
     h += f'  <div class="def-card-header">\n'
     h += f'    <span class="kind-badge {kind_cls}">{kind}</span>\n'
+    if is_linear:
+        h += f'    <span class="linear-badge">linear</span>\n'
     h += f'    <h2>{html_module.escape(name)}</h2>\n'
     h += f'  </div>\n'
     h += f'  <pre class="def-signature">{html_module.escape(sig)}</pre>\n'
@@ -1043,7 +1084,20 @@ def _build_doc_entry(defn):
     if not doc:
         return defn['name']
 
-    parts = [doc['summary']]
+    # LT4: prepend [linear] to the summary when the definition involves linear types.
+    params = defn.get('params', [])
+    ret = defn.get('return_type', '') or ''
+    is_linear = (
+        defn.get('struct_ann') == 'linear'
+        or any('^linear' in (p or '') for p, _ in params)
+        or any('lref<' in (t or '') for _, t in params)
+        or 'lref<' in ret
+    )
+    summary = doc['summary']
+    if is_linear:
+        summary = '[linear] ' + summary
+
+    parts = [summary]
 
     if doc['params']:
         parts.append('')

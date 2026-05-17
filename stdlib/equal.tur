@@ -14,3 +14,19 @@
 (defn equal-trans [eq1 :Equal eq2 :Equal] :Equal
   (match eq1
     (Refl) eq2))
+
+;;; equal-cong -- congruence: if a = b then (f a) = (f b) for any f : * -> *.
+;;;
+;;; Parameters:
+;;;   eq -- a proof that a = b
+;;;
+;;; Returns:
+;;;   A proof that (f a) = (f b).
+;;;
+;;; Example:
+;;;   (equal-cong Refl)  ; => Refl
+;;;
+;;; Since: Phase G4 (requires HKT)
+(defn equal-cong [^f eq : (Equal a b)] : (Equal (f a) (f b))
+  (match eq
+    (Refl) (Refl)))

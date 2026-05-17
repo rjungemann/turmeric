@@ -1,0 +1,138 @@
+;; Phase SEL1: select-fair-block -- fair multi-channel blocking select.
+;;
+;; Two producer threads send to separate channels (ch-a and ch-b).
+;; Producer A sends 10, 20, 30 to ch-a.
+;; Producer B sends 100, 200, 300 to ch-b.
+;; The main thread performs 6 (select ...) iterations, receiving one value per
+;; iteration from whichever channel has data first.
+;;
+;; Because all values are consumed, the sum is deterministic: 660.
+;; Expected output: 660
+
+;; ChanBlock struct with waiter fields (Phase SEL0).
+;; Must match the layout expected by tur_select_blocking in the emitted preamble.
+
+(defn chan-new [cap :int] :ptr<void>
+  ```c
+  typedef struct {
+      pthread_mutex_t lock;
+      pthread_cond_t  not_full;
+      pthread_cond_t  not_empty;
+      int64_t        *buf;
+      int64_t         head;
+      int64_t         tail;
+      int64_t         count;
+      int64_t         cap;
+      void           *recv_waiters;
+      void           *send_waiters;
+  } ChanBlock;
+  ChanBlock *ch = (ChanBlock *)malloc(sizeof(ChanBlock));
+  if (!ch) { fprintf(stderr, "chan-new: oom\n"); abort(); }
+  ch->buf = (int64_t *)malloc(sizeof(int64_t) * (size_t)cap);
+  if (!ch->buf) { free(ch); fprintf(stderr, "chan-new: buf oom\n"); abort(); }
+  pthread_mutex_init(&ch->lock, NULL);
+  pthread_cond_init(&ch->not_full, NULL);
+  pthread_cond_init(&ch->not_empty, NULL);
+  ch->head = 0; ch->tail = 0; ch->count = 0; ch->cap = (int64_t)cap;
+  ch->recv_waiters = NULL; ch->send_waiters = NULL;
+  return (void *)ch;
+  ```)
+
+(defn chan-free [ch :ptr<void>] :nil
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+      void *recv_waiters; void *send_waiters;
+  } ChanBlock;
+  ChanBlock *c = (ChanBlock *)ch;
+  pthread_mutex_destroy(&c->lock);
+  pthread_cond_destroy(&c->not_full);
+  pthread_cond_destroy(&c->not_empty);
+  free(c->buf);
+  free(c);
+  ```)
+
+;; Producer A: sends 10, 20, 30 to the channel.
+(defn producer-a [ch :ptr<void>] :ptr<void>
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+      void *recv_waiters; void *send_waiters;
+  } ChanBlock;
+  int64_t vals[3] = {10, 20, 30};
+  int i;
+  for (i = 0; i < 3; i++) {
+      ChanBlock *c = (ChanBlock *)ch;
+      pthread_mutex_lock(&c->lock);
+      while (c->count == c->cap) pthread_cond_wait(&c->not_full, &c->lock);
+      c->buf[c->tail] = vals[i];
+      c->tail = (c->tail + 1) % c->cap;
+      c->count++;
+      pthread_cond_signal(&c->not_empty);
+      tur_waiter_signal_one(c->recv_waiters);
+      pthread_mutex_unlock(&c->lock);
+  }
+  return NULL;
+  ```)
+
+;; Producer B: sends 100, 200, 300 to the channel.
+(defn producer-b [ch :ptr<void>] :ptr<void>
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+      void *recv_waiters; void *send_waiters;
+  } ChanBlock;
+  int64_t vals[3] = {100, 200, 300};
+  int i;
+  for (i = 0; i < 3; i++) {
+      ChanBlock *c = (ChanBlock *)ch;
+      pthread_mutex_lock(&c->lock);
+      while (c->count == c->cap) pthread_cond_wait(&c->not_full, &c->lock);
+      c->buf[c->tail] = vals[i];
+      c->tail = (c->tail + 1) % c->cap;
+      c->count++;
+      pthread_cond_signal(&c->not_empty);
+      tur_waiter_signal_one(c->recv_waiters);
+      pthread_mutex_unlock(&c->lock);
+  }
+  return NULL;
+  ```)
+
+(defn thread-spawn-fn [fn-ptr :ptr<void> arg :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  if (!t) { fprintf(stderr, "thread-spawn: oom\n"); abort(); }
+  pthread_create(t, NULL, (void *(*)(void *))fn_ptr, arg);
+  return (void *)t;
+  ```)
+
+(defn thread-join [t :ptr<void>] :nil
+  ```c
+  pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  ```)
+
+;; Accumulate 6 values from two channels via (select ...) into a running sum.
+;; Uses tail recursion (iter decrements to 0).
+(defn select-loop [ch-a :ptr<void> ch-b :ptr<void> iter :int acc :int] :int
+  (if (= iter 0)
+    acc
+    (let [v (select ((ch-a :recv x) x)
+                    ((ch-b :recv x) x))]
+      (select-loop ch-a ch-b (- iter 1) (+ acc v)))))
+
+(defn main [] :int
+  (let [ch-a (chan-new 4)
+        ch-b (chan-new 4)]
+    (let [tp-a (thread-spawn-fn producer-a ch-a)
+          tp-b (thread-spawn-fn producer-b ch-b)]
+      (let [total (select-loop ch-a ch-b 6 0)]
+        (thread-join tp-a)
+        (thread-join tp-b)
+        (println total)    ;; 660  (10+20+30+100+200+300)
+        (chan-free ch-a)
+        (chan-free ch-b)))
+    0))

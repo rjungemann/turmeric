@@ -1,0 +1,28 @@
+; Phase G4/HKT: Test equal-cong -- congruence for type equality witnesses.
+; equal-cong takes a proof (Equal a b) and returns a proof (Equal (f a) (f b)).
+; The body is Refl because in the Refl arm the skolem a ~ b is active,
+; so (f a) and (f b) are interchangeable.
+
+(defgadt Equal [a b]
+  (Refl : (Equal a a)))
+
+;;; equal-cong -- congruence: if a = b then (f a) = (f b) for any f : * -> *.
+;;;
+;;; Parameters:
+;;;   eq -- a proof that a = b
+;;;
+;;; Returns:
+;;;   A proof that (f a) = (f b).
+;;;
+;;; Example:
+;;;   (equal-cong Refl)  ; => Refl
+;;;
+;;; Since: Phase G4 (requires HKT)
+(defn equal-cong [^f eq : (Equal a b)] : (Equal (f a) (f b))
+  (match eq
+    (Refl) (Refl)))
+
+(defn main [] :int
+  (let [pf (equal-cong (Refl))]
+    (println "ok"))
+  0)

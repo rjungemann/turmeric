@@ -48,6 +48,8 @@
       int64_t         tail;
       int64_t         count;
       int64_t         cap;
+      void           *recv_waiters; /* TurSelectWaiter* -- SEL0 */
+      void           *send_waiters; /* TurSelectWaiter* -- SEL0 */
   } ChanBlock;
   ChanBlock *ch = (ChanBlock *)malloc(sizeof(ChanBlock));
   if (!ch) { fprintf(stderr, "chan-new: out of memory\n"); abort(); }
@@ -57,6 +59,7 @@
   pthread_cond_init(&ch->not_full, NULL);
   pthread_cond_init(&ch->not_empty, NULL);
   ch->head = 0; ch->tail = 0; ch->count = 0; ch->cap = (int64_t)cap;
+  ch->recv_waiters = NULL; ch->send_waiters = NULL;
   return (void *)ch;
   ```)
 
@@ -75,6 +78,7 @@
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+      void *recv_waiters; void *send_waiters;
   } ChanBlock;
   ChanBlock *c = (ChanBlock *)ch;
   pthread_mutex_lock(&c->lock);
@@ -84,6 +88,7 @@
   c->tail = (c->tail + 1) % c->cap;
   c->count++;
   pthread_cond_signal(&c->not_empty);
+  tur_waiter_signal_one(c->recv_waiters);
   pthread_mutex_unlock(&c->lock);
   ```)
 
@@ -104,6 +109,7 @@
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+      void *recv_waiters; void *send_waiters;
   } ChanBlock;
   ChanBlock *c = (ChanBlock *)ch;
   pthread_mutex_lock(&c->lock);
@@ -113,6 +119,7 @@
   c->head = (c->head + 1) % c->cap;
   c->count--;
   pthread_cond_signal(&c->not_full);
+  tur_waiter_signal_one(c->send_waiters);
   pthread_mutex_unlock(&c->lock);
   return v;
   ```)
@@ -131,6 +138,7 @@
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+      void *recv_waiters; void *send_waiters;
   } ChanBlock;
   ChanBlock *c = (ChanBlock *)ch;
   pthread_mutex_destroy(&c->lock);
@@ -166,6 +174,8 @@
       int64_t         tail;
       int64_t         count;
       int64_t         cap;
+      void           *recv_waiters;
+      void           *send_waiters;
   } ChanBlock;
   ChanBlock *ch = (ChanBlock *)malloc(sizeof(ChanBlock));
   if (!ch) { fprintf(stderr, "async-chan-new: out of memory\n"); abort(); }
@@ -175,6 +185,7 @@
   pthread_cond_init(&ch->not_full, NULL);
   pthread_cond_init(&ch->not_empty, NULL);
   ch->head = 0; ch->tail = 0; ch->count = 0; ch->cap = (int64_t)cap;
+  ch->recv_waiters = NULL; ch->send_waiters = NULL;
   return (void *)ch;
   ```)
 
@@ -193,6 +204,7 @@
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+      void *recv_waiters; void *send_waiters;
   } ChanBlock;
   ChanBlock *c = (ChanBlock *)ch;
   pthread_mutex_lock(&c->lock);
@@ -202,6 +214,7 @@
   c->tail = (c->tail + 1) % c->cap;
   c->count++;
   pthread_cond_signal(&c->not_empty);
+  tur_waiter_signal_one(c->recv_waiters);
   pthread_mutex_unlock(&c->lock);
   ```)
 
@@ -222,6 +235,7 @@
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+      void *recv_waiters; void *send_waiters;
   } ChanBlock;
   ChanBlock *c = (ChanBlock *)ch;
   pthread_mutex_lock(&c->lock);
@@ -231,6 +245,7 @@
   c->head = (c->head + 1) % c->cap;
   c->count--;
   pthread_cond_signal(&c->not_full);
+  tur_waiter_signal_one(c->send_waiters);
   pthread_mutex_unlock(&c->lock);
   return v;
   ```)
@@ -253,6 +268,7 @@
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+      void *recv_waiters; void *send_waiters;
   } ChanBlock;
   ChanBlock *c = (ChanBlock *)ch;
   pthread_mutex_lock(&c->lock);
@@ -264,6 +280,7 @@
   c->tail = (c->tail + 1) % c->cap;
   c->count++;
   pthread_cond_signal(&c->not_empty);
+  tur_waiter_signal_one(c->recv_waiters);
   pthread_mutex_unlock(&c->lock);
   return 1; /* sent */
   ```)
@@ -287,6 +304,7 @@
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+      void *recv_waiters; void *send_waiters;
   } ChanBlock;
   ChanBlock *c = (ChanBlock *)ch;
   pthread_mutex_lock(&c->lock);
@@ -298,6 +316,7 @@
   c->head = (c->head + 1) % c->cap;
   c->count--;
   pthread_cond_signal(&c->not_full);
+  tur_waiter_signal_one(c->send_waiters);
   pthread_mutex_unlock(&c->lock);
   return v;
   ```)
@@ -319,6 +338,7 @@
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+      void *recv_waiters; void *send_waiters;
   } ChanBlock;
   ChanBlock *c = (ChanBlock *)ch;
   pthread_mutex_lock(&c->lock);
@@ -341,6 +361,7 @@
   typedef struct {
       pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
       int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+      void *recv_waiters; void *send_waiters;
   } ChanBlock;
   ChanBlock *c = (ChanBlock *)ch;
   pthread_mutex_destroy(&c->lock);

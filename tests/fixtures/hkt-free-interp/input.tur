@@ -1,0 +1,98 @@
+;; Phase S4: Free monad with a simple interpreter.
+;;
+;; Free f a = PureFree a | Suspend (f a)
+;;
+;; In this test the base functor's Suspend payload is a plain int64_t.
+;; The interpreter is a fat closure (capturing lambda) applied only to
+;; Suspend values; PureFree values pass straight through.
+;;
+;; Tests:
+;;   1. free-pure? is true for PureFree.
+;;   2. free-run on PureFree returns the value (interp not called).
+;;   3. free-bind sequences two PureFree computations.
+;;   4. free-run on Suspend calls the interpreter.
+
+;; ---- Free monad (inline C, tag-based struct) --------------------------------
+;;   { int tag; int64_t val }
+;;   tag = 0 => PureFree val
+;;   tag = 1 => Suspend  val
+
+(defn free-pure [x] :int
+  ```c
+  struct { int tag; int64_t val; } *r = malloc(sizeof(*r));
+  r->tag = 0; r->val = x;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(defn free-lift [x] :int
+  ```c
+  struct { int tag; int64_t val; } *r = malloc(sizeof(*r));
+  r->tag = 1; r->val = x;
+  return (int64_t)(intptr_t)r;
+  ```)
+
+(defn free-pure? [m] :bool
+  ```c
+  struct { int tag; int64_t val; } *r =
+      (struct { int tag; int64_t val; } *)(intptr_t)m;
+  return r->tag == 0;
+  ```)
+
+;; free-run: run with a fat-closure interpreter.
+;;   PureFree a -> a          (interp not called)
+;;   Suspend  x -> interp(x)  (interp is a fat closure)
+(defn free-run [interp m] :int
+  ```c
+  struct { int tag; int64_t val; } *fr =
+      (struct { int tag; int64_t val; } *)(intptr_t)m;
+  if (fr->tag == 0) {
+      return fr->val;
+  }
+  int64_t *fat = (int64_t *)(intptr_t)interp;
+  int64_t thunk = fat[0];
+  return ((int64_t(*)(void *, int64_t))(intptr_t)thunk)((void *)fat, fr->val);
+  ```)
+
+;; free-bind: monadic bind (fat-closure kont).
+;;   PureFree a >>= kont = kont a
+;;   Suspend  x >>= kont = Suspend x  (single-layer pass-through)
+(defn free-bind [m kont] :int
+  ```c
+  struct { int tag; int64_t val; } *fr =
+      (struct { int tag; int64_t val; } *)(intptr_t)m;
+  if (fr->tag == 0) {
+      int64_t *fat = (int64_t *)(intptr_t)kont;
+      int64_t thunk = fat[0];
+      return ((int64_t(*)(void *, int64_t))(intptr_t)thunk)((void *)fat, fr->val);
+  }
+  return m;
+  ```)
+
+;; ---- Tests ------------------------------------------------------------------
+
+(defn main [] :int
+  (do
+    ;; Test 1: free-pure? identifies a PureFree value
+    (println (free-pure? (free-pure 42)))   ;; true
+
+    ;; Test 2: free-run on PureFree returns the value
+    ;; The interp is a fat closure but is never invoked for PureFree.
+    (let [zero 0]
+      (let [id (fn [x] (+ x zero))]
+        (println (free-run id (free-pure 42)))))   ;; 42
+
+    ;; Test 3: free-bind sequences two Pure computations, then run
+    ;; (free-pure 3) >>= (fn [x] (free-pure (* x 5))) = PureFree 15
+    (let [mult 5]
+      (let [r (free-bind (free-pure 3) (fn [x] (free-pure (* x mult))))]
+        (let [zero 0]
+          (let [id (fn [x] (+ x zero))]
+            (println (free-run id r))))))   ;; 15
+
+    ;; Test 4: free-run on Suspend calls the interpreter
+    ;; The interp is (fn [x] (+ x 0)) = identity
+    (let [zero 0]
+      (let [id (fn [x] (+ x zero))]
+        (println (free-run id (free-lift 99)))))   ;; 99
+
+    0))

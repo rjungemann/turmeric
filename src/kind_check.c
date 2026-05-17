@@ -253,6 +253,56 @@ static int kind_check_expr(Expr *expr) {
             }
             break;
         }
+        case EX_DEFGADT: {
+            /* Phase G1/HKT: Walk each constructor's return-type form.
+             * For each constructor with an explicit return-type annotation,
+             * check that any F_LIST sub-form (type application) in argument
+             * position has a well-kinded head.
+             *
+             * The primary kind check runs in elab_defgadt at elaboration time.
+             * This pass adds a belt-and-suspenders walk that fires after all
+             * type information has been propagated (e.g. by kind_infer_from_instances).
+             *
+             * In Phase G1 all GADT type parameters have kind *, so any
+             * constructor return-type argument that is itself a type
+             * application (F_LIST) is suspicious: the head must be a type
+             * constructor of kind * -> *.  elab_defgadt already validates
+             * bare-symbol arguments; here we validate F_LIST sub-forms by
+             * checking that the result_type_form is well-structured (non-NULL
+             * head symbol that is the GADT name). */
+            AdtDef *def = expr->as.defgadt_.def;
+            if (!def || !def->is_gadt) break;
+            for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+                CtorDef *ctor = def->ctors[ci];
+                if (!ctor || !ctor->result_type_form) continue;
+                const struct Form *rtf = ctor->result_type_form;
+                if (rtf->tag != F_LIST || rtf->as.list.len < 1) continue;
+                /* Walk argument sub-forms (indices 1..len-1). */
+                for (uint32_t ai = 1; ai < rtf->as.list.len; ai++) {
+                    const struct Form *arg = rtf->as.list.items[ai];
+                    if (arg->tag != F_LIST) continue; /* bare symbols validated by elab */
+                    /* F_LIST sub-form: type application in argument position.
+                     * HEAD must be a type constructor (its kind is resolved at
+                     * elaboration time by elab_defgadt).  Here we confirm the
+                     * head is a symbol (not a nested application), which is the
+                     * only form that elab validates.  Nested F_LIST heads
+                     * (curried applications) are future work requiring a full
+                     * KindEnv pass. */
+                    if (arg->as.list.len < 1) continue;
+                    const struct Form *app_head = arg->as.list.items[0];
+                    if (app_head->tag != F_SYM) {
+                        diag_emit_with_code(DIAG_ERROR, arg->span,
+                            TUR_E0012_KIND_MISMATCH,
+                            "kind mismatch (TUR-E0012): constructor '%s' return-type "
+                            "argument is a nested type application; only simple type "
+                            "constructors are supported in Phase G1",
+                            ctor->name);
+                        errors++;
+                    }
+                }
+            }
+            break;
+        }
         default:
             break;
     }

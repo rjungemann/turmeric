@@ -208,6 +208,10 @@ void expr_print(Buf *b, const Expr *e) {
             expr_print(b, e->as.await_.fut_expr);
             buf_putc(b, ')');
             break;
+        /* Phase SEL1: fair multi-channel select */
+        case EX_SELECT:
+            buf_puts(b, "(select ...)");
+            break;
         /* Phase N: numeric cast */
         case EX_CAST:
             buf_puts(b, "(as ");
@@ -487,6 +491,23 @@ void expr_print(Buf *b, const Expr *e) {
         case EX_MATCH:
             buf_puts(b, "(match ");
             expr_print(b, e->as.match_.scrutinee);
+            buf_putc(b, ')');
+            break;
+        /* IT4: Tagged union injection */
+        case EX_UNION_INJECT:
+            buf_printf(b, "(union-inject %lld ", (long long)e->as.union_inject_.tag_idx);
+            expr_print(b, e->as.union_inject_.value);
+            buf_putc(b, ')');
+            break;
+        /* IT4 gradual typing */
+        case EX_ANY_TYPE_OF:
+            buf_puts(b, "(type-of ");
+            expr_print(b, e->as.any_type_of_.value);
+            buf_putc(b, ')');
+            break;
+        case EX_ANY_CAST:
+            buf_printf(b, "(cast %s ", type_name(e->type));
+            expr_print(b, e->as.any_cast_.value);
             buf_putc(b, ')');
             break;
     }

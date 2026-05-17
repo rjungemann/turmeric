@@ -1,8 +1,8 @@
 # Advanced Type System Features — Feasibility Plan for Turmeric
 
-> **Status:** Draft — Not Started  
+> **Status:** In Progress — v3 features partially implemented; v2 prerequisites complete  
 > **Target:** v3 or later  
-> **Prerequisites:** Phase 19 (Algebraic Effects) complete; HKT/HRT/GADT roadmap (v2) recommended  
+> **Prerequisites:** Phase 19 (Algebraic Effects) complete; HKT/HRT/GADT roadmap (v2) complete  
 > **Related:** [higher-ranked-types-plan.md](archive/higher-ranked-types-plan.md), [higher-kinded-types-plan.md](archive/higher-kinded-types-plan.md), [gadts-plan.md](archive/gadts-plan.md)
 
 ---
@@ -20,25 +20,25 @@ This document explores **type system features not yet considered** for Turmeric 
 | Unique ownership (ref<T>) | ✅ | Move semantics, Phase 5 |
 | Algebraic effects | ✅ | OCaml 5-style, Phase 19 |
 
-**Already planned for v2:**
-- Higher-Kinded Types (HKT) — [hkt-implementation-plan.md](archive/higher-kinded-types-plan.md)
-- Higher-Ranked Types (HRT) — [higher-ranked-types-plan.md](archive/higher-ranked-types-plan.md)
-- Generalized Algebraic Data Types (GADTs) — [gadts-plan.md](archive/gadts-plan.md)
+**v2 complete:**
+- Higher-Kinded Types (HKT) — ✅ [hkt-implementation-plan.md](archive/higher-kinded-types-plan.md) / [guide](guides/hkt-guide.md)
+- Higher-Ranked Types (HRT) — ✅ [higher-ranked-types-plan.md](archive/higher-ranked-types-plan.md) / [guide](guides/hrt-guide.md)
+- Generalized Algebraic Data Types (GADTs) — ✅ G0–G4 substantially complete; [gadts-plan.md](archive/gadts-plan.md) / [guide](guides/gadts-guide.md)
 
-**This document covers features NOT yet on the roadmap:**
+**This document covers features from the v3+ roadmap:**
 
-| Feature | Maturity | Complexity | Use Case |
+| Feature | Maturity | Complexity | Implementation Status |
 |---|---|---|---|
-| [Linear Types](#1-linear-types) | High | Medium-High | Memory safety, resource management |
-| [Dependent Types](#2-dependent-types) | Research | Very High | Formal verification, indexed types |
-| [Uniqueness Types](#3-uniqueness-types) | Medium | Medium | Alias control, in-place update |
-| [Substructural Type Systems](#4-substructural-type-systems) | Medium | Medium | Session types, linear logic |
-| [Session Types](#5-session-types) | Medium | High | Protocol verification, concurrency |
-| [Refinement Types](#6-refinement-types) | Medium | High | Runtime property verification |
-| [Intersection & Union Types](#7-intersection--union-types) | High | Medium | Gradual typing, flexible APIs |
-| [Effect Types (Row Polymorphism)](#8-effect-types-row-polymorphism) | High | Medium | Effect tracking, handler typing |
-| [Sized Types](#9-sized-types) | Medium | Medium-High | Memory layout, embedded DSLs |
-| [Contract Types](#10-contract-types) | Medium | Medium | Runtime assertions, gradual typing |
+| [Linear Types](#1-linear-types) | High | Medium-High | ✅ LT0–LT4 complete (`-Xlinear`) |
+| [Dependent Types](#2-dependent-types) | Research | Very High | ⏸ Deferred |
+| [Uniqueness Types](#3-uniqueness-types) | Medium | Medium | ✅ UT0–UT1 complete (`-Xunique`) |
+| [Substructural Type Systems](#4-substructural-type-systems) | Medium | Medium | ✅ ST0–ST3 complete (`-Xsubstructural`) |
+| [Session Types](#5-session-types) | Medium | High | 📋 Draft — Not Started |
+| [Refinement Types](#6-refinement-types) | Medium | High | ⏸ Deferred |
+| [Intersection & Union Types](#7-intersection--union-types) | High | Medium | ✅ IT0–IT4 substantially complete (`-Xunion-types`, `-Xintersection-types`) |
+| [Effect Types (Row Polymorphism)](#8-effect-types-row-polymorphism) | High | Medium | 📋 Draft — Not Started |
+| [Sized Types](#9-sized-types) | Medium | Medium-High | 📋 Draft — Not Started |
+| [Contract Types](#10-contract-types) | Medium | Medium | 📋 Draft — Not Started |
 
 ---
 
@@ -209,14 +209,14 @@ defn with-linear-cont [f : (-> (LinearCont a) b)] : b
 
 ### Recommendation
 
-**✅ ACCEPT — High value, medium complexity, aligns perfectly with existing ownership model.**
+**✅ IMPLEMENTED — LT0–LT4 complete (gated behind `-Xlinear`).**
 
 Linear types are a natural extension of Turmeric's `ref<T>` semantics. They provide:
 1. Compile-time guarantees against resource leaks
 2. Better alignment with Rust's ownership model (useful for FFI)
 3. Foundation for session types and other substructural features
 
-**Implementation priority:** High (after HKT/HRT, before GADTs)
+See [linear-types-plan.md](linear-types-plan.md) for full implementation details and [guides/uniqueness-types-guide.md](guides/uniqueness-types-guide.md) for the `lref<T>` / `^linear` user guide.
 
 ---
 
@@ -506,16 +506,16 @@ defn example [] : unit
 
 ### Recommendation
 
-**✅ ACCEPT — Low complexity, good alignment with existing model, useful for in-place mutation.**
+**✅ IMPLEMENTED — UT0–UT1 complete (gated behind `-Xunique`); UT2–UT3 remaining.**
 
 Uniqueness types are a small extension to the existing ownership model. They provide:
 1. Explicit alias control for mutable operations
 2. Foundation for more advanced type systems
 3. Better error messages for aliasing bugs
 
-**Implementation priority:** Medium (after Linear Types, before Dependent Types)
+`ref<T>` is modelled as `CK_UNIQUE` internally. UT2 (unique mutable references via `^unique ^mut`) and UT3 (stdlib integration for mutable arrays and buffers) remain as follow-on work.
 
-**Note:** Uniqueness types can be partially simulated with the existing `ref<T>` + borrow checker. However, explicit uniqueness annotations provide better documentation and enable more precise static analysis.
+See [guides/uniqueness-types-guide.md](guides/uniqueness-types-guide.md).
 
 ---
 
@@ -629,7 +629,7 @@ defn bad [] : unit
 
 ### Recommendation
 
-**✅ ACCEPT — Provides a unifying framework for Linear, Uniqueness, and Affine types.**
+**✅ IMPLEMENTED — ST0–ST3 complete (gated behind `-Xsubstructural`).**
 
 Substructural type systems:
 1. Generalize linear types naturally
@@ -637,9 +637,9 @@ Substructural type systems:
 3. Have clean semantic foundations
 4. Low implementation complexity
 
-**Implementation priority:** Medium (after Linear Types, as a generalization)
+`-Xsubstructural` implies `-Xlinear`. All three annotations (`^linear`, `^affine`, `^relevant`) are supported.
 
-**Note:** Start with Linear Types (most useful), then generalize to the full substructural framework.
+See [guides/substructural-types-guide.md](guides/substructural-types-guide.md).
 
 ---
 
@@ -1071,7 +1071,7 @@ Intersection types (`A & B`) represent values that satisfy both `A` and `B`. Uni
 
 ### Recommendation
 
-**✅ ACCEPT — Medium complexity, high value for gradual typing and flexible APIs.**
+**✅ IMPLEMENTED — IT0–IT4 substantially complete (gated behind `-Xunion-types` / `-Xintersection-types`).**
 
 Intersection & Union types provide:
 1. Gradual typing capabilities
@@ -1079,9 +1079,9 @@ Intersection & Union types provide:
 3. Type-safe duck typing
 4. Natural encoding of ADTs
 
-**Implementation priority:** Medium (can be implemented independently)
+IT4 partial: `any` top type is complete; boxing codegen, `cast`/`type-of`, and ADT-as-union sugar are deferred to a v4 stretch goal.
 
-**Note:** Start with union types (more useful), then add intersection types. Consider implementing ADTs as syntactic sugar for unions.
+See [archive/intersection-union-types-plan.md](archive/intersection-union-types-plan.md) for remaining tasks.
 
 ---
 
@@ -1496,61 +1496,68 @@ Contract types provide:
 
 ## Feature Comparison Matrix
 
-| Feature | Complexity | Value | C99 Fit | Composability | Demand | Priority |
+| Feature | Complexity | Value | C99 Fit | Composability | Demand | Status |
 |---|---|---|---|---|---|---|
-| [Linear Types](#1-linear-types) | Medium | High | ✅ Excellent | ✅ Excellent | High | **High** |
-| [Substructural Types](#4-substructural-type-systems) | Medium | High | ✅ Excellent | ✅ Excellent | Medium | **High** |
-| [Uniqueness Types](#3-uniqueness-types) | Low | Medium | ✅ Excellent | ✅ Excellent | Medium | **Medium** |
-| [Session Types](#5-session-types) | High | High | ✅ Good | ✅ Good | Medium | **Medium-High** |
-| [Intersection & Union](#7-intersection--union-types) | Medium | High | ✅ Good | ✅ Good | Medium | **Medium** |
-| [Effect Types](#8-effect-types-row-polymorphism) | High | High | ✅ Good | ✅ Excellent | Medium | **High** |
-| [Sized Types](#9-sized-types) | Medium | Medium | ✅ Excellent | ✅ Good | Low | **Medium** |
-| [Contract Types](#10-contract-types) | Medium | Medium | ✅ Good | ✅ Good | Medium | **Medium** |
-| [Dependent Types](#2-dependent-types) | Very High | High | ❌ Poor | ✅ Good | Low | **Deferred** |
-| [Refinement Types](#6-refinement-types) | Very High | Medium | ⚠️ Fair | ✅ Good | Low | **Deferred** |
+| [Linear Types](#1-linear-types) | Medium | High | ✅ Excellent | ✅ Excellent | High | **✅ LT0–LT4 complete** |
+| [Substructural Types](#4-substructural-type-systems) | Medium | High | ✅ Excellent | ✅ Excellent | Medium | **✅ ST0–ST3 complete** |
+| [Uniqueness Types](#3-uniqueness-types) | Low | Medium | ✅ Excellent | ✅ Excellent | Medium | **✅ UT0–UT1 complete** |
+| [Intersection & Union](#7-intersection--union-types) | Medium | High | ✅ Good | ✅ Good | Medium | **✅ IT0–IT4 substantially complete** |
+| [Session Types](#5-session-types) | High | High | ✅ Good | ✅ Good | Medium | **📋 Draft — Not Started** |
+| [Effect Types](#8-effect-types-row-polymorphism) | High | High | ✅ Good | ✅ Excellent | Medium | **📋 Draft — Not Started** |
+| [Sized Types](#9-sized-types) | Medium | Medium | ✅ Excellent | ✅ Good | Low | **📋 Draft — Not Started** |
+| [Contract Types](#10-contract-types) | Medium | Medium | ✅ Good | ✅ Good | Medium | **📋 Draft — Not Started** |
+| [Dependent Types](#2-dependent-types) | Very High | High | ❌ Poor | ✅ Good | Low | **⏸ Deferred** |
+| [Refinement Types](#6-refinement-types) | Very High | Medium | ⚠️ Fair | ✅ Good | Low | **⏸ Deferred** |
 
 ---
 
 ## Recommended Implementation Roadmap
 
-### Phase 1: Linear & Substructural Types (v3)
+### Phase 1: Linear & Substructural Types (v3) — ✅ Complete
 
-**Duration:** 8-12 weeks
+**Status:** All phases shipped.
+
+| Feature | Phases | Status |
+|---|---|---|
+| Linear Types | LT0–LT4 | ✅ Complete (`-Xlinear`) |
+| Uniqueness Types | UT0–UT1 | ✅ Complete (`-Xunique`); UT2–UT3 deferred |
+| Substructural Framework | ST0–ST3 | ✅ Complete (`-Xsubstructural`) |
+
+**Remaining:** UT2 (unique mutable refs) and UT3 (stdlib mutable arrays/buffers) are follow-on work with no set milestone.
+
+### Phase 1b: Intersection & Union Types (v3) — ✅ Substantially Complete
+
+**Status:** IT0–IT4 shipped; IT4 has deferred stretch goals.
+
+| Feature | Phases | Status |
+|---|---|---|
+| Intersection & Union Types | IT0–IT4 | ✅ Core complete; `cast`/`type-of`, boxing codegen, ADT-as-union sugar deferred |
+
+### Phase 2: Effect Types & Session Types (v3–v4)
+
 **Priority:** High
 
-| Feature | Phases | Duration | Dependencies |
-|---|---|---|---|
-| Linear Types | LT0-LT4 | 6-8 weeks | Phase 19 |
-| Uniqueness Types | UT0-UT3 | 2-4 weeks | Linear Types |
-| Substructural Framework | ST0-ST3 | 2-4 weeks | Linear + Uniqueness |
+| Feature | Phases | Duration | Dependencies | Status |
+|---|---|---|---|---|
+| Effect Types (Row Polymorphism) | ET0–ET4 | 8-12 weeks | Phase 19 + HRT1 | 📋 Not Started |
+| Session Types | SS0–SS4 | 8-12 weeks | Linear Types + Threads | 📋 Not Started |
 
-**Rationale:** Linear types are the most impactful feature that aligns with Turmeric's existing ownership model. They provide compile-time memory safety guarantees without significant runtime overhead. Substructural types generalize this to a clean framework.
+**Note:** HRT is complete. Effect rows (ER0–ER6) are substantially complete. ET0 (explicit effect row syntax in function types) can now proceed.
 
-### Phase 2: Effect Types & Session Types (v3-v4)
+See [effect-types-row-polymorphism-plan.md](effect-types-row-polymorphism-plan.md) and [upcoming/session-types-plan.md](upcoming/session-types-plan.md).
 
-**Duration:** 12-16 weeks
-**Priority:** High
+### Phase 3: Contract Types & Sized Types (v4)
 
-| Feature | Phases | Duration | Dependencies |
-|---|---|---|---|
-| Higher-Ranked Types | HRT0-HRT5 | 11.5-18 weeks | Phase 15 |
-| Effect Types | ET0-ET4 | 8-12 weeks | Phase 19 + HRT1 |
-| Session Types | SS0-SS4 | 8-12 weeks | Linear Types + Threads |
-
-**Rationale:** Effect types are a natural extension of Phase 19's algebraic effects, providing type safety for effect usage. Session types enable type-safe concurrent programming. Both require rank-N type support.
-
-### Phase 3: Union/Intersection & Contract Types (v4)
-
-**Duration:** 8-12 weeks
 **Priority:** Medium
 
-| Feature | Phases | Duration | Dependencies |
-|---|---|---|---|
-| Intersection & Union Types | IT0-IT4 | 6-8 weeks | None |
-| Contract Types | CT0-CT4 | 6-8 weeks | None |
-| Sized Types | SZ0-SZ3 | 6-8 weeks | None |
+| Feature | Phases | Duration | Dependencies | Status |
+|---|---|---|---|---|
+| Contract Types | CT0–CT4 | 6-8 weeks | None | 📋 Not Started |
+| Sized Types | SZ0–SZ3 | 6-8 weeks | None | 📋 Not Started |
 
-**Rationale:** These features provide gradual typing, flexible APIs, and runtime verification. They can be implemented independently and provide immediate value.
+**Note:** The stdlib already has `assert!`/`require!`/`ensure!` macros. CT0 can build on these.
+
+See [contract-types-plan.md](contract-types-plan.md).
 
 ### Phase 4: Deferred Features (v5+)
 
@@ -1560,7 +1567,6 @@ Contract types provide:
 |---|---|
 | Dependent Types | Very high complexity, unclear demand |
 | Refinement Types | High complexity, limited C99 fit |
-| GADTs (already planned) | Wait for v2 completion |
 
 **Rationale:** These features have high complexity and unclear immediate value. They should be reconsidered when:
 1. There is strong user demand
@@ -1573,16 +1579,18 @@ Contract types provide:
 
 All advanced type system features should be gated behind feature flags:
 
-| Feature | Flag | Default | Notes |
+| Feature | Flag | Default | Status |
 |---|---|---|---|
-| Linear Types | `-Xlinear` | Off | Enable when stable |
-| Substructural Types | `-Xsubstructural` | Off | Includes linear, affine, relevant |
-| Session Types | `-Xsessions` | Off | Requires threads |
-| Effect Types | `-Xeffect-types` | Off | Extends Phase 19 |
-| Union Types | `-Xunion-types` | Off | Can be default earlier |
-| Intersection Types | `-Xintersection-types` | Off | Can be default earlier |
-| Contract Types | `-Xcontracts` | Off | Runtime overhead |
-| Sized Types | `-Xsized-types` | Off | Memory layout impact |
+| Linear Types | `-Xlinear` | Off | ✅ Implemented |
+| Substructural Types | `-Xsubstructural` | Off | ✅ Implemented (implies `-Xlinear`) |
+| Uniqueness Types | `-Xunique` | Off | ✅ Implemented (UT0–UT1) |
+| Union Types | `-Xunion-types` | Off | ✅ Implemented |
+| Intersection Types | `-Xintersection-types` | Off | ✅ Implemented |
+| GADTs | `-Xgadt` | Off | ✅ Implemented (G0–G4) |
+| Session Types | `-Xsessions` | Off | 📋 Not implemented yet |
+| Effect Types | `-Xeffect-types` | Off | 📋 Not implemented yet |
+| Contract Types | `-Xcontracts` | Off | 📋 Not implemented yet |
+| Sized Types | `-Xsized-types` | Off | 📋 Not implemented yet |
 
 ---
 
@@ -1838,31 +1846,32 @@ If a feature proves problematic:
 ## Appendix A: Type System Feature Timeline
 
 ```
-v1 (Current)
+v1 (Complete)
 ├── Typeclasses (Phase 15)
 ├── Borrow checking (Phase 12)
 ├── Reference counting (Phase 9)
 ├── Unique ownership (Phase 5)
 └── Algebraic effects (Phase 19)
 
-v2 (Planned)
-├── Higher-Kinded Types (H0-H6)
-├── Higher-Ranked Types (HRT0-HRT5)
-├── GADTs (G0-G4)
+v2 (Complete)
+├── Higher-Kinded Types (H0-H6)         ✅
+├── Higher-Ranked Types (HRT0-HRT5)     ✅
+├── GADTs (G0-G4) — substantially done  ✅
+├── Effect Rows (ER0-ER6)               ✅ (ER6 advanced items remain)
 ├── STM (Phase 20-21)
 └── Persistent collections (P1-P4)
 
-v3 (Proposed - High Priority)
-├── Linear Types (LT0-LT4)
-├── Substructural Types (ST0-ST3)
-├── Effect Types (ET0-ET4)
-└── Session Types (SS0-SS4)
+v3 (In Progress)
+├── Linear Types (LT0-LT4)              ✅ complete
+├── Uniqueness Types (UT0-UT1)          ✅ complete; UT2-UT3 deferred
+├── Substructural Types (ST0-ST3)       ✅ complete
+├── Union/Intersection Types (IT0-IT4)  ✅ substantially complete
+├── Effect Types (ET0-ET4)              📋 not started
+└── Session Types (SS0-SS4)             📋 not started
 
-v4 (Proposed - Medium Priority)
-├── Union Types (IT0-IT4)
-├── Intersection Types (IT0-IT4)
-├── Contract Types (CT0-CT4)
-└── Sized Types (SZ0-SZ3)
+v4 (Planned)
+├── Contract Types (CT0-CT4)            📋 not started
+└── Sized Types (SZ0-SZ3)              📋 not started
 
 v5+ (Deferred)
 ├── Dependent Types
@@ -1900,4 +1909,4 @@ v5+ (Deferred)
 
 ---
 
-*Last updated: 2026-05-11*
+*Last updated: 2026-05-17*
