@@ -4152,75 +4152,159 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* Emit scrutinee */
             char *scrut_val = emit_value(ctx, body, e->as.match_.scrutinee);
 
-            indent_buf(body, ctx->indent);
-            buf_puts(body, "{\n");
-            ctx->indent += 4;
-
-            indent_buf(body, ctx->indent);
-            buf_printf(body, "%s *__scrut = (%s *)(intptr_t)(%s);\n",
-                       adt_c_name, adt_c_name, scrut_val);
-            free(scrut_val);
-
-            indent_buf(body, ctx->indent);
-            buf_puts(body, "switch (__scrut->tag) {\n");
-
-            bool has_default = false;
+            /* Phase G4: Check if any arm has a guard */
+            bool has_any_guard = false;
             for (uint32_t ai = 0; ai < e->as.match_.n_arms; ai++) {
-                MatchArm *arm = &e->as.match_.arms[ai];
-                MatchPattern *pat = &arm->pattern;
+                if (e->as.match_.arms[ai].guard) { has_any_guard = true; break; }
+            }
 
+            if (has_any_guard) {
+                /* Phase G4: Emit as if-chain with goto for guard fallthrough */
+                char *end_label = fresh_tmp(ctx);
                 indent_buf(body, ctx->indent);
-                if (pat->is_wildcard || pat->is_var) {
-                    buf_puts(body, "default: {\n");
-                    has_default = true;
-                } else {
-                    buf_printf(body, "case %u: {\n", pat->ctor->tag);
-                }
+                buf_puts(body, "{\n");
                 ctx->indent += 4;
 
-                /* Bind field variables for constructor patterns */
-                if (!pat->is_wildcard && !pat->is_var && pat->ctor) {
-                    for (uint32_t bi = 0; bi < pat->n_bindings; bi++) {
-                        Binding *fb = pat->bindings[bi];
-                        const char *ctype = type_c_name(fb->type);
-                        /* Use name_for_binding to get the canonical C name */
-                        char *bname = name_for_binding(ctx, fb);
-                        indent_buf(body, ctx->indent);
-                        buf_printf(body, "%s %s = (%s)__scrut->as.%s._%u;\n",
-                                   ctype, bname, ctype, pat->ctor->name, bi);
-                        free(bname);
-                    }
-                }
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s *__scrut = (%s *)(intptr_t)(%s);\n",
+                           adt_c_name, adt_c_name, scrut_val);
+                free(scrut_val);
 
-                /* Emit body */
-                if (!nil_result) {
-                    char *bv = emit_value(ctx, body, arm->body);
+                for (uint32_t ai = 0; ai < e->as.match_.n_arms; ai++) {
+                    MatchArm *arm = &e->as.match_.arms[ai];
+                    MatchPattern *pat = &arm->pattern;
+
                     indent_buf(body, ctx->indent);
-                    buf_printf(body, "%s = %s;\n", tmp, bv);
-                    free(bv);
-                } else {
-                    emit_stmt(ctx, body, arm->body);
+                    if (pat->is_wildcard || pat->is_var) {
+                        buf_puts(body, "{\n");
+                    } else {
+                        buf_printf(body, "if (__scrut->tag == %u) {\n", pat->ctor->tag);
+                    }
+                    ctx->indent += 4;
+
+                    /* Bind fields */
+                    if (!pat->is_wildcard && !pat->is_var && pat->ctor) {
+                        for (uint32_t bi = 0; bi < pat->n_bindings; bi++) {
+                            Binding *fb = pat->bindings[bi];
+                            const char *ctype = type_c_name(fb->type);
+                            char *bname = name_for_binding(ctx, fb);
+                            indent_buf(body, ctx->indent);
+                            buf_printf(body, "%s %s = (%s)__scrut->as.%s._%u;\n",
+                                       ctype, bname, ctype, pat->ctor->name, bi);
+                            free(bname);
+                        }
+                    }
+
+                    /* Emit guard */
+                    if (arm->guard) {
+                        char *gv = emit_value(ctx, body, arm->guard);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "if (%s) {\n", gv);
+                        free(gv);
+                        ctx->indent += 4;
+                    }
+
+                    /* Emit body */
+                    if (!nil_result) {
+                        char *bv = emit_value(ctx, body, arm->body);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "%s = %s;\n", tmp, bv);
+                        free(bv);
+                    } else {
+                        emit_stmt(ctx, body, arm->body);
+                    }
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "goto __%s;\n", end_label);
+
+                    if (arm->guard) {
+                        ctx->indent -= 4;
+                        indent_buf(body, ctx->indent);
+                        buf_puts(body, "}\n");
+                    }
+
+                    ctx->indent -= 4;
+                    indent_buf(body, ctx->indent);
+                    buf_puts(body, "}\n");
                 }
 
                 indent_buf(body, ctx->indent);
-                buf_puts(body, "break;\n");
+                buf_printf(body, "__%s:;\n", end_label);
+
+                ctx->indent -= 4;
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "}\n");
+                free(end_label);
+            } else {
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "{\n");
+                ctx->indent += 4;
+
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s *__scrut = (%s *)(intptr_t)(%s);\n",
+                           adt_c_name, adt_c_name, scrut_val);
+                free(scrut_val);
+
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "switch (__scrut->tag) {\n");
+
+                bool has_default = false;
+                for (uint32_t ai = 0; ai < e->as.match_.n_arms; ai++) {
+                    MatchArm *arm = &e->as.match_.arms[ai];
+                    MatchPattern *pat = &arm->pattern;
+
+                    indent_buf(body, ctx->indent);
+                    if (pat->is_wildcard || pat->is_var) {
+                        buf_puts(body, "default: {\n");
+                        has_default = true;
+                    } else {
+                        buf_printf(body, "case %u: {\n", pat->ctor->tag);
+                    }
+                    ctx->indent += 4;
+
+                    /* Bind field variables for constructor patterns */
+                    if (!pat->is_wildcard && !pat->is_var && pat->ctor) {
+                        for (uint32_t bi = 0; bi < pat->n_bindings; bi++) {
+                            Binding *fb = pat->bindings[bi];
+                            const char *ctype = type_c_name(fb->type);
+                            /* Use name_for_binding to get the canonical C name */
+                            char *bname = name_for_binding(ctx, fb);
+                            indent_buf(body, ctx->indent);
+                            buf_printf(body, "%s %s = (%s)__scrut->as.%s._%u;\n",
+                                       ctype, bname, ctype, pat->ctor->name, bi);
+                            free(bname);
+                        }
+                    }
+
+                    /* Emit body */
+                    if (!nil_result) {
+                        char *bv = emit_value(ctx, body, arm->body);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "%s = %s;\n", tmp, bv);
+                        free(bv);
+                    } else {
+                        emit_stmt(ctx, body, arm->body);
+                    }
+
+                    indent_buf(body, ctx->indent);
+                    buf_puts(body, "break;\n");
+                    ctx->indent -= 4;
+                    indent_buf(body, ctx->indent);
+                    buf_puts(body, "}\n");
+                }
+
+                /* If no default/wildcard arm, add a default that does nothing
+                 * (exhaustiveness is checked at elab time) */
+                if (!has_default) {
+                    indent_buf(body, ctx->indent);
+                    buf_puts(body, "default: break;\n");
+                }
+
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "}\n");
                 ctx->indent -= 4;
                 indent_buf(body, ctx->indent);
                 buf_puts(body, "}\n");
             }
-
-            /* If no default/wildcard arm, add a default that does nothing
-             * (exhaustiveness is checked at elab time) */
-            if (!has_default) {
-                indent_buf(body, ctx->indent);
-                buf_puts(body, "default: break;\n");
-            }
-
-            indent_buf(body, ctx->indent);
-            buf_puts(body, "}\n");
-            ctx->indent -= 4;
-            indent_buf(body, ctx->indent);
-            buf_puts(body, "}\n");
 
             return nil_result ? atom_nil() : tmp;
         }

@@ -1,0 +1,26 @@
+; Phase G4: Test type-level Nat GADT from stdlib/nat.tur.
+; Demonstrates nat-to-int, nat-add, and recursive Nat construction.
+
+(defgadt Nat []
+  (Zero : (Nat))
+  (Succ (Nat) : (Nat)))
+
+(defn nat-to-int [n :Nat] :int
+  (match n
+    (Zero)   0
+    (Succ p) (+ 1 (nat-to-int p))))
+
+(defn nat-add [a :Nat b :Nat] :Nat
+  (match a
+    (Zero)   b
+    (Succ p) (Succ (nat-add p b))))
+
+(defn main [] :int
+  ; Print integer equivalents of 0, 1, 2, 3
+  (println (nat-to-int (Zero)))
+  (println (nat-to-int (Succ (Zero))))
+  (println (nat-to-int (Succ (Succ (Zero)))))
+  (println (nat-to-int (Succ (Succ (Succ (Zero))))))
+  ; Print sum: 1 + 2 = 3
+  (println (nat-to-int (nat-add (Succ (Zero)) (Succ (Succ (Zero))))))
+  0)

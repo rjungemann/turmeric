@@ -886,6 +886,8 @@ typedef struct Elab {
     SkolemEnv *g2_skolem_env;
     /* Phase G3: coerce special form */
     const Symbol *sym_coerce;
+    /* Phase G3: (~ a b) equality constraint notation */
+    const Symbol *sym_tilde;
     /* Phase M0: Module system */
     const Symbol *sym_defmodule;  /* defmodule */
     const Symbol *sym_export;     /* export */
@@ -1378,6 +1380,8 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->g2_skolem_env = NULL;
     /* Phase G3: coerce */
     e->sym_coerce = intern_cstr(st, "coerce");
+    /* Phase G3: (~ a b) equality constraint */
+    e->sym_tilde = intern_cstr(st, "~");
     /* Phase 12: Borrow traits */
     e->sym_borrow = intern_cstr(st, "&");
     e->sym_borrow_mut = intern_cstr(st, "&mut");
@@ -6203,6 +6207,13 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     SkolemEnv param_constraint_env;
     param_constraint_env.n = 0;
 
+    /* Phase HKT: kind-variable names collected from ^f annotations.
+     * These are type-level variables with kind * -> *; no runtime param is
+     * created.  They are pushed into a temporary scope so that return-type
+     * annotations such as (Equal (f a) (f b)) can resolve (f a) as TY_APP. */
+    const Symbol *kind_var_names[8];
+    uint8_t n_kind_vars = 0;
+
     /* LT0: ^linear annotation applies to the next parameter */
     bool next_param_linear = false;
     /* UT0: ^unique annotation applies to the next parameter */
@@ -6237,6 +6248,14 @@ static Expr *elab_defn(Elab *e, const Form *call) {
                        p->as.list.items[0]->tag == F_TYPE_ANN &&
                        p->as.list.items[0]->as.list.len == 1) {
                 var_form  = p->as.list.items[0]->as.list.items[0];
+                type_form = p->as.list.items[1];
+            } else if (p->tag == F_LIST && p->as.list.len == 2 &&
+                       p->as.list.items[0]->tag == F_UNQUOTE &&
+                       p->as.list.items[0]->as.list.len == 1 &&
+                       p->as.list.items[0]->as.list.items[0]->tag == F_SYM) {
+                /* Phase G3: (~ a T) equality constraint — reader turns (~ a T) into
+                 * F_LIST[F_UNQUOTE(a), T] because ~ is the unquote reader macro */
+                var_form  = p->as.list.items[0]->as.list.items[0]; /* symbol inside ~a */
                 type_form = p->as.list.items[1];
             }
             if (var_form && type_form &&
@@ -6300,7 +6319,13 @@ static Expr *elab_defn(Elab *e, const Form *call) {
              * kind annotation on the function and may be followed by a ^Typeclass f
              * constraint (which adds a regular typeclass constraint handled below). */
             if (tc_name_len > 0 && tc_name_str[0] >= 'a' && tc_name_str[0] <= 'z') {
-                /* Kind variable — silently skip; no runtime parameter is created. */
+                /* Phase HKT: Kind variable (e.g. ^f).  Record the bare name so
+                 * the return-type parser can resolve (f a) as TY_APP.  No
+                 * runtime parameter is created. */
+                if (n_kind_vars < 8) {
+                    kind_var_names[n_kind_vars++] = symtab_intern(e->st,
+                        strslice(tc_name_str, tc_name_len));
+                }
                 continue;
             }
 
@@ -6590,6 +6615,21 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     bool fn_declared_unsafe =
         effect_row_contains_symbol(declared_effect_row_defn, e->sym_effect_unsafe);
 
+    /* Phase HKT: Create the inner scope early so that kind-variable bindings
+     * (^f → TY_TYVAR/KIND_ARROW) are visible when the return-type annotation
+     * is parsed below.  Regular parameter bindings are added to this same
+     * scope after the annotation is parsed (see "Push params" below). */
+    Scope inner;
+    scope_init(&inner, e->scope);
+    e->scope = &inner;
+    for (uint8_t kvi = 0; kvi < n_kind_vars; kvi++) {
+        Type kv_type = type_tyvar_named(kind_var_names[kvi]->name);
+        kv_type.hkt_kind = KIND_ARROW;
+        Binding *kvb = binding_new(e, kind_var_names[kvi], kv_type,
+                                   false, true, call->span);
+        scope_add(&inner, kvb);
+    }
+
     /* Check for : return-type annotation */
     if (call->as.list.len >= (body_start + 1)) {
         Form *ret_f = call->as.list.items[body_start];
@@ -6639,11 +6679,18 @@ static Expr *elab_defn(Elab *e, const Form *call) {
                         }
                     }
                     if (!return_adt_def) {
-                        /* Phase HRT/G2: Unknown return type keyword -- named type variable.
-                         * e.g., :a means the function returns the type variable a.
-                         * For codegen, we fall through and let the body type determine the
-                         * concrete return kind (see the TY_TYVAR inference below). */
-                        return_kind = TY_TYVAR;
+                        if (g_gadt_enabled) {
+                            /* Phase HRT/G2: Unknown return type keyword -- named type variable.
+                             * e.g., :a means the function returns the type variable a.
+                             * For codegen, we fall through and let the body type determine the
+                             * concrete return kind (see the TY_TYVAR inference below). */
+                            return_kind = TY_TYVAR;
+                        } else {
+                            diag_emit(DIAG_ERROR, ret_f->span,
+                                      "defn: unsupported return type keyword :%s",
+                                      kw->name);
+                            return NULL;
+                        }
                     }
                 }
             }
@@ -6662,6 +6709,8 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     if (call->as.list.len < body_start + 1) {
         diag_emit(DIAG_ERROR, call->span,
                   "defn: missing body");
+        e->scope = inner.parent;
+        scope_free(&inner);
         return NULL;
     }
 
@@ -6685,10 +6734,7 @@ static Expr *elab_defn(Elab *e, const Form *call) {
         }
     }
 
-    /* Push a new scope for the function body with params bound */
-    Scope inner;
-    scope_init(&inner, e->scope);
-    e->scope = &inner;
+    /* Push params into the inner scope (created earlier for kind-var bindings). */
     for (uint8_t i = 0; i < n_params; i++) {
         scope_add(&inner, params[i]);
     }
@@ -8677,6 +8723,19 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
              * is expected.  Partial type application values are opaque int64_t at runtime. */
             arg_ok = true;
         }
+        if (!arg_ok && expected_arg_kind == TY_APP && args[i]->type.kind == TY_ADT) {
+            /* Phase HKT/G4: Allow passing a TY_ADT where TY_APP is expected.
+             * Both lower to int64_t at runtime.  This arises when a function
+             * parameter is annotated with a parameterised type like (Equal a b)
+             * (which parses as TY_APP) and the caller passes a GADT constructor
+             * value such as Refl (which has type TY_ADT). */
+            arg_ok = true;
+        }
+        if (!arg_ok && expected_arg_kind == TY_APP && args[i]->type.kind == TY_TYVAR) {
+            /* Phase HKT/G4: Allow passing a TY_TYVAR where TY_APP is expected.
+             * Type variables and applied types share int64_t representation. */
+            arg_ok = true;
+        }
         if (!arg_ok && expected_arg_kind == TY_INT && args[i]->type.kind == TY_FN) {
             /* Phase HKT H3/H4: Allow passing a function value where int64_t is expected.
              * Function references are represented as int64_t in HKT helper calls. */
@@ -10481,6 +10540,10 @@ static Expr *elab_defdata(Elab *e, const Form *call) {
          * The pre-pass stub was created with is_copy=false; now that we know the
          * real is_copy flag, regenerate the type and update the binding. */
         adt_type = type_adt(def);
+        /* Phase G1/HKT: Apply KIND_ARROW fix so that the kind check can detect
+         * when a parameterized defdata type is used in a kind-* slot. */
+        if (n_type_params >= 2)     adt_type.hkt_kind = KIND_ARROW2;
+        else if (n_type_params == 1) adt_type.hkt_kind = KIND_ARROW;
         adt_binding->type = adt_type;
         /* Already in global scope and elab registry from the pre-pass */
     } else {
@@ -10495,8 +10558,13 @@ static Expr *elab_defdata(Elab *e, const Form *call) {
         def->type_params = type_params;
         def->n_type_params = n_type_params;
 
-        /* Pre-register ADT type so constructors can reference it */
+        /* Pre-register ADT type so constructors can reference it.
+         * Phase G1/HKT: Set hkt_kind based on type-parameter count so that
+         * elab_defgadt's belt-and-suspenders kind check can detect when a
+         * parameterized type constructor is used in a kind-* argument slot. */
         adt_type = type_adt(def);
+        if (n_type_params >= 2)     adt_type.hkt_kind = KIND_ARROW2;
+        else if (n_type_params == 1) adt_type.hkt_kind = KIND_ARROW;
         adt_binding = binding_new(e, name, adt_type, false, true, name_form->span);
         scope_add(&e->global, adt_binding);
     }
@@ -10645,9 +10713,9 @@ static Type gadt_resolve_type_from_form(Elab *e, const AdtDef *gadt, const Form 
         /* Type variable: look up in skolem env */
         TypeKind resolved = gadt_skolem_lookup(senv, n);
         if (resolved != TY_UNKNOWN) return type_from_kind(resolved);
-        /* Unresolved type variable → TY_TYVAR */
+        /* Unresolved type variable → anonymous TY_TYVAR (name=NULL signals skolem escape) */
         (void)gadt; /* suppress unused warning */
-        return type_from_kind(TY_TYVAR);
+        return type_tyvar_named(NULL);
     }
 
     if (f->tag == F_LIST && f->as.list.len >= 1) {
@@ -10658,6 +10726,12 @@ static Type gadt_resolve_type_from_form(Elab *e, const AdtDef *gadt, const Form 
             if (!b) b = scope_lookup(&e->global, head->as.sym);
             if (b && b->type.kind == TY_ADT && b->type.as.adt_.def) {
                 return b->type; /* TY_ADT with the def pointer */
+            }
+            /* Phase HKT: kind-variable application (f a) where f : * -> *.
+             * Return an anonymous TY_TYVAR so the arm body is accepted as
+             * int64_t-sized (same runtime repr as TY_ADT/TY_APP). */
+            if (b && b->type.kind == TY_TYVAR && b->type.hkt_kind == KIND_ARROW) {
+                return type_tyvar_named(NULL);
             }
         }
     }
@@ -10843,6 +10917,10 @@ static Expr *elab_defgadt(Elab *e, const Form *call) {
         def->type_params = type_params;
         def->n_type_params = n_type_params;
         adt_type = type_adt(def);
+        /* Phase G1/HKT: Apply the same KIND_ARROW fix as the non-stub branch so
+         * that kind checks see the correct kind for parameterized GADTs. */
+        if (n_type_params >= 2)     adt_type.hkt_kind = KIND_ARROW2;
+        else if (n_type_params == 1) adt_type.hkt_kind = KIND_ARROW;
         adt_binding->type = adt_type;
         /* Already in global scope and elab registry from the pre-pass */
     } else {
@@ -10856,8 +10934,13 @@ static Expr *elab_defgadt(Elab *e, const Form *call) {
         def->type_params = type_params;
         def->n_type_params = n_type_params;
 
-        /* Pre-register ADT type so constructors can reference it */
+        /* Pre-register ADT type so constructors can reference it.
+         * Phase G1/HKT: Set hkt_kind based on type-parameter count so that
+         * the belt-and-suspenders kind check can detect when a parameterized
+         * GADT is used in a kind-* argument slot of another GADT. */
         adt_type = type_adt(def);
+        if (n_type_params >= 2)     adt_type.hkt_kind = KIND_ARROW2;
+        else if (n_type_params == 1) adt_type.hkt_kind = KIND_ARROW;
         adt_binding = binding_new(e, name, adt_type, false, true, name_form->span);
         scope_add(&e->global, adt_binding);
     }
@@ -10986,7 +11069,22 @@ static Expr *elab_defgadt(Elab *e, const Form *call) {
                 const Symbol *type_sym = symtab_intern(e->st,
                     strslice(an, (uint32_t)strlen(an)));
                 Binding *tb = scope_lookup_type_def(e->scope, type_sym);
-                if (tb && (tb->type.kind == TY_STRUCT || tb->type.kind == TY_ADT)) continue;
+                if (tb && (tb->type.kind == TY_STRUCT || tb->type.kind == TY_ADT)) {
+                    /* Phase G1/HKT: Belt-and-suspenders kind check.
+                     * All GADT type parameters have kind * in Phase G1.  A
+                     * type constructor of kind * -> * (hkt_kind == KIND_ARROW)
+                     * in a plain type-argument slot is a kind mismatch. */
+                    if (tb->type.hkt_kind == KIND_ARROW ||
+                            tb->type.hkt_kind == KIND_ARROW2) {
+                        diag_emit_with_code(DIAG_ERROR, arg->span,
+                            TUR_E0012_KIND_MISMATCH,
+                            "kind mismatch (TUR-E0012): type argument '%s' in constructor "
+                            "'%s' return type has kind '* -> *' but kind '*' is expected",
+                            an, ctor_name->name);
+                        return NULL;
+                    }
+                    continue;
+                }
                 /* Unknown -- error */
                 diag_emit(DIAG_ERROR, arg->span,
                           "defgadt: unknown type argument '%s' in return type of constructor '%s' "
@@ -11109,19 +11207,43 @@ static Expr *elab_match(Elab *e, const Form *call) {
                   "match requires a scrutinee: (match scrutinee pattern body ...)");
         return NULL;
     }
-    if (call->as.list.len < 4) {
+    /* Phase G4: Pre-scan arms to count and find per-arm start indices.
+     * Arms can be (pat body) or (pat when guard body). */
+    uint32_t arm_start[256];    /* start index of each arm's pattern */
+    bool arm_has_guard[256];    /* whether the arm has a when-guard */
+    uint32_t n_arms = 0;
+    {
+        uint32_t idx = 2; /* skip 'match' and scrutinee */
+        while (idx < call->as.list.len) {
+            if (n_arms >= 256) {
+                diag_emit(DIAG_ERROR, call->span, "match: too many arms (max 256)");
+                return NULL;
+            }
+            arm_start[n_arms] = idx;
+            arm_has_guard[n_arms] = false;
+            idx++; /* skip pattern */
+            /* Check for optional 'when guard' */
+            if (idx + 1 < call->as.list.len &&
+                call->as.list.items[idx]->tag == F_SYM &&
+                call->as.list.items[idx]->as.sym == e->sym_when) {
+                arm_has_guard[n_arms] = true;
+                idx += 2; /* skip 'when' and guard expr */
+            }
+            idx++; /* skip body */
+            n_arms++;
+        }
+        /* Verify last arm ends exactly at list end */
+        if (idx != call->as.list.len) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "match: malformed arm list (missing body for last arm?)");
+            return NULL;
+        }
+    }
+    if (n_arms == 0) {
         diag_emit(DIAG_ERROR, call->span,
                   "match requires at least one arm: (match scrutinee pattern body)");
         return NULL;
     }
-
-    uint32_t n_remaining = call->as.list.len - 2;
-    if (n_remaining % 2 != 0) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "match: arms must come in (pattern body) pairs");
-        return NULL;
-    }
-    uint32_t n_arms = n_remaining / 2;
 
     /* Elaborate scrutinee */
     Expr *scrutinee = elab_form(e, call->as.list.items[1]);
@@ -11270,7 +11392,7 @@ static Expr *elab_match(Elab *e, const Form *call) {
     if (scrutinee->type.kind != TY_ADT || !scrutinee->type.as.adt_.def) {
         AdtDef *inferred_adt = NULL;
         for (uint32_t ai = 0; ai < n_arms && !inferred_adt; ai++) {
-            Form *pat_f = call->as.list.items[2 + ai * 2];
+            Form *pat_f = call->as.list.items[arm_start[ai]];
             if (pat_f->tag == F_LIST && pat_f->as.list.len >= 1 &&
                 pat_f->as.list.items[0]->tag == F_SYM) {
                 CtorDef *cd = elab_lookup_ctor(e, pat_f->as.list.items[0]->as.sym);
@@ -11300,11 +11422,16 @@ static Expr *elab_match(Elab *e, const Form *call) {
     Type result_type = TYPE_UNKNOWN;
 
     for (uint32_t ai = 0; ai < n_arms; ai++) {
-        Form *pat_form = call->as.list.items[2 + ai * 2];
-        Form *body_form = call->as.list.items[3 + ai * 2];
+        uint32_t base = arm_start[ai];
+        Form *pat_form = call->as.list.items[base];
+        Form *guard_form_raw = arm_has_guard[ai]
+            ? call->as.list.items[base + 2]
+            : NULL;
+        Form *body_form = call->as.list.items[arm_has_guard[ai] ? base + 3 : base + 1];
 
         MatchPattern *pat = &arms[ai].pattern;
         memset(pat, 0, sizeof(MatchPattern));
+        arms[ai].guard = NULL;
 
         if (pat_form->tag == F_SYM) {
             /* Bare symbol: either _ wildcard or variable capture */
@@ -11368,7 +11495,8 @@ static Expr *elab_match(Elab *e, const Form *call) {
                 ? (Binding **)arena_alloc(e->arena, n_bindings * sizeof(Binding *))
                 : NULL;
 
-            covered[ctor->tag] = true;
+            /* Phase G4: guarded arm doesn't guarantee coverage */
+            covered[ctor->tag] = !arm_has_guard[ai];
 
             /* Phase G2: For GADT arms, build a per-arm SkolemEnv to resolve
              * type-variable field types to concrete kinds. */
@@ -11415,6 +11543,28 @@ static Expr *elab_match(Elab *e, const Form *call) {
             }
 
             Expr *body = elab_form(e, body_form);
+
+            /* Phase G4: Elaborate optional when-guard while arm scope is still live */
+            Expr *guard_expr = NULL;
+            if (arm_has_guard[ai] && guard_form_raw) {
+                guard_expr = elab_form(e, guard_form_raw);
+                if (!guard_expr) {
+                    e->scope = saved_scope;
+                    scope_free(&arm_scope);
+                    e->g2_skolem_env = saved_senv;
+                    free(covered); return NULL;
+                }
+                if (guard_expr->type.kind != TY_BOOL) {
+                    diag_emit(DIAG_ERROR, guard_form_raw->span,
+                              "match: when-guard must have type bool, got %s",
+                              typekind_to_string(guard_expr->type.kind));
+                    e->scope = saved_scope;
+                    scope_free(&arm_scope);
+                    e->g2_skolem_env = saved_senv;
+                    free(covered); return NULL;
+                }
+            }
+
             e->scope = saved_scope;
             scope_free(&arm_scope);
             e->g2_skolem_env = saved_senv;
@@ -11463,6 +11613,7 @@ static Expr *elab_match(Elab *e, const Form *call) {
             }
 
             arms[ai].body = body;
+            arms[ai].guard = guard_expr;
             if (result_type.kind == TY_UNKNOWN) result_type = body->type;
         } else {
             diag_emit(DIAG_ERROR, pat_form->span,

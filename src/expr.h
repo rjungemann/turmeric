@@ -350,6 +350,7 @@ typedef struct MatchPattern {
 typedef struct MatchArm {
     MatchPattern pattern;
     struct Expr *body;
+    struct Expr *guard;  /* Phase G4: optional when-guard; NULL if no guard */
 } MatchArm;
 
 struct Expr {

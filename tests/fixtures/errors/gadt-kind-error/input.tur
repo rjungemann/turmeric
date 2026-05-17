@@ -1,0 +1,14 @@
+; Phase G1/HKT: Test that using a kind-* -> * type constructor as a bare
+; symbol in a GADT constructor return-type argument slot emits TUR-E0012.
+;
+; Pair has one type parameter so its kind is * -> *.
+; Bad has zero type parameters so its sole argument slot expects kind *.
+; Passing Pair (kind * -> *) in that slot is a kind mismatch.
+
+(defgadt Pair [a]
+  (MkPair a : (Pair a)))
+
+(defgadt Bad []
+  (MkBad : (Bad Pair)))
+
+(defn main [] :int 0)

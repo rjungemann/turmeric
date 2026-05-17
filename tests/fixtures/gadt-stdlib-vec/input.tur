@@ -1,0 +1,23 @@
+; Test a simplified GADT-based Vec demonstrating recursive operations.
+; Uses defgadt with -Xgadt flag. Avoids reuse of moved bindings by
+; constructing fresh Vec values for each operation.
+
+(defgadt Vec [a]
+  (VNil : (Vec int))
+  (VCons int (Vec int) : (Vec int)))
+
+(defn vec-len [v] :int
+  (match v
+    (VNil)      0
+    (VCons _ t) (+ 1 (vec-len t))))
+
+(defn vec-sum [v] :int
+  (match v
+    (VNil)      0
+    (VCons x t) (+ x (vec-sum t))))
+
+(defn main [] :int
+  (println (vec-len (VCons 1 (VCons 2 (VCons 3 (VNil))))))
+  (println (vec-sum (VCons 1 (VCons 2 (VCons 3 (VNil))))))
+  (println (vec-len (VNil)))
+  0)
