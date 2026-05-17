@@ -455,7 +455,7 @@ and `free-run`.
    more instances are in scope and the receiver type has been erased to
    `int64_t`, the compiler now emits `TUR_E0020_AMBIGUOUS_DISPATCH` instead of
    silently picking the wrong instance. See
-   `docs/hkt-opaque-dispatch-plan.md` §Phase D0 for details and §Phase D1 for
+   `docs/archive/hkt-opaque-dispatch-plan.md` §Phase D0 for details and §Phase D1 for
    the `@TypeName` witness syntax that resolves the ambiguity at zero runtime
    cost.
 
