@@ -1,0 +1,11 @@
+; IT0/IT1: Union type parsing and subtyping.
+; A function accepting (int | bool) can be called with an int or bool arg.
+; The body ignores the parameter to avoid union-match codegen (IT4).
+
+(defn accept-int-or-bool [x : (int | bool)] :int
+  99)
+
+; Subtyping: int <: (int | bool)
+(println (accept-int-or-bool 42))
+; Subtyping: bool <: (int | bool)
+(println (accept-int-or-bool true))

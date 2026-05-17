@@ -37,6 +37,9 @@ extern bool g_unique_enabled;
 /* ST0: Substructural types feature flag */
 extern bool g_substructural_enabled;
 
+/* IT0: Union types feature flag */
+extern bool g_union_types_enabled;
+
 #define ELAB_MAX_MACRO_EXPANSION_DEPTH 256
 
 /* Helper to create a Type from TypeKind. */
@@ -803,6 +806,8 @@ typedef struct Elab {
     /* Phase G1: GADT special symbols */
     const Symbol *sym_defgadt;
     const Symbol *sym_colon; /* bare ":" used as annotation separator in defgadt */
+    /* IT0: Union type pipe separator "|" */
+    const Symbol *sym_pipe;  /* "|" -- used in (A | B | C) union type expressions */
     /* Phase G2: current per-arm skolem environment (NULL outside GADT match arms) */
     SkolemEnv *g2_skolem_env;
     /* Phase G3: coerce special form */
@@ -1291,6 +1296,8 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* Phase G1: GADT */
     e->sym_defgadt = intern_cstr(st, "defgadt");
     e->sym_colon = intern_cstr(st, ":");
+    /* IT0: Union type pipe separator */
+    e->sym_pipe = intern_cstr(st, "|");
     /* Phase G2: per-arm skolem environment (NULL until inside a GADT match arm) */
     e->g2_skolem_env = NULL;
     /* Phase G3: coerce */
@@ -6298,6 +6305,11 @@ static Expr *elab_defn(Elab *e, const Form *call) {
                 /* Other type annotation — use the kind */
                 param_kinds[n_params - 1] = ann->kind;
                 params[n_params - 1]->type = *ann;
+                /* IT1: For union-typed parameters, store full type in param_poly_types
+                 * so it propagates into arg_full_types for subtyping checks at call sites. */
+                if (g_union_types_enabled && ann->kind == TY_UNION) {
+                    param_poly_types[n_params - 1] = ann;
+                }
             }
             /* LT3: Propagate linearity from the type annotation (e.g., [p : (lref int)]) */
             if (g_linear_enabled && params[n_params - 1]->type.copy_kind == CK_LINEAR) {
@@ -8583,13 +8595,59 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
              * (int64_t)(intptr_t) cast so the generated C99 code is valid. */
             arg_ok = true;
         }
+        /* IT1: Union type subtyping — accept a value of type A where (A | B) is expected.
+         * Check arg_full_types for the union type descriptor. */
+        if (!arg_ok && g_union_types_enabled && expected_arg_kind == TY_UNION) {
+            uint32_t fn_arg_idx3 = i;
+            if (fn_binding->closure_fn_binding) fn_arg_idx3 = i + 1;
+            if (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types &&
+                fn_arg_idx3 < fn_type.as.fn.arity) {
+                Type *union_t = fn_type.as.fn.arg_full_types[fn_arg_idx3];
+                if (union_t && union_t->kind == TY_UNION) {
+                    for (uint8_t um = 0; um < union_t->as.union_.n_members; um++) {
+                        Type *mem = union_t->as.union_.members[um];
+                        if (mem && type_eq(args[i]->type, *mem)) {
+                            arg_ok = true;
+                            break;
+                        }
+                    }
+                    /* Also accept if the argument is itself the same union type */
+                    if (!arg_ok && args[i]->type.kind == TY_UNION) {
+                        arg_ok = type_eq(args[i]->type, *union_t);
+                    }
+                }
+            }
+        }
+        /* IT1: Widening — accept a member type where the expected union matches. */
+        if (!arg_ok && g_union_types_enabled && args[i]->type.kind == TY_UNION &&
+            expected_arg_kind == TY_UNION) {
+            arg_ok = (args[i]->type.kind == expected_arg_kind);
+        }
 
         if (!arg_ok) {
             /* Phase 8: Enhanced type mismatch with error code */
-            diag_emit_with_code(DIAG_ERROR, args[i]->span, TUR_E0001_TYPE_MISMATCH,
+            /* IT1: Use union-specific error code when union type is involved */
+            DiagCode err_code = TUR_E0001_TYPE_MISMATCH;
+            if (g_union_types_enabled && (expected_arg_kind == TY_UNION ||
+                                           args[i]->type.kind == TY_UNION)) {
+                err_code = TUR_E0300_UNION_TYPE_MISMATCH;
+            }
+            /* Compute expected type name for diagnostic */
+            const char *expected_str;
+            if (expected_arg_kind == TY_UNION && fn_type.kind == TY_FN &&
+                fn_type.as.fn.arg_full_types) {
+                uint32_t fn_arg_idx4 = fn_binding->closure_fn_binding ? i + 1 : i;
+                Type *ut = (fn_arg_idx4 < fn_type.as.fn.arity)
+                    ? fn_type.as.fn.arg_full_types[fn_arg_idx4] : NULL;
+                expected_str = ut ? type_name(*ut)
+                                  : type_name(type_from_kind(expected_arg_kind));
+            } else {
+                expected_str = type_name(type_from_kind(expected_arg_kind));
+            }
+            diag_emit_with_code(DIAG_ERROR, args[i]->span, err_code,
                                 "function '%s' arg %u: expected %s, got %s",
                                 fn_binding->name->name, i + 1,
-                                type_name(type_from_kind(expected_arg_kind)),
+                                expected_str,
                                 type_name(args[i]->type));
             return NULL;
         }
@@ -10816,6 +10874,142 @@ static Expr *elab_match(Elab *e, const Form *call) {
     Expr *scrutinee = elab_form(e, call->as.list.items[1]);
     if (!scrutinee) return NULL;
 
+    /* IT1: Union type match — when scrutinee is TY_UNION, handle type-narrowing patterns.
+     * Pattern syntax: (varname : TypeName) or bare _ / variable for wildcard.
+     * Returns early via the union match path. */
+    if (g_union_types_enabled && scrutinee->type.kind == TY_UNION) {
+        Type *union_t = &scrutinee->type;
+        uint8_t n_members = union_t->as.union_.n_members;
+
+        /* Track which union members are covered */
+        bool *member_covered = (bool *)calloc(n_members, sizeof(bool));
+        bool has_wildcard = false;
+        Type result_type = TYPE_UNKNOWN;
+
+        MatchArm *arms = (MatchArm *)arena_alloc(e->arena, n_arms * sizeof(MatchArm));
+
+        for (uint32_t ai = 0; ai < n_arms; ai++) {
+            Form *pat_form = call->as.list.items[2 + ai * 2];
+            Form *body_form = call->as.list.items[3 + ai * 2];
+            MatchPattern *pat = &arms[ai].pattern;
+            memset(pat, 0, sizeof(MatchPattern));
+
+            /* Wildcard: bare _ or bare variable symbol */
+            if (pat_form->tag == F_SYM) {
+                const Symbol *sym_wildcard = intern_cstr(e->st, "_");
+                if (pat_form->as.sym == sym_wildcard) {
+                    pat->is_wildcard = true;
+                } else {
+                    pat->is_var = true;
+                    pat->var_sym = pat_form->as.sym;
+                }
+                has_wildcard = true;
+                Expr *body = elab_form(e, body_form);
+                if (!body) { free(member_covered); return NULL; }
+                arms[ai].body = body;
+                if (result_type.kind == TY_UNKNOWN) result_type = body->type;
+                continue;
+            }
+
+            /* Type-narrowing pattern: (varname : TypeName)
+             * The reader collapses ': TypeName' into a single F_TYPE_ANN node, so the
+             * list has 2 items: [F_SYM varname, F_TYPE_ANN{inner}].
+             * The 3-item form [F_SYM varname, F_SYM ":", F_SYM TypeName] is also
+             * supported for defgadt-style bare colon separators. */
+            bool is_type_narrowing_2 = (pat_form->tag == F_LIST &&
+                pat_form->as.list.len == 2 &&
+                pat_form->as.list.items[0]->tag == F_SYM &&
+                pat_form->as.list.items[1]->tag == F_TYPE_ANN);
+            bool is_type_narrowing_3 = (pat_form->tag == F_LIST &&
+                pat_form->as.list.len == 3 &&
+                pat_form->as.list.items[0]->tag == F_SYM &&
+                pat_form->as.list.items[1]->tag == F_SYM &&
+                pat_form->as.list.items[1]->as.sym == e->sym_colon);
+            if (is_type_narrowing_2 || is_type_narrowing_3) {
+                Form *var_form  = pat_form->as.list.items[0];
+                Form *type_form = is_type_narrowing_2
+                    ? pat_form->as.list.items[1]->as.list.items[0]  /* inner of F_TYPE_ANN */
+                    : pat_form->as.list.items[2];
+                /* Parse narrowed type */
+                Type *narrowed = type_expr_from_form(e, type_form, NULL, NULL, NULL, 0);
+                if (!narrowed) { free(member_covered); return NULL; }
+
+                /* Find which union member this pattern covers */
+                int covered_member = -1;
+                for (uint8_t um = 0; um < n_members; um++) {
+                    if (union_t->as.union_.members[um] &&
+                        type_eq(*narrowed, *union_t->as.union_.members[um])) {
+                        covered_member = (int)um;
+                        break;
+                    }
+                }
+                if (covered_member < 0) {
+                    diag_emit_with_code(DIAG_ERROR, pat_form->span,
+                                        TUR_E0300_UNION_TYPE_MISMATCH,
+                                        "match: type '%s' is not a member of union '%s'",
+                                        type_name(*narrowed), type_name(*union_t));
+                    free(member_covered);
+                    return NULL;
+                }
+                member_covered[covered_member] = true;
+
+                /* Introduce arm scope with the narrowed binding */
+                Scope arm_scope;
+                scope_init(&arm_scope, e->scope);
+                Scope *saved_scope = e->scope;
+                e->scope = &arm_scope;
+
+                Binding *var_b = binding_new(e, var_form->as.sym, *narrowed,
+                                             false, false, var_form->span);
+                scope_add(&arm_scope, var_b);
+
+                Expr *body = elab_form(e, body_form);
+                e->scope = saved_scope;
+                if (!body) { free(member_covered); return NULL; }
+
+                /* Record the binding in the pattern */
+                pat->is_var = true;
+                pat->var_sym = var_form->as.sym;
+                pat->n_bindings = 1;
+                pat->bindings = (Binding **)arena_alloc(e->arena, sizeof(Binding *));
+                pat->bindings[0] = var_b;
+
+                arms[ai].body = body;
+                if (result_type.kind == TY_UNKNOWN) result_type = body->type;
+                continue;
+            }
+
+            /* Unrecognized pattern for union match */
+            diag_emit(DIAG_ERROR, pat_form->span,
+                      "match on union type: expected '(varname : Type)' or wildcard '_', got unexpected pattern");
+            free(member_covered);
+            return NULL;
+        }
+
+        /* Exhaustiveness check: every union member must be covered */
+        if (!has_wildcard) {
+            for (uint8_t um = 0; um < n_members; um++) {
+                if (!member_covered[um] && union_t->as.union_.members[um]) {
+                    diag_emit_with_code(DIAG_ERROR, call->span,
+                                        TUR_E0301_NON_EXHAUSTIVE_UNION_MATCH,
+                                        "match on union type '%s': missing arm for member '%s'",
+                                        type_name(*union_t),
+                                        type_name(*union_t->as.union_.members[um]));
+                    free(member_covered);
+                    return NULL;
+                }
+            }
+        }
+        free(member_covered);
+
+        if (result_type.kind == TY_UNKNOWN) result_type = TYPE_NIL;
+        Expr *out = expr_new(e->arena, EX_MATCH, result_type, call->span);
+        out->as.match_.scrutinee = scrutinee;
+        out->as.match_.arms = arms;
+        out->as.match_.n_arms = n_arms;
+        return out;
+    }
+
     /* If the scrutinee type is not already TY_ADT (e.g. an untyped param
      * that defaulted to TY_INT), or is TY_ADT with no def (e.g. return of
      * ADT-returning fn without result_full_type), infer the ADT from the
@@ -12242,6 +12436,55 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
         t->as.struct_.def = NULL;
         return t;
     } else if (form->tag == F_LIST) {
+        /* IT0: (A | B | C) — union type expression.
+         * Detect by scanning for any element that is the "|" pipe symbol.
+         * Only active when -Xunion-types is enabled. */
+        {
+            bool has_pipe = false;
+            for (uint32_t uk = 0; uk < form->as.list.len; uk++) {
+                Form *uit = form->as.list.items[uk];
+                if (uit->tag == F_SYM && uit->as.sym == e->sym_pipe) {
+                    has_pipe = true;
+                    break;
+                }
+            }
+            if (has_pipe) {
+                if (!g_union_types_enabled) {
+                    diag_emit(DIAG_ERROR, form->span,
+                              "union type syntax requires -Xunion-types; found '|' in type expression");
+                    return NULL;
+                }
+                /* Count non-pipe member forms */
+                uint8_t n_members = 0;
+                for (uint32_t uk = 0; uk < form->as.list.len; uk++) {
+                    Form *uit = form->as.list.items[uk];
+                    if (uit->tag == F_SYM && uit->as.sym == e->sym_pipe) continue;
+                    n_members++;
+                }
+                if (n_members < 2) {
+                    diag_emit(DIAG_ERROR, form->span,
+                              "union type requires at least two member types separated by '|'");
+                    return NULL;
+                }
+                /* Collect member types */
+                Type **members = (Type **)arena_alloc(e->arena, n_members * sizeof(Type *));
+                uint8_t mi = 0;
+                for (uint32_t uk = 0; uk < form->as.list.len; uk++) {
+                    Form *uit = form->as.list.items[uk];
+                    if (uit->tag == F_SYM && uit->as.sym == e->sym_pipe) continue;
+                    Type *mt = type_expr_from_form(e, uit, rec_name,
+                                                   type_params, type_param_kinds, n_type_params);
+                    if (!mt) return NULL;
+                    members[mi++] = mt;
+                }
+                /* Build and return union type (type_union_build flattens nested unions) */
+                Type built = type_union_build(e->arena, members, n_members);
+                Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *t = built;
+                return t;
+            }
+        }
+
         /* Phase HRT0: Handle (forall [vars...] body) and (exists [vars...] body) */
         if (form->as.list.len >= 1 && form->as.list.items[0]->tag == F_SYM) {
             const Symbol *head = form->as.list.items[0]->as.sym;

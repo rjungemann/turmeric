@@ -128,6 +128,9 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0200_UNIQUE_ALIASED:             return "TUR-E0200";
         case TUR_E0201_UNIQUE_COPY:                return "TUR-E0201";
         case TUR_E0202_UNIQUE_IN_RC:               return "TUR-E0202";
+        /* IT1: Union type errors */
+        case TUR_E0300_UNION_TYPE_MISMATCH:        return "TUR-E0300";
+        case TUR_E0301_NON_EXHAUSTIVE_UNION_MATCH: return "TUR-E0301";
         default:                          return "";
     }
 }
@@ -169,6 +172,9 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0200") == 0) return TUR_E0200_UNIQUE_ALIASED;
     if (strcmp(s, "TUR-E0201") == 0) return TUR_E0201_UNIQUE_COPY;
     if (strcmp(s, "TUR-E0202") == 0) return TUR_E0202_UNIQUE_IN_RC;
+    /* IT1: Union type errors */
+    if (strcmp(s, "TUR-E0300") == 0) return TUR_E0300_UNION_TYPE_MISMATCH;
+    if (strcmp(s, "TUR-E0301") == 0) return TUR_E0301_NON_EXHAUSTIVE_UNION_MATCH;
     return DIAG_CODE_NONE;
 }
 
@@ -647,6 +653,43 @@ static const DiagExplanation diag_explanations_[] = {
       "(must-use, but duplication is allowed).\n"
       "\n"
       "Enable with: tur -Xsubstructural myfile.tur\n",
+    },
+    /* IT1: Union type explanations */
+    { TUR_E0300_UNION_TYPE_MISMATCH,
+      "TUR-E0300: Union type mismatch\n"
+      "\n"
+      "A value's type is not a member of the expected union type.\n"
+      "\n"
+      "Example:\n"
+      "  (defn print-either [x : (int | cstr)] : nil (println x))\n"
+      "  (print-either true)  ; error: bool is not a member of (int | cstr)\n"
+      "\n"
+      "Pass a value whose type is one of the union members, or widen the union\n"
+      "type to include the actual type.\n"
+      "\n"
+      "Enable with: turc -Xunion-types myfile.tur\n",
+    },
+    { TUR_E0301_NON_EXHAUSTIVE_UNION_MATCH,
+      "TUR-E0301: Non-exhaustive pattern match on union type\n"
+      "\n"
+      "A match expression on a union type does not cover all member types.\n"
+      "Every arm must be a type-narrowing pattern (varname : Type) covering\n"
+      "each union member, or a wildcard '_' or variable capturing the rest.\n"
+      "\n"
+      "Example:\n"
+      "  (defn f [x : (int | cstr | bool)] : nil\n"
+      "    (match x\n"
+      "      (n : int)  (println n)\n"
+      "      (s : cstr) (println s)))\n"
+      "  ; error: match on (int | cstr | bool) is missing arm for bool\n"
+      "\n"
+      "Fix: add arms for all missing member types, or add a wildcard arm:\n"
+      "  (match x\n"
+      "    (n : int)  (println n)\n"
+      "    (s : cstr) (println s)\n"
+      "    (b : bool) (println b))\n"
+      "\n"
+      "Enable with: turc -Xunion-types myfile.tur\n",
     },
     { TUR_E0151_RELEVANT_DROPPED,
       "TUR-E0151: Relevant value dropped without being used\n"

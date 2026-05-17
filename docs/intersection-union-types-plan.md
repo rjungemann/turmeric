@@ -1,6 +1,6 @@
 # Intersection & Union Types — Implementation Plan (IT0–IT4)
 
-> **Status:** Draft — Not Started
+> **Status:** IT0 and IT1 complete; IT2–IT4 not started
 >
 > **Target:** v4
 >
@@ -28,7 +28,7 @@ Intersection types (`A & B`) represent values that satisfy **both** `A` and `B`.
 | Pattern matching on unions | **Not supported** | IT1 |
 | Intersection types `(A & B)` | **Not supported** | IT2–IT3 |
 | `any` type for gradual typing | **Not supported** | IT4 |
-| ADTs as union sugar | **Not supported** | IT4 (stretch) |
+| ADTs as union sugar | **Not supported** | IT4 (stretch) — tracked in [gadts-plan.md](archive/gadts-plan.md) G4 |
 
 ---
 
@@ -128,7 +128,7 @@ src/error.h/.c      -- Error codes and messages
 
 **Goal:** Parse and represent union types in the type system.
 
-- [ ] Add `TY_UNION` to `TypeKind` in `src/types.h`:
+- [x] Add `TY_UNION` to `TypeKind` in `src/types.h`:
 
   ```c
   typedef enum TypeKind {
@@ -138,9 +138,9 @@ src/error.h/.c      -- Error codes and messages
   } TypeKind;
   ```
 
-- [ ] `TY_UNION` node stores a list of member types (order-independent)
-- [ ] Parse `(A | B | C)` syntax in `src/reader.c`; flatten nested unions
-- [ ] Pretty-print union types in error messages
+- [x] `TY_UNION` node stores a list of member types (order-independent)
+- [x] Parse `(A | B | C)` syntax in `src/elab.c`; flatten nested unions
+- [x] Pretty-print union types in error messages
 
 ---
 
@@ -148,10 +148,10 @@ src/error.h/.c      -- Error codes and messages
 
 **Goal:** Implement subtyping and pattern matching for union types.
 
-- [ ] **Subtyping:** `A <: (A | B)` and `B <: (A | B)`
+- [x] **Subtyping:** `A <: (A | B)` and `B <: (A | B)`
   - A value of type `A` can be passed where `(A | B)` is expected
-- [ ] **Function application:** a function `(-> (A | B) C)` accepts arguments of type `A` or `B`
-- [ ] **Pattern matching on unions:**
+- [x] **Function application:** a function `(-> (A | B) C)` accepts arguments of type `A` or `B`
+- [x] **Pattern matching on unions:**
   ```clojure
   (match x
     (n : int)  ...
@@ -214,7 +214,7 @@ src/error.h/.c      -- Error codes and messages
 - [ ] Codegen for union types:
   - Tagged union in C: `struct { int tag; union { A a; B b; } data; }`
   - Tags assigned at compile time; `match` compiles to a `switch` on the tag
-- [ ] (Stretch) ADT-as-union sugar: `(defdata Option [a] (none | (some a)))` desugars to a union type
+- [ ] (Stretch) ADT-as-union sugar: `(defdata Option [a] (none | (some a)))` desugars to a union type — **implementation tracked in [gadts-plan.md](archive/gadts-plan.md) Phase G4** (requires both `-Xgadt` and `-Xunion-types`)
 - [ ] `tur explain TUR_E0300` / `TUR_E0301` / `TUR_E0350` / `TUR_E0351` entries
 - [ ] Performance benchmarks: tagged union emission overhead vs. existing ADT codegen
 

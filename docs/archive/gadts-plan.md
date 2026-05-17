@@ -636,6 +636,14 @@ Type refinement propagates correctly through GADT match arms; `eval-expr` and `s
   ```
 - [ ] Requires kind-annotated type variable `f : * -> *`
 
+#### ADTs as union sugar (stretch)
+- [ ] Desugar `(defdata Option [a] (None) (Some a))` to a union type `(None | (Some a))` internally
+- [ ] Desugar `(defdata Result [e a] (Ok a) (Err e))` to `(Ok a | Err e)` internally
+- [ ] Only applies when both `-Xgadt` and `-Xunion-types` flags are active
+- [ ] Plain `defdata` without the union-types flag continues to emit the existing tagged-union C struct
+- [ ] Exhaustiveness checking and pattern matching behaviour are unchanged from the existing ADT path
+- [ ] See [intersection-union-types-plan.md](../intersection-union-types-plan.md) IT4 for the union-types side of this work
+
 #### Guard clauses in `match`
 - [ ] Add `when` guard syntax to `match` arms:
   ```clojure

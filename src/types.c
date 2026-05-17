@@ -89,6 +89,18 @@ int type_eq(Type a, Type b) {
             return a.as.forall_.body == b.as.forall_.body;
         return type_eq(*a.as.forall_.body, *b.as.forall_.body);
     }
+    /* IT0: Union types — structural equality: same n_members, each member equal */
+    if (a.kind == TY_UNION) {
+        if (a.as.union_.n_members != b.as.union_.n_members) return 0;
+        for (uint8_t i = 0; i < a.as.union_.n_members; i++) {
+            if (!a.as.union_.members[i] || !b.as.union_.members[i]) {
+                if (a.as.union_.members[i] != b.as.union_.members[i]) return 0;
+                continue;
+            }
+            if (!type_eq(*a.as.union_.members[i], *b.as.union_.members[i])) return 0;
+        }
+        return 1;
+    }
     return 1;
 }
 
@@ -305,6 +317,23 @@ const char *type_name(Type t) {
             buf_putc(&tmp, '\0');
             return tur_strdup(tmp.data);
         }
+        /* IT0: Union types — "(T1 | T2 | ...)" */
+        case TY_UNION: {
+            Buf tmp;
+            buf_init(&tmp);
+            buf_putc(&tmp, '(');
+            for (uint8_t i = 0; i < t.as.union_.n_members; i++) {
+                if (i > 0) buf_puts(&tmp, " | ");
+                if (t.as.union_.members && t.as.union_.members[i]) {
+                    buf_puts(&tmp, type_name(*t.as.union_.members[i]));
+                } else {
+                    buf_putc(&tmp, '?');
+                }
+            }
+            buf_putc(&tmp, ')');
+            buf_putc(&tmp, '\0');
+            return tur_strdup(tmp.data);
+        }
     }
     return "?";
 }
@@ -483,6 +512,20 @@ static void type_name_buf(Buf *b, Type t) {
             buf_putc(b, ')');
             break;
         }
+        /* IT0: Union types — "(T1 | T2 | ...)" */
+        case TY_UNION: {
+            buf_putc(b, '(');
+            for (uint8_t i = 0; i < t.as.union_.n_members; i++) {
+                if (i > 0) buf_puts(b, " | ");
+                if (t.as.union_.members && t.as.union_.members[i]) {
+                    type_name_buf(b, *t.as.union_.members[i]);
+                } else {
+                    buf_putc(b, '?');
+                }
+            }
+            buf_putc(b, ')');
+            break;
+        }
     }
 }
 
@@ -571,6 +614,9 @@ const char *type_c_name(Type t) {
         case TY_FORALL:
         case TY_EXISTS:
             return "void *";
+        /* IT0: Union types — tagged union struct (IT4 will emit full struct; for now opaque) */
+        case TY_UNION:
+            return "int64_t";
     }
     return "void";
 }
@@ -725,6 +771,15 @@ static bool type_is_guarded_recursive_helper(const Type *t, const char *rec_name
         /* Phase G2: unresolved type variable — treated as opaque/guarded */
         case TY_TYVAR:
             return true;
+        /* IT0: Union types — guard recursion like other type constructors */
+        case TY_UNION: {
+            int new_depth = depth + 1;
+            for (uint8_t i = 0; i < t->as.union_.n_members; i++) {
+                if (!type_is_guarded_recursive_helper(t->as.union_.members[i], rec_name, new_depth))
+                    return false;
+            }
+            return true;
+        }
     }
 
     return true;  /* Unknown type kind - assume safe */
@@ -798,6 +853,8 @@ const char *typekind_to_string(TypeKind k) {
         case TY_EXISTS:   return "exists";
         /* Phase G2 */
         case TY_TYVAR:    return "tyvar";
+        /* IT0: Union types */
+        case TY_UNION:    return "union";
         default:          return "<?>";
     }
 }
@@ -819,6 +876,45 @@ int type_rank(const Type *t) {
         default:
             return 0;
     }
+}
+
+/* IT0: Union type constructor.
+ * Builds a TY_UNION type from an array of member types.
+ * Nested TY_UNION members are flattened: (A | (B | C)) -> (A | B | C).
+ * The members array and its contents are allocated on the given arena. */
+Type type_union_build(Arena *a, Type **members, uint8_t n_members) {
+    /* First, compute flattened count */
+    uint8_t flat_count = 0;
+    for (uint8_t i = 0; i < n_members; i++) {
+        if (members[i] && members[i]->kind == TY_UNION) {
+            flat_count += members[i]->as.union_.n_members;
+        } else {
+            flat_count++;
+        }
+    }
+
+    /* Allocate flattened array */
+    Type **flat = (Type **)arena_alloc(a, flat_count * sizeof(Type *));
+    uint8_t fi = 0;
+    for (uint8_t i = 0; i < n_members; i++) {
+        if (members[i] && members[i]->kind == TY_UNION) {
+            /* Flatten nested union */
+            for (uint8_t j = 0; j < members[i]->as.union_.n_members; j++) {
+                flat[fi++] = members[i]->as.union_.members[j];
+            }
+        } else {
+            flat[fi++] = members[i];
+        }
+    }
+
+    Type t;
+    memset(&t, 0, sizeof(t));
+    t.kind = TY_UNION;
+    t.copy_kind = CK_MOVE;
+    t.hkt_kind = KIND_STAR;
+    t.as.union_.members = flat;
+    t.as.union_.n_members = flat_count;
+    return t;
 }
 
 TypeKind typekind_from_name(const char *name) {

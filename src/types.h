@@ -108,6 +108,8 @@ typedef enum TypeKind {
     TY_TYVAR,        /* free type variable — field whose type is a GADT type param not yet known */
     /* LT3: lref<T> — linear owning pointer; must be consumed exactly once */
     TY_LREF,         /* lref<T> — CK_LINEAR; silent drop is an error */
+    /* IT0: Union types (-Xunion-types) */
+    TY_UNION,        /* (A | B | C) — anonymous closed union type */
 } TypeKind;
 
 /* Phase G0: Constructor field descriptor for ADTs */
@@ -231,6 +233,9 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
         case TY_FORALL:
         case TY_EXISTS:
             return CK_MOVE;
+        /* IT0: Union types — move-only by default; actual semantics depend on members */
+        case TY_UNION:
+            return CK_MOVE;
         case TY_UNKNOWN:
         default:
             return CK_MOVE;
@@ -330,6 +335,11 @@ typedef struct Type {
             uint8_t      n_vars;
             struct Type *body;      /* body type (arena-allocated) */
         } forall_;
+        /* IT0: Union types — (A | B | C) */
+        struct {
+            struct Type **members;  /* arena-allocated array of member type pointers */
+            uint8_t       n_members; /* number of union members (>= 2) */
+        } union_;
     } as;
 } Type;
 
@@ -581,6 +591,12 @@ static inline Type type_typeclass_inst(TypeClassInstance *inst) {
  * Both fn and arg are copied into newly-allocated memory on the arena.
  * The result kind is computed from fn's kind using kind_of_type_app. */
 Type type_app(Arena *a, Type fn, Type arg, Span span);
+
+/* IT0: Union type constructor.
+ * Create a TY_UNION type with the given array of member types.
+ * members[] is copied from the provided arena-allocated pointers.
+ * Nested TY_UNION members are flattened automatically. */
+Type type_union_build(Arena *a, Type **members, uint8_t n_members);
 
 /* Phase 17: Exception type constructor */
 /* Create an exception type wrapping a payload of the given type */

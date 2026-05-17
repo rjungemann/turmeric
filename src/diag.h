@@ -58,6 +58,9 @@ typedef enum DiagCode {
     /* ST0: Substructural type errors (-Xsubstructural) */
     TUR_E0150_AFFINE_USED_TWICE,   /* affine value used more than once */
     TUR_E0151_RELEVANT_DROPPED,    /* relevant value dropped without being used */
+    /* IT1: Union type errors (-Xunion-types) */
+    TUR_E0300_UNION_TYPE_MISMATCH,   /* value type not a member of union type */
+    TUR_E0301_NON_EXHAUSTIVE_UNION_MATCH, /* match on union type missing arm for one or more members */
 } DiagCode;
 
 typedef enum DiagLevel {
