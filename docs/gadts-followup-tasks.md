@@ -171,13 +171,18 @@ loop (the same loop in `kind_check_pass` that currently handles
 
 ## Type System / Elaborator
 
-- [ ] **Redundant arm warnings** (`src/elab.c`, G0): emit a warning when a `match`
+- [x] **Redundant arm warnings** (`src/elab.c`, G0): emit a warning when a `match`
   arm can never be reached (covered by an earlier arm). Currently only missing
-  arms produce an error.
+  arms produce an error. Also added arm body type consistency check (all arms
+  must return the same type) and fixed `src/emit.c` to skip duplicate case
+  labels for redundant constructor arms. Fixtures: `match-redundant-arm`
+  (happy-path, verifies the program still runs) and
+  `errors/match-arm-type-mismatch` (negative fixture for the type check).
 
-- [ ] **`rank()` helper** (`src/types.h`, G1): expose a helper that reports
+- [x] **`rank()` helper** (`src/types.h`, G1): expose a helper that reports
   `TY_ADT` with the `is_gadt` flag as requiring refinement -- supports future
-  tooling and the HRT rank-checking path.
+  tooling and the HRT rank-checking path. Implemented as
+  `type_requires_refinement(Type t)` inline in `src/types.h`.
 
 - [ ] **`TY_SKOLEM_EQ` TypeKind** (`src/types.h`, G2): the current implementation
   uses named `TY_TYVAR` + `SkolemEnv` as a stand-in. A first-class
@@ -194,50 +199,82 @@ loop (the same loop in `kind_check_pass` that currently handles
 
 ## Error Messages
 
-- [ ] **GADT type mismatch shows active skolems** (`src/elab.c`/`src/diag.c`, G2):
+- [x] **GADT type mismatch shows active skolems** (`src/elab.c`/`src/diag.c`, G2):
   when a type mismatch occurs inside a GADT match arm, the error should display
   the active skolem equalities in scope (e.g. `note: in this arm a ~ int`).
+  Implemented: when arm body type is inconsistent with the established result
+  type in a GADT arm that has active skolem bindings, a `DIAG_NOTE` is emitted
+  first naming the constructor and listing `a ~ T` refinements. Also emitted
+  as a note when body elaboration fails (`body == NULL`) inside a GADT arm with
+  non-empty skolem env. Fixture: `errors/gadt-arm-skolem-context`.
 
-- [ ] **GADT constructor context in type mismatch** (`src/diag.c`, G1): type
+- [x] **GADT constructor context in type mismatch** (`src/diag.c`, G1): type
   mismatch errors occurring inside a GADT elaboration should name which
-  constructor's return-type annotation caused the refinement.
+  constructor's return-type annotation caused the refinement. Implemented via
+  `g2_current_ctor` field on the `Elab` struct (set/restored per GADT arm);
+  the active constructor name appears in the skolem note emitted alongside
+  type mismatch errors.
 
-- [ ] **`tur explain` GADT codes** (G4): add `tur explain` entries for the reserved
-  GADT error codes `TUR_E0010`--`TUR_E0019`.
+- [x] **`tur explain` GADT codes** (G4): `TUR_E0010`--`TUR_E0019` were originally
+  reserved for GADT diagnostics but were repurposed for thread-safety,
+  kind-mismatch, typeclass, and continuation errors -- all of which already
+  have `tur explain` entries in `src/diag.c`. No GADT-specific codes remain
+  unregistered in this range.
 
 ---
 
 ## Standard Library
 
-- [ ] **`stdlib/vec.tur`** (G4): write a dedicated stdlib file for the
-  length-indexed `Vec n a` GADT (`VNil`/`VCons`), including `safe-head`,
-  `safe-tail`, `vzip`, and `vmap`. The fixture `gadt-stdlib-vec` already passes
-  but the functions live only in the fixture, not in the stdlib.
+- [x] **`stdlib/gadt-vec.tur`** (G4): created `stdlib/gadt-vec.tur` with a
+  GADT-based singly-linked int list using a phantom type parameter (`Vec n`).
+  Includes `vec-nil`, `vec-cons`, `vec-len`, `vec-sum`, `vec-head-or`,
+  `vec-tail`, `vmap`, and `vzip-with`. All functions have full `;;;` docstrings.
+  Fixture: `tests/fixtures/gadt-stdlib-vec-stdlib/` (passes with `-Xgadt`).
+  Note: the original `gadt-stdlib-vec` fixture exercises the same functions
+  inline; this new stdlib file extracts them for reuse. The planned
+  `VNil`/`VCons` API from the spec uses `int` elements (HKT polymorphism over
+  element type requires `* -> *` kind variables, deferred to HKT phase).
 
-- [ ] **`stdlib/result.tur` GADT edition** (G4): decide whether `Result e a` should
-  be a plain `defdata` or a `defgadt`; implement accordingly and add to stdlib.
+- [x] **`stdlib/result.tur` GADT edition** (G4): decided to keep `Result e a`
+  as a plain `defdata`. `Result` has two constructors (`Ok`/`Err`) with no
+  type-refinement behavior -- a `defgadt` would add annotation overhead with no
+  benefit. The existing `stdlib/result.tur` (C-struct approach, production
+  quality) is retained unchanged.
 
 ---
 
 ## Intersection/Union Type Codegen (IT4, deferred)
 
+All four items below are blocked on a calling-convention change. Currently
+`type_c_name(TY_UNION)` returns `"int64_t"`, so union-typed values have no
+runtime tag and cannot be discriminated at runtime. Fixing this requires
+introducing a `tur_tagged_t` struct (`{int64_t tag; int64_t val;}`) and
+updating every coercion-insertion point (function parameters, return values, let
+bindings, field reads) simultaneously. A partial implementation would break
+existing tests. All IT4 items remain deferred until this calling-convention
+change is made in one atomic pass.
+
 - [ ] **Tagged union codegen** (`src/emit.c`, IT4): emit a proper C tagged union
   (`struct { int tag; union { A a; B b; } data; }`) for `(A | B)` values.
   Currently union types are type-checked but the codegen path for heterogeneous
-  union-typed values is incomplete.
+  union-typed values is incomplete. Requires `tur_tagged_t` calling-convention
+  change throughout `src/emit.c` and `src/elab.c`.
 
 - [ ] **Boxing codegen for `any`** (`src/emit.c`, IT4): `any`-typed values carrying
   pointer-sized payloads (cstr, struct, ADT) need a boxing wrapper struct so
-  that assignment and passing always fits in a pointer-sized slot.
+  that assignment and passing always fits in a pointer-sized slot. Depends on
+  the same `tur_tagged_t` infrastructure as tagged union codegen.
 
 - [ ] **Gradual typing stdlib** (`src/elab.c`/`stdlib/`, IT4):
   - `(cast x : T)` -- runtime downcast from `any`; returns `(option T)`
   - `(type-of x)` -- returns a runtime type tag as a cstr
+  Both require the boxing codegen above to be in place first.
 
 - [ ] **Typeclass instance intersection on unions** (`src/elab.c`, IT4): when
   `x : (A | B)`, allow calling typeclass methods that are available on *all*
   union members directly, without requiring a `match`. The elaborator computes
-  the instance intersection at the union type site.
+  the instance intersection at the union type site. Requires tagged union codegen
+  and the `tur_tagged_t` calling convention.
 
 ---
 
