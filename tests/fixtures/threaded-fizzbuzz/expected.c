@@ -577,6 +577,54 @@ static __thread bool tur_fiber_cancelled_flag = false;
 static void tur_task_group_notify_done(void *task_group);
 static void tur_fiber_set_cancelled(bool c);
 
+/* TC0: per-thread cancel state for cooperative POSIX-thread cancellation */
+typedef struct {
+    volatile int    cancel_requested;  /* set by canceller via tur_thread_cancel */
+    pthread_mutex_t cancel_mutex;
+    pthread_cond_t  cancel_cond;
+} TurThreadState;
+
+typedef struct {
+    pthread_t        tid;
+    TurThreadState  *state;  /* heap-allocated; owned by this handle */
+} TurThreadHandle;
+
+typedef struct {
+    void           *(*user_fn)(void *);
+    void           *user_arg;
+    TurThreadState *state;
+} TurThreadSpawnArg;
+
+/* TC0: thread-local pointer to this thread's cancel state (NULL on main thread) */
+static __thread TurThreadState *tur_current_thread_state = NULL;
+/* TC0: thread-local setjmp buffer for with-cancel-guard (0 = not active) */
+static __thread jmp_buf tur_cancel_jmpbuf;
+static __thread int tur_cancel_jmpbuf_valid = 0;
+
+static void *tur_thread_trampoline(void *raw) {
+    TurThreadSpawnArg *a = (TurThreadSpawnArg *)raw;
+    tur_current_thread_state = a->state;
+    void *(*fn)(void *) = a->user_fn;
+    void *user_arg = a->user_arg;
+    free(a);
+    return fn(user_arg);
+}
+
+static int tur_thread_cancel_requested(void) {
+    TurThreadState *s = tur_current_thread_state;
+    return s ? __atomic_load_n(&s->cancel_requested, __ATOMIC_ACQUIRE) : 0;
+}
+
+/* TC0: cancel action -- longjmp into cancel guard if active, else exit thread */
+static void tur_thread_do_cancel(void) {
+    if (tur_cancel_jmpbuf_valid) {
+        tur_cancel_jmpbuf_valid = 0;
+        longjmp(tur_cancel_jmpbuf, 1);
+    }
+    /* No cancel guard -- exit the thread cleanly without panicking. */
+    pthread_exit(NULL);
+}
+
 static void tur_fiber_shim(uint32_t hi, uint32_t lo) {
     FiberBlock *f = (FiberBlock *)(((uintptr_t)hi << 32) | (uintptr_t)(uint32_t)lo);
     void *task_group = f->task_group;
@@ -1485,10 +1533,37 @@ static int tur_select_blocking(TurSelectClause *clauses, int n, int has_default)
     }
     /* Release all channel locks */
     for (int i = 0; i < n_unique; i++) pthread_mutex_unlock(&lock_order[i]->lock);
-    /* Sleep until woken by a channel operation */
+    /* Sleep until woken by a channel operation or cancelled (TC1) */
     pthread_mutex_lock(&wakeup_mutex);
-    while (selected_idx == -1)
-        pthread_cond_wait(&wakeup_cond, &wakeup_mutex);
+    while (selected_idx == -1) {
+        if (tur_thread_cancel_requested()) {
+            pthread_mutex_unlock(&wakeup_mutex);
+            /* Deregister all waiters before cancelling */
+            for (int __ci = 0; __ci < wn; __ci++) {
+                ChanBlock_ *__cch = (ChanBlock_ *)clauses[__ci].chan;
+                pthread_mutex_lock(&__cch->lock);
+                if (clauses[__ci].op == 0) {
+                    TurSelectWaiter **pp = (TurSelectWaiter **)&__cch->recv_waiters;
+                    while (*pp && *pp != &waiters[__ci]) pp = &(*pp)->next;
+                    if (*pp) *pp = (*pp)->next;
+                } else {
+                    TurSelectWaiter **pp = (TurSelectWaiter **)&__cch->send_waiters;
+                    while (*pp && *pp != &waiters[__ci]) pp = &(*pp)->next;
+                    if (*pp) *pp = (*pp)->next;
+                }
+                pthread_mutex_unlock(&__cch->lock);
+            }
+            pthread_mutex_destroy(&wakeup_mutex);
+            pthread_cond_destroy(&wakeup_cond);
+            tur_thread_do_cancel();
+        }
+        struct timespec __sel_ts;
+        clock_gettime(CLOCK_REALTIME, &__sel_ts);
+        long __sel_ns = __sel_ts.tv_nsec + 5000000L;
+        __sel_ts.tv_sec += __sel_ns / 1000000000L;
+        __sel_ts.tv_nsec = __sel_ns % 1000000000L;
+        pthread_cond_timedwait(&wakeup_cond, &wakeup_mutex, &__sel_ts);
+    }
     int winner = selected_idx;
     pthread_mutex_unlock(&wakeup_mutex);
     /* Deregister all waiters */
@@ -1938,10 +2013,10 @@ extern void * tur_hamt_persistent(void *);
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
 static void * array_slice(void *, int64_t, int64_t);
-static void * with_c_string(const char *, int64_t);
+static void * with_c_string(const char *, void *);
 static const char * from_c_string(const char *);
 static void * box(int64_t);
-static int64_t unbox(int64_t);
+static int64_t unbox(void *);
 static bool contract_enabled_();
 static void tur_contract_check(bool, const char *);
 static void tur_contract_check_inv(int64_t, int64_t, const char *);
@@ -2020,7 +2095,7 @@ static void * array_slice(void * arr, int64_t start, int64_t len) {
   
 }
 
-static void * with_c_string(const char * s, int64_t f) {
+static void * with_c_string(const char * s, void * f) {
         /* For v1, we just call f with s directly since cstr is already a C string */
   int64_t (*fn)(const char *) = (int64_t (*)(const char *))f;
   return (void *)(intptr_t)fn(s);
@@ -2038,7 +2113,7 @@ static void * box(int64_t v) {
   
 }
 
-static int64_t unbox(int64_t p) {
+static int64_t unbox(void * p) {
         int64_t *boxed = (int64_t *)p;
   return *boxed;
   

@@ -136,12 +136,12 @@ operation:
 **Goal:** Add cancel flag infrastructure without exposing it to user code.
 
 **Tasks:**
-- [ ] Define `TurThreadState` (cancel flag + condvar) in `src/runtime/thread.h`
-- [ ] Allocate and attach `TurThreadState` to each spawned thread (thread-local
+- [x] Define `TurThreadState` (cancel flag + condvar) in `src/runtime/thread.h`
+- [x] Allocate and attach `TurThreadState` to each spawned thread (thread-local
       storage or a handle table)
-- [ ] Implement `tur_thread_cancel(handle)`: set flag, signal cancel condvar
-- [ ] Implement `tur_thread_cancelled()`: read flag for current thread
-- [ ] Verify all existing threading fixture tests pass (`just test`)
+- [x] Implement `tur_thread_cancel(handle)`: set flag, signal cancel condvar
+- [x] Implement `tur_thread_cancelled()`: read flag for current thread
+- [x] Verify all existing threading fixture tests pass (`just test`)
 
 **Exit Criterion:** No regressions; cancel state exists but is never set.
 
@@ -152,21 +152,19 @@ operation:
 `tur_chan_send`.
 
 **Tasks:**
-- [ ] Update `tur_select_blocking` sleep loop to check cancel flag; deregister
+- [x] Update `tur_select_blocking` sleep loop to check cancel flag; deregister
       all waiters and return `TUR_SELECT_CANCELLED` on cancellation
-- [ ] Update blocking `tur_chan_recv` to return an error value on cancellation
-- [ ] Update blocking `tur_chan_send` to return an error value on cancellation
-- [ ] Propagate cancellation errors as result values (see Open Question 1
-      resolution below): blocking calls return `(err 0)` on cancellation;
-      call sites that do not need cleanup use `result-must` to re-panic;
-      call sites that do need cleanup wrap with `with-cancel-guard`
-- [ ] Implement `with-cancel-guard` macro in `stdlib/thread.tur`:
-      catches `(err 0)` from a cancelled blocking call, runs a cleanup
-      thunk, then returns nil (or re-raises -- decide during implementation)
-- [ ] Add fixture `tests/fixtures/cancel-select/`:
+- [x] Update blocking `tur_chan_recv` to return an error value on cancellation
+- [x] Update blocking `tur_chan_send` to return an error value on cancellation
+- [x] Propagate cancellation via `tur_thread_do_cancel()` (longjmp to cancel
+      guard if active, else `pthread_exit(NULL)`); `with-cancel-guard` uses
+      setjmp/longjmp for opt-in cleanup
+- [x] Implement `with-cancel-guard` in `stdlib/thread.tur`:
+      saves/restores jmpbuf state; calls cleanup thunk on cancel longjmp
+- [x] Add fixture `tests/fixtures/cancel-select/`:
       - Thread sleeps in a `select` with no immediately ready channels
       - Main thread cancels it; assert clean exit, no sanitizer errors
-- [ ] Add fixture `tests/fixtures/cancel-chan/`:
+- [x] Add fixture `tests/fixtures/cancel-chan/`:
       - Thread blocks on `tur_chan_recv`; main thread cancels it
       - Assert clean exit
 
@@ -178,9 +176,9 @@ operation:
 **Goal:** Expose `cancel-thread` and `cancelled?` to Turmeric code.
 
 **Tasks:**
-- [ ] Implement `cancel-thread` and `cancelled?` in `stdlib/thread.tur`
-- [ ] Add docstrings (full format per CLAUDE.md standard)
-- [ ] Add fixture `tests/fixtures/cancel-cooperative/`:
+- [x] Implement `cancel-thread` and `cancelled?` in `stdlib/thread.tur`
+- [x] Add docstrings (full format per CLAUDE.md standard)
+- [x] Add fixture `tests/fixtures/cancel-cooperative/`:
       - Long-running computation checks `(cancelled?)` in its loop
       - Main thread cancels it mid-run; assert it exits at the next yield point
 - [ ] Update `docs/guides/threading-guide.md` with cancellation semantics
