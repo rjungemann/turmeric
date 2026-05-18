@@ -1,6 +1,14 @@
 cmake_minimum_required(VERSION 3.20)
 
 # ---------------------------------------------------------------------------
+# Feature-test macro: glibc hides POSIX/BSD declarations (strdup, isatty,
+# clock_gettime, ...) under strict -std=c11/-pedantic unless a feature macro
+# is defined. Apple libc exposes them regardless, so this is a no-op there.
+# Must be defined before any system header is included, hence a -D flag.
+# ---------------------------------------------------------------------------
+add_compile_definitions(_DEFAULT_SOURCE)
+
+# ---------------------------------------------------------------------------
 # Phase S1: detect libedit for REPL line editing + history
 # ---------------------------------------------------------------------------
 find_library(LIBEDIT_LIB edit)
@@ -121,6 +129,9 @@ target_include_directories(tur_core PUBLIC ${TUR_INCLUDE_DIRS})
 # Common warning flags
 target_compile_options(tur_core PRIVATE
     -Wall -Wextra -Werror -Wno-unused-parameter -std=c11 -pedantic -pthread
+    # GCC's -Wformat-truncation flags bounded, memory-safe snprintf path
+    # building (pkg.c); clang has no such warning. Keep it non-fatal on GCC.
+    $<$<C_COMPILER_ID:GNU>:-Wno-format-truncation>
 )
 # Per-build-type flags
 target_compile_options(tur_core PRIVATE
@@ -148,6 +159,7 @@ target_include_directories(tur PRIVATE ${TUR_INCLUDE_DIRS})
 # Common warning flags
 target_compile_options(tur PRIVATE
     -Wall -Wextra -Werror -Wno-unused-parameter -std=c11 -pedantic
+    $<$<C_COMPILER_ID:GNU>:-Wno-format-truncation>
 )
 
 # Per-build-type flags
