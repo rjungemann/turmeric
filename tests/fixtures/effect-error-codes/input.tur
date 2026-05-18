@@ -1,0 +1,19 @@
+;; ET4: Demonstrates error code scenarios for TUR-E0251/E0252/E0254.
+;; This is the golden happy-path: correct handler construction with distinct
+;; effects (no E0251 overlap), consistent result types (no E0252 mismatch),
+;; and no infinite row instantiation (no E0254 occurs failure).
+
+(defeffect Write [msg :cstr] :nil)
+(defeffect Read [] :int)
+
+(defn do-write-read [] #{Write Read} :int
+  (do (perform (Write "test"))
+      (perform (Read))))
+
+(defn main [] :int
+  (handle
+    (handle
+      (do-write-read)
+      (Read [] k) (resume k 42))
+    (Write [msg] k) (resume k nil))
+  0)

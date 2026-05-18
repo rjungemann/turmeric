@@ -30,6 +30,10 @@ struct TypeClassMethod {
     /* ER3: Effect-row annotation from the defclass method signature.
      * NULL if not annotated; ERK_UNRESOLVED until PASS_EFFECT_ROW_INFER resolves it. */
     struct EffectRow *effect_row;
+    /* ER3: Elaborated default method body as a file-level EX_FN_DEF expression.
+     * NULL if the defclass method has no default body.  Registered in the program
+     * by elab_defclass so effect_check_pass validates it automatically. */
+    struct Expr *default_fn_expr;
 };
 
 /* A typeclass definition (e.g., Eq, Ord, Show) */

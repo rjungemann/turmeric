@@ -1,0 +1,10 @@
+;; ER1: function declares an effect it never performs -- TUR-W0031.
+
+(defeffect Write [msg :cstr] :nil)
+(defeffect Read [] :int)
+
+(defn pure-but-annotated [] #{Write} :int
+  42)
+
+(defn main [] :int
+  0)

@@ -32,14 +32,14 @@
 - [x] Confirm `#{}` round-trip works for closures and inner `defn`s via `effect_row_is_subset`
 - [x] Inner `(fn [...] ...)` literals inherit enclosing function's row when no annotation is given
 - [x] `(fn [...] #{} ...)` closure annotation: emit `TUR-E0009` if closure body performs any effect
-- [ ] Over-annotation warning: emit `TUR-W0031` when declared row is non-empty but inferred row is empty
+- [x] Over-annotation warning: emit `TUR-W0031` when declared row is non-empty but inferred row is empty
 - [x] `main` purity: under `--strict-effects`, treat unannotated `main` as having an implicit open row
 - [x] `main [] #{}` convention: emit `TUR-E0009` if any effect escapes `main`
 - [x] Fixture: `effect-pure-closure.tur` -- closure with `#{}` annotation rejected when body performs an effect
 - [x] Fixture: `effect-strict-mode.tur` -- `--strict-effects` warns on unannotated effectful function
 - [x] Fixture: `effect-main-pure.tur` -- `main [] #{}` accepted when all effects handled
 - [x] Fixture (negative): `errors/effect-main-leak.tur` -- `main [] #{}` rejected when effect escapes
-- [ ] Fixture (negative): `errors/effect-over-annotated.tur` -- `TUR-W0031` for declared but never-performed effect
+- [x] Fixture (negative): `errors/effect-over-annotated.tur` -- `TUR-W0031` for declared but never-performed effect
 
 ### ER2 remaining -- Row-variable enforcement and higher-order propagation
 
@@ -49,7 +49,7 @@
 - [x] After unifying, apply substitution to callee's declared row and merge into caller's inferred row
 - [x] When actual argument is a named function (not closure), look up its declared or inferred row and unify
 - [x] A `defn` annotated `#{e}` that internally calls `(perform (Write ...))` adds `Write` to `e`'s binding
-- [ ] Under `--strict-effects`, emit `TUR-W0032` when row variable `e` is always concrete (hint to use explicit row)
+- [x] Under `--strict-effects`, emit `TUR-W0032` when row variable `e` is always concrete (hint to use explicit row)
 - [x] Fixture: `effect-row-ho.tur` -- `map`-style higher-order function with row variable; caller's inferred row includes mapped function's effects
 - [x] Fixture: `effect-row-compose.tur` -- two functions with different row variables composed; union propagates correctly
 - [x] Fixture: `effect-row-var-unused.tur` -- row variable never bound stays open
@@ -62,11 +62,11 @@
 - [x] Emit `TUR-E0009` when instance method body's inferred row is not a subset of the declared method row
 - [x] In `collect_effects_in_expr`, look up method's declared row from the typeclass when resolving a method call; merge into caller's row
 - [x] Error: calling effectful method from `#{}` function yields `TUR-E0009`
-- [ ] If `defclass` provides a default method body, check it against the method's declared effect row
+- [x] If `defclass` provides a default method body, check it against the method's declared effect row
 - [x] Fixture: `typeclass-effect-row-enforced.tur` -- instance method that violates declared row produces `TUR-E0009`
 - [x] Fixture: `typeclass-effect-row-caller.tur` -- calling an effectful method propagates the method's row to the caller
 - [x] Fixture: `typeclass-effect-row-pure-ctx.tur` -- calling an effectful method from `#{}` function is rejected
-- [ ] Fixture: `typeclass-effect-row-default.tur` -- default method body checked against declared row
+- [x] Fixture: `typeclass-effect-row-default.tur` -- default method body checked against declared row
 
 ### ER4 remaining -- Effect row subtyping in function types
 
@@ -96,7 +96,7 @@
 
 ### ER6 -- `--lint-effects` flag
 
-- [ ] Add `--lint-effects` flag; scan for unannotated functions with non-empty inferred rows and emit advisory warnings (similar to `--lint-unsafe`)
+- [x] Add `--lint-effects` flag; scan for unannotated functions with non-empty inferred rows and emit advisory warnings (similar to `--lint-unsafe`)
 
 ### ER6 -- Static one-shot enforcement for `resume`
 
@@ -120,7 +120,7 @@
 
 ### ER6 -- IDE / tooling
 
-- [ ] `--check` mode reports effect-row errors without emitting code
+- [x] `--check` mode reports effect-row errors without emitting code
 - [ ] Language server hover: show inferred effect row for a `defn`
 - [ ] Inline hint: display `#{...}` annotation suggestion for unannotated effectful functions (under `--strict-effects`)
 
@@ -332,8 +332,8 @@
 - [x] `TUR-E0252` -- handler clause result type mismatch
 - [x] `TUR-E0253` -- effect not in scope at perform site (private or undeclared)
 - [x] `TUR-E0254` -- `forall [e]` instantiation produces infinite row (occurs check -- also needed in GATE)
-- [ ] Add `tur explain TUR-E025x` entries for all codes
-- [ ] Fixture: `effect-error-codes.tur` -- golden-output tests for each new error code
+- [x] Add `tur explain TUR-E025x` entries for all codes
+- [x] Fixture: `effect-error-codes.tur` -- golden-output tests for each new error code
 
 ### ET4 -- `-Xeffect-types` feature flag
 
@@ -380,10 +380,10 @@
 
 ### LC3 -- Stdlib migration to `^unsafe-multishot`
 
-- [ ] Annotate backtracking handlers in `stdlib/logic.tur` with `^unsafe-multishot`
-- [ ] Annotate any multi-shot async combinators in `stdlib/async.tur` with `^unsafe-multishot`
-- [ ] Annotate any other multi-shot stdlib handlers with `^unsafe-multishot`
-- [ ] Add `tur explain` entries for `TUR_E0100`, `TUR_E0101`, `TUR_E0201` continuation errors
+- [x] Annotate backtracking handlers in `stdlib/logic.tur` with `^unsafe-multishot`
+- [x] Annotate any multi-shot async combinators in `stdlib/async.tur` with `^unsafe-multishot`
+- [x] Annotate any other multi-shot stdlib handlers with `^unsafe-multishot`
+- [x] Add `tur explain` entries for `TUR_E0100`, `TUR_E0101`, `TUR_E0201` continuation errors
 
 ---
 
@@ -394,39 +394,39 @@
 
 ### MS0 -- Runtime snapshot infrastructure
 
-- [ ] Implement `tur_continuation_snapshot(TurClosure* k)` in `src/runtime/effects.c` -- deep-copies a continuation closure for multi-shot resume
-- [ ] Ensure all `CK_COPY` closure capture types support bitwise copy
-- [ ] Handle `rc<T>` captures: increment refcount in snapshot
-- [ ] Fixture: `multishot-snapshot.tur` -- two independent resumes produce independent results
+- [x] Implement `tur_continuation_snapshot(TurClosure* k)` in `src/runtime/effects.c` -- deep-copies a continuation closure for multi-shot resume
+- [x] Ensure all `CK_COPY` closure capture types support bitwise copy
+- [x] Handle `rc<T>` captures: increment refcount in snapshot
+- [x] Fixture: `multishot-snapshot.tur` -- two independent resumes produce independent results
 
 ### MS1 -- `CK_MULTISHOT` kind and `^multishot` annotation
 
-- [ ] Add `CK_MULTISHOT` to `CopyKind` enum in `src/types.h`
-- [ ] Parse `^multishot k` in `src/reader.c`; set `CK_MULTISHOT` on the `k` binding in the symbol table
-- [ ] `resume` on `CK_MULTISHOT` binding: emit `tur_continuation_snapshot` call in codegen; do not mark `k` consumed
-- [ ] `UsageState` for `CK_MULTISHOT`: `USED_MANY` is not an error
+- [x] Add `CK_MULTISHOT` to `CopyKind` enum in `src/types.h`
+- [x] Parse `^multishot k` in `src/reader.c`; set `CK_MULTISHOT` on the `k` binding in the symbol table
+- [x] `resume` on `CK_MULTISHOT` binding: emit `tur_continuation_snapshot` call in codegen; do not mark `k` consumed
+- [x] `UsageState` for `CK_MULTISHOT`: `USED_MANY` is not an error
 
 ### MS2 -- Closure capture analysis
 
-- [ ] At a `^multishot k` handler clause, walk the handler body and collect all free variable captures
-- [ ] For each capture, check its `CopyKind`: `CK_COPY` and `CK_MULTISHOT` are allowed; `CK_UNIQUE` or `CK_LINEAR` emit `TUR_E0500`
-- [ ] Emit `TUR_E0501` if `^multishot` annotation is used outside a handler continuation binding
-- [ ] Emit `TUR_E0502` if `resume k` where `k` is `CK_MULTISHOT` appears inside an `atomic` expression
-- [ ] Fixture: `multishot-copy-capture.tur` -- `CK_COPY` capture in `^multishot` handler accepted
-- [ ] Fixture (negative): `errors/multishot-unique-capture.tur` -- `CK_UNIQUE` capture rejected with `TUR_E0500`
-- [ ] Fixture (negative): `errors/multishot-linear-capture.tur` -- `CK_LINEAR` capture rejected with `TUR_E0500`
+- [x] At a `^multishot k` handler clause, walk the handler body and collect all free variable captures
+- [x] For each capture, check its `CopyKind`: `CK_COPY` and `CK_MULTISHOT` are allowed; `CK_UNIQUE` or `CK_LINEAR` emit `TUR_E0500`
+- [x] Emit `TUR_E0501` if `^multishot` annotation is used outside a handler continuation binding
+- [x] Emit `TUR_E0502` if `resume k` where `k` is `CK_MULTISHOT` appears inside an `atomic` expression
+- [x] Fixture: `multishot-copy-capture.tur` -- `CK_COPY` capture in `^multishot` handler accepted
+- [x] Fixture (negative): `errors/multishot-unique-capture.tur` -- `CK_UNIQUE` capture rejected with `TUR_E0500`
+- [x] Fixture (negative): `errors/multishot-linear-capture.tur` -- `CK_LINEAR` capture rejected with `TUR_E0500`
 
 ### MS3 -- Stdlib migration from `^unsafe-multishot` to `^multishot`
 
-- [ ] Replace `^unsafe-multishot` with `^multishot` in `stdlib/logic.tur`; confirm capture analysis passes
-- [ ] Replace `^unsafe-multishot` with `^multishot` in `stdlib/async.tur`; confirm capture analysis passes
-- [ ] Replace `^unsafe-multishot` at all other stdlib sites; confirm capture analysis passes
+- [x] Replace `^unsafe-multishot` with `^multishot` in `stdlib/logic.tur`; confirm capture analysis passes
+- [x] Replace `^unsafe-multishot` with `^multishot` in `stdlib/async.tur`; confirm capture analysis passes
+- [x] Replace `^unsafe-multishot` at all other stdlib sites; confirm capture analysis passes
 
 ### MS4 -- `^unsafe-multishot` deprecation and removal
 
-- [ ] Emit `TUR_W0400` ("use `^multishot` instead of `^unsafe-multishot`") on any remaining `^unsafe-multishot` annotation
+- [x] Emit `TUR_W0400` ("use `^multishot` instead of `^unsafe-multishot`") on any remaining `^unsafe-multishot` annotation
 - [ ] Remove `^unsafe-multishot` parsing in the following major version
-- [ ] Add `tur explain TUR_E0500`, `TUR_E0501`, `TUR_E0502`, `TUR_W0400` entries
+- [x] Add `tur explain TUR_E0500`, `TUR_E0501`, `TUR_E0502`, `TUR_W0400` entries
 
 ---
 

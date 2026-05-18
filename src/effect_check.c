@@ -616,6 +616,34 @@ static int effect_row_check_over_annotated(FnDef *fd, Arena *a) {
     return 0;
 }
 
+/* ER2: Under --strict-effects, warn when a function declares a row variable
+ * (e.g., #{e}) but the inferred row is always a concrete effect set.
+ * Suggests replacing the variable with the concrete row. */
+static void effect_row_check_var_always_concrete(FnDef *fd, Arena *a) {
+    if (!fd) return;
+    EffectRow *declared = fd->binding ? fd->binding->type.as.fn.effect_row : NULL;
+    if (!declared || declared->kind != ERK_VAR) return;
+    EffectRow *inferred = fd->inferred_effect_row;
+    if (!inferred || inferred->kind != ERK_CONCRETE) return;
+    if (inferred->as.concrete.n_effects == 0) return;
+
+    Span fn_span = fd->binding ? fd->binding->span : (Span){0, 0, 0, 0, 0, 0};
+    Buf inferred_str;
+    buf_init(&inferred_str);
+    effect_row_print(&inferred_str, inferred);
+    diag_emit_with_code(DIAG_WARNING, fn_span,
+        TUR_W0032_ROW_VAR_ALWAYS_CONCRETE,
+        "function '%s' declares row variable '#{%s}' but always performs "
+        "concrete effects #%.*s; consider replacing '#{%s}' with '#%.*s'",
+        fd->binding ? fd->binding->name->name : "<anonymous>",
+        declared->as.var.var_name->name,
+        (int)inferred_str.len, inferred_str.data,
+        declared->as.var.var_name->name,
+        (int)inferred_str.len, inferred_str.data);
+    buf_free(&inferred_str);
+    (void)a;
+}
+
 /* ER1: Recursively find EX_CLOSURE nodes with declared effect rows and check them.
  * Collect each closure body's effects and validate against its declared row. */
 static int check_closures_in_expr(Arena *a, Expr *e,
@@ -1034,6 +1062,24 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
         }
     }
 
+    /* ER3 Pass 3: Propagate resolved effect_row to default method FnDef bindings.
+     * Default method bodies are registered as EX_FN_DEF nodes, but their binding
+     * types are set up before typeclass method effect rows are resolved.  Copy
+     * the now-resolved effect_row so effect_check_pass validates them correctly. */
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        Expr *item = program->as.program.items[i];
+        if (!item || item->kind != EX_TYPECLASS_DEF) continue;
+        TypeClass *tc = item->as.typeclass_def_.typeclass;
+        if (!tc) continue;
+        for (uint8_t mi = 0; mi < tc->n_methods; mi++) {
+            TypeClassMethod *meth = &tc->methods[mi];
+            if (!meth->default_fn_expr || !meth->effect_row) continue;
+            FnDef *def_fn = meth->default_fn_expr->as.fn_def_.fn;
+            if (!def_fn || !def_fn->binding) continue;
+            def_fn->binding->type.as.fn.effect_row = meth->effect_row;
+        }
+    }
+
     /* --- Step 0c: Resolve effect rows on struct fields.
      * Struct fields with :fn #{...} annotations store ERK_UNRESOLVED rows that
      * must be resolved before the fixed-point inference can propagate them. */
@@ -1117,6 +1163,11 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
 
         /* ER1: over-annotation warning (TUR-W0031). */
         effect_row_check_over_annotated(fn, a);
+
+        /* ER2: --strict-effects: warn when row variable is always concrete (TUR-W0032). */
+        if (g_strict_effects) {
+            effect_row_check_var_always_concrete(fn, a);
+        }
 
         /* ER1: --strict-effects: warn on unannotated effectful functions (TUR-W0030). */
         if (g_strict_effects && !declared &&

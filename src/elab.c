@@ -8374,7 +8374,8 @@ static Expr *elab_borrow_mut(Elab *e, const Form *call);
 static Expr *elab_defclass(Elab *e, const Form *call);
 static Expr *elab_definstance(Elab *e, const Form *call);
 static Expr *elab_method_call(Elab *e, const Form *call);
-static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span span);
+static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span span,
+                                               uint32_t *out_body_start);
 /* Phase HKT H5: kind aliases */
 static Expr *elab_defkind(Elab *e, const Form *call);
 static Expr *elab_defrec(Elab *e, const Form *call);  /* Phase HKT-P2 */
@@ -12764,7 +12765,8 @@ static Expr *elab_borrow_mut(Elab *e, const Form *call) {
  * Syntax: (method-name [param1 : type1, param2 : type2, ...] : return-type)
  * or: (method-name [param1 param2 ...] : return-type) - types inferred from usage
  */
-static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span span) {
+static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span span,
+                                               uint32_t *out_body_start) {
     if (method_form->tag != F_LIST || method_form->as.list.len < 3) {
         diag_emit(DIAG_ERROR, span,
                   "typeclass method requires (name [params...] : return-type)");
@@ -12986,6 +12988,12 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
         }
     }
     
+    /* ER3: Report where body forms start so elab_defclass can elaborate defaults.
+     * body_start_idx is the index of the first form after the return type (or
+     * method_form->as.list.len if there are no body forms). */
+    uint32_t body_start_idx = ret_idx + 1;
+    if (out_body_start) *out_body_start = body_start_idx;
+
     TypeClassMethod *method = (TypeClassMethod *)arena_alloc(e->arena, sizeof(TypeClassMethod));
     method->name = name;
     method->param_names = param_names;
@@ -12994,6 +13002,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
     method->n_params = n_params;
     method->return_type = return_type;
     method->effect_row = method_effect_row;  /* ER3: NULL if not annotated */
+    method->default_fn_expr = NULL;          /* ER3: set by elab_defclass if body forms exist */
     return method;
 }
 
@@ -15204,12 +15213,113 @@ static Expr *elab_defclass(Elab *e, const Form *call) {
     /* Allocate methods array */
     methods = (TypeClassMethod *)arena_alloc(e->arena, n_methods * sizeof(TypeClassMethod));
     
-    /* Second pass: parse each method */
+    /* Second pass: parse each method and elaborate any default bodies */
     for (uint32_t i = 0; i < n_methods; i++) {
         Form *method_form = call->as.list.items[methods_start + i];
-        TypeClassMethod *method = parse_typeclass_method(e, method_form, call->span);
+        uint32_t body_start = 0;
+        TypeClassMethod *method = parse_typeclass_method(e, method_form, call->span, &body_start);
         if (!method) return NULL;
-        methods[i] = *method;  /* Copy the method struct */
+        methods[i] = *method;
+
+        /* ER3: If the method form has forms after the return type, elaborate
+         * them as a default body.  This mirrors elab_definstance's method
+         * elaboration so that effect_check_pass finds it as a normal FnDef. */
+        if (body_start < method_form->as.list.len) {
+            /* Build a synthetic function name: __default_<TypeClass>_<method> */
+            char default_name_buf[192];
+            snprintf(default_name_buf, sizeof(default_name_buf),
+                     "__default_%s_%s", name->name, method->name->name);
+            const Symbol *default_sym = symtab_intern(e->st,
+                strslice(default_name_buf, strlen(default_name_buf)));
+
+            /* Build parameter bindings from the method signature */
+            uint8_t n_mp = methods[i].n_params;
+            Binding **mp = n_mp > 0
+                ? (Binding **)arena_alloc(e->arena, n_mp * sizeof(Binding *)) : NULL;
+            Type *mp_types = n_mp > 0
+                ? (Type *)arena_alloc(e->arena, n_mp * sizeof(Type)) : NULL;
+
+            /* Parse body parameter names from the method form's param vector */
+            Form *pbody_params = method_form->as.list.items[1]; /* the [params] vector */
+            uint8_t actual_p = 0;
+            for (uint8_t j = 0; j < pbody_params->as.list.len && actual_p < n_mp; j++) {
+                Form *pf = pbody_params->as.list.items[j];
+                const Symbol *pname = NULL;
+                Type ptype = methods[i].n_params > actual_p
+                    ? methods[i].param_types[actual_p] : TYPE_INT;
+                if (pf->tag == F_SYM) {
+                    pname = pf->as.sym;
+                } else if (pf->tag == F_VEC && pf->as.list.len >= 1
+                           && pf->as.list.items[0]->tag == F_SYM) {
+                    pname = pf->as.list.items[0]->as.sym;
+                }
+                if (!pname) continue;
+                mp[actual_p] = binding_new(e, pname, ptype, false, false, pf->span);
+                mp_types[actual_p] = ptype;
+                actual_p++;
+            }
+            n_mp = actual_p;
+
+            /* Push scope with parameters */
+            Scope def_scope;
+            scope_init(&def_scope, e->scope);
+            e->scope = &def_scope;
+            for (uint8_t j = 0; j < n_mp; j++)
+                scope_add(&def_scope, mp[j]);
+            e->fn_body_depth++;
+
+            /* Elaborate body forms */
+            uint32_t n_body = method_form->as.list.len - body_start;
+            Expr *def_body = e_nil(e, method_form->span);
+            if (n_body == 1) {
+                def_body = elab_form(e, method_form->as.list.items[body_start]);
+            } else if (n_body > 1) {
+                Expr **body_items = (Expr **)arena_alloc(e->arena, n_body * sizeof(Expr *));
+                for (uint32_t k = 0; k < n_body; k++) {
+                    body_items[k] = elab_form(e, method_form->as.list.items[body_start + k]);
+                    if (!body_items[k]) {
+                        e->fn_body_depth--;
+                        e->scope = def_scope.parent;
+                        scope_free(&def_scope);
+                        return NULL;
+                    }
+                }
+                def_body = expr_new(e->arena, EX_DO,
+                    body_items[n_body - 1]->type, method_form->span);
+                def_body->as.do_.items = body_items;
+                def_body->as.do_.n = n_body;
+            }
+
+            e->fn_body_depth--;
+            e->scope = def_scope.parent;
+            scope_free(&def_scope);
+
+            /* Build FnDef and register it as a file-level function */
+            TypeKind pk[MAX_FN_ARITY];
+            for (uint8_t j = 0; j < n_mp; j++) pk[j] = mp_types[j].kind;
+            Type fn_t = type_fn(pk, n_mp, methods[i].return_type.kind);
+
+            FnDef *def_fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));
+            Binding *def_b = binding_new(e, default_sym, fn_t, false, true,
+                                          method_form->span);
+            def_fd->binding        = def_b;
+            def_fd->params         = mp;
+            def_fd->n_params       = n_mp;
+            def_fd->body           = def_body;
+            def_fd->is_variadic    = false;
+            def_fd->closure        = NULL;
+            def_fd->param_types    = mp_types;
+            def_fd->may_capture    = false;
+            def_fd->inferred_effect_row = NULL;
+            constraint_set_init(&def_fd->constraints);
+
+            scope_add(&e->global, def_b);
+            Expr *def_expr = expr_new(e->arena, EX_FN_DEF, fn_t, method_form->span);
+            def_expr->as.fn_def_.fn = def_fd;
+            elab_register_file_def(e, def_expr);
+
+            methods[i].default_fn_expr = def_expr;
+        }
     }
     
     /* Register the typeclass in the environment */
