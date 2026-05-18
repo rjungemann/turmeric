@@ -1,0 +1,12 @@
+;; CT0: { x : T | p } contract type syntax in parameter annotations
+;; The param name is the binding used in the body; the contract var is only
+;; used inside the predicate expression.
+
+(defn safe-increment [n { v : int | (>= v 0) }] :int
+  (+ n 1))
+
+(defn main [] :int
+  (println (safe-increment 4))
+  (println (safe-increment 0))
+  (println "contract-type-pass")
+  0)

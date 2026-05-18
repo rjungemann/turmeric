@@ -236,6 +236,9 @@ struct FnDef {
      * declared_effect_row lives in Type.as.fn.effect_row (the annotated row);
      * this field carries the pass-computed row so both can coexist. */
     EffectRow     *inferred_effect_row;
+    /* CT0: Contract pre/post-conditions — NULL if not specified */
+    const struct Form *pre_cond;   /* :pre predicate form, or NULL */
+    const struct Form *post_cond;  /* :post predicate form, or NULL */
 };
 
 /* Phase 2: ExternC represents an (extern-c ...) declaration. */
@@ -246,6 +249,9 @@ struct ExternC {
     Type          *param_types;
     uint8_t        n_params;
     bool           is_variadic;
+    /* CT4: Contract pre/post-conditions on extern-c calls — NULL if not specified */
+    const struct Form *pre_cond;   /* :pre predicate form, or NULL */
+    const struct Form *post_cond;  /* :post predicate form, or NULL */
 };
 
 /* Phase 2: InlineC represents an inline C block. ```c ... ``` */

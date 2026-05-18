@@ -27,7 +27,8 @@
 (defmodule tur/contract
   (export assert! assert-msg! require! require-msg!
           ensure! ensure-msg! invariant! invariant-msg!
-          contract-enabled?)
+          contract-enabled?
+          set-contract-handler! with-contract-handler)
 
 ;;; contract-enabled? -- returns true when contracts are enabled at runtime.
 ;;;
@@ -190,4 +191,49 @@
 ;;; Since: Phase C1
 (defmacro invariant-msg! [obj predicate msg]
   (tur-contract-check-inv obj predicate msg))
+
+;;; set-contract-handler! -- install a global contract-violation handler.
+;;;
+;;; Parameters:
+;;;   handler :int -- a function pointer (as :int) called on contract failure
+;;;                   with signature (fn [msg :cstr] :void)
+;;;
+;;; Returns:
+;;;   :void
+;;;
+;;; Example:
+;;;   (set-contract-handler! my-handler)
+;;;
+;;; Since: Phase CT4
+(defn set-contract-handler! [handler :int] :void
+  ```c
+  extern void tur_set_contract_handler(void (*h)(const char*));
+  tur_set_contract_handler((void (*)(const char*))(intptr_t)handler);
+  ```)
+
+;;; with-contract-handler -- execute body with a temporary contract handler.
+;;;
+;;; Parameters:
+;;;   h    :int -- handler function pointer (fn [msg :cstr] :void), as :int
+;;;   body :int -- thunk to run (fn [] :int), as :int
+;;;
+;;; Returns:
+;;;   :int -- the return value of body (as :int)
+;;;
+;;; Example:
+;;;   (with-contract-handler my-handler (fn [] (check-something)))
+;;;
+;;; Since: Phase CT4
+(defn with-contract-handler [h :int body :int] :int
+  ```c
+  extern void tur_set_contract_handler(void (*h)(const char*));
+  extern void* tur_get_contract_handler(void);
+  void* prev = tur_get_contract_handler();
+  tur_set_contract_handler((void (*)(const char*))(intptr_t)h);
+  typedef int64_t (*thunk_fn)(void);
+  thunk_fn thunk = (thunk_fn)(intptr_t)body;
+  int64_t result = thunk();
+  tur_set_contract_handler((void (*)(const char*))prev);
+  return result;
+  ```)
 )

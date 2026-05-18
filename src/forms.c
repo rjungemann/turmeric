@@ -135,6 +135,11 @@ Form *form_type_ann(Arena *a, Span span, Form *inner) {
     return f;
 }
 
+/* CT0: Contract type { var : T | pred } — stores items as a list */
+Form *form_contract_type(Arena *a, Span span, Form **items, uint32_t len) {
+    return form_seq(a, F_CONTRACT_TYPE, span, items, len);
+}
+
 /* Return the name of a FormTag as a string */
 const char *form_tag_name(FormTag tag) {
     switch (tag) {
@@ -155,6 +160,7 @@ const char *form_tag_name(FormTag tag) {
         case F_UNQUOTE: return "unquote";
         case F_UNQUOTE_SPLICING: return "unquote-splicing";
         case F_TYPE_ANN: return "type-ann";
+        case F_CONTRACT_TYPE: return "contract-type";
         default: return "unknown";
     }
 }
@@ -265,6 +271,15 @@ void form_print(Buf *b, const Form *f) {
             if (f->as.list.len > 0) {
                 form_print(b, f->as.list.items[0]);
             }
+            break;
+        /* CT0: Contract type { var : T | pred } */
+        case F_CONTRACT_TYPE:
+            buf_puts(b, "{ ");
+            for (uint32_t i = 0; i < f->as.list.len; i++) {
+                if (i) buf_putc(b, ' ');
+                form_print(b, f->as.list.items[i]);
+            }
+            buf_puts(b, " }");
             break;
     }
 }

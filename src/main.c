@@ -1486,7 +1486,9 @@ static int usage(void) {
         "  -Xunique-types                   enable uniqueness type checking (UT0-UT3)\n"
         "  -Xsubstructural                  enable substructural type checking (ST0-ST3; implies -Xlinear)\n"
         "  -Xunion-types                    enable union type syntax: (A | B | C) (IT0-IT1)\n"
-        "  -Xintersection-types             enable intersection type syntax: (A & B & C) (IT2)\n");
+        "  -Xintersection-types             enable intersection type syntax: (A & B & C) (IT2)\n"
+        "  -Xcontracts                      enable contract checks (default in debug builds) (CT3)\n"
+        "  --keep-contracts                 retain contract checks in release builds (CT3)\n");
     return 64;
 }
 
@@ -1820,6 +1822,23 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "-Xintersection-types") == 0) {
             /* IT2: enable intersection type syntax */
             g_intersection_types_enabled = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "-Xcontracts") == 0) {
+            /* CT3: explicitly enable contract checks (already on by default in debug) */
+            g_contracts_enabled = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--keep-contracts") == 0) {
+            /* CT3: keep contract checks in release builds */
+            g_contracts_enabled = true;
+            g_keep_contracts_in_release = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

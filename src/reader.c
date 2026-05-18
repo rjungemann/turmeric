@@ -1145,6 +1145,57 @@ static Form *read_curly_infix(Reader *r) {
     }
 }
 
+/* CT0: Read a contract type annotation: { var : T | pred }
+ * Produces an F_CONTRACT_TYPE form with items:
+ *   [0] = F_SYM(var)
+ *   [1] = F_TYPE_ANN(T)  (or F_KEYWORD(:T))
+ *   [2] = F_SYM("|")
+ *   [3] = predicate form (any expression)
+ * The outer braces are consumed here. */
+static Form *read_contract_type(Reader *r) {
+    uint32_t start_line = r->line;
+    uint32_t start_col = r->col;
+    size_t start_off = r->pos;
+
+    advance(r); /* consume '{' */
+
+    /* Collect items until '}' */
+    Form **items = NULL;
+    size_t cap = 0, n = 0;
+
+    for (;;) {
+        skip_ws_and_comments(r);
+        int c = peek(r);
+        if (c == -1) {
+            Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
+            diag_emit(DIAG_ERROR, s, "unterminated contract type (missing '}')");
+            r->error = true;
+            free(items);
+            return NULL;
+        }
+        if (c == '}') {
+            advance(r);
+            break;
+        }
+        Form *child = read_form(r);
+        if (!child) {
+            free(items);
+            return NULL;
+        }
+        if (n == cap) {
+            cap = cap ? cap * 2 : 4;
+            items = (Form **)realloc(items, cap * sizeof(Form *));
+            if (!items) { fprintf(stderr, "tur: oom\n"); abort(); }
+        }
+        items[n++] = child;
+    }
+
+    Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
+    Form *f = form_contract_type(r->arena, span, items, (uint32_t)n);
+    free(items);
+    return f;
+}
+
 static Form *read_form(Reader *r) {
     skip_ws_and_comments(r);
     if (r->error) return NULL;
@@ -1162,17 +1213,15 @@ static Form *read_form(Reader *r) {
         return read_attribute(r);
     }
 
-    /* Phase S1: Curly-infix support */
+    /* CT0 / Phase S1: Curly-brace handling.
+     * In curly-infix mode (SRFI-105), '{' is the infix operator.
+     * Otherwise '{' introduces a contract type { var : T | pred }. */
     if (c == '{') {
         if (r->curly_infix_enabled) {
             return read_curly_infix(r);
         } else {
-            /* { is reserved for SRFI-105 curly-infix - error in plain turmeric */
-            Span s = span_point(r);
-            diag_emit(DIAG_ERROR, s, "'{' is reserved for curly-infix; use #lang turmeric/curly-infix to enable it");
-            r->error = true;
-            advance(r);
-            return NULL;
+            /* CT0: contract type annotation { var : T | pred } */
+            return read_contract_type(r);
         }
     }
     

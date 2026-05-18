@@ -295,6 +295,18 @@ void tur_panic_abort(const char *msg) {
     abort();
 }
 
+/* CT4: Contract violation handler -- called by tur-contract-check on failure.
+ * Default: forward to tur_panic. Can be overridden via tur_set_contract_handler. */
+static void (*g_contract_handler)(const char *) = NULL;
+
+void tur_set_contract_handler(void (*h)(const char *)) {
+    g_contract_handler = h;
+}
+
+void *tur_get_contract_handler(void) {
+    return (void *)g_contract_handler;
+}
+
 /* Phase R2: Panic with typed payload */
 
 #include <setjmp.h>

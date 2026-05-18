@@ -14,7 +14,7 @@ tur repl
 $ tur repl
 Turmeric v0.x.0  (type :help for help, :quit to exit)
 > 
-```text
+```
 
 Exit with `:quit`, `:q`, or `Ctrl-D`.
 
@@ -32,7 +32,7 @@ next line.
 42
 > "hello"
 "hello"
-```text
+```
 
 Top-level definitions persist across expressions:
 
@@ -40,7 +40,7 @@ Top-level definitions persist across expressions:
 > (defn square [x :int] :int (* x x))
 > (square 9)
 81
-```text
+```
 
 ---
 
@@ -55,7 +55,7 @@ expression is complete:
         y 20]
     (+ x y))
 30
-```text
+```
 
 To abandon an incomplete expression, enter a blank line.
 
@@ -77,7 +77,7 @@ Meta-commands:
   :type <expr>        print inferred type without evaluating
   :doc  <sym>         print documentation for a symbol or builtin
   :reload <file>      evaluate a .tur file into the current session
-```turmeric
+```
 
 ### `:quit` / `:q`
 
@@ -92,7 +92,7 @@ Elaborates `<expr>` and prints the inferred type without evaluating it.
 :int
 > :type (fn [x :int] :int x)
 (:int -> :int)
-```turmeric
+```
 
 ### `:doc <sym>`
 
@@ -103,7 +103,7 @@ Prints brief documentation for a known builtin or user-defined symbol.
 println — print a value followed by a newline
 > :doc +
 + — integer or float addition
-```text
+```
 
 For user-defined functions the signature is printed:
 
@@ -111,7 +111,7 @@ For user-defined functions the signature is printed:
 > (defn square [x :int] :int (* x x))
 > :doc square
 square : (Int -> Int)
-```turmeric
+```
 
 ### `:reload <file>`
 
@@ -121,7 +121,7 @@ loading a script into the REPL without restarting.
 ```
 > :reload src/utils.tur
 reloaded src/utils.tur
-```sh
+```
 
 If the file cannot be opened or contains an error, a diagnostic is printed and
 the session continues.

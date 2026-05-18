@@ -86,6 +86,9 @@ typedef enum DiagCode {
     TUR_E0502_MULTISHOT_RESUME_IN_ATOMIC,     /* resume of ^multishot k inside atomically block */
     /* MS4: ^unsafe-multishot deprecation */
     TUR_W0400_UNSAFE_MULTISHOT_DEPRECATED,    /* ^unsafe-multishot is deprecated; use ^multishot instead */
+    /* CT0: Contract type errors */
+    TUR_E0400_CONTRACT_VIOLATED,   /* contract check failed: predicate is false */
+    TUR_E0401_POSTCOND_VIOLATED,   /* postcondition failed: predicate is false for result */
 } DiagCode;
 
 typedef enum DiagLevel {

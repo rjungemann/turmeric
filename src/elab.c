@@ -989,6 +989,11 @@ typedef struct Elab {
     const Symbol   **forward_type_syms;
     uint32_t         n_forward_type_syms;
     uint32_t         cap_forward_type_syms;
+    /* CT0: Contract keyword symbols */
+    const Symbol    *kw_pre;                /* :pre */
+    const Symbol    *kw_post;               /* :post */
+    const Symbol    *sym_result;            /* "result" -- bound name in :post predicates */
+    const Symbol    *sym_tur_contract_check; /* tur-contract-check */
 } Elab;
 
 /* Phase 6: Macro definition */
@@ -1626,6 +1631,11 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->forward_type_syms = NULL;
     e->n_forward_type_syms = 0;
     e->cap_forward_type_syms = 0;
+    /* CT0: Contract keyword symbols */
+    e->kw_pre  = intern_cstr(st, "pre");
+    e->kw_post = intern_cstr(st, "post");
+    e->sym_result             = intern_cstr(st, "result");
+    e->sym_tur_contract_check = intern_cstr(st, "tur-contract-check");
 }
 
 /* Phase 13: Lifetime annotation helpers (deferred - infrastructure in place) */
@@ -1718,6 +1728,8 @@ static bool ct_form_equal(const Form *a, const Form *b) {
         case F_UNQUOTE:
         case F_UNQUOTE_SPLICING:
         case F_TYPE_ANN:
+        /* CT0: Contract types compare structurally */
+        case F_CONTRACT_TYPE:
         case F_LIST:
         case F_VEC:
         case F_MAP:
@@ -1854,6 +1866,8 @@ static bool form_contains_ct_builtins(Form *f) {
         case F_KEYWORD:
         case F_CBLOCK:
         case F_TYPE_ANN:
+        /* CT0: Contract type annotations don't contain CT builtins at top level */
+        case F_CONTRACT_TYPE:
             return false;
     }
     return false;
@@ -2184,6 +2198,8 @@ static CtValue ct_eval_form(CtEnv *env, Form *f) {
         case F_UNQUOTE_SPLICING:
             return ct_value_form(f->as.list.items[0]);
         case F_TYPE_ANN:
+        /* CT0: Contract type annotations are compile-time literals */
+        case F_CONTRACT_TYPE:
             /* Type annotations are compile-time literals */
             return ct_value_form(f);
         case F_SYM: {
@@ -2316,6 +2332,8 @@ static Form *quasiquote_expand_form(Elab *e, Form *f) {
             }
         case F_CBLOCK:
         case F_TYPE_ANN:
+        /* CT0: Contract type annotations are passed through in quasiquote */
+        case F_CONTRACT_TYPE:
             return f;
         case F_QUASIQUOTE:
             /* Expand the quasiquoted form */
@@ -2336,6 +2354,8 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
         case F_CBLOCK:
         case F_QUOTE:
         case F_TYPE_ANN:
+        /* CT0: Contract type annotations are returned as-is in macro substitution */
+        case F_CONTRACT_TYPE:
             /* Literals, quote forms, and type annotations are returned as-is */
             return f;
         case F_QUASIQUOTE:
@@ -6695,6 +6715,18 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     Type *param_poly_types[MAX_FN_ARITY];
     for (uint8_t _i = 0; _i < MAX_FN_ARITY; _i++) param_poly_types[_i] = NULL;
 
+    /* CT0: Contract type predicates from param annotations { v : T | p }.
+     * Collected during param parsing; injected as pre-checks before the body. */
+    const Form *ct_param_preds[MAX_FN_ARITY];     /* predicate forms */
+    const char *ct_param_varnames[MAX_FN_ARITY];  /* contract var names (for substitution) */
+    uint8_t ct_param_param_idx[MAX_FN_ARITY];     /* which param index the predicate belongs to */
+    uint8_t n_ct_param_preds = 0;
+    for (uint8_t _ci = 0; _ci < MAX_FN_ARITY; _ci++) {
+        ct_param_preds[_ci] = NULL;
+        ct_param_varnames[_ci] = NULL;
+        ct_param_param_idx[_ci] = 0;
+    }
+
     /* Phase 15: Constraint parsing */
     /* Track pending constraints that apply to the next type variable */
     TypeClass *pending_constraints[8];  /* Max 8 constraints per function */
@@ -6893,18 +6925,42 @@ static Expr *elab_defn(Elab *e, const Form *call) {
         
         /* Phase HRT1: Handle complex type annotation (list form or F_TYPE_ANN) for previous param.
          * Syntax: [param-name (forall [a] (-> a a))] — list form follows a symbol.
-         * Also: [param-name : (-> a b)] — F_TYPE_ANN wrapping any type form. */
-        if (p->tag == F_LIST || p->tag == F_VEC || p->tag == F_TYPE_ANN) {
+         * Also: [param-name : (-> a b)] — F_TYPE_ANN wrapping any type form.
+         * CT0: [param-name { v : T | pred }] — contract type annotation. */
+        if (p->tag == F_LIST || p->tag == F_VEC || p->tag == F_TYPE_ANN || p->tag == F_CONTRACT_TYPE) {
             if (n_params == 0) {
                 diag_emit(DIAG_ERROR, p->span,
                           "defn: type annotation without preceding parameter");
                 return NULL;
+            }
+            /* CT0: For F_CONTRACT_TYPE, use the base type for the param kind.
+             * The predicate is collected for injection as a precondition. */
+            /* For F_CONTRACT_TYPE: collect predicate, use base type */
+            if (p->tag == F_CONTRACT_TYPE && p->as.list.len >= 4) {
+                /* items: [var, type-ann, "|", pred] */
+                const char *ct_var = NULL;
+                if (p->as.list.items[0]->tag == F_SYM) {
+                    ct_var = p->as.list.items[0]->as.sym->name;
+                }
+                if (n_ct_param_preds < MAX_FN_ARITY) {
+                    ct_param_preds[n_ct_param_preds]     = p->as.list.items[3];
+                    ct_param_varnames[n_ct_param_preds]  = ct_var;
+                    ct_param_param_idx[n_ct_param_preds] = n_params - 1;
+                    n_ct_param_preds++;
+                }
             }
             /* For F_TYPE_ANN, unwrap to the inner type form first */
             const Form *type_form = (p->tag == F_TYPE_ANN) ? p->as.list.items[0] : p;
             /* Parse as a type expression — supports (forall [a] (-> a a)), (-> a b), etc. */
             Type *ann = type_expr_from_form(e, type_form, NULL, NULL, NULL, 0);
             if (!ann) return NULL;
+            /* CT0: For contract types, use base type for C-level representation */
+            if (ann->kind == TY_CONTRACT && ann->as.contract_.base_type) {
+                TypeKind base_kind = ann->as.contract_.base_type->kind;
+                param_kinds[n_params - 1] = base_kind;
+                params[n_params - 1]->type = *ann->as.contract_.base_type;
+                continue;
+            }
             if (ann->kind == TY_FORALL || ann->kind == TY_EXISTS) {
                 /* Rank-2 polymorphic parameter: represented as tur_poly_fn_t at C level */
                 param_kinds[n_params - 1] = TY_PTR_VOID;
@@ -7239,6 +7295,30 @@ static Expr *elab_defn(Elab *e, const Form *call) {
         }
     }
 
+    /* CT0/CT1: Parse :pre and :post clauses between return annotation and body.
+     * Scan items[body_start..] for F_KEYWORD(:pre) or F_KEYWORD(:post) pairs
+     * and advance body_start past them. */
+    const Form *ct_pre_form  = NULL;  /* :pre predicate form */
+    const Form *ct_post_form = NULL;  /* :post predicate form */
+    {
+        while (body_start + 1 < call->as.list.len) {
+            Form *maybe_kw = call->as.list.items[body_start];
+            if (maybe_kw->tag == F_KEYWORD && maybe_kw->as.sym == e->kw_pre) {
+                if (body_start + 1 >= call->as.list.len) break;
+                ct_pre_form = call->as.list.items[body_start + 1];
+                body_start += 2;
+            } else if (maybe_kw->tag == F_KEYWORD && maybe_kw->as.sym == e->kw_post) {
+                if (body_start + 1 >= call->as.list.len) break;
+                ct_post_form = call->as.list.items[body_start + 1];
+                body_start += 2;
+            } else {
+                break;
+            }
+        }
+    }
+
+    /* CT1: Param contract predicates will be injected as pre-checks below. */
+
     /* Elaborate body */
     if (call->as.list.len < body_start + 1) {
         diag_emit(DIAG_ERROR, call->span,
@@ -7322,6 +7402,164 @@ static Expr *elab_defn(Elab *e, const Form *call) {
     e->fn_body_depth--;
     /* Phase R6: Reset current function name */
     e->current_fn_name = NULL;
+
+    /* CT1: Inject contract checks into body.
+     * Determine whether to emit checks based on build mode. */
+    {
+        bool should_check = g_contracts_enabled;
+#ifdef NDEBUG
+        if (!g_keep_contracts_in_release) should_check = false;
+#endif
+        if (should_check && body) {
+            /* Look up tur-contract-check binding */
+            Binding *check_fn = scope_lookup(&e->global, e->sym_tur_contract_check);
+
+            /* CT1: Param contract type predicates — inject as pre-checks.
+             * For each { v : T | pred } param annotation, inject:
+             *   (tur-contract-check (let [v param] pred) "Contract violated") */
+            if (check_fn) {
+                for (uint8_t ct_pi = 0; ct_pi < n_ct_param_preds; ct_pi++) {
+                    if (ct_param_preds[ct_pi] == NULL) continue;
+                    const char *var_nm = ct_param_varnames[ct_pi];
+                    const Form *pred_f = ct_param_preds[ct_pi];
+                    uint8_t pi = ct_param_param_idx[ct_pi];
+                    /* Add contract var binding (alias for param) */
+                    Binding *cv_b = NULL;
+                    if (var_nm) {
+                        StrSlice vnsl = strslice(var_nm, (uint32_t)strlen(var_nm));
+                        const Symbol *cv_sym = symtab_intern(e->st, vnsl);
+                        /* Only add if different from param name */
+                        Binding *existing_cv = scope_lookup(e->scope, cv_sym);
+                        if (!existing_cv || existing_cv != params[pi]) {
+                            cv_b = binding_new(e, cv_sym, params[pi]->type, false, false, call->span);
+                            /* Make cv_b reference same value as param by sharing the binding.
+                             * We create a var expr below to read params[pi]. */
+                            scope_add(e->scope, cv_b);
+                        }
+                    }
+                    Expr *pred_e = elab_form(e, (Form *)pred_f);
+                    if (pred_e) {
+                        Expr **ck_args = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
+                        /* If cv_b was added, wrap in let: (let [v param] pred) */
+                        Expr *check_expr = pred_e;
+                        if (cv_b) {
+                            /* Build: let [cv_b = param_var] in pred_e */
+                            Expr *param_var_e = expr_new(e->arena, EX_VAR, params[pi]->type, call->span);
+                            param_var_e->as.var.binding = params[pi];
+                            LetBinding *cv_lb = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
+                            cv_lb->binding = cv_b;
+                            cv_lb->init = param_var_e;
+                            Expr *let_cv = expr_new(e->arena, EX_LET, pred_e->type, call->span);
+                            let_cv->as.let_.bindings = cv_lb;
+                            let_cv->as.let_.n = 1;
+                            let_cv->as.let_.body = pred_e;
+                            check_expr = let_cv;
+                        }
+                        ck_args[0] = check_expr;
+                        Expr *ck_msg = expr_new(e->arena, EX_CSTR_LIT, TYPE_CSTR, call->span);
+                        ck_msg->as.s.p = "Contract violated";
+                        ck_msg->as.s.len = 17;
+                        ck_args[1] = ck_msg;
+                        Expr *ck_call = expr_new(e->arena, EX_CALL, TYPE_NIL, call->span);
+                        ck_call->as.call_.fn_binding = check_fn;
+                        ck_call->as.call_.args = ck_args;
+                        ck_call->as.call_.n_args = 2;
+                        ck_call->as.call_.fn_expr = NULL;
+                        ck_call->as.call_.dict_arg = NULL;
+                        ck_call->as.call_.is_poly_call = false;
+                        ck_call->as.call_.poly_arg_mask = 0;
+                        /* Prepend to body */
+                        Expr **do2 = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
+                        do2[0] = ck_call;
+                        do2[1] = body;
+                        Expr *new_b = expr_new(e->arena, EX_DO, body->type, call->span);
+                        new_b->as.do_.items = do2;
+                        new_b->as.do_.n = 2;
+                        body = new_b;
+                    }
+                }
+            }
+
+            /* CT1: :pre — prepend (tur-contract-check pre_pred "Precondition failed") */
+            if (ct_pre_form && check_fn) {
+                Expr *pred_e = elab_form(e, (Form *)ct_pre_form);
+                if (pred_e) {
+                    /* Build call: (tur-contract-check pred "Precondition failed") */
+                    Expr **check_args = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
+                    check_args[0] = pred_e;
+                    /* String arg */
+                    Expr *msg_e = expr_new(e->arena, EX_CSTR_LIT, TYPE_CSTR, call->span);
+                    msg_e->as.s.p = "Precondition failed";
+                    msg_e->as.s.len = 19;
+                    check_args[1] = msg_e;
+                    Expr *check_call = expr_new(e->arena, EX_CALL, TYPE_NIL, call->span);
+                    check_call->as.call_.fn_binding = check_fn;
+                    check_call->as.call_.args = check_args;
+                    check_call->as.call_.n_args = 2;
+                    check_call->as.call_.fn_expr = NULL;
+                    check_call->as.call_.dict_arg = NULL;
+                    check_call->as.call_.is_poly_call = false;
+                    check_call->as.call_.poly_arg_mask = 0;
+                    /* Prepend check to body as EX_DO */
+                    Expr **do_items = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
+                    do_items[0] = check_call;
+                    do_items[1] = body;
+                    Expr *new_body = expr_new(e->arena, EX_DO, body->type, call->span);
+                    new_body->as.do_.items = do_items;
+                    new_body->as.do_.n = 2;
+                    body = new_body;
+                }
+            }
+
+            /* CT1: :post — wrap body as:
+             *   (let [result body] (tur-contract-check post_pred "Postcondition failed") result) */
+            if (ct_post_form && check_fn) {
+                /* Create 'result' binding for the return value */
+                Binding *result_b = binding_new(e, e->sym_result, body->type, false, false, call->span);
+                /* Elaborate post predicate with 'result' in scope */
+                scope_add(e->scope, result_b);
+                Expr *post_pred_e = elab_form(e, (Form *)ct_post_form);
+                /* Remove 'result' from scope (done via scope exit, but we patch manually) */
+                /* Note: scope is already cleaned up below; we just need the expr */
+                if (post_pred_e) {
+                    /* Build (tur-contract-check post_pred "Postcondition failed") */
+                    Expr **post_args = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
+                    post_args[0] = post_pred_e;
+                    Expr *post_msg = expr_new(e->arena, EX_CSTR_LIT, TYPE_CSTR, call->span);
+                    post_msg->as.s.p = "Postcondition failed";
+                    post_msg->as.s.len = 20;
+                    post_args[1] = post_msg;
+                    Expr *post_check = expr_new(e->arena, EX_CALL, TYPE_NIL, call->span);
+                    post_check->as.call_.fn_binding = check_fn;
+                    post_check->as.call_.args = post_args;
+                    post_check->as.call_.n_args = 2;
+                    post_check->as.call_.fn_expr = NULL;
+                    post_check->as.call_.dict_arg = NULL;
+                    post_check->as.call_.is_poly_call = false;
+                    post_check->as.call_.poly_arg_mask = 0;
+                    /* result_var: reference to the result binding */
+                    Expr *result_var = expr_new(e->arena, EX_VAR, body->type, call->span);
+                    result_var->as.var.binding = result_b;
+                    /* do: (tur-contract-check ...) then result */
+                    Expr **inner_items = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
+                    inner_items[0] = post_check;
+                    inner_items[1] = result_var;
+                    Expr *inner_do = expr_new(e->arena, EX_DO, body->type, call->span);
+                    inner_do->as.do_.items = inner_items;
+                    inner_do->as.do_.n = 2;
+                    /* let binding: result = body */
+                    LetBinding *lb = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
+                    lb->binding = result_b;
+                    lb->init = body;
+                    Expr *let_e = expr_new(e->arena, EX_LET, body->type, call->span);
+                    let_e->as.let_.bindings = lb;
+                    let_e->as.let_.n = 1;
+                    let_e->as.let_.body = inner_do;
+                    body = let_e;
+                }
+            }
+        }
+    }
 
     /* LT1: At function scope exit, verify all linear params were consumed */
     bool lt1_param_fail = false;
@@ -8029,6 +8267,23 @@ static Expr *elab_extern_c(Elab *e, const Form *call) {
     b->is_extern_c = true;  /* ER6: mark as extern-c for effect inference */
     scope_add(&e->global, b);
 
+    /* CT4: Parse optional :pre and :post clauses after the return type annotation.
+     * Syntax: (extern-c name [params...] :ret-type :pre pred :post pred) */
+    const Form *ec_pre_form  = NULL;
+    const Form *ec_post_form = NULL;
+    for (uint32_t ci = ret_idx + 1; ci < call->as.list.len; ci++) {
+        const Form *maybe_kw = call->as.list.items[ci];
+        if (maybe_kw->tag == F_KEYWORD && maybe_kw->as.sym == e->kw_pre) {
+            if (ci + 1 < call->as.list.len) {
+                ec_pre_form = call->as.list.items[++ci];
+            }
+        } else if (maybe_kw->tag == F_KEYWORD && maybe_kw->as.sym == e->kw_post) {
+            if (ci + 1 < call->as.list.len) {
+                ec_post_form = call->as.list.items[++ci];
+            }
+        }
+    }
+
     /* Create ExternC declaration */
     ExternC *ec = (ExternC *)arena_alloc(e->arena, sizeof(ExternC));
     ec->c_name = name_f->as.sym;
@@ -8040,10 +8295,13 @@ static Expr *elab_extern_c(Elab *e, const Form *call) {
     }
     ec->n_params = n_params;
     ec->is_variadic = false;
+    /* CT4: store pre/post predicates for contract check emission */
+    ec->pre_cond  = ec_pre_form;
+    ec->post_cond = ec_post_form;
 
     Expr *out = expr_new(e->arena, EX_EXTERN_C, fn_type, call->span);
     out->as.extern_c_.ext = ec;
-    
+
     /* params was allocated with arena_alloc, so no need to free */
     return out;
 }
@@ -10742,6 +11000,11 @@ static Expr *elab_form(Elab *e, Form *f) {
         case F_TYPE_ANN:
             diag_emit(DIAG_ERROR, f->span,
                       "type annotation ': type' is only valid after a parameter name or as a return type");
+            return NULL;
+        /* CT0: Contract type annotations are not valid standalone expressions */
+        case F_CONTRACT_TYPE:
+            diag_emit(DIAG_ERROR, f->span,
+                      "contract type '{ var : T | pred }' is only valid as a parameter or return type annotation");
             return NULL;
     }
     return NULL;
@@ -14442,6 +14705,36 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
         }
         return type_expr_from_form(e, form->as.list.items[0], rec_name,
                                    type_params, type_param_kinds, n_type_params);
+    } else if (form->tag == F_CONTRACT_TYPE) {
+        /* CT0: { var : T | pred } contract type.
+         * items layout: [F_SYM(var), F_TYPE_ANN(T) or F_KEYWORD(:T), F_SYM("|"), pred...]
+         * We need at least 4 items: var, type-ann, "|", predicate. */
+        if (form->as.list.len < 4) {
+            diag_emit(DIAG_ERROR, form->span,
+                      "contract type requires { var : T | predicate }");
+            return NULL;
+        }
+        /* Extract var name */
+        Form *var_form = form->as.list.items[0];
+        const char *var_name = NULL;
+        if (var_form->tag == F_SYM) {
+            var_name = var_form->as.sym->name;
+        }
+        /* Extract base type from item[1] */
+        Form *type_form = form->as.list.items[1];
+        Type *base_type = type_expr_from_form(e, type_form, rec_name,
+                                              type_params, type_param_kinds, n_type_params);
+        if (!base_type) return NULL;
+        /* item[2] should be "|" (sym) — we skip it */
+        /* item[3..] is the predicate — use item[3] as the predicate form */
+        const Form *pred_form = form->as.list.items[3];
+
+        Type *base_copy = (Type *)arena_alloc(e->arena, sizeof(Type));
+        *base_copy = *base_type;
+
+        Type *ct = (Type *)arena_alloc(e->arena, sizeof(Type));
+        *ct = type_contract(e->arena, base_copy, var_name, pred_form);
+        return ct;
     } else {
         diag_emit(DIAG_ERROR, form->span,
                   "unsupported type expression form (expected symbol, keyword, or list)");

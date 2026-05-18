@@ -226,6 +226,10 @@ void tur_panic(const char *msg);
 /* Phase R5: Panic strategy - ABORT variant for #[no-unwind] */
 void tur_panic_abort(const char *msg);
 
+/* CT4: Contract handler API -- override the handler called on contract failure. */
+void tur_set_contract_handler(void (*h)(const char *));
+void *tur_get_contract_handler(void);
+
 /* Phase R2: Panic with typed payload */
 /* TypeKind is an enum from types.h; we use int for type_tag in runtime.h */
 

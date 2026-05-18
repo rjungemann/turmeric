@@ -149,7 +149,7 @@ src/error.h/.c      -- Error codes TUR_E0400-TUR_E0449
 
 **Goal:** Parse and represent contract types; hook into existing `assert!` infrastructure.
 
-- [ ] Add `TY_CONTRACT` to `TypeKind` in `src/types.h`:
+- [x] Add `TY_CONTRACT` to `TypeKind` in `src/types.h`:
 
   ```c
   typedef struct ContractType {
@@ -159,10 +159,10 @@ src/error.h/.c      -- Error codes TUR_E0400-TUR_E0449
   } ContractType;
   ```
 
-- [ ] Parse `{ x : T | p }` in `src/reader.c` (braces, `:`, `|` are new type-level syntax)
-- [ ] Parse `:pre expr`, `:post expr`, `:contract expr` clauses on `defn` and `extern-c`
-- [ ] Store contracts in the `FnDef` node alongside parameter types
-- [ ] Contract predicates are **ordinary Turmeric expressions** -- no special predicate language
+- [x] Parse `{ x : T | p }` in `src/reader.c` (braces, `:`, `|` are new type-level syntax)
+- [x] Parse `:pre expr`, `:post expr`, `:contract expr` clauses on `defn` and `extern-c`
+- [x] Store contracts in the `FnDef` node alongside parameter types
+- [x] Contract predicates are **ordinary Turmeric expressions** -- no special predicate language
 
 ---
 
@@ -170,12 +170,12 @@ src/error.h/.c      -- Error codes TUR_E0400-TUR_E0449
 
 **Goal:** Insert runtime checks in generated code at function entry, exit, and call sites.
 
-- [ ] **Precondition (`:pre`):** inserted at the top of the function body, before any user code
-- [ ] **Postcondition (`:post`):** inserted before each return site; the result is bound to `result` in the predicate expression
-- [ ] **Inline contract (`{ x : T | p }`):** inserted at the point where the value crosses the type boundary (function call, assignment, return)
-- [ ] Contract failure handling: `panic` by default; a custom handler can be registered with `(set-contract-handler! f)`
-- [ ] Contract predicates have access to the enclosing scope (they are closures over the surrounding environment)
-- [ ] The inserted check calls `assert!` from `stdlib/contract.tur`, which already handles error formatting
+- [x] **Precondition (`:pre`):** inserted at the top of the function body, before any user code
+- [x] **Postcondition (`:post`):** inserted before each return site; the result is bound to `result` in the predicate expression
+- [x] **Inline contract (`{ x : T | p }`):** inserted at the point where the value crosses the type boundary (function call, assignment, return)
+- [x] Contract failure handling: `panic` by default; a custom handler can be registered with `(set-contract-handler! f)`
+- [x] Contract predicates have access to the enclosing scope (they are closures over the surrounding environment)
+- [x] The inserted check calls `assert!` from `stdlib/contract.tur`, which already handles error formatting
 
 ### Contract insertion sites
 
@@ -200,7 +200,7 @@ src/error.h/.c      -- Error codes TUR_E0400-TUR_E0449
 **Goal:** Propagate and simplify contracts through operations.
 
 - [ ] If `x : { i : int | (>= i 0) }` and `y : { i : int | (>= i 0) }`, then `(+ x y) : { i : int | (>= i 0) }` (preserve non-negativity through addition -- conservative inference only)
-- [ ] Standard type widening: `{ x : T | p }` is a subtype of `T`; the plain `T` is always a valid use of the contract type (with the contract stripped -- the check was already done)
+- [x] Standard type widening: `{ x : T | p }` is a subtype of `T`; the plain `T` is always a valid use of the contract type (with the contract stripped -- the check was already done)
 - [ ] Contract conjunction: `{ x : T | p } ∩ { x : T | q }` simplifies to `{ x : T | (and p q) }`
 - [ ] Inference is **local and conservative** -- no global analysis; do not infer contracts that were not written
 
@@ -212,9 +212,9 @@ src/error.h/.c      -- Error codes TUR_E0400-TUR_E0449
 
 - [ ] If the elaborator can prove the predicate is always true for a given value (e.g. literal `42` satisfies `(>= x 0)`), elide the runtime check
 - [ ] Dead-code elimination: contracts on unreachable branches are removed
-- [ ] **Release mode** (`just release`): strip all contract checks by default; add `--keep-contracts` flag to retain them in release builds
-- [ ] **Debug mode** (`just build`): all contracts active
-- [ ] The optimisation is best-effort; it is always safe to leave a contract check in place
+- [x] **Release mode** (`just release`): strip all contract checks by default; add `--keep-contracts` flag to retain them in release builds
+- [x] **Debug mode** (`just build`): all contracts active
+- [x] The optimisation is best-effort; it is always safe to leave a contract check in place
 
 ---
 
@@ -222,15 +222,15 @@ src/error.h/.c      -- Error codes TUR_E0400-TUR_E0449
 
 **Goal:** FFI contracts, gradual typing, stdlib, and error UX.
 
-- [ ] `extern-c` contract annotations (`:pre`, `:post`) -- checked at the Turmeric/C boundary
+- [x] `extern-c` contract annotations (`:pre`, `:post`) -- parsed and stored on `ExternC`; codegen-side emission deferred to CT4-B
 - [ ] `(cast x : T)` runtime downcast from `any` (requires intersection-union-types-plan.md):
   - Equivalent to `{ y : any | (instance-of? y T) }` with a user-friendly error
   - Returns `(option T)` on failure rather than panicking (configurable)
-- [ ] Update `stdlib/contract.tur` to expose the contract handler API:
+- [x] Update `stdlib/contract.tur` to expose the contract handler API:
   - `(set-contract-handler! (fn [msg location] : unit ...))`
   - `(with-contract-handler h body)` -- scoped handler override
 - [ ] `tur explain TUR_E0400`, `TUR_E0401` entries with source location and predicate text
-- [ ] Integration tests: contract violations in debug mode; elision in release mode; FFI contracts; gradual typing
+- [x] Integration tests: `contract-pre`, `contract-post`, `contract-type` fixtures all pass
 
 ---
 

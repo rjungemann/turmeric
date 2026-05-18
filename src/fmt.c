@@ -176,6 +176,15 @@ static void fmt_form_flat(Buf *b, const Form *f) {
             buf_puts(b, ": ");
             if (f->as.list.len > 0) fmt_form_flat(b, f->as.list.items[0]);
             break;
+        /* CT0: Contract type { var : T | pred } */
+        case F_CONTRACT_TYPE:
+            buf_puts(b, "{ ");
+            for (uint32_t _i = 0; _i < f->as.list.len; _i++) {
+                if (_i) buf_putc(b, ' ');
+                fmt_form_flat(b, f->as.list.items[_i]);
+            }
+            buf_puts(b, " }");
+            break;
     }
 }
 
@@ -716,6 +725,13 @@ static void fmt_form(FmtState *s, const Form *f) {
             fs_puts(s, ": ");
             if (f->as.list.len > 0) fmt_form(s, f->as.list.items[0]);
             break;
+        /* CT0: Contract type { var : T | pred } — format inline */
+        case F_CONTRACT_TYPE: {
+            uint32_t w = fmt_measure(f);
+            if (s->col + w <= s->opts.line_width) fmt_emit_inline(s, f);
+            else fmt_emit_inline(s, f); /* always inline for now */
+            break;
+        }
         case F_VEC: {
             uint32_t w = fmt_measure(f);
             if (s->col + w <= s->opts.line_width) fmt_emit_inline(s, f);

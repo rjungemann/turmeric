@@ -66,6 +66,8 @@ typedef enum FormTag {
     F_UNQUOTE,    /* (unquote x) - unquote in quasiquote */
     F_UNQUOTE_SPLICING, /* (unquote-splicing x) - splice unquoted list */
     F_TYPE_ANN,         /* `: type-expr` — compound type annotation wrapper produced by reader */
+    /* CT0: Contract type { x : T | p } — refinement type annotation */
+    F_CONTRACT_TYPE,    /* { var : base-type | predicate } */
 } FormTag;
 
 struct Form;
@@ -107,6 +109,8 @@ Form *form_cblock (Arena *a, Span span, StrSlice code);
 /* Phase 6 */
 Form *form_quote  (Arena *a, Span span, Form *quoted);
 Form *form_type_ann(Arena *a, Span span, Form *inner);
+/* CT0: Contract type { var : T | pred } */
+Form *form_contract_type(Arena *a, Span span, Form **items, uint32_t len);
 Form *form_quasiquote  (Arena *a, Span span, Form *quoted);
 Form *form_unquote  (Arena *a, Span span, Form *quoted);
 Form *form_unquote_splicing  (Arena *a, Span span, Form *quoted);
