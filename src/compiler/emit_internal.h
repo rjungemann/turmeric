@@ -1,0 +1,133 @@
+#ifndef TUR_EMIT_INTERNAL_H
+#define TUR_EMIT_INTERNAL_H
+
+/* Shared internals for the emit_*.c translation units (emit_core, emit_expr,
+ * emit_stmt, emit_fns, emit_module). This header is not installed; the public
+ * codegen API lives in emit.h. */
+
+#include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "emit.h"
+
+#include "builtins.h"
+#include "cps.h"
+#include "rc.h"
+#include "rc_elision.h"
+#include "types.h"
+
+/* Phase R5: Global panic strategy flag (set by main.c --panic-abort) */
+extern bool g_panic_abort;
+
+/* Phase R6: Result/panic linting flags (set by main.c) */
+extern bool g_warn_unused_result;
+extern bool g_lint_panic;
+extern bool g_panic_trace;
+/* Phase P3: HAMT lowering - track if HAMT is needed */
+extern bool g_needs_hamt;
+
+/* Phase B5: backtrack depth cap (set by main.c --backtrack-depth N) */
+extern int64_t g_backtrack_depth;
+/* Phase B5: dump cloneable capture plan (set by main.c --dump-clone-plan) */
+extern bool g_dump_clone_plan;
+
+/* Forward declarations */
+struct DeferThunk;
+
+typedef struct EmitCtx {
+    Buf  *file;     /* file-scope decls (statics, includes) */
+    Buf  *main_;    /* main() body */
+    int   indent;
+    int   tmp_n;
+    /* Phase 2: when emitting a function body, these are the parameter bindings
+     * that should use raw names (without ID suffix) when referenced. */
+    Binding **fn_params;
+    uint8_t   n_fn_params;
+    /* Phase 3: Track emitted env struct names to avoid duplicates */
+    const Symbol **env_struct_names;
+    uint8_t   n_env_struct_names;
+    uint8_t   cap_env_struct_names;
+    /* Phase 3: For closure thunk emission, track the current closure */
+    struct Closure *closure;
+    const char *env_var_name;  /* Name of the casted env variable (e.g., "__env_4") */
+    /* Phase 4 v1: Frame tracking for unified defer model */
+    const char *frame_var;    /* Name of current tur_frame variable (e.g., "__frame_3") */
+    bool in_scope_with_defers; /* Track if current scope has defers */
+    struct DeferThunk *pending_defer_thunks; /* Thunks to emit at file scope */
+    /* Phase 4 v1: For defer thunk emission with captures */
+    Binding **defer_captures;    /* Current defer thunk's captures (NULL if none) */
+    uint8_t n_defer_captures;
+    /* Phase 3/4: Track if a return has been emitted in the current scope */
+    bool return_emitted;
+    /* Phase 19: Buffer for effect handler functions that must be emitted just
+     * before the enclosing function definition (never inside a function body). */
+    Buf *pending_handler_fns;
+    /* Phase R5: true when currently emitting a #[no-unwind] function body;
+     * causes EX_PANIC/EX_PANIC_WITH to emit tur_panic_abort instead of
+     * tur_panic so that no setjmp/longjmp unwinding is attempted. */
+    bool no_unwind;
+    /* Phase M3: when true, each module is compiled to its own .c/.h pair;
+     * exported functions are not static and headers are export-filtered. */
+    bool separate_compilation;
+    /* Phase 19D: Handle body fiber - outer variable captures */
+    Binding **handle_captures;
+    uint32_t n_handle_captures;
+    const char *handle_env_name;  /* e.g., "__henv_5" */
+} EmitCtx;
+
+/* Phase 4 v1: Defer thunk tracking */
+typedef struct DeferThunk {
+    char *name;              /* Thunk function name (e.g., "__defer_1") */
+    Expr *body;              /* The defer body expression */
+    Binding **captures;      /* Captured bindings (NULL if none) */
+    uint8_t n_captures;
+    char *env_name;          /* Env struct name for captured defers (NULL if no captures) */
+    struct DeferThunk *next; /* Linked list */
+} DeferThunk;
+
+/* ------------ emit_core.c: helpers, naming, atoms, builtins ------------ */
+const Expr **flatten_program_items(const Expr *program, uint32_t *out_n);
+Type emit_type_from_kind(TypeKind k);
+void indent_buf(Buf *b, int n);
+bool expr_is_divergent(const Expr *e);
+bool expr_contains_return_or_throw(const Expr *e);
+bool expr_has_multishot_handler(const Expr *e);
+char *fresh_tmp(EmitCtx *ctx);
+char *fresh_frame(EmitCtx *ctx);
+char *fresh_defer_thunk(EmitCtx *ctx);
+char *fresh_defer_env(EmitCtx *ctx);
+void register_defer_thunk(EmitCtx *ctx, const char *name, const Expr *body,
+                          Binding **captures, uint8_t n_captures,
+                          const char *env_name);
+void emit_pending_defer_thunks(EmitCtx *ctx, Buf *out);
+char *mangle_field_name(const char *name);
+char *raw_name_for_binding(const Binding *b);
+char *name_for_binding(EmitCtx *ctx, const Binding *b);
+void emit_c_string(Buf *out, StrSlice s);
+char *atom_nil(void);
+char *atom_bool(bool b);
+char *atom_int_typed(int64_t i, TypeKind k);
+char *atom_float32(double f);
+char *atom_float(double f);
+char *atom_var(EmitCtx *ctx, const Binding *b);
+char *atom_cstr(StrSlice s);
+char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e);
+void emit_dict_name(char *buf, size_t buflen, const TypeClassInstance *inst);
+void collect_defined(const Expr *e, Binding ***defs, uint32_t *ndefs, uint32_t *cdefs);
+Binding **collect_handle_captures(const Expr *body, uint32_t *n_out);
+
+/* ------------ emit_expr.c: expression-position emission ------------ */
+char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e);
+
+/* ------------ emit_stmt.c: statement-position emission ------------ */
+void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e);
+void emit_while_stmt(EmitCtx *ctx, Buf *body, const Expr *e);
+void emit_set_stmt(EmitCtx *ctx, Buf *body, const Expr *e);
+void emit_set_deref_stmt(EmitCtx *ctx, Buf *body, const Expr *e);
+
+/* ------------ emit_fns.c: function-definition emission ------------ */
+void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e);
+
+#endif
