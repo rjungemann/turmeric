@@ -78,6 +78,8 @@ typedef enum DiagCode {
     /* IT3: Intersection type errors (-Xintersection-types) */
     TUR_E0350_INTERSECTION_UNSATISFIABLE,   /* no value can satisfy all intersection members */
     TUR_E0351_INTERSECTION_MEMBER_MISMATCH, /* value doesn't satisfy an intersection member */
+    /* LC0: Linear continuation warnings */
+    TUR_W0035_UNSAFE_MULTISHOT_CONT,   /* ^unsafe-multishot continuation -- ownership not tracked */
 } DiagCode;
 
 typedef enum DiagLevel {

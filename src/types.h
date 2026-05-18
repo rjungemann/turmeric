@@ -371,6 +371,7 @@ typedef struct Type {
             const char *effect_name;  /* interned effect name (e.g. "Write") */
             TypeKind    value_kind;   /* the type of the value passed to the effect */
             TypeKind    result_kind;  /* the result type of the handle expression */
+            CopyKind    cont_kind;    /* LC0: ownership discipline for the continuation k */
         } handler_;
     } as;
 } Type;

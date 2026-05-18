@@ -1,0 +1,9 @@
+;; LC1: Resuming a ^linear continuation twice is TUR-E0101.
+
+(defeffect Ask [] :int)
+
+(defn bad [] :int
+  (handle (perform (Ask))
+    (Ask [] ^linear k) (+ (resume k 1) (resume k 2))))
+
+(println (bad))

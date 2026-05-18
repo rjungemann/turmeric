@@ -300,6 +300,11 @@ typedef struct HandleCase {
     uint8_t n_params;           /* Number of parameters */
     const Symbol *k_name;        /* Name of the continuation parameter */
     struct Binding *k_binding;   /* Resolved binding for k (set by elab) */
+    /* LC0: ownership discipline for k.
+     * CK_UNIQUE (default): at most one resume/discontinue (affine).
+     * CK_LINEAR (^linear k): exactly one resume/discontinue required.
+     * CK_COPY (^unsafe-multishot k): no ownership tracking; multi-shot allowed. */
+    CopyKind cont_kind;
     Expr *body;                 /* Handler body */
 } HandleCase;
 

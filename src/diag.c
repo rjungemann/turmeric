@@ -125,6 +125,8 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0032_ROW_VAR_ALWAYS_CONCRETE:    return "TUR-W0032";
         case TUR_W0033_UNREACHABLE_HANDLER:        return "TUR-W0033";
         case TUR_W0034_ROW_VAR_GENERALISED:        return "TUR-W0034";
+        /* LC0: Linear continuation warnings */
+        case TUR_W0035_UNSAFE_MULTISHOT_CONT:      return "TUR-W0035";
         /* LT1: Linear type errors */
         case TUR_E0100_LINEAR_DROPPED:             return "TUR-E0100";
         case TUR_E0101_LINEAR_USE_AFTER_CONSUME:   return "TUR-E0101";
@@ -182,6 +184,8 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0032") == 0) return TUR_W0032_ROW_VAR_ALWAYS_CONCRETE;
     if (strcmp(s, "TUR-W0033") == 0) return TUR_W0033_UNREACHABLE_HANDLER;
     if (strcmp(s, "TUR-W0034") == 0) return TUR_W0034_ROW_VAR_GENERALISED;
+    /* LC0: Linear continuation warnings */
+    if (strcmp(s, "TUR-W0035") == 0) return TUR_W0035_UNSAFE_MULTISHOT_CONT;
     /* LT1: Linear type errors */
     if (strcmp(s, "TUR-E0100") == 0) return TUR_E0100_LINEAR_DROPPED;
     if (strcmp(s, "TUR-E0101") == 0) return TUR_E0101_LINEAR_USE_AFTER_CONSUME;
@@ -564,6 +568,19 @@ static const DiagExplanation diag_explanations_[] = {
       "\n"
       "  ; After (explicit forall, no warning):\n"
       "  (defn run [f :(forall [e] fn [] #{e} :int)] #{e} :int (f))\n",
+    },
+    /* LC0: Linear continuation warnings */
+    { TUR_W0035_UNSAFE_MULTISHOT_CONT,
+      "TUR-W0035: Unsafe multi-shot continuation\n"
+      "\n"
+      "A handler clause was annotated ^unsafe-multishot on its continuation k.\n"
+      "This disables ownership tracking, allowing k to be resumed any number of\n"
+      "times, but the compiler cannot verify that captured resources are safe to\n"
+      "duplicate. Use this only when you understand the memory implications.\n"
+      "\n"
+      "Fix: if you intend exactly-once semantics, use ^linear k instead.\n"
+      "If you need multi-shot, ensure all captured bindings are copyable (CK_COPY)\n"
+      "or reference-counted.\n",
     },
     /* LT1: Linear type errors */
     { TUR_E0100_LINEAR_DROPPED,

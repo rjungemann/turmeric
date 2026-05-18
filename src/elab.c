@@ -685,6 +685,8 @@ typedef struct Elab {
     const Symbol *sym_caret_affine;     /* ^affine -- affine value annotation */
     const Symbol *sym_caret_relevant;   /* ^relevant -- relevant value annotation */
     const Symbol *sym_caret_extends;    /* ^extends -- effect hierarchy parent annotation (ET4) */
+    /* LC0: multi-shot continuation annotation */
+    const Symbol *sym_caret_unsafe_multishot; /* ^unsafe-multishot -- multi-shot k (ownership not tracked) */
     const Symbol *sym_map_new;    /* map-new - create new map */
     const Symbol *sym_assoc;      /* assoc - insert/update key-value */
     const Symbol *sym_dissoc;     /* dissoc - delete key */
@@ -1345,6 +1347,7 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_caret_affine    = intern_cstr(st, "^affine");
     e->sym_caret_relevant  = intern_cstr(st, "^relevant");
     e->sym_caret_extends   = intern_cstr(st, "^extends");  /* ET4: effect hierarchy */
+    e->sym_caret_unsafe_multishot = intern_cstr(st, "^unsafe-multishot"); /* LC0 */
     e->sym_map_new = intern_cstr(st, "map-new");
     e->sym_assoc = intern_cstr(st, "assoc");
     e->sym_dissoc = intern_cstr(st, "dissoc");
@@ -5887,13 +5890,18 @@ static Expr *elab_handle(Elab *e, const Form *call) {
             return NULL;
         }
         
-        /* Case header format: (EffectName [params...] k) */
-        if (case_f->as.list.len != 3) {
+        /* Case header format: (EffectName [params...] k)
+         * LC0: Optional annotation before k:
+         *   (EffectName [params...] ^linear k)           -- CK_LINEAR: exactly-once
+         *   (EffectName [params...] ^unsafe-multishot k) -- CK_COPY: multi-shot allowed */
+        uint32_t hdr_len = case_f->as.list.len;
+        if (hdr_len != 3 && hdr_len != 4) {
             diag_emit(DIAG_ERROR, case_f->span,
-                      "handle case header requires (EffectName [params...] k)");
+                      "handle case header requires (EffectName [params...] k) "
+                      "or (EffectName [params...] ^annotation k)");
             return NULL;
         }
-        
+
         /* Parse effect name */
         Form *name_f = case_f->as.list.items[0];
         if (name_f->tag != F_SYM) {
@@ -5902,7 +5910,7 @@ static Expr *elab_handle(Elab *e, const Form *call) {
             return NULL;
         }
         cases[i].effect_name = name_f->as.sym;
-        
+
         /* Parse parameter list */
         Form *params_f = case_f->as.list.items[1];
         if (params_f->tag != F_LIST && params_f->tag != F_VEC) {
@@ -5911,7 +5919,7 @@ static Expr *elab_handle(Elab *e, const Form *call) {
                       form_tag_name(params_f->tag));
             return NULL;
         }
-        
+
         cases[i].n_params = params_f->as.list.len;
         cases[i].param_names = arena_alloc(e->arena, cases[i].n_params * sizeof(const Symbol *));
         cases[i].param_bindings = arena_alloc(e->arena, cases[i].n_params * sizeof(Binding *));
@@ -5924,9 +5932,31 @@ static Expr *elab_handle(Elab *e, const Form *call) {
             }
             cases[i].param_names[j] = param_f->as.sym;
         }
-        
-        /* Parse continuation parameter name */
-        Form *k_f = case_f->as.list.items[2];
+
+        /* LC0: Parse optional cont_kind annotation and continuation name.
+         * 3 items: (Effect [params...] k)             -> CK_UNIQUE (default)
+         * 4 items: (Effect [params...] ^annotation k) -> CK_LINEAR or CK_COPY */
+        cases[i].cont_kind = CK_UNIQUE;
+        Form *k_f;
+        if (hdr_len == 4) {
+            Form *ann_f = case_f->as.list.items[2];
+            k_f = case_f->as.list.items[3];
+            if (ann_f->tag == F_SYM && ann_f->as.sym == e->sym_caret_linear) {
+                cases[i].cont_kind = CK_LINEAR;
+            } else if (ann_f->tag == F_SYM &&
+                       ann_f->as.sym == e->sym_caret_unsafe_multishot) {
+                cases[i].cont_kind = CK_COPY;
+            } else {
+                diag_emit(DIAG_ERROR, ann_f->span,
+                          "handle case: expected ^linear or ^unsafe-multishot "
+                          "before continuation name, got '%s'",
+                          ann_f->tag == F_SYM ? ann_f->as.sym->name : "<non-symbol>");
+                return NULL;
+            }
+        } else {
+            k_f = case_f->as.list.items[2];
+        }
+
         if (k_f->tag != F_SYM) {
             diag_emit(DIAG_ERROR, k_f->span,
                       "handle case: continuation name must be a symbol");
@@ -5969,11 +5999,28 @@ static Expr *elab_handle(Elab *e, const Form *call) {
             scope_add(&handler_scope, pb);
         }
         
-        /* Create binding for k (dummy continuation — int64).
-         * Marked CK_MOVE so the one-shot check fires on a second resume/discontinue.
-         * Marked is_continuation so async Send checks can detect continuation escape. */
+        /* LC0: Create binding for k; apply cont_kind annotation.
+         * is_continuation lets the async-escape check (T25) detect continuation capture. */
         Binding *kb = binding_new(e, cases[i].k_name, TYPE_INT, false, false, k_f->span);
-        kb->type.copy_kind = CK_MOVE;
+        switch (cases[i].cont_kind) {
+        case CK_LINEAR:
+            /* ^linear k: exactly one resume/discontinue required. */
+            kb->is_linear = true;
+            kb->type.copy_kind = CK_LINEAR;
+            break;
+        case CK_COPY:
+            /* ^unsafe-multishot k: ownership not tracked; any number of resumes allowed. */
+            kb->type.copy_kind = CK_COPY;
+            diag_emit_with_code(DIAG_WARNING, k_f->span,
+                TUR_W0035_UNSAFE_MULTISHOT_CONT,
+                "unsafe-multishot continuation '%s' -- ownership not tracked",
+                kb->name->name);
+            break;
+        default: /* CK_UNIQUE */
+            /* Default: affine (at most once). CK_MOVE == CK_UNIQUE for continuations. */
+            kb->type.copy_kind = CK_MOVE;
+            break;
+        }
         kb->is_continuation = true;
         cases[i].k_binding = kb;
         scope_add(&handler_scope, kb);
@@ -5981,6 +6028,15 @@ static Expr *elab_handle(Elab *e, const Form *call) {
         /* Parse handler body inside the handler scope */
         Form *body_f = call->as.list.items[3 + (i * 2)];
         cases[i].body = elab_form(e, body_f);
+
+        /* LC1: ^linear k must be consumed (resumed or discontinued) in the handler body.
+         * Check immediately after body elaboration, while the binding is still live. */
+        if (cases[i].cont_kind == CK_LINEAR && kb && !kb->is_linear_consumed) {
+            diag_emit_with_code(DIAG_ERROR, k_f->span,
+                TUR_E0100_LINEAR_DROPPED,
+                "linear continuation '%s' was not resumed or discontinued",
+                kb->name->name);
+        }
 
         /* Restore outer scope */
         e->scope = saved_scope;
@@ -6098,6 +6154,43 @@ static Expr *elab_compose_handlers(Elab *e, const Form *call) {
     return out;
 }
 
+/* LC1: Pre-check a continuation binding for double-use before elaborating k.
+ * Emits the appropriate error and returns true if the use should be rejected. */
+static bool cont_check_double_use(Elab *e, const Form *k_form) {
+    if (k_form->tag != F_SYM) return false;
+    Binding *kb = scope_lookup(e->scope, k_form->as.sym);
+    if (!kb || !kb->is_continuation) return false;
+
+    if (kb->type.copy_kind == CK_LINEAR && kb->is_linear_consumed) {
+        diag_emit_with_code(DIAG_ERROR, k_form->span,
+            TUR_E0101_LINEAR_USE_AFTER_CONSUME,
+            "linear continuation '%s' has already been resumed or discontinued",
+            kb->name->name);
+        return true;
+    }
+    if (type_is_move(kb->type) && kb->is_moved) {
+        diag_emit_with_code(DIAG_ERROR, k_form->span,
+            TUR_E0201_UNIQUE_COPY,
+            "continuation '%s' has already been resumed or discontinued",
+            kb->name->name);
+        return true;
+    }
+    return false;
+}
+
+/* LC1: Mark a continuation binding consumed after resume/discontinue. */
+static void cont_mark_consumed(Expr *k) {
+    if (!k || k->kind != EX_VAR) return;
+    Binding *kb = k->as.var.binding;
+    if (!kb->is_continuation) return;
+    if (kb->type.copy_kind == CK_LINEAR) {
+        kb->is_linear_consumed = true;
+    } else if (type_is_move(kb->type)) {
+        binding_mark_moved(kb, k->span);
+    }
+    /* CK_COPY: no tracking — multi-shot resumes are allowed. */
+}
+
 /* (resume k value)
  * Resume a captured continuation with a value.
  */
@@ -6107,24 +6200,23 @@ static Expr *elab_resume(Elab *e, const Form *call) {
                   "(resume k value) requires exactly two arguments");
         return NULL;
     }
-    
+
+    /* LC1: Check for double-use before elaborating k (would emit E0005 otherwise). */
+    if (cont_check_double_use(e, call->as.list.items[1])) return NULL;
+
     Expr *k = elab_form(e, call->as.list.items[1]);
     if (!k) return NULL;
-    
+
     Expr *value = elab_form(e, call->as.list.items[2]);
     if (!value) return NULL;
-    
-    /* Phase 19: One-shot continuation check.
-     * k is TY_CONT which is CK_MOVE — mark it consumed so any second
-     * (resume k ...) triggers the existing use-after-move diagnostic. */
-    if (k->kind == EX_VAR && type_is_move(k->as.var.binding->type)) {
-        binding_mark_moved(k->as.var.binding, k->span);
-    }
-    
+
+    /* LC1: Mark continuation consumed per its cont_kind. */
+    cont_mark_consumed(k);
+
     ResumeExpr *resume = arena_alloc(e->arena, sizeof(ResumeExpr));
     resume->k = k;
     resume->value = value;
-    
+
     Expr *out = expr_new(e->arena, EX_RESUME, value->type, call->span);
     out->as.resume_.resume = resume;
     return out;
@@ -6140,21 +6232,22 @@ static Expr *elab_discontinue(Elab *e, const Form *call) {
         return NULL;
     }
     
+    /* LC1: Check for double-use before elaborating k. */
+    if (cont_check_double_use(e, call->as.list.items[1])) return NULL;
+
     Expr *k = elab_form(e, call->as.list.items[1]);
     if (!k) return NULL;
-    
+
     Expr *exception = elab_form(e, call->as.list.items[2]);
     if (!exception) return NULL;
-    
-    /* Phase 19: One-shot continuation check — same as resume. */
-    if (k->kind == EX_VAR && type_is_move(k->as.var.binding->type)) {
-        binding_mark_moved(k->as.var.binding, k->span);
-    }
-    
+
+    /* LC1: Mark continuation consumed per its cont_kind. */
+    cont_mark_consumed(k);
+
     DiscontinueExpr *discontinue = arena_alloc(e->arena, sizeof(DiscontinueExpr));
     discontinue->k = k;
     discontinue->exception = exception;
-    
+
     Expr *out = expr_new(e->arena, EX_DISCONTINUE, TYPE_NIL, call->span);
     out->as.discontinue_.discontinue = discontinue;
     return out;
