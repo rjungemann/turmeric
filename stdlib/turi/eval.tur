@@ -26,7 +26,9 @@
           eval-as-int eval-as-bool eval-as-cstr eval-tag)
 
   ;; Autolink + include hints consumed by cmd_build in src/main.c.
-  ;; __tur_autolink__: appends -lturi to cc invocation.
+  ;; __tur_autolink__: appends -lturi and the src/ include paths so the
+  ;;   generated C can resolve turi/eval.h and the headers it pulls in
+  ;;   (diag.h in compiler/, arena.h/buf.h in runtime/).
   ;; __tur_include__: injects file-level #include before the generated C.
 
   ;;; turi-eval-autolink-hint -- emit build hints for the libturi linker and headers.
@@ -37,7 +39,7 @@
   ;;; Since: Phase S2
   (defn turi-eval-autolink-hint [] :int
     ```c
-    /* __tur_autolink__: -lturi */
+    /* __tur_autolink__: -lturi -Isrc -Isrc/compiler -Isrc/runtime */
     /* __tur_include__: #include "turi/eval.h" */
     /* __tur_include__: #include "turi/env.h" */
     return 0;
