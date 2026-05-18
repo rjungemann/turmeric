@@ -1549,8 +1549,11 @@ static bool parse_lint_panic(int argc, char **argv) {
  * of the form "TUR-E" followed by one or more decimal digits. */
 static bool looks_like_diag_code_(const char *s) {
     if (!s) return false;
-    if (strncmp(s, "TUR-E", 5) != 0) return false;
-    const char *p = s + 5;
+    /* Accept TUR-E#### and TUR-W#### */
+    if (strncmp(s, "TUR-", 4) != 0) return false;
+    const char *p = s + 4;
+    if (*p != 'E' && *p != 'W') return false;
+    p++;
     if (*p == '\0') return false;   /* need at least one digit */
     while (*p) {
         if (*p < '0' || *p > '9') return false;

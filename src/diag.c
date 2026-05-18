@@ -150,6 +150,8 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0500_MULTISHOT_UNIQUE_CAPTURE:      return "TUR-E0500";
         case TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER: return "TUR-E0501";
         case TUR_E0502_MULTISHOT_RESUME_IN_ATOMIC:    return "TUR-E0502";
+        /* MS4: ^unsafe-multishot deprecation */
+        case TUR_W0400_UNSAFE_MULTISHOT_DEPRECATED:   return "TUR-W0400";
         default:                          return "";
     }
 }
@@ -213,6 +215,8 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0500") == 0) return TUR_E0500_MULTISHOT_UNIQUE_CAPTURE;
     if (strcmp(s, "TUR-E0501") == 0) return TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER;
     if (strcmp(s, "TUR-E0502") == 0) return TUR_E0502_MULTISHOT_RESUME_IN_ATOMIC;
+    /* MS4: ^unsafe-multishot deprecation */
+    if (strcmp(s, "TUR-W0400") == 0) return TUR_W0400_UNSAFE_MULTISHOT_DEPRECATED;
     return DIAG_CODE_NONE;
 }
 
@@ -998,7 +1002,7 @@ static const DiagExplanation diag_explanations_[] = {
       "         (Ask [] ^multishot k) (resume k x)))  ; OK: int is CK_COPY\n"
       "\n"
       "  2. Use ^unsafe-multishot instead, which does not check captures\n"
-      "     (emits TUR-W0035):\n"
+      "     (deprecated -- emits TUR-W0035 and TUR-W0400):\n"
       "     (Ask [] ^unsafe-multishot k) (resume k ...)\n"
       "\n"
       "  3. If the struct is `:copy`, the capture is allowed:\n"
@@ -1040,6 +1044,31 @@ static const DiagExplanation diag_explanations_[] = {
       "\n"
       "Fix: move the handle expression outside the atomically block, or use\n"
       "a plain STM operation instead of a ^multishot effect handler.\n",
+    },
+    /* MS4: ^unsafe-multishot deprecation */
+    { TUR_W0400_UNSAFE_MULTISHOT_DEPRECATED,
+      "TUR-W0400: ^unsafe-multishot is deprecated\n"
+      "\n"
+      "The ^unsafe-multishot annotation allowed resuming a continuation k any\n"
+      "number of times without capture-safety checks.  It is deprecated now that\n"
+      "^multishot provides the same multi-shot semantics with safe capture analysis\n"
+      "(TUR-E0500 checks that only copyable values are captured).\n"
+      "\n"
+      "^unsafe-multishot will be removed in a future major version.\n"
+      "\n"
+      "Example triggering this warning:\n"
+      "  (handle body\n"
+      "    (Ask [] ^unsafe-multishot k)  ; TUR-W0035 + TUR-W0400\n"
+      "      (+ (resume k 1) (resume k 2)))\n"
+      "\n"
+      "Fix: replace ^unsafe-multishot with ^multishot:\n"
+      "  (handle body\n"
+      "    (Ask [] ^multishot k)          ; safe: captures are checked\n"
+      "      (+ (resume k 1) (resume k 2)))\n"
+      "\n"
+      "If the handler body captures a move-only or linear binding and you cannot\n"
+      "make it copyable, you will need to restructure the code to avoid multi-shot\n"
+      "semantics or wrap the captured value in a copyable container.\n",
     },
 };
 

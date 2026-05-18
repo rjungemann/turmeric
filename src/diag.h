@@ -84,6 +84,8 @@ typedef enum DiagCode {
     TUR_E0500_MULTISHOT_UNIQUE_CAPTURE,       /* ^multishot handler captures a unique/linear value */
     TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER,  /* ^multishot annotation outside a handler continuation */
     TUR_E0502_MULTISHOT_RESUME_IN_ATOMIC,     /* resume of ^multishot k inside atomically block */
+    /* MS4: ^unsafe-multishot deprecation */
+    TUR_W0400_UNSAFE_MULTISHOT_DEPRECATED,    /* ^unsafe-multishot is deprecated; use ^multishot instead */
 } DiagCode;
 
 typedef enum DiagLevel {

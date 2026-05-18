@@ -6029,12 +6029,18 @@ static Expr *elab_handle(Elab *e, const Form *call) {
             kb->is_relevant  = true;  /* must be consumed */
             break;
         case CK_COPY:
-            /* ^unsafe-multishot k: ownership not tracked; any number of resumes allowed. */
+            /* ^unsafe-multishot k: ownership not tracked; any number of resumes allowed.
+             * MS4: deprecated -- emit both the ownership warning (W0035) and the
+             * migration hint (W0400).  ^unsafe-multishot will be removed in the next
+             * major version; users should migrate to ^multishot. */
             kb->type.copy_kind = CK_COPY;
             diag_emit_with_code(DIAG_WARNING, k_f->span,
                 TUR_W0035_UNSAFE_MULTISHOT_CONT,
                 "unsafe-multishot continuation '%s' -- ownership not tracked",
                 kb->name->name);
+            diag_emit_with_code(DIAG_WARNING, k_f->span,
+                TUR_W0400_UNSAFE_MULTISHOT_DEPRECATED,
+                "'^unsafe-multishot' is deprecated; use '^multishot' instead");
             break;
         case CK_MULTISHOT:
             /* ^multishot k: MS1: safe multi-shot via snapshot semantics; no ownership warning. */
