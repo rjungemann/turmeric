@@ -1,11 +1,17 @@
 ;; Phase C1: contracts at FFI boundaries
-;; Wraps a C function with require-msg!/ensure-msg! guards.
+;; Wraps a C-bodied function with require-msg!/ensure-msg! guards.
+;; Uses an inline-C function body rather than extern-c to a libc symbol:
+;; libc llabs/labs are declared with platform-variant long/long-long types
+;; that conflict with Turmeric's int64_t-based :int under LP64 Linux.
 
-(extern-c llabs [n :int] :int)
+(defn c-abs [n :int] :int
+  ```c
+  return n < 0 ? -n : n;
+  ```)
 
-(defn safe-llabs [x :int] :int
-  (ensure-msg! (>= (llabs x) 0) "llabs must return non-negative value")
-  (llabs x))
+(defn safe-abs [x :int] :int
+  (ensure-msg! (>= (c-abs x) 0) "c-abs must return non-negative value")
+  (c-abs x))
 
 (defn safe-add [a :int b :int] :int
   (require-msg! (>= a 0) "a must be non-negative")
@@ -14,8 +20,8 @@
   (+ a b))
 
 (defn main [] :int
-  (println (safe-llabs -5))
-  (println (safe-llabs 3))
+  (println (safe-abs -5))
+  (println (safe-abs 3))
   (println (safe-add 4 6))
   (println "ffi-pass")
   0)

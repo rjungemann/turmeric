@@ -303,9 +303,15 @@ void tur_set_contract_handler(void (*h)(const char *)) {
     g_contract_handler = h;
 }
 
+/* ISO C forbids converting a function pointer to void *, but every supported
+ * platform (POSIX) guarantees the round-trip; the handler is round-tripped
+ * back through tur_set_contract_handler. Silence -Wpedantic for this case. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
 void *tur_get_contract_handler(void) {
     return (void *)g_contract_handler;
 }
+#pragma GCC diagnostic pop
 
 /* Phase R2: Panic with typed payload */
 

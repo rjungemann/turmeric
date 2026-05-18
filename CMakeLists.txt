@@ -64,7 +64,7 @@ else()
   set(_eval_import_asan "")
 endif()
 set_tests_properties(tur_eval_import PROPERTIES
-  ENVIRONMENT "TUR_CC_FLAGS=-O2 -std=c99 -Wall${_eval_import_asan} -I${CMAKE_CURRENT_SOURCE_DIR}/src -L${CMAKE_CURRENT_BINARY_DIR}/src"
+  ENVIRONMENT "TUR_CC_FLAGS=-O2 -std=c99 -Wall${_eval_import_asan} -I${CMAKE_CURRENT_SOURCE_DIR}/src -I${CMAKE_CURRENT_SOURCE_DIR}/src/compiler -I${CMAKE_CURRENT_SOURCE_DIR}/src/passes -I${CMAKE_CURRENT_SOURCE_DIR}/src/runtime -I${CMAKE_CURRENT_SOURCE_DIR}/src/async -I${CMAKE_CURRENT_SOURCE_DIR}/src/web -L${CMAKE_CURRENT_BINARY_DIR}/src;ASAN_OPTIONS=detect_leaks=0"
 )
 add_test(
   NAME tur_eval_basic
@@ -129,6 +129,21 @@ set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
                      tur_eval_async_effects tur_eval_async_timeout
                      tur_eval_async_cancel tur_eval_async_error tur_eval_async_io
   PROPERTIES DEPENDS tur
+)
+
+# LeakSanitizer ships enabled with ASan on Linux but is absent on macOS, so the
+# Debug/ASan CI run on Ubuntu would otherwise fail: the tree-walking turi/eval
+# interpreter intentionally does not free closures (they live for the process
+# lifetime). Disable leak detection so the test run still catches real memory
+# errors (use-after-free, out-of-bounds) without flagging that design choice.
+# tur_eval_import sets ASAN_OPTIONS via its own ENVIRONMENT above.
+set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
+                     tur_repl_tests tur_repl_smoke tur_eval_basic
+                     tur_eval_effects tur_eval_s4
+                     tur_eval_async_basic tur_eval_async_composition
+                     tur_eval_async_effects tur_eval_async_timeout
+                     tur_eval_async_cancel tur_eval_async_error tur_eval_async_io
+  PROPERTIES ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
 )
 
 # ---------------------------------------------------------------------------
