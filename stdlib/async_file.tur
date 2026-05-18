@@ -26,7 +26,7 @@
 ;;;   (async-file-open "/tmp/out.txt" 1)  ; => 5
 ;;;
 ;;; Since: Phase T24
-(defn async-file-open [path :cstr flags :int] :int
+(defn async-file-open [path :cstr flags :int] #{Unsafe} :int
   ```c
   int oflags;
   switch ((int)flags) {
@@ -54,7 +54,7 @@
 ;;;   (async-file-read fd 4096)  ; => 128
 ;;;
 ;;; Since: Phase T24
-(defn async-file-read [fd :int buf-size :int] :int
+(defn async-file-read [fd :int buf-size :int] #{Unsafe} :int
   ```c
   char *buf = (char *)malloc((size_t)buf_size);
   if (!buf) return -1;
@@ -98,7 +98,7 @@
 ;;;   (async-file-write fd "hello" 5)  ; => 5
 ;;;
 ;;; Since: Phase T24
-(defn async-file-write [fd :int data :cstr len :int] :int
+(defn async-file-write [fd :int data :cstr len :int] #{Unsafe} :int
   ```c
   int64_t total = 0;
   while (total < len) {
@@ -134,7 +134,7 @@
 ;;;   (async-file-close fd)  ; => 0
 ;;;
 ;;; Since: Phase T24
-(defn async-file-close [fd :int] :int
+(defn async-file-close [fd :int] #{Unsafe} :int
   ```c
   tur_io_unregister((int)fd);
   return (int64_t)close((int)fd);
@@ -151,7 +151,7 @@
 ;;;   (async-file-read-buf)  ; => buf-ptr
 ;;;
 ;;; Since: Phase T24
-(defn async-file-read-buf [] :ptr<void>
+(defn async-file-read-buf [] #{Unsafe} :ptr<void>
   ```c
   if (!tur_current_fiber) return NULL;
   return (void*)(intptr_t)tur_fiber_local_get(tur_current_fiber, 0xA51CF11E);
@@ -167,7 +167,7 @@
 ;;;   (async-file-read-len)  ; => 128
 ;;;
 ;;; Since: Phase T24
-(defn async-file-read-len [] :int
+(defn async-file-read-len [] #{Unsafe} :int
   ```c
   if (!tur_current_fiber) return 0;
   return tur_fiber_local_get(tur_current_fiber, 0xA51CF11F);

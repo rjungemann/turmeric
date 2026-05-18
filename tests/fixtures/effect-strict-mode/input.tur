@@ -1,0 +1,12 @@
+;; ER1: --strict-effects warns on unannotated effectful function (TUR-W0030).
+;; The program still compiles and runs correctly -- warnings do not block build.
+
+(defeffect Write [msg :cstr] :nil)
+
+(defn effectful [] :nil
+  (perform (Write "hello")))
+
+(defn main [] :int
+  (handle
+    (do (effectful) 0)
+    (Write [msg] k) (do (println msg) (resume k nil))))

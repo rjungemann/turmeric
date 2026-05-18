@@ -1481,6 +1481,7 @@ static int usage(void) {
         "  --warn-unused-result             warn on discarded result values (Phase R6)\n"
         "  --no-warn-unused-result          disable --warn-unused-result (Phase R6)\n"
         "  --lint-panic                     lint panic/must! usage (Phase R6)\n"
+        "  -Xeffect-types                   enable full effect typing: TY_HANDLER, ET4 checks (ET4)\n"
         "  -Xlinear                         enable linear type checking (LT0-LT4)\n"
         "  -Xunique-types                   enable uniqueness type checking (UT0-UT3)\n"
         "  -Xsubstructural                  enable substructural type checking (ST0-ST3; implies -Xlinear)\n"
@@ -1548,8 +1549,11 @@ static bool parse_lint_panic(int argc, char **argv) {
  * of the form "TUR-E" followed by one or more decimal digits. */
 static bool looks_like_diag_code_(const char *s) {
     if (!s) return false;
-    if (strncmp(s, "TUR-E", 5) != 0) return false;
-    const char *p = s + 5;
+    /* Accept TUR-E#### and TUR-W#### */
+    if (strncmp(s, "TUR-", 4) != 0) return false;
+    const char *p = s + 4;
+    if (*p != 'E' && *p != 'W') return false;
+    p++;
     if (*p == '\0') return false;   /* need at least one digit */
     while (*p) {
         if (*p < '0' || *p > '9') return false;
@@ -1758,6 +1762,15 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "--dump-clone-plan") == 0) {
             /* Phase B5: dump cloneable capture plan after CPS */
             g_dump_clone_plan = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "-Xeffect-types") == 0) {
+            /* ET4: enable full effect typing (TY_HANDLER, handler typing, ET4 checks) */
+            g_effect_types_enabled = true;
+            g_strict_effects = true;  /* -Xeffect-types implies --strict-effects */
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

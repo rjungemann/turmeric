@@ -1,0 +1,22 @@
+;; ET1-F: do sequences accumulate all sub-expression effect rows.
+;; The sequence performs Write then Read then Log; the enclosing function
+;; infers #{Write Read Log}.
+
+(defeffect Write [s :cstr] :nil)
+(defeffect Read [] :int)
+(defeffect Log [msg :cstr] :nil)
+
+(defn run-all [] #{Write Read Log} :nil
+  (do
+    (perform (Write "step1"))
+    (let [n (perform (Read))]
+      (perform (Log (if (> n 0) "step3" "step3-zero"))))))
+
+(defn main [] :int
+  (handle
+    (handle
+      (handle
+        (do (run-all) 0)
+        (Write [s] k) (do (println s) (resume k nil)))
+      (Read [] k) (resume k 1))
+    (Log [msg] k) (do (println msg) (resume k nil))))

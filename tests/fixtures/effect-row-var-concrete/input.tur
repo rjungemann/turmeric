@@ -1,0 +1,13 @@
+;; ER2: function declares a row variable #{e} but always performs concrete effects.
+;; Under --strict-effects this should emit TUR-W0032.
+
+(defeffect Write [msg :cstr] :nil)
+
+(defn always-writes [x :int] #{e} :int
+  (do (perform (Write "hello"))
+      x))
+
+(defn main [] :int
+  (handle
+    (always-writes 0)
+    (Write [msg] k) (resume k 0)))

@@ -1,0 +1,9 @@
+;; LC1: Resuming a CK_UNIQUE continuation twice is TUR-E0201.
+
+(defeffect Ask [] :int)
+
+(defn bad [] :int
+  (handle (perform (Ask))
+    (Ask [] k) (+ (resume k 1) (resume k 2))))
+
+(println (bad))

@@ -26,7 +26,7 @@
 ;;;   (roll my-layer)  ; => (Roll my-layer)
 ;;;
 ;;; Since: Phase RF2
-(defn roll [layer :int] :int
+(defn roll [layer :int] #{} :int
   (Roll layer))
 
 ;;; unroll -- unwrap one layer of Fix to expose the inner functor value.
@@ -41,7 +41,7 @@
 ;;;   (unroll (roll x))  ; => x
 ;;;
 ;;; Since: Phase RF2
-(defn unroll [fix :int] :int
+(defn unroll [fix :int] #{} :int
   (match fix
     (Roll inner) inner))
 
@@ -61,7 +61,7 @@
 ;;;   (cata my-alg leaf-fix)
 ;;;
 ;;; Since: Phase RF2
-(defn cata [alg :int fix :int] :int
+(defn cata [alg :int fix :int] #{Unsafe} :int
   ```c
   int64_t *fat = (int64_t*)(intptr_t)alg;
   int64_t thunk = fat[0];
@@ -82,7 +82,7 @@
 ;;;   (ana my-coalg seed-value)
 ;;;
 ;;; Since: Phase RF2
-(defn ana [coalg :int seed :int] :int
+(defn ana [coalg :int seed :int] #{Unsafe} :int
   ```c
   int64_t *fat = (int64_t*)(intptr_t)coalg;
   int64_t thunk = fat[0];

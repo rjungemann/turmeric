@@ -1,0 +1,17 @@
+;; ER3: default method body performs an effect beyond the declared effect row.
+;; The method declares #{} (pure) but the default body performs Write -- TUR-E0009.
+
+(defeffect Write [msg :cstr] :nil)
+
+(defclass Greet [a]
+  (greeting [x] #{} :cstr
+    (do (perform (Write "hi"))
+        "hello")))
+
+(definstance Greet [int]
+  (greeting [x] :cstr
+    "hello int"))
+
+(defn main [] :int
+  (println (.greeting 42))
+  0)

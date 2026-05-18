@@ -1,0 +1,10 @@
+;; ET4: Write ^extends IO. A function performing Write has row
+;; #{Write} which is a subset of #{IO}.
+(defeffect IO [] :nil)
+(defeffect Write [s :cstr] :nil ^extends IO)
+(defn log-io [] #{IO} :nil
+  (perform (Write "via hierarchy")))
+(defn main [] :int
+  (handle
+    (do (log-io) 0)
+    (Write [s] k) (do (println s) (resume k nil))))

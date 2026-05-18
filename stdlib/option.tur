@@ -18,7 +18,7 @@
 ;;;   (some 42)  ; => some(42)
 ;;;
 ;;; Since: Phase B1
-(defn some [x]
+(defn some [x] #{Unsafe}
   ```c
   struct { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
   opt->is_some = true;
@@ -36,7 +36,7 @@
 ;;;   (none)  ; => none (NULL)
 ;;;
 ;;; Since: Phase B1
-(defn none []
+(defn none [] #{Unsafe}
   ```c
   return NULL;
   ```)
@@ -55,7 +55,7 @@
 ;;;   (some? (none))    ; => false
 ;;;
 ;;; Since: Phase B1
-(defn some? [o] :bool
+(defn some? [o] #{Unsafe} :bool
   ```c
   struct { bool is_some; int64_t value; } *opt = (void*)o;
   return opt != NULL && opt->is_some;
@@ -74,7 +74,7 @@
 ;;;   (option-unwrap (some 7))  ; => 7
 ;;;
 ;;; Since: Phase B1
-(defn option-unwrap [o] :int
+(defn option-unwrap [o] #{Unsafe} :int
   ```c
   struct { bool is_some; int64_t value; } *opt = (void*)o;
   if (opt == NULL || !opt->is_some) {
@@ -94,7 +94,7 @@
 ;;;   (option-free my-opt)
 ;;;
 ;;; Since: Phase B1
-(defn option-free [o]
+(defn option-free [o] #{Unsafe}
   ```c
   free(o);
   return 0;
@@ -113,7 +113,7 @@
 ;;;   (option-must (some 3))  ; => 3
 ;;;
 ;;; Since: Phase R4
-(defn option-must [o :ptr<void>] :int
+(defn option-must [o :ptr<void>] #{Unsafe} :int
   ```c
   struct { bool is_some; int64_t value; } *opt = (void*)o;
   if (opt == NULL || !opt->is_some) {
@@ -136,7 +136,7 @@
 ;;;   (option-expect my-opt "expected a value")  ; => value or panic
 ;;;
 ;;; Since: Phase R4
-(defn option-expect [o :ptr<void> msg :cstr] :int
+(defn option-expect [o :ptr<void> msg :cstr] #{Unsafe} :int
   ```c
   struct { bool is_some; int64_t value; } *opt = (void*)o;
   if (opt == NULL || !opt->is_some) {
@@ -154,7 +154,7 @@
 ;;     none    -> init
 ;;     some(x) -> fn(x, init)
 ;;; __foldable_option_foldl -- foldl implementation for the option Foldable instance.
-(defn __foldable_option_foldl [ta init fn] :int
+(defn __foldable_option_foldl [ta init fn] #{Unsafe} :int
   ```c
   struct { bool is_some; int64_t value; } *opt =
       (struct { bool is_some; int64_t value; } *)(intptr_t)ta;
@@ -163,7 +163,7 @@
   ```)
 
 ;;; __foldable_option_foldr -- foldr implementation for the option Foldable instance.
-(defn __foldable_option_foldr [ta init fn] :int
+(defn __foldable_option_foldr [ta init fn] #{Unsafe} :int
   ```c
   struct { bool is_some; int64_t value; } *opt =
       (struct { bool is_some; int64_t value; } *)(intptr_t)ta;
@@ -181,7 +181,7 @@
 ;; return a none (NULL) option if the input is none.
 ;; The fn argument is expected to be a function pointer cast to int64_t.
 ;;; __functor_option_fmap -- fmap implementation for the option Functor instance.
-(defn __functor_option_fmap [container fn] :int
+(defn __functor_option_fmap [container fn] #{Unsafe} :int
   ```c
   struct { bool is_some; int64_t value; } *c =
       (struct { bool is_some; int64_t value; } *)(intptr_t)container;
@@ -214,7 +214,7 @@
 ;;   ap (some f) (some x) = some (f x)
 ;;   ap none _            = none
 ;;; __applicative_option_pure -- pure implementation for the option Applicative instance.
-(defn __applicative_option_pure [x] :int
+(defn __applicative_option_pure [x] #{Unsafe} :int
   ```c
   struct { bool is_some; int64_t value; } *r =
       malloc(sizeof(struct { bool is_some; int64_t value; }));
@@ -224,7 +224,7 @@
   ```)
 
 ;;; __applicative_option_ap -- ap implementation for the option Applicative instance.
-(defn __applicative_option_ap [ff fa] :int
+(defn __applicative_option_ap [ff fa] #{Unsafe} :int
   ```c
   struct { bool is_some; int64_t value; } *f_opt =
       (struct { bool is_some; int64_t value; } *)(intptr_t)ff;
@@ -247,7 +247,7 @@
 ;;   bind (some x) f = f x
 ;;   bind none     _ = none
 ;;; __monad_option_bind -- bind implementation for the option Monad instance.
-(defn __monad_option_bind [ma fn] :int
+(defn __monad_option_bind [ma fn] #{Unsafe} :int
   ```c
   struct { bool is_some; int64_t value; } *opt =
       (struct { bool is_some; int64_t value; } *)(intptr_t)ma;
@@ -269,7 +269,7 @@
 ;; Foldable instance for option.
 ;; foldl :: (b -> a -> b) -> b -> option a -> b
 ;; foldr :: (a -> b -> b) -> b -> option a -> b
-(defn __foldable_option_foldl [ta init fn] :int
+(defn __foldable_option_foldl [ta init fn] #{Unsafe} :int
   ```c
   struct { bool is_some; int64_t value; } *opt =
       (struct { bool is_some; int64_t value; } *)(intptr_t)ta;
@@ -277,7 +277,7 @@
   return ((int64_t(*)(int64_t, int64_t))(intptr_t)fn)(init, opt->value);
   ```)
 
-(defn __foldable_option_foldr [ta init fn] :int
+(defn __foldable_option_foldr [ta init fn] #{Unsafe} :int
   ```c
   struct { bool is_some; int64_t value; } *opt =
       (struct { bool is_some; int64_t value; } *)(intptr_t)ta;
@@ -295,7 +295,7 @@
 ;;   traverse f (some a) = some <$> f a
 ;;   traverse f none     = pure none
 ;;; __traversable_option_traverse -- traverse implementation for the option Traversable instance.
-(defn __traversable_option_traverse [ta fn] :int
+(defn __traversable_option_traverse [ta fn] #{Unsafe} :int
   ```c
   struct { bool is_some; int64_t value; } *opt =
       (struct { bool is_some; int64_t value; } *)(intptr_t)ta;
@@ -322,11 +322,11 @@
 ;;   empty = none
 ;;   alt-or a b = a if a is some, otherwise b
 ;;; __alternative_option_empty -- empty implementation for the option Alternative instance.
-(defn __alternative_option_empty [] :int
+(defn __alternative_option_empty [] #{Unsafe} :int
   (none))
 
 ;;; __alternative_option_alt_or -- alt-or implementation for the option Alternative instance.
-(defn __alternative_option_alt_or [a b] :int
+(defn __alternative_option_alt_or [a b] #{Unsafe} :int
   ```c
   struct { bool is_some; int64_t value; } *opt_a = (void*)a;
   if (opt_a && opt_a->is_some) return a;
@@ -354,7 +354,7 @@
 ;;;   (option-eq? (some 1) (some 1) (fn [a b] (= a b)))  ; => true
 ;;;
 ;;; Since: Phase E1
-(defn option-eq? [o1 o2 cmp-fn] :bool
+(defn option-eq? [o1 o2 cmp-fn] #{Unsafe} :bool
   ```c
   struct { bool is_some; int64_t value; } *a =
       (struct { bool is_some; int64_t value; } *)(intptr_t)o1;
@@ -374,7 +374,7 @@
 ;; Phase B1: Clone instance for option
 ;; Deep copies the option struct and its contained value (v1: int64_t only)
 ;;; __clone_option_clone -- clone implementation for the option Clone instance.
-(defn __clone_option_clone [x] :int
+(defn __clone_option_clone [x] #{Unsafe} :int
   ```c
   struct { bool is_some; int64_t value; } *opt =
       (struct { bool is_some; int64_t value; } *)(intptr_t)x;

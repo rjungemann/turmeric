@@ -1,0 +1,12 @@
+;; ET1-F: TUR-W0033 -- handler clause for Write is unreachable because the
+;; body only performs Log. The program still compiles and runs correctly;
+;; the compiler emits a warning.
+
+(defeffect Write [s :cstr] :nil)
+(defeffect Log [msg :cstr] :nil)
+
+(defn main [] :int
+  (handle
+    (do (perform (Log "logged")) 0)
+    (Log [msg] k) (do (println msg) (resume k nil))
+    (Write [s] k) (do (println s) (resume k nil))))

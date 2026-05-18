@@ -1,0 +1,13 @@
+;; ER3: typeclass method with a default body that satisfies the declared effect row.
+
+(defclass Greet [a]
+  (greeting [x] :cstr
+    "hello"))
+
+(definstance Greet [int]
+  (greeting [x] :cstr
+    "hello int"))
+
+(defn main [] :int
+  (println (.greeting 42))
+  0)

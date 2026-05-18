@@ -18,7 +18,7 @@
 ;;;
 ;;; Since: Phase B1
 ;; Create a new Pair
-(defn pair-new [a b] :int
+(defn pair-new [a b] #{Unsafe} :int
   ```c
   struct { int64_t first; int64_t second; } *p = malloc(sizeof(*p));
   p->first = a;
@@ -39,7 +39,7 @@
 ;;;
 ;;; Since: Phase B1
 ;; Get first element
-(defn pair-first [p] :int
+(defn pair-first [p] #{Unsafe} :int
   ```c
   struct { int64_t first; int64_t second; } *pair = (void*)(intptr_t)p;
   return pair->first;
@@ -58,7 +58,7 @@
 ;;;
 ;;; Since: Phase B1
 ;; Get second element
-(defn pair-second [p] :int
+(defn pair-second [p] #{Unsafe} :int
   ```c
   struct { int64_t first; int64_t second; } *pair = (void*)(intptr_t)p;
   return pair->second;
@@ -74,7 +74,7 @@
 ;;;
 ;;; Since: Phase B1
 ;; Free a Pair (does NOT free the contained values - shallow free)
-(defn pair-free [p]
+(defn pair-free [p] #{Unsafe}
   ```c
   free((void*)(intptr_t)p);
   ```)
@@ -83,7 +83,7 @@
 ;;; SINCE: Phase HKT §6 — Stdlib HKT migration
 ;; Bifunctor instance for Pair.
 ;; bimap :: (a -> c) -> (b -> d) -> pair a b -> pair c d
-(defn __bifunctor_pair_bimap [container fn-left fn-right] :int
+(defn __bifunctor_pair_bimap [container fn-left fn-right] #{Unsafe} :int
   ```c
   struct { int64_t first; int64_t second; } *p =
       (struct { int64_t first; int64_t second; } *)(intptr_t)container;
@@ -114,7 +114,7 @@
 ;;; Since: Phase E1
 ;; Phase E1: pair-eq? -- compare two Pairs element-wise using a comparator fn.
 ;; cmp-fn must be a fn [a :int b :int] :bool
-(defn pair-eq? [p1 p2 cmp-fn] :bool
+(defn pair-eq? [p1 p2 cmp-fn] #{Unsafe} :bool
   ```c
   struct { int64_t first; int64_t second; } *a = (void*)(intptr_t)p1;
   struct { int64_t first; int64_t second; } *b = (void*)(intptr_t)p2;

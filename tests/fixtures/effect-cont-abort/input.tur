@@ -1,0 +1,11 @@
+;; LC0/LC1: Dropping k without resuming under CK_UNIQUE (default) is permitted.
+;; An aborting handler simply ignores k and returns a default value.
+
+(defeffect Fail [msg :cstr] :int)
+
+(defn main [] :int
+  (let [result
+    (handle (+ (perform (Fail "oops")) 1)
+      (Fail [msg] k) -1)]
+    (println result))
+  0)

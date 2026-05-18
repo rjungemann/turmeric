@@ -1,0 +1,5 @@
+;; ET3-F4: compose-handlers rejects two handlers for the same effect (TUR-E0251).
+(defeffect Write [s :cstr] :nil)
+(defn test-overlap [h1 :(handler Write cstr nil) h2 :(handler Write cstr nil)] :nil
+  (compose-handlers h1 h2))
+(defn main [] :int 0)

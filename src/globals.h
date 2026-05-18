@@ -56,3 +56,6 @@ extern bool g_union_types_enabled;
 
 /* IT2: -Xintersection-types flag — enable intersection type syntax */
 extern bool g_intersection_types_enabled;
+
+/* ET4: -Xeffect-types enables full effect typing (TY_HANDLER, handler typing, ET4 checks) */
+extern bool g_effect_types_enabled;

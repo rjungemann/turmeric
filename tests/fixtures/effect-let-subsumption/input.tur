@@ -1,0 +1,13 @@
+;; ET1-F: let-binding with explicit effect annotation is enforced.
+;; A function declared #{Write} that only performs Write is accepted.
+;; The inferred row is subsumed by the declared row.
+
+(defeffect Write [s :cstr] :nil)
+
+(defn do-write [s :cstr] #{Write} :nil
+  (perform (Write s)))
+
+(defn main [] :int
+  (handle
+    (do (do-write "let subsumption ok") 0)
+    (Write [s] k) (do (println s) (resume k nil))))

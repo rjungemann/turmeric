@@ -6,6 +6,18 @@
 ;; v1 limitation: handler bodies cannot capture outer-scope variables
 ;; (no closure analysis for effect handler functions yet).
 
+;; -- IO (parent of Write, Read) -------------------------------------------
+;;; IO -- base effect for all I/O operations.
+;;;
+;;; Returns:
+;;;   nil
+;;;
+;;; Example:
+;;;   (defeffect Write [s :cstr] :nil ^extends IO)
+;;;
+;;; Since: ET4
+(defeffect IO [] :nil)
+
 ;; -- Write ------------------------------------------------------------------
 ;; Perform a string write operation.
 ;;; Write -- declare an effect that writes a string to the environment.
@@ -20,7 +32,7 @@
 ;;;   (perform (Write "hello"))  ; => nil
 ;;;
 ;;; Since: Phase 19
-(defeffect Write [s :cstr] :nil)
+(defeffect Write [s :cstr] :nil ^extends IO)
 
 ;; -- Fail -------------------------------------------------------------------
 ;; Signal a failure with a message string.  A handler may recover or abort.
@@ -49,7 +61,7 @@
 ;;;   (perform (Read))  ; => 42
 ;;;
 ;;; Since: Phase 19
-(defeffect Read [] :int)
+(defeffect Read [] :int ^extends IO)
 
 ;; -- GetEnv -----------------------------------------------------------------
 ;; Look up a named environment variable; returns a cstr (or nil if absent).
@@ -133,7 +145,7 @@
 ;;;   (read-int-console)  ; => 7
 ;;;
 ;;; Since: Phase 19
-(defn read-int-console [] :int
+(defn read-int-console [] #{Unsafe} :int
   ```c
   int _v = 0;
   scanf("%d", &_v);

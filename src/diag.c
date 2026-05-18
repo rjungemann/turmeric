@@ -113,9 +113,20 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0018_NOT_SERIALIZABLE:                 return "TUR-E0018";
         case TUR_E0019_SERIAL_SHIFT_OUTSIDE_RESET:       return "TUR-E0019";
         case TUR_E0021_PRIVATE_EFFECT:                   return "TUR-E0021";
+        case TUR_E0254_INFINITE_EFFECT_ROW:              return "TUR-E0254";
+        /* ET3: handler typing errors */
+        case TUR_E0251_HANDLER_OVERLAP:                  return "TUR-E0251";
+        case TUR_E0252_HANDLER_RESULT_MISMATCH:          return "TUR-E0252";
+        /* ET4: effect scope errors */
+        case TUR_E0250_ROW_VAR_ESCAPES_SCOPE:            return "TUR-E0250";
+        case TUR_E0253_EFFECT_NOT_IN_SCOPE:              return "TUR-E0253";
         case TUR_W0030_STRICT_EFFECTS_UNANNOTATED: return "TUR-W0030";
         case TUR_W0031_EFFECT_OVER_ANNOTATED:      return "TUR-W0031";
         case TUR_W0032_ROW_VAR_ALWAYS_CONCRETE:    return "TUR-W0032";
+        case TUR_W0033_UNREACHABLE_HANDLER:        return "TUR-W0033";
+        case TUR_W0034_ROW_VAR_GENERALISED:        return "TUR-W0034";
+        /* LC0: Linear continuation warnings */
+        case TUR_W0035_UNSAFE_MULTISHOT_CONT:      return "TUR-W0035";
         /* LT1: Linear type errors */
         case TUR_E0100_LINEAR_DROPPED:             return "TUR-E0100";
         case TUR_E0101_LINEAR_USE_AFTER_CONSUME:   return "TUR-E0101";
@@ -135,6 +146,12 @@ const char *diag_code_to_string(DiagCode code) {
         /* IT3: Intersection type errors */
         case TUR_E0350_INTERSECTION_UNSATISFIABLE:   return "TUR-E0350";
         case TUR_E0351_INTERSECTION_MEMBER_MISMATCH: return "TUR-E0351";
+        /* MS2: Multi-shot continuation capture analysis */
+        case TUR_E0500_MULTISHOT_UNIQUE_CAPTURE:      return "TUR-E0500";
+        case TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER: return "TUR-E0501";
+        case TUR_E0502_MULTISHOT_RESUME_IN_ATOMIC:    return "TUR-E0502";
+        /* MS4: ^unsafe-multishot deprecation */
+        case TUR_W0400_UNSAFE_MULTISHOT_DEPRECATED:   return "TUR-W0400";
         default:                          return "";
     }
 }
@@ -161,9 +178,20 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0018") == 0) return TUR_E0018_NOT_SERIALIZABLE;
     if (strcmp(s, "TUR-E0019") == 0) return TUR_E0019_SERIAL_SHIFT_OUTSIDE_RESET;
     if (strcmp(s, "TUR-E0021") == 0) return TUR_E0021_PRIVATE_EFFECT;
+    if (strcmp(s, "TUR-E0254") == 0) return TUR_E0254_INFINITE_EFFECT_ROW;
+    /* ET3: handler typing errors */
+    if (strcmp(s, "TUR-E0251") == 0) return TUR_E0251_HANDLER_OVERLAP;
+    if (strcmp(s, "TUR-E0252") == 0) return TUR_E0252_HANDLER_RESULT_MISMATCH;
+    /* ET4: effect scope errors */
+    if (strcmp(s, "TUR-E0250") == 0) return TUR_E0250_ROW_VAR_ESCAPES_SCOPE;
+    if (strcmp(s, "TUR-E0253") == 0) return TUR_E0253_EFFECT_NOT_IN_SCOPE;
     if (strcmp(s, "TUR-W0030") == 0) return TUR_W0030_STRICT_EFFECTS_UNANNOTATED;
     if (strcmp(s, "TUR-W0031") == 0) return TUR_W0031_EFFECT_OVER_ANNOTATED;
     if (strcmp(s, "TUR-W0032") == 0) return TUR_W0032_ROW_VAR_ALWAYS_CONCRETE;
+    if (strcmp(s, "TUR-W0033") == 0) return TUR_W0033_UNREACHABLE_HANDLER;
+    if (strcmp(s, "TUR-W0034") == 0) return TUR_W0034_ROW_VAR_GENERALISED;
+    /* LC0: Linear continuation warnings */
+    if (strcmp(s, "TUR-W0035") == 0) return TUR_W0035_UNSAFE_MULTISHOT_CONT;
     /* LT1: Linear type errors */
     if (strcmp(s, "TUR-E0100") == 0) return TUR_E0100_LINEAR_DROPPED;
     if (strcmp(s, "TUR-E0101") == 0) return TUR_E0101_LINEAR_USE_AFTER_CONSUME;
@@ -183,6 +211,12 @@ DiagCode diag_code_from_string(const char *s) {
     /* IT3: Intersection type errors */
     if (strcmp(s, "TUR-E0350") == 0) return TUR_E0350_INTERSECTION_UNSATISFIABLE;
     if (strcmp(s, "TUR-E0351") == 0) return TUR_E0351_INTERSECTION_MEMBER_MISMATCH;
+    /* MS2: Multi-shot continuation capture analysis */
+    if (strcmp(s, "TUR-E0500") == 0) return TUR_E0500_MULTISHOT_UNIQUE_CAPTURE;
+    if (strcmp(s, "TUR-E0501") == 0) return TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER;
+    if (strcmp(s, "TUR-E0502") == 0) return TUR_E0502_MULTISHOT_RESUME_IN_ATOMIC;
+    /* MS4: ^unsafe-multishot deprecation */
+    if (strcmp(s, "TUR-W0400") == 0) return TUR_W0400_UNSAFE_MULTISHOT_DEPRECATED;
     return DIAG_CODE_NONE;
 }
 
@@ -472,6 +506,21 @@ static const DiagExplanation diag_explanations_[] = {
       "  2. Expose a public function in mymod that encapsulates the effect and\n"
       "     provides the handler, so consumers never touch Ask directly.\n"
     },
+    { TUR_E0254_INFINITE_EFFECT_ROW,
+      "TUR-E0254: Infinite effect row (occurs-check failure)\n"
+      "\n"
+      "Unifying an effect row variable with a row that contains the same variable\n"
+      "would produce an infinite effect row. This usually means a function with an\n"
+      "open row variable is being passed to a parameter that constrains the same\n"
+      "variable.\n"
+      "\n"
+      "Fix: ensure the actual argument's effect row does not contain the same row\n"
+      "variable as the parameter's declared row, e.g.:\n"
+      "  (defn run-e [f :(fn [] #{e} :nil)] #{e} :nil (f))\n"
+      "  ;; pass a concrete-row function, not one with the same variable:\n"
+      "  (defn pure-f [] #{} :nil nil)\n"
+      "  (run-e pure-f)  ; ok\n",
+    },
     { TUR_W0030_STRICT_EFFECTS_UNANNOTATED,
       "TUR-W0030: Unannotated effectful function (--strict-effects)\n"
       "\n"
@@ -503,6 +552,48 @@ static const DiagExplanation diag_explanations_[] = {
       "Fix: replace the row variable with the concrete effect set, e.g.:\n"
       "  (defn run-twice [f :(fn [] #{Ask} :int)] #{Ask} :int ...)\n",
     },
+    { TUR_W0033_UNREACHABLE_HANDLER,
+      "TUR-W0033: Handler clause is unreachable\n"
+      "\n"
+      "A (handle ...) expression contains a handler clause for an effect that the\n"
+      "handled body never actually performs. The clause will never be triggered.\n"
+      "\n"
+      "This usually means the effect was already handled by an inner (handle ...) or\n"
+      "the body was refactored and the handler was not updated.\n"
+      "\n"
+      "Fix: remove the unreachable handler clause, or ensure the body performs the\n"
+      "effect, e.g.:\n"
+      "  (handle (perform (Write \"hi\"))         ; body actually performs Write\n"
+      "    (Write [s] k) (do (println s) (resume k nil)))\n",
+    },
+    { TUR_W0034_ROW_VAR_GENERALISED,
+      "TUR-W0034: Row variable was auto-generalised\n"
+      "\n"
+      "Under --strict-effects, a function whose effect-row annotation uses a bare\n"
+      "row variable (e.g. #{e}) has that variable implicitly generalised as if\n"
+      "you had written (forall [e] ...). This warning suggests making the\n"
+      "quantification explicit for clarity.\n"
+      "\n"
+      "Fix: add an explicit forall binder:\n"
+      "  ; Before (implicit generalisation triggers TUR-W0034):\n"
+      "  (defn run [f :(fn [] #{e} :int)] #{e} :int (f))\n"
+      "\n"
+      "  ; After (explicit forall, no warning):\n"
+      "  (defn run [f :(forall [e] fn [] #{e} :int)] #{e} :int (f))\n",
+    },
+    /* LC0: Linear continuation warnings */
+    { TUR_W0035_UNSAFE_MULTISHOT_CONT,
+      "TUR-W0035: Unsafe multi-shot continuation\n"
+      "\n"
+      "A handler clause was annotated ^unsafe-multishot on its continuation k.\n"
+      "This disables ownership tracking, allowing k to be resumed any number of\n"
+      "times, but the compiler cannot verify that captured resources are safe to\n"
+      "duplicate. Use this only when you understand the memory implications.\n"
+      "\n"
+      "Fix: if you intend exactly-once semantics, use ^linear k instead.\n"
+      "If you need multi-shot, ensure all captured bindings are copyable (CK_COPY)\n"
+      "or reference-counted.\n",
+    },
     /* LT1: Linear type errors */
     { TUR_E0100_LINEAR_DROPPED,
       "TUR-E0100: Linear value dropped without being consumed\n"
@@ -527,7 +618,22 @@ static const DiagExplanation diag_explanations_[] = {
       "    (close-file fh))\n"
       "\n"
       "Enable with: tur -Xlinear myfile.tur\n"
-      "         or: tur -Xsubstructural myfile.tur\n",
+      "         or: tur -Xsubstructural myfile.tur\n"
+      "\n"
+      "In effect handler clauses:\n"
+      "A ^linear continuation k must be resumed or discontinued exactly once.\n"
+      "If the handler body exits without calling (resume k ...) or\n"
+      "(discontinue k ...), TUR-E0100 is emitted at the k binding site.\n"
+      "\n"
+      "  (handle body\n"
+      "    (Ask [] ^linear k)\n"
+      "    42)   ; ERROR: ^linear k dropped without resume or discontinue\n"
+      "\n"
+      "Fix: ensure every code path through the handler body calls resume or\n"
+      "discontinue exactly once:\n"
+      "  (handle body\n"
+      "    (Ask [] ^linear k)\n"
+      "    (resume k 42))  ; OK\n",
     },
     { TUR_E0101_LINEAR_USE_AFTER_CONSUME,
       "TUR-E0101: Linear value used after being moved or consumed\n"
@@ -547,7 +653,20 @@ static const DiagExplanation diag_explanations_[] = {
       "Fix: restructure so each linear value flows through exactly one code path.\n"
       "\n"
       "Enable with: tur -Xlinear myfile.tur\n"
-      "         or: tur -Xsubstructural myfile.tur\n",
+      "         or: tur -Xsubstructural myfile.tur\n"
+      "\n"
+      "In effect handler clauses:\n"
+      "A ^linear continuation k may be resumed or discontinued at most once.\n"
+      "Calling (resume k ...) or (discontinue k ...) a second time emits\n"
+      "TUR-E0101 at the second call site.\n"
+      "\n"
+      "  (handle body\n"
+      "    (Ask [] ^linear k)\n"
+      "    (+ (resume k 1) (resume k 2)))  ; ERROR: ^linear k used twice\n"
+      "\n"
+      "Fix: ensure at most one resume or discontinue is reachable per handler\n"
+      "invocation. For multi-shot continuations, use ^unsafe-multishot k\n"
+      "(see TUR-W0035).\n",
     },
     { TUR_E0102_LINEAR_COPY,
       "TUR-E0102: Cannot copy a linear value\n"
@@ -643,7 +762,20 @@ static const DiagExplanation diag_explanations_[] = {
       "  (let [^unique x 42]\n"
       "    (println x))  ; OK: single use\n"
       "\n"
-      "Enable with: turc -Xunique-types myfile.tur\n",
+      "Enable with: turc -Xunique-types myfile.tur\n"
+      "\n"
+      "In effect handler clauses:\n"
+      "Every handler continuation k is one-shot (unique) by default. Calling\n"
+      "(resume k ...) or (discontinue k ...) a second time emits TUR-E0201.\n"
+      "\n"
+      "  (handle body\n"
+      "    (Ask [] k)\n"
+      "    (+ (resume k 1) (resume k 2)))  ; ERROR: k already resumed\n"
+      "\n"
+      "Fix: call resume or discontinue at most once per handler invocation.\n"
+      "For continuations that must be called exactly once, use ^linear k\n"
+      "(emits TUR-E0100 if dropped). For multi-shot continuations, use\n"
+      "^unsafe-multishot k (see TUR-W0035).\n",
     },
     { TUR_E0202_UNIQUE_IN_RC,
       "TUR-E0202: Cannot wrap a unique value in rc<T>\n"
@@ -786,6 +918,157 @@ static const DiagExplanation diag_explanations_[] = {
       "consider ^affine or ^linear instead.\n"
       "\n"
       "Enable with: tur -Xsubstructural myfile.tur\n",
+    },
+    /* ET4: effect scope errors */
+    { TUR_E0250_ROW_VAR_ESCAPES_SCOPE,
+      "TUR-E0250: Effect row variable escapes its quantifier scope\n"
+      "\n"
+      "A row variable introduced by forall [e] is being used outside the\n"
+      "quantifier scope that defined it.  Row variables are only valid within\n"
+      "the type expression that quantifies over them.\n"
+      "\n"
+      "Example (bad):\n"
+      "  ;; forall [e] row variable 'e' referenced outside its scope\n"
+      "\n"
+      "Fix: ensure the row variable is only referenced within the forall body,\n"
+      "or introduce a new forall quantifier at the appropriate scope level.\n",
+    },
+    { TUR_E0253_EFFECT_NOT_IN_SCOPE,
+      "TUR-E0253: Effect not in scope at perform site\n"
+      "\n"
+      "A (perform (EffectName ...)) call uses an effect that is not declared\n"
+      "in the current scope.  This can happen if the effect has not been\n"
+      "defined (missing defeffect), is defined in another module without being\n"
+      "imported, or is declared with ^private and is not accessible here.\n"
+      "\n"
+      "Example (bad):\n"
+      "  (perform (Foo 1))  ; error if Foo is not in scope\n"
+      "\n"
+      "Fix: define the effect with defeffect or import it from the module\n"
+      "that owns it before using perform.\n",
+    },
+    /* ET3: handler typing errors */
+    { TUR_E0251_HANDLER_OVERLAP,
+      "TUR-E0251: Overlapping handler effects\n"
+      "\n"
+      "Two handlers composed via compose-handlers both handle the same algebraic\n"
+      "effect.  Each effect may only be handled once in a composed handler.\n"
+      "\n"
+      "Example (bad):\n"
+      "  (defeffect Write [s :cstr] :nil)\n"
+      "  (compose-handlers h1 h2)  ; error if both h1 and h2 handle Write\n"
+      "\n"
+      "Fix: ensure that each composed handler handles a distinct set of effects.\n",
+    },
+    { TUR_E0252_HANDLER_RESULT_MISMATCH,
+      "TUR-E0252: Handler clause result type mismatch\n"
+      "\n"
+      "The result type of a handler clause body does not match the result type of\n"
+      "the enclosing handle expression.  All handler clause bodies and the handled\n"
+      "expression body must produce the same type.\n"
+      "\n"
+      "Example (bad):\n"
+      "  (defeffect Write [s :cstr] :nil)\n"
+      "  (handle\n"
+      "    (do (perform (Write \"x\")) 0)  ; handle expression returns :int\n"
+      "    (Write [s] k) \"wrong type\")    ; error: clause returns :cstr\n"
+      "\n"
+      "Fix: ensure the handler clause body produces the same type as the handled\n"
+      "expression body.  Use (resume k value) to continue with a value of the\n"
+      "correct type.\n",
+    },
+    /* MS2: Multi-shot continuation capture analysis */
+    { TUR_E0500_MULTISHOT_UNIQUE_CAPTURE,
+      "TUR-E0500: Multi-shot handler captures a non-copyable value\n"
+      "\n"
+      "A handler clause annotated with ^multishot captures a binding whose\n"
+      "CopyKind is CK_UNIQUE (move-only) or CK_LINEAR (exactly-once).  Because\n"
+      "^multishot continuations may be resumed any number of times via snapshots,\n"
+      "each resume would re-enter the handler body, accessing the same non-copyable\n"
+      "binding multiple times -- violating its ownership semantics.\n"
+      "\n"
+      "Example of the error:\n"
+      "  (defstruct MyData [x :int])\n"
+      "  (defeffect Ask [] :int)\n"
+      "  (let [d (MyData 42)]\n"
+      "    (handle (perform (Ask))\n"
+      "      (Ask [] ^multishot k)\n"
+      "        (resume k (.-x d))))  ; ERROR: d is move-only (TUR-E0500)\n"
+      "\n"
+      "Fix options:\n"
+      "  1. Change the captured type to be Copy (e.g. use primitive int, not a struct):\n"
+      "     (let [x 42]\n"
+      "       (handle (perform (Ask))\n"
+      "         (Ask [] ^multishot k) (resume k x)))  ; OK: int is CK_COPY\n"
+      "\n"
+      "  2. Use ^unsafe-multishot instead, which does not check captures\n"
+      "     (deprecated -- emits TUR-W0035 and TUR-W0400):\n"
+      "     (Ask [] ^unsafe-multishot k) (resume k ...)\n"
+      "\n"
+      "  3. If the struct is `:copy`, the capture is allowed:\n"
+      "     (defstruct CopyData :copy [x :int])\n",
+    },
+    { TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER,
+      "TUR-E0501: ^multishot annotation outside a handler continuation\n"
+      "\n"
+      "The ^multishot annotation is only valid as the continuation-kind\n"
+      "annotation in a (handle ...) clause:\n"
+      "\n"
+      "  (handle body\n"
+      "    (Effect [params] ^multishot k) handler-body)\n"
+      "\n"
+      "Using ^multishot as a let-binding annotation, a function parameter\n"
+      "annotation, or in any other position is not supported.\n"
+      "\n"
+      "Example of the error:\n"
+      "  (let [^multishot x 5] ...)   ; ERROR: ^multishot not valid here\n"
+      "\n"
+      "Fix: remove the ^multishot annotation.  If you need multi-shot\n"
+      "continuation semantics, annotate the k parameter in a handler clause:\n"
+      "  (handle body\n"
+      "    (Effect [] ^multishot k) (resume k v))\n",
+    },
+    { TUR_E0502_MULTISHOT_RESUME_IN_ATOMIC,
+      "TUR-E0502: Cannot resume a ^multishot continuation inside atomically\n"
+      "\n"
+      "Resuming a multi-shot continuation inside an (atomically ...) block is\n"
+      "forbidden.  Effect-handler fiber resumption runs arbitrary code outside\n"
+      "STM semantics, which can observe or modify non-transactional state and\n"
+      "violate the atomicity guarantee.\n"
+      "\n"
+      "Example of the error:\n"
+      "  (atomically\n"
+      "    (handle (perform (Ask))\n"
+      "      (Ask [] ^multishot k)\n"
+      "        (resume k 10)))  ; ERROR: ^multishot resume inside atomically\n"
+      "\n"
+      "Fix: move the handle expression outside the atomically block, or use\n"
+      "a plain STM operation instead of a ^multishot effect handler.\n",
+    },
+    /* MS4: ^unsafe-multishot deprecation */
+    { TUR_W0400_UNSAFE_MULTISHOT_DEPRECATED,
+      "TUR-W0400: ^unsafe-multishot is deprecated\n"
+      "\n"
+      "The ^unsafe-multishot annotation allowed resuming a continuation k any\n"
+      "number of times without capture-safety checks.  It is deprecated now that\n"
+      "^multishot provides the same multi-shot semantics with safe capture analysis\n"
+      "(TUR-E0500 checks that only copyable values are captured).\n"
+      "\n"
+      "^unsafe-multishot will be removed in a future major version.\n"
+      "\n"
+      "Example triggering this warning:\n"
+      "  (handle body\n"
+      "    (Ask [] ^unsafe-multishot k)  ; TUR-W0035 + TUR-W0400\n"
+      "      (+ (resume k 1) (resume k 2)))\n"
+      "\n"
+      "Fix: replace ^unsafe-multishot with ^multishot:\n"
+      "  (handle body\n"
+      "    (Ask [] ^multishot k)          ; safe: captures are checked\n"
+      "      (+ (resume k 1) (resume k 2)))\n"
+      "\n"
+      "If the handler body captures a move-only or linear binding and you cannot\n"
+      "make it copyable, you will need to restructure the code to avoid multi-shot\n"
+      "semantics or wrap the captured value in a copyable container.\n",
     },
 };
 

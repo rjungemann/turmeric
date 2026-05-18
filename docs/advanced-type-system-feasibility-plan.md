@@ -1,6 +1,6 @@
 # Advanced Type System Features — Feasibility Plan for Turmeric
 
-> **Status:** In Progress — v3 features partially implemented; v2 prerequisites complete  
+> **Status:** In Progress — v3 features substantially complete; v4 work (Contract Types, Sized Types) not started  
 > **Target:** v3 or later  
 > **Prerequisites:** Phase 19 (Algebraic Effects) complete; HKT/HRT/GADT roadmap (v2) complete  
 > **Related:** [higher-ranked-types-plan.md](archive/higher-ranked-types-plan.md), [higher-kinded-types-plan.md](archive/higher-kinded-types-plan.md), [gadts-plan.md](archive/gadts-plan.md)
@@ -36,7 +36,7 @@ This document explores **type system features not yet considered** for Turmeric 
 | [Session Types](#5-session-types) | Medium | High | 📋 Draft — Not Started |
 | [Refinement Types](#6-refinement-types) | Medium | High | ⏸ Deferred |
 | [Intersection & Union Types](#7-intersection--union-types) | High | Medium | ✅ IT0–IT4 substantially complete (`-Xunion-types`, `-Xintersection-types`) |
-| [Effect Types (Row Polymorphism)](#8-effect-types-row-polymorphism) | High | Medium | 📋 Draft — Not Started |
+| [Effect Types (Row Polymorphism)](#8-effect-types-row-polymorphism) | High | Medium | ✅ ET0–ET4 complete (`-Xeffect-types`); LC0–LC3, MS0–MS4 complete |
 | [Sized Types](#9-sized-types) | Medium | Medium-High | 📋 Draft — Not Started |
 | [Contract Types](#10-contract-types) | Medium | Medium | 📋 Draft — Not Started |
 
@@ -1207,19 +1207,17 @@ defn handle-io [e : Io, h : (-> IoError a)] : NoEffect a
 
 ### Recommendation
 
-**✅ ACCEPT — Natural extension of Phase 19, provides type safety for effects.**
+**✅ IMPLEMENTED — ET0–ET4 complete (gated behind `-Xeffect-types`); LC0–LC3 (linear continuations) and MS0–MS4 (multi-shot continuations) complete.**
 
 Effect types provide:
 1. Type-safe effect composition
-2. Effect polymorphism for reusable abstractions
+2. Effect polymorphism for reusable abstractions (`forall [e]` row quantification)
 3. Better error messages for effect usage
 4. Foundation for effect-based optimizations
 
-**Implementation priority:** High (after HRT, as it depends on rank-N types)
+`-Xeffect-types` implies `--strict-effects`. Handler typing (`TY_HANDLER`), effect hierarchy (`Write ≤ IO`, etc.), and full stdlib annotation are all shipped. Linear continuations (`^linear k`, `^unsafe-multishot`) and multi-shot continuations (`^multishot`, `CK_MULTISHOT`, snapshot runtime) are complete as of v3/v5 post-work.
 
-**Prerequisites:** Phase 19 (Algebraic Effects), HRT Phase HRT1 (Rank-2 types)
-
-**Note:** Effect types should be designed in conjunction with the existing effect system to ensure smooth integration.
+See [effects-continuations-tasks.md](effects-continuations-tasks.md) for full phase details and [guides/effects-system-guide.md](guides/effects-system-guide.md) for the user guide.
 
 ---
 
@@ -1503,7 +1501,7 @@ Contract types provide:
 | [Uniqueness Types](#3-uniqueness-types) | Low | Medium | ✅ Excellent | ✅ Excellent | Medium | **✅ UT0–UT1 complete** |
 | [Intersection & Union](#7-intersection--union-types) | Medium | High | ✅ Good | ✅ Good | Medium | **✅ IT0–IT4 substantially complete** |
 | [Session Types](#5-session-types) | High | High | ✅ Good | ✅ Good | Medium | **📋 Draft — Not Started** |
-| [Effect Types](#8-effect-types-row-polymorphism) | High | High | ✅ Good | ✅ Excellent | Medium | **📋 Draft — Not Started** |
+| [Effect Types](#8-effect-types-row-polymorphism) | High | High | ✅ Good | ✅ Excellent | Medium | **✅ ET0–ET4 complete; LC0–LC3, MS0–MS4 complete** |
 | [Sized Types](#9-sized-types) | Medium | Medium | ✅ Excellent | ✅ Good | Low | **📋 Draft — Not Started** |
 | [Contract Types](#10-contract-types) | Medium | Medium | ✅ Good | ✅ Good | Medium | **📋 Draft — Not Started** |
 | [Dependent Types](#2-dependent-types) | Very High | High | ❌ Poor | ✅ Good | Low | **⏸ Deferred** |
@@ -1535,16 +1533,16 @@ Contract types provide:
 
 ### Phase 2: Effect Types & Session Types (v3–v4)
 
-**Priority:** High
+**Status:** Effect Types complete; Session Types not started.
 
 | Feature | Phases | Duration | Dependencies | Status |
 |---|---|---|---|---|
-| Effect Types (Row Polymorphism) | ET0–ET4 | 8-12 weeks | Phase 19 + HRT1 | 📋 Not Started |
+| Effect Types (Row Polymorphism) | ET0–ET4 | — | Phase 19 + HRT1 | ✅ Complete (`-Xeffect-types`) |
+| Linear Continuations | LC0–LC3 | — | LT0–LT4 + ET0–ET4 | ✅ Complete |
+| Multi-Shot Continuations | MS0–MS4 | — | LC0–LC3 | ✅ Complete (MS4: `^unsafe-multishot` removal deferred) |
 | Session Types | SS0–SS4 | 8-12 weeks | Linear Types + Threads | 📋 Not Started |
 
-**Note:** HRT is complete. Effect rows (ER0–ER6) are substantially complete. ET0 (explicit effect row syntax in function types) can now proceed.
-
-See [effect-types-row-polymorphism-plan.md](effect-types-row-polymorphism-plan.md) and [upcoming/session-types-plan.md](upcoming/session-types-plan.md).
+See [effects-continuations-tasks.md](effects-continuations-tasks.md) and [upcoming/session-types-plan.md](upcoming/session-types-plan.md).
 
 ### Phase 3: Contract Types & Sized Types (v4)
 
@@ -1588,7 +1586,7 @@ All advanced type system features should be gated behind feature flags:
 | Intersection Types | `-Xintersection-types` | Off | ✅ Implemented |
 | GADTs | `-Xgadt` | Off | ✅ Implemented (G0–G4) |
 | Session Types | `-Xsessions` | Off | 📋 Not implemented yet |
-| Effect Types | `-Xeffect-types` | Off | 📋 Not implemented yet |
+| Effect Types | `-Xeffect-types` | Off | ✅ Implemented (ET0–ET4, LC0–LC3, MS0–MS4) |
 | Contract Types | `-Xcontracts` | Off | 📋 Not implemented yet |
 | Sized Types | `-Xsized-types` | Off | 📋 Not implemented yet |
 
@@ -1866,7 +1864,9 @@ v3 (In Progress)
 ├── Uniqueness Types (UT0-UT1)          ✅ complete; UT2-UT3 deferred
 ├── Substructural Types (ST0-ST3)       ✅ complete
 ├── Union/Intersection Types (IT0-IT4)  ✅ substantially complete
-├── Effect Types (ET0-ET4)              📋 not started
+├── Effect Types (ET0-ET4)              ✅ complete (-Xeffect-types)
+├── Linear Continuations (LC0-LC3)      ✅ complete
+├── Multi-Shot Continuations (MS0-MS4)  ✅ complete (MS4 minor: ^unsafe-multishot removal deferred)
 └── Session Types (SS0-SS4)             📋 not started
 
 v4 (Planned)
@@ -1909,4 +1909,4 @@ v5+ (Deferred)
 
 ---
 
-*Last updated: 2026-05-17*
+*Last updated: 2026-05-17 (ET0–ET4, LC0–LC3, MS0–MS4 complete)*

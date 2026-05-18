@@ -11,6 +11,7 @@
 #include "typeclass.h"  /* Phase 15 */
 #include "types.h"
 #include "effect.h"    /* Phase 19 */
+#include "globals.h"   /* ET4: g_effect_types_enabled */
 
 /* Phase U5: External declarations for global unsafe linting configuration */
 extern uint32_t g_unsafe_max_lines;
@@ -40,6 +41,10 @@ extern bool g_substructural_enabled;
 /* IT0: Union types feature flag */
 extern bool g_union_types_enabled;
 extern bool g_intersection_types_enabled;
+
+/* MS2: Track whether we're inside an atomically block for TUR-E0502 checking.
+ * Declared here (before elab_resume) and also set in elab_atomically below. */
+static bool elab_in_atomically = false;
 
 #define ELAB_MAX_MACRO_EXPANSION_DEPTH 256
 
@@ -683,6 +688,10 @@ typedef struct Elab {
     /* ST0: Substructural types */
     const Symbol *sym_caret_affine;     /* ^affine -- affine value annotation */
     const Symbol *sym_caret_relevant;   /* ^relevant -- relevant value annotation */
+    const Symbol *sym_caret_extends;    /* ^extends -- effect hierarchy parent annotation (ET4) */
+    /* LC0: multi-shot continuation annotations */
+    const Symbol *sym_caret_unsafe_multishot; /* ^unsafe-multishot -- multi-shot k (ownership not tracked) */
+    const Symbol *sym_caret_multishot;        /* ^multishot -- MS1: safe multi-shot via snapshot semantics */
     const Symbol *sym_map_new;    /* map-new - create new map */
     const Symbol *sym_assoc;      /* assoc - insert/update key-value */
     const Symbol *sym_dissoc;     /* dissoc - delete key */
@@ -745,6 +754,9 @@ typedef struct Elab {
     const Symbol *sym_discontinue;/* discontinue */
     const Symbol *sym_k;          /* continuation parameter name k */
     const Symbol *sym_effect_unsafe; /* built-in effect name: Unsafe */
+    /* ET3: handler type expression and compose-handlers */
+    const Symbol *sym_handler_type;     /* "handler" type expression keyword */
+    const Symbol *sym_compose_handlers; /* "compose-handlers" call form */
     /* Phase U3: Unsafe primitives - pointer operations */
     const Symbol *sym_ptr_deref;   /* ptr-deref */
     const Symbol *sym_ptr_write;  /* ptr-write */
@@ -1339,6 +1351,9 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* ST0: Substructural types */
     e->sym_caret_affine    = intern_cstr(st, "^affine");
     e->sym_caret_relevant  = intern_cstr(st, "^relevant");
+    e->sym_caret_extends   = intern_cstr(st, "^extends");  /* ET4: effect hierarchy */
+    e->sym_caret_unsafe_multishot = intern_cstr(st, "^unsafe-multishot"); /* LC0 */
+    e->sym_caret_multishot        = intern_cstr(st, "^multishot");        /* MS1 */
     e->sym_map_new = intern_cstr(st, "map-new");
     e->sym_assoc = intern_cstr(st, "assoc");
     e->sym_dissoc = intern_cstr(st, "dissoc");
@@ -1403,6 +1418,9 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_cont_pred = intern_cstr(st, "cont?");
     e->sym_effect_unsafe = intern_cstr(st, EFFECT_NAME_UNSAFE);
     effect_env_register_builtin_unsafe(e->effect_env, e->arena, e->sym_effect_unsafe);
+    /* ET3: handler type expression and compose-handlers */
+    e->sym_handler_type     = intern_cstr(st, "handler");
+    e->sym_compose_handlers = intern_cstr(st, "compose-handlers");
     /* Phase U3: Unsafe primitives - pointer operations */
     e->sym_ptr_deref = intern_cstr(st, "ptr-deref");
     e->sym_ptr_write = intern_cstr(st, "ptr-write");
@@ -3511,6 +3529,13 @@ static Expr *elab_let(Elab *e, const Form *call) {
                     is_affine_ann = true;
                 } else if (cur->as.sym == e->sym_caret_relevant) {
                     is_relevant_ann = true;
+                } else if (cur->as.sym == e->sym_caret_multishot) {
+                    /* MS2: ^multishot is only valid on handler continuation bindings */
+                    diag_emit_with_code(DIAG_ERROR, cur->span,
+                        TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER,
+                        "'^multishot' annotation is only valid on a handler continuation, "
+                        "not on a let binding");
+                    rc = -1; keep_going = false; break;
                 } else {
                     break; /* Not an annotation -- this is the binding name */
                 }
@@ -5509,6 +5534,8 @@ static Expr *elab_serial_shift(Elab *e, const Form *call) {
 
 /* Forward declaration (defined after elab_defeffect) */
 static Expr *elab_handle(Elab *e, const Form *call);
+/* ET3-E: Forward declaration for compose-handlers */
+static Expr *elab_compose_handlers(Elab *e, const Form *call);
 
 /* (try-with body (EffectName [params] k) handler ...)
  * Sugar: identical to (handle body ...).
@@ -5648,12 +5675,41 @@ static Expr *elab_defeffect(Elab *e, const Form *call) {
         return NULL;
     }
     
+    /* ET4: Parse optional ^extends ParentName after the return type */
+    const Symbol *parent_name = NULL;
+    uint32_t extends_start = name_idx + 3; /* items after (defeffect [^private] Name [params] :ret) */
+    for (uint32_t xi = extends_start; xi + 1 < (uint32_t)call->as.list.len; xi++) {
+        Form *f = call->as.list.items[xi];
+        if (f->tag == F_SYM && f->as.sym == e->sym_caret_extends) {
+            Form *pname_f = call->as.list.items[xi + 1];
+            if (pname_f->tag != F_SYM) {
+                diag_emit(DIAG_ERROR, pname_f->span,
+                          "defeffect: expected effect name after ^extends");
+                return NULL;
+            }
+            parent_name = pname_f->as.sym;
+            break;
+        }
+    }
+
     /* Register the effect — pass module visibility info (Phase P19-6) */
     Effect *effect = effect_env_register(e->effect_env, e->arena, name,
                                           param_names, param_types, n_params, result_type,
                                           e->current_module_name, is_private);
     if (!effect) return NULL;
-    
+
+    /* ET4: Resolve parent effect if ^extends was specified */
+    if (parent_name) {
+        Effect *parent_eff = effect_env_lookup(e->effect_env, parent_name);
+        if (!parent_eff) {
+            diag_emit(DIAG_ERROR, name_f->span,
+                      "defeffect: unknown parent effect '%s' in ^extends clause",
+                      parent_name->name);
+            return NULL;
+        }
+        effect->parent = parent_eff;
+    }
+
     /* Create the effect definition expression */
     EffectDef *def = arena_alloc(e->arena, sizeof(EffectDef));
     def->name = name;
@@ -5663,6 +5719,7 @@ static Expr *elab_defeffect(Elab *e, const Form *call) {
     def->result_type = result_type;
     def->is_private = is_private;
     def->defining_module_name = e->current_module_name;
+    def->parent_name = parent_name;  /* ET4: ^extends parent effect name */
 
     Expr *out = expr_new(e->arena, EX_DEFECT, TYPE_NIL, call->span);
     out->as.effect_def_.def = def;
@@ -5846,13 +5903,18 @@ static Expr *elab_handle(Elab *e, const Form *call) {
             return NULL;
         }
         
-        /* Case header format: (EffectName [params...] k) */
-        if (case_f->as.list.len != 3) {
+        /* Case header format: (EffectName [params...] k)
+         * LC0: Optional annotation before k:
+         *   (EffectName [params...] ^linear k)           -- CK_LINEAR: exactly-once
+         *   (EffectName [params...] ^unsafe-multishot k) -- CK_COPY: multi-shot allowed */
+        uint32_t hdr_len = case_f->as.list.len;
+        if (hdr_len != 3 && hdr_len != 4) {
             diag_emit(DIAG_ERROR, case_f->span,
-                      "handle case header requires (EffectName [params...] k)");
+                      "handle case header requires (EffectName [params...] k) "
+                      "or (EffectName [params...] ^annotation k)");
             return NULL;
         }
-        
+
         /* Parse effect name */
         Form *name_f = case_f->as.list.items[0];
         if (name_f->tag != F_SYM) {
@@ -5861,7 +5923,7 @@ static Expr *elab_handle(Elab *e, const Form *call) {
             return NULL;
         }
         cases[i].effect_name = name_f->as.sym;
-        
+
         /* Parse parameter list */
         Form *params_f = case_f->as.list.items[1];
         if (params_f->tag != F_LIST && params_f->tag != F_VEC) {
@@ -5870,7 +5932,7 @@ static Expr *elab_handle(Elab *e, const Form *call) {
                       form_tag_name(params_f->tag));
             return NULL;
         }
-        
+
         cases[i].n_params = params_f->as.list.len;
         cases[i].param_names = arena_alloc(e->arena, cases[i].n_params * sizeof(const Symbol *));
         cases[i].param_bindings = arena_alloc(e->arena, cases[i].n_params * sizeof(Binding *));
@@ -5883,9 +5945,34 @@ static Expr *elab_handle(Elab *e, const Form *call) {
             }
             cases[i].param_names[j] = param_f->as.sym;
         }
-        
-        /* Parse continuation parameter name */
-        Form *k_f = case_f->as.list.items[2];
+
+        /* LC0: Parse optional cont_kind annotation and continuation name.
+         * 3 items: (Effect [params...] k)             -> CK_UNIQUE (default)
+         * 4 items: (Effect [params...] ^annotation k) -> CK_LINEAR or CK_COPY */
+        cases[i].cont_kind = CK_UNIQUE;
+        Form *k_f;
+        if (hdr_len == 4) {
+            Form *ann_f = case_f->as.list.items[2];
+            k_f = case_f->as.list.items[3];
+            if (ann_f->tag == F_SYM && ann_f->as.sym == e->sym_caret_linear) {
+                cases[i].cont_kind = CK_LINEAR;
+            } else if (ann_f->tag == F_SYM &&
+                       ann_f->as.sym == e->sym_caret_unsafe_multishot) {
+                cases[i].cont_kind = CK_COPY;
+            } else if (ann_f->tag == F_SYM &&
+                       ann_f->as.sym == e->sym_caret_multishot) {
+                cases[i].cont_kind = CK_MULTISHOT;
+            } else {
+                diag_emit(DIAG_ERROR, ann_f->span,
+                          "handle case: expected ^linear, ^unsafe-multishot, or ^multishot "
+                          "before continuation name, got '%s'",
+                          ann_f->tag == F_SYM ? ann_f->as.sym->name : "<non-symbol>");
+                return NULL;
+            }
+        } else {
+            k_f = case_f->as.list.items[2];
+        }
+
         if (k_f->tag != F_SYM) {
             diag_emit(DIAG_ERROR, k_f->span,
                       "handle case: continuation name must be a symbol");
@@ -5928,11 +6015,44 @@ static Expr *elab_handle(Elab *e, const Form *call) {
             scope_add(&handler_scope, pb);
         }
         
-        /* Create binding for k (dummy continuation — int64).
-         * Marked CK_MOVE so the one-shot check fires on a second resume/discontinue.
-         * Marked is_continuation so async Send checks can detect continuation escape. */
+        /* LC0: Create binding for k; apply cont_kind annotation.
+         * is_continuation lets the async-escape check (T25) detect continuation capture. */
         Binding *kb = binding_new(e, cases[i].k_name, TYPE_INT, false, false, k_f->span);
-        kb->type.copy_kind = CK_MOVE;
+        switch (cases[i].cont_kind) {
+        case CK_LINEAR:
+            /* ^linear k: exactly one resume/discontinue required.
+             * LC2: is_affine + is_relevant wire k into the ST0-ST1 usage-tracking
+             * machinery so that usage_state is maintained via elab_var. */
+            kb->is_linear = true;
+            kb->type.copy_kind = CK_LINEAR;
+            kb->is_affine    = true;  /* no duplication */
+            kb->is_relevant  = true;  /* must be consumed */
+            break;
+        case CK_COPY:
+            /* ^unsafe-multishot k: ownership not tracked; any number of resumes allowed.
+             * MS4: deprecated -- emit both the ownership warning (W0035) and the
+             * migration hint (W0400).  ^unsafe-multishot will be removed in the next
+             * major version; users should migrate to ^multishot. */
+            kb->type.copy_kind = CK_COPY;
+            diag_emit_with_code(DIAG_WARNING, k_f->span,
+                TUR_W0035_UNSAFE_MULTISHOT_CONT,
+                "unsafe-multishot continuation '%s' -- ownership not tracked",
+                kb->name->name);
+            diag_emit_with_code(DIAG_WARNING, k_f->span,
+                TUR_W0400_UNSAFE_MULTISHOT_DEPRECATED,
+                "'^unsafe-multishot' is deprecated; use '^multishot' instead");
+            break;
+        case CK_MULTISHOT:
+            /* ^multishot k: MS1: safe multi-shot via snapshot semantics; no ownership warning. */
+            kb->type.copy_kind = CK_MULTISHOT;
+            break;
+        default: /* CK_UNIQUE */
+            /* Default: affine (at most once).
+             * LC2: is_affine wires k into the ST0-ST1 usage-tracking machinery. */
+            kb->type.copy_kind = CK_MOVE;
+            kb->is_affine = true;  /* no duplication */
+            break;
+        }
         kb->is_continuation = true;
         cases[i].k_binding = kb;
         scope_add(&handler_scope, kb);
@@ -5940,24 +6060,209 @@ static Expr *elab_handle(Elab *e, const Form *call) {
         /* Parse handler body inside the handler scope */
         Form *body_f = call->as.list.items[3 + (i * 2)];
         cases[i].body = elab_form(e, body_f);
-        
+
+        /* MS2: For ^multishot handlers, check all captured free variables.
+         * CK_UNIQUE (move-only) and CK_LINEAR captures are forbidden because
+         * the handler body may run multiple times -- each resume takes a
+         * snapshot of k, so the body executes N times and must not consume a
+         * linear or unique value on each execution. */
+        if (cases[i].cont_kind == CK_MULTISHOT && cases[i].body) {
+            /* Build the "local params" list: effect params + k (not free vars) */
+            uint8_t n_hparams = (uint8_t)(cases[i].n_params + 1);
+            Binding **hparams = arena_alloc(e->arena, n_hparams * sizeof(Binding *));
+            for (uint8_t j = 0; j < cases[i].n_params; j++)
+                hparams[j] = cases[i].param_bindings[j];
+            hparams[cases[i].n_params] = kb;
+            uint32_t n_caps = 0;
+            Binding **caps = collect_free_vars(cases[i].body, hparams, n_hparams, &n_caps);
+            for (uint32_t ci = 0; ci < n_caps; ci++) {
+                CopyKind ck = caps[ci]->type.copy_kind;
+                if (ck == CK_UNIQUE || ck == CK_LINEAR) {
+                    diag_emit_with_code(DIAG_ERROR, cases[i].body->span,
+                        TUR_E0500_MULTISHOT_UNIQUE_CAPTURE,
+                        "^multishot handler captures '%s' which is %s -- "
+                        "cannot be safely captured in a multi-shot handler",
+                        caps[ci]->name->name,
+                        ck == CK_UNIQUE ? "unique (move-only)" : "linear");
+                }
+            }
+            free(caps);
+        }
+
+        /* LC1/LC2: ^linear k must be consumed (resumed or discontinued) in the handler body.
+         * Check immediately after body elaboration while the binding is still in scope.
+         * Uses is_linear_consumed (flow-sensitive via elab_if linear-state machinery). */
+        if (cases[i].cont_kind == CK_LINEAR && kb && !kb->is_linear_consumed) {
+            diag_emit_with_code(DIAG_ERROR, k_f->span,
+                TUR_E0100_LINEAR_DROPPED,
+                "linear continuation '%s' was not resumed or discontinued",
+                kb->name->name);
+        }
+
         /* Restore outer scope */
         e->scope = saved_scope;
         scope_free(&handler_scope);
-        
+
         if (!cases[i].body) return NULL;
+
+        /* ET3-C: Check that the handler clause result type matches the body type.
+         * Skip the check when either is TY_UNKNOWN or TY_NEVER, or when the clause
+         * body ends in a resume expression (resume returns the value type passed to
+         * the continuation, not the overall handle result type). */
+        {
+            /* Helper: check if an expression ends in a resume.
+             * Handles bare (resume ...) and (do ... (resume ...)) patterns. */
+            const Expr *cb = cases[i].body;
+            bool ends_in_resume = (cb->kind == EX_RESUME);
+            if (!ends_in_resume && cb->kind == EX_DO && cb->as.do_.n > 0) {
+                const Expr *last = cb->as.do_.items[cb->as.do_.n - 1];
+                ends_in_resume = (last->kind == EX_RESUME);
+            }
+
+            if (!ends_in_resume && i == 0 && body != NULL
+                && cases[i].body->type.kind != TY_UNKNOWN
+                && cases[i].body->type.kind != TY_NEVER
+                && body->type.kind != TY_UNKNOWN
+                && body->type.kind != TY_NEVER
+                && cases[i].body->type.kind != body->type.kind) {
+                diag_emit_with_code(DIAG_ERROR, body_f->span,
+                    TUR_E0252_HANDLER_RESULT_MISMATCH,
+                    "handler clause result type '%s' does not match handle expression type '%s'",
+                    type_name(cases[i].body->type), type_name(body->type));
+            } else if (!ends_in_resume && i > 0 && cases[0].body != NULL) {
+                /* Also check if case 0's body ends in resume before comparing */
+                const Expr *cb0 = cases[0].body;
+                bool c0_ends_resume = (cb0->kind == EX_RESUME);
+                if (!c0_ends_resume && cb0->kind == EX_DO && cb0->as.do_.n > 0) {
+                    const Expr *last0 = cb0->as.do_.items[cb0->as.do_.n - 1];
+                    c0_ends_resume = (last0->kind == EX_RESUME);
+                }
+                if (!c0_ends_resume
+                    && cases[i].body->type.kind != TY_UNKNOWN
+                    && cases[i].body->type.kind != TY_NEVER
+                    && cases[0].body->type.kind != TY_UNKNOWN
+                    && cases[0].body->type.kind != TY_NEVER
+                    && cases[i].body->type.kind != cases[0].body->type.kind) {
+                    diag_emit_with_code(DIAG_ERROR, body_f->span,
+                        TUR_E0252_HANDLER_RESULT_MISMATCH,
+                        "handler clause result type '%s' does not match other clauses' type '%s'",
+                        type_name(cases[i].body->type), type_name(cases[0].body->type));
+                }
+            }
+        }
     }
-    
+
     /* Create the handle expression */
     HandleExpr *handle = arena_alloc(e->arena, sizeof(HandleExpr));
     handle->body = body;
     handle->cases = cases;
     handle->n_cases = n_cases;
-    
+
     /* The return type of handle is the same as the body's type */
     Expr *out = expr_new(e->arena, EX_HANDLE, body->type, call->span);
     out->as.handle_.handle = handle;
     return out;
+}
+
+/* ET3-E: (compose-handlers h1 h2)
+ * Compose two handlers that must handle different effects.
+ * Emits TUR_E0251 if both handlers handle the same effect.
+ * Returns a nil-typed expression (placeholder; runtime semantics TBD).
+ */
+static Expr *elab_compose_handlers(Elab *e, const Form *call) {
+    if (!g_effect_types_enabled) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "'compose-handlers' requires -Xeffect-types");
+        return NULL;
+    }
+    if (call->as.list.len != 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(compose-handlers h1 h2) requires exactly two arguments");
+        return NULL;
+    }
+    Expr *h1 = elab_form(e, call->as.list.items[1]);
+    if (!h1) return NULL;
+    Expr *h2 = elab_form(e, call->as.list.items[2]);
+    if (!h2) return NULL;
+
+    /* ET3: Both arguments should have TY_HANDLER type */
+    if (h1->type.kind != TY_HANDLER) {
+        diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
+                  "(compose-handlers): first argument must be a handler value, got '%s'",
+                  type_name(h1->type));
+        return NULL;
+    }
+    if (h2->type.kind != TY_HANDLER) {
+        diag_emit(DIAG_ERROR, call->as.list.items[2]->span,
+                  "(compose-handlers): second argument must be a handler value, got '%s'",
+                  type_name(h2->type));
+        return NULL;
+    }
+
+    /* ET3: Handlers must handle different effects (TUR-E0251) */
+    if (h1->type.as.handler_.effect_name != NULL
+        && h2->type.as.handler_.effect_name != NULL
+        && h1->type.as.handler_.effect_name == h2->type.as.handler_.effect_name) {
+        diag_emit_with_code(DIAG_ERROR, call->span,
+            TUR_E0251_HANDLER_OVERLAP,
+            "composed handlers both handle effect '%s'; overlapping effects are not allowed",
+            h1->type.as.handler_.effect_name);
+        return NULL;
+    }
+
+    /* Return a nil-typed placeholder expression */
+    Expr *out = expr_new(e->arena, EX_NIL_LIT, TYPE_NIL, call->span);
+    return out;
+}
+
+/* LC1/LC2: Pre-check a continuation binding for double-use before elaborating k.
+ * Uses is_linear_consumed (CK_LINEAR) and is_moved (CK_UNIQUE) — both are
+ * snapshot/restored by elab_if, making them flow-sensitive across branches.
+ * Emits the appropriate error and returns true if the use should be rejected. */
+static bool cont_check_double_use(Elab *e, const Form *k_form) {
+    if (k_form->tag != F_SYM) return false;
+    Binding *kb = scope_lookup(e->scope, k_form->as.sym);
+    if (!kb || !kb->is_continuation) return false;
+    /* CK_COPY / CK_MULTISHOT: multi-shot allowed -- no double-use restriction. */
+    if (kb->type.copy_kind == CK_COPY || kb->type.copy_kind == CK_MULTISHOT) return false;
+
+    if (kb->type.copy_kind == CK_LINEAR) {
+        if (kb->is_linear_consumed) {
+            diag_emit_with_code(DIAG_ERROR, k_form->span,
+                TUR_E0101_LINEAR_USE_AFTER_CONSUME,
+                "linear continuation '%s' has already been resumed or discontinued",
+                kb->name->name);
+            return true;
+        }
+    } else {
+        /* CK_UNIQUE: is_moved is flow-sensitive (elab_if restores it between branches). */
+        if (kb->is_moved) {
+            diag_emit_with_code(DIAG_ERROR, k_form->span,
+                TUR_E0201_UNIQUE_COPY,
+                "continuation '%s' has already been resumed or discontinued",
+                kb->name->name);
+            return true;
+        }
+    }
+    return false;
+}
+
+/* LC1/LC2: Mark a continuation binding consumed after resume/discontinue.
+ * Sets is_linear_consumed (CK_LINEAR), is_moved (CK_UNIQUE) — both flow-sensitive.
+ * Also sets usage_state for ST0-ST1 interop. */
+static void cont_mark_consumed(Expr *k) {
+    if (!k || k->kind != EX_VAR) return;
+    Binding *kb = k->as.var.binding;
+    if (!kb->is_continuation) return;
+    /* LC2: also set usage_state for ST0-ST1 informational tracking. */
+    kb->usage_state = USAGE_USED_ONCE;
+    if (kb->type.copy_kind == CK_LINEAR) {
+        kb->is_linear_consumed = true;
+    } else if (type_is_move(kb->type)) {
+        /* CK_UNIQUE: mark moved so elab_if's move-state machinery stays consistent. */
+        binding_mark_moved(kb, k->span);
+    }
+    /* CK_COPY / CK_MULTISHOT: usage_state updated but no ownership enforcement. */
 }
 
 /* (resume k value)
@@ -5969,24 +6274,36 @@ static Expr *elab_resume(Elab *e, const Form *call) {
                   "(resume k value) requires exactly two arguments");
         return NULL;
     }
-    
+
+    /* LC1: Check for double-use before elaborating k (would emit E0005 otherwise). */
+    if (cont_check_double_use(e, call->as.list.items[1])) return NULL;
+
     Expr *k = elab_form(e, call->as.list.items[1]);
     if (!k) return NULL;
-    
+
     Expr *value = elab_form(e, call->as.list.items[2]);
     if (!value) return NULL;
-    
-    /* Phase 19: One-shot continuation check.
-     * k is TY_CONT which is CK_MOVE — mark it consumed so any second
-     * (resume k ...) triggers the existing use-after-move diagnostic. */
-    if (k->kind == EX_VAR && type_is_move(k->as.var.binding->type)) {
-        binding_mark_moved(k->as.var.binding, k->span);
+
+    /* LC1: Mark continuation consumed per its cont_kind. */
+    cont_mark_consumed(k);
+
+    /* MS2: Resuming a ^multishot continuation inside atomically is unsafe --
+     * the handler body may be re-executed by STM retry, causing the continuation
+     * to be resumed more than once in unexpected ways. */
+    if (k->kind == EX_VAR && k->as.var.binding &&
+        k->as.var.binding->type.copy_kind == CK_MULTISHOT &&
+        elab_in_atomically) {
+        diag_emit_with_code(DIAG_ERROR, call->span,
+            TUR_E0502_MULTISHOT_RESUME_IN_ATOMIC,
+            "cannot resume a '^multishot' continuation inside 'atomically' -- "
+            "STM retry may cause the continuation to be resumed multiple times unexpectedly");
+        return NULL;
     }
-    
+
     ResumeExpr *resume = arena_alloc(e->arena, sizeof(ResumeExpr));
     resume->k = k;
     resume->value = value;
-    
+
     Expr *out = expr_new(e->arena, EX_RESUME, value->type, call->span);
     out->as.resume_.resume = resume;
     return out;
@@ -6002,21 +6319,22 @@ static Expr *elab_discontinue(Elab *e, const Form *call) {
         return NULL;
     }
     
+    /* LC1: Check for double-use before elaborating k. */
+    if (cont_check_double_use(e, call->as.list.items[1])) return NULL;
+
     Expr *k = elab_form(e, call->as.list.items[1]);
     if (!k) return NULL;
-    
+
     Expr *exception = elab_form(e, call->as.list.items[2]);
     if (!exception) return NULL;
-    
-    /* Phase 19: One-shot continuation check — same as resume. */
-    if (k->kind == EX_VAR && type_is_move(k->as.var.binding->type)) {
-        binding_mark_moved(k->as.var.binding, k->span);
-    }
-    
+
+    /* LC1: Mark continuation consumed per its cont_kind. */
+    cont_mark_consumed(k);
+
     DiscontinueExpr *discontinue = arena_alloc(e->arena, sizeof(DiscontinueExpr));
     discontinue->k = k;
     discontinue->exception = exception;
-    
+
     Expr *out = expr_new(e->arena, EX_DISCONTINUE, TYPE_NIL, call->span);
     out->as.discontinue_.discontinue = discontinue;
     return out;
@@ -6490,6 +6808,15 @@ static Expr *elab_defn(Elab *e, const Form *call) {
         if (p->tag == F_SYM && p->as.sym == e->sym_caret_relevant) {
             next_param_relevant = true;
             continue;
+        }
+
+        /* MS2: ^multishot is not valid as a function parameter annotation */
+        if (p->tag == F_SYM && p->as.sym == e->sym_caret_multishot) {
+            diag_emit_with_code(DIAG_ERROR, p->span,
+                TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER,
+                "'^multishot' annotation is only valid on a handler continuation, "
+                "not on a function parameter");
+            return NULL;
         }
 
         /* Phase 15: Handle constraint annotations (^Eq, ^Show, etc.) */
@@ -7699,6 +8026,7 @@ static Expr *elab_extern_c(Elab *e, const Form *call) {
 
     /* Create a binding for the extern-c function so it can be looked up and called */
     Binding *b = binding_new(e, name_f->as.sym, fn_type, false, true, call->span);
+    b->is_extern_c = true;  /* ER6: mark as extern-c for effect inference */
     scope_add(&e->global, b);
 
     /* Create ExternC declaration */
@@ -8046,7 +8374,8 @@ static Expr *elab_borrow_mut(Elab *e, const Form *call);
 static Expr *elab_defclass(Elab *e, const Form *call);
 static Expr *elab_definstance(Elab *e, const Form *call);
 static Expr *elab_method_call(Elab *e, const Form *call);
-static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span span);
+static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span span,
+                                               uint32_t *out_body_start);
 /* Phase HKT H5: kind aliases */
 static Expr *elab_defkind(Elab *e, const Form *call);
 static Expr *elab_defrec(Elab *e, const Form *call);  /* Phase HKT-P2 */
@@ -8187,6 +8516,8 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_with_handler) return elab_handle(e, call);  /* T25: sugar for handle in async context */
     if (name == e->sym_resume)    return elab_resume(e, call);
     if (name == e->sym_discontinue) return elab_discontinue(e, call);
+    /* ET3-E: compose-handlers */
+    if (name == e->sym_compose_handlers) return elab_compose_handlers(e, call);
     if (name == e->sym_cont_pred)   return elab_cont_pred(e, call);
     /* Phase 10: GC */
     if (name == e->sym_gc_force)    return elab_gc_force(e, call);
@@ -10314,7 +10645,9 @@ static Expr *elab_form(Elab *e, Form *f) {
              * ^affine: may not be used more than once (TUR_E0150).
              * ^relevant: must be used at least once; duplicates are fine. */
             if (g_substructural_enabled) {
-                if (b->is_affine) {
+                if (b->is_affine && !b->is_continuation) {
+                    /* Continuation affine checks are handled by cont_check_double_use
+                     * (LC2) to emit continuation-specific error codes instead of E0150. */
                     if (b->usage_state >= USAGE_USED_ONCE) {
                         diag_emit_with_code(DIAG_ERROR, f->span,
                                             TUR_E0150_AFFINE_USED_TWICE,
@@ -10323,8 +10656,8 @@ static Expr *elab_form(Elab *e, Form *f) {
                         return NULL;
                     }
                     b->usage_state = USAGE_USED_ONCE;
-                } else if (b->is_relevant) {
-                    /* Increment usage; any count >= 1 satisfies the must-use requirement */
+                } else if (b->is_relevant && !b->is_continuation) {
+                    /* Continuation relevant checks are handled by the LC2 drop check. */
                     b->usage_state = (b->usage_state == USAGE_UNUSED) ? USAGE_USED_ONCE
                                                                        : USAGE_USED_MANY;
                 }
@@ -12432,7 +12765,8 @@ static Expr *elab_borrow_mut(Elab *e, const Form *call) {
  * Syntax: (method-name [param1 : type1, param2 : type2, ...] : return-type)
  * or: (method-name [param1 param2 ...] : return-type) - types inferred from usage
  */
-static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span span) {
+static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span span,
+                                               uint32_t *out_body_start) {
     if (method_form->tag != F_LIST || method_form->as.list.len < 3) {
         diag_emit(DIAG_ERROR, span,
                   "typeclass method requires (name [params...] : return-type)");
@@ -12654,6 +12988,12 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
         }
     }
     
+    /* ER3: Report where body forms start so elab_defclass can elaborate defaults.
+     * body_start_idx is the index of the first form after the return type (or
+     * method_form->as.list.len if there are no body forms). */
+    uint32_t body_start_idx = ret_idx + 1;
+    if (out_body_start) *out_body_start = body_start_idx;
+
     TypeClassMethod *method = (TypeClassMethod *)arena_alloc(e->arena, sizeof(TypeClassMethod));
     method->name = name;
     method->param_names = param_names;
@@ -12662,6 +13002,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
     method->n_params = n_params;
     method->return_type = return_type;
     method->effect_row = method_effect_row;  /* ER3: NULL if not annotated */
+    method->default_fn_expr = NULL;          /* ER3: set by elab_defclass if body forms exist */
     return method;
 }
 
@@ -13370,6 +13711,12 @@ static Expr *elab_defrec(Elab *e, const Form *call) {
 static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                                   const Symbol **type_params, Kind *type_param_kinds,
                                   uint8_t n_type_params) {
+    /* ET3: bare `nil` literal (F_NIL) in a type expression means the nil/unit type */
+    if (form->tag == F_NIL) {
+        Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+        *t = TYPE_NIL;
+        return t;
+    }
     if (form->tag == F_SYM) {
         const Symbol *sym = form->as.sym;
         
@@ -13622,6 +13969,35 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
             }
         }
 
+        /* ET3-A: (handler EffectName ValueType ResultType) type expression */
+        if (form->as.list.len == 4 && form->as.list.items[0]->tag == F_SYM
+                && form->as.list.items[0]->as.sym == e->sym_handler_type) {
+            if (!g_effect_types_enabled) {
+                diag_emit(DIAG_ERROR, form->span,
+                          "'handler' type expression requires -Xeffect-types");
+                return NULL;
+            }
+            Form *eff_f = form->as.list.items[1];
+            Form *val_f = form->as.list.items[2];
+            Form *res_f = form->as.list.items[3];
+            if (eff_f->tag != F_SYM) {
+                diag_emit(DIAG_ERROR, eff_f->span, "(handler E V R): effect name must be a symbol");
+                return NULL;
+            }
+            Type *val_t = type_expr_from_form(e, val_f, rec_name, type_params, type_param_kinds, n_type_params);
+            Type *res_t = type_expr_from_form(e, res_f, rec_name, type_params, type_param_kinds, n_type_params);
+            if (!val_t || !res_t) return NULL;
+            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+            memset(t, 0, sizeof(Type));
+            t->kind = TY_HANDLER;
+            t->copy_kind = CK_COPY;
+            t->hkt_kind = KIND_STAR;
+            t->as.handler_.effect_name = eff_f->as.sym->name;
+            t->as.handler_.value_kind = val_t->kind;
+            t->as.handler_.result_kind = res_t->kind;
+            return t;
+        }
+
         /* Phase HRT0: Handle (forall [vars...] body) and (exists [vars...] body) */
         if (form->as.list.len >= 1 && form->as.list.items[0]->tag == F_SYM) {
             const Symbol *head = form->as.list.items[0]->as.sym;
@@ -13692,9 +14068,13 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
                         }
                     }
                     var_names[i] = vf->as.sym->name;
-                    var_kinds[i] = KIND_STAR;  /* default kind */
+                    /* ET2-A: lowercase binders are row variables (effect rows);
+                     * uppercase binders remain type variables (KIND_STAR). */
+                    bool is_row_binder = (vf->as.sym->name[0] >= 'a'
+                                          && vf->as.sym->name[0] <= 'z');
+                    var_kinds[i] = is_row_binder ? KIND_ROW : KIND_STAR;
                     ext_params[n_type_params + i] = vf->as.sym;
-                    ext_kinds[n_type_params + i] = KIND_STAR;
+                    ext_kinds[n_type_params + i] = is_row_binder ? KIND_ROW : KIND_STAR;
                 }
 
                 /* Parse the body type with bound vars in scope */
@@ -14833,12 +15213,113 @@ static Expr *elab_defclass(Elab *e, const Form *call) {
     /* Allocate methods array */
     methods = (TypeClassMethod *)arena_alloc(e->arena, n_methods * sizeof(TypeClassMethod));
     
-    /* Second pass: parse each method */
+    /* Second pass: parse each method and elaborate any default bodies */
     for (uint32_t i = 0; i < n_methods; i++) {
         Form *method_form = call->as.list.items[methods_start + i];
-        TypeClassMethod *method = parse_typeclass_method(e, method_form, call->span);
+        uint32_t body_start = 0;
+        TypeClassMethod *method = parse_typeclass_method(e, method_form, call->span, &body_start);
         if (!method) return NULL;
-        methods[i] = *method;  /* Copy the method struct */
+        methods[i] = *method;
+
+        /* ER3: If the method form has forms after the return type, elaborate
+         * them as a default body.  This mirrors elab_definstance's method
+         * elaboration so that effect_check_pass finds it as a normal FnDef. */
+        if (body_start < method_form->as.list.len) {
+            /* Build a synthetic function name: __default_<TypeClass>_<method> */
+            char default_name_buf[192];
+            snprintf(default_name_buf, sizeof(default_name_buf),
+                     "__default_%s_%s", name->name, method->name->name);
+            const Symbol *default_sym = symtab_intern(e->st,
+                strslice(default_name_buf, strlen(default_name_buf)));
+
+            /* Build parameter bindings from the method signature */
+            uint8_t n_mp = methods[i].n_params;
+            Binding **mp = n_mp > 0
+                ? (Binding **)arena_alloc(e->arena, n_mp * sizeof(Binding *)) : NULL;
+            Type *mp_types = n_mp > 0
+                ? (Type *)arena_alloc(e->arena, n_mp * sizeof(Type)) : NULL;
+
+            /* Parse body parameter names from the method form's param vector */
+            Form *pbody_params = method_form->as.list.items[1]; /* the [params] vector */
+            uint8_t actual_p = 0;
+            for (uint8_t j = 0; j < pbody_params->as.list.len && actual_p < n_mp; j++) {
+                Form *pf = pbody_params->as.list.items[j];
+                const Symbol *pname = NULL;
+                Type ptype = methods[i].n_params > actual_p
+                    ? methods[i].param_types[actual_p] : TYPE_INT;
+                if (pf->tag == F_SYM) {
+                    pname = pf->as.sym;
+                } else if (pf->tag == F_VEC && pf->as.list.len >= 1
+                           && pf->as.list.items[0]->tag == F_SYM) {
+                    pname = pf->as.list.items[0]->as.sym;
+                }
+                if (!pname) continue;
+                mp[actual_p] = binding_new(e, pname, ptype, false, false, pf->span);
+                mp_types[actual_p] = ptype;
+                actual_p++;
+            }
+            n_mp = actual_p;
+
+            /* Push scope with parameters */
+            Scope def_scope;
+            scope_init(&def_scope, e->scope);
+            e->scope = &def_scope;
+            for (uint8_t j = 0; j < n_mp; j++)
+                scope_add(&def_scope, mp[j]);
+            e->fn_body_depth++;
+
+            /* Elaborate body forms */
+            uint32_t n_body = method_form->as.list.len - body_start;
+            Expr *def_body = e_nil(e, method_form->span);
+            if (n_body == 1) {
+                def_body = elab_form(e, method_form->as.list.items[body_start]);
+            } else if (n_body > 1) {
+                Expr **body_items = (Expr **)arena_alloc(e->arena, n_body * sizeof(Expr *));
+                for (uint32_t k = 0; k < n_body; k++) {
+                    body_items[k] = elab_form(e, method_form->as.list.items[body_start + k]);
+                    if (!body_items[k]) {
+                        e->fn_body_depth--;
+                        e->scope = def_scope.parent;
+                        scope_free(&def_scope);
+                        return NULL;
+                    }
+                }
+                def_body = expr_new(e->arena, EX_DO,
+                    body_items[n_body - 1]->type, method_form->span);
+                def_body->as.do_.items = body_items;
+                def_body->as.do_.n = n_body;
+            }
+
+            e->fn_body_depth--;
+            e->scope = def_scope.parent;
+            scope_free(&def_scope);
+
+            /* Build FnDef and register it as a file-level function */
+            TypeKind pk[MAX_FN_ARITY];
+            for (uint8_t j = 0; j < n_mp; j++) pk[j] = mp_types[j].kind;
+            Type fn_t = type_fn(pk, n_mp, methods[i].return_type.kind);
+
+            FnDef *def_fd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));
+            Binding *def_b = binding_new(e, default_sym, fn_t, false, true,
+                                          method_form->span);
+            def_fd->binding        = def_b;
+            def_fd->params         = mp;
+            def_fd->n_params       = n_mp;
+            def_fd->body           = def_body;
+            def_fd->is_variadic    = false;
+            def_fd->closure        = NULL;
+            def_fd->param_types    = mp_types;
+            def_fd->may_capture    = false;
+            def_fd->inferred_effect_row = NULL;
+            constraint_set_init(&def_fd->constraints);
+
+            scope_add(&e->global, def_b);
+            Expr *def_expr = expr_new(e->arena, EX_FN_DEF, fn_t, method_form->span);
+            def_expr->as.fn_def_.fn = def_fd;
+            elab_register_file_def(e, def_expr);
+
+            methods[i].default_fn_expr = def_expr;
+        }
     }
     
     /* Register the typeclass in the environment */
@@ -16922,9 +17403,14 @@ static Expr *elab_atomically(Elab *e, const Form *call) {
 
     Form *arg = call->as.list.items[1];
 
+    /* MS2: Set atomically flag so elab_resume can detect TUR-E0502 */
+    bool prev_in_atomically = elab_in_atomically;
+    elab_in_atomically = true;
+
     /* The argument should be an stm block or something that evaluates to one */
     /* For v1, we just wrap it in atomically */
     Expr *stm_expr = elab_form(e, arg);
+    elab_in_atomically = prev_in_atomically;
     if (!stm_expr) return NULL;
 
     /* Check if it's already an stm block */

@@ -1,0 +1,18 @@
+;; ET2-F1: Effect-polymorphic map.
+;; map-list applies a function to each element of a list and collects results.
+;; The function parameter carries an effect row #{e}, which propagates to the
+;; return type, making map-list polymorphic over the caller's effect row.
+
+(defeffect Log [msg :cstr] :nil)
+
+(defn map-list [n :int f :(fn [:int] #{e} :int)] #{e} :int
+  (if (> n 0)
+    (+ (f n) (map-list (- n 1) f))
+    0))
+
+(defn main [] :int
+  (handle
+    (do
+      (map-list 3 (fn [x] (do (perform (Log "tick")) x)))
+      0)
+    (Log [msg] k) (do (println msg) (resume k nil))))

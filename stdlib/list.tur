@@ -14,7 +14,7 @@
 ;;;   (nil-value)  ; => 0
 ;;;
 ;;; Since: Phase B1
-(defn nil-value []
+(defn nil-value [] #{Unsafe}
   ```c
   return 0;
   ```)
@@ -32,7 +32,7 @@
 ;;;   (list-nil? (nil-value))  ; => true
 ;;;
 ;;; Since: Phase B1
-(defn list-nil? [lst] :bool
+(defn list-nil? [lst] #{Unsafe} :bool
   ```c
   return lst == 0;
   ```)
@@ -51,7 +51,7 @@
 ;;;   (cons 1 (cons 2 (nil-value)))  ; => list [1, 2]
 ;;;
 ;;; Since: Phase B1
-(defn cons [value next] :int
+(defn cons [value next] #{Unsafe} :int
   ```c
   struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
   cell->value = value;
@@ -72,7 +72,7 @@
 ;;;   (head (cons 42 (nil-value)))  ; => 42
 ;;;
 ;;; Since: Phase B1
-(defn head [lst] :int
+(defn head [lst] #{Unsafe} :int
   ```c
   struct { int64_t value; int64_t next; } *cell = (void*)(intptr_t)lst;
   if (!cell) {
@@ -95,7 +95,7 @@
 ;;;   (tail (cons 1 (cons 2 (nil-value))))  ; => list [2]
 ;;;
 ;;; Since: Phase B1
-(defn tail [lst] :int
+(defn tail [lst] #{Unsafe} :int
   ```c
   struct { int64_t value; int64_t next; } *cell = (void*)(intptr_t)lst;
   if (!cell) {
@@ -115,7 +115,7 @@
 ;;;   (list-free my-list)
 ;;;
 ;;; Since: Phase B1
-(defn list-free [lst]
+(defn list-free [lst] #{Unsafe}
   ```c
   struct { int64_t value; int64_t next; } *cell = (void*)(intptr_t)lst;
   while (cell) {
@@ -138,7 +138,7 @@
 ;;;   (list-length (cons 1 (cons 2 (nil-value))))  ; => 2
 ;;;
 ;;; Since: Phase B1
-(defn list-length [lst] :int
+(defn list-length [lst] #{Unsafe} :int
   ```c
   int len = 0;
   struct { int64_t value; int64_t next; } *cell = (void*)(intptr_t)lst;
@@ -171,7 +171,7 @@
 ;; fmap :: (a -> b) -> list a -> list b
 ;; Maps fn over every element, building a new list.
 ;;; __functor_list_fmap -- fmap implementation for the list Functor instance.
-(defn __functor_list_fmap [container fn] :int
+(defn __functor_list_fmap [container fn] #{Unsafe} :int
   ```c
   struct { int64_t value; int64_t next; } *cell =
       (struct { int64_t value; int64_t next; } *)(intptr_t)container;
@@ -228,7 +228,7 @@
 ;; foldl :: (b -> a -> b) -> b -> list a -> b
 ;; foldr :: (a -> b -> b) -> b -> list a -> b
 ;;; __foldable_list_foldl -- foldl implementation for the list Foldable instance.
-(defn __foldable_list_foldl [ta init fn] :int
+(defn __foldable_list_foldl [ta init fn] #{Unsafe} :int
   ```c
   struct { int64_t value; int64_t next; } *cell =
       (struct { int64_t value; int64_t next; } *)(intptr_t)ta;
@@ -241,7 +241,7 @@
   ```)
 
 ;;; __foldable_list_foldr -- foldr implementation for the list Foldable instance.
-(defn __foldable_list_foldr [ta init fn] :int
+(defn __foldable_list_foldr [ta init fn] #{Unsafe} :int
   ```c
   /* Count elements first, then process in reverse order via stack */
   struct { int64_t value; int64_t next; } *cell =
@@ -276,11 +276,11 @@
 ;;   pure x = cons(x, nil)
 ;;   ap [f1, f2, ...] [x1, x2, ...] = [f1 x1, f1 x2, ..., f2 x1, ...]
 ;;; __applicative_list_pure -- pure implementation for the list Applicative instance.
-(defn __applicative_list_pure [x] :int
+(defn __applicative_list_pure [x] #{Unsafe} :int
   (cons x (nil-value)))
 
 ;;; __applicative_list_ap -- ap implementation for the list Applicative instance.
-(defn __applicative_list_ap [ff fa] :int
+(defn __applicative_list_ap [ff fa] #{Unsafe} :int
   ```c
   struct { int64_t value; int64_t next; } *fs =
       (struct { int64_t value; int64_t next; } *)(intptr_t)ff;
@@ -321,7 +321,7 @@
 ;; Monad instance for list.
 ;;   bind [a1, a2, ...] f = concat [f a1, f a2, ...]
 ;;; __monad_list_bind -- bind implementation for the list Monad instance.
-(defn __monad_list_bind [ma fn] :int
+(defn __monad_list_bind [ma fn] #{Unsafe} :int
   ```c
   struct { int64_t value; int64_t next; } *cell =
       (struct { int64_t value; int64_t next; } *)(intptr_t)ma;
@@ -402,7 +402,7 @@
 ;;;   (list-eq? xs ys (fn [a b] (= a b)))  ; => true/false
 ;;;
 ;;; Since: Phase E1
-(defn list-eq? [l1 l2 cmp-fn] :bool
+(defn list-eq? [l1 l2 cmp-fn] #{Unsafe} :bool
   ```c
   struct { int64_t value; int64_t next; } *a =
       (struct { int64_t value; int64_t next; } *)(intptr_t)l1;

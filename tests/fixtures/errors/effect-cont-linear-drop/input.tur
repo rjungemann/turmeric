@@ -1,0 +1,9 @@
+;; LC1: Dropping a ^linear continuation without resuming it is TUR-E0100.
+
+(defeffect Ask [] :int)
+
+(defn bad [] :int
+  (handle (perform (Ask))
+    (Ask [] ^linear k) 42))
+
+(println (bad))

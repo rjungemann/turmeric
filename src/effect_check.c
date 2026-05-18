@@ -43,6 +43,18 @@ static Effect *find_unsafe_effect(EffectEnv *env) {
     return NULL;
 }
 
+/* Returns true if e contains any EX_INLINE_C node (shallow: only checks the
+ * immediate expression, not inside nested function literals). */
+static bool expr_has_inline_c(Expr *e) {
+    if (!e) return false;
+    if (e->kind == EX_INLINE_C) return true;
+    if (e->kind == EX_DO) {
+        for (uint32_t i = 0; i < e->as.do_.n; i++)
+            if (expr_has_inline_c(e->as.do_.items[i])) return true;
+    }
+    return false;
+}
+
 static void fn_index_add(FnIndex *idx, const Binding *b, FnDef *fn) {
     if (idx->n >= FN_INDEX_CAP) return; /* silently drop if full */
     idx->entries[idx->n].binding = b;
@@ -204,16 +216,32 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
                         effect_row_empty(a), idx, env, arg_subst);
                 } else if (actual && actual->kind == EX_VAR &&
                            actual->as.var.binding) {
-                    /* Named function: use its inferred row if known. */
+                    /* Named function: prefer the declared row for occurs-check
+                     * purposes -- the inferred row may have already resolved
+                     * row variables to concrete effects, hiding the open variable.
+                     * Fall back to the inferred row if no declaration exists. */
                     FnDef *arg_fn = fn_index_lookup(idx, actual->as.var.binding);
-                    if (arg_fn && arg_fn->inferred_effect_row) {
+                    EffectRow *decl_row = actual->as.var.binding->type.kind == TY_FN
+                                         ? actual->as.var.binding->type.as.fn.effect_row
+                                         : NULL;
+                    if (decl_row && (decl_row->kind == ERK_VAR ||
+                                     decl_row->kind == ERK_UNION)) {
+                        /* Use the declared row: it may contain open row variables. */
+                        actual_row = decl_row;
+                    } else if (arg_fn && arg_fn->inferred_effect_row) {
                         actual_row = arg_fn->inferred_effect_row;
-                    } else if (actual->as.var.binding->type.kind == TY_FN) {
-                        actual_row = actual->as.var.binding->type.as.fn.effect_row;
+                    } else {
+                        actual_row = decl_row;
                     }
                 }
                 if (actual_row) {
-                    effect_row_unify(param_row, actual_row, subst, a);
+                    if (!effect_row_unify(param_row, actual_row, subst, a)) {
+                        diag_emit_with_code(DIAG_ERROR, e->span,
+                            TUR_E0254_INFINITE_EFFECT_ROW,
+                            "occurs-check failure: unifying effect row variable '%s' with "
+                            "row containing itself would produce an infinite effect row",
+                            param_row->as.var.var_name->name);
+                    }
                 }
             }
         }
@@ -246,6 +274,10 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
                     row = effect_row_merge(a, row, resolved);
                 }
             }
+            /* Note: extern-c calls are NOT automatically inferred as Unsafe here.
+             * Stdlib wrapper functions (e.g. hamt.tur) wrap unsafe C and present
+             * a safe interface to callers; adding Unsafe inference here would
+             * cause TUR-W0030 under --strict-effects for those unannotated wrappers. */
         }
 
         /* ER2: Apply substitution to the callee's declared row.
@@ -550,14 +582,66 @@ static int effect_row_check_over_annotated(FnDef *fd, Arena *a) {
     for (uint8_t i = 0; i < declared->as.concrete.n_effects; i++) {
         Effect *eff = declared->as.concrete.effects[i];
         if (!effect_row_contains(inferred, eff)) {
-            diag_emit_with_code(DIAG_WARNING, fn_span,
-                TUR_W0031_EFFECT_OVER_ANNOTATED,
-                "function '%s' declares effect '%s' but never performs it",
-                fd->binding ? fd->binding->name->name : "<anonymous>",
-                eff->name->name);
+            /* ET4: Also suppress if the inferred row contains a subeffect of `eff`.
+             * A function declaring #{IO} that performs #{Write} (where Write extends IO)
+             * is not over-annotated -- Write's presence covers IO. */
+            bool covered_by_subeffect = false;
+            if (inferred->kind == ERK_CONCRETE) {
+                for (uint8_t j = 0; j < inferred->as.concrete.n_effects; j++) {
+                    if (effect_is_subeffect(inferred->as.concrete.effects[j], eff)) {
+                        covered_by_subeffect = true;
+                        break;
+                    }
+                }
+            }
+            if (!covered_by_subeffect) {
+                /* Suppress W0031 for #{Unsafe} when the body contains inline C:
+                 * inline C is inherently unsafe but the effect system does not
+                 * infer Unsafe from it, so the annotation is always justified. */
+                bool suppress = false;
+                if (strcmp(eff->name->name, EFFECT_NAME_UNSAFE) == 0 &&
+                    expr_has_inline_c(fd->body)) {
+                    suppress = true;
+                }
+                if (!suppress) {
+                    diag_emit_with_code(DIAG_WARNING, fn_span,
+                        TUR_W0031_EFFECT_OVER_ANNOTATED,
+                        "function '%s' declares effect '%s' but never performs it",
+                        fd->binding ? fd->binding->name->name : "<anonymous>",
+                        eff->name->name);
+                }
+            }
         }
     }
     return 0;
+}
+
+/* ER2: Under --strict-effects, warn when a function declares a row variable
+ * (e.g., #{e}) but the inferred row is always a concrete effect set.
+ * Suggests replacing the variable with the concrete row. */
+static void effect_row_check_var_always_concrete(FnDef *fd, Arena *a) {
+    if (!fd) return;
+    EffectRow *declared = fd->binding ? fd->binding->type.as.fn.effect_row : NULL;
+    if (!declared || declared->kind != ERK_VAR) return;
+    EffectRow *inferred = fd->inferred_effect_row;
+    if (!inferred || inferred->kind != ERK_CONCRETE) return;
+    if (inferred->as.concrete.n_effects == 0) return;
+
+    Span fn_span = fd->binding ? fd->binding->span : (Span){0, 0, 0, 0, 0, 0};
+    Buf inferred_str;
+    buf_init(&inferred_str);
+    effect_row_print(&inferred_str, inferred);
+    diag_emit_with_code(DIAG_WARNING, fn_span,
+        TUR_W0032_ROW_VAR_ALWAYS_CONCRETE,
+        "function '%s' declares row variable '#{%s}' but always performs "
+        "concrete effects #%.*s; consider replacing '#{%s}' with '#%.*s'",
+        fd->binding ? fd->binding->name->name : "<anonymous>",
+        declared->as.var.var_name->name,
+        (int)inferred_str.len, inferred_str.data,
+        declared->as.var.var_name->name,
+        (int)inferred_str.len, inferred_str.data);
+    buf_free(&inferred_str);
+    (void)a;
 }
 
 /* ER1: Recursively find EX_CLOSURE nodes with declared effect rows and check them.
@@ -804,6 +888,82 @@ static int check_call_site_rows_in_expr(Arena *a, Expr *e,
 }
 
 /* ---------------------------------------------------------------------------
+ * ET1-C: check_unreachable_handlers_in_expr
+ * Walk an expression tree; for each EX_HANDLE, recompute the body's inferred
+ * effect row and emit TUR-W0033 for any handler clause whose effect is absent
+ * from that row (the clause can never be triggered).
+ * --------------------------------------------------------------------------- */
+
+static void check_unreachable_handlers_in_expr(
+        Arena *a, Expr *e, FnIndex *idx, EffectEnv *env) {
+    if (!e) return;
+    switch (e->kind) {
+    case EX_HANDLE: {
+        HandleExpr *h = e->as.handle_.handle;
+        EffectRowSubst *subst = effect_row_subst_new(a);
+        EffectRow *body_row = collect_effects_in_expr(
+            a, h->body, effect_row_empty(a), idx, env, subst);
+        for (uint8_t i = 0; i < h->n_cases; i++) {
+            const Symbol *eff_name = h->cases[i].effect_name;
+            if (!eff_name) continue;
+            Effect *eff = effect_env_lookup(env, eff_name);
+            if (!eff) continue;
+            if (!effect_row_contains(body_row, eff)) {
+                Span span = h->cases[i].body
+                            ? h->cases[i].body->span
+                            : (Span){0, 0, 0, 0, 0, 0};
+                diag_emit_with_code(DIAG_WARNING, span,
+                    TUR_W0033_UNREACHABLE_HANDLER,
+                    "handler clause for '%s' is unreachable: "
+                    "the body does not perform '%s'",
+                    eff_name->name, eff_name->name);
+            }
+        }
+        check_unreachable_handlers_in_expr(a, h->body, idx, env);
+        for (uint8_t i = 0; i < h->n_cases; i++)
+            check_unreachable_handlers_in_expr(a, h->cases[i].body, idx, env);
+        return;
+    }
+    case EX_LET:
+        for (uint32_t i = 0; i < e->as.let_.n; i++)
+            check_unreachable_handlers_in_expr(
+                a, e->as.let_.bindings[i].init, idx, env);
+        check_unreachable_handlers_in_expr(a, e->as.let_.body, idx, env);
+        return;
+    case EX_DO:
+        for (uint32_t i = 0; i < e->as.do_.n; i++)
+            check_unreachable_handlers_in_expr(a, e->as.do_.items[i], idx, env);
+        return;
+    case EX_IF:
+        check_unreachable_handlers_in_expr(a, e->as.if_.cond, idx, env);
+        check_unreachable_handlers_in_expr(a, e->as.if_.then_, idx, env);
+        check_unreachable_handlers_in_expr(a, e->as.if_.else_or_null, idx, env);
+        return;
+    case EX_WHILE:
+        check_unreachable_handlers_in_expr(a, e->as.while_.cond, idx, env);
+        check_unreachable_handlers_in_expr(a, e->as.while_.body, idx, env);
+        return;
+    case EX_CALL:
+        check_unreachable_handlers_in_expr(a, e->as.call_.fn_expr, idx, env);
+        for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+            check_unreachable_handlers_in_expr(a, e->as.call_.args[i], idx, env);
+        return;
+    case EX_CLOSURE:
+        check_unreachable_handlers_in_expr(
+            a, e->as.closure_.closure->fn->body, idx, env);
+        return;
+    case EX_SET:
+        check_unreachable_handlers_in_expr(a, e->as.set_.value, idx, env);
+        return;
+    case EX_RETURN:
+        check_unreachable_handlers_in_expr(a, e->as.return_.value, idx, env);
+        return;
+    default:
+        return;
+    }
+}
+
+/* ---------------------------------------------------------------------------
  * effect_check_pass
  * --------------------------------------------------------------------------- */
 
@@ -825,6 +985,19 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
                                 def->param_names, def->param_types,
                                 def->n_params, def->result_type,
                                 def->defining_module_name, def->is_private);
+        }
+    }
+    /* ET4: Second pass to set parent pointers from ^extends declarations.
+     * Must happen after all effects are registered so parent lookup works. */
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        Expr *item = program->as.program.items[i];
+        if (!item || item->kind != EX_DEFECT || !item->as.effect_def_.def) continue;
+        EffectDef *def = item->as.effect_def_.def;
+        if (!def->parent_name) continue;
+        Effect *child_eff = effect_env_lookup(env, def->name);
+        Effect *parent_eff = effect_env_lookup(env, def->parent_name);
+        if (child_eff && parent_eff) {
+            child_eff->parent = parent_eff;
         }
     }
 
@@ -885,6 +1058,40 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
             if (!impl || !impl->binding) continue;
             if (meth->effect_row) {
                 impl->binding->type.as.fn.effect_row = meth->effect_row;
+            }
+        }
+    }
+
+    /* ER3 Pass 3: Propagate resolved effect_row to default method FnDef bindings.
+     * Default method bodies are registered as EX_FN_DEF nodes, but their binding
+     * types are set up before typeclass method effect rows are resolved.  Copy
+     * the now-resolved effect_row so effect_check_pass validates them correctly. */
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        Expr *item = program->as.program.items[i];
+        if (!item || item->kind != EX_TYPECLASS_DEF) continue;
+        TypeClass *tc = item->as.typeclass_def_.typeclass;
+        if (!tc) continue;
+        for (uint8_t mi = 0; mi < tc->n_methods; mi++) {
+            TypeClassMethod *meth = &tc->methods[mi];
+            if (!meth->default_fn_expr || !meth->effect_row) continue;
+            FnDef *def_fn = meth->default_fn_expr->as.fn_def_.fn;
+            if (!def_fn || !def_fn->binding) continue;
+            def_fn->binding->type.as.fn.effect_row = meth->effect_row;
+        }
+    }
+
+    /* --- Step 0c: Resolve effect rows on struct fields.
+     * Struct fields with :fn #{...} annotations store ERK_UNRESOLVED rows that
+     * must be resolved before the fixed-point inference can propagate them. */
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        Expr *item = program->as.program.items[i];
+        if (!item || item->kind != EX_DEF || !item->as.def_.struct_def) continue;
+        StructDef *sd = item->as.def_.struct_def;
+        for (uint32_t fi = 0; fi < sd->n_fields; fi++) {
+            if (sd->fields[fi].effect_row &&
+                sd->fields[fi].effect_row->kind == ERK_UNRESOLVED) {
+                sd->fields[fi].effect_row =
+                    effect_row_resolve(sd->fields[fi].effect_row, env, a);
             }
         }
     }
@@ -957,6 +1164,11 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
         /* ER1: over-annotation warning (TUR-W0031). */
         effect_row_check_over_annotated(fn, a);
 
+        /* ER2: --strict-effects: warn when row variable is always concrete (TUR-W0032). */
+        if (g_strict_effects) {
+            effect_row_check_var_always_concrete(fn, a);
+        }
+
         /* ER1: --strict-effects: warn on unannotated effectful functions (TUR-W0030). */
         if (g_strict_effects && !declared &&
             inferred && !effect_row_is_empty(inferred)) {
@@ -994,6 +1206,15 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
             rc = 1;
     }
 
+    /* --- Step 3c: ET1-C -- Unreachable handler clause warnings (TUR-W0033).
+     * For each top-level function, walk its body and warn when a handler clause
+     * names an effect that the handled body does not actually perform. */
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        Expr *item = program->as.program.items[i];
+        if (!item || item->kind != EX_FN_DEF || !item->as.fn_def_.fn) continue;
+        check_unreachable_handlers_in_expr(a, item->as.fn_def_.fn->body, &idx, env);
+    }
+
     /* --- ER6: --lint-effects: advisory warnings for unannotated effectful functions.
      * Behaves like --strict-effects (TUR-W0030) but is never promoted to an error. */
     if (g_lint_effects) {
@@ -1022,7 +1243,9 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
     return rc;
 }
 
-/* ER6: --dump-effects — print each top-level defn's inferred effect row. */
+/* ER6: --dump-effects — print each top-level defn's inferred effect row.
+ * ET4: When a declared annotation is present, prefer it over the inferred row
+ * so that row variables (e.g. #{e}) appear in the output for polymorphic defns. */
 void effect_check_dump_effects(Expr *program, FILE *out) {
     if (!program || program->kind != EX_PROGRAM) return;
     for (uint32_t i = 0; i < program->as.program.n; i++) {
@@ -1031,9 +1254,14 @@ void effect_check_dump_effects(Expr *program, FILE *out) {
         FnDef *fn = item->as.fn_def_.fn;
         if (!fn->binding || !fn->binding->name) continue;
 
+        /* Prefer the declared annotation; fall back to inferred. */
+        EffectRow *declared = NULL;
+        if (fn->binding->type.kind == TY_FN)
+            declared = fn->binding->type.as.fn.effect_row;
+
         Buf row_str;
         buf_init(&row_str);
-        EffectRow *row = fn->inferred_effect_row;
+        EffectRow *row = declared ? declared : fn->inferred_effect_row;
         if (!row) {
             buf_puts(&row_str, "#{}");
         } else {

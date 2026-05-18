@@ -48,6 +48,17 @@ typedef enum DiagCode {
     TUR_W0030_STRICT_EFFECTS_UNANNOTATED,  /* unannotated fn has non-empty inferred row (--strict-effects) */
     TUR_W0031_EFFECT_OVER_ANNOTATED,       /* declared effect never performed */
     TUR_W0032_ROW_VAR_ALWAYS_CONCRETE,    /* row variable is always concrete; suggest replacing with concrete row */
+    TUR_W0033_UNREACHABLE_HANDLER,        /* handler clause for Foo is unreachable -- body never performs Foo */
+    /* ET2: effect polymorphism warnings */
+    TUR_W0034_ROW_VAR_GENERALISED,        /* row variable auto-generalised; consider explicit forall [e] (--strict-effects) */
+    /* GATE / ET2: effect row type errors */
+    TUR_E0254_INFINITE_EFFECT_ROW,     /* occurs check: binding effect row variable would produce an infinite row */
+    /* ET3: handler typing errors */
+    TUR_E0251_HANDLER_OVERLAP,            /* composed handlers handle overlapping effects */
+    TUR_E0252_HANDLER_RESULT_MISMATCH,   /* handler clause result type does not match handle expression type */
+    /* ET4: effect scope errors */
+    TUR_E0250_ROW_VAR_ESCAPES_SCOPE,    /* forall [e] row variable used outside its quantifier scope */
+    TUR_E0253_EFFECT_NOT_IN_SCOPE,      /* perform site uses an effect not declared or in scope */
     /* LT1: Linear type errors (-Xlinear) */
     TUR_E0100_LINEAR_DROPPED,      /* linear value dropped without being consumed */
     TUR_E0101_LINEAR_USE_AFTER_CONSUME, /* linear value used after being moved/consumed */
@@ -67,6 +78,14 @@ typedef enum DiagCode {
     /* IT3: Intersection type errors (-Xintersection-types) */
     TUR_E0350_INTERSECTION_UNSATISFIABLE,   /* no value can satisfy all intersection members */
     TUR_E0351_INTERSECTION_MEMBER_MISMATCH, /* value doesn't satisfy an intersection member */
+    /* LC0: Linear continuation warnings */
+    TUR_W0035_UNSAFE_MULTISHOT_CONT,   /* ^unsafe-multishot continuation -- ownership not tracked */
+    /* MS2: Multi-shot continuation capture analysis */
+    TUR_E0500_MULTISHOT_UNIQUE_CAPTURE,       /* ^multishot handler captures a unique/linear value */
+    TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER,  /* ^multishot annotation outside a handler continuation */
+    TUR_E0502_MULTISHOT_RESUME_IN_ATOMIC,     /* resume of ^multishot k inside atomically block */
+    /* MS4: ^unsafe-multishot deprecation */
+    TUR_W0400_UNSAFE_MULTISHOT_DEPRECATED,    /* ^unsafe-multishot is deprecated; use ^multishot instead */
 } DiagCode;
 
 typedef enum DiagLevel {

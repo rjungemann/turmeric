@@ -1,0 +1,12 @@
+;; MS1: ^multishot k allows multiple resumes in a handler clause.
+;; Uses snapshot semantics: each (resume k v) automatically snapshots k first.
+
+(defeffect Ask [] :int)
+
+(defn main [] :int
+  (let [r
+    (handle (perform (Ask))
+      (Ask [] ^multishot k)
+        (+ (resume k 10) (resume k 20)))]
+    (println r))
+  0)

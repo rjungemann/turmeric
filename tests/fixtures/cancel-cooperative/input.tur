@@ -1,0 +1,73 @@
+;; TC2: cooperative cancellation via yield-point.
+;; A CPU-bound loop checks for cancellation every iteration using inline C.
+;; Main thread cancels it mid-run; thread exits at the next check.
+;; main() joins and prints "done".
+
+(defn sleep-ms [ms :int] :nil
+  ```c
+  usleep((unsigned int)ms * 1000);
+  ```)
+
+(defn null-ptr [] :ptr<void>
+  ```c
+  return NULL;
+  ```)
+
+;; CPU-bound worker: spins checking cancel flag until cancelled.
+;; Exercises the TC2 cooperative cancellation path via tur_thread_cancel_requested.
+(defn cpu-worker [arg :ptr<void>] :ptr<void>
+  ```c
+  for (;;) {
+      if (tur_thread_cancel_requested()) {
+          tur_thread_do_cancel();
+      }
+  }
+  return NULL;
+  ```)
+
+(defn my-thread-spawn [fn-ptr :ptr<void> arg :ptr<void>] :ptr<void>
+  ```c
+  TurThreadState *state = (TurThreadState *)malloc(sizeof(TurThreadState));
+  if (!state) abort();
+  pthread_mutex_init(&state->cancel_mutex, NULL);
+  pthread_cond_init(&state->cancel_cond, NULL);
+  state->cancel_requested = 0;
+  TurThreadSpawnArg *spawn_arg = (TurThreadSpawnArg *)malloc(sizeof(TurThreadSpawnArg));
+  if (!spawn_arg) { free(state); abort(); }
+  spawn_arg->user_fn  = (void *(*)(void *))fn_ptr;
+  spawn_arg->user_arg = (void *)arg;
+  spawn_arg->state    = state;
+  TurThreadHandle *h = (TurThreadHandle *)malloc(sizeof(TurThreadHandle));
+  if (!h) { free(spawn_arg); free(state); abort(); }
+  h->state = state;
+  int rc = pthread_create(&h->tid, NULL, tur_thread_trampoline, spawn_arg);
+  if (rc != 0) { free(h); free(spawn_arg); free(state); abort(); }
+  return (void *)h;
+  ```)
+
+(defn my-cancel-thread [t :ptr<void>] :nil
+  ```c
+  TurThreadHandle *h = (TurThreadHandle *)t;
+  __atomic_store_n(&h->state->cancel_requested, 1, __ATOMIC_RELEASE);
+  pthread_mutex_lock(&h->state->cancel_mutex);
+  pthread_cond_broadcast(&h->state->cancel_cond);
+  pthread_mutex_unlock(&h->state->cancel_mutex);
+  ```)
+
+(defn my-thread-join [t :ptr<void>] :nil
+  ```c
+  TurThreadHandle *h = (TurThreadHandle *)t;
+  pthread_join(h->tid, NULL);
+  pthread_mutex_destroy(&h->state->cancel_mutex);
+  pthread_cond_destroy(&h->state->cancel_cond);
+  free(h->state);
+  free(h);
+  ```)
+
+(defn main [] :int
+  (let [t (my-thread-spawn cpu-worker (null-ptr))]
+    (sleep-ms 30)
+    (my-cancel-thread t)
+    (my-thread-join t)
+    (println "done")
+    0))
