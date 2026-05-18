@@ -145,6 +145,8 @@ Form *interp_eval(Env *e, Form *f) {
         case F_SET:
         case F_CBLOCK:
         case F_TYPE_ANN:
+        /* CT0: Contract type annotations evaluate to themselves */
+        case F_CONTRACT_TYPE:
             /* Vectors, maps, sets, C blocks, and type annotations evaluate to themselves */
             return f;
     }
@@ -205,6 +207,8 @@ static Form *quasiquote_expand(Env *macro_env, Form *f) {
             }
         case F_CBLOCK:
         case F_TYPE_ANN:
+        /* CT0: Contract type annotations are passed through in quasiquote */
+        case F_CONTRACT_TYPE:
             return f; /* C blocks and type annotations are passed through */
         case F_QUASIQUOTE:
             /* This is the main case: expand the quasiquoted form */
@@ -232,6 +236,8 @@ Form *macro_expand(Env *macro_env, Form *f, int *depth) {
         case F_CBLOCK:
         case F_QUOTE:
         case F_TYPE_ANN:
+        /* CT0: Contract type annotations don't expand */
+        case F_CONTRACT_TYPE:
             /* Atoms, quote forms, and type annotations don't expand */
             return f;
         case F_QUASIQUOTE:

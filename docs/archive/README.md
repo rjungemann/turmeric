@@ -10,6 +10,9 @@ active development or consideration. For user-facing guides and tutorials, see
 
 - **[thread-safety-and-primitives-plan.md](thread-safety-and-primitives-plan.md)** -- Thread API design; see [../guides/threading-guide.md](../guides/threading-guide.md)
 - **[fiber-asm-ctx-plan.md](fiber-asm-ctx-plan.md)** -- Fiber context-switching fallback strategy for macOS
+- **[thread-cancellation-plan.md](thread-cancellation-plan.md)** -- Cooperative thread cancellation (TC0--TC2); prerequisite for WT3 (WASM threads)
+- **[wasm-threads-plan.md](wasm-threads-plan.md)** -- WASM pthread support; WT0--WT2 and WT4 complete; WT3 deferred pending TC0--TC2
+- **[release-tagging-plan.md](release-tagging-plan.md)** -- Semi-automatic version bumping and GitHub release workflow (not started)
 
 ### Ongoing Implementation
 
@@ -38,7 +41,7 @@ active development or consideration. For user-facing guides and tutorials, see
 - **[signal-processing-arrows-plan.md](signal-processing-arrows-plan.md)** -- Signal processing with arrows and HKTs (tutorial plan; depends on Phase 19 + HKT)
 - **[performance-improvement-plan.md](performance-improvement-plan.md)** -- Compiler optimization roadmap
 - **[test-perf-plan.md](test-perf-plan.md)** -- Test suite and performance testing strategy
-- **[panic-system-vs-exception-system-plan.md](panic-system-vs-exception-system-plan.md)** -- Error handling design rationale
+- **[history/panic-system-vs-exception-system-plan.md](history/panic-system-vs-exception-system-plan.md)** -- Error handling design rationale (moved to history; decision resolved)
 - **[remove-exceptions-plan.md](remove-exceptions-plan.md)** -- Plan to remove exception machinery
 - **[set-literal-plan.md](set-literal-plan.md)** -- `#s(...)` set literal syntax
 - **[autodoc-plan.md](autodoc-plan.md)** -- Docstring standard and doc generator (see also CLAUDE.md)
@@ -78,6 +81,8 @@ The following planning documents have guide counterparts in [../guides/](../guid
 | [uniqueness-types-guide.md](../guides/uniqueness-types-guide.md) | `uniqueness-types-plan.md` (complete) |
 | [vscode-guide.md](../guides/vscode-guide.md) | `vscode-syntax-highlighting-plan.md` |
 | [web-continuations-tutorial.md](../guides/web-continuations-tutorial.md) | `web-continuations-tutorial-plan.md` (complete) |
+| [union-intersection-types-guide.md](../guides/union-intersection-types-guide.md) | `intersection-union-types-plan.md` (IT0--IT4 complete, IT4 partial) |
+| [contract-types-guide.md](../guides/contract-types-guide.md) | `../contract-types-plan.md` (CT0--CT4 planned) |
 
 ## Historical Documents
 

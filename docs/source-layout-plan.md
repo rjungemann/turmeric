@@ -53,6 +53,8 @@ src/
 │   ├── builtins.{c,h}      # built-in primitive table
 │   ├── typeclass.{c,h}     # typeclass environment
 │   ├── diag.{c,h}          # diagnostics (errors, warnings, codes)
+│   ├── fmt.{c,h}           # source pretty-printer
+│   ├── pkg.{c,h}           # Spice package manager (Phase PKG-1)
 │   ├── elab.{c,h}          # elaborator (see §3 for further split)
 │   └── emit.{c,h}          # C codegen  (see §3 for further split)
 │
@@ -150,9 +152,12 @@ change is mechanical and grep-friendly.
 
 ## 3. Splitting the large translation units
 
-Two files dominate the build: `elab.c` (11,850 lines, 495 KB) and `emit.c`
-(6,948 lines, 335 KB). Both have clear internal section boundaries already
-marked by `/* Phase N: ... */` comments.
+Two files dominate the build: `elab.c` (17,889 lines, 784 KB) and `emit.c`
+(8,347 lines, 408 KB). Both have grown substantially since this plan was first
+written (elab.c was 11,850 lines, emit.c was 6,948 lines), driven by the
+addition of algebraic effects, contract types, union/intersection types, and
+the Spice package manager. Both retain clear internal section boundaries
+already marked by `/* Phase N: ... */` comments.
 
 ### 3a. `emit.c` — recommended first (medium effort, low risk)
 
@@ -161,12 +166,16 @@ declarations. The natural split is:
 
 | New file | Approx lines | Contents |
 |---|---|---|
-| `emit_core.c` | ~550 | `EmitCtx`, naming helpers (`name_for_binding`, `mangle_field_name`), atom constructors, `emit_c_string`, `emit_builtin`, deferred-thunk machinery |
-| `emit_expr.c` | ~1,600 | `emit_value`, `emit_let_value`, `emit_if_value`, `emit_do_value` — expression-position emission |
-| `emit_stmt.c` | ~600 | `emit_stmt`, `emit_while_stmt`, `emit_set_stmt` — statement emission |
-| `emit_fns.c` | ~2,400 | `emit_fn_def`, closure environments, typeclass dict emission, RC/cloneable-cont emission |
-| `emit_effects.c` | ~900 | algebraic effects, CPS shift/reset, continuation frame emission |
-| `emit_module.c` | ~900 | `emit_header_file`, `emit_impl_file` — module codegen |
+| `emit_core.c` | ~650 | `EmitCtx`, naming helpers (`name_for_binding`, `mangle_field_name`), atom constructors, `emit_c_string`, `emit_builtin`, deferred-thunk machinery |
+| `emit_expr.c` | ~1,900 | `emit_value`, `emit_let_value`, `emit_if_value`, `emit_do_value` — expression-position emission |
+| `emit_stmt.c` | ~700 | `emit_stmt`, `emit_while_stmt`, `emit_set_stmt` — statement emission |
+| `emit_fns.c` | ~2,700 | `emit_fn_def`, closure environments, typeclass dict emission, RC/cloneable-cont emission |
+| `emit_effects.c` | ~1,200 | algebraic effects, CPS shift/reset, continuation frame emission |
+| `emit_module.c` | ~1,200 | `emit_header_file`, `emit_impl_file` — module codegen |
+
+> **Note:** These estimates are scaled from the original plan proportionally;
+> actual boundaries should be verified against `emit.c` section markers before
+> splitting.
 
 An `emit_internal.h` header (not installed, included only by `emit_*.c`)
 would expose `EmitCtx` and the static helper declarations that need to be
@@ -188,30 +197,33 @@ compiler/
     elab_internal.h     # Elab struct, Scope, MacroDef, forward decls of all
                         # static helpers — included only by elab_*.c files
     elab_core.c         # Elab struct init, scope helpers, free-var analysis,
-                        # intern_cstr, binding helpers (~1,200 lines)
+                        # intern_cstr, binding helpers
     elab_macros.c       # defmacro, quasiquote, gensym, macro expansion
-                        # (~800 lines)
     elab_fns.c          # defn, fn, extern-c, closure elaboration
-                        # (~750 lines)
     elab_structs.c      # defstruct, make-struct, borrow traits
-                        # (~600 lines)
     elab_typeclasses.c  # defclass, definstance, kind aliases, HKT,
-                        # method-call dispatch  (~1,400 lines)
+                        # method-call dispatch
     elab_memory.c       # rc/weak/ref/gc primitives, Phase 9 & 10
-                        # (~700 lines)
     elab_effects.c      # defeffect, perform, handle, shift/reset,
                         # cloneable continuations, Phase 18/19/B2
-                        # (~1,000 lines)
+    elab_contracts.c    # contract types (require!/ensure!/assert!),
+                        # Phase CT
     elab_unsafe.c       # ptr-deref/write/add, unsafe-cast, reinterpret,
-                        # raw-malloc/free, Phase U3  (~400 lines)
-    elab_module.c       # module load, import, export, Phase M  (~600 lines)
+                        # raw-malloc/free, Phase U3
+    elab_module.c       # module load, import, export, Phase M
     elab_call.c         # function-call elaboration, method dispatch,
-                        # threading macros (-> and ->>)  (~800 lines)
+                        # threading macros (-> and ->>)
     elab_toplevel.c     # elaborate_program entry point, top-level form
-                        # dispatch  (~600 lines)
+                        # dispatch
 ```
 
-Target: no single file above ~1,500 lines.
+Target: no single file above ~2,000 lines.
+
+> **Note:** The original per-file line estimates from this plan are stale —
+> elab.c has grown from ~11,850 to ~17,889 lines. Re-baseline the estimates
+> by grepping for `/* Phase` section markers before starting the split. A new
+> `elab_contracts.c` is needed to house contract-type elaboration, which did
+> not exist when this plan was written.
 
 **The critical constraint** is that every `elab_*.c` file is a single
 translation unit that still needs `static` linkage for internal helpers
@@ -241,8 +253,8 @@ moving to the next, since elab is on the critical path for every fixture.
 |---|---|---|---|
 | 1 | Delete root generated files + add `.gitignore` | Trivial | Removes noise from every `git status` |
 | 2 | Move files into `compiler/`, `passes/`, `runtime/`, `async/`, `web/` + update `CMakeLists.txt` | ~1 day | Navigation, grep locality, mental model |
-| 3 | Split `emit.c` into 6 files via `emit_internal.h` | ~2 days | Faster incremental builds, clearer codegen stages |
-| 4 | Split `elab.c` into ~11 files via `elab_internal.h` | ~1 week | Biggest win for readability and build times; highest risk |
+| 3 | Split `emit.c` into 6 files via `emit_internal.h` | ~2–3 days | Faster incremental builds, clearer codegen stages; emit.c is now 8,347 lines |
+| 4 | Split `elab.c` into ~12 files via `elab_internal.h` | ~2 weeks | Biggest win for readability and build times; highest risk; elab.c is now 17,889 lines |
 
 Items 1–2 are independent of each other and of 3–4. Items 3 and 4 are also
 independent. The directory reorganisation (item 2) should happen before the

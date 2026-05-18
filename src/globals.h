@@ -59,3 +59,7 @@ extern bool g_intersection_types_enabled;
 
 /* ET4: -Xeffect-types enables full effect typing (TY_HANDLER, handler typing, ET4 checks) */
 extern bool g_effect_types_enabled;
+
+/* CT3: Contract checking configuration */
+extern bool g_contracts_enabled;          /* -Xcontracts: enable contract syntax (always on in debug) */
+extern bool g_keep_contracts_in_release;  /* --keep-contracts: retain checks in release builds */

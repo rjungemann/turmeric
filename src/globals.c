@@ -61,3 +61,7 @@ bool g_intersection_types_enabled = false;
 
 /* ET4: -Xeffect-types flag — enable full effect typing */
 bool g_effect_types_enabled = false;  /* ET4: -Xeffect-types */
+
+/* CT3: Contract checking configuration */
+bool g_contracts_enabled = true;          /* contracts always active by default */
+bool g_keep_contracts_in_release = false; /* --keep-contracts: retain in release builds */

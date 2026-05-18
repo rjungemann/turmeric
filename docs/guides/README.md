@@ -2,6 +2,11 @@
 
 User-facing documentation for Turmeric features, tutorials, and best practices.
 
+## Getting Started
+
+- **[quickstart.md](quickstart.md)** — Prose introduction: expressions, functions, control flow, Option, Result, collections, closures, structs, and algebraic effects
+- **[repl-tutorial.md](repl-tutorial.md)** — 22-step interactive tutorial to follow at `tur repl` or the web REPL
+
 ## Concurrency and Async
 
 - **[threading-guide.md](threading-guide.md)** — OS threads, `Arc<T>`, `Mutex<T>`, `Atomic<T>`, channels
@@ -31,6 +36,7 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 - **[type-annotations-guide.md](type-annotations-guide.md)** — Compound type annotation syntax: `(-> a b)`, `(vec T)`, `forall`, and more
 - **[gadts-guide.md](gadts-guide.md)** — GADTs: `defgadt`, type refinement, equality witnesses, union types, gradual typing
 - **[gadts-cookbook.md](gadts-cookbook.md)** — GADTs cookbook: practical patterns and recipes
+- **[union-intersection-types-guide.md](union-intersection-types-guide.md)** — Union (`A | B`) and intersection (`A & B`) types, `any`, gradual typing
 
 ## Type Safety
 
@@ -40,6 +46,7 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 ## Error Handling
 
 - **[error-handling-guide.md](error-handling-guide.md)** — `Result`, `Option`, `panic`, contract macros (`assert!`, `require!`, `ensure!`)
+- **[contract-types-guide.md](contract-types-guide.md)** — Contract types: `{ x : T | p }`, `:pre`/`:post` annotations, FFI contracts (planned v4)
 - **[../design/error-handling-rationale.md](../design/error-handling-rationale.md)** — Design rationale: exceptions vs. panic
 
 ## Tutorials and Examples
@@ -58,6 +65,7 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 
 - **[formatter-guide.md](formatter-guide.md)** — `tur format` CLI and web REPL Format button
 - **[vscode-guide.md](vscode-guide.md)** — VS Code extension installation and configuration
+- **[vim-guide.md](vim-guide.md)** — Vim / Neovim syntax highlighting installation and configuration
 
 ## Reference
 
@@ -71,15 +79,15 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 - Concurrency → [threading-guide.md](threading-guide.md), [async-await-guide.md](async-await-guide.md), [stm-guide.md](stm-guide.md), [stm-tutorial.md](stm-tutorial.md)
 - Data structures → [hamt-guide.md](hamt-guide.md)
 - Control flow → [effects-system-guide.md](effects-system-guide.md), [logic-programming-guide.md](logic-programming-guide.md), [serializable-continuations-guide.md](serializable-continuations-guide.md), [web-continuations-guide.md](web-continuations-guide.md)
-- Type system → [hkt-guide.md](hkt-guide.md), [hrt-guide.md](hrt-guide.md), [module-system-guide.md](module-system-guide.md), [type-annotations-guide.md](type-annotations-guide.md)
+- Type system → [hkt-guide.md](hkt-guide.md), [hrt-guide.md](hrt-guide.md), [module-system-guide.md](module-system-guide.md), [type-annotations-guide.md](type-annotations-guide.md), [union-intersection-types-guide.md](union-intersection-types-guide.md)
 - Type safety → [substructural-types-guide.md](substructural-types-guide.md), [uniqueness-types-guide.md](uniqueness-types-guide.md)
 - Effects design → [effects-vs-monads.md](effects-vs-monads.md)
 - Package management → [package-management-guide.md](package-management-guide.md)
-- Tools → [formatter-guide.md](formatter-guide.md), [vscode-guide.md](vscode-guide.md)
-- Error handling → [error-handling-guide.md](error-handling-guide.md)
+- Tools → [formatter-guide.md](formatter-guide.md), [vscode-guide.md](vscode-guide.md), [vim-guide.md](vim-guide.md)
+- Error handling → [error-handling-guide.md](error-handling-guide.md), [contract-types-guide.md](contract-types-guide.md)
 
 **By level:**
-- Beginner → Tutorials, guides on core features
+- Beginner → [quickstart.md](quickstart.md), [repl-tutorial.md](repl-tutorial.md), then core feature guides
 - Intermediate → Advanced control flow, type system
 - Advanced → Effects, logic programming, serializable continuations, checkpointing
 

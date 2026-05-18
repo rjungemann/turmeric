@@ -18,6 +18,10 @@ This folder contains planning and design documents for completed phases or super
 
 - **hamt-feasibility.md** — Feasibility analysis for persistent hash array mapped tries (HAMTs); decision made to include in v2 roadmap as [hamt-plan.md](../hamt-plan.md)
 
+## Resolved Design Decisions
+
+- **panic-system-vs-exception-system-plan.md** — Pre-implementation comparison of panic vs. exception error handling (2024); decision made and implemented: hybrid Result + limited panic (see [../../guides/error-handling-guide.md](../../guides/error-handling-guide.md))
+
 ## Design References (Kept for Architecture Context)
 
 - **higher-kinded-types-plan.md** — HKT architecture and design (Phase H3); mostly implemented; kept as reference for understanding the type system design

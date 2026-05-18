@@ -1,0 +1,362 @@
+id: quickstart
+title: Turmeric Quickstart
+description: A 22-step introduction to Turmeric covering expressions, functions,
+  control flow, Option, Result, collections, closures, structs, and algebraic effects.
+
+steps:
+  - id: first_expression
+    title: Your first expression
+    instruction: |
+      Turmeric uses prefix notation -- the operator comes first inside parentheses.
+      Evaluate an addition: type (+ 1 2) and press Enter.
+    expected: "(+ 1 2)"
+    alternate_accept:
+      - "(* 6 7)"
+      - "(- 100 58)"
+      - "(/ 144 12)"
+    hints:
+      - "Operators go inside the parentheses, before the arguments."
+      - "Try (+ 1 2) -- that is 'add 1 and 2'."
+    success_message: "Correct! The REPL evaluates the expression and prints the result."
+    verify: "(+ 1 2)"
+
+  - id: strings_and_booleans
+    title: Strings and booleans
+    instruction: |
+      Print a string with println. Type: (println "Hello, Turmeric!")
+    expected: "(println \"Hello, Turmeric!\")"
+    alternate_accept:
+      - "(= 1 1)"
+      - "(not true)"
+      - "(not false)"
+    hints:
+      - "Strings are written in double quotes."
+      - "println prints the value and a newline."
+    success_message: "Well done! println prints the string and returns nil (nothing printed)."
+    verify: "(= 1 1)"
+
+  - id: let_bindings
+    title: Binding names with let
+    instruction: |
+      let introduces local names. Type: (let [x 10 y 20] (+ x y))
+    expected: "(let [x 10 y 20] (+ x y))"
+    alternate_accept:
+      - "(let [a 1 b 2 c 3] (+ a (+ b c)))"
+      - "(let [x 5] (* x x))"
+    hints:
+      - "Bindings go in a vector [...] after the word let."
+      - "Try (let [x 10 y 20] (+ x y))."
+    success_message: "Correct! x and y are only visible inside the let body."
+    verify: "(let [x 10 y 20] (+ x y))"
+
+  - id: defn
+    title: Defining functions with defn
+    instruction: |
+      defn creates a named function. Define square and call it:
+        (defn square [x :int] :int (* x x))
+        (square 9)
+    expected: "(square 9)"
+    alternate_accept:
+      - "(defn square [x :int] :int (* x x))"
+    hints:
+      - "Define the function first: (defn square [x :int] :int (* x x))"
+      - "Then call it: (square 9)"
+    success_message: "Correct! defn definitions persist for the rest of the REPL session."
+    verify: "(square 9)"
+
+  - id: if_cond
+    title: if and cond
+    instruction: |
+      if is an expression -- both branches produce a value. Define abs:
+        (defn abs [n :int] :int (if (< n 0) (- 0 n) n))
+        (abs -5)
+    expected: "(abs -5)"
+    alternate_accept:
+      - "(defn abs [n :int] :int (if (< n 0) (- 0 n) n))"
+      - "(defn sign [n :int] :int (cond (> n 0) 1 (< n 0) -1 :else 0))"
+    hints:
+      - "Define abs first: (defn abs [n :int] :int (if (< n 0) (- 0 n) n))"
+      - "Then call it with a negative number: (abs -5)"
+    success_message: "Correct! Both branches of if must produce a value."
+    verify: "(abs -5)"
+
+  - id: recursion
+    title: Recursion
+    instruction: |
+      Define a recursive factorial function:
+        (defn factorial [n :int] :int
+          (if (<= n 1) 1 (* n (factorial (- n 1)))))
+        (factorial 10)
+    expected: "(factorial 10)"
+    alternate_accept:
+      - "(defn factorial [n :int] :int (if (<= n 1) 1 (* n (factorial (- n 1)))))"
+    hints:
+      - "The base case is (<= n 1), returning 1."
+      - "The recursive case is (* n (factorial (- n 1)))."
+    success_message: "Correct! Turmeric uses recursion (and the for macro) instead of loop keywords."
+    verify: "(factorial 10)"
+
+  - id: when_unless
+    title: when and unless
+    instruction: |
+      when evaluates its body only when the test is truthy. Type:
+        (when true (println "yes"))
+    expected: "(when true (println \"yes\"))"
+    alternate_accept:
+      - "(unless false (println \"also yes\"))"
+      - "(when (< 0 1) (println \"positive\"))"
+    hints:
+      - "when takes a test and a body expression."
+      - "Try (when true (println \"yes\"))"
+    success_message: "Correct! when and unless are macros from stdlib/macros.tur."
+    verify: "(when true (println \"yes\"))"
+
+  - id: option_constructors
+    title: "Option: constructors and predicates"
+    instruction: |
+      option-some wraps a value; option-none represents absence.
+      Check: (option-some? (option-some 42))
+    expected: "(option-some? (option-some 42))"
+    alternate_accept:
+      - "(option-none? (option-none))"
+      - "(option-some? (option-none))"
+      - "(option-none? (option-some 0))"
+    hints:
+      - "option-some wraps a value; option-some? tests for it."
+      - "Try (option-some? (option-some 42))"
+    success_message: "Correct! option-some holds a value; option-none is the empty case."
+    verify: "(option-some? (option-some 42))"
+
+  - id: option_unwrap
+    title: "Option: safe unwrapping"
+    instruction: |
+      option-unwrap-or provides a fallback instead of panicking.
+        (option-unwrap-or (option-none) -1)
+    expected: "(option-unwrap-or (option-none) -1)"
+    alternate_accept:
+      - "(option-unwrap (option-some 99))"
+      - "(defn safe-div [a :int b :int] (if (= b 0) (option-none) (option-some (/ a b))))"
+    hints:
+      - "option-unwrap-or takes an option and a fallback value."
+      - "Try (option-unwrap-or (option-none) -1)"
+    success_message: "Correct! option-unwrap-or is safe -- it never panics."
+    verify: "(option-unwrap-or (option-none) -1)"
+
+  - id: result_constructors
+    title: "Result: success or failure"
+    instruction: |
+      ok wraps a success value; err wraps an error.
+        (ok? (ok 100))
+    expected: "(ok? (ok 100))"
+    alternate_accept:
+      - "(err? (ok 100))"
+      - "(result-unwrap-or (err 0) -1)"
+    hints:
+      - "ok and err are constructors; ok? and err? are predicates."
+      - "Try (ok? (ok 100))"
+    success_message: "Correct! Use Result when the error case carries a useful value."
+    verify: "(ok? (ok 100))"
+
+  - id: cond_dispatch
+    title: Branching on Option and Result with cond
+    instruction: |
+      Use cond + predicates to branch on wrapped values. Define and call:
+        (defn describe-result [r]
+          (cond (ok? r)  (println "ok!")
+                (err? r) (println "err!")
+                :else    (println "unknown")))
+        (describe-result (ok 1))
+    expected: "(describe-result (ok 1))"
+    alternate_accept:
+      - "(defn describe-result [r] (cond (ok? r) (println \"ok!\") (err? r) (println \"err!\") :else (println \"unknown\")))"
+    hints:
+      - "Define describe-result first, then call it with (ok 1)."
+      - "cond tests each condition in order; :else is the fallback."
+    success_message: "Correct! This predicate-cond pattern is the standard lightweight dispatch."
+    verify: "(describe-result (ok 1))"
+
+  - id: vectors
+    title: Vectors
+    instruction: |
+      vec-new allocates an empty vector; vec-push! appends to it.
+        (let [v (vec-new)]
+          (vec-push! v 10)
+          (vec-push! v 20)
+          (vec-push! v 30)
+          (vec-len v))
+    expected: "(let [v (vec-new)] (vec-push! v 10) (vec-push! v 20) (vec-push! v 30) (vec-len v))"
+    alternate_accept:
+      - "(vec-len (vec-new))"
+    hints:
+      - "vec-new creates the vector; vec-push! adds elements."
+      - "vec-len returns the current length."
+    success_message: "Correct! The ! suffix on vec-push! signals in-place mutation."
+    verify: "(let [v (vec-new)] (vec-push! v 42) (vec-len v))"
+
+  - id: for_macro
+    title: The for macro
+    instruction: |
+      for counts from lo to hi (exclusive). Type:
+        (for i 0 5 (println i))
+    expected: "(for i 0 5 (println i))"
+    alternate_accept:
+      - "(for i 1 6 (println i))"
+      - "(for i 0 3 (println (* i i)))"
+    hints:
+      - "The form is (for variable lo hi body)."
+      - "Try (for i 0 5 (println i))"
+    success_message: "Correct! for binds i to 0, 1, 2, 3, 4 in turn."
+    verify: "(for i 0 5 (println i))"
+
+  - id: closures
+    title: Closures and fn
+    instruction: |
+      fn creates an anonymous function. Define make-adder and use it:
+        (defn make-adder [n :int] (fn [x :int] :int (+ x n)))
+        (let [add3 (make-adder 3)] (add3 7))
+    expected: "(let [add3 (make-adder 3)] (add3 7))"
+    alternate_accept:
+      - "(defn make-adder [n :int] (fn [x :int] :int (+ x n)))"
+      - "(let [add5 (fn [x :int] :int (+ x 5))] (add5 10))"
+    hints:
+      - "fn creates a function value that captures its surrounding scope."
+      - "Define make-adder first, then call it: (let [add3 (make-adder 3)] (add3 7))"
+    success_message: "Correct! Each call to make-adder produces a new closure with its own n."
+    verify: "(let [add3 (make-adder 3)] (add3 7))"
+
+  - id: higher_order
+    title: Passing functions as arguments
+    instruction: |
+      Functions are first-class values. Define apply-twice and use it:
+        (defn apply-twice [f x :int] :int (f (f x)))
+        (apply-twice (fn [x :int] :int (* x 2)) 3)
+    expected: "(apply-twice (fn [x :int] :int (* x 2)) 3)"
+    alternate_accept:
+      - "(defn apply-twice [f x :int] :int (f (f x)))"
+    hints:
+      - "Define apply-twice first."
+      - "Pass an inline fn as the first argument: (fn [x :int] :int (* x 2))"
+    success_message: "Correct! apply-twice calls f twice: 3 -> 6 -> 12."
+    verify: "(apply-twice (fn [x :int] :int (* x 2)) 3)"
+
+  - id: defstruct
+    title: Defining structs
+    instruction: |
+      defstruct declares a record type. Define Point and read its fields:
+        (defstruct Point [x :int y :int])
+        (let [p (Point 3 4)] (Point-x p))
+    expected: "(let [p (Point 3 4)] (Point-x p))"
+    alternate_accept:
+      - "(defstruct Point [x :int y :int])"
+      - "(let [p (Point 3 4)] (Point-y p))"
+    hints:
+      - "Define the struct first: (defstruct Point [x :int y :int])"
+      - "The accessor is StructName-fieldname: (Point-x p)"
+    success_message: "Correct! defstruct generates a constructor and field accessors automatically."
+    verify: "(let [p (Point 3 4)] (Point-x p))"
+
+  - id: defeffect_perform
+    title: Declaring and performing effects
+    instruction: |
+      defeffect declares a named effect; perform raises it. Without a handler
+      the runtime raises an error -- that is intentional.
+        (defeffect Log [msg :cstr] :void)
+        (defn do-work [] :void
+          (perform (Log "starting"))
+          (perform (Log "done")))
+        (do-work)
+    expected: "(do-work)"
+    alternate_accept:
+      - "(defeffect Log [msg :cstr] :void)"
+      - "(defn do-work [] :void (perform (Log \"starting\")) (perform (Log \"done\")))"
+    hints:
+      - "Define the effect and function first, then call (do-work)."
+      - "The unhandled-effect error is expected -- the handler comes next."
+    success_message: "Correct! The runtime searches the call stack for a matching handler."
+    verify: "(do-work)"
+
+  - id: handle_resume
+    title: Handling effects
+    instruction: |
+      handle intercepts effects; resume continues the computation.
+        (handle (do-work)
+          (Log [msg] k)
+            (do (println msg) (resume k (nil-value))))
+    expected: "(handle (do-work) (Log [msg] k) (do (println msg) (resume k (nil-value))))"
+    alternate_accept:
+      - "(handle (do-work) (Log [msg] k) (do (println msg) (resume k nil)))"
+    hints:
+      - "k is the continuation. (resume k v) passes v back to the perform expression."
+      - "Log returns :void, so pass (nil-value) to resume."
+    success_message: "Correct! resume continues do-work from the point where perform suspended it."
+    verify: "(handle (do-work) (Log [msg] k) (do (println msg) (resume k (nil-value))))"
+
+  - id: dependency_injection
+    title: Effects for dependency injection
+    instruction: |
+      Swap the handler without changing do-work:
+        (handle (do-work)
+          (Log [msg] k)
+            (do (println (str-concat "[LOG] " msg)) (resume k (nil-value))))
+    expected: "(handle (do-work) (Log [msg] k) (do (println (str-concat \"[LOG] \" msg)) (resume k (nil-value))))"
+    alternate_accept:
+      - "(handle (do-work) (Log [msg] k) (resume k (nil-value)))"
+    hints:
+      - "Only the handler body changes -- do-work is identical to the previous step."
+      - "str-concat concatenates two :cstr values."
+    success_message: "Correct! The same computation, different interpretation."
+    verify: "(handle (do-work) (Log [msg] k) (do (println (str-concat \"[LOG] \" msg)) (resume k (nil-value))))"
+
+  - id: effects_return_values
+    title: Effects that return values
+    instruction: |
+      An effect with a non-void return type lets the handler supply a value.
+        (defeffect Ask [] :int)
+        (defn use-ask [] :int (+ 1 (perform (Ask))))
+        (handle (use-ask) (Ask [] k) (resume k 41))
+    expected: "(handle (use-ask) (Ask [] k) (resume k 41))"
+    alternate_accept:
+      - "(defeffect Ask [] :int)"
+      - "(defn use-ask [] :int (+ 1 (perform (Ask))))"
+      - "(handle (use-ask) (Ask [] k) (resume k 99))"
+    hints:
+      - "Define Ask and use-ask first."
+      - "The handler passes 41 to resume; use-ask adds 1 to get 42."
+    success_message: "Correct! resume's argument becomes the value that (perform (Ask)) evaluates to."
+    verify: "(handle (use-ask) (Ask [] k) (resume k 41))"
+
+  - id: reload_file
+    title: Loading a file with :reload
+    instruction: |
+      Save this to hello.tur:
+        (defn greet [name :cstr] :void
+          (println (str-concat "Hello, " (str-concat name "!"))))
+      Then in the REPL:
+        :reload hello.tur
+        (greet "world")
+    expected: "(greet \"world\")"
+    alternate_accept:
+      - ":reload hello.tur"
+    hints:
+      - "Create hello.tur in your working directory, then type :reload hello.tur"
+      - "After reloading, call (greet \"world\")"
+    success_message: "Correct! :reload loads the file into the current session without restarting."
+    verify: "(greet \"world\")"
+
+  - id: next_steps
+    title: Where to go next
+    instruction: |
+      You have completed the Turmeric quickstart tutorial!
+
+      Suggested reading:
+        - docs/guides/error-handling-guide.md  -- Result, Option, panic, contracts
+        - docs/guides/effects-system-guide.md  -- full effects reference
+        - docs/guides/hkt-guide.md             -- Functor, Monad, Applicative
+        - docs/guides/threading-guide.md       -- OS threads and channels
+        - docs/html/api/index.html             -- generated API reference
+
+      Type :doc <sym> in the REPL to look up any symbol.
+    expected: ""
+    hints: []
+    success_message: "Well done! You have seen the core of Turmeric."
+    verify: ~

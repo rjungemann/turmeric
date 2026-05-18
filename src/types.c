@@ -407,6 +407,19 @@ const char *type_name(Type t) {
             buf_putc(&tmp, '\0');
             return tur_strdup(tmp.data);
         }
+        /* CT0: Contract type — "{ x : T | p }" */
+        case TY_CONTRACT: {
+            Buf tmp;
+            buf_init(&tmp);
+            buf_puts(&tmp, "{ ");
+            buf_puts(&tmp, t.as.contract_.var_name ? t.as.contract_.var_name : "_");
+            buf_puts(&tmp, " : ");
+            buf_puts(&tmp, t.as.contract_.base_type
+                          ? type_name(*t.as.contract_.base_type) : "?");
+            buf_puts(&tmp, " | ... }");
+            buf_putc(&tmp, '\0');
+            return tur_strdup(tmp.data);
+        }
     }
     return "?";
 }
@@ -626,6 +639,19 @@ static void type_name_buf(Buf *b, Type t) {
             buf_putc(b, '>');
             break;
         }
+        /* CT0: Contract type */
+        case TY_CONTRACT: {
+            buf_puts(b, "{ ");
+            buf_puts(b, t.as.contract_.var_name ? t.as.contract_.var_name : "_");
+            buf_puts(b, " : ");
+            if (t.as.contract_.base_type) {
+                type_name_buf(b, *t.as.contract_.base_type);
+            } else {
+                buf_putc(b, '?');
+            }
+            buf_puts(b, " | ... }");
+            break;
+        }
     }
 }
 
@@ -726,6 +752,11 @@ const char *type_c_name(Type t) {
         /* ET3: Handler type — struct with env pointer and function pointer */
         case TY_HANDLER:
             return "tur_handler_t";
+        /* CT0: Contract type — same C representation as its base type */
+        case TY_CONTRACT:
+            return t.as.contract_.base_type
+                   ? type_c_name(*t.as.contract_.base_type)
+                   : "int64_t";
     }
     return "void";
 }
@@ -904,6 +935,9 @@ static bool type_is_guarded_recursive_helper(const Type *t, const char *rec_name
         /* ET3: Handler type — leaf type; no recursive members */
         case TY_HANDLER:
             return true;
+        /* CT0: Contract type — guarded by the base type constructor */
+        case TY_CONTRACT:
+            return type_is_guarded_recursive_helper(t->as.contract_.base_type, rec_name, depth + 1);
     }
 
     return true;  /* Unknown type kind - assume safe */
@@ -986,6 +1020,8 @@ const char *typekind_to_string(TypeKind k) {
         case TY_ANY:          return "any";
         /* ET3: Handler type */
         case TY_HANDLER:      return "handler";
+        /* CT0: Contract type */
+        case TY_CONTRACT:     return "contract";
         /* Phase HKT-P1/P2 */
         case TY_APP:          return "app";
         case TY_REC:          return "rec";
@@ -1158,12 +1194,17 @@ TypeKind typekind_from_name(const char *name) {
  * Rules:
  *   - TY_ANY as super_ accepts any subtype (top type).
  *   - TY_NEVER as sub is a subtype of everything (bottom type).
+ *   - TY_CONTRACT as sub is a subtype of its base type (predicate already checked).
  *   - TY_HANDLER: covariant in result, contravariant in value (simplified: equality for now).
  *   - Otherwise: use type_eq.
  */
 bool type_is_subtype(Type sub, Type super_) {
     if (super_.kind == TY_ANY) return true;
     if (sub.kind == TY_NEVER) return true;
+    /* CT0: Contract type is a subtype of its base type */
+    if (sub.kind == TY_CONTRACT && sub.as.contract_.base_type) {
+        if (type_is_subtype(*sub.as.contract_.base_type, super_)) return true;
+    }
     if (sub.kind == super_.kind) {
         if (sub.kind == TY_HANDLER) {
             if (sub.as.handler_.effect_name != super_.as.handler_.effect_name) return false;

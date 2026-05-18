@@ -118,6 +118,8 @@ typedef enum TypeKind {
     TY_ANY,          /* any — top type; every type is a subtype of any */
     /* ET3: Handler type — a handler for a named algebraic effect */
     TY_HANDLER,      /* handler<Effect, ValueType, ResultType> */
+    /* CT0: Contract type — { x : T | p }; a refinement-checked wrapper around T */
+    TY_CONTRACT,     /* { var : base_type | predicate } */
 } TypeKind;
 
 /* Phase G0: Constructor field descriptor for ADTs */
@@ -254,6 +256,9 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
         /* ET3: handler values are copyable (they are function-pointer structs) */
         case TY_HANDLER:
             return CK_COPY;
+        /* CT0: contract type copies like its base type (defaults to copy for safety) */
+        case TY_CONTRACT:
+            return CK_COPY;
         case TY_UNKNOWN:
         default:
             return CK_MOVE;
@@ -374,6 +379,12 @@ typedef struct Type {
             TypeKind    result_kind;  /* the result type of the handle expression */
             CopyKind    cont_kind;    /* LC0: ownership discipline for the continuation k */
         } handler_;
+        /* CT0: Contract type — { x : T | p } */
+        struct {
+            struct Type      *base_type;  /* the underlying type T */
+            const char       *var_name;   /* bound variable x in { x : T | p } */
+            const struct Form *predicate; /* predicate expression p (a Form*) */
+        } contract_;
     } as;
 } Type;
 
@@ -709,6 +720,19 @@ static inline Type type_adt(AdtDef *def) {
 static inline Type type_tyvar_named(const char *name) {
     Type t = { .kind = TY_TYVAR, .copy_kind = CK_COPY };
     t.as.tyvar_.name = name;
+    return t;
+}
+
+/* CT0: Contract type constructor — { x : T | p } */
+static inline Type type_contract(Arena *a, struct Type *base, const char *var, const struct Form *pred) {
+    (void)a; /* base is already arena-allocated at call sites */
+    Type t = {0};
+    t.kind = TY_CONTRACT;
+    t.copy_kind = base ? base->copy_kind : CK_COPY;
+    t.hkt_kind = KIND_STAR;
+    t.as.contract_.base_type = base;
+    t.as.contract_.var_name = var;
+    t.as.contract_.predicate = pred;
     return t;
 }
 
