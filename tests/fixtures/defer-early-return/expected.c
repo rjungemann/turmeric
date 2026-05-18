@@ -377,6 +377,7 @@ static void tur_panic(const char *msg) {
     if (global_panic_frame) {
         tur_frame_fire_chain(global_panic_frame);
     }
+    fflush(NULL);
     abort();
 }
 
@@ -2061,11 +2062,11 @@ static int64_t test_return_with_defer();
 static int64_t test_return_in_nested_scope();
 static int64_t test_return_in_if();
 
-static void __defer_12(void *__env) {
+static void __defer_13(void *__env) {
     puts("defer-in-then");
 }
 
-static void __defer_9(void *__env) {
+static void __defer_10(void *__env) {
     puts("defer-before-if");
 }
 
@@ -2149,7 +2150,7 @@ static void tur_contract_check(bool condition, const char * msg) {
 }
 
 static void tur_contract_check_inv(int64_t obj, int64_t pred, const char * msg) {
-        typedef int64_t (*pred_fn)(int64_t);
+        typedef bool (*pred_fn)(int64_t);
   pred_fn f = (pred_fn)(intptr_t)pred;
   if (!f(obj)) { tur_panic((const char*)msg); }
   
@@ -2364,19 +2365,22 @@ static int64_t test_return_in_nested_scope() {
 static int64_t test_return_in_if() {
         tur_frame __frame_8;
         tur_frame_init(&__frame_8, NULL);
-        tur_frame_push_defer(&__frame_8, __defer_9, NULL);
-        int64_t __t10;
+        int64_t __t9;
+        tur_frame_push_defer(&__frame_8, __defer_10, NULL);
+        int64_t __t11;
         if (true) {
-            tur_frame __frame_11;
-            tur_frame_init(&__frame_11, &__frame_8);
-            tur_frame_push_defer(&__frame_11, __defer_12, NULL);
-            tur_frame_fire_chain(&__frame_11);
+            tur_frame __frame_12;
+            tur_frame_init(&__frame_12, &__frame_8);
+            tur_frame_push_defer(&__frame_12, __defer_13, NULL);
+            tur_frame_fire_chain(&__frame_12);
             return INT64_C(42);
-            tur_frame_fire_lifo(&__frame_11);
+            tur_frame_fire_lifo(&__frame_12);
         } else {
-            __t10 = INT64_C(0);
+            __t11 = INT64_C(0);
         }
+        __t9 = __t11;
         tur_frame_fire_lifo(&__frame_8);
+        return __t9;
 }
 
 int main() {
@@ -2404,9 +2408,9 @@ int main() {
             (void)r4_222;
             printf("%lld\n", (long long)(r4_222));
         }
-        int64_t __t13;
-        __t13 = INT64_C(0);
-        return (int)__t13;
+        int64_t __t14;
+        __t14 = INT64_C(0);
+        return (int)__t14;
 }
 
 

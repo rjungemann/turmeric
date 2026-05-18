@@ -40,7 +40,7 @@ fi
 # Override with TUR_CC_FLAGS="-O1 -std=c99" for faster (but less safe) builds.
 # NOTE: -O0 causes SIGTRAP on Apple Silicon; -O1 exposes latent UB in some
 #       emitted functions missing a return path — keep -O2 for safety.
-export TUR_CC_FLAGS="${TUR_CC_FLAGS:--O2 -std=c99 -Wall -Lbuild/src}"
+export TUR_CC_FLAGS="${TUR_CC_FLAGS:--O2 -std=c99 -Wall -fno-strict-aliasing -Lbuild/src}"
 
 # T19: ThreadSanitizer (TSan) support.
 # Set TUR_TSAN=1 to compile and run all fixtures with -fsanitize=thread.

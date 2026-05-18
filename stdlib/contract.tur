@@ -61,7 +61,7 @@
 ;;;   msg :cstr -- the panic message to emit if the predicate returns false
 (defn tur-contract-check-inv [obj :int pred :int msg :cstr] :void
   ```c
-  typedef int64_t (*pred_fn)(int64_t);
+  typedef bool (*pred_fn)(int64_t);
   pred_fn f = (pred_fn)(intptr_t)pred;
   if (!f(obj)) { tur_panic((const char*)msg); }
   ```)
