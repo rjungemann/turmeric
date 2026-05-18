@@ -6,407 +6,14 @@
 <title>Roadmap -- Turmeric</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400;1,500&family=DM+Sans:wght@300;400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<style>
-*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
-
-:root {
-  --bg-base:       #0C0A08;
-  --bg-surface:    #111009;
-  --bg-panel:      #161411;
-  --bg-hover:      #1C1915;
-  --bg-card:       #131108;
-  --border:        #222018;
-  --border-mid:    #2E2B22;
-  --border-str:    #3D3A2F;
-  --gold:          #D48B1C;
-  --gold-bright:   #EFA030;
-  --gold-dim:      #7A5010;
-  --gold-subtle:   rgba(212,139,28,0.08);
-  --gold-line:     rgba(212,139,28,0.25);
-  --text-primary:  #EAE0D2;
-  --text-sec:      #8A7D6E;
-  --text-dim:      #4A4438;
-  --green:         #A8C98A;
-  --green-subtle:  rgba(168,201,138,0.10);
-  --teal:          #7AC4B8;
-  --teal-subtle:   rgba(122,196,184,0.10);
-  --amber:         #EFA030;
-  --amber-subtle:  rgba(239,160,48,0.10);
-  --purple:        #C4A0E8;
-  --purple-subtle: rgba(196,160,232,0.10);
-}
-
-html { scroll-behavior: smooth; }
-
-body {
-  background: var(--bg-base);
-  color: var(--text-primary);
-  font-family: 'DM Sans', sans-serif;
-  font-size: 16px;
-  line-height: 1.6;
-  overflow-x: hidden;
-}
-
-a { text-decoration: none; color: inherit; }
-
-::-webkit-scrollbar { width: 5px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border-str); border-radius: 3px; }
-
-/* ── NAV ───────────────────────────────── */
-nav {
-  position: fixed;
-  top: 0; left: 0; right: 0;
-  z-index: 100;
-  height: 60px;
-  background: rgba(12,10,8,0.85);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  padding: 0 48px;
-  gap: 0;
-}
-
-.nav-logo {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.nav-mark {
-  width: 30px;
-  height: 30px;
-  background: var(--gold);
-  border-radius: 7px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: 'Cormorant Garamond', serif;
-  font-size: 18px;
-  font-weight: 600;
-  color: #0A0800;
-  flex-shrink: 0;
-}
-
-.nav-name {
-  font-family: 'Cormorant Garamond', serif;
-  font-size: 21px;
-  font-weight: 500;
-  color: var(--gold-bright);
-  letter-spacing: 0.01em;
-}
-
-.nav-links {
-  display: flex;
-  align-items: center;
-  gap: 28px;
-  margin-left: auto;
-}
-
-.nav-links a {
-  font-size: 13.5px;
-  font-weight: 400;
-  color: var(--text-sec);
-  transition: color 0.12s;
-}
-.nav-links a:hover { color: var(--text-primary); }
-.nav-links a.active { color: var(--gold-bright); }
-
-/* ── HERO ──────────────────────────────── */
-.hero {
-  padding: 130px 48px 80px;
-  max-width: 1100px;
-  margin: 0 auto;
-}
-
-.hero-eyebrow {
-  font-size: 11px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--gold);
-  margin-bottom: 20px;
-  font-weight: 500;
-}
-
-.hero-title {
-  font-family: 'Cormorant Garamond', serif;
-  font-size: clamp(40px, 6vw, 66px);
-  font-weight: 400;
-  line-height: 1.08;
-  color: var(--text-primary);
-  margin-bottom: 24px;
-}
-
-.hero-title em {
-  font-style: italic;
-  color: var(--gold-bright);
-}
-
-.hero-desc {
-  font-size: 17px;
-  color: var(--text-sec);
-  font-weight: 300;
-  max-width: 580px;
-  line-height: 1.7;
-}
-
-/* ── LEGEND ────────────────────────────── */
-.legend {
-  max-width: 1100px;
-  margin: 0 auto 64px;
-  padding: 0 48px;
-  display: flex;
-  gap: 24px;
-  flex-wrap: wrap;
-}
-
-.legend-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12.5px;
-  color: var(--text-sec);
-  font-weight: 300;
-}
-
-.status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-.dot-done     { background: var(--green); }
-.dot-progress { background: var(--amber); }
-.dot-planned  { background: var(--border-str); }
-
-/* ── SECTION ───────────────────────────── */
-.section {
-  max-width: 1100px;
-  margin: 0 auto 72px;
-  padding: 0 48px;
-}
-
-.section-header {
-  display: flex;
-  align-items: baseline;
-  gap: 14px;
-  margin-bottom: 28px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--border);
-}
-
-.section-title {
-  font-family: 'Cormorant Garamond', serif;
-  font-size: 26px;
-  font-weight: 400;
-  color: var(--text-primary);
-}
-
-.section-badge {
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  font-weight: 500;
-  padding: 3px 9px;
-  border-radius: 4px;
-}
-
-.badge-core     { background: var(--purple-subtle); color: var(--purple); }
-.badge-effects  { background: var(--teal-subtle);   color: var(--teal); }
-.badge-tooling  { background: var(--amber-subtle);  color: var(--amber); }
-.badge-interop  { background: var(--green-subtle);  color: var(--green); }
-.badge-dx       { background: var(--gold-subtle);   color: var(--gold); }
-
-/* ── CARD GRID ─────────────────────────── */
-.card-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 16px;
-}
-
-.card {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 22px 24px;
-  transition: border-color 0.15s, background 0.15s;
-  position: relative;
-}
-.card:hover {
-  border-color: var(--border-mid);
-  background: var(--bg-panel);
-}
-
-.card-top {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
-}
-
-.card-name {
-  font-size: 15px;
-  font-weight: 500;
-  color: var(--text-primary);
-  line-height: 1.3;
-}
-
-.status-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  font-weight: 500;
-  padding: 3px 9px;
-  border-radius: 20px;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.pill-done {
-  background: var(--green-subtle);
-  color: var(--green);
-  border: 1px solid rgba(168,201,138,0.2);
-}
-.pill-progress {
-  background: var(--amber-subtle);
-  color: var(--amber);
-  border: 1px solid rgba(239,160,48,0.2);
-}
-.pill-planned {
-  background: rgba(74,68,56,0.3);
-  color: var(--text-sec);
-  border: 1px solid var(--border-mid);
-}
-
-.card-desc {
-  font-size: 13.5px;
-  color: var(--text-sec);
-  font-weight: 300;
-  line-height: 1.6;
-}
-
-.card-note {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
-  font-size: 12px;
-  color: var(--text-dim);
-  font-family: 'JetBrains Mono', monospace;
-  line-height: 1.5;
-}
-
-/* ── FOOTER ────────────────────────────── */
-footer {
-  border-top: 1px solid var(--border);
-  background: var(--bg-surface);
-  padding: 56px 48px 40px;
-}
-
-.footer-inner {
-  max-width: 1100px;
-  margin: 0 auto;
-  display: grid;
-  grid-template-columns: 2fr 1fr 1fr 1fr;
-  gap: 48px;
-  padding-bottom: 48px;
-  border-bottom: 1px solid var(--border);
-}
-
-.footer-brand p {
-  font-size: 13.5px;
-  color: var(--text-dim);
-  margin-top: 14px;
-  line-height: 1.65;
-  font-weight: 300;
-  max-width: 260px;
-}
-
-.footer-col-title {
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-  margin-bottom: 16px;
-  font-weight: 500;
-}
-
-.footer-col a {
-  display: block;
-  font-size: 13.5px;
-  color: var(--text-sec);
-  margin-bottom: 10px;
-  transition: color 0.12s;
-  font-weight: 300;
-}
-.footer-col a:hover { color: var(--text-primary); }
-
-.footer-bottom {
-  max-width: 1100px;
-  margin: 28px auto 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.footer-copy {
-  font-size: 12.5px;
-  color: var(--text-dim);
-  font-weight: 300;
-}
-
-.footer-links {
-  display: flex;
-  gap: 20px;
-}
-
-.footer-links a {
-  font-size: 12.5px;
-  color: var(--text-dim);
-  transition: color 0.12s;
-}
-.footer-links a:hover { color: var(--text-sec); }
-
-/* ── REVEAL ─────────────────────────────── */
-.reveal {
-  opacity: 0;
-  transform: translateY(18px);
-  transition: opacity 0.55s ease, transform 0.55s ease;
-}
-.reveal.visible {
-  opacity: 1;
-  transform: none;
-}
-
-@media (max-width: 700px) {
-  nav { padding: 0 20px; }
-  .hero { padding: 110px 20px 56px; }
-  .legend { padding: 0 20px; }
-  .section { padding: 0 20px; }
-  footer { padding: 48px 20px 32px; }
-  .footer-inner { grid-template-columns: 1fr 1fr; }
-  .card-grid { grid-template-columns: 1fr; }
-}
-</style>
+<link rel="stylesheet" href="/site.css">
+<link rel="stylesheet" href="/roadmap.css">
+<script type="module" src="/site.js"></script>
 </head>
 <body>
 
 <!-- ── NAV ───────────────────────────── -->
-<nav>
-  <a href="../docs/design/turmeric-homepage.html" class="nav-logo">
-    <div class="nav-mark">T</div>
-    <span class="nav-name">Turmeric</span>
-  </a>
-  <div class="nav-links">
-    <a href="../docs/design/turmeric-homepage.html">Home</a>
-    <a href="#">Docs</a>
-    <a href="roadmap.html" class="active">Roadmap</a>
-    <a href="#">GitHub</a>
-  </div>
-</nav>
+<site-nav active="Roadmap"></site-nav>
 
 <!-- ── HERO ──────────────────────────── -->
 <div class="hero reveal">
@@ -453,7 +60,7 @@ footer {
         <div class="card-name">Compound Type Annotations</div>
         <span class="status-pill pill-planned">Planned</span>
       </div>
-      <p class="card-desc">Extends the <code style="font-family:JetBrains Mono,monospace;font-size:12px;color:var(--teal)">:keyword</code> syntax to support complex type expressions such as <code style="font-family:JetBrains Mono,monospace;font-size:12px;color:var(--teal)">(-> A B)</code>, enabling richer type-level annotations on function arguments and return values.</p>
+      <p class="card-desc">Extends the <code class="code-ref">:keyword</code> syntax to support complex type expressions such as <code class="code-ref">(-> A B)</code>, enabling richer type-level annotations on function arguments and return values.</p>
     </div>
 
     <div class="card">
@@ -486,7 +93,7 @@ footer {
         <div class="card-name">Struct Inspection &amp; Derive</div>
         <span class="status-pill pill-progress">In Progress</span>
       </div>
-      <p class="card-desc">A <code style="font-family:JetBrains Mono,monospace;font-size:12px;color:var(--teal)">derive-show</code> macro that automatically generates <code style="font-family:JetBrains Mono,monospace;font-size:12px;color:var(--teal)">Show</code> typeclass instances from struct definitions, reducing boilerplate for debugging output.</p>
+      <p class="card-desc">A <code class="code-ref">derive-show</code> macro that automatically generates <code class="code-ref">Show</code> typeclass instances from struct definitions, reducing boilerplate for debugging output.</p>
     </div>
 
   </div>
@@ -514,7 +121,7 @@ footer {
         <div class="card-name">Generator Functions</div>
         <span class="status-pill pill-planned">Planned</span>
       </div>
-      <p class="card-desc">Coroutine-style generator functions using algebraic effects. Enables <code style="font-family:JetBrains Mono,monospace;font-size:12px;color:var(--teal)">yield</code>-based iteration patterns without manual state machines or callbacks.</p>
+      <p class="card-desc">Coroutine-style generator functions using algebraic effects. Enables <code class="code-ref">yield</code>-based iteration patterns without manual state machines or callbacks.</p>
     </div>
 
     <div class="card">
@@ -522,7 +129,7 @@ footer {
         <div class="card-name">Self-Hosted Interpreter &amp; Eval</div>
         <span class="status-pill pill-planned">Planned</span>
       </div>
-      <p class="card-desc">A tree-walk interpreter written in Turmeric itself, exposing a public <code style="font-family:JetBrains Mono,monospace;font-size:12px;color:var(--teal)">eval</code> API and async REPL support for runtime code evaluation.</p>
+      <p class="card-desc">A tree-walk interpreter written in Turmeric itself, exposing a public <code class="code-ref">eval</code> API and async REPL support for runtime code evaluation.</p>
     </div>
 
   </div>
@@ -541,7 +148,7 @@ footer {
         <div class="card-name">tur CLI</div>
         <span class="status-pill pill-planned">Planned</span>
       </div>
-      <p class="card-desc">A unified project management tool with <code style="font-family:JetBrains Mono,monospace;font-size:12px;color:var(--teal)">tur new</code>, <code style="font-family:JetBrains Mono,monospace;font-size:12px;color:var(--teal)">tur run</code>, and <code style="font-family:JetBrains Mono,monospace;font-size:12px;color:var(--teal)">tur add</code> subcommands for project scaffolding and dependency management.</p>
+      <p class="card-desc">A unified project management tool with <code class="code-ref">tur new</code>, <code class="code-ref">tur run</code>, and <code class="code-ref">tur add</code> subcommands for project scaffolding and dependency management.</p>
     </div>
 
     <div class="card">
@@ -557,7 +164,7 @@ footer {
         <div class="card-name">Source Layout Refactor</div>
         <span class="status-pill pill-planned">Planned</span>
       </div>
-      <p class="card-desc">Reorganizes the <code style="font-family:JetBrains Mono,monospace;font-size:12px;color:var(--teal)">src/</code> directory into a more maintainable structure as the codebase grows across compiler phases.</p>
+      <p class="card-desc">Reorganizes the <code class="code-ref">src/</code> directory into a more maintainable structure as the codebase grows across compiler phases.</p>
     </div>
 
     <div class="card">
@@ -619,68 +226,13 @@ footer {
         <div class="card-name">REPL Auto-Show</div>
         <span class="status-pill pill-progress">In Progress</span>
       </div>
-      <p class="card-desc">Automatically displays <code style="font-family:JetBrains Mono,monospace;font-size:12px;color:var(--teal)">Show</code> typeclass results for evaluated expressions in the REPL, removing the need to manually wrap values in <code style="font-family:JetBrains Mono,monospace;font-size:12px;color:var(--teal)">println</code> calls.</p>
+      <p class="card-desc">Automatically displays <code class="code-ref">Show</code> typeclass results for evaluated expressions in the REPL, removing the need to manually wrap values in <code class="code-ref">println</code> calls.</p>
     </div>
 
   </div>
 </div>
 
 <!-- ── FOOTER ─────────────────────────── -->
-<footer>
-  <div class="footer-inner">
-    <div class="footer-brand footer-col">
-      <a href="design/turmeric-homepage.html" class="nav-logo" style="display:inline-flex;gap:9px;align-items:center;">
-        <div class="nav-mark">T</div>
-        <span class="nav-name">Turmeric</span>
-      </a>
-      <p>A lightning-fast functional language with typeclasses, effects, and a Lisp-flavored syntax. Open source under the MIT license.</p>
-    </div>
-    <div class="footer-col">
-      <div class="footer-col-title">Language</div>
-      <a href="#">Tour</a>
-      <a href="#">Specification</a>
-      <a href="#">Changelog</a>
-      <a href="roadmap.html">Roadmap</a>
-    </div>
-    <div class="footer-col">
-      <div class="footer-col-title">Ecosystem</div>
-      <a href="#">Packages (Spice)</a>
-      <a href="#">Standard Library</a>
-      <a href="#">Editor Support</a>
-      <a href="#">Language Server</a>
-    </div>
-    <div class="footer-col">
-      <div class="footer-col-title">Community</div>
-      <a href="#">GitHub</a>
-      <a href="#">Discord</a>
-      <a href="#">Forum</a>
-      <a href="#">Contributing</a>
-    </div>
-  </div>
-  <div class="footer-bottom">
-    <span class="footer-copy">&copy; 2025 The Turmeric Project. MIT License.</span>
-    <div class="footer-links">
-      <a href="#">Privacy</a>
-      <a href="#">Terms</a>
-      <a href="#">Security</a>
-    </div>
-  </div>
-</footer>
-
-<script>
-const obs = new IntersectionObserver(entries => {
-  entries.forEach(e => {
-    if (e.isIntersecting) {
-      e.target.classList.add('visible');
-      obs.unobserve(e.target);
-    }
-  });
-}, { threshold: 0.06, rootMargin: '0px 0px -30px 0px' });
-
-document.querySelectorAll('.reveal').forEach((el, i) => {
-  el.style.transitionDelay = (i * 0.06) + 's';
-  obs.observe(el);
-});
-</script>
+<site-footer></site-footer>
 </body>
 </html>

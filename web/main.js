@@ -3,6 +3,8 @@
  * Main JavaScript file for the Turmeric WASM REPL
  */
 
+import { TUTORIAL_STEPS } from './tutorials.js';
+
 // ============================================================================
 // WASM Module State
 // ============================================================================
@@ -15,7 +17,9 @@ const WASM_STATE = {
 };
 
 let wasmState = WASM_STATE.INITIALIZING;
-let turiModule = null;
+let evalWorker = null;
+let evalCallId = 0;
+const pendingCalls = new Map();
 let editor = null;
 let monaco = null;
 let consoleOutput = [];
@@ -33,12 +37,6 @@ const CONFIG = {
 `,
     EXECUTION_TIMEOUT: 5000, // 5 seconds
     MAX_OUTPUT_LENGTH: 10000,
-    ANSI_COLORS: {
-        0: 'ansi-0', 1: 'ansi-1', 2: 'ansi-2', 3: 'ansi-3',
-        4: 'ansi-4', 5: 'ansi-5', 6: 'ansi-6', 7: 'ansi-7',
-        8: 'ansi-8', 9: 'ansi-9', 10: 'ansi-10', 11: 'ansi-11',
-        12: 'ansi-12', 13: 'ansi-13', 14: 'ansi-14', 15: 'ansi-15'
-    }
 };
 
 // ============================================================================
@@ -100,59 +98,6 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-/**
- * Parse ANSI escape codes and convert to HTML spans
- */
-function parseAnsi(text) {
-    // Remove ANSI codes for now - we'll add proper parsing later
-    // This is a simplified version
-    return text.replace(/\x1b\[[0-9;]*m/g, '');
-    
-    /* Full ANSI parsing (for future use):
-    let result = '';
-    let currentClass = '';
-    let i = 0;
-    
-    while (i < text.length) {
-        if (text[i] === '\x1b' && text[i + 1] === '[') {
-            // ANSI escape sequence
-            const end = text.indexOf('m', i + 2);
-            if (end !== -1) {
-                const codes = text.slice(i + 2, end).split(';').map(Number);
-                const classList = [];
-                
-                for (const code of codes) {
-                    if (code === 0) {
-                        classList.length = 0;
-                        classList.push('ansi-0');
-                    } else if (code === 1) {
-                        classList.push('ansi-bold');
-                    } else if (code === 3) {
-                        classList.push('ansi-italic');
-                    } else if (code === 4) {
-                        classList.push('ansi-underline');
-                    } else if (code >= 30 && code <= 37) {
-                        classList.push(CONFIG.ANSI_COLORS[code - 30]);
-                    } else if (code >= 90 && code <= 97) {
-                        classList.push(CONFIG.ANSI_COLORS[code - 90 + 8]);
-                    }
-                }
-                
-                currentClass = classList.join(' ');
-                i = end + 1;
-            } else {
-                result += text[i];
-                i++;
-            }
-        } else {
-            result += text[i];
-            i++;
-        }
-    }
-    
-    return currentClass ? `<span class="${currentClass}">${result}</span>` : result;
-    */
-}
 
 /**
  * Format a console line with prompt and result
@@ -314,63 +259,88 @@ function loadFromUrlHash() {
 // ============================================================================
 
 /**
- * Initialize the WASM module
+ * Initialize the WASM module via the eval Worker.
+ * All WASM calls (eval, format, doc lookup, reset) run inside the Worker so
+ * that Atomics.wait is permitted and blocking select cannot freeze the tab.
  */
 async function initWasm() {
     if (wasmState !== WASM_STATE.INITIALIZING) return;
-    
+
     wasmState = WASM_STATE.LOADING;
-    
-    // Show loading overlay
+
     const loadingOverlay = document.getElementById('loading-overlay');
     const wasmStatus = document.getElementById('wasm-status-text');
     if (loadingOverlay) loadingOverlay.style.display = 'flex';
     if (wasmStatus) wasmStatus.textContent = 'Loading WASM module...';
-    
-    try {
-        // Load the WASM module.
-        // turmeric.js is an Emscripten UMD build (MODULARIZE=1, no EXPORT_ES6)
-        // loaded via <script> in index.html — it sets window.TurmericModule.
-        if (typeof window.TurmericModule !== 'function') {
-            throw new Error('window.TurmericModule not found — did turmeric.js load?');
-        }
 
-        turiModule = await window.TurmericModule({
-            print: (text) => {
-                appendToConsole(`<span class="console-output">${escapeHtml(text)}</span>`);
-            },
-            printErr: (text) => {
-                appendToConsole(`<span class="console-error">${escapeHtml(text)}</span>`);
-            }
+    try {
+        await new Promise((resolve, reject) => {
+            evalWorker = new Worker('/eval-worker.js');
+
+            evalWorker.addEventListener('message', (e) => {
+                const msg = e.data;
+
+                if (msg.type === 'ready') {
+                    resolve();
+                    return;
+                }
+                if (msg.type === 'init-error') {
+                    reject(new Error(msg.error));
+                    return;
+                }
+
+                // Console output forwarded from WASM print/printErr callbacks.
+                if (msg.type === 'print') {
+                    appendToConsole(`<span class="console-output">${escapeHtml(msg.text)}</span>`);
+                    return;
+                }
+                if (msg.type === 'printErr') {
+                    appendToConsole(`<span class="console-error">${escapeHtml(msg.text)}</span>`);
+                    return;
+                }
+
+                // Resolve pending call promises (eval, format, doc, reset).
+                const pending = pendingCalls.get(msg.id);
+                if (!pending) return;
+                pendingCalls.delete(msg.id);
+
+                if (msg.type === 'eval-result') {
+                    const execTime = performance.now() - pending.startTime;
+                    updateExecTime(execTime);
+                    const isError = msg.result.startsWith('Error:') || msg.result.includes('error');
+                    pending.resolve({ result: msg.result, isError, execTime });
+                    setTimeout(processQueue, 0);
+                } else if (msg.type === 'format-result') {
+                    pending.resolve(msg.result);
+                } else if (msg.type === 'doc-result') {
+                    pending.resolve(msg.result);
+                } else if (msg.type === 'reset-done') {
+                    pending.resolve();
+                } else if (msg.type === 'error') {
+                    pending.reject(new Error(msg.error));
+                    if (pending.isEval) setTimeout(processQueue, 0);
+                }
+            });
+
+            evalWorker.addEventListener('error', (e) => {
+                reject(new Error(String(e.message || e)));
+            });
+
+            evalWorker.postMessage({ type: 'init' });
         });
 
-        console.log('WASM module initialized');
-
-        // Call turi_wasm_init directly via exported function pointer
-        const initResult = turiModule._turi_wasm_init();
-        if (initResult !== 0) {
-            throw new Error(`turi_wasm_init failed with code ${initResult}`);
-        }
-        
         console.log('Turmeric WASM runtime initialized');
         wasmState = WASM_STATE.READY;
 
-        // Enable the REPL input now that WASM is ready
         const replInput = document.getElementById('repl-input');
         if (replInput) replInput.disabled = false;
 
-        // Update status
         showStatus('Ready', 'success');
-        
-        // Load code from URL hash
         loadFromUrlHash();
-
-        // Load doc name list for the search bar (non-blocking)
         fetchDocNames();
 
-        // Hide loading overlay
         if (loadingOverlay) loadingOverlay.style.display = 'none';
-        
+
     } catch (error) {
         console.error('Failed to initialize WASM:', error);
         wasmState = WASM_STATE.ERROR;
@@ -381,88 +351,56 @@ async function initWasm() {
 }
 
 /**
- * Evaluate Turmeric code using WASM
+ * Evaluate Turmeric code via the eval Worker.
  */
 function evaluateCode(code) {
     return new Promise((resolve, reject) => {
-        // Queue the evaluation if one is already in progress
         executionQueue.push({ code, resolve, reject });
-        
-        if (isExecuting) return;
-        
-        processQueue();
+        if (!isExecuting) processQueue();
     });
 }
 
 /**
- * Process the execution queue
+ * Process the execution queue, sending one eval at a time to the Worker.
+ * The Worker message handler calls setTimeout(processQueue, 0) when a result
+ * arrives so the next queued item is dispatched on the next tick.
  */
-async function processQueue() {
+function processQueue() {
     if (executionQueue.length === 0) {
         isExecuting = false;
         return;
     }
-    
+
     isExecuting = true;
-    
+
     const { code, resolve, reject } = executionQueue.shift();
-    
-    try {
-        if (wasmState !== WASM_STATE.READY) {
-            throw new Error('WASM not ready');
-        }
-        
-        // Write input string into WASM memory using the exported helper
-        const inputLen = turiModule.lengthBytesUTF8(code) + 1;
-        const inputPtr = turiModule._malloc(inputLen);
-        turiModule.stringToUTF8(code, inputPtr, inputLen);
 
-        const startTime = performance.now();
-
-        // Call turi_wasm_eval directly via exported function pointer
-        // Signature: char* turi_wasm_eval(const char* input)
-        const resultPtr = turiModule._turi_wasm_eval(inputPtr);
-
-        const endTime = performance.now();
-        const execTime = endTime - startTime;
-
-        turiModule._free(inputPtr);
-
-        // Read result string back from WASM memory then free it
-        const result = resultPtr ? turiModule.UTF8ToString(resultPtr) : '';
-        if (resultPtr) turiModule._free(resultPtr);
-        
-        // Check for errors in the result
-        const isError = result.startsWith('Error:') || result.includes('error');
-        
-        updateExecTime(execTime);
-        
-        resolve({ result, isError, execTime });
-        
-    } catch (error) {
-        console.error('Evaluation error:', error);
+    if (wasmState !== WASM_STATE.READY) {
+        reject(new Error('WASM not ready'));
         updateExecTime(0);
-        reject(error);
-    } finally {
-        // Process next item in queue
         setTimeout(processQueue, 0);
+        return;
     }
+
+    const id = ++evalCallId;
+    pendingCalls.set(id, { resolve, reject, startTime: performance.now(), isEval: true });
+    evalWorker.postMessage({ type: 'eval', id, input: code });
 }
 
 /**
- * Reset the WASM environment
+ * Reset the WASM environment via the eval Worker.
  */
 function resetWasm() {
     if (wasmState !== WASM_STATE.READY) return;
-    
-    try {
-        turiModule._turi_wasm_reset();
-        clearConsole();
-        showStatus('Environment reset', 'success');
-    } catch (error) {
-        console.error('Reset error:', error);
-        showStatus('Failed to reset', 'error');
-    }
+
+    const id = ++evalCallId;
+    pendingCalls.set(id, {
+        resolve: () => { clearConsole(); showStatus('Environment reset', 'success'); },
+        reject:  (err) => { console.error('Reset error:', err); showStatus('Failed to reset', 'error'); },
+        startTime: performance.now(),
+        isEval: false,
+    });
+    evalWorker.postMessage({ type: 'reset', id });
 }
 
 // ============================================================================
@@ -755,57 +693,58 @@ async function initEditor() {
 // ============================================================================
 
 /**
- * Run the current code
+ * Shared eval + output path used by both the Run button and the REPL input.
+ * @param {string} code        Source to evaluate
+ * @param {string} promptHtml  HTML for the prompt prefix (e.g. '<span ...>></span>')
+ * @param {boolean} showTiming Whether to call updateExecTime and show the loading indicator
+ */
+async function executeCode(source, promptHtml, showTiming = false) {
+    const consoleLoading = showTiming ? document.getElementById('console-loading') : null;
+    if (consoleLoading) consoleLoading.style.display = 'flex';
+
+    appendToConsole(`${promptHtml} ${escapeHtml(source)}`);
+
+    try {
+        const startTime = performance.now();
+        const { result, isError } = await evaluateCode(source);
+        const execTime = performance.now() - startTime;
+
+        if (consoleLoading) consoleLoading.style.display = 'none';
+
+        if (isError) {
+            appendToConsole(`<span class="console-error">${escapeHtml(result)}</span>`);
+        } else if (result && result !== 'nil') {
+            appendToConsole(`<span class="console-result">${escapeHtml(result)}</span>`);
+        }
+
+        if (showTiming) updateExecTime(execTime);
+        maybeShowDoc(source.trim());
+
+    } catch (err) {
+        if (consoleLoading) consoleLoading.style.display = 'none';
+        appendToConsole(`<span class="console-error">Error: ${escapeHtml(err.message)}</span>`);
+        if (showTiming) updateExecTime(0);
+    }
+}
+
+/**
+ * Run the current editor contents
  */
 async function runCode() {
     if (wasmState !== WASM_STATE.READY) {
         showStatus('WASM not ready', 'error');
         return;
     }
-    
     const code = editor.getValue();
     if (!code.trim()) {
         appendToConsole('<span class="console-error">Error: No code to evaluate</span>');
         return;
     }
-    
-    // Show loading indicator
-    const consoleLoading = document.getElementById('console-loading');
-    if (consoleLoading) consoleLoading.style.display = 'flex';
-    
-    try {
-        // Append input to console
-        appendToConsole(`<span class="console-prompt">></span> ${escapeHtml(code)}`);
-        
-        // Evaluate the code
-        const startTime = performance.now();
-        const { result, isError } = await evaluateCode(code);
-        const execTime = performance.now() - startTime;
-        
-        // Hide loading indicator
-        if (consoleLoading) consoleLoading.style.display = 'none';
-        
-        // Append result to console
-        if (isError) {
-            appendToConsole(`<span class="console-error">${escapeHtml(result)}</span>`);
-        } else if (result && result !== 'nil') {
-            appendToConsole(`<span class="console-result">${escapeHtml(result)}</span>`);
-        }
-        
-        updateExecTime(execTime);
-
-        // If the code was a (doc name) call, populate the doc panel
-        maybeShowDoc(code.trim());
-
-    } catch (error) {
-        if (consoleLoading) consoleLoading.style.display = 'none';
-        appendToConsole(`<span class="console-error">Error: ${escapeHtml(error.message)}</span>`);
-        updateExecTime(0);
-    }
+    await executeCode(code, '<span class="console-prompt">></span>', true);
 }
 
 /**
- * Format the editor contents using turi_wasm_format
+ * Format the editor contents via the eval Worker.
  */
 async function formatCode() {
     if (wasmState !== WASM_STATE.READY) {
@@ -815,23 +754,18 @@ async function formatCode() {
     const code = editor.getValue();
     if (!code.trim()) return;
 
-    const inputLen = turiModule.lengthBytesUTF8(code) + 1;
-    const inputPtr = turiModule._malloc(inputLen);
-    turiModule.stringToUTF8(code, inputPtr, inputLen);
-
-    const resultPtr = turiModule._turi_wasm_format(inputPtr);
-    turiModule._free(inputPtr);
-
-    if (!resultPtr) {
+    try {
+        const formatted = await new Promise((resolve, reject) => {
+            const id = ++evalCallId;
+            pendingCalls.set(id, { resolve, reject, startTime: performance.now(), isEval: false });
+            evalWorker.postMessage({ type: 'format', id, input: code });
+        });
+        editor.setValue(formatted);
+        showStatus('Formatted', 'success');
+    } catch (err) {
+        console.error('Format error:', err);
         showStatus('Format failed', 'error');
-        return;
     }
-
-    const formatted = turiModule.UTF8ToString(resultPtr);
-    turiModule._free(resultPtr);
-
-    editor.setValue(formatted);
-    showStatus('Formatted', 'success');
 }
 
 /**
@@ -897,20 +831,7 @@ function initReplInput() {
             replHistoryIndex = -1;
             input.value = '';
 
-            appendToConsole(`<span class="console-prompt">turi&gt;</span> ${escapeHtml(code)}`);
-
-            try {
-                const { result, isError } = await evaluateCode(code);
-                if (isError) {
-                    appendToConsole(`<span class="console-error">${escapeHtml(result)}</span>`);
-                } else if (result && result !== 'nil') {
-                    appendToConsole(`<span class="console-result">${escapeHtml(result)}</span>`);
-                }
-                // Populate doc panel for (doc name) expressions
-                maybeShowDoc(code);
-            } catch (err) {
-                appendToConsole(`<span class="console-error">Error: ${escapeHtml(err.message)}</span>`);
-            }
+            await executeCode(code, '<span class="console-prompt">turi&gt;</span>');
 
             const consoleEl = document.getElementById('console');
             if (consoleEl) consoleEl.scrollTop = consoleEl.scrollHeight;
@@ -994,127 +915,6 @@ function initEventListeners() {
 let currentTutorial = null;
 let currentStep = 0;
 
-// Tutorial step data: each step has a title, description, starter code, and answer
-const TUTORIAL_STEPS = {
-    'basics': [
-        {
-            title: 'Step 1: Hello World',
-            description: 'Print "Hello, Turmeric!" to the console using println.',
-            starter: ';; Print "Hello, Turmeric!" to the console\n',
-            answer: '(println "Hello, Turmeric!")'
-        },
-        {
-            title: 'Step 2: Arithmetic',
-            description: 'Add 1, 2, and 3 together using the + operator.',
-            starter: ';; Add 1, 2, and 3 together\n',
-            answer: '(+ 1 2 3)'
-        },
-        {
-            title: 'Step 3: Variables',
-            description: 'Bind the value 42 to the name x using let, then print it.',
-            starter: ';; Bind 42 to x and print it\n',
-            answer: '(let [x 42]\n  (println x))'
-        },
-        {
-            title: 'Step 4: Conditionals',
-            description: 'Use if to print "big" when 10 > 5, otherwise "small".',
-            starter: ';; Print "big" if 10 > 5, otherwise "small"\n',
-            answer: '(println (if (> 10 5) "big" "small"))'
-        }
-    ],
-    'data-structures': [
-        {
-            title: 'Step 1: Vectors',
-            description: 'Create a vector [1 2 3] and print its first element using get.',
-            starter: ';; Create a vector and access its first element\n',
-            answer: '(let [v [1 2 3]]\n  (println (get v 0)))'
-        },
-        {
-            title: 'Step 2: Structs',
-            description: 'Define a Point struct with x and y fields, create a Point at (3, 4), and print its fields.',
-            starter: ';; Define a Point struct and create an instance at (3, 4)\n',
-            answer: '(defstruct Point [x :int y :int])\n\n(let [p (Point 3 4)]\n  (println (.x p))\n  (println (.y p)))'
-        },
-        {
-            title: 'Step 3: Pattern Matching',
-            description: 'Use match to print "zero", "one", or "other" for the value of n.',
-            starter: ';; Match n and print "zero", "one", or "other"\n(let [n 1]\n  )',
-            answer: '(let [n 1]\n  (println (match n\n    0 "zero"\n    1 "one"\n    _ "other")))'
-        },
-        {
-            title: 'Step 4: Map and Filter',
-            description: 'Double each number in [1 2 3 4], then keep only those greater than 4.',
-            starter: ';; Double [1 2 3 4], then filter to keep elements > 4\n',
-            answer: '(let [doubled (map (fn [x] (* x 2)) [1 2 3 4])]\n  (println (filter (fn [x] (> x 4)) doubled)))'
-        }
-    ],
-    'type-system': [
-        {
-            title: 'Step 1: Type Annotations',
-            description: 'Define an "add" function with :int annotations on both parameters and the return type.',
-            starter: ';; Define add with type annotations, then call it with 3 and 4\n',
-            answer: '(defn add [a :int b :int] :int\n  (+ a b))\n\n(println (add 3 4))'
-        },
-        {
-            title: 'Step 2: Polymorphic Functions',
-            description: 'Write an "identity" function using a type variable :a that works on any type.',
-            starter: ';; Define a polymorphic identity function and test it on an int and a string\n',
-            answer: '(defn identity [x :a] :a x)\n\n(println (identity 42))\n(println (identity "hello"))'
-        },
-        {
-            title: 'Step 3: Struct Types',
-            description: 'Define a Point struct and a "get-x" function that takes a :Point and returns its x field.',
-            starter: ';; Define Point and a function that extracts its x field\n',
-            answer: '(defstruct Point [x :int y :int])\n\n(defn get-x [p :Point] :int (.x p))\n\n(println (get-x (Point 10 20)))'
-        }
-    ],
-    'functions': [
-        {
-            title: 'Step 1: Defining Functions',
-            description: 'Define a "square" function that multiplies its argument by itself.',
-            starter: ';; Define square and call it with 7\n',
-            answer: '(defn square [n :int] :int (* n n))\n\n(println (square 7))'
-        },
-        {
-            title: 'Step 2: Recursion',
-            description: 'Write a recursive "factorial" function.',
-            starter: ';; Define a recursive factorial function and compute (factorial 5)\n',
-            answer: '(defn factorial [n :int] :int\n  (if (<= n 1) 1 (* n (factorial (- n 1)))))\n\n(println (factorial 5))'
-        },
-        {
-            title: 'Step 3: Closures',
-            description: 'Write a "make-adder" function that returns a closure adding x to its argument.',
-            starter: ';; Define make-adder, create add5, and call it with 10\n',
-            answer: '(defn make-adder [x :int] (fn [y :int] (+ x y)))\n\n(let [add5 (make-adder 5)]\n  (println (add5 10)))'
-        },
-        {
-            title: 'Step 4: Higher-Order Functions',
-            description: 'Use map to double every element in [1 2 3 4 5].',
-            starter: ';; Use map to double every element in [1 2 3 4 5]\n',
-            answer: '(println (map (fn [x] (* x 2)) [1 2 3 4 5]))'
-        }
-    ],
-    'effects': [
-        {
-            title: 'Step 1: Defining Effects',
-            description: 'Declare an Ask effect that yields an int, perform it, and handle it by resuming with 41.',
-            starter: ';; Define Ask, perform it in a function, and handle with resume k 41\n',
-            answer: '(defeffect Ask [] :int)\n\n(defn use-ask [] :int\n  (+ 1 (perform (Ask))))\n\n(println (handle (use-ask)\n  (Ask [] k) (resume k 41)))'
-        },
-        {
-            title: 'Step 2: Effects with Logging',
-            description: 'Define a Logger effect that prints a message, then returns a value from the computation.',
-            starter: ';; Define Logger, log "hello", return 42, and handle by printing the message\n',
-            answer: '(defeffect Logger [msg :str] :nil)\n\n(defn logged-value [] :int\n  (perform (Logger "hello"))\n  42)\n\n(println (handle (logged-value)\n  (Logger [msg k] (println msg) (resume k nil))))'
-        },
-        {
-            title: 'Step 3: Multiple Effects',
-            description: 'Handle two different effects -- Ask and Log -- in a single handle block.',
-            starter: ';; Define Ask and Log effects, use both in a program, handle both together\n',
-            answer: '(defeffect Ask [] :int)\n(defeffect Log [msg :str] :nil)\n\n(defn program [] :int\n  (perform (Log "starting"))\n  (+ 1 (perform (Ask))))\n\n(println (handle (program)\n  (Ask [] k) (resume k 10)\n  (Log [msg k] (println msg) (resume k nil))))'
-        }
-    ]
-};
 
 /**
  * Load the given step of a tutorial into the editor and update the tutorial bar.
@@ -1316,10 +1116,9 @@ function initDocSearch() {
     }
 
     function selectResult(name) {
-        const docText = wasmDocLookup(name);
-        showDocPanel(name, docText);
         input.value = '';
         hideResults();
+        wasmDocLookup(name).then(docText => showDocPanel(name, docText));
     }
 
     function highlightActive() {
@@ -1330,14 +1129,18 @@ function initDocSearch() {
         }
     }
 
+    let searchTimer;
     input.addEventListener('input', () => {
-        const q = input.value.trim().toLowerCase();
-        if (!q) { hideResults(); return; }
-        const matches = docNames.filter(d =>
-            d.name.toLowerCase().includes(q) ||
-            d.summary.toLowerCase().includes(q)
-        );
-        renderResults(matches);
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(() => {
+            const q = input.value.trim().toLowerCase();
+            if (!q) { hideResults(); return; }
+            const matches = docNames.filter(d =>
+                d.name.toLowerCase().includes(q) ||
+                d.summary.toLowerCase().includes(q)
+            );
+            renderResults(matches);
+        }, 150);
     });
 
     input.addEventListener('keydown', (e) => {
@@ -1383,23 +1186,21 @@ function initDocSearch() {
 }
 
 /**
- * Look up documentation for `name` via the WASM turi_doc_lookup export.
- * Returns the doc string, or null if not found or WASM not ready.
+ * Look up documentation for `name` via the eval Worker.
+ * Returns a Promise resolving to the doc string, or null if not found.
  */
 function wasmDocLookup(name) {
-    if (!turiModule || wasmState !== WASM_STATE.READY) return null;
-    try {
-        const fn = turiModule._turi_doc_lookup;
-        if (!fn) return null;
-        const inputPtr = turiModule.allocate(
-            turiModule.intArrayFromString(name), turiModule.ALLOC_NORMAL);
-        const resultPtr = fn(inputPtr);
-        turiModule._free(inputPtr);
-        if (!resultPtr) return null;
-        return turiModule.UTF8ToString(resultPtr);
-    } catch (_) {
-        return null;
-    }
+    if (!evalWorker || wasmState !== WASM_STATE.READY) return Promise.resolve(null);
+    return new Promise((resolve) => {
+        const id = ++evalCallId;
+        pendingCalls.set(id, {
+            resolve,
+            reject: () => resolve(null),
+            startTime: performance.now(),
+            isEval: false,
+        });
+        evalWorker.postMessage({ type: 'doc', id, name });
+    });
 }
 
 /**
@@ -1449,8 +1250,7 @@ function maybeShowDoc(code) {
     const m = code.trim().match(/^\(\s*doc\s+([\w/\-!?*+]+)\s*\)$/);
     if (!m) return false;
     const name = m[1];
-    const docText = wasmDocLookup(name);
-    showDocPanel(name, docText);
+    wasmDocLookup(name).then(docText => showDocPanel(name, docText));
     return true;
 }
 
@@ -1474,6 +1274,6 @@ window.turmericApp = {
     getState: () => ({
         wasmState,
         hasEditor: !!editor,
-        hasWasm: !!turiModule
+        hasWasm: !!evalWorker && wasmState === WASM_STATE.READY,
     })
 };

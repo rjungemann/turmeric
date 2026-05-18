@@ -1,0 +1,348 @@
+/* ==========================================================================
+ * home.css — Homepage-specific styles for turmeric-lang.com /
+ * ========================================================================== */
+
+/* ── HERO ──────────────────────────────── */
+.hero {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 120px 48px 80px;
+  position: relative;
+  overflow: hidden;
+}
+
+.hero-grid {
+  mask-image: radial-gradient(ellipse 80% 60% at 50% 40%, black 0%, transparent 80%);
+}
+
+.hero-inner {
+  max-width: 900px;
+  width: 100%;
+  text-align: center;
+  position: relative;
+  z-index: 1;
+}
+
+h1 {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: clamp(52px, 8vw, 96px);
+  font-weight: 400;
+  line-height: 1.0;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+h1 em { font-style: italic; color: var(--gold-bright); }
+
+.hero-subtitle {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: clamp(20px, 2.5vw, 28px);
+  font-weight: 300;
+  font-style: italic;
+  color: var(--text-sec);
+  margin-bottom: 28px;
+  letter-spacing: 0.01em;
+}
+
+.hero-desc {
+  font-size: 16px;
+  color: var(--text-sec);
+  max-width: 520px;
+  margin: 0 auto 44px;
+  line-height: 1.7;
+  font-weight: 300;
+}
+
+.hero-actions { margin-bottom: 64px; display: flex; align-items: center; justify-content: center; gap: 16px; }
+
+.install-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.install-cmd {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--text-sec);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-mid);
+  border-radius: 5px;
+  padding: 3px 10px;
+}
+
+/* ── HERO CODE BLOCK ───────────────────── */
+.hero-code {
+  margin-top: 64px;
+  position: relative;
+  max-width: 760px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.hl { background: rgba(212,139,28,0.08); display: inline-block; width: 100%; border-radius: 2px; }
+
+/* ── PAGE SECTIONS ─────────────────────── */
+section {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 100px 48px;
+}
+
+.section-title { font-size: clamp(36px, 4vw, 54px); }
+.section-desc { max-width: 540px; font-size: 16px; }
+
+/* Override split-section padding for homepage */
+.split-section { padding: 100px 48px; }
+
+/* ── FEATURES ──────────────────────────── */
+.features-header {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 100px 48px 0;
+}
+
+.feature-grid {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 48px 48px 100px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.feature-card {
+  background: var(--bg-card);
+  padding: 36px 32px;
+  transition: background 0.14s;
+}
+.feature-card:hover { background: var(--bg-hover); }
+
+.feat-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: var(--gold-subtle);
+  border: 1px solid var(--gold-line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 20px;
+  font-size: 16px;
+}
+
+.feat-title {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 22px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+  letter-spacing: 0.01em;
+}
+
+.feat-desc {
+  font-size: 14px;
+  color: var(--text-sec);
+  line-height: 1.65;
+  font-weight: 300;
+}
+
+/* ── BENCHMARKS ────────────────────────── */
+.bench-section {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 100px 48px;
+}
+
+.bench-grid {
+  display: grid;
+  grid-template-columns: repeat(3,1fr);
+  gap: 24px;
+  margin-top: 48px;
+}
+
+.bench-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-mid);
+  border-radius: 12px;
+  padding: 32px 28px;
+  position: relative;
+  overflow: hidden;
+}
+
+.bench-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--gold-line), transparent);
+}
+
+.bench-metric {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 56px;
+  font-weight: 300;
+  color: var(--gold-bright);
+  line-height: 1;
+  letter-spacing: -0.02em;
+  margin-bottom: 8px;
+}
+
+.bench-unit { font-size: 20px; color: var(--gold-dim); }
+.bench-label { font-size: 14px; color: var(--text-sec); font-weight: 300; margin-bottom: 16px; }
+
+.bench-bar-wrap { height: 3px; background: var(--border-mid); border-radius: 2px; overflow: hidden; }
+
+.bench-bar {
+  height: 100%;
+  background: linear-gradient(90deg, var(--gold-dim), var(--gold));
+  border-radius: 2px;
+  transform-origin: left;
+  animation: growBar 1.2s ease both;
+}
+@keyframes growBar { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+
+.bench-compare { margin-top: 10px; font-size: 12px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; }
+
+/* ── GETTING STARTED ───────────────────── */
+.started-section {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 100px 48px;
+}
+
+.started-grid {
+  margin-top: 56px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 32px;
+}
+
+.step-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-mid);
+  border-radius: 12px;
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  /* Allow the grid track to shrink below the min-content width of the
+     white-space:pre .step-code, so it scrolls internally instead of
+     widening the page. */
+  min-width: 0;
+}
+
+.step-num {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 13px;
+  color: var(--gold-dim);
+  letter-spacing: 0.06em;
+  font-weight: 500;
+}
+
+.step-title {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 20px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.step-code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12.5px;
+  color: var(--text-sec);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 14px 16px;
+  line-height: 1.7;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.step-desc { font-size: 13.5px; color: var(--text-sec); line-height: 1.6; font-weight: 300; }
+
+/* ── INFLUENCES ────────────────────────── */
+.influences {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 80px 48px;
+  display: flex;
+  align-items: center;
+  gap: 48px;
+}
+
+.infl-label {
+  font-size: 12px;
+  color: var(--text-dim);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.infl-sep { flex: 1; height: 1px; background: var(--border); }
+
+.infl-items {
+  display: flex;
+  align-items: center;
+  gap: 40px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.infl-item {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 20px;
+  font-weight: 400;
+  color: var(--text-dim);
+  letter-spacing: 0.02em;
+  transition: color 0.14s;
+  cursor: default;
+}
+.infl-item:hover { color: var(--text-sec); }
+
+/* ── CTA ───────────────────────────────── */
+.cta-title { font-size: clamp(36px, 4vw, 56px); }
+
+/* ── RESPONSIVE: HOMEPAGE ──────────────── */
+@media (max-width: 768px) {
+  .hero { padding: 100px 24px 60px; }
+  .install-hint { flex-direction: column; gap: 6px; text-align: center; }
+
+  .features-header { padding: 60px 24px 0; }
+  .feature-grid {
+    padding: 32px 24px 60px;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .split-section { padding: 60px 24px; }
+
+  .bench-section { padding: 60px 24px; }
+  .bench-grid { grid-template-columns: 1fr; gap: 16px; }
+
+  .started-section { padding: 60px 24px; }
+  .started-grid { grid-template-columns: 1fr; }
+
+  section { padding: 60px 24px; }
+
+  .influences { padding: 40px 24px; flex-wrap: wrap; gap: 16px; }
+  .infl-sep { display: none; }
+}
+
+@media (max-width: 480px) {
+  .hero { padding: 90px 16px 48px; }
+
+  .feature-grid { padding: 24px 16px 48px; grid-template-columns: 1fr; }
+  .bench-section { padding: 48px 16px; }
+  .started-section { padding: 48px 16px; }
+}

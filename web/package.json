@@ -12,7 +12,8 @@
     "test:prod": "playwright test --config playwright.config.prod.js"
   },
   "dependencies": {
-    "monaco-editor": "^0.45.0"
+    "monaco-editor": "^0.45.0",
+    "prismjs": "^1.30.0"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.36.4",

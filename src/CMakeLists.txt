@@ -267,20 +267,21 @@ if(TUR_WASM)
                 -sALLOW_MEMORY_GROWTH=1
                 -sALLOW_TABLE_GROWTH=1
                 -sWASM=1
-                -sASYNCIFY=1
-                -sASYNCIFY_STACK_SIZE=65536
-                -sEXPORTED_FUNCTIONS=_turi_wasm_init,_turi_wasm_reset,_turi_wasm_shutdown,_turi_wasm_eval,_turi_wasm_eval_ex,_turi_wasm_version,_turi_wasm_format,_malloc,_free
+                -pthread
+                -sPTHREAD_POOL_SIZE_STRICT=0
+                -sEXIT_RUNTIME=0
+                -sEXPORTED_FUNCTIONS=_turi_wasm_init,_turi_wasm_reset,_turi_wasm_shutdown,_turi_wasm_eval,_turi_wasm_eval_ex,_turi_wasm_version,_turi_wasm_format,_turi_doc_lookup,_malloc,_free
                 -sEXPORTED_RUNTIME_METHODS=stringToUTF8,UTF8ToString,lengthBytesUTF8
                 -sEXPORT_NAME=TurmericModule
                 -sMODULARIZE=1
-                -O3
+                -O2
                 -Wall -Wextra -Wno-unused-parameter -std=c11 -pedantic
                 -D_DEFAULT_SOURCE
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-            COMMENT "Building Turmeric WASM module"
+            COMMENT "Building Turmeric WASM module (pthreads, lazy pool)"
             VERBATIM
         )
-        
+
         # Copy the WASM output to the web directory for development
         add_custom_command(TARGET tur_wasm POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different

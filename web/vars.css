@@ -1,0 +1,49 @@
+/* ==========================================================================
+ * vars.css — Design tokens for turmeric-lang.com
+ * Imported by site.css; all pages inherit these variables.
+ * ========================================================================== */
+
+:root {
+  /* Backgrounds */
+  --bg-base:       #0C0A08;
+  --bg-surface:    #111009;
+  --bg-panel:      #161411;
+  --bg-hover:      #1C1915;
+  --bg-card:       #131108;
+
+  /* Borders */
+  --border:        #222018;
+  --border-mid:    #2E2B22;
+  --border-str:    #3D3A2F;
+
+  /* Gold palette */
+  --gold:          #D48B1C;
+  --gold-bright:   #EFA030;
+  --gold-dim:      #7A5010;
+  --gold-subtle:   rgba(212,139,28,0.08);
+  --gold-line:     rgba(212,139,28,0.25);
+
+  /* Text */
+  --text-primary:  #EAE0D2;
+  --text-sec:      #8A7D6E;
+  --text-dim:      #4A4438;
+
+  /* Syntax highlight */
+  --syn-kw:        #EFA030;
+  --syn-str:       #D9735A;
+  --syn-cmt:       #3E3B35;
+  --syn-type:      #7AC4B8;
+  --syn-num:       #A8C98A;
+  --syn-fn:        #C4A0E8;
+  --syn-punc:      #5A5448;
+
+  /* Accent palette (roadmap / badges) */
+  --green:         #A8C98A;
+  --green-subtle:  rgba(168,201,138,0.10);
+  --teal:          #7AC4B8;
+  --teal-subtle:   rgba(122,196,184,0.10);
+  --amber:         #EFA030;
+  --amber-subtle:  rgba(239,160,48,0.10);
+  --purple:        #C4A0E8;
+  --purple-subtle: rgba(196,160,232,0.10);
+}

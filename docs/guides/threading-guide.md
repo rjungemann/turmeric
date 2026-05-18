@@ -726,6 +726,54 @@ Turmeric's borrow checker enforces:
 (thread-pool-free tp)
 ```
 
+## Web REPL (WASM) Threading Constraints
+
+The web REPL runs Turmeric inside a WebAssembly module compiled with
+Emscripten pthreads. The threading model differs from native `tur run` in a
+few ways:
+
+### Worker pool
+
+The WASM build uses `-sPTHREAD_POOL_SIZE_STRICT=0`, which means the Worker
+pool grows lazily on demand. There is no hard cap on concurrent threads.
+The first time a thread is created beyond the current pool size there is
+additional latency while the browser spawns a new Worker; subsequent reuse
+of that Worker is fast.
+
+This limit does not apply to native builds, which use unrestricted POSIX
+threads.
+
+### Eval Worker
+
+All code evaluation in the browser REPL runs inside a dedicated eval Worker
+(`eval-worker.js`). This is necessary because `Atomics.wait` (which
+Emscripten uses for `pthread_cond_wait`) is prohibited on the browser's main
+thread. The eval Worker can block freely on channel operations and `select`
+without freezing the tab.
+
+### No `pthread_cancel`
+
+Emscripten does not implement `pthread_cancel`. Turmeric's cooperative
+cancellation design (cancel flag + condvar check) is unaffected by this --
+it does not call `pthread_cancel`.
+
+### Cross-origin isolation
+
+The site must serve `Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp` on every response for
+`SharedArrayBuffer` (required by Emscripten pthreads) to be available in
+the browser. Self-hosted deployments must set these headers; the hosted
+`turmeric-lang.com` site does this via the Cloudflare Worker.
+
+### Optimization level
+
+The threaded WASM build uses `-O2` rather than `-O3`. Older `wasm-opt`
+(Binaryen) versions can mishandle the shared-memory semantics required by
+pthreads at `-O3`. Once the threaded build has been smoke-tested at `-O3`
+and confirmed clean, the flag will be restored.
+
+---
+
 ## See Also
 
 - [Async/Await Guide](async-await-guide.md) -- Lightweight fibers for I/O concurrency
