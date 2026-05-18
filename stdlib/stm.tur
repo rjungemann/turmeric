@@ -14,7 +14,7 @@
 ;;;   (ptr/null)  ; => ptr (NULL)
 ;;;
 ;;; Since: Phase 20
-(defn ptr/null [] :ptr
+(defn ptr/null [] #{Unsafe} :ptr
   ```c
   return NULL;
   ```)
@@ -31,7 +31,7 @@
 ;;;   (let [tv (tvar/new 0)] ...)  ; => ptr
 ;;;
 ;;; Since: Phase 20
-(defn tvar/new [init] :ptr
+(defn tvar/new [init] #{Unsafe} :ptr
   ```c
   TVar *tv = tur_tvar_new(NULL, (void*)(intptr_t)init);
   return (void*)tv;
@@ -49,7 +49,7 @@
 ;;;   (tvar/read tv)  ; => ptr
 ;;;
 ;;; Since: Phase 20
-(defn tvar/read [tv :ptr] :ptr
+(defn tvar/read [tv :ptr] #{Unsafe} :ptr
   ```c
   return (void*)tur_tvar_read(tur_stm_current_tx(), (TVar*)tv);
   ```)
@@ -64,7 +64,7 @@
 ;;;   (tvar/write tv new-val)
 ;;;
 ;;; Since: Phase 20
-(defn tvar/write [tv :ptr val :ptr] :nil
+(defn tvar/write [tv :ptr val :ptr] #{Unsafe} :nil
   ```c
   tur_tvar_write(tur_stm_current_tx(), (TVar*)tv, (void*)val);
   return 0;
@@ -83,7 +83,7 @@
 ;;;   (tvar/swap tv new-val)  ; => ptr (old value)
 ;;;
 ;;; Since: Phase 20
-(defn tvar/swap [tv :ptr new :ptr] :ptr
+(defn tvar/swap [tv :ptr new :ptr] #{Unsafe} :ptr
   ```c
   return (void*)tur_tvar_swap(tur_stm_current_tx(), (TVar*)tv, (void*)new);
   ```)
@@ -102,7 +102,7 @@
 ;;;   (tvar/cas tv expected new-val)  ; => bool
 ;;;
 ;;; Since: Phase 21
-(defn tvar/cas [tv :ptr old :ptr new :ptr] :bool
+(defn tvar/cas [tv :ptr old :ptr new :ptr] #{Unsafe} :bool
   ```c
   return tur_tvar_cas(tur_stm_current_tx(), (TVar*)tv, (void*)old, (void*)new);
   ```)

@@ -11,6 +11,7 @@
 #include "typeclass.h"  /* Phase 15 */
 #include "types.h"
 #include "effect.h"    /* Phase 19 */
+#include "globals.h"   /* ET4: g_effect_types_enabled */
 
 /* Phase U5: External declarations for global unsafe linting configuration */
 extern uint32_t g_unsafe_max_lines;
@@ -683,6 +684,7 @@ typedef struct Elab {
     /* ST0: Substructural types */
     const Symbol *sym_caret_affine;     /* ^affine -- affine value annotation */
     const Symbol *sym_caret_relevant;   /* ^relevant -- relevant value annotation */
+    const Symbol *sym_caret_extends;    /* ^extends -- effect hierarchy parent annotation (ET4) */
     const Symbol *sym_map_new;    /* map-new - create new map */
     const Symbol *sym_assoc;      /* assoc - insert/update key-value */
     const Symbol *sym_dissoc;     /* dissoc - delete key */
@@ -1342,6 +1344,7 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* ST0: Substructural types */
     e->sym_caret_affine    = intern_cstr(st, "^affine");
     e->sym_caret_relevant  = intern_cstr(st, "^relevant");
+    e->sym_caret_extends   = intern_cstr(st, "^extends");  /* ET4: effect hierarchy */
     e->sym_map_new = intern_cstr(st, "map-new");
     e->sym_assoc = intern_cstr(st, "assoc");
     e->sym_dissoc = intern_cstr(st, "dissoc");
@@ -5656,12 +5659,41 @@ static Expr *elab_defeffect(Elab *e, const Form *call) {
         return NULL;
     }
     
+    /* ET4: Parse optional ^extends ParentName after the return type */
+    const Symbol *parent_name = NULL;
+    uint32_t extends_start = name_idx + 3; /* items after (defeffect [^private] Name [params] :ret) */
+    for (uint32_t xi = extends_start; xi + 1 < (uint32_t)call->as.list.len; xi++) {
+        Form *f = call->as.list.items[xi];
+        if (f->tag == F_SYM && f->as.sym == e->sym_caret_extends) {
+            Form *pname_f = call->as.list.items[xi + 1];
+            if (pname_f->tag != F_SYM) {
+                diag_emit(DIAG_ERROR, pname_f->span,
+                          "defeffect: expected effect name after ^extends");
+                return NULL;
+            }
+            parent_name = pname_f->as.sym;
+            break;
+        }
+    }
+
     /* Register the effect — pass module visibility info (Phase P19-6) */
     Effect *effect = effect_env_register(e->effect_env, e->arena, name,
                                           param_names, param_types, n_params, result_type,
                                           e->current_module_name, is_private);
     if (!effect) return NULL;
-    
+
+    /* ET4: Resolve parent effect if ^extends was specified */
+    if (parent_name) {
+        Effect *parent_eff = effect_env_lookup(e->effect_env, parent_name);
+        if (!parent_eff) {
+            diag_emit(DIAG_ERROR, name_f->span,
+                      "defeffect: unknown parent effect '%s' in ^extends clause",
+                      parent_name->name);
+            return NULL;
+        }
+        effect->parent = parent_eff;
+    }
+
     /* Create the effect definition expression */
     EffectDef *def = arena_alloc(e->arena, sizeof(EffectDef));
     def->name = name;
@@ -5671,6 +5703,7 @@ static Expr *elab_defeffect(Elab *e, const Form *call) {
     def->result_type = result_type;
     def->is_private = is_private;
     def->defining_module_name = e->current_module_name;
+    def->parent_name = parent_name;  /* ET4: ^extends parent effect name */
 
     Expr *out = expr_new(e->arena, EX_DEFECT, TYPE_NIL, call->span);
     out->as.effect_def_.def = def;
@@ -6020,6 +6053,11 @@ static Expr *elab_handle(Elab *e, const Form *call) {
  * Returns a nil-typed expression (placeholder; runtime semantics TBD).
  */
 static Expr *elab_compose_handlers(Elab *e, const Form *call) {
+    if (!g_effect_types_enabled) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "'compose-handlers' requires -Xeffect-types");
+        return NULL;
+    }
     if (call->as.list.len != 3) {
         diag_emit(DIAG_ERROR, call->span,
                   "(compose-handlers h1 h2) requires exactly two arguments");
@@ -7799,6 +7837,7 @@ static Expr *elab_extern_c(Elab *e, const Form *call) {
 
     /* Create a binding for the extern-c function so it can be looked up and called */
     Binding *b = binding_new(e, name_f->as.sym, fn_type, false, true, call->span);
+    b->is_extern_c = true;  /* ER6: mark as extern-c for effect inference */
     scope_add(&e->global, b);
 
     /* Create ExternC declaration */
@@ -13733,6 +13772,11 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
         /* ET3-A: (handler EffectName ValueType ResultType) type expression */
         if (form->as.list.len == 4 && form->as.list.items[0]->tag == F_SYM
                 && form->as.list.items[0]->as.sym == e->sym_handler_type) {
+            if (!g_effect_types_enabled) {
+                diag_emit(DIAG_ERROR, form->span,
+                          "'handler' type expression requires -Xeffect-types");
+                return NULL;
+            }
             Form *eff_f = form->as.list.items[1];
             Form *val_f = form->as.list.items[2];
             Form *res_f = form->as.list.items[3];

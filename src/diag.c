@@ -117,6 +117,9 @@ const char *diag_code_to_string(DiagCode code) {
         /* ET3: handler typing errors */
         case TUR_E0251_HANDLER_OVERLAP:                  return "TUR-E0251";
         case TUR_E0252_HANDLER_RESULT_MISMATCH:          return "TUR-E0252";
+        /* ET4: effect scope errors */
+        case TUR_E0250_ROW_VAR_ESCAPES_SCOPE:            return "TUR-E0250";
+        case TUR_E0253_EFFECT_NOT_IN_SCOPE:              return "TUR-E0253";
         case TUR_W0030_STRICT_EFFECTS_UNANNOTATED: return "TUR-W0030";
         case TUR_W0031_EFFECT_OVER_ANNOTATED:      return "TUR-W0031";
         case TUR_W0032_ROW_VAR_ALWAYS_CONCRETE:    return "TUR-W0032";
@@ -171,6 +174,9 @@ DiagCode diag_code_from_string(const char *s) {
     /* ET3: handler typing errors */
     if (strcmp(s, "TUR-E0251") == 0) return TUR_E0251_HANDLER_OVERLAP;
     if (strcmp(s, "TUR-E0252") == 0) return TUR_E0252_HANDLER_RESULT_MISMATCH;
+    /* ET4: effect scope errors */
+    if (strcmp(s, "TUR-E0250") == 0) return TUR_E0250_ROW_VAR_ESCAPES_SCOPE;
+    if (strcmp(s, "TUR-E0253") == 0) return TUR_E0253_EFFECT_NOT_IN_SCOPE;
     if (strcmp(s, "TUR-W0030") == 0) return TUR_W0030_STRICT_EFFECTS_UNANNOTATED;
     if (strcmp(s, "TUR-W0031") == 0) return TUR_W0031_EFFECT_OVER_ANNOTATED;
     if (strcmp(s, "TUR-W0032") == 0) return TUR_W0032_ROW_VAR_ALWAYS_CONCRETE;
@@ -842,6 +848,34 @@ static const DiagExplanation diag_explanations_[] = {
       "consider ^affine or ^linear instead.\n"
       "\n"
       "Enable with: tur -Xsubstructural myfile.tur\n",
+    },
+    /* ET4: effect scope errors */
+    { TUR_E0250_ROW_VAR_ESCAPES_SCOPE,
+      "TUR-E0250: Effect row variable escapes its quantifier scope\n"
+      "\n"
+      "A row variable introduced by forall [e] is being used outside the\n"
+      "quantifier scope that defined it.  Row variables are only valid within\n"
+      "the type expression that quantifies over them.\n"
+      "\n"
+      "Example (bad):\n"
+      "  ;; forall [e] row variable 'e' referenced outside its scope\n"
+      "\n"
+      "Fix: ensure the row variable is only referenced within the forall body,\n"
+      "or introduce a new forall quantifier at the appropriate scope level.\n",
+    },
+    { TUR_E0253_EFFECT_NOT_IN_SCOPE,
+      "TUR-E0253: Effect not in scope at perform site\n"
+      "\n"
+      "A (perform (EffectName ...)) call uses an effect that is not declared\n"
+      "in the current scope.  This can happen if the effect has not been\n"
+      "defined (missing defeffect), is defined in another module without being\n"
+      "imported, or is declared with ^private and is not accessible here.\n"
+      "\n"
+      "Example (bad):\n"
+      "  (perform (Foo 1))  ; error if Foo is not in scope\n"
+      "\n"
+      "Fix: define the effect with defeffect or import it from the module\n"
+      "that owns it before using perform.\n",
     },
     /* ET3: handler typing errors */
     { TUR_E0251_HANDLER_OVERLAP,

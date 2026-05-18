@@ -88,6 +88,9 @@ struct Binding {
     /* Phase HRT4: for let-bound aliases of global functions, tracks the original
      * function binding so poly_arg_fn_binding can find the callable C name. */
     struct Binding *source_binding;
+    /* ER6: true if this binding was introduced by an (extern-c ...) declaration.
+     * Used by effect_check to infer #{Unsafe} for calls to extern-c functions. */
+    bool          is_extern_c;
 };
 
 typedef enum ExprKind {
@@ -278,6 +281,8 @@ typedef struct EffectDef {
     /* Phase P19-6: Module visibility */
     bool          is_private;           /* declared with ^private */
     const Symbol *defining_module_name; /* module that declared this effect, or NULL */
+    /* ET4: effect hierarchy -- NULL if no ^extends */
+    const Symbol *parent_name;          /* name of parent effect (for ^extends), or NULL */
 } EffectDef;
 
 /* Perform expression: (perform (EffectName arg1 arg2 ...)) */

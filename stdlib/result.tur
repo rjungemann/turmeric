@@ -19,7 +19,7 @@
 ;;;
 ;;; Example:
 ;;;   (ok 42)  ; => ok(42)
-(defn ok [x :int] :ptr<void>
+(defn ok [x :int] #{Unsafe} :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
   result->is_ok = true;
@@ -39,7 +39,7 @@
 ;;;
 ;;; Example:
 ;;;   (err 1)  ; => err(1)
-(defn err [e :int] :ptr<void>
+(defn err [e :int] #{Unsafe} :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
   result->is_ok = false;
@@ -62,7 +62,7 @@
 ;;; Example:
 ;;;   (ok? (ok 1))   ; => true
 ;;;   (ok? (err 0))  ; => false
-(defn ok? [r :ptr<void>] :bool
+(defn ok? [r :ptr<void>] #{Unsafe} :bool
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
   return result != NULL && result->is_ok;
@@ -80,7 +80,7 @@
 ;;; Example:
 ;;;   (err? (err 0))  ; => true
 ;;;   (err? (ok 1))   ; => false
-(defn err? [r :ptr<void>] :bool
+(defn err? [r :ptr<void>] #{Unsafe} :bool
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
   return result == NULL || !result->is_ok;
@@ -99,7 +99,7 @@
 ;;;
 ;;; Example:
 ;;;   (ok-val (ok 5))  ; => 5
-(defn ok-val [r :ptr<void>] :int
+(defn ok-val [r :ptr<void>] #{Unsafe} :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
   return result->ok_val;
@@ -116,7 +116,7 @@
 ;;;
 ;;; Example:
 ;;;   (err-val (err 99))  ; => 99
-(defn err-val [r :ptr<void>] :int
+(defn err-val [r :ptr<void>] #{Unsafe} :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
   return result->err_val;
@@ -135,7 +135,7 @@
 ;;;
 ;;; Example:
 ;;;   (result-unwrap (ok 7))  ; => 7
-(defn result-unwrap [r :ptr<void>] :int
+(defn result-unwrap [r :ptr<void>] #{Unsafe} :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
   if (result == NULL || !result->is_ok) {
@@ -157,7 +157,7 @@
 ;;;
 ;;; Example:
 ;;;   (result-unwrap-or (err 0) 99)  ; => 99
-(defn result-unwrap-or [r :ptr<void> default_val :int] :int
+(defn result-unwrap-or [r :ptr<void> default_val :int] #{Unsafe} :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
   if (result != NULL && result->is_ok) return (int)result->ok_val;
@@ -176,7 +176,7 @@
 ;;;
 ;;; Example:
 ;;;   (result-expect r "parse failed")  ; => ok value or abort
-(defn result-expect [r :ptr<void> msg :cstr] :int
+(defn result-expect [r :ptr<void> msg :cstr] #{Unsafe} :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = (void*)r;
   if (result == NULL || !result->is_ok) {
@@ -201,7 +201,7 @@
 ;;;
 ;;; Example:
 ;;;   (result-map (ok 3) (fn [x] (* x 2)))  ; => ok(6)
-(defn result-map [r :ptr<void> f :ptr<void>] :ptr<void>
+(defn result-map [r :ptr<void> f :ptr<void>] #{Unsafe} :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
   if (res == NULL || !res->is_ok) return r;
@@ -226,7 +226,7 @@
 ;;;
 ;;; Example:
 ;;;   (result-map-err (err 1) (fn [e] (+ e 100)))  ; => err(101)
-(defn result-map-err [r :ptr<void> f :ptr<void>] :ptr<void>
+(defn result-map-err [r :ptr<void> f :ptr<void>] #{Unsafe} :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
   if (res == NULL || res->is_ok) return r;
@@ -251,7 +251,7 @@
 ;;;
 ;;; Example:
 ;;;   (result-flat-map (ok 5) (fn [x] (if (> x 0) (ok x) (err -1))))  ; => ok(5)
-(defn result-flat-map [r :ptr<void> f :ptr<void>] :ptr<void>
+(defn result-flat-map [r :ptr<void> f :ptr<void>] #{Unsafe} :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
   if (res == NULL || !res->is_ok) return r;
@@ -270,7 +270,7 @@
 ;;;
 ;;; Example:
 ;;;   (result-or (err 0) (ok 99))  ; => ok(99)
-(defn result-or [r :ptr<void> alt :ptr<void>] :ptr<void>
+(defn result-or [r :ptr<void> alt :ptr<void>] #{Unsafe} :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
   if (res != NULL && res->is_ok) return r;
@@ -290,7 +290,7 @@
 ;;;
 ;;; Example:
 ;;;   (result-or-else (err 1) (fn [e] (ok 0)))  ; => ok(0)
-(defn result-or-else [r :ptr<void> f :ptr<void>] :ptr<void>
+(defn result-or-else [r :ptr<void> f :ptr<void>] #{Unsafe} :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
   if (res != NULL && res->is_ok) return r;
@@ -313,7 +313,7 @@
 ;;; Example:
 ;;;   (ok-or (some 7) -1)  ; => ok(7)
 ;;;   (ok-or (none) -1)    ; => err(-1)
-(defn ok-or [opt :ptr<void> e :int] :ptr<void>
+(defn ok-or [opt :ptr<void> e :int] #{Unsafe} :ptr<void>
   ```c
   struct { bool is_some; int64_t value; } *o = (void*)opt;
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *result = malloc(sizeof(*result));
@@ -345,7 +345,7 @@
 ;;;
 ;;; Example:
 ;;;   (err-context (err my-msg) "loading config")
-(defn err-context [r :ptr<void> ctx :cstr] :ptr<void>
+(defn err-context [r :ptr<void> ctx :cstr] #{Unsafe} :ptr<void>
   ```c
   extern size_t strlen(const char*);
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
@@ -385,7 +385,7 @@
 ;;;   (result-eq? (ok 1) (ok 1) (fn [a b] (= a b)) (fn [a b] (= a b)))  ; => true
 ;;;
 ;;; Since: Phase E1
-(defn result-eq? [r1 r2 ok-cmp err-cmp] :bool
+(defn result-eq? [r1 r2 ok-cmp err-cmp] #{Unsafe} :bool
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *a =
       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r1;
@@ -413,7 +413,7 @@
 ;;;
 ;;; Example:
 ;;;   (result-free my-result)
-(defn result-free [r :ptr<void>]
+(defn result-free [r :ptr<void>] #{Unsafe}
   ```c
   free(r);
   ```)
@@ -435,7 +435,7 @@
 ;;;
 ;;; Example:
 ;;;   (result-collect my-results-vec)  ; => ok(vec) or err(e)
-(defn result-collect [v :ptr<void>] :ptr<void>
+(defn result-collect [v :ptr<void>] #{Unsafe} :ptr<void>
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec =
       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
@@ -486,7 +486,7 @@
 ;;; Example:
 ;;;   (let [pair (result-partition my-vec)]
 ;;;     (result-partition-ok pair))
-(defn result-partition [v :ptr<void>] :ptr<void>
+(defn result-partition [v :ptr<void>] #{Unsafe} :ptr<void>
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec =
       (struct { int64_t *data; size_t len; size_t cap; } *)(void*)v;
@@ -537,7 +537,7 @@
 ;;;
 ;;; Example:
 ;;;   (result-partition-ok (result-partition my-vec))
-(defn result-partition-ok [pair :ptr<void>] :ptr<void>
+(defn result-partition-ok [pair :ptr<void>] #{Unsafe} :ptr<void>
   ```c
   struct { void *ok_vec; void *err_vec; } *p = (void*)pair;
   return p->ok_vec;
@@ -554,7 +554,7 @@
 ;;;
 ;;; Example:
 ;;;   (result-partition-err (result-partition my-vec))
-(defn result-partition-err [pair :ptr<void>] :ptr<void>
+(defn result-partition-err [pair :ptr<void>] #{Unsafe} :ptr<void>
   ```c
   struct { void *ok_vec; void *err_vec; } *p = (void*)pair;
   return p->err_vec;
@@ -573,7 +573,7 @@
 ;;;   (result-must (ok 5))  ; => 5
 ;;;
 ;;; Since: Phase R4
-(defn result-must [r :ptr<void>] :int
+(defn result-must [r :ptr<void>] #{Unsafe} :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
   if (res == NULL || !res->is_ok) {
@@ -596,7 +596,7 @@
 ;;;   (result-must-msg r "expected ok result")  ; => value or panic
 ;;;
 ;;; Since: Phase R4
-(defn result-must-msg [r :ptr<void> msg :cstr] :int
+(defn result-must-msg [r :ptr<void> msg :cstr] #{Unsafe} :int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
   if (res == NULL || !res->is_ok) {
@@ -613,7 +613,7 @@
 ;; Foldable instance for result.
 ;; foldl/foldr operate on the ok value only; err is skipped.
 ;;; __foldable_result_foldl -- foldl implementation for the result Foldable instance.
-(defn __foldable_result_foldl [ta init fn] :ptr<void>
+(defn __foldable_result_foldl [ta init fn] #{Unsafe} :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)ta;
@@ -622,7 +622,7 @@
   ```)
 
 ;;; __foldable_result_foldr -- foldr implementation for the result Foldable instance.
-(defn __foldable_result_foldr [ta init fn] :ptr<void>
+(defn __foldable_result_foldr [ta init fn] #{Unsafe} :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)ta;
@@ -639,7 +639,7 @@
 ;; bimap :: (e -> e') -> (a -> b) -> result e a -> result e' b
 ;; Maps fn-left over err, fn-right over ok.
 ;;; __bifunctor_result_bimap -- bimap implementation for the result Bifunctor instance.
-(defn __bifunctor_result_bimap [container fn-left fn-right] :ptr<void>
+(defn __bifunctor_result_bimap [container fn-left fn-right] #{Unsafe} :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)container;
@@ -666,7 +666,7 @@
 ;; fmap :: (a -> b) -> result e a -> result e b
 ;; Maps a function over the ok value, leaving err unchanged.
 ;;; __functor_result_fmap -- fmap implementation for the result Functor instance.
-(defn __functor_result_fmap [container fn] :ptr<void>
+(defn __functor_result_fmap [container fn] #{Unsafe} :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)container;
@@ -712,11 +712,11 @@
 ;;   ap (err e) _      = err e
 ;;   ap _ (err e)       = err e
 ;;; __applicative_result_pure -- pure implementation for the result Applicative instance.
-(defn __applicative_result_pure [x] :ptr<void>
+(defn __applicative_result_pure [x] #{Unsafe} :ptr<void>
   (ok x))
 
 ;;; __applicative_result_ap -- ap implementation for the result Applicative instance.
-(defn __applicative_result_ap [ff fa] :ptr<void>
+(defn __applicative_result_ap [ff fa] #{Unsafe} :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *f_res =
       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)ff;
@@ -741,7 +741,7 @@
 ;;   bind (ok x) f = f x
 ;;   bind (err e) _ = err e
 ;;; __monad_result_bind -- bind implementation for the result Monad instance.
-(defn __monad_result_bind [ma fn] :ptr<void>
+(defn __monad_result_bind [ma fn] #{Unsafe} :ptr<void>
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
       (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)ma;

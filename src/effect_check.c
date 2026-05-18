@@ -43,6 +43,18 @@ static Effect *find_unsafe_effect(EffectEnv *env) {
     return NULL;
 }
 
+/* Returns true if e contains any EX_INLINE_C node (shallow: only checks the
+ * immediate expression, not inside nested function literals). */
+static bool expr_has_inline_c(Expr *e) {
+    if (!e) return false;
+    if (e->kind == EX_INLINE_C) return true;
+    if (e->kind == EX_DO) {
+        for (uint32_t i = 0; i < e->as.do_.n; i++)
+            if (expr_has_inline_c(e->as.do_.items[i])) return true;
+    }
+    return false;
+}
+
 static void fn_index_add(FnIndex *idx, const Binding *b, FnDef *fn) {
     if (idx->n >= FN_INDEX_CAP) return; /* silently drop if full */
     idx->entries[idx->n].binding = b;
@@ -262,6 +274,10 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
                     row = effect_row_merge(a, row, resolved);
                 }
             }
+            /* Note: extern-c calls are NOT automatically inferred as Unsafe here.
+             * Stdlib wrapper functions (e.g. hamt.tur) wrap unsafe C and present
+             * a safe interface to callers; adding Unsafe inference here would
+             * cause TUR-W0030 under --strict-effects for those unannotated wrappers. */
         }
 
         /* ER2: Apply substitution to the callee's declared row.
@@ -566,11 +582,35 @@ static int effect_row_check_over_annotated(FnDef *fd, Arena *a) {
     for (uint8_t i = 0; i < declared->as.concrete.n_effects; i++) {
         Effect *eff = declared->as.concrete.effects[i];
         if (!effect_row_contains(inferred, eff)) {
-            diag_emit_with_code(DIAG_WARNING, fn_span,
-                TUR_W0031_EFFECT_OVER_ANNOTATED,
-                "function '%s' declares effect '%s' but never performs it",
-                fd->binding ? fd->binding->name->name : "<anonymous>",
-                eff->name->name);
+            /* ET4: Also suppress if the inferred row contains a subeffect of `eff`.
+             * A function declaring #{IO} that performs #{Write} (where Write extends IO)
+             * is not over-annotated -- Write's presence covers IO. */
+            bool covered_by_subeffect = false;
+            if (inferred->kind == ERK_CONCRETE) {
+                for (uint8_t j = 0; j < inferred->as.concrete.n_effects; j++) {
+                    if (effect_is_subeffect(inferred->as.concrete.effects[j], eff)) {
+                        covered_by_subeffect = true;
+                        break;
+                    }
+                }
+            }
+            if (!covered_by_subeffect) {
+                /* Suppress W0031 for #{Unsafe} when the body contains inline C:
+                 * inline C is inherently unsafe but the effect system does not
+                 * infer Unsafe from it, so the annotation is always justified. */
+                bool suppress = false;
+                if (strcmp(eff->name->name, EFFECT_NAME_UNSAFE) == 0 &&
+                    expr_has_inline_c(fd->body)) {
+                    suppress = true;
+                }
+                if (!suppress) {
+                    diag_emit_with_code(DIAG_WARNING, fn_span,
+                        TUR_W0031_EFFECT_OVER_ANNOTATED,
+                        "function '%s' declares effect '%s' but never performs it",
+                        fd->binding ? fd->binding->name->name : "<anonymous>",
+                        eff->name->name);
+                }
+            }
         }
     }
     return 0;
@@ -919,6 +959,19 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
                                 def->defining_module_name, def->is_private);
         }
     }
+    /* ET4: Second pass to set parent pointers from ^extends declarations.
+     * Must happen after all effects are registered so parent lookup works. */
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        Expr *item = program->as.program.items[i];
+        if (!item || item->kind != EX_DEFECT || !item->as.effect_def_.def) continue;
+        EffectDef *def = item->as.effect_def_.def;
+        if (!def->parent_name) continue;
+        Effect *child_eff = effect_env_lookup(env, def->name);
+        Effect *parent_eff = effect_env_lookup(env, def->parent_name);
+        if (child_eff && parent_eff) {
+            child_eff->parent = parent_eff;
+        }
+    }
 
     /* --- Step 0: Resolve ERK_UNRESOLVED declared effect rows.
      * Effect row annotations are parsed during elaboration as ERK_UNRESOLVED
@@ -1139,7 +1192,9 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
     return rc;
 }
 
-/* ER6: --dump-effects — print each top-level defn's inferred effect row. */
+/* ER6: --dump-effects — print each top-level defn's inferred effect row.
+ * ET4: When a declared annotation is present, prefer it over the inferred row
+ * so that row variables (e.g. #{e}) appear in the output for polymorphic defns. */
 void effect_check_dump_effects(Expr *program, FILE *out) {
     if (!program || program->kind != EX_PROGRAM) return;
     for (uint32_t i = 0; i < program->as.program.n; i++) {
@@ -1148,9 +1203,14 @@ void effect_check_dump_effects(Expr *program, FILE *out) {
         FnDef *fn = item->as.fn_def_.fn;
         if (!fn->binding || !fn->binding->name) continue;
 
+        /* Prefer the declared annotation; fall back to inferred. */
+        EffectRow *declared = NULL;
+        if (fn->binding->type.kind == TY_FN)
+            declared = fn->binding->type.as.fn.effect_row;
+
         Buf row_str;
         buf_init(&row_str);
-        EffectRow *row = fn->inferred_effect_row;
+        EffectRow *row = declared ? declared : fn->inferred_effect_row;
         if (!row) {
             buf_puts(&row_str, "#{}");
         } else {

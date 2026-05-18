@@ -56,6 +56,9 @@ typedef enum DiagCode {
     /* ET3: handler typing errors */
     TUR_E0251_HANDLER_OVERLAP,            /* composed handlers handle overlapping effects */
     TUR_E0252_HANDLER_RESULT_MISMATCH,   /* handler clause result type does not match handle expression type */
+    /* ET4: effect scope errors */
+    TUR_E0250_ROW_VAR_ESCAPES_SCOPE,    /* forall [e] row variable used outside its quantifier scope */
+    TUR_E0253_EFFECT_NOT_IN_SCOPE,      /* perform site uses an effect not declared or in scope */
     /* LT1: Linear type errors (-Xlinear) */
     TUR_E0100_LINEAR_DROPPED,      /* linear value dropped without being consumed */
     TUR_E0101_LINEAR_USE_AFTER_CONSUME, /* linear value used after being moved/consumed */

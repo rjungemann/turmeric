@@ -29,7 +29,7 @@
 ;;;   (free-pure 42)  ; => (PureFree 42)
 ;;;
 ;;; Since: Phase RF3
-(defn free-pure [x :int] :int
+(defn free-pure [x :int] #{} :int
   (PureFree x))
 
 ;;; free-lift -- lift one layer of f into Free.
@@ -44,7 +44,7 @@
 ;;;   (free-lift (some 5))
 ;;;
 ;;; Since: Phase RF3
-(defn free-lift [fx :int] :int
+(defn free-lift [fx :int] #{} :int
   (Suspend fx))
 
 ;;; free-bind -- monadic bind for Free.
@@ -64,7 +64,7 @@
 ;;;   (free-bind (free-pure 3) (fn [x] (free-pure (* x 2))))  ; => (PureFree 6)
 ;;;
 ;;; Since: Phase RF3
-(defn free-bind [ma :int kont :int] :int
+(defn free-bind [ma :int kont :int] #{Unsafe} :int
   ```c
   typedef struct { int tag; union { struct { int64_t _0; } PureFree; struct { int64_t _0; } Suspend; } as; } tur_adt_Free_fb;
   tur_adt_Free_fb *fr = (tur_adt_Free_fb*)(intptr_t)ma;
@@ -87,7 +87,7 @@
 ;;;   A new Free value with f applied to all pure leaves.
 ;;;
 ;;; Since: Phase RF3
-(defn free-fmap [free :int f :int] :int
+(defn free-fmap [free :int f :int] #{Unsafe} :int
   ```c
   /* Apply f to the pure value inside a PureFree, or pass Suspend through. */
   /* Assume free is a tur_adt_Free pointer */
@@ -116,7 +116,7 @@
 ;;;   (free-run my-interp my-program)
 ;;;
 ;;; Since: Phase RF3
-(defn free-run [interp :int free :int] :int
+(defn free-run [interp :int free :int] #{Unsafe} :int
   ```c
   typedef struct { int tag; union { struct { int64_t _0; } PureFree; struct { int64_t _0; } Suspend; } as; } tur_adt_Free_fr;
   tur_adt_Free_fr *fr = (tur_adt_Free_fr*)(intptr_t)free;
