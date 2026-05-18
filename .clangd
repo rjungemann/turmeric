@@ -2,5 +2,10 @@ CompileFlags:
   Add:
     - -std=c11
     - -Isrc
+    - -Isrc/compiler
+    - -Isrc/passes
+    - -Isrc/runtime
+    - -Isrc/async
+    - -Isrc/web
     - -Isrc/turi
     - -Wall

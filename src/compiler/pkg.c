@@ -1700,7 +1700,7 @@ static int scaffold_project(const char *dir, const char *name,
             "git -C '%s' add -A 2>/dev/null && "
             "git -C '%s' commit -q -m 'Initial commit' 2>/dev/null",
             dir, dir, dir);
-        system(cmd); /* silently ignore if git is absent */
+        if (system(cmd) != 0) { /* git absent or commit failed -- non-fatal */ }
     }
 
     printf("Created %s project '%s'\n", is_bin ? "binary" : "library", name);

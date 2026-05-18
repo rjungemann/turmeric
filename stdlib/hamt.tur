@@ -452,14 +452,14 @@
 
 ;; ============================================================================
 ;; Autolink hint -- consumed by `tur build`/`tur run` (src/main.c).
-;; The __tur_autolink__ comment causes hamt.c to be compiled alongside the
-;; generated code and -Isrc to be added so that hamt.h can be found.
-;; TUR_SRC_DIR overrides the default "src" directory.
+;; The __tur_autolink__ comment causes src/runtime/hamt.c to be compiled
+;; alongside the generated code and -Isrc/runtime to be added so that hamt.h
+;; can be found.
 ;; ============================================================================
 
 ;;; hamt/autolink-hint -- internal marker that triggers hamt.c compilation in tur build/run.
 (defn hamt/autolink-hint [] #{Unsafe} :int
   ```c
-  /* __tur_autolink__: src/hamt.c -Isrc */
+  /* __tur_autolink__: src/runtime/hamt.c -Isrc/runtime */
   return 0;
   ```)
