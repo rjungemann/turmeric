@@ -1540,9 +1540,9 @@ Contract types provide:
 | Effect Types (Row Polymorphism) | ET0–ET4 | — | Phase 19 + HRT1 | ✅ Complete (`-Xeffect-types`) |
 | Linear Continuations | LC0–LC3 | — | LT0–LT4 + ET0–ET4 | ✅ Complete |
 | Multi-Shot Continuations | MS0–MS4 | — | LC0–LC3 | ✅ Complete (MS4: `^unsafe-multishot` removal deferred) |
-| Session Types | SS0–SS4 | 8-12 weeks | Linear Types + Threads | 📋 Not Started |
+| Session Types | SS0–SS8 | 16-24 weeks | Linear Types + Threads | 📋 Not Started |
 
-See [effects-continuations-tasks.md](effects-continuations-tasks.md) and [upcoming/session-types-plan.md](upcoming/session-types-plan.md).
+See [effects-continuations-tasks.md](effects-continuations-tasks.md) and [session-types-plan.md](session-types-plan.md).
 
 ### Phase 3: Contract Types & Sized Types (v4)
 
