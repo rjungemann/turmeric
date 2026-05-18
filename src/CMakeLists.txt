@@ -55,7 +55,11 @@ set(TUR_CORE_SOURCES
     compiler/builtins.c
     compiler/diag.c
     compiler/elab.c
-    compiler/emit.c
+    compiler/emit_core.c
+    compiler/emit_expr.c
+    compiler/emit_stmt.c
+    compiler/emit_fns.c
+    compiler/emit_module.c
     compiler/expr.c
     compiler/fmt.c
     compiler/forms.c
