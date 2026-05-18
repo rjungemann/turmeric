@@ -300,7 +300,8 @@ Expr *elab_let(Elab *e, const Form *call) {
                     binds[k].init->kind != EX_REF_FROM_RC &&
                     !binding_moved_during_init[k] &&
                     !binds[k].binding->is_moved &&
-                    !binds[k].binding->is_linear) {
+                    !binds[k].binding->is_linear &&
+                    !is_binding_consumed(body, binds[k].binding)) {
                     n_refs++;
                 }
             }
@@ -327,7 +328,8 @@ Expr *elab_let(Elab *e, const Form *call) {
                         binds[k].init->kind != EX_REF_FROM_RC &&
                         !binding_moved_during_init[k] &&
                         !binds[k].binding->is_moved &&
-                        !binds[k].binding->is_linear) {
+                        !binds[k].binding->is_linear &&
+                        !is_binding_consumed(body, binds[k].binding)) {
                         /* Create (defer (drop! binding_name)) expression */
                         /* Create a variable reference to the binding */
                         Expr *var_expr = expr_new(e->arena, EX_VAR, binds[k].binding->type, call->span);
@@ -409,7 +411,7 @@ Expr *elab_let(Elab *e, const Form *call) {
             if (binds[k].binding->type.kind == TY_RC && 
                 !binding_moved_during_init[k] &&
                 !binds[k].binding->is_moved &&
-                !is_rc_binding_consumed(body, binds[k].binding)) {
+                !is_binding_consumed(body, binds[k].binding)) {
                 n_rc_drops++;
             }
         }
@@ -429,7 +431,7 @@ Expr *elab_let(Elab *e, const Form *call) {
                 if (binds[k].binding->type.kind == TY_RC && 
                     !binding_moved_during_init[k] &&
                     !binds[k].binding->is_moved &&
-                    !is_rc_binding_consumed(body, binds[k].binding)) {
+                    !is_binding_consumed(body, binds[k].binding)) {
                     
                     /* Create a variable reference to the rc binding */
                     Expr *var_expr = expr_new(e->arena, EX_VAR, binds[k].binding->type, call->span);

@@ -113,6 +113,38 @@ bool expr_contains_return_or_throw(const Expr *e) {
     }
 }
 
+/* Check whether the fall-through point after `e` is unreachable -- i.e. every
+ * path through `e` ends in a return/panic.  Unlike expr_is_divergent (which
+ * only inspects the last item of a `do`), this treats a `do` as divergent when
+ * ANY item diverges, since statements after an unconditional return/panic are
+ * unreachable.  Used to decide whether a function body still needs a trailing
+ * `return <body-value>`. */
+bool expr_tail_diverges(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_RETURN:
+        case EX_PANIC:
+        case EX_PANIC_WITH:
+        case EX_DISCONTINUE:
+            return true;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++) {
+                if (expr_tail_diverges(e->as.do_.items[i])) return true;
+            }
+            return false;
+        case EX_LET:
+            return expr_tail_diverges(e->as.let_.body);
+        case EX_IF:
+            /* Diverges only if both branches diverge; a missing else falls
+             * through. */
+            if (!e->as.if_.else_or_null) return false;
+            return expr_tail_diverges(e->as.if_.then_) &&
+                   expr_tail_diverges(e->as.if_.else_or_null);
+        default:
+            return false;
+    }
+}
+
 /* MS1: Check if a program contains any handle expression with a ^multishot case.
  * Used to decide whether to emit the cloneable cont preamble. */
 bool expr_has_multishot_handler(const Expr *e) {

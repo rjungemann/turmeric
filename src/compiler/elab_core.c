@@ -722,9 +722,11 @@ void linear_state_restore(Binding **bindings, const bool *states, uint32_t n) {
     }
 }
 
-/* Check if an RC binding is consumed by ref/from-rc or explicitly dropped via rc/drop.
- * Returns true if the binding is consumed (should skip auto-drop to avoid double-free). */
-bool is_rc_binding_consumed(const Expr *body, Binding *binding) {
+/* Check if a binding is explicitly disposed in the body: an RC binding consumed
+ * by ref/from-rc or dropped via rc/drop, or a ref<T> binding dropped via drop!.
+ * Returns true if the binding is disposed (so the auto-drop must be skipped to
+ * avoid a double-free). */
+bool is_binding_consumed(const Expr *body, Binding *binding) {
     if (!body) return false;
     
     const Expr **stack = (const Expr **)malloc(256 * sizeof(const Expr *));
@@ -758,7 +760,19 @@ bool is_rc_binding_consumed(const Expr *body, Binding *binding) {
             free(stack);
             return true;
         }
-        
+
+        /* Check if this expression disposes the binding via explicit (drop! r) */
+        if (cur->kind == EX_BUILTIN &&
+            cur->as.builtin.spec &&
+            cur->as.builtin.spec->name &&
+            strcmp(cur->as.builtin.spec->name, "drop!") == 0 &&
+            cur->as.builtin.n == 1 &&
+            cur->as.builtin.args[0]->kind == EX_VAR &&
+            cur->as.builtin.args[0]->as.var.binding == binding) {
+            free(stack);
+            return true;
+        }
+
         /* Recursively traverse sub-expressions */
         switch (cur->kind) {
             case EX_LET:

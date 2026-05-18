@@ -710,9 +710,11 @@ static int cmd_build(const char *input, const char *out_path,
     if (!cc || !*cc) cc = "cc";
 
     /* TUR_CC_FLAGS overrides the default compiler flags.  Useful for test runs
-     * where -O0 is fast enough and ccache benefits from consistent flags. */
+     * where -O0 is fast enough and ccache benefits from consistent flags.
+     * -fno-strict-aliasing: emitted code and inline C blocks routinely pun
+     * pointers through int64_t, which GCC's TBAA miscompiles at -O2. */
     const char *cc_flags = getenv("TUR_CC_FLAGS");
-    if (!cc_flags || !*cc_flags) cc_flags = "-O2 -std=c99 -Wall";
+    if (!cc_flags || !*cc_flags) cc_flags = "-O2 -std=c99 -Wall -fno-strict-aliasing";
 
     /* Collect cmake dep flags from cmake/spice-deps-manifest.json if present */
     Buf cmake_flags;
@@ -1298,8 +1300,9 @@ static int cmd_build_multi(const char *dir, const char *out_path) {
     const char *cc = getenv("CC");
     if (!cc || !*cc) cc = "cc";
 
+    /* See the note on -fno-strict-aliasing above. */
     const char *cc_flags = getenv("TUR_CC_FLAGS");
-    if (!cc_flags || !*cc_flags) cc_flags = "-O2 -std=c99 -Wall";
+    if (!cc_flags || !*cc_flags) cc_flags = "-O2 -std=c99 -Wall -fno-strict-aliasing";
 
     /* Collect cmake dep flags from cmake/spice-deps-manifest.json if present */
     Buf cmake_flags;

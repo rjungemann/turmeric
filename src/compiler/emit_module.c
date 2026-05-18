@@ -832,6 +832,9 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    if (global_panic_frame) {\n");
     buf_puts(out, "        tur_frame_fire_chain(global_panic_frame);\n");
     buf_puts(out, "    }\n");
+    /* Flush buffered output (defers fired above may have printed) before
+     * abort(), which does not flush stdio streams. */
+    buf_puts(out, "    fflush(NULL);\n");
     buf_puts(out, "    abort();\n");
     buf_puts(out, "}\n\n");
 

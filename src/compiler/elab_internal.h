@@ -532,7 +532,7 @@ uint32_t linear_state_snapshot_bindings(const Scope *scope,
     bool **out_states);
 bool *linear_state_capture_current(Binding **bindings, uint32_t n);
 void linear_state_restore(Binding **bindings, const bool *states, uint32_t n);
-bool is_rc_binding_consumed(const Expr *body, Binding *binding);
+bool is_binding_consumed(const Expr *body, Binding *binding);
 void elab_init_state(Elab *e, Arena *arena, SymbolTable *st);
 MacroDef *elab_lookup_macro(Elab *e, const Symbol *name);
 Binding *binding_new(Elab *e, const Symbol *name, Type type,
