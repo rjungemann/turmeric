@@ -114,6 +114,9 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0019_SERIAL_SHIFT_OUTSIDE_RESET:       return "TUR-E0019";
         case TUR_E0021_PRIVATE_EFFECT:                   return "TUR-E0021";
         case TUR_E0254_INFINITE_EFFECT_ROW:              return "TUR-E0254";
+        /* ET3: handler typing errors */
+        case TUR_E0251_HANDLER_OVERLAP:                  return "TUR-E0251";
+        case TUR_E0252_HANDLER_RESULT_MISMATCH:          return "TUR-E0252";
         case TUR_W0030_STRICT_EFFECTS_UNANNOTATED: return "TUR-W0030";
         case TUR_W0031_EFFECT_OVER_ANNOTATED:      return "TUR-W0031";
         case TUR_W0032_ROW_VAR_ALWAYS_CONCRETE:    return "TUR-W0032";
@@ -165,6 +168,9 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0019") == 0) return TUR_E0019_SERIAL_SHIFT_OUTSIDE_RESET;
     if (strcmp(s, "TUR-E0021") == 0) return TUR_E0021_PRIVATE_EFFECT;
     if (strcmp(s, "TUR-E0254") == 0) return TUR_E0254_INFINITE_EFFECT_ROW;
+    /* ET3: handler typing errors */
+    if (strcmp(s, "TUR-E0251") == 0) return TUR_E0251_HANDLER_OVERLAP;
+    if (strcmp(s, "TUR-E0252") == 0) return TUR_E0252_HANDLER_RESULT_MISMATCH;
     if (strcmp(s, "TUR-W0030") == 0) return TUR_W0030_STRICT_EFFECTS_UNANNOTATED;
     if (strcmp(s, "TUR-W0031") == 0) return TUR_W0031_EFFECT_OVER_ANNOTATED;
     if (strcmp(s, "TUR-W0032") == 0) return TUR_W0032_ROW_VAR_ALWAYS_CONCRETE;
@@ -836,6 +842,36 @@ static const DiagExplanation diag_explanations_[] = {
       "consider ^affine or ^linear instead.\n"
       "\n"
       "Enable with: tur -Xsubstructural myfile.tur\n",
+    },
+    /* ET3: handler typing errors */
+    { TUR_E0251_HANDLER_OVERLAP,
+      "TUR-E0251: Overlapping handler effects\n"
+      "\n"
+      "Two handlers composed via compose-handlers both handle the same algebraic\n"
+      "effect.  Each effect may only be handled once in a composed handler.\n"
+      "\n"
+      "Example (bad):\n"
+      "  (defeffect Write [s :cstr] :nil)\n"
+      "  (compose-handlers h1 h2)  ; error if both h1 and h2 handle Write\n"
+      "\n"
+      "Fix: ensure that each composed handler handles a distinct set of effects.\n",
+    },
+    { TUR_E0252_HANDLER_RESULT_MISMATCH,
+      "TUR-E0252: Handler clause result type mismatch\n"
+      "\n"
+      "The result type of a handler clause body does not match the result type of\n"
+      "the enclosing handle expression.  All handler clause bodies and the handled\n"
+      "expression body must produce the same type.\n"
+      "\n"
+      "Example (bad):\n"
+      "  (defeffect Write [s :cstr] :nil)\n"
+      "  (handle\n"
+      "    (do (perform (Write \"x\")) 0)  ; handle expression returns :int\n"
+      "    (Write [s] k) \"wrong type\")    ; error: clause returns :cstr\n"
+      "\n"
+      "Fix: ensure the handler clause body produces the same type as the handled\n"
+      "expression body.  Use (resume k value) to continue with a value of the\n"
+      "correct type.\n",
     },
 };
 

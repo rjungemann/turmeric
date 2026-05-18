@@ -5917,6 +5917,11 @@ int emit_program(Buf *out, const Expr *program) {
      * Used for (forall [a] (-> a a))-style rank-2 parameters. */
     buf_puts(out, "/* Phase HRT1: rank-2 polymorphic function type */\n");
     buf_puts(out, "typedef struct { void *env; int64_t (*fn)(void *, int64_t); } tur_poly_fn_t;\n");
+    /* ET3: handler runtime type.
+     * tur_handler_t is a handler value: an env pointer plus a dispatch function.
+     * The dispatch function receives: env, n_args, value, continuation-as-int64_t. */
+    buf_puts(out, "/* ET3: algebraic effect handler runtime type */\n");
+    buf_puts(out, "typedef struct { void *env; int64_t (*fn)(int64_t *, int, int64_t, void *); } tur_handler_t;\n");
     /* IT4: Tagged union runtime representation.
      * tur_tagged_t carries a discriminant tag and a 64-bit payload.
      * Used for (A | B) union types and the 'any' top type. */

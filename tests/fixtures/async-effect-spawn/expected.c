@@ -97,6 +97,8 @@ static tur_set_t *tur_set_difference(tur_set_t *a, tur_set_t *b) {
 static void tur_set_free(tur_set_t *s) { if (s) { free(s->items); free(s); } }
 /* Phase HRT1: rank-2 polymorphic function type */
 typedef struct { void *env; int64_t (*fn)(void *, int64_t); } tur_poly_fn_t;
+/* ET3: algebraic effect handler runtime type */
+typedef struct { void *env; int64_t (*fn)(int64_t *, int, int64_t, void *); } tur_handler_t;
 /* IT4: tagged union runtime representation */
 typedef struct { int64_t tag; int64_t val; } tur_tagged_t;
 #define TUR_TAG(t, v)  ((tur_tagged_t){(int64_t)(t), (int64_t)(v)})

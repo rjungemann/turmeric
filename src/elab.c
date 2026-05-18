@@ -745,6 +745,9 @@ typedef struct Elab {
     const Symbol *sym_discontinue;/* discontinue */
     const Symbol *sym_k;          /* continuation parameter name k */
     const Symbol *sym_effect_unsafe; /* built-in effect name: Unsafe */
+    /* ET3: handler type expression and compose-handlers */
+    const Symbol *sym_handler_type;     /* "handler" type expression keyword */
+    const Symbol *sym_compose_handlers; /* "compose-handlers" call form */
     /* Phase U3: Unsafe primitives - pointer operations */
     const Symbol *sym_ptr_deref;   /* ptr-deref */
     const Symbol *sym_ptr_write;  /* ptr-write */
@@ -1403,6 +1406,9 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_cont_pred = intern_cstr(st, "cont?");
     e->sym_effect_unsafe = intern_cstr(st, EFFECT_NAME_UNSAFE);
     effect_env_register_builtin_unsafe(e->effect_env, e->arena, e->sym_effect_unsafe);
+    /* ET3: handler type expression and compose-handlers */
+    e->sym_handler_type     = intern_cstr(st, "handler");
+    e->sym_compose_handlers = intern_cstr(st, "compose-handlers");
     /* Phase U3: Unsafe primitives - pointer operations */
     e->sym_ptr_deref = intern_cstr(st, "ptr-deref");
     e->sym_ptr_write = intern_cstr(st, "ptr-write");
@@ -5509,6 +5515,8 @@ static Expr *elab_serial_shift(Elab *e, const Form *call) {
 
 /* Forward declaration (defined after elab_defeffect) */
 static Expr *elab_handle(Elab *e, const Form *call);
+/* ET3-E: Forward declaration for compose-handlers */
+static Expr *elab_compose_handlers(Elab *e, const Form *call);
 
 /* (try-with body (EffectName [params] k) handler ...)
  * Sugar: identical to (handle body ...).
@@ -5940,23 +5948,115 @@ static Expr *elab_handle(Elab *e, const Form *call) {
         /* Parse handler body inside the handler scope */
         Form *body_f = call->as.list.items[3 + (i * 2)];
         cases[i].body = elab_form(e, body_f);
-        
+
         /* Restore outer scope */
         e->scope = saved_scope;
         scope_free(&handler_scope);
-        
+
         if (!cases[i].body) return NULL;
+
+        /* ET3-C: Check that the handler clause result type matches the body type.
+         * Skip the check when either is TY_UNKNOWN or TY_NEVER, or when the clause
+         * body ends in a resume expression (resume returns the value type passed to
+         * the continuation, not the overall handle result type). */
+        {
+            /* Helper: check if an expression ends in a resume.
+             * Handles bare (resume ...) and (do ... (resume ...)) patterns. */
+            const Expr *cb = cases[i].body;
+            bool ends_in_resume = (cb->kind == EX_RESUME);
+            if (!ends_in_resume && cb->kind == EX_DO && cb->as.do_.n > 0) {
+                const Expr *last = cb->as.do_.items[cb->as.do_.n - 1];
+                ends_in_resume = (last->kind == EX_RESUME);
+            }
+
+            if (!ends_in_resume && i == 0 && body != NULL
+                && cases[i].body->type.kind != TY_UNKNOWN
+                && cases[i].body->type.kind != TY_NEVER
+                && body->type.kind != TY_UNKNOWN
+                && body->type.kind != TY_NEVER
+                && cases[i].body->type.kind != body->type.kind) {
+                diag_emit_with_code(DIAG_ERROR, body_f->span,
+                    TUR_E0252_HANDLER_RESULT_MISMATCH,
+                    "handler clause result type '%s' does not match handle expression type '%s'",
+                    type_name(cases[i].body->type), type_name(body->type));
+            } else if (!ends_in_resume && i > 0 && cases[0].body != NULL) {
+                /* Also check if case 0's body ends in resume before comparing */
+                const Expr *cb0 = cases[0].body;
+                bool c0_ends_resume = (cb0->kind == EX_RESUME);
+                if (!c0_ends_resume && cb0->kind == EX_DO && cb0->as.do_.n > 0) {
+                    const Expr *last0 = cb0->as.do_.items[cb0->as.do_.n - 1];
+                    c0_ends_resume = (last0->kind == EX_RESUME);
+                }
+                if (!c0_ends_resume
+                    && cases[i].body->type.kind != TY_UNKNOWN
+                    && cases[i].body->type.kind != TY_NEVER
+                    && cases[0].body->type.kind != TY_UNKNOWN
+                    && cases[0].body->type.kind != TY_NEVER
+                    && cases[i].body->type.kind != cases[0].body->type.kind) {
+                    diag_emit_with_code(DIAG_ERROR, body_f->span,
+                        TUR_E0252_HANDLER_RESULT_MISMATCH,
+                        "handler clause result type '%s' does not match other clauses' type '%s'",
+                        type_name(cases[i].body->type), type_name(cases[0].body->type));
+                }
+            }
+        }
     }
-    
+
     /* Create the handle expression */
     HandleExpr *handle = arena_alloc(e->arena, sizeof(HandleExpr));
     handle->body = body;
     handle->cases = cases;
     handle->n_cases = n_cases;
-    
+
     /* The return type of handle is the same as the body's type */
     Expr *out = expr_new(e->arena, EX_HANDLE, body->type, call->span);
     out->as.handle_.handle = handle;
+    return out;
+}
+
+/* ET3-E: (compose-handlers h1 h2)
+ * Compose two handlers that must handle different effects.
+ * Emits TUR_E0251 if both handlers handle the same effect.
+ * Returns a nil-typed expression (placeholder; runtime semantics TBD).
+ */
+static Expr *elab_compose_handlers(Elab *e, const Form *call) {
+    if (call->as.list.len != 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(compose-handlers h1 h2) requires exactly two arguments");
+        return NULL;
+    }
+    Expr *h1 = elab_form(e, call->as.list.items[1]);
+    if (!h1) return NULL;
+    Expr *h2 = elab_form(e, call->as.list.items[2]);
+    if (!h2) return NULL;
+
+    /* ET3: Both arguments should have TY_HANDLER type */
+    if (h1->type.kind != TY_HANDLER) {
+        diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
+                  "(compose-handlers): first argument must be a handler value, got '%s'",
+                  type_name(h1->type));
+        return NULL;
+    }
+    if (h2->type.kind != TY_HANDLER) {
+        diag_emit(DIAG_ERROR, call->as.list.items[2]->span,
+                  "(compose-handlers): second argument must be a handler value, got '%s'",
+                  type_name(h2->type));
+        return NULL;
+    }
+
+    /* ET3: Handlers must handle different effects (TUR-E0251) */
+    if (h1->type.as.handler_.effect_name != NULL
+        && h2->type.as.handler_.effect_name != NULL
+        && h1->type.as.handler_.effect_name == h2->type.as.handler_.effect_name) {
+        diag_emit_with_code(DIAG_ERROR, call->span,
+            TUR_E0251_HANDLER_OVERLAP,
+            "composed handlers both handle effect '%s'; overlapping effects are not allowed",
+            h1->type.as.handler_.effect_name);
+        return NULL;
+    }
+
+    /* Return a nil-typed placeholder expression */
+    Expr *out = expr_new(e->arena, EX_NIL_LIT, TYPE_NIL, call->span);
     return out;
 }
 
@@ -8187,6 +8287,8 @@ static Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_with_handler) return elab_handle(e, call);  /* T25: sugar for handle in async context */
     if (name == e->sym_resume)    return elab_resume(e, call);
     if (name == e->sym_discontinue) return elab_discontinue(e, call);
+    /* ET3-E: compose-handlers */
+    if (name == e->sym_compose_handlers) return elab_compose_handlers(e, call);
     if (name == e->sym_cont_pred)   return elab_cont_pred(e, call);
     /* Phase 10: GC */
     if (name == e->sym_gc_force)    return elab_gc_force(e, call);
@@ -13370,6 +13472,12 @@ static Expr *elab_defrec(Elab *e, const Form *call) {
 static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                                   const Symbol **type_params, Kind *type_param_kinds,
                                   uint8_t n_type_params) {
+    /* ET3: bare `nil` literal (F_NIL) in a type expression means the nil/unit type */
+    if (form->tag == F_NIL) {
+        Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+        *t = TYPE_NIL;
+        return t;
+    }
     if (form->tag == F_SYM) {
         const Symbol *sym = form->as.sym;
         
@@ -13620,6 +13728,30 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
                 *t = built;
                 return t;
             }
+        }
+
+        /* ET3-A: (handler EffectName ValueType ResultType) type expression */
+        if (form->as.list.len == 4 && form->as.list.items[0]->tag == F_SYM
+                && form->as.list.items[0]->as.sym == e->sym_handler_type) {
+            Form *eff_f = form->as.list.items[1];
+            Form *val_f = form->as.list.items[2];
+            Form *res_f = form->as.list.items[3];
+            if (eff_f->tag != F_SYM) {
+                diag_emit(DIAG_ERROR, eff_f->span, "(handler E V R): effect name must be a symbol");
+                return NULL;
+            }
+            Type *val_t = type_expr_from_form(e, val_f, rec_name, type_params, type_param_kinds, n_type_params);
+            Type *res_t = type_expr_from_form(e, res_f, rec_name, type_params, type_param_kinds, n_type_params);
+            if (!val_t || !res_t) return NULL;
+            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+            memset(t, 0, sizeof(Type));
+            t->kind = TY_HANDLER;
+            t->copy_kind = CK_COPY;
+            t->hkt_kind = KIND_STAR;
+            t->as.handler_.effect_name = eff_f->as.sym->name;
+            t->as.handler_.value_kind = val_t->kind;
+            t->as.handler_.result_kind = res_t->kind;
+            return t;
         }
 
         /* Phase HRT0: Handle (forall [vars...] body) and (exists [vars...] body) */

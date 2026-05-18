@@ -64,6 +64,12 @@ int type_eq(Type a, Type b) {
     if (a.kind == TY_CLONEABLE_CONT) {
         return a.as.cont.returns == b.as.cont.returns;
     }
+    /* ET3: Handler types */
+    if (a.kind == TY_HANDLER) {
+        return a.as.handler_.effect_name == b.as.handler_.effect_name
+            && a.as.handler_.value_kind == b.as.handler_.value_kind
+            && a.as.handler_.result_kind == b.as.handler_.result_kind;
+    }
     /* Phase 11: Struct types - identity by StructDef pointer */
     if (a.kind == TY_STRUCT) {
         return a.as.struct_.def == b.as.struct_.def;
@@ -387,6 +393,20 @@ const char *type_name(Type t) {
             buf_putc(&tmp, '\0');
             return tur_strdup(tmp.data);
         }
+        /* ET3: Handler type — "handler<Effect, ValueType, ResultType>" */
+        case TY_HANDLER: {
+            Buf tmp;
+            buf_init(&tmp);
+            buf_puts(&tmp, "handler<");
+            buf_puts(&tmp, t.as.handler_.effect_name ? t.as.handler_.effect_name : "?");
+            buf_puts(&tmp, ", ");
+            buf_puts(&tmp, type_name(type_from_kind(t.as.handler_.value_kind)));
+            buf_puts(&tmp, ", ");
+            buf_puts(&tmp, type_name(type_from_kind(t.as.handler_.result_kind)));
+            buf_putc(&tmp, '>');
+            buf_putc(&tmp, '\0');
+            return tur_strdup(tmp.data);
+        }
     }
     return "?";
 }
@@ -595,6 +615,17 @@ static void type_name_buf(Buf *b, Type t) {
             buf_putc(b, ')');
             break;
         }
+        /* ET3: Handler type */
+        case TY_HANDLER: {
+            buf_puts(b, "handler<");
+            buf_puts(b, t.as.handler_.effect_name ? t.as.handler_.effect_name : "?");
+            buf_puts(b, ", ");
+            type_name_buf(b, type_from_kind(t.as.handler_.value_kind));
+            buf_puts(b, ", ");
+            type_name_buf(b, type_from_kind(t.as.handler_.result_kind));
+            buf_putc(b, '>');
+            break;
+        }
     }
 }
 
@@ -692,6 +723,9 @@ const char *type_c_name(Type t) {
         /* IT4: any — tagged union struct (same as TY_UNION; tag is TypeKind of stored value) */
         case TY_ANY:
             return "tur_tagged_t";
+        /* ET3: Handler type — struct with env pointer and function pointer */
+        case TY_HANDLER:
+            return "tur_handler_t";
     }
     return "void";
 }
@@ -867,6 +901,9 @@ static bool type_is_guarded_recursive_helper(const Type *t, const char *rec_name
         /* IT4: any — top type; always safe (no recursive members) */
         case TY_ANY:
             return true;
+        /* ET3: Handler type — leaf type; no recursive members */
+        case TY_HANDLER:
+            return true;
     }
 
     return true;  /* Unknown type kind - assume safe */
@@ -947,6 +984,13 @@ const char *typekind_to_string(TypeKind k) {
         case TY_INTERSECTION: return "intersection";
         /* IT4: Top type */
         case TY_ANY:          return "any";
+        /* ET3: Handler type */
+        case TY_HANDLER:      return "handler";
+        /* Phase HKT-P1/P2 */
+        case TY_APP:          return "app";
+        case TY_REC:          return "rec";
+        /* Phase LT3 */
+        case TY_LREF:         return "lref";
         default:          return "<?>";
     }
 }
@@ -1105,5 +1149,28 @@ TypeKind typekind_from_name(const char *name) {
     if (strcmp(name, "float32") == 0) return TY_FLOAT32;
     if (strcmp(name, "float64") == 0) return TY_FLOAT64;
     if (strcmp(name, "set") == 0) return TY_SET;
+    if (strcmp(name, "handler") == 0) return TY_HANDLER;
     return TY_UNKNOWN;
+}
+
+/* ET3-D: type_is_subtype -- check if sub is a subtype of super_.
+ * Returns true if sub is assignable where super_ is expected.
+ * Rules:
+ *   - TY_ANY as super_ accepts any subtype (top type).
+ *   - TY_NEVER as sub is a subtype of everything (bottom type).
+ *   - TY_HANDLER: covariant in result, contravariant in value (simplified: equality for now).
+ *   - Otherwise: use type_eq.
+ */
+bool type_is_subtype(Type sub, Type super_) {
+    if (super_.kind == TY_ANY) return true;
+    if (sub.kind == TY_NEVER) return true;
+    if (sub.kind == super_.kind) {
+        if (sub.kind == TY_HANDLER) {
+            if (sub.as.handler_.effect_name != super_.as.handler_.effect_name) return false;
+            return sub.as.handler_.value_kind == super_.as.handler_.value_kind
+                && sub.as.handler_.result_kind == super_.as.handler_.result_kind;
+        }
+        return type_eq(sub, super_);
+    }
+    return false;
 }
