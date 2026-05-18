@@ -54,7 +54,20 @@ set(TUR_CORE_SOURCES
     # compiler/ -- frontend pipeline: text -> IR
     compiler/builtins.c
     compiler/diag.c
-    compiler/elab.c
+    compiler/elab_core.c
+    compiler/elab_macros.c
+    compiler/elab_unsafe.c
+    compiler/elab_forms.c
+    compiler/elab_memory.c
+    compiler/elab_effects.c
+    compiler/elab_fns.c
+    compiler/elab_call.c
+    compiler/elab_module.c
+    compiler/elab_structs.c
+    compiler/elab_types.c
+    compiler/elab_typeclasses.c
+    compiler/elab_concurrent.c
+    compiler/elab_toplevel.c
     compiler/emit_core.c
     compiler/emit_expr.c
     compiler/emit_stmt.c

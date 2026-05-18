@@ -1,0 +1,863 @@
+/* elab_module.c -- module loading, imports, exports, and symbol resolution. */
+#include "elab_internal.h"
+
+/* ---- file-local helper forward declarations ---- */
+static bool module_name_valid(const char *name, uint32_t len);
+static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_span);
+static bool parse_import_spec(Elab *e, const Form *f, ImportSpec *out);
+
+/* Phase M0: Module system */
+
+/* Validate that a module name only contains [a-zA-Z0-9_\-/] */
+static bool module_name_valid(const char *name, uint32_t len) {
+    if (len == 0) return false;
+    for (uint32_t i = 0; i < len; i++) {
+        char c = name[i];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '/') {
+            continue;
+        }
+        return false;
+    }
+    /* Must not start or end with '/' */
+    if (name[0] == '/' || name[len - 1] == '/') return false;
+    return true;
+}
+
+/* Phase M: (load "path") — source-file inclusion form.
+ * Reads the file at the given path, elaborates all its top-level forms into
+ * the current module's scope, and returns nil.  Uses the loaded_modules
+ * registry (keyed by interned path) to prevent duplicate loads.
+ *
+ * Syntax: (load "relative/or/absolute/path.tur")
+ */
+/* Phase M: (load "path") — handled by load-expansion preprocessor in
+ * elaborate_program before the two-pass elab.  This dispatch path should be
+ * unreachable for top-level loads; we return nil to allow stray (load ...)
+ * inside e.g. (do ...) blocks to no-op (loaded forms are already expanded
+ * at top level by then).  See expand_loads_in_forms. */
+Expr *elab_load(Elab *e, const Form *call) {
+    (void)call;
+    return expr_new(e->arena, EX_NIL_LIT, TYPE_NIL, call->span);
+}
+
+/* Phase M2: Load and elaborate an imported module file.
+ * Returns the registry entry (may have 0 exports on parse/elab failure).
+ * Returns NULL only on fatal error (circular import or OOM). */
+static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_span) {
+    /* Already in registry? */
+    ElabModule *existing = elab_find_loaded_module(e, name);
+    if (existing) {
+        if (existing->is_loading) {
+            diag_emit(DIAG_ERROR, import_span,
+                      "circular import: module '%s' is already being loaded", name->name);
+            return NULL;
+        }
+        return existing;
+    }
+
+    /* Reserve a registry slot first (for circular-import detection). */
+    if (e->n_loaded_modules >= e->cap_loaded_modules) {
+        e->cap_loaded_modules = e->cap_loaded_modules ? e->cap_loaded_modules * 2 : 8;
+        e->loaded_modules = (ElabModule *)realloc(e->loaded_modules,
+                             e->cap_loaded_modules * sizeof(ElabModule));
+        if (!e->loaded_modules) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    ElabModule *slot = &e->loaded_modules[e->n_loaded_modules++];
+    slot->name = name;
+    slot->exports = NULL;
+    slot->n_exports = 0;
+    slot->is_loading = true;
+
+    /* Build file path: 'geom/vector' -> '{base_dir}/geom/vector.tur'
+     * The '/' in module names maps directly to directory separators. */
+    char path_buf[4096];
+    const char *base = e->module_base_dir ? e->module_base_dir : ".";
+    int plen = snprintf(path_buf, sizeof(path_buf), "%s/%s.tur", base, name->name);
+    if (plen < 0 || (size_t)plen >= sizeof(path_buf)) {
+        diag_emit(DIAG_ERROR, import_span,
+                  "module path too long for '%s'", name->name);
+        slot->is_loading = false;
+        return NULL;
+    }
+
+    /* Read source file. */
+    char *src_raw = NULL;
+    size_t src_len = 0;
+    if (elab_read_file(path_buf, &src_raw, &src_len) != 0) {
+        /* Fallback: try the stdlib directory (e.g. for `import turi/eval`). */
+        bool found_in_stdlib = false;
+        if (e->module_stdlib_dir) {
+            char stdlib_path[4096];
+            int splen = snprintf(stdlib_path, sizeof(stdlib_path), "%s/%s.tur",
+                                 e->module_stdlib_dir, name->name);
+            if (splen > 0 && (size_t)splen < sizeof(stdlib_path)) {
+                if (elab_read_file(stdlib_path, &src_raw, &src_len) == 0) {
+                    memcpy(path_buf, stdlib_path, (size_t)splen + 1);
+                    plen = splen;
+                    found_in_stdlib = true;
+                }
+            }
+        }
+        if (!found_in_stdlib) {
+            /* Fallback: try each -I include directory (spice paths). */
+            bool found_in_includes = false;
+            for (int ii = 0; ii < e->n_module_include_dirs && !found_in_includes; ii++) {
+                char inc_path[4096];
+                int iplen = snprintf(inc_path, sizeof(inc_path), "%s/%s.tur",
+                                     e->module_include_dirs[ii], name->name);
+                if (iplen > 0 && (size_t)iplen < sizeof(inc_path)) {
+                    if (elab_read_file(inc_path, &src_raw, &src_len) == 0) {
+                        memcpy(path_buf, inc_path, (size_t)iplen + 1);
+                        plen = iplen;
+                        found_in_includes = true;
+                    }
+                }
+            }
+            if (!found_in_includes) {
+                diag_emit(DIAG_ERROR, import_span,
+                          "module '%s' not found (looked for '%s')", name->name, path_buf);
+                slot->is_loading = false;
+                return NULL;
+            }
+        }
+    }
+
+    /* Copy source into the arena so it outlives the load. */
+    char *src_copy = (char *)arena_alloc(e->arena, src_len + 1);
+    memcpy(src_copy, src_raw, src_len);
+    src_copy[src_len] = '\0';
+    free(src_raw);
+
+    /* Register the source file for diagnostics.  Path must also live in arena. */
+    char *path_copy = (char *)arena_alloc(e->arena, (size_t)plen + 1);
+    memcpy(path_copy, path_buf, (size_t)plen + 1);
+
+    SourceFile *sfile = (SourceFile *)arena_alloc(e->arena, sizeof(SourceFile));
+    *sfile = (SourceFile){0};
+    sfile->path = path_copy;
+    sfile->src = src_copy;
+    sfile->len = src_len;
+    sfile->file_id = e->next_import_file_id++;
+    sfile->reader_type = READER_TURMERIC;
+    diag_register_file(sfile);
+
+    /* Parse the source into forms. */
+    uint32_t nforms = 0;
+    Form **forms = read_all(e->arena, e->st, sfile, &nforms);
+    if (!forms) {
+        slot->is_loading = false;
+        return NULL;
+    }
+
+    /* Elaborate the imported module's forms.
+     * Save and restore fields that track the current defmodule context so the
+     * outer caller's state is not corrupted. */
+    bool         saved_has_defmodule   = e->has_defmodule;
+    const Symbol *saved_module_name    = e->current_module_name;
+    const DefModule *saved_module      = e->current_module;
+    e->has_defmodule       = false;
+    e->current_module_name = NULL;
+    e->current_module      = NULL;
+
+    /* Phase M4: capture the DefModule so we can check its export list for macros. */
+    const DefModule *loaded_defmod = NULL;
+
+    for (uint32_t i = 0; i < nforms; i++) {
+        Expr *ex = elab_form(e, forms[i]);
+        if (!ex) {
+            e->has_defmodule       = saved_has_defmodule;
+            e->current_module_name = saved_module_name;
+            e->current_module      = saved_module;
+            slot->is_loading = false;
+            return NULL;
+        }
+        /* Register EX_DEFMODULE into file_scope_defs so its body gets emitted.
+         * emit.c's flatten_program_items expands these into top-level C items.
+         * Phase M3: Skip inlining when compiling each module separately; the
+         * implementation file #includes the imported module's header instead. */
+        if (ex->kind == EX_DEFMODULE) {
+            loaded_defmod = ex->as.defmodule_.mod; /* Phase M4 */
+            if (!e->separate_compilation) elab_register_file_def(e, ex);
+        }
+    }
+
+    e->has_defmodule       = saved_has_defmodule;
+    e->current_module_name = saved_module_name;
+    e->current_module      = saved_module;
+
+    /* Collect exported bindings: those in the global scope owned by this module. */
+    uint32_t n_exp = 0;
+    for (uint32_t i = 0; i < e->global.n; i++) {
+        Binding *b = e->global.bindings[i];
+        if (b->defining_module_name == name && b->is_exported) n_exp++;
+    }
+    Binding **exp_arr = (n_exp == 0) ? NULL :
+        (Binding **)arena_alloc(e->arena, n_exp * sizeof(Binding *));
+    uint32_t idx = 0;
+    for (uint32_t i = 0; i < e->global.n; i++) {
+        Binding *b = e->global.bindings[i];
+        if (b->defining_module_name == name && b->is_exported)
+            exp_arr[idx++] = b;
+    }
+
+    slot->exports   = exp_arr;
+    slot->n_exports = n_exp;
+
+    /* Phase M4: Collect exported macros from this module.
+     * A macro is exported if its defining_module_name matches this module's name
+     * AND its name appears in the module's (export ...) list. */
+    slot->exported_macros   = NULL;
+    slot->n_exported_macros = 0;
+    if (loaded_defmod != NULL && loaded_defmod->n_exports > 0) {
+        uint32_t n_mexp = 0;
+        for (uint32_t i = 0; i < e->n_macros; i++) {
+            MacroDef *m = e->macros[i];
+            if (m->defining_module_name != name) continue;
+            /* Check if this macro's name is in the export list */
+            for (uint32_t j = 0; j < loaded_defmod->n_exports; j++) {
+                if (loaded_defmod->exports[j] == m->name) { n_mexp++; break; }
+            }
+        }
+        if (n_mexp > 0) {
+            struct MacroDef **mexp_arr =
+                (struct MacroDef **)arena_alloc(e->arena, n_mexp * sizeof(struct MacroDef *));
+            uint32_t midx = 0;
+            for (uint32_t i = 0; i < e->n_macros; i++) {
+                MacroDef *m = e->macros[i];
+                if (m->defining_module_name != name) continue;
+                for (uint32_t j = 0; j < loaded_defmod->n_exports; j++) {
+                    if (loaded_defmod->exports[j] == m->name) {
+                        mexp_arr[midx++] = m; break;
+                    }
+                }
+            }
+            slot->exported_macros   = mexp_arr;
+            slot->n_exported_macros = n_mexp;
+        }
+    }
+
+    /* PR5-3-D: Collect exported effects for this module. */
+    {
+        uint32_t n_eeff = 0;
+        for (uint32_t i = 0; i < e->effect_env->n_effects; i++) {
+            Effect *eff = e->effect_env->effects[i];
+            if (eff->defining_module_name == name && eff->is_exported) n_eeff++;
+        }
+        Effect **eeff_arr = (n_eeff == 0) ? NULL :
+            (Effect **)arena_alloc(e->arena, n_eeff * sizeof(Effect *));
+        uint32_t eidx = 0;
+        for (uint32_t i = 0; i < e->effect_env->n_effects; i++) {
+            Effect *eff = e->effect_env->effects[i];
+            if (eff->defining_module_name == name && eff->is_exported)
+                eeff_arr[eidx++] = eff;
+        }
+        slot->exported_effects   = eeff_arr;
+        slot->n_exported_effects = n_eeff;
+    }
+
+    slot->is_loading = false;
+    return slot;
+}
+
+/* Parse a single (import module-name [:as alias] [:refer [syms...]]) form */
+static bool parse_import_spec(Elab *e, const Form *f, ImportSpec *out) {
+    if (f->tag != F_LIST || f->as.list.len < 2) {
+        diag_emit(DIAG_ERROR, f->span,
+                  "import requires a module name: (import module-name [:as alias] [:refer [syms...]])");
+        return false;
+    }
+    Form *head = f->as.list.items[0];
+    if (head->tag != F_SYM || head->as.sym != e->sym_import) {
+        diag_emit(DIAG_ERROR, f->span, "expected (import ...)");
+        return false;
+    }
+    Form *name_f = f->as.list.items[1];
+    if (name_f->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, name_f->span, "import module name must be a symbol");
+        return false;
+    }
+    if (!module_name_valid(name_f->as.sym->name, name_f->as.sym->len)) {
+        diag_emit(DIAG_ERROR, name_f->span,
+                  "invalid module name '%s': only alphanumeric, '-', '_', '/' allowed",
+                  name_f->as.sym->name);
+        return false;
+    }
+    out->module_name = name_f->as.sym;
+    out->alias = NULL;
+    out->refer_syms = NULL;
+    out->n_refer = 0;
+    out->refer_effect_syms = NULL;
+    out->n_refer_effects   = 0;
+    out->span = f->span;
+
+    uint32_t i = 2;
+    while (i < f->as.list.len) {
+        Form *kw = f->as.list.items[i];
+        if (kw->tag == F_KEYWORD && kw->as.sym == e->kw_as) {
+            i++;
+            if (i >= f->as.list.len) {
+                diag_emit(DIAG_ERROR, kw->span, ":as requires an alias symbol");
+                return false;
+            }
+            Form *alias_f = f->as.list.items[i];
+            if (alias_f->tag != F_SYM) {
+                diag_emit(DIAG_ERROR, alias_f->span, ":as alias must be a symbol");
+                return false;
+            }
+            out->alias = alias_f->as.sym;
+            i++;
+        } else if (kw->tag == F_KEYWORD && kw->as.sym == e->kw_refer) {
+            i++;
+            if (i >= f->as.list.len) {
+                diag_emit(DIAG_ERROR, kw->span, ":refer requires a vector of symbols");
+                return false;
+            }
+            Form *refer_f = f->as.list.items[i];
+            if (refer_f->tag != F_VEC) {
+                diag_emit(DIAG_ERROR, refer_f->span, ":refer requires a vector [sym1 sym2 ...]");
+                return false;
+            }
+            uint32_t n = refer_f->as.list.len;
+            /* Count plain symbols vs (effect Name) entries. */
+            uint32_t n_syms = 0, n_effs = 0;
+            for (uint32_t j = 0; j < n; j++) {
+                Form *sf = refer_f->as.list.items[j];
+                if (sf->tag == F_SYM) {
+                    n_syms++;
+                } else if (sf->tag == F_LIST && sf->as.list.len == 2
+                           && sf->as.list.items[0]->tag == F_SYM
+                           && sf->as.list.items[0]->as.sym == e->sym_effect) {
+                    n_effs++;
+                } else {
+                    diag_emit(DIAG_ERROR, sf->span,
+                              ":refer list must contain symbols or (effect Name) forms");
+                    return false;
+                }
+            }
+            const Symbol **syms = (n_syms == 0) ? NULL :
+                (const Symbol **)arena_alloc(e->arena, n_syms * sizeof(Symbol *));
+            const Symbol **esyms = (n_effs == 0) ? NULL :
+                (const Symbol **)arena_alloc(e->arena, n_effs * sizeof(Symbol *));
+            uint32_t si = 0, ei = 0;
+            for (uint32_t j = 0; j < n; j++) {
+                Form *sf = refer_f->as.list.items[j];
+                if (sf->tag == F_SYM) {
+                    syms[si++] = sf->as.sym;
+                } else {
+                    /* (effect Name) -- already validated above */
+                    Form *en = sf->as.list.items[1];
+                    if (en->tag != F_SYM) {
+                        diag_emit(DIAG_ERROR, en->span, "effect name in :refer must be a symbol");
+                        return false;
+                    }
+                    esyms[ei++] = en->as.sym;
+                }
+            }
+            out->refer_syms        = syms;
+            out->n_refer           = n_syms;
+            out->refer_effect_syms = esyms;
+            out->n_refer_effects   = n_effs;
+            i++;
+        } else {
+            diag_emit(DIAG_ERROR, kw->span,
+                      "unexpected token in import; expected :as or :refer");
+            return false;
+        }
+    }
+    return true;
+}
+
+Expr *elab_defmodule(Elab *e, const Form *call) {
+    /* Only valid at the top level */
+    if (e->scope != &e->global) {
+        diag_emit(DIAG_ERROR, call->span, "defmodule is only valid at the top level");
+        return NULL;
+    }
+    /* Syntax: (defmodule name [docstring] (export ...) (import ...)... body...) */
+    if (call->as.list.len < 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "defmodule requires a module name: (defmodule name ...)");
+        return NULL;
+    }
+    Form *name_f = call->as.list.items[1];
+    if (name_f->tag != F_SYM) {
+        diag_emit(DIAG_ERROR, name_f->span, "defmodule name must be a symbol");
+        return NULL;
+    }
+    if (!module_name_valid(name_f->as.sym->name, name_f->as.sym->len)) {
+        diag_emit(DIAG_ERROR, name_f->span,
+                  "invalid module name '%s': only alphanumeric, '-', '_', '/' allowed",
+                  name_f->as.sym->name);
+        return NULL;
+    }
+    if (e->has_defmodule) {
+        diag_emit(DIAG_ERROR, call->span, "only one defmodule is allowed per file");
+        return NULL;
+    }
+    e->has_defmodule = true;
+
+    uint32_t i = 2;
+    const char *docstring = NULL;
+
+    /* Optional docstring */
+    if (i < call->as.list.len && call->as.list.items[i]->tag == F_STR) {
+        docstring = call->as.list.items[i]->as.s.p;
+        i++;
+    }
+
+    /* Collect export symbols */
+    const Symbol **exports = NULL;
+    uint32_t n_exports = 0;
+    uint32_t cap_exports = 0;
+    const Symbol **exp_effects = NULL;
+    uint32_t n_exp_effects = 0;
+    uint32_t cap_exp_effects = 0;
+
+    /* Collect import specs */
+    ImportSpec *imports = NULL;
+    uint32_t n_imports = 0;
+    uint32_t cap_imports = 0;
+
+    /* Consume (export ...) and (import ...) forms */
+    while (i < call->as.list.len) {
+        Form *item = call->as.list.items[i];
+        if (item->tag != F_LIST || item->as.list.len == 0) break;
+        Form *head = item->as.list.items[0];
+        if (head->tag != F_SYM) break;
+
+        if (head->as.sym == e->sym_export) {
+            /* Parse (export sym1 sym2 ... (effect Name) ...) */
+            for (uint32_t j = 1; j < item->as.list.len; j++) {
+                Form *sf = item->as.list.items[j];
+                if (sf->tag == F_SYM) {
+                    /* Regular symbol export */
+                    if (n_exports >= cap_exports) {
+                        cap_exports = cap_exports ? cap_exports * 2 : 4;
+                        exports = (const Symbol **)realloc(exports, cap_exports * sizeof(Symbol *));
+                    }
+                    exports[n_exports++] = sf->as.sym;
+                } else if (sf->tag == F_LIST && sf->as.list.len == 2
+                           && sf->as.list.items[0]->tag == F_SYM
+                           && sf->as.list.items[0]->as.sym == e->sym_effect) {
+                    /* (effect Name) export */
+                    Form *ename_f = sf->as.list.items[1];
+                    if (ename_f->tag != F_SYM) {
+                        diag_emit(DIAG_ERROR, ename_f->span,
+                                  "effect name in export list must be a symbol");
+                        free(exports); free(exp_effects); free(imports);
+                        return NULL;
+                    }
+                    if (n_exp_effects >= cap_exp_effects) {
+                        cap_exp_effects = cap_exp_effects ? cap_exp_effects * 2 : 4;
+                        exp_effects = (const Symbol **)realloc(exp_effects, cap_exp_effects * sizeof(Symbol *));
+                    }
+                    exp_effects[n_exp_effects++] = ename_f->as.sym;
+                } else {
+                    diag_emit(DIAG_ERROR, sf->span,
+                              "export list entries must be symbols or (effect Name) forms");
+                    free(exports); free(exp_effects); free(imports);
+                    return NULL;
+                }
+            }
+            i++;
+        } else if (head->as.sym == e->sym_import) {
+            /* Parse (import module-name [:as alias] [:refer [syms...]]) */
+            if (n_imports >= cap_imports) {
+                cap_imports = cap_imports ? cap_imports * 2 : 4;
+                imports = (ImportSpec *)realloc(imports, cap_imports * sizeof(ImportSpec));
+            }
+            if (!parse_import_spec(e, item, &imports[n_imports])) {
+                free(exports); free(exp_effects); free(imports);
+                return NULL;
+            }
+            n_imports++;
+            i++;
+        } else {
+            break; /* Body starts here */
+        }
+    }
+
+    uint32_t body_start = i;
+
+    /* M1: Allocate module struct early and populate imports so elab_lookup_sym
+     * can resolve qualified names and import aliases during body elaboration. */
+    DefModule *mod = (DefModule *)arena_alloc(e->arena, sizeof(DefModule));
+    memset(mod, 0, sizeof(DefModule));
+    mod->name = name_f->as.sym;
+    mod->docstring = docstring;
+
+    /* Copy exports to arena (used for marking after pass 2) */
+    if (n_exports > 0) {
+        mod->exports = (const Symbol **)arena_alloc(e->arena, n_exports * sizeof(Symbol *));
+        for (uint32_t j = 0; j < n_exports; j++) mod->exports[j] = exports[j];
+        mod->n_exports = n_exports;
+    }
+    free(exports); exports = NULL;
+
+    /* PR5-3-B: Copy exported_effects to arena */
+    if (n_exp_effects > 0) {
+        mod->exported_effects = (const Symbol **)arena_alloc(e->arena, n_exp_effects * sizeof(Symbol *));
+        for (uint32_t j = 0; j < n_exp_effects; j++) mod->exported_effects[j] = exp_effects[j];
+        mod->n_exported_effects = n_exp_effects;
+    }
+    free(exp_effects); exp_effects = NULL;
+
+    /* Copy imports to arena (needed for alias resolution during elaboration) */
+    if (n_imports > 0) {
+        mod->imports = (ImportSpec *)arena_alloc(e->arena, n_imports * sizeof(ImportSpec));
+        for (uint32_t j = 0; j < n_imports; j++) mod->imports[j] = imports[j];
+        mod->n_imports = n_imports;
+    }
+    free(imports); imports = NULL;
+
+    /* M1: Set module context — body bindings will inherit defining_module_name */
+    e->current_module_name = mod->name;
+    e->current_module = mod;
+
+    /* M2: Process imports — load each referenced module and inject :refer symbols. */
+    for (uint32_t j = 0; j < mod->n_imports; j++) {
+        const ImportSpec *imp = &mod->imports[j];
+        ElabModule *loaded = elab_load_module(e, imp->module_name, imp->span);
+        if (!loaded) {
+            e->current_module_name = NULL;
+            e->current_module = NULL;
+            return NULL;
+        }
+        /* :refer — add each referred symbol (binding or macro) to the current scope. */
+        for (uint32_t k = 0; k < imp->n_refer; k++) {
+            const Symbol *ref_sym = imp->refer_syms[k];
+
+            /* First check bindings. */
+            Binding *ref_b = NULL;
+            for (uint32_t m = 0; m < loaded->n_exports; m++) {
+                if (loaded->exports[m]->name == ref_sym) {
+                    ref_b = loaded->exports[m];
+                    break;
+                }
+            }
+            if (ref_b) {
+                scope_add(&e->global, ref_b);
+                continue;
+            }
+
+            /* Phase M4: Check exported macros. */
+            MacroDef *ref_macro = NULL;
+            for (uint32_t m = 0; m < loaded->n_exported_macros; m++) {
+                if (loaded->exported_macros[m]->name == ref_sym) {
+                    ref_macro = loaded->exported_macros[m];
+                    break;
+                }
+            }
+            if (ref_macro) {
+                /* Inject an alias that is visible everywhere via is_referred,
+                 * but keeps defining_module_name so private helpers of the
+                 * original module remain accessible during expansion. */
+                MacroDef *alias = (MacroDef *)arena_alloc(e->arena, sizeof(MacroDef));
+                *alias = *ref_macro;
+                alias->is_referred = true;
+                /* Check for name collision with existing global macros. */
+                if (elab_lookup_macro(e, ref_sym) != NULL) {
+                    diag_emit(DIAG_ERROR, imp->span,
+                              "macro '%s' from module '%s' conflicts with an existing macro",
+                              ref_sym->name, imp->module_name->name);
+                    e->current_module_name = NULL;
+                    e->current_module = NULL;
+                    return NULL;
+                }
+                elab_register_macro(e, alias);
+                continue;
+            }
+
+            diag_emit(DIAG_ERROR, imp->span,
+                      "symbol '%s' is not exported from module '%s'",
+                      ref_sym->name, imp->module_name->name);
+            e->current_module_name = NULL;
+            e->current_module = NULL;
+            return NULL;
+        }
+
+        /* PR5-3-D: Process :refer [(effect Name)] imports. */
+        for (uint32_t k = 0; k < imp->n_refer_effects; k++) {
+            const Symbol *ref_eff_sym = imp->refer_effect_syms[k];
+            Effect *ref_eff = NULL;
+            for (uint32_t m = 0; m < loaded->n_exported_effects; m++) {
+                if (loaded->exported_effects[m]->name == ref_eff_sym) {
+                    ref_eff = loaded->exported_effects[m];
+                    break;
+                }
+            }
+            if (!ref_eff) {
+                diag_emit(DIAG_ERROR, imp->span,
+                          "effect '%s' is not exported from module '%s'",
+                          ref_eff_sym->name, imp->module_name->name);
+                e->current_module_name = NULL;
+                e->current_module = NULL;
+                return NULL;
+            }
+            /* Add to referred_effects so the visibility guard allows access. */
+            if (e->n_referred_effects >= e->cap_referred_effects) {
+                e->cap_referred_effects = e->cap_referred_effects ? e->cap_referred_effects * 2 : 4;
+                e->referred_effects = (Effect **)realloc(e->referred_effects,
+                                      e->cap_referred_effects * sizeof(Effect *));
+            }
+            e->referred_effects[e->n_referred_effects++] = ref_eff;
+        }
+    }
+
+    /* Pass 1: forward-declare all defn bodies (for mutual recursion) */
+    for (uint32_t j = body_start; j < call->as.list.len; j++) {
+        Form *f = call->as.list.items[j];
+        if (f->tag == F_LIST && f->as.list.len > 0) {
+            Form *h = f->as.list.items[0];
+            if (h->tag == F_SYM && h->as.sym == e->sym_defn) {
+                if (f->as.list.len >= 3) {
+                    uint32_t name_idx = 1;
+                    if (f->as.list.items[1]->tag == F_SYM &&
+                        f->as.list.items[1]->as.sym == e->sym_no_unwind_attr) {
+                        name_idx = 2;
+                    }
+                    if ((uint32_t)f->as.list.len <= name_idx) continue;
+                    Form *fn_name_f = f->as.list.items[name_idx];
+                    if (fn_name_f->tag == F_SYM) {
+                        /* Check not already defined */
+                        if (!scope_lookup(&e->global, fn_name_f->as.sym)) {
+                            TypeKind arg_kinds[1] = {TY_INT};
+                            Type fn_type = type_fn(arg_kinds, 1, TY_INT);
+                            Binding *b = binding_new(e, fn_name_f->as.sym, fn_type, false, true, f->span);
+                            scope_add(&e->global, b);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /* Pass 2: elaborate body forms */
+    uint32_t n_body = call->as.list.len - body_start;
+    Expr **body = (n_body == 0) ? NULL :
+        (Expr **)arena_alloc(e->arena, n_body * sizeof(Expr *));
+    uint32_t actual_n_body = 0;
+
+    for (uint32_t j = body_start; j < call->as.list.len; j++) {
+        Expr *be = elab_form(e, call->as.list.items[j]);
+        if (!be) {
+            e->current_module_name = NULL;
+            e->current_module = NULL;
+            return NULL;
+        }
+        body[actual_n_body++] = be;
+    }
+
+    mod->body = body;
+    mod->n_body = actual_n_body;
+
+    /* M1: Mark exported bindings and validate they exist in this module.
+     * Phase M4: macro names in the export list are also valid exports. */
+    for (uint32_t j = 0; j < mod->n_exports; j++) {
+        Binding *exp_b = scope_lookup(&e->global, mod->exports[j]);
+        if (!exp_b || exp_b->defining_module_name != mod->name) {
+            /* Not a binding — check if it's a macro defined in this module. */
+            bool found_macro = false;
+            for (uint32_t k = 0; k < e->n_macros; k++) {
+                if (e->macros[k]->name == mod->exports[j] &&
+                    e->macros[k]->defining_module_name == mod->name) {
+                    found_macro = true;
+                    break;
+                }
+            }
+            if (!found_macro) {
+                diag_emit(DIAG_ERROR, call->span,
+                          "exported symbol '%s' is not defined in this module",
+                          mod->exports[j]->name);
+                diag_emit(DIAG_NOTE, call->span,
+                          "ensure '%s' has a matching (defn ...) or (defmacro ...) inside the (defmodule %s ...) body, "
+                          "and check for typos in the (export ...) list",
+                          mod->exports[j]->name, mod->name->name);
+                e->current_module_name = NULL;
+                e->current_module = NULL;
+                return NULL;
+            }
+            /* Macro exports don't need is_exported flag; they're collected by elab_load_module. */
+        } else {
+            exp_b->is_exported = true;
+        }
+    }
+
+    /* PR5-3-B: Validate and mark exported effects. */
+    for (uint32_t j = 0; j < mod->n_exported_effects; j++) {
+        const Symbol *eff_name = mod->exported_effects[j];
+        Effect *eff = effect_env_lookup(e->effect_env, eff_name);
+        if (!eff || eff->defining_module_name != mod->name) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "exported effect '%s' is not defined in this module",
+                      eff_name->name);
+            e->current_module_name = NULL;
+            e->current_module = NULL;
+            return NULL;
+        }
+        if (eff->is_private) {
+            diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0021_PRIVATE_EFFECT,
+                                "private effect '%s' cannot be exported",
+                                eff_name->name);
+            e->current_module_name = NULL;
+            e->current_module = NULL;
+            return NULL;
+        }
+        eff->is_exported = true; /* explicit export — already true, but record intent */
+    }
+
+    /* Reset module context */
+    e->current_module_name = NULL;
+    e->current_module = NULL;
+
+    Expr *out = expr_new(e->arena, EX_DEFMODULE, TYPE_NIL, call->span);
+    out->as.defmodule_.mod = mod;
+    return out;
+}
+
+/* M1: Resolve a symbol with module visibility and qualified name support.
+ * Returns the binding on success.
+ * Returns NULL with *had_error = false: symbol not found, caller emits "unbound".
+ * Returns NULL with *had_error = true: error already emitted, caller returns NULL. */
+Binding *elab_lookup_sym(Elab *e, const Symbol *sym, Span span, bool *had_error) {
+    *had_error = false;
+
+    /* Direct scope lookup */
+    Binding *b = scope_lookup(e->scope, sym);
+    if (b) {
+        /* Visibility: private symbol accessed from outside its module */
+        if (b->defining_module_name != NULL
+            && e->current_module_name != b->defining_module_name
+            && !b->is_exported) {
+            diag_emit(DIAG_ERROR, span,
+                      "symbol '%s' is private to module '%s'",
+                      sym->name, b->defining_module_name->name);
+            diag_emit(DIAG_NOTE, b->span,
+                      "defined here; add '%s' to module '%s''s (export ...) list to expose it",
+                      sym->name, b->defining_module_name->name);
+            *had_error = true;
+            return NULL;
+        }
+        return b;
+    }
+
+    /* Qualified name resolution — only if symbol contains '/' */
+    const char *sym_str = sym->name;
+    uint32_t    sym_len = sym->len;
+    bool has_slash = false;
+    for (uint32_t i = 0; i < sym_len; i++) {
+        if (sym_str[i] == '/') { has_slash = true; break; }
+    }
+    if (!has_slash) return NULL;
+
+    /* Self-qualified: current module name is a prefix */
+    if (e->current_module_name != NULL) {
+        const Symbol *mn = e->current_module_name;
+        if (sym_len > mn->len + 1
+            && sym_str[mn->len] == '/'
+            && memcmp(sym_str, mn->name, mn->len) == 0) {
+            const char *suffix     = sym_str + mn->len + 1;
+            uint32_t    suffix_len = sym_len - mn->len - 1;
+            const Symbol *ss = symtab_intern(e->st, strslice(suffix, suffix_len));
+            Binding *b2 = scope_lookup(e->scope, ss);
+            if (b2) return b2;
+            diag_emit_with_code(DIAG_ERROR, span, TUR_E0003_UNBOUND_SYMBOL,
+                                "unbound symbol '%.*s' in module '%s'",
+                                (int)suffix_len, suffix, mn->name);
+            *had_error = true;
+            return NULL;
+        }
+    }
+
+    /* M2: Cross-module qualified resolution. */
+    if (e->current_module != NULL) {
+        /* alias/sym — match by :as alias */
+        for (uint32_t i = 0; i < e->current_module->n_imports; i++) {
+            const ImportSpec *imp = &e->current_module->imports[i];
+            if (!imp->alias) continue;
+            const Symbol *alias = imp->alias;
+            if (sym_len > alias->len + 1
+                && sym_str[alias->len] == '/'
+                && memcmp(sym_str, alias->name, alias->len) == 0) {
+                const char *sym_part     = sym_str + alias->len + 1;
+                uint32_t    sym_part_len = sym_len - alias->len - 1;
+                const Symbol *sym_key = symtab_intern(e->st, strslice(sym_part, sym_part_len));
+                ElabModule *loaded = elab_find_loaded_module(e, imp->module_name);
+                if (!loaded) {
+                    diag_emit(DIAG_ERROR, span,
+                              "module '%s' (alias '%s') was not loaded",
+                              imp->module_name->name, alias->name);
+                    *had_error = true;
+                    return NULL;
+                }
+                for (uint32_t m = 0; m < loaded->n_exports; m++) {
+                    if (loaded->exports[m]->name == sym_key)
+                        return loaded->exports[m];
+                }
+                /* M7: check if the symbol IS defined in that module but private. */
+                Binding *priv = NULL;
+                for (uint32_t k = 0; k < e->global.n; k++) {
+                    Binding *gb = e->global.bindings[k];
+                    if (gb->name == sym_key &&
+                        gb->defining_module_name == imp->module_name) {
+                        priv = gb; break;
+                    }
+                }
+                diag_emit(DIAG_ERROR, span,
+                          "symbol '%s' is not exported from module '%s'",
+                          sym_key->name, imp->module_name->name);
+                if (priv) {
+                    diag_emit(DIAG_NOTE, priv->span,
+                              "'%s' is defined here but is private; add it to module '%s''s (export ...) list",
+                              sym_key->name, imp->module_name->name);
+                }
+                *had_error = true;
+                return NULL;
+            }
+        }
+        /* full-module-name/sym — match by full module name */
+        for (uint32_t i = 0; i < e->current_module->n_imports; i++) {
+            const ImportSpec *imp = &e->current_module->imports[i];
+            const Symbol *mn = imp->module_name;
+            if (sym_len > mn->len + 1
+                && sym_str[mn->len] == '/'
+                && memcmp(sym_str, mn->name, mn->len) == 0) {
+                const char *sym_part     = sym_str + mn->len + 1;
+                uint32_t    sym_part_len = sym_len - mn->len - 1;
+                const Symbol *sym_key = symtab_intern(e->st, strslice(sym_part, sym_part_len));
+                ElabModule *loaded = elab_find_loaded_module(e, mn);
+                if (!loaded) {
+                    diag_emit(DIAG_ERROR, span,
+                              "module '%s' was not loaded", mn->name);
+                    *had_error = true;
+                    return NULL;
+                }
+                for (uint32_t m = 0; m < loaded->n_exports; m++) {
+                    if (loaded->exports[m]->name == sym_key)
+                        return loaded->exports[m];
+                }
+                /* M7: check if the symbol IS defined in that module but private. */
+                Binding *priv = NULL;
+                for (uint32_t k = 0; k < e->global.n; k++) {
+                    Binding *gb = e->global.bindings[k];
+                    if (gb->name == sym_key && gb->defining_module_name == mn) {
+                        priv = gb; break;
+                    }
+                }
+                diag_emit(DIAG_ERROR, span,
+                          "symbol '%s' is not exported from module '%s'",
+                          sym_key->name, mn->name);
+                if (priv) {
+                    diag_emit(DIAG_NOTE, priv->span,
+                              "'%s' is defined here but is private; add it to module '%s''s (export ...) list",
+                              sym_key->name, mn->name);
+                }
+                *had_error = true;
+                return NULL;
+            }
+        }
+    }
+
+    return NULL; /* Not a recognised qualified name; caller handles "unbound" */
+}
