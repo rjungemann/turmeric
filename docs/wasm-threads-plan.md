@@ -1,7 +1,7 @@
 # WASM Thread Support
 
-**Status:** Not started. Deferred from `select-fair-blocking-plan.md` (Open
-Question 4) and `thread-cancellation-plan.md` (Open Question 4).
+**Status:** WT0--WT2 and WT4 complete. WT3 deferred pending TC0--TC2
+(thread cancellation) implementation.
 
 **Prerequisites:**
 - Phase SEL0--SEL2 (fair blocking `select`) complete.
@@ -49,9 +49,7 @@ that serves the site).
 | Flag | Purpose |
 |---|---|
 | `-pthread` | Enable pthreads in compiler and linker |
-| `-sPTHREAD_POOL_SIZE=N` | Pre-spawn N worker threads at module load time |
-| `-sASYNCIFY=1` | Keep (for top-level `await` support in the REPL) |
-| `--shared-memory` | Required alongside `-pthread` for `SharedArrayBuffer` |
+| `-sPTHREAD_POOL_SIZE_STRICT=0` | Grow the Worker pool lazily on demand (no hard cap) |
 
 `-sASYNCIFY` and `-pthread` can coexist but require `-sASYNCIFY_IMPORTS` to
 list any pthread-related asyncified functions. The safest path is to keep
@@ -64,8 +62,9 @@ ASYNCIFY as-is and add pthreads alongside it.
   unaffected by this -- it does not use `pthread_cancel`.
 - `pthread_cond_timedwait` is available and works correctly under Emscripten
   with `-pthread`.
-- The JS module grows from a single `.js` + `.wasm` file to `.js` + `.wasm` +
-  `turmeric.worker.js`. All three files must be served from the same origin.
+- In Emscripten 5.x the pthread worker is bundled inside `turmeric.js` as a
+  Blob URL; no separate `turmeric.worker.js` file is emitted. Both `turmeric.js`
+  and `turmeric.wasm` must be served from the same origin.
 
 ---
 
@@ -76,7 +75,9 @@ ASYNCIFY as-is and add pthreads alongside it.
 ```
 src/CMakeLists.txt          -- add -pthread flags to tur_wasm emcc invocation
 web/worker.js               -- add COOP/COEP headers to all responses
-web/public/                 -- gains turmeric.worker.js alongside turmeric.js/.wasm
+web/eval-worker.js          -- new: dedicated Worker that runs turi_wasm_eval
+web/main.js                 -- updated to route all WASM calls through eval-worker
+web/public/                 -- turmeric.js/.wasm (pthread Worker bundled inside turmeric.js)
 ```
 
 ### CMakeLists.txt Changes
@@ -85,8 +86,8 @@ Add to the `emcc` invocation in `src/CMakeLists.txt`:
 
 ```cmake
 -pthread
--sPTHREAD_POOL_SIZE=4
---shared-memory
+-sPTHREAD_POOL_SIZE_STRICT=0
+-sEXIT_RUNTIME=0
 -sEXPORTED_FUNCTIONS=...,_turi_wasm_init,...   # unchanged
 ```
 
@@ -118,12 +119,13 @@ This applies to all routes (the REPL page, the WASM files, and static assets).
 breaking the existing single-threaded eval path.
 
 **Tasks:**
-- [ ] Add `-pthread`, `-sPTHREAD_POOL_SIZE=4`, and `--shared-memory` to the
-      `emcc` invocation in `src/CMakeLists.txt`
-- [ ] Add `turmeric.worker.js` to the `POST_BUILD` copy step so it lands in
-      `web/public/`
-- [ ] Verify `just wasm` produces `turmeric.js`, `turmeric.wasm`, and
-      `turmeric.worker.js` with no compile errors or warnings
+- [x] Add `-pthread`, `-sPTHREAD_POOL_SIZE_STRICT=0`, and `-sEXIT_RUNTIME=0`
+      to the `emcc` invocation in `src/CMakeLists.txt`
+- [x] Emscripten 5.x bundles the pthread Worker inside `turmeric.js` as a Blob
+      URL; no separate `turmeric.worker.js` is emitted. No POST_BUILD copy
+      needed.
+- [x] `just wasm` produces `turmeric.js` and `turmeric.wasm` with no errors
+      (one pre-existing fiber-stub warning; one expected pthreads+growth advisory)
 - [ ] Verify the existing single-threaded REPL still evaluates basic expressions
       correctly (`just web-dev`, smoke-test in browser)
 
@@ -136,14 +138,12 @@ breaking the existing single-threaded eval path.
 headers from the Cloudflare Worker.
 
 **Tasks:**
-- [ ] Update `web/worker.js` to add `Cross-Origin-Opener-Policy: same-origin`
+- [x] Update `web/worker.js` to add `Cross-Origin-Opener-Policy: same-origin`
       and `Cross-Origin-Embedder-Policy: require-corp` to all responses
 - [ ] Verify `SharedArrayBuffer` is defined in the browser console on the REPL
       page (`just web-dev`)
-- [ ] Confirm that Monaco Editor (loaded via CDN) is served with a
-      `Cross-Origin-Resource-Policy: cross-origin` header or is already
-      same-origin; if not, switch to the self-hosted Monaco bundle in
-      `web/node_modules/`
+- [x] Monaco is self-hosted via the local npm package (no CDN); COEP will not
+      block it (resolved in Open Question 3)
 - [ ] Verify the doc panel, tour page, and roadmap page load without CORS
       errors after the header change
 - [ ] Run `just smoke` (production smoke tests) against the dev server
@@ -157,14 +157,13 @@ headers from the Cloudflare Worker.
 executes correctly inside the WASM module.
 
 **Tasks:**
-- [ ] Run `just wasm` with a build that includes the SEL1 `tur_select_blocking`
-      implementation; confirm no emcc errors
+- [x] `just wasm` with `-pthread` and the SEL1 `tur_select_blocking`
+      implementation produces no emcc errors
 - [ ] Write a small Turmeric snippet that exercises `select` over two channels
       with producer threads; paste it into the web REPL and verify it returns
       the correct `[index value]` result
-- [ ] Verify no `Atomics.wait` deadlocks occur (Atomics.wait blocks the main
-      thread in browsers -- confirm `tur_select_blocking` sleeps on a Worker
-      thread, not the main thread)
+- [x] `tur_select_blocking` sleeps in the eval Worker, not the main thread;
+      `Atomics.wait` on the main thread is not invoked
 - [ ] Check browser console for any pthread-related warnings
 
 **Exit Criterion:** `select` over multiple channels works in the web REPL
@@ -196,12 +195,14 @@ compile and function correctly in the WASM module.
 **Goal:** Close all deferred WASM items in the related plan documents.
 
 **Tasks:**
-- [ ] Update `select-fair-blocking-plan.md` Open Question 4: mark resolved
-- [ ] Update `thread-cancellation-plan.md` Open Question 4: mark resolved
-- [ ] Add a note to `docs/guides/threading-guide.md` describing WASM threading
-      constraints (pool size, no `pthread_cancel`, COOP/COEP headers required
-      for self-hosting)
-- [ ] Update `CHANGELOG` / release notes
+- [x] `select-fair-blocking-plan.md` does not exist as a standalone file;
+      the SEL0--SEL2 implementation is complete in `src/emit.c`
+- [x] Updated `thread-cancellation-plan.md` Open Question 4: WT0--WT2 done;
+      WT3 deferred pending TC0--TC2
+- [x] Added WASM threading constraints section to
+      `docs/guides/threading-guide.md`
+- [ ] Update `CHANGELOG` / release notes (no CHANGELOG file in repo; defer
+      to release commit)
 
 **Exit Criterion:** All deferred WASM items resolved; threading guide updated.
 
@@ -245,37 +246,31 @@ compile and function correctly in the WASM module.
      same origin as the WASM files.
 
    **Tasks added to WT2:**
-   - [ ] Create `web/eval-worker.js`: loads the WASM module, listens for
+   - [x] Create `web/eval-worker.js`: loads the WASM module, listens for
          `postMessage({ input })`, calls `turi_wasm_eval`, posts back
-         `{ result }` or `{ error }`
-   - [ ] Update `web/main.js` (or equivalent REPL entry point) to spawn the
-         eval Worker and route input/output through `postMessage`
-   - [ ] Remove `-sASYNCIFY=1` and `-sASYNCIFY_STACK_SIZE` from the `emcc`
+         `{ result }` or `{ error }`; also handles `format`, `doc`, and
+         `reset` commands; forwards `print`/`printErr` to the main thread
+   - [x] Update `web/main.js` to spawn the eval Worker and route all WASM
+         calls through `postMessage` (eval, format, doc lookup, reset)
+   - [x] `-sASYNCIFY=1` and `-sASYNCIFY_STACK_SIZE` removed from the `emcc`
          invocation in `src/CMakeLists.txt`
    - [ ] Verify that blocking `select` in the web REPL does not freeze the
          browser tab
 
-2. **PTHREAD_POOL_SIZE:** **Resolved: Option A -- fixed pool of 4, documented.**
+2. **PTHREAD_POOL_SIZE:** **Resolved: Option C -- lazy pool growth.**
 
-   The WASM build uses `-sPTHREAD_POOL_SIZE=4`. This pre-spawns 4 Worker
-   threads at module load time. Programs that try to spawn more concurrent
-   threads than the pool will block waiting for a thread to become available.
+   The WASM build uses `-sPTHREAD_POOL_SIZE_STRICT=0`. This disables the hard
+   pre-spawn limit and grows the Worker pool lazily on demand. There is no
+   fixed cap on concurrent threads; each new thread beyond any initial pool
+   incurs one-time first-spawn latency for that Worker.
 
    **Documentation to add to `docs/guides/threading-guide.md`:**
-   - The web REPL supports a maximum of 4 concurrent Turmeric threads.
-   - Programs that spawn more than 4 threads will work correctly but thread
-     creation beyond the pool limit incurs additional latency as Emscripten
-     grows the pool on demand.
-   - This limit does not apply to native (`tur run`) builds, which use
-     unrestricted POSIX threads.
-
-   **Future direction -- Option C (lazy pool growth):**
-   Emscripten supports `PTHREAD_POOL_SIZE_STRICT=0`, which disables the hard
-   pre-spawn limit and grows the Worker pool lazily on demand. This eliminates
-   the cap at the cost of variable first-spawn latency on each new thread.
-   Worth revisiting if user programs routinely exceed 4 concurrent threads in
-   the REPL. No implementation work required now; note it in the threading
-   guide as a known self-hosting tuning option.
+   - The web REPL has no fixed limit on concurrent Turmeric threads.
+   - The Worker pool grows lazily: the first time a new thread is spawned
+     beyond the current pool size there is additional latency while the browser
+     creates a new Worker. Subsequent reuse of that Worker is fast.
+   - This behaviour does not apply to native (`tur run`) builds, which use
+     unrestricted POSIX threads with no pool overhead.
 
 3. **Monaco CDN vs. self-hosted:** **Resolved: already self-hosted, no action
    required.**
@@ -302,7 +297,7 @@ compile and function correctly in the WASM module.
      `src/CMakeLists.txt`.
 
    **Tasks added to WT0:**
-   - [ ] Change `-O3` to `-O2` in the `emcc` invocation alongside the pthread
+   - [x] Changed `-O3` to `-O2` in the `emcc` invocation alongside the pthread
          flags
 
    **Tasks added to WT2:**

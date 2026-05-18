@@ -1,6 +1,32 @@
 // site.js — Shared JS for turmeric-lang.com marketing pages (/, /tour)
-// Load this with <script src="/site.js" defer> in <head> so custom elements
-// are registered before the browser paints, avoiding a flash of raw content.
+// Load this with <script type="module" src="/site.js"> in <head>; the module
+// is deferred by default, so it runs after the DOM is parsed.
+
+import Prism from 'prismjs';
+
+// ── TURMERIC SYNTAX GRAMMAR ─────────────────────────────────────────────────
+
+Prism.languages.turmeric = {
+  comment:     /;.*/,
+  string:      /"(?:[^"\\]|\\.)*"/,
+  keyword: {
+    pattern: /\b(?:defn|defmacro|defstruct|defclass|definstance|defdata|defgadt|defeffect|defpackage|let|let\*|letrec|if|cond|when|match|fn|do|begin|and|or|not|handle|perform|resume)\b/,
+    greedy: false,
+  },
+  type:        /:[a-zA-Z][a-zA-Z0-9_\-?!]*/,
+  number:      /\b\d[\d._]*\b/,
+  punctuation: /[()[\]{}]/,
+};
+
+// ── SYNTAX HIGHLIGHTING ─────────────────────────────────────────────────────
+
+// Highlight all .code-version and .step-code elements that contain plain code.
+// site.js runs after DOM parsing (module = implicit defer), so elements are
+// available immediately without waiting for DOMContentLoaded.
+document.querySelectorAll('.code-version, .step-code').forEach(el => {
+  const raw = el.textContent;
+  el.innerHTML = Prism.highlight(raw, Prism.languages.turmeric, 'turmeric');
+});
 
 // ── WEB COMPONENTS ─────────────────────────────────────────────────────────
 
@@ -75,22 +101,28 @@ customElements.define('site-footer', SiteFooter);
 
 // ── REVEAL ON SCROLL ────────────────────────────────────────────────────────
 
-// Reveal on scroll
+const revealTargets = Array.from(document.querySelectorAll('.reveal'));
+let revealPending = revealTargets.length;
+
 const revealObs = new IntersectionObserver(entries => {
   entries.forEach(e => {
     if (e.isIntersecting) {
       e.target.classList.add('visible');
       revealObs.unobserve(e.target);
+      revealPending--;
+      if (revealPending <= 0) revealObs.disconnect();
     }
   });
 }, { threshold: 0.08, rootMargin: '0px 0px -40px 0px' });
 
-document.querySelectorAll('.reveal').forEach((el, i) => {
+revealTargets.forEach((el, i) => {
   el.style.transitionDelay = (i === 0 ? 0.1 : 0) + 's';
   revealObs.observe(el);
 });
 
-// Syntax toggle — supports multiple independent toggles per page
+// ── SYNTAX TOGGLE ──────────────────────────────────────────────────────────
+
+// Supports multiple independent toggles per page
 document.querySelectorAll('.code-syntax-toggle').forEach(toggle => {
   toggle.addEventListener('click', (e) => {
     if (!e.target.classList.contains('seg-btn')) return;

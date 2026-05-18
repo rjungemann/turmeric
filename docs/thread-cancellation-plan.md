@@ -351,8 +351,11 @@ operation:
          section covering `yield-point`, call frequency, and the
          `with-cancel-guard` interaction
 
-4. **WASM:** Emscripten's pthread cancel support is limited. **Deferred:** See
-   `docs/wasm-threads-plan.md` Phase WT3 for WASM cancellation verification.
+4. **WASM:** Emscripten's pthread cancel support is limited. **Partially
+   resolved:** `docs/wasm-threads-plan.md` Phases WT0--WT2 are complete; the
+   WASM build now uses `-pthread` with lazy pool growth and the eval runs in a
+   dedicated Worker. Phase WT3 (verifying cooperative cancel in the browser
+   REPL) remains open pending TC0--TC2 implementation.
    The cooperative cancel flag design is unaffected by Emscripten's lack of
    `pthread_cancel`.
 

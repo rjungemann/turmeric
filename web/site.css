@@ -1,36 +1,11 @@
 /* ==========================================================================
- * site.css — Shared styles for turmeric-lang.com marketing pages (/, /tour)
+ * site.css — Shared styles for turmeric-lang.com marketing pages
  * ========================================================================== */
+
+@import './vars.css';
 
 /* ── RESET ─────────────────────────────── */
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
-
-/* ── VARIABLES ─────────────────────────── */
-:root {
-  --bg-base:       #0C0A08;
-  --bg-surface:    #111009;
-  --bg-panel:      #161411;
-  --bg-hover:      #1C1915;
-  --bg-card:       #131108;
-  --border:        #222018;
-  --border-mid:    #2E2B22;
-  --border-str:    #3D3A2F;
-  --gold:          #D48B1C;
-  --gold-bright:   #EFA030;
-  --gold-dim:      #7A5010;
-  --gold-subtle:   rgba(212,139,28,0.08);
-  --gold-line:     rgba(212,139,28,0.25);
-  --text-primary:  #EAE0D2;
-  --text-sec:      #8A7D6E;
-  --text-dim:      #4A4438;
-  --syn-kw:        #EFA030;
-  --syn-str:       #D9735A;
-  --syn-cmt:       #3E3B35;
-  --syn-type:      #7AC4B8;
-  --syn-num:       #A8C98A;
-  --syn-fn:        #C4A0E8;
-  --syn-punc:      #5A5448;
-}
 
 /* ── BASE ──────────────────────────────── */
 html { scroll-behavior: smooth; }
@@ -567,3 +542,22 @@ footer {
     align-items: flex-start;
   }
 }
+
+/* ── CODE CARD MODIFIER ────────────────── */
+/* Smaller font size for dense code examples */
+.code-card--sm .code-card-body { font-size: 12px; padding: 20px 22px; }
+
+/* ── PRISM SYNTAX TOKENS ───────────────── */
+/* Maps Prism's generated token spans to the site's --syn-* palette */
+.token.comment    { color: var(--syn-cmt); font-style: italic; }
+.token.string     { color: var(--syn-str); }
+.token.keyword    { color: var(--syn-kw); }
+.token.type       { color: var(--syn-type); }
+.token.number     { color: var(--syn-num); }
+.token.punctuation { color: var(--syn-punc); }
+.token.operator   { color: var(--text-sec); }
+
+/* ── UTILITIES ─────────────────────────── */
+.dot-sep { color: var(--border-str); }
+.mt-80   { margin-top: 80px; }
+.mb-24   { margin-bottom: 24px; }

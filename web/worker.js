@@ -35,6 +35,17 @@ export default {
 
     // Rewrite try.turmeric-lang.com/* -> turmeric-lang.com/try/*
     // so both URLs serve the same page without a redirect round-trip.
-    return env.ASSETS.fetch(request);
+    const response = await env.ASSETS.fetch(request);
+
+    // SharedArrayBuffer (required for Emscripten pthreads) is only available
+    // in cross-origin isolated contexts.
+    const headers = new Headers(response.headers);
+    headers.set('Cross-Origin-Opener-Policy', 'same-origin');
+    headers.set('Cross-Origin-Embedder-Policy', 'require-corp');
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
   },
 };

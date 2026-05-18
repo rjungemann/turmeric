@@ -25,355 +25,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400;1,500&family=DM+Sans:wght@300;400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/site.css">
+<link rel="stylesheet" href="/home.css">
 <script type="module" src="/site.js"></script>
-<style>
-/* ── PAGE-SPECIFIC: HOMEPAGE ───────────── */
-
-/* Hero — full-page centred layout */
-.hero {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 120px 48px 80px;
-  position: relative;
-  overflow: hidden;
-}
-
-.hero-grid {
-  mask-image: radial-gradient(ellipse 80% 60% at 50% 40%, black 0%, transparent 80%);
-}
-
-.hero-inner {
-  max-width: 900px;
-  width: 100%;
-  text-align: center;
-  position: relative;
-  z-index: 1;
-}
-
-h1 {
-  font-family: 'Cormorant Garamond', serif;
-  font-size: clamp(52px, 8vw, 96px);
-  font-weight: 400;
-  line-height: 1.0;
-  letter-spacing: -0.01em;
-  color: var(--text-primary);
-  margin-bottom: 6px;
-}
-h1 em { font-style: italic; color: var(--gold-bright); }
-
-.hero-subtitle {
-  font-family: 'Cormorant Garamond', serif;
-  font-size: clamp(20px, 2.5vw, 28px);
-  font-weight: 300;
-  font-style: italic;
-  color: var(--text-sec);
-  margin-bottom: 28px;
-  letter-spacing: 0.01em;
-}
-
-.hero-desc {
-  font-size: 16px;
-  color: var(--text-sec);
-  max-width: 520px;
-  margin: 0 auto 44px;
-  line-height: 1.7;
-  font-weight: 300;
-}
-
-.hero-actions { margin-bottom: 64px; display: flex; align-items: center; justify-content: center; gap: 16px; }
-
-.install-hint {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--text-dim);
-}
-
-.install-cmd {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 12px;
-  color: var(--text-sec);
-  background: var(--bg-panel);
-  border: 1px solid var(--border-mid);
-  border-radius: 5px;
-  padding: 3px 10px;
-}
-
-/* Hero code block */
-.hero-code {
-  margin-top: 64px;
-  position: relative;
-  max-width: 760px;
-  margin-left: auto;
-  margin-right: auto;
-}
-
-.hl { background: rgba(212,139,28,0.08); display: inline-block; width: 100%; border-radius: 2px; }
-
-/* Section wrapper */
-section {
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 100px 48px;
-}
-
-.section-title { font-size: clamp(36px, 4vw, 54px); }
-.section-desc { max-width: 540px; font-size: 16px; }
-
-/* Features */
-.features-header {
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 100px 48px 0;
-}
-
-.feature-grid {
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 48px 48px 100px;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 1px;
-  background: var(--border);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  overflow: hidden;
-}
-
-.feature-card {
-  background: var(--bg-card);
-  padding: 36px 32px;
-  transition: background 0.14s;
-}
-.feature-card:hover { background: var(--bg-hover); }
-
-.feat-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-  background: var(--gold-subtle);
-  border: 1px solid var(--gold-line);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: 20px;
-  font-size: 16px;
-}
-
-.feat-title {
-  font-family: 'Cormorant Garamond', serif;
-  font-size: 22px;
-  font-weight: 500;
-  color: var(--text-primary);
-  margin-bottom: 10px;
-  letter-spacing: 0.01em;
-}
-
-.feat-desc {
-  font-size: 14px;
-  color: var(--text-sec);
-  line-height: 1.65;
-  font-weight: 300;
-}
-
-/* Benchmarks */
-.bench-section {
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 100px 48px;
-}
-
-.bench-grid {
-  display: grid;
-  grid-template-columns: repeat(3,1fr);
-  gap: 24px;
-  margin-top: 48px;
-}
-
-.bench-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-mid);
-  border-radius: 12px;
-  padding: 32px 28px;
-  position: relative;
-  overflow: hidden;
-}
-
-.bench-card::before {
-  content: '';
-  position: absolute;
-  top: 0; left: 0; right: 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--gold-line), transparent);
-}
-
-.bench-metric {
-  font-family: 'Cormorant Garamond', serif;
-  font-size: 56px;
-  font-weight: 300;
-  color: var(--gold-bright);
-  line-height: 1;
-  letter-spacing: -0.02em;
-  margin-bottom: 8px;
-}
-
-.bench-unit { font-size: 20px; color: var(--gold-dim); }
-.bench-label { font-size: 14px; color: var(--text-sec); font-weight: 300; margin-bottom: 16px; }
-
-.bench-bar-wrap { height: 3px; background: var(--border-mid); border-radius: 2px; overflow: hidden; }
-
-.bench-bar {
-  height: 100%;
-  background: linear-gradient(90deg, var(--gold-dim), var(--gold));
-  border-radius: 2px;
-  transform-origin: left;
-  animation: growBar 1.2s ease both;
-}
-@keyframes growBar { from { transform: scaleX(0); } to { transform: scaleX(1); } }
-
-.bench-compare { margin-top: 10px; font-size: 12px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; }
-
-/* Getting started */
-.started-section {
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 100px 48px;
-}
-
-.started-grid {
-  margin-top: 56px;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 32px;
-}
-
-.step-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-mid);
-  border-radius: 12px;
-  padding: 28px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  /* Allow the grid track to shrink below the min-content width of the
-     white-space:pre .step-code, so it scrolls internally instead of
-     widening the page. */
-  min-width: 0;
-}
-
-.step-num {
-  font-family: 'Cormorant Garamond', serif;
-  font-size: 13px;
-  color: var(--gold-dim);
-  letter-spacing: 0.06em;
-  font-weight: 500;
-}
-
-.step-title {
-  font-family: 'Cormorant Garamond', serif;
-  font-size: 20px;
-  font-weight: 500;
-  color: var(--text-primary);
-}
-
-.step-code {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 12.5px;
-  color: var(--text-sec);
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  padding: 14px 16px;
-  line-height: 1.7;
-  white-space: pre;
-  overflow-x: auto;
-}
-
-.step-desc { font-size: 13.5px; color: var(--text-sec); line-height: 1.6; font-weight: 300; }
-
-/* Influences */
-.influences {
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 80px 48px;
-  display: flex;
-  align-items: center;
-  gap: 48px;
-}
-
-.infl-label {
-  font-size: 12px;
-  color: var(--text-dim);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.infl-sep { flex: 1; height: 1px; background: var(--border); }
-
-.infl-items {
-  display: flex;
-  align-items: center;
-  gap: 40px;
-  flex-wrap: wrap;
-  justify-content: center;
-}
-
-.infl-item {
-  font-family: 'Cormorant Garamond', serif;
-  font-size: 20px;
-  font-weight: 400;
-  color: var(--text-dim);
-  letter-spacing: 0.02em;
-  transition: color 0.14s;
-  cursor: default;
-}
-.infl-item:hover { color: var(--text-sec); }
-
-/* CTA font size */
-.cta-title { font-size: clamp(36px, 4vw, 56px); }
-
-/* Split section — slightly more padding on homepage */
-.split-section { padding: 100px 48px; }
-
-/* ── RESPONSIVE: HOMEPAGE ──────────────── */
-@media (max-width: 768px) {
-  .hero { padding: 100px 24px 60px; }
-  .install-hint { flex-direction: column; gap: 6px; text-align: center; }
-
-  .features-header { padding: 60px 24px 0; }
-  .feature-grid {
-    padding: 32px 24px 60px;
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .split-section { padding: 60px 24px; }
-
-  .bench-section { padding: 60px 24px; }
-  .bench-grid { grid-template-columns: 1fr; gap: 16px; }
-
-  .started-section { padding: 60px 24px; }
-  .started-grid { grid-template-columns: 1fr; }
-
-  section { padding: 60px 24px; }
-
-  .influences { padding: 40px 24px; flex-wrap: wrap; gap: 16px; }
-  .infl-sep { display: none; }
-}
-
-@media (max-width: 480px) {
-  .hero { padding: 90px 16px 48px; }
-
-  .feature-grid { padding: 24px 16px 48px; grid-template-columns: 1fr; }
-  .bench-section { padding: 48px 16px; }
-  .started-section { padding: 48px 16px; }
-}
-</style>
 </head>
 <body>
 
@@ -417,24 +70,25 @@ section {
             <button class="seg-btn" data-syntax="sweet-exp">sweet-exp</button>
           </div>
         </div>
-        <div class="code-card-body"><div class="code-version turmeric-version"><span class="cmt">;; Algebraic effects in Turmeric</span>
-<span class="pnc">(</span><span class="kw">defeffect</span> <span class="tp">Ask</span> <span class="pnc">[]</span> <span class="tp">:int</span><span class="pnc">)</span>
+        <div class="code-card-body">
+          <div class="code-version turmeric-version">;; Algebraic effects in Turmeric
+(defeffect Ask [] :int)
 
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">use-ask</span> <span class="pnc">[]</span> <span class="tp">:int</span>
-  <span class="pnc">(</span><span class="op">+</span> <span class="num">1</span> <span class="pnc">(</span>perform <span class="pnc">(</span><span class="tp">Ask</span><span class="pnc">))))</span>
+(defn use-ask [] :int
+  (+ 1 (perform (Ask))))
 
-<span class="pnc">(</span>println
-  <span class="pnc">(</span>handle <span class="pnc">(</span><span class="fn">use-ask</span><span class="pnc">)</span>
-    <span class="pnc">(</span><span class="tp">Ask</span> <span class="pnc">[]</span> k<span class="pnc">)</span> <span class="pnc">(</span>resume k <span class="num">41</span><span class="pnc">)))</span></div><div class="code-version sweet-exp-version" style="display: none;"><span class="cmt">#lang turmeric/sweet-exp</span>
-<span class="kw">defeffect</span> <span class="tp">Ask</span> <span class="pnc">[]</span> <span class="tp">:int</span>
+(println
+  (handle (use-ask)
+    (Ask [] k) (resume k 41)))</div>
+          <div class="code-version sweet-exp-version" style="display: none;">#lang turmeric/sweet-exp
+defeffect Ask [] :int
 
-<span class="kw">defn</span> <span class="fn">use-ask</span> <span class="pnc">[]</span> <span class="tp">:int</span>
-  <span class="pnc">{</span><span class="num">1</span> <span class="op">+</span> perform<span class="pnc">(</span><span class="tp">Ask</span><span class="pnc">())}</span>
+defn use-ask [] :int
+  {1 + perform(Ask())}
 
-<span class="pnc"></span>println
-  handle <span class="fn">use-ask</span><span class="pnc">()</span>
-    <span class="pnc">(</span><span class="tp">Ask</span> <span class="pnc">[]</span> k<span class="pnc">)</span> resume<span class="pnc">(</span>k <span class="num">41</span><span class="pnc">)</span>
-</div>
+println
+  handle use-ask()
+    (Ask [] k) resume(k 41)</div>
         </div>
       </div>
     </div>
@@ -448,13 +102,13 @@ section {
   <div class="infl-sep"></div>
   <div class="infl-items">
     <span class="infl-item">Clojure</span>
-    <span class="infl-item" style="color:var(--border-str);">·</span>
+    <span class="infl-item dot-sep">·</span>
     <span class="infl-item">Racket</span>
-    <span class="infl-item" style="color:var(--border-str);">·</span>
+    <span class="infl-item dot-sep">·</span>
     <span class="infl-item">Haskell</span>
-    <span class="infl-item" style="color:var(--border-str);">·</span>
+    <span class="infl-item dot-sep">·</span>
     <span class="infl-item">Koka</span>
-    <span class="infl-item" style="color:var(--border-str);">·</span>
+    <span class="infl-item dot-sep">·</span>
     <span class="infl-item">Effekt</span>
   </div>
 </div>
@@ -512,17 +166,17 @@ section {
 
 </div>
 
-<hr class="divider" style="margin-top: 80px;">
+<hr class="divider mt-80">
 
 <!-- ── TYPECLASSES SPLIT ───────────────── -->
 <div class="split-section reveal">
   <div>
     <p class="section-label">Typeclasses</p>
     <h2 class="section-title">Polymorphism<br>that <em>scales.</em></h2>
-    <p class="section-desc" style="margin-bottom: 24px;">Define behavior once, use it everywhere. Turmeric's typeclass system handles dispatch at compile time — no virtual tables, no runtime cost.</p>
+    <p class="section-desc mb-24">Define behavior once, use it everywhere. Turmeric's typeclass system handles dispatch at compile time — no virtual tables, no runtime cost.</p>
     <p class="section-desc">Write instances for any type with complete type inference. Typeclass constraints keep your functions general without losing precision.</p>
   </div>
-  <div class="code-card" style="font-size:12.5px;">
+  <div class="code-card code-card--sm">
     <div class="code-card-bar">
       <div class="win-dot wd-r"></div>
       <div class="win-dot wd-y"></div>
@@ -533,51 +187,53 @@ section {
         <button class="seg-btn" data-syntax="sweet-exp">sweet-exp</button>
       </div>
     </div>
-    <div class="code-card-body" style="font-size:12px;padding:20px 22px;"><div class="code-version turmeric-version"><span class="pnc">(</span><span class="kw">defclass</span> <span class="fn">Show</span> <span class="pnc">[</span>a<span class="pnc">]</span>
-  <span class="pnc">(</span><span class="fn">show</span> <span class="pnc">[</span>x<span class="pnc">]</span> <span class="tp">:cstr</span><span class="pnc">))</span>
+    <div class="code-card-body">
+      <div class="code-version turmeric-version">(defclass Show [a]
+  (show [x] :cstr))
 
-<span class="pnc">(</span><span class="kw">defclass</span> <span class="fn">Eq</span> <span class="pnc">[</span>a<span class="pnc">]</span>
-  <span class="pnc">(</span><span class="fn">eq?</span> <span class="pnc">[</span>x y<span class="pnc">]</span> <span class="tp">:bool</span><span class="pnc">))</span>
+(defclass Eq [a]
+  (eq? [x y] :bool))
 
-<span class="pnc">(</span><span class="kw">defdata</span> <span class="tp">Color</span> <span class="pnc">(</span><span class="tp">Red</span><span class="pnc">)</span> <span class="pnc">(</span><span class="tp">Green</span><span class="pnc">)</span> <span class="pnc">(</span><span class="tp">Blue</span><span class="pnc">))</span>
+(defdata Color (Red) (Green) (Blue))
 
-<span class="pnc">(</span><span class="kw">definstance</span> <span class="fn">Eq</span> <span class="pnc">[</span><span class="tp">int</span><span class="pnc">]</span>
-  <span class="pnc">(</span><span class="fn">eq?</span> <span class="pnc">[</span>x y<span class="pnc">]</span> <span class="pnc">(</span>= x y<span class="pnc">)))</span>
+(definstance Eq [int]
+  (eq? [x y] (= x y)))
 
-<span class="cmt">;; Typeclass constraint -- requires Show instance</span>
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">display</span> <span class="pnc">[</span><span class="tp">^Show</span> a x<span class="pnc">]</span> <span class="tp">:void</span>
-  <span class="pnc">(</span>println <span class="pnc">(</span><span class="fn">show</span> x<span class="pnc">)))</span>
+;; Typeclass constraint -- requires Show instance
+(defn display [^Show a x] :void
+  (println (show x)))
 
-<span class="cmt">;; Pattern match on ADTs</span>
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">color-name</span> <span class="pnc">[</span>c<span class="pnc">]</span> <span class="tp">:cstr</span>
-  <span class="pnc">(</span><span class="kw">match</span> c
-    <span class="pnc">(</span><span class="tp">Red</span><span class="pnc">)</span>   <span class="str">"red"</span>
-    <span class="pnc">(</span><span class="tp">Green</span><span class="pnc">)</span> <span class="str">"green"</span>
-    <span class="pnc">(</span><span class="tp">Blue</span><span class="pnc">)</span>  <span class="str">"blue"</span><span class="pnc">))</span></div>
-<div class="code-version sweet-exp-version" style="display:none;"><span class="cmt">#lang turmeric/neoteric</span>
+;; Pattern match on ADTs
+(defn color-name [c] :cstr
+  (match c
+    (Red)   "red"
+    (Green) "green"
+    (Blue)  "blue"))</div>
+      <div class="code-version sweet-exp-version" style="display:none;">#lang turmeric/neoteric
 
-<span class="kw">defclass</span> <span class="fn">Show</span> <span class="pnc">[</span>a<span class="pnc">]</span>
-  <span class="fn">show</span> <span class="pnc">[</span>x<span class="pnc">]</span> <span class="tp">:cstr</span>
+defclass Show [a]
+  show [x] :cstr
 
-<span class="kw">defclass</span> <span class="fn">Eq</span> <span class="pnc">[</span>a<span class="pnc">]</span>
-  <span class="fn">eq?</span> <span class="pnc">[</span>x y<span class="pnc">]</span> <span class="tp">:bool</span>
+defclass Eq [a]
+  eq? [x y] :bool
 
-<span class="kw">defdata</span> <span class="tp">Color</span> <span class="pnc">(</span><span class="tp">Red</span><span class="pnc">)</span> <span class="pnc">(</span><span class="tp">Green</span><span class="pnc">)</span> <span class="pnc">(</span><span class="tp">Blue</span><span class="pnc">)</span>
+defdata Color (Red) (Green) (Blue)
 
-<span class="kw">definstance</span> <span class="fn">Eq</span> <span class="pnc">[</span><span class="tp">int</span><span class="pnc">]</span>
-  <span class="fn">eq?</span> <span class="pnc">[</span>x y<span class="pnc">]</span>
-    <span class="pnc">{</span>x <span class="op">=</span> y<span class="pnc">}</span>
+definstance Eq [int]
+  eq? [x y]
+    {x = y}
 
-<span class="cmt">;; Typeclass constraint -- requires Show instance</span>
-<span class="kw">defn</span> <span class="fn">display</span> <span class="pnc">[</span><span class="tp">^Show</span> a x<span class="pnc">]</span> <span class="tp">:void</span>
-  println<span class="pnc">(</span><span class="fn">show</span><span class="pnc">(</span>x<span class="pnc">))</span>
+;; Typeclass constraint -- requires Show instance
+defn display [^Show a x] :void
+  println(show(x))
 
-<span class="cmt">;; Pattern match on ADTs</span>
-<span class="kw">defn</span> <span class="fn">color-name</span> <span class="pnc">[</span>c<span class="pnc">]</span> <span class="tp">:cstr</span>
-  <span class="kw">match</span> c
-    <span class="pnc">(</span><span class="tp">Red</span><span class="pnc">)</span>   <span class="str">"red"</span>
-    <span class="pnc">(</span><span class="tp">Green</span><span class="pnc">)</span> <span class="str">"green"</span>
-    <span class="pnc">(</span><span class="tp">Blue</span><span class="pnc">)</span>  <span class="str">"blue"</span></div></div>
+;; Pattern match on ADTs
+defn color-name [c] :cstr
+  match c
+    (Red)   "red"
+    (Green) "green"
+    (Blue)  "blue"</div>
+    </div>
   </div>
 </div>
 
@@ -588,10 +244,10 @@ section {
   <div>
     <p class="section-label">Algebraic Effects</p>
     <h2 class="section-title">Side effects,<br><em>tamed.</em></h2>
-    <p class="section-desc" style="margin-bottom: 24px;">Declare what your functions can do, not how they do it. Handlers let you swap implementations — test, log, mock — without touching your core logic.</p>
+    <p class="section-desc mb-24">Declare what your functions can do, not how they do it. Handlers let you swap implementations — test, log, mock — without touching your core logic.</p>
     <p class="section-desc">Compose effects freely. The type system ensures you never forget to handle one.</p>
   </div>
-  <div class="code-card">
+  <div class="code-card code-card--sm">
     <div class="code-card-bar">
       <div class="win-dot wd-r"></div>
       <div class="win-dot wd-y"></div>
@@ -602,44 +258,46 @@ section {
         <button class="seg-btn" data-syntax="sweet-exp">sweet-exp</button>
       </div>
     </div>
-    <div class="code-card-body" style="font-size:12px;padding:20px 22px;"><div class="code-version turmeric-version"><span class="pnc">(</span><span class="kw">defeffect</span> <span class="fn">Ask</span> <span class="pnc">[]</span> <span class="tp">:int</span><span class="pnc">)</span>
+    <div class="code-card-body">
+      <div class="code-version turmeric-version">(defeffect Ask [] :int)
 
-<span class="cmt">;; Business logic -- no mention of *how* Ask works</span>
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">compute</span> <span class="pnc">[</span>x<span class="pnc">]</span> <span class="tp">:int</span>
-  <span class="pnc">(</span><span class="op">+</span> x <span class="pnc">(</span>perform <span class="pnc">(</span><span class="fn">Ask</span><span class="pnc">))))</span>
+;; Business logic -- no mention of *how* Ask works
+(defn compute [x] :int
+  (+ x (perform (Ask))))
 
-<span class="cmt">;; Production: supply real value</span>
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">run-prod</span> <span class="pnc">[</span>program<span class="pnc">]</span> <span class="tp">:int</span>
-  <span class="pnc">(</span>handle program
-    <span class="pnc">(</span><span class="fn">Ask</span> <span class="pnc">[]</span> k<span class="pnc">)</span> <span class="pnc">(</span>resume k <span class="num">41</span><span class="pnc">)))</span>
+;; Production: supply real value
+(defn run-prod [program] :int
+  (handle program
+    (Ask [] k) (resume k 41)))
 
-<span class="cmt">;; Test: supply fixed value -- no mocking frameworks</span>
-<span class="pnc">(</span><span class="kw">defn</span> <span class="fn">run-test</span> <span class="pnc">[</span>program<span class="pnc">]</span> <span class="tp">:int</span>
-  <span class="pnc">(</span>handle program
-    <span class="pnc">(</span><span class="fn">Ask</span> <span class="pnc">[]</span> k<span class="pnc">)</span> <span class="pnc">(</span>resume k <span class="num">0</span><span class="pnc">)))</span>
+;; Test: supply fixed value -- no mocking frameworks
+(defn run-test [program] :int
+  (handle program
+    (Ask [] k) (resume k 0)))
 
-<span class="pnc">(</span>println <span class="pnc">(</span><span class="fn">run-prod</span> <span class="pnc">(</span><span class="fn">compute</span> <span class="num">1</span><span class="pnc">)))</span>  <span class="cmt">;; => 42</span>
-<span class="pnc">(</span>println <span class="pnc">(</span><span class="fn">run-test</span> <span class="pnc">(</span><span class="fn">compute</span> <span class="num">1</span><span class="pnc">)))</span>  <span class="cmt">;; => 1</span></div>
-<div class="code-version sweet-exp-version" style="display:none;"><span class="cmt">#lang turmeric/neoteric</span>
+(println (run-prod (compute 1)))  ;; =&gt; 42
+(println (run-test (compute 1)))  ;; =&gt; 1</div>
+      <div class="code-version sweet-exp-version" style="display:none;">#lang turmeric/neoteric
 
-<span class="kw">defeffect</span> <span class="fn">Ask</span> <span class="pnc">[]</span> <span class="tp">:int</span>
+defeffect Ask [] :int
 
-<span class="cmt">;; Business logic -- no mention of *how* Ask works</span>
-<span class="kw">defn</span> <span class="fn">compute</span> <span class="pnc">[</span>x<span class="pnc">]</span> <span class="tp">:int</span>
-  <span class="pnc">{</span>x <span class="op">+</span> perform<span class="pnc">(</span><span class="fn">Ask</span><span class="pnc">())}</span>
+;; Business logic -- no mention of *how* Ask works
+defn compute [x] :int
+  {x + perform(Ask())}
 
-<span class="cmt">;; Production: supply real value</span>
-<span class="kw">defn</span> <span class="fn">run-prod</span> <span class="pnc">[</span>program<span class="pnc">]</span> <span class="tp">:int</span>
+;; Production: supply real value
+defn run-prod [program] :int
   handle program
-    <span class="pnc">(</span><span class="fn">Ask</span> <span class="pnc">[]</span> k<span class="pnc">)</span> resume<span class="pnc">(</span>k <span class="num">41</span><span class="pnc">)</span>
+    (Ask [] k) resume(k 41)
 
-<span class="cmt">;; Test: supply fixed value -- no mocking frameworks</span>
-<span class="kw">defn</span> <span class="fn">run-test</span> <span class="pnc">[</span>program<span class="pnc">]</span> <span class="tp">:int</span>
+;; Test: supply fixed value -- no mocking frameworks
+defn run-test [program] :int
   handle program
-    <span class="pnc">(</span><span class="fn">Ask</span> <span class="pnc">[]</span> k<span class="pnc">)</span> resume<span class="pnc">(</span>k <span class="num">0</span><span class="pnc">)</span>
+    (Ask [] k) resume(k 0)
 
-println<span class="pnc">(</span><span class="fn">run-prod</span><span class="pnc">(</span><span class="fn">compute</span><span class="pnc">(</span><span class="num">1</span><span class="pnc">)))</span>  <span class="cmt">;; => 42</span>
-println<span class="pnc">(</span><span class="fn">run-test</span><span class="pnc">(</span><span class="fn">compute</span><span class="pnc">(</span><span class="num">1</span><span class="pnc">)))</span>  <span class="cmt">;; => 1</span></div></div>
+println(run-prod(compute(1)))  ;; =&gt; 42
+println(run-test(compute(1)))  ;; =&gt; 1</div>
+    </div>
   </div>
 </div>
 
@@ -650,33 +308,35 @@ println<span class="pnc">(</span><span class="fn">run-test</span><span class="pn
   <div>
     <p class="section-label">Spice Package Manager</p>
     <h2 class="section-title">Packages, meet<br><em>simplicity.</em></h2>
-    <p class="section-desc" style="margin-bottom: 24px;">One <code>build.tur</code> file declares your package and all its dependencies -- called <em>spices</em>. Git URLs are all you need. No separate package manager binary, no CMake required.</p>
+    <p class="section-desc mb-24">One <code>build.tur</code> file declares your package and all its dependencies -- called <em>spices</em>. Git URLs are all you need. No separate package manager binary, no CMake required.</p>
     <p class="section-desc">Need a C library? Add it to <code>:cmake-deps</code> and Turmeric handles the rest -- fetching, building, and linking automatically.</p>
   </div>
-  <div class="code-card" style="font-size:12.5px;">
+  <div class="code-card code-card--sm">
     <div class="code-card-bar">
       <div class="win-dot wd-r"></div>
       <div class="win-dot wd-y"></div>
       <div class="win-dot wd-g"></div>
       <span class="code-card-filename">build.tur</span>
     </div>
-    <div class="code-card-body" style="font-size:12px;padding:20px 22px;"><span class="pnc">(</span><span class="kw">defpackage</span> <span class="fn">my-app</span>
-  <span class="tp">:name</span>    <span class="str">"my-app"</span>
-  <span class="tp">:version</span> <span class="str">"0.1.0"</span>
+    <div class="code-card-body">
+      <div class="code-version turmeric-version">(defpackage my-app
+  :name    "my-app"
+  :version "0.1.0"
 
-  <span class="cmt">;; Turmeric dependencies -- called spices</span>
-  <span class="tp">:spices</span> <span class="pnc">{</span>
-    <span class="str">"geom"</span>  <span class="pnc">{</span><span class="tp">:url</span> <span class="str">"https://github.com/alice/tur-geom"</span>
-             <span class="tp">:ref</span> <span class="str">"v0.2.1"</span><span class="pnc">}</span>
-    <span class="str">"math"</span>  <span class="pnc">{</span><span class="tp">:url</span> <span class="str">"https://github.com/bob/tur-math"</span>
-             <span class="tp">:ref</span> <span class="str">"v1.5.0"</span><span class="pnc">}</span>
-  <span class="pnc">}</span>
+  ;; Turmeric dependencies -- called spices
+  :spices {
+    "geom"  {:url "https://github.com/alice/tur-geom"
+             :ref "v0.2.1"}
+    "math"  {:url "https://github.com/bob/tur-math"
+             :ref "v1.5.0"}
+  }
 
-  <span class="cmt">;; C/CMake dependencies (CPM-compatible)</span>
-  <span class="tp">:cmake-deps</span> <span class="pnc">{</span>
-    <span class="str">"raylib"</span> <span class="pnc">{</span><span class="tp">:url</span> <span class="str">"https://github.com/raysan5/raylib"</span>
-              <span class="tp">:ref</span> <span class="str">"5.0"</span><span class="pnc">}</span>
-  <span class="pnc">}</span><span class="pnc">)</span></div>
+  ;; C/CMake dependencies (CPM-compatible)
+  :cmake-deps {
+    "raylib" {:url "https://github.com/raysan5/raylib"
+              :ref "5.0"}
+  })</div>
+    </div>
   </div>
 </div>
 
@@ -737,11 +397,11 @@ tur run</div>
     <div class="step-card">
       <div class="step-num">03 — Write Code</div>
       <div class="step-title">Your first function</div>
-      <div class="step-code"><span class="pnc">(</span><span class="kw">defn</span> <span class="fn">factorial</span> <span class="pnc">[</span>n<span class="pnc">]</span> <span class="tp">:int</span>
-  <span class="pnc">(</span><span class="kw">if</span> <span class="pnc">(</span><span class="op">&lt;=</span> n <span class="num">1</span><span class="pnc">)</span> <span class="num">1</span>
-    <span class="pnc">(</span><span class="op">*</span> n <span class="pnc">(</span><span class="fn">factorial</span> <span class="pnc">(</span><span class="op">-</span> n <span class="num">1</span><span class="pnc">)))))</span>
+      <div class="step-code">(defn factorial [n] :int
+  (if (&lt;= n 1) 1
+    (* n (factorial (- n 1)))))
 
-<span class="pnc">(</span>println <span class="pnc">(</span><span class="fn">factorial</span> <span class="num">10</span><span class="pnc">))</span>  <span class="cmt">;; => 3628800</span></div>
+(println (factorial 10))  ;; =&gt; 3628800</div>
       <p class="step-desc">Return types are annotated with <code>:int</code>, <code>:bool</code>, or <code>:cstr</code>. The compiler catches type errors before you run.</p>
     </div>
 
