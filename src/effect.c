@@ -394,16 +394,24 @@ bool effect_row_unify(EffectRow *r1, EffectRow *r2,
 
     /* Simplify: apply existing substitutions first. */
     if (r1->kind == ERK_VAR) {
+        /* Trivial case: same variable on both sides, no binding needed. */
+        if (r2->kind == ERK_VAR && r1->as.var.var_name == r2->as.var.var_name)
+            return true;
         EffectRow *bound = effect_row_subst_lookup(subst, r1->as.var.var_name);
         if (bound) return effect_row_unify(bound, r2, subst, a);
-        /* r1 is an unbound variable: bind it to r2 */
+        if (effect_row_occurs(r1->as.var.var_name, r2))
+            return false; /* occurs check: binding would produce an infinite row */
         effect_row_subst_bind(subst, r1->as.var.var_name, r2);
         return true;
     }
     if (r2->kind == ERK_VAR) {
+        /* Trivial case: same variable on both sides, no binding needed. */
+        if (r1->kind == ERK_VAR && r2->as.var.var_name == r1->as.var.var_name)
+            return true;
         EffectRow *bound = effect_row_subst_lookup(subst, r2->as.var.var_name);
         if (bound) return effect_row_unify(r1, bound, subst, a);
-        /* r2 is an unbound variable: bind it to r1 */
+        if (effect_row_occurs(r2->as.var.var_name, r1))
+            return false; /* occurs check: binding would produce an infinite row */
         effect_row_subst_bind(subst, r2->as.var.var_name, r1);
         return true;
     }
@@ -419,6 +427,24 @@ bool effect_row_unify(EffectRow *r1, EffectRow *r2,
     /* Both concrete (or union): succeed permissively in v1. */
     (void)a;
     return true;
+}
+
+bool effect_row_occurs(const Symbol *var_name, EffectRow *row) {
+    if (!row) return false;
+    switch (row->kind) {
+    case ERK_EMPTY:
+        return false;
+    case ERK_VAR:
+        return var_name == row->as.var.var_name; /* pointer equality: symbols are interned */
+    case ERK_CONCRETE:
+        return false; /* concrete rows have no variables */
+    case ERK_UNION:
+        return effect_row_occurs(var_name, row->as.union_.left) ||
+               effect_row_occurs(var_name, row->as.union_.right);
+    case ERK_UNRESOLVED:
+        return false; /* already resolved by this point */
+    }
+    return false; /* unreachable */
 }
 
 EffectRow *effect_row_apply_subst(EffectRow *row,

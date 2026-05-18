@@ -1,0 +1,18 @@
+;; ET2-F2: Effect-polymorphic bracket (with-resource) pattern.
+;; bracket acquires a resource, runs a body function, then releases it.
+;; The body function carries effect row #{e}, which propagates through bracket.
+
+(defeffect Log [msg :cstr] :nil)
+
+(defn bracket [body :(fn [] #{e} :int)] #{e} :int
+  (do
+    (println "acquire")
+    (let [result (body)]
+      (do
+        (println "release")
+        result))))
+
+(defn main [] :int
+  (handle
+    (do (bracket (fn [] (do (perform (Log "inside")) 42))) 0)
+    (Log [msg] k) (do (println msg) (resume k nil))))

@@ -204,16 +204,32 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
                         effect_row_empty(a), idx, env, arg_subst);
                 } else if (actual && actual->kind == EX_VAR &&
                            actual->as.var.binding) {
-                    /* Named function: use its inferred row if known. */
+                    /* Named function: prefer the declared row for occurs-check
+                     * purposes -- the inferred row may have already resolved
+                     * row variables to concrete effects, hiding the open variable.
+                     * Fall back to the inferred row if no declaration exists. */
                     FnDef *arg_fn = fn_index_lookup(idx, actual->as.var.binding);
-                    if (arg_fn && arg_fn->inferred_effect_row) {
+                    EffectRow *decl_row = actual->as.var.binding->type.kind == TY_FN
+                                         ? actual->as.var.binding->type.as.fn.effect_row
+                                         : NULL;
+                    if (decl_row && (decl_row->kind == ERK_VAR ||
+                                     decl_row->kind == ERK_UNION)) {
+                        /* Use the declared row: it may contain open row variables. */
+                        actual_row = decl_row;
+                    } else if (arg_fn && arg_fn->inferred_effect_row) {
                         actual_row = arg_fn->inferred_effect_row;
-                    } else if (actual->as.var.binding->type.kind == TY_FN) {
-                        actual_row = actual->as.var.binding->type.as.fn.effect_row;
+                    } else {
+                        actual_row = decl_row;
                     }
                 }
                 if (actual_row) {
-                    effect_row_unify(param_row, actual_row, subst, a);
+                    if (!effect_row_unify(param_row, actual_row, subst, a)) {
+                        diag_emit_with_code(DIAG_ERROR, e->span,
+                            TUR_E0254_INFINITE_EFFECT_ROW,
+                            "occurs-check failure: unifying effect row variable '%s' with "
+                            "row containing itself would produce an infinite effect row",
+                            param_row->as.var.var_name->name);
+                    }
                 }
             }
         }

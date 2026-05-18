@@ -49,6 +49,10 @@ typedef enum DiagCode {
     TUR_W0031_EFFECT_OVER_ANNOTATED,       /* declared effect never performed */
     TUR_W0032_ROW_VAR_ALWAYS_CONCRETE,    /* row variable is always concrete; suggest replacing with concrete row */
     TUR_W0033_UNREACHABLE_HANDLER,        /* handler clause for Foo is unreachable -- body never performs Foo */
+    /* ET2: effect polymorphism warnings */
+    TUR_W0034_ROW_VAR_GENERALISED,        /* row variable auto-generalised; consider explicit forall [e] (--strict-effects) */
+    /* GATE / ET2: effect row type errors */
+    TUR_E0254_INFINITE_EFFECT_ROW,     /* occurs check: binding effect row variable would produce an infinite row */
     /* LT1: Linear type errors (-Xlinear) */
     TUR_E0100_LINEAR_DROPPED,      /* linear value dropped without being consumed */
     TUR_E0101_LINEAR_USE_AFTER_CONSUME, /* linear value used after being moved/consumed */

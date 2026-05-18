@@ -883,6 +883,7 @@ const char *kind_to_string(Kind k) {
         case KIND_STAR:   return "*";
         case KIND_ARROW:  return "* -> *";
         case KIND_ARROW2: return "* -> * -> *";
+        case KIND_ROW:    return "Row";
     }
     return "*";  /* default */
 }

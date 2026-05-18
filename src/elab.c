@@ -13692,9 +13692,13 @@ static Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_na
                         }
                     }
                     var_names[i] = vf->as.sym->name;
-                    var_kinds[i] = KIND_STAR;  /* default kind */
+                    /* ET2-A: lowercase binders are row variables (effect rows);
+                     * uppercase binders remain type variables (KIND_STAR). */
+                    bool is_row_binder = (vf->as.sym->name[0] >= 'a'
+                                          && vf->as.sym->name[0] <= 'z');
+                    var_kinds[i] = is_row_binder ? KIND_ROW : KIND_STAR;
                     ext_params[n_type_params + i] = vf->as.sym;
-                    ext_kinds[n_type_params + i] = KIND_STAR;
+                    ext_kinds[n_type_params + i] = is_row_binder ? KIND_ROW : KIND_STAR;
                 }
 
                 /* Parse the body type with bound vars in scope */

@@ -191,6 +191,11 @@ EffectRow *effect_row_subst_lookup(const EffectRowSubst *subst,
 bool effect_row_unify(EffectRow *r1, EffectRow *r2,
                       EffectRowSubst *subst, Arena *a);
 
+/* Return true if `var_name` appears free in `row` (occurs check).
+ * Used by effect_row_unify to prevent binding a variable to a row that
+ * contains itself, which would produce an infinite effect row. */
+bool effect_row_occurs(const Symbol *var_name, EffectRow *row);
+
 /* Apply `subst` to `row`, replacing bound ERK_VAR nodes with their values.
  * Unbound variables are left as ERK_VAR.  Returns a new EffectRow on `a`. */
 EffectRow *effect_row_apply_subst(EffectRow *row,

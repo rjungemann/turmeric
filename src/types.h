@@ -45,6 +45,7 @@ typedef enum Kind {
     KIND_STAR   = 0,  /* * — a concrete type, e.g. int, bool, vec<int> */
     KIND_ARROW  = 1,  /* * -> * — a unary type constructor, e.g. vec, option */
     KIND_ARROW2 = 2,  /* * -> * -> * — a binary type constructor, e.g. result, either */
+    KIND_ROW    = 3,  /* Row — an effect row variable, e.g. e in (forall [e] ...) */
 } Kind;
 /* Phase 13: Lifetime annotations */
 /* Lifetimes are purely an elaborator construct - no runtime representation */

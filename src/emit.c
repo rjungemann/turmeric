@@ -3685,7 +3685,10 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 for (uint32_t ci = 0; ci < n_all_caps; ci++) {
                     Binding *b = all_caps[ci];
                     char *raw = raw_name_for_binding(b);
-                    buf_printf(hbuf, "    %s %s;\n", type_c_name(b->type), raw);
+                    /* ET2: poly fn params (TY_FORALL) must be stored as tur_poly_fn_t */
+                    const char *field_ctype = b->is_poly_fn ? "tur_poly_fn_t"
+                                                            : type_c_name(b->type);
+                    buf_printf(hbuf, "    %s %s;\n", field_ctype, raw);
                     free(raw);
                 }
                 buf_printf(hbuf, "};\n\n");

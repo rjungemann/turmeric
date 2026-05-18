@@ -1,0 +1,19 @@
+;; ET2-F4: Implicit effect polymorphism via inferred row variable.
+;; apply has no explicit effect row annotation but its inferred row contains
+;; the open variable #{e} from its function parameter, making it effect-
+;; polymorphic. The outer handle handles Log performed inside the callback.
+
+(defeffect Log [msg :cstr] :nil)
+
+(defn apply [f :(fn [:int] #{e} :int) x :int] #{e} :int
+  (f x))
+
+(defn apply-logged [x :int] #{Log} :int
+  (apply (fn [v] (do (perform (Log "calling")) v)) x))
+
+(defn main [] :int
+  (handle
+    (do
+      (apply-logged 5)
+      0)
+    (Log [msg] k) (do (println msg) (resume k nil))))

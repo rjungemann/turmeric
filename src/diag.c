@@ -113,10 +113,12 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0018_NOT_SERIALIZABLE:                 return "TUR-E0018";
         case TUR_E0019_SERIAL_SHIFT_OUTSIDE_RESET:       return "TUR-E0019";
         case TUR_E0021_PRIVATE_EFFECT:                   return "TUR-E0021";
+        case TUR_E0254_INFINITE_EFFECT_ROW:              return "TUR-E0254";
         case TUR_W0030_STRICT_EFFECTS_UNANNOTATED: return "TUR-W0030";
         case TUR_W0031_EFFECT_OVER_ANNOTATED:      return "TUR-W0031";
         case TUR_W0032_ROW_VAR_ALWAYS_CONCRETE:    return "TUR-W0032";
         case TUR_W0033_UNREACHABLE_HANDLER:        return "TUR-W0033";
+        case TUR_W0034_ROW_VAR_GENERALISED:        return "TUR-W0034";
         /* LT1: Linear type errors */
         case TUR_E0100_LINEAR_DROPPED:             return "TUR-E0100";
         case TUR_E0101_LINEAR_USE_AFTER_CONSUME:   return "TUR-E0101";
@@ -162,10 +164,12 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0018") == 0) return TUR_E0018_NOT_SERIALIZABLE;
     if (strcmp(s, "TUR-E0019") == 0) return TUR_E0019_SERIAL_SHIFT_OUTSIDE_RESET;
     if (strcmp(s, "TUR-E0021") == 0) return TUR_E0021_PRIVATE_EFFECT;
+    if (strcmp(s, "TUR-E0254") == 0) return TUR_E0254_INFINITE_EFFECT_ROW;
     if (strcmp(s, "TUR-W0030") == 0) return TUR_W0030_STRICT_EFFECTS_UNANNOTATED;
     if (strcmp(s, "TUR-W0031") == 0) return TUR_W0031_EFFECT_OVER_ANNOTATED;
     if (strcmp(s, "TUR-W0032") == 0) return TUR_W0032_ROW_VAR_ALWAYS_CONCRETE;
     if (strcmp(s, "TUR-W0033") == 0) return TUR_W0033_UNREACHABLE_HANDLER;
+    if (strcmp(s, "TUR-W0034") == 0) return TUR_W0034_ROW_VAR_GENERALISED;
     /* LT1: Linear type errors */
     if (strcmp(s, "TUR-E0100") == 0) return TUR_E0100_LINEAR_DROPPED;
     if (strcmp(s, "TUR-E0101") == 0) return TUR_E0101_LINEAR_USE_AFTER_CONSUME;
@@ -474,6 +478,21 @@ static const DiagExplanation diag_explanations_[] = {
       "  2. Expose a public function in mymod that encapsulates the effect and\n"
       "     provides the handler, so consumers never touch Ask directly.\n"
     },
+    { TUR_E0254_INFINITE_EFFECT_ROW,
+      "TUR-E0254: Infinite effect row (occurs-check failure)\n"
+      "\n"
+      "Unifying an effect row variable with a row that contains the same variable\n"
+      "would produce an infinite effect row. This usually means a function with an\n"
+      "open row variable is being passed to a parameter that constrains the same\n"
+      "variable.\n"
+      "\n"
+      "Fix: ensure the actual argument's effect row does not contain the same row\n"
+      "variable as the parameter's declared row, e.g.:\n"
+      "  (defn run-e [f :(fn [] #{e} :nil)] #{e} :nil (f))\n"
+      "  ;; pass a concrete-row function, not one with the same variable:\n"
+      "  (defn pure-f [] #{} :nil nil)\n"
+      "  (run-e pure-f)  ; ok\n",
+    },
     { TUR_W0030_STRICT_EFFECTS_UNANNOTATED,
       "TUR-W0030: Unannotated effectful function (--strict-effects)\n"
       "\n"
@@ -518,6 +537,21 @@ static const DiagExplanation diag_explanations_[] = {
       "effect, e.g.:\n"
       "  (handle (perform (Write \"hi\"))         ; body actually performs Write\n"
       "    (Write [s] k) (do (println s) (resume k nil)))\n",
+    },
+    { TUR_W0034_ROW_VAR_GENERALISED,
+      "TUR-W0034: Row variable was auto-generalised\n"
+      "\n"
+      "Under --strict-effects, a function whose effect-row annotation uses a bare\n"
+      "row variable (e.g. #{e}) has that variable implicitly generalised as if\n"
+      "you had written (forall [e] ...). This warning suggests making the\n"
+      "quantification explicit for clarity.\n"
+      "\n"
+      "Fix: add an explicit forall binder:\n"
+      "  ; Before (implicit generalisation triggers TUR-W0034):\n"
+      "  (defn run [f :(fn [] #{e} :int)] #{e} :int (f))\n"
+      "\n"
+      "  ; After (explicit forall, no warning):\n"
+      "  (defn run [f :(forall [e] fn [] #{e} :int)] #{e} :int (f))\n",
     },
     /* LT1: Linear type errors */
     { TUR_E0100_LINEAR_DROPPED,
