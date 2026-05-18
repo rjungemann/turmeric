@@ -100,7 +100,7 @@ static void remove_registration(struct EpollBackend *backend, int fd) {
 static void wakeup_callback(int fd, int events, void *user_data) {
     /* Just read and discard the byte(s) */
     char buf[16];
-    (void)read(fd, buf, sizeof(buf));
+    if (read(fd, buf, sizeof(buf)) < 0) { /* drain failed -- harmless */ }
 }
 
 /* epoll-specific vtable functions */
@@ -228,7 +228,7 @@ static void epoll_wake(IOBackend *backend) {
     /* Write a byte to wake up the epoll_wait */
     if (eb->wakeup_pipe[1] >= 0) {
         char byte = 1;
-        (void)write(eb->wakeup_pipe[1], &byte, 1);
+        if (write(eb->wakeup_pipe[1], &byte, 1) < 0) { /* wake failed -- harmless */ }
     }
 }
 
