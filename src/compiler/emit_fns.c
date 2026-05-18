@@ -188,11 +188,15 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* Get the return type */
     TypeKind result_kind = e->type.kind == TY_FN ? e->type.as.fn.result_kind : TY_NIL;
 
-    /* Phase 3/4: Check if body contains return/throw */
-    bool body_has_return_or_throw = expr_contains_return_or_throw(fd->body);
-    
-    if (body_has_return_or_throw) {
-        /* Body contains a return/throw - emit as statements only */
+    /* Phase 3/4: If the body diverges on every path (return/panic), emit it as
+     * statements only -- a trailing `return` would be dead code.  A body that
+     * may still fall through with a value (e.g. an early `return` in only one
+     * `if` branch) must go through the emit_value path below so the
+     * fall-through value is returned. */
+    bool body_diverges = expr_tail_diverges(fd->body);
+
+    if (body_diverges) {
+        /* Body diverges on every path - emit as statements only */
         emit_stmt(ctx, file, fd->body);
     } else if (fd->body->kind == EX_INLINE_C) {
         /* Inline C body - emit as-is (it contains its own return statements) */

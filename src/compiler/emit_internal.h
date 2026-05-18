@@ -93,6 +93,7 @@ Type emit_type_from_kind(TypeKind k);
 void indent_buf(Buf *b, int n);
 bool expr_is_divergent(const Expr *e);
 bool expr_contains_return_or_throw(const Expr *e);
+bool expr_tail_diverges(const Expr *e);
 bool expr_has_multishot_handler(const Expr *e);
 char *fresh_tmp(EmitCtx *ctx);
 char *fresh_frame(EmitCtx *ctx);

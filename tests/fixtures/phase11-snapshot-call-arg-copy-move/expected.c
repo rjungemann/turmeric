@@ -377,6 +377,7 @@ static void tur_panic(const char *msg) {
     if (global_panic_frame) {
         tur_frame_fire_chain(global_panic_frame);
     }
+    fflush(NULL);
     abort();
 }
 
@@ -2058,14 +2059,6 @@ static void * merge(void *, void *);
 static bool map_eq_(int64_t, int64_t, int64_t);
 static int64_t add1(int64_t);
 
-struct __defer_env_2 {void * r; };
-
-static void __defer_3(void *__env) {
-    struct __defer_env_2 *__e = (struct __defer_env_2 *)__env;
-    free(__e->r);
-}
-
-
 static void * array_get(void * arr, int64_t idx) {
         struct __array_get_result { bool is_some; int64_t value; } *opt = malloc(sizeof(*opt));
   int64_t *array = (int64_t *)arr;
@@ -2133,7 +2126,7 @@ static void tur_contract_check(bool condition, const char * msg) {
 }
 
 static void tur_contract_check_inv(int64_t obj, int64_t pred, const char * msg) {
-        typedef int64_t (*pred_fn)(int64_t);
+        typedef bool (*pred_fn)(int64_t);
   pred_fn f = (pred_fn)(intptr_t)pred;
   if (!f(obj)) { tur_panic((const char*)msg); }
   
@@ -2325,16 +2318,11 @@ int main() {
             *((int64_t *)__t0) = INT64_C(9);
             void * r_216 = __t0;
             (void)r_216;
-            tur_frame __frame_1;
-            tur_frame_init(&__frame_1, NULL);
             free(r_216);
-            struct __defer_env_2 __t4 = {.r = r_216};
-            tur_frame_push_defer(&__frame_1, __defer_3, &__t4);
-            tur_frame_fire_lifo(&__frame_1);
         }
-        int64_t __t5;
-        __t5 = INT64_C(0);
-        return (int)__t5;
+        int64_t __t1;
+        __t1 = INT64_C(0);
+        return (int)__t1;
 }
 
 

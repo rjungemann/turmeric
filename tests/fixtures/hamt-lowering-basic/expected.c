@@ -378,6 +378,7 @@ static void tur_panic(const char *msg) {
     if (global_panic_frame) {
         tur_frame_fire_chain(global_panic_frame);
     }
+    fflush(NULL);
     abort();
 }
 
@@ -2099,7 +2100,7 @@ static void tur_contract_check(bool condition, const char * msg) {
 }
 
 static void tur_contract_check_inv(int64_t obj, int64_t pred, const char * msg) {
-        typedef int64_t (*pred_fn)(int64_t);
+        typedef bool (*pred_fn)(int64_t);
   pred_fn f = (pred_fn)(intptr_t)pred;
   if (!f(obj)) { tur_panic((const char*)msg); }
   

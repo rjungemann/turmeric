@@ -1272,11 +1272,13 @@ Hamt *tur_hamt_persistent(HamtTransient *t) {
     m->count = t->count;
     /* t already retained root; transfer ownership to m */
 
-    /* Invalidate t so any subsequent use is detectable */
+    /* Invalidate t so any subsequent use is detectable.  The struct is
+     * deliberately left allocated (not freed) -- tur_hamt_transient_set/del
+     * read t->token to abort on use-after-persistent!, which would be a
+     * use-after-free if the struct were freed here. */
     t->root = NULL;
     t->count = 0;
     t->token = 0;
-    free(t);
 
     return m;
 }
