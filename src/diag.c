@@ -606,7 +606,22 @@ static const DiagExplanation diag_explanations_[] = {
       "    (close-file fh))\n"
       "\n"
       "Enable with: tur -Xlinear myfile.tur\n"
-      "         or: tur -Xsubstructural myfile.tur\n",
+      "         or: tur -Xsubstructural myfile.tur\n"
+      "\n"
+      "In effect handler clauses:\n"
+      "A ^linear continuation k must be resumed or discontinued exactly once.\n"
+      "If the handler body exits without calling (resume k ...) or\n"
+      "(discontinue k ...), TUR-E0100 is emitted at the k binding site.\n"
+      "\n"
+      "  (handle body\n"
+      "    (Ask [] ^linear k)\n"
+      "    42)   ; ERROR: ^linear k dropped without resume or discontinue\n"
+      "\n"
+      "Fix: ensure every code path through the handler body calls resume or\n"
+      "discontinue exactly once:\n"
+      "  (handle body\n"
+      "    (Ask [] ^linear k)\n"
+      "    (resume k 42))  ; OK\n",
     },
     { TUR_E0101_LINEAR_USE_AFTER_CONSUME,
       "TUR-E0101: Linear value used after being moved or consumed\n"
@@ -626,7 +641,20 @@ static const DiagExplanation diag_explanations_[] = {
       "Fix: restructure so each linear value flows through exactly one code path.\n"
       "\n"
       "Enable with: tur -Xlinear myfile.tur\n"
-      "         or: tur -Xsubstructural myfile.tur\n",
+      "         or: tur -Xsubstructural myfile.tur\n"
+      "\n"
+      "In effect handler clauses:\n"
+      "A ^linear continuation k may be resumed or discontinued at most once.\n"
+      "Calling (resume k ...) or (discontinue k ...) a second time emits\n"
+      "TUR-E0101 at the second call site.\n"
+      "\n"
+      "  (handle body\n"
+      "    (Ask [] ^linear k)\n"
+      "    (+ (resume k 1) (resume k 2)))  ; ERROR: ^linear k used twice\n"
+      "\n"
+      "Fix: ensure at most one resume or discontinue is reachable per handler\n"
+      "invocation. For multi-shot continuations, use ^unsafe-multishot k\n"
+      "(see TUR-W0035).\n",
     },
     { TUR_E0102_LINEAR_COPY,
       "TUR-E0102: Cannot copy a linear value\n"
@@ -722,7 +750,20 @@ static const DiagExplanation diag_explanations_[] = {
       "  (let [^unique x 42]\n"
       "    (println x))  ; OK: single use\n"
       "\n"
-      "Enable with: turc -Xunique-types myfile.tur\n",
+      "Enable with: turc -Xunique-types myfile.tur\n"
+      "\n"
+      "In effect handler clauses:\n"
+      "Every handler continuation k is one-shot (unique) by default. Calling\n"
+      "(resume k ...) or (discontinue k ...) a second time emits TUR-E0201.\n"
+      "\n"
+      "  (handle body\n"
+      "    (Ask [] k)\n"
+      "    (+ (resume k 1) (resume k 2)))  ; ERROR: k already resumed\n"
+      "\n"
+      "Fix: call resume or discontinue at most once per handler invocation.\n"
+      "For continuations that must be called exactly once, use ^linear k\n"
+      "(emits TUR-E0100 if dropped). For multi-shot continuations, use\n"
+      "^unsafe-multishot k (see TUR-W0035).\n",
     },
     { TUR_E0202_UNIQUE_IN_RC,
       "TUR-E0202: Cannot wrap a unique value in rc<T>\n"
