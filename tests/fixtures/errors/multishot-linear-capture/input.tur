@@ -1,0 +1,16 @@
+;; MS2: ^multishot handler capturing a ^linear continuation is forbidden.
+;; k1 is a CK_LINEAR binding from the outer handler.
+;; The inner ^multishot k2 handler body references k1, which triggers TUR-E0500.
+
+(defeffect AskOuter [] :int)
+(defeffect AskInner [] :int)
+
+(defn main [] :int
+  (handle
+    (handle (perform (AskOuter))
+      (AskOuter [] ^linear k1)
+        (handle (perform (AskInner))
+          (AskInner [] ^multishot k2)
+            (resume k1 10)))
+    (AskInner [] k3) (resume k3 0))
+  0)

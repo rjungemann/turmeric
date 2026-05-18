@@ -42,6 +42,10 @@ extern bool g_substructural_enabled;
 extern bool g_union_types_enabled;
 extern bool g_intersection_types_enabled;
 
+/* MS2: Track whether we're inside an atomically block for TUR-E0502 checking.
+ * Declared here (before elab_resume) and also set in elab_atomically below. */
+static bool elab_in_atomically = false;
+
 #define ELAB_MAX_MACRO_EXPANSION_DEPTH 256
 
 /* Helper to create a Type from TypeKind. */
@@ -3525,6 +3529,13 @@ static Expr *elab_let(Elab *e, const Form *call) {
                     is_affine_ann = true;
                 } else if (cur->as.sym == e->sym_caret_relevant) {
                     is_relevant_ann = true;
+                } else if (cur->as.sym == e->sym_caret_multishot) {
+                    /* MS2: ^multishot is only valid on handler continuation bindings */
+                    diag_emit_with_code(DIAG_ERROR, cur->span,
+                        TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER,
+                        "'^multishot' annotation is only valid on a handler continuation, "
+                        "not on a let binding");
+                    rc = -1; keep_going = false; break;
                 } else {
                     break; /* Not an annotation -- this is the binding name */
                 }
@@ -6044,6 +6055,34 @@ static Expr *elab_handle(Elab *e, const Form *call) {
         Form *body_f = call->as.list.items[3 + (i * 2)];
         cases[i].body = elab_form(e, body_f);
 
+        /* MS2: For ^multishot handlers, check all captured free variables.
+         * CK_UNIQUE (move-only) and CK_LINEAR captures are forbidden because
+         * the handler body may run multiple times -- each resume takes a
+         * snapshot of k, so the body executes N times and must not consume a
+         * linear or unique value on each execution. */
+        if (cases[i].cont_kind == CK_MULTISHOT && cases[i].body) {
+            /* Build the "local params" list: effect params + k (not free vars) */
+            uint8_t n_hparams = (uint8_t)(cases[i].n_params + 1);
+            Binding **hparams = arena_alloc(e->arena, n_hparams * sizeof(Binding *));
+            for (uint8_t j = 0; j < cases[i].n_params; j++)
+                hparams[j] = cases[i].param_bindings[j];
+            hparams[cases[i].n_params] = kb;
+            uint32_t n_caps = 0;
+            Binding **caps = collect_free_vars(cases[i].body, hparams, n_hparams, &n_caps);
+            for (uint32_t ci = 0; ci < n_caps; ci++) {
+                CopyKind ck = caps[ci]->type.copy_kind;
+                if (ck == CK_UNIQUE || ck == CK_LINEAR) {
+                    diag_emit_with_code(DIAG_ERROR, cases[i].body->span,
+                        TUR_E0500_MULTISHOT_UNIQUE_CAPTURE,
+                        "^multishot handler captures '%s' which is %s -- "
+                        "cannot be safely captured in a multi-shot handler",
+                        caps[ci]->name->name,
+                        ck == CK_UNIQUE ? "unique (move-only)" : "linear");
+                }
+            }
+            free(caps);
+        }
+
         /* LC1/LC2: ^linear k must be consumed (resumed or discontinued) in the handler body.
          * Check immediately after body elaboration while the binding is still in scope.
          * Uses is_linear_consumed (flow-sensitive via elab_if linear-state machinery). */
@@ -6241,6 +6280,19 @@ static Expr *elab_resume(Elab *e, const Form *call) {
 
     /* LC1: Mark continuation consumed per its cont_kind. */
     cont_mark_consumed(k);
+
+    /* MS2: Resuming a ^multishot continuation inside atomically is unsafe --
+     * the handler body may be re-executed by STM retry, causing the continuation
+     * to be resumed more than once in unexpected ways. */
+    if (k->kind == EX_VAR && k->as.var.binding &&
+        k->as.var.binding->type.copy_kind == CK_MULTISHOT &&
+        elab_in_atomically) {
+        diag_emit_with_code(DIAG_ERROR, call->span,
+            TUR_E0502_MULTISHOT_RESUME_IN_ATOMIC,
+            "cannot resume a '^multishot' continuation inside 'atomically' -- "
+            "STM retry may cause the continuation to be resumed multiple times unexpectedly");
+        return NULL;
+    }
 
     ResumeExpr *resume = arena_alloc(e->arena, sizeof(ResumeExpr));
     resume->k = k;
@@ -6750,6 +6802,15 @@ static Expr *elab_defn(Elab *e, const Form *call) {
         if (p->tag == F_SYM && p->as.sym == e->sym_caret_relevant) {
             next_param_relevant = true;
             continue;
+        }
+
+        /* MS2: ^multishot is not valid as a function parameter annotation */
+        if (p->tag == F_SYM && p->as.sym == e->sym_caret_multishot) {
+            diag_emit_with_code(DIAG_ERROR, p->span,
+                TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER,
+                "'^multishot' annotation is only valid on a handler continuation, "
+                "not on a function parameter");
+            return NULL;
         }
 
         /* Phase 15: Handle constraint annotations (^Eq, ^Show, etc.) */
@@ -17226,9 +17287,14 @@ static Expr *elab_atomically(Elab *e, const Form *call) {
 
     Form *arg = call->as.list.items[1];
 
+    /* MS2: Set atomically flag so elab_resume can detect TUR-E0502 */
+    bool prev_in_atomically = elab_in_atomically;
+    elab_in_atomically = true;
+
     /* The argument should be an stm block or something that evaluates to one */
     /* For v1, we just wrap it in atomically */
     Expr *stm_expr = elab_form(e, arg);
+    elab_in_atomically = prev_in_atomically;
     if (!stm_expr) return NULL;
 
     /* Check if it's already an stm block */

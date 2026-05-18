@@ -146,6 +146,10 @@ const char *diag_code_to_string(DiagCode code) {
         /* IT3: Intersection type errors */
         case TUR_E0350_INTERSECTION_UNSATISFIABLE:   return "TUR-E0350";
         case TUR_E0351_INTERSECTION_MEMBER_MISMATCH: return "TUR-E0351";
+        /* MS2: Multi-shot continuation capture analysis */
+        case TUR_E0500_MULTISHOT_UNIQUE_CAPTURE:      return "TUR-E0500";
+        case TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER: return "TUR-E0501";
+        case TUR_E0502_MULTISHOT_RESUME_IN_ATOMIC:    return "TUR-E0502";
         default:                          return "";
     }
 }
@@ -205,6 +209,10 @@ DiagCode diag_code_from_string(const char *s) {
     /* IT3: Intersection type errors */
     if (strcmp(s, "TUR-E0350") == 0) return TUR_E0350_INTERSECTION_UNSATISFIABLE;
     if (strcmp(s, "TUR-E0351") == 0) return TUR_E0351_INTERSECTION_MEMBER_MISMATCH;
+    /* MS2: Multi-shot continuation capture analysis */
+    if (strcmp(s, "TUR-E0500") == 0) return TUR_E0500_MULTISHOT_UNIQUE_CAPTURE;
+    if (strcmp(s, "TUR-E0501") == 0) return TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER;
+    if (strcmp(s, "TUR-E0502") == 0) return TUR_E0502_MULTISHOT_RESUME_IN_ATOMIC;
     return DIAG_CODE_NONE;
 }
 
@@ -964,6 +972,74 @@ static const DiagExplanation diag_explanations_[] = {
       "Fix: ensure the handler clause body produces the same type as the handled\n"
       "expression body.  Use (resume k value) to continue with a value of the\n"
       "correct type.\n",
+    },
+    /* MS2: Multi-shot continuation capture analysis */
+    { TUR_E0500_MULTISHOT_UNIQUE_CAPTURE,
+      "TUR-E0500: Multi-shot handler captures a non-copyable value\n"
+      "\n"
+      "A handler clause annotated with ^multishot captures a binding whose\n"
+      "CopyKind is CK_UNIQUE (move-only) or CK_LINEAR (exactly-once).  Because\n"
+      "^multishot continuations may be resumed any number of times via snapshots,\n"
+      "each resume would re-enter the handler body, accessing the same non-copyable\n"
+      "binding multiple times -- violating its ownership semantics.\n"
+      "\n"
+      "Example of the error:\n"
+      "  (defstruct MyData [x :int])\n"
+      "  (defeffect Ask [] :int)\n"
+      "  (let [d (MyData 42)]\n"
+      "    (handle (perform (Ask))\n"
+      "      (Ask [] ^multishot k)\n"
+      "        (resume k (.-x d))))  ; ERROR: d is move-only (TUR-E0500)\n"
+      "\n"
+      "Fix options:\n"
+      "  1. Change the captured type to be Copy (e.g. use primitive int, not a struct):\n"
+      "     (let [x 42]\n"
+      "       (handle (perform (Ask))\n"
+      "         (Ask [] ^multishot k) (resume k x)))  ; OK: int is CK_COPY\n"
+      "\n"
+      "  2. Use ^unsafe-multishot instead, which does not check captures\n"
+      "     (emits TUR-W0035):\n"
+      "     (Ask [] ^unsafe-multishot k) (resume k ...)\n"
+      "\n"
+      "  3. If the struct is `:copy`, the capture is allowed:\n"
+      "     (defstruct CopyData :copy [x :int])\n",
+    },
+    { TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER,
+      "TUR-E0501: ^multishot annotation outside a handler continuation\n"
+      "\n"
+      "The ^multishot annotation is only valid as the continuation-kind\n"
+      "annotation in a (handle ...) clause:\n"
+      "\n"
+      "  (handle body\n"
+      "    (Effect [params] ^multishot k) handler-body)\n"
+      "\n"
+      "Using ^multishot as a let-binding annotation, a function parameter\n"
+      "annotation, or in any other position is not supported.\n"
+      "\n"
+      "Example of the error:\n"
+      "  (let [^multishot x 5] ...)   ; ERROR: ^multishot not valid here\n"
+      "\n"
+      "Fix: remove the ^multishot annotation.  If you need multi-shot\n"
+      "continuation semantics, annotate the k parameter in a handler clause:\n"
+      "  (handle body\n"
+      "    (Effect [] ^multishot k) (resume k v))\n",
+    },
+    { TUR_E0502_MULTISHOT_RESUME_IN_ATOMIC,
+      "TUR-E0502: Cannot resume a ^multishot continuation inside atomically\n"
+      "\n"
+      "Resuming a multi-shot continuation inside an (atomically ...) block is\n"
+      "forbidden.  Effect-handler fiber resumption runs arbitrary code outside\n"
+      "STM semantics, which can observe or modify non-transactional state and\n"
+      "violate the atomicity guarantee.\n"
+      "\n"
+      "Example of the error:\n"
+      "  (atomically\n"
+      "    (handle (perform (Ask))\n"
+      "      (Ask [] ^multishot k)\n"
+      "        (resume k 10)))  ; ERROR: ^multishot resume inside atomically\n"
+      "\n"
+      "Fix: move the handle expression outside the atomically block, or use\n"
+      "a plain STM operation instead of a ^multishot effect handler.\n",
     },
 };
 
