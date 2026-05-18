@@ -12,7 +12,7 @@
 #endif
 
 #include <stdbool.h>
-#include "../diag.h"
+#include "diag.h"
 
 #ifndef __EMSCRIPTEN__
 #  if defined(__APPLE__)

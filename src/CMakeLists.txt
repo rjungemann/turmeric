@@ -24,57 +24,78 @@ set(TURI_EVAL_SOURCES
 )
 
 # ---------------------------------------------------------------------------
+# Include directories: src/ plus each subsystem subdirectory, so that the
+# existing bare `#include "foo.h"` directives keep resolving after the
+# source-layout split. turi/ is intentionally omitted -- turi sources resolve
+# their own headers via the compiler's current-directory rule, which also
+# avoids the async/fiber.h vs turi/fiber.h basename clash.
+# ---------------------------------------------------------------------------
+set(TUR_INCLUDE_DIRS
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/compiler
+    ${CMAKE_CURRENT_SOURCE_DIR}/passes
+    ${CMAKE_CURRENT_SOURCE_DIR}/runtime
+    ${CMAKE_CURRENT_SOURCE_DIR}/async
+    ${CMAKE_CURRENT_SOURCE_DIR}/web
+)
+
+# ---------------------------------------------------------------------------
 # Compiler sources (all except main.c and turi eval core)
 # ---------------------------------------------------------------------------
 set(TUR_CORE_SOURCES
-    arc.c
-    arena.c
-    atomic_queue.c
-    borrow_check.c
-    buf.c
-    builtins.c
-    cps.c
-    diag.c
-    effect_check.c
-    effect_lower.c
-    effect.c
-    elab.c
-    emit.c
-    expr.c
-    fiber.c
-    fmt.c
-    forms.c
-    gc.c
-    globals.c
-    hamt.c
-    interp.c
-    kind_check.c
-    pkg.c
-    tutorial.c
-    lifetime_elision.c
-    lifetimes.c
-    rc_elision.c
-    rc_free_queue.c
-    rc.c
-    io.c
-    reader.c
-    runtime.c
-    serial.c
-    scheduler.c
-    scheduler_common.c
-    stm.c
-    timer_wheel.c
-    symbols.c
-    typeclass.c
-    types.c
+    # compiler/ -- frontend pipeline: text -> IR
+    compiler/builtins.c
+    compiler/diag.c
+    compiler/elab.c
+    compiler/emit.c
+    compiler/expr.c
+    compiler/fmt.c
+    compiler/forms.c
+    compiler/pkg.c
+    compiler/reader.c
+    compiler/symbols.c
+    compiler/typeclass.c
+    compiler/types.c
+    # passes/ -- analysis and transformation passes
+    passes/borrow_check.c
+    passes/cps.c
+    passes/effect.c
+    passes/effect_check.c
+    passes/effect_lower.c
+    passes/kind_check.c
+    passes/lifetime_elision.c
+    passes/lifetimes.c
+    passes/rc_elision.c
+    # runtime/ -- memory, data structures, execution
+    runtime/arc.c
+    runtime/arena.c
+    runtime/buf.c
+    runtime/gc.c
+    runtime/globals.c
+    runtime/hamt.c
+    runtime/interp.c
+    runtime/rc.c
+    runtime/rc_free_queue.c
+    runtime/runtime.c
+    runtime/serial.c
+    runtime/stm.c
+    # async/ -- async I/O, fibers, scheduler
+    async/atomic_queue.c
+    async/fiber.c
+    async/io.c
+    async/scheduler.c
+    async/scheduler_common.c
+    async/timer_wheel.c
+    # web/ -- WASM glue and playground tutorial
+    web/tutorial.c
     ${TURI_EVAL_SOURCES}
 )
 
 # Architecture-specific assembly (added to both tur and libturi)
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
-    list(APPEND TUR_CORE_SOURCES fiber_ctx_arm64.S)
+    list(APPEND TUR_CORE_SOURCES async/fiber_ctx_arm64.S)
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
-    list(APPEND TUR_CORE_SOURCES fiber_ctx_x64.S)
+    list(APPEND TUR_CORE_SOURCES async/fiber_ctx_x64.S)
 else()
     message(FATAL_ERROR "Unsupported architecture '${CMAKE_SYSTEM_PROCESSOR}'; expected arm64/aarch64/x86_64/amd64")
 endif()
@@ -82,10 +103,10 @@ endif()
 # Platform-specific I/O backends
 if(UNIX AND NOT APPLE AND NOT FREEBSD AND NOT OPENBSD AND NOT NETBSD)
     # Linux - use epoll
-    list(APPEND TUR_CORE_SOURCES io_epoll.c)
+    list(APPEND TUR_CORE_SOURCES async/io_epoll.c)
 elseif(APPLE OR FREEBSD OR OPENBSD OR NETBSD)
     # BSD/macOS - use kqueue
-    list(APPEND TUR_CORE_SOURCES io_kqueue.c)
+    list(APPEND TUR_CORE_SOURCES async/io_kqueue.c)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -93,8 +114,9 @@ endif()
 # ---------------------------------------------------------------------------
 add_library(tur_core OBJECT ${TUR_CORE_SOURCES})
 
-# turi/ sources need src/ on the include path (they use #include "arena.h" etc.)
-target_include_directories(tur_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+# Subsystem subdirectories on the include path so bare #include directives
+# (e.g. #include "arena.h") resolve regardless of which subdir the file lives in.
+target_include_directories(tur_core PUBLIC ${TUR_INCLUDE_DIRS})
 
 # Common warning flags
 target_compile_options(tur_core PRIVATE
@@ -120,8 +142,8 @@ endif()
 # ---------------------------------------------------------------------------
 add_executable(tur main.c $<TARGET_OBJECTS:tur_core>)
 
-# tur also needs src/ on the include path for main.c -> turi/eval.h
-target_include_directories(tur PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+# tur also needs the subsystem subdirs on the include path for main.c.
+target_include_directories(tur PRIVATE ${TUR_INCLUDE_DIRS})
 
 # Common warning flags
 target_compile_options(tur PRIVATE
@@ -161,7 +183,7 @@ set_target_properties(tur PROPERTIES
 # ---------------------------------------------------------------------------
 add_library(libturi STATIC $<TARGET_OBJECTS:tur_core>)
 set_target_properties(libturi PROPERTIES OUTPUT_NAME "turi")
-target_include_directories(libturi PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(libturi PUBLIC ${TUR_INCLUDE_DIRS})
 target_link_options(libturi INTERFACE -pthread)
 if(HAVE_EDITLINE)
     target_link_libraries(libturi INTERFACE ${LIBEDIT_LIB})
@@ -200,7 +222,7 @@ install(FILES ${CMAKE_SOURCE_DIR}/man/man1/tur-repl.1
 # Phase S0: tur_eval_basic — C embedding smoke test
 # ---------------------------------------------------------------------------
 add_executable(tur_eval_basic ${CMAKE_SOURCE_DIR}/tests/turi/eval-basic.c)
-target_include_directories(tur_eval_basic PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(tur_eval_basic PRIVATE ${TUR_INCLUDE_DIRS})
 target_link_libraries(tur_eval_basic PRIVATE libturi)
 target_compile_options(tur_eval_basic PRIVATE
     -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
@@ -220,14 +242,14 @@ set_target_properties(tur_eval_basic PROPERTIES
 
 # WASM glue source
 set(WASM_GLUE_SOURCES
-    wasm_glue.c
-    tutorial.c
+    web/wasm_glue.c
+    web/tutorial.c
 )
 
 # Create a static library for the WASM glue + libturi
 add_library(libturi_wasm STATIC ${WASM_GLUE_SOURCES} $<TARGET_OBJECTS:tur_core>)
 set_target_properties(libturi_wasm PROPERTIES OUTPUT_NAME "turi_wasm")
-target_include_directories(libturi_wasm PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(libturi_wasm PRIVATE ${TUR_INCLUDE_DIRS})
 target_link_options(libturi_wasm INTERFACE -pthread)
 
 # Option to build the WASM module (requires Emscripten)
@@ -247,10 +269,10 @@ if(TUR_WASM)
         # Remove architecture-specific assembly and platform I/O backends —
         # emcc targets wasm32 and cannot assemble native code; I/O is stubbed.
         list(REMOVE_ITEM WASM_SOURCES
-            fiber_ctx_arm64.S
-            fiber_ctx_x64.S
-            io_epoll.c
-            io_kqueue.c
+            async/fiber_ctx_arm64.S
+            async/fiber_ctx_x64.S
+            async/io_epoll.c
+            async/io_kqueue.c
         )
         # Deduplicate (tutorial.c appears in both WASM_GLUE_SOURCES and TUR_CORE_SOURCES)
         list(REMOVE_DUPLICATES WASM_SOURCES)
@@ -261,6 +283,11 @@ if(TUR_WASM)
             COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/wasm
             COMMAND ${EMCC}
                 -I${CMAKE_CURRENT_SOURCE_DIR}
+                -I${CMAKE_CURRENT_SOURCE_DIR}/compiler
+                -I${CMAKE_CURRENT_SOURCE_DIR}/passes
+                -I${CMAKE_CURRENT_SOURCE_DIR}/runtime
+                -I${CMAKE_CURRENT_SOURCE_DIR}/async
+                -I${CMAKE_CURRENT_SOURCE_DIR}/web
                 ${WASM_SOURCES}
                 -o ${CMAKE_BINARY_DIR}/wasm/turmeric.js
                 -sMODULARIZE=1
