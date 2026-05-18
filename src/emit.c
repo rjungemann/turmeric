@@ -197,6 +197,49 @@ static bool expr_contains_return_or_throw(const Expr *e) {
     }
 }
 
+/* MS1: Check if a program contains any handle expression with a ^multishot case.
+ * Used to decide whether to emit the cloneable cont preamble. */
+static bool expr_has_multishot_handler(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_HANDLE: {
+            const HandleExpr *h = e->as.handle_.handle;
+            if (!h) return false;
+            for (uint8_t i = 0; i < h->n_cases; i++) {
+                if (h->cases[i].cont_kind == CK_MULTISHOT) return true;
+            }
+            if (expr_has_multishot_handler(h->body)) return true;
+            for (uint8_t i = 0; i < h->n_cases; i++) {
+                if (expr_has_multishot_handler(h->cases[i].body)) return true;
+            }
+            return false;
+        }
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++) {
+                if (expr_has_multishot_handler(e->as.let_.bindings[i].init)) return true;
+            }
+            return expr_has_multishot_handler(e->as.let_.body);
+        case EX_IF:
+            if (expr_has_multishot_handler(e->as.if_.cond)) return true;
+            if (expr_has_multishot_handler(e->as.if_.then_)) return true;
+            return e->as.if_.else_or_null && expr_has_multishot_handler(e->as.if_.else_or_null);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++) {
+                if (expr_has_multishot_handler(e->as.do_.items[i])) return true;
+            }
+            return false;
+        case EX_FN_DEF:
+            return e->as.fn_def_.fn && expr_has_multishot_handler(e->as.fn_def_.fn->body);
+        case EX_PROGRAM:
+            for (uint32_t i = 0; i < e->as.program.n; i++) {
+                if (expr_has_multishot_handler(e->as.program.items[i])) return true;
+            }
+            return false;
+        default:
+            return false;
+    }
+}
+
 static char *fresh_tmp(EmitCtx *ctx) {
     char *p = (char *)malloc(24);
     if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
@@ -3897,6 +3940,41 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * ---------------------------------------------------------------- */
             buf_printf(hbuf, "static int64_t %s(void *__ctx_void, int64_t __k_int, int64_t __resume_val);\n",
                        dispatch_fn_name);
+
+            /* MS1: Emit multishot wrapper helpers (env struct + cont_fn + clone_fn).
+             * These are emitted after the dispatch fn forward declaration so they can
+             * call dispatch_fn_name, and before the dispatch fn body that calls them. */
+            for (uint8_t i = 0; i < h->n_cases; i++) {
+                HandleCase *ms_c = &h->cases[i];
+                if (ms_c->cont_kind != CK_MULTISHOT) continue;
+                /* Env struct: captures the dispatch context and fiber pointer */
+                buf_printf(hbuf, "struct __ms_env_%d_%d { void *__ctx; int64_t __k_int; };\n",
+                           handle_id, (int)i);
+                /* Continuation function: calls dispatch_fn_name(ctx, k_int, v) */
+                buf_printf(hbuf,
+                    "static int64_t __ms_cont_fn_%d_%d(void *__env, int64_t __v) {\n",
+                    handle_id, (int)i);
+                buf_printf(hbuf,
+                    "    struct __ms_env_%d_%d *__e = (struct __ms_env_%d_%d *)__env;\n",
+                    handle_id, (int)i, handle_id, (int)i);
+                buf_printf(hbuf,
+                    "    return %s(__e->__ctx, __e->__k_int, __v);\n", dispatch_fn_name);
+                buf_puts(hbuf, "}\n");
+                /* Clone function: shallow copy of env (ctx and k_int are both plain pointers) */
+                buf_printf(hbuf,
+                    "static void *__ms_env_clone_%d_%d(const void *__env) {\n",
+                    handle_id, (int)i);
+                buf_printf(hbuf,
+                    "    struct __ms_env_%d_%d *__orig = (struct __ms_env_%d_%d *)__env;\n",
+                    handle_id, (int)i, handle_id, (int)i);
+                buf_printf(hbuf,
+                    "    struct __ms_env_%d_%d *__copy = (struct __ms_env_%d_%d *)malloc(sizeof(struct __ms_env_%d_%d));\n",
+                    handle_id, (int)i, handle_id, (int)i, handle_id, (int)i);
+                buf_puts(hbuf, "    if (__copy) *__copy = *__orig;\n");
+                buf_puts(hbuf, "    return __copy;\n");
+                buf_puts(hbuf, "}\n");
+            }
+
             buf_printf(hbuf, "static int64_t %s(void *__ctx_void, int64_t __k_int, int64_t __resume_val) {\n",
                        dispatch_fn_name);
             buf_puts(hbuf, "    TurEffectCaptureCtx *__dcap = (TurEffectCaptureCtx *)__ctx_void;\n");
@@ -3913,7 +3991,25 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 else
                     buf_printf(hbuf, "    } else if (strcmp(__dcap->eff_name, \"%s\") == 0) {\n",
                                c->effect_name->name);
-                if (has_captures)
+                if (c->cont_kind == CK_MULTISHOT) {
+                    /* MS1: wrap fiber k in a tur_cloneable_cont for snapshot-safe multi-shot. */
+                    buf_printf(hbuf,
+                        "        struct __ms_env_%d_%d *__ms_e = (struct __ms_env_%d_%d *)malloc(sizeof(struct __ms_env_%d_%d));\n",
+                        handle_id, (int)i, handle_id, (int)i, handle_id, (int)i);
+                    buf_puts(hbuf, "        if (!__ms_e) abort();\n");
+                    buf_printf(hbuf, "        __ms_e->__ctx = __ctx_void; __ms_e->__k_int = __k_int;\n");
+                    buf_printf(hbuf,
+                        "        int64_t __k_ms = (int64_t)(intptr_t)tur_cloneable_cont_alloc(__ms_cont_fn_%d_%d, __ms_e, __ms_env_clone_%d_%d, free);\n",
+                        handle_id, (int)i, handle_id, (int)i);
+                    if (has_captures)
+                        buf_printf(hbuf,
+                            "        return %s(__dcap->eff_args, __dcap->eff_n_args, __k_ms, __dcap->body_env);\n",
+                            hfn_names[i]);
+                    else
+                        buf_printf(hbuf,
+                            "        return %s(__dcap->eff_args, __dcap->eff_n_args, __k_ms, NULL);\n",
+                            hfn_names[i]);
+                } else if (has_captures)
                     buf_printf(hbuf,
                         "        return %s(__dcap->eff_args, __dcap->eff_n_args, __k_int, __dcap->body_env);\n",
                         hfn_names[i]);
@@ -4092,12 +4188,32 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * Phase 19D: k is a FiberBlock* cast to int64_t.
              * tur_effect_cont_resume(k, v) resumes the fiber via the dispatch fn.
              *
+             * MS1: CK_MULTISHOT k is a tur_cloneable_cont* (int64_t).
+             * tur_cloneable_cont_resume(tur_continuation_snapshot(k), v) clones before each resume.
+             *
              * For Phase 18 tur_cont* continuations (TY_CONT), use the old path.
              */
             if (e->as.resume_.resume) {
                 char *k_var = emit_value(ctx, body, e->as.resume_.resume->k);
                 char *v_var = emit_value(ctx, body, e->as.resume_.resume->value);
-                if (e->as.resume_.resume->k->type.kind == TY_INT) {
+                Type k_type = e->as.resume_.resume->k->type;
+                if (k_type.copy_kind == CK_MULTISHOT) {
+                    /* MS1: ^multishot k — snapshot before each resume so k stays usable. */
+                    char *tmp = fresh_tmp(ctx);
+                    Type vtype = e->as.resume_.resume->value->type;
+                    bool v_is_nil = (vtype.kind == TY_NIL || vtype.kind == TY_NEVER);
+                    indent_buf(body, ctx->indent);
+                    if (v_is_nil)
+                        buf_printf(body, "int64_t %s = tur_cloneable_cont_resume(tur_continuation_snapshot(%s), (int64_t)0);\n",
+                                   tmp, k_var);
+                    else
+                        buf_printf(body, "int64_t %s = tur_cloneable_cont_resume(tur_continuation_snapshot(%s), (int64_t)%s);\n",
+                                   tmp, k_var, v_var);
+                    free(k_var);
+                    free(v_var);
+                    return tmp;
+                }
+                if (k_type.kind == TY_INT) {
                     /* Phase 19D: fiber-based k.
                      * tur_effect_cont_resume always returns int64_t (the fiber's final result),
                      * regardless of the effect's return type. Always capture the return value
@@ -6330,11 +6446,10 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
 
-    /* Phase B2: Cloneable continuation runtime (inline in generated C).
-     * Only emitted when the program actually uses cloneable-shift/reset so
-     * that programs that don't use cloneable continuations don't get
-     * spurious extra declarations in their generated C output. */
-    if (cps_expr_contains_cloneable_shift(program)) {
+    /* Phase B2 / MS1: Cloneable continuation runtime (inline in generated C).
+     * Emitted when the program uses cloneable-shift/reset OR any ^multishot handler
+     * (which uses tur_cloneable_cont wrappers + tur_continuation_snapshot). */
+    if (cps_expr_contains_cloneable_shift(program) || expr_has_multishot_handler(program)) {
     buf_puts(out, "/* Phase B2: Cloneable continuation runtime */\n");
     buf_puts(out, "typedef struct tur_cloneable_cont tur_cloneable_cont;\n");
     buf_puts(out, "struct tur_cloneable_cont {\n");
@@ -6373,6 +6488,8 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    copy->env = cont->clone_env ? cont->clone_env(cont->env) : cont->env;\n");
     buf_puts(out, "    return (int64_t)(intptr_t)copy;\n");
     buf_puts(out, "}\n\n");
+    /* MS0: tur_continuation_snapshot — alias for clone; used by ^multishot resume */
+    buf_puts(out, "#define tur_continuation_snapshot tur_cloneable_cont_clone\n\n");
     /* User-facing: drop — fire drop_env, then free struct */
     buf_puts(out, "static void tur_cloneable_cont_drop(int64_t cont_int) {\n");
     buf_puts(out, "    tur_cloneable_cont *cont = (tur_cloneable_cont *)(intptr_t)cont_int;\n");

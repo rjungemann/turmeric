@@ -20,6 +20,7 @@ typedef enum CopyKind {
     CK_COPY,      /* Copy: bitwise duplication allowed */
     CK_UNSIZED,   /* Unsized: size unknown at compile time (e.g., slices) */
     CK_LINEAR,    /* Linear: must be used exactly once (LT0) */
+    CK_MULTISHOT, /* MS1: multi-shot continuation; may be resumed any number of times */
 } CopyKind;
 /* UT0: backward-compat alias — all former CK_MOVE sites now mean CK_UNIQUE */
 #define CK_MOVE CK_UNIQUE

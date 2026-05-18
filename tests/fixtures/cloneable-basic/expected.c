@@ -536,6 +536,8 @@ static int64_t tur_cloneable_cont_clone(int64_t cont_int) {
     return (int64_t)(intptr_t)copy;
 }
 
+#define tur_continuation_snapshot tur_cloneable_cont_clone
+
 static void tur_cloneable_cont_drop(int64_t cont_int) {
     tur_cloneable_cont *cont = (tur_cloneable_cont *)(intptr_t)cont_int;
     if (!cont) return;

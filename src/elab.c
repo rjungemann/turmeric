@@ -685,8 +685,9 @@ typedef struct Elab {
     const Symbol *sym_caret_affine;     /* ^affine -- affine value annotation */
     const Symbol *sym_caret_relevant;   /* ^relevant -- relevant value annotation */
     const Symbol *sym_caret_extends;    /* ^extends -- effect hierarchy parent annotation (ET4) */
-    /* LC0: multi-shot continuation annotation */
+    /* LC0: multi-shot continuation annotations */
     const Symbol *sym_caret_unsafe_multishot; /* ^unsafe-multishot -- multi-shot k (ownership not tracked) */
+    const Symbol *sym_caret_multishot;        /* ^multishot -- MS1: safe multi-shot via snapshot semantics */
     const Symbol *sym_map_new;    /* map-new - create new map */
     const Symbol *sym_assoc;      /* assoc - insert/update key-value */
     const Symbol *sym_dissoc;     /* dissoc - delete key */
@@ -1348,6 +1349,7 @@ static void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_caret_relevant  = intern_cstr(st, "^relevant");
     e->sym_caret_extends   = intern_cstr(st, "^extends");  /* ET4: effect hierarchy */
     e->sym_caret_unsafe_multishot = intern_cstr(st, "^unsafe-multishot"); /* LC0 */
+    e->sym_caret_multishot        = intern_cstr(st, "^multishot");        /* MS1 */
     e->sym_map_new = intern_cstr(st, "map-new");
     e->sym_assoc = intern_cstr(st, "assoc");
     e->sym_dissoc = intern_cstr(st, "dissoc");
@@ -5946,9 +5948,12 @@ static Expr *elab_handle(Elab *e, const Form *call) {
             } else if (ann_f->tag == F_SYM &&
                        ann_f->as.sym == e->sym_caret_unsafe_multishot) {
                 cases[i].cont_kind = CK_COPY;
+            } else if (ann_f->tag == F_SYM &&
+                       ann_f->as.sym == e->sym_caret_multishot) {
+                cases[i].cont_kind = CK_MULTISHOT;
             } else {
                 diag_emit(DIAG_ERROR, ann_f->span,
-                          "handle case: expected ^linear or ^unsafe-multishot "
+                          "handle case: expected ^linear, ^unsafe-multishot, or ^multishot "
                           "before continuation name, got '%s'",
                           ann_f->tag == F_SYM ? ann_f->as.sym->name : "<non-symbol>");
                 return NULL;
@@ -6019,6 +6024,10 @@ static Expr *elab_handle(Elab *e, const Form *call) {
                 TUR_W0035_UNSAFE_MULTISHOT_CONT,
                 "unsafe-multishot continuation '%s' -- ownership not tracked",
                 kb->name->name);
+            break;
+        case CK_MULTISHOT:
+            /* ^multishot k: MS1: safe multi-shot via snapshot semantics; no ownership warning. */
+            kb->type.copy_kind = CK_MULTISHOT;
             break;
         default: /* CK_UNIQUE */
             /* Default: affine (at most once).
@@ -6169,8 +6178,8 @@ static bool cont_check_double_use(Elab *e, const Form *k_form) {
     if (k_form->tag != F_SYM) return false;
     Binding *kb = scope_lookup(e->scope, k_form->as.sym);
     if (!kb || !kb->is_continuation) return false;
-    /* CK_COPY: multi-shot allowed -- no double-use restriction. */
-    if (kb->type.copy_kind == CK_COPY) return false;
+    /* CK_COPY / CK_MULTISHOT: multi-shot allowed -- no double-use restriction. */
+    if (kb->type.copy_kind == CK_COPY || kb->type.copy_kind == CK_MULTISHOT) return false;
 
     if (kb->type.copy_kind == CK_LINEAR) {
         if (kb->is_linear_consumed) {
@@ -6208,7 +6217,7 @@ static void cont_mark_consumed(Expr *k) {
         /* CK_UNIQUE: mark moved so elab_if's move-state machinery stays consistent. */
         binding_mark_moved(kb, k->span);
     }
-    /* CK_COPY: usage_state updated but no ownership enforcement. */
+    /* CK_COPY / CK_MULTISHOT: usage_state updated but no ownership enforcement. */
 }
 
 /* (resume k value)
