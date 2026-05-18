@@ -6004,9 +6004,13 @@ static Expr *elab_handle(Elab *e, const Form *call) {
         Binding *kb = binding_new(e, cases[i].k_name, TYPE_INT, false, false, k_f->span);
         switch (cases[i].cont_kind) {
         case CK_LINEAR:
-            /* ^linear k: exactly one resume/discontinue required. */
+            /* ^linear k: exactly one resume/discontinue required.
+             * LC2: is_affine + is_relevant wire k into the ST0-ST1 usage-tracking
+             * machinery so that usage_state is maintained via elab_var. */
             kb->is_linear = true;
             kb->type.copy_kind = CK_LINEAR;
+            kb->is_affine    = true;  /* no duplication */
+            kb->is_relevant  = true;  /* must be consumed */
             break;
         case CK_COPY:
             /* ^unsafe-multishot k: ownership not tracked; any number of resumes allowed. */
@@ -6017,8 +6021,10 @@ static Expr *elab_handle(Elab *e, const Form *call) {
                 kb->name->name);
             break;
         default: /* CK_UNIQUE */
-            /* Default: affine (at most once). CK_MOVE == CK_UNIQUE for continuations. */
+            /* Default: affine (at most once).
+             * LC2: is_affine wires k into the ST0-ST1 usage-tracking machinery. */
             kb->type.copy_kind = CK_MOVE;
+            kb->is_affine = true;  /* no duplication */
             break;
         }
         kb->is_continuation = true;
@@ -6029,8 +6035,9 @@ static Expr *elab_handle(Elab *e, const Form *call) {
         Form *body_f = call->as.list.items[3 + (i * 2)];
         cases[i].body = elab_form(e, body_f);
 
-        /* LC1: ^linear k must be consumed (resumed or discontinued) in the handler body.
-         * Check immediately after body elaboration, while the binding is still live. */
+        /* LC1/LC2: ^linear k must be consumed (resumed or discontinued) in the handler body.
+         * Check immediately after body elaboration while the binding is still in scope.
+         * Uses is_linear_consumed (flow-sensitive via elab_if linear-state machinery). */
         if (cases[i].cont_kind == CK_LINEAR && kb && !kb->is_linear_consumed) {
             diag_emit_with_code(DIAG_ERROR, k_f->span,
                 TUR_E0100_LINEAR_DROPPED,
@@ -6154,41 +6161,54 @@ static Expr *elab_compose_handlers(Elab *e, const Form *call) {
     return out;
 }
 
-/* LC1: Pre-check a continuation binding for double-use before elaborating k.
+/* LC1/LC2: Pre-check a continuation binding for double-use before elaborating k.
+ * Uses is_linear_consumed (CK_LINEAR) and is_moved (CK_UNIQUE) — both are
+ * snapshot/restored by elab_if, making them flow-sensitive across branches.
  * Emits the appropriate error and returns true if the use should be rejected. */
 static bool cont_check_double_use(Elab *e, const Form *k_form) {
     if (k_form->tag != F_SYM) return false;
     Binding *kb = scope_lookup(e->scope, k_form->as.sym);
     if (!kb || !kb->is_continuation) return false;
+    /* CK_COPY: multi-shot allowed -- no double-use restriction. */
+    if (kb->type.copy_kind == CK_COPY) return false;
 
-    if (kb->type.copy_kind == CK_LINEAR && kb->is_linear_consumed) {
-        diag_emit_with_code(DIAG_ERROR, k_form->span,
-            TUR_E0101_LINEAR_USE_AFTER_CONSUME,
-            "linear continuation '%s' has already been resumed or discontinued",
-            kb->name->name);
-        return true;
-    }
-    if (type_is_move(kb->type) && kb->is_moved) {
-        diag_emit_with_code(DIAG_ERROR, k_form->span,
-            TUR_E0201_UNIQUE_COPY,
-            "continuation '%s' has already been resumed or discontinued",
-            kb->name->name);
-        return true;
+    if (kb->type.copy_kind == CK_LINEAR) {
+        if (kb->is_linear_consumed) {
+            diag_emit_with_code(DIAG_ERROR, k_form->span,
+                TUR_E0101_LINEAR_USE_AFTER_CONSUME,
+                "linear continuation '%s' has already been resumed or discontinued",
+                kb->name->name);
+            return true;
+        }
+    } else {
+        /* CK_UNIQUE: is_moved is flow-sensitive (elab_if restores it between branches). */
+        if (kb->is_moved) {
+            diag_emit_with_code(DIAG_ERROR, k_form->span,
+                TUR_E0201_UNIQUE_COPY,
+                "continuation '%s' has already been resumed or discontinued",
+                kb->name->name);
+            return true;
+        }
     }
     return false;
 }
 
-/* LC1: Mark a continuation binding consumed after resume/discontinue. */
+/* LC1/LC2: Mark a continuation binding consumed after resume/discontinue.
+ * Sets is_linear_consumed (CK_LINEAR), is_moved (CK_UNIQUE) — both flow-sensitive.
+ * Also sets usage_state for ST0-ST1 interop. */
 static void cont_mark_consumed(Expr *k) {
     if (!k || k->kind != EX_VAR) return;
     Binding *kb = k->as.var.binding;
     if (!kb->is_continuation) return;
+    /* LC2: also set usage_state for ST0-ST1 informational tracking. */
+    kb->usage_state = USAGE_USED_ONCE;
     if (kb->type.copy_kind == CK_LINEAR) {
         kb->is_linear_consumed = true;
     } else if (type_is_move(kb->type)) {
+        /* CK_UNIQUE: mark moved so elab_if's move-state machinery stays consistent. */
         binding_mark_moved(kb, k->span);
     }
-    /* CK_COPY: no tracking — multi-shot resumes are allowed. */
+    /* CK_COPY: usage_state updated but no ownership enforcement. */
 }
 
 /* (resume k value)
@@ -10548,7 +10568,9 @@ static Expr *elab_form(Elab *e, Form *f) {
              * ^affine: may not be used more than once (TUR_E0150).
              * ^relevant: must be used at least once; duplicates are fine. */
             if (g_substructural_enabled) {
-                if (b->is_affine) {
+                if (b->is_affine && !b->is_continuation) {
+                    /* Continuation affine checks are handled by cont_check_double_use
+                     * (LC2) to emit continuation-specific error codes instead of E0150. */
                     if (b->usage_state >= USAGE_USED_ONCE) {
                         diag_emit_with_code(DIAG_ERROR, f->span,
                                             TUR_E0150_AFFINE_USED_TWICE,
@@ -10557,8 +10579,8 @@ static Expr *elab_form(Elab *e, Form *f) {
                         return NULL;
                     }
                     b->usage_state = USAGE_USED_ONCE;
-                } else if (b->is_relevant) {
-                    /* Increment usage; any count >= 1 satisfies the must-use requirement */
+                } else if (b->is_relevant && !b->is_continuation) {
+                    /* Continuation relevant checks are handled by the LC2 drop check. */
                     b->usage_state = (b->usage_state == USAGE_UNUSED) ? USAGE_USED_ONCE
                                                                        : USAGE_USED_MANY;
                 }
