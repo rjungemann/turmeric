@@ -1,0 +1,11 @@
+;; LC0/LC1: Default (CK_UNIQUE) continuation -- at most one resume allowed.
+;; Single resume is accepted; the handler returns the resumed value.
+
+(defeffect Ask [] :int)
+
+(defn main [] :int
+  (let [result
+    (handle (perform (Ask))
+      (Ask [] k) (resume k 42))]
+    (println result))
+  0)

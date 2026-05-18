@@ -24,7 +24,7 @@
 ;;; Since: Phase 16
 ;; Real-Logger implementation
 ;; Writes to stderr with timestamps
-(defn Real-Logger []
+(defn Real-Logger [] #{Unsafe} :int
   ```c
   /* Define the Logger struct */
   typedef struct Logger Logger;
@@ -93,7 +93,7 @@
 ;;;
 ;;; Since: Phase 16
 ;; Free a Real-Logger
-(defn Real-Logger-free [log]
+(defn Real-Logger-free [log] #{Unsafe} :nil
   ```c
   free(log);
   ```)
@@ -115,7 +115,7 @@
 ;;;
 ;;; Since: Phase 16
 ;; Simple-Logger implementation - no timestamps, just writes to stderr/stdout
-(defn Simple-Logger []
+(defn Simple-Logger [] #{Unsafe} :int
   ```c
   typedef struct Logger Logger;
   struct Logger {
@@ -165,7 +165,7 @@
 ;;;
 ;;; Since: Phase 16
 ;; Free a Simple-Logger
-(defn Simple-Logger-free [log]
+(defn Simple-Logger-free [log] #{Unsafe} :nil
   ```c
   free(log);
   ```)
@@ -186,7 +186,7 @@
 ;;;
 ;;; Since: Phase 16
 ;; Null-Logger implementation - discards all messages
-(defn Null-Logger []
+(defn Null-Logger [] #{Unsafe} :int
   ```c
   typedef struct Logger Logger;
   struct Logger {
@@ -215,7 +215,7 @@
 ;;;
 ;;; Since: Phase 16
 ;; Free a Null-Logger
-(defn Null-Logger-free [log]
+(defn Null-Logger-free [log] #{Unsafe} :nil
   ```c
   free(log);
   ```)
@@ -235,7 +235,7 @@
 ;;;
 ;;; Since: Phase 16
 ;; Log a debug message
-(defn log-debug-direct [msg]
+(defn log-debug-direct [msg] #{Unsafe} :nil
   ```c
   fprintf(stdout, "[DEBUG] %s\n", msg);
   fflush(stdout);
@@ -252,7 +252,7 @@
 ;;;
 ;;; Since: Phase 16
 ;; Log an info message
-(defn log-info-direct [msg]
+(defn log-info-direct [msg] #{Unsafe} :nil
   ```c
   fprintf(stdout, "[INFO] %s\n", msg);
   fflush(stdout);
@@ -269,7 +269,7 @@
 ;;;
 ;;; Since: Phase 16
 ;; Log a warning message
-(defn log-warn-direct [msg]
+(defn log-warn-direct [msg] #{Unsafe} :nil
   ```c
   fprintf(stderr, "[WARN] %s\n", msg);
   fflush(stderr);
@@ -286,7 +286,7 @@
 ;;;
 ;;; Since: Phase 16
 ;; Log an error message
-(defn log-error-direct [msg]
+(defn log-error-direct [msg] #{Unsafe} :nil
   ```c
   fprintf(stderr, "[ERROR] %s\n", msg);
   fflush(stderr);

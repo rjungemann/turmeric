@@ -1,0 +1,12 @@
+;; LC0: ^unsafe-multishot annotation allows resuming k multiple times.
+;; A W0035 warning is emitted at the handler site.
+
+(defeffect Choose [] :int)
+
+(defn main [] :int
+  (let [sum
+    (handle (+ (perform (Choose)) (perform (Choose)))
+      (Choose [] ^unsafe-multishot k)
+        (+ (resume k 10) (resume k 20)))]
+    (println sum))
+  0)

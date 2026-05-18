@@ -37,6 +37,8 @@ struct Effect {
     bool          is_private;           /* declared with ^private — only visible within defining module */
     bool          is_exported;          /* false only for ^private effects; true for all public ones */
     const Symbol *defining_module_name; /* module that declared this effect, or NULL for top-level */
+    /* ET4: effect hierarchy -- NULL if no parent */
+    struct Effect *parent;
 };
 
 /* Effect row represents a set of effects that a function may perform.
@@ -96,6 +98,9 @@ EffectRow *effect_row_union(Arena *a, EffectRow *left, EffectRow *right);
  * Uppercase names will resolve to concrete effects; lowercase to row variables.
  * Must be resolved by effect_row_resolve() before the inference pass runs. */
 EffectRow *effect_row_unresolved(Arena *a, const Symbol **sym_names, uint8_t n_sym_names);
+
+/* ET4: Returns true if `child` is the same as `parent_eff` or is a descendant via ^extends */
+bool effect_is_subeffect(const Effect *child, const Effect *parent_eff);
 
 /* Check if an effect row is empty */
 bool effect_row_is_empty(EffectRow *row);
@@ -190,6 +195,11 @@ EffectRow *effect_row_subst_lookup(const EffectRowSubst *subst,
  * different concrete effects conflict).  Arena `a` is used for allocations. */
 bool effect_row_unify(EffectRow *r1, EffectRow *r2,
                       EffectRowSubst *subst, Arena *a);
+
+/* Return true if `var_name` appears free in `row` (occurs check).
+ * Used by effect_row_unify to prevent binding a variable to a row that
+ * contains itself, which would produce an infinite effect row. */
+bool effect_row_occurs(const Symbol *var_name, EffectRow *row);
 
 /* Apply `subst` to `row`, replacing bound ERK_VAR nodes with their values.
  * Unbound variables are left as ERK_VAR.  Returns a new EffectRow on `a`. */

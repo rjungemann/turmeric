@@ -1,0 +1,12 @@
+;; ET1-F: Over-constrained declaration -- function declared #{} but actually
+;; performs Write, which is not a subset of the empty row. Emits TUR-E0009.
+
+(defeffect Write [s :cstr] :nil)
+
+(defn bad-fn [] #{} :nil
+  (perform (Write "oops")))
+
+(defn main [] :int
+  (handle
+    (do (bad-fn) 0)
+    (Write [s] k) (do (println s) (resume k nil))))

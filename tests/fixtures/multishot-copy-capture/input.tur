@@ -1,0 +1,13 @@
+;; MS2: ^multishot handler capturing a CK_COPY (int) binding is allowed.
+;; The offset variable is an int (copy-able) so capturing it is safe.
+
+(defeffect Ask [] :int)
+
+(defn main [] :int
+  (let [offset 100]
+    (let [r
+      (handle (perform (Ask))
+        (Ask [] ^multishot k)
+          (+ (resume k offset) (resume k offset)))]
+      (println r)))
+  0)

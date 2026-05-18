@@ -82,8 +82,17 @@
   } ChanBlock;
   ChanBlock *c = (ChanBlock *)ch;
   pthread_mutex_lock(&c->lock);
-  while (c->count == c->cap)
-      pthread_cond_wait(&c->not_full, &c->lock);
+  while (c->count == c->cap) {
+      if (tur_thread_cancel_requested()) {
+          pthread_mutex_unlock(&c->lock);
+          tur_thread_do_cancel();
+      }
+      struct timespec __ts;
+      clock_gettime(CLOCK_REALTIME, &__ts);
+      long __ns = __ts.tv_nsec + 5000000L;
+      __ts.tv_sec += __ns / 1000000000L; __ts.tv_nsec = __ns % 1000000000L;
+      pthread_cond_timedwait(&c->not_full, &c->lock, &__ts);
+  }
   c->buf[c->tail] = (int64_t)val;
   c->tail = (c->tail + 1) % c->cap;
   c->count++;
@@ -113,8 +122,17 @@
   } ChanBlock;
   ChanBlock *c = (ChanBlock *)ch;
   pthread_mutex_lock(&c->lock);
-  while (c->count == 0)
-      pthread_cond_wait(&c->not_empty, &c->lock);
+  while (c->count == 0) {
+      if (tur_thread_cancel_requested()) {
+          pthread_mutex_unlock(&c->lock);
+          tur_thread_do_cancel();
+      }
+      struct timespec __ts;
+      clock_gettime(CLOCK_REALTIME, &__ts);
+      long __ns = __ts.tv_nsec + 5000000L;
+      __ts.tv_sec += __ns / 1000000000L; __ts.tv_nsec = __ns % 1000000000L;
+      pthread_cond_timedwait(&c->not_empty, &c->lock, &__ts);
+  }
   int64_t v = c->buf[c->head];
   c->head = (c->head + 1) % c->cap;
   c->count--;
@@ -208,8 +226,17 @@
   } ChanBlock;
   ChanBlock *c = (ChanBlock *)ch;
   pthread_mutex_lock(&c->lock);
-  while (c->count == c->cap)
-      pthread_cond_wait(&c->not_full, &c->lock);
+  while (c->count == c->cap) {
+      if (tur_thread_cancel_requested()) {
+          pthread_mutex_unlock(&c->lock);
+          tur_thread_do_cancel();
+      }
+      struct timespec __ts;
+      clock_gettime(CLOCK_REALTIME, &__ts);
+      long __ns = __ts.tv_nsec + 5000000L;
+      __ts.tv_sec += __ns / 1000000000L; __ts.tv_nsec = __ns % 1000000000L;
+      pthread_cond_timedwait(&c->not_full, &c->lock, &__ts);
+  }
   c->buf[c->tail] = (int64_t)val;
   c->tail = (c->tail + 1) % c->cap;
   c->count++;
@@ -239,8 +266,17 @@
   } ChanBlock;
   ChanBlock *c = (ChanBlock *)ch;
   pthread_mutex_lock(&c->lock);
-  while (c->count == 0)
-      pthread_cond_wait(&c->not_empty, &c->lock);
+  while (c->count == 0) {
+      if (tur_thread_cancel_requested()) {
+          pthread_mutex_unlock(&c->lock);
+          tur_thread_do_cancel();
+      }
+      struct timespec __ts;
+      clock_gettime(CLOCK_REALTIME, &__ts);
+      long __ns = __ts.tv_nsec + 5000000L;
+      __ts.tv_sec += __ns / 1000000000L; __ts.tv_nsec = __ns % 1000000000L;
+      pthread_cond_timedwait(&c->not_empty, &c->lock, &__ts);
+  }
   int64_t v = c->buf[c->head];
   c->head = (c->head + 1) % c->cap;
   c->count--;

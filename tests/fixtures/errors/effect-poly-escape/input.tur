@@ -1,0 +1,16 @@
+;; ET2-F5: Row variable escape via self-referential unification.
+;; Passing a function with row #{e} as itself plus an extra effect
+;; would require binding e := #{Write e}, an infinite row (TUR-E0254).
+
+(defeffect Write [s :cstr] :nil)
+
+(defn relay [f :(fn [] #{e} :nil)] #{e} :nil
+  (f))
+
+(defn write-relay [] #{Write e} :nil
+  (perform (Write "escape")))
+
+(defn main [] :int
+  (handle
+    (do (relay write-relay) 0)
+    (Write [s] k) (resume k nil)))

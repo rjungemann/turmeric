@@ -1,0 +1,25 @@
+;; ER2: two higher-order functions with different row variables composed;
+;; the outer caller's inferred row is the union of both.
+
+(defeffect Ask [] :int)
+(defeffect Tell [s :cstr] :nil)
+
+;;; run-asker -- run a zero-arg callback with row variable e.
+(defn run-asker [f :(fn [] #{e} :int)] #{e} :int
+  (f))
+
+;;; run-teller -- run a zero-arg callback with row variable e.
+(defn run-teller [g :(fn [] #{e} :nil)] #{e} :nil
+  (g))
+
+(defn main [] :int
+  (let [result
+    (handle
+      (handle
+        (do
+          (run-teller (fn [] (perform (Tell "composed"))))
+          (run-asker (fn [] (perform (Ask)))))
+        (Tell [s] k) (do (println s) (resume k nil)))
+      (Ask [] k) (resume k 42))]
+    (println result)
+    0))

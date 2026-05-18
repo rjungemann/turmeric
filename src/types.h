@@ -20,6 +20,7 @@ typedef enum CopyKind {
     CK_COPY,      /* Copy: bitwise duplication allowed */
     CK_UNSIZED,   /* Unsized: size unknown at compile time (e.g., slices) */
     CK_LINEAR,    /* Linear: must be used exactly once (LT0) */
+    CK_MULTISHOT, /* MS1: multi-shot continuation; may be resumed any number of times */
 } CopyKind;
 /* UT0: backward-compat alias — all former CK_MOVE sites now mean CK_UNIQUE */
 #define CK_MOVE CK_UNIQUE
@@ -45,6 +46,7 @@ typedef enum Kind {
     KIND_STAR   = 0,  /* * — a concrete type, e.g. int, bool, vec<int> */
     KIND_ARROW  = 1,  /* * -> * — a unary type constructor, e.g. vec, option */
     KIND_ARROW2 = 2,  /* * -> * -> * — a binary type constructor, e.g. result, either */
+    KIND_ROW    = 3,  /* Row — an effect row variable, e.g. e in (forall [e] ...) */
 } Kind;
 /* Phase 13: Lifetime annotations */
 /* Lifetimes are purely an elaborator construct - no runtime representation */
@@ -114,6 +116,8 @@ typedef enum TypeKind {
     TY_INTERSECTION, /* (A & B & C) — anonymous closed intersection type */
     /* IT4: Top type (gradual typing) — available with -Xunion-types or -Xintersection-types */
     TY_ANY,          /* any — top type; every type is a subtype of any */
+    /* ET3: Handler type — a handler for a named algebraic effect */
+    TY_HANDLER,      /* handler<Effect, ValueType, ResultType> */
 } TypeKind;
 
 /* Phase G0: Constructor field descriptor for ADTs */
@@ -247,6 +251,9 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
         /* IT4: any — top type is copy (it's an opaque container) */
         case TY_ANY:
             return CK_COPY;
+        /* ET3: handler values are copyable (they are function-pointer structs) */
+        case TY_HANDLER:
+            return CK_COPY;
         case TY_UNKNOWN:
         default:
             return CK_MOVE;
@@ -360,6 +367,13 @@ typedef struct Type {
         struct {
             const char *name;  /* interned type var name (e.g. "a"), or NULL for anonymous escaped skolem */
         } tyvar_;
+        /* ET3: Handler type — handler<Effect, ValueType, ResultType> */
+        struct {
+            const char *effect_name;  /* interned effect name (e.g. "Write") */
+            TypeKind    value_kind;   /* the type of the value passed to the effect */
+            TypeKind    result_kind;  /* the result type of the handle expression */
+            CopyKind    cont_kind;    /* LC0: ownership discipline for the continuation k */
+        } handler_;
     } as;
 } Type;
 
@@ -698,7 +712,21 @@ static inline Type type_tyvar_named(const char *name) {
     return t;
 }
 
+/* ET3: Handler type constructor */
+static inline Type type_make_handler(const char *effect_name, TypeKind value_kind, TypeKind result_kind) {
+    Type t = {0};
+    t.kind = TY_HANDLER;
+    t.copy_kind = CK_COPY;
+    t.hkt_kind = KIND_STAR;
+    t.as.handler_.effect_name = effect_name;
+    t.as.handler_.value_kind = value_kind;
+    t.as.handler_.result_kind = result_kind;
+    return t;
+}
+
 int          type_eq(Type a, Type b);
+/* ET3-D: Subtype check. Returns true if sub is a subtype of super_. */
+bool         type_is_subtype(Type sub, Type super_);
 /* LT2: Check arg_linear compatibility between two function types.
  * Returns 1 if compatible (all arg_linear flags match), 0 on mismatch.
  * Non-function types always return 1. */

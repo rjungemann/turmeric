@@ -88,6 +88,9 @@ struct Binding {
     /* Phase HRT4: for let-bound aliases of global functions, tracks the original
      * function binding so poly_arg_fn_binding can find the callable C name. */
     struct Binding *source_binding;
+    /* ER6: true if this binding was introduced by an (extern-c ...) declaration.
+     * Used by effect_check to infer #{Unsafe} for calls to extern-c functions. */
+    bool          is_extern_c;
 };
 
 typedef enum ExprKind {
@@ -278,6 +281,8 @@ typedef struct EffectDef {
     /* Phase P19-6: Module visibility */
     bool          is_private;           /* declared with ^private */
     const Symbol *defining_module_name; /* module that declared this effect, or NULL */
+    /* ET4: effect hierarchy -- NULL if no ^extends */
+    const Symbol *parent_name;          /* name of parent effect (for ^extends), or NULL */
 } EffectDef;
 
 /* Perform expression: (perform (EffectName arg1 arg2 ...)) */
@@ -295,6 +300,12 @@ typedef struct HandleCase {
     uint8_t n_params;           /* Number of parameters */
     const Symbol *k_name;        /* Name of the continuation parameter */
     struct Binding *k_binding;   /* Resolved binding for k (set by elab) */
+    /* LC0: ownership discipline for k.
+     * CK_UNIQUE (default): at most one resume/discontinue (affine).
+     * CK_LINEAR (^linear k): exactly one resume/discontinue required.
+     * CK_COPY (^unsafe-multishot k): no ownership tracking; multi-shot allowed.
+     * CK_MULTISHOT (^multishot k): MS1: safe multi-shot via snapshot semantics. */
+    CopyKind cont_kind;
     Expr *body;                 /* Handler body */
 } HandleCase;
 

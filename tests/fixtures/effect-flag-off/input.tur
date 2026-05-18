@@ -1,0 +1,6 @@
+;; ET4: Basic effects work without -Xeffect-types flag.
+(defeffect Log [msg :cstr] :nil)
+(defn main [] :int
+  (handle
+    (do (perform (Log "works")) 0)
+    (Log [msg] k) (do (println msg) (resume k nil))))

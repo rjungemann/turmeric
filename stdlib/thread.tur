@@ -1,8 +1,14 @@
-;; stdlib/thread.tur — POSIX thread spawn/join/detach (Phase T19-C)
+;; stdlib/thread.tur -- POSIX thread spawn/join/detach (Phase T19-C)
 ;;
 ;; Wraps pthread_create / pthread_join / pthread_detach.
-;; A thread handle is a :ptr<void> pointing to a heap-allocated pthread_t.
+;; A thread handle is a :ptr<void> pointing to a heap-allocated TurThreadHandle.
 ;; The handle is consumed (freed) by thread-join or thread-detach.
+;;
+;; TC0-TC2: Cooperative cancellation API:
+;;   cancel-thread    [t :ptr<void>]   -- request cancellation of t
+;;   cancelled?       []               -- true if the calling thread has been cancelled
+;;   yield-point      []               -- macro: panic if cancelled (cooperative cancel point)
+;;   with-cancel-guard [cleanup body]  -- run body; on cancel, run cleanup and return nil
 ;;
 ;; API:
 ;;   thread-spawn-fn  [fn-ptr :ptr<void> arg :ptr<void>]  -- ptr<void>
@@ -27,16 +33,28 @@
 ;;;   (let [t (thread-spawn-fn my-fn arg)] (thread-join t))  ; => ptr<void>
 ;;;
 ;;; Since: Phase T19-C
-(defn thread-spawn-fn [fn-ptr :ptr<void> arg :ptr<void>] :ptr<void>
+(defn thread-spawn-fn [fn-ptr :ptr<void> arg :ptr<void>] #{Unsafe} :ptr<void>
   ```c
-  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
-  if (!t) { fprintf(stderr, "thread-spawn-fn: out of memory\n"); abort(); }
-  int rc = pthread_create(t, NULL, (void *(*)(void *))fn_ptr, (void *)arg);
+  TurThreadState *state = (TurThreadState *)malloc(sizeof(TurThreadState));
+  if (!state) { fprintf(stderr, "thread-spawn-fn: out of memory\n"); abort(); }
+  pthread_mutex_init(&state->cancel_mutex, NULL);
+  pthread_cond_init(&state->cancel_cond, NULL);
+  state->cancel_requested = 0;
+  TurThreadSpawnArg *spawn_arg = (TurThreadSpawnArg *)malloc(sizeof(TurThreadSpawnArg));
+  if (!spawn_arg) { free(state); fprintf(stderr, "thread-spawn-fn: out of memory\n"); abort(); }
+  spawn_arg->user_fn  = (void *(*)(void *))fn_ptr;
+  spawn_arg->user_arg = (void *)arg;
+  spawn_arg->state    = state;
+  TurThreadHandle *h = (TurThreadHandle *)malloc(sizeof(TurThreadHandle));
+  if (!h) { free(spawn_arg); free(state); fprintf(stderr, "thread-spawn-fn: out of memory\n"); abort(); }
+  h->state = state;
+  int rc = pthread_create(&h->tid, NULL, tur_thread_trampoline, spawn_arg);
   if (rc != 0) {
+      free(h); free(spawn_arg); free(state);
       fprintf(stderr, "thread-spawn-fn: pthread_create failed (%d)\n", rc);
       abort();
   }
-  return (void *)t;
+  return (void *)h;
   ```)
 
 ;;; thread-join -- wait for a thread to finish and free its handle.
@@ -48,10 +66,14 @@
 ;;;   (thread-join t)
 ;;;
 ;;; Since: Phase T19-C
-(defn thread-join [t :ptr<void>] :nil
+(defn thread-join [t :ptr<void>] #{Unsafe} :nil
   ```c
-  pthread_join(*(pthread_t *)t, NULL);
-  free(t);
+  TurThreadHandle *h = (TurThreadHandle *)t;
+  pthread_join(h->tid, NULL);
+  pthread_mutex_destroy(&h->state->cancel_mutex);
+  pthread_cond_destroy(&h->state->cancel_cond);
+  free(h->state);
+  free(h);
   ```)
 
 ;;; thread-detach -- detach a thread (it cleans up itself on exit) and free the handle.
@@ -63,10 +85,14 @@
 ;;;   (thread-detach t)
 ;;;
 ;;; Since: Phase T19-C
-(defn thread-detach [t :ptr<void>] :nil
+(defn thread-detach [t :ptr<void>] #{Unsafe} :nil
   ```c
-  pthread_detach(*(pthread_t *)t);
-  free(t);
+  TurThreadHandle *h = (TurThreadHandle *)t;
+  pthread_detach(h->tid);
+  /* state ownership: the thread still holds tur_current_thread_state pointing to
+   * state; free only the handle struct. state is freed when the thread exits or
+   * leaked (detached threads are fire-and-forget). */
+  free(h);
   ```)
 
 ;;; thread-id -- return an integer identifier for the calling OS thread.
@@ -78,7 +104,121 @@
 ;;;   (thread-id)  ; => int
 ;;;
 ;;; Since: Phase T19-C
-(defn thread-id [] :int
+(defn thread-id [] #{Unsafe} :int
   ```c
   return (int64_t)(uintptr_t)pthread_self();
   ```)
+
+;; ---- TC0-TC2: Cooperative thread cancellation ----
+
+;;; cancel-thread -- request cooperative cancellation of a thread handle.
+;;;
+;;; Parameters:
+;;;   t -- a thread handle returned by thread-spawn-fn
+;;;
+;;; Returns:
+;;;   :void
+;;;
+;;; Example:
+;;;   (let [t (thread-spawn-fn my-fn arg)]
+;;;     (cancel-thread t)
+;;;     (thread-join t))
+;;;
+;;; Since: Phase TC0
+(defn cancel-thread [t :ptr<void>] #{Unsafe} :void
+  ```c
+  TurThreadHandle *h = (TurThreadHandle *)t;
+  __atomic_store_n(&h->state->cancel_requested, 1, __ATOMIC_RELEASE);
+  pthread_mutex_lock(&h->state->cancel_mutex);
+  pthread_cond_broadcast(&h->state->cancel_cond);
+  pthread_mutex_unlock(&h->state->cancel_mutex);
+  ```)
+
+;;; cancelled? -- return true if the current thread has been cancelled.
+;;;
+;;; Returns:
+;;;   bool -- true if a cancellation has been requested for this thread
+;;;
+;;; Example:
+;;;   (when (cancelled?) (cleanup-and-return))
+;;;
+;;; Since: Phase TC0
+(defn cancelled? [] #{Unsafe} :bool
+  ```c
+  return tur_thread_cancel_requested() != 0;
+  ```)
+
+;;; with-cancel-guard -- run a body closure; on cancellation, run cleanup and return nil.
+;;;
+;;; When the body or any blocking operation inside it (chan-recv, chan-send, select)
+;;; is cancelled, the cleanup closure runs before control returns.
+;;; Without a guard, cancellation inside a blocking op panics immediately.
+;;;
+;;; Parameters:
+;;;   cleanup -- zero-argument closure: (fn [] ...) to run on cancellation
+;;;   body    -- zero-argument closure: (fn [] ...) to run normally
+;;;
+;;; Returns:
+;;;   :nil (always; body result is discarded)
+;;;
+;;; Example:
+;;;   (with-cancel-guard
+;;;     (fn [] (release resource))
+;;;     (fn []
+;;;       (let [v (chan-recv ch)]
+;;;         (process v))))
+;;;
+;;; Since: Phase TC1
+(defn with-cancel-guard [cleanup :ptr<void> body :ptr<void>] #{Unsafe} :nil
+  ```c
+  /* Save previous cancel jmpbuf state (supports nested guards) */
+  int prev_valid = tur_cancel_jmpbuf_valid;
+  jmp_buf prev_buf;
+  if (prev_valid) memcpy(&prev_buf, &tur_cancel_jmpbuf, sizeof(jmp_buf));
+  tur_cancel_jmpbuf_valid = 1;
+  /* Fat-closure calling convention: struct { int64_t __fn; ... }
+   * Call as thunk(closure_ptr, 0) where __fn is the function pointer. */
+  typedef struct { int64_t __fn; } GenericClosure;
+  GenericClosure *body_clos    = (GenericClosure *)(intptr_t)body;
+  GenericClosure *cleanup_clos = (GenericClosure *)(intptr_t)cleanup;
+  int64_t (*body_thunk)(void *, int64_t)    = (int64_t (*)(void *, int64_t))(intptr_t)body_clos->__fn;
+  int64_t (*cleanup_thunk)(void *, int64_t) = (int64_t (*)(void *, int64_t))(intptr_t)cleanup_clos->__fn;
+  if (setjmp(tur_cancel_jmpbuf) == 0) {
+      body_thunk(body_clos, 0);
+      tur_cancel_jmpbuf_valid = prev_valid;
+      if (prev_valid) memcpy(&tur_cancel_jmpbuf, &prev_buf, sizeof(jmp_buf));
+  } else {
+      tur_cancel_jmpbuf_valid = prev_valid;
+      if (prev_valid) memcpy(&tur_cancel_jmpbuf, &prev_buf, sizeof(jmp_buf));
+      cleanup_thunk(cleanup_clos, 0);
+  }
+  ```)
+
+;;; __yield-point-impl -- internal: check cancel and exit if cancelled.
+(defn __yield-point-impl [] #{Unsafe} :void
+  ```c
+  if (tur_thread_cancel_requested()) {
+      tur_thread_do_cancel();
+  }
+  ```)
+
+;;; yield-point -- check for a pending cancellation and exit if one is set.
+;;;
+;;; Call this inside any CPU-bound loop that must respond to cancel-thread.
+;;; Blocking operations (chan-recv, chan-send, select) check automatically;
+;;; pure computation loops must call yield-point explicitly.
+;;;
+;;; Returns:
+;;;   :void (never returns if the thread has been cancelled)
+;;;
+;;; Example:
+;;;   (defn crunch [n] :int
+;;;     (let [i 0]
+;;;       (while (< i n)
+;;;         (yield-point)
+;;;         (do-work i)
+;;;         (set! i (+ i 1)))))
+;;;
+;;; Since: Phase TC2
+(defmacro yield-point []
+  (list '__yield-point-impl))

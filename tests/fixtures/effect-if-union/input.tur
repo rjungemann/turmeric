@@ -1,0 +1,18 @@
+;; ET1-F: if with mixed-effect branches accumulates the union row.
+;; One branch performs Write, the other performs Log.
+;; The enclosing function's inferred row is #{Write Log}.
+
+(defeffect Write [s :cstr] :nil)
+(defeffect Log [msg :cstr] :nil)
+
+(defn either [flag :int] #{Write Log} :nil
+  (if (> flag 0)
+    (perform (Write "from write branch"))
+    (perform (Log "from log branch"))))
+
+(defn main [] :int
+  (handle
+    (handle
+      (do (either 1) (either 0) 0)
+      (Write [s] k) (do (println s) (resume k nil)))
+    (Log [msg] k) (do (println msg) (resume k nil))))

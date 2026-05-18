@@ -197,6 +197,49 @@ static bool expr_contains_return_or_throw(const Expr *e) {
     }
 }
 
+/* MS1: Check if a program contains any handle expression with a ^multishot case.
+ * Used to decide whether to emit the cloneable cont preamble. */
+static bool expr_has_multishot_handler(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_HANDLE: {
+            const HandleExpr *h = e->as.handle_.handle;
+            if (!h) return false;
+            for (uint8_t i = 0; i < h->n_cases; i++) {
+                if (h->cases[i].cont_kind == CK_MULTISHOT) return true;
+            }
+            if (expr_has_multishot_handler(h->body)) return true;
+            for (uint8_t i = 0; i < h->n_cases; i++) {
+                if (expr_has_multishot_handler(h->cases[i].body)) return true;
+            }
+            return false;
+        }
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++) {
+                if (expr_has_multishot_handler(e->as.let_.bindings[i].init)) return true;
+            }
+            return expr_has_multishot_handler(e->as.let_.body);
+        case EX_IF:
+            if (expr_has_multishot_handler(e->as.if_.cond)) return true;
+            if (expr_has_multishot_handler(e->as.if_.then_)) return true;
+            return e->as.if_.else_or_null && expr_has_multishot_handler(e->as.if_.else_or_null);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++) {
+                if (expr_has_multishot_handler(e->as.do_.items[i])) return true;
+            }
+            return false;
+        case EX_FN_DEF:
+            return e->as.fn_def_.fn && expr_has_multishot_handler(e->as.fn_def_.fn->body);
+        case EX_PROGRAM:
+            for (uint32_t i = 0; i < e->as.program.n; i++) {
+                if (expr_has_multishot_handler(e->as.program.items[i])) return true;
+            }
+            return false;
+        default:
+            return false;
+    }
+}
+
 static char *fresh_tmp(EmitCtx *ctx) {
     char *p = (char *)malloc(24);
     if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
@@ -3685,7 +3728,10 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 for (uint32_t ci = 0; ci < n_all_caps; ci++) {
                     Binding *b = all_caps[ci];
                     char *raw = raw_name_for_binding(b);
-                    buf_printf(hbuf, "    %s %s;\n", type_c_name(b->type), raw);
+                    /* ET2: poly fn params (TY_FORALL) must be stored as tur_poly_fn_t */
+                    const char *field_ctype = b->is_poly_fn ? "tur_poly_fn_t"
+                                                            : type_c_name(b->type);
+                    buf_printf(hbuf, "    %s %s;\n", field_ctype, raw);
                     free(raw);
                 }
                 buf_printf(hbuf, "};\n\n");
@@ -3894,6 +3940,41 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * ---------------------------------------------------------------- */
             buf_printf(hbuf, "static int64_t %s(void *__ctx_void, int64_t __k_int, int64_t __resume_val);\n",
                        dispatch_fn_name);
+
+            /* MS1: Emit multishot wrapper helpers (env struct + cont_fn + clone_fn).
+             * These are emitted after the dispatch fn forward declaration so they can
+             * call dispatch_fn_name, and before the dispatch fn body that calls them. */
+            for (uint8_t i = 0; i < h->n_cases; i++) {
+                HandleCase *ms_c = &h->cases[i];
+                if (ms_c->cont_kind != CK_MULTISHOT) continue;
+                /* Env struct: captures the dispatch context and fiber pointer */
+                buf_printf(hbuf, "struct __ms_env_%d_%d { void *__ctx; int64_t __k_int; };\n",
+                           handle_id, (int)i);
+                /* Continuation function: calls dispatch_fn_name(ctx, k_int, v) */
+                buf_printf(hbuf,
+                    "static int64_t __ms_cont_fn_%d_%d(void *__env, int64_t __v) {\n",
+                    handle_id, (int)i);
+                buf_printf(hbuf,
+                    "    struct __ms_env_%d_%d *__e = (struct __ms_env_%d_%d *)__env;\n",
+                    handle_id, (int)i, handle_id, (int)i);
+                buf_printf(hbuf,
+                    "    return %s(__e->__ctx, __e->__k_int, __v);\n", dispatch_fn_name);
+                buf_puts(hbuf, "}\n");
+                /* Clone function: shallow copy of env (ctx and k_int are both plain pointers) */
+                buf_printf(hbuf,
+                    "static void *__ms_env_clone_%d_%d(const void *__env) {\n",
+                    handle_id, (int)i);
+                buf_printf(hbuf,
+                    "    struct __ms_env_%d_%d *__orig = (struct __ms_env_%d_%d *)__env;\n",
+                    handle_id, (int)i, handle_id, (int)i);
+                buf_printf(hbuf,
+                    "    struct __ms_env_%d_%d *__copy = (struct __ms_env_%d_%d *)malloc(sizeof(struct __ms_env_%d_%d));\n",
+                    handle_id, (int)i, handle_id, (int)i, handle_id, (int)i);
+                buf_puts(hbuf, "    if (__copy) *__copy = *__orig;\n");
+                buf_puts(hbuf, "    return __copy;\n");
+                buf_puts(hbuf, "}\n");
+            }
+
             buf_printf(hbuf, "static int64_t %s(void *__ctx_void, int64_t __k_int, int64_t __resume_val) {\n",
                        dispatch_fn_name);
             buf_puts(hbuf, "    TurEffectCaptureCtx *__dcap = (TurEffectCaptureCtx *)__ctx_void;\n");
@@ -3910,7 +3991,25 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 else
                     buf_printf(hbuf, "    } else if (strcmp(__dcap->eff_name, \"%s\") == 0) {\n",
                                c->effect_name->name);
-                if (has_captures)
+                if (c->cont_kind == CK_MULTISHOT) {
+                    /* MS1: wrap fiber k in a tur_cloneable_cont for snapshot-safe multi-shot. */
+                    buf_printf(hbuf,
+                        "        struct __ms_env_%d_%d *__ms_e = (struct __ms_env_%d_%d *)malloc(sizeof(struct __ms_env_%d_%d));\n",
+                        handle_id, (int)i, handle_id, (int)i, handle_id, (int)i);
+                    buf_puts(hbuf, "        if (!__ms_e) abort();\n");
+                    buf_printf(hbuf, "        __ms_e->__ctx = __ctx_void; __ms_e->__k_int = __k_int;\n");
+                    buf_printf(hbuf,
+                        "        int64_t __k_ms = (int64_t)(intptr_t)tur_cloneable_cont_alloc(__ms_cont_fn_%d_%d, __ms_e, __ms_env_clone_%d_%d, free);\n",
+                        handle_id, (int)i, handle_id, (int)i);
+                    if (has_captures)
+                        buf_printf(hbuf,
+                            "        return %s(__dcap->eff_args, __dcap->eff_n_args, __k_ms, __dcap->body_env);\n",
+                            hfn_names[i]);
+                    else
+                        buf_printf(hbuf,
+                            "        return %s(__dcap->eff_args, __dcap->eff_n_args, __k_ms, NULL);\n",
+                            hfn_names[i]);
+                } else if (has_captures)
                     buf_printf(hbuf,
                         "        return %s(__dcap->eff_args, __dcap->eff_n_args, __k_int, __dcap->body_env);\n",
                         hfn_names[i]);
@@ -4089,12 +4188,32 @@ static char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * Phase 19D: k is a FiberBlock* cast to int64_t.
              * tur_effect_cont_resume(k, v) resumes the fiber via the dispatch fn.
              *
+             * MS1: CK_MULTISHOT k is a tur_cloneable_cont* (int64_t).
+             * tur_cloneable_cont_resume(tur_continuation_snapshot(k), v) clones before each resume.
+             *
              * For Phase 18 tur_cont* continuations (TY_CONT), use the old path.
              */
             if (e->as.resume_.resume) {
                 char *k_var = emit_value(ctx, body, e->as.resume_.resume->k);
                 char *v_var = emit_value(ctx, body, e->as.resume_.resume->value);
-                if (e->as.resume_.resume->k->type.kind == TY_INT) {
+                Type k_type = e->as.resume_.resume->k->type;
+                if (k_type.copy_kind == CK_MULTISHOT) {
+                    /* MS1: ^multishot k — snapshot before each resume so k stays usable. */
+                    char *tmp = fresh_tmp(ctx);
+                    Type vtype = e->as.resume_.resume->value->type;
+                    bool v_is_nil = (vtype.kind == TY_NIL || vtype.kind == TY_NEVER);
+                    indent_buf(body, ctx->indent);
+                    if (v_is_nil)
+                        buf_printf(body, "int64_t %s = tur_cloneable_cont_resume(tur_continuation_snapshot(%s), (int64_t)0);\n",
+                                   tmp, k_var);
+                    else
+                        buf_printf(body, "int64_t %s = tur_cloneable_cont_resume(tur_continuation_snapshot(%s), (int64_t)%s);\n",
+                                   tmp, k_var, v_var);
+                    free(k_var);
+                    free(v_var);
+                    return tmp;
+                }
+                if (k_type.kind == TY_INT) {
                     /* Phase 19D: fiber-based k.
                      * tur_effect_cont_resume always returns int64_t (the fiber's final result),
                      * regardless of the effect's return type. Always capture the return value
@@ -5914,6 +6033,11 @@ int emit_program(Buf *out, const Expr *program) {
      * Used for (forall [a] (-> a a))-style rank-2 parameters. */
     buf_puts(out, "/* Phase HRT1: rank-2 polymorphic function type */\n");
     buf_puts(out, "typedef struct { void *env; int64_t (*fn)(void *, int64_t); } tur_poly_fn_t;\n");
+    /* ET3: handler runtime type.
+     * tur_handler_t is a handler value: an env pointer plus a dispatch function.
+     * The dispatch function receives: env, n_args, value, continuation-as-int64_t. */
+    buf_puts(out, "/* ET3: algebraic effect handler runtime type */\n");
+    buf_puts(out, "typedef struct { void *env; int64_t (*fn)(int64_t *, int, int64_t, void *); } tur_handler_t;\n");
     /* IT4: Tagged union runtime representation.
      * tur_tagged_t carries a discriminant tag and a 64-bit payload.
      * Used for (A | B) union types and the 'any' top type. */
@@ -6322,11 +6446,10 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
 
-    /* Phase B2: Cloneable continuation runtime (inline in generated C).
-     * Only emitted when the program actually uses cloneable-shift/reset so
-     * that programs that don't use cloneable continuations don't get
-     * spurious extra declarations in their generated C output. */
-    if (cps_expr_contains_cloneable_shift(program)) {
+    /* Phase B2 / MS1: Cloneable continuation runtime (inline in generated C).
+     * Emitted when the program uses cloneable-shift/reset OR any ^multishot handler
+     * (which uses tur_cloneable_cont wrappers + tur_continuation_snapshot). */
+    if (cps_expr_contains_cloneable_shift(program) || expr_has_multishot_handler(program)) {
     buf_puts(out, "/* Phase B2: Cloneable continuation runtime */\n");
     buf_puts(out, "typedef struct tur_cloneable_cont tur_cloneable_cont;\n");
     buf_puts(out, "struct tur_cloneable_cont {\n");
@@ -6365,6 +6488,8 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    copy->env = cont->clone_env ? cont->clone_env(cont->env) : cont->env;\n");
     buf_puts(out, "    return (int64_t)(intptr_t)copy;\n");
     buf_puts(out, "}\n\n");
+    /* MS0: tur_continuation_snapshot — alias for clone; used by ^multishot resume */
+    buf_puts(out, "#define tur_continuation_snapshot tur_cloneable_cont_clone\n\n");
     /* User-facing: drop — fire drop_env, then free struct */
     buf_puts(out, "static void tur_cloneable_cont_drop(int64_t cont_int) {\n");
     buf_puts(out, "    tur_cloneable_cont *cont = (tur_cloneable_cont *)(intptr_t)cont_int;\n");
@@ -6475,6 +6600,48 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "static void tur_task_group_notify_done(void *task_group);\n");
     /* Forward-declare tur_fiber_set_cancelled before tur_fiber_shim uses it */
     buf_puts(out, "static void tur_fiber_set_cancelled(bool c);\n\n");
+    /* TC0: per-thread cooperative cancellation state for POSIX threads */
+    buf_puts(out, "/* TC0: per-thread cancel state for cooperative POSIX-thread cancellation */\n");
+    buf_puts(out, "typedef struct {\n");
+    buf_puts(out, "    volatile int    cancel_requested;  /* set by canceller via tur_thread_cancel */\n");
+    buf_puts(out, "    pthread_mutex_t cancel_mutex;\n");
+    buf_puts(out, "    pthread_cond_t  cancel_cond;\n");
+    buf_puts(out, "} TurThreadState;\n\n");
+    buf_puts(out, "typedef struct {\n");
+    buf_puts(out, "    pthread_t        tid;\n");
+    buf_puts(out, "    TurThreadState  *state;  /* heap-allocated; owned by this handle */\n");
+    buf_puts(out, "} TurThreadHandle;\n\n");
+    buf_puts(out, "typedef struct {\n");
+    buf_puts(out, "    void           *(*user_fn)(void *);\n");
+    buf_puts(out, "    void           *user_arg;\n");
+    buf_puts(out, "    TurThreadState *state;\n");
+    buf_puts(out, "} TurThreadSpawnArg;\n\n");
+    buf_puts(out, "/* TC0: thread-local pointer to this thread's cancel state (NULL on main thread) */\n");
+    buf_puts(out, "static __thread TurThreadState *tur_current_thread_state = NULL;\n");
+    buf_puts(out, "/* TC0: thread-local setjmp buffer for with-cancel-guard (0 = not active) */\n");
+    buf_puts(out, "static __thread jmp_buf tur_cancel_jmpbuf;\n");
+    buf_puts(out, "static __thread int tur_cancel_jmpbuf_valid = 0;\n\n");
+    buf_puts(out, "static void *tur_thread_trampoline(void *raw) {\n");
+    buf_puts(out, "    TurThreadSpawnArg *a = (TurThreadSpawnArg *)raw;\n");
+    buf_puts(out, "    tur_current_thread_state = a->state;\n");
+    buf_puts(out, "    void *(*fn)(void *) = a->user_fn;\n");
+    buf_puts(out, "    void *user_arg = a->user_arg;\n");
+    buf_puts(out, "    free(a);\n");
+    buf_puts(out, "    return fn(user_arg);\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "static int tur_thread_cancel_requested(void) {\n");
+    buf_puts(out, "    TurThreadState *s = tur_current_thread_state;\n");
+    buf_puts(out, "    return s ? __atomic_load_n(&s->cancel_requested, __ATOMIC_ACQUIRE) : 0;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "/* TC0: cancel action -- longjmp into cancel guard if active, else exit thread */\n");
+    buf_puts(out, "static void tur_thread_do_cancel(void) {\n");
+    buf_puts(out, "    if (tur_cancel_jmpbuf_valid) {\n");
+    buf_puts(out, "        tur_cancel_jmpbuf_valid = 0;\n");
+    buf_puts(out, "        longjmp(tur_cancel_jmpbuf, 1);\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    /* No cancel guard -- exit the thread cleanly without panicking. */\n");
+    buf_puts(out, "    pthread_exit(NULL);\n");
+    buf_puts(out, "}\n\n");
     buf_puts(out, "static void tur_fiber_shim(uint32_t hi, uint32_t lo) {\n");
     buf_puts(out, "    FiberBlock *f = (FiberBlock *)(((uintptr_t)hi << 32) | (uintptr_t)(uint32_t)lo);\n");
     /* Phase TG-004-3 PR: Per-fiber panic handling with auto-cancel on panic */
@@ -7385,10 +7552,37 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    }\n");
     buf_puts(out, "    /* Release all channel locks */\n");
     buf_puts(out, "    for (int i = 0; i < n_unique; i++) pthread_mutex_unlock(&lock_order[i]->lock);\n");
-    buf_puts(out, "    /* Sleep until woken by a channel operation */\n");
+    buf_puts(out, "    /* Sleep until woken by a channel operation or cancelled (TC1) */\n");
     buf_puts(out, "    pthread_mutex_lock(&wakeup_mutex);\n");
-    buf_puts(out, "    while (selected_idx == -1)\n");
-    buf_puts(out, "        pthread_cond_wait(&wakeup_cond, &wakeup_mutex);\n");
+    buf_puts(out, "    while (selected_idx == -1) {\n");
+    buf_puts(out, "        if (tur_thread_cancel_requested()) {\n");
+    buf_puts(out, "            pthread_mutex_unlock(&wakeup_mutex);\n");
+    buf_puts(out, "            /* Deregister all waiters before cancelling */\n");
+    buf_puts(out, "            for (int __ci = 0; __ci < wn; __ci++) {\n");
+    buf_puts(out, "                ChanBlock_ *__cch = (ChanBlock_ *)clauses[__ci].chan;\n");
+    buf_puts(out, "                pthread_mutex_lock(&__cch->lock);\n");
+    buf_puts(out, "                if (clauses[__ci].op == 0) {\n");
+    buf_puts(out, "                    TurSelectWaiter **pp = (TurSelectWaiter **)&__cch->recv_waiters;\n");
+    buf_puts(out, "                    while (*pp && *pp != &waiters[__ci]) pp = &(*pp)->next;\n");
+    buf_puts(out, "                    if (*pp) *pp = (*pp)->next;\n");
+    buf_puts(out, "                } else {\n");
+    buf_puts(out, "                    TurSelectWaiter **pp = (TurSelectWaiter **)&__cch->send_waiters;\n");
+    buf_puts(out, "                    while (*pp && *pp != &waiters[__ci]) pp = &(*pp)->next;\n");
+    buf_puts(out, "                    if (*pp) *pp = (*pp)->next;\n");
+    buf_puts(out, "                }\n");
+    buf_puts(out, "                pthread_mutex_unlock(&__cch->lock);\n");
+    buf_puts(out, "            }\n");
+    buf_puts(out, "            pthread_mutex_destroy(&wakeup_mutex);\n");
+    buf_puts(out, "            pthread_cond_destroy(&wakeup_cond);\n");
+    buf_puts(out, "            tur_thread_do_cancel();\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "        struct timespec __sel_ts;\n");
+    buf_puts(out, "        clock_gettime(CLOCK_REALTIME, &__sel_ts);\n");
+    buf_puts(out, "        long __sel_ns = __sel_ts.tv_nsec + 5000000L;\n");
+    buf_puts(out, "        __sel_ts.tv_sec += __sel_ns / 1000000000L;\n");
+    buf_puts(out, "        __sel_ts.tv_nsec = __sel_ns % 1000000000L;\n");
+    buf_puts(out, "        pthread_cond_timedwait(&wakeup_cond, &wakeup_mutex, &__sel_ts);\n");
+    buf_puts(out, "    }\n");
     buf_puts(out, "    int winner = selected_idx;\n");
     buf_puts(out, "    pthread_mutex_unlock(&wakeup_mutex);\n");
     buf_puts(out, "    /* Deregister all waiters */\n");

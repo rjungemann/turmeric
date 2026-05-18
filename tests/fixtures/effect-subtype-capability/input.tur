@@ -1,0 +1,18 @@
+;; ER4: struct capability field typed `:fn #{Write}` can hold a pure function.
+;; pure-greet has inferred row #{} which is a subset of the field's #{Write}.
+;; The Write handler is installed but never triggered since pure-greet is pure.
+
+(defeffect Write [s :cstr] :nil)
+
+;; Capability struct: the `run` field is declared to potentially Write.
+(defstruct Action :copy [run :fn #{Write}])
+
+;; Pure action: does not perform Write, but satisfies the #{Write} field.
+(defn pure-greet [msg :cstr]
+  (println msg))
+
+(defn main [] :int
+  (let [act (make-struct Action pure-greet)]
+    (handle
+      (do (.run act "hello from pure") 0)
+      (Write [s] k) (do (println s) (resume k nil)))))

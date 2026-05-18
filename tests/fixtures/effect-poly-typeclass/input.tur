@@ -1,0 +1,16 @@
+;; ET2-F3: Effect polymorphism via higher-order composition.
+;; run-twice calls a zero-arg effectful function twice, accumulating results.
+;; The open effect row #{e} on f propagates to run-twice so callers can
+;; handle whatever effects f performs.
+
+(defeffect Tick [] :int)
+
+(defn run-twice [f :(fn [] #{e} :int)] #{e} :int
+  (+ (f) (f)))
+
+(defn main [] :int
+  (let [counter (handle
+    (run-twice (fn [] (perform (Tick))))
+    (Tick [] k) (resume k 1))]
+  (println counter)
+  0))

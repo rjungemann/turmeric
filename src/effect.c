@@ -78,6 +78,17 @@ EffectRow *effect_row_resolve(EffectRow *row, EffectEnv *env, Arena *a) {
     return result;
 }
 
+/* ET4: Returns true if `child` is the same as `parent_eff` or is a descendant via ^extends */
+bool effect_is_subeffect(const Effect *child, const Effect *parent_eff) {
+    if (!child || !parent_eff) return child == parent_eff;
+    const Effect *e = child;
+    while (e) {
+        if (e == parent_eff) return true;
+        e = e->parent;
+    }
+    return false;
+}
+
 /* Check if an effect row is empty */
 bool effect_row_is_empty(EffectRow *row) {
     if (!row) return true;
@@ -99,6 +110,10 @@ bool effect_row_contains(EffectRow *row, Effect *effect) {
         case ERK_CONCRETE: {
             for (uint8_t i = 0; i < row->as.concrete.n_effects; i++) {
                 if (effect_ptr_eq(row->as.concrete.effects[i], effect)) {
+                    return true;
+                }
+                /* ET4: Check if row effect is a parent (ancestor) of eff */
+                if (effect_is_subeffect(effect, row->as.concrete.effects[i])) {
                     return true;
                 }
             }
@@ -317,6 +332,7 @@ Effect *effect_env_register(EffectEnv *env, Arena *a, const Symbol *name,
     effect->defining_module_name = defining_module_name;
     effect->is_private = is_private;
     effect->is_exported = !is_private;
+    effect->parent = NULL;  /* ET4: no parent by default */
 
     /* Create the constructor (1:1 for now) */
     EffectConstructor *ctor = arena_alloc(a, sizeof(EffectConstructor));
@@ -394,16 +410,24 @@ bool effect_row_unify(EffectRow *r1, EffectRow *r2,
 
     /* Simplify: apply existing substitutions first. */
     if (r1->kind == ERK_VAR) {
+        /* Trivial case: same variable on both sides, no binding needed. */
+        if (r2->kind == ERK_VAR && r1->as.var.var_name == r2->as.var.var_name)
+            return true;
         EffectRow *bound = effect_row_subst_lookup(subst, r1->as.var.var_name);
         if (bound) return effect_row_unify(bound, r2, subst, a);
-        /* r1 is an unbound variable: bind it to r2 */
+        if (effect_row_occurs(r1->as.var.var_name, r2))
+            return false; /* occurs check: binding would produce an infinite row */
         effect_row_subst_bind(subst, r1->as.var.var_name, r2);
         return true;
     }
     if (r2->kind == ERK_VAR) {
+        /* Trivial case: same variable on both sides, no binding needed. */
+        if (r1->kind == ERK_VAR && r2->as.var.var_name == r1->as.var.var_name)
+            return true;
         EffectRow *bound = effect_row_subst_lookup(subst, r2->as.var.var_name);
         if (bound) return effect_row_unify(r1, bound, subst, a);
-        /* r2 is an unbound variable: bind it to r1 */
+        if (effect_row_occurs(r2->as.var.var_name, r1))
+            return false; /* occurs check: binding would produce an infinite row */
         effect_row_subst_bind(subst, r2->as.var.var_name, r1);
         return true;
     }
@@ -419,6 +443,24 @@ bool effect_row_unify(EffectRow *r1, EffectRow *r2,
     /* Both concrete (or union): succeed permissively in v1. */
     (void)a;
     return true;
+}
+
+bool effect_row_occurs(const Symbol *var_name, EffectRow *row) {
+    if (!row) return false;
+    switch (row->kind) {
+    case ERK_EMPTY:
+        return false;
+    case ERK_VAR:
+        return var_name == row->as.var.var_name; /* pointer equality: symbols are interned */
+    case ERK_CONCRETE:
+        return false; /* concrete rows have no variables */
+    case ERK_UNION:
+        return effect_row_occurs(var_name, row->as.union_.left) ||
+               effect_row_occurs(var_name, row->as.union_.right);
+    case ERK_UNRESOLVED:
+        return false; /* already resolved by this point */
+    }
+    return false; /* unreachable */
 }
 
 EffectRow *effect_row_apply_subst(EffectRow *row,

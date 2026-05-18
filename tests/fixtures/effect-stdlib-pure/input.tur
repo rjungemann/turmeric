@@ -1,0 +1,7 @@
+;; ET4: Pure stdlib functions have inferred #{} rows.
+;; Verifies they can be called from pure functions without effect issues.
+(defn twice [x :int] :int (* x 2))
+(defn main [] :int
+  (let [result (twice 21)]
+    (println result)
+    0))

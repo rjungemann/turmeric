@@ -168,6 +168,7 @@ Kind kind_of_type_app(Type fn_type, Type arg_type, Span span) {
             /* Binary type constructor partially applied → still a constructor */
             return KIND_ARROW;
         case KIND_STAR:
+        case KIND_ROW:
             diag_emit_with_code(DIAG_ERROR, span, TUR_E0012_KIND_MISMATCH,
                 "kind mismatch (TUR-E0012): cannot apply a type of kind '*' as a "
                 "type constructor; type must have kind '* -> *' or '* -> * -> *'");

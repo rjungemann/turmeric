@@ -1,0 +1,9 @@
+;; ET0-D: Assigning a #{Write}-performing closure to a #{} parameter emits TUR-E0009.
+
+(defeffect Write [s :cstr] :nil)
+
+(defn call-pure [f :(fn [:cstr] #{} :nil)] #{} :nil
+  (f "test"))
+
+(defn main [] :int
+  (call-pure (fn [s] (perform (Write s)))))

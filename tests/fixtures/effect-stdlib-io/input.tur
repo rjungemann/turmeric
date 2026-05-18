@@ -1,0 +1,8 @@
+;; ET4: I/O effects are properly tracked.
+(defeffect Log [msg :cstr] :nil)
+(defn do-log [] #{Log} :nil
+  (perform (Log "hello")))
+(defn main [] :int
+  (handle
+    (do (do-log) 0)
+    (Log [msg] k) (do (println msg) (resume k nil))))

@@ -251,6 +251,58 @@ for C/CMake dependency details.
 (show-type "hello")  ; => "cstr"
 ```
 
+**Effect row types and effect polymorphism:**
+
+```lisp
+; Requires: -Xeffect-types
+
+(defeffect Write [s :cstr] :nil)
+(defeffect Read  []        :cstr)
+
+; #{Write} in the function type is enforced at call sites
+(defn greet [name :cstr] #{Write} :nil
+  (perform (Write name)))
+
+; Effect-polymorphic: the caller's effect row propagates through
+(defn twice [f :(fn [] #{e} :nil)] #{e} :nil
+  (do (f) (f)))
+
+; Effect hierarchy: Write ^extends IO; #{Write} satisfies #{IO}
+(defeffect IO [] :nil)
+(defeffect Log [s :cstr] :nil ^extends IO)
+
+(defn log-message [] #{IO} :nil
+  (perform (Log "hello")))
+```
+
+**Linear and substructural types:**
+
+```lisp
+; Requires: -Xlinear
+; ^linear: value must be used exactly once
+(defn use-once [^linear x :int] :int x)
+
+; Requires: -Xsubstructural (implies -Xlinear)
+; ^affine:   may be dropped, cannot be duplicated
+; ^relevant: must be used, may be duplicated
+(defn consume-affine [^affine  x :int] :int x)
+(defn must-use       [^relevant x :int] :int x)
+```
+
+**Multi-shot continuations:**
+
+```lisp
+(defeffect Ask [] :int)
+
+; ^multishot k: continuation may be resumed more than once
+(defn main [] :int
+  (let [r (handle (perform (Ask))
+            (Ask [] ^multishot k)
+              (+ (resume k 10) (resume k 20)))]
+    (println r))   ; => 30
+  0)
+```
+
 ## Features
 
 | Feature | Status |
@@ -267,6 +319,17 @@ for C/CMake dependency details.
 | ADTs (`defdata`, `match`, exhaustiveness checking) | ✅ |
 | GADTs (`defgadt`, per-constructor type refinement, equality witnesses, `coerce`, `-Xgadt`) | ✅ |
 | Structural union types (`A \| B`), `any` top type, gradual typing (`-Xunion-types`) | ✅ |
+| Intersection types (`A & B`, `-Xintersection-types`) | ✅ |
+| Higher-ranked types (Rank-2/N `forall`, existential `pack`/`open`, `-Xhrt`) | ✅ |
+| Linear types (`^linear`, `lref<T>`, `-Xlinear`) | ✅ |
+| Uniqueness types (`^unique`, `-Xunique-types`) | ✅ |
+| Substructural types (`^affine`, `^relevant`, `-Xsubstructural`) | ✅ |
+| Effect row types (`#{Effect}` in function types, `-Xeffect-types`) | ✅ |
+| Effect polymorphism (`forall [e]`, implicit row generalisation) | ✅ |
+| Effect hierarchy (`^extends`, stdlib `Write ≤ IO` lattice) | ✅ |
+| Handler typing (`(handler Effect A B)` first-class handler types) | ✅ |
+| Linear continuations (`^linear k` one-shot, `^unsafe-multishot` escape hatch) | ✅ |
+| Multi-shot continuations (`^multishot k`, snapshot semantics) | ✅ |
 | Borrow checker (`&`, `&mut`, reborrow, move semantics) | ✅ |
 | Reference counting (`rc/of`, `rc/clone`, `rc/drop`, weak refs) | ✅ |
 | RC elision (static analysis to remove redundant retain/release) | ✅ |
@@ -291,6 +354,6 @@ for C/CMake dependency details.
 
 ## Status
 
-The compiler passes its full fixture test suite with ASan/UBSan clean. All planned phases through Phase 21 (serializable continuations) are complete.
+The compiler passes its full fixture test suite with ASan/UBSan clean. All planned phases through Phase 21 (serializable continuations) are complete, along with the full v2 type system (HKT, HRT, GADTs, effect rows) and v3 extensions (linear/uniqueness/substructural types, union/intersection types, effect row types ET0–ET4, linear continuations LC0–LC3, multi-shot continuations MS0–MS4).
 
 See [docs/turmeric-plan.md](docs/turmeric-plan.md) for the detailed design and roadmap.

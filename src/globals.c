@@ -58,3 +58,6 @@ bool g_union_types_enabled = false;
 
 /* IT2: -Xintersection-types flag — enable intersection type syntax */
 bool g_intersection_types_enabled = false;
+
+/* ET4: -Xeffect-types flag — enable full effect typing */
+bool g_effect_types_enabled = false;  /* ET4: -Xeffect-types */

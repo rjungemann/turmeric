@@ -1,0 +1,108 @@
+;; TC1: thread blocks on chan-recv; main thread cancels it.
+;; The cancelled thread exits cleanly via pthread_exit.
+;; main() joins the thread and prints "done".
+
+(defn sleep-ms [ms :int] :nil
+  ```c
+  usleep((unsigned int)ms * 1000);
+  ```)
+
+(defn chan-alloc [cap :int] :ptr<void>
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+      void *recv_waiters; void *send_waiters;
+  } ChanBlock;
+  ChanBlock *ch = (ChanBlock *)malloc(sizeof(ChanBlock));
+  if (!ch) abort();
+  ch->buf = (int64_t *)malloc(sizeof(int64_t) * (size_t)cap);
+  if (!ch->buf) { free(ch); abort(); }
+  pthread_mutex_init(&ch->lock, NULL);
+  pthread_cond_init(&ch->not_full, NULL);
+  pthread_cond_init(&ch->not_empty, NULL);
+  ch->head = 0; ch->tail = 0; ch->count = 0; ch->cap = (int64_t)cap;
+  ch->recv_waiters = NULL; ch->send_waiters = NULL;
+  return (void *)ch;
+  ```)
+
+;; Thread function: blocks on chan-recv forever (channel stays empty).
+;; Uses TC0/TC1 cancel infrastructure from the preamble.
+(defn blocking-recv-thread [arg :ptr<void>] :ptr<void>
+  ```c
+  typedef struct {
+      pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
+      int64_t *buf; int64_t head; int64_t tail; int64_t count; int64_t cap;
+      void *recv_waiters; void *send_waiters;
+  } ChanBlock;
+  ChanBlock *c = (ChanBlock *)arg;
+  pthread_mutex_lock(&c->lock);
+  while (c->count == 0) {
+      if (tur_thread_cancel_requested()) {
+          pthread_mutex_unlock(&c->lock);
+          tur_thread_do_cancel();
+      }
+      struct timespec __ts;
+      clock_gettime(CLOCK_REALTIME, &__ts);
+      long __ns = __ts.tv_nsec + 5000000L;
+      __ts.tv_sec += __ns / 1000000000L; __ts.tv_nsec = __ns % 1000000000L;
+      pthread_cond_timedwait(&c->not_empty, &c->lock, &__ts);
+  }
+  int64_t v = c->buf[c->head];
+  c->head = (c->head + 1) % c->cap;
+  c->count--;
+  pthread_cond_signal(&c->not_full);
+  pthread_mutex_unlock(&c->lock);
+  return NULL;
+  ```)
+
+;; Spawn a thread using the TC0 TurThreadHandle infrastructure.
+(defn my-thread-spawn [fn-ptr :ptr<void> arg :ptr<void>] :ptr<void>
+  ```c
+  TurThreadState *state = (TurThreadState *)malloc(sizeof(TurThreadState));
+  if (!state) abort();
+  pthread_mutex_init(&state->cancel_mutex, NULL);
+  pthread_cond_init(&state->cancel_cond, NULL);
+  state->cancel_requested = 0;
+  TurThreadSpawnArg *spawn_arg = (TurThreadSpawnArg *)malloc(sizeof(TurThreadSpawnArg));
+  if (!spawn_arg) { free(state); abort(); }
+  spawn_arg->user_fn  = (void *(*)(void *))fn_ptr;
+  spawn_arg->user_arg = (void *)arg;
+  spawn_arg->state    = state;
+  TurThreadHandle *h = (TurThreadHandle *)malloc(sizeof(TurThreadHandle));
+  if (!h) { free(spawn_arg); free(state); abort(); }
+  h->state = state;
+  int rc = pthread_create(&h->tid, NULL, tur_thread_trampoline, spawn_arg);
+  if (rc != 0) { free(h); free(spawn_arg); free(state); abort(); }
+  return (void *)h;
+  ```)
+
+;; Signal a thread to cancel.
+(defn my-cancel-thread [t :ptr<void>] :nil
+  ```c
+  TurThreadHandle *h = (TurThreadHandle *)t;
+  __atomic_store_n(&h->state->cancel_requested, 1, __ATOMIC_RELEASE);
+  pthread_mutex_lock(&h->state->cancel_mutex);
+  pthread_cond_broadcast(&h->state->cancel_cond);
+  pthread_mutex_unlock(&h->state->cancel_mutex);
+  ```)
+
+;; Join a thread and free its handle.
+(defn my-thread-join [t :ptr<void>] :nil
+  ```c
+  TurThreadHandle *h = (TurThreadHandle *)t;
+  pthread_join(h->tid, NULL);
+  pthread_mutex_destroy(&h->state->cancel_mutex);
+  pthread_cond_destroy(&h->state->cancel_cond);
+  free(h->state);
+  free(h);
+  ```)
+
+(defn main [] :int
+  (let [ch (chan-alloc 4)
+        t  (my-thread-spawn blocking-recv-thread ch)]
+    (sleep-ms 30)
+    (my-cancel-thread t)
+    (my-thread-join t)
+    (println "done")
+    0))
