@@ -543,20 +543,17 @@ The duality relation:
 
 **Goal:** Emit message-passing primitives and channel structs to C.
 
-- [ ] Define a typed channel struct in generated C:
-
-  ```c
-  typedef struct TurChannel {
-      pthread_mutex_t lock;
-      pthread_cond_t  ready;
-      void*           data;
-      int             closed;
-  } TurChannel;
-  ```
-
-- [ ] Emit `send`, `recv`, `close` as thin wrappers over the Phase T19 channel primitives
-- [ ] The session type is erased at runtime: no tag or protocol descriptor needed
-- [ ] Optional: in debug builds, emit a runtime protocol tag and check it on each operation (useful for FFI boundaries)
+- [x] Define a typed channel struct in generated C (`TurChannel` with two
+  `TurSyncCh` sub-channels -- one for data, one for branch tags -- plus a
+  reference count and a mutex; synchronous rendezvous via pthread condvars)
+- [x] Emit `send`, `recv`, `close`, `offer`, `choose-left`, `choose-right`
+  as inline C snippets via the `EX_INLINE_C` substitution mechanism
+- [x] The session type is erased at runtime: no tag or protocol descriptor
+  carried at runtime in release builds
+- [x] Optional: `TUR_DBGPROTO("Send[int, Close]")` macro embeds the initial
+  protocol name as a `const char *dbg_proto` field on `TurChannel` in debug
+  builds (NDEBUG off); expands to null pointer in release builds; useful for
+  inspecting channel protocol at FFI boundaries in a debugger
 
 ---
 

@@ -2,6 +2,7 @@
 #define _DEFAULT_SOURCE 1
 #pragma GCC diagnostic ignored "-Wunused-function"
 #pragma GCC diagnostic ignored "-Wunused-variable"
+#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 #include "hamt.h"
 #include <sys/select.h>
 #include <sys/socket.h>
