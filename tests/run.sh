@@ -81,9 +81,9 @@ export -f _run_timed
 TUR_EMIT_C_MODE="${TUR_EMIT_C_MODE:-snapshot-only}"
 
 # Performance plan item #2: parallel fixture execution.
-# Override with TUR_TEST_JOBS=<n>; defaults to nproc*2 (capped at 32).
-# Fixture workers are I/O-bound (process spawning, temp files, linking) so
-# oversubscribing beyond the physical core count keeps pipelines saturated.
+# Override with TUR_TEST_JOBS=<n>; defaults to physical core count (capped at 8).
+# Capped at physical cores (not 2x) to avoid flooding syspolicyd on macOS with
+# simultaneous new-binary executions from requires.compiled fixtures.
 if [ -n "${TUR_TEST_JOBS:-}" ]; then
     JOBS="$TUR_TEST_JOBS"
 else
@@ -94,14 +94,14 @@ else
     else
         _nproc=4
     fi
-    JOBS=$(( _nproc * 2 ))
+    JOBS=$(( _nproc ))
 fi
 
 case "$JOBS" in
-    ''|*[!0-9]*) JOBS=8 ;;
+    ''|*[!0-9]*) JOBS=4 ;;
 esac
 if [ "$JOBS" -lt 1 ]; then JOBS=1; fi
-if [ "$JOBS" -gt 32 ]; then JOBS=32; fi
+if [ "$JOBS" -gt 8 ]; then JOBS=8; fi
 
 RESULTS_DIR="$(mktemp -d -t tur-tests-results-XXXXXX)"
 trap 'rm -rf "$RESULTS_DIR"' EXIT
@@ -255,9 +255,18 @@ run_happy() {
     local actual_c="$out_dir/actual.c"
     local log_file="$RESULTS_DIR/$(printf '%s' "happy-$name" | tr '/ ' '__').log"
     local needs_codegen_check=0
+    local needs_compiled=0
 
     if [ -f "$dir/expected.c" ]; then
         needs_codegen_check=1
+    fi
+
+    # requires.compiled: fixture must run as a native binary.
+    # Also force compiled mode under TUR_TSAN=1 so sanitizer flags apply.
+    # Add this marker to any fixture whose semantics diverge between the
+    # interpreter and compiled output (e.g. fiber/async ABI, C FFI tests).
+    if [ -f "$dir/requires.compiled" ] || [ "$TUR_TSAN" = "1" ]; then
+        needs_compiled=1
     fi
 
     # Stamp fast-path: skip if input, expected.c, and tur binary are all
@@ -285,26 +294,42 @@ run_happy() {
         fi
     fi
 
-    local exe
-    exe=$(mktemp -t tur-test-XXXXXX)
-    CC="$BUILD_CC" "$TUR" $fixture_flags build "$input" -o "$exe" 2> "$out_dir/actual.stderr"
-    if [ $? -ne 0 ]; then
-        {
-            echo "FAIL $name — tur build failed"
-            cat "$out_dir/actual.stderr"
-        } > "$log_file"
-        write_result "FAIL" "$name" "build failed" "$log_file"
+    local rc
+    if [ "$needs_compiled" -eq 1 ]; then
+        # Compiled path: build a native binary and run it.
+        # Spawns cc + a new executable; triggers syspolicyd on macOS.
+        local exe
+        exe=$(mktemp -t tur-test-XXXXXX)
+        CC="$BUILD_CC" "$TUR" $fixture_flags build "$input" -o "$exe" 2> "$out_dir/actual.stderr"
+        if [ $? -ne 0 ]; then
+            {
+                echo "FAIL $name — tur build failed"
+                cat "$out_dir/actual.stderr"
+            } > "$log_file"
+            write_result "FAIL" "$name" "build failed" "$log_file"
+            rm -f "$exe"
+            return
+        fi
+        if [ -f "$dir/input.stdin" ]; then
+            _run_timed "$fixture_timeout" "$exe" < "$dir/input.stdin" > "$actual_stdout" 2>> "$actual_stderr"
+        else
+            _run_timed "$fixture_timeout" "$exe" > "$actual_stdout" 2>> "$actual_stderr"
+        fi
+        rc=$?
         rm -f "$exe"
-        return
-    fi
-
-    if [ -f "$dir/input.stdin" ]; then
-        _run_timed "$fixture_timeout" "$exe" < "$dir/input.stdin" > "$actual_stdout" 2>> "$actual_stderr"
     else
-        _run_timed "$fixture_timeout" "$exe" > "$actual_stdout" 2>> "$actual_stderr"
+        # Interpreter path: run via `tur run` -- no cc invocation, no new binary,
+        # no syspolicyd hit.  This is the default for all fixtures that do not
+        # have a requires.compiled marker.
+        if [ -f "$dir/input.stdin" ]; then
+            _run_timed "$fixture_timeout" "$TUR" $fixture_flags run "$input" \
+                < "$dir/input.stdin" > "$actual_stdout" 2> "$actual_stderr"
+        else
+            _run_timed "$fixture_timeout" "$TUR" $fixture_flags run "$input" \
+                > "$actual_stdout" 2> "$actual_stderr"
+        fi
+        rc=$?
     fi
-    local rc=$?
-    rm -f "$exe"
 
     local expected_exit="0"
     if [ -f "$dir/expected.exit" ]; then

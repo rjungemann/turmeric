@@ -66,3 +66,6 @@ extern bool g_keep_contracts_in_release;  /* --keep-contracts: retain checks in 
 
 /* SS0a: -Xsessions flag — enable session type syntax and checking (implies -Xsubstructural) */
 extern bool g_sessions_enabled;
+
+/* DV0: -Xdynamic-vars flag — enable dynamic var syntax and checking */
+extern bool g_dynvar_enabled;

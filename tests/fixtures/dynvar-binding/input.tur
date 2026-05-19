@@ -1,0 +1,5 @@
+;; DV1 P2: binding form overrides a dynamic var for its dynamic extent.
+;; Reading the var inside the binding body returns the override value.
+(defdynamic *log-level* :int 0)
+(binding [*log-level* 2]
+  (println *log-level*))

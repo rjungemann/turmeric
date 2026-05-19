@@ -70,6 +70,7 @@ set(TUR_CORE_SOURCES
     compiler/elab_sessions.c
     compiler/elab_global.c
     compiler/project.c
+    compiler/elab_dynvars.c
     compiler/elab_toplevel.c
     compiler/emit_core.c
     compiler/emit_expr.c

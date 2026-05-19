@@ -1,0 +1,7 @@
+;; DV1 P2: set! on a dynamic var inside an atomically block (E0605).
+;; STM transactions may be retried; binding-stack mutation cannot be rolled back
+;; on retry, so set! inside atomically is rejected.
+(defdynamic *log-level* :int 0)
+(binding [*log-level* 1]
+  (atomically
+    (set! *log-level* 2)))

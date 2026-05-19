@@ -487,6 +487,21 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
         case EX_DEFECT:
             /* Effect definitions don't have borrows to check at this level */
             return true;
+        /* DV0-DV1: Dynamic vars */
+        case EX_DEFDYNAMIC:
+            /* Declaration-only node; no borrows to check */
+            return true;
+        case EX_DYNVAR_READ:
+            return true;
+        case EX_DYNVAR_SET:
+            return borrow_check_expr_recursive(ctx, e->as.dynvar_set_.value);
+        case EX_DYNVAR_BINDING: {
+            for (uint32_t i = 0; i < e->as.dynvar_binding_.n_pairs; i++) {
+                if (!borrow_check_expr_recursive(ctx, e->as.dynvar_binding_.pairs[i].override_expr))
+                    return false;
+            }
+            return borrow_check_expr_recursive(ctx, e->as.dynvar_binding_.body);
+        }
         case EX_PERFORM:
             /* Check perform arguments */
             for (uint8_t i = 0; i < e->as.perform_.perform->n_args; i++) {

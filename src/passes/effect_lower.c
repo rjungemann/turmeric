@@ -482,10 +482,23 @@ static Expr *lower_expr(Arena *a, SymbolTable *st, Expr *e, EffectEnv *effect_en
          */
         case EX_DEFECT:
             return e;
-        
+        /* DV1: Dynamic var nodes pass through unchanged */
+        case EX_DEFDYNAMIC:
+        case EX_DYNVAR_READ:
+        case EX_DYNVAR_SET:
+            return e;
+        case EX_DYNVAR_BINDING: {
+            for (uint32_t i = 0; i < e->as.dynvar_binding_.n_pairs; i++) {
+                e->as.dynvar_binding_.pairs[i].override_expr =
+                    lower_expr(a, st, e->as.dynvar_binding_.pairs[i].override_expr, effect_env);
+            }
+            e->as.dynvar_binding_.body = lower_expr(a, st, e->as.dynvar_binding_.body, effect_env);
+            return e;
+        }
+
         case EX_PERFORM:
             return e;
-        
+
         case EX_HANDLE:
             return e;
         

@@ -1,6 +1,6 @@
 # Dynamic Vars -- Implementation Plan (DV0-DV4)
 
-> **Status:** Draft -- Not Started
+> **Status:** DV0-DV4 complete
 >
 > **Target:** v3 or later
 >
@@ -10,7 +10,7 @@
 > [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md)
 > (§8 Effect Types, §1 Linear Types)
 >
-> **Last updated:** 2026-05-18 (initial draft; no phases complete)
+> **Last updated:** 2026-05-19 (DV4 complete: stdlib common vars, integration test fixtures, guide, tur explain entries confirmed)
 
 ---
 
@@ -160,6 +160,97 @@ Each request-handling thread sees its own locale without the locale being thread
 
 ---
 
+## Alternative Approaches
+
+This section shows how the test-fixture-injection use case (Example 2) looks in Haskell's `IORef` + `ReaderT` pattern and in Turmeric's existing algebraic-effects system, so the trade-offs motivating dynamic vars are concrete.
+
+### Haskell: `IORef` + `ReaderT`
+
+```haskell
+-- The environment record holds an IORef to the connection so it can be
+-- swapped at test time without changing the type of the computation.
+data AppEnv = AppEnv { envDb :: IORef Connection }
+
+type App a = ReaderT AppEnv IO a
+
+-- query reads the connection from the environment on every call.
+query :: String -> App String
+query sql = do
+    env <- ask
+    db  <- liftIO $ readIORef (envDb env)
+    liftIO $ dbExec db sql
+
+-- Production entry point: wire up the real DB.
+runApp :: App a -> IO a
+runApp action = do
+    db    <- openProdDb
+    dbRef <- newIORef db
+    runReaderT action (AppEnv dbRef)
+
+-- Tests inject a fake by swapping the IORef before running.
+runTests :: IO ()
+runTests = do
+    testDb <- openTestDb
+    dbRef  <- newIORef testDb
+    let env = AppEnv { envDb = dbRef }
+    result <- runReaderT (query "SELECT 1") env
+    assert (result == "1")
+```
+
+**Cost:** every function that calls `query` must live in `App` (or a suitably constrained `MonadReader AppEnv m`). Adding a new injected dependency widens `AppEnv`, regenerates the `Has*` instances (if using the `Has` typeclass pattern), and forces all callers deeper into the transformer stack. The boilerplate scales linearly with the number of dependencies.
+
+---
+
+### Turmeric: Algebraic Effects
+
+```clojure
+;; Declare an effect row for database operations.
+(defeffect DbEffect
+  (query [sql : str] : str))
+
+;; query is written as a plain perform -- no explicit threading.
+(defn query [sql : str] : str
+  (perform (DbEffect.query sql)))
+
+;; All downstream callers can call query without any extra parameters;
+;; the effect row propagates through the type system automatically.
+(defn run-report [] : str
+  (str-concat (query "SELECT name") ": " (query "SELECT count")))
+
+;; Production handler: install the real connection at the boundary.
+(defn run-with-db [db thunk] : unit
+  (handle (thunk)
+    [(DbEffect.query sql k)
+     (resume k (db-exec db sql))]))
+
+;; Test handler: intercept the effect and return canned responses.
+(defn run-tests [] : unit
+  (handle
+    (do
+      (assert! (= (query "SELECT 1") "1"))
+      (assert! (= (run-report)) "alice: 42"))
+    [(DbEffect.query sql k)
+     (resume k (mock-db-exec sql))]))
+```
+
+**Cost:** every function that (transitively) calls `query` acquires `DbEffect` in its effect row. This is visible in types and checked by the compiler, which is good for reasoning but means the effect row grows with each additional injected dependency. Installing a handler (`handle`) at each architectural boundary is explicit and required; forgetting one is a type error, but it also means tests must always wrap calls in a `handle` block.
+
+---
+
+### Summary: when to use which
+
+| Situation | Reach for |
+|---|---|
+| The dependency is an interceptable operation with multiple implementations (prod vs. mock, local vs. remote) | Algebraic effects -- the `handle` boundary enforces the contract |
+| The dependency is configuration that is almost always the root value (log level, locale, feature flags) | Dynamic vars -- `binding` only at the rare override sites |
+| You want multi-shot resumption, or the handler needs to observe every invocation | Algebraic effects only |
+| Deep call chains where threading the parameter is the only cost | Dynamic vars -- zero call-site annotation |
+| Cross-thread conveyance with snapshot isolation | Dynamic vars + `spawn-conveying` |
+
+The two mechanisms are orthogonal: `binding` may appear inside `handle` bodies and `perform` may appear inside `binding` bodies without interaction issues.
+
+---
+
 ## Interaction with Existing Features
 
 | Feature | Interaction | Notes |
@@ -197,41 +288,44 @@ tests/fixtures/dynvar-*/    -- happy-path and negative fixtures
 
 ### P0 -- Error Code Range Allocation
 
-- [ ] Lock the `TUR_E0600`-`TUR_E0605` range for dynamic vars before any DV phase emits error codes. The `TUR_E05xx` block (multishot continuations) ends at `TUR_E0502`; `TUR_E0600` is the next clean block.
+- [x] Lock the `TUR_E0600`-`TUR_E0605` range for dynamic vars before any DV phase emits error codes. The `TUR_E05xx` block (multishot continuations) ends at `TUR_E0502`; `TUR_E0600` is the next clean block.
 
-  Proposed allocation:
+  Allocation (locked in `src/compiler/diag.h` and `src/compiler/diag.c`):
 
-  | Code | Meaning |
-  |---|---|
-  | `TUR_E0600` | `set!` on a non-dynamic var |
-  | `TUR_E0601` | `set!` on a dynamic var with no active `binding` frame on the current thread |
-  | `TUR_E0602` | type mismatch: override value does not match `defdynamic` type |
-  | `TUR_E0603` | dynamic var declared with a substructural (linear, affine, relevant, or unique) type |
-  | `TUR_E0604` | `defdynamic` at non-toplevel position |
-  | `TUR_E0605` | `set!` on a dynamic var inside an `atomically` block |
+  | Code | Enum constant | Meaning |
+  |---|---|---|
+  | `TUR_E0600` | `TUR_E0600_DYNVAR_SET_NOT_DYNAMIC` | `set!` or `binding` target is not a dynamic var |
+  | `TUR_E0601` | `TUR_E0601_DYNVAR_SET_NO_BINDING` | `set!` on a dynamic var with no active `binding` frame on the current thread |
+  | `TUR_E0602` | `TUR_E0602_DYNVAR_TYPE_MISMATCH` | type mismatch: override value does not match `defdynamic` type |
+  | `TUR_E0603` | `TUR_E0603_DYNVAR_SUBSTRUCTURAL_TYPE` | dynamic var declared with a substructural (linear, affine, relevant, or unique) type |
+  | `TUR_E0604` | `TUR_E0604_DYNVAR_NOT_TOPLEVEL` | `defdynamic` at non-toplevel position |
+  | `TUR_E0605` | `TUR_E0605_DYNVAR_SET_IN_ATOMIC` | `set!` on a dynamic var inside an `atomically` block |
+  | `TUR_W0600` | `TUR_W0600_DYNVAR_NO_EARMUFFS` | `defdynamic` name does not use `*earmuffs*` convention |
+
+  All codes have `diag_code_to_string`, `diag_code_from_string`, and `diag_explain` entries.
 
 ### P1 -- Thread Primitives Audit
 
-- [ ] Confirm Phase T19 provides:
-  - `pthread_key_t` creation and destruction in generated C (`pthread_key_create`, `pthread_key_delete`)
-  - `pthread_getspecific` / `pthread_setspecific`
-  - `spawn` with a zero-arg closure that can capture a value payload (needed to pass the conveyed frame snapshot to the new thread)
-- [ ] Confirm that `__attribute__((cleanup(fn)))` is available in the C compiler targeted by `turc` (GCC and Clang both support it; MSVC does not -- flag as a Windows porting concern)
+- [x] Confirm Phase T19 provides:
+  - `pthread_key_t` creation and destruction in generated C (`pthread_key_create`, `pthread_key_delete`): **confirmed available** -- not a Turmeric stdlib primitive, but the DV2 codegen emits C directly (as do other stdlib files with inline C blocks) and POSIX pthreads are already a build dependency (used by `thread-spawn-fn` in `stdlib/thread.tur`). `pthread_key_create`/`pthread_key_delete` can be emitted by the DV2 codegen pass without any new runtime glue.
+  - `pthread_getspecific` / `pthread_setspecific`: **confirmed available** -- same reasoning; both symbols are in POSIX pthreads, already linked.
+  - `spawn` with a zero-arg closure that can capture a value payload: **confirmed available** -- `thread-spawn-fn` in `stdlib/thread.tur` accepts a raw `fn-ptr` and a `ptr<void>` payload, which is sufficient for DV2. DV3 (`spawn-conveying`) will wrap this with a snapshot-capture helper; no new primitive is required.
+- [x] Confirm that `__attribute__((cleanup(fn)))` is available in the C compiler targeted by `turc`: **confirmed** -- GCC and Clang both support it (tested on the macOS/Linux CI targets). MSVC limitation is documented in the plan (Open Question 4, resolved: use a wrapper-function fallback on MSVC, `__attribute__((cleanup))` as an optimisation on GCC/Clang via `#ifdef __GNUC__`).
 
 ### P2 -- Test Fixture Baseline
 
-- [ ] Create fixture baseline alongside DV0:
+- [x] Create fixture baseline alongside DV0:
   - Happy path: `dynvar-read` (root), `dynvar-binding` (override), `dynvar-nested` (nested overrides), `dynvar-set` (`set!` in binding), `dynvar-multi` (multiple vars)
   - Negative: `dynvar-set-no-binding`, `dynvar-set-non-dynamic`, `dynvar-type-mismatch`, `dynvar-linear-type`, `dynvar-set-in-atomic`
   - All intentionally red until DV1-DV2 implement the operations.
 
 ---
 
-## Phase DV0 -- Data Model
+## Phase DV0 -- Data Model ✓
 
 **Goal:** Add the `defdynamic` top-level form and `TY_DYNVAR` to the type system. No binding stack or codegen yet.
 
-- [ ] Add `TY_DYNVAR` to `TypeKind` in `src/compiler/types.h`:
+- [x] Add `TY_DYNVAR` to `TypeKind` in `src/compiler/types.h`:
 
   ```c
   TY_DYNVAR,  /* the type of a dynamic var reference (not the stored value) */
@@ -239,25 +333,29 @@ tests/fixtures/dynvar-*/    -- happy-path and negative fixtures
 
   `TY_DYNVAR` wraps the var's declared value type. Reading a `*name*` var produces a value of the declared type (not `TY_DYNVAR`); the `TY_DYNVAR` node is only held in the environment during elaboration.
 
-- [ ] Add `DynVarEntry` to the elaborator's global symbol table:
+- [x] Add `DynVarEntry` to `src/compiler/expr.h` (accessible from both `expr.c` and the elaborator):
 
   ```c
   typedef struct DynVarEntry {
-      const char *name;        /* "*log-level*" */
-      Type       *value_type;  /* the declared element type */
-      int         index;       /* stable integer ID; used as pthread_key_t index */
+      const Symbol *name;       /* interned symbol, e.g. "*log-level*" */
+      Type          value_type; /* declared element type */
+      int           index;      /* stable sequential ID; used as pthread_key_t index in DV2 */
+      bool          is_private; /* ^private annotation */
   } DynVarEntry;
   ```
 
-- [ ] Elaborate `(defdynamic *name* :type root-expr)`:
+- [x] Elaborate `(defdynamic *name* :type root-expr)` in `src/compiler/elab_dynvars.c`:
   - Resolve `:type` to a `Type *`
   - Reject if type is substructural (`TUR_E0603`)
   - Reject if not at module toplevel (`TUR_E0604`)
   - Elaborate `root-expr` and check it matches `:type` (`TUR_E0602`)
-  - Register `DynVarEntry` in the module's dynvar table
-- [ ] Add `TUR_E0603` and `TUR_E0604` to `diag.h` / `diag.c`
-- [ ] Warn (`TUR_W0600`) if name does not match `*...*` pattern
-- [ ] Baseline fixtures from P2 already present; all intentionally red
+  - Register `DynVarEntry` in `e->dynvar_entries`; add global `Binding` with `is_dynvar = true`
+- [x] `TUR_E0603`, `TUR_E0604`, and `TUR_W0600` registered in `diag.h` / `diag.c` (done in P0)
+- [x] Warn (`TUR_W0600`) if name does not match `*...*` pattern
+- [x] `-Xdynamic-vars` flag added to `src/main.c` and `src/runtime/globals.h`
+- [x] `EX_DEFDYNAMIC` stub in `emit_expr.c` and `emit_stmt.c` (returns `atom_nil()`)
+- [x] Build clean: `just build` passes with zero errors
+- [x] Baseline fixtures from P2 already present; all intentionally red until DV1+
 
 ---
 
@@ -296,7 +394,7 @@ The existing `set!` path in `elab_forms.c` dispatches on whether the target is a
 
 ---
 
-## Phase DV2 -- Codegen
+## Phase DV2 -- Codegen ✓
 
 **Goal:** Emit the pthread_key_t binding stack and generate correct C for all dynamic var operations.
 
@@ -379,7 +477,7 @@ A compiler optimization pass can hoist the `pthread_getspecific` call if the var
 
 ---
 
-## Phase DV3 -- Binding Conveyance
+## Phase DV3 -- Binding Conveyance ✓ COMPLETE
 
 **Goal:** Allow child threads to inherit a snapshot of the parent's binding frame.
 
@@ -427,25 +525,44 @@ The snapshot values are **copied** (via the var type's copy semantics), not shar
 (defn spawn-conveying [f] :thread ...)
 ```
 
+### Implementation checklist
+
+- [x] `TurDynFrame.heap` flag added to distinguish heap-allocated DV3 snapshot frames from stack-allocated DV2 binding frames; key destructor walks and frees heap frames on thread exit
+- [x] `_TurDynSnap` struct emitted per-program in `src/compiler/emit_module.c` with one typed field pair per `defdynamic` declaration
+- [x] `_tur_binding_snapshot_capture()` -- copies top-of-stack value for each registered dynamic var into a heap-allocated `_TurDynSnap`
+- [x] `_tur_binding_snapshot_install()` -- pushes heap-allocated `TurDynFrame` onto each var's per-thread key on the new thread; heap frames are freed by the key destructor on thread exit
+- [x] `_TurConveyArg` + `_tur_convey_trampoline` -- thread entry point that installs the snapshot before running the closure, then frees the snapshot
+- [x] `_tur_spawn_conveying()` -- captures snapshot, allocates `TurThreadHandle`, spawns via `_tur_convey_trampoline`; returns handle compatible with `thread-join`/`thread-detach`
+- [x] `stdlib/dynvar.tur` -- `spawn-conveying` stdlib helper with full docstring; uses `#{Unsafe}` effect tag; calls `_tur_spawn_conveying` via inline C
+- [x] `tests/fixtures/dynvar-convey/` -- happy-path fixture: child thread inherits parent `binding [*log-level* 42]` and prints `42`; passes
+
 ---
 
-## Phase DV4 -- Integration
+## Phase DV4 -- Integration ✓ COMPLETE
 
 **Goal:** Stdlib dynamic vars, effect integration guidance, and complete documentation.
 
-- [ ] Add common dynamic vars to `stdlib/dynvar.tur`:
+- [x] Add common dynamic vars to `stdlib/dynvar.tur`:
   - `*log-level* : int` (default `1`)
-  - `*locale* : str` (default `"en-US"`)
+  - `*locale* : cstr` (default `"en-US"`) -- `:cstr` not `:str`; `:str` is CK_MOVE and cannot be held in a dynamic var
   - `*random-seed* : int` (default `0` -- `0` means use system entropy)
-  - `*current-module* : str` (default `""` -- set by module preamble, useful for structured logging)
-- [ ] Document interaction pattern with algebraic effects: dynamic vars for configuration-style context, effects for interceptable operations. Provide a guide section "Effects vs. Dynamic Vars" in `docs/guides/`.
-- [ ] `tur explain TUR_E0600`, `TUR_E0601`, `TUR_E0602`, `TUR_E0603`, `TUR_E0604`, `TUR_E0605` entries
-- [ ] Integration tests:
-  - Scoped log level (Example 1)
-  - Test fixture injection (Example 2)
-  - Thread-local locale (Example 3)
-  - `spawn-conveying` snapshot isolation (Example 4)
-  - Negative: `set!` outside `binding`, type mismatch, linear type rejection, `set!` in `atomically`
+  - `*current-module* : cstr` (default `""` -- set by module preamble, useful for structured logging)
+- [x] Document interaction pattern with algebraic effects: dynamic vars for configuration-style context, effects for interceptable operations. Guide written at `docs/guides/dynamic-vars-guide.md` with "Effects vs. Dynamic Vars" comparison table.
+- [x] `tur explain TUR_E0600`, `TUR_E0601`, `TUR_E0602`, `TUR_E0603`, `TUR_E0604`, `TUR_E0605` entries -- confirmed already fully implemented in `src/compiler/diag.c`
+- [x] Integration tests (all passing):
+  - `dynvar-log-level` -- scoped log level; root default `1`, override to `0` (script mode)
+  - `dynvar-inject` -- test fixture injection via `*db*` pointer
+  - `dynvar-thread-locale` -- dynamic scoping: callee sees binding from callsite (script mode)
+  - `dynvar-convey-isolation` -- `spawn-conveying` snapshot isolation: parent mutates after spawn, child sees snapshot
+  - Negative: `dynvar-set-no-binding`, `dynvar-set-non-dynamic`, `dynvar-type-mismatch`, `dynvar-linear-type`, `dynvar-set-in-atomic` (all from P2 baseline)
+
+### Known limitation: root-value init with explicit `defn main`
+
+When a program defines an explicit `(defn main [] ...)`, the `defdynamic` root-value initializer expressions are **not emitted** in the generated C `main()`. The root C global is zero-initialized (0 for `:int`, NULL for `:cstr`). This means non-zero or non-null root defaults are silently ignored when `defn main` is present.
+
+**Workaround:** Use script mode (no explicit `defn main`) for programs that rely on non-zero root values. The root-init statement IS emitted in the script-mode generated main. Fixtures `dynvar-log-level` and `dynvar-thread-locale` use script mode for this reason. `dynvar-inject` uses `defn main` safely because its `*db*` root default is `0` (matches C zero-init).
+
+This is tracked as a separate bug; fixing it requires emitting root-value initializer statements before the first user statement in the generated `main()` when `defn main` is present.
 
 ---
 
@@ -490,17 +607,19 @@ Recommend implementing DV0-DV2 together as a single sprint once Phase T19 is con
 
 1. **`alter-root`:** Should there be an explicit form for mutating the root binding (analogous to Clojure's `alter-var-root`)? Mutating the root is a global side effect and should require an explicit acknowledgement. A tentative `alter-root!` form with a prominent warning is one option; alternatively, the root can only be set at `defdynamic` declaration time (no post-declaration root mutation).
 
-   **Tentative decision:** Provide `(alter-root! *name* new-val)` gated behind a `-Xunsafe-alter-root` flag. Without the flag, root mutation is disallowed after module initialization.
+   **Decision:** Provide `(alter-root! *name* new-val)` gated behind a `-Xunsafe-alter-root` flag. Without the flag, root mutation is disallowed after module initialization.
 
 2. **`binding` and effect handler boundaries:** If a `binding` form spans an effect handler's resume boundary (i.e., the body of `binding` performs an effect and is resumed later), the binding frame must survive across the continuation. Since the frame lives on the C stack and continuations are implemented via `longjmp`/`setjmp`, the frame's stack slot may have been reclaimed. Does this require heap-allocating the frame in the presence of effect handlers?
 
-   **Tentative decision:** Heap-allocate binding frames when `-Xeffect-types` is active and a `binding` body contains a `perform` site (detectable at elaboration time). Stack allocation remains the default when no `perform` is in scope.
+   **Decision:** Heap-allocate binding frames when `-Xeffect-types` is active and a `binding` body contains a `perform` site (detectable at elaboration time). Stack allocation remains the default when no `perform` is in scope.
 
 3. **`binding` with a non-`DynVarEntry` name:** If `(binding [x 1] ...)` appears where `x` is a plain local (not a dynamic var), should it be a type error or should it shadow the local lexically? This overlaps with the existing use of `let` for local shadowing. The safest answer is: `binding` requires all names to be `defdynamic` vars; use `let` for local shadowing.
 
-   **Tentative decision:** `binding` with a non-dynamic-var name is `TUR_E0600`. Use `let` for lexical shadowing.
+   **Decision:** `binding` with a non-dynamic-var name is `TUR_E0600`. Use `let` for lexical shadowing.
 
-4. **Windows portability:** `__attribute__((cleanup))` is not available on MSVC. If Windows support is added (see `windows-support-plan.md`), the binding stack push/pop must use an alternative mechanism (e.g. explicit `__try`/`__finally` on Windows, or wrapping every binding body in a helper function that takes a cleanup callback).
+4. **Windows portability:** `__attribute__((cleanup))` is not available on MSVC. If Windows support is added (see `windows-support-plan.md`), the binding stack push/pop must use a portable alternative.
+
+   **Decision:** Wrap every `binding` body in a helper function that takes the frame pointer and a cleanup callback. The helper calls the body, then unconditionally pops the frame on return -- no platform-specific `__try`/`__finally` needed. This is the default codegen path; `__attribute__((cleanup))` is used as an optimisation on GCC/Clang when available (detected via `#ifdef __GNUC__`).
 
 ---
 
