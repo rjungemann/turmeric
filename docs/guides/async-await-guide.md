@@ -111,10 +111,10 @@ A **fiber** is a user-space thread (lightweight thread) that:
 ;; Fork two concurrent operations; wait for both
 (async
   (let [fut-a (async (fetch-a))
-        fut-b (async (fetch-b))]
-    (let [a (await fut-a)
-          b (await fut-b)]
-      (process a b))))
+        fut-b (async (fetch-b))
+        a     (await fut-a)
+        b     (await fut-b)]
+    (process a b)))
 ```
 
 ### Error Handling

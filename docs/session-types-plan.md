@@ -125,17 +125,17 @@ Many practical concurrent systems involve more than two participants -- handshak
 
 ;; Server implementation
 (defn server [^linear chan : (Session ServerProtocol)] : unit
-  (let [[req chan] (recv chan)]
-    (let [resp      (handle-request req)]
-      (let [chan    (send chan resp)]
-        (close chan)))))
+  (let [[req chan] (recv chan)
+        resp       (handle-request req)
+        chan       (send chan resp)]
+    (close chan)))
 
 ;; Client implementation
 (defn client [^linear chan : (Session ClientProtocol)] : unit
-  (let [chan         (send chan (make-request))]
-    (let [[resp chan] (recv chan)]
-      (close chan)
-      (process-response resp))))
+  (let [chan        (send chan (make-request))
+        [resp chan] (recv chan)]
+    (close chan)
+    (process-response resp)))
 ```
 
 ### Example 2: Repeating protocol with recursion
@@ -150,9 +150,9 @@ Many practical concurrent systems involve more than two participants -- handshak
 (defn echo-server [^linear chan : (Session EchoServer)] : unit
   (match (offer chan)
     (Left chan)
-      (let [[n chan] (recv chan)]
-        (let [chan (send chan n)]
-          (echo-server chan)))
+      (let [[n chan] (recv chan)
+             chan    (send chan n)]
+        (echo-server chan))
     (Right chan)
       (close chan)))
 ```
@@ -170,15 +170,15 @@ Many practical concurrent systems involve more than two participants -- handshak
 (defn calculator-server [^linear chan : (Session Calculator)] : unit
   (match (offer chan)
     (Left chan)
-      (let [[[Add x y] chan] (recv chan)]
-        (let [chan (send chan (+ x y))]
-          (calculator-server chan)))
+      (let [[[Add x y] chan] (recv chan)
+             chan            (send chan (+ x y))]
+        (calculator-server chan))
     (Right chan)
       (match (offer chan)
         (Left chan)
-          (let [[[Sub x y] chan] (recv chan)]
-            (let [chan (send chan (- x y))]
-              (calculator-server chan)))
+          (let [[[Sub x y] chan] (recv chan)
+                 chan            (send chan (- x y))]
+            (calculator-server chan))
         (Right chan)
           (close chan))))
 ```
@@ -199,21 +199,21 @@ Many practical concurrent systems involve more than two participants -- handshak
 ;;   (project Handshake C) = Recv Ack (Send AckAck Close)
 
 (defn role-a [^linear chan : (Role Handshake A)] : unit
-  (let [chan        (send-to chan B (make-syn))]
-    (let [[sa chan] (recv-from chan B)]
-      (let [chan      (send-to chan C (make-ack))]
-        (let [[aa chan] (recv-from chan C)]
-          (close chan))))))
+  (let [chan      (send-to chan B (make-syn))
+        [sa chan] (recv-from chan B)
+        chan      (send-to chan C (make-ack))
+        [aa chan] (recv-from chan C)]
+    (close chan)))
 
 (defn role-b [^linear chan : (Role Handshake B)] : unit
-  (let [[syn chan] (recv-from chan A)]
-    (let [chan     (send-to chan A (make-syn-ack))]
-      (close chan))))
+  (let [[syn chan] (recv-from chan A)
+        chan       (send-to chan A (make-syn-ack))]
+    (close chan)))
 
 (defn role-c [^linear chan : (Role Handshake C)] : unit
-  (let [[ack chan] (recv-from chan A)]
-    (let [chan     (send-to chan A (make-ack-ack))]
-      (close chan))))
+  (let [[ack chan] (recv-from chan A)
+        chan       (send-to chan A (make-ack-ack))]
+    (close chan)))
 
 ;; Spawning all three roles from a single scoped protocol
 (defn run-handshake [] : unit
@@ -697,13 +697,13 @@ Example coordinator/worker pattern:
   [^linear ch-a : (Session (Send Work (Recv Result Close)))
    ^linear ch-b : (Session (Send Work (Recv Result Close)))]
   : unit
-  (let [ch-a (send ch-a work-a)]
-    (let [ch-b (send ch-b work-b)]
-      (let [[res-a ch-a] (recv ch-a)]
-        (let [[res-b ch-b] (recv ch-b)]
-          (close ch-a)
-          (close ch-b)
-          (combine res-a res-b))))))
+  (let [ch-a         (send ch-a work-a)
+        ch-b         (send ch-b work-b)
+        [res-a ch-a] (recv ch-a)
+        [res-b ch-b] (recv ch-b)]
+    (close ch-a)
+    (close ch-b)
+    (combine res-a res-b)))
 ```
 
 #### What it loses vs. Option A
@@ -1091,32 +1091,32 @@ error[TUR-E0220]: global protocol `BrokenCommit` is not projectable onto
 (defn coordinator [^linear chan : (Role TwoPhaseCommit Coordinator)
                    txn-id : int
                    should-commit : bool] : unit
-  (let [chan (send-to chan P1 (Prepare txn-id))]
-    (let [chan (send-to chan P2 (Prepare txn-id))]
-      (let [[vote1 chan] (recv-from chan P1)]
-        (let [[vote2 chan] (recv-from chan P2)]
-          (if (and (Vote.yes vote1) (Vote.yes vote2))
-            (let [chan (choose-left chan)]
-              (let [chan (send-to chan P1 (Commit txn-id))]
-                (let [chan (send-to chan P2 (Commit txn-id))]
-                  (close chan))))
-            (let [chan (choose-right chan)]
-              (let [chan (send-to chan P1 (Abort txn-id))]
-                (let [chan (send-to chan P2 (Abort txn-id))]
-                  (close chan))))))))))
+  (let [chan         (send-to chan P1 (Prepare txn-id))
+        chan         (send-to chan P2 (Prepare txn-id))
+        [vote1 chan] (recv-from chan P1)
+        [vote2 chan] (recv-from chan P2)]
+    (if (and (Vote.yes vote1) (Vote.yes vote2))
+      (let [chan (choose-left chan)
+            chan (send-to chan P1 (Commit txn-id))
+            chan (send-to chan P2 (Commit txn-id))]
+        (close chan))
+      (let [chan (choose-right chan)
+            chan (send-to chan P1 (Abort txn-id))
+            chan (send-to chan P2 (Abort txn-id))]
+        (close chan)))))
 
 ;; Participant: receives Prepare, votes, then awaits commit or abort
 (defn participant [^linear chan : (Role TwoPhaseCommit P1)
                    ready : bool] : unit
-  (let [[prep chan] (recv-from chan Coordinator)]
-    (let [chan (send-to chan Coordinator (Vote (Prepare.transaction-id prep) ready))]
-      (match (offer chan)
-        (Left chan)
-          (let [[_ chan] (recv-from chan Coordinator)]   ; Commit
-            (close chan))
-        (Right chan)
-          (let [[_ chan] (recv-from chan Coordinator)]   ; Abort
-            (close chan))))))
+  (let [[prep chan] (recv-from chan Coordinator)
+        chan        (send-to chan Coordinator (Vote (Prepare.transaction-id prep) ready))]
+    (match (offer chan)
+      (Left chan)
+        (let [[_ chan] (recv-from chan Coordinator)]   ; Commit
+          (close chan))
+      (Right chan)
+        (let [[_ chan] (recv-from chan Coordinator)]   ; Abort
+          (close chan)))))
 
 ;; Spawn all three roles from a single scoped protocol
 (defn run-two-phase-commit [txn-id : int] : unit
@@ -1230,55 +1230,55 @@ compiler applies the uninvolved-role skip rule at each of these steps.
                     scope : str
                     client-secret : str
                     path : str] : ApiResponse
-  (let [chan           (send-to chan AuthServer (AuthRequest client-id scope))]
-    (let [[code chan]  (recv-from chan AuthServer)]
-      (let [chan       (send-to chan AuthServer
-                         (TokenRequest (AuthCode.code code) client-id client-secret))]
-        (let [[tok chan] (recv-from chan AuthServer)]
-          (let [chan   (send-to chan ResourceServer
-                         (ApiRequest (AccessToken.token tok) path))]
-            (let [[resp chan] (recv-from chan ResourceServer)]
-              (close chan)
-              resp)))))))
+  (let [chan         (send-to chan AuthServer (AuthRequest client-id scope))
+        [code chan]  (recv-from chan AuthServer)
+        chan         (send-to chan AuthServer
+                       (TokenRequest (AuthCode.code code) client-id client-secret))
+        [tok chan]   (recv-from chan AuthServer)
+        chan         (send-to chan ResourceServer
+                       (ApiRequest (AccessToken.token tok) path))
+        [resp chan]  (recv-from chan ResourceServer)]
+    (close chan)
+    resp))
 
 ;; AuthServer: issues codes, exchanges tokens, validates on demand
 (defn oauth-auth-server [^linear chan : (Role OAuthFlow AuthServer)] : unit
-  (let [[req chan]   (recv-from chan Client)]
-    (let [code       (issue-auth-code (AuthRequest.client-id req)
-                                      (AuthRequest.scope req))]
-      (let [chan     (send-to chan Client (AuthCode code 600))]
-        (let [[treq chan] (recv-from chan Client)]
-          (let [tok  (exchange-code-for-token
-                       (TokenRequest.code treq)
-                       (TokenRequest.client-id treq))]
-            (let [chan (send-to chan Client (AccessToken tok "Bearer" 3600))]
-              (let [[vtok chan] (recv-from chan ResourceServer)]
-                (let [subject   (validate-token (ValidateToken.token vtok))]
-                  (let [chan    (send-to chan ResourceServer
-                                  (TokenOk subject (AuthRequest.scope req)))]
-                    (close chan)))))))))))
+  (let [[req chan]  (recv-from chan Client)
+        code        (issue-auth-code (AuthRequest.client-id req)
+                                     (AuthRequest.scope req))
+        chan        (send-to chan Client (AuthCode code 600))
+        [treq chan] (recv-from chan Client)
+        tok         (exchange-code-for-token
+                      (TokenRequest.code treq)
+                      (TokenRequest.client-id treq))
+        chan        (send-to chan Client (AccessToken tok "Bearer" 3600))
+        [vtok chan] (recv-from chan ResourceServer)
+        subject     (validate-token (ValidateToken.token vtok))
+        chan        (send-to chan ResourceServer
+                      (TokenOk subject (AuthRequest.scope req)))]
+    (close chan)))
 
 ;; ResourceServer: receives a request, validates the token, returns data
 (defn oauth-resource-server [^linear chan : (Role OAuthFlow ResourceServer)] : unit
-  (let [[req chan]   (recv-from chan Client)]
-    (let [chan       (send-to chan AuthServer
-                       (ValidateToken (ApiRequest.token req)))]
-      (let [[ok chan] (recv-from chan AuthServer)]
-        (let [body   (fetch-resource (ApiRequest.path req) (TokenOk.subject ok))]
-          (let [chan  (send-to chan Client (ApiResponse 200 body))]
-            (close chan)))))))
+  (let [[req chan] (recv-from chan Client)
+        chan       (send-to chan AuthServer
+                     (ValidateToken (ApiRequest.token req)))
+        [ok chan]  (recv-from chan AuthServer)
+        body       (fetch-resource (ApiRequest.path req) (TokenOk.subject ok))
+        chan       (send-to chan Client (ApiResponse 200 body))]
+    (close chan)))
 
 ;; Wire all three roles together
 (defn run-oauth-flow [client-id : str
                       client-secret : str
                       scope : str
                       path : str] : ApiResponse
-  (let [[client auth resource] (make-protocol OAuthFlow)]
-    (let [result (promise)]
-      (spawn (fn [] (oauth-auth-server auth)))
-      (spawn (fn [] (oauth-resource-server resource)))
-      (let [resp (oauth-client client client-id scope client-secret path)]
-        resp))))
+  (let [[client auth resource] (make-protocol OAuthFlow)
+        result                 (promise)]
+    (spawn (fn [] (oauth-auth-server auth)))
+    (spawn (fn [] (oauth-resource-server resource)))
+    (let [resp (oauth-client client client-id scope client-secret path)]
+      resp)))
 ```
 
 ### What the type checker verifies

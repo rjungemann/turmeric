@@ -551,6 +551,86 @@ char *atom_cstr(StrSlice s) {
     return p;
 }
 
+/* SS2: Perform __TUR_CAP_N__ / __TUR_VAL_N__ substitution on an InlineC node.
+ * Emits val_exprs[N] into temp vars in body, then returns a malloc'd C string
+ * with all __TUR_CAP_N__ and __TUR_VAL_N__ placeholders substituted. */
+char *inline_c_substitute(EmitCtx *ctx, Buf *body, InlineC *ic) {
+    /* Fast path: no substitution needed. */
+    if (ic->n_captures == 0 && ic->n_val_exprs == 0) {
+        return strndup(ic->code.p, ic->code.len);
+    }
+
+    /* Build capture name array. */
+    char **cap_names = NULL;
+    if (ic->n_captures > 0) {
+        cap_names = (char **)calloc(ic->n_captures, sizeof(char *));
+        for (int ci = 0; ci < ic->n_captures; ci++) {
+            cap_names[ci] = name_for_binding(ctx, ic->captures[ci]);
+        }
+    }
+
+    /* Evaluate val_exprs into temp variables. */
+    char **val_temps = NULL;
+    if (ic->n_val_exprs > 0) {
+        val_temps = (char **)calloc(ic->n_val_exprs, sizeof(char *));
+        for (int vi = 0; vi < ic->n_val_exprs; vi++) {
+            char *tmp = fresh_tmp(ctx);
+            char *vv = emit_value(ctx, body, ic->val_exprs[vi]);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s %s = %s;\n",
+                       type_c_name(ic->val_exprs[vi]->type), tmp, vv);
+            free(vv);
+            val_temps[vi] = tmp;
+        }
+    }
+
+    /* Scan the code string and perform substitution. */
+    const char *code = ic->code.p;
+    uint32_t len = ic->code.len;
+    Buf result; buf_init(&result);
+    for (uint32_t i = 0; i < len; ) {
+        bool matched = false;
+        /* Check for __TUR_CAP_N__ */
+        if (i + 12 <= len && memcmp(code + i, "__TUR_CAP_", 10) == 0) {
+            uint32_t j = i + 10;
+            int n = 0; bool have_digit = false;
+            while (j < len && code[j] >= '0' && code[j] <= '9') {
+                n = n * 10 + (code[j] - '0'); j++; have_digit = true;
+            }
+            if (have_digit && j + 1 < len && code[j] == '_' && code[j+1] == '_') {
+                j += 2;
+                buf_puts(&result, (cap_names && n < ic->n_captures) ? cap_names[n] : "NULL");
+                i = j; matched = true;
+            }
+        }
+        /* Check for __TUR_VAL_N__ */
+        if (!matched && i + 12 <= len && memcmp(code + i, "__TUR_VAL_", 10) == 0) {
+            uint32_t j = i + 10;
+            int n = 0; bool have_digit = false;
+            while (j < len && code[j] >= '0' && code[j] <= '9') {
+                n = n * 10 + (code[j] - '0'); j++; have_digit = true;
+            }
+            if (have_digit && j + 1 < len && code[j] == '_' && code[j+1] == '_') {
+                j += 2;
+                buf_puts(&result, (val_temps && n < ic->n_val_exprs) ? val_temps[n] : "0");
+                i = j; matched = true;
+            }
+        }
+        if (!matched) { buf_putc(&result, code[i++]); }
+    }
+
+    /* Free temporaries. */
+    for (int ci = 0; ci < ic->n_captures; ci++) free(cap_names[ci]);
+    free(cap_names);
+    for (int vi = 0; vi < ic->n_val_exprs; vi++) free(val_temps[vi]);
+    free(val_temps);
+
+    buf_putc(&result, '\0');
+    char *out = strdup(result.data);
+    buf_free(&result);
+    return out;
+}
+
 /* ------------ builtin emitters ------------ */
 
 char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {

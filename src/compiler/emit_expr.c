@@ -1517,12 +1517,11 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             return atom_nil();
         }
         case EX_INLINE_C: {
-            /* Return the inline C code as a value string so it can be used
-             * as an expression (e.g. a let-binding initializer). Statement-
-             * position use goes through emit_stmt which handles EX_INLINE_C
-             * separately (writes code + newline). */
+            /* Return the inline C code as a value string (with __TUR_CAP_N__ /
+             * __TUR_VAL_N__ substitution).  Statement-position use goes through
+             * emit_stmt which handles EX_INLINE_C separately. */
             InlineC *ic = e->as.inline_c_.inline_c;
-            return strndup(ic->code.p, ic->code.len);
+            return inline_c_substitute(ctx, body, ic);
         }
         /* Phase 3 */
         /* Phase 4 */
@@ -3195,9 +3194,97 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_DEFGADT:
             return atom_nil();
 
-        /* Phase G0: EX_MATCH — emit as statement-expression ({ ... result; }) */
+        /* Phase G0: EX_MATCH -- emit as statement-expression ({ ... result; }) */
         case EX_MATCH: {
-            /* IT4: Union match — tag-based dispatch via TUR_GETTAG / TUR_UNTAG.
+            /* SS2: Session offer match -- TY_SESSION_OFFER scrutinee.
+             * The scrutinee emits a tur_session_recv_tag() call (returns int64_t tag).
+             * Each arm binds the channel pointer to its arm variable. */
+            if (g_sessions_enabled &&
+                e->as.match_.scrutinee->type.kind == TY_SESSION_OFFER) {
+                const Expr *scrut = e->as.match_.scrutinee;
+                bool nil_result = (e->type.kind == TY_NIL);
+                char *tmp = NULL;
+                if (!nil_result) {
+                    tmp = fresh_tmp(ctx);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "%s %s = 0;\n", type_c_name(e->type), tmp);
+                }
+                /* Evaluate the scrutinee (returns the tag as int64_t). */
+                char *tag_val = emit_value(ctx, body, scrut);
+                char *tag_tmp = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "int64_t %s = %s;\n", tag_tmp, tag_val);
+                free(tag_val);
+
+                /* Get the channel C name from the scrutinee's val_exprs[0]. */
+                char *chan_name = NULL;
+                if (scrut->kind == EX_INLINE_C) {
+                    InlineC *sc_ic = scrut->as.inline_c_.inline_c;
+                    if (sc_ic->n_val_exprs > 0 && sc_ic->val_exprs[0]
+                        && sc_ic->val_exprs[0]->kind == EX_VAR) {
+                        chan_name = name_for_binding(ctx, sc_ic->val_exprs[0]->as.var.binding);
+                    }
+                }
+                if (!chan_name) chan_name = strdup("NULL");
+
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "{\n");
+                ctx->indent += 4;
+
+                bool first_arm = true;
+                for (uint32_t ai = 0; ai < e->as.match_.n_arms; ai++) {
+                    MatchArm *arm = &e->as.match_.arms[ai];
+                    MatchPattern *pat = &arm->pattern;
+
+                    indent_buf(body, ctx->indent);
+                    if (pat->is_wildcard || pat->union_member_idx < 0) {
+                        buf_puts(body, first_arm ? "{\n" : "else {\n");
+                    } else {
+                        if (first_arm) {
+                            buf_printf(body, "if (%s == %d) {\n",
+                                       tag_tmp, pat->union_member_idx);
+                        } else {
+                            buf_printf(body, "else if (%s == %d) {\n",
+                                       tag_tmp, pat->union_member_idx);
+                        }
+                    }
+                    first_arm = false;
+                    ctx->indent += 4;
+
+                    /* Bind the arm variable to the channel pointer. */
+                    if (pat->n_bindings > 0 && pat->bindings[0]) {
+                        Binding *fb = pat->bindings[0];
+                        char *bname = name_for_binding(ctx, fb);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "%s %s = (void *)%s;\n",
+                                   type_c_name(fb->type), bname, chan_name);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "(void)%s;\n", bname);
+                        free(bname);
+                    }
+
+                    if (!nil_result) {
+                        char *bv = emit_value(ctx, body, arm->body);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "%s = %s;\n", tmp, bv);
+                        free(bv);
+                    } else {
+                        emit_stmt(ctx, body, arm->body);
+                    }
+                    ctx->indent -= 4;
+                    indent_buf(body, ctx->indent);
+                    buf_puts(body, "}\n");
+                }
+
+                free(chan_name);
+                free(tag_tmp);
+                ctx->indent -= 4;
+                indent_buf(body, ctx->indent);
+                buf_puts(body, "}\n");
+                return nil_result ? atom_nil() : tmp;
+            }
+
+            /* IT4: Union match -- tag-based dispatch via TUR_GETTAG / TUR_UNTAG.
              * Emits an if/else-if/else chain; each type-narrowing arm checks
              * the discriminant tag and binds the untagged value to the arm variable. */
             if (e->as.match_.scrutinee->type.kind == TY_UNION ||

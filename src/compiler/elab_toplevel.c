@@ -303,6 +303,8 @@ Expr *elab_form(Elab *e, Form *f) {
             ic->return_type = TYPE_NIL; /* Will be inferred from context or default to void */
             ic->captures = NULL;
             ic->n_captures = 0;
+            ic->val_exprs = NULL;
+            ic->n_val_exprs = 0;
             
             Expr *out = expr_new(e->arena, EX_INLINE_C, TYPE_NIL, f->span);
             out->as.inline_c_.inline_c = ic;

@@ -24,11 +24,11 @@ Like database transactions, an STM transaction either completes entirely or roll
 ;; Transfer funds between accounts atomically
 (atomically
   (fn []
-    (let [from-balance (read-tvar from-account)]
-      (let [to-balance (read-tvar to-account)]
-        (when (>= from-balance amount)
-          (write-tvar from-account (- from-balance amount))
-          (write-tvar to-account (+ to-balance amount)))))))
+    (let [from-balance (read-tvar from-account)
+          to-balance   (read-tvar to-account)]
+      (when (>= from-balance amount)
+        (write-tvar from-account (- from-balance amount))
+        (write-tvar to-account (+ to-balance amount))))))
 ```
 
 ### Transactional Variables: TVar

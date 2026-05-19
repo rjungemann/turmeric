@@ -2478,7 +2478,71 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "    if (cb->strong_count > 0) return true;\n");
     buf_puts(out, "    return (cb->color == GC_BLACK || cb->color == GC_GREY);\n");
     buf_puts(out, "}\n\n");
-    
+
+    /* SS2: TurChannel -- synchronous rendezvous channel for session types.
+     * Only emitted when -Xsessions is active. */
+    if (g_sessions_enabled) {
+        buf_puts(out, "/* SS2: TurChannel -- synchronous rendezvous channel for session types */\n");
+        buf_puts(out, "typedef struct { pthread_mutex_t mu; pthread_cond_t cv; int64_t val; int state; } TurSyncCh;\n");
+        buf_puts(out, "typedef struct { TurSyncCh data; TurSyncCh branch; int refcount; pthread_mutex_t rc_mu; } TurChannel;\n");
+        buf_puts(out, "static TurChannel *tur_session_new(void) {\n");
+        buf_puts(out, "    TurChannel *ch = (TurChannel *)calloc(1, sizeof(TurChannel));\n");
+        buf_puts(out, "    pthread_mutex_init(&ch->data.mu, NULL);\n");
+        buf_puts(out, "    pthread_cond_init(&ch->data.cv, NULL);\n");
+        buf_puts(out, "    pthread_mutex_init(&ch->branch.mu, NULL);\n");
+        buf_puts(out, "    pthread_cond_init(&ch->branch.cv, NULL);\n");
+        buf_puts(out, "    pthread_mutex_init(&ch->rc_mu, NULL);\n");
+        buf_puts(out, "    ch->refcount = 2;\n");
+        buf_puts(out, "    return ch;\n");
+        buf_puts(out, "}\n");
+        buf_puts(out, "static void tur_session_send(TurChannel *ch, int64_t val) {\n");
+        buf_puts(out, "    pthread_mutex_lock(&ch->data.mu);\n");
+        buf_puts(out, "    ch->data.val = val; ch->data.state = 1;\n");
+        buf_puts(out, "    pthread_cond_signal(&ch->data.cv);\n");
+        buf_puts(out, "    while (ch->data.state) pthread_cond_wait(&ch->data.cv, &ch->data.mu);\n");
+        buf_puts(out, "    pthread_mutex_unlock(&ch->data.mu);\n");
+        buf_puts(out, "}\n");
+        buf_puts(out, "static int64_t tur_session_recv(TurChannel *ch) {\n");
+        buf_puts(out, "    pthread_mutex_lock(&ch->data.mu);\n");
+        buf_puts(out, "    while (!ch->data.state) pthread_cond_wait(&ch->data.cv, &ch->data.mu);\n");
+        buf_puts(out, "    int64_t v = ch->data.val; ch->data.state = 0;\n");
+        buf_puts(out, "    pthread_cond_signal(&ch->data.cv);\n");
+        buf_puts(out, "    pthread_mutex_unlock(&ch->data.mu);\n");
+        buf_puts(out, "    return v;\n");
+        buf_puts(out, "}\n");
+        buf_puts(out, "static void tur_session_send_tag(TurChannel *ch, int64_t tag) {\n");
+        buf_puts(out, "    pthread_mutex_lock(&ch->branch.mu);\n");
+        buf_puts(out, "    ch->branch.val = tag; ch->branch.state = 1;\n");
+        buf_puts(out, "    pthread_cond_signal(&ch->branch.cv);\n");
+        buf_puts(out, "    while (ch->branch.state) pthread_cond_wait(&ch->branch.cv, &ch->branch.mu);\n");
+        buf_puts(out, "    pthread_mutex_unlock(&ch->branch.mu);\n");
+        buf_puts(out, "}\n");
+        buf_puts(out, "static int64_t tur_session_recv_tag(TurChannel *ch) {\n");
+        buf_puts(out, "    pthread_mutex_lock(&ch->branch.mu);\n");
+        buf_puts(out, "    while (!ch->branch.state) pthread_cond_wait(&ch->branch.cv, &ch->branch.mu);\n");
+        buf_puts(out, "    int64_t tag = ch->branch.val; ch->branch.state = 0;\n");
+        buf_puts(out, "    pthread_cond_signal(&ch->branch.cv);\n");
+        buf_puts(out, "    pthread_mutex_unlock(&ch->branch.mu);\n");
+        buf_puts(out, "    return tag;\n");
+        buf_puts(out, "}\n");
+        buf_puts(out, "static void tur_session_close(TurChannel *ch) {\n");
+        buf_puts(out, "    pthread_mutex_lock(&ch->rc_mu);\n");
+        buf_puts(out, "    int rc = --ch->refcount;\n");
+        buf_puts(out, "    pthread_mutex_unlock(&ch->rc_mu);\n");
+        buf_puts(out, "    if (rc == 0) {\n");
+        buf_puts(out, "        pthread_mutex_destroy(&ch->data.mu); pthread_cond_destroy(&ch->data.cv);\n");
+        buf_puts(out, "        pthread_mutex_destroy(&ch->branch.mu); pthread_cond_destroy(&ch->branch.cv);\n");
+        buf_puts(out, "        pthread_mutex_destroy(&ch->rc_mu); free(ch);\n");
+        buf_puts(out, "    }\n");
+        buf_puts(out, "}\n");
+        buf_puts(out, "static void *tur_session_thread_wrapper(void *arg) {\n");
+        buf_puts(out, "    int64_t *fat = (int64_t *)arg;\n");
+        buf_puts(out, "    int64_t (*thunk)(void *) = (int64_t (*)(void *))(intptr_t)fat[0];\n");
+        buf_puts(out, "    thunk(arg);\n");
+        buf_puts(out, "    return NULL;\n");
+        buf_puts(out, "}\n\n");
+    }
+
     /* Phase 4 v1: Collect all defer thunks into a buffer so they can be
      * emitted after extern_decls and fwd_decls (defer bodies may call
      * extern-c functions or forward-declared Turmeric functions). */
