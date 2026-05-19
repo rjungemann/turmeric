@@ -1,0 +1,14 @@
+;; SS5: session-global-basic -- declare a simple 2-role protocol.
+;;
+;; Protocol Ping: A sends an int to B, B sends an int back to A.
+;; This tests that defprotocol parses and registers without errors.
+;; make-protocol is not called here -- just verifying the declaration
+;; compiles successfully.
+
+(defprotocol Ping [A B]
+  (-> A B int)
+  (-> B A int))
+
+(defn main [] :int
+  (println "ok")
+  0)

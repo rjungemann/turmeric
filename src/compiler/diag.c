@@ -157,6 +157,11 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0210_SESSION_NOT_DUAL:         return "TUR-E0210";
         case TUR_E0211_SESSION_DROPPED:          return "TUR-E0211";
         case TUR_E0212_SESSION_PROTO_MISMATCH:   return "TUR-E0212";
+        /* SS5: Global protocol type errors */
+        case TUR_E0220_GLOBAL_NOT_PROJECTABLE:   return "TUR-E0220";
+        case TUR_E0221_ROLE_NOT_DECLARED:        return "TUR-E0221";
+        case TUR_E0222_ROLE_IMPL_MISMATCH:       return "TUR-E0222";
+        case TUR_E0223_GLOBAL_NOT_WELLFORMED:    return "TUR-E0223";
         default:                          return "";
     }
 }
@@ -226,6 +231,11 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0210") == 0) return TUR_E0210_SESSION_NOT_DUAL;
     if (strcmp(s, "TUR-E0211") == 0) return TUR_E0211_SESSION_DROPPED;
     if (strcmp(s, "TUR-E0212") == 0) return TUR_E0212_SESSION_PROTO_MISMATCH;
+    /* SS5: Global protocol type errors */
+    if (strcmp(s, "TUR-E0220") == 0) return TUR_E0220_GLOBAL_NOT_PROJECTABLE;
+    if (strcmp(s, "TUR-E0221") == 0) return TUR_E0221_ROLE_NOT_DECLARED;
+    if (strcmp(s, "TUR-E0222") == 0) return TUR_E0222_ROLE_IMPL_MISMATCH;
+    if (strcmp(s, "TUR-E0223") == 0) return TUR_E0223_GLOBAL_NOT_WELLFORMED;
     return DIAG_CODE_NONE;
 }
 
@@ -1078,6 +1088,56 @@ static const DiagExplanation diag_explanations_[] = {
       "If the handler body captures a move-only or linear binding and you cannot\n"
       "make it copyable, you will need to restructure the code to avoid multi-shot\n"
       "semantics or wrap the captured value in a copyable container.\n",
+    },
+    /* SS5: Global protocol type errors */
+    { TUR_E0220_GLOBAL_NOT_PROJECTABLE,
+      "TUR-E0220: Global protocol is not projectable onto role\n"
+      "\n"
+      "A global protocol step cannot be projected onto the given role because the\n"
+      "role is not involved at that point in the protocol, or the choice structure\n"
+      "is ambiguous from that role's perspective.\n"
+      "\n"
+      "This error is checked during SS6 (projection). In SS5, the global protocol\n"
+      "is only parsed and well-formedness is checked.\n",
+    },
+    { TUR_E0221_ROLE_NOT_DECLARED,
+      "TUR-E0221: Role is not declared in global protocol\n"
+      "\n"
+      "A role name used in a protocol interaction was not listed in the protocol's\n"
+      "role declaration.\n"
+      "\n"
+      "Example:\n"
+      "  (defprotocol Ping [A B]\n"
+      "    (-> A C int))   ; error: C is not declared\n"
+      "\n"
+      "Fix: add C to the role list or correct the role name.\n",
+    },
+    { TUR_E0222_ROLE_IMPL_MISMATCH,
+      "TUR-E0222: Role implementation does not match projected local type\n"
+      "\n"
+      "The implementation code for a role does not match the local session type\n"
+      "projected from the global protocol for that role.\n"
+      "\n"
+      "This error is checked during SS6 (projection and role implementation checking).\n",
+    },
+    { TUR_E0223_GLOBAL_NOT_WELLFORMED,
+      "TUR-E0223: Global protocol is not well-formed\n"
+      "\n"
+      "The global protocol declaration contains a structural error:\n"
+      "\n"
+      "  - A role sends a message to itself (self-send)\n"
+      "  - A role name in an interaction is not declared in the protocol header\n"
+      "  - A (loop ...) body contains no interactions before (continue ...) (unguarded)\n"
+      "  - A (choice ...) has fewer than 2 branches\n"
+      "\n"
+      "Examples:\n"
+      "  (defprotocol Bad [A B]\n"
+      "    (-> A A int))   ; error: self-send\n"
+      "\n"
+      "  (defprotocol Bad [A B]\n"
+      "    (loop X (continue X)))  ; error: unguarded recursion\n"
+      "\n"
+      "Fix: correct the interaction structure so the protocol is well-formed.\n",
     },
 };
 
