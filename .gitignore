@@ -44,3 +44,4 @@ web/test-results/
 
 # Playwright MCP browser session artifacts
 .playwright-mcp/
+core
