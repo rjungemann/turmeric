@@ -1,0 +1,5 @@
+;; SS1 E0212: close not valid when protocol is not at Close.
+;; 's' has protocol Send int Close; calling close before completing the send
+;; step is a protocol violation -- the endpoint is not yet at Close.
+(defn use-wrong [^linear s :(Session (Send int Close))] :nil
+  (close s))

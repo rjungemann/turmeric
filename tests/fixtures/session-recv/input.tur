@@ -1,0 +1,16 @@
+;; SS0b + SS1 + SS2: session-recv -- receive a value on a typed session channel.
+;;
+;; Creates a [Session[Recv int Close], Session[Send int Close]] pair.
+;; The main thread recvs and prints; a sender thread sends 99.
+;;
+;; Expected output: 99
+(defn main [] :int
+  (let [[r s] (make-session (Recv int Close))]
+    (let [t (spawn (fn []
+                     (let [s (send s 99)]
+                       (close s))))]
+      (let [[n r] (recv r)]
+        (close r)
+        (join t)
+        (println n))))
+  0)

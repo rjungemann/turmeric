@@ -1,0 +1,23 @@
+;; SS0b + SS1 + SS2: session-offer -- receive a branch selection on a session channel.
+;;
+;; Creates a [Session[Choose (Send int Close) Close],
+;;            Session[Branch (Recv int Close) Close]] pair.
+;; A sender thread picks Left then sends 7; the main thread uses offer to
+;; learn the selected branch and recvs the value.
+;;
+;; Expected output: 7
+(defn main [] :int
+  (let [[s r] (make-session (Choose (Send int Close) Close))]
+    (let [t (spawn (fn []
+                     (let [s (choose-left s)]
+                       (let [s (send s 7)]
+                         (close s)))))]
+      (match (offer r)
+        (Left r)
+          (let [[n r] (recv r)]
+            (close r)
+            (join t)
+            (println n))
+        (Right r)
+          (do (close r) (join t)))))
+  0)
