@@ -1,0 +1,29 @@
+;;; session-timeout-ok -- sender sends before timeout; receiver gets the value.
+(defn spawn [f :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(tid, NULL, tur_session_thread_wrapper, f);
+  return (void *)tid;
+  ```)
+
+(defn join [t :ptr<void>] :int
+  ```c
+  pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  return 0;
+  ```)
+
+(defn main [] :int
+  (let [[r s] (make-session (Recv int (Timeout Close Close)))]
+    (let [t (spawn (fn []
+                     (let [s (send s 42)]
+                       (close s))))]
+      (match (recv-timeout r 1000)
+        (Left pair)
+          (let [[v r] pair]
+            (println v)
+            (close r)
+            (join t))
+        (Right r)
+          (do (println "timeout") (close r) (join t)))))
+  0)

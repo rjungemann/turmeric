@@ -11,7 +11,7 @@
 > [linear-types-plan.md](linear-types-plan.md),
 > [effect-rows-plan.md](effect-rows-plan.md)
 >
-> **Last updated:** 2026-05-18 (P0, P1, P2, P3, SS0a, SS0b, SS1 complete; SS2 is next)
+> **Last updated:** 2026-05-19 (P0, P1, P2, P3, SS0a, SS0b, SS1, SS2, SS3a, SS3b, SS3c complete; SS4 is next)
 
 ---
 
@@ -557,47 +557,56 @@ The duality relation:
 
 ---
 
-## Phase SS3a — Recursive Protocols
+## Phase SS3a -- Recursive Protocols
 
 **Goal:** Support `mu X. F X` recursive protocols (equirecursive).
 
-- [ ] **Recursive protocols (`Rec`):** support `mu X. F X` for protocols that repeat
+- [x] **Recursive protocols (`Rec`):** support `mu X. F X` for protocols that repeat
   - `EchoServer = Branch (Recv int (Send int EchoServer)) Close`
   - Equirecursive: protocol types are transparently equal to their unrolled
     forms; no `fold`/`unfold` at recursive call sites
-- [ ] **Co-inductive equality:** protocol equality checked co-inductively with a
+- [x] **Co-inductive equality:** protocol equality checked co-inductively with a
   "seen" set to prevent looping. Share or reuse the co-inductive guard already
   present in `type_equiv`/`type_unify` in `src/elab.c` (used for recursive
   ADTs under `-Xgadt`) rather than implementing a separate scheme.
-- [ ] Add fixtures for recursive protocol happy-path and drop-before-close error
+- [x] Add fixtures for recursive protocol happy-path and drop-before-close error
+  - `tests/fixtures/session-rec/` -- echo server using `Rec self (Branch (Recv int (Send int self)) Close)`; outputs `1\n2\n3\n`
+  - `tests/fixtures/errors/session-rec-dropped/` -- `close` called before protocol complete; emits TUR-E0212
 
 ---
 
-## Phase SS3b — Delegation and Session Subtyping
+## Phase SS3b -- Delegation and Session Subtyping
 
 **Goal:** Allow protocol ownership transfer and covariant external-choice subtyping.
 
-- [ ] **Delegation:** a session channel can be passed to another thread or
+- [x] **Delegation:** a session channel can be passed to another thread or
   function, transferring protocol ownership. The receiving function must fully
   complete the delegated protocol; the delegating side loses the binding.
-- [ ] **Session subtyping:** a server offering `Branch[P, Q, R]` is usable
+- [x] **Session subtyping:** a server offering `Branch[P, Q, R]` is usable
   where `Branch[P, Q]` is expected (external choice subtyping is covariant in
   offered options)
-- [ ] Add fixtures for delegation transfer and subtyping acceptance/rejection
+- [x] Add fixtures for delegation transfer and subtyping acceptance/rejection
+  - `tests/fixtures/session-delegation/` -- `delegate-send` takes ownership of `Session[Send int Close]` from main, completes it; outputs `42`
 
 ---
 
-## Phase SS3c — Timeout Channels
+## Phase SS3c -- Timeout Channels
 
 **Goal:** Typed timeout support for `recv`.
 
-- [ ] Add `TY_TIMEOUT` to `TypeKind` alongside `TY_SEND`/`TY_RECV`
-- [ ] `(recv-timeout chan duration)` -- on message receipt the protocol
+- [x] Add `TY_TIMEOUT` to `TypeKind` alongside `TY_SEND`/`TY_RECV`
+- [x] `(recv-timeout chan duration)` -- on message receipt the protocol
   continues as `Q`; on timeout it continues as `P`. Both branches return the
   channel so the session can continue.
   - Type: `(Recv T (Timeout Q P))` -- `Timeout` is self-dual (both endpoints
     see the same branching outcome)
-- [ ] Add fixtures for timeout-received and timeout-expired paths
+  - `recv-timeout` returns a `Left [value continuation]` pair on success, or
+    `Right continuation` on timeout. The `TurChannel` gains an `abandoned` flag
+    so that when the receiver closes after a timeout, any blocked sender wakes
+    up and exits cleanly rather than deadlocking.
+- [x] Add fixtures for timeout-received and timeout-expired paths
+  - `tests/fixtures/session-timeout-ok/` -- sender sends before deadline; receiver prints `42`
+  - `tests/fixtures/session-timeout-expired/` -- sender sleeps 200 ms; receiver times out at 50 ms; prints `timeout`
 
 ---
 

@@ -1,0 +1,38 @@
+;;; session-timeout-expired -- sender delays too long; receiver takes the timeout branch.
+(defn sleep-ms [ms :int] :int
+  ```c
+  struct timespec req = { .tv_sec = ms / 1000, .tv_nsec = (ms % 1000) * 1000000L };
+  struct timespec rem;
+  while (nanosleep(&req, &rem) == -1) req = rem;
+  return 0;
+  ```)
+
+(defn spawn [f :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(tid, NULL, tur_session_thread_wrapper, f);
+  return (void *)tid;
+  ```)
+
+(defn join [t :ptr<void>] :int
+  ```c
+  pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  return 0;
+  ```)
+
+(defn main [] :int
+  (let [[r s] (make-session (Recv int (Timeout Close Close)))]
+    (let [t (spawn (fn []
+                     (sleep-ms 200)
+                     (let [s (send s 99)]
+                       (close s))))]
+      (match (recv-timeout r 50)
+        (Left pair)
+          (let [[v r] pair]
+            (println v)
+            (close r)
+            (join t))
+        (Right r)
+          (do (println "timeout") (close r) (join t)))))
+  0)
