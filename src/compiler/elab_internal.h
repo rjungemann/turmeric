@@ -531,9 +531,14 @@ typedef struct Elab {
     uint32_t         cap_global_protocols;
     /* DV0: Dynamic vars (-Xdynamic-vars) */
     const Symbol    *sym_defdynamic;        /* "defdynamic" */
+    const Symbol    *sym_binding;           /* "binding" (DV1: dynvar override form) */
     DynVarEntry    **dynvar_entries;        /* all registered dynamic vars */
     uint32_t         n_dynvars;
     uint32_t         cap_dynvars;
+    /* DV1: Active binding frames (compile-time set! scope check) */
+    const Symbol   **active_dynvar_bindings; /* dynvar names with a live binding frame */
+    uint32_t         n_active_dynvar_bindings;
+    uint32_t         cap_active_dynvar_bindings;
 } Elab;
 
 /* Phase 6: Macro definition */
@@ -812,6 +817,7 @@ Type *session_project(Elab *e, GlobalInteraction *step, const char *role, Span s
 
 /* elab_dynvars.c */
 Expr       *elab_defdynamic(Elab *e, const Form *call);
+Expr       *elab_binding(Elab *e, const Form *call);
 DynVarEntry *dynvar_lookup(const Elab *e, const Symbol *name);
 
 /* elab_sessions.c */

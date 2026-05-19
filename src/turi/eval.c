@@ -1045,6 +1045,21 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_DEFECT:
         return turi_nil();
 
+    /* DV1: Dynamic var nodes — runtime stubs until DV2 codegen */
+    case EX_DEFDYNAMIC:
+        return turi_nil();
+    case EX_DYNVAR_READ:
+        /* Until DV2: return the root value (stored in entry->value_type for now,
+         * but the REPL has no storage, so return a placeholder 0). */
+        return turi_int(0);
+    case EX_DYNVAR_BINDING: {
+        /* Until DV2: evaluate body without actually installing frames */
+        return eval_expr_impl(env, frame, e->as.dynvar_binding_.body);
+    }
+    case EX_DYNVAR_SET:
+        /* Until DV2: no-op (no binding stack to mutate) */
+        return turi_nil();
+
     /* (perform (EffectName arg1 ...)) — yield to nearest handler. */
     case EX_PERFORM: {
         PerformExpr *pe = e->as.perform_.perform;

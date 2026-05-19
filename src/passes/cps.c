@@ -91,6 +91,17 @@ bool cps_expr_contains_shift(const Expr *e) {
         /* Phase 19: Algebraic effects - these lower to shift/reset */
         case EX_DEFECT:
             return false; /* Effect definitions don't contain shift */
+        /* DV1: Dynamic var nodes */
+        case EX_DEFDYNAMIC:
+        case EX_DYNVAR_READ:
+        case EX_DYNVAR_SET:
+            return false;
+        case EX_DYNVAR_BINDING:
+            for (uint32_t i = 0; i < e->as.dynvar_binding_.n_pairs; i++) {
+                if (cps_expr_contains_shift(e->as.dynvar_binding_.pairs[i].override_expr))
+                    return true;
+            }
+            return cps_expr_contains_shift(e->as.dynvar_binding_.body);
         case EX_PERFORM:
             /* perform lowers to shift - always needs CPS marking */
             return true;
@@ -644,12 +655,19 @@ static Expr *cps_mark_expr(Arena *a, Expr *e) {
         /* Phase 19: Algebraic effects */
         case EX_DEFECT:
             return e;
-        
+        /* DV1: Dynamic var nodes pass through CPS transform unchanged */
+        case EX_DEFDYNAMIC:
+        case EX_DYNVAR_READ:
+        case EX_DYNVAR_SET:
+            return e;
+        case EX_DYNVAR_BINDING:
+            return e;
+
         case EX_PERFORM:
             /* perform is already lowered to shift by effect_lower pass */
             /* Just mark the expression */
             return e;
-        
+
         case EX_HANDLE:
             /* handle is already lowered to reset by effect_lower pass */
             /* Just mark the expression */

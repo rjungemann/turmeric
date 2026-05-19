@@ -2350,9 +2350,14 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_DEFECT:
             /* Effect definitions are compile-time only - no runtime code */
             return atom_nil();
-        /* DV0: Dynamic vars */
+        /* DV0-DV1: Dynamic vars (codegen is DV2) */
         case EX_DEFDYNAMIC:
-            /* Declaration is compile-time only - no runtime code in DV0 */
+            /* Declaration is compile-time only */
+            return atom_nil();
+        case EX_DYNVAR_READ:
+        case EX_DYNVAR_BINDING:
+        case EX_DYNVAR_SET:
+            /* Codegen deferred to DV2 */
             return atom_nil();
         case EX_PERFORM: {
             /* (perform (EffectName args...)) - perform an effect.

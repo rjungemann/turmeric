@@ -332,10 +332,32 @@ void expr_print(Buf *b, const Expr *e) {
             buf_puts(b, e->as.effect_def_.def->name->name);
             buf_putc(b, ')');
             break;
-        /* DV0: Dynamic vars */
+        /* DV0-DV1: Dynamic vars */
         case EX_DEFDYNAMIC:
             buf_puts(b, "(defdynamic ");
             buf_puts(b, e->as.defdynamic_.entry->name->name);
+            buf_putc(b, ')');
+            break;
+        case EX_DYNVAR_READ:
+            buf_puts(b, e->as.dynvar_read_.entry->name->name);
+            break;
+        case EX_DYNVAR_BINDING:
+            buf_puts(b, "(binding [");
+            for (uint32_t i = 0; i < e->as.dynvar_binding_.n_pairs; i++) {
+                if (i > 0) buf_putc(b, ' ');
+                buf_puts(b, e->as.dynvar_binding_.pairs[i].entry->name->name);
+                buf_putc(b, ' ');
+                expr_print(b, e->as.dynvar_binding_.pairs[i].override_expr);
+            }
+            buf_puts(b, "] ");
+            expr_print(b, e->as.dynvar_binding_.body);
+            buf_putc(b, ')');
+            break;
+        case EX_DYNVAR_SET:
+            buf_puts(b, "(set! ");
+            buf_puts(b, e->as.dynvar_set_.entry->name->name);
+            buf_putc(b, ' ');
+            expr_print(b, e->as.dynvar_set_.value);
             buf_putc(b, ')');
             break;
         case EX_PERFORM:
