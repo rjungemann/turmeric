@@ -93,6 +93,11 @@ typedef enum DiagCode {
     TUR_E0210_SESSION_NOT_DUAL,         /* session endpoints are not dual protocols */
     TUR_E0211_SESSION_DROPPED,          /* session channel dropped before protocol completion */
     TUR_E0212_SESSION_PROTO_MISMATCH,   /* channel operation not valid for current session protocol */
+    /* SS5: Global protocol type errors (-Xsessions) */
+    TUR_E0220_GLOBAL_NOT_PROJECTABLE,   /* global protocol G is not projectable onto role R at step */
+    TUR_E0221_ROLE_NOT_DECLARED,        /* role R is not declared in global protocol G */
+    TUR_E0222_ROLE_IMPL_MISMATCH,       /* role R impl does not match projected local type */
+    TUR_E0223_GLOBAL_NOT_WELLFORMED,    /* global protocol G is not well-formed: reason */
 } DiagCode;
 
 typedef enum DiagLevel {

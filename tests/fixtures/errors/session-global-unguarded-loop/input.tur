@@ -1,0 +1,7 @@
+;; SS5 E0223: defprotocol with unguarded recursion.
+;; (loop X (continue X)) has no interactions before the continue.
+(defprotocol Bad [A B]
+  (loop X
+    (continue X)))
+
+(defn main [] :int 0)

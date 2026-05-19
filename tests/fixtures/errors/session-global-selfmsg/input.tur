@@ -1,0 +1,6 @@
+;; SS5 E0223: defprotocol with a self-send (-> A A int).
+;; A role cannot send a message to itself.
+(defprotocol Bad [A B]
+  (-> A A int))
+
+(defn main [] :int 0)

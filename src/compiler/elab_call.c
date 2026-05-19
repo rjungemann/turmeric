@@ -418,9 +418,14 @@ Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_open) return elab_open(e, call);
     /* SS0b: Session channel operations (-Xsessions) */
     if (g_sessions_enabled) {
+        if (name == e->sym_defprotocol)   return elab_defprotocol(e, call);
+        if (name == e->sym_make_protocol) return elab_make_protocol(e, call);
+        if (name == e->sym_send_to)       return elab_send_to(e, call);
+        if (name == e->sym_recv_from)     return elab_recv_from(e, call);
         if (name == e->sym_make_session)  return elab_session_make(e, call);
         if (name == e->sym_send)          return elab_session_send(e, call);
         if (name == e->sym_recv)          return elab_session_recv(e, call);
+        /* SS5: close handles both TY_SESSION (binary) and TY_ROLE (multi-party) */
         if (name == e->sym_close)         return elab_session_close(e, call);
         if (name == e->sym_offer)         return elab_session_offer(e, call);
         if (name == e->sym_choose_left)   return elab_session_choose_left(e, call);

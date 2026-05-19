@@ -58,6 +58,53 @@ extern bool elab_in_stm;
 
 /* ---- shared type definitions ---- */
 
+/* SS5: Global protocol interaction tree (compile-time only, arena-allocated).
+ * Represents the multi-party interaction structure of a defprotocol. */
+typedef enum GlobalInteractionKind {
+    GI_MSG,      /* (-> From To T) -- From sends T to To */
+    GI_CHOICE,   /* (choice From [label branch] ...) -- From selects a labelled branch */
+    GI_LOOP,     /* (loop label body...) -- recursive global protocol */
+    GI_CONTINUE, /* (continue label) -- jump back to loop label */
+    GI_END,      /* end of protocol */
+} GlobalInteractionKind;
+
+typedef struct GlobalBranch {
+    const char               *label;
+    struct GlobalInteraction *body;
+} GlobalBranch;
+
+typedef struct GlobalInteraction {
+    GlobalInteractionKind kind;
+    union {
+        struct {
+            const char               *from;  /* interned role name */
+            const char               *to;    /* interned role name */
+            struct Type              *msg;   /* message type */
+            struct GlobalInteraction *rest;  /* next step */
+        } msg;
+        struct {
+            const char               *decider;   /* role making the choice */
+            GlobalBranch             *branches;  /* arena-allocated array */
+            int                       n_branches;
+            struct GlobalInteraction *rest;      /* steps after all branches (NULL if diverge) */
+        } choice;
+        struct {
+            const char               *label;
+            struct GlobalInteraction *body;
+            struct GlobalInteraction *rest;  /* steps after loop (if any) */
+        } loop;
+        struct {
+            const char *label; /* loop label to continue to */
+        } cont;
+    };
+} GlobalInteraction;
+
+/* SS5: Registry entry for a declared global protocol. */
+typedef struct GlobalProtocol {
+    const char  *name;       /* interned protocol name */
+    struct Type *type;       /* TY_GLOBAL type node */
+} GlobalProtocol;
+
 /* ---- scope ---- */
 
 /* Phase 12: Borrow tracking in Scope */
@@ -468,6 +515,18 @@ typedef struct Elab {
     const Symbol    *rec_labels[ELAB_MAX_REC_DEPTH]; /* active Rec labels */
     struct Type     *rec_types[ELAB_MAX_REC_DEPTH];  /* corresponding TY_SESSION_REC nodes */
     uint8_t          rec_depth;                       /* number of active Rec binders */
+    /* SS5: Global protocol symbols */
+    const Symbol    *sym_defprotocol;  /* "defprotocol" */
+    const Symbol    *sym_make_protocol; /* "make-protocol" */
+    const Symbol    *sym_send_to;       /* "send-to" */
+    const Symbol    *sym_recv_from;     /* "recv-from" */
+    /* SS5: Global protocol type symbols (appear in type annotations) */
+    const Symbol    *sym_global_type;   /* "Global" -- type constructor */
+    const Symbol    *sym_role_type;     /* "Role"   -- type constructor */
+    /* SS5: Global protocol registry */
+    GlobalProtocol  *global_protocols;
+    uint32_t         n_global_protocols;
+    uint32_t         cap_global_protocols;
 } Elab;
 
 /* Phase 6: Macro definition */
@@ -734,6 +793,12 @@ Expr *elab_as_cast(Elab *e, const Form *call);
 Expr *elab_any_type_of(Elab *e, const Form *call);
 Expr *elab_any_cast(Elab *e, const Form *call);
 Expr *elab_form(Elab *e, Form *f);
+
+/* elab_global.c -- SS5: multi-party global protocol types */
+Expr *elab_defprotocol(Elab *e, const Form *call);
+Expr *elab_make_protocol(Elab *e, const Form *call);
+Expr *elab_send_to(Elab *e, const Form *call);
+Expr *elab_recv_from(Elab *e, const Form *call);
 
 /* elab_sessions.c */
 Expr *elab_session_make(Elab *e, const Form *call);
