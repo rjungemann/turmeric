@@ -1,0 +1,44 @@
+;; SS4: session-calc-rpc -- calculator RPC integration test.
+;;
+;; A server receives an integer and sends back double the value.
+;; The client sends 21 and expects to receive 42.
+;;
+;; Protocol (server view): Recv int (Send int Close)
+;; Protocol (client view): Send int (Recv int Close)
+;;
+;; Expected output: 42
+
+(defn spawn [f :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(tid, NULL, tur_session_thread_wrapper, f);
+  return (void *)tid;
+  ```)
+
+(defn join [t :ptr<void>] :int
+  ```c
+  pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  return 0;
+  ```)
+
+;; double-server: receive an int, send back its double, close.
+(defn double-server [^linear ch :(Session (Recv int (Send int Close)))] :nil
+  (let [[n ch] (recv ch)]
+    (let [ch (send ch (* n 2))]
+      (close ch))))
+
+;; rpc-call: send req, recv response, close channel, return response.
+(defn rpc-call [^linear ch :(Session (Send int (Recv int Close))) req :int] :int
+  (let [ch (send ch req)]
+    (let [[resp ch] (recv ch)]
+      (close ch)
+      resp)))
+
+(defn main [] :int
+  (let [[s r] (make-session (Send int (Recv int Close)))]
+    (let [t (spawn (fn [] (double-server r)))]
+      (let [result (rpc-call s 21)]
+        (println result)
+        (join t))))
+  0)

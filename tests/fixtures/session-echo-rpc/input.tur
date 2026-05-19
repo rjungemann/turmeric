@@ -1,0 +1,57 @@
+;; SS4: session-echo-rpc -- echo server/client integration test.
+;;
+;; A recursive echo server is spawned in a thread.  The client sends 10, 20,
+;; 30 in sequence, receiving each echo back and printing it.  The client then
+;; closes the conversation with choose-right.
+;;
+;; Protocol:
+;;   Server: Rec self (Branch (Recv int (Send int self)) Close)
+;;   Client: Rec self (Choose (Send int (Recv int self)) Close)
+;;
+;; Expected output:
+;; 10
+;; 20
+;; 30
+
+(defn spawn [f :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(tid, NULL, tur_session_thread_wrapper, f);
+  return (void *)tid;
+  ```)
+
+(defn join [t :ptr<void>] :int
+  ```c
+  pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  return 0;
+  ```)
+
+;; server-loop: offer the channel; echo ints until the client closes.
+(defn server-loop [^linear ch :(Session (Rec self (Branch (Recv int (Send int self)) Close)))] :nil
+  (match (offer ch)
+    (Left ch)
+      (let [[n ch] (recv ch)]
+        (let [ch (send ch n)]
+          (server-loop ch)))
+    (Right ch)
+      (close ch)))
+
+;; client-step: send val, recv echo, print it, return updated channel.
+(defn client-step [^linear ch :(Session (Rec self (Choose (Send int (Recv int self)) Close))) val :int] :(Session (Rec self (Choose (Send int (Recv int self)) Close)))
+  (let [ch (choose-left ch)]
+    (let [ch (send ch val)]
+      (let [[r ch] (recv ch)]
+        (println r)
+        ch))))
+
+(defn main [] :int
+  (let [[s r] (make-session (Rec self (Branch (Recv int (Send int self)) Close)))]
+    (let [t (spawn (fn [] (server-loop r)))]
+      (let [s (client-step s 10)]
+        (let [s (client-step s 20)]
+          (let [s (client-step s 30)]
+            (let [s (choose-right s)]
+              (close s)
+              (join t)))))))
+  0)
