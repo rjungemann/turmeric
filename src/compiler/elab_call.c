@@ -425,6 +425,7 @@ Expr *elab_call(Elab *e, Form *call) {
         if (name == e->sym_offer)         return elab_session_offer(e, call);
         if (name == e->sym_choose_left)   return elab_session_choose_left(e, call);
         if (name == e->sym_choose_right)  return elab_session_choose_right(e, call);
+        if (name == e->sym_recv_timeout)  return elab_session_recv_timeout(e, call);
     }
     /* Phase R2: Panic */
     if (name == e->sym_panic) return elab_panic(e, call);
@@ -1400,7 +1401,16 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
     Type result_type;
     if (fn_type.kind == TY_FN) {
         TypeKind result_kind = fn_type.as.fn.result_kind;
-        result_type = type_from_kind(result_kind);
+        /* SS3a: Use full session return type when available (preserves the protocol
+         * pointer inside Session[P]).  Without this, type_from_kind(TY_SESSION)
+         * produces a bare Session shell with NULL protocol, causing silent failures
+         * when the returned channel is used in subsequent session operations. */
+        if (g_sessions_enabled && result_kind == TY_SESSION &&
+                fn_type.as.fn.result_full_type) {
+            result_type = *fn_type.as.fn.result_full_type;
+        } else {
+            result_type = type_from_kind(result_kind);
+        }
     } else if (fn_type.kind == TY_CONT) {
         /* Calling a continuation returns its result type (though in practice it jumps) */
         result_type = type_from_kind(fn_type.as.cont.returns);

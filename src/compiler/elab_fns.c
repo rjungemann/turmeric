@@ -539,6 +539,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     TypeKind return_kind = TY_NIL;
     AdtDef *return_adt_def = NULL; /* Phase G3: set when return type is an ADT name */
     StructDef *return_struct_def = NULL; /* LT4: set when return type is a struct name */
+    Type *return_session_type = NULL; /* SS3a: full session return type (Session[P]) */
     uint32_t body_start = name_idx + 2;  /* name_idx + 1 = params, +1 = after params */
 
     /* Phase 19: Parse optional effect-row annotation #{Read Write} or #{e} before return type.
@@ -659,7 +660,15 @@ Expr *elab_defn(Elab *e, const Form *call) {
             /* Compound return type via `: type-expr` syntax: `: (-> a b)`, `: (vec int)`, etc. */
             if (ret_f->as.list.len > 0) {
                 Type *ann = type_expr_from_form(e, ret_f->as.list.items[0], NULL, NULL, NULL, 0);
-                if (ann) return_kind = ann->kind;
+                if (ann) {
+                    return_kind = ann->kind;
+                    /* SS3a: Capture full session return type so callers see the complete
+                     * protocol type (e.g. Session[Rec[self, ...]]) rather than a bare
+                     * TY_SESSION shell with a NULL protocol pointer. */
+                    if (g_sessions_enabled && ann->kind == TY_SESSION) {
+                        return_session_type = ann;
+                    }
+                }
             }
             body_start++;
         }
@@ -1011,6 +1020,13 @@ Expr *elab_defn(Elab *e, const Form *call) {
         rft->hkt_kind = KIND_STAR;
         rft->as.struct_.def = return_struct_def;
         fn_type.as.fn.result_full_type = rft;
+    }
+    /* SS3a: attach full session return type if declared.
+     * Without this, callers using type_from_kind(TY_SESSION) get a bare shell
+     * with NULL protocol pointer, causing silent elaboration failures when the
+     * returned channel is used in subsequent session operations. */
+    if (return_session_type) {
+        fn_type.as.fn.result_full_type = return_session_type;
     }
 
     /* Phase HRT1: attach full poly types for rank-2 params */

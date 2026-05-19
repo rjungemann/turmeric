@@ -1211,12 +1211,16 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_session_Choose = intern_cstr(st, "Choose");
     e->sym_session_Branch = intern_cstr(st, "Branch");
     e->sym_session_Rec    = intern_cstr(st, "Rec");
+    e->sym_session_Timeout = intern_cstr(st, "Timeout");
     /* SS0b: Session channel operation symbols (lowercase, appear in expression position) */
     e->sym_close        = intern_cstr(st, "close");
     e->sym_offer        = intern_cstr(st, "offer");
     e->sym_choose_left  = intern_cstr(st, "choose-left");
     e->sym_choose_right = intern_cstr(st, "choose-right");
     e->sym_make_session = intern_cstr(st, "make-session");
+    e->sym_recv_timeout = intern_cstr(st, "recv-timeout");
+    /* SS3a: Initialize session Rec label stack */
+    e->rec_depth = 0;
 }
 
 /* Phase 13: Lifetime annotation helpers (deferred - infrastructure in place) */
