@@ -1,0 +1,41 @@
+;; SS3b: session-delegation -- protocol ownership transfer (delegation).
+;;
+;; Demonstrates that a session channel can be passed to another function,
+;; transferring protocol ownership.  The receiving function completes the
+;; protocol; the delegating side loses the binding (linear discipline).
+;;
+;; Protocol: Session[Send int Close]
+;;
+;; delegate-send takes ownership of the Send-end and completes the protocol.
+;; main creates the session, spawns a receiver thread, then delegates the
+;; send-end to delegate-send rather than using it directly.
+;;
+;; Expected output: 42
+(defn spawn [f :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(tid, NULL, tur_session_thread_wrapper, f);
+  return (void *)tid;
+  ```)
+
+(defn join [t :ptr<void>] :int
+  ```c
+  pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  return 0;
+  ```)
+
+;; delegate-send: accepts ownership of a send-end and completes the protocol.
+(defn delegate-send [^linear ch :(Session (Send int Close)) val :int] :nil
+  (let [ch (send ch val)]
+    (close ch)))
+
+(defn main [] :int
+  (let [[s r] (make-session (Send int Close))]
+    (let [t (spawn (fn []
+                     (let [[v r] (recv r)]
+                       (println v)
+                       (close r))))]
+      (delegate-send s 42)
+      (join t)))
+  0)

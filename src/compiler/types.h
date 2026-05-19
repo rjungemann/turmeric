@@ -128,6 +128,7 @@ typedef enum TypeKind {
     TY_CHOOSE,       /* Choose[P, Q] -- internal choice (this endpoint picks branch) */
     TY_BRANCH,       /* Branch[P, Q] -- external choice (peer picks; this endpoint selects) */
     TY_SESSION_REC,  /* Rec[label, F] -- recursive protocol mu-type (distinct from HKT-P2 TY_REC) */
+    TY_TIMEOUT,      /* SS3c: Timeout[Q, P] -- success continuation Q; timeout continuation P */
     TY_SESSION_PAIR, /* SS1: internal pair [Session[P], Session[dual(P)]] returned by make-session */
     TY_SESSION_RECV_PAIR, /* SS2: internal pair [T, Session[Q]] returned by recv */
     TY_SESSION_OFFER,     /* SS2: internal result of offer; matched with Left/Right patterns */
@@ -281,6 +282,7 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
         case TY_CHOOSE:
         case TY_BRANCH:
         case TY_SESSION_REC:
+        case TY_TIMEOUT:
         case TY_SESSION_PAIR:
         case TY_SESSION_RECV_PAIR:
         case TY_SESSION_OFFER:
@@ -638,6 +640,20 @@ static inline Type type_session_rec(const char *label, struct Type *body) {
     t.hkt_kind = KIND_STAR;
     t.as.session_.label = label;
     t.as.session_.fst = body;
+    return t;
+}
+
+/* SS3c: TY_TIMEOUT -- Timeout[Q, P] protocol node.
+ * fst = Q: success continuation (message was received in time).
+ * snd = P: timeout continuation (no message before deadline).
+ * Timeout is self-dual: both endpoints experience the same timing outcome. */
+static inline Type type_timeout(struct Type *success_proto, struct Type *timeout_proto) {
+    Type t = {0};
+    t.kind = TY_TIMEOUT;
+    t.copy_kind = CK_MOVE;
+    t.hkt_kind = KIND_STAR;
+    t.as.session_.fst = success_proto;
+    t.as.session_.snd = timeout_proto;
     return t;
 }
 

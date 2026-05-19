@@ -252,6 +252,21 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             return t;
         }
 
+        /* SS3a: bare Rec label reference -- resolve to back-reference sentinel.
+         * When we encounter a bare symbol that matches an active Rec binder label,
+         * return a TY_SESSION_REC node with fst=NULL (sentinel for recursive call). */
+        if (g_sessions_enabled && e->rec_depth > 0) {
+            for (uint8_t ri = 0; ri < e->rec_depth; ri++) {
+                if (e->rec_labels[ri] == sym) {
+                    /* Return a sentinel TY_SESSION_REC with fst=NULL to indicate
+                     * a recursive reference that will be unrolled at use time. */
+                    Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                    *t = type_session_rec(sym->name, NULL);
+                    return t;
+                }
+            }
+        }
+
         /* Unknown - return as opaque struct */
         Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
         memset(t, 0, sizeof(Type));
@@ -816,6 +831,49 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 if (!right) return NULL;
                 Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
                 *t = type_branch(left, right);
+                return t;
+            }
+            /* SS3a: (Rec label body) -- recursive protocol mu-type.
+             * label is a bare symbol (the recursion variable).
+             * Inside body, label may appear as a bare symbol to back-reference this Rec. */
+            if (head_sym == e->sym_session_Rec && form->as.list.len == 3) {
+                Form *label_form = form->as.list.items[1];
+                if (label_form->tag != F_SYM) {
+                    diag_emit(DIAG_ERROR, label_form->span,
+                              "Rec: label must be a bare symbol, e.g. (Rec self Body)");
+                    return NULL;
+                }
+                const Symbol *label_sym = label_form->as.sym;
+                /* Allocate the Rec node first (body filled below). */
+                Type *rec_t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *rec_t = type_session_rec(label_sym->name, NULL);
+                /* Push label onto rec stack so bare references inside body resolve. */
+                if (e->rec_depth >= ELAB_MAX_REC_DEPTH) {
+                    diag_emit(DIAG_ERROR, form->span,
+                              "Rec: maximum recursive protocol depth exceeded");
+                    return NULL;
+                }
+                e->rec_labels[e->rec_depth] = label_sym;
+                e->rec_types[e->rec_depth]  = rec_t;
+                e->rec_depth++;
+                /* Parse body with the label in scope. */
+                Type *body = type_expr_from_form(e, form->as.list.items[2],
+                                                 rec_name, type_params, type_param_kinds, n_type_params);
+                e->rec_depth--;
+                if (!body) return NULL;
+                rec_t->as.session_.fst = body;
+                return rec_t;
+            }
+            /* SS3c: (Timeout Q P) -- success continuation Q; timeout continuation P. */
+            if (head_sym == e->sym_session_Timeout && form->as.list.len == 3) {
+                Type *success = type_expr_from_form(e, form->as.list.items[1],
+                                                    rec_name, type_params, type_param_kinds, n_type_params);
+                if (!success) return NULL;
+                Type *timeout = type_expr_from_form(e, form->as.list.items[2],
+                                                    rec_name, type_params, type_param_kinds, n_type_params);
+                if (!timeout) return NULL;
+                Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *t = type_timeout(success, timeout);
                 return t;
             }
         }
