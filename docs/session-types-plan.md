@@ -11,7 +11,7 @@
 > [linear-types-plan.md](linear-types-plan.md),
 > [effect-rows-plan.md](effect-rows-plan.md)
 >
-> **Last updated:** 2026-05-18
+> **Last updated:** 2026-05-18 (P0 and P1 resolved)
 
 ---
 
@@ -273,21 +273,63 @@ projection algorithm is wired into the compiler.
 
 ### P0 — Error Code Range Coordination
 
-- [ ] Reconcile `TUR_E0200`-`TUR_E0249` with `uniqueness-types-plan.md`, which
+- [x] Reconcile `TUR_E0200`-`TUR_E0249` with `uniqueness-types-plan.md`, which
   proposes the same range. Lock the final allocation before any SS phase emits
   error codes or writes fixtures that reference them.
-  - Proposed split (pending coordination): binary sessions `TUR_E0210`-`TUR_E0212`,
-    multi-party sessions `TUR_E0220`-`TUR_E0223`
+
+  **Resolution (2026-05-18):** There is no separate `uniqueness-types-plan.md`
+  file; uniqueness types shipped as part of the substructural track and already
+  occupy `TUR_E0200`-`TUR_E0202` in `src/compiler/diag.h`. The remainder of the
+  `TUR_E02xx` block is unallocated. Full allocation as of this audit:
+
+  | Range | Owner | Status |
+  |---|---|---|
+  | `TUR_E0100`-`TUR_E0104` | Linear types (`-Xlinear`, LT0-LT1) | Active |
+  | `TUR_E0150`-`TUR_E0151` | Substructural types (`-Xsubstructural`, ST0) | Active |
+  | `TUR_E0200`-`TUR_E0202` | Unique types (UT0) | Active |
+  | `TUR_E0203`-`TUR_E0249` | **Unallocated** | Free |
+  | `TUR_E0250`-`TUR_E0254` | Effect row types (`-Xeffect-types`) | Active |
+  | `TUR_E0300`-`TUR_E0301` | Union types (`-Xunion-types`) | Active |
+  | `TUR_E0350`-`TUR_E0351` | Intersection types (`-Xintersection-types`) | Active |
+  | `TUR_E0400`-`TUR_E0401` | Contracts | Active |
+  | `TUR_E0500`-`TUR_E0502` | Multishot continuations | Active |
+
+  **Locked allocation for sessions:**
+  - Binary sessions: `TUR_E0210`-`TUR_E0212`
+  - Multi-party sessions: `TUR_E0220`-`TUR_E0223`
+  - Gaps `TUR_E0203`-`TUR_E0209`, `TUR_E0213`-`TUR_E0219`, `TUR_E0224`-`TUR_E0249`
+    remain unallocated as headroom.
 
 ### P1 — Linear Types Prerequisite Audit
 
-- [ ] Verify which LT phases provide the elaborator machinery session types
+- [x] Verify which LT phases provide the elaborator machinery session types
   depend on, and confirm they are implemented (not just marked complete in the plan):
   - Which LT phase implements `CK_LINEAR` / `CK_AFFINE` / `CK_UNIQUE`
     capability-kind tracking? (needed by SS0a and the `^affine Session` guard in SS1)
   - Which LT phase provides the elaborator linearity enforcement that SS1 re-uses
     for protocol progress checking?
-- [ ] Document the answers in this plan before SS0a begins
+
+  **Findings (2026-05-18):**
+
+  - **`CK_LINEAR` -- LT0** (`src/compiler/types.h`, line 22): `CK_LINEAR` is a
+    live variant in the `CopyKind` enum, gated behind `-Xlinear`. `TY_LREF` uses
+    it as its default copy kind. `ty_is_linear()` predicate is available.
+    **Required by SS0a -- confirmed present.**
+
+  - **Linearity enforcement -- LT1** (`src/compiler/elab_*.c`): `is_linear` /
+    `is_linear_consumed` flags live on `Binding` (`src/compiler/expr.h`).
+    Consumption is tracked in `elab_form` (F_SYM case); scope-exit drop checks
+    run in `elab_let` and `elab_defn`; branch-aware consumption (if/match arms
+    must agree) is complete. Emits `TUR_E0100`-`TUR_E0104`.
+    **Required by SS1 for protocol progress checking -- confirmed present.**
+
+  - **`CK_AFFINE` and `CK_RELEVANT`** do NOT exist as `CopyKind` enum variants.
+    Affine and relevant tracking is implemented via per-parameter boolean flags
+    (`arg_affine[]` / `arg_relevant[]` on `FnType`; `is_affine` / `is_relevant`
+    on `Binding`) in ST0 (`-Xsubstructural`). The `^affine Session` guard in SS1
+    must therefore check the binding's `is_affine` flag rather than a `CopyKind`
+    value. Since `-Xsessions` implies `-Xsubstructural`, this machinery is always
+    available when session types are active.
 
 ### P2 — Test Fixture Baseline
 
