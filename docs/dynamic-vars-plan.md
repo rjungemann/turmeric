@@ -1,6 +1,6 @@
 # Dynamic Vars -- Implementation Plan (DV0-DV4)
 
-> **Status:** Draft -- Not Started
+> **Status:** Pre-phase prerequisites complete; DV0 not started
 >
 > **Target:** v3 or later
 >
@@ -10,7 +10,7 @@
 > [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md)
 > (§8 Effect Types, §1 Linear Types)
 >
-> **Last updated:** 2026-05-19 (open questions resolved; no phases complete)
+> **Last updated:** 2026-05-19 (P0-P2 complete; error codes locked; fixture baseline created)
 
 ---
 
@@ -288,30 +288,33 @@ tests/fixtures/dynvar-*/    -- happy-path and negative fixtures
 
 ### P0 -- Error Code Range Allocation
 
-- [ ] Lock the `TUR_E0600`-`TUR_E0605` range for dynamic vars before any DV phase emits error codes. The `TUR_E05xx` block (multishot continuations) ends at `TUR_E0502`; `TUR_E0600` is the next clean block.
+- [x] Lock the `TUR_E0600`-`TUR_E0605` range for dynamic vars before any DV phase emits error codes. The `TUR_E05xx` block (multishot continuations) ends at `TUR_E0502`; `TUR_E0600` is the next clean block.
 
-  Proposed allocation:
+  Allocation (locked in `src/compiler/diag.h` and `src/compiler/diag.c`):
 
-  | Code | Meaning |
-  |---|---|
-  | `TUR_E0600` | `set!` on a non-dynamic var |
-  | `TUR_E0601` | `set!` on a dynamic var with no active `binding` frame on the current thread |
-  | `TUR_E0602` | type mismatch: override value does not match `defdynamic` type |
-  | `TUR_E0603` | dynamic var declared with a substructural (linear, affine, relevant, or unique) type |
-  | `TUR_E0604` | `defdynamic` at non-toplevel position |
-  | `TUR_E0605` | `set!` on a dynamic var inside an `atomically` block |
+  | Code | Enum constant | Meaning |
+  |---|---|---|
+  | `TUR_E0600` | `TUR_E0600_DYNVAR_SET_NOT_DYNAMIC` | `set!` or `binding` target is not a dynamic var |
+  | `TUR_E0601` | `TUR_E0601_DYNVAR_SET_NO_BINDING` | `set!` on a dynamic var with no active `binding` frame on the current thread |
+  | `TUR_E0602` | `TUR_E0602_DYNVAR_TYPE_MISMATCH` | type mismatch: override value does not match `defdynamic` type |
+  | `TUR_E0603` | `TUR_E0603_DYNVAR_SUBSTRUCTURAL_TYPE` | dynamic var declared with a substructural (linear, affine, relevant, or unique) type |
+  | `TUR_E0604` | `TUR_E0604_DYNVAR_NOT_TOPLEVEL` | `defdynamic` at non-toplevel position |
+  | `TUR_E0605` | `TUR_E0605_DYNVAR_SET_IN_ATOMIC` | `set!` on a dynamic var inside an `atomically` block |
+  | `TUR_W0600` | `TUR_W0600_DYNVAR_NO_EARMUFFS` | `defdynamic` name does not use `*earmuffs*` convention |
+
+  All codes have `diag_code_to_string`, `diag_code_from_string`, and `diag_explain` entries.
 
 ### P1 -- Thread Primitives Audit
 
-- [ ] Confirm Phase T19 provides:
-  - `pthread_key_t` creation and destruction in generated C (`pthread_key_create`, `pthread_key_delete`)
-  - `pthread_getspecific` / `pthread_setspecific`
-  - `spawn` with a zero-arg closure that can capture a value payload (needed to pass the conveyed frame snapshot to the new thread)
-- [ ] Confirm that `__attribute__((cleanup(fn)))` is available in the C compiler targeted by `turc` (GCC and Clang both support it; MSVC does not -- flag as a Windows porting concern)
+- [x] Confirm Phase T19 provides:
+  - `pthread_key_t` creation and destruction in generated C (`pthread_key_create`, `pthread_key_delete`): **confirmed available** -- not a Turmeric stdlib primitive, but the DV2 codegen emits C directly (as do other stdlib files with inline C blocks) and POSIX pthreads are already a build dependency (used by `thread-spawn-fn` in `stdlib/thread.tur`). `pthread_key_create`/`pthread_key_delete` can be emitted by the DV2 codegen pass without any new runtime glue.
+  - `pthread_getspecific` / `pthread_setspecific`: **confirmed available** -- same reasoning; both symbols are in POSIX pthreads, already linked.
+  - `spawn` with a zero-arg closure that can capture a value payload: **confirmed available** -- `thread-spawn-fn` in `stdlib/thread.tur` accepts a raw `fn-ptr` and a `ptr<void>` payload, which is sufficient for DV2. DV3 (`spawn-conveying`) will wrap this with a snapshot-capture helper; no new primitive is required.
+- [x] Confirm that `__attribute__((cleanup(fn)))` is available in the C compiler targeted by `turc`: **confirmed** -- GCC and Clang both support it (tested on the macOS/Linux CI targets). MSVC limitation is documented in the plan (Open Question 4, resolved: use a wrapper-function fallback on MSVC, `__attribute__((cleanup))` as an optimisation on GCC/Clang via `#ifdef __GNUC__`).
 
 ### P2 -- Test Fixture Baseline
 
-- [ ] Create fixture baseline alongside DV0:
+- [x] Create fixture baseline alongside DV0:
   - Happy path: `dynvar-read` (root), `dynvar-binding` (override), `dynvar-nested` (nested overrides), `dynvar-set` (`set!` in binding), `dynvar-multi` (multiple vars)
   - Negative: `dynvar-set-no-binding`, `dynvar-set-non-dynamic`, `dynvar-type-mismatch`, `dynvar-linear-type`, `dynvar-set-in-atomic`
   - All intentionally red until DV1-DV2 implement the operations.

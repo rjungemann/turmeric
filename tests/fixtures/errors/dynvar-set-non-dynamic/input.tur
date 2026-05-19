@@ -1,0 +1,6 @@
+;; DV1 P2: binding with a name that is not a dynamic var (E0600).
+;; x is declared as a plain let binding; (binding [x ...]) is invalid.
+;; Use let for lexical shadowing of non-dynamic names.
+(let [x 0]
+  (binding [x 1]
+    x))

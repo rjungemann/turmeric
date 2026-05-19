@@ -1,0 +1,4 @@
+;; DV0 P2: read dynamic var root value (no active binding).
+;; When no binding frame is active, reading the var returns the root value.
+(defdynamic *log-level* :int 0)
+(println *log-level*)
