@@ -1,8 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/Users/rjungemann/Projects/turmeric/build_nosub/cmake_install.cmake",
-		"/Users/rjungemann/Projects/turmeric/build_nosub/src/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

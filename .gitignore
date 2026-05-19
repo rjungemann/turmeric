@@ -4,6 +4,7 @@ build-norel/
 build-rel/
 build-tsan/
 build-wasm/
+build_nosub/
 *.dSYM/
 *.o
 *.d
