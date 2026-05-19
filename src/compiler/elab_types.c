@@ -252,6 +252,21 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             return t;
         }
 
+        /* SS3a: bare Rec label reference -- resolve to back-reference sentinel.
+         * When we encounter a bare symbol that matches an active Rec binder label,
+         * return a TY_SESSION_REC node with fst=NULL (sentinel for recursive call). */
+        if (g_sessions_enabled && e->rec_depth > 0) {
+            for (uint8_t ri = 0; ri < e->rec_depth; ri++) {
+                if (e->rec_labels[ri] == sym) {
+                    /* Return a sentinel TY_SESSION_REC with fst=NULL to indicate
+                     * a recursive reference that will be unrolled at use time. */
+                    Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                    *t = type_session_rec(sym->name, NULL);
+                    return t;
+                }
+            }
+        }
+
         /* Unknown - return as opaque struct */
         Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
         memset(t, 0, sizeof(Type));
