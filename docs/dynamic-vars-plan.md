@@ -10,7 +10,7 @@
 > [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md)
 > (§8 Effect Types, §1 Linear Types)
 >
-> **Last updated:** 2026-05-18 (initial draft; no phases complete)
+> **Last updated:** 2026-05-19 (open questions resolved; no phases complete)
 
 ---
 
@@ -157,6 +157,97 @@ Each request-handling thread sees its own locale without the locale being thread
 ```
 
 `spawn-conveying` captures a snapshot of the current binding frame at spawn time. Subsequent changes in the parent thread do not affect the child, and vice versa.
+
+---
+
+## Alternative Approaches
+
+This section shows how the test-fixture-injection use case (Example 2) looks in Haskell's `IORef` + `ReaderT` pattern and in Turmeric's existing algebraic-effects system, so the trade-offs motivating dynamic vars are concrete.
+
+### Haskell: `IORef` + `ReaderT`
+
+```haskell
+-- The environment record holds an IORef to the connection so it can be
+-- swapped at test time without changing the type of the computation.
+data AppEnv = AppEnv { envDb :: IORef Connection }
+
+type App a = ReaderT AppEnv IO a
+
+-- query reads the connection from the environment on every call.
+query :: String -> App String
+query sql = do
+    env <- ask
+    db  <- liftIO $ readIORef (envDb env)
+    liftIO $ dbExec db sql
+
+-- Production entry point: wire up the real DB.
+runApp :: App a -> IO a
+runApp action = do
+    db    <- openProdDb
+    dbRef <- newIORef db
+    runReaderT action (AppEnv dbRef)
+
+-- Tests inject a fake by swapping the IORef before running.
+runTests :: IO ()
+runTests = do
+    testDb <- openTestDb
+    dbRef  <- newIORef testDb
+    let env = AppEnv { envDb = dbRef }
+    result <- runReaderT (query "SELECT 1") env
+    assert (result == "1")
+```
+
+**Cost:** every function that calls `query` must live in `App` (or a suitably constrained `MonadReader AppEnv m`). Adding a new injected dependency widens `AppEnv`, regenerates the `Has*` instances (if using the `Has` typeclass pattern), and forces all callers deeper into the transformer stack. The boilerplate scales linearly with the number of dependencies.
+
+---
+
+### Turmeric: Algebraic Effects
+
+```clojure
+;; Declare an effect row for database operations.
+(defeffect DbEffect
+  (query [sql : str] : str))
+
+;; query is written as a plain perform -- no explicit threading.
+(defn query [sql : str] : str
+  (perform (DbEffect.query sql)))
+
+;; All downstream callers can call query without any extra parameters;
+;; the effect row propagates through the type system automatically.
+(defn run-report [] : str
+  (str-concat (query "SELECT name") ": " (query "SELECT count")))
+
+;; Production handler: install the real connection at the boundary.
+(defn run-with-db [db thunk] : unit
+  (handle (thunk)
+    [(DbEffect.query sql k)
+     (resume k (db-exec db sql))]))
+
+;; Test handler: intercept the effect and return canned responses.
+(defn run-tests [] : unit
+  (handle
+    (do
+      (assert! (= (query "SELECT 1") "1"))
+      (assert! (= (run-report)) "alice: 42"))
+    [(DbEffect.query sql k)
+     (resume k (mock-db-exec sql))]))
+```
+
+**Cost:** every function that (transitively) calls `query` acquires `DbEffect` in its effect row. This is visible in types and checked by the compiler, which is good for reasoning but means the effect row grows with each additional injected dependency. Installing a handler (`handle`) at each architectural boundary is explicit and required; forgetting one is a type error, but it also means tests must always wrap calls in a `handle` block.
+
+---
+
+### Summary: when to use which
+
+| Situation | Reach for |
+|---|---|
+| The dependency is an interceptable operation with multiple implementations (prod vs. mock, local vs. remote) | Algebraic effects -- the `handle` boundary enforces the contract |
+| The dependency is configuration that is almost always the root value (log level, locale, feature flags) | Dynamic vars -- `binding` only at the rare override sites |
+| You want multi-shot resumption, or the handler needs to observe every invocation | Algebraic effects only |
+| Deep call chains where threading the parameter is the only cost | Dynamic vars -- zero call-site annotation |
+| Cross-thread conveyance with snapshot isolation | Dynamic vars + `spawn-conveying` |
+
+The two mechanisms are orthogonal: `binding` may appear inside `handle` bodies and `perform` may appear inside `binding` bodies without interaction issues.
 
 ---
 
@@ -490,17 +581,19 @@ Recommend implementing DV0-DV2 together as a single sprint once Phase T19 is con
 
 1. **`alter-root`:** Should there be an explicit form for mutating the root binding (analogous to Clojure's `alter-var-root`)? Mutating the root is a global side effect and should require an explicit acknowledgement. A tentative `alter-root!` form with a prominent warning is one option; alternatively, the root can only be set at `defdynamic` declaration time (no post-declaration root mutation).
 
-   **Tentative decision:** Provide `(alter-root! *name* new-val)` gated behind a `-Xunsafe-alter-root` flag. Without the flag, root mutation is disallowed after module initialization.
+   **Decision:** Provide `(alter-root! *name* new-val)` gated behind a `-Xunsafe-alter-root` flag. Without the flag, root mutation is disallowed after module initialization.
 
 2. **`binding` and effect handler boundaries:** If a `binding` form spans an effect handler's resume boundary (i.e., the body of `binding` performs an effect and is resumed later), the binding frame must survive across the continuation. Since the frame lives on the C stack and continuations are implemented via `longjmp`/`setjmp`, the frame's stack slot may have been reclaimed. Does this require heap-allocating the frame in the presence of effect handlers?
 
-   **Tentative decision:** Heap-allocate binding frames when `-Xeffect-types` is active and a `binding` body contains a `perform` site (detectable at elaboration time). Stack allocation remains the default when no `perform` is in scope.
+   **Decision:** Heap-allocate binding frames when `-Xeffect-types` is active and a `binding` body contains a `perform` site (detectable at elaboration time). Stack allocation remains the default when no `perform` is in scope.
 
 3. **`binding` with a non-`DynVarEntry` name:** If `(binding [x 1] ...)` appears where `x` is a plain local (not a dynamic var), should it be a type error or should it shadow the local lexically? This overlaps with the existing use of `let` for local shadowing. The safest answer is: `binding` requires all names to be `defdynamic` vars; use `let` for local shadowing.
 
-   **Tentative decision:** `binding` with a non-dynamic-var name is `TUR_E0600`. Use `let` for lexical shadowing.
+   **Decision:** `binding` with a non-dynamic-var name is `TUR_E0600`. Use `let` for lexical shadowing.
 
-4. **Windows portability:** `__attribute__((cleanup))` is not available on MSVC. If Windows support is added (see `windows-support-plan.md`), the binding stack push/pop must use an alternative mechanism (e.g. explicit `__try`/`__finally` on Windows, or wrapping every binding body in a helper function that takes a cleanup callback).
+4. **Windows portability:** `__attribute__((cleanup))` is not available on MSVC. If Windows support is added (see `windows-support-plan.md`), the binding stack push/pop must use a portable alternative.
+
+   **Decision:** Wrap every `binding` body in a helper function that takes the frame pointer and a cleanup callback. The helper calls the body, then unconditionally pops the frame on return -- no platform-specific `__try`/`__finally` needed. This is the default codegen path; `__attribute__((cleanup))` is used as an optimisation on GCC/Clang when available (detected via `#ifdef __GNUC__`).
 
 ---
 
