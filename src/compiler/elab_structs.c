@@ -1105,6 +1105,16 @@ Expr *elab_coerce(Elab *e, const Form *call) {
     }
     Expr *x = elab_form(e, call->as.list.items[2]);
     if (!x) return NULL;
+    /* SS1: Reject coerce whose source is a session channel.
+     * Reinterpreting a Session endpoint at a different protocol step would
+     * strand the linear resource; the Equal witness is insufficient to make
+     * this safe without full protocol equality checking (SS3+). */
+    if (g_sessions_enabled && x->type.kind == TY_SESSION) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "coerce cannot reinterpret a session channel endpoint; "
+                  "use session operations (send/recv/close/...) to advance the protocol");
+        return NULL;
+    }
     /* Zero-cost cast: return x unchanged (same runtime representation) */
     return x;
 }

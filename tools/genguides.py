@@ -168,35 +168,6 @@ GUIDE_CSS = '''\
     .hl-type    { color:#7AC4B8; }'''
 
 
-def parse_readme(readme_path: Path) -> list[dict]:
-    """
-    Parse README.md into a list of categories.
-    Each category: { 'name': str, 'guides': [{'stem', 'label', 'desc'}] }
-    Stop at the first '---' separator (below the categories).
-    """
-    text = readme_path.read_text(encoding='utf-8')
-    categories = []
-    current: dict | None = None
-
-    for line in text.splitlines():
-        if line.strip() == '---':
-            break
-        m_cat = re.match(r'^## (.+)', line)
-        if m_cat:
-            current = {'name': m_cat.group(1), 'guides': []}
-            categories.append(current)
-            continue
-        # Match: - **[label](href)** — desc  (with either -- or —)
-        m_item = re.match(r'-\s+\*\*\[([^\]]+)\]\(([^)]+)\)\*\*\s+[--—]+\s+(.+)', line)
-        if m_item and current is not None:
-            label, href, desc = m_item.group(1), m_item.group(2), m_item.group(3)
-            if not href.startswith('..') and href.endswith('.md'):
-                stem = Path(href).stem
-                current['guides'].append({'stem': stem, 'label': label.replace('.md', ''), 'desc': desc})
-
-    return [c for c in categories if c['guides']]
-
-
 def toc_tokens_to_sidebar(tokens: list) -> str:
     """Recursively render toc_tokens into sidebar <li> elements."""
     items = []
