@@ -132,7 +132,15 @@ typedef enum TypeKind {
     TY_SESSION_PAIR, /* SS1: internal pair [Session[P], Session[dual(P)]] returned by make-session */
     TY_SESSION_RECV_PAIR, /* SS2: internal pair [T, Session[Q]] returned by recv */
     TY_SESSION_OFFER,     /* SS2: internal result of offer; matched with Left/Right patterns */
+    /* SS5: Multi-party global protocol types (-Xsessions) */
+    TY_GLOBAL,            /* Global[...] -- a multi-party global protocol (compile-time only) */
+    TY_ROLE,              /* Role[G, R]  -- an endpoint of protocol G playing role R */
 } TypeKind;
+
+/* SS5: Global protocol interaction tree (compile-time only, arena-allocated).
+ * Forward-declared here so Type can reference them; defined in elab_internal.h. */
+typedef struct GlobalInteraction GlobalInteraction;
+typedef struct GlobalBranch GlobalBranch;
 
 /* Phase G0: Constructor field descriptor for ADTs */
 typedef struct CtorField {
@@ -287,6 +295,11 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
         case TY_SESSION_RECV_PAIR:
         case TY_SESSION_OFFER:
             return CK_MOVE;
+        /* SS5: Global protocol types -- compile-time only, linear endpoints */
+        case TY_GLOBAL:
+            return CK_MOVE;
+        case TY_ROLE:
+            return CK_LINEAR;
         case TY_UNKNOWN:
         default:
             return CK_MOVE;
@@ -424,6 +437,19 @@ typedef struct Type {
                                    NULL for TY_SESSION, TY_CLOSE, TY_SESSION_REC */
             const char  *label; /* TY_SESSION_REC: binder label (interned) */
         } session_;
+        /* SS5: Global protocol type (compile-time only) */
+        struct {
+            const char           *name;     /* interned protocol name */
+            const char          **roles;    /* arena-allocated array of interned role names */
+            int                   n_roles;
+            GlobalInteraction    *body;     /* interaction tree (arena-allocated) */
+        } global_;
+        /* SS5: Role endpoint type -- in-progress multi-party channel endpoint */
+        struct {
+            struct Type          *global_type; /* TY_GLOBAL type node */
+            const char           *role_name;   /* interned role name */
+            GlobalInteraction    *current_step; /* current position in interaction tree */
+        } role_;
     } as;
 } Type;
 
@@ -913,6 +939,34 @@ static inline Type type_make_handler(const char *effect_name, TypeKind value_kin
     t.as.handler_.effect_name = effect_name;
     t.as.handler_.value_kind = value_kind;
     t.as.handler_.result_kind = result_kind;
+    return t;
+}
+
+/* SS5: Global protocol type constructor (compile-time only, no runtime representation). */
+static inline Type type_global(const char *name, const char **roles, int n_roles,
+                               GlobalInteraction *body) {
+    Type t = {0};
+    t.kind = TY_GLOBAL;
+    t.copy_kind = CK_MOVE;
+    t.hkt_kind = KIND_STAR;
+    t.as.global_.name = name;
+    t.as.global_.roles = roles;
+    t.as.global_.n_roles = n_roles;
+    t.as.global_.body = body;
+    return t;
+}
+
+/* SS5: Role endpoint type constructor -- linear channel endpoint in a global protocol. */
+static inline Type type_role(struct Type *global_type, const char *role_name,
+                             GlobalInteraction *current_step) {
+    Type t = {0};
+    t.kind = TY_ROLE;
+    t.copy_kind = CK_LINEAR;
+    t.substruct = SK_LINEAR;
+    t.hkt_kind = KIND_STAR;
+    t.as.role_.global_type = global_type;
+    t.as.role_.role_name = role_name;
+    t.as.role_.current_step = current_step;
     return t;
 }
 
