@@ -354,7 +354,15 @@ Expr *elab_session_close(Elab *e, const Form *call) {
     if (!chan) return NULL;
     if (chan->type.kind == TY_ROLE) {
         /* The chan is already elaborated; inline the role-close logic here. */
+        const char *role_name = chan->type.as.role_.role_name;
+        /* SS8: skip bystander steps before checking for protocol end */
         GlobalInteraction *step = chan->type.as.role_.current_step;
+        while (step && step->kind == GI_MSG) {
+            bool is_sender   = step->msg.from && strcmp(step->msg.from, role_name) == 0;
+            bool is_receiver = step->msg.to   && strcmp(step->msg.to,   role_name) == 0;
+            if (is_sender || is_receiver) break;
+            step = step->msg.rest;
+        }
         if (!step || step->kind != GI_END) {
             const char *step_name = "unknown";
             if (step) {
