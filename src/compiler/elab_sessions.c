@@ -1,6 +1,65 @@
 /* elab_sessions.c -- session type channel operations (-Xsessions). */
 #include "elab_internal.h"
 
+/* SS1: Compute the dual of a session protocol type.
+ * dual(Send[T,Q])    = Recv[T, dual(Q)]
+ * dual(Recv[T,Q])    = Send[T, dual(Q)]
+ * dual(Close)        = Close
+ * dual(Choose[P,Q])  = Branch[dual(P), dual(Q)]
+ * dual(Branch[P,Q])  = Choose[dual(P), dual(Q)]
+ * Returns NULL and emits TUR_E0210 if the protocol kind is not dualizable. */
+static Type *session_dual(Elab *e, Type *proto, Span span) {
+    if (!proto) return NULL;
+    switch (proto->kind) {
+        case TY_CLOSE: {
+            Type *d = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *d = type_close();
+            return d;
+        }
+        case TY_SEND: {
+            /* dual(Send[T,Q]) = Recv[T, dual(Q)] */
+            Type *dual_cont = session_dual(e, proto->as.session_.snd, span);
+            if (!dual_cont) return NULL;
+            Type *d = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *d = type_recv(proto->as.session_.fst, dual_cont);
+            return d;
+        }
+        case TY_RECV: {
+            /* dual(Recv[T,Q]) = Send[T, dual(Q)] */
+            Type *dual_cont = session_dual(e, proto->as.session_.snd, span);
+            if (!dual_cont) return NULL;
+            Type *d = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *d = type_send(proto->as.session_.fst, dual_cont);
+            return d;
+        }
+        case TY_CHOOSE: {
+            /* dual(Choose[P,Q]) = Branch[dual(P), dual(Q)] */
+            Type *dp = session_dual(e, proto->as.session_.fst, span);
+            if (!dp) return NULL;
+            Type *dq = session_dual(e, proto->as.session_.snd, span);
+            if (!dq) return NULL;
+            Type *d = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *d = type_branch(dp, dq);
+            return d;
+        }
+        case TY_BRANCH: {
+            /* dual(Branch[P,Q]) = Choose[dual(P), dual(Q)] */
+            Type *dp = session_dual(e, proto->as.session_.fst, span);
+            if (!dp) return NULL;
+            Type *dq = session_dual(e, proto->as.session_.snd, span);
+            if (!dq) return NULL;
+            Type *d = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *d = type_choose(dp, dq);
+            return d;
+        }
+        default:
+            diag_emit_with_code(DIAG_ERROR, span, TUR_E0210_SESSION_NOT_DUAL,
+                                "cannot compute dual of protocol '%s'",
+                                type_name(*proto));
+            return NULL;
+    }
+}
+
 /* Helper: return a TY_SESSION Expr wrapping the given protocol Type, using
  * EX_INLINE_C as a placeholder (codegen is deferred to SS2).  The returned
  * expression carries the correct type for subsequent type-level checks. */
@@ -19,18 +78,37 @@ static Expr *session_placeholder(Elab *e, Type proto_type, Span span) {
 }
 
 /* (make-session P) — create a dual pair [Session[P], Session[Dual[P]]].
- * Duality checking is deferred to SS1; for SS0b we return a placeholder. */
+ * SS1: parses the protocol type P, computes dual(P), and returns a
+ * TY_SESSION_PAIR expression so that vector destructuring can assign
+ * the correct Session types to each binding. Codegen is deferred to SS2. */
 Expr *elab_session_make(Elab *e, const Form *call) {
     if (call->as.list.len != 2) {
         diag_emit(DIAG_ERROR, call->span,
                   "make-session requires a protocol: (make-session Protocol)");
         return NULL;
     }
-    /* Return TY_INT as a placeholder; SS2 will emit the actual pair-creation code. */
-    Expr *out = expr_new(e->arena, EX_INLINE_C, TYPE_INT, call->span);
+
+    /* Parse the protocol type expression (e.g. (Send int Close), Close, ...) */
+    Type *proto = type_expr_from_form(e, call->as.list.items[1],
+                                      NULL, NULL, NULL, 0);
+    if (!proto) return NULL;
+
+    /* Compute dual(P) — emits TUR_E0210 on failure */
+    Type *dual_proto = session_dual(e, proto, call->span);
+    if (!dual_proto) return NULL;
+
+    /* Build Session[P] and Session[dual(P)] */
+    Type *sess_p = (Type *)arena_alloc(e->arena, sizeof(Type));
+    *sess_p = type_session(proto);
+    Type *sess_dp = (Type *)arena_alloc(e->arena, sizeof(Type));
+    *sess_dp = type_session(dual_proto);
+
+    /* Return a TY_SESSION_PAIR placeholder; SS2 will emit the actual pair-creation. */
+    Type pair_type = type_session_pair(sess_p, sess_dp);
+    Expr *out = expr_new(e->arena, EX_INLINE_C, pair_type, call->span);
     InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
     ic->code = strslice("0 /*make-session-placeholder*/", 30);
-    ic->return_type = TYPE_INT;
+    ic->return_type = pair_type;
     ic->captures = NULL;
     ic->n_captures = 0;
     out->as.inline_c_.inline_c = ic;

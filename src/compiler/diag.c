@@ -154,6 +154,7 @@ const char *diag_code_to_string(DiagCode code) {
         /* MS4: ^unsafe-multishot deprecation */
         case TUR_W0400_UNSAFE_MULTISHOT_DEPRECATED:   return "TUR-W0400";
         /* SS0b: Session type errors */
+        case TUR_E0210_SESSION_NOT_DUAL:         return "TUR-E0210";
         case TUR_E0211_SESSION_DROPPED:          return "TUR-E0211";
         case TUR_E0212_SESSION_PROTO_MISMATCH:   return "TUR-E0212";
         default:                          return "";
@@ -222,6 +223,7 @@ DiagCode diag_code_from_string(const char *s) {
     /* MS4: ^unsafe-multishot deprecation */
     if (strcmp(s, "TUR-W0400") == 0) return TUR_W0400_UNSAFE_MULTISHOT_DEPRECATED;
     /* SS0b: Session type errors */
+    if (strcmp(s, "TUR-E0210") == 0) return TUR_E0210_SESSION_NOT_DUAL;
     if (strcmp(s, "TUR-E0211") == 0) return TUR_E0211_SESSION_DROPPED;
     if (strcmp(s, "TUR-E0212") == 0) return TUR_E0212_SESSION_PROTO_MISMATCH;
     return DIAG_CODE_NONE;

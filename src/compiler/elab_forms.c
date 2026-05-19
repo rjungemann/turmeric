@@ -100,8 +100,20 @@ Expr *elab_let(Elab *e, const Form *call) {
                               "vector destructuring elements must be symbols");
                     rc = -1; break;
                 }
-                /* Use the init type for the first binding; TY_INT placeholder for rest. */
-                Type elem_type = (vi == 0) ? init_v->type : type_from_kind(TY_INT);
+                /* SS1: TY_SESSION_PAIR decomposes into the two typed session endpoints.
+                 * For all other types: elem 0 gets the init type; rest get TY_INT placeholder. */
+                Type elem_type;
+                if (init_v->type.kind == TY_SESSION_PAIR) {
+                    if (vi == 0 && init_v->type.as.session_.fst) {
+                        elem_type = *init_v->type.as.session_.fst;
+                    } else if (vi == 1 && init_v->type.as.session_.snd) {
+                        elem_type = *init_v->type.as.session_.snd;
+                    } else {
+                        elem_type = type_from_kind(TY_INT);
+                    }
+                } else {
+                    elem_type = (vi == 0) ? init_v->type : type_from_kind(TY_INT);
+                }
                 Binding *vb = binding_new(e, vname_f->as.sym, elem_type, false, false, vname_f->span);
                 if (elem_type.copy_kind == CK_LINEAR) {
                     vb->is_linear = true;
