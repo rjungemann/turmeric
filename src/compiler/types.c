@@ -420,6 +420,73 @@ const char *type_name(Type t) {
             buf_putc(&tmp, '\0');
             return tur_strdup(tmp.data);
         }
+        /* SS0a: Session protocol type names */
+        case TY_SESSION: {
+            Buf tmp;
+            buf_init(&tmp);
+            buf_puts(&tmp, "Session[");
+            buf_puts(&tmp, t.as.session_.fst ? type_name(*t.as.session_.fst) : "?");
+            buf_puts(&tmp, "]");
+            buf_putc(&tmp, '\0');
+            return tur_strdup(tmp.data);
+        }
+        case TY_SEND: {
+            Buf tmp;
+            buf_init(&tmp);
+            buf_puts(&tmp, "Send[");
+            buf_puts(&tmp, t.as.session_.fst ? type_name(*t.as.session_.fst) : "?");
+            buf_puts(&tmp, ", ");
+            buf_puts(&tmp, t.as.session_.snd ? type_name(*t.as.session_.snd) : "?");
+            buf_puts(&tmp, "]");
+            buf_putc(&tmp, '\0');
+            return tur_strdup(tmp.data);
+        }
+        case TY_RECV: {
+            Buf tmp;
+            buf_init(&tmp);
+            buf_puts(&tmp, "Recv[");
+            buf_puts(&tmp, t.as.session_.fst ? type_name(*t.as.session_.fst) : "?");
+            buf_puts(&tmp, ", ");
+            buf_puts(&tmp, t.as.session_.snd ? type_name(*t.as.session_.snd) : "?");
+            buf_puts(&tmp, "]");
+            buf_putc(&tmp, '\0');
+            return tur_strdup(tmp.data);
+        }
+        case TY_CLOSE:
+            return "Close";
+        case TY_CHOOSE: {
+            Buf tmp;
+            buf_init(&tmp);
+            buf_puts(&tmp, "Choose[");
+            buf_puts(&tmp, t.as.session_.fst ? type_name(*t.as.session_.fst) : "?");
+            buf_puts(&tmp, ", ");
+            buf_puts(&tmp, t.as.session_.snd ? type_name(*t.as.session_.snd) : "?");
+            buf_puts(&tmp, "]");
+            buf_putc(&tmp, '\0');
+            return tur_strdup(tmp.data);
+        }
+        case TY_BRANCH: {
+            Buf tmp;
+            buf_init(&tmp);
+            buf_puts(&tmp, "Branch[");
+            buf_puts(&tmp, t.as.session_.fst ? type_name(*t.as.session_.fst) : "?");
+            buf_puts(&tmp, ", ");
+            buf_puts(&tmp, t.as.session_.snd ? type_name(*t.as.session_.snd) : "?");
+            buf_puts(&tmp, "]");
+            buf_putc(&tmp, '\0');
+            return tur_strdup(tmp.data);
+        }
+        case TY_SESSION_REC: {
+            Buf tmp;
+            buf_init(&tmp);
+            buf_puts(&tmp, "Rec[");
+            buf_puts(&tmp, t.as.session_.label ? t.as.session_.label : "?");
+            buf_puts(&tmp, ", ");
+            buf_puts(&tmp, t.as.session_.fst ? type_name(*t.as.session_.fst) : "?");
+            buf_puts(&tmp, "]");
+            buf_putc(&tmp, '\0');
+            return tur_strdup(tmp.data);
+        }
     }
     return "?";
 }
@@ -652,6 +719,60 @@ static void type_name_buf(Buf *b, Type t) {
             buf_puts(b, " | ... }");
             break;
         }
+        /* SS0a: Session protocol types */
+        case TY_SESSION:
+            buf_puts(b, "Session[");
+            if (t.as.session_.fst) type_name_buf(b, *t.as.session_.fst);
+            else buf_putc(b, '?');
+            buf_putc(b, ']');
+            break;
+        case TY_SEND:
+            buf_puts(b, "Send[");
+            if (t.as.session_.fst) type_name_buf(b, *t.as.session_.fst);
+            else buf_putc(b, '?');
+            buf_puts(b, ", ");
+            if (t.as.session_.snd) type_name_buf(b, *t.as.session_.snd);
+            else buf_putc(b, '?');
+            buf_putc(b, ']');
+            break;
+        case TY_RECV:
+            buf_puts(b, "Recv[");
+            if (t.as.session_.fst) type_name_buf(b, *t.as.session_.fst);
+            else buf_putc(b, '?');
+            buf_puts(b, ", ");
+            if (t.as.session_.snd) type_name_buf(b, *t.as.session_.snd);
+            else buf_putc(b, '?');
+            buf_putc(b, ']');
+            break;
+        case TY_CLOSE:
+            buf_puts(b, "Close");
+            break;
+        case TY_CHOOSE:
+            buf_puts(b, "Choose[");
+            if (t.as.session_.fst) type_name_buf(b, *t.as.session_.fst);
+            else buf_putc(b, '?');
+            buf_puts(b, ", ");
+            if (t.as.session_.snd) type_name_buf(b, *t.as.session_.snd);
+            else buf_putc(b, '?');
+            buf_putc(b, ']');
+            break;
+        case TY_BRANCH:
+            buf_puts(b, "Branch[");
+            if (t.as.session_.fst) type_name_buf(b, *t.as.session_.fst);
+            else buf_putc(b, '?');
+            buf_puts(b, ", ");
+            if (t.as.session_.snd) type_name_buf(b, *t.as.session_.snd);
+            else buf_putc(b, '?');
+            buf_putc(b, ']');
+            break;
+        case TY_SESSION_REC:
+            buf_puts(b, "Rec[");
+            buf_puts(b, t.as.session_.label ? t.as.session_.label : "?");
+            buf_puts(b, ", ");
+            if (t.as.session_.fst) type_name_buf(b, *t.as.session_.fst);
+            else buf_putc(b, '?');
+            buf_putc(b, ']');
+            break;
     }
 }
 
@@ -757,6 +878,17 @@ const char *type_c_name(Type t) {
             return t.as.contract_.base_type
                    ? type_c_name(*t.as.contract_.base_type)
                    : "int64_t";
+        /* SS0a: Session channel endpoints lower to TurChannel* in C (SS2).
+         * Protocol descriptor types are erased and never appear as C values. */
+        case TY_SESSION:
+            return "TurChannel *";
+        case TY_SEND:
+        case TY_RECV:
+        case TY_CLOSE:
+        case TY_CHOOSE:
+        case TY_BRANCH:
+        case TY_SESSION_REC:
+            return "/*session-protocol*/ void";
     }
     return "void";
 }
@@ -938,6 +1070,22 @@ static bool type_is_guarded_recursive_helper(const Type *t, const char *rec_name
         /* CT0: Contract type — guarded by the base type constructor */
         case TY_CONTRACT:
             return type_is_guarded_recursive_helper(t->as.contract_.base_type, rec_name, depth + 1);
+        /* SS0a: Session protocol types — guarded by their constructors.
+         * TY_SESSION wraps the protocol (one constructor deep = depth+1 counts).
+         * TY_CLOSE is a leaf; others have child protocol types. */
+        case TY_CLOSE:
+            return true;
+        case TY_SESSION:
+            return type_is_guarded_recursive_helper(t->as.session_.fst, rec_name, depth + 1);
+        case TY_SEND:
+        case TY_RECV:
+        case TY_CHOOSE:
+        case TY_BRANCH:
+            return type_is_guarded_recursive_helper(t->as.session_.fst, rec_name, depth + 1)
+                && (!t->as.session_.snd
+                    || type_is_guarded_recursive_helper(t->as.session_.snd, rec_name, depth + 1));
+        case TY_SESSION_REC:
+            return type_is_guarded_recursive_helper(t->as.session_.fst, rec_name, depth + 1);
     }
 
     return true;  /* Unknown type kind - assume safe */
@@ -1027,6 +1175,14 @@ const char *typekind_to_string(TypeKind k) {
         case TY_REC:          return "rec";
         /* Phase LT3 */
         case TY_LREF:         return "lref";
+        /* SS0a: Session protocol types */
+        case TY_SESSION:      return "Session";
+        case TY_SEND:         return "Send";
+        case TY_RECV:         return "Recv";
+        case TY_CLOSE:        return "Close";
+        case TY_CHOOSE:       return "Choose";
+        case TY_BRANCH:       return "Branch";
+        case TY_SESSION_REC:  return "Rec";
         default:          return "<?>";
     }
 }
@@ -1186,6 +1342,14 @@ TypeKind typekind_from_name(const char *name) {
     if (strcmp(name, "float64") == 0) return TY_FLOAT64;
     if (strcmp(name, "set") == 0) return TY_SET;
     if (strcmp(name, "handler") == 0) return TY_HANDLER;
+    /* SS0a: Session protocol types */
+    if (strcmp(name, "Session") == 0) return TY_SESSION;
+    if (strcmp(name, "Send") == 0)    return TY_SEND;
+    if (strcmp(name, "Recv") == 0)    return TY_RECV;
+    if (strcmp(name, "Close") == 0)   return TY_CLOSE;
+    if (strcmp(name, "Choose") == 0)  return TY_CHOOSE;
+    if (strcmp(name, "Branch") == 0)  return TY_BRANCH;
+    if (strcmp(name, "Rec") == 0)     return TY_SESSION_REC;
     return TY_UNKNOWN;
 }
 

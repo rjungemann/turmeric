@@ -11,7 +11,7 @@
 > [linear-types-plan.md](linear-types-plan.md),
 > [effect-rows-plan.md](effect-rows-plan.md)
 >
-> **Last updated:** 2026-05-18 (P0, P1, P2, P3 resolved; SS0a ready to begin)
+> **Last updated:** 2026-05-18 (P0, P1, P2, P3, SS0a complete; SS0b ready to begin)
 
 ---
 
@@ -420,25 +420,44 @@ projection algorithm is wired into the compiler.
 **Goal:** Add session type constructors to the type system; define the channel
 creation primitive. No parser or elaborator behaviour yet.
 
-- [ ] Add to `TypeKind` in `src/types.h`:
+- [x] Add to `TypeKind` in `src/compiler/types.h` (actual path per P0 audit):
 
   ```c
-  TY_SESSION,   /* Session[P] -- a channel carrying protocol P */
-  TY_SEND,      /* Send[T, Q] -- send T then continue as Q */
-  TY_RECV,      /* Recv[T, Q] -- receive T then continue as Q */
-  TY_CLOSE,     /* Close -- protocol complete */
-  TY_CHOOSE,    /* Choose[P, Q] -- internal choice (sender picks) */
-  TY_BRANCH,    /* Branch[P, Q] -- external choice (receiver picks) */
-  TY_REC,       /* Rec[F] -- recursive protocol (mu-type) */
+  TY_SESSION,      /* Session[P] -- a channel carrying protocol P */
+  TY_SEND,         /* Send[T, Q] -- send T then continue as Q */
+  TY_RECV,         /* Recv[T, Q] -- receive T then continue as Q */
+  TY_CLOSE,        /* Close -- protocol complete */
+  TY_CHOOSE,       /* Choose[P, Q] -- internal choice (sender picks) */
+  TY_BRANCH,       /* Branch[P, Q] -- external choice (receiver picks) */
+  TY_SESSION_REC,  /* Rec[label, F] -- recursive protocol (mu-type) */
   ```
 
-- [ ] Define `make-session` as the channel-creation primitive: given a protocol
-  `P`, allocates a pair of endpoints `[Session[P], Session[Dual[P]]]`. (Duality
-  checking happens in SS1; SS0a only establishes the construct.)
-- [ ] Assign `CK_LINEAR` capability kind to all `Session` types by construction
-  (from linear-types-plan.md; confirm the relevant LT phase is complete per P1)
-- [ ] Create `tests/fixtures/sessions/` and add the baseline fixtures described
-  in P2
+  > **Note:** `TY_REC` already exists (HKT-P2 recursive type binder). The
+  > session recursive protocol uses `TY_SESSION_REC` to avoid the collision.
+
+- [x] `make-session` is deferred to SS0b (parser/elaborator). SS0a only
+  establishes the `TY_SESSION` TypeKind and its `CK_LINEAR` assignment so
+  the construct exists in the data model before SS0b wires it up.
+- [x] Assign `CK_LINEAR` to `TY_SESSION`; protocol descriptor types
+  (`TY_SEND`, `TY_RECV`, etc.) are `CK_MOVE` (type-level only, never values)
+- [x] `session_` union field added to `Type.as`; type constructors
+  `type_session`, `type_send`, `type_recv`, `type_close`, `type_choose`,
+  `type_branch`, `type_session_rec` added as `static inline` functions
+- [x] `typekind_to_string` / `typekind_from_name` / `type_name` /
+  `type_name_buf` / `type_c_name` / `type_is_guarded_recursive_helper`
+  all updated with session cases in `src/compiler/types.c`
+- [x] Baseline fixtures from P2 already present in
+  `tests/fixtures/session-*/` and `tests/fixtures/errors/session-*/`;
+  all intentionally red until SS0b-SS1 implement the operations
+
+  **Implementation notes (2026-05-18):**
+  - `TY_SESSION` gets `CK_LINEAR + SK_LINEAR`; all others get `CK_MOVE`
+  - `type_c_name(TY_SESSION)` returns `"TurChannel *"` (SS2 will emit the
+    actual struct definition; for now only the pointer type is needed)
+  - Protocol descriptors (`TY_SEND` etc.) return `"/*session-protocol*/ void"`
+    from `type_c_name` since they are never runtime values
+  - Inline constructors use `= {0}` zero-initialisation (avoids a
+    `<string.h>` dependency in the header)
 
 ---
 

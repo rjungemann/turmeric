@@ -120,6 +120,14 @@ typedef enum TypeKind {
     TY_HANDLER,      /* handler<Effect, ValueType, ResultType> */
     /* CT0: Contract type — { x : T | p }; a refinement-checked wrapper around T */
     TY_CONTRACT,     /* { var : base_type | predicate } */
+    /* SS0a: Session type protocol constructors (-Xsessions) */
+    TY_SESSION,      /* Session[P] -- linear channel endpoint carrying protocol P */
+    TY_SEND,         /* Send[T, Q] -- send T then continue as Q */
+    TY_RECV,         /* Recv[T, Q] -- receive T then continue as Q */
+    TY_CLOSE,        /* Close -- protocol complete; must be consumed by close */
+    TY_CHOOSE,       /* Choose[P, Q] -- internal choice (this endpoint picks branch) */
+    TY_BRANCH,       /* Branch[P, Q] -- external choice (peer picks; this endpoint selects) */
+    TY_SESSION_REC,  /* Rec[label, F] -- recursive protocol mu-type (distinct from HKT-P2 TY_REC) */
 } TypeKind;
 
 /* Phase G0: Constructor field descriptor for ADTs */
@@ -259,6 +267,18 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
         /* CT0: contract type copies like its base type (defaults to copy for safety) */
         case TY_CONTRACT:
             return CK_COPY;
+        /* SS0a: Session channels are linear (exactly-once protocol discipline).
+         * Protocol descriptor types (Send, Recv, etc.) are move-only; they are
+         * type-level constructs that never become runtime values by themselves. */
+        case TY_SESSION:
+            return CK_LINEAR;
+        case TY_SEND:
+        case TY_RECV:
+        case TY_CLOSE:
+        case TY_CHOOSE:
+        case TY_BRANCH:
+        case TY_SESSION_REC:
+            return CK_MOVE;
         case TY_UNKNOWN:
         default:
             return CK_MOVE;
@@ -385,6 +405,17 @@ typedef struct Type {
             const char       *var_name;   /* bound variable x in { x : T | p } */
             const struct Form *predicate; /* predicate expression p (a Form*) */
         } contract_;
+        /* SS0a: Session protocol type arguments (-Xsessions) */
+        struct {
+            struct Type *fst;   /* TY_SESSION: protocol P
+                                   TY_SEND/TY_RECV: message type T
+                                   TY_CHOOSE/TY_BRANCH: left branch P
+                                   TY_SESSION_REC: body type */
+            struct Type *snd;   /* TY_SEND/TY_RECV: continuation Q
+                                   TY_CHOOSE/TY_BRANCH: right branch Q
+                                   NULL for TY_SESSION, TY_CLOSE, TY_SESSION_REC */
+            const char  *label; /* TY_SESSION_REC: binder label (interned) */
+        } session_;
     } as;
 } Type;
 
@@ -526,6 +557,81 @@ static inline Type type_lref(TypeKind inner) {
     t.substruct  = SK_LINEAR;   /* ST0: lref<T> has the linear substructural discipline */
     t.as.ref.inner = inner;
     t.n_lifetimes = 0;
+    return t;
+}
+
+/* SS0a: Session type constructors (-Xsessions).
+ * These take arena-allocated Type* arguments; callers own allocation.
+ * Protocol descriptors (Send, Recv, etc.) are move-only type-level constructs.
+ * Only TY_SESSION gets CK_LINEAR + SK_LINEAR (it is the channel endpoint). */
+
+static inline Type type_session(struct Type *proto) {
+    Type t = {0};
+    t.kind = TY_SESSION;
+    t.copy_kind = CK_LINEAR;
+    t.substruct = SK_LINEAR;
+    t.hkt_kind = KIND_STAR;
+    t.as.session_.fst = proto;
+    return t;
+}
+
+static inline Type type_send(struct Type *msg, struct Type *cont) {
+    Type t = {0};
+    t.kind = TY_SEND;
+    t.copy_kind = CK_MOVE;
+    t.hkt_kind = KIND_STAR;
+    t.as.session_.fst = msg;
+    t.as.session_.snd = cont;
+    return t;
+}
+
+static inline Type type_recv(struct Type *msg, struct Type *cont) {
+    Type t = {0};
+    t.kind = TY_RECV;
+    t.copy_kind = CK_MOVE;
+    t.hkt_kind = KIND_STAR;
+    t.as.session_.fst = msg;
+    t.as.session_.snd = cont;
+    return t;
+}
+
+static inline Type type_close(void) {
+    Type t = {0};
+    t.kind = TY_CLOSE;
+    t.copy_kind = CK_MOVE;
+    t.hkt_kind = KIND_STAR;
+    return t;
+}
+
+static inline Type type_choose(struct Type *left, struct Type *right) {
+    Type t = {0};
+    t.kind = TY_CHOOSE;
+    t.copy_kind = CK_MOVE;
+    t.hkt_kind = KIND_STAR;
+    t.as.session_.fst = left;
+    t.as.session_.snd = right;
+    return t;
+}
+
+static inline Type type_branch(struct Type *left, struct Type *right) {
+    Type t = {0};
+    t.kind = TY_BRANCH;
+    t.copy_kind = CK_MOVE;
+    t.hkt_kind = KIND_STAR;
+    t.as.session_.fst = left;
+    t.as.session_.snd = right;
+    return t;
+}
+
+/* TY_SESSION_REC: recursive protocol mu-type.
+ * label is an interned string (e.g. "echo"); body is the unrolled protocol. */
+static inline Type type_session_rec(const char *label, struct Type *body) {
+    Type t = {0};
+    t.kind = TY_SESSION_REC;
+    t.copy_kind = CK_MOVE;
+    t.hkt_kind = KIND_STAR;
+    t.as.session_.label = label;
+    t.as.session_.fst = body;
     return t;
 }
 
