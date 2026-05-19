@@ -4,7 +4,7 @@
 >
 > **Target:** v3-v4 (binary sessions, SS0-SS4); v4-v5 (multi-party sessions, SS5-SS8)
 >
-> **Prerequisites:** Linear Types (LT0-LT4) complete; thread primitives (Phase T19) complete; Higher-Ranked Types (HRT1) recommended.
+> **Prerequisites:** Linear Types (LT0-LT4) complete; thread primitives (Phase T19) complete; Higher-Ranked Types (HRT1) recommended. GADTs (G0–G4) are complete and active (`-Xgadt`); Intersection & Union Types (IT0–IT4) are substantially complete (`-Xunion-types`, `-Xintersection-types`); Substructural Types (ST0–ST3) are complete (`-Xsubstructural`). See interaction notes in the [Interaction with Existing Features](#interaction-with-existing-features) table.
 >
 > **Related:** [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md)
 > (§5 Session Types, §1 Linear Types, §8 Effect Types)
@@ -237,6 +237,10 @@ Many practical concurrent systems involve more than two participants -- handshak
 | Borrow checker | Sessions are owned, not borrowed | `recv`/`send` consume and return the channel |
 | HRT | Recursive protocols require recursive types | HRT1 (Rank-2) recommended |
 | Multi-party roles | Each `Role` endpoint is `^linear`; roles run concurrently | `make-protocol` distributes one endpoint per role (SS7) |
+| GADTs (`-Xgadt`) | `offer`/`Branch` returns `(either (Session P) (Session Q))`; inside a `match` arm the elaborator refines the channel type (P or Q) alongside any GADT skolem equalities already in scope — both refinements must compose correctly | `Equal`/`coerce` must not be used to reinterpret a `Session` endpoint at a different protocol step; the elaborator should reject `coerce` whose target is a `Session` type unless the source protocol is provably equal (a legitimate use via `Equal` witnesses is sound but rare); session channels must not appear as phantom GADT type indices unless linearity is tracked through the GADT |
+| Intersection & Union Types (`-Xunion-types`) | Session channels must not widen to `any` (widening loses linear tracking); `(offer chan)` returns `(either (Session P) (Session Q))` which with `-Xunion-types` could also be spelled `(Session P \| Session Q)` — in either spelling the elaborator must enforce that exactly one branch is consumed linearly | Intersection `(Session P & Session Q)` must be rejected: it would alias a single linear resource under two protocols simultaneously; the elaborator should emit a type error if a session type appears in an intersection position |
+| Substructural Types (`-Xsubstructural`) | `-Xsessions` implies `-Xlinear`; the full substructural framework (`-Xsubstructural`) subsumes linear and is now complete; session channels are `CK_LINEAR` (not `CK_AFFINE` or `CK_UNIQUE`) — both weaker and stronger modes are unsound for sessions | `^affine` on a `Session` type is unsound (you could drop the channel mid-protocol); `^relevant` is unsound (you could use the channel twice); the elaborator must reject any session type annotated with a weaker-than-linear capability kind |
+| Effect row polymorphism (`-Xeffect-types`) | With row-polymorphic effects, `send`/`recv` operations carry an explicit effect row; the elaborator's effect-row tracking must interleave with session-state advancement so the channel type advances after an effect is handled and resumed | Effect handlers that intercept `send`/`recv` must return the advanced channel endpoint; handlers that abort rather than resuming leave the session channel unconsumed — the elaborator must enforce that abort-resumption handlers produce a `Session[Close]` or otherwise discharge the linearity obligation |
 
 ---
 
@@ -261,9 +265,63 @@ src/error.h/.c      -- Error codes TUR_E0200-TUR_E0249 (shared with uniqueness? 
 
 ---
 
-## Phase SS0 — Session Type Foundations
+## Pre-Phase Prerequisites
 
-**Goal:** Add session type constructors to the type system and parser.
+These tasks must be completed before any SS phase begins. They are cheap now
+and expensive to retrofit once error codes appear in test fixtures or the
+projection algorithm is wired into the compiler.
+
+### P0 — Error Code Range Coordination
+
+- [ ] Reconcile `TUR_E0200`-`TUR_E0249` with `uniqueness-types-plan.md`, which
+  proposes the same range. Lock the final allocation before any SS phase emits
+  error codes or writes fixtures that reference them.
+  - Proposed split (pending coordination): binary sessions `TUR_E0210`-`TUR_E0212`,
+    multi-party sessions `TUR_E0220`-`TUR_E0223`
+
+### P1 — Linear Types Prerequisite Audit
+
+- [ ] Verify which LT phases provide the elaborator machinery session types
+  depend on, and confirm they are implemented (not just marked complete in the plan):
+  - Which LT phase implements `CK_LINEAR` / `CK_AFFINE` / `CK_UNIQUE`
+    capability-kind tracking? (needed by SS0a and the `^affine Session` guard in SS1)
+  - Which LT phase provides the elaborator linearity enforcement that SS1 re-uses
+    for protocol progress checking?
+- [ ] Document the answers in this plan before SS0a begins
+
+### P2 — Test Fixture Baseline
+
+- [ ] Create `tests/fixtures/sessions/` alongside SS0a
+- [ ] Add at least one happy-path and one negative-case fixture per core
+  operation: `send`, `recv`, `close`, `offer`, `choose-left`, `choose-right`
+- [ ] Each subsequent SS phase adds its own fixtures; this baseline gives every
+  phase a clear red/green criterion from day one and prevents regressions as
+  later phases layer on top
+
+### P3 — Projection Algorithm Spike (required before SS5)
+
+- [ ] Implement a standalone reference version of the projection algorithm
+  (Python or pseudocode) against the Honda/Yoshida/Carbone rules before
+  starting the SS5 global-type front end
+- [ ] Validate against at least four cases:
+  - `ThreeWayHandshake` (Example 4) -- straightforward sequential interactions
+  - A `choice`-containing protocol -- exercises the uninvolved-role merge
+  - A recursive global protocol -- exercises `loop`/`continue` projection
+  - A non-projectable protocol -- confirms the partial-function failure case
+    triggers `TUR_E0220` correctly
+- [ ] Projection rules to validate:
+  - `(-> R X T) then rest` projects for `R` to `Send[T, project(rest, R)]`
+  - `(-> X R T) then rest` projects for `R` to `Recv[T, project(rest, R)]`
+  - `(-> X Y T) then rest` with `R` uninvolved projects to `project(rest, R)`
+  - `choice` for deciding role → `Choose`; notified roles → `Branch`; uninvolved
+    roles → merge (fails if branches are not mergeable)
+
+---
+
+## Phase SS0a — Session Type Data Model
+
+**Goal:** Add session type constructors to the type system; define the channel
+creation primitive. No parser or elaborator behaviour yet.
 
 - [ ] Add to `TypeKind` in `src/types.h`:
 
@@ -277,13 +335,28 @@ src/error.h/.c      -- Error codes TUR_E0200-TUR_E0249 (shared with uniqueness? 
   TY_REC,       /* Rec[F] -- recursive protocol (mu-type) */
   ```
 
-- [ ] Parse session type syntax in `src/reader.c`
-- [ ] Session channels are `CK_LINEAR` by construction (from linear-types-plan.md)
+- [ ] Define `make-session` as the channel-creation primitive: given a protocol
+  `P`, allocates a pair of endpoints `[Session[P], Session[Dual[P]]]`. (Duality
+  checking happens in SS1; SS0a only establishes the construct.)
+- [ ] Assign `CK_LINEAR` capability kind to all `Session` types by construction
+  (from linear-types-plan.md; confirm the relevant LT phase is complete per P1)
+- [ ] Create `tests/fixtures/sessions/` and add the baseline fixtures described
+  in P2
+
+---
+
+## Phase SS0b — Session Type Parser and Elaborator
+
+**Goal:** Parse session type syntax and implement all six channel operations in
+the elaborator.
+
+- [ ] Parse session type syntax in `src/reader.c`:
+  `Session`, `Send`, `Recv`, `Close`, `Choose`, `Branch`, `Rec`, `make-session`
 - [ ] Add session channel operations to the elaborator:
   - `(send chan val)` -- consumes `chan : Session[Send[T, Q]]`; returns `chan' : Session[Q]`
   - `(recv chan)` -- consumes `chan : Session[Recv[T, Q]]`; returns `[val chan'] : [T, Session[Q]]`
   - `(close chan)` -- consumes `chan : Session[Close]`; returns `unit`
-  - `(offer chan)` -- consumes `chan : Session[Branch[P, Q]]`; returns `(either (Session P) (Session Q))`
+  - `(offer chan)` -- consumes `chan : Session[Branch[P, Q]]`; returns `(either (Session P) (Session Q))`. With `-Xgadt` active the elaborator must propagate the per-branch session-type refinement (P vs. Q) into each match arm alongside any GADT skolem equalities already in scope. With `-Xunion-types` the return type may also be spelled `(Session P | Session Q)`; in either spelling the elaborator must enforce that exactly one branch is consumed linearly and that no implicit widening to `any` is applied.
   - `(choose-left chan)` -- consumes `chan : Session[Choose[P, Q]]`; returns `Session[P]`
   - `(choose-right chan)` -- consumes `chan : Session[Choose[P, Q]]`; returns `Session[Q]`
 
@@ -311,6 +384,7 @@ The duality relation:
 - [ ] Implement `dual(P)` function in `src/typecheck.c`
 - [ ] When a session channel is created (`make-session`), check that the two endpoints have dual types
 - [ ] Emit error `TUR_E0210` when duality fails
+- [ ] **GADT `coerce` guard:** the elaborator must reject any use of `coerce` (from `stdlib/equal.tur`, `-Xgadt`) whose target type is a `Session` type, unless the source protocol is provably equal via an `Equal` witness. A misfired `coerce` could reinterpret a channel at a wrong protocol step, stranding the linear resource.
 
 ### Protocol Progress
 
@@ -349,17 +423,47 @@ The duality relation:
 
 ---
 
-## Phase SS3 — Session Combinators
+## Phase SS3a — Recursive Protocols
 
-**Goal:** Add recursive protocols, delegation, and session subtyping.
+**Goal:** Support `mu X. F X` recursive protocols (equirecursive).
 
 - [ ] **Recursive protocols (`Rec`):** support `mu X. F X` for protocols that repeat
   - `EchoServer = Branch (Recv int (Send int EchoServer)) Close`
-  - Implement as isorecursive types (explicit fold/unfold) or equirecursive (transparent)
-- [ ] **Delegation:** a session channel can be passed to another thread/function, transferring protocol ownership
-  - The receiving function must fully complete the delegated protocol
-- [ ] **Session subtyping:** a server offering `Branch[P, Q, R]` can be used where `Branch[P, Q]` is expected (external choice subtyping is covariant in offered options)
-- [ ] **Timeout channels:** `(recv-timeout chan duration)` returns `(option T)` and advances or resets the protocol
+  - Equirecursive: protocol types are transparently equal to their unrolled
+    forms; no `fold`/`unfold` at recursive call sites
+- [ ] **Co-inductive equality:** protocol equality checked co-inductively with a
+  "seen" set to prevent looping. Share or reuse the co-inductive guard already
+  present in `type_equiv`/`type_unify` in `src/elab.c` (used for recursive
+  ADTs under `-Xgadt`) rather than implementing a separate scheme.
+- [ ] Add fixtures for recursive protocol happy-path and drop-before-close error
+
+---
+
+## Phase SS3b — Delegation and Session Subtyping
+
+**Goal:** Allow protocol ownership transfer and covariant external-choice subtyping.
+
+- [ ] **Delegation:** a session channel can be passed to another thread or
+  function, transferring protocol ownership. The receiving function must fully
+  complete the delegated protocol; the delegating side loses the binding.
+- [ ] **Session subtyping:** a server offering `Branch[P, Q, R]` is usable
+  where `Branch[P, Q]` is expected (external choice subtyping is covariant in
+  offered options)
+- [ ] Add fixtures for delegation transfer and subtyping acceptance/rejection
+
+---
+
+## Phase SS3c — Timeout Channels
+
+**Goal:** Typed timeout support for `recv`.
+
+- [ ] Add `TY_TIMEOUT` to `TypeKind` alongside `TY_SEND`/`TY_RECV`
+- [ ] `(recv-timeout chan duration)` -- on message receipt the protocol
+  continues as `Q`; on timeout it continues as `P`. Both branches return the
+  channel so the session can continue.
+  - Type: `(Recv T (Timeout Q P))` -- `Timeout` is self-dual (both endpoints
+    see the same branching outcome)
+- [ ] Add fixtures for timeout-received and timeout-expired paths
 
 ---
 
@@ -371,7 +475,7 @@ The duality relation:
   - `echo` -- trivial echo protocol
   - `rpc` -- generic request-response
   - `pubsub` -- publish-subscribe protocol template
-- [ ] Integration with effects: `recv` and `send` may be declared as effects so that handlers can intercept message passing (useful for testing, logging, mock protocols)
+- [ ] Integration with effects: `recv` and `send` may be declared as effects so that handlers can intercept message passing (useful for testing, logging, mock protocols). With `-Xeffect-types` active, verify that the effect handler elaboration path correctly handles the advanced session channel in the handler's return type; handlers that abort rather than resuming must discharge the linearity obligation (e.g. by closing the channel).
 - [ ] Integration with STM: session operations within `atomic` blocks are serialised; deadlock detection is the programmer's responsibility (document limitations)
 - [ ] `tur explain TUR_E0210`, `TUR_E0211`, `TUR_E0212` entries
 - [ ] Integration tests: echo server/client, calculator RPC, delegated sessions
@@ -625,14 +729,17 @@ N-party protocols; a `defprotocol` declaration is.
 
 ## Complexity Assessment
 
-### Binary sessions (SS0-SS4)
+### Binary sessions (SS0a-SS4)
 
 | Aspect | Complexity | Notes |
 |---|---|---|
-| Type system changes | High | Seven new `TypeKind` variants; duality relation |
-| Elaborator changes | High | Protocol progress checking; duality checking |
-| Codegen changes | Medium | Channel struct emission; typed send/recv wrappers |
-| C emission | Medium | Thin wrappers over Phase T19 primitives |
+| Type system changes (SS0a) | Low-Medium | Seven new `TypeKind` variants; `make-session`; `CK_LINEAR` assignment -- additive only |
+| Parser + elaborator ops (SS0b) | Medium | Six channel operations; GADT/union-types interaction |
+| Duality + progress checking (SS1) | High | Protocol progress checking; duality checking; GADT coerce guard |
+| Codegen (SS2) | Medium | Channel struct emission; typed send/recv wrappers |
+| Recursive protocols (SS3a) | High | Co-inductive equality; must integrate with existing GADT `type_equiv` guard |
+| Delegation + subtyping (SS3b) | Medium | Protocol ownership transfer; covariant external-choice subtyping |
+| Timeout channels (SS3c) | Low-Medium | Self-contained new type kind; typed branch on timeout |
 | Error messages | High | Protocol mismatch errors require showing expected vs. actual protocol steps |
 
 ### Multi-party additions (SS5-SS8)
@@ -653,22 +760,26 @@ N-party protocols; a `defprotocol` declaration is.
 turc -Xsessions myfile.tur
 ```
 
-Enabling `-Xsessions` implicitly enables `-Xlinear` (channels are linear).
+Enabling `-Xsessions` implicitly enables `-Xlinear` (channels are linear). Because `-Xsubstructural` now subsumes `-Xlinear` and is complete (ST0–ST3), `-Xsessions` also implicitly enables `-Xsubstructural`; this ensures the capability-kind machinery (`CK_LINEAR` / `CK_AFFINE` / `CK_UNIQUE`) is available to reject unsound `^affine` or `^relevant` annotations on session channels.
 
 The `-Xsessions` flag gates both binary and multi-party forms. The
 `(defprotocol ...)` global-protocol form and the `Role` type are available only
 under `-Xsessions`; until SS5 lands they are rejected with a "not yet
 implemented" diagnostic.
 
+> **Note:** `-Xsessions` does **not** implicitly enable `-Xgadt` or `-Xunion-types`. The GADT and union-type elaboration paths interact with session types (see interaction table) but are separate opt-in features; a program may use session types without either.
+
 ---
 
 ## Implementation Priority
 
-**Binary sessions (SS0-SS4): Medium-High** — v3-v4, after Linear Types (LT0-LT4) and thread primitives (Phase T19).
+**Pre-phase tasks (P0-P3):** Complete before any SS phase. P0 (error range) and P1 (LT audit) are one-time coordination tasks; P2 (fixture baseline) is done alongside SS0a; P3 (projection spike) must be done before SS5.
+
+**Binary sessions (SS0a-SS4): Medium-High** — v3-v4, after Linear Types (LT0-LT4) and thread primitives (Phase T19).
 
 Session types are the highest-value concurrency safety feature available. They build directly on linear types and are well-understood theoretically. The primary complexity is in protocol progress and duality checking; the codegen is relatively straightforward.
 
-Start with simple send/receive protocols (SS0-SS2), ship them, then add choice, recursion, and delegation (SS3-SS4).
+Start with the data model and test infrastructure (SS0a), then the parser and elaborator operations (SS0b), then ship simple send/receive protocols (SS1-SS2). Add recursive protocols first (SS3a), then delegation and subtyping (SS3b), then timeouts (SS3c), then the integration phase (SS4).
 
 **Multi-party sessions (SS5-SS8): Medium** — v4-v5, a separate track that must
 not begin until binary sessions are stable and in real use. The projection
