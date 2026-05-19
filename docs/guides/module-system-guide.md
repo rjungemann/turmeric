@@ -1,3 +1,9 @@
+---
+title: Module System Guide
+category: Language Features
+description: Module system, namespacing, exports
+---
+
 # Turmeric Module System Guide
 
 Turmeric's module system gives you namespaced, self-contained units of code

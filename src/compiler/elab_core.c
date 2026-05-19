@@ -1166,6 +1166,20 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->kw_post = intern_cstr(st, "post");
     e->sym_result             = intern_cstr(st, "result");
     e->sym_tur_contract_check = intern_cstr(st, "tur-contract-check");
+    /* SS0b: Session type constructor symbols (capitalized, appear in type positions) */
+    e->sym_session_type  = intern_cstr(st, "Session");
+    e->sym_session_Send  = intern_cstr(st, "Send");
+    e->sym_session_Recv  = intern_cstr(st, "Recv");
+    e->sym_session_Close = intern_cstr(st, "Close");
+    e->sym_session_Choose = intern_cstr(st, "Choose");
+    e->sym_session_Branch = intern_cstr(st, "Branch");
+    e->sym_session_Rec    = intern_cstr(st, "Rec");
+    /* SS0b: Session channel operation symbols (lowercase, appear in expression position) */
+    e->sym_close        = intern_cstr(st, "close");
+    e->sym_offer        = intern_cstr(st, "offer");
+    e->sym_choose_left  = intern_cstr(st, "choose-left");
+    e->sym_choose_right = intern_cstr(st, "choose-right");
+    e->sym_make_session = intern_cstr(st, "make-session");
 }
 
 /* Phase 13: Lifetime annotation helpers (deferred - infrastructure in place) */

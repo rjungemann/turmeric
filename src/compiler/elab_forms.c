@@ -75,6 +75,52 @@ Expr *elab_let(Elab *e, const Form *call) {
                 cur = bindings_form->as.list.items[i];
             }
         }
+        /* SS0b: Vector destructuring: (let [[a b] init] ...) */
+        if (cur->tag == F_VEC) {
+            Form *vec_pat = cur;
+            Span  vec_span = cur->span;
+            i++;
+            if (i >= bindings_form->as.list.len) {
+                diag_emit(DIAG_ERROR, vec_span,
+                          "let vector destructuring is missing its initializer");
+                rc = -1; break;
+            }
+            Form *init_form_v = bindings_form->as.list.items[i++];
+            Expr *init_v = elab_form(e, init_form_v);
+            if (!init_v) { rc = -1; break; }
+            /* Create one binding per name in the pattern vector with placeholder types.
+             * The actual types will be verified by codegen (SS2); for SS0b the
+             * type-level operations (send/recv/offer/choose-*) already emit their
+             * own diagnostics before returning. */
+            uint32_t n_elems = vec_pat->as.list.len;
+            for (uint32_t vi = 0; vi < n_elems; vi++) {
+                Form *vname_f = vec_pat->as.list.items[vi];
+                if (vname_f->tag != F_SYM) {
+                    diag_emit(DIAG_ERROR, vname_f->span,
+                              "vector destructuring elements must be symbols");
+                    rc = -1; break;
+                }
+                /* Use the init type for the first binding; TY_INT placeholder for rest. */
+                Type elem_type = (vi == 0) ? init_v->type : type_from_kind(TY_INT);
+                Binding *vb = binding_new(e, vname_f->as.sym, elem_type, false, false, vname_f->span);
+                if (elem_type.copy_kind == CK_LINEAR) {
+                    vb->is_linear = true;
+                }
+                scope_add(&inner, vb);
+                if (n_binds == cap) {
+                    cap = cap ? cap * 2 : 4;
+                    binds = (LetBinding *)realloc(binds, cap * sizeof(LetBinding));
+                    if (!binds) { fprintf(stderr, "tur: oom\n"); abort(); }
+                    binding_moved_during_init = (bool *)realloc(binding_moved_during_init, cap * sizeof(bool));
+                    if (!binding_moved_during_init) { fprintf(stderr, "tur: oom\n"); abort(); }
+                }
+                binds[n_binds].binding = vb;
+                binds[n_binds].init = init_v;
+                binding_moved_during_init[n_binds] = false;
+                n_binds++;
+            }
+            continue;
+        }
         if (cur->tag != F_SYM) {
             diag_emit(DIAG_ERROR, cur->span,
                       "let binding name must be a symbol, got %s",

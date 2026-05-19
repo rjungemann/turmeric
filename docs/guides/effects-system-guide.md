@@ -1,3 +1,9 @@
+---
+title: Effects System Guide
+category: Advanced Control Flow
+description: Algebraic effects, dependency injection, custom control flow
+---
+
 # Effects System Guide
 
 This guide explains Turmeric's algebraic effects system and when to use it.

@@ -1,3 +1,9 @@
+---
+title: Higher-Ranked Types
+category: Language Features
+description: Higher-ranked types: rank-2/3 polymorphic function parameters
+---
+
 # Higher-Ranked Types in Turmeric
 
 This guide explains how to use higher-ranked types (HRTs) in Turmeric: what they are, when to use them, and common patterns.

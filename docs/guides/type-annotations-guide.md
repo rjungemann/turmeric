@@ -1,3 +1,9 @@
+---
+title: Type Annotation Syntax
+category: Language Features
+description: Compound type annotation syntax: `(-> a b)`, `(vec T)`, `forall`, and more
+---
+
 # Type Annotation Syntax
 
 Turmeric supports both simple keyword-style type annotations and compound type

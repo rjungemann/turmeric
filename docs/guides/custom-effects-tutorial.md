@@ -1,3 +1,9 @@
+---
+title: Custom Effects Tutorial
+category: Tutorials and Examples
+description: Writing custom effects
+---
+
 # Custom Effects Tutorial
 
 A step-by-step guide to algebraic effects in Turmeric. Each section builds on the previous one, starting from the simplest possible effect and working up to real-world patterns like mock I/O and dependency injection.

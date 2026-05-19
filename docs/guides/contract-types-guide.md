@@ -1,3 +1,9 @@
+---
+title: Contract Types Guide
+category: Error Handling
+description: Contract types: `{ x : T | p }`, `:pre`/`:post` annotations, FFI contracts (planned v4)
+---
+
 # Contract Types Guide
 
 > **Status:** Not yet implemented -- requires `-Xcontracts` flag (planned for v4).

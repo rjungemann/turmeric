@@ -1,3 +1,9 @@
+---
+title: MiniKanren Tutorial
+category: Tutorials and Examples
+description: Logic programming with miniKanren
+---
+
 # MiniKanren-Style Tutorial
 
 A practical introduction to relational programming in Turmeric using a small, runnable example project in `examples/minikanren`.

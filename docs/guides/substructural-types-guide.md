@@ -1,3 +1,9 @@
+---
+title: Substructural Types
+category: Type Safety
+description: `^linear`, `^affine`, `^relevant` type disciplines
+---
+
 # Substructural Types in Turmeric
 
 Turmeric supports three substructural type disciplines via the `-Xsubstructural` flag.

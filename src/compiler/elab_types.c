@@ -245,6 +245,13 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             return t;
         }
 
+        /* SS0b: Close — terminal session protocol (bare symbol, no arguments) */
+        if (g_sessions_enabled && sym == e->sym_session_Close) {
+            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *t = type_close();
+            return t;
+        }
+
         /* Unknown - return as opaque struct */
         Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
         memset(t, 0, sizeof(Type));
@@ -746,6 +753,71 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             }
 
             return fn_t;
+        }
+
+        /* SS0b: Session type constructors (-Xsessions) */
+        if (g_sessions_enabled
+                && form->as.list.len >= 2
+                && form->as.list.items[0]->tag == F_SYM) {
+            const Symbol *head_sym = form->as.list.items[0]->as.sym;
+
+            /* (Session P) — linear channel endpoint carrying protocol P */
+            if (head_sym == e->sym_session_type && form->as.list.len == 2) {
+                Type *proto = type_expr_from_form(e, form->as.list.items[1],
+                                                  rec_name, type_params, type_param_kinds, n_type_params);
+                if (!proto) return NULL;
+                Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *t = type_session(proto);
+                return t;
+            }
+            /* (Send T Q) — send T then continue as Q */
+            if (head_sym == e->sym_session_Send && form->as.list.len == 3) {
+                Type *msg = type_expr_from_form(e, form->as.list.items[1],
+                                                rec_name, type_params, type_param_kinds, n_type_params);
+                if (!msg) return NULL;
+                Type *cont = type_expr_from_form(e, form->as.list.items[2],
+                                                 rec_name, type_params, type_param_kinds, n_type_params);
+                if (!cont) return NULL;
+                Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *t = type_send(msg, cont);
+                return t;
+            }
+            /* (Recv T Q) — receive T then continue as Q */
+            if (head_sym == e->sym_session_Recv && form->as.list.len == 3) {
+                Type *msg = type_expr_from_form(e, form->as.list.items[1],
+                                                rec_name, type_params, type_param_kinds, n_type_params);
+                if (!msg) return NULL;
+                Type *cont = type_expr_from_form(e, form->as.list.items[2],
+                                                 rec_name, type_params, type_param_kinds, n_type_params);
+                if (!cont) return NULL;
+                Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *t = type_recv(msg, cont);
+                return t;
+            }
+            /* (Choose P Q) — internal choice: this endpoint picks the branch */
+            if (head_sym == e->sym_session_Choose && form->as.list.len == 3) {
+                Type *left = type_expr_from_form(e, form->as.list.items[1],
+                                                 rec_name, type_params, type_param_kinds, n_type_params);
+                if (!left) return NULL;
+                Type *right = type_expr_from_form(e, form->as.list.items[2],
+                                                  rec_name, type_params, type_param_kinds, n_type_params);
+                if (!right) return NULL;
+                Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *t = type_choose(left, right);
+                return t;
+            }
+            /* (Branch P Q) — external choice: peer picks; this endpoint waits */
+            if (head_sym == e->sym_session_Branch && form->as.list.len == 3) {
+                Type *left = type_expr_from_form(e, form->as.list.items[1],
+                                                 rec_name, type_params, type_param_kinds, n_type_params);
+                if (!left) return NULL;
+                Type *right = type_expr_from_form(e, form->as.list.items[2],
+                                                  rec_name, type_params, type_param_kinds, n_type_params);
+                if (!right) return NULL;
+                Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *t = type_branch(left, right);
+                return t;
+            }
         }
 
         /* LT3: (lref T) — linear owning pointer type expression.

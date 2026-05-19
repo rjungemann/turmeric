@@ -1,3 +1,9 @@
+---
+title: Higher-Kinded Types
+category: Language Features
+description: Higher-kinded types (functor, monad, applicative abstractions, performance/dispatch model)
+---
+
 # Higher-Kinded Types in Turmeric
 
 Turmeric supports higher-kinded types (HKT), allowing you to write generic code

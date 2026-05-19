@@ -1,3 +1,9 @@
+---
+title: C Integration Guide
+category: Language Features
+description: Foreign function interface (FFI) and C interop
+---
+
 # Turmeric ↔ C Integration Guide
 
 Turmeric compiles to C99. This means C integration is not a plugin API — it is

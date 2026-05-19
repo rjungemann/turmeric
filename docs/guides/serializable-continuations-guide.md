@@ -1,3 +1,9 @@
+---
+title: Serializable Continuations Guide
+category: Advanced Control Flow
+description: Serializable continuations for persistent workflows and cross-process computation
+---
+
 # Serializable Continuations Guide
 
 Save and resume computations across process boundaries using serializable continuations.

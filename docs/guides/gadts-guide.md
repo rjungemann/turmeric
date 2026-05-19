@@ -1,3 +1,9 @@
+---
+title: GADTs -- A Practical Guide
+category: Language Features
+description: GADTs: `defgadt`, type refinement, equality witnesses, union types, gradual typing
+---
+
 # GADTs in Turmeric -- A Practical Guide
 
 Generalized Algebraic Data Types (GADTs) extend ordinary sum types by letting

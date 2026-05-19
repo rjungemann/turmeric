@@ -1,3 +1,9 @@
+---
+title: Web Continuations Guide
+category: Advanced Control Flow
+description: Compact reference: `send-form-and-wait`, continuation store, routing model
+---
+
 # Web Continuations Guide
 
 A compact reference for building multi-page web applications in Turmeric using serializable continuations. This guide assumes you understand `serial-reset` / `serial-shift` / `serial-resume` -- see [serializable-continuations-guide.md](serializable-continuations-guide.md) for that background.

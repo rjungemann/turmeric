@@ -1,3 +1,9 @@
+---
+title: Tidal Guide
+category: Tidal
+description: Introduction to the TidalCycles-inspired live-coding pattern library for Turmeric, covering core concepts, combinators, and synth integration
+---
+
 # TidalCycles-like DSL for Turmeric - User Guide
 
 > **Version**: 1.0  

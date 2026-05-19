@@ -1,3 +1,9 @@
+---
+title: Quickstart & Interactive REPL Tutorial Plan
+category: Reference
+description: Authoring plan and step outline for the quickstart.md prose guide and repl-tutorial.md 22-step interactive tutorial
+---
+
 # Quickstart & Interactive REPL Tutorial Plan
 
 ## Overview

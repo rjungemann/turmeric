@@ -1,3 +1,9 @@
+---
+title: Web Continuations Tutorial
+category: Tutorials and Examples
+description: Multi-page web forms using serializable continuations (guestbook example)
+---
+
 # Web Continuations Tutorial -- Multi-Page Forms Without Session State
 
 A **step-by-step guide** to building a multi-page web form application in Turmeric using serializable continuations. Each step introduces one new concept. By the end you will have a working guestbook server that captures, stores, and resumes continuations across HTTP round-trips.

@@ -11,7 +11,7 @@
 > [linear-types-plan.md](linear-types-plan.md),
 > [effect-rows-plan.md](effect-rows-plan.md)
 >
-> **Last updated:** 2026-05-18 (P0, P1, P2, P3, SS0a complete; SS0b ready to begin)
+> **Last updated:** 2026-05-18 (P0, P1, P2, P3, SS0a, SS0b complete; SS1 ready to begin)
 
 ---
 
@@ -461,20 +461,41 @@ creation primitive. No parser or elaborator behaviour yet.
 
 ---
 
-## Phase SS0b — Session Type Parser and Elaborator
+## Phase SS0b — Session Type Parser and Elaborator ✓ COMPLETE
 
 **Goal:** Parse session type syntax and implement all six channel operations in
 the elaborator.
 
-- [ ] Parse session type syntax in `src/reader.c`:
-  `Session`, `Send`, `Recv`, `Close`, `Choose`, `Branch`, `Rec`, `make-session`
-- [ ] Add session channel operations to the elaborator:
+- [x] Parse session type syntax in `src/compiler/elab_types.c` (not reader.c):
+  `Session`, `Send`, `Recv`, `Close`, `Choose`, `Branch` as type constructors;
+  gated on `-Xsessions` / `g_sessions_enabled`.
+  `Rec` stub deferred to SS3 (recursive protocols).
+- [x] Add session channel operations to the elaborator (`src/compiler/elab_sessions.c`):
   - `(send chan val)` -- consumes `chan : Session[Send[T, Q]]`; returns `chan' : Session[Q]`
-  - `(recv chan)` -- consumes `chan : Session[Recv[T, Q]]`; returns `[val chan'] : [T, Session[Q]]`
+  - `(recv chan)` -- consumes `chan : Session[Recv[T, Q]]`; returns placeholder (SS2 for real tuple)
   - `(close chan)` -- consumes `chan : Session[Close]`; returns `unit`
-  - `(offer chan)` -- consumes `chan : Session[Branch[P, Q]]`; returns `(either (Session P) (Session Q))`. With `-Xgadt` active the elaborator must propagate the per-branch session-type refinement (P vs. Q) into each match arm alongside any GADT skolem equalities already in scope. With `-Xunion-types` the return type may also be spelled `(Session P | Session Q)`; in either spelling the elaborator must enforce that exactly one branch is consumed linearly and that no implicit widening to `any` is applied.
+  - `(offer chan)` -- consumes `chan : Session[Branch[P, Q]]`; returns placeholder (SS2 for ADT)
   - `(choose-left chan)` -- consumes `chan : Session[Choose[P, Q]]`; returns `Session[P]`
   - `(choose-right chan)` -- consumes `chan : Session[Choose[P, Q]]`; returns `Session[Q]`
+  - `(make-session P)` -- returns `TY_INT` placeholder; SS2 implements the pair creation
+- [x] `TUR_E0211` / `TUR_E0212` added to `diag.h` and `diag.c`
+- [x] `-Xsessions` flag added to `main.c` (implies -Xsubstructural, -Xlinear)
+- [x] `g_sessions_enabled` global in `globals.h` / `globals.c`
+- [x] All 6 error fixtures pass: session-dropped, session-send-invalid,
+  session-recv-invalid, session-close-incomplete, session-offer-invalid,
+  session-choose-invalid
+- [x] `elab_let` extended with basic vector destructuring support (`(let [[a b] init] ...)`)
+  to allow let-binding of session op results
+
+**Notes:**
+- Type parsing lives in `elab_types.c` (not reader.c) following the pattern of
+  `lref`, `forall`, etc. The reader itself doesn't need changes.
+- `make-session` returns a `TY_INT` placeholder at SS0b; actual pair-creation
+  codegen (returning `[Session[P], Session[Dual[P]]]`) is SS2.
+- `recv` and `offer` return `TY_INT` placeholder; the tuple/Either return types
+  are SS2 work.
+- Vector destructuring in `let` creates placeholder-typed bindings for non-first
+  elements; full type inference is deferred to the tuple-type work in SS2.
 
 ---
 
@@ -939,5 +960,339 @@ before the runtime (SS7-SS8).
 - [Covington et al. -- Session Types for C](https://dl.acm.org/doi/10.1145/1596553.1596586)
 - [Scribble -- Protocol Description Language](https://www.scribble.org/)
 - [advanced-type-system-feasibility-plan.md §5](advanced-type-system-feasibility-plan.md)
+
+---
+
+## Tutorial: Two-Phase Commit
+
+Two-phase commit (2PC) is a distributed coordination protocol that ensures all
+participants in a transaction either commit or abort together. It is a natural
+fit for multi-party session types: a single coordinator role drives the protocol
+through two distinct phases (prepare then commit/abort), and the global type
+enforces that the coordinator's decision is broadcast identically to every
+participant -- a property that binary sessions cannot verify.
+
+### Protocol overview
+
+In the prepare phase the coordinator sends a `Prepare` message to each
+participant and waits for a `Vote` reply. If all participants vote `Yes`, the
+coordinator sends `Commit` to everyone; if any participant votes `No`, the
+coordinator sends `Abort` to everyone. The session closes after the second
+broadcast.
+
+### Global protocol declaration
+
+The example fixes two participants (`P1` and `P2`). Scaling to more participants
+requires repeating the send/receive pairs for each additional role; a future
+variadic-role extension would allow `(-> Coordinator [P ...] Prepare)`.
+
+```clojure
+(defprotocol TwoPhaseCommit [Coordinator P1 P2]
+  ;; Phase 1: prepare
+  (-> Coordinator P1 Prepare)
+  (-> Coordinator P2 Prepare)
+  (-> P1 Coordinator Vote)
+  (-> P2 Coordinator Vote)
+  ;; Phase 2: commit or abort
+  (choice Coordinator
+    [commit
+      (-> Coordinator P1 Commit)
+      (-> Coordinator P2 Commit)]
+    [abort
+      (-> Coordinator P1 Abort)
+      (-> Coordinator P2 Abort)]))
+```
+
+### Projected local types
+
+The compiler projects `TwoPhaseCommit` onto each role automatically (SS6). The
+projected types are shown here for reference; a programmer using
+`(Role TwoPhaseCommit Coordinator)` never writes them by hand.
+
+```clojure
+;; (project TwoPhaseCommit Coordinator)
+(Send Prepare
+  (Send Prepare
+    (Recv Vote
+      (Recv Vote
+        (Choose
+          (Send Commit (Send Commit Close))
+          (Send Abort  (Send Abort  Close)))))))
+
+;; (project TwoPhaseCommit P1)
+(Recv Prepare
+  (Send Vote
+    (Branch
+      (Recv Commit Close)
+      (Recv Abort  Close))))
+
+;; (project TwoPhaseCommit P2)  -- identical structure to P1
+(Recv Prepare
+  (Send Vote
+    (Branch
+      (Recv Commit Close)
+      (Recv Abort  Close))))
+```
+
+Note that `P1` and `P2` each project to a `Branch` even though neither of them
+is the deciding role. The projection algorithm propagates the coordinator's
+`choice` to all involved roles: the deciding role gets `Choose` (internal
+choice) and every other involved role gets `Branch` (external choice). Roles
+that do not participate in a branch at all would instead receive a merged
+projection of the two branches; here both branches involve `P1` and `P2`, so
+the merge step is not exercised.
+
+### Broken global type -- non-projectable example
+
+A common protocol error is a broadcast that reaches only some participants.
+The following variant forgets to send `Abort` to `P2`:
+
+```clojure
+;; BUG: abort branch omits (-> Coordinator P2 Abort)
+(defprotocol BrokenCommit [Coordinator P1 P2]
+  (-> Coordinator P1 Prepare)
+  (-> Coordinator P2 Prepare)
+  (-> P1 Coordinator Vote)
+  (-> P2 Coordinator Vote)
+  (choice Coordinator
+    [commit
+      (-> Coordinator P1 Commit)
+      (-> Coordinator P2 Commit)]
+    [abort
+      (-> Coordinator P1 Abort)]))   ; P2 is missing here
+```
+
+`P2` is involved in the commit branch (`Recv Commit Close`) but uninvolved in
+the abort branch. The projection algorithm tries to merge `Recv Commit Close`
+with the abort-branch projection for `P2`, which is `Close`. Those are not
+structurally equal, so the merge fails and the compiler emits `TUR_E0220`:
+
+```
+error[TUR-E0220]: global protocol `BrokenCommit` is not projectable onto
+  role `P2` at interaction `choice Coordinator [commit ...] [abort ...]`:
+  branches produce incompatible local types
+    commit branch: (Recv Commit Close)
+    abort branch:  Close
+```
+
+### Message types
+
+```clojure
+(defstruct Prepare [transaction-id :int])
+(defstruct Vote    [transaction-id :int yes :bool])
+(defstruct Commit  [transaction-id :int])
+(defstruct Abort   [transaction-id :int])
+```
+
+### Role implementations
+
+```clojure
+;; Coordinator: sends Prepare, collects votes, decides, broadcasts outcome
+(defn coordinator [^linear chan : (Role TwoPhaseCommit Coordinator)
+                   txn-id : int
+                   should-commit : bool] : unit
+  (let [chan (send-to chan P1 (Prepare txn-id))]
+    (let [chan (send-to chan P2 (Prepare txn-id))]
+      (let [[vote1 chan] (recv-from chan P1)]
+        (let [[vote2 chan] (recv-from chan P2)]
+          (if (and (Vote.yes vote1) (Vote.yes vote2))
+            (let [chan (choose-left chan)]
+              (let [chan (send-to chan P1 (Commit txn-id))]
+                (let [chan (send-to chan P2 (Commit txn-id))]
+                  (close chan))))
+            (let [chan (choose-right chan)]
+              (let [chan (send-to chan P1 (Abort txn-id))]
+                (let [chan (send-to chan P2 (Abort txn-id))]
+                  (close chan))))))))))
+
+;; Participant: receives Prepare, votes, then awaits commit or abort
+(defn participant [^linear chan : (Role TwoPhaseCommit P1)
+                   ready : bool] : unit
+  (let [[prep chan] (recv-from chan Coordinator)]
+    (let [chan (send-to chan Coordinator (Vote (Prepare.transaction-id prep) ready))]
+      (match (offer chan)
+        (Left chan)
+          (let [[_ chan] (recv-from chan Coordinator)]   ; Commit
+            (close chan))
+        (Right chan)
+          (let [[_ chan] (recv-from chan Coordinator)]   ; Abort
+            (close chan))))))
+
+;; Spawn all three roles from a single scoped protocol
+(defn run-two-phase-commit [txn-id : int] : unit
+  (let [[coord p1 p2] (make-protocol TwoPhaseCommit)]
+    (spawn (fn [] (coordinator coord txn-id true)))
+    (spawn (fn [] (participant p1 true)))
+    (participant p2 true)))
+```
+
+### What the type checker verifies
+
+- **Coordinator** must make a `choose-left`/`choose-right` call before sending
+  `Commit`/`Abort`; skipping the choice call is a type error (`TUR_E0212`).
+- **Coordinator** must send to both `P1` and `P2` in each branch; sending to
+  only one is a projection mismatch caught at the `defprotocol` level
+  (`TUR_E0220`), not at the call site.
+- **Participant** (`P1` or `P2`) must match on `offer` before it knows whether
+  it will receive `Commit` or `Abort`; reading `Commit` unconditionally is a
+  type error (`TUR_E0212`).
+- All three channels are linear: dropping `coord`, `p1`, or `p2` mid-protocol
+  is a type error (`TUR_E0211`).
+
+---
+
+## Tutorial: OAuth-Style Auth Flow
+
+OAuth 2.0's authorization code flow involves three parties: a Client that wants
+a protected resource, an AuthServer that issues tokens, and a ResourceServer
+that holds the resource and validates tokens. The interaction is fully
+sequential with no branching -- every step is a rendezvous -- which makes it a
+clean example of a projectable global protocol where the uninvolved-role
+skip rule is exercised at every step.
+
+### Protocol overview
+
+1. Client sends an authorization request to AuthServer.
+2. AuthServer issues an authorization code back to Client.
+3. Client exchanges the code for an access token (sends `TokenRequest`).
+4. AuthServer issues the access token.
+5. Client sends an API request to ResourceServer, including the token.
+6. ResourceServer asks AuthServer to validate the token.
+7. AuthServer confirms the token is valid.
+8. ResourceServer returns the API response to Client.
+
+### Global protocol declaration
+
+```clojure
+(defprotocol OAuthFlow [Client AuthServer ResourceServer]
+  (-> Client      AuthServer     AuthRequest)
+  (-> AuthServer  Client         AuthCode)
+  (-> Client      AuthServer     TokenRequest)
+  (-> AuthServer  Client         AccessToken)
+  (-> Client      ResourceServer ApiRequest)
+  (-> ResourceServer AuthServer  ValidateToken)
+  (-> AuthServer  ResourceServer TokenOk)
+  (-> ResourceServer Client      ApiResponse))
+```
+
+### Projected local types
+
+```clojure
+;; (project OAuthFlow Client)
+(Send AuthRequest
+  (Recv AuthCode
+    (Send TokenRequest
+      (Recv AccessToken
+        (Send ApiRequest
+          (Recv ApiResponse Close))))))
+
+;; (project OAuthFlow AuthServer)
+(Recv AuthRequest
+  (Send AuthCode
+    (Recv TokenRequest
+      (Send AccessToken
+        (Recv ValidateToken
+          (Send TokenOk Close))))))
+
+;; (project OAuthFlow ResourceServer)
+(Recv ApiRequest
+  (Send ValidateToken
+    (Recv TokenOk
+      (Send ApiResponse Close))))
+```
+
+`ResourceServer` is uninvolved in the first four steps of the global protocol
+(`AuthRequest`, `AuthCode`, `TokenRequest`, `AccessToken`). Its projection
+skips those steps entirely, starting only at step 5 (`ApiRequest`). Likewise
+`Client` is uninvolved in steps 6 and 7 (`ValidateToken`/`TokenOk`) and its
+projection jumps from `Send ApiRequest` directly to `Recv ApiResponse`. The
+compiler applies the uninvolved-role skip rule at each of these steps.
+
+### Message types
+
+```clojure
+(defstruct AuthRequest   [client-id :str scope :str])
+(defstruct AuthCode      [code :str expires-in :int])
+(defstruct TokenRequest  [code :str client-id :str client-secret :str])
+(defstruct AccessToken   [token :str token-type :str expires-in :int])
+(defstruct ApiRequest    [token :str path :str])
+(defstruct ValidateToken [token :str])
+(defstruct TokenOk       [subject :str scope :str])
+(defstruct ApiResponse   [status :int body :str])
+```
+
+### Role implementations
+
+```clojure
+;; Client: drives the auth code exchange, then fetches the resource
+(defn oauth-client [^linear chan : (Role OAuthFlow Client)
+                    client-id : str
+                    scope : str
+                    client-secret : str
+                    path : str] : ApiResponse
+  (let [chan           (send-to chan AuthServer (AuthRequest client-id scope))]
+    (let [[code chan]  (recv-from chan AuthServer)]
+      (let [chan       (send-to chan AuthServer
+                         (TokenRequest (AuthCode.code code) client-id client-secret))]
+        (let [[tok chan] (recv-from chan AuthServer)]
+          (let [chan   (send-to chan ResourceServer
+                         (ApiRequest (AccessToken.token tok) path))]
+            (let [[resp chan] (recv-from chan ResourceServer)]
+              (close chan)
+              resp)))))))
+
+;; AuthServer: issues codes, exchanges tokens, validates on demand
+(defn oauth-auth-server [^linear chan : (Role OAuthFlow AuthServer)] : unit
+  (let [[req chan]   (recv-from chan Client)]
+    (let [code       (issue-auth-code (AuthRequest.client-id req)
+                                      (AuthRequest.scope req))]
+      (let [chan     (send-to chan Client (AuthCode code 600))]
+        (let [[treq chan] (recv-from chan Client)]
+          (let [tok  (exchange-code-for-token
+                       (TokenRequest.code treq)
+                       (TokenRequest.client-id treq))]
+            (let [chan (send-to chan Client (AccessToken tok "Bearer" 3600))]
+              (let [[vtok chan] (recv-from chan ResourceServer)]
+                (let [subject   (validate-token (ValidateToken.token vtok))]
+                  (let [chan    (send-to chan ResourceServer
+                                  (TokenOk subject (AuthRequest.scope req)))]
+                    (close chan)))))))))))
+
+;; ResourceServer: receives a request, validates the token, returns data
+(defn oauth-resource-server [^linear chan : (Role OAuthFlow ResourceServer)] : unit
+  (let [[req chan]   (recv-from chan Client)]
+    (let [chan       (send-to chan AuthServer
+                       (ValidateToken (ApiRequest.token req)))]
+      (let [[ok chan] (recv-from chan AuthServer)]
+        (let [body   (fetch-resource (ApiRequest.path req) (TokenOk.subject ok))]
+          (let [chan  (send-to chan Client (ApiResponse 200 body))]
+            (close chan)))))))
+
+;; Wire all three roles together
+(defn run-oauth-flow [client-id : str
+                      client-secret : str
+                      scope : str
+                      path : str] : ApiResponse
+  (let [[client auth resource] (make-protocol OAuthFlow)]
+    (let [result (promise)]
+      (spawn (fn [] (oauth-auth-server auth)))
+      (spawn (fn [] (oauth-resource-server resource)))
+      (let [resp (oauth-client client client-id scope client-secret path)]
+        resp))))
+```
+
+### What the type checker verifies
+
+- **Client** cannot skip the code-exchange steps and jump straight to the API
+  request; the type system requires each `send-to`/`recv-from` in the exact
+  order the global protocol specifies.
+- **ResourceServer** cannot call `recv-from chan Client` before the first four
+  steps of the protocol complete -- its projected type begins with
+  `Recv ApiRequest`, so attempting to receive from `AuthServer` first would be
+  a `TUR_E0212` type error.
+- **AuthServer** must respond to the `ValidateToken` query from `ResourceServer`
+  before closing; dropping the channel after the token exchange but before
+  step 6 would be `TUR_E0211`.
+- All three endpoints are linear and must be fully consumed through `close`.
 </content>
 </invoke>

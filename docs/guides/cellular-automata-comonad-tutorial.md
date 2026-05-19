@@ -1,3 +1,9 @@
+---
+title: Cellular Automata with Comonads
+category: Tutorials and Examples
+description: Cellular automata with comonads
+---
+
 # Cellular Automata with Comonads in Turmeric
 
 This tutorial builds Conway's Game of Life using **comonads** — a functional abstraction that makes cellular automata rules both composable and easy to reason about.

@@ -936,9 +936,15 @@ Expr *elab_defn(Elab *e, const Form *call) {
     if (g_linear_enabled && body) {
         for (uint8_t _li = 0; _li < n_params; _li++) {
             if (params[_li]->is_linear && !params[_li]->is_linear_consumed && !params[_li]->is_moved) {
+                /* SS0b: Session channels get a distinct error code */
+                DiagCode drop_code = (g_sessions_enabled && params[_li]->type.kind == TY_SESSION)
+                    ? TUR_E0211_SESSION_DROPPED
+                    : TUR_E0100_LINEAR_DROPPED;
+                const char *drop_msg = (drop_code == TUR_E0211_SESSION_DROPPED)
+                    ? "session channel '%s' dropped before protocol completion"
+                    : "linear parameter '%s' dropped without being consumed";
                 diag_emit_with_code(DIAG_ERROR, params[_li]->span,
-                                    TUR_E0100_LINEAR_DROPPED,
-                                    "linear parameter '%s' dropped without being consumed",
+                                    drop_code, drop_msg,
                                     params[_li]->name->name);
                 lt1_param_fail = true;
             }
