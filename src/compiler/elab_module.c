@@ -622,8 +622,37 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
                     if (fn_name_f->tag == F_SYM) {
                         /* Check not already defined */
                         if (!scope_lookup(&e->global, fn_name_f->as.sym)) {
+                            /* SS3a / general: scan for return-type annotation in the defn
+                             * form to get the real result_kind for the forward declaration.
+                             * Without this, recursive functions declared :nil infer TY_INT
+                             * (the placeholder) and emit as int64_t.
+                             * params vector is at name_idx+1; return type annotation is
+                             * at name_idx+2 if it is F_KEYWORD or F_TYPE_ANN. */
+                            TypeKind fwd_result_kind = TY_INT; /* placeholder */
+                            uint32_t ret_idx = name_idx + 2;
+                            if (ret_idx < (uint32_t)f->as.list.len) {
+                                Form *ret_f = f->as.list.items[ret_idx];
+                                if (ret_f->tag == F_KEYWORD) {
+                                    const char *kn = ret_f->as.sym->name;
+                                    if (strcmp(kn, "int") == 0) fwd_result_kind = TY_INT;
+                                    else if (strcmp(kn, "bool") == 0) fwd_result_kind = TY_BOOL;
+                                    else if (strcmp(kn, "float") == 0) fwd_result_kind = TY_FLOAT;
+                                    else if (strcmp(kn, "nil") == 0
+                                          || strcmp(kn, "void") == 0) fwd_result_kind = TY_NIL;
+                                    else if (strcmp(kn, "ptr") == 0
+                                          || strcmp(kn, "ptr<void>") == 0) fwd_result_kind = TY_PTR_VOID;
+                                } else if (ret_f->tag == F_TYPE_ANN && ret_f->as.list.len > 0) {
+                                    /* Compound return type: peek at the head symbol */
+                                    Form *head_f = ret_f->as.list.items[0];
+                                    if (head_f->tag == F_SYM &&
+                                            strcmp(head_f->as.sym->name, "Session") == 0) {
+                                        fwd_result_kind = TY_SESSION;
+                                    }
+                                    /* Other compound types keep TY_INT placeholder */
+                                }
+                            }
                             TypeKind arg_kinds[1] = {TY_INT};
-                            Type fn_type = type_fn(arg_kinds, 1, TY_INT);
+                            Type fn_type = type_fn(arg_kinds, 1, fwd_result_kind);
                             Binding *b = binding_new(e, fn_name_f->as.sym, fn_type, false, true, f->span);
                             scope_add(&e->global, b);
                         }

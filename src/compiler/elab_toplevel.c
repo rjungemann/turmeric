@@ -573,10 +573,25 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                                         return_kind = TY_BOOL;
                                     } else if (kw->len == 4 && memcmp(kw->name, "void", 4) == 0) {
                                         return_kind = TY_NIL;
+                                    } else if (kw->len == 3 && memcmp(kw->name, "nil", 3) == 0) {
+                                        /* SS3a: :nil return type must forward-declare as void,
+                                         * not TY_INT, so recursive nil-returning functions
+                                         * correctly infer TY_NIL for their body type. */
+                                        return_kind = TY_NIL;
                                     } else if (kw->len == 4 && memcmp(kw->name, "cstr", 4) == 0) {
                                         return_kind = TY_CSTR;
                                     } else if (kw->len == 9 && memcmp(kw->name, "ptr<void>", 9) == 0) {
                                         return_kind = TY_PTR_VOID;
+                                    } else if (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0) {
+                                        return_kind = TY_PTR_VOID;
+                                    }
+                                } else if (ret_f->tag == F_TYPE_ANN && ret_f->as.list.len > 0) {
+                                    /* Compound return type: peek at the head symbol to
+                                     * recognize Session[P] returns for pass-1 forward decls. */
+                                    Form *head_f = ret_f->as.list.items[0];
+                                    if (head_f->tag == F_SYM &&
+                                            strcmp(head_f->as.sym->name, "Session") == 0) {
+                                        return_kind = TY_SESSION;
                                     }
                                 }
                             }

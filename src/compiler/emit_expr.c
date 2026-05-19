@@ -3251,13 +3251,22 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     first_arm = false;
                     ctx->indent += 4;
 
-                    /* Bind the arm variable to the channel pointer. */
+                    /* Bind the arm variable to the channel pointer.
+                     * Session-derived types (pair, recv-pair, offer) all lower to
+                     * void* at runtime -- a TurChannel pointer. */
                     if (pat->n_bindings > 0 && pat->bindings[0]) {
                         Binding *fb = pat->bindings[0];
                         char *bname = name_for_binding(ctx, fb);
+                        const char *arm_c_type =
+                            (fb->type.kind == TY_SESSION ||
+                             fb->type.kind == TY_SESSION_RECV_PAIR ||
+                             fb->type.kind == TY_SESSION_PAIR ||
+                             fb->type.kind == TY_SESSION_OFFER)
+                            ? "void *"
+                            : type_c_name(fb->type);
                         indent_buf(body, ctx->indent);
                         buf_printf(body, "%s %s = (void *)%s;\n",
-                                   type_c_name(fb->type), bname, chan_name);
+                                   arm_c_type, bname, chan_name);
                         indent_buf(body, ctx->indent);
                         buf_printf(body, "(void)%s;\n", bname);
                         free(bname);

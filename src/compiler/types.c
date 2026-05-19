@@ -487,6 +487,17 @@ const char *type_name(Type t) {
             buf_putc(&tmp, '\0');
             return tur_strdup(tmp.data);
         }
+        case TY_TIMEOUT: {
+            Buf tmp;
+            buf_init(&tmp);
+            buf_puts(&tmp, "Timeout[");
+            buf_puts(&tmp, t.as.session_.fst ? type_name(*t.as.session_.fst) : "?");
+            buf_puts(&tmp, ", ");
+            buf_puts(&tmp, t.as.session_.snd ? type_name(*t.as.session_.snd) : "?");
+            buf_puts(&tmp, "]");
+            buf_putc(&tmp, '\0');
+            return tur_strdup(tmp.data);
+        }
         case TY_SESSION_PAIR: {
             Buf tmp;
             buf_init(&tmp);
@@ -806,6 +817,15 @@ static void type_name_buf(Buf *b, Type t) {
             else buf_putc(b, '?');
             buf_putc(b, ']');
             break;
+        case TY_TIMEOUT:
+            buf_puts(b, "Timeout[");
+            if (t.as.session_.fst) type_name_buf(b, *t.as.session_.fst);
+            else buf_putc(b, '?');
+            buf_puts(b, ", ");
+            if (t.as.session_.snd) type_name_buf(b, *t.as.session_.snd);
+            else buf_putc(b, '?');
+            buf_putc(b, ']');
+            break;
         case TY_SESSION_PAIR:
             buf_puts(b, "SessionPair[");
             if (t.as.session_.fst) type_name_buf(b, *t.as.session_.fst);
@@ -949,11 +969,12 @@ const char *type_c_name(Type t) {
         case TY_CHOOSE:
         case TY_BRANCH:
         case TY_SESSION_REC:
+        case TY_TIMEOUT:
             return "/*session-protocol*/ void";
         case TY_SESSION_PAIR:
-            return "/*session-pair*/ void";
+            return "void *";  /* session pair lowers to TurChannel pointer */
         case TY_SESSION_RECV_PAIR:
-            return "/*session-recv-pair*/ void";
+            return "void *";  /* recv-pair lowers to TurChannel pointer */
         case TY_SESSION_OFFER:
             return "int64_t";
     }
@@ -1153,6 +1174,10 @@ static bool type_is_guarded_recursive_helper(const Type *t, const char *rec_name
                     || type_is_guarded_recursive_helper(t->as.session_.snd, rec_name, depth + 1));
         case TY_SESSION_REC:
             return type_is_guarded_recursive_helper(t->as.session_.fst, rec_name, depth + 1);
+        case TY_TIMEOUT:
+            return type_is_guarded_recursive_helper(t->as.session_.fst, rec_name, depth + 1)
+                && (!t->as.session_.snd
+                    || type_is_guarded_recursive_helper(t->as.session_.snd, rec_name, depth + 1));
         case TY_SESSION_PAIR:
         case TY_SESSION_RECV_PAIR:
         case TY_SESSION_OFFER:
@@ -1256,6 +1281,7 @@ const char *typekind_to_string(TypeKind k) {
         case TY_CHOOSE:       return "Choose";
         case TY_BRANCH:       return "Branch";
         case TY_SESSION_REC:       return "Rec";
+        case TY_TIMEOUT:           return "Timeout";
         case TY_SESSION_PAIR:      return "SessionPair";
         case TY_SESSION_RECV_PAIR: return "RecvPair";
         case TY_SESSION_OFFER:     return "Offer";

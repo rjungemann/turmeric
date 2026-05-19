@@ -452,12 +452,22 @@ typedef struct Elab {
     const Symbol    *sym_session_Choose;    /* "Choose"  — internal choice */
     const Symbol    *sym_session_Branch;    /* "Branch"  — external choice */
     const Symbol    *sym_session_Rec;       /* "Rec"     — recursive protocol */
+    const Symbol    *sym_session_Timeout;   /* "Timeout" -- timeout protocol (SS3c) */
     /* SS0b: Session channel operation symbols (used in expression position) */
     const Symbol    *sym_close;             /* "close"        */
     const Symbol    *sym_offer;             /* "offer"        */
     const Symbol    *sym_choose_left;       /* "choose-left"  */
     const Symbol    *sym_choose_right;      /* "choose-right" */
     const Symbol    *sym_make_session;      /* "make-session" */
+    const Symbol    *sym_recv_timeout;      /* "recv-timeout" -- SS3c */
+    /* SS3a: Session Rec label stack -- used during type parsing to resolve
+     * bare label references inside (Rec label body) expressions.
+     * rec_labels[i] is the interned label symbol; rec_types[i] is the
+     * arena-allocated TY_SESSION_REC node being constructed (body filled later). */
+#define ELAB_MAX_REC_DEPTH 8
+    const Symbol    *rec_labels[ELAB_MAX_REC_DEPTH]; /* active Rec labels */
+    struct Type     *rec_types[ELAB_MAX_REC_DEPTH];  /* corresponding TY_SESSION_REC nodes */
+    uint8_t          rec_depth;                       /* number of active Rec binders */
 } Elab;
 
 /* Phase 6: Macro definition */
@@ -733,5 +743,6 @@ Expr *elab_session_close(Elab *e, const Form *call);
 Expr *elab_session_offer(Elab *e, const Form *call);
 Expr *elab_session_choose_left(Elab *e, const Form *call);
 Expr *elab_session_choose_right(Elab *e, const Form *call);
+Expr *elab_session_recv_timeout(Elab *e, const Form *call);
 
 #endif

@@ -173,31 +173,67 @@ Expr *elab_let(Elab *e, const Form *call) {
                     ic_expr->as.inline_c_.inline_c = ic;
                     elem_init = ic_expr;
                 } else if (init_v->type.kind == TY_SESSION_RECV_PAIR) {
-                    /* recv destructuring:
-                     *   vi=0: tur_session_recv(__TUR_VAL_0__) -- reads the value
-                     *   vi=1: __TUR_VAL_0__ -- same channel ptr (now Session[Q]) */
-                    InlineC *orig_ic = init_v->as.inline_c_.inline_c;
-                    Binding *chan_b = (orig_ic->n_val_exprs > 0 && orig_ic->val_exprs[0]
-                        && orig_ic->val_exprs[0]->kind == EX_VAR)
-                        ? orig_ic->val_exprs[0]->as.var.binding : NULL;
+                    /* recv / recv-timeout destructuring.
+                     * Case A -- plain recv (EX_INLINE_C, code is recv-pair sentinel):
+                     *   vi=0: tur_session_recv(__TUR_VAL_0__)
+                     *   vi=1: __TUR_VAL_0__ (channel ptr)
+                     * Case B -- recv-timeout Left arm (init_v is EX_VAR of type RecvPair):
+                     *   vi=0: tur__rtv_ (value stashed by tur_session_recv_timeout)
+                     *   vi=1: __TUR_VAL_0__ (the arm var = channel ptr)
+                     * Case C -- recv-timeout inline_c
+                     *   (code starts with "tur_session_recv_timeout"):
+                     *   vi=0: tur__rtv_
+                     *   vi=1: __TUR_VAL_0__ (channel) */
+                    bool is_recv_timeout_var = (init_v->kind == EX_VAR);
+                    bool is_recv_timeout_ic = false;
+                    Binding *chan_b = NULL;
+                    if (!is_recv_timeout_var && init_v->kind == EX_INLINE_C) {
+                        InlineC *orig_ic = init_v->as.inline_c_.inline_c;
+                        is_recv_timeout_ic = (orig_ic->code.len > 24 &&
+                            memcmp(orig_ic->code.p, "tur_session_recv_timeout", 24) == 0);
+                        chan_b = (orig_ic->n_val_exprs > 0 && orig_ic->val_exprs[0]
+                            && orig_ic->val_exprs[0]->kind == EX_VAR)
+                            ? orig_ic->val_exprs[0]->as.var.binding : NULL;
+                    }
+                    bool is_recv_timeout = is_recv_timeout_var || is_recv_timeout_ic;
                     Expr *ic_expr = expr_new(e->arena, EX_INLINE_C, elem_type, vec_span);
                     InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
                     ic->return_type = elem_type;
                     ic->captures = NULL; ic->n_captures = 0;
                     if (vi == 0) {
-                        static const char recv_code[] = "tur_session_recv(__TUR_VAL_0__)";
-                        ic->code = strslice(recv_code, sizeof(recv_code) - 1);
+                        if (is_recv_timeout) {
+                            /* SS3c: value is in tur__rtv_ thread-local */
+                            static const char rtv_code[] = "tur__rtv_";
+                            ic->code = strslice(rtv_code, sizeof(rtv_code) - 1);
+                            ic->val_exprs = NULL; ic->n_val_exprs = 0;
+                        } else {
+                            static const char recv_code[] = "tur_session_recv(__TUR_VAL_0__)";
+                            ic->code = strslice(recv_code, sizeof(recv_code) - 1);
+                            if (chan_b) {
+                                ic->val_exprs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+                                Expr *chan_var = expr_new(e->arena, EX_VAR, chan_b->type, vec_span);
+                                chan_var->as.var.binding = chan_b;
+                                ic->val_exprs[0] = chan_var;
+                                ic->n_val_exprs = 1;
+                            } else { ic->val_exprs = NULL; ic->n_val_exprs = 0; }
+                        }
                     } else {
+                        /* vi=1: the channel pointer */
                         static const char ref_code2[] = "__TUR_VAL_0__";
                         ic->code = strslice(ref_code2, sizeof(ref_code2) - 1);
+                        if (is_recv_timeout_var) {
+                            /* init_v IS the arm variable (a void* channel pointer) */
+                            ic->val_exprs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+                            ic->val_exprs[0] = init_v;  /* EX_VAR for the arm binding */
+                            ic->n_val_exprs = 1;
+                        } else if (chan_b) {
+                            ic->val_exprs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+                            Expr *chan_var = expr_new(e->arena, EX_VAR, chan_b->type, vec_span);
+                            chan_var->as.var.binding = chan_b;
+                            ic->val_exprs[0] = chan_var;
+                            ic->n_val_exprs = 1;
+                        } else { ic->val_exprs = NULL; ic->n_val_exprs = 0; }
                     }
-                    if (chan_b) {
-                        ic->val_exprs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
-                        Expr *chan_var = expr_new(e->arena, EX_VAR, chan_b->type, vec_span);
-                        chan_var->as.var.binding = chan_b;
-                        ic->val_exprs[0] = chan_var;
-                        ic->n_val_exprs = 1;
-                    } else { ic->val_exprs = NULL; ic->n_val_exprs = 0; }
                     ic_expr->as.inline_c_.inline_c = ic;
                     elem_init = ic_expr;
                 }

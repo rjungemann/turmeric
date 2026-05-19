@@ -2489,11 +2489,22 @@ int emit_program(Buf *out, const Expr *program) {
         buf_puts(out, "#else\n");
         buf_puts(out, "#  define TUR_DBGPROTO(s) ((const char*)0)\n");
         buf_puts(out, "#endif\n");
-        buf_puts(out, "typedef struct { pthread_mutex_t mu; pthread_cond_t cv; int64_t val; int state; } TurSyncCh;\n");
+        /* TurSyncCh: synchronous rendezvous slot with explicit send/recv handshake.
+         * state: 0=idle, 1=sender deposited (waiting for recv), 2=receiver acked (waiting for send to return)
+         * cv: broadcast on every state change; both sender and receiver use it.
+         * The three-state design ensures no ABA races when the same thread
+         * receives a value and immediately sends a new one on the same channel. */
+        buf_puts(out, "typedef struct {\n");
+        buf_puts(out, "    pthread_mutex_t mu;\n");
+        buf_puts(out, "    pthread_cond_t  cv;\n");
+        buf_puts(out, "    int64_t val;\n");
+        buf_puts(out, "    int state; /* 0=idle 1=data-ready 2=data-acked */\n");
+        buf_puts(out, "} TurSyncCh;\n");
         buf_puts(out, "typedef struct {\n");
         buf_puts(out, "    TurSyncCh data;\n");
         buf_puts(out, "    TurSyncCh branch;\n");
         buf_puts(out, "    int refcount;\n");
+        buf_puts(out, "    int abandoned; /* set when timeout fires; unblocks sender */\n");
         buf_puts(out, "    pthread_mutex_t rc_mu;\n");
         buf_puts(out, "#ifndef NDEBUG\n");
         buf_puts(out, "    const char *dbg_proto;\n");
@@ -2516,35 +2527,54 @@ int emit_program(Buf *out, const Expr *program) {
         buf_puts(out, "}\n");
         buf_puts(out, "static void tur_session_send(TurChannel *ch, int64_t val) {\n");
         buf_puts(out, "    pthread_mutex_lock(&ch->data.mu);\n");
+        buf_puts(out, "    /* phase 1: wait for idle slot, deposit value */\n");
+        buf_puts(out, "    while (ch->data.state != 0 && !ch->abandoned)\n");
+        buf_puts(out, "        pthread_cond_wait(&ch->data.cv, &ch->data.mu);\n");
+        buf_puts(out, "    if (ch->abandoned) { pthread_mutex_unlock(&ch->data.mu); return; }\n");
         buf_puts(out, "    ch->data.val = val; ch->data.state = 1;\n");
-        buf_puts(out, "    pthread_cond_signal(&ch->data.cv);\n");
-        buf_puts(out, "    while (ch->data.state) pthread_cond_wait(&ch->data.cv, &ch->data.mu);\n");
+        buf_puts(out, "    pthread_cond_broadcast(&ch->data.cv);\n");
+        buf_puts(out, "    /* phase 2: wait for receiver ack (state==2), then clear to idle */\n");
+        buf_puts(out, "    while (ch->data.state != 2 && !ch->abandoned)\n");
+        buf_puts(out, "        pthread_cond_wait(&ch->data.cv, &ch->data.mu);\n");
+        buf_puts(out, "    if (!ch->abandoned) {\n");
+        buf_puts(out, "        ch->data.state = 0;\n");
+        buf_puts(out, "        pthread_cond_broadcast(&ch->data.cv);\n");
+        buf_puts(out, "    }\n");
         buf_puts(out, "    pthread_mutex_unlock(&ch->data.mu);\n");
         buf_puts(out, "}\n");
         buf_puts(out, "static int64_t tur_session_recv(TurChannel *ch) {\n");
         buf_puts(out, "    pthread_mutex_lock(&ch->data.mu);\n");
-        buf_puts(out, "    while (!ch->data.state) pthread_cond_wait(&ch->data.cv, &ch->data.mu);\n");
-        buf_puts(out, "    int64_t v = ch->data.val; ch->data.state = 0;\n");
-        buf_puts(out, "    pthread_cond_signal(&ch->data.cv);\n");
+        buf_puts(out, "    /* wait for data-ready (state==1), read, ack */\n");
+        buf_puts(out, "    while (ch->data.state != 1) pthread_cond_wait(&ch->data.cv, &ch->data.mu);\n");
+        buf_puts(out, "    int64_t v = ch->data.val; ch->data.state = 2;\n");
+        buf_puts(out, "    pthread_cond_broadcast(&ch->data.cv);\n");
         buf_puts(out, "    pthread_mutex_unlock(&ch->data.mu);\n");
         buf_puts(out, "    return v;\n");
         buf_puts(out, "}\n");
         buf_puts(out, "static void tur_session_send_tag(TurChannel *ch, int64_t tag) {\n");
         buf_puts(out, "    pthread_mutex_lock(&ch->branch.mu);\n");
+        buf_puts(out, "    while (ch->branch.state != 0) pthread_cond_wait(&ch->branch.cv, &ch->branch.mu);\n");
         buf_puts(out, "    ch->branch.val = tag; ch->branch.state = 1;\n");
-        buf_puts(out, "    pthread_cond_signal(&ch->branch.cv);\n");
-        buf_puts(out, "    while (ch->branch.state) pthread_cond_wait(&ch->branch.cv, &ch->branch.mu);\n");
+        buf_puts(out, "    pthread_cond_broadcast(&ch->branch.cv);\n");
+        buf_puts(out, "    while (ch->branch.state != 2) pthread_cond_wait(&ch->branch.cv, &ch->branch.mu);\n");
+        buf_puts(out, "    ch->branch.state = 0;\n");
+        buf_puts(out, "    pthread_cond_broadcast(&ch->branch.cv);\n");
         buf_puts(out, "    pthread_mutex_unlock(&ch->branch.mu);\n");
         buf_puts(out, "}\n");
         buf_puts(out, "static int64_t tur_session_recv_tag(TurChannel *ch) {\n");
         buf_puts(out, "    pthread_mutex_lock(&ch->branch.mu);\n");
-        buf_puts(out, "    while (!ch->branch.state) pthread_cond_wait(&ch->branch.cv, &ch->branch.mu);\n");
-        buf_puts(out, "    int64_t tag = ch->branch.val; ch->branch.state = 0;\n");
-        buf_puts(out, "    pthread_cond_signal(&ch->branch.cv);\n");
+        buf_puts(out, "    while (ch->branch.state != 1) pthread_cond_wait(&ch->branch.cv, &ch->branch.mu);\n");
+        buf_puts(out, "    int64_t tag = ch->branch.val; ch->branch.state = 2;\n");
+        buf_puts(out, "    pthread_cond_broadcast(&ch->branch.cv);\n");
         buf_puts(out, "    pthread_mutex_unlock(&ch->branch.mu);\n");
         buf_puts(out, "    return tag;\n");
         buf_puts(out, "}\n");
         buf_puts(out, "static void tur_session_close(TurChannel *ch) {\n");
+        buf_puts(out, "    /* signal abandoned so any blocked sender/sender_tag wakes up */\n");
+        buf_puts(out, "    pthread_mutex_lock(&ch->data.mu);\n");
+        buf_puts(out, "    ch->abandoned = 1;\n");
+        buf_puts(out, "    pthread_cond_broadcast(&ch->data.cv);\n");
+        buf_puts(out, "    pthread_mutex_unlock(&ch->data.mu);\n");
         buf_puts(out, "    pthread_mutex_lock(&ch->rc_mu);\n");
         buf_puts(out, "    int rc = --ch->refcount;\n");
         buf_puts(out, "    pthread_mutex_unlock(&ch->rc_mu);\n");
@@ -2559,6 +2589,29 @@ int emit_program(Buf *out, const Expr *program) {
         buf_puts(out, "    int64_t (*thunk)(void *) = (int64_t (*)(void *))(intptr_t)fat[0];\n");
         buf_puts(out, "    thunk(arg);\n");
         buf_puts(out, "    return NULL;\n");
+        buf_puts(out, "}\n");
+        /* SS3c: thread-local storage for recv-timeout value. */
+        buf_puts(out, "static _Thread_local int64_t tur__rtv_ = 0;\n");
+        buf_puts(out, "static int64_t tur_session_recv_timeout(TurChannel *ch, int64_t ms) {\n");
+        buf_puts(out, "    struct timespec ts;\n");
+        buf_puts(out, "    clock_gettime(CLOCK_REALTIME, &ts);\n");
+        buf_puts(out, "    ts.tv_sec  += (time_t)(ms / 1000);\n");
+        buf_puts(out, "    ts.tv_nsec += (long)((ms % 1000) * 1000000L);\n");
+        buf_puts(out, "    if (ts.tv_nsec >= 1000000000L) { ts.tv_sec += 1; ts.tv_nsec -= 1000000000L; }\n");
+        buf_puts(out, "    pthread_mutex_lock(&ch->data.mu);\n");
+        buf_puts(out, "    int rc = 0;\n");
+        buf_puts(out, "    while (ch->data.state != 1 && rc == 0)\n");
+        buf_puts(out, "        rc = pthread_cond_timedwait(&ch->data.cv, &ch->data.mu, &ts);\n");
+        buf_puts(out, "    int64_t tag;\n");
+        buf_puts(out, "    if (ch->data.state == 1) {\n");
+        buf_puts(out, "        tur__rtv_ = ch->data.val; ch->data.state = 2;\n");
+        buf_puts(out, "        pthread_cond_broadcast(&ch->data.cv);\n");
+        buf_puts(out, "        tag = 0;\n");
+        buf_puts(out, "    } else {\n");
+        buf_puts(out, "        tag = 1;\n");
+        buf_puts(out, "    }\n");
+        buf_puts(out, "    pthread_mutex_unlock(&ch->data.mu);\n");
+        buf_puts(out, "    return tag;\n");
         buf_puts(out, "}\n\n");
     }
 

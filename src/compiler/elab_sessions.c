@@ -1,12 +1,89 @@
 /* elab_sessions.c -- session type channel operations (-Xsessions). */
 #include "elab_internal.h"
 
+/* SS3a: Substitute all TY_SESSION_REC sentinel nodes (fst==NULL) whose label
+ * matches `label` with `replacement`.  Used for one-step equirecursive unrolling.
+ * Returns a new arena-allocated Type* with the substitution applied. */
+static Type *session_proto_subst(Elab *e, Type *proto, const char *label, Type *replacement) {
+    if (!proto) return NULL;
+    /* Sentinel: TY_SESSION_REC with fst==NULL and matching label -- replace it. */
+    if (proto->kind == TY_SESSION_REC && proto->as.session_.fst == NULL
+            && proto->as.session_.label == label) {
+        return replacement;
+    }
+    switch (proto->kind) {
+        case TY_CLOSE:
+        case TY_UNKNOWN:
+            return proto;  /* leaf -- no substitution needed */
+        case TY_SEND:
+        case TY_RECV: {
+            Type *new_fst = session_proto_subst(e, proto->as.session_.fst, label, replacement);
+            Type *new_snd = session_proto_subst(e, proto->as.session_.snd, label, replacement);
+            if (new_fst == proto->as.session_.fst && new_snd == proto->as.session_.snd)
+                return proto;
+            Type *r = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *r = *proto;
+            r->as.session_.fst = new_fst;
+            r->as.session_.snd = new_snd;
+            return r;
+        }
+        case TY_CHOOSE:
+        case TY_BRANCH: {
+            Type *new_fst = session_proto_subst(e, proto->as.session_.fst, label, replacement);
+            Type *new_snd = session_proto_subst(e, proto->as.session_.snd, label, replacement);
+            if (new_fst == proto->as.session_.fst && new_snd == proto->as.session_.snd)
+                return proto;
+            Type *r = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *r = *proto;
+            r->as.session_.fst = new_fst;
+            r->as.session_.snd = new_snd;
+            return r;
+        }
+        case TY_TIMEOUT: {
+            Type *new_fst = session_proto_subst(e, proto->as.session_.fst, label, replacement);
+            Type *new_snd = session_proto_subst(e, proto->as.session_.snd, label, replacement);
+            if (new_fst == proto->as.session_.fst && new_snd == proto->as.session_.snd)
+                return proto;
+            Type *r = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *r = *proto;
+            r->as.session_.fst = new_fst;
+            r->as.session_.snd = new_snd;
+            return r;
+        }
+        case TY_SESSION_REC: {
+            /* A different Rec binder -- substitute inside its body but don't
+             * shadow the outer label (the inner label is different). */
+            if (proto->as.session_.fst == NULL) return proto; /* different sentinel */
+            Type *new_body = session_proto_subst(e, proto->as.session_.fst, label, replacement);
+            if (new_body == proto->as.session_.fst) return proto;
+            Type *r = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *r = *proto;
+            r->as.session_.fst = new_body;
+            return r;
+        }
+        default:
+            return proto;
+    }
+}
+
+/* SS3a: One-step equirecursive unrolling of a TY_SESSION_REC type.
+ * Rec[label, body] -> body[label := Rec[label, body]]
+ * Returns the unrolled protocol (arena-allocated). */
+static Type *session_rec_unfold(Elab *e, Type *rec_proto) {
+    if (!rec_proto || rec_proto->kind != TY_SESSION_REC) return rec_proto;
+    if (!rec_proto->as.session_.fst) return rec_proto; /* sentinel -- can't unfold */
+    return session_proto_subst(e, rec_proto->as.session_.fst,
+                               rec_proto->as.session_.label, rec_proto);
+}
+
 /* SS1: Compute the dual of a session protocol type.
  * dual(Send[T,Q])    = Recv[T, dual(Q)]
  * dual(Recv[T,Q])    = Send[T, dual(Q)]
  * dual(Close)        = Close
  * dual(Choose[P,Q])  = Branch[dual(P), dual(Q)]
  * dual(Branch[P,Q])  = Choose[dual(P), dual(Q)]
+ * dual(Rec[X,P])     = Rec[X, dual(P)]   (SS3a)
+ * dual(Timeout[Q,P]) = Timeout[dual(Q), dual(P)]  (SS3c; self-dual structure)
  * Returns NULL and emits TUR_E0210 if the protocol kind is not dualizable. */
 static Type *session_dual(Elab *e, Type *proto, Span span) {
     if (!proto) return NULL;
@@ -50,6 +127,33 @@ static Type *session_dual(Elab *e, Type *proto, Span span) {
             if (!dq) return NULL;
             Type *d = (Type *)arena_alloc(e->arena, sizeof(Type));
             *d = type_choose(dp, dq);
+            return d;
+        }
+        case TY_SESSION_REC: {
+            /* SS3a: dual(Rec[X, P]) = Rec[X, dual(P)].
+             * A sentinel (fst==NULL) means a back-reference -- dual of it is the
+             * same sentinel (will be resolved by the outer Rec dual). */
+            if (!proto->as.session_.fst) {
+                /* sentinel back-reference: return as-is (label preserved) */
+                Type *d = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *d = *proto;
+                return d;
+            }
+            Type *dual_body = session_dual(e, proto->as.session_.fst, span);
+            if (!dual_body) return NULL;
+            Type *d = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *d = type_session_rec(proto->as.session_.label, dual_body);
+            return d;
+        }
+        case TY_TIMEOUT: {
+            /* SS3c: Timeout is self-dual in structure.
+             * dual(Timeout[Q, P]) = Timeout[dual(Q), dual(P)] */
+            Type *dq = session_dual(e, proto->as.session_.fst, span);
+            if (!dq) return NULL;
+            Type *dp = session_dual(e, proto->as.session_.snd, span);
+            if (!dp) return NULL;
+            Type *d = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *d = type_timeout(dq, dp);
             return d;
         }
         default:
@@ -120,7 +224,8 @@ Expr *elab_session_make(Elab *e, const Form *call) {
 }
 
 /* Helper: validate that an expression is a Session[...] channel and extract
- * its inner protocol type.  On failure, emits a diagnostic and returns NULL. */
+ * its inner protocol type.  On failure, emits a diagnostic and returns NULL.
+ * SS3a: If the protocol is TY_SESSION_REC, unroll it one step (equirecursive). */
 static Type *session_protocol_of(Elab *e, Expr *chan, const char *op, Span span) {
     if (!chan) return NULL;
     if (chan->type.kind != TY_SESSION) {
@@ -129,7 +234,12 @@ static Type *session_protocol_of(Elab *e, Expr *chan, const char *op, Span span)
                             op, type_name(chan->type));
         return NULL;
     }
-    return chan->type.as.session_.fst;
+    Type *proto = chan->type.as.session_.fst;
+    /* SS3a: Equirecursive unrolling -- transparently unfold Rec at use sites. */
+    while (proto && proto->kind == TY_SESSION_REC && proto->as.session_.fst != NULL) {
+        proto = session_rec_unfold(e, proto);
+    }
+    return proto;
 }
 
 /* (send chan val) — consume chan : Session[Send[T, Q]]; return chan' : Session[Q].
@@ -243,7 +353,14 @@ Expr *elab_session_close(Elab *e, const Form *call) {
     Type *proto = session_protocol_of(e, chan, "close", call->span);
     if (!proto) return NULL;
 
-    if (proto->kind != TY_CLOSE) {
+    /* SS3c: Also allow close on Session[Timeout[Close, Close]].
+     * When the sender has sent and both timeout branches are Close, the sender
+     * can transparently close regardless of which branch the receiver took. */
+    bool is_trivial_timeout = (proto->kind == TY_TIMEOUT &&
+        proto->as.session_.fst && proto->as.session_.fst->kind == TY_CLOSE &&
+        proto->as.session_.snd && proto->as.session_.snd->kind == TY_CLOSE);
+
+    if (proto->kind != TY_CLOSE && !is_trivial_timeout) {
         diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0212_SESSION_PROTO_MISMATCH,
                             "close is not valid on Session[%s] -- "
                             "protocol is not yet complete",
@@ -403,4 +520,99 @@ Expr *elab_session_choose_right(Elab *e, const Form *call) {
     } else { ic->val_exprs = NULL; ic->n_val_exprs = 0; }
     out->as.inline_c_.inline_c = ic;
     return out;
+}
+
+/* SS3c: (recv-timeout chan duration) -- timed receive on a session channel.
+ * chan     : Session[Recv[T, Timeout[Q, P]]]
+ * duration : int (milliseconds)
+ * Returns  : TY_SESSION_OFFER where fst = TY_SESSION_RECV_PAIR[T, Session[Q]]
+ *                                   snd = Session[P]
+ *
+ * Emits tur_session_recv_timeout(chan, dur_ms) which returns
+ * 0 (success, value stashed in tur__rtv_ thread-local) or 1 (timeout).
+ *
+ * The match Left arm gets a TY_SESSION_RECV_PAIR which the user can
+ * vector-destructure to [value, chan2].  The match Right arm gets Session[P]. */
+Expr *elab_session_recv_timeout(Elab *e, const Form *call) {
+    if (call->as.list.len != 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "recv-timeout requires two arguments: (recv-timeout chan duration)");
+        return NULL;
+    }
+    Expr *chan = elab_form(e, call->as.list.items[1]);
+    if (!chan) return NULL;
+    Expr *dur  = elab_form(e, call->as.list.items[2]);
+    if (!dur) return NULL;
+
+    Type *proto = session_protocol_of(e, chan, "recv-timeout", call->span);
+    if (!proto) return NULL;
+
+    /* Expect Recv[T, Timeout[Q, P]] */
+    if (proto->kind != TY_RECV) {
+        diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0212_SESSION_PROTO_MISMATCH,
+                            "recv-timeout is not valid on Session[%s] -- "
+                            "expected Recv[T, Timeout[Q, P]]",
+                            type_name(*proto));
+        return NULL;
+    }
+    Type *cont = proto->as.session_.snd;
+    if (!cont || cont->kind != TY_TIMEOUT) {
+        diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0212_SESSION_PROTO_MISMATCH,
+                            "recv-timeout: continuation must be Timeout[Q, P], got %s",
+                            cont ? type_name(*cont) : "?");
+        return NULL;
+    }
+
+    /* Mark chan as consumed */
+    Binding *chan_binding = (chan->kind == EX_VAR) ? chan->as.var.binding : NULL;
+    if (chan_binding) binding_mark_moved(chan_binding, call->span);
+
+    /* Build types:
+     *   T   = proto->fst
+     *   Q   = cont->fst  (success continuation protocol)
+     *   P   = cont->snd  (timeout continuation protocol)
+     *   Left  arm type = RecvPair[T, Session[Q]]
+     *   Right arm type = Session[P] */
+    Type *val_tp = (Type *)arena_alloc(e->arena, sizeof(Type));
+    *val_tp = *proto->as.session_.fst;  /* T */
+
+    Type *q_proto = (Type *)arena_alloc(e->arena, sizeof(Type));
+    *q_proto = *cont->as.session_.fst;  /* Q */
+    Type *sess_q = (Type *)arena_alloc(e->arena, sizeof(Type));
+    *sess_q = type_session(q_proto);    /* Session[Q] */
+
+    Type *p_proto = (Type *)arena_alloc(e->arena, sizeof(Type));
+    *p_proto = *cont->as.session_.snd;  /* P */
+    Type *sess_p = (Type *)arena_alloc(e->arena, sizeof(Type));
+    *sess_p = type_session(p_proto);    /* Session[P] */
+
+    /* Left arm type = RecvPair[T, Session[Q]] -- vector-destructured by user */
+    Type *recv_pair = (Type *)arena_alloc(e->arena, sizeof(Type));
+    *recv_pair = type_session_recv_pair(val_tp, sess_q);
+
+    /* Build TY_SESSION_OFFER: fst = RecvPair[T, Session[Q]]; snd = Session[P] */
+    Type offer_type = type_session_offer(recv_pair, sess_p);
+
+    /* Emit: tur_session_recv_timeout(chan, dur_ms) returns 0/1 tag.
+     * On success the received value is in tur__rtv_ (thread-local in generated C).
+     * val_exprs[0] = chan, val_exprs[1] = dur */
+    static const char rto_code[] =
+        "tur_session_recv_timeout(__TUR_VAL_0__, __TUR_VAL_1__)";
+    Expr *rto_out = expr_new(e->arena, EX_INLINE_C, offer_type, call->span);
+    InlineC *rto_ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
+    rto_ic->code = strslice(rto_code, sizeof(rto_code) - 1);
+    rto_ic->return_type = offer_type;
+    rto_ic->captures = NULL; rto_ic->n_captures = 0;
+    rto_ic->val_exprs = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
+    rto_ic->n_val_exprs = 2;
+    if (chan_binding) {
+        Expr *cv = expr_new(e->arena, EX_VAR, chan_binding->type, call->span);
+        cv->as.var.binding = chan_binding;
+        rto_ic->val_exprs[0] = cv;
+    } else {
+        rto_ic->val_exprs[0] = NULL;
+    }
+    rto_ic->val_exprs[1] = dur;
+    rto_out->as.inline_c_.inline_c = rto_ic;
+    return rto_out;
 }
