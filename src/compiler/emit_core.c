@@ -309,6 +309,29 @@ void emit_pending_defer_thunks(EmitCtx *ctx, Buf *out) {
 
 
 
+/* DV2: Return a malloc'd C identifier for a dynamic var name.
+ * Strips leading/trailing '*' (earmuffs), then converts non-alphanumeric
+ * characters to '_'. E.g. "*log-level*" -> "log_level". Caller frees. */
+char *mangle_dynvar_name(const char *name) {
+    const char *start = name;
+    size_t mlen = strlen(name);
+    if (mlen > 0 && start[0] == '*') { start++; mlen--; }
+    if (mlen > 0 && start[mlen - 1] == '*') { mlen--; }
+    char *p = (char *)malloc(mlen + 1);
+    if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
+    for (size_t i = 0; i < mlen; i++) {
+        char c = start[i];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '_') {
+            p[i] = c;
+        } else {
+            p[i] = '_';
+        }
+    }
+    p[mlen] = '\0';
+    return p;
+}
+
 /* Mangle a Turmeric struct field name to a valid C identifier.
  * Replaces hyphens and other non-id-safe chars with underscores. Caller frees. */
 char *mangle_field_name(const char *name) {

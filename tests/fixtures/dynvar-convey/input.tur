@@ -1,0 +1,25 @@
+;; DV3: dynvar-convey -- spawn-conveying inherits a snapshot of the parent's
+;; binding frame. The child thread should see the override value (42), not the
+;; root value (0).
+(defdynamic *log-level* :int 0)
+
+(defn thread-join [t :ptr<void>] :nil
+  ```c
+  TurThreadHandle *h = (TurThreadHandle *)t;
+  pthread_join(h->tid, NULL);
+  pthread_mutex_destroy(&h->state->cancel_mutex);
+  pthread_cond_destroy(&h->state->cancel_cond);
+  free(h->state);
+  free(h);
+  ```)
+
+(defn spawn-conveying [f :ptr<void>] :ptr<void>
+  ```c
+  return (void *)(intptr_t)_tur_spawn_conveying((int64_t)(intptr_t)f);
+  ```)
+
+(defn main [] :int
+  (binding [*log-level* 42]
+    (let [t (spawn-conveying (fn [] (println *log-level*)))]
+      (thread-join t)
+      0)))

@@ -1,0 +1,5 @@
+;; DV1 P2: override value type does not match the declared type (E0602).
+;; *log-level* is declared :int but the binding supplies a :str value.
+(defdynamic *log-level* :int 0)
+(binding [*log-level* "verbose"]
+  *log-level*)

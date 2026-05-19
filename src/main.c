@@ -1492,7 +1492,8 @@ static int usage(void) {
         "  -Xunion-types                    enable union type syntax: (A | B | C) (IT0-IT1)\n"
         "  -Xintersection-types             enable intersection type syntax: (A & B & C) (IT2)\n"
         "  -Xcontracts                      enable contract checks (default in debug builds) (CT3)\n"
-        "  --keep-contracts                 retain contract checks in release builds (CT3)\n");
+        "  --keep-contracts                 retain contract checks in release builds (CT3)\n"
+        "  -Xdynamic-vars                   enable dynamic var syntax: (defdynamic *name* :type val) (DV0+)\n");
     return 64;
 }
 
@@ -1820,6 +1821,14 @@ int main(int argc, char **argv) {
             g_sessions_enabled = true;
             g_substructural_enabled = true;
             g_linear_enabled = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "-Xdynamic-vars") == 0) {
+            /* DV0: enable dynamic var syntax and checking */
+            g_dynvar_enabled = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

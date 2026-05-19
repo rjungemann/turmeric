@@ -237,6 +237,14 @@ Expr *elab_form(Elab *e, Form *f) {
                                                                        : USAGE_USED_MANY;
                 }
             }
+            /* DV1: If the binding is a dynamic var, emit a dynvar-read node.
+             * The result type is the var's value type, not TY_DYNVAR. */
+            if (b->is_dynvar && b->dynvar_entry) {
+                Expr *out = expr_new(e->arena, EX_DYNVAR_READ,
+                                     b->dynvar_entry->value_type, f->span);
+                out->as.dynvar_read_.entry = b->dynvar_entry;
+                return out;
+            }
             Expr *out = expr_new(e->arena, EX_VAR, b->type, f->span);
             out->as.var.binding = b;
             /* Phase HRT/G2: Resolve named type variable through current GADT match arm skolem env.
