@@ -743,5 +743,6 @@ Expr *elab_session_close(Elab *e, const Form *call);
 Expr *elab_session_offer(Elab *e, const Form *call);
 Expr *elab_session_choose_left(Elab *e, const Form *call);
 Expr *elab_session_choose_right(Elab *e, const Form *call);
+Expr *elab_session_recv_timeout(Elab *e, const Form *call);
 
 #endif

@@ -1,0 +1,55 @@
+;; SS3a: session-rec -- recursive protocol (mu-type) echo server.
+;;
+;; EchoProtocol = Branch (Recv int (Send int EchoProtocol)) Close
+;;
+;; The server loops: offer the channel; if Left (a message is coming), recv the
+;; integer, send it back, and recurse.  If Right, close and stop.
+;; The client sends three values (1, 2, 3) then closes.
+;;
+;; Expected output (one per recv on client side):
+;; 1
+;; 2
+;; 3
+(defn spawn [f :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(tid, NULL, tur_session_thread_wrapper, f);
+  return (void *)tid;
+  ```)
+
+(defn join [t :ptr<void>] :int
+  ```c
+  pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  return 0;
+  ```)
+
+;; server-loop: repeatedly offer the channel and echo values back.
+;; Protocol: Session[Rec self (Branch (Recv int (Send int self)) Close)]
+(defn server-loop [^linear ch :(Session (Rec self (Branch (Recv int (Send int self)) Close)))] :nil
+  (match (offer ch)
+    (Left ch)
+      (let [[n ch] (recv ch)]
+        (let [ch (send ch n)]
+          (server-loop ch)))
+    (Right ch)
+      (close ch)))
+
+;; client: send n, then recv the echo.
+(defn client-step [^linear ch :(Session (Rec self (Choose (Send int (Recv int self)) Close))) n :int] :(Session (Rec self (Choose (Send int (Recv int self)) Close)))
+  (let [ch (choose-left ch)]
+    (let [ch (send ch n)]
+      (let [[r ch] (recv ch)]
+        (println r)
+        ch))))
+
+(defn main [] :int
+  (let [[s r] (make-session (Rec self (Branch (Recv int (Send int self)) Close)))]
+    (let [t (spawn (fn [] (server-loop r)))]
+      (let [s (client-step s 1)]
+        (let [s (client-step s 2)]
+          (let [s (client-step s 3)]
+            (let [s (choose-right s)]
+              (close s)
+              (join t)))))))
+  0)

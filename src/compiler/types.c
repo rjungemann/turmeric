@@ -972,9 +972,9 @@ const char *type_c_name(Type t) {
         case TY_TIMEOUT:
             return "/*session-protocol*/ void";
         case TY_SESSION_PAIR:
-            return "/*session-pair*/ void";
+            return "void *";  /* session pair lowers to TurChannel pointer */
         case TY_SESSION_RECV_PAIR:
-            return "/*session-recv-pair*/ void";
+            return "void *";  /* recv-pair lowers to TurChannel pointer */
         case TY_SESSION_OFFER:
             return "int64_t";
     }
