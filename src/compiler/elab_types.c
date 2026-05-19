@@ -876,6 +876,56 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 *t = type_timeout(success, timeout);
                 return t;
             }
+            /* SS6: (project G R) -- compute Session[P] where P = project(G, R).
+             * G is the protocol name; R is the role name. */
+            if (head_sym == e->sym_project_type && form->as.list.len == 3
+                    && form->as.list.items[1]->tag == F_SYM
+                    && form->as.list.items[2]->tag == F_SYM) {
+                const char *proto_name = form->as.list.items[1]->as.sym->name;
+                const char *role_name  = form->as.list.items[2]->as.sym->name;
+
+                /* Look up protocol */
+                Type *global_t = NULL;
+                for (uint32_t gi = 0; gi < e->n_global_protocols; gi++) {
+                    if (strcmp(e->global_protocols[gi].name, proto_name) == 0) {
+                        global_t = e->global_protocols[gi].type;
+                        break;
+                    }
+                }
+                if (!global_t) {
+                    diag_emit(DIAG_ERROR, form->span,
+                              "project: unknown protocol '%s'", proto_name);
+                    return NULL;
+                }
+
+                /* Validate role is declared in this protocol */
+                bool role_found = false;
+                for (int ri = 0; ri < global_t->as.global_.n_roles; ri++) {
+                    if (strcmp(global_t->as.global_.roles[ri], role_name) == 0) {
+                        role_found = true;
+                        break;
+                    }
+                }
+                if (!role_found) {
+                    diag_emit_with_code(DIAG_ERROR, form->span, TUR_E0221_ROLE_NOT_DECLARED,
+                                        "project: role '%s' is not declared in protocol '%s'",
+                                        role_name, proto_name);
+                    return NULL;
+                }
+
+                /* Intern the role name so pointer comparisons work in project_inner */
+                const char *role_interned = intern_cstr(e->st, role_name)->name;
+
+                /* Compute projection */
+                Type *proj = session_project(e, global_t->as.global_.body,
+                                             role_interned, form->span);
+                if (!proj) return NULL;
+
+                /* Wrap in Session[P] */
+                Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *t = type_session(proj);
+                return t;
+            }
             /* SS5: (Global Name) -- reference to a named global protocol type.
              * Looks up the protocol by name and returns a TY_GLOBAL type. */
             if (head_sym == e->sym_global_type && form->as.list.len == 2
