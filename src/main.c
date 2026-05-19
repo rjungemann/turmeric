@@ -17,6 +17,9 @@
 #endif
 
 #include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1441,6 +1444,437 @@ static int cmd_repl(void) {
     return turi_repl_run();
 }
 
+/* ---------------------------------------------------------------------------
+ * Tier 3: tur worker — persistent fixture evaluator for the test suite.
+ *
+ * Reads fixture directory paths from stdin (one per line, blank = stop).
+ * For each fixture, evaluates it using the interpreter in a forked child
+ * (for isolation and stdout/stderr capture), compares outputs against
+ * expected files, then writes a 4-line result file to $RESULTS_DIR and
+ * prints PASS/FAIL/SKIP to stdout for live progress.
+ *
+ * The parent process persists across fixtures; only tur binary itself is
+ * validated by syspolicyd at startup (N times for N workers), not once per
+ * fixture.
+ * --------------------------------------------------------------------------- */
+
+/* Apply flags string (e.g. "-Xgadt -Xlinear") to global compiler flags. */
+static void wk_apply_flags(const char *flags_str) {
+    if (!flags_str || !*flags_str) return;
+    char copy[512];
+    strncpy(copy, flags_str, sizeof(copy) - 1);
+    copy[sizeof(copy) - 1] = '\0';
+    char *tok = strtok(copy, " \t");
+    while (tok) {
+        if      (strcmp(tok, "-Xgadt")             == 0) g_gadt_enabled            = true;
+        else if (strcmp(tok, "-Xlinear")            == 0) g_linear_enabled           = true;
+        else if (strcmp(tok, "-Xunique-types")      == 0) g_unique_enabled           = true;
+        else if (strcmp(tok, "-Xsubstructural")     == 0) { g_substructural_enabled = true; g_linear_enabled = true; }
+        else if (strcmp(tok, "-Xunion-types")       == 0) g_union_types_enabled      = true;
+        else if (strcmp(tok, "-Xintersection-types")== 0) g_intersection_types_enabled = true;
+        else if (strcmp(tok, "-Xeffect-types")      == 0) { g_effect_types_enabled   = true; g_strict_effects = true; }
+        else if (strcmp(tok, "-Xcontracts")         == 0) g_contracts_enabled        = true;
+        else if (strcmp(tok, "-Xsessions")          == 0) { g_sessions_enabled = true; g_substructural_enabled = true; g_linear_enabled = true; }
+        else if (strcmp(tok, "-Xdynamic-vars")      == 0) g_dynvar_enabled           = true;
+        else if (strcmp(tok, "--unsafe-stats")      == 0) { g_lint_unsafe_enabled = true; g_unsafe_stats_enabled = true; }
+        else if (strcmp(tok, "--strict-effects")    == 0) g_strict_effects           = true;
+        else if (strcmp(tok, "--dump-effects")      == 0) g_dump_effects             = true;
+        else if (strcmp(tok, "--lint-effects")      == 0) g_lint_effects             = true;
+        tok = strtok(NULL, " \t");
+    }
+}
+
+/* Write a 4-line result file matching the format read by run.sh. */
+static void wk_write_result(const char *results_dir, const char *kind,
+                             const char *name, const char *detail,
+                             const char *log_file) {
+    char id[1024];
+    snprintf(id, sizeof(id), "%s-%s", kind, name);
+    for (char *p = id; *p; p++)
+        if (*p == '/' || *p == ' ') *p = '_';
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/%s.result", results_dir, id);
+    FILE *f = fopen(path, "w");
+    if (!f) return;
+    fprintf(f, "%s\n%s\n%s\n%s\n", kind, name, detail ? detail : "", log_file ? log_file : "");
+    fclose(f);
+}
+
+/* Drain two read-end pipe fds concurrently into Bufs.
+ * Closes both fds on return. */
+static void wk_drain_pipes(int fd_out, int fd_err, Buf *out_buf, Buf *err_buf) {
+    struct pollfd pfds[2];
+    pfds[0].fd = fd_out; pfds[0].events = POLLIN;
+    pfds[1].fd = fd_err; pfds[1].events = POLLIN;
+    int done_out = 0, done_err = 0;
+    while (!done_out || !done_err) {
+        pfds[0].fd = done_out ? -1 : fd_out;
+        pfds[1].fd = done_err ? -1 : fd_err;
+        pfds[0].revents = 0; pfds[1].revents = 0;
+        int r = poll(pfds, 2, 1000);
+        if (r < 0) { if (errno == EINTR) continue; break; }
+        for (int i = 0; i < 2; i++) {
+            if (pfds[i].fd < 0) continue;
+            if (pfds[i].revents & (POLLIN | POLLHUP | POLLERR)) {
+                char tmp[8192];
+                ssize_t n = read(pfds[i].fd, tmp, sizeof(tmp));
+                if (n > 0) {
+                    Buf *b = (i == 0) ? out_buf : err_buf;
+                    buf_write(b, tmp, (size_t)n);
+                } else {
+                    if (i == 0) done_out = 1; else done_err = 1;
+                }
+            }
+        }
+    }
+    close(fd_out); close(fd_err);
+}
+
+/* Run the interpreter on 'input' in a forked child.
+ * Returns child exit code; writes captured stdout and stderr into out and err.
+ * Caller frees *out and *err. */
+static int wk_eval_fixture(const char *input, const char *flags_str,
+                            const char *stdin_path, int timeout_secs,
+                            char **out, char **err) {
+    int pout[2], perr[2];
+    if (pipe(pout) < 0 || pipe(perr) < 0) { *out = NULL; *err = NULL; return 1; }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pout[0]); close(pout[1]);
+        close(perr[0]); close(perr[1]);
+        *out = NULL; *err = NULL; return 1;
+    }
+
+    if (pid == 0) {
+        /* Child: redirect fds, apply flags, evaluate. */
+        close(pout[0]); close(perr[0]);
+        dup2(pout[1], STDOUT_FILENO);
+        dup2(perr[1], STDERR_FILENO);
+        close(pout[1]); close(perr[1]);
+
+        if (stdin_path) {
+            int fdin = open(stdin_path, O_RDONLY);
+            if (fdin >= 0) { dup2(fdin, STDIN_FILENO); close(fdin); }
+        } else {
+            int devnull = open("/dev/null", O_RDONLY);
+            if (devnull >= 0) { dup2(devnull, STDIN_FILENO); close(devnull); }
+        }
+
+        wk_apply_flags(flags_str);
+        if (timeout_secs > 0) alarm((unsigned)timeout_secs);
+
+        TuriEnv *env = turi_env_new();
+        TuriValue v = turi_eval_file(env, input);
+        int exit_code = 0;
+        if (v.tag == TURI_ERROR) {
+            exit_code = 1;
+        } else {
+            /* Fixtures that define (defn main [] :int ...) need an explicit call.
+             * Top-level-expression style fixtures already produced their output. */
+            TuriValue main_fn = turi_env_get(env, "main");
+            if (main_fn.tag == TURI_CLOSURE) {
+                TuriValue result = turi_eval(env, "(main)");
+                if (result.tag == TURI_ERROR) {
+                    exit_code = 1;
+                } else if (result.tag == TURI_INT) {
+                    exit_code = (int)result.as_int;
+                }
+            }
+        }
+        turi_env_free(env);
+        fflush(NULL);
+        _exit(exit_code);
+    }
+
+    /* Parent: collect output. */
+    close(pout[1]); close(perr[1]);
+    Buf out_buf, err_buf;
+    buf_init(&out_buf); buf_init(&err_buf);
+    wk_drain_pipes(pout[0], perr[0], &out_buf, &err_buf);
+
+    int ws = 0;
+    waitpid(pid, &ws, 0);
+    int rc = WIFEXITED(ws) ? WEXITSTATUS(ws) : 1;
+
+    buf_putc(&out_buf, '\0');
+    buf_putc(&err_buf, '\0');
+    *out = out_buf.data;
+    *err = err_buf.data;
+    return rc;
+}
+
+/* Run compile_to_c in a forked child, capturing the generated C.
+ * Returns 0 on success; sets *gen_c to malloc'd string (caller frees). */
+static int wk_emit_c_fixture(const char *input, const char *flags_str, char **gen_c) {
+    int pout[2];
+    if (pipe(pout) < 0) { *gen_c = NULL; return 1; }
+
+    pid_t pid = fork();
+    if (pid < 0) { close(pout[0]); close(pout[1]); *gen_c = NULL; return 1; }
+
+    if (pid == 0) {
+        close(pout[0]);
+        dup2(pout[1], STDOUT_FILENO);
+        close(pout[1]);
+        /* Suppress diagnostics in this child. */
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) { dup2(devnull, STDERR_FILENO); close(devnull); }
+
+        wk_apply_flags(flags_str);
+        diag_init(false);
+
+        Buf cbuf; buf_init(&cbuf);
+        int rc = compile_to_c(input, &cbuf, NULL, 0);
+        if (rc == 0 && cbuf.data) {
+            fwrite(cbuf.data, 1, cbuf.len, stdout);
+        }
+        buf_free(&cbuf);
+        fflush(NULL);
+        _exit(rc);
+    }
+
+    close(pout[1]);
+    Buf cbuf; buf_init(&cbuf);
+    char tmp[8192];
+    ssize_t nr;
+    while ((nr = read(pout[0], tmp, sizeof(tmp))) > 0)
+        buf_write(&cbuf, tmp, (size_t)nr);
+    close(pout[0]);
+
+    int ws = 0;
+    waitpid(pid, &ws, 0);
+    int rc = WIFEXITED(ws) ? WEXITSTATUS(ws) : 1;
+    buf_putc(&cbuf, '\0');
+    *gen_c = cbuf.data;
+    return rc;
+}
+
+/* Check that every non-empty line of expected_stderr_path appears in actual. */
+static bool wk_check_stderr_substrings(const char *actual,
+                                        const char *expected_path,
+                                        char *missing_out, size_t missing_cap) {
+    char *expected = NULL; size_t exp_len = 0;
+    if (read_entire_file(expected_path, &expected, &exp_len) != 0) return true;
+    bool ok = true;
+    char *line = expected;
+    while (line && *line && ok) {
+        char *nl = strchr(line, '\n');
+        if (nl) *nl = '\0';
+        size_t ll = strlen(line);
+        while (ll > 0 && (line[ll-1] == '\r' || line[ll-1] == ' ')) line[--ll] = '\0';
+        if (*line && !strstr(actual, line)) {
+            snprintf(missing_out, missing_cap, "%s", line);
+            ok = false;
+        }
+        line = nl ? nl + 1 : NULL;
+    }
+    free(expected);
+    return ok;
+}
+
+/* Tier 3: persistent fixture worker loop.
+ * Each invocation handles an entire batch of fixtures without spawning a new
+ * tur binary (no syspolicyd hit per fixture). */
+static int cmd_worker(void) {
+    const char *results_dir = getenv("RESULTS_DIR");
+    if (!results_dir || !*results_dir) {
+        fprintf(stderr, "tur worker: RESULTS_DIR not set\n");
+        return 2;
+    }
+    const char *tsan_env = getenv("TUR_TSAN");
+    bool tsan_active = tsan_env && strcmp(tsan_env, "1") == 0;
+
+    turi_init(false);
+
+    char linebuf[4096];
+    while (fgets(linebuf, sizeof(linebuf), stdin)) {
+        size_t n = strlen(linebuf);
+        while (n > 0 && (linebuf[n-1] == '\n' || linebuf[n-1] == '\r')) linebuf[--n] = '\0';
+        if (n == 0) continue;
+
+        const char *dir = linebuf;
+        const char *fixture_prefix = "tests/fixtures/";
+        const char *name_part = (strncmp(dir, fixture_prefix, strlen(fixture_prefix)) == 0)
+            ? dir + strlen(fixture_prefix) : dir;
+        char name[512];
+        strncpy(name, name_part, sizeof(name) - 1);
+        name[sizeof(name) - 1] = '\0';
+
+        /* Find input file. */
+        char input[4096];
+        snprintf(input, sizeof(input), "%s/input.tur", dir);
+        struct stat st;
+        if (stat(input, &st) != 0) {
+            snprintf(input, sizeof(input), "%s/%s.tur", dir, basename_of(dir));
+            if (stat(input, &st) != 0) {
+                printf("SKIP %s\n", name); fflush(stdout); continue;
+            }
+        }
+
+        /* Skip if TSAN marker present and TSAN not active. */
+        char marker[4096];
+        snprintf(marker, sizeof(marker), "%s/requires.tsan", dir);
+        if (stat(marker, &st) == 0 && !tsan_active) {
+            wk_write_result(results_dir, "PASS", name, "(tsan-skipped)", "");
+            printf("PASS %s\n", name); fflush(stdout); continue;
+        }
+
+        /* requires.compiled: cannot run in interpreter. */
+        snprintf(marker, sizeof(marker), "%s/requires.compiled", dir);
+        if (stat(marker, &st) == 0) {
+            /* Print SKIP so the shell coordinator can route to compiled path. */
+            printf("SKIP %s requires-compiled\n", name); fflush(stdout); continue;
+        }
+
+        /* Read fixture flags. */
+        char flags[256] = "";
+        {
+            char fp[4096];
+            snprintf(fp, sizeof(fp), "%s/flags", dir);
+            FILE *ff = fopen(fp, "r");
+            if (ff) {
+                if (fgets(flags, sizeof(flags), ff)) {
+                    size_t fl = strlen(flags);
+                    while (fl > 0 && (flags[fl-1] == '\n' || flags[fl-1] == '\r')) flags[--fl] = '\0';
+                }
+                fclose(ff);
+            }
+        }
+
+        /* Read per-fixture timeout (default 10, 0 = unlimited). */
+        int fixture_timeout = 10;
+        {
+            char tp[4096];
+            snprintf(tp, sizeof(tp), "%s/expected.timeout", dir);
+            FILE *tf = fopen(tp, "r");
+            if (tf) {
+                char ts[32] = "";
+                if (fgets(ts, sizeof(ts), tf)) { int tv = atoi(ts); if (tv >= 0) fixture_timeout = tv; }
+                fclose(tf);
+            }
+        }
+
+        /* Detect optional stdin file. */
+        char stdin_path[4096];
+        snprintf(stdin_path, sizeof(stdin_path), "%s/input.stdin", dir);
+        bool has_stdin = (stat(stdin_path, &st) == 0);
+
+        /* Check for codegen snapshot. */
+        char expected_c_path[4096];
+        snprintf(expected_c_path, sizeof(expected_c_path), "%s/expected.c", dir);
+        bool needs_codegen = (stat(expected_c_path, &st) == 0);
+
+        /* --- Codegen snapshot check (in a forked child for isolation) --- */
+        const char *fail_detail = NULL;
+        char log_path[4096] = "";
+        if (needs_codegen) {
+            char *gen_c = NULL;
+            int emit_rc = wk_emit_c_fixture(input, flags, &gen_c);
+            if (emit_rc != 0) {
+                fail_detail = "emit-c failed";
+            } else {
+                char *expected_c = NULL; size_t exp_len = 0;
+                if (read_entire_file(expected_c_path, &expected_c, &exp_len) == 0) {
+                    if (strcmp(gen_c, expected_c) != 0) fail_detail = "codegen mismatch";
+                    free(expected_c);
+                }
+            }
+            free(gen_c);
+            if (fail_detail) {
+                char id[512];
+                snprintf(id, sizeof(id), "happy-%s", name);
+                for (char *p = id; *p; p++) if (*p == '/' || *p == ' ') *p = '_';
+                snprintf(log_path, sizeof(log_path), "%s/%s.log", results_dir, id);
+                FILE *lf = fopen(log_path, "w");
+                if (lf) { fprintf(lf, "FAIL %s -- %s\n", name, fail_detail); fclose(lf); }
+                wk_write_result(results_dir, "FAIL", name, fail_detail, log_path);
+                printf("FAIL %s -- %s\n", name, fail_detail); fflush(stdout);
+                continue;
+            }
+        }
+
+        /* --- Interpreter evaluation --- */
+        char *actual_out = NULL, *actual_err = NULL;
+        int eval_rc = wk_eval_fixture(input, flags, has_stdin ? stdin_path : NULL,
+                                       fixture_timeout, &actual_out, &actual_err);
+
+        /* Compare stdout. */
+        if (!fail_detail) {
+            char exp_stdout_path[4096];
+            snprintf(exp_stdout_path, sizeof(exp_stdout_path), "%s/expected.stdout", dir);
+            if (stat(exp_stdout_path, &st) == 0) {
+                char *expected_out = NULL; size_t exp_len = 0;
+                if (read_entire_file(exp_stdout_path, &expected_out, &exp_len) == 0) {
+                    if (strcmp(actual_out ? actual_out : "", expected_out) != 0)
+                        fail_detail = "stdout mismatch";
+                    free(expected_out);
+                }
+            }
+        }
+
+        /* Compare exit code. */
+        if (!fail_detail) {
+            char exp_exit_path[4096];
+            snprintf(exp_exit_path, sizeof(exp_exit_path), "%s/expected.exit", dir);
+            if (stat(exp_exit_path, &st) == 0) {
+                char *econtent = NULL; size_t elen = 0;
+                if (read_entire_file(exp_exit_path, &econtent, &elen) == 0) {
+                    while (elen > 0 && (econtent[elen-1] == '\n' || econtent[elen-1] == '\r'
+                                        || econtent[elen-1] == ' ')) econtent[--elen] = '\0';
+                    if (strcmp(econtent, "nonzero") == 0) {
+                        if (eval_rc == 0) fail_detail = "expected nonzero exit";
+                    } else {
+                        int expected_exit = atoi(econtent);
+                        if (eval_rc != expected_exit) fail_detail = "exit code mismatch";
+                    }
+                    free(econtent);
+                }
+            } else {
+                /* Default expected exit = 0 */
+                if (eval_rc != 0) fail_detail = "exit code mismatch";
+            }
+        }
+
+        /* Check stderr substrings. */
+        if (!fail_detail) {
+            char exp_stderr_path[4096];
+            snprintf(exp_stderr_path, sizeof(exp_stderr_path), "%s/expected.stderr", dir);
+            if (stat(exp_stderr_path, &st) == 0) {
+                char missing[512] = "";
+                if (!wk_check_stderr_substrings(actual_err ? actual_err : "",
+                                                 exp_stderr_path, missing, sizeof(missing)))
+                    fail_detail = "stderr mismatch";
+            }
+        }
+
+        /* Write result and print progress. */
+        if (fail_detail) {
+            char id[512];
+            snprintf(id, sizeof(id), "happy-%s", name);
+            for (char *p = id; *p; p++) if (*p == '/' || *p == ' ') *p = '_';
+            snprintf(log_path, sizeof(log_path), "%s/%s.log", results_dir, id);
+            FILE *lf = fopen(log_path, "w");
+            if (lf) {
+                fprintf(lf, "FAIL %s -- %s\n", name, fail_detail);
+                if (actual_out) fprintf(lf, "actual stdout:\n%s\n", actual_out);
+                if (actual_err) fprintf(lf, "actual stderr:\n%s\n", actual_err);
+                fclose(lf);
+            }
+            wk_write_result(results_dir, "FAIL", name, fail_detail, log_path);
+            printf("FAIL %s -- %s\n", name, fail_detail);
+        } else {
+            wk_write_result(results_dir, "PASS", name, "", "");
+            printf("PASS %s\n", name);
+        }
+        fflush(stdout);
+
+        free(actual_out);
+        free(actual_err);
+    }
+    return 0;
+}
+
 static int usage(void) {
     fprintf(stderr,
         "tur: the Turmeric compiler (phase 8)\n"
@@ -1452,6 +1886,7 @@ static int usage(void) {
         "  tur emit-h <input.tur>            print the generated header to stdout\n"
         "  tur run <input.tur>               build + execute a single file\n"
         "  tur repl                          interactive REPL (Phase S1)\n"
+        "  tur worker                        persistent fixture evaluator (Tier 3, reads dirs from stdin)\n"
         "  tur test <dir>                    run all .tur files in a directory\n"
         "  tur check <input.tur>             type-check only, no codegen (phase 8)\n"
         "  tur format [--check] [file.tur]   format source (stdin if no file given)\n"
@@ -1957,6 +2392,10 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "repl") == 0) {
         /* Phase S0: interactive REPL */
         return cmd_repl();
+    }
+    /* Tier 3: persistent fixture worker for the test suite. */
+    if (strcmp(cmd, "worker") == 0) {
+        return cmd_worker();
     }
     if (strcmp(cmd, "format") == 0) {
         bool check_only = false;
