@@ -1,0 +1,17 @@
+;; SS0b + SS1 + SS2: session-choose-left -- select the Left branch of a Choose session.
+;;
+;; Creates a [Session[Choose Close Close], Session[Branch Close Close]] pair.
+;; The main thread picks Left with choose-left; a receiver thread uses offer
+;; and handles the Left branch by printing "left".
+;;
+;; Expected output: left
+(defn main [] :int
+  (let [[s r] (make-session (Choose Close Close))]
+    (let [t (spawn (fn []
+                     (match (offer r)
+                       (Left r) (do (close r) (println "left"))
+                       (Right r) (close r))))]
+      (let [s (choose-left s)]
+        (close s)
+        (join t))))
+  0)

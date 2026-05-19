@@ -1,0 +1,16 @@
+;; SS0b + SS1 + SS2: session-send -- send a value on a typed session channel.
+;;
+;; Creates a [Session[Send int Close], Session[Recv int Close]] pair.
+;; A receiver thread recvs the value and prints it; the main thread sends 42.
+;;
+;; Expected output: 42
+(defn main [] :int
+  (let [[s r] (make-session (Send int Close))]
+    (let [t (spawn (fn []
+                     (let [[n r] (recv r)]
+                       (println n)
+                       (close r))))]
+      (let [s (send s 42)]
+        (close s)
+        (join t))))
+  0)

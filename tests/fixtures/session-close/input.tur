@@ -1,0 +1,13 @@
+;; SS0b + SS1 + SS2: session-close -- close both endpoints of a trivial session.
+;;
+;; Close is self-dual: make-session Close creates two Session[Close] endpoints.
+;; Both endpoints can be closed immediately with no sends or recvs.
+;; Because neither endpoint has any messages to exchange, no thread is needed.
+;;
+;; Expected output: closed
+(defn main [] :int
+  (let [[a b] (make-session Close)]
+    (close a)
+    (close b)
+    (println "closed"))
+  0)

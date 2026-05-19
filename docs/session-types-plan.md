@@ -11,7 +11,7 @@
 > [linear-types-plan.md](linear-types-plan.md),
 > [effect-rows-plan.md](effect-rows-plan.md)
 >
-> **Last updated:** 2026-05-18 (P0 and P1 resolved)
+> **Last updated:** 2026-05-18 (P0, P1, P2 resolved; SS0a ready to begin)
 
 ---
 
@@ -258,10 +258,13 @@ src/project.c       -- Global-type projection algorithm (new file, SS6)
 src/codegen.c       -- Message passing primitives; channel struct
 src/runtime/        -- Channel runtime (typed wrappers over Phase T19
                        primitives); N-endpoint allocation and routed queues
-src/error.h/.c      -- Error codes TUR_E0200-TUR_E0249 (shared with uniqueness? or own range)
+src/compiler/diag.h -- Error codes TUR_E0210-TUR_E0212 (binary), TUR_E0220-TUR_E0223 (multi-party)
 ```
 
-> **Note:** Error code range `TUR_E0200`-`TUR_E0249` is proposed here; reconcile with uniqueness-types-plan.md which also proposes `TUR_E0200`. Final allocation should be coordinated. Within this range, binary sessions use `TUR_E0210`-`TUR_E0212` and multi-party sessions use `TUR_E0220`-`TUR_E0223`.
+> **Note:** Error code allocation resolved by P0 (2026-05-18). Binary sessions use
+> `TUR_E0210`-`TUR_E0212`; multi-party sessions use `TUR_E0220`-`TUR_E0223`.
+> `TUR_E0200`-`TUR_E0202` are already allocated to uniqueness types (UT0).
+> The actual implementation file is `src/compiler/diag.h` (not `src/error.h`).
 
 ---
 
@@ -333,12 +336,43 @@ projection algorithm is wired into the compiler.
 
 ### P2 — Test Fixture Baseline
 
-- [ ] Create `tests/fixtures/sessions/` alongside SS0a
-- [ ] Add at least one happy-path and one negative-case fixture per core
+- [x] Create session fixture baseline alongside SS0a
+- [x] Add at least one happy-path and one negative-case fixture per core
   operation: `send`, `recv`, `close`, `offer`, `choose-left`, `choose-right`
-- [ ] Each subsequent SS phase adds its own fixtures; this baseline gives every
+- [x] Each subsequent SS phase adds its own fixtures; this baseline gives every
   phase a clear red/green criterion from day one and prevents regressions as
   later phases layer on top
+
+  **Fixtures created (2026-05-18):** All fixtures use the `-Xsessions` flag
+  and are intentionally red until SS0b-SS1 are implemented.
+
+  Happy-path (`tests/fixtures/session-*/`):
+
+  | Fixture | Operations | Expected output |
+  |---|---|---|
+  | `session-send` | `make-session`, `send`, `recv`, `close`, `spawn`, `join` | `42` |
+  | `session-recv` | `make-session`, `recv`, `send`, `close`, `spawn`, `join` | `99` |
+  | `session-close` | `make-session Close`, `close` (both endpoints, no thread needed) | `closed` |
+  | `session-offer` | `make-session`, `offer`, `choose-left`, `send`, `recv`, `close` | `7` |
+  | `session-choose-left` | `make-session`, `choose-left`, `offer`, `close` | `left` |
+  | `session-choose-right` | `make-session`, `choose-right`, `offer`, `close` | `right` |
+
+  Negative (`tests/fixtures/errors/session-*/`):
+
+  | Fixture | Violation | Expected code |
+  |---|---|---|
+  | `session-send-invalid` | `send` on `Session[Recv int Close]` | `TUR-E0212` |
+  | `session-recv-invalid` | `recv` on `Session[Send int Close]` | `TUR-E0212` |
+  | `session-close-incomplete` | `close` on `Session[Send int Close]` (not at `Close` step) | `TUR-E0212` |
+  | `session-dropped` | Session channel goes out of scope mid-protocol | `TUR-E0211` |
+  | `session-offer-invalid` | `offer` on `Session[Send int Close]` (not a `Branch`) | `TUR-E0212` |
+  | `session-choose-invalid` | `choose-left` on `Session[Recv int Close]` (not a `Choose`) | `TUR-E0212` |
+
+  Note on happy-path fixtures: session channels are linear and require concurrent
+  endpoints. The happy-path fixtures use a planned `spawn`/`join` API (a zero-arg
+  closure that moves linear captures into the new thread). This API will be
+  implemented as part of SS2/SS4. The `session-close` fixture is the exception:
+  `Close` is self-dual, so both endpoints can be closed in the same thread.
 
 ### P3 — Projection Algorithm Spike (required before SS5)
 
