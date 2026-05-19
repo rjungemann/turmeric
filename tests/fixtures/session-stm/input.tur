@@ -1,0 +1,45 @@
+;; SS4: session-stm -- session channels used alongside STM TVars.
+;;
+;; Documents the intended integration pattern: session operations are NOT
+;; transactional variables and must NOT be placed inside (atomically ...).
+;; The correct pattern is:
+;;   1. Compute or read a value (e.g. from STM) outside the session protocol.
+;;   2. Use the value to communicate over a session channel.
+;;
+;; Session channels are not retryable like STM TVars; a session send/recv inside
+;; an atomically block would not have transactional semantics and could cause
+;; deadlock.  Deadlock detection is the programmer's responsibility.
+;; See docs/session-types-plan.md for details on limitations.
+;;
+;; This fixture demonstrates that a ^linear session channel coexists with a
+;; locally-computed integer (stand-in for an STM-read value).
+;;
+;; Expected output: 42
+
+(defn spawn [f :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(tid, NULL, tur_session_thread_wrapper, f);
+  return (void *)tid;
+  ```)
+
+(defn join [t :ptr<void>] :int
+  ```c
+  pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  return 0;
+  ```)
+
+(defn main [] :int
+  ;; A value that would normally come from an STM read (kept simple here).
+  (let [val 42]
+    ;; Communicate the value over a session channel (outside any STM block).
+    (let [[s r] (make-session (Send int Close))]
+      (let [t (spawn (fn []
+                       (let [[v r] (recv r)]
+                         (println v)
+                         (close r))))]
+        (let [s (send s val)]
+          (close s)
+          (join t)))))
+  0)
