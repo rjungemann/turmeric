@@ -1328,6 +1328,86 @@ Expr *elab_match(Elab *e, const Form *call) {
         return out;
     }
 
+    /* SS2: Session offer match — when scrutinee is TY_SESSION_OFFER, handle
+     * Left/Right branch patterns.  The scrutinee carries the tag as int64_t
+     * and keeps the channel pointer in val_exprs[0] for arm binding. */
+    if (g_sessions_enabled && scrutinee->type.kind == TY_SESSION_OFFER) {
+        MatchArm *arms = (MatchArm *)arena_alloc(e->arena, n_arms * sizeof(MatchArm));
+        Type result_type = TYPE_UNKNOWN;
+        const Symbol *sym_left  = intern_cstr(e->st, "Left");
+        const Symbol *sym_right = intern_cstr(e->st, "Right");
+
+        for (uint32_t ai = 0; ai < n_arms; ai++) {
+            uint32_t base = arm_start[ai];
+            Form *pat_form  = call->as.list.items[base];
+            Form *body_form = call->as.list.items[arm_has_guard[ai] ? base + 3 : base + 1];
+            MatchPattern *pat = &arms[ai].pattern;
+            memset(pat, 0, sizeof(MatchPattern));
+            arms[ai].guard = NULL;
+            pat->union_member_idx = -1;
+
+            if (pat_form->tag == F_SYM) {
+                /* Wildcard */
+                pat->is_wildcard = true;
+                Expr *body = elab_form(e, body_form);
+                if (!body) return NULL;
+                arms[ai].body = body;
+                if (result_type.kind == TY_UNKNOWN) result_type = body->type;
+                continue;
+            }
+            if (pat_form->tag == F_LIST && pat_form->as.list.len == 2 &&
+                pat_form->as.list.items[0]->tag == F_SYM &&
+                pat_form->as.list.items[1]->tag == F_SYM) {
+                const Symbol *ctor_sym = pat_form->as.list.items[0]->as.sym;
+                Form *var_form = pat_form->as.list.items[1];
+                int arm_tag;
+                Type arm_type;
+                if (ctor_sym == sym_left) {
+                    arm_tag = 0;
+                    arm_type = scrutinee->type.as.session_.fst
+                        ? *scrutinee->type.as.session_.fst : type_from_kind(TY_PTR_VOID);
+                } else if (ctor_sym == sym_right) {
+                    arm_tag = 1;
+                    arm_type = scrutinee->type.as.session_.snd
+                        ? *scrutinee->type.as.session_.snd : type_from_kind(TY_PTR_VOID);
+                } else {
+                    diag_emit(DIAG_ERROR, pat_form->span,
+                              "session offer match: expected Left or Right pattern, got '%s'",
+                              ctor_sym->name);
+                    return NULL;
+                }
+                pat->union_member_idx = arm_tag;
+                pat->n_bindings = 1;
+                pat->bindings = (Binding **)arena_alloc(e->arena, sizeof(Binding *));
+                Binding *fb = binding_new(e, var_form->as.sym, arm_type,
+                                          false, false, var_form->span);
+                if (arm_type.copy_kind == CK_LINEAR) fb->is_linear = true;
+                pat->bindings[0] = fb;
+                Scope arm_scope;
+                scope_init(&arm_scope, e->scope);
+                Scope *saved_scope = e->scope;
+                e->scope = &arm_scope;
+                scope_add(&arm_scope, fb);
+                Expr *body = elab_form(e, body_form);
+                e->scope = saved_scope;
+                scope_free(&arm_scope);
+                if (!body) return NULL;
+                arms[ai].body = body;
+                if (result_type.kind == TY_UNKNOWN) result_type = body->type;
+                continue;
+            }
+            diag_emit(DIAG_ERROR, pat_form->span,
+                      "session offer match: expected (Left var) or (Right var) pattern");
+            return NULL;
+        }
+        if (result_type.kind == TY_UNKNOWN) result_type = TYPE_NIL;
+        Expr *out = expr_new(e->arena, EX_MATCH, result_type, call->span);
+        out->as.match_.scrutinee = scrutinee;
+        out->as.match_.arms = arms;
+        out->as.match_.n_arms = n_arms;
+        return out;
+    }
+
     /* If the scrutinee type is not already TY_ADT (e.g. an untyped param
      * that defaulted to TY_INT), or is TY_ADT with no def (e.g. return of
      * ADT-returning fn without result_full_type), infer the ADT from the

@@ -498,6 +498,28 @@ const char *type_name(Type t) {
             buf_putc(&tmp, '\0');
             return tur_strdup(tmp.data);
         }
+        case TY_SESSION_RECV_PAIR: {
+            Buf tmp;
+            buf_init(&tmp);
+            buf_puts(&tmp, "RecvPair[");
+            buf_puts(&tmp, t.as.session_.fst ? type_name(*t.as.session_.fst) : "?");
+            buf_puts(&tmp, ", ");
+            buf_puts(&tmp, t.as.session_.snd ? type_name(*t.as.session_.snd) : "?");
+            buf_puts(&tmp, "]");
+            buf_putc(&tmp, '\0');
+            return tur_strdup(tmp.data);
+        }
+        case TY_SESSION_OFFER: {
+            Buf tmp;
+            buf_init(&tmp);
+            buf_puts(&tmp, "Offer[");
+            buf_puts(&tmp, t.as.session_.fst ? type_name(*t.as.session_.fst) : "?");
+            buf_puts(&tmp, ", ");
+            buf_puts(&tmp, t.as.session_.snd ? type_name(*t.as.session_.snd) : "?");
+            buf_puts(&tmp, "]");
+            buf_putc(&tmp, '\0');
+            return tur_strdup(tmp.data);
+        }
     }
     return "?";
 }
@@ -793,6 +815,24 @@ static void type_name_buf(Buf *b, Type t) {
             else buf_putc(b, '?');
             buf_putc(b, ']');
             break;
+        case TY_SESSION_RECV_PAIR:
+            buf_puts(b, "RecvPair[");
+            if (t.as.session_.fst) type_name_buf(b, *t.as.session_.fst);
+            else buf_putc(b, '?');
+            buf_puts(b, ", ");
+            if (t.as.session_.snd) type_name_buf(b, *t.as.session_.snd);
+            else buf_putc(b, '?');
+            buf_putc(b, ']');
+            break;
+        case TY_SESSION_OFFER:
+            buf_puts(b, "Offer[");
+            if (t.as.session_.fst) type_name_buf(b, *t.as.session_.fst);
+            else buf_putc(b, '?');
+            buf_puts(b, ", ");
+            if (t.as.session_.snd) type_name_buf(b, *t.as.session_.snd);
+            else buf_putc(b, '?');
+            buf_putc(b, ']');
+            break;
     }
 }
 
@@ -912,6 +952,10 @@ const char *type_c_name(Type t) {
             return "/*session-protocol*/ void";
         case TY_SESSION_PAIR:
             return "/*session-pair*/ void";
+        case TY_SESSION_RECV_PAIR:
+            return "/*session-recv-pair*/ void";
+        case TY_SESSION_OFFER:
+            return "int64_t";
     }
     return "void";
 }
@@ -1110,6 +1154,8 @@ static bool type_is_guarded_recursive_helper(const Type *t, const char *rec_name
         case TY_SESSION_REC:
             return type_is_guarded_recursive_helper(t->as.session_.fst, rec_name, depth + 1);
         case TY_SESSION_PAIR:
+        case TY_SESSION_RECV_PAIR:
+        case TY_SESSION_OFFER:
             return type_is_guarded_recursive_helper(t->as.session_.fst, rec_name, depth + 1)
                 && (!t->as.session_.snd
                     || type_is_guarded_recursive_helper(t->as.session_.snd, rec_name, depth + 1));
@@ -1209,8 +1255,10 @@ const char *typekind_to_string(TypeKind k) {
         case TY_CLOSE:        return "Close";
         case TY_CHOOSE:       return "Choose";
         case TY_BRANCH:       return "Branch";
-        case TY_SESSION_REC:  return "Rec";
-        case TY_SESSION_PAIR: return "SessionPair";
+        case TY_SESSION_REC:       return "Rec";
+        case TY_SESSION_PAIR:      return "SessionPair";
+        case TY_SESSION_RECV_PAIR: return "RecvPair";
+        case TY_SESSION_OFFER:     return "Offer";
         default:          return "<?>";
     }
 }

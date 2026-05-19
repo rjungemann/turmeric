@@ -178,15 +178,15 @@ The standard library (`stdlib/typeclass.tur`) provides:
 (defn main [] :int
   (do
     ;; Identity law: fmap id x = x
-    (let [opt (__opt_some 42)]
-      (let [result (__fmap_option opt id)]
-        (println (__opt_unwrap result))))  ;; 42
+    (let [opt    (__opt_some 42)
+          result (__fmap_option opt id)]
+      (println (__opt_unwrap result)))  ;; 42
 
     ;; Composition law: fmap (f . g) x = fmap f (fmap g x)
-    (let [opt (__opt_some 5)]
-      (let [lhs (__fmap_option opt (fn [x] (times2 (inc x))))]
-        (let [rhs (__fmap_option (__fmap_option opt inc) times2)]
-          (println (= (__opt_unwrap lhs) (__opt_unwrap rhs))))))  ;; true
+    (let [opt (__opt_some 5)
+          lhs (__fmap_option opt (fn [x] (times2 (inc x))))
+          rhs (__fmap_option (__fmap_option opt inc) times2)]
+      (println (= (__opt_unwrap lhs) (__opt_unwrap rhs))))  ;; true
     0))
 ```
 
@@ -196,11 +196,9 @@ Use `bind` directly to chain monadic operations:
 
 ```turmeric
 ;; Sequence two Option computations
-(let [step1 (__bind_option (__opt_some 3) (fn [x] (__opt_some (* x 2))))]
-  ;; step1 = some 6
-  (let [result (__bind_option step1 (fn [y] (__opt_some (+ y 1))))]
-    ;; result = some 7
-    (println (__opt_unwrap result))))  ;; 7
+(let [step1  (__bind_option (__opt_some 3) (fn [x] (__opt_some (* x 2))))  ;; step1 = some 6
+      result (__bind_option step1 (fn [y] (__opt_some (+ y 1))))]           ;; result = some 7
+  (println (__opt_unwrap result)))  ;; 7
 ```
 
 ## do-m Notation
@@ -238,27 +236,27 @@ typeclass dispatch.
 
 ```turmeric
 ;; Non-capturing closure
-(let [opt (__opt_some 10)]
-  (let [result (.fmap opt (fn [x] (* x x)))]
-    (println (__opt_unwrap result))))  ;; 100
+(let [opt    (__opt_some 10)
+      result (.fmap opt (fn [x] (* x x)))]
+  (println (__opt_unwrap result)))  ;; 100
 
 ;; Capturing closure -- delta is captured from the enclosing scope
-(let [delta 5]
-  (let [opt (__opt_some 10)]
-    (let [result (.fmap opt (fn [x] (+ x delta)))]
-      (println (__opt_unwrap result)))))  ;; 15
+(let [delta  5
+      opt    (__opt_some 10)
+      result (.fmap opt (fn [x] (+ x delta)))]
+  (println (__opt_unwrap result)))  ;; 15
 
 ;; Multi-capture
-(let [a 2]
-  (let [b 3]
-    (let [opt (__opt_some 10)]
-      (let [result (.fmap opt (fn [x] (+ (* x a) b)))]
-        (println (__opt_unwrap result))))))  ;; 23
+(let [a      2
+      b      3
+      opt    (__opt_some 10)
+      result (.fmap opt (fn [x] (+ (* x a) b)))]
+  (println (__opt_unwrap result)))  ;; 23
 
 ;; Capturing closure through .bind
-(let [scale 3]
-  (let [r (.bind (__opt_some 4) (fn [x] (__opt_some (* x scale))))]
-    (println (__opt_unwrap r))))  ;; 12
+(let [scale 3
+      r     (.bind (__opt_some 4) (fn [x] (__opt_some (* x scale))))]
+  (println (__opt_unwrap r)))  ;; 12
 ```
 
 Named functions (non-closures) also work unchanged:
@@ -266,17 +264,17 @@ Named functions (non-closures) also work unchanged:
 ```turmeric
 (defn double [x] :int (* x 2))
 
-(let [opt (__opt_some 7)]
-  (let [result (.fmap opt double)]
-    (println (__opt_unwrap result))))  ;; 14
+(let [opt    (__opt_some 7)
+      result (.fmap opt double)]
+  (println (__opt_unwrap result)))  ;; 14
 ```
 
 `do-m` with captured variables works too:
 
 ```turmeric
-(let [factor 3]
-  (let [r (do-m x (__opt_some 5) (__opt_some (* x factor)))]
-    (println (__opt_unwrap r))))  ;; 15
+(let [factor 3
+      r      (do-m x (__opt_some 5) (__opt_some (* x factor)))]
+  (println (__opt_unwrap r)))  ;; 15
 ```
 
 ## Binary Type Constructors (Bifunctor)

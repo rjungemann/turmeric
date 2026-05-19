@@ -75,9 +75,9 @@ value is a compile-time error.
   (set! x (+ x 1)))
 
 (defn bad [] : unit
-  (let [x 42]
-    (let [y x]       ;; alias created
-      (modify x))))  ;; ERROR TUR-E0200: 'x' is not unique (aliased by 'y')
+  (let [x 42
+        y x]       ;; alias created
+    (modify x)))  ;; ERROR TUR-E0200: 'x' is not unique (aliased by 'y')
 ```
 
 Passing a `^unique` value to a function **transfers ownership** -- the source

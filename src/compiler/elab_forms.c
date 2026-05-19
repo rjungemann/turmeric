@@ -93,6 +93,9 @@ Expr *elab_let(Elab *e, const Form *call) {
              * type-level operations (send/recv/offer/choose-*) already emit their
              * own diagnostics before returning. */
             uint32_t n_elems = vec_pat->as.list.len;
+            /* SS2: For session pair types we track the first binding so vi=1 can
+             * reference vi=0's C name via __TUR_CAP_0__. */
+            uint32_t first_bind_idx = n_binds;
             for (uint32_t vi = 0; vi < n_elems; vi++) {
                 Form *vname_f = vec_pat->as.list.items[vi];
                 if (vname_f->tag != F_SYM) {
@@ -100,10 +103,10 @@ Expr *elab_let(Elab *e, const Form *call) {
                               "vector destructuring elements must be symbols");
                     rc = -1; break;
                 }
-                /* SS1: TY_SESSION_PAIR decomposes into the two typed session endpoints.
-                 * For all other types: elem 0 gets the init type; rest get TY_INT placeholder. */
+                /* Determine the type for this element. */
                 Type elem_type;
-                if (init_v->type.kind == TY_SESSION_PAIR) {
+                if (init_v->type.kind == TY_SESSION_PAIR ||
+                    init_v->type.kind == TY_SESSION_RECV_PAIR) {
                     if (vi == 0 && init_v->type.as.session_.fst) {
                         elem_type = *init_v->type.as.session_.fst;
                     } else if (vi == 1 && init_v->type.as.session_.snd) {
@@ -126,8 +129,65 @@ Expr *elab_let(Elab *e, const Form *call) {
                     binding_moved_during_init = (bool *)realloc(binding_moved_during_init, cap * sizeof(bool));
                     if (!binding_moved_during_init) { fprintf(stderr, "tur: oom\n"); abort(); }
                 }
+                /* SS2: For session pair types, create separate EX_INLINE_C inits
+                 * so each binding gets its own expression (avoids double evaluation). */
+                Expr *elem_init = init_v; /* default: share the original init */
+                if (init_v->type.kind == TY_SESSION_PAIR) {
+                    /* make-session destructuring:
+                     *   vi=0: tur_session_new() -- allocates the channel
+                     *   vi=1: __TUR_CAP_0__ with captures[0]=vi0_binding -- same ptr */
+                    Expr *ic_expr = expr_new(e->arena, EX_INLINE_C, elem_type, vec_span);
+                    InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
+                    ic->return_type = elem_type;
+                    ic->val_exprs = NULL; ic->n_val_exprs = 0;
+                    if (vi == 0) {
+                        static const char new_code[] = "tur_session_new()";
+                        ic->code = strslice(new_code, sizeof(new_code) - 1);
+                        ic->captures = NULL; ic->n_captures = 0;
+                    } else {
+                        static const char ref_code[] = "__TUR_VAL_0__";
+                        ic->code = strslice(ref_code, sizeof(ref_code) - 1);
+                        ic->captures = NULL; ic->n_captures = 0;
+                        ic->val_exprs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+                        Expr *chan_var = expr_new(e->arena, EX_VAR,
+                                                  binds[first_bind_idx].binding->type, vec_span);
+                        chan_var->as.var.binding = binds[first_bind_idx].binding;
+                        ic->val_exprs[0] = chan_var;
+                        ic->n_val_exprs = 1;
+                    }
+                    ic_expr->as.inline_c_.inline_c = ic;
+                    elem_init = ic_expr;
+                } else if (init_v->type.kind == TY_SESSION_RECV_PAIR) {
+                    /* recv destructuring:
+                     *   vi=0: tur_session_recv(__TUR_VAL_0__) -- reads the value
+                     *   vi=1: __TUR_VAL_0__ -- same channel ptr (now Session[Q]) */
+                    InlineC *orig_ic = init_v->as.inline_c_.inline_c;
+                    Binding *chan_b = (orig_ic->n_val_exprs > 0 && orig_ic->val_exprs[0]
+                        && orig_ic->val_exprs[0]->kind == EX_VAR)
+                        ? orig_ic->val_exprs[0]->as.var.binding : NULL;
+                    Expr *ic_expr = expr_new(e->arena, EX_INLINE_C, elem_type, vec_span);
+                    InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
+                    ic->return_type = elem_type;
+                    ic->captures = NULL; ic->n_captures = 0;
+                    if (vi == 0) {
+                        static const char recv_code[] = "tur_session_recv(__TUR_VAL_0__)";
+                        ic->code = strslice(recv_code, sizeof(recv_code) - 1);
+                    } else {
+                        static const char ref_code2[] = "__TUR_VAL_0__";
+                        ic->code = strslice(ref_code2, sizeof(ref_code2) - 1);
+                    }
+                    if (chan_b) {
+                        ic->val_exprs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+                        Expr *chan_var = expr_new(e->arena, EX_VAR, chan_b->type, vec_span);
+                        chan_var->as.var.binding = chan_b;
+                        ic->val_exprs[0] = chan_var;
+                        ic->n_val_exprs = 1;
+                    } else { ic->val_exprs = NULL; ic->n_val_exprs = 0; }
+                    ic_expr->as.inline_c_.inline_c = ic;
+                    elem_init = ic_expr;
+                }
                 binds[n_binds].binding = vb;
-                binds[n_binds].init = init_v;
+                binds[n_binds].init = elem_init;
                 binding_moved_during_init[n_binds] = false;
                 n_binds++;
             }
