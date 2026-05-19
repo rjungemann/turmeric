@@ -69,6 +69,7 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 
 ## Reference
 
+- **[compiler-flags-guide.md](compiler-flags-guide.md)** — All `-X` feature flags and diagnostic flags: status, what each enables, dependency graph, and common combinations
 - **[test-runner-contract.md](test-runner-contract.md)** — Test framework API and contract
 
 ---
