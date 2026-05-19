@@ -1,0 +1,39 @@
+;; SS6: (project G R) resolves to a concrete Session type.
+;; Ping protocol: A sends int to B, B sends int back, both close.
+;; project(Ping, A) = Session[Send int (Recv int Close)]
+;; project(Ping, B) = Session[Recv int (Send int Close)]
+(defprotocol Ping [A B]
+  (-> A B int)
+  (-> B A int))
+
+(defn spawn [f :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(tid, NULL, tur_session_thread_wrapper, f);
+  return (void *)tid;
+  ```)
+
+(defn join [t :ptr<void>] :int
+  ```c
+  pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  return 0;
+  ```)
+
+(defn role-a [^linear ch :(project Ping A)] :nil
+  (let [ch (send ch 42)]
+    (let [[v ch] (recv ch)]
+      (println v)
+      (close ch))))
+
+(defn role-b [^linear ch :(project Ping B)] :nil
+  (let [[v ch] (recv ch)]
+    (let [ch (send ch v)]
+      (close ch))))
+
+(defn main [] :int
+  (let [[ca cb] (make-session (Send int (Recv int Close)))]
+    (let [t (spawn (fn [] (role-b cb)))]
+      (role-a ca)
+      (join t)))
+  0)

@@ -1228,6 +1228,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_recv_from     = intern_cstr(st, "recv-from");
     e->sym_global_type   = intern_cstr(st, "Global");
     e->sym_role_type     = intern_cstr(st, "Role");
+    e->sym_project_type  = intern_cstr(st, "project");
     e->global_protocols  = NULL;
     e->n_global_protocols = 0;
     e->cap_global_protocols = 0;
