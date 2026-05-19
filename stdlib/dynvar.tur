@@ -1,11 +1,59 @@
-;; stdlib/dynvar.tur -- binding conveyance for dynamic vars (Phase DV3)
+;; stdlib/dynvar.tur -- common dynamic vars and binding conveyance (DV3-DV4)
 ;;
-;; Provides spawn-conveying: spawns a new OS thread whose initial dynamic var
-;; bindings are a snapshot of the parent thread's current binding frame.
+;; Declares the standard set of dynamic vars and provides spawn-conveying.
 ;;
-;; Requires: the calling program must use -Xdynamic-vars and define at least
-;; one defdynamic (otherwise _tur_spawn_conveying is not emitted by the
-;; compiler and this function will fail to link).
+;; Common vars:
+;;   *log-level*       :int   -- logging verbosity threshold (default 1)
+;;   *locale*          :cstr  -- BCP-47 locale tag for formatting (default "en-US")
+;;   *random-seed*     :int   -- RNG seed; 0 means use system entropy (default 0)
+;;   *current-module*  :cstr  -- module name for structured logging (default "")
+;;
+;; Requires: -Xdynamic-vars flag.
+
+;;; *log-level* -- logging verbosity threshold.
+;;;
+;;; Convention: 0 = verbose/debug, 1 = info (default), 2 = warn, 3 = error.
+;;; Code that conditionally logs checks (>= level *log-level*) or similar.
+;;;
+;;; Example:
+;;;   (binding [*log-level* 0]
+;;;     (log-debug "entering handler"))  ; visible only in verbose mode
+;;;
+;;; Since: DV4
+(defdynamic *log-level* :int 1)
+
+;;; *locale* -- BCP-47 locale tag used by formatting and i18n functions.
+;;;
+;;; Example:
+;;;   (binding [*locale* "fr-FR"]
+;;;     (format-currency 1234))  ; uses French number formatting
+;;;
+;;; Since: DV4
+(defdynamic *locale* :cstr "en-US")
+
+;;; *random-seed* -- seed for the per-thread RNG.
+;;;
+;;; 0 (the default) means the RNG should use system entropy (e.g. /dev/urandom).
+;;; Set to a non-zero value for reproducible results in tests.
+;;;
+;;; Example:
+;;;   (binding [*random-seed* 42]
+;;;     (random-int 100))  ; reproducible random number
+;;;
+;;; Since: DV4
+(defdynamic *random-seed* :int 0)
+
+;;; *current-module* -- module name tag for structured log output.
+;;;
+;;; Set by a module's preamble so that log lines include the module name
+;;; without threading a logger argument through every function.
+;;;
+;;; Example:
+;;;   (binding [*current-module* "auth"]
+;;;     (log-info "token validated"))  ; log line shows "auth: token validated"
+;;;
+;;; Since: DV4
+(defdynamic *current-module* :cstr "")
 
 ;;; spawn-conveying -- spawn a thread that inherits the current binding frame.
 ;;;

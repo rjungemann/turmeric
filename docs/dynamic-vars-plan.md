@@ -1,6 +1,6 @@
 # Dynamic Vars -- Implementation Plan (DV0-DV4)
 
-> **Status:** DV0-DV3 complete; DV4 not started
+> **Status:** DV0-DV4 complete
 >
 > **Target:** v3 or later
 >
@@ -10,7 +10,7 @@
 > [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md)
 > (§8 Effect Types, §1 Linear Types)
 >
-> **Last updated:** 2026-05-19 (P0-P2 complete; DV0-DV3 complete: TY_DYNVAR, EX_DEFDYNAMIC, elab_dynvars.c, -Xdynamic-vars flag, pthread_key_t codegen, binding frame stack, cleanup guards, root-value init, spawn-conveying snapshot infrastructure, stdlib/dynvar.tur)
+> **Last updated:** 2026-05-19 (DV4 complete: stdlib common vars, integration test fixtures, guide, tur explain entries confirmed)
 
 ---
 
@@ -538,23 +538,31 @@ The snapshot values are **copied** (via the var type's copy semantics), not shar
 
 ---
 
-## Phase DV4 -- Integration
+## Phase DV4 -- Integration ✓ COMPLETE
 
 **Goal:** Stdlib dynamic vars, effect integration guidance, and complete documentation.
 
-- [ ] Add common dynamic vars to `stdlib/dynvar.tur`:
+- [x] Add common dynamic vars to `stdlib/dynvar.tur`:
   - `*log-level* : int` (default `1`)
-  - `*locale* : str` (default `"en-US"`)
+  - `*locale* : cstr` (default `"en-US"`) -- `:cstr` not `:str`; `:str` is CK_MOVE and cannot be held in a dynamic var
   - `*random-seed* : int` (default `0` -- `0` means use system entropy)
-  - `*current-module* : str` (default `""` -- set by module preamble, useful for structured logging)
-- [ ] Document interaction pattern with algebraic effects: dynamic vars for configuration-style context, effects for interceptable operations. Provide a guide section "Effects vs. Dynamic Vars" in `docs/guides/`.
-- [ ] `tur explain TUR_E0600`, `TUR_E0601`, `TUR_E0602`, `TUR_E0603`, `TUR_E0604`, `TUR_E0605` entries
-- [ ] Integration tests:
-  - Scoped log level (Example 1)
-  - Test fixture injection (Example 2)
-  - Thread-local locale (Example 3)
-  - `spawn-conveying` snapshot isolation (Example 4)
-  - Negative: `set!` outside `binding`, type mismatch, linear type rejection, `set!` in `atomically`
+  - `*current-module* : cstr` (default `""` -- set by module preamble, useful for structured logging)
+- [x] Document interaction pattern with algebraic effects: dynamic vars for configuration-style context, effects for interceptable operations. Guide written at `docs/guides/dynamic-vars-guide.md` with "Effects vs. Dynamic Vars" comparison table.
+- [x] `tur explain TUR_E0600`, `TUR_E0601`, `TUR_E0602`, `TUR_E0603`, `TUR_E0604`, `TUR_E0605` entries -- confirmed already fully implemented in `src/compiler/diag.c`
+- [x] Integration tests (all passing):
+  - `dynvar-log-level` -- scoped log level; root default `1`, override to `0` (script mode)
+  - `dynvar-inject` -- test fixture injection via `*db*` pointer
+  - `dynvar-thread-locale` -- dynamic scoping: callee sees binding from callsite (script mode)
+  - `dynvar-convey-isolation` -- `spawn-conveying` snapshot isolation: parent mutates after spawn, child sees snapshot
+  - Negative: `dynvar-set-no-binding`, `dynvar-set-non-dynamic`, `dynvar-type-mismatch`, `dynvar-linear-type`, `dynvar-set-in-atomic` (all from P2 baseline)
+
+### Known limitation: root-value init with explicit `defn main`
+
+When a program defines an explicit `(defn main [] ...)`, the `defdynamic` root-value initializer expressions are **not emitted** in the generated C `main()`. The root C global is zero-initialized (0 for `:int`, NULL for `:cstr`). This means non-zero or non-null root defaults are silently ignored when `defn main` is present.
+
+**Workaround:** Use script mode (no explicit `defn main`) for programs that rely on non-zero root values. The root-init statement IS emitted in the script-mode generated main. Fixtures `dynvar-log-level` and `dynvar-thread-locale` use script mode for this reason. `dynvar-inject` uses `defn main` safely because its `*db*` root default is `0` (matches C zero-init).
+
+This is tracked as a separate bug; fixing it requires emitting root-value initializer statements before the first user statement in the generated `main()` when `defn main` is present.
 
 ---
 
