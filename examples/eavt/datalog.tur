@@ -1,0 +1,452 @@
+;; EAVT Database -- Datalog-style query layer
+;;
+;; Implements a minimal pattern-matching query engine inspired by Datalog.
+;; Queries are expressed as sequences of Pattern clauses; each clause
+;; narrows a set of "bindings" (variable -> value maps).
+;;
+;; Key concepts:
+;;   Term     -- a query component: Var (bind), Lit (literal), Wild (skip)
+;;   Clause   -- a pattern over (entity-term, attr-term, value-term)
+;;   Binding  -- an assoc-list mapping variable names to Value pointers
+;;   datalog  -- run a list of clauses, return all surviving bindings
+;;
+;; Run with: ./build/tur examples/eavt/datalog.tur
+
+;; ============================================================
+;; Value ADT
+;; ============================================================
+
+(defdata Value
+  (LongVal :int)
+  (StrVal :int)
+  (EntityVal :int))
+
+;; ============================================================
+;; Datum
+;; ============================================================
+
+(defn datum-new [entity :int attr :int value :int tx :int] :int
+  ```c
+  int64_t *d = malloc(4 * sizeof(int64_t));
+  d[0] = entity; d[1] = attr; d[2] = value; d[3] = tx;
+  return (int64_t)(intptr_t)d;
+  ```)
+
+(defn datum-entity [d :int] :int
+  ```c return ((int64_t*)(intptr_t)d)[0]; ```)
+
+(defn datum-attr [d :int] :int
+  ```c return ((int64_t*)(intptr_t)d)[1]; ```)
+
+(defn datum-value [d :int] :int
+  ```c return ((int64_t*)(intptr_t)d)[2]; ```)
+
+(defn datum-tx [d :int] :int
+  ```c return ((int64_t*)(intptr_t)d)[3]; ```)
+
+;; ============================================================
+;; Database
+;; ============================================================
+
+(defn db-new [] :int
+  ```c
+  int64_t *db = malloc(2 * sizeof(int64_t));
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v->data = NULL; v->len = 0; v->cap = 0;
+  db[0] = (int64_t)(intptr_t)v;
+  db[1] = 0;
+  return (int64_t)(intptr_t)db;
+  ```)
+
+(defn db-count [db :int] :int
+  ```c
+  int64_t *p = (int64_t*)(intptr_t)db;
+  struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)p[0];
+  return (int64_t)v->len;
+  ```)
+
+(defn db-ref [db :int i :int] :int
+  ```c
+  int64_t *p = (int64_t*)(intptr_t)db;
+  struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)p[0];
+  return v->data[i];
+  ```)
+
+(defn db-assert! [db :int entity :int attr :int value :int] :int
+  ```c
+  int64_t *p = (int64_t*)(intptr_t)db;
+  p[1] += 1;
+  int64_t tx = p[1];
+  int64_t *d = malloc(4 * sizeof(int64_t));
+  d[0] = entity; d[1] = attr; d[2] = value; d[3] = tx;
+  struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)p[0];
+  if (v->len >= v->cap) {
+    size_t nc = v->cap > 0 ? v->cap * 2 : 8;
+    int64_t *nd = malloc(sizeof(int64_t) * nc);
+    for (size_t i = 0; i < v->len; i++) nd[i] = v->data[i];
+    free(v->data); v->data = nd; v->cap = nc;
+  }
+  v->data[v->len++] = (int64_t)(intptr_t)d;
+  return tx;
+  ```)
+
+;; ============================================================
+;; Result vec
+;; ============================================================
+
+(defn rvec-new [] :ptr<void>
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v->data = NULL; v->len = 0; v->cap = 0;
+  return v;
+  ```)
+
+(defn rvec-len [v :ptr<void>] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  return (int)vec->len;
+  ```)
+
+(defn rvec-get [v :ptr<void> i :int] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  return (int)vec->data[i];
+  ```)
+
+(defn rvec-push! [v :ptr<void> val :int]
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  if (vec->len >= vec->cap) {
+    size_t nc = vec->cap > 0 ? vec->cap * 2 : 8;
+    int64_t *nd = malloc(sizeof(int64_t) * nc);
+    for (size_t i = 0; i < vec->len; i++) nd[i] = vec->data[i];
+    free(vec->data); vec->data = nd; vec->cap = nc;
+  }
+  vec->data[vec->len++] = val;
+  ```)
+
+;; ============================================================
+;; String helpers
+;; ============================================================
+
+(defn cstr->int [s :cstr] :int
+  ```c return (int64_t)(intptr_t)s; ```)
+
+(defn cstr-eq? [a :int b :int] :bool
+  ```c
+  return strcmp((const char*)(intptr_t)a, (const char*)(intptr_t)b) == 0;
+  ```)
+
+(defn println-cstr [s :int] :nil
+  ```c printf("%s\n", (const char*)(intptr_t)s); ```)
+
+;; ============================================================
+;; Value constructors and equality
+;; ============================================================
+
+(defn long-val [n :int] :int  (LongVal n))
+(defn str-val  [s :cstr] :int (StrVal (cstr->int s)))
+(defn entity-val [e :int] :int (EntityVal e))
+
+(defn print-value [v :int] :nil
+  (match v
+    (LongVal n)   (println n)
+    (StrVal s)    (println-cstr s)
+    (EntityVal e) (println e)))
+
+(defn value-eq? [a :int b :int] :bool
+  (match a
+    (LongVal x)   (match b (LongVal y)   (= x y)        _ false)
+    (StrVal x)    (match b (StrVal y)    (cstr-eq? x y) _ false)
+    (EntityVal x) (match b (EntityVal y) (= x y)        _ false)))
+
+;; ============================================================
+;; Term ADT
+;;
+;; A Term represents one component of a pattern clause:
+;;   Var  -- a variable name (cstr pointer); will be bound if free
+;;   Lit  -- a literal Value pointer to match against
+;;   Wild -- matches anything; binds nothing
+;; ============================================================
+
+(defdata Term
+  (Var :int)   ;; variable name as cstr ptr
+  (Lit :int)   ;; Value ADT pointer (as int)
+  (Wild))      ;; match anything, bind nothing
+
+;; mk-var -- construct a Var term from a cstr literal
+(defn mk-var [name :cstr] :int
+  (Var (cstr->int name)))
+
+;; mk-lit -- construct a Lit term from a Value pointer
+(defn mk-lit [val :int] :int
+  (Lit val))
+
+;; mk-wild -- construct a Wild term
+(defn mk-wild [] :int
+  (Wild))
+
+;; ============================================================
+;; Binding -- assoc list of (var-name-ptr, value-ptr) pairs
+;;
+;; Layout: each cell is int64_t[3] = {var-ptr, val-ptr, next-ptr}
+;; An empty binding is represented as 0 (null pointer).
+;; ============================================================
+
+;; bind-new -- create an empty binding
+(defn bind-new [] :int
+  0)
+
+;; bind-set -- prepend (var -> val) to binding; returns new binding head
+(defn bind-set [binding :int var :int val :int] :int
+  ```c
+  int64_t *cell = malloc(3 * sizeof(int64_t));
+  cell[0] = var; cell[1] = val; cell[2] = binding;
+  return (int64_t)(intptr_t)cell;
+  ```)
+
+;; bind-get -- look up var in binding; returns val or -1 if not found
+(defn bind-get [binding :int var :int] :int
+  ```c
+  int64_t *p = (int64_t*)(intptr_t)binding;
+  while (p != NULL) {
+    if (strcmp((const char*)(intptr_t)p[0], (const char*)(intptr_t)var) == 0)
+      return p[1];
+    p = (int64_t*)(intptr_t)p[2];
+  }
+  return -1;
+  ```)
+
+;; ============================================================
+;; Term matching and extension
+;; ============================================================
+
+;; term-matches? -- check whether a term is consistent with a datum component
+;; If the term is a Var that is already bound, the bound value must equal val.
+;; Unbound Vars and Wild always match.
+(defn term-matches? [term :int val :int binding :int] :bool
+  (match term
+    (Wild)   true
+    (Lit v)  (value-eq? v val)
+    (Var name)
+      (let [existing (bind-get binding name)]
+        (if (= existing -1)
+          true
+          (value-eq? existing val)))))
+
+;; term-extend -- if term is an unbound Var, add (var -> val) to binding
+;; Returns the updated binding (or the same binding if no new binding added).
+(defn term-extend [term :int val :int binding :int] :int
+  (match term
+    (Wild)     binding
+    (Lit _)    binding
+    (Var name)
+      (let [existing (bind-get binding name)]
+        (if (= existing -1)
+          (bind-set binding name val)
+          binding))))
+
+;; ============================================================
+;; Pattern clause: (entity-term, attr-term, value-term)
+;;
+;; A pattern clause is stored as int64_t[3] = {e-term, a-term, v-term}.
+;; Use mk-pattern to construct one.
+;; ============================================================
+
+;; mk-pattern -- create a pattern clause from three terms
+(defn mk-pattern [e-term :int a-term :int v-term :int] :int
+  ```c
+  int64_t *p = malloc(3 * sizeof(int64_t));
+  p[0] = e_term; p[1] = a_term; p[2] = v_term;
+  return (int64_t)(intptr_t)p;
+  ```)
+
+(defn pattern-e [pat :int] :int
+  ```c return ((int64_t*)(intptr_t)pat)[0]; ```)
+
+(defn pattern-a [pat :int] :int
+  ```c return ((int64_t*)(intptr_t)pat)[1]; ```)
+
+(defn pattern-v [pat :int] :int
+  ```c return ((int64_t*)(intptr_t)pat)[2]; ```)
+
+;; ============================================================
+;; match-one-datum
+;;
+;; Try to extend binding by unifying a datum with a pattern.
+;; Returns the extended binding on success, or -1 on failure.
+;; ============================================================
+
+(defn match-one-datum [datum :int pat :int binding :int] :int
+  (let [e-term (pattern-e pat)]
+    (let [a-term (pattern-a pat)]
+      (let [v-term (pattern-v pat)]
+        ;; Wrap entity and attr as Values for uniform handling
+        (let [e-val  (EntityVal (datum-entity datum))]
+          (let [a-val  (StrVal (datum-attr datum))]
+            (let [v-val  (datum-value datum)]
+              (if (not (term-matches? e-term e-val binding))
+                -1
+                (if (not (term-matches? a-term a-val binding))
+                  -1
+                  (if (not (term-matches? v-term v-val binding))
+                    -1
+                    (let [b1 (term-extend e-term e-val binding)]
+                      (let [b2 (term-extend a-term a-val b1)]
+                        (term-extend v-term v-val b2)))))))))))))
+
+;; ============================================================
+;; match-pattern
+;;
+;; Expand a set of bindings by matching each datum against pat.
+;; For each (binding, datum) pair where unification succeeds,
+;; the extended binding is added to the result set.
+;; ============================================================
+
+(defn match-pattern [db :int pat :int bindings :ptr<void>] :ptr<void>
+  (let [result (rvec-new)]
+    (let [nb (rvec-len bindings)]
+      (let [nd (db-count db)]
+        (let [^mut bi 0]
+          (while (< bi nb)
+            (do
+              (let [b (rvec-get bindings bi)]
+                (let [^mut di 0]
+                  (while (< di nd)
+                    (do
+                      (let [datum (db-ref db di)]
+                        (let [b2 (match-one-datum datum pat b)]
+                          (when (not (= b2 -1))
+                            (rvec-push! result b2))))
+                      (set! di (+ di 1))))))
+              (set! bi (+ bi 1))))))
+    result))
+
+;; ============================================================
+;; Clause list
+;;
+;; A clause list is an rvec of pattern pointers (each an int).
+;; Use clauses-new and clauses-add to build one.
+;; ============================================================
+
+(defn clauses-new [] :ptr<void>
+  (rvec-new))
+
+(defn clauses-add [clauses :ptr<void> pat :int] :nil
+  (rvec-push! clauses pat))
+
+;; ============================================================
+;; datalog -- run all clauses, return final bindings
+;;
+;; Starts with one empty binding, then refines it through each clause.
+;; ============================================================
+
+(defn datalog [db :int clauses :ptr<void>] :ptr<void>
+  (let [initial (rvec-new)]
+    (rvec-push! initial (bind-new))
+    (let [^mut bindings initial]
+      (let [nc (rvec-len clauses)]
+        (let [^mut ci 0]
+          (while (< ci nc)
+            (do
+              (let [pat (rvec-get clauses ci)]
+                (set! bindings (match-pattern db pat bindings)))
+              (set! ci (+ ci 1)))))
+        bindings))))
+
+;; ============================================================
+;; Binding lookup helper for demo output
+;; ============================================================
+
+;; binding-get-str -- get a string value from a binding by var name
+(defn binding-get-str [binding :int var-name :cstr] :int
+  (let [val (bind-get binding (cstr->int var-name))]
+    (if (= val -1)
+      0
+      (match val
+        (StrVal s) s
+        _ 0))))
+
+;; binding-get-entity -- get an entity value from a binding by var name
+(defn binding-get-entity [binding :int var-name :cstr] :int
+  (let [val (bind-get binding (cstr->int var-name))]
+    (if (= val -1)
+      -1
+      (match val
+        (EntityVal e) e
+        _ -1))))
+
+;; ============================================================
+;; Demo
+;; ============================================================
+
+(defn demo [] :nil
+  (let [db (db-new)]
+
+    ;; --- Build a small user/post database ---
+    ;; Users
+    (db-assert! db 1 (cstr->int ":user/name") (str-val "Alice"))
+    (db-assert! db 2 (cstr->int ":user/name") (str-val "Bob"))
+
+    ;; Posts (entity=3 by Alice, entity=4 by Bob)
+    (db-assert! db 3 (cstr->int ":post/title")  (str-val "Hello from Alice"))
+    (db-assert! db 3 (cstr->int ":post/author") (entity-val 1))
+
+    (db-assert! db 4 (cstr->int ":post/title")  (str-val "Bob's Guide"))
+    (db-assert! db 4 (cstr->int ":post/author") (entity-val 2))
+
+    ;; --- Query 1: find all user names ---
+    ;; Pattern: [?e :user/name ?name]
+    (println "-- All user names --")
+    (let [clauses1 (clauses-new)]
+      (clauses-add clauses1
+        (mk-pattern
+          (mk-var "?e")
+          (mk-lit (str-val ":user/name"))
+          (mk-var "?name")))
+      (let [results1 (datalog db clauses1)]
+        (let [^mut i 0]
+          (while (< i (rvec-len results1))
+            (do
+              (let [b (rvec-get results1 i)]
+                (let [name-ptr (binding-get-str b "?name")]
+                  (when (not (= name-ptr 0))
+                    (println-cstr name-ptr))))
+              (set! i (+ i 1)))))))
+
+    ;; --- Query 2: find posts by Alice (two-clause join) ---
+    ;; Clause 1: [?alice :user/name "Alice"]  -- bind ?alice to Alice's entity
+    ;; Clause 2: [?post :post/author ?alice]  -- find posts where author = ?alice
+    ;; Clause 3: [?post :post/title ?title]   -- pull the title
+    (println "-- Posts by Alice (Datalog join) --")
+    (let [clauses2 (clauses-new)]
+      (clauses-add clauses2
+        (mk-pattern
+          (mk-var "?alice")
+          (mk-lit (str-val ":user/name"))
+          (mk-lit (str-val "Alice"))))
+      (clauses-add clauses2
+        (mk-pattern
+          (mk-var "?post")
+          (mk-lit (str-val ":post/author"))
+          (mk-var "?alice")))
+      (clauses-add clauses2
+        (mk-pattern
+          (mk-var "?post")
+          (mk-lit (str-val ":post/title"))
+          (mk-var "?title")))
+      (let [results2 (datalog db clauses2)]
+        (let [^mut i 0]
+          (while (< i (rvec-len results2))
+            (do
+              (let [b (rvec-get results2 i)]
+                (let [title-ptr (binding-get-str b "?title")]
+                  (when (not (= title-ptr 0))
+                    (println-cstr title-ptr))))
+              (set! i (+ i 1)))))))
+
+    nil))
+
+(defn main [] :int
+  (demo)
+  0)

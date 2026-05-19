@@ -1,0 +1,352 @@
+;; EAVT Database -- extended query API
+;;
+;; Builds on the minimal implementation to add:
+;;   - Value equality comparison
+;;   - Attribute+value queries (q-av)
+;;   - Temporal as-of queries (db-as-of)
+;;   - Pull API (get all facts for an entity)
+;;   - History (sorted by tx)
+;;   - Retraction (encoding as :db/retract facts)
+;;
+;; Run with: ./build/tur examples/eavt/query.tur
+
+;; ============================================================
+;; Value ADT
+;; ============================================================
+
+(defdata Value
+  (LongVal :int)
+  (StrVal :int)
+  (EntityVal :int))
+
+;; ============================================================
+;; Datum
+;; ============================================================
+
+(defn datum-new [entity :int attr :int value :int tx :int] :int
+  ```c
+  int64_t *d = malloc(4 * sizeof(int64_t));
+  d[0] = entity; d[1] = attr; d[2] = value; d[3] = tx;
+  return (int64_t)(intptr_t)d;
+  ```)
+
+(defn datum-entity [d :int] :int
+  ```c return ((int64_t*)(intptr_t)d)[0]; ```)
+
+(defn datum-attr [d :int] :int
+  ```c return ((int64_t*)(intptr_t)d)[1]; ```)
+
+(defn datum-value [d :int] :int
+  ```c return ((int64_t*)(intptr_t)d)[2]; ```)
+
+(defn datum-tx [d :int] :int
+  ```c return ((int64_t*)(intptr_t)d)[3]; ```)
+
+;; ============================================================
+;; Database
+;; ============================================================
+
+(defn db-new [] :int
+  ```c
+  int64_t *db = malloc(2 * sizeof(int64_t));
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v->data = NULL; v->len = 0; v->cap = 0;
+  db[0] = (int64_t)(intptr_t)v;
+  db[1] = 0;
+  return (int64_t)(intptr_t)db;
+  ```)
+
+(defn db-count [db :int] :int
+  ```c
+  int64_t *p = (int64_t*)(intptr_t)db;
+  struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)p[0];
+  return (int64_t)v->len;
+  ```)
+
+(defn db-ref [db :int i :int] :int
+  ```c
+  int64_t *p = (int64_t*)(intptr_t)db;
+  struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)p[0];
+  return v->data[i];
+  ```)
+
+(defn db-assert! [db :int entity :int attr :int value :int] :int
+  ```c
+  int64_t *p = (int64_t*)(intptr_t)db;
+  p[1] += 1;
+  int64_t tx = p[1];
+  int64_t *d = malloc(4 * sizeof(int64_t));
+  d[0] = entity; d[1] = attr; d[2] = value; d[3] = tx;
+  struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)p[0];
+  if (v->len >= v->cap) {
+    size_t nc = v->cap > 0 ? v->cap * 2 : 8;
+    int64_t *nd = malloc(sizeof(int64_t) * nc);
+    for (size_t i = 0; i < v->len; i++) nd[i] = v->data[i];
+    free(v->data); v->data = nd; v->cap = nc;
+  }
+  v->data[v->len++] = (int64_t)(intptr_t)d;
+  return tx;
+  ```)
+
+;; ============================================================
+;; Result vec
+;; ============================================================
+
+(defn rvec-new [] :ptr<void>
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v->data = NULL; v->len = 0; v->cap = 0;
+  return v;
+  ```)
+
+(defn rvec-len [v :ptr<void>] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  return (int)vec->len;
+  ```)
+
+(defn rvec-get [v :ptr<void> i :int] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  return (int)vec->data[i];
+  ```)
+
+(defn rvec-push! [v :ptr<void> val :int]
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  if (vec->len >= vec->cap) {
+    size_t nc = vec->cap > 0 ? vec->cap * 2 : 8;
+    int64_t *nd = malloc(sizeof(int64_t) * nc);
+    for (size_t i = 0; i < vec->len; i++) nd[i] = vec->data[i];
+    free(vec->data); vec->data = nd; vec->cap = nc;
+  }
+  vec->data[vec->len++] = val;
+  ```)
+
+;; ============================================================
+;; String helpers
+;; ============================================================
+
+(defn cstr->int [s :cstr] :int
+  ```c return (int64_t)(intptr_t)s; ```)
+
+(defn cstr-eq? [a :int b :int] :bool
+  ```c
+  return strcmp((const char*)(intptr_t)a, (const char*)(intptr_t)b) == 0;
+  ```)
+
+(defn println-cstr [s :int] :nil
+  ```c printf("%s\n", (const char*)(intptr_t)s); ```)
+
+;; ============================================================
+;; Value constructors and printer
+;; ============================================================
+
+(defn long-val [n :int] :int
+  (LongVal n))
+
+(defn str-val [s :cstr] :int
+  (StrVal (cstr->int s)))
+
+(defn entity-val [e :int] :int
+  (EntityVal e))
+
+(defn print-value [v :int] :nil
+  (match v
+    (LongVal n)   (println n)
+    (StrVal s)    (println-cstr s)
+    (EntityVal e) (println e)))
+
+;; ============================================================
+;; Base query combinators
+;; ============================================================
+
+(defn db-q [db :int pred] :ptr<void>
+  (let [n (db-count db)]
+    (let [result (rvec-new)]
+      (let [^mut i 0]
+        (while (< i n)
+          (do
+            (let [d (db-ref db i)]
+              (when (pred d)
+                (rvec-push! result d)))
+            (set! i (+ i 1))))
+        result))))
+
+(defn q-entity [e :int]
+  (fn [d] (= (datum-entity d) e)))
+
+(defn q-attr [a :cstr]
+  (fn [d] (cstr-eq? (datum-attr d) (cstr->int a))))
+
+(defn q-ea [e :int a :cstr]
+  (fn [d]
+    (and (= (datum-entity d) e)
+         (cstr-eq? (datum-attr d) (cstr->int a)))))
+
+(defn q-and [p q]
+  (fn [d] (and (p d) (q d))))
+
+(defn q-or [p q]
+  (fn [d] (or (p d) (q d))))
+
+(defn q-not [p]
+  (fn [d] (not (p d))))
+
+;; ============================================================
+;; Value equality
+;; ============================================================
+
+;; Compare two Value ADT instances for equality
+(defn value-eq? [a :int b :int] :bool
+  (match a
+    (LongVal x)   (match b (LongVal y)   (= x y)        _ false)
+    (StrVal x)    (match b (StrVal y)    (cstr-eq? x y) _ false)
+    (EntityVal x) (match b (EntityVal y) (= x y)        _ false)))
+
+;; ============================================================
+;; Extended query combinators
+;; ============================================================
+
+;; q-av -- query datums by attribute name and value
+(defn q-av [a :cstr v :int]
+  (fn [d]
+    (and (cstr-eq? (datum-attr d) (cstr->int a))
+         (value-eq? (datum-value d) v))))
+
+;; db-as-of -- return an rvec of all datums at or before as-of-tx
+(defn db-as-of [db :int as-of-tx :int] :ptr<void>
+  (db-q db (fn [d] (<= (datum-tx d) as-of-tx))))
+
+;; pull -- get all datums for entity e
+(defn pull [db :int e :int] :ptr<void>
+  (db-q db (fn [d] (= (datum-entity d) e))))
+
+;; history -- return datums for entity/attr sorted ascending by tx
+;; Uses insertion sort (suitable for tutorial-scale data)
+(defn history [db :int entity :int attr :cstr] :ptr<void>
+  (let [raw (db-q db (fn [d]
+                       (and (= (datum-entity d) entity)
+                            (cstr-eq? (datum-attr d) (cstr->int attr)))))]
+    (let [n (rvec-len raw)]
+      (let [^mut i 1]
+        (while (< i n)
+          (do
+            (let [key (rvec-get raw i)]
+              (let [^mut j (- i 1)]
+                (while (and (>= j 0)
+                            (> (datum-tx (rvec-get raw j)) (datum-tx key)))
+                  (do
+                    ```c
+                    { struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)raw;
+                      vec->data[j + 1] = vec->data[j]; }
+                    ```
+                    (set! j (- j 1))))
+                ```c
+                { struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)raw;
+                  vec->data[j + 1] = key; }
+                ```))
+            (set! i (+ i 1))))))
+    raw))
+
+;; ============================================================
+;; Retraction
+;; ============================================================
+
+;; db-retract! -- record a retraction fact for entity/attr
+;; Retraction is represented as a :db/retract fact whose value
+;; is the attribute name being retracted (as a StrVal).
+(defn db-retract! [db :int entity :int attr :cstr] :int
+  (db-assert! db entity (cstr->int ":db/retract") (StrVal (cstr->int attr))))
+
+;; retracted? -- true if entity/attr has a :db/retract at or before as-of-tx
+(defn retracted? [db :int entity :int attr :cstr as-of-tx :int] :bool
+  (let [n (db-count db)]
+    (let [^mut i 0]
+      (let [^mut found false]
+        (while (< i n)
+          (do
+            (let [d (db-ref db i)]
+              (when (and (= (datum-entity d) entity)
+                         (cstr-eq? (datum-attr d) (cstr->int ":db/retract"))
+                         (<= (datum-tx d) as-of-tx))
+                (match (datum-value d)
+                  (StrVal s) (when (cstr-eq? s (cstr->int attr)) (set! found true))
+                  _ nil)))
+            (set! i (+ i 1))))
+        found))))
+
+;; ============================================================
+;; Demo
+;; ============================================================
+
+(defn demo [] :nil
+  (let [db (db-new)]
+
+    ;; --- Alice: entity 1 ---
+    (db-assert! db 1 (cstr->int ":user/name")  (str-val "Alice"))
+    (db-assert! db 1 (cstr->int ":user/email") (str-val "alice@example.com"))
+    (let [tx-age-1 (db-assert! db 1 (cstr->int ":user/age") (long-val 30))]
+
+      ;; --- Bob: entity 2 ---
+      (db-assert! db 2 (cstr->int ":user/name")  (str-val "Bob"))
+      (db-assert! db 2 (cstr->int ":user/email") (str-val "bob@example.com"))
+      (db-assert! db 2 (cstr->int ":user/age")   (long-val 25))
+
+      ;; Later, Alice has a birthday -- assert new age
+      (db-assert! db 1 (cstr->int ":user/age") (long-val 31))
+
+      ;; -- pull: all facts for Alice --
+      (println "-- pull: all Alice facts --")
+      (let [alice-facts (pull db 1)]
+        (let [^mut i 0]
+          (while (< i (rvec-len alice-facts))
+            (do
+              (let [d (rvec-get alice-facts i)]
+                (println-cstr (datum-attr d))
+                (print-value (datum-value d)))
+              (set! i (+ i 1))))))
+
+      ;; -- as-of: snapshot before the birthday update --
+      (println "-- as-of tx-age-1: Alice's age before birthday --")
+      (let [snap (db-as-of db tx-age-1)]
+        (let [^mut i 0]
+          (while (< i (rvec-len snap))
+            (do
+              (let [d (rvec-get snap i)]
+                (when (and (= (datum-entity d) 1)
+                           (cstr-eq? (datum-attr d) (cstr->int ":user/age")))
+                  (print-value (datum-value d))))
+              (set! i (+ i 1))))))
+
+      ;; -- history: all tx for Alice's age --
+      (println "-- history: Alice :user/age across all tx --")
+      (let [hist (history db 1 ":user/age")]
+        (let [^mut i 0]
+          (while (< i (rvec-len hist))
+            (do
+              (let [d (rvec-get hist i)]
+                (println (datum-tx d))
+                (print-value (datum-value d)))
+              (set! i (+ i 1))))))
+
+      ;; -- retraction: remove Bob's email --
+      (db-retract! db 2 ":user/email")
+      (let [current-tx (db-count db)]
+        (println "-- retracted? Bob :user/email --")
+        (println (retracted? db 2 ":user/email" current-tx)))
+
+      ;; -- q-av: find user with age = 31 --
+      (println "-- q-av: entity with :user/age = 31 --")
+      (let [results (db-q db (q-av ":user/age" (long-val 31)))]
+        (let [^mut i 0]
+          (while (< i (rvec-len results))
+            (do
+              (println (datum-entity (rvec-get results i)))
+              (set! i (+ i 1))))))
+
+      nil)))
+
+(defn main [] :int
+  (demo)
+  0)

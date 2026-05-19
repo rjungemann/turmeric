@@ -1,0 +1,320 @@
+;; EAVT Database -- indexed implementation
+;;
+;; Adds a hash-chained EAVT index on top of the minimal database.
+;; The index maps (entity, attr) pairs to a linked list of matching
+;; datum pointers, enabling O(1) average-case lookup instead of
+;; a full linear scan.
+;;
+;; C struct layout:
+;;   eavt_entry: [entity :int64, attr :int64, datum :int64, next :ptr]
+;;   eavt_idx:   [buckets :ptr, nbuckets :size_t]
+;;
+;; Run with: ./build/tur examples/eavt/indexed.tur
+
+;; ============================================================
+;; Value ADT
+;; ============================================================
+
+(defdata Value
+  (LongVal :int)
+  (StrVal :int)
+  (EntityVal :int))
+
+;; ============================================================
+;; Datum
+;; ============================================================
+
+(defn datum-new [entity :int attr :int value :int tx :int] :int
+  ```c
+  int64_t *d = malloc(4 * sizeof(int64_t));
+  d[0] = entity; d[1] = attr; d[2] = value; d[3] = tx;
+  return (int64_t)(intptr_t)d;
+  ```)
+
+(defn datum-entity [d :int] :int
+  ```c return ((int64_t*)(intptr_t)d)[0]; ```)
+
+(defn datum-attr [d :int] :int
+  ```c return ((int64_t*)(intptr_t)d)[1]; ```)
+
+(defn datum-value [d :int] :int
+  ```c return ((int64_t*)(intptr_t)d)[2]; ```)
+
+(defn datum-tx [d :int] :int
+  ```c return ((int64_t*)(intptr_t)d)[3]; ```)
+
+;; ============================================================
+;; Database
+;; ============================================================
+
+(defn db-new [] :int
+  ```c
+  int64_t *db = malloc(2 * sizeof(int64_t));
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v->data = NULL; v->len = 0; v->cap = 0;
+  db[0] = (int64_t)(intptr_t)v;
+  db[1] = 0;
+  return (int64_t)(intptr_t)db;
+  ```)
+
+(defn db-count [db :int] :int
+  ```c
+  int64_t *p = (int64_t*)(intptr_t)db;
+  struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)p[0];
+  return (int64_t)v->len;
+  ```)
+
+(defn db-ref [db :int i :int] :int
+  ```c
+  int64_t *p = (int64_t*)(intptr_t)db;
+  struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)p[0];
+  return v->data[i];
+  ```)
+
+(defn db-assert! [db :int entity :int attr :int value :int] :int
+  ```c
+  int64_t *p = (int64_t*)(intptr_t)db;
+  p[1] += 1;
+  int64_t tx = p[1];
+  int64_t *d = malloc(4 * sizeof(int64_t));
+  d[0] = entity; d[1] = attr; d[2] = value; d[3] = tx;
+  struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)p[0];
+  if (v->len >= v->cap) {
+    size_t nc = v->cap > 0 ? v->cap * 2 : 8;
+    int64_t *nd = malloc(sizeof(int64_t) * nc);
+    for (size_t i = 0; i < v->len; i++) nd[i] = v->data[i];
+    free(v->data); v->data = nd; v->cap = nc;
+  }
+  v->data[v->len++] = (int64_t)(intptr_t)d;
+  return tx;
+  ```)
+
+;; ============================================================
+;; Result vec
+;; ============================================================
+
+(defn rvec-new [] :ptr<void>
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v->data = NULL; v->len = 0; v->cap = 0;
+  return v;
+  ```)
+
+(defn rvec-len [v :ptr<void>] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  return (int)vec->len;
+  ```)
+
+(defn rvec-get [v :ptr<void> i :int] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  return (int)vec->data[i];
+  ```)
+
+(defn rvec-push! [v :ptr<void> val :int]
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  if (vec->len >= vec->cap) {
+    size_t nc = vec->cap > 0 ? vec->cap * 2 : 8;
+    int64_t *nd = malloc(sizeof(int64_t) * nc);
+    for (size_t i = 0; i < vec->len; i++) nd[i] = vec->data[i];
+    free(vec->data); vec->data = nd; vec->cap = nc;
+  }
+  vec->data[vec->len++] = val;
+  ```)
+
+;; ============================================================
+;; String helpers
+;; ============================================================
+
+(defn cstr->int [s :cstr] :int
+  ```c return (int64_t)(intptr_t)s; ```)
+
+(defn cstr-eq? [a :int b :int] :bool
+  ```c
+  return strcmp((const char*)(intptr_t)a, (const char*)(intptr_t)b) == 0;
+  ```)
+
+(defn println-cstr [s :int] :nil
+  ```c printf("%s\n", (const char*)(intptr_t)s); ```)
+
+;; ============================================================
+;; Value constructors and printer
+;; ============================================================
+
+(defn long-val [n :int] :int  (LongVal n))
+(defn str-val  [s :cstr] :int (StrVal (cstr->int s)))
+(defn entity-val [e :int] :int (EntityVal e))
+
+(defn print-value [v :int] :nil
+  (match v
+    (LongVal n)   (println n)
+    (StrVal s)    (println-cstr s)
+    (EntityVal e) (println e)))
+
+;; ============================================================
+;; EAVT index
+;;
+;; Uses a fixed 64-bucket hash table with chaining.
+;; Each bucket is a linked list of eavt_entry nodes.
+;;
+;; struct eavt_entry {
+;;   int64_t entity;
+;;   int64_t attr;      -- cstr pointer stored as int64
+;;   int64_t datum;     -- datum pointer stored as int64
+;;   struct eavt_entry *next;
+;; };
+;;
+;; struct eavt_idx {
+;;   struct eavt_entry **buckets;
+;;   size_t nbuckets;
+;; };
+;; ============================================================
+
+;; Allocate a new 64-bucket EAVT index
+(defn eavt-idx-new [] :ptr<void>
+  ```c
+  struct eavt_entry { int64_t entity; int64_t attr; int64_t datum; struct eavt_entry *next; };
+  struct eavt_idx { struct eavt_entry **buckets; size_t nbuckets; };
+  struct eavt_idx *idx = malloc(sizeof(*idx));
+  idx->nbuckets = 64;
+  idx->buckets = calloc(64, sizeof(struct eavt_entry *));
+  return idx;
+  ```)
+
+;; Insert a datum into the EAVT index under (entity, attr)
+(defn eavt-idx-insert! [idx :ptr<void> entity :int attr :int datum :int] :nil
+  ```c
+  struct eavt_entry { int64_t entity; int64_t attr; int64_t datum; struct eavt_entry *next; };
+  struct eavt_idx { struct eavt_entry **buckets; size_t nbuckets; };
+  struct eavt_idx *i = (struct eavt_idx *)idx;
+  size_t h = (size_t)(entity * 31 + attr) % i->nbuckets;
+  struct eavt_entry *e = malloc(sizeof(*e));
+  e->entity = entity; e->attr = attr; e->datum = datum;
+  e->next = i->buckets[h];
+  i->buckets[h] = e;
+  ```)
+
+;; Lookup all datums in the EAVT index for (entity, attr).
+;; Returns a fresh rvec of matching datum pointers.
+(defn eavt-idx-lookup [idx :ptr<void> entity :int attr :int] :ptr<void>
+  ```c
+  struct eavt_entry { int64_t entity; int64_t attr; int64_t datum; struct eavt_entry *next; };
+  struct eavt_idx { struct eavt_entry **buckets; size_t nbuckets; };
+  struct { int64_t *data; size_t len; size_t cap; } *result = malloc(sizeof(*result));
+  result->data = NULL; result->len = 0; result->cap = 0;
+  struct eavt_idx *i = (struct eavt_idx *)idx;
+  size_t h = (size_t)(entity * 31 + attr) % i->nbuckets;
+  struct eavt_entry *e = i->buckets[h];
+  while (e != NULL) {
+    if (e->entity == entity && e->attr == attr) {
+      if (result->len >= result->cap) {
+        size_t nc = result->cap > 0 ? result->cap * 2 : 8;
+        int64_t *nd = malloc(sizeof(int64_t) * nc);
+        for (size_t j = 0; j < result->len; j++) nd[j] = result->data[j];
+        free(result->data); result->data = nd; result->cap = nc;
+      }
+      result->data[result->len++] = e->datum;
+    }
+    e = e->next;
+  }
+  return result;
+  ```)
+
+;; ============================================================
+;; Indexed database (idb)
+;;
+;; An idb is a pair [db-ptr, eavt-idx-ptr] stored as int64_t[2].
+;; ============================================================
+
+;; Create an indexed database wrapper
+(defn idb-new [] :int
+  ```c
+  int64_t *idb = malloc(2 * sizeof(int64_t));
+  /* db-new inline */
+  int64_t *db = malloc(2 * sizeof(int64_t));
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v->data = NULL; v->len = 0; v->cap = 0;
+  db[0] = (int64_t)(intptr_t)v; db[1] = 0;
+  idb[0] = (int64_t)(intptr_t)db;
+  /* eavt-idx-new inline */
+  struct eavt_entry { int64_t entity; int64_t attr; int64_t datum; struct eavt_entry *next; };
+  struct eavt_idx { struct eavt_entry **buckets; size_t nbuckets; };
+  struct eavt_idx *idx = malloc(sizeof(*idx));
+  idx->nbuckets = 64;
+  idx->buckets = calloc(64, sizeof(struct eavt_entry *));
+  idb[1] = (int64_t)(intptr_t)idx;
+  return (int64_t)(intptr_t)idb;
+  ```)
+
+;; Extract the raw db pointer from an idb
+(defn idb-db [idb :int] :int
+  ```c return ((int64_t*)(intptr_t)idb)[0]; ```)
+
+;; Extract the eavt index pointer from an idb
+(defn idb-idx [idb :int] :ptr<void>
+  ```c return (void*)(intptr_t)((int64_t*)(intptr_t)idb)[1]; ```)
+
+;; Assert a fact into the indexed database
+(defn idb-assert! [idb :int entity :int attr :int value :int] :int
+  (let [db  (idb-db idb)]
+    (let [idx (idb-idx idb)]
+      (let [tx (db-assert! db entity attr value)]
+        ;; The datum is the last entry in the db vector
+        (let [n (db-count db)]
+          (let [datum (db-ref db (- n 1))]
+            (eavt-idx-insert! idx entity attr datum)
+            tx))))))
+
+;; Query by entity and attribute using the EAVT index (fast path)
+(defn idb-q-ea [idb :int entity :int attr :cstr] :ptr<void>
+  (eavt-idx-lookup (idb-idx idb) entity (cstr->int attr)))
+
+;; ============================================================
+;; Demo
+;; ============================================================
+
+(defn demo [] :nil
+  (let [idb (idb-new)]
+
+    ;; Build some data
+    (idb-assert! idb 1 (cstr->int ":user/name")  (str-val "Alice"))
+    (idb-assert! idb 1 (cstr->int ":user/age")   (long-val 30))
+    (idb-assert! idb 1 (cstr->int ":user/email") (str-val "alice@example.com"))
+
+    (idb-assert! idb 2 (cstr->int ":user/name")  (str-val "Bob"))
+    (idb-assert! idb 2 (cstr->int ":user/age")   (long-val 25))
+    (idb-assert! idb 2 (cstr->int ":user/email") (str-val "bob@example.com"))
+
+    (idb-assert! idb 3 (cstr->int ":user/name")  (str-val "Carol"))
+    (idb-assert! idb 3 (cstr->int ":user/age")   (long-val 28))
+
+    ;; Indexed lookup: find Alice's name (entity=1, attr=:user/name)
+    (println "-- idb-q-ea entity=1 :user/name --")
+    (let [results (idb-q-ea idb 1 ":user/name")]
+      (let [^mut i 0]
+        (while (< i (rvec-len results))
+          (do
+            (print-value (datum-value (rvec-get results i)))
+            (set! i (+ i 1))))))
+
+    ;; Indexed lookup: find Bob's age
+    (println "-- idb-q-ea entity=2 :user/age --")
+    (let [results (idb-q-ea idb 2 ":user/age")]
+      (let [^mut i 0]
+        (while (< i (rvec-len results))
+          (do
+            (print-value (datum-value (rvec-get results i)))
+            (set! i (+ i 1))))))
+
+    ;; Indexed lookup for entity that has no such attribute
+    (println "-- idb-q-ea entity=3 :user/email (should be empty) --")
+    (let [results (idb-q-ea idb 3 ":user/email")]
+      (println (rvec-len results)))
+
+    nil))
+
+(defn main [] :int
+  (demo)
+  0)
