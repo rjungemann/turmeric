@@ -1,0 +1,47 @@
+;; SS8: session-mp-effects -- multi-party session channels and algebraic effects coexist.
+;;
+;; A MpLog effect is declared for logging. Role A sends a value to B while
+;; performing log effects; the handler intercepts MpLog and prints the message.
+
+(defprotocol Echo [A B]
+  (-> A B int)
+  (-> B A int))
+
+(defeffect MpLog [msg :cstr] :nil)
+
+(defn spawn [f :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(tid, NULL, tur_session_thread_wrapper, f);
+  return (void *)tid;
+  ```)
+
+(defn join [t :ptr<void>] :int
+  ```c
+  pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  return 0;
+  ```)
+
+(defn role-a [^linear ch :(Role Echo A) val :int] :int
+  (perform (MpLog "sending 99"))
+  (let [ch (send-to ch B val)]
+    (let [[result ch] (recv-from ch B)]
+      (perform (MpLog "received 99"))
+      (close ch)
+      result)))
+
+(defn role-b [^linear ch :(Role Echo B)] :nil
+  (let [[v ch] (recv-from ch A)]
+    (let [ch (send-to ch A v)]
+      (close ch))))
+
+(defn main [] :int
+  (let [[ra rb] (make-protocol Echo)]
+    (let [t (spawn (fn [] (role-b rb)))]
+      (let [result
+            (handle (role-a ra 99)
+              (MpLog [msg] k) (do (println msg) (resume k nil)))]
+        (println result)
+        (join t))))
+  0)
