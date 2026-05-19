@@ -1,0 +1,27 @@
+;; stdlib/dynvar.tur -- binding conveyance for dynamic vars (Phase DV3)
+;;
+;; Provides spawn-conveying: spawns a new OS thread whose initial dynamic var
+;; bindings are a snapshot of the parent thread's current binding frame.
+;;
+;; Requires: the calling program must use -Xdynamic-vars and define at least
+;; one defdynamic (otherwise _tur_spawn_conveying is not emitted by the
+;; compiler and this function will fail to link).
+
+;;; spawn-conveying -- spawn a thread that inherits the current binding frame.
+;;;
+;;; Parameters:
+;;;   f -- zero-arg closure to run on the new thread
+;;;
+;;; Returns:
+;;;   A ptr<void> thread handle. Pass to thread-join or thread-detach.
+;;;
+;;; Example:
+;;;   (binding [*log-level* 2]
+;;;     (let [t (spawn-conveying (fn [] (println *log-level*)))]
+;;;       (thread-join t)))
+;;;
+;;; Since: DV3
+(defn spawn-conveying [f :ptr<void>] #{Unsafe} :ptr<void>
+  ```c
+  return (void *)(intptr_t)_tur_spawn_conveying((int64_t)(intptr_t)f);
+  ```)

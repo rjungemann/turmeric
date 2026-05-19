@@ -1,6 +1,6 @@
 # Dynamic Vars -- Implementation Plan (DV0-DV4)
 
-> **Status:** DV0-DV2 complete; DV3 not started
+> **Status:** DV0-DV3 complete; DV4 not started
 >
 > **Target:** v3 or later
 >
@@ -10,7 +10,7 @@
 > [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md)
 > (§8 Effect Types, §1 Linear Types)
 >
-> **Last updated:** 2026-05-19 (P0-P2 complete; DV0-DV2 complete: TY_DYNVAR, EX_DEFDYNAMIC, elab_dynvars.c, -Xdynamic-vars flag, pthread_key_t codegen, binding frame stack, cleanup guards, root-value init)
+> **Last updated:** 2026-05-19 (P0-P2 complete; DV0-DV3 complete: TY_DYNVAR, EX_DEFDYNAMIC, elab_dynvars.c, -Xdynamic-vars flag, pthread_key_t codegen, binding frame stack, cleanup guards, root-value init, spawn-conveying snapshot infrastructure, stdlib/dynvar.tur)
 
 ---
 
@@ -477,7 +477,7 @@ A compiler optimization pass can hoist the `pthread_getspecific` call if the var
 
 ---
 
-## Phase DV3 -- Binding Conveyance
+## Phase DV3 -- Binding Conveyance ✓ COMPLETE
 
 **Goal:** Allow child threads to inherit a snapshot of the parent's binding frame.
 
@@ -524,6 +524,17 @@ The snapshot values are **copied** (via the var type's copy semantics), not shar
 ;;; Since: DV3
 (defn spawn-conveying [f] :thread ...)
 ```
+
+### Implementation checklist
+
+- [x] `TurDynFrame.heap` flag added to distinguish heap-allocated DV3 snapshot frames from stack-allocated DV2 binding frames; key destructor walks and frees heap frames on thread exit
+- [x] `_TurDynSnap` struct emitted per-program in `src/compiler/emit_module.c` with one typed field pair per `defdynamic` declaration
+- [x] `_tur_binding_snapshot_capture()` -- copies top-of-stack value for each registered dynamic var into a heap-allocated `_TurDynSnap`
+- [x] `_tur_binding_snapshot_install()` -- pushes heap-allocated `TurDynFrame` onto each var's per-thread key on the new thread; heap frames are freed by the key destructor on thread exit
+- [x] `_TurConveyArg` + `_tur_convey_trampoline` -- thread entry point that installs the snapshot before running the closure, then frees the snapshot
+- [x] `_tur_spawn_conveying()` -- captures snapshot, allocates `TurThreadHandle`, spawns via `_tur_convey_trampoline`; returns handle compatible with `thread-join`/`thread-detach`
+- [x] `stdlib/dynvar.tur` -- `spawn-conveying` stdlib helper with full docstring; uses `#{Unsafe}` effect tag; calls `_tur_spawn_conveying` via inline C
+- [x] `tests/fixtures/dynvar-convey/` -- happy-path fixture: child thread inherits parent `binding [*log-level* 42]` and prints `42`; passes
 
 ---
 
