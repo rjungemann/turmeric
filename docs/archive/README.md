@@ -22,6 +22,8 @@ active development or consideration. For user-facing guides and tutorials, see
 - **[gadts-followup-tasks.md](gadts-followup-tasks.md)** -- Open polish items from the GADT and intersection/union phases
 - **[intersection-union-types-plan.md](intersection-union-types-plan.md)** -- IT0-IT4 complete (IT4 partial: boxing/cast deferred)
 - **[linear-types-plan.md](linear-types-plan.md)** -- LT0-LT4 complete (gated behind `-Xlinear`; see [../guides/substructural-types-guide.md](../guides/substructural-types-guide.md))
+- **[session-types-plan.md](session-types-plan.md)** -- SS0--SS8 complete (`-Xsessions`); binary + multi-party sessions shipped (see [../guides/session-types-guide.md](../guides/session-types-guide.md))
+- **[dynamic-vars-plan.md](dynamic-vars-plan.md)** -- DV0--DV4 complete (`-Xdynamic-vars`); `defdynamic`, `binding`, `spawn-conveying`, stdlib vars shipped (see [../guides/dynamic-vars-guide.md](../guides/dynamic-vars-guide.md))
 - **[recursive-types-free-monad-plan.md](recursive-types-free-monad-plan.md)** -- Recursive types and Free monad; RF0-RF4 planned
 - **[package-management-plan.md](package-management-plan.md)** -- Spice package manager v2; see [../guides/package-management-guide.md](../guides/package-management-guide.md)
 - **[cmake-cpm-integration-plan.md](cmake-cpm-integration-plan.md)** -- CMake/CPM integration for C dependencies (v2.x target)
@@ -82,7 +84,9 @@ The following planning documents have guide counterparts in [../guides/](../guid
 | [vscode-guide.md](../guides/vscode-guide.md) | `vscode-syntax-highlighting-plan.md` |
 | [web-continuations-tutorial.md](../guides/web-continuations-tutorial.md) | `web-continuations-tutorial-plan.md` (complete) |
 | [union-intersection-types-guide.md](../guides/union-intersection-types-guide.md) | `intersection-union-types-plan.md` (IT0--IT4 complete, IT4 partial) |
-| [contract-types-guide.md](../guides/contract-types-guide.md) | `../contract-types-plan.md` (CT0--CT4 planned) |
+| [contract-types-guide.md](../guides/contract-types-guide.md) | `contract-types-plan.md` (CT0--CT4 substantially complete) |
+| [session-types-guide.md](../guides/session-types-guide.md) | `session-types-plan.md` (SS0--SS8 complete) |
+| [dynamic-vars-guide.md](../guides/dynamic-vars-guide.md) | `dynamic-vars-plan.md` (DV0--DV4 complete) |
 
 ## Historical Documents
 

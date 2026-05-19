@@ -29,7 +29,8 @@ between flags.
 | `-Xintersection-types` | ✅ Substantial (IT0–IT4) | Intersection types `(A & B)`; typeclass intersection constraints | — |
 | `-Xeffect-types` | ✅ Complete (ET0–ET4, LC0–LC3, MS0–MS4) | Row-polymorphic effect types; `forall [e]` quantification; `TY_HANDLER`; effect hierarchy (`Write ≤ IO`); linear continuations; multi-shot continuations | `--strict-effects` |
 | `-Xcontracts` | 📋 Planned (v4) | Contract types; `assert!`/`require!`/`ensure!` at the type level; contract checking in debug builds | — |
-| `-Xsessions` | 📋 Planned (v3–v4) | Session types; `Session[P]`; `Send`/`Recv`/`Close`/`Choose`/`Branch`/`Rec`; `make-session`; `defprotocol` (SS5+) | `-Xsubstructural` |
+| `-Xsessions` | ✅ Complete (SS0–SS8) | Session types; `Session[P]`; `Send`/`Recv`/`Close`/`Choose`/`Branch`/`Rec`/`Timeout`; `make-session`; `defprotocol`; multi-party `Role`/`make-protocol`/`send-to`/`recv-from` | `-Xsubstructural` |
+| `-Xdynamic-vars` | ✅ Complete (DV0–DV4) | Dynamic vars; `defdynamic`; `binding`; dynamic-var `set!`; `spawn-conveying`; stdlib common vars (`*log-level*`, `*locale*`, etc.) | — |
 | `-Xsized-types` | 📋 Planned | Sized / dependent types | — |
 
 ### Diagnostic and debug flags
@@ -55,7 +56,8 @@ Arrows mean "enables / implies":
 ```
 
 Flags that stand alone (no implications): `-Xunique`, `-Xgadt`, `-Xhkt`,
-`-Xunion-types`, `-Xintersection-types`, `-Xcontracts`, `-Xsized-types`.
+`-Xunion-types`, `-Xintersection-types`, `-Xcontracts`, `-Xdynamic-vars`,
+`-Xsized-types`.
 
 ---
 
@@ -289,33 +291,74 @@ builds.
 
 ---
 
-### `-Xsessions` — Session Types *(planned, v3–v4)*
+### `-Xsessions` — Session Types
 
-Will enable session types for type-safe, protocol-verified message passing.
+Enables session types for type-safe, protocol-verified message passing.
+Binary and multi-party sessions (SS0--SS8) are both shipped.
 
 ```clojure
-(deftype ServerProtocol []
-  (Recv Request (Send Response Close)))
-
-(defn server [^linear chan : (Session ServerProtocol)] : unit
+;; Binary: two-party request/response
+(defn server [^linear chan : (Session (Recv int (Send int Close)))] : unit
   (let [[req chan] (recv chan)]
-    (let [chan (send chan (handle-request req))]
+    (let [chan (send chan (+ req 1))]
       (close chan))))
+
+;; Multi-party: global protocol projected onto each role
+(defprotocol Ping [A B]
+  (-> A B int)
+  (-> B A int))
+
+(defn role-a [^linear ch : (Role Ping A)] : unit
+  (let [ch (send-to ch B 42)]
+    (let [[v ch] (recv-from ch B)]
+      (close ch))))
 ```
 
-Session channels are `CK_LINEAR` by construction: the channel must be used
-exactly according to its declared protocol, ending at `Close`. Duality checking
-ensures both endpoints agree on message order.
-
-Binary session types (SS0–SS4) ship first; multi-party global protocols
-(`defprotocol`) follow in SS5–SS8.
+Session channels are `CK_LINEAR` by construction. `make-session` produces
+two dual endpoints. `defprotocol` declares global N-party protocols; the
+compiler projects each role's local type and verifies it at compile time.
 
 **Implies:** `-Xsubstructural` (and therefore `-Xlinear`)
 
-**Does not imply:** `-Xgadt`, `-Xunion-types` (these interact with session
-types but are independent opt-in features)
+**Does not imply:** `-Xgadt`, `-Xunion-types` (independent opt-in features)
 
-**See also:** [session-types-plan.md](../session-types-plan.md)
+**See also:** [session-types-guide.md](session-types-guide.md),
+[session-types-plan.md](../archive/session-types-plan.md)
+
+---
+
+### `-Xdynamic-vars` — Dynamic Vars
+
+Enables typed, thread-local, dynamically-scoped mutable cells. All of
+DV0--DV4 are shipped.
+
+```clojure
+(load "stdlib/dynvar.tur")   ; provides *log-level*, *locale*, spawn-conveying
+
+(defdynamic *request-id* :cstr "none")
+
+(defn log [msg :cstr] :int
+  (println *request-id*)
+  (println msg))
+
+(defn handle [] :int
+  (binding [*request-id* "req-42"]
+    (log "processing"))
+  0)
+```
+
+`binding` pushes an override for the dynamic extent of its body; `set!`
+mutates the current thread's top frame. `spawn-conveying` passes a snapshot
+of the calling thread's binding frame to a new thread.
+
+Common stdlib vars (from `stdlib/dynvar.tur`): `*log-level*`, `*locale*`,
+`*random-seed*`, `*current-module*`.
+
+**Does not imply** any other flag. Substructural types (linear, affine, unique)
+are forbidden in dynamic vars (`TUR-E0603`).
+
+**See also:** [dynamic-vars-guide.md](dynamic-vars-guide.md),
+[dynamic-vars-plan.md](../archive/dynamic-vars-plan.md)
 
 ---
 
@@ -392,5 +435,6 @@ turc -Xsubstructural -Xgadt -Xhkt -Xhrt -Xunion-types -Xintersection-types -Xeff
 | `-Xintersection-types` | IT0–IT4 | ✅ Substantial |
 | `-Xeffect-types` | ET0–ET4, LC0–LC3, MS0–MS4 | ✅ Complete |
 | `-Xcontracts` | CT phases | 📋 Planned (v4) |
-| `-Xsessions` | SS0–SS8 | 📋 Planned (v3–v4) |
+| `-Xsessions` | SS0–SS8 | ✅ Complete |
+| `-Xdynamic-vars` | DV0–DV4 | ✅ Complete |
 | `-Xsized-types` | — | 📋 Planned |

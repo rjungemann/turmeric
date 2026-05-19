@@ -1,8 +1,8 @@
 # Session Types -- Implementation Plan (SS0-SS8)
 
-> **Status:** Draft -- Not Started
+> **Status:** Complete -- SS0--SS8 shipped (`-Xsessions`)
 >
-> **Target:** v3-v4 (binary sessions, SS0-SS4); v4-v5 (multi-party sessions, SS5-SS8)
+> **Target:** v3-v4 (binary sessions, SS0-SS4); v4-v5 (multi-party sessions, SS5-SS8) -- **both tracks complete**
 >
 > **Prerequisites:** Linear Types (LT0-LT4) complete; thread primitives (Phase T19) complete; Higher-Ranked Types (HRT1) recommended. GADTs (G0–G4) are complete and active (`-Xgadt`); Intersection & Union Types (IT0–IT4) are substantially complete (`-Xunion-types`, `-Xintersection-types`); Substructural Types (ST0–ST3) are complete (`-Xsubstructural`). See interaction notes in the [Interaction with Existing Features](#interaction-with-existing-features) table.
 >
@@ -11,7 +11,7 @@
 > [linear-types-plan.md](linear-types-plan.md),
 > [effect-rows-plan.md](effect-rows-plan.md)
 >
-> **Last updated:** 2026-05-19 (P0, P1, P2, P3, SS0a, SS0b, SS1, SS2, SS3a, SS3b, SS3c complete; SS4 is next)
+> **Last updated:** 2026-05-19 (SS0--SS8 complete; see [session-types-guide.md](../guides/session-types-guide.md))
 
 ---
 

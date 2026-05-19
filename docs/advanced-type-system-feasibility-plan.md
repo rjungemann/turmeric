@@ -1,6 +1,6 @@
 # Advanced Type System Features — Feasibility Plan for Turmeric
 
-> **Status:** In Progress — v3 features substantially complete; v4 work (Contract Types, Sized Types) not started  
+> **Status:** In Progress — v3 features complete (including Session Types SS0--SS8 and Dynamic Vars DV0--DV4); v4 work (Contract Types, Sized Types) not started  
 > **Target:** v3 or later  
 > **Prerequisites:** Phase 19 (Algebraic Effects) complete; HKT/HRT/GADT roadmap (v2) complete  
 > **Related:** [higher-ranked-types-plan.md](archive/higher-ranked-types-plan.md), [higher-kinded-types-plan.md](archive/higher-kinded-types-plan.md), [gadts-plan.md](archive/gadts-plan.md)
@@ -33,7 +33,7 @@ This document explores **type system features not yet considered** for Turmeric 
 | [Dependent Types](#2-dependent-types) | Research | Very High | ⏸ Deferred |
 | [Uniqueness Types](#3-uniqueness-types) | Medium | Medium | ✅ UT0–UT1 complete (`-Xunique`) |
 | [Substructural Type Systems](#4-substructural-type-systems) | Medium | Medium | ✅ ST0–ST3 complete (`-Xsubstructural`) |
-| [Session Types](#5-session-types) | Medium | High | 📋 Draft — Not Started |
+| [Session Types](#5-session-types) | Medium | High | ✅ SS0–SS8 complete (`-Xsessions`) |
 | [Refinement Types](#6-refinement-types) | Medium | High | ⏸ Deferred |
 | [Intersection & Union Types](#7-intersection--union-types) | High | Medium | ✅ IT0–IT4 substantially complete (`-Xunion-types`, `-Xintersection-types`) |
 | [Effect Types (Row Polymorphism)](#8-effect-types-row-polymorphism) | High | Medium | ✅ ET0–ET4 complete (`-Xeffect-types`); LC0–LC3, MS0–MS4 complete |
@@ -791,19 +791,19 @@ defn calculator-server [chan : (Session Calculator)] : unit
 
 ### Recommendation
 
-**✅ ACCEPT — High value for concurrent/distributed programming, aligns with linear types.**
+**✅ IMPLEMENTED — SS0–SS8 complete (gated behind `-Xsessions`).**
 
 Session types provide:
 1. Compile-time verification of communication protocols
-2. Deadlock prevention
+2. Deadlock prevention (binary duality + multi-party projection coherence)
 3. Type-safe concurrency patterns
 4. Natural fit with Turmeric's effect system and STM
 
-**Implementation priority:** Medium-High (after Linear Types, Substructural Types)
+Binary session types (SS0–SS4): `make-session`, `send`/`recv`/`close`, `offer`/`choose-left`/`choose-right`, `Rec` recursive protocols, `recv-timeout`, session delegation, and session subtyping are all shipped.
 
-**Prerequisites:** Linear Types (for channel linearity), Thread primitives (Phase T19)
+Multi-party session types (SS5–SS8): `defprotocol`, global protocol well-formedness checking, the Honda/Yoshida/Carbone projection algorithm (`src/compiler/elab_global.c`), `make-protocol`/`send-to`/`recv-from`, and the N-party routed-queue runtime are all shipped.
 
-**Note:** Start with simple send/receive protocols, then add choice, recursion, and delegation.
+See [session-types-plan.md](archive/session-types-plan.md) for full phase details and [guides/session-types-guide.md](guides/session-types-guide.md) for the user guide.
 
 ---
 
@@ -1500,7 +1500,7 @@ Contract types provide:
 | [Substructural Types](#4-substructural-type-systems) | Medium | High | ✅ Excellent | ✅ Excellent | Medium | **✅ ST0–ST3 complete** |
 | [Uniqueness Types](#3-uniqueness-types) | Low | Medium | ✅ Excellent | ✅ Excellent | Medium | **✅ UT0–UT1 complete** |
 | [Intersection & Union](#7-intersection--union-types) | Medium | High | ✅ Good | ✅ Good | Medium | **✅ IT0–IT4 substantially complete** |
-| [Session Types](#5-session-types) | High | High | ✅ Good | ✅ Good | Medium | **📋 Draft — Not Started** |
+| [Session Types](#5-session-types) | High | High | ✅ Good | ✅ Good | Medium | **✅ SS0–SS8 complete** |
 | [Effect Types](#8-effect-types-row-polymorphism) | High | High | ✅ Good | ✅ Excellent | Medium | **✅ ET0–ET4 complete; LC0–LC3, MS0–MS4 complete** |
 | [Sized Types](#9-sized-types) | Medium | Medium | ✅ Excellent | ✅ Good | Low | **📋 Draft — Not Started** |
 | [Contract Types](#10-contract-types) | Medium | Medium | ✅ Good | ✅ Good | Medium | **📋 Draft — Not Started** |
@@ -1533,14 +1533,14 @@ Contract types provide:
 
 ### Phase 2: Effect Types & Session Types (v3–v4)
 
-**Status:** Effect Types complete; Session Types not started.
+**Status:** Effect Types complete; Session Types complete (SS0–SS8, binary + multi-party).
 
 | Feature | Phases | Duration | Dependencies | Status |
 |---|---|---|---|---|
 | Effect Types (Row Polymorphism) | ET0–ET4 | — | Phase 19 + HRT1 | ✅ Complete (`-Xeffect-types`) |
 | Linear Continuations | LC0–LC3 | — | LT0–LT4 + ET0–ET4 | ✅ Complete |
 | Multi-Shot Continuations | MS0–MS4 | — | LC0–LC3 | ✅ Complete (MS4: `^unsafe-multishot` removal deferred) |
-| Session Types | SS0–SS8 | 16-24 weeks | Linear Types + Threads | 📋 Not Started |
+| Session Types | SS0–SS8 | — | Linear Types + Threads | ✅ Complete (`-Xsessions`; binary SS0–SS4 + multi-party SS5–SS8) |
 
 See [effects-continuations-tasks.md](effects-continuations-tasks.md) and [session-types-plan.md](session-types-plan.md).
 
@@ -1585,7 +1585,7 @@ All advanced type system features should be gated behind feature flags:
 | Union Types | `-Xunion-types` | Off | ✅ Implemented |
 | Intersection Types | `-Xintersection-types` | Off | ✅ Implemented |
 | GADTs | `-Xgadt` | Off | ✅ Implemented (G0–G4) |
-| Session Types | `-Xsessions` | Off | 📋 Not implemented yet |
+| Session Types | `-Xsessions` | Off | ✅ Implemented (SS0–SS8; binary + multi-party) |
 | Effect Types | `-Xeffect-types` | Off | ✅ Implemented (ET0–ET4, LC0–LC3, MS0–MS4) |
 | Contract Types | `-Xcontracts` | Off | 📋 Not implemented yet |
 | Sized Types | `-Xsized-types` | Off | 📋 Not implemented yet |
@@ -1867,7 +1867,11 @@ v3 (In Progress)
 ├── Effect Types (ET0-ET4)              ✅ complete (-Xeffect-types)
 ├── Linear Continuations (LC0-LC3)      ✅ complete
 ├── Multi-Shot Continuations (MS0-MS4)  ✅ complete (MS4 minor: ^unsafe-multishot removal deferred)
-└── Session Types (SS0-SS4)             📋 not started
+├── Session Types (SS0-SS4)             ✅ complete (-Xsessions, binary)
+└── Dynamic Vars (DV0-DV4)             ✅ complete (-Xdynamic-vars)
+
+v3.5 (complete)
+└── Session Types (SS5-SS8)             ✅ complete (-Xsessions, multi-party)
 
 v4 (Planned)
 ├── Contract Types (CT0-CT4)            📋 not started
@@ -1909,4 +1913,4 @@ v5+ (Deferred)
 
 ---
 
-*Last updated: 2026-05-17 (ET0–ET4, LC0–LC3, MS0–MS4 complete)*
+*Last updated: 2026-05-19 (SS0–SS8 complete; DV0–DV4 complete)*

@@ -1,6 +1,6 @@
 # Dynamic Vars -- Implementation Plan (DV0-DV4)
 
-> **Status:** DV0-DV4 complete
+> **Status:** Complete -- DV0-DV4 shipped (`-Xdynamic-vars`)
 >
 > **Target:** v3 or later
 >

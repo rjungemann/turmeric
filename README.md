@@ -303,6 +303,64 @@ for C/CMake dependency details.
   0)
 ```
 
+**Session types (binary and multi-party):**
+
+```lisp
+; Requires: -Xsessions
+
+; Binary: two-party echo — one side sends int, other echoes it back
+(defn echo-client [^linear ch :(Session (Send int (Recv int Close)))] :int
+  (let [ch       (send ch 42)]
+    (let [[v ch] (recv ch)]
+      (close ch)
+      v)))
+
+; Multi-party: global protocol projected onto each role at compile time
+(defprotocol Ping [A B]
+  (-> A B int)   ; A sends int to B
+  (-> B A int))  ; B replies with int to A
+
+(defn role-a [^linear ch :(Role Ping A)] :nil
+  (let [ch (send-to ch B 42)]
+    (let [[v ch] (recv-from ch B)]
+      (println v)   ; => 42
+      (close ch))))
+
+(defn main [] :int
+  (let [[ra rb] (make-protocol Ping)]
+    (let [t (spawn (fn [] (role-b rb)))]
+      (role-a ra)
+      (join t)))
+  0)
+```
+
+**Dynamic vars (dynamically-scoped mutable cells):**
+
+```lisp
+; Requires: -Xdynamic-vars
+(load "stdlib/dynvar.tur")   ; provides *log-level*, *locale*, spawn-conveying
+
+(defdynamic *request-id* :cstr "none")
+
+(defn log-msg [msg :cstr] :int
+  (println *request-id*)
+  (println msg))
+
+(defn handle-req [id :cstr] :int
+  ; binding overrides *request-id* for the dynamic extent of its body
+  ; -- visible to all code called from here, not just lexically enclosed code
+  (binding [*request-id* id]
+    (log-msg "processing"))
+  0)
+
+; spawn-conveying passes a snapshot of the current binding frame to the child
+(defn main [] :int
+  (binding [*request-id* "req-1"]
+    (let [t (spawn-conveying (fn [] (log-msg "child")))]
+      (join t)))  ; child sees "req-1"
+  0)
+```
+
 ## Features
 
 | Feature | Status |
@@ -330,6 +388,9 @@ for C/CMake dependency details.
 | Handler typing (`(handler Effect A B)` first-class handler types) | ✅ |
 | Linear continuations (`^linear k` one-shot, `^unsafe-multishot` escape hatch) | ✅ |
 | Multi-shot continuations (`^multishot k`, snapshot semantics) | ✅ |
+| Session types (binary `Session[P]`, `make-session`, `send`/`recv`/`close`/`offer`/`choose-*`; `-Xsessions`) | ✅ |
+| Multi-party session types (`defprotocol`, `Role`, `make-protocol`, `send-to`/`recv-from`; `-Xsessions`) | ✅ |
+| Dynamic vars (`defdynamic`, `binding`, `spawn-conveying`, stdlib common vars; `-Xdynamic-vars`) | ✅ |
 | Borrow checker (`&`, `&mut`, reborrow, move semantics) | ✅ |
 | Reference counting (`rc/of`, `rc/clone`, `rc/drop`, weak refs) | ✅ |
 | RC elision (static analysis to remove redundant retain/release) | ✅ |
@@ -354,6 +415,6 @@ for C/CMake dependency details.
 
 ## Status
 
-The compiler passes its full fixture test suite with ASan/UBSan clean. All planned phases through Phase 21 (serializable continuations) are complete, along with the full v2 type system (HKT, HRT, GADTs, effect rows) and v3 extensions (linear/uniqueness/substructural types, union/intersection types, effect row types ET0–ET4, linear continuations LC0–LC3, multi-shot continuations MS0–MS4).
+The compiler passes its full fixture test suite with ASan/UBSan clean. All planned phases through Phase 21 (serializable continuations) are complete, along with the full v2 type system (HKT, HRT, GADTs, effect rows) and all v3 extensions: linear/uniqueness/substructural types, union/intersection types, effect row types (ET0–ET4), linear continuations (LC0–LC3), multi-shot continuations (MS0–MS4), session types (SS0–SS8, both binary and multi-party), and dynamic vars (DV0–DV4).
 
-See [docs/turmeric-plan.md](docs/turmeric-plan.md) for the detailed design and roadmap.
+See [docs/advanced-type-system-feasibility-plan.md](docs/advanced-type-system-feasibility-plan.md) for the type system roadmap and [docs/guides/](docs/guides/) for user guides.
