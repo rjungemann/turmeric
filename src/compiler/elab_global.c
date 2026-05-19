@@ -31,6 +31,27 @@ static const char *gi_intern(Elab *e, const char *s) {
     return intern_cstr(e->st, s)->name;
 }
 
+/* ---- SS8: bystander step projection ---- */
+
+/* Skip any protocol steps in which `role_name` is neither sender nor receiver
+ * (i.e., bystander steps).  This implements the projection rule for N-role
+ * protocols: if the current role is not involved in a message exchange it
+ * simply advances past it.
+ *
+ * Returns the first step at which `role_name` is the sender or receiver, or
+ * NULL/GI_END if the protocol is finished for this role. */
+static GlobalInteraction *skip_bystander_steps(GlobalInteraction *step,
+                                                const char *role_name) {
+    while (step && step->kind == GI_MSG) {
+        bool is_sender   = step->msg.from && strcmp(step->msg.from, role_name) == 0;
+        bool is_receiver = step->msg.to   && strcmp(step->msg.to,   role_name) == 0;
+        if (is_sender || is_receiver) break;
+        /* This role is a bystander -- advance past this step */
+        step = step->msg.rest;
+    }
+    return step;
+}
+
 /* ---- well-formedness checking ---- */
 
 /* Check that a role name is declared in the protocol's role list.
@@ -475,15 +496,9 @@ Expr *elab_make_protocol(Elab *e, const Form *call) {
         result_type = inner;
     }
 
-    /* SS7: only 2-role protocols are fully supported; N>2 is planned for SS8. */
-    if (n_roles > 2) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "make-protocol: only 2-role protocols are supported in this version "
-                  "(SS7); multi-role support is planned for SS8");
-        return NULL;
-    }
+    /* SS8: N-role protocols (N>=2) are fully supported. */
 
-    /* SS7: emit a marker; actual codegen happens in elab_forms.c vector-let split */
+    /* SS8: emit a marker; actual codegen happens in elab_forms.c vector-let split */
     return make_null_placeholder(e, *result_type, "/*make-protocol*/", call->span);
 }
 
@@ -524,7 +539,8 @@ Expr *elab_send_to(Elab *e, const Form *call) {
 
     const char *this_role  = chan->type.as.role_.role_name;
     const char *dest_role  = gi_intern(e, role_f->as.sym->name);
-    GlobalInteraction *step = chan->type.as.role_.current_step;
+    /* SS8: skip bystander steps (steps where this role is neither sender nor receiver) */
+    GlobalInteraction *step = skip_bystander_steps(chan->type.as.role_.current_step, this_role);
 
     /* Validate current step is GI_MSG with matching from/to */
     if (!step || step->kind != GI_MSG) {
@@ -650,7 +666,8 @@ Expr *elab_recv_from(Elab *e, const Form *call) {
 
     const char *this_role  = chan->type.as.role_.role_name;
     const char *src_role   = gi_intern(e, role_f->as.sym->name);
-    GlobalInteraction *step = chan->type.as.role_.current_step;
+    /* SS8: skip bystander steps (steps where this role is neither sender nor receiver) */
+    GlobalInteraction *step = skip_bystander_steps(chan->type.as.role_.current_step, this_role);
 
     /* Validate current step is GI_MSG with matching from/to */
     if (!step || step->kind != GI_MSG) {

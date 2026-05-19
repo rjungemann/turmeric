@@ -1,0 +1,42 @@
+;; SS8: session-mp-handshake -- 2-role three-way handshake.
+;; Initiator sends SYN=1, Responder sends SYN-ACK=syn+1=2,
+;; Initiator sends ACK=synack+1=3, Responder prints ACK.
+
+(defprotocol Handshake [Initiator Responder]
+  (-> Initiator Responder int)
+  (-> Responder Initiator int)
+  (-> Initiator Responder int))
+
+(defn spawn [f :ptr<void>] :ptr<void>
+  ```c
+  pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(tid, NULL, tur_session_thread_wrapper, f);
+  return (void *)tid;
+  ```)
+
+(defn join [t :ptr<void>] :int
+  ```c
+  pthread_join(*(pthread_t *)t, NULL);
+  free(t);
+  return 0;
+  ```)
+
+(defn role-initiator [^linear ch :(Role Handshake Initiator)] :nil
+  (let [ch (send-to ch Responder 1)]
+    (let [[synack ch] (recv-from ch Responder)]
+      (let [ch (send-to ch Responder (+ synack 1))]
+        (close ch)))))
+
+(defn role-responder [^linear ch :(Role Handshake Responder)] :nil
+  (let [[syn ch] (recv-from ch Initiator)]
+    (let [ch (send-to ch Initiator (+ syn 1))]
+      (let [[ack ch] (recv-from ch Initiator)]
+        (println ack)
+        (close ch)))))
+
+(defn main [] :int
+  (let [[ri rr] (make-protocol Handshake)]
+    (let [t (spawn (fn [] (role-responder rr)))]
+      (role-initiator ri)
+      (join t)))
+  0)
