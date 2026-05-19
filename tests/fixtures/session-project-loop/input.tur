@@ -1,0 +1,22 @@
+;; SS6: projection through a recursive loop.
+;; EchoP: A loops sending int to B, B sends it back; A can stop.
+;; project(EchoP, A) = Session[Rec self (Choose (Send int (Recv int self)) Close)]
+;; project(EchoP, B) = Session[Rec self (Branch (Recv int (Send int self)) Close)]
+(defprotocol EchoP [A B]
+  (loop self
+    (choice A
+      [cont (-> A B int) (-> B A int) (continue self)]
+      [stop])))
+
+(defn serve-b [^linear ch :(project EchoP B)] :nil
+  (match (offer ch)
+    (Left ch)
+      (let [[v ch] (recv ch)]
+        (let [ch (send ch v)]
+          (serve-b ch)))
+    (Right ch)
+      (close ch)))
+
+(defn main [] :int
+  (println "ok")
+  0)

@@ -523,6 +523,8 @@ typedef struct Elab {
     /* SS5: Global protocol type symbols (appear in type annotations) */
     const Symbol    *sym_global_type;   /* "Global" -- type constructor */
     const Symbol    *sym_role_type;     /* "Role"   -- type constructor */
+    /* SS6: Projection type annotation */
+    const Symbol    *sym_project_type;  /* "project" -- SS6: (project G R) type annotation */
     /* SS5: Global protocol registry */
     GlobalProtocol  *global_protocols;
     uint32_t         n_global_protocols;
@@ -799,6 +801,9 @@ Expr *elab_defprotocol(Elab *e, const Form *call);
 Expr *elab_make_protocol(Elab *e, const Form *call);
 Expr *elab_send_to(Elab *e, const Form *call);
 Expr *elab_recv_from(Elab *e, const Form *call);
+
+/* project.c -- SS6: projection algorithm */
+Type *session_project(Elab *e, GlobalInteraction *step, const char *role, Span span);
 
 /* elab_sessions.c */
 Expr *elab_session_make(Elab *e, const Form *call);

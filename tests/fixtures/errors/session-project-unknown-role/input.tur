@@ -1,0 +1,7 @@
+;; SS6: TUR-E0221 -- role C is not declared in protocol Ping.
+(defprotocol Ping [A B]
+  (-> A B int))
+
+(defn f [^linear ch :(project Ping C)] :nil (close ch))
+
+(defn main [] :int 0)
