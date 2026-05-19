@@ -1,0 +1,12 @@
+;; SS6: TUR-E0220 -- protocol is not projectable because role C behaves
+;; differently in different branches but is not the deciding role.
+;; In the left branch C receives from B; in the right branch C sends to B.
+;; These projections are not equal, so merge fails.
+(defprotocol Bad3 [A B C]
+  (choice A
+    [left  (-> B C int)]
+    [right (-> C B int)]))
+
+(defn f [^linear ch :(project Bad3 C)] :nil (close ch))
+
+(defn main [] :int 0)
