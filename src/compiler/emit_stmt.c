@@ -591,6 +591,10 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_DEFECT:
             /* Effect definitions are compile-time only */
             return;
+        /* DV0: Dynamic vars */
+        case EX_DEFDYNAMIC:
+            /* Declaration is compile-time only */
+            return;
         case EX_PERFORM:
         case EX_HANDLE:
         case EX_RESUME:

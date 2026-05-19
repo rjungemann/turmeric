@@ -332,6 +332,12 @@ void expr_print(Buf *b, const Expr *e) {
             buf_puts(b, e->as.effect_def_.def->name->name);
             buf_putc(b, ')');
             break;
+        /* DV0: Dynamic vars */
+        case EX_DEFDYNAMIC:
+            buf_puts(b, "(defdynamic ");
+            buf_puts(b, e->as.defdynamic_.entry->name->name);
+            buf_putc(b, ')');
+            break;
         case EX_PERFORM:
             buf_puts(b, "(perform (");
             buf_puts(b, e->as.perform_.perform->effect_name->name);

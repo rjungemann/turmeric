@@ -1203,6 +1203,11 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->kw_post = intern_cstr(st, "post");
     e->sym_result             = intern_cstr(st, "result");
     e->sym_tur_contract_check = intern_cstr(st, "tur-contract-check");
+    /* DV0: Dynamic vars */
+    e->sym_defdynamic    = intern_cstr(st, "defdynamic");
+    e->dynvar_entries    = NULL;
+    e->n_dynvars         = 0;
+    e->cap_dynvars       = 0;
     /* SS0b: Session type constructor symbols (capitalized, appear in type positions) */
     e->sym_session_type  = intern_cstr(st, "Session");
     e->sym_session_Send  = intern_cstr(st, "Send");

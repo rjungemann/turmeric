@@ -487,6 +487,10 @@ static bool borrow_check_expr_recursive(BorrowCheckCtx *ctx, const Expr *e) {
         case EX_DEFECT:
             /* Effect definitions don't have borrows to check at this level */
             return true;
+        /* DV0: Dynamic vars */
+        case EX_DEFDYNAMIC:
+            /* Declaration-only node; no borrows to check */
+            return true;
         case EX_PERFORM:
             /* Check perform arguments */
             for (uint8_t i = 0; i < e->as.perform_.perform->n_args; i++) {

@@ -2350,6 +2350,10 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_DEFECT:
             /* Effect definitions are compile-time only - no runtime code */
             return atom_nil();
+        /* DV0: Dynamic vars */
+        case EX_DEFDYNAMIC:
+            /* Declaration is compile-time only - no runtime code in DV0 */
+            return atom_nil();
         case EX_PERFORM: {
             /* (perform (EffectName args...)) - perform an effect.
              * Emit: tur_effect_perform("Name", args_array, n_args)

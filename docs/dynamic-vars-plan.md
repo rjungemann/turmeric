@@ -1,6 +1,6 @@
 # Dynamic Vars -- Implementation Plan (DV0-DV4)
 
-> **Status:** Pre-phase prerequisites complete; DV0 not started
+> **Status:** DV0 complete; DV1 not started
 >
 > **Target:** v3 or later
 >
@@ -10,7 +10,7 @@
 > [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md)
 > (§8 Effect Types, §1 Linear Types)
 >
-> **Last updated:** 2026-05-19 (P0-P2 complete; error codes locked; fixture baseline created)
+> **Last updated:** 2026-05-19 (P0-P2 complete; DV0 complete: TY_DYNVAR, EX_DEFDYNAMIC, elab_dynvars.c, -Xdynamic-vars flag)
 
 ---
 
@@ -321,11 +321,11 @@ tests/fixtures/dynvar-*/    -- happy-path and negative fixtures
 
 ---
 
-## Phase DV0 -- Data Model
+## Phase DV0 -- Data Model ✓
 
 **Goal:** Add the `defdynamic` top-level form and `TY_DYNVAR` to the type system. No binding stack or codegen yet.
 
-- [ ] Add `TY_DYNVAR` to `TypeKind` in `src/compiler/types.h`:
+- [x] Add `TY_DYNVAR` to `TypeKind` in `src/compiler/types.h`:
 
   ```c
   TY_DYNVAR,  /* the type of a dynamic var reference (not the stored value) */
@@ -333,25 +333,29 @@ tests/fixtures/dynvar-*/    -- happy-path and negative fixtures
 
   `TY_DYNVAR` wraps the var's declared value type. Reading a `*name*` var produces a value of the declared type (not `TY_DYNVAR`); the `TY_DYNVAR` node is only held in the environment during elaboration.
 
-- [ ] Add `DynVarEntry` to the elaborator's global symbol table:
+- [x] Add `DynVarEntry` to `src/compiler/expr.h` (accessible from both `expr.c` and the elaborator):
 
   ```c
   typedef struct DynVarEntry {
-      const char *name;        /* "*log-level*" */
-      Type       *value_type;  /* the declared element type */
-      int         index;       /* stable integer ID; used as pthread_key_t index */
+      const Symbol *name;       /* interned symbol, e.g. "*log-level*" */
+      Type          value_type; /* declared element type */
+      int           index;      /* stable sequential ID; used as pthread_key_t index in DV2 */
+      bool          is_private; /* ^private annotation */
   } DynVarEntry;
   ```
 
-- [ ] Elaborate `(defdynamic *name* :type root-expr)`:
+- [x] Elaborate `(defdynamic *name* :type root-expr)` in `src/compiler/elab_dynvars.c`:
   - Resolve `:type` to a `Type *`
   - Reject if type is substructural (`TUR_E0603`)
   - Reject if not at module toplevel (`TUR_E0604`)
   - Elaborate `root-expr` and check it matches `:type` (`TUR_E0602`)
-  - Register `DynVarEntry` in the module's dynvar table
-- [ ] Add `TUR_E0603` and `TUR_E0604` to `diag.h` / `diag.c`
-- [ ] Warn (`TUR_W0600`) if name does not match `*...*` pattern
-- [ ] Baseline fixtures from P2 already present; all intentionally red
+  - Register `DynVarEntry` in `e->dynvar_entries`; add global `Binding` with `is_dynvar = true`
+- [x] `TUR_E0603`, `TUR_E0604`, and `TUR_W0600` registered in `diag.h` / `diag.c` (done in P0)
+- [x] Warn (`TUR_W0600`) if name does not match `*...*` pattern
+- [x] `-Xdynamic-vars` flag added to `src/main.c` and `src/runtime/globals.h`
+- [x] `EX_DEFDYNAMIC` stub in `emit_expr.c` and `emit_stmt.c` (returns `atom_nil()`)
+- [x] Build clean: `just build` passes with zero errors
+- [x] Baseline fixtures from P2 already present; all intentionally red until DV1+
 
 ---
 

@@ -529,6 +529,11 @@ typedef struct Elab {
     GlobalProtocol  *global_protocols;
     uint32_t         n_global_protocols;
     uint32_t         cap_global_protocols;
+    /* DV0: Dynamic vars (-Xdynamic-vars) */
+    const Symbol    *sym_defdynamic;        /* "defdynamic" */
+    DynVarEntry    **dynvar_entries;        /* all registered dynamic vars */
+    uint32_t         n_dynvars;
+    uint32_t         cap_dynvars;
 } Elab;
 
 /* Phase 6: Macro definition */
@@ -804,6 +809,10 @@ Expr *elab_recv_from(Elab *e, const Form *call);
 
 /* project.c -- SS6: projection algorithm */
 Type *session_project(Elab *e, GlobalInteraction *step, const char *role, Span span);
+
+/* elab_dynvars.c */
+Expr       *elab_defdynamic(Elab *e, const Form *call);
+DynVarEntry *dynvar_lookup(const Elab *e, const Symbol *name);
 
 /* elab_sessions.c */
 Expr *elab_session_make(Elab *e, const Form *call);
