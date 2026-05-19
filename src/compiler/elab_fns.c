@@ -539,7 +539,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     TypeKind return_kind = TY_NIL;
     AdtDef *return_adt_def = NULL; /* Phase G3: set when return type is an ADT name */
     StructDef *return_struct_def = NULL; /* LT4: set when return type is a struct name */
-    Type *return_session_type = NULL; /* SS3a: full session return type (Session[P]) */
+    Type *return_session_type = NULL; /* SS3a/SS7: full session/role return type */
     uint32_t body_start = name_idx + 2;  /* name_idx + 1 = params, +1 = after params */
 
     /* Phase 19: Parse optional effect-row annotation #{Read Write} or #{e} before return type.
@@ -665,7 +665,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     /* SS3a: Capture full session return type so callers see the complete
                      * protocol type (e.g. Session[Rec[self, ...]]) rather than a bare
                      * TY_SESSION shell with a NULL protocol pointer. */
-                    if (g_sessions_enabled && ann->kind == TY_SESSION) {
+                    if (g_sessions_enabled && (ann->kind == TY_SESSION || ann->kind == TY_ROLE)) {
                         return_session_type = ann;
                     }
                 }
@@ -993,6 +993,13 @@ Expr *elab_defn(Elab *e, const Form *call) {
     if ((return_kind == TY_NIL || return_kind == TY_TYVAR) && body->type.kind != TY_NIL
             && body->type.kind != TY_TYVAR) {
         return_kind = body->type.kind;
+        /* SS7: propagate full TY_ROLE type from body so callers see the correct
+         * current_step (the step after the body's last session operation). */
+        if (g_sessions_enabled && body->type.kind == TY_ROLE && !return_session_type) {
+            Type *rft = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *rft = body->type;
+            return_session_type = rft;
+        }
     }
 
     /* Create function type */

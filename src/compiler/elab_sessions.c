@@ -369,9 +369,13 @@ Expr *elab_session_close(Elab *e, const Form *call) {
                                 chan->type.as.role_.role_name, step_name);
             return NULL;
         }
-        if (chan->kind == EX_VAR && chan->as.var.binding)
-            binding_mark_moved(chan->as.var.binding, call->span);
-        return e_nil(e, call->span);
+        Binding *chan_binding = (chan->kind == EX_VAR) ? chan->as.var.binding : NULL;
+        if (chan_binding) binding_mark_moved(chan_binding, call->span);
+        /* SS7: emit tur_role_close(chan) */
+        static const char role_close_code[] = "tur_role_close((void *)__TUR_VAL_0__)";
+        Type nil_t = TYPE_NIL;
+        return session_inline_c(e, role_close_code, sizeof(role_close_code) - 1,
+                                nil_t, chan_binding, call->span);
     }
 
     Type *proto = session_protocol_of(e, chan, "close", call->span);

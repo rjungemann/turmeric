@@ -133,47 +133,78 @@ Expr *elab_let(Elab *e, const Form *call) {
                  * so each binding gets its own expression (avoids double evaluation). */
                 Expr *elem_init = init_v; /* default: share the original init */
                 if (init_v->type.kind == TY_SESSION_PAIR) {
-                    /* make-session destructuring:
-                     *   vi=0: tur_session_new() -- allocates the channel
-                     *   vi=1: __TUR_CAP_0__ with captures[0]=vi0_binding -- same ptr */
+                    Type *fst = init_v->type.as.session_.fst;
+                    bool is_role_pair = (fst && fst->kind == TY_ROLE);
                     Expr *ic_expr = expr_new(e->arena, EX_INLINE_C, elem_type, vec_span);
                     InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
                     ic->return_type = elem_type;
                     ic->val_exprs = NULL; ic->n_val_exprs = 0;
-                    if (vi == 0) {
-                        /* SS2: Pass protocol name for debug tag: tur_session_new(TUR_DBGPROTO("...")) */
-                        Buf code_buf;
-                        buf_init(&code_buf);
-                        buf_puts(&code_buf, "tur_session_new(TUR_DBGPROTO(\"");
-                        /* init_v->type is TY_SESSION_PAIR; fst is Session[P]; fst->fst is P */
-                        Type *sess_p = init_v->type.as.session_.fst;
-                        if (sess_p && sess_p->as.session_.fst) {
-                            type_print(&code_buf, *sess_p->as.session_.fst);
+                    ic->captures = NULL; ic->n_captures = 0;
+                    if (is_role_pair) {
+                        /* SS7: make-protocol destructuring:
+                         *   vi=0: tur_make_roles(N, 0) -- allocates router + role 0
+                         *   vi=k: tur_get_role(__TUR_VAL_0__, k) -- peer role on same router */
+                        int n_roles = fst->as.role_.global_type->as.global_.n_roles;
+                        if (vi == 0) {
+                            Buf code_buf; buf_init(&code_buf);
+                            buf_printf(&code_buf, "tur_make_roles(%d, 0)", n_roles);
+                            char *code_str = (char *)arena_alloc(e->arena, code_buf.len + 1);
+                            memcpy(code_str, code_buf.data, code_buf.len);
+                            code_str[code_buf.len] = '\0';
+                            ic->code = strslice(code_str, (uint32_t)code_buf.len);
+                            buf_free(&code_buf);
                         } else {
-                            buf_puts(&code_buf, "?");
+                            /* vi > 0: tur_get_role(__TUR_VAL_0__, vi) referencing vi=0's binding */
+                            Buf code_buf; buf_init(&code_buf);
+                            buf_printf(&code_buf, "tur_get_role(__TUR_VAL_0__, %d)", (int)vi);
+                            char *code_str = (char *)arena_alloc(e->arena, code_buf.len + 1);
+                            memcpy(code_str, code_buf.data, code_buf.len);
+                            code_str[code_buf.len] = '\0';
+                            ic->code = strslice(code_str, (uint32_t)code_buf.len);
+                            buf_free(&code_buf);
+                            /* Reference vi=0's binding as __TUR_VAL_0__ */
+                            ic->val_exprs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+                            Expr *r0_var = expr_new(e->arena, EX_VAR,
+                                                    binds[first_bind_idx].binding->type, vec_span);
+                            r0_var->as.var.binding = binds[first_bind_idx].binding;
+                            ic->val_exprs[0] = r0_var;
+                            ic->n_val_exprs = 1;
                         }
-                        buf_puts(&code_buf, "\"))");
-                        char *code_str = (char *)arena_alloc(e->arena, code_buf.len + 1);
-                        memcpy(code_str, code_buf.data, code_buf.len);
-                        code_str[code_buf.len] = '\0';
-                        ic->code = strslice(code_str, (uint32_t)code_buf.len);
-                        buf_free(&code_buf);
-                        ic->captures = NULL; ic->n_captures = 0;
                     } else {
-                        static const char ref_code[] = "__TUR_VAL_0__";
-                        ic->code = strslice(ref_code, sizeof(ref_code) - 1);
-                        ic->captures = NULL; ic->n_captures = 0;
-                        ic->val_exprs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
-                        Expr *chan_var = expr_new(e->arena, EX_VAR,
-                                                  binds[first_bind_idx].binding->type, vec_span);
-                        chan_var->as.var.binding = binds[first_bind_idx].binding;
-                        ic->val_exprs[0] = chan_var;
-                        ic->n_val_exprs = 1;
+                        /* Existing make-session logic */
+                        if (vi == 0) {
+                            /* SS2: Pass protocol name for debug tag: tur_session_new(TUR_DBGPROTO("...")) */
+                            Buf code_buf;
+                            buf_init(&code_buf);
+                            buf_puts(&code_buf, "tur_session_new(TUR_DBGPROTO(\"");
+                            /* init_v->type is TY_SESSION_PAIR; fst is Session[P]; fst->fst is P */
+                            Type *sess_p = init_v->type.as.session_.fst;
+                            if (sess_p && sess_p->as.session_.fst) {
+                                type_print(&code_buf, *sess_p->as.session_.fst);
+                            } else {
+                                buf_puts(&code_buf, "?");
+                            }
+                            buf_puts(&code_buf, "\"))");
+                            char *code_str = (char *)arena_alloc(e->arena, code_buf.len + 1);
+                            memcpy(code_str, code_buf.data, code_buf.len);
+                            code_str[code_buf.len] = '\0';
+                            ic->code = strslice(code_str, (uint32_t)code_buf.len);
+                            buf_free(&code_buf);
+                        } else {
+                            static const char ref_code[] = "__TUR_VAL_0__";
+                            ic->code = strslice(ref_code, sizeof(ref_code) - 1);
+                            ic->val_exprs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+                            Expr *chan_var = expr_new(e->arena, EX_VAR,
+                                                      binds[first_bind_idx].binding->type, vec_span);
+                            chan_var->as.var.binding = binds[first_bind_idx].binding;
+                            ic->val_exprs[0] = chan_var;
+                            ic->n_val_exprs = 1;
+                        }
                     }
                     ic_expr->as.inline_c_.inline_c = ic;
                     elem_init = ic_expr;
                 } else if (init_v->type.kind == TY_SESSION_RECV_PAIR) {
-                    /* recv / recv-timeout destructuring.
+                    /* recv / recv-timeout / recv-from destructuring.
                      * Case A -- plain recv (EX_INLINE_C, code is recv-pair sentinel):
                      *   vi=0: tur_session_recv(__TUR_VAL_0__)
                      *   vi=1: __TUR_VAL_0__ (channel ptr)
@@ -183,11 +214,17 @@ Expr *elab_let(Elab *e, const Form *call) {
                      * Case C -- recv-timeout inline_c
                      *   (code starts with "tur_session_recv_timeout"):
                      *   vi=0: tur__rtv_
-                     *   vi=1: __TUR_VAL_0__ (channel) */
-                    bool is_recv_timeout_var = (init_v->kind == EX_VAR);
+                     *   vi=1: __TUR_VAL_0__ (channel)
+                     * Case D -- SS7 recv-from (EX_INLINE_C, snd type is TY_ROLE):
+                     *   vi=0: tur_router_recv(__TUR_VAL_0__, from_idx)
+                     *   vi=1: __TUR_VAL_0__ (role channel ptr) */
+                    Type *recv_snd = init_v->type.as.session_.snd;
+                    bool is_role_recv = (recv_snd && recv_snd->kind == TY_ROLE
+                                         && init_v->kind == EX_INLINE_C);
+                    bool is_recv_timeout_var = (!is_role_recv && init_v->kind == EX_VAR);
                     bool is_recv_timeout_ic = false;
                     Binding *chan_b = NULL;
-                    if (!is_recv_timeout_var && init_v->kind == EX_INLINE_C) {
+                    if (!is_role_recv && !is_recv_timeout_var && init_v->kind == EX_INLINE_C) {
                         InlineC *orig_ic = init_v->as.inline_c_.inline_c;
                         is_recv_timeout_ic = (orig_ic->code.len > 24 &&
                             memcmp(orig_ic->code.p, "tur_session_recv_timeout", 24) == 0);
@@ -200,7 +237,36 @@ Expr *elab_let(Elab *e, const Form *call) {
                     InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
                     ic->return_type = elem_type;
                     ic->captures = NULL; ic->n_captures = 0;
-                    if (vi == 0) {
+                    if (is_role_recv) {
+                        /* SS7: recv-from destructuring:
+                         *   vi=0: the tur_router_recv(...) code embedded by elab_recv_from
+                         *   vi=1: __TUR_VAL_0__ (same role channel pointer) */
+                        InlineC *orig_ic = init_v->as.inline_c_.inline_c;
+                        Binding *role_b = (orig_ic->n_val_exprs > 0 && orig_ic->val_exprs[0]
+                            && orig_ic->val_exprs[0]->kind == EX_VAR)
+                            ? orig_ic->val_exprs[0]->as.var.binding : NULL;
+                        if (vi == 0) {
+                            ic->code = orig_ic->code;
+                            if (role_b) {
+                                ic->val_exprs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+                                Expr *role_var = expr_new(e->arena, EX_VAR, role_b->type, vec_span);
+                                role_var->as.var.binding = role_b;
+                                ic->val_exprs[0] = role_var;
+                                ic->n_val_exprs = 1;
+                            } else { ic->val_exprs = NULL; ic->n_val_exprs = 0; }
+                        } else {
+                            /* vi=1: same void* role channel pointer */
+                            static const char ref_role[] = "__TUR_VAL_0__";
+                            ic->code = strslice(ref_role, sizeof(ref_role) - 1);
+                            if (role_b) {
+                                ic->val_exprs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+                                Expr *role_var = expr_new(e->arena, EX_VAR, role_b->type, vec_span);
+                                role_var->as.var.binding = role_b;
+                                ic->val_exprs[0] = role_var;
+                                ic->n_val_exprs = 1;
+                            } else { ic->val_exprs = NULL; ic->n_val_exprs = 0; }
+                        }
+                    } else if (vi == 0) {
                         if (is_recv_timeout) {
                             /* SS3c: value is in tur__rtv_ thread-local */
                             static const char rtv_code[] = "tur__rtv_";
