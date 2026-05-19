@@ -417,6 +417,7 @@ int emit_program(Buf *out, const Expr *program) {
      * but not exercised by every program.  Both GCC and Clang honour these. */
     buf_puts(out, "#pragma GCC diagnostic ignored \"-Wunused-function\"\n");
     buf_puts(out, "#pragma GCC diagnostic ignored \"-Wunused-variable\"\n");
+    buf_puts(out, "#pragma GCC diagnostic ignored \"-Wunused-but-set-variable\"\n");
     /* Phase P3: HAMT lowering - include HAMT header when needed */
     if (g_needs_hamt) {
         buf_puts(out, "#include \"hamt.h\"\n");
@@ -2483,9 +2484,22 @@ int emit_program(Buf *out, const Expr *program) {
      * Only emitted when -Xsessions is active. */
     if (g_sessions_enabled) {
         buf_puts(out, "/* SS2: TurChannel -- synchronous rendezvous channel for session types */\n");
+        buf_puts(out, "#ifndef NDEBUG\n");
+        buf_puts(out, "#  define TUR_DBGPROTO(s) (s)\n");
+        buf_puts(out, "#else\n");
+        buf_puts(out, "#  define TUR_DBGPROTO(s) ((const char*)0)\n");
+        buf_puts(out, "#endif\n");
         buf_puts(out, "typedef struct { pthread_mutex_t mu; pthread_cond_t cv; int64_t val; int state; } TurSyncCh;\n");
-        buf_puts(out, "typedef struct { TurSyncCh data; TurSyncCh branch; int refcount; pthread_mutex_t rc_mu; } TurChannel;\n");
-        buf_puts(out, "static TurChannel *tur_session_new(void) {\n");
+        buf_puts(out, "typedef struct {\n");
+        buf_puts(out, "    TurSyncCh data;\n");
+        buf_puts(out, "    TurSyncCh branch;\n");
+        buf_puts(out, "    int refcount;\n");
+        buf_puts(out, "    pthread_mutex_t rc_mu;\n");
+        buf_puts(out, "#ifndef NDEBUG\n");
+        buf_puts(out, "    const char *dbg_proto;\n");
+        buf_puts(out, "#endif\n");
+        buf_puts(out, "} TurChannel;\n");
+        buf_puts(out, "static TurChannel *tur_session_new(const char *proto) {\n");
         buf_puts(out, "    TurChannel *ch = (TurChannel *)calloc(1, sizeof(TurChannel));\n");
         buf_puts(out, "    pthread_mutex_init(&ch->data.mu, NULL);\n");
         buf_puts(out, "    pthread_cond_init(&ch->data.cv, NULL);\n");
@@ -2493,6 +2507,11 @@ int emit_program(Buf *out, const Expr *program) {
         buf_puts(out, "    pthread_cond_init(&ch->branch.cv, NULL);\n");
         buf_puts(out, "    pthread_mutex_init(&ch->rc_mu, NULL);\n");
         buf_puts(out, "    ch->refcount = 2;\n");
+        buf_puts(out, "#ifndef NDEBUG\n");
+        buf_puts(out, "    ch->dbg_proto = proto;\n");
+        buf_puts(out, "#else\n");
+        buf_puts(out, "    (void)proto;\n");
+        buf_puts(out, "#endif\n");
         buf_puts(out, "    return ch;\n");
         buf_puts(out, "}\n");
         buf_puts(out, "static void tur_session_send(TurChannel *ch, int64_t val) {\n");
