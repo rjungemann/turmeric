@@ -162,6 +162,15 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0221_ROLE_NOT_DECLARED:        return "TUR-E0221";
         case TUR_E0222_ROLE_IMPL_MISMATCH:       return "TUR-E0222";
         case TUR_E0223_GLOBAL_NOT_WELLFORMED:    return "TUR-E0223";
+        /* DV0-DV1: Dynamic var errors */
+        case TUR_E0600_DYNVAR_SET_NOT_DYNAMIC:    return "TUR-E0600";
+        case TUR_E0601_DYNVAR_SET_NO_BINDING:     return "TUR-E0601";
+        case TUR_E0602_DYNVAR_TYPE_MISMATCH:      return "TUR-E0602";
+        case TUR_E0603_DYNVAR_SUBSTRUCTURAL_TYPE: return "TUR-E0603";
+        case TUR_E0604_DYNVAR_NOT_TOPLEVEL:       return "TUR-E0604";
+        case TUR_E0605_DYNVAR_SET_IN_ATOMIC:      return "TUR-E0605";
+        /* DV0: Dynamic var naming warning */
+        case TUR_W0600_DYNVAR_NO_EARMUFFS:        return "TUR-W0600";
         default:                          return "";
     }
 }
@@ -236,6 +245,15 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0221") == 0) return TUR_E0221_ROLE_NOT_DECLARED;
     if (strcmp(s, "TUR-E0222") == 0) return TUR_E0222_ROLE_IMPL_MISMATCH;
     if (strcmp(s, "TUR-E0223") == 0) return TUR_E0223_GLOBAL_NOT_WELLFORMED;
+    /* DV0-DV1: Dynamic var errors */
+    if (strcmp(s, "TUR-E0600") == 0) return TUR_E0600_DYNVAR_SET_NOT_DYNAMIC;
+    if (strcmp(s, "TUR-E0601") == 0) return TUR_E0601_DYNVAR_SET_NO_BINDING;
+    if (strcmp(s, "TUR-E0602") == 0) return TUR_E0602_DYNVAR_TYPE_MISMATCH;
+    if (strcmp(s, "TUR-E0603") == 0) return TUR_E0603_DYNVAR_SUBSTRUCTURAL_TYPE;
+    if (strcmp(s, "TUR-E0604") == 0) return TUR_E0604_DYNVAR_NOT_TOPLEVEL;
+    if (strcmp(s, "TUR-E0605") == 0) return TUR_E0605_DYNVAR_SET_IN_ATOMIC;
+    /* DV0: Dynamic var naming warning */
+    if (strcmp(s, "TUR-W0600") == 0) return TUR_W0600_DYNVAR_NO_EARMUFFS;
     return DIAG_CODE_NONE;
 }
 
@@ -1223,6 +1241,148 @@ static const DiagExplanation diag_explanations_[] = {
       "    (loop X (continue X)))  ; error: unguarded recursion\n"
       "\n"
       "Fix: correct the interaction structure so the protocol is well-formed.\n",
+    },
+    /* DV0-DV1: Dynamic var errors (-Xdynamic-vars) */
+    { TUR_E0600_DYNVAR_SET_NOT_DYNAMIC,
+      "TUR-E0600: set! or binding target is not a dynamic var\n"
+      "\n"
+      "The name given to set! or used as a binding key in a (binding [...] ...)\n"
+      "form is not declared as a dynamic var with defdynamic.\n"
+      "\n"
+      "Example of the error (set!):\n"
+      "  (let [x 0]\n"
+      "    (set! x 1))   ; ERROR: x is a plain let binding, not a dynamic var\n"
+      "\n"
+      "Example of the error (binding with non-dynamic name):\n"
+      "  (let [x 0]\n"
+      "    (binding [x 1]   ; ERROR: x is not a dynamic var\n"
+      "      x))\n"
+      "\n"
+      "Fix: declare the var with defdynamic at module toplevel:\n"
+      "  (defdynamic *x* :int 0)\n"
+      "  (binding [*x* 1]\n"
+      "    *x*)   ; => 1\n"
+      "\n"
+      "For lexical shadowing of a plain local, use let instead:\n"
+      "  (let [x 0]\n"
+      "    (let [x 1]\n"
+      "      x))   ; => 1\n",
+    },
+    { TUR_E0601_DYNVAR_SET_NO_BINDING,
+      "TUR-E0601: set! on a dynamic var with no active binding frame\n"
+      "\n"
+      "set! mutates the current thread's top binding frame for the dynamic var.\n"
+      "If no binding form is active on the current thread for that var, there is\n"
+      "no frame to mutate and the operation is rejected.\n"
+      "\n"
+      "Example of the error:\n"
+      "  (defdynamic *log-level* :int 0)\n"
+      "  (set! *log-level* 2)   ; ERROR: no binding frame active\n"
+      "\n"
+      "Fix: wrap the set! inside a binding form:\n"
+      "  (defdynamic *log-level* :int 0)\n"
+      "  (binding [*log-level* 0]\n"
+      "    (set! *log-level* 2)   ; OK: mutates the binding-frame value\n"
+      "    *log-level*)           ; => 2\n"
+      "\n"
+      "To update the global root value (rarely needed), use alter-root! with\n"
+      "the -Xunsafe-alter-root flag instead.\n",
+    },
+    { TUR_E0602_DYNVAR_TYPE_MISMATCH,
+      "TUR-E0602: Override value type does not match the defdynamic declared type\n"
+      "\n"
+      "Every binding override and every set! mutation must produce a value of\n"
+      "exactly the type declared in defdynamic.  The declared type is fixed and\n"
+      "does not change when overridden.\n"
+      "\n"
+      "Example of the error:\n"
+      "  (defdynamic *log-level* :int 0)\n"
+      "  (binding [*log-level* \"verbose\"]   ; ERROR: expected :int, got :str\n"
+      "    *log-level*)\n"
+      "\n"
+      "Fix: use a value of the correct type:\n"
+      "  (binding [*log-level* 2]   ; OK\n"
+      "    *log-level*)             ; => 2\n",
+    },
+    { TUR_E0603_DYNVAR_SUBSTRUCTURAL_TYPE,
+      "TUR-E0603: Dynamic var declared with a substructural type\n"
+      "\n"
+      "Dynamic vars may be read by any number of callers on any thread.  A\n"
+      "substructural type (linear, affine, relevant, or unique) carries an\n"
+      "ownership discipline that limits how many times a value may be used or\n"
+      "whether it may be copied.  Storing such a type in a dynamic var would\n"
+      "violate that discipline on every read.\n"
+      "\n"
+      "This includes:\n"
+      "  - ^linear  (CK_LINEAR)  -- exactly one consumer required\n"
+      "  - ^affine  (CK_AFFINE)  -- at most one consumer\n"
+      "  - ^relevant (CK_RELEVANT) -- at least one consumer required\n"
+      "  - ^unique  (CK_UNIQUE)  -- move-only (single owner)\n"
+      "  - session channels (^linear internally)\n"
+      "\n"
+      "Example of the error:\n"
+      "  (defdynamic *resource* ^linear :int 0)   ; ERROR: linear type\n"
+      "\n"
+      "Fix: use a plain copyable (CK_COPY) type:\n"
+      "  (defdynamic *resource* :int 0)   ; OK\n"
+      "\n"
+      "If you need to pass a unique resource through call chains, consider\n"
+      "algebraic effects (defeffect / perform / handle) instead, which\n"
+      "correctly track ownership at each resume point.\n",
+    },
+    { TUR_E0604_DYNVAR_NOT_TOPLEVEL,
+      "TUR-E0604: defdynamic used outside module toplevel\n"
+      "\n"
+      "defdynamic declarations must appear at module toplevel, alongside defn\n"
+      "and defstruct.  Defining a dynamic var inside a function body, a let\n"
+      "block, or any other nested position is not supported.\n"
+      "\n"
+      "Example of the error:\n"
+      "  (defn setup [] :unit\n"
+      "    (defdynamic *x* :int 0))   ; ERROR: defdynamic inside defn\n"
+      "\n"
+      "Fix: move the defdynamic to module toplevel:\n"
+      "  (defdynamic *x* :int 0)   ; OK: module toplevel\n"
+      "  (defn setup [] :unit\n"
+      "    (binding [*x* 1] ...))\n",
+    },
+    { TUR_E0605_DYNVAR_SET_IN_ATOMIC,
+      "TUR-E0605: set! on a dynamic var inside an atomically block\n"
+      "\n"
+      "STM transactions (atomically) may be retried an arbitrary number of\n"
+      "times.  Mutating the per-thread binding stack inside a transaction would\n"
+      "not be rolled back on retry, leaving the binding stack in an inconsistent\n"
+      "state.  To prevent this, set! on a dynamic var is rejected inside\n"
+      "atomically.\n"
+      "\n"
+      "Example of the error:\n"
+      "  (defdynamic *log-level* :int 0)\n"
+      "  (binding [*log-level* 1]\n"
+      "    (atomically\n"
+      "      (set! *log-level* 2)))   ; ERROR: set! inside atomically\n"
+      "\n"
+      "Fix options:\n"
+      "  1. Move the set! outside the atomically block.\n"
+      "  2. Use an STM ref (ref / alter / deref) for values that must be\n"
+      "     mutated atomically -- those are correctly rolled back on retry.\n",
+    },
+    /* DV0: Dynamic var naming warning */
+    { TUR_W0600_DYNVAR_NO_EARMUFFS,
+      "TUR-W0600: defdynamic name does not use *earmuffs* convention\n"
+      "\n"
+      "By convention, dynamic vars use *earmuffs* (leading and trailing\n"
+      "asterisks) to signal that they are dynamically scoped and may vary\n"
+      "across threads or binding frames.  Omitting the earmuffs makes dynamic\n"
+      "vars harder to distinguish from ordinary module-level values.\n"
+      "\n"
+      "Example triggering this warning:\n"
+      "  (defdynamic log-level :int 0)   ; TUR-W0600: no earmuffs\n"
+      "\n"
+      "Fix: rename to use earmuffs:\n"
+      "  (defdynamic *log-level* :int 0)   ; OK\n"
+      "\n"
+      "Suppress with -Wno-dynvar-earmuffs if your project intentionally omits\n"
+      "this convention.\n",
     },
 };
 

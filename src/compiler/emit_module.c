@@ -226,6 +226,162 @@ int emit_program(Buf *out, const Expr *program) {
         }
     }
 
+    /* DV2+DV3: Emit TurDynFrame typedef, pthread_key_t globals, constructors,
+     * cleanup functions, and (DV3) snapshot/convey infrastructure for every
+     * defdynamic declaration found in the program. */
+    {
+        bool any_dynvar = false;
+        for (uint32_t i = 0; i < n_items; i++) {
+            if (items[i]->kind == EX_DEFDYNAMIC) { any_dynvar = true; break; }
+        }
+        if (any_dynvar) {
+            /* DV2: TurDynFrame -- heap flag distinguishes DV3 snapshot frames
+             * (heap=1, owned) from DV2 stack frames (heap=0, not owned). */
+            buf_puts(&early_file,
+                "/* DV2+DV3: dynamic var frame stack */\n"
+                "typedef struct TurDynFrame {\n"
+                "    struct TurDynFrame *prev;\n"
+                "    void               *value;\n"
+                "    int                 heap; /* DV3: 1 = frame+value are heap-allocated */\n"
+                "} TurDynFrame;\n\n");
+
+            /* DV2: per-var storage, destructor, constructor, and binding pop */
+            for (uint32_t i = 0; i < n_items; i++) {
+                const Expr *e = items[i];
+                if (e->kind != EX_DEFDYNAMIC) continue;
+                DynVarEntry *entry = e->as.defdynamic_.entry;
+                char *mname = mangle_dynvar_name(entry->name->name);
+                const char *ctype = type_c_name(entry->value_type);
+                buf_printf(&early_file, "static %s _dynvar_root_%s;\n", ctype, mname);
+                buf_printf(&early_file, "static pthread_key_t _dynvar_key_%s;\n", mname);
+                /* DV3: destructor walks chain and frees heap frames on thread exit. */
+                buf_printf(&early_file,
+                    "static void _dynvar_cleanup_%s(void *f) {\n"
+                    "    TurDynFrame *frame = (TurDynFrame *)f;\n"
+                    "    while (frame && frame->heap) {\n"
+                    "        TurDynFrame *prev = frame->prev;\n"
+                    "        free(frame->value);\n"
+                    "        free(frame);\n"
+                    "        frame = prev;\n"
+                    "    }\n"
+                    "}\n"
+                    "__attribute__((constructor))\n"
+                    "static void _dynvar_init_%s(void) {\n"
+                    "    pthread_key_create(&_dynvar_key_%s, _dynvar_cleanup_%s);\n"
+                    "}\n"
+                    "static void _dynvar_pop_%s(TurDynFrame **fp) {\n"
+                    "    pthread_setspecific(_dynvar_key_%s, (*fp)->prev);\n"
+                    "}\n\n",
+                    mname,
+                    mname, mname, mname,
+                    mname, mname);
+                free(mname);
+            }
+
+            /* DV3: _TurDynSnap struct -- one field pair per dynamic var. */
+            buf_puts(&early_file, "/* DV3: binding snapshot for spawn-conveying */\n");
+            buf_puts(&early_file, "typedef struct {\n");
+            for (uint32_t i = 0; i < n_items; i++) {
+                const Expr *e = items[i];
+                if (e->kind != EX_DEFDYNAMIC) continue;
+                DynVarEntry *entry = e->as.defdynamic_.entry;
+                char *mname = mangle_dynvar_name(entry->name->name);
+                const char *ctype = type_c_name(entry->value_type);
+                buf_printf(&early_file,
+                    "    int has_%s; %s val_%s;\n", mname, ctype, mname);
+                free(mname);
+            }
+            buf_puts(&early_file, "} _TurDynSnap;\n\n");
+
+            /* DV3: _tur_binding_snapshot_capture -- copy top frame value for each var. */
+            buf_puts(&early_file,
+                "static _TurDynSnap *_tur_binding_snapshot_capture(void) {\n"
+                "    _TurDynSnap *s = (_TurDynSnap *)calloc(1, sizeof(_TurDynSnap));\n"
+                "    if (!s) { fprintf(stderr, \"tur: oom\\n\"); abort(); }\n");
+            for (uint32_t i = 0; i < n_items; i++) {
+                const Expr *e = items[i];
+                if (e->kind != EX_DEFDYNAMIC) continue;
+                DynVarEntry *entry = e->as.defdynamic_.entry;
+                char *mname = mangle_dynvar_name(entry->name->name);
+                const char *ctype = type_c_name(entry->value_type);
+                buf_printf(&early_file,
+                    "    { TurDynFrame *_f = (TurDynFrame *)pthread_getspecific(_dynvar_key_%s);\n"
+                    "      if (_f) { s->has_%s = 1; s->val_%s = *(%s *)_f->value; } }\n",
+                    mname, mname, mname, ctype);
+                free(mname);
+            }
+            buf_puts(&early_file, "    return s;\n}\n\n");
+
+            /* DV3: _tur_binding_snapshot_install -- push heap frames on the new thread. */
+            buf_puts(&early_file,
+                "static void _tur_binding_snapshot_install(_TurDynSnap *s) {\n");
+            for (uint32_t i = 0; i < n_items; i++) {
+                const Expr *e = items[i];
+                if (e->kind != EX_DEFDYNAMIC) continue;
+                DynVarEntry *entry = e->as.defdynamic_.entry;
+                char *mname = mangle_dynvar_name(entry->name->name);
+                const char *ctype = type_c_name(entry->value_type);
+                buf_printf(&early_file,
+                    "    if (s->has_%s) {\n"
+                    "        %s *_v = (%s *)malloc(sizeof(%s));\n"
+                    "        if (!_v) { fprintf(stderr, \"tur: oom\\n\"); abort(); }\n"
+                    "        *_v = s->val_%s;\n"
+                    "        TurDynFrame *_fr = (TurDynFrame *)malloc(sizeof(TurDynFrame));\n"
+                    "        if (!_fr) { free(_v); fprintf(stderr, \"tur: oom\\n\"); abort(); }\n"
+                    "        _fr->prev  = (TurDynFrame *)pthread_getspecific(_dynvar_key_%s);\n"
+                    "        _fr->value = _v;\n"
+                    "        _fr->heap  = 1;\n"
+                    "        pthread_setspecific(_dynvar_key_%s, _fr);\n"
+                    "    }\n",
+                    mname, ctype, ctype, ctype, mname, mname, mname);
+                free(mname);
+            }
+            buf_puts(&early_file, "}\n\n");
+
+            /* DV3: convey arg + trampoline + spawn-conveying entry point.
+             * These reference TurThreadState/TurThreadHandle which are emitted
+             * earlier in the output (before early_file is appended). */
+            buf_puts(&early_file,
+                "typedef struct {\n"
+                "    int64_t         closure;\n"
+                "    TurThreadState *state;\n"
+                "    _TurDynSnap    *snap;\n"
+                "} _TurConveyArg;\n\n"
+                "static void *_tur_convey_trampoline(void *raw) {\n"
+                "    _TurConveyArg *a = (_TurConveyArg *)raw;\n"
+                "    tur_current_thread_state = a->state;\n"
+                "    _tur_binding_snapshot_install(a->snap);\n"
+                "    free(a->snap);\n"
+                "    void (*fn)(void) = (void (*)(void))(intptr_t)a->closure;\n"
+                "    free(a);\n"
+                "    fn();\n"
+                "    return NULL;\n"
+                "}\n\n"
+                "static void *_tur_spawn_conveying(int64_t closure) {\n"
+                "    _TurDynSnap *snap = _tur_binding_snapshot_capture();\n"
+                "    TurThreadState *state = (TurThreadState *)calloc(1, sizeof(TurThreadState));\n"
+                "    if (!state) { free(snap); fprintf(stderr, \"tur: oom\\n\"); abort(); }\n"
+                "    pthread_mutex_init(&state->cancel_mutex, NULL);\n"
+                "    pthread_cond_init(&state->cancel_cond, NULL);\n"
+                "    _TurConveyArg *arg = (_TurConveyArg *)malloc(sizeof(_TurConveyArg));\n"
+                "    if (!arg) { free(state); free(snap); fprintf(stderr, \"tur: oom\\n\"); abort(); }\n"
+                "    arg->closure = closure;\n"
+                "    arg->state   = state;\n"
+                "    arg->snap    = snap;\n"
+                "    TurThreadHandle *h = (TurThreadHandle *)malloc(sizeof(TurThreadHandle));\n"
+                "    if (!h) { free(arg); free(state); free(snap); fprintf(stderr, \"tur: oom\\n\"); abort(); }\n"
+                "    h->state = state;\n"
+                "    int _rc = pthread_create(&h->tid, NULL, _tur_convey_trampoline, arg);\n"
+                "    if (_rc != 0) {\n"
+                "        free(h); free(arg); free(state); free(snap);\n"
+                "        fprintf(stderr, \"tur: spawn-conveying: pthread_create failed (%d)\\n\", _rc);\n"
+                "        abort();\n"
+                "    }\n"
+                "    return (void *)h;\n"
+                "}\n\n");
+        }
+    }
+
     /* Pass 1: Emit forward declarations for all functions.
      * Written to fwd_decls buffer (emitted before pending_handler_fns in final
      * assembly) so that effect handler functions can call user-defined functions. */
@@ -377,6 +533,15 @@ int emit_program(Buf *out, const Expr *program) {
             }
             buf_puts(&extern_decls, ");\n");
             }
+        } else if (e->kind == EX_DEFDYNAMIC) {
+            /* DV2: initialize the root value in main() body. */
+            DynVarEntry *entry = e->as.defdynamic_.entry;
+            char *mname = mangle_dynvar_name(entry->name->name);
+            char *rv = emit_value(&ctx, &body, e->as.defdynamic_.root_expr);
+            indent_buf(&body, ctx.indent);
+            buf_printf(&body, "_dynvar_root_%s = %s;\n", mname, rv);
+            free(rv);
+            free(mname);
         } else {
             emit_stmt(&ctx, &body, e);
         }

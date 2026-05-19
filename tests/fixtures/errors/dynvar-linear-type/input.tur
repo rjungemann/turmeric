@@ -1,0 +1,4 @@
+;; DV0 P2: dynamic var declared with a linear type (E0603).
+;; Linear values must be consumed exactly once; dynamic vars are read by any
+;; number of callers, violating the exactly-once ownership invariant.
+(defdynamic *resource* ^linear :int 0)

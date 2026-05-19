@@ -1,0 +1,6 @@
+;; DV1 P2: set! mutates the current thread's top binding frame.
+;; The mutation is visible for the remaining extent of the enclosing binding.
+(defdynamic *log-level* :int 0)
+(binding [*log-level* 1]
+  (set! *log-level* 4)
+  (println *log-level*))

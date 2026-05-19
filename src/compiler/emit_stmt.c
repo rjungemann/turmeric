@@ -591,6 +591,19 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_DEFECT:
             /* Effect definitions are compile-time only */
             return;
+        /* DV2: Dynamic vars */
+        case EX_DEFDYNAMIC:
+            /* Root init is handled by emit_module.c Pass 2 directly; nothing to do here. */
+            return;
+        case EX_DYNVAR_READ:
+            /* Reading a var as a statement discards the value; skip. */
+            return;
+        case EX_DYNVAR_BINDING:
+        case EX_DYNVAR_SET: {
+            char *v = emit_value(ctx, body, e);
+            free(v);
+            return;
+        }
         case EX_PERFORM:
         case EX_HANDLE:
         case EX_RESUME:

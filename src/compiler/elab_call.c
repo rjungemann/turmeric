@@ -344,6 +344,9 @@ Expr *elab_call(Elab *e, Form *call) {
     /* Phase 21: Serializable continuations */
     if (name == e->sym_serial_reset) return elab_serial_reset(e, call);
     if (name == e->sym_serial_shift) return elab_serial_shift(e, call);
+    /* DV0-DV1: Dynamic vars */
+    if (name == e->sym_defdynamic) return elab_defdynamic(e, call);
+    if (name == e->sym_binding)    return elab_binding   (e, call);
     /* Phase 19: Algebraic effects */
     if (name == e->sym_defeffect) return elab_defeffect(e, call);
     if (name == e->sym_perform)   return elab_perform(e, call);

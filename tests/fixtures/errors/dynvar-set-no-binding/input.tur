@@ -1,0 +1,5 @@
+;; DV1 P2: set! on a dynamic var with no active binding frame (E0601).
+;; *log-level* is a valid dynamic var but no binding form is active on this
+;; thread, so there is no frame to mutate.
+(defdynamic *log-level* :int 0)
+(set! *log-level* 5)

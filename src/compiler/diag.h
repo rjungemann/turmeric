@@ -98,6 +98,15 @@ typedef enum DiagCode {
     TUR_E0221_ROLE_NOT_DECLARED,        /* role R is not declared in global protocol G */
     TUR_E0222_ROLE_IMPL_MISMATCH,       /* role R impl does not match projected local type */
     TUR_E0223_GLOBAL_NOT_WELLFORMED,    /* global protocol G is not well-formed: reason */
+    /* DV0-DV1: Dynamic var errors (-Xdynamic-vars) */
+    TUR_E0600_DYNVAR_SET_NOT_DYNAMIC,    /* set! or binding target is not a dynamic var */
+    TUR_E0601_DYNVAR_SET_NO_BINDING,     /* set! on dynamic var with no active binding frame */
+    TUR_E0602_DYNVAR_TYPE_MISMATCH,      /* override value type does not match defdynamic type */
+    TUR_E0603_DYNVAR_SUBSTRUCTURAL_TYPE, /* dynamic var declared with a substructural type */
+    TUR_E0604_DYNVAR_NOT_TOPLEVEL,       /* defdynamic used outside module toplevel */
+    TUR_E0605_DYNVAR_SET_IN_ATOMIC,      /* set! on dynamic var inside an atomically block */
+    /* DV0: Dynamic var naming warning */
+    TUR_W0600_DYNVAR_NO_EARMUFFS,        /* defdynamic name does not use *earmuffs* convention */
 } DiagCode;
 
 typedef enum DiagLevel {

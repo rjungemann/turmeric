@@ -91,6 +91,10 @@ struct Binding {
     /* ER6: true if this binding was introduced by an (extern-c ...) declaration.
      * Used by effect_check to infer #{Unsafe} for calls to extern-c functions. */
     bool          is_extern_c;
+    /* DV0: true if this binding was introduced by (defdynamic ...).
+     * Used by DV1 binding/set! dispatch to distinguish dynamic vars from plain locals. */
+    bool          is_dynvar;
+    struct DynVarEntry *dynvar_entry; /* non-NULL iff is_dynvar */
 };
 
 typedef enum ExprKind {
@@ -212,6 +216,11 @@ typedef enum ExprKind {
     /* IT4 gradual typing */
     EX_ANY_TYPE_OF,    /* (type-of x) — returns cstr type name of an any-typed value */
     EX_ANY_CAST,       /* (cast x T) — unsafe downcast from any; returns the inner value as T */
+    /* DV0-DV1: Dynamic vars (-Xdynamic-vars) */
+    EX_DEFDYNAMIC,       /* (defdynamic *name* :type root-expr) -- declare a dynamic var */
+    EX_DYNVAR_READ,      /* *name* -- read current value of a dynamic var */
+    EX_DYNVAR_BINDING,   /* (binding [*v* expr ...] body) -- dynamic binding form */
+    EX_DYNVAR_SET,       /* (set! *name* expr) on a dynvar -- mutate top binding frame */
 } ExprKind;
 
 /* Phase 2: FnDef represents a function definition from defn or lifted fn. */
@@ -292,6 +301,21 @@ typedef struct EffectDef {
     /* ET4: effect hierarchy -- NULL if no ^extends */
     const Symbol *parent_name;          /* name of parent effect (for ^extends), or NULL */
 } EffectDef;
+
+/* DV0: Dynamic var metadata entry (-Xdynamic-vars).
+ * One entry per (defdynamic ...) declaration. */
+typedef struct DynVarEntry {
+    const Symbol *name;       /* interned symbol, e.g. "*log-level*" */
+    Type          value_type; /* declared element type */
+    int           index;      /* sequential ID; used as pthread_key_t index in DV2 */
+    bool          is_private; /* ^private annotation */
+} DynVarEntry;
+
+/* DV1: One override pair inside a (binding [...] body) form. */
+typedef struct DynBinding {
+    DynVarEntry *entry;         /* which dynamic var is being overridden */
+    struct Expr *override_expr; /* the new value for this scope */
+} DynBinding;
 
 /* Perform expression: (perform (EffectName arg1 arg2 ...)) */
 typedef struct PerformExpr {
@@ -610,6 +634,26 @@ struct Expr {
         /* IT4 gradual typing */
         struct { struct Expr *value; } any_type_of_;   /* (type-of x) — x must be TY_ANY */
         struct { struct Expr *value; TypeKind target_kind; } any_cast_;  /* (cast x T) — unbox any as T */
+        /* DV0: Dynamic var declaration */
+        struct {
+            DynVarEntry        *entry;      /* the registered dynvar (name, value_type, index) */
+            struct Expr        *root_expr;  /* elaborated root value expression */
+        } defdynamic_;
+        /* DV1: Read the current value of a dynamic var */
+        struct {
+            DynVarEntry        *entry;      /* which dynamic var to read */
+        } dynvar_read_;
+        /* DV1: (binding [*v* expr ...] body) -- push override frames, run body, pop */
+        struct {
+            DynBinding         *pairs;      /* override pairs (var + override expr) */
+            uint32_t            n_pairs;
+            struct Expr        *body;       /* body evaluated with overrides active */
+        } dynvar_binding_;
+        /* DV1: (set! *name* expr) on a dynamic var -- mutate top binding frame */
+        struct {
+            DynVarEntry        *entry;      /* which dynamic var to mutate */
+            struct Expr        *value;      /* new value */
+        } dynvar_set_;
     } as;
 };
 

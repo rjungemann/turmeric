@@ -2350,6 +2350,106 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_DEFECT:
             /* Effect definitions are compile-time only - no runtime code */
             return atom_nil();
+        /* DV2: Dynamic vars */
+        case EX_DEFDYNAMIC:
+            /* Declaration is compile-time only; root init is in emit_module.c Pass 2. */
+            return atom_nil();
+        case EX_DYNVAR_READ: {
+            DynVarEntry *dv_entry = e->as.dynvar_read_.entry;
+            char *mname = mangle_dynvar_name(dv_entry->name->name);
+            const char *vctype = type_c_name(dv_entry->value_type);
+            char *ftmp = fresh_tmp(ctx);
+            char *rtmp = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "TurDynFrame *%s = (TurDynFrame *)pthread_getspecific(_dynvar_key_%s);\n",
+                       ftmp, mname);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s %s = %s ? *(%s *)%s->value : _dynvar_root_%s;\n",
+                       vctype, rtmp, ftmp, vctype, ftmp, mname);
+            free(mname);
+            free(ftmp);
+            return rtmp;
+        }
+        case EX_DYNVAR_BINDING: {
+            const DynBinding *pairs = e->as.dynvar_binding_.pairs;
+            uint32_t n_pairs = e->as.dynvar_binding_.n_pairs;
+            bool nil_result = (e->type.kind == TY_NIL);
+            char *result_tmp = NULL;
+            if (!nil_result) {
+                result_tmp = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s %s;\n", type_c_name(e->type), result_tmp);
+            }
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "{\n");
+            ctx->indent += 4;
+            for (uint32_t pi = 0; pi < n_pairs; pi++) {
+                DynVarEntry *dv_entry = pairs[pi].entry;
+                char *mname = mangle_dynvar_name(dv_entry->name->name);
+                const char *vctype = type_c_name(dv_entry->value_type);
+                /* Emit override value */
+                char *val = emit_value(ctx, body, pairs[pi].override_expr);
+                char *vslot = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s %s = %s;\n", vctype, vslot, val);
+                free(val);
+                /* Emit binding frame */
+                char *frame = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body,
+                    "TurDynFrame %s = { (TurDynFrame *)pthread_getspecific(_dynvar_key_%s), &%s };\n",
+                    frame, mname, vslot);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "pthread_setspecific(_dynvar_key_%s, &%s);\n", mname, frame);
+                /* Cleanup guard pointer -- cleanup fn pops the frame even on longjmp */
+                char *fptr = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body,
+                    "TurDynFrame *%s __attribute__((cleanup(_dynvar_pop_%s))) = &%s;\n",
+                    fptr, mname, frame);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "(void)%s;\n", fptr);
+                free(mname);
+                free(vslot);
+                free(frame);
+                free(fptr);
+            }
+            /* Emit body */
+            char *bval = emit_value(ctx, body, e->as.dynvar_binding_.body);
+            if (!nil_result) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s = %s;\n", result_tmp, bval);
+            }
+            free(bval);
+            ctx->indent -= 4;
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "}\n");
+            return nil_result ? atom_nil() : result_tmp;
+        }
+        case EX_DYNVAR_SET: {
+            DynVarEntry *dv_entry = e->as.dynvar_set_.entry;
+            char *mname = mangle_dynvar_name(dv_entry->name->name);
+            const char *vctype = type_c_name(dv_entry->value_type);
+            char *val = emit_value(ctx, body, e->as.dynvar_set_.value);
+            char *ftmp = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "{ TurDynFrame *%s = (TurDynFrame *)pthread_getspecific(_dynvar_key_%s);\n",
+                       ftmp, mname);
+            ctx->indent += 2;
+            indent_buf(body, ctx->indent);
+            buf_printf(body,
+                "if (!%s) { fprintf(stderr, \"tur: set! on dynamic var '%s' with no active binding\\n\"); abort(); }\n",
+                ftmp, dv_entry->name->name);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "*(%s *)%s->value = %s;\n", vctype, ftmp, val);
+            ctx->indent -= 2;
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "}\n");
+            free(mname);
+            free(val);
+            free(ftmp);
+            return atom_nil();
+        }
         case EX_PERFORM: {
             /* (perform (EffectName args...)) - perform an effect.
              * Emit: tur_effect_perform("Name", args_array, n_args)

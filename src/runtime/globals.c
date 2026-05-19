@@ -68,3 +68,6 @@ bool g_keep_contracts_in_release = false; /* --keep-contracts: retain in release
 
 /* SS0a: -Xsessions flag — enable session type syntax and checking */
 bool g_sessions_enabled = false;
+
+/* DV0: -Xdynamic-vars flag — enable dynamic var syntax and checking */
+bool g_dynvar_enabled = false;

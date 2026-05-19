@@ -548,6 +548,16 @@ const char *type_name(Type t) {
             buf_putc(&tmp, '\0');
             return tur_strdup(tmp.data);
         }
+        /* DV0: Dynamic var type */
+        case TY_DYNVAR: {
+            Buf tmp;
+            buf_init(&tmp);
+            buf_puts(&tmp, "dynvar<");
+            buf_puts(&tmp, t.as.dynvar_.value_type ? type_name(*t.as.dynvar_.value_type) : "?");
+            buf_puts(&tmp, ">");
+            buf_putc(&tmp, '\0');
+            return tur_strdup(tmp.data);
+        }
     }
     return "?";
 }
@@ -884,6 +894,13 @@ static void type_name_buf(Buf *b, Type t) {
             buf_puts(b, t.as.role_.role_name ? t.as.role_.role_name : "?");
             buf_putc(b, ']');
             break;
+        /* DV0: Dynamic var type */
+        case TY_DYNVAR:
+            buf_puts(b, "dynvar<");
+            if (t.as.dynvar_.value_type) type_name_buf(b, *t.as.dynvar_.value_type);
+            else buf_putc(b, '?');
+            buf_putc(b, '>');
+            break;
     }
 }
 
@@ -1013,8 +1030,23 @@ const char *type_c_name(Type t) {
             return "/*global-protocol*/ void";
         case TY_ROLE:
             return "void *";   /* role endpoint -- NULL placeholder in SS5 */
+        /* DV0: TY_DYNVAR is an elaboration-time marker; it has no C runtime representation */
+        case TY_DYNVAR:
+            return "/*dynvar*/ void";
     }
     return "void";
+}
+
+/* DV0: Dynamic var type constructor (-Xdynamic-vars). */
+Type type_dynvar(Arena *a, Type value_type) {
+    Type t;
+    memset(&t, 0, sizeof(t));
+    t.kind = TY_DYNVAR;
+    t.copy_kind = CK_COPY;
+    t.hkt_kind = KIND_STAR;
+    t.as.dynvar_.value_type = (Type *)arena_alloc(a, sizeof(Type));
+    *t.as.dynvar_.value_type = value_type;
+    return t;
 }
 
 /* Phase HKT-P1: Type application constructor.
@@ -1223,6 +1255,9 @@ static bool type_is_guarded_recursive_helper(const Type *t, const char *rec_name
         /* SS5: Global protocol types -- never recursive in the TY_REC sense */
         case TY_GLOBAL:
         case TY_ROLE:
+            return true;
+        /* DV0: Dynamic var — leaf; no recursive members */
+        case TY_DYNVAR:
             return true;
     }
 

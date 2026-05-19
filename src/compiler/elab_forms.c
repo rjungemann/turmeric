@@ -1082,6 +1082,54 @@ Expr *elab_set(Elab *e, const Form *call) {
                   "set!: '%s' is not bound", target->as.sym->name);
         return NULL;
     }
+
+    /* DV1: If the target is a dynamic var, dispatch to dynvar set path */
+    if (b->is_dynvar && b->dynvar_entry) {
+        DynVarEntry *entry = b->dynvar_entry;
+
+        /* TUR-E0605: set! on dynvar inside atomically is disallowed */
+        if (elab_in_atomically) {
+            diag_emit_with_code(DIAG_ERROR, target->span, TUR_E0605_DYNVAR_SET_IN_ATOMIC,
+                                "set!: cannot mutate dynamic var '%s' inside an "
+                                "atomically block (mutation cannot be rolled back on retry)",
+                                entry->name->name);
+            return NULL;
+        }
+
+        /* TUR-E0601: no active binding frame for this var */
+        bool frame_active = false;
+        for (uint32_t i = 0; i < e->n_active_dynvar_bindings; i++) {
+            if (e->active_dynvar_bindings[i] == entry->name) {
+                frame_active = true;
+                break;
+            }
+        }
+        if (!frame_active) {
+            diag_emit_with_code(DIAG_ERROR, target->span, TUR_E0601_DYNVAR_SET_NO_BINDING,
+                                "set!: '%s' has no active binding frame on this thread; "
+                                "wrap in (binding [%s ...] ...) first",
+                                entry->name->name, entry->name->name);
+            return NULL;
+        }
+
+        Expr *value = elab_form(e, call->as.list.items[2]);
+        if (!value) return NULL;
+
+        /* TUR-E0602: type must match declared value type */
+        if (value->type.kind != entry->value_type.kind) {
+            diag_emit_with_code(DIAG_ERROR, value->span, TUR_E0602_DYNVAR_TYPE_MISMATCH,
+                                "set!: '%s' declared as '%s' but value has type '%s'",
+                                entry->name->name, type_name(entry->value_type),
+                                type_name(value->type));
+            return NULL;
+        }
+
+        Expr *out = expr_new(e->arena, EX_DYNVAR_SET, TYPE_NIL, call->span);
+        out->as.dynvar_set_.entry = entry;
+        out->as.dynvar_set_.value = value;
+        return out;
+    }
+
     /* Phase 11: Check if target binding has been moved */
     if (b->is_moved) {
         diag_emit_with_code(DIAG_ERROR, target->span, TUR_E0005_USE_AFTER_MOVE,

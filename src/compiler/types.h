@@ -135,6 +135,9 @@ typedef enum TypeKind {
     /* SS5: Multi-party global protocol types (-Xsessions) */
     TY_GLOBAL,            /* Global[...] -- a multi-party global protocol (compile-time only) */
     TY_ROLE,              /* Role[G, R]  -- an endpoint of protocol G playing role R */
+    /* DV0: Dynamic var reference type (-Xdynamic-vars) */
+    TY_DYNVAR,       /* dynvar<T> -- internal marker for a dynamic var binding; wraps declared value type T.
+                        Only held in DynVarEntry during elaboration; never appears as the type of a user expression. */
 } TypeKind;
 
 /* SS5: Global protocol interaction tree (compile-time only, arena-allocated).
@@ -300,6 +303,9 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
             return CK_MOVE;
         case TY_ROLE:
             return CK_LINEAR;
+        /* DV0: Dynamic var reference is copy (it's an opaque elaboration-time marker) */
+        case TY_DYNVAR:
+            return CK_COPY;
         case TY_UNKNOWN:
         default:
             return CK_MOVE;
@@ -450,8 +456,17 @@ typedef struct Type {
             const char           *role_name;   /* interned role name */
             GlobalInteraction    *current_step; /* current position in interaction tree */
         } role_;
+        /* DV0: Dynamic var type (-Xdynamic-vars) */
+        struct {
+            struct Type *value_type; /* the declared element type of the dynamic var */
+        } dynvar_;
     } as;
 } Type;
+
+/* DV0: Dynamic var type constructor (-Xdynamic-vars).
+ * Wraps the declared value type.  Only stored in DynVarEntry during elaboration;
+ * user-visible expressions have the value type directly. */
+Type type_dynvar(Arena *a, Type value_type);
 
 /* Helper to check if a type has lifetime annotations */
 static inline bool type_has_lifetime(Type t) {
