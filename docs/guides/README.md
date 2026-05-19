@@ -13,6 +13,8 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 - **[async-await-guide.md](async-await-guide.md)** — Async/await with fibers and delimited continuations
 - **[stm-guide.md](stm-guide.md)** — Software transactional memory — API reference and mechanics
 - **[stm-tutorial.md](stm-tutorial.md)** — STM tutorial: concepts, patterns, and worked examples
+- **[session-types-guide.md](session-types-guide.md)** — Session types: type-safe binary and multi-party protocols (`-Xsessions`)
+- **[dynamic-vars-guide.md](dynamic-vars-guide.md)** — Dynamic vars: thread-local, dynamically-scoped mutable cells (`-Xdynamic-vars`)
 
 ## Advanced Control Flow
 
@@ -77,7 +79,7 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 ## Finding Guides
 
 **By topic:**
-- Concurrency → [threading-guide.md](threading-guide.md), [async-await-guide.md](async-await-guide.md), [stm-guide.md](stm-guide.md), [stm-tutorial.md](stm-tutorial.md)
+- Concurrency → [threading-guide.md](threading-guide.md), [async-await-guide.md](async-await-guide.md), [stm-guide.md](stm-guide.md), [stm-tutorial.md](stm-tutorial.md), [session-types-guide.md](session-types-guide.md), [dynamic-vars-guide.md](dynamic-vars-guide.md)
 - Data structures → [hamt-guide.md](hamt-guide.md)
 - Control flow → [effects-system-guide.md](effects-system-guide.md), [logic-programming-guide.md](logic-programming-guide.md), [serializable-continuations-guide.md](serializable-continuations-guide.md), [web-continuations-guide.md](web-continuations-guide.md)
 - Type system → [hkt-guide.md](hkt-guide.md), [hrt-guide.md](hrt-guide.md), [module-system-guide.md](module-system-guide.md), [type-annotations-guide.md](type-annotations-guide.md), [union-intersection-types-guide.md](union-intersection-types-guide.md)
