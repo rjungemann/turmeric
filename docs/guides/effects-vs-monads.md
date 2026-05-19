@@ -1,3 +1,9 @@
+---
+title: Effects vs. Monads
+category: Language Features
+description: Design rationale: why effects instead of Haskell-style monads
+---
+
 # Effects vs. Monads in Turmeric
 
 Turmeric uses algebraic effects instead of Haskell-style monadic chaining for

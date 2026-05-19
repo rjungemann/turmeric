@@ -63,3 +63,6 @@ extern bool g_effect_types_enabled;
 /* CT3: Contract checking configuration */
 extern bool g_contracts_enabled;          /* -Xcontracts: enable contract syntax (always on in debug) */
 extern bool g_keep_contracts_in_release;  /* --keep-contracts: retain checks in release builds */
+
+/* SS0a: -Xsessions flag — enable session type syntax and checking (implies -Xsubstructural) */
+extern bool g_sessions_enabled;

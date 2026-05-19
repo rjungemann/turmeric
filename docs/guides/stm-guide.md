@@ -1,3 +1,9 @@
+---
+title: STM Guide
+category: Concurrency and Async
+description: Software transactional memory -- API reference and mechanics
+---
+
 # STM Guide
 
 Reference guide for Software Transactional Memory — composable, deadlock-free concurrent state.

@@ -1,3 +1,9 @@
+---
+title: Compiler Flags
+category: Reference
+description: All -X feature flags and diagnostic flags: status, what each enables, dependency graph, and common combinations
+---
+
 # Turmeric Compiler Flags
 
 This guide covers every `-X` feature flag and diagnostic flag accepted by

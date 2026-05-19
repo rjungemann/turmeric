@@ -1,3 +1,9 @@
+---
+title: Snake Game Tutorial
+category: Tutorials and Examples
+description: Building the snake game example
+---
+
 # Snake Game Tutorial — Step-by-Step Implementation
 
 A **hands-on guide** to building the Snake game with CMake + CPM + Raylib + Turmeric. Each step builds on the previous one, introducing Turmeric features incrementally. By the end, you'll have a fully working game that showcases algebraic effects, typeclasses, FFI, and more.

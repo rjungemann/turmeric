@@ -1,3 +1,9 @@
+---
+title: Formatter Guide
+category: Tools and IDE
+description: `tur format` CLI and web REPL Format button
+---
+
 # Code Formatting in Turmeric
 
 Turmeric ships a built-in formatter that produces canonical, consistent style

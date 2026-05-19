@@ -1,3 +1,9 @@
+---
+title: Union and Intersection Types Guide
+category: Language Features
+description: Union (`A | B`) and intersection (`A & B`) types, `any`, gradual typing
+---
+
 # Union and Intersection Types Guide
 
 > **Feature flags:** `-Xunion-types` and `-Xintersection-types`

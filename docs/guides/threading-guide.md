@@ -1,3 +1,9 @@
+---
+title: Threading and Concurrency Primitives Guide
+category: Concurrency and Async
+description: OS threads, `Arc<T>`, `Mutex<T>`, `Atomic<T>`, channels
+---
+
 # Threading and Concurrency Primitives Guide
 
 Safe concurrent programming with OS threads, atomic types, and synchronization primitives.

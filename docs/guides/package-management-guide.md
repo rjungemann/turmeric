@@ -1,3 +1,9 @@
+---
+title: Package Management Guide (Spice)
+category: Package Management
+description: Creating projects, adding spices, `build.tur`, `tur.lock`, CLI reference
+---
+
 # Turmeric Package Management Guide (Spice)
 
 Turmeric's package manager is called **Spice**. Every project has a single

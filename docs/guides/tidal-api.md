@@ -1,3 +1,9 @@
+---
+title: Tidal API Reference
+category: Tidal
+description: Complete API documentation for all modules in the TidalCycles-inspired pattern library for Turmeric
+---
+
 # TidalCycles-like DSL for Turmeric - API Reference
 
 > **Version**: 1.0  

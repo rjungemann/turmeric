@@ -1,3 +1,9 @@
+---
+title: GADTs Cookbook
+category: Language Features
+description: GADTs cookbook: practical patterns and recipes
+---
+
 # GADTs Cookbook
 
 Practical patterns for using Generalized Algebraic Data Types (GADTs) in
