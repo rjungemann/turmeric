@@ -141,8 +141,23 @@ Expr *elab_let(Elab *e, const Form *call) {
                     ic->return_type = elem_type;
                     ic->val_exprs = NULL; ic->n_val_exprs = 0;
                     if (vi == 0) {
-                        static const char new_code[] = "tur_session_new()";
-                        ic->code = strslice(new_code, sizeof(new_code) - 1);
+                        /* SS2: Pass protocol name for debug tag: tur_session_new(TUR_DBGPROTO("...")) */
+                        Buf code_buf;
+                        buf_init(&code_buf);
+                        buf_puts(&code_buf, "tur_session_new(TUR_DBGPROTO(\"");
+                        /* init_v->type is TY_SESSION_PAIR; fst is Session[P]; fst->fst is P */
+                        Type *sess_p = init_v->type.as.session_.fst;
+                        if (sess_p && sess_p->as.session_.fst) {
+                            type_print(&code_buf, *sess_p->as.session_.fst);
+                        } else {
+                            buf_puts(&code_buf, "?");
+                        }
+                        buf_puts(&code_buf, "\"))");
+                        char *code_str = (char *)arena_alloc(e->arena, code_buf.len + 1);
+                        memcpy(code_str, code_buf.data, code_buf.len);
+                        code_str[code_buf.len] = '\0';
+                        ic->code = strslice(code_str, (uint32_t)code_buf.len);
+                        buf_free(&code_buf);
                         ic->captures = NULL; ic->n_captures = 0;
                     } else {
                         static const char ref_code[] = "__TUR_VAL_0__";
