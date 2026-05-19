@@ -1,0 +1,356 @@
+;; EAVT Database -- blog system example
+;;
+;; Demonstrates a realistic EAVT use case: a blog with users, posts,
+;; and comments. Shows how to model relationships as EntityVal references,
+;; query across entities, and print human-readable output.
+;;
+;; Run with: ./build/tur examples/eavt/blog.tur
+
+;; ============================================================
+;; Value ADT
+;; ============================================================
+
+(defdata Value
+  (LongVal :int)
+  (StrVal :int)
+  (EntityVal :int))
+
+;; ============================================================
+;; Datum
+;; ============================================================
+
+(defn datum-new [entity :int attr :int value :int tx :int] :int
+  ```c
+  int64_t *d = malloc(4 * sizeof(int64_t));
+  d[0] = entity; d[1] = attr; d[2] = value; d[3] = tx;
+  return (int64_t)(intptr_t)d;
+  ```)
+
+(defn datum-entity [d :int] :int
+  ```c return ((int64_t*)(intptr_t)d)[0]; ```)
+
+(defn datum-attr [d :int] :int
+  ```c return ((int64_t*)(intptr_t)d)[1]; ```)
+
+(defn datum-value [d :int] :int
+  ```c return ((int64_t*)(intptr_t)d)[2]; ```)
+
+(defn datum-tx [d :int] :int
+  ```c return ((int64_t*)(intptr_t)d)[3]; ```)
+
+;; ============================================================
+;; Database
+;; ============================================================
+
+(defn db-new [] :int
+  ```c
+  int64_t *db = malloc(2 * sizeof(int64_t));
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v->data = NULL; v->len = 0; v->cap = 0;
+  db[0] = (int64_t)(intptr_t)v;
+  db[1] = 0;
+  return (int64_t)(intptr_t)db;
+  ```)
+
+(defn db-count [db :int] :int
+  ```c
+  int64_t *p = (int64_t*)(intptr_t)db;
+  struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)p[0];
+  return (int64_t)v->len;
+  ```)
+
+(defn db-ref [db :int i :int] :int
+  ```c
+  int64_t *p = (int64_t*)(intptr_t)db;
+  struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)p[0];
+  return v->data[i];
+  ```)
+
+(defn db-assert! [db :int entity :int attr :int value :int] :int
+  ```c
+  int64_t *p = (int64_t*)(intptr_t)db;
+  p[1] += 1;
+  int64_t tx = p[1];
+  int64_t *d = malloc(4 * sizeof(int64_t));
+  d[0] = entity; d[1] = attr; d[2] = value; d[3] = tx;
+  struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)p[0];
+  if (v->len >= v->cap) {
+    size_t nc = v->cap > 0 ? v->cap * 2 : 8;
+    int64_t *nd = malloc(sizeof(int64_t) * nc);
+    for (size_t i = 0; i < v->len; i++) nd[i] = v->data[i];
+    free(v->data); v->data = nd; v->cap = nc;
+  }
+  v->data[v->len++] = (int64_t)(intptr_t)d;
+  return tx;
+  ```)
+
+;; ============================================================
+;; Result vec
+;; ============================================================
+
+(defn rvec-new [] :ptr<void>
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
+  v->data = NULL; v->len = 0; v->cap = 0;
+  return v;
+  ```)
+
+(defn rvec-len [v :ptr<void>] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  return (int)vec->len;
+  ```)
+
+(defn rvec-get [v :ptr<void> i :int] :int
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  return (int)vec->data[i];
+  ```)
+
+(defn rvec-push! [v :ptr<void> val :int]
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)v;
+  if (vec->len >= vec->cap) {
+    size_t nc = vec->cap > 0 ? vec->cap * 2 : 8;
+    int64_t *nd = malloc(sizeof(int64_t) * nc);
+    for (size_t i = 0; i < vec->len; i++) nd[i] = vec->data[i];
+    free(vec->data); vec->data = nd; vec->cap = nc;
+  }
+  vec->data[vec->len++] = val;
+  ```)
+
+;; ============================================================
+;; String helpers
+;; ============================================================
+
+(defn cstr->int [s :cstr] :int
+  ```c return (int64_t)(intptr_t)s; ```)
+
+(defn cstr-eq? [a :int b :int] :bool
+  ```c
+  return strcmp((const char*)(intptr_t)a, (const char*)(intptr_t)b) == 0;
+  ```)
+
+(defn println-cstr [s :int] :nil
+  ```c printf("%s\n", (const char*)(intptr_t)s); ```)
+
+;; ============================================================
+;; Value constructors and printer
+;; ============================================================
+
+(defn long-val [n :int] :int  (LongVal n))
+(defn str-val  [s :cstr] :int (StrVal (cstr->int s)))
+(defn entity-val [e :int] :int (EntityVal e))
+
+(defn print-value [v :int] :nil
+  (match v
+    (LongVal n)   (println n)
+    (StrVal s)    (println-cstr s)
+    (EntityVal e) (println e)))
+
+;; Extract str from a StrVal (returns cstr pointer as int, or 0)
+(defn value->str [v :int] :int
+  (match v
+    (StrVal s) s
+    _ 0))
+
+;; Extract long from a LongVal (returns int, or -1)
+(defn value->long [v :int] :int
+  (match v
+    (LongVal n) n
+    _ -1))
+
+;; Extract entity from an EntityVal (returns int, or -1)
+(defn value->entity [v :int] :int
+  (match v
+    (EntityVal e) e
+    _ -1))
+
+;; ============================================================
+;; Query
+;; ============================================================
+
+(defn db-q [db :int pred] :ptr<void>
+  (let [n (db-count db)]
+    (let [result (rvec-new)]
+      (let [^mut i 0]
+        (while (< i n)
+          (do
+            (let [d (db-ref db i)]
+              (when (pred d)
+                (rvec-push! result d)))
+            (set! i (+ i 1))))
+        result))))
+
+(defn q-entity [e :int]
+  (fn [d] (= (datum-entity d) e)))
+
+(defn q-attr [a :cstr]
+  (fn [d] (cstr-eq? (datum-attr d) (cstr->int a))))
+
+(defn q-and [p q]
+  (fn [d] (and (p d) (q d))))
+
+;; ============================================================
+;; Attribute name constants
+;; ============================================================
+
+(def user/name   ":user/name")
+(def user/email  ":user/email")
+(def post/title  ":post/title")
+(def post/body   ":post/body")
+(def post/author ":post/author")
+(def comment/body   ":comment/body")
+(def comment/post   ":comment/post")
+(def comment/author ":comment/author")
+
+;; ============================================================
+;; Blog data helpers
+;; ============================================================
+
+;; create-user -- assert name and email for a user entity
+(defn create-user [db :int entity :int name :cstr email :cstr] :nil
+  (db-assert! db entity (cstr->int user/name)  (str-val name))
+  (db-assert! db entity (cstr->int user/email) (str-val email))
+  nil)
+
+;; create-post -- assert title, body, and author for a post entity
+(defn create-post [db :int entity :int title :cstr body :cstr author-id :int] :nil
+  (db-assert! db entity (cstr->int post/title)  (str-val title))
+  (db-assert! db entity (cstr->int post/body)   (str-val body))
+  (db-assert! db entity (cstr->int post/author) (entity-val author-id))
+  nil)
+
+;; create-comment -- assert body, post ref, and author for a comment entity
+(defn create-comment [db :int entity :int body :cstr post-id :int author-id :int] :nil
+  (db-assert! db entity (cstr->int comment/body)   (str-val body))
+  (db-assert! db entity (cstr->int comment/post)   (entity-val post-id))
+  (db-assert! db entity (cstr->int comment/author) (entity-val author-id))
+  nil)
+
+;; ============================================================
+;; Lookup helpers
+;; ============================================================
+
+;; get-attr -- retrieve first matching datum value for entity+attr, or 0
+(defn get-attr [db :int entity :int attr :cstr] :int
+  (let [results (db-q db (fn [d]
+                            (and (= (datum-entity d) entity)
+                                 (cstr-eq? (datum-attr d) (cstr->int attr)))))]
+    (if (> (rvec-len results) 0)
+      (datum-value (rvec-get results 0))
+      0)))
+
+;; get-posts-by-user -- find all post entities authored by a given user
+(defn get-posts-by-user [db :int user-entity :int] :ptr<void>
+  (db-q db (fn [d]
+              (and (cstr-eq? (datum-attr d) (cstr->int post/author))
+                   (match (datum-value d)
+                     (EntityVal e) (= e user-entity)
+                     _ false)))))
+
+;; get-comments-on-post -- find all comment entities for a given post
+(defn get-comments-on-post [db :int post-entity :int] :ptr<void>
+  (db-q db (fn [d]
+              (and (cstr-eq? (datum-attr d) (cstr->int comment/post))
+                   (match (datum-value d)
+                     (EntityVal e) (= e post-entity)
+                     _ false)))))
+
+;; ============================================================
+;; Pretty-printing
+;; ============================================================
+
+;; print-user -- print user name and email
+(defn print-user [db :int entity :int] :nil
+  (let [name-val  (get-attr db entity user/name)]
+    (let [email-val (get-attr db entity user/email)]
+      (println-cstr (value->str name-val))
+      (println-cstr (value->str email-val)))))
+
+;; print-blog-post -- print a post with its author and comments
+(defn print-blog-post [db :int post-entity :int] :nil
+  (let [title-val  (get-attr db post-entity post/title)]
+    (let [body-val   (get-attr db post-entity post/body)]
+      (let [author-val (get-attr db post-entity post/author)]
+        (let [author-id (value->entity author-val)]
+          (let [author-name (get-attr db author-id user/name)]
+
+            (println "  Title:")
+            (println-cstr (value->str title-val))
+            (println "  Author:")
+            (println-cstr (value->str author-name))
+            (println "  Body:")
+            (println-cstr (value->str body-val))
+
+            ;; Print each comment
+            (let [comments (get-comments-on-post db post-entity)]
+              (println "  Comments:")
+              (let [^mut ci 0]
+                (while (< ci (rvec-len comments))
+                  (do
+                    (let [cd (rvec-get comments ci)]
+                      (let [comment-entity (datum-entity cd)])
+                        (let [cbody  (get-attr db comment-entity comment/body)]
+                          (let [cauth-val (get-attr db comment-entity comment/author)]
+                            (let [cauth-name (get-attr db (value->entity cauth-val) user/name)]
+                              (println-cstr (value->str cauth-name))
+                              (println-cstr (value->str cbody))))))
+                    (set! ci (+ ci 1))))))
+
+            nil))))))
+
+;; ============================================================
+;; Demo
+;; ============================================================
+
+(defn demo [] :nil
+  (let [db (db-new)]
+
+    ;; Users: entity 1 = Alice, entity 2 = Bob
+    (create-user db 1 "Alice" "alice@example.com")
+    (create-user db 2 "Bob"   "bob@example.com")
+
+    ;; Posts: entity 101 by Alice, entity 102 by Bob
+    (create-post db 101 "Hello World" "My first post!" 1)
+    (create-post db 102 "Turmeric Tips" "Use defdata for ADTs." 2)
+
+    ;; Comments: entity 201 (Bob on post 101), entity 202 (Alice on post 101)
+    (create-comment db 201 "Nice post!" 101 2)
+    (create-comment db 202 "Thanks!" 101 1)
+
+    ;; --- Print all posts with details ---
+    (println "=== Blog Posts ===")
+
+    (println "--- Post 101 ---")
+    (print-blog-post db 101)
+
+    (println "--- Post 102 ---")
+    (print-blog-post db 102)
+
+    ;; --- Get posts by Alice ---
+    (println "=== Alice's Posts ===")
+    (let [alice-post-datums (get-posts-by-user db 1)]
+      (let [^mut i 0]
+        (while (< i (rvec-len alice-post-datums))
+          (do
+            (let [d (rvec-get alice-post-datums i)]
+              (println (datum-entity d)))
+            (set! i (+ i 1))))))
+
+    ;; --- Get comments on post 101 ---
+    (println "=== Comments on Post 101 ===")
+    (let [post-comments (get-comments-on-post db 101)]
+      (let [^mut i 0]
+        (while (< i (rvec-len post-comments))
+          (do
+            (let [d (rvec-get post-comments i)]
+              (let [cbody (get-attr db (datum-entity d) comment/body)]
+                (println-cstr (value->str cbody))))
+            (set! i (+ i 1))))))
+
+    nil))
+
+(defn main [] :int
+  (demo)
+  0)
