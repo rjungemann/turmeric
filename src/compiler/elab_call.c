@@ -416,6 +416,16 @@ Expr *elab_call(Elab *e, Form *call) {
     /* Phase HRT2: existential types */
     if (name == e->sym_pack) return elab_pack(e, call);
     if (name == e->sym_open) return elab_open(e, call);
+    /* SS0b: Session channel operations (-Xsessions) */
+    if (g_sessions_enabled) {
+        if (name == e->sym_make_session)  return elab_session_make(e, call);
+        if (name == e->sym_send)          return elab_session_send(e, call);
+        if (name == e->sym_recv)          return elab_session_recv(e, call);
+        if (name == e->sym_close)         return elab_session_close(e, call);
+        if (name == e->sym_offer)         return elab_session_offer(e, call);
+        if (name == e->sym_choose_left)   return elab_session_choose_left(e, call);
+        if (name == e->sym_choose_right)  return elab_session_choose_right(e, call);
+    }
     /* Phase R2: Panic */
     if (name == e->sym_panic) return elab_panic(e, call);
     if (name == e->sym_panic_with) return elab_panic_with(e, call);

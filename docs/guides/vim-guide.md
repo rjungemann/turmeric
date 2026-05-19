@@ -1,3 +1,9 @@
+---
+title: Vim Guide
+category: Tools and IDE
+description: Vim / Neovim syntax highlighting installation and configuration
+---
+
 # Vim Syntax Highlighting for Turmeric
 
 The Turmeric Vim plugin provides syntax highlighting for `.tur` files in Vim

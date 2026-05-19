@@ -13,6 +13,42 @@ from pathlib import Path
 
 import markdown as md_lib
 
+
+def parse_front_matter(text: str) -> tuple[dict, str]:
+    """Return (meta_dict, body) after stripping YAML front matter (--- blocks)."""
+    if not text.startswith('---\n'):
+        return {}, text
+    end = text.find('\n---', 4)
+    if end == -1:
+        return {}, text
+    fm_text = text[4:end]
+    rest_start = text.find('\n', end + 1)
+    body = text[rest_start + 1:] if rest_start != -1 else ''
+    meta: dict = {}
+    for line in fm_text.splitlines():
+        if ':' in line:
+            k, _, v = line.partition(':')
+            k, v = k.strip(), v.strip()
+            if k:
+                meta[k] = v
+    return meta, body
+
+
+def build_categories_from_meta(meta_by_stem: dict, all_stems: set) -> list:
+    """Build ordered category list from guide front matter."""
+    buckets: dict[str, list] = {}
+    for stem in sorted(all_stems):
+        meta = meta_by_stem.get(stem, {})
+        cat = meta.get('category', '').strip() or 'Other'
+        title = meta.get('title', stem.replace('-', ' ').title()).strip()
+        desc = meta.get('description', '').strip()
+        buckets.setdefault(cat, []).append({'stem': stem, 'label': title, 'desc': desc})
+    cat_names = sorted(k for k in buckets if k != 'Other')
+    if 'Other' in buckets:
+        cat_names.append('Other')
+    return [{'name': name, 'guides': buckets[name]} for name in cat_names]
+
+
 STYLE_REL = '../api/style.css'
 
 PAGE_HEADER = '''\
@@ -179,8 +215,11 @@ def toc_tokens_to_sidebar(tokens: list) -> str:
     return '\n'.join(items)
 
 
-def render_guide(stem: str, src: Path, out: Path, all_stems: set[str]) -> None:
-    text = src.read_text(encoding='utf-8')
+def render_guide(stem: str, src: Path, out: Path, all_stems: set, meta: dict | None = None) -> None:
+    raw = src.read_text(encoding='utf-8')
+    fm_meta, text = parse_front_matter(raw)
+    if meta is None:
+        meta = fm_meta
 
     # Rewrite .md links to .html (only local, non-absolute links)
     def rewrite_md_link(m: re.Match) -> str:
@@ -196,8 +235,12 @@ def render_guide(stem: str, src: Path, out: Path, all_stems: set[str]) -> None:
     body_html = conv.convert(text)
     toc_tokens = getattr(conv, 'toc_tokens', [])
 
-    title_match = re.match(r'^#\s+(.+)', src.read_text(encoding='utf-8'), re.MULTILINE)
-    title = title_match.group(1) if title_match else stem.replace('-', ' ').title()
+    fm_title = meta.get('title', '').strip() if meta else ''
+    if fm_title:
+        title = fm_title
+    else:
+        title_match = re.match(r'^#\s+(.+)', text, re.MULTILINE)
+        title = title_match.group(1) if title_match else stem.replace('-', ' ').title()
 
     sidebar_items = toc_tokens_to_sidebar(toc_tokens)
     sidebar_html = f'''\
@@ -330,15 +373,20 @@ def main() -> None:
     out_dir = Path(args.out) if args.out else guides_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    readme = guides_dir / 'README.md'
-    categories = parse_readme(readme) if readme.exists() else []
-
     md_files = sorted(f for f in guides_dir.glob('*.md') if f.stem != 'README')
     all_stems = {f.stem for f in md_files}
 
+    meta_by_stem: dict = {}
+    for src in md_files:
+        fm, _ = parse_front_matter(src.read_text(encoding='utf-8'))
+        meta_by_stem[src.stem] = fm
+
+    categories = build_categories_from_meta(meta_by_stem, all_stems)
+
     print('Generating guides:')
     for src in md_files:
-        render_guide(src.stem, src, out_dir / f'{src.stem}.html', all_stems)
+        render_guide(src.stem, src, out_dir / f'{src.stem}.html', all_stems,
+                     meta_by_stem.get(src.stem, {}))
     render_index(categories, all_stems, out_dir)
     print(f'Done: {len(md_files)} guides + index → {out_dir}')
 

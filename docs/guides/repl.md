@@ -1,3 +1,9 @@
+---
+title: tur repl -- REPL Reference
+category: Getting Started
+description: Reference guide for the `tur repl` interactive read-eval-print loop, covering startup, expression evaluation, meta-commands, and configuration
+---
+
 # tur repl — REPL Reference
 
 `tur repl` launches an interactive Turmeric read-eval-print loop.

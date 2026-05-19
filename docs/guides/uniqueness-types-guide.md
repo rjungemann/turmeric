@@ -1,3 +1,9 @@
+---
+title: Uniqueness Types
+category: Type Safety
+description: `^unique`: at-most-one-reference ownership
+---
+
 # Uniqueness Types in Turmeric
 
 Uniqueness types enforce the **at-most-one-reference** discipline: a value with `^unique`

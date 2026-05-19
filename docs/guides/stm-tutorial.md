@@ -1,3 +1,9 @@
+---
+title: Software Transactional Memory (STM) Tutorial
+category: Concurrency and Async
+description: STM tutorial: concepts, patterns, and worked examples
+---
+
 # Software Transactional Memory (STM) Tutorial
 
 Composable, deadlock-free concurrent programming using transactional memory.

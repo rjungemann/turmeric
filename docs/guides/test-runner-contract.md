@@ -1,3 +1,9 @@
+---
+title: Test Runner Contract
+category: Reference
+description: Test framework API and contract
+---
+
 # Test Runner Contract (Deferred Follow-up)
 
 This document defines the expected behavior for stdlib test running follow-up work.

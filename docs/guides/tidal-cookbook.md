@@ -1,3 +1,9 @@
+---
+title: Tidal Cookbook
+category: Tidal
+description: Practical recipes and patterns for creating music with the TidalCycles-inspired DSL for Turmeric
+---
+
 # TidalCycles-like DSL for Turmeric - Cookbook
 
 > **Version**: 1.0  

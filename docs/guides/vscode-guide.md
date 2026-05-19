@@ -1,3 +1,9 @@
+---
+title: VS Code Extension
+category: Tools and IDE
+description: VS Code extension installation and configuration
+---
+
 # VS Code Extension for Turmeric
 
 The Turmeric VS Code extension provides syntax highlighting for `.tur` files,

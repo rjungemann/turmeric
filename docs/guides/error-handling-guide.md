@@ -1,3 +1,9 @@
+---
+title: Error Handling Guide
+category: Error Handling
+description: `Result`, `Option`, `panic`, contract macros (`assert!`, `require!`, `ensure!`)
+---
+
 # Error Handling Guide
 
 This guide covers the Turmeric error handling story: `Result`, `Option`, `panic`,

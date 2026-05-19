@@ -1,3 +1,9 @@
+---
+title: libturi -- C Embedding API Reference
+category: Reference
+description: C embedding API for evaluating Turmeric expressions and calling Turmeric functions from within a C program using libturi.a
+---
+
 # libturi — C Embedding API Reference
 
 `libturi` is the Turmeric eval runtime packaged as a static library (`libturi.a`).

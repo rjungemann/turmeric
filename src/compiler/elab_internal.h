@@ -38,6 +38,8 @@ extern bool g_linear_enabled;
 extern bool g_unique_enabled;
 /* ST0: Substructural types feature flag */
 extern bool g_substructural_enabled;
+/* SS0a: Session types feature flag */
+extern bool g_sessions_enabled;
 /* IT0: Union types feature flag */
 extern bool g_union_types_enabled;
 extern bool g_intersection_types_enabled;
@@ -442,6 +444,20 @@ typedef struct Elab {
     const Symbol    *kw_post;               /* :post */
     const Symbol    *sym_result;            /* "result" -- bound name in :post predicates */
     const Symbol    *sym_tur_contract_check; /* tur-contract-check */
+    /* SS0b: Session type constructor symbols (used in type annotations) */
+    const Symbol    *sym_session_type;      /* "Session" — type constructor */
+    const Symbol    *sym_session_Send;      /* "Send"    — protocol Send[T, Q] */
+    const Symbol    *sym_session_Recv;      /* "Recv"    — protocol Recv[T, Q] */
+    const Symbol    *sym_session_Close;     /* "Close"   — terminal protocol */
+    const Symbol    *sym_session_Choose;    /* "Choose"  — internal choice */
+    const Symbol    *sym_session_Branch;    /* "Branch"  — external choice */
+    const Symbol    *sym_session_Rec;       /* "Rec"     — recursive protocol */
+    /* SS0b: Session channel operation symbols (used in expression position) */
+    const Symbol    *sym_close;             /* "close"        */
+    const Symbol    *sym_offer;             /* "offer"        */
+    const Symbol    *sym_choose_left;       /* "choose-left"  */
+    const Symbol    *sym_choose_right;      /* "choose-right" */
+    const Symbol    *sym_make_session;      /* "make-session" */
 } Elab;
 
 /* Phase 6: Macro definition */
@@ -708,5 +724,14 @@ Expr *elab_as_cast(Elab *e, const Form *call);
 Expr *elab_any_type_of(Elab *e, const Form *call);
 Expr *elab_any_cast(Elab *e, const Form *call);
 Expr *elab_form(Elab *e, Form *f);
+
+/* elab_sessions.c */
+Expr *elab_session_make(Elab *e, const Form *call);
+Expr *elab_session_send(Elab *e, const Form *call);
+Expr *elab_session_recv(Elab *e, const Form *call);
+Expr *elab_session_close(Elab *e, const Form *call);
+Expr *elab_session_offer(Elab *e, const Form *call);
+Expr *elab_session_choose_left(Elab *e, const Form *call);
+Expr *elab_session_choose_right(Elab *e, const Form *call);
 
 #endif

@@ -1488,6 +1488,7 @@ static int usage(void) {
         "  -Xlinear                         enable linear type checking (LT0-LT4)\n"
         "  -Xunique-types                   enable uniqueness type checking (UT0-UT3)\n"
         "  -Xsubstructural                  enable substructural type checking (ST0-ST3; implies -Xlinear)\n"
+        "  -Xsessions                       enable session type syntax and checking (SS0-SS2; implies -Xsubstructural)\n"
         "  -Xunion-types                    enable union type syntax: (A | B | C) (IT0-IT1)\n"
         "  -Xintersection-types             enable intersection type syntax: (A & B & C) (IT2)\n"
         "  -Xcontracts                      enable contract checks (default in debug builds) (CT3)\n"
@@ -1807,6 +1808,16 @@ int main(int argc, char **argv) {
             i--;
         } else if (strcmp(argv[i], "-Xsubstructural") == 0) {
             /* ST0: enable substructural type checking (implies -Xlinear) */
+            g_substructural_enabled = true;
+            g_linear_enabled = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "-Xsessions") == 0) {
+            /* SS0a: enable session type syntax and checking (implies -Xsubstructural, -Xlinear) */
+            g_sessions_enabled = true;
             g_substructural_enabled = true;
             g_linear_enabled = true;
             for (int j = i; j < argc - 1; j++) {

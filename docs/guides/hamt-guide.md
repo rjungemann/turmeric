@@ -1,3 +1,9 @@
+---
+title: HAMT Guide
+category: Data Structures
+description: Persistent hash maps with structural sharing (HAMT)
+---
+
 # HAMT Guide
 
 Persistent, immutable hash maps with structural sharing via Hash Array Mapped Tries.
