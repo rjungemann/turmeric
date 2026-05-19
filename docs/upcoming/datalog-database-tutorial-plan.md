@@ -1220,3 +1220,208 @@ turmeric examples/eavt/minimal.tur
 3. [DataScript](https://github.com/tonsky/datascript) — Lightweight Datomic alternative
 4. [XTDB](https://xtdb.com/) — Open-source Datomic alternative
 5. Richter, Stuart Halloway — "Database as a Value"
+
+---
+
+## 16. Datalog-esque Query Language
+
+### 16.1 Overview
+
+Rather than relying solely on functional combinators, a Datalog-inspired query layer provides a more **declarative, composable** query surface. The design stays minimal: no full unification engine, but enough pattern-matching expressiveness to write joins, negation, and aggregation concisely.
+
+A query is a map with three keys:
+
+```turmeric
+;; Query structure
+(defstruct DatalogQuery
+  [find  : (list FindClause)   ;; what to return
+   where : (list WhereClause)  ;; constraints / pattern clauses
+   in    : (list cstr)])       ;; optional input variables (default: [])
+```
+
+### 16.2 Clauses
+
+**Pattern clause** — match datums where any component may be a variable (prefixed `?`) or a literal:
+
+```turmeric
+;; WhereClause variants
+(defalias WhereClause
+  (variant
+    ;; [?e :attr ?v] -- pattern match on entity, attribute, value
+    PATTERN  (Triple Term Term Term)
+    ;; (not [?e :attr ?v]) -- negation as failure
+    NOT      WhereClause
+    ;; (or [c1] [c2]) -- disjunction
+    OR       (Pair WhereClause WhereClause)
+    ;; (and [c1] [c2]) -- explicit conjunction (default is implicit)
+    AND      (Pair WhereClause WhereClause)))
+
+;; A term is either a variable or a literal value
+(defalias Term
+  (variant
+    VAR  cstr    ;; "?name", "?e", etc.
+    LIT  Value   ;; Value::STR "Alice", Value::LONG 42, etc.
+    WILD))       ;; "_" -- match anything, bind nothing
+```
+
+**Find clause** — what variables (or aggregations) to return:
+
+```turmeric
+(defalias FindClause
+  (variant
+    FIND_VAR   cstr            ;; ?e, ?name, ...
+    FIND_PULL  (Pair cstr (list Attribute))  ;; (pull ?e [:user/name :user/email])
+    FIND_AGG   (Pair AggFn cstr)))           ;; (count ?e), (distinct ?v)
+
+(defalias AggFn
+  (variant
+    COUNT
+    COUNT_DISTINCT
+    SUM
+    MIN
+    MAX))
+```
+
+### 16.3 Execution Model
+
+Execution is a simple **binding-propagation** pipeline:
+
+1. Start with one empty binding map `{}`.
+2. For each `WHERE` clause in order, expand the current set of bindings by pattern-matching against the database.
+3. After all clauses, project the surviving bindings through the `FIND` spec.
+
+```turmeric
+;; A binding is a map from variable name to Value
+(defalias Binding (Map cstr Value))
+
+;; Execute a single pattern clause against the database, extending bindings
+(defn match_pattern [db : Database, clause : WhereClause, bindings : (list Binding)]
+  : (list Binding)
+  (match clause
+    (WhereClause::PATTERN e_term a_term v_term)
+      (List::flat_map bindings
+        (fn [b]
+          (let [candidates (filter_by_bound db b e_term a_term v_term)]
+            (List::filter_map candidates (fn [d] (extend_binding b e_term a_term v_term d))))))
+    (WhereClause::NOT inner)
+      (List::filter bindings
+        (fn [b] (List::empty? (match_pattern db inner [b]))))
+    (WhereClause::OR (Pair c1 c2))
+      (List::concat (match_pattern db c1 bindings) (match_pattern db c2 bindings))
+    (WhereClause::AND (Pair c1 c2))
+      (match_pattern db c2 (match_pattern db c1 bindings))))
+
+;; Run a full query
+(defn datalog [db : Database, query : DatalogQuery] : (list (list Value))
+  (let [initial_bindings [Map::new]]
+    (let [bindings (List::fold query.where initial_bindings
+                     (fn [bs clause] (match_pattern db clause bs)))]
+      (List::map bindings (fn [b] (project_find query.find b))))))
+```
+
+### 16.4 Example Queries
+
+```turmeric
+;; Find all user names
+(defn q_all_names [db : Database] : (list (list Value))
+  (datalog db
+    (DatalogQuery::new
+      [(FindClause::FIND_VAR "?name")]
+      [(WhereClause::PATTERN
+          (Term::VAR "?e")
+          (Term::LIT (Value::KEYWORD ":user/name"))
+          (Term::VAR "?name"))]
+      [])))
+
+;; Find posts authored by Alice (join across entities)
+(defn q_alice_posts [db : Database] : (list (list Value))
+  (datalog db
+    (DatalogQuery::new
+      [(FindClause::FIND_VAR "?title")]
+      [(WhereClause::PATTERN
+          (Term::VAR "?alice")
+          (Term::LIT (Value::KEYWORD ":user/name"))
+          (Term::LIT (Value::STR "Alice")))
+       (WhereClause::PATTERN
+          (Term::VAR "?post")
+          (Term::LIT (Value::KEYWORD ":post/author"))
+          (Term::VAR "?alice"))
+       (WhereClause::PATTERN
+          (Term::VAR "?post")
+          (Term::LIT (Value::KEYWORD ":post/title"))
+          (Term::VAR "?title"))]
+      [])))
+
+;; Count comments per post
+(defn q_comment_counts [db : Database] : (list (list Value))
+  (datalog db
+    (DatalogQuery::new
+      [(FindClause::FIND_VAR "?post")
+       (FindClause::FIND_AGG (Pair AggFn::COUNT "?comment"))]
+      [(WhereClause::PATTERN
+          (Term::VAR "?comment")
+          (Term::LIT (Value::KEYWORD ":comment/post"))
+          (Term::VAR "?post"))]
+      [])))
+
+;; Pull full entity for each matching post
+(defn q_post_pull [db : Database] : (list (list Value))
+  (datalog db
+    (DatalogQuery::new
+      [(FindClause::FIND_PULL "?post" [":post/title" ":post/body" ":post/date"])]
+      [(WhereClause::PATTERN
+          (Term::VAR "?post")
+          (Term::LIT (Value::KEYWORD ":post/id"))
+          (Term::WILD))]
+      [])))
+```
+
+### 16.5 Input Variables
+
+Queries can accept runtime parameters via the `:in` spec, bound before execution:
+
+```turmeric
+;; Find posts by a given author name (passed as input)
+(defn q_posts_by_author [db : Database, author_name : cstr] : (list (list Value))
+  (datalog_with_inputs db
+    (DatalogQuery::new
+      [(FindClause::FIND_VAR "?title")]
+      [(WhereClause::PATTERN
+          (Term::VAR "?author")
+          (Term::LIT (Value::KEYWORD ":user/name"))
+          (Term::VAR "?author_name"))
+       (WhereClause::PATTERN
+          (Term::VAR "?post")
+          (Term::LIT (Value::KEYWORD ":post/author"))
+          (Term::VAR "?author"))
+       (WhereClause::PATTERN
+          (Term::VAR "?post")
+          (Term::LIT (Value::KEYWORD ":post/title"))
+          (Term::VAR "?title"))]
+      ["?author_name"])
+    [(Value::STR author_name)]))
+
+;; Execute a query with bound inputs
+(defn datalog_with_inputs
+    [db : Database, query : DatalogQuery, inputs : (list Value)]
+    : (list (list Value))
+  (let [seed_binding (List::zip query.in inputs
+                       (fn [var val] (Pair::new var val)))]
+    (let [initial [Map::from_pairs seed_binding]]
+      (let [bindings (List::fold query.where initial
+                       (fn [bs clause] (match_pattern db clause bs)))]
+        (List::map bindings (fn [b] (project_find query.find b)))))))
+```
+
+### 16.6 Implementation Notes
+
+| Concern | V1 Approach | Future Option |
+|---------|-------------|---------------|
+| Variable binding | `Map cstr Value` per result row | Trie-based sharing |
+| Join order | Left-to-right clause order | Cost-based reordering |
+| Negation | Negation-as-failure (stratified) | Full stratified Datalog |
+| Aggregation | Post-projection grouping | Streaming aggregates |
+| Recursion | Not supported | Recursive rules |
+| Index use | Falls back to `q` filter scan | Planner picks best index |
+
+The functional combinator API (Section 5.3) and the Datalog layer are **complementary**: combinators are ideal for programmatic query construction; Datalog is better for ad-hoc, human-readable queries. Both operate on the same `Database` or `IndexedDatabase` value.

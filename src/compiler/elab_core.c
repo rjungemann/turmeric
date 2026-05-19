@@ -357,6 +357,25 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                     }
                     break;
                 }
+                case EX_MATCH: {
+                    ls[lsp++] = cur->as.match_.scrutinee;
+                    for (uint32_t ai = 0; ai < cur->as.match_.n_arms; ai++) {
+                        MatchArm *arm = &cur->as.match_.arms[ai];
+                        for (uint32_t bi = 0; bi < arm->pattern.n_bindings; bi++) {
+                            if (arm->pattern.bindings && arm->pattern.bindings[bi]) {
+                                if (n_local >= cap_local) {
+                                    cap_local = cap_local ? cap_local * 2 : 8;
+                                    local_defs = (Binding **)realloc(local_defs,
+                                        cap_local * sizeof(Binding *));
+                                }
+                                local_defs[n_local++] = arm->pattern.bindings[bi];
+                            }
+                        }
+                        if (arm->guard) ls[lsp++] = arm->guard;
+                        if (arm->body)  ls[lsp++] = arm->body;
+                    }
+                    break;
+                }
                 default: break;
             }
         }
@@ -558,6 +577,24 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
             case EX_PANIC:
                 stack[sp++] = cur->as.panic_.payload;
                 break;
+            case EX_MATCH:
+                stack[sp++] = cur->as.match_.scrutinee;
+                for (uint32_t ai = cur->as.match_.n_arms; ai > 0; ai--) {
+                    MatchArm *arm = &cur->as.match_.arms[ai-1];
+                    if (arm->guard) stack[sp++] = arm->guard;
+                    if (arm->body)  stack[sp++] = arm->body;
+                }
+                break;
+            /* SS2: Walk val_exprs so channel EX_VAR nodes are found as free vars */
+            case EX_INLINE_C: {
+                InlineC *ic = cur->as.inline_c_.inline_c;
+                if (ic) {
+                    for (uint8_t vi = 0; vi < ic->n_val_exprs; vi++) {
+                        if (ic->val_exprs[vi]) stack[sp++] = ic->val_exprs[vi];
+                    }
+                }
+                break;
+            }
             default:
                 break;
         }

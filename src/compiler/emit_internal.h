@@ -27,6 +27,8 @@ extern bool g_lint_panic;
 extern bool g_panic_trace;
 /* Phase P3: HAMT lowering - track if HAMT is needed */
 extern bool g_needs_hamt;
+/* SS0a: Session types enabled (-Xsessions) */
+extern bool g_sessions_enabled;
 
 /* Phase B5: backtrack depth cap (set by main.c --backtrack-depth N) */
 extern int64_t g_backtrack_depth;
@@ -88,6 +90,9 @@ typedef struct DeferThunk {
 } DeferThunk;
 
 /* ------------ emit_core.c: helpers, naming, atoms, builtins ------------ */
+/* SS2: Perform __TUR_CAP_N__ / __TUR_VAL_N__ substitution on an InlineC node.
+ * Evaluates val_exprs[N] into temp vars; returns a malloc'd substituted string. */
+char *inline_c_substitute(EmitCtx *ctx, Buf *body, InlineC *ic);
 const Expr **flatten_program_items(const Expr *program, uint32_t *out_n);
 Type emit_type_from_kind(TypeKind k);
 void indent_buf(Buf *b, int n);

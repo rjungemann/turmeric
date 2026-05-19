@@ -129,6 +129,8 @@ typedef enum TypeKind {
     TY_BRANCH,       /* Branch[P, Q] -- external choice (peer picks; this endpoint selects) */
     TY_SESSION_REC,  /* Rec[label, F] -- recursive protocol mu-type (distinct from HKT-P2 TY_REC) */
     TY_SESSION_PAIR, /* SS1: internal pair [Session[P], Session[dual(P)]] returned by make-session */
+    TY_SESSION_RECV_PAIR, /* SS2: internal pair [T, Session[Q]] returned by recv */
+    TY_SESSION_OFFER,     /* SS2: internal result of offer; matched with Left/Right patterns */
 } TypeKind;
 
 /* Phase G0: Constructor field descriptor for ADTs */
@@ -280,6 +282,8 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
         case TY_BRANCH:
         case TY_SESSION_REC:
         case TY_SESSION_PAIR:
+        case TY_SESSION_RECV_PAIR:
+        case TY_SESSION_OFFER:
             return CK_MOVE;
         case TY_UNKNOWN:
         default:
@@ -648,6 +652,32 @@ static inline Type type_session_pair(struct Type *first_sess, struct Type *secon
     t.hkt_kind = KIND_STAR;
     t.as.session_.fst = first_sess;
     t.as.session_.snd = second_sess;
+    return t;
+}
+
+/* SS2: TY_SESSION_RECV_PAIR -- internal pair returned by recv.
+ * fst = received value type (e.g. int); snd = continuation session type Session[Q].
+ * Never a runtime value; always immediately destructured by vector let. */
+static inline Type type_session_recv_pair(struct Type *val_type, struct Type *cont_type) {
+    Type t = {0};
+    t.kind = TY_SESSION_RECV_PAIR;
+    t.copy_kind = CK_MOVE;
+    t.hkt_kind = KIND_STAR;
+    t.as.session_.fst = val_type;
+    t.as.session_.snd = cont_type;
+    return t;
+}
+
+/* SS2: TY_SESSION_OFFER -- internal result of offer.
+ * fst = Session[P] (Left branch type); snd = Session[Q] (Right branch type).
+ * Always consumed by a match expression; never a runtime value on its own. */
+static inline Type type_session_offer(struct Type *left_type, struct Type *right_type) {
+    Type t = {0};
+    t.kind = TY_SESSION_OFFER;
+    t.copy_kind = CK_MOVE;
+    t.hkt_kind = KIND_STAR;
+    t.as.session_.fst = left_type;
+    t.as.session_.snd = right_type;
     return t;
 }
 

@@ -495,6 +495,8 @@ Expr *elab_gc_force(Elab *e, const Form *call) {
     ic->return_type = TYPE_NIL;
     ic->captures = NULL;
     ic->n_captures = 0;
+    ic->val_exprs = NULL;
+    ic->n_val_exprs = 0;
     Expr *out = expr_new(e->arena, EX_INLINE_C, TYPE_NIL, call->span);
     out->as.inline_c_.inline_c = ic;
     return out;
@@ -512,6 +514,8 @@ Expr *elab_gc_enable(Elab *e, const Form *call) {
     ic->return_type = TYPE_NIL;
     ic->captures = NULL;
     ic->n_captures = 0;
+    ic->val_exprs = NULL;
+    ic->n_val_exprs = 0;
     Expr *out = expr_new(e->arena, EX_INLINE_C, TYPE_NIL, call->span);
     out->as.inline_c_.inline_c = ic;
     return out;
@@ -529,6 +533,8 @@ Expr *elab_gc_disable(Elab *e, const Form *call) {
     ic->return_type = TYPE_NIL;
     ic->captures = NULL;
     ic->n_captures = 0;
+    ic->val_exprs = NULL;
+    ic->n_val_exprs = 0;
     Expr *out = expr_new(e->arena, EX_INLINE_C, TYPE_NIL, call->span);
     out->as.inline_c_.inline_c = ic;
     return out;

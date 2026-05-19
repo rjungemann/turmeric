@@ -60,19 +60,28 @@ static Type *session_dual(Elab *e, Type *proto, Span span) {
     }
 }
 
-/* Helper: return a TY_SESSION Expr wrapping the given protocol Type, using
- * EX_INLINE_C as a placeholder (codegen is deferred to SS2).  The returned
- * expression carries the correct type for subsequent type-level checks. */
-static Expr *session_placeholder(Elab *e, Type proto_type, Span span) {
-    Type *proto = (Type *)arena_alloc(e->arena, sizeof(Type));
-    *proto = proto_type;
-    Type sess_type = type_session(proto);
-    Expr *out = expr_new(e->arena, EX_INLINE_C, sess_type, span);
+/* SS2: Build an EX_INLINE_C node with substitution placeholders.
+ * code_str/code_len: the template (may contain __TUR_VAL_N__)
+ * ret_type: the Turmeric type of the expression
+ * chan_binding: if non-NULL, stored as EX_VAR in val_exprs[0] for __TUR_VAL_0__ */
+static Expr *session_inline_c(Elab *e, const char *code_str, uint32_t code_len,
+                               Type ret_type, Binding *chan_binding, Span span) {
+    Expr *out = expr_new(e->arena, EX_INLINE_C, ret_type, span);
     InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
-    ic->code = strslice("NULL /*session-placeholder*/", 28);
-    ic->return_type = sess_type;
+    ic->code = strslice(code_str, code_len);
+    ic->return_type = ret_type;
     ic->captures = NULL;
     ic->n_captures = 0;
+    if (chan_binding) {
+        ic->val_exprs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+        Expr *chan_var = expr_new(e->arena, EX_VAR, chan_binding->type, span);
+        chan_var->as.var.binding = chan_binding;
+        ic->val_exprs[0] = chan_var;
+        ic->n_val_exprs = 1;
+    } else {
+        ic->val_exprs = NULL;
+        ic->n_val_exprs = 0;
+    }
     out->as.inline_c_.inline_c = ic;
     return out;
 }
@@ -103,16 +112,11 @@ Expr *elab_session_make(Elab *e, const Form *call) {
     Type *sess_dp = (Type *)arena_alloc(e->arena, sizeof(Type));
     *sess_dp = type_session(dual_proto);
 
-    /* Return a TY_SESSION_PAIR placeholder; SS2 will emit the actual pair-creation. */
+    /* Return a TY_SESSION_PAIR node. SS2: elab_forms.c splits this into two
+     * separate EX_INLINE_C init expressions: tur_session_new() for fst and
+     * __TUR_CAP_0__ (referencing fst's binding) for snd. */
     Type pair_type = type_session_pair(sess_p, sess_dp);
-    Expr *out = expr_new(e->arena, EX_INLINE_C, pair_type, call->span);
-    InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
-    ic->code = strslice("0 /*make-session-placeholder*/", 30);
-    ic->return_type = pair_type;
-    ic->captures = NULL;
-    ic->n_captures = 0;
-    out->as.inline_c_.inline_c = ic;
-    return out;
+    return session_inline_c(e, "/*make-session*/", 16, pair_type, NULL, call->span);
 }
 
 /* Helper: validate that an expression is a Session[...] channel and extract
@@ -153,12 +157,36 @@ Expr *elab_session_send(Elab *e, const Form *call) {
     }
 
     /* Mark chan as consumed (it's linear) */
-    if (chan->kind == EX_VAR) {
-        binding_mark_moved(chan->as.var.binding, call->span);
-    }
+    Binding *chan_binding = (chan->kind == EX_VAR) ? chan->as.var.binding : NULL;
+    if (chan_binding) binding_mark_moved(chan_binding, call->span);
 
-    /* Return Session[Q] where Q = proto->as.session_.snd */
-    return session_placeholder(e, *proto->as.session_.snd, call->span);
+    /* Build Session[Q] result type */
+    Type *cont_proto = proto->as.session_.snd;
+    Type *cont_proto_alloc = (Type *)arena_alloc(e->arena, sizeof(Type));
+    *cont_proto_alloc = *cont_proto;
+    Type sess_q = type_session(cont_proto_alloc);
+    Expr *sess_q_alloc = expr_new(e->arena, EX_INLINE_C, sess_q, call->span);
+
+    /* SS2: emit a GNU statement-expression that sends and returns the channel.
+     * val_exprs[0] = EX_VAR(chan_binding), val_exprs[1] = val */
+    static const char send_code[] =
+        "__extension__ ({ tur_session_send(__TUR_VAL_0__, (int64_t)(__TUR_VAL_1__)); (void *)__TUR_VAL_0__; })";
+    InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
+    ic->code = strslice(send_code, sizeof(send_code) - 1);
+    ic->return_type = sess_q;
+    ic->captures = NULL; ic->n_captures = 0;
+    ic->val_exprs = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
+    ic->n_val_exprs = 2;
+    if (chan_binding) {
+        Expr *chan_var = expr_new(e->arena, EX_VAR, chan_binding->type, call->span);
+        chan_var->as.var.binding = chan_binding;
+        ic->val_exprs[0] = chan_var;
+    } else {
+        ic->val_exprs[0] = NULL;
+    }
+    ic->val_exprs[1] = val;
+    sess_q_alloc->as.inline_c_.inline_c = ic;
+    return sess_q_alloc;
 }
 
 /* (recv chan) — consume chan : Session[Recv[T, Q]]; return placeholder for [T, Session[Q]].
@@ -184,19 +212,21 @@ Expr *elab_session_recv(Elab *e, const Form *call) {
     }
 
     /* Mark chan as consumed */
-    if (chan->kind == EX_VAR) {
-        binding_mark_moved(chan->as.var.binding, call->span);
-    }
+    Binding *chan_binding = (chan->kind == EX_VAR) ? chan->as.var.binding : NULL;
+    if (chan_binding) binding_mark_moved(chan_binding, call->span);
 
-    /* Return TY_INT placeholder; SS2 will emit the actual pair-creation code. */
-    Expr *out = expr_new(e->arena, EX_INLINE_C, TYPE_INT, call->span);
-    InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
-    ic->code = strslice("0 /*recv-placeholder*/", 22);
-    ic->return_type = TYPE_INT;
-    ic->captures = NULL;
-    ic->n_captures = 0;
-    out->as.inline_c_.inline_c = ic;
-    return out;
+    /* SS2: return TY_SESSION_RECV_PAIR so vector destructuring can split it.
+     * fst = value type T; snd = Session[Q] (continuation).
+     * captures[0] = chan_binding — used by elab_forms.c to create separate inits. */
+    Type *val_tp = (Type *)arena_alloc(e->arena, sizeof(Type));
+    *val_tp = *proto->as.session_.fst;  /* T */
+    Type *cont_proto = proto->as.session_.snd;
+    Type *cont_proto_alloc = (Type *)arena_alloc(e->arena, sizeof(Type));
+    *cont_proto_alloc = *cont_proto;
+    Type *sess_q = (Type *)arena_alloc(e->arena, sizeof(Type));
+    *sess_q = type_session(cont_proto_alloc);  /* Session[Q] */
+    Type pair_type = type_session_recv_pair(val_tp, sess_q);
+    return session_inline_c(e, "/*recv-pair*/", 13, pair_type, chan_binding, call->span);
 }
 
 /* (close chan) — consume chan : Session[Close]; return nil.
@@ -222,18 +252,13 @@ Expr *elab_session_close(Elab *e, const Form *call) {
     }
 
     /* Mark chan as consumed */
-    if (chan->kind == EX_VAR) {
-        binding_mark_moved(chan->as.var.binding, call->span);
-    }
+    Binding *chan_binding = (chan->kind == EX_VAR) ? chan->as.var.binding : NULL;
+    if (chan_binding) binding_mark_moved(chan_binding, call->span);
 
-    Expr *out = expr_new(e->arena, EX_INLINE_C, TYPE_NIL, call->span);
-    InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
-    ic->code = strslice("0 /*close-placeholder*/", 23);
-    ic->return_type = TYPE_NIL;
-    ic->captures = NULL;
-    ic->n_captures = 0;
-    out->as.inline_c_.inline_c = ic;
-    return out;
+    /* SS2: call tur_session_close(__TUR_VAL_0__); return nil. */
+    static const char close_code[] = "tur_session_close(__TUR_VAL_0__)";
+    return session_inline_c(e, close_code, sizeof(close_code) - 1,
+                             TYPE_NIL, chan_binding, call->span);
 }
 
 /* (offer chan) — consume chan : Session[Branch[P, Q]]; return Either(Session[P], Session[Q]).
@@ -259,19 +284,27 @@ Expr *elab_session_offer(Elab *e, const Form *call) {
     }
 
     /* Mark chan as consumed */
-    if (chan->kind == EX_VAR) {
-        binding_mark_moved(chan->as.var.binding, call->span);
-    }
+    Binding *chan_binding = (chan->kind == EX_VAR) ? chan->as.var.binding : NULL;
+    if (chan_binding) binding_mark_moved(chan_binding, call->span);
 
-    /* Return TY_INT placeholder; SS2 will emit the ADT construction. */
-    Expr *out = expr_new(e->arena, EX_INLINE_C, TYPE_INT, call->span);
-    InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
-    ic->code = strslice("0 /*offer-placeholder*/", 23);
-    ic->return_type = TYPE_INT;
-    ic->captures = NULL;
-    ic->n_captures = 0;
-    out->as.inline_c_.inline_c = ic;
-    return out;
+    /* SS2: receive a branch tag from the peer's choose-left/choose-right.
+     * Result type TY_SESSION_OFFER: fst=Session[P] (Left), snd=Session[Q] (Right).
+     * The tag value (0 or 1) is used by match emit to select the branch arm.
+     * The channel is still live as captures[0] for arm binding. */
+    Type *left_proto = proto->as.session_.fst;   /* P in Branch[P,Q] */
+    Type *right_proto = proto->as.session_.snd;  /* Q in Branch[P,Q] */
+    Type *left_proto_alloc  = (Type *)arena_alloc(e->arena, sizeof(Type));
+    *left_proto_alloc = *left_proto;
+    Type *right_proto_alloc = (Type *)arena_alloc(e->arena, sizeof(Type));
+    *right_proto_alloc = *right_proto;
+    Type *sess_p = (Type *)arena_alloc(e->arena, sizeof(Type));
+    *sess_p = type_session(left_proto_alloc);   /* Session[P] */
+    Type *sess_q = (Type *)arena_alloc(e->arena, sizeof(Type));
+    *sess_q = type_session(right_proto_alloc);  /* Session[Q] */
+    Type offer_type = type_session_offer(sess_p, sess_q);
+    static const char offer_code[] = "tur_session_recv_tag(__TUR_VAL_0__)";
+    return session_inline_c(e, offer_code, sizeof(offer_code) - 1,
+                             offer_type, chan_binding, call->span);
 }
 
 /* (choose-left chan) — consume chan : Session[Choose[P, Q]]; return Session[P].
@@ -297,12 +330,30 @@ Expr *elab_session_choose_left(Elab *e, const Form *call) {
     }
 
     /* Mark chan as consumed */
-    if (chan->kind == EX_VAR) {
-        binding_mark_moved(chan->as.var.binding, call->span);
-    }
+    Binding *chan_binding = (chan->kind == EX_VAR) ? chan->as.var.binding : NULL;
+    if (chan_binding) binding_mark_moved(chan_binding, call->span);
 
-    /* Return Session[P] where P = proto->as.session_.fst (left branch) */
-    return session_placeholder(e, *proto->as.session_.fst, call->span);
+    /* SS2: send tag=0 to peer and return channel as Session[P]. */
+    Type *left_proto = proto->as.session_.fst;
+    Type *left_proto_alloc = (Type *)arena_alloc(e->arena, sizeof(Type));
+    *left_proto_alloc = *left_proto;
+    Type sess_p = type_session(left_proto_alloc);
+    Expr *out = expr_new(e->arena, EX_INLINE_C, sess_p, call->span);
+    static const char choose_left_code[] =
+        "__extension__ ({ tur_session_send_tag(__TUR_VAL_0__, (int64_t)0); (void *)__TUR_VAL_0__; })";
+    InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
+    ic->code = strslice(choose_left_code, sizeof(choose_left_code) - 1);
+    ic->return_type = sess_p;
+    ic->captures = NULL; ic->n_captures = 0;
+    if (chan_binding) {
+        ic->val_exprs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+        Expr *chan_var = expr_new(e->arena, EX_VAR, chan_binding->type, call->span);
+        chan_var->as.var.binding = chan_binding;
+        ic->val_exprs[0] = chan_var;
+        ic->n_val_exprs = 1;
+    } else { ic->val_exprs = NULL; ic->n_val_exprs = 0; }
+    out->as.inline_c_.inline_c = ic;
+    return out;
 }
 
 /* (choose-right chan) — consume chan : Session[Choose[P, Q]]; return Session[Q].
@@ -328,10 +379,28 @@ Expr *elab_session_choose_right(Elab *e, const Form *call) {
     }
 
     /* Mark chan as consumed */
-    if (chan->kind == EX_VAR) {
-        binding_mark_moved(chan->as.var.binding, call->span);
-    }
+    Binding *chan_binding = (chan->kind == EX_VAR) ? chan->as.var.binding : NULL;
+    if (chan_binding) binding_mark_moved(chan_binding, call->span);
 
-    /* Return Session[Q] where Q = proto->as.session_.snd (right branch) */
-    return session_placeholder(e, *proto->as.session_.snd, call->span);
+    /* SS2: send tag=1 to peer and return channel as Session[Q]. */
+    Type *right_proto = proto->as.session_.snd;
+    Type *right_proto_alloc = (Type *)arena_alloc(e->arena, sizeof(Type));
+    *right_proto_alloc = *right_proto;
+    Type sess_q = type_session(right_proto_alloc);
+    Expr *out = expr_new(e->arena, EX_INLINE_C, sess_q, call->span);
+    static const char choose_right_code[] =
+        "__extension__ ({ tur_session_send_tag(__TUR_VAL_0__, (int64_t)1); (void *)__TUR_VAL_0__; })";
+    InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
+    ic->code = strslice(choose_right_code, sizeof(choose_right_code) - 1);
+    ic->return_type = sess_q;
+    ic->captures = NULL; ic->n_captures = 0;
+    if (chan_binding) {
+        ic->val_exprs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+        Expr *chan_var = expr_new(e->arena, EX_VAR, chan_binding->type, call->span);
+        chan_var->as.var.binding = chan_binding;
+        ic->val_exprs[0] = chan_var;
+        ic->n_val_exprs = 1;
+    } else { ic->val_exprs = NULL; ic->n_val_exprs = 0; }
+    out->as.inline_c_.inline_c = ic;
+    return out;
 }

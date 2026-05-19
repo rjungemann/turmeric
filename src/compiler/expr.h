@@ -256,10 +256,12 @@ struct ExternC {
 
 /* Phase 2: InlineC represents an inline C block. ```c ... ``` */
 struct InlineC {
-    StrSlice       code;         /* the raw C code */
+    StrSlice       code;         /* the raw C code (may contain __TUR_CAP_N__ / __TUR_VAL_N__) */
     Type           return_type; /* annotated : T */
-    Binding      **captures;     /* captured bindings from enclosing scope */
+    Binding      **captures;     /* captured bindings; __TUR_CAP_N__ substitutes captures[N]'s C name */
     uint8_t        n_captures;
+    struct Expr  **val_exprs;    /* SS2: sub-expressions; __TUR_VAL_N__ evaluates val_exprs[N] */
+    uint8_t        n_val_exprs;
 };
 
 /* Phase 3: Closure represents a fn with captured environment. */
