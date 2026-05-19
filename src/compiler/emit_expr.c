@@ -1517,11 +1517,12 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             return atom_nil();
         }
         case EX_INLINE_C: {
-            /* Emit the raw C code inline */
+            /* Return the inline C code as a value string so it can be used
+             * as an expression (e.g. a let-binding initializer). Statement-
+             * position use goes through emit_stmt which handles EX_INLINE_C
+             * separately (writes code + newline). */
             InlineC *ic = e->as.inline_c_.inline_c;
-            /* Just emit the C code as-is */
-            buf_write(body, ic->code.p, ic->code.len);
-            return atom_nil();
+            return strndup(ic->code.p, ic->code.len);
         }
         /* Phase 3 */
         /* Phase 4 */

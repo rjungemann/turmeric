@@ -487,6 +487,17 @@ const char *type_name(Type t) {
             buf_putc(&tmp, '\0');
             return tur_strdup(tmp.data);
         }
+        case TY_SESSION_PAIR: {
+            Buf tmp;
+            buf_init(&tmp);
+            buf_puts(&tmp, "SessionPair[");
+            buf_puts(&tmp, t.as.session_.fst ? type_name(*t.as.session_.fst) : "?");
+            buf_puts(&tmp, ", ");
+            buf_puts(&tmp, t.as.session_.snd ? type_name(*t.as.session_.snd) : "?");
+            buf_puts(&tmp, "]");
+            buf_putc(&tmp, '\0');
+            return tur_strdup(tmp.data);
+        }
     }
     return "?";
 }
@@ -773,6 +784,15 @@ static void type_name_buf(Buf *b, Type t) {
             else buf_putc(b, '?');
             buf_putc(b, ']');
             break;
+        case TY_SESSION_PAIR:
+            buf_puts(b, "SessionPair[");
+            if (t.as.session_.fst) type_name_buf(b, *t.as.session_.fst);
+            else buf_putc(b, '?');
+            buf_puts(b, ", ");
+            if (t.as.session_.snd) type_name_buf(b, *t.as.session_.snd);
+            else buf_putc(b, '?');
+            buf_putc(b, ']');
+            break;
     }
 }
 
@@ -878,10 +898,11 @@ const char *type_c_name(Type t) {
             return t.as.contract_.base_type
                    ? type_c_name(*t.as.contract_.base_type)
                    : "int64_t";
-        /* SS0a: Session channel endpoints lower to TurChannel* in C (SS2).
-         * Protocol descriptor types are erased and never appear as C values. */
+        /* SS0a/SS1: Session channel endpoints lower to void* in C until SS2
+         * defines the TurChannel struct. Protocol descriptor types are erased
+         * and never appear as C values. */
         case TY_SESSION:
-            return "TurChannel *";
+            return "void *";
         case TY_SEND:
         case TY_RECV:
         case TY_CLOSE:
@@ -889,6 +910,8 @@ const char *type_c_name(Type t) {
         case TY_BRANCH:
         case TY_SESSION_REC:
             return "/*session-protocol*/ void";
+        case TY_SESSION_PAIR:
+            return "/*session-pair*/ void";
     }
     return "void";
 }
@@ -1086,6 +1109,10 @@ static bool type_is_guarded_recursive_helper(const Type *t, const char *rec_name
                     || type_is_guarded_recursive_helper(t->as.session_.snd, rec_name, depth + 1));
         case TY_SESSION_REC:
             return type_is_guarded_recursive_helper(t->as.session_.fst, rec_name, depth + 1);
+        case TY_SESSION_PAIR:
+            return type_is_guarded_recursive_helper(t->as.session_.fst, rec_name, depth + 1)
+                && (!t->as.session_.snd
+                    || type_is_guarded_recursive_helper(t->as.session_.snd, rec_name, depth + 1));
     }
 
     return true;  /* Unknown type kind - assume safe */
@@ -1183,6 +1210,7 @@ const char *typekind_to_string(TypeKind k) {
         case TY_CHOOSE:       return "Choose";
         case TY_BRANCH:       return "Branch";
         case TY_SESSION_REC:  return "Rec";
+        case TY_SESSION_PAIR: return "SessionPair";
         default:          return "<?>";
     }
 }

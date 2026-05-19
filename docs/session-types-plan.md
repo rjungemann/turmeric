@@ -11,7 +11,7 @@
 > [linear-types-plan.md](linear-types-plan.md),
 > [effect-rows-plan.md](effect-rows-plan.md)
 >
-> **Last updated:** 2026-05-18 (P0, P1, P2, P3, SS0a, SS0b complete; SS1 ready to begin)
+> **Last updated:** 2026-05-18 (P0, P1, P2, P3, SS0a, SS0b, SS1 complete; SS2 is next)
 
 ---
 
@@ -518,16 +518,16 @@ The duality relation:
 | `Branch[P, Q]` | `Choose[Dual[P], Dual[Q]]` |
 | `Rec[F]` | `Rec[x => Dual[F x]]` |
 
-- [ ] Implement `dual(P)` function in `src/typecheck.c`
-- [ ] When a session channel is created (`make-session`), check that the two endpoints have dual types
-- [ ] Emit error `TUR_E0210` when duality fails
-- [ ] **GADT `coerce` guard:** the elaborator must reject any use of `coerce` (from `stdlib/equal.tur`, `-Xgadt`) whose target type is a `Session` type, unless the source protocol is provably equal via an `Equal` witness. A misfired `coerce` could reinterpret a channel at a wrong protocol step, stranding the linear resource.
+- [x] Implement `dual(P)` function in `src/compiler/elab_sessions.c` (`session_dual()`)
+- [x] When a session channel is created (`make-session`), parse the protocol type with `type_expr_from_form`, compute `dual(P)`, and return `TY_SESSION_PAIR` carrying both `Session[P]` and `Session[dual(P)]` endpoints; vector destructuring decomposes `TY_SESSION_PAIR` into the two typed bindings
+- [x] Emit error `TUR_E0210` when duality fails
+- [x] **GADT `coerce` guard:** added in `elab_structs.c` (`elab_coerce`) -- rejects any `coerce` whose source expression is `TY_SESSION`
 
 ### Protocol Progress
 
-- [ ] A session channel must be fully consumed (all `send`/`recv` steps completed, ending at `Close`) before the channel binding goes out of scope
-- [ ] Re-use linear type machinery: `chan : Session[Close]` must be passed to `close` before scope exit
-- [ ] Emit `TUR_E0211` when a non-`Close` session is dropped
+- [x] A session channel must be fully consumed (all `send`/`recv` steps completed, ending at `Close`) before the channel binding goes out of scope
+- [x] Re-use linear type machinery: `chan : Session[Close]` must be passed to `close` before scope exit
+- [x] Emit `TUR_E0211` when a non-`Close` session is dropped (message now includes current protocol state)
 
 ### Error codes
 

@@ -432,10 +432,43 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_DICT:
             return;
         case EX_INLINE_C: {
-            /* Emit the raw C code inline as a statement */
+            /* Emit the raw C code inline as a statement.
+             * Session placeholders are plain expressions that need a semicolon;
+             * full inline-C function bodies already end with ';' or '}' (possibly
+             * followed by whitespace or block comments).  Strip trailing whitespace
+             * and block comments iteratively, then check the last significant byte. */
             InlineC *ic = e->as.inline_c_.inline_c;
             indent_buf(body, ctx->indent);
             buf_write(body, ic->code.p, ic->code.len);
+            /* Find last significant byte by stripping whitespace + block comments. */
+            size_t l = ic->code.len;
+            bool strip_again;
+            do {
+                strip_again = false;
+                while (l > 0 && (ic->code.p[l-1] == ' ' || ic->code.p[l-1] == '\t'
+                                 || ic->code.p[l-1] == '\n' || ic->code.p[l-1] == '\r')) {
+                    l--; strip_again = true;
+                }
+                if (l >= 2 && ic->code.p[l-1] == '/' && ic->code.p[l-2] == '*') {
+                    /* Strip trailing block comment: scan back for its opening delimiter. */
+                    size_t j = l - 2;
+                    bool found = false;
+                    while (j > 0) {
+                        j--;
+                        if (ic->code.p[j] == '/' && ic->code.p[j+1] == '*') {
+                            l = j;
+                            strip_again = true;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) { l = 0; break; }
+                }
+            } while (strip_again);
+            bool needs_semi = l > 0 && ic->code.p[l-1] != ';' && ic->code.p[l-1] != '}';
+            if (needs_semi) {
+                buf_putc(body, ';');
+            }
             buf_putc(body, '\n');
             return;
         }

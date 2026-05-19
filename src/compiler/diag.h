@@ -89,7 +89,8 @@ typedef enum DiagCode {
     /* CT0: Contract type errors */
     TUR_E0400_CONTRACT_VIOLATED,   /* contract check failed: predicate is false */
     TUR_E0401_POSTCOND_VIOLATED,   /* postcondition failed: predicate is false for result */
-    /* SS0b: Session type errors (-Xsessions) */
+    /* SS0b-SS1: Session type errors (-Xsessions) */
+    TUR_E0210_SESSION_NOT_DUAL,         /* session endpoints are not dual protocols */
     TUR_E0211_SESSION_DROPPED,          /* session channel dropped before protocol completion */
     TUR_E0212_SESSION_PROTO_MISMATCH,   /* channel operation not valid for current session protocol */
 } DiagCode;

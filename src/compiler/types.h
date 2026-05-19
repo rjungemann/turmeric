@@ -128,6 +128,7 @@ typedef enum TypeKind {
     TY_CHOOSE,       /* Choose[P, Q] -- internal choice (this endpoint picks branch) */
     TY_BRANCH,       /* Branch[P, Q] -- external choice (peer picks; this endpoint selects) */
     TY_SESSION_REC,  /* Rec[label, F] -- recursive protocol mu-type (distinct from HKT-P2 TY_REC) */
+    TY_SESSION_PAIR, /* SS1: internal pair [Session[P], Session[dual(P)]] returned by make-session */
 } TypeKind;
 
 /* Phase G0: Constructor field descriptor for ADTs */
@@ -278,6 +279,7 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
         case TY_CHOOSE:
         case TY_BRANCH:
         case TY_SESSION_REC:
+        case TY_SESSION_PAIR:
             return CK_MOVE;
         case TY_UNKNOWN:
         default:
@@ -632,6 +634,20 @@ static inline Type type_session_rec(const char *label, struct Type *body) {
     t.hkt_kind = KIND_STAR;
     t.as.session_.label = label;
     t.as.session_.fst = body;
+    return t;
+}
+
+/* SS1: TY_SESSION_PAIR -- internal pair returned by make-session.
+ * fst = first session endpoint type (Session[P])
+ * snd = second session endpoint type (Session[dual(P)])
+ * Never a runtime value; always immediately destructured by vector let. */
+static inline Type type_session_pair(struct Type *first_sess, struct Type *second_sess) {
+    Type t = {0};
+    t.kind = TY_SESSION_PAIR;
+    t.copy_kind = CK_MOVE;
+    t.hkt_kind = KIND_STAR;
+    t.as.session_.fst = first_sess;
+    t.as.session_.snd = second_sess;
     return t;
 }
 
