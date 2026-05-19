@@ -1,7 +1,7 @@
 ;; DV1 P2: multiple dynamic vars bound in a single binding form.
 ;; Each var gets its own override frame; both are visible in the body.
 (defdynamic *log-level* :int 0)
-(defdynamic *locale* :str "en-US")
+(defdynamic *locale* :cstr "en-US")
 (binding [*log-level* 2
           *locale*    "fr-FR"]
   (println *log-level*)

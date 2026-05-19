@@ -1,6 +1,6 @@
 # Dynamic Vars -- Implementation Plan (DV0-DV4)
 
-> **Status:** DV0 complete; DV1 not started
+> **Status:** DV0-DV2 complete; DV3 not started
 >
 > **Target:** v3 or later
 >
@@ -10,7 +10,7 @@
 > [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md)
 > (§8 Effect Types, §1 Linear Types)
 >
-> **Last updated:** 2026-05-19 (P0-P2 complete; DV0 complete: TY_DYNVAR, EX_DEFDYNAMIC, elab_dynvars.c, -Xdynamic-vars flag)
+> **Last updated:** 2026-05-19 (P0-P2 complete; DV0-DV2 complete: TY_DYNVAR, EX_DEFDYNAMIC, elab_dynvars.c, -Xdynamic-vars flag, pthread_key_t codegen, binding frame stack, cleanup guards, root-value init)
 
 ---
 
@@ -394,7 +394,7 @@ The existing `set!` path in `elab_forms.c` dispatches on whether the target is a
 
 ---
 
-## Phase DV2 -- Codegen
+## Phase DV2 -- Codegen ✓
 
 **Goal:** Emit the pthread_key_t binding stack and generate correct C for all dynamic var operations.
 

@@ -226,6 +226,42 @@ int emit_program(Buf *out, const Expr *program) {
         }
     }
 
+    /* DV2: Emit TurDynFrame typedef, pthread_key_t globals, constructor and cleanup
+     * functions for each defdynamic declaration found in the program. */
+    {
+        bool any_dynvar = false;
+        for (uint32_t i = 0; i < n_items; i++) {
+            if (items[i]->kind == EX_DEFDYNAMIC) { any_dynvar = true; break; }
+        }
+        if (any_dynvar) {
+            buf_puts(&early_file,
+                "/* DV2: dynamic var frame stack */\n"
+                "typedef struct TurDynFrame {\n"
+                "    struct TurDynFrame *prev;\n"
+                "    void               *value;\n"
+                "} TurDynFrame;\n\n");
+            for (uint32_t i = 0; i < n_items; i++) {
+                const Expr *e = items[i];
+                if (e->kind != EX_DEFDYNAMIC) continue;
+                DynVarEntry *entry = e->as.defdynamic_.entry;
+                char *mname = mangle_dynvar_name(entry->name->name);
+                const char *ctype = type_c_name(entry->value_type);
+                buf_printf(&early_file, "static %s _dynvar_root_%s;\n", ctype, mname);
+                buf_printf(&early_file, "static pthread_key_t _dynvar_key_%s;\n", mname);
+                buf_printf(&early_file,
+                    "__attribute__((constructor))\n"
+                    "static void _dynvar_init_%s(void) {\n"
+                    "    pthread_key_create(&_dynvar_key_%s, free);\n"
+                    "}\n"
+                    "static void _dynvar_pop_%s(TurDynFrame **fp) {\n"
+                    "    pthread_setspecific(_dynvar_key_%s, (*fp)->prev);\n"
+                    "}\n\n",
+                    mname, mname, mname, mname);
+                free(mname);
+            }
+        }
+    }
+
     /* Pass 1: Emit forward declarations for all functions.
      * Written to fwd_decls buffer (emitted before pending_handler_fns in final
      * assembly) so that effect handler functions can call user-defined functions. */
@@ -377,6 +413,15 @@ int emit_program(Buf *out, const Expr *program) {
             }
             buf_puts(&extern_decls, ");\n");
             }
+        } else if (e->kind == EX_DEFDYNAMIC) {
+            /* DV2: initialize the root value in main() body. */
+            DynVarEntry *entry = e->as.defdynamic_.entry;
+            char *mname = mangle_dynvar_name(entry->name->name);
+            char *rv = emit_value(&ctx, &body, e->as.defdynamic_.root_expr);
+            indent_buf(&body, ctx.indent);
+            buf_printf(&body, "_dynvar_root_%s = %s;\n", mname, rv);
+            free(rv);
+            free(mname);
         } else {
             emit_stmt(&ctx, &body, e);
         }
