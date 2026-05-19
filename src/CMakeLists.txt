@@ -68,6 +68,7 @@ set(TUR_CORE_SOURCES
     compiler/elab_typeclasses.c
     compiler/elab_concurrent.c
     compiler/elab_sessions.c
+    compiler/elab_global.c
     compiler/elab_toplevel.c
     compiler/emit_core.c
     compiler/emit_expr.c

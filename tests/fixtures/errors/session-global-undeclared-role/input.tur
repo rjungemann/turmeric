@@ -1,0 +1,6 @@
+;; SS5 E0223: defprotocol with an undeclared role C used in an interaction.
+;; Only A and B are declared; C is not in the role list.
+(defprotocol Bad [A B]
+  (-> A C int))
+
+(defn main [] :int 0)

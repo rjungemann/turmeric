@@ -531,6 +531,23 @@ const char *type_name(Type t) {
             buf_putc(&tmp, '\0');
             return tur_strdup(tmp.data);
         }
+        /* SS5: Global protocol types */
+        case TY_GLOBAL:
+            return t.as.global_.name ? t.as.global_.name : "<global>";
+        case TY_ROLE: {
+            Buf tmp;
+            buf_init(&tmp);
+            buf_puts(&tmp, "Role[");
+            buf_puts(&tmp, t.as.role_.global_type
+                          ? (t.as.role_.global_type->as.global_.name
+                             ? t.as.role_.global_type->as.global_.name : "?")
+                          : "?");
+            buf_puts(&tmp, ", ");
+            buf_puts(&tmp, t.as.role_.role_name ? t.as.role_.role_name : "?");
+            buf_puts(&tmp, "]");
+            buf_putc(&tmp, '\0');
+            return tur_strdup(tmp.data);
+        }
     }
     return "?";
 }
@@ -853,6 +870,20 @@ static void type_name_buf(Buf *b, Type t) {
             else buf_putc(b, '?');
             buf_putc(b, ']');
             break;
+        /* SS5: Global protocol types */
+        case TY_GLOBAL:
+            buf_puts(b, t.as.global_.name ? t.as.global_.name : "<global>");
+            break;
+        case TY_ROLE:
+            buf_puts(b, "Role[");
+            buf_puts(b, t.as.role_.global_type
+                        ? (t.as.role_.global_type->as.global_.name
+                           ? t.as.role_.global_type->as.global_.name : "?")
+                        : "?");
+            buf_puts(b, ", ");
+            buf_puts(b, t.as.role_.role_name ? t.as.role_.role_name : "?");
+            buf_putc(b, ']');
+            break;
     }
 }
 
@@ -977,6 +1008,11 @@ const char *type_c_name(Type t) {
             return "void *";  /* recv-pair lowers to TurChannel pointer */
         case TY_SESSION_OFFER:
             return "int64_t";
+        /* SS5: Global protocol types -- compile-time only; erased to void* at runtime */
+        case TY_GLOBAL:
+            return "/*global-protocol*/ void";
+        case TY_ROLE:
+            return "void *";   /* role endpoint -- NULL placeholder in SS5 */
     }
     return "void";
 }
@@ -1184,6 +1220,10 @@ static bool type_is_guarded_recursive_helper(const Type *t, const char *rec_name
             return type_is_guarded_recursive_helper(t->as.session_.fst, rec_name, depth + 1)
                 && (!t->as.session_.snd
                     || type_is_guarded_recursive_helper(t->as.session_.snd, rec_name, depth + 1));
+        /* SS5: Global protocol types -- never recursive in the TY_REC sense */
+        case TY_GLOBAL:
+        case TY_ROLE:
+            return true;
     }
 
     return true;  /* Unknown type kind - assume safe */
@@ -1285,6 +1325,9 @@ const char *typekind_to_string(TypeKind k) {
         case TY_SESSION_PAIR:      return "SessionPair";
         case TY_SESSION_RECV_PAIR: return "RecvPair";
         case TY_SESSION_OFFER:     return "Offer";
+        /* SS5: Global protocol types */
+        case TY_GLOBAL:            return "Global";
+        case TY_ROLE:              return "Role";
         default:          return "<?>";
     }
 }

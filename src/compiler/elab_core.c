@@ -1221,6 +1221,16 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_recv_timeout = intern_cstr(st, "recv-timeout");
     /* SS3a: Initialize session Rec label stack */
     e->rec_depth = 0;
+    /* SS5: Global protocol symbols */
+    e->sym_defprotocol  = intern_cstr(st, "defprotocol");
+    e->sym_make_protocol = intern_cstr(st, "make-protocol");
+    e->sym_send_to       = intern_cstr(st, "send-to");
+    e->sym_recv_from     = intern_cstr(st, "recv-from");
+    e->sym_global_type   = intern_cstr(st, "Global");
+    e->sym_role_type     = intern_cstr(st, "Role");
+    e->global_protocols  = NULL;
+    e->n_global_protocols = 0;
+    e->cap_global_protocols = 0;
 }
 
 /* Phase 13: Lifetime annotation helpers (deferred - infrastructure in place) */

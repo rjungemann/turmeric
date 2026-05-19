@@ -340,15 +340,39 @@ Expr *elab_session_recv(Elab *e, const Form *call) {
 }
 
 /* (close chan) — consume chan : Session[Close]; return nil.
- * Emits TUR-E0212 if chan's protocol is not Close. */
+ * Emits TUR-E0212 if chan's protocol is not Close.
+ * SS5: also handles TY_ROLE endpoints (dispatches to elab_role_close). */
 Expr *elab_session_close(Elab *e, const Form *call) {
     if (call->as.list.len != 2) {
         diag_emit(DIAG_ERROR, call->span,
                   "close requires one argument: (close chan)");
         return NULL;
     }
+    /* SS5: Dispatch TY_ROLE close to elab_role_close (handled in elab_global.c).
+     * Note: elab_role_close will re-elaborate the argument, so we pass the call form. */
     Expr *chan = elab_form(e, call->as.list.items[1]);
     if (!chan) return NULL;
+    if (chan->type.kind == TY_ROLE) {
+        /* The chan is already elaborated; inline the role-close logic here. */
+        GlobalInteraction *step = chan->type.as.role_.current_step;
+        if (!step || step->kind != GI_END) {
+            const char *step_name = "unknown";
+            if (step) {
+                if (step->kind == GI_MSG)      step_name = "->";
+                else if (step->kind == GI_CHOICE) step_name = "choice";
+                else if (step->kind == GI_LOOP)   step_name = "loop";
+                else if (step->kind == GI_CONTINUE) step_name = "continue";
+            }
+            diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0212_SESSION_PROTO_MISMATCH,
+                                "close: role '%s' cannot close the protocol here -- "
+                                "current step is %s, expected end of protocol",
+                                chan->type.as.role_.role_name, step_name);
+            return NULL;
+        }
+        if (chan->kind == EX_VAR && chan->as.var.binding)
+            binding_mark_moved(chan->as.var.binding, call->span);
+        return e_nil(e, call->span);
+    }
 
     Type *proto = session_protocol_of(e, chan, "close", call->span);
     if (!proto) return NULL;
