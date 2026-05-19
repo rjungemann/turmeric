@@ -1,0 +1,228 @@
+id: eavt
+title: EAVT Immutable Database
+description: Build an append-only fact database with Entity-Attribute-Value-Transaction
+  semantics. Learn how to assert facts, query by entity and attribute, compose
+  predicates, work with the Value ADT, and understand temporal transactions.
+category: advanced
+difficulty: 3
+
+steps:
+  - id: load_minimal
+    title: Load the EAVT foundation
+    instruction: |
+      This tutorial builds on the EAVT minimal implementation.
+      Load it into your session first:
+        :reload examples/eavt/minimal.tur
+      Then confirm the database constructor is available:
+        (db-new)
+    expected: "(db-new)"
+    alternate_accept:
+      - ":reload examples/eavt/minimal.tur"
+      - "(db-count (db-new))"
+    hints:
+      - "Type :reload examples/eavt/minimal.tur to load the file."
+      - "Then type (db-new) to create a new empty database."
+      - "db-new returns an opaque integer handle to the database."
+    success_message: "Good! db-new allocates an empty append-only fact store."
+    verify: "(db-count (db-new))"
+
+  - id: assert_first_fact
+    title: Assert your first fact
+    instruction: |
+      Create a database and assert one fact about entity 1:
+        (let [db (db-new)]
+          (db-assert! db 1 (cstr->int ":user/name") (str-val "Alice"))
+          (db-count db))
+      db-assert! takes: database, entity id, attribute (as int), value (as int).
+      It returns the transaction number.
+    expected: "(let [db (db-new)] (db-assert! db 1 (cstr->int \":user/name\") (str-val \"Alice\")) (db-count db))"
+    alternate_accept:
+      - "(let [db (db-new)] (db-assert! db 1 (cstr->int \":test\") (long-val 42)) (db-count db))"
+      - "(let [db (db-new)] (db-assert! db 2 (cstr->int \":user/name\") (str-val \"Bob\")) (db-count db))"
+    hints:
+      - "db-assert! returns the tx number; db-count returns total number of facts."
+      - "str-val wraps a :cstr literal as a Value; cstr->int converts it for the attribute field."
+      - "Try: (let [db (db-new)] (db-assert! db 1 (cstr->int \":user/name\") (str-val \"Alice\")) (db-count db))"
+    success_message: "Correct! The database now holds one fact. db-count returns 1."
+    verify: "(let [db (db-new)] (db-assert! db 1 (cstr->int \":user/name\") (str-val \"Alice\")) (db-count db))"
+
+  - id: query_all_facts
+    title: Query all facts with a pass-all predicate
+    instruction: |
+      db-q accepts a predicate closure and returns a result vector.
+      Query every fact in the database:
+        (let [db (db-new)]
+          (db-assert! db 1 (cstr->int ":user/name") (str-val "Alice"))
+          (db-assert! db 2 (cstr->int ":user/name") (str-val "Bob"))
+          (rvec-len (db-q db (fn [d] true))))
+      The predicate (fn [d] true) matches every datum.
+    expected: "(let [db (db-new)] (db-assert! db 1 (cstr->int \":user/name\") (str-val \"Alice\")) (db-assert! db 2 (cstr->int \":user/name\") (str-val \"Bob\")) (rvec-len (db-q db (fn [d] true))))"
+    alternate_accept:
+      - "(let [db (db-new)] (db-assert! db 1 (cstr->int \":user/age\") (long-val 30)) (rvec-len (db-q db (fn [d] true))))"
+    hints:
+      - "db-q returns an rvec; rvec-len gives its length."
+      - "The predicate (fn [d] true) matches every datum in the database."
+      - "After asserting two facts you should see rvec-len return 2."
+    success_message: "Correct! db-q with a pass-all predicate returns all datums."
+    verify: "(let [db (db-new)] (db-assert! db 1 (cstr->int \":user/name\") (str-val \"Alice\")) (db-assert! db 2 (cstr->int \":user/name\") (str-val \"Bob\")) (rvec-len (db-q db (fn [d] true))))"
+
+  - id: query_by_entity
+    title: Query by entity
+    instruction: |
+      q-entity builds a predicate that matches facts for a single entity.
+      Find all facts about entity 1:
+        (let [db (db-new)]
+          (db-assert! db 1 (cstr->int ":user/name") (str-val "Alice"))
+          (db-assert! db 1 (cstr->int ":user/age")  (long-val 30))
+          (db-assert! db 2 (cstr->int ":user/name") (str-val "Bob"))
+          (rvec-len (db-q db (q-entity 1))))
+      This should return 2 -- the two facts for entity 1.
+    expected: "(let [db (db-new)] (db-assert! db 1 (cstr->int \":user/name\") (str-val \"Alice\")) (db-assert! db 1 (cstr->int \":user/age\") (long-val 30)) (db-assert! db 2 (cstr->int \":user/name\") (str-val \"Bob\")) (rvec-len (db-q db (q-entity 1))))"
+    alternate_accept:
+      - "(let [db (db-new)] (db-assert! db 1 (cstr->int \":user/name\") (str-val \"Alice\")) (rvec-len (db-q db (q-entity 1))))"
+    hints:
+      - "q-entity takes an entity id and returns a predicate closure."
+      - "Only facts where datum-entity equals 1 will be included."
+      - "The result should have length 2 after asserting two facts for entity 1."
+    success_message: "Correct! q-entity filters to a single entity's facts."
+    verify: "(let [db (db-new)] (db-assert! db 1 (cstr->int \":user/name\") (str-val \"Alice\")) (db-assert! db 1 (cstr->int \":user/age\") (long-val 30)) (db-assert! db 2 (cstr->int \":user/name\") (str-val \"Bob\")) (rvec-len (db-q db (q-entity 1))))"
+
+  - id: query_by_attribute
+    title: Query by attribute
+    instruction: |
+      q-attr builds a predicate matching all facts with a given attribute name.
+      Find every :user/name fact:
+        (let [db (db-new)]
+          (db-assert! db 1 (cstr->int ":user/name") (str-val "Alice"))
+          (db-assert! db 1 (cstr->int ":user/age")  (long-val 30))
+          (db-assert! db 2 (cstr->int ":user/name") (str-val "Bob"))
+          (rvec-len (db-q db (q-attr ":user/name"))))
+      This should return 2 -- one name fact for each user.
+    expected: "(let [db (db-new)] (db-assert! db 1 (cstr->int \":user/name\") (str-val \"Alice\")) (db-assert! db 1 (cstr->int \":user/age\") (long-val 30)) (db-assert! db 2 (cstr->int \":user/name\") (str-val \"Bob\")) (rvec-len (db-q db (q-attr \":user/name\"))))"
+    alternate_accept:
+      - "(let [db (db-new)] (db-assert! db 1 (cstr->int \":user/age\") (long-val 30)) (rvec-len (db-q db (q-attr \":user/age\"))))"
+    hints:
+      - "q-attr takes a :cstr attribute name and returns a predicate."
+      - "It uses cstr-eq? internally to compare string attribute names."
+      - "Two :user/name facts should give rvec-len 2."
+    success_message: "Correct! q-attr filters facts by attribute name using string comparison."
+    verify: "(let [db (db-new)] (db-assert! db 1 (cstr->int \":user/name\") (str-val \"Alice\")) (db-assert! db 1 (cstr->int \":user/age\") (long-val 30)) (db-assert! db 2 (cstr->int \":user/name\") (str-val \"Bob\")) (rvec-len (db-q db (q-attr \":user/name\"))))"
+
+  - id: compose_predicates
+    title: Compose queries with q-and
+    instruction: |
+      q-and combines two predicates -- a fact must satisfy both.
+      Find entity 1 AND attribute :user/age:
+        (let [db (db-new)]
+          (db-assert! db 1 (cstr->int ":user/name") (str-val "Alice"))
+          (db-assert! db 1 (cstr->int ":user/age")  (long-val 30))
+          (db-assert! db 2 (cstr->int ":user/age")  (long-val 25))
+          (rvec-len
+            (db-q db (q-and (q-entity 1) (q-attr ":user/age")))))
+      This should return 1 -- only Alice's age fact.
+    expected: "(let [db (db-new)] (db-assert! db 1 (cstr->int \":user/name\") (str-val \"Alice\")) (db-assert! db 1 (cstr->int \":user/age\") (long-val 30)) (db-assert! db 2 (cstr->int \":user/age\") (long-val 25)) (rvec-len (db-q db (q-and (q-entity 1) (q-attr \":user/age\")))))"
+    alternate_accept:
+      - "(let [db (db-new)] (db-assert! db 1 (cstr->int \":user/age\") (long-val 30)) (db-assert! db 2 (cstr->int \":user/age\") (long-val 25)) (rvec-len (db-q db (q-and (q-entity 1) (q-attr \":user/age\")))))"
+    hints:
+      - "q-and takes two predicates and returns one that requires both to pass."
+      - "Use (q-entity 1) for Alice and (q-attr \":user/age\") for the attribute."
+      - "Only Alice's age fact satisfies both conditions."
+    success_message: "Correct! q-and narrows down to exactly the intersection."
+    verify: "(let [db (db-new)] (db-assert! db 1 (cstr->int \":user/name\") (str-val \"Alice\")) (db-assert! db 1 (cstr->int \":user/age\") (long-val 30)) (db-assert! db 2 (cstr->int \":user/age\") (long-val 25)) (rvec-len (db-q db (q-and (q-entity 1) (q-attr \":user/age\")))))"
+
+  - id: understand_tx
+    title: Understand transaction numbers
+    instruction: |
+      Every db-assert! returns the transaction number (tx) for that fact.
+      Transactions start at 1 and increment with each assertion.
+        (let [db (db-new)]
+          (let [tx1 (db-assert! db 1 (cstr->int ":user/name") (str-val "Alice"))]
+            (let [tx2 (db-assert! db 2 (cstr->int ":user/name") (str-val "Bob"))]
+              (+ tx1 tx2))))
+      tx1 = 1 and tx2 = 2, so the sum is 3.
+    expected: "(let [db (db-new)] (let [tx1 (db-assert! db 1 (cstr->int \":user/name\") (str-val \"Alice\"))] (let [tx2 (db-assert! db 2 (cstr->int \":user/name\") (str-val \"Bob\"))] (+ tx1 tx2))))"
+    alternate_accept:
+      - "(let [db (db-new)] (db-assert! db 1 (cstr->int \":user/name\") (str-val \"Alice\")) (db-assert! db 2 (cstr->int \":user/name\") (str-val \"Bob\")))"
+    hints:
+      - "db-assert! returns the tx number -- bind it with let."
+      - "The first assertion gets tx=1, the second tx=2."
+      - "Adding them: 1 + 2 = 3."
+    success_message: "Correct! Transaction numbers are monotonically increasing integers."
+    verify: "(let [db (db-new)] (let [tx1 (db-assert! db 1 (cstr->int \":user/name\") (str-val \"Alice\"))] (let [tx2 (db-assert! db 2 (cstr->int \":user/name\") (str-val \"Bob\"))] (+ tx1 tx2))))"
+
+  - id: value_adt
+    title: The Value ADT
+    instruction: |
+      Values are tagged with their type using a defdata ADT.
+      Construct each kind and match on one:
+        (let [v (long-val 42)]
+          (match v
+            (LongVal n)   n
+            (StrVal s)    0
+            (EntityVal e) 0))
+      This extracts the integer from a LongVal and returns it directly.
+    expected: "(let [v (long-val 42)] (match v (LongVal n) n (StrVal s) 0 (EntityVal e) 0))"
+    alternate_accept:
+      - "(long-val 100)"
+      - "(str-val \"hello\")"
+      - "(entity-val 7)"
+      - "(let [v (entity-val 5)] (match v (LongVal n) 0 (StrVal s) 0 (EntityVal e) e))"
+    hints:
+      - "long-val, str-val, and entity-val are the three value constructors."
+      - "Use match to inspect which constructor was used."
+      - "Try: (let [v (long-val 42)] (match v (LongVal n) n (StrVal s) 0 (EntityVal e) 0))"
+    success_message: "Correct! The Value ADT lets you safely inspect typed fact values."
+    verify: "(let [v (long-val 42)] (match v (LongVal n) n (StrVal s) 0 (EntityVal e) 0))"
+
+  - id: temporal_query
+    title: Time travel with db-as-of
+    instruction: |
+      Load query.tur to get db-as-of:
+        :reload examples/eavt/query.tur
+      Then try an as-of snapshot:
+        (let [db (db-new)]
+          (let [tx1 (db-assert! db 1 (cstr->int ":user/age") (long-val 30))]
+            (db-assert! db 1 (cstr->int ":user/age") (long-val 31))
+            (rvec-len (db-as-of db tx1))))
+      After tx1, there is 1 fact. After the second assert, there are 2.
+      db-as-of db tx1 returns only facts from tx <= tx1 -- so length 1.
+    expected: "(let [db (db-new)] (let [tx1 (db-assert! db 1 (cstr->int \":user/age\") (long-val 30))] (db-assert! db 1 (cstr->int \":user/age\") (long-val 31)) (rvec-len (db-as-of db tx1))))"
+    alternate_accept:
+      - ":reload examples/eavt/query.tur"
+      - "(let [db (db-new)] (db-assert! db 1 (cstr->int \":user/age\") (long-val 30)) (rvec-len (db-as-of db 1)))"
+    hints:
+      - "First load query.tur with :reload examples/eavt/query.tur"
+      - "db-as-of filters to datums with tx <= the given number."
+      - "After one assert, tx1=1. db-as-of db 1 returns 1 fact."
+    success_message: "Correct! db-as-of enables point-in-time queries -- the database remembers all history."
+    verify: "(let [db (db-new)] (let [tx1 (db-assert! db 1 (cstr->int \":user/age\") (long-val 30))] (db-assert! db 1 (cstr->int \":user/age\") (long-val 31)) (rvec-len (db-as-of db tx1))))"
+
+  - id: next_steps
+    title: Where to go next
+    instruction: |
+      You have completed the EAVT Immutable Database tutorial!
+
+      What you learned:
+        - Every fact is a (entity, attribute, value, tx) tuple
+        - db-assert! appends; nothing is ever deleted
+        - db-q filters with predicate closures
+        - q-entity, q-attr, q-and, q-or, q-not compose freely
+        - Transaction numbers enable point-in-time queries
+        - The Value ADT (LongVal, StrVal, EntityVal) types the payload
+
+      Next reading:
+        - examples/eavt/query.tur  -- value equality, pull, history, retraction
+        - examples/eavt/indexed.tur -- O(1) average-case index lookups
+        - examples/eavt/blog.tur   -- a complete blog system example
+        - examples/eavt/datalog.tur -- Datalog-style pattern matching
+
+        - docs/tutorials/eavt/01-concepts.md -- conceptual background
+        - docs/tutorials/eavt/02-minimal-impl.md -- code walkthrough
+        - docs/tutorials/eavt/03-query-api.md   -- extended queries
+        - docs/tutorials/eavt/04-indexing.md     -- indexing internals
+
+      Type :doc <sym> in the REPL to look up any function.
+    expected: ""
+    hints: []
+    success_message: "Well done! You have built a foundation in immutable EAVT databases."
+    verify: ~
