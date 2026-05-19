@@ -475,8 +475,16 @@ Expr *elab_make_protocol(Elab *e, const Form *call) {
         result_type = inner;
     }
 
-    /* Emit a NULL placeholder (no runtime channels in SS5) */
-    return make_null_placeholder(e, *result_type, "/*make-protocol-ss5*/NULL", call->span);
+    /* SS7: only 2-role protocols are fully supported; N>2 is planned for SS8. */
+    if (n_roles > 2) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "make-protocol: only 2-role protocols are supported in this version "
+                  "(SS7); multi-role support is planned for SS8");
+        return NULL;
+    }
+
+    /* SS7: emit a marker; actual codegen happens in elab_forms.c vector-let split */
+    return make_null_placeholder(e, *result_type, "/*make-protocol*/", call->span);
 }
 
 /* ---- elab_send_to ---- */
@@ -562,8 +570,50 @@ Expr *elab_send_to(Elab *e, const Form *call) {
                                    this_role,
                                    step->msg.rest);
 
-    /* Emit a NULL placeholder -- no runtime in SS5 */
-    return make_null_placeholder(e, advanced_type, "/*send-to-ss5*/NULL", call->span);
+    /* SS7: Compute to_idx at elaboration time */
+    Type *global_t = chan->type.as.role_.global_type;
+    int to_idx = -1;
+    for (int i = 0; i < global_t->as.global_.n_roles; i++) {
+        if (global_t->as.global_.roles[i] == dest_role
+                || strcmp(global_t->as.global_.roles[i], dest_role) == 0) {
+            to_idx = i; break;
+        }
+    }
+    if (to_idx < 0) {
+        diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0212_SESSION_PROTO_MISMATCH,
+                            "send-to: role '%s' not found in protocol", dest_role);
+        return NULL;
+    }
+
+    /* Emit: __extension__ ({ tur_router_send(__TUR_VAL_0__, to_idx, (int64_t)(__TUR_VAL_1__)); (void*)__TUR_VAL_0__; }) */
+    char send_code[256];
+    snprintf(send_code, sizeof(send_code),
+             "__extension__ ({ tur_router_send(__TUR_VAL_0__, %d, (int64_t)(__TUR_VAL_1__)); (void *)__TUR_VAL_0__; })",
+             to_idx);
+    size_t send_code_len = strlen(send_code);
+    char *code_str = (char *)arena_alloc(e->arena, send_code_len + 1);
+    memcpy(code_str, send_code, send_code_len + 1);
+
+    Expr *out = expr_new(e->arena, EX_INLINE_C, advanced_type, call->span);
+    InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
+    ic->code = strslice(code_str, (uint32_t)send_code_len);
+    ic->return_type = advanced_type;
+    ic->captures = NULL; ic->n_captures = 0;
+    ic->val_exprs = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
+    ic->n_val_exprs = 2;
+    /* __TUR_VAL_0__ = chan */
+    if (chan->kind == EX_VAR && chan->as.var.binding) {
+        Binding *chan_binding = chan->as.var.binding;
+        Expr *chan_var = expr_new(e->arena, EX_VAR, chan_binding->type, call->span);
+        chan_var->as.var.binding = chan_binding;
+        ic->val_exprs[0] = chan_var;
+    } else {
+        ic->val_exprs[0] = chan;
+    }
+    /* __TUR_VAL_1__ = val */
+    ic->val_exprs[1] = val;
+    out->as.inline_c_.inline_c = ic;
+    return out;
 }
 
 /* ---- elab_recv_from ---- */
@@ -644,8 +694,46 @@ Expr *elab_recv_from(Elab *e, const Form *call) {
 
     Type pair_type = type_session_recv_pair(msg_type, new_role);
 
-    /* Emit NULL placeholder */
-    return make_null_placeholder(e, pair_type, "/*recv-from-ss5*/NULL", call->span);
+    /* SS7: Compute from_idx at elaboration time */
+    Type *global_t = chan->type.as.role_.global_type;
+    int from_idx = -1;
+    for (int i = 0; i < global_t->as.global_.n_roles; i++) {
+        if (global_t->as.global_.roles[i] == src_role
+                || strcmp(global_t->as.global_.roles[i], src_role) == 0) {
+            from_idx = i; break;
+        }
+    }
+    if (from_idx < 0) {
+        diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0212_SESSION_PROTO_MISMATCH,
+                            "recv-from: role '%s' not found in protocol", src_role);
+        return NULL;
+    }
+
+    /* Build code: "tur_router_recv(__TUR_VAL_0__, from_idx)" -- used by elab_forms.c */
+    char recv_code[80];
+    snprintf(recv_code, sizeof(recv_code), "tur_router_recv(__TUR_VAL_0__, %d)", from_idx);
+    size_t recv_code_len = strlen(recv_code);
+    char *code_str = (char *)arena_alloc(e->arena, recv_code_len + 1);
+    memcpy(code_str, recv_code, recv_code_len + 1);
+
+    Expr *out = expr_new(e->arena, EX_INLINE_C, pair_type, call->span);
+    InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
+    ic->code = strslice(code_str, (uint32_t)recv_code_len);
+    ic->return_type = pair_type;
+    ic->captures = NULL; ic->n_captures = 0;
+    ic->val_exprs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+    ic->n_val_exprs = 1;
+    /* __TUR_VAL_0__ = chan (so elab_forms.c can reference it for vi=1 too) */
+    if (chan->kind == EX_VAR && chan->as.var.binding) {
+        Binding *chan_binding = chan->as.var.binding;
+        Expr *chan_var = expr_new(e->arena, EX_VAR, chan_binding->type, call->span);
+        chan_var->as.var.binding = chan_binding;
+        ic->val_exprs[0] = chan_var;
+    } else {
+        ic->val_exprs[0] = chan;
+    }
+    out->as.inline_c_.inline_c = ic;
+    return out;
 }
 
 /* Note: (close chan) for TY_ROLE endpoints is handled inline in
