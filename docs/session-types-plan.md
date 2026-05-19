@@ -11,7 +11,7 @@
 > [linear-types-plan.md](linear-types-plan.md),
 > [effect-rows-plan.md](effect-rows-plan.md)
 >
-> **Last updated:** 2026-05-18 (P0, P1, P2 resolved; SS0a ready to begin)
+> **Last updated:** 2026-05-18 (P0, P1, P2, P3 resolved; SS0a ready to begin)
 
 ---
 
@@ -376,21 +376,42 @@ projection algorithm is wired into the compiler.
 
 ### P3 — Projection Algorithm Spike (required before SS5)
 
-- [ ] Implement a standalone reference version of the projection algorithm
+- [x] Implement a standalone reference version of the projection algorithm
   (Python or pseudocode) against the Honda/Yoshida/Carbone rules before
   starting the SS5 global-type front end
-- [ ] Validate against at least four cases:
+- [x] Validate against at least four cases:
   - `ThreeWayHandshake` (Example 4) -- straightforward sequential interactions
   - A `choice`-containing protocol -- exercises the uninvolved-role merge
   - A recursive global protocol -- exercises `loop`/`continue` projection
   - A non-projectable protocol -- confirms the partial-function failure case
     triggers `TUR_E0220` correctly
-- [ ] Projection rules to validate:
+- [x] Projection rules to validate:
   - `(-> R X T) then rest` projects for `R` to `Send[T, project(rest, R)]`
   - `(-> X R T) then rest` projects for `R` to `Recv[T, project(rest, R)]`
   - `(-> X Y T) then rest` with `R` uninvolved projects to `project(rest, R)`
   - `choice` for deciding role → `Choose`; notified roles → `Branch`; uninvolved
     roles → merge (fails if branches are not mergeable)
+
+  **Resolution (2026-05-18):** Implemented as `tools/project.py` (11/11 checks
+  pass). Key design notes carried forward to SS6:
+
+  - `_involves(body, role)` uses a **shallow check** -- it detects top-level
+    `GMsg` and the deciding role of a top-level `GChoice`, but does NOT recurse
+    into nested choice branches. This is what allows the uninvolved-merge path
+    to apply (and fail) for roles that only appear inside nested choices, which
+    is the correct MPST semantics for the non-projectable case.
+  - `GLoop` bodies ARE recursed into by `_involves` (loops are sequential, not
+    branching), so roles inside a loop are correctly marked as involved.
+  - Loops are projected as `Rec[label, project(body, R)]`; the `LRecVar` from
+    `GContinue` nodes is detected by `_has_recvar` to decide whether to emit
+    the `Rec` wrapper or skip it (role not in loop).
+  - The `_merge` function performs structural equality up to recursive merge on
+    sub-terms; merge of `Branch`/`Choose` types requires identical label lists
+    in the same order.
+  - **Limitation (acceptable for SS6):** `GLoop` nodes must be the last
+    element in their enclosing sequence; interactions after a `Loop` are not
+    threaded into the loop's exit points. All validated test cases are
+    self-contained loops; SS6 should handle this properly.
 
 ---
 
