@@ -107,8 +107,19 @@ Expr *elab_let(Elab *e, const Form *call) {
                 Type elem_type;
                 if (init_v->type.kind == TY_SESSION_PAIR ||
                     init_v->type.kind == TY_SESSION_RECV_PAIR) {
-                    if (vi == 0 && init_v->type.as.session_.fst) {
-                        elem_type = *init_v->type.as.session_.fst;
+                    Type *fst_t = init_v->type.as.session_.fst;
+                    /* SS8: N-role make-protocol pairs: get elem_type from global_t directly */
+                    if (init_v->type.kind == TY_SESSION_PAIR && fst_t && fst_t->kind == TY_ROLE) {
+                        Type *global_t = fst_t->as.role_.global_type;
+                        if ((int)vi < global_t->as.global_.n_roles) {
+                            elem_type = type_role(global_t, global_t->as.global_.roles[vi],
+                                                  global_t->as.global_.body);
+                            elem_type.copy_kind = CK_LINEAR;
+                        } else {
+                            elem_type = type_from_kind(TY_INT);
+                        }
+                    } else if (vi == 0 && fst_t) {
+                        elem_type = *fst_t;
                     } else if (vi == 1 && init_v->type.as.session_.snd) {
                         elem_type = *init_v->type.as.session_.snd;
                     } else {

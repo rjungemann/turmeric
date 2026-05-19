@@ -133,3 +133,44 @@
         (pubsub-recv-loop-inner ch handler))
     (Right ch)
       (close ch)))
+
+;; ---------------------------------------------------------------------------
+;; Multi-party session patterns (SS8)
+;;
+;; Multi-party sessions require -Xsessions and a protocol declared with
+;; (defprotocol Name [Role1 Role2 ...] interactions...).
+;;
+;; Key operations:
+;;   (make-protocol P)       -- allocate one Role endpoint per declared role;
+;;                              destructure with (let [[r1 r2] (make-protocol P)])
+;;   (send-to ch R val)      -- send val to role R on channel ch; returns advanced ch
+;;   (recv-from ch R)        -- receive from role R; destructure with [v ch]
+;;   (close ch)              -- close the role endpoint (must be at end of protocol)
+;;
+;; Example -- two-role ping:
+;;
+;;   (defprotocol Ping [A B]
+;;     (-> A B int)
+;;     (-> B A int))
+;;
+;;   (defn role-a [^linear ch :(Role Ping A)] :nil
+;;     (let [ch (send-to ch B 42)]
+;;       (let [[v ch] (recv-from ch B)]
+;;         (println v)
+;;         (close ch))))
+;;
+;;   (defn main [] :int
+;;     (let [[ra rb] (make-protocol Ping)]
+;;       (let [t (spawn (fn [] (role-b rb)))]
+;;         (role-a ra)
+;;         (join t)))
+;;     0)
+;;
+;; Three-role example (requires N>=3 protocol):
+;;
+;;   (defprotocol Pipeline [A B C]
+;;     (-> A B int)
+;;     (-> B C int))
+;;
+;;   (let [[ra rb rc] (make-protocol Pipeline)] ...)
+;; ---------------------------------------------------------------------------
