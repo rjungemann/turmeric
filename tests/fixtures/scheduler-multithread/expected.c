@@ -2496,7 +2496,7 @@ int main() {
                     (void)fb_268;
                     scheduler_mt_spawn((void *)(intptr_t)(sched_266), (void *)(intptr_t)(fa_267));
                     scheduler_mt_spawn((void *)(intptr_t)(sched_266), (void *)(intptr_t)(fb_268));
-                    (void)(thread_sleep(INT64_C(100)));
+                    thread_sleep(INT64_C(100));
                     scheduler_mt_free((void *)(intptr_t)(sched_266));
                     fiber_free((void *)(intptr_t)(fa_267));
                     fiber_free((void *)(intptr_t)(fb_268));
