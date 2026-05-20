@@ -1,9 +1,5 @@
 ;; sort -- sort N pseudo-random int64 values; print min and max (interpreter-compatible).
 ;; Uses vec from stdlib. Sorting done with insertion sort (O(N^2), sufficient for small N).
-(defn parse-first-arg [fallback :int] :int
-  (if (= *args* 0)
-    fallback
-    (cstr->parse-int (head *args*))))
 
 ;; lcg-next -- advance the LCG state.
 (defn lcg-next [state :int] :int
@@ -37,4 +33,4 @@
         (println (vec-get v (- n 1)))
         (vec-free v))))
 
-(sort-bench (parse-first-arg 1000))
+(sort-bench (if (= *args* 0) 1000 (cstr->parse-int (head *args*))))

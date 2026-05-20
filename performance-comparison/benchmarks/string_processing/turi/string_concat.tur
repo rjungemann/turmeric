@@ -1,9 +1,5 @@
 ;; string_concat -- concatenate "hello" N times, print final length (interpreter-compatible).
 ;; Uses vec as a byte buffer instead of inline-C malloc/realloc.
-(defn parse-first-arg [fallback :int] :int
-  (if (= *args* 0)
-    fallback
-    (cstr->parse-int (head *args*))))
 
 ;; fill-hello -- write "hello" bytes at position pos in vec v.
 (defn fill-hello [v :int pos :int] :nil
@@ -27,4 +23,4 @@
         (vec-free v)
         (* n 5))))
 
-(println (concat-bench (parse-first-arg 1000)))
+(println (concat-bench (if (= *args* 0) 1000 (cstr->parse-int (head *args*)))))

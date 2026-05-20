@@ -1,9 +1,5 @@
 ;; alloc_churn -- allocate and free N small objects; measure allocation throughput
 ;; (interpreter-compatible). Uses vec-new-filled/vec-get/vec-free instead of raw malloc/free.
-(defn parse-first-arg [fallback :int] :int
-  (if (= *args* 0)
-    fallback
-    (cstr->parse-int (head *args*))))
 
 ;; churn-loop -- alloc one-element vec, read value i, free; accumulate sum via tail recursion.
 (defn churn-loop [i :int n :int sum :int] :int
@@ -18,4 +14,4 @@
 (defn churn [n :int] :int
   (churn-loop 0 n 0))
 
-(println (churn (parse-first-arg 10000)))
+(println (churn (if (= *args* 0) 10000 (cstr->parse-int (head *args*)))))

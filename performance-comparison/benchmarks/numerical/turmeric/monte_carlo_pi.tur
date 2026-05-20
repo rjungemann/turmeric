@@ -1,11 +1,16 @@
 ;; monte_carlo_pi -- Monte Carlo estimation of pi using LCG PRNG.
 ;; LCG step and loop are pure Turmeric; bit-shift and int->float are
 ;; one-line C helpers; printf-%.6f is used for the final output.
-(defn parse-first-arg [fallback :int] :int
+(defn head [lst :int] :int
   ```c
-  struct __tur_cons { int64_t value; int64_t next; };
-  struct __tur_cons *c = (struct __tur_cons *)(intptr_t)g_tur_args;
-  return c ? (int64_t)atoll((const char *)(intptr_t)c->value) : fallback;
+  struct { int64_t value; int64_t next; } *c = (void*)(intptr_t)lst;
+  return c ? c->value : 0;
+  ```)
+
+(defn cstr->parse-int [s :int] :int
+  ```c
+  const char *cs = (const char *)(intptr_t)s;
+  return cs ? (int64_t)atoll(cs) : 0;
   ```)
 
 ;; lcg-next -- advance the LCG state (same constants as C benchmark).
@@ -48,4 +53,4 @@
   (let [inside (mc-loop 0 iters 6364136223846793005 0)]
     (print-float6 (* 4.0 (int->unit-float (* inside iters))))))
 
-(estimate-pi (parse-first-arg 1000))
+(estimate-pi (if (= *args* 0) 1000 (cstr->parse-int (head *args*))))

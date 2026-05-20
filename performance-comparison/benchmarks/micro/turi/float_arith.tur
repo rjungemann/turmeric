@@ -1,9 +1,5 @@
 ;; float_arith -- N iterations of FP multiply/sqrt/add (interpreter-compatible).
 ;; tur-sqrt uses a registered native shim; result is an int count.
-(defn parse-first-arg [fallback :int] :int
-  (if (= *args* 0)
-    fallback
-    (cstr->parse-int (head *args*))))
 
 ;; float-arith-loop -- tail-recursive; returns iteration count as :int.
 ;; Exercises float multiply, sqrt, and add each iteration.
@@ -15,4 +11,4 @@
                       (+ (* b 0.9999999) (tur-sqrt a))
                       n)))
 
-(println (float-arith-loop 0 1.0 1.0 (parse-first-arg 1000000)))
+(println (float-arith-loop 0 1.0 1.0 (if (= *args* 0) 1000000 (cstr->parse-int (head *args*)))))

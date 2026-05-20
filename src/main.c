@@ -1493,9 +1493,6 @@ static int cmd_eval(const char *path, bool use_color,
             "(defn hamt-set [m :int hash :int key :int val :int] :int 0)\n"
             "(defn hamt-get [m :int hash :int key :int] :int 0)\n"
             "(defn hamt-hash-ptr [p :int] :int 0)\n"
-            /* arg-parsing natives (replace old g_tur_args inline-C in symlinked benchmarks) */
-            "(defn parse-first-arg [fallback :int] :int 0)\n"
-            "(defn parse-arg [idx :int fallback :int] :int 0)\n"
             /* I/O benchmark helpers (file_read.tur, file_write.tur) */
             "(defn write-temp-file [path :cstr n :int] :nil nil)\n"
             "(defn io-fopen-read [path :cstr] :int 0)\n"
@@ -2592,43 +2589,6 @@ static TuriValue native_int_to_float(TuriEnv *env, TuriValue *a, uint32_t n, voi
 }
 
 /* -------------------------------------------------------------------------
- * Benchmark arg-parsing natives.
- *
- * parse-first-arg and parse-arg are defined in many benchmark files using
- * old inline-C that references g_tur_args.  These natives replace them so
- * the benchmarks work under tur --interpret.
- * ---------------------------------------------------------------------- */
-
-/* parse-first-arg [fallback :int] :int -- return atoll(*args*[0]) or fallback. */
-static TuriValue native_parse_first_arg(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)ud;
-    int64_t fallback = (n > 0) ? a[0].as_int : 0;
-    TuriValue av = turi_env_get(env, "*args*");
-    if (av.tag != TURI_INT || av.as_int == 0) return turi_int(fallback);
-    int64_t *cell = (int64_t *)(intptr_t)av.as_int;
-    const char *s = (const char *)(intptr_t)cell[0];
-    return turi_int(s ? (int64_t)atoll(s) : fallback);
-}
-
-/* parse-arg [idx :int fallback :int] :int -- return atoll(*args*[idx]) or fallback. */
-static TuriValue native_parse_arg(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)ud;
-    int64_t idx      = (n > 0) ? a[0].as_int : 0;
-    int64_t fallback = (n > 1) ? a[1].as_int : 0;
-    TuriValue av = turi_env_get(env, "*args*");
-    if (av.tag != TURI_INT || av.as_int == 0) return turi_int(fallback);
-    int64_t cell = av.as_int;
-    for (int64_t i = 0; i < idx && cell != 0; i++) {
-        int64_t *c = (int64_t *)(intptr_t)cell;
-        cell = c[1];
-    }
-    if (cell == 0) return turi_int(fallback);
-    int64_t *c = (int64_t *)(intptr_t)cell;
-    const char *s = (const char *)(intptr_t)c[0];
-    return turi_int(s ? (int64_t)atoll(s) : fallback);
-}
-
-/* -------------------------------------------------------------------------
  * I/O benchmark native helpers (file_read.tur, file_write.tur).
  *
  * These replace the inline-C helper definitions in the turmeric/ benchmark
@@ -3030,9 +2990,6 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "hamt-set",          native_tur_hamt_set,    NULL);
     turi_env_register_native(env, "hamt-get",          native_tur_hamt_get,    NULL);
     turi_env_register_native(env, "hamt-hash-ptr",     native_tur_hamt_hash_ptr, NULL);
-    /* Arg-parsing natives (replace g_tur_args inline-C in symlinked benchmarks) */
-    turi_env_register_native(env, "parse-first-arg",   native_parse_first_arg, NULL);
-    turi_env_register_native(env, "parse-arg",         native_parse_arg,       NULL);
     /* I/O benchmark helpers */
     turi_env_register_native(env, "write-temp-file",   native_write_temp_file, NULL);
     turi_env_register_native(env, "io-fopen-read",     native_io_fopen_read,   NULL);

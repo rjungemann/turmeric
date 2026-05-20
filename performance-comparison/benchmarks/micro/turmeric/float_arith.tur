@@ -1,11 +1,16 @@
 ;; float_arith -- N iterations of FP multiply/sqrt/add; print result.
 ;; Algorithm is pure Turmeric tail-recursion.
 ;; sqrt and printf-%.6f are one-line C helpers (no stdlib equivalent yet).
-(defn parse-first-arg [fallback :int] :int
+(defn head [lst :int] :int
   ```c
-  struct __tur_cons { int64_t value; int64_t next; };
-  struct __tur_cons *c = (struct __tur_cons *)(intptr_t)g_tur_args;
-  return c ? (int64_t)atoll((const char *)(intptr_t)c->value) : fallback;
+  struct { int64_t value; int64_t next; } *c = (void*)(intptr_t)lst;
+  return c ? c->value : 0;
+  ```)
+
+(defn cstr->parse-int [s :int] :int
+  ```c
+  const char *cs = (const char *)(intptr_t)s;
+  return cs ? (int64_t)atoll(cs) : 0;
   ```)
 
 ;; tur-sqrt -- square root via libm.
@@ -36,4 +41,4 @@
                                 (+ (* b 0.9999999) (tur-sqrt a))
                                 n))))
 
-(print-float6 (float-arith-loop 0 1.0 1.0 (parse-first-arg 1000000)))
+(print-float6 (float-arith-loop 0 1.0 1.0 (if (= *args* 0) 1000000 (cstr->parse-int (head *args*)))))

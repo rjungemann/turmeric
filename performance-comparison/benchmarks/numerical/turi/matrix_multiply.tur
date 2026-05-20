@@ -1,10 +1,6 @@
 ;; matrix_multiply -- NxN dense matrix multiply (interpreter-compatible).
 ;; All algorithm logic in pure Turmeric using vec-new-filled/vec-get/vec-set!.
 ;; A and B are 1-filled NxN matrices stored flat; C = A*B; prints integer checksum.
-(defn parse-first-arg [fallback :int] :int
-  (if (= *args* 0)
-    fallback
-    (cstr->parse-int (head *args*))))
 
 ;; matmul-loop -- triple loop: C[i*n+j] += A[i*n+k] * B[k*n+j]
 ;; Expressed as three nested tail-recursive loops over j, k, i.
@@ -44,4 +40,4 @@
           (do (vec-free a) (vec-free b) (vec-free c)
               s)))))
 
-(println (matmul-checksum (parse-first-arg 10)))
+(println (matmul-checksum (if (= *args* 0) 10 (cstr->parse-int (head *args*)))))

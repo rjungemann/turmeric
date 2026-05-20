@@ -1,10 +1,6 @@
 ;; monte_carlo_pi -- Monte Carlo estimation of pi (interpreter-compatible).
 ;; LCG step and loop are pure Turmeric; bit-shr, int->unit-float, println-float
 ;; are registered native shims.
-(defn parse-first-arg [fallback :int] :int
-  (if (= *args* 0)
-    fallback
-    (cstr->parse-int (head *args*))))
 
 ;; lcg-next -- advance the LCG state.
 (defn lcg-next [state :int] :int
@@ -28,4 +24,4 @@
   (let [inside (mc-loop 0 iters 6364136223846793005 0)]
     (println-float (/ (* 4.0 (int->float inside)) (int->float iters)) 6)))
 
-(estimate-pi (parse-first-arg 1000))
+(estimate-pi (if (= *args* 0) 1000 (cstr->parse-int (head *args*))))

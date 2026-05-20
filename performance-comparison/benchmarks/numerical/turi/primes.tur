@@ -1,9 +1,5 @@
 ;; primes -- sieve of Eratosthenes benchmark (interpreter-compatible).
 ;; Uses vec from stdlib instead of raw calloc/array ops.
-(defn parse-first-arg [fallback :int] :int
-  (if (= *args* 0)
-    fallback
-    (cstr->parse-int (head *args*))))
 
 ;; mark-multiples -- tail-recursive: mark j, j+step, j+2*step, ... as composite.
 (defn mark-multiples [s :int j :int step :int limit :int] :nil
@@ -27,4 +23,4 @@
       (vec-free s)
       result)))
 
-(println (count-primes (parse-first-arg 10000)))
+(println (count-primes (if (= *args* 0) 10000 (cstr->parse-int (head *args*)))))

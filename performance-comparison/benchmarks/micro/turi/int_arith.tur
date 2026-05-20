@@ -1,9 +1,5 @@
 ;; int_arith -- N iterations of integer multiply-add (interpreter-compatible).
 ;; bit-xor uses a registered native shim.
-(defn parse-first-arg [fallback :int] :int
-  (if (= *args* 0)
-    fallback
-    (cstr->parse-int (head *args*))))
 
 ;; int-arith-loop -- tail-recursive multiply-add accumulator.
 (defn int-arith-loop [i :int a :int b :int n :int] :int
@@ -14,4 +10,4 @@
                     (+ (* b 999983) a)
                     n)))
 
-(println (int-arith-loop 0 1 1 (parse-first-arg 1000000)))
+(println (int-arith-loop 0 1 1 (if (= *args* 0) 1000000 (cstr->parse-int (head *args*)))))

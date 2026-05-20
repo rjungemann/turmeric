@@ -1,9 +1,5 @@
 ;; text_search -- count occurrences of "hello" in a generated string (interpreter-compatible).
 ;; Uses vec as a byte buffer instead of inline-C malloc/strstr.
-(defn parse-first-arg [fallback :int] :int
-  (if (= *args* 0)
-    fallback
-    (cstr->parse-int (head *args*))))
 
 ;; hay-byte -- compute the haystack byte at position i.
 ;; Pattern: i%10 in {0..4} -> 'x' (120), {5} -> 'h', {6} -> 'e', {7,8} -> 'l', {9} -> 'o'.
@@ -50,4 +46,4 @@
           (do (vec-free v)
               result)))))
 
-(println (search-bench (parse-first-arg 10000)))
+(println (search-bench (if (= *args* 0) 10000 (cstr->parse-int (head *args*)))))
