@@ -1,1 +1,21 @@
-../turmeric/alloc_churn.tur
+;; alloc_churn -- allocate and free N small objects; measure allocation throughput
+;; (interpreter-compatible). Uses vec-new-filled/vec-get/vec-free instead of raw malloc/free.
+(defn parse-first-arg [fallback :int] :int
+  (if (= *args* 0)
+    fallback
+    (cstr->parse-int (head *args*))))
+
+;; churn-loop -- alloc one-element vec, read value i, free; accumulate sum via tail recursion.
+(defn churn-loop [i :int n :int sum :int] :int
+  (if (>= i n)
+    sum
+    (let [v   (vec-new-filled 1 i)
+          val (vec-get v 0)]
+      (do (vec-free v)
+          (churn-loop (+ i 1) n (+ sum val))))))
+
+;; churn -- N alloc/free cycles; return sum of stored values.
+(defn churn [n :int] :int
+  (churn-loop 0 n 0))
+
+(println (churn (parse-first-arg 10000)))
