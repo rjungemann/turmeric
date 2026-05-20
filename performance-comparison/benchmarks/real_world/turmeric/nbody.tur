@@ -1,0 +1,46 @@
+;; nbody -- simulate n_bodies for steps; print kinetic energy checksum.
+(defn parse-arg [idx :int default :int] :int
+  ```c
+  struct __tur_cons { int64_t value; int64_t next; };
+  struct __tur_cons *cell = (struct __tur_cons *)(intptr_t)g_tur_args;
+  for (int64_t i = 0; i < idx && cell; i++)
+    cell = (struct __tur_cons *)(intptr_t)cell->next;
+  return cell ? (int64_t)atoll((const char *)(intptr_t)cell->value) : default;
+  ```)
+
+(defn run-nbody [n_bodies :int steps :int] :void
+  ```c
+  typedef struct { double x,y,z,vx,vy,vz,mass; } Body;
+  Body *b = (Body*)calloc((size_t)n_bodies, sizeof(Body));
+  uint64_t state = 42;
+  for (int i = 0; i < n_bodies; i++) {
+    state = state*6364136223846793005ULL + 1442695040888963407ULL;
+    b[i].x = (double)(int64_t)(state>>32) / 1e8;
+    state = state*6364136223846793005ULL + 1442695040888963407ULL;
+    b[i].y = (double)(int64_t)(state>>32) / 1e8;
+    state = state*6364136223846793005ULL + 1442695040888963407ULL;
+    b[i].z = (double)(int64_t)(state>>32) / 1e8;
+    b[i].vx = b[i].vy = b[i].vz = 0.0;
+    b[i].mass = 1.0 + (i % 5) * 0.5;
+  }
+  for (int s = 0; s < steps; s++) {
+    for (int i = 0; i < n_bodies; i++)
+      for (int j = i+1; j < n_bodies; j++) {
+        double dx=b[j].x-b[i].x, dy=b[j].y-b[i].y, dz=b[j].z-b[i].z;
+        double dist = sqrt(dx*dx+dy*dy+dz*dz)+1e-10;
+        double f = b[i].mass*b[j].mass/(dist*dist*dist);
+        b[i].vx+=f*dx; b[i].vy+=f*dy; b[i].vz+=f*dz;
+        b[j].vx-=f*dx; b[j].vy-=f*dy; b[j].vz-=f*dz;
+      }
+    for (int i = 0; i < n_bodies; i++) {
+      b[i].x+=b[i].vx; b[i].y+=b[i].vy; b[i].z+=b[i].vz;
+    }
+  }
+  double ke = 0;
+  for (int i = 0; i < n_bodies; i++)
+    ke += 0.5*b[i].mass*(b[i].vx*b[i].vx+b[i].vy*b[i].vy+b[i].vz*b[i].vz);
+  printf("%.4f\n", ke);
+  free(b);
+  ```)
+
+(run-nbody (parse-arg 0 5) (parse-arg 1 1000))

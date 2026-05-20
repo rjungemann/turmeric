@@ -1,0 +1,27 @@
+;; file_write -- write N bytes to a temp file; print bytes written.
+(defn parse-first-arg [default :int] :int
+  ```c
+  struct __tur_cons { int64_t value; int64_t next; };
+  struct __tur_cons *c = (struct __tur_cons *)(intptr_t)g_tur_args;
+  return c ? (int64_t)atoll((const char *)(intptr_t)c->value) : default;
+  ```)
+
+(defn file-write [n :int] :int
+  ```c
+  const char *path = "/tmp/bench_io_write_tur.bin";
+  FILE *f = fopen(path, "wb");
+  if (!f) { perror("fopen"); return -1; }
+  char buf[4096];
+  memset(buf, 0xAB, sizeof(buf));
+  int64_t written = 0;
+  while (written < n) {
+    int64_t chunk = n - written < 4096 ? n - written : 4096;
+    fwrite(buf, 1, (size_t)chunk, f);
+    written += chunk;
+  }
+  fclose(f);
+  remove(path);
+  return written;
+  ```)
+
+(println (file-write (parse-first-arg 1048576)))

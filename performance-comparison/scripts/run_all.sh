@@ -143,6 +143,12 @@ run_category() {
             _run_memory "$bmark_dir" "$input_dir" "$size" ;;
         recursion)
             _run_recursion "$bmark_dir" "$input_dir" "$size" ;;
+        io)
+            _run_io "$bmark_dir" "$input_dir" "$size" ;;
+        real_world)
+            _run_real_world "$bmark_dir" "$input_dir" "$size" ;;
+        micro)
+            _run_micro "$bmark_dir" "$input_dir" "$size" ;;
         *)
             echo "Unknown category: $category"; return 1 ;;
     esac
@@ -297,6 +303,93 @@ _run_recursion() {
         python    "python3 $dir/python/factorial.py"
 }
 
+# ── io ───────────────────────────────────────────────────────────────────────
+_run_io() {
+    local dir="$1" idir="$2" size="$3"
+
+    local n
+    n=$(python3 -c "import json; d=json.load(open('$idir/file_write.json')); print(d['$size']['n'])")
+    _bench_lang io file_write "$size" "$n" \
+        c         "$dir/c/file_write" \
+        turmeric  "$dir/turmeric/file_write" \
+        clojure   "clojure -M $dir/clojure/file_write.clj" \
+        racket    "racket $dir/racket/file_write.rkt" \
+        python    "python3 $dir/python/file_write.py"
+
+    n=$(python3 -c "import json; d=json.load(open('$idir/file_read.json')); print(d['$size']['n'])")
+    _bench_lang io file_read "$size" "$n" \
+        c         "$dir/c/file_read" \
+        turmeric  "$dir/turmeric/file_read" \
+        clojure   "clojure -M $dir/clojure/file_read.clj" \
+        racket    "racket $dir/racket/file_read.rkt" \
+        python    "python3 $dir/python/file_read.py"
+
+    local fsize nreads
+    fsize=$(python3 -c "import json; d=json.load(open('$idir/random_access.json')); print(d['$size']['file_size'])")
+    nreads=$(python3 -c "import json; d=json.load(open('$idir/random_access.json')); print(d['$size']['n_reads'])")
+    _bench_lang io random_access "$size" "$fsize $nreads" \
+        c         "$dir/c/random_access" \
+        turmeric  "$dir/turmeric/random_access" \
+        clojure   "clojure -M $dir/clojure/random_access.clj" \
+        racket    "racket $dir/racket/random_access.rkt" \
+        python    "python3 $dir/python/random_access.py"
+}
+
+# ── real_world ───────────────────────────────────────────────────────────────
+_run_real_world() {
+    local dir="$1" idir="$2" size="$3"
+
+    local nb_bodies nb_steps
+    nb_bodies=$(python3 -c "import json; d=json.load(open('$idir/nbody.json')); print(d['$size']['n_bodies'])")
+    nb_steps=$(python3 -c "import json; d=json.load(open('$idir/nbody.json')); print(d['$size']['steps'])")
+    _bench_lang real_world nbody "$size" "$nb_bodies $nb_steps" \
+        c         "$dir/c/nbody" \
+        turmeric  "$dir/turmeric/nbody" \
+        clojure   "clojure -M $dir/clojure/nbody.clj" \
+        racket    "racket $dir/racket/nbody.rkt" \
+        python    "python3 $dir/python/nbody.py"
+
+    local rt_w rt_h
+    rt_w=$(python3 -c "import json; d=json.load(open('$idir/ray_tracing.json')); print(d['$size']['width'])")
+    rt_h=$(python3 -c "import json; d=json.load(open('$idir/ray_tracing.json')); print(d['$size']['height'])")
+    _bench_lang real_world ray_tracing "$size" "$rt_w $rt_h" \
+        c         "$dir/c/ray_tracing" \
+        turmeric  "$dir/turmeric/ray_tracing" \
+        clojure   "clojure -M $dir/clojure/ray_tracing.clj" \
+        racket    "racket $dir/racket/ray_tracing.rkt" \
+        python    "python3 $dir/python/ray_tracing.py"
+}
+
+# ── micro ────────────────────────────────────────────────────────────────────
+_run_micro() {
+    local dir="$1" idir="$2" size="$3"
+
+    local n
+    n=$(python3 -c "import json; d=json.load(open('$idir/int_arith.json')); print(d['$size']['n'])")
+    _bench_lang micro int_arith "$size" "$n" \
+        c         "$dir/c/int_arith" \
+        turmeric  "$dir/turmeric/int_arith" \
+        clojure   "clojure -M $dir/clojure/int_arith.clj" \
+        racket    "racket $dir/racket/int_arith.rkt" \
+        python    "python3 $dir/python/int_arith.py"
+
+    n=$(python3 -c "import json; d=json.load(open('$idir/float_arith.json')); print(d['$size']['n'])")
+    _bench_lang micro float_arith "$size" "$n" \
+        c         "$dir/c/float_arith" \
+        turmeric  "$dir/turmeric/float_arith" \
+        clojure   "clojure -M $dir/clojure/float_arith.clj" \
+        racket    "racket $dir/racket/float_arith.rkt" \
+        python    "python3 $dir/python/float_arith.py"
+
+    n=$(python3 -c "import json; d=json.load(open('$idir/function_call.json')); print(d['$size']['n'])")
+    _bench_lang micro function_call "$size" "$n" \
+        c         "$dir/c/function_call" \
+        turmeric  "$dir/turmeric/function_call" \
+        clojure   "clojure -M $dir/clojure/function_call.clj" \
+        racket    "racket $dir/racket/function_call.rkt" \
+        python    "python3 $dir/python/function_call.py"
+}
+
 # ── _bench_lang: dispatch per language, skip missing impls ───────────────────
 # Usage: _bench_lang <category> <benchmark> <size> <arg> \
 #            <lang1> <cmd1_or_binary1> <lang2> <cmd2_or_binary2> ...
@@ -343,21 +436,21 @@ _bench_lang() {
 # ── build C and Turmeric binaries before benchmarking ────────────────────────
 build_c_binaries() {
     echo "── building C binaries ──────────────────────────────"
-    local categories=(numerical data_structures string_processing concurrency memory recursion)
+    local categories=(numerical data_structures string_processing concurrency memory recursion io real_world micro)
     for cat in "${categories[@]}"; do
         local cdir="$BENCHMARK_DIR/$cat/c"
         [ -d "$cdir" ] || continue
         for src in "$cdir"/*.c; do
             [ -f "$src" ] || continue
             local bin="${src%.c}"
-            clang -O3 -o "$bin" "$src" -lpthread 2>/dev/null && echo "  built $bin" || echo "  WARN: failed to build $bin"
+            clang -O3 -o "$bin" "$src" -lpthread -lm 2>/dev/null && echo "  built $bin" || echo "  WARN: failed to build $bin"
         done
     done
 }
 
 build_turmeric_binaries() {
     echo "── building Turmeric binaries ───────────────────────"
-    local categories=(numerical data_structures string_processing concurrency memory recursion)
+    local categories=(numerical data_structures string_processing concurrency memory recursion io real_world micro)
     for cat in "${categories[@]}"; do
         local tdir="$BENCHMARK_DIR/$cat/turmeric"
         [ -d "$tdir" ] || continue
@@ -370,7 +463,7 @@ build_turmeric_binaries() {
 }
 
 # ── main ─────────────────────────────────────────────────────────────────────
-ALL_CATEGORIES=(numerical data_structures string_processing concurrency memory recursion)
+ALL_CATEGORIES=(numerical data_structures string_processing concurrency memory recursion io real_world micro)
 
 TARGET_CATEGORY="${1:-all}"
 TARGET_SIZE="${2:-small}"

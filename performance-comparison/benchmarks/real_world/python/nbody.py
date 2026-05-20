@@ -1,78 +1,32 @@
-import time
-import math
-import random
+import sys, math
 
-NUM_BODIES = 5
-STEPS = 10000
+n_bodies = int(sys.argv[1]) if len(sys.argv) > 1 else 5
+steps    = int(sys.argv[2]) if len(sys.argv) > 2 else 1000
 
-class Body:
-    def __init__(self, x, y, z, vx, vy, vz, mass):
-        self.x = x
-        self.y = y
-        self.z = z
-        self.vx = vx
-        self.vy = vy
-        self.vz = vz
-        self.mass = mass
+MASK = (1 << 64) - 1
+A, C = 6364136223846793005, 1442695040888963407
 
-def measure_time():
-    return time.perf_counter()
+def lcg(s): return (s * A + C) & MASK
+def lcg_float(s): return (s >> 32) / 1e8
 
-def update_bodies(bodies):
-    # Calculate forces
-    fx = [0.0] * NUM_BODIES
-    fy = [0.0] * NUM_BODIES
-    fz = [0.0] * NUM_BODIES
+state = 42
+bodies = []
+for i in range(n_bodies):
+    s1 = lcg(state); s2 = lcg(s1); s3 = lcg(s2); state = s3
+    bodies.append([lcg_float(s1), lcg_float(s2), lcg_float(s3),
+                   0.0, 0.0, 0.0, 1.0 + (i % 5) * 0.5])
 
-    for i in range(NUM_BODIES):
-        for j in range(i + 1, NUM_BODIES):
-            dx = bodies[j].x - bodies[i].x
-            dy = bodies[j].y - bodies[i].y
-            dz = bodies[j].z - bodies[i].z
-            dist_sq = dx * dx + dy * dy + dz * dz
-            dist = math.sqrt(dist_sq)
-            force = bodies[i].mass * bodies[j].mass / dist_sq
+for _ in range(steps):
+    for i in range(n_bodies):
+        for j in range(i + 1, n_bodies):
+            bi, bj = bodies[i], bodies[j]
+            dx, dy, dz = bj[0]-bi[0], bj[1]-bi[1], bj[2]-bi[2]
+            dist = math.sqrt(dx*dx + dy*dy + dz*dz) + 1e-10
+            f = bi[6] * bj[6] / (dist * dist * dist)
+            bi[3] += f*dx; bi[4] += f*dy; bi[5] += f*dz
+            bj[3] -= f*dx; bj[4] -= f*dy; bj[5] -= f*dz
+    for b in bodies:
+        b[0] += b[3]; b[1] += b[4]; b[2] += b[5]
 
-            fx[i] += force * dx / dist
-            fy[i] += force * dy / dist
-            fz[i] += force * dz / dist
-
-            fx[j] -= force * dx / dist
-            fy[j] -= force * dy / dist
-            fz[j] -= force * dz / dist
-
-    # Update positions and velocities
-    for i in range(NUM_BODIES):
-        bodies[i].vx += fx[i] / bodies[i].mass
-        bodies[i].vy += fy[i] / bodies[i].mass
-        bodies[i].vz += fz[i] / bodies[i].mass
-
-        bodies[i].x += bodies[i].vx
-        bodies[i].y += bodies[i].vy
-        bodies[i].z += bodies[i].vz
-
-def main():
-    random.seed(42)
-    bodies = []
-
-    # Initialize bodies with random positions and velocities
-    for _ in range(NUM_BODIES):
-        x = random.random() * 100 - 50
-        y = random.random() * 100 - 50
-        z = random.random() * 100 - 50
-        vx = random.random() * 2 - 1
-        vy = random.random() * 2 - 1
-        vz = random.random() * 2 - 1
-        mass = random.random() * 10 + 1
-        bodies.append(Body(x, y, z, vx, vy, vz, mass))
-
-    start = measure_time()
-
-    for _ in range(STEPS):
-        update_bodies(bodies)
-
-    end = measure_time()
-    print(f"Time taken: {end - start:.6f} seconds")
-
-if __name__ == "__main__":
-    main()
+ke = sum(0.5 * b[6] * (b[3]**2 + b[4]**2 + b[5]**2) for b in bodies)
+print(f"{ke:.4f}")

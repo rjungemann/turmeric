@@ -1,0 +1,30 @@
+;; file_read -- write N bytes then read them back; print bytes read.
+(defn parse-first-arg [default :int] :int
+  ```c
+  struct __tur_cons { int64_t value; int64_t next; };
+  struct __tur_cons *c = (struct __tur_cons *)(intptr_t)g_tur_args;
+  return c ? (int64_t)atoll((const char *)(intptr_t)c->value) : default;
+  ```)
+
+(defn file-read-bench [n :int] :int
+  ```c
+  const char *path = "/tmp/bench_io_read_tur.bin";
+  char wbuf[4096]; memset(wbuf, 0xCD, sizeof(wbuf));
+  FILE *fw = fopen(path, "wb");
+  if (!fw) { perror("fopen"); return -1; }
+  int64_t rem = n;
+  while (rem > 0) {
+    int64_t chunk = rem < 4096 ? rem : 4096;
+    fwrite(wbuf, 1, (size_t)chunk, fw); rem -= chunk;
+  }
+  fclose(fw);
+  char rbuf[4096];
+  FILE *fr = fopen(path, "rb");
+  if (!fr) { perror("fopen read"); return -1; }
+  int64_t total = 0; size_t nr;
+  while ((nr = fread(rbuf, 1, sizeof(rbuf), fr)) > 0) total += (int64_t)nr;
+  fclose(fr); remove(path);
+  return total;
+  ```)
+
+(println (file-read-bench (parse-first-arg 1048576)))
