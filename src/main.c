@@ -152,7 +152,8 @@ static int run_core_passes(PassContext *ctx) {
                                           ctx->separate_compilation,
                                           &ctx->tc_env,
                                           ctx->include_dirs,
-                                          ctx->n_include_dirs);
+                                          ctx->n_include_dirs,
+                                          NULL);
             if (!ctx->prog || diag_had_error()) return 1;
 #ifndef NDEBUG
             /* Phase HKT-P6: verify kind info is preserved after elaboration */
@@ -1480,6 +1481,14 @@ static void wk_apply_flags(const char *flags_str) {
         else if (strcmp(tok, "--strict-effects")    == 0) g_strict_effects           = true;
         else if (strcmp(tok, "--dump-effects")      == 0) g_dump_effects             = true;
         else if (strcmp(tok, "--lint-effects")      == 0) g_lint_effects             = true;
+        else if (strcmp(tok, "--lint-unsafe")       == 0) { g_lint_unsafe_enabled = true; g_unsafe_warn_nested = true; }
+        else if (strncmp(tok, "--lint-unsafe-max-lines=", 24) == 0) {
+            g_lint_unsafe_enabled = true;
+            g_unsafe_max_lines = (uint32_t)atoi(tok + 24);
+        }
+        else if (strcmp(tok, "--lint-unsafe-doc")   == 0) { g_lint_unsafe_enabled = true; }
+        else if (strcmp(tok, "--require-unsafe-docs")== 0) { g_lint_unsafe_enabled = true; g_unsafe_require_safety = true; }
+        else if (strcmp(tok, "--lint-unsafe-nested")== 0) { g_lint_unsafe_enabled = true; }
         tok = strtok(NULL, " \t");
     }
 }
@@ -1528,6 +1537,209 @@ static void wk_drain_pipes(int fd_out, int fd_err, Buf *out_buf, Buf *err_buf) {
         }
     }
     close(fd_out); close(fd_err);
+}
+
+/* -------------------------------------------------------------------------
+ * Native HAMT wrappers for the interpreter (Tier 3).
+ * These replace the nil stubs registered by EX_EXTERN_C so that HAMT
+ * operations actually work during interpreter evaluation.
+ * ---------------------------------------------------------------------- */
+#include "runtime/hamt.h"
+
+static TuriValue native_tur_hamt_new(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)a; (void)n; (void)ud;
+    Hamt *m = tur_hamt_new();
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)m; return v;
+}
+static TuriValue native_tur_hamt_free(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n >= 1) tur_hamt_free((Hamt *)(intptr_t)a[0].as_int);
+    return turi_nil();
+}
+static TuriValue native_tur_hamt_retain(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    Hamt *m = (n >= 1) ? (Hamt *)(intptr_t)a[0].as_int : NULL;
+    Hamt *r = tur_hamt_retain(m);
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)r; return v;
+}
+static TuriValue native_tur_hamt_count(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    Hamt *m = (n >= 1) ? (Hamt *)(intptr_t)a[0].as_int : NULL;
+    uint32_t c = tur_hamt_count(m);
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)c; return v;
+}
+static TuriValue native_tur_hamt_set(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 4) return turi_nil();
+    Hamt *m    = (Hamt *)(intptr_t)a[0].as_int;
+    uint64_t h = (uint64_t)a[1].as_int;
+    void *key  = (void *)(intptr_t)a[2].as_int;
+    void *val  = (void *)(intptr_t)a[3].as_int;
+    /* For cstr keys/values, use the actual pointer (they're interned). */
+    if (a[2].tag == TURI_CSTR) key = (void *)a[2].as_cstr;
+    if (a[3].tag == TURI_CSTR) val = (void *)a[3].as_cstr;
+    Hamt *r = tur_hamt_set(m, h, key, val);
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)r; return v;
+}
+static TuriValue native_tur_hamt_del(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 3) return turi_nil();
+    Hamt *m    = (Hamt *)(intptr_t)a[0].as_int;
+    uint64_t h = (uint64_t)a[1].as_int;
+    void *key  = (n >= 3 && a[2].tag == TURI_CSTR) ? (void *)a[2].as_cstr
+                                                     : (void *)(intptr_t)a[2].as_int;
+    Hamt *r = tur_hamt_del(m, h, key);
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)r; return v;
+}
+static TuriValue native_tur_hamt_has(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 3) { TuriValue v = {0}; v.tag = TURI_BOOL; v.as_bool = false; return v; }
+    Hamt *m    = (Hamt *)(intptr_t)a[0].as_int;
+    uint64_t h = (uint64_t)a[1].as_int;
+    void *key  = (a[2].tag == TURI_CSTR) ? (void *)a[2].as_cstr
+                                          : (void *)(intptr_t)a[2].as_int;
+    bool r = tur_hamt_has(m, h, key);
+    TuriValue v = {0}; v.tag = TURI_BOOL; v.as_bool = r; return v;
+}
+static TuriValue native_tur_hamt_get(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 3) return turi_nil();
+    Hamt *m    = (Hamt *)(intptr_t)a[0].as_int;
+    uint64_t h = (uint64_t)a[1].as_int;
+    void *key  = (a[2].tag == TURI_CSTR) ? (void *)a[2].as_cstr
+                                          : (void *)(intptr_t)a[2].as_int;
+    void *r = tur_hamt_get(m, h, key);
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)r; return v;
+}
+static TuriValue native_tur_hamt_merge(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2) return turi_nil();
+    Hamt *ma = (Hamt *)(intptr_t)a[0].as_int;
+    Hamt *mb = (Hamt *)(intptr_t)a[1].as_int;
+    Hamt *r = tur_hamt_merge(ma, mb);
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)r; return v;
+}
+static TuriValue native_tur_hamt_hash_str(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    const char *s = (n >= 1 && a[0].tag == TURI_CSTR) ? a[0].as_cstr : "";
+    uint64_t h = tur_hamt_hash_str(s);
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)h; return v;
+}
+static TuriValue native_tur_hamt_hash_ptr(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    void *p = (n >= 1) ? ((a[0].tag == TURI_CSTR) ? (void *)a[0].as_cstr
+                                                   : (void *)(intptr_t)a[0].as_int)
+                       : NULL;
+    uint64_t h = tur_hamt_hash_ptr(p);
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)h; return v;
+}
+static TuriValue native_tur_hamt_iter_init(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2) return turi_nil();
+    HamtIter *iter = (HamtIter *)(intptr_t)a[0].as_int;
+    Hamt *m = (Hamt *)(intptr_t)a[1].as_int;
+    if (iter) tur_hamt_iter_init(iter, m);
+    return turi_nil();
+}
+static TuriValue native_tur_hamt_iter_free(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n >= 1) { HamtIter *iter = (HamtIter *)(intptr_t)a[0].as_int; if (iter) tur_hamt_iter_free(iter); }
+    return turi_nil();
+}
+static TuriValue native_tur_hamt_iter_next(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 4) { TuriValue v = {0}; v.tag = TURI_BOOL; return v; }
+    HamtIter *iter  = (HamtIter *)(intptr_t)a[0].as_int;
+    uint64_t *hout  = (uint64_t *)(intptr_t)a[1].as_int;
+    void    **kout  = (void **)(intptr_t)a[2].as_int;
+    void    **vout  = (void **)(intptr_t)a[3].as_int;
+    bool r = tur_hamt_iter_next(iter, hout, kout, vout);
+    TuriValue v = {0}; v.tag = TURI_BOOL; v.as_bool = r; return v;
+}
+
+static void wk_register_hamt_natives(TuriEnv *env) {
+    turi_env_register_native(env, "tur_hamt_new",       native_tur_hamt_new,       NULL);
+    turi_env_register_native(env, "tur_hamt_free",      native_tur_hamt_free,      NULL);
+    turi_env_register_native(env, "tur_hamt_retain",    native_tur_hamt_retain,    NULL);
+    turi_env_register_native(env, "tur_hamt_count",     native_tur_hamt_count,     NULL);
+    turi_env_register_native(env, "tur_hamt_set",       native_tur_hamt_set,       NULL);
+    turi_env_register_native(env, "tur_hamt_del",       native_tur_hamt_del,       NULL);
+    turi_env_register_native(env, "tur_hamt_has",       native_tur_hamt_has,       NULL);
+    turi_env_register_native(env, "tur_hamt_get",       native_tur_hamt_get,       NULL);
+    turi_env_register_native(env, "tur_hamt_merge",     native_tur_hamt_merge,     NULL);
+    turi_env_register_native(env, "tur_hamt_hash_str",  native_tur_hamt_hash_str,  NULL);
+    turi_env_register_native(env, "tur_hamt_hash_ptr",  native_tur_hamt_hash_ptr,  NULL);
+    turi_env_register_native(env, "tur_hamt_iter_init", native_tur_hamt_iter_init, NULL);
+    turi_env_register_native(env, "tur_hamt_iter_free", native_tur_hamt_iter_free, NULL);
+    turi_env_register_native(env, "tur_hamt_iter_next", native_tur_hamt_iter_next, NULL);
+}
+
+/* -------------------------------------------------------------------------
+ * Native implementations of safe.tur stdlib functions (inline-C bodies).
+ * These allow safe.tur functions to run correctly in interpreter mode.
+ * ---------------------------------------------------------------------- */
+
+/* array-get [arr :ptr<void> idx :int] :ptr
+ * Returns a heap-allocated { bool is_some; int64_t value; } option. */
+static TuriValue native_safe_array_get(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_nil();
+    int64_t *arr = (int64_t *)(intptr_t)a[0].as_int;
+    int64_t  idx = a[1].as_int;
+    /* Layout: { bool is_some (8 bytes as int64), int64_t value } */
+    int64_t *opt = (int64_t *)malloc(2 * sizeof(int64_t));
+    if (!opt) return turi_nil();
+    if (arr && idx >= 0 && idx < 1024) {
+        opt[0] = 1; /* is_some = true */
+        opt[1] = arr[idx];
+    } else {
+        opt[0] = 0; /* is_some = false */
+        opt[1] = 0;
+    }
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)opt;
+    return v;
+}
+
+/* array-set [arr :ptr<void> idx :int value :int] :int
+ * Returns 1 on success, 0 on out-of-range. */
+static TuriValue native_safe_array_set(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 3) return turi_int(0);
+    int64_t *arr = (int64_t *)(intptr_t)a[0].as_int;
+    int64_t  idx = a[1].as_int;
+    int64_t  val = a[2].as_int;
+    if (arr && idx >= 0 && idx < 1024) {
+        arr[idx] = val;
+        return turi_int(1);
+    }
+    return turi_int(0);
+}
+
+/* box [v :int] :ptr -- allocate an int64_t on the heap */
+static TuriValue native_safe_box(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+    if (!p) return turi_nil();
+    *p = (n > 0) ? a[0].as_int : 0;
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)p;
+    return v;
+}
+
+/* unbox [p :ptr] :int -- read int64_t from heap pointer */
+static TuriValue native_safe_unbox(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    int64_t *p = (int64_t *)(intptr_t)a[0].as_int;
+    if (!p) return turi_int(0);
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = *p;
+    return v;
+}
+
+static void wk_register_safe_natives(TuriEnv *env) {
+    turi_env_register_native(env, "array-get",   native_safe_array_get, NULL);
+    turi_env_register_native(env, "array-set",   native_safe_array_set, NULL);
+    turi_env_register_native(env, "box",         native_safe_box,       NULL);
+    turi_env_register_native(env, "unbox",       native_safe_unbox,     NULL);
 }
 
 /* Native implementation of tur-contract-check (bool * cstr -> void).
@@ -1622,14 +1834,22 @@ static int wk_eval_fixture(const char *input, const char *flags_str,
         if (timeout_secs > 0) alarm((unsigned)timeout_secs);
 
         TuriEnv *env = turi_env_new();
-        /* Pre-load stdlib/macros.tur so its macros (cond, when, assert!, etc.)
-         * are available for elaborating user code.  We load only macros.tur
-         * (not contract.tur) because both files define assert! and loading both
-         * causes a "macro already defined" re-elaboration error.  The contract
-         * runtime helpers are registered as native C functions below. */
+        /* Pre-load stdlib files so the elaborator has all standard definitions.
+         * We skip contract.tur because it conflicts with the native stubs below.
+         * hamt.tur and map.tur are needed for ^persistent map lowering (Phase P3).
+         * safe.tur is needed for bounds-checked array ops. */
         {
-            TuriValue sv = turi_eval_file(env, "stdlib/macros.tur");
-            (void)sv;
+            static const char *preload[] = {
+                "stdlib/macros.tur",
+                "stdlib/safe.tur",
+                "stdlib/hamt.tur",
+                "stdlib/map.tur",
+                NULL
+            };
+            for (int pi = 0; preload[pi]; pi++) {
+                TuriValue sv = turi_eval_file(env, preload[pi]);
+                (void)sv;
+            }
         }
         /* Inject typed stubs for contract runtime helpers so the elaborator
          * knows their signatures.  Native functions override the closures at
@@ -1650,6 +1870,11 @@ static int wk_eval_fixture(const char *input, const char *flags_str,
                                  native_contract_check_inv, NULL);
         turi_env_register_native(env, "contract-enabled?",
                                  native_contract_enabled, NULL);
+        /* Register native HAMT implementations so persistent map operations
+         * work correctly in interpreter mode. */
+        wk_register_hamt_natives(env);
+        /* Register native safe.tur stdlib implementations. */
+        wk_register_safe_natives(env);
         /* Set module_base_dir to the fixture directory so that (import ...)
          * forms resolve sibling .tur files correctly. */
         {
@@ -1684,6 +1909,11 @@ static int wk_eval_fixture(const char *input, const char *flags_str,
             turi_run_pending_defers(env);
         }
         turi_env_free(env);
+        /* Print unsafe stats if enabled (matches compiler pipeline output). */
+        if (g_unsafe_stats_enabled) {
+            fprintf(stderr, "unsafe stats: %u blocks, %u total forms\n",
+                    g_unsafe_block_count, g_unsafe_total_lines);
+        }
         fflush(NULL);
         _exit(exit_code);
     }
@@ -2142,7 +2372,7 @@ static int cmd_explain(const char *code) {
     }
 
     Expr *prog = elaborate_program(&arena, &st, forms, nforms, 0, ".", false, NULL,
-                                    NULL, 0);
+                                    NULL, 0, NULL);
     if (!prog || diag_had_error()) {
         /* Error already emitted */
         symtab_free(&st);

@@ -35,6 +35,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #ifndef __EMSCRIPTEN__
 #  include <sys/mman.h>
@@ -68,6 +69,7 @@
 #include "reader.h"
 #include "symbols.h"
 #include "types.h"
+#include "../passes/effect_check.h"
 
 /* -------------------------------------------------------------------------
  * Internal closure representation
@@ -148,6 +150,59 @@ static void async_fiber_thunk(void) {
 #if defined(__APPLE__)
 #  pragma clang diagnostic pop
 #endif
+
+/* -------------------------------------------------------------------------
+ * Nil stub for extern-c functions: returns nil in interpreter mode.
+ * ---------------------------------------------------------------------- */
+static TuriValue native_nil_stub(TuriEnv *env, TuriValue *args, uint32_t n,
+                                  void *ud) {
+    (void)env; (void)args; (void)n; (void)ud;
+    return turi_nil();
+}
+
+/* Native stubs for well-known libc functions declared via extern-c. */
+static TuriValue native_extern_exit(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int code = (n > 0) ? (int)args[0].as_int : 0;
+    fflush(NULL);
+    _exit(code);
+}
+static TuriValue native_extern_free(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n > 0) { void *p = (void *)(intptr_t)args[0].as_int; if (p) free(p); }
+    return turi_nil();
+}
+static TuriValue native_extern_strlen(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n > 0 && args[0].tag == TURI_CSTR && args[0].as_cstr)
+        return turi_int((int64_t)strlen(args[0].as_cstr));
+    return turi_int(0);
+}
+static TuriValue native_extern_getenv(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n > 0 && args[0].tag == TURI_CSTR && args[0].as_cstr) {
+        const char *v = getenv(args[0].as_cstr);
+        return v ? turi_cstr(v) : turi_nil();
+    }
+    return turi_nil();
+}
+
+static void register_extern_c_known(TuriEnv *env, const char *fname) {
+    struct { const char *name; TuriNativeFn fn; } known[] = {
+        { "exit",   native_extern_exit   },
+        { "free",   native_extern_free   },
+        { "strlen", native_extern_strlen },
+        { "getenv", native_extern_getenv },
+        { NULL, NULL }
+    };
+    for (int i = 0; known[i].name; i++) {
+        if (strcmp(fname, known[i].name) == 0) {
+            turi_env_register_native(env, fname, known[i].fn, NULL);
+            return;
+        }
+    }
+    turi_env_register_native(env, fname, native_nil_stub, NULL);
+}
 
 /* -------------------------------------------------------------------------
  * Local variable frame (stack-allocated linked list)
@@ -750,8 +805,22 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
     case BS_PREFIX_UNARY: {
         const char *op = spec->c_op;
         if (op && strcmp(op, "!") == 0) return turi_bool(!args[0].as_bool);
+        if (op && strcmp(op, "&") == 0) {
+            /* ptr-of: emulate &var by boxing the value into a heap cell */
+            int64_t *cell = (int64_t *)malloc(sizeof(int64_t));
+            if (!cell) return turi_nil();
+            *cell = args[0].as_int;
+            TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)cell;
+            return v;
+        }
         return turi_nil();
     }
+
+    case BS_UNSAFE_CAST:
+    case BS_REINTERPRET:
+    case BS_TRANSMUTE:
+        /* All three are C-style casts; in the interpreter, pass the value through. */
+        return args[0];
 
     case BS_PREFIX_UNARY_FREE:
         /* (drop! x) — no-op in the evaluator */
@@ -795,6 +864,70 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
                 printf("%lld\n", (long long)a.as_int);
             break;
         }
+        return turi_nil();
+    }
+
+    /* --- Unsafe pointer/memory operations -------------------------------- */
+    case BS_RAW_MALLOC: {
+        int64_t sz = args[0].as_int;
+        void *p = malloc((size_t)(sz > 0 ? sz : 0));
+        TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)p;
+        return v;
+    }
+    case BS_RAW_FREE: {
+        void *p = (void *)(intptr_t)args[0].as_int;
+        if (p) free(p);
+        return turi_nil();
+    }
+    case BS_PTR_DEREF: {
+        int64_t *p = (int64_t *)(intptr_t)args[0].as_int;
+        if (!p) return turi_nil();
+        TuriValue v = {0}; v.tag = TURI_INT; v.as_int = *p;
+        return v;
+    }
+    case BS_PTR_WRITE: {
+        int64_t *p = (int64_t *)(intptr_t)args[0].as_int;
+        if (p) *p = args[1].as_int;
+        return turi_nil();
+    }
+    case BS_PTR_ARITH: {
+        /* ptr-add/ptr-sub: raw byte arithmetic, matching emitted C: (char*)p +/- off */
+        intptr_t base = (intptr_t)args[0].as_int;
+        int64_t  off  = args[1].as_int;
+        intptr_t res  = (spec->c_op && spec->c_op[0] == '-')
+                        ? base - (intptr_t)off
+                        : base + (intptr_t)off;
+        TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)res;
+        return v;
+    }
+    case BS_RAW_MEMSET: {
+        void *p = (void *)(intptr_t)args[0].as_int;
+        int  c  = (int)args[1].as_int;
+        size_t n = (size_t)args[2].as_int;
+        if (p) memset(p, c, n);
+        return turi_nil();
+    }
+    case BS_RAW_MEMCPY: {
+        void *dst = (void *)(intptr_t)args[0].as_int;
+        void *src = (void *)(intptr_t)args[1].as_int;
+        size_t n  = (size_t)args[2].as_int;
+        if (dst && src) memcpy(dst, src, n);
+        return turi_nil();
+    }
+    case BS_ARRAY_GET_UNCHECKED: {
+        /* *((int64_t *)arr + idx) */
+        int64_t *arr = (int64_t *)(intptr_t)args[0].as_int;
+        int64_t  idx = args[1].as_int;
+        TuriValue v = {0}; v.tag = TURI_INT;
+        v.as_int = arr ? arr[idx] : 0;
+        return v;
+    }
+    case BS_ARRAY_SET_UNCHECKED: {
+        /* *((int64_t *)arr + idx) = val */
+        int64_t *arr = (int64_t *)(intptr_t)args[0].as_int;
+        int64_t  idx = args[1].as_int;
+        int64_t  val = args[2].as_int;
+        if (arr) arr[idx] = val;
         return turi_nil();
     }
 
@@ -906,11 +1039,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return turi_float(e->as.f);
 
     case EX_CSTR_LIT: {
-        /* StrSlice — copy to a malloc'd NUL-terminated string */
-        char *s = (char *)malloc(e->as.s.len + 1);
-        memcpy(s, e->as.s.p, e->as.s.len);
-        s[e->as.s.len] = '\0';
-        return turi_cstr(s);
+        /* Intern the string so that identical literals share the same pointer.
+         * This is required for HAMT key comparison (pointer equality) to work
+         * correctly when the same string literal appears multiple times. */
+        StrSlice sl = { e->as.s.p, e->as.s.len };
+        const Symbol *sym = symtab_intern(&env->st, sl);
+        return turi_cstr(sym->name);
     }
 
     /* --- Variable -------------------------------------------------------- */
@@ -1022,6 +1156,19 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriValue v  = turi_closure(cl);
         turi_env_set(env, e->as.fn_def_.fn->binding->name->name, v);
         return v;
+    }
+
+    /* --- Extern C declaration -- register nil stub in interpreter mode ----- */
+    case EX_EXTERN_C: {
+        ExternC *ec = e->as.extern_c_.ext;
+        if (ec && ec->binding) {
+            const char *fname = ec->binding->name->name;
+            /* Only register if not already bound (avoid overwriting native impls). */
+            TuriValue existing = turi_env_get(env, fname);
+            if (existing.tag == TURI_ERROR)
+                register_extern_c_known(env, fname);
+        }
+        return turi_nil();
     }
 
     /* --- Anonymous function (fn) ---------------------------------------- */
@@ -1984,6 +2131,7 @@ TuriValue turi_eval(TuriEnv *env, const char *src) {
      * "only one defmodule per file" error on re-elaboration. */
     uint32_t prior = env->prior_toplevel;
     const char *mbase = env->module_base_dir ? env->module_base_dir : ".";
+    uint32_t actual_n_fsd = 0;
     Expr *prog = elaborate_program(eval_arena, &env->st,
                                    forms, nforms,
                                    /*stdlib_prefix=*/prior,
@@ -1991,22 +2139,32 @@ TuriValue turi_eval(TuriEnv *env, const char *src) {
                                    /*separate_compilation=*/false,
                                    /*out_tc_env=*/NULL,
                                    /*include_dirs=*/NULL,
-                                   /*n_include_dirs=*/0);
+                                   /*n_include_dirs=*/0,
+                                   /*out_n_file_scope_defs=*/&actual_n_fsd);
     if (!prog || diag_had_error()) {
         return turi_error("elaboration error");
     }
 
+    /* 6b. Run effect-row check pass to emit warnings (e.g. TUR-W0033). */
+    {
+        EffectEnv eff_env;
+        memset(&eff_env, 0, sizeof(eff_env));
+        effect_check_pass(eval_arena, prog, &eff_env);
+        /* Warnings are emitted as a side-effect; ignore hard errors in
+         * interpreter mode (they would already be caught as elaboration errors). */
+    }
+
     /* 7. Evaluate the new top-level expressions.
      *
-     * elaborate_program prepends any "file-scope defs" (EX_DEFMODULE nodes
-     * from imported modules resolved during elaboration) before the parsed
-     * forms.  As a result the total item count may exceed nforms:
+     * elaborate_program prepends actual file-scope defs (EX_DEFMODULE nodes
+     * from imported modules) before the parsed forms.  It also expands any
+     * (load ...) directives inline, which increases prog->as.program.n
+     * beyond nforms without contributing to n_fsd.  We use the count returned
+     * via out_n_file_scope_defs to correctly separate the two:
      *
      *   [0 .. n_fsd-1]               <- file_scope_defs (imported modules)
      *   [n_fsd .. n_fsd+prior-1]     <- previously-accumulated forms (already run)
-     *   [n_fsd+prior .. total-1]     <- new user forms (must run)
-     *
-     * where n_fsd = total - nforms.
+     *   [n_fsd+prior .. total-1]     <- new user forms (must run; includes load-expanded)
      *
      * We must also run the file_scope_defs on every call because they are
      * freshly elaborated and not yet registered in the runtime env.  Since
@@ -2016,7 +2174,7 @@ TuriValue turi_eval(TuriEnv *env, const char *src) {
      * prior_toplevel tracks *parsed* form count (not total), so the formula
      * stays consistent across calls even as n_fsd fluctuates. */
     uint32_t total = prog->as.program.n;
-    uint32_t n_fsd = (total > nforms) ? (total - nforms) : 0;
+    uint32_t n_fsd = actual_n_fsd;
 
 #define EVAL_TOPLEVEL_RANGE(lo, hi) do {                                      \
     for (uint32_t _i = (lo); _i < (hi); _i++) {                              \
