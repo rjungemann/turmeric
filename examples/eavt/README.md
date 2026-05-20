@@ -136,7 +136,7 @@ to deconstruct.
 
 ## Tutorial Docs
 
-Step-by-step explanations of each file live in `docs/tutorials/eavt/`:
+Step-by-step explanations of each file live in `docs/guides/eavt/`:
 
 - `01-concepts.md` -- EAVT model, immutability, comparison with SQL
 - `02-minimal-impl.md` -- walk through `minimal.tur` line by line

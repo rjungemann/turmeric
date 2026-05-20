@@ -38,7 +38,7 @@ This document explores **type system features not yet considered** for Turmeric 
 | [Intersection & Union Types](#7-intersection--union-types) | High | Medium | ✅ IT0–IT4 substantially complete (`-Xunion-types`, `-Xintersection-types`) |
 | [Effect Types (Row Polymorphism)](#8-effect-types-row-polymorphism) | High | Medium | ✅ ET0–ET4 complete (`-Xeffect-types`); LC0–LC3, MS0–MS4 complete |
 | [Sized Types](#9-sized-types) | Medium | Medium-High | 📋 Draft — Not Started |
-| [Contract Types](#10-contract-types) | Medium | Medium | 📋 Draft — Not Started |
+| [Contract Types](#10-contract-types) | Medium | Medium | ✅ CT0–CT4 complete (`-Xcontracts`) |
 
 ---
 
@@ -1364,7 +1364,7 @@ Contract types add **runtime assertions** to types. A contract type `T { p }` re
 - API boundary validation
 - Runtime property verification
 
-### Syntax (Proposed)
+### Syntax
 
 ```clojure
 ;; Contract type syntax
@@ -1427,33 +1427,43 @@ defn example [] : { y : int | (>= y 0) }
 
 #### Phase CT0: Contract Type Foundations
 
-- [ ] Add contract syntax to type annotations
-- [ ] Parse contract predicates
-- [ ] Store contracts in type system
+**Status: ✅ Complete**
+
+- [x] Add contract syntax to type annotations
+- [x] Parse contract predicates
+- [x] Store contracts in type system
 
 #### Phase CT1: Contract Checking
 
-- [ ] Insert runtime checks for contract predicates
-- [ ] Contract failure handling (panic, return error, custom handler)
-- [ ] Contract propagation through operations
+**Status: ✅ Complete**
+
+- [x] Insert runtime checks for contract predicates
+- [x] Contract failure handling (panic, return error, custom handler)
+- [x] Contract propagation through operations
 
 #### Phase CT2: Contract Inference
 
-- [ ] Infer contracts where possible
-- [ ] Contract simplification
-- [ ] Contract composition
+**Status: ✅ Complete**
+
+- [x] Infer contracts where possible
+- [x] Contract simplification
+- [x] Contract composition
 
 #### Phase CT3: Contract Optimization
 
-- [ ] Remove contracts that can be proven at compile time
-- [ ] Inline simple contracts
-- [ ] Contract caching
+**Status: ✅ Complete**
+
+- [x] Remove contracts that can be proven at compile time
+- [x] Inline simple contracts
+- [x] Contract caching
 
 #### Phase CT4: Integration
 
-- [ ] Stdlib: common contracts (bounds, null checks, etc.)
-- [ ] Integration with FFI
-- [ ] Contract type error messages
+**Status: ✅ Complete**
+
+- [x] Stdlib: common contracts (bounds, null checks, etc.)
+- [x] Integration with FFI
+- [x] Contract type error messages
 
 ### Complexity Assessment
 
@@ -1476,7 +1486,7 @@ defn example [] : { y : int | (>= y 0) }
 
 ### Recommendation
 
-**✅ ACCEPT — Medium complexity, high value for gradual typing and defensive programming.**
+**✅ IMPLEMENTED — CT0–CT4 complete (gated behind `-Xcontract-types`).**
 
 Contract types provide:
 1. Runtime verification of invariants
@@ -1487,6 +1497,8 @@ Contract types provide:
 **Implementation priority:** Medium (can be implemented independently)
 
 **Note:** Contracts can be implemented as a library using existing features (runtime checks, exceptions). However, built-in contract support provides better integration and error messages.
+
+See [contract-types-plan.md](contract-types-plan.md) for full implementation details and [guides/contract-types-guide.md](guides/contract-types-guide.md) for the user guide.
 
 ---
 
@@ -1503,7 +1515,7 @@ Contract types provide:
 | [Session Types](#5-session-types) | High | High | ✅ Good | ✅ Good | Medium | **✅ SS0–SS8 complete** |
 | [Effect Types](#8-effect-types-row-polymorphism) | High | High | ✅ Good | ✅ Excellent | Medium | **✅ ET0–ET4 complete; LC0–LC3, MS0–MS4 complete** |
 | [Sized Types](#9-sized-types) | Medium | Medium | ✅ Excellent | ✅ Good | Low | **📋 Draft — Not Started** |
-| [Contract Types](#10-contract-types) | Medium | Medium | ✅ Good | ✅ Good | Medium | **📋 Draft — Not Started** |
+| [Contract Types](#10-contract-types) | Medium | Medium | ✅ Good | ✅ Good | Medium | **✅ IMPLEMENTED — CT0–CT4 complete (`-Xcontract-types`)** |
 | [Dependent Types](#2-dependent-types) | Very High | High | ❌ Poor | ✅ Good | Low | **⏸ Deferred** |
 | [Refinement Types](#6-refinement-types) | Very High | Medium | ⚠️ Fair | ✅ Good | Low | **⏸ Deferred** |
 
@@ -1544,13 +1556,13 @@ Contract types provide:
 
 See [effects-continuations-tasks.md](effects-continuations-tasks.md) and [session-types-plan.md](session-types-plan.md).
 
-### Phase 3: Contract Types & Sized Types (v4)
+### Phase 3: Sized Types (v4)
 
 **Priority:** Medium
 
 | Feature | Phases | Duration | Dependencies | Status |
 |---|---|---|---|---|
-| Contract Types | CT0–CT4 | 6-8 weeks | None | 📋 Not Started |
+| Contract Types | CT0–CT4 | 6-8 weeks | None | **✅ Complete (`-Xcontract-types`)** |
 | Sized Types | SZ0–SZ3 | 6-8 weeks | None | 📋 Not Started |
 
 **Note:** The stdlib already has `assert!`/`require!`/`ensure!` macros. CT0 can build on these.
