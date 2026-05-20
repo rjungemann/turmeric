@@ -1863,6 +1863,199 @@ static TuriValue native_ok_pred(TuriEnv *env, TuriValue *a, uint32_t n, void *ud
     int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
     return turi_bool(r != NULL && r[0] != 0);
 }
+static TuriValue native_err_pred(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_bool(true);
+    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
+    return turi_bool(!r || r[0] == 0);
+}
+static TuriValue native_ok_val(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = r ? r[1] : 0; return v;
+}
+static TuriValue native_err_val(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = r ? r[2] : 0; return v;
+}
+static TuriValue native_result_unwrap_or(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_int(0);
+    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
+    if (r && r[0] != 0) { TuriValue v = {0}; v.tag = TURI_INT; v.as_int = r[1]; return v; }
+    return a[1];
+}
+/* ok-val-ptr: get ok_val as a pointer (void*) */
+static TuriValue native_ok_val_ptr(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_nil();
+    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = r ? r[1] : 0; return v;
+}
+/* err-val-ptr: get err_val as a pointer (void*) */
+static TuriValue native_err_val_ptr(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_nil();
+    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = r ? r[2] : 0; return v;
+}
+/* result-map: apply Turmeric fn to ok value, return new result */
+static TuriValue native_result_map(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 2) return turi_nil();
+    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
+    if (!r || r[0] == 0) return a[0]; /* return err unchanged */
+    TuriValue arg = {0}; arg.tag = TURI_INT; arg.as_int = r[1];
+    TuriValue res = turi_call(env, a[1], &arg, 1);
+    int64_t *out = (int64_t *)malloc(3 * sizeof(int64_t));
+    if (!out) return turi_nil();
+    out[0] = 1; out[1] = res.as_int; out[2] = 0;
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)out; return v;
+}
+/* result-map-err: apply fn to err value, return new result */
+static TuriValue native_result_map_err(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 2) return turi_nil();
+    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
+    if (!r || r[0] != 0) return a[0]; /* return ok unchanged */
+    TuriValue arg = {0}; arg.tag = TURI_INT; arg.as_int = r[2];
+    TuriValue res = turi_call(env, a[1], &arg, 1);
+    int64_t *out = (int64_t *)malloc(3 * sizeof(int64_t));
+    if (!out) return turi_nil();
+    out[0] = 0; out[1] = 0; out[2] = res.as_int;
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)out; return v;
+}
+/* result-flat-map: apply fn to ok value (fn returns a result), flatMap */
+static TuriValue native_result_flat_map(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 2) return turi_nil();
+    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
+    if (!r || r[0] == 0) return a[0]; /* return err unchanged */
+    TuriValue arg = {0}; arg.tag = TURI_INT; arg.as_int = r[1];
+    return turi_call(env, a[1], &arg, 1);
+}
+/* result-or: return self if ok, else return alt */
+static TuriValue native_result_or(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_nil();
+    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
+    if (r && r[0] != 0) return a[0];
+    return a[1];
+}
+/* result-or-else: return self if ok, else call f(err_val) */
+static TuriValue native_result_or_else(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 2) return turi_nil();
+    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
+    if (r && r[0] != 0) return a[0];
+    TuriValue arg = {0}; arg.tag = TURI_INT; arg.as_int = r ? r[2] : 0;
+    return turi_call(env, a[1], &arg, 1);
+}
+/* Display helpers */
+static TuriValue native_result_display(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_cstr("err");
+    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
+    TuriValue v = {0}; v.tag = TURI_CSTR;
+    v.as_cstr = (r && r[0] != 0) ? "ok" : "err"; return v;
+}
+static TuriValue native_result_debug(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_cstr("Result::Err");
+    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
+    TuriValue v = {0}; v.tag = TURI_CSTR;
+    v.as_cstr = (r && r[0] != 0) ? "Result::Ok" : "Result::Err"; return v;
+}
+static TuriValue native_result_error_message(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_cstr("result is err");
+    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
+    TuriValue v = {0}; v.tag = TURI_CSTR;
+    v.as_cstr = (r && r[0] != 0) ? "result is ok" : "result is err"; return v;
+}
+/* result-collect: vec<result<T,E>> → result<vec<T>,E>
+ * If all elements are ok, returns ok(new_vec_of_ok_vals).
+ * If any element is err, returns the first err. */
+static TuriValue native_result_collect(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_nil();
+    int64_t *v = (int64_t *)(intptr_t)a[0].as_int;
+    if (!v) return turi_nil();
+    int64_t len = v[1];
+    int64_t *data = (int64_t *)(intptr_t)v[0];
+    /* Check for first err */
+    for (int64_t i = 0; i < len; i++) {
+        int64_t *rp = (int64_t *)(intptr_t)data[i];
+        if (!rp || rp[0] == 0) {
+            int64_t ev = rp ? rp[2] : 0;
+            int64_t *out = (int64_t *)malloc(3 * sizeof(int64_t));
+            if (!out) return turi_nil();
+            out[0] = 0; out[1] = 0; out[2] = ev;
+            TuriValue rv = {0}; rv.tag = TURI_INT; rv.as_int = (int64_t)(intptr_t)out; return rv;
+        }
+    }
+    /* All ok: create new vec of ok_vals */
+    int64_t *ov = (int64_t *)calloc(3, sizeof(int64_t));
+    if (!ov) return turi_nil();
+    int64_t *od = len > 0 ? (int64_t *)malloc((size_t)len * sizeof(int64_t)) : NULL;
+    ov[0] = (int64_t)(intptr_t)od; ov[1] = len; ov[2] = len;
+    for (int64_t i = 0; i < len; i++) {
+        int64_t *rp = (int64_t *)(intptr_t)data[i];
+        od[i] = rp[1]; /* ok_val */
+    }
+    int64_t *out = (int64_t *)malloc(3 * sizeof(int64_t));
+    if (!out) { free(od); free(ov); return turi_nil(); }
+    out[0] = 1; out[1] = (int64_t)(intptr_t)ov; out[2] = 0;
+    TuriValue rv = {0}; rv.tag = TURI_INT; rv.as_int = (int64_t)(intptr_t)out; return rv;
+}
+/* Pair layout: { void *ok_vec; void *err_vec; } = int64_t[2] */
+static TuriValue native_result_partition(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_nil();
+    int64_t *v = (int64_t *)(intptr_t)a[0].as_int;
+    if (!v) return turi_nil();
+    int64_t len = v[1];
+    int64_t *data = (int64_t *)(intptr_t)v[0];
+    /* Allocate ok and err vecs */
+    int64_t *ov = (int64_t *)calloc(3, sizeof(int64_t));
+    int64_t *ev = (int64_t *)calloc(3, sizeof(int64_t));
+    if (!ov || !ev) { free(ov); free(ev); return turi_nil(); }
+    for (int64_t i = 0; i < len; i++) {
+        int64_t *rp = (int64_t *)(intptr_t)data[i];
+        int64_t *dst = (rp && rp[0] != 0) ? ov : ev;
+        int64_t val = (rp && rp[0] != 0) ? rp[1] : (rp ? rp[2] : 0);
+        /* Push to dst vec */
+        int64_t dlen = dst[1], dcap = dst[2];
+        int64_t *ddata = (int64_t *)(intptr_t)dst[0];
+        if (dlen >= dcap) {
+            int64_t nc = dcap > 0 ? dcap * 2 : 4;
+            int64_t *nd = (int64_t *)malloc((size_t)nc * sizeof(int64_t));
+            if (!nd) continue;
+            for (int64_t j = 0; j < dlen; j++) nd[j] = ddata[j];
+            free(ddata); dst[0] = (int64_t)(intptr_t)nd; dst[2] = nc; ddata = nd;
+        }
+        ddata[dlen] = val; dst[1] = dlen + 1;
+    }
+    int64_t *pair = (int64_t *)malloc(2 * sizeof(int64_t));
+    if (!pair) { return turi_nil(); }
+    pair[0] = (int64_t)(intptr_t)ov; pair[1] = (int64_t)(intptr_t)ev;
+    TuriValue rv = {0}; rv.tag = TURI_INT; rv.as_int = (int64_t)(intptr_t)pair; return rv;
+}
+static TuriValue native_result_partition_ok(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_nil();
+    int64_t *pair = (int64_t *)(intptr_t)a[0].as_int;
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = pair ? pair[0] : 0; return v;
+}
+static TuriValue native_result_partition_err(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_nil();
+    int64_t *pair = (int64_t *)(intptr_t)a[0].as_int;
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = pair ? pair[1] : 0; return v;
+}
 static TuriValue native_result_unwrap(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 1) return turi_int(0);
@@ -1979,6 +2172,45 @@ static TuriValue native_ptr_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *ud)
     return turi_bool(a[0].as_int == a[1].as_int);
 }
 
+/* c-abs: absolute value (fixture helper) */
+static TuriValue native_c_abs(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t x = (n > 0) ? a[0].as_int : 0;
+    return turi_int(x < 0 ? -x : x);
+}
+/* popcount: bit population count via __builtin_popcount */
+static TuriValue native_popcount(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t x = (n > 0) ? a[0].as_int : 0;
+    return turi_int((int64_t)__builtin_popcountll((unsigned long long)x));
+}
+/* flat array: calloc n int64_t cells */
+static TuriValue native_flat_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t sz = (n > 0) ? a[0].as_int : 0;
+    if (sz <= 0) return turi_int(0);
+    int64_t *arr = (int64_t *)calloc((size_t)sz, sizeof(int64_t));
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)arr; return v;
+}
+/* flat-get: arr[y*width + x] */
+static TuriValue native_flat_get(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 4) return turi_int(0);
+    int64_t *arr = (int64_t *)(intptr_t)a[0].as_int;
+    int64_t x = a[1].as_int, y = a[2].as_int, w = a[3].as_int;
+    if (!arr) return turi_int(0);
+    return turi_int(arr[y * w + x]);
+}
+/* flat-set: arr[y*width + x] = val, returns 0 */
+static TuriValue native_flat_set(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 5) return turi_int(0);
+    int64_t *arr = (int64_t *)(intptr_t)a[0].as_int;
+    int64_t x = a[1].as_int, y = a[2].as_int, w = a[3].as_int, val = a[4].as_int;
+    if (arr) arr[y * w + x] = val;
+    return turi_int(0);
+}
+
 /* Vec layout: { int64_t *data; size_t len; size_t cap; }
  * Stored as int64_t[3]: [0]=data ptr (as int64_t), [1]=len, [2]=cap */
 static TuriValue native_vec_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -2084,15 +2316,36 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "ok",              native_ok,              NULL);
     turi_env_register_native(env, "err",             native_err,             NULL);
     turi_env_register_native(env, "ok?",             native_ok_pred,         NULL);
+    turi_env_register_native(env, "err?",            native_err_pred,        NULL);
+    turi_env_register_native(env, "ok-val",          native_ok_val,          NULL);
+    turi_env_register_native(env, "err-val",         native_err_val,         NULL);
     turi_env_register_native(env, "result-unwrap",   native_result_unwrap,   NULL);
+    turi_env_register_native(env, "result-unwrap-or",native_result_unwrap_or,NULL);
     turi_env_register_native(env, "result-unwrap-err",native_result_unwrap_err,NULL);
+    turi_env_register_native(env, "ok-val-ptr",      native_ok_val_ptr,      NULL);
+    turi_env_register_native(env, "err-val-ptr",     native_err_val_ptr,     NULL);
+    turi_env_register_native(env, "result-map",      native_result_map,      NULL);
+    turi_env_register_native(env, "result-map-err",  native_result_map_err,  NULL);
+    turi_env_register_native(env, "result-flat-map", native_result_flat_map, NULL);
+    turi_env_register_native(env, "result-or",       native_result_or,       NULL);
+    turi_env_register_native(env, "result-or-else",  native_result_or_else,  NULL);
+    turi_env_register_native(env, "result-display",  native_result_display,  NULL);
+    turi_env_register_native(env, "result-debug",    native_result_debug,    NULL);
+    turi_env_register_native(env, "result-error-message", native_result_error_message, NULL);
     turi_env_register_native(env, "result-free",     native_result_free,     NULL);
     turi_env_register_native(env, "result-must",     native_result_must,     NULL);
     turi_env_register_native(env, "result-must-msg", native_result_must_msg, NULL);
+    turi_env_register_native(env, "result-expect",   native_result_must_msg, NULL);
     /* String conversion */
     turi_env_register_native(env, "int->str",        native_int_to_str,      NULL);
     turi_env_register_native(env, "str->int",        native_str_to_int,      NULL);
     turi_env_register_native(env, "strcmp",          native_strcmp_fn,       NULL);
+    /* Common math/array fixture helpers */
+    turi_env_register_native(env, "c-abs",           native_c_abs,           NULL);
+    turi_env_register_native(env, "popcount",        native_popcount,        NULL);
+    turi_env_register_native(env, "flat-new",        native_flat_new,        NULL);
+    turi_env_register_native(env, "flat-get",        native_flat_get,        NULL);
+    turi_env_register_native(env, "flat-set",        native_flat_set,        NULL);
     /* Common fixture helpers: int-val, alloc-int, alloc-key, alloc-str, ptr= */
     turi_env_register_native(env, "int-val",         native_int_val,         NULL);
     turi_env_register_native(env, "alloc-int",       native_alloc_int,       NULL);
@@ -2106,9 +2359,14 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "vec-capacity",    native_vec_capacity,    NULL);
     turi_env_register_native(env, "vec-get",         native_vec_get,         NULL);
     turi_env_register_native(env, "vec-push!",       native_vec_push,        NULL);
+    turi_env_register_native(env, "vec-push-ptr!",   native_vec_push,        NULL);
     turi_env_register_native(env, "vec-pop!",        native_vec_pop,         NULL);
     turi_env_register_native(env, "vec-set!",        native_vec_set,         NULL);
     turi_env_register_native(env, "vec-free",        native_vec_free,        NULL);
+    turi_env_register_native(env, "result-collect",  native_result_collect,  NULL);
+    turi_env_register_native(env, "result-partition",native_result_partition, NULL);
+    turi_env_register_native(env, "result-partition-ok", native_result_partition_ok, NULL);
+    turi_env_register_native(env, "result-partition-err", native_result_partition_err, NULL);
 }
 
 /* -------------------------------------------------------------------------
