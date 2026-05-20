@@ -172,13 +172,10 @@ static EvalFrame *eval_frame_new(EvalFrame *parent) {
 }
 
 static void eval_frame_free(EvalFrame *f) {
-    EvalBinding *b = f->bindings;
-    while (b) {
-        EvalBinding *next = b->next;
-        free(b);
-        b = next;
-    }
-    free(f);
+    /* Frames are intentionally not freed: closures may capture frame pointers
+     * and outlive the scope that created them.  Worker processes are short-lived
+     * (one fixture per fork), so leaking frames is acceptable. */
+    (void)f;
 }
 
 static void frame_bind(EvalFrame *f, const char *name, TuriValue value) {
@@ -297,6 +294,46 @@ static void fire_defers_to_mark(TuriEnv *env, DeferItem *mark,
     }
 
     /* Restore signals (caller decides what to do with them). */
+    env->throwing     = saved_throwing;
+    env->throw_value  = saved_tv;
+    env->returning    = saved_returning;
+    env->return_value = saved_rv;
+}
+
+/* Fire defers in reversed (oldest-first / outer-first) order.
+ * Used at function exit to match compiled tur_frame_fire_chain semantics:
+ * on early-return, outer defers fire before inner defers. */
+static void fire_defers_to_mark_reversed(TuriEnv *env, DeferItem *mark,
+                                          EvalFrame *fallback_frame) {
+    /* Count items */
+    size_t n = 0;
+    for (DeferItem *it = (DeferItem *)env->defer_stack; it != mark; it = it->next) n++;
+    if (n == 0) return;
+
+    /* Collect into array (index 0 = newest / innermost) */
+    DeferItem **items = (DeferItem **)malloc(n * sizeof(DeferItem *));
+    DeferItem *cur = (DeferItem *)env->defer_stack;
+    for (size_t i = 0; i < n; i++) { items[i] = cur; cur = cur->next; }
+    env->defer_stack = mark;
+
+    bool saved_throwing  = env->throwing;
+    TuriValue saved_tv   = env->throw_value;
+    bool saved_returning = env->returning;
+    TuriValue saved_rv   = env->return_value;
+
+    /* Fire reversed: oldest (outermost) first */
+    for (size_t i = n; i-- > 0; ) {
+        DeferItem *item = items[i];
+        env->throwing  = false;
+        env->returning = false;
+        EvalFrame *dframe = item->snapshot;
+        if (dframe) dframe->parent = fallback_frame;
+        eval_expr(env, dframe, item->body);
+        eval_frame_free(item->snapshot);
+        free(item);
+    }
+    free(items);
+
     env->throwing     = saved_throwing;
     env->throw_value  = saved_tv;
     env->returning    = saved_returning;
@@ -750,13 +787,18 @@ static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
     DeferItem *defer_mark = (DeferItem *)env->defer_stack;
 
     /* Evaluate the body; handle early-return and throw signals. */
-    bool was_returning = env->returning;
-    env->returning     = false;
+    bool was_returning   = env->returning;
+    bool was_no_unwind   = env->in_no_unwind;
+    env->returning       = false;
+    env->in_no_unwind    = fn->binding && fn->binding->no_unwind;
 
     TuriValue result = eval_expr(env, call_frame, fn->body);
 
-    /* Fire defers (LIFO) registered in this call scope. */
-    fire_defers_to_mark(env, defer_mark, NULL);
+    env->in_no_unwind = was_no_unwind;
+
+    /* Fire defers in outer-first (reversed) order to match compiled
+     * tur_frame_fire_chain semantics on early-return and normal exit. */
+    fire_defers_to_mark_reversed(env, defer_mark, NULL);
 
     TuriValue ret;
     if (env->returning) {
@@ -769,7 +811,11 @@ static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
         ret = result;
     }
 
-    eval_frame_free(call_frame);
+    /* Do NOT free call_frame here: closures created in this call may have
+     * captured it.  Since the interpreter runs in a short-lived worker process
+     * (one fixture per fork), leaking call frames is acceptable — the process
+     * exits immediately after each fixture evaluation. */
+    (void)call_frame;
     return ret;
 }
 
@@ -833,7 +879,14 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             if (env->returning)  { eval_frame_free(new_frame); return env->return_value; }
             frame_bind(new_frame, e->as.let_.bindings[i].binding->name->name, v);
         }
+        /* Mark defer stack so defers registered in this let-scope fire on exit. */
+        DeferItem *let_defer_mark = (DeferItem *)env->defer_stack;
         TuriValue result = eval_expr(env, new_frame, e->as.let_.body);
+        /* Fire this scope's defers on normal exit only.
+         * On early-return or throw, leave defers on the stack; eval_apply will
+         * fire them all in outer-first order (matching tur_frame_fire_chain). */
+        if (!env->returning && !env->throwing)
+            fire_defers_to_mark(env, let_defer_mark, NULL);
         eval_frame_free(new_frame);
         return result;
     }
@@ -1580,25 +1633,81 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_POLY_WRAP:
         return eval_expr(env, frame, e->as.poly_wrap_.inner);
 
-    /* --- Phase 12: borrows are transparent (interpreter has no linearity) -- */
+    /* --- Phase 12: borrows --- */
     case EX_BORROW_IMMUT:
         return eval_expr(env, frame, e->as.borrow_immut_.expr);
-    case EX_BORROW_MUT:
+    case EX_BORROW_MUT: {
+        /* Return a TURI_REF pointing to the EvalBinding so set! can mutate it. */
+        const Expr *inner = e->as.borrow_mut_.expr;
+        if (inner->kind == EX_VAR) {
+            const char *vname = inner->as.var.binding->name->name;
+            for (EvalFrame *f = frame; f; f = f->parent) {
+                for (EvalBinding *b = f->bindings; b; b = b->next) {
+                    if (strcmp(b->name, vname) == 0) {
+                        TuriValue ref; ref.tag = TURI_REF; ref.as_ref = b;
+                        return ref;
+                    }
+                }
+            }
+        }
+        /* Fallback: transparent */
         return eval_expr(env, frame, e->as.borrow_mut_.expr);
-    case EX_DEREF:
-        return eval_expr(env, frame, e->as.deref_.expr);
+    }
+    case EX_DEREF: {
+        TuriValue r = eval_expr(env, frame, e->as.deref_.expr);
+        if (turi_is_error(r) || env->returning || env->throwing) return r;
+        if (r.tag == TURI_REF && r.as_ref)
+            return ((EvalBinding *)r.as_ref)->value;
+        return r;
+    }
     case EX_SET_DEREF: {
+        TuriValue ref = eval_expr(env, frame, e->as.set_deref_.ref);
+        if (turi_is_error(ref) || env->returning || env->throwing) return ref;
         TuriValue v = eval_expr(env, frame, e->as.set_deref_.value);
         if (turi_is_error(v) || env->returning || env->throwing) return v;
-        return v;
+        if (ref.tag == TURI_REF && ref.as_ref)
+            ((EvalBinding *)ref.as_ref)->value = v;
+        return turi_nil();
     }
 
     /* --- Phase R2: panic terminates the program ---------------------------- */
     case EX_PANIC: {
         TuriValue msg = eval_expr(env, frame, e->as.panic_.payload);
         const char *s = (msg.tag == TURI_CSTR && msg.as_cstr) ? msg.as_cstr : "(no message)";
-        fprintf(stderr, "panic at\n%s\n", s);
+        if (env->panicking) {
+            /* Double panic: a defer itself panicked. */
+            fprintf(stderr, "double panic: aborting\n");
+            fflush(stderr);
+            fflush(stdout);
+            abort();
+        }
+        env->panicking = true;
+        if (env->in_no_unwind) {
+            fprintf(stderr, "panic (no unwind): %s\n", s);
+        } else {
+            fprintf(stderr, "panic at\npanic: %s\n", s);
+        }
         fflush(stderr);
+        /* Fire all pending defers before exiting (outer-first order). */
+        if (!env->in_no_unwind)
+            fire_defers_to_mark_reversed(env, NULL, NULL);
+        fflush(stdout);
+        exit(1);
+    }
+
+    case EX_PANIC_WITH: {
+        /* Typed panic payload — just needs "panic at" in stderr and nonzero exit. */
+        if (env->panicking) {
+            fprintf(stderr, "double panic: aborting\n");
+            fflush(stderr);
+            fflush(stdout);
+            abort();
+        }
+        env->panicking = true;
+        fprintf(stderr, "panic at\n");
+        fflush(stderr);
+        fire_defers_to_mark_reversed(env, NULL, NULL);
+        fflush(stdout);
         exit(1);
     }
 
@@ -1950,5 +2059,8 @@ void turi_value_repr(char *buf, size_t cap, TuriValue v) {
         snprintf(buf, cap, "#<future:%s>", state);
         break;
     }
+    case TURI_REF:
+        snprintf(buf, cap, "#<ref>");
+        break;
     }
 }

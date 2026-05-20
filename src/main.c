@@ -1631,6 +1631,16 @@ static int wk_eval_fixture(const char *input, const char *flags_str,
             TuriValue sv = turi_eval_file(env, "stdlib/macros.tur");
             (void)sv;
         }
+        /* Inject typed stubs for contract runtime helpers so the elaborator
+         * knows their signatures.  Native functions override the closures at
+         * runtime, but the elaborator uses the declared return type. */
+        {
+            TuriValue sv2 = turi_eval(env,
+                "(defn contract-enabled? [] :bool true)\n"
+                "(defn tur-contract-check [condition :bool msg :cstr] :void nil)\n"
+                "(defn tur-contract-check-inv [obj :int pred :int msg :cstr] :void nil)");
+            (void)sv2;
+        }
         /* Register native implementations of contract runtime helpers.
          * These replace the inline-C bodies (which return nil in interpreter
          * mode) so that assertions actually check their conditions. */

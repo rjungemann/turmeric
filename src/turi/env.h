@@ -98,6 +98,10 @@ typedef struct TuriEnv {
     /* Phase S5: recursion depth guard */
     uint32_t    eval_depth;
     uint32_t    max_eval_depth;
+    /* Panic state: set by EX_PANIC before firing defers; detects double-panic */
+    bool        panicking;
+    /* Set when currently inside a #[no-unwind] function call */
+    bool        in_no_unwind;
     /* Phase S7: cooperative async scheduler */
     TuriFiber  *sched_ready_head;   /* ready queue head (FIFO) */
     TuriFiber  *sched_ready_tail;   /* ready queue tail */
