@@ -333,6 +333,21 @@ Expr *elab_form(Elab *e, Form *f) {
             diag_emit(DIAG_ERROR, f->span,
                       "contract type '{ var : T | pred }' is only valid as a parameter or return type annotation");
             return NULL;
+        /* INT-1: Reader conditional -- pick :tur or :turi branch based on g_interpret_mode */
+        case F_READER_COND: {
+            Form *tur_form = NULL, *turi_form = NULL;
+            for (uint32_t i = 0; i + 1 < f->as.list.len; i += 2) {
+                Form *key = f->as.list.items[i];
+                Form *val = f->as.list.items[i + 1];
+                if (key->tag == F_KEYWORD && strcmp(key->as.sym->name, "tur") == 0)
+                    tur_form = val;
+                else if (key->tag == F_KEYWORD && strcmp(key->as.sym->name, "turi") == 0)
+                    turi_form = val;
+            }
+            Form *chosen = g_interpret_mode ? turi_form : tur_form;
+            if (!chosen) return e_nil(e, f->span);
+            return elab_form(e, chosen);
+        }
     }
     return NULL;
 }

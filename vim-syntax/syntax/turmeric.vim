@@ -93,6 +93,13 @@ syn keyword turmericBuiltin  boolean? null? atom? pair? empty? extern-c
 " ---- Delimiters ----
 syn match   turmericDelim  /[()[\]{}]/
 
+" ---- Reader conditional: #?(:tur ... :turi ...) ----
+syn match turmericReaderCondPrefix /#?/ contained
+syn region turmericReaderCond matchgroup=turmericReaderCondDelim
+    \ start=/#?(/ end=/)/
+    \ contains=turmericReaderCondKey,turmericNumber,turmericString,turmericBoolean,turmericKeyword,turmericList,turmericComment
+syn match turmericReaderCondKey /:\(tur\|turi\)\>/ contained
+
 " ---- Highlight links ----
 " Later definitions take priority at the same position (Vim priority rule),
 " so turmericDocComment overrides turmericLineComment for ;;; lines.
@@ -125,5 +132,7 @@ hi def link turmericExcept        Exception
 hi def link turmericSpecial       Special
 hi def link turmericBuiltin       Function
 hi def link turmericDelim         Delimiter
+hi def link turmericReaderCondDelim  Special
+hi def link turmericReaderCondKey    Keyword
 
 let b:current_syntax = "turmeric"

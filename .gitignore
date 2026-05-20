@@ -51,7 +51,8 @@ core
 
 # Performance comparison build artifacts and generated output
 performance-comparison/benchmarks/*/c/
-performance-comparison/benchmarks/*/turi/
+performance-comparison/benchmarks/*/turi/*
+!performance-comparison/benchmarks/*/turi/*.tur
 performance-comparison/benchmarks/*/turmeric/*
 !performance-comparison/benchmarks/*/turmeric/*.tur
 performance-comparison/analysis/
