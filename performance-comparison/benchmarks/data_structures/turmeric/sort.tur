@@ -1,0 +1,26 @@
+;; sort -- sort N pseudo-random int64 values, print min and max.
+(defn parse-first-arg [default :int] :int
+  ```c
+  struct __tur_cons { int64_t value; int64_t next; };
+  struct __tur_cons *c = (struct __tur_cons *)(intptr_t)g_tur_args;
+  return c ? (int64_t)atoll((const char *)(intptr_t)c->value) : default;
+  ```)
+
+(defn sort-bench [n :int] :void
+  ```c
+  int64_t *arr = malloc((size_t)n * sizeof(int64_t));
+  uint64_t s = 12345;
+  for (int64_t i = 0; i < n; i++) {
+    s = s * 6364136223846793005ULL + 1442695040888963407ULL;
+    arr[i] = (int64_t)(s >> 1);
+  }
+  int cmp(const void *a, const void *b) {
+    int64_t x = *(const int64_t *)a, y = *(const int64_t *)b;
+    return (x > y) - (x < y);
+  }
+  qsort(arr, (size_t)n, sizeof(int64_t), cmp);
+  printf("%lld %lld\n", (long long)arr[0], (long long)arr[n - 1]);
+  free(arr);
+  ```)
+
+(sort-bench (parse-first-arg 1000))

@@ -1,0 +1,4 @@
+;; cli-args-empty -- verify *args* is nil when no CLI arguments are passed.
+(if (= *args* 0)
+  (println "no args")
+  (println "has args"))

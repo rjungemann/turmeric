@@ -1,0 +1,29 @@
+;; hash_map -- insert N int keys and look them all up; sum values.
+(defn parse-first-arg [default :int] :int
+  ```c
+  struct __tur_cons { int64_t value; int64_t next; };
+  struct __tur_cons *c = (struct __tur_cons *)(intptr_t)g_tur_args;
+  return c ? (int64_t)atoll((const char *)(intptr_t)c->value) : default;
+  ```)
+
+(defn hashmap-bench [n :int] :int
+  ```c
+  typedef struct { int64_t key; int64_t val; int used; } Slot;
+  int cap = (int)(n * 2);
+  Slot *t = calloc((size_t)cap, sizeof(Slot));
+  for (int64_t i = 0; i < n; i++) {
+    int idx = (int)((uint64_t)(i * 2654435761ULL) % (uint64_t)cap);
+    while (t[idx].used && t[idx].key != i) idx = (idx + 1) % cap;
+    t[idx].key = i; t[idx].val = i * 2; t[idx].used = 1;
+  }
+  int64_t sum = 0;
+  for (int64_t i = 0; i < n; i++) {
+    int idx = (int)((uint64_t)(i * 2654435761ULL) % (uint64_t)cap);
+    while (t[idx].used && t[idx].key != i) idx = (idx + 1) % cap;
+    if (t[idx].used) sum += t[idx].val;
+  }
+  free(t);
+  return sum;
+  ```)
+
+(println (hashmap-bench (parse-first-arg 1000)))

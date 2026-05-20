@@ -1,0 +1,14 @@
+;; factorial -- tail-recursive factorial mod 1e9+7; tests tail-call / loop perf.
+(defn parse-first-arg [default :int] :int
+  ```c
+  struct __tur_cons { int64_t value; int64_t next; };
+  struct __tur_cons *c = (struct __tur_cons *)(intptr_t)g_tur_args;
+  return c ? (int64_t)atoll((const char *)(intptr_t)c->value) : default;
+  ```)
+
+(defn fact [n :int acc :int m :int] :int
+  (if (<= n 1)
+    (mod acc m)
+    (fact (- n 1) (mod (* acc n) m) m)))
+
+(println (fact (parse-first-arg 1000) 1 1000000007))

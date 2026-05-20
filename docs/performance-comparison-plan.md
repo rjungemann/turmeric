@@ -145,19 +145,19 @@ Complex, realistic algorithms that combine multiple aspects.
 ## Implementation Plan
 
 ### Phase 1: Setup (Week 1)
-- [ ] Define exact versions of all language runtimes
-- [ ] Set up consistent build/environment configuration
-- [ ] Create template repository structure for each language
-- [ ] Implement input generation utilities (shared where possible)
-- [ ] Set up automated test runner
+- [x] Define exact versions of all language runtimes
+- [x] Set up consistent build/environment configuration
+- [x] Create template repository structure for each language
+- [x] Implement input generation utilities (all categories: numerical, data_structures, string_processing, concurrency, memory, recursion)
+- [x] Set up automated test runner (`scripts/run_all.sh` supports all 6 categories × 5 languages)
 
 ### Phase 2: Core Tasks (Weeks 2-4)
-- [ ] Implement numerical computation benchmarks
-- [ ] Implement data structure benchmarks
-- [ ] Implement string processing benchmarks
-- [ ] Implement concurrency benchmarks
-- [ ] Implement memory/GC benchmarks
-- [ ] Implement recursion benchmarks
+- [x] Implement numerical computation benchmarks (fibonacci, primes, matrix_multiply, monte_carlo_pi — C/Turmeric/Clojure/Racket/Python)
+- [x] Implement data structure benchmarks (list_ops, hash_map, sort — C/Turmeric/Clojure/Racket/Python)
+- [x] Implement string processing benchmarks (string_concat, text_search — C/Turmeric/Clojure/Racket/Python)
+- [x] Implement concurrency benchmarks (thread_ring — C/Turmeric/Clojure/Racket/Python)
+- [x] Implement memory/GC benchmarks (alloc_churn — C/Turmeric/Clojure/Racket/Python)
+- [x] Implement recursion benchmarks (fib_recursive, factorial — C/Turmeric/Clojure/Racket/Python)
 
 ### Phase 3: I/O and Real-world (Weeks 5-6)
 - [ ] Implement I/O benchmarks
@@ -165,10 +165,31 @@ Complex, realistic algorithms that combine multiple aspects.
 - [ ] Add micro-benchmarks for specific operations
 
 ### Phase 4: Validation (Week 7)
-- [ ] Verify correctness of all implementations
-- [ ] Run full benchmark suite multiple times
-- [ ] Validate results are reproducible
-- [ ] Identify and fix any benchmarking issues
+- [ ] **Correctness Verification**: 
+  - Implement cross-language validation tests for each benchmark
+  - Verify identical outputs for same inputs across all languages
+  - Create golden test files for reference outputs
+  - (`scripts/validate_correctness.py` stub exists; no benchmarks implemented yet)
+
+- [ ] **Reproducibility Testing**:
+  - Run full benchmark suite 10+ times with identical environment
+  - Calculate standard deviation and coefficient of variation
+  - Document any observed non-determinism
+
+- [ ] **Environment Validation**:
+  - Verify consistent hardware/software configuration across runs
+  - Check for background process interference
+  - Validate compiler/interpreter versions match documentation
+
+- [ ] **Benchmark Analysis**:
+  - Identify outliers and investigate causes
+  - Check for consistent performance characteristics
+  - Validate measurement tools are working correctly
+
+- [ ] **Issue Resolution**:
+  - Document and categorize all discovered issues
+  - Implement fixes for critical correctness problems
+  - Note limitations and caveats for analysis phase
 
 ### Phase 5: Analysis and Documentation (Week 8)
 - [ ] Aggregate and normalize results

@@ -971,6 +971,8 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "static int tur_panic_in_progress = 0;\n");
     buf_puts(out, "static tur_frame *global_panic_frame = NULL;\n");
     buf_puts(out, "static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */\n");
+    /* CLI-ARGS: g_tur_args holds the *args* list (linked list of argv strings, built in main). */
+    buf_puts(out, "static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */\n");
     buf_puts(out, "static void tur_panic_set_frame(tur_frame *f) {\n");
     buf_puts(out, "    global_panic_frame = f;\n");
     buf_puts(out, "}\n");
@@ -2893,11 +2895,21 @@ int emit_program(Buf *out, const Expr *program) {
 
     if (!user_has_main) {
         /* Only generate main() if user didn't define one */
-        buf_puts(out, "int main(void) {\n");
+        buf_puts(out, "int main(int argc, char **argv) {\n");
         /* Phase R6: Set g_panic_trace from compiler flag */
         if (g_panic_trace) {
             buf_puts(out, "    g_panic_trace = 1;\n");
         }
+        /* CLI-ARGS: Build *args* list from argv[1..] as a linked list of char* (as int64_t). */
+        buf_puts(out, "    /* *args*: build cons list from argv[1..argc-1] */\n");
+        buf_puts(out, "    g_tur_args = 0;\n");
+        buf_puts(out, "    for (int _ai = argc - 1; _ai >= 1; _ai--) {\n");
+        buf_puts(out, "        typedef struct { int64_t value; int64_t next; } __tur_args_cell;\n");
+        buf_puts(out, "        __tur_args_cell *_c = (__tur_args_cell *)malloc(sizeof(__tur_args_cell));\n");
+        buf_puts(out, "        _c->value = (int64_t)(intptr_t)argv[_ai];\n");
+        buf_puts(out, "        _c->next = g_tur_args;\n");
+        buf_puts(out, "        g_tur_args = (int64_t)(intptr_t)_c;\n");
+        buf_puts(out, "    }\n");
         if (body.len) buf_write(out, body.data, body.len);
         buf_puts(out, "    return 0;\n");
         buf_puts(out, "}\n");
@@ -3213,11 +3225,21 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program, 
     if (file.len) { buf_write(out, file.data, file.len); buf_putc(out, '\n'); }
     if (!separate_compilation && !user_has_main) {
         /* Only generate main() if user didn't define one (single-file mode) */
-        buf_puts(out, "int main(void) {\n");
+        buf_puts(out, "int main(int argc, char **argv) {\n");
         /* Phase R6: Set g_panic_trace from compiler flag */
         if (g_panic_trace) {
             buf_puts(out, "    g_panic_trace = 1;\n");
         }
+        /* CLI-ARGS: Build *args* list from argv[1..] as a linked list of char* (as int64_t). */
+        buf_puts(out, "    /* *args*: build cons list from argv[1..argc-1] */\n");
+        buf_puts(out, "    g_tur_args = 0;\n");
+        buf_puts(out, "    for (int _ai = argc - 1; _ai >= 1; _ai--) {\n");
+        buf_puts(out, "        typedef struct { int64_t value; int64_t next; } __tur_args_cell;\n");
+        buf_puts(out, "        __tur_args_cell *_c = (__tur_args_cell *)malloc(sizeof(__tur_args_cell));\n");
+        buf_puts(out, "        _c->value = (int64_t)(intptr_t)argv[_ai];\n");
+        buf_puts(out, "        _c->next = g_tur_args;\n");
+        buf_puts(out, "        g_tur_args = (int64_t)(intptr_t)_c;\n");
+        buf_puts(out, "    }\n");
         if (body.len) buf_write(out, body.data, body.len);
         buf_puts(out, "    return 0;\n");
         buf_puts(out, "}\n");

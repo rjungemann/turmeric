@@ -282,6 +282,17 @@ run_happy() {
         fixture_flags=$(cat "$dir/flags")
     fi
 
+    # Read per-fixture run arguments if present (space-separated, one line).
+    # For the compiled path these are passed directly to the binary.
+    # For the interpreter path they are passed after -- to `tur run`.
+    local run_args_arr=()
+    if [ -f "$dir/run.args" ]; then
+        while IFS= read -r _ra; do
+            [ -z "$_ra" ] && continue
+            run_args_arr+=("$_ra")
+        done < "$dir/run.args"
+    fi
+
     if [ "$TUR_EMIT_C_MODE" = "always" ] || [ "$needs_codegen_check" -eq 1 ]; then
         "$TUR" $fixture_flags emit-c "$input" > "$actual_c" 2> "$out_dir/actual.stderr"
         if [ $? -ne 0 ]; then
@@ -311,9 +322,9 @@ run_happy() {
             return
         fi
         if [ -f "$dir/input.stdin" ]; then
-            _run_timed "$fixture_timeout" "$exe" < "$dir/input.stdin" > "$actual_stdout" 2>> "$actual_stderr"
+            _run_timed "$fixture_timeout" "$exe" "${run_args_arr[@]}" < "$dir/input.stdin" > "$actual_stdout" 2>> "$actual_stderr"
         else
-            _run_timed "$fixture_timeout" "$exe" > "$actual_stdout" 2>> "$actual_stderr"
+            _run_timed "$fixture_timeout" "$exe" "${run_args_arr[@]}" > "$actual_stdout" 2>> "$actual_stderr"
         fi
         rc=$?
         rm -f "$exe"
@@ -321,7 +332,15 @@ run_happy() {
         # Interpreter path: run via `tur run` -- no cc invocation, no new binary,
         # no syspolicyd hit.  This is the default for all fixtures that do not
         # have a requires.compiled marker.
-        if [ -f "$dir/input.stdin" ]; then
+        if [ "${#run_args_arr[@]}" -gt 0 ]; then
+            if [ -f "$dir/input.stdin" ]; then
+                _run_timed "$fixture_timeout" "$TUR" $fixture_flags run "$input" -- "${run_args_arr[@]}" \
+                    < "$dir/input.stdin" > "$actual_stdout" 2> "$actual_stderr"
+            else
+                _run_timed "$fixture_timeout" "$TUR" $fixture_flags run "$input" -- "${run_args_arr[@]}" \
+                    > "$actual_stdout" 2> "$actual_stderr"
+            fi
+        elif [ -f "$dir/input.stdin" ]; then
             _run_timed "$fixture_timeout" "$TUR" $fixture_flags run "$input" \
                 < "$dir/input.stdin" > "$actual_stdout" 2> "$actual_stderr"
         else

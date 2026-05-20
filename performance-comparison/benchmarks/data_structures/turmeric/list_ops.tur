@@ -1,0 +1,25 @@
+;; list_ops -- prepend N integers to a singly-linked list, sum them.
+(defn parse-first-arg [default :int] :int
+  ```c
+  struct __tur_cons { int64_t value; int64_t next; };
+  struct __tur_cons *c = (struct __tur_cons *)(intptr_t)g_tur_args;
+  return c ? (int64_t)atoll((const char *)(intptr_t)c->value) : default;
+  ```)
+
+(defn build-and-sum [n :int] :int
+  ```c
+  typedef struct Node { int64_t val; struct Node *next; } Node;
+  Node *head = NULL;
+  for (int64_t i = 0; i < n; i++) {
+    Node *node = malloc(sizeof(Node));
+    node->val = i;
+    node->next = head;
+    head = node;
+  }
+  int64_t sum = 0;
+  for (Node *p = head; p; p = p->next) sum += p->val;
+  while (head) { Node *t = head->next; free(head); head = t; }
+  return sum;
+  ```)
+
+(println (build-and-sum (parse-first-arg 1000)))

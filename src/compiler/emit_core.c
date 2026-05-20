@@ -472,6 +472,10 @@ char *name_for_binding(EmitCtx *ctx, const Binding *b) {
     if (b->type.kind == TY_FN) {
         return raw_name_for_binding(b);
     }
+    /* Phase M6: If c_export_name is set, use it directly (bypasses mangling and id suffix). */
+    if (b->c_export_name) {
+        return strdup(b->c_export_name);
+    }
     /* `<name>_<id>` with non-id-safe chars mangled to underscores. We append
      * the unique id so different bindings with the same source name don't
      * collide in C. */
