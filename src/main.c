@@ -2211,6 +2211,69 @@ static TuriValue native_flat_set(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     return turi_int(0);
 }
 
+/* -------------------------------------------------------------------------
+ * Set operations
+ * Set represented as int64_t[2]: [0]=ptr to sorted int64_t array, [1]=count
+ * (matches EX_SET_LIT interpreter layout in eval.c)
+ * ---------------------------------------------------------------------- */
+static TuriValue native_set_member(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_bool(false);
+    int64_t *s = (int64_t *)(intptr_t)a[0].as_int;
+    if (!s) return turi_bool(false);
+    int64_t *items = (int64_t *)(intptr_t)s[0];
+    int64_t cnt = s[1];
+    int64_t x = a[1].as_int;
+    int64_t lo = 0, hi = cnt - 1;
+    while (lo <= hi) {
+        int64_t mid = lo + (hi - lo) / 2;
+        if (items[mid] == x) return turi_bool(true);
+        if (items[mid] < x) lo = mid + 1; else hi = mid - 1;
+    }
+    return turi_bool(false);
+}
+static TuriValue native_set_count(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    int64_t *s = (int64_t *)(intptr_t)a[0].as_int;
+    return turi_int(s ? s[1] : 0);
+}
+
+/* -------------------------------------------------------------------------
+ * Slice operations
+ * Slice represented as int64_t[2]: [0]=data ptr, [1]=len
+ * ---------------------------------------------------------------------- */
+static TuriValue native_slice_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t *s = (int64_t *)malloc(2 * sizeof(int64_t));
+    if (!s) return turi_nil();
+    s[0] = (n >= 1) ? a[0].as_int : 0;
+    s[1] = (n >= 2) ? a[1].as_int : 0;
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)s; return v;
+}
+static TuriValue native_slice_len(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    int64_t *s = (int64_t *)(intptr_t)a[0].as_int;
+    return turi_int(s ? s[1] : 0);
+}
+static TuriValue native_slice_get(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_int(0);
+    int64_t *s = (int64_t *)(intptr_t)a[0].as_int;
+    int64_t  i = a[1].as_int;
+    if (!s || i < 0 || i >= s[1]) {
+        fprintf(stderr, "slice index out of bounds\n"); fflush(stderr); _exit(1);
+    }
+    int64_t *data = (int64_t *)(intptr_t)s[0];
+    return turi_int(data[i]);
+}
+static TuriValue native_slice_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n >= 1) { void *p = (void *)(intptr_t)a[0].as_int; if (p) free(p); }
+    return turi_nil();
+}
+
 /* Vec layout: { int64_t *data; size_t len; size_t cap; }
  * Stored as int64_t[3]: [0]=data ptr (as int64_t), [1]=len, [2]=cap */
 static TuriValue native_vec_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -2238,7 +2301,8 @@ static TuriValue native_vec_get(TuriEnv *env, TuriValue *a, uint32_t n, void *ud
     int64_t  i = a[1].as_int;
     if (!v || i < 0 || i >= v[1]) {
         fprintf(stderr, "vec index out of bounds\n");
-        return turi_int(0);
+        fflush(stderr);
+        _exit(1);
     }
     int64_t *data = (int64_t *)(intptr_t)v[0];
     return turi_int(data[i]);
@@ -2346,6 +2410,14 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "flat-new",        native_flat_new,        NULL);
     turi_env_register_native(env, "flat-get",        native_flat_get,        NULL);
     turi_env_register_native(env, "flat-set",        native_flat_set,        NULL);
+    /* Set operations */
+    turi_env_register_native(env, "set-member?",     native_set_member,      NULL);
+    turi_env_register_native(env, "set-count",       native_set_count,       NULL);
+    /* Slice operations */
+    turi_env_register_native(env, "slice-new",       native_slice_new,       NULL);
+    turi_env_register_native(env, "slice-len",       native_slice_len,       NULL);
+    turi_env_register_native(env, "slice-get",       native_slice_get,       NULL);
+    turi_env_register_native(env, "slice-free",      native_slice_free,      NULL);
     /* Common fixture helpers: int-val, alloc-int, alloc-key, alloc-str, ptr= */
     turi_env_register_native(env, "int-val",         native_int_val,         NULL);
     turi_env_register_native(env, "alloc-int",       native_alloc_int,       NULL);
