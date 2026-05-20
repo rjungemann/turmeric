@@ -988,6 +988,28 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
  * Returns true and sets *out if a pattern was recognized; false otherwise.
  * ========================================================================= */
 
+/* Process C string escape sequences in-place: "\\n" -> "\n" etc. */
+static void ic_unescape_str(char *s) {
+    char *r = s, *w = s;
+    while (*r) {
+        if (*r == '\\' && r[1]) {
+            r++;
+            switch (*r) {
+                case 'n':  *w++ = '\n'; r++; break;
+                case 't':  *w++ = '\t'; r++; break;
+                case 'r':  *w++ = '\r'; r++; break;
+                case '\\': *w++ = '\\'; r++; break;
+                case '"':  *w++ = '"';  r++; break;
+                case '0':  *w++ = '\0'; r++; break;
+                default:   *w++ = '\\'; *w++ = *r++; break;
+            }
+        } else {
+            *w++ = *r++;
+        }
+    }
+    *w = '\0';
+}
+
 static const char *ic_skip_ws(const char *p) {
     for (;;) {
         while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
@@ -1731,6 +1753,7 @@ static TuriValue ic_exec_snprintf_fmt(const char *body,
             char fmt_str[512]; size_t fmt_len=(size_t)(fmte-fmts);
             if(fmt_len>=sizeof(fmt_str)){sp=fp+1;continue;}
             memcpy(fmt_str,fmts,fmt_len); fmt_str[fmt_len]='\0';
+            ic_unescape_str(fmt_str);
             fq=fmte+1;
             /* parse snprintf arguments */
             int64_t sn_args[8]; int sn_argc=0;
@@ -1789,6 +1812,142 @@ static TuriValue ic_exec_str_cmp(TuriValue *args, uint32_t n_args) {
     return turi_bool(memcmp(pa, pb, (size_t)la) == 0);
 }
 
+/* Execute a while-loop linked-list traversal with printf.
+ * Pattern: Cell *var = (cast)param; while(var){ printf(fmt, var->field); var=(cast)var->next; } */
+static TuriValue ic_exec_linked_list_print(const char *body,
+                                            TuriValue *args, uint32_t n_args,
+                                            FnDef *fn, uint32_t param_offset) {
+    /* Find while keyword */
+    const char *wp = body;
+    while ((wp = strstr(wp, "while")) != NULL) {
+        if (wp > body && (isalnum((unsigned char)wp[-1])||wp[-1]=='_')) { wp++; continue; }
+        break;
+    }
+    if (!wp) return turi_nil();
+    const char *wq = wp + 5; wq = ic_skip_ws(wq);
+    if (*wq != '(') return turi_nil();
+    wq++; wq = ic_skip_ws(wq);
+    /* Extract loop variable name (condition is just the pointer: while (c)) */
+    char loopvar[64]; int lvlen = 0;
+    while ((isalnum((unsigned char)*wq)||*wq=='_') && lvlen<63) loopvar[lvlen++] = *wq++;
+    loopvar[lvlen] = '\0';
+    if (lvlen == 0) return turi_nil();
+    while (*wq && *wq != ')') wq++;
+    if (*wq == ')') wq++;
+    wq = ic_skip_ws(wq);
+    if (*wq != '{') return turi_nil();
+    wq++;
+
+    /* Extract struct field definitions for index lookup */
+    const char *snames[IC_MAX_FIELDS]; size_t slens[IC_MAX_FIELDS]; int stypes[IC_MAX_FIELDS];
+    int sn = ic_extract_struct_fields_typed(body, snames, slens, stypes);
+
+    /* Find printf(fmt, (cast)loopvar->print_field); */
+    const char *pp = strstr(wq, "printf(");
+    if (!pp) return turi_nil();
+    const char *pfq = pp + 7; pfq = ic_skip_ws(pfq);
+    if (*pfq != '"') return turi_nil();
+    const char *fmts = pfq+1, *fmte = fmts;
+    while (*fmte && *fmte != '"') { if (*fmte=='\\') fmte++; fmte++; }
+    char fmt_str[128]; size_t fmt_len = (size_t)(fmte-fmts);
+    if (fmt_len >= sizeof(fmt_str)) return turi_nil();
+    memcpy(fmt_str, fmts, fmt_len); fmt_str[fmt_len] = '\0';
+    ic_unescape_str(fmt_str);
+    pfq = fmte+1;
+    if (*pfq == ',') pfq++;
+    pfq = ic_skip_ws(pfq);
+    /* Strip casts */
+    while (*pfq == '(') {
+        const char *cq = pfq+1; cq=ic_skip_ws(cq);
+        if (isalpha((unsigned char)*cq)||*cq=='_') {
+            const char *ce=cq; while(*ce&&*ce!=')') ce++;
+            if (*ce==')') { pfq=ic_skip_ws(ce+1); continue; }
+        }
+        break;
+    }
+    /* loopvar->print_field */
+    char pvar[64]; int pvlen=0;
+    while ((isalnum((unsigned char)*pfq)||*pfq=='_')&&pvlen<63) pvar[pvlen++]=*pfq++;
+    pvar[pvlen]='\0';
+    if (strcmp(pvar,loopvar)!=0||pfq[0]!='-'||pfq[1]!='>') return turi_nil();
+    pfq+=2;
+    char print_field[64]; int pflen=0;
+    while ((isalnum((unsigned char)*pfq)||*pfq=='_')&&pflen<63) print_field[pflen++]=*pfq++;
+    print_field[pflen]='\0';
+
+    /* Find advance: loopvar = (cast)loopvar->next_field; */
+    const char *ap = wq;
+    while ((ap = strstr(ap, loopvar)) != NULL) {
+        if (ap > wq && (isalnum((unsigned char)ap[-1])||ap[-1]=='_')) { ap++; continue; }
+        const char *aq = ap + lvlen; aq=ic_skip_ws(aq);
+        if (*aq != '=') { ap++; continue; }
+        aq++; aq=ic_skip_ws(aq);
+        /* strip casts */
+        while (*aq=='(') {
+            const char *cq=aq+1; cq=ic_skip_ws(cq);
+            if (isalpha((unsigned char)*cq)||*cq=='_') {
+                const char *ce=cq; while(*ce&&*ce!=')') ce++;
+                if(*ce==')') { aq=ic_skip_ws(ce+1); continue; }
+            }
+            break;
+        }
+        char avar[64]; int avlen=0;
+        while ((isalnum((unsigned char)*aq)||*aq=='_')&&avlen<63) avar[avlen++]=*aq++;
+        avar[avlen]='\0';
+        if (strcmp(avar,loopvar)!=0||aq[0]!='-'||aq[1]!='>') { ap++; continue; }
+        aq+=2;
+        char next_field[64]; int nflen=0;
+        while ((isalnum((unsigned char)*aq)||*aq=='_')&&nflen<63) next_field[nflen++]=*aq++;
+        next_field[nflen]='\0';
+        if (nflen==0) { ap++; continue; }
+
+        /* Get field indices */
+        size_t pfl=strlen(print_field), nfl=strlen(next_field);
+        int pidx=(sn>0)?ic_field_index(print_field,pfl,snames,slens,sn):-1;
+        if (pidx<0) pidx=ic_common_field_idx(print_field,pfl);
+        int nidx=(sn>0)?ic_field_index(next_field,nfl,snames,slens,sn):-1;
+        if (nidx<0) nidx=ic_common_field_idx(next_field,nfl);
+        if (pidx<0||nidx<0) { ap++; continue; }
+
+        /* Find initial value: search for "loopvar = (cast)param" before while */
+        int64_t init_val = n_args > 0 ? args[0].as_int : 0;
+        /* Search for "*loopvar = (cast)param_name;" in body before wp */
+        char init_pat[80]; snprintf(init_pat, sizeof(init_pat), "*%s =", loopvar);
+        const char *ip = strstr(body, init_pat);
+        if (ip && ip < wp) {
+            ip += strlen(init_pat); ip=ic_skip_ws(ip);
+            while (*ip=='(') {
+                const char *cq=ip+1; cq=ic_skip_ws(cq);
+                if (isalpha((unsigned char)*cq)||*cq=='_') {
+                    const char *ce=cq; while(*ce&&*ce!=')') ce++;
+                    if(*ce==')') { ip=ic_skip_ws(ce+1); continue; }
+                }
+                break;
+            }
+            char ivar[64]; int ivlen=0;
+            while ((isalnum((unsigned char)*ip)||*ip=='_')&&ivlen<63) ivar[ivlen++]=*ip++;
+            ivar[ivlen]='\0';
+            if (ivlen>0) {
+                int64_t tmp;
+                if (ic_eval_assign_expr(ivar,fn,param_offset,args,n_args,&tmp,body)) init_val=tmp;
+            }
+        }
+
+        /* Execute linked list traversal */
+        int64_t *cur=(int64_t*)(intptr_t)init_val;
+        int safety=100000;
+        while (cur && safety-->0) {
+            int64_t pval=cur[pidx];
+            char line[256];
+            int llen=snprintf(line,sizeof(line),fmt_str,(long long)pval);
+            if (llen>0) { fwrite(line,1,(size_t)llen,stdout); fflush(stdout); }
+            cur=(int64_t*)(intptr_t)cur[nidx];
+        }
+        return turi_nil();
+    }
+    return turi_nil();
+}
+
 /* Top-level dispatcher */
 static bool try_exec_simple_inline_c(TuriEnv *env,
                                       const char *body, size_t blen,
@@ -1843,7 +2002,16 @@ static bool try_exec_simple_inline_c(TuriEnv *env,
         if (r.tag != TURI_NIL) { *out = r; return true; }
     }
 
-    /* Pattern 6: Simple return of constant or single param (no malloc, no arrow) */
+    /* Pattern 6: Linked list traversal with printf (while loop + printf + ->next) */
+    bool has_printf = strstr(body,"printf(") != NULL;
+    bool has_while  = strstr(body,"while") != NULL;
+    if (!has_malloc && has_arrow && has_while && has_printf && !has_fptr) {
+        TuriValue r = ic_exec_linked_list_print(body, args, n_args, fn, param_offset);
+        /* Always claim handled if we have a while+printf pattern (even if nil) */
+        if (has_while && has_printf) { *out = r; return true; }
+    }
+
+    /* Pattern 7: Simple return of constant or single param (no malloc, no arrow) */
     if (!has_malloc && !has_arrow && has_return && !has_fptr && !has_switch) {
         const char *r = strstr(body, "return "); if (r) {
             r += 7; r = ic_skip_ws(r);
