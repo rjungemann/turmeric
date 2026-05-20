@@ -147,6 +147,7 @@ gadt-refine-basic
 gadt-refine-expr
 gadt-syntax-basic
 gadt-syntax-multi
+match-literal
 match-redundant-arm
 panic-basic
 panic-defer
@@ -322,6 +323,20 @@ for rf in "$RESULTS_DIR"/*.result; do
     elif [ "$kind" = "FAIL" ]; then
         FAIL=$((FAIL + 1))
         FAILED+=("$name")
+    fi
+done
+
+# §4.2: Run REPL-based async eval test scripts.
+for _async_sh in tests/turi/eval-async-*.sh; do
+    [ -x "$_async_sh" ] || continue
+    _async_name="$(basename "${_async_sh%.sh}")"
+    if TUR="$TUR" bash "$_async_sh" > /dev/null 2>&1; then
+        PASS=$((PASS + 1))
+        printf 'PASS %s\n' "$_async_name"
+    else
+        FAIL=$((FAIL + 1))
+        FAILED+=("$_async_name")
+        printf 'FAIL %s\n' "$_async_name"
     fi
 done
 

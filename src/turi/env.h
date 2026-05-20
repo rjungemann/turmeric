@@ -11,6 +11,7 @@
 #  endif
 #endif
 
+#include <setjmp.h>
 #include <stdbool.h>
 #include "diag.h"
 
@@ -122,6 +123,9 @@ typedef struct TuriEnv {
     /* Base directory for resolving module imports (NULL = ".").
      * Set this before turi_eval_file when the input uses (import ...). */
     const char  *module_base_dir;
+    /* Phase R2: catch-unwind support — setjmp boundary for interpreter panic handling */
+    jmp_buf     *catch_jmp;           /* active catch-unwind jmp_buf, or NULL */
+    char         catch_panic_msg[512]; /* copy of panic message when longjmp fires */
 } TuriEnv;
 
 /* Create a new unrestricted environment. */
