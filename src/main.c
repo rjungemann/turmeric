@@ -18,6 +18,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <math.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdio.h>
@@ -2389,6 +2390,106 @@ static TuriValue native_vec_free(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     return turi_nil();
 }
 
+/* nil-value: return 0 (empty list sentinel) */
+static TuriValue native_nil_value(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    return turi_int(0);
+}
+/* cons: allocate a new cons cell {value, next} and return pointer as int64 */
+static TuriValue native_cons(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t value = (n > 0) ? a[0].as_int : 0;
+    int64_t next  = (n > 1) ? a[1].as_int : 0;
+    int64_t *cell = (int64_t *)malloc(2 * sizeof(int64_t));
+    if (!cell) return turi_nil();
+    cell[0] = value; cell[1] = next;
+    return turi_int((int64_t)(intptr_t)cell);
+}
+/* tail: return the next pointer field of the first cons cell */
+static TuriValue native_list_tail(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_int(0);
+    int64_t *cell = (int64_t *)(intptr_t)a[0].as_int;
+    return turi_int(cell[1]);
+}
+/* list-nil?: true if the cons-cell pointer is 0 (empty list) */
+static TuriValue native_list_nil_pred(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    TuriValue rv = {0}; rv.tag = TURI_BOOL;
+    rv.as_bool = (n == 0 || a[0].as_int == 0);
+    return rv;
+}
+/* head: return the value field of the first cons cell */
+static TuriValue native_list_head(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_nil();
+    int64_t *cell = (int64_t *)(intptr_t)a[0].as_int;
+    return turi_int(cell[0]);
+}
+/* cstr->parse-int: parse a raw int (cstr pointer as int64) to int64 */
+static TuriValue native_cstr_parse_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    const char *s = (const char *)(intptr_t)a[0].as_int;
+    return turi_int(s ? (int64_t)atoll(s) : 0);
+}
+/* bit-shr: logical (unsigned) right shift */
+static TuriValue native_bit_shr(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_int(0);
+    return turi_int((int64_t)((uint64_t)a[0].as_int >> (unsigned)a[1].as_int));
+}
+/* bit-xor: bitwise XOR of two integers */
+static TuriValue native_bit_xor(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_int(0);
+    return turi_int(a[0].as_int ^ a[1].as_int);
+}
+/* println-float: print float with given decimal places */
+static TuriValue native_println_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double x = (n > 0) ? (a[0].tag == TURI_FLOAT ? a[0].as_float : (double)a[0].as_int) : 0.0;
+    int d = (n > 1) ? (int)a[1].as_int : 6;
+    if (d < 0) d = 0;
+    if (d > 17) d = 17;
+    char fmt[16];
+    snprintf(fmt, sizeof(fmt), "%%.%df\n", d);
+    printf(fmt, x);
+    return turi_nil();
+}
+/* vec-new-filled: allocate a vec of size sz filled with init */
+static TuriValue native_vec_new_filled(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t sz  = (n > 0) ? a[0].as_int : 0;
+    int64_t val = (n > 1) ? a[1].as_int : 0;
+    if (sz < 0) sz = 0;
+    int64_t *v = (int64_t *)malloc(3 * sizeof(int64_t));
+    if (!v) return turi_nil();
+    int64_t *data = sz > 0 ? (int64_t *)malloc((size_t)sz * sizeof(int64_t)) : NULL;
+    for (int64_t i = 0; i < sz; i++) data[i] = val;
+    v[0] = (int64_t)(intptr_t)data; v[1] = sz; v[2] = sz;
+    TuriValue ret = {0}; ret.tag = TURI_INT; ret.as_int = (int64_t)(intptr_t)v;
+    return ret;
+}
+/* int->unit-float: map a 64-bit int to [0,1) by dividing by 2^53 */
+static TuriValue native_int_to_unit_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double v = (n > 0) ? (double)(uint64_t)a[0].as_int / 9007199254740992.0 : 0.0;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = v; return rv;
+}
+/* tur-sqrt: square root via libm */
+static TuriValue native_tur_sqrt(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double x = (n > 0 && a[0].tag == TURI_FLOAT) ? a[0].as_float : (n > 0 ? (double)a[0].as_int : 0.0);
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = sqrt(x); return rv;
+}
+/* int->float: cast int64 to double */
+static TuriValue native_int_to_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double v = (n > 0) ? (double)a[0].as_int : 0.0;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = v; return rv;
+}
+
 static void wk_register_stdlib_natives(TuriEnv *env) {
     /* Option/some/none */
     turi_env_register_native(env, "some",            native_some,            NULL);
@@ -2463,6 +2564,21 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "result-partition",native_result_partition, NULL);
     turi_env_register_native(env, "result-partition-ok", native_result_partition_ok, NULL);
     turi_env_register_native(env, "result-partition-err", native_result_partition_err, NULL);
+    /* List operations for benchmark arg parsing and list_ops benchmark */
+    turi_env_register_native(env, "nil-value",         native_nil_value,       NULL);
+    turi_env_register_native(env, "cons",              native_cons,            NULL);
+    turi_env_register_native(env, "list-nil?",         native_list_nil_pred,   NULL);
+    turi_env_register_native(env, "head",              native_list_head,       NULL);
+    turi_env_register_native(env, "tail",              native_list_tail,       NULL);
+    /* Benchmark micro-helpers */
+    turi_env_register_native(env, "cstr->parse-int",  native_cstr_parse_int,  NULL);
+    turi_env_register_native(env, "bit-shr",           native_bit_shr,         NULL);
+    turi_env_register_native(env, "bit-xor",           native_bit_xor,         NULL);
+    turi_env_register_native(env, "println-float",     native_println_float,   NULL);
+    turi_env_register_native(env, "vec-new-filled",    native_vec_new_filled,  NULL);
+    turi_env_register_native(env, "int->unit-float",   native_int_to_unit_float, NULL);
+    turi_env_register_native(env, "tur-sqrt",          native_tur_sqrt,        NULL);
+    turi_env_register_native(env, "int->float",        native_int_to_float,    NULL);
 }
 
 /* -------------------------------------------------------------------------

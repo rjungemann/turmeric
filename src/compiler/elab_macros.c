@@ -88,6 +88,8 @@ static bool ct_form_equal(const Form *a, const Form *b) {
         case F_TYPE_ANN:
         /* CT0: Contract types compare structurally */
         case F_CONTRACT_TYPE:
+        /* INT-1: Reader conditionals compare structurally */
+        case F_READER_COND:
         case F_LIST:
         case F_VEC:
         case F_MAP:
@@ -224,6 +226,8 @@ static bool form_contains_ct_builtins(Form *f) {
         case F_TYPE_ANN:
         /* CT0: Contract type annotations don't contain CT builtins at top level */
         case F_CONTRACT_TYPE:
+        /* INT-1: Reader conditionals don't contain CT builtins */
+        case F_READER_COND:
             return false;
     }
     return false;
@@ -556,6 +560,8 @@ static CtValue ct_eval_form(CtEnv *env, Form *f) {
         case F_TYPE_ANN:
         /* CT0: Contract type annotations are compile-time literals */
         case F_CONTRACT_TYPE:
+        /* INT-1: Reader conditionals are compile-time literals */
+        case F_READER_COND:
             /* Type annotations are compile-time literals */
             return ct_value_form(f);
         case F_SYM: {
@@ -690,6 +696,8 @@ Form *quasiquote_expand_form(Elab *e, Form *f) {
         case F_TYPE_ANN:
         /* CT0: Contract type annotations are passed through in quasiquote */
         case F_CONTRACT_TYPE:
+        /* INT-1: Reader conditionals are passed through in quasiquote */
+        case F_READER_COND:
             return f;
         case F_QUASIQUOTE:
             /* Expand the quasiquoted form */
@@ -712,6 +720,8 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
         case F_TYPE_ANN:
         /* CT0: Contract type annotations are returned as-is in macro substitution */
         case F_CONTRACT_TYPE:
+        /* INT-1: Reader conditionals are returned as-is in macro substitution */
+        case F_READER_COND:
             /* Literals, quote forms, and type annotations are returned as-is */
             return f;
         case F_QUASIQUOTE:

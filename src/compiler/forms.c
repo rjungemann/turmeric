@@ -140,6 +140,16 @@ Form *form_contract_type(Arena *a, Span span, Form **items, uint32_t len) {
     return form_seq(a, F_CONTRACT_TYPE, span, items, len);
 }
 
+/* INT-1: Reader conditional #?(:tur expr :turi expr) */
+Form *form_reader_cond(Arena *a, Span span, Form **items, uint32_t len) {
+    Form *f = form_new(a, F_READER_COND, span);
+    Form **copy = (Form **)arena_alloc(a, len * sizeof(Form *));
+    for (uint32_t i = 0; i < len; i++) copy[i] = items[i];
+    f->as.list.items = copy;
+    f->as.list.len = len;
+    return f;
+}
+
 /* Return the name of a FormTag as a string */
 const char *form_tag_name(FormTag tag) {
     switch (tag) {
@@ -161,6 +171,7 @@ const char *form_tag_name(FormTag tag) {
         case F_UNQUOTE_SPLICING: return "unquote-splicing";
         case F_TYPE_ANN: return "type-ann";
         case F_CONTRACT_TYPE: return "contract-type";
+        case F_READER_COND: return "reader-cond";
         default: return "unknown";
     }
 }
@@ -280,6 +291,15 @@ void form_print(Buf *b, const Form *f) {
                 form_print(b, f->as.list.items[i]);
             }
             buf_puts(b, " }");
+            break;
+        /* INT-1: Reader conditional */
+        case F_READER_COND:
+            buf_puts(b, "#?(");
+            for (uint32_t i = 0; i < f->as.list.len; i++) {
+                if (i) buf_putc(b, ' ');
+                form_print(b, f->as.list.items[i]);
+            }
+            buf_putc(b, ')');
             break;
     }
 }

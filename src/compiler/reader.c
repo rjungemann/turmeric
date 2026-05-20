@@ -27,6 +27,8 @@ static int peek_neoteric_bracket(const Reader *r);
 static Form *read_neoteric_bracket(Reader *r, Form *atom, int bracket);
 static Form *read_seq(Reader *r, char open, char close, FormTag tag,
                       const char *unterminated_msg);
+/* INT-1: Reader conditional */
+static Form *read_reader_cond(Reader *r);
 
 static Span span_from_to(const Reader *r,
                          uint32_t start_line, uint32_t start_col,
@@ -738,6 +740,53 @@ static Form *read_symbol_or_minus(Reader *r) {
     return atom;
 }
 
+/* INT-1: Read #?(:tur expr :turi expr) reader conditional. */
+static Form *read_reader_cond(Reader *r) {
+    uint32_t start_line = r->line;
+    uint32_t start_col = r->col;
+    size_t start_off = r->pos;
+    advance(r); /* consume '#' */
+    advance(r); /* consume '?' */
+
+    skip_ws_and_comments(r);
+    if (peek(r) != '(') {
+        Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
+        diag_emit(DIAG_ERROR, s, "#? must be followed by '('");
+        r->error = true;
+        return NULL;
+    }
+    advance(r); /* consume '(' */
+
+    Form **items = NULL;
+    size_t cap = 0, n = 0;
+
+    for (;;) {
+        skip_ws_and_comments(r);
+        if (r->error) { free(items); return NULL; }
+        if (peek(r) == ')') { advance(r); break; }
+        if (peek(r) == -1) {
+            Span s = span_from_to(r, start_line, start_col, start_off, r->pos);
+            diag_emit(DIAG_ERROR, s, "unterminated reader conditional (missing ')')");
+            r->error = true;
+            free(items);
+            return NULL;
+        }
+        Form *child = read_form(r);
+        if (!child) { free(items); return NULL; }
+        if (n == cap) {
+            cap = cap ? cap * 2 : 4;
+            items = (Form **)realloc(items, cap * sizeof(Form *));
+        }
+        items[n++] = child;
+    }
+
+    Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
+    Form **arena_items = (Form **)arena_alloc(r->arena, n * sizeof(Form *));
+    for (size_t i = 0; i < n; i++) arena_items[i] = items[i];
+    free(items);
+    return form_reader_cond(r->arena, span, arena_items, (uint32_t)n);
+}
+
 static Form *read_seq(Reader *r, char open, char close, FormTag tag,
                       const char *unterminated_msg) {
     uint32_t start_line = r->line;
@@ -1211,6 +1260,10 @@ static Form *read_form(Reader *r) {
     /* Phase R5: Attribute syntax #[...] */
     if (c == '#' && peek2(r) == '[') {
         return read_attribute(r);
+    }
+    /* INT-1: Reader conditional #?(:tur expr :turi expr) */
+    if (c == '#' && peek2(r) == '?') {
+        return read_reader_cond(r);
     }
 
     /* CT0 / Phase S1: Curly-brace handling.
