@@ -1,0 +1,19 @@
+;; float_arith -- N iterations of FP multiply/sqrt/add; print result.
+(defn parse-first-arg [default :int] :int
+  ```c
+  struct __tur_cons { int64_t value; int64_t next; };
+  struct __tur_cons *c = (struct __tur_cons *)(intptr_t)g_tur_args;
+  return c ? (int64_t)atoll((const char *)(intptr_t)c->value) : default;
+  ```)
+
+(defn float-arith [n :int] :void
+  ```c
+  double a = 1.0, b = 1.0;
+  for (int64_t i = 0; i < n; i++) {
+    a = a * 1.0000001 + sqrt(b);
+    b = b * 0.9999999 + sqrt(a);
+  }
+  printf("%.6f\n", a + b);
+  ```)
+
+(float-arith (parse-first-arg 1000000))

@@ -1,27 +1,13 @@
-import time
+import sys, os
 
-def measure_time():
-    return time.perf_counter()
-
-def write_file(filename):
-    total_size = 100 * 1024 * 1024  # 100MB
-    buffer = b'x' * 4096
-    remaining = total_size
-
-    with open(filename, 'wb') as f:
-        while remaining > 0:
-            to_write = min(remaining, 4096)
-            f.write(buffer[:to_write])
-            remaining -= to_write
-
-if __name__ == "__main__":
-    import sys
-    if len(sys.argv) != 2:
-        print(f"Usage: {sys.argv[0]} <file>")
-        sys.exit(1)
-
-    start = measure_time()
-    write_file(sys.argv[1])
-    end = measure_time()
-
-    print(f"Time taken: {end - start:.6f} seconds")
+n    = int(sys.argv[1]) if len(sys.argv) > 1 else 1048576
+path = "/tmp/bench_io_write_py.bin"
+buf  = b'\xAB' * 4096
+with open(path, 'wb') as f:
+    written = 0
+    while written < n:
+        chunk = min(4096, n - written)
+        f.write(buf[:chunk])
+        written += chunk
+os.remove(path)
+print(n)

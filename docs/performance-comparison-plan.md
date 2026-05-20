@@ -160,9 +160,9 @@ Complex, realistic algorithms that combine multiple aspects.
 - [x] Implement recursion benchmarks (fib_recursive, factorial — C/Turmeric/Clojure/Racket/Python)
 
 ### Phase 3: I/O and Real-world (Weeks 5-6)
-- [ ] Implement I/O benchmarks
-- [ ] Implement real-world algorithm benchmarks
-- [ ] Add micro-benchmarks for specific operations
+- [x] Implement I/O benchmarks (file_write, file_read, random_access — C/Turmeric/Clojure/Racket/Python)
+- [x] Implement real-world algorithm benchmarks (nbody, ray_tracing — C/Turmeric/Clojure/Racket/Python)
+- [x] Add micro-benchmarks for specific operations (int_arith, float_arith, function_call — C/Turmeric/Clojure/Racket/Python)
 
 ### Phase 4: Validation (Week 7)
 - [ ] **Correctness Verification**: 
