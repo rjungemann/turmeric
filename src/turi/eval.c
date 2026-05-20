@@ -299,15 +299,21 @@ struct TuriStruct {
     const char  *name;     /* struct name (for debugging) */
     uint32_t     n_fields;
     TuriValue   *fields;   /* heap-allocated array */
+    StructDef   *def;      /* compiler's struct definition (for field name lookup); may be NULL */
 };
 
-static TuriValue make_struct_val(const char *name, uint32_t n, TuriValue *fields) {
+static TuriValue make_struct_val_def(const char *name, uint32_t n, TuriValue *fields, StructDef *def) {
     TuriStruct *s = (TuriStruct *)malloc(sizeof(TuriStruct));
     s->name     = name;
     s->n_fields = n;
+    s->def      = def;
     s->fields   = (TuriValue *)malloc(n * sizeof(TuriValue));
     for (uint32_t i = 0; i < n; i++) s->fields[i] = fields[i];
     return turi_struct_val(s);
+}
+
+static TuriValue make_struct_val(const char *name, uint32_t n, TuriValue *fields) {
+    return make_struct_val_def(name, n, fields, NULL);
 }
 
 /* Native callback for ADT constructors registered by EX_DEFDATA/EX_DEFGADT. */
@@ -1022,11 +1028,23 @@ static int ic_param_idx(FnDef *fn, const char *name, uint32_t param_offset) {
     return -1;
 }
 
-/* Parse a simple field assignment expression: param name, bool/null/int literal, or cast */
+/* Forward declarations for struct field helpers used by ic_eval_assign_expr */
+#define IC_MAX_FIELDS 10
+static int ic_extract_struct_fields_typed(const char *body,
+                                           const char *out_names[IC_MAX_FIELDS],
+                                           size_t      out_lens[IC_MAX_FIELDS],
+                                           int         out_types[IC_MAX_FIELDS]);
+static int ic_field_index(const char *fname, size_t flen,
+                           const char *names[], size_t lens[], int n);
+static int ic_common_field_idx(const char *fname, size_t flen);
+
+/* Parse a simple field assignment expression: param name, bool/null/int literal, or cast.
+ * ic_body is the full inline-C body (for struct field extraction); may be NULL. */
 static bool ic_eval_assign_expr(const char *expr,
                                  FnDef *fn, uint32_t param_offset,
                                  TuriValue *args, uint32_t n_args,
-                                 int64_t *out_val) {
+                                 int64_t *out_val,
+                                 const char *ic_body) {
     const char *p = ic_skip_ws(expr);
     /* Strip any number of casts like (T), (T*), (int64_t)(intptr_t), etc. */
     while (*p == '(') {
@@ -1052,14 +1070,77 @@ static bool ic_eval_assign_expr(const char *expr,
     if (ic_read_ident(&q, ident, sizeof(ident)) > 0) {
         int idx = ic_param_idx(fn, ident, param_offset);
         if (idx >= 0 && (uint32_t)idx < n_args) {
-            *out_val = args[idx].as_int;
+            TuriValue *arg = &args[idx];
+            /* Check for param.field (dot access on TuriStruct value) */
+            const char *r = ic_skip_ws(q);
+            if (*r == '.' && r[1] != '.') {
+                r++;
+                char field_name[64];
+                const char *r2 = r;
+                if (ic_read_ident(&r2, field_name, sizeof(field_name)) > 0) {
+                    size_t flen = strlen(field_name);
+                    if (arg->tag == TURI_STRUCT && arg->as_struct) {
+                        /* TuriStruct: look up field index from StructDef, body struct, or common table */
+                        int fidx = -1;
+                        /* 1. Use StructDef field names if available */
+                        if (fidx < 0 && arg->as_struct->def) {
+                            StructDef *sdef = arg->as_struct->def;
+                            for (uint32_t fi = 0; fi < sdef->n_fields && fi < arg->as_struct->n_fields; fi++) {
+                                if (sdef->fields[fi].name && strcmp(sdef->fields[fi].name, field_name) == 0) {
+                                    fidx = (int)fi; break;
+                                }
+                            }
+                        }
+                        /* 2. Try body struct definition */
+                        if (fidx < 0) {
+                            const char *snames[IC_MAX_FIELDS]; size_t slens[IC_MAX_FIELDS]; int stypes[IC_MAX_FIELDS];
+                            int sn = ic_body ? ic_extract_struct_fields_typed(ic_body, snames, slens, stypes) : 0;
+                            if (sn > 0) fidx = ic_field_index(field_name, flen, snames, slens, sn);
+                        }
+                        /* 3. Common field name table */
+                        if (fidx < 0) fidx = ic_common_field_idx(field_name, flen);
+                        if (fidx >= 0 && (uint32_t)fidx < arg->as_struct->n_fields) {
+                            *out_val = arg->as_struct->fields[fidx].as_int;
+                            return true;
+                        }
+                    } else if (arg->tag == TURI_INT && arg->as_int != 0) {
+                        /* Pointer to struct, access via common field index */
+                        int fidx = ic_common_field_idx(field_name, flen);
+                        if (fidx >= 0) {
+                            int64_t *ptr = (int64_t*)(intptr_t)arg->as_int;
+                            *out_val = ptr[fidx];
+                            return true;
+                        }
+                    }
+                }
+            }
+            /* Check for param->field (arrow access on pointer parameter) */
+            if (r[0] == '-' && r[1] == '>') {
+                r += 2;
+                char field_name[64];
+                const char *r2 = r;
+                if (ic_read_ident(&r2, field_name, sizeof(field_name)) > 0) {
+                    size_t flen = strlen(field_name);
+                    if (arg->tag == TURI_INT && arg->as_int != 0) {
+                        const char *snames[IC_MAX_FIELDS]; size_t slens[IC_MAX_FIELDS];
+                        int stypes[IC_MAX_FIELDS];
+                        int sn = ic_body ? ic_extract_struct_fields_typed(ic_body, snames, slens, stypes) : 0;
+                        int fidx = (sn > 0) ? ic_field_index(field_name, flen, snames, slens, sn) : -1;
+                        if (fidx < 0) fidx = ic_common_field_idx(field_name, flen);
+                        if (fidx >= 0) {
+                            int64_t *ptr = (int64_t*)(intptr_t)arg->as_int;
+                            *out_val = ptr[fidx];
+                            return true;
+                        }
+                    }
+                }
+            }
+            *out_val = arg->as_int;
             return true;
         }
     }
     return false;
 }
-
-#define IC_MAX_FIELDS 10
 
 /* Extract struct field names from a "struct { ... }" definition in body. */
 /* Field type hint for ic_extract_struct_fields */
@@ -1275,7 +1356,7 @@ static TuriValue ic_exec_constructor(const char *body,
             int64_t fval=0;
             if (elen>0&&elen<(int)sizeof(expr_buf)) {
                 memcpy(expr_buf,expr_start,(size_t)elen); expr_buf[elen]='\0';
-                ic_eval_assign_expr(expr_buf,fn,param_offset,args,n_args,&fval);
+                ic_eval_assign_expr(expr_buf,fn,param_offset,args,n_args,&fval,body);
             }
             field_vals[n_fields++]=fval;
             if(*p) p++;
@@ -1305,7 +1386,7 @@ static TuriValue ic_exec_constructor(const char *body,
             int64_t fval=0;
             if (elen>0&&elen<(int)sizeof(expr_buf)) {
                 memcpy(expr_buf,expr_start,(size_t)elen); expr_buf[elen]='\0';
-                ic_eval_assign_expr(expr_buf,fn,param_offset,args,n_args,&fval);
+                ic_eval_assign_expr(expr_buf,fn,param_offset,args,n_args,&fval,body);
             }
             /* idx must match n_fields (sequential) */
             if ((long long)n_fields==idx) field_vals[n_fields++]=fval;
@@ -1342,8 +1423,7 @@ static TuriValue ic_exec_constructor(const char *body,
 static TuriValue ic_exec_accessor(const char *body,
                                    TuriValue *args, uint32_t n_args,
                                    FnDef *fn) {
-    if (n_args < 1 || args[0].as_int == 0) return turi_nil();
-    int64_t *ptr = (int64_t*)(intptr_t)args[0].as_int;
+    if (n_args < 1) return turi_nil();
 
     /* Extract struct field names and types from body */
     const char *fnames[IC_MAX_FIELDS]; size_t flens[IC_MAX_FIELDS];
@@ -1364,8 +1444,97 @@ static TuriValue ic_exec_accessor(const char *body,
         break;
     }
 
-    /* Skip variable name and expect -> */
+    /* Handle ternary: "return var ? var->field : fallback;"
+     * The var is null-checked before deref */
+    {
+        const char *t = ret;
+        char var1[64], var2[64], field2[64];
+        const char *t2 = t;
+        int n1 = ic_read_ident(&t2, var1, sizeof(var1));
+        if (n1 > 0) {
+            const char *t3 = ic_skip_ws(t2);
+            if (*t3 == '?') {
+                t3++; t3 = ic_skip_ws(t3);
+                /* skip truthy part: var2->field */
+                const char *t4 = t3;
+                int n2 = ic_read_ident(&t4, var2, sizeof(var2));
+                if (n2 > 0 && t4[0]=='-' && t4[1]=='>') {
+                    t4 += 2;
+                    const char *t5 = t4;
+                    int n3 = ic_read_ident(&t5, field2, sizeof(field2));
+                    if (n3 > 0) {
+                        /* skip to colon */
+                        while (*t5 && *t5 != ':') t5++;
+                        if (*t5 == ':') {
+                            t5++; t5 = ic_skip_ws(t5);
+                            /* parse fallback value */
+                            int64_t fallback = 0;
+                            if (isdigit((unsigned char)*t5) || (*t5=='-'&&isdigit((unsigned char)t5[1]))) {
+                                char *end2; fallback = strtoll(t5, &end2, 0);
+                            }
+                            /* Check if args[0] is null */
+                            int64_t ptr_val = args[0].as_int;
+                            if (ptr_val == 0) {
+                                TuriValue rv={0}; rv.tag=TURI_INT; rv.as_int=fallback; return rv;
+                            }
+                            /* Access field on the non-null pointer */
+                            size_t flen3 = strlen(field2);
+                            int fidx3 = (nf>0) ? ic_field_index(field2,flen3,fnames,flens,nf) : -1;
+                            if (fidx3 < 0) fidx3 = ic_common_field_idx(field2, flen3);
+                            if (fidx3 >= 0) {
+                                int64_t *ptr3 = (int64_t*)(intptr_t)ptr_val;
+                                int64_t fv3 = ptr3[fidx3];
+                                int ft3 = (fidx3 < nf) ? ftypes[fidx3] : IC_FT_INT;
+                                if (ft3 == IC_FT_BOOL) { TuriValue rv={0}; rv.tag=TURI_BOOL; rv.as_bool=(bool)(fv3!=0); return rv; }
+                                if (ft3 == IC_FT_CSTR) { TuriValue rv={0}; rv.tag=TURI_CSTR; rv.as_cstr=(const char*)(intptr_t)fv3; return rv; }
+                                TuriValue rv={0}; rv.tag=TURI_INT; rv.as_int=fv3; return rv;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /* Skip variable name and look for -> or . */
+    const char *varstart = ret;
     while (isalnum((unsigned char)*ret)||*ret=='_') ret++;
+    size_t varlen = (size_t)(ret - varstart);
+
+    /* Handle "return var.field;" (TuriStruct value field access) */
+    if (*ret == '.' && ret[1] != '.') {
+        ret++;
+        const char *fn_start2 = ret;
+        while (isalnum((unsigned char)*ret)||*ret=='_') ret++;
+        size_t fn_len2 = (size_t)(ret - fn_start2);
+        /* Find which param is named 'var' */
+        char varname2[64];
+        if (varlen < sizeof(varname2)) {
+            memcpy(varname2, varstart, varlen); varname2[varlen]='\0';
+            int pidx2 = ic_param_idx(fn, varname2, 0);
+            if (pidx2 < 0 && fn) pidx2 = ic_param_idx(fn, varname2, fn->n_params > 0 ? 0 : 0);
+            TuriValue *src = (pidx2 >= 0 && (uint32_t)pidx2 < n_args) ? &args[pidx2] : &args[0];
+            int fidx2 = (nf>0) ? ic_field_index(fn_start2, fn_len2, fnames, flens, nf) : -1;
+            if (fidx2 < 0) fidx2 = ic_common_field_idx(fn_start2, fn_len2);
+            if (fidx2 >= 0) {
+                int64_t fv2; int ft2;
+                if (src->tag == TURI_STRUCT && src->as_struct && (uint32_t)fidx2 < src->as_struct->n_fields) {
+                    fv2 = src->as_struct->fields[fidx2].as_int;
+                    ft2 = IC_FT_INT;
+                } else if (src->tag == TURI_INT && src->as_int != 0) {
+                    int64_t *ptr2 = (int64_t*)(intptr_t)src->as_int;
+                    fv2 = ptr2[fidx2];
+                    ft2 = (fidx2 < nf) ? ftypes[fidx2] : IC_FT_INT;
+                } else { return turi_nil(); }
+                if (ft2 == IC_FT_BOOL) { TuriValue rv={0}; rv.tag=TURI_BOOL; rv.as_bool=(bool)(fv2!=0); return rv; }
+                if (ft2 == IC_FT_CSTR) { TuriValue rv={0}; rv.tag=TURI_CSTR; rv.as_cstr=(const char*)(intptr_t)fv2; return rv; }
+                TuriValue rv={0}; rv.tag=TURI_INT; rv.as_int=fv2; return rv;
+            }
+        }
+        return turi_nil();
+    }
+
+    /* Expect -> for pointer dereference */
     if (ret[0]!='-'||ret[1]!='>') return turi_nil();
     ret += 2;
 
@@ -1375,12 +1544,32 @@ static TuriValue ic_exec_accessor(const char *body,
 
     /* Find field index */
     int fidx = (nf>0) ? ic_field_index(fn_start,fn_len,fnames,flens,nf) : -1;
+    /* If arg is TURI_STRUCT with StructDef, use field names from StructDef */
+    if (fidx < 0 && args[0].tag == TURI_STRUCT && args[0].as_struct && args[0].as_struct->def) {
+        StructDef *sdef = args[0].as_struct->def;
+        for (uint32_t fi = 0; fi < sdef->n_fields; fi++) {
+            if (sdef->fields[fi].name && strncmp(sdef->fields[fi].name, fn_start, fn_len) == 0
+                && strlen(sdef->fields[fi].name) == fn_len) { fidx = (int)fi; break; }
+        }
+    }
     if (fidx < 0) fidx = ic_common_field_idx(fn_start, fn_len);
     if (fidx < 0) return turi_nil();
 
-    int64_t field_val = ptr[fidx];
+    /* Get pointer value: from TURI_INT (raw pointer) or TURI_STRUCT */
+    int64_t field_val;
+    int ftype;
+    if (args[0].tag == TURI_STRUCT && args[0].as_struct) {
+        /* TuriStruct: use struct field directly */
+        if ((uint32_t)fidx >= args[0].as_struct->n_fields) return turi_nil();
+        field_val = args[0].as_struct->fields[fidx].as_int;
+        ftype = IC_FT_INT;
+    } else {
+        if (args[0].as_int == 0) return turi_nil();
+        int64_t *ptr = (int64_t*)(intptr_t)args[0].as_int;
+        field_val = ptr[fidx];
+        ftype = (fidx < nf) ? ftypes[fidx] : IC_FT_INT;
+    }
     /* Determine field type: from struct definition or field-name heuristic */
-    int ftype = (fidx < nf) ? ftypes[fidx] : IC_FT_INT;
     /* Heuristic overrides for well-known bool/cstr fields */
     if ((fn_len==5&&strncmp(fn_start,"is_ok",5)==0)||
         (fn_len==7&&strncmp(fn_start,"is_some",7)==0))  ftype = IC_FT_BOOL;
@@ -1419,6 +1608,169 @@ static TuriValue ic_exec_accessor(const char *body,
         rv.as_cstr=(const char*)(intptr_t)field_val; return rv;
     }
     TuriValue rv={0}; rv.tag=TURI_INT; rv.as_int=field_val; return rv;
+}
+
+/* Execute snprintf-based formatter: handles bodies that do conditional early returns and
+ * then snprintf(buf, size, "format", args...) + return buf. Useful for Show instances. */
+static TuriValue ic_exec_snprintf_fmt(const char *body,
+                                       TuriValue *args, uint32_t n_args,
+                                       FnDef *fn, uint32_t param_offset) {
+    /* Step 1: Find buffer variable name by scanning all return statements for
+     * one that returns a variable (not a string literal or 0). Take the last such return. */
+    char bufvar[64]; int bvlen = 0;
+    {
+        const char *scan = body;
+        while ((scan = strstr(scan, "return ")) != NULL) {
+            const char *r2 = scan + 7; r2 = ic_skip_ws(r2);
+            /* strip casts */
+            while (*r2 == '(') {
+                const char *q2 = r2+1; q2 = ic_skip_ws(q2);
+                if (isalpha((unsigned char)*q2) || *q2 == '_') {
+                    const char *e2 = q2; while (*e2 && *e2 != ')') e2++;
+                    if (*e2 == ')') { r2 = ic_skip_ws(e2+1); continue; }
+                }
+                break;
+            }
+            /* If this return is an identifier (variable name), remember it */
+            if (isalpha((unsigned char)*r2) || *r2 == '_') {
+                char tmp[64]; int tlen = 0;
+                while ((isalnum((unsigned char)*r2)||*r2=='_') && tlen < 63) tmp[tlen++] = *r2++;
+                tmp[tlen] = '\0';
+                /* Skip keywords */
+                if (strcmp(tmp,"true")&&strcmp(tmp,"false")&&strcmp(tmp,"NULL")) {
+                    memcpy(bufvar, tmp, (size_t)tlen+1); bvlen = tlen;
+                }
+            }
+            scan++;
+        }
+    }
+    if (bvlen == 0) return turi_nil();
+
+    /* Step 2: Handle conditional early returns: if (COND) return "str"; */
+    const char *p = body;
+    while (*p) {
+        p = ic_skip_ws(p);
+        if (!ic_word_eq(p, "if")) { while (*p && *p != ';' && *p != '{') p++; if(*p) p++; continue; }
+        const char *q = p + 2; q = ic_skip_ws(q);
+        if (*q != '(') { p++; continue; }
+        q++; q = ic_skip_ws(q);
+        bool negate = false;
+        if (*q == '!') { negate = true; q++; q = ic_skip_ws(q); }
+        char cond_param[64], cond_field[64]; cond_field[0] = '\0';
+        int cp_len = 0, cf_len = 0;
+        while ((isalnum((unsigned char)*q)||*q=='_') && cp_len<63) cond_param[cp_len++]=*q++;
+        cond_param[cp_len] = '\0';
+        if (*q == '.') { q++; while ((isalnum((unsigned char)*q)||*q=='_') && cf_len<63) cond_field[cf_len++]=*q++; cond_field[cf_len]='\0'; }
+        while (*q && *q != ')') q++;
+        if (*q == ')') q++;
+        q = ic_skip_ws(q);
+        if (!ic_word_eq(q, "return")) { p += 2; continue; }
+        q += 6; q = ic_skip_ws(q);
+        if (*q != '"') { p += 2; continue; }
+        const char *ss = q+1, *se = ss;
+        while (*se && *se != '"') { if (*se == '\\') se++; se++; }
+        /* Evaluate condition */
+        int64_t cond_val = 0;
+        if (cond_field[0]) {
+            int pidx = ic_param_idx(fn, cond_param, param_offset);
+            if (pidx >= 0 && (uint32_t)pidx < n_args) {
+                TuriValue *arg = &args[pidx];
+                size_t flen = strlen(cond_field);
+                const char *snames[IC_MAX_FIELDS]; size_t slens[IC_MAX_FIELDS]; int stypes[IC_MAX_FIELDS];
+                int sn = ic_extract_struct_fields_typed(body, snames, slens, stypes);
+                int fidx = (sn>0)?ic_field_index(cond_field,flen,snames,slens,sn):-1;
+                /* Also try StructDef field names */
+                if (fidx<0 && arg->tag==TURI_STRUCT && arg->as_struct && arg->as_struct->def) {
+                    StructDef *sdef=arg->as_struct->def;
+                    for (uint32_t fi=0; fi<sdef->n_fields; fi++) {
+                        if (sdef->fields[fi].name && strcmp(sdef->fields[fi].name,cond_field)==0) { fidx=(int)fi; break; }
+                    }
+                }
+                if (fidx<0) fidx=ic_common_field_idx(cond_field,flen);
+                if (fidx>=0) {
+                    if (arg->tag==TURI_STRUCT&&arg->as_struct&&(uint32_t)fidx<arg->as_struct->n_fields)
+                        cond_val=arg->as_struct->fields[fidx].as_int;
+                    else if (arg->tag==TURI_INT&&arg->as_int)
+                        cond_val=((int64_t*)(intptr_t)arg->as_int)[fidx];
+                }
+            }
+        } else if (cp_len > 0) {
+            int pidx = ic_param_idx(fn, cond_param, param_offset);
+            if (pidx >= 0 && (uint32_t)pidx < n_args) cond_val = args[pidx].as_int;
+        }
+        if (negate ? (cond_val==0) : (cond_val!=0)) {
+            size_t elen = (size_t)(se-ss);
+            char *buf = (char*)malloc(elen+1);
+            if (!buf) return turi_nil();
+            memcpy(buf, ss, elen); buf[elen] = '\0';
+            TuriValue rv={0}; rv.tag=TURI_CSTR; rv.as_cstr=buf; return rv;
+        }
+        p += 2;
+    }
+
+    /* Step 3: Find snprintf(bufvar, size, "format", args...) */
+    const char *sp = body;
+    while (*sp) {
+        const char *fp = strstr(sp, "snprintf(");
+        if (!fp) break;
+        const char *fq = fp + 9;
+        fq = ic_skip_ws(fq);
+        const char *bvs = fq;
+        while (isalnum((unsigned char)*fq)||*fq=='_') fq++;
+        if ((int)(fq-bvs)==bvlen && strncmp(bvs,bufvar,bvlen)==0) {
+            /* skip comma + size arg */
+            fq=ic_skip_ws(fq); if(*fq==',') fq++;
+            fq=ic_skip_ws(fq); int d=0;
+            while(*fq&&(*fq!=','||d>0)){if(*fq=='(')d++;else if(*fq==')')d--;fq++;}
+            if(*fq==',') fq++;
+            fq=ic_skip_ws(fq);
+            if(*fq!='"') { sp=fp+1; continue; }
+            /* extract format string */
+            const char *fmts=fq+1, *fmte=fmts;
+            while(*fmte&&*fmte!='"'){if(*fmte=='\\')fmte++;fmte++;}
+            char fmt_str[512]; size_t fmt_len=(size_t)(fmte-fmts);
+            if(fmt_len>=sizeof(fmt_str)){sp=fp+1;continue;}
+            memcpy(fmt_str,fmts,fmt_len); fmt_str[fmt_len]='\0';
+            fq=fmte+1;
+            /* parse snprintf arguments */
+            int64_t sn_args[8]; int sn_argc=0;
+            while(*fq&&*fq!=')'&&sn_argc<8) {
+                if(*fq==',') fq++;
+                fq=ic_skip_ws(fq); if(*fq==')') break;
+                const char *as=fq; int d2=0;
+                while(*fq&&((*fq!=','&&*fq!=')')||d2>0)) {
+                    if(*fq=='(')d2++;else if(*fq==')')d2--;
+                    else if(*fq=='"'){fq++;while(*fq&&*fq!='"'){if(*fq=='\\')fq++;fq++;}}
+                    if(*fq)fq++;
+                }
+                int alen=(int)(fq-as);
+                while(alen>0&&(as[alen-1]==' '||as[alen-1]=='\t'))alen--;
+                if(alen>0&&alen<256){
+                    char abuf[256]; memcpy(abuf,as,(size_t)alen); abuf[alen]='\0';
+                    int64_t val=0;
+                    ic_eval_assign_expr(abuf,fn,param_offset,args,n_args,&val,body);
+                    sn_args[sn_argc++]=val;
+                }
+            }
+            /* format the result */
+            char result_buf[1024]; int rlen=0;
+            switch(sn_argc){
+                case 0: rlen=snprintf(result_buf,sizeof(result_buf),"%s",fmt_str); break;
+                case 1: rlen=snprintf(result_buf,sizeof(result_buf),fmt_str,(long long)sn_args[0]); break;
+                case 2: rlen=snprintf(result_buf,sizeof(result_buf),fmt_str,(long long)sn_args[0],(long long)sn_args[1]); break;
+                case 3: rlen=snprintf(result_buf,sizeof(result_buf),fmt_str,(long long)sn_args[0],(long long)sn_args[1],(long long)sn_args[2]); break;
+                case 4: rlen=snprintf(result_buf,sizeof(result_buf),fmt_str,(long long)sn_args[0],(long long)sn_args[1],(long long)sn_args[2],(long long)sn_args[3]); break;
+                default: return turi_nil();
+            }
+            if(rlen<0) return turi_nil();
+            char *out=(char*)malloc((size_t)rlen+1);
+            if(!out) return turi_nil();
+            memcpy(out,result_buf,(size_t)rlen+1);
+            TuriValue rv={0}; rv.tag=TURI_CSTR; rv.as_cstr=out; return rv;
+        }
+        sp=fp+1;
+    }
+    return turi_nil();
 }
 
 /* Execute string comparison of two fat-pointer {const char *p; size_t len;} structs */
@@ -1473,6 +1825,12 @@ static bool try_exec_simple_inline_c(TuriEnv *env,
         return true;
     }
 
+    /* Pattern 4a: snprintf formatter (malloc + snprintf + return cstr, no arrow in return) */
+    if (has_malloc && !has_fptr && strstr(body,"snprintf(")) {
+        TuriValue r = ic_exec_snprintf_fmt(body, args, n_args, fn, param_offset);
+        if (r.tag != TURI_NIL) { *out = r; return true; }
+    }
+
     /* Pattern 4: Constructor (malloc + arrow or index assignments, no fptr cast) */
     if (has_malloc && !has_fptr) {
         TuriValue r = ic_exec_constructor(body, args, n_args, fn, param_offset);
@@ -1480,9 +1838,20 @@ static bool try_exec_simple_inline_c(TuriEnv *env,
     }
 
     /* Pattern 5: Accessor (no malloc, has arrow, has return) */
-    if (!has_malloc && has_arrow && has_return && !has_fptr) {
+    if (!has_malloc && has_return && !has_fptr) {
         TuriValue r = ic_exec_accessor(body, args, n_args, fn);
         if (r.tag != TURI_NIL) { *out = r; return true; }
+    }
+
+    /* Pattern 6: Simple return of constant or single param (no malloc, no arrow) */
+    if (!has_malloc && !has_arrow && has_return && !has_fptr && !has_switch) {
+        const char *r = strstr(body, "return "); if (r) {
+            r += 7; r = ic_skip_ws(r);
+            int64_t val = 0;
+            if (ic_eval_assign_expr(r, fn, param_offset, args, n_args, &val, body)) {
+                TuriValue rv={0}; rv.tag=TURI_INT; rv.as_int=val; *out=rv; return true;
+            }
+        }
     }
 
     return false;
@@ -1854,9 +2223,9 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             if (turi_is_error(fields[i]) || env->returning || env->throwing)
                 return fields[i];
         }
-        const char *sname = e->as.make_struct_.def
-                            ? e->as.make_struct_.def->name : "<struct>";
-        return make_struct_val(sname, n, fields);
+        StructDef *sdef = e->as.make_struct_.def;
+        const char *sname = sdef ? sdef->name : "<struct>";
+        return make_struct_val_def(sname, n, fields, sdef);
     }
 
     case EX_SET_LIT: {
