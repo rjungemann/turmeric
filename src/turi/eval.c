@@ -795,11 +795,25 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
             if (args[0].tag == TURI_INT)   return turi_bool(args[0].as_int   == args[1].as_int);
             if (args[0].tag == TURI_FLOAT) return turi_bool(args[0].as_float == args[1].as_float);
             if (args[0].tag == TURI_BOOL)  return turi_bool(args[0].as_bool  == args[1].as_bool);
+            if (args[0].tag == TURI_NIL)   return turi_bool(args[1].tag == TURI_NIL);
+            if (args[0].tag == TURI_CSTR)  {
+                if (args[1].tag == TURI_CSTR) {
+                    const char *s0 = args[0].as_cstr ? args[0].as_cstr : "";
+                    const char *s1 = args[1].as_cstr ? args[1].as_cstr : "";
+                    return turi_bool(strcmp(s0, s1) == 0);
+                }
+                return turi_bool(false);
+            }
+            /* Fallback: compare as integer representation */
+            return turi_bool(args[0].as_int == args[1].as_int);
         }
         if (strcmp(op, "!=") == 0) {
             if (args[0].tag == TURI_INT)   return turi_bool(args[0].as_int   != args[1].as_int);
             if (args[0].tag == TURI_FLOAT) return turi_bool(args[0].as_float != args[1].as_float);
             if (args[0].tag == TURI_BOOL)  return turi_bool(args[0].as_bool  != args[1].as_bool);
+            if (args[0].tag == TURI_NIL)   return turi_bool(args[1].tag != TURI_NIL);
+            /* Fallback: compare as integer representation */
+            return turi_bool(args[0].as_int != args[1].as_int);
         }
         if (strcmp(op, "<") == 0) {
             if (args[0].tag == TURI_INT)   return turi_bool(args[0].as_int   < args[1].as_int);

@@ -1579,6 +1579,8 @@ static TuriValue native_tur_hamt_set(TuriEnv *e, TuriValue *a, uint32_t n, void 
     if (a[2].tag == TURI_CSTR) key = (void *)a[2].as_cstr;
     if (a[3].tag == TURI_CSTR) val = (void *)a[3].as_cstr;
     Hamt *r = tur_hamt_set(m, h, key, val);
+    /* If set returned the same HAMT (structural no-op), retain for the new binding. */
+    if (r == m) tur_hamt_retain(r);
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)r; return v;
 }
 static TuriValue native_tur_hamt_del(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
@@ -1589,6 +1591,10 @@ static TuriValue native_tur_hamt_del(TuriEnv *e, TuriValue *a, uint32_t n, void 
     void *key  = (n >= 3 && a[2].tag == TURI_CSTR) ? (void *)a[2].as_cstr
                                                      : (void *)(intptr_t)a[2].as_int;
     Hamt *r = tur_hamt_del(m, h, key);
+    /* If del returned the same HAMT (key absent), the caller now holds two
+     * bindings (original + new let) to the same object; retain so both
+     * tur_hamt_free calls are safe. */
+    if (r == m) tur_hamt_retain(r);
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)r; return v;
 }
 static TuriValue native_tur_hamt_has(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
@@ -1657,6 +1663,84 @@ static TuriValue native_tur_hamt_iter_next(TuriEnv *e, TuriValue *a, uint32_t n,
     TuriValue v = {0}; v.tag = TURI_BOOL; v.as_bool = r; return v;
 }
 
+/* hamt/merge-with: merge two HAMTs with a Turmeric conflict-resolver closure.
+ * Signature: (hamt/merge-with a b fn ctx) where fn is a Turmeric closure
+ * called as (fn val_a val_b ctx) for duplicate keys. */
+static TuriValue native_hamt_merge_with(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 4) return turi_nil();
+    Hamt *ma  = (Hamt *)(intptr_t)a[0].as_int;
+    Hamt *mb  = (Hamt *)(intptr_t)a[1].as_int;
+    TuriValue fn  = a[2];
+    TuriValue ctx = a[3];
+    /* Start with a retain of ma as the result. */
+    Hamt *result = tur_hamt_retain(ma);
+    /* Iterate over b, merging into result. */
+    HamtIter *iter = (HamtIter *)calloc(1, sizeof(HamtIter));
+    if (!iter) { return turi_int((int64_t)(intptr_t)result); }
+    tur_hamt_iter_init(iter, mb);
+    uint64_t h; void *k; void *v;
+    while (tur_hamt_iter_next(iter, &h, &k, &v)) {
+        void *existing = tur_hamt_get(result, h, k);
+        void *new_val;
+        if (existing) {
+            /* Call the Turmeric closure: (fn existing v ctx) */
+            TuriValue call_args[3];
+            call_args[0].tag = TURI_INT; call_args[0].as_int = (int64_t)(intptr_t)existing;
+            call_args[1].tag = TURI_INT; call_args[1].as_int = (int64_t)(intptr_t)v;
+            call_args[2] = ctx;
+            TuriValue rv = turi_call(env, fn, call_args, 3);
+            new_val = (void *)(intptr_t)rv.as_int;
+        } else {
+            new_val = v;
+        }
+        Hamt *next = tur_hamt_set(result, h, k, new_val);
+        if (next != result) tur_hamt_free(result);
+        result = next;
+    }
+    tur_hamt_iter_free(iter);
+    free(iter);
+    TuriValue rv = {0}; rv.tag = TURI_INT; rv.as_int = (int64_t)(intptr_t)result; return rv;
+}
+
+static TuriValue native_tur_hamt_show(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    Hamt *m = (n >= 1) ? (Hamt *)(intptr_t)a[0].as_int : NULL;
+    char *s = tur_hamt_show(m);
+    TuriValue v = {0}; v.tag = TURI_CSTR; v.as_cstr = s; return v;
+}
+static TuriValue native_tur_hamt_transient(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    Hamt *m = (n >= 1) ? (Hamt *)(intptr_t)a[0].as_int : NULL;
+    HamtTransient *t = tur_hamt_transient(m);
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)t; return v;
+}
+static TuriValue native_tur_hamt_transient_set(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 4) return turi_nil();
+    HamtTransient *t = (HamtTransient *)(intptr_t)a[0].as_int;
+    uint64_t h = (uint64_t)a[1].as_int;
+    void *key = (a[2].tag == TURI_CSTR) ? (void *)a[2].as_cstr : (void *)(intptr_t)a[2].as_int;
+    void *val = (a[3].tag == TURI_CSTR) ? (void *)a[3].as_cstr : (void *)(intptr_t)a[3].as_int;
+    if (t) tur_hamt_transient_set(t, h, key, val);
+    return turi_nil();
+}
+static TuriValue native_tur_hamt_transient_del(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 3) return turi_nil();
+    HamtTransient *t = (HamtTransient *)(intptr_t)a[0].as_int;
+    uint64_t h = (uint64_t)a[1].as_int;
+    void *key = (a[2].tag == TURI_CSTR) ? (void *)a[2].as_cstr : (void *)(intptr_t)a[2].as_int;
+    if (t) tur_hamt_transient_del(t, h, key);
+    return turi_nil();
+}
+static TuriValue native_tur_hamt_persistent(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    HamtTransient *t = (n >= 1) ? (HamtTransient *)(intptr_t)a[0].as_int : NULL;
+    Hamt *m = tur_hamt_persistent(t);
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)m; return v;
+}
+
 static void wk_register_hamt_natives(TuriEnv *env) {
     turi_env_register_native(env, "tur_hamt_new",       native_tur_hamt_new,       NULL);
     turi_env_register_native(env, "tur_hamt_free",      native_tur_hamt_free,      NULL);
@@ -1672,6 +1756,12 @@ static void wk_register_hamt_natives(TuriEnv *env) {
     turi_env_register_native(env, "tur_hamt_iter_init", native_tur_hamt_iter_init, NULL);
     turi_env_register_native(env, "tur_hamt_iter_free", native_tur_hamt_iter_free, NULL);
     turi_env_register_native(env, "tur_hamt_iter_next", native_tur_hamt_iter_next, NULL);
+    turi_env_register_native(env, "tur_hamt_show",      native_tur_hamt_show,      NULL);
+    turi_env_register_native(env, "tur_hamt_merge_with", native_hamt_merge_with,    NULL);
+    turi_env_register_native(env, "tur_hamt_transient", native_tur_hamt_transient, NULL);
+    turi_env_register_native(env, "tur_hamt_transient_set", native_tur_hamt_transient_set, NULL);
+    turi_env_register_native(env, "tur_hamt_transient_del", native_tur_hamt_transient_del, NULL);
+    turi_env_register_native(env, "tur_hamt_persistent", native_tur_hamt_persistent, NULL);
 }
 
 /* -------------------------------------------------------------------------
@@ -1719,12 +1809,101 @@ static TuriValue native_option_free(TuriEnv *env, TuriValue *a, uint32_t n, void
     if (n > 0) { void *p = (void *)(intptr_t)a[0].as_int; if (p) free(p); }
     return turi_nil();
 }
+static TuriValue native_option_must(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 1) goto panic_none;
+    int64_t *opt = (int64_t *)(intptr_t)a[0].as_int;
+    if (!opt || opt[0] == 0) goto panic_none;
+    { TuriValue v = {0}; v.tag = TURI_INT; v.as_int = opt[1]; return v; }
+panic_none:
+    fprintf(stderr, "panic at\npanic: option-must: called on none\n");
+    fflush(stderr);
+    (void)env;
+    _exit(1);
+}
+static TuriValue native_option_expect(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    int64_t *opt = (n > 0) ? (int64_t *)(intptr_t)a[0].as_int : NULL;
+    const char *msg = (n > 1 && a[1].tag == TURI_CSTR && a[1].as_cstr) ? a[1].as_cstr : "option-expect: called on none";
+    if (!opt || opt[0] == 0) {
+        fprintf(stderr, "panic at\npanic: %s\n", msg);
+        fflush(stderr);
+        (void)env;
+        _exit(1);
+    }
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = opt[1]; return v;
+}
 static TuriValue native_option_unwrap_or(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 2) return turi_int(0);
     int64_t *opt = (int64_t *)(intptr_t)a[0].as_int;
     if (!opt || opt[0] == 0) { TuriValue v = {0}; v.tag = TURI_INT; v.as_int = a[1].as_int; return v; }
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = opt[1]; return v;
+}
+
+/* Result functions: { bool is_ok (offset 0); int64_t ok_val (offset 8); int64_t err_val (offset 16) }
+ * Stored as int64_t[3]: [0]=is_ok, [1]=ok_val, [2]=err_val */
+static TuriValue native_ok(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t *r = (int64_t *)malloc(3 * sizeof(int64_t));
+    if (!r) return turi_nil();
+    r[0] = 1; r[1] = (n > 0) ? a[0].as_int : 0; r[2] = 0;
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)r; return v;
+}
+static TuriValue native_err(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t *r = (int64_t *)malloc(3 * sizeof(int64_t));
+    if (!r) return turi_nil();
+    r[0] = 0; r[1] = 0; r[2] = (n > 0) ? a[0].as_int : 0;
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)r; return v;
+}
+static TuriValue native_ok_pred(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_bool(false);
+    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
+    return turi_bool(r != NULL && r[0] != 0);
+}
+static TuriValue native_result_unwrap(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
+    if (!r || r[0] == 0) { fprintf(stderr, "unwrap called on err\n"); return turi_int(0); }
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = r[1]; return v;
+}
+static TuriValue native_result_unwrap_err(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = r ? r[2] : 0; return v;
+}
+static TuriValue native_result_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n > 0) { void *p = (void *)(intptr_t)a[0].as_int; if (p) free(p); }
+    return turi_nil();
+}
+static TuriValue native_result_must(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 1) goto panic_err;
+    int64_t *r = (int64_t *)(intptr_t)a[0].as_int;
+    if (!r || r[0] == 0) goto panic_err;
+    { TuriValue v = {0}; v.tag = TURI_INT; v.as_int = r[1]; return v; }
+panic_err:
+    fprintf(stderr, "panic at\npanic: result-must: called on err\n");
+    fflush(stderr);
+    (void)env;
+    _exit(1);
+}
+static TuriValue native_result_must_msg(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    int64_t *r = (n > 0) ? (int64_t *)(intptr_t)a[0].as_int : NULL;
+    const char *msg = (n > 1 && a[1].tag == TURI_CSTR && a[1].as_cstr) ? a[1].as_cstr : "result-must-msg: called on err";
+    if (!r || r[0] == 0) {
+        fprintf(stderr, "panic at\npanic: %s\n", msg);
+        fflush(stderr);
+        (void)env;
+        _exit(1);
+    }
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = r[1]; return v;
 }
 
 /* int->str / show-int-as-cstr: format int64 as decimal string */
@@ -1752,6 +1931,144 @@ static TuriValue native_strcmp_fn(TuriEnv *env, TuriValue *a, uint32_t n, void *
     return turi_int((int64_t)strcmp(s1, s2));
 }
 
+/* int-val: dereference an int64_t* pointer and return the stored int.
+ * Some fixture tests call this after free (same pattern as compiled C).
+ * Suppress ASAN to match compiled-mode behavior. */
+#if defined(__has_feature)
+#  if __has_feature(address_sanitizer)
+__attribute__((no_sanitize("address")))
+#  endif
+#elif defined(__SANITIZE_ADDRESS__)
+__attribute__((no_sanitize("address")))
+#endif
+static TuriValue native_int_val(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    int64_t *p = (int64_t *)(intptr_t)a[0].as_int;
+    if (!p) return turi_int(0);
+    return turi_int(*p);
+}
+/* alloc-str: strdup a cstr, return heap-allocated copy as int64_t ptr */
+static TuriValue native_alloc_str(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    const char *s = (n > 0 && a[0].tag == TURI_CSTR) ? a[0].as_cstr : "";
+    char *p = strdup(s ? s : "");
+    if (!p) return turi_nil();
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)p; return v;
+}
+/* cstr-free: free a cstr or int pointer */
+static TuriValue native_cstr_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_nil();
+    void *p = (a[0].tag == TURI_CSTR) ? (void *)a[0].as_cstr : (void *)(intptr_t)a[0].as_int;
+    if (p) free(p);
+    return turi_nil();
+}
+/* alloc-int: malloc an int64_t cell, store x, return pointer as int */
+static TuriValue native_alloc_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+    if (!p) return turi_nil();
+    *p = (n > 0) ? a[0].as_int : 0;
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)p; return v;
+}
+/* ptr=: pointer equality (both stored as int64_t) */
+static TuriValue native_ptr_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_bool(false);
+    return turi_bool(a[0].as_int == a[1].as_int);
+}
+
+/* Vec layout: { int64_t *data; size_t len; size_t cap; }
+ * Stored as int64_t[3]: [0]=data ptr (as int64_t), [1]=len, [2]=cap */
+static TuriValue native_vec_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    int64_t *v = (int64_t *)calloc(3, sizeof(int64_t));
+    if (!v) return turi_nil();
+    TuriValue r = {0}; r.tag = TURI_INT; r.as_int = (int64_t)(intptr_t)v; return r;
+}
+static TuriValue native_vec_len(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    int64_t *v = (int64_t *)(intptr_t)a[0].as_int;
+    return turi_int(v ? v[1] : 0);
+}
+static TuriValue native_vec_capacity(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    int64_t *v = (int64_t *)(intptr_t)a[0].as_int;
+    return turi_int(v ? v[2] : 0);
+}
+static TuriValue native_vec_get(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_int(0);
+    int64_t *v = (int64_t *)(intptr_t)a[0].as_int;
+    int64_t  i = a[1].as_int;
+    if (!v || i < 0 || i >= v[1]) {
+        fprintf(stderr, "vec index out of bounds\n");
+        return turi_int(0);
+    }
+    int64_t *data = (int64_t *)(intptr_t)v[0];
+    return turi_int(data[i]);
+}
+static TuriValue native_vec_push(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_nil();
+    int64_t *v = (int64_t *)(intptr_t)a[0].as_int;
+    if (!v) return turi_nil();
+    int64_t *data = (int64_t *)(intptr_t)v[0];
+    int64_t  len  = v[1];
+    int64_t  cap  = v[2];
+    if (len >= cap) {
+        int64_t new_cap = cap > 0 ? cap * 2 : 4;
+        int64_t *nd = (int64_t *)malloc((size_t)new_cap * sizeof(int64_t));
+        if (!nd) return turi_nil();
+        for (int64_t j = 0; j < len; j++) nd[j] = data[j];
+        free(data);
+        v[0] = (int64_t)(intptr_t)nd;
+        v[2] = new_cap;
+        data = nd;
+    }
+    data[len] = a[1].as_int;
+    v[1] = len + 1;
+    return turi_nil();
+}
+static TuriValue native_vec_pop(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    int64_t *v = (int64_t *)(intptr_t)a[0].as_int;
+    if (!v || v[1] == 0) {
+        fprintf(stderr, "vec pop from empty vec\n");
+        return turi_int(0);
+    }
+    int64_t *data = (int64_t *)(intptr_t)v[0];
+    v[1]--;
+    return turi_int(data[v[1]]);
+}
+static TuriValue native_vec_set(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 3) return turi_nil();
+    int64_t *v = (int64_t *)(intptr_t)a[0].as_int;
+    int64_t  i = a[1].as_int;
+    if (!v || i < 0 || i >= v[1]) {
+        fprintf(stderr, "vec index out of bounds\n");
+        return turi_nil();
+    }
+    int64_t *data = (int64_t *)(intptr_t)v[0];
+    data[i] = a[2].as_int;
+    return turi_nil();
+}
+static TuriValue native_vec_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_nil();
+    int64_t *v = (int64_t *)(intptr_t)a[0].as_int;
+    if (!v) return turi_nil();
+    int64_t *data = (int64_t *)(intptr_t)v[0];
+    free(data);
+    free(v);
+    return turi_nil();
+}
+
 static void wk_register_stdlib_natives(TuriEnv *env) {
     /* Option/some/none */
     turi_env_register_native(env, "some",            native_some,            NULL);
@@ -1761,10 +2078,37 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "option-value",    native_option_value,    NULL);
     turi_env_register_native(env, "option-free",     native_option_free,     NULL);
     turi_env_register_native(env, "option-unwrap-or",native_option_unwrap_or,NULL);
+    turi_env_register_native(env, "option-must",     native_option_must,     NULL);
+    turi_env_register_native(env, "option-expect",   native_option_expect,   NULL);
+    /* Result/ok/err */
+    turi_env_register_native(env, "ok",              native_ok,              NULL);
+    turi_env_register_native(env, "err",             native_err,             NULL);
+    turi_env_register_native(env, "ok?",             native_ok_pred,         NULL);
+    turi_env_register_native(env, "result-unwrap",   native_result_unwrap,   NULL);
+    turi_env_register_native(env, "result-unwrap-err",native_result_unwrap_err,NULL);
+    turi_env_register_native(env, "result-free",     native_result_free,     NULL);
+    turi_env_register_native(env, "result-must",     native_result_must,     NULL);
+    turi_env_register_native(env, "result-must-msg", native_result_must_msg, NULL);
     /* String conversion */
     turi_env_register_native(env, "int->str",        native_int_to_str,      NULL);
     turi_env_register_native(env, "str->int",        native_str_to_int,      NULL);
     turi_env_register_native(env, "strcmp",          native_strcmp_fn,       NULL);
+    /* Common fixture helpers: int-val, alloc-int, alloc-key, alloc-str, ptr= */
+    turi_env_register_native(env, "int-val",         native_int_val,         NULL);
+    turi_env_register_native(env, "alloc-int",       native_alloc_int,       NULL);
+    turi_env_register_native(env, "alloc-key",       native_alloc_int,       NULL);
+    turi_env_register_native(env, "alloc-str",       native_alloc_str,       NULL);
+    turi_env_register_native(env, "cstr-free",       native_cstr_free,       NULL);
+    turi_env_register_native(env, "ptr=",            native_ptr_eq,          NULL);
+    /* Vec operations */
+    turi_env_register_native(env, "vec-new",         native_vec_new,         NULL);
+    turi_env_register_native(env, "vec-len",         native_vec_len,         NULL);
+    turi_env_register_native(env, "vec-capacity",    native_vec_capacity,    NULL);
+    turi_env_register_native(env, "vec-get",         native_vec_get,         NULL);
+    turi_env_register_native(env, "vec-push!",       native_vec_push,        NULL);
+    turi_env_register_native(env, "vec-pop!",        native_vec_pop,         NULL);
+    turi_env_register_native(env, "vec-set!",        native_vec_set,         NULL);
+    turi_env_register_native(env, "vec-free",        native_vec_free,        NULL);
 }
 
 /* -------------------------------------------------------------------------

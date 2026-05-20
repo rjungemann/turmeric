@@ -262,7 +262,7 @@ static void node_free_recursive(HamtNode *n) {
         case HAMT_NODE_BITMAP: {
             uint32_t bitmap = n->as.bitmap.bitmap;
             for (uint32_t i = 0; i < 32; i++) {
-                if (bitmap & (1 << i)) {
+                if (bitmap & (UINT32_C(1) << i)) {
                     uint32_t child_idx = 0;
                     uint32_t mask = 1;
                     for (uint32_t j = 0; j < i; j++, mask <<= 1) {
@@ -374,7 +374,7 @@ static HamtNode *node_insert(HamtNode *n, uint64_t hash, void *key, void *val,
         case HAMT_NODE_BITMAP: {
             uint32_t bitmap = n->as.bitmap.bitmap;
 
-            bool has_child = (bitmap & (1 << chunk)) != 0;
+            bool has_child = (bitmap & (UINT32_C(1) << chunk)) != 0;
 
             if (has_child) {
                 uint32_t idx = 0;
@@ -396,13 +396,13 @@ static HamtNode *node_insert(HamtNode *n, uint64_t hash, void *key, void *val,
                 new_node->as.bitmap.children[idx] = new_child;
                 return new_node;
             } else {
-                uint32_t new_bitmap = bitmap | (1 << chunk);
+                uint32_t new_bitmap = bitmap | (UINT32_C(1) << chunk);
                 HamtNode *new_node = bitmap_node_create(new_bitmap);
 
                 uint32_t new_idx = 0;
                 uint32_t pos = 0;
                 for (uint32_t i = 0; i < 32; i++) {
-                    if (bitmap & (1 << i)) {
+                    if (bitmap & (UINT32_C(1) << i)) {
                         new_node->as.bitmap.children[new_idx] = n->as.bitmap.children[pos];
                         tur_hamt_node_retain(new_node->as.bitmap.children[new_idx]);
                         new_idx++;
@@ -440,7 +440,7 @@ static HamtNode *node_insert(HamtNode *n, uint64_t hash, void *key, void *val,
 
             if (existing_chunk != chunk) {
                 /* Different slot at this level — expand into a bitmap node. */
-                uint32_t new_bitmap = (1 << existing_chunk) | (1 << chunk);
+                uint32_t new_bitmap = (UINT32_C(1) << existing_chunk) | (UINT32_C(1) << chunk);
 
                 HamtNode *new_node = bitmap_node_create(new_bitmap);
 
@@ -523,7 +523,7 @@ static HamtNode *node_delete(HamtNode *n, uint64_t hash, void *key, uint32_t lev
         case HAMT_NODE_BITMAP: {
             uint32_t bitmap = n->as.bitmap.bitmap;
 
-            if (!(bitmap & (1 << chunk))) {
+            if (!(bitmap & (UINT32_C(1) << chunk))) {
                 return n;
             }
 
@@ -541,7 +541,7 @@ static HamtNode *node_delete(HamtNode *n, uint64_t hash, void *key, uint32_t lev
 
             if (!new_child) {
                 tur_hamt_node_release(n->as.bitmap.children[idx]);
-                uint32_t new_bitmap = bitmap & ~(1 << chunk);
+                uint32_t new_bitmap = bitmap & ~(UINT32_C(1) << chunk);
                 uint32_t new_child_count = popcount32(new_bitmap);
 
                 if (new_child_count == 0) {
@@ -552,7 +552,7 @@ static HamtNode *node_delete(HamtNode *n, uint64_t hash, void *key, uint32_t lev
                 uint32_t old_idx = 0;
                 uint32_t new_idx = 0;
                 for (uint32_t i = 0; i < 32; i++) {
-                    if (bitmap & (1 << i)) {
+                    if (bitmap & (UINT32_C(1) << i)) {
                         if (i == chunk) {
                             old_idx++;
                         } else {
@@ -655,7 +655,7 @@ static void *node_get(HamtNode *n, uint64_t hash, void *key, uint32_t level) {
         case HAMT_NODE_BITMAP: {
             uint32_t bitmap = n->as.bitmap.bitmap;
 
-            if (!(bitmap & (1 << chunk))) {
+            if (!(bitmap & (UINT32_C(1) << chunk))) {
                 return NULL;
             }
 
@@ -696,7 +696,7 @@ static bool node_has(HamtNode *n, uint64_t hash, void *key, uint32_t level) {
         case HAMT_NODE_BITMAP: {
             uint32_t bitmap = n->as.bitmap.bitmap;
 
-            if (!(bitmap & (1 << chunk))) {
+            if (!(bitmap & (UINT32_C(1) << chunk))) {
                 return false;
             }
 
@@ -1047,7 +1047,7 @@ static void dump_node(HamtNode *n, FILE *out, int indent) {
             fprintf(out, "BitmapNode (bitmap=0x%08X, children=%u, refs=%u)\n",
                     bitmap, child_count, n->ref_count);
             for (uint32_t i = 0; i < 32; i++) {
-                if (bitmap & (1 << i)) {
+                if (bitmap & (UINT32_C(1) << i)) {
                     uint32_t child_idx = 0;
                     uint32_t mask = 1;
                     for (uint32_t j = 0; j < i; j++, mask <<= 1) {
