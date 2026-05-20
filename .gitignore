@@ -1,5 +1,6 @@
 build/
 build2/
+build-debug/
 build-norel/
 build-rel/
 build-tsan/
