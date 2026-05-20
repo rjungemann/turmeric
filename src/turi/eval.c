@@ -187,12 +187,34 @@ static TuriValue native_extern_getenv(TuriEnv *env, TuriValue *args, uint32_t n,
     return turi_nil();
 }
 
+/* printf: supports one argument (%lld for int, %s for cstr, %f/%g for float). */
+static TuriValue native_extern_printf(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || args[0].tag != TURI_CSTR || !args[0].as_cstr) return turi_int(0);
+    const char *fmt = args[0].as_cstr;
+    int ret = 0;
+    if (n >= 2) {
+        TuriValue arg = args[1];
+        if (arg.tag == TURI_CSTR)
+            ret = printf(fmt, arg.as_cstr);
+        else if (arg.tag == TURI_FLOAT)
+            ret = printf(fmt, arg.as_float);
+        else
+            ret = printf(fmt, (long long)arg.as_int);
+    } else {
+        ret = printf("%s", fmt);
+    }
+    return turi_int((int64_t)ret);
+}
+
 static void register_extern_c_known(TuriEnv *env, const char *fname) {
     struct { const char *name; TuriNativeFn fn; } known[] = {
-        { "exit",   native_extern_exit   },
-        { "free",   native_extern_free   },
-        { "strlen", native_extern_strlen },
-        { "getenv", native_extern_getenv },
+        { "exit",     native_extern_exit     },
+        { "free",     native_extern_free     },
+        { "strlen",   native_extern_strlen   },
+        { "getenv",   native_extern_getenv   },
+        { "printf",   native_extern_printf   },
+        { "printf_s", native_extern_printf   },
         { NULL, NULL }
     };
     for (int i = 0; known[i].name; i++) {
@@ -958,6 +980,19 @@ static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
                            (unsigned)effective_params, (unsigned)n_args);
     }
 
+    /* If the function body is inline-C, check if a native override was registered
+     * under the function's binding name. This allows the worker to override
+     * stdlib functions whose inline-C bodies would otherwise return nil. */
+    if (fn->body && fn->body->kind == EX_INLINE_C && fn->binding) {
+        const char *fname = fn->binding->name->name;
+        TuriValue native_v = turi_env_get(env, fname);
+        if (native_v.tag == TURI_CLOSURE && native_v.as_closure &&
+            native_v.as_closure->native) {
+            return native_v.as_closure->native(env, args, n_args,
+                                               native_v.as_closure->native_ud);
+        }
+    }
+
     /* Build call frame on top of the captured environment */
     EvalFrame *call_frame = eval_frame_new((EvalFrame *)cl->captured);
     for (uint32_t i = 0; i < n_args; i++) {
@@ -1149,12 +1184,23 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     /* --- Named function definition (defn) -------------------------------- */
     case EX_FN_DEF: {
+        FnDef *fndef = e->as.fn_def_.fn;
+        /* If the body is inline-C and a native override is already registered,
+         * keep the native rather than overwriting it with the inline-C closure. */
+        if (fndef->body && fndef->body->kind == EX_INLINE_C) {
+            const char *fname = fndef->binding->name->name;
+            TuriValue existing = turi_env_get(env, fname);
+            if (existing.tag == TURI_CLOSURE && existing.as_closure &&
+                existing.as_closure->native) {
+                return existing; /* keep native override */
+            }
+        }
         TuriClosure *cl = (TuriClosure *)malloc(sizeof(TuriClosure));
         memset(cl, 0, sizeof(*cl)); /* zero native/skip_env_param/native_ud */
-        cl->fn       = e->as.fn_def_.fn;
+        cl->fn       = fndef;
         cl->captured = NULL; /* top-level defn has no captured environment */
         TuriValue v  = turi_closure(cl);
-        turi_env_set(env, e->as.fn_def_.fn->binding->name->name, v);
+        turi_env_set(env, fndef->binding->name->name, v);
         return v;
     }
 
@@ -2045,6 +2091,10 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         }
         return turi_cstr(tname);
     }
+
+    /* serial-reset: without serial-shift inside, just evaluate body and return. */
+    case EX_SERIAL_RESET:
+        return eval_expr(env, frame, e->as.serial_reset_.body);
 
     /* --- Everything else — silently return nil --------------------------- */
     default:

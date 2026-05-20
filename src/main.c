@@ -1675,6 +1675,99 @@ static void wk_register_hamt_natives(TuriEnv *env) {
 }
 
 /* -------------------------------------------------------------------------
+ * Native implementations of common inline-C stdlib patterns.
+ * Registered under their Turmeric function names; EX_FN_DEF preservation
+ * keeps them when fixtures define the same function with inline-C body.
+ *
+ * Option struct layout: { bool is_some (offset 0); int64_t value (offset 8) }
+ * Matching C struct { bool; int64_t } with 7-byte padding.
+ * We represent this as int64_t[2]: [0]=is_some flag, [1]=value.
+ * ---------------------------------------------------------------------- */
+
+/* Option functions */
+static TuriValue native_some(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t *opt = (int64_t *)malloc(2 * sizeof(int64_t));
+    if (!opt) return turi_nil();
+    opt[0] = 1; /* is_some = true */
+    opt[1] = (n > 0) ? a[0].as_int : 0;
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)opt;
+    return v;
+}
+static TuriValue native_none(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    return turi_int(0); /* NULL pointer */
+}
+static TuriValue native_some_pred(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_bool(false);
+    int64_t *opt = (int64_t *)(intptr_t)a[0].as_int;
+    return turi_bool(opt != NULL && opt[0] != 0);
+}
+static TuriValue native_option_unwrap(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    int64_t *opt = (int64_t *)(intptr_t)a[0].as_int;
+    if (!opt || opt[0] == 0) { fprintf(stderr, "unwrap called on none\n"); return turi_int(0); }
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = opt[1]; return v;
+}
+static TuriValue native_option_value(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    return native_option_unwrap(env, a, n, ud);
+}
+static TuriValue native_option_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n > 0) { void *p = (void *)(intptr_t)a[0].as_int; if (p) free(p); }
+    return turi_nil();
+}
+static TuriValue native_option_unwrap_or(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_int(0);
+    int64_t *opt = (int64_t *)(intptr_t)a[0].as_int;
+    if (!opt || opt[0] == 0) { TuriValue v = {0}; v.tag = TURI_INT; v.as_int = a[1].as_int; return v; }
+    TuriValue v = {0}; v.tag = TURI_INT; v.as_int = opt[1]; return v;
+}
+
+/* int->str / show-int-as-cstr: format int64 as decimal string */
+static TuriValue native_int_to_str(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t v = (n > 0) ? a[0].as_int : 0;
+    char *buf = (char *)malloc(32);
+    if (!buf) return turi_nil();
+    snprintf(buf, 32, "%lld", (long long)v);
+    return turi_cstr(buf);
+}
+
+/* str->int: parse decimal string to int64 */
+static TuriValue native_str_to_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || a[0].tag != TURI_CSTR || !a[0].as_cstr) return turi_int(0);
+    return turi_int((int64_t)atoll(a[0].as_cstr));
+}
+
+/* strcmp: compare two cstr values */
+static TuriValue native_strcmp_fn(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    const char *s1 = (n > 0 && a[0].tag == TURI_CSTR) ? a[0].as_cstr : "";
+    const char *s2 = (n > 1 && a[1].tag == TURI_CSTR) ? a[1].as_cstr : "";
+    return turi_int((int64_t)strcmp(s1, s2));
+}
+
+static void wk_register_stdlib_natives(TuriEnv *env) {
+    /* Option/some/none */
+    turi_env_register_native(env, "some",            native_some,            NULL);
+    turi_env_register_native(env, "none",            native_none,            NULL);
+    turi_env_register_native(env, "some?",           native_some_pred,       NULL);
+    turi_env_register_native(env, "option-unwrap",   native_option_unwrap,   NULL);
+    turi_env_register_native(env, "option-value",    native_option_value,    NULL);
+    turi_env_register_native(env, "option-free",     native_option_free,     NULL);
+    turi_env_register_native(env, "option-unwrap-or",native_option_unwrap_or,NULL);
+    /* String conversion */
+    turi_env_register_native(env, "int->str",        native_int_to_str,      NULL);
+    turi_env_register_native(env, "str->int",        native_str_to_int,      NULL);
+    turi_env_register_native(env, "strcmp",          native_strcmp_fn,       NULL);
+}
+
+/* -------------------------------------------------------------------------
  * Native implementations of safe.tur stdlib functions (inline-C bodies).
  * These allow safe.tur functions to run correctly in interpreter mode.
  * ---------------------------------------------------------------------- */
@@ -1740,6 +1833,61 @@ static void wk_register_safe_natives(TuriEnv *env) {
     turi_env_register_native(env, "array-set",   native_safe_array_set, NULL);
     turi_env_register_native(env, "box",         native_safe_box,       NULL);
     turi_env_register_native(env, "unbox",       native_safe_unbox,     NULL);
+}
+
+/* -------------------------------------------------------------------------
+ * Native overrides for typeclass instance methods with inline-C bodies.
+ * These are registered under the elaborator-generated C binding names
+ * (e.g. __inst_Show_show_int) so that eval_apply can find them when a
+ * function has an EX_INLINE_C body.
+ * ---------------------------------------------------------------------- */
+
+/* Show [int].show: format int64 as decimal string */
+static TuriValue native_show_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t v = (n > 0) ? a[0].as_int : 0;
+    char *buf = (char *)malloc(32);
+    if (!buf) return turi_nil();
+    snprintf(buf, 32, "%lld", (long long)v);
+    /* Note: this leaks 'buf'. Acceptable for interpreter mode. */
+    return turi_cstr(buf);
+}
+
+/* Show [float].show / Show [bool].show / Show [cstr].show */
+static TuriValue native_show_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double v = (n > 0 && a[0].tag == TURI_FLOAT) ? a[0].as_float : 0.0;
+    char *buf = (char *)malloc(64);
+    if (!buf) return turi_nil();
+    snprintf(buf, 64, "%g", v);
+    return turi_cstr(buf);
+}
+static TuriValue native_show_bool(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    bool v = (n > 0 && a[0].tag == TURI_BOOL) ? a[0].as_bool : false;
+    return turi_cstr(v ? "true" : "false");
+}
+static TuriValue native_show_cstr(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return (n > 0 && a[0].tag == TURI_CSTR) ? a[0] : turi_nil();
+}
+
+/* show-float: standalone show function for floats (used in show-float fixture) */
+static TuriValue native_show_float_fn(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    return native_show_float(env, a, n, ud);
+}
+
+static void wk_register_typeclass_natives(TuriEnv *env) {
+    /* Show typeclass instances */
+    turi_env_register_native(env, "__inst_Show_show_int",   native_show_int,   NULL);
+    turi_env_register_native(env, "__inst_Show_show_float", native_show_float, NULL);
+    /* TY_FLOAT falls through to "T" suffix in the elaborator's type suffix builder */
+    turi_env_register_native(env, "__inst_Show_show_T",     native_show_float, NULL);
+    turi_env_register_native(env, "__inst_Show_show_bool",  native_show_bool,  NULL);
+    turi_env_register_native(env, "__inst_Show_show_cstr",  native_show_cstr,  NULL);
+    /* Standalone show helpers used in some fixtures */
+    turi_env_register_native(env, "show-float", native_show_float_fn, NULL);
+    turi_env_register_native(env, "show-int",   native_show_int,      NULL);
 }
 
 /* Native implementation of tur-contract-check (bool * cstr -> void).
@@ -1875,6 +2023,10 @@ static int wk_eval_fixture(const char *input, const char *flags_str,
         wk_register_hamt_natives(env);
         /* Register native safe.tur stdlib implementations. */
         wk_register_safe_natives(env);
+        /* Register native overrides for typeclass instance methods with inline-C bodies. */
+        wk_register_typeclass_natives(env);
+        /* Register native overrides for common stdlib inline-C patterns. */
+        wk_register_stdlib_natives(env);
         /* Set module_base_dir to the fixture directory so that (import ...)
          * forms resolve sibling .tur files correctly. */
         {
