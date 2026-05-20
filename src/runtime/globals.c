@@ -71,3 +71,6 @@ bool g_sessions_enabled = false;
 
 /* DV0: -Xdynamic-vars flag — enable dynamic var syntax and checking */
 bool g_dynvar_enabled = false;
+
+/* INT-2: --interpret mode — true when running tur --interpret. */
+bool g_interpret_mode = false;

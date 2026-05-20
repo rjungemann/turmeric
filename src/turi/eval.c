@@ -2298,6 +2298,24 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         if (n > MAX_EVAL_ARGS)
             return turi_errorf("eval: too many builtin arguments (%u)", n);
 
+        /* and/or must short-circuit before evaluating remaining args. */
+        if (e->as.builtin.spec->shape == BS_AND_SC) {
+            for (uint32_t i = 0; i < n; i++) {
+                TuriValue v = eval_expr(env, frame, e->as.builtin.args[i]);
+                if (turi_is_error(v) || env->returning || env->throwing) return v;
+                if (!turi_is_truthy(v)) return turi_bool(false);
+            }
+            return turi_bool(true);
+        }
+        if (e->as.builtin.spec->shape == BS_OR_SC) {
+            for (uint32_t i = 0; i < n; i++) {
+                TuriValue v = eval_expr(env, frame, e->as.builtin.args[i]);
+                if (turi_is_error(v) || env->returning || env->throwing) return v;
+                if (turi_is_truthy(v)) return turi_bool(true);
+            }
+            return turi_bool(false);
+        }
+
         for (uint32_t i = 0; i < n; i++) {
             args[i] = eval_expr(env, frame, e->as.builtin.args[i]);
             if (turi_is_error(args[i]) || env->returning || env->throwing) return args[i];

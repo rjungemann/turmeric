@@ -18,6 +18,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <math.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdio.h>
@@ -1441,14 +1442,86 @@ static int cmd_format(const char *path, bool check_only) {
     return rc;
 }
 
+static void wk_register_stdlib_natives(TuriEnv *env);
+
 /* Phase S0: tur repl — interactive read-eval-print loop. */
-/* Phase S0: run a .tur file through the tree-walking interpreter */
-static int cmd_eval(const char *path, bool use_color) {
+/* Phase INT-1: run a .tur file through the tree-walking interpreter.
+ * extra_argv/extra_argc are the arguments after the file path, exposed
+ * to the script as *args* (a cons-cell list of C-string pointers). */
+static int cmd_eval(const char *path, bool use_color,
+                    char **extra_argv, int extra_argc) {
+    g_interpret_mode = true;
     turi_init(use_color);
     TuriEnv *env = turi_env_new();
     if (!env) {
         fprintf(stderr, "tur: failed to create interpreter environment\n");
         return 1;
+    }
+    /* Preload macros.tur so that and/or/when/cond/for etc. are available.
+     * This is the minimum stdlib needed for any real Turmeric program to work. */
+    {
+        TuriValue sv = turi_eval_file(env, "stdlib/macros.tur");
+        (void)sv;
+    }
+    /* Inject typed stubs so the elaborator knows the signatures of native
+     * functions used by benchmark scripts.  The native shims registered below
+     * replace these no-op closures at runtime. */
+    {
+        TuriValue sv = turi_eval(env,
+            /* list operations */
+            "(defn nil-value [] :int 0)\n"
+            "(defn cons [v :int n :int] :int 0)\n"
+            "(defn head [lst :int] :int 0)\n"
+            "(defn tail [lst :int] :int 0)\n"
+            /* vec operations */
+            "(defn vec-new-filled [n :int v :int] :int 0)\n"
+            "(defn vec-get [v :int i :int] :int 0)\n"
+            "(defn vec-set! [v :int i :int x :int] :nil nil)\n"
+            "(defn vec-free [v :int] :nil nil)\n"
+            /* numeric helpers */
+            "(defn cstr->parse-int [s :int] :int 0)\n"
+            "(defn bit-shr [x :int n :int] :int 0)\n"
+            "(defn bit-xor [x :int y :int] :int 0)\n"
+            "(defn println-float [x :float d :int] :nil nil)\n"
+            "(defn int->unit-float [x :int] :float 0.0)\n"
+            "(defn tur-sqrt [x :float] :float 0.0)\n"
+            "(defn int->float [x :int] :float 0.0)\n"
+            /* HAMT operations for hash_map benchmark */
+            "(defn hamt-new [] :int 0)\n"
+            "(defn hamt-free [m :int] :nil nil)\n"
+            "(defn hamt-set [m :int hash :int key :int val :int] :int 0)\n"
+            "(defn hamt-get [m :int hash :int key :int] :int 0)\n"
+            "(defn hamt-hash-ptr [p :int] :int 0)\n"
+        );
+        (void)sv;
+    }
+    /* Register native overrides for stdlib inline-C functions. */
+    wk_register_stdlib_natives(env);
+    /* Build *args* as a cons-cell list of C-string pointers. */
+    {
+        typedef struct { int64_t value; int64_t next; } TurCons;
+        int64_t args_list = 0;
+        for (int i = extra_argc - 1; i >= 0; i--) {
+            TurCons *c = (TurCons *)malloc(sizeof(TurCons));
+            c->value = (int64_t)(intptr_t)extra_argv[i];
+            c->next  = args_list;
+            args_list = (int64_t)(intptr_t)c;
+        }
+        TuriValue args_val = {0};
+        args_val.tag    = TURI_INT;
+        args_val.as_int = args_list;
+        turi_env_set(env, "*args*", args_val);
+    }
+    /* Set module_base_dir so (import ...) resolves relative to the script. */
+    {
+        const char *slash = strrchr(path, '/');
+        if (slash) {
+            size_t dlen = (size_t)(slash - path);
+            char *dpath = (char *)malloc(dlen + 1);
+            memcpy(dpath, path, dlen);
+            dpath[dlen] = '\0';
+            env->module_base_dir = dpath;
+        }
     }
     TuriValue result = turi_eval_file(env, path);
     int rc = 0;
@@ -1460,6 +1533,14 @@ static int cmd_eval(const char *path, bool use_color) {
             fprintf(stderr, "tur: %s\n", msg);
         }
         rc = 1;
+    } else {
+        TuriValue main_fn = turi_env_get(env, "main");
+        if (main_fn.tag == TURI_CLOSURE) {
+            TuriValue r = turi_call(env, main_fn, NULL, 0);
+            if (r.tag == TURI_ERROR) rc = 1;
+            else if (r.tag == TURI_INT) rc = (int)r.as_int;
+        }
+        turi_run_pending_defers(env);
     }
     turi_env_free(env);
     return rc;
@@ -2389,6 +2470,106 @@ static TuriValue native_vec_free(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     return turi_nil();
 }
 
+/* nil-value: return 0 (empty list sentinel) */
+static TuriValue native_nil_value(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    return turi_int(0);
+}
+/* cons: allocate a new cons cell {value, next} and return pointer as int64 */
+static TuriValue native_cons(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t value = (n > 0) ? a[0].as_int : 0;
+    int64_t next  = (n > 1) ? a[1].as_int : 0;
+    int64_t *cell = (int64_t *)malloc(2 * sizeof(int64_t));
+    if (!cell) return turi_nil();
+    cell[0] = value; cell[1] = next;
+    return turi_int((int64_t)(intptr_t)cell);
+}
+/* tail: return the next pointer field of the first cons cell */
+static TuriValue native_list_tail(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_int(0);
+    int64_t *cell = (int64_t *)(intptr_t)a[0].as_int;
+    return turi_int(cell[1]);
+}
+/* list-nil?: true if the cons-cell pointer is 0 (empty list) */
+static TuriValue native_list_nil_pred(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    TuriValue rv = {0}; rv.tag = TURI_BOOL;
+    rv.as_bool = (n == 0 || a[0].as_int == 0);
+    return rv;
+}
+/* head: return the value field of the first cons cell */
+static TuriValue native_list_head(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || a[0].as_int == 0) return turi_nil();
+    int64_t *cell = (int64_t *)(intptr_t)a[0].as_int;
+    return turi_int(cell[0]);
+}
+/* cstr->parse-int: parse a raw int (cstr pointer as int64) to int64 */
+static TuriValue native_cstr_parse_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_int(0);
+    const char *s = (const char *)(intptr_t)a[0].as_int;
+    return turi_int(s ? (int64_t)atoll(s) : 0);
+}
+/* bit-shr: logical (unsigned) right shift */
+static TuriValue native_bit_shr(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_int(0);
+    return turi_int((int64_t)((uint64_t)a[0].as_int >> (unsigned)a[1].as_int));
+}
+/* bit-xor: bitwise XOR of two integers */
+static TuriValue native_bit_xor(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 2) return turi_int(0);
+    return turi_int(a[0].as_int ^ a[1].as_int);
+}
+/* println-float: print float with given decimal places */
+static TuriValue native_println_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double x = (n > 0) ? (a[0].tag == TURI_FLOAT ? a[0].as_float : (double)a[0].as_int) : 0.0;
+    int d = (n > 1) ? (int)a[1].as_int : 6;
+    if (d < 0) d = 0;
+    if (d > 17) d = 17;
+    char fmt[16];
+    snprintf(fmt, sizeof(fmt), "%%.%df\n", d);
+    printf(fmt, x);
+    return turi_nil();
+}
+/* vec-new-filled: allocate a vec of size sz filled with init */
+static TuriValue native_vec_new_filled(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int64_t sz  = (n > 0) ? a[0].as_int : 0;
+    int64_t val = (n > 1) ? a[1].as_int : 0;
+    if (sz < 0) sz = 0;
+    int64_t *v = (int64_t *)malloc(3 * sizeof(int64_t));
+    if (!v) return turi_nil();
+    int64_t *data = sz > 0 ? (int64_t *)malloc((size_t)sz * sizeof(int64_t)) : NULL;
+    for (int64_t i = 0; i < sz; i++) data[i] = val;
+    v[0] = (int64_t)(intptr_t)data; v[1] = sz; v[2] = sz;
+    TuriValue ret = {0}; ret.tag = TURI_INT; ret.as_int = (int64_t)(intptr_t)v;
+    return ret;
+}
+/* int->unit-float: map a 64-bit int to [0,1) by dividing by 2^53 */
+static TuriValue native_int_to_unit_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double v = (n > 0) ? (double)(uint64_t)a[0].as_int / 9007199254740992.0 : 0.0;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = v; return rv;
+}
+/* tur-sqrt: square root via libm */
+static TuriValue native_tur_sqrt(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double x = (n > 0 && a[0].tag == TURI_FLOAT) ? a[0].as_float : (n > 0 ? (double)a[0].as_int : 0.0);
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = sqrt(x); return rv;
+}
+/* int->float: cast int64 to double */
+static TuriValue native_int_to_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double v = (n > 0) ? (double)a[0].as_int : 0.0;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = v; return rv;
+}
+
 static void wk_register_stdlib_natives(TuriEnv *env) {
     /* Option/some/none */
     turi_env_register_native(env, "some",            native_some,            NULL);
@@ -2463,6 +2644,27 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "result-partition",native_result_partition, NULL);
     turi_env_register_native(env, "result-partition-ok", native_result_partition_ok, NULL);
     turi_env_register_native(env, "result-partition-err", native_result_partition_err, NULL);
+    /* List operations for benchmark arg parsing and list_ops benchmark */
+    turi_env_register_native(env, "nil-value",         native_nil_value,       NULL);
+    turi_env_register_native(env, "cons",              native_cons,            NULL);
+    turi_env_register_native(env, "list-nil?",         native_list_nil_pred,   NULL);
+    turi_env_register_native(env, "head",              native_list_head,       NULL);
+    turi_env_register_native(env, "tail",              native_list_tail,       NULL);
+    /* Benchmark micro-helpers */
+    turi_env_register_native(env, "cstr->parse-int",  native_cstr_parse_int,  NULL);
+    turi_env_register_native(env, "bit-shr",           native_bit_shr,         NULL);
+    turi_env_register_native(env, "bit-xor",           native_bit_xor,         NULL);
+    turi_env_register_native(env, "println-float",     native_println_float,   NULL);
+    turi_env_register_native(env, "vec-new-filled",    native_vec_new_filled,  NULL);
+    turi_env_register_native(env, "int->unit-float",   native_int_to_unit_float, NULL);
+    turi_env_register_native(env, "tur-sqrt",          native_tur_sqrt,        NULL);
+    turi_env_register_native(env, "int->float",        native_int_to_float,    NULL);
+    /* HAMT operations for hash_map benchmark (int-typed wrappers) */
+    turi_env_register_native(env, "hamt-new",          native_tur_hamt_new,    NULL);
+    turi_env_register_native(env, "hamt-free",         native_tur_hamt_free,   NULL);
+    turi_env_register_native(env, "hamt-set",          native_tur_hamt_set,    NULL);
+    turi_env_register_native(env, "hamt-get",          native_tur_hamt_get,    NULL);
+    turi_env_register_native(env, "hamt-hash-ptr",     native_tur_hamt_hash_ptr, NULL);
 }
 
 /* -------------------------------------------------------------------------
@@ -2678,6 +2880,7 @@ static int wk_eval_fixture(const char *input, const char *flags_str,
 
         wk_apply_flags(flags_str);
         if (timeout_secs > 0) alarm((unsigned)timeout_secs);
+        g_interpret_mode = true;
 
         TuriEnv *env = turi_env_new();
         /* Pre-load stdlib files so the elaborator has all standard definitions.
@@ -3584,7 +3787,7 @@ int main(int argc, char **argv) {
             fprintf(stderr, "tur: --interpret requires a file argument\n");
             return usage();
         }
-        return cmd_eval(argv[2], !no_color && stderr_is_tty());
+        return cmd_eval(argv[2], !no_color && stderr_is_tty(), argv + 3, argc - 3);
     }
     if (strcmp(cmd, "format") == 0) {
         bool check_only = false;

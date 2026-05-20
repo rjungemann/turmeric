@@ -5,6 +5,7 @@
   "fileTypes": ["tur"],
   "uuid": "D8D5E82E-3D5B-46B8-8981-C61B89F00D57",
   "patterns": [
+    {"include": "#reader-conditional"},
     {"include": "#c-inline"},
     {"include": "#comment"},
     {"include": "#string"},
@@ -18,6 +19,24 @@
     {"include": "#illegal"}
   ],
   "repository": {
+    "reader-conditional": {
+      "name": "meta.reader-conditional.turmeric",
+      "begin": "#\\?\\(",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.reader-conditional.turmeric" }
+      },
+      "end": "\\)",
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.reader-conditional.turmeric" }
+      },
+      "patterns": [
+        {
+          "match": ":(tur|turi)\\b",
+          "name": "keyword.other.reader-conditional-key.turmeric"
+        },
+        { "include": "#forms" }
+      ]
+    },
     "c-inline": {
       "name": "meta.embedded.c.turmeric",
       "begin": "```c?",

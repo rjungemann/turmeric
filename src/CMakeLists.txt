@@ -193,6 +193,7 @@ target_compile_options(tur PRIVATE
 # Phase T19: Fiber work requires pthread for spinlocks
 target_compile_options(tur PRIVATE -pthread)
 target_link_options(tur PRIVATE -pthread)
+target_link_libraries(tur PRIVATE m)
 
 target_link_options(tur PRIVATE
     $<$<CONFIG:Debug>:   -fsanitize=address,undefined>

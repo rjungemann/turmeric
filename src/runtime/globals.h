@@ -69,3 +69,6 @@ extern bool g_sessions_enabled;
 
 /* DV0: -Xdynamic-vars flag — enable dynamic var syntax and checking */
 extern bool g_dynvar_enabled;
+
+/* INT-2: --interpret mode flag — set by cmd_eval before elaboration. */
+extern bool g_interpret_mode;
