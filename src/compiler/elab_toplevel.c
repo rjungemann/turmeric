@@ -344,7 +344,8 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                         bool separate_compilation,
                         TypeClassEnv *out_tc_env,
                         const char **include_dirs,
-                        int n_include_dirs) {
+                        int n_include_dirs,
+                        uint32_t *out_n_file_scope_defs) {
     Elab e;
     elab_init_state(&e, arena, st);
     e.module_base_dir = module_base_dir ? module_base_dir : ".";
@@ -759,5 +760,9 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
     prog->as.program.n = nforms;
     /* CPS-CL10: expose typeclass env to callers (e.g. cps_transform) */
     if (out_tc_env) *out_tc_env = e.typeclass_env;
+    /* Tier 3: expose actual file-scope-def count so the interpreter can
+     * distinguish them from (load ...)-expanded inline forms. */
+    if (out_n_file_scope_defs)
+        *out_n_file_scope_defs = (uint32_t)e.n_file_scope_defs;
     return prog;
 }

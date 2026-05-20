@@ -26,6 +26,7 @@ typedef enum TuriTag {
     TURI_STRUCT,         /* struct instance: TuriStruct* (Phase S4) */
     TURI_THROW,          /* in-flight exception: TuriThrow* (Phase S4) */
     TURI_FUTURE,         /* async future handle: TuriFuture* (Phase S7) */
+    TURI_REF,            /* mutable borrow reference: void* to EvalBinding */
 } TuriTag;
 
 typedef struct TuriValue {
@@ -33,6 +34,7 @@ typedef struct TuriValue {
     union {
         bool              as_bool;
         int64_t           as_int;
+        void             *as_ref;   /* TURI_REF: EvalBinding* in interpreter */
         double            as_float;
         const char       *as_cstr;    /* borrowed or malloc'd string */
         TuriClosure      *as_closure;

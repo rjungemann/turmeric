@@ -17,7 +17,11 @@
  * inlined; callers emit separate .h/.c per module and #include them.
  * `out_tc_env` (CPS-CL10): if non-NULL, the typeclass environment collected
  * during elaboration is written here on success; the caller may pass this
- * to cps_transform for Clone-instance checking of captured bindings. */
+ * to cps_transform for Clone-instance checking of captured bindings.
+ * `out_n_file_scope_defs` (Tier 3): if non-NULL, the number of file-scope
+ * definition items prepended to the program (from imported modules) is
+ * written here on success; used by the interpreter to distinguish these
+ * from (load ...) -expanded forms when computing evaluation ranges. */
 Expr *elaborate_program(Arena *arena, SymbolTable *st,
                         Form *const *forms, uint32_t nforms,
                         uint32_t stdlib_prefix,
@@ -25,6 +29,7 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                         bool separate_compilation,
                         TypeClassEnv *out_tc_env,
                         const char **include_dirs,
-                        int n_include_dirs);
+                        int n_include_dirs,
+                        uint32_t *out_n_file_scope_defs);
 
 #endif

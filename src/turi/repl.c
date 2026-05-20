@@ -152,6 +152,7 @@ static void repl_print_value(TuriValue v, bool use_color) {
         case TURI_STRUCT:      col = COL_RESET; break;
         case TURI_THROW:       col = COL_ERR;   break;
         case TURI_FUTURE:      col = COL_RESET; break;
+        case TURI_REF:         col = COL_RESET; break;
     }
     printf("=> %s%s%s\n", col, repr, COL_RESET);
 }
@@ -194,7 +195,8 @@ static void cmd_type(TuriEnv *env, const char *expr_src) {
                                        /*separate_compilation=*/false,
                                        /*tc_env=*/NULL,
                                        /*include_dirs=*/NULL,
-                                       /*n_include_dirs=*/0);
+                                       /*n_include_dirs=*/0,
+                                       /*out_n_fsd=*/NULL);
         if (!prog || diag_had_error()) goto cleanup;
 
         /* The last top-level item is the expression we care about */
