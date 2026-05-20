@@ -1,12 +1,1 @@
-;; factorial -- tail-recursive factorial mod 1e9+7 (interpreter-compatible).
-(defn parse-first-arg [fallback :int] :int
-  (if (= *args* 0)
-    fallback
-    (cstr->parse-int (head *args*))))
-
-(defn fact [n :int acc :int m :int] :int
-  (if (<= n 1)
-    (mod acc m)
-    (fact (- n 1) (mod (* acc n) m) m)))
-
-(println (fact (parse-first-arg 1000) 1 1000000007))
+../turmeric/factorial.tur
