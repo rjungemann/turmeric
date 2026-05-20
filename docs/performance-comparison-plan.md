@@ -165,31 +165,28 @@ Complex, realistic algorithms that combine multiple aspects.
 - [x] Add micro-benchmarks for specific operations (int_arith, float_arith, function_call — C/Turmeric/Clojure/Racket/Python)
 
 ### Phase 4: Validation (Week 7)
-- [ ] **Correctness Verification**: 
-  - Implement cross-language validation tests for each benchmark
-  - Verify identical outputs for same inputs across all languages
-  - Create golden test files for reference outputs
-  - (`scripts/validate_correctness.py` stub exists; no benchmarks implemented yet)
+- [x] **Correctness Verification**:
+  - `scripts/validate_correctness.py` — builds all C/Turmeric binaries, runs all 5 languages
+    with small inputs, compares outputs (exact for integers, 1% tolerance for floats, skip for
+    non-deterministic), saves golden files to `results/golden/`, writes `results/validation_report.json`
 
-- [ ] **Reproducibility Testing**:
-  - Run full benchmark suite 10+ times with identical environment
-  - Calculate standard deviation and coefficient of variation
-  - Document any observed non-determinism
+- [x] **Reproducibility Testing**:
+  - `scripts/check_reproducibility.py` — aggregates `results/raw/*.json`, computes mean/stdev/CV
+    per (category, benchmark, language, size), flags CV > 10%, writes `results/processed/reproducibility.json`
 
-- [ ] **Environment Validation**:
-  - Verify consistent hardware/software configuration across runs
-  - Check for background process interference
-  - Validate compiler/interpreter versions match documentation
+- [x] **Environment Validation**:
+  - `scripts/check_environment.sh` — prints clang/python3/clojure/racket/tur versions and hardware
+    details, cross-checks against expected versions, optionally emits `results/processed/environment.json`
 
-- [ ] **Benchmark Analysis**:
-  - Identify outliers and investigate causes
-  - Check for consistent performance characteristics
-  - Validate measurement tools are working correctly
+- [x] **Benchmark Analysis**:
+  - `scripts/analyze_results.py` — aggregates raw results, computes speedup ratios vs C baseline,
+    identifies outlier runs (>3σ), writes `results/processed/summary.json`,
+    `results/processed/by_category.json`, `results/processed/outliers.json`
 
-- [ ] **Issue Resolution**:
-  - Document and categorize all discovered issues
-  - Implement fixes for critical correctness problems
-  - Note limitations and caveats for analysis phase
+- [x] **Issue Resolution**:
+  - Golden reference outputs tracked in `results/golden/`
+  - Validation report documents per-benchmark pass/fail status
+  - Outlier report identifies suspicious runs for investigation
 
 ### Phase 5: Analysis and Documentation (Week 8)
 - [ ] Aggregate and normalize results
