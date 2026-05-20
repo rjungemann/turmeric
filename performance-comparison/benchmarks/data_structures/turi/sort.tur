@@ -17,13 +17,10 @@
           (fill-loop v (+ i 1) n s)))))
 
 ;; insertion-sort: shift elements right to find position for arr[i].
-;; Nested if guards against negative index (avoids short-circuit dependency on macros).
 (defn insert-elem [v :int i :int key :int] :nil
-  (if (>= i 0)
-    (if (> (vec-get v i) key)
-      (do (vec-set! v (+ i 1) (vec-get v i))
-          (insert-elem v (- i 1) key))
-      (vec-set! v (+ i 1) key))
+  (if (and (>= i 0) (> (vec-get v i) key))
+    (do (vec-set! v (+ i 1) (vec-get v i))
+        (insert-elem v (- i 1) key))
     (vec-set! v (+ i 1) key)))
 
 (defn isort-loop [v :int i :int n :int] :nil

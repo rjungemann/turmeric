@@ -193,6 +193,7 @@ _run_numerical() {
     # primes (sieve)
     local primes_n
     primes_n=$(python3 -c "import json; d=json.load(open('$idir/primes.json')); print(d['$size']['up_to'])")
+    TURI_ARG=$(python3 -c "import json; d=json.load(open('$idir/primes.json')); print(d.get('turi', d['$size'])['up_to'])")
     _bench_lang numerical primes "$size" "$primes_n" \
         c         "$dir/c/primes" \
         turmeric  "$dir/turmeric/primes" \
@@ -201,6 +202,7 @@ _run_numerical() {
         turi      "$TUR --interpret$dir/turi/primes.tur" \
         rust      "$RUST_RELEASE_DIR/primes" \
         python    "python3 $dir/python/primes.py"
+    unset TURI_ARG
 
     # matrix_multiply
     local mat_n
@@ -217,6 +219,7 @@ _run_numerical() {
     # monte_carlo_pi
     local mc_n
     mc_n=$(python3 -c "import json; d=json.load(open('$idir/monte_carlo.json')); print(d['$size']['iterations'])")
+    TURI_ARG=$(python3 -c "import json; d=json.load(open('$idir/monte_carlo.json')); print(d.get('turi', d['$size'])['iterations'])")
     _bench_lang numerical monte_carlo_pi "$size" "$mc_n" \
         c         "$dir/c/monte_carlo_pi" \
         turmeric  "$dir/turmeric/monte_carlo_pi" \
@@ -225,6 +228,7 @@ _run_numerical() {
         turi      "$TUR --interpret$dir/turi/monte_carlo_pi.tur" \
         rust      "$RUST_RELEASE_DIR/monte_carlo_pi" \
         python    "python3 $dir/python/monte_carlo_pi.py"
+    unset TURI_ARG
 }
 
 # ── data structures ──────────────────────────────────────────────────────────
@@ -253,6 +257,7 @@ _run_data_structures() {
         python    "python3 $dir/python/hash_map.py"
 
     n=$(python3 -c "import json; d=json.load(open('$idir/sort.json')); print(d['$size']['n'])")
+    TURI_ARG=$(python3 -c "import json; d=json.load(open('$idir/sort.json')); print(d.get('turi', d['$size'])['n'])")
     _bench_lang data_structures sort "$size" "$n" \
         c         "$dir/c/sort" \
         turmeric  "$dir/turmeric/sort" \
@@ -261,6 +266,7 @@ _run_data_structures() {
         turi      "$TUR --interpret$dir/turi/sort.tur" \
         rust      "$RUST_RELEASE_DIR/sort" \
         python    "python3 $dir/python/sort.py"
+    unset TURI_ARG
 }
 
 # ── string processing ────────────────────────────────────────────────────────
@@ -422,6 +428,7 @@ _run_micro() {
 
     local n
     n=$(python3 -c "import json; d=json.load(open('$idir/int_arith.json')); print(d['$size']['n'])")
+    TURI_ARG=$(python3 -c "import json; d=json.load(open('$idir/int_arith.json')); print(d.get('turi', d['$size'])['n'])")
     _bench_lang micro int_arith "$size" "$n" \
         c         "$dir/c/int_arith" \
         turmeric  "$dir/turmeric/int_arith" \
@@ -430,8 +437,10 @@ _run_micro() {
         turi      "$TUR --interpret$dir/turi/int_arith.tur" \
         rust      "$RUST_RELEASE_DIR/int_arith" \
         python    "python3 $dir/python/int_arith.py"
+    unset TURI_ARG
 
     n=$(python3 -c "import json; d=json.load(open('$idir/float_arith.json')); print(d['$size']['n'])")
+    TURI_ARG=$(python3 -c "import json; d=json.load(open('$idir/float_arith.json')); print(d.get('turi', d['$size'])['n'])")
     _bench_lang micro float_arith "$size" "$n" \
         c         "$dir/c/float_arith" \
         turmeric  "$dir/turmeric/float_arith" \
@@ -440,8 +449,10 @@ _run_micro() {
         turi      "$TUR --interpret$dir/turi/float_arith.tur" \
         rust      "$RUST_RELEASE_DIR/float_arith" \
         python    "python3 $dir/python/float_arith.py"
+    unset TURI_ARG
 
     n=$(python3 -c "import json; d=json.load(open('$idir/function_call.json')); print(d['$size']['n'])")
+    TURI_ARG=$(python3 -c "import json; d=json.load(open('$idir/function_call.json')); print(d.get('turi', d['$size'])['n'])")
     _bench_lang micro function_call "$size" "$n" \
         c         "$dir/c/function_call" \
         turmeric  "$dir/turmeric/function_call" \
@@ -450,6 +461,7 @@ _run_micro() {
         turi      "$TUR --interpret$dir/turi/function_call.tur" \
         rust      "$RUST_RELEASE_DIR/function_call" \
         python    "python3 $dir/python/function_call.py"
+    unset TURI_ARG
 }
 
 # ── _bench_lang: dispatch per language, skip missing impls ───────────────────
@@ -464,9 +476,15 @@ _bench_lang() {
         local raw_cmd="$2"
         shift 2
 
-        # Build the command array (handle space-separated commands)
+        # Build the command array (handle space-separated commands).
+        # TURI_ARG overrides the standard arg for the turi interpreter, allowing
+        # interpreter-safe (smaller) N values when the standard N overflows the stack.
+        local effective_arg="$arg"
+        if [ "$lang" = "turi" ] && [ -n "${TURI_ARG:-}" ]; then
+            effective_arg="$TURI_ARG"
+        fi
         local cmd_arr
-        read -ra cmd_arr <<< "$raw_cmd $arg"
+        read -ra cmd_arr <<< "$raw_cmd $effective_arg"
 
         # Skip if primary binary/script doesn't exist
         local primary="${cmd_arr[0]}"

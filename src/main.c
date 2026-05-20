@@ -1457,6 +1457,12 @@ static int cmd_eval(const char *path, bool use_color,
         fprintf(stderr, "tur: failed to create interpreter environment\n");
         return 1;
     }
+    /* Preload macros.tur so that and/or/when/cond/for etc. are available.
+     * This is the minimum stdlib needed for any real Turmeric program to work. */
+    {
+        TuriValue sv = turi_eval_file(env, "stdlib/macros.tur");
+        (void)sv;
+    }
     /* Inject typed stubs so the elaborator knows the signatures of native
      * functions used by benchmark scripts.  The native shims registered below
      * replace these no-op closures at runtime. */
