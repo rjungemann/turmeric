@@ -157,9 +157,9 @@
 ;; ============================================================
 
 (defn test-slow-zero []
-  ;; Slow by 0 might cause division by zero
-  ;; TODO: update to use (catch-unwind ...) to test that slow 0 panics
-  false)
+  (let [panicked (catch-unwind (fn [] (slow 0 (cycle 1 2))))]
+    (assert (panic? panicked) "slow 0 should panic")
+    true))
 
 (defn test-slow-negative []
   ;; Slow by negative factor

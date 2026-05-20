@@ -389,13 +389,20 @@ typedef struct DefModule {
 typedef struct MatchPattern {
     bool is_wildcard;           /* _ wildcard */
     bool is_var;                /* bare variable capture (not a constructor) */
-    CtorDef *ctor;              /* NULL for wildcard/var */
+    bool is_literal;            /* literal value comparison (int/bool/float/cstr) */
+    CtorDef *ctor;              /* NULL for wildcard/var/literal */
     Binding **bindings;         /* arena-allocated bindings for ctor fields */
     uint32_t n_bindings;
     const Symbol *var_sym;      /* for is_var: the variable being bound */
     Binding *var_binding;       /* resolved binding for is_var */
     int union_member_idx;       /* IT4: index into union members array for type-narrowing arms;
                                  * -1 for wildcard/var arms and non-union (ADT) arms */
+    /* for is_literal: the literal value to compare against */
+    int8_t      lit_kind;       /* F_BOOL/F_INT/F_FLOAT/F_STR/F_NIL from forms.h */
+    bool        lit_bool;
+    int64_t     lit_int;
+    double      lit_float;
+    const char *lit_cstr;
 } MatchPattern;
 
 /* Phase G0: One arm of a match expression */

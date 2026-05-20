@@ -1408,6 +1408,104 @@ Expr *elab_match(Elab *e, const Form *call) {
         return out;
     }
 
+    /* Phase S4-lit: Literal match — scrutinee is a primitive (non-ADT) type.
+     * Patterns are literals (F_INT/F_BOOL/F_FLOAT/F_STR), _ wildcards, or
+     * bare variable captures.  Emits EX_MATCH with is_literal arms. */
+    {
+        TypeKind _sk = scrutinee->type.kind;
+        bool _is_prim = (_sk == TY_INT    || _sk == TY_BOOL   || _sk == TY_FLOAT  ||
+                         _sk == TY_CSTR   || _sk == TY_INT8   || _sk == TY_INT16  ||
+                         _sk == TY_INT32  || _sk == TY_INT64  || _sk == TY_UINT8  ||
+                         _sk == TY_UINT16 || _sk == TY_UINT32 || _sk == TY_UINT64 ||
+                         _sk == TY_FLOAT32 || _sk == TY_FLOAT64);
+        /* Also trigger when first non-wildcard arm is a literal pattern */
+        if (!_is_prim && (_sk == TY_UNKNOWN || _sk == TY_NIL)) {
+            for (uint32_t _ai = 0; _ai < n_arms; _ai++) {
+                FormTag _ft = call->as.list.items[arm_start[_ai]]->tag;
+                if (_ft == F_INT || _ft == F_BOOL || _ft == F_FLOAT ||
+                    _ft == F_STR || _ft == F_NIL) {
+                    _is_prim = true;
+                    break;
+                }
+                if (_ft != F_SYM) break; /* constructor found — not literal match */
+            }
+        }
+        if (_is_prim) {
+            MatchArm *lit_arms = (MatchArm *)arena_alloc(e->arena, n_arms * sizeof(MatchArm));
+            Type lit_result = TYPE_UNKNOWN;
+            for (uint32_t ai = 0; ai < n_arms; ai++) {
+                uint32_t base     = arm_start[ai];
+                Form *pat_form    = call->as.list.items[base];
+                Form *guard_raw   = arm_has_guard[ai] ? call->as.list.items[base + 2] : NULL;
+                Form *body_form   = call->as.list.items[arm_has_guard[ai] ? base + 3 : base + 1];
+                MatchPattern *pat = &lit_arms[ai].pattern;
+                memset(pat, 0, sizeof(MatchPattern));
+                pat->union_member_idx = -1;
+                lit_arms[ai].guard = NULL;
+
+                if (pat_form->tag == F_SYM) {
+                    const Symbol *sym_wc = intern_cstr(e->st, "_");
+                    if (pat_form->as.sym == sym_wc) {
+                        pat->is_wildcard = true;
+                    } else {
+                        pat->is_var     = true;
+                        pat->var_sym    = pat_form->as.sym;
+                    }
+                } else if (pat_form->tag == F_INT  || pat_form->tag == F_BOOL ||
+                           pat_form->tag == F_FLOAT || pat_form->tag == F_STR  ||
+                           pat_form->tag == F_NIL) {
+                    pat->is_literal  = true;
+                    pat->lit_kind    = (int8_t)pat_form->tag;
+                    switch (pat_form->tag) {
+                    case F_INT:   pat->lit_int   = pat_form->as.i; break;
+                    case F_BOOL:  pat->lit_bool  = pat_form->as.b; break;
+                    case F_FLOAT: pat->lit_float = pat_form->as.f; break;
+                    case F_STR:   pat->lit_cstr  = pat_form->as.s.p; break;
+                    default: break;
+                    }
+                } else {
+                    diag_emit(DIAG_ERROR, pat_form->span,
+                              "match: pattern must be a literal value, _ wildcard, "
+                              "or variable capture when matching a primitive type");
+                    return NULL;
+                }
+
+                /* Optional when-guard */
+                if (guard_raw) {
+                    lit_arms[ai].guard = elab_form(e, guard_raw);
+                    if (!lit_arms[ai].guard) return NULL;
+                }
+
+                /* Elaborate body; for is_var, introduce the binding in a new scope */
+                Expr *body;
+                if (pat->is_var && pat->var_sym) {
+                    Binding *vb = binding_new(e, pat->var_sym, scrutinee->type,
+                                              false, false, pat_form->span);
+                    pat->var_binding = vb;
+                    Scope arm_sc;
+                    scope_init(&arm_sc, e->scope);
+                    Scope *saved_sc = e->scope;
+                    e->scope = &arm_sc;
+                    scope_add(&arm_sc, vb);
+                    body = elab_form(e, body_form);
+                    e->scope = saved_sc;
+                    scope_free(&arm_sc);
+                } else {
+                    body = elab_form(e, body_form);
+                }
+                if (!body) return NULL;
+                lit_arms[ai].body = body;
+                if (lit_result.kind == TY_UNKNOWN) lit_result = body->type;
+            }
+            if (lit_result.kind == TY_UNKNOWN) lit_result = TYPE_NIL;
+            Expr *out = expr_new(e->arena, EX_MATCH, lit_result, call->span);
+            out->as.match_.scrutinee = scrutinee;
+            out->as.match_.arms      = lit_arms;
+            out->as.match_.n_arms    = n_arms;
+            return out;
+        }
+    }
+
     /* If the scrutinee type is not already TY_ADT (e.g. an untyped param
      * that defaulted to TY_INT), or is TY_ADT with no def (e.g. return of
      * ADT-returning fn without result_full_type), infer the ADT from the
