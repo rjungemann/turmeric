@@ -1,5 +1,20 @@
 # Turmeric 2 -- Claude Code Guide
 
+## CLI Argument Parsing -- STRICT RULE
+
+Reading CLI arguments via any mechanism other than `*args*` or `stdlib/args.tur` is
+**strictly forbidden** in this codebase. This means:
+
+- **Allowed**: `*args*` (the pre-declared global cons list), `head`/`tail`/`cstr->parse-int`
+  to walk it, or `args/parse` from `stdlib/args.tur` for structured parsing.
+- **Forbidden**: `parse-first-arg`, `parse-arg`, or any inline-C that directly reads
+  `g_tur_args` via a raw `struct __tur_cons` cast. These patterns have been purged from
+  the codebase. Do not reintroduce them.
+
+If you need to read argument N in a self-contained benchmark file that does not import
+stdlib, define local `head`/`tail`/`cstr->parse-int` stubs as inline-C at the top of
+the file -- the interpreter will override them with stdlib natives automatically.
+
 ## Build System
 
 The project uses `just` (not `make`). Common targets:

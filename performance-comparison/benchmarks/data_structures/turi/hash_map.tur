@@ -1,9 +1,5 @@
 ;; hash_map -- insert N key->value pairs into HAMT; sum all values (interpreter-compatible).
 ;; hamt-new/set/get/hash-ptr/free are provided by interpreter native shims (see cmd_eval stubs).
-(defn parse-first-arg [fallback :int] :int
-  (if (= *args* 0)
-    fallback
-    (cstr->parse-int (head *args*))))
 
 ;; insert-loop -- insert i -> i*2 for each i in [0, n) into HAMT m.
 (defn insert-loop [m :int i :int n :int] :int
@@ -27,4 +23,4 @@
       (hamt-free m)
       s)))
 
-(println (hashmap-bench (parse-first-arg 1000)))
+(println (hashmap-bench (if (= *args* 0) 1000 (cstr->parse-int (head *args*)))))

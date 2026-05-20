@@ -1,11 +1,16 @@
 ;; file_read -- write N bytes then read them back; print bytes read.
 ;; The write phase uses a single inline-C call; the read loop is pure
 ;; Turmeric tail-recursion over extern-c file primitives.
-(defn parse-first-arg [fallback :int] :int
+(defn head [lst :int] :int
   ```c
-  struct __tur_cons { int64_t value; int64_t next; };
-  struct __tur_cons *c = (struct __tur_cons *)(intptr_t)g_tur_args;
-  return c ? (int64_t)atoll((const char *)(intptr_t)c->value) : fallback;
+  struct { int64_t value; int64_t next; } *c = (void*)(intptr_t)lst;
+  return c ? c->value : 0;
+  ```)
+
+(defn cstr->parse-int [s :int] :int
+  ```c
+  const char *cs = (const char *)(intptr_t)s;
+  return cs ? (int64_t)atoll(cs) : 0;
   ```)
 
 ;; write-temp-file -- write n bytes of value 0xCD to path.
@@ -77,4 +82,4 @@
               (io-buf-free buf)
               tot)))))
 
-(println (file-read-bench (parse-first-arg 1048576)))
+(println (file-read-bench (if (= *args* 0) 1048576 (cstr->parse-int (head *args*)))))

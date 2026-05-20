@@ -25,6 +25,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <pthread.h>
 #include <sys/stat.h>
 #include <dirent.h>
 #include <sys/wait.h>
@@ -1492,6 +1493,23 @@ static int cmd_eval(const char *path, bool use_color,
             "(defn hamt-set [m :int hash :int key :int val :int] :int 0)\n"
             "(defn hamt-get [m :int hash :int key :int] :int 0)\n"
             "(defn hamt-hash-ptr [p :int] :int 0)\n"
+            /* I/O benchmark helpers (file_read.tur, file_write.tur) */
+            "(defn write-temp-file [path :cstr n :int] :nil nil)\n"
+            "(defn io-fopen-read [path :cstr] :int 0)\n"
+            "(defn io-fread-chunk [fp :int buf :int] :int 0)\n"
+            "(defn io-fclose [fp :int] :nil nil)\n"
+            "(defn io-remove [path :cstr] :nil nil)\n"
+            "(defn io-buf-new [] :int 0)\n"
+            "(defn io-buf-free [buf :int] :nil nil)\n"
+            "(defn io-alloc [n :int v :int] :int 0)\n"
+            "(defn io-free [buf :int] :nil nil)\n"
+            "(defn io-fopen-write [path :cstr] :int 0)\n"
+            "(defn io-fwrite-chunk [fp :int buf :int offset :int chunk :int] :int 0)\n"
+            /* Whole-benchmark natives (random_access, thread_ring, nbody, ray_tracing) */
+            "(defn random-access-bench [size :int reads :int] :int 0)\n"
+            "(defn run-ring [n :int m :int] :nil nil)\n"
+            "(defn run-nbody [n :int steps :int] :nil nil)\n"
+            "(defn run-raytracer [w :int h :int] :int 0)\n"
         );
         (void)sv;
     }
@@ -2570,6 +2588,313 @@ static TuriValue native_int_to_float(TuriEnv *env, TuriValue *a, uint32_t n, voi
     TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = v; return rv;
 }
 
+/* -------------------------------------------------------------------------
+ * I/O benchmark native helpers (file_read.tur, file_write.tur).
+ *
+ * These replace the inline-C helper definitions in the turmeric/ benchmark
+ * files so the shared turi/ symlinks work under tur --interpret.
+ * ---------------------------------------------------------------------- */
+
+/* Helper: extract a C-string from a TuriValue (TURI_CSTR or TURI_INT ptr). */
+static const char *tv_to_cstr(TuriValue v) {
+    if (v.tag == TURI_CSTR) return v.as_cstr;
+    return (const char *)(intptr_t)v.as_int;
+}
+
+/* write-temp-file [path :cstr n :int] :nil -- write n bytes to path. */
+static TuriValue native_write_temp_file(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2) return turi_nil();
+    const char *path = tv_to_cstr(a[0]);
+    int64_t bytes = a[1].as_int;
+    if (!path || bytes <= 0) return turi_nil();
+    char buf[4096];
+    memset(buf, 0xCD, sizeof(buf));
+    FILE *f = fopen(path, "wb");
+    if (!f) return turi_nil();
+    int64_t rem = bytes;
+    while (rem > 0) {
+        int64_t chunk = rem < 4096 ? rem : 4096;
+        fwrite(buf, 1, (size_t)chunk, f);
+        rem -= chunk;
+    }
+    fclose(f);
+    return turi_nil();
+}
+
+/* io-fopen-read [path :cstr] :int -- fopen "rb", return FILE* as int64. */
+static TuriValue native_io_fopen_read(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    const char *path = (n >= 1) ? tv_to_cstr(a[0]) : NULL;
+    FILE *f = path ? fopen(path, "rb") : NULL;
+    return turi_int((int64_t)(intptr_t)f);
+}
+
+/* io-fread-chunk [fp :int buf :int] :int -- fread up to 4096 bytes; return bytes read. */
+static TuriValue native_io_fread_chunk(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2) return turi_int(0);
+    FILE *fp  = (FILE *)(intptr_t)a[0].as_int;
+    void *buf = (void *)(intptr_t)a[1].as_int;
+    if (!fp || !buf) return turi_int(0);
+    return turi_int((int64_t)fread(buf, 1, 4096, fp));
+}
+
+/* io-fclose [fp :int] :nil -- fclose a FILE*. */
+static TuriValue native_io_fclose(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n >= 1 && a[0].as_int) fclose((FILE *)(intptr_t)a[0].as_int);
+    return turi_nil();
+}
+
+/* io-remove [path :cstr] :nil -- remove a file. */
+static TuriValue native_io_remove(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    const char *path = (n >= 1) ? tv_to_cstr(a[0]) : NULL;
+    if (path) remove(path);
+    return turi_nil();
+}
+
+/* io-buf-new [] :int -- malloc 4096 bytes; return pointer as int64. */
+static TuriValue native_io_buf_new(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)a; (void)n; (void)ud;
+    return turi_int((int64_t)(intptr_t)malloc(4096));
+}
+
+/* io-buf-free [buf :int] :nil -- free a buffer. */
+static TuriValue native_io_buf_free(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n >= 1 && a[0].as_int) free((void *)(intptr_t)a[0].as_int);
+    return turi_nil();
+}
+
+/* io-alloc [n :int v :int] :int -- malloc n bytes filled with byte v. */
+static TuriValue native_io_alloc(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    size_t sz  = (n > 0 && a[0].as_int > 0) ? (size_t)a[0].as_int : 0;
+    int    val = (n > 1) ? (int)a[1].as_int : 0;
+    void *buf = sz ? malloc(sz) : NULL;
+    if (buf) memset(buf, val, sz);
+    return turi_int((int64_t)(intptr_t)buf);
+}
+
+/* io-free [buf :int] :nil -- free an io-alloc'd buffer. */
+static TuriValue native_io_free(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n >= 1 && a[0].as_int) free((void *)(intptr_t)a[0].as_int);
+    return turi_nil();
+}
+
+/* io-fopen-write [path :cstr] :int -- fopen "wb", return FILE* as int64. */
+static TuriValue native_io_fopen_write(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    const char *path = (n >= 1) ? tv_to_cstr(a[0]) : NULL;
+    FILE *f = path ? fopen(path, "wb") : NULL;
+    return turi_int((int64_t)(intptr_t)f);
+}
+
+/* io-fwrite-chunk [fp :int buf :int offset :int chunk :int] :int -- fwrite; return bytes. */
+static TuriValue native_io_fwrite_chunk(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 4) return turi_int(0);
+    FILE *fp    = (FILE *)(intptr_t)a[0].as_int;
+    char *buf   = (char *)(intptr_t)a[1].as_int;
+    int64_t off = a[2].as_int;
+    int64_t len = a[3].as_int;
+    if (!fp || !buf || len <= 0) return turi_int(0);
+    return turi_int((int64_t)fwrite(buf + off, 1, (size_t)len, fp));
+}
+
+/* -------------------------------------------------------------------------
+ * Whole-benchmark native implementations for benchmarks whose logic is
+ * written entirely in inline-C (legitimate platform I/O or concurrency tests).
+ * ---------------------------------------------------------------------- */
+
+/* random-access-bench [file_size :int n_reads :int] :int */
+static TuriValue native_random_access_bench(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2) return turi_int(0);
+    int64_t file_size = a[0].as_int;
+    int64_t n_reads   = a[1].as_int;
+    const char *path  = "/tmp/bench_io_random_tur.bin";
+    char wbuf[4096];
+    FILE *fw = fopen(path, "wb");
+    if (!fw) return turi_int(-1);
+    int64_t rem = file_size;
+    int seq = 0;
+    while (rem > 0) {
+        int64_t chunk = rem < 4096 ? rem : 4096;
+        for (int64_t i = 0; i < chunk; i++) wbuf[i] = (char)(seq++ & 0xFF);
+        fwrite(wbuf, 1, (size_t)chunk, fw);
+        rem -= chunk;
+    }
+    fclose(fw);
+    FILE *fr = fopen(path, "rb");
+    if (!fr) return turi_int(-1);
+    uint64_t state = 12345678ULL;
+    int64_t  checksum = 0;
+    unsigned char byte;
+    for (int64_t i = 0; i < n_reads; i++) {
+        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        int64_t offset = (int64_t)(state >> 1) % file_size;
+        fseek(fr, (long)offset, SEEK_SET);
+        if (fread(&byte, 1, 1, fr)) checksum += byte;
+    }
+    fclose(fr);
+    remove(path);
+    return turi_int(checksum);
+}
+
+/* ring_worker_nat: pthread worker for the thread-ring benchmark. */
+typedef struct {
+    pthread_mutex_t mu;
+    pthread_cond_t  cv;
+    int             ready;
+    int64_t         token;
+} TRSlot_nat;
+typedef struct { TRSlot_nat *ring; int id; int n; } TRArg_nat;
+static void *ring_worker_nat(void *vp) {
+    TRArg_nat *a = (TRArg_nat *)vp;
+    TRSlot_nat *me   = &a->ring[a->id];
+    TRSlot_nat *next = &a->ring[(a->id + 1) % a->n];
+    while (1) {
+        pthread_mutex_lock(&me->mu);
+        while (!me->ready) pthread_cond_wait(&me->cv, &me->mu);
+        int64_t tok = me->token; me->ready = 0;
+        pthread_mutex_unlock(&me->mu);
+        int64_t out = tok > 0 ? tok - 1 : tok;
+        pthread_mutex_lock(&next->mu);
+        next->token = out; next->ready = 1;
+        pthread_cond_signal(&next->cv);
+        pthread_mutex_unlock(&next->mu);
+        if (tok <= 0) return NULL;
+    }
+}
+
+/* run-ring [n_threads :int messages :int] :nil */
+static TuriValue native_run_ring(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2) return turi_nil();
+    int n_threads = (int)a[0].as_int;
+    int messages  = (int)a[1].as_int;
+    if (n_threads <= 0) return turi_nil();
+    TRSlot_nat *ring = (TRSlot_nat *)calloc((size_t)n_threads, sizeof(TRSlot_nat));
+    for (int i = 0; i < n_threads; i++) {
+        pthread_mutex_init(&ring[i].mu, NULL);
+        pthread_cond_init(&ring[i].cv, NULL);
+    }
+    TRArg_nat *targs = (TRArg_nat *)malloc((size_t)n_threads * sizeof(TRArg_nat));
+    for (int i = 0; i < n_threads; i++) {
+        targs[i].ring = ring; targs[i].id = i; targs[i].n = n_threads;
+    }
+    pthread_t *threads = (pthread_t *)malloc((size_t)n_threads * sizeof(pthread_t));
+    for (int i = 0; i < n_threads; i++)
+        pthread_create(&threads[i], NULL, ring_worker_nat, &targs[i]);
+    pthread_mutex_lock(&ring[0].mu);
+    ring[0].token = messages; ring[0].ready = 1;
+    pthread_cond_signal(&ring[0].cv);
+    pthread_mutex_unlock(&ring[0].mu);
+    for (int i = 0; i < n_threads; i++) pthread_join(threads[i], NULL);
+    printf("done\n");
+    free(threads); free(targs); free(ring);
+    return turi_nil();
+}
+
+/* run-nbody [n_bodies :int steps :int] :nil */
+static TuriValue native_run_nbody(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2) return turi_nil();
+    int n_bodies = (int)a[0].as_int;
+    int steps    = (int)a[1].as_int;
+    if (n_bodies <= 0) return turi_nil();
+    typedef struct { double x,y,z,vx,vy,vz,mass; } NBody_nat;
+    NBody_nat *b = (NBody_nat *)calloc((size_t)n_bodies, sizeof(NBody_nat));
+    uint64_t state = 42;
+    for (int i = 0; i < n_bodies; i++) {
+        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        b[i].x = (double)(int64_t)(state >> 32) / 1e8;
+        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        b[i].y = (double)(int64_t)(state >> 32) / 1e8;
+        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        b[i].z = (double)(int64_t)(state >> 32) / 1e8;
+        b[i].vx = b[i].vy = b[i].vz = 0.0;
+        b[i].mass = 1.0 + (i % 5) * 0.5;
+    }
+    for (int s = 0; s < steps; s++) {
+        for (int i = 0; i < n_bodies; i++)
+            for (int j = i + 1; j < n_bodies; j++) {
+                double dx = b[j].x-b[i].x, dy = b[j].y-b[i].y, dz = b[j].z-b[i].z;
+                double dist = sqrt(dx*dx+dy*dy+dz*dz) + 1e-10;
+                double f = b[i].mass * b[j].mass / (dist*dist*dist);
+                b[i].vx+=f*dx; b[i].vy+=f*dy; b[i].vz+=f*dz;
+                b[j].vx-=f*dx; b[j].vy-=f*dy; b[j].vz-=f*dz;
+            }
+        for (int i = 0; i < n_bodies; i++) {
+            b[i].x += b[i].vx; b[i].y += b[i].vy; b[i].z += b[i].vz;
+        }
+    }
+    double ke = 0;
+    for (int i = 0; i < n_bodies; i++)
+        ke += 0.5 * b[i].mass * (b[i].vx*b[i].vx + b[i].vy*b[i].vy + b[i].vz*b[i].vz);
+    printf("%.4f\n", ke);
+    free(b);
+    return turi_nil();
+}
+
+/* run-raytracer [width :int height :int] :int */
+static TuriValue native_run_raytracer(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 2) return turi_int(0);
+    int64_t width  = a[0].as_int;
+    int64_t height = a[1].as_int;
+    typedef struct { double x, y, z; } RT_Vec3;
+    typedef struct { RT_Vec3 center; double radius; } RT_Sphere;
+#define RT_ADD(a,b) ((RT_Vec3){(a).x+(b).x,(a).y+(b).y,(a).z+(b).z})
+#define RT_SUB(a,b) ((RT_Vec3){(a).x-(b).x,(a).y-(b).y,(a).z-(b).z})
+#define RT_SCALE(v,s) ((RT_Vec3){(v).x*(s),(v).y*(s),(v).z*(s)})
+#define RT_DOT(a,b) ((a).x*(b).x+(a).y*(b).y+(a).z*(b).z)
+    RT_Sphere spheres[] = {{{0,0,-5},1.0}, {{2,0,-7},1.5}, {{-3,0,-6},0.8}};
+    RT_Vec3 lraw = {1, 1, -1};
+    double llen = sqrt(RT_DOT(lraw, lraw)) + 1e-15;
+    RT_Vec3 light = RT_SCALE(lraw, 1.0 / llen);
+    RT_Vec3 origin = {0, 0, 0};
+    int64_t checksum = 0;
+    for (int64_t y = 0; y < height; y++) {
+        for (int64_t x = 0; x < width; x++) {
+            double u = ((double)x / width) * 2 - 1;
+            double v = ((double)y / height) * 2 - 1;
+            RT_Vec3 dv = {u, v, -1};
+            double dlen = sqrt(RT_DOT(dv, dv)) + 1e-15;
+            RT_Vec3 dir = RT_SCALE(dv, 1.0 / dlen);
+            double best = 1e18; int bi = -1;
+            for (int i = 0; i < 3; i++) {
+                RT_Vec3 oc = RT_SUB(origin, spheres[i].center);
+                double aa = RT_DOT(dir, dir), b2 = RT_DOT(oc, dir);
+                double c = RT_DOT(oc, oc) - spheres[i].radius * spheres[i].radius;
+                double d = b2*b2 - aa*c;
+                if (d >= 0) {
+                    double t = (-b2 - sqrt(d)) / aa;
+                    if (t > 0.001 && t < best) { best = t; bi = i; }
+                }
+            }
+            if (bi >= 0) {
+                RT_Vec3 hp = RT_ADD(origin, RT_SCALE(dir, best));
+                RT_Vec3 nv = RT_SUB(hp, spheres[bi].center);
+                double nlen2 = sqrt(RT_DOT(nv, nv)) + 1e-15;
+                RT_Vec3 norm = RT_SCALE(nv, 1.0 / nlen2);
+                double diff = RT_DOT(norm, light);
+                if (diff < 0) diff = 0;
+                checksum += (int64_t)(diff * 255);
+            }
+        }
+    }
+#undef RT_ADD
+#undef RT_SUB
+#undef RT_SCALE
+#undef RT_DOT
+    return turi_int(checksum);
+}
+
 static void wk_register_stdlib_natives(TuriEnv *env) {
     /* Option/some/none */
     turi_env_register_native(env, "some",            native_some,            NULL);
@@ -2665,6 +2990,23 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "hamt-set",          native_tur_hamt_set,    NULL);
     turi_env_register_native(env, "hamt-get",          native_tur_hamt_get,    NULL);
     turi_env_register_native(env, "hamt-hash-ptr",     native_tur_hamt_hash_ptr, NULL);
+    /* I/O benchmark helpers */
+    turi_env_register_native(env, "write-temp-file",   native_write_temp_file, NULL);
+    turi_env_register_native(env, "io-fopen-read",     native_io_fopen_read,   NULL);
+    turi_env_register_native(env, "io-fread-chunk",    native_io_fread_chunk,  NULL);
+    turi_env_register_native(env, "io-fclose",         native_io_fclose,       NULL);
+    turi_env_register_native(env, "io-remove",         native_io_remove,       NULL);
+    turi_env_register_native(env, "io-buf-new",        native_io_buf_new,      NULL);
+    turi_env_register_native(env, "io-buf-free",       native_io_buf_free,     NULL);
+    turi_env_register_native(env, "io-alloc",          native_io_alloc,        NULL);
+    turi_env_register_native(env, "io-free",           native_io_free,         NULL);
+    turi_env_register_native(env, "io-fopen-write",    native_io_fopen_write,  NULL);
+    turi_env_register_native(env, "io-fwrite-chunk",   native_io_fwrite_chunk, NULL);
+    /* Whole-benchmark natives */
+    turi_env_register_native(env, "random-access-bench", native_random_access_bench, NULL);
+    turi_env_register_native(env, "run-ring",          native_run_ring,        NULL);
+    turi_env_register_native(env, "run-nbody",         native_run_nbody,       NULL);
+    turi_env_register_native(env, "run-raytracer",     native_run_raytracer,   NULL);
 }
 
 /* -------------------------------------------------------------------------

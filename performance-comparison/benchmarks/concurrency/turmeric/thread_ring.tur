@@ -1,11 +1,20 @@
 ;; thread_ring -- pass a token around N threads M times (inline-C pthreads).
-(defn parse-arg [idx :int fallback :int] :int
+(defn head [lst :int] :int
   ```c
-  struct __tur_cons { int64_t value; int64_t next; };
-  struct __tur_cons *cell = (struct __tur_cons *)(intptr_t)g_tur_args;
-  for (int64_t i = 0; i < idx && cell; i++)
-    cell = (struct __tur_cons *)(intptr_t)cell->next;
-  return cell ? (int64_t)atoll((const char *)(intptr_t)cell->value) : fallback;
+  struct { int64_t value; int64_t next; } *c = (void*)(intptr_t)lst;
+  return c ? c->value : 0;
+  ```)
+
+(defn tail [lst :int] :int
+  ```c
+  struct { int64_t value; int64_t next; } *c = (void*)(intptr_t)lst;
+  return c ? c->next : 0;
+  ```)
+
+(defn cstr->parse-int [s :int] :int
+  ```c
+  const char *cs = (const char *)(intptr_t)s;
+  return cs ? (int64_t)atoll(cs) : 0;
   ```)
 
 ;; ring-worker -- pthread worker: receives token, decrements, passes to next slot.
@@ -65,4 +74,8 @@
   free(threads); free(targs); free(ring);
   ```)
 
-(run-ring (parse-arg 0 4) (parse-arg 1 1000))
+(run-ring
+  (if (= *args* 0) 4 (cstr->parse-int (head *args*)))
+  (if (= *args* 0) 1000
+    (if (= (tail *args*) 0) 1000
+      (cstr->parse-int (head (tail *args*))))))

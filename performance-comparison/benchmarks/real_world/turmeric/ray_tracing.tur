@@ -1,16 +1,25 @@
 ;; ray_tracing -- render width x height scene; print pixel checksum.
-(defn parse-arg [idx :int fallback :int] :int
+(defn head [lst :int] :int
   ```c
-  struct __tur_cons { int64_t value; int64_t next; };
-  struct __tur_cons *cell = (struct __tur_cons *)(intptr_t)g_tur_args;
-  for (int64_t i = 0; i < idx && cell; i++)
-    cell = (struct __tur_cons *)(intptr_t)cell->next;
-  return cell ? (int64_t)atoll((const char *)(intptr_t)cell->value) : fallback;
+  struct { int64_t value; int64_t next; } *c = (void*)(intptr_t)lst;
+  return c ? c->value : 0;
+  ```)
+
+(defn tail [lst :int] :int
+  ```c
+  struct { int64_t value; int64_t next; } *c = (void*)(intptr_t)lst;
+  return c ? c->next : 0;
+  ```)
+
+(defn cstr->parse-int [s :int] :int
+  ```c
+  const char *cs = (const char *)(intptr_t)s;
+  return cs ? (int64_t)atoll(cs) : 0;
   ```)
 
 (defn run-raytracer [width :int height :int] :int
   ```c
-  double sqrt(double); double fmax(double, double);
+  double sqrt(double);
   typedef struct { double x,y,z; } Vec3;
   typedef struct { Vec3 center; double radius; } Sphere;
   #define RT_ADD(a,b) ((Vec3){(a).x+(b).x,(a).y+(b).y,(a).z+(b).z})
@@ -37,7 +46,7 @@
       if (bi>=0) {
         Vec3 hp=RT_ADD(origin,RT_SCALE(dir,best));
         Vec3 n=RT_NORM(RT_SUB(hp,spheres[bi].center));
-        double diff=fmax(0,RT_DOT(n,light));
+        double diff=RT_DOT(n,light); if(diff<0) diff=0;
         checksum+=(int64_t)(diff*255);
       }
     }
@@ -50,4 +59,8 @@
   return checksum;
   ```)
 
-(println (run-raytracer (parse-arg 0 100) (parse-arg 1 75)))
+(println (run-raytracer
+  (if (= *args* 0) 100 (cstr->parse-int (head *args*)))
+  (if (= *args* 0) 75
+    (if (= (tail *args*) 0) 75
+      (cstr->parse-int (head (tail *args*)))))))

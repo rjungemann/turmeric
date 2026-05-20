@@ -1,12 +1,1 @@
-;; fib_recursive -- naive doubly-recursive Fibonacci (interpreter-compatible).
-(defn parse-first-arg [fallback :int] :int
-  (if (= *args* 0)
-    fallback
-    (cstr->parse-int (head *args*))))
-
-(defn fib [n :int] :int
-  (if (<= n 1)
-    n
-    (+ (fib (- n 1)) (fib (- n 2)))))
-
-(println (fib (parse-first-arg 25)))
+../turmeric/fib_recursive.tur

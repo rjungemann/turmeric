@@ -1,12 +1,1 @@
-;; function_call -- N tail-recursive calls (interpreter-compatible).
-(defn parse-first-arg [fallback :int] :int
-  (if (= *args* 0)
-    fallback
-    (cstr->parse-int (head *args*))))
-
-(defn loop-fn [i :int n :int acc :int] :int
-  (if (>= i n)
-    acc
-    (loop-fn (+ i 1) n (+ acc 1))))
-
-(println (loop-fn 0 (parse-first-arg 1000000) 0))
+../turmeric/function_call.tur

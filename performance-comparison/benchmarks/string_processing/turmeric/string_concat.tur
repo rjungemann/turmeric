@@ -1,9 +1,14 @@
 ;; string_concat -- concatenate "hello" N times, print final length.
-(defn parse-first-arg [fallback :int] :int
+(defn head [lst :int] :int
   ```c
-  struct __tur_cons { int64_t value; int64_t next; };
-  struct __tur_cons *c = (struct __tur_cons *)(intptr_t)g_tur_args;
-  return c ? (int64_t)atoll((const char *)(intptr_t)c->value) : fallback;
+  struct { int64_t value; int64_t next; } *c = (void*)(intptr_t)lst;
+  return c ? c->value : 0;
+  ```)
+
+(defn cstr->parse-int [s :int] :int
+  ```c
+  const char *cs = (const char *)(intptr_t)s;
+  return cs ? (int64_t)atoll(cs) : 0;
   ```)
 
 (defn concat-bench [n :int] :int
@@ -22,4 +27,4 @@
   return (int64_t)total;
   ```)
 
-(println (concat-bench (parse-first-arg 1000)))
+(println (concat-bench (if (= *args* 0) 1000 (cstr->parse-int (head *args*)))))
