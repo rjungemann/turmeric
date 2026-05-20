@@ -22,7 +22,7 @@ cd "$(dirname "$0")/.."
 BENCHMARK_DIR="$(pwd)/benchmarks"
 INPUT_DIR="$(pwd)/inputs"
 RESULTS_DIR="$(pwd)/results/raw"
-TUR="$(pwd)/../build/tur"             # Turmeric build binary (relative to project root)
+TUR="${TUR:-$(pwd)/../build-rel/tur}"  # Turmeric build binary (override with TUR env var)
 RUST_RELEASE_DIR="$(pwd)/benchmarks/rust-workspace/target/release"  # Rust release binaries
 WARMUP_RUNS=3
 MEASURE_RUNS=10
@@ -186,7 +186,7 @@ _run_numerical() {
         turmeric  "$dir/turmeric/fibonacci" \
         clojure   "clojure -M $dir/clojure/fibonacci.clj" \
         racket    "racket $dir/racket/fibonacci.rkt" \
-        turi      "$TUR run $dir/turi/fibonacci.tur" \
+        turi      "$TUR --interpret$dir/turi/fibonacci.tur" \
         rust      "$RUST_RELEASE_DIR/fibonacci" \
         python    "python3 $dir/python/fibonacci.py"
 
@@ -198,7 +198,7 @@ _run_numerical() {
         turmeric  "$dir/turmeric/primes" \
         clojure   "clojure -M $dir/clojure/primes.clj" \
         racket    "racket $dir/racket/primes.rkt" \
-        turi      "$TUR run $dir/turi/primes.tur" \
+        turi      "$TUR --interpret$dir/turi/primes.tur" \
         rust      "$RUST_RELEASE_DIR/primes" \
         python    "python3 $dir/python/primes.py"
 
@@ -210,7 +210,7 @@ _run_numerical() {
         turmeric  "$dir/turmeric/matrix_multiply" \
         clojure   "clojure -M $dir/clojure/matrix_multiply.clj" \
         racket    "racket $dir/racket/matrix_multiply.rkt" \
-        turi      "$TUR run $dir/turi/matrix_multiply.tur" \
+        turi      "$TUR --interpret$dir/turi/matrix_multiply.tur" \
         rust      "$RUST_RELEASE_DIR/matrix_multiply" \
         python    "python3 $dir/python/matrix_multiply.py"
 
@@ -222,7 +222,7 @@ _run_numerical() {
         turmeric  "$dir/turmeric/monte_carlo_pi" \
         clojure   "clojure -M $dir/clojure/monte_carlo_pi.clj" \
         racket    "racket $dir/racket/monte_carlo_pi.rkt" \
-        turi      "$TUR run $dir/turi/monte_carlo_pi.tur" \
+        turi      "$TUR --interpret$dir/turi/monte_carlo_pi.tur" \
         rust      "$RUST_RELEASE_DIR/monte_carlo_pi" \
         python    "python3 $dir/python/monte_carlo_pi.py"
 }
@@ -238,7 +238,7 @@ _run_data_structures() {
         turmeric  "$dir/turmeric/list_ops" \
         clojure   "clojure -M $dir/clojure/list_ops.clj" \
         racket    "racket $dir/racket/list_ops.rkt" \
-        turi      "$TUR run $dir/turi/list_ops.tur" \
+        turi      "$TUR --interpret$dir/turi/list_ops.tur" \
         rust      "$RUST_RELEASE_DIR/list_ops" \
         python    "python3 $dir/python/list_ops.py"
 
@@ -248,7 +248,7 @@ _run_data_structures() {
         turmeric  "$dir/turmeric/hash_map" \
         clojure   "clojure -M $dir/clojure/hash_map.clj" \
         racket    "racket $dir/racket/hash_map.rkt" \
-        turi      "$TUR run $dir/turi/hash_map.tur" \
+        turi      "$TUR --interpret$dir/turi/hash_map.tur" \
         rust      "$RUST_RELEASE_DIR/hash_map" \
         python    "python3 $dir/python/hash_map.py"
 
@@ -258,7 +258,7 @@ _run_data_structures() {
         turmeric  "$dir/turmeric/sort" \
         clojure   "clojure -M $dir/clojure/sort.clj" \
         racket    "racket $dir/racket/sort.rkt" \
-        turi      "$TUR run $dir/turi/sort.tur" \
+        turi      "$TUR --interpret$dir/turi/sort.tur" \
         rust      "$RUST_RELEASE_DIR/sort" \
         python    "python3 $dir/python/sort.py"
 }
@@ -274,7 +274,7 @@ _run_string_processing() {
         turmeric  "$dir/turmeric/string_concat" \
         clojure   "clojure -M $dir/clojure/string_concat.clj" \
         racket    "racket $dir/racket/string_concat.rkt" \
-        turi      "$TUR run $dir/turi/string_concat.tur" \
+        turi      "$TUR --interpret$dir/turi/string_concat.tur" \
         rust      "$RUST_RELEASE_DIR/string_concat" \
         python    "python3 $dir/python/string_concat.py"
 
@@ -285,7 +285,7 @@ _run_string_processing() {
         turmeric  "$dir/turmeric/text_search" \
         clojure   "clojure -M $dir/clojure/text_search.clj" \
         racket    "racket $dir/racket/text_search.rkt" \
-        turi      "$TUR run $dir/turi/text_search.tur" \
+        turi      "$TUR --interpret$dir/turi/text_search.tur" \
         rust      "$RUST_RELEASE_DIR/text_search" \
         python    "python3 $dir/python/text_search.py"
 }
@@ -302,7 +302,7 @@ _run_concurrency() {
         turmeric  "$dir/turmeric/thread_ring" \
         clojure   "clojure -M $dir/clojure/thread_ring.clj" \
         racket    "racket $dir/racket/thread_ring.rkt" \
-        turi      "$TUR run $dir/turi/thread_ring.tur" \
+        turi      "$TUR --interpret$dir/turi/thread_ring.tur" \
         rust      "$RUST_RELEASE_DIR/thread_ring" \
         python    "python3 $dir/python/thread_ring.py"
 }
@@ -318,7 +318,7 @@ _run_memory() {
         turmeric  "$dir/turmeric/alloc_churn" \
         clojure   "clojure -M $dir/clojure/alloc_churn.clj" \
         racket    "racket $dir/racket/alloc_churn.rkt" \
-        turi      "$TUR run $dir/turi/alloc_churn.tur" \
+        turi      "$TUR --interpret$dir/turi/alloc_churn.tur" \
         rust      "$RUST_RELEASE_DIR/alloc_churn" \
         python    "python3 $dir/python/alloc_churn.py"
 }
@@ -334,7 +334,7 @@ _run_recursion() {
         turmeric  "$dir/turmeric/fib_recursive" \
         clojure   "clojure -M $dir/clojure/fib_recursive.clj" \
         racket    "racket $dir/racket/fib_recursive.rkt" \
-        turi      "$TUR run $dir/turi/fib_recursive.tur" \
+        turi      "$TUR --interpret$dir/turi/fib_recursive.tur" \
         rust      "$RUST_RELEASE_DIR/fib_recursive" \
         python    "python3 $dir/python/fib_recursive.py"
 
@@ -344,7 +344,7 @@ _run_recursion() {
         turmeric  "$dir/turmeric/factorial" \
         clojure   "clojure -M $dir/clojure/factorial.clj" \
         racket    "racket $dir/racket/factorial.rkt" \
-        turi      "$TUR run $dir/turi/factorial.tur" \
+        turi      "$TUR --interpret$dir/turi/factorial.tur" \
         rust      "$RUST_RELEASE_DIR/factorial" \
         python    "python3 $dir/python/factorial.py"
 }
@@ -360,7 +360,7 @@ _run_io() {
         turmeric  "$dir/turmeric/file_write" \
         clojure   "clojure -M $dir/clojure/file_write.clj" \
         racket    "racket $dir/racket/file_write.rkt" \
-        turi      "$TUR run $dir/turi/file_write.tur" \
+        turi      "$TUR --interpret$dir/turi/file_write.tur" \
         rust      "$RUST_RELEASE_DIR/file_write" \
         python    "python3 $dir/python/file_write.py"
 
@@ -370,7 +370,7 @@ _run_io() {
         turmeric  "$dir/turmeric/file_read" \
         clojure   "clojure -M $dir/clojure/file_read.clj" \
         racket    "racket $dir/racket/file_read.rkt" \
-        turi      "$TUR run $dir/turi/file_read.tur" \
+        turi      "$TUR --interpret$dir/turi/file_read.tur" \
         rust      "$RUST_RELEASE_DIR/file_read" \
         python    "python3 $dir/python/file_read.py"
 
@@ -382,7 +382,7 @@ _run_io() {
         turmeric  "$dir/turmeric/random_access" \
         clojure   "clojure -M $dir/clojure/random_access.clj" \
         racket    "racket $dir/racket/random_access.rkt" \
-        turi      "$TUR run $dir/turi/random_access.tur" \
+        turi      "$TUR --interpret$dir/turi/random_access.tur" \
         rust      "$RUST_RELEASE_DIR/random_access" \
         python    "python3 $dir/python/random_access.py"
 }
@@ -399,7 +399,7 @@ _run_real_world() {
         turmeric  "$dir/turmeric/nbody" \
         clojure   "clojure -M $dir/clojure/nbody.clj" \
         racket    "racket $dir/racket/nbody.rkt" \
-        turi      "$TUR run $dir/turi/nbody.tur" \
+        turi      "$TUR --interpret$dir/turi/nbody.tur" \
         rust      "$RUST_RELEASE_DIR/nbody" \
         python    "python3 $dir/python/nbody.py"
 
@@ -411,7 +411,7 @@ _run_real_world() {
         turmeric  "$dir/turmeric/ray_tracing" \
         clojure   "clojure -M $dir/clojure/ray_tracing.clj" \
         racket    "racket $dir/racket/ray_tracing.rkt" \
-        turi      "$TUR run $dir/turi/ray_tracing.tur" \
+        turi      "$TUR --interpret$dir/turi/ray_tracing.tur" \
         rust      "$RUST_RELEASE_DIR/ray_tracing" \
         python    "python3 $dir/python/ray_tracing.py"
 }
@@ -427,7 +427,7 @@ _run_micro() {
         turmeric  "$dir/turmeric/int_arith" \
         clojure   "clojure -M $dir/clojure/int_arith.clj" \
         racket    "racket $dir/racket/int_arith.rkt" \
-        turi      "$TUR run $dir/turi/int_arith.tur" \
+        turi      "$TUR --interpret$dir/turi/int_arith.tur" \
         rust      "$RUST_RELEASE_DIR/int_arith" \
         python    "python3 $dir/python/int_arith.py"
 
@@ -437,7 +437,7 @@ _run_micro() {
         turmeric  "$dir/turmeric/float_arith" \
         clojure   "clojure -M $dir/clojure/float_arith.clj" \
         racket    "racket $dir/racket/float_arith.rkt" \
-        turi      "$TUR run $dir/turi/float_arith.tur" \
+        turi      "$TUR --interpret$dir/turi/float_arith.tur" \
         rust      "$RUST_RELEASE_DIR/float_arith" \
         python    "python3 $dir/python/float_arith.py"
 
@@ -447,7 +447,7 @@ _run_micro() {
         turmeric  "$dir/turmeric/function_call" \
         clojure   "clojure -M $dir/clojure/function_call.clj" \
         racket    "racket $dir/racket/function_call.rkt" \
-        turi      "$TUR run $dir/turi/function_call.tur" \
+        turi      "$TUR --interpret$dir/turi/function_call.tur" \
         rust      "$RUST_RELEASE_DIR/function_call" \
         python    "python3 $dir/python/function_call.py"
 }
@@ -476,7 +476,7 @@ _bench_lang() {
             c|turmeric|rust)
                 impl_file="$primary" ;;
             turi)
-                # turi runs via $TUR run <file.tur>; find the .tur arg
+                # turi runs via $TUR --interpret <file.tur>; find the .tur arg
                 for w in "${cmd_arr[@]}"; do
                     case "$w" in *.tur) impl_file="$w" ;; esac
                 done ;;

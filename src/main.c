@@ -1442,14 +1442,80 @@ static int cmd_format(const char *path, bool check_only) {
     return rc;
 }
 
+static void wk_register_stdlib_natives(TuriEnv *env);
+
 /* Phase S0: tur repl — interactive read-eval-print loop. */
-/* Phase S0: run a .tur file through the tree-walking interpreter */
-static int cmd_eval(const char *path, bool use_color) {
+/* Phase INT-1: run a .tur file through the tree-walking interpreter.
+ * extra_argv/extra_argc are the arguments after the file path, exposed
+ * to the script as *args* (a cons-cell list of C-string pointers). */
+static int cmd_eval(const char *path, bool use_color,
+                    char **extra_argv, int extra_argc) {
+    g_interpret_mode = true;
     turi_init(use_color);
     TuriEnv *env = turi_env_new();
     if (!env) {
         fprintf(stderr, "tur: failed to create interpreter environment\n");
         return 1;
+    }
+    /* Inject typed stubs so the elaborator knows the signatures of native
+     * functions used by benchmark scripts.  The native shims registered below
+     * replace these no-op closures at runtime. */
+    {
+        TuriValue sv = turi_eval(env,
+            /* list operations */
+            "(defn nil-value [] :int 0)\n"
+            "(defn cons [v :int n :int] :int 0)\n"
+            "(defn head [lst :int] :int 0)\n"
+            "(defn tail [lst :int] :int 0)\n"
+            /* vec operations */
+            "(defn vec-new-filled [n :int v :int] :int 0)\n"
+            "(defn vec-get [v :int i :int] :int 0)\n"
+            "(defn vec-set! [v :int i :int x :int] :nil nil)\n"
+            "(defn vec-free [v :int] :nil nil)\n"
+            /* numeric helpers */
+            "(defn cstr->parse-int [s :int] :int 0)\n"
+            "(defn bit-shr [x :int n :int] :int 0)\n"
+            "(defn bit-xor [x :int y :int] :int 0)\n"
+            "(defn println-float [x :float d :int] :nil nil)\n"
+            "(defn int->unit-float [x :int] :float 0.0)\n"
+            "(defn tur-sqrt [x :float] :float 0.0)\n"
+            "(defn int->float [x :int] :float 0.0)\n"
+            /* HAMT operations for hash_map benchmark */
+            "(defn hamt-new [] :int 0)\n"
+            "(defn hamt-free [m :int] :nil nil)\n"
+            "(defn hamt-set [m :int hash :int key :int val :int] :int 0)\n"
+            "(defn hamt-get [m :int hash :int key :int] :int 0)\n"
+            "(defn hamt-hash-ptr [p :int] :int 0)\n"
+        );
+        (void)sv;
+    }
+    /* Register native overrides for stdlib inline-C functions. */
+    wk_register_stdlib_natives(env);
+    /* Build *args* as a cons-cell list of C-string pointers. */
+    {
+        typedef struct { int64_t value; int64_t next; } TurCons;
+        int64_t args_list = 0;
+        for (int i = extra_argc - 1; i >= 0; i--) {
+            TurCons *c = (TurCons *)malloc(sizeof(TurCons));
+            c->value = (int64_t)(intptr_t)extra_argv[i];
+            c->next  = args_list;
+            args_list = (int64_t)(intptr_t)c;
+        }
+        TuriValue args_val = {0};
+        args_val.tag    = TURI_INT;
+        args_val.as_int = args_list;
+        turi_env_set(env, "*args*", args_val);
+    }
+    /* Set module_base_dir so (import ...) resolves relative to the script. */
+    {
+        const char *slash = strrchr(path, '/');
+        if (slash) {
+            size_t dlen = (size_t)(slash - path);
+            char *dpath = (char *)malloc(dlen + 1);
+            memcpy(dpath, path, dlen);
+            dpath[dlen] = '\0';
+            env->module_base_dir = dpath;
+        }
     }
     TuriValue result = turi_eval_file(env, path);
     int rc = 0;
@@ -1461,6 +1527,14 @@ static int cmd_eval(const char *path, bool use_color) {
             fprintf(stderr, "tur: %s\n", msg);
         }
         rc = 1;
+    } else {
+        TuriValue main_fn = turi_env_get(env, "main");
+        if (main_fn.tag == TURI_CLOSURE) {
+            TuriValue r = turi_call(env, main_fn, NULL, 0);
+            if (r.tag == TURI_ERROR) rc = 1;
+            else if (r.tag == TURI_INT) rc = (int)r.as_int;
+        }
+        turi_run_pending_defers(env);
     }
     turi_env_free(env);
     return rc;
@@ -2579,6 +2653,12 @@ static void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "int->unit-float",   native_int_to_unit_float, NULL);
     turi_env_register_native(env, "tur-sqrt",          native_tur_sqrt,        NULL);
     turi_env_register_native(env, "int->float",        native_int_to_float,    NULL);
+    /* HAMT operations for hash_map benchmark (int-typed wrappers) */
+    turi_env_register_native(env, "hamt-new",          native_tur_hamt_new,    NULL);
+    turi_env_register_native(env, "hamt-free",         native_tur_hamt_free,   NULL);
+    turi_env_register_native(env, "hamt-set",          native_tur_hamt_set,    NULL);
+    turi_env_register_native(env, "hamt-get",          native_tur_hamt_get,    NULL);
+    turi_env_register_native(env, "hamt-hash-ptr",     native_tur_hamt_hash_ptr, NULL);
 }
 
 /* -------------------------------------------------------------------------
@@ -2794,6 +2874,7 @@ static int wk_eval_fixture(const char *input, const char *flags_str,
 
         wk_apply_flags(flags_str);
         if (timeout_secs > 0) alarm((unsigned)timeout_secs);
+        g_interpret_mode = true;
 
         TuriEnv *env = turi_env_new();
         /* Pre-load stdlib files so the elaborator has all standard definitions.
@@ -3700,7 +3781,7 @@ int main(int argc, char **argv) {
             fprintf(stderr, "tur: --interpret requires a file argument\n");
             return usage();
         }
-        return cmd_eval(argv[2], !no_color && stderr_is_tty());
+        return cmd_eval(argv[2], !no_color && stderr_is_tty(), argv + 3, argc - 3);
     }
     if (strcmp(cmd, "format") == 0) {
         bool check_only = false;
