@@ -1,0 +1,42 @@
+;; bits.tur -- bitwise operations not expressible as arithmetic in Turmeric.
+
+;;; bit-shr -- logical (unsigned) right shift of x by n bits.
+;;;
+;;; Parameters:
+;;;   x -- value to shift
+;;;   n -- number of bit positions to shift right
+;;;
+;;; Returns:
+;;;   x shifted right by n bits (unsigned/logical shift; 0-fills high bits).
+;;;
+;;; Example:
+;;;   (bit-shr -1 1)  ; => 9223372036854775807  (fills with 0, not sign bit)
+;;;
+;;; Since: Phase B1
+(defn bit-shr [x :int n :int] :int
+  ```c
+  return (int64_t)((uint64_t)x >> (unsigned)n);
+  ```)
+
+;;; println-float -- print a float with the specified number of decimal places.
+;;;
+;;; Parameters:
+;;;   x        -- floating-point value to print
+;;;   decimals -- number of decimal places (clamped to 0--17)
+;;;
+;;; Returns:
+;;;   :nil
+;;;
+;;; Example:
+;;;   (println-float 3.14159 6)  ; prints "3.141590"
+;;;
+;;; Since: Phase B1
+(defn println-float [x :float decimals :int] :nil
+  ```c
+  int d = (int)decimals;
+  if (d < 0) d = 0;
+  if (d > 17) d = 17;
+  char fmt[16];
+  snprintf(fmt, sizeof(fmt), "%%.%df\n", d);
+  printf(fmt, x);
+  ```)
