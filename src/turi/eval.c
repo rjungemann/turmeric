@@ -1556,6 +1556,42 @@ static TuriValue ic_exec_accessor(const char *body,
         return turi_nil();
     }
 
+    /* Fallback: find -> anywhere in the return expression; try to find param via (intptr_t)PARAM */
+    if (ret[0]!='-'||ret[1]!='>') {
+        /* Look for "->field_name" in the return expression */
+        const char *arrow_pos = strstr(varstart, "->");
+        if (!arrow_pos) return turi_nil();
+        const char *fns2 = arrow_pos+2;
+        char fn_name2[64]; int fn_len2_i = 0;
+        while ((isalnum((unsigned char)*fns2)||*fns2=='_') && fn_len2_i<63) fn_name2[fn_len2_i++]=*fns2++;
+        fn_name2[fn_len2_i] = '\0';
+        if (fn_len2_i == 0) return turi_nil();
+        size_t fn_len2 = (size_t)fn_len2_i;
+        int fidx2 = (nf>0)?ic_field_index(fn_name2,fn_len2,fnames,flens,nf):-1;
+        if (fidx2<0) fidx2=ic_common_field_idx(fn_name2,fn_len2);
+        if (fidx2<0) return turi_nil();
+        /* Look for which param is used: scan for (intptr_t)PARAM in the return expr */
+        int64_t ptr_val = n_args > 0 ? args[0].as_int : 0;
+        const char *itp = strstr(varstart, "intptr_t)");
+        if (itp) {
+            itp += 9;
+            while (*itp==' '||*itp=='\t') itp++;
+            char pname[64]; int plen=0;
+            while ((isalnum((unsigned char)*itp)||*itp=='_') && plen<63) pname[plen++]=*itp++;
+            pname[plen]='\0';
+            if (plen>0) {
+                int pidx2=ic_param_idx(fn,pname,0);
+                if (pidx2>=0&&(uint32_t)pidx2<n_args) ptr_val=args[pidx2].as_int;
+            }
+        }
+        if (ptr_val == 0) return turi_nil();
+        int64_t *ptr2=(int64_t*)(intptr_t)ptr_val;
+        int64_t fv2=ptr2[fidx2];
+        int ft2=(fidx2<nf)?ftypes[fidx2]:IC_FT_INT;
+        if (ft2==IC_FT_BOOL){TuriValue rv={0};rv.tag=TURI_BOOL;rv.as_bool=(bool)(fv2!=0);return rv;}
+        if (ft2==IC_FT_CSTR){TuriValue rv={0};rv.tag=TURI_CSTR;rv.as_cstr=(const char*)(intptr_t)fv2;return rv;}
+        TuriValue rv={0};rv.tag=TURI_INT;rv.as_int=fv2;return rv;
+    }
     /* Expect -> for pointer dereference */
     if (ret[0]!='-'||ret[1]!='>') return turi_nil();
     ret += 2;
