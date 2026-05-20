@@ -1530,6 +1530,63 @@ static void wk_drain_pipes(int fd_out, int fd_err, Buf *out_buf, Buf *err_buf) {
     close(fd_out); close(fd_err);
 }
 
+/* Native implementation of tur-contract-check (bool * cstr -> void).
+ * Panics (exit 1) if the condition is false; otherwise returns nil. */
+static TuriValue native_contract_check(TuriEnv *env, TuriValue *args,
+                                        uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    bool cond = true;
+    if (n >= 1) {
+        TuriValue a = args[0];
+        if (a.tag == TURI_BOOL)      cond = a.as_bool;
+        else if (a.tag == TURI_INT)  cond = (a.as_int != 0);
+        else if (a.tag == TURI_NIL)  cond = false;
+    }
+    if (!cond) {
+        const char *msg = (n >= 2 && args[1].tag == TURI_CSTR && args[1].as_cstr)
+                          ? args[1].as_cstr : "Assertion failed";
+        fprintf(stderr, "panic at\n%s\n", msg);
+        fflush(stderr);
+        exit(1);
+    }
+    return turi_nil();
+}
+
+/* Native implementation of tur-contract-check-inv (obj pred msg -> void).
+ * Calls pred(obj); panics if it returns false. */
+static TuriValue native_contract_check_inv(TuriEnv *env, TuriValue *args,
+                                            uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 3) return turi_nil();
+    TuriValue obj  = args[0];
+    TuriValue pred = args[1];
+    const char *msg = (args[2].tag == TURI_CSTR && args[2].as_cstr)
+                      ? args[2].as_cstr : "Invariant failed";
+    if (pred.tag != TURI_CLOSURE || !pred.as_closure) {
+        fprintf(stderr, "panic at\n%s (bad predicate)\n", msg);
+        fflush(stderr);
+        exit(1);
+    }
+    TuriValue result = turi_call(env, pred, &obj, 1);
+    bool ok = true;
+    if (result.tag == TURI_BOOL)     ok = result.as_bool;
+    else if (result.tag == TURI_INT) ok = (result.as_int != 0);
+    else if (result.tag == TURI_NIL) ok = false;
+    if (!ok) {
+        fprintf(stderr, "panic at\n%s\n", msg);
+        fflush(stderr);
+        exit(1);
+    }
+    return turi_nil();
+}
+
+/* Native contract-enabled? -- always returns true in worker mode. */
+static TuriValue native_contract_enabled(TuriEnv *env, TuriValue *args,
+                                          uint32_t n, void *ud) {
+    (void)env; (void)args; (void)n; (void)ud;
+    return turi_bool(true);
+}
+
 /* Run the interpreter on 'input' in a forked child.
  * Returns child exit code; writes captured stdout and stderr into out and err.
  * Caller frees *out and *err. */
@@ -1565,22 +1622,56 @@ static int wk_eval_fixture(const char *input, const char *flags_str,
         if (timeout_secs > 0) alarm((unsigned)timeout_secs);
 
         TuriEnv *env = turi_env_new();
+        /* Pre-load stdlib/macros.tur so its macros (cond, when, assert!, etc.)
+         * are available for elaborating user code.  We load only macros.tur
+         * (not contract.tur) because both files define assert! and loading both
+         * causes a "macro already defined" re-elaboration error.  The contract
+         * runtime helpers are registered as native C functions below. */
+        {
+            TuriValue sv = turi_eval_file(env, "stdlib/macros.tur");
+            (void)sv;
+        }
+        /* Register native implementations of contract runtime helpers.
+         * These replace the inline-C bodies (which return nil in interpreter
+         * mode) so that assertions actually check their conditions. */
+        turi_env_register_native(env, "tur-contract-check",
+                                 native_contract_check, NULL);
+        turi_env_register_native(env, "tur-contract-check-inv",
+                                 native_contract_check_inv, NULL);
+        turi_env_register_native(env, "contract-enabled?",
+                                 native_contract_enabled, NULL);
+        /* Set module_base_dir to the fixture directory so that (import ...)
+         * forms resolve sibling .tur files correctly. */
+        {
+            const char *slash = strrchr(input, '/');
+            if (slash) {
+                size_t dlen = (size_t)(slash - input);
+                char *dpath = (char *)malloc(dlen + 1);
+                memcpy(dpath, input, dlen);
+                dpath[dlen] = '\0';
+                env->module_base_dir = dpath;
+            }
+        }
         TuriValue v = turi_eval_file(env, input);
         int exit_code = 0;
         if (v.tag == TURI_ERROR) {
             exit_code = 1;
         } else {
             /* Fixtures that define (defn main [] :int ...) need an explicit call.
-             * Top-level-expression style fixtures already produced their output. */
+             * Use turi_call to invoke the closure directly, bypassing re-elaboration
+             * so macros from the initial eval remain available. */
             TuriValue main_fn = turi_env_get(env, "main");
             if (main_fn.tag == TURI_CLOSURE) {
-                TuriValue result = turi_eval(env, "(main)");
+                TuriValue result = turi_call(env, main_fn, NULL, 0);
                 if (result.tag == TURI_ERROR) {
                     exit_code = 1;
                 } else if (result.tag == TURI_INT) {
                     exit_code = (int)result.as_int;
                 }
             }
+            /* Fire any module-level or top-level defers that were registered
+             * outside of functions (e.g. bare (defer ...) at module scope). */
+            turi_run_pending_defers(env);
         }
         turi_env_free(env);
         fflush(NULL);

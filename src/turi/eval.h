@@ -23,6 +23,13 @@ TuriValue turi_eval(TuriEnv *env, const char *src);
 /* Evaluate the contents of a file. */
 TuriValue turi_eval_file(TuriEnv *env, const char *path);
 
+/* Call a closure value directly with the given arguments.
+ * Bypasses re-elaboration, so macros from previous elaboration calls
+ * remain usable inside the closure body.  The closure must have been
+ * obtained from turi_env_get() after a turi_eval_file() call.
+ * Returns TURI_ERROR on arity mismatch or runtime error. */
+TuriValue turi_call(TuriEnv *env, TuriValue fn, TuriValue *args, uint32_t n_args);
+
 /* Initialise the diagnostics subsystem for standalone libturi use.
  * Call once before the first turi_eval.  `use_color` enables ANSI colour
  * in error messages; pass false when output is not a terminal. */
@@ -61,5 +68,9 @@ TuriValue turi_sleep_async(TuriEnv *env, uint64_t ms);
  * Sets env->throwing and env->throw_value; the native should return
  * turi_nil() immediately after calling this. */
 void turi_native_throw(TuriEnv *env, const char *msg);
+
+/* Fire all remaining top-level/module-level deferred actions.
+ * Call after turi_call(main) to honour module-level (defer ...) forms. */
+void turi_run_pending_defers(TuriEnv *env);
 
 #endif /* TURI_EVAL_H */

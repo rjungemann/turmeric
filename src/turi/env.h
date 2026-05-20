@@ -115,6 +115,9 @@ typedef struct TuriEnv {
     EnvHashTable globals_ht;
     /* Active reader syntax mode — settable via #lang in the REPL */
     ReaderType   reader_type;
+    /* Base directory for resolving module imports (NULL = ".").
+     * Set this before turi_eval_file when the input uses (import ...). */
+    const char  *module_base_dir;
 } TuriEnv;
 
 /* Create a new unrestricted environment. */

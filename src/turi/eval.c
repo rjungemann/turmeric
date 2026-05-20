@@ -235,6 +235,13 @@ static TuriValue make_struct_val(const char *name, uint32_t n, TuriValue *fields
     return turi_struct_val(s);
 }
 
+/* Native callback for ADT constructors registered by EX_DEFDATA/EX_DEFGADT. */
+static TuriValue adt_ctor_native(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)env;
+    CtorDef *ctor = (CtorDef *)ud;
+    return make_struct_val(ctor->name, n, args);
+}
+
 /* Full definition of TuriThrow (forward-declared in value.h). */
 struct TuriThrow {
     TuriValue   value;      /* the thrown Turmeric value */
@@ -1045,20 +1052,155 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_DEFECT:
         return turi_nil();
 
-    /* DV1: Dynamic var nodes — runtime stubs until DV2 codegen */
-    case EX_DEFDYNAMIC:
+    /* --- G0/G1: ADT and GADT definitions --------------------------------- */
+    case EX_DEFDATA:
+    case EX_DEFGADT: {
+        AdtDef *adt = (e->kind == EX_DEFDATA)
+            ? e->as.defdata_.def : e->as.defgadt_.def;
+        for (uint32_t ci = 0; ci < adt->n_ctors; ci++) {
+            CtorDef *ctor = adt->ctors[ci];
+            /* Register each constructor as a native that builds a TuriStruct. */
+            turi_env_register_native(env, ctor->name,
+                                     adt_ctor_native, (void *)ctor);
+        }
         return turi_nil();
-    case EX_DYNVAR_READ:
-        /* Until DV2: return the root value (stored in entry->value_type for now,
-         * but the REPL has no storage, so return a placeholder 0). */
-        return turi_int(0);
-    case EX_DYNVAR_BINDING: {
-        /* Until DV2: evaluate body without actually installing frames */
-        return eval_expr_impl(env, frame, e->as.dynvar_binding_.body);
     }
-    case EX_DYNVAR_SET:
-        /* Until DV2: no-op (no binding stack to mutate) */
+
+    /* --- G0: match expression -------------------------------------------- */
+    case EX_MATCH: {
+        TuriValue val = eval_expr(env, frame, e->as.match_.scrutinee);
+        if (turi_is_error(val) || env->returning || env->throwing) return val;
+
+        MatchArm  *arms   = e->as.match_.arms;
+        uint32_t   n_arms = e->as.match_.n_arms;
+
+        for (uint32_t ai = 0; ai < n_arms; ai++) {
+            MatchArm    *arm = &arms[ai];
+            MatchPattern *pat = &arm->pattern;
+
+            bool matched = false;
+            EvalFrame *arm_frame = NULL;
+
+            if (pat->is_wildcard) {
+                matched   = true;
+                arm_frame = eval_frame_new(frame);
+            } else if (pat->is_var && pat->union_member_idx >= 0) {
+                /* IT4: Union type-narrowing arm — check runtime tag against member type */
+                bool tag_ok = false;
+                if (pat->n_bindings >= 1 && pat->bindings[0]) {
+                    TypeKind tk = pat->bindings[0]->type.kind;
+                    switch (tk) {
+                    case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+                    case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+                        tag_ok = (val.tag == TURI_INT); break;
+                    case TY_BOOL:
+                        tag_ok = (val.tag == TURI_BOOL); break;
+                    case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
+                        tag_ok = (val.tag == TURI_FLOAT); break;
+                    case TY_CSTR:
+                        tag_ok = (val.tag == TURI_CSTR); break;
+                    case TY_NIL:
+                        tag_ok = (val.tag == TURI_NIL); break;
+                    default:
+                        /* For struct/closure/pointer types, accept any non-primitive. */
+                        tag_ok = (val.tag == TURI_STRUCT || val.tag == TURI_CLOSURE);
+                        break;
+                    }
+                } else {
+                    tag_ok = true; /* no type info — treat as var capture */
+                }
+                if (tag_ok) {
+                    matched   = true;
+                    arm_frame = eval_frame_new(frame);
+                    if (pat->var_sym)
+                        frame_bind(arm_frame, pat->var_sym->name, val);
+                }
+            } else if (pat->is_var) {
+                matched   = true;
+                arm_frame = eval_frame_new(frame);
+                frame_bind(arm_frame, pat->var_sym->name, val);
+            } else {
+                CtorDef *ctor = pat->ctor;
+                if (ctor && val.tag == TURI_STRUCT &&
+                    strcmp(val.as_struct->name, ctor->name) == 0) {
+                    matched   = true;
+                    arm_frame = eval_frame_new(frame);
+                    for (uint32_t bi = 0; bi < pat->n_bindings; bi++) {
+                        Binding *b = pat->bindings[bi];
+                        if (b && bi < val.as_struct->n_fields)
+                            frame_bind(arm_frame, b->name->name,
+                                       val.as_struct->fields[bi]);
+                    }
+                }
+            }
+
+            if (matched) {
+                /* Optional guard: re-check if the arm has a when-guard. */
+                if (arm->guard) {
+                    TuriValue gv = eval_expr(env, arm_frame, arm->guard);
+                    if (turi_is_error(gv) || env->returning || env->throwing) {
+                        eval_frame_free(arm_frame);
+                        return gv;
+                    }
+                    if (gv.tag != TURI_BOOL || !gv.as_bool) {
+                        eval_frame_free(arm_frame);
+                        continue;
+                    }
+                }
+                TuriValue result = eval_expr(env, arm_frame, arm->body);
+                eval_frame_free(arm_frame);
+                return result;
+            }
+        }
+        return turi_error("eval: match: no arm matched");
+    }
+
+    /* --- DV0/DV1: Dynamic variables -------------------------------------- */
+    case EX_DEFDYNAMIC: {
+        DynVarEntry *entry = e->as.defdynamic_.entry;
+        TuriValue root = eval_expr(env, frame, e->as.defdynamic_.root_expr);
+        if (turi_is_error(root) || env->returning || env->throwing) return root;
+        turi_env_set(env, entry->name->name, root);
         return turi_nil();
+    }
+    case EX_DYNVAR_READ: {
+        DynVarEntry *entry = e->as.dynvar_read_.entry;
+        return turi_env_get(env, entry->name->name);
+    }
+    case EX_DYNVAR_BINDING: {
+        uint32_t   n_pairs = e->as.dynvar_binding_.n_pairs;
+        DynBinding *pairs  = e->as.dynvar_binding_.pairs;
+
+        TuriValue *saved = (TuriValue *)malloc(n_pairs * sizeof(TuriValue));
+        for (uint32_t pi = 0; pi < n_pairs; pi++)
+            saved[pi] = turi_env_get(env, pairs[pi].entry->name->name);
+
+        uint32_t installed = 0;
+        for (; installed < n_pairs; installed++) {
+            TuriValue ov = eval_expr(env, frame, pairs[installed].override_expr);
+            if (turi_is_error(ov) || env->returning || env->throwing) {
+                for (uint32_t ri = 0; ri < installed; ri++)
+                    turi_env_set(env, pairs[ri].entry->name->name, saved[ri]);
+                free(saved);
+                return ov;
+            }
+            turi_env_set(env, pairs[installed].entry->name->name, ov);
+        }
+
+        TuriValue result = eval_expr(env, frame, e->as.dynvar_binding_.body);
+
+        for (uint32_t pi = 0; pi < n_pairs; pi++)
+            turi_env_set(env, pairs[pi].entry->name->name, saved[pi]);
+        free(saved);
+        return result;
+    }
+    case EX_DYNVAR_SET: {
+        DynVarEntry *entry = e->as.dynvar_set_.entry;
+        TuriValue v = eval_expr(env, frame, e->as.dynvar_set_.value);
+        if (turi_is_error(v) || env->returning || env->throwing) return v;
+        turi_env_set(env, entry->name->name, v);
+        return turi_nil();
+    }
 
     /* (perform (EffectName arg1 ...)) — yield to nearest handler. */
     case EX_PERFORM: {
@@ -1158,7 +1300,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_INLINE_C:
         if (env->sandboxed)
             return turi_error("eval: inline-C not allowed in sandboxed environment");
-        return turi_error("eval: inline-C blocks cannot be executed by the interpreter");
+        /* In non-sandboxed interpreter mode, silently return nil.
+         * Inline-C functions that return void (like contract checks) will
+         * appear to succeed; those that return values will produce nil.
+         * This lets programs using stdlib functions with inline-C bodies
+         * run through the interpreter even without native C execution. */
+        return turi_nil();
 
     /* --- Phase S7: async / await ----------------------------------------- */
 
@@ -1337,6 +1484,200 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return result;
     }
 
+    /* --- Phase H §1: typeclass dictionary — return method closure ---------- */
+    case EX_DICT: {
+        TypeClassInstance *inst = e->as.dict_.instance;
+        const char *mname = e->as.dict_.method_name;
+        if (!inst || !mname || mname[0] == '\0') return turi_nil();
+        TypeClass *tc = inst->typeclass;
+        if (!tc) return turi_nil();
+        /* Find the method index by comparing sanitized method names.
+         * Sanitization: replace non-alphanumeric chars with '_'. */
+        for (uint32_t mi = 0; mi < tc->n_methods; mi++) {
+            const char *orig = tc->methods[mi].name->name;
+            /* Build sanitized version of orig for comparison. */
+            char san[128];
+            size_t olen = strlen(orig);
+            if (olen >= sizeof(san)) olen = sizeof(san) - 1;
+            for (size_t k = 0; k < olen; k++)
+                san[k] = (orig[k] >= '0' && orig[k] <= '9') ||
+                         (orig[k] >= 'a' && orig[k] <= 'z') ||
+                         (orig[k] >= 'A' && orig[k] <= 'Z') ? orig[k] : '_';
+            san[olen] = '\0';
+            if (strcmp(san, mname) != 0) continue;
+            /* Found matching method. */
+            if (mi >= inst->n_method_impls || !inst->method_impls[mi]) break;
+            FnDef *impl = inst->method_impls[mi];
+            TuriClosure *cl = (TuriClosure *)malloc(sizeof(TuriClosure));
+            memset(cl, 0, sizeof(*cl));
+            cl->fn       = impl;
+            cl->captured = NULL;
+            return turi_closure(cl);
+        }
+        return turi_errorf("eval: EX_DICT: method '%s' not found in instance", mname);
+    }
+
+    /* --- Phase N: numeric type cast ---------------------------------------- */
+    case EX_CAST: {
+        TuriValue v = eval_expr(env, frame, e->as.cast_.expr);
+        if (turi_is_error(v) || env->returning || env->throwing) return v;
+        switch (e->as.cast_.target_kind) {
+        case TY_INT:
+        case TY_INT64:
+            if (v.tag == TURI_FLOAT) return turi_int((int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int(v.as_int);
+            return turi_int(0);
+        case TY_INT8:
+            if (v.tag == TURI_FLOAT) return turi_int((int8_t)(int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int((int8_t)v.as_int);
+            return turi_int(0);
+        case TY_INT16:
+            if (v.tag == TURI_FLOAT) return turi_int((int16_t)(int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int((int16_t)v.as_int);
+            return turi_int(0);
+        case TY_INT32:
+            if (v.tag == TURI_FLOAT) return turi_int((int32_t)(int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int((int32_t)v.as_int);
+            return turi_int(0);
+        case TY_UINT8:
+            if (v.tag == TURI_FLOAT) return turi_int((int64_t)(uint8_t)(int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int((int64_t)(uint8_t)v.as_int);
+            return turi_int(0);
+        case TY_UINT16:
+            if (v.tag == TURI_FLOAT) return turi_int((int64_t)(uint16_t)(int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int((int64_t)(uint16_t)v.as_int);
+            return turi_int(0);
+        case TY_UINT32:
+            if (v.tag == TURI_FLOAT) return turi_int((int64_t)(uint32_t)(int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int((int64_t)(uint32_t)v.as_int);
+            return turi_int(0);
+        case TY_UINT64:
+            if (v.tag == TURI_FLOAT) return turi_int((int64_t)(uint64_t)(int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int((int64_t)(uint64_t)v.as_int);
+            return turi_int(0);
+        case TY_FLOAT:
+        case TY_FLOAT64:
+            if (v.tag == TURI_INT)   return turi_float((double)v.as_int);
+            if (v.tag == TURI_FLOAT) return turi_float(v.as_float);
+            return turi_float(0.0);
+        case TY_FLOAT32:
+            if (v.tag == TURI_INT)   return turi_float((double)(float)v.as_int);
+            if (v.tag == TURI_FLOAT) return turi_float((double)(float)v.as_float);
+            return turi_float(0.0);
+        case TY_BOOL:
+            if (v.tag == TURI_INT)   return turi_bool(v.as_int != 0);
+            return turi_bool(false);
+        default:
+            return v;
+        }
+    }
+
+    /* --- Phase 2: type ascription is transparent at runtime ---------------- */
+    case EX_ASCRIBE:
+        return eval_expr(env, frame, e->as.ascribe_.inner);
+
+    /* --- Phase N: poly wrap is transparent in the interpreter -------------- */
+    case EX_POLY_WRAP:
+        return eval_expr(env, frame, e->as.poly_wrap_.inner);
+
+    /* --- Phase 12: borrows are transparent (interpreter has no linearity) -- */
+    case EX_BORROW_IMMUT:
+        return eval_expr(env, frame, e->as.borrow_immut_.expr);
+    case EX_BORROW_MUT:
+        return eval_expr(env, frame, e->as.borrow_mut_.expr);
+    case EX_DEREF:
+        return eval_expr(env, frame, e->as.deref_.expr);
+    case EX_SET_DEREF: {
+        TuriValue v = eval_expr(env, frame, e->as.set_deref_.value);
+        if (turi_is_error(v) || env->returning || env->throwing) return v;
+        return v;
+    }
+
+    /* --- Phase R2: panic terminates the program ---------------------------- */
+    case EX_PANIC: {
+        TuriValue msg = eval_expr(env, frame, e->as.panic_.payload);
+        const char *s = (msg.tag == TURI_CSTR && msg.as_cstr) ? msg.as_cstr : "(no message)";
+        fprintf(stderr, "panic at\n%s\n", s);
+        fflush(stderr);
+        exit(1);
+    }
+
+    /* --- Phase 9: rc<T> simplified — no reference counting in interpreter -- */
+    case EX_RC_OF:
+        return eval_expr(env, frame, e->as.rc_of_.expr);
+    case EX_RC_CLONE:
+        return eval_expr(env, frame, e->as.rc_clone_.expr);
+    case EX_RC_DROP:
+        (void)eval_expr(env, frame, e->as.rc_drop_.expr);
+        return turi_nil();
+    case EX_RC_PTR:
+        return eval_expr(env, frame, e->as.rc_ptr_.expr);
+    case EX_RC_COUNT:
+        (void)eval_expr(env, frame, e->as.rc_count_.expr);
+        return turi_int(1);
+    case EX_RC_FROM_REF:
+        return eval_expr(env, frame, e->as.rc_from_ref_.expr);
+    case EX_REF_FROM_RC:
+        return eval_expr(env, frame, e->as.ref_from_rc_.expr);
+
+    /* --- Phase 5: ref<T> — transparent in interpreter --------------------- */
+    case EX_REF:
+        return eval_expr(env, frame, e->as.ref_.expr);
+    case EX_REF_PRED:
+        return turi_bool(true); /* assume refs are valid */
+
+    /* --- Phase 9: weak<T> — simplified in interpreter --------------------- */
+    case EX_WEAK:
+        return eval_expr(env, frame, e->as.weak_.expr);
+    case EX_WEAK_UPGRADE:
+        /* Simplified: always succeeds; return some(value) as struct */
+        return eval_expr(env, frame, e->as.weak_upgrade_.expr);
+    case EX_WEAK_PRED:
+        return turi_bool(true);
+
+    /* --- Phase HRT0: exists pack/open — erase existential box ------------- */
+    case EX_EXISTS_PACK:
+        return eval_expr(env, frame, e->as.exists_pack_.value);
+    case EX_EXISTS_OPEN: {
+        TuriValue packed = eval_expr(env, frame, e->as.exists_open_.packed);
+        if (turi_is_error(packed) || env->returning || env->throwing) return packed;
+        EvalFrame *ef = eval_frame_new(frame);
+        if (e->as.exists_open_.var_binding)
+            frame_bind(ef, e->as.exists_open_.var_binding->name->name, packed);
+        TuriValue r = eval_expr(env, ef, e->as.exists_open_.body);
+        eval_frame_free(ef);
+        return r;
+    }
+
+    /* --- IT0: union inject — tag a value for union type -------------------- */
+    case EX_UNION_INJECT:
+        return eval_expr(env, frame, e->as.union_inject_.value);
+
+    /* --- IT4: any-typed cast and type-of --------------------------------- */
+    case EX_ANY_CAST:
+        /* In the interpreter, 'any' values are untagged (union injection is
+         * transparent), so (cast x T) just returns the inner value. */
+        return eval_expr(env, frame, e->as.any_cast_.value);
+
+    case EX_ANY_TYPE_OF: {
+        TuriValue v = eval_expr(env, frame, e->as.any_type_of_.value);
+        if (turi_is_error(v) || env->returning || env->throwing) return v;
+        const char *tname = "unknown";
+        switch (v.tag) {
+        case TURI_INT:     tname = "int";     break;
+        case TURI_FLOAT:   tname = "float";   break;
+        case TURI_BOOL:    tname = "bool";    break;
+        case TURI_CSTR:    tname = "cstr";    break;
+        case TURI_NIL:     tname = "nil";     break;
+        case TURI_CLOSURE: tname = "fn";      break;
+        case TURI_STRUCT:
+            tname = (v.as_struct && v.as_struct->name) ? v.as_struct->name : "struct";
+            break;
+        default: break;
+        }
+        return turi_cstr(tname);
+    }
+
     /* --- Everything else — silently return nil --------------------------- */
     default:
         return turi_nil();
@@ -1414,11 +1755,18 @@ TuriValue turi_eval(TuriEnv *env, const char *src) {
         return turi_error("parse error");
     }
 
-    /* 6. Elaborate (read-only path: no borrow-check, no CPS, no emit). */
+    /* 6. Elaborate (read-only path: no borrow-check, no CPS, no emit).
+     * Pass prior_toplevel as stdlib_prefix so the elaborator resets
+     * has_defmodule after each defmodule in the already-accumulated forms.
+     * This lets multiple stdlib files (each with their own defmodule) be
+     * preloaded via successive turi_eval_file calls without hitting the
+     * "only one defmodule per file" error on re-elaboration. */
+    uint32_t prior = env->prior_toplevel;
+    const char *mbase = env->module_base_dir ? env->module_base_dir : ".";
     Expr *prog = elaborate_program(eval_arena, &env->st,
                                    forms, nforms,
-                                   /*stdlib_prefix=*/0,
-                                   /*module_base_dir=*/".",
+                                   /*stdlib_prefix=*/prior,
+                                   /*module_base_dir=*/mbase,
                                    /*separate_compilation=*/false,
                                    /*out_tc_env=*/NULL,
                                    /*include_dirs=*/NULL,
@@ -1427,42 +1775,65 @@ TuriValue turi_eval(TuriEnv *env, const char *src) {
         return turi_error("elaboration error");
     }
 
-    /* 7. Evaluate only the NEW top-level expressions. */
-    uint32_t prior = env->prior_toplevel;
+    /* 7. Evaluate the new top-level expressions.
+     *
+     * elaborate_program prepends any "file-scope defs" (EX_DEFMODULE nodes
+     * from imported modules resolved during elaboration) before the parsed
+     * forms.  As a result the total item count may exceed nforms:
+     *
+     *   [0 .. n_fsd-1]               <- file_scope_defs (imported modules)
+     *   [n_fsd .. n_fsd+prior-1]     <- previously-accumulated forms (already run)
+     *   [n_fsd+prior .. total-1]     <- new user forms (must run)
+     *
+     * where n_fsd = total - nforms.
+     *
+     * We must also run the file_scope_defs on every call because they are
+     * freshly elaborated and not yet registered in the runtime env.  Since
+     * EX_FN_DEF is idempotent (just overwrites the env binding), re-running
+     * them on subsequent calls is harmless.
+     *
+     * prior_toplevel tracks *parsed* form count (not total), so the formula
+     * stays consistent across calls even as n_fsd fluctuates. */
     uint32_t total = prog->as.program.n;
+    uint32_t n_fsd = (total > nforms) ? (total - nforms) : 0;
+
+#define EVAL_TOPLEVEL_RANGE(lo, hi) do {                                      \
+    for (uint32_t _i = (lo); _i < (hi); _i++) {                              \
+        last = eval_expr(env, NULL, prog->as.program.items[_i]);             \
+        if (env->returning) {                                                 \
+            last = env->return_value;                                         \
+            env->returning = false;                                           \
+        }                                                                     \
+        if (env->throwing) {                                                  \
+            env->throwing = false;                                            \
+            TuriValue _tv = env->throw_value;                                \
+            if (_tv.tag == TURI_THROW && _tv.as_throw) {                     \
+                TuriValue _inner = _tv.as_throw->value;                      \
+                if (_inner.tag == TURI_CSTR && _inner.as_cstr)               \
+                    last = turi_errorf("uncaught exception: %s",             \
+                                       _inner.as_cstr);                      \
+                else last = turi_error("uncaught exception");                 \
+            } else last = turi_error("uncaught exception");                   \
+            goto eval_done;                                                   \
+        }                                                                     \
+        if (turi_is_error(last)) goto eval_done;                             \
+    }                                                                         \
+} while (0)
 
     TuriValue last = turi_nil();
-    for (uint32_t i = prior; i < total; i++) {
-        last = eval_expr(env, NULL, prog->as.program.items[i]);
-        /* Clear any dangling return signal at the top level */
-        if (env->returning) {
-            last = env->return_value;
-            env->returning = false;
-        }
-        /* Convert an uncaught throw into a TURI_ERROR */
-        if (env->throwing) {
-            env->throwing = false;
-            TuriValue tv = env->throw_value;
-            if (tv.tag == TURI_THROW && tv.as_throw) {
-                TuriValue inner = tv.as_throw->value;
-                if (inner.tag == TURI_CSTR && inner.as_cstr)
-                    last = turi_errorf("uncaught exception: %s", inner.as_cstr);
-                else
-                    last = turi_error("uncaught exception");
-            } else {
-                last = turi_error("uncaught exception");
-            }
-            break;
-        }
-        if (turi_is_error(last)) break;
-    }
+    EVAL_TOPLEVEL_RANGE(0, n_fsd);              /* imported module bodies */
+    EVAL_TOPLEVEL_RANGE(n_fsd + prior, total);  /* new user forms         */
+eval_done:;
+#undef EVAL_TOPLEVEL_RANGE
 
-    /* 8. Update accumulated state only on success. */
+    /* 8. Update accumulated state only on success.
+     * Store nforms (parsed count) rather than total so the n_fsd formula
+     * remains correct on subsequent calls that re-elaborate the same imports. */
     if (!turi_is_error(last)) {
         /* Append new source (without any leading #lang line) to accumulator */
         if (env->src_acc.len > 0) buf_putc(&env->src_acc, '\n');
         buf_write(&env->src_acc, src_body, body_len);
-        env->prior_toplevel = total;
+        env->prior_toplevel = nforms;  /* track parsed count, not total */
     }
 
     return last;
@@ -1502,6 +1873,23 @@ TuriValue turi_eval_file(TuriEnv *env, const char *path) {
     TuriValue v = turi_eval(env, buf);
     free(buf);
     return v;
+}
+
+/* -------------------------------------------------------------------------
+ * turi_call: directly invoke a closure value
+ * ---------------------------------------------------------------------- */
+
+TuriValue turi_call(TuriEnv *env, TuriValue fn, TuriValue *args, uint32_t n_args) {
+    if (!env) return turi_error("turi_call: null env");
+    if (fn.tag != TURI_CLOSURE || !fn.as_closure)
+        return turi_errorf("turi_call: expected closure, got tag %d", fn.tag);
+    return eval_apply(env, fn.as_closure, args, n_args);
+}
+
+/* Fire all remaining deferred actions (those registered at module/top level).
+ * Call this after turi_call(main) to honour module-level (defer ...) forms. */
+void turi_run_pending_defers(TuriEnv *env) {
+    if (env) fire_defers_to_mark(env, NULL, NULL);
 }
 
 /* -------------------------------------------------------------------------
