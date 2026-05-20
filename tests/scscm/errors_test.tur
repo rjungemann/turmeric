@@ -165,10 +165,10 @@
       true)))
 
 (defn test-result-unwrap-error []
-  ;; Test unwrapping an error result (should panic or return default)
   (let [result (make-err :connection-failed)]
-    false  ;; TODO: update to use (catch-unwind ...) to test that result-unwrap panics
-    true))
+    (let [panicked (catch-unwind (fn [] (result-unwrap result)))]
+      (assert (panic? panicked) "result-unwrap on err should panic")
+      true)))
 
 (defn test-result-unwrap-or []
   ;; Test unwrapping with default

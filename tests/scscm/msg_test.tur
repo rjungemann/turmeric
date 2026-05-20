@@ -133,11 +133,10 @@
     true))
 
 (defn test-unsupported-type []
-  ;; Test adding unsupported type
-  (with-osc-message [msg "/test"]
-    ;; Try to add a list (unsupported)
-    ;; This should either work (flattened) or fail gracefully
-    ;; TODO: update to use (catch-unwind ...) to test panic behavior
+  (let [panicked (catch-unwind
+                    (fn [] (with-osc-message [msg "/test"]
+                              (osc-add! msg (list 1 2 3)))))]
+    (assert (panic? panicked) "Adding a list to an OSC message should panic")
     true))
 
 ;; ============================================================

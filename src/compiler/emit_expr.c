@@ -3478,6 +3478,110 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 return nil_result ? atom_nil() : tmp;
             }
 
+            /* Phase S4-lit: Literal pattern match -- scrutinee is a primitive type.
+             * Emits an if/else-if chain comparing the scrutinee against literal values. */
+            {
+                bool _has_lit = false;
+                for (uint32_t _ai = 0; _ai < e->as.match_.n_arms && !_has_lit; _ai++)
+                    _has_lit = e->as.match_.arms[_ai].pattern.is_literal;
+                if (_has_lit) {
+                    bool nil_result = (e->type.kind == TY_NIL);
+                    char *tmp = NULL;
+                    if (!nil_result) {
+                        tmp = fresh_tmp(ctx);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "%s %s = 0;\n", type_c_name(e->type), tmp);
+                    }
+                    char *scrut_val = emit_value(ctx, body, e->as.match_.scrutinee);
+                    TypeKind _sk = e->as.match_.scrutinee->type.kind;
+                    bool _is_str   = (_sk == TY_CSTR);
+                    bool _is_float = (_sk == TY_FLOAT || _sk == TY_FLOAT32 || _sk == TY_FLOAT64);
+                    char *scrut_tmp = fresh_tmp(ctx);
+                    indent_buf(body, ctx->indent);
+                    if (_is_str)
+                        buf_printf(body, "const char *%s = (const char *)(intptr_t)(%s);\n",
+                                   scrut_tmp, scrut_val);
+                    else if (_is_float)
+                        buf_printf(body, "double %s = (double)(%s);\n",
+                                   scrut_tmp, scrut_val);
+                    else
+                        buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n",
+                                   scrut_tmp, scrut_val);
+                    free(scrut_val);
+                    bool _first = true;
+                    for (uint32_t ai = 0; ai < e->as.match_.n_arms; ai++) {
+                        MatchArm *arm = &e->as.match_.arms[ai];
+                        MatchPattern *pat = &arm->pattern;
+                        indent_buf(body, ctx->indent);
+                        if (pat->is_wildcard || pat->is_var) {
+                            buf_puts(body, _first ? "{\n" : "else {\n");
+                        } else {
+                            const char *kw = _first ? "if" : "else if";
+                            switch (pat->lit_kind) {
+                            case F_INT:
+                                buf_printf(body, "%s (%s == (int64_t)%lldLL) {\n",
+                                           kw, scrut_tmp, (long long)pat->lit_int);
+                                break;
+                            case F_BOOL:
+                                buf_printf(body, "%s (%s == %s) {\n",
+                                           kw, scrut_tmp, pat->lit_bool ? "1" : "0");
+                                break;
+                            case F_FLOAT:
+                                buf_printf(body, "%s (%s == %g) {\n",
+                                           kw, scrut_tmp, pat->lit_float);
+                                break;
+                            case F_STR: {
+                                Buf _slit; buf_init(&_slit);
+                                StrSlice _ss; _ss.p = pat->lit_cstr ? pat->lit_cstr : "";
+                                _ss.len = (uint32_t)strlen(_ss.p);
+                                emit_c_string(&_slit, _ss);
+                                buf_putc(&_slit, '\0');
+                                buf_printf(body, "%s (%s != NULL && strcmp(%s, %s) == 0) {\n",
+                                           kw, scrut_tmp, scrut_tmp, _slit.data);
+                                buf_free(&_slit);
+                                break;
+                            }
+                            case F_NIL:
+                                buf_printf(body, "%s (%s == 0) {\n", kw, scrut_tmp);
+                                break;
+                            default:
+                                buf_printf(body, "%s (0) {\n", kw);
+                                break;
+                            }
+                        }
+                        _first = false;
+                        ctx->indent += 4;
+                        /* Bind var capture to scrutinee value */
+                        if (pat->is_var && pat->var_binding) {
+                            const char *_ctype = type_c_name(e->as.match_.scrutinee->type);
+                            char *_vname = name_for_binding(ctx, pat->var_binding);
+                            indent_buf(body, ctx->indent);
+                            if (_is_str)
+                                buf_printf(body, "const char *%s = %s;\n", _vname, scrut_tmp);
+                            else if (_is_float)
+                                buf_printf(body, "%s %s = (%s)%s;\n", _ctype, _vname, _ctype, scrut_tmp);
+                            else
+                                buf_printf(body, "%s %s = (%s)(intptr_t)%s;\n",
+                                           _ctype, _vname, _ctype, scrut_tmp);
+                            free(_vname);
+                        }
+                        if (!nil_result) {
+                            char *bv = emit_value(ctx, body, arm->body);
+                            indent_buf(body, ctx->indent);
+                            buf_printf(body, "%s = %s;\n", tmp, bv);
+                            free(bv);
+                        } else {
+                            emit_stmt(ctx, body, arm->body);
+                        }
+                        ctx->indent -= 4;
+                        indent_buf(body, ctx->indent);
+                        buf_puts(body, "}\n");
+                    }
+                    free(scrut_tmp);
+                    return nil_result ? atom_nil() : tmp;
+                }
+            }
+
             AdtDef *adt = e->as.match_.scrutinee->type.as.adt_.def;
             char adt_c_name[256];
             snprintf(adt_c_name, sizeof(adt_c_name), "tur_adt_%s", adt->name);

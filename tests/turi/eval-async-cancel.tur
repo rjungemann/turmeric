@@ -18,3 +18,11 @@
 (let [check (async (fn [] :int 0))]
   (let [r (await check)]
     (if (= r 0) (println "false") (println "unexpected"))))
+
+;; --- Test 3: async-race returns winner's value and cancels loser ------------
+;; The first future spawned resolves first in the FIFO scheduler; the second
+;; is cancelled.  async-race should return the winner's result (42).
+(let [fa (async (fn [] :int 42))]
+  (let [fb (async (fn [] :int 99))]
+    (let [result (async-race fa fb)]
+      (println result))))

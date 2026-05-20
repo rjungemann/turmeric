@@ -105,9 +105,9 @@
     true))
 
 (defn test-clock-zero-bpm []
-  ;; Zero BPM should be handled gracefully
-  ;; TODO: update to use (catch-unwind ...) to test that make-beat-clock 0.0 panics
-  false)
+  (let [panicked (catch-unwind (fn [] (make-beat-clock 0.0 44100.0)))]
+    (assert (panic? panicked) "make-beat-clock 0.0 should panic")
+    true))
 
 (defn test-audio-pattern-negative-sample []
   (let [p (audio-pattern (const 0.5) (make-beat-clock 120.0 44100.0))]

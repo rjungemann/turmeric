@@ -1,4 +1,5 @@
 #include "env.h"
+#include "eval.h"
 #include "fiber.h"
 
 #include <stdlib.h>
@@ -83,6 +84,8 @@ TuriEnv *turi_env_new(void) {
     turi_sched_init(env);
     /* Register async native builtins (sleep-async, with-timeout, etc.) */
     turi_async_register_builtins(env);
+    /* Register eval-layer native builtins (panic?, etc.) */
+    turi_eval_register_builtins(env);
     return env;
 }
 

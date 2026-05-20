@@ -48,6 +48,9 @@ void turi_value_repr(char *buf, size_t cap, TuriValue v);
 void turi_env_register_native(TuriEnv *env, const char *name,
                                TuriNativeFn fn, void *ud);
 
+/* Register eval-layer native builtins (struct-aware predicates, etc.). */
+void turi_eval_register_builtins(TuriEnv *env);
+
 /* Run the cooperative event loop until all async fibers and timers complete. */
 void turi_run_event_loop(TuriEnv *env);
 
