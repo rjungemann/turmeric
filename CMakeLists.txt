@@ -36,6 +36,11 @@ add_test(
   COMMAND bash tests/run-flags.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+add_test(
+  NAME turi_fixture_tests
+  COMMAND bash tests/run-turi.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 
 # Phase S0: tur repl / libturi smoke tests
 add_test(
@@ -83,6 +88,12 @@ add_test(
   COMMAND bash tests/turi/eval-s4.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# TCO: tail call optimization in eval
+add_test(
+  NAME tur_eval_tco
+  COMMAND bash tests/turi/eval-tco.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 
 # Phase S7: async/await, fiber scheduler
 add_test(
@@ -123,8 +134,9 @@ add_test(
 
 # Make sure tur is built before any test is run
 set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
+                     turi_fixture_tests
                      tur_repl_tests tur_repl_smoke tur_eval_import tur_eval_basic
-                     tur_eval_effects tur_eval_s4
+                     tur_eval_effects tur_eval_s4 tur_eval_tco
                      tur_eval_async_basic tur_eval_async_composition
                      tur_eval_async_effects tur_eval_async_timeout
                      tur_eval_async_cancel tur_eval_async_error tur_eval_async_io
@@ -138,8 +150,9 @@ set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
 # errors (use-after-free, out-of-bounds) without flagging that design choice.
 # tur_eval_import sets ASAN_OPTIONS via its own ENVIRONMENT above.
 set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
+                     turi_fixture_tests
                      tur_repl_tests tur_repl_smoke tur_eval_basic
-                     tur_eval_effects tur_eval_s4
+                     tur_eval_effects tur_eval_s4 tur_eval_tco
                      tur_eval_async_basic tur_eval_async_composition
                      tur_eval_async_effects tur_eval_async_timeout
                      tur_eval_async_cancel tur_eval_async_error tur_eval_async_io

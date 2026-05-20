@@ -255,18 +255,19 @@ run_happy() {
     local actual_c="$out_dir/actual.c"
     local log_file="$RESULTS_DIR/$(printf '%s' "happy-$name" | tr '/ ' '__').log"
     local needs_codegen_check=0
-    local needs_compiled=0
+    # Default: compiled. All fixtures run through tur build unless they
+    # carry a requires.interp marker (reserved for future interpreter-only
+    # tests).  Under TUR_TSAN=1 compiled mode is always forced.
+    local needs_compiled=1
 
     if [ -f "$dir/expected.c" ]; then
         needs_codegen_check=1
     fi
 
-    # requires.compiled: fixture must run as a native binary.
-    # Also force compiled mode under TUR_TSAN=1 so sanitizer flags apply.
-    # Add this marker to any fixture whose semantics diverge between the
-    # interpreter and compiled output (e.g. fiber/async ABI, C FFI tests).
-    if [ -f "$dir/requires.compiled" ] || [ "$TUR_TSAN" = "1" ]; then
-        needs_compiled=1
+    # requires.interp: override compiled default and use the interpreter.
+    # requires.compiled is kept for documentation but is now a no-op.
+    if [ -f "$dir/requires.interp" ] && [ "$TUR_TSAN" != "1" ]; then
+        needs_compiled=0
     fi
 
     # Stamp fast-path: skip if input, expected.c, and tur binary are all
@@ -491,16 +492,6 @@ export TUR_TSAN _tur_timeout_bin
 export -f matches_filter matches_shard write_result run_happy run_negative run_happy_worker run_negative_worker
 export -f _tur_hash_file _tur_mtime stamp_key stamp_check stamp_write _run_timed
 
-# Tier 3: persistent worker pool (opt-in, TUR_WORKER_POOL=1).
-# When enabled, happy-path fixtures are evaluated in-process via the Turmeric
-# interpreter (tur worker) rather than spawning a compiled binary per fixture.
-# This eliminates per-fixture syspolicyd hits on macOS.
-# Default is 0 (disabled) because the interpreter does not yet handle all
-# language features; enable after the interpreter reaches Tier 2 parity.
-# Auto-disabled under TUR_TSAN=1 (TSan requires compiled mode).
-TUR_WORKER_POOL="${TUR_WORKER_POOL:-0}"
-if [ "$TUR_TSAN" = "1" ]; then TUR_WORKER_POOL=0; fi
-
 # Happy fixtures: tests/fixtures/* except tests/fixtures/errors
 shopt -s nullglob
 HAPPY_DIRS=()
@@ -516,65 +507,7 @@ for d in tests/fixtures/*/; do
     fixture_ordinal=$((fixture_ordinal + 1))
 done
 
-if [ "$TUR_WORKER_POOL" = "1" ] && [ ${#HAPPY_DIRS[@]} -gt 0 ]; then
-    # --- Tier 3 worker pool path ---
-    # Pre-split: stamp-cached fixtures are recorded immediately;
-    # requires.compiled fixtures go through the shell compiled path (xargs);
-    # everything else is batched across N persistent tur worker processes.
-    PENDING_LIST="$RESULTS_DIR/pending.list"
-    COMPILED_LIST_FILE="$RESULTS_DIR/compiled_dirs.list"
-    : > "$PENDING_LIST"
-    : > "$COMPILED_LIST_FILE"
-    for dir in "${HAPPY_DIRS[@]}"; do
-        wk_name="${dir#tests/fixtures/}"
-        wk_input="$dir/input.tur"
-        [ -f "$wk_input" ] || wk_input="$dir/$(basename "$dir").tur"
-        if [ ! -f "$wk_input" ]; then continue; fi
-        if [ -f "$dir/requires.compiled" ] || { [ "$TUR_TSAN" = "1" ] && true; }; then
-            echo "$dir" >> "$COMPILED_LIST_FILE"
-        elif stamp_check "$wk_name" "$wk_input"; then
-            write_result "PASS" "$wk_name" "" ""
-        else
-            echo "$dir" >> "$PENDING_LIST"
-        fi
-    done
-
-    # Run requires.compiled fixtures using the existing xargs path.
-    if [ -s "$COMPILED_LIST_FILE" ]; then
-        xargs -P "$JOBS" -I{} bash -c 'run_happy_worker "$@"' _ {} < "$COMPILED_LIST_FILE" 2>/dev/null
-    fi
-
-    if [ -s "$PENDING_LIST" ]; then
-        # Distribute fixtures into N batch files round-robin.
-        BATCH_DIR="$RESULTS_DIR/batches"
-        mkdir -p "$BATCH_DIR"
-        batch_idx=0
-        while IFS= read -r wk_dir; do
-            printf '%s\n' "$wk_dir" >> "$BATCH_DIR/batch_$batch_idx"
-            batch_idx=$(( (batch_idx + 1) % JOBS ))
-        done < "$PENDING_LIST"
-
-        # Start one persistent worker per batch in parallel.
-        for batch_file in "$BATCH_DIR"/batch_*; do
-            [ -f "$batch_file" ] || continue
-            RESULTS_DIR="$RESULTS_DIR" "$TUR" worker < "$batch_file" &
-        done
-        wait
-
-        # Write stamp files for fixtures that passed in the workers.
-        for rf in "$RESULTS_DIR"/*.result; do
-            [ -f "$rf" ] || continue
-            rf_kind="$(sed -n '1p' "$rf")"
-            [ "$rf_kind" = "PASS" ] || continue
-            rf_name="$(sed -n '2p' "$rf")"
-            rf_dir="tests/fixtures/$rf_name"
-            rf_input="$rf_dir/input.tur"
-            [ -f "$rf_input" ] || rf_input="$rf_dir/$rf_name.tur"
-            [ -f "$rf_input" ] && stamp_write "$rf_name" "$rf_input"
-        done
-    fi
-elif [ ${#HAPPY_DIRS[@]} -gt 0 ]; then
-    # --- Original xargs path (Tier 2, used when worker pool is disabled) ---
+if [ ${#HAPPY_DIRS[@]} -gt 0 ]; then
     HAPPY_LIST_FILE="$RESULTS_DIR/happy_dirs.list"
     printf '%s\n' "${HAPPY_DIRS[@]}" > "$HAPPY_LIST_FILE"
     xargs -P "$JOBS" -I{} bash -c 'run_happy_worker "$@"' _ {} < "$HAPPY_LIST_FILE" 2>/dev/null

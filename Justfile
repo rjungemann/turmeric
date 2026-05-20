@@ -34,6 +34,14 @@ reconfigure:
 test: build
     ctest --output-on-failure --progress --test-dir build
 
+# Run only the compiled-fixture test suite (tur tests).
+test-tur: build
+    bash tests/run.sh
+
+# Run the interpreter fixture test suite (turi tests).
+test-turi: build
+    bash tests/run-turi.sh
+
 test-tsan: tsan
     TUR_TSAN=1 ctest --output-on-failure --test-dir build
 
