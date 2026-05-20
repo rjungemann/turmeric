@@ -61,3 +61,4 @@ performance-comparison/results/processed/
 performance-comparison/results/raw/
 performance-comparison/results/validation_report.json
 performance-comparison/benchmarks/rust-workspace/
+performance-comparison/inputs/large/
