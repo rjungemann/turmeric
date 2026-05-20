@@ -112,7 +112,7 @@ def main() -> None:
     flagged = []
     summary_rows = []
 
-    for (cat, bench, lang, size), timing_list in sorted(groups.keys()):
+    for (cat, bench, lang, size), timing_list in sorted(groups.items()):
         stats = analyze_group(groups[(cat, bench, lang, size)])
         cv = stats["cv"]
         flag = cv is not None and cv > args.threshold

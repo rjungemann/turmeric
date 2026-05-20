@@ -29,6 +29,9 @@ hello
 debug_iter
 hamt-bench-insert
 input
+hash_map
+primes
+sort
 
 # Test/build output files
 actual_test.stderr
@@ -45,3 +48,14 @@ web/test-results/
 # Playwright MCP browser session artifacts
 .playwright-mcp/
 core
+
+# Performance comparison build artifacts and generated output
+performance-comparison/benchmarks/*/c/
+performance-comparison/benchmarks/*/turi/
+performance-comparison/benchmarks/*/turmeric/*
+!performance-comparison/benchmarks/*/turmeric/*.tur
+performance-comparison/analysis/
+performance-comparison/results/processed/
+performance-comparison/results/raw/
+performance-comparison/results/validation_report.json
+performance-comparison/benchmarks/rust-workspace/

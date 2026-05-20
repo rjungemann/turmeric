@@ -5,7 +5,9 @@
 - **OS**: macOS 14.5
 - **Compiler/Interpreter Versions**:
   - C: Apple clang 17.0.0
-  - Turmeric: latest (local build)
+  - Turmeric: latest (local build, compiled to native via C)
+  - turi: latest (same source as Turmeric; tree-walking interpreter mode)
+  - Rust: 1.95.0 stable (cargo build --release)
   - Clojure: 1.12.5
   - Racket: 9.1
   - Python: 3.13.1

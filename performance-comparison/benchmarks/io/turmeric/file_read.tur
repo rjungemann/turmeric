@@ -1,30 +1,80 @@
 ;; file_read -- write N bytes then read them back; print bytes read.
-(defn parse-first-arg [default :int] :int
+;; The write phase uses a single inline-C call; the read loop is pure
+;; Turmeric tail-recursion over extern-c file primitives.
+(defn parse-first-arg [fallback :int] :int
   ```c
   struct __tur_cons { int64_t value; int64_t next; };
   struct __tur_cons *c = (struct __tur_cons *)(intptr_t)g_tur_args;
-  return c ? (int64_t)atoll((const char *)(intptr_t)c->value) : default;
+  return c ? (int64_t)atoll((const char *)(intptr_t)c->value) : fallback;
   ```)
 
-(defn file-read-bench [n :int] :int
+;; write-temp-file -- write n bytes of value 0xCD to path.
+(defn write-temp-file [path :cstr n :int] :nil
   ```c
-  const char *path = "/tmp/bench_io_read_tur.bin";
-  char wbuf[4096]; memset(wbuf, 0xCD, sizeof(wbuf));
-  FILE *fw = fopen(path, "wb");
-  if (!fw) { perror("fopen"); return -1; }
+  char buf[4096]; memset(buf, 0xCD, sizeof(buf));
+  FILE *f = fopen(path, "wb");
+  if (!f) return;
   int64_t rem = n;
   while (rem > 0) {
     int64_t chunk = rem < 4096 ? rem : 4096;
-    fwrite(wbuf, 1, (size_t)chunk, fw); rem -= chunk;
+    fwrite(buf, 1, (size_t)chunk, f); rem -= chunk;
   }
-  fclose(fw);
-  char rbuf[4096];
-  FILE *fr = fopen(path, "rb");
-  if (!fr) { perror("fopen read"); return -1; }
-  int64_t total = 0; size_t nr;
-  while ((nr = fread(rbuf, 1, sizeof(rbuf), fr)) > 0) total += (int64_t)nr;
-  fclose(fr); remove(path);
-  return total;
+  fclose(f);
   ```)
+
+;; io-fopen-read -- open a file for reading; returns file handle.
+(defn io-fopen-read [path :cstr] :ptr<void>
+  ```c
+  return (void *)fopen(path, "rb");
+  ```)
+
+;; io-fread-chunk -- read up to 4096 bytes from fp into buf; returns bytes read.
+(defn io-fread-chunk [fp :ptr<void> buf :ptr<void>] :int
+  ```c
+  return (int64_t)fread(buf, 1, 4096, (FILE *)fp);
+  ```)
+
+;; io-fclose -- close a file handle.
+(defn io-fclose [fp :ptr<void>] :nil
+  ```c
+  fclose((FILE *)fp);
+  ```)
+
+;; io-remove -- delete a file.
+(defn io-remove [path :cstr] :nil
+  ```c
+  remove(path);
+  ```)
+
+;; io-buf-new -- allocate a 4096-byte read buffer.
+(defn io-buf-new [] :ptr<void>
+  ```c
+  return malloc(4096);
+  ```)
+
+;; io-buf-free -- release a read buffer.
+(defn io-buf-free [buf :ptr<void>] :nil
+  ```c
+  free(buf);
+  ```)
+
+;; read-loop -- tail-recursive read until EOF; accumulates total bytes.
+(defn read-loop [fp :ptr<void> buf :ptr<void> total :int] :int
+  (let [nr (io-fread-chunk fp buf)]
+    (if (<= nr 0)
+      total
+      (read-loop fp buf (+ total nr)))))
+
+;; file-read-bench -- write, then read back, return bytes read.
+(defn file-read-bench [n :int] :int
+  (let [path "/tmp/bench_io_read_tur.bin"]
+    (do (write-temp-file path n)
+        (let [fp  (io-fopen-read path)
+              buf (io-buf-new)
+              tot (read-loop fp buf 0)]
+          (do (io-fclose fp)
+              (io-remove path)
+              (io-buf-free buf)
+              tot)))))
 
 (println (file-read-bench (parse-first-arg 1048576)))

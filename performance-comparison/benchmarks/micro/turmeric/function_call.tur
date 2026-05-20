@@ -1,9 +1,9 @@
 ;; function_call -- N tail-recursive calls; measures function-call overhead.
-(defn parse-first-arg [default :int] :int
+(defn parse-first-arg [fallback :int] :int
   ```c
   struct __tur_cons { int64_t value; int64_t next; };
   struct __tur_cons *c = (struct __tur_cons *)(intptr_t)g_tur_args;
-  return c ? (int64_t)atoll((const char *)(intptr_t)c->value) : default;
+  return c ? (int64_t)atoll((const char *)(intptr_t)c->value) : fallback;
   ```)
 
 (defn loop-fn [i :int n :int acc :int] :int

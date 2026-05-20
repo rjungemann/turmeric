@@ -1,48 +1,52 @@
 ;; ray_tracing -- render width x height scene; print pixel checksum.
-(defn parse-arg [idx :int default :int] :int
+(defn parse-arg [idx :int fallback :int] :int
   ```c
   struct __tur_cons { int64_t value; int64_t next; };
   struct __tur_cons *cell = (struct __tur_cons *)(intptr_t)g_tur_args;
   for (int64_t i = 0; i < idx && cell; i++)
     cell = (struct __tur_cons *)(intptr_t)cell->next;
-  return cell ? (int64_t)atoll((const char *)(intptr_t)cell->value) : default;
+  return cell ? (int64_t)atoll((const char *)(intptr_t)cell->value) : fallback;
   ```)
 
 (defn run-raytracer [width :int height :int] :int
   ```c
+  double sqrt(double); double fmax(double, double);
   typedef struct { double x,y,z; } Vec3;
   typedef struct { Vec3 center; double radius; } Sphere;
-  Vec3 vadd(Vec3 a, Vec3 b) { return (Vec3){a.x+b.x,a.y+b.y,a.z+b.z}; }
-  Vec3 vsub(Vec3 a, Vec3 b) { return (Vec3){a.x-b.x,a.y-b.y,a.z-b.z}; }
-  Vec3 vscale(Vec3 v, double s) { return (Vec3){v.x*s,v.y*s,v.z*s}; }
-  double vdot(Vec3 a, Vec3 b) { return a.x*b.x+a.y*b.y+a.z*b.z; }
-  Vec3 vnorm(Vec3 v) { double l=sqrt(vdot(v,v))+1e-15; return vscale(v,1/l); }
-  int rhit(Sphere s, Vec3 ro, Vec3 rd, double *t) {
-    Vec3 oc=vsub(ro,s.center);
-    double a=vdot(rd,rd),b2=vdot(oc,rd),c=vdot(oc,oc)-s.radius*s.radius;
-    double d=b2*b2-a*c; if(d<0) return 0;
-    *t=(-b2-sqrt(d))/a; return *t>0.001;
-  }
+  #define RT_ADD(a,b) ((Vec3){(a).x+(b).x,(a).y+(b).y,(a).z+(b).z})
+  #define RT_SUB(a,b) ((Vec3){(a).x-(b).x,(a).y-(b).y,(a).z-(b).z})
+  #define RT_SCALE(v,s) ((Vec3){(v).x*(s),(v).y*(s),(v).z*(s)})
+  #define RT_DOT(a,b) ((a).x*(b).x+(a).y*(b).y+(a).z*(b).z)
+  #define RT_NORM(v) RT_SCALE(v, 1.0/(sqrt(RT_DOT(v,v))+1e-15))
   Sphere spheres[]={{{0,0,-5},1.0},{{2,0,-7},1.5},{{-3,0,-6},0.8}};
-  Vec3 light=vnorm((Vec3){1,1,-1});
+  Vec3 light=RT_NORM(((Vec3){1,1,-1}));
   Vec3 origin={0,0,0};
   int64_t checksum=0;
   for (int64_t y=0; y<height; y++) {
     for (int64_t x=0; x<width; x++) {
       double u=((double)x/width)*2-1, v=((double)y/height)*2-1;
-      Vec3 dir=vnorm((Vec3){u,v,-1});
+      Vec3 dir=RT_NORM(((Vec3){u,v,-1}));
       double best=1e18; int bi=-1;
       for (int i=0;i<3;i++) {
-        double t; if(rhit(spheres[i],origin,dir,&t)&&t<best){best=t;bi=i;}
+        Vec3 oc=RT_SUB(origin,spheres[i].center);
+        double a=RT_DOT(dir,dir),b2=RT_DOT(oc,dir);
+        double c=RT_DOT(oc,oc)-spheres[i].radius*spheres[i].radius;
+        double d=b2*b2-a*c;
+        if(d>=0){double t=(-b2-sqrt(d))/a; if(t>0.001&&t<best){best=t;bi=i;}}
       }
       if (bi>=0) {
-        Vec3 hp=vadd(origin,vscale(dir,best));
-        Vec3 n=vnorm(vsub(hp,spheres[bi].center));
-        double diff=fmax(0,vdot(n,light));
+        Vec3 hp=RT_ADD(origin,RT_SCALE(dir,best));
+        Vec3 n=RT_NORM(RT_SUB(hp,spheres[bi].center));
+        double diff=fmax(0,RT_DOT(n,light));
         checksum+=(int64_t)(diff*255);
       }
     }
   }
+  #undef RT_ADD
+  #undef RT_SUB
+  #undef RT_SCALE
+  #undef RT_DOT
+  #undef RT_NORM
   return checksum;
   ```)
 

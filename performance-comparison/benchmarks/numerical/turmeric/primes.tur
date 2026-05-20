@@ -1,23 +1,57 @@
 ;; primes -- sieve of Eratosthenes benchmark.
-(defn parse-first-arg [default :int] :int
+;; The sieve array is managed by thin inline-C helpers; the nested loop
+;; algorithm is expressed as pure Turmeric tail-recursion.
+(defn parse-first-arg [fallback :int] :int
   ```c
   struct __tur_cons { int64_t value; int64_t next; };
   struct __tur_cons *c = (struct __tur_cons *)(intptr_t)g_tur_args;
-  return c ? (int64_t)atoll((const char *)(intptr_t)c->value) : default;
+  return c ? (int64_t)atoll((const char *)(intptr_t)c->value) : fallback;
   ```)
 
-(defn count-primes [limit :int] :int
+;; sieve-new -- allocate a zero-filled int array of 'size' elements.
+(defn sieve-new [size :int] :ptr<void>
   ```c
-  char *sieve = calloc((size_t)(limit + 1), 1);
-  int64_t count = 0;
-  for (int64_t i = 2; i <= limit; i++) {
-    if (!sieve[i]) {
-      count++;
-      for (int64_t j = 2 * i; j <= limit; j += i) sieve[j] = 1;
-    }
-  }
-  free(sieve);
-  return count;
+  return calloc((size_t)size, sizeof(int64_t));
   ```)
+
+;; sieve-get -- read element i from the sieve.
+(defn sieve-get [s :ptr<void> i :int] :int
+  ```c
+  return ((int64_t *)s)[i];
+  ```)
+
+;; sieve-set -- write 1 to element i (mark composite).
+(defn sieve-set! [s :ptr<void> i :int] :nil
+  ```c
+  ((int64_t *)s)[i] = 1;
+  ```)
+
+;; sieve-free -- release the sieve array.
+(defn sieve-free [s :ptr<void>] :nil
+  ```c
+  free(s);
+  ```)
+
+;; mark-multiples -- tail-recursive inner loop: mark j, j+step, j+2*step, ...
+(defn mark-multiples [s :ptr<void> j :int step :int limit :int] :nil
+  (if (<= j limit)
+    (do (sieve-set! s j)
+        (mark-multiples s (+ j step) step limit))))
+
+;; count-primes-loop -- tail-recursive outer loop.
+(defn count-primes-loop [s :ptr<void> i :int limit :int count :int] :int
+  (if (> i limit)
+    count
+    (if (= (sieve-get s i) 0)
+      (do (mark-multiples s (* 2 i) i limit)
+          (count-primes-loop s (+ i 1) limit (+ count 1)))
+      (count-primes-loop s (+ i 1) limit count))))
+
+;; count-primes -- run the sieve up to limit; return prime count.
+(defn count-primes [limit :int] :int
+  (let [s (sieve-new (+ limit 1))]
+    (let [result (count-primes-loop s 2 limit 0)]
+      (sieve-free s)
+      result)))
 
 (println (count-primes (parse-first-arg 10000)))

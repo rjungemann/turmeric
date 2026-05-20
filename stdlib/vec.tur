@@ -476,3 +476,26 @@
     snprintf(buf + off, (int)(total + 1) - off, "]");
     return (const char *)(intptr_t)buf;
     ```))
+;;; vec-sort! -- sort the elements of a vec in ascending order (in-place).
+;;;
+;;; Parameters:
+;;;   v -- vec pointer (as :int / int64_t)
+;;;
+;;; Returns:
+;;;   :nil
+;;;
+;;; Example:
+;;;   (vec-sort! my-vec)
+;;;
+;;; Since: Phase B2
+(defn vec-sort! [v] :nil
+  ```c
+  struct { int64_t *data; size_t len; size_t cap; } *vec =
+      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
+  if (!vec || vec->len < 2) return;
+  static int cmp_i64(const void *a, const void *b) {
+      int64_t x = *(const int64_t *)a, y = *(const int64_t *)b;
+      return (x > y) - (x < y);
+  }
+  qsort(vec->data, vec->len, sizeof(int64_t), cmp_i64);
+  ```)

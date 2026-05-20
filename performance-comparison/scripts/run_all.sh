@@ -22,19 +22,39 @@ cd "$(dirname "$0")/.."
 BENCHMARK_DIR="$(pwd)/benchmarks"
 INPUT_DIR="$(pwd)/inputs"
 RESULTS_DIR="$(pwd)/results/raw"
-TUR="$(pwd)/../../build-rel/tur"    # Turmeric release binary (relative to project root)
+TUR="$(pwd)/../build/tur"             # Turmeric build binary (relative to project root)
+RUST_RELEASE_DIR="$(pwd)/benchmarks/rust-workspace/target/release"  # Rust release binaries
 WARMUP_RUNS=3
 MEASURE_RUNS=10
+BENCHMARK_TIMEOUT_S=60   # per-invocation timeout (seconds)
 
 mkdir -p "$RESULTS_DIR"
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
+# Detect a working timeout command (macOS needs coreutils gtimeout)
+if command -v gtimeout &>/dev/null; then
+    _TIMEOUT_CMD=gtimeout
+elif command -v timeout &>/dev/null; then
+    _TIMEOUT_CMD=timeout
+else
+    _TIMEOUT_CMD=""
+fi
+
+# with_timeout <cmd> [args...] -- run with BENCHMARK_TIMEOUT_S timeout if available
+with_timeout() {
+    if [ -n "${_TIMEOUT_CMD:-}" ]; then
+        "$_TIMEOUT_CMD" "$BENCHMARK_TIMEOUT_S" "$@"
+    else
+        "$@"
+    fi
+}
+
 # elapsed_s <cmd> [args...] -- run command and return wall-clock seconds
 elapsed_s() {
     local start end
     start=$(python3 -c "import time; print(time.perf_counter())")
-    "$@" > /dev/null 2>&1
+    with_timeout "$@" > /dev/null 2>&1
     end=$(python3 -c "import time; print(time.perf_counter())")
     python3 -c "print(round($end - $start, 6))"
 }
@@ -67,8 +87,8 @@ run_timed() {
 
     # Correctness check — run once, capture stdout
     local output
-    output=$("${cmd[@]}" 2>/dev/null) || {
-        echo "    SKIP: command failed"
+    output=$(with_timeout "${cmd[@]}" 2>/dev/null) || {
+        echo "    SKIP: command failed or timed out"
         return
     }
 
@@ -88,7 +108,7 @@ run_timed() {
 
     # Peak RSS (single run)
     local rss
-    rss=$(peak_rss_kb "${cmd[@]}" 2>/dev/null) || rss="null"
+    rss=$(peak_rss_kb "${cmd[@]}" 2>/dev/null) || rss="null"   # peak_rss_kb uses /usr/bin/time; timeout applies inside elapsed_s
 
     # Build JSON
     local times_json
@@ -166,6 +186,8 @@ _run_numerical() {
         turmeric  "$dir/turmeric/fibonacci" \
         clojure   "clojure -M $dir/clojure/fibonacci.clj" \
         racket    "racket $dir/racket/fibonacci.rkt" \
+        turi      "$TUR run $dir/turi/fibonacci.tur" \
+        rust      "$RUST_RELEASE_DIR/fibonacci" \
         python    "python3 $dir/python/fibonacci.py"
 
     # primes (sieve)
@@ -176,6 +198,8 @@ _run_numerical() {
         turmeric  "$dir/turmeric/primes" \
         clojure   "clojure -M $dir/clojure/primes.clj" \
         racket    "racket $dir/racket/primes.rkt" \
+        turi      "$TUR run $dir/turi/primes.tur" \
+        rust      "$RUST_RELEASE_DIR/primes" \
         python    "python3 $dir/python/primes.py"
 
     # matrix_multiply
@@ -186,6 +210,8 @@ _run_numerical() {
         turmeric  "$dir/turmeric/matrix_multiply" \
         clojure   "clojure -M $dir/clojure/matrix_multiply.clj" \
         racket    "racket $dir/racket/matrix_multiply.rkt" \
+        turi      "$TUR run $dir/turi/matrix_multiply.tur" \
+        rust      "$RUST_RELEASE_DIR/matrix_multiply" \
         python    "python3 $dir/python/matrix_multiply.py"
 
     # monte_carlo_pi
@@ -196,6 +222,8 @@ _run_numerical() {
         turmeric  "$dir/turmeric/monte_carlo_pi" \
         clojure   "clojure -M $dir/clojure/monte_carlo_pi.clj" \
         racket    "racket $dir/racket/monte_carlo_pi.rkt" \
+        turi      "$TUR run $dir/turi/monte_carlo_pi.tur" \
+        rust      "$RUST_RELEASE_DIR/monte_carlo_pi" \
         python    "python3 $dir/python/monte_carlo_pi.py"
 }
 
@@ -210,6 +238,8 @@ _run_data_structures() {
         turmeric  "$dir/turmeric/list_ops" \
         clojure   "clojure -M $dir/clojure/list_ops.clj" \
         racket    "racket $dir/racket/list_ops.rkt" \
+        turi      "$TUR run $dir/turi/list_ops.tur" \
+        rust      "$RUST_RELEASE_DIR/list_ops" \
         python    "python3 $dir/python/list_ops.py"
 
     n=$(python3 -c "import json; d=json.load(open('$idir/hash_map.json')); print(d['$size']['n'])")
@@ -218,6 +248,8 @@ _run_data_structures() {
         turmeric  "$dir/turmeric/hash_map" \
         clojure   "clojure -M $dir/clojure/hash_map.clj" \
         racket    "racket $dir/racket/hash_map.rkt" \
+        turi      "$TUR run $dir/turi/hash_map.tur" \
+        rust      "$RUST_RELEASE_DIR/hash_map" \
         python    "python3 $dir/python/hash_map.py"
 
     n=$(python3 -c "import json; d=json.load(open('$idir/sort.json')); print(d['$size']['n'])")
@@ -226,6 +258,8 @@ _run_data_structures() {
         turmeric  "$dir/turmeric/sort" \
         clojure   "clojure -M $dir/clojure/sort.clj" \
         racket    "racket $dir/racket/sort.rkt" \
+        turi      "$TUR run $dir/turi/sort.tur" \
+        rust      "$RUST_RELEASE_DIR/sort" \
         python    "python3 $dir/python/sort.py"
 }
 
@@ -240,6 +274,8 @@ _run_string_processing() {
         turmeric  "$dir/turmeric/string_concat" \
         clojure   "clojure -M $dir/clojure/string_concat.clj" \
         racket    "racket $dir/racket/string_concat.rkt" \
+        turi      "$TUR run $dir/turi/string_concat.tur" \
+        rust      "$RUST_RELEASE_DIR/string_concat" \
         python    "python3 $dir/python/string_concat.py"
 
     local hs_n
@@ -249,6 +285,8 @@ _run_string_processing() {
         turmeric  "$dir/turmeric/text_search" \
         clojure   "clojure -M $dir/clojure/text_search.clj" \
         racket    "racket $dir/racket/text_search.rkt" \
+        turi      "$TUR run $dir/turi/text_search.tur" \
+        rust      "$RUST_RELEASE_DIR/text_search" \
         python    "python3 $dir/python/text_search.py"
 }
 
@@ -264,6 +302,8 @@ _run_concurrency() {
         turmeric  "$dir/turmeric/thread_ring" \
         clojure   "clojure -M $dir/clojure/thread_ring.clj" \
         racket    "racket $dir/racket/thread_ring.rkt" \
+        turi      "$TUR run $dir/turi/thread_ring.tur" \
+        rust      "$RUST_RELEASE_DIR/thread_ring" \
         python    "python3 $dir/python/thread_ring.py"
 }
 
@@ -278,6 +318,8 @@ _run_memory() {
         turmeric  "$dir/turmeric/alloc_churn" \
         clojure   "clojure -M $dir/clojure/alloc_churn.clj" \
         racket    "racket $dir/racket/alloc_churn.rkt" \
+        turi      "$TUR run $dir/turi/alloc_churn.tur" \
+        rust      "$RUST_RELEASE_DIR/alloc_churn" \
         python    "python3 $dir/python/alloc_churn.py"
 }
 
@@ -292,6 +334,8 @@ _run_recursion() {
         turmeric  "$dir/turmeric/fib_recursive" \
         clojure   "clojure -M $dir/clojure/fib_recursive.clj" \
         racket    "racket $dir/racket/fib_recursive.rkt" \
+        turi      "$TUR run $dir/turi/fib_recursive.tur" \
+        rust      "$RUST_RELEASE_DIR/fib_recursive" \
         python    "python3 $dir/python/fib_recursive.py"
 
     n=$(python3 -c "import json; d=json.load(open('$idir/factorial.json')); print(d['$size']['n'])")
@@ -300,6 +344,8 @@ _run_recursion() {
         turmeric  "$dir/turmeric/factorial" \
         clojure   "clojure -M $dir/clojure/factorial.clj" \
         racket    "racket $dir/racket/factorial.rkt" \
+        turi      "$TUR run $dir/turi/factorial.tur" \
+        rust      "$RUST_RELEASE_DIR/factorial" \
         python    "python3 $dir/python/factorial.py"
 }
 
@@ -314,6 +360,8 @@ _run_io() {
         turmeric  "$dir/turmeric/file_write" \
         clojure   "clojure -M $dir/clojure/file_write.clj" \
         racket    "racket $dir/racket/file_write.rkt" \
+        turi      "$TUR run $dir/turi/file_write.tur" \
+        rust      "$RUST_RELEASE_DIR/file_write" \
         python    "python3 $dir/python/file_write.py"
 
     n=$(python3 -c "import json; d=json.load(open('$idir/file_read.json')); print(d['$size']['n'])")
@@ -322,6 +370,8 @@ _run_io() {
         turmeric  "$dir/turmeric/file_read" \
         clojure   "clojure -M $dir/clojure/file_read.clj" \
         racket    "racket $dir/racket/file_read.rkt" \
+        turi      "$TUR run $dir/turi/file_read.tur" \
+        rust      "$RUST_RELEASE_DIR/file_read" \
         python    "python3 $dir/python/file_read.py"
 
     local fsize nreads
@@ -332,6 +382,8 @@ _run_io() {
         turmeric  "$dir/turmeric/random_access" \
         clojure   "clojure -M $dir/clojure/random_access.clj" \
         racket    "racket $dir/racket/random_access.rkt" \
+        turi      "$TUR run $dir/turi/random_access.tur" \
+        rust      "$RUST_RELEASE_DIR/random_access" \
         python    "python3 $dir/python/random_access.py"
 }
 
@@ -347,6 +399,8 @@ _run_real_world() {
         turmeric  "$dir/turmeric/nbody" \
         clojure   "clojure -M $dir/clojure/nbody.clj" \
         racket    "racket $dir/racket/nbody.rkt" \
+        turi      "$TUR run $dir/turi/nbody.tur" \
+        rust      "$RUST_RELEASE_DIR/nbody" \
         python    "python3 $dir/python/nbody.py"
 
     local rt_w rt_h
@@ -357,6 +411,8 @@ _run_real_world() {
         turmeric  "$dir/turmeric/ray_tracing" \
         clojure   "clojure -M $dir/clojure/ray_tracing.clj" \
         racket    "racket $dir/racket/ray_tracing.rkt" \
+        turi      "$TUR run $dir/turi/ray_tracing.tur" \
+        rust      "$RUST_RELEASE_DIR/ray_tracing" \
         python    "python3 $dir/python/ray_tracing.py"
 }
 
@@ -371,6 +427,8 @@ _run_micro() {
         turmeric  "$dir/turmeric/int_arith" \
         clojure   "clojure -M $dir/clojure/int_arith.clj" \
         racket    "racket $dir/racket/int_arith.rkt" \
+        turi      "$TUR run $dir/turi/int_arith.tur" \
+        rust      "$RUST_RELEASE_DIR/int_arith" \
         python    "python3 $dir/python/int_arith.py"
 
     n=$(python3 -c "import json; d=json.load(open('$idir/float_arith.json')); print(d['$size']['n'])")
@@ -379,6 +437,8 @@ _run_micro() {
         turmeric  "$dir/turmeric/float_arith" \
         clojure   "clojure -M $dir/clojure/float_arith.clj" \
         racket    "racket $dir/racket/float_arith.rkt" \
+        turi      "$TUR run $dir/turi/float_arith.tur" \
+        rust      "$RUST_RELEASE_DIR/float_arith" \
         python    "python3 $dir/python/float_arith.py"
 
     n=$(python3 -c "import json; d=json.load(open('$idir/function_call.json')); print(d['$size']['n'])")
@@ -387,6 +447,8 @@ _run_micro() {
         turmeric  "$dir/turmeric/function_call" \
         clojure   "clojure -M $dir/clojure/function_call.clj" \
         racket    "racket $dir/racket/function_call.rkt" \
+        turi      "$TUR run $dir/turi/function_call.tur" \
+        rust      "$RUST_RELEASE_DIR/function_call" \
         python    "python3 $dir/python/function_call.py"
 }
 
@@ -411,8 +473,13 @@ _bench_lang() {
         # For clojure/racket/python, check the script file (last .clj/.rkt/.py arg)
         local impl_file
         case "$lang" in
-            c|turmeric)
+            c|turmeric|rust)
                 impl_file="$primary" ;;
+            turi)
+                # turi runs via $TUR run <file.tur>; find the .tur arg
+                for w in "${cmd_arr[@]}"; do
+                    case "$w" in *.tur) impl_file="$w" ;; esac
+                done ;;
             *)
                 # find the script file in the command
                 for w in "${cmd_arr[@]}"; do
@@ -429,7 +496,14 @@ _bench_lang() {
         ts=$(date +%Y%m%d_%H%M%S)
         local out_json="${RESULTS_DIR}/${category}_${benchmark}_${lang}_${size}_${ts}.json"
 
-        run_timed "$out_json" "$lang" "$category" "$benchmark" "$size" "${cmd_arr[@]}" || true
+        case "$lang" in
+            turi)
+                # tur run needs to be launched from the project root so that
+                # stdlib/ is found at its default relative path.
+                ( cd "$(dirname "$TUR")/.." && run_timed "$out_json" "$lang" "$category" "$benchmark" "$size" "${cmd_arr[@]}" ) || true ;;
+            *)
+                run_timed "$out_json" "$lang" "$category" "$benchmark" "$size" "${cmd_arr[@]}" || true ;;
+        esac
     done
 }
 
@@ -457,9 +531,21 @@ build_turmeric_binaries() {
         for src in "$tdir"/*.tur; do
             [ -f "$src" ] || continue
             local bin="${src%.tur}"
-            "$TUR" build "$src" -o "$bin" 2>/dev/null && echo "  built $bin" || echo "  WARN: failed to build $bin"
+            ( cd "$(dirname "$TUR")/.." && "$TUR" build "$src" -o "$bin" ) 2>/dev/null && echo "  built $bin" || echo "  WARN: failed to build $bin"
         done
     done
+}
+
+build_rust_binaries() {
+    echo "── building Rust binaries ───────────────────────────"
+    local rwdir="$BENCHMARK_DIR/rust-workspace"
+    if [ -d "$rwdir" ]; then
+        (cd "$rwdir" && cargo build --workspace --release 2>&1 | tail -5) \
+            && echo "  Rust workspace built" \
+            || echo "  WARN: Rust build failed"
+    else
+        echo "  SKIP: rust-workspace not found"
+    fi
 }
 
 # ── main ─────────────────────────────────────────────────────────────────────
@@ -470,6 +556,7 @@ TARGET_SIZE="${2:-small}"
 
 build_c_binaries
 build_turmeric_binaries
+build_rust_binaries
 
 if [ "$TARGET_CATEGORY" = "all" ]; then
     for cat in "${ALL_CATEGORIES[@]}"; do

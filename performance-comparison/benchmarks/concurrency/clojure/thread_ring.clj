@@ -17,5 +17,9 @@
               :else
               (do (.put next (dec tok)) (recur))))))))
   (.put (first chans) total)
-  (.await latch)
-  (println "done"))
+  (when-not (.await latch 30 java.util.concurrent.TimeUnit/SECONDS)
+    (binding [*out* *err*]
+      (println "ERROR: thread ring did not complete within 30s"))
+    (System/exit 1))
+  (println "done")
+  (System/exit 0))
