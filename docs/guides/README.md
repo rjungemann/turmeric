@@ -59,6 +59,13 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 - **[snake-game-tutorial.md](snake-game-tutorial.md)** — Building the snake game example
 - **[web-continuations-tutorial.md](web-continuations-tutorial.md)** — Multi-page web forms using serializable continuations (guestbook example)
 
+### EAVT Database (multi-chapter)
+
+- **[eavt/01-concepts.md](eavt/01-concepts.md)** — EAVT model, immutability, comparison with SQL
+- **[eavt/02-minimal-impl.md](eavt/02-minimal-impl.md)** — Walk through `minimal.tur` line by line
+- **[eavt/03-query-api.md](eavt/03-query-api.md)** — Walk through `query.tur` additions
+- **[eavt/04-indexing.md](eavt/04-indexing.md)** — Why indexing matters and how `indexed.tur` works
+
 ## Package Management
 
 - **[package-management-guide.md](package-management-guide.md)** — Creating projects, adding spices, `build.tur`, `tur.lock`, CLI reference
