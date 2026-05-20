@@ -1,0 +1,23 @@
+;; args-subcommand -- test subcommand dispatch and sub-result access.
+
+(defn print-cstr [s :cstr] :void
+  ```c
+  printf("%s\n", s ? s : "");
+  ```)
+
+(defn print-bool [b :bool] :void
+  ```c
+  printf("%s\n", b ? "true" : "false");
+  ```)
+
+(let [spec    (args/spec-new)
+      sub     (args/spec-new)]
+  (args/spec-flag      sub    "--release")
+  (args/spec-subcommand spec  "build" sub)
+  (let [res (args/parse spec *args*)]
+    (print-cstr (args/subcommand res))
+    (let [sr (args/sub-result res)]
+      (print-bool (args/get-bool sr "release")))
+    (args/result-free res))
+  (args/spec-free sub)
+  (args/spec-free spec))

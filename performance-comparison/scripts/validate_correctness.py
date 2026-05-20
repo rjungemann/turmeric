@@ -29,7 +29,7 @@ BASE_DIR      = Path(__file__).resolve().parent.parent
 BENCHMARK_DIR = BASE_DIR / "benchmarks"
 INPUT_DIR     = BASE_DIR / "inputs"
 GOLDEN_DIR    = BASE_DIR / "results" / "golden"
-TUR           = BASE_DIR / "../../build-rel/tur"
+TUR           = BASE_DIR / "../build/tur"
 
 FLOAT_TOL = 0.01  # 1% relative tolerance for floating-point outputs
 

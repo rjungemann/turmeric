@@ -1,6 +1,6 @@
 (let [n    (Long/parseLong (first *command-line-args*))
      path  "/tmp/bench_io_read_clj.bin"
-     wbuf  (byte-array 4096 (byte 0xCD))]
+     wbuf  (byte-array 4096 (unchecked-byte 0xCD))]
   ;; write phase
   (with-open [fw (java.io.FileOutputStream. path)]
     (loop [rem n]

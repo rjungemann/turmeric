@@ -189,10 +189,25 @@ Complex, realistic algorithms that combine multiple aspects.
   - Outlier report identifies suspicious runs for investigation
 
 ### Phase 5: Analysis and Documentation (Week 8)
-- [ ] Aggregate and normalize results
-- [ ] Create visualizations (charts, graphs)
-- [ ] Write analysis and conclusions
-- [ ] Document limitations and caveats
+- [x] **Aggregate and normalize results**:
+  - `scripts/aggregate_results.py` — applies trimmed mean (±10%), normalizes to C=1.0 baseline,
+    writes `results/processed/normalized.json` and `results/processed/rankings.json`
+
+- [x] **Create visualizations (charts, graphs)**:
+  - `scripts/visualize_results.py` — ASCII bar charts to stdout +
+    `analysis/report.html` (self-contained Chart.js bar charts and speedup heatmap table)
+
+- [x] **Write analysis and conclusions**:
+  - `scripts/generate_analysis.py` — generates from processed data:
+    - `analysis/comparison.md` — full cross-language speedup table
+    - `analysis/by_category.md` — per-category breakdowns with rankings
+    - `analysis/by_language.md` — per-language profile with geometric mean speedups
+    - `analysis/conclusions.md` — key findings, category winners, methodology recap
+
+- [x] **Document limitations and caveats**:
+  - `analysis/limitations.md` — single-machine caveats, startup-cost bias, inline-C notes,
+    statistical limitations (sample size, trimmed mean, input size effects), Turmeric-specific notes,
+    open questions, and rerun instructions
 
 ---
 

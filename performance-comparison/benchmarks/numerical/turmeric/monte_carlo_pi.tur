@@ -1,26 +1,51 @@
 ;; monte_carlo_pi -- Monte Carlo estimation of pi using LCG PRNG.
-(defn parse-first-arg [default :int] :int
+;; LCG step and loop are pure Turmeric; bit-shift and int->float are
+;; one-line C helpers; printf-%.6f is used for the final output.
+(defn parse-first-arg [fallback :int] :int
   ```c
   struct __tur_cons { int64_t value; int64_t next; };
   struct __tur_cons *c = (struct __tur_cons *)(intptr_t)g_tur_args;
-  return c ? (int64_t)atoll((const char *)(intptr_t)c->value) : default;
+  return c ? (int64_t)atoll((const char *)(intptr_t)c->value) : fallback;
   ```)
 
-(defn estimate-pi [iters :int] :int
+;; lcg-next -- advance the LCG state (same constants as C benchmark).
+(defn lcg-next [state :int] :int
+  (+ (* state 6364136223846793005) 1442695040888963407))
+
+;; bit-shr11 -- logical right shift by 11 bits (for float mantissa extraction).
+(defn bit-shr11 [x :int] :int
   ```c
-  /* LCG PRNG -- same constants as C benchmark for reproducibility */
-  uint64_t state = 6364136223846793005ULL;
-  #define LCG_NEXT() ({ state = state * 6364136223846793005ULL + 1442695040888963407ULL; \
-                        (double)(state >> 11) / (double)(1ULL << 53); })
-  int64_t inside = 0;
-  for (int64_t i = 0; i < iters; i++) {
-    double x = LCG_NEXT(), y = LCG_NEXT();
-    if (x * x + y * y <= 1.0) inside++;
-  }
-  /* Return pi * 1e6 as integer to avoid float printing */
-  return (int64_t)(4.0 * inside / iters * 1e6);
-  #undef LCG_NEXT
+  return (int64_t)((uint64_t)x >> 11);
   ```)
 
-(let [pi6 (estimate-pi (parse-first-arg 1000))]
-  (println pi6))
+;; int->unit-float -- map a 64-bit integer to [0, 1) by taking the upper 53 bits.
+(defn int->unit-float [bits :int] :float
+  ```c
+  return (double)(uint64_t)bits / 9007199254740992.0; /* 2^53 */
+  ```)
+
+;; print-float6 -- print a float with 6 decimal places (matches C benchmark output).
+(defn print-float6 [x :float] :nil
+  ```c
+  printf("%.6f\n", x);
+  ```)
+
+;; mc-loop -- tail-recursive Monte Carlo inner loop.
+(defn mc-loop [i :int n :int state :int inside :int] :int
+  (if (>= i n)
+    inside
+    (let [s1 (lcg-next state)
+          x  (int->unit-float (bit-shr11 s1))
+          s2 (lcg-next s1)
+          y  (int->unit-float (bit-shr11 s2))]
+      (mc-loop (+ i 1) n s2
+               (if (<= (+ (* x x) (* y y)) 1.0)
+                 (+ inside 1)
+                 inside)))))
+
+;; estimate-pi -- run Monte Carlo and print the result.
+(defn estimate-pi [iters :int] :nil
+  (let [inside (mc-loop 0 iters 6364136223846793005 0)]
+    (print-float6 (* 4.0 (int->unit-float (* inside iters))))))
+
+(estimate-pi (parse-first-arg 1000))

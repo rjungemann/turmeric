@@ -264,6 +264,7 @@ static int compile_to_c(const char *path, Buf *out_c,
     const char *stdlib_files[] = {
         "stdlib/macros.tur",
         "stdlib/safe.tur",
+        "stdlib/args.tur",
         /* Phase C1: runtime contracts - auto-load contract.tur for assert!/require!/ensure!/invariant! */
         "stdlib/contract.tur",
         /* Phase P3: HAMT lowering - auto-load hamt.tur and map.tur */
@@ -1441,6 +1442,29 @@ static int cmd_format(const char *path, bool check_only) {
 }
 
 /* Phase S0: tur repl — interactive read-eval-print loop. */
+/* Phase S0: run a .tur file through the tree-walking interpreter */
+static int cmd_eval(const char *path, bool use_color) {
+    turi_init(use_color);
+    TuriEnv *env = turi_env_new();
+    if (!env) {
+        fprintf(stderr, "tur: failed to create interpreter environment\n");
+        return 1;
+    }
+    TuriValue result = turi_eval_file(env, path);
+    int rc = 0;
+    if (turi_is_error(result)) {
+        const char *msg = turi_error_message(result);
+        /* parse/elaboration errors are already printed by the diagnostic system */
+        if (msg && strcmp(msg, "parse error") != 0 &&
+                   strcmp(msg, "elaboration error") != 0) {
+            fprintf(stderr, "tur: %s\n", msg);
+        }
+        rc = 1;
+    }
+    turi_env_free(env);
+    return rc;
+}
+
 static int cmd_repl(void) {
     return turi_repl_run();
 }
@@ -3044,6 +3068,7 @@ static int usage(void) {
         "  tur run <input.tur>               build + execute a single file\n"
         "  tur repl                          interactive REPL (Phase S1)\n"
         "  tur worker                        persistent fixture evaluator (Tier 3, reads dirs from stdin)\n"
+        "  tur --interpret <file.tur>        run a file through the tree-walking interpreter\n"
         "  tur test <dir>                    run all .tur files in a directory\n"
         "  tur check <input.tur>             type-check only, no codegen (phase 8)\n"
         "  tur format [--check] [file.tur]   format source (stdin if no file given)\n"
@@ -3553,6 +3578,13 @@ int main(int argc, char **argv) {
     /* Tier 3: persistent fixture worker for the test suite. */
     if (strcmp(cmd, "worker") == 0) {
         return cmd_worker();
+    }
+    if (strcmp(cmd, "--interpret") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "tur: --interpret requires a file argument\n");
+            return usage();
+        }
+        return cmd_eval(argv[2], !no_color && stderr_is_tty());
     }
     if (strcmp(cmd, "format") == 0) {
         bool check_only = false;

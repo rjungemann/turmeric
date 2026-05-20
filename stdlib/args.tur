@@ -1,0 +1,656 @@
+;; stdlib/args.tur -- Argument parser for Turmeric CLI scripts
+;;
+;; Builder-pattern API for parsing CLI arguments.
+;; Supports flags (--verbose), options (--input=file or --input file),
+;; positional args, per-option defaults with type coercion, and
+;; arbitrarily nested subcommands.
+;;
+;; All internal structs are int64_t arrays; field layout:
+;;
+;;   spec    [0]=flags_list  [1]=options_list  [2]=subcmds_list  [3]=prog_cstr
+;;   flag    [0]=name_cstr   [1]=next_flag
+;;   option  [0]=name_cstr   [1]=type_cstr     [2]=dflt_cstr_or_0  [3]=next_option
+;;   subcmd  [0]=name_cstr   [1]=sub_spec      [2]=next_subcmd
+;;   result  [0]=entries     [1]=positional    [2]=subcommand_cstr
+;;           [3]=sub_result  [4]=error_flag    [5]=errmsg_cstr
+;;   entry   [0]=key_cstr    [1]=val_cstr      [2]=next_entry
+;;   cons    [0]=value_cstr  [1]=next_cons     (Turmeric *args* layout)
+;;
+;; NULL / absent values are stored as 0.
+
+;;; args/spec-new -- create a new empty argument specification.
+;;;
+;;; Returns:
+;;;   Opaque pointer (as :int) to an empty arg spec.
+;;;   Free with args/spec-free when done.
+;;;
+;;; Example:
+;;;   (let [spec (args/spec-new)] ...)
+;;;
+;;; Since: Phase A1
+(defn args/spec-new [] :int
+  ```c
+  int64_t *s = calloc(4, sizeof(int64_t));
+  return (int64_t)(intptr_t)s;
+  ```)
+
+;;; args/spec-prog -- set the program name displayed in help text.
+;;;
+;;; Parameters:
+;;;   spec -- arg spec pointer from args/spec-new
+;;;   name -- program name cstr
+;;;
+;;; Returns:
+;;;   The same spec pointer (mutated in place).
+;;;
+;;; Example:
+;;;   (args/spec-prog spec "mytool")
+;;;
+;;; Since: Phase A1
+(defn args/spec-prog [spec :int name :cstr] :int
+  ```c
+  int64_t *s = (int64_t*)(intptr_t)spec;
+  s[3] = (int64_t)(intptr_t)name;
+  return spec;
+  ```)
+
+;;; args/spec-flag -- register a boolean flag in the arg spec.
+;;;
+;;; Parameters:
+;;;   spec -- arg spec pointer
+;;;   name -- flag name including dashes (e.g., "--verbose")
+;;;
+;;; Returns:
+;;;   The same spec pointer (mutated in place).
+;;;
+;;; Example:
+;;;   (args/spec-flag spec "--verbose")
+;;;
+;;; Since: Phase A1
+(defn args/spec-flag [spec :int name :cstr] :int
+  ```c
+  int64_t *s = (int64_t*)(intptr_t)spec;
+  int64_t *cell = malloc(2 * sizeof(int64_t));
+  cell[0] = (int64_t)(intptr_t)name;
+  cell[1] = s[0];
+  s[0] = (int64_t)(intptr_t)cell;
+  return spec;
+  ```)
+
+;;; args/spec-option -- register a named option in the arg spec.
+;;;
+;;; Parameters:
+;;;   spec -- arg spec pointer
+;;;   name -- option name with dashes (e.g., "--input")
+;;;   type -- one of "string", "int", "float", "bool"
+;;;   dflt -- default value as a cstr, or 0 if the option is required
+;;;
+;;; Returns:
+;;;   The same spec pointer (mutated in place).
+;;;
+;;; Example:
+;;;   (args/spec-option spec "--input" "string" 0)
+;;;   (args/spec-option spec "--count" "int" "1")
+;;;
+;;; Since: Phase A1
+(defn args/spec-option [spec :int name :cstr type :cstr dflt :int] :int
+  ```c
+  int64_t *s = (int64_t*)(intptr_t)spec;
+  int64_t *cell = malloc(4 * sizeof(int64_t));
+  cell[0] = (int64_t)(intptr_t)name;
+  cell[1] = (int64_t)(intptr_t)type;
+  cell[2] = (int64_t)dflt;
+  cell[3] = s[1];
+  s[1] = (int64_t)(intptr_t)cell;
+  return spec;
+  ```)
+
+;;; args/spec-subcommand -- register a nested subcommand.
+;;;
+;;; Parameters:
+;;;   spec     -- parent arg spec pointer
+;;;   name     -- subcommand name (e.g., "build")
+;;;   sub-spec -- arg spec for the subcommand (from args/spec-new)
+;;;
+;;; Returns:
+;;;   The same spec pointer (mutated in place).
+;;;
+;;; Example:
+;;;   (let [sub (args/spec-new)]
+;;;     (args/spec-flag sub "--release")
+;;;     (args/spec-subcommand spec "build" sub))
+;;;
+;;; Since: Phase A1
+(defn args/spec-subcommand [spec :int name :cstr sub-spec :int] :int
+  ```c
+  int64_t *s = (int64_t*)(intptr_t)spec;
+  int64_t *cell = malloc(3 * sizeof(int64_t));
+  cell[0] = (int64_t)(intptr_t)name;
+  cell[1] = (int64_t)sub_spec;
+  cell[2] = s[2];
+  s[2] = (int64_t)(intptr_t)cell;
+  return spec;
+  ```)
+
+;;; args/parse -- parse a Turmeric *args* cons list against an arg spec.
+;;;
+;;; Accepts both --key=value (preferred) and --key value forms for options.
+;;; Flags are set to "1" when present. --help is always accepted.
+;;; The first non-flag token matching a registered subcommand name triggers
+;;; recursive dispatch: remaining tokens are parsed against the sub-spec.
+;;; Defaults are injected after parsing; required options that are missing
+;;; produce an error in the result.
+;;;
+;;; Parameters:
+;;;   spec -- arg spec pointer from args/spec-new
+;;;   argv -- Turmeric *args* cons list (int representing the cons cell pointer)
+;;;
+;;; Returns:
+;;;   Opaque result pointer. Free with args/result-free when done.
+;;;
+;;; Example:
+;;;   (let [res (args/parse spec *args*)] ...)
+;;;
+;;; Since: Phase A1
+(defn args/parse [spec :int argv :int] :int
+  ```c
+  /* --- linearise the *args* cons list into a char* array --- */
+  int argc_l = 0;
+  int64_t tmp = argv;
+  while (tmp) { argc_l++; tmp = ((int64_t*)(intptr_t)tmp)[1]; }
+  const char **argv_l = argc_l ? (const char**)malloc(argc_l * sizeof(char*)) : NULL;
+  tmp = argv;
+  for (int ii = 0; ii < argc_l; ii++) {
+    int64_t *cell = (int64_t*)(intptr_t)tmp;
+    argv_l[ii] = (const char*)(intptr_t)cell[0];
+    tmp = cell[1];
+  }
+
+  /* --- stack for nested subcommand dispatch (max depth 8) --- */
+  int64_t spec_stk[8];
+  int64_t res_stk[8];
+  int depth = 0;
+  spec_stk[0] = spec;
+  res_stk[0] = (int64_t)(intptr_t)calloc(6, sizeof(int64_t));
+
+  /* --- main parse loop --- */
+  int i = 0;
+  while (i < argc_l) {
+    const char *arg = argv_l[i];
+    int64_t *sp  = (int64_t*)(intptr_t)spec_stk[depth];
+    int64_t *res = (int64_t*)(intptr_t)res_stk[depth];
+
+    if (strncmp(arg, "--", 2) == 0) {
+      const char *key_start = arg + 2;
+
+      /* --help is always accepted */
+      if (strcmp(key_start, "help") == 0) {
+        int64_t *ent = malloc(3 * sizeof(int64_t));
+        ent[0] = (int64_t)(intptr_t)strdup("help");
+        ent[1] = (int64_t)(intptr_t)strdup("1");
+        ent[2] = res[0];
+        res[0] = (int64_t)(intptr_t)ent;
+        i++; continue;
+      }
+
+      const char *eq = strchr(key_start, '=');
+      if (eq) {
+        /* --key=value form */
+        size_t klen = (size_t)(eq - key_start);
+        char *key = (char*)malloc(klen + 1);
+        memcpy(key, key_start, klen);
+        key[klen] = '\0';
+        const char *val = eq + 1;
+
+        int found = 0;
+        int64_t *opt = (int64_t*)(intptr_t)sp[1];
+        while (opt) {
+          const char *oname = (const char*)(intptr_t)opt[0];
+          if (strcmp(oname + 2, key) == 0) {
+            int64_t *ent = malloc(3 * sizeof(int64_t));
+            ent[0] = (int64_t)(intptr_t)key;
+            ent[1] = (int64_t)(intptr_t)strdup(val);
+            ent[2] = res[0];
+            res[0] = (int64_t)(intptr_t)ent;
+            found = 1; break;
+          }
+          opt = (int64_t*)(intptr_t)opt[3];
+        }
+        if (!found) {
+          int64_t *fl = (int64_t*)(intptr_t)sp[0];
+          while (fl) {
+            if (strcmp(((const char*)(intptr_t)fl[0]) + 2, key) == 0) {
+              if (!res[4]) {
+                res[4] = 1;
+                char *em = (char*)malloc(256);
+                snprintf(em, 256, "flag --%s does not take a value", key);
+                res[5] = (int64_t)(intptr_t)em;
+              }
+              free(key); found = 1; break;
+            }
+            fl = (int64_t*)(intptr_t)fl[1];
+          }
+        }
+        if (!found) {
+          if (!res[4]) {
+            res[4] = 1;
+            char *em = (char*)malloc(256);
+            snprintf(em, 256, "unknown option: --%s", key);
+            res[5] = (int64_t)(intptr_t)em;
+          }
+          free(key);
+        }
+      } else {
+        /* --key form: flag or space-separated option */
+        int found = 0;
+        int64_t *fl = (int64_t*)(intptr_t)sp[0];
+        while (fl) {
+          const char *fname = (const char*)(intptr_t)fl[0];
+          if (strcmp(fname + 2, key_start) == 0) {
+            int64_t *ent = malloc(3 * sizeof(int64_t));
+            ent[0] = (int64_t)(intptr_t)strdup(key_start);
+            ent[1] = (int64_t)(intptr_t)strdup("1");
+            ent[2] = res[0];
+            res[0] = (int64_t)(intptr_t)ent;
+            found = 1; break;
+          }
+          fl = (int64_t*)(intptr_t)fl[1];
+        }
+        if (!found) {
+          int64_t *opt = (int64_t*)(intptr_t)sp[1];
+          while (opt) {
+            const char *oname = (const char*)(intptr_t)opt[0];
+            if (strcmp(oname + 2, key_start) == 0) {
+              if (i + 1 < argc_l) {
+                i++;
+                const char *val = argv_l[i];
+                int64_t *ent = malloc(3 * sizeof(int64_t));
+                ent[0] = (int64_t)(intptr_t)strdup(key_start);
+                ent[1] = (int64_t)(intptr_t)strdup(val);
+                ent[2] = res[0];
+                res[0] = (int64_t)(intptr_t)ent;
+              } else {
+                if (!res[4]) {
+                  res[4] = 1;
+                  char *em = (char*)malloc(256);
+                  snprintf(em, 256, "option --%s requires a value", key_start);
+                  res[5] = (int64_t)(intptr_t)em;
+                }
+              }
+              found = 1; break;
+            }
+            opt = (int64_t*)(intptr_t)opt[3];
+          }
+        }
+        if (!found) {
+          if (!res[4]) {
+            res[4] = 1;
+            char *em = (char*)malloc(256);
+            snprintf(em, 256, "unknown flag: --%s", key_start);
+            res[5] = (int64_t)(intptr_t)em;
+          }
+        }
+      }
+    } else {
+      /* non-flag: try subcommand, else positional */
+      int found_sub = 0;
+      int64_t *sub = (int64_t*)(intptr_t)sp[2];
+      while (sub) {
+        const char *sname = (const char*)(intptr_t)sub[0];
+        if (strcmp(sname, arg) == 0) {
+          res[2] = (int64_t)(intptr_t)strdup(arg);
+          int64_t *sub_res = calloc(6, sizeof(int64_t));
+          res[3] = (int64_t)(intptr_t)sub_res;
+          if (depth < 7) {
+            depth++;
+            spec_stk[depth] = sub[1];
+            res_stk[depth]  = (int64_t)(intptr_t)sub_res;
+          }
+          found_sub = 1; break;
+        }
+        sub = (int64_t*)(intptr_t)sub[2];
+      }
+      if (!found_sub) {
+        /* positional -- prepend; list ends up reversed (last arg is head) */
+        int64_t *pos = malloc(2 * sizeof(int64_t));
+        pos[0] = (int64_t)(intptr_t)arg;
+        pos[1] = res[1];
+        res[1] = (int64_t)(intptr_t)pos;
+      }
+    }
+    i++;
+  }
+
+  /* --- inject defaults and check required options for every result level --- */
+  for (int d = 0; d <= depth; d++) {
+    int64_t *sp_d  = (int64_t*)(intptr_t)spec_stk[d];
+    int64_t *res_d = (int64_t*)(intptr_t)res_stk[d];
+    int64_t *opt = (int64_t*)(intptr_t)sp_d[1];
+    while (opt) {
+      int64_t odflt = opt[2];
+      const char *okey = ((const char*)(intptr_t)opt[0]) + 2;  /* strip "--" */
+      int already = 0;
+      int64_t *e = (int64_t*)(intptr_t)res_d[0];
+      while (e) {
+        if (strcmp((const char*)(intptr_t)e[0], okey) == 0) { already = 1; break; }
+        e = (int64_t*)(intptr_t)e[2];
+      }
+      if (!already) {
+        if (odflt != 0) {
+          /* inject default */
+          int64_t *ent = malloc(3 * sizeof(int64_t));
+          ent[0] = (int64_t)(intptr_t)strdup(okey);
+          ent[1] = (int64_t)(intptr_t)strdup((const char*)(intptr_t)odflt);
+          ent[2] = res_d[0];
+          res_d[0] = (int64_t)(intptr_t)ent;
+        } else if (!res_d[4]) {
+          /* required option missing */
+          res_d[4] = 1;
+          char *em = (char*)malloc(256);
+          snprintf(em, 256, "required option --%s not provided", okey);
+          res_d[5] = (int64_t)(intptr_t)em;
+        }
+      }
+      opt = (int64_t*)(intptr_t)opt[3];
+    }
+  }
+
+  if (argv_l) free(argv_l);
+  return res_stk[0];
+  ```)
+
+;;; args/has? -- check whether a key is present in the result.
+;;;
+;;; Parameters:
+;;;   result -- result pointer from args/parse
+;;;   key    -- option or flag name without dashes (e.g., "verbose")
+;;;
+;;; Returns:
+;;;   true if the key was parsed or injected via a default.
+;;;
+;;; Example:
+;;;   (args/has? res "verbose")  ; => true if --verbose was passed
+;;;
+;;; Since: Phase A1
+(defn args/has? [result :int key :cstr] :bool
+  ```c
+  int64_t *res = (int64_t*)(intptr_t)result;
+  int64_t *e   = (int64_t*)(intptr_t)res[0];
+  while (e) {
+    if (strcmp((const char*)(intptr_t)e[0], (const char*)(intptr_t)key) == 0)
+      return true;
+    e = (int64_t*)(intptr_t)e[2];
+  }
+  return false;
+  ```)
+
+;;; args/get-str -- look up a string value in the result.
+;;;
+;;; Parameters:
+;;;   result -- result pointer from args/parse
+;;;   key    -- option name without dashes (e.g., "input")
+;;;
+;;; Returns:
+;;;   The string value, or 0 (NULL) if the key is not present.
+;;;
+;;; Example:
+;;;   (args/get-str res "input")  ; => "file.txt"
+;;;
+;;; Since: Phase A1
+(defn args/get-str [result :int key :cstr] :cstr
+  ```c
+  int64_t *res = (int64_t*)(intptr_t)result;
+  int64_t *e   = (int64_t*)(intptr_t)res[0];
+  while (e) {
+    if (strcmp((const char*)(intptr_t)e[0], (const char*)(intptr_t)key) == 0)
+      return (const char*)(intptr_t)e[1];
+    e = (int64_t*)(intptr_t)e[2];
+  }
+  return 0;
+  ```)
+
+;;; args/get-int -- look up an integer value in the result.
+;;;
+;;; Parameters:
+;;;   result -- result pointer from args/parse
+;;;   key    -- option name without dashes
+;;;
+;;; Returns:
+;;;   The parsed integer value, or 0 if the key is not present.
+;;;
+;;; Example:
+;;;   (args/get-int res "count")  ; => 5
+;;;
+;;; Since: Phase A1
+(defn args/get-int [result :int key :cstr] :int
+  ```c
+  int64_t *res = (int64_t*)(intptr_t)result;
+  int64_t *e   = (int64_t*)(intptr_t)res[0];
+  while (e) {
+    if (strcmp((const char*)(intptr_t)e[0], (const char*)(intptr_t)key) == 0)
+      return strtoll((const char*)(intptr_t)e[1], NULL, 10);
+    e = (int64_t*)(intptr_t)e[2];
+  }
+  return 0;
+  ```)
+
+;;; args/get-bool -- look up a boolean flag value in the result.
+;;;
+;;; Parameters:
+;;;   result -- result pointer from args/parse
+;;;   key    -- flag name without dashes (e.g., "verbose")
+;;;
+;;; Returns:
+;;;   true if the flag was set (value is "1", "true", "yes", or "on").
+;;;
+;;; Example:
+;;;   (args/get-bool res "verbose")  ; => true if --verbose was passed
+;;;
+;;; Since: Phase A1
+(defn args/get-bool [result :int key :cstr] :bool
+  ```c
+  int64_t *res = (int64_t*)(intptr_t)result;
+  int64_t *e   = (int64_t*)(intptr_t)res[0];
+  while (e) {
+    if (strcmp((const char*)(intptr_t)e[0], (const char*)(intptr_t)key) == 0) {
+      const char *v = (const char*)(intptr_t)e[1];
+      return strcmp(v, "1") == 0 || strcmp(v, "true") == 0
+          || strcmp(v, "yes") == 0 || strcmp(v, "on") == 0;
+    }
+    e = (int64_t*)(intptr_t)e[2];
+  }
+  return false;
+  ```)
+
+;;; args/subcommand -- return the matched subcommand name, or 0 if none.
+;;;
+;;; Parameters:
+;;;   result -- result pointer from args/parse
+;;;
+;;; Returns:
+;;;   The subcommand name cstr, or 0 if no subcommand was matched.
+;;;
+;;; Example:
+;;;   (args/subcommand res)  ; => "build"
+;;;
+;;; Since: Phase A1
+(defn args/subcommand [result :int] :cstr
+  ```c
+  int64_t *res = (int64_t*)(intptr_t)result;
+  return (const char*)(intptr_t)res[2];
+  ```)
+
+;;; args/sub-result -- return the result from subcommand parsing, or 0 if none.
+;;;
+;;; Parameters:
+;;;   result -- result pointer from args/parse
+;;;
+;;; Returns:
+;;;   The sub-result pointer, or 0 if no subcommand was matched.
+;;;
+;;; Example:
+;;;   (let [sub (args/sub-result res)] (args/get-bool sub "release"))
+;;;
+;;; Since: Phase A1
+(defn args/sub-result [result :int] :int
+  ```c
+  int64_t *res = (int64_t*)(intptr_t)result;
+  return res[3];
+  ```)
+
+;;; args/positional -- return the positional arg cons list from the result.
+;;;
+;;; The list is in reverse order (last positional arg is the head).
+;;;
+;;; Parameters:
+;;;   result -- result pointer from args/parse
+;;;
+;;; Returns:
+;;;   A Turmeric cons list (int64_t) of remaining positional cstr args.
+;;;
+;;; Example:
+;;;   (args/positional res)  ; => cons list
+;;;
+;;; Since: Phase A1
+(defn args/positional [result :int] :int
+  ```c
+  int64_t *res = (int64_t*)(intptr_t)result;
+  return res[1];
+  ```)
+
+;;; args/error? -- check whether parsing produced an error.
+;;;
+;;; Parameters:
+;;;   result -- result pointer from args/parse
+;;;
+;;; Returns:
+;;;   true if the result contains a parse error.
+;;;
+;;; Example:
+;;;   (args/error? res)  ; => true if an unknown flag was passed
+;;;
+;;; Since: Phase A1
+(defn args/error? [result :int] :bool
+  ```c
+  int64_t *res = (int64_t*)(intptr_t)result;
+  return res[4] != 0;
+  ```)
+
+;;; args/error-msg -- return the parse error message, or 0 if no error.
+;;;
+;;; Parameters:
+;;;   result -- result pointer from args/parse
+;;;
+;;; Returns:
+;;;   The error message cstr, or 0 if there was no error.
+;;;
+;;; Example:
+;;;   (args/error-msg res)  ; => "required option --input not provided"
+;;;
+;;; Since: Phase A1
+(defn args/error-msg [result :int] :cstr
+  ```c
+  int64_t *res = (int64_t*)(intptr_t)result;
+  return (const char*)(intptr_t)res[5];
+  ```)
+
+;;; args/print-help -- print usage information to stdout.
+;;;
+;;; Parameters:
+;;;   spec -- arg spec pointer from args/spec-new
+;;;
+;;; Example:
+;;;   (args/print-help spec)
+;;;
+;;; Since: Phase A1
+(defn args/print-help [spec :int] :void
+  ```c
+  int64_t *sp = (int64_t*)(intptr_t)spec;
+  const char *prog = sp[3] ? (const char*)(intptr_t)sp[3] : "program";
+  printf("Usage: %s [options]", prog);
+  if (sp[2]) printf(" <subcommand>");
+  printf("\n");
+  if (sp[0] || sp[1]) {
+    printf("\nOptions:\n");
+    int64_t *fl = (int64_t*)(intptr_t)sp[0];
+    while (fl) {
+      printf("  %s\n", (const char*)(intptr_t)fl[0]);
+      fl = (int64_t*)(intptr_t)fl[1];
+    }
+    int64_t *opt = (int64_t*)(intptr_t)sp[1];
+    while (opt) {
+      const char *oname = (const char*)(intptr_t)opt[0];
+      const char *otype = (const char*)(intptr_t)opt[1];
+      int64_t odflt = opt[2];
+      if (odflt)
+        printf("  %s=<%s>  (default: %s)\n", oname, otype, (const char*)(intptr_t)odflt);
+      else
+        printf("  %s=<%s>  (required)\n", oname, otype);
+      opt = (int64_t*)(intptr_t)opt[3];
+    }
+  }
+  if (sp[2]) {
+    printf("\nSubcommands:\n");
+    int64_t *sub = (int64_t*)(intptr_t)sp[2];
+    while (sub) {
+      printf("  %s\n", (const char*)(intptr_t)sub[0]);
+      sub = (int64_t*)(intptr_t)sub[2];
+    }
+  }
+  ```)
+
+;;; args/spec-free -- free a spec created by args/spec-new.
+;;;
+;;; Does not free sub-specs registered via args/spec-subcommand;
+;;; the caller must free those separately.
+;;;
+;;; Parameters:
+;;;   spec -- arg spec pointer to free
+;;;
+;;; Example:
+;;;   (args/spec-free spec)
+;;;
+;;; Since: Phase A1
+(defn args/spec-free [spec :int] :void
+  ```c
+  int64_t *sp = (int64_t*)(intptr_t)spec;
+  int64_t *fl = (int64_t*)(intptr_t)sp[0];
+  while (fl) { int64_t *nx = (int64_t*)(intptr_t)fl[1]; free(fl); fl = nx; }
+  int64_t *opt = (int64_t*)(intptr_t)sp[1];
+  while (opt) { int64_t *nx = (int64_t*)(intptr_t)opt[3]; free(opt); opt = nx; }
+  int64_t *sub = (int64_t*)(intptr_t)sp[2];
+  while (sub) { int64_t *nx = (int64_t*)(intptr_t)sub[2]; free(sub); sub = nx; }
+  free(sp);
+  ```)
+
+;;; args/result-free -- free a result created by args/parse (including sub-results).
+;;;
+;;; Parameters:
+;;;   result -- result pointer to free
+;;;
+;;; Example:
+;;;   (args/result-free result)
+;;;
+;;; Since: Phase A1
+(defn args/result-free [result :int] :void
+  ```c
+  int64_t cur = result;
+  while (cur) {
+    int64_t *res = (int64_t*)(intptr_t)cur;
+    int64_t sub  = res[3];
+    int64_t *e   = (int64_t*)(intptr_t)res[0];
+    while (e) {
+      int64_t *nx = (int64_t*)(intptr_t)e[2];
+      free((void*)(intptr_t)e[0]);  /* key */
+      free((void*)(intptr_t)e[1]);  /* val */
+      free(e);
+      e = nx;
+    }
+    int64_t *pos = (int64_t*)(intptr_t)res[1];
+    while (pos) { int64_t *nx = (int64_t*)(intptr_t)pos[1]; free(pos); pos = nx; }
+    if (res[2]) free((void*)(intptr_t)res[2]);  /* subcommand name */
+    if (res[5]) free((void*)(intptr_t)res[5]);  /* error message */
+    free(res);
+    cur = sub;
+  }
+  ```)

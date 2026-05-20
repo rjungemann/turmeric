@@ -1,11 +1,38 @@
 ;; thread_ring -- pass a token around N threads M times (inline-C pthreads).
-(defn parse-arg [idx :int default :int] :int
+(defn parse-arg [idx :int fallback :int] :int
   ```c
   struct __tur_cons { int64_t value; int64_t next; };
   struct __tur_cons *cell = (struct __tur_cons *)(intptr_t)g_tur_args;
   for (int64_t i = 0; i < idx && cell; i++)
     cell = (struct __tur_cons *)(intptr_t)cell->next;
-  return cell ? (int64_t)atoll((const char *)(intptr_t)cell->value) : default;
+  return cell ? (int64_t)atoll((const char *)(intptr_t)cell->value) : fallback;
+  ```)
+
+;; ring-worker -- pthread worker: receives token, decrements, passes to next slot.
+(defn ring-worker [vp :ptr<void>] :ptr<void>
+  ```c
+  typedef struct {
+    pthread_mutex_t mu;
+    pthread_cond_t  cv;
+    int             ready;
+    int64_t         token;
+  } TRSlot;
+  typedef struct { TRSlot *ring; int id; int n; } TRArg;
+  TRArg *a = (TRArg *)vp;
+  TRSlot *me   = &a->ring[a->id];
+  TRSlot *next = &a->ring[(a->id + 1) % a->n];
+  while (1) {
+    pthread_mutex_lock(&me->mu);
+    while (!me->ready) pthread_cond_wait(&me->cv, &me->mu);
+    int64_t tok = me->token; me->ready = 0;
+    pthread_mutex_unlock(&me->mu);
+    int64_t out = tok > 0 ? tok - 1 : tok;
+    pthread_mutex_lock(&next->mu);
+    next->token = out; next->ready = 1;
+    pthread_cond_signal(&next->cv);
+    pthread_mutex_unlock(&next->mu);
+    if (tok <= 0) return NULL;
+  }
   ```)
 
 (defn run-ring [n_threads :int messages :int] :void
@@ -15,38 +42,20 @@
     pthread_cond_t  cv;
     int             ready;
     int64_t         token;
-  } Slot;
-  Slot *ring = (Slot *)calloc((size_t)n_threads, sizeof(Slot));
+  } TRSlot;
+  typedef struct { TRSlot *ring; int id; int n; } TRArg;
+  TRSlot *ring = (TRSlot *)calloc((size_t)n_threads, sizeof(TRSlot));
   for (int i = 0; i < n_threads; i++) {
     pthread_mutex_init(&ring[i].mu, NULL);
     pthread_cond_init(&ring[i].cv, NULL);
   }
-  /* thread arg: index into ring */
-  typedef struct { Slot *ring; int id; int n; } TArg;
-  TArg *targs = (TArg *)malloc((size_t)n_threads * sizeof(TArg));
+  TRArg *targs = (TRArg *)malloc((size_t)n_threads * sizeof(TRArg));
   for (int i = 0; i < n_threads; i++) {
     targs[i].ring = ring; targs[i].id = i; targs[i].n = n_threads;
   }
-  void *worker(void *vp) {
-    TArg *a = (TArg *)vp;
-    Slot *me   = &a->ring[a->id];
-    Slot *next = &a->ring[(a->id + 1) % a->n];
-    while (1) {
-      pthread_mutex_lock(&me->mu);
-      while (!me->ready) pthread_cond_wait(&me->cv, &me->mu);
-      int64_t tok = me->token; me->ready = 0;
-      pthread_mutex_unlock(&me->mu);
-      int64_t out = tok > 0 ? tok - 1 : tok;
-      pthread_mutex_lock(&next->mu);
-      next->token = out; next->ready = 1;
-      pthread_cond_signal(&next->cv);
-      pthread_mutex_unlock(&next->mu);
-      if (tok <= 0) return NULL;
-    }
-  }
   pthread_t *threads = (pthread_t *)malloc((size_t)n_threads * sizeof(pthread_t));
   for (int i = 0; i < n_threads; i++)
-    pthread_create(&threads[i], NULL, worker, &targs[i]);
+    pthread_create(&threads[i], NULL, ring_worker, &targs[i]);
   pthread_mutex_lock(&ring[0].mu);
   ring[0].token = messages; ring[0].ready = 1;
   pthread_cond_signal(&ring[0].cv);

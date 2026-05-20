@@ -8,7 +8,7 @@
 (let loop ([pos 0])
   (when (< pos file-size)
     (define chunk (min 4096 (- file-size pos)))
-    (write-bytes (build-string chunk (lambda (i) (integer->char (bitwise-and (+ pos i) 255)))) out)
+    (write-bytes (list->bytes (build-list chunk (lambda (i) (bitwise-and (+ pos i) 255)))) out)
     (loop (+ pos chunk))))
 (close-output-port out)
 

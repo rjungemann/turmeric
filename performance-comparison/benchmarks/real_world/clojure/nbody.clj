@@ -1,16 +1,16 @@
 (let [n-bodies (Integer/parseInt (first *command-line-args*))
      steps     (Integer/parseInt (second *command-line-args*))]
   ;; initialize bodies with deterministic LCG
-  (let [lcg  (fn [s] (unchecked-long (+ (* s 6364136223846793005) 1442695040888963407)))
+  (let [lcg  (fn [s] (unchecked-add (unchecked-multiply s 6364136223846793005) 1442695040888963407))
         init (loop [i 0 state (long 42) bodies []]
                (if (>= i n-bodies) bodies
                    (let [s1 (lcg state) s2 (lcg s1) s3 (lcg s2)]
                      (recur (inc i) s3
-                            (conj bodies {:x  (/ (double (int (unsigned-bit-shift-right s1 32))) 1e8)
-                                          :y  (/ (double (int (unsigned-bit-shift-right s2 32))) 1e8)
-                                          :z  (/ (double (int (unsigned-bit-shift-right s3 32))) 1e8)
+                            (conj bodies {:x  (/ (double (unsigned-bit-shift-right s1 32)) 1e8)
+                                          :y  (/ (double (unsigned-bit-shift-right s2 32)) 1e8)
+                                          :z  (/ (double (unsigned-bit-shift-right s3 32)) 1e8)
                                           :vx 0.0 :vy 0.0 :vz 0.0
-                                          :mass (+ 1.0 (* (mod i 5) 0.5))}))))
+                                          :mass (+ 1.0 (* (mod i 5) 0.5))})))))
         bodies (atom (vec init))]
     (dotimes [_ steps]
       (let [bs @bodies n n-bodies]

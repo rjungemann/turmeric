@@ -1,19 +1,25 @@
 ;; int_arith -- N iterations of integer multiply-add; print result.
-(defn parse-first-arg [default :int] :int
+;; Algorithm is pure Turmeric tail-recursion; bit-xor is a one-line C helper.
+(defn parse-first-arg [fallback :int] :int
   ```c
   struct __tur_cons { int64_t value; int64_t next; };
   struct __tur_cons *c = (struct __tur_cons *)(intptr_t)g_tur_args;
-  return c ? (int64_t)atoll((const char *)(intptr_t)c->value) : default;
+  return c ? (int64_t)atoll((const char *)(intptr_t)c->value) : fallback;
   ```)
 
-(defn int-arith [n :int] :int
+;; bit-xor -- bitwise XOR of two integers.
+(defn bit-xor [a :int b :int] :int
   ```c
-  int64_t a = 1, b = 1;
-  for (int64_t i = 0; i < n; i++) {
-    a = a * 1000003 + b;
-    b = b * 999983 + a;
-  }
-  return a ^ b;
+  return (int64_t)((int64_t)a ^ (int64_t)b);
   ```)
 
-(println (int-arith (parse-first-arg 1000000)))
+;; int-arith-loop -- tail-recursive multiply-add accumulator.
+(defn int-arith-loop [i :int a :int b :int n :int] :int
+  (if (>= i n)
+    (bit-xor a b)
+    (int-arith-loop (+ i 1)
+                    (+ (* a 1000003) b)
+                    (+ (* b 999983) a)
+                    n)))
+
+(println (int-arith-loop 0 1 1 (parse-first-arg 1000000)))
