@@ -479,6 +479,54 @@ static TuriValue eval_handle_inner(TuriEnv *env, EvalFrame *frame,
         }
     }
     if (!matched) {
+        /* Effect not handled by this handler — propagate to the next outer handler.
+         * We're currently in the handler context (the outer body fiber or main thread).
+         * env->handler_stack has the outer handler frames (current handler was popped). */
+        TuriHandlerFrame *outer = (TuriHandlerFrame *)env->handler_stack;
+        while (outer) {
+            for (uint8_t j = 0; j < outer->n_cases; j++) {
+                if (strcmp(outer->cases[j].effect_name->name, cont->perf_name) == 0) {
+                    /* Found matching outer handler. Yield to it. */
+                    TuriEffectCont *outer_cont = outer->cont;
+                    /* Copy signal to outer cont. */
+                    outer_cont->perf_name   = cont->perf_name;
+                    outer_cont->perf_args   = cont->perf_args;
+                    outer_cont->n_perf_args = cont->n_perf_args;
+#if defined(__APPLE__)
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+                    swapcontext(&outer_cont->body_ctx, &outer_cont->handler_ctx);
+#if defined(__APPLE__)
+#  pragma clang diagnostic pop
+#endif
+                    /* Outer handler ran and resumed us. Forward resume value to inner body. */
+                    TuriValue resume_val = outer_cont->resume_val;
+                    cont->resume_val = resume_val;
+                    /* Re-push inner handler frame and resume inner body. */
+                    TuriHandlerFrame inner_hf;
+                    inner_hf.cases   = cont->handle_expr->cases;
+                    inner_hf.n_cases = cont->handle_expr->n_cases;
+                    inner_hf.cont    = cont;
+                    inner_hf.prev    = (TuriHandlerFrame *)env->handler_stack;
+                    env->handler_stack = &inner_hf;
+#if defined(__APPLE__)
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+                    swapcontext(&cont->handler_ctx, &cont->body_ctx);
+#if defined(__APPLE__)
+#  pragma clang diagnostic pop
+#endif
+                    env->handler_stack = inner_hf.prev;
+                    if (cont->done)
+                        return cont->body_result;
+                    /* Inner body performed again; dispatch (possibly propagate again). */
+                    return eval_handle_inner(env, frame, cont->handle_expr, cont);
+                }
+            }
+            outer = outer->prev;
+        }
         return turi_errorf("eval: unhandled effect: %s", cont->perf_name);
     }
 
@@ -908,10 +956,14 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_PROGRAM: {
         Expr   **items = (e->kind == EX_PROGRAM) ? e->as.program.items : e->as.do_.items;
         uint32_t n     = (e->kind == EX_PROGRAM) ? e->as.program.n     : e->as.do_.n;
+        /* Defers appended at the end (by rc auto-drop injection) must not
+         * count as the "last value" — only the last non-defer item does. */
         TuriValue last = turi_nil();
         for (uint32_t i = 0; i < n; i++) {
-            last = eval_expr(env, frame, items[i]);
-            if (turi_is_error(last) || env->returning || env->throwing) return last;
+            TuriValue v = eval_expr(env, frame, items[i]);
+            if (turi_is_error(v) || env->returning || env->throwing) return v;
+            if (items[i]->kind != EX_DEFER)
+                last = v;
         }
         return last;
     }
@@ -1270,30 +1322,24 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             if (turi_is_error(args[i]) || env->returning || env->throwing) return args[i];
         }
 
-        /* Walk handler stack for a matching case. */
-        TuriHandlerFrame *hf = (TuriHandlerFrame *)env->handler_stack;
-        while (hf) {
-            for (uint8_t i = 0; i < hf->n_cases; i++) {
-                if (strcmp(hf->cases[i].effect_name->name, effect_name) == 0) {
-                    TuriEffectCont *cont = hf->cont;
-                    cont->perf_name   = effect_name;
-                    cont->perf_args   = args;
-                    cont->n_perf_args = n_args;
+        /* Always yield to the innermost handler so nested handlers can
+         * propagate unmatched effects upward (see eval_handle_inner). */
+        TuriHandlerFrame *top = (TuriHandlerFrame *)env->handler_stack;
+        if (!top) return turi_errorf("eval: unhandled effect: %s", effect_name);
+        TuriEffectCont *cont = top->cont;
+        cont->perf_name   = effect_name;
+        cont->perf_args   = args;
+        cont->n_perf_args = n_args;
 #if defined(__APPLE__)
 #  pragma clang diagnostic push
 #  pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #endif
-                    swapcontext(&cont->body_ctx, &cont->handler_ctx);
+        swapcontext(&cont->body_ctx, &cont->handler_ctx);
 #if defined(__APPLE__)
 #  pragma clang diagnostic pop
 #endif
-                    /* Resumed: return the value sent by resume k v. */
-                    return cont->resume_val;
-                }
-            }
-            hf = hf->prev;
-        }
-        return turi_errorf("eval: unhandled effect: %s", effect_name);
+        /* Resumed: return the value sent by resume k v. */
+        return cont->resume_val;
     }
 
     /* (handle BODY cases...) — install handler, run BODY in a fiber. */
@@ -1711,23 +1757,89 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         exit(1);
     }
 
-    /* --- Phase 9: rc<T> simplified — no reference counting in interpreter -- */
-    case EX_RC_OF:
-        return eval_expr(env, frame, e->as.rc_of_.expr);
-    case EX_RC_CLONE:
-        return eval_expr(env, frame, e->as.rc_clone_.expr);
-    case EX_RC_DROP:
-        (void)eval_expr(env, frame, e->as.rc_drop_.expr);
+    /* --- Phase 9: rc<T> with shared reference counter in interpreter ------- */
+    case EX_RC_OF: {
+        /* Allocate shared counter, wrap value in __rc struct. */
+        TuriValue v = eval_expr(env, frame, e->as.rc_of_.expr);
+        if (turi_is_error(v) || env->returning || env->throwing) return v;
+        int64_t *cnt = (int64_t *)malloc(sizeof(int64_t)); *cnt = 1;
+        TuriValue fields[2];
+        fields[0] = turi_int((int64_t)(intptr_t)cnt); /* pointer-as-int */
+        fields[1] = v;
+        return make_struct_val("__rc", 2, fields);
+    }
+    case EX_RC_CLONE: {
+        if (e->as.rc_clone_.elide)
+            return eval_expr(env, frame, e->as.rc_clone_.expr);
+        TuriValue r = eval_expr(env, frame, e->as.rc_clone_.expr);
+        if (turi_is_error(r) || env->returning || env->throwing) return r;
+        if (r.tag == TURI_STRUCT && r.as_struct
+            && r.as_struct->name && strcmp(r.as_struct->name, "__rc") == 0
+            && r.as_struct->n_fields >= 2) {
+            int64_t *cnt = (int64_t *)(intptr_t)r.as_struct->fields[0].as_int;
+            (*cnt)++;
+        }
+        return r; /* return copy — same pointer-as-int, so shares counter */
+    }
+    case EX_RC_DROP: {
+        if (e->as.rc_drop_.elide) return turi_nil();
+        TuriValue r = eval_expr(env, frame, e->as.rc_drop_.expr);
+        if (!turi_is_error(r) && r.tag == TURI_STRUCT && r.as_struct
+            && r.as_struct->name && strcmp(r.as_struct->name, "__rc") == 0
+            && r.as_struct->n_fields >= 2) {
+            int64_t *cnt = (int64_t *)(intptr_t)r.as_struct->fields[0].as_int;
+            if (*cnt > 0) {
+                (*cnt)--;
+                /* When count reaches 0, recursively drop any inner __rc values. */
+                if (*cnt == 0) {
+                    TuriValue inner = r.as_struct->fields[1];
+                    /* Walk the chain of nested __rc structs. */
+                    while (inner.tag == TURI_STRUCT && inner.as_struct
+                           && inner.as_struct->name
+                           && strcmp(inner.as_struct->name, "__rc") == 0
+                           && inner.as_struct->n_fields >= 2) {
+                        int64_t *icnt = (int64_t *)(intptr_t)inner.as_struct->fields[0].as_int;
+                        if (*icnt > 0) (*icnt)--;
+                        if (*icnt > 0) break; /* still alive — stop recursing */
+                        inner = inner.as_struct->fields[1];
+                    }
+                }
+            }
+        }
         return turi_nil();
-    case EX_RC_PTR:
-        return eval_expr(env, frame, e->as.rc_ptr_.expr);
-    case EX_RC_COUNT:
-        (void)eval_expr(env, frame, e->as.rc_count_.expr);
+    }
+    case EX_RC_PTR: {
+        TuriValue r = eval_expr(env, frame, e->as.rc_ptr_.expr);
+        if (turi_is_error(r) || env->returning || env->throwing) return r;
+        if (r.tag == TURI_STRUCT && r.as_struct
+            && r.as_struct->name && strcmp(r.as_struct->name, "__rc") == 0
+            && r.as_struct->n_fields >= 2)
+            return r.as_struct->fields[1];
+        return r;
+    }
+    case EX_RC_COUNT: {
+        TuriValue r = eval_expr(env, frame, e->as.rc_count_.expr);
+        if (turi_is_error(r) || env->returning || env->throwing) return r;
+        if (r.tag == TURI_STRUCT && r.as_struct
+            && r.as_struct->name && strcmp(r.as_struct->name, "__rc") == 0
+            && r.as_struct->n_fields >= 2) {
+            int64_t *cnt = (int64_t *)(intptr_t)r.as_struct->fields[0].as_int;
+            return turi_int(*cnt);
+        }
         return turi_int(1);
+    }
     case EX_RC_FROM_REF:
         return eval_expr(env, frame, e->as.rc_from_ref_.expr);
-    case EX_REF_FROM_RC:
-        return eval_expr(env, frame, e->as.ref_from_rc_.expr);
+    case EX_REF_FROM_RC: {
+        /* Convert rc<T> to ref<T>: extract the inner value from the __rc struct. */
+        TuriValue rv = eval_expr(env, frame, e->as.ref_from_rc_.expr);
+        if (turi_is_error(rv) || env->returning || env->throwing) return rv;
+        if (rv.tag == TURI_STRUCT && rv.as_struct
+            && rv.as_struct->name && strcmp(rv.as_struct->name, "__rc") == 0
+            && rv.as_struct->n_fields >= 2)
+            return rv.as_struct->fields[1];
+        return rv;
+    }
 
     /* --- Phase 5: ref<T> — transparent in interpreter --------------------- */
     case EX_REF:
