@@ -1,6 +1,6 @@
 # Test Suite Process Reduction Plan
 
-> **Status:** Not started
+> **Status:** Tier 1 done; Tier 2 done (run.sh); Tier 3 infrastructure done (opt-in, `TUR_WORKER_POOL=1`)
 >
 > **Problem:** Running `just test` causes a massive CPU spike on macOS because
 > `syspolicyd` (Gatekeeper) is flooded with 639+ new binary validations in
@@ -129,7 +129,7 @@ path. Initially zero fixtures should need this; add as exceptions are discovered
 
 ---
 
-### Tier 3 -- Long-term: persistent worker pool (1--2 days)
+### Tier 3 -- Long-term: persistent worker pool (1--2 days) ✓ infrastructure done
 
 Even with Tier 2, each fixture still spawns a fresh `tur` process. For 800
 fixtures that is 800 process spawns total -- acceptable, but still measurable
@@ -184,6 +184,32 @@ for dir in "${HAPPY_DIRS[@]}"; do
     echo "$dir" > "$RESULTS_DIR/req.$((ordinal % JOBS + 1))"
 done
 ```
+
+#### Implementation notes (as shipped)
+
+`tur worker` reads fixture directory paths from stdin (one per line). For each
+fixture it:
+
+1. Checks `requires.compiled` / `requires.tsan` markers and skips if needed.
+2. Reads `flags`, `expected.timeout`, and `input.stdin` from the fixture dir.
+3. Forks a child that: applies fixture flags to global compiler state, runs
+   `turi_eval_file` with stdout/stderr captured via pipes, then calls `(main)`
+   if a `main` function was defined. The fork gives crash isolation: a panicking
+   fixture exits the child, not the worker.
+4. If `expected.c` exists, forks a separate child to run `compile_to_c` and
+   compare the generated C against the snapshot.
+5. Compares actual stdout, exit code, and stderr substrings against expected
+   files and writes a 4-line result file to `$RESULTS_DIR`.
+
+`tests/run.sh` uses a round-robin batch dispatch: fixtures are split into N
+files, one persistent `tur worker` per file runs in parallel, stamps are written
+by the coordinator after all workers complete.
+
+**Current status:** opt-in (`TUR_WORKER_POOL=1`). The interpreter does not yet
+handle all language constructs used by fixture programs (notably `defdata` +
+`match` inside `defn main`). Enable by default once interpreter parity is
+achieved. Divergences between worker and compiled output are real interpreter
+bugs.
 
 ---
 

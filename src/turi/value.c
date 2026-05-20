@@ -57,5 +57,8 @@ void turi_print_value(FILE *out, TuriValue v) {
     case TURI_FUTURE:
         fprintf(out, "#<future>");
         break;
+    case TURI_REF:
+        fprintf(out, "#<ref>");
+        break;
     }
 }

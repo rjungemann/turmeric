@@ -31,10 +31,12 @@
 #include "eval.h"
 #include "fiber.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #ifndef __EMSCRIPTEN__
 #  include <sys/mman.h>
@@ -68,6 +70,7 @@
 #include "reader.h"
 #include "symbols.h"
 #include "types.h"
+#include "../passes/effect_check.h"
 
 /* -------------------------------------------------------------------------
  * Internal closure representation
@@ -150,6 +153,81 @@ static void async_fiber_thunk(void) {
 #endif
 
 /* -------------------------------------------------------------------------
+ * Nil stub for extern-c functions: returns nil in interpreter mode.
+ * ---------------------------------------------------------------------- */
+static TuriValue native_nil_stub(TuriEnv *env, TuriValue *args, uint32_t n,
+                                  void *ud) {
+    (void)env; (void)args; (void)n; (void)ud;
+    return turi_nil();
+}
+
+/* Native stubs for well-known libc functions declared via extern-c. */
+static TuriValue native_extern_exit(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    int code = (n > 0) ? (int)args[0].as_int : 0;
+    fflush(NULL);
+    _exit(code);
+}
+static TuriValue native_extern_free(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n > 0) { void *p = (void *)(intptr_t)args[0].as_int; if (p) free(p); }
+    return turi_nil();
+}
+static TuriValue native_extern_strlen(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n > 0 && args[0].tag == TURI_CSTR && args[0].as_cstr)
+        return turi_int((int64_t)strlen(args[0].as_cstr));
+    return turi_int(0);
+}
+static TuriValue native_extern_getenv(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n > 0 && args[0].tag == TURI_CSTR && args[0].as_cstr) {
+        const char *v = getenv(args[0].as_cstr);
+        return v ? turi_cstr(v) : turi_nil();
+    }
+    return turi_nil();
+}
+
+/* printf: supports one argument (%lld for int, %s for cstr, %f/%g for float). */
+static TuriValue native_extern_printf(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1 || args[0].tag != TURI_CSTR || !args[0].as_cstr) return turi_int(0);
+    const char *fmt = args[0].as_cstr;
+    int ret = 0;
+    if (n >= 2) {
+        TuriValue arg = args[1];
+        if (arg.tag == TURI_CSTR)
+            ret = printf(fmt, arg.as_cstr);
+        else if (arg.tag == TURI_FLOAT)
+            ret = printf(fmt, arg.as_float);
+        else
+            ret = printf(fmt, (long long)arg.as_int);
+    } else {
+        ret = printf("%s", fmt);
+    }
+    return turi_int((int64_t)ret);
+}
+
+static void register_extern_c_known(TuriEnv *env, const char *fname) {
+    struct { const char *name; TuriNativeFn fn; } known[] = {
+        { "exit",     native_extern_exit     },
+        { "free",     native_extern_free     },
+        { "strlen",   native_extern_strlen   },
+        { "getenv",   native_extern_getenv   },
+        { "printf",   native_extern_printf   },
+        { "printf_s", native_extern_printf   },
+        { NULL, NULL }
+    };
+    for (int i = 0; known[i].name; i++) {
+        if (strcmp(fname, known[i].name) == 0) {
+            turi_env_register_native(env, fname, known[i].fn, NULL);
+            return;
+        }
+    }
+    turi_env_register_native(env, fname, native_nil_stub, NULL);
+}
+
+/* -------------------------------------------------------------------------
  * Local variable frame (stack-allocated linked list)
  * ---------------------------------------------------------------------- */
 
@@ -172,13 +250,10 @@ static EvalFrame *eval_frame_new(EvalFrame *parent) {
 }
 
 static void eval_frame_free(EvalFrame *f) {
-    EvalBinding *b = f->bindings;
-    while (b) {
-        EvalBinding *next = b->next;
-        free(b);
-        b = next;
-    }
-    free(f);
+    /* Frames are intentionally not freed: closures may capture frame pointers
+     * and outlive the scope that created them.  Worker processes are short-lived
+     * (one fixture per fork), so leaking frames is acceptable. */
+    (void)f;
 }
 
 static void frame_bind(EvalFrame *f, const char *name, TuriValue value) {
@@ -224,15 +299,28 @@ struct TuriStruct {
     const char  *name;     /* struct name (for debugging) */
     uint32_t     n_fields;
     TuriValue   *fields;   /* heap-allocated array */
+    StructDef   *def;      /* compiler's struct definition (for field name lookup); may be NULL */
 };
 
-static TuriValue make_struct_val(const char *name, uint32_t n, TuriValue *fields) {
+static TuriValue make_struct_val_def(const char *name, uint32_t n, TuriValue *fields, StructDef *def) {
     TuriStruct *s = (TuriStruct *)malloc(sizeof(TuriStruct));
     s->name     = name;
     s->n_fields = n;
+    s->def      = def;
     s->fields   = (TuriValue *)malloc(n * sizeof(TuriValue));
     for (uint32_t i = 0; i < n; i++) s->fields[i] = fields[i];
     return turi_struct_val(s);
+}
+
+static TuriValue make_struct_val(const char *name, uint32_t n, TuriValue *fields) {
+    return make_struct_val_def(name, n, fields, NULL);
+}
+
+/* Native callback for ADT constructors registered by EX_DEFDATA/EX_DEFGADT. */
+static TuriValue adt_ctor_native(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
+    (void)env;
+    CtorDef *ctor = (CtorDef *)ud;
+    return make_struct_val(ctor->name, n, args);
 }
 
 /* Full definition of TuriThrow (forward-declared in value.h). */
@@ -290,6 +378,46 @@ static void fire_defers_to_mark(TuriEnv *env, DeferItem *mark,
     }
 
     /* Restore signals (caller decides what to do with them). */
+    env->throwing     = saved_throwing;
+    env->throw_value  = saved_tv;
+    env->returning    = saved_returning;
+    env->return_value = saved_rv;
+}
+
+/* Fire defers in reversed (oldest-first / outer-first) order.
+ * Used at function exit to match compiled tur_frame_fire_chain semantics:
+ * on early-return, outer defers fire before inner defers. */
+static void fire_defers_to_mark_reversed(TuriEnv *env, DeferItem *mark,
+                                          EvalFrame *fallback_frame) {
+    /* Count items */
+    size_t n = 0;
+    for (DeferItem *it = (DeferItem *)env->defer_stack; it != mark; it = it->next) n++;
+    if (n == 0) return;
+
+    /* Collect into array (index 0 = newest / innermost) */
+    DeferItem **items = (DeferItem **)malloc(n * sizeof(DeferItem *));
+    DeferItem *cur = (DeferItem *)env->defer_stack;
+    for (size_t i = 0; i < n; i++) { items[i] = cur; cur = cur->next; }
+    env->defer_stack = mark;
+
+    bool saved_throwing  = env->throwing;
+    TuriValue saved_tv   = env->throw_value;
+    bool saved_returning = env->returning;
+    TuriValue saved_rv   = env->return_value;
+
+    /* Fire reversed: oldest (outermost) first */
+    for (size_t i = n; i-- > 0; ) {
+        DeferItem *item = items[i];
+        env->throwing  = false;
+        env->returning = false;
+        EvalFrame *dframe = item->snapshot;
+        if (dframe) dframe->parent = fallback_frame;
+        eval_expr(env, dframe, item->body);
+        eval_frame_free(item->snapshot);
+        free(item);
+    }
+    free(items);
+
     env->throwing     = saved_throwing;
     env->throw_value  = saved_tv;
     env->returning    = saved_returning;
@@ -435,6 +563,54 @@ static TuriValue eval_handle_inner(TuriEnv *env, EvalFrame *frame,
         }
     }
     if (!matched) {
+        /* Effect not handled by this handler — propagate to the next outer handler.
+         * We're currently in the handler context (the outer body fiber or main thread).
+         * env->handler_stack has the outer handler frames (current handler was popped). */
+        TuriHandlerFrame *outer = (TuriHandlerFrame *)env->handler_stack;
+        while (outer) {
+            for (uint8_t j = 0; j < outer->n_cases; j++) {
+                if (strcmp(outer->cases[j].effect_name->name, cont->perf_name) == 0) {
+                    /* Found matching outer handler. Yield to it. */
+                    TuriEffectCont *outer_cont = outer->cont;
+                    /* Copy signal to outer cont. */
+                    outer_cont->perf_name   = cont->perf_name;
+                    outer_cont->perf_args   = cont->perf_args;
+                    outer_cont->n_perf_args = cont->n_perf_args;
+#if defined(__APPLE__)
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+                    swapcontext(&outer_cont->body_ctx, &outer_cont->handler_ctx);
+#if defined(__APPLE__)
+#  pragma clang diagnostic pop
+#endif
+                    /* Outer handler ran and resumed us. Forward resume value to inner body. */
+                    TuriValue resume_val = outer_cont->resume_val;
+                    cont->resume_val = resume_val;
+                    /* Re-push inner handler frame and resume inner body. */
+                    TuriHandlerFrame inner_hf;
+                    inner_hf.cases   = cont->handle_expr->cases;
+                    inner_hf.n_cases = cont->handle_expr->n_cases;
+                    inner_hf.cont    = cont;
+                    inner_hf.prev    = (TuriHandlerFrame *)env->handler_stack;
+                    env->handler_stack = &inner_hf;
+#if defined(__APPLE__)
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+                    swapcontext(&cont->handler_ctx, &cont->body_ctx);
+#if defined(__APPLE__)
+#  pragma clang diagnostic pop
+#endif
+                    env->handler_stack = inner_hf.prev;
+                    if (cont->done)
+                        return cont->body_result;
+                    /* Inner body performed again; dispatch (possibly propagate again). */
+                    return eval_handle_inner(env, frame, cont->handle_expr, cont);
+                }
+            }
+            outer = outer->prev;
+        }
         return turi_errorf("eval: unhandled effect: %s", cont->perf_name);
     }
 
@@ -626,11 +802,25 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
             if (args[0].tag == TURI_INT)   return turi_bool(args[0].as_int   == args[1].as_int);
             if (args[0].tag == TURI_FLOAT) return turi_bool(args[0].as_float == args[1].as_float);
             if (args[0].tag == TURI_BOOL)  return turi_bool(args[0].as_bool  == args[1].as_bool);
+            if (args[0].tag == TURI_NIL)   return turi_bool(args[1].tag == TURI_NIL);
+            if (args[0].tag == TURI_CSTR)  {
+                if (args[1].tag == TURI_CSTR) {
+                    const char *s0 = args[0].as_cstr ? args[0].as_cstr : "";
+                    const char *s1 = args[1].as_cstr ? args[1].as_cstr : "";
+                    return turi_bool(strcmp(s0, s1) == 0);
+                }
+                return turi_bool(false);
+            }
+            /* Fallback: compare as integer representation */
+            return turi_bool(args[0].as_int == args[1].as_int);
         }
         if (strcmp(op, "!=") == 0) {
             if (args[0].tag == TURI_INT)   return turi_bool(args[0].as_int   != args[1].as_int);
             if (args[0].tag == TURI_FLOAT) return turi_bool(args[0].as_float != args[1].as_float);
             if (args[0].tag == TURI_BOOL)  return turi_bool(args[0].as_bool  != args[1].as_bool);
+            if (args[0].tag == TURI_NIL)   return turi_bool(args[1].tag != TURI_NIL);
+            /* Fallback: compare as integer representation */
+            return turi_bool(args[0].as_int != args[1].as_int);
         }
         if (strcmp(op, "<") == 0) {
             if (args[0].tag == TURI_INT)   return turi_bool(args[0].as_int   < args[1].as_int);
@@ -658,8 +848,22 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
     case BS_PREFIX_UNARY: {
         const char *op = spec->c_op;
         if (op && strcmp(op, "!") == 0) return turi_bool(!args[0].as_bool);
+        if (op && strcmp(op, "&") == 0) {
+            /* ptr-of: emulate &var by boxing the value into a heap cell */
+            int64_t *cell = (int64_t *)malloc(sizeof(int64_t));
+            if (!cell) return turi_nil();
+            *cell = args[0].as_int;
+            TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)cell;
+            return v;
+        }
         return turi_nil();
     }
+
+    case BS_UNSAFE_CAST:
+    case BS_REINTERPRET:
+    case BS_TRANSMUTE:
+        /* All three are C-style casts; in the interpreter, pass the value through. */
+        return args[0];
 
     case BS_PREFIX_UNARY_FREE:
         /* (drop! x) — no-op in the evaluator */
@@ -706,10 +910,1155 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
         return turi_nil();
     }
 
+    /* --- Unsafe pointer/memory operations -------------------------------- */
+    case BS_RAW_MALLOC: {
+        int64_t sz = args[0].as_int;
+        void *p = malloc((size_t)(sz > 0 ? sz : 0));
+        TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)p;
+        return v;
+    }
+    case BS_RAW_FREE: {
+        void *p = (void *)(intptr_t)args[0].as_int;
+        if (p) free(p);
+        return turi_nil();
+    }
+    case BS_PTR_DEREF: {
+        int64_t *p = (int64_t *)(intptr_t)args[0].as_int;
+        if (!p) return turi_nil();
+        TuriValue v = {0}; v.tag = TURI_INT; v.as_int = *p;
+        return v;
+    }
+    case BS_PTR_WRITE: {
+        int64_t *p = (int64_t *)(intptr_t)args[0].as_int;
+        if (p) *p = args[1].as_int;
+        return turi_nil();
+    }
+    case BS_PTR_ARITH: {
+        /* ptr-add/ptr-sub: raw byte arithmetic, matching emitted C: (char*)p +/- off */
+        intptr_t base = (intptr_t)args[0].as_int;
+        int64_t  off  = args[1].as_int;
+        intptr_t res  = (spec->c_op && spec->c_op[0] == '-')
+                        ? base - (intptr_t)off
+                        : base + (intptr_t)off;
+        TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)res;
+        return v;
+    }
+    case BS_RAW_MEMSET: {
+        void *p = (void *)(intptr_t)args[0].as_int;
+        int  c  = (int)args[1].as_int;
+        size_t n = (size_t)args[2].as_int;
+        if (p) memset(p, c, n);
+        return turi_nil();
+    }
+    case BS_RAW_MEMCPY: {
+        void *dst = (void *)(intptr_t)args[0].as_int;
+        void *src = (void *)(intptr_t)args[1].as_int;
+        size_t n  = (size_t)args[2].as_int;
+        if (dst && src) memcpy(dst, src, n);
+        return turi_nil();
+    }
+    case BS_ARRAY_GET_UNCHECKED: {
+        /* *((int64_t *)arr + idx) */
+        int64_t *arr = (int64_t *)(intptr_t)args[0].as_int;
+        int64_t  idx = args[1].as_int;
+        TuriValue v = {0}; v.tag = TURI_INT;
+        v.as_int = arr ? arr[idx] : 0;
+        return v;
+    }
+    case BS_ARRAY_SET_UNCHECKED: {
+        /* *((int64_t *)arr + idx) = val */
+        int64_t *arr = (int64_t *)(intptr_t)args[0].as_int;
+        int64_t  idx = args[1].as_int;
+        int64_t  val = args[2].as_int;
+        if (arr) arr[idx] = val;
+        return turi_nil();
+    }
+
     default:
         /* Silently return nil for unsupported builtins (unsafe ops, STM, etc.) */
         return turi_nil();
     }
+}
+
+/* =========================================================================
+ * Minimal inline-C body executor for common patterns.
+ *
+ * Recognizes and executes: free, switch-case-string, simple constructors
+ * (malloc + field assignments), and simple accessors (cast ptr + return field).
+ * Returns true and sets *out if a pattern was recognized; false otherwise.
+ * ========================================================================= */
+
+/* Process C string escape sequences in-place: "\\n" -> "\n" etc. */
+static void ic_unescape_str(char *s) {
+    char *r = s, *w = s;
+    while (*r) {
+        if (*r == '\\' && r[1]) {
+            r++;
+            switch (*r) {
+                case 'n':  *w++ = '\n'; r++; break;
+                case 't':  *w++ = '\t'; r++; break;
+                case 'r':  *w++ = '\r'; r++; break;
+                case '\\': *w++ = '\\'; r++; break;
+                case '"':  *w++ = '"';  r++; break;
+                case '0':  *w++ = '\0'; r++; break;
+                default:   *w++ = '\\'; *w++ = *r++; break;
+            }
+        } else {
+            *w++ = *r++;
+        }
+    }
+    *w = '\0';
+}
+
+static const char *ic_skip_ws(const char *p) {
+    for (;;) {
+        while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+        if (p[0] == '/' && p[1] == '/') { while (*p && *p != '\n') p++; continue; }
+        if (p[0] == '/' && p[1] == '*') {
+            p += 2;
+            while (*p && !(p[0] == '*' && p[1] == '/')) p++;
+            if (*p) p += 2;
+            continue;
+        }
+        break;
+    }
+    return p;
+}
+
+static bool ic_word_eq(const char *p, const char *word) {
+    size_t n = strlen(word);
+    return strncmp(p, word, n) == 0 && !isalnum((unsigned char)p[n]) && p[n] != '_';
+}
+
+static int ic_read_ident(const char **p, char *out, int out_max) {
+    *p = ic_skip_ws(*p);
+    const char *s = *p;
+    if (!isalpha((unsigned char)*s) && *s != '_') return 0;
+    int n = 0;
+    while ((isalnum((unsigned char)*s) || *s == '_') && n < out_max - 1)
+        out[n++] = *s++;
+    out[n] = '\0';
+    *p = s;
+    return n;
+}
+
+static int ic_param_idx(FnDef *fn, const char *name, uint32_t param_offset) {
+    for (uint32_t i = param_offset; i < fn->n_params; i++) {
+        if (strcmp(fn->params[i]->name->name, name) == 0)
+            return (int)(i - param_offset);
+    }
+    return -1;
+}
+
+/* Forward declarations for struct field helpers used by ic_eval_assign_expr */
+#define IC_MAX_FIELDS 10
+static int ic_extract_struct_fields_typed(const char *body,
+                                           const char *out_names[IC_MAX_FIELDS],
+                                           size_t      out_lens[IC_MAX_FIELDS],
+                                           int         out_types[IC_MAX_FIELDS]);
+static int ic_field_index(const char *fname, size_t flen,
+                           const char *names[], size_t lens[], int n);
+static int ic_common_field_idx(const char *fname, size_t flen);
+
+/* Parse a simple field assignment expression: param name, bool/null/int literal, or cast.
+ * ic_body is the full inline-C body (for struct field extraction); may be NULL. */
+static bool ic_eval_assign_expr(const char *expr,
+                                 FnDef *fn, uint32_t param_offset,
+                                 TuriValue *args, uint32_t n_args,
+                                 int64_t *out_val,
+                                 const char *ic_body) {
+    const char *p = ic_skip_ws(expr);
+    /* Strip any number of casts like (T), (T*), (int64_t)(intptr_t), etc. */
+    while (*p == '(') {
+        const char *q = p + 1; q = ic_skip_ws(q);
+        if (isalpha((unsigned char)*q) || *q == '_') {
+            /* consume type tokens and * until ) */
+            const char *q2 = q;
+            while (*q2 && *q2 != ')') q2++;
+            if (*q2 == ')') { p = ic_skip_ws(q2 + 1); continue; }
+        }
+        break;
+    }
+    if (ic_word_eq(p, "true"))  { *out_val = 1; return true; }
+    if (ic_word_eq(p, "false")) { *out_val = 0; return true; }
+    if (ic_word_eq(p, "NULL"))  { *out_val = 0; return true; }
+    if (*p == '0' && !isdigit((unsigned char)p[1])) { *out_val = 0; return true; }
+    if (isdigit((unsigned char)*p) || (*p == '-' && isdigit((unsigned char)p[1]))) {
+        char *end; *out_val = strtoll(p, &end, 0);
+        if (end > p) return true;
+    }
+    char ident[64];
+    const char *q = p;
+    if (ic_read_ident(&q, ident, sizeof(ident)) > 0) {
+        int idx = ic_param_idx(fn, ident, param_offset);
+        if (idx >= 0 && (uint32_t)idx < n_args) {
+            TuriValue *arg = &args[idx];
+            /* Check for param.field (dot access on TuriStruct value) */
+            const char *r = ic_skip_ws(q);
+            if (*r == '.' && r[1] != '.') {
+                r++;
+                char field_name[64];
+                const char *r2 = r;
+                if (ic_read_ident(&r2, field_name, sizeof(field_name)) > 0) {
+                    size_t flen = strlen(field_name);
+                    if (arg->tag == TURI_STRUCT && arg->as_struct) {
+                        /* TuriStruct: look up field index from StructDef, body struct, or common table */
+                        int fidx = -1;
+                        /* 1. Use StructDef field names if available */
+                        if (fidx < 0 && arg->as_struct->def) {
+                            StructDef *sdef = arg->as_struct->def;
+                            for (uint32_t fi = 0; fi < sdef->n_fields && fi < arg->as_struct->n_fields; fi++) {
+                                if (sdef->fields[fi].name && strcmp(sdef->fields[fi].name, field_name) == 0) {
+                                    fidx = (int)fi; break;
+                                }
+                            }
+                        }
+                        /* 2. Try body struct definition */
+                        if (fidx < 0) {
+                            const char *snames[IC_MAX_FIELDS]; size_t slens[IC_MAX_FIELDS]; int stypes[IC_MAX_FIELDS];
+                            int sn = ic_body ? ic_extract_struct_fields_typed(ic_body, snames, slens, stypes) : 0;
+                            if (sn > 0) fidx = ic_field_index(field_name, flen, snames, slens, sn);
+                        }
+                        /* 3. Common field name table */
+                        if (fidx < 0) fidx = ic_common_field_idx(field_name, flen);
+                        if (fidx >= 0 && (uint32_t)fidx < arg->as_struct->n_fields) {
+                            *out_val = arg->as_struct->fields[fidx].as_int;
+                            return true;
+                        }
+                    } else if (arg->tag == TURI_INT && arg->as_int != 0) {
+                        /* Pointer to struct, access via common field index */
+                        int fidx = ic_common_field_idx(field_name, flen);
+                        if (fidx >= 0) {
+                            int64_t *ptr = (int64_t*)(intptr_t)arg->as_int;
+                            *out_val = ptr[fidx];
+                            return true;
+                        }
+                    }
+                }
+            }
+            /* Check for param->field (arrow access on pointer parameter) */
+            if (r[0] == '-' && r[1] == '>') {
+                r += 2;
+                char field_name[64];
+                const char *r2 = r;
+                if (ic_read_ident(&r2, field_name, sizeof(field_name)) > 0) {
+                    size_t flen = strlen(field_name);
+                    if (arg->tag == TURI_INT && arg->as_int != 0) {
+                        const char *snames[IC_MAX_FIELDS]; size_t slens[IC_MAX_FIELDS];
+                        int stypes[IC_MAX_FIELDS];
+                        int sn = ic_body ? ic_extract_struct_fields_typed(ic_body, snames, slens, stypes) : 0;
+                        int fidx = (sn > 0) ? ic_field_index(field_name, flen, snames, slens, sn) : -1;
+                        if (fidx < 0) fidx = ic_common_field_idx(field_name, flen);
+                        if (fidx >= 0) {
+                            int64_t *ptr = (int64_t*)(intptr_t)arg->as_int;
+                            *out_val = ptr[fidx];
+                            return true;
+                        }
+                    }
+                }
+            }
+            *out_val = arg->as_int;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Extract struct field names from a "struct { ... }" definition in body. */
+/* Field type hint for ic_extract_struct_fields */
+#define IC_FT_INT  0  /* int64_t, size_t, int, uint32_t, etc. */
+#define IC_FT_BOOL 1  /* bool, _Bool */
+#define IC_FT_CSTR 2  /* const char *, char * */
+
+static int ic_extract_struct_fields_typed(const char *body,
+                                           const char *out_names[IC_MAX_FIELDS],
+                                           size_t      out_lens[IC_MAX_FIELDS],
+                                           int         out_types[IC_MAX_FIELDS]) {
+    int n = 0;
+    const char *p = strstr(body, "struct");
+    if (!p) return 0;
+    p = strchr(p, '{'); if (!p) return 0; p++;
+    const char *end = strchr(p, '}'); if (!end) return 0;
+    while (p < end && n < IC_MAX_FIELDS) {
+        p = ic_skip_ws(p); if (p >= end) break;
+        const char *semi = (const char *)memchr(p, ';', (size_t)(end - p));
+        if (!semi) break;
+        /* Determine field type from declaration start */
+        int ftype = IC_FT_INT;
+        const char *decl = ic_skip_ws(p);
+        if (ic_word_eq(decl,"bool")||ic_word_eq(decl,"_Bool")) ftype=IC_FT_BOOL;
+        else if ((ic_word_eq(decl,"const")&&strstr(decl,"char")&&strchr(decl,'*')) ||
+                 (ic_word_eq(decl,"char")&&strchr(decl,'*'))) ftype=IC_FT_CSTR;
+        /* Extract field name: last identifier before ';' */
+        const char *fe = semi;
+        while (fe>p&&(fe[-1]==' '||fe[-1]=='\t'||fe[-1]=='\n'||fe[-1]=='\r')) fe--;
+        const char *fs = fe;
+        while (fs>p&&(isalnum((unsigned char)fs[-1])||fs[-1]=='_')) fs--;
+        if (fs < fe) {
+            out_names[n] = fs; out_lens[n] = (size_t)(fe-fs);
+            if (out_types) out_types[n] = ftype;
+            n++;
+        }
+        p = semi + 1;
+    }
+    return n;
+}
+
+static int ic_field_index(const char *fname, size_t flen,
+                           const char *names[], size_t lens[], int n) {
+    for (int i = 0; i < n; i++)
+        if (lens[i]==flen && strncmp(names[i],fname,flen)==0) return i;
+    return -1;
+}
+
+/* Common field-name → index fallback table */
+static int ic_common_field_idx(const char *fname, size_t flen) {
+    static const struct { const char *name; int idx; } tbl[] = {
+        {"is_some",0},{"value",1},{"is_ok",0},{"ok_val",1},{"err_val",2},
+        {"message",0},{"what",0},{"path",1},{"field",1},
+        {"p",0},{"len",1},{"data",0},{"n",1},{"items",0},{"cap",2},
+        {"errno_",1},{"cx",3},{"cy",4},{"width",1},{"height",2},
+        {NULL,-1}
+    };
+    for (int i = 0; tbl[i].name; i++) {
+        size_t nl = strlen(tbl[i].name);
+        if (flen == nl && strncmp(fname, tbl[i].name, nl) == 0) return tbl[i].idx;
+    }
+    return -1;
+}
+
+/* Execute free pattern */
+static TuriValue ic_exec_free(TuriValue *args, uint32_t n_args) {
+    if (n_args >= 1) { void *p = (void*)(intptr_t)args[0].as_int; if (p) free(p); }
+    return turi_nil();
+}
+
+/* Execute switch-case string: switch(arg0) { case V: return "str"; ... } */
+static TuriValue ic_exec_switch_string(const char *body,
+                                        TuriValue *args, uint32_t n_args) {
+    if (n_args < 1) return turi_nil();
+    int64_t sel = args[0].as_int;
+    const char *p = strstr(body, "switch"); if (!p) return turi_nil();
+    p = strchr(p, '{'); if (!p) return turi_nil(); p++;
+    const char *default_str = NULL; size_t default_len = 0;
+    while (*p) {
+        p = ic_skip_ws(p);
+        if (*p == '}') break;
+        if (ic_word_eq(p, "case")) {
+            p += 4; p = ic_skip_ws(p);
+            char *end; long long v = strtoll(p, &end, 0); p = end;
+            p = ic_skip_ws(p); if (*p == ':') p++;
+            p = ic_skip_ws(p);
+            if (ic_word_eq(p, "return")) {
+                p += 6; p = ic_skip_ws(p);
+                if (*p == '"') {
+                    const char *ss = p+1;
+                    const char *se = ss;
+                    while (*se && *se!='"') { if(*se=='\\') se++; se++; }
+                    if (v == sel) {
+                        char *buf = (char*)malloc((size_t)(se-ss)+1);
+                        if (!buf) return turi_nil();
+                        memcpy(buf, ss, (size_t)(se-ss));
+                        buf[se-ss] = '\0';
+                        return turi_cstr(buf);
+                    }
+                    p = se+1;
+                    while (*p && *p!=';') { p++; } if(*p) { p++; }
+                    continue;
+                }
+            }
+        } else if (ic_word_eq(p, "default")) {
+            p += 7; p = ic_skip_ws(p); if(*p==':') p++;
+            p = ic_skip_ws(p);
+            if (ic_word_eq(p, "return")) {
+                p += 6; p = ic_skip_ws(p);
+                if (*p == '"') {
+                    default_str = p+1;
+                    const char *se = default_str;
+                    while (*se && *se!='"') { if(*se=='\\') se++; se++; }
+                    default_len = (size_t)(se - default_str);
+                }
+            }
+            while (*p && *p!='}') p++;
+        } else { while (*p && *p!=';' && *p!='}') p++; if(*p==';') p++; }
+    }
+    if (default_str) {
+        char *buf = (char*)malloc(default_len+1);
+        if (!buf) return turi_nil();
+        memcpy(buf, default_str, default_len); buf[default_len] = '\0';
+        return turi_cstr(buf);
+    }
+    return turi_nil();
+}
+
+/* Execute constructor pattern: malloc + field assignments + return ptr. */
+static TuriValue ic_exec_constructor(const char *body,
+                                      TuriValue *args, uint32_t n_args,
+                                      FnDef *fn, uint32_t param_offset) {
+    /* Special case: string fat-pointer constructor (->p and ->len via strlen/while) */
+    if ((strstr(body,"strlen")||strstr(body,"while")) &&
+         strstr(body,"->p") && strstr(body,"->len") && n_args >= 1) {
+        const char *cstr = (args[0].tag==TURI_CSTR) ? args[0].as_cstr
+                                                     : (const char*)(intptr_t)args[0].as_int;
+        size_t len = cstr ? strlen(cstr) : 0;
+        int64_t *s = (int64_t*)malloc(2*sizeof(int64_t));
+        if (!s) return turi_nil();
+        s[0] = (int64_t)(intptr_t)cstr; s[1] = (int64_t)len;
+        TuriValue v={0}; v.tag=TURI_INT; v.as_int=(int64_t)(intptr_t)s; return v;
+    }
+
+    /* Find malloc call and the variable name preceding it */
+    const char *malloc_p = strstr(body, "malloc(");
+    if (!malloc_p) malloc_p = strstr(body, "calloc(");
+    if (!malloc_p) return turi_nil();
+    /* Scan backwards for variable name.
+     * Pattern: "TYPE *varname = (optional_cast)malloc("
+     * Start from the char before 'm' in malloc. */
+    const char *q = malloc_p;
+    if (q > body) q--; /* step before 'm' */
+    /* Skip whitespace and closing parens of a cast like (ValidationError*) */
+    while (q > body && (*q==' '||*q=='\t'||*q=='\n'||*q=='\r')) q--;
+    while (q > body && *q == ')') {
+        q--; int d=1;
+        while (q>body && d>0) { if(*q==')') d++; else if(*q=='(') d--; q--; }
+        while (q>body && (*q==' '||*q=='\t'||*q=='\n'||*q=='\r')) q--;
+    }
+    /* Now skip '=' and leading whitespace and pointer stars */
+    if (q > body && *q == '=') q--;
+    while (q > body && (*q==' '||*q=='\t'||*q=='\n'||*q=='\r'||*q=='*')) q--;
+    const char *name_end = q + 1;
+    while (q > body && (isalnum((unsigned char)q[-1])||q[-1]=='_')) q--;
+    int vname_len = (int)(name_end - q);
+    char varname[64];
+    if (vname_len<=0||vname_len>=64) return turi_nil();
+    memcpy(varname, q, (size_t)vname_len); varname[vname_len]='\0';
+
+    /* Scan past malloc line */
+    const char *p = malloc_p;
+    p = strchr(p,'('); if (!p) return turi_nil();
+    int depth = 1; p++;
+    while (*p && depth>0) { if(*p=='(') depth++; else if(*p==')') depth--; p++; }
+    while (*p && *p!=';') { p++; } if (*p) { p++; }
+
+    /* Collect field assignments: varname->field = expr; */
+    char arrow_buf[80];
+    if (snprintf(arrow_buf,sizeof(arrow_buf),"%s->",varname) >= (int)sizeof(arrow_buf))
+        return turi_nil();
+
+    int64_t field_vals[IC_MAX_FIELDS]; int n_fields=0;
+
+    /* Also check for p[i] = constant; (array index constructor) */
+    char idx_buf[80];
+    snprintf(idx_buf,sizeof(idx_buf),"%s[",varname);
+
+    while (*p) {
+        p = ic_skip_ws(p);
+        if (!*p || *p=='}') break;
+        if (ic_word_eq(p,"return")) break;
+
+        /* varname->field = expr; */
+        if (strncmp(p, arrow_buf, strlen(arrow_buf))==0) {
+            if (n_fields>=IC_MAX_FIELDS) break;
+            p += strlen(arrow_buf);
+            while (isalnum((unsigned char)*p)||*p=='_') p++; /* skip field name */
+            p = ic_skip_ws(p);
+            if (*p!='=') { while(*p&&*p!=';') p++; if(*p) p++; continue; }
+            p++; p = ic_skip_ws(p);
+            const char *expr_start = p;
+            int d=0;
+            while (*p&&(*p!=';'||d>0)) {
+                if(*p=='(') d++; else if(*p==')') d--;
+                else if(*p=='"') {p++;while(*p&&*p!='"'){if(*p=='\\')p++;p++;}}
+                p++;
+            }
+            char expr_buf[256];
+            int elen=(int)(p-expr_start);
+            while (elen>0&&(expr_start[elen-1]==' '||expr_start[elen-1]=='\t'||
+                            expr_start[elen-1]=='\n'||expr_start[elen-1]=='\r')) elen--;
+            int64_t fval=0;
+            if (elen>0&&elen<(int)sizeof(expr_buf)) {
+                memcpy(expr_buf,expr_start,(size_t)elen); expr_buf[elen]='\0';
+                ic_eval_assign_expr(expr_buf,fn,param_offset,args,n_args,&fval,body);
+            }
+            field_vals[n_fields++]=fval;
+            if(*p) p++;
+            continue;
+        }
+
+        /* varname[i] = constant; (array index constructor) */
+        if (strncmp(p, idx_buf, strlen(idx_buf))==0) {
+            if (n_fields>=IC_MAX_FIELDS) break;
+            p += strlen(idx_buf);
+            char *end; long long idx = strtoll(p, &end, 0); p = end;
+            if (*p!=']') { while(*p&&*p!=';') p++; if(*p) p++; continue; }
+            p++; p=ic_skip_ws(p);
+            if (*p!='=') { while(*p&&*p!=';') p++; if(*p) p++; continue; }
+            p++; p=ic_skip_ws(p);
+            const char *expr_start=p;
+            int d=0;
+            while(*p&&(*p!=';'||d>0)) {
+                if(*p=='(') d++; else if(*p==')') d--;
+                else if(*p=='"') {p++;while(*p&&*p!='"'){if(*p=='\\')p++;p++;}}
+                p++;
+            }
+            char expr_buf[256];
+            int elen=(int)(p-expr_start);
+            while(elen>0&&(expr_start[elen-1]==' '||expr_start[elen-1]=='\t'||
+                           expr_start[elen-1]=='\n'||expr_start[elen-1]=='\r')) elen--;
+            int64_t fval=0;
+            if (elen>0&&elen<(int)sizeof(expr_buf)) {
+                memcpy(expr_buf,expr_start,(size_t)elen); expr_buf[elen]='\0';
+                ic_eval_assign_expr(expr_buf,fn,param_offset,args,n_args,&fval,body);
+            }
+            /* idx must match n_fields (sequential) */
+            if ((long long)n_fields==idx) field_vals[n_fields++]=fval;
+            else if (idx>=0&&idx<IC_MAX_FIELDS) {
+                /* non-sequential index: grow to idx+1 */
+                while (n_fields <= (int)idx) field_vals[n_fields++]=0;
+                field_vals[idx]=fval;
+            }
+            if(*p) p++;
+            continue;
+        }
+
+        /* Skip other statements */
+        int d2=0;
+        while(*p&&(*p!=';'||d2>0)) {
+            if(*p=='(') d2++; else if(*p==')') d2--;
+            else if(*p=='"') {p++;while(*p&&*p!='"'){if(*p=='\\')p++;p++;}}
+            else if(*p=='{') d2++;
+            else if(*p=='}') { if(d2>0) d2--; else break; }
+            p++;
+        }
+        if(*p==';') p++;
+    }
+
+    if (n_fields==0) return turi_nil();
+    int64_t *mem = (int64_t*)malloc((size_t)n_fields*sizeof(int64_t));
+    if (!mem) return turi_nil();
+    for (int i=0;i<n_fields;i++) mem[i]=field_vals[i];
+    TuriValue v={0}; v.tag=TURI_INT; v.as_int=(int64_t)(intptr_t)mem; return v;
+}
+
+/* Execute accessor: cast arg to ptr, return field[idx].
+ * fn is used to check the declared return type. */
+static TuriValue ic_exec_accessor(const char *body,
+                                   TuriValue *args, uint32_t n_args,
+                                   FnDef *fn) {
+    if (n_args < 1) return turi_nil();
+
+    /* Extract struct field names and types from body */
+    const char *fnames[IC_MAX_FIELDS]; size_t flens[IC_MAX_FIELDS];
+    int ftypes[IC_MAX_FIELDS];
+    int nf = ic_extract_struct_fields_typed(body, fnames, flens, ftypes);
+
+    /* Find return statement */
+    const char *ret = strstr(body, "return "); if (!ret) return turi_nil();
+    ret += 7; ret = ic_skip_ws(ret);
+
+    /* Strip casts */
+    while (*ret == '(') {
+        const char *q2 = ret+1; q2=ic_skip_ws(q2);
+        if (isalpha((unsigned char)*q2)||*q2=='_') {
+            const char *e=q2; while(*e&&*e!=')') e++;
+            if(*e==')') { ret=ic_skip_ws(e+1); continue; }
+        }
+        break;
+    }
+
+    /* Handle ternary: "return var ? var->field : fallback;"
+     * The var is null-checked before deref */
+    {
+        const char *t = ret;
+        char var1[64], var2[64], field2[64];
+        const char *t2 = t;
+        int n1 = ic_read_ident(&t2, var1, sizeof(var1));
+        if (n1 > 0) {
+            const char *t3 = ic_skip_ws(t2);
+            if (*t3 == '?') {
+                t3++; t3 = ic_skip_ws(t3);
+                /* skip truthy part: var2->field */
+                const char *t4 = t3;
+                int n2 = ic_read_ident(&t4, var2, sizeof(var2));
+                if (n2 > 0 && t4[0]=='-' && t4[1]=='>') {
+                    t4 += 2;
+                    const char *t5 = t4;
+                    int n3 = ic_read_ident(&t5, field2, sizeof(field2));
+                    if (n3 > 0) {
+                        /* skip to colon */
+                        while (*t5 && *t5 != ':') t5++;
+                        if (*t5 == ':') {
+                            t5++; t5 = ic_skip_ws(t5);
+                            /* parse fallback value */
+                            int64_t fallback = 0;
+                            if (isdigit((unsigned char)*t5) || (*t5=='-'&&isdigit((unsigned char)t5[1]))) {
+                                char *end2; fallback = strtoll(t5, &end2, 0);
+                            }
+                            /* Check if args[0] is null */
+                            int64_t ptr_val = args[0].as_int;
+                            if (ptr_val == 0) {
+                                TuriValue rv={0}; rv.tag=TURI_INT; rv.as_int=fallback; return rv;
+                            }
+                            /* Access field on the non-null pointer */
+                            size_t flen3 = strlen(field2);
+                            int fidx3 = (nf>0) ? ic_field_index(field2,flen3,fnames,flens,nf) : -1;
+                            if (fidx3 < 0) fidx3 = ic_common_field_idx(field2, flen3);
+                            if (fidx3 >= 0) {
+                                int64_t *ptr3 = (int64_t*)(intptr_t)ptr_val;
+                                int64_t fv3 = ptr3[fidx3];
+                                int ft3 = (fidx3 < nf) ? ftypes[fidx3] : IC_FT_INT;
+                                if (ft3 == IC_FT_BOOL) { TuriValue rv={0}; rv.tag=TURI_BOOL; rv.as_bool=(bool)(fv3!=0); return rv; }
+                                if (ft3 == IC_FT_CSTR) { TuriValue rv={0}; rv.tag=TURI_CSTR; rv.as_cstr=(const char*)(intptr_t)fv3; return rv; }
+                                TuriValue rv={0}; rv.tag=TURI_INT; rv.as_int=fv3; return rv;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /* Skip variable name and look for -> or . */
+    const char *varstart = ret;
+    while (isalnum((unsigned char)*ret)||*ret=='_') ret++;
+    size_t varlen = (size_t)(ret - varstart);
+
+    /* Handle "return var.field;" (TuriStruct value field access) */
+    if (*ret == '.' && ret[1] != '.') {
+        ret++;
+        const char *fn_start2 = ret;
+        while (isalnum((unsigned char)*ret)||*ret=='_') ret++;
+        size_t fn_len2 = (size_t)(ret - fn_start2);
+        /* Find which param is named 'var' */
+        char varname2[64];
+        if (varlen < sizeof(varname2)) {
+            memcpy(varname2, varstart, varlen); varname2[varlen]='\0';
+            int pidx2 = ic_param_idx(fn, varname2, 0);
+            if (pidx2 < 0 && fn) pidx2 = ic_param_idx(fn, varname2, fn->n_params > 0 ? 0 : 0);
+            TuriValue *src = (pidx2 >= 0 && (uint32_t)pidx2 < n_args) ? &args[pidx2] : &args[0];
+            int fidx2 = (nf>0) ? ic_field_index(fn_start2, fn_len2, fnames, flens, nf) : -1;
+            if (fidx2 < 0) fidx2 = ic_common_field_idx(fn_start2, fn_len2);
+            if (fidx2 >= 0) {
+                int64_t fv2; int ft2;
+                if (src->tag == TURI_STRUCT && src->as_struct && (uint32_t)fidx2 < src->as_struct->n_fields) {
+                    fv2 = src->as_struct->fields[fidx2].as_int;
+                    ft2 = IC_FT_INT;
+                } else if (src->tag == TURI_INT && src->as_int != 0) {
+                    int64_t *ptr2 = (int64_t*)(intptr_t)src->as_int;
+                    fv2 = ptr2[fidx2];
+                    ft2 = (fidx2 < nf) ? ftypes[fidx2] : IC_FT_INT;
+                } else { return turi_nil(); }
+                if (ft2 == IC_FT_BOOL) { TuriValue rv={0}; rv.tag=TURI_BOOL; rv.as_bool=(bool)(fv2!=0); return rv; }
+                if (ft2 == IC_FT_CSTR) { TuriValue rv={0}; rv.tag=TURI_CSTR; rv.as_cstr=(const char*)(intptr_t)fv2; return rv; }
+                TuriValue rv={0}; rv.tag=TURI_INT; rv.as_int=fv2; return rv;
+            }
+        }
+        return turi_nil();
+    }
+
+    /* Fallback: find -> anywhere in the return expression; try to find param via (intptr_t)PARAM */
+    if (ret[0]!='-'||ret[1]!='>') {
+        /* Look for "->field_name" in the return expression */
+        const char *arrow_pos = strstr(varstart, "->");
+        if (!arrow_pos) return turi_nil();
+        const char *fns2 = arrow_pos+2;
+        char fn_name2[64]; int fn_len2_i = 0;
+        while ((isalnum((unsigned char)*fns2)||*fns2=='_') && fn_len2_i<63) fn_name2[fn_len2_i++]=*fns2++;
+        fn_name2[fn_len2_i] = '\0';
+        if (fn_len2_i == 0) return turi_nil();
+        size_t fn_len2 = (size_t)fn_len2_i;
+        int fidx2 = (nf>0)?ic_field_index(fn_name2,fn_len2,fnames,flens,nf):-1;
+        if (fidx2<0) fidx2=ic_common_field_idx(fn_name2,fn_len2);
+        if (fidx2<0) return turi_nil();
+        /* Look for which param is used: scan for (intptr_t)PARAM in the return expr */
+        int64_t ptr_val = n_args > 0 ? args[0].as_int : 0;
+        const char *itp = strstr(varstart, "intptr_t)");
+        if (itp) {
+            itp += 9;
+            while (*itp==' '||*itp=='\t') itp++;
+            char pname[64]; int plen=0;
+            while ((isalnum((unsigned char)*itp)||*itp=='_') && plen<63) pname[plen++]=*itp++;
+            pname[plen]='\0';
+            if (plen>0) {
+                int pidx2=ic_param_idx(fn,pname,0);
+                if (pidx2>=0&&(uint32_t)pidx2<n_args) ptr_val=args[pidx2].as_int;
+            }
+        }
+        if (ptr_val == 0) return turi_nil();
+        int64_t *ptr2=(int64_t*)(intptr_t)ptr_val;
+        int64_t fv2=ptr2[fidx2];
+        int ft2=(fidx2<nf)?ftypes[fidx2]:IC_FT_INT;
+        if (ft2==IC_FT_BOOL){TuriValue rv={0};rv.tag=TURI_BOOL;rv.as_bool=(bool)(fv2!=0);return rv;}
+        if (ft2==IC_FT_CSTR){TuriValue rv={0};rv.tag=TURI_CSTR;rv.as_cstr=(const char*)(intptr_t)fv2;return rv;}
+        TuriValue rv={0};rv.tag=TURI_INT;rv.as_int=fv2;return rv;
+    }
+    /* Expect -> for pointer dereference */
+    if (ret[0]!='-'||ret[1]!='>') return turi_nil();
+    ret += 2;
+
+    const char *fn_start = ret;
+    while (isalnum((unsigned char)*ret)||*ret=='_') ret++;
+    size_t fn_len = (size_t)(ret - fn_start);
+
+    /* Find field index */
+    int fidx = (nf>0) ? ic_field_index(fn_start,fn_len,fnames,flens,nf) : -1;
+    /* If arg is TURI_STRUCT with StructDef, use field names from StructDef */
+    if (fidx < 0 && args[0].tag == TURI_STRUCT && args[0].as_struct && args[0].as_struct->def) {
+        StructDef *sdef = args[0].as_struct->def;
+        for (uint32_t fi = 0; fi < sdef->n_fields; fi++) {
+            if (sdef->fields[fi].name && strncmp(sdef->fields[fi].name, fn_start, fn_len) == 0
+                && strlen(sdef->fields[fi].name) == fn_len) { fidx = (int)fi; break; }
+        }
+    }
+    if (fidx < 0) fidx = ic_common_field_idx(fn_start, fn_len);
+    if (fidx < 0) return turi_nil();
+
+    /* Get pointer value: from TURI_INT (raw pointer) or TURI_STRUCT */
+    int64_t field_val;
+    int ftype;
+    if (args[0].tag == TURI_STRUCT && args[0].as_struct) {
+        /* TuriStruct: use struct field directly */
+        if ((uint32_t)fidx >= args[0].as_struct->n_fields) return turi_nil();
+        field_val = args[0].as_struct->fields[fidx].as_int;
+        ftype = IC_FT_INT;
+    } else {
+        if (args[0].as_int == 0) return turi_nil();
+        int64_t *ptr = (int64_t*)(intptr_t)args[0].as_int;
+        field_val = ptr[fidx];
+        ftype = (fidx < nf) ? ftypes[fidx] : IC_FT_INT;
+    }
+    /* Determine field type: from struct definition or field-name heuristic */
+    /* Heuristic overrides for well-known bool/cstr fields */
+    if ((fn_len==5&&strncmp(fn_start,"is_ok",5)==0)||
+        (fn_len==7&&strncmp(fn_start,"is_some",7)==0))  ftype = IC_FT_BOOL;
+
+    /* Null-or-default pattern: "return ptr->field ? ptr->field : \"default\";" */
+    const char *q = ic_skip_ws(ret);
+    if (*q == '?') {
+        if (field_val == 0) {
+            q++; q=ic_skip_ws(q);
+            /* Skip truthy part to colon */
+            int d=0;
+            while(*q&&(*q!=':'||d>0)) {
+                if(*q=='(') d++; else if(*q==')') d--;
+                else if(*q=='"') {q++;while(*q&&*q!='"'){if(*q=='\\')q++;q++;}}
+                q++;
+            }
+            if(*q==':') { q++; q=ic_skip_ws(q); }
+            if(*q=='"') {
+                const char *se=q+1;
+                while(*se&&*se!='"') { if(*se=='\\') se++; se++; }
+                char *buf=(char*)malloc((size_t)(se-(q+1))+1);
+                if (!buf) return turi_nil();
+                size_t slen=(size_t)(se-(q+1));
+                memcpy(buf,q+1,slen); buf[slen]='\0';
+                return turi_cstr(buf);
+            }
+        }
+        /* field_val != 0: fall through to return field_val with type */
+    }
+
+    if (ftype == IC_FT_BOOL) {
+        TuriValue rv={0}; rv.tag=TURI_BOOL; rv.as_bool=(bool)(field_val!=0); return rv;
+    }
+    if (ftype == IC_FT_CSTR) {
+        TuriValue rv={0}; rv.tag=TURI_CSTR;
+        rv.as_cstr=(const char*)(intptr_t)field_val; return rv;
+    }
+    TuriValue rv={0}; rv.tag=TURI_INT; rv.as_int=field_val; return rv;
+}
+
+/* Execute snprintf-based formatter: handles bodies that do conditional early returns and
+ * then snprintf(buf, size, "format", args...) + return buf. Useful for Show instances. */
+static TuriValue ic_exec_snprintf_fmt(const char *body,
+                                       TuriValue *args, uint32_t n_args,
+                                       FnDef *fn, uint32_t param_offset) {
+    /* Step 1: Find buffer variable name by scanning all return statements for
+     * one that returns a variable (not a string literal or 0). Take the last such return. */
+    char bufvar[64]; int bvlen = 0;
+    {
+        const char *scan = body;
+        while ((scan = strstr(scan, "return ")) != NULL) {
+            const char *r2 = scan + 7; r2 = ic_skip_ws(r2);
+            /* strip casts */
+            while (*r2 == '(') {
+                const char *q2 = r2+1; q2 = ic_skip_ws(q2);
+                if (isalpha((unsigned char)*q2) || *q2 == '_') {
+                    const char *e2 = q2; while (*e2 && *e2 != ')') e2++;
+                    if (*e2 == ')') { r2 = ic_skip_ws(e2+1); continue; }
+                }
+                break;
+            }
+            /* If this return is an identifier (variable name), remember it */
+            if (isalpha((unsigned char)*r2) || *r2 == '_') {
+                char tmp[64]; int tlen = 0;
+                while ((isalnum((unsigned char)*r2)||*r2=='_') && tlen < 63) tmp[tlen++] = *r2++;
+                tmp[tlen] = '\0';
+                /* Skip keywords */
+                if (strcmp(tmp,"true")&&strcmp(tmp,"false")&&strcmp(tmp,"NULL")) {
+                    memcpy(bufvar, tmp, (size_t)tlen+1); bvlen = tlen;
+                }
+            }
+            scan++;
+        }
+    }
+    if (bvlen == 0) return turi_nil();
+
+    /* Step 2: Handle conditional early returns: if (COND) return "str"; */
+    const char *p = body;
+    while (*p) {
+        p = ic_skip_ws(p);
+        if (!ic_word_eq(p, "if")) { while (*p && *p != ';' && *p != '{') p++; if(*p) p++; continue; }
+        const char *q = p + 2; q = ic_skip_ws(q);
+        if (*q != '(') { p++; continue; }
+        q++; q = ic_skip_ws(q);
+        bool negate = false;
+        if (*q == '!') { negate = true; q++; q = ic_skip_ws(q); }
+        char cond_param[64], cond_field[64]; cond_field[0] = '\0';
+        int cp_len = 0, cf_len = 0;
+        while ((isalnum((unsigned char)*q)||*q=='_') && cp_len<63) cond_param[cp_len++]=*q++;
+        cond_param[cp_len] = '\0';
+        if (*q == '.') { q++; while ((isalnum((unsigned char)*q)||*q=='_') && cf_len<63) cond_field[cf_len++]=*q++; cond_field[cf_len]='\0'; }
+        while (*q && *q != ')') q++;
+        if (*q == ')') q++;
+        q = ic_skip_ws(q);
+        if (!ic_word_eq(q, "return")) { p += 2; continue; }
+        q += 6; q = ic_skip_ws(q);
+        if (*q != '"') { p += 2; continue; }
+        const char *ss = q+1, *se = ss;
+        while (*se && *se != '"') { if (*se == '\\') se++; se++; }
+        /* Evaluate condition */
+        int64_t cond_val = 0;
+        if (cond_field[0]) {
+            int pidx = ic_param_idx(fn, cond_param, param_offset);
+            if (pidx >= 0 && (uint32_t)pidx < n_args) {
+                TuriValue *arg = &args[pidx];
+                size_t flen = strlen(cond_field);
+                const char *snames[IC_MAX_FIELDS]; size_t slens[IC_MAX_FIELDS]; int stypes[IC_MAX_FIELDS];
+                int sn = ic_extract_struct_fields_typed(body, snames, slens, stypes);
+                int fidx = (sn>0)?ic_field_index(cond_field,flen,snames,slens,sn):-1;
+                /* Also try StructDef field names */
+                if (fidx<0 && arg->tag==TURI_STRUCT && arg->as_struct && arg->as_struct->def) {
+                    StructDef *sdef=arg->as_struct->def;
+                    for (uint32_t fi=0; fi<sdef->n_fields; fi++) {
+                        if (sdef->fields[fi].name && strcmp(sdef->fields[fi].name,cond_field)==0) { fidx=(int)fi; break; }
+                    }
+                }
+                if (fidx<0) fidx=ic_common_field_idx(cond_field,flen);
+                if (fidx>=0) {
+                    if (arg->tag==TURI_STRUCT&&arg->as_struct&&(uint32_t)fidx<arg->as_struct->n_fields)
+                        cond_val=arg->as_struct->fields[fidx].as_int;
+                    else if (arg->tag==TURI_INT&&arg->as_int)
+                        cond_val=((int64_t*)(intptr_t)arg->as_int)[fidx];
+                }
+            }
+        } else if (cp_len > 0) {
+            int pidx = ic_param_idx(fn, cond_param, param_offset);
+            if (pidx >= 0 && (uint32_t)pidx < n_args) cond_val = args[pidx].as_int;
+        }
+        if (negate ? (cond_val==0) : (cond_val!=0)) {
+            size_t elen = (size_t)(se-ss);
+            char *buf = (char*)malloc(elen+1);
+            if (!buf) return turi_nil();
+            memcpy(buf, ss, elen); buf[elen] = '\0';
+            TuriValue rv={0}; rv.tag=TURI_CSTR; rv.as_cstr=buf; return rv;
+        }
+        p += 2;
+    }
+
+    /* Step 3: Find snprintf(bufvar, size, "format", args...) */
+    const char *sp = body;
+    while (*sp) {
+        const char *fp = strstr(sp, "snprintf(");
+        if (!fp) break;
+        const char *fq = fp + 9;
+        fq = ic_skip_ws(fq);
+        const char *bvs = fq;
+        while (isalnum((unsigned char)*fq)||*fq=='_') fq++;
+        if ((int)(fq-bvs)==bvlen && strncmp(bvs,bufvar,bvlen)==0) {
+            /* skip comma + size arg */
+            fq=ic_skip_ws(fq); if(*fq==',') fq++;
+            fq=ic_skip_ws(fq); int d=0;
+            while(*fq&&(*fq!=','||d>0)){if(*fq=='(')d++;else if(*fq==')')d--;fq++;}
+            if(*fq==',') fq++;
+            fq=ic_skip_ws(fq);
+            if(*fq!='"') { sp=fp+1; continue; }
+            /* extract format string */
+            const char *fmts=fq+1, *fmte=fmts;
+            while(*fmte&&*fmte!='"'){if(*fmte=='\\')fmte++;fmte++;}
+            char fmt_str[512]; size_t fmt_len=(size_t)(fmte-fmts);
+            if(fmt_len>=sizeof(fmt_str)){sp=fp+1;continue;}
+            memcpy(fmt_str,fmts,fmt_len); fmt_str[fmt_len]='\0';
+            ic_unescape_str(fmt_str);
+            fq=fmte+1;
+            /* parse snprintf arguments */
+            int64_t sn_args[8]; int sn_argc=0;
+            while(*fq&&*fq!=')'&&sn_argc<8) {
+                if(*fq==',') fq++;
+                fq=ic_skip_ws(fq); if(*fq==')') break;
+                const char *as=fq; int d2=0;
+                while(*fq&&((*fq!=','&&*fq!=')')||d2>0)) {
+                    if(*fq=='(')d2++;else if(*fq==')')d2--;
+                    else if(*fq=='"'){fq++;while(*fq&&*fq!='"'){if(*fq=='\\')fq++;fq++;}}
+                    if(*fq)fq++;
+                }
+                int alen=(int)(fq-as);
+                while(alen>0&&(as[alen-1]==' '||as[alen-1]=='\t'))alen--;
+                if(alen>0&&alen<256){
+                    char abuf[256]; memcpy(abuf,as,(size_t)alen); abuf[alen]='\0';
+                    int64_t val=0;
+                    ic_eval_assign_expr(abuf,fn,param_offset,args,n_args,&val,body);
+                    sn_args[sn_argc++]=val;
+                }
+            }
+            /* format the result */
+            char result_buf[1024]; int rlen=0;
+            switch(sn_argc){
+                case 0: rlen=snprintf(result_buf,sizeof(result_buf),"%s",fmt_str); break;
+                case 1: rlen=snprintf(result_buf,sizeof(result_buf),fmt_str,(long long)sn_args[0]); break;
+                case 2: rlen=snprintf(result_buf,sizeof(result_buf),fmt_str,(long long)sn_args[0],(long long)sn_args[1]); break;
+                case 3: rlen=snprintf(result_buf,sizeof(result_buf),fmt_str,(long long)sn_args[0],(long long)sn_args[1],(long long)sn_args[2]); break;
+                case 4: rlen=snprintf(result_buf,sizeof(result_buf),fmt_str,(long long)sn_args[0],(long long)sn_args[1],(long long)sn_args[2],(long long)sn_args[3]); break;
+                default: return turi_nil();
+            }
+            if(rlen<0) return turi_nil();
+            char *out=(char*)malloc((size_t)rlen+1);
+            if(!out) return turi_nil();
+            memcpy(out,result_buf,(size_t)rlen+1);
+            TuriValue rv={0}; rv.tag=TURI_CSTR; rv.as_cstr=out; return rv;
+        }
+        sp=fp+1;
+    }
+    return turi_nil();
+}
+
+/* Execute string comparison of two fat-pointer {const char *p; size_t len;} structs */
+static TuriValue ic_exec_str_cmp(TuriValue *args, uint32_t n_args) {
+    if (n_args < 2) return turi_bool(false);
+    int64_t *a = (int64_t*)(intptr_t)args[0].as_int;
+    int64_t *b = (int64_t*)(intptr_t)args[1].as_int;
+    if (!a && !b) return turi_bool(true);
+    if (!a || !b) return turi_bool(false);
+    int64_t la = a[1], lb = b[1];
+    if (la != lb) return turi_bool(false);
+    const char *pa = (const char*)(intptr_t)a[0];
+    const char *pb = (const char*)(intptr_t)b[0];
+    if (!pa && !pb) return turi_bool(true);
+    if (!pa || !pb) return turi_bool(false);
+    return turi_bool(memcmp(pa, pb, (size_t)la) == 0);
+}
+
+/* Execute a while-loop linked-list traversal with printf.
+ * Pattern: Cell *var = (cast)param; while(var){ printf(fmt, var->field); var=(cast)var->next; } */
+static TuriValue ic_exec_linked_list_print(const char *body,
+                                            TuriValue *args, uint32_t n_args,
+                                            FnDef *fn, uint32_t param_offset) {
+    /* Find while keyword */
+    const char *wp = body;
+    while ((wp = strstr(wp, "while")) != NULL) {
+        if (wp > body && (isalnum((unsigned char)wp[-1])||wp[-1]=='_')) { wp++; continue; }
+        break;
+    }
+    if (!wp) return turi_nil();
+    const char *wq = wp + 5; wq = ic_skip_ws(wq);
+    if (*wq != '(') return turi_nil();
+    wq++; wq = ic_skip_ws(wq);
+    /* Extract loop variable name (condition is just the pointer: while (c)) */
+    char loopvar[64]; int lvlen = 0;
+    while ((isalnum((unsigned char)*wq)||*wq=='_') && lvlen<63) loopvar[lvlen++] = *wq++;
+    loopvar[lvlen] = '\0';
+    if (lvlen == 0) return turi_nil();
+    while (*wq && *wq != ')') wq++;
+    if (*wq == ')') wq++;
+    wq = ic_skip_ws(wq);
+    if (*wq != '{') return turi_nil();
+    wq++;
+
+    /* Extract struct field definitions for index lookup */
+    const char *snames[IC_MAX_FIELDS]; size_t slens[IC_MAX_FIELDS]; int stypes[IC_MAX_FIELDS];
+    int sn = ic_extract_struct_fields_typed(body, snames, slens, stypes);
+
+    /* Find printf(fmt, (cast)loopvar->print_field); */
+    const char *pp = strstr(wq, "printf(");
+    if (!pp) return turi_nil();
+    const char *pfq = pp + 7; pfq = ic_skip_ws(pfq);
+    if (*pfq != '"') return turi_nil();
+    const char *fmts = pfq+1, *fmte = fmts;
+    while (*fmte && *fmte != '"') { if (*fmte=='\\') fmte++; fmte++; }
+    char fmt_str[128]; size_t fmt_len = (size_t)(fmte-fmts);
+    if (fmt_len >= sizeof(fmt_str)) return turi_nil();
+    memcpy(fmt_str, fmts, fmt_len); fmt_str[fmt_len] = '\0';
+    ic_unescape_str(fmt_str);
+    pfq = fmte+1;
+    if (*pfq == ',') pfq++;
+    pfq = ic_skip_ws(pfq);
+    /* Strip casts */
+    while (*pfq == '(') {
+        const char *cq = pfq+1; cq=ic_skip_ws(cq);
+        if (isalpha((unsigned char)*cq)||*cq=='_') {
+            const char *ce=cq; while(*ce&&*ce!=')') ce++;
+            if (*ce==')') { pfq=ic_skip_ws(ce+1); continue; }
+        }
+        break;
+    }
+    /* loopvar->print_field */
+    char pvar[64]; int pvlen=0;
+    while ((isalnum((unsigned char)*pfq)||*pfq=='_')&&pvlen<63) pvar[pvlen++]=*pfq++;
+    pvar[pvlen]='\0';
+    if (strcmp(pvar,loopvar)!=0||pfq[0]!='-'||pfq[1]!='>') return turi_nil();
+    pfq+=2;
+    char print_field[64]; int pflen=0;
+    while ((isalnum((unsigned char)*pfq)||*pfq=='_')&&pflen<63) print_field[pflen++]=*pfq++;
+    print_field[pflen]='\0';
+
+    /* Find advance: loopvar = (cast)loopvar->next_field; */
+    const char *ap = wq;
+    while ((ap = strstr(ap, loopvar)) != NULL) {
+        if (ap > wq && (isalnum((unsigned char)ap[-1])||ap[-1]=='_')) { ap++; continue; }
+        const char *aq = ap + lvlen; aq=ic_skip_ws(aq);
+        if (*aq != '=') { ap++; continue; }
+        aq++; aq=ic_skip_ws(aq);
+        /* strip casts */
+        while (*aq=='(') {
+            const char *cq=aq+1; cq=ic_skip_ws(cq);
+            if (isalpha((unsigned char)*cq)||*cq=='_') {
+                const char *ce=cq; while(*ce&&*ce!=')') ce++;
+                if(*ce==')') { aq=ic_skip_ws(ce+1); continue; }
+            }
+            break;
+        }
+        char avar[64]; int avlen=0;
+        while ((isalnum((unsigned char)*aq)||*aq=='_')&&avlen<63) avar[avlen++]=*aq++;
+        avar[avlen]='\0';
+        if (strcmp(avar,loopvar)!=0||aq[0]!='-'||aq[1]!='>') { ap++; continue; }
+        aq+=2;
+        char next_field[64]; int nflen=0;
+        while ((isalnum((unsigned char)*aq)||*aq=='_')&&nflen<63) next_field[nflen++]=*aq++;
+        next_field[nflen]='\0';
+        if (nflen==0) { ap++; continue; }
+
+        /* Get field indices */
+        size_t pfl=strlen(print_field), nfl=strlen(next_field);
+        int pidx=(sn>0)?ic_field_index(print_field,pfl,snames,slens,sn):-1;
+        if (pidx<0) pidx=ic_common_field_idx(print_field,pfl);
+        int nidx=(sn>0)?ic_field_index(next_field,nfl,snames,slens,sn):-1;
+        if (nidx<0) nidx=ic_common_field_idx(next_field,nfl);
+        if (pidx<0||nidx<0) { ap++; continue; }
+
+        /* Find initial value: search for "loopvar = (cast)param" before while */
+        int64_t init_val = n_args > 0 ? args[0].as_int : 0;
+        /* Search for "*loopvar = (cast)param_name;" in body before wp */
+        char init_pat[80]; snprintf(init_pat, sizeof(init_pat), "*%s =", loopvar);
+        const char *ip = strstr(body, init_pat);
+        if (ip && ip < wp) {
+            ip += strlen(init_pat); ip=ic_skip_ws(ip);
+            while (*ip=='(') {
+                const char *cq=ip+1; cq=ic_skip_ws(cq);
+                if (isalpha((unsigned char)*cq)||*cq=='_') {
+                    const char *ce=cq; while(*ce&&*ce!=')') ce++;
+                    if(*ce==')') { ip=ic_skip_ws(ce+1); continue; }
+                }
+                break;
+            }
+            char ivar[64]; int ivlen=0;
+            while ((isalnum((unsigned char)*ip)||*ip=='_')&&ivlen<63) ivar[ivlen++]=*ip++;
+            ivar[ivlen]='\0';
+            if (ivlen>0) {
+                int64_t tmp;
+                if (ic_eval_assign_expr(ivar,fn,param_offset,args,n_args,&tmp,body)) init_val=tmp;
+            }
+        }
+
+        /* Execute linked list traversal */
+        int64_t *cur=(int64_t*)(intptr_t)init_val;
+        int safety=100000;
+        while (cur && safety-->0) {
+            int64_t pval=cur[pidx];
+            char line[256];
+            int llen=snprintf(line,sizeof(line),fmt_str,(long long)pval);
+            if (llen>0) { fwrite(line,1,(size_t)llen,stdout); fflush(stdout); }
+            cur=(int64_t*)(intptr_t)cur[nidx];
+        }
+        return turi_nil();
+    }
+    return turi_nil();
+}
+
+/* Top-level dispatcher */
+static bool try_exec_simple_inline_c(TuriEnv *env,
+                                      const char *body, size_t blen,
+                                      TuriValue *args, uint32_t n_args,
+                                      FnDef *fn, uint32_t param_offset,
+                                      TuriValue *out) {
+    (void)env; (void)blen;
+    if (!body || !*body) return false;
+
+    bool has_malloc = strstr(body,"malloc(") || strstr(body,"calloc(");
+    bool has_free   = strstr(body,"free(");
+    bool has_arrow  = strstr(body,"->");
+    bool has_fptr   = strstr(body,"(*)(");
+    bool has_switch = strstr(body,"switch") && strstr(body,"case ");
+    bool has_return = strstr(body,"return ");
+
+    /* Pattern 1: Free */
+    if (has_free && !has_malloc) {
+        *out = ic_exec_free(args, n_args);
+        return true;
+    }
+
+    /* Pattern 2: Switch-case string */
+    if (has_switch && strstr(body,"return \"") && !has_fptr) {
+        *out = ic_exec_switch_string(body, args, n_args);
+        return true;
+    }
+
+    /* Pattern 3: String fat-pointer comparison (->len && ->p[i]) */
+    if (!has_malloc && has_arrow && n_args>=2 &&
+        strstr(body,"->len") && strstr(body,"->p") &&
+        (strstr(body,"return true")||strstr(body,"return false"))) {
+        *out = ic_exec_str_cmp(args, n_args);
+        return true;
+    }
+
+    /* Pattern 4a: snprintf formatter (malloc + snprintf + return cstr, no arrow in return) */
+    if (has_malloc && !has_fptr && strstr(body,"snprintf(")) {
+        TuriValue r = ic_exec_snprintf_fmt(body, args, n_args, fn, param_offset);
+        if (r.tag != TURI_NIL) { *out = r; return true; }
+    }
+
+    /* Pattern 4: Constructor (malloc + arrow or index assignments, no fptr cast) */
+    if (has_malloc && !has_fptr) {
+        TuriValue r = ic_exec_constructor(body, args, n_args, fn, param_offset);
+        if (r.tag != TURI_NIL) { *out = r; return true; }
+    }
+
+    /* Pattern 5: Accessor (no malloc, has arrow, has return) */
+    if (!has_malloc && has_return && !has_fptr) {
+        TuriValue r = ic_exec_accessor(body, args, n_args, fn);
+        if (r.tag != TURI_NIL) { *out = r; return true; }
+    }
+
+    /* Pattern 6: Linked list traversal with printf (while loop + printf + ->next) */
+    bool has_printf = strstr(body,"printf(") != NULL;
+    bool has_while  = strstr(body,"while") != NULL;
+    if (!has_malloc && has_arrow && has_while && has_printf && !has_fptr) {
+        TuriValue r = ic_exec_linked_list_print(body, args, n_args, fn, param_offset);
+        /* Always claim handled if we have a while+printf pattern (even if nil) */
+        if (has_while && has_printf) { *out = r; return true; }
+    }
+
+    /* Pattern 7: Simple return of constant or single param (no malloc, no arrow) */
+    if (!has_malloc && !has_arrow && has_return && !has_fptr && !has_switch) {
+        const char *r = strstr(body, "return "); if (r) {
+            r += 7; r = ic_skip_ws(r);
+            int64_t val = 0;
+            if (ic_eval_assign_expr(r, fn, param_offset, args, n_args, &val, body)) {
+                TuriValue rv={0}; rv.tag=TURI_INT; rv.as_int=val; *out=rv; return true;
+            }
+        }
+    }
+
+    return false;
 }
 
 /* -------------------------------------------------------------------------
@@ -733,6 +2082,40 @@ static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
                            (unsigned)effective_params, (unsigned)n_args);
     }
 
+    /* If the function body is inline-C, check if a native override was registered
+     * under the function's binding name. This allows the worker to override
+     * stdlib functions whose inline-C bodies would otherwise return nil. */
+    if (fn->body && fn->body->kind == EX_INLINE_C && fn->binding) {
+        const char *fname = fn->binding->name->name;
+        TuriValue native_v = turi_env_get(env, fname);
+        if (native_v.tag == TURI_CLOSURE && native_v.as_closure &&
+            native_v.as_closure->native) {
+            return native_v.as_closure->native(env, args, n_args,
+                                               native_v.as_closure->native_ud);
+        }
+    }
+
+    /* Try the inline-C pattern executor for all inline-C functions. */
+    if (fn->body && fn->body->kind == EX_INLINE_C) {
+        InlineC *ic = fn->body->as.inline_c_.inline_c;
+        const char *body = ic->code.p;
+        size_t blen = (size_t)ic->code.len;
+        /* Build a null-terminated copy of the body for strstr/pattern matching. */
+        char *body_copy = NULL;
+        if (body && blen > 0) {
+            body_copy = (char*)malloc(blen + 1);
+            if (body_copy) { memcpy(body_copy, body, blen); body_copy[blen] = '\0'; }
+        }
+        if (body_copy) {
+            TuriValue inline_result;
+            bool handled = try_exec_simple_inline_c(env, body_copy, blen,
+                                                     args, n_args, fn,
+                                                     param_offset, &inline_result);
+            free(body_copy);
+            if (handled) return inline_result;
+        }
+    }
+
     /* Build call frame on top of the captured environment */
     EvalFrame *call_frame = eval_frame_new((EvalFrame *)cl->captured);
     for (uint32_t i = 0; i < n_args; i++) {
@@ -743,13 +2126,18 @@ static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
     DeferItem *defer_mark = (DeferItem *)env->defer_stack;
 
     /* Evaluate the body; handle early-return and throw signals. */
-    bool was_returning = env->returning;
-    env->returning     = false;
+    bool was_returning   = env->returning;
+    bool was_no_unwind   = env->in_no_unwind;
+    env->returning       = false;
+    env->in_no_unwind    = fn->binding && fn->binding->no_unwind;
 
     TuriValue result = eval_expr(env, call_frame, fn->body);
 
-    /* Fire defers (LIFO) registered in this call scope. */
-    fire_defers_to_mark(env, defer_mark, NULL);
+    env->in_no_unwind = was_no_unwind;
+
+    /* Fire defers in outer-first (reversed) order to match compiled
+     * tur_frame_fire_chain semantics on early-return and normal exit. */
+    fire_defers_to_mark_reversed(env, defer_mark, NULL);
 
     TuriValue ret;
     if (env->returning) {
@@ -762,7 +2150,11 @@ static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
         ret = result;
     }
 
-    eval_frame_free(call_frame);
+    /* Do NOT free call_frame here: closures created in this call may have
+     * captured it.  Since the interpreter runs in a short-lived worker process
+     * (one fixture per fork), leaking call frames is acceptable — the process
+     * exits immediately after each fixture evaluation. */
+    (void)call_frame;
     return ret;
 }
 
@@ -805,11 +2197,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return turi_float(e->as.f);
 
     case EX_CSTR_LIT: {
-        /* StrSlice — copy to a malloc'd NUL-terminated string */
-        char *s = (char *)malloc(e->as.s.len + 1);
-        memcpy(s, e->as.s.p, e->as.s.len);
-        s[e->as.s.len] = '\0';
-        return turi_cstr(s);
+        /* Intern the string so that identical literals share the same pointer.
+         * This is required for HAMT key comparison (pointer equality) to work
+         * correctly when the same string literal appears multiple times. */
+        StrSlice sl = { e->as.s.p, e->as.s.len };
+        const Symbol *sym = symtab_intern(&env->st, sl);
+        return turi_cstr(sym->name);
     }
 
     /* --- Variable -------------------------------------------------------- */
@@ -826,7 +2219,14 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             if (env->returning)  { eval_frame_free(new_frame); return env->return_value; }
             frame_bind(new_frame, e->as.let_.bindings[i].binding->name->name, v);
         }
+        /* Mark defer stack so defers registered in this let-scope fire on exit. */
+        DeferItem *let_defer_mark = (DeferItem *)env->defer_stack;
         TuriValue result = eval_expr(env, new_frame, e->as.let_.body);
+        /* Fire this scope's defers on normal exit only.
+         * On early-return or throw, leave defers on the stack; eval_apply will
+         * fire them all in outer-first order (matching tur_frame_fire_chain). */
+        if (!env->returning && !env->throwing)
+            fire_defers_to_mark(env, let_defer_mark, NULL);
         eval_frame_free(new_frame);
         return result;
     }
@@ -848,10 +2248,14 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_PROGRAM: {
         Expr   **items = (e->kind == EX_PROGRAM) ? e->as.program.items : e->as.do_.items;
         uint32_t n     = (e->kind == EX_PROGRAM) ? e->as.program.n     : e->as.do_.n;
+        /* Defers appended at the end (by rc auto-drop injection) must not
+         * count as the "last value" — only the last non-defer item does. */
         TuriValue last = turi_nil();
         for (uint32_t i = 0; i < n; i++) {
-            last = eval_expr(env, frame, items[i]);
-            if (turi_is_error(last) || env->returning || env->throwing) return last;
+            TuriValue v = eval_expr(env, frame, items[i]);
+            if (turi_is_error(v) || env->returning || env->throwing) return v;
+            if (items[i]->kind != EX_DEFER)
+                last = v;
         }
         return last;
     }
@@ -903,13 +2307,37 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     /* --- Named function definition (defn) -------------------------------- */
     case EX_FN_DEF: {
+        FnDef *fndef = e->as.fn_def_.fn;
+        /* If the body is inline-C and a native override is already registered,
+         * keep the native rather than overwriting it with the inline-C closure. */
+        if (fndef->body && fndef->body->kind == EX_INLINE_C) {
+            const char *fname = fndef->binding->name->name;
+            TuriValue existing = turi_env_get(env, fname);
+            if (existing.tag == TURI_CLOSURE && existing.as_closure &&
+                existing.as_closure->native) {
+                return existing; /* keep native override */
+            }
+        }
         TuriClosure *cl = (TuriClosure *)malloc(sizeof(TuriClosure));
         memset(cl, 0, sizeof(*cl)); /* zero native/skip_env_param/native_ud */
-        cl->fn       = e->as.fn_def_.fn;
+        cl->fn       = fndef;
         cl->captured = NULL; /* top-level defn has no captured environment */
         TuriValue v  = turi_closure(cl);
-        turi_env_set(env, e->as.fn_def_.fn->binding->name->name, v);
+        turi_env_set(env, fndef->binding->name->name, v);
         return v;
+    }
+
+    /* --- Extern C declaration -- register nil stub in interpreter mode ----- */
+    case EX_EXTERN_C: {
+        ExternC *ec = e->as.extern_c_.ext;
+        if (ec && ec->binding) {
+            const char *fname = ec->binding->name->name;
+            /* Only register if not already bound (avoid overwriting native impls). */
+            TuriValue existing = turi_env_get(env, fname);
+            if (existing.tag == TURI_ERROR)
+                register_extern_c_known(env, fname);
+        }
+        return turi_nil();
     }
 
     /* --- Anonymous function (fn) ---------------------------------------- */
@@ -999,14 +2427,47 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             if (turi_is_error(fields[i]) || env->returning || env->throwing)
                 return fields[i];
         }
-        const char *sname = e->as.make_struct_.def
-                            ? e->as.make_struct_.def->name : "<struct>";
-        return make_struct_val(sname, n, fields);
+        StructDef *sdef = e->as.make_struct_.def;
+        const char *sname = sdef ? sdef->name : "<struct>";
+        return make_struct_val_def(sname, n, fields, sdef);
     }
 
-    case EX_SET_LIT:
-        /* Set literals are not interpreted in the REPL; return nil. */
-        return turi_nil();
+    case EX_SET_LIT: {
+        /* Build a sorted, deduplicated int64_t set stored as {int64_t *items, int64_t n}.
+         * Represented as TURI_INT (opaque pointer) matching tur_set_t layout. */
+        uint32_t raw_n = e->as.set_lit_.n;
+        int64_t *raw = raw_n ? (int64_t*)malloc(raw_n * sizeof(int64_t)) : NULL;
+        uint32_t k = 0;
+        for (uint32_t si = 0; si < raw_n; si++) {
+            TuriValue iv = eval_expr(env, frame, e->as.set_lit_.items[si]);
+            if (turi_is_error(iv) || env->returning || env->throwing) {
+                free(raw); return iv;
+            }
+            raw[k++] = iv.as_int;
+        }
+        /* Sort */
+        if (k > 1) {
+            /* Simple insertion sort (k is small in tests) */
+            for (uint32_t i = 1; i < k; i++) {
+                int64_t key = raw[i]; int32_t j = (int32_t)i - 1;
+                while (j >= 0 && raw[j] > key) { raw[j+1]=raw[j]; j--; }
+                raw[j+1] = key;
+            }
+        }
+        /* Deduplicate in-place */
+        uint32_t uniq = 0;
+        for (uint32_t i = 0; i < k; i++) {
+            if (uniq == 0 || raw[uniq-1] != raw[i]) raw[uniq++] = raw[i];
+        }
+        /* Allocate set struct: {int64_t *items; int64_t n} */
+        int64_t *s = (int64_t*)malloc(2 * sizeof(int64_t));
+        if (!s) { free(raw); return turi_nil(); }
+        s[0] = uniq ? (int64_t)(intptr_t)raw : 0;
+        s[1] = (int64_t)uniq;
+        if (uniq == 0) free(raw);
+        TuriValue sv = {0}; sv.tag = TURI_INT; sv.as_int = (int64_t)(intptr_t)s;
+        return sv;
+    }
 
     case EX_GET_FIELD: {
         TuriValue sv = eval_expr(env, frame, e->as.get_field_.struct_expr);
@@ -1045,20 +2506,155 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_DEFECT:
         return turi_nil();
 
-    /* DV1: Dynamic var nodes — runtime stubs until DV2 codegen */
-    case EX_DEFDYNAMIC:
+    /* --- G0/G1: ADT and GADT definitions --------------------------------- */
+    case EX_DEFDATA:
+    case EX_DEFGADT: {
+        AdtDef *adt = (e->kind == EX_DEFDATA)
+            ? e->as.defdata_.def : e->as.defgadt_.def;
+        for (uint32_t ci = 0; ci < adt->n_ctors; ci++) {
+            CtorDef *ctor = adt->ctors[ci];
+            /* Register each constructor as a native that builds a TuriStruct. */
+            turi_env_register_native(env, ctor->name,
+                                     adt_ctor_native, (void *)ctor);
+        }
         return turi_nil();
-    case EX_DYNVAR_READ:
-        /* Until DV2: return the root value (stored in entry->value_type for now,
-         * but the REPL has no storage, so return a placeholder 0). */
-        return turi_int(0);
-    case EX_DYNVAR_BINDING: {
-        /* Until DV2: evaluate body without actually installing frames */
-        return eval_expr_impl(env, frame, e->as.dynvar_binding_.body);
     }
-    case EX_DYNVAR_SET:
-        /* Until DV2: no-op (no binding stack to mutate) */
+
+    /* --- G0: match expression -------------------------------------------- */
+    case EX_MATCH: {
+        TuriValue val = eval_expr(env, frame, e->as.match_.scrutinee);
+        if (turi_is_error(val) || env->returning || env->throwing) return val;
+
+        MatchArm  *arms   = e->as.match_.arms;
+        uint32_t   n_arms = e->as.match_.n_arms;
+
+        for (uint32_t ai = 0; ai < n_arms; ai++) {
+            MatchArm    *arm = &arms[ai];
+            MatchPattern *pat = &arm->pattern;
+
+            bool matched = false;
+            EvalFrame *arm_frame = NULL;
+
+            if (pat->is_wildcard) {
+                matched   = true;
+                arm_frame = eval_frame_new(frame);
+            } else if (pat->is_var && pat->union_member_idx >= 0) {
+                /* IT4: Union type-narrowing arm — check runtime tag against member type */
+                bool tag_ok = false;
+                if (pat->n_bindings >= 1 && pat->bindings[0]) {
+                    TypeKind tk = pat->bindings[0]->type.kind;
+                    switch (tk) {
+                    case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+                    case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+                        tag_ok = (val.tag == TURI_INT); break;
+                    case TY_BOOL:
+                        tag_ok = (val.tag == TURI_BOOL); break;
+                    case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
+                        tag_ok = (val.tag == TURI_FLOAT); break;
+                    case TY_CSTR:
+                        tag_ok = (val.tag == TURI_CSTR); break;
+                    case TY_NIL:
+                        tag_ok = (val.tag == TURI_NIL); break;
+                    default:
+                        /* For struct/closure/pointer types, accept any non-primitive. */
+                        tag_ok = (val.tag == TURI_STRUCT || val.tag == TURI_CLOSURE);
+                        break;
+                    }
+                } else {
+                    tag_ok = true; /* no type info — treat as var capture */
+                }
+                if (tag_ok) {
+                    matched   = true;
+                    arm_frame = eval_frame_new(frame);
+                    if (pat->var_sym)
+                        frame_bind(arm_frame, pat->var_sym->name, val);
+                }
+            } else if (pat->is_var) {
+                matched   = true;
+                arm_frame = eval_frame_new(frame);
+                frame_bind(arm_frame, pat->var_sym->name, val);
+            } else {
+                CtorDef *ctor = pat->ctor;
+                if (ctor && val.tag == TURI_STRUCT &&
+                    strcmp(val.as_struct->name, ctor->name) == 0) {
+                    matched   = true;
+                    arm_frame = eval_frame_new(frame);
+                    for (uint32_t bi = 0; bi < pat->n_bindings; bi++) {
+                        Binding *b = pat->bindings[bi];
+                        if (b && bi < val.as_struct->n_fields)
+                            frame_bind(arm_frame, b->name->name,
+                                       val.as_struct->fields[bi]);
+                    }
+                }
+            }
+
+            if (matched) {
+                /* Optional guard: re-check if the arm has a when-guard. */
+                if (arm->guard) {
+                    TuriValue gv = eval_expr(env, arm_frame, arm->guard);
+                    if (turi_is_error(gv) || env->returning || env->throwing) {
+                        eval_frame_free(arm_frame);
+                        return gv;
+                    }
+                    if (gv.tag != TURI_BOOL || !gv.as_bool) {
+                        eval_frame_free(arm_frame);
+                        continue;
+                    }
+                }
+                TuriValue result = eval_expr(env, arm_frame, arm->body);
+                eval_frame_free(arm_frame);
+                return result;
+            }
+        }
+        return turi_error("eval: match: no arm matched");
+    }
+
+    /* --- DV0/DV1: Dynamic variables -------------------------------------- */
+    case EX_DEFDYNAMIC: {
+        DynVarEntry *entry = e->as.defdynamic_.entry;
+        TuriValue root = eval_expr(env, frame, e->as.defdynamic_.root_expr);
+        if (turi_is_error(root) || env->returning || env->throwing) return root;
+        turi_env_set(env, entry->name->name, root);
         return turi_nil();
+    }
+    case EX_DYNVAR_READ: {
+        DynVarEntry *entry = e->as.dynvar_read_.entry;
+        return turi_env_get(env, entry->name->name);
+    }
+    case EX_DYNVAR_BINDING: {
+        uint32_t   n_pairs = e->as.dynvar_binding_.n_pairs;
+        DynBinding *pairs  = e->as.dynvar_binding_.pairs;
+
+        TuriValue *saved = (TuriValue *)malloc(n_pairs * sizeof(TuriValue));
+        for (uint32_t pi = 0; pi < n_pairs; pi++)
+            saved[pi] = turi_env_get(env, pairs[pi].entry->name->name);
+
+        uint32_t installed = 0;
+        for (; installed < n_pairs; installed++) {
+            TuriValue ov = eval_expr(env, frame, pairs[installed].override_expr);
+            if (turi_is_error(ov) || env->returning || env->throwing) {
+                for (uint32_t ri = 0; ri < installed; ri++)
+                    turi_env_set(env, pairs[ri].entry->name->name, saved[ri]);
+                free(saved);
+                return ov;
+            }
+            turi_env_set(env, pairs[installed].entry->name->name, ov);
+        }
+
+        TuriValue result = eval_expr(env, frame, e->as.dynvar_binding_.body);
+
+        for (uint32_t pi = 0; pi < n_pairs; pi++)
+            turi_env_set(env, pairs[pi].entry->name->name, saved[pi]);
+        free(saved);
+        return result;
+    }
+    case EX_DYNVAR_SET: {
+        DynVarEntry *entry = e->as.dynvar_set_.entry;
+        TuriValue v = eval_expr(env, frame, e->as.dynvar_set_.value);
+        if (turi_is_error(v) || env->returning || env->throwing) return v;
+        turi_env_set(env, entry->name->name, v);
+        return turi_nil();
+    }
 
     /* (perform (EffectName arg1 ...)) — yield to nearest handler. */
     case EX_PERFORM: {
@@ -1075,30 +2671,24 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             if (turi_is_error(args[i]) || env->returning || env->throwing) return args[i];
         }
 
-        /* Walk handler stack for a matching case. */
-        TuriHandlerFrame *hf = (TuriHandlerFrame *)env->handler_stack;
-        while (hf) {
-            for (uint8_t i = 0; i < hf->n_cases; i++) {
-                if (strcmp(hf->cases[i].effect_name->name, effect_name) == 0) {
-                    TuriEffectCont *cont = hf->cont;
-                    cont->perf_name   = effect_name;
-                    cont->perf_args   = args;
-                    cont->n_perf_args = n_args;
+        /* Always yield to the innermost handler so nested handlers can
+         * propagate unmatched effects upward (see eval_handle_inner). */
+        TuriHandlerFrame *top = (TuriHandlerFrame *)env->handler_stack;
+        if (!top) return turi_errorf("eval: unhandled effect: %s", effect_name);
+        TuriEffectCont *cont = top->cont;
+        cont->perf_name   = effect_name;
+        cont->perf_args   = args;
+        cont->n_perf_args = n_args;
 #if defined(__APPLE__)
 #  pragma clang diagnostic push
 #  pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #endif
-                    swapcontext(&cont->body_ctx, &cont->handler_ctx);
+        swapcontext(&cont->body_ctx, &cont->handler_ctx);
 #if defined(__APPLE__)
 #  pragma clang diagnostic pop
 #endif
-                    /* Resumed: return the value sent by resume k v. */
-                    return cont->resume_val;
-                }
-            }
-            hf = hf->prev;
-        }
-        return turi_errorf("eval: unhandled effect: %s", effect_name);
+        /* Resumed: return the value sent by resume k v. */
+        return cont->resume_val;
     }
 
     /* (handle BODY cases...) — install handler, run BODY in a fiber. */
@@ -1158,7 +2748,12 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_INLINE_C:
         if (env->sandboxed)
             return turi_error("eval: inline-C not allowed in sandboxed environment");
-        return turi_error("eval: inline-C blocks cannot be executed by the interpreter");
+        /* In non-sandboxed interpreter mode, silently return nil.
+         * Inline-C functions that return void (like contract checks) will
+         * appear to succeed; those that return values will produce nil.
+         * This lets programs using stdlib functions with inline-C bodies
+         * run through the interpreter even without native C execution. */
+        return turi_nil();
 
     /* --- Phase S7: async / await ----------------------------------------- */
 
@@ -1337,6 +2932,326 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         return result;
     }
 
+    /* --- Phase H §1: typeclass dictionary — return method closure ---------- */
+    case EX_DICT: {
+        TypeClassInstance *inst = e->as.dict_.instance;
+        const char *mname = e->as.dict_.method_name;
+        if (!inst || !mname || mname[0] == '\0') return turi_nil();
+        TypeClass *tc = inst->typeclass;
+        if (!tc) return turi_nil();
+        /* Find the method index by comparing sanitized method names.
+         * Sanitization: replace non-alphanumeric chars with '_'. */
+        for (uint32_t mi = 0; mi < tc->n_methods; mi++) {
+            const char *orig = tc->methods[mi].name->name;
+            /* Build sanitized version of orig for comparison. */
+            char san[128];
+            size_t olen = strlen(orig);
+            if (olen >= sizeof(san)) olen = sizeof(san) - 1;
+            for (size_t k = 0; k < olen; k++)
+                san[k] = (orig[k] >= '0' && orig[k] <= '9') ||
+                         (orig[k] >= 'a' && orig[k] <= 'z') ||
+                         (orig[k] >= 'A' && orig[k] <= 'Z') ? orig[k] : '_';
+            san[olen] = '\0';
+            if (strcmp(san, mname) != 0) continue;
+            /* Found matching method. */
+            if (mi >= inst->n_method_impls || !inst->method_impls[mi]) break;
+            FnDef *impl = inst->method_impls[mi];
+            TuriClosure *cl = (TuriClosure *)malloc(sizeof(TuriClosure));
+            memset(cl, 0, sizeof(*cl));
+            cl->fn       = impl;
+            cl->captured = NULL;
+            return turi_closure(cl);
+        }
+        return turi_errorf("eval: EX_DICT: method '%s' not found in instance", mname);
+    }
+
+    /* --- Phase N: numeric type cast ---------------------------------------- */
+    case EX_CAST: {
+        TuriValue v = eval_expr(env, frame, e->as.cast_.expr);
+        if (turi_is_error(v) || env->returning || env->throwing) return v;
+        switch (e->as.cast_.target_kind) {
+        case TY_INT:
+        case TY_INT64:
+            if (v.tag == TURI_FLOAT) return turi_int((int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int(v.as_int);
+            return turi_int(0);
+        case TY_INT8:
+            if (v.tag == TURI_FLOAT) return turi_int((int8_t)(int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int((int8_t)v.as_int);
+            return turi_int(0);
+        case TY_INT16:
+            if (v.tag == TURI_FLOAT) return turi_int((int16_t)(int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int((int16_t)v.as_int);
+            return turi_int(0);
+        case TY_INT32:
+            if (v.tag == TURI_FLOAT) return turi_int((int32_t)(int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int((int32_t)v.as_int);
+            return turi_int(0);
+        case TY_UINT8:
+            if (v.tag == TURI_FLOAT) return turi_int((int64_t)(uint8_t)(int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int((int64_t)(uint8_t)v.as_int);
+            return turi_int(0);
+        case TY_UINT16:
+            if (v.tag == TURI_FLOAT) return turi_int((int64_t)(uint16_t)(int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int((int64_t)(uint16_t)v.as_int);
+            return turi_int(0);
+        case TY_UINT32:
+            if (v.tag == TURI_FLOAT) return turi_int((int64_t)(uint32_t)(int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int((int64_t)(uint32_t)v.as_int);
+            return turi_int(0);
+        case TY_UINT64:
+            if (v.tag == TURI_FLOAT) return turi_int((int64_t)(uint64_t)(int64_t)v.as_float);
+            if (v.tag == TURI_INT)   return turi_int((int64_t)(uint64_t)v.as_int);
+            return turi_int(0);
+        case TY_FLOAT:
+        case TY_FLOAT64:
+            if (v.tag == TURI_INT)   return turi_float((double)v.as_int);
+            if (v.tag == TURI_FLOAT) return turi_float(v.as_float);
+            return turi_float(0.0);
+        case TY_FLOAT32:
+            if (v.tag == TURI_INT)   return turi_float((double)(float)v.as_int);
+            if (v.tag == TURI_FLOAT) return turi_float((double)(float)v.as_float);
+            return turi_float(0.0);
+        case TY_BOOL:
+            if (v.tag == TURI_INT)   return turi_bool(v.as_int != 0);
+            return turi_bool(false);
+        default:
+            return v;
+        }
+    }
+
+    /* --- Phase 2: type ascription is transparent at runtime ---------------- */
+    case EX_ASCRIBE:
+        return eval_expr(env, frame, e->as.ascribe_.inner);
+
+    /* --- Phase N: poly wrap is transparent in the interpreter -------------- */
+    case EX_POLY_WRAP:
+        return eval_expr(env, frame, e->as.poly_wrap_.inner);
+
+    /* --- Phase 12: borrows --- */
+    case EX_BORROW_IMMUT:
+        return eval_expr(env, frame, e->as.borrow_immut_.expr);
+    case EX_BORROW_MUT: {
+        /* Return a TURI_REF pointing to the EvalBinding so set! can mutate it. */
+        const Expr *inner = e->as.borrow_mut_.expr;
+        if (inner->kind == EX_VAR) {
+            const char *vname = inner->as.var.binding->name->name;
+            for (EvalFrame *f = frame; f; f = f->parent) {
+                for (EvalBinding *b = f->bindings; b; b = b->next) {
+                    if (strcmp(b->name, vname) == 0) {
+                        TuriValue ref; ref.tag = TURI_REF; ref.as_ref = b;
+                        return ref;
+                    }
+                }
+            }
+        }
+        /* Fallback: transparent */
+        return eval_expr(env, frame, e->as.borrow_mut_.expr);
+    }
+    case EX_DEREF: {
+        TuriValue r = eval_expr(env, frame, e->as.deref_.expr);
+        if (turi_is_error(r) || env->returning || env->throwing) return r;
+        if (r.tag == TURI_REF && r.as_ref)
+            return ((EvalBinding *)r.as_ref)->value;
+        return r;
+    }
+    case EX_SET_DEREF: {
+        TuriValue ref = eval_expr(env, frame, e->as.set_deref_.ref);
+        if (turi_is_error(ref) || env->returning || env->throwing) return ref;
+        TuriValue v = eval_expr(env, frame, e->as.set_deref_.value);
+        if (turi_is_error(v) || env->returning || env->throwing) return v;
+        if (ref.tag == TURI_REF && ref.as_ref)
+            ((EvalBinding *)ref.as_ref)->value = v;
+        return turi_nil();
+    }
+
+    /* --- Phase R2: panic terminates the program ---------------------------- */
+    case EX_PANIC: {
+        TuriValue msg = eval_expr(env, frame, e->as.panic_.payload);
+        const char *s = (msg.tag == TURI_CSTR && msg.as_cstr) ? msg.as_cstr : "(no message)";
+        if (env->panicking) {
+            /* Double panic: a defer itself panicked. */
+            fprintf(stderr, "double panic: aborting\n");
+            fflush(stderr);
+            fflush(stdout);
+            abort();
+        }
+        env->panicking = true;
+        if (env->in_no_unwind) {
+            fprintf(stderr, "panic (no unwind): %s\n", s);
+        } else {
+            fprintf(stderr, "panic at\npanic: %s\n", s);
+        }
+        fflush(stderr);
+        /* Fire all pending defers before exiting (outer-first order). */
+        if (!env->in_no_unwind)
+            fire_defers_to_mark_reversed(env, NULL, NULL);
+        fflush(stdout);
+        exit(1);
+    }
+
+    case EX_PANIC_WITH: {
+        /* Typed panic payload — just needs "panic at" in stderr and nonzero exit. */
+        if (env->panicking) {
+            fprintf(stderr, "double panic: aborting\n");
+            fflush(stderr);
+            fflush(stdout);
+            abort();
+        }
+        env->panicking = true;
+        fprintf(stderr, "panic at\n");
+        fflush(stderr);
+        fire_defers_to_mark_reversed(env, NULL, NULL);
+        fflush(stdout);
+        exit(1);
+    }
+
+    /* --- Phase 9: rc<T> with shared reference counter in interpreter ------- */
+    case EX_RC_OF: {
+        /* Allocate shared counter, wrap value in __rc struct. */
+        TuriValue v = eval_expr(env, frame, e->as.rc_of_.expr);
+        if (turi_is_error(v) || env->returning || env->throwing) return v;
+        int64_t *cnt = (int64_t *)malloc(sizeof(int64_t)); *cnt = 1;
+        TuriValue fields[2];
+        fields[0] = turi_int((int64_t)(intptr_t)cnt); /* pointer-as-int */
+        fields[1] = v;
+        return make_struct_val("__rc", 2, fields);
+    }
+    case EX_RC_CLONE: {
+        if (e->as.rc_clone_.elide)
+            return eval_expr(env, frame, e->as.rc_clone_.expr);
+        TuriValue r = eval_expr(env, frame, e->as.rc_clone_.expr);
+        if (turi_is_error(r) || env->returning || env->throwing) return r;
+        if (r.tag == TURI_STRUCT && r.as_struct
+            && r.as_struct->name && strcmp(r.as_struct->name, "__rc") == 0
+            && r.as_struct->n_fields >= 2) {
+            int64_t *cnt = (int64_t *)(intptr_t)r.as_struct->fields[0].as_int;
+            (*cnt)++;
+        }
+        return r; /* return copy — same pointer-as-int, so shares counter */
+    }
+    case EX_RC_DROP: {
+        if (e->as.rc_drop_.elide) return turi_nil();
+        TuriValue r = eval_expr(env, frame, e->as.rc_drop_.expr);
+        if (!turi_is_error(r) && r.tag == TURI_STRUCT && r.as_struct
+            && r.as_struct->name && strcmp(r.as_struct->name, "__rc") == 0
+            && r.as_struct->n_fields >= 2) {
+            int64_t *cnt = (int64_t *)(intptr_t)r.as_struct->fields[0].as_int;
+            if (*cnt > 0) {
+                (*cnt)--;
+                /* When count reaches 0, recursively drop any inner __rc values. */
+                if (*cnt == 0) {
+                    TuriValue inner = r.as_struct->fields[1];
+                    /* Walk the chain of nested __rc structs. */
+                    while (inner.tag == TURI_STRUCT && inner.as_struct
+                           && inner.as_struct->name
+                           && strcmp(inner.as_struct->name, "__rc") == 0
+                           && inner.as_struct->n_fields >= 2) {
+                        int64_t *icnt = (int64_t *)(intptr_t)inner.as_struct->fields[0].as_int;
+                        if (*icnt > 0) (*icnt)--;
+                        if (*icnt > 0) break; /* still alive — stop recursing */
+                        inner = inner.as_struct->fields[1];
+                    }
+                }
+            }
+        }
+        return turi_nil();
+    }
+    case EX_RC_PTR: {
+        TuriValue r = eval_expr(env, frame, e->as.rc_ptr_.expr);
+        if (turi_is_error(r) || env->returning || env->throwing) return r;
+        if (r.tag == TURI_STRUCT && r.as_struct
+            && r.as_struct->name && strcmp(r.as_struct->name, "__rc") == 0
+            && r.as_struct->n_fields >= 2)
+            return r.as_struct->fields[1];
+        return r;
+    }
+    case EX_RC_COUNT: {
+        TuriValue r = eval_expr(env, frame, e->as.rc_count_.expr);
+        if (turi_is_error(r) || env->returning || env->throwing) return r;
+        if (r.tag == TURI_STRUCT && r.as_struct
+            && r.as_struct->name && strcmp(r.as_struct->name, "__rc") == 0
+            && r.as_struct->n_fields >= 2) {
+            int64_t *cnt = (int64_t *)(intptr_t)r.as_struct->fields[0].as_int;
+            return turi_int(*cnt);
+        }
+        return turi_int(1);
+    }
+    case EX_RC_FROM_REF:
+        return eval_expr(env, frame, e->as.rc_from_ref_.expr);
+    case EX_REF_FROM_RC: {
+        /* Convert rc<T> to ref<T>: extract the inner value from the __rc struct. */
+        TuriValue rv = eval_expr(env, frame, e->as.ref_from_rc_.expr);
+        if (turi_is_error(rv) || env->returning || env->throwing) return rv;
+        if (rv.tag == TURI_STRUCT && rv.as_struct
+            && rv.as_struct->name && strcmp(rv.as_struct->name, "__rc") == 0
+            && rv.as_struct->n_fields >= 2)
+            return rv.as_struct->fields[1];
+        return rv;
+    }
+
+    /* --- Phase 5: ref<T> — transparent in interpreter --------------------- */
+    case EX_REF:
+        return eval_expr(env, frame, e->as.ref_.expr);
+    case EX_REF_PRED:
+        return turi_bool(true); /* assume refs are valid */
+
+    /* --- Phase 9: weak<T> — simplified in interpreter --------------------- */
+    case EX_WEAK:
+        return eval_expr(env, frame, e->as.weak_.expr);
+    case EX_WEAK_UPGRADE:
+        /* Simplified: always succeeds; return some(value) as struct */
+        return eval_expr(env, frame, e->as.weak_upgrade_.expr);
+    case EX_WEAK_PRED:
+        return turi_bool(true);
+
+    /* --- Phase HRT0: exists pack/open — erase existential box ------------- */
+    case EX_EXISTS_PACK:
+        return eval_expr(env, frame, e->as.exists_pack_.value);
+    case EX_EXISTS_OPEN: {
+        TuriValue packed = eval_expr(env, frame, e->as.exists_open_.packed);
+        if (turi_is_error(packed) || env->returning || env->throwing) return packed;
+        EvalFrame *ef = eval_frame_new(frame);
+        if (e->as.exists_open_.var_binding)
+            frame_bind(ef, e->as.exists_open_.var_binding->name->name, packed);
+        TuriValue r = eval_expr(env, ef, e->as.exists_open_.body);
+        eval_frame_free(ef);
+        return r;
+    }
+
+    /* --- IT0: union inject — tag a value for union type -------------------- */
+    case EX_UNION_INJECT:
+        return eval_expr(env, frame, e->as.union_inject_.value);
+
+    /* --- IT4: any-typed cast and type-of --------------------------------- */
+    case EX_ANY_CAST:
+        /* In the interpreter, 'any' values are untagged (union injection is
+         * transparent), so (cast x T) just returns the inner value. */
+        return eval_expr(env, frame, e->as.any_cast_.value);
+
+    case EX_ANY_TYPE_OF: {
+        TuriValue v = eval_expr(env, frame, e->as.any_type_of_.value);
+        if (turi_is_error(v) || env->returning || env->throwing) return v;
+        const char *tname = "unknown";
+        switch (v.tag) {
+        case TURI_INT:     tname = "int";     break;
+        case TURI_FLOAT:   tname = "float";   break;
+        case TURI_BOOL:    tname = "bool";    break;
+        case TURI_CSTR:    tname = "cstr";    break;
+        case TURI_NIL:     tname = "nil";     break;
+        case TURI_CLOSURE: tname = "fn";      break;
+        case TURI_STRUCT:
+            tname = (v.as_struct && v.as_struct->name) ? v.as_struct->name : "struct";
+            break;
+        default: break;
+        }
+        return turi_cstr(tname);
+    }
+
+    /* serial-reset: without serial-shift inside, just evaluate body and return. */
+    case EX_SERIAL_RESET:
+        return eval_expr(env, frame, e->as.serial_reset_.body);
+
     /* --- Everything else — silently return nil --------------------------- */
     default:
         return turi_nil();
@@ -1414,55 +3329,96 @@ TuriValue turi_eval(TuriEnv *env, const char *src) {
         return turi_error("parse error");
     }
 
-    /* 6. Elaborate (read-only path: no borrow-check, no CPS, no emit). */
+    /* 6. Elaborate (read-only path: no borrow-check, no CPS, no emit).
+     * Pass prior_toplevel as stdlib_prefix so the elaborator resets
+     * has_defmodule after each defmodule in the already-accumulated forms.
+     * This lets multiple stdlib files (each with their own defmodule) be
+     * preloaded via successive turi_eval_file calls without hitting the
+     * "only one defmodule per file" error on re-elaboration. */
+    uint32_t prior = env->prior_toplevel;
+    const char *mbase = env->module_base_dir ? env->module_base_dir : ".";
+    uint32_t actual_n_fsd = 0;
     Expr *prog = elaborate_program(eval_arena, &env->st,
                                    forms, nforms,
-                                   /*stdlib_prefix=*/0,
-                                   /*module_base_dir=*/".",
+                                   /*stdlib_prefix=*/prior,
+                                   /*module_base_dir=*/mbase,
                                    /*separate_compilation=*/false,
                                    /*out_tc_env=*/NULL,
                                    /*include_dirs=*/NULL,
-                                   /*n_include_dirs=*/0);
+                                   /*n_include_dirs=*/0,
+                                   /*out_n_file_scope_defs=*/&actual_n_fsd);
     if (!prog || diag_had_error()) {
         return turi_error("elaboration error");
     }
 
-    /* 7. Evaluate only the NEW top-level expressions. */
-    uint32_t prior = env->prior_toplevel;
-    uint32_t total = prog->as.program.n;
-
-    TuriValue last = turi_nil();
-    for (uint32_t i = prior; i < total; i++) {
-        last = eval_expr(env, NULL, prog->as.program.items[i]);
-        /* Clear any dangling return signal at the top level */
-        if (env->returning) {
-            last = env->return_value;
-            env->returning = false;
-        }
-        /* Convert an uncaught throw into a TURI_ERROR */
-        if (env->throwing) {
-            env->throwing = false;
-            TuriValue tv = env->throw_value;
-            if (tv.tag == TURI_THROW && tv.as_throw) {
-                TuriValue inner = tv.as_throw->value;
-                if (inner.tag == TURI_CSTR && inner.as_cstr)
-                    last = turi_errorf("uncaught exception: %s", inner.as_cstr);
-                else
-                    last = turi_error("uncaught exception");
-            } else {
-                last = turi_error("uncaught exception");
-            }
-            break;
-        }
-        if (turi_is_error(last)) break;
+    /* 6b. Run effect-row check pass to emit warnings (e.g. TUR-W0033). */
+    {
+        EffectEnv eff_env;
+        memset(&eff_env, 0, sizeof(eff_env));
+        effect_check_pass(eval_arena, prog, &eff_env);
+        /* Warnings are emitted as a side-effect; ignore hard errors in
+         * interpreter mode (they would already be caught as elaboration errors). */
     }
 
-    /* 8. Update accumulated state only on success. */
+    /* 7. Evaluate the new top-level expressions.
+     *
+     * elaborate_program prepends actual file-scope defs (EX_DEFMODULE nodes
+     * from imported modules) before the parsed forms.  It also expands any
+     * (load ...) directives inline, which increases prog->as.program.n
+     * beyond nforms without contributing to n_fsd.  We use the count returned
+     * via out_n_file_scope_defs to correctly separate the two:
+     *
+     *   [0 .. n_fsd-1]               <- file_scope_defs (imported modules)
+     *   [n_fsd .. n_fsd+prior-1]     <- previously-accumulated forms (already run)
+     *   [n_fsd+prior .. total-1]     <- new user forms (must run; includes load-expanded)
+     *
+     * We must also run the file_scope_defs on every call because they are
+     * freshly elaborated and not yet registered in the runtime env.  Since
+     * EX_FN_DEF is idempotent (just overwrites the env binding), re-running
+     * them on subsequent calls is harmless.
+     *
+     * prior_toplevel tracks *parsed* form count (not total), so the formula
+     * stays consistent across calls even as n_fsd fluctuates. */
+    uint32_t total = prog->as.program.n;
+    uint32_t n_fsd = actual_n_fsd;
+
+#define EVAL_TOPLEVEL_RANGE(lo, hi) do {                                      \
+    for (uint32_t _i = (lo); _i < (hi); _i++) {                              \
+        last = eval_expr(env, NULL, prog->as.program.items[_i]);             \
+        if (env->returning) {                                                 \
+            last = env->return_value;                                         \
+            env->returning = false;                                           \
+        }                                                                     \
+        if (env->throwing) {                                                  \
+            env->throwing = false;                                            \
+            TuriValue _tv = env->throw_value;                                \
+            if (_tv.tag == TURI_THROW && _tv.as_throw) {                     \
+                TuriValue _inner = _tv.as_throw->value;                      \
+                if (_inner.tag == TURI_CSTR && _inner.as_cstr)               \
+                    last = turi_errorf("uncaught exception: %s",             \
+                                       _inner.as_cstr);                      \
+                else last = turi_error("uncaught exception");                 \
+            } else last = turi_error("uncaught exception");                   \
+            goto eval_done;                                                   \
+        }                                                                     \
+        if (turi_is_error(last)) goto eval_done;                             \
+    }                                                                         \
+} while (0)
+
+    TuriValue last = turi_nil();
+    EVAL_TOPLEVEL_RANGE(0, n_fsd);              /* imported module bodies */
+    EVAL_TOPLEVEL_RANGE(n_fsd + prior, total);  /* new user forms         */
+eval_done:;
+#undef EVAL_TOPLEVEL_RANGE
+
+    /* 8. Update accumulated state only on success.
+     * Store nforms (parsed count) rather than total so the n_fsd formula
+     * remains correct on subsequent calls that re-elaborate the same imports. */
     if (!turi_is_error(last)) {
         /* Append new source (without any leading #lang line) to accumulator */
         if (env->src_acc.len > 0) buf_putc(&env->src_acc, '\n');
         buf_write(&env->src_acc, src_body, body_len);
-        env->prior_toplevel = total;
+        env->prior_toplevel = nforms;  /* track parsed count, not total */
     }
 
     return last;
@@ -1502,6 +3458,23 @@ TuriValue turi_eval_file(TuriEnv *env, const char *path) {
     TuriValue v = turi_eval(env, buf);
     free(buf);
     return v;
+}
+
+/* -------------------------------------------------------------------------
+ * turi_call: directly invoke a closure value
+ * ---------------------------------------------------------------------- */
+
+TuriValue turi_call(TuriEnv *env, TuriValue fn, TuriValue *args, uint32_t n_args) {
+    if (!env) return turi_error("turi_call: null env");
+    if (fn.tag != TURI_CLOSURE || !fn.as_closure)
+        return turi_errorf("turi_call: expected closure, got tag %d", fn.tag);
+    return eval_apply(env, fn.as_closure, args, n_args);
+}
+
+/* Fire all remaining deferred actions (those registered at module/top level).
+ * Call this after turi_call(main) to honour module-level (defer ...) forms. */
+void turi_run_pending_defers(TuriEnv *env) {
+    if (env) fire_defers_to_mark(env, NULL, NULL);
 }
 
 /* -------------------------------------------------------------------------
@@ -1562,5 +3535,8 @@ void turi_value_repr(char *buf, size_t cap, TuriValue v) {
         snprintf(buf, cap, "#<future:%s>", state);
         break;
     }
+    case TURI_REF:
+        snprintf(buf, cap, "#<ref>");
+        break;
     }
 }

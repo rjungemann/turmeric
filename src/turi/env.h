@@ -98,6 +98,10 @@ typedef struct TuriEnv {
     /* Phase S5: recursion depth guard */
     uint32_t    eval_depth;
     uint32_t    max_eval_depth;
+    /* Panic state: set by EX_PANIC before firing defers; detects double-panic */
+    bool        panicking;
+    /* Set when currently inside a #[no-unwind] function call */
+    bool        in_no_unwind;
     /* Phase S7: cooperative async scheduler */
     TuriFiber  *sched_ready_head;   /* ready queue head (FIFO) */
     TuriFiber  *sched_ready_tail;   /* ready queue tail */
@@ -115,6 +119,9 @@ typedef struct TuriEnv {
     EnvHashTable globals_ht;
     /* Active reader syntax mode — settable via #lang in the REPL */
     ReaderType   reader_type;
+    /* Base directory for resolving module imports (NULL = ".").
+     * Set this before turi_eval_file when the input uses (import ...). */
+    const char  *module_base_dir;
 } TuriEnv;
 
 /* Create a new unrestricted environment. */
