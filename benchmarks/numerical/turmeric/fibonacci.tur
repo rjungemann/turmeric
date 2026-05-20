@@ -1,0 +1,61 @@
+(import core :as c)
+(import time :as t)
+
+;;; recursive-fib -- Compute nth Fibonacci number recursively
+;;;
+;;; Parameters:
+;;;   n -- the index to compute
+;;;
+;;; Returns:
+;;;   The nth Fibonacci number
+;;;
+;;; Example:
+;;;   (recursive-fib 10) ; => 55
+(defn recursive-fib [n] :int
+  (if (<= n 1)
+      n
+      (+ (recursive-fib (- n 1))
+         (recursive-fib (- n 2)))))
+
+;;; iterative-fib -- Compute nth Fibonacci number iteratively
+;;;
+;;; Parameters:
+;;;   n -- the index to compute
+;;;
+;;; Returns:
+;;;   The nth Fibonacci number
+;;;
+;;; Example:
+;;;   (iterative-fib 10) ; => 55
+(defn iterative-fib [n] :int
+  (if (<= n 1)
+      n
+      (let [[a b] [0 1]]
+        (loop [i 2 a a b b]
+          (if (> i n)
+              b
+              (let [c (+ a b)]
+                (recur (+ i 1) b c)))))))
+
+;;; main -- Entry point for Fibonacci benchmark
+;;;
+;;; Returns:
+;;;   :void
+;;;
+;;; Example:
+;;;   (main) ; computes fib(10) and prints timing info
+(defn main [] :void
+  (let [n 10  ; Default value for testing
+        start (t/current-time-ms)]
+    (let [result (recursive-fib n)
+          time (- (t/current-time-ms) start)]
+      (c/printf "{\"language\": \"Turmeric\", \"version\": \"0.1\", \"implementation\": \"recursive\", \"n\": %d, \"result\": %d, \"time_ms\": %d}\n"
+               n result time))
+
+    (let [start (t/current-time-ms)
+          result (iterative-fib n)
+          time (- (t/current-time-ms) start)]
+      (c/printf "{\"language\": \"Turmeric\", \"version\": \"0.1\", \"implementation\": \"iterative\", \"n\": %d, \"result\": %d, \"time_ms\": %d}\n"
+               n result time))))
+
+;; Run with command: tur run benchmarks/numerical/turmeric/fibonacci.tur 10

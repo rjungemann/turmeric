@@ -1,0 +1,24 @@
+;; text_search -- count occurrences of "hello" in a generated string.
+(defn parse-first-arg [default :int] :int
+  ```c
+  struct __tur_cons { int64_t value; int64_t next; };
+  struct __tur_cons *c = (struct __tur_cons *)(intptr_t)g_tur_args;
+  return c ? (int64_t)atoll((const char *)(intptr_t)c->value) : default;
+  ```)
+
+(defn search-bench [hs_size :int] :int
+  ```c
+  const char *needle = "hello";
+  int nlen = 5;
+  char *hay = malloc((size_t)(hs_size + 1));
+  for (int64_t i = 0; i < hs_size; i++)
+    hay[i] = (i % 10 < 5) ? 'x' : needle[(int)(i % 10) - 5];
+  hay[hs_size] = '\0';
+  int64_t count = 0;
+  const char *p = hay;
+  while ((p = strstr(p, needle)) != NULL) { count++; p += nlen; }
+  free(hay);
+  return count;
+  ```)
+
+(println (search-bench (parse-first-arg 10000)))

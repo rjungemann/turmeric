@@ -1241,6 +1241,15 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->global_protocols  = NULL;
     e->n_global_protocols = 0;
     e->cap_global_protocols = 0;
+    /* CLI-ARGS: Pre-declare *args* as a global :int binding backed by g_tur_args.
+     * Scripts access CLI arguments (after --) via *args* as a list of :cstr values
+     * represented as int64_t pointers (same layout as stdlib/list.tur cons cells). */
+    {
+        const Symbol *sym_args = intern_cstr(st, "*args*");
+        Binding *b_args = binding_new(e, sym_args, TYPE_INT, false, true, SPAN_UNKNOWN);
+        b_args->c_export_name = "g_tur_args";
+        scope_add(&e->global, b_args);
+    }
 }
 
 /* Phase 13: Lifetime annotation helpers (deferred - infrastructure in place) */
