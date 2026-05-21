@@ -134,17 +134,27 @@ def _parse_docstring(lines):
         buf = []
         return text
 
+    def _flush_section():
+        if current_section == 'returns':
+            sections['returns'] = flush()
+        elif current_section == 'example':
+            sections['example'] = flush()
+
     for line in stripped[1:]:
         if line.startswith('Parameters:'):
+            _flush_section()
             current_section = 'params'
             continue
         elif line.startswith('Returns:'):
+            _flush_section()
             current_section = 'returns'
             continue
         elif line.startswith('Example:'):
+            _flush_section()
             current_section = 'example'
             continue
         elif line.startswith('Since:'):
+            _flush_section()
             sections['since'] = line[len('Since:'):].strip()
             current_section = None
             continue
@@ -163,10 +173,7 @@ def _parse_docstring(lines):
         elif current_section == 'example':
             buf.append(line)
 
-    if current_section == 'returns':
-        sections['returns'] = flush()
-    elif current_section == 'example':
-        sections['example'] = flush()
+    _flush_section()
 
     return sections
 
@@ -371,6 +378,67 @@ def _parse_def_line(kind, text):
             return_type = parts[0]
 
     return name, params, return_type, extra
+
+
+# ---------------------------------------------------------------------------
+# Doctest extraction  (Phase D0)
+# ---------------------------------------------------------------------------
+
+TESTABLE_RE = re.compile(
+    r'^(-?[0-9]+\.[0-9]+|-?[0-9]+|true|false|"[^"]*"|nil)$'
+)
+
+
+class DocTestCase:
+    """A single testable docstring example."""
+    __slots__ = ('module_name', 'defn_name', 'setup_lines', 'expr', 'expected')
+
+    def __init__(self, module_name, defn_name, setup_lines, expr, expected):
+        self.module_name = module_name
+        self.defn_name = defn_name
+        self.setup_lines = setup_lines  # list[str] -- lines before this case
+        self.expr = expr                # str -- the expression to evaluate
+        self.expected = expected        # str -- expected println output
+
+
+def extract_doctest_cases(module_name, defn_name, doc):
+    """
+    Extract testable examples from a parsed docstring dict.
+
+    A line is testable when its '; =>' value matches TESTABLE_RE (integer,
+    float, true/false, quoted string, or nil).  Lines without '; =>' are
+    accumulated as setup statements for the following testable line and
+    emitted ahead of it in the generated test file.
+
+    Returns a list of DocTestCase objects; non-testable '; =>' lines are
+    skipped silently.
+    """
+    if not doc or not doc.get('example'):
+        return []
+
+    lines = [l.strip() for l in doc['example'].splitlines() if l.strip()]
+    cases = []
+    pending_setup = []
+
+    for line in lines:
+        if '; =>' not in line:
+            pending_setup.append(line)
+            continue
+        expr_part, expected_raw = line.split('; =>', 1)
+        expr_part = expr_part.strip()
+        expected_raw = expected_raw.strip()
+        if TESTABLE_RE.match(expected_raw):
+            cases.append(DocTestCase(
+                module_name=module_name,
+                defn_name=defn_name,
+                setup_lines=list(pending_setup),
+                expr=expr_part,
+                expected=expected_raw,
+            ))
+        # Reset pending setup after each '; =>' line (testable or not)
+        pending_setup = []
+
+    return cases
 
 
 # ---------------------------------------------------------------------------
@@ -1124,9 +1192,13 @@ def _build_doc_entry(defn):
     return '\n'.join(parts)
 
 
-def emit_docstrings_tur(modules, out_path):
+def emit_docstrings_tur(modules, out_path, verified_names=None):
     """
-    Emit stdlib/docstrings.tur with a C-backed doc-lookup function.
+    Emit stdlib/docstrings.tur with C-backed doc-lookup and doc-verified? functions.
+
+    verified_names -- optional set of function names that have passing doctests.
+    When provided, a doc-verified? function is exported that returns true for
+    those names.  When absent (or empty), doc-verified? always returns false.
     """
     entries = []
     for module in modules:
@@ -1148,7 +1220,7 @@ def emit_docstrings_tur(modules, out_path):
     lines = [
         ';; AUTO-GENERATED -- do not edit. Run: just docs',
         '(defmodule tur/docstrings',
-        '  (export doc-lookup)',
+        '  (export doc-lookup doc-verified?)',
         '',
         '(defn doc-lookup [name :cstr] :cstr',
         '  ```c',
@@ -1173,11 +1245,34 @@ def emit_docstrings_tur(modules, out_path):
         '  return 0;',
         '  ```)',
         '',
+    ]
+
+    # Phase D5: emit doc-verified? backed by the verified names set
+    vnames = sorted(verified_names) if verified_names else []
+    lines += [
+        '(defn doc-verified? [name :cstr] :bool',
+        '  ```c',
+        '  static const char *verified[] = {',
+    ]
+    for vname in vnames:
+        escaped = _escape_tur_string(vname)
+        lines.append(f'    "{escaped}",')
+    lines += [
+        '    NULL',
+        '  };',
+        '  const char *n = (const char*)(intptr_t)name;',
+        '  if (!n) return 0;',
+        '  for (int __i = 0; verified[__i]; __i++) {',
+        '    if (strcmp(verified[__i], n) == 0) return 1;',
+        '  }',
+        '  return 0;',
+        '  ```)',
+        '',
         ')',
     ]
 
     Path(out_path).write_text('\n'.join(lines) + '\n', encoding='utf-8')
-    print(f'  Wrote {out_path} ({len(deduped)} entries)')
+    print(f'  Wrote {out_path} ({len(deduped)} entries, {len(vnames)} verified)')
 
 
 # ---------------------------------------------------------------------------
@@ -1312,7 +1407,15 @@ def main():
 
     # Optionally emit docstrings.tur
     if args.emit_tur:
-        emit_docstrings_tur(modules, args.emit_tur)
+        # Phase D5: read verified function names from doctest manifest if present
+        verified_names = None
+        verified_path = Path('tests/doctest-generated/verified.txt')
+        if verified_path.exists():
+            verified_names = set(
+                l.strip() for l in verified_path.read_text(encoding='utf-8').splitlines()
+                if l.strip()
+            )
+        emit_docstrings_tur(modules, args.emit_tur, verified_names=verified_names)
 
     # Optionally emit doc-names.json for the web search bar
     if args.emit_json:

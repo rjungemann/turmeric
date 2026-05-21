@@ -31,8 +31,13 @@ reconfigure:
 # Test targets
 # ---------------------------------------------------------------------------
 
-test: build
+test: build doctest
     ctest --output-on-failure --progress --test-dir build
+
+# Run stdlib doctests (generate + run).
+doctest: build
+    python3 tools/doctest.py stdlib/ --out tests/doctest-generated/
+    bash tools/run-doctests.sh
 
 # Run only the compiled-fixture test suite (tur tests).
 test-tur: build

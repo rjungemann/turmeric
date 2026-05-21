@@ -87,7 +87,7 @@
 ;;;   int -- a non-negative thread ID unique within the scheduler
 ;;;
 ;;; Example:
-;;;   (scheduler-mt-thread-id)  ; => 2
+;;;   (scheduler-mt-thread-id)  ; => non-deterministic thread ID
 ;;;
 ;;; Since: Phase T23
 (defn scheduler-mt-thread-id [] :int
