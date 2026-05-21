@@ -209,7 +209,7 @@ for C/CMake dependency details.
     (println (hamt-get m2 1))))
 ```
 
-**EAVT immutable database (Datomic-style):**
+**EAVT / Datalog immutable database (Datomic-style):**
 
 ```lisp
 ; Each fact is a four-tuple: [entity attribute value tx]
@@ -217,9 +217,68 @@ for C/CMake dependency details.
   (db-assert! db 1 ":user/name"  (StrVal  "Alice") 1)
   (db-assert! db 1 ":user/email" (StrVal  "alice@example.com") 2)
   (db-assert! db 2 ":user/name"  (StrVal  "Bob") 3)
-  ; Query: find all :user/name values asserted at or before tx 3
-  (let [results (db-query db ":user/name" 3)]
-    (println results)))
+  ; Temporal query: find all :user/name datums at or before tx 3
+  (let [results (db-datoms-for-attr db ":user/name" 3)]
+    (for-each results (fn [d] (println (datum-value d))))))
+```
+
+**Sized types (size-indexed vectors and buffers):**
+
+```lisp
+; Requires: -Xsized-types
+(let [v (sized-vec-new (static-int 3))]
+  (let [v (sized-vec-push v 10)]
+    (let [v (sized-vec-push v 20)]
+      (println (sized-vec-get v 0)))))  ; => 10
+
+; Flat buffer -- compile-time size annotation, heap or stack dispatch
+(let [buf (sized-buf-alloc (static-int 64))]
+  (sized-buf-set buf 0 42)
+  (println (sized-buf-get buf 0)))      ; => 42
+```
+
+**Literal match patterns:**
+
+```lisp
+(defn describe [x :int] :cstr
+  (match x
+    0 "zero"
+    1 "one"
+    2 "two"
+    _ "many"))
+
+(println (describe 1))   ; => one
+```
+
+**Async race:**
+
+```lisp
+(let [result (async-race
+               (async (do (sleep 100) 1))
+               (async (do (sleep  50) 2)))]
+  (println result))   ; => 2  (faster task wins; slower is cancelled)
+```
+
+**CLI argument parsing:**
+
+```lisp
+(load "stdlib/args.tur")
+(let [spec (args/spec-new)]
+  (args/spec-flag   spec "--verbose")
+  (args/spec-option spec "--output" "file" "out.txt")
+  (let [result (args/parse spec *args*)]
+    (println (args/get result "--output"))))
+```
+
+**Math and bitwise stdlib:**
+
+```lisp
+(load "stdlib/math.tur")
+(println (sqrt 2.0))       ; => 1.4142135623730951
+(println (hypot 3.0 4.0))  ; => 5.0
+
+(load "stdlib/bits.tur")
+(println (bit-shr 16 2))   ; => 4
 ```
 
 **GADTs (generalized algebraic data types):**
@@ -404,6 +463,8 @@ for C/CMake dependency details.
 | Session types (binary `Session[P]`, `make-session`, `send`/`recv`/`close`/`offer`/`choose-*`; `-Xsessions`) | ✅ |
 | Multi-party session types (`defprotocol`, `Role`, `make-protocol`, `send-to`/`recv-from`; `-Xsessions`) | ✅ |
 | Dynamic vars (`defdynamic`, `binding`, `spawn-conveying`, stdlib common vars; `-Xdynamic-vars`) | ✅ |
+| Sized types (`StaticInt`, `SizedVec`, `SizedBuf`, `SizedMatrix`, `SizedBitVec`; `-Xsized-types`) | ✅ |
+| Literal match patterns (int, bool, float, str literals as match arms) | ✅ |
 | Borrow checker (`&`, `&mut`, reborrow, move semantics) | ✅ |
 | Reference counting (`rc/of`, `rc/clone`, `rc/drop`, weak refs) | ✅ |
 | RC elision (static analysis to remove redundant retain/release) | ✅ |
@@ -419,7 +480,7 @@ for C/CMake dependency details.
 | `extern-c`, inline-C blocks, FFI | ✅ |
 | Structural equality (`=struct=`) | ✅ |
 | Runtime contracts (`require!` / `ensure!` / `assert!` / `invariant!`) | ✅ |
-| Standard library: `option`, `result`, `vec`, `str`, `slice`, `io`, `log`, `test` | ✅ |
+| Standard library: `option`, `result`, `vec`, `str`, `slice`, `io`, `log`, `test`, `math`, `bits`, `args` | ✅ |
 | Persistent collections (HAMT) | ✅ |
 | STM (`TVar`, `atomically`, `retry`) | ✅ |
 | Higher-kinded types (Functor, Applicative, Monad, Foldable, Traversable; `^f`/`^^f` syntax) | ✅ |
@@ -428,8 +489,8 @@ for C/CMake dependency details.
 
 ## Status
 
-**v0.7.0** — The compiler passes its full fixture test suite with ASan/UBSan clean. All planned phases through Phase 21 (serializable continuations) are complete, along with the full v2 type system (HKT, HRT, GADTs, effect rows) and all v3 extensions: linear/uniqueness/substructural types, union/intersection types, effect row types (ET0–ET4), linear continuations (LC0–LC3), multi-shot continuations (MS0–MS4), session types (SS0–SS8, both binary and multi-party), and dynamic vars (DV0–DV4).
+**v0.7.0** — The compiler passes its full fixture test suite with ASan/UBSan clean. All planned phases through Phase 21 (serializable continuations) are complete, along with the full v2 type system (HKT, HRT, GADTs, effect rows) and all v3 extensions: linear/uniqueness/substructural types, union/intersection types, effect row types (ET0–ET4), linear continuations (LC0–LC3), multi-shot continuations (MS0–MS4), session types (SS0–SS8, both binary and multi-party), dynamic vars (DV0–DV4), and sized types (SZ0–SZ1).
 
-This release adds an EAVT immutable database tutorial and example suite (`examples/eavt/`) — a five-file, progressive walkthrough of building a Datomic-inspired append-only fact store with temporal queries and Datalog-style logic-variable unification.
+New in this release: sized types (`-Xsized-types`) with `SizedVec`, `SizedBuf`, `SizedMatrix`, and `SizedBitVec`; literal match patterns for int/bool/float/str arms; `async-race` and `with-timeout` in the interpreter; tail call optimization in `turi`; `stdlib/args.tur` CLI argument parser; `stdlib/math.tur` and `stdlib/bits.tur`; a cross-language performance comparison suite benchmarking C, Turmeric, Rust, Clojure, Racket, and Python; and a four-part EAVT/Datalog database tutorial.
 
 See [docs/advanced-type-system-feasibility-plan.md](docs/advanced-type-system-feasibility-plan.md) for the type system roadmap and [docs/guides/](docs/guides/) for user guides.

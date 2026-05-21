@@ -6,16 +6,78 @@ All notable changes to Turmeric are documented here.
 
 ### Added
 
-- **EAVT immutable database tutorial and examples** (`examples/eavt/`)
-  - Five progressive Turmeric programs building a Datomic-inspired fact store: `minimal.tur`, `indexed.tur`, `query.tur`, `blog.tur`, `datalog.tur`
-  - Four-part guide series in `docs/guides/eavt/`: core concepts, minimal implementation, query API, and B-tree indexing
-  - Covers Entity-Attribute-Value-Transaction data model, append-only storage, temporal queries, and logic-variable unification for Datalog-style queries
+- **Sized types (SZ0–SZ1)** (`-Xsized-types`) (#50)
+  - `StaticInt` and size arithmetic (`static-int-add`, `static-int-mul`, `static-int-eq`) for phantom size annotations
+  - `SizedVec` — length-indexed vector; `sized-vec-new`, `sized-vec-push`, `sized-vec-get`, `sized-vec-set`
+  - `SizedBuf` — flat byte/word buffers with heap and stack allocation dispatch; `sized-buf-alloc`, `sized-buf-stack`, `sized-buf-get`, `sized-buf-set`
+  - `SizedMatrix` — sized 2-D matrix with row/column shape annotations; `sized-matrix-new`, `sized-matrix-ref`, `sized-matrix-set`
+  - `SizedBitVec` — compact bit array with size annotation; `sized-bitvec-new`, `sized-bitvec-get`, `sized-bitvec-set`, `sized-bitvec-popcount`
+  - Stdlib in `stdlib/sized.tur`, `stdlib/sized-buf.tur`, `stdlib/sized-matrix.tur`, `stdlib/sized-bits.tur`
+  - Full user guide: [docs/guides/sized-types-guide.md](docs/guides/sized-types-guide.md)
 
-- **Sized-types design document** (`docs/sized-types-plan.md`)
-  - Implementation plan for tracking data-structure sizes in the type system (SZ0–SZ4 phases)
-  - Targets stack-allocated fixed-size structures, array shape verification, and type-safe embedded DSLs
+- **Literal match patterns** (Phase S4) (#50)
+  - Match arms now accept integer, boolean, float, and string literals directly (no wrapping constructor required)
+  - Emits an `if`/`else-if` chain for primitive scrutinees; integrates with the existing ADT elaboration path
 
-- Regenerated stdlib docstrings and web REPL assets
+- **`async-race` and `with-timeout`** in the `turi` interpreter (#50)
+  - `async-race`: race two futures; the first to resolve wins and the loser is cancelled
+  - `with-timeout`: run a future with a deadline; cancel and throw on expiry
+
+- **Tail call optimization (TCO)** in `turi` interpreter (#50)
+  - Self-tail-recursive and mutually-tail-recursive functions no longer grow the call stack
+  - Tail calls through `let` bindings and `do` blocks are optimized
+
+- **`catch-unwind`** boundary in `turi` interpreter (#50)
+  - `setjmp`/`longjmp` panic boundary exposed as `EX_CATCH_UNWIND`; `panic?` native predicate
+
+- **Weak pointer upgrade returns Option** (#50)
+  - `(weak-upgrade r)` now returns `(some value)` on success and `(none)` on dangling — previously returned a raw value or zero
+
+- **Args parser stdlib** (`stdlib/args.tur`) (#50)
+  - Builder-pattern CLI argument parsing: flags (`--verbose`), options (`--input=file` or `--input file`), positional args, and arbitrarily nested subcommands
+  - `args/spec-new`, `args/spec-flag`, `args/spec-option`, `args/spec-subcmd`, `args/parse`, `args/get`, `args/positional`
+
+- **Math stdlib** (`stdlib/math.tur`) (#50)
+  - Thin wrappers around libm: `sqrt`, `fabs`, `floor`, `ceil`, `round`, `pow`, `log`, `log2`, `exp`, `sin`, `cos`, `tan`, `atan2`, `hypot`
+
+- **Bits stdlib** (`stdlib/bits.tur`) (#50)
+  - `bit-shr` (unsigned right shift), `println-float` (float with precision), and related bitwise helpers
+
+- **Per-subcommand help strings** (#50)
+  - `tur build --help`, `tur run --help`, `tur eval --help`, etc. now print usage for each subcommand
+
+- **Performance comparison suite** (`performance-comparison/`) (#50)
+  - Multi-language benchmark harness comparing C, Turmeric (compiled), `turi` (interpreted), Rust, Clojure, Racket, and Python
+  - `tur --interpret file.tur` flag runs programs through the tree-walking interpreter without compiling
+  - Benchmarks cover numerical computation, data structures, string processing, concurrency, I/O, and recursion
+
+- **Cross-language validation framework** (`validation/`) (#50)
+  - Python validation scripts that run the same benchmark across languages and verify identical results
+  - `validate_fibonacci.py` checks correctness of Fibonacci across all five languages
+
+- **Tier 3 worker pool** (#45)
+  - Persistent interpreter processes for test fixtures; dramatically reduces per-test process-spawn overhead
+
+- **`emit_effects.c`** — effects codegen extracted from `emit_expr.c` into a dedicated translation unit (#50)
+
+- **EAVT / Datalog database tutorial series** (`docs/guides/datalog-*.md`, `examples/eavt/`)
+  - Four-part guide: EAVT concepts, minimal implementation, query API, B-tree indexing
+  - Five progressive example programs in `examples/eavt/`: `minimal.tur`, `indexed.tur`, `query.tur`, `blog.tur`, `datalog.tur`
+
+- **New and expanded guides**
+  - Performance guide (`docs/guides/performance-guide.md`) — numerical, data structures, concurrency, memory, recursion, I/O, benchmarking methodology
+  - Sized types guide (`docs/guides/sized-types-guide.md`)
+  - Building for the Web with Emscripten (`docs/guides/web-emscripten-tutorial.md`)
+  - Structs guide (`docs/guides/structs-guide.md`)
+  - Web continuations tutorial (`docs/guides/web-continuations-tutorial.md`)
+  - Dual Turmeric / sweet-expression syntax toggle throughout all guides (`check-guide-pairs.py`)
+  - Substantially expanded: threading, STM, session types, HKT, tidal/scscm cookbook guides
+
+### Fixed
+
+- ADT match regression: literal match path no longer incorrectly triggers for ADT matches on unannotated parameters
+- Memory leaks and stale codegen snapshots from perf-comparison branch
+- `weak-dangling` test updated to reflect Option-returning `weak-upgrade`
 
 ## [0.6.0] — 2026-05-19
 
