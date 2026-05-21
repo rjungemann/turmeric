@@ -660,6 +660,7 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
         scope_free(&e.global);
         free(e.struct_defs);
         free(e.adt_defs);
+        free(e.forward_type_syms);
         free(e.handled_effect_names);
         free(e.macros);
         return NULL;
@@ -771,6 +772,7 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
     scope_free(&e.global);
     free(e.struct_defs);
     free(e.adt_defs);
+    free(e.forward_type_syms);
     free(e.handled_effect_names);
     free(e.macros);
     free(e.loaded_modules); /* Phase M2 */

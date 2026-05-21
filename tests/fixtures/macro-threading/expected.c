@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2315,9 +2316,9 @@ static int64_t mul2(int64_t x) {
 int main() {
         int64_t __t0;
         {
-            int64_t result_217 = mul2(add5(INT64_C(10)));
-            (void)result_217;
-            printf("%lld\n", (long long)(result_217));
+            int64_t result_218 = mul2(add5(INT64_C(10)));
+            (void)result_218;
+            printf("%lld\n", (long long)(result_218));
             int64_t __t1;
             __t1 = INT64_C(0);
             __t0 = __t1;

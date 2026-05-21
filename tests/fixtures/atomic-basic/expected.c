@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2365,42 +2366,42 @@ static void atomic_free(void * p) {
 
 int main() {
         {
-            void * a_235 = atomic_new(INT64_C(10));
-            (void)a_235;
-            printf("%lld\n", (long long)(atomic_load((void *)(intptr_t)(a_235))));
+            void * a_236 = atomic_new(INT64_C(10));
+            (void)a_236;
+            printf("%lld\n", (long long)(atomic_load((void *)(intptr_t)(a_236))));
             {
-                int64_t prev_add_236 = atomic_add_((void *)(intptr_t)(a_235), INT64_C(5));
-                (void)prev_add_236;
-                printf("%lld\n", (long long)(prev_add_236));
-                printf("%lld\n", (long long)(atomic_load((void *)(intptr_t)(a_235))));
+                int64_t prev_add_237 = atomic_add_((void *)(intptr_t)(a_236), INT64_C(5));
+                (void)prev_add_237;
+                printf("%lld\n", (long long)(prev_add_237));
+                printf("%lld\n", (long long)(atomic_load((void *)(intptr_t)(a_236))));
             }
             {
-                int64_t prev_sub_237 = atomic_sub_((void *)(intptr_t)(a_235), INT64_C(3));
-                (void)prev_sub_237;
-                printf("%lld\n", (long long)(prev_sub_237));
-                printf("%lld\n", (long long)(atomic_load((void *)(intptr_t)(a_235))));
+                int64_t prev_sub_238 = atomic_sub_((void *)(intptr_t)(a_236), INT64_C(3));
+                (void)prev_sub_238;
+                printf("%lld\n", (long long)(prev_sub_238));
+                printf("%lld\n", (long long)(atomic_load((void *)(intptr_t)(a_236))));
             }
-            atomic_store_((void *)(intptr_t)(a_235), INT64_C(100));
-            printf("%lld\n", (long long)(atomic_load((void *)(intptr_t)(a_235))));
+            atomic_store_((void *)(intptr_t)(a_236), INT64_C(100));
+            printf("%lld\n", (long long)(atomic_load((void *)(intptr_t)(a_236))));
             {
-                int64_t prev_swap_238 = atomic_swap_((void *)(intptr_t)(a_235), INT64_C(42));
-                (void)prev_swap_238;
-                printf("%lld\n", (long long)(prev_swap_238));
-                printf("%lld\n", (long long)(atomic_load((void *)(intptr_t)(a_235))));
-            }
-            {
-                bool ok_239 = atomic_cas_((void *)(intptr_t)(a_235), INT64_C(42), INT64_C(99));
-                (void)ok_239;
-                puts((ok_239) ? "true" : "false");
-                printf("%lld\n", (long long)(atomic_load((void *)(intptr_t)(a_235))));
+                int64_t prev_swap_239 = atomic_swap_((void *)(intptr_t)(a_236), INT64_C(42));
+                (void)prev_swap_239;
+                printf("%lld\n", (long long)(prev_swap_239));
+                printf("%lld\n", (long long)(atomic_load((void *)(intptr_t)(a_236))));
             }
             {
-                bool fail_240 = atomic_cas_((void *)(intptr_t)(a_235), INT64_C(0), INT64_C(1));
-                (void)fail_240;
-                puts((fail_240) ? "true" : "false");
-                printf("%lld\n", (long long)(atomic_load((void *)(intptr_t)(a_235))));
+                bool ok_240 = atomic_cas_((void *)(intptr_t)(a_236), INT64_C(42), INT64_C(99));
+                (void)ok_240;
+                puts((ok_240) ? "true" : "false");
+                printf("%lld\n", (long long)(atomic_load((void *)(intptr_t)(a_236))));
             }
-            atomic_free((void *)(intptr_t)(a_235));
+            {
+                bool fail_241 = atomic_cas_((void *)(intptr_t)(a_236), INT64_C(0), INT64_C(1));
+                (void)fail_241;
+                puts((fail_241) ? "true" : "false");
+                printf("%lld\n", (long long)(atomic_load((void *)(intptr_t)(a_236))));
+            }
+            atomic_free((void *)(intptr_t)(a_236));
         }
         int64_t __t0;
         __t0 = INT64_C(0);

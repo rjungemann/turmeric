@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2304,7 +2305,7 @@ static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
 
 static int64_t __effect_handler_1(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_1(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t k_213 = __k;
+    int64_t k_214 = __k;
     return 0;
 }
 
@@ -2344,7 +2345,7 @@ static int64_t __dispatch_0(void *__ctx_void, int64_t __k_int, int64_t __resume_
 
 static int64_t __effect_handler_4(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_4(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t k_214 = __k;
+    int64_t k_215 = __k;
     return 0;
 }
 

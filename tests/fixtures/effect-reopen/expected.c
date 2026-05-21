@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2310,32 +2311,32 @@ static int64_t counted_sum(int64_t n) {
 
 static int64_t __effect_handler_2(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_2(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    const char * msg_219 = (const char *)__effect_args[0];
-    int64_t k_220 = __k;
-    puts(msg_219);
+    const char * msg_220 = (const char *)__effect_args[0];
+    int64_t k_221 = __k;
+    puts(msg_220);
     int64_t __t3;
-    int64_t __t4 = tur_effect_cont_resume((int64_t)(intptr_t)k_220, (int64_t)INT64_C(0));
+    int64_t __t4 = tur_effect_cont_resume((int64_t)(intptr_t)k_221, (int64_t)INT64_C(0));
     __t3 = __t4;
     return (int64_t)__t3;
 }
 
 static int64_t __effect_handler_6(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_6(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    const char * msg_216 = (const char *)__effect_args[0];
-    int64_t k_217 = __k;
+    const char * msg_217 = (const char *)__effect_args[0];
+    int64_t k_218 = __k;
     int64_t __t8[1];
-    __t8[0] = (int64_t)msg_216;
+    __t8[0] = (int64_t)msg_217;
     tur_effect_perform("Write", __t8, 1);
     int64_t __t9;
-    int64_t __t10 = tur_effect_cont_resume((int64_t)(intptr_t)k_217, (int64_t)INT64_C(0));
+    int64_t __t10 = tur_effect_cont_resume((int64_t)(intptr_t)k_218, (int64_t)INT64_C(0));
     __t9 = __t10;
     return (int64_t)__t9;
 }
 
 static int64_t __effect_handler_7(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_7(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t k_218 = __k;
-    int64_t __t11 = tur_effect_cont_resume((int64_t)(intptr_t)k_218, (int64_t)INT64_C(42));
+    int64_t k_219 = __k;
+    int64_t __t11 = tur_effect_cont_resume((int64_t)(intptr_t)k_219, (int64_t)INT64_C(42));
     return (int64_t)__t11;
 }
 
@@ -2347,12 +2348,12 @@ static void __handle_body_5(void) {
     int64_t __t13;
     int64_t __t14;
     {
-        int64_t result_215 = counted_sum(INT64_C(100));
-        (void)result_215;
+        int64_t result_216 = counted_sum(INT64_C(100));
+        (void)result_216;
         int64_t __t15[1];
         __t15[0] = (int64_t)"done";
         tur_effect_perform("Log", __t15, 1);
-        printf("%lld\n", (long long)(result_215));
+        printf("%lld\n", (long long)(result_216));
         int64_t __t16;
         __t16 = INT64_C(0);
         __t14 = __t16;

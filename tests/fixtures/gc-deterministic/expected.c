@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2326,41 +2327,41 @@ int main() {
             *__t0 = INT64_C(1);
             RcControlBlock *__t1 = rc_cb_alloc(0, 3, NULL);
             __t1->value = __t0;
-            RcControlBlock * a_213 = __t1;
-            (void)a_213;
+            RcControlBlock * a_214 = __t1;
+            (void)a_214;
             int64_t *__t2 = (int64_t *)malloc(sizeof(int64_t));
             *__t2 = INT64_C(2);
             RcControlBlock *__t3 = rc_cb_alloc(0, 3, NULL);
             __t3->value = __t2;
-            RcControlBlock * b_214 = __t3;
-            (void)b_214;
+            RcControlBlock * b_215 = __t3;
+            (void)b_215;
             {
-                RcControlBlock *__t4 = a_213; rc_weak_increment(a_213);
-                RcControlBlock * wa_215 = __t4;
-                (void)wa_215;
-                RcControlBlock *__t5 = b_214; rc_weak_increment(b_214);
-                RcControlBlock * wb_216 = __t5;
-                (void)wb_216;
-                rc_strong_decrement(a_213);
+                RcControlBlock *__t4 = a_214; rc_weak_increment(a_214);
+                RcControlBlock * wa_216 = __t4;
+                (void)wa_216;
+                RcControlBlock *__t5 = b_215; rc_weak_increment(b_215);
+                RcControlBlock * wb_217 = __t5;
+                (void)wb_217;
+                rc_strong_decrement(a_214);
                 rc_free_queue_drain();
-                rc_strong_decrement(b_214);
+                rc_strong_decrement(b_215);
                 rc_free_queue_drain();
                 gc_force();
                 {
-                    RcControlBlock *__t6 = rc_upgrade(wa_215);
-                    RcControlBlock * ua_217 = __t6;
-                    (void)ua_217;
-                    RcControlBlock *__t7 = rc_upgrade(wb_216);
-                    RcControlBlock * ub_218 = __t7;
-                    (void)ub_218;
+                    RcControlBlock *__t6 = rc_upgrade(wa_216);
+                    RcControlBlock * ua_218 = __t6;
+                    (void)ua_218;
+                    RcControlBlock *__t7 = rc_upgrade(wb_217);
+                    RcControlBlock * ub_219 = __t7;
+                    (void)ub_219;
                     tur_frame __frame_8;
                     tur_frame_init(&__frame_8, NULL);
-                    int64_t __t9 = rc_strong_count(ua_217);
-                    int64_t __t10 = rc_strong_count(ub_218);
+                    int64_t __t9 = rc_strong_count(ua_218);
+                    int64_t __t10 = rc_strong_count(ub_219);
                     printf("%lld\n", (long long)(((__t9) + (__t10))));
-                    struct __defer_env_11 __t13 = {.ua = ua_217};
+                    struct __defer_env_11 __t13 = {.ua = ua_218};
                     tur_frame_push_defer(&__frame_8, __defer_12, &__t13);
-                    struct __defer_env_14 __t16 = {.ub = ub_218};
+                    struct __defer_env_14 __t16 = {.ub = ub_219};
                     tur_frame_push_defer(&__frame_8, __defer_15, &__t16);
                     tur_frame_fire_lifo(&__frame_8);
                 }

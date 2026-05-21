@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2361,19 +2362,19 @@ static void * use_question(bool b) {
         {
             int64_t __t2;
             {
-                void * __q_0_229 = get_value(b);
-                (void)__q_0_229;
+                void * __q_0_230 = get_value(b);
+                (void)__q_0_230;
                 int64_t __t3;
-                if (err_((void *)(intptr_t)(__q_0_229))) {
-                    return err(err_val((void *)(intptr_t)(__q_0_229)));
+                if (err_((void *)(intptr_t)(__q_0_230))) {
+                    return err(err_val((void *)(intptr_t)(__q_0_230)));
                 } else {
-                    __t3 = ok_val((void *)(intptr_t)(__q_0_229));
+                    __t3 = ok_val((void *)(intptr_t)(__q_0_230));
                 }
                 __t2 = __t3;
             }
-            int64_t x_230 = __t2;
-            (void)x_230;
-            __t1 = ok(((x_230) * (INT64_C(2))));
+            int64_t x_231 = __t2;
+            (void)x_231;
+            __t1 = ok(((x_231) * (INT64_C(2))));
         }
         return __t1;
 }
@@ -2381,13 +2382,13 @@ static void * use_question(bool b) {
 int main() {
         int64_t __t4;
         {
-            void * r1_231 = use_question(true);
-            (void)r1_231;
+            void * r1_232 = use_question(true);
+            (void)r1_232;
             int64_t __t5;
             {
-                int64_t v1_232 = ok_val((void *)(intptr_t)(r1_231));
-                (void)v1_232;
-                printf("%lld\n", (long long)(v1_232));
+                int64_t v1_233 = ok_val((void *)(intptr_t)(r1_232));
+                (void)v1_233;
+                printf("%lld\n", (long long)(v1_233));
                 int64_t __t6;
                 __t6 = INT64_C(0);
                 __t5 = __t6;

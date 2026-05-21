@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2341,26 +2342,26 @@ static void fiber_free_fn(void * f) {
 int main() {
         int64_t __t0;
         {
-            void * fa_226 = fiber_new_fn((void *)(intptr_t)(fiber_a), INT64_C(0));
-            (void)fa_226;
+            void * fa_227 = fiber_new_fn((void *)(intptr_t)(fiber_a), INT64_C(0));
+            (void)fa_227;
             int64_t __t1;
             {
-                void * fb_227 = fiber_new_fn((void *)(intptr_t)(fiber_b), INT64_C(0));
-                (void)fb_227;
-                (void)(fiber_resume_fn((void *)(intptr_t)(fa_226), INT64_C(0)));
-                (void)(fiber_resume_fn((void *)(intptr_t)(fb_227), INT64_C(0)));
+                void * fb_228 = fiber_new_fn((void *)(intptr_t)(fiber_b), INT64_C(0));
+                (void)fb_228;
+                (void)(fiber_resume_fn((void *)(intptr_t)(fa_227), INT64_C(0)));
+                (void)(fiber_resume_fn((void *)(intptr_t)(fb_228), INT64_C(0)));
                 int64_t __t2;
                 int64_t __t3;
                 {
-                    int64_t va_228 = fiber_local_get_fn((void *)(intptr_t)(fa_226), INT64_C(42));
-                    (void)va_228;
+                    int64_t va_229 = fiber_local_get_fn((void *)(intptr_t)(fa_227), INT64_C(42));
+                    (void)va_229;
                     int64_t __t4;
                     {
-                        int64_t vb_229 = fiber_local_get_fn((void *)(intptr_t)(fb_227), INT64_C(42));
-                        (void)vb_229;
-                        printf("%lld\n", (long long)(((va_228) + (vb_229))));
-                        fiber_free_fn((void *)(intptr_t)(fa_226));
-                        fiber_free_fn((void *)(intptr_t)(fb_227));
+                        int64_t vb_230 = fiber_local_get_fn((void *)(intptr_t)(fb_228), INT64_C(42));
+                        (void)vb_230;
+                        printf("%lld\n", (long long)(((va_229) + (vb_230))));
+                        fiber_free_fn((void *)(intptr_t)(fa_227));
+                        fiber_free_fn((void *)(intptr_t)(fb_228));
                         int64_t __t5;
                         __t5 = INT64_C(0);
                         __t4 = __t5;

@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2338,28 +2339,28 @@ int main() {
             *__t1 = INT64_C(10);
             RcControlBlock *__t2 = rc_cb_alloc(0, 3, NULL);
             __t2->value = __t1;
-            RcControlBlock * inner_214 = __t2;
-            (void)inner_214;
+            RcControlBlock * inner_215 = __t2;
+            (void)inner_215;
             tur_frame __frame_3;
             tur_frame_init(&__frame_3, NULL);
-            int64_t __t4 = rc_strong_count(inner_214);
+            int64_t __t4 = rc_strong_count(inner_215);
             printf("%lld\n", (long long)(__t4));
-            struct __defer_env_5 __t7 = {.inner = inner_214};
+            struct __defer_env_5 __t7 = {.inner = inner_215};
             tur_frame_push_defer(&__frame_3, __defer_6, &__t7);
             int64_t __t8;
             int64_t __t9;
             {
                 Wrapper *__t10 = (Wrapper *)malloc(sizeof(Wrapper));
-                *__t10 = (Wrapper){.val = inner_214};
+                *__t10 = (Wrapper){.val = inner_215};
                 RcControlBlock *__t11 = rc_cb_alloc(0, 18, drop_glue_Wrapper);
                 __t11->value = __t10;
-                RcControlBlock * w_215 = __t11;
-                (void)w_215;
+                RcControlBlock * w_216 = __t11;
+                (void)w_216;
                 tur_frame __frame_12;
                 tur_frame_init(&__frame_12, &__frame_3);
-                int64_t __t13 = rc_strong_count(w_215);
+                int64_t __t13 = rc_strong_count(w_216);
                 printf("%lld\n", (long long)(__t13));
-                struct __defer_env_14 __t16 = {.w = w_215};
+                struct __defer_env_14 __t16 = {.w = w_216};
                 tur_frame_push_defer(&__frame_12, __defer_15, &__t16);
                 int64_t __t17;
                 __t17 = INT64_C(0);

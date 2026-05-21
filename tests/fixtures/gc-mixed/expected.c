@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2320,38 +2321,38 @@ int main() {
             *__t2 = INT64_C(10);
             RcControlBlock *__t3 = rc_cb_alloc(0, 3, NULL);
             __t3->value = __t2;
-            RcControlBlock * x_213 = __t3;
-            (void)x_213;
+            RcControlBlock * x_214 = __t3;
+            (void)x_214;
             int64_t *__t4 = (int64_t *)malloc(sizeof(int64_t));
             *__t4 = INT64_C(20);
             RcControlBlock *__t5 = rc_cb_alloc(0, 3, NULL);
             __t5->value = __t4;
-            RcControlBlock * y_214 = __t5;
-            (void)y_214;
+            RcControlBlock * y_215 = __t5;
+            (void)y_215;
             int64_t __t6;
             int64_t __t7;
             {
-                RcControlBlock *__t8 = y_214; rc_weak_increment(y_214);
-                RcControlBlock * wy_215 = __t8;
-                (void)wy_215;
-                rc_strong_decrement(y_214);
+                RcControlBlock *__t8 = y_215; rc_weak_increment(y_215);
+                RcControlBlock * wy_216 = __t8;
+                (void)wy_216;
+                rc_strong_decrement(y_215);
                 rc_free_queue_drain();
                 gc_force();
-                int64_t __t9 = rc_strong_count(x_213);
+                int64_t __t9 = rc_strong_count(x_214);
                 printf("%lld\n", (long long)(__t9));
                 {
-                    RcControlBlock *__t10 = rc_upgrade(wy_215);
-                    RcControlBlock * uy_216 = __t10;
-                    (void)uy_216;
+                    RcControlBlock *__t10 = rc_upgrade(wy_216);
+                    RcControlBlock * uy_217 = __t10;
+                    (void)uy_217;
                     tur_frame __frame_11;
                     tur_frame_init(&__frame_11, NULL);
-                    int64_t __t12 = rc_strong_count(uy_216);
+                    int64_t __t12 = rc_strong_count(uy_217);
                     printf("%lld\n", (long long)(__t12));
-                    struct __defer_env_13 __t15 = {.uy = uy_216};
+                    struct __defer_env_13 __t15 = {.uy = uy_217};
                     tur_frame_push_defer(&__frame_11, __defer_14, &__t15);
                     tur_frame_fire_lifo(&__frame_11);
                 }
-                rc_strong_decrement(x_213);
+                rc_strong_decrement(x_214);
                 rc_free_queue_drain();
                 int64_t __t16;
                 __t16 = INT64_C(0);

@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2304,9 +2305,9 @@ static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
 
 static int64_t __effect_handler_1(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_1(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t x_214 = (int64_t)__effect_args[0];
-    int64_t k_215 = __k;
-    int64_t __t2 = tur_effect_cont_resume((int64_t)(intptr_t)k_215, (int64_t)((x_214) * (INT64_C(2))));
+    int64_t x_215 = (int64_t)__effect_args[0];
+    int64_t k_216 = __k;
+    int64_t __t2 = tur_effect_cont_resume((int64_t)(intptr_t)k_216, (int64_t)((x_215) * (INT64_C(2))));
     return (int64_t)__t2;
 }
 
@@ -2349,8 +2350,8 @@ static int64_t __dispatch_0(void *__ctx_void, int64_t __k_int, int64_t __resume_
 
 int main() {
         {
-            int64_t x_213 = INT64_C(1000);
-            (void)x_213;
+            int64_t x_214 = INT64_C(1000);
+            (void)x_214;
             {
                 TurEffectCaptureCtx __cap_0;
                 __cap_0.has_pending_effect = false;
@@ -2370,9 +2371,9 @@ int main() {
                 __fiber_0->effect_handler_chain = &__eff_frame_0;
                 int64_t __t5 = (int64_t)__dispatch_0(&__cap_0, (int64_t)(intptr_t)__fiber_0, 0);
                 if (__fiber_0->done) { free(__fiber_0->stack); free(__fiber_0); }
-                int64_t result_216 = __t5;
-                (void)result_216;
-                printf("%lld\n", (long long)(result_216));
+                int64_t result_217 = __t5;
+                (void)result_217;
+                printf("%lld\n", (long long)(result_217));
             }
         }
         int64_t __t6;

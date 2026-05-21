@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2015,10 +2016,10 @@ extern void * tur_hamt_persistent(void *);
 
 static int64_t __inst_Functor_fmap_option(int64_t, int64_t);
 static int64_t __inst_Monad_bind_option(int64_t, int64_t);
-static int64_t __fn_234(int64_t);
-static int64_t __fn_238(int64_t);
-static int64_t __fn_242(int64_t);
-static int64_t __fn_246(int64_t);
+static int64_t __fn_235(int64_t);
+static int64_t __fn_239(int64_t);
+static int64_t __fn_243(int64_t);
+static int64_t __fn_247(int64_t);
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
 static void * array_slice(void *, int64_t, int64_t);
@@ -2095,19 +2096,19 @@ static dict_Monad_option dict_Monad_option_singleton = {
     .bind = __inst_Monad_bind_option,
 };
 
-static int64_t __fn_234(int64_t x) {
+static int64_t __fn_235(int64_t x) {
         return __opt_some(((x) * (INT64_C(3))));
 }
 
-static int64_t __fn_238(int64_t x) {
+static int64_t __fn_239(int64_t x) {
         return __opt_some(((x) * (INT64_C(3))));
 }
 
-static int64_t __fn_242(int64_t x) {
+static int64_t __fn_243(int64_t x) {
         return __opt_some(((x) * (INT64_C(2))));
 }
 
-static int64_t __fn_246(int64_t y) {
+static int64_t __fn_247(int64_t y) {
         return __opt_some(((y) + (INT64_C(1))));
 }
 
@@ -2402,30 +2403,30 @@ static int64_t __bind_option(int64_t ma, int64_t fn) {
 
 int main() {
         {
-            int64_t result3_232 = __opt_some(INT64_C(99));
-            (void)result3_232;
-            puts((__opt_some_(result3_232)) ? "true" : "false");
-            printf("%lld\n", (long long)(__opt_unwrap(result3_232)));
+            int64_t result3_233 = __opt_some(INT64_C(99));
+            (void)result3_233;
+            puts((__opt_some_(result3_233)) ? "true" : "false");
+            printf("%lld\n", (long long)(__opt_unwrap(result3_233)));
         }
         {
-            int64_t result_236 = ((int64_t (*)(int64_t, int64_t))(intptr_t)(dict_Monad_option_singleton.bind))(__opt_some(INT64_C(5)), (int64_t)(intptr_t)(__fn_234));
-            (void)result_236;
-            puts((__opt_some_(result_236)) ? "true" : "false");
-            printf("%lld\n", (long long)(__opt_unwrap(result_236)));
+            int64_t result_237 = ((int64_t (*)(int64_t, int64_t))(intptr_t)(dict_Monad_option_singleton.bind))(__opt_some(INT64_C(5)), (int64_t)(intptr_t)(__fn_235));
+            (void)result_237;
+            puts((__opt_some_(result_237)) ? "true" : "false");
+            printf("%lld\n", (long long)(__opt_unwrap(result_237)));
         }
         {
-            int64_t result2_240 = ((int64_t (*)(int64_t, int64_t))(intptr_t)(dict_Monad_option_singleton.bind))(__opt_none(), (int64_t)(intptr_t)(__fn_238));
-            (void)result2_240;
-            puts((__opt_some_(result2_240)) ? "true" : "false");
+            int64_t result2_241 = ((int64_t (*)(int64_t, int64_t))(intptr_t)(dict_Monad_option_singleton.bind))(__opt_none(), (int64_t)(intptr_t)(__fn_239));
+            (void)result2_241;
+            puts((__opt_some_(result2_241)) ? "true" : "false");
         }
         {
-            int64_t step1_244 = __bind_option(__opt_some(INT64_C(3)), (int64_t)(intptr_t)(__fn_242));
-            (void)step1_244;
+            int64_t step1_245 = __bind_option(__opt_some(INT64_C(3)), (int64_t)(intptr_t)(__fn_243));
+            (void)step1_245;
             {
-                int64_t result4_248 = __bind_option(step1_244, (int64_t)(intptr_t)(__fn_246));
-                (void)result4_248;
-                puts((__opt_some_(result4_248)) ? "true" : "false");
-                printf("%lld\n", (long long)(__opt_unwrap(result4_248)));
+                int64_t result4_249 = __bind_option(step1_245, (int64_t)(intptr_t)(__fn_247));
+                (void)result4_249;
+                puts((__opt_some_(result4_249)) ? "true" : "false");
+                printf("%lld\n", (long long)(__opt_unwrap(result4_249)));
             }
         }
         int64_t __t0;

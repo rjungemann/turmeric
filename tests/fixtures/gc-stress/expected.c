@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2305,27 +2306,27 @@ static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
 int main() {
         gc_enable();
         {
-            int64_t i_213 = INT64_C(0);
-            (void)i_213;
+            int64_t i_214 = INT64_C(0);
+            (void)i_214;
             while (1) {
-                if (!(((i_213) < (INT64_C(20))))) break;
+                if (!(((i_214) < (INT64_C(20))))) break;
                 {
                     int64_t *__t0 = (int64_t *)malloc(sizeof(int64_t));
-                    *__t0 = i_213;
+                    *__t0 = i_214;
                     RcControlBlock *__t1 = rc_cb_alloc(0, 3, NULL);
                     __t1->value = __t0;
-                    RcControlBlock * r_214 = __t1;
-                    (void)r_214;
+                    RcControlBlock * r_215 = __t1;
+                    (void)r_215;
                     {
-                        RcControlBlock *__t2 = r_214; rc_weak_increment(r_214);
-                        RcControlBlock * w_215 = __t2;
-                        (void)w_215;
-                        rc_strong_decrement(r_214);
+                        RcControlBlock *__t2 = r_215; rc_weak_increment(r_215);
+                        RcControlBlock * w_216 = __t2;
+                        (void)w_216;
+                        rc_strong_decrement(r_215);
                         rc_free_queue_drain();
                         gc_force();
                     }
                 }
-                i_213 = ((i_213) + (INT64_C(1)));
+                i_214 = ((i_214) + (INT64_C(1)));
             }
         }
         printf("%lld\n", (long long)(INT64_C(1)));

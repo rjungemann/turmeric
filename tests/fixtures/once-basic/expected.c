@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2363,13 +2364,13 @@ static void once_call(void * o) {
 
 int main() {
         {
-            void * flag_226 = once_flag_new();
-            (void)flag_226;
-            once_call((void *)(intptr_t)(flag_226));
-            once_call((void *)(intptr_t)(flag_226));
-            once_call((void *)(intptr_t)(flag_226));
+            void * flag_227 = once_flag_new();
+            (void)flag_227;
+            once_call((void *)(intptr_t)(flag_227));
+            once_call((void *)(intptr_t)(flag_227));
+            once_call((void *)(intptr_t)(flag_227));
             printf("%lld\n", (long long)(INT64_C(3)));
-            once_flag_free((void *)(intptr_t)(flag_226));
+            once_flag_free((void *)(intptr_t)(flag_227));
         }
         int64_t __t0;
         __t0 = INT64_C(0);

@@ -266,7 +266,9 @@ static int compile_to_c(const char *path, Buf *out_c,
     const char *stdlib_files[] = {
         "stdlib/macros.tur",
         "stdlib/safe.tur",
-        "stdlib/args.tur",
+        /* stdlib/args.tur is NOT auto-loaded to avoid injecting ~400 lines of args
+         * parser stubs into every compiled program.  Load it explicitly with
+         * (load "stdlib/args.tur") when args/spec-* functions are needed. */
         /* Phase C1: runtime contracts - auto-load contract.tur for assert!/require!/ensure!/invariant! */
         "stdlib/contract.tur",
         /* Phase P3: HAMT lowering - auto-load hamt.tur and map.tur */

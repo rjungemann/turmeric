@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2447,24 +2448,24 @@ static void tg_free(void * group) {
 int main() {
         int64_t __t0;
         {
-            void * tg_226 = tg_new();
-            (void)tg_226;
-            tg_spawn((void *)(intptr_t)(tg_226));
-            tg_spawn((void *)(intptr_t)(tg_226));
-            tg_cancel_panic((void *)(intptr_t)(tg_226));
-            tg_task_done((void *)(intptr_t)(tg_226));
-            tg_task_done((void *)(intptr_t)(tg_226));
-            tg_wait((void *)(intptr_t)(tg_226));
+            void * tg_227 = tg_new();
+            (void)tg_227;
+            tg_spawn((void *)(intptr_t)(tg_227));
+            tg_spawn((void *)(intptr_t)(tg_227));
+            tg_cancel_panic((void *)(intptr_t)(tg_227));
+            tg_task_done((void *)(intptr_t)(tg_227));
+            tg_task_done((void *)(intptr_t)(tg_227));
+            tg_wait((void *)(intptr_t)(tg_227));
             {
-                int64_t reason_227 = tg_cancel_reason((void *)(intptr_t)(tg_226));
-                (void)reason_227;
-                if (((reason_227) == (INT64_C(1)))) {
+                int64_t reason_228 = tg_cancel_reason((void *)(intptr_t)(tg_227));
+                (void)reason_228;
+                if (((reason_228) == (INT64_C(1)))) {
                     puts("panic-propagated");
                 } else {
                     puts("wrong-reason");
                 }
             }
-            tg_free((void *)(intptr_t)(tg_226));
+            tg_free((void *)(intptr_t)(tg_227));
             int64_t __t1;
             __t1 = INT64_C(0);
             __t0 = __t1;

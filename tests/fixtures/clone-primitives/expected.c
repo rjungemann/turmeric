@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2317,21 +2318,21 @@ static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
 
 int main() {
         {
-            int64_t a_215 = INT64_C(42);
-            (void)a_215;
+            int64_t a_216 = INT64_C(42);
+            (void)a_216;
             {
-                int64_t b_216 = ((int64_t (*)(int64_t))(intptr_t)(dict_Clone_int_singleton.clone))(a_215);
-                (void)b_216;
-                printf("%lld\n", (long long)(b_216));
+                int64_t b_217 = ((int64_t (*)(int64_t))(intptr_t)(dict_Clone_int_singleton.clone))(a_216);
+                (void)b_217;
+                printf("%lld\n", (long long)(b_217));
             }
         }
         {
-            int64_t c_217 = INT64_C(99);
-            (void)c_217;
+            int64_t c_218 = INT64_C(99);
+            (void)c_218;
             {
-                int64_t d_218 = ((int64_t (*)(int64_t))(intptr_t)(dict_Clone_int_singleton.clone))(c_217);
-                (void)d_218;
-                printf("%lld\n", (long long)(d_218));
+                int64_t d_219 = ((int64_t (*)(int64_t))(intptr_t)(dict_Clone_int_singleton.clone))(c_218);
+                (void)d_219;
+                printf("%lld\n", (long long)(d_219));
             }
         }
         int64_t __t0;

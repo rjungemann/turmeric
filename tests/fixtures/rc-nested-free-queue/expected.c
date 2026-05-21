@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2308,17 +2309,17 @@ int main() {
             *__t0 = INT64_C(1);
             RcControlBlock *__t1 = rc_cb_alloc(0, 3, NULL);
             __t1->value = __t0;
-            RcControlBlock * inner_213 = __t1;
-            (void)inner_213;
+            RcControlBlock * inner_214 = __t1;
+            (void)inner_214;
             {
-                rc_strong_increment(inner_213);
-                RcControlBlock * outer_214 = inner_213;
-                (void)outer_214;
+                rc_strong_increment(inner_214);
+                RcControlBlock * outer_215 = inner_214;
+                (void)outer_215;
                 puts("Before inner drop");
-                rc_strong_decrement(inner_213);
+                rc_strong_decrement(inner_214);
                 rc_free_queue_drain();
                 puts("After inner drop");
-                rc_strong_decrement(outer_214);
+                rc_strong_decrement(outer_215);
                 rc_free_queue_drain();
                 puts("After outer drop");
             }
@@ -2328,28 +2329,28 @@ int main() {
             *__t2 = INT64_C(10);
             RcControlBlock *__t3 = rc_cb_alloc(0, 3, NULL);
             __t3->value = __t2;
-            RcControlBlock * a_215 = __t3;
-            (void)a_215;
+            RcControlBlock * a_216 = __t3;
+            (void)a_216;
             {
-                rc_strong_increment(a_215);
-                RcControlBlock * b_216 = a_215;
-                (void)b_216;
+                rc_strong_increment(a_216);
+                RcControlBlock * b_217 = a_216;
+                (void)b_217;
                 {
-                    rc_strong_increment(b_216);
-                    RcControlBlock * c_217 = b_216;
-                    (void)c_217;
+                    rc_strong_increment(b_217);
+                    RcControlBlock * c_218 = b_217;
+                    (void)c_218;
                     {
-                        rc_strong_increment(c_217);
-                        RcControlBlock * d_218 = c_217;
-                        (void)d_218;
+                        rc_strong_increment(c_218);
+                        RcControlBlock * d_219 = c_218;
+                        (void)d_219;
                         puts("Nested level 4");
-                        rc_strong_decrement(d_218);
+                        rc_strong_decrement(d_219);
                         rc_free_queue_drain();
-                        rc_strong_decrement(c_217);
+                        rc_strong_decrement(c_218);
                         rc_free_queue_drain();
-                        rc_strong_decrement(b_216);
+                        rc_strong_decrement(b_217);
                         rc_free_queue_drain();
-                        rc_strong_decrement(a_215);
+                        rc_strong_decrement(a_216);
                         rc_free_queue_drain();
                     }
                 }

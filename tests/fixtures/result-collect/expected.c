@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2478,60 +2479,60 @@ static void * result_partition_err(void * pair) {
 
 int main() {
         {
-            void * v1_250 = vec_new();
-            (void)v1_250;
-            vec_push_ptr_((void *)(intptr_t)(v1_250), (void *)(intptr_t)(ok(INT64_C(10))));
-            vec_push_ptr_((void *)(intptr_t)(v1_250), (void *)(intptr_t)(ok(INT64_C(20))));
-            vec_push_ptr_((void *)(intptr_t)(v1_250), (void *)(intptr_t)(ok(INT64_C(30))));
+            void * v1_251 = vec_new();
+            (void)v1_251;
+            vec_push_ptr_((void *)(intptr_t)(v1_251), (void *)(intptr_t)(ok(INT64_C(10))));
+            vec_push_ptr_((void *)(intptr_t)(v1_251), (void *)(intptr_t)(ok(INT64_C(20))));
+            vec_push_ptr_((void *)(intptr_t)(v1_251), (void *)(intptr_t)(ok(INT64_C(30))));
             {
-                void * c1_251 = result_collect((void *)(intptr_t)(v1_250));
-                (void)c1_251;
-                puts((ok_((void *)(intptr_t)(c1_251))) ? "true" : "false");
+                void * c1_252 = result_collect((void *)(intptr_t)(v1_251));
+                (void)c1_252;
+                puts((ok_((void *)(intptr_t)(c1_252))) ? "true" : "false");
                 {
-                    void * ov_252 = ok_val_ptr((void *)(intptr_t)(c1_251));
-                    (void)ov_252;
-                    printf("%lld\n", (long long)(vec_len((void *)(intptr_t)(ov_252))));
-                    printf("%lld\n", (long long)(vec_get((void *)(intptr_t)(ov_252), INT64_C(0))));
-                    printf("%lld\n", (long long)(vec_get((void *)(intptr_t)(ov_252), INT64_C(1))));
-                    printf("%lld\n", (long long)(vec_get((void *)(intptr_t)(ov_252), INT64_C(2))));
+                    void * ov_253 = ok_val_ptr((void *)(intptr_t)(c1_252));
+                    (void)ov_253;
+                    printf("%lld\n", (long long)(vec_len((void *)(intptr_t)(ov_253))));
+                    printf("%lld\n", (long long)(vec_get((void *)(intptr_t)(ov_253), INT64_C(0))));
+                    printf("%lld\n", (long long)(vec_get((void *)(intptr_t)(ov_253), INT64_C(1))));
+                    printf("%lld\n", (long long)(vec_get((void *)(intptr_t)(ov_253), INT64_C(2))));
                 }
             }
         }
         {
-            void * v2_253 = vec_new();
-            (void)v2_253;
-            vec_push_ptr_((void *)(intptr_t)(v2_253), (void *)(intptr_t)(ok(INT64_C(1))));
-            vec_push_ptr_((void *)(intptr_t)(v2_253), (void *)(intptr_t)(err(INT64_C(99))));
-            vec_push_ptr_((void *)(intptr_t)(v2_253), (void *)(intptr_t)(ok(INT64_C(2))));
+            void * v2_254 = vec_new();
+            (void)v2_254;
+            vec_push_ptr_((void *)(intptr_t)(v2_254), (void *)(intptr_t)(ok(INT64_C(1))));
+            vec_push_ptr_((void *)(intptr_t)(v2_254), (void *)(intptr_t)(err(INT64_C(99))));
+            vec_push_ptr_((void *)(intptr_t)(v2_254), (void *)(intptr_t)(ok(INT64_C(2))));
             {
-                void * c2_254 = result_collect((void *)(intptr_t)(v2_253));
-                (void)c2_254;
-                puts((err_((void *)(intptr_t)(c2_254))) ? "true" : "false");
-                printf("%lld\n", (long long)(err_val((void *)(intptr_t)(c2_254))));
+                void * c2_255 = result_collect((void *)(intptr_t)(v2_254));
+                (void)c2_255;
+                puts((err_((void *)(intptr_t)(c2_255))) ? "true" : "false");
+                printf("%lld\n", (long long)(err_val((void *)(intptr_t)(c2_255))));
             }
         }
         {
-            void * v3_255 = vec_new();
-            (void)v3_255;
-            vec_push_ptr_((void *)(intptr_t)(v3_255), (void *)(intptr_t)(ok(INT64_C(10))));
-            vec_push_ptr_((void *)(intptr_t)(v3_255), (void *)(intptr_t)(err(INT64_C(1))));
-            vec_push_ptr_((void *)(intptr_t)(v3_255), (void *)(intptr_t)(ok(INT64_C(20))));
-            vec_push_ptr_((void *)(intptr_t)(v3_255), (void *)(intptr_t)(err(INT64_C(2))));
+            void * v3_256 = vec_new();
+            (void)v3_256;
+            vec_push_ptr_((void *)(intptr_t)(v3_256), (void *)(intptr_t)(ok(INT64_C(10))));
+            vec_push_ptr_((void *)(intptr_t)(v3_256), (void *)(intptr_t)(err(INT64_C(1))));
+            vec_push_ptr_((void *)(intptr_t)(v3_256), (void *)(intptr_t)(ok(INT64_C(20))));
+            vec_push_ptr_((void *)(intptr_t)(v3_256), (void *)(intptr_t)(err(INT64_C(2))));
             {
-                void * p_256 = result_partition((void *)(intptr_t)(v3_255));
-                (void)p_256;
+                void * p_257 = result_partition((void *)(intptr_t)(v3_256));
+                (void)p_257;
                 {
-                    void * oks_257 = result_partition_ok((void *)(intptr_t)(p_256));
-                    (void)oks_257;
+                    void * oks_258 = result_partition_ok((void *)(intptr_t)(p_257));
+                    (void)oks_258;
                     {
-                        void * errs_258 = result_partition_err((void *)(intptr_t)(p_256));
-                        (void)errs_258;
-                        printf("%lld\n", (long long)(vec_len((void *)(intptr_t)(oks_257))));
-                        printf("%lld\n", (long long)(vec_get((void *)(intptr_t)(oks_257), INT64_C(0))));
-                        printf("%lld\n", (long long)(vec_get((void *)(intptr_t)(oks_257), INT64_C(1))));
-                        printf("%lld\n", (long long)(vec_len((void *)(intptr_t)(errs_258))));
-                        printf("%lld\n", (long long)(vec_get((void *)(intptr_t)(errs_258), INT64_C(0))));
-                        printf("%lld\n", (long long)(vec_get((void *)(intptr_t)(errs_258), INT64_C(1))));
+                        void * errs_259 = result_partition_err((void *)(intptr_t)(p_257));
+                        (void)errs_259;
+                        printf("%lld\n", (long long)(vec_len((void *)(intptr_t)(oks_258))));
+                        printf("%lld\n", (long long)(vec_get((void *)(intptr_t)(oks_258), INT64_C(0))));
+                        printf("%lld\n", (long long)(vec_get((void *)(intptr_t)(oks_258), INT64_C(1))));
+                        printf("%lld\n", (long long)(vec_len((void *)(intptr_t)(errs_259))));
+                        printf("%lld\n", (long long)(vec_get((void *)(intptr_t)(errs_259), INT64_C(0))));
+                        printf("%lld\n", (long long)(vec_get((void *)(intptr_t)(errs_259), INT64_C(1))));
                     }
                 }
             }

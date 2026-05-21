@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2327,11 +2328,11 @@ static int64_t rc_auto_drop_nested_scope() {
             *__t1 = INT64_C(10);
             RcControlBlock *__t2 = rc_cb_alloc(0, 3, NULL);
             __t2->value = __t1;
-            RcControlBlock * outer_213 = __t2;
-            (void)outer_213;
+            RcControlBlock * outer_214 = __t2;
+            (void)outer_214;
             tur_frame __frame_3;
             tur_frame_init(&__frame_3, NULL);
-            struct __defer_env_4 __t6 = {.outer = outer_213};
+            struct __defer_env_4 __t6 = {.outer = outer_214};
             tur_frame_push_defer(&__frame_3, __defer_5, &__t6);
             int64_t __t7;
             int64_t __t8;
@@ -2340,15 +2341,15 @@ static int64_t rc_auto_drop_nested_scope() {
                 *__t9 = INT64_C(20);
                 RcControlBlock *__t10 = rc_cb_alloc(0, 3, NULL);
                 __t10->value = __t9;
-                RcControlBlock * inner_214 = __t10;
-                (void)inner_214;
+                RcControlBlock * inner_215 = __t10;
+                (void)inner_215;
                 tur_frame __frame_11;
                 tur_frame_init(&__frame_11, &__frame_3);
-                struct __defer_env_12 __t14 = {.inner = inner_214};
+                struct __defer_env_12 __t14 = {.inner = inner_215};
                 tur_frame_push_defer(&__frame_11, __defer_13, &__t14);
                 int64_t __t15;
-                int64_t __t16 = rc_strong_count(outer_213);
-                int64_t __t17 = rc_strong_count(inner_214);
+                int64_t __t16 = rc_strong_count(outer_214);
+                int64_t __t17 = rc_strong_count(inner_215);
                 __t15 = ((__t16) + (__t17));
                 tur_frame_fire_lifo(&__frame_11);
                 __t8 = __t15;
@@ -2361,6 +2362,15 @@ static int64_t rc_auto_drop_nested_scope() {
 }
 
 
-int main(void) {
+int main(int argc, char **argv) {
+    /* *args*: build cons list from argv[1..argc-1] */
+    g_tur_args = 0;
+    for (int _ai = argc - 1; _ai >= 1; _ai--) {
+        typedef struct { int64_t value; int64_t next; } __tur_args_cell;
+        __tur_args_cell *_c = (__tur_args_cell *)malloc(sizeof(__tur_args_cell));
+        _c->value = (int64_t)(intptr_t)argv[_ai];
+        _c->next = g_tur_args;
+        g_tur_args = (int64_t)(intptr_t)_c;
+    }
     return 0;
 }

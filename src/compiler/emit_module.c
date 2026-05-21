@@ -2918,6 +2918,7 @@ int emit_program(Buf *out, const Expr *program) {
     buf_free(&file);
     buf_free(&body);
     free(items);
+    free(ctx.env_struct_names);
     return 0;
 }
 
@@ -3247,5 +3248,6 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program, 
 
     buf_free(&file);
     buf_free(&body);
+    free(ctx.env_struct_names);
     return 0;
 }

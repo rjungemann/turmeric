@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2305,12 +2306,12 @@ static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
 int main() {
         int64_t __t0;
         {
-            const char * s_213 = "hello";
-            (void)s_213;
+            const char * s_214 = "hello";
+            (void)s_214;
             int64_t __t1;
             {
-                const char * result_214 = from_c_string(s_213);
-                (void)result_214;
+                const char * result_215 = from_c_string(s_214);
+                (void)result_215;
                 puts("from-c-string succeeded");
                 int64_t __t2;
                 __t2 = INT64_C(0);

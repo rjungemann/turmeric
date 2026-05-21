@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2407,25 +2408,25 @@ static const char * show_parse_error(void * err) {
 
 int main() {
         {
-            void * r1_233 = err("file not found");
-            (void)r1_233;
+            void * r1_234 = err("file not found");
+            (void)r1_234;
             {
-                void * r2_234 = err_context((void *)(intptr_t)(r1_233), "reading config");
-                (void)r2_234;
-                if (ok_((void *)(intptr_t)(r2_234))) {
+                void * r2_235 = err_context((void *)(intptr_t)(r1_234), "reading config");
+                (void)r2_235;
+                if (ok_((void *)(intptr_t)(r2_235))) {
                     puts("unexpected ok");
                 } else {
-                    puts(err_val_cstr((void *)(intptr_t)(r2_234)));
+                    puts(err_val_cstr((void *)(intptr_t)(r2_235)));
                 }
             }
         }
         {
-            void * r3_235 = ok(INT64_C(42));
-            (void)r3_235;
+            void * r3_236 = ok(INT64_C(42));
+            (void)r3_236;
             {
-                void * r4_236 = err_context((void *)(intptr_t)(r3_235), "some context");
-                (void)r4_236;
-                if (ok_((void *)(intptr_t)(r4_236))) {
+                void * r4_237 = err_context((void *)(intptr_t)(r3_236), "some context");
+                (void)r4_237;
+                if (ok_((void *)(intptr_t)(r4_237))) {
                     puts("ok passed through");
                 } else {
                     puts("unexpected err");
@@ -2433,14 +2434,14 @@ int main() {
             }
         }
         {
-            void * e1_237 = io_error("connection refused");
-            (void)e1_237;
-            puts(show_io_error((void *)(intptr_t)(e1_237)));
+            void * e1_238 = io_error("connection refused");
+            (void)e1_238;
+            puts(show_io_error((void *)(intptr_t)(e1_238)));
         }
         {
-            void * e2_238 = parse_error_simple("unexpected token", INT64_C(12));
-            (void)e2_238;
-            puts(show_parse_error((void *)(intptr_t)(e2_238)));
+            void * e2_239 = parse_error_simple("unexpected token", INT64_C(12));
+            (void)e2_239;
+            puts(show_parse_error((void *)(intptr_t)(e2_239)));
         }
         int64_t __t0;
         __t0 = INT64_C(0);

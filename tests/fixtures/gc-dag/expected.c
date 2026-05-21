@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2311,17 +2312,17 @@ int main() {
             *__t2 = INT64_C(42);
             RcControlBlock *__t3 = rc_cb_alloc(0, 3, NULL);
             __t3->value = __t2;
-            RcControlBlock * x_213 = __t3;
-            (void)x_213;
+            RcControlBlock * x_214 = __t3;
+            (void)x_214;
             int64_t __t4;
             int64_t __t5;
             {
-                /* rc-elision: skipped rc_strong_increment(x_213) — last-use clone */
-                RcControlBlock * y_214 = x_213;
-                (void)y_214;
-                rc_strong_decrement(x_213);
+                /* rc-elision: skipped rc_strong_increment(x_214) — last-use clone */
+                RcControlBlock * y_215 = x_214;
+                (void)y_215;
+                rc_strong_decrement(x_214);
                 rc_free_queue_drain();
-                /* rc-elision: skipped rc_strong_decrement(y_214) — matched elided clone */
+                /* rc-elision: skipped rc_strong_decrement(y_215) — matched elided clone */
                 gc_force();
                 printf("%lld\n", (long long)(INT64_C(1)));
                 int64_t __t6;

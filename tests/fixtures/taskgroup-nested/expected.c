@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2401,21 +2402,21 @@ static void tg_free(void * group) {
 int main() {
         int64_t __t0;
         {
-            void * outer_222 = tg_new();
-            (void)outer_222;
-            void * inner_223 = tg_new();
-            (void)inner_223;
-            tg_spawn((void *)(intptr_t)(outer_222));
-            tg_spawn((void *)(intptr_t)(outer_222));
-            tg_spawn((void *)(intptr_t)(inner_223));
-            tg_task_done((void *)(intptr_t)(outer_222));
-            tg_task_done((void *)(intptr_t)(outer_222));
-            tg_task_done((void *)(intptr_t)(inner_223));
-            tg_wait((void *)(intptr_t)(inner_223));
-            tg_wait((void *)(intptr_t)(outer_222));
+            void * outer_223 = tg_new();
+            (void)outer_223;
+            void * inner_224 = tg_new();
+            (void)inner_224;
+            tg_spawn((void *)(intptr_t)(outer_223));
+            tg_spawn((void *)(intptr_t)(outer_223));
+            tg_spawn((void *)(intptr_t)(inner_224));
+            tg_task_done((void *)(intptr_t)(outer_223));
+            tg_task_done((void *)(intptr_t)(outer_223));
+            tg_task_done((void *)(intptr_t)(inner_224));
+            tg_wait((void *)(intptr_t)(inner_224));
+            tg_wait((void *)(intptr_t)(outer_223));
             puts("nested-complete");
-            tg_free((void *)(intptr_t)(inner_223));
-            tg_free((void *)(intptr_t)(outer_222));
+            tg_free((void *)(intptr_t)(inner_224));
+            tg_free((void *)(intptr_t)(outer_223));
             int64_t __t1;
             __t1 = INT64_C(0);
             __t0 = __t1;

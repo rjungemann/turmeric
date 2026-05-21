@@ -1,5 +1,7 @@
 ;; args-equals -- test --key=value form option parsing.
 
+(load "stdlib/args.tur")
+
 (defn print-cstr [s :cstr] :void
   ```c
   printf("%s\n", s ? s : "");

@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2311,14 +2312,14 @@ static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
 int main() {
         int64_t __t0;
         {
-            Point p_214 = (Point){.x = INT64_C(3), .y = INT64_C(4)};
-            (void)p_214;
-            printf("%lld\n", (long long)((p_214).x));
-            printf("%lld\n", (long long)((p_214).y));
+            Point p_215 = (Point){.x = INT64_C(3), .y = INT64_C(4)};
+            (void)p_215;
+            printf("%lld\n", (long long)((p_215).x));
+            printf("%lld\n", (long long)((p_215).y));
             {
-                const void * rx_215 = &(p_214).x;
-                (void)rx_215;
-                int64_t __t1 = *((int64_t *)rx_215);
+                const void * rx_216 = &(p_215).x;
+                (void)rx_216;
+                int64_t __t1 = *((int64_t *)rx_216);
                 printf("%lld\n", (long long)(__t1));
             }
             int64_t __t2;

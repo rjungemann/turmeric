@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2462,18 +2463,18 @@ static void consumer() {
 int main() {
         int64_t __t0;
         {
-            void * ch_234 = achan_new(INT64_C(2));
-            (void)ch_234;
-            (void)(chan_slot((void *)(intptr_t)(ch_234), INT64_C(1)));
+            void * ch_235 = achan_new(INT64_C(2));
+            (void)ch_235;
+            (void)(chan_slot((void *)(intptr_t)(ch_235), INT64_C(1)));
             {
-                void * q_235 = sched_new();
-                (void)q_235;
-                sched_push((void *)(intptr_t)(q_235), (void *)(intptr_t)(fiber_new_fn((void *)(intptr_t)(producer))));
-                sched_push((void *)(intptr_t)(q_235), (void *)(intptr_t)(fiber_new_fn((void *)(intptr_t)(consumer))));
-                sched_run((void *)(intptr_t)(q_235));
-                sched_free((void *)(intptr_t)(q_235));
+                void * q_236 = sched_new();
+                (void)q_236;
+                sched_push((void *)(intptr_t)(q_236), (void *)(intptr_t)(fiber_new_fn((void *)(intptr_t)(producer))));
+                sched_push((void *)(intptr_t)(q_236), (void *)(intptr_t)(fiber_new_fn((void *)(intptr_t)(consumer))));
+                sched_run((void *)(intptr_t)(q_236));
+                sched_free((void *)(intptr_t)(q_236));
             }
-            achan_free((void *)(intptr_t)(ch_234));
+            achan_free((void *)(intptr_t)(ch_235));
             puts("done");
             int64_t __t1;
             __t1 = INT64_C(0);

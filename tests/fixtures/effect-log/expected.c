@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2311,14 +2312,14 @@ static int64_t process(int64_t x) {
         int64_t __t1;
         int64_t __t2;
         {
-            int64_t result_215 = ((x) * (INT64_C(2)));
-            (void)result_215;
+            int64_t result_216 = ((x) * (INT64_C(2)));
+            (void)result_216;
             int64_t __t3[2];
             __t3[0] = (int64_t)"info";
             __t3[1] = (int64_t)"done";
             tur_effect_perform("Log", __t3, 2);
             int64_t __t4;
-            __t4 = result_215;
+            __t4 = result_216;
             __t2 = __t4;
         }
         __t1 = __t2;
@@ -2327,12 +2328,12 @@ static int64_t process(int64_t x) {
 
 static int64_t __effect_handler_6(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_6(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    const char * level_216 = (const char *)__effect_args[0];
-    const char * msg_217 = (const char *)__effect_args[1];
-    int64_t k_218 = __k;
-    puts(msg_217);
+    const char * level_217 = (const char *)__effect_args[0];
+    const char * msg_218 = (const char *)__effect_args[1];
+    int64_t k_219 = __k;
+    puts(msg_218);
     int64_t __t7;
-    int64_t __t8 = tur_effect_cont_resume((int64_t)(intptr_t)k_218, (int64_t)0);
+    int64_t __t8 = tur_effect_cont_resume((int64_t)(intptr_t)k_219, (int64_t)0);
     __t7 = __t8;
     return (int64_t)__t7;
 }
@@ -2373,10 +2374,10 @@ static int64_t __dispatch_5(void *__ctx_void, int64_t __k_int, int64_t __resume_
 
 static int64_t __effect_handler_11(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_11(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    const char * level_220 = (const char *)__effect_args[0];
-    const char * msg_221 = (const char *)__effect_args[1];
-    int64_t k_222 = __k;
-    int64_t __t12 = tur_effect_cont_resume((int64_t)(intptr_t)k_222, (int64_t)0);
+    const char * level_221 = (const char *)__effect_args[0];
+    const char * msg_222 = (const char *)__effect_args[1];
+    int64_t k_223 = __k;
+    int64_t __t12 = tur_effect_cont_resume((int64_t)(intptr_t)k_223, (int64_t)0);
     return (int64_t)__t12;
 }
 
@@ -2434,9 +2435,9 @@ int main() {
             __fiber_5->effect_handler_chain = &__eff_frame_5;
             int64_t __t9 = (int64_t)__dispatch_5(&__cap_5, (int64_t)(intptr_t)__fiber_5, 0);
             if (__fiber_5->done) { free(__fiber_5->stack); free(__fiber_5); }
-            int64_t r1_219 = __t9;
-            (void)r1_219;
-            printf("%lld\n", (long long)(r1_219));
+            int64_t r1_220 = __t9;
+            (void)r1_220;
+            printf("%lld\n", (long long)(r1_220));
         }
         {
             TurEffectCaptureCtx __cap_10;
@@ -2457,9 +2458,9 @@ int main() {
             __fiber_10->effect_handler_chain = &__eff_frame_10;
             int64_t __t13 = (int64_t)__dispatch_10(&__cap_10, (int64_t)(intptr_t)__fiber_10, 0);
             if (__fiber_10->done) { free(__fiber_10->stack); free(__fiber_10); }
-            int64_t r2_223 = __t13;
-            (void)r2_223;
-            printf("%lld\n", (long long)(r2_223));
+            int64_t r2_224 = __t13;
+            (void)r2_224;
+            printf("%lld\n", (long long)(r2_224));
         }
         int64_t __t14;
         __t14 = INT64_C(0);

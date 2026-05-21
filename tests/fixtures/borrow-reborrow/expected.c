@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2304,15 +2305,15 @@ static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
 
 int main() {
         {
-            int64_t x_213 = INT64_C(7);
-            (void)x_213;
+            int64_t x_214 = INT64_C(7);
+            (void)x_214;
             {
-                const void * r1_214 = &x_213;
-                (void)r1_214;
+                const void * r1_215 = &x_214;
+                (void)r1_215;
                 {
-                    const void * r2_215 = r1_214;
-                    (void)r2_215;
-                    int64_t __t0 = *((int64_t *)r2_215);
+                    const void * r2_216 = r1_215;
+                    (void)r2_216;
+                    int64_t __t0 = *((int64_t *)r2_216);
                     printf("%lld\n", (long long)(__t0));
                 }
             }

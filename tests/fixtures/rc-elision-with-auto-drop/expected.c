@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2318,17 +2319,17 @@ int main() {
             *__t1 = INT64_C(42);
             RcControlBlock *__t2 = rc_cb_alloc(0, 3, NULL);
             __t2->value = __t1;
-            RcControlBlock * x_213 = __t2;
-            (void)x_213;
-            /* rc-elision: skipped rc_strong_increment(x_213) — last-use clone */
-            RcControlBlock * c_214 = x_213;
-            (void)c_214;
+            RcControlBlock * x_214 = __t2;
+            (void)x_214;
+            /* rc-elision: skipped rc_strong_increment(x_214) — last-use clone */
+            RcControlBlock * c_215 = x_214;
+            (void)c_215;
             tur_frame __frame_3;
             tur_frame_init(&__frame_3, NULL);
-            /* rc-elision: skipped rc_strong_decrement(c_214) — matched elided clone */
-            int64_t __t4 = rc_strong_count(x_213);
+            /* rc-elision: skipped rc_strong_decrement(c_215) — matched elided clone */
+            int64_t __t4 = rc_strong_count(x_214);
             printf("%lld\n", (long long)(__t4));
-            struct __defer_env_5 __t7 = {.x = x_213};
+            struct __defer_env_5 __t7 = {.x = x_214};
             tur_frame_push_defer(&__frame_3, __defer_6, &__t7);
             int64_t __t8;
             __t8 = INT64_C(0);

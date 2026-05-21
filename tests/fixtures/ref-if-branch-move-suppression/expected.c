@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2322,18 +2323,18 @@ int main() {
         {
             void * __t1 = malloc(sizeof(int64_t));
             *((int64_t *)__t1) = INT64_C(1);
-            void * r_213 = __t1;
-            (void)r_213;
+            void * r_214 = __t1;
+            (void)r_214;
             tur_frame __frame_2;
             tur_frame_init(&__frame_2, NULL);
             if (false) {
                 int64_t __t3;
                 {
-                    void * tmp_214 = r_213;
-                    (void)tmp_214;
+                    void * tmp_215 = r_214;
+                    (void)tmp_215;
                     tur_frame __frame_4;
                     tur_frame_init(&__frame_4, &__frame_2);
-                    struct __defer_env_5 __t7 = {.tmp = tmp_214};
+                    struct __defer_env_5 __t7 = {.tmp = tmp_215};
                     tur_frame_push_defer(&__frame_4, __defer_6, &__t7);
                     int64_t __t8;
                     __t8 = INT64_C(0);
@@ -2342,9 +2343,9 @@ int main() {
                 }
             } else {
             }
-            int64_t __t9 = *((int64_t *)r_213);
+            int64_t __t9 = *((int64_t *)r_214);
             printf("%lld\n", (long long)(__t9));
-            struct __defer_env_10 __t12 = {.r = r_213};
+            struct __defer_env_10 __t12 = {.r = r_214};
             tur_frame_push_defer(&__frame_2, __defer_11, &__t12);
             int64_t __t13;
             __t13 = INT64_C(0);

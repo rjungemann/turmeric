@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2359,14 +2360,14 @@ static int64_t negate(int64_t x) {
 int main() {
         int64_t __t0;
         {
-            int64_t p_232 = __pair_make(INT64_C(10), INT64_C(20));
-            (void)p_232;
+            int64_t p_233 = __pair_make(INT64_C(10), INT64_C(20));
+            (void)p_233;
             int64_t __t1;
             {
-                int64_t mapped_233 = __bimap_pair(p_232, (int64_t)(intptr_t)(inc), (int64_t)(intptr_t)(negate));
-                (void)mapped_233;
-                printf("%lld\n", (long long)(__pair_fst(mapped_233)));
-                printf("%lld\n", (long long)(__pair_snd(mapped_233)));
+                int64_t mapped_234 = __bimap_pair(p_233, (int64_t)(intptr_t)(inc), (int64_t)(intptr_t)(negate));
+                (void)mapped_234;
+                printf("%lld\n", (long long)(__pair_fst(mapped_234)));
+                printf("%lld\n", (long long)(__pair_snd(mapped_234)));
                 int64_t __t2;
                 __t2 = INT64_C(0);
                 __t1 = __t2;

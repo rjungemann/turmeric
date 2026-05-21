@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2418,30 +2419,30 @@ static int64_t compute_b() {
 int main() {
         int64_t __t0;
         {
-            void * tg_224 = tg_new();
-            (void)tg_224;
+            void * tg_225 = tg_new();
+            (void)tg_225;
             int64_t __t1;
             {
-                void * fut_a_225 = tg_spawn_async((void *)(intptr_t)(tg_224), (void *)(intptr_t)(compute_a));
-                (void)fut_a_225;
+                void * fut_a_226 = tg_spawn_async((void *)(intptr_t)(tg_225), (void *)(intptr_t)(compute_a));
+                (void)fut_a_226;
                 int64_t __t2;
                 {
-                    void * fut_b_226 = tg_spawn_async((void *)(intptr_t)(tg_224), (void *)(intptr_t)(compute_b));
-                    (void)fut_b_226;
+                    void * fut_b_227 = tg_spawn_async((void *)(intptr_t)(tg_225), (void *)(intptr_t)(compute_b));
+                    (void)fut_b_227;
                     int64_t __t3;
                     {
-                        int64_t __t4 = tur_await_future((TurFuture*)(intptr_t)fut_a_225);
-                        int64_t a_227 = __t4;
-                        (void)a_227;
+                        int64_t __t4 = tur_await_future((TurFuture*)(intptr_t)fut_a_226);
+                        int64_t a_228 = __t4;
+                        (void)a_228;
                         int64_t __t5;
                         {
-                            int64_t __t6 = tur_await_future((TurFuture*)(intptr_t)fut_b_226);
-                            int64_t b_228 = __t6;
-                            (void)b_228;
-                            printf("%lld\n", (long long)(a_227));
-                            printf("%lld\n", (long long)(b_228));
-                            printf("%lld\n", (long long)(((a_227) + (b_228))));
-                            tg_free((void *)(intptr_t)(tg_224));
+                            int64_t __t6 = tur_await_future((TurFuture*)(intptr_t)fut_b_227);
+                            int64_t b_229 = __t6;
+                            (void)b_229;
+                            printf("%lld\n", (long long)(a_228));
+                            printf("%lld\n", (long long)(b_229));
+                            printf("%lld\n", (long long)(((a_228) + (b_229))));
+                            tg_free((void *)(intptr_t)(tg_225));
                             puts("done");
                             int64_t __t7;
                             __t7 = INT64_C(0);

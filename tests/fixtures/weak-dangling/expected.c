@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2317,23 +2318,23 @@ int main() {
             *__t0 = INT64_C(99);
             RcControlBlock *__t1 = rc_cb_alloc(0, 3, NULL);
             __t1->value = __t0;
-            RcControlBlock * r_213 = __t1;
-            (void)r_213;
+            RcControlBlock * r_214 = __t1;
+            (void)r_214;
             {
-                RcControlBlock *__t2 = r_213; rc_weak_increment(r_213);
-                RcControlBlock * w_214 = __t2;
-                (void)w_214;
-                rc_strong_decrement(r_213);
+                RcControlBlock *__t2 = r_214; rc_weak_increment(r_214);
+                RcControlBlock * w_215 = __t2;
+                (void)w_215;
+                rc_strong_decrement(r_214);
                 rc_free_queue_drain();
                 {
-                    RcControlBlock *__t3 = rc_upgrade(w_214);
-                    RcControlBlock * u_215 = __t3;
-                    (void)u_215;
+                    RcControlBlock *__t3 = rc_upgrade(w_215);
+                    RcControlBlock * u_216 = __t3;
+                    (void)u_216;
                     tur_frame __frame_4;
                     tur_frame_init(&__frame_4, NULL);
-                    int64_t __t5 = rc_strong_count(u_215);
+                    int64_t __t5 = rc_strong_count(u_216);
                     printf("%lld\n", (long long)(__t5));
-                    struct __defer_env_6 __t8 = {.u = u_215};
+                    struct __defer_env_6 __t8 = {.u = u_216};
                     tur_frame_push_defer(&__frame_4, __defer_7, &__t8);
                     tur_frame_fire_lifo(&__frame_4);
                 }

@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2348,9 +2349,9 @@ static int64_t __fmap_option(int64_t container, int64_t fn) {
 static int64_t map_and_add(int64_t container, int64_t fn, int64_t addend) {
         int64_t __t0;
         {
-            int64_t mapped_228 = ((int64_t (*)(int64_t, int64_t))(intptr_t)(dict_Functor_option_singleton.fmap))(container, fn);
-            (void)mapped_228;
-            __t0 = ((__opt_unwrap(mapped_228)) + (addend));
+            int64_t mapped_229 = ((int64_t (*)(int64_t, int64_t))(intptr_t)(dict_Functor_option_singleton.fmap))(container, fn);
+            (void)mapped_229;
+            __t0 = ((__opt_unwrap(mapped_229)) + (addend));
         }
         return __t0;
 }
@@ -2361,9 +2362,9 @@ static int64_t negate(int64_t x) {
 
 int main() {
         {
-            int64_t opt_230 = __opt_some(INT64_C(10));
-            (void)opt_230;
-            printf("%lld\n", (long long)(map_and_add(opt_230, (int64_t)(intptr_t)(negate), INT64_C(3))));
+            int64_t opt_231 = __opt_some(INT64_C(10));
+            (void)opt_231;
+            printf("%lld\n", (long long)(map_and_add(opt_231, (int64_t)(intptr_t)(negate), INT64_C(3))));
         }
         int64_t __t1;
         __t1 = INT64_C(0);

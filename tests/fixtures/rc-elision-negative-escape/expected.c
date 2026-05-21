@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2341,25 +2342,25 @@ int main() {
             *__t0 = INT64_C(777);
             RcControlBlock *__t1 = rc_cb_alloc(0, 3, NULL);
             __t1->value = __t0;
-            RcControlBlock * orig_213 = __t1;
-            (void)orig_213;
+            RcControlBlock * orig_214 = __t1;
+            (void)orig_214;
             tur_frame __frame_2;
             tur_frame_init(&__frame_2, NULL);
             {
-                rc_strong_increment(orig_213);
-                RcControlBlock * cloned_214 = orig_213;
-                (void)cloned_214;
+                rc_strong_increment(orig_214);
+                RcControlBlock * cloned_215 = orig_214;
+                (void)cloned_215;
                 tur_frame __frame_3;
                 tur_frame_init(&__frame_3, &__frame_2);
-                int64_t __t4 = rc_strong_count(cloned_214);
+                int64_t __t4 = rc_strong_count(cloned_215);
                 printf("%lld\n", (long long)(__t4));
-                int64_t __t5 = rc_strong_count(cloned_214);
+                int64_t __t5 = rc_strong_count(cloned_215);
                 printf("%lld\n", (long long)(__t5));
-                struct __defer_env_6 __t8 = {.cloned = cloned_214};
+                struct __defer_env_6 __t8 = {.cloned = cloned_215};
                 tur_frame_push_defer(&__frame_3, __defer_7, &__t8);
                 tur_frame_fire_lifo(&__frame_3);
             }
-            struct __defer_env_9 __t11 = {.orig = orig_213};
+            struct __defer_env_9 __t11 = {.orig = orig_214};
             tur_frame_push_defer(&__frame_2, __defer_10, &__t11);
             tur_frame_fire_lifo(&__frame_2);
         }
@@ -2368,24 +2369,24 @@ int main() {
             *__t12 = INT64_C(888);
             RcControlBlock *__t13 = rc_cb_alloc(0, 3, NULL);
             __t13->value = __t12;
-            RcControlBlock * orig_215 = __t13;
-            (void)orig_215;
+            RcControlBlock * orig_216 = __t13;
+            (void)orig_216;
             tur_frame __frame_14;
             tur_frame_init(&__frame_14, NULL);
             {
-                rc_strong_increment(orig_215);
-                RcControlBlock * cloned_216 = orig_215;
-                (void)cloned_216;
+                rc_strong_increment(orig_216);
+                RcControlBlock * cloned_217 = orig_216;
+                (void)cloned_217;
                 tur_frame __frame_15;
                 tur_frame_init(&__frame_15, &__frame_14);
                 puts("before");
-                int64_t __t16 = rc_strong_count(cloned_216);
+                int64_t __t16 = rc_strong_count(cloned_217);
                 printf("%lld\n", (long long)(__t16));
-                struct __defer_env_17 __t19 = {.cloned = cloned_216};
+                struct __defer_env_17 __t19 = {.cloned = cloned_217};
                 tur_frame_push_defer(&__frame_15, __defer_18, &__t19);
                 tur_frame_fire_lifo(&__frame_15);
             }
-            struct __defer_env_20 __t22 = {.orig = orig_215};
+            struct __defer_env_20 __t22 = {.orig = orig_216};
             tur_frame_push_defer(&__frame_14, __defer_21, &__t22);
             tur_frame_fire_lifo(&__frame_14);
         }

@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2308,11 +2309,11 @@ static void run_with_handler(tur_handler_t h1, tur_handler_t h2) {
 
 static int64_t __effect_handler_1(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_1(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    const char * s_216 = (const char *)__effect_args[0];
-    int64_t k_217 = __k;
-    puts(s_216);
+    const char * s_217 = (const char *)__effect_args[0];
+    int64_t k_218 = __k;
+    puts(s_217);
     int64_t __t2;
-    int64_t __t3 = tur_effect_cont_resume((int64_t)(intptr_t)k_217, (int64_t)0);
+    int64_t __t3 = tur_effect_cont_resume((int64_t)(intptr_t)k_218, (int64_t)0);
     __t2 = __t3;
     return (int64_t)__t2;
 }

@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2486,20 +2487,20 @@ static void fiber_b() {
 int main() {
         int64_t __t0;
         {
-            void * sched_266 = scheduler_mt_new(INT64_C(2));
-            (void)sched_266;
+            void * sched_267 = scheduler_mt_new(INT64_C(2));
+            (void)sched_267;
             {
-                void * fa_267 = fiber_new((void *)(intptr_t)(fiber_a), INT64_C(0));
-                (void)fa_267;
+                void * fa_268 = fiber_new((void *)(intptr_t)(fiber_a), INT64_C(0));
+                (void)fa_268;
                 {
-                    void * fb_268 = fiber_new((void *)(intptr_t)(fiber_b), INT64_C(0));
-                    (void)fb_268;
-                    scheduler_mt_spawn((void *)(intptr_t)(sched_266), (void *)(intptr_t)(fa_267));
-                    scheduler_mt_spawn((void *)(intptr_t)(sched_266), (void *)(intptr_t)(fb_268));
+                    void * fb_269 = fiber_new((void *)(intptr_t)(fiber_b), INT64_C(0));
+                    (void)fb_269;
+                    scheduler_mt_spawn((void *)(intptr_t)(sched_267), (void *)(intptr_t)(fa_268));
+                    scheduler_mt_spawn((void *)(intptr_t)(sched_267), (void *)(intptr_t)(fb_269));
                     thread_sleep(INT64_C(100));
-                    scheduler_mt_free((void *)(intptr_t)(sched_266));
-                    fiber_free((void *)(intptr_t)(fa_267));
-                    fiber_free((void *)(intptr_t)(fb_268));
+                    scheduler_mt_free((void *)(intptr_t)(sched_267));
+                    fiber_free((void *)(intptr_t)(fa_268));
+                    fiber_free((void *)(intptr_t)(fb_269));
                 }
             }
             int64_t __t1;

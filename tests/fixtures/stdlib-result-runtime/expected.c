@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2358,18 +2359,18 @@ static void result_free(void * r) {
 int main() {
         int64_t __t1;
         {
-            void * a_226 = ok(INT64_C(7));
-            (void)a_226;
+            void * a_227 = ok(INT64_C(7));
+            (void)a_227;
             int64_t __t2;
             {
-                void * b_227 = err(INT64_C(99));
-                (void)b_227;
-                puts((ok_((void *)(intptr_t)(a_226))) ? "true" : "false");
-                puts((ok_((void *)(intptr_t)(b_227))) ? "true" : "false");
-                printf("%lld\n", (long long)(result_unwrap((void *)(intptr_t)(a_226))));
-                printf("%lld\n", (long long)(result_unwrap_or((void *)(intptr_t)(b_227), INT64_C(123))));
-                result_free((void *)(intptr_t)(a_226));
-                result_free((void *)(intptr_t)(b_227));
+                void * b_228 = err(INT64_C(99));
+                (void)b_228;
+                puts((ok_((void *)(intptr_t)(a_227))) ? "true" : "false");
+                puts((ok_((void *)(intptr_t)(b_228))) ? "true" : "false");
+                printf("%lld\n", (long long)(result_unwrap((void *)(intptr_t)(a_227))));
+                printf("%lld\n", (long long)(result_unwrap_or((void *)(intptr_t)(b_228), INT64_C(123))));
+                result_free((void *)(intptr_t)(a_227));
+                result_free((void *)(intptr_t)(b_228));
                 int64_t __t3;
                 __t3 = INT64_C(0);
                 __t2 = __t3;

@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2354,12 +2355,12 @@ static int64_t heap_pair_second(int64_t p) {
 
 int main() {
         {
-            Pair p_222 = (Pair){.first = INT64_C(10), .second = INT64_C(20)};
-            (void)p_222;
+            Pair p_223 = (Pair){.first = INT64_C(10), .second = INT64_C(20)};
+            (void)p_223;
             {
-                int64_t p2_223 = ((int64_t (*)(Pair))(intptr_t)(dict_Clone_Pair_singleton.clone))(p_222);
-                (void)p2_223;
-                printf("%lld\n", (long long)(((heap_pair_first(p2_223)) + (heap_pair_second(p2_223)))));
+                int64_t p2_224 = ((int64_t (*)(Pair))(intptr_t)(dict_Clone_Pair_singleton.clone))(p_223);
+                (void)p2_224;
+                printf("%lld\n", (long long)(((heap_pair_first(p2_224)) + (heap_pair_second(p2_224)))));
             }
         }
         int64_t __t0;

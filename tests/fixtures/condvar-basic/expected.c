@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2360,22 +2361,22 @@ static void condvar_free(void * c) {
 
 int main() {
         {
-            void * m_227 = mutex_new();
-            (void)m_227;
+            void * m_228 = mutex_new();
+            (void)m_228;
             {
-                void * c_228 = condvar_new();
-                (void)c_228;
-                mutex_lock((void *)(intptr_t)(m_227));
-                condvar_signal((void *)(intptr_t)(c_228));
+                void * c_229 = condvar_new();
+                (void)c_229;
+                mutex_lock((void *)(intptr_t)(m_228));
+                condvar_signal((void *)(intptr_t)(c_229));
                 printf("%lld\n", (long long)(INT64_C(1)));
-                mutex_unlock((void *)(intptr_t)(m_227));
-                mutex_lock((void *)(intptr_t)(m_227));
-                condvar_broadcast((void *)(intptr_t)(c_228));
+                mutex_unlock((void *)(intptr_t)(m_228));
+                mutex_lock((void *)(intptr_t)(m_228));
+                condvar_broadcast((void *)(intptr_t)(c_229));
                 printf("%lld\n", (long long)(INT64_C(2)));
-                mutex_unlock((void *)(intptr_t)(m_227));
-                condvar_free((void *)(intptr_t)(c_228));
+                mutex_unlock((void *)(intptr_t)(m_228));
+                condvar_free((void *)(intptr_t)(c_229));
             }
-            mutex_free((void *)(intptr_t)(m_227));
+            mutex_free((void *)(intptr_t)(m_228));
         }
         int64_t __t0;
         __t0 = INT64_C(0);

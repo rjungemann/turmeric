@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2317,22 +2318,22 @@ static int64_t risky() {
 
 static int64_t __effect_handler_4(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_4(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    const char * s_216 = (const char *)__effect_args[0];
-    int64_t k_217 = __k;
-    puts(s_216);
+    const char * s_217 = (const char *)__effect_args[0];
+    int64_t k_218 = __k;
+    puts(s_217);
     int64_t __t5;
-    int64_t __t6 = tur_effect_cont_resume((int64_t)(intptr_t)k_217, (int64_t)0);
+    int64_t __t6 = tur_effect_cont_resume((int64_t)(intptr_t)k_218, (int64_t)0);
     __t5 = __t6;
     return (int64_t)__t5;
 }
 
 static int64_t __effect_handler_8(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_8(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    const char * msg_214 = (const char *)__effect_args[0];
-    int64_t k_215 = __k;
-    puts(msg_214);
+    const char * msg_215 = (const char *)__effect_args[0];
+    int64_t k_216 = __k;
+    puts(msg_215);
     int64_t __t9;
-    int64_t __t10 = tur_effect_cont_resume((int64_t)(intptr_t)k_215, (int64_t)INT64_C(0));
+    int64_t __t10 = tur_effect_cont_resume((int64_t)(intptr_t)k_216, (int64_t)INT64_C(0));
     __t9 = __t10;
     return (int64_t)__t9;
 }

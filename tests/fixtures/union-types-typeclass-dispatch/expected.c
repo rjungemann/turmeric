@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2334,12 +2335,12 @@ static int64_t describe(tur_tagged_t x) {
         {
             tur_tagged_t __t1 = x;
             if (TUR_GETTAG(__t1) == 0) {
-                int64_t __udisp_0_219 = (int64_t)(intptr_t)TUR_UNTAG(__t1);
-                __t0 = __inst_Show_show_int(__udisp_0_219);
+                int64_t __udisp_0_220 = (int64_t)(intptr_t)TUR_UNTAG(__t1);
+                __t0 = __inst_Show_show_int(__udisp_0_220);
             }
             else if (TUR_GETTAG(__t1) == 1) {
-                bool __udisp_0_220 = (bool)(intptr_t)TUR_UNTAG(__t1);
-                __t0 = __inst_Show_show_bool(__udisp_0_220);
+                bool __udisp_0_221 = (bool)(intptr_t)TUR_UNTAG(__t1);
+                __t0 = __inst_Show_show_bool(__udisp_0_221);
             }
         }
         puts(__t0);

@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2013,7 +2014,7 @@ extern void tur_hamt_transient_set(void *, int64_t, void *, void *);
 extern void tur_hamt_transient_del(void *, int64_t, void *);
 extern void * tur_hamt_persistent(void *);
 
-static int64_t __fn_215(void *);
+static int64_t __fn_216(void *);
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
 static void * array_slice(void *, int64_t, int64_t);
@@ -2070,10 +2071,10 @@ static void __defer_6(void *__env) {
 }
 
 
-struct __env_217 { int64_t __fn; RcControlBlock * x; };
-static int64_t __fn_215(void * __env_p_218) {
-        struct __env_217 *__env___env_217 = (struct __env_217 *)__env_p_218;
-        int64_t __t0 = rc_strong_count(__env___env_217->x);
+struct __env_218 { int64_t __fn; RcControlBlock * x; };
+static int64_t __fn_216(void * __env_p_219) {
+        struct __env_218 *__env___env_218 = (struct __env_218 *)__env_p_219;
+        int64_t __t0 = rc_strong_count(__env___env_218->x);
         return __t0;
 }
 
@@ -2327,22 +2328,22 @@ static int64_t rc_auto_drop_closure_capture() {
             *__t2 = INT64_C(7);
             RcControlBlock *__t3 = rc_cb_alloc(0, 3, NULL);
             __t3->value = __t2;
-            RcControlBlock * x_214 = __t3;
-            (void)x_214;
+            RcControlBlock * x_215 = __t3;
+            (void)x_215;
             tur_frame __frame_4;
             tur_frame_init(&__frame_4, NULL);
-            struct __defer_env_5 __t7 = {.x = x_214};
+            struct __defer_env_5 __t7 = {.x = x_215};
             tur_frame_push_defer(&__frame_4, __defer_6, &__t7);
             int64_t __t8;
             int64_t __t9;
             {
-                struct __env_217 *__t10 = (struct __env_217 *)malloc(sizeof(struct __env_217));
-                __t10->__fn = (int64_t)(intptr_t)__fn_215;
-                __t10->x = x_214;
+                struct __env_218 *__t10 = (struct __env_218 *)malloc(sizeof(struct __env_218));
+                __t10->__fn = (int64_t)(intptr_t)__fn_216;
+                __t10->x = x_215;
                 void *__t11 = __t10;
-                void * f_220 = __t11;
-                (void)f_220;
-                __t9 = __fn_215(f_220);
+                void * f_221 = __t11;
+                (void)f_221;
+                __t9 = __fn_216(f_221);
             }
             __t8 = __t9;
             tur_frame_fire_lifo(&__frame_4);

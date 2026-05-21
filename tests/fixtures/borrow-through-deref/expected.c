@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2305,30 +2306,30 @@ static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
 int main() {
         int64_t __t0;
         {
-            int64_t x_213 = INT64_C(10);
-            (void)x_213;
+            int64_t x_214 = INT64_C(10);
+            (void)x_214;
             {
-                const void * r1_214 = &x_213;
-                (void)r1_214;
+                const void * r1_215 = &x_214;
+                (void)r1_215;
                 {
-                    int64_t __t1 = *((int64_t *)r1_214);
-                    const void * r2_215 = &__t1;
-                    (void)r2_215;
-                    int64_t __t2 = *((int64_t *)r2_215);
+                    int64_t __t1 = *((int64_t *)r1_215);
+                    const void * r2_216 = &__t1;
+                    (void)r2_216;
+                    int64_t __t2 = *((int64_t *)r2_216);
                     printf("%lld\n", (long long)(__t2));
                 }
             }
             {
-                int64_t y_216 = INT64_C(20);
-                (void)y_216;
+                int64_t y_217 = INT64_C(20);
+                (void)y_217;
                 {
-                    void * rm_217 = &y_216;
-                    (void)rm_217;
+                    void * rm_218 = &y_217;
+                    (void)rm_218;
                     {
-                        int64_t __t3 = *((int64_t *)rm_217);
-                        const void * r3_218 = &__t3;
-                        (void)r3_218;
-                        int64_t __t4 = *((int64_t *)r3_218);
+                        int64_t __t3 = *((int64_t *)rm_218);
+                        const void * r3_219 = &__t3;
+                        (void)r3_219;
+                        int64_t __t4 = *((int64_t *)r3_219);
                         printf("%lld\n", (long long)(__t4));
                     }
                 }

@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2538,38 +2539,38 @@ static void free_state(void * state) {
 int main() {
         int64_t __t0;
         {
-            void * d0_242 = bwsd_new(INT64_C(16));
-            (void)d0_242;
+            void * d0_243 = bwsd_new(INT64_C(16));
+            (void)d0_243;
             int64_t __t1;
             {
-                void * d1_243 = bwsd_new(INT64_C(16));
-                (void)d1_243;
-                bwsd_push((void *)(intptr_t)(d0_242), (void *)(intptr_t)(d0_242));
-                bwsd_push((void *)(intptr_t)(d0_242), (void *)(intptr_t)(d0_242));
-                bwsd_push((void *)(intptr_t)(d0_242), (void *)(intptr_t)(d0_242));
-                bwsd_push((void *)(intptr_t)(d0_242), (void *)(intptr_t)(d0_242));
-                bwsd_push((void *)(intptr_t)(d0_242), (void *)(intptr_t)(d0_242));
-                bwsd_push((void *)(intptr_t)(d0_242), (void *)(intptr_t)(d0_242));
-                bwsd_push((void *)(intptr_t)(d0_242), (void *)(intptr_t)(d0_242));
-                bwsd_push((void *)(intptr_t)(d0_242), (void *)(intptr_t)(d0_242));
+                void * d1_244 = bwsd_new(INT64_C(16));
+                (void)d1_244;
+                bwsd_push((void *)(intptr_t)(d0_243), (void *)(intptr_t)(d0_243));
+                bwsd_push((void *)(intptr_t)(d0_243), (void *)(intptr_t)(d0_243));
+                bwsd_push((void *)(intptr_t)(d0_243), (void *)(intptr_t)(d0_243));
+                bwsd_push((void *)(intptr_t)(d0_243), (void *)(intptr_t)(d0_243));
+                bwsd_push((void *)(intptr_t)(d0_243), (void *)(intptr_t)(d0_243));
+                bwsd_push((void *)(intptr_t)(d0_243), (void *)(intptr_t)(d0_243));
+                bwsd_push((void *)(intptr_t)(d0_243), (void *)(intptr_t)(d0_243));
+                bwsd_push((void *)(intptr_t)(d0_243), (void *)(intptr_t)(d0_243));
                 int64_t __t2;
                 int64_t __t3;
                 {
-                    void * state_244 = make_state((void *)(intptr_t)(d0_242), (void *)(intptr_t)(d1_243), INT64_C(8));
-                    (void)state_244;
+                    void * state_245 = make_state((void *)(intptr_t)(d0_243), (void *)(intptr_t)(d1_244), INT64_C(8));
+                    (void)state_245;
                     int64_t __t4;
                     {
-                        void * handles_245 = launch_workers((void *)(intptr_t)(bal_worker));
-                        (void)handles_245;
+                        void * handles_246 = launch_workers((void *)(intptr_t)(bal_worker));
+                        (void)handles_246;
                         int64_t __t5;
                         {
-                            int64_t count_246 = wait_done((void *)(intptr_t)(state_244));
-                            (void)count_246;
-                            join_workers((void *)(intptr_t)(handles_245));
-                            print_count(count_246);
-                            free_state((void *)(intptr_t)(state_244));
-                            bwsd_free((void *)(intptr_t)(d0_242));
-                            bwsd_free((void *)(intptr_t)(d1_243));
+                            int64_t count_247 = wait_done((void *)(intptr_t)(state_245));
+                            (void)count_247;
+                            join_workers((void *)(intptr_t)(handles_246));
+                            print_count(count_247);
+                            free_state((void *)(intptr_t)(state_245));
+                            bwsd_free((void *)(intptr_t)(d0_243));
+                            bwsd_free((void *)(intptr_t)(d1_244));
                             int64_t __t6;
                             __t6 = INT64_C(0);
                             __t5 = __t6;

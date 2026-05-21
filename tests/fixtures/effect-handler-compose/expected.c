@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2304,19 +2305,19 @@ static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
 
 static int64_t __effect_handler_2(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_2(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    const char * msg_214 = (const char *)__effect_args[0];
-    int64_t k_215 = __k;
-    puts(msg_214);
+    const char * msg_215 = (const char *)__effect_args[0];
+    int64_t k_216 = __k;
+    puts(msg_215);
     int64_t __t3;
-    int64_t __t4 = tur_effect_cont_resume((int64_t)(intptr_t)k_215, (int64_t)0);
+    int64_t __t4 = tur_effect_cont_resume((int64_t)(intptr_t)k_216, (int64_t)0);
     __t3 = __t4;
     return (int64_t)__t3;
 }
 
 static int64_t __effect_handler_6(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_6(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t k_213 = __k;
-    int64_t __t7 = tur_effect_cont_resume((int64_t)(intptr_t)k_213, (int64_t)INT64_C(41));
+    int64_t k_214 = __k;
+    int64_t __t7 = tur_effect_cont_resume((int64_t)(intptr_t)k_214, (int64_t)INT64_C(41));
     return (int64_t)__t7;
 }
 
@@ -2433,9 +2434,9 @@ int main() {
             __fiber_1->effect_handler_chain = &__eff_frame_1;
             int64_t __t12 = (int64_t)__dispatch_1(&__cap_1, (int64_t)(intptr_t)__fiber_1, 0);
             if (__fiber_1->done) { free(__fiber_1->stack); free(__fiber_1); }
-            int64_t result_216 = __t12;
-            (void)result_216;
-            printf("%lld\n", (long long)(result_216));
+            int64_t result_217 = __t12;
+            (void)result_217;
+            printf("%lld\n", (long long)(result_217));
             int64_t __t13;
             __t13 = INT64_C(0);
             __t0 = __t13;

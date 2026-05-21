@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2318,9 +2319,9 @@ static int64_t safe_divide(int64_t n, int64_t d) {
 
 static int64_t __effect_handler_4(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_4(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    const char * msg_216 = (const char *)__effect_args[0];
-    int64_t k_217 = __k;
-    tur_panic(msg_216);
+    const char * msg_217 = (const char *)__effect_args[0];
+    int64_t k_218 = __k;
+    tur_panic(msg_217);
     return 0; /* unreachable */
 }
 
@@ -2378,9 +2379,9 @@ int main() {
             __fiber_3->effect_handler_chain = &__eff_frame_3;
             int64_t __t5 = (int64_t)__dispatch_3(&__cap_3, (int64_t)(intptr_t)__fiber_3, 0);
             if (__fiber_3->done) { free(__fiber_3->stack); free(__fiber_3); }
-            int64_t r_218 = __t5;
-            (void)r_218;
-            printf("%lld\n", (long long)(r_218));
+            int64_t r_219 = __t5;
+            (void)r_219;
+            printf("%lld\n", (long long)(r_219));
         }
         int64_t __t6;
         __t6 = INT64_C(0);

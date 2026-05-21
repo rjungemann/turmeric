@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2350,12 +2351,12 @@ static int64_t double_it(int64_t x) {
 
 int main() {
         {
-            int64_t o_225 = __opt_some(INT64_C(7));
-            (void)o_225;
+            int64_t o_226 = __opt_some(INT64_C(7));
+            (void)o_226;
             {
-                int64_t o2_226 = ((int64_t (*)(int64_t, int64_t))(intptr_t)(dict_Functor_option_singleton.fmap))(o_225, (int64_t)(intptr_t)(double_it));
-                (void)o2_226;
-                printf("%lld\n", (long long)(__opt_unwrap(o2_226)));
+                int64_t o2_227 = ((int64_t (*)(int64_t, int64_t))(intptr_t)(dict_Functor_option_singleton.fmap))(o_226, (int64_t)(intptr_t)(double_it));
+                (void)o2_227;
+                printf("%lld\n", (long long)(__opt_unwrap(o2_227)));
             }
         }
         int64_t __t0;

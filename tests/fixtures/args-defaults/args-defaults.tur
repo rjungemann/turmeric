@@ -1,5 +1,7 @@
 ;; args-defaults -- test that missing options with defaults are injected.
 
+(load "stdlib/args.tur")
+
 (defn cstr->int [s :cstr] :int
   ```c
   return (int64_t)(intptr_t)s;

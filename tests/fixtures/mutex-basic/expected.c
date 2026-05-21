@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2338,24 +2339,24 @@ static void mutex_free(void * m) {
 
 int main() {
         {
-            void * m_222 = mutex_new();
-            (void)m_222;
-            mutex_lock((void *)(intptr_t)(m_222));
+            void * m_223 = mutex_new();
+            (void)m_223;
+            mutex_lock((void *)(intptr_t)(m_223));
             printf("%lld\n", (long long)(INT64_C(1)));
-            mutex_unlock((void *)(intptr_t)(m_222));
+            mutex_unlock((void *)(intptr_t)(m_223));
             printf("%lld\n", (long long)(INT64_C(2)));
             {
-                bool got_223 = mutex_try_lock((void *)(intptr_t)(m_222));
-                (void)got_223;
-                puts((got_223) ? "true" : "false");
+                bool got_224 = mutex_try_lock((void *)(intptr_t)(m_223));
+                (void)got_224;
+                puts((got_224) ? "true" : "false");
                 {
-                    bool got2_224 = mutex_try_lock((void *)(intptr_t)(m_222));
-                    (void)got2_224;
-                    puts((got2_224) ? "true" : "false");
+                    bool got2_225 = mutex_try_lock((void *)(intptr_t)(m_223));
+                    (void)got2_225;
+                    puts((got2_225) ? "true" : "false");
                 }
-                mutex_unlock((void *)(intptr_t)(m_222));
+                mutex_unlock((void *)(intptr_t)(m_223));
             }
-            mutex_free((void *)(intptr_t)(m_222));
+            mutex_free((void *)(intptr_t)(m_223));
         }
         int64_t __t0;
         __t0 = INT64_C(0);

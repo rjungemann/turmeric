@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2014,7 +2015,7 @@ extern void tur_hamt_transient_del(void *, int64_t, void *);
 extern void * tur_hamt_persistent(void *);
 
 static int64_t __inst_Functor_fmap_option(int64_t, int64_t);
-static int64_t __fn_235(int64_t);
+static int64_t __fn_236(int64_t);
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
 static void * array_slice(void *, int64_t, int64_t);
@@ -2080,7 +2081,7 @@ static dict_Functor_option dict_Functor_option_singleton = {
     .fmap = __inst_Functor_fmap_option,
 };
 
-static int64_t __fn_235(int64_t x) {
+static int64_t __fn_236(int64_t x) {
         return times2(inc(x));
 }
 
@@ -2374,27 +2375,27 @@ static int64_t inc(int64_t x) {
 
 int main() {
         {
-            int64_t opt_231 = __opt_some(INT64_C(42));
-            (void)opt_231;
+            int64_t opt_232 = __opt_some(INT64_C(42));
+            (void)opt_232;
             {
-                int64_t result_232 = __fmap_option(opt_231, (int64_t)(intptr_t)(id));
-                (void)result_232;
-                puts((__opt_some_(result_232)) ? "true" : "false");
-                printf("%lld\n", (long long)(__opt_unwrap(result_232)));
+                int64_t result_233 = __fmap_option(opt_232, (int64_t)(intptr_t)(id));
+                (void)result_233;
+                puts((__opt_some_(result_233)) ? "true" : "false");
+                printf("%lld\n", (long long)(__opt_unwrap(result_233)));
             }
         }
         {
-            int64_t opt_233 = __opt_some(INT64_C(5));
-            (void)opt_233;
+            int64_t opt_234 = __opt_some(INT64_C(5));
+            (void)opt_234;
             {
-                int64_t lhs_237 = __fmap_option(opt_233, (int64_t)(intptr_t)(__fn_235));
-                (void)lhs_237;
+                int64_t lhs_238 = __fmap_option(opt_234, (int64_t)(intptr_t)(__fn_236));
+                (void)lhs_238;
                 {
-                    int64_t rhs_238 = __fmap_option(__fmap_option(opt_233, (int64_t)(intptr_t)(inc)), (int64_t)(intptr_t)(times2));
-                    (void)rhs_238;
-                    printf("%lld\n", (long long)(__opt_unwrap(lhs_237)));
-                    printf("%lld\n", (long long)(__opt_unwrap(rhs_238)));
-                    puts((((__opt_unwrap(lhs_237)) == (__opt_unwrap(rhs_238)))) ? "true" : "false");
+                    int64_t rhs_239 = __fmap_option(__fmap_option(opt_234, (int64_t)(intptr_t)(inc)), (int64_t)(intptr_t)(times2));
+                    (void)rhs_239;
+                    printf("%lld\n", (long long)(__opt_unwrap(lhs_238)));
+                    printf("%lld\n", (long long)(__opt_unwrap(rhs_239)));
+                    puts((((__opt_unwrap(lhs_238)) == (__opt_unwrap(rhs_239)))) ? "true" : "false");
                 }
             }
         }

@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2334,22 +2335,22 @@ static int64_t result_expect(void * r, const char * msg) {
 
 int main() {
         {
-            int64_t a_223 = option_expect((void *)(intptr_t)(some(INT64_C(7))), "expected some(7)");
-            (void)a_223;
-            printf("%lld\n", (long long)(a_223));
+            int64_t a_224 = option_expect((void *)(intptr_t)(some(INT64_C(7))), "expected some(7)");
+            (void)a_224;
+            printf("%lld\n", (long long)(a_224));
         }
         {
-            int64_t b_224 = result_expect((void *)(intptr_t)(ok(INT64_C(13))), "expected ok(13)");
-            (void)b_224;
-            printf("%lld\n", (long long)(b_224));
+            int64_t b_225 = result_expect((void *)(intptr_t)(ok(INT64_C(13))), "expected ok(13)");
+            (void)b_225;
+            printf("%lld\n", (long long)(b_225));
         }
         {
-            int64_t x_225 = option_expect((void *)(intptr_t)(some(INT64_C(100))), "expected some");
-            (void)x_225;
+            int64_t x_226 = option_expect((void *)(intptr_t)(some(INT64_C(100))), "expected some");
+            (void)x_226;
             {
-                int64_t y_226 = result_expect((void *)(intptr_t)(ok(x_225)), "expected ok");
-                (void)y_226;
-                printf("%lld\n", (long long)(y_226));
+                int64_t y_227 = result_expect((void *)(intptr_t)(ok(x_226)), "expected ok");
+                (void)y_227;
+                printf("%lld\n", (long long)(y_227));
             }
         }
         int64_t __t0;

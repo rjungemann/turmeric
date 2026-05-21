@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2318,18 +2319,18 @@ int main() {
             *__t1 = INT64_C(99);
             RcControlBlock *__t2 = rc_cb_alloc(0, 3, NULL);
             __t2->value = __t1;
-            RcControlBlock * rc_213 = __t2;
-            (void)rc_213;
+            RcControlBlock * rc_214 = __t2;
+            (void)rc_214;
             tur_frame __frame_3;
             tur_frame_init(&__frame_3, NULL);
             {
-                RcControlBlock *__t4 = rc_213; rc_weak_increment(rc_213);
-                RcControlBlock * w_214 = __t4;
-                (void)w_214;
+                RcControlBlock *__t4 = rc_214; rc_weak_increment(rc_214);
+                RcControlBlock * w_215 = __t4;
+                (void)w_215;
                 bool __t5 = true; // weak? not fully implemented in Phase 9
                 puts((__t5) ? "true" : "false");
             }
-            struct __defer_env_6 __t8 = {.rc = rc_213};
+            struct __defer_env_6 __t8 = {.rc = rc_214};
             tur_frame_push_defer(&__frame_3, __defer_7, &__t8);
             int64_t __t9;
             __t9 = INT64_C(0);

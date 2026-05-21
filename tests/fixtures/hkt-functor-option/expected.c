@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2365,22 +2366,22 @@ static int64_t twice(int64_t x) {
 
 int main() {
         {
-            int64_t opt1_228 = __opt_some(INT64_C(21));
-            (void)opt1_228;
+            int64_t opt1_229 = __opt_some(INT64_C(21));
+            (void)opt1_229;
             {
-                int64_t mapped_229 = __fmap_option(opt1_228, (int64_t)(intptr_t)(twice));
-                (void)mapped_229;
-                puts((__opt_some_(mapped_229)) ? "true" : "false");
-                printf("%lld\n", (long long)(__opt_unwrap(mapped_229)));
+                int64_t mapped_230 = __fmap_option(opt1_229, (int64_t)(intptr_t)(twice));
+                (void)mapped_230;
+                puts((__opt_some_(mapped_230)) ? "true" : "false");
+                printf("%lld\n", (long long)(__opt_unwrap(mapped_230)));
             }
         }
         {
-            int64_t opt2_230 = __opt_none();
-            (void)opt2_230;
+            int64_t opt2_231 = __opt_none();
+            (void)opt2_231;
             {
-                int64_t mapped2_231 = __fmap_option(opt2_230, (int64_t)(intptr_t)(twice));
-                (void)mapped2_231;
-                puts((__opt_some_(mapped2_231)) ? "true" : "false");
+                int64_t mapped2_232 = __fmap_option(opt2_231, (int64_t)(intptr_t)(twice));
+                (void)mapped2_232;
+                puts((__opt_some_(mapped2_232)) ? "true" : "false");
             }
         }
         int64_t __t0;

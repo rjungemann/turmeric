@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2013,7 +2014,7 @@ extern void tur_hamt_transient_set(void *, int64_t, void *, void *);
 extern void tur_hamt_transient_del(void *, int64_t, void *);
 extern void * tur_hamt_persistent(void *);
 
-static int64_t __fn_217(void *);
+static int64_t __fn_218(void *);
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
 static void * array_slice(void *, int64_t, int64_t);
@@ -2068,10 +2069,10 @@ static void __defer_4(void *__env) {
 }
 
 
-struct __env_219 { int64_t __fn; int64_t v; int64_t a; int64_t b; };
-static int64_t __fn_217(void * __env_p_220) {
-        struct __env_219 *__env___env_219 = (struct __env_219 *)__env_p_220;
-        return ((__env___env_219->v) + (((__env___env_219->a) + (__env___env_219->b))));
+struct __env_220 { int64_t __fn; int64_t v; int64_t a; int64_t b; };
+static int64_t __fn_218(void * __env_p_221) {
+        struct __env_220 *__env___env_220 = (struct __env_220 *)__env_p_221;
+        return ((__env___env_220->v) + (((__env___env_220->a) + (__env___env_220->b))));
 }
 
 static void * array_get(void * arr, int64_t idx) {
@@ -2322,37 +2323,37 @@ int main() {
         {
             void * __t1 = malloc(sizeof(int64_t));
             *((int64_t *)__t1) = INT64_C(5);
-            void * r_213 = __t1;
-            (void)r_213;
+            void * r_214 = __t1;
+            (void)r_214;
             tur_frame __frame_2;
             tur_frame_init(&__frame_2, NULL);
-            struct __defer_env_3 __t5 = {.r = r_213};
+            struct __defer_env_3 __t5 = {.r = r_214};
             tur_frame_push_defer(&__frame_2, __defer_4, &__t5);
             int64_t __t6;
             int64_t __t7;
             {
-                int64_t a_214 = INT64_C(10);
-                (void)a_214;
+                int64_t a_215 = INT64_C(10);
+                (void)a_215;
                 int64_t __t8;
                 {
-                    int64_t b_215 = INT64_C(20);
-                    (void)b_215;
+                    int64_t b_216 = INT64_C(20);
+                    (void)b_216;
                     int64_t __t9;
                     {
-                        int64_t __t10 = *((int64_t *)r_213);
-                        int64_t v_216 = __t10;
-                        (void)v_216;
+                        int64_t __t10 = *((int64_t *)r_214);
+                        int64_t v_217 = __t10;
+                        (void)v_217;
                         int64_t __t11;
                         {
-                            struct __env_219 *__t12 = (struct __env_219 *)malloc(sizeof(struct __env_219));
-                            __t12->__fn = (int64_t)(intptr_t)__fn_217;
-                            __t12->v = v_216;
-                            __t12->a = a_214;
-                            __t12->b = b_215;
+                            struct __env_220 *__t12 = (struct __env_220 *)malloc(sizeof(struct __env_220));
+                            __t12->__fn = (int64_t)(intptr_t)__fn_218;
+                            __t12->v = v_217;
+                            __t12->a = a_215;
+                            __t12->b = b_216;
                             void *__t13 = __t12;
-                            void * f_222 = __t13;
-                            (void)f_222;
-                            printf("%lld\n", (long long)(__fn_217(f_222)));
+                            void * f_223 = __t13;
+                            (void)f_223;
+                            printf("%lld\n", (long long)(__fn_218(f_223)));
                             int64_t __t14;
                             __t14 = INT64_C(0);
                             __t11 = __t14;

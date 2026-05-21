@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2309,15 +2310,15 @@ int main() {
             *__t1 = INT64_C(77);
             RcControlBlock *__t2 = rc_cb_alloc(0, 3, NULL);
             __t2->value = __t1;
-            RcControlBlock * rc_213 = __t2;
-            (void)rc_213;
+            RcControlBlock * rc_214 = __t2;
+            (void)rc_214;
             int64_t __t3;
             int64_t __t4;
             {
-                RcControlBlock *__t5 = rc_213; rc_weak_increment(rc_213);
-                RcControlBlock * w_214 = __t5;
-                (void)w_214;
-                void *__t6 = tur_ref_from_rc(rc_213);
+                RcControlBlock *__t5 = rc_214; rc_weak_increment(rc_214);
+                RcControlBlock * w_215 = __t5;
+                (void)w_215;
+                void *__t6 = tur_ref_from_rc(rc_214);
                 (void)(__t6);
                 int64_t __t7;
                 __t7 = INT64_C(0);

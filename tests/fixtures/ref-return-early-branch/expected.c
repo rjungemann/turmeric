@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2316,20 +2317,20 @@ static int64_t keep_or_return(bool flag) {
         {
             void * __t1 = malloc(sizeof(int64_t));
             *((int64_t *)__t1) = INT64_C(7);
-            void * r_215 = __t1;
-            (void)r_215;
+            void * r_216 = __t1;
+            (void)r_216;
             tur_frame __frame_2;
             tur_frame_init(&__frame_2, NULL);
             int64_t __t3;
             if (flag) {
                 tur_frame_fire_chain(&__frame_2);
-                                int64_t __t4 = *((int64_t *)r_215);
+                                int64_t __t4 = *((int64_t *)r_216);
 return __t4;
             } else {
             }
-            int64_t __t5 = *((int64_t *)r_215);
+            int64_t __t5 = *((int64_t *)r_216);
             __t3 = __t5;
-            struct __defer_env_6 __t8 = {.r = r_215};
+            struct __defer_env_6 __t8 = {.r = r_216};
             tur_frame_push_defer(&__frame_2, __defer_7, &__t8);
             tur_frame_fire_lifo(&__frame_2);
             __t0 = __t3;

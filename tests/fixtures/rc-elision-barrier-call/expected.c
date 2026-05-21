@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2317,19 +2318,19 @@ int main() {
             *__t0 = INT64_C(123);
             RcControlBlock *__t1 = rc_cb_alloc(0, 3, NULL);
             __t1->value = __t0;
-            RcControlBlock * orig_213 = __t1;
-            (void)orig_213;
+            RcControlBlock * orig_214 = __t1;
+            (void)orig_214;
             tur_frame __frame_2;
             tur_frame_init(&__frame_2, NULL);
             {
-                rc_strong_increment(orig_213);
-                RcControlBlock * cloned_214 = orig_213;
-                (void)cloned_214;
+                rc_strong_increment(orig_214);
+                RcControlBlock * cloned_215 = orig_214;
+                (void)cloned_215;
                 puts("barrier call before drop");
-                rc_strong_decrement(cloned_214);
+                rc_strong_decrement(cloned_215);
                 rc_free_queue_drain();
             }
-            struct __defer_env_3 __t5 = {.orig = orig_213};
+            struct __defer_env_3 __t5 = {.orig = orig_214};
             tur_frame_push_defer(&__frame_2, __defer_4, &__t5);
             tur_frame_fire_lifo(&__frame_2);
         }

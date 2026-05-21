@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2013,7 +2014,7 @@ extern void tur_hamt_transient_set(void *, int64_t, void *, void *);
 extern void tur_hamt_transient_del(void *, int64_t, void *);
 extern void * tur_hamt_persistent(void *);
 
-static int64_t __fn_214(int64_t);
+static int64_t __fn_215(int64_t);
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
 static void * array_slice(void *, int64_t, int64_t);
@@ -2060,7 +2061,7 @@ static int64_t count(void *);
 static void * merge(void *, void *);
 static bool map_eq_(int64_t, int64_t, int64_t);
 
-static int64_t __fn_214(int64_t x) {
+static int64_t __fn_215(int64_t x) {
         return ((x) + (INT64_C(5)));
 }
 
@@ -2310,7 +2311,7 @@ static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
 int main() {
         int64_t __t0;
         {
-            int64_t (*add5)(int64_t) = __fn_214;
+            int64_t (*add5)(int64_t) = __fn_215;
             (void)add5;
             printf("%lld\n", (long long)(((int64_t (*)(int64_t))(intptr_t)add5)(INT64_C(10))));
             int64_t __t1;

@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2067,8 +2068,8 @@ static void __defer_1(void *__env) {
 
 static int64_t __effect_handler_5(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_5(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t k_213 = __k;
-    int64_t __t6 = tur_effect_cont_resume((int64_t)(intptr_t)k_213, (int64_t)INT64_C(42));
+    int64_t k_214 = __k;
+    int64_t __t6 = tur_effect_cont_resume((int64_t)(intptr_t)k_214, (int64_t)INT64_C(42));
     return (int64_t)__t6;
 }
 
@@ -2361,7 +2362,16 @@ static int64_t deferred_ask() {
 }
 
 
-int main(void) {
+int main(int argc, char **argv) {
+    /* *args*: build cons list from argv[1..argc-1] */
+    g_tur_args = 0;
+    for (int _ai = argc - 1; _ai >= 1; _ai--) {
+        typedef struct { int64_t value; int64_t next; } __tur_args_cell;
+        __tur_args_cell *_c = (__tur_args_cell *)malloc(sizeof(__tur_args_cell));
+        _c->value = (int64_t)(intptr_t)argv[_ai];
+        _c->next = g_tur_args;
+        g_tur_args = (int64_t)(intptr_t)_c;
+    }
     TurEffectCaptureCtx __cap_4;
     __cap_4.has_pending_effect = false;
     __cap_4.eff_name = NULL;

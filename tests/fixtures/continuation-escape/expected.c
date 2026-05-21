@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2013,9 +2014,9 @@ extern void tur_hamt_transient_set(void *, int64_t, void *, void *);
 extern void tur_hamt_transient_del(void *, int64_t, void *);
 extern void * tur_hamt_persistent(void *);
 
-static int64_t __fn_217(int64_t);
-static int64_t __fn_220(int64_t);
-static int64_t __fn_224(int64_t);
+static int64_t __fn_218(int64_t);
+static int64_t __fn_221(int64_t);
+static int64_t __fn_225(int64_t);
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
 static void * array_slice(void *, int64_t, int64_t);
@@ -2064,21 +2065,21 @@ static bool map_eq_(int64_t, int64_t, int64_t);
 static int64_t test_escape_nested();
 static int64_t test_escape_let();
 
-static int64_t __fn_217(int64_t exit2) {
+static int64_t __fn_218(int64_t exit2) {
         return INT64_C(100);
 }
 
-static int64_t __fn_220(int64_t exit1) {
+static int64_t __fn_221(int64_t exit1) {
         int64_t __t0;
         {
-            int64_t (*__esc_f)(int64_t) = __fn_217;
+            int64_t (*__esc_f)(int64_t) = __fn_218;
             (void)__esc_f;
             __t0 = ((int64_t (*)(int64_t))(intptr_t)__esc_f)(INT64_C(0));
         }
         return __t0;
 }
 
-static int64_t __fn_224(int64_t exit) {
+static int64_t __fn_225(int64_t exit) {
         return INT64_C(5);
 }
 
@@ -2328,7 +2329,7 @@ static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
 static int64_t test_escape_nested() {
         int64_t __t1;
         {
-            int64_t (*__esc_f)(int64_t) = __fn_220;
+            int64_t (*__esc_f)(int64_t) = __fn_221;
             (void)__esc_f;
             __t1 = ((int64_t (*)(int64_t))(intptr_t)__esc_f)(INT64_C(0));
         }
@@ -2340,13 +2341,13 @@ static int64_t test_escape_let() {
         {
             int64_t __t3;
             {
-                int64_t (*__esc_f)(int64_t) = __fn_224;
+                int64_t (*__esc_f)(int64_t) = __fn_225;
                 (void)__esc_f;
                 __t3 = ((int64_t (*)(int64_t))(intptr_t)__esc_f)(INT64_C(0));
             }
-            int64_t v_227 = __t3;
-            (void)v_227;
-            __t2 = ((v_227) + (INT64_C(10)));
+            int64_t v_228 = __t3;
+            (void)v_228;
+            __t2 = ((v_228) + (INT64_C(10)));
         }
         return __t2;
 }

@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2325,9 +2326,9 @@ static int64_t vec_get(void * v, int64_t i) {
 int main() {
         int64_t __t0;
         {
-            void * v_217 = vec_new();
-            (void)v_217;
-            printf("%lld\n", (long long)(vec_get((void *)(intptr_t)(v_217), INT64_C(0))));
+            void * v_218 = vec_new();
+            (void)v_218;
+            printf("%lld\n", (long long)(vec_get((void *)(intptr_t)(v_218), INT64_C(0))));
             int64_t __t1;
             __t1 = INT64_C(0);
             __t0 = __t1;

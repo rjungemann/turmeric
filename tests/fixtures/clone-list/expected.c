@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2347,12 +2348,12 @@ static int64_t heap_cons_value(int64_t p) {
 
 int main() {
         {
-            Cons cell_220 = (Cons){.value = INT64_C(42), .next = INT64_C(0)};
-            (void)cell_220;
+            Cons cell_221 = (Cons){.value = INT64_C(42), .next = INT64_C(0)};
+            (void)cell_221;
             {
-                int64_t cell2_221 = ((int64_t (*)(Cons))(intptr_t)(dict_Clone_Cons_singleton.clone))(cell_220);
-                (void)cell2_221;
-                printf("%lld\n", (long long)(heap_cons_value(cell2_221)));
+                int64_t cell2_222 = ((int64_t (*)(Cons))(intptr_t)(dict_Clone_Cons_singleton.clone))(cell_221);
+                (void)cell2_222;
+                printf("%lld\n", (long long)(heap_cons_value(cell2_222)));
             }
         }
         int64_t __t0;

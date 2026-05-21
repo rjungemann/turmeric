@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2329,8 +2330,8 @@ static void fiber_yield_fn(int64_t v) {
 
 static int64_t __effect_handler_1(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_1(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t k_224 = __k;
-    int64_t __t2 = tur_effect_cont_resume((int64_t)(intptr_t)k_224, (int64_t)INT64_C(10));
+    int64_t k_225 = __k;
+    int64_t __t2 = tur_effect_cont_resume((int64_t)(intptr_t)k_225, (int64_t)INT64_C(10));
     return (int64_t)__t2;
 }
 
@@ -2389,16 +2390,16 @@ static void fiber_body() {
             __fiber_0->effect_handler_chain = &__eff_frame_0;
             int64_t __t4 = (int64_t)__dispatch_0(&__cap_0, (int64_t)(intptr_t)__fiber_0, 0);
             if (__fiber_0->done) { free(__fiber_0->stack); free(__fiber_0); }
-            int64_t result_225 = __t4;
-            (void)result_225;
-            fiber_yield_fn(result_225);
+            int64_t result_226 = __t4;
+            (void)result_226;
+            fiber_yield_fn(result_226);
         }
 }
 
 static int64_t __effect_handler_10(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
 static int64_t __effect_handler_10(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t k_228 = __k;
-    int64_t __t11 = tur_effect_cont_resume((int64_t)(intptr_t)k_228, (int64_t)INT64_C(99));
+    int64_t k_229 = __k;
+    int64_t __t11 = tur_effect_cont_resume((int64_t)(intptr_t)k_229, (int64_t)INT64_C(99));
     return (int64_t)__t11;
 }
 
@@ -2440,14 +2441,14 @@ static int64_t __dispatch_9(void *__ctx_void, int64_t __k_int, int64_t __resume_
 int main() {
         int64_t __t5;
         {
-            void * f_226 = fiber_new_fn((void *)(intptr_t)(fiber_body), INT64_C(0));
-            (void)f_226;
+            void * f_227 = fiber_new_fn((void *)(intptr_t)(fiber_body), INT64_C(0));
+            (void)f_227;
             int64_t __t6;
             {
-                int64_t fval_227 = fiber_resume_fn((void *)(intptr_t)(f_226), INT64_C(0));
-                (void)fval_227;
-                printf("%lld\n", (long long)(fval_227));
-                fiber_free_fn((void *)(intptr_t)(f_226));
+                int64_t fval_228 = fiber_resume_fn((void *)(intptr_t)(f_227), INT64_C(0));
+                (void)fval_228;
+                printf("%lld\n", (long long)(fval_228));
+                fiber_free_fn((void *)(intptr_t)(f_227));
                 int64_t __t7;
                 int64_t __t8;
                 {
@@ -2469,9 +2470,9 @@ int main() {
                     __fiber_9->effect_handler_chain = &__eff_frame_9;
                     int64_t __t13 = (int64_t)__dispatch_9(&__cap_9, (int64_t)(intptr_t)__fiber_9, 0);
                     if (__fiber_9->done) { free(__fiber_9->stack); free(__fiber_9); }
-                    int64_t mval_229 = __t13;
-                    (void)mval_229;
-                    printf("%lld\n", (long long)(mval_229));
+                    int64_t mval_230 = __t13;
+                    (void)mval_230;
+                    printf("%lld\n", (long long)(mval_230));
                     int64_t __t14;
                     __t14 = INT64_C(0);
                     __t8 = __t14;

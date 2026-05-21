@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2372,25 +2373,25 @@ static void thread_join(void * t) {
 
 int main() {
         {
-            void * a1_228 = targ_new(INT64_C(7));
-            (void)a1_228;
+            void * a1_229 = targ_new(INT64_C(7));
+            (void)a1_229;
             {
-                void * a2_229 = targ_new(INT64_C(13));
-                (void)a2_229;
+                void * a2_230 = targ_new(INT64_C(13));
+                (void)a2_230;
                 {
-                    void * t1_230 = thread_spawn((void *)(intptr_t)(a1_228));
-                    (void)t1_230;
+                    void * t1_231 = thread_spawn((void *)(intptr_t)(a1_229));
+                    (void)t1_231;
                     {
-                        void * t2_231 = thread_spawn((void *)(intptr_t)(a2_229));
-                        (void)t2_231;
-                        thread_join((void *)(intptr_t)(t1_230));
-                        thread_join((void *)(intptr_t)(t2_231));
+                        void * t2_232 = thread_spawn((void *)(intptr_t)(a2_230));
+                        (void)t2_232;
+                        thread_join((void *)(intptr_t)(t1_231));
+                        thread_join((void *)(intptr_t)(t2_232));
                     }
                 }
-                printf("%lld\n", (long long)(targ_result((void *)(intptr_t)(a1_228))));
-                printf("%lld\n", (long long)(targ_result((void *)(intptr_t)(a2_229))));
-                targ_free((void *)(intptr_t)(a1_228));
-                targ_free((void *)(intptr_t)(a2_229));
+                printf("%lld\n", (long long)(targ_result((void *)(intptr_t)(a1_229))));
+                printf("%lld\n", (long long)(targ_result((void *)(intptr_t)(a2_230))));
+                targ_free((void *)(intptr_t)(a1_229));
+                targ_free((void *)(intptr_t)(a2_230));
             }
         }
         int64_t __t0;

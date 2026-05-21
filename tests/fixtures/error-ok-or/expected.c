@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2359,25 +2360,25 @@ static const char * show_err_code(int64_t code) {
 
 int main() {
         {
-            void * opt1_225 = some(INT64_C(42));
-            (void)opt1_225;
+            void * opt1_226 = some(INT64_C(42));
+            (void)opt1_226;
             {
-                void * r1_226 = ok_or((void *)(intptr_t)(opt1_225), INT64_C(1));
-                (void)r1_226;
-                if (ok_((void *)(intptr_t)(r1_226))) {
-                    printf("%lld\n", (long long)(ok_val((void *)(intptr_t)(r1_226))));
+                void * r1_227 = ok_or((void *)(intptr_t)(opt1_226), INT64_C(1));
+                (void)r1_227;
+                if (ok_((void *)(intptr_t)(r1_227))) {
+                    printf("%lld\n", (long long)(ok_val((void *)(intptr_t)(r1_227))));
                 } else {
                     puts("unexpected err");
                 }
             }
         }
         {
-            void * opt2_227 = none();
-            (void)opt2_227;
+            void * opt2_228 = none();
+            (void)opt2_228;
             {
-                void * r2_228 = ok_or((void *)(intptr_t)(opt2_227), INT64_C(1));
-                (void)r2_228;
-                if (ok_((void *)(intptr_t)(r2_228))) {
+                void * r2_229 = ok_or((void *)(intptr_t)(opt2_228), INT64_C(1));
+                (void)r2_229;
+                if (ok_((void *)(intptr_t)(r2_229))) {
                     puts("unexpected ok");
                 } else {
                     puts(show_err_code(INT64_C(1)));
@@ -2385,12 +2386,12 @@ int main() {
             }
         }
         {
-            void * opt3_229 = none();
-            (void)opt3_229;
+            void * opt3_230 = none();
+            (void)opt3_230;
             {
-                void * r3_230 = ok_or((void *)(intptr_t)(opt3_229), INT64_C(2));
-                (void)r3_230;
-                if (ok_((void *)(intptr_t)(r3_230))) {
+                void * r3_231 = ok_or((void *)(intptr_t)(opt3_230), INT64_C(2));
+                (void)r3_231;
+                if (ok_((void *)(intptr_t)(r3_231))) {
                     puts("unexpected ok");
                 } else {
                     puts(show_err_code(INT64_C(2)));

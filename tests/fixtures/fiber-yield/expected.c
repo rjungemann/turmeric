@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2337,14 +2338,14 @@ static void fiber_free_fn(void * f) {
 int main() {
         int64_t __t0;
         {
-            void * f_224 = fiber_new_fn((void *)(intptr_t)(fiber_body), INT64_C(0));
-            (void)f_224;
-            printf("%lld\n", (long long)(fiber_resume_fn((void *)(intptr_t)(f_224), INT64_C(0))));
-            printf("%lld\n", (long long)(fiber_resume_fn((void *)(intptr_t)(f_224), INT64_C(0))));
-            printf("%lld\n", (long long)(fiber_resume_fn((void *)(intptr_t)(f_224), INT64_C(0))));
-            (void)(fiber_resume_fn((void *)(intptr_t)(f_224), INT64_C(0)));
+            void * f_225 = fiber_new_fn((void *)(intptr_t)(fiber_body), INT64_C(0));
+            (void)f_225;
+            printf("%lld\n", (long long)(fiber_resume_fn((void *)(intptr_t)(f_225), INT64_C(0))));
+            printf("%lld\n", (long long)(fiber_resume_fn((void *)(intptr_t)(f_225), INT64_C(0))));
+            printf("%lld\n", (long long)(fiber_resume_fn((void *)(intptr_t)(f_225), INT64_C(0))));
+            (void)(fiber_resume_fn((void *)(intptr_t)(f_225), INT64_C(0)));
             puts("done");
-            fiber_free_fn((void *)(intptr_t)(f_224));
+            fiber_free_fn((void *)(intptr_t)(f_225));
             int64_t __t1;
             __t1 = INT64_C(0);
             __t0 = __t1;

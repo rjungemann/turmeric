@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2332,21 +2333,21 @@ int main() {
         int64_t __t0;
         {
             void *__t1 = (void *)tur_async_fiber((int64_t(*)(void))(intptr_t)compute_42);
-            void * fut1_217 = __t1;
-            (void)fut1_217;
+            void * fut1_218 = __t1;
+            (void)fut1_218;
             void *__t2 = (void *)tur_async_fiber((int64_t(*)(void))(intptr_t)compute_99);
-            void * fut2_218 = __t2;
-            (void)fut2_218;
+            void * fut2_219 = __t2;
+            (void)fut2_219;
             {
-                int64_t __t3 = tur_await_future((TurFuture*)(intptr_t)fut1_217);
-                int64_t x_219 = __t3;
-                (void)x_219;
+                int64_t __t3 = tur_await_future((TurFuture*)(intptr_t)fut1_218);
+                int64_t x_220 = __t3;
+                (void)x_220;
                 puts("Got:42");
-                if (async_done_((void *)(intptr_t)(fut2_218))) {
+                if (async_done_((void *)(intptr_t)(fut2_219))) {
                     {
-                        int64_t __t4 = tur_await_future((TurFuture*)(intptr_t)fut2_218);
-                        int64_t y_220 = __t4;
-                        (void)y_220;
+                        int64_t __t4 = tur_await_future((TurFuture*)(intptr_t)fut2_219);
+                        int64_t y_221 = __t4;
+                        (void)y_221;
                         puts("Got:99");
                     }
                 } else {

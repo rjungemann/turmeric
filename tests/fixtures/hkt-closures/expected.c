@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -2014,8 +2015,8 @@ extern void tur_hamt_transient_del(void *, int64_t, void *);
 extern void * tur_hamt_persistent(void *);
 
 static int64_t __inst_Functor_fmap_option(int64_t, int64_t);
-static int64_t __fn_239(void *, int64_t);
-static int64_t __fn_249(void *, int64_t);
+static int64_t __fn_240(void *, int64_t);
+static int64_t __fn_250(void *, int64_t);
 static void * array_get(void *, int64_t);
 static int64_t array_set(void *, int64_t, int64_t);
 static void * array_slice(void *, int64_t, int64_t);
@@ -2081,16 +2082,16 @@ static dict_Functor_option dict_Functor_option_singleton = {
     .fmap = __inst_Functor_fmap_option,
 };
 
-struct __env_241 { int64_t __fn; int64_t n; };
-static int64_t __fn_239(void * __env_p_242, int64_t x) {
-        struct __env_241 *__env___env_241 = (struct __env_241 *)__env_p_242;
-        return ((x) + (__env___env_241->n));
+struct __env_242 { int64_t __fn; int64_t n; };
+static int64_t __fn_240(void * __env_p_243, int64_t x) {
+        struct __env_242 *__env___env_242 = (struct __env_242 *)__env_p_243;
+        return ((x) + (__env___env_242->n));
 }
 
-struct __env_251 { int64_t __fn; int64_t a; int64_t b; };
-static int64_t __fn_249(void * __env_p_252, int64_t x) {
-        struct __env_251 *__env___env_251 = (struct __env_251 *)__env_p_252;
-        return ((x) + (((__env___env_251->a) + (__env___env_251->b))));
+struct __env_252 { int64_t __fn; int64_t a; int64_t b; };
+static int64_t __fn_250(void * __env_p_253, int64_t x) {
+        struct __env_252 *__env___env_252 = (struct __env_252 *)__env_p_253;
+        return ((x) + (((__env___env_252->a) + (__env___env_252->b))));
 }
 
 static void * array_get(void * arr, int64_t idx) {
@@ -2392,62 +2393,62 @@ static int64_t __square(int64_t x) {
 
 int main() {
         {
-            int64_t opt_232 = __opt_some(INT64_C(10));
-            (void)opt_232;
+            int64_t opt_233 = __opt_some(INT64_C(10));
+            (void)opt_233;
             {
-                int64_t result_233 = __fmap_option(opt_232, (int64_t)(intptr_t)(__add5));
-                (void)result_233;
-                puts((__opt_some_(result_233)) ? "true" : "false");
-                printf("%lld\n", (long long)(__opt_unwrap(result_233)));
+                int64_t result_234 = __fmap_option(opt_233, (int64_t)(intptr_t)(__add5));
+                (void)result_234;
+                puts((__opt_some_(result_234)) ? "true" : "false");
+                printf("%lld\n", (long long)(__opt_unwrap(result_234)));
             }
         }
         {
-            int64_t opt2_234 = __opt_some(INT64_C(7));
-            (void)opt2_234;
+            int64_t opt2_235 = __opt_some(INT64_C(7));
+            (void)opt2_235;
             {
-                int64_t result2_235 = __fmap_option(opt2_234, (int64_t)(intptr_t)(__square));
-                (void)result2_235;
-                puts((__opt_some_(result2_235)) ? "true" : "false");
-                printf("%lld\n", (long long)(__opt_unwrap(result2_235)));
+                int64_t result2_236 = __fmap_option(opt2_235, (int64_t)(intptr_t)(__square));
+                (void)result2_236;
+                puts((__opt_some_(result2_236)) ? "true" : "false");
+                printf("%lld\n", (long long)(__opt_unwrap(result2_236)));
             }
         }
         {
-            int64_t n_236 = INT64_C(5);
-            (void)n_236;
+            int64_t n_237 = INT64_C(5);
+            (void)n_237;
             {
-                int64_t opt3_237 = __opt_some(INT64_C(10));
-                (void)opt3_237;
+                int64_t opt3_238 = __opt_some(INT64_C(10));
+                (void)opt3_238;
                 {
-                    struct __env_241 *__t0 = (struct __env_241 *)malloc(sizeof(struct __env_241));
-                    __t0->__fn = (int64_t)(intptr_t)__fn_239;
-                    __t0->n = n_236;
+                    struct __env_242 *__t0 = (struct __env_242 *)malloc(sizeof(struct __env_242));
+                    __t0->__fn = (int64_t)(intptr_t)__fn_240;
+                    __t0->n = n_237;
                     void *__t1 = __t0;
-                    int64_t result3_244 = __fmap_option_clos(opt3_237, (int64_t)(intptr_t)(__t1));
-                    (void)result3_244;
-                    puts((__opt_some_(result3_244)) ? "true" : "false");
-                    printf("%lld\n", (long long)(__opt_unwrap(result3_244)));
+                    int64_t result3_245 = __fmap_option_clos(opt3_238, (int64_t)(intptr_t)(__t1));
+                    (void)result3_245;
+                    puts((__opt_some_(result3_245)) ? "true" : "false");
+                    printf("%lld\n", (long long)(__opt_unwrap(result3_245)));
                 }
             }
         }
         {
-            int64_t a_245 = INT64_C(3);
-            (void)a_245;
+            int64_t a_246 = INT64_C(3);
+            (void)a_246;
             {
-                int64_t b_246 = INT64_C(4);
-                (void)b_246;
+                int64_t b_247 = INT64_C(4);
+                (void)b_247;
                 {
-                    int64_t opt4_247 = __opt_some(INT64_C(10));
-                    (void)opt4_247;
+                    int64_t opt4_248 = __opt_some(INT64_C(10));
+                    (void)opt4_248;
                     {
-                        struct __env_251 *__t2 = (struct __env_251 *)malloc(sizeof(struct __env_251));
-                        __t2->__fn = (int64_t)(intptr_t)__fn_249;
-                        __t2->a = a_245;
-                        __t2->b = b_246;
+                        struct __env_252 *__t2 = (struct __env_252 *)malloc(sizeof(struct __env_252));
+                        __t2->__fn = (int64_t)(intptr_t)__fn_250;
+                        __t2->a = a_246;
+                        __t2->b = b_247;
                         void *__t3 = __t2;
-                        int64_t result4_254 = __fmap_option_clos(opt4_247, (int64_t)(intptr_t)(__t3));
-                        (void)result4_254;
-                        puts((__opt_some_(result4_254)) ? "true" : "false");
-                        printf("%lld\n", (long long)(__opt_unwrap(result4_254)));
+                        int64_t result4_255 = __fmap_option_clos(opt4_248, (int64_t)(intptr_t)(__t3));
+                        (void)result4_255;
+                        puts((__opt_some_(result4_255)) ? "true" : "false");
+                        printf("%lld\n", (long long)(__opt_unwrap(result4_255)));
                     }
                 }
             }
