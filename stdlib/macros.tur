@@ -6,7 +6,7 @@
 
 (defmodule tur/macros
   (export cond when unless must! must-msg! ignore! do-m for doc as->
-          assert! assert-msg! require! require-msg!)
+          assert! assert-msg! require! require-msg!
           ensure! ensure-msg! invariant! invariant-msg!
           curry with-resource must-use)
 
@@ -441,3 +441,4 @@
 ;;; Since: Phase M8
 (defmacro dot [thing method & args]
   (cons (list '. method) (cons thing args)))
+)
