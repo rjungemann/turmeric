@@ -125,6 +125,26 @@ void emit_dict_name(char *buf, size_t buflen, const TypeClassInstance *inst);
 void collect_defined(const Expr *e, Binding ***defs, uint32_t *ndefs, uint32_t *cdefs);
 Binding **collect_handle_captures(const Expr *body, uint32_t *n_out);
 
+/* ------------ emit_effects.c: effects/CPS expression emission ------------ */
+/* Region C -- algebraic effects (EX_DEFECT, EX_PERFORM, EX_HANDLE, EX_RESUME,
+ * EX_DISCONTINUE).  Expression-position emission only; emit_program runtime
+ * fragments remain in emit_module.c. */
+char *emit_effects_defect(EmitCtx *ctx, Buf *body, const Expr *e);
+char *emit_effects_perform(EmitCtx *ctx, Buf *body, const Expr *e);
+char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e);
+char *emit_effects_resume(EmitCtx *ctx, Buf *body, const Expr *e);
+char *emit_effects_discontinue(EmitCtx *ctx, Buf *body, const Expr *e);
+/* Region A -- delimited / cloneable / serial continuations */
+char *emit_effects_reset(EmitCtx *ctx, Buf *body, const Expr *e);
+char *emit_effects_cloneable_reset(EmitCtx *ctx, Buf *body, const Expr *e);
+char *emit_effects_shift(EmitCtx *ctx, Buf *body, const Expr *e);
+char *emit_effects_shift0(EmitCtx *ctx, Buf *body, const Expr *e);
+char *emit_effects_cloneable_shift(EmitCtx *ctx, Buf *body, const Expr *e);
+char *emit_effects_serial_reset(EmitCtx *ctx, Buf *body, const Expr *e);
+char *emit_effects_serial_shift(EmitCtx *ctx, Buf *body, const Expr *e);
+/* Region B -- continuation predicate */
+char *emit_effects_cont_pred(EmitCtx *ctx, Buf *body, const Expr *e);
+
 /* ------------ emit_expr.c: expression-position emission ------------ */
 char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e);
 
