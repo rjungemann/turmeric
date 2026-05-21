@@ -2304,7 +2304,7 @@ static bool map_eq_(int64_t m1, int64_t m2, int64_t val_cmp) {
 }
 
 int main() {
-        tur_panic_with(0, (void*)INT64_C(42), __FILE__, __LINE__);
+        tur_panic_with(3, (void*)INT64_C(42), __FILE__, __LINE__);
 }
 
 

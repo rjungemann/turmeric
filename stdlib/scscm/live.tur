@@ -260,29 +260,9 @@
 ;;; Example:
 ;;;   (live-eval sess "(synth-new \"mySynth\")")
 (defn live-eval [session code]
-  ;; In Turmeric, we'd use eval or similar
-  ;; For now, this is a placeholder that shows the concept
-
-  ;; Bind session and utilities into evaluation context
-  (let [context {
-          'session session
-          'base (:base session)
-          'synth-new (fn [def-name & params]
-                       (synth/session-synth-new (:base session) def-name params))
-          'synth-free (fn [node-id]
-                         (synth/session-synth-free (:base session) node-id))
-          'synth-set (fn [node-id params]
-                         (synth/session-synth-set (:base session) node-id params))
-          'play-note play-note
-          'midi->hz params/midi->hz
-          'vel->amp params/vel->amp
-          'db->amp params/db->amp
-          'amp->db params/amp->db
-          'now (fn [] (now-samples (:time-state session)))
-        }]
-    ;; In a real implementation, we'd evaluate code with this context
-    ;; For now, just return the code as-is (conceptual)
-    code))
+  (let [_ session
+        _ code]
+    (panic "live-eval: not yet implemented (requires sandboxed eval)")))
 
 ;; ============================================================================
 ;; Utility Functions

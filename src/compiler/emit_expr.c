@@ -559,8 +559,8 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_printf(body, "tur_panic_set_frame(&%s);\n", ctx->frame_var);
                 }
                 /* tur_panic_with takes type_tag (int), payload (void*), file, line */
-                /* For now, use a placeholder type_tag of 0 (TY_INT) */
-                buf_printf(body, "tur_panic_with(0, (void*)%s, __FILE__, __LINE__);\n", payload_val);
+                buf_printf(body, "tur_panic_with(%d, (void*)%s, __FILE__, __LINE__);\n",
+                           (int)payload->type.kind, payload_val);
             }
             free(payload_val);
             return atom_nil();
@@ -635,13 +635,20 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         }
         /* Phase S4: throw / try-catch */
         case EX_THROW: {
-            /* In compiled code, throw maps to panic (uncatchable at C level).
-             * Full compiled try/catch machinery is not yet implemented. */
-            char *val = emit_value(ctx, body, e->as.throw_.value);
+            const Expr *thrown = e->as.throw_.value;
+            char *val = emit_value(ctx, body, thrown);
             indent_buf(body, ctx->indent);
-            buf_printf(body, "/* throw */ (void)(%s); abort();\n", val);
+            if (ctx->no_unwind) {
+                buf_printf(body, "tur_panic_abort(\"(throw)\");\n");
+            } else {
+                if (ctx->frame_var) {
+                    buf_printf(body, "tur_panic_set_frame(&%s);\n", ctx->frame_var);
+                }
+                buf_printf(body, "tur_panic_with(%d, (void*)%s, __FILE__, __LINE__);\n",
+                           (int)thrown->type.kind, val);
+            }
             free(val);
-            return fresh_tmp(ctx);  /* unreachable, but type-check needs a value */
+            return fresh_tmp(ctx);
         }
         case EX_TRY_CATCH: {
             /* In compiled code, emit only the body (no catch machinery yet).

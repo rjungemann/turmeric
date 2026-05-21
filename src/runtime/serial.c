@@ -261,8 +261,10 @@ static bool wire_field_payload(WireBuf *wb, const SerialField *fld) {
         return true;
     }
     case STAG_PTR:
-        /* Opaque pointer: emit 8 zero bytes as placeholder. */
-        return wire_u64le(wb, 0);
+        /* Opaque pointers carry host-process addresses and cannot be serialized. */
+        fprintf(stderr, "serial error: attempt to serialize an opaque pointer (STAG_PTR)\n");
+        abort();
+        return false;
     case STAG_NIL:
         return true; /* nothing to emit */
     default:
@@ -546,10 +548,10 @@ bool serial_cont_from_bytes(const uint8_t *data, size_t len,
                 break;
             }
             case STAG_PTR: {
-                /* Consume the 8 placeholder bytes; pointer is not restorable. */
-                uint64_t dummy;
-                if (!cur_u64le(&c, &dummy)) { field_ok = false; break; }
-                fld->value.i = 0;
+                /* Opaque pointers cannot be deserialized; abort. */
+                fprintf(stderr, "serial error: attempt to deserialize an opaque pointer (STAG_PTR)\n");
+                if (out_err) *out_err = err_tag;
+                field_ok = false;
                 break;
             }
             case STAG_NIL:

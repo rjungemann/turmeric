@@ -356,10 +356,9 @@
 ;;; Returns:
 ;;;   Result of evaluation (placeholder: returns code unchanged).
 (defn live-eval [session code]
-  (let [context (live-context session)]
-    ;; In Turmeric, we'd use eval with this context
-    ;; For now, this is a placeholder
-    code))
+  (let [_ session
+        _ code]
+    (panic "live-eval: not yet implemented (requires sandboxed eval)")))
 
 ;; ============================================================================
 ;; Pattern Live-Coding Helpers

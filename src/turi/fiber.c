@@ -456,16 +456,12 @@ TuriValue turi_task_spawn(TuriEnv *env, const char *src) {
     if (cl.tag != TURI_CLOSURE)
         return turi_error("turi_task_spawn: src must evaluate to a function");
 
-    /* Build a wrapped call: "(await (async src))" won't work without Expr.
-     * Fallback: create a resolved future immediately with the closure result.
-     * Full implementation requires the eval fiber spawn from eval.c internals.
-     * Use a simple helper string: "(async (fn [] :int 0))" is a placeholder.
-     * The real spawn is done from within eval.c for the EX_ASYNC case.
-     * This C-API version just calls the closure synchronously and wraps. */
-    snprintf(buf, sizeof(buf), "%s", "(async (fn [] :void nil))");
+    /* Synchronous fallback: turi_task_spawn cannot yet spawn a real async fiber
+     * without access to the eval.c internals (EX_ASYNC path). Warn and resolve
+     * the closure result immediately as a completed future. */
+    fprintf(stderr, "warning: turi_task_spawn is running synchronously (not yet integrated with async fiber scheduler)\n");
     (void)buf;
 
-    /* Synchronous fallback: resolve immediately. */
     TuriValue result = turi_eval(env, src);
     TuriFuture *f = turi_future_new(env);
     if (turi_is_error(result))
