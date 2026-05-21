@@ -1,0 +1,399 @@
+# Stubs, Placeholders, and Test Workarounds
+
+This document catalogs every known placeholder, stub, and test workaround in the
+codebase as of 2026-05-20, grouped by area and ordered from highest to lowest
+implementation priority.
+
+---
+
+## 1. Compiler / Codegen (`src/compiler/`)
+
+### 1.1 Nested Function Definitions (`EX_FN`) -- **highest priority**
+
+- `src/compiler/emit_expr.c` ~1146-1150: `EX_FN_DEF` in value position aborts with
+  "nested fn not yet supported"; `EX_FN` aborts unconditionally.
+- `src/compiler/emit_stmt.c` ~255: `EX_FN` in statement position also aborts.
+
+**Impact:** First-class lambda / anonymous function in compiled output does not work.
+Any program that passes an un-named `fn` as a value (rather than a named `defn`) hits
+an abort.
+
+**Plan:** Implement closure lifting in `emit_expr.c`. Assign each `EX_FN` a synthetic
+name (e.g. `__lambda_<n>`), emit it as a top-level C function with a captured-variable
+struct, and return a fat-pointer. Gate behind a new fixture
+`tests/fixtures/nested-fn-basic/`.
+
+---
+
+### 1.2 Phase S4: Try/Catch Machinery
+
+- `src/compiler/emit_expr.c` ~637-649: only the body of a `try` block is emitted;
+  the `catch` arm is never reached. Uncaught panics abort at the C level.
+
+**Impact:** `try`/`catch` is silently broken in compiled mode. `requires.compiled`
+tests that rely on catch are not yet possible.
+
+**Plan:** Emit `setjmp`/`longjmp` (or the existing `tur_panic_t` mechanism) around the
+try body and jump to the catch block on panic. See `src/runtime/panic.c` for the
+existing panic infrastructure. Add compiled-mode fixture
+`tests/fixtures/try-catch-compiled/` alongside the existing interpreted version.
+
+---
+
+### 1.3 Phase T: Panic Type Tag
+
+- `src/compiler/emit_expr.c` ~562-563: panic emits type tag 0 (`TY_INT`) for all
+  panic values instead of the actual type of the panicked expression.
+
+**Impact:** Catch clauses that dispatch on panic type cannot distinguish types in
+compiled mode.
+
+**Plan:** Thread the elaborated type of the panic argument through to the codegen call
+and emit the correct `TY_*` constant.
+
+---
+
+### 1.4 Phase 18: Continuation Capture (`call/cc`)
+
+- `src/compiler/elab_effects.c` ~1185: compiled continuation capture receives an
+  identity function instead of a real reified continuation.
+
+**Impact:** `call/cc` silently returns the value of the body rather than capturing the
+continuation.
+
+**Plan:** Requires CPS transform or `setjmp`/stack-copying. Tracked separately in
+`docs/archive/multishot-continuations-plan.md`. Mark with a prominent `STUB` comment
+and add a `requires.compiled` guard to any test that exercises `call/cc`.
+
+---
+
+### 1.5 Phase 21: Serial-Shift / Serializable Continuations
+
+- `src/compiler/emit_expr.c` ~1138-1140: `EX_SERIAL_SHIFT` emits `int64_t %s = 0; /* serial-shift placeholder */`.
+- `src/turi/eval.c` ~3622-3624: `EX_SERIAL_RESET` evaluates body and discards the shift entirely.
+- `stdlib/workflow.tur:32-59`: `save-cont!` returns NULL; `resume-cont!` returns 0.
+
+**Impact:** Workflow persistence (save/restore execution state) is entirely
+non-functional.
+
+**Plan:** Implement serial-shift as a special `SERIAL_RESET` delimiter with
+stack-snapshot serialization. The serial.c opaque-pointer placeholder
+(`src/runtime/serial.c` ~264, ~549) must be resolved first -- opaque pointers
+currently serialize as 8 zero bytes and cannot be restored.
+
+---
+
+### 1.6 `weak-upgrade` Return Type
+
+- `src/compiler/elab_memory.c` ~432-437: `weak-upgrade` returns `rc<T>` instead of
+  `option<rc<T>>`.
+
+**Impact:** Upgrade of a dangling weak reference returns an uninitialised `rc<T>`
+instead of `none`, so callers cannot detect upgrade failure.
+
+**Plan:** Change the elaborated return type to `option<rc<T>>` and wrap the C-level
+result in `some`/`none` depending on the strong-count check. Add a fixture that
+upgrades a weak ref after the original rc is dropped.
+
+---
+
+### 1.7 `transmute` Compile-Time Size Check
+
+- `src/compiler/elab_unsafe.c` ~322-333: size equality between source and target types
+  is not verified at compile time; the args array uses a placeholder slot.
+
+**Plan:** Resolve both type sizes in the elaborator and emit a `static_assert` in the
+generated C. Low risk but easy to add.
+
+---
+
+### 1.8 HKT `[f :kind]` Vector Syntax
+
+- `src/compiler/elab_typeclasses.c` ~314-315: kind-annotated vector form `[f :kind]`
+  is not parsed; users must use `'^name'` prefix.
+
+**Plan:** Parse `[f :kind]` in the kind-annotation reader path and lower it to the
+same internal form as `'^f'`. Purely additive change.
+
+---
+
+### 1.9 Reserved Operator `?` (Phase R1)
+
+- `src/compiler/elab_internal.h` ~347: `?` operator reserved but not implemented.
+
+**Plan:** Implement as short-circuit option-unwrap (analogous to Rust `?`). Tracked in
+IDEAS.md if a design decision is still pending.
+
+---
+
+### 1.10 `#lang` Directive
+
+- `src/main.c` ~84: unsupported `#lang` formats print "not yet implemented".
+- `src/compiler/reader.c` ~1485: unknown language directives return false.
+
+**Plan:** Either implement the language dispatch table or document the set of supported
+`#lang` values and turn the unknown-lang path into a proper error with a suggestion.
+
+---
+
+## 2. Interpreter (`src/turi/`)
+
+### 2.1 Phase 6: Quasiquote
+
+- `src/runtime/interp.c` ~110: `F_QUASIQUOTE`, `F_UNQUOTE`, `F_UNQUOTE_SPLICING` all
+  unimplemented in the interpreter.
+
+**Impact:** Quasiquote/unquote only works in compiled mode (via macro expansion
+pre-elaboration). The interpreter silently falls through.
+
+**Plan:** Add quasiquote expansion to `interp.c` using the same recursive strategy as
+the reader macro expansion pass.
+
+---
+
+### 2.2 Phase 21: Serial-Reset in Interpreter
+
+- `src/turi/eval.c` ~3622-3624: `EX_SERIAL_RESET` evaluates body and ignores all
+  serial-shift invocations inside it.
+
+**Plan:** Blocked on Phase 21 compiler work (§1.5 above). Add an explicit "Phase 21
+not implemented" panic so it fails loudly rather than silently.
+
+---
+
+## 3. Runtime (`src/runtime/`, `src/async/`)
+
+### 3.1 Opaque Pointer Serialization
+
+- `src/runtime/serial.c` ~264, ~549: opaque pointers serialize as 8 zero bytes and
+  cannot be deserialized.
+
+**Impact:** Any serialized value that contains an opaque pointer (file handle, C
+struct, etc.) is silently corrupted on restore.
+
+**Plan:** Decide on a policy: (a) panic on attempt to serialize an opaque pointer, or
+(b) register a per-type serialize/deserialize hook. Option (a) is safer and simpler to
+ship first.
+
+---
+
+### 3.2 Effect Lowering Placeholder
+
+- `src/passes/effect_lower.c` ~110-137: `perform_to_shift()` is unused
+  (`__attribute__((unused))`); it returns 0 instead of looking up the handler.
+
+**Impact:** The effect-lowering pass is not wired in. Effects rely on the elaborator's
+handler resolution rather than a post-pass rewrite.
+
+**Plan:** Either wire in the pass or remove the dead code. See
+`docs/archive/emit-effects-extraction-plan.md` for context.
+
+---
+
+### 3.3 Async / Scheduler Stubs
+
+- `src/async/scheduler.c` ~537-551: `tur_scheduler_mt_from_threadpool()` returns the
+  current scheduler unchanged; `tur_scheduler_mt_set_for_threadpool()` is a no-op.
+- `src/async/scheduler_common.c` ~27-46: weak stub `tur_scheduler_spawn_st` and
+  friends satisfy the linker but do nothing.
+- `src/turi/fiber.c` ~462: `turi_task_spawn` runs the closure synchronously and wraps
+  the result in a Future instead of spawning a real task.
+
+**Impact:** Multi-threaded scheduler integration and the C-API task spawn are silent
+no-ops, masking concurrency bugs.
+
+**Plan:** The ST-scheduler stubs are intentional for the compiler binary; document
+that clearly. The MT threadpool integration should panic with "not yet integrated"
+rather than silently returning the wrong scheduler. The `turi_task_spawn` sync fallback
+should at minimum log a warning.
+
+---
+
+### 3.4 WASM Fiber Context
+
+- `src/async/fiber_ctx.h` ~9-12: WASM builds use a 1-byte placeholder struct for
+  `tur_ctx_t`.
+
+**Impact:** Fibers / async cannot context-switch on WASM.
+
+**Plan:** Implement using Asyncify (Emscripten) or document WASM as single-threaded
+with cooperative yields only. Tracked in `docs/archive/wasm-threads-plan.md`.
+
+---
+
+## 4. Standard Library (`stdlib/`)
+
+### 4.1 Phase N4: Show Instances for Numeric Types
+
+- `stdlib/typeclass.tur` ~156: Show instances for `int8`, `int16`, `int32`, `uint8`,
+  `uint16`, `uint32`, `uint64`, `float32` all return placeholder strings like
+  `"<int8>"` instead of formatting the actual value.
+
+**Impact:** Printing any of these types produces a useless tag instead of the number.
+
+**Plan:** Each instance should call the appropriate C `sprintf`/inline-C conversion.
+Straightforward change; add fixture `tests/fixtures/show-numeric-types/`.
+
+---
+
+### 4.2 Arena Infrastructure Deferred in `Show` Instances
+
+- `stdlib/option.tur` ~409, `stdlib/list.tur` ~440, `stdlib/vec.tur` ~457: the
+  `Show` instances for `option`, `Cons`, and `Vec` all contain a TODO to use a scratch
+  arena for intermediate string allocation once arena infrastructure lands.
+
+**Impact:** `show` on these types currently heap-allocates each fragment; acceptable
+but leaves performance on the table for large collections.
+
+**Plan:** Implement scratch-arena allocation (`stdlib/arena.tur` or
+`src/runtime/arena.c`), then revisit these three instances.
+
+---
+
+### 4.3 `result`/`option` Display/Debug/Error Instances
+
+- `stdlib/typeclass.tur` ~528-559: `Display`, `Debug`, and `Error` instances for
+  `ptr<void>` (the result representation) return `"ok"` / `"err"` / `"error"` without
+  any inner value. `Debug` produces `"ok(...)"` / `"err(...)"` with no actual contents.
+
+**Plan:** These instances require type-erased inner-value access (reflection or a
+vtable). Either implement that, or replace `ptr<void>` with a tagged struct that
+carries a `show` function pointer.
+
+---
+
+### 4.4 Signal/DSP Filter Stubs
+
+- `stdlib/signal/dsp.tur` ~130-150:
+  - `low-pass`: returns `amplitude * signal` instead of a real IIR/FIR filter.
+  - `high-pass`: returns the signal unchanged.
+
+**Impact:** Any DSP code using these filters computes incorrect output silently.
+
+**Plan:** Implement stateful IIR filters (biquad or one-pole) using `stdlib/vec.tur`
+or a dedicated filter-state struct. The stateless API signature may need to change to
+pass state in/out. Tracked in `docs/archive/signal-processing-arrows-plan.md`.
+
+---
+
+### 4.5 Tidal / Live-Coding Placeholders
+
+- `stdlib/tidal/timing.tur` ~194: pattern scheduling callback is a placeholder.
+- `stdlib/tidal/live.tur` ~357-361: `live-eval` returns code unchanged instead of
+  evaluating it.
+- `stdlib/tidal/perf.tur` ~134: `eval-compiled` always yields pattern value 0.0.
+
+**Plan:** `live-eval` depends on sandboxed eval (see
+`docs/upcoming/sandboxed-eval-plan.md`). Until then, add an explicit panic so callers
+know it is not functional.
+
+---
+
+### 4.6 SuperCollider / SCSCM Stubs
+
+- `stdlib/scscm/synth.tur` ~231-233: `synth-set-by-name` panics with "not yet
+  implemented" (acceptable -- it already fails loudly).
+- `stdlib/scscm/live.tur` ~250-285: `live-eval` returns code unchanged.
+
+**Plan:** `live-eval` should panic rather than silently do nothing. Real implementation
+tracked in `docs/archive/scscm-hcsynth-livecoding-plan.md`.
+
+---
+
+### 4.7 `with-async` Effect Placeholder
+
+- `stdlib/effects.tur` ~307: `with-async` notes it is a placeholder pending async
+  runtime integration.
+
+**Plan:** Wire `with-async` to the scheduler once the MT scheduler integration
+(§3.3) is resolved.
+
+---
+
+### 4.8 `rc.tur` Functor Map Simplified
+
+- `stdlib/rc.tur` ~24-46: `__functor_rc_fmap` contains a note that it assumes the
+  mapped value fits in `int64_t`.
+
+**Plan:** Use the type-erased pointer path for non-integer values, or add a compile-
+time guard that panics when `fmap` is called over a non-integer `rc`.
+
+---
+
+### 4.9 `backtrack.tur` Fresh Variable
+
+- `stdlib/backtrack.tur` ~213-222: `fresh` passes 0 as the placeholder value for a
+  fresh logic variable.
+
+**Impact:** Fresh variables start with value 0, which is indistinguishable from the
+integer 0. Any backtracking program that checks the value of an unbound variable gets
+a false result.
+
+**Plan:** Use a sentinel outside the normal value range (e.g. a tagged pointer or a
+dedicated `Unbound` variant) to represent an uninstantiated logic variable.
+
+---
+
+## 5. Tests
+
+### 5.1 Missing Compiled-Mode Catch Tests
+
+Tests for `try`/`catch` only run in interpreter mode because compiled catch is broken
+(§1.2). No `requires.compiled` fixture exists for error recovery.
+
+**Plan:** Add `tests/fixtures/try-catch-compiled/` once §1.2 is complete.
+
+---
+
+### 5.2 `safe-arena` Fixture
+
+- `tests/fixtures/safe-arena/input.tur:2`: body is `(println "arena test placeholder")`.
+
+**Plan:** Flesh out with real arena allocation/deallocation tests once arena
+infrastructure (§4.2) is in place.
+
+---
+
+### 5.3 `backtrack-fresh` Placeholder Value
+
+- `tests/fixtures/backtrack-fresh/input.tur`: exercises `fresh` with the 0 placeholder
+  (§4.9). Test output is vacuously correct because the placeholder happens to match
+  the expected value.
+
+**Plan:** Update the test to verify that a fresh variable is distinct from 0 once the
+sentinel is implemented.
+
+---
+
+### 5.4 `scscm` Synth Test Placeholder
+
+- `tests/scscm/synth_test.tur` ~57: comment notes the assertion depends on scsynth
+  feedback not yet wired up.
+
+**Plan:** Skip or mark the assertion as pending until SCSCM feedback is integrated.
+
+---
+
+## 6. Priority Order
+
+| Priority | Item | Effort |
+|----------|------|--------|
+| P1 | §1.1 Nested functions (`EX_FN`) | High |
+| P1 | §1.2 Compiled try/catch | Medium |
+| P1 | §4.1 Show for numeric types | Low |
+| P2 | §1.3 Panic type tag | Low |
+| P2 | §1.6 `weak-upgrade` return type | Low |
+| P2 | §3.1 Opaque pointer serialization policy | Low |
+| P2 | §4.9 `backtrack.tur` fresh sentinel | Low |
+| P3 | §2.1 Quasiquote in interpreter | Medium |
+| P3 | §3.3 Async/scheduler stubs -- make them loud | Low |
+| P3 | §4.4 DSP filter stubs | Medium |
+| P3 | §4.5/4.6 Tidal/SCSCM `live-eval` -- panic loudly | Low |
+| P4 | §1.5 Phase 21 serial-shift | Very High |
+| P4 | §1.4 Phase 18 `call/cc` | Very High |
+| P4 | §3.4 WASM fiber context | High |
+| P5 | §1.7 Transmute size check | Low |
+| P5 | §1.8 HKT `[f :kind]` syntax | Low |
+| P5 | §1.9 Reserved `?` operator | Low |
+| P5 | §4.2 Arena-backed Show | Medium |
+| P5 | §4.3 result/option Display vtable | High |
