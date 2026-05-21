@@ -812,11 +812,14 @@ RT4  (predicate propagation)     RT5a (WASM / z3-solver JS bridge)
                  RT5c (inline fast path; optional)
                   |
 RT6  (error message quality)
+ |
+RT7  (incremental discharge caching; follow-up)
 ```
 
 RT2 can be developed and unit-tested independently of RT1. RT5a and RT5b can
 be developed in parallel once RT3 is complete. RT5c is optional and can be
-deferred indefinitely without affecting correctness.
+deferred indefinitely without affecting correctness. RT7 is a follow-up phase
+that does not block any earlier work.
 
 ---
 
@@ -833,46 +836,98 @@ deferred indefinitely without affecting correctness.
 | RT5b | 1.5 days | `refine.tur`; `refine-vec.tur`; integration tests |
 | RT5c | 2 days | Inline fast path; cross-validation harness (optional) |
 | RT6 | 2 days | Counterexample translation; hint generation; snapshot tests |
-| **Total (without RT5c)** | **~15.5 days** | Assumes one developer |
-| **Total (with RT5c)** | **~17.5 days** | RT5c is optional and can be deferred |
+| RT7 | 2 days | Incremental caching; predicate hash keying (follow-up) |
+| **Total (without RT5c, RT7)** | **~15.5 days** | Assumes one developer |
+| **Total (with RT5c, RT7)** | **~19.5 days** | RT5c and RT7 are optional follow-ups |
+
+---
+
+## Phase RT7: Incremental Discharge Caching (Follow-up)
+
+**Goal:** Avoid re-running refinement queries on files that have not changed
+since the last build. Currently the discharge pass runs on every compilation
+regardless of whether any source has changed, which is wasteful for large
+codebases.
+
+### Design
+
+Each `RefineObligation` is keyed by a hash of:
+- The encoded SMTLIB2 text (captures the predicate and environment fully).
+- The Turmeric compiler version (invalidates cache across releases).
+
+Results (`proven`, `counterex`) are stored in a per-project cache file
+(e.g. `.tur-cache/refine.db`, a flat key-value store using a simple binary
+format or SQLite). On subsequent builds, obligations whose hash matches a
+cached entry skip the libz3 call entirely.
+
+Cache invalidation is conservative: any change to the source file containing
+the obligation evicts all of that file's cached entries. This is overly broad
+but safe and simple; finer-grained invalidation can be added later.
+
+### Acceptance Criteria
+
+- A second `just build` with no source changes produces zero libz3 calls
+  (verified via `TUR_REFINE_STATS=1`).
+- Modifying a source file evicts exactly that file's obligations from the cache.
+- The cache file is safe to delete at any time (`just clean` removes it);
+  the build falls back to full discharge transparently.
 
 ---
 
 ## Open Questions
 
-1. **Z3 version pinning.** CPM pins a specific Z3 git tag (`z3-4.13.0`), so
-   version drift is not a concern for fresh builds. However, if a system-installed
-   Z3 is found first via `find_package`, it may be older. Pin a minimum version
-   (4.12) in the `find_package` call and reject older installs with a clear
-   diagnostic rather than silently producing wrong results.
+1. **Z3 version pinning.** ✅ *Decided.* Prefer a system-installed Z3 if it
+   meets the minimum version (4.12); use CPM as the automatic fallback. If
+   `find_package` finds a system Z3 that is older than 4.12, emit a hard error
+   (`TUR-E0380: system Z3 version <ver> is below the required minimum 4.12 --
+   uninstall it or set Z3_DIR to the CPM-built copy`) rather than silently
+   falling back to behaviour that may produce wrong results.
 
-2. **WASM cross-origin isolation.** The `Atomics.wait` bridge requires the page
-   to be served with `Cross-Origin-Opener-Policy: same-origin` and
-   `Cross-Origin-Embedder-Policy: require-corp` headers, which enable
-   `SharedArrayBuffer`. This is already needed for Emscripten thread support.
-   Verify the `just web-dev` dev server and any production hosting set these
-   headers correctly.
+2. **WASM cross-origin isolation.** ✅ *Decided.* Use the `Atomics.wait`
+   synchronous bridge (same UX as native -- discharge happens inline). The
+   required `Cross-Origin-Opener-Policy: same-origin` and
+   `Cross-Origin-Embedder-Policy: require-corp` headers are already needed for
+   Emscripten thread support. Verify that `just web-dev` and any production
+   hosting set both headers correctly as part of the RT5a acceptance criteria.
 
-3. **CPM build time.** Fetching and building Z3 from source takes several
-   minutes on a cold cache. Pre-built libz3 binaries from the Z3 GitHub releases
-   page are available for major platforms; CPM supports `URL`-based package
-   sources as an alternative to `GITHUB_REPOSITORY`. If cold-cache build time
-   becomes a CI concern, switch to pre-built binaries for the CI platform.
+3. **CPM build time.** ✅ *Decided.* Use pre-built libz3 binaries from the Z3
+   GitHub Releases page for CI. The CPM call in `CMakeLists.txt` gains a
+   platform-detection branch:
 
-4. **Incremental compilation.** The current build system does not cache
-   elaboration results per file. Refinement queries on unchanged files will be
-   re-run on every build. Caching obligation results keyed by predicate hash is
-   a useful follow-up but is out of scope for this prototype.
+   ```cmake
+   if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+     set(Z3_PREBUILT_URL  "https://github.com/Z3Prover/z3/releases/download/z3-4.13.0/z3-4.13.0-arm64-osx-13.7.zip")
+     set(Z3_PREBUILT_SHA256 "<sha256>")
+   elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+     set(Z3_PREBUILT_URL  "https://github.com/Z3Prover/z3/releases/download/z3-4.13.0/z3-4.13.0-x64-glibc-2.35.zip")
+     set(Z3_PREBUILT_SHA256 "<sha256>")
+   endif()
+   CPMAddPackage(URL ${Z3_PREBUILT_URL} URL_HASH SHA256=${Z3_PREBUILT_SHA256})
+   ```
 
-5. **`:post` with mutable references.** A `:post` predicate on a function that
-   takes `&mut T` parameters cannot safely reason about the parameter values
-   (they may have changed). The prototype should reject `:post` on functions
-   with `&mut` parameters with `TUR-E0378: post-condition on a function with
-   mutable reference parameters is not supported`.
+   Developer machines still build from source via the `GITHUB_REPOSITORY` path
+   (once, then cached). CI always hits the pre-built binary path.
 
-6. **Interaction with typeclasses.** If a typeclass method has a refined return
-   type, every instance must satisfy the refinement. This requires discharge
-   per-instance rather than per-callsite. Deferred to a follow-up.
+4. **Incremental compilation.** *Promoted to RT7.* See phase RT7 below.
+
+5. **`:post` with mutable references.** ✅ *Decided.* Allow `:post` on functions
+   that take `&mut T` parameters, but reject any predicate whose free variables
+   include an `&mut` parameter name. The elaborator checks the predicate's free
+   variables at the point of `:post` elaboration:
+
+   - If the predicate mentions `result` and/or non-`&mut` parameters only:
+     allowed. Example: `(>= result 0)` on a function taking `&mut Vec` is fine.
+   - If the predicate names any `&mut` parameter: emit
+     `TUR-E0378: post-condition predicate references mutable parameter '<name>';
+     only the return value ('result') and non-mutable parameters may appear`.
+
+   This is a free-variable check on the predicate `Form*` and requires no
+   alias analysis.
+
+6. **Interaction with typeclasses.** ✅ *Decided.* Reject refined types on
+   typeclass method signatures in the prototype with `TUR-E0376: refinement on
+   typeclass method return type is not supported in this prototype`. Per-instance
+   discharge is deferred to a follow-up phase.
 
 ---
 
