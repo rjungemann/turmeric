@@ -350,6 +350,7 @@ static void tur_frame_fire_chain(tur_frame *f) {
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
 static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
+static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
 }
@@ -461,6 +462,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -484,6 +486,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
         return false;
     } else {
         global_panic_jmpbuf_valid = 0;
+        tur_panic_in_progress = 0;
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2402,43 +2405,43 @@ static void thread_join(void * t) {
 
 int main() {
         {
-            void * shared_235 = arc_new(INT64_C(21));
-            (void)shared_235;
+            void * shared_236 = arc_new(INT64_C(21));
+            (void)shared_236;
             {
-                void * c1_236 = arc_clone((void *)(intptr_t)(shared_235));
-                (void)c1_236;
+                void * c1_237 = arc_clone((void *)(intptr_t)(shared_236));
+                (void)c1_237;
                 {
-                    void * c2_237 = arc_clone((void *)(intptr_t)(shared_235));
-                    (void)c2_237;
-                    printf("%lld\n", (long long)(arc_strong_count((void *)(intptr_t)(shared_235))));
+                    void * c2_238 = arc_clone((void *)(intptr_t)(shared_236));
+                    (void)c2_238;
+                    printf("%lld\n", (long long)(arc_strong_count((void *)(intptr_t)(shared_236))));
                     {
-                        void * a1_238 = thread_arg_new((void *)(intptr_t)(c1_236));
-                        (void)a1_238;
+                        void * a1_239 = thread_arg_new((void *)(intptr_t)(c1_237));
+                        (void)a1_239;
                         {
-                            void * a2_239 = thread_arg_new((void *)(intptr_t)(c2_237));
-                            (void)a2_239;
+                            void * a2_240 = thread_arg_new((void *)(intptr_t)(c2_238));
+                            (void)a2_240;
                             {
-                                void * t1_240 = thread_spawn((void *)(intptr_t)(a1_238));
-                                (void)t1_240;
+                                void * t1_241 = thread_spawn((void *)(intptr_t)(a1_239));
+                                (void)t1_241;
                                 {
-                                    void * t2_241 = thread_spawn((void *)(intptr_t)(a2_239));
-                                    (void)t2_241;
-                                    thread_join((void *)(intptr_t)(t1_240));
-                                    thread_join((void *)(intptr_t)(t2_241));
+                                    void * t2_242 = thread_spawn((void *)(intptr_t)(a2_240));
+                                    (void)t2_242;
+                                    thread_join((void *)(intptr_t)(t1_241));
+                                    thread_join((void *)(intptr_t)(t2_242));
                                 }
                             }
-                            printf("%lld\n", (long long)(thread_arg_result((void *)(intptr_t)(a1_238))));
-                            printf("%lld\n", (long long)(thread_arg_result((void *)(intptr_t)(a2_239))));
-                            arc_drop((void *)(intptr_t)(c1_236));
-                            arc_drop((void *)(intptr_t)(c2_237));
-                            printf("%lld\n", (long long)(arc_strong_count((void *)(intptr_t)(shared_235))));
-                            thread_arg_free((void *)(intptr_t)(a1_238));
-                            thread_arg_free((void *)(intptr_t)(a2_239));
+                            printf("%lld\n", (long long)(thread_arg_result((void *)(intptr_t)(a1_239))));
+                            printf("%lld\n", (long long)(thread_arg_result((void *)(intptr_t)(a2_240))));
+                            arc_drop((void *)(intptr_t)(c1_237));
+                            arc_drop((void *)(intptr_t)(c2_238));
+                            printf("%lld\n", (long long)(arc_strong_count((void *)(intptr_t)(shared_236))));
+                            thread_arg_free((void *)(intptr_t)(a1_239));
+                            thread_arg_free((void *)(intptr_t)(a2_240));
                         }
                     }
                 }
             }
-            arc_drop((void *)(intptr_t)(shared_235));
+            arc_drop((void *)(intptr_t)(shared_236));
         }
         int64_t __t0;
         __t0 = INT64_C(0);
