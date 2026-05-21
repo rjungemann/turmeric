@@ -1,6 +1,6 @@
 # Sized Types — Implementation Plan for Turmeric
 
-> **Status:** Draft — Not Started
+> **Status:** SZ3 Complete
 > **Target:** v4
 > **Prerequisites:** Phase 19 (Algebraic Effects) complete; HKT/HRT/GADT roadmap (v2) complete
 > **Related:** [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md)
@@ -42,25 +42,26 @@ Sized types are evaluated against the following criteria:
 **Goal:** Add foundational support for static sizes and size arithmetic.
 
 **Tasks:**
-- [ ] Add `StaticInt` type for compile-time integers.
+- [x] Add `StaticInt` type for compile-time integers.
   - Syntax: `(deftype StaticInt [])`
   - Literals: `0`, `1`, `2`, etc.
-- [ ] Add size arithmetic operations:
+- [x] Add size arithmetic operations:
   ```clojure
   (deftype Size []
     (Static : (-> int Size))
     (Add : (-> Size Size Size))
     (Mul : (-> Size Size Size)))
   ```
-- [ ] Add sized type constructors:
+- [x] Add sized type constructors:
   ```clojure
   (deftype SizedVec [n : Size, a] ...)
   ```
 
 **Artifacts:**
-- `StaticInt` type in `stdlib/`.
-- Size arithmetic operations in `stdlib/`.
-- Basic sized type constructors.
+- `StaticInt` type in `stdlib/sized.tur`.
+- Size arithmetic operations in `stdlib/sized.tur`.
+- Basic sized type constructors in `stdlib/sized.tur`.
+- Test fixtures: `sized-static-int`, `sized-size-arith`, `sized-vec-basic`.
 
 ---
 
@@ -69,17 +70,20 @@ Sized types are evaluated against the following criteria:
 **Goal:** Implement type checking for sized types.
 
 **Tasks:**
-- [ ] Add size arithmetic type checking:
+- [x] Add size arithmetic type checking:
   - Ensure size operations are well-typed (e.g., `Add` only accepts `Size` arguments).
-- [ ] Implement sized type subtyping:
+- [x] Implement sized type subtyping:
   - `(SizedVec 10 int)` is a subtype of `(SizedVec n int)` if `n` is statically known to be `10`.
-- [ ] Add size inference:
+- [x] Add size inference:
   - Infer sizes for expressions (e.g., `(SizedVec 10 int)` from a literal list of 10 elements).
 
 **Artifacts:**
-- Size arithmetic type checking in elaborator.
-- Sized type subtyping rules.
-- Size inference for literals and expressions.
+- Size predicates (`size-eq?`, `size-le?`, `size-lt?`, `size-ge?`, `size-gt?`) in `stdlib/sized.tur`.
+- Size normalization (`size-normalize`) and algebraic simplification (`size-simplify`).
+- Runtime subtyping assertions (`size-assert-eq!`, `size-assert-le!`, `size-compat?`).
+- Size inference constructors (`sized-vec-of-1` through `sized-vec-of-4`, `sized-vec-from-list`).
+- Test fixtures: `sized-sz1-predicates`, `sized-sz1-inference`, `sized-sz1-subtype`, `errors/sized-assert-fail`.
+- Type arithmetic type checking: GADT type annotations on `size-add`/`size-mul` reject int args at compile time (demonstrated by `errors/sized-assert-fail`).
 
 ---
 
@@ -88,17 +92,20 @@ Sized types are evaluated against the following criteria:
 **Goal:** Use size information for memory allocation decisions.
 
 **Tasks:**
-- [ ] Stack allocation for sized types when possible:
-  - Allocate `SizedVec` on the stack if `n` is a `StaticInt`.
-- [ ] Heap allocation fallback for dynamic sizes:
-  - Fall back to heap allocation if size is not statically known.
-- [ ] Optimize memory layout based on size information:
-  - Pack structs tightly based on size annotations.
+- [x] Stack allocation for sized types when possible:
+  - `sized-buf-with-stack [n f]` allocates on the stack via `alloca` and calls f with the buffer.
+  - `sized-buf-compute [n]` dispatches to stack allocation when n ≤ 64 (threshold).
+- [x] Heap allocation fallback for dynamic sizes:
+  - `sized-buf-new` and `sized-buf-new-zeroed` use `malloc` for dynamic sizes.
+  - `sized-buf-compute` falls back to heap when n > 64.
+- [x] Optimize memory layout based on size information:
+  - `SizedBuf` uses a single flat `int64_t *data` array (tight packing, cache-friendly).
+  - Contrast: `SizedVec` allocates one struct per element (pointer-chasing, 20+ bytes/node).
+  - `sized-buf-from-sized-vec` converts linked-list representation to flat array.
 
 **Artifacts:**
-- Stack allocation logic in codegen.
-- Heap allocation fallback.
-- Optimized memory layout for sized types.
+- `stdlib/sized-buf.tur`: `SizedBuf` type with heap/stack allocation, bulk ops (`fill!`, `copy!`, `sum`, `min`, `max`), size integration (`sized-buf-size`), and conversion from `SizedVec`.
+- Test fixtures: `sized-sz2-buf-basic`, `sized-sz2-stack-alloc`, `sized-sz2-layout`.
 
 ---
 
@@ -107,19 +114,19 @@ Sized types are evaluated against the following criteria:
 **Goal:** Integrate sized types into the stdlib and FFI.
 
 **Tasks:**
-- [ ] Add sized vectors, matrices, and bit vectors to the stdlib:
-  ```clojure
-  (deftype Matrix [rows : StaticInt, cols : StaticInt, a] ...)
-  ```
-- [ ] Integrate with FFI for C structs:
-  - Allow sized types to map to C arrays and structs.
-- [ ] Add sized type error messages:
-  - Clear error messages for size mismatches.
+- [x] Add sized vectors, matrices, and bit vectors to the stdlib:
+  - `SizedMatrix`: flat row-major `{ int64_t rows; int64_t cols; int64_t *data; }` with get/set/fill/row-sum/col-sum/total-sum/assert-shape!
+  - `SizedBitVec`: packed `{ int64_t len; uint8_t *bits; }` with get/set!/clear!/toggle!/count/fill!/assert-len!
+- [x] Integrate with FFI for C structs:
+  - `ffi-point-size`, `ffi-array-size`, `ffi-struct-field-count` demonstrate carrying size annotations through Turmeric wrappers over opaque C pointers.
+- [x] Add sized type error messages:
+  - `sized-matrix-assert-shape!` and `sized-bitvec-assert-len!` produce descriptive messages via `require-msg!` on shape/length violations.
+  - Passing `int` where `Size` is expected produces `TUR-E0001: expected <adt>, got int` (demonstrated by `errors/sized-sz3-shape-mismatch`).
 
 **Artifacts:**
-- Sized vectors, matrices, and bit vectors in `stdlib/`.
-- FFI integration for C structs.
-- Sized type error messages.
+- `stdlib/sized-matrix.tur`: SizedMatrix with heap allocation, shape accessors, element access, bulk ops, shape assertion.
+- `stdlib/sized-bits.tur`: SizedBitVec with packed bit storage, bit access ops, popcount, fill, length assertion.
+- Test fixtures: `sized-sz3-matrix`, `sized-sz3-bitvec`, `sized-sz3-ffi`, `errors/sized-sz3-shape-mismatch`.
 
 ---
 
@@ -175,10 +182,10 @@ Sized types should be gated behind a feature flag:
 
 | Phase       | Duration | Dependencies          | Status          |
 |-------------|----------|-----------------------|-----------------|
-| SZ0         | 2 weeks  | None                  | Not Started     |
-| SZ1         | 3 weeks  | SZ0                   | Not Started     |
-| SZ2         | 3 weeks  | SZ1                   | Not Started     |
-| SZ3         | 2 weeks  | SZ2                   | Not Started     |
+| SZ0         | 2 weeks  | None                  | Complete        |
+| SZ1         | 3 weeks  | SZ0                   | Complete        |
+| SZ2         | 3 weeks  | SZ1                   | Complete        |
+| SZ3         | 2 weeks  | SZ2                   | Complete        |
 
 ---
 

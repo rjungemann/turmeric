@@ -257,6 +257,147 @@ turmeric> (* _ 10)
 
 ---
 
+#### 2g. `:doc` coverage for special forms, keywords, and built-in operators
+
+**Current state:** `:doc defstruct` (and similar) prints
+`no documentation for 'defstruct'`. The REPL's `cmd_doc()` in
+`src/turi/repl.c` (line ~230) only covers ~20 arithmetic operators and a handful
+of core forms (`let`, `if`, `do`, `defn`, `fn`, `def`, `while`, `set!`).
+Entirely absent:
+
+| Missing | Missing | Missing |
+|---------|---------|---------|
+| `defstruct` | `defdata` | `deftype` |
+| `defmacro` | `defeffect` | `defclass` |
+| `definstance` | `defmodule` | `match` |
+| `when` | `cond` | `for` |
+| `unless` | `quote` | `import` |
+| `perform` | `handle` | `resume` |
+| `async` | `await` | `try` / `catch` / `throw` |
+| `let-dyn` | | |
+
+**Second problem — two separate, drifting lookup paths:**
+
+- The REPL uses a hardcoded `docs[]` C array in `cmd_doc()`.
+- The web WASM REPL uses `turi_doc_lookup()` (`src/web/wasm_glue.c` line ~333),
+  which evaluates `(doc-lookup "name")` from the auto-generated
+  `stdlib/docstrings.tur`. Special forms are absent there too.
+
+These two paths are completely independent. New entries added to the C table do
+not appear in the web REPL, and vice-versa.
+
+**Proposed fix — one source of truth:**
+
+1. **Introduce `stdlib/special-forms.tur`** — a hand-maintained file of short-form
+   doc entries for every special form, built-in keyword, and built-in operator.
+   Use the same `;;;` doc-comment format as the rest of stdlib so `gendocs.py`
+   picks them up automatically and emits them into `docstrings.tur`.
+
+   Example entry:
+   ```turmeric
+   ;;; defstruct -- define a named product type (struct).
+   ;;;
+   ;;; Parameters:
+   ;;;   Name   -- the type name (a symbol)
+   ;;;   fields -- a vector of alternating field names and type keywords
+   ;;;             [:copy | :move | :linear] annotation is optional
+   ;;;
+   ;;; Returns:
+   ;;;   nil (definition form; evaluated for its side effect)
+   ;;;
+   ;;; Example:
+   ;;;   (defstruct Point [x :int y :int])
+   ;;;   (defstruct Buffer :copy [data :ptr len :int])
+   ;;;
+   ;;; Since: Phase S4
+   (def defstruct nil)
+   ```
+
+2. **Remove the hardcoded `docs[]` table from `cmd_doc()`** and replace it with a
+   call to `turi_doc_lookup()` (the same function the WASM path already uses).
+   This unifies both paths; `cmd_doc()` becomes a thin wrapper:
+   ```c
+   const char *d = turi_doc_lookup(sym);
+   if (d) { printf("%s\n", d); return; }
+   printf("no documentation for '%s'\n", sym);
+   ```
+
+3. **Extend `gendocs.py`** (if needed) to accept `stdlib/special-forms.tur` as
+   an additional input file so it is included in the generated `docstrings.tur`.
+
+**Implementation notes:**
+- `cmd_doc` is in `src/turi/repl.c` around line 219.
+- `turi_doc_lookup` is in `src/web/wasm_glue.c` around line 333 — but it depends
+  on `g_env`, which is only set in WASM mode. For the CLI REPL path, a parallel
+  `turi_doc_lookup_cli(TuriEnv *env, const char *name)` that takes an explicit env
+  pointer would be needed, or the existing function signature extended.
+- Alternatively, expose `doc-lookup` as a native registered in the stdlib env, so
+  `cmd_doc` can call it via `turi_env_get` + `eval_apply`.
+- `gendocs.py` currently scans `stdlib/*.tur`; including `special-forms.tur` in
+  that directory is sufficient without a script change.
+
+---
+
+#### 2h. REPL: type-level definitions return descriptive sentinels, not `nil`
+
+**Current state:** Entering a type-level definition or subsequently typing its
+name at the REPL prints `=> nil`, which is misleading — the name was bound, but
+the runtime value is `nil` because types have no runtime representation.
+
+Affected forms and their current / target output:
+
+| Input | Current | Target |
+|-------|---------|--------|
+| `(defstruct Foo [x :int])` | `=> nil` | `=> #<struct-type Foo>` |
+| `Foo` (after defstruct) | `=> nil` | `=> #<struct-type Foo>` |
+| `(defdata Bar (A) (B :int))` | `=> nil` | `=> #<adt-type Bar>` |
+| `(deftype MyAlias int)` | `=> nil` | `=> #<type-alias MyAlias>` |
+| `(defeffect Log ...)` | `=> nil` | `=> #<effect Log>` |
+| `(defclass Functor [f] ...)` | `=> nil` | `=> #<typeclass Functor>` |
+| `(definstance Functor Maybe ...)` | `=> nil` | `=> #<instance Functor/Maybe>` |
+| `(defmacro when ...)` | `=> nil` | `=> #<macro when>` |
+
+**Root cause:** The elaborator produces `EX_DEF` with `init = NULL` for struct
+definitions (see `elab_defstruct` in `src/compiler/elab_structs.c`, line ~354),
+so the interpreter stores `nil` for the name. Similarly, `EX_DEFDATA`,
+`EX_TYPECLASS_DEF`, `EX_INSTANCE_DEF`, `EX_DEFECT`, and `elab_defmacro` all
+return `turi_nil()` or `EX_NIL_LIT` at runtime
+(see `eval_expr` cases in `src/turi/eval.c`, lines ~2707–2826).
+
+**Implementation options (two approaches, pick one):**
+
+**Option A — Sentinel runtime values.** Introduce a new `TURI_TYPE_DESCRIPTOR`
+tag (or reuse `TURI_CSTR`) and bind the struct/adt/etc. name to a value like
+`#<struct-type Foo>` at definition time. `turi_value_repr` and `repl_print_value`
+already handle it with no other changes needed.
+
+- For `EX_DEF` with a non-null `struct_def`: set the binding to
+  `turi_cstr("#<struct-type Foo>")` (or a new tagged value) instead of nil.
+- For `EX_DEFDATA`/`EX_DEFGADT`: bind the adt name to `#<adt-type Bar>`.
+- For `EX_TYPECLASS_DEF`, `EX_INSTANCE_DEF`, `EX_DEFECT`: similar cstr sentinels.
+- For `defmacro` (`EX_NIL_LIT` path): bind macro name to `#<macro name>`.
+
+**Option B — Suppress `=> nil` for type-level top-level forms.** In the REPL
+loop (`src/turi/repl.c`, around line 737), detect that the result is `nil` and
+check whether the last evaluated form was a type-level declaration; if so, print
+a `;; defined <kind> <name>` confirmation line instead of `=> nil`. This requires
+passing form-kind metadata through `turi_eval` or handling it as a post-eval hook.
+
+Option A is simpler to implement incrementally; Option B is cleaner from a
+type-theory standpoint (types have no runtime values). A hybrid is also possible:
+suppress `=> nil` for type definitions while emitting a `;; defined …` message.
+
+**Implementation notes:**
+- `EX_DEF` when `struct_def != NULL`: in `src/turi/eval.c` around line 2574.
+- `EX_DEFDATA` / `EX_DEFGADT`: around line 2815.
+- `EX_TYPECLASS_DEF` / `EX_INSTANCE_DEF`: around line 2707.
+- `EX_DEFECT`: around line 2811.
+- `defmacro` path: `elab_defmacro` returns `e_nil` (line ~1008 in
+  `src/compiler/elab_macros.c`); the macro name could be bound in the env with a
+  sentinel before returning.
+
+---
+
 ### Tier 3 — Quality-of-Life / Power User
 
 These items meaningfully improve productivity but are not blocking for beginners.
@@ -347,6 +488,8 @@ time ./build/tur repl <<< ':quit'
 | E8 | REPL `:reset` | 2 | Small |
 | E9 | REPL multi-line sweet-exp input | 2 | Medium |
 | E10 | REPL `_` last-result binding | 2 | Small |
+| E16 | `:doc` coverage for special forms, keywords, built-ins; unified lookup | 2 | Medium |
+| E17 | REPL: type definitions print descriptive sentinel, not `nil` | 2 | Small |
 | E11 | REPL tab-completion | 3 | Medium |
 | E12 | `tur format --diff` | 3 | Small |
 | E13 | `tur explain` as subcommand | 3 | Small |

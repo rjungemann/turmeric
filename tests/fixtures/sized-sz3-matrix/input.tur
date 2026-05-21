@@ -1,0 +1,118 @@
+; Phase SZ3: SizedMatrix -- 2D flat row-major matrix.
+
+(defgadt Size []
+  (Static (int) : (Size))
+  (Add (Size) (Size) : (Size))
+  (Mul (Size) (Size) : (Size)))
+
+(defn size-eval [s :Size] :int
+  (match s (Static n) n (Add a b) (+ (size-eval a) (size-eval b))
+            (Mul a b) (* (size-eval a) (size-eval b))))
+
+(defn sized-matrix-new-zeroed [rows cols] #{Unsafe} :int
+  ```c
+  struct { int64_t rows; int64_t cols; int64_t *data; } *m = malloc(sizeof(*m));
+  m->rows = rows;
+  m->cols = cols;
+  int64_t n = rows * cols;
+  m->data = n > 0 ? (int64_t *)calloc((size_t)n, sizeof(int64_t)) : NULL;
+  return (int64_t)(intptr_t)m;
+  ```)
+
+(defn sized-matrix-free [m] #{Unsafe} :nil
+  ```c
+  struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
+  if (mat->data) free(mat->data);
+  free(mat);
+  ```)
+
+(defn sized-matrix-rows [m] #{Unsafe} :int
+  ```c
+  return ((struct { int64_t rows; int64_t cols; int64_t *data; } *)(intptr_t)m)->rows;
+  ```)
+
+(defn sized-matrix-cols [m] #{Unsafe} :int
+  ```c
+  return ((struct { int64_t rows; int64_t cols; int64_t *data; } *)(intptr_t)m)->cols;
+  ```)
+
+(defn sized-matrix-size [m] #{Unsafe} :Size
+  ```c
+  struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
+  return ctor_Static(mat->rows * mat->cols);
+  ```)
+
+(defn sized-matrix-get [m r c] #{Unsafe} :int
+  ```c
+  struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
+  if (r >= 0 && r < mat->rows && c >= 0 && c < mat->cols)
+    return mat->data[r * mat->cols + c];
+  fprintf(stderr, "sized-matrix-get: out of bounds\n"); exit(1); return 0;
+  ```)
+
+(defn sized-matrix-set! [m r c v] #{Unsafe} :int
+  ```c
+  struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
+  if (r >= 0 && r < mat->rows && c >= 0 && c < mat->cols) {
+    mat->data[r * mat->cols + c] = v; return m;
+  }
+  fprintf(stderr, "sized-matrix-set!: out of bounds\n"); exit(1); return m;
+  ```)
+
+(defn sized-matrix-row-sum [m r] #{Unsafe} :int
+  ```c
+  struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
+  int64_t s = 0;
+  for (int64_t c = 0; c < mat->cols; c++) s += mat->data[r * mat->cols + c];
+  return s;
+  ```)
+
+(defn sized-matrix-col-sum [m c] #{Unsafe} :int
+  ```c
+  struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
+  int64_t s = 0;
+  for (int64_t r = 0; r < mat->rows; r++) s += mat->data[r * mat->cols + c];
+  return s;
+  ```)
+
+(defn sized-matrix-total-sum [m] #{Unsafe} :int
+  ```c
+  struct { int64_t rows; int64_t cols; int64_t *data; } *mat = (void*)(intptr_t)m;
+  int64_t s = 0; int64_t n = mat->rows * mat->cols;
+  for (int64_t i = 0; i < n; i++) s += mat->data[i];
+  return s;
+  ```)
+
+(defn sized-matrix-assert-shape! [m er :Size ec :Size] #{Unsafe} :nil
+  (let [ar (sized-matrix-rows m)]
+    (let [ac (sized-matrix-cols m)]
+      (require-msg! (= ar (size-eval er)) "row mismatch")
+      (require-msg! (= ac (size-eval ec)) "col mismatch"))))
+
+(defn main [] :int
+  (let [m (unsafe (sized-matrix-new-zeroed 3 4))]
+    ; Shape
+    (println (unsafe (sized-matrix-rows m)))
+    (println (unsafe (sized-matrix-cols m)))
+    (println (size-eval (unsafe (sized-matrix-size m))))
+    ; Set and get
+    (unsafe (sized-matrix-set! m 0 0 1))
+    (unsafe (sized-matrix-set! m 0 1 2))
+    (unsafe (sized-matrix-set! m 0 2 3))
+    (unsafe (sized-matrix-set! m 0 3 4))
+    (unsafe (sized-matrix-set! m 1 0 5))
+    (unsafe (sized-matrix-set! m 1 1 6))
+    (unsafe (sized-matrix-set! m 1 2 7))
+    (unsafe (sized-matrix-set! m 1 3 8))
+    (println (unsafe (sized-matrix-get m 0 0)))
+    (println (unsafe (sized-matrix-get m 1 3)))
+    ; Row and col sums
+    (println (unsafe (sized-matrix-row-sum m 0)))
+    (println (unsafe (sized-matrix-col-sum m 0)))
+    ; Total sum (only first two rows set; row 2 still zero)
+    (println (unsafe (sized-matrix-total-sum m)))
+    ; Shape assertion passes
+    (unsafe (sized-matrix-assert-shape! m (Static 3) (Static 4)))
+    (println 1)
+    (unsafe (sized-matrix-free m)))
+  0)

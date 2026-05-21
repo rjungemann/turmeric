@@ -1,0 +1,126 @@
+; Phase SZ3: SizedBitVec -- packed bit vector.
+
+(defgadt Size []
+  (Static (int) : (Size))
+  (Add (Size) (Size) : (Size))
+  (Mul (Size) (Size) : (Size)))
+
+(defn size-eval [s :Size] :int
+  (match s (Static n) n (Add a b) (+ (size-eval a) (size-eval b))
+            (Mul a b) (* (size-eval a) (size-eval b))))
+
+(defn sized-bitvec-new [n] #{Unsafe} :int
+  ```c
+  struct { int64_t len; uint8_t *bits; } *bv = malloc(sizeof(*bv));
+  bv->len  = n;
+  int64_t nbytes = (n + 7) / 8;
+  bv->bits = nbytes > 0 ? (uint8_t *)calloc((size_t)nbytes, 1) : NULL;
+  return (int64_t)(intptr_t)bv;
+  ```)
+
+(defn sized-bitvec-free [bv] #{Unsafe} :nil
+  ```c
+  struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
+  if (b->bits) free(b->bits);
+  free(b);
+  ```)
+
+(defn sized-bitvec-len [bv] #{Unsafe} :int
+  ```c
+  return ((struct { int64_t len; uint8_t *bits; } *)(intptr_t)bv)->len;
+  ```)
+
+(defn sized-bitvec-size [bv] #{Unsafe} :Size
+  ```c
+  return ctor_Static(((struct { int64_t len; uint8_t *bits; } *)(intptr_t)bv)->len);
+  ```)
+
+(defn sized-bitvec-get [bv i] #{Unsafe} :int
+  ```c
+  struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
+  if (i < 0 || i >= b->len) {
+    fprintf(stderr, "sized-bitvec-get: out of bounds\n"); exit(1);
+  }
+  return (b->bits[i / 8] >> (i % 8)) & 1;
+  ```)
+
+(defn sized-bitvec-set! [bv i] #{Unsafe} :int
+  ```c
+  struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
+  if (i < 0 || i >= b->len) {
+    fprintf(stderr, "sized-bitvec-set!: out of bounds\n"); exit(1);
+  }
+  b->bits[i / 8] |= (uint8_t)(1 << (i % 8));
+  return bv;
+  ```)
+
+(defn sized-bitvec-clear! [bv i] #{Unsafe} :int
+  ```c
+  struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
+  if (i < 0 || i >= b->len) {
+    fprintf(stderr, "sized-bitvec-clear!: out of bounds\n"); exit(1);
+  }
+  b->bits[i / 8] &= (uint8_t)~(1 << (i % 8));
+  return bv;
+  ```)
+
+(defn sized-bitvec-toggle! [bv i] #{Unsafe} :int
+  ```c
+  struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
+  if (i < 0 || i >= b->len) {
+    fprintf(stderr, "sized-bitvec-toggle!: out of bounds\n"); exit(1);
+  }
+  b->bits[i / 8] ^= (uint8_t)(1 << (i % 8));
+  return bv;
+  ```)
+
+(defn sized-bitvec-count [bv] #{Unsafe} :int
+  ```c
+  struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
+  int64_t nbytes = (b->len + 7) / 8;
+  int64_t count = 0;
+  for (int64_t i = 0; i < nbytes; i++) {
+    uint8_t byte = b->bits[i];
+    while (byte) { count += byte & 1; byte >>= 1; }
+  }
+  return count;
+  ```)
+
+(defn sized-bitvec-assert-len! [bv expected :Size] #{Unsafe} :nil
+  (require-msg!
+    (= (sized-bitvec-len bv) (size-eval expected))
+    "sized-bitvec-assert-len!: bit count mismatch"))
+
+(defn main [] :int
+  (let [bv (unsafe (sized-bitvec-new 16))]
+    ; Length and size annotation
+    (println (unsafe (sized-bitvec-len bv)))
+    (println (size-eval (unsafe (sized-bitvec-size bv))))
+    ; All bits start clear
+    (println (unsafe (sized-bitvec-get bv 0)))
+    (println (unsafe (sized-bitvec-get bv 7)))
+    ; Set some bits
+    (unsafe (sized-bitvec-set! bv 0))
+    (unsafe (sized-bitvec-set! bv 3))
+    (unsafe (sized-bitvec-set! bv 7))
+    (println (unsafe (sized-bitvec-get bv 0)))
+    (println (unsafe (sized-bitvec-get bv 3)))
+    (println (unsafe (sized-bitvec-get bv 7)))
+    (println (unsafe (sized-bitvec-get bv 1)))
+    ; Popcount
+    (println (unsafe (sized-bitvec-count bv)))
+    ; Toggle clears bit 0, sets bit 1
+    (unsafe (sized-bitvec-toggle! bv 0))
+    (unsafe (sized-bitvec-toggle! bv 1))
+    (println (unsafe (sized-bitvec-get bv 0)))
+    (println (unsafe (sized-bitvec-get bv 1)))
+    (println (unsafe (sized-bitvec-count bv)))
+    ; Clear bit 3
+    (unsafe (sized-bitvec-clear! bv 3))
+    (println (unsafe (sized-bitvec-get bv 3)))
+    (println (unsafe (sized-bitvec-count bv)))
+    ; Assertion on length passes
+    (unsafe (sized-bitvec-assert-len! bv (Static 16)))
+    (println 1)
+    (unsafe (sized-bitvec-free bv)))
+  0)

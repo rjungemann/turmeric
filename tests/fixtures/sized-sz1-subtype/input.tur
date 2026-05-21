@@ -1,0 +1,55 @@
+; Phase SZ1: Sized type subtyping -- runtime size compatibility.
+; Demonstrates the runtime analog of the subtyping rule:
+;   (SizedVec n int) is compatible with (SizedVec m int) iff n = m.
+; Uses size-compat?, size-assert-eq!, and size-assert-le!.
+
+(defgadt Size []
+  (Static (int) : (Size))
+  (Add (Size) (Size) : (Size))
+  (Mul (Size) (Size) : (Size)))
+
+(defgadt SizedVec [n a]
+  (SVNil : (SizedVec Size int))
+  (SVCons int (SizedVec Size int) : (SizedVec Size int)))
+
+(defn size-eval [s :Size] :int
+  (match s
+    (Static n)   n
+    (Add s1 s2)  (+ (size-eval s1) (size-eval s2))
+    (Mul s1 s2)  (* (size-eval s1) (size-eval s2))))
+
+(defn size-compat? [s1 :Size s2 :Size] :bool (= (size-eval s1) (size-eval s2)))
+(defn size-assert-eq! [s1 :Size s2 :Size] :nil
+  (require-msg! (= (size-eval s1) (size-eval s2)) "sized type mismatch: sizes are not equal"))
+(defn size-assert-le! [s1 :Size s2 :Size] :nil
+  (require-msg! (<= (size-eval s1) (size-eval s2)) "sized type mismatch: size exceeds upper bound"))
+
+(defn sized-vec-len [v :SizedVec] :int
+  (match v
+    (SVNil)       0
+    (SVCons _ xs) (+ 1 (sized-vec-len xs))))
+
+(defn sized-vec-size [v :SizedVec] :Size (Static (sized-vec-len v)))
+(defn sized-vec-of-3 [a :int b :int c :int] :SizedVec (SVCons a (SVCons b (SVCons c (SVNil)))))
+
+(defn main [] :int
+  ; size-compat?: equal sizes are compatible
+  (println (size-compat? (Static 4) (Add (Static 2) (Static 2))))
+  ; size-compat?: different sizes are not compatible
+  (println (size-compat? (Static 3) (Static 4)))
+  ; size-compat?: compound expressions that evaluate to the same value
+  (println (size-compat? (Mul (Static 2) (Static 5)) (Add (Static 3) (Static 7))))
+  ; size-assert-eq!: passes when sizes match -- demonstrates subtyping check
+  (size-assert-eq! (Static (sized-vec-len (sized-vec-of-3 1 2 3))) (Static 3))
+  (println "size-3-ok")
+  ; size-assert-le!: passes when actual <= upper bound
+  (size-assert-le! (Static 3) (Static 10))
+  (println "fits-in-10")
+  ; size-assert-le!: exact boundary passes
+  (size-assert-le! (Static 5) (Static 5))
+  (println "exact-fits")
+  ; size-compat? between two vec sizes (construct fresh for each)
+  (let [n1 (sized-vec-len (sized-vec-of-3 10 20 30))]
+    (let [n2 (sized-vec-len (sized-vec-of-3 40 50 60))]
+      (println (= n1 n2))))
+  0)

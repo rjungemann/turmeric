@@ -30,6 +30,7 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 
 ## Language Features
 
+- **[structs-guide.md](structs-guide.md)** — Struct types: `defstruct`, field access, ownership kinds, typeclasses, RC, linear fields
 - **[hkt-guide.md](hkt-guide.md)** — Higher-kinded types (functor, monad, applicative abstractions, performance/dispatch model)
 - **[hrt-guide.md](hrt-guide.md)** — Higher-ranked types: rank-2/3 polymorphic function parameters
 - **[module-system-guide.md](module-system-guide.md)** — Module system, namespacing, exports
@@ -39,6 +40,7 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 - **[gadts-guide.md](gadts-guide.md)** — GADTs: `defgadt`, type refinement, equality witnesses, union types, gradual typing
 - **[gadts-cookbook.md](gadts-cookbook.md)** — GADTs cookbook: practical patterns and recipes
 - **[union-intersection-types-guide.md](union-intersection-types-guide.md)** — Union (`A | B`) and intersection (`A & B`) types, `any`, gradual typing
+- **[sized-types-guide.md](sized-types-guide.md)** — Sized types: compile-time size tracking, stack allocation, `SizedBuf`, `SizedMatrix`, `SizedBitVec` (`-Xsized-types`)
 
 ## Type Safety
 
@@ -89,7 +91,7 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 - Concurrency → [threading-guide.md](threading-guide.md), [async-await-guide.md](async-await-guide.md), [stm-guide.md](stm-guide.md), [stm-tutorial.md](stm-tutorial.md), [session-types-guide.md](session-types-guide.md), [dynamic-vars-guide.md](dynamic-vars-guide.md)
 - Data structures → [hamt-guide.md](hamt-guide.md)
 - Control flow → [effects-system-guide.md](effects-system-guide.md), [logic-programming-guide.md](logic-programming-guide.md), [serializable-continuations-guide.md](serializable-continuations-guide.md), [web-continuations-guide.md](web-continuations-guide.md)
-- Type system → [hkt-guide.md](hkt-guide.md), [hrt-guide.md](hrt-guide.md), [module-system-guide.md](module-system-guide.md), [type-annotations-guide.md](type-annotations-guide.md), [union-intersection-types-guide.md](union-intersection-types-guide.md)
+- Type system → [structs-guide.md](structs-guide.md), [hkt-guide.md](hkt-guide.md), [hrt-guide.md](hrt-guide.md), [module-system-guide.md](module-system-guide.md), [type-annotations-guide.md](type-annotations-guide.md), [union-intersection-types-guide.md](union-intersection-types-guide.md), [sized-types-guide.md](sized-types-guide.md)
 - Type safety → [substructural-types-guide.md](substructural-types-guide.md), [uniqueness-types-guide.md](uniqueness-types-guide.md)
 - Effects design → [effects-vs-monads.md](effects-vs-monads.md)
 - Package management → [package-management-guide.md](package-management-guide.md)
