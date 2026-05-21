@@ -21,7 +21,7 @@
 ;;;   int -- bytes read (>= 0), 0 on EOF, -1 on error
 ;;;
 ;;; Example:
-;;;   (async-read-stdin 1024)  ; => 42
+;;;   (async-read-stdin 1024)  ; => bytes-read count (0 on EOF)
 ;;;
 ;;; Since: Phase T24
 (defn async-read-stdin [buf-size :int] #{Unsafe} :int
@@ -77,7 +77,7 @@
 ;;;   int -- number of bytes read in the most recent async-read-stdin
 ;;;
 ;;; Example:
-;;;   (async-stdin-len)  ; => 42
+;;;   (async-stdin-len)  ; => byte count from last async-read-stdin
 ;;;
 ;;; Since: Phase T24
 (defn async-stdin-len [] #{Unsafe} :int
@@ -99,7 +99,7 @@
 ;;;   int -- total bytes written, or -1 on error
 ;;;
 ;;; Example:
-;;;   (async-write-stdout "hello\n" 6)  ; => 6
+;;;   (async-write-stdout "hello\n" 6)  ; => total bytes written (6 here)
 ;;;
 ;;; Since: Phase T24
 (defn async-write-stdout [data :cstr len :int] #{Unsafe} :int
