@@ -80,7 +80,7 @@
 (println
   (handle (use-ask)
     (Ask [] k) (resume k 41)))</div>
-          <div class="code-version sweet-exp-version" style="display: none;">#lang turmeric/sweet-exp
+          <div class="code-version sweet-exp-version" style="display: none;">#lang sweet-exp
 defeffect Ask [] :int
 
 defn use-ask [] :int
@@ -209,7 +209,7 @@ println
     (Red)   "red"
     (Green) "green"
     (Blue)  "blue"))</div>
-      <div class="code-version sweet-exp-version" style="display:none;">#lang turmeric/neoteric
+      <div class="code-version sweet-exp-version" style="display:none;">#lang sweet-exp
 
 defclass Show [a]
   show [x] :cstr
@@ -277,7 +277,7 @@ defn color-name [c] :cstr
 
 (println (run-prod (compute 1)))  ;; =&gt; 42
 (println (run-test (compute 1)))  ;; =&gt; 1</div>
-      <div class="code-version sweet-exp-version" style="display:none;">#lang turmeric/neoteric
+      <div class="code-version sweet-exp-version" style="display:none;">#lang sweet-exp
 
 defeffect Ask [] :int
 

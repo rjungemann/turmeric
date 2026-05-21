@@ -2,6 +2,37 @@
 
 User-facing documentation for Turmeric features, tutorials, and best practices.
 
+Code examples are available in both standard S-expression syntax (`turmeric`) and
+sweet-expression syntax (`sweet-exp`). Use the toggle above each paired example to
+switch between them.
+
+## Authoring paired examples
+
+Write two consecutive fenced blocks -- a `turmeric` block immediately followed (no
+prose between) by a `sweet-exp` block. `genguides.py` detects the pair and renders
+a toggle widget automatically. A lone `turmeric` block with no `sweet-exp` sibling
+renders as a plain code block; all existing blocks remain valid.
+
+The second (sweet-exp) variant always opens with `#lang sweet-exp` when the snippet
+is a complete runnable program; inline snippets omit the directive. Do not use the
+invalid `#lang turmeric/sweet-exp` or mix `#lang turmeric/neoteric` into sweet-exp
+labelled examples -- the correct directive is `#lang sweet-exp` in every case.
+
+Example:
+
+````markdown
+```turmeric
+(defn use-ask [] :int
+  (+ 1 (perform (Ask))))
+```
+```sweet-exp
+defn use-ask [] :int
+  {1 + perform(Ask())}
+```
+````
+
+Note: all guide content must be ASCII-only. Use `--` (double hyphen), never em dashes.
+
 ## Getting Started
 
 - **[quickstart.md](quickstart.md)** — Prose introduction: expressions, functions, control flow, Option, Result, collections, closures, structs, and algebraic effects
@@ -60,6 +91,7 @@ User-facing documentation for Turmeric features, tutorials, and best practices.
 - **[custom-effects-tutorial.md](custom-effects-tutorial.md)** — Writing custom effects
 - **[snake-game-tutorial.md](snake-game-tutorial.md)** — Building the snake game example
 - **[web-continuations-tutorial.md](web-continuations-tutorial.md)** — Multi-page web forms using serializable continuations (guestbook example)
+- **[web-emscripten-tutorial.md](web-emscripten-tutorial.md)** — Compile Turmeric to WebAssembly with Emscripten and run it in a browser
 
 ### EAVT Database (multi-chapter)
 

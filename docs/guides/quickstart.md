@@ -37,6 +37,11 @@ parenthesised list with the operator first:
 (* 6 7)       ; => 42
 (- 100 58)    ; => 42
 ```
+```sweet-exp
+{1 + 2}       ; => 3
+{6 * 7}       ; => 42
+{100 - 58}    ; => 42
+```
 
 Strings are double-quoted. Booleans are `true` and `false`. `println` prints
 a value followed by a newline:
@@ -46,6 +51,11 @@ a value followed by a newline:
 (= 1 1)                        ; => true
 (not true)                     ; => false
 ```
+```sweet-exp
+println("Hello, Turmeric!")   ; prints: Hello, Turmeric!
+{1 = 1}                        ; => true
+not(true)                      ; => false
+```
 
 ### Local bindings with `let`
 
@@ -53,6 +63,9 @@ a value followed by a newline:
 
 ```turmeric
 (let [x 10 y 20] (+ x y))   ; => 30
+```
+```sweet-exp
+let [x 10 y 20] {x + y}   ; => 30
 ```
 
 All bindings in the same `let` share the same scope; they cannot refer to
@@ -67,6 +80,12 @@ annotated with `:type`:
 (defn square [x :int] :int (* x x))
 
 (square 9)    ; => 81
+```
+```sweet-exp
+defn square [x :int] :int
+  {x * x}
+
+square(9)    ; => 81
 ```
 
 In the REPL, top-level definitions persist across expressions. `:doc square`
@@ -88,6 +107,13 @@ evaluating.
 (abs -5)    ; => 5
 (abs  5)    ; => 5
 ```
+```sweet-exp
+defn abs [n :int] :int
+  if {n < 0} {0 - n} n
+
+abs(-5)    ; => 5
+abs(5)     ; => 5
+```
 
 ### Multi-branch with `cond`
 
@@ -103,6 +129,17 @@ evaluating.
 (sign -3)    ; => -1
 (sign  0)    ; => 0
 ```
+```sweet-exp
+defn sign [n :int] :int
+  cond
+    {n > 0}  1
+    {n < 0}  -1
+    :else    0
+
+sign(3)     ; => 1
+sign(-3)    ; => -1
+sign(0)     ; => 0
+```
 
 ### One-arm conditionals: `when` and `unless`
 
@@ -111,6 +148,10 @@ Use `when` and `unless` for side effects that only run under a condition:
 ```turmeric
 (when   (< x 0) (println "negative"))
 (unless (= x 0) (println "non-zero"))
+```
+```sweet-exp
+when   {x < 0} println("negative")
+unless {x = 0} println("non-zero")
 ```
 
 Both return nil when the condition is not met.
@@ -126,6 +167,12 @@ macro (see Collections below):
 
 (factorial 10)    ; => 3628800
 ```
+```sweet-exp
+defn factorial [n :int] :int
+  if {n <= 1} 1 {n * factorial({n - 1})}
+
+factorial(10)    ; => 3628800
+```
 
 ---
 
@@ -140,6 +187,11 @@ macro (see Collections below):
 (option-none? (option-none))       ; => true
 (option-some? (option-none))       ; => false
 ```
+```sweet-exp
+option-some?(option-some(42))    ; => true
+option-none?(option-none())      ; => true
+option-some?(option-none())      ; => false
+```
 
 Extract the value with `option-unwrap` (panics on none) or provide a fallback
 with `option-unwrap-or`:
@@ -147,6 +199,10 @@ with `option-unwrap-or`:
 ```turmeric
 (option-unwrap     (option-some 99))    ; => 99
 (option-unwrap-or  (option-none) -1)    ; => -1
+```
+```sweet-exp
+option-unwrap(option-some(99))       ; => 99
+option-unwrap-or(option-none() -1)   ; => -1
 ```
 
 Returning `Option` instead of crashing is idiomatic for operations that
@@ -159,6 +215,13 @@ might not produce a value:
 (option-unwrap    (safe-div 10 2))     ; => 5
 (option-unwrap-or (safe-div 10 0) -1)  ; => -1
 ```
+```sweet-exp
+defn safe-div [a :int b :int]
+  if {b = 0} option-none() option-some({a / b})
+
+option-unwrap(safe-div(10 2))           ; => 5
+option-unwrap-or(safe-div(10 0) -1)     ; => -1
+```
 
 ### `Result`: success or failure
 
@@ -168,6 +231,11 @@ might not produce a value:
 (ok? (ok 100))               ; => true
 (err? (ok 100))              ; => false
 (result-unwrap-or (err 0) -1)    ; => -1
+```
+```sweet-exp
+ok?(ok(100))                   ; => true
+err?(ok(100))                  ; => false
+result-unwrap-or(err(0) -1)    ; => -1
 ```
 
 Use `Result` when the error case carries a useful value (an error code, a
@@ -187,6 +255,19 @@ Combine predicates inside `cond` to dispatch on either type:
   (cond (option-some? o) (println "some!")
         (option-none? o) (println "none!")
         :else            (println "unknown")))
+```
+```sweet-exp
+defn describe-result [r]
+  cond
+    ok?(r)  println("ok!")
+    err?(r) println("err!")
+    :else   println("unknown")
+
+defn describe-option [o]
+  cond
+    option-some?(o) println("some!")
+    option-none?(o) println("none!")
+    :else           println("unknown")
 ```
 
 See `docs/guides/error-handling-guide.md` for the full story: `panic`,
@@ -209,6 +290,14 @@ See `docs/guides/error-handling-guide.md` for the full story: `panic`,
   (println (vec-len v))      ; 3
   (println (vec-get v 1)))   ; 20
 ```
+```sweet-exp
+let [v vec-new()]
+  vec-push!(v 10)
+  vec-push!(v 20)
+  vec-push!(v 30)
+  println(vec-len(v))      ; 3
+  println(vec-get(v 1))    ; 20
+```
 
 The `!` suffix on `vec-push!` signals mutation -- the function modifies the
 vector in place rather than returning a new one.
@@ -222,6 +311,10 @@ vector in place rather than returning a new one.
 (for i 0 5 (println i))
 ; prints 0 through 4
 ```
+```sweet-exp
+for i 0 5 println(i)
+; prints 0 through 4
+```
 
 Combining `for` with a vector is a common pattern for building sequences:
 
@@ -231,6 +324,14 @@ Combining `for` with a vector is a common pattern for building sequences:
     (vec-push! squares (* i i)))
   (for i 0 5
     (println (vec-get squares i))))
+; prints 1 4 9 16 25
+```
+```sweet-exp
+let [squares vec-new()]
+  for i 1 6
+    vec-push!(squares {i * i})
+  for i 0 5
+    println(vec-get(squares i))
 ; prints 1 4 9 16 25
 ```
 
@@ -246,6 +347,10 @@ Combining `for` with a vector is a common pattern for building sequences:
 (let [add5 (fn [x :int] :int (+ x 5))]
   (add5 10))    ; => 15
 ```
+```sweet-exp
+let [add5 fn([x :int] :int {x + 5})]
+  add5(10)    ; => 15
+```
 
 Closures can be returned from functions, giving each call site its own
 captured environment:
@@ -258,6 +363,15 @@ captured environment:
   (println (add3 10))    ; 13
   (println (add7 10)))   ; 17
 ```
+```sweet-exp
+defn make-adder [n :int]
+  fn [x :int] :int {x + n}
+
+let [add3 make-adder(3)
+     add7 make-adder(7)]
+  println(add3(10))    ; 13
+  println(add7(10))    ; 17
+```
 
 ### Functions as arguments
 
@@ -267,6 +381,12 @@ Functions are first-class values. Pass them to other functions:
 (defn apply-twice [f x :int] :int (f (f x)))
 
 (apply-twice (fn [x :int] :int (* x 2)) 3)    ; => 12
+```
+```sweet-exp
+defn apply-twice [f x :int] :int
+  f(f(x))
+
+apply-twice(fn([x :int] :int {x * 2}) 3)    ; => 12
 ```
 
 `apply-twice` is not special -- it is just a function whose first parameter
@@ -286,6 +406,13 @@ name; field accessors are generated as `StructName-fieldname`:
   (println (Point-x p))    ; 3
   (println (Point-y p)))   ; 4
 ```
+```sweet-exp
+defstruct Point [x :int y :int]
+
+let [p Point(3 4)]
+  println(Point-x(p))    ; 3
+  println(Point-y(p))    ; 4
+```
 
 Struct values are heap-allocated. `:type (Point 1 2)` in the REPL confirms
 the type.
@@ -299,6 +426,14 @@ A complete example combining struct and function:
   (* (Rect-width r) (Rect-height r)))
 
 (area (Rect 6 7))    ; => 42
+```
+```sweet-exp
+defstruct Rect [width :int height :int]
+
+defn area [r] :int
+  {Rect-width(r) * Rect-height(r)}
+
+area(Rect(6 7))    ; => 42
 ```
 
 ---
@@ -316,6 +451,9 @@ a *handler* installed by the caller decides what to do.
 ```turmeric
 (defeffect Log [msg :cstr] :void)
 ```
+```sweet-exp
+defeffect Log [msg :cstr] :void
+```
 
 `perform` raises the effect and suspends until a handler responds:
 
@@ -323,6 +461,11 @@ a *handler* installed by the caller decides what to do.
 (defn do-work [] :void
   (perform (Log "starting"))
   (perform (Log "done")))
+```
+```sweet-exp
+defn do-work [] :void
+  perform(Log("starting"))
+  perform(Log("done"))
 ```
 
 Without a handler, the runtime raises an unhandled-effect error.
@@ -341,6 +484,16 @@ expression and continues the computation:
 ; starting
 ; done
 ```
+```sweet-exp
+handle do-work()
+  (Log [msg] k)
+    do
+      println(msg)
+      resume(k nil-value())
+; prints:
+; starting
+; done
+```
 
 ### Swapping handlers (dependency injection)
 
@@ -355,12 +508,27 @@ The same computation runs under different handlers without any changes to
 ; [LOG] starting
 ; [LOG] done
 ```
+```sweet-exp
+handle do-work()
+  (Log [msg] k)
+    do
+      println(str-concat("[LOG] " msg))
+      resume(k nil-value())
+; prints:
+; [LOG] starting
+; [LOG] done
+```
 
 A silent handler discards all messages:
 
 ```turmeric
 (handle (do-work)
   (Log [msg] k) (resume k (nil-value)))
+; prints nothing; do-work still completes
+```
+```sweet-exp
+handle do-work()
+  (Log [msg] k) resume(k nil-value())
 ; prints nothing; do-work still completes
 ```
 
@@ -379,6 +547,16 @@ evaluates to whatever the handler passes to `resume`:
   (Ask [] k) (resume k 41))
 ; => 42
 ```
+```sweet-exp
+defeffect Ask [] :int
+
+defn use-ask [] :int
+  {1 + perform(Ask())}
+
+handle use-ask()
+  (Ask [] k) resume(k 41)
+; => 42
+```
 
 See `docs/guides/effects-system-guide.md` for the full reference: effect rows,
 composable handlers, and one-shot vs. cloneable continuations.
@@ -394,6 +572,11 @@ Write Turmeric code to a `.tur` file and load it into any REPL session with
 ; hello.tur
 (defn greet [name :cstr] :void
   (println (str-concat "Hello, " (str-concat name "!"))))
+```
+```sweet-exp
+; hello.tur
+defn greet [name :cstr] :void
+  println(str-concat("Hello, " str-concat(name "!")))
 ```
 
 ```

@@ -35,6 +35,19 @@ Three core primitives:
     (println (str "Hello " name)))
   (Read [] k) (resume k "World"))
 ```
+```sweet-exp
+;; Declare an effect
+defeffect Read [] :str
+
+;; Perform the effect
+def name perform(Read())
+
+;; Handle the effect
+handle
+  let [name perform(Read())]
+    println(str("Hello " name))
+  (Read [] k) resume(k "World")
+```
 
 ### One-Shot Continuations
 
@@ -57,6 +70,11 @@ Effects enable ergonomic async/await (see [Async/Await Guide](async-await-guide.
   (await (read-file "data.txt"))
   (println "done"))
 ```
+```sweet-exp
+async
+  await(read-file("data.txt"))
+  println("done")
+```
 
 ### Custom Control Flow
 
@@ -71,6 +89,19 @@ Implement generators, early returns, or custom exception handling:
     (perform (Yield 1))
     (perform (Yield 2)))
   (Yield [v] k) (do (println v) (resume k nil)))
+```
+```sweet-exp
+;; Generator: yield values one at a time
+defeffect Yield [v :int] :nil
+
+handle
+  do
+    perform(Yield(1))
+    perform(Yield(2))
+  (Yield [v] k)
+    do
+      println(v)
+      resume(k nil)
 ```
 
 ### Dependency Injection
@@ -88,6 +119,17 @@ Mock I/O operations in tests:
 (handle code
   (ReadFile [path] k) (resume k "mock data"))
 ```
+```sweet-exp
+defeffect ReadFile [path :cstr] :str
+
+;; Production
+handle code
+  (ReadFile [path] k) resume(k read-file-real(path))
+
+;; Tests
+handle code
+  (ReadFile [path] k) resume(k "mock data")
+```
 
 ### Transactional Retry
 
@@ -102,6 +144,16 @@ Automatic conflict resolution (see [STM Tutorial](stm-tutorial.md)):
       (perform (Retry))))
   ;; Re-run transaction on conflict
   (Retry [] k) (resume k nil))
+```
+```sweet-exp
+defeffect Retry [] :nil
+
+handle
+  fn []
+    when {read-tvar(x) < 10}
+      perform(Retry())
+  ;; Re-run transaction on conflict
+  (Retry [] k) resume(k nil)
 ```
 
 ## Effect Rows (Typed Effects)
@@ -126,6 +178,19 @@ An effect row appears between the parameter list and the return type:
 (defn run-twice [f :(fn [] #{e} :int)] #{e} :int
   (+ (f) (f)))
 ```
+```sweet-exp
+;; Annotated: may perform the Write effect
+defn log-msg [msg :cstr] #{Write} :nil
+  perform(Write(msg))
+
+;; Pure: performs no effects
+defn add [a :int b :int] #{} :int
+  {a + b}
+
+;; Row-polymorphic: propagates the row of the function argument
+defn run-twice [f :(fn [] #{e} :int)] #{e} :int
+  {f() + f()}
+```
 
 The row `#{e}` is a row variable: `run-twice` performs whatever effects `f` performs, no more.
 
@@ -144,6 +209,9 @@ Effects can be declared `^private` to prevent leakage outside their defining mod
 ```turmeric
 (defeffect ^private InternalLog [msg :cstr] :nil)
 ```
+```sweet-exp
+defeffect ^private InternalLog [msg :cstr] :nil
+```
 
 A `^private` effect cannot be `perform`ed or `handle`d outside the module that declares it.
 Cross-module effect rows are automatically filtered: if a callee internally performs a private
@@ -155,6 +223,11 @@ To export an effect explicitly:
 (defmodule MyLib
   (export (effect Write) (effect Read))
   ...)
+```
+```sweet-exp
+defmodule MyLib
+  export (effect Write) (effect Read)
+  ...
 ```
 
 Other modules import it with `:refer [(effect Write)]`.
