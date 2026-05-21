@@ -37,9 +37,11 @@
 #  include <editline/readline.h>
 #endif
 
+#ifdef TURI_HAVE_EDITLINE
 /* E11: tab-completion — current REPL environment for the completion generator.
  * Updated whenever the env is recreated (e.g. after :reset). */
 static TuriEnv *g_completion_env = NULL;
+#endif
 
 /* Compiler internals (CMake adds src/ to the include path) */
 #include "arena.h"
