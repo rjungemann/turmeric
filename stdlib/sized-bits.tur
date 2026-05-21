@@ -1,0 +1,251 @@
+;; Phase SZ3: SizedBitVec -- packed bit vector with sized type annotations.
+;;
+;; SizedBitVec stores n bits in ceil(n/8) bytes using a flat uint8_t array.
+;; C struct layout:
+;;   struct { int64_t len; uint8_t *bits; }
+;; where len is the number of bits (not bytes) and bits holds the packed data.
+;; Bit i is stored at byte (i/8), bit (i%8) within that byte (LSB = bit 0).
+;;
+;; All operations require (unsafe ...) at the call site.
+;; This file requires stdlib/sized.tur to be loaded first.
+
+;; ===== Allocation =====
+
+;;; sized-bitvec-new -- allocate a bit vector of n bits, all zero.
+;;;
+;;; Parameters:
+;;;   n -- number of bits
+;;;
+;;; Returns:
+;;;   Opaque pointer to the new SizedBitVec.
+;;;
+;;; Example:
+;;;   (let [bv (unsafe (sized-bitvec-new 16))] ...)
+;;;
+;;; Since: Phase SZ3
+(defn sized-bitvec-new [n] #{Unsafe} :int
+  ```c
+  struct { int64_t len; uint8_t *bits; } *bv = malloc(sizeof(*bv));
+  bv->len  = n;
+  int64_t nbytes = (n + 7) / 8;
+  bv->bits = nbytes > 0 ? (uint8_t *)calloc((size_t)nbytes, 1) : NULL;
+  return (int64_t)(intptr_t)bv;
+  ```)
+
+;;; sized-bitvec-free -- free a SizedBitVec and its backing storage.
+;;;
+;;; Parameters:
+;;;   bv -- SizedBitVec pointer from sized-bitvec-new
+;;;
+;;; Returns:
+;;;   nil
+;;;
+;;; Example:
+;;;   (unsafe (sized-bitvec-free bv))
+;;;
+;;; Since: Phase SZ3
+(defn sized-bitvec-free [bv] #{Unsafe} :nil
+  ```c
+  struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
+  if (b->bits) free(b->bits);
+  free(b);
+  ```)
+
+;; ===== Accessors =====
+
+;;; sized-bitvec-len -- number of bits in the bit vector.
+;;;
+;;; Parameters:
+;;;   bv -- SizedBitVec pointer
+;;;
+;;; Returns:
+;;;   Bit count as :int.
+;;;
+;;; Example:
+;;;   (sized-bitvec-len bv)  ; => 16
+;;;
+;;; Since: Phase SZ3
+(defn sized-bitvec-len [bv] #{Unsafe} :int
+  ```c
+  return ((struct { int64_t len; uint8_t *bits; } *)(intptr_t)bv)->len;
+  ```)
+
+;;; sized-bitvec-size -- return the bit count as a Size expression.
+;;;
+;;; Parameters:
+;;;   bv -- SizedBitVec pointer
+;;;
+;;; Returns:
+;;;   A (Static n) where n is the bit count.
+;;;
+;;; Example:
+;;;   (size-eval (unsafe (sized-bitvec-size bv)))  ; => bit count
+;;;
+;;; Since: Phase SZ3
+(defn sized-bitvec-size [bv] #{Unsafe} :Size
+  ```c
+  return ctor_Static(((struct { int64_t len; uint8_t *bits; } *)(intptr_t)bv)->len);
+  ```)
+
+;;; sized-bitvec-get -- read bit i; aborts if out of range.
+;;;
+;;; Parameters:
+;;;   bv -- SizedBitVec pointer
+;;;   i  -- zero-based bit index (0 <= i < len)
+;;;
+;;; Returns:
+;;;   1 if bit i is set, 0 if clear.
+;;;
+;;; Example:
+;;;   (sized-bitvec-get bv 3)  ; => 0 or 1
+;;;
+;;; Since: Phase SZ3
+(defn sized-bitvec-get [bv i] #{Unsafe} :int
+  ```c
+  struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
+  if (i < 0 || i >= b->len) {
+    fprintf(stderr, "sized-bitvec-get: index %lld out of bounds\n", (long long)i);
+    exit(1);
+  }
+  return (b->bits[i / 8] >> (i % 8)) & 1;
+  ```)
+
+;;; sized-bitvec-set! -- set bit i to 1; aborts if out of range.
+;;;
+;;; Parameters:
+;;;   bv -- SizedBitVec pointer
+;;;   i  -- zero-based bit index
+;;;
+;;; Returns:
+;;;   The same bv pointer (for chaining).
+;;;
+;;; Example:
+;;;   (sized-bitvec-set! bv 3)
+;;;
+;;; Since: Phase SZ3
+(defn sized-bitvec-set! [bv i] #{Unsafe} :int
+  ```c
+  struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
+  if (i < 0 || i >= b->len) {
+    fprintf(stderr, "sized-bitvec-set!: index %lld out of bounds\n", (long long)i);
+    exit(1);
+  }
+  b->bits[i / 8] |= (uint8_t)(1 << (i % 8));
+  return bv;
+  ```)
+
+;;; sized-bitvec-clear! -- clear bit i to 0; aborts if out of range.
+;;;
+;;; Parameters:
+;;;   bv -- SizedBitVec pointer
+;;;   i  -- zero-based bit index
+;;;
+;;; Returns:
+;;;   The same bv pointer (for chaining).
+;;;
+;;; Example:
+;;;   (sized-bitvec-clear! bv 3)
+;;;
+;;; Since: Phase SZ3
+(defn sized-bitvec-clear! [bv i] #{Unsafe} :int
+  ```c
+  struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
+  if (i < 0 || i >= b->len) {
+    fprintf(stderr, "sized-bitvec-clear!: index %lld out of bounds\n", (long long)i);
+    exit(1);
+  }
+  b->bits[i / 8] &= (uint8_t)~(1 << (i % 8));
+  return bv;
+  ```)
+
+;;; sized-bitvec-toggle! -- flip bit i; aborts if out of range.
+;;;
+;;; Parameters:
+;;;   bv -- SizedBitVec pointer
+;;;   i  -- zero-based bit index
+;;;
+;;; Returns:
+;;;   The same bv pointer (for chaining).
+;;;
+;;; Example:
+;;;   (sized-bitvec-toggle! bv 3)
+;;;
+;;; Since: Phase SZ3
+(defn sized-bitvec-toggle! [bv i] #{Unsafe} :int
+  ```c
+  struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
+  if (i < 0 || i >= b->len) {
+    fprintf(stderr, "sized-bitvec-toggle!: index %lld out of bounds\n", (long long)i);
+    exit(1);
+  }
+  b->bits[i / 8] ^= (uint8_t)(1 << (i % 8));
+  return bv;
+  ```)
+
+;; ===== Bulk operations =====
+
+;;; sized-bitvec-count -- count the number of set bits (popcount).
+;;;
+;;; Parameters:
+;;;   bv -- SizedBitVec pointer
+;;;
+;;; Returns:
+;;;   Number of bits set to 1.
+;;;
+;;; Example:
+;;;   (sized-bitvec-count bv)  ; => set bit count
+;;;
+;;; Since: Phase SZ3
+(defn sized-bitvec-count [bv] #{Unsafe} :int
+  ```c
+  struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
+  int64_t nbytes = (b->len + 7) / 8;
+  int64_t count = 0;
+  for (int64_t i = 0; i < nbytes; i++) {
+    uint8_t byte = b->bits[i];
+    while (byte) { count += byte & 1; byte >>= 1; }
+  }
+  return count;
+  ```)
+
+;;; sized-bitvec-fill! -- set all bits to v (0=clear, nonzero=set).
+;;;
+;;; Parameters:
+;;;   bv -- SizedBitVec pointer
+;;;   v  -- 0 to clear all bits, nonzero to set all bits
+;;;
+;;; Returns:
+;;;   The same bv pointer.
+;;;
+;;; Example:
+;;;   (sized-bitvec-fill! bv 0)   ; clear all
+;;;   (sized-bitvec-fill! bv 1)   ; set all
+;;;
+;;; Since: Phase SZ3
+(defn sized-bitvec-fill! [bv v] #{Unsafe} :int
+  ```c
+  struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
+  int64_t nbytes = (b->len + 7) / 8;
+  memset(b->bits, v ? 0xFF : 0x00, (size_t)nbytes);
+  return bv;
+  ```)
+
+;; ===== Size assertion =====
+
+;;; sized-bitvec-assert-len! -- panic if the bit vector does not have the expected length.
+;;;
+;;; Parameters:
+;;;   bv       -- SizedBitVec pointer
+;;;   expected -- expected bit count as a (Size)
+;;;
+;;; Returns:
+;;;   nil on success; panics on mismatch.
+;;;
+;;; Example:
+;;;   (unsafe (sized-bitvec-assert-len! bv (Static 16)))
+;;;
+;;; Since: Phase SZ3
+(defn sized-bitvec-assert-len! [bv expected] #{Unsafe} :nil
+  (require-msg!
+    (= (sized-bitvec-len bv) (size-eval expected))
+    "sized-bitvec-assert-len!: bit count mismatch"))

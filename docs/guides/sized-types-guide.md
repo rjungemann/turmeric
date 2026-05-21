@@ -1,0 +1,558 @@
+---
+title: Sized Types
+category: Language Features
+description: Tracking data-structure sizes in the type system for memory layout, stack allocation, and type-safe array operations (`-Xsized-types`)
+---
+
+# Sized Types in Turmeric
+
+Sized types track the **size** of data structures at compile time. This enables
+memory layout verification, stack allocation of fixed-size buffers, type-safe
+array operations, and FFI structs that carry size annotations through Turmeric
+wrappers.
+
+Sized types are enabled with the `-Xsized-types` compiler flag.
+
+## Table of Contents
+
+1. [Size Foundations](#size-foundations)
+   - [StaticInt](#staticint)
+   - [Size expressions](#size-expressions)
+   - [SizedVec](#sizedvec)
+2. [Size Predicates and Assertions](#size-predicates-and-assertions)
+3. [Size Inference](#size-inference)
+4. [Flat Buffers and Memory Layout](#flat-buffers-and-memory-layout)
+   - [Heap allocation](#heap-allocation)
+   - [Stack allocation](#stack-allocation)
+   - [Allocation dispatch](#allocation-dispatch)
+5. [SizedMatrix](#sizedmatrix)
+6. [SizedBitVec](#sizedbitvec)
+7. [FFI Integration](#ffi-integration)
+8. [Error Messages](#error-messages)
+9. [API Reference](#api-reference)
+
+---
+
+## Size Foundations
+
+### StaticInt
+
+`StaticInt` is a compile-time integer annotation. It carries an integer value
+intended for use as a type-level literal.
+
+```turmeric
+(import stdlib/sized)
+
+(let [si (static-int 10)]
+  (println (static-int-val si)))   ; => 10
+```
+
+Arithmetic on `StaticInt` values:
+
+```turmeric
+(let [a (static-int 3)
+      b (static-int 4)]
+  (println (static-int-val (static-int-add a b)))   ; => 7
+  (println (static-int-val (static-int-mul a b))))  ; => 12
+```
+
+### Size expressions
+
+`Size` is a GADT that represents arithmetic expressions over compile-time sizes.
+Its constructors are:
+
+| Constructor     | Meaning                        |
+|-----------------|--------------------------------|
+| `(Static n)`    | Literal size `n`               |
+| `(Add s1 s2)`   | Sum of two sizes               |
+| `(Mul s1 s2)`   | Product of two sizes           |
+
+Use `size-static`, `size-add`, and `size-mul` to build `Size` expressions, and
+`size-eval` to reduce them to a runtime integer:
+
+```turmeric
+(let [s (size-add (size-static 3) (size-mul (size-static 2) (size-static 5)))]
+  (println (size-eval s)))   ; => 13
+```
+
+`size-normalize` flattens a `Size` expression to `(Static n)`:
+
+```turmeric
+(let [s (size-normalize (size-add (size-static 4) (size-static 6)))]
+  (println (size-eval s)))   ; => 10
+```
+
+`size-simplify` folds constant sub-expressions and collapses identities such as
+`0 + s = s` and `1 * s = s`:
+
+```turmeric
+(let [s (size-simplify (size-mul (size-static 1) (size-add (size-static 2) (size-static 3))))]
+  (println (size-eval s)))   ; => 5
+```
+
+### SizedVec
+
+`SizedVec` is a linked-list collection that carries a `Size` annotation. It is
+primarily useful when you need a simple sized container and do not require
+flat memory layout (see [Flat Buffers](#flat-buffers-and-memory-layout) for
+that).
+
+```turmeric
+(let [v (sized-vec-of-3 10 20 30)]
+  (println (sized-vec-len v))       ; => 3
+  (println (sized-vec-get v 1)))    ; => 20
+```
+
+`sized-vec-push` prepends an element and returns a new `SizedVec` whose size
+is `n + 1`:
+
+```turmeric
+(let [v  (sized-vec-of-2 1 2)
+      v2 (sized-vec-push v 0)]
+  (println (sized-vec-len v2)))   ; => 3
+```
+
+---
+
+## Size Predicates and Assertions
+
+Five predicates compare two `Size` expressions at runtime:
+
+```turmeric
+(size-eq? (size-static 4) (size-add (size-static 2) (size-static 2)))   ; => true
+(size-lt? (size-static 3) (size-static 4))                               ; => true
+(size-le? (size-static 4) (size-static 4))                               ; => true
+(size-gt? (size-static 5) (size-static 3))                               ; => true
+(size-ge? (size-static 4) (size-static 4))                               ; => true
+```
+
+`size-compat?` is the runtime analog of the subtyping rule -- two sizes are
+compatible when they evaluate to the same integer:
+
+```turmeric
+(size-compat? (size-static 8) (size-mul (size-static 2) (size-static 4)))
+; => true
+```
+
+Two assertion functions panic with a descriptive message when the condition
+fails:
+
+```turmeric
+; passes silently
+(size-assert-eq! (size-static 4) (size-add (size-static 2) (size-static 2)))
+
+; passes silently (3 <= 10)
+(size-assert-le! (size-static 3) (size-static 10))
+
+; panics: "sized type mismatch"
+(size-assert-eq! (size-static 4) (size-static 5))
+```
+
+---
+
+## Size Inference
+
+When the number of elements is known at the call site, use the fixed-arity
+constructors to let the compiler infer the size:
+
+```turmeric
+(let [v1 (sized-vec-of-1 42)]          ; size inferred as 1
+  (let [v2 (sized-vec-of-2 1 2)]       ; size inferred as 2
+    (let [v3 (sized-vec-of-3 1 2 3)]   ; size inferred as 3
+      (let [v4 (sized-vec-of-4 1 2 3 4)] ; size inferred as 4
+        (println (sized-vec-len v3))))))  ; => 3
+```
+
+When the size is determined at runtime (e.g. from a cons list), use
+`sized-vec-from-list`:
+
+```turmeric
+(let [lst (cons 10 (cons 20 (cons 30 (nil-value))))]
+  (let [v (unsafe (sized-vec-from-list lst))]
+    (println (sized-vec-len v))))   ; => 3
+```
+
+`sized-vec-from-list` requires `#{Unsafe}` because it casts the cons cell
+layout directly.
+
+---
+
+## Flat Buffers and Memory Layout
+
+`SizedBuf` stores elements in a contiguous `int64_t *data` array. This is more
+cache-friendly than `SizedVec` (which allocates one struct per element) and is
+the right choice for numerical work, bulk operations, or FFI.
+
+C struct layout:
+
+```c
+struct { int64_t len; int64_t *data; }
+```
+
+All `SizedBuf` operations require `#{Unsafe}` at the call site.
+
+### Heap allocation
+
+```turmeric
+(import stdlib/sized-buf)
+
+(let [b (unsafe (sized-buf-new-zeroed 4))]
+  (unsafe (sized-buf-set! b 0 10))
+  (unsafe (sized-buf-set! b 1 20))
+  (unsafe (sized-buf-set! b 2 30))
+  (unsafe (sized-buf-set! b 3 40))
+  (println (unsafe (sized-buf-get  b 2)))    ; => 30
+  (println (unsafe (sized-buf-sum  b)))      ; => 100
+  (println (unsafe (sized-buf-min  b)))      ; => 10
+  (println (unsafe (sized-buf-max  b)))      ; => 40
+  (unsafe (sized-buf-free b)))
+```
+
+`sized-buf-fill!` sets every element to the same value:
+
+```turmeric
+(let [b (unsafe (sized-buf-new 8))]
+  (unsafe (sized-buf-fill! b 7))
+  (println (unsafe (sized-buf-sum b)))   ; => 56
+  (unsafe (sized-buf-free b)))
+```
+
+`sized-buf-copy!` copies all elements from one buffer into another (both must
+have the same length):
+
+```turmeric
+(let [src (unsafe (sized-buf-new-zeroed 3))
+      dst (unsafe (sized-buf-new-zeroed 3))]
+  (unsafe (sized-buf-set! src 0 1))
+  (unsafe (sized-buf-set! src 1 2))
+  (unsafe (sized-buf-set! src 2 3))
+  (unsafe (sized-buf-copy! src dst))
+  (println (unsafe (sized-buf-get dst 1)))   ; => 2
+  (unsafe (sized-buf-free src))
+  (unsafe (sized-buf-free dst)))
+```
+
+### Stack allocation
+
+`sized-buf-with-stack` allocates `n` elements on the stack via `alloca` and
+calls a non-capturing function with the buffer. No `malloc`/`free` overhead;
+the buffer is reclaimed automatically when the enclosing function returns.
+
+```turmeric
+(defn fill-and-sum [b] :int
+  (unsafe (sized-buf-set! b 0 10))
+  (unsafe (sized-buf-set! b 1 20))
+  (unsafe (sized-buf-set! b 2 30))
+  (unsafe (sized-buf-sum b)))
+
+(println (unsafe (sized-buf-with-stack 3 fill-and-sum)))   ; => 60
+```
+
+The callback must be a named function (not an anonymous lambda) because `alloca`
+memory must not escape the frame.
+
+### Allocation dispatch
+
+`sized-buf-compute` demonstrates the dispatch strategy that your own code can
+mirror: use the stack when the size is small and known, fall back to the heap
+otherwise.
+
+```turmeric
+; n <= 64: uses alloca (stack)
+(println (unsafe (sized-buf-compute 10)))    ; => 45  (0+1+...+9)
+
+; n > 64: uses malloc (heap)
+(println (unsafe (sized-buf-compute 100)))   ; => 4950
+```
+
+`sized-buf-size` returns the element count as a `Size` expression so you can
+pass it to size predicates and assertions:
+
+```turmeric
+(let [b (unsafe (sized-buf-new 6))]
+  (println (size-eval (unsafe (sized-buf-size b))))   ; => 6
+  (unsafe (sized-buf-free b)))
+```
+
+Converting a `SizedVec` to a flat `SizedBuf`:
+
+```turmeric
+(let [v (sized-vec-of-3 1 2 3)
+      b (unsafe (sized-buf-from-sized-vec v))]
+  (println (unsafe (sized-buf-sum b)))   ; => 6
+  (unsafe (sized-buf-free b)))
+```
+
+---
+
+## SizedMatrix
+
+`SizedMatrix` is a 2-D flat row-major matrix.
+
+C struct layout:
+
+```c
+struct { int64_t rows; int64_t cols; int64_t *data; }
+```
+
+All operations require `#{Unsafe}`.
+
+```turmeric
+(import stdlib/sized-matrix)
+
+(let [m (unsafe (sized-matrix-new-zeroed 3 4))]
+  ; Shape
+  (println (unsafe (sized-matrix-rows m)))    ; => 3
+  (println (unsafe (sized-matrix-cols m)))    ; => 4
+  (println (size-eval (unsafe (sized-matrix-size m))))   ; => 12
+
+  ; Element access
+  (unsafe (sized-matrix-set! m 0 0 1))
+  (unsafe (sized-matrix-set! m 0 1 2))
+  (unsafe (sized-matrix-set! m 1 0 5))
+  (println (unsafe (sized-matrix-get m 0 1)))   ; => 2
+
+  ; Bulk operations
+  (println (unsafe (sized-matrix-row-sum   m 0)))   ; => 3  (1+2+0+0)
+  (println (unsafe (sized-matrix-col-sum   m 0)))   ; => 6  (1+5+0)
+  (println (unsafe (sized-matrix-total-sum m)))     ; => 8
+
+  ; Shape assertion (panics if shape does not match)
+  (unsafe (sized-matrix-assert-shape! m (Static 3) (Static 4)))
+
+  (unsafe (sized-matrix-free m)))
+```
+
+`sized-matrix-fill!` sets every element to the same value:
+
+```turmeric
+(let [m (unsafe (sized-matrix-new 2 2))]
+  (unsafe (sized-matrix-fill! m 9))
+  (println (unsafe (sized-matrix-total-sum m)))   ; => 36
+  (unsafe (sized-matrix-free m)))
+```
+
+`sized-matrix-row-size` returns the column count as a `Size` expression,
+useful for checking row-vector widths:
+
+```turmeric
+(let [m (unsafe (sized-matrix-new 3 4))]
+  (println (size-eval (unsafe (sized-matrix-row-size m))))   ; => 4
+  (unsafe (sized-matrix-free m)))
+```
+
+---
+
+## SizedBitVec
+
+`SizedBitVec` packs bits tightly: `n` bits occupy `ceil(n / 8)` bytes.
+
+C struct layout:
+
+```c
+struct { int64_t len; uint8_t *bits; }
+```
+
+Bit `i` is stored at byte `i/8`, at position `i%8` within that byte (LSB = bit
+0). All operations require `#{Unsafe}`.
+
+```turmeric
+(import stdlib/sized-bits)
+
+(let [bv (unsafe (sized-bitvec-new 16))]
+  ; Set some bits
+  (unsafe (sized-bitvec-set!    bv 0))
+  (unsafe (sized-bitvec-set!    bv 3))
+  (unsafe (sized-bitvec-set!    bv 7))
+
+  ; Read bits
+  (println (unsafe (sized-bitvec-get bv 0)))   ; => 1
+  (println (unsafe (sized-bitvec-get bv 1)))   ; => 0
+
+  ; Popcount
+  (println (unsafe (sized-bitvec-count bv)))   ; => 3
+
+  ; Clear and toggle
+  (unsafe (sized-bitvec-clear!  bv 0))
+  (unsafe (sized-bitvec-toggle! bv 1))
+  (println (unsafe (sized-bitvec-count bv)))   ; => 2
+
+  ; Fill all bits
+  (unsafe (sized-bitvec-fill! bv 1))
+  (println (unsafe (sized-bitvec-count bv)))   ; => 16
+
+  ; Length and size
+  (println (unsafe (sized-bitvec-len  bv)))                      ; => 16
+  (println (size-eval (unsafe (sized-bitvec-size bv))))          ; => 16
+
+  ; Length assertion (panics if length does not match)
+  (unsafe (sized-bitvec-assert-len! bv (Static 16)))
+
+  (unsafe (sized-bitvec-free bv)))
+```
+
+---
+
+## FFI Integration
+
+Size annotations can be carried through Turmeric wrappers over opaque C
+pointers, providing type-safe size information without any runtime cost.
+
+```turmeric
+; Wrapper that reports the byte size of a point struct via an inline-C accessor.
+(defn ffi-point-size [] #{Unsafe} :Size
+  ```c
+  return ctor_Static(sizeof(struct { int64_t x; int64_t y; }));
+  ```)
+
+; Wrapper that reports the element count for a fixed-size C array.
+(defn ffi-array-size [] #{Unsafe} :Size
+  ```c
+  return ctor_Static(16);
+  ```)
+
+; Wrapper that reports the field count of a struct.
+(defn ffi-struct-field-count [] #{Unsafe} :Size
+  ```c
+  return ctor_Static(3);
+  ```)
+
+(println (size-eval (unsafe (ffi-point-size))))         ; => 16
+(println (size-eval (unsafe (ffi-array-size))))         ; => 16
+(println (size-eval (unsafe (ffi-struct-field-count)))) ; => 3
+```
+
+The pattern is: return `ctor_Static(n)` from inline C to inject a sized
+annotation into Turmeric's type system.
+
+---
+
+## Error Messages
+
+Passing an `int` where a `Size` is expected is a compile-time error:
+
+```turmeric
+; ERROR: TUR-E0001: expected <adt>, got int
+(size-add 3 4)
+```
+
+Shape or length assertions produce descriptive runtime messages:
+
+```turmeric
+; Panics: "row mismatch" (or "col mismatch")
+(unsafe (sized-matrix-assert-shape! m (Static 2) (Static 2)))
+
+; Panics: "sized type mismatch"
+(unsafe (sized-bitvec-assert-len! bv (Static 8)))
+
+; Panics: "sized type mismatch"
+(size-assert-eq! (size-static 4) (size-static 5))
+```
+
+---
+
+## API Reference
+
+### stdlib/sized.tur
+
+#### StaticInt
+
+| Function             | Signature                              | Description                       |
+|----------------------|----------------------------------------|-----------------------------------|
+| `static-int`         | `(-> int StaticInt)`                   | Wrap an integer as a `StaticInt`  |
+| `static-int-val`     | `(-> StaticInt int)`                   | Unwrap to a plain integer         |
+| `static-int-add`     | `(-> StaticInt StaticInt StaticInt)`   | Add two `StaticInt` values        |
+| `static-int-mul`     | `(-> StaticInt StaticInt StaticInt)`   | Multiply two `StaticInt` values   |
+
+#### Size
+
+| Function          | Signature                        | Description                                       |
+|-------------------|----------------------------------|---------------------------------------------------|
+| `size-static`     | `(-> int Size)`                  | Literal size from an integer                      |
+| `size-add`        | `(-> Size Size Size)`            | Sum of two sizes                                  |
+| `size-mul`        | `(-> Size Size Size)`            | Product of two sizes                              |
+| `size-eval`       | `(-> Size int)`                  | Evaluate to a runtime integer                     |
+| `size-normalize`  | `(-> Size Size)`                 | Flatten to `(Static n)`                           |
+| `size-simplify`   | `(-> Size Size)`                 | Algebraic simplification                          |
+
+#### Predicates and assertions
+
+| Function           | Signature                      | Description                                      |
+|--------------------|--------------------------------|--------------------------------------------------|
+| `size-eq?`         | `(-> Size Size bool)`          | True if sizes evaluate equal                     |
+| `size-lt?`         | `(-> Size Size bool)`          | True if s1 < s2                                  |
+| `size-le?`         | `(-> Size Size bool)`          | True if s1 <= s2                                 |
+| `size-gt?`         | `(-> Size Size bool)`          | True if s1 > s2                                  |
+| `size-ge?`         | `(-> Size Size bool)`          | True if s1 >= s2                                 |
+| `size-compat?`     | `(-> Size Size bool)`          | True if sizes are equal (runtime subtyping)      |
+| `size-assert-eq!`  | `(-> Size Size nil)`           | Panic if s1 != s2                                |
+| `size-assert-le!`  | `(-> Size Size nil)`           | Panic if s1 > s2                                 |
+
+#### SizedVec
+
+| Function               | Signature                         | Description                                  |
+|------------------------|-----------------------------------|----------------------------------------------|
+| `sized-vec-of-1`       | `(-> int SizedVec)`               | 1-element vec; size inferred as 1            |
+| `sized-vec-of-2`       | `(-> int int SizedVec)`           | 2-element vec; size inferred as 2            |
+| `sized-vec-of-3`       | `(-> int int int SizedVec)`       | 3-element vec; size inferred as 3            |
+| `sized-vec-of-4`       | `(-> int int int int SizedVec)`   | 4-element vec; size inferred as 4            |
+| `sized-vec-from-list`  | `#{Unsafe} (-> int SizedVec)`     | Convert a cons list; size inferred at runtime |
+| `sized-vec-push`       | `(-> SizedVec int SizedVec)`      | Prepend an element; size becomes n+1         |
+| `sized-vec-len`        | `(-> SizedVec int)`               | Element count                                |
+| `sized-vec-get`        | `(-> SizedVec int int)`           | Bounds-checked element read                  |
+| `sized-vec-size`       | `(-> SizedVec Size)`              | Size as a `Size` expression                  |
+
+### stdlib/sized-buf.tur
+
+| Function                  | Signature                          | Description                                       |
+|---------------------------|------------------------------------|---------------------------------------------------|
+| `sized-buf-new`           | `#{Unsafe} (-> int int)`           | Heap-allocate n elements (uninitialized)          |
+| `sized-buf-new-zeroed`    | `#{Unsafe} (-> int int)`           | Heap-allocate n elements, zeroed                  |
+| `sized-buf-free`          | `#{Unsafe} (-> int nil)`           | Free a heap-allocated buffer                      |
+| `sized-buf-len`           | `#{Unsafe} (-> int int)`           | Element count                                     |
+| `sized-buf-get`           | `#{Unsafe} (-> int int int)`       | Bounds-checked element read                       |
+| `sized-buf-set!`          | `#{Unsafe} (-> int int int int)`   | Bounds-checked element write; returns buf         |
+| `sized-buf-fill!`         | `#{Unsafe} (-> int int int)`       | Set all elements to a value                       |
+| `sized-buf-copy!`         | `#{Unsafe} (-> int int nil)`       | Copy src into dst (equal lengths required)        |
+| `sized-buf-sum`           | `#{Unsafe} (-> int int)`           | Sum of all elements                               |
+| `sized-buf-min`           | `#{Unsafe} (-> int int)`           | Minimum element                                   |
+| `sized-buf-max`           | `#{Unsafe} (-> int int)`           | Maximum element                                   |
+| `sized-buf-size`          | `#{Unsafe} (-> int Size)`          | Element count as a `Size` expression              |
+| `sized-buf-with-stack`    | `#{Unsafe} (-> int fn int)`        | Stack-allocate n elements; call f with buffer     |
+| `sized-buf-compute`       | `#{Unsafe} (-> int int)`           | Stack when n<=64, heap otherwise (demo)           |
+| `sized-buf-from-sized-vec`| `#{Unsafe} (-> SizedVec int)`      | Convert a `SizedVec` to a flat heap buffer        |
+
+### stdlib/sized-matrix.tur
+
+| Function                    | Signature                                 | Description                                  |
+|-----------------------------|-------------------------------------------|----------------------------------------------|
+| `sized-matrix-new`          | `#{Unsafe} (-> int int int)`              | Allocate rows x cols (uninitialized)         |
+| `sized-matrix-new-zeroed`   | `#{Unsafe} (-> int int int)`              | Allocate rows x cols, zeroed                 |
+| `sized-matrix-free`         | `#{Unsafe} (-> int nil)`                  | Free the matrix                              |
+| `sized-matrix-rows`         | `#{Unsafe} (-> int int)`                  | Row count                                    |
+| `sized-matrix-cols`         | `#{Unsafe} (-> int int)`                  | Column count                                 |
+| `sized-matrix-size`         | `#{Unsafe} (-> int Size)`                 | Total element count as `Size`                |
+| `sized-matrix-row-size`     | `#{Unsafe} (-> int Size)`                 | Column count as `Size`                       |
+| `sized-matrix-get`          | `#{Unsafe} (-> int int int int)`          | Bounds-checked element read at (r, c)        |
+| `sized-matrix-set!`         | `#{Unsafe} (-> int int int int int)`      | Bounds-checked element write at (r, c)       |
+| `sized-matrix-fill!`        | `#{Unsafe} (-> int int int)`              | Set all elements to a value                  |
+| `sized-matrix-row-sum`      | `#{Unsafe} (-> int int int)`              | Sum of row r                                 |
+| `sized-matrix-col-sum`      | `#{Unsafe} (-> int int int)`              | Sum of column c                              |
+| `sized-matrix-total-sum`    | `#{Unsafe} (-> int int)`                  | Sum of all elements                          |
+| `sized-matrix-assert-shape!`| `#{Unsafe} (-> int Size Size nil)`        | Panic on shape mismatch                      |
+
+### stdlib/sized-bits.tur
+
+| Function                   | Signature                          | Description                                    |
+|----------------------------|------------------------------------|------------------------------------------------|
+| `sized-bitvec-new`         | `#{Unsafe} (-> int int)`           | Allocate n bits, all zero                      |
+| `sized-bitvec-free`        | `#{Unsafe} (-> int nil)`           | Free the bit vector                            |
+| `sized-bitvec-len`         | `#{Unsafe} (-> int int)`           | Bit count                                      |
+| `sized-bitvec-size`        | `#{Unsafe} (-> int Size)`          | Bit count as a `Size` expression               |
+| `sized-bitvec-get`         | `#{Unsafe} (-> int int int)`       | Read bit i; returns 0 or 1                     |
+| `sized-bitvec-set!`        | `#{Unsafe} (-> int int int)`       | Set bit i to 1; returns bv                     |
+| `sized-bitvec-clear!`      | `#{Unsafe} (-> int int int)`       | Clear bit i to 0; returns bv                   |
+| `sized-bitvec-toggle!`     | `#{Unsafe} (-> int int int)`       | Flip bit i; returns bv                         |
+| `sized-bitvec-count`       | `#{Unsafe} (-> int int)`           | Popcount (number of set bits)                  |
+| `sized-bitvec-fill!`       | `#{Unsafe} (-> int int int)`       | Set all bits to v (0 or 1); returns bv         |
+| `sized-bitvec-assert-len!` | `#{Unsafe} (-> int Size nil)`      | Panic if bit count does not match expected     |

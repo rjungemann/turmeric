@@ -1,6 +1,6 @@
 # Sized Types — Implementation Plan for Turmeric
 
-> **Status:** SZ2 Complete
+> **Status:** SZ3 Complete
 > **Target:** v4
 > **Prerequisites:** Phase 19 (Algebraic Effects) complete; HKT/HRT/GADT roadmap (v2) complete
 > **Related:** [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md)
@@ -114,19 +114,19 @@ Sized types are evaluated against the following criteria:
 **Goal:** Integrate sized types into the stdlib and FFI.
 
 **Tasks:**
-- [ ] Add sized vectors, matrices, and bit vectors to the stdlib:
-  ```clojure
-  (deftype Matrix [rows : StaticInt, cols : StaticInt, a] ...)
-  ```
-- [ ] Integrate with FFI for C structs:
-  - Allow sized types to map to C arrays and structs.
-- [ ] Add sized type error messages:
-  - Clear error messages for size mismatches.
+- [x] Add sized vectors, matrices, and bit vectors to the stdlib:
+  - `SizedMatrix`: flat row-major `{ int64_t rows; int64_t cols; int64_t *data; }` with get/set/fill/row-sum/col-sum/total-sum/assert-shape!
+  - `SizedBitVec`: packed `{ int64_t len; uint8_t *bits; }` with get/set!/clear!/toggle!/count/fill!/assert-len!
+- [x] Integrate with FFI for C structs:
+  - `ffi-point-size`, `ffi-array-size`, `ffi-struct-field-count` demonstrate carrying size annotations through Turmeric wrappers over opaque C pointers.
+- [x] Add sized type error messages:
+  - `sized-matrix-assert-shape!` and `sized-bitvec-assert-len!` produce descriptive messages via `require-msg!` on shape/length violations.
+  - Passing `int` where `Size` is expected produces `TUR-E0001: expected <adt>, got int` (demonstrated by `errors/sized-sz3-shape-mismatch`).
 
 **Artifacts:**
-- Sized vectors, matrices, and bit vectors in `stdlib/`.
-- FFI integration for C structs.
-- Sized type error messages.
+- `stdlib/sized-matrix.tur`: SizedMatrix with heap allocation, shape accessors, element access, bulk ops, shape assertion.
+- `stdlib/sized-bits.tur`: SizedBitVec with packed bit storage, bit access ops, popcount, fill, length assertion.
+- Test fixtures: `sized-sz3-matrix`, `sized-sz3-bitvec`, `sized-sz3-ffi`, `errors/sized-sz3-shape-mismatch`.
 
 ---
 
@@ -185,7 +185,7 @@ Sized types should be gated behind a feature flag:
 | SZ0         | 2 weeks  | None                  | Complete        |
 | SZ1         | 3 weeks  | SZ0                   | Complete        |
 | SZ2         | 3 weeks  | SZ1                   | Complete        |
-| SZ3         | 2 weeks  | SZ2                   | Not Started     |
+| SZ3         | 2 weeks  | SZ2                   | Complete        |
 
 ---
 
