@@ -190,9 +190,7 @@
     (queue-push (:queue sched)
                 {:time at-beat
                  :callback (fn []
-                             ;; In a real implementation, this would update synth parameters
-                             ;; For now, just a placeholder
-                             )
+                             (panic "schedule-param callback: not yet implemented (requires synth parameter update integration)"))
                  :node-id node-id
                  :pattern (some pattern)})
     (update sched :next-id inc)))
