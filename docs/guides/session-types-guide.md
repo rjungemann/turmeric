@@ -1,3 +1,9 @@
+---
+title: Session Types Guide
+category: Other
+description: Model protocols as types, whether the protocol has two participants, or more
+---
+
 # Session Types Guide
 
 Turmeric supports session types -- a type discipline that statically verifies
@@ -6,20 +12,22 @@ the `-Xsessions` compiler flag.
 
 ## Table of Contents
 
-1. [Binary Session Types (SS0-SS4)](#binary-session-types-ss0-ss4)
-   - [make-session, send, recv, close](#make-session-send-recv-close)
-   - [Choice: choose-left, choose-right, offer](#choice-choose-left-choose-right-offer)
-   - [Recursive protocols: Rec](#recursive-protocols-rec)
-   - [Timeouts](#timeouts)
-   - [Duality](#duality)
-   - [Effect integration](#effect-integration)
-2. [Multi-Party Session Types (SS5-SS8)](#multi-party-session-types-ss5-ss8)
-   - [defprotocol](#defprotocol)
-   - [make-protocol, send-to, recv-from, close](#make-protocol-send-to-recv-from-close)
-   - [Three or more roles](#three-or-more-roles)
-   - [Projection algorithm](#projection-algorithm)
-3. [Error Codes](#error-codes)
-4. [Getting More Help](#getting-more-help)
+- [Session Types Guide](#session-types-guide)
+  - [Table of Contents](#table-of-contents)
+  - [Binary Session Types (SS0-SS4)](#binary-session-types-ss0-ss4)
+    - [make-session, send, recv, close](#make-session-send-recv-close)
+    - [Choice: choose-left, choose-right, offer](#choice-choose-left-choose-right-offer)
+    - [Recursive protocols: Rec](#recursive-protocols-rec)
+    - [Timeouts](#timeouts)
+    - [Duality](#duality)
+    - [Effect integration](#effect-integration)
+  - [Multi-Party Session Types (SS5-SS8)](#multi-party-session-types-ss5-ss8)
+    - [defprotocol](#defprotocol)
+    - [make-protocol, send-to, recv-from, close](#make-protocol-send-to-recv-from-close)
+    - [Three or more roles](#three-or-more-roles)
+    - [Projection algorithm](#projection-algorithm)
+  - [Error Codes](#error-codes)
+  - [Getting More Help](#getting-more-help)
 
 ---
 

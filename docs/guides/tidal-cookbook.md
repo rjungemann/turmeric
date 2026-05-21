@@ -1,6 +1,6 @@
 ---
 title: Tidal Cookbook
-category: Tidal
+category: Music
 description: Practical recipes and patterns for creating music with the TidalCycles-inspired DSL for Turmeric
 ---
 

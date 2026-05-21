@@ -1,4 +1,10 @@
-# EAVT Database: Indexing
+---
+title: Datalog Tutorial Pt. 4: Indexing
+category: Datalog
+description: Create a database and a query system to go with it
+---
+
+# Datalog Tutorial Pt. 4: Indexing
 
 This session covers `examples/eavt/indexed.tur`, which adds a hash-chained EAVT
 index on top of the minimal database. The index maps `(entity, attr)` pairs to

@@ -1,6 +1,6 @@
 ---
 title: Tidal Guide
-category: Tidal
+category: Music
 description: Introduction to the TidalCycles-inspired live-coding pattern library for Turmeric, covering core concepts, combinators, and synth integration
 ---
 

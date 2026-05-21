@@ -1,4 +1,10 @@
-# EAVT Database: Minimal Implementation
+---
+title: Datalog Tutorial Pt. 2: Minimal Implementation
+category: Datalog
+description: Create a database and a query system to go with it
+---
+
+# EAVT Database: Minimal ImplementationDatalog Tutorial Pt. 2: Minimal Implementation
 
 This session walks through `examples/eavt/minimal.tur` line by line. By the
 end you will have a working, append-only fact database with a predicate-based

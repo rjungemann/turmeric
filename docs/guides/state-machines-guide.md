@@ -1,3 +1,9 @@
+---
+title: State Machines Guide
+category: Other
+description: Five different approaches to modeling state machines in turmeric
+---
+
 # State Machines in Turmeric
 
 ## Approaches Overview

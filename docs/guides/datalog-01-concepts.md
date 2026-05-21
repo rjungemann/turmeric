@@ -1,4 +1,10 @@
-# EAVT Database: Core Concepts
+---
+title: Datalog Tutorial Pt. 1: Concepts
+category: Datalog
+description: Create a database and a query system to go with it
+---
+
+# Datalog Tutorial Pt. 1: Concepts
 
 ## What is EAVT?
 

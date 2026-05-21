@@ -66,18 +66,6 @@ clean-test:
     find tests/cli -name 'actual.*' -delete
 
 # ---------------------------------------------------------------------------
-# Documentation
-# ---------------------------------------------------------------------------
-
-# Render all guide markdown files to docs/html/guides/.
-guides:
-    python3 tools/genguides.py docs/guides/ --out docs/html/guides/
-
-# Check that every turmeric+sweet-exp toggle pair in the guides is valid.
-check-guides:
-    python3 tools/check-guide-pairs.py docs/guides/
-
-# ---------------------------------------------------------------------------
 # Utility
 # ---------------------------------------------------------------------------
 
@@ -179,6 +167,10 @@ rebuild: clean configure build
 # Documentation
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Documentation
+# ---------------------------------------------------------------------------
+
 # Generate HTML API docs from stdlib ;;; docstrings.
 # Also emits stdlib/docstrings.tur for the runtime (doc name) lookup,
 # and web/public/doc-names.json for the web REPL search bar.
@@ -188,6 +180,11 @@ docs: guides
 # Render markdown guides to HTML pages (served at /docs/html/guides/).
 guides:
     python3 tools/genguides.py docs/guides/ --out docs/html/guides/
+
+
+# Check that every turmeric+sweet-exp toggle pair in the guides is valid.
+check-guides:
+    python3 tools/check-guide-pairs.py docs/guides/
 
 # ---------------------------------------------------------------------------
 # WebAssembly & Web REPL targets

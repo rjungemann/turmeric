@@ -1,4 +1,10 @@
-# EAVT Database: Query API
+---
+title: Datalog Tutorial Pt. 3: Query API
+category: Datalog
+description: Create a database and a query system to go with it
+---
+
+# Datalog Tutorial Pt. 3: Query API
 
 This session covers `examples/eavt/query.tur`, which extends the minimal
 implementation with:
