@@ -1,6 +1,6 @@
 # Sized Types — Implementation Plan for Turmeric
 
-> **Status:** SZ1 Complete
+> **Status:** SZ2 Complete
 > **Target:** v4
 > **Prerequisites:** Phase 19 (Algebraic Effects) complete; HKT/HRT/GADT roadmap (v2) complete
 > **Related:** [advanced-type-system-feasibility-plan.md](advanced-type-system-feasibility-plan.md)
@@ -92,17 +92,20 @@ Sized types are evaluated against the following criteria:
 **Goal:** Use size information for memory allocation decisions.
 
 **Tasks:**
-- [ ] Stack allocation for sized types when possible:
-  - Allocate `SizedVec` on the stack if `n` is a `StaticInt`.
-- [ ] Heap allocation fallback for dynamic sizes:
-  - Fall back to heap allocation if size is not statically known.
-- [ ] Optimize memory layout based on size information:
-  - Pack structs tightly based on size annotations.
+- [x] Stack allocation for sized types when possible:
+  - `sized-buf-with-stack [n f]` allocates on the stack via `alloca` and calls f with the buffer.
+  - `sized-buf-compute [n]` dispatches to stack allocation when n ≤ 64 (threshold).
+- [x] Heap allocation fallback for dynamic sizes:
+  - `sized-buf-new` and `sized-buf-new-zeroed` use `malloc` for dynamic sizes.
+  - `sized-buf-compute` falls back to heap when n > 64.
+- [x] Optimize memory layout based on size information:
+  - `SizedBuf` uses a single flat `int64_t *data` array (tight packing, cache-friendly).
+  - Contrast: `SizedVec` allocates one struct per element (pointer-chasing, 20+ bytes/node).
+  - `sized-buf-from-sized-vec` converts linked-list representation to flat array.
 
 **Artifacts:**
-- Stack allocation logic in codegen.
-- Heap allocation fallback.
-- Optimized memory layout for sized types.
+- `stdlib/sized-buf.tur`: `SizedBuf` type with heap/stack allocation, bulk ops (`fill!`, `copy!`, `sum`, `min`, `max`), size integration (`sized-buf-size`), and conversion from `SizedVec`.
+- Test fixtures: `sized-sz2-buf-basic`, `sized-sz2-stack-alloc`, `sized-sz2-layout`.
 
 ---
 
@@ -181,7 +184,7 @@ Sized types should be gated behind a feature flag:
 |-------------|----------|-----------------------|-----------------|
 | SZ0         | 2 weeks  | None                  | Complete        |
 | SZ1         | 3 weeks  | SZ0                   | Complete        |
-| SZ2         | 3 weeks  | SZ1                   | Not Started     |
+| SZ2         | 3 weeks  | SZ1                   | Complete        |
 | SZ3         | 2 weeks  | SZ2                   | Not Started     |
 
 ---
