@@ -209,6 +209,19 @@ for C/CMake dependency details.
     (println (hamt-get m2 1))))
 ```
 
+**EAVT immutable database (Datomic-style):**
+
+```lisp
+; Each fact is a four-tuple: [entity attribute value tx]
+(let [db (db-new)]
+  (db-assert! db 1 ":user/name"  (StrVal  "Alice") 1)
+  (db-assert! db 1 ":user/email" (StrVal  "alice@example.com") 2)
+  (db-assert! db 2 ":user/name"  (StrVal  "Bob") 3)
+  ; Query: find all :user/name values asserted at or before tx 3
+  (let [results (db-query db ":user/name" 3)]
+    (println results)))
+```
+
 **GADTs (generalized algebraic data types):**
 
 ```lisp
@@ -415,6 +428,8 @@ for C/CMake dependency details.
 
 ## Status
 
-The compiler passes its full fixture test suite with ASan/UBSan clean. All planned phases through Phase 21 (serializable continuations) are complete, along with the full v2 type system (HKT, HRT, GADTs, effect rows) and all v3 extensions: linear/uniqueness/substructural types, union/intersection types, effect row types (ET0–ET4), linear continuations (LC0–LC3), multi-shot continuations (MS0–MS4), session types (SS0–SS8, both binary and multi-party), and dynamic vars (DV0–DV4).
+**v0.7.0** — The compiler passes its full fixture test suite with ASan/UBSan clean. All planned phases through Phase 21 (serializable continuations) are complete, along with the full v2 type system (HKT, HRT, GADTs, effect rows) and all v3 extensions: linear/uniqueness/substructural types, union/intersection types, effect row types (ET0–ET4), linear continuations (LC0–LC3), multi-shot continuations (MS0–MS4), session types (SS0–SS8, both binary and multi-party), and dynamic vars (DV0–DV4).
+
+This release adds an EAVT immutable database tutorial and example suite (`examples/eavt/`) — a five-file, progressive walkthrough of building a Datomic-inspired append-only fact store with temporal queries and Datalog-style logic-variable unification.
 
 See [docs/advanced-type-system-feasibility-plan.md](docs/advanced-type-system-feasibility-plan.md) for the type system roadmap and [docs/guides/](docs/guides/) for user guides.

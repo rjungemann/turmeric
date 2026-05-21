@@ -2,6 +2,28 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.7.0] — 2026-05-21
+
+### Added
+
+- **EAVT immutable database tutorial and examples** (`examples/eavt/`)
+  - Five progressive Turmeric programs building a Datomic-inspired fact store: `minimal.tur`, `indexed.tur`, `query.tur`, `blog.tur`, `datalog.tur`
+  - Four-part guide series in `docs/guides/eavt/`: core concepts, minimal implementation, query API, and B-tree indexing
+  - Covers Entity-Attribute-Value-Transaction data model, append-only storage, temporal queries, and logic-variable unification for Datalog-style queries
+
+- **Sized-types design document** (`docs/sized-types-plan.md`)
+  - Implementation plan for tracking data-structure sizes in the type system (SZ0–SZ4 phases)
+  - Targets stack-allocated fixed-size structures, array shape verification, and type-safe embedded DSLs
+
+- Regenerated stdlib docstrings and web REPL assets
+
+## [0.6.0] — 2026-05-19
+
+### Changed
+
+- Documentation refresh and cleanup
+- Regenerated stdlib API reference
+
 ## [0.5.0] — 2026-05-19
 
 ### Added
