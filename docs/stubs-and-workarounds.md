@@ -43,7 +43,7 @@ struct, and return a fat-pointer. Gate behind a new fixture
 
 ---
 
-### 1.2 [~] Phase S4: Try/Catch Machinery
+### 1.2 [x] Phase S4: Try/Catch Machinery
 
 - `src/compiler/emit_expr.c` ~637-649: only the body of a `try` block is emitted;
   the `catch` arm is never reached. Uncaught panics abort at the C level.

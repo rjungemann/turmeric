@@ -1079,6 +1079,7 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "        return false;\n");
     buf_puts(out, "    } else {\n");
     buf_puts(out, "        global_panic_jmpbuf_valid = 0;\n");
+    buf_puts(out, "        tur_panic_in_progress = 0;\n");
     buf_puts(out, "        out->tag = TUR_RESULT_ERR;\n");
     buf_puts(out, "        out->u.err = global_panic_payload;\n");
     buf_puts(out, "        global_panic_payload = NULL;\n");
@@ -1101,6 +1102,7 @@ int emit_program(Buf *out, const Expr *program) {
     buf_puts(out, "        return false;\n");
     buf_puts(out, "    } else {\n");
     buf_puts(out, "        global_panic_jmpbuf_valid = 0;\n");
+    buf_puts(out, "        tur_panic_in_progress = 0;\n");
     buf_puts(out, "        if (global_panic_payload && global_panic_payload->type_tag == expected_type) {\n");
     buf_puts(out, "            out->tag = TUR_RESULT_ERR;\n");
     buf_puts(out, "            out->u.err = global_panic_payload;\n");

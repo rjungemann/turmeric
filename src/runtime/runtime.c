@@ -421,11 +421,12 @@ bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
     } else {
         /* Panic occurred - set up error result */
         global_panic_jmpbuf_valid = 0;
-        
+        tur_panic_in_progress = 0;  /* panic was caught; re-enable panics */
+
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
-        
+
         return true;  /* Panic was caught */
     }
 }
@@ -455,7 +456,8 @@ bool tur_catch_panic_of(TypeKindInt expected_type, tur_thunk_fn thunk, void *env
     } else {
         /* Panic occurred - check type */
         global_panic_jmpbuf_valid = 0;
-        
+        tur_panic_in_progress = 0;  /* tentatively allow re-panic on type mismatch */
+
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             /* Type matches - set up error result */
             out->tag = TUR_RESULT_ERR;

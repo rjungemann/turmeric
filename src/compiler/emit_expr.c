@@ -206,7 +206,8 @@ static char *emit_do_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         if (last_value_idx >= 0) {
             const Expr *last = e->as.do_.items[last_value_idx];
             /* Phase 3/4: If last item is return or throw, emit as statement only */
-            if (last->kind == EX_RETURN || last->kind == EX_PANIC || last->kind == EX_PANIC_WITH) {
+            if (last->kind == EX_RETURN || last->kind == EX_PANIC ||
+                last->kind == EX_PANIC_WITH || last->kind == EX_THROW) {
                 emit_stmt(ctx, body, last);
                 return atom_nil();
             } else if (last->type.kind == TY_NIL &&
@@ -648,12 +649,174 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                            (int)thrown->type.kind, val);
             }
             free(val);
-            return fresh_tmp(ctx);
+            return atom_nil();
         }
         case EX_TRY_CATCH: {
-            /* In compiled code, emit only the body (no catch machinery yet).
-             * Uncaught panics will still abort at the C level. */
-            return emit_value(ctx, body, e->as.try_catch_.body);
+            /* Phase S4: wrap the try body in a tur_thunk_fn, call tur_catch_unwind,
+             * and dispatch the first catch clause on panic.
+             *
+             * Fall back to body-only emission when:
+             *   - no_unwind: panics already abort at the C level, catch is unreachable.
+             *   - no pending_handler_fns: we have nowhere to put the thunk.
+             */
+            if (ctx->no_unwind || !ctx->pending_handler_fns) {
+                return emit_value(ctx, body, e->as.try_catch_.body);
+            }
+
+            const Expr    *try_body      = e->as.try_catch_.body;
+            uint32_t       n_catches     = e->as.try_catch_.n_catches;
+            Binding      **catch_binds   = e->as.try_catch_.catch_bindings;
+            Expr         **catch_hdlrs   = e->as.try_catch_.catch_handlers;
+
+            /* Collect free variables (captures) from the try body */
+            uint32_t   n_caps = 0;
+            Binding  **caps   = collect_handle_captures(try_body, &n_caps);
+
+            int thunk_id = ctx->tmp_n++;
+            Buf *pbuf    = ctx->pending_handler_fns;
+
+            /* Emit env struct if there are captures */
+            if (n_caps > 0) {
+                buf_printf(pbuf, "typedef struct { ");
+                for (uint32_t ci = 0; ci < n_caps; ci++) {
+                    Binding *cap = caps[ci];
+                    char *rn = raw_name_for_binding(cap);
+                    buf_printf(pbuf, "%s %s; ", type_c_name(cap->type), rn);
+                    free(rn);
+                }
+                buf_printf(pbuf, "} __try_env_%d;\n", thunk_id);
+            }
+
+            /* Build the thunk body in a temporary buffer */
+            Buf thunk_body; buf_init(&thunk_body);
+
+            EmitCtx tctx              = *ctx;
+            tctx.file                 = pbuf;
+            tctx.pending_handler_fns  = pbuf;
+            tctx.indent               = 4;
+            tctx.fn_params            = NULL;
+            tctx.n_fn_params          = 0;
+            tctx.closure              = NULL;
+            tctx.env_var_name         = (n_caps > 0) ? "__e" : NULL;
+            tctx.defer_captures       = caps;
+            tctx.n_defer_captures     = (uint8_t)(n_caps > 255 ? 255 : n_caps);
+            tctx.frame_var            = NULL;
+            tctx.return_emitted       = false;
+
+            bool body_void = (try_body->type.kind == TY_NIL ||
+                              try_body->type.kind == TY_NEVER ||
+                              expr_is_divergent(try_body));
+            char *body_ret = NULL;
+            if (body_void) {
+                emit_stmt(&tctx, &thunk_body, try_body);
+            } else {
+                body_ret = emit_value(&tctx, &thunk_body, try_body);
+            }
+            ctx->tmp_n = tctx.tmp_n;
+
+            /* Emit the thunk function to pbuf */
+            buf_printf(pbuf, "static void __try_thunk_%d(void *__env, tur_result *__out) {\n", thunk_id);
+            if (n_caps > 0) {
+                buf_printf(pbuf, "    __try_env_%d *__e = (__try_env_%d *)__env;\n", thunk_id, thunk_id);
+            } else {
+                buf_puts(pbuf, "    (void)__env;\n");
+            }
+            if (thunk_body.len > 0)
+                buf_write(pbuf, thunk_body.data, thunk_body.len);
+            buf_puts(pbuf, "    __out->tag = TUR_RESULT_OK;\n");
+            if (body_ret) {
+                buf_printf(pbuf, "    __out->u.ok_val = (int64_t)%s;\n", body_ret);
+                free(body_ret);
+            } else {
+                buf_puts(pbuf, "    __out->u.ok_val = 0;\n");
+            }
+            buf_puts(pbuf, "}\n\n");
+            buf_free(&thunk_body);
+
+            /* ---- call site ---- */
+
+            /* Create env struct on stack (or pass NULL) */
+            const char *env_arg;
+            char *env_var = NULL;
+            if (n_caps > 0) {
+                env_var = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "__try_env_%d %s = { ", thunk_id, env_var);
+                for (uint32_t ci = 0; ci < n_caps; ci++) {
+                    if (ci > 0) buf_puts(body, ", ");
+                    char *cn = name_for_binding(ctx, caps[ci]);
+                    buf_puts(body, cn);
+                    free(cn);
+                }
+                buf_puts(body, " };\n");
+                env_arg = env_var;
+            } else {
+                env_arg = "NULL";
+            }
+            free(caps);
+
+            /* tur_result + tur_catch_unwind call */
+            char *res_var     = fresh_tmp(ctx);
+            char *caught_var  = fresh_tmp(ctx);
+            char *result_var  = fresh_tmp(ctx);
+
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "tur_result %s;\n", res_var);
+            indent_buf(body, ctx->indent);
+            if (n_caps > 0) {
+                buf_printf(body, "bool %s = tur_catch_unwind(__try_thunk_%d, &%s, &%s);\n",
+                           caught_var, thunk_id, env_arg, res_var);
+            } else {
+                buf_printf(body, "bool %s = tur_catch_unwind(__try_thunk_%d, %s, &%s);\n",
+                           caught_var, thunk_id, env_arg, res_var);
+            }
+            free(env_var);
+
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "int64_t %s;\n", result_var);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "if (%s) {\n", caught_var);
+            free(caught_var);
+
+            ctx->indent += 4;
+            if (n_catches > 0) {
+                /* Bind catch variable to the panic payload value */
+                Binding *cb = catch_binds[0];
+                if (cb) {
+                    char *cb_name = name_for_binding(ctx, cb);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body,
+                        "int64_t %s = (int64_t)(intptr_t)tur_panic_payload_value(%s.u.err);\n",
+                        cb_name, res_var);
+                    free(cb_name);
+                }
+                char *h = emit_value(ctx, body, catch_hdlrs[0]);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s = (int64_t)%s;\n", result_var, h);
+                free(h);
+            } else {
+                /* No catch clause: re-panic with the original payload */
+                indent_buf(body, ctx->indent);
+                buf_printf(body,
+                    "tur_panic_with(%s.u.err->type_tag, "
+                    "(void*)tur_panic_payload_value(%s.u.err), __FILE__, __LINE__);\n",
+                    res_var, res_var);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s = 0;\n", result_var);
+            }
+            ctx->indent -= 4;
+
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "} else {\n");
+            ctx->indent += 4;
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s = %s.u.ok_val;\n", result_var, res_var);
+            ctx->indent -= 4;
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "}\n");
+            free(res_var);
+
+            return result_var;
         }
         case EX_PANIC_PAYLOAD_TYPE: {
             const Expr *payload = e->as.panic_payload_type_.payload;
