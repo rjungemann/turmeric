@@ -1430,6 +1430,17 @@ Expr *elab_match(Elab *e, const Form *call) {
                 if (_ft != F_SYM) break; /* constructor found — not literal match */
             }
         }
+        /* If any arm is an ADT constructor call (F_LIST), defer to the ADT path
+         * even when the scrutinee type looks primitive (e.g. unannotated param
+         * that defaulted to TY_INT — the ADT path infers the type from patterns). */
+        if (_is_prim) {
+            for (uint32_t _ai = 0; _ai < n_arms; _ai++) {
+                if (call->as.list.items[arm_start[_ai]]->tag == F_LIST) {
+                    _is_prim = false;
+                    break;
+                }
+            }
+        }
         if (_is_prim) {
             MatchArm *lit_arms = (MatchArm *)arena_alloc(e->arena, n_arms * sizeof(MatchArm));
             Type lit_result = TYPE_UNKNOWN;
